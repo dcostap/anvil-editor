@@ -2157,7 +2157,16 @@ int video_init(void) {
     ** It also enables aero-snap on Windows apparently. */
     SDL_SetHint("SDL_BORDERLESS_RESIZABLE_STYLE", "1");
     SDL_SetHint("SDL_MOUSE_DOUBLE_CLICK_RADIUS", "4");
+#ifdef _WIN32
+    /* Use the native accelerated renderer for the final surface-to-window
+       presentation on Windows. The editor still rasterizes into our CPU
+       surface, but live resize needs texture upload/presentation to keep up
+       with DWM; SDL's software renderer makes that path visibly laggy. */
+    SDL_SetHint(SDL_HINT_RENDER_DRIVER, "direct3d11");
+    SDL_SetHint(SDL_HINT_RENDER_VSYNC, "0");
+#else
     SDL_SetHint(SDL_HINT_RENDER_DRIVER, "software");
+#endif
     ren_inited = 1;
   }
   return 0;

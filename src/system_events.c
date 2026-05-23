@@ -11,8 +11,8 @@
  *
  * To preserve the existing poll_event / wait_event Lua API we maintain our
  * own ring buffer.  SDL_AppEvent() pushes events here; f_poll_event() pops
- * from here instead of calling SDL_PollEvent().  Mouse-motion and
- * finger-motion events are coalesced on the way in, mirroring what the old
+ * from here instead of calling SDL_PollEvent().  High-frequency motion and
+ * resize events are coalesced on the way in, mirroring what the old
  * SDL_PeepEvents() loop used to do in f_poll_event().
  * ------------------------------------------------------------------------- */
 
@@ -80,13 +80,37 @@ static bool system_event_is_handled(uint32_t type) {
   }
 }
 
+static bool window_event_should_coalesce(uint32_t type) {
+  switch (type) {
+    case SDL_EVENT_WINDOW_RESIZED:
+    case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
+    case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+      return true;
+    default:
+      return false;
+  }
+}
+
 void system_push_event(const SDL_Event *event) {
   /* Discard event types that f_poll_event() never consumes */
   if (!system_event_is_handled(event->type))
     return;
 
+  /* Coalesce high-frequency window resize/scale events for the same window.
+     During live resize, Windows can deliver hundreds of these faster than Lua
+     can redraw. Keeping stale sizes in the queue makes the UI visibly lag
+     behind the resize border and can force multiple old-size redraws. */
+  if (window_event_should_coalesce(event->type)) {
+    for (int i = system_event_queue_count - 1; i >= 0; i--) {
+      int idx = (system_event_queue_read + i) % SYSTEM_EVENT_QUEUE_SIZE;
+      if (system_event_queue[idx].type == event->type &&
+          system_event_queue[idx].window.windowID == event->window.windowID) {
+        system_event_queue[idx] = *event;
+        return;
+      }
+    }
   /* Coalesce consecutive mouse-motion events for the same window */
-  if (event->type == SDL_EVENT_MOUSE_MOTION) {
+  } else if (event->type == SDL_EVENT_MOUSE_MOTION) {
     for (int i = system_event_queue_count - 1; i >= 0; i--) {
       int idx = (system_event_queue_read + i) % SYSTEM_EVENT_QUEUE_SIZE;
       if (system_event_queue[idx].type == SDL_EVENT_MOUSE_MOTION &&
