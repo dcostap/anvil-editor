@@ -13,16 +13,9 @@ local EmptyView = Widget:extend()
 
 function EmptyView:__tostring() return "EmptyView" end
 
----Font used to render the logo
----@type renderer.font
-local icon_huge_font
-
----Prevent the font getting scaled more than once from multiple instances
----@type boolean
-local icon_font_scaled = false
-
----Current font scale in case rescaling is required on EmptyView creation
-local icon_font_current_scale = SCALE
+---Cached program logo canvas used by the welcome view.
+local logo_canvas
+local logo_canvas_size
 
 local buttons = {
   { name = "new_file", icon = "f", cmd = "core:new-doc",
@@ -51,10 +44,6 @@ local buttons = {
 ---Constructor
 function EmptyView:new()
   EmptyView.super.new(self, nil, false)
-
-  if not icon_huge_font or icon_font_current_scale ~= SCALE then
-    icon_huge_font = style.icon_big_font:copy(110 * SCALE)
-  end
 
   self.name = "Welcome"
   self.type_name = "core.emptyview"
@@ -142,18 +131,29 @@ function EmptyView:get_h_scrollable_size()
 end
 
 function EmptyView:on_scale_change(new_scale)
-  if not icon_font_scaled then
-    icon_font_scaled = true
-    icon_huge_font = style.icon_big_font:copy(110 * new_scale)
-    icon_font_scaled = false
-    icon_font_current_scale = new_scale
+  logo_canvas = nil
+  logo_canvas_size = nil
+end
+
+local function get_logo(size)
+  if logo_canvas and logo_canvas_size == size then return logo_canvas end
+
+  logo_canvas = nil
+  logo_canvas_size = size
+
+  local ok, logo = pcall(canvas.load_image, DATADIR .. "/icons/logo.png")
+  if ok and logo then
+    logo_canvas = logo:scaled(size, size, "linear")
   end
+  return logo_canvas
 end
 
 local function draw_text(self, x, y, calc_only)
   local th = style.big_font:get_height()
-  local dh = 2 * th + style.padding.y * 2
-  local x1, y1 = x, y + (dh / 2) - (th - style.padding.y * 2)
+  local logo_size = math.floor(110 * SCALE)
+  local text_h = 2 * th + style.padding.y * 2
+  local dh = math.max(logo_size, text_h)
+  local x1, y1 = x, y + (dh - text_h) / 2
   local xv = x1
 
   if self.version_width > self.title_width then
@@ -169,21 +169,20 @@ local function draw_text(self, x, y, calc_only)
       x = x + style.padding.x
       renderer.draw_rect(x, y, math.ceil(1 * SCALE), dh, style.dim)
       x = x + style.padding.x
-      renderer.draw_text(icon_huge_font, "5", x, y, style.background2)
     else
-      x = x + (self.size.x / 2) - (icon_huge_font:get_width("9") / 2) - style.padding.x
+      x = x + (self.size.x / 2) - (logo_size / 2) - style.padding.x
     end
 
-    renderer.draw_text(icon_huge_font, "5", x, y, style.background2)
-    renderer.draw_text(icon_huge_font, "6", x, y, style.text)
-    renderer.draw_text(icon_huge_font, "7", x, y, style.caret)
-    renderer.draw_text(icon_huge_font, "8", x, y, common.lighten_color(style.dim, 25))
-    x = renderer.draw_text(icon_huge_font, "9", x, y, common.lighten_color(style.dim, 45))
+    local logo = get_logo(logo_size)
+    if logo then
+      renderer.draw_canvas(logo, x, y + (dh - logo_size) / 2)
+    end
+    x = x + logo_size
   else
     x, y = 0, 0
     x = style.big_font:get_width(self.title)
       + (style.padding.x * 2)
-      + icon_huge_font:get_width("9")
+      + logo_size
   end
 
   return x, dh

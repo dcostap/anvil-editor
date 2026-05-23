@@ -53,7 +53,7 @@ config.select_add_next_no_case = true
 -- integration for shadow/resize/snap behavior while Lua draws the top bar.
 if PLATFORM == "Windows" then
   config.borderless = true
-  config.integrated_titlebar_tabs = true
+  config.integrated_titlebar_tabs = false
 end
 -- Cleaner tabs: hide cramped close buttons and reduce default tab width.
 config.tab_close_button = false

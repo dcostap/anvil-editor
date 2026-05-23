@@ -8,7 +8,7 @@ This folder contains resources that is used for building or packaging the projec
 
 ### Packaging
 
-- `icons/icon.{icns,ico,inl,rc,svg}`: anvil icon in various formats.
+- `icons/logo.png`, `icons/icon.{icns,ico,inl,rc}`: anvil icon in various formats.
 - `icons/segments`: anvil icon split in segments for the icons font.
 - `linux/io.github.dcostap.Anvil.appdata.xml`: AppStream metadata.
 - `linux/io.github.dcostap.Anvil.desktop`: Desktop file for Linux desktops.

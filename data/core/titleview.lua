@@ -4,14 +4,6 @@ local config = require "core.config"
 local style = require "core.style"
 local View = require "core.view"
 
-local icon_colors = {
-  bg = { common.color "#21252bff" },
-  color6 = { common.color "#ffffffff" },
-  color7 = { common.color "#3771c8ff" },
-  color8 = { common.color "#87aadeff" },
-  color9 = { common.color "#ABC6EDFF" }
-};
-
 local restore_command = {
   id = "restore", action = function() system.set_window_mode(core.window, "normal") end
 }
@@ -39,12 +31,27 @@ local function caption_button_width()
 end
 
 local caption_font
+local title_logo
+local title_logo_size
 local caption_glyphs = {
   minimize = "\238\164\161", -- U+E921 ChromeMinimize
   maximize = "\238\164\162", -- U+E922 ChromeMaximize
   restore  = "\238\164\163", -- U+E923 ChromeRestore
   close    = "\238\162\187", -- U+E8BB ChromeClose
 }
+
+local function get_title_logo(size)
+  if title_logo and title_logo_size == size then return title_logo end
+
+  title_logo = nil
+  title_logo_size = size
+
+  local ok, logo = pcall(canvas.load_image, DATADIR .. "/icons/logo.png")
+  if ok and logo then
+    title_logo = logo:scaled(size, size, "linear")
+  end
+  return title_logo
+end
 
 local function get_caption_font()
   if caption_font == false then return nil end
@@ -80,6 +87,14 @@ end
 
 local function title_tabs_right_padding()
   return math.floor(80 * SCALE)
+end
+
+local function current_project_title()
+  local project = core.root_project and core.root_project()
+  if project and project.path and project.path ~= "" then
+    return common.basename(project.path)
+  end
+  return "Anvil"
 end
 
 function TitleView:new()
@@ -150,17 +165,24 @@ function TitleView:draw_window_title()
   local h = style.font:get_height()
   local ox, oy = self:get_content_offset()
   local color = self:has_window_focus() and style.text or style.dim
-  local x, y = ox + style.padding.x, oy + math.floor((self.size.y - h) / 2)
-  local clip_w = math.max(0, title_tabs_x() - style.padding.x * 2)
-  core.push_clip_rect(ox, oy, clip_w, self.size.y)
-  common.draw_text(style.icon_font, icon_colors.bg, "5", nil, x, y, 0, h)
-  common.draw_text(style.icon_font, icon_colors.color6, "6", nil, x, y, 0, h)
-  common.draw_text(style.icon_font, icon_colors.color7, "7", nil, x, y, 0, h)
-  common.draw_text(style.icon_font, icon_colors.color8, "8", nil, x, y, 0, h)
-  x = common.draw_text(style.icon_font, icon_colors.color9, "9 ", nil, x, y, 0, h)
-  local title = core.compose_window_title(core.window_title)
-  common.draw_text(style.font, color, title, nil, x, y, 0, h)
-  core.pop_clip_rect()
+  local y = oy + math.floor((self.size.y - h) / 2)
+
+  local logo_slot = math.floor(math.min(22 * SCALE, self.size.y - 6 * SCALE))
+  local logo_size = math.floor(math.min(16 * SCALE, logo_slot))
+  local logo = get_title_logo(logo_size)
+  if logo then
+    renderer.draw_canvas(
+      logo,
+      ox + style.padding.x + math.floor((logo_slot - logo_size) / 2),
+      oy + math.floor((self.size.y - logo_size) / 2)
+    )
+  end
+
+  local controls_width = caption_button_width() * #title_commands
+  local inset = math.max(logo_slot + style.padding.x * 2, controls_width + style.padding.x)
+  local x = ox + inset
+  local w = math.max(0, self.size.x - inset * 2)
+  common.draw_text(style.font, color, current_project_title(), "center", x, y, w, h)
 end
 
 function TitleView:get_tabs_rect()

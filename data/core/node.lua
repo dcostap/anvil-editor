@@ -504,6 +504,24 @@ function Node:get_tab_rect(idx)
 end
 
 
+local function node_contains_view(node, view)
+  if not node or not view then return false end
+  if node.type == "leaf" then
+    for _, item in ipairs(node.views) do
+      if item == view then return true end
+    end
+    return false
+  end
+  return node_contains_view(node.a, view) or node_contains_view(node.b, view)
+end
+
+local function divider_size_for_node(node)
+  if core.title_view and (node_contains_view(node.a, core.title_view) or node_contains_view(node.b, core.title_view)) then
+    return 0
+  end
+  return style.divider_size
+end
+
 ---Get the rectangle for this node's divider (for split nodes).
 ---@return number? x Screen x coordinate, or nil for leaf nodes
 ---@return number? y Screen y coordinate, or nil for leaf nodes
@@ -511,10 +529,11 @@ end
 ---@return number? h Height, or nil for leaf nodes
 function Node:get_divider_rect()
   local x, y = self.position.x, self.position.y
+  local ds = divider_size_for_node(self)
   if self.type == "hsplit" then
-    return x + self.a.size.x, y, style.divider_size, self.size.y
+    return x + self.a.size.x, y, ds, self.size.y
   elseif self.type == "vsplit" then
-    return x, y + self.a.size.y, self.size.x, style.divider_size
+    return x, y + self.a.size.y, self.size.x, ds
   end
 end
 
@@ -540,13 +559,13 @@ function Node:get_locked_size()
     local sx, sy
     if self.type == 'hsplit' then
       if x1 and x2 then
-        local dsx = (x1 < 1 or x2 < 1) and 0 or style.divider_size
+        local dsx = (x1 < 1 or x2 < 1) and 0 or divider_size_for_node(self)
         sx = x1 + x2 + dsx
       end
       sy = y1 or y2
     else
       if y1 and y2 then
-        local dsy = (y1 < 1 or y2 < 1) and 0 or style.divider_size
+        local dsy = (y1 < 1 or y2 < 1) and 0 or divider_size_for_node(self)
         sy = y1 + y2 + dsy
       end
       sx = x1 or x2
@@ -575,7 +594,7 @@ end
 ---@param y1? number Locked size of first child on perpendicular axis (unused)
 ---@param y2? number Locked size of second child on perpendicular axis (unused)
 local function calc_split_sizes(self, x, y, x1, x2, y1, y2)
-  local ds = ((x1 and x1 < 1) or (x2 and x2 < 1)) and 0 or style.divider_size
+  local ds = ((x1 and x1 < 1) or (x2 and x2 < 1)) and 0 or divider_size_for_node(self)
   local n = x1 and x1 + ds or (x2 and self.size[x] - x2 or math.floor(self.size[x] * self.divider))
   self.a.position[x] = self.position[x]
   self.a.position[y] = self.position[y]
@@ -837,7 +856,11 @@ function Node:draw()
     end
   else
     local x, y, w, h = self:get_divider_rect()
-    renderer.draw_rect(x, y, w, h, style.divider)
+    local color = style.divider
+    if core.title_view and (node_contains_view(self.a, core.title_view) or node_contains_view(self.b, core.title_view)) then
+      color = style.background2
+    end
+    renderer.draw_rect(x, y, w, h, color)
     self:propagate("draw")
   end
 end

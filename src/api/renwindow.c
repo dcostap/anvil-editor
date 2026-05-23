@@ -7,7 +7,7 @@
 static RenWindow *persistant_window = NULL;
 
 static void init_window_icon(SDL_Window *window) {
-#if !defined(_WIN32) && !defined(__APPLE__)
+#if !defined(__APPLE__)
   #include "../resources/icons/icon.inl"
   (void) icon_rgba_len; /* unused */
   SDL_PixelFormat format = SDL_GetPixelFormatForMasks(32, 0x000000ff, 0x0000ff00, 0x00ff0000, 0xff000000);
