@@ -170,18 +170,39 @@ static LRESULT hit_test(Win32FrameData *frame, HWND hwnd, LPARAM lparam) {
   return HTCLIENT;
 }
 
-static void push_sdl_mouse_motion(Win32FrameData *frame, LPARAM lparam) {
+static void push_sdl_mouse_motion_at(Win32FrameData *frame, float x, float y) {
   if (!frame || !frame->ren || !frame->ren->cache.window) return;
-
-  POINT pt = { GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
-  ScreenToClient(frame->hwnd, &pt);
 
   SDL_Event event;
   SDL_zero(event);
   event.type = SDL_EVENT_MOUSE_MOTION;
   event.motion.windowID = SDL_GetWindowID(frame->ren->cache.window);
-  event.motion.x = (float) pt.x;
-  event.motion.y = (float) pt.y;
+  event.motion.x = x;
+  event.motion.y = y;
+  SDL_PushEvent(&event);
+}
+
+static void push_sdl_mouse_motion(Win32FrameData *frame, LPARAM lparam) {
+  if (!frame || !frame->ren || !frame->ren->cache.window) return;
+
+  POINT pt = { GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
+  ScreenToClient(frame->hwnd, &pt);
+  push_sdl_mouse_motion_at(frame, (float) pt.x, (float) pt.y);
+}
+
+static void push_sdl_mouse_leave(Win32FrameData *frame) {
+  if (!frame || !frame->ren || !frame->ren->cache.window) return;
+
+  /* Some hover state is cleared by mouse-motion routing, while window-leave
+     routing only notifies the last overlapping view. Send an explicit outside
+     motion first so app-drawn titlebar buttons are cleared even when the
+     cursor exits directly from the top/right edge. */
+  push_sdl_mouse_motion_at(frame, -1.0f, -1.0f);
+
+  SDL_Event event;
+  SDL_zero(event);
+  event.type = SDL_EVENT_WINDOW_MOUSE_LEAVE;
+  event.window.windowID = SDL_GetWindowID(frame->ren->cache.window);
   SDL_PushEvent(&event);
 }
 
@@ -252,11 +273,7 @@ static LRESULT CALLBACK frame_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
 
     case WM_MOUSELEAVE:
       if (frame->enabled) {
-        SDL_Event event;
-        SDL_zero(event);
-        event.type = SDL_EVENT_WINDOW_MOUSE_LEAVE;
-        event.window.windowID = SDL_GetWindowID(frame->ren->cache.window);
-        SDL_PushEvent(&event);
+        push_sdl_mouse_leave(frame);
       }
       break;
 
@@ -274,11 +291,7 @@ static LRESULT CALLBACK frame_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
 
     case WM_NCMOUSELEAVE:
       if (frame->enabled) {
-        SDL_Event event;
-        SDL_zero(event);
-        event.type = SDL_EVENT_WINDOW_MOUSE_LEAVE;
-        event.window.windowID = SDL_GetWindowID(frame->ren->cache.window);
-        SDL_PushEvent(&event);
+        push_sdl_mouse_leave(frame);
       }
       break;
 
