@@ -534,7 +534,8 @@ function core.init()
     end
   end
 
-  core.window = core.window or renwindow._restore() or renwindow.create("", table.unpack(session.window or {}))
+  local restored_window = core.window or renwindow._restore()
+  core.window = restored_window or renwindow.create("", table.unpack(session.window or {}))
 
   -- Maximizing the window makes it lose the hidden attribute on Windows
   -- so we delay this to keep window hidden until args parsed. Also, on
@@ -542,10 +543,10 @@ function core.init()
   -- so we delay it on all platforms, except macOS. On macOS setting the
   -- mode to maximized seems to cause issues resetting its size so setting
   -- the size is all we need on that platform.
-  if session.window then
+  if session.window and not restored_window then
     system.set_window_size(core.window, table.unpack(session.window))
   end
-  if session.window_mode == "maximized" and PLATFORM ~= "Mac OS X" then
+  if session.window_mode == "maximized" and PLATFORM ~= "Mac OS X" and not restored_window then
     core.add_thread(function()
       system.set_window_mode(core.window, "maximized")
     end)
