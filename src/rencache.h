@@ -24,6 +24,7 @@ typedef struct {
   unsigned *cells;
   RenRect rect_buf[RENCACHE_CELLS_X * RENCACHE_CELLS_Y / 2];
   bool resize_issue;
+  bool force_full_redraw;
   RenRect screen_rect;
   RenRect last_clip_rect;
   SDL_Window *window;   /* The cache can be used for both a window or surface */
@@ -44,9 +45,11 @@ RenRect rencache_draw_poly(RenCache *rc, RenPoint *points, int npoints, RenColor
 void  rencache_draw_canvas(RenCache *ren_cache, RenRect rect, RenCache *canvas);
 void  rencache_draw_pixels(RenCache *ren_cache, RenRect rect, const char* bytes, size_t len);
 void  rencache_invalidate(RenCache *rc);
+void  rencache_force_full_redraw(RenCache *rc);
 void  rencache_begin_frame(RenCache *rc);
 void  rencache_end_frame(RenCache *rc);
 RenSurface rencache_get_surface(RenCache *rc);
 void rencache_update_rects(RenCache *rc, RenRect *rects, int count);
+bool rencache_is_window_resizing(RenCache *rc);
 
 #endif

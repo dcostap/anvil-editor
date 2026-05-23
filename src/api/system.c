@@ -588,6 +588,12 @@ static int f_set_window_native_frame(lua_State *L) {
   return 1;
 }
 
+static int f_window_is_resizing(lua_State *L) {
+  RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  lua_pushboolean(L, win32_frame_is_resizing(window_renderer));
+  return 1;
+}
+
 static int f_get_window_frame_metrics(lua_State *L) {
   RenWindow *window_renderer = *(RenWindow**) luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
   int button_width, title_height, resize_border;
@@ -1686,6 +1692,7 @@ static const luaL_Reg lib[] = {
   { "set_window_hit_test",   f_set_window_hit_test   },
   { "set_window_native_frame", f_set_window_native_frame },
   { "get_window_frame_metrics", f_get_window_frame_metrics },
+  { "window_is_resizing",     f_window_is_resizing     },
   { "get_window_size",       f_get_window_size       },
   { "set_window_size",       f_set_window_size       },
   { "set_text_input_rect",   f_set_text_input_rect   },

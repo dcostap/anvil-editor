@@ -1,4 +1,8 @@
+#ifndef RENWINDOW_H
+#define RENWINDOW_H
+
 #include <SDL3/SDL.h>
+#include <stdbool.h>
 #include "renderer.h"
 #include "rencache.h"
 
@@ -28,7 +32,10 @@ RenWindow* renwin_create(SDL_Window *win);
 void renwin_clip_to_surface(RenWindow *ren);
 void renwin_set_clip_rect(RenWindow *ren, RenRect rect);
 void renwin_resize_surface(RenWindow *ren);
+bool renwin_is_resizing(RenWindow *ren);
 void renwin_update_scale(RenWindow *ren);
 void renwin_show_window(RenWindow *ren);
 void renwin_update_rects(RenWindow *ren, RenRect *rects, int count);
 void renwin_free(RenWindow *ren);
+
+#endif

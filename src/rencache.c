@@ -296,6 +296,11 @@ void rencache_invalidate(RenCache *ren_cache) {
   memset(ren_cache->cells_prev, 0xff, sizeof(ren_cache->cells_buf1));
 }
 
+void rencache_force_full_redraw(RenCache *ren_cache) {
+  ren_cache->force_full_redraw = true;
+  rencache_invalidate(ren_cache);
+}
+
 
 void rencache_begin_frame(RenCache *ren_cache) {
   /* reset all cells if the screen width/height has changed */
@@ -306,7 +311,7 @@ void rencache_begin_frame(RenCache *ren_cache) {
   if (ren_cache->screen_rect.width != w || h != ren_cache->screen_rect.height) {
     ren_cache->screen_rect.width = w;
     ren_cache->screen_rect.height = h;
-    rencache_invalidate(ren_cache);
+    rencache_force_full_redraw(ren_cache);
   }
   ren_cache->last_clip_rect = ren_cache->screen_rect;
 }
@@ -360,27 +365,34 @@ void rencache_end_frame(RenCache *ren_cache) {
 
   /* push rects for all cells changed from last frame, reset cells */
   int rect_count = 0;
-  int max_x = ren_cache->screen_rect.width / RENCACHE_CELL_SIZE + 1;
-  int max_y = ren_cache->screen_rect.height / RENCACHE_CELL_SIZE + 1;
-  for (int y = 0; y < max_y; y++) {
-    for (int x = 0; x < max_x; x++) {
-      /* compare previous and current cell for change */
-      int idx = cell_idx(x, y);
-      if (ren_cache->cells[idx] != ren_cache->cells_prev[idx]) {
-        push_rect(ren_cache, (RenRect) { x, y, 1, 1 }, &rect_count);
-      }
-      ren_cache->cells_prev[idx] = HASH_INITIAL;
+  if (ren_cache->force_full_redraw) {
+    ren_cache->rect_buf[rect_count++] = ren_cache->screen_rect;
+    for (size_t i = 0; i < sizeof(ren_cache->cells_buf1) / sizeof(ren_cache->cells_buf1[0]); i++) {
+      ren_cache->cells_prev[i] = HASH_INITIAL;
     }
-  }
+  } else {
+    int max_x = ren_cache->screen_rect.width / RENCACHE_CELL_SIZE + 1;
+    int max_y = ren_cache->screen_rect.height / RENCACHE_CELL_SIZE + 1;
+    for (int y = 0; y < max_y; y++) {
+      for (int x = 0; x < max_x; x++) {
+        /* compare previous and current cell for change */
+        int idx = cell_idx(x, y);
+        if (ren_cache->cells[idx] != ren_cache->cells_prev[idx]) {
+          push_rect(ren_cache, (RenRect) { x, y, 1, 1 }, &rect_count);
+        }
+        ren_cache->cells_prev[idx] = HASH_INITIAL;
+      }
+    }
 
-  /* expand rects from cells to pixels */
-  for (int i = 0; i < rect_count; i++) {
-    RenRect *r = &ren_cache->rect_buf[i];
-    r->x *= RENCACHE_CELL_SIZE;
-    r->y *= RENCACHE_CELL_SIZE;
-    r->width *= RENCACHE_CELL_SIZE;
-    r->height *= RENCACHE_CELL_SIZE;
-    *r = intersect_rects(*r, ren_cache->screen_rect);
+    /* expand rects from cells to pixels */
+    for (int i = 0; i < rect_count; i++) {
+      RenRect *r = &ren_cache->rect_buf[i];
+      r->x *= RENCACHE_CELL_SIZE;
+      r->y *= RENCACHE_CELL_SIZE;
+      r->width *= RENCACHE_CELL_SIZE;
+      r->height *= RENCACHE_CELL_SIZE;
+      *r = intersect_rects(*r, ren_cache->screen_rect);
+    }
   }
 
   RenSurface rs = rencache_get_surface(ren_cache);
@@ -438,6 +450,13 @@ void rencache_end_frame(RenCache *ren_cache) {
   ren_cache->cells = ren_cache->cells_prev;
   ren_cache->cells_prev = tmp;
   ren_cache->command_buf_idx = 0;
+  ren_cache->force_full_redraw = false;
+}
+
+bool rencache_is_window_resizing(RenCache *rc) {
+  if (!rc || !rc->window) return false;
+  RenWindow *window = ren_find_window(rc->window);
+  return window && renwin_is_resizing(window);
 }
 
 RenSurface rencache_get_surface(RenCache *ren_cache) {

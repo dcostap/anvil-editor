@@ -1535,6 +1535,8 @@ local max_coroutines = 1000
 local main_loop_time = 0
 
 function core.step(next_frame_time)
+  local window_is_resizing = system.window_is_resizing and system.window_is_resizing(core.window)
+
   -- handle events
   local did_keymap = false
 
@@ -1566,7 +1568,7 @@ function core.step(next_frame_time)
   -- update
   local stats_config = config.draw_stats
   local uncapped = stats_config == "uncapped"
-  local priority_event = event_received and event_received ~= "mousemoved"
+  local priority_event = window_is_resizing or (event_received and event_received ~= "mousemoved")
   core.root_view.size.x, core.root_view.size.y = width, height
   if uncapped or priority_event or next_frame_time < system.get_time() then
     core.root_view:update()
@@ -1578,7 +1580,7 @@ function core.step(next_frame_time)
   ---interaction. Otherwise, rendering is prioritized on user events and
   ---config.fps not obeyed.
   if
-    not uncapped and ((not event_received and not core.redraw) or
+    not window_is_resizing and not uncapped and ((not event_received and not core.redraw) or
       -- time left before next frame so we can skip
       next_frame_time > system.get_time()
     )
@@ -1609,6 +1611,9 @@ function core.step(next_frame_time)
 
   -- draw
   local start_time = system.get_time()
+  if window_is_resizing and renderer.force_full_redraw then
+    renderer.force_full_redraw(core.window)
+  end
   renderer.begin_frame(core.window)
   core.clip_rect_stack[1] = { 0, 0, width, height }
   renderer.set_clip_rect(table.unpack(core.clip_rect_stack[1]))
@@ -1863,10 +1868,17 @@ function core.run_step()
     run_has_focus   = system.window_has_focus(core.window)
   end
 
-  -- run all coroutine tasks
-  local time_to_wake   = run_threads()
-  local threads_end_time = system.get_time() - now
-  now = now + threads_end_time
+  local resizing_window = system.window_is_resizing and system.window_is_resizing(core.window)
+
+  -- run all coroutine tasks. During interactive resize, keep the UI path hot
+  -- and avoid background/plugin coroutine work stealing frame time.
+  local time_to_wake = 1 / config.fps
+  local threads_end_time = 0
+  if not resizing_window then
+    time_to_wake = run_threads()
+    threads_end_time = system.get_time() - now
+    now = now + threads_end_time
+  end
 
   -- respect coroutines redraw requests
   if run_has_focus or core.redraw then
@@ -1876,7 +1888,7 @@ function core.run_step()
 
   -- detect events that arrived via SDL_AppEvent before this iteration
   -- and use them to enable burst-rendering mode
-  if system.has_pending_events() then
+  if resizing_window or system.has_pending_events() then
     run_next_step     = nil
     run_burst_events  = now + 3
   end

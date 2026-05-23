@@ -173,6 +173,14 @@ function system.set_window_native_frame(window, enabled) end
 function system.get_window_frame_metrics(window) end
 
 ---
+---Return true while the window is being interactively resized by Anvil's
+---platform-native frame integration.
+---
+---@param window renwindow
+---@return boolean resizing
+function system.window_is_resizing(window) end
+
+---
 ---When then window is run borderless (without system decorations), this
 ---function allows to set the size of the different regions that allow
 ---for custom window management.
