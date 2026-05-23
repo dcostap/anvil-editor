@@ -4,154 +4,44 @@ local core = require "core"
 local style = require "core.style"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
-local common = require "core.common"
 local command = require "core.command"
-local config = require "core.config"
 
----Base configuration options.
----@class config.plugins.drawwhitespace.options
----Disable or enable the drawing of white spaces.
----@field enabled boolean
----Show white spaces at the beginning of a line.
----@field show_leading boolean
----Show white spaces at the end of a line.
----@field show_trailing boolean
----Show white spaces between words.
----@field show_middle boolean
----Show white spaces on selected text only.
----@field show_selected_only boolean
----Minimum amount of white spaces between words in order to show them.
----@field show_middle_min integer
----Default color used to render the white spaces.
----@field color renderer.color
----Color for leading white spaces.
----@field leading_color renderer.color
----Color for middle white spaces.
----@field middle_color renderer.color
----Color for trailing white spaces.
----@field trailing_color renderer.color
-
----Character substitution options.
----@class config.plugins.drawwhitespace.substitutions : config.plugins.drawwhitespace.options
----The character to substitute.
----@field char string
----The substitution character,
----@field sub string
-
----Configuration options for `drawwhitespace` plugin.
----@class config.plugins.drawwhitespace : config.plugins.drawwhitespace.options
----Character substitutions.
----@field substitutions config.plugins.drawwhitespace.substitutions[]
-config.plugins.drawwhitespace = common.merge({
-  enabled = false,
+local drawwhitespace = {
+  enabled = true,
   show_leading = true,
   show_trailing = true,
-  show_middle = true,
+  show_middle = false,
   show_selected_only = false,
 
   show_middle_min = 1,
 
-  color = style.syntax.whitespace or style.syntax.comment,
-  leading_color = nil,
+  color = style.whitespace,
+  leading_color = style.whitespace,
   middle_color = nil,
-  trailing_color = nil,
+  trailing_color = style.whitespace_trailing,
 
   substitutions = {
     {
       char = " ",
       sub = "·",
-      -- You can put any of the previous options here too.
-      -- For example:
-      -- show_middle_min = 2,
-      -- show_leading = false,
+      show_leading = true,
+      show_middle = false,
+      show_trailing = true,
     },
     {
       char = "\t",
-      sub = "»",
-    },
-    {
-      char = "\26",
-      sub = "█",
+      sub = "→",
       show_leading = true,
+      show_middle = false,
       show_trailing = true,
-      show_middle = true,
-      binary_only = true
     },
   },
-
-  config_spec = {
-    name = "Draw Whitespace",
-    {
-      label = "Enabled",
-      description = "Disable or enable the drawing of white spaces.",
-      path = "enabled",
-      type = "toggle",
-      default = false
-    },
-    {
-      label = "Show Leading",
-      description = "Draw whitespaces starting at the beginning of a line.",
-      path = "show_leading",
-      type = "toggle",
-      default = true,
-    },
-    {
-      label = "Show Middle",
-      description = "Draw whitespaces on the middle of a line.",
-      path = "show_middle",
-      type = "toggle",
-      default = true,
-    },
-    {
-      label = "Show Trailing",
-      description = "Draw whitespaces on the end of a line.",
-      path = "show_trailing",
-      type = "toggle",
-      default = true,
-    },
-    {
-      label = "Show Selected Only",
-      description = "Only draw whitespaces if it is within a selection.",
-      path = "show_selected_only",
-      type = "toggle",
-      default = false,
-    },
-    {
-      label = "Show Trailing as Error",
-      description = "Uses an error square to spot them easily, requires 'Show Trailing' enabled.",
-      path = "show_trailing_error",
-      type = "toggle",
-      default = false,
-      on_apply = function(enabled)
-        local found = nil
-        local substitutions = config.plugins.drawwhitespace.substitutions
-        for i, sub in ipairs(substitutions) do
-          if sub.trailing_error then
-            found = i
-          end
-        end
-        if found == nil and enabled then
-          table.insert(substitutions, {
-            char = " ",
-            sub = "█",
-            show_leading = false,
-            show_middle = false,
-            show_trailing = true,
-            trailing_color = style.error,
-            trailing_error = true
-          })
-        elseif found ~= nil and not enabled then
-          table.remove(substitutions, found)
-        end
-      end
-    }
-  }
-}, config.plugins.drawwhitespace)
+}
 
 
 local function get_option(substitution, option)
   if substitution[option] == nil then
-    return config.plugins.drawwhitespace[option]
+    return drawwhitespace[option]
   end
   return substitution[option]
 end
@@ -160,9 +50,9 @@ local update = DocView.update
 function DocView:update()
   update(self)
   if
-    config.plugins.drawwhitespace.enabled
+    drawwhitespace.enabled
     and
-    config.plugins.drawwhitespace.show_selected_only
+    drawwhitespace.show_selected_only
   then
     local selections = {}
     local col1, col2
@@ -214,7 +104,7 @@ end
 local draw_line_text = DocView.draw_line_text
 function DocView:draw_line_text(idx, x, y)
   if
-    not config.plugins.drawwhitespace.enabled
+    not drawwhitespace.enabled
     or
     getmetatable(self) ~= DocView
   then
@@ -234,7 +124,7 @@ function DocView:draw_line_text(idx, x, y)
   local line_len = #self.doc.lines[idx]
   local l1, c1, l2, c2
   if
-    not config.plugins.drawwhitespace.show_selected_only
+    not drawwhitespace.show_selected_only
     or
     self.drawwhitespace_selections.all
   then
@@ -246,7 +136,7 @@ function DocView:draw_line_text(idx, x, y)
     col1, col2, text = table.unpack(self.drawwhitespace_selections[idx])
   end
 
-  for _, substitution in pairs(config.plugins.drawwhitespace.substitutions) do
+  for _, substitution in pairs(drawwhitespace.substitutions) do
     local char = substitution.char
     local sub = substitution.sub
     offset = 1
@@ -312,14 +202,14 @@ end
 
 command.add(nil, {
   ["draw-whitespace:toggle"]  = function()
-    config.plugins.drawwhitespace.enabled = not config.plugins.drawwhitespace.enabled
+    drawwhitespace.enabled = not drawwhitespace.enabled
   end,
 
   ["draw-whitespace:disable"] = function()
-    config.plugins.drawwhitespace.enabled = false
+    drawwhitespace.enabled = false
   end,
 
   ["draw-whitespace:enable"]  = function()
-    config.plugins.drawwhitespace.enabled = true
+    drawwhitespace.enabled = true
   end,
 })

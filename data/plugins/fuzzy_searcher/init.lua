@@ -1,0 +1,2682 @@
+-- mod-version:3 priority:101
+-- A small Telescope-like fuzzy/search overlay for Pragtical.
+local core = require "core"
+local command = require "core.command"
+local keymap = require "core.keymap"
+local style = require "core.style"
+local common = require "core.common"
+local config = require "core.config"
+local process = require "core.process"
+local Doc = require "core.doc"
+local DocView = require "core.docview"
+local ImageView = require "core.imageview"
+local file_context = require "plugins.file_context"
+local split_view = require "plugins.split_view"
+local Widget = require "widget"
+local TextBox = require "widget.textbox"
+
+local PreviewDocView = DocView:extend()
+
+function PreviewDocView:get_gutter_width()
+  local padding = style.padding.x * 2
+  if config.show_line_numbers then
+    return self:get_font():get_width("00000") + padding, padding
+  end
+  return style.padding.x, padding
+end
+
+function PreviewDocView:draw_line_gutter(line, x, y, width)
+  local lh = self:get_line_height()
+  if config.show_line_numbers then
+    local color = style.line_number
+    for _, line1, _, line2 in self.doc:get_selections(true) do
+      if line >= line1 and line <= line2 then
+        color = style.line_number2
+        break
+      end
+    end
+    -- Preview gutters are fixed-width and left-aligned so the label itself
+    -- stays anchored when the visible range changes from 1 to 2+ digits.
+    renderer.draw_text(self:get_font(), tostring(line), x + style.padding.x, y + self:get_line_text_y_offset(), color)
+  end
+  return lh
+end
+
+-- Older development versions of this plugin monkey-patched keymap.on_key_pressed.
+-- Restore it on reload so this version uses normal Pragtical commands/keymaps.
+if keymap.__fuzzy_searcher_original_on_key_pressed then
+  keymap.on_key_pressed = keymap.__fuzzy_searcher_original_on_key_pressed
+  keymap.__fuzzy_searcher_original_on_key_pressed = nil
+end
+
+local BUNDLED_PLUGIN_DIR = DATADIR .. PATHSEP .. "plugins" .. PATHSEP .. "fuzzy_searcher"
+local USER_PLUGIN_DIR = USERDIR .. PATHSEP .. "plugins" .. PATHSEP .. "fuzzy_searcher"
+local RECENT_COMMANDS_FILE = USER_PLUGIN_DIR .. PATHSEP .. "recent_commands.txt"
+
+local function bundled_tool(name)
+  local bundled = BUNDLED_PLUGIN_DIR .. PATHSEP .. name
+  if system.get_file_info(bundled) then return bundled end
+  return USER_PLUGIN_DIR .. PATHSEP .. name
+end
+
+local fuzzy_searcher = {
+  result_limit = 30,
+  max_result_limit = 500,
+  width = 0.90,
+  height = 0.80,
+  min_width = 1000 * SCALE,
+  min_height = 650 * SCALE,
+  preview_width = 0.50,
+  fd = bundled_tool("fd.exe"),
+  rg = bundled_tool("rg.exe"),
+  fuzzy_candidate_limit = 500,
+  fuzzy_scan_limit = 10000,
+  fuzzy_line_max_chars = 1200,
+  fuzzy_time_slice = 0.006,
+  grep_path_column_width = 0.45,
+  preview_debug = false,
+  preview_text_max_bytes = 2 * 1024 * 1024,
+}
+
+local FSView = Widget:extend()
+local active_view
+local open
+
+local modal_modkey_map = {
+  ["left ctrl"] = "ctrl", ["right ctrl"] = "ctrl",
+  ["left shift"] = "shift", ["right shift"] = "shift",
+  ["left alt"] = "alt", ["right alt"] = "altgr",
+  ["left gui"] = "super", ["right gui"] = "super",
+  ["left windows"] = "super", ["right windows"] = "super",
+}
+local modal_modkeys = { "ctrl", "shift", "alt", "altgr", "super" }
+local function modal_normalize_stroke(stroke)
+  local stroke_table = {}
+  for key in stroke:gmatch("[^+]+") do table.insert(stroke_table, key) end
+  table.sort(stroke_table, function(a, b)
+    if a == b then return false end
+    for _, mod in ipairs(modal_modkeys) do
+      if a == mod or b == mod then return a == mod end
+    end
+    return a < b
+  end)
+  return table.concat(stroke_table, "+")
+end
+
+local function modal_key_to_stroke(key)
+  local keys = { key }
+  for _, mod in ipairs(modal_modkeys) do
+    if keymap.modkeys[mod] then table.insert(keys, mod) end
+  end
+  return modal_normalize_stroke(table.concat(keys, "+"))
+end
+
+local function current_picker()
+  if active_view and active_view:is_visible() then return active_view end
+  local view = core.fuzzy_searcher_active_view
+  if view and view.is_visible and view:is_visible() then
+    active_view = view
+    return view
+  end
+end
+
+local function modal_fuzzy_command_allowed(cmd)
+  return type(cmd) == "string" and cmd:match("^fuzzy%-searcher:") ~= nil
+end
+
+local function modal_textbox_command_allowed(cmd)
+  if type(cmd) ~= "string" then return false end
+  if cmd:match("^doc:move%-") or cmd:match("^doc:select%-") then return true end
+  if cmd:match("^doc:delete") then return true end
+  return cmd == "doc:backspace"
+      or cmd == "doc:copy"
+      or cmd == "doc:cut"
+      or cmd == "doc:paste"
+      or cmd == "doc:undo"
+      or cmd == "doc:redo"
+      or cmd == "doc:select-all"
+      or cmd == "doc:select-none"
+end
+
+local function modal_command(stroke, predicate)
+  local commands = keymap.map[stroke]
+  if not commands then return nil end
+  for _, cmd in ipairs(commands) do
+    if predicate(cmd) then return cmd end
+  end
+end
+
+local function modal_fuzzy_command(stroke)
+  -- Ctrl+Enter is also claimed by local IntelliJ conflict disabling. Keep the
+  -- picker modal command authoritative even when the global keymap was later
+  -- overwritten.
+  if stroke == "ctrl+return" then return "fuzzy-searcher:confirm-side" end
+  return modal_command(stroke, modal_fuzzy_command_allowed)
+end
+
+local function modal_textbox_command(stroke)
+  return modal_command(stroke, modal_textbox_command_allowed)
+end
+
+local modal_non_text_keys = {
+  ["escape"] = true, ["return"] = true, ["keypad enter"] = true,
+  ["tab"] = true, ["backspace"] = true, ["delete"] = true, ["insert"] = true,
+  ["up"] = true, ["down"] = true, ["left"] = true, ["right"] = true,
+  ["home"] = true, ["end"] = true, ["pageup"] = true, ["pagedown"] = true,
+  ["capslock"] = true, ["numlock"] = true, ["scrolllock"] = true,
+  ["printscreen"] = true, ["pause"] = true, ["menu"] = true,
+}
+for i = 1, 24 do modal_non_text_keys["f" .. i] = true end
+
+local function modal_should_let_text_input_through(key, stroke)
+  -- Printable text arrives through a later textinput event. If we consume the
+  -- keypressed event for plain/shifted characters, Pragtical/SDL can suppress
+  -- that textinput, so normal typing appears broken. Ctrl/Alt/Super combos are
+  -- shortcuts and stay modal-blocked unless explicitly allowed.
+  if keymap.modkeys.super then return false end
+  if keymap.modkeys.ctrl or keymap.modkeys.alt then
+    -- On Windows AltGr can appear as ctrl+alt, but it is used to enter
+    -- printable characters like @/# on many layouts. If the physical AltGr
+    -- modifier is down, do not treat ctrl/alt as shortcut blockers.
+    if not keymap.modkeys.altgr then return false end
+  end
+  if modal_textbox_command(stroke) or modal_non_text_keys[key] then return false end
+  return type(key) == "string" and key ~= ""
+end
+local files_cache_root, files_cache, files_indexing, files_generation = nil, nil, false, 0
+local command_cache
+local recent_commands = {}
+local recent_command_set = {}
+local line_count_cache = {}
+local grep_proc
+local grep_generation = 0
+local file_search_generation = 0
+local fuzzy_grep_sessions = {}
+
+local function project_dir()
+  local p = core.root_project and core.root_project()
+  return common.normalize_path((p and p.path) or system.absolute_path("."))
+end
+
+local function display_root(root)
+  return common.home_encode and common.home_encode(root) or root
+end
+
+local function fullpath(path)
+  path = tostring(path or "")
+  if path == "" then return project_dir() end
+  local normalized = common.normalize_path(path)
+  if normalized and common.is_absolute_path(normalized) then return normalized end
+  return project_dir() .. PATHSEP .. path:gsub("[/\\]", PATHSEP)
+end
+
+local function get_recent_projects()
+  local out, seen = {}, {}
+  for _, path in ipairs(core.recent_projects or {}) do
+    path = common.normalize_path(path)
+    if path and path ~= "" and not seen[path] then
+      out[#out+1] = path
+      seen[path] = true
+    end
+  end
+  return out
+end
+
+local function open_pragtical_window(path)
+  local exe = EXEFILE or (EXEDIR and (EXEDIR .. PATHSEP .. "pragtical.exe")) or "pragtical"
+  process.start({ exe, path }, {
+    detach = true,
+    stdin = process.REDIRECT_DISCARD,
+    stdout = process.REDIRECT_DISCARD,
+    stderr = process.REDIRECT_DISCARD,
+  })
+end
+
+local function kill_grep()
+  if grep_proc and grep_proc:running() then pcall(function() grep_proc:kill() end) end
+  grep_proc = nil
+end
+
+local function kill_file_search()
+  file_search_generation = file_search_generation + 1
+end
+
+local function ensure_file_index()
+  local root = project_dir()
+  if files_cache and files_cache_root == root then return end
+  if files_indexing and files_cache_root == root then return end
+
+  files_cache_root = root
+  files_cache = {}
+  files_indexing = true
+  files_generation = files_generation + 1
+  local gen = files_generation
+
+  core.add_thread(function()
+    local proc, err = process.start({
+      fuzzy_searcher.fd,
+      "--type", "f",
+      "--hidden",
+      "--exclude", ".git",
+      "."
+    }, {
+      cwd = root,
+      stdout = process.REDIRECT_PIPE,
+      stderr = process.REDIRECT_DISCARD,
+      stdin = process.REDIRECT_DISCARD,
+    })
+
+    if not proc then
+      files_indexing = false
+      core.error("fuzzy_searcher: fd failed: %s", err or "unknown error")
+      return
+    end
+
+    local t, n = {}, 0
+    while true do
+      local line = proc.stdout:read("line", { scan = 1 / config.fps })
+      if line and line ~= "" then
+        line = line:gsub("^%.[/\\]", ""):gsub("\\", "/")
+        t[#t+1] = line
+        n = n + 1
+        if n % 250 == 0 and gen == files_generation and files_cache_root == root then
+          files_cache = t
+          if active_view then active_view.dirty = true; active_view:schedule_update(true) end
+        end
+      elseif not proc:running() then
+        break
+      else
+        coroutine.yield(1 / config.fps)
+      end
+    end
+    proc:wait(process.WAIT_DEADLINE)
+    if gen == files_generation and files_cache_root == root then
+      table.sort(t)
+      files_cache = t
+      files_indexing = false
+      if active_view then active_view.dirty = true; active_view:schedule_update(true) end
+    end
+  end)
+end
+
+local function get_files()
+  ensure_file_index()
+  return files_cache or {}
+end
+
+local function get_recent_files()
+  local root = project_dir()
+  local out, seen = {}, {}
+
+  for _, abs in ipairs(core.visited_files or {}) do
+    abs = tostring(abs or "")
+    if abs ~= "" then
+      abs = common.normalize_path(abs)
+      if abs and not common.is_absolute_path(abs) then
+        abs = system.absolute_path(abs)
+        abs = abs and common.normalize_path(abs)
+      end
+      if abs and not seen[abs] then
+        local info = system.get_file_info(abs)
+        if info and info.type == "file" then
+          seen[abs] = true
+          if common.path_belongs_to(abs, root) then
+            out[#out+1] = common.relative_path(root, abs):gsub("\\", "/")
+          else
+            -- Keep non-project recents visible/openable. Since they are not
+            -- relative to the active project, show their absolute path.
+            out[#out+1] = abs
+          end
+        end
+      end
+    end
+  end
+
+  return out
+end
+
+local function get_file_search_items()
+  local out, seen = {}, {}
+  for _, f in ipairs(get_files()) do
+    local abs = fullpath(f)
+    if not seen[abs] then
+      seen[abs] = true
+      out[#out+1] = f
+    end
+  end
+  for _, f in ipairs(get_recent_files()) do
+    local abs = fullpath(f)
+    if not seen[abs] then
+      seen[abs] = true
+      out[#out+1] = f
+    end
+  end
+  return out
+end
+
+local function get_commands()
+  if command_cache then return command_cache end
+  local t = {}
+  for name in pairs(command.map) do t[#t+1] = name end
+  table.sort(t)
+  command_cache = t
+  return t
+end
+
+local function save_recent_commands()
+  common.mkdirp(USER_PLUGIN_DIR)
+  local fp = io.open(RECENT_COMMANDS_FILE, "wb")
+  if not fp then return end
+  for _, name in ipairs(recent_commands) do
+    fp:write(name, "\n")
+  end
+  fp:close()
+end
+
+local function load_recent_commands()
+  local fp = io.open(RECENT_COMMANDS_FILE, "rb")
+  if not fp then return end
+  for line in fp:lines() do
+    local name = tostring(line or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if name ~= "" and not recent_command_set[name] then
+      recent_commands[#recent_commands+1] = name
+      recent_command_set[name] = true
+      if #recent_commands >= 10 then break end
+    end
+  end
+  fp:close()
+end
+
+local function remember_command(name)
+  name = tostring(name or "")
+  if name == "" then return end
+
+  if recent_command_set[name] then
+    for i, v in ipairs(recent_commands) do
+      if v == name then
+        table.remove(recent_commands, i)
+        break
+      end
+    end
+  end
+
+  table.insert(recent_commands, 1, name)
+  recent_command_set[name] = true
+
+  while #recent_commands > 10 do
+    local removed = table.remove(recent_commands)
+    if removed then recent_command_set[removed] = nil end
+  end
+
+  save_recent_commands()
+end
+
+load_recent_commands()
+
+local function parse_query(s)
+  local before, grep = s, nil
+  local p = s:find("#", 1, true)
+  if p then
+    before = s:sub(1, p - 1)
+    grep = s:sub(p + 1):gsub("^%s+", "")
+  end
+
+  local base, line = before, nil
+  local b, n = before:match("^(.-)%s*:%s*(%d+)%s*$")
+  if n then
+    base = b:gsub("%s+$", "")
+    line = tonumber(n)
+  end
+  return base:gsub("^%s+", ""):gsub("%s+$", ""), line, grep
+end
+
+local function trim_query(q)
+  return tostring(q or ""):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function split_words(q)
+  local t = {}
+  for w in trim_query(q):lower():gmatch("%S+") do t[#t+1] = w end
+  return t
+end
+
+local SCORE_MATCH = 16
+local SCORE_GAP_START = -3
+local SCORE_GAP_EXTENSION = -1
+local BONUS_BOUNDARY = SCORE_MATCH / 2
+local BONUS_BOUNDARY_WHITE = BONUS_BOUNDARY + 2
+local BONUS_BOUNDARY_DELIMITER = BONUS_BOUNDARY + 1
+local BONUS_NON_WORD = BONUS_BOUNDARY
+local BONUS_CAMEL123 = BONUS_BOUNDARY + SCORE_GAP_EXTENSION
+local BONUS_CONSECUTIVE = -(SCORE_GAP_START + SCORE_GAP_EXTENSION)
+local BONUS_FIRST_CHAR_MULTIPLIER = 2
+local NEG_SCORE = -1000000000
+
+local function char_class_at(text, idx)
+  if idx < 1 or idx > #text then return "white" end
+  local ch = text:sub(idx, idx)
+  local b = ch:byte()
+  if ch:match("%s") then return "white" end
+  if ch == "/" or ch == "\\" or ch == ":" or ch == ";" or ch == "," or ch == "|" then return "delimiter" end
+  if b and b >= 48 and b <= 57 then return "number" end
+  if b and b >= 97 and b <= 122 then return "lower" end
+  if b and b >= 65 and b <= 90 then return "upper" end
+  if ch:match("%a") then return "letter" end
+  return "nonword"
+end
+
+local function bonus_for(prev_class, class)
+  if class ~= "white" then
+    if prev_class == "white" then return BONUS_BOUNDARY_WHITE end
+    if prev_class == "delimiter" then return BONUS_BOUNDARY_DELIMITER end
+    if prev_class == "nonword" then return BONUS_BOUNDARY end
+  end
+  if (prev_class == "lower" and class == "upper") or (prev_class ~= "number" and class == "number") then
+    return BONUS_CAMEL123
+  end
+  if class == "nonword" or class == "delimiter" then return BONUS_NON_WORD end
+  if class == "white" then return BONUS_BOUNDARY_WHITE end
+  return 0
+end
+
+local function bonus_at(text, idx)
+  local prev_class = idx == 1 and "white" or char_class_at(text, idx - 1)
+  return bonus_for(prev_class, char_class_at(text, idx))
+end
+
+local function positions_to_spans(positions, offset)
+  local spans = {}
+  offset = offset or 0
+  local s, e
+  for _, p in ipairs(positions or {}) do
+    if not s then
+      s, e = p, p
+    elseif p == e + 1 then
+      e = p
+    else
+      spans[#spans+1] = { offset + s, offset + e }
+      s, e = p, p
+    end
+  end
+  if s then spans[#spans+1] = { offset + s, offset + e } end
+  return spans
+end
+
+local function fuzzy_match_word(word, text)
+  word = trim_query(word):lower()
+  text = tostring(text or "")
+  if word == "" then return 0, {}, {} end
+
+  local lower = text:lower()
+  local m, n = #word, #lower
+  if m > n then return nil end
+
+  -- Cheap subsequence pre-check. The dynamic-programming pass below then picks
+  -- the best alignment and returns the exact characters used for the score.
+  local scan = 1
+  for i = 1, m do
+    local p = lower:find(word:sub(i, i), scan, true)
+    if not p then return nil end
+    scan = p + 1
+  end
+
+  local parents = {}
+  local prev, prev_run_bonus = {}, {}
+  for i = 1, m do
+    local ch = word:sub(i, i)
+    local curr, parent, curr_run_bonus = {}, {}, {}
+    local matched = false
+    local best_gap_value, best_gap_pos = NEG_SCORE, nil
+
+    for j = 1, n do
+      if i > 1 then
+        local k = j - 2 -- non-consecutive transitions have at least one gap char
+        local ps = k >= 1 and prev[k]
+        if ps then
+          local value = ps - SCORE_GAP_EXTENSION * k
+          if value > best_gap_value then
+            best_gap_value, best_gap_pos = value, k
+          end
+        end
+      end
+
+      if lower:sub(j, j) == ch then
+        local b = bonus_at(text, j)
+        local best_score, best_parent, best_run_bonus
+
+        if i == 1 then
+          best_score = SCORE_MATCH + b * BONUS_FIRST_CHAR_MULTIPLIER - (j - 1)
+          best_parent = 0
+          best_run_bonus = b
+        else
+          if j > 1 and prev[j - 1] then
+            local inherited = prev_run_bonus[j - 1] or 0
+            local consecutive_bonus
+            if b >= BONUS_BOUNDARY and b > inherited then
+              consecutive_bonus = b
+              best_run_bonus = b
+            else
+              consecutive_bonus = math.max(BONUS_CONSECUTIVE, b, inherited)
+              best_run_bonus = inherited
+            end
+            best_score = prev[j - 1] + SCORE_MATCH + consecutive_bonus
+            best_parent = j - 1
+          end
+          if best_gap_pos then
+            local gap_score = best_gap_value + SCORE_GAP_START + SCORE_GAP_EXTENSION * (j - 2) + SCORE_MATCH + b
+            if not best_score or gap_score > best_score then
+              best_score, best_parent, best_run_bonus = gap_score, best_gap_pos, b
+            end
+          end
+        end
+
+        if best_score then
+          curr[j], parent[j], curr_run_bonus[j] = best_score, best_parent, best_run_bonus or 0
+          matched = true
+        end
+      end
+    end
+
+    if not matched then return nil end
+    parents[i] = parent
+    prev, prev_run_bonus = curr, curr_run_bonus
+  end
+
+  local best_j, best_score
+  for j, score in pairs(prev) do
+    if not best_score or score > best_score or (score == best_score and j < best_j) then
+      best_j, best_score = j, score
+    end
+  end
+  if not best_j then return nil end
+
+  local positions = {}
+  local j = best_j
+  for i = m, 1, -1 do
+    positions[i] = j
+    j = parents[i][j]
+    if not j or j == 0 then break end
+  end
+
+  return best_score, positions_to_spans(positions), positions
+end
+
+local function fuzzy_match(query, text)
+  query = trim_query(query)
+  text = tostring(text or "")
+  if query == "" then return 0, {} end
+
+  local total, spans = 0, {}
+  for _, word in ipairs(split_words(query)) do
+    local score, word_spans = fuzzy_match_word(word, text)
+    if not score then return nil end
+    total = total + score
+    for _, span in ipairs(word_spans) do spans[#spans+1] = span end
+  end
+
+  local base = text:match("[^/\\]+$") or text
+  local base_start = #text - #base + 1
+  local all_in_base = #spans > 0
+  for _, span in ipairs(spans) do
+    if span[1] < base_start then all_in_base = false; break end
+  end
+  if all_in_base then total = total + 80 end
+
+  -- Prefer concise candidates once the match quality is otherwise similar.
+  total = total - math.floor(#text / 8)
+  return total, spans
+end
+
+local function fuzzy_result_better(a, b)
+  if a.score == b.score then return tostring(a.text) < tostring(b.text) end
+  return a.score > b.score
+end
+
+local function fuzzy_insert_top(scored, candidate, limit)
+  if limit <= 0 then return end
+  local n = #scored
+  if n >= limit and not fuzzy_result_better(candidate, scored[n]) then return end
+
+  local insert_at = n + 1
+  while insert_at > 1 and fuzzy_result_better(candidate, scored[insert_at - 1]) do
+    insert_at = insert_at - 1
+  end
+  table.insert(scored, insert_at, candidate)
+  if #scored > limit then table.remove(scored) end
+end
+
+local function fuzzy_filter(items, query, limit, make_text)
+  query = trim_query(query)
+  limit = math.max(0, limit or #items)
+  if query == "" then
+    local out = {}
+    for i = 1, math.min(limit, #items) do
+      local text = make_text and make_text(items[i]) or items[i]
+      out[#out+1] = { item = items[i], text = text, score = 0, spans = {} }
+    end
+    return out
+  end
+
+  -- Keep only the best requested results instead of collecting and sorting every
+  -- match. The picker never exposes entries beyond the requested cap (callers
+  -- pass max+1 when they need has_more), so this preserves visible ordering while
+  -- avoiding large allocations/sorts in projects with tens of thousands of files.
+  local scored = {}
+  for _, item in ipairs(items) do
+    local text = make_text and make_text(item) or item
+    local score, spans = fuzzy_match(query, text)
+    if score then
+      fuzzy_insert_top(scored, { item = item, text = text, score = score, spans = spans or {} }, limit)
+    end
+  end
+  return scored
+end
+
+local function line_count(path)
+  local cached = line_count_cache[path]
+  if cached then return cached end
+  local fp = io.open(path, "rb")
+  if not fp then line_count_cache[path] = 0; return 0 end
+  local n = 0
+  for _ in fp:lines() do n = n + 1 end
+  fp:close()
+  line_count_cache[path] = n
+  return n
+end
+
+local function line_exists(relpath, nr)
+  if not nr then return true end
+  return line_count(fullpath(relpath)) >= nr
+end
+
+local binary_preview_extensions = {
+  pdf=true,
+  doc=true, docx=true, xls=true, xlsx=true, ppt=true, pptx=true,
+  odt=true, ods=true, odp=true,
+  zip=true, rar=true, ["7z"]=true, tar=true, gz=true, bz2=true, xz=true,
+  exe=true, dll=true, pdb=true, lib=true, obj=true, so=true, dylib=true,
+  class=true, jar=true, pyc=true,
+  mp3=true, wav=true, flac=true, ogg=true, m4a=true,
+  mp4=true, mov=true, avi=true, mkv=true, webm=true,
+  ttf=true, otf=true, woff=true, woff2=true,
+  sqlite=true, db=true,
+}
+
+local function file_extension(path)
+  local ext = tostring(path or ""):match("%.([^%.%/%\\]+)$")
+  return ext and ext:lower() or ""
+end
+
+local function detect_binary_preview(path)
+  local ext = file_extension(path)
+  if binary_preview_extensions[ext] then return true, ext:upper() .. " file" end
+
+  local info = system.get_file_info(path)
+  if info and info.size and info.size > (fuzzy_searcher.preview_text_max_bytes or 2097152) then
+    return true, string.format("Large file (%.1f MB)", info.size / 1024 / 1024)
+  end
+
+  local fp = io.open(path, "rb")
+  if not fp then return true, "Cannot open file" end
+  local data = fp:read(8192) or ""
+  fp:close()
+
+  if data:sub(1, 4) == "%PDF" then return true, "PDF file" end
+  if data:sub(1, 2) == "MZ" then return true, "Windows executable" end
+  if data:sub(1, 4) == "PK\003\004" then return true, "ZIP container" end
+  if data:sub(1, 7) == "\127ELF\002\001\001" or data:sub(1, 4) == "\127ELF" then return true, "ELF binary" end
+  if data:find("%z", 1, true) then return true, "Binary file" end
+
+  local weird = 0
+  for i = 1, #data do
+    local b = data:byte(i)
+    if b < 32 and b ~= 9 and b ~= 10 and b ~= 13 and b ~= 12 then weird = weird + 1 end
+  end
+  if #data > 0 and weird / #data > 0.05 then return true, "Binary file" end
+  return false, nil
+end
+
+local function tokenize_code_query(q)
+  local s = q:gsub("([a-z])([A-Z])", "%1 %2")
+             :gsub("([A-Z]+)([A-Z][a-z])", "%1 %2")
+             :gsub("[_%-%./\\]+", " ")
+  local t = {}
+  for w in s:lower():gmatch("%S+") do if #w > 1 then t[#t+1] = w end end
+  return t
+end
+
+local function parse_code_search_terms(q)
+  local terms = {}
+  local i, n = 1, #q
+
+  local function add_fuzzy_chunk(chunk)
+    for _, tok in ipairs(tokenize_code_query(chunk or "")) do
+      terms[#terms+1] = { text = tok, exact = false }
+    end
+  end
+
+  local function add_exact_phrase(phrase)
+    phrase = tostring(phrase or "")
+    if phrase ~= "" then terms[#terms+1] = { text = phrase:lower(), exact = true, phrase = phrase } end
+  end
+
+  while i <= n do
+    while i <= n and q:sub(i, i):match("%s") do i = i + 1 end
+    if i > n then break end
+
+    if q:sub(i, i) == '"' then
+      local j = i + 1
+      while j <= n do
+        if q:sub(j, j) == '"' then
+          local k = j
+          while k + 1 <= n and q:sub(k + 1, k + 1) == '"' do k = k + 1 end
+          if k == n or q:sub(k + 1, k + 1):match("%s") then
+            break
+          end
+          j = k + 1
+        else
+          j = j + 1
+        end
+      end
+      if j <= n then
+        add_exact_phrase(q:sub(i + 1, j - 1))
+        i = j + 1
+      else
+        -- While the closing quote has not been typed yet, still treat the
+        -- remainder as one literal phrase instead of splitting on spaces.
+        add_exact_phrase(q:sub(i + 1))
+        break
+      end
+    else
+      local j = i
+      while j <= n and (not q:sub(j, j):match("%s")) and q:sub(j, j) ~= '"' do j = j + 1 end
+      add_fuzzy_chunk(q:sub(i, j - 1))
+      i = j
+    end
+  end
+
+  return terms
+end
+
+local function quoted_exact_query(q)
+  local s = trim_query(q)
+  if s:sub(1, 1) ~= '"' then return nil end
+  if #s > 1 and s:sub(-1) == '"' then return s:sub(2, -2) end
+  return s:sub(2)
+end
+
+local function terms_to_legacy_tokens(terms)
+  local tokens = {}
+  for _, term in ipairs(terms or {}) do tokens[#tokens+1] = term.text end
+  return tokens
+end
+
+local function terms_fuzzy_query(terms)
+  local tokens = {}
+  for _, term in ipairs(terms or {}) do
+    if not term.exact then tokens[#tokens+1] = term.text end
+  end
+  return table.concat(tokens, " ")
+end
+
+local function exact_term_spans(lower_text, terms)
+  local spans = {}
+  for _, term in ipairs(terms or {}) do
+    if term.exact then
+      local start = 1
+      local found = false
+      while true do
+        local s, e = lower_text:find(term.text, start, true)
+        if not s then break end
+        spans[#spans+1] = { s, e }
+        found = true
+        start = e + 1
+      end
+      if not found then return nil end
+    end
+  end
+  return spans
+end
+
+local function yield_if_over_budget(start_time)
+  local budget = fuzzy_searcher.fuzzy_time_slice or 0.006
+  if system.get_time() - start_time >= budget then
+    coroutine.yield(1 / config.fps)
+    return system.get_time()
+  end
+  return start_time
+end
+
+local function parse_vimgrep(line)
+  local f, l, c, txt = line:match("^(.-):(%d+):(%d+):(.*)$")
+  if not f then return nil end
+  return {
+    kind = "grep",
+    file = f:gsub("\\", "/"),
+    line = tonumber(l),
+    col = tonumber(c),
+    text = txt,
+    exact = true,
+  }
+end
+
+local function scope_key(scope)
+  if not scope then return "*" end
+  return table.concat(scope, "\0")
+end
+
+local function fuzzy_session_key(root, scope, seed)
+  return root .. "\0" .. scope_key(scope) .. "\0" .. seed:lower()
+end
+
+local function seed_for_tokens(tokens)
+  local seed = tokens[1]
+  for _, tok in ipairs(tokens or {}) do if #tok > #(seed or "") then seed = tok end end
+  return seed
+end
+
+local function kill_fuzzy_grep_sessions()
+  for _, session in pairs(fuzzy_grep_sessions) do
+    if session.proc and session.proc:running() then pcall(function() session.proc:kill() end) end
+    session.cancelled = true
+  end
+  fuzzy_grep_sessions = {}
+end
+
+local function ensure_fuzzy_grep_session(root, scope, tokens)
+  if not tokens or #tokens == 0 then return nil end
+
+  -- Prefer reusing an already-warm broader stream when the user appends tokens,
+  -- e.g. #word -> #word test. Also start the most selective stream in the
+  -- background if it differs, so future filtering can switch to it.
+  local preferred_seed = seed_for_tokens(tokens)
+  local reusable
+  for _, tok in ipairs(tokens) do
+    local existing = fuzzy_grep_sessions[fuzzy_session_key(root, scope, tok)]
+    if existing then reusable = existing; break end
+  end
+
+  local function start_session(seed)
+    local key = fuzzy_session_key(root, scope, seed)
+    local session = fuzzy_grep_sessions[key]
+    if session then session.last_used = system.get_time(); return session end
+
+    session = {
+      key = key,
+      root = root,
+      scope = scope,
+      seed = seed,
+      lines = {},
+      seen = {},
+      scanned = 0,
+      version = 0,
+      done = false,
+      truncated = false,
+      cancelled = false,
+      last_used = system.get_time(),
+    }
+    fuzzy_grep_sessions[key] = session
+
+    core.add_thread(function()
+      local args = { fuzzy_searcher.rg, "--vimgrep", "--color", "never", "-i", "-F", "--hidden", "--glob", "!.git/**", "-e", seed }
+      if scope then args[#args+1] = "--"; for _, f in ipairs(scope) do args[#args+1] = f end end
+      local proc = process.start(args, { cwd = root, stdout = process.REDIRECT_PIPE, stderr = process.REDIRECT_DISCARD, stdin = process.REDIRECT_DISCARD })
+      session.proc = proc
+      if not proc then session.done = true; session.version = session.version + 1; return end
+
+      local max_scanned = fuzzy_searcher.fuzzy_scan_limit or 10000
+      local max_line_chars = fuzzy_searcher.fuzzy_line_max_chars or 1200
+      local slice_start = system.get_time()
+      while not session.cancelled and session.scanned < max_scanned do
+        local l = proc.stdout:read("line", { scan = 1 / config.fps })
+        if l then
+          session.scanned = session.scanned + 1
+          local r = parse_vimgrep(l)
+          if r and #(r.text or "") <= max_line_chars then
+            local key = r.file .. ":" .. tostring(r.line)
+            if not session.seen[key] then
+              session.seen[key] = true
+              session.lines[#session.lines+1] = r
+              session.version = session.version + 1
+            end
+          end
+          slice_start = yield_if_over_budget(slice_start)
+        elseif not proc:running() then
+          break
+        else
+          coroutine.yield(1 / config.fps)
+          slice_start = system.get_time()
+        end
+      end
+
+      session.truncated = proc:running() or session.scanned >= max_scanned
+      if proc:running() then pcall(function() proc:kill() end) end
+      proc:wait(process.WAIT_DEADLINE)
+      session.done = true
+      session.version = session.version + 1
+      if active_view then active_view:schedule_update(true) end
+    end)
+
+    return session
+  end
+
+  local preferred = preferred_seed and start_session(preferred_seed) or nil
+  if reusable and preferred and reusable ~= preferred then return reusable, preferred end
+  return reusable or preferred, preferred
+end
+
+local function basename(path)
+  return (path and path:match("[^/\\]+$")) or path or ""
+end
+
+local function truncate_text(font, text, max_width)
+  text = tostring(text or "")
+  if max_width <= 0 then return "" end
+  if font:get_width(text) <= max_width then return text end
+  local ellipsis = "..."
+  if font:get_width(ellipsis) > max_width then return "" end
+  local lo, hi = 0, text:ulen(nil, nil, true) or #text
+  while lo < hi do
+    local mid = math.ceil((lo + hi) / 2)
+    local candidate = text:usub(1, mid) .. ellipsis
+    if font:get_width(candidate) <= max_width then
+      lo = mid
+    else
+      hi = mid - 1
+    end
+  end
+  return text:usub(1, lo) .. ellipsis
+end
+
+local function utf8_floor_end(text, pos)
+  pos = common.clamp(math.floor(pos or 0), 0, #text)
+  while pos > 0 and pos < #text and common.is_utf8_cont(text, pos + 1) do
+    pos = pos - 1
+  end
+  return pos
+end
+
+local function utf8_ceil_start(text, pos)
+  pos = common.clamp(math.floor(pos or 1), 1, #text + 1)
+  while pos <= #text and common.is_utf8_cont(text, pos) do
+    pos = pos + 1
+  end
+  return pos
+end
+
+local function utf8_safe_sub(text, first, last)
+  if #text == 0 then return "" end
+  first = utf8_ceil_start(text, first or 1)
+  last = utf8_floor_end(text, last or #text)
+  if first > last or first > #text then return "" end
+  return text:sub(first, last)
+end
+
+local function fit_forward_end(font, text, first, max_width)
+  first = utf8_ceil_start(text, first or 1)
+  if max_width <= 0 or first > #text then return first - 1 end
+  if font:get_width(utf8_safe_sub(text, first, #text)) <= max_width then return #text end
+
+  local lo, hi = first - 1, #text
+  while lo < hi do
+    local mid = math.ceil((lo + hi) / 2)
+    if font:get_width(utf8_safe_sub(text, first, mid)) <= max_width then
+      lo = mid
+    else
+      hi = mid - 1
+    end
+  end
+  return utf8_floor_end(text, lo)
+end
+
+local function fit_suffix_start(font, text, last, max_width)
+  last = utf8_floor_end(text, last or #text)
+  if max_width <= 0 or last < 1 then return last + 1 end
+  if font:get_width(utf8_safe_sub(text, 1, last)) <= max_width then return 1 end
+
+  local lo, hi = 1, last
+  while lo < hi do
+    local mid = math.floor((lo + hi) / 2)
+    if font:get_width(utf8_safe_sub(text, mid, last)) <= max_width then
+      hi = mid
+    else
+      lo = mid + 1
+    end
+  end
+  return utf8_ceil_start(text, lo)
+end
+
+local function merge_spans(spans, max_len)
+  table.sort(spans, function(a, b) return a[1] < b[1] end)
+  local merged = {}
+  for _, span in ipairs(spans) do
+    if span[1] <= max_len and span[2] >= 1 then
+      local s = common.clamp(span[1], 1, max_len)
+      local e = common.clamp(span[2], 1, max_len)
+      if s <= e then
+        local last = merged[#merged]
+        if last and s <= last[2] + 1 then
+          last[2] = math.max(last[2], e)
+        else
+          merged[#merged+1] = {s, e}
+        end
+      end
+    end
+  end
+  return merged
+end
+
+local function literal_spans(text, query, offset)
+  local spans = {}
+  text = tostring(text or "")
+  query = tostring(query or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  if query == "" then return spans end
+  offset = offset or 0
+  local lower_text, lower_query = text:lower(), query:lower()
+  local pos = 1
+  while true do
+    local s, e = lower_text:find(lower_query, pos, true)
+    if not s then break end
+    spans[#spans+1] = {offset + s, offset + e}
+    pos = e + 1
+  end
+  return spans
+end
+
+local function offset_spans(spans, offset)
+  local out = {}
+  offset = offset or 0
+  for _, span in ipairs(spans or {}) do out[#out+1] = { span[1] + offset, span[2] + offset } end
+  return out
+end
+
+local function project_spans(spans, src_start, src_end, dst_before)
+  local out = {}
+  dst_before = dst_before or 0
+  for _, span in ipairs(spans or {}) do
+    local s = math.max(span[1], src_start)
+    local e = math.min(span[2], src_end)
+    if s <= e then out[#out+1] = { dst_before + (s - src_start + 1), dst_before + (e - src_start + 1) } end
+  end
+  return out
+end
+
+local function grep_content_spans(text, result, offset, line_nr)
+  if not result or not result.grep_query or result.grep_query == "" then return {} end
+  if result.exact then
+    return literal_spans(text, result.grep_query, offset)
+  end
+  if result.content_spans and (not line_nr or line_nr == result.line) then
+    return offset_spans(result.content_spans, offset)
+  end
+  if line_nr and line_nr ~= result.line then return {} end
+  local _, spans = fuzzy_match(result.fuzzy_query or result.grep_query, text)
+  return offset_spans(spans, offset)
+end
+
+local small_path_font_cache, small_path_font_key
+
+local function color_with_alpha(color, alpha)
+  color = color or style.accent or style.text or {255, 255, 255, 255}
+  return { color[1] or 255, color[2] or 255, color[3] or 255, alpha or color[4] or 255 }
+end
+
+local function get_small_path_font(font)
+  local size = math.max(1, math.floor((font:get_size() or 12) * 0.84 + 0.5))
+  local key = tostring(font) .. ":" .. tostring(size)
+  if not small_path_font_cache or small_path_font_key ~= key then
+    local ok, copied = pcall(function() return font:copy(size) end)
+    small_path_font_cache = ok and copied or font
+    small_path_font_key = key
+  end
+  return small_path_font_cache
+end
+
+local function text_span_for_anchor(spans, text_len, anchor_pos)
+  local first, best, best_distance
+  anchor_pos = tonumber(anchor_pos)
+  for _, span in ipairs(spans or {}) do
+    local s, e = tonumber(span[1]), tonumber(span[2])
+    if s and e and s <= text_len and e >= 1 then
+      s, e = common.clamp(s, 1, text_len), common.clamp(e, 1, text_len)
+      if s <= e then
+        if not first or s < first[1] then first = { s, e } end
+        if anchor_pos then
+          local distance = anchor_pos < s and (s - anchor_pos) or (anchor_pos > e and (anchor_pos - e) or 0)
+          if not best or distance < best_distance or (distance == best_distance and s < best[1]) then
+            best, best_distance = { s, e }, distance
+          end
+        end
+      end
+    end
+  end
+  return best or first
+end
+
+local function prefix_clipped_highlight(font, text, width, spans, ellipsis, ellipsis_width)
+  local keep = fit_forward_end(font, text, 1, width - ellipsis_width)
+  return utf8_safe_sub(text, 1, keep) .. ellipsis, project_spans(spans, 1, keep, 0)
+end
+
+local function clip_highlighted_text(font, text, width, spans, anchor_to_match)
+  text = tostring(text or "")
+  spans = spans or {}
+  if width <= 0 then return "", {} end
+  if font:get_width(text) <= width then return text, merge_spans(spans, #text) end
+
+  local ellipsis = "..."
+  local ellipsis_width = font:get_width(ellipsis)
+  if ellipsis_width > width then return "", {} end
+
+  local anchor_pos = type(anchor_to_match) == "number" and anchor_to_match or nil
+  local anchor = anchor_to_match and text_span_for_anchor(spans, #text, anchor_pos) or nil
+  if not anchor then
+    return prefix_clipped_highlight(font, text, width, spans, ellipsis, ellipsis_width)
+  end
+
+  -- If the normal left-to-right truncation still shows the full anchored
+  -- match, keep it; just avoid projecting highlight spans onto the ellipsis.
+  local prefix_keep = fit_forward_end(font, text, 1, width - ellipsis_width)
+  if anchor[2] <= prefix_keep then
+    return utf8_safe_sub(text, 1, prefix_keep) .. ellipsis, project_spans(spans, 1, prefix_keep, 0)
+  end
+
+  -- The match starts beyond the visible prefix. Slide the inline preview
+  -- forward and render a window around the anchored content match, with a leading
+  -- ellipsis for omitted text. The projected spans only cover real source text,
+  -- so the ellipses themselves are never highlighted as matches.
+  local match_start = utf8_ceil_start(text, anchor[1])
+  local match_end = utf8_floor_end(text, anchor[2])
+  if match_end < match_start then match_end = match_start end
+
+  local leading = match_start > 1
+  local trailing = match_end < #text
+  local fixed_width = (leading and ellipsis_width or 0) + (trailing and ellipsis_width or 0)
+  if fixed_width >= width then
+    trailing = false
+    fixed_width = leading and ellipsis_width or 0
+    if fixed_width >= width then
+      return prefix_clipped_highlight(font, text, width, spans, ellipsis, ellipsis_width)
+    end
+  end
+
+  local text_width = width - fixed_width
+  local match_width = font:get_width(utf8_safe_sub(text, match_start, match_end))
+  local extra_width = math.max(0, text_width - math.min(match_width, text_width))
+  local before_budget = math.min(extra_width * 0.45, text_width * 0.30)
+  local first = match_start
+  if before_budget > 1 and match_start > 1 then
+    local before_end = utf8_floor_end(text, match_start - 1)
+    if before_end >= 1 then first = fit_suffix_start(font, text, before_end, before_budget) end
+  end
+
+  first = utf8_ceil_start(text, first)
+  leading = first > 1
+  fixed_width = (leading and ellipsis_width or 0) + (trailing and ellipsis_width or 0)
+  if fixed_width >= width then
+    trailing = false
+    fixed_width = leading and ellipsis_width or 0
+  end
+  if fixed_width >= width then
+    return prefix_clipped_highlight(font, text, width, spans, ellipsis, ellipsis_width)
+  end
+
+  local last = fit_forward_end(font, text, first, width - fixed_width)
+  if last < match_start then
+    first = match_start
+    leading = first > 1
+    trailing = false
+    fixed_width = leading and ellipsis_width or 0
+    if fixed_width >= width then
+      return prefix_clipped_highlight(font, text, width, spans, ellipsis, ellipsis_width)
+    end
+    last = fit_forward_end(font, text, first, width - fixed_width)
+  end
+  if last < match_start then
+    return prefix_clipped_highlight(font, text, width, spans, ellipsis, ellipsis_width)
+  end
+
+  trailing = last < #text
+  local clipped = (leading and ellipsis or "") .. utf8_safe_sub(text, first, last) .. (trailing and ellipsis or "")
+  return clipped, project_spans(spans, first, last, leading and #ellipsis or 0)
+end
+
+local function draw_highlighted_text(font, text, x, y, width, color, spans, match_color, anchor_to_match)
+  local clipped
+  clipped, spans = clip_highlighted_text(font, text, width, spans, anchor_to_match)
+  spans = merge_spans(spans or {}, #clipped)
+  local highlight_bg = style.fuzzy_searcher_match_background or color_with_alpha(style.search_selection or style.accent or style.selection or style.text, 70)
+  local highlight_fg = match_color or style.fuzzy_searcher_match or style.search_selection_text or style.text or color
+  local pos = 1
+  local cx = x
+  local line_h = font:get_height()
+  for _, span in ipairs(spans) do
+    if pos < span[1] then
+      cx = renderer.draw_text(font, clipped:sub(pos, span[1] - 1), cx, y, color)
+    end
+    local chunk = clipped:sub(span[1], span[2])
+    local chunk_w = font:get_width(chunk)
+    renderer.draw_rect(cx, y, chunk_w, line_h, highlight_bg)
+    cx = renderer.draw_text(font, chunk, cx, y, highlight_fg)
+    pos = span[2] + 1
+  end
+  if pos <= #clipped then
+    cx = renderer.draw_text(font, clipped:sub(pos), cx, y, color)
+  end
+  return cx
+end
+
+local function command_preview_parts(name)
+  local binding = keymap.get_binding(name)
+  local picker = current_picker()
+  local path = picker and picker.source_file_path
+  if not path then
+    path = file_context.view_file_path(core.active_view)
+  end
+
+  local preview
+  if name == "user:copy-absolute-filepath" then
+    preview = path
+  elseif name == "user:copy-absolute-filepath-with-line" then
+    local picker = current_picker()
+    local line = picker and picker.source_file_line or 1
+    preview = path and string.format("%s:%d", path, line or 1)
+  elseif name == "user:copy-relative-filepath" then
+    local root = core.root_project and core.root_project()
+    local root_path = root and common.normalize_path(root.path)
+    if path and root_path and common.path_belongs_to(path, root_path) then
+      preview = common.relative_path(root_path, path):gsub("\\", "/")
+    elseif path then
+      preview = "not inside project"
+    end
+  elseif name == "user:copy-filename" then
+    preview = path and basename(path)
+  end
+
+  if binding == "" then binding = nil end
+  if preview == "" then preview = nil end
+  return binding, preview
+end
+
+local function command_preview_info(name)
+  local binding, preview = command_preview_parts(name)
+  if binding and preview then return binding .. "  ·  " .. preview end
+  return preview or binding
+end
+
+local function result_list_label_and_spans(r)
+  if r.kind == "command" then
+    local text = r.label or r.command or ""
+    return "> " .. text, offset_spans(r.match_spans or {}, 2)
+  end
+  if r.kind == "project" then
+    local text = r.label or r.project or ""
+    return "@ " .. display_root(text), offset_spans(r.match_spans or {}, 2)
+  end
+  local text = r.label or r.file or ""
+  return text, r.match_spans or {}
+end
+
+local function draw_command_result_row(font, r, x, y, width)
+  local label, spans = result_list_label_and_spans(r)
+  local binding, preview = command_preview_parts(r.command)
+  -- Keep command rows column-aligned even when a row has no shortcut or no
+  -- preview text: empty cells still reserve their column width.
+  -- Layout: command label | preview/info | shortcut binding.
+  -- In narrow panes, progressively shrink the side columns to zero so the
+  -- command label eventually gets the full row width.
+  local scale = SCALE or 1
+  local side_column_factor = common.clamp((width - 260 * scale) / (760 * scale - 260 * scale), 0, 1)
+  local preview_factor = side_column_factor * side_column_factor
+  local gap = style.padding.x * side_column_factor
+  local preview_w = math.floor(width * 0.28 * preview_factor)
+  local binding_w = math.floor(width * 0.18 * side_column_factor)
+  local label_w = math.max(0, width - preview_w - binding_w - gap * 2)
+
+  draw_highlighted_text(font, label, x, y, label_w, style.text, spans)
+
+  local preview_x = x + label_w + gap
+  local binding_x = preview_x + preview_w + gap
+  if preview and preview ~= "" then
+    renderer.draw_text(font, truncate_text(font, preview, preview_w), preview_x, y, style.dim or style.text)
+  end
+  if binding and binding ~= "" then
+    renderer.draw_text(font, truncate_text(font, binding, binding_w), binding_x, y, style.dim or style.text)
+  end
+end
+
+local function draw_file_result_row(font, file, spans, prefix, x, y, width, suffix)
+  file = tostring(file or "")
+  spans = spans or {}
+  prefix = prefix or ""
+  suffix = suffix or ""
+
+  local path_font = get_small_path_font(font)
+  local prefix_color = style.dim or style.text
+  local dir_color = style.dim or style.text
+  local suffix_color = style.dim or style.text
+  local name_color = style.text
+  local line_h = font:get_height()
+  local path_y = y + math.max(0, math.floor((line_h - path_font:get_height()) / 2))
+
+  local cx = renderer.draw_text(font, prefix, x, y, prefix_color)
+  local right = x + width
+  local available = math.max(0, right - cx)
+  if available <= 0 then return cx end
+
+  local name = basename(file)
+  local dir = file:sub(1, math.max(0, #file - #name))
+  local name_start = #dir + 1
+  local name_spans = project_spans(spans, name_start, #file, 0)
+  local suffix_width = suffix ~= "" and font:get_width(suffix) or 0
+
+  local name_width = font:get_width(name)
+  if dir ~= "" then
+    local scale = SCALE or 1
+    local min_name_width = math.min(name_width, math.max(48 * scale, available * 0.55))
+    local dir_width = name_width + suffix_width < available
+      and available - name_width - suffix_width
+      or math.max(0, available - min_name_width - suffix_width)
+    if dir_width > path_font:get_width("...") then
+      local dir_spans = project_spans(spans, 1, #dir, 0)
+      cx = draw_highlighted_text(path_font, dir, cx, path_y, dir_width, dir_color, dir_spans)
+      available = math.max(0, right - cx)
+    end
+  end
+
+  local name_available = suffix_width > 0 and math.max(0, available - suffix_width) or available
+  cx = draw_highlighted_text(font, name, cx, y, name_available, name_color, name_spans)
+  if suffix ~= "" and cx < right then
+    cx = renderer.draw_text(font, truncate_text(font, suffix, right - cx), cx, y, suffix_color)
+  end
+  return cx
+end
+
+local function grep_row_columns(width)
+  local scale = SCALE or 1
+  local gap = math.max(8 * scale, style.padding.x)
+  local ratio = fuzzy_searcher.grep_path_column_width or 0.45
+  local path_w = math.floor(width * ratio)
+  if width > 260 * scale then
+    path_w = common.clamp(path_w, 130 * scale, width - 120 * scale)
+  else
+    path_w = math.floor(width * 0.5)
+  end
+  return path_w, gap, math.max(0, width - path_w - gap)
+end
+
+local function draw_grep_result_row(font, result, x, y, width)
+  local path_w, gap, text_w = grep_row_columns(width)
+  local prefix = result.exact and "# " or "~# "
+  draw_file_result_row(font, result.file or "", result.file_spans, prefix, x, y, path_w, ":" .. tostring(result.line or 1))
+  if text_w <= 0 then return end
+  local text_x = x + path_w + gap
+  local text = tostring(result.text or "")
+  local spans = grep_content_spans(text, result, 0)
+  local anchor = result.col or true
+  local leading = #(text:match("^%s*") or "")
+  if leading > 0 then
+    text = text:sub(leading + 1)
+    spans = project_spans(spans, leading + 1, leading + #text, 0)
+    if type(anchor) == "number" then anchor = math.max(1, anchor - leading) end
+  end
+  draw_highlighted_text(font, text, text_x, y, text_w, style.text, spans, nil, anchor)
+end
+
+local function build_scope(base, line, max_count)
+  if base:sub(1, 1) == ">" then base = "" end
+  local matches = fuzzy_filter(get_files(), base, max_count or 200)
+  local list = {}
+  for _, match in ipairs(matches) do
+    local f = match.item
+    if (not line) or line_exists(f, line) then list[#list+1] = f end
+  end
+  return list
+end
+
+function FSView:new(prefix)
+  FSView.super.new(self, nil, true) -- floating widget; widget lib owns RootView routing
+  file_context.exclude_main_view(self)
+  self.type_name = "plugins.fuzzy_searcher"
+  self.name = "Fuzzy Searcher"
+  self.background_color = style.background
+  self.results = {}
+  self.selected = 1
+  self.viewport_offset = 1
+  self.loaded_limit = nil
+  self.has_more = false
+  self.current_query_key = nil
+  self.force_refresh = false
+  self.pending_select_index = nil
+  self.status = ""
+  self.last_files_generation = -1
+  self.dirty = true
+  self.scrollable = false
+  self.hovered_result = nil
+  self.pressed_result = nil
+  self.pressed_clicks = 0
+  self.forward_mouse_to_child = false
+  self.preview_view = nil
+  self.preview_key = nil
+  self.preview_target_line = nil
+  self.preview_highlight_key = nil
+  self.preview_blocked = nil
+  self.preview_mouse_pressed = false
+
+  local source_view = core.active_view
+  local source_doc = source_view and source_view.doc
+  self.source_view = file_context.current_main_view(source_view) or source_view
+  self.source_file_path = file_context.view_file_path(source_view)
+  self.source_file_line = source_doc and source_doc:get_selection(false) or 1
+
+  self.input = TextBox(self, prefix or "", "")
+  file_context.exclude_main_view(self.input)
+  file_context.exclude_main_view(self.input.textview)
+  self.input.on_change = function(_, text)
+    self.dirty = true
+    self:refresh(text)
+    self:schedule_update(true)
+  end
+
+  ensure_file_index()
+  self:show()
+  self:layout()
+  self:swap_active_child(self.input)
+  self:refresh(self.input:get_text())
+end
+
+function FSView:layout()
+  local root = core.root_view
+  local rw, rh = root.size.x, root.size.y
+  local w = math.min(rw, math.max(rw * fuzzy_searcher.width, fuzzy_searcher.min_width or 0))
+  local h = math.min(rh, math.max(rh * fuzzy_searcher.height, fuzzy_searcher.min_height or 0))
+  local x = root.position.x + (rw - w) / 2
+  local y = root.position.y + (rh - h) / 2
+  self:set_size(w, h)
+  self:set_position(x, y)
+  local pad = style.padding.x
+  self.input:set_position(pad, pad)
+  self.input:set_size(self.size.x - pad * 2)
+end
+
+function FSView:is_command_mode()
+  local text = self.input and self.input:get_text() or ""
+  return text:sub(1, 1) == ">"
+end
+
+function FSView:list_metrics(font)
+  font = font or style.code_font
+  local pad = style.padding.x
+  local lh = font:get_height()
+  local x, y = self.position.x, self.position.y
+  local w, h = self.size.x, self.size.y
+  local top = y + self.input.size.y + pad * 3 + lh
+  local list_w = self:is_command_mode() and w or w * (1 - fuzzy_searcher.preview_width)
+  local total_rows = math.max(0, math.floor((h - (top - y)) / lh))
+  local result_rows = math.max(1, total_rows - 2) -- first/last rows are scroll indicators
+  return {
+    x = x, y = y, w = w, h = h, top = top, list_w = list_w,
+    lh = lh, total_rows = total_rows, result_rows = result_rows,
+    results_top = top + lh,
+    bottom_indicator_y = top + math.max(0, total_rows - 1) * lh,
+  }
+end
+
+function FSView:reset_pagination()
+  self.loaded_limit = self:list_metrics().result_rows
+  self.selected = 1
+  self.viewport_offset = 1
+  self.pending_select_index = nil
+end
+
+function FSView:max_result_limit()
+  local rows = self:list_metrics().result_rows
+  return math.max(rows, fuzzy_searcher.max_result_limit or fuzzy_searcher.result_limit or rows)
+end
+
+function FSView:result_limit()
+  local rows = self:list_metrics().result_rows
+  self.loaded_limit = common.clamp(self.loaded_limit or rows, rows, self:max_result_limit())
+  return self.loaded_limit
+end
+
+function FSView:can_load_more()
+  return self.has_more and self:result_limit() < self:max_result_limit()
+end
+
+function FSView:load_more(select_next)
+  if not self:can_load_more() then return false end
+  local current = self:result_limit()
+  local rows = self:list_metrics().result_rows
+  if select_next then self.pending_select_index = current + 1 end
+  self.loaded_limit = common.clamp(current + rows, rows, self:max_result_limit())
+  self.force_refresh = true
+  self.dirty = true
+  self:refresh(self.input:get_text())
+  return true
+end
+
+function FSView:ensure_selection_visible()
+  if #self.results == 0 then self.selected, self.viewport_offset = 1, 1; return end
+  local rows = self:list_metrics().result_rows
+  self.viewport_offset = common.clamp(self.viewport_offset or 1, 1, math.max(1, #self.results))
+  if self.selected < self.viewport_offset then
+    self.viewport_offset = self.selected
+  elseif self.selected > self.viewport_offset + rows - 1 then
+    self.viewport_offset = self.selected - rows + 1
+  end
+  self.viewport_offset = common.clamp(self.viewport_offset, 1, math.max(1, #self.results - rows + 1))
+end
+
+function FSView:select_delta(delta)
+  if #self.results == 0 then self.selected = 1; self.viewport_offset = 1; return end
+  if delta > 0 and self.selected >= #self.results and self.has_more then
+    if self:load_more(true) then return end
+  end
+  local i = self.selected
+  repeat
+    i = common.clamp(i + delta, 1, #self.results)
+    if not self.results[i].header then break end
+    if i == 1 or i == #self.results then break end
+  until false
+  self.selected = i
+  self:ensure_selection_visible()
+end
+
+function FSView:selected_result()
+  local r = self.results[self.selected]
+  if r and not r.header then return r end
+end
+
+function FSView:preview_bounds()
+  local pad = style.padding.x
+  local m = self:list_metrics(style.code_font)
+  local px = m.x + m.list_w + pad
+  local py = m.top
+  local pw = m.w - m.list_w - pad * 2
+  local ph = m.h - (m.top - m.y)
+  return px, py, pw, ph
+end
+
+function FSView:preview_contains(x, y)
+  local px, py, pw, ph = self:preview_bounds()
+  return x >= px and x <= px + pw and y >= py and y <= py + ph
+end
+
+function FSView:clear_preview_view()
+  if self.preview_view and self.preview_view.doc then
+    self.preview_view.doc:clear_search_selections()
+  end
+  self.preview_view = nil
+  self.preview_key = nil
+  self.preview_target_line = nil
+  self.preview_highlight_key = nil
+  self.preview_blocked = nil
+  self.preview_mouse_pressed = false
+end
+
+local function draw_preview_debug(view, result, x, y, w, h)
+  if not fuzzy_searcher.preview_debug then return end
+  local font = style.code_font
+  local lh = font:get_height()
+  local lines = {}
+  local clip = core.clip_rect_stack and core.clip_rect_stack[#core.clip_rect_stack] or {}
+
+  if view:extends(DocView) then
+    local minline, maxline = view:get_visible_line_range()
+    local gw = view:get_gutter_width()
+    local tx, ty = view:get_line_screen_position(minline)
+    local raw = tostring(view.doc.lines[minline] or "")
+    local utf8 = tostring(view.doc:get_utf8_line(minline) or "")
+    local sample = raw:gsub("\t", "→"):gsub("\n", "⏎")
+    local usample = utf8:gsub("\t", "→"):gsub("\n", "⏎")
+    local tok = view.doc.highlighter:get_line(minline).tokens
+    lines[#lines+1] = "PREVIEW DEBUG: DocView"
+    lines[#lines+1] = string.format("rect=(%.0f,%.0f %.0fx%.0f) view=(%.0f,%.0f %.0fx%.0f)", x, y, w, h, view.position.x, view.position.y, view.size.x, view.size.y)
+    lines[#lines+1] = string.format("clip=(%.0f,%.0f %.0fx%.0f) scroll=(%.0f,%.0f -> %.0f,%.0f)", clip[1] or -1, clip[2] or -1, clip[3] or -1, clip[4] or -1, view.scroll.x, view.scroll.y, view.scroll.to.x, view.scroll.to.y)
+    lines[#lines+1] = string.format("lines=%d visible=%d..%d target=%s gutter=%.0f text_xy=(%.0f,%.0f) binary=%s", #view.doc.lines, minline, maxline, tostring(result and result.line), gw, tx, ty, tostring(view.doc.binary))
+    lines[#lines+1] = string.format("raw[%d] len=%d: %s", minline, #raw, sample:sub(1, 90))
+    lines[#lines+1] = string.format("utf8[%d] len=%d: %s", minline, #utf8, usample:sub(1, 90))
+    lines[#lines+1] = string.format("tokens=%d first=(%s,%s)", #tok, tostring(tok[1]), tostring(tok[2] and tok[2]:sub(1, 40)))
+    renderer.draw_rect(tx, ty, math.max(2, font:get_width("TEXT ORIGIN PROBE")), lh, color_with_alpha(style.accent or style.text, 90))
+    renderer.draw_text(font, "TEXT ORIGIN PROBE", tx, ty, style.text)
+  else
+    lines[#lines+1] = "PREVIEW DEBUG: " .. tostring(view)
+    lines[#lines+1] = string.format("rect=(%.0f,%.0f %.0fx%.0f) view=(%.0f,%.0f %.0fx%.0f)", x, y, w, h, view.position.x, view.position.y, view.size.x, view.size.y)
+    lines[#lines+1] = string.format("clip=(%.0f,%.0f %.0fx%.0f)", clip[1] or -1, clip[2] or -1, clip[3] or -1, clip[4] or -1)
+  end
+
+  local box_h = math.min(h - 8, (#lines * lh) + 8)
+  renderer.draw_rect(x + 4, y + 4, math.max(0, w - 8), box_h, {0, 0, 0, 210})
+  local yy = y + 8
+  for i, line in ipairs(lines) do
+    renderer.draw_text(font, truncate_text(font, line, w - 16), x + 8, yy, i == 1 and (style.accent or style.text) or style.text)
+    yy = yy + lh
+    if yy > y + box_h then break end
+  end
+end
+
+local function draw_preview_placeholder(message, detail, x, y, w, h)
+  renderer.draw_rect(x, y, w, h, style.background)
+  local font = style.code_font
+  local lh = font:get_height()
+  local yy = y + style.padding.y
+  renderer.draw_text(font, message or "Preview unavailable", x + style.padding.x, yy, style.accent or style.text)
+  yy = yy + lh * 1.4
+  if detail and detail ~= "" then
+    draw_highlighted_text(font, detail, x + style.padding.x, yy, w - style.padding.x * 2, style.dim or style.text, {})
+  end
+end
+
+local function draw_view_in_rect(view, x, y, w, h, result)
+  -- Embedded core views may push their own clip rects. Give them a clean local
+  -- clip stack rooted at the preview pane; otherwise they can intersect with a
+  -- stale parent/deferred-draw clip.
+  local saved_stack = core.clip_rect_stack
+  local rx, ry, rw, rh = table.unpack(saved_stack[#saved_stack])
+  core.clip_rect_stack = {{ x, y, w, h }}
+  renderer.set_clip_rect(x, y, w, h)
+  view:draw()
+  draw_preview_debug(view, result, x, y, w, h)
+  core.clip_rect_stack = saved_stack
+  renderer.set_clip_rect(rx, ry, rw, rh)
+end
+
+function FSView:update_preview_view()
+  local r = self:selected_result()
+  if not r or not r.file then self:clear_preview_view(); return nil end
+
+  local path = fullpath(r.file)
+  local key = path
+  local view
+  if ImageView.is_supported(path) then
+    key = "image:" .. path
+  else
+    local blocked, reason = detect_binary_preview(path)
+    if blocked then
+      key = "blocked:" .. path .. ":" .. tostring(reason)
+      if self.preview_key ~= key then
+        self:clear_preview_view()
+        self.preview_key = key
+        self.preview_blocked = { reason = reason or "Unsupported binary file", path = path }
+      end
+      return nil
+    end
+    key = "doc:" .. path
+  end
+
+  if self.preview_key ~= key then
+    self:clear_preview_view()
+    if key:sub(1, 6) == "image:" then
+      view = ImageView(path, "fit")
+    else
+      local ok, doc = pcall(Doc, core.normalize_to_project_dir(path), path, false)
+      if not ok or not doc then
+        self.preview_blocked = { reason = "Cannot open file", path = path }
+        return nil
+      end
+      view = PreviewDocView(doc)
+    end
+    self.preview_view = view
+    self.preview_key = key
+  end
+
+  view = self.preview_view
+  local px, py, pw, ph = self:preview_bounds()
+  view.position.x, view.position.y = px, py
+  view.size.x, view.size.y = math.max(0, pw), math.max(0, ph)
+
+  local target = r.line or 1
+  if view.doc then
+    target = common.clamp(target, 1, #view.doc.lines)
+    local highlight_key = table.concat({ r.kind or "", r.grep_query or "", r.fuzzy_query or "", tostring(target), r.text or "" }, "\0")
+    if self.preview_target_line ~= target or self.preview_highlight_key ~= highlight_key then
+      view.doc:clear_search_selections()
+      local selections = {}
+      if r.kind == "grep" then
+        for _, span in ipairs(grep_content_spans(view.doc.lines[target] or "", r, 0, target) or {}) do
+          local col1, col2 = span[1], span[2] + 1
+          view.doc:add_search_selection(target, col1, target, col2)
+          table.insert(selections, target)
+          table.insert(selections, col1)
+          table.insert(selections, target)
+          table.insert(selections, col2)
+        end
+      end
+      if #selections > 0 then
+        view.doc.selections = selections
+      else
+        view.doc:set_selection(target, 1, target, 1)
+      end
+      view:scroll_to_line(target, false, true)
+      self.preview_target_line = target
+      self.preview_highlight_key = highlight_key
+    end
+  end
+
+  view:update()
+  return view
+end
+
+-- Treat the floating overlay as a modal surface for mouse routing: while it is
+-- open, editor hover/click/wheel events behind it should not leak through.
+function FSView:mouse_on_top(x, y)
+  return self:is_visible()
+end
+
+function FSView:panel_contains(x, y)
+  if not self:is_visible() then return false end
+  local px = self.position.x - self.border.width
+  local py = self.position.y - self.border.width
+  return x >= px and x <= px + self:get_width() and y >= py and y <= py + self:get_height()
+end
+
+function FSView:result_at_point(x, y)
+  if not self:panel_contains(x, y) then return nil end
+  local m = self:list_metrics(style.code_font)
+  if x < m.x or x > m.x + m.list_w - style.divider_size then return nil end
+
+  if y >= m.results_top and y < m.results_top + m.result_rows * m.lh then
+    local idx = self.viewport_offset + math.floor((y - m.results_top) / m.lh)
+    if idx >= 1 and idx <= #self.results then return idx end
+  end
+  if y >= m.top and y < m.top + m.lh and self.viewport_offset > 1 then
+    return "scroll-up"
+  end
+  if y >= m.bottom_indicator_y and y < m.bottom_indicator_y + m.lh
+    and (self.viewport_offset + m.result_rows - 1 < #self.results or self:can_load_more())
+  then
+    return "scroll-down"
+  end
+  return nil
+end
+
+function FSView:on_mouse_pressed(button, x, y, clicks)
+  self.mouse.x, self.mouse.y = x, y
+  self.pressed_result = nil
+  self.pressed_clicks = clicks or 1
+  self.forward_mouse_to_child = false
+
+  if not self:panel_contains(x, y) then
+    self:close()
+    return true
+  end
+
+  if self.input and self.input:mouse_on_top(x, y) then
+    self.forward_mouse_to_child = true
+    return FSView.super.on_mouse_pressed(self, button, x, y, clicks)
+  end
+
+  if self:preview_contains(x, y) then
+    if not self.preview_view then self:update_preview_view() end
+    if not self.preview_view then return true end
+    local interactive = self.preview_view:extends(ImageView) or self.preview_view:scrollbar_overlaps_point(x, y)
+    if interactive then
+      self.preview_mouse_pressed = true
+      self.preview_view:on_mouse_pressed(button, x, y, clicks)
+    end
+    self:swap_active_child(self.input)
+    self:schedule_update(true)
+    return true
+  end
+
+  local hit = self:result_at_point(x, y)
+  if hit == "scroll-up" then
+    for _ = 1, self:list_metrics().result_rows do self:select_delta(-1) end
+    self:schedule_update(true)
+  elseif hit == "scroll-down" then
+    for _ = 1, self:list_metrics().result_rows do self:select_delta(1) end
+    self:schedule_update(true)
+  elseif type(hit) == "number" and self.results[hit] and not self.results[hit].header then
+    self.selected = hit
+    self.pressed_result = hit
+    self:ensure_selection_visible()
+    self:schedule_update(true)
+  end
+
+  self:swap_active_child(self.input)
+  return true
+end
+
+function FSView:on_mouse_released(button, x, y)
+  self.mouse.x, self.mouse.y = x, y
+
+  if self.forward_mouse_to_child then
+    self.forward_mouse_to_child = false
+    FSView.super.on_mouse_released(self, button, x, y)
+    self:swap_active_child(self.input)
+    return true
+  end
+
+  if self.preview_mouse_pressed then
+    self.preview_mouse_pressed = false
+    if self.preview_view then self.preview_view:on_mouse_released(button, x, y) end
+    self:swap_active_child(self.input)
+    self:schedule_update(true)
+    return true
+  end
+
+  local hit = self:result_at_point(x, y)
+  if button == "left" and type(hit) == "number" and hit == self.pressed_result then
+    self.selected = hit
+    self:ensure_selection_visible()
+    if (self.pressed_clicks or 1) >= 2 then self:confirm() end
+  end
+
+  self.pressed_result = nil
+  self.pressed_clicks = 0
+  if self:is_visible() then self:swap_active_child(self.input) end
+  return true
+end
+
+function FSView:on_mouse_moved(x, y, dx, dy)
+  self.mouse.x, self.mouse.y = x, y
+
+  if self.forward_mouse_to_child or (self.input and self.input.mouse_is_pressed) or (self.input and self.input:mouse_on_top(x, y)) then
+    local handled = FSView.super.on_mouse_moved(self, x, y, dx, dy)
+    self.hovered_result = nil
+    return handled or true
+  end
+
+  if self.preview_view and (self.preview_mouse_pressed or self:preview_contains(x, y)) then
+    self.preview_view:on_mouse_moved(x, y, dx, dy)
+    if self.preview_view.cursor then system.set_cursor(self.preview_view.cursor) end
+    self.hovered_result = nil
+    self:schedule_update(true)
+    return true
+  end
+
+  local hit = self:result_at_point(x, y)
+  local hovered = type(hit) == "number" and self.results[hit] and not self.results[hit].header and hit or nil
+  if hovered ~= self.hovered_result then
+    self.hovered_result = hovered
+    self:schedule_update(true)
+  end
+  return true
+end
+
+function FSView:on_mouse_wheel(y, x)
+  if self.preview_view and self:preview_contains(self.mouse.x, self.mouse.y) then
+    if not self.preview_view:on_mouse_wheel(y, x) and self.preview_view.scrollable then
+      self.preview_view.scroll.to.y = self.preview_view.scroll.to.y + y * -config.mouse_wheel_scroll
+    end
+    self.preview_view:update()
+    self:schedule_update(true)
+  elseif self:panel_contains(self.mouse.x, self.mouse.y) then
+    self:select_delta(y < 0 and 1 or -1)
+    self:schedule_update(true)
+  end
+  return true
+end
+
+function FSView:start_file_search(query, line, reset_selection)
+  kill_file_search()
+  local gen = file_search_generation
+  local keep_limit = self:max_result_limit() + 1
+  local root = project_dir()
+
+  self.results = {}
+  self.has_more = false
+  self.hovered_result = nil
+  if reset_selection then
+    self.selected = 1
+    self.viewport_offset = 1
+  end
+  self.status = files_indexing
+    and string.format("Indexing files… %d found — %s", #(files_cache or {}), display_root(root))
+    or string.format("Searching %d files…", #(files_cache or {}))
+  self:schedule_update(true)
+
+  core.add_thread(function()
+    local items = get_file_search_items()
+    local scored = {}
+    local matched = 0
+    local scanned = 0
+    local empty_query = trim_query(query) == ""
+    local slice_start = system.get_time()
+    local last_publish = system.get_time()
+
+    local function publish(final)
+      if gen ~= file_search_generation or active_view ~= self then return false end
+      local current_limit = self:result_limit()
+      local out = {}
+      for i = 1, math.min(current_limit, #scored) do
+        local match = scored[i]
+        out[#out+1] = { kind = "file", label = match.item, file = match.item, line = line or 1, col = 1, query = query, match_spans = match.spans }
+      end
+      self.results = out
+      self.has_more = matched > current_limit
+      if self.pending_select_index then
+        self.selected = common.clamp(self.pending_select_index, 1, math.max(1, #out))
+        self.pending_select_index = nil
+      else
+        self.selected = common.clamp(self.selected, 1, math.max(1, #out))
+      end
+      self:ensure_selection_visible()
+      if final then
+        self.status = files_indexing
+          and string.format("%d file matches — still indexing %d files — %s", matched, #(files_cache or {}), display_root(root))
+          or string.format("%d file matches — %d files indexed — %s", matched, #items, display_root(root))
+      else
+        self.status = string.format("%d file matches — scanning %d/%d…", matched, scanned, #items)
+      end
+      self:schedule_update(true)
+      last_publish = system.get_time()
+      return true
+    end
+
+    for _, item in ipairs(items) do
+      if gen ~= file_search_generation or active_view ~= self then return end
+      scanned = scanned + 1
+      local score, spans
+      if empty_query then
+        score, spans = 0, {}
+      else
+        score, spans = fuzzy_match(query, item)
+      end
+      if score and ((not line) or line_exists(item, line)) then
+        matched = matched + 1
+        local candidate = { item = item, text = item, score = score, spans = spans or {} }
+        if empty_query then
+          if #scored < keep_limit then scored[#scored+1] = candidate end
+        else
+          fuzzy_insert_top(scored, candidate, keep_limit)
+        end
+      end
+      if #scored > 0 and system.get_time() - last_publish > 0.05 then publish(false) end
+      slice_start = yield_if_over_budget(slice_start)
+    end
+
+    publish(true)
+  end)
+end
+
+function FSView:refresh_normal(base, line, reset_selection)
+  local limit = self:result_limit()
+  local mode = base:sub(1, 1)
+  if mode == ">" or mode == "@" then base = base:sub(2):gsub("^%s+", "") end
+
+  local out = {}
+  self.has_more = false
+
+  local function add_file_results(query, max_items)
+    if max_items <= 0 then self.has_more = true; return end
+
+    if trim_query(query) == "" and not line then
+      local added_recent = 0
+      for _, f in ipairs(get_recent_files()) do
+        if added_recent >= max_items then self.has_more = true; return end
+        out[#out+1] = { kind = "file", label = f, file = f, line = 1, col = 1, query = query, match_spans = {}, recent = true }
+        added_recent = added_recent + 1
+      end
+      return
+    end
+
+    self:start_file_search(query, line, reset_selection)
+    return "async"
+  end
+
+  local function add_command_results(query, max_items)
+    if max_items <= 0 then self.has_more = true; return end
+
+    if trim_query(query) == "" then
+      local added_recent = 0
+      for _, name in ipairs(recent_commands) do
+        if command.map[name] then
+          if added_recent >= max_items then self.has_more = true; return end
+          out[#out+1] = { kind = "command", label = name, command = name, query = query, match_spans = {}, recent = true, info = command_preview_info(name) }
+          added_recent = added_recent + 1
+        end
+      end
+      return
+    end
+
+    local matches = fuzzy_filter(get_commands(), query, max_items + 1)
+    for i, match in ipairs(matches) do
+      if i > max_items then self.has_more = true; break end
+      local name = match.item
+      out[#out+1] = { kind = "command", label = name, command = name, query = query, match_spans = match.spans, info = command_preview_info(name) }
+    end
+  end
+
+  local function add_project_results(query, max_items)
+    if max_items <= 0 then self.has_more = true; return end
+    local projects = get_recent_projects()
+
+    if trim_query(query) == "" then
+      for i, path in ipairs(projects) do
+        if i > max_items then self.has_more = true; break end
+        out[#out+1] = { kind = "project", label = path, project = path, query = query, match_spans = {}, recent = true }
+      end
+      return
+    end
+
+    local matches = fuzzy_filter(projects, query, max_items + 1, display_root)
+    for i, match in ipairs(matches) do
+      if i > max_items then self.has_more = true; break end
+      local path = match.item
+      out[#out+1] = { kind = "project", label = path, project = path, query = query, match_spans = match.spans }
+    end
+  end
+
+  local async
+  if mode == ">" then
+    kill_file_search()
+    add_command_results(base, limit)
+  elseif mode == "@" then
+    kill_file_search()
+    add_project_results(base, limit)
+  else
+    async = add_file_results(base, limit)
+    if async then return end
+    kill_file_search()
+  end
+
+  if mode == "@" then
+    self.status = string.format("%d recent projects", #get_recent_projects())
+  elseif files_indexing then
+    self.status = string.format("Indexing files… %d found — %s", #(files_cache or {}), display_root(project_dir()))
+  else
+    self.status = string.format("%d files indexed — %s", #(files_cache or {}), display_root(project_dir()))
+  end
+
+  self.results = out
+  self.hovered_result = nil
+  if reset_selection then
+    self.selected = 1
+    self.viewport_offset = 1
+  elseif self.pending_select_index then
+    self.selected = common.clamp(self.pending_select_index, 1, math.max(1, #out))
+    self.pending_select_index = nil
+  else
+    self.selected = common.clamp(self.selected, 1, math.max(1, #out))
+  end
+  if self.results[self.selected] and self.results[self.selected].header then self:select_delta(1) end
+  self:ensure_selection_visible()
+end
+
+function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, gen)
+  local limit = self:result_limit()
+  local tokens = terms_to_legacy_tokens(terms)
+  local session, preferred_session = ensure_fuzzy_grep_session(root, scope, tokens)
+  if not session then return end
+  local sessions = { session }
+  if preferred_session and preferred_session ~= session then sessions[#sessions+1] = preferred_session end
+  local exact_results = #terms == 1 and not terms[1].exact and trim_query(grep):lower() == terms[1].text
+  local fuzzy_query = terms_fuzzy_query(terms)
+
+  local function sessions_label()
+    if #sessions == 1 then return sessions[1].seed end
+    local names = {}
+    for _, s in ipairs(sessions) do names[#names+1] = s.seed end
+    return table.concat(names, "/")
+  end
+
+  self.results = {}
+  self.selected = 1
+  self.viewport_offset = 1
+  self.hovered_result = nil
+  self.has_more = true
+  self.status = exact_results and string.format("Searching '%s'…", sessions_label())
+    or string.format("Expanding fuzzy text search from '%s'…", sessions_label())
+  self:schedule_update(true)
+
+  core.add_thread(function()
+    local base_query = base:sub(1, 1) == ">" and "" or base
+    local candidates, candidate_seen = {}, {}
+    local processed = {}
+    for _, s in ipairs(sessions) do processed[s.key] = 0 end
+    local max_candidates = fuzzy_searcher.fuzzy_candidate_limit or 500
+    local slice_start = system.get_time()
+    local last_publish = 0
+
+    local function add_candidate(source)
+      if line and not line_exists(source.file, line) then return end
+      local key = source.file .. ":" .. tostring(source.line)
+      if candidate_seen[key] then return end
+
+      local low = (source.text or ""):lower()
+      local spans = exact_term_spans(low, terms)
+      if not spans then return end
+      for _, term in ipairs(terms) do
+        if not term.exact and not low:find(term.text, 1, true) then return end
+      end
+
+      local score, fuzzy_spans = 0, {}
+      if fuzzy_query ~= "" then
+        score, fuzzy_spans = fuzzy_match(fuzzy_query, source.text)
+        if not score then return end
+      end
+      for _, span in ipairs(fuzzy_spans or {}) do spans[#spans+1] = span end
+      score = score + (#spans * 4)
+
+      local r = {
+        kind = "grep",
+        file = source.file,
+        line = source.line,
+        col = source.col,
+        text = source.text,
+        exact = exact_results,
+        grep_query = grep,
+        fuzzy_query = fuzzy_query,
+        fuzzy_score = score,
+        content_spans = spans or {},
+        base_query = base_query,
+      }
+      if base_query ~= "" then
+        local _, file_spans = fuzzy_match(base_query, r.file)
+        r.file_spans = file_spans or {}
+      end
+
+      candidate_seen[key] = true
+      candidates[#candidates+1] = r
+    end
+
+    local function session_stats()
+      local running, truncated, scanned = false, false, 0
+      for _, s in ipairs(sessions) do
+        running = running or not s.done
+        truncated = truncated or s.truncated
+        scanned = scanned + (s.scanned or 0)
+      end
+      return running, truncated, scanned
+    end
+
+    local function publish(final)
+      if gen ~= grep_generation or active_view ~= self then return false end
+      local running, truncated, scanned = session_stats()
+      table.sort(candidates, function(a, b)
+        if a.fuzzy_score == b.fuzzy_score then
+          local ak = tostring(a.file) .. tostring(a.line)
+          local bk = tostring(b.file) .. tostring(b.line)
+          return ak < bk
+        end
+        return a.fuzzy_score > b.fuzzy_score
+      end)
+
+      local out = {}
+      for i = 1, math.min(limit, #candidates) do out[#out+1] = candidates[i] end
+      self.results = out
+      self.has_more = #candidates > limit or running or truncated
+      if self.pending_select_index then
+        self.selected = common.clamp(self.pending_select_index, 1, math.max(1, #out))
+        self.pending_select_index = nil
+      else
+        self.selected = common.clamp(self.selected, 1, math.max(1, #out))
+      end
+      self.viewport_offset = common.clamp(self.viewport_offset, 1, math.max(1, #out))
+      self:ensure_selection_visible()
+
+      local fuzzy_count = #candidates
+      if exact_results then
+        if final then
+          self.status = truncated
+            and string.format("%d exact matches — limited scan from '%s'", fuzzy_count, sessions_label())
+            or string.format("%d exact matches", fuzzy_count)
+        else
+          self.status = string.format("%d exact matches — scanning '%s'… %d lines", fuzzy_count, sessions_label(), scanned)
+        end
+      elseif final then
+        self.status = truncated
+          and string.format("%d fuzzy matches — limited scan from '%s'", fuzzy_count, sessions_label())
+          or string.format("%d fuzzy matches", fuzzy_count)
+      else
+        self.status = string.format("%d fuzzy matches — scanning '%s'… %d lines", fuzzy_count, sessions_label(), scanned)
+      end
+      self:schedule_update(true)
+      last_publish = system.get_time()
+      return true
+    end
+
+    while gen == grep_generation and active_view == self do
+      local did_work = false
+      local all_done = true
+      for _, s in ipairs(sessions) do
+        while (processed[s.key] or 0) < #s.lines and #candidates < max_candidates do
+          processed[s.key] = (processed[s.key] or 0) + 1
+          add_candidate(s.lines[processed[s.key]])
+          did_work = true
+          if #candidates >= 20 and system.get_time() - last_publish > 0.04 then publish(false) end
+          slice_start = yield_if_over_budget(slice_start)
+        end
+        if not s.done or (processed[s.key] or 0) < #s.lines then all_done = false end
+      end
+
+      if did_work and system.get_time() - last_publish > 0.08 then publish(false) end
+      if (#candidates >= max_candidates) or all_done then break end
+      coroutine.yield(1 / config.fps)
+      slice_start = system.get_time()
+    end
+
+    if gen ~= grep_generation or active_view ~= self then return end
+    publish(true)
+  end)
+end
+
+function FSView:start_grep(base, line, grep)
+  grep_generation = grep_generation + 1
+  local gen = grep_generation
+  kill_file_search()
+  kill_grep()
+
+  self.results = {}
+  self.selected = 1
+  self.viewport_offset = 1
+  self.hovered_result = nil
+  self.has_more = false
+  self.status = grep == "" and "Type text after # to search inside files" or "Searching exact text matches…"
+  if grep == "" then return end
+
+  local limit = self:result_limit()
+  local root = project_dir()
+  local scope = nil
+  if base ~= "" or line then
+    scope = build_scope(base, line, 200)
+    if #scope == 0 then self.status = "No files in scope"; return end
+  end
+
+  local exact_query = quoted_exact_query(grep)
+  if exact_query and exact_query ~= "" then grep = exact_query end
+
+  local terms = parse_code_search_terms(grep)
+  local single_token_exact = #terms == 1 and not terms[1].exact and trim_query(grep):lower() == terms[1].text
+  if not exact_query and (#terms > 1 or single_token_exact) then
+    self:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, gen)
+    return
+  end
+
+  core.add_thread(function()
+    local function add_result(r, seen, exact)
+      if gen ~= grep_generation or active_view ~= self then return false end
+      if line and not line_exists(r.file, line) then return true end
+      local key = r.file .. ":" .. r.line .. ":" .. r.col
+      if seen[key] then return true end
+      if #self.results >= limit then
+        self.has_more = true
+        self:schedule_update(true)
+        return false
+      end
+      seen[key] = true
+      r.exact = exact
+      r.grep_query = grep
+      r.base_query = base:sub(1, 1) == ">" and "" or base
+      if r.base_query ~= "" and not r.file_spans then
+        local _, file_spans = fuzzy_match(r.base_query, r.file)
+        r.file_spans = file_spans or {}
+      end
+      self.results[#self.results+1] = r
+      if #self.results == 1 then self.selected = 1; self.viewport_offset = 1 end
+      if self.pending_select_index and #self.results >= self.pending_select_index then
+        self.selected = self.pending_select_index
+        self.pending_select_index = nil
+      end
+      self:ensure_selection_visible()
+      self:schedule_update(true)
+      return true
+    end
+
+    local seen = {}
+    local args = { fuzzy_searcher.rg, "--vimgrep", "--color", "never", "-i", "-F", "--hidden", "--glob", "!.git/**", "-e", grep }
+    if scope then args[#args+1] = "--"; for _, f in ipairs(scope) do args[#args+1] = f end end
+    grep_proc = process.start(args, { cwd = root, stdout = process.REDIRECT_PIPE, stderr = process.REDIRECT_DISCARD, stdin = process.REDIRECT_DISCARD })
+
+    if grep_proc then
+      while true do
+        local l = grep_proc.stdout:read("line", { scan = 1 / config.fps })
+        if l then
+          local r = parse_vimgrep(l)
+          if r and not add_result(r, seen, true) then break end
+        elseif not grep_proc:running() then break else coroutine.yield(1 / config.fps) end
+      end
+      if grep_proc:running() then pcall(function() grep_proc:kill() end) end
+      grep_proc:wait(process.WAIT_DEADLINE)
+    end
+
+    if gen ~= grep_generation or active_view ~= self then return end
+    self.status = string.format("%d exact matches", #self.results)
+    self:schedule_update(true)
+  end)
+end
+
+function FSView:refresh(text)
+  text = text or self.input:get_text()
+  local files_changed = self.last_files_generation ~= files_generation
+  local base, line, grep = parse_query(text)
+  local query_key = base .. "\0" .. tostring(line or "") .. "\0" .. tostring(grep or "")
+  local query_changed = query_key ~= self.current_query_key
+
+  if query_changed then
+    self.current_query_key = query_key
+    self:reset_pagination()
+  end
+
+  if not self.force_refresh and not self.dirty and not files_changed then return end
+  local force_refresh = self.force_refresh
+  self.force_refresh = false
+  self.dirty = false
+  self.last_files_generation = files_generation
+
+  if grep ~= nil then
+    if query_changed or force_refresh then self:start_grep(base, line, grep) end
+  else
+    kill_grep()
+    kill_fuzzy_grep_sessions()
+    self:refresh_normal(base, line, query_changed)
+  end
+end
+
+function FSView:on_text_input(text)
+  -- Text input is the authoritative path for all printable characters,
+  -- especially layout-dependent ones like AltGr, dead keys and IME output.
+  self:swap_active_child(self.input)
+  self.input:on_text_input(text)
+  return true
+end
+
+function FSView:close()
+  kill_file_search()
+  kill_grep()
+  kill_fuzzy_grep_sessions()
+  self:clear_preview_view()
+  self:swap_active_child(nil)
+  self:hide()
+  self:destroy()
+  if active_view == self then active_view = nil end
+  if core.fuzzy_searcher_active_view == self then core.fuzzy_searcher_active_view = nil end
+end
+
+function FSView:selected_file_path()
+  local r = self:selected_result()
+  if not r or not r.file then return end
+  return common.normalize_path(fullpath(r.file))
+end
+
+function FSView:focus_selected_in_tree()
+  local path = self:selected_file_path()
+  if not path then return end
+
+  local root = core.root_project and core.root_project()
+  if not root or not common.path_belongs_to(path, root.path) then return end
+
+  -- Close first so editree remains the active view; otherwise its update() sees
+  -- the fuzzy input as active and collapses itself again.
+  self:close()
+  command.perform("editree:focus-file", path)
+end
+
+function FSView:reveal_selected_in_explorer()
+  local path = self:selected_file_path()
+  if not path then return end
+
+  self:close()
+  command.perform("user:reveal-active-file-in-explorer", path)
+end
+
+function FSView:confirm(new_window)
+  local r = self:selected_result()
+  if not r then return end
+  if r.kind == "command" then
+    local cmd = r.command
+    remember_command(cmd)
+    self:close()
+    command.perform(cmd)
+    return
+  end
+  if r.kind == "project" and r.project then
+    local path = r.project
+    self:close()
+    if new_window then
+      open_pragtical_window(path)
+    else
+      core.open_project(path)
+    end
+    return
+  end
+  if r.file then
+    local path = fullpath(r.file)
+    local line, col = r.line or 1, r.col or 1
+    local source_view = self.source_view
+    self:close()
+    if new_window then
+      split_view.open_path_in_side(path, {
+        line = line,
+        col = col,
+        focus = false,
+        restore_focus = source_view,
+      })
+    else
+      local v = core.open_file(path)
+      if v and v.doc then v.doc:set_selection(line, col) end
+    end
+  end
+end
+
+function FSView:update()
+  self:layout()
+  FSView.super.update(self)
+  self:refresh(self.input:get_text())
+end
+
+function FSView:draw()
+  if not self:is_visible() then return false end
+  local root = core.root_view
+  renderer.draw_rect(root.position.x, root.position.y, root.size.x, root.size.y, {0, 0, 0, 110})
+
+  if not FSView.super.draw(self) then return false end
+
+  local pad = style.padding.x
+  local font = style.code_font
+  local m = self:list_metrics(font)
+  local x, y, w, h = m.x, m.y, m.w, m.h
+  local top, list_w, lh = m.top, m.list_w, m.lh
+  self:ensure_selection_visible()
+
+  renderer.draw_text(font, self.status or "", x + pad, y + self.input.size.y + pad * 1.5, style.dim or style.text)
+  local command_mode = self:is_command_mode()
+  local divider_w = command_mode and 0 or style.divider_size
+  if not command_mode then
+    renderer.draw_rect(x + list_w, top, style.divider_size, h - (top - y), style.divider)
+  end
+
+  core.push_clip_rect(x, top, list_w - divider_w, h - (top - y))
+  local row_text_w = list_w - (pad * 2) - divider_w
+  local arrow_color = style.dim or style.text
+  local up_arrow, down_arrow = "▲", "▼"
+  if self.viewport_offset > 1 then
+    renderer.draw_text(font, up_arrow, x + (list_w - font:get_width(up_arrow)) / 2, top, arrow_color)
+  end
+  if self.viewport_offset + m.result_rows - 1 < #self.results or self:can_load_more() then
+    renderer.draw_text(font, down_arrow, x + (list_w - font:get_width(down_arrow)) / 2, m.bottom_indicator_y, arrow_color)
+  end
+
+  local last = math.min(#self.results, self.viewport_offset + m.result_rows - 1)
+  local has_visible_grep = false
+  for idx = self.viewport_offset, last do
+    local r = self.results[idx]
+    if r and r.kind == "grep" then has_visible_grep = true; break end
+  end
+  for idx = self.viewport_offset, last do
+    local r = self.results[idx]
+    local yy = m.results_top + (idx - self.viewport_offset) * lh
+    if r.header then
+      renderer.draw_text(font, truncate_text(font, r.label, row_text_w), x + pad, yy, style.accent or style.text)
+    else
+      if idx == self.selected then
+        renderer.draw_rect(x, yy, list_w, lh, style.line_highlight or style.selection)
+      elseif idx == self.hovered_result then
+        renderer.draw_rect(x, yy, list_w, lh, style.background3 or color_with_alpha(style.text, 24))
+      end
+      if r.kind == "grep" then
+        draw_grep_result_row(font, r, x + pad, yy, row_text_w)
+      elseif r.kind == "file" then
+        draw_file_result_row(font, r.file or r.label, r.match_spans, "", x + pad, yy, row_text_w)
+      elseif r.kind == "command" then
+        draw_command_result_row(font, r, x + pad, yy, row_text_w)
+      else
+        local label, spans = result_list_label_and_spans(r)
+        draw_highlighted_text(font, label, x + pad, yy, row_text_w, style.text, spans)
+      end
+    end
+  end
+  if has_visible_grep then
+    local path_w, gap = grep_row_columns(row_text_w)
+    local sx = x + pad + path_w + gap / 2
+    renderer.draw_rect(sx, m.results_top, style.divider_size, math.max(0, last - self.viewport_offset + 1) * lh, style.divider)
+  end
+  core.pop_clip_rect()
+
+  local r = self:selected_result()
+  local px, py, preview_w, preview_h = self:preview_bounds()
+  if command_mode then
+    self:clear_preview_view()
+  elseif r and r.kind == "command" then
+    self:clear_preview_view()
+    core.push_clip_rect(px, py, preview_w, preview_h)
+    renderer.draw_text(font, "Command", px, py, style.accent or style.text)
+    draw_highlighted_text(font, r.command, px, py + lh, preview_w, style.text, r.match_spans or {})
+    local info = r.info or command_preview_info(r.command)
+    if info and info ~= "" then
+      renderer.draw_text(font, info, px, py + lh * 2, style.dim or style.text)
+    end
+    core.pop_clip_rect()
+  elseif r and r.kind == "project" then
+    self:clear_preview_view()
+    core.push_clip_rect(px, py, preview_w, preview_h)
+    renderer.draw_text(font, "Project", px, py, style.accent or style.text)
+    draw_highlighted_text(font, display_root(r.project), px, py + lh, preview_w, style.text, r.match_spans or {})
+    renderer.draw_text(font, "Enter: open here", px, py + lh * 3, style.dim or style.text)
+    renderer.draw_text(font, "Ctrl+Enter: open in new Pragtical window", px, py + lh * 4, style.dim or style.text)
+    core.pop_clip_rect()
+  else
+    local preview = self:update_preview_view()
+    if preview then
+      draw_view_in_rect(preview, px, py, preview_w, preview_h, r)
+    elseif self.preview_blocked then
+      core.push_clip_rect(px, py, preview_w, preview_h)
+      draw_preview_placeholder("Preview unavailable", self.preview_blocked.reason .. " — " .. basename(self.preview_blocked.path), px, py, preview_w, preview_h)
+      core.pop_clip_rect()
+    end
+  end
+  return true
+end
+
+
+local function picker_active()
+  return current_picker() ~= nil
+end
+
+local function picker_close()
+  local view = current_picker()
+  if view then view:close() end
+end
+
+local function picker_confirm()
+  local view = current_picker()
+  if view then view:confirm(false) end
+end
+
+local function picker_confirm_new_window()
+  local view = current_picker()
+  if view then view:confirm(true) end
+end
+
+local function picker_focus_selected_in_tree()
+  local view = current_picker()
+  if view then view:focus_selected_in_tree() end
+end
+
+local function picker_reveal_selected_in_explorer()
+  local view = current_picker()
+  if view then view:reveal_selected_in_explorer() end
+end
+
+local function picker_next()
+  local view = current_picker()
+  if view then view:select_delta(1); view:schedule_update(true) end
+end
+
+local function picker_previous()
+  local view = current_picker()
+  if view then view:select_delta(-1); view:schedule_update(true) end
+end
+
+function open(prefix)
+  local view = current_picker()
+  if view then view:close() end
+  active_view = FSView(prefix or "")
+  core.fuzzy_searcher_active_view = active_view
+end
+
+command.add(nil, {
+  ["fuzzy-searcher:open"] = function() open("") end,
+  ["fuzzy-searcher:open-files"] = function() open("") end,
+  ["fuzzy-searcher:open-projects"] = function() open("@") end,
+  ["fuzzy-searcher:open-grep"] = function() open("#") end,
+  ["fuzzy-searcher:open-commands"] = function() open(">") end,
+})
+
+command.add(picker_active, {
+  ["fuzzy-searcher:close"] = picker_close,
+  ["fuzzy-searcher:confirm"] = picker_confirm,
+  ["fuzzy-searcher:confirm-side"] = picker_confirm_new_window,
+  ["fuzzy-searcher:confirm-new-window"] = picker_confirm_new_window,
+  ["fuzzy-searcher:focus-selected-in-tree"] = picker_focus_selected_in_tree,
+  ["fuzzy-searcher:reveal-selected-in-explorer"] = picker_reveal_selected_in_explorer,
+  ["fuzzy-searcher:next"] = picker_next,
+  ["fuzzy-searcher:previous"] = picker_previous,
+})
+
+-- Global open shortcuts intentionally override conflicting defaults.
+core.fuzzy_searcher_install_global_keymaps = function()
+  keymap.add({
+    ["ctrl+shift+e"] = "fuzzy-searcher:open-projects",
+    ["ctrl+e"] = "fuzzy-searcher:open-files",
+    ["ctrl+shift+j"] = "fuzzy-searcher:open-grep",
+    ["ctrl+shift+f"] = "fuzzy-searcher:open-grep",
+    ["ctrl+shift+a"] = "fuzzy-searcher:open-commands",
+  }, true)
+  keymap.unbind("ctrl+shift+f", "project-search:find")
+end
+core.fuzzy_searcher_install_global_keymaps()
+
+-- Picker-local navigation. These are prepended, not overwritten: when the
+-- picker predicate is false, Pragtical falls through to the normal bindings.
+core.fuzzy_searcher_install_picker_keymaps = function()
+  keymap.add({
+    ["escape"] = "fuzzy-searcher:close",
+    ["return"] = "fuzzy-searcher:confirm",
+    ["keypad enter"] = "fuzzy-searcher:confirm",
+    ["ctrl+return"] = "fuzzy-searcher:confirm-side",
+    ["ctrl+l"] = "fuzzy-searcher:focus-selected-in-tree",
+    ["ctrl+shift+l"] = "fuzzy-searcher:reveal-selected-in-explorer",
+    ["up"] = "fuzzy-searcher:previous",
+    ["down"] = "fuzzy-searcher:next",
+  })
+end
+core.fuzzy_searcher_install_picker_keymaps()
+
+keymap.__fuzzy_searcher_original_on_key_pressed = keymap.on_key_pressed
+keymap.on_key_pressed = function(key, ...)
+  if modal_modkey_map[key] or not current_picker() then
+    return keymap.__fuzzy_searcher_original_on_key_pressed(key, ...)
+  end
+
+  local stroke = modal_key_to_stroke(key)
+  local fuzzy_cmd = modal_fuzzy_command(stroke)
+  local textbox_cmd = not fuzzy_cmd and modal_textbox_command(stroke)
+  if fuzzy_cmd then
+    command.perform(fuzzy_cmd, ...)
+  elseif textbox_cmd then
+    command.perform(textbox_cmd, ...)
+  elseif modal_should_let_text_input_through(key, stroke) then
+    -- Named printable keys such as "space", "minus", "comma", etc. also
+    -- produce textinput events. Do not consume them; otherwise the fuzzy input
+    -- never sees the character.
+    return false
+  end
+  -- The picker is modal: every non-modifier keypress is consumed while it is
+  -- open, even when it is not one of the picker/input shortcuts above.
+  return true
+end
+
+return { open = open }
