@@ -239,6 +239,27 @@ static LRESULT CALLBACK frame_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
       if (frame->enabled) return TRUE;
       break;
 
+    case WM_MOUSEMOVE:
+      if (frame->enabled) {
+        TRACKMOUSEEVENT tme;
+        tme.cbSize = sizeof(tme);
+        tme.dwFlags = TME_LEAVE;
+        tme.hwndTrack = hwnd;
+        tme.dwHoverTime = HOVER_DEFAULT;
+        TrackMouseEvent(&tme);
+      }
+      break;
+
+    case WM_MOUSELEAVE:
+      if (frame->enabled) {
+        SDL_Event event;
+        SDL_zero(event);
+        event.type = SDL_EVENT_WINDOW_MOUSE_LEAVE;
+        event.window.windowID = SDL_GetWindowID(frame->ren->cache.window);
+        SDL_PushEvent(&event);
+      }
+      break;
+
     case WM_NCMOUSEMOVE:
       if (frame->enabled) {
         push_sdl_mouse_motion(frame, lparam);
