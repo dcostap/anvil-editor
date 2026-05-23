@@ -49,6 +49,12 @@ config.indent_size = 4
 config.tab_type = "soft"
 -- Match IntelliJ/VSCode-style occurrence selection.
 config.select_add_next_no_case = true
+-- Integrated app-owned titlebar. On Windows this uses native non-client
+-- integration for shadow/resize/snap behavior while Lua draws the top bar.
+if PLATFORM == "Windows" then
+  config.borderless = true
+  config.integrated_titlebar_tabs = true
+end
 -- Cleaner tabs: hide cramped close buttons and reduce default tab width.
 config.tab_close_button = false
 style.tab_width = 120 * SCALE

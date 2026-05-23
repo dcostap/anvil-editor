@@ -23,7 +23,7 @@ img_args += '-DUSE_STBIMAGE'
 img_args += '-DSDL_IMAGE_USE_COMMON_BACKEND'
 
 # AVIF
-avif_dep = dependency('libavif', required: false)
+avif_dep = dependency('libavif', required: false, method: 'pkg-config')
 if avif_dep.found()
   img_args += '-DLOAD_AVIF'
   img_args += '-DLOAD_AVIF_DYNAMIC="@0@avif@1@"'.format(libprefix, libext)
@@ -39,7 +39,7 @@ img_args += '-DLOAD_GIF'
 img_args += '-DLOAD_JPG'
 
 # JXL
-jxl_dep = dependency('libjxl', required: false)
+jxl_dep = dependency('libjxl', required: false, method: 'pkg-config')
 if jxl_dep.found()
   img_args += '-DLOAD_JXL'
   img_args += '-DLOAD_JXL_DYNAMIC="@0@jxl@1@"'.format(libprefix, libext)
@@ -68,7 +68,7 @@ img_args += '-DLOAD_TGA'
 
 # TIFF
 if host_machine.system() != 'darwin'
-  tiff_dep = dependency('libtiff', 'libtiff-4', required: false)
+  tiff_dep = dependency('libtiff', 'libtiff-4', required: false, method: 'pkg-config')
   if tiff_dep.found()
     img_args += '-DLOAD_TIF'
     img_args += '-DLOAD_TIF_DYNAMIC="@0@tiff@1@"'.format(libprefix, libext)
@@ -76,9 +76,9 @@ if host_machine.system() != 'darwin'
 endif
 
 # WEBP - seems to require more effort since it is not working :-(
-webp_dep = dependency('libwebp', required: false)
-webpmux_dep = dependency('libwebpmux', required: false)
-webpdemux_dep = dependency('libwebpdemux', required: false)
+webp_dep = dependency('libwebp', required: false, method: 'pkg-config')
+webpmux_dep = dependency('libwebpmux', required: false, method: 'pkg-config')
+webpdemux_dep = dependency('libwebpdemux', required: false, method: 'pkg-config')
 if webp_dep.found() and webpdemux_dep.found() and webpmux_dep.found()
   img_args += '-DLOAD_WEBP'
   img_args += '-DLOAD_WEBP_DYNAMIC="@0@webp@1@"'.format(libprefix, libext)

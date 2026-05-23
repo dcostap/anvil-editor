@@ -6,14 +6,21 @@ struct HitTestInfo {
   int title_height;
   int controls_width;
   int resize_border;
+  int titlebar_client_x;
+  int titlebar_client_width;
 };
 typedef struct HitTestInfo HitTestInfo;
+
+struct Win32FrameData;
 
 struct RenWindow {
   RenCache cache;
   float scale_x;
   float scale_y;
   HitTestInfo hit_test_info;
+#if defined(_WIN32)
+  struct Win32FrameData *win32_frame;
+#endif
 };
 typedef struct RenWindow RenWindow;
 

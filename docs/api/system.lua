@@ -152,6 +152,27 @@ function system.get_window_mode(window) end
 function system.set_window_bordered(window, bordered) end
 
 ---
+---Enable/disable platform-native custom frame integration where available.
+---On Windows this keeps native shadow/resize/snap behavior while the app draws
+---the titlebar contents.
+---
+---@param window renwindow
+---@param enabled boolean
+---@return boolean supported
+function system.set_window_native_frame(window, enabled) end
+
+---
+---Return platform-native frame metrics where available.
+---On Windows this returns caption button width, caption height and resize
+---border size in renderer coordinates.
+---
+---@param window renwindow
+---@return number? button_width
+---@return number? title_height
+---@return number? resize_border
+function system.get_window_frame_metrics(window) end
+
+---
 ---When then window is run borderless (without system decorations), this
 ---function allows to set the size of the different regions that allow
 ---for custom window management.
@@ -162,7 +183,9 @@ function system.set_window_bordered(window, bordered) end
 ---@param title_height? number Height of the window decoration
 ---@param controls_width? number Width of window controls (maximize,minimize and close buttons, etc).
 ---@param resize_border? number The amount of pixels reserved for resizing
-function system.set_window_hit_test(window, title_height, controls_width, resize_border) end
+---@param client_x? number Optional non-draggable app-owned titlebar region x coordinate
+---@param client_width? number Optional non-draggable app-owned titlebar region width
+function system.set_window_hit_test(window, title_height, controls_width, resize_border, client_x, client_width) end
 
 ---
 ---Get the size and coordinates of the window.

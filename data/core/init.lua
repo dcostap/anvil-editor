@@ -329,7 +329,17 @@ end
 
 
 function core.configure_borderless_window()
-  system.set_window_bordered(core.window, not config.borderless)
+  local using_native_frame = false
+  if PLATFORM == "Windows" and system.set_window_native_frame then
+    if config.borderless then
+      using_native_frame = system.set_window_native_frame(core.window, true) or false
+    else
+      system.set_window_native_frame(core.window, false)
+    end
+  end
+  if not using_native_frame then
+    system.set_window_bordered(core.window, not config.borderless)
+  end
   core.title_view:configure_hit_test(config.borderless)
   core.title_view.visible = config.borderless
 end

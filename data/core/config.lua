@@ -328,6 +328,27 @@ config.draw_whitespace = false
 ---@type boolean
 config.borderless = false
 
+---Moves the active editor tab strip into the custom title bar.
+---Currently intended for the integrated Windows titlebar path.
+---Defaults to false.
+---@type boolean
+config.integrated_titlebar_tabs = false
+
+---Shows/hides close buttons on integrated titlebar tabs.
+---Defaults to true.
+---@type boolean
+config.integrated_titlebar_tab_close_button = true
+
+---Minimum width for integrated titlebar tabs.
+---Defaults to 80 * SCALE.
+---@type number
+config.integrated_titlebar_tab_min_width = 80 * SCALE
+
+---Maximum width for integrated titlebar tabs.
+---Defaults to style.tab_width when not set.
+---@type number?
+config.integrated_titlebar_tab_max_width = nil
+
 ---Shows/hides the close buttons on tabs.
 ---When hidden, users can close tabs via keyboard shortcuts or commands.
 ---

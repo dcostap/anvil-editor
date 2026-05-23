@@ -372,6 +372,13 @@ end
 ---@return boolean show True if tabs should be displayed
 function Node:should_show_tabs()
   if self.locked then return false end
+  if config.integrated_titlebar_tabs and core.title_view and core.title_view.visible and core.root_view then
+    local active_node = core.root_view:get_active_node()
+    if active_node and active_node.locked and core.last_active_view then
+      active_node = core.root_view.root_node:get_node_for_view(core.last_active_view) or active_node
+    end
+    if active_node == self then return false end
+  end
   local dn = core.root_view.dragged_node
   if config.hide_tabs then
     return false

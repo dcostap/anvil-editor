@@ -58,7 +58,7 @@ if dirmonitor_backends.length() == 0
         dirmonitor_backends += 'inodewatcher'
     endif
 
-    if dependency('libkqueue', required : false).found()
+    if dependency('libkqueue', required : false, method: 'pkg-config').found()
         dirmonitor_backends += 'kqueue'
     endif
 
@@ -78,7 +78,7 @@ foreach backend : dirmonitor_backends
         anvil_cargs += '-DDIRMONITOR_FSEVENTS'
     elif backend == 'kqueue'
         anvil_sources += 'api' / 'dirmonitor' / 'kqueue.c'
-        libkqueue_dep = dependency('libkqueue', required : false)
+        libkqueue_dep = dependency('libkqueue', required : false, method: 'pkg-config')
         if libkqueue_dep.found()
             anvil_deps += libkqueue_dep
         endif
@@ -119,6 +119,8 @@ message('lua-compat-5.3 needed: @0@'.format(lua_compat_needed))
 anvil_rc = []
 if host_machine.system() == 'windows'
     windows = import('windows')
+    anvil_sources += 'win32_frame.c'
+    anvil_deps += cc.find_library('dwmapi', required: true)
     anvil_rc += windows.compile_resources('../resources/icons/icon.rc')
     anvil_rc += windows.compile_resources('../resources/windows/manifest.rc')
 

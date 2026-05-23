@@ -16,6 +16,7 @@
 #include "arena_allocator.h"
 #include "custom_events.h"
 #include "../system_events.h"
+#include "../win32_frame.h"
 #ifdef _WIN32
   #include <direct.h>
   #include <windows.h>
@@ -76,6 +77,11 @@ static SDL_HitTestResult SDLCALL hit_test(SDL_Window *window, const SDL_Point *p
     pt->y > resize_border &&
     #endif
     pt->x > resize_border && pt->x < w - controls_width) {
+    if (hit_info.titlebar_client_width > 0 &&
+        pt->x >= hit_info.titlebar_client_x &&
+        pt->x < hit_info.titlebar_client_x + hit_info.titlebar_client_width) {
+      return SDL_HITTEST_NORMAL;
+    }
     return SDL_HITTEST_DRAGGABLE;
   }
 
@@ -552,13 +558,45 @@ static int f_set_window_hit_test(lua_State *L) {
   RenWindow *window_renderer = *(RenWindow**) luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
   if (lua_gettop(L) == 1) {
     SDL_SetWindowHitTest(window_renderer->cache.window, NULL, NULL);
+    win32_frame_set_hit_test(window_renderer, 0, 0, 0, 0, 0);
     return 0;
   }
   float scale = window_renderer->scale_x;
-  window_renderer->hit_test_info.title_height = luaL_checkinteger(L, 2) / scale;
-  window_renderer->hit_test_info.controls_width = luaL_checkinteger(L, 3) / scale;
-  window_renderer->hit_test_info.resize_border = luaL_checkinteger(L, 4) / scale;
+  int title_height = luaL_checkinteger(L, 2) / scale;
+  int controls_width = luaL_checkinteger(L, 3) / scale;
+  int resize_border = luaL_checkinteger(L, 4) / scale;
+  window_renderer->hit_test_info.title_height = title_height;
+  window_renderer->hit_test_info.controls_width = controls_width;
+  int client_x = luaL_optinteger(L, 5, 0) / scale;
+  int client_width = luaL_optinteger(L, 6, 0) / scale;
+  window_renderer->hit_test_info.resize_border = resize_border;
+  window_renderer->hit_test_info.titlebar_client_x = client_x;
+  window_renderer->hit_test_info.titlebar_client_width = client_width;
+  win32_frame_set_hit_test(window_renderer, title_height, controls_width, resize_border, client_x, client_width);
+#if defined(SDL_PLATFORM_WINDOWS)
+  if (window_renderer->win32_frame) return 0;
+#endif
   SDL_SetWindowHitTest(window_renderer->cache.window, &hit_test, window_renderer);
+  return 0;
+}
+
+static int f_set_window_native_frame(lua_State *L) {
+  RenWindow *window_renderer = *(RenWindow**) luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  bool enable = lua_toboolean(L, 2);
+  if (enable) SDL_SetWindowHitTest(window_renderer->cache.window, NULL, NULL);
+  lua_pushboolean(L, win32_frame_enable(window_renderer, enable));
+  return 1;
+}
+
+static int f_get_window_frame_metrics(lua_State *L) {
+  RenWindow *window_renderer = *(RenWindow**) luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  int button_width, title_height, resize_border;
+  if (win32_frame_get_metrics(window_renderer, &button_width, &title_height, &resize_border)) {
+    lua_pushinteger(L, button_width * window_renderer->scale_x);
+    lua_pushinteger(L, title_height * window_renderer->scale_x);
+    lua_pushinteger(L, resize_border * window_renderer->scale_x);
+    return 3;
+  }
   return 0;
 }
 
@@ -1646,6 +1684,8 @@ static const luaL_Reg lib[] = {
   { "get_window_mode",       f_get_window_mode       },
   { "set_window_bordered",   f_set_window_bordered   },
   { "set_window_hit_test",   f_set_window_hit_test   },
+  { "set_window_native_frame", f_set_window_native_frame },
+  { "get_window_frame_metrics", f_get_window_frame_metrics },
   { "get_window_size",       f_get_window_size       },
   { "set_window_size",       f_set_window_size       },
   { "set_text_input_rect",   f_set_text_input_rect   },

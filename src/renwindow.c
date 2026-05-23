@@ -1,5 +1,6 @@
 #include <assert.h>
 #include "renwindow.h"
+#include "win32_frame.h"
 
 #ifdef ANVIL_USE_SDL_RENDERER
 #include <math.h>
@@ -133,6 +134,7 @@ void renwin_show_window(RenWindow *ren) {
 }
 
 void renwin_free(RenWindow *ren) {
+  win32_frame_destroy(ren);
 #ifdef ANVIL_USE_SDL_RENDERER
   SDL_DestroyTexture(ren->cache.texture);
   SDL_DestroyRenderer(ren->cache.renderer);
