@@ -62,7 +62,7 @@ local core = require "core"
 ---List of arguments that weren't handled on last parse.
 ---@field unhandled_arguments table<integer,string>
 local cli = {
-  app_name = "Pragtical",
+  app_name = "Anvil",
   app_version = VERSION,
   app_description = "The practical and pragmatic code editor.",
   commands = {},
@@ -297,7 +297,7 @@ local function print_command_help(command)
       print(cli.colorize("  --", "green")
         .. pad_text(
           "Always treat argument as command even if a file or directory "
-            .. "exists with the same name, eg: pragtical -- help",
+            .. "exists with the same name, eg: anvil -- help",
           flags_padding,
           flags_padding - 4,
           columns
@@ -342,7 +342,7 @@ end
 function cli.print_help(command)
   if not command then
     -- ASCII Art generated with:
-    -- https://patorjk.com/software/taag/#p=display&f=Big&t=Pragtical
+    -- https://patorjk.com/software/taag/#p=display&f=Big&t=Anvil
     print [[ _____                 _   _           _ ]]
     print [[|  __ \               | | (_)         | |]]
     print [[| |__) | __ __ _  __ _| |_ _  ___ __ _| |]]
@@ -665,11 +665,11 @@ cli.register {
   usage = "[<command_name>]",
   long_description = "The help command displays help for a given command, eg:"
     .. "\n\n"
-    .. cli.colorize("  pragtical help help", "green")
+    .. cli.colorize("  anvil help help", "green")
     .. "\n\n"
     .. "To view all commands use the `list` command:"
     .. "\n\n"
-    .. cli.colorize("  pragtical list", "green"),
+    .. cli.colorize("  anvil list", "green"),
   arguments = {
     command_name = "Name of specific command to print its help"
   },
@@ -768,7 +768,7 @@ cli.register {
 -- Register test command
 cli.register {
   command = "test",
-  description = "Run Lua test files against the Pragtical runtime.",
+  description = "Run Lua test files against the Anvil runtime.",
   usage = "<tests_directory>",
   exit_editor = false,
   min_arguments = 1,
@@ -839,7 +839,7 @@ cli.register {
 -- Register run command
 cli.register {
   command = "run",
-  description = "Run a Lua script against the Pragtical runtime.",
+  description = "Run a Lua script against the Anvil runtime.",
   usage = "[options] <lua_file|lua_code>",
   exit_editor = false,
   min_arguments = 1,

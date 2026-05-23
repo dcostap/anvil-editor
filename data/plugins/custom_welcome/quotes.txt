@@ -1,6 +1,6 @@
 # Programming/IT quote pool for plugins/custom_welcome.lua
 # Format: quote<TAB>author. Lines beginning with # are ignored.
-# Generated from public quote/fortune dumps for this local Pragtical config.
+# Generated from public quote/fortune dumps for this local Anvil config.
 # API Ninjas was not used: it requires an API key and has no programming category.
 # Sources and imported line counts:
 # - mudroljub/programming-quotes-api data/quotes.json: 499

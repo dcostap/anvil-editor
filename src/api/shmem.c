@@ -268,7 +268,7 @@ static bool shmem_region_path(char *path, size_t path_size, const char *name) {
   int written = snprintf(
     path,
     path_size,
-    "%spragtical-shmem-%08x.bin",
+    "%sanvil-shmem-%08x.bin",
     temp_path,
     shmem_hash_string(name)
   );
@@ -276,7 +276,7 @@ static bool shmem_region_path(char *path, size_t path_size, const char *name) {
   int written = snprintf(
     path,
     path_size,
-    "%s%spragtical-shmem-%08x.bin",
+    "%s%sanvil-shmem-%08x.bin",
     temp_path,
     separator,
     shmem_hash_string(name)

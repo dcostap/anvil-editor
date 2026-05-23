@@ -160,7 +160,7 @@ typedef struct RenFont {
   FT_UShort palette_count;
   CharMap charmap;
   GlyphMap glyphs;
-#if PRAGTICAL_USE_SDL_RENDERER
+#if ANVIL_USE_SDL_RENDERER
   float scale;
 #endif
   float size, space_advance, color_scale;
@@ -177,7 +177,7 @@ typedef struct RenFont {
   char path[];
 } RenFont;
 
-#ifdef PRAGTICAL_USE_SDL_RENDERER
+#ifdef ANVIL_USE_SDL_RENDERER
 void update_font_scale(RenWindow *window_renderer, RenFont **fonts) {
   if (window_renderer == NULL) return;
   const float surface_scale = rencache_get_surface(&window_renderer->cache).scale_x;
@@ -1222,7 +1222,7 @@ static void font_file_close(FT_Stream stream) {
 static int font_set_face_metrics(RenFont *font, FT_Face face) {
   FT_Error err;
   float pixel_size = font->size;
-  #ifdef PRAGTICAL_USE_SDL_RENDERER
+  #ifdef ANVIL_USE_SDL_RENDERER
   pixel_size *= font->scale;
   #endif
   font->color_scale = 1.0f;
@@ -1311,7 +1311,7 @@ RenFont* ren_font_load(const char* path, float size, ERenFontAntialiasing antial
   font->style = style;
   font->ligatures = ligatures;
   font->tab_size = 2;
-#ifdef PRAGTICAL_USE_SDL_RENDERER
+#ifdef ANVIL_USE_SDL_RENDERER
   font->scale = 1.0;
 #endif
 
@@ -1587,7 +1587,7 @@ void ren_font_group_set_size(RenFont **fonts, float size, float surface_scale) {
     font_clear_glyph_cache(fonts[i]);
     fonts[i]->size = size;
     fonts[i]->tab_size = 2;
-    #ifdef PRAGTICAL_USE_SDL_RENDERER
+    #ifdef ANVIL_USE_SDL_RENDERER
     fonts[i]->scale = surface_scale;
     #endif
     font_set_face_metrics(fonts[i], fonts[i]->face);
@@ -1759,7 +1759,7 @@ double ren_font_group_get_width(RenFont **fonts, const char *text, size_t len, R
     hb_buffer_destroy(hb_buffer);
   if (!set_x_offset)
     *x_offset = 0;
-#ifdef PRAGTICAL_USE_SDL_RENDERER
+#ifdef ANVIL_USE_SDL_RENDERER
   return width / fonts[0]->scale;
 #else
   return width;
@@ -2202,7 +2202,7 @@ void ren_resize_window(RenWindow *window_renderer) {
 
 
 static RenRect scaled_rect(const RenRect rect, const RenSurface *rs) {
-#ifdef PRAGTICAL_USE_SDL_RENDERER
+#ifdef ANVIL_USE_SDL_RENDERER
   float scale_x = rs->scale_x;
   float scale_y = rs->scale_y;
 #else
@@ -2226,7 +2226,7 @@ void ren_set_clip_rect(RenSurface *rs, RenRect rect) {
 void ren_get_size(RenSurface *rs, int *x, int *y) {
   *x = rs->surface->w;
   *y = rs->surface->h;
-#ifdef PRAGTICAL_USE_SDL_RENDERER
+#ifdef ANVIL_USE_SDL_RENDERER
   *x /= rs->scale_x;
   *y /= rs->scale_y;
 #endif

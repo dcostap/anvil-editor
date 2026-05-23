@@ -5,7 +5,7 @@
 	<meta charset="utf-8" />
 	<meta http-equiv="x-ua-compatible" content="ie=edge" />
 	<meta name="viewport" content="width=device-width, initial-scale=1" />
-	<title>Pragtical</title>
+	<title>Anvil</title>
 
 	<style>
 		/* make everything fullscreen */
@@ -35,11 +35,11 @@
 		var Module = {
 			arguments: ['/home/web_user/welcome.md'],
 			preRun: [function () {
-				ENV.PRAGTICAL_PREFIX = '/usr';
+				ENV.ANVIL_PREFIX = '/usr';
 				FS.chdir('/home/web_user');
 				FS.writeFile('/home/web_user/welcome.md',
-					'# Welcome to Pragtical!\n\n' +
-					'This is an instance of Pragtical running on your browser using **JavaScript** and **WASM**.\n\n' +
+					'# Welcome to Anvil!\n\n' +
+					'This is an instance of Anvil running on your browser using **JavaScript** and **WASM**.\n\n' +
 					'There isn\'t a lot of things you can do here; you can **create, edit and save files**,\n' +
 					'but they _will not be persisted_ across different tabs / sessions.\n\n' +
 					'Not all plugins work, and **some keyboard shortcuts might not work** if your browser\n' +
@@ -64,7 +64,7 @@
 			};
 		};
 	</script>
-	<script type="application/javascript" src="./pragtical.js"></script>
+	<script type="application/javascript" src="./anvil.js"></script>
 </head>
 
 <body>
@@ -75,9 +75,9 @@
 		<p>If this page freezes, please check the console for any errors.</p>
 	</div>
 	<div class="modal" id="close">
-		<h2>Oops, Pragtical is closed!</h2>
+		<h2>Oops, Anvil is closed!</h2>
 		<p>If you didn't do this intentionally, please check the console for any errors.</p>
-		<p>You can refresh the page to load Pragtical again.</p>
+		<p>You can refresh the page to load Anvil again.</p>
 	</div>
 	<noscript>
 		<p>You need to enable JavaScript and WASM for this page to work.</p>

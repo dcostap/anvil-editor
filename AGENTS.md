@@ -14,8 +14,8 @@ This repository is the source for the personal Anvil editor fork.
 
 Compiling produces binaries in:
 
-- `build-windows-x86_64\src\pragtical.exe`
-- `build-windows-x86_64\src\pragtical.com`
+- `build-windows-x86_64\src\anvil.exe`
+- `build-windows-x86_64\src\anvil.com`
 
 The Lua/data files are not embedded in the exe. A runnable portable app is produced by `meson install` into `C:\Projects\c_projects\anvil-portable`.
 
@@ -39,12 +39,12 @@ Use the BAT files in the repo root:
 Daily launcher target:
 
 ```text
-C:\Projects\c_projects\anvil-portable\pragtical.exe
+C:\Projects\c_projects\anvil-portable\anvil.exe
 ```
 
 ## Bundled Anvil defaults/plugins
 
-The old personal `~\.config\pragtical` workflow has been promoted into the fork:
+The old personal `~\.config\anvil` workflow has been promoted into the fork:
 
 - bundled plugins: `data\plugins`
 - bundled theme: `data\colors\onedark.lua`

@@ -1,10 +1,10 @@
 [Desktop Entry]
 Type=Application
-Name=Pragtical
+Name=Anvil
 Comment=The practical and pragmatic code editor.
-Exec=pragtical %F
-Icon=pragtical
+Exec=anvil %F
+Icon=anvil
 Terminal=false
-StartupWMClass=dev.pragtical.Pragtical
+StartupWMClass=io.github.dcostap.Anvil
 Categories=Development;IDE;TextEditor;
 MimeType=text/plain;inode/directory;

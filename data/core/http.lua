@@ -1,4 +1,4 @@
----Coroutine-based HTTP client for Pragtical Code Editor.
+---Coroutine-based HTTP client for Anvil Code Editor.
 ---Supports streaming responses line-by-line or binary, chunked transfer encoding,
 ---Content-Length, connection-close streams, automatic redirects,
 ---proper port handling, global user agent, and file downloads.
@@ -61,7 +61,7 @@ local MAX_REDIRECTS = 5
 local DOWNLOADING_CACERT_BUNDLE = false
 
 ---Default user agent used on all requests.
-http.user_agent = "Pragtical/" .. VERSION
+http.user_agent = "Anvil/" .. VERSION
 
 ---@param value any
 ---@return any
@@ -141,7 +141,7 @@ end
 
 ---@return string
 local function random_boundary()
-  return "----PragticalFormBoundary" .. tostring(math.random(1e9))
+  return "----AnvilFormBoundary" .. tostring(math.random(1e9))
 end
 
 ---@param params http.request.param[]

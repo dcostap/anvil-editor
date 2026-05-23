@@ -1,4 +1,4 @@
--- this file is used by pragtical to setup the Lua environment when starting
+-- this file is used by anvil to setup the Lua environment when starting
 VERSION = "@PROJECT_VERSION@"
 MOD_VERSION_MAJOR = tonumber("@MOD_VERSION_MAJOR@")
 MOD_VERSION_MINOR = tonumber("@MOD_VERSION_MINOR@")
@@ -15,13 +15,13 @@ EXEDIR = EXEFILE:match("^(.+)[/\\][^/\\]+$")
 if MACOS_RESOURCES then
   DATADIR = MACOS_RESOURCES
 else
-  local prefix = os.getenv('PRAGTICAL_PREFIX') or EXEDIR:match("^(.+)[/\\]bin$")
-  DATADIR = prefix and (prefix .. PATHSEP .. 'share' .. PATHSEP .. 'pragtical') or (EXEDIR .. PATHSEP .. 'data')
+  local prefix = os.getenv('ANVIL_PREFIX') or EXEDIR:match("^(.+)[/\\]bin$")
+  DATADIR = prefix and (prefix .. PATHSEP .. 'share' .. PATHSEP .. 'anvil') or (EXEDIR .. PATHSEP .. 'data')
 end
 USERDIR = (system.get_file_info(EXEDIR .. PATHSEP .. 'user') and (EXEDIR .. PATHSEP .. 'user'))
-       or os.getenv("PRAGTICAL_USERDIR")
-       or ((os.getenv("XDG_CONFIG_HOME") and os.getenv("XDG_CONFIG_HOME") .. PATHSEP .. "pragtical"))
-       or (HOME and (HOME .. PATHSEP .. '.config' .. PATHSEP .. 'pragtical'))
+       or os.getenv("ANVIL_USERDIR")
+       or ((os.getenv("XDG_CONFIG_HOME") and os.getenv("XDG_CONFIG_HOME") .. PATHSEP .. "anvil"))
+       or (HOME and (HOME .. PATHSEP .. '.config' .. PATHSEP .. 'anvil'))
 
 package.path = DATADIR .. '/?.lua;'
 package.path = DATADIR .. '/?/init.lua;' .. package.path

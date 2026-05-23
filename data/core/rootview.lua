@@ -487,8 +487,8 @@ function RootView:on_file_dropped(filename, x, y)
       )
       return true
     end
-    -- in macOS, when dropping folders into Pragtical in the dock,
-    -- the OS tries to start an instance of Pragtical with each folder as a DND request.
+    -- in macOS, when dropping folders into Anvil in the dock,
+    -- the OS tries to start an instance of Anvil with each folder as a DND request.
     -- When this happens, the DND request always arrive before the first update() call.
     -- We need to change the current project folder for the first request, and start
     -- new instances for the rest to emulate existing behavior.

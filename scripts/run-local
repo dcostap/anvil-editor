@@ -63,7 +63,7 @@ if [[ $option_portable == true ]]; then
   datadir="$rundir/data"
 else
   bindir="$rundir/bin"
-  datadir="$rundir/share/pragtical"
+  datadir="$rundir/share/anvil"
 fi
 
 # on macOS we need `brew install coreutils` for grealpath
@@ -74,7 +74,7 @@ else
 fi
 builddir="${pargs[0]}"
 
-build_pragtical () {
+build_anvil () {
   if [ -e "$builddir/.muon" ]; then
     echo "running muon samu"
     muon samu -C "$builddir"
@@ -84,14 +84,14 @@ build_pragtical () {
   fi
 }
 
-copy_pragtical_build () {
-  echo "copying pragtical executable and data"
+copy_anvil_build () {
+  echo "copying anvil executable and data"
   rm -fr "$rundir"
   mkdir -p "$bindir" "$datadir"
   if [[ $run_windows == true ]]; then
-    cp "$builddir/src/pragtical.exe" "$bindir"
+    cp "$builddir/src/anvil.exe" "$bindir"
   else
-    cp "$builddir/src/pragtical" "$bindir"
+    cp "$builddir/src/anvil" "$bindir"
   fi
   mkdir -p "$datadir/core"
   for module_name in core compat plugins colors fonts; do
@@ -129,20 +129,20 @@ copy_pragtical_build () {
   fi
 }
 
-run_pragtical () {
+run_anvil () {
   if [[ $option_debug == true ]]; then
     echo "LLVM_PROFILE_FILE: $LLVM_PROFILE_FILE"
     echo "SDL_VIDEO_DRIVER: $SDL_VIDEO_DRIVER"
   fi
   if [[ $option_global == true ]]; then
-    echo "running \"pragtical ${pargs[@]:1}\""
-    exec "$bindir/pragtical" "${pargs[@]:1}"
+    echo "running \"anvil ${pargs[@]:1}\""
+    exec "$bindir/anvil" "${pargs[@]:1}"
   else
-    echo "running \"pragtical ${pargs[@]:1}\" with local HOME"
+    echo "running \"anvil ${pargs[@]:1}\" with local HOME"
     if [[ $run_windows == true ]]; then
-      USERPROFILE="$userdir" ./$bindir/pragtical "${pargs[@]:1}"
+      USERPROFILE="$userdir" ./$bindir/anvil "${pargs[@]:1}"
     else
-      PRAGTICAL_USERDIR="$userdir" ./$bindir/pragtical "${pargs[@]:1}"
+      ANVIL_USERDIR="$userdir" ./$bindir/anvil "${pargs[@]:1}"
     fi
   fi
 }
@@ -165,8 +165,8 @@ fetch_plugins () {
 }
 
 if [[ $option_copy == true ]]; then
-  build_pragtical
-  copy_pragtical_build
+  build_anvil
+  copy_anvil_build
 fi
 fetch_plugins "${plugins[@]}"
-run_pragtical
+run_anvil

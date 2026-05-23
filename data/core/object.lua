@@ -1,5 +1,5 @@
 ---Base class providing OOP functionality for Lua.
----All classes in Pragtical inherit from Object.
+---All classes in Anvil inherit from Object.
 ---@class core.object
 ---@overload fun():core.object
 ---@field super core.object

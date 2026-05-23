@@ -33,8 +33,8 @@ local function log_state(reason, extra)
     tostring(DEFAULT_SCALE),
     tostring(ui_font_size()),
     tostring(code_font_size()),
-    tostring(os.getenv("PRAGTICAL_SCALE_RESTART") or os.getenv("PRAGTICAL_SCALE")),
-    tostring(os.getenv("PRAGTICAL_SCALE_CODE_RESTART")),
+    tostring(os.getenv("ANVIL_SCALE_RESTART") or os.getenv("ANVIL_SCALE")),
+    tostring(os.getenv("ANVIL_SCALE_CODE_RESTART")),
     extra and (" " .. extra) or ""
   ))
 end

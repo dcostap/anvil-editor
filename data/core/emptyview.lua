@@ -62,7 +62,7 @@ function EmptyView:new()
   self.border.width = 0
   self.scrollable = true
 
-  self.title = "Pragtical"
+  self.title = "Anvil"
   self.version = "version " .. VERSION
   self.title_width = style.big_font:get_width(self.title)
   self.version_width = style.font:get_width(self.title)
@@ -218,7 +218,7 @@ function EmptyView:update()
     self.top_container:set_size(self:get_width())
     self.top_container:update()
 
-    self.title = "Pragtical"
+    self.title = "Anvil"
     self.version = "version " .. VERSION
     self.title_width = style.big_font:get_width(self.title)
     self.version_width = style.font:get_width(self.version)

@@ -1,6 +1,6 @@
 # Lua Scripts
 
-This directory contains lua scripts for running with Pragtical.
+This directory contains lua scripts for running with Anvil.
 
 ### Tests
 

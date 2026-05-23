@@ -2,7 +2,7 @@
 set -e
 
 if [ ! -e "src/api/api.h" ]; then
-  echo "Please run this script from the root directory of Pragtical."; exit 1
+  echo "Please run this script from the root directory of Anvil."; exit 1
 fi
 
 source scripts/common.sh

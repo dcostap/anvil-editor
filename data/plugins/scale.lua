@@ -27,7 +27,7 @@ local scale_steps = 0.05
 local current_scale = SCALE
 local current_code_scale = SCALE
 local user_scale = tonumber(
-  os.getenv("PRAGTICAL_SCALE_RESTART") or os.getenv("PRAGTICAL_SCALE")
+  os.getenv("ANVIL_SCALE_RESTART") or os.getenv("ANVIL_SCALE")
 )
 
 ---@class plugins.scale
@@ -35,7 +35,7 @@ local scale = {}
 
 function scale.set(scale)
   if current_scale == scale then return end
-  system.setenv("PRAGTICAL_SCALE_RESTART", scale)
+  system.setenv("ANVIL_SCALE_RESTART", scale)
 
   scale = common.clamp(scale, 0.2, 6)
 
@@ -90,7 +90,7 @@ end
 
 function scale.set_code(scale)
   if current_code_scale == scale then return end
-  system.setenv("PRAGTICAL_SCALE_CODE_RESTART", scale)
+  system.setenv("ANVIL_SCALE_CODE_RESTART", scale)
 
   scale = common.clamp(scale, 0.2, 6)
 
@@ -156,7 +156,7 @@ config.plugins.scale.config_spec = {
   name = "Scale",
   {
     label = "Autodetect Scale",
-    description = "Keeps the scale equal to display, ignored on startup if PRAGTICAL_SCALE is set.",
+    description = "Keeps the scale equal to display, ignored on startup if ANVIL_SCALE is set.",
     path = "autodetect",
     type = "toggle",
     default = true,
@@ -174,7 +174,7 @@ config.plugins.scale.config_spec = {
   },
   {
     label = "Default Scale",
-    description = "The scaling factor applied to pragtical when autodetect is not enabled.",
+    description = "The scaling factor applied to anvil when autodetect is not enabled.",
     path = "default_scale",
     type = "number",
     default = DEFAULT_SCALE,
@@ -186,7 +186,7 @@ config.plugins.scale.config_spec = {
       return value
     end,
     on_apply = function(value)
-      -- Perevents overwriting the scale set by user in PRAGTICAL_SCALE
+      -- Perevents overwriting the scale set by user in ANVIL_SCALE
       if first_on_apply_scale then
         first_on_apply_scale = false
         if scale_set_by_user == 0 then return end
@@ -253,14 +253,14 @@ if config.plugins.scale.use_mousewheel then
   }
 end
 
--- Apply previous scale on restart set on PRAGTICAL_SCALE_RESTART and
--- PRAGTICAL_SCALE_CODE_RESTART or custom PRAGTICAL_SCALE if set by user
+-- Apply previous scale on restart set on ANVIL_SCALE_RESTART and
+-- ANVIL_SCALE_CODE_RESTART or custom ANVIL_SCALE if set by user
 if user_scale then
   -- to prevent issues on restart we defer it
   core.add_thread(function()
     scale.set(user_scale)
     scale.set_code(
-      tonumber(os.getenv("PRAGTICAL_SCALE_CODE_RESTART")) or user_scale
+      tonumber(os.getenv("ANVIL_SCALE_CODE_RESTART")) or user_scale
     )
   end)
 end

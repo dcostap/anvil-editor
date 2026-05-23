@@ -2,7 +2,7 @@
 set -e
 
 if [ ! -e "src/api/api.h" ]; then
-  echo "Please run this script from the root directory of Pragtical."; exit 1
+  echo "Please run this script from the root directory of Anvil."; exit 1
 fi
 
 source scripts/common.sh
@@ -16,7 +16,7 @@ show_help() {
   echo "-b --builddir DIRNAME         Sets the name of the build directory (not path)."
   echo "                              Default: '$(get_default_build_dir)'."
   echo "-d --destdir DIRNAME          Set the name of the package directory (not path)."
-  echo "                              Default: 'pragtical'."
+  echo "                              Default: 'anvil'."
   echo "-h --help                     Show this help and exit."
   echo "-p --prefix PREFIX            Install directory prefix. Default: '/'."
   echo "-v --version VERSION          Sets the version on the package name."
@@ -50,7 +50,7 @@ source_package() {
   rsync -arv \
     --exclude /*build*/ \
     --exclude *.git* \
-    --exclude pragtical* \
+    --exclude anvil* \
     --exclude submodules \
     . ${package_name}
 
@@ -102,7 +102,7 @@ main() {
   local arch="$(get_platform_arch)"
   local platform="$(get_platform_name)"
   local build_dir="$(get_default_build_dir)"
-  local dest_dir=pragtical
+  local dest_dir=anvil
   local prefix=/
   local version
   local addons=false
@@ -217,7 +217,7 @@ main() {
 
   # The source package doesn't require a previous build,
   # nor the following install step, so run it now.
-  if [[ $source == true ]]; then source_package "pragtical$version-src"; fi
+  if [[ $source == true ]]; then source_package "anvil$version-src"; fi
 
   # No packages request
   if [[ $appimage == false && $binary == false && $dmg == false && $innosetup == false ]]; then
@@ -239,16 +239,16 @@ main() {
     -C "${build_dir}"
 
   local data_dir="$(pwd)/${dest_dir}/data"
-  local exe_file="$(pwd)/${dest_dir}/pragtical"
+  local exe_file="$(pwd)/${dest_dir}/anvil"
 
-  local package_name=pragtical$version-$platform-$arch
+  local package_name=anvil$version-$platform-$arch
   local bundle=false
   local portable=false
 
   if [[ -d "${data_dir}" ]]; then
     echo "Creating a portable, compressed archive..."
     portable=true
-    exe_file="$(pwd)/${dest_dir}/pragtical"
+    exe_file="$(pwd)/${dest_dir}/anvil"
     if [[ $platform == "windows" ]]; then
       exe_file="${exe_file}.exe"
       if command -v ntldd >/dev/null 2>&1; then
@@ -282,16 +282,16 @@ main() {
       bundle=true
       # Specify "bundle" on compressed archive only, implicit on images
       if [[ $dmg == false ]]; then package_name+="-bundle"; fi
-      rm -rf "Pragtical.app"; mv "${dest_dir}" "Pragtical.app"
-      dest_dir="Pragtical.app"
-      exe_file="$(pwd)/${dest_dir}/Contents/MacOS/pragtical"
+      rm -rf "Anvil.app"; mv "${dest_dir}" "Anvil.app"
+      dest_dir="Anvil.app"
+      exe_file="$(pwd)/${dest_dir}/Contents/MacOS/anvil"
       data_dir="$(pwd)/${dest_dir}/Contents/Resources"
     fi
   fi
 
   if [[ $bundle == false && $portable == false ]]; then
-    data_dir="$(pwd)/${dest_dir}/$prefix/share/pragtical"
-    exe_file="$(pwd)/${dest_dir}/$prefix/bin/pragtical"
+    data_dir="$(pwd)/${dest_dir}/$prefix/share/anvil"
+    exe_file="$(pwd)/${dest_dir}/$prefix/bin/anvil"
   fi
 
   if [[ -z "$cross" ]]; then

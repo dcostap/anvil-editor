@@ -4,7 +4,7 @@ setlocal EnableExtensions
 set "REPO=C:\Projects\c_projects\anvil-editor"
 set "DEST=C:\Projects\c_projects\anvil-portable"
 set "BASH=C:\msys64\usr\bin\bash.exe"
-set "APP=%DEST%\pragtical.exe"
+set "APP=%DEST%\anvil.exe"
 set "MSYSTEM=MINGW64"
 set "CHERE_INVOKING=1"
 set "MSYS_ENV=export MSYSTEM=MINGW64 HOME=C:/Users/Darius USERPROFILE=C:/Users/Darius HOMEDRIVE=C: HOMEPATH=/Users/Darius; export PATH=/mingw64/bin:/usr/bin:/bin:$PATH;"

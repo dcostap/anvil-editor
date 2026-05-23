@@ -1,13 +1,13 @@
 #include <assert.h>
 #include "renwindow.h"
 
-#ifdef PRAGTICAL_USE_SDL_RENDERER
+#ifdef ANVIL_USE_SDL_RENDERER
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #endif
 
-#ifdef PRAGTICAL_USE_SDL_RENDERER
+#ifdef ANVIL_USE_SDL_RENDERER
 static void query_surface_scale(RenWindow *ren, float* scale_x, float* scale_y) {
   int w_pixels, h_pixels;
   int w_points, h_points;
@@ -41,7 +41,7 @@ static void setup_renderer(RenWindow *ren, int w, int h) {
 
 static void init_surface(RenWindow *ren) {
   ren->scale_x = ren->scale_y = 1;
-#ifdef PRAGTICAL_USE_SDL_RENDERER
+#ifdef ANVIL_USE_SDL_RENDERER
   if (ren->cache.rensurface.surface) {
     SDL_DestroySurface(ren->cache.rensurface.surface);
   }
@@ -79,7 +79,7 @@ void renwin_clip_to_surface(RenWindow *ren) {
 
 
 static RenRect scaled_rect(const RenRect rect, const RenSurface *rs) {
-#ifdef PRAGTICAL_USE_SDL_RENDERER
+#ifdef ANVIL_USE_SDL_RENDERER
   float scale_x = rs->scale_x;
   float scale_y = rs->scale_y;
 #else
@@ -102,7 +102,7 @@ void renwin_set_clip_rect(RenWindow *ren, RenRect rect) {
 
 
 void renwin_resize_surface(UNUSED RenWindow *ren) {
-#ifdef PRAGTICAL_USE_SDL_RENDERER
+#ifdef ANVIL_USE_SDL_RENDERER
   int new_w, new_h;
   float new_scale;
   SDL_GetWindowSizeInPixels(ren->cache.window, &new_w, &new_h);
@@ -119,7 +119,7 @@ void renwin_resize_surface(UNUSED RenWindow *ren) {
 }
 
 void renwin_update_scale(RenWindow *ren) {
-#ifndef PRAGTICAL_USE_SDL_RENDERER
+#ifndef ANVIL_USE_SDL_RENDERER
   SDL_Surface *surface = SDL_GetWindowSurface(ren->cache.window);
   int window_w = surface->w, window_h = surface->h;
   SDL_GetWindowSize(ren->cache.window, &window_w, &window_h);
@@ -133,7 +133,7 @@ void renwin_show_window(RenWindow *ren) {
 }
 
 void renwin_free(RenWindow *ren) {
-#ifdef PRAGTICAL_USE_SDL_RENDERER
+#ifdef ANVIL_USE_SDL_RENDERER
   SDL_DestroyTexture(ren->cache.texture);
   SDL_DestroyRenderer(ren->cache.renderer);
   SDL_DestroySurface(ren->cache.rensurface.surface);

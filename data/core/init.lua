@@ -218,11 +218,11 @@ local style = require "core.style"
 -- style.font = renderer.font.load(DATADIR .. "/fonts/FiraSans-Regular.ttf", 14 * SCALE)
 -- style.code_font = renderer.font.load(DATADIR .. "/fonts/JetBrainsMono-Regular.ttf", 14 * SCALE)
 --
--- DATADIR is the location of the installed Pragtical Lua code, default color
+-- DATADIR is the location of the installed Anvil Lua code, default color
 -- schemes and fonts.
--- USERDIR is the location of the Pragtical configuration directory.
+-- USERDIR is the location of the Anvil configuration directory.
 --
--- font names used by pragtical:
+-- font names used by anvil:
 -- style.font          : user interface
 -- style.big_font      : big text in welcome screen
 -- style.icon_font     : icons
@@ -337,14 +337,14 @@ end
 
 function core.init()
   DEFAULT_SCALE, DEFAULT_FPS = system.get_display_info()
-  SCALE = tonumber(os.getenv("PRAGTICAL_SCALE")) or DEFAULT_SCALE
+  SCALE = tonumber(os.getenv("ANVIL_SCALE")) or DEFAULT_SCALE
 
   -- load config after scale detection for flags that depend on it
   config = require "core.config"
 
   -- log functions depend on config so initialize after loading config
   core.log_items = {}
-  core.log_quiet("Pragtical version %s - mod-version %s", VERSION, MOD_VERSION_STRING)
+  core.log_quiet("Anvil version %s - mod-version %s", VERSION, MOD_VERSION_STRING)
 
   style = require "colors.default"
   cli = require "core.cli"
@@ -551,7 +551,7 @@ function core.init()
     -- defer file loading to ensure all plugins are loaded first,
     -- fixes issues like with linewrapping been enabled by default
     -- but not applied when opening editor with "open with"
-    -- see: https://github.com/pragtical/pragtical/issues/423
+    -- see: https://github.com/dcostap/anvil-editor/issues/423
     core.add_thread(function()
       -- allow workspace plugin to do its thing first to prevent duplicate files
       coroutine.yield()
@@ -629,7 +629,7 @@ function core.confirm_close_docs(docs, close_fn, ...)
 end
 
 local temp_uid = math.floor(system.get_time() * 1000) % 0xffffffff
-local temp_file_prefix = string.format(".pragtical_temp_%08x", tonumber(temp_uid))
+local temp_file_prefix = string.format(".anvil_temp_%08x", tonumber(temp_uid))
 local temp_file_counter = 0
 
 function core.delete_temp_files(dir)
@@ -774,7 +774,7 @@ function core.load_plugins()
   }
   local files, ordered = {}, {
     { priority = -2, load = load_lua_plugin_if_exists, version_match = true, file = USERDIR .. PATHSEP .. "init.lua", name = "User Module" },
-    { priority = -1, load = load_lua_plugin_if_exists, version_match = true, file = core.root_project().path .. PATHSEP .. ".pragtical_project.lua", name = "Project Module" }
+    { priority = -1, load = load_lua_plugin_if_exists, version_match = true, file = core.root_project().path .. PATHSEP .. ".anvil_project.lua", name = "Project Module" }
   }
   for _, root_dir in ipairs {DATADIR, USERDIR} do
     local plugin_dir = root_dir .. PATHSEP .. "plugins"
@@ -1030,7 +1030,7 @@ function core.reload_absolute_module(filename)
       if not fn then error("Error when loading file:\n\t" .. err) end
       fn()
       core.project_module_loaded = true
-      if filename:match("%.pragtical_project") then
+      if filename:match("%.anvil_project") then
         core.log_quiet("Reloaded project module")
       elseif filename == USERDIR .. PATHSEP .. "init.lua" then
         core.log_quiet("Reloaded user module")
@@ -1464,7 +1464,7 @@ end
 
 
 function core.compose_window_title(title)
-  return (title == "" or title == nil) and "Pragtical" or title .. " - Pragtical"
+  return (title == "" or title == nil) and "Anvil" or title .. " - Anvil"
 end
 
 local draw_stats_fps = 0

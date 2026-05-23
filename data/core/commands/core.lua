@@ -289,10 +289,10 @@ command.add(nil, {
   end,
 
   ["core:open-project-module"] = function()
-    if not system.get_file_info(".pragtical_project.lua") then
-      core.try(core.write_init_project_module, ".pragtical_project.lua")
+    if not system.get_file_info(".anvil_project.lua") then
+      core.try(core.write_init_project_module, ".anvil_project.lua")
     end
-    local doc = core.open_doc(".pragtical_project.lua")
+    local doc = core.open_doc(".anvil_project.lua")
     core.root_view:open_doc(doc)
   end,
 
@@ -353,10 +353,10 @@ command.add(nil, {
   end,
 
   ["core:view-documentation-help"] = function()
-    common.open_in_system("https://pragtical.dev/docs/intro")
+    common.open_in_system("https://github.com/dcostap/anvil-editor")
   end,
 
   ["core:view-website"] = function()
-    common.open_in_system("https://pragtical.dev")
+    common.open_in_system("https://github.com/dcostap/anvil-editor")
   end,
 })

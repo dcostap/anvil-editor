@@ -1,7 +1,7 @@
 -- mod-version:3
--- Local clone of Pragtical's built-in in-file find commands.
+-- Local clone of Anvil's built-in in-file find commands.
 -- Kept separate so we can evolve it toward IntelliJ-like search behavior without
--- patching Pragtical's core files.
+-- patching Anvil's core files.
 
 local core = require "core"
 local command = require "core.command"

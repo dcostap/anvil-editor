@@ -334,7 +334,7 @@ test.describe("http", function()
 
     local post_ok, post_err, post_result, post_info = await_callback(function(done)
       http.post(base_url .. "/echo-body", "application/json", {
-        name = "pragtical",
+        name = "anvil",
       }, {
         headers = {
           ["X-Request-ID"] = "req-123",
@@ -348,7 +348,7 @@ test.describe("http", function()
     test.equal(post_result.method, "POST")
     test.equal(post_result.request_id, "req-123")
     test.contains(post_result.content_type, "application/json")
-    test.equal(post_result.json.name, "pragtical")
+    test.equal(post_result.json.name, "anvil")
 
     local head_ok, head_err, head_result, head_info = await_callback(function(done)
       http.head(base_url .. "/head", nil, {

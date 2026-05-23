@@ -1,5 +1,5 @@
 -- mod-version:3
--- VSCode-like untitled tabs on top of Pragtical's built-in unnamed docs.
+-- VSCode-like untitled tabs on top of Anvil's built-in unnamed docs.
 
 local core = require "core"
 local command = require "core.command"

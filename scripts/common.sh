@@ -29,7 +29,7 @@ addons_install() {
   local build_dir="$1"
   local data_dir="$2"
 
-  # Disabled since pragtical can load binary files without crashing
+  # Disabled since anvil can load binary files without crashing
   # Plugins
   # mkdir -p "${data_dir}/plugins"
 

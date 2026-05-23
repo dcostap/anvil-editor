@@ -54,12 +54,12 @@ local function process_module(mod, filename)
 end
 
 
-print("Warning: this is not guaranteed to work outside pragtical's own keymap. Proceed with caution")
-local PRAGTICAL_ROOT = arg[1]
-if not PRAGTICAL_ROOT then
-  error("PRAGTICAL_ROOT is not given")
+print("Warning: this is not guaranteed to work outside anvil's own keymap. Proceed with caution")
+local ANVIL_ROOT = arg[1]
+if not ANVIL_ROOT then
+  error("ANVIL_ROOT is not given")
 end
-package.path = package.path .. ";" .. PRAGTICAL_ROOT .. "/?.lua;" .. PRAGTICAL_ROOT .. "/?/init.lua"
+package.path = package.path .. ";" .. ANVIL_ROOT .. "/?.lua;" .. ANVIL_ROOT .. "/?/init.lua"
 
 -- fix core.command (because we don't want load the entire thing)
 package.loaded["core.command"] = {}

@@ -56,13 +56,13 @@ static void get_exe_filename(char *buf, int sz) {
 }
 
 #ifdef _WIN32
-#define PRAGTICAL_OS_HOME "USERPROFILE"
-#define PRAGTICAL_PATHSEP_PATTERN "\\\\"
-#define PRAGTICAL_NONPATHSEP_PATTERN "[^\\\\]+"
+#define ANVIL_OS_HOME "USERPROFILE"
+#define ANVIL_PATHSEP_PATTERN "\\\\"
+#define ANVIL_NONPATHSEP_PATTERN "[^\\\\]+"
 #else
-#define PRAGTICAL_OS_HOME "HOME"
-#define PRAGTICAL_PATHSEP_PATTERN "/"
-#define PRAGTICAL_NONPATHSEP_PATTERN "[^/]+"
+#define ANVIL_OS_HOME "HOME"
+#define ANVIL_PATHSEP_PATTERN "/"
+#define ANVIL_NONPATHSEP_PATTERN "[^/]+"
 #endif
 
 #ifdef SDL_PLATFORM_APPLE
@@ -72,7 +72,7 @@ void set_macos_bundle_resources(lua_State *L);
 #endif
 #endif
 
-#ifndef PRAGTICAL_ARCH_TUPLE
+#ifndef ANVIL_ARCH_TUPLE
   // https://learn.microsoft.com/en-us/cpp/preprocessor/predefined-macros?view=msvc-140
   #if defined(__x86_64__) || defined(_M_AMD64) || defined(__MINGW64__)
     #define ARCH_PROCESSOR "x86_64"
@@ -98,16 +98,16 @@ void set_macos_bundle_resources(lua_State *L);
   #endif
 
   #if !defined(ARCH_PROCESSOR) || !defined(ARCH_PLATFORM)
-    #error "Please define -DPRAGTICAL_ARCH_TUPLE."
+    #error "Please define -DANVIL_ARCH_TUPLE."
   #endif
 
-  #define PRAGTICAL_ARCH_TUPLE ARCH_PROCESSOR "-" ARCH_PLATFORM
+  #define ANVIL_ARCH_TUPLE ARCH_PROCESSOR "-" ARCH_PLATFORM
 #endif
 
 #ifdef LUA_JIT
-  #define PRAGTICAL_LUAJIT "true"
+  #define ANVIL_LUAJIT "true"
 #else
-  #define PRAGTICAL_LUAJIT "false"
+  #define ANVIL_LUAJIT "false"
 #endif
 
 /* Application state shared across SDL3 callbacks. */
@@ -130,12 +130,12 @@ static const char *init_code =
   "end\n"
   "xpcall(function()\n"
   "  local match = require('utf8extra').match\n"
-  "  HOME = os.getenv('" PRAGTICAL_OS_HOME "')\n"
-  "  LUAJIT = " PRAGTICAL_LUAJIT "\n"
-  "  local exedir = match(EXEFILE, '^(.*)" PRAGTICAL_PATHSEP_PATTERN PRAGTICAL_NONPATHSEP_PATTERN "$')\n"
-  "  local prefix = os.getenv('PRAGTICAL_PREFIX') or match(exedir, '^(.*)" PRAGTICAL_PATHSEP_PATTERN "bin$')\n"
-  "  dofile((MACOS_RESOURCES or (prefix and prefix .. '/share/pragtical' or exedir .. '/data')) .. '/core/start.lua')\n"
-  "  core = require(os.getenv('PRAGTICAL_RUNTIME') or 'core')\n"
+  "  HOME = os.getenv('" ANVIL_OS_HOME "')\n"
+  "  LUAJIT = " ANVIL_LUAJIT "\n"
+  "  local exedir = match(EXEFILE, '^(.*)" ANVIL_PATHSEP_PATTERN ANVIL_NONPATHSEP_PATTERN "$')\n"
+  "  local prefix = os.getenv('ANVIL_PREFIX') or match(exedir, '^(.*)" ANVIL_PATHSEP_PATTERN "bin$')\n"
+  "  dofile((MACOS_RESOURCES or (prefix and prefix .. '/share/anvil' or exedir .. '/data')) .. '/core/start.lua')\n"
+  "  core = require(os.getenv('ANVIL_RUNTIME') or 'core')\n"
   "  core.init()\n"
   "  core.run()\n"
   "end, function(err)\n"
@@ -152,7 +152,7 @@ static const char *init_code =
   "    fp:close()\n"
   "    error_path = system.absolute_path(error_path)\n"
   "  end\n"
-  "  system.show_fatal_error('Pragtical internal error',\n"
+  "  system.show_fatal_error('Anvil internal error',\n"
   "    'An internal error occurred in a critical part of the application.\\n\\n'..\n"
   "    'Error: '..tostring(err)..'\\n\\n'..\n"
   "    'Details can be found in \\\"'..error_path..'\\\"')\n"
@@ -175,7 +175,7 @@ static bool init_lua_state(AppState *app) {
   lua_pushstring(app->L, SDL_GetPlatform());
   lua_setglobal(app->L, "PLATFORM");
 
-  lua_pushstring(app->L, PRAGTICAL_ARCH_TUPLE);
+  lua_pushstring(app->L, ANVIL_ARCH_TUPLE);
   lua_setglobal(app->L, "ARCH");
 
   lua_pushboolean(app->L, app->has_restarted);
@@ -220,11 +220,11 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
 #ifndef _WIN32
   signal(SIGPIPE, SIG_IGN);
 #else
-  /* Allow console output when called from pragtical.com wrapper.
+  /* Allow console output when called from anvil.com wrapper.
    * See: https://stackoverflow.com/q/73987850
    *      https://stackoverflow.com/q/17111308
   */
-  if (getenv("PRAGTICAL_COM_WRAP") && AttachConsole(ATTACH_PARENT_PROCESS)) {
+  if (getenv("ANVIL_COM_WRAP") && AttachConsole(ATTACH_PARENT_PROCESS)) {
     freopen("CONOUT$", "w", stdout);
     freopen("CONOUT$", "w", stderr);
     freopen("CONIN$", "r", stdin);
@@ -241,7 +241,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   }
 #endif
 
-  SDL_SetAppMetadata("Pragtical", PRAGTICAL_PROJECT_VERSION_STR, "dev.pragtical.Pragtical");
+  SDL_SetAppMetadata("Anvil", ANVIL_PROJECT_VERSION_STR, "io.github.dcostap.Anvil");
   if (!SDL_Init(SDL_INIT_EVENTS)) {
     fprintf(stderr, "Error initializing sdl: %s", SDL_GetError());
     return SDL_APP_FAILURE;
@@ -311,7 +311,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     lua_getglobal(app->L, "system");
     lua_getfield(app->L, -1, "show_fatal_error");
     lua_remove(app->L, -2); /* remove 'system' table */
-    lua_pushstring(app->L, "Pragtical internal error");
+    lua_pushstring(app->L, "Anvil internal error");
     lua_pushfstring(
       app->L,
       "    An internal error occurred in a critical part of the application.\n\n"

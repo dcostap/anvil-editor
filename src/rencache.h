@@ -28,7 +28,7 @@ typedef struct {
   RenRect last_clip_rect;
   SDL_Window *window;   /* The cache can be used for both a window or surface */
   RenSurface rensurface;
-#ifdef PRAGTICAL_USE_SDL_RENDERER
+#ifdef ANVIL_USE_SDL_RENDERER
   SDL_Renderer *renderer;
   SDL_Texture *texture;
 #endif

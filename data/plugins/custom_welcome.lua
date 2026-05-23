@@ -1,5 +1,5 @@
 -- mod-version:3
--- Minimal local replacement for Pragtical's welcome screen.
+-- Minimal local replacement for Anvil's welcome screen.
 
 local core = require "core"
 local common = require "core.common"

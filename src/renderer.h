@@ -11,7 +11,7 @@
 #define UNUSED
 #endif
 
-#ifdef PRAGTICAL_USE_SDL_RENDERER
+#ifdef ANVIL_USE_SDL_RENDERER
 #define RECT_TYPE double
 #else
 #define RECT_TYPE int
@@ -44,7 +44,7 @@ int ren_font_group_get_tab_size(RenFont **font);
 int ren_font_group_get_height(RenFont **font);
 float ren_font_group_get_size(RenFont **font);
 void ren_font_group_set_size(RenFont **font, float size, float surface_scale);
-#ifdef PRAGTICAL_USE_SDL_RENDERER
+#ifdef ANVIL_USE_SDL_RENDERER
 void update_font_scale(RenWindow *window_renderer, RenFont **fonts);
 #endif
 void ren_font_group_set_tab_size(RenFont **font, int n);

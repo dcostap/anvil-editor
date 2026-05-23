@@ -40,7 +40,7 @@ ptrize() {
 
 # create a stub function that warns user when calling it
 makestub() {
-  grep '^LUA' | grep -v "$IGNORE_SYM" | sed -e "s/$sym_regex/static\t\2\t__pragtical_fallback_\3\t(\4) { fputs(\"warning: \3 is a stub\", stderr); }/"
+  grep '^LUA' | grep -v "$IGNORE_SYM" | sed -e "s/$sym_regex/static\t\2\t__anvil_fallback_\3\t(\4) { fputs(\"warning: \3 is a stub\", stderr); }/"
 }
 
 import_sym() {
@@ -70,14 +70,14 @@ decl_import() {
 
 generate_header() {
   local LUA_PATH="$1"
-  echo "#ifndef PRAGTICAL_PLUGIN_API"
-  echo "#define PRAGTICAL_PLUGIN_API"
+  echo "#ifndef ANVIL_PLUGIN_API"
+  echo "#define ANVIL_PLUGIN_API"
   echo "/**"
-  echo "The pragtical plugin API is quite simple. Any shared library can be a plugin file, so long"
+  echo "The anvil plugin API is quite simple. Any shared library can be a plugin file, so long"
   echo "as it has an entrypoint that looks like the following, where xxxxx is the plugin name:"
-  echo '#include "pragtical_plugin_api.h"'
-  echo "int luaopen_pragtical_xxxxx(lua_State* L, void* XL) {"
-  echo "  pragtical_plugin_init(XL);"
+  echo '#include "anvil_plugin_api.h"'
+  echo "int luaopen_anvil_xxxxx(lua_State* L, void* XL) {"
+  echo "  anvil_plugin_init(XL);"
   echo "  ..."
   echo "  return 1;"
   echo "}"
@@ -99,11 +99,11 @@ generate_header() {
   echo
   decl "$LUA_PATH/lauxlib.h"
   echo "static  void (*luaL_openlibs)      (lua_State *L);"
-  echo 'static  void  __pragtical_fallback_luaL_openlibs    (lua_State *L) { fputs("warning: luaL_openlibs is a stub", stderr); }'
+  echo 'static  void  __anvil_fallback_luaL_openlibs    (lua_State *L) { fputs("warning: luaL_openlibs is a stub", stderr); }'
   echo
 
-  echo "#define IMPORT_SYMBOL(name, ret, ...) name = (name = (ret (*) (__VA_ARGS__)) symbol(#name), name == NULL ? &__pragtical_fallback_##name : name)"
-  echo "static void pragtical_plugin_init(void *XL) {"
+  echo "#define IMPORT_SYMBOL(name, ret, ...) name = (name = (ret (*) (__VA_ARGS__)) symbol(#name), name == NULL ? &__anvil_fallback_##name : name)"
+  echo "static void anvil_plugin_init(void *XL) {"
   echo -e "\tvoid* (*symbol)(const char *) = (void* (*) (const char *)) XL;"
 
   decl_import "$LUA_PATH/lua.h"

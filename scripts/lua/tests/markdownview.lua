@@ -1451,10 +1451,10 @@ Text with a footnote.[^note]
     end
 
     local view = MarkdownView([=[
-[![Build Rolling]](https://github.com/pragtical/pragtical/actions/workflows/rolling.yml)
+[![Build Rolling]](https://github.com/dcostap/anvil-editor/actions/workflows/rolling.yml)
 [![Discord]](https://discord.gg/8V2yJtn3Fc)
 
-[Build Rolling]: https://github.com/pragtical/pragtical/actions/workflows/rolling.yml/badge.svg
+[Build Rolling]: https://github.com/dcostap/anvil-editor/actions/workflows/rolling.yml/badge.svg
 [Discord]: https://discord.com/api/guilds/1285023036071743542/widget.png?style=shield
 ]=])
     view.size.x = 420
@@ -1469,12 +1469,12 @@ Text with a footnote.[^note]
     test.ok(first_image.y > 0)
     test.ok(second_image.x > first_image.x)
     test.equal(second_image.y, first_image.y)
-    test.equal(first_image.link_url, "https://github.com/pragtical/pragtical/actions/workflows/rolling.yml")
+    test.equal(first_image.link_url, "https://github.com/dcostap/anvil-editor/actions/workflows/rolling.yml")
     test.equal(second_image.link_url, "https://discord.gg/8V2yJtn3Fc")
-    test.equal(first_image.image_url, "https://github.com/pragtical/pragtical/actions/workflows/rolling.yml/badge.svg")
+    test.equal(first_image.image_url, "https://github.com/dcostap/anvil-editor/actions/workflows/rolling.yml/badge.svg")
     test.equal(second_image.image_url, "https://discord.com/api/guilds/1285023036071743542/widget.png?style=shield")
     test.equal(#download_opts, 2)
-    test.equal(download_opts[1].url, "https://github.com/pragtical/pragtical/actions/workflows/rolling.yml/badge.svg")
+    test.equal(download_opts[1].url, "https://github.com/dcostap/anvil-editor/actions/workflows/rolling.yml/badge.svg")
     test.equal(download_opts[2].url, "https://discord.com/api/guilds/1285023036071743542/widget.png?style=shield")
 
     local original_open_in_system = common.open_in_system
@@ -1519,7 +1519,7 @@ Text with a footnote.[^note]
   test.test("resolves inline and reference links", function()
     local view = MarkdownView([[
 [inline](https://example.com) and [docs][ref]
-For more detailed instructions visit: https://pragtical.dev/docs/setup/building
+For more detailed instructions visit: https://github.com/dcostap/anvil-editor#building
 
 [ref]: https://example.org
 ]])
@@ -1539,7 +1539,7 @@ For more detailed instructions visit: https://pragtical.dev/docs/setup/building
     test.same(urls, {
       "https://example.com",
       "https://example.org",
-      "https://pragtical.dev/docs/setup/building"
+      "https://github.com/dcostap/anvil-editor#building"
     })
 
     local first_link_fragment
@@ -1560,9 +1560,9 @@ For more detailed instructions visit: https://pragtical.dev/docs/setup/building
 
   test.test("resolves bold reference links", function()
     local view = MarkdownView([[
-**[Get Pragtical]**
+**[Get Anvil]**
 
-[Get Pragtical]: https://github.com/pragtical/pragtical/releases
+[Get Anvil]: https://github.com/dcostap/anvil-editor/releases
 ]])
     view.size.x = 420
     view.size.y = 240
@@ -1577,7 +1577,7 @@ For more detailed instructions visit: https://pragtical.dev/docs/setup/building
     end
 
     test.not_nil(target)
-    test.equal(target.url, "https://github.com/pragtical/pragtical/releases")
+    test.equal(target.url, "https://github.com/dcostap/anvil-editor/releases")
 
     local link_fragment
     for _, command in ipairs(layout.commands) do

@@ -3,17 +3,17 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDisplayName</key>
-	<string>Pragtical</string>
+	<string>Anvil</string>
 	<key>CFBundleExecutable</key>
-	<string>pragtical</string>
+	<string>anvil</string>
 	<key>CFBundleGetInfoString</key>
-	<string>pragtical</string>
+	<string>anvil</string>
 	<key>CFBundleIconFile</key>
 	<string>icon.icns</string>
 	<key>CFBundleIdentifier</key>
-	<string>dev.pragtical</string>
+	<string>io.github.dcostap.Anvil</string>
 	<key>CFBundleName</key>
-	<string>Pragtical</string>
+	<string>Anvil</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>NSHighResolutionCapable</key>
@@ -32,7 +32,7 @@
 	<string>@PROJECT_VERSION@</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2020 rxi
-© 2023-@CURRENT_YEAR@ Pragtical Team</string>
+© 2023-@CURRENT_YEAR@ Anvil Team</string>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>

@@ -925,7 +925,7 @@ static void close_child_pipe_fds(int pipefd[3][2], int control_pipe[2]) {
 
 /* SDL3's POSIX process API uses posix_spawn() and does not expose a way to put
    foreground children in a dedicated process group. We keep a local POSIX spawn
-   path so closing Pragtical can signal the whole tree, matching the old API. */
+   path so closing Anvil can signal the whole tree, matching the old API. */
 static bool process_start_posix(
   const char **args,
   SDL_Environment *env,

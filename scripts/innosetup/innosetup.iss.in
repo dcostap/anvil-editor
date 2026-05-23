@@ -1,8 +1,8 @@
-#define MyAppName      "Pragtical"
+#define MyAppName      "Anvil"
 #define MyAppVersion   "@PROJECT_VERSION@"
-#define MyAppPublisher "Pragtical Team"
-#define MyAppURL       "https://pragtical.github.io"
-#define MyAppExeName   "pragtical.exe"
+#define MyAppPublisher "Anvil Team"
+#define MyAppURL       "https://github.com/dcostap/anvil-editor"
+#define MyAppExeName   "anvil.exe"
 #define BuildDir       "@PROJECT_BUILD_DIR@"
 #define SourceDir      "@PROJECT_SOURCE_DIR@"
 
@@ -55,7 +55,7 @@ PrivilegesRequiredOverridesAllowed=dialog
 UsedUserAreasWarning=no
 
 OutputDir=.
-OutputBaseFilename=Pragtical-{#MyAppVersion}-{#ArchInternal}-setup
+OutputBaseFilename=Anvil-{#MyAppVersion}-{#ArchInternal}-setup
 ;DisableDirPage=yes
 ;DisableProgramGroupPage=yes
 
@@ -63,7 +63,7 @@ LicenseFile={#SourceDir}/LICENSE
 SetupIconFile={#SourceDir}/resources/icons/icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}, 0
 WizardImageFile="{#SourceDir}/scripts/innosetup/wizard-modern-image.bmp"
-WizardSmallImageFile="{#SourceDir}/scripts/innosetup/pragtical-55px.bmp"
+WizardSmallImageFile="{#SourceDir}/scripts/innosetup/anvil-55px.bmp"
 
 ; Required for the add to path option to refresh environment
 ChangesEnvironment=yes
@@ -78,7 +78,7 @@ Name: "portablemode"; Description: "Portable Mode"; Flags: unchecked
 Name: "envPath"; Description: "Add to PATH variable"
 
 [Files]
-Source: "{#SourceDir}/pragtical/*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
+Source: "{#SourceDir}/anvil/*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Icons]

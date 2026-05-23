@@ -2,7 +2,7 @@
 set -ex
 
 if [ ! -e "src/api/api.h" ]; then
-  echo "Please run this script from the root directory of Pragtical."
+  echo "Please run this script from the root directory of Anvil."
   exit 1
 fi
 
@@ -22,12 +22,12 @@ for dmg_path in "$DMGDIR"/*.dmg; do
 	dmg="${dmg%.dmg}"
 	hdiutil attach -mountpoint "/Volumes/$dmg" "$dmg_path"
 	if [[ ! -d "$WORKDIR/dmg" ]]; then
-		ditto "/Volumes/$dmg/Pragtical.app" "Pragtical.app"
+		ditto "/Volumes/$dmg/Anvil.app" "Anvil.app"
 	fi
-	cp "/Volumes/$dmg/Pragtical.app/Contents/MacOS/pragtical" "$WORKDIR/$dmg-pragtical"
+	cp "/Volumes/$dmg/Anvil.app/Contents/MacOS/anvil" "$WORKDIR/$dmg-anvil"
 	hdiutil detach "/Volumes/$dmg"
 done
 
-lipo -create -output "Pragtical.app/Contents/MacOS/pragtical" "$WORKDIR/"*-pragtical
+lipo -create -output "Anvil.app/Contents/MacOS/anvil" "$WORKDIR/"*-anvil
 
 source scripts/appdmg.sh "$2"

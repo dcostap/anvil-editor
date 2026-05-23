@@ -83,7 +83,7 @@ function REPL:start()
   local global_mt = getmetatable(_G)
   setmetatable(_G, nil) -- disable strict global
 
-  print("Pragtical REPL. Type 'exit' or Ctrl+D to quit.")
+  print("Anvil REPL. Type 'exit' or Ctrl+D to quit.")
   print("Enter \".help\" for usage hints.")
 
   local buffer = ""

@@ -487,7 +487,7 @@ local function set_selection_offsets(doc, starts, start_offset, end_offset, reas
     selection_debug_repr(old_text), selection_debug_repr(new_text)
   ))
 
-  -- Pragtical selections can only place the caret at one end of the range.
+  -- Anvil selections can only place the caret at one end of the range.
   -- Preserve the caret side instead of always forcing it to the selection start:
   -- if the caret was at/near the left edge, keep it on the left; otherwise keep
   -- it on the right. This matches IntelliJ's stable-caret feel as closely as the

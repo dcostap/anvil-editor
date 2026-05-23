@@ -259,7 +259,7 @@ local function load_error_handler(err)
 end
 
 local function is_skip_error(err)
-  return type(err) == "table" and err.__pragtical_test_skip
+  return type(err) == "table" and err.__anvil_test_skip
 end
 
 local function run_error_handler(err)
@@ -469,7 +469,7 @@ end
 ---@param reason? string
 function test.skip_now(reason)
   error({
-    __pragtical_test_skip = true,
+    __anvil_test_skip = true,
     reason = reason or "skipped"
   }, 0)
 end

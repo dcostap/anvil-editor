@@ -1,5 +1,5 @@
 -- mod-version:3 priority:101
--- A small Telescope-like fuzzy/search overlay for Pragtical.
+-- A small Telescope-like fuzzy/search overlay for Anvil.
 local core = require "core"
 local command = require "core.command"
 local keymap = require "core.keymap"
@@ -43,7 +43,7 @@ function PreviewDocView:draw_line_gutter(line, x, y, width)
 end
 
 -- Older development versions of this plugin monkey-patched keymap.on_key_pressed.
--- Restore it on reload so this version uses normal Pragtical commands/keymaps.
+-- Restore it on reload so this version uses normal Anvil commands/keymaps.
 if keymap.__fuzzy_searcher_original_on_key_pressed then
   keymap.on_key_pressed = keymap.__fuzzy_searcher_original_on_key_pressed
   keymap.__fuzzy_searcher_original_on_key_pressed = nil
@@ -170,7 +170,7 @@ for i = 1, 24 do modal_non_text_keys["f" .. i] = true end
 
 local function modal_should_let_text_input_through(key, stroke)
   -- Printable text arrives through a later textinput event. If we consume the
-  -- keypressed event for plain/shifted characters, Pragtical/SDL can suppress
+  -- keypressed event for plain/shifted characters, Anvil/SDL can suppress
   -- that textinput, so normal typing appears broken. Ctrl/Alt/Super combos are
   -- shortcuts and stay modal-blocked unless explicitly allowed.
   if keymap.modkeys.super then return false end
@@ -222,8 +222,8 @@ local function get_recent_projects()
   return out
 end
 
-local function open_pragtical_window(path)
-  local exe = EXEFILE or (EXEDIR and (EXEDIR .. PATHSEP .. "pragtical.exe")) or "pragtical"
+local function open_anvil_window(path)
+  local exe = EXEFILE or (EXEDIR and (EXEDIR .. PATHSEP .. "anvil.exe")) or "anvil"
   process.start({ exe, path }, {
     detach = true,
     stdin = process.REDIRECT_DISCARD,
@@ -2426,7 +2426,7 @@ function FSView:confirm(new_window)
     local path = r.project
     self:close()
     if new_window then
-      open_pragtical_window(path)
+      open_anvil_window(path)
     else
       core.open_project(path)
     end
@@ -2545,7 +2545,7 @@ function FSView:draw()
     renderer.draw_text(font, "Project", px, py, style.accent or style.text)
     draw_highlighted_text(font, display_root(r.project), px, py + lh, preview_w, style.text, r.match_spans or {})
     renderer.draw_text(font, "Enter: open here", px, py + lh * 3, style.dim or style.text)
-    renderer.draw_text(font, "Ctrl+Enter: open in new Pragtical window", px, py + lh * 4, style.dim or style.text)
+    renderer.draw_text(font, "Ctrl+Enter: open in new Anvil window", px, py + lh * 4, style.dim or style.text)
     core.pop_clip_rect()
   else
     local preview = self:update_preview_view()
@@ -2640,7 +2640,7 @@ end
 core.fuzzy_searcher_install_global_keymaps()
 
 -- Picker-local navigation. These are prepended, not overwritten: when the
--- picker predicate is false, Pragtical falls through to the normal bindings.
+-- picker predicate is false, Anvil falls through to the normal bindings.
 core.fuzzy_searcher_install_picker_keymaps = function()
   keymap.add({
     ["escape"] = "fuzzy-searcher:close",

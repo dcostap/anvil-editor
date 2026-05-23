@@ -1,4 +1,4 @@
----Coroutine-based WebSocket client for Pragtical Code Editor.
+---Coroutine-based WebSocket client for Anvil Code Editor.
 ---Supports ws/wss connections, subprotocol negotiation, fragmented messages,
 ---automatic pong replies, optional keepalive pings, reconnect backoff,
 ---session restore hooks, and async callbacks.
@@ -1164,7 +1164,7 @@ function websocket.client:_run_session(parsed, session_info)
   local request_headers = clone_value(options.headers or {})
 
   if not request_headers["User-Agent"] and not request_headers["user-agent"] and VERSION then
-    request_headers["User-Agent"] = "Pragtical/" .. VERSION
+    request_headers["User-Agent"] = "Anvil/" .. VERSION
   end
 
   if options.protocols then

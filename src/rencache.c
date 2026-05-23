@@ -181,7 +181,7 @@ void rencache_init(RenCache *rc) {
   memset(rc, 0, sizeof(RenCache));
   rc->window = NULL;
   rc->rensurface.surface = NULL;
-#ifdef PRAGTICAL_USE_SDL_RENDERER
+#ifdef ANVIL_USE_SDL_RENDERER
   rc->texture = NULL;
   rc->renderer = NULL;
 #endif
@@ -441,7 +441,7 @@ void rencache_end_frame(RenCache *ren_cache) {
 }
 
 RenSurface rencache_get_surface(RenCache *ren_cache) {
-#ifdef PRAGTICAL_USE_SDL_RENDERER
+#ifdef ANVIL_USE_SDL_RENDERER
   return ren_cache->rensurface;
 #else
   if (ren_cache->window) {
@@ -464,7 +464,7 @@ void rencache_update_rects(RenCache *rc, RenRect *rects, int count) {
   // TODO: Does not work nicely with multiple windows
   static bool initial_window = true;
   if (rc->window){
-#ifdef PRAGTICAL_USE_SDL_RENDERER
+#ifdef ANVIL_USE_SDL_RENDERER
     const float scale_x = rc->rensurface.scale_x;
     const float scale_y = rc->rensurface.scale_y;
     for (int i = 0; i < count; i++) {

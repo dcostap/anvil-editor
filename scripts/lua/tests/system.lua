@@ -100,7 +100,7 @@ test.describe("system", function()
     local end_time = system.get_time()
     test.ok(end_time >= start_time)
 
-    local key = "PRAGTICAL_SYSTEM_TEST_ENV_" .. pid
+    local key = "ANVIL_SYSTEM_TEST_ENV_" .. pid
     test.ok(system.setenv(key, "ok"))
     test.equal(os.getenv(key), "ok")
 

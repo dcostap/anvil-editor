@@ -142,7 +142,7 @@
     },
     {
       "uid": "1abb409c2423ac0b0354cb311a56369a",
-      "css": "pragticalbg",
+      "css": "anvilbg",
       "code": 53,
       "src": "custom_icons",
       "selected": true,
@@ -151,12 +151,12 @@
         "width": 1020
       },
       "search": [
-        "pragticalbg"
+        "anvilbg"
       ]
     },
     {
       "uid": "39cf2a3e500912a058cc05e77300dd83",
-      "css": "pragtical1",
+      "css": "anvil1",
       "code": 54,
       "src": "custom_icons",
       "selected": true,
@@ -165,12 +165,12 @@
         "width": 1010
       },
       "search": [
-        "pragtical1"
+        "anvil1"
       ]
     },
     {
       "uid": "16309119f0bfbd6ac63f6f7db9f714c1",
-      "css": "pragtical2",
+      "css": "anvil2",
       "code": 55,
       "src": "custom_icons",
       "selected": true,
@@ -179,12 +179,12 @@
         "width": 1010
       },
       "search": [
-        "pragtical2"
+        "anvil2"
       ]
     },
     {
       "uid": "84479fe50093c12425170a49baa19d60",
-      "css": "pragtical3",
+      "css": "anvil3",
       "code": 56,
       "src": "custom_icons",
       "selected": true,
@@ -193,12 +193,12 @@
         "width": 1010
       },
       "search": [
-        "pragtical3"
+        "anvil3"
       ]
     },
     {
       "uid": "e2da2598b77af7243e9d0e7b7a44eb3f",
-      "css": "pragtical4",
+      "css": "anvil4",
       "code": 57,
       "src": "custom_icons",
       "selected": true,
@@ -207,7 +207,7 @@
         "width": 1010
       },
       "search": [
-        "pragtical4"
+        "anvil4"
       ]
     },
     {

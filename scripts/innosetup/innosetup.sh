@@ -2,7 +2,7 @@
 set -e
 
 if [ ! -e "src/api/api.h" ]; then
-  echo "Please run this script from the root directory of Pragtical."; exit 1
+  echo "Please run this script from the root directory of Anvil."; exit 1
 fi
 
 source scripts/common.sh
@@ -81,15 +81,15 @@ main() {
   fi
 
   # remove portable user settings directory since this is a fixed install
-  mv "pragtical/user" .
+  mv "anvil/user" .
 
   # generate setup
-  output="Pragtical${version}-${arch_file}-setup"
+  output="Anvil${version}-${arch_file}-setup"
   "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" -dARCH=$arch //F"${output}" "${build_dir}/scripts/innosetup.iss"
-  pushd "${build_dir}/scripts"; mv Pragtical*.exe "./../../"; popd
+  pushd "${build_dir}/scripts"; mv Anvil*.exe "./../../"; popd
 
   # recreate user settings directory after generating setup
-  mv user "pragtical/"
+  mv user "anvil/"
 }
 
 main "$@"

@@ -16,7 +16,7 @@
 -- 3. Run this script to generate the profiling data.
 --
 --    If using installed files:
---      install/pragtical run -n scripts/lua/pgo.lua
+--      install/anvil run -n scripts/lua/pgo.lua
 --
 --    If using run-local:
 --      ./scripts/run-local build run -n scripts/lua/pgo.lua

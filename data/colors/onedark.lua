@@ -2,8 +2,8 @@ local style = require "core.style"
 local common = require "core.common"
 
 -- Port of "OneDark custom" from OneDark_custom.icls.
--- IntelliJ has many more semantic token slots than Pragtical; all colors from
--- the scheme are preserved below and mapped to the closest Pragtical style keys.
+-- IntelliJ has many more semantic token slots than Anvil; all colors from
+-- the scheme are preserved below and mapped to the closest Anvil style keys.
 
 local function c(hex)
   return { common.color("#" .. hex) }
@@ -121,11 +121,11 @@ style.indent_guide_active = { common.color "rgba(255, 255, 255, 0.24)" }
 style.whitespace = { common.color "rgba(255, 255, 255, 0.10)" }
 style.whitespace_trailing = { common.color "rgba(224, 108, 117, 0.55)" }
 
--- Pragtical's common syntax slots.
+-- Anvil's common syntax slots.
 style.syntax["normal"] = c(C.text_fg)
 style.syntax["symbol"] = c(C.identifier)
 style.syntax["comment"] = c(C.block_comment)
--- Pragtical's Kotlin lexer emits `private`, `fun`, etc. as generic
+-- Anvil's Kotlin lexer emits `private`, `fun`, etc. as generic
 -- `keyword`; use the IntelliJ Java/Kotlin-looking blue keyword color rather
 -- than DEFAULT_KEYWORD's orange.
 style.syntax["keyword"] = c(C.java_keyword)

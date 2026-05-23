@@ -2144,7 +2144,7 @@ end
 
 function Settings:setup_about()
   ---@type widget.label
-  local title = Label(self.about, "Pragtical")
+  local title = Label(self.about, "Anvil")
   title.font = "big_font"
   ---@type widget.label
   local version = Label(self.about, "version " .. VERSION, true)
@@ -2158,7 +2158,7 @@ function Settings:setup_about()
   ---@type widget.button
   local button = Button(self.about, "Visit Website")
   button:set_icon("G")
-  button:set_tooltip("Open Pragtical Website", "core:view-website")
+  button:set_tooltip("Open Anvil Website", "core:view-website")
   function button:on_click() command.perform "core:view-website" end
 
   ---@type widget.listbox
@@ -2172,14 +2172,14 @@ function Settings:setup_about()
 local contributors_list = {
   { "Rxi", "Lite Founder", "https://github.com/rxi" },
   { "Francesco Abbate", "Lite XL Founder", "https://github.com/franko" },
-  { "jgmdev", "Pragtical Founder, Core, Plugins", "https://github.com/jgmdev" },
-  { "AmerM137", "Pragtical Contributor, Colors, Ninja", "https://github.com/AmerM137" },
-  { "juliardi",	"Pragtical Contributor, Evangelist", "https://github.com/juliardi" },
-  { "Walkero", "Pragtical Amiga Port, Tests", "https://github.com/walkero-gr" },
-  { "Jan", "Pragtical Contributor", "https://github.com/Jan200101" },
-  { "tacf", "Pragtical Contributor", "https://github.com/tacf" },
-  { "detomastah", "Pragtical Contributor", "https://github.com/detomastah" },
-  { "acook", "Pragtical Contributor", "https://github.com/acook" },
+  { "jgmdev", "Anvil Founder, Core, Plugins", "https://github.com/jgmdev" },
+  { "AmerM137", "Anvil Contributor, Colors, Ninja", "https://github.com/AmerM137" },
+  { "juliardi",	"Anvil Contributor, Evangelist", "https://github.com/juliardi" },
+  { "Walkero", "Anvil Amiga Port, Tests", "https://github.com/walkero-gr" },
+  { "Jan", "Anvil Contributor", "https://github.com/Jan200101" },
+  { "tacf", "Anvil Contributor", "https://github.com/tacf" },
+  { "detomastah", "Anvil Contributor", "https://github.com/detomastah" },
+  { "acook", "Anvil Contributor", "https://github.com/acook" },
   { "Adam Harrison", "Core", "https://github.com/adamharrison" },
   { "Andrea Zanellato", "CI, Website", "https://github.com/redtide" },
   { "Björn Buckwalter", "MacOS Support", "https://github.com/bjornbm" },
@@ -2216,7 +2216,7 @@ local contributors_list = {
   function self.about:update_positions()
     local center = self:get_width() / 2
 
-    title:set_label("Pragtical")
+    title:set_label("Anvil")
     title:set_position(
       center - (title:get_width() / 2),
       style.padding.y
@@ -2515,7 +2515,7 @@ function core.run()
   if settings.config.reload_user_modules then
     local modules = {
       USERDIR .. PATHSEP .. "init.lua",
-      core.root_project().path .. PATHSEP .. ".pragtical_project.lua"
+      core.root_project().path .. PATHSEP .. ".anvil_project.lua"
     }
     for _, module in ipairs(modules) do
       core.reload_absolute_module(module)
@@ -2527,7 +2527,7 @@ end
 
 --------------------------------------------------------------------------------
 -- Disable plugins at startup, only works if this file is the first
--- required on user module, or priority tag is obeyed by pragtical.
+-- required on user module, or priority tag is obeyed by anvil.
 --------------------------------------------------------------------------------
 -- load custom user settings that include list of disabled plugins
 load_settings()

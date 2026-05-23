@@ -43,7 +43,7 @@ function Doc:on_text_change(type)
   -- check if file is saved
   if autosave_fast.enabled and self.filename
     and self.abs_filename ~= system.absolute_path(USERDIR .. PATHSEP .. "init.lua")
-    and self.abs_filename ~= system.absolute_path(".pragtical_project.lua")
+    and self.abs_filename ~= system.absolute_path(".anvil_project.lua")
     then
     updatepress()
   end

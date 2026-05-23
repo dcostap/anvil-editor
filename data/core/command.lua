@@ -174,7 +174,7 @@ function command.perform(name, ...)
 end
 
 
----Inserts the default commands for Pragtical into the map.
+---Inserts the default commands for Anvil into the map.
 function command.add_defaults()
   local reg = {
     "core", "root", "command", "doc", "findreplace",

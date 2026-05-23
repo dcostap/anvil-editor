@@ -14,14 +14,14 @@ int luaopen_diff(lua_State *L);
 int luaopen_canvas(lua_State* L);
 int luaopen_tokenizer(lua_State *L);
 
-#ifdef PRAGTICAL_NET
+#ifdef ANVIL_NET
   int luaopen_net(lua_State* L);
   #define LUA_NET { "net",  luaopen_net  },
 #else
   #define LUA_NET
 #endif
 
-#ifdef PRAGTICAL_REPL_HISTORY
+#ifdef ANVIL_REPL_HISTORY
   int luaopen_linenoise(lua_State *L);
   #define LUA_REPL { "repl",  luaopen_linenoise  },
 #else

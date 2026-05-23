@@ -1,5 +1,5 @@
 /*
- * Wrapper over pragtical.exe that when compiled as pragtical.com provides
+ * Wrapper over anvil.exe that when compiled as anvil.com provides
  * console ready stdout/stderr for normal behavior on CMD or PowerShell.
  */
 
@@ -10,7 +10,7 @@
 #include <stdbool.h>
 
 /**
- * Get pragtical.exe absolute path relative to pragtical.com
+ * Get anvil.exe absolute path relative to anvil.com
  */
 static void get_exe_filename(char *buf, int sz) {
     int len;
@@ -183,7 +183,7 @@ int main(int argc, char *argv[]) {
       }
     }
 
-    SetEnvironmentVariable("PRAGTICAL_COM_WRAP", "1");
+    SetEnvironmentVariable("ANVIL_COM_WRAP", "1");
 
     // Execute the command and store the exit code
     DWORD exit_code = 0;

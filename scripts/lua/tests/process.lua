@@ -42,14 +42,14 @@ test.describe("process", function()
 
   test.test("supports stdin pipes and environment overrides", function()
     local command = PLATFORM == "Windows"
-      and "set /p INPUT=& echo %PRAGTICAL_PROCESS_TEST_ENV%:!INPUT!"
-      or "IFS= read -r INPUT; printf '%s:%s' \"$PRAGTICAL_PROCESS_TEST_ENV\" \"$INPUT\""
+      and "set /p INPUT=& echo %ANVIL_PROCESS_TEST_ENV%:!INPUT!"
+      or "IFS= read -r INPUT; printf '%s:%s' \"$ANVIL_PROCESS_TEST_ENV\" \"$INPUT\""
     local proc = process.start(shell_command(command), {
       stdin = process.REDIRECT_PIPE,
       stdout = process.REDIRECT_PIPE,
       stderr = process.REDIRECT_PIPE,
       env = {
-        PRAGTICAL_PROCESS_TEST_ENV = "ok"
+        ANVIL_PROCESS_TEST_ENV = "ok"
       }
     })
 
@@ -68,13 +68,13 @@ test.describe("process", function()
 
   test.test("does not mutate environment options", function()
     local command = PLATFORM == "Windows"
-      and "echo %PRAGTICAL_PROCESS_TEST_ENV%"
-      or "printf '%s' \"$PRAGTICAL_PROCESS_TEST_ENV\""
+      and "echo %ANVIL_PROCESS_TEST_ENV%"
+      or "printf '%s' \"$ANVIL_PROCESS_TEST_ENV\""
     local options = {
       stdout = process.REDIRECT_PIPE,
       stderr = process.REDIRECT_PIPE,
       env = {
-        PRAGTICAL_PROCESS_TEST_ENV = "reused"
+        ANVIL_PROCESS_TEST_ENV = "reused"
       }
     }
 
@@ -90,13 +90,13 @@ test.describe("process", function()
 
   test.test("supports environment callback options", function()
     local command = PLATFORM == "Windows"
-      and "echo %PRAGTICAL_PROCESS_TEST_ENV%"
-      or "printf '%s' \"$PRAGTICAL_PROCESS_TEST_ENV\""
+      and "echo %ANVIL_PROCESS_TEST_ENV%"
+      or "printf '%s' \"$ANVIL_PROCESS_TEST_ENV\""
     local proc = process.start(shell_command(command), {
       stdout = process.REDIRECT_PIPE,
       stderr = process.REDIRECT_PIPE,
       env = function(system_env)
-        system_env.PRAGTICAL_PROCESS_TEST_ENV = "callback"
+        system_env.ANVIL_PROCESS_TEST_ENV = "callback"
         local env = {}
         for key, value in pairs(system_env) do
           env[#env + 1] = key .. "=" .. value

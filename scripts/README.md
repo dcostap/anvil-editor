@@ -1,6 +1,6 @@
 # Scripts
 
-Various scripts and configurations used to configure, build, and package Pragtical.
+Various scripts and configurations used to configure, build, and package Anvil.
 
 ### Build
 
@@ -19,7 +19,7 @@ Various scripts and configurations used to configure, build, and package Pragtic
 
 - **common.sh**:               Common functions used by other scripts.
 - **install-dependencies.sh**: Installs required applications to build, package
-  and run Pragtical, mainly useful for CI and documentation purpose.
+  and run Anvil, mainly useful for CI and documentation purpose.
   Preferably not to be used in user systems.
 - **fontello-config.json**:    Used by the icons generator.
 - **generate_header.sh**: Generates a header file for native plugin API
