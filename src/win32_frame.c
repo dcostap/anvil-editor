@@ -19,20 +19,12 @@
 #endif
 
 #define ANVIL_WIN32_FRAME_PROP L"AnvilWin32FrameData"
-#define ANVIL_RESIZE_LEFT   0x01
-#define ANVIL_RESIZE_RIGHT  0x02
-#define ANVIL_RESIZE_TOP    0x04
-#define ANVIL_RESIZE_BOTTOM 0x08
 
 struct Win32FrameData {
   HWND hwnd;
   WNDPROC old_proc;
   RenWindow *ren;
   bool enabled;
-  bool resizing;
-  int resize_edges;
-  POINT resize_start_pt;
-  RECT resize_start_rect;
 };
 typedef struct Win32FrameData Win32FrameData;
 
@@ -119,39 +111,6 @@ static LRESULT handle_nccalcsize(HWND hwnd, WPARAM wparam, LPARAM lparam) {
   return 0;
 }
 
-static int resize_edges_at(Win32FrameData *frame, HWND hwnd, int x, int y, int width, int height) {
-  RenWindow *ren = frame->ren;
-  int resize = ren ? ren->hit_test_info.resize_border : 0;
-  if (resize <= 0) resize = scale_for_dpi(hwnd, 8);
-  if (is_maximized(hwnd)) return 0;
-
-  int edges = 0;
-  if (x >= 0 && x < resize) edges |= ANVIL_RESIZE_LEFT;
-  if (x < width && x >= width - resize) edges |= ANVIL_RESIZE_RIGHT;
-  if (y >= 0 && y < resize) edges |= ANVIL_RESIZE_TOP;
-  if (y < height && y >= height - resize) edges |= ANVIL_RESIZE_BOTTOM;
-  return edges;
-}
-
-static HCURSOR cursor_for_resize_edges(int edges) {
-  switch (edges) {
-    case ANVIL_RESIZE_LEFT:
-    case ANVIL_RESIZE_RIGHT:
-      return LoadCursor(NULL, IDC_SIZEWE);
-    case ANVIL_RESIZE_TOP:
-    case ANVIL_RESIZE_BOTTOM:
-      return LoadCursor(NULL, IDC_SIZENS);
-    case ANVIL_RESIZE_TOP | ANVIL_RESIZE_LEFT:
-    case ANVIL_RESIZE_BOTTOM | ANVIL_RESIZE_RIGHT:
-      return LoadCursor(NULL, IDC_SIZENWSE);
-    case ANVIL_RESIZE_TOP | ANVIL_RESIZE_RIGHT:
-    case ANVIL_RESIZE_BOTTOM | ANVIL_RESIZE_LEFT:
-      return LoadCursor(NULL, IDC_SIZENESW);
-    default:
-      return NULL;
-  }
-}
-
 static LRESULT hit_test(Win32FrameData *frame, HWND hwnd, LPARAM lparam) {
   RenWindow *ren = frame->ren;
   if (!ren) return HTCLIENT;
@@ -182,12 +141,20 @@ static LRESULT hit_test(Win32FrameData *frame, HWND hwnd, LPARAM lparam) {
     return HTCLIENT;
   }
 
-  /* Keep resize edges in the client area and perform sizing ourselves from
-     WM_MOUSEMOVE. The standard HTLEFT/HTRIGHT path enters Windows' modal
-     sizing loop, where SDL_AppIterate can starve and DWM shows a laggy ghost
-     outline while our app contents repaint late. */
-  if (resize_edges_at(frame, hwnd, x, y, width, height) != 0) {
-    return HTCLIENT;
+  const bool left = x >= 0 && x < resize;
+  const bool right = x < width && x >= width - resize;
+  const bool top = y >= 0 && y < resize;
+  const bool bottom = y < height && y >= height - resize;
+
+  if (!is_maximized(hwnd)) {
+    if (top && left) return HTTOPLEFT;
+    if (top && right) return HTTOPRIGHT;
+    if (bottom && left) return HTBOTTOMLEFT;
+    if (bottom && right) return HTBOTTOMRIGHT;
+    if (left) return HTLEFT;
+    if (right) return HTRIGHT;
+    if (top) return HTTOP;
+    if (bottom) return HTBOTTOM;
   }
 
   if (title_height > 0 && y >= 0 && y < title_height) {
@@ -247,47 +214,6 @@ static void toggle_maximize(HWND hwnd) {
   }
 }
 
-static int point_resize_edges(Win32FrameData *frame, LPARAM lparam) {
-  RECT wr;
-  GetWindowRect(frame->hwnd, &wr);
-  const int width = wr.right - wr.left;
-  const int height = wr.bottom - wr.top;
-  const int x = GET_X_LPARAM(lparam);
-  const int y = GET_Y_LPARAM(lparam);
-  return resize_edges_at(frame, frame->hwnd, x, y, width, height);
-}
-
-static void apply_custom_resize(Win32FrameData *frame) {
-  POINT pt;
-  GetCursorPos(&pt);
-
-  RECT r = frame->resize_start_rect;
-  const int dx = pt.x - frame->resize_start_pt.x;
-  const int dy = pt.y - frame->resize_start_pt.y;
-  if (frame->resize_edges & ANVIL_RESIZE_LEFT) r.left += dx;
-  if (frame->resize_edges & ANVIL_RESIZE_RIGHT) r.right += dx;
-  if (frame->resize_edges & ANVIL_RESIZE_TOP) r.top += dy;
-  if (frame->resize_edges & ANVIL_RESIZE_BOTTOM) r.bottom += dy;
-
-  int min_w = 240;
-  int min_h = 180;
-  if (frame->ren && frame->ren->cache.window) {
-    SDL_GetWindowMinimumSize(frame->ren->cache.window, &min_w, &min_h);
-  }
-
-  if (r.right - r.left < min_w) {
-    if (frame->resize_edges & ANVIL_RESIZE_LEFT) r.left = r.right - min_w;
-    else r.right = r.left + min_w;
-  }
-  if (r.bottom - r.top < min_h) {
-    if (frame->resize_edges & ANVIL_RESIZE_TOP) r.top = r.bottom - min_h;
-    else r.bottom = r.top + min_h;
-  }
-
-  SetWindowPos(frame->hwnd, NULL, r.left, r.top, r.right - r.left, r.bottom - r.top,
-    SWP_NOZORDER | SWP_NOACTIVATE);
-}
-
 static void show_system_menu(HWND hwnd, LPARAM lparam) {
   HMENU menu = GetSystemMenu(hwnd, FALSE);
   if (!menu) return;
@@ -334,61 +260,20 @@ static LRESULT CALLBACK frame_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
       if (frame->enabled) return TRUE;
       break;
 
-    case WM_LBUTTONDOWN:
-      if (frame->enabled) {
-        int edges = point_resize_edges(frame, lparam);
-        if (edges != 0) {
-          frame->resizing = true;
-          frame->resize_edges = edges;
-          GetCursorPos(&frame->resize_start_pt);
-          GetWindowRect(hwnd, &frame->resize_start_rect);
-          SetCapture(hwnd);
-          HCURSOR cursor = cursor_for_resize_edges(edges);
-          if (cursor) SetCursor(cursor);
-          return 0;
-        }
-      }
-      break;
-
-    case WM_LBUTTONUP:
-      if (frame->enabled && frame->resizing) {
-        frame->resizing = false;
-        frame->resize_edges = 0;
-        if (GetCapture() == hwnd) ReleaseCapture();
-        return 0;
-      }
-      break;
-
-    case WM_CAPTURECHANGED:
-      if (frame->enabled) {
-        frame->resizing = false;
-        frame->resize_edges = 0;
-      }
-      break;
-
     case WM_MOUSEMOVE:
       if (frame->enabled) {
-        if (frame->resizing) {
-          apply_custom_resize(frame);
-          HCURSOR cursor = cursor_for_resize_edges(frame->resize_edges);
-          if (cursor) SetCursor(cursor);
-          return 0;
-        }
         TRACKMOUSEEVENT tme;
         tme.cbSize = sizeof(tme);
         tme.dwFlags = TME_LEAVE;
         tme.hwndTrack = hwnd;
         tme.dwHoverTime = HOVER_DEFAULT;
         TrackMouseEvent(&tme);
-        int edges = point_resize_edges(frame, lparam);
-        HCURSOR cursor = cursor_for_resize_edges(edges);
-        if (cursor) SetCursor(cursor);
       }
       break;
 
     case WM_MOUSELEAVE:
       if (frame->enabled) {
-        if (!frame->resizing) push_sdl_mouse_leave(frame);
+        push_sdl_mouse_leave(frame);
       }
       break;
 
