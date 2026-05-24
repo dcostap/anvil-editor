@@ -164,13 +164,6 @@ function renderer.show_debug(enable) end
 function renderer.get_size() end
 
 ---
----Force the next frame for a window to redraw the full surface instead of
----using dirty-region caching.
----
----@param window renwindow
-function renderer.force_full_redraw(window) end
-
----
 ---Tell the rendering system that we want to build a new frame to render.
 ---
 ---@param window renwindow

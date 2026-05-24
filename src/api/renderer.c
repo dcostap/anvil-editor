@@ -347,12 +347,6 @@ static int f_get_size(lua_State *L) {
 }
 
 
-static int f_force_full_redraw(lua_State *L) {
-  RenWindow *window = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
-  rencache_force_full_redraw(&window->cache);
-  return 0;
-}
-
 static int f_begin_frame(UNUSED lua_State *L) {
   assert(ren_get_target_window() == NULL);
   RenWindow *window = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
@@ -559,7 +553,6 @@ static int f_to_canvas(lua_State *L) {
 static const luaL_Reg lib[] = {
   { "show_debug",         f_show_debug         },
   { "get_size",           f_get_size           },
-  { "force_full_redraw", f_force_full_redraw },
   { "begin_frame",        f_begin_frame        },
   { "end_frame",          f_end_frame          },
   { "set_clip_rect",      f_set_clip_rect      },

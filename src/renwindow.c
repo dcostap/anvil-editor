@@ -102,10 +102,6 @@ void renwin_set_clip_rect(RenWindow *ren, RenRect rect) {
 }
 
 
-bool renwin_is_resizing(RenWindow *ren) {
-  return win32_frame_is_resizing(ren);
-}
-
 void renwin_resize_surface(UNUSED RenWindow *ren) {
 #ifdef ANVIL_USE_SDL_RENDERER
   int new_w, new_h;

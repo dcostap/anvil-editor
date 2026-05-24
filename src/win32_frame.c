@@ -257,17 +257,6 @@ static int point_resize_edges(Win32FrameData *frame, LPARAM lparam) {
   return resize_edges_at(frame, frame->hwnd, x, y, width, height);
 }
 
-static void push_sdl_resize_event(Win32FrameData *frame) {
-  if (!frame || !frame->ren || !frame->ren->cache.window) return;
-
-  SDL_Event event;
-  SDL_zero(event);
-  event.type = SDL_EVENT_WINDOW_RESIZED;
-  event.window.windowID = SDL_GetWindowID(frame->ren->cache.window);
-  SDL_GetWindowSize(frame->ren->cache.window, &event.window.data1, &event.window.data2);
-  SDL_PushEvent(&event);
-}
-
 static void apply_custom_resize(Win32FrameData *frame) {
   POINT pt;
   GetCursorPos(&pt);
@@ -297,7 +286,6 @@ static void apply_custom_resize(Win32FrameData *frame) {
 
   SetWindowPos(frame->hwnd, NULL, r.left, r.top, r.right - r.left, r.bottom - r.top,
     SWP_NOZORDER | SWP_NOACTIVATE);
-  push_sdl_resize_event(frame);
 }
 
 static void show_system_menu(HWND hwnd, LPARAM lparam) {
@@ -364,18 +352,15 @@ static LRESULT CALLBACK frame_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
 
     case WM_LBUTTONUP:
       if (frame->enabled && frame->resizing) {
-        apply_custom_resize(frame);
         frame->resizing = false;
         frame->resize_edges = 0;
         if (GetCapture() == hwnd) ReleaseCapture();
-        push_sdl_resize_event(frame);
         return 0;
       }
       break;
 
     case WM_CAPTURECHANGED:
       if (frame->enabled) {
-        if (frame->resizing) push_sdl_resize_event(frame);
         frame->resizing = false;
         frame->resize_edges = 0;
       }
@@ -499,10 +484,6 @@ bool win32_frame_enable(RenWindow *ren, bool enable) {
   SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
     SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
   return true;
-}
-
-bool win32_frame_is_resizing(RenWindow *ren) {
-  return ren && ren->win32_frame && ren->win32_frame->resizing;
 }
 
 bool win32_frame_get_metrics(RenWindow *ren, int *button_width, int *title_height, int *resize_border) {
