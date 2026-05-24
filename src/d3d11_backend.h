@@ -22,8 +22,10 @@ bool anvil_d3d11_push_texture(SDL_Window *window, SDL_Surface *surface,
 bool anvil_d3d11_push_pixels(SDL_Window *window, const char *bytes, size_t len,
                               int width, int height, RenRect dst_px, RenRect clip_px);
 bool anvil_d3d11_end_frame(SDL_Window *window);
+void anvil_d3d11_abort_frame(SDL_Window *window);
 
 void anvil_d3d11_forget_window(SDL_Window *window);
+void anvil_d3d11_forget_surface(SDL_Surface *surface);
 void anvil_d3d11_shutdown(void);
 #else
 static inline bool anvil_d3d11_enabled(void) { return false; }
@@ -56,7 +58,9 @@ static inline bool anvil_d3d11_end_frame(SDL_Window *window) {
   (void)window;
   return false;
 }
+static inline void anvil_d3d11_abort_frame(SDL_Window *window) { (void)window; }
 static inline void anvil_d3d11_forget_window(SDL_Window *window) { (void)window; }
+static inline void anvil_d3d11_forget_surface(SDL_Surface *surface) { (void)surface; }
 static inline void anvil_d3d11_shutdown(void) {}
 #endif
 

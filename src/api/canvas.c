@@ -9,6 +9,7 @@
 #include "utils/lxlauxlib.h"
 #include "../renderer.h"
 #include "../rencache.h"
+#include "../d3d11_backend.h"
 
 extern int RENDERER_FONT_REF;
 extern int RENDERER_CANVAS_REF;
@@ -409,8 +410,10 @@ static int f_save_image(lua_State *L) {
 
 static int f_gc(lua_State *L) {
   RenCache* canvas = luaL_checkudata(L, 1, API_TYPE_CANVAS);
-  if (canvas->rensurface.surface)
+  if (canvas->rensurface.surface) {
+    anvil_d3d11_forget_surface(canvas->rensurface.surface);
     SDL_DestroySurface(canvas->rensurface.surface);
+  }
   rencache_uninit(canvas);
   return 0;
 }

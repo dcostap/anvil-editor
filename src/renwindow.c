@@ -48,6 +48,7 @@ static void init_surface(RenWindow *ren) {
   ren->scale_x = ren->scale_y = 1;
 #ifdef ANVIL_USE_SDL_RENDERER
   if (ren->cache.rensurface.surface) {
+    anvil_d3d11_forget_surface(ren->cache.rensurface.surface);
     SDL_DestroySurface(ren->cache.rensurface.surface);
   }
   int w, h;
@@ -143,6 +144,7 @@ void renwin_free(RenWindow *ren) {
 #ifdef ANVIL_USE_SDL_RENDERER
   SDL_DestroyTexture(ren->cache.texture);
   SDL_DestroyRenderer(ren->cache.renderer);
+  anvil_d3d11_forget_surface(ren->cache.rensurface.surface);
   SDL_DestroySurface(ren->cache.rensurface.surface);
 #endif
   SDL_DestroyWindow(ren->cache.window);

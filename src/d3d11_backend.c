@@ -53,6 +53,7 @@ struct D3D11CachedTexture {
   SDL_PixelFormat format;
   int mode;
   uint64_t last_update_frame;
+  uint64_t last_used_frame;
 };
 
 typedef struct D3D11Window D3D11Window;
@@ -407,6 +408,8 @@ static void d3d11_destroy_window(D3D11Window *w) {
   free(w);
 }
 
+static void d3d11_release_cached_texture(D3D11CachedTexture *t);
+
 void anvil_d3d11_forget_window(SDL_Window *window) {
   D3D11Window **link = &g_d3d11.windows;
   while (*link) {
@@ -417,6 +420,38 @@ void anvil_d3d11_forget_window(SDL_Window *window) {
       return;
     }
     link = &w->next;
+  }
+}
+
+void anvil_d3d11_forget_surface(SDL_Surface *surface) {
+  if (!surface) return;
+  D3D11CachedTexture **link = &g_d3d11.textures;
+  while (*link) {
+    D3D11CachedTexture *t = *link;
+    if (t->surface == surface) {
+      *link = t->next;
+      d3d11_release_cached_texture(t);
+      free(t);
+      continue;
+    }
+    link = &t->next;
+  }
+}
+
+static void d3d11_prune_texture_cache(uint64_t max_age_frames) {
+  D3D11CachedTexture **link = &g_d3d11.textures;
+  while (*link) {
+    D3D11CachedTexture *t = *link;
+    uint64_t age = g_d3d11.frame_index >= t->last_used_frame
+      ? g_d3d11.frame_index - t->last_used_frame
+      : 0;
+    if (age > max_age_frames) {
+      *link = t->next;
+      d3d11_release_cached_texture(t);
+      free(t);
+      continue;
+    }
+    link = &t->next;
   }
 }
 
@@ -584,6 +619,9 @@ bool anvil_d3d11_begin_frame(SDL_Window *window, int width, int height, RenColor
 
   g_d3d11.frame_index++;
   if (g_d3d11.frame_index == 0) g_d3d11.frame_index = 1;
+  if ((g_d3d11.frame_index % 120u) == 0) {
+    d3d11_prune_texture_cache(600u);
+  }
   g_d3d11.rect_vertex_count = 0;
   g_d3d11.rect_active_window = window;
   w->batch_vertex_count = 0;
@@ -717,6 +755,7 @@ static D3D11CachedTexture *d3d11_get_cached_texture(SDL_Surface *surface, int mo
     g_d3d11.textures = t;
   }
   if (!d3d11_update_cached_texture(t, surface, mode)) return NULL;
+  t->last_used_frame = g_d3d11.frame_index;
   return t;
 }
 
@@ -962,16 +1001,28 @@ bool anvil_d3d11_push_pixels(SDL_Window *window, const char *bytes, size_t len,
   return true;
 }
 
+void anvil_d3d11_abort_frame(SDL_Window *window) {
+  if (!window || window == g_d3d11.rect_active_window) {
+    g_d3d11.rect_active_window = NULL;
+    g_d3d11.rect_vertex_count = 0;
+  }
+}
+
 bool anvil_d3d11_end_frame(SDL_Window *window) {
   if (window != g_d3d11.rect_active_window) return false;
   D3D11Window *w = d3d11_find_window(window);
-  if (!w || !w->swapchain || !w->rtv) return false;
+  if (!w || !w->swapchain || !w->rtv) {
+    anvil_d3d11_abort_frame(window);
+    return false;
+  }
 
-  if (!d3d11_flush_rects()) return false;
+  if (!d3d11_flush_rects()) {
+    anvil_d3d11_abort_frame(window);
+    return false;
+  }
 
   HRESULT hr = w->swapchain->lpVtbl->Present(w->swapchain, 1, 0);
-  g_d3d11.rect_active_window = NULL;
-  g_d3d11.rect_vertex_count = 0;
+  anvil_d3d11_abort_frame(window);
   if (FAILED(hr)) {
     anvil_d3d11_forget_window(window);
     return false;

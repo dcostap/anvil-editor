@@ -1185,6 +1185,7 @@ static void font_clear_glyph_cache(RenFont* font) {
     for (int atlas_idx = 0; atlas_idx < font->glyphs.natlas[glyph_format_idx]; atlas_idx++) {
       GlyphAtlas *atlas = &font->glyphs.atlas[glyph_format_idx][atlas_idx];
       for (int surface_idx = 0; surface_idx < atlas->nsurface; surface_idx++) {
+        anvil_d3d11_forget_surface(atlas->surfaces[surface_idx]);
         SDL_DestroySurface(atlas->surfaces[surface_idx]);
       }
       SDL_free(atlas->surfaces);
@@ -1778,6 +1779,7 @@ typedef struct {
   float surface_scale_y;
   RenColor color;
   bool d3d11;
+  bool d3d11_failed;
   SDL_Window *d3d11_window;
   RenRect d3d11_clip;
 } DrawGlyphContext;
@@ -1791,7 +1793,9 @@ static void draw_glyph_bitmap(DrawGlyphContext *ctx, RenFont **fonts, RenFont *f
   if (!has_bitmap && draw_missing) {
     RenRect missing = { start_x + 1, y, font->space_advance - 1, ren_font_group_get_height(fonts) };
     if (ctx->d3d11) {
-      anvil_d3d11_push_rect(ctx->d3d11_window, missing, ctx->d3d11_clip, ctx->color);
+      if (!anvil_d3d11_push_rect(ctx->d3d11_window, missing, ctx->d3d11_clip, ctx->color)) {
+        ctx->d3d11_failed = true;
+      }
     } else {
       ren_draw_rect(ctx->rs, missing, ctx->color, false);
     }
@@ -1806,7 +1810,9 @@ static void draw_glyph_bitmap(DrawGlyphContext *ctx, RenFont **fonts, RenFont *f
     int target_y = (int)(y - y_offset - metric->bitmap_top + (fonts[0]->baseline * ctx->surface_scale_y));
     RenRect src = { 0, metric->y0, metric->x1, metric->y1 - metric->y0 };
     RenRect dst = { start_x, target_y, metric->x1, metric->y1 - metric->y0 };
-    anvil_d3d11_push_texture(ctx->d3d11_window, font_surface, src, dst, ctx->d3d11_clip, ctx->color, metric->format);
+    if (!anvil_d3d11_push_texture(ctx->d3d11_window, font_surface, src, dst, ctx->d3d11_clip, ctx->color, metric->format)) {
+      ctx->d3d11_failed = true;
+    }
     return;
   }
 
@@ -2074,7 +2080,7 @@ bool ren_draw_text_d3d11(SDL_Window *window, RenRect clip, RenFont **fonts, cons
   }
   if (hb_buffer)
     hb_buffer_destroy(hb_buffer);
-  return true;
+  return !draw_context.d3d11_failed;
 }
 
 int ren_poly_cbox(RenPoint *points, int npoints, RenRect *cbox) {
