@@ -719,12 +719,16 @@ static bool d3d11_recreate_cached_texture(D3D11CachedTexture *t, SDL_Surface *su
   hr = g_d3d11.device->lpVtbl->CreateShaderResourceView(g_d3d11.device,
                                                          (ID3D11Resource *)t->texture,
                                                          &sdesc, &t->srv);
-  return SUCCEEDED(hr) && t->srv != NULL;
+  if (FAILED(hr) || !t->srv) {
+    d3d11_release_cached_texture(t);
+    return false;
+  }
+  return true;
 }
 
 static bool d3d11_update_cached_texture(D3D11CachedTexture *t, SDL_Surface *surface, int mode) {
   if (!surface || !surface->pixels || surface->w <= 0 || surface->h <= 0) return false;
-  if (!t->texture || t->width != surface->w || t->height != surface->h ||
+  if (!t->texture || !t->srv || t->width != surface->w || t->height != surface->h ||
       t->format != surface->format || t->mode != mode) {
     if (!d3d11_recreate_cached_texture(t, surface, mode)) return false;
   }
