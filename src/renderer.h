@@ -50,6 +50,7 @@ void update_font_scale(RenWindow *window_renderer, RenFont **fonts);
 void ren_font_group_set_tab_size(RenFont **font, int n);
 double ren_font_group_get_width(RenFont **font, const char *text, size_t len, RenTab tab, int *x_offset);
 double ren_draw_text(RenSurface *rs, RenFont **font, const char *text, size_t len, float x, float y, RenColor color, RenTab tab);
+bool ren_draw_text_d3d11(SDL_Window *window, RenRect clip, RenFont **font, const char *text, size_t len, float x, float y, RenColor color, RenTab tab);
 
 void ren_draw_rect(RenSurface *rs, RenRect rect, RenColor color, bool replace);
 

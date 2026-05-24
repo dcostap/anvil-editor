@@ -1,0 +1,64 @@
+#ifndef ANVIL_D3D11_BACKEND_H
+#define ANVIL_D3D11_BACKEND_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <SDL3/SDL.h>
+#include "renderer.h"
+
+#if defined(_WIN32) && defined(ANVIL_USE_SDL_RENDERER)
+bool anvil_d3d11_enabled(void);
+bool anvil_d3d11_present(SDL_Window *window, SDL_Surface *surface,
+                          float scale_x, float scale_y,
+                          RenRect *rects, int rect_count);
+
+/* Experimental retained-mode D3D11 command renderer, modeled after RAD's
+ * low-level backend. This is intentionally separate from the SDL surface
+ * upload bridge so we can migrate command classes one by one. */
+bool anvil_d3d11_begin_frame(SDL_Window *window, int width, int height, RenColor clear_color);
+bool anvil_d3d11_push_rect(SDL_Window *window, RenRect rect, RenRect clip, RenColor color);
+bool anvil_d3d11_push_texture(SDL_Window *window, SDL_Surface *surface,
+                               RenRect src_px, RenRect dst_px, RenRect clip_px,
+                               RenColor color, int mode);
+bool anvil_d3d11_push_pixels(SDL_Window *window, const char *bytes, size_t len,
+                              int width, int height, RenRect dst_px, RenRect clip_px);
+bool anvil_d3d11_end_frame(SDL_Window *window);
+
+void anvil_d3d11_forget_window(SDL_Window *window);
+void anvil_d3d11_shutdown(void);
+#else
+static inline bool anvil_d3d11_enabled(void) { return false; }
+static inline bool anvil_d3d11_present(SDL_Window *window, SDL_Surface *surface,
+                                        float scale_x, float scale_y,
+                                        RenRect *rects, int rect_count) {
+  (void)window; (void)surface; (void)scale_x; (void)scale_y; (void)rects; (void)rect_count;
+  return false;
+}
+static inline bool anvil_d3d11_begin_frame(SDL_Window *window, int width, int height, RenColor clear_color) {
+  (void)window; (void)width; (void)height; (void)clear_color;
+  return false;
+}
+static inline bool anvil_d3d11_push_rect(SDL_Window *window, RenRect rect, RenRect clip, RenColor color) {
+  (void)window; (void)rect; (void)clip; (void)color;
+  return false;
+}
+static inline bool anvil_d3d11_push_texture(SDL_Window *window, SDL_Surface *surface,
+                                             RenRect src_px, RenRect dst_px, RenRect clip_px,
+                                             RenColor color, int mode) {
+  (void)window; (void)surface; (void)src_px; (void)dst_px; (void)clip_px; (void)color; (void)mode;
+  return false;
+}
+static inline bool anvil_d3d11_push_pixels(SDL_Window *window, const char *bytes, size_t len,
+                                           int width, int height, RenRect dst_px, RenRect clip_px) {
+  (void)window; (void)bytes; (void)len; (void)width; (void)height; (void)dst_px; (void)clip_px;
+  return false;
+}
+static inline bool anvil_d3d11_end_frame(SDL_Window *window) {
+  (void)window;
+  return false;
+}
+static inline void anvil_d3d11_forget_window(SDL_Window *window) { (void)window; }
+static inline void anvil_d3d11_shutdown(void) {}
+#endif
+
+#endif

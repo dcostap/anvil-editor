@@ -85,8 +85,23 @@ void system_push_event(const SDL_Event *event) {
   if (!system_event_is_handled(event->type))
     return;
 
+  /* Coalesce high-frequency events for the same window. During live window
+   * resize, SDL can deliver many resize / pixel-size events before Lua gets a
+   * chance to draw. Keeping every intermediate size makes the UI churn through
+   * stale layouts and looks janky; only the latest size matters. */
+  if (event->type == SDL_EVENT_WINDOW_RESIZED ||
+      event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
+      event->type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED) {
+    for (int i = system_event_queue_count - 1; i >= 0; i--) {
+      int idx = (system_event_queue_read + i) % SYSTEM_EVENT_QUEUE_SIZE;
+      if (system_event_queue[idx].type == event->type &&
+          system_event_queue[idx].window.windowID == event->window.windowID) {
+        system_event_queue[idx] = *event;
+        return;
+      }
+    }
   /* Coalesce consecutive mouse-motion events for the same window */
-  if (event->type == SDL_EVENT_MOUSE_MOTION) {
+  } else if (event->type == SDL_EVENT_MOUSE_MOTION) {
     for (int i = system_event_queue_count - 1; i >= 0; i--) {
       int idx = (system_event_queue_read + i) % SYSTEM_EVENT_QUEUE_SIZE;
       if (system_event_queue[idx].type == SDL_EVENT_MOUSE_MOTION &&

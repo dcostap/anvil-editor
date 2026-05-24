@@ -1412,6 +1412,7 @@ function core.on_event(type, ...)
   elseif type == "touchmoved" then
     core.root_view:on_touch_moved(...)
   elseif type == "resized" then
+    core.window_resizing_until = system.get_time() + 0.20
     local window_mode = system.get_window_mode(core.window)
     if window_mode ~= "fullscreen" and window_mode ~= "maximized" then
       core.window_size = table.pack(system.get_window_size(core.window))
@@ -1567,8 +1568,9 @@ function core.step(next_frame_time)
   local stats_config = config.draw_stats
   local uncapped = stats_config == "uncapped"
   local priority_event = event_received and event_received ~= "mousemoved"
+  local resizing = core.window_resizing_until and core.window_resizing_until > system.get_time()
   core.root_view.size.x, core.root_view.size.y = width, height
-  if uncapped or priority_event or next_frame_time < system.get_time() then
+  if uncapped or resizing or priority_event or next_frame_time < system.get_time() then
     core.root_view:update()
   end
 
@@ -1578,7 +1580,7 @@ function core.step(next_frame_time)
   ---interaction. Otherwise, rendering is prioritized on user events and
   ---config.fps not obeyed.
   if
-    not uncapped and ((not event_received and not core.redraw) or
+    not uncapped and not resizing and ((not event_received and not core.redraw) or
       -- time left before next frame so we can skip
       next_frame_time > system.get_time()
     )

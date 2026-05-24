@@ -6,7 +6,11 @@
 #include <dwmapi.h>
 #include <SDL3/SDL.h>
 #include "renwindow.h"
+#include "renderer.h"
+#include "system_events.h"
 #include "win32_frame.h"
+
+void anvil_request_resize_frame(void);
 
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
@@ -206,6 +210,25 @@ static void push_sdl_mouse_leave(Win32FrameData *frame) {
   SDL_PushEvent(&event);
 }
 
+static void push_sdl_resize_event(Win32FrameData *frame) {
+  if (!frame || !frame->ren || !frame->ren->cache.window) return;
+
+  SDL_Event event;
+  SDL_zero(event);
+  event.type = SDL_EVENT_WINDOW_RESIZED;
+  event.window.windowID = SDL_GetWindowID(frame->ren->cache.window);
+  SDL_GetWindowSize(frame->ren->cache.window, &event.window.data1, &event.window.data2);
+  system_push_event(&event);
+}
+
+static void live_resize_frame(Win32FrameData *frame) {
+  if (!frame || !frame->enabled || !frame->ren || !frame->ren->cache.window) return;
+  ren_resize_window(frame->ren);
+  rencache_invalidate(&frame->ren->cache);
+  push_sdl_resize_event(frame);
+  anvil_request_resize_frame();
+}
+
 static void toggle_maximize(HWND hwnd) {
   if (is_maximized(hwnd)) {
     ShowWindow(hwnd, SW_RESTORE);
@@ -235,6 +258,22 @@ static LRESULT CALLBACK frame_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
   if (!frame) return DefWindowProcW(hwnd, msg, wparam, lparam);
 
   switch (msg) {
+    case WM_SIZE:
+      if (frame->enabled) {
+        LRESULT result = CallWindowProcW(frame->old_proc, hwnd, msg, wparam, lparam);
+        if (wparam != SIZE_MINIMIZED) live_resize_frame(frame);
+        return result;
+      }
+      break;
+
+    case WM_PAINT:
+      if (frame->enabled) {
+        LRESULT result = CallWindowProcW(frame->old_proc, hwnd, msg, wparam, lparam);
+        live_resize_frame(frame);
+        return result;
+      }
+      break;
+
     case WM_NCCALCSIZE:
       if (frame->enabled) return handle_nccalcsize(hwnd, wparam, lparam);
       break;

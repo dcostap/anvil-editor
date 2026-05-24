@@ -17,9 +17,14 @@
   #include <stdalign.h>
 #endif
 
+#ifdef _WIN32
+  #include <dwmapi.h>
+#endif
+
 #include <lauxlib.h>
 #include "rencache.h"
 #include "renwindow.h"
+#include "d3d11_backend.h"
 
 /* a cache over the software renderer -- all drawing operations are stored as
 ** commands when issued. At the end of the frame we write the commands to a grid
@@ -81,6 +86,11 @@ typedef struct {
 } DrawPixelsCommand;
 
 static bool show_debug = false;
+
+static bool d3d11_command_renderer_enabled(void) {
+  const char *value = getenv("ANVIL_D3D11_COMMANDS");
+  return value && value[0] && value[0] != '0' && value[0] != 'n' && value[0] != 'N' && value[0] != 'f' && value[0] != 'F';
+}
 
 static inline int rencache_min(int a, int b) { return a < b ? a : b; }
 static inline int rencache_max(int a, int b) { return a > b ? a : b; }
@@ -341,7 +351,93 @@ static void push_rect(RenCache *ren_cache, RenRect r, int *count) {
 }
 
 
+static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
+  if (!d3d11_command_renderer_enabled() || !ren_cache || !ren_cache->window) return false;
+
+  RenSurface rs = rencache_get_surface(ren_cache);
+  int width = 0, height = 0;
+  ren_get_size(&rs, &width, &height);
+  if (width <= 0 || height <= 0) return false;
+
+  RenColor clear = { 0, 0, 0, 255 };
+  if (!anvil_d3d11_begin_frame(ren_cache->window, width, height, clear)) return false;
+
+  Command *cmd = NULL;
+  RenRect clip = ren_cache->screen_rect;
+  while (next_command(ren_cache, &cmd)) {
+    switch (cmd->type) {
+      case SET_CLIP: {
+        SetClipCommand *ccmd = (SetClipCommand*)&cmd->command;
+        clip = intersect_rects(ccmd->rect, ren_cache->screen_rect);
+      } break;
+      case DRAW_RECT: {
+        DrawRectCommand *rcmd = (DrawRectCommand*)&cmd->command;
+        anvil_d3d11_push_rect(ren_cache->window, rcmd->rect, clip, rcmd->color);
+      } break;
+      case DRAW_TEXT: {
+        DrawTextCommand *tcmd = (DrawTextCommand*)&cmd->command;
+        ren_font_group_set_tab_size(tcmd->fonts, tcmd->tab_size);
+        ren_draw_text_d3d11(ren_cache->window, clip, tcmd->fonts, tcmd->text, tcmd->len,
+                            tcmd->text_x, tcmd->rect.y, tcmd->color, tcmd->tab);
+      } break;
+      case DRAW_CANVAS: {
+        DrawCanvasCommand *cvcmd = (DrawCanvasCommand*)&cmd->command;
+        rencache_end_frame(cvcmd->canvas);
+        SDL_Surface *surface = cvcmd->canvas->rensurface.surface;
+        if (surface) {
+          RenRect src = { 0, 0, surface->w, surface->h };
+          RenRect dst = { cvcmd->rect.x, cvcmd->rect.y, surface->w, surface->h };
+          anvil_d3d11_push_texture(ren_cache->window, surface, src, dst, clip,
+                                   (RenColor){255, 255, 255, 255}, 2);
+        }
+      } break;
+      case DRAW_PIXELS: {
+        DrawPixelsCommand *pcmd = (DrawPixelsCommand*)&cmd->command;
+        anvil_d3d11_push_pixels(ren_cache->window, pcmd->bytes, pcmd->len,
+                                (int)pcmd->rect.width, (int)pcmd->rect.height,
+                                pcmd->rect, clip);
+      } break;
+      case DRAW_POLY: {
+        DrawBezierCommand *bcmd = (DrawBezierCommand*)&cmd->command;
+        int ox = (int)bcmd->rect.x - 2;
+        int oy = (int)bcmd->rect.y - 2;
+        int tw = (int)bcmd->rect.width + 4;
+        int th = (int)bcmd->rect.height + 4;
+        if (tw > 0 && th > 0 && bcmd->npoints > 0) {
+          SDL_Surface *surface = SDL_CreateSurface(tw, th, SDL_PIXELFORMAT_RGBA32);
+          if (surface) {
+            SDL_FillSurfaceRect(surface, NULL, SDL_MapSurfaceRGBA(surface, 0, 0, 0, 0));
+            RenPoint *points = SDL_malloc(sizeof(RenPoint) * bcmd->npoints);
+            if (points) {
+              for (int i = 0; i < bcmd->npoints; i++) {
+                points[i] = bcmd->points[i];
+                points[i].x -= ox;
+                points[i].y -= oy;
+              }
+              RenSurface trs = { .surface = surface, .scale_x = 1, .scale_y = 1 };
+              ren_set_clip_rect(&trs, (RenRect){0, 0, tw, th});
+              ren_draw_poly(&trs, points, bcmd->npoints, bcmd->color);
+              SDL_free(points);
+              RenRect dst = { ox, oy, tw, th };
+              anvil_d3d11_push_pixels(ren_cache->window, (const char *)surface->pixels,
+                                      (size_t)surface->pitch * (size_t)surface->h,
+                                      tw, th, dst, clip);
+            }
+            SDL_DestroySurface(surface);
+          }
+        }
+      } break;
+    }
+  }
+
+  if (!anvil_d3d11_end_frame(ren_cache->window)) return false;
+  ren_cache->command_buf_idx = 0;
+  return true;
+}
+
 void rencache_end_frame(RenCache *ren_cache) {
+  if (rencache_try_d3d11_command_frame(ren_cache)) return;
+
   /* update cells from commands */
   Command *cmd = NULL;
   RenRect cr = ren_cache->screen_rect;
@@ -431,6 +527,10 @@ void rencache_end_frame(RenCache *ren_cache) {
   /* update dirty rects */
   if (rect_count > 0 && ren_cache->window) {
     rencache_update_rects(ren_cache, ren_cache->rect_buf, rect_count);
+  } else if (rect_count > 0 && rs.surface) {
+    SDL_PropertiesID props = SDL_GetSurfaceProperties(rs.surface);
+    SDL_SetNumberProperty(props, "anvil_d3d11_generation",
+                          SDL_GetNumberProperty(props, "anvil_d3d11_generation", 0) + 1);
   }
 
   /* swap cell buffer and reset */
@@ -465,18 +565,26 @@ void rencache_update_rects(RenCache *rc, RenRect *rects, int count) {
   static bool initial_window = true;
   if (rc->window){
 #ifdef ANVIL_USE_SDL_RENDERER
-    const float scale_x = rc->rensurface.scale_x;
-    const float scale_y = rc->rensurface.scale_y;
-    for (int i = 0; i < count; i++) {
-      const RenRect *r = &rects[i];
-      const int x = scale_x * r->x, y = scale_y * r->y;
-      const int w = scale_x * r->width, h = scale_y * r->height;
-      const SDL_Rect sr = {.x = x, .y = y, .w = w, .h = h};
-      uint8_t *pixels = ((uint8_t *) rc->rensurface.surface->pixels) + y * rc->rensurface.surface->pitch + x * SDL_BYTESPERPIXEL(rc->rensurface.surface->format);
-      SDL_UpdateTexture(rc->texture, &sr, pixels, rc->rensurface.surface->pitch);
+    bool presented = anvil_d3d11_present(rc->window, rc->rensurface.surface,
+                                          rc->rensurface.scale_x, rc->rensurface.scale_y,
+                                          rects, count);
+    if (!presented) {
+      const float scale_x = rc->rensurface.scale_x;
+      const float scale_y = rc->rensurface.scale_y;
+      for (int i = 0; i < count; i++) {
+        const RenRect *r = &rects[i];
+        const int x = scale_x * r->x, y = scale_y * r->y;
+        const int w = scale_x * r->width, h = scale_y * r->height;
+        const SDL_Rect sr = {.x = x, .y = y, .w = w, .h = h};
+        uint8_t *pixels = ((uint8_t *) rc->rensurface.surface->pixels) + y * rc->rensurface.surface->pitch + x * SDL_BYTESPERPIXEL(rc->rensurface.surface->format);
+        SDL_UpdateTexture(rc->texture, &sr, pixels, rc->rensurface.surface->pitch);
+      }
+      SDL_RenderTexture(rc->renderer, rc->texture, NULL, NULL);
+      SDL_RenderPresent(rc->renderer);
+#ifdef _WIN32
+      DwmFlush();
+#endif
     }
-    SDL_RenderTexture(rc->renderer, rc->texture, NULL, NULL);
-    SDL_RenderPresent(rc->renderer);
 #else
     SDL_UpdateWindowSurfaceRects(rc->window, (SDL_Rect*) rects, count);
 #endif

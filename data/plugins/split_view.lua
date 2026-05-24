@@ -123,15 +123,18 @@ local function side_parent_width()
   return math.max(0, w)
 end
 
-function M.target_width()
+function M.target_width(view)
   if not M.visible then return 0 end
-  return math.floor(side_parent_width() / 2)
+  local parent_width = side_parent_width()
+  local preferred = tonumber(view and view.target_size) or tonumber(M.width) or 650 * SCALE
+  return math.floor(common.clamp(preferred, 0, parent_width * 0.8))
 end
 
 function M.update_side_view_size(view)
   if not view then return end
-  local dest = M.target_width()
-  if M.instant_size then
+  local dest = M.target_width(view)
+  local resizing = core.window_resizing_until and system.get_time() < core.window_resizing_until
+  if M.instant_size or resizing then
     view.size.x = dest
     M.instant_size = false
   elseif math.abs((view.size.x or 0) - dest) > 0.5 then

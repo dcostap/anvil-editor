@@ -117,7 +117,11 @@ typedef struct {
   char     **argv;
   int        has_restarted;
   int        core_run_step_ref;
+  bool       in_run_step;
+  Uint64     last_resize_step_ns;
 } AppState;
+
+static AppState *live_resize_app = NULL;
 
 /* Lua init-code: loads and starts the core.  core.run() is now non-blocking
  * (it only sets up the run-loop state); SDL_AppIterate drives the loop by
@@ -266,9 +270,12 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   app->L                 = NULL;
   app->argc              = argc;
   app->argv              = argv;
-  app->has_restarted     = 0;
-  app->core_run_step_ref = -1;
+  app->has_restarted      = 0;
+  app->core_run_step_ref  = -1;
+  app->in_run_step        = false;
+  app->last_resize_step_ns = 0;
   *appstate = app;
+  live_resize_app = app;
 
 #ifdef SDL_PLATFORM_APPLE
   enable_momentum_scroll();
@@ -284,15 +291,8 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
 }
 
 
-SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
-  (void)appstate;
-  system_push_event(event);
-  return SDL_APP_CONTINUE;
-}
-
-
-SDL_AppResult SDL_AppIterate(void *appstate) {
-  AppState *app = appstate;
+static SDL_AppResult app_run_step(AppState *app) {
+  if (!app || !app->L || app->in_run_step) return SDL_APP_CONTINUE;
 
   /* Call core.run_step() — one frame of the main loop.
    * Returns true  → keep running
@@ -302,8 +302,10 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     return SDL_APP_FAILURE;
   }
 
+  app->in_run_step = true;
   lua_rawgeti(app->L, LUA_REGISTRYINDEX, app->core_run_step_ref);
   if (lua_pcall(app->L, 0, 1, 0) != LUA_OK) {
+    app->in_run_step = false;
     const char *errmsg = lua_tostring(app->L, -1);
     lua_pop(app->L, 1);
     fprintf(stderr, "Error in core.run_step: %s\n", errmsg);
@@ -326,6 +328,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
   bool should_continue = lua_toboolean(app->L, -1);
   lua_pop(app->L, 1);
+  app->in_run_step = false;
 
   if (!should_continue) {
     /* Distinguish between quit and restart. */
@@ -355,10 +358,57 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 }
 
 
+void anvil_request_resize_frame(void) {
+  AppState *app = live_resize_app;
+  if (!app || !app->L) return;
+
+  const Uint64 now = SDL_GetTicksNS();
+  const Uint64 min_interval = SDL_NS_PER_SECOND / 120;
+  if (app->last_resize_step_ns == 0 || now - app->last_resize_step_ns >= min_interval) {
+    app->last_resize_step_ns = now;
+    (void)app_run_step(app);
+  }
+}
+
+static bool event_wants_immediate_resize_frame(const SDL_Event *event) {
+  switch (event->type) {
+    case SDL_EVENT_WINDOW_RESIZED:
+    case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+    case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
+    case SDL_EVENT_WINDOW_EXPOSED:
+      return true;
+    default:
+      return false;
+  }
+}
+
+SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
+  AppState *app = (AppState *)appstate;
+  system_push_event(event);
+
+  /* Windows live-resize runs inside a modal sizing loop. SDL may keep sending
+   * resize/paint events while normal SDL_AppIterate callbacks are sparse, so
+   * render a throttled frame directly from the event callback. The Lua side
+   * treats active resize as a frame-rate override, which keeps this from being
+   * skipped by the normal FPS cap. */
+  if (app && event_wants_immediate_resize_frame(event)) {
+    anvil_request_resize_frame();
+  }
+
+  return SDL_APP_CONTINUE;
+}
+
+
+SDL_AppResult SDL_AppIterate(void *appstate) {
+  return app_run_step((AppState *)appstate);
+}
+
+
 void SDL_AppQuit(void *appstate, SDL_AppResult result) {
   (void)result;
   AppState *app = appstate;
   if (app) {
+    if (live_resize_app == app) live_resize_app = NULL;
     if (app->L) lua_close(app->L);
     SDL_free(app);
   }

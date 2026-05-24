@@ -119,8 +119,12 @@ message('lua-compat-5.3 needed: @0@'.format(lua_compat_needed))
 anvil_rc = []
 if host_machine.system() == 'windows'
     windows = import('windows')
-    anvil_sources += 'win32_frame.c'
+    anvil_sources += ['win32_frame.c', 'd3d11_backend.c']
     anvil_deps += cc.find_library('dwmapi', required: true)
+    anvil_deps += cc.find_library('d3d11', required: true)
+    anvil_deps += cc.find_library('dxgi', required: true)
+    anvil_deps += cc.find_library('dxguid', required: true)
+    anvil_deps += cc.find_library('d3dcompiler', required: true)
     anvil_rc += windows.compile_resources('../resources/icons/icon.rc')
     anvil_rc += windows.compile_resources('../resources/windows/manifest.rc')
 

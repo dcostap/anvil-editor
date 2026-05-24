@@ -1,6 +1,7 @@
 #include <assert.h>
 #include "renwindow.h"
 #include "win32_frame.h"
+#include "d3d11_backend.h"
 
 #ifdef ANVIL_USE_SDL_RENDERER
 #include <math.h>
@@ -27,6 +28,9 @@ static void setup_renderer(RenWindow *ren, int w, int h) {
      a call to SDL_GetWindowSizeInPixels(). */
   if (!ren->cache.renderer) {
     ren->cache.renderer = SDL_CreateRenderer(ren->cache.window, NULL);
+    if (ren->cache.renderer) {
+      SDL_SetRenderVSync(ren->cache.renderer, 1);
+    }
   }
   if (ren->cache.texture) {
     SDL_DestroyTexture(ren->cache.texture);
@@ -135,6 +139,7 @@ void renwin_show_window(RenWindow *ren) {
 
 void renwin_free(RenWindow *ren) {
   win32_frame_destroy(ren);
+  anvil_d3d11_forget_window(ren->cache.window);
 #ifdef ANVIL_USE_SDL_RENDERER
   SDL_DestroyTexture(ren->cache.texture);
   SDL_DestroyRenderer(ren->cache.renderer);

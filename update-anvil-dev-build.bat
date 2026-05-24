@@ -16,8 +16,9 @@ if not exist "%BASH%" (
 
 cd /d "%REPO%" || exit /b 1
 
-echo Close Anvil before continuing. This updates the exe and installed data.
-pause
+echo Closing running Anvil processes before updating...
+call :KillAnvil
+if errorlevel 1 exit /b 1
 
 echo.
 echo === Temporarily removing source-data junctions ===
@@ -46,7 +47,20 @@ if errorlevel 1 exit /b 1
 echo.
 echo Updated dev portable Anvil:
 echo   %APP%
-pause
+
+echo.
+echo === Restarting Anvil ===
+start "" "%APP%"
+exit /b 0
+
+:KillAnvil
+rem Close all running Anvil processes so the portable exe/com are not locked.
+rem Try graceful termination first, then force anything left behind.
+taskkill /IM anvil.exe /T >nul 2>nul
+taskkill /IM anvil.com /T >nul 2>nul
+timeout /T 1 /NOBREAK >nul 2>nul
+taskkill /F /IM anvil.exe /T >nul 2>nul
+taskkill /F /IM anvil.com /T >nul 2>nul
 exit /b 0
 
 :RemoveLink

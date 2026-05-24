@@ -17,6 +17,7 @@
 #include <hb-ft.h>
 
 #include "renderer.h"
+#include "d3d11_backend.h"
 #include "renwindow.h"
 
 // uncomment the line below for more debugging information through printf
@@ -378,6 +379,8 @@ static SDL_Surface *font_allocate_glyph_surface(RenFont *font, FT_GlyphSlot slot
     metric->y0 = last_metric->y1; metric->y1 += last_metric->y1;
   }
   SDL_SetPointerProperty(userdata, "metric", (void *) metric);
+  SDL_SetNumberProperty(userdata, "anvil_d3d11_generation",
+                        SDL_GetNumberProperty(userdata, "anvil_d3d11_generation", 0) + 1);
   return atlas->surfaces[surface_idx];
 }
 
@@ -1774,6 +1777,9 @@ typedef struct {
   int clip_end_x, clip_end_y;
   float surface_scale_y;
   RenColor color;
+  bool d3d11;
+  SDL_Window *d3d11_window;
+  RenRect d3d11_clip;
 } DrawGlyphContext;
 
 static void draw_glyph_bitmap(DrawGlyphContext *ctx, RenFont **fonts, RenFont *font, SDL_Surface *font_surface, GlyphMetric *metric, double draw_x, double y, double y_offset, bool draw_missing) {
@@ -1783,13 +1789,26 @@ static void draw_glyph_bitmap(DrawGlyphContext *ctx, RenFont **fonts, RenFont *f
   bool has_bitmap = font_surface && metric->x1 > 0 && metric->y1 > metric->y0;
 
   if (!has_bitmap && draw_missing) {
-    ren_draw_rect(ctx->rs, (RenRect){ start_x + 1, y, font->space_advance - 1, ren_font_group_get_height(fonts) }, ctx->color, false);
+    RenRect missing = { start_x + 1, y, font->space_advance - 1, ren_font_group_get_height(fonts) };
+    if (ctx->d3d11) {
+      anvil_d3d11_push_rect(ctx->d3d11_window, missing, ctx->d3d11_clip, ctx->color);
+    } else {
+      ren_draw_rect(ctx->rs, missing, ctx->color, false);
+    }
     return;
   }
   if (!has_bitmap)
     return;
   if (ctx->color.a == 0 || end_x < ctx->clip.x || start_x >= ctx->clip_end_x)
     return;
+
+  if (ctx->d3d11) {
+    int target_y = (int)(y - y_offset - metric->bitmap_top + (fonts[0]->baseline * ctx->surface_scale_y));
+    RenRect src = { 0, metric->y0, metric->x1, metric->y1 - metric->y0 };
+    RenRect dst = { start_x, target_y, metric->x1, metric->y1 - metric->y0 };
+    anvil_d3d11_push_texture(ctx->d3d11_window, font_surface, src, dst, ctx->d3d11_clip, ctx->color, metric->format);
+    return;
+  }
 
   uint8_t* source_pixels = font_surface->pixels;
   const SDL_PixelFormatDetails* surface_format = SDL_GetPixelFormatDetails(ctx->surface->format);
@@ -2002,6 +2021,62 @@ double ren_draw_text(RenSurface *rs, RenFont **fonts, const char *text, size_t l
   return pen_x / surface_scale_x;
 }
 
+bool ren_draw_text_d3d11(SDL_Window *window, RenRect clip, RenFont **fonts, const char *text, size_t len, float x, float y, RenColor color, RenTab tab) {
+  if (!window || !fonts || !fonts[0]) return false;
+
+  const float surface_scale_x = 1.0f, surface_scale_y = 1.0f;
+  double pen_x = x * surface_scale_x;
+  double original_pen_x = pen_x;
+  y *= surface_scale_y;
+  const char* end = text + len;
+  hb_buffer_t *hb_buffer = NULL;
+  DrawGlyphContext draw_context = {
+    .rs = NULL,
+    .surface = NULL,
+    .clip = { (int)clip.x, (int)clip.y, (int)clip.width, (int)clip.height },
+    .destination_pixels = NULL,
+    .clip_end_x = (int)(clip.x + clip.width),
+    .clip_end_y = (int)(clip.y + clip.height),
+    .surface_scale_y = surface_scale_y,
+    .color = color,
+    .d3d11 = true,
+    .d3d11_window = window,
+    .d3d11_clip = clip,
+  };
+
+  while (text < end) {
+    unsigned int codepoint, glyph_id = 0;
+    const char *char_start = text;
+    text = utf8_to_codepoint(text, end, &codepoint);
+    RenFont *font = font_group_find_font(fonts, codepoint, &glyph_id);
+
+    if (!is_whitespace(codepoint) && font && font->ligatures && font->hb_font && glyph_id) {
+      const char *run_end = next_shaped_run(fonts, text, end, font);
+      if (text_needs_shaping(char_start, run_end)) {
+        if (!hb_buffer)
+          hb_buffer = hb_buffer_create();
+        if (hb_buffer)
+          pen_x = draw_shaped_run(hb_buffer, &draw_context, fonts, font, char_start, run_end - char_start, pen_x, y);
+      } else {
+        pen_x = draw_unshaped_run(&draw_context, fonts, char_start, run_end, pen_x, original_pen_x, y, tab);
+      }
+      text = run_end;
+    } else {
+      SDL_Surface *font_surface = NULL; GlyphMetric *metric = NULL;
+      font = font_group_get_glyph(fonts, codepoint, (int)(fmod(pen_x, 1.0) * SUBPIXEL_BITMAPS_CACHED), &font_surface, &metric);
+      if (!metric)
+        break;
+      bool white_space = is_whitespace(codepoint);
+      if (!white_space)
+        draw_glyph_bitmap(&draw_context, fonts, font, font_surface, metric, pen_x, y, 0, true);
+      pen_x += font_get_xadvance(fonts[0], codepoint, metric, pen_x - original_pen_x, tab);
+    }
+  }
+  if (hb_buffer)
+    hb_buffer_destroy(hb_buffer);
+  return true;
+}
+
 int ren_poly_cbox(RenPoint *points, int npoints, RenRect *cbox) {
   if (npoints > MAX_POLY_POINTS) return -1;
   if (npoints == 0) { memset(cbox, 0, sizeof(RenRect)); return 0; }
@@ -2178,6 +2253,7 @@ int ren_init(void) {
 }
 
 void ren_free(void) {
+  anvil_d3d11_shutdown();
   SDL_DestroySurface(draw_rect_surface);
   FT_Done_FreeType(library);
 }
