@@ -145,11 +145,40 @@ typedef struct D3D11State {
 
 static D3D11State g_d3d11;
 
+static char d3d11_ascii_lower(char c) {
+  return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+}
+
+static bool d3d11_ascii_equals_ci(const char *a, const char *b) {
+  if (!a || !b) return false;
+  while (*a == ' ' || *a == '\t') a++;
+  while (*b) {
+    if (d3d11_ascii_lower(*a++) != d3d11_ascii_lower(*b++)) return false;
+  }
+  while (*a == ' ' || *a == '\t') a++;
+  return *a == 0;
+}
+
+static bool d3d11_env_value_is_false(const char *value) {
+  if (!value || !value[0]) return true;
+  while (*value == ' ' || *value == '\t') value++;
+  if (!value[0]) return true;
+  return value[0] == '0' ||
+         d3d11_ascii_equals_ci(value, "false") ||
+         d3d11_ascii_equals_ci(value, "no") ||
+         d3d11_ascii_equals_ci(value, "off");
+}
+
+static bool d3d11_renderer_value_is_software(const char *value) {
+  if (d3d11_env_value_is_false(value)) return true;
+  return d3d11_ascii_equals_ci(value, "software") ||
+         d3d11_ascii_equals_ci(value, "soft") ||
+         d3d11_ascii_equals_ci(value, "sdl") ||
+         d3d11_ascii_equals_ci(value, "cpu");
+}
+
 static bool d3d11_env_truthy(const char *name) {
-  const char *value = getenv(name);
-  if (!value || !value[0]) return false;
-  if (value[0] == '0' || value[0] == 'n' || value[0] == 'N' || value[0] == 'f' || value[0] == 'F') return false;
-  return true;
+  return !d3d11_env_value_is_false(getenv(name));
 }
 
 static double d3d11_ms_between(LARGE_INTEGER a, LARGE_INTEGER b) {
@@ -294,10 +323,22 @@ static const char *texture_shader_source =
   "}\n";
 
 bool anvil_d3d11_enabled(void) {
-  const char *value = getenv("ANVIL_D3D11");
-  if (value && (value[0] == '0' || value[0] == 'n' || value[0] == 'N' || value[0] == 'f' || value[0] == 'F')) {
-    return false;
+  /* One runtime renderer switch:
+     - unset / "d3d11" / "auto" / "1" => D3D11 command renderer
+     - "software" / "sdl" / "0" / "off" => SDL/software fallback
+
+     ANVIL_D3D11 is kept only as a legacy alias so old test scripts can still
+     disable D3D; ANVIL_D3D11_COMMANDS is intentionally ignored now. */
+  const char *renderer = getenv("ANVIL_RENDERER");
+  if (renderer && renderer[0]) {
+    return !d3d11_renderer_value_is_software(renderer);
   }
+
+  const char *legacy = getenv("ANVIL_D3D11");
+  if (legacy && legacy[0]) {
+    return !d3d11_env_value_is_false(legacy);
+  }
+
   return true;
 }
 

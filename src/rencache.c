@@ -87,14 +87,6 @@ typedef struct {
 
 static bool show_debug = false;
 
-static bool d3d11_command_renderer_enabled(void) {
-  const char *value = getenv("ANVIL_D3D11_COMMANDS");
-  if (value && (value[0] == '0' || value[0] == 'n' || value[0] == 'N' || value[0] == 'f' || value[0] == 'F')) {
-    return false;
-  }
-  return anvil_d3d11_enabled();
-}
-
 static inline int rencache_min(int a, int b) { return a < b ? a : b; }
 static inline int rencache_max(int a, int b) { return a > b ? a : b; }
 
@@ -355,7 +347,7 @@ static void push_rect(RenCache *ren_cache, RenRect r, int *count) {
 
 
 static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
-  if (!d3d11_command_renderer_enabled() || !ren_cache || !ren_cache->window) return false;
+  if (!anvil_d3d11_enabled() || !ren_cache || !ren_cache->window) return false;
 
   RenSurface rs = rencache_get_surface(ren_cache);
   int width = 0, height = 0;

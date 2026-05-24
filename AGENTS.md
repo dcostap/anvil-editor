@@ -42,6 +42,18 @@ Daily launcher target:
 C:\Projects\c_projects\anvil-portable\anvil.exe
 ```
 
+## Renderer selection
+
+The dev portable build defaults to the D3D11 command renderer on Windows. Do not use the old two-flag test setup (`ANVIL_D3D11` plus `ANVIL_D3D11_COMMANDS`) for normal launches.
+
+Use one runtime switch only when needed:
+
+```text
+ANVIL_RENDERER=software
+```
+
+Unset `ANVIL_RENDERER`, or set it to `d3d11`, to use the default D3D11 path. D3D stats are still opt-in with `ANVIL_D3D11_STATS=1` and `ANVIL_D3D11_STATS_FILE=...`.
+
 ## Bundled Anvil defaults/plugins
 
 The old personal `~\.config\anvil` workflow has been promoted into the fork:

@@ -7,6 +7,9 @@
 #include "renderer.h"
 
 #if defined(_WIN32) && defined(ANVIL_USE_SDL_RENDERER)
+/* Runtime renderer selection is controlled by ANVIL_RENDERER.
+   Default/unset: D3D11 command renderer. Set ANVIL_RENDERER=software
+   or ANVIL_RENDERER=sdl to force the SDL/software fallback. */
 bool anvil_d3d11_enabled(void);
 bool anvil_d3d11_present(SDL_Window *window, SDL_Surface *surface,
                           float scale_x, float scale_y,
