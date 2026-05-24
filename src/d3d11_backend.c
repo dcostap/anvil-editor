@@ -66,7 +66,6 @@ struct D3D11Window {
   ID3D11RenderTargetView *rtv;
   int width;
   int height;
-  int batch_vertex_count;
 };
 
 typedef struct D3D11State {
@@ -103,6 +102,18 @@ typedef struct D3D11State {
 } D3D11State;
 
 static D3D11State g_d3d11;
+
+static bool d3d11_device_lost(HRESULT hr) {
+  return hr == DXGI_ERROR_DEVICE_REMOVED ||
+         hr == DXGI_ERROR_DEVICE_RESET ||
+         hr == DXGI_ERROR_DEVICE_HUNG ||
+         hr == DXGI_ERROR_DRIVER_INTERNAL_ERROR;
+}
+
+static void d3d11_reset_device(void) {
+  anvil_d3d11_shutdown();
+  g_d3d11.attempted_init = false;
+}
 
 static const char *rect_shader_source =
   "cbuffer RectConstants : register(b0) { float2 viewport; float2 _pad; };\n"
@@ -462,11 +473,18 @@ static void d3d11_prune_texture_cache(uint64_t max_age_frames) {
 static bool d3d11_get_backbuffer(D3D11Window *w) {
   d3d11_release_window_buffers(w);
   HRESULT hr = w->swapchain->lpVtbl->GetBuffer(w->swapchain, 0, &IID_ID3D11Texture2D, (void **)&w->backbuffer);
-  if (FAILED(hr) || !w->backbuffer) return false;
+  if (FAILED(hr) || !w->backbuffer) {
+    if (d3d11_device_lost(hr)) d3d11_reset_device();
+    return false;
+  }
   hr = g_d3d11.device->lpVtbl->CreateRenderTargetView(g_d3d11.device,
                                                        (ID3D11Resource *)w->backbuffer,
                                                        NULL, &w->rtv);
-  return SUCCEEDED(hr) && w->rtv != NULL;
+  if (FAILED(hr) || !w->rtv) {
+    if (d3d11_device_lost(hr)) d3d11_reset_device();
+    return false;
+  }
+  return true;
 }
 
 static D3D11Window *d3d11_get_or_create_window(SDL_Window *window, int width, int height) {
@@ -527,7 +545,10 @@ static bool d3d11_resize_window(D3D11Window *w, int width, int height) {
 
   d3d11_release_window_buffers(w);
   HRESULT hr = w->swapchain->lpVtbl->ResizeBuffers(w->swapchain, 0, (UINT)width, (UINT)height, DXGI_FORMAT_UNKNOWN, 0);
-  if (FAILED(hr)) return false;
+  if (FAILED(hr)) {
+    if (d3d11_device_lost(hr)) d3d11_reset_device();
+    return false;
+  }
 
   w->width = width;
   w->height = height;
@@ -628,7 +649,6 @@ bool anvil_d3d11_begin_frame(SDL_Window *window, int width, int height, RenColor
   }
   g_d3d11.rect_vertex_count = 0;
   g_d3d11.rect_active_window = window;
-  w->batch_vertex_count = 0;
   return true;
 }
 
@@ -1038,7 +1058,11 @@ bool anvil_d3d11_end_frame(SDL_Window *window) {
   HRESULT hr = w->swapchain->lpVtbl->Present(w->swapchain, 1, 0);
   anvil_d3d11_abort_frame(window);
   if (FAILED(hr)) {
-    anvil_d3d11_forget_window(window);
+    if (d3d11_device_lost(hr)) {
+      d3d11_reset_device();
+    } else {
+      anvil_d3d11_forget_window(window);
+    }
     return false;
   }
   DwmFlush();
@@ -1094,7 +1118,11 @@ bool anvil_d3d11_present(SDL_Window *window, SDL_Surface *surface,
 
   HRESULT hr = w->swapchain->lpVtbl->Present(w->swapchain, 1, 0);
   if (FAILED(hr)) {
-    anvil_d3d11_forget_window(window);
+    if (d3d11_device_lost(hr)) {
+      d3d11_reset_device();
+    } else {
+      anvil_d3d11_forget_window(window);
+    }
     return false;
   }
   DwmFlush();
