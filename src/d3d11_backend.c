@@ -878,6 +878,47 @@ static bool d3d11_flush_rects(void) {
   return true;
 }
 
+static bool d3d11_draw_texture_quad(SDL_Window *window, ID3D11ShaderResourceView *srv,
+                                     const D3D11TextureVertex verts[6], float mode) {
+  if (!srv) return false;
+
+  D3D11_MAPPED_SUBRESOURCE mapped;
+  HRESULT hr = g_d3d11.context->lpVtbl->Map(g_d3d11.context,
+                                            (ID3D11Resource *)g_d3d11.tex_vbuf,
+                                            0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+  if (FAILED(hr)) return false;
+  memcpy(mapped.pData, verts, sizeof(D3D11TextureVertex) * 6u);
+  g_d3d11.context->lpVtbl->Unmap(g_d3d11.context, (ID3D11Resource *)g_d3d11.tex_vbuf, 0);
+
+  D3D11Window *w = d3d11_find_window(window);
+  if (!w || !w->rtv) return false;
+  g_d3d11.context->lpVtbl->OMSetRenderTargets(g_d3d11.context, 1, &w->rtv, NULL);
+
+  D3D11TextureConstants constants = { (float)w->width, (float)w->height, mode, 0.0f };
+  g_d3d11.context->lpVtbl->UpdateSubresource(g_d3d11.context,
+                                             (ID3D11Resource *)g_d3d11.tex_cbuf,
+                                             0, NULL, &constants, 0, 0);
+
+  UINT stride = sizeof(D3D11TextureVertex);
+  UINT offset = 0;
+  FLOAT blend_factor[4] = {0, 0, 0, 0};
+  g_d3d11.context->lpVtbl->IASetInputLayout(g_d3d11.context, g_d3d11.tex_layout);
+  g_d3d11.context->lpVtbl->IASetPrimitiveTopology(g_d3d11.context, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+  g_d3d11.context->lpVtbl->IASetVertexBuffers(g_d3d11.context, 0, 1, &g_d3d11.tex_vbuf, &stride, &offset);
+  g_d3d11.context->lpVtbl->VSSetShader(g_d3d11.context, g_d3d11.tex_vs, NULL, 0);
+  g_d3d11.context->lpVtbl->VSSetConstantBuffers(g_d3d11.context, 0, 1, &g_d3d11.tex_cbuf);
+  g_d3d11.context->lpVtbl->PSSetShader(g_d3d11.context, g_d3d11.tex_ps, NULL, 0);
+  g_d3d11.context->lpVtbl->PSSetShaderResources(g_d3d11.context, 0, 1, &srv);
+  g_d3d11.context->lpVtbl->PSSetSamplers(g_d3d11.context, 0, 1, &g_d3d11.tex_sampler);
+  g_d3d11.context->lpVtbl->RSSetState(g_d3d11.context, g_d3d11.rect_raster);
+  g_d3d11.context->lpVtbl->OMSetBlendState(g_d3d11.context, g_d3d11.rect_blend, blend_factor, 0xffffffffu);
+  g_d3d11.context->lpVtbl->Draw(g_d3d11.context, 6, 0);
+
+  ID3D11ShaderResourceView *null_srv = NULL;
+  g_d3d11.context->lpVtbl->PSSetShaderResources(g_d3d11.context, 0, 1, &null_srv);
+  return true;
+}
+
 bool anvil_d3d11_push_texture(SDL_Window *window, SDL_Surface *surface,
                                RenRect src_px, RenRect dst_px, RenRect clip_px,
                                RenColor color, int mode) {
@@ -921,41 +962,7 @@ bool anvil_d3d11_push_texture(SDL_Window *window, SDL_Surface *surface,
     { cx0, cy0, u0, v0, cr, cg, cb, ca }, { cx1, cy1, u1, v1, cr, cg, cb, ca }, { cx0, cy1, u0, v1, cr, cg, cb, ca },
   };
 
-  D3D11_MAPPED_SUBRESOURCE mapped;
-  HRESULT hr = g_d3d11.context->lpVtbl->Map(g_d3d11.context,
-                                            (ID3D11Resource *)g_d3d11.tex_vbuf,
-                                            0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
-  if (FAILED(hr)) return false;
-  memcpy(mapped.pData, verts, sizeof(verts));
-  g_d3d11.context->lpVtbl->Unmap(g_d3d11.context, (ID3D11Resource *)g_d3d11.tex_vbuf, 0);
-
-  D3D11Window *w = d3d11_find_window(window);
-  if (!w || !w->rtv) return false;
-  g_d3d11.context->lpVtbl->OMSetRenderTargets(g_d3d11.context, 1, &w->rtv, NULL);
-
-  D3D11TextureConstants constants = { (float)w->width, (float)w->height, (float)mode, 0.0f };
-  g_d3d11.context->lpVtbl->UpdateSubresource(g_d3d11.context,
-                                             (ID3D11Resource *)g_d3d11.tex_cbuf,
-                                             0, NULL, &constants, 0, 0);
-
-  UINT stride = sizeof(D3D11TextureVertex);
-  UINT offset = 0;
-  FLOAT blend_factor[4] = {0, 0, 0, 0};
-  g_d3d11.context->lpVtbl->IASetInputLayout(g_d3d11.context, g_d3d11.tex_layout);
-  g_d3d11.context->lpVtbl->IASetPrimitiveTopology(g_d3d11.context, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-  g_d3d11.context->lpVtbl->IASetVertexBuffers(g_d3d11.context, 0, 1, &g_d3d11.tex_vbuf, &stride, &offset);
-  g_d3d11.context->lpVtbl->VSSetShader(g_d3d11.context, g_d3d11.tex_vs, NULL, 0);
-  g_d3d11.context->lpVtbl->VSSetConstantBuffers(g_d3d11.context, 0, 1, &g_d3d11.tex_cbuf);
-  g_d3d11.context->lpVtbl->PSSetShader(g_d3d11.context, g_d3d11.tex_ps, NULL, 0);
-  g_d3d11.context->lpVtbl->PSSetShaderResources(g_d3d11.context, 0, 1, &tex->srv);
-  g_d3d11.context->lpVtbl->PSSetSamplers(g_d3d11.context, 0, 1, &g_d3d11.tex_sampler);
-  g_d3d11.context->lpVtbl->RSSetState(g_d3d11.context, g_d3d11.rect_raster);
-  g_d3d11.context->lpVtbl->OMSetBlendState(g_d3d11.context, g_d3d11.rect_blend, blend_factor, 0xffffffffu);
-  g_d3d11.context->lpVtbl->Draw(g_d3d11.context, 6, 0);
-
-  ID3D11ShaderResourceView *null_srv = NULL;
-  g_d3d11.context->lpVtbl->PSSetShaderResources(g_d3d11.context, 0, 1, &null_srv);
-  return true;
+  return d3d11_draw_texture_quad(window, tex->srv, verts, (float)mode);
 }
 
 bool anvil_d3d11_push_pixels(SDL_Window *window, const char *bytes, size_t len,
@@ -1003,40 +1010,7 @@ bool anvil_d3d11_push_pixels(SDL_Window *window, const char *bytes, size_t len,
     { cx0, cy0, u0, v0, cr, cg, cb, ca }, { cx1, cy1, u1, v1, cr, cg, cb, ca }, { cx0, cy1, u0, v1, cr, cg, cb, ca },
   };
 
-  D3D11_MAPPED_SUBRESOURCE mapped;
-  HRESULT hr = g_d3d11.context->lpVtbl->Map(g_d3d11.context,
-                                            (ID3D11Resource *)g_d3d11.tex_vbuf,
-                                            0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
-  if (FAILED(hr)) return false;
-  memcpy(mapped.pData, verts, sizeof(verts));
-  g_d3d11.context->lpVtbl->Unmap(g_d3d11.context, (ID3D11Resource *)g_d3d11.tex_vbuf, 0);
-
-  D3D11Window *w = d3d11_find_window(window);
-  if (!w || !w->rtv) return false;
-  g_d3d11.context->lpVtbl->OMSetRenderTargets(g_d3d11.context, 1, &w->rtv, NULL);
-  D3D11TextureConstants constants = { (float)w->width, (float)w->height, 2.0f, 0.0f };
-  g_d3d11.context->lpVtbl->UpdateSubresource(g_d3d11.context,
-                                             (ID3D11Resource *)g_d3d11.tex_cbuf,
-                                             0, NULL, &constants, 0, 0);
-
-  UINT stride = sizeof(D3D11TextureVertex);
-  UINT offset = 0;
-  FLOAT blend_factor[4] = {0, 0, 0, 0};
-  g_d3d11.context->lpVtbl->IASetInputLayout(g_d3d11.context, g_d3d11.tex_layout);
-  g_d3d11.context->lpVtbl->IASetPrimitiveTopology(g_d3d11.context, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-  g_d3d11.context->lpVtbl->IASetVertexBuffers(g_d3d11.context, 0, 1, &g_d3d11.tex_vbuf, &stride, &offset);
-  g_d3d11.context->lpVtbl->VSSetShader(g_d3d11.context, g_d3d11.tex_vs, NULL, 0);
-  g_d3d11.context->lpVtbl->VSSetConstantBuffers(g_d3d11.context, 0, 1, &g_d3d11.tex_cbuf);
-  g_d3d11.context->lpVtbl->PSSetShader(g_d3d11.context, g_d3d11.tex_ps, NULL, 0);
-  g_d3d11.context->lpVtbl->PSSetShaderResources(g_d3d11.context, 0, 1, &g_d3d11.upload_srv);
-  g_d3d11.context->lpVtbl->PSSetSamplers(g_d3d11.context, 0, 1, &g_d3d11.tex_sampler);
-  g_d3d11.context->lpVtbl->RSSetState(g_d3d11.context, g_d3d11.rect_raster);
-  g_d3d11.context->lpVtbl->OMSetBlendState(g_d3d11.context, g_d3d11.rect_blend, blend_factor, 0xffffffffu);
-  g_d3d11.context->lpVtbl->Draw(g_d3d11.context, 6, 0);
-
-  ID3D11ShaderResourceView *null_srv = NULL;
-  g_d3d11.context->lpVtbl->PSSetShaderResources(g_d3d11.context, 0, 1, &null_srv);
-  return true;
+  return d3d11_draw_texture_quad(window, g_d3d11.upload_srv, verts, 2.0f);
 }
 
 void anvil_d3d11_abort_frame(SDL_Window *window) {
