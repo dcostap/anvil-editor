@@ -93,6 +93,10 @@ typedef struct D3D11State {
   ID3D11Buffer *tex_vbuf;
   ID3D11Buffer *tex_cbuf;
   ID3D11SamplerState *tex_sampler;
+  ID3D11Texture2D *upload_texture;
+  ID3D11ShaderResourceView *upload_srv;
+  int upload_width;
+  int upload_height;
   D3D11CachedTexture *textures;
   uint64_t frame_index;
   D3D11Window *windows;
@@ -759,6 +763,53 @@ static D3D11CachedTexture *d3d11_get_cached_texture(SDL_Surface *surface, int mo
   return t;
 }
 
+static void d3d11_release_upload_texture(void) {
+  SAFE_RELEASE(g_d3d11.upload_srv);
+  SAFE_RELEASE(g_d3d11.upload_texture);
+  g_d3d11.upload_width = 0;
+  g_d3d11.upload_height = 0;
+}
+
+static bool d3d11_ensure_upload_texture(int width, int height) {
+  if (g_d3d11.upload_texture && g_d3d11.upload_srv &&
+      g_d3d11.upload_width == width && g_d3d11.upload_height == height) {
+    return true;
+  }
+
+  d3d11_release_upload_texture();
+
+  D3D11_TEXTURE2D_DESC desc;
+  memset(&desc, 0, sizeof(desc));
+  desc.Width = (UINT)width;
+  desc.Height = (UINT)height;
+  desc.MipLevels = 1;
+  desc.ArraySize = 1;
+  desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+  desc.SampleDesc.Count = 1;
+  desc.Usage = D3D11_USAGE_DEFAULT;
+  desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+  HRESULT hr = g_d3d11.device->lpVtbl->CreateTexture2D(g_d3d11.device, &desc, NULL, &g_d3d11.upload_texture);
+  if (FAILED(hr) || !g_d3d11.upload_texture) return false;
+
+  D3D11_SHADER_RESOURCE_VIEW_DESC sdesc;
+  memset(&sdesc, 0, sizeof(sdesc));
+  sdesc.Format = desc.Format;
+  sdesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+  sdesc.Texture2D.MipLevels = 1;
+  hr = g_d3d11.device->lpVtbl->CreateShaderResourceView(g_d3d11.device,
+                                                         (ID3D11Resource *)g_d3d11.upload_texture,
+                                                         &sdesc, &g_d3d11.upload_srv);
+  if (FAILED(hr) || !g_d3d11.upload_srv) {
+    d3d11_release_upload_texture();
+    return false;
+  }
+
+  g_d3d11.upload_width = width;
+  g_d3d11.upload_height = height;
+  return true;
+}
+
 static bool d3d11_flush_rects(void) {
   if (g_d3d11.rect_vertex_count <= 0) return true;
   D3D11Window *w = d3d11_find_window(g_d3d11.rect_active_window);
@@ -884,10 +935,13 @@ bool anvil_d3d11_push_texture(SDL_Window *window, SDL_Surface *surface,
 }
 
 bool anvil_d3d11_push_pixels(SDL_Window *window, const char *bytes, size_t len,
-                              int width, int height, RenRect dst_px, RenRect clip_px) {
+                              int width, int height, int pitch,
+                              RenRect dst_px, RenRect clip_px) {
   if (window != g_d3d11.rect_active_window || !bytes || width <= 0 || height <= 0) return false;
-  if (len < (size_t)width * (size_t)height * 4u) return false;
+  if (pitch < width * 4) return false;
+  if (len < (size_t)pitch * (size_t)height) return false;
   if (!d3d11_ensure_texture_pipeline()) return false;
+  if (!d3d11_ensure_upload_texture(width, height)) return false;
   if (!d3d11_flush_rects()) return false;
 
   RenRect src_px = { 0, 0, width, height };
@@ -915,39 +969,9 @@ bool anvil_d3d11_push_pixels(SDL_Window *window, const char *bytes, size_t len,
   float u1 = (sx0 + (cx1 - dx0) * (sx1 - sx0) / (dx1 - dx0)) / (float)width;
   float v1 = (sy0 + (cy1 - dy0) * (sy1 - sy0) / (dy1 - dy0)) / (float)height;
 
-  D3D11_TEXTURE2D_DESC desc;
-  memset(&desc, 0, sizeof(desc));
-  desc.Width = (UINT)width;
-  desc.Height = (UINT)height;
-  desc.MipLevels = 1;
-  desc.ArraySize = 1;
-  desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-  desc.SampleDesc.Count = 1;
-  desc.Usage = D3D11_USAGE_DEFAULT;
-  desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-
-  D3D11_SUBRESOURCE_DATA data;
-  memset(&data, 0, sizeof(data));
-  data.pSysMem = bytes;
-  data.SysMemPitch = (UINT)(width * 4);
-
-  ID3D11Texture2D *texture = NULL;
-  ID3D11ShaderResourceView *srv = NULL;
-  HRESULT hr = g_d3d11.device->lpVtbl->CreateTexture2D(g_d3d11.device, &desc, &data, &texture);
-  if (FAILED(hr)) return false;
-
-  D3D11_SHADER_RESOURCE_VIEW_DESC sdesc;
-  memset(&sdesc, 0, sizeof(sdesc));
-  sdesc.Format = desc.Format;
-  sdesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-  sdesc.Texture2D.MipLevels = 1;
-  hr = g_d3d11.device->lpVtbl->CreateShaderResourceView(g_d3d11.device,
-                                                         (ID3D11Resource *)texture,
-                                                         &sdesc, &srv);
-  if (FAILED(hr) || !srv) {
-    SAFE_RELEASE(texture);
-    return false;
-  }
+  g_d3d11.context->lpVtbl->UpdateSubresource(g_d3d11.context,
+                                             (ID3D11Resource *)g_d3d11.upload_texture,
+                                             0, NULL, bytes, (UINT)pitch, 0);
 
   float cr = 1.0f, cg = 1.0f, cb = 1.0f, ca = 1.0f;
   D3D11TextureVertex verts[6] = {
@@ -956,23 +980,15 @@ bool anvil_d3d11_push_pixels(SDL_Window *window, const char *bytes, size_t len,
   };
 
   D3D11_MAPPED_SUBRESOURCE mapped;
-  hr = g_d3d11.context->lpVtbl->Map(g_d3d11.context,
-                                    (ID3D11Resource *)g_d3d11.tex_vbuf,
-                                    0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
-  if (FAILED(hr)) {
-    SAFE_RELEASE(srv);
-    SAFE_RELEASE(texture);
-    return false;
-  }
+  HRESULT hr = g_d3d11.context->lpVtbl->Map(g_d3d11.context,
+                                            (ID3D11Resource *)g_d3d11.tex_vbuf,
+                                            0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+  if (FAILED(hr)) return false;
   memcpy(mapped.pData, verts, sizeof(verts));
   g_d3d11.context->lpVtbl->Unmap(g_d3d11.context, (ID3D11Resource *)g_d3d11.tex_vbuf, 0);
 
   D3D11Window *w = d3d11_find_window(window);
-  if (!w || !w->rtv) {
-    SAFE_RELEASE(srv);
-    SAFE_RELEASE(texture);
-    return false;
-  }
+  if (!w || !w->rtv) return false;
   g_d3d11.context->lpVtbl->OMSetRenderTargets(g_d3d11.context, 1, &w->rtv, NULL);
   D3D11TextureConstants constants = { (float)w->width, (float)w->height, 2.0f, 0.0f };
   g_d3d11.context->lpVtbl->UpdateSubresource(g_d3d11.context,
@@ -988,7 +1004,7 @@ bool anvil_d3d11_push_pixels(SDL_Window *window, const char *bytes, size_t len,
   g_d3d11.context->lpVtbl->VSSetShader(g_d3d11.context, g_d3d11.tex_vs, NULL, 0);
   g_d3d11.context->lpVtbl->VSSetConstantBuffers(g_d3d11.context, 0, 1, &g_d3d11.tex_cbuf);
   g_d3d11.context->lpVtbl->PSSetShader(g_d3d11.context, g_d3d11.tex_ps, NULL, 0);
-  g_d3d11.context->lpVtbl->PSSetShaderResources(g_d3d11.context, 0, 1, &srv);
+  g_d3d11.context->lpVtbl->PSSetShaderResources(g_d3d11.context, 0, 1, &g_d3d11.upload_srv);
   g_d3d11.context->lpVtbl->PSSetSamplers(g_d3d11.context, 0, 1, &g_d3d11.tex_sampler);
   g_d3d11.context->lpVtbl->RSSetState(g_d3d11.context, g_d3d11.rect_raster);
   g_d3d11.context->lpVtbl->OMSetBlendState(g_d3d11.context, g_d3d11.rect_blend, blend_factor, 0xffffffffu);
@@ -996,8 +1012,6 @@ bool anvil_d3d11_push_pixels(SDL_Window *window, const char *bytes, size_t len,
 
   ID3D11ShaderResourceView *null_srv = NULL;
   g_d3d11.context->lpVtbl->PSSetShaderResources(g_d3d11.context, 0, 1, &null_srv);
-  SAFE_RELEASE(srv);
-  SAFE_RELEASE(texture);
   return true;
 }
 
@@ -1103,6 +1117,7 @@ void anvil_d3d11_shutdown(void) {
     tex = next;
   }
   g_d3d11.textures = NULL;
+  d3d11_release_upload_texture();
   SAFE_RELEASE(g_d3d11.tex_sampler);
   SAFE_RELEASE(g_d3d11.tex_cbuf);
   SAFE_RELEASE(g_d3d11.tex_vbuf);

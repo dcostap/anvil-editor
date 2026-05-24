@@ -396,8 +396,9 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
       } break;
       case DRAW_PIXELS: {
         DrawPixelsCommand *pcmd = (DrawPixelsCommand*)&cmd->command;
+        int pitch = (int)pcmd->rect.width * 4;
         if (!anvil_d3d11_push_pixels(ren_cache->window, pcmd->bytes, pcmd->len,
-                                     (int)pcmd->rect.width, (int)pcmd->rect.height,
+                                     (int)pcmd->rect.width, (int)pcmd->rect.height, pitch,
                                      pcmd->rect, clip)) goto fail;
       } break;
       case DRAW_POLY: {
@@ -424,7 +425,7 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
               RenRect dst = { ox, oy, tw, th };
               if (!anvil_d3d11_push_pixels(ren_cache->window, (const char *)surface->pixels,
                                            (size_t)surface->pitch * (size_t)surface->h,
-                                           tw, th, dst, clip)) {
+                                           tw, th, surface->pitch, dst, clip)) {
                 SDL_DestroySurface(surface);
                 goto fail;
               }
