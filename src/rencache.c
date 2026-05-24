@@ -367,6 +367,7 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
 
   Command *cmd = NULL;
   RenRect clip = ren_cache->screen_rect;
+  const char *fail_reason = "unknown";
   while (next_command(ren_cache, &cmd)) {
     switch (cmd->type) {
       case SET_CLIP: {
@@ -375,13 +376,13 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
       } break;
       case DRAW_RECT: {
         DrawRectCommand *rcmd = (DrawRectCommand*)&cmd->command;
-        if (!anvil_d3d11_push_rect(ren_cache->window, rcmd->rect, clip, rcmd->color)) goto fail;
+        if (!anvil_d3d11_push_rect(ren_cache->window, rcmd->rect, clip, rcmd->color)) { fail_reason = "draw_rect"; goto fail; }
       } break;
       case DRAW_TEXT: {
         DrawTextCommand *tcmd = (DrawTextCommand*)&cmd->command;
         ren_font_group_set_tab_size(tcmd->fonts, tcmd->tab_size);
         if (!ren_draw_text_d3d11(ren_cache->window, clip, tcmd->fonts, tcmd->text, tcmd->len,
-                                 tcmd->text_x, tcmd->rect.y, tcmd->color, tcmd->tab)) goto fail;
+                                 tcmd->text_x, tcmd->rect.y, tcmd->color, tcmd->tab)) { fail_reason = "draw_text"; goto fail; }
       } break;
       case DRAW_CANVAS: {
         DrawCanvasCommand *cvcmd = (DrawCanvasCommand*)&cmd->command;
@@ -391,7 +392,7 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
           RenRect src = { 0, 0, surface->w, surface->h };
           RenRect dst = { cvcmd->rect.x, cvcmd->rect.y, surface->w, surface->h };
           if (!anvil_d3d11_push_texture(ren_cache->window, surface, src, dst, clip,
-                                        (RenColor){255, 255, 255, 255}, 2)) goto fail;
+                                        (RenColor){255, 255, 255, 255}, 2)) { fail_reason = "draw_canvas"; goto fail; }
         }
       } break;
       case DRAW_PIXELS: {
@@ -399,7 +400,7 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
         int pitch = (int)pcmd->rect.width * 4;
         if (!anvil_d3d11_push_pixels(ren_cache->window, pcmd->bytes, pcmd->len,
                                      (int)pcmd->rect.width, (int)pcmd->rect.height, pitch,
-                                     pcmd->rect, clip)) goto fail;
+                                     pcmd->rect, clip)) { fail_reason = "draw_pixels"; goto fail; }
       } break;
       case DRAW_POLY: {
         DrawBezierCommand *bcmd = (DrawBezierCommand*)&cmd->command;
@@ -427,6 +428,7 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
                                            (size_t)surface->pitch * (size_t)surface->h,
                                            tw, th, surface->pitch, dst, clip)) {
                 SDL_DestroySurface(surface);
+                fail_reason = "draw_poly_pixels";
                 goto fail;
               }
             }
@@ -438,11 +440,12 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
   }
 
   if (!anvil_d3d11_end_frame(ren_cache->window)) return false;
+  SDL_ShowWindow(ren_cache->window);
   ren_cache->command_buf_idx = 0;
   return true;
 
 fail:
-  anvil_d3d11_abort_frame(ren_cache->window);
+  anvil_d3d11_abort_frame_reason(ren_cache->window, fail_reason);
   return false;
 }
 

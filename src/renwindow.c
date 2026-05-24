@@ -26,6 +26,24 @@ static void query_surface_scale(RenWindow *ren, float* scale_x, float* scale_y) 
 static void setup_renderer(RenWindow *ren, int w, int h) {
   /* Note that w and h here should always be in pixels and obtained from
      a call to SDL_GetWindowSizeInPixels(). */
+  query_surface_scale(ren, &ren->cache.rensurface.scale_x, &ren->cache.rensurface.scale_y);
+
+  /* When Anvil's custom D3D11 path is enabled, do not create SDL_Renderer.
+     SDL's renderer owns its own swapchain for this HWND; creating our custom
+     swapchain on the same window as SDL's swapchain causes broken/flickering
+     presentation. The SDL renderer is only the fallback path. */
+  if (anvil_d3d11_enabled()) {
+    if (ren->cache.texture) {
+      SDL_DestroyTexture(ren->cache.texture);
+      ren->cache.texture = NULL;
+    }
+    if (ren->cache.renderer) {
+      SDL_DestroyRenderer(ren->cache.renderer);
+      ren->cache.renderer = NULL;
+    }
+    return;
+  }
+
   if (!ren->cache.renderer) {
     ren->cache.renderer = SDL_CreateRenderer(ren->cache.window, NULL);
     if (ren->cache.renderer) {
@@ -39,7 +57,6 @@ static void setup_renderer(RenWindow *ren, int w, int h) {
     ren->cache.renderer, ren->cache.rensurface.surface->format,
     SDL_TEXTUREACCESS_STREAMING, w, h
   );
-  query_surface_scale(ren, &ren->cache.rensurface.scale_x, &ren->cache.rensurface.scale_y);
 }
 #endif
 

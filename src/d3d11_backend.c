@@ -9,6 +9,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "d3d11_backend.h"
@@ -68,6 +69,40 @@ struct D3D11Window {
   int height;
 };
 
+typedef struct D3D11FrameStats {
+  const char *path;
+  int width;
+  int height;
+  int rect_pushes;
+  int rect_flushes;
+  int rect_draws;
+  int rect_vertices;
+  int texture_quads;
+  int texture_draws;
+  int pixel_quads;
+  int draw_calls;
+  int maps;
+  int texture_uploads;
+  size_t texture_upload_bytes;
+  int texture_recreates;
+  int texture_prunes;
+  double present_ms;
+  double dwm_flush_ms;
+  const char *fail_reason;
+  LARGE_INTEGER start_counter;
+} D3D11FrameStats;
+
+typedef struct D3D11Stats {
+  bool initialized;
+  bool enabled;
+  bool active;
+  FILE *file;
+  LARGE_INTEGER freq;
+  uint64_t frame_index;
+  int lines_since_flush;
+  D3D11FrameStats frame;
+} D3D11Stats;
+
 typedef struct D3D11State {
   bool attempted_init;
   bool available;
@@ -92,6 +127,12 @@ typedef struct D3D11State {
   ID3D11Buffer *tex_vbuf;
   ID3D11Buffer *tex_cbuf;
   ID3D11SamplerState *tex_sampler;
+  D3D11TextureVertex *tex_vertices;
+  int tex_vertex_count;
+  int tex_vertex_capacity;
+  int tex_vbuf_capacity;
+  ID3D11ShaderResourceView *tex_batch_srv;
+  float tex_batch_mode;
   ID3D11Texture2D *upload_texture;
   ID3D11ShaderResourceView *upload_srv;
   int upload_width;
@@ -99,9 +140,112 @@ typedef struct D3D11State {
   D3D11CachedTexture *textures;
   uint64_t frame_index;
   D3D11Window *windows;
+  D3D11Stats stats;
 } D3D11State;
 
 static D3D11State g_d3d11;
+
+static bool d3d11_env_truthy(const char *name) {
+  const char *value = getenv(name);
+  if (!value || !value[0]) return false;
+  if (value[0] == '0' || value[0] == 'n' || value[0] == 'N' || value[0] == 'f' || value[0] == 'F') return false;
+  return true;
+}
+
+static double d3d11_ms_between(LARGE_INTEGER a, LARGE_INTEGER b) {
+  if (g_d3d11.stats.freq.QuadPart == 0) return 0.0;
+  return ((double)(b.QuadPart - a.QuadPart) * 1000.0) / (double)g_d3d11.stats.freq.QuadPart;
+}
+
+static int d3d11_cached_texture_count(void) {
+  int count = 0;
+  for (D3D11CachedTexture *t = g_d3d11.textures; t; t = t->next) count++;
+  return count;
+}
+
+static void d3d11_stats_init(void) {
+  if (g_d3d11.stats.initialized) return;
+  g_d3d11.stats.initialized = true;
+  if (!d3d11_env_truthy("ANVIL_D3D11_STATS")) return;
+
+  QueryPerformanceFrequency(&g_d3d11.stats.freq);
+
+  const char *path = getenv("ANVIL_D3D11_STATS_FILE");
+  char temp_path[MAX_PATH];
+  if (!path || !path[0]) {
+    DWORD len = GetTempPathA((DWORD)sizeof(temp_path), temp_path);
+    if (len > 0 && len < sizeof(temp_path)) {
+      strncat(temp_path, "anvil_d3d11_stats.csv", sizeof(temp_path) - strlen(temp_path) - 1);
+      path = temp_path;
+    } else {
+      path = "anvil_d3d11_stats.csv";
+    }
+  }
+
+  g_d3d11.stats.file = fopen(path, "wb");
+  if (!g_d3d11.stats.file) return;
+  g_d3d11.stats.enabled = true;
+  fprintf(g_d3d11.stats.file,
+          "frame,path,success,width,height,cpu_ms,present_ms,dwm_flush_ms,draw_calls,rect_pushes,rect_flushes,rect_draws,rect_vertices,texture_quads,texture_draws,pixel_quads,maps,texture_uploads,texture_upload_bytes,texture_recreates,texture_prunes,texture_cache_entries,hr,fail_reason\n");
+  fflush(g_d3d11.stats.file);
+}
+
+static void d3d11_stats_begin(const char *path, int width, int height) {
+  d3d11_stats_init();
+  if (!g_d3d11.stats.enabled) return;
+  memset(&g_d3d11.stats.frame, 0, sizeof(g_d3d11.stats.frame));
+  g_d3d11.stats.active = true;
+  g_d3d11.stats.frame.path = path;
+  g_d3d11.stats.frame.width = width;
+  g_d3d11.stats.frame.height = height;
+  QueryPerformanceCounter(&g_d3d11.stats.frame.start_counter);
+}
+
+static void d3d11_stats_end(bool success, HRESULT hr) {
+  if (!g_d3d11.stats.enabled || !g_d3d11.stats.active || !g_d3d11.stats.file) return;
+  LARGE_INTEGER end_counter;
+  QueryPerformanceCounter(&end_counter);
+  D3D11FrameStats *s = &g_d3d11.stats.frame;
+  double cpu_ms = d3d11_ms_between(s->start_counter, end_counter);
+  fprintf(g_d3d11.stats.file,
+          "%llu,%s,%d,%d,%d,%.3f,%.3f,%.3f,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%llu,%d,%d,%d,0x%08lx,%s\n",
+          (unsigned long long)++g_d3d11.stats.frame_index,
+          s->path ? s->path : "unknown",
+          success ? 1 : 0,
+          s->width,
+          s->height,
+          cpu_ms,
+          s->present_ms,
+          s->dwm_flush_ms,
+          s->draw_calls,
+          s->rect_pushes,
+          s->rect_flushes,
+          s->rect_draws,
+          s->rect_vertices,
+          s->texture_quads,
+          s->texture_draws,
+          s->pixel_quads,
+          s->maps,
+          s->texture_uploads,
+          (unsigned long long)s->texture_upload_bytes,
+          s->texture_recreates,
+          s->texture_prunes,
+          d3d11_cached_texture_count(),
+          (unsigned long)hr,
+          s->fail_reason ? s->fail_reason : "");
+  g_d3d11.stats.active = false;
+  if (++g_d3d11.stats.lines_since_flush >= 60 || !success) {
+    fflush(g_d3d11.stats.file);
+    g_d3d11.stats.lines_since_flush = 0;
+  }
+}
+
+static void d3d11_stats_abort_reason(const char *reason) {
+  if (g_d3d11.stats.enabled && g_d3d11.stats.active) {
+    g_d3d11.stats.frame.fail_reason = reason;
+    d3d11_stats_end(false, E_ABORT);
+  }
+}
 
 static bool d3d11_device_lost(HRESULT hr) {
   return hr == DXGI_ERROR_DEVICE_REMOVED ||
@@ -359,9 +503,10 @@ static bool d3d11_ensure_texture_pipeline(void) {
                                                   &g_d3d11.tex_layout);
   if (FAILED(hr)) goto fail;
 
+  g_d3d11.tex_vbuf_capacity = 65536;
   D3D11_BUFFER_DESC vdesc;
   memset(&vdesc, 0, sizeof(vdesc));
-  vdesc.ByteWidth = (UINT)(sizeof(D3D11TextureVertex) * 6);
+  vdesc.ByteWidth = (UINT)(sizeof(D3D11TextureVertex) * g_d3d11.tex_vbuf_capacity);
   vdesc.Usage = D3D11_USAGE_DYNAMIC;
   vdesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
   vdesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
@@ -397,6 +542,7 @@ fail:
   SAFE_RELEASE(g_d3d11.tex_sampler);
   SAFE_RELEASE(g_d3d11.tex_cbuf);
   SAFE_RELEASE(g_d3d11.tex_vbuf);
+  g_d3d11.tex_vbuf_capacity = 0;
   SAFE_RELEASE(g_d3d11.tex_layout);
   SAFE_RELEASE(g_d3d11.tex_ps);
   SAFE_RELEASE(g_d3d11.tex_vs);
@@ -464,6 +610,7 @@ static void d3d11_prune_texture_cache(uint64_t max_age_frames) {
       *link = t->next;
       d3d11_release_cached_texture(t);
       free(t);
+      g_d3d11.stats.frame.texture_prunes++;
       continue;
     }
     link = &t->next;
@@ -604,6 +751,41 @@ static bool d3d11_ensure_vertex_buffer_capacity(int vertex_count) {
   return true;
 }
 
+static bool d3d11_reserve_texture_vertices(int extra) {
+  int needed = g_d3d11.tex_vertex_count + extra;
+  if (needed <= g_d3d11.tex_vertex_capacity) return true;
+
+  int new_capacity = g_d3d11.tex_vertex_capacity ? g_d3d11.tex_vertex_capacity * 2 : 4096;
+  while (new_capacity < needed) new_capacity *= 2;
+  D3D11TextureVertex *new_vertices = (D3D11TextureVertex *)realloc(g_d3d11.tex_vertices,
+                                                                    sizeof(D3D11TextureVertex) * (size_t)new_capacity);
+  if (!new_vertices) return false;
+  g_d3d11.tex_vertices = new_vertices;
+  g_d3d11.tex_vertex_capacity = new_capacity;
+  return true;
+}
+
+static bool d3d11_ensure_texture_vertex_buffer_capacity(int vertex_count) {
+  if (vertex_count <= g_d3d11.tex_vbuf_capacity) return true;
+
+  SAFE_RELEASE(g_d3d11.tex_vbuf);
+  int new_capacity = g_d3d11.tex_vbuf_capacity ? g_d3d11.tex_vbuf_capacity * 2 : 65536;
+  while (new_capacity < vertex_count) new_capacity *= 2;
+
+  D3D11_BUFFER_DESC vdesc;
+  memset(&vdesc, 0, sizeof(vdesc));
+  vdesc.ByteWidth = (UINT)(sizeof(D3D11TextureVertex) * (size_t)new_capacity);
+  vdesc.Usage = D3D11_USAGE_DYNAMIC;
+  vdesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+  vdesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+  HRESULT hr = g_d3d11.device->lpVtbl->CreateBuffer(g_d3d11.device, &vdesc, NULL, &g_d3d11.tex_vbuf);
+  if (FAILED(hr)) return false;
+  g_d3d11.tex_vbuf_capacity = new_capacity;
+  return true;
+}
+
+static bool d3d11_flush_textures(void);
+
 bool anvil_d3d11_begin_frame(SDL_Window *window, int width, int height, RenColor clear_color) {
   if (!anvil_d3d11_enabled() || !window || width <= 0 || height <= 0) return false;
   if (!d3d11_init() || !d3d11_ensure_rect_pipeline()) return false;
@@ -614,6 +796,8 @@ bool anvil_d3d11_begin_frame(SDL_Window *window, int width, int height, RenColor
     anvil_d3d11_forget_window(window);
     return false;
   }
+
+  d3d11_stats_begin("commands", width, height);
 
   FLOAT clear[4] = {
     clear_color.r / 255.0f,
@@ -648,12 +832,18 @@ bool anvil_d3d11_begin_frame(SDL_Window *window, int width, int height, RenColor
     d3d11_prune_texture_cache(600u);
   }
   g_d3d11.rect_vertex_count = 0;
+  g_d3d11.tex_vertex_count = 0;
+  g_d3d11.tex_batch_srv = NULL;
+  g_d3d11.tex_batch_mode = 0.0f;
   g_d3d11.rect_active_window = window;
   return true;
 }
 
 bool anvil_d3d11_push_rect(SDL_Window *window, RenRect rect, RenRect clip, RenColor color) {
-  if (window != g_d3d11.rect_active_window || color.a == 0) return false;
+  if (window != g_d3d11.rect_active_window) return false;
+  if (color.a == 0) return true;
+  if (!d3d11_flush_textures()) return false;
+  g_d3d11.stats.frame.rect_pushes++;
   RenRect r = d3d11_intersect_renrect(rect, clip);
   if (r.width <= 0 || r.height <= 0) return true;
   if (!d3d11_reserve_rect_vertices(6)) return false;
@@ -697,6 +887,7 @@ static bool d3d11_recreate_cached_texture(D3D11CachedTexture *t, SDL_Surface *su
   t->format = surface->format;
   t->mode = mode;
   t->last_update_frame = 0;
+  g_d3d11.stats.frame.texture_recreates++;
 
   D3D11_TEXTURE2D_DESC desc;
   memset(&desc, 0, sizeof(desc));
@@ -769,6 +960,8 @@ static bool d3d11_update_cached_texture(D3D11CachedTexture *t, SDL_Surface *surf
   g_d3d11.context->lpVtbl->UpdateSubresource(g_d3d11.context,
                                              (ID3D11Resource *)t->texture,
                                              0, NULL, rgba, (UINT)(width * 4), 0);
+  g_d3d11.stats.frame.texture_uploads++;
+  g_d3d11.stats.frame.texture_upload_bytes += (size_t)width * (size_t)height * 4u;
   free(rgba);
   t->last_update_frame = update_key;
   return true;
@@ -858,6 +1051,7 @@ static bool d3d11_flush_rects(void) {
                                             (ID3D11Resource *)g_d3d11.rect_vbuf,
                                             0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
   if (FAILED(hr)) return false;
+  g_d3d11.stats.frame.maps++;
   memcpy(mapped.pData, g_d3d11.rect_vertices,
          sizeof(D3D11RectVertex) * (size_t)g_d3d11.rect_vertex_count);
   g_d3d11.context->lpVtbl->Unmap(g_d3d11.context, (ID3D11Resource *)g_d3d11.rect_vbuf, 0);
@@ -874,27 +1068,34 @@ static bool d3d11_flush_rects(void) {
   g_d3d11.context->lpVtbl->RSSetState(g_d3d11.context, g_d3d11.rect_raster);
   g_d3d11.context->lpVtbl->OMSetBlendState(g_d3d11.context, g_d3d11.rect_blend, blend_factor, 0xffffffffu);
   g_d3d11.context->lpVtbl->Draw(g_d3d11.context, (UINT)g_d3d11.rect_vertex_count, 0);
+  g_d3d11.stats.frame.draw_calls++;
+  g_d3d11.stats.frame.rect_draws++;
+  g_d3d11.stats.frame.rect_flushes++;
+  g_d3d11.stats.frame.rect_vertices += g_d3d11.rect_vertex_count;
   g_d3d11.rect_vertex_count = 0;
   return true;
 }
 
-static bool d3d11_draw_texture_quad(SDL_Window *window, ID3D11ShaderResourceView *srv,
-                                     const D3D11TextureVertex verts[6], float mode) {
-  if (!srv) return false;
+static bool d3d11_flush_textures(void) {
+  if (g_d3d11.tex_vertex_count <= 0) return true;
+  if (!g_d3d11.tex_batch_srv) return false;
+  if (!d3d11_ensure_texture_vertex_buffer_capacity(g_d3d11.tex_vertex_count)) return false;
 
   D3D11_MAPPED_SUBRESOURCE mapped;
   HRESULT hr = g_d3d11.context->lpVtbl->Map(g_d3d11.context,
                                             (ID3D11Resource *)g_d3d11.tex_vbuf,
                                             0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
   if (FAILED(hr)) return false;
-  memcpy(mapped.pData, verts, sizeof(D3D11TextureVertex) * 6u);
+  g_d3d11.stats.frame.maps++;
+  memcpy(mapped.pData, g_d3d11.tex_vertices,
+         sizeof(D3D11TextureVertex) * (size_t)g_d3d11.tex_vertex_count);
   g_d3d11.context->lpVtbl->Unmap(g_d3d11.context, (ID3D11Resource *)g_d3d11.tex_vbuf, 0);
 
-  D3D11Window *w = d3d11_find_window(window);
+  D3D11Window *w = d3d11_find_window(g_d3d11.rect_active_window);
   if (!w || !w->rtv) return false;
   g_d3d11.context->lpVtbl->OMSetRenderTargets(g_d3d11.context, 1, &w->rtv, NULL);
 
-  D3D11TextureConstants constants = { (float)w->width, (float)w->height, mode, 0.0f };
+  D3D11TextureConstants constants = { (float)w->width, (float)w->height, g_d3d11.tex_batch_mode, 0.0f };
   g_d3d11.context->lpVtbl->UpdateSubresource(g_d3d11.context,
                                              (ID3D11Resource *)g_d3d11.tex_cbuf,
                                              0, NULL, &constants, 0, 0);
@@ -908,21 +1109,44 @@ static bool d3d11_draw_texture_quad(SDL_Window *window, ID3D11ShaderResourceView
   g_d3d11.context->lpVtbl->VSSetShader(g_d3d11.context, g_d3d11.tex_vs, NULL, 0);
   g_d3d11.context->lpVtbl->VSSetConstantBuffers(g_d3d11.context, 0, 1, &g_d3d11.tex_cbuf);
   g_d3d11.context->lpVtbl->PSSetShader(g_d3d11.context, g_d3d11.tex_ps, NULL, 0);
-  g_d3d11.context->lpVtbl->PSSetShaderResources(g_d3d11.context, 0, 1, &srv);
+  g_d3d11.context->lpVtbl->PSSetShaderResources(g_d3d11.context, 0, 1, &g_d3d11.tex_batch_srv);
   g_d3d11.context->lpVtbl->PSSetSamplers(g_d3d11.context, 0, 1, &g_d3d11.tex_sampler);
   g_d3d11.context->lpVtbl->RSSetState(g_d3d11.context, g_d3d11.rect_raster);
   g_d3d11.context->lpVtbl->OMSetBlendState(g_d3d11.context, g_d3d11.rect_blend, blend_factor, 0xffffffffu);
-  g_d3d11.context->lpVtbl->Draw(g_d3d11.context, 6, 0);
+  g_d3d11.context->lpVtbl->Draw(g_d3d11.context, (UINT)g_d3d11.tex_vertex_count, 0);
+  g_d3d11.stats.frame.draw_calls++;
+  g_d3d11.stats.frame.texture_draws++;
 
   ID3D11ShaderResourceView *null_srv = NULL;
   g_d3d11.context->lpVtbl->PSSetShaderResources(g_d3d11.context, 0, 1, &null_srv);
+  g_d3d11.tex_vertex_count = 0;
+  g_d3d11.tex_batch_srv = NULL;
+  g_d3d11.tex_batch_mode = 0.0f;
+  return true;
+}
+
+static bool d3d11_queue_texture_quad(ID3D11ShaderResourceView *srv,
+                                     const D3D11TextureVertex verts[6], float mode) {
+  if (!srv) return false;
+  if (g_d3d11.tex_vertex_count > 0 &&
+      (g_d3d11.tex_batch_srv != srv || g_d3d11.tex_batch_mode != mode)) {
+    if (!d3d11_flush_textures()) return false;
+  }
+  if (g_d3d11.tex_vertex_count == 0) {
+    g_d3d11.tex_batch_srv = srv;
+    g_d3d11.tex_batch_mode = mode;
+  }
+  if (!d3d11_reserve_texture_vertices(6)) return false;
+  memcpy(&g_d3d11.tex_vertices[g_d3d11.tex_vertex_count], verts, sizeof(D3D11TextureVertex) * 6u);
+  g_d3d11.tex_vertex_count += 6;
   return true;
 }
 
 bool anvil_d3d11_push_texture(SDL_Window *window, SDL_Surface *surface,
                                RenRect src_px, RenRect dst_px, RenRect clip_px,
                                RenColor color, int mode) {
-  if (window != g_d3d11.rect_active_window || !surface || color.a == 0) return false;
+  if (window != g_d3d11.rect_active_window || !surface) return false;
+  if (color.a == 0) return true;
   if (!d3d11_ensure_texture_pipeline()) return false;
   if (!d3d11_flush_rects()) return false;
 
@@ -952,6 +1176,7 @@ bool anvil_d3d11_push_texture(SDL_Window *window, SDL_Surface *surface,
 
   D3D11CachedTexture *tex = d3d11_get_cached_texture(surface, mode);
   if (!tex || !tex->srv) return false;
+  g_d3d11.stats.frame.texture_quads++;
 
   float cr = color.r / 255.0f;
   float cg = color.g / 255.0f;
@@ -962,7 +1187,7 @@ bool anvil_d3d11_push_texture(SDL_Window *window, SDL_Surface *surface,
     { cx0, cy0, u0, v0, cr, cg, cb, ca }, { cx1, cy1, u1, v1, cr, cg, cb, ca }, { cx0, cy1, u0, v1, cr, cg, cb, ca },
   };
 
-  return d3d11_draw_texture_quad(window, tex->srv, verts, (float)mode);
+  return d3d11_queue_texture_quad(tex->srv, verts, (float)mode);
 }
 
 bool anvil_d3d11_push_pixels(SDL_Window *window, const char *bytes, size_t len,
@@ -974,6 +1199,7 @@ bool anvil_d3d11_push_pixels(SDL_Window *window, const char *bytes, size_t len,
   if (!d3d11_ensure_texture_pipeline()) return false;
   if (!d3d11_ensure_upload_texture(width, height)) return false;
   if (!d3d11_flush_rects()) return false;
+  if (!d3d11_flush_textures()) return false;
 
   RenRect src_px = { 0, 0, width, height };
   RenRect clipped = d3d11_intersect_renrect(dst_px, clip_px);
@@ -1003,6 +1229,9 @@ bool anvil_d3d11_push_pixels(SDL_Window *window, const char *bytes, size_t len,
   g_d3d11.context->lpVtbl->UpdateSubresource(g_d3d11.context,
                                              (ID3D11Resource *)g_d3d11.upload_texture,
                                              0, NULL, bytes, (UINT)pitch, 0);
+  g_d3d11.stats.frame.texture_uploads++;
+  g_d3d11.stats.frame.texture_upload_bytes += (size_t)pitch * (size_t)height;
+  g_d3d11.stats.frame.pixel_quads++;
 
   float cr = 1.0f, cg = 1.0f, cb = 1.0f, ca = 1.0f;
   D3D11TextureVertex verts[6] = {
@@ -1010,32 +1239,55 @@ bool anvil_d3d11_push_pixels(SDL_Window *window, const char *bytes, size_t len,
     { cx0, cy0, u0, v0, cr, cg, cb, ca }, { cx1, cy1, u1, v1, cr, cg, cb, ca }, { cx0, cy1, u0, v1, cr, cg, cb, ca },
   };
 
-  return d3d11_draw_texture_quad(window, g_d3d11.upload_srv, verts, 2.0f);
+  if (!d3d11_queue_texture_quad(g_d3d11.upload_srv, verts, 2.0f)) return false;
+  return d3d11_flush_textures();
 }
 
-void anvil_d3d11_abort_frame(SDL_Window *window) {
+void anvil_d3d11_abort_frame_reason(SDL_Window *window, const char *reason) {
   if (!window || window == g_d3d11.rect_active_window) {
     g_d3d11.rect_active_window = NULL;
     g_d3d11.rect_vertex_count = 0;
+    g_d3d11.tex_vertex_count = 0;
+    g_d3d11.tex_batch_srv = NULL;
+    g_d3d11.tex_batch_mode = 0.0f;
+    d3d11_stats_abort_reason(reason ? reason : "abort");
   }
+}
+
+void anvil_d3d11_abort_frame(SDL_Window *window) {
+  anvil_d3d11_abort_frame_reason(window, "abort");
 }
 
 bool anvil_d3d11_end_frame(SDL_Window *window) {
   if (window != g_d3d11.rect_active_window) return false;
   D3D11Window *w = d3d11_find_window(window);
   if (!w || !w->swapchain || !w->rtv) {
-    anvil_d3d11_abort_frame(window);
+    anvil_d3d11_abort_frame_reason(window, "end_frame_no_window");
     return false;
   }
 
   if (!d3d11_flush_rects()) {
-    anvil_d3d11_abort_frame(window);
+    anvil_d3d11_abort_frame_reason(window, "end_frame_flush_rects");
+    return false;
+  }
+  if (!d3d11_flush_textures()) {
+    anvil_d3d11_abort_frame_reason(window, "end_frame_flush_textures");
     return false;
   }
 
+  LARGE_INTEGER present_start, present_end, dwm_start, dwm_end;
+  QueryPerformanceCounter(&present_start);
   HRESULT hr = w->swapchain->lpVtbl->Present(w->swapchain, 1, 0);
-  anvil_d3d11_abort_frame(window);
+  QueryPerformanceCounter(&present_end);
+  g_d3d11.stats.frame.present_ms = d3d11_ms_between(present_start, present_end);
+  g_d3d11.rect_active_window = NULL;
+  g_d3d11.rect_vertex_count = 0;
+  g_d3d11.tex_vertex_count = 0;
+  g_d3d11.tex_batch_srv = NULL;
+  g_d3d11.tex_batch_mode = 0.0f;
   if (FAILED(hr)) {
+    g_d3d11.stats.frame.fail_reason = "present";
+    d3d11_stats_end(false, hr);
     if (d3d11_device_lost(hr)) {
       d3d11_reset_device();
     } else {
@@ -1043,7 +1295,11 @@ bool anvil_d3d11_end_frame(SDL_Window *window) {
     }
     return false;
   }
+  QueryPerformanceCounter(&dwm_start);
   DwmFlush();
+  QueryPerformanceCounter(&dwm_end);
+  g_d3d11.stats.frame.dwm_flush_ms = d3d11_ms_between(dwm_start, dwm_end);
+  d3d11_stats_end(true, hr);
   return true;
 }
 
@@ -1069,33 +1325,30 @@ bool anvil_d3d11_present(SDL_Window *window, SDL_Surface *surface,
     return false;
   }
 
-  for (int i = 0; i < rect_count; i++) {
-    int x = (int)(rects[i].x * scale_x);
-    int y = (int)(rects[i].y * scale_y);
-    int rw = (int)(rects[i].width * scale_x);
-    int rh = (int)(rects[i].height * scale_y);
-    if (rw <= 0 || rh <= 0) continue;
-    if (x < 0) { rw += x; x = 0; }
-    if (y < 0) { rh += y; y = 0; }
-    if (x + rw > width) rw = width - x;
-    if (y + rh > height) rh = height - y;
-    if (rw <= 0 || rh <= 0) continue;
+  d3d11_stats_begin("surface_upload", width, height);
 
-    D3D11_BOX box;
-    box.left = (UINT)x;
-    box.top = (UINT)y;
-    box.front = 0;
-    box.right = (UINT)(x + rw);
-    box.bottom = (UINT)(y + rh);
-    box.back = 1;
+  (void)scale_x;
+  (void)scale_y;
+  (void)rects;
 
-    const uint8_t *pixels = (const uint8_t *)surface->pixels + (size_t)y * (size_t)surface->pitch + (size_t)x * 4u;
-    g_d3d11.context->lpVtbl->UpdateSubresource(g_d3d11.context, (ID3D11Resource *)w->backbuffer,
-                                               0, &box, pixels, (UINT)surface->pitch, 0);
-  }
+  /* The swapchain uses flip-discard, so previous backbuffer contents are not
+     preserved across presents. Upload the complete cached software surface for
+     this bridge path; dirty-rect-only updates leave undefined regions. */
+  g_d3d11.context->lpVtbl->UpdateSubresource(g_d3d11.context,
+                                             (ID3D11Resource *)w->backbuffer,
+                                             0, NULL, surface->pixels,
+                                             (UINT)surface->pitch, 0);
+  g_d3d11.stats.frame.texture_uploads++;
+  g_d3d11.stats.frame.texture_upload_bytes += (size_t)surface->pitch * (size_t)height;
 
+  LARGE_INTEGER present_start, present_end, dwm_start, dwm_end;
+  QueryPerformanceCounter(&present_start);
   HRESULT hr = w->swapchain->lpVtbl->Present(w->swapchain, 1, 0);
+  QueryPerformanceCounter(&present_end);
+  g_d3d11.stats.frame.present_ms = d3d11_ms_between(present_start, present_end);
   if (FAILED(hr)) {
+    g_d3d11.stats.frame.fail_reason = "surface_present";
+    d3d11_stats_end(false, hr);
     if (d3d11_device_lost(hr)) {
       d3d11_reset_device();
     } else {
@@ -1103,7 +1356,11 @@ bool anvil_d3d11_present(SDL_Window *window, SDL_Surface *surface,
     }
     return false;
   }
+  QueryPerformanceCounter(&dwm_start);
   DwmFlush();
+  QueryPerformanceCounter(&dwm_end);
+  g_d3d11.stats.frame.dwm_flush_ms = d3d11_ms_between(dwm_start, dwm_end);
+  d3d11_stats_end(true, hr);
   return true;
 }
 
@@ -1127,6 +1384,7 @@ void anvil_d3d11_shutdown(void) {
   SAFE_RELEASE(g_d3d11.tex_sampler);
   SAFE_RELEASE(g_d3d11.tex_cbuf);
   SAFE_RELEASE(g_d3d11.tex_vbuf);
+  g_d3d11.tex_vbuf_capacity = 0;
   SAFE_RELEASE(g_d3d11.tex_layout);
   SAFE_RELEASE(g_d3d11.tex_ps);
   SAFE_RELEASE(g_d3d11.tex_vs);
@@ -1142,6 +1400,13 @@ void anvil_d3d11_shutdown(void) {
   g_d3d11.rect_vertex_count = 0;
   g_d3d11.rect_vertex_capacity = 0;
   g_d3d11.rect_vbuf_capacity = 0;
+  free(g_d3d11.tex_vertices);
+  g_d3d11.tex_vertices = NULL;
+  g_d3d11.tex_vertex_count = 0;
+  g_d3d11.tex_vertex_capacity = 0;
+  g_d3d11.tex_vbuf_capacity = 0;
+  g_d3d11.tex_batch_srv = NULL;
+  g_d3d11.tex_batch_mode = 0.0f;
   g_d3d11.rect_active_window = NULL;
   SAFE_RELEASE(g_d3d11.factory);
   SAFE_RELEASE(g_d3d11.context);

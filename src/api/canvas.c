@@ -242,7 +242,7 @@ static int f_clear(lua_State *L) {
   else
     color = luaXL_checkcolor(L, 6, 255);
 
-  RECT_TYPE w, h;
+  int w, h;
   ren_get_size(&canvas->rensurface, &w, &h);
   RenRect rect = { .x = 0, .y = 0, .width = w, .height = h };
 
