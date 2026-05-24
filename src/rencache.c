@@ -89,7 +89,10 @@ static bool show_debug = false;
 
 static bool d3d11_command_renderer_enabled(void) {
   const char *value = getenv("ANVIL_D3D11_COMMANDS");
-  return value && value[0] && value[0] != '0' && value[0] != 'n' && value[0] != 'N' && value[0] != 'f' && value[0] != 'F';
+  if (value && (value[0] == '0' || value[0] == 'n' || value[0] == 'N' || value[0] == 'f' || value[0] == 'F')) {
+    return false;
+  }
+  return anvil_d3d11_enabled();
 }
 
 static inline int rencache_min(int a, int b) { return a < b ? a : b; }

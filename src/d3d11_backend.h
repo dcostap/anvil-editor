@@ -12,9 +12,8 @@ bool anvil_d3d11_present(SDL_Window *window, SDL_Surface *surface,
                           float scale_x, float scale_y,
                           RenRect *rects, int rect_count);
 
-/* Experimental retained-mode D3D11 command renderer, modeled after RAD's
- * low-level backend. This is intentionally separate from the SDL surface
- * upload bridge so we can migrate command classes one by one. */
+/* Retained-mode D3D11 command renderer, modeled after RAD's low-level
+ * backend. The SDL surface upload bridge remains available as a fallback. */
 bool anvil_d3d11_begin_frame(SDL_Window *window, int width, int height, RenColor clear_color);
 bool anvil_d3d11_push_rect(SDL_Window *window, RenRect rect, RenRect clip, RenColor color);
 bool anvil_d3d11_push_texture(SDL_Window *window, SDL_Surface *surface,
