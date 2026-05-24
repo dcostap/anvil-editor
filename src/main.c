@@ -291,11 +291,6 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
 }
 
 
-static bool live_resize_frames_enabled(void) {
-  const char *value = getenv("ANVIL_LIVE_RESIZE_FRAMES");
-  return !(value && (value[0] == '0' || value[0] == 'n' || value[0] == 'N' || value[0] == 'f' || value[0] == 'F'));
-}
-
 static SDL_AppResult app_run_step(AppState *app) {
   if (!app || !app->L || app->in_run_step) return SDL_APP_CONTINUE;
 
@@ -364,8 +359,6 @@ static SDL_AppResult app_run_step(AppState *app) {
 
 
 void anvil_request_resize_frame(void) {
-  if (!live_resize_frames_enabled()) return;
-
   AppState *app = live_resize_app;
   if (!app || !app->L) return;
 
