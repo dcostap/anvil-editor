@@ -203,6 +203,15 @@ static bool d3d11_should_dwm_flush(void) {
   return d3d11_env_truthy("ANVIL_D3D11_DWM_FLUSH");
 }
 
+static bool d3d11_should_clear_state_after_present(void) {
+  const char *value = getenv("ANVIL_D3D11_CLEAR_STATE_AFTER_PRESENT");
+  return !value || !value[0] || !d3d11_env_value_is_false(value);
+}
+
+static bool d3d11_should_resize_flush(void) {
+  return d3d11_env_truthy("ANVIL_D3D11_RESIZE_FLUSH");
+}
+
 static bool d3d11_should_flush_stats_each_frame(void) {
   return d3d11_env_truthy("ANVIL_D3D11_STATS_FLUSH") ||
          d3d11_env_truthy("ANVIL_D3D11_STATS_FLUSH_EVERY_FRAME");
@@ -644,6 +653,15 @@ static D3D11Window *d3d11_find_window(SDL_Window *window) {
   return NULL;
 }
 
+static void d3d11_unbind_resize_references(void) {
+  if (!g_d3d11.context) return;
+  ID3D11RenderTargetView *null_rtv = NULL;
+  ID3D11ShaderResourceView *null_srv = NULL;
+  g_d3d11.context->lpVtbl->OMSetRenderTargets(g_d3d11.context, 0, NULL, NULL);
+  g_d3d11.context->lpVtbl->PSSetShaderResources(g_d3d11.context, 0, 1, &null_srv);
+  (void)null_rtv;
+}
+
 static void d3d11_release_window_buffers(D3D11Window *w) {
   if (!w) return;
   SAFE_RELEASE(w->rtv);
@@ -811,6 +829,7 @@ static bool d3d11_resize_window(D3D11Window *w, int width, int height) {
 
   LARGE_INTEGER start, end;
   QueryPerformanceCounter(&start);
+  d3d11_unbind_resize_references();
   d3d11_release_window_buffers(w);
   QueryPerformanceCounter(&end);
   if (g_d3d11.stats.enabled && g_d3d11.stats.active) {
@@ -839,6 +858,14 @@ static bool d3d11_resize_window(D3D11Window *w, int width, int height) {
     g_d3d11.stats.frame.resize_get_buffer_ms = get_ms;
     g_d3d11.stats.frame.resize_create_rtv_ms = rtv_ms;
     if (FAILED(backbuffer_hr)) g_d3d11.stats.frame.resize_hr = backbuffer_hr;
+  }
+  if (ok && d3d11_should_resize_flush()) {
+    QueryPerformanceCounter(&start);
+    g_d3d11.context->lpVtbl->Flush(g_d3d11.context);
+    QueryPerformanceCounter(&end);
+    if (g_d3d11.stats.enabled && g_d3d11.stats.active) {
+      g_d3d11.stats.frame.resize_flush_ms = d3d11_ms_between(start, end);
+    }
   }
   return ok;
 }
@@ -1434,6 +1461,13 @@ bool anvil_d3d11_end_frame(SDL_Window *window) {
   } else {
     g_d3d11.stats.frame.dwm_flush_ms = 0.0;
   }
+  if (d3d11_should_clear_state_after_present()) {
+    LARGE_INTEGER clear_start, clear_end;
+    QueryPerformanceCounter(&clear_start);
+    g_d3d11.context->lpVtbl->ClearState(g_d3d11.context);
+    QueryPerformanceCounter(&clear_end);
+    g_d3d11.stats.frame.clear_state_ms = d3d11_ms_between(clear_start, clear_end);
+  }
   d3d11_stats_end(true, hr);
   return true;
 }
@@ -1499,6 +1533,13 @@ bool anvil_d3d11_present(SDL_Window *window, SDL_Surface *surface,
     g_d3d11.stats.frame.dwm_flush_ms = d3d11_ms_between(dwm_start, dwm_end);
   } else {
     g_d3d11.stats.frame.dwm_flush_ms = 0.0;
+  }
+  if (d3d11_should_clear_state_after_present()) {
+    LARGE_INTEGER clear_start, clear_end;
+    QueryPerformanceCounter(&clear_start);
+    g_d3d11.context->lpVtbl->ClearState(g_d3d11.context);
+    QueryPerformanceCounter(&clear_end);
+    g_d3d11.stats.frame.clear_state_ms = d3d11_ms_between(clear_start, clear_end);
   }
   d3d11_stats_end(true, hr);
   return true;
