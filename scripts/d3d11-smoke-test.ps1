@@ -224,7 +224,7 @@ try {
   if (!$AllowWarp -and $latestStats.device -ne "hardware") {
     throw "D3D11 smoke expected hardware device, got '$($latestStats.device)'"
   }
-  Write-Host ("D3D11 summary: frame={0} device={1} adapter={2} draw_calls={3} quad_instances={4}" -f $latestStats.frame, $latestStats.device, $latestStats.adapter, $latestStats.draw_calls, $latestStats.quad_instances)
+  Write-Host ("D3D11 summary: frame={0} device={1} adapter={2} draw_calls={3} maps={4} quad_instances={5}" -f $latestStats.frame, $latestStats.device, $latestStats.adapter, $latestStats.draw_calls, $latestStats.maps, $latestStats.quad_instances)
 
   $hashes = @($captures | ForEach-Object { Get-FileSha256 $_ })
   $uniqueHashes = @($hashes | Select-Object -Unique)
