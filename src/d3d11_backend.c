@@ -315,9 +315,8 @@ static void d3d11_stats_init(void) {
 static void d3d11_stats_begin(const char *path, SDL_Window *window, D3D11Window *d3d_window, int width, int height) {
   g_d3d11.last_frame_path = path;
   d3d11_stats_init();
-  if (!g_d3d11.stats.enabled) return;
   memset(&g_d3d11.stats.frame, 0, sizeof(g_d3d11.stats.frame));
-  g_d3d11.stats.active = true;
+  g_d3d11.stats.active = g_d3d11.stats.enabled;
   g_d3d11.stats.frame.path = path;
   g_d3d11.stats.frame.width = width;
   g_d3d11.stats.frame.height = height;

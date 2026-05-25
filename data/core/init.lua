@@ -1670,7 +1670,8 @@ function core.step(next_frame_time, options)
   core.clip_rect_stack[1] = { 0, 0, width, height }
   renderer.set_clip_rect(table.unpack(core.clip_rect_stack[1]))
   local draw_emit_start_time = system.get_time()
-  if os.getenv("ANVIL_DOCVIEW_STATS") then
+  local perf = package.loaded["core.perf"]
+  if os.getenv("ANVIL_DOCVIEW_STATS") or (perf and perf.is_recording and perf.is_recording()) then
     core.docview_frame_stats = {
       draw_ms = 0,
       gutter_ms = 0,
@@ -1684,6 +1685,8 @@ function core.step(next_frame_time, options)
       tokens = 0,
       draw_text_calls = 0,
     }
+  else
+    core.docview_frame_stats = nil
   end
   core.root_view:draw()
   step_stats.draw_emit_ms = (system.get_time() - draw_emit_start_time) * 1000
