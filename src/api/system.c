@@ -479,6 +479,11 @@ static const int cursor_enums[] = {
 };
 
 static int f_set_cursor(lua_State *L) {
+#if defined(_WIN32)
+  if (anvil_resize_diag_live_resize()) {
+    return 0;
+  }
+#endif
   int opt = luaL_checkoption(L, 1, "arrow", cursor_opts);
   int n = cursor_enums[opt];
   SDL_Cursor *cursor = cursor_cache[n];
