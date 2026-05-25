@@ -800,6 +800,13 @@ function DocView:draw_line_text(line, x, y)
 
   local col = 1
   local start_tx = tx
+  local pending_font, pending_color, pending_chunks, pending_len
+  local function flush_pending_text()
+    if not pending_font then return false end
+    tx = renderer.draw_text(pending_font, table.concat(pending_chunks), tx, ty, pending_color, {tab_offset = tx - start_tx})
+    pending_font, pending_color, pending_chunks, pending_len = nil, nil, nil, nil
+    return tx > self.position.x + self.size.x
+  end
   for tidx, type, text in self.doc.highlighter:each_token(line) do
     if #search_selections == 0 then
       local color = style.syntax[type] or style.syntax["normal"]
@@ -807,9 +814,18 @@ function DocView:draw_line_text(line, x, y)
       if font ~= default_font then font:set_tab_size(indent_size) end
       -- do not render newline, fixes issue #1164
       if tidx == last_token then text = text:sub(1, -2) end
-      tx = renderer.draw_text(font, text, tx, ty, color, {tab_offset = tx - start_tx})
-      if tx > self.position.x + self.size.x then break end
+      if text ~= "" then
+        if pending_font ~= font or pending_color ~= color or (pending_len or 0) + #text > 512 then
+          if flush_pending_text() then break end
+        end
+        if not pending_font then
+          pending_font, pending_color, pending_chunks, pending_len = font, color, {}, 0
+        end
+        pending_len = pending_len + #text
+        pending_chunks[#pending_chunks + 1] = text
+      end
     else
+      if flush_pending_text() then break end
       local font = style.syntax_fonts[type] or default_font
       if font ~= default_font then font:set_tab_size(indent_size) end
       if tidx == last_token then text = text:sub(1, -2) end
@@ -842,6 +858,7 @@ function DocView:draw_line_text(line, x, y)
       end
     end
   end
+  flush_pending_text()
   return self:get_line_height()
 end
 
