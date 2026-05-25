@@ -349,6 +349,33 @@ static void push_rect(RenCache *ren_cache, RenRect r, int *count) {
 }
 
 
+static RenColor rencache_detect_frame_clear_color(RenCache *ren_cache) {
+  RenColor clear = { 0, 0, 0, 255 };
+  if (!ren_cache) return clear;
+
+  /* DXGI uses the swapchain background color for newly exposed pixels during
+     fast live-resize before the next presented frame lands.  Anvil's command
+     renderer normally clears to black and then draws the theme background as a
+     full-window rect; using black as the swapchain background makes those
+     exposed pixels look like a black void.  Detect the full-screen opaque rect
+     and use that as both the D3D clear and swapchain background instead. */
+  Command *cmd = NULL;
+  RenRect screen = ren_cache->screen_rect;
+  while (next_command(ren_cache, &cmd)) {
+    if (cmd->type != DRAW_RECT) continue;
+    DrawRectCommand *rcmd = (DrawRectCommand*)&cmd->command;
+    RenRect r = rcmd->rect;
+    if (rcmd->color.a == 255 &&
+        r.x <= 0 && r.y <= 0 &&
+        r.x + r.width >= screen.width &&
+        r.y + r.height >= screen.height) {
+      clear = rcmd->color;
+      break;
+    }
+  }
+  return clear;
+}
+
 static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
   if (!anvil_d3d11_enabled() || !ren_cache || !ren_cache->window) return false;
 
@@ -356,7 +383,7 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
   rencache_get_size(ren_cache, &width, &height);
   if (width <= 0 || height <= 0) return false;
 
-  RenColor clear = { 0, 0, 0, 255 };
+  RenColor clear = rencache_detect_frame_clear_color(ren_cache);
   if (!anvil_d3d11_begin_frame(ren_cache->window, width, height, clear)) return false;
 
   Command *cmd = NULL;
