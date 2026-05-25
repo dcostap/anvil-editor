@@ -779,10 +779,14 @@ end
 ---@param y number Screen y coordinate
 ---@return integer height Line height
 function DocView:draw_line_text(line, x, y)
+  local stats = core.docview_frame_stats
+  local text_start = stats and system.get_time()
   local default_font = self:get_font()
   local tx, ty = x, y + self:get_line_text_y_offset()
   local last_token = nil
+  local get_line_start = stats and system.get_time()
   local tokens = self.doc.highlighter:get_line(line).tokens
+  if stats then stats.highlighter_get_line_ms = stats.highlighter_get_line_ms + (system.get_time() - get_line_start) * 1000 end
   local tokens_count = #tokens
   if tokens_count > 0 and string.sub(tokens[tokens_count], -1) == "\n" then
     last_token = tokens_count - 1
@@ -803,11 +807,18 @@ function DocView:draw_line_text(line, x, y)
   local pending_font, pending_color, pending_chunks, pending_len
   local function flush_pending_text()
     if not pending_font then return false end
+    local draw_text_start = stats and system.get_time()
     tx = renderer.draw_text(pending_font, table.concat(pending_chunks), tx, ty, pending_color, {tab_offset = tx - start_tx})
+    if stats then
+      stats.draw_text_calls = stats.draw_text_calls + 1
+      stats.renderer_draw_text_ms = stats.renderer_draw_text_ms + (system.get_time() - draw_text_start) * 1000
+    end
     pending_font, pending_color, pending_chunks, pending_len = nil, nil, nil, nil
     return tx > self.position.x + self.size.x
   end
+  local token_loop_start = stats and system.get_time()
   for tidx, type, text in self.doc.highlighter:each_token(line) do
+    if stats then stats.tokens = stats.tokens + 1 end
     if #search_selections == 0 then
       local color = style.syntax[type] or style.syntax["normal"]
       local font = style.syntax_fonts[type] or default_font
@@ -853,12 +864,22 @@ function DocView:draw_line_text(line, x, y)
         local chunk = text:sub(chunk_start, i - 1)
         local color = selected and (style.search_selection_text or style.background)
           or (style.syntax[type] or style.syntax["normal"])
+        local draw_text_start = stats and system.get_time()
         tx = renderer.draw_text(font, chunk, tx, ty, color, {tab_offset = tx - start_tx})
+        if stats then
+          stats.draw_text_calls = stats.draw_text_calls + 1
+          stats.renderer_draw_text_ms = stats.renderer_draw_text_ms + (system.get_time() - draw_text_start) * 1000
+        end
         if tx > self.position.x + self.size.x then break end
       end
     end
   end
   flush_pending_text()
+  if stats then
+    stats.token_loop_ms = stats.token_loop_ms + (system.get_time() - token_loop_start) * 1000
+    stats.text_ms = stats.text_ms + (system.get_time() - text_start) * 1000
+    stats.text_lines = stats.text_lines + 1
+  end
   return self:get_line_height()
 end
 
@@ -1017,24 +1038,33 @@ function DocView:draw()
   local minline, maxline = self:get_visible_line_range()
   local lh = self:get_line_height()
 
+  local stats = core.docview_frame_stats
+  local draw_start = stats and system.get_time()
+  if stats then stats.visible_lines = stats.visible_lines + math.max(0, maxline - minline + 1) end
+
   local x, y = self:get_line_screen_position(minline)
   local gw, gpad = self:get_gutter_width()
+  local gutter_start = stats and system.get_time()
   for i = minline, maxline do
     y = y + (self:draw_line_gutter(i, self.position.x, y, gpad and gw - gpad or gw) or lh)
   end
+  if stats then stats.gutter_ms = stats.gutter_ms + (system.get_time() - gutter_start) * 1000 end
 
   local pos = self.position
   x, y = self:get_line_screen_position(minline)
   -- the clip below ensure we don't write on the gutter region. On the
   -- right side it is redundant with the Node's clip.
   core.push_clip_rect(pos.x + gw, pos.y, self.size.x - gw, self.size.y)
+  local body_start = stats and system.get_time()
   for i = minline, maxline do
     y = y + (self:draw_line_body(i, x, y) or lh)
   end
+  if stats then stats.body_ms = stats.body_ms + (system.get_time() - body_start) * 1000 end
   self:draw_overlay()
   core.pop_clip_rect()
 
   self:draw_scrollbar()
+  if stats then stats.draw_ms = stats.draw_ms + (system.get_time() - draw_start) * 1000 end
 end
 
 return DocView

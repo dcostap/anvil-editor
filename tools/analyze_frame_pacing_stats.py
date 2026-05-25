@@ -102,6 +102,17 @@ def summarize(frame_path, d3d_path, budget_ms):
                 "rencache_text_bytes",
                 "rencache_draw_text_ms",
                 "rencache_draw_text_width_ms",
+                "docview_draw_ms",
+                "docview_gutter_ms",
+                "docview_body_ms",
+                "docview_text_ms",
+                "docview_highlighter_get_line_ms",
+                "docview_token_loop_ms",
+                "docview_renderer_draw_text_ms",
+                "docview_visible_lines",
+                "docview_text_lines",
+                "docview_tokens",
+                "docview_draw_text_calls",
             ]:
                 if key in red[0]:
                     print(key, fmt(stats(as_float(r.get(key)) for r in red)))
@@ -112,7 +123,8 @@ def summarize(frame_path, d3d_path, budget_ms):
             for r in sorted(red, key=lambda r: as_float(r.get("frame_time_ms")) or -1, reverse=True)[:5]:
                 print({k: r.get(k) for k in [
                     "seq", "reason", "event_ms", "update_ms", "draw_emit_ms",
-                    "renderer_end_ms", "frame_time_ms", "draw_calls", "rencache_text_commands",
+                    "renderer_end_ms", "frame_time_ms", "docview_draw_ms", "docview_text_ms",
+                    "docview_renderer_draw_text_ms", "draw_calls", "rencache_text_commands",
                     "rencache_draw_text_ms", "rencache_draw_text_width_ms", "texture_uploads",
                     "texture_upload_bytes",
                 ]})

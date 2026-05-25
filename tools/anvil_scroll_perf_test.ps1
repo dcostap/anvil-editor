@@ -45,6 +45,7 @@ $env:ANVIL_FRAME_PACING_STATS_FLUSH = "1"
 $env:ANVIL_D3D11_STATS = "1"
 $env:ANVIL_D3D11_STATS_FILE = $D3DStatsFile
 $env:ANVIL_D3D11_STATS_FLUSH = "1"
+$env:ANVIL_DOCVIEW_STATS = "1"
 
 Add-Type @"
 using System;

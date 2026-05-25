@@ -1670,6 +1670,21 @@ function core.step(next_frame_time, options)
   core.clip_rect_stack[1] = { 0, 0, width, height }
   renderer.set_clip_rect(table.unpack(core.clip_rect_stack[1]))
   local draw_emit_start_time = system.get_time()
+  if os.getenv("ANVIL_DOCVIEW_STATS") then
+    core.docview_frame_stats = {
+      draw_ms = 0,
+      gutter_ms = 0,
+      body_ms = 0,
+      text_ms = 0,
+      highlighter_get_line_ms = 0,
+      token_loop_ms = 0,
+      renderer_draw_text_ms = 0,
+      visible_lines = 0,
+      text_lines = 0,
+      tokens = 0,
+      draw_text_calls = 0,
+    }
+  end
   core.root_view:draw()
   step_stats.draw_emit_ms = (system.get_time() - draw_emit_start_time) * 1000
   local renderer_end_start_time = system.get_time()
@@ -1965,7 +1980,7 @@ local function frame_pacing_stats_log(fields)
       frame_pacing_stats_enabled = false
       return
     end
-    frame_pacing_stats_file:write("time,seq,rad_pacing,immediate,reason,target_fps,core_fps,present_paced,active_present_paced,did_redraw,pending_events,queue_depth,event_count,event_ms,update_ms,pre_draw_ms,draw_emit_ms,renderer_end_ms,frame_time_ms,run_threads_ms,core_step_ms,present_ms,sync_interval,renderer_path,draw_calls,quad_instances,texture_quads,texture_uploads,texture_upload_bytes,rencache_commands,rencache_text_commands,rencache_rect_commands,rencache_set_clip_commands,rencache_command_bytes,rencache_text_bytes,rencache_draw_text_ms,rencache_draw_text_width_ms,sleep_requested_ms,sleep_actual_ms,skipped_post_present_sleep,total_ms,run_mode\n")
+    frame_pacing_stats_file:write("time,seq,rad_pacing,immediate,reason,target_fps,core_fps,present_paced,active_present_paced,did_redraw,pending_events,queue_depth,event_count,event_ms,update_ms,pre_draw_ms,draw_emit_ms,renderer_end_ms,frame_time_ms,run_threads_ms,core_step_ms,present_ms,sync_interval,renderer_path,draw_calls,quad_instances,texture_quads,texture_uploads,texture_upload_bytes,rencache_commands,rencache_text_commands,rencache_rect_commands,rencache_set_clip_commands,rencache_command_bytes,rencache_text_bytes,rencache_draw_text_ms,rencache_draw_text_width_ms,docview_draw_ms,docview_gutter_ms,docview_body_ms,docview_text_ms,docview_highlighter_get_line_ms,docview_token_loop_ms,docview_renderer_draw_text_ms,docview_visible_lines,docview_text_lines,docview_tokens,docview_draw_text_calls,sleep_requested_ms,sleep_actual_ms,skipped_post_present_sleep,total_ms,run_mode\n")
     frame_pacing_stats_file:flush()
   end
   frame_pacing_stats_seq = frame_pacing_stats_seq + 1
@@ -2007,6 +2022,17 @@ local function frame_pacing_stats_log(fields)
     tostring(fields.rencache_text_bytes or 0),
     string.format("%.3f", fields.rencache_draw_text_ms or 0),
     string.format("%.3f", fields.rencache_draw_text_width_ms or 0),
+    string.format("%.3f", fields.docview_draw_ms or 0),
+    string.format("%.3f", fields.docview_gutter_ms or 0),
+    string.format("%.3f", fields.docview_body_ms or 0),
+    string.format("%.3f", fields.docview_text_ms or 0),
+    string.format("%.3f", fields.docview_highlighter_get_line_ms or 0),
+    string.format("%.3f", fields.docview_token_loop_ms or 0),
+    string.format("%.3f", fields.docview_renderer_draw_text_ms or 0),
+    tostring(fields.docview_visible_lines or 0),
+    tostring(fields.docview_text_lines or 0),
+    tostring(fields.docview_tokens or 0),
+    tostring(fields.docview_draw_text_calls or 0),
     string.format("%.3f", fields.sleep_requested_ms or 0),
     string.format("%.3f", fields.sleep_actual_ms or 0),
     fields.skipped_post_present_sleep and "1" or "0",
@@ -2218,6 +2244,7 @@ function core.run_step(options)
     total_ms = (system.get_time() - run_step_start) * 1000,
     run_mode = run_threads_mode,
   }
+  local docview_stats = core.docview_frame_stats or {}
   frame_pacing_stats_log {
     rad_pacing = rad_pacing,
     immediate = immediate,
@@ -2254,6 +2281,17 @@ function core.run_step(options)
     rencache_text_bytes = renderer_stats.rencache_text_bytes,
     rencache_draw_text_ms = renderer_stats.rencache_draw_text_ms,
     rencache_draw_text_width_ms = renderer_stats.rencache_draw_text_width_ms,
+    docview_draw_ms = docview_stats.draw_ms,
+    docview_gutter_ms = docview_stats.gutter_ms,
+    docview_body_ms = docview_stats.body_ms,
+    docview_text_ms = docview_stats.text_ms,
+    docview_highlighter_get_line_ms = docview_stats.highlighter_get_line_ms,
+    docview_token_loop_ms = docview_stats.token_loop_ms,
+    docview_renderer_draw_text_ms = docview_stats.renderer_draw_text_ms,
+    docview_visible_lines = docview_stats.visible_lines,
+    docview_text_lines = docview_stats.text_lines,
+    docview_tokens = docview_stats.tokens,
+    docview_draw_text_calls = docview_stats.draw_text_calls,
     sleep_requested_ms = sleep_requested_ms,
     sleep_actual_ms = sleep_actual_ms,
     skipped_post_present_sleep = skipped_post_present_sleep,
