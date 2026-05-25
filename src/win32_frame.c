@@ -59,6 +59,10 @@ static bool resize_dwm_flush_enabled(void) {
   return !env_value_is_false(getenv("ANVIL_D3D11_RESIZE_DWM_FLUSH"));
 }
 
+static bool own_wm_paint_enabled(void) {
+  return !env_value_is_false(getenv("ANVIL_WIN32_OWN_WM_PAINT"));
+}
+
 static void get_sdl_window_sizes(Win32FrameData *frame, int *point_w, int *point_h, int *pixel_w, int *pixel_h) {
   if (point_w) *point_w = 0;
   if (point_h) *point_h = 0;
@@ -386,6 +390,13 @@ static LRESULT CALLBACK frame_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
     case WM_PAINT:
       if (frame->enabled) {
         log_win32_message(frame, "WM_PAINT", wparam, lparam);
+        if (own_wm_paint_enabled()) {
+          PAINTSTRUCT ps;
+          BeginPaint(hwnd, &ps);
+          live_resize_frame(frame, "wm_paint_owned");
+          EndPaint(hwnd, &ps);
+          return 0;
+        }
         LRESULT result = CallWindowProcW(frame->old_proc, hwnd, msg, wparam, lparam);
         live_resize_frame(frame, "wm_paint");
         return result;
