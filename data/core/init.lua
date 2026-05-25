@@ -1535,7 +1535,8 @@ local max_coroutines = 1000
 ---@type number
 local main_loop_time = 0
 
-function core.step(next_frame_time)
+function core.step(next_frame_time, options)
+  options = options or {}
   -- handle events
   local did_keymap = false
 
@@ -1555,6 +1556,8 @@ function core.step(next_frame_time)
       if config.auto_fps then config.fps = DEFAULT_FPS end
     elseif type == "scalechanged" then
       update_scale(a)
+      DEFAULT_FPS = core.window:get_refresh_rate() or DEFAULT_FPS
+      if config.auto_fps then config.fps = DEFAULT_FPS end
     else
       local _, res = core.try(core.on_event, type, a, b, c, d)
       did_keymap = res or did_keymap
@@ -1568,9 +1571,9 @@ function core.step(next_frame_time)
   local stats_config = config.draw_stats
   local uncapped = stats_config == "uncapped"
   local priority_event = event_received and event_received ~= "mousemoved"
-  local resizing = core.window_resizing_until and core.window_resizing_until > system.get_time()
+  local resizing = options.live_resize or (core.window_resizing_until and core.window_resizing_until > system.get_time())
   core.root_view.size.x, core.root_view.size.y = width, height
-  if uncapped or resizing or priority_event or next_frame_time < system.get_time() then
+  if uncapped or resizing or priority_event or options.immediate or next_frame_time < system.get_time() then
     core.root_view:update()
   end
 
@@ -1580,7 +1583,7 @@ function core.step(next_frame_time)
   ---interaction. Otherwise, rendering is prioritized on user events and
   ---config.fps not obeyed.
   if
-    not uncapped and not resizing and ((not event_received and not core.redraw) or
+    not uncapped and not resizing and not options.immediate and ((not event_received and not core.redraw) or
       -- time left before next frame so we can skip
       next_frame_time > system.get_time()
     )
@@ -1905,6 +1908,8 @@ function core.run_step(options)
   options = options or {}
   local immediate = not not options.immediate
   local immediate_reason = options.reason or ""
+  local previous_live_resize_frame = core.in_live_resize_frame
+  core.in_live_resize_frame = immediate and options.live_resize or false
   local run_step_start = system.get_time()
   local sleep_requested_ms = 0
   local sleep_actual_ms = 0
@@ -1917,6 +1922,7 @@ function core.run_step(options)
     seconds = seconds or 0
     if seconds <= 0 then return end
     sleep_requested_ms = sleep_requested_ms + seconds * 1000
+    if immediate then return end
     local sleep_start = system.get_time()
     system.sleep(seconds)
     sleep_actual_ms = sleep_actual_ms + (system.get_time() - sleep_start) * 1000
@@ -1929,12 +1935,18 @@ function core.run_step(options)
     run_has_focus   = system.window_has_focus(core.window)
   end
 
-  -- run all coroutine tasks
+  -- run all coroutine tasks. Immediate resize frames are inside the Win32
+  -- modal sizing loop, so skip background coroutine work and draw the latest
+  -- layout without adding scheduler latency.
   local threads_start = system.get_time()
-  local time_to_wake   = run_threads()
-  local threads_end_time = system.get_time() - threads_start
+  local time_to_wake = 0
+  local threads_end_time = 0
+  if not immediate then
+    time_to_wake = run_threads()
+    threads_end_time = system.get_time() - threads_start
+    now = now + threads_end_time
+  end
   local run_threads_ms = threads_end_time * 1000
-  now = now + threads_end_time
 
   -- respect coroutines redraw requests
   if run_has_focus or core.redraw then
@@ -1950,7 +1962,9 @@ function core.run_step(options)
   end
 
   -- set the run mode
-  if
+  if immediate then
+    run_threads_mode = "all"
+  elseif
     not run_has_focus
     and run_skip_no_focus < core.frame_start
     and core.background_threads > 0
@@ -1974,14 +1988,17 @@ function core.run_step(options)
     end
   else
     -- listen events and perform drawing as needed
-    if not run_next_step or now >= run_next_step then
+    if immediate or not run_next_step or now >= run_next_step then
       local core_step_start = system.get_time()
-      did_redraw    = core.step(run_next_frame_time)
+      did_redraw    = core.step(run_next_frame_time, options)
       core_step_ms  = (system.get_time() - core_step_start) * 1000
       now           = system.get_time()
       run_next_step = nil
     end
-    if core.restart_request or core.quit_request then return false end
+    if core.restart_request or core.quit_request then
+      core.in_live_resize_frame = previous_live_resize_frame
+      return false
+    end
     if not did_redraw then
       if run_has_focus or core.background_threads > 0 or run_skip_no_focus > now then
         if not run_next_step then -- compute the time until the next blink
@@ -2046,6 +2063,7 @@ function core.run_step(options)
     run_mode = run_threads_mode,
   }
 
+  core.in_live_resize_frame = previous_live_resize_frame
   return true
 end
 

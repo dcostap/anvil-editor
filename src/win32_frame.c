@@ -13,6 +13,7 @@
 
 void anvil_request_resize_frame(void);
 void anvil_request_resize_frame_reason(const char *reason);
+void anvil_request_resize_frame_for_window(SDL_Window *window, const char *reason);
 void anvil_set_live_resize(bool live_resize);
 
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
@@ -286,7 +287,7 @@ static void live_resize_frame(Win32FrameData *frame, const char *reason) {
   });
   frame->last_pixel_w = pixel_w;
   frame->last_pixel_h = pixel_h;
-  anvil_request_resize_frame_reason(reason ? reason : "win32_resize");
+  anvil_request_resize_frame_for_window(frame->ren->cache.window, reason ? reason : "win32_resize");
 }
 
 static void toggle_maximize(HWND hwnd) {
@@ -333,6 +334,9 @@ static LRESULT CALLBACK frame_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
         frame->live_resize = false;
         anvil_resize_diag_set_live_resize(false);
         anvil_set_live_resize(false);
+        if (frame->ren && frame->ren->cache.window) {
+          anvil_request_resize_frame_for_window(frame->ren->cache.window, "exit_sizemove");
+        }
       }
       break;
 

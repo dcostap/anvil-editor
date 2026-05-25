@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
+#include <string.h>
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include "api/api.h"
@@ -124,6 +125,13 @@ typedef struct {
   uint64_t   resize_request_count;
   uint64_t   resize_request_throttled;
   uint64_t   resize_request_reentrant;
+  uint64_t   resize_request_same_size;
+  bool       pending_resize_frame;
+  SDL_Window *pending_resize_window;
+  char       pending_resize_reason[64];
+  Uint32     last_rendered_resize_window_id;
+  int        last_rendered_resize_pixel_w;
+  int        last_rendered_resize_pixel_h;
 } AppState;
 
 static AppState *live_resize_app = NULL;
@@ -147,6 +155,52 @@ void anvil_set_live_resize(bool live_resize) {
   AppState *app = live_resize_app;
   if (app) app->live_resize = live_resize;
   anvil_resize_diag_set_live_resize(live_resize);
+}
+
+static void get_window_pixel_size(SDL_Window *window, int *pixel_w, int *pixel_h) {
+  if (pixel_w) *pixel_w = 0;
+  if (pixel_h) *pixel_h = 0;
+  if (!window) return;
+  SDL_GetWindowSizeInPixels(window, pixel_w, pixel_h);
+}
+
+static double window_refresh_rate(SDL_Window *window) {
+  if (!window) return 0.0;
+  SDL_DisplayID display = SDL_GetDisplayForWindow(window);
+  if (!display) return 0.0;
+  const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(display);
+  if (mode && mode->refresh_rate > 0) return mode->refresh_rate;
+  mode = SDL_GetDesktopDisplayMode(display);
+  if (mode && mode->refresh_rate > 0) return mode->refresh_rate;
+  return 0.0;
+}
+
+static Uint64 resize_min_interval_ns(AppState *app, SDL_Window *window) {
+  if (app && app->live_resize) return 0;
+  double hz = window_refresh_rate(window);
+  if (hz < 30.0 || hz > 1000.0) hz = 120.0;
+  return (Uint64)((double)SDL_NS_PER_SECOND / hz);
+}
+
+static bool resize_reason_allows_same_size(const char *reason) {
+  if (!reason) return false;
+  return strcmp(reason, "wm_paint") == 0 ||
+         strcmp(reason, "sdl_exposed") == 0 ||
+         strcmp(reason, "exit_sizemove") == 0 ||
+         strcmp(reason, "reentrant_final") == 0;
+}
+
+static bool resize_reason_bypasses_throttle(const char *reason) {
+  if (!reason) return false;
+  return strcmp(reason, "exit_sizemove") == 0 ||
+         strcmp(reason, "reentrant_final") == 0;
+}
+
+static void set_pending_resize_frame(AppState *app, SDL_Window *window, const char *reason) {
+  if (!app) return;
+  app->pending_resize_frame = true;
+  app->pending_resize_window = window;
+  SDL_strlcpy(app->pending_resize_reason, reason ? reason : "pending", sizeof(app->pending_resize_reason));
 }
 
 /* Lua init-code: loads and starts the core.  core.run() is now non-blocking
@@ -305,6 +359,13 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   app->resize_request_count = 0;
   app->resize_request_throttled = 0;
   app->resize_request_reentrant = 0;
+  app->resize_request_same_size = 0;
+  app->pending_resize_frame = false;
+  app->pending_resize_window = NULL;
+  app->pending_resize_reason[0] = '\0';
+  app->last_rendered_resize_window_id = 0;
+  app->last_rendered_resize_pixel_w = 0;
+  app->last_rendered_resize_pixel_h = 0;
   *appstate = app;
   live_resize_app = app;
 
@@ -322,11 +383,14 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
 }
 
 
-static SDL_AppResult app_run_step(AppState *app) {
+void anvil_request_resize_frame_for_window(SDL_Window *window, const char *reason);
+
+static SDL_AppResult app_run_step_ex(AppState *app, bool immediate, const char *reason) {
   if (!app || !app->L) return SDL_APP_CONTINUE;
   if (app->in_run_step) {
     app->resize_request_reentrant++;
-    log_resize_request(app, "app_run_step", "skip_reentrant", 0, 0.0);
+    set_pending_resize_frame(app, NULL, reason ? reason : "app_run_step");
+    log_resize_request(app, reason ? reason : "app_run_step", "skip_reentrant", 0, 0.0);
     return SDL_APP_CONTINUE;
   }
 
@@ -342,7 +406,18 @@ static SDL_AppResult app_run_step(AppState *app) {
 
   app->in_run_step = true;
   lua_rawgeti(app->L, LUA_REGISTRYINDEX, app->core_run_step_ref);
-  if (lua_pcall(app->L, 0, 1, 0) != LUA_OK) {
+  int nargs = 0;
+  if (immediate) {
+    lua_createtable(app->L, 0, 3);
+    lua_pushboolean(app->L, true);
+    lua_setfield(app->L, -2, "immediate");
+    lua_pushstring(app->L, reason ? reason : "immediate");
+    lua_setfield(app->L, -2, "reason");
+    lua_pushboolean(app->L, app->live_resize || (reason && strcmp(reason, "exit_sizemove") == 0));
+    lua_setfield(app->L, -2, "live_resize");
+    nargs = 1;
+  }
+  if (lua_pcall(app->L, nargs, 1, 0) != LUA_OK) {
     app->in_run_step = false;
     const char *errmsg = lua_tostring(app->L, -1);
     lua_pop(app->L, 1);
@@ -370,7 +445,8 @@ static SDL_AppResult app_run_step(AppState *app) {
   Uint64 run_end_ns = SDL_GetTicksNS();
   anvil_resize_diag_log(&(AnvilResizeDiagEvent){
     .category = "app_run_step",
-    .name = "end",
+    .name = immediate ? "end_immediate" : "end",
+    .reason = reason,
     .live_resize = app->live_resize,
     .queue_depth = system_pending_event_count(),
     .ms_a = anvil_resize_diag_ticks_to_ms(run_start_ns, run_end_ns)
@@ -400,26 +476,57 @@ static SDL_AppResult app_run_step(AppState *app) {
     return exit_status == 0 ? SDL_APP_SUCCESS : SDL_APP_FAILURE;
   }
 
+  if (app->pending_resize_frame) {
+    SDL_Window *pending_window = app->pending_resize_window;
+    char pending_reason[64];
+    SDL_strlcpy(pending_reason,
+                app->pending_resize_reason[0] ? app->pending_resize_reason : "reentrant_final",
+                sizeof(pending_reason));
+    app->pending_resize_frame = false;
+    app->pending_resize_window = NULL;
+    app->pending_resize_reason[0] = '\0';
+    anvil_request_resize_frame_for_window(pending_window,
+                                          pending_reason[0] ? pending_reason : "reentrant_final");
+  }
+
   return SDL_APP_CONTINUE;
 }
 
+static SDL_AppResult app_run_step(AppState *app) {
+  return app_run_step_ex(app, false, "iterate");
+}
 
-void anvil_request_resize_frame_reason(const char *reason) {
+
+void anvil_request_resize_frame_for_window(SDL_Window *window, const char *reason) {
   AppState *app = live_resize_app;
   if (!app || !app->L || app->core_run_step_ref == -1) return;
+
+  int pixel_w = 0, pixel_h = 0;
+  get_window_pixel_size(window, &pixel_w, &pixel_h);
+  Uint32 window_id = window ? SDL_GetWindowID(window) : 0;
 
   app->resize_request_count++;
   const Uint64 now = SDL_GetTicksNS();
   const Uint64 since_last = app->last_resize_step_ns == 0 ? 0 : now - app->last_resize_step_ns;
-  const Uint64 min_interval = SDL_NS_PER_SECOND / 120;
+  const Uint64 min_interval = resize_reason_bypasses_throttle(reason) ? 0 : resize_min_interval_ns(app, window);
 
   if (app->in_run_step) {
     app->resize_request_reentrant++;
+    set_pending_resize_frame(app, window, "reentrant_final");
     log_resize_request(app, reason, "skip_reentrant", since_last, 0.0);
     return;
   }
 
-  if (app->last_resize_step_ns != 0 && since_last < min_interval) {
+  if (window_id != 0 && !resize_reason_allows_same_size(reason) &&
+      app->last_rendered_resize_window_id == window_id &&
+      app->last_rendered_resize_pixel_w == pixel_w &&
+      app->last_rendered_resize_pixel_h == pixel_h) {
+    app->resize_request_same_size++;
+    log_resize_request(app, reason, "skip_same_size", since_last, 0.0);
+    return;
+  }
+
+  if (min_interval > 0 && app->last_resize_step_ns != 0 && since_last < min_interval) {
     app->resize_request_throttled++;
     log_resize_request(app, reason, "skip_throttle", since_last, 0.0);
     return;
@@ -427,16 +534,27 @@ void anvil_request_resize_frame_reason(const char *reason) {
 
   app->last_resize_step_ns = now;
   Uint64 run_start_ns = SDL_GetTicksNS();
-  SDL_AppResult result = app_run_step(app);
+  SDL_AppResult result = app_run_step_ex(app, true, reason ? reason : "resize");
   (void)result;
   Uint64 run_end_ns = SDL_GetTicksNS();
-  log_resize_request(app, reason, "run", since_last,
+  if (window_id != 0) {
+    get_window_pixel_size(window, &pixel_w, &pixel_h);
+    app->last_rendered_resize_window_id = window_id;
+    app->last_rendered_resize_pixel_w = pixel_w;
+    app->last_rendered_resize_pixel_h = pixel_h;
+  }
+  log_resize_request(app, reason, "run_immediate", since_last,
                      anvil_resize_diag_ticks_to_ms(run_start_ns, run_end_ns));
+}
+
+void anvil_request_resize_frame_reason(const char *reason) {
+  anvil_request_resize_frame_for_window(NULL, reason);
 }
 
 void anvil_request_resize_frame(void) {
   anvil_request_resize_frame_reason("unknown");
 }
+
 
 static bool event_wants_immediate_resize_frame(const SDL_Event *event) {
   switch (event->type) {
@@ -463,7 +581,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
     const char *reason = anvil_resize_diag_event_reason(event->type);
     anvil_resize_diag_log(&(AnvilResizeDiagEvent){
       .category = "sdl_event",
-      .name = "immediate_resize_candidate",
+      .name = app->live_resize ? "skip_live_resize_duplicate" : "immediate_resize_candidate",
       .reason = reason,
       .window_id = event->window.windowID,
       .live_resize = app->live_resize,
@@ -472,7 +590,9 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
       .point_w = event->window.data1,
       .point_h = event->window.data2
     });
-    anvil_request_resize_frame_reason(reason);
+    if (!app->live_resize) {
+      anvil_request_resize_frame_for_window(SDL_GetWindowFromID(event->window.windowID), reason);
+    }
   }
 
   return SDL_APP_CONTINUE;
