@@ -97,6 +97,25 @@ cmd.exe //d //s //c "call C:\Projects\c_projects\anvil-editor\update-anvil-dev-b
 
 Do **not** use plain `cmd /c ...` or `cmd.exe /c ...` from this shell; it may only print the CMD banner/prompt and not run the command. The double-slash form was verified to build, install to `C:\Projects\c_projects\anvil-portable`, restore junctions, and restart Anvil.
 
+## Vendored/Meson subprojects
+
+SDL3 is brought in through Meson's wrap system, not as a top-level git submodule:
+
+- wrap file: `subprojects/sdl3.wrap`
+- local checkout/build input: `subprojects/sdl3`
+- Anvil-owned wrap patches/files: `subprojects/packagefiles/sdl3*`
+
+If changing SDL3 behavior for Anvil, do not rely only on committing inside the local `subprojects/sdl3` checkout. Fresh clones rebuild SDL3 from the wrap, so reproducible changes must be represented in the top-level repo, usually with a patch listed in `subprojects/sdl3.wrap` via `diff_files` or files under `subprojects/packagefiles/sdl3`.
+
+Current Anvil SDL3 patch:
+
+- `subprojects/packagefiles/sdl3-titlebar-mousemove-opt-in.patch`
+- listed by `diff_files` in `subprojects/sdl3.wrap`
+- makes SDL3's Win32 titlebar synthetic `WM_MOUSEMOVE` workaround opt-in with `ANVIL_SDL3_TITLEBAR_MOUSEMOVE_FIX=1`
+- default keeps the workaround disabled because it causes a one-frame cursor blink on normal titlebar clicks
+
+When updating SDL3 upstream, verify this patch still applies. If it fails, rebase/regenerate the patch against the new SDL3 revision and keep it tracked in the top-level Anvil repo.
+
 ## Why not Program Files for dev?
 
 Do not use `C:\Program Files` for this dev install. It causes admin/write-permission issues and makes junction/rebuild workflows annoying. Use the writable dev portable folder instead.
