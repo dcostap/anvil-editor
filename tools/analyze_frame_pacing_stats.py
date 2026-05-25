@@ -46,6 +46,23 @@ def fmt(s):
     ).format(**s)
 
 
+def timestamp_span_fps(rows):
+    times = [as_float(r.get("time")) for r in rows]
+    times = [t for t in times if t is not None and math.isfinite(t)]
+    if len(times) < 2:
+        return None
+    elapsed = times[-1] - times[0]
+    if elapsed <= 0:
+        return None
+    return (len(times) - 1) / elapsed, elapsed
+
+
+def timestamp_intervals_ms(rows):
+    times = [as_float(r.get("time")) for r in rows]
+    times = [t for t in times if t is not None and math.isfinite(t)]
+    return [(b - a) * 1000 for a, b in zip(times, times[1:]) if b >= a]
+
+
 def read_csv(path):
     if not os.path.exists(path):
         return []
@@ -72,6 +89,18 @@ def summarize(frame_path, d3d_path, budget_ms):
         print(f"\nframe rows {len(rows)}")
         print(f"redraw rows {len(red)} non-redraw {len(rows) - len(red)}")
         if red:
+            active_rate = timestamp_span_fps(red)
+            if active_rate:
+                fps, elapsed = active_rate
+                print(f"redraw timestamp rate {fps:.1f} fps over {elapsed:.3f}s")
+            intervals = timestamp_intervals_ms(red)
+            if intervals:
+                print("redraw interval_ms", fmt(stats(intervals)))
+            steady_red = red[10:] if len(red) > 20 else red
+            steady_rate = timestamp_span_fps(steady_red)
+            if steady_rate and steady_red is not red:
+                fps, elapsed = steady_rate
+                print(f"steady redraw timestamp rate {fps:.1f} fps over {elapsed:.3f}s (first 10 redraws skipped)")
             for key in [
                 "target_fps",
                 "event_ms",
