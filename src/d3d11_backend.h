@@ -11,6 +11,10 @@
    Default/unset: D3D11 command renderer. Set ANVIL_RENDERER=software
    or ANVIL_RENDERER=sdl to force the SDL/software fallback. */
 bool anvil_d3d11_enabled(void);
+bool anvil_d3d11_is_present_paced(void);
+double anvil_d3d11_last_present_ms(void);
+int anvil_d3d11_last_sync_interval(void);
+const char *anvil_d3d11_last_frame_path(void);
 bool anvil_d3d11_present(SDL_Window *window, SDL_Surface *surface,
                           float scale_x, float scale_y,
                           RenRect *rects, int rect_count);
@@ -34,6 +38,10 @@ void anvil_d3d11_forget_surface(SDL_Surface *surface);
 void anvil_d3d11_shutdown(void);
 #else
 static inline bool anvil_d3d11_enabled(void) { return false; }
+static inline bool anvil_d3d11_is_present_paced(void) { return false; }
+static inline double anvil_d3d11_last_present_ms(void) { return 0.0; }
+static inline int anvil_d3d11_last_sync_interval(void) { return 0; }
+static inline const char *anvil_d3d11_last_frame_path(void) { return "none"; }
 static inline bool anvil_d3d11_present(SDL_Window *window, SDL_Surface *surface,
                                         float scale_x, float scale_y,
                                         RenRect *rects, int rect_count) {

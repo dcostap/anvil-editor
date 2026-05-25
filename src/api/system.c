@@ -206,6 +206,14 @@ top:
         return 1;
       }
 
+    case SDL_EVENT_WINDOW_MOVED:
+      {
+        lua_pushstring(L, "moved");
+        lua_pushinteger(L, e.window.data1);
+        lua_pushinteger(L, e.window.data2);
+        return 3;
+      }
+
     case SDL_EVENT_WINDOW_EXPOSED:
       {
         RenWindow* window_renderer = ren_find_window_from_id(e.window.windowID);
@@ -434,6 +442,11 @@ top:
   return 0;
 }
 
+
+static int f_pending_event_count(lua_State *L) {
+  lua_pushinteger(L, system_pending_event_count());
+  return 1;
+}
 
 static int f_wait_event(lua_State *L) {
   int nargs = lua_gettop(L);
@@ -1680,7 +1693,7 @@ static int f_get_display_info(lua_State* L) {
   }
 
   lua_pushnumber(L, current_scale);
-  lua_pushnumber(L, round(mode->refresh_rate));
+  lua_pushnumber(L, mode->refresh_rate);
   lua_pushnumber(L, mode->w);
   lua_pushnumber(L, mode->h);
   lua_pushnumber(L, default_scale);
@@ -1695,6 +1708,7 @@ static const luaL_Reg lib[] = {
   { "poll_event",            f_poll_event            },
   { "wait_event",            f_wait_event            },
   { "has_pending_events",    f_has_pending_events    },
+  { "pending_event_count",   f_pending_event_count   },
   { "set_cursor",            f_set_cursor            },
   { "get_scale",             f_get_scale             },
   { "set_window_title",      f_set_window_title      },

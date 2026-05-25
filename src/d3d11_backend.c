@@ -159,6 +159,9 @@ typedef struct D3D11State {
   uint64_t frame_index;
   D3D11Window *windows;
   D3D11Stats stats;
+  double last_present_ms;
+  int last_sync_interval;
+  const char *last_frame_path;
 } D3D11State;
 
 static D3D11State g_d3d11;
@@ -244,6 +247,9 @@ static const char *d3d11_feature_level_string(D3D_FEATURE_LEVEL level) {
 }
 
 static double d3d11_ms_between(LARGE_INTEGER a, LARGE_INTEGER b) {
+  if (g_d3d11.stats.freq.QuadPart == 0) {
+    QueryPerformanceFrequency(&g_d3d11.stats.freq);
+  }
   if (g_d3d11.stats.freq.QuadPart == 0) return 0.0;
   return ((double)(b.QuadPart - a.QuadPart) * 1000.0) / (double)g_d3d11.stats.freq.QuadPart;
 }
@@ -303,6 +309,7 @@ static void d3d11_stats_init(void) {
 }
 
 static void d3d11_stats_begin(const char *path, SDL_Window *window, D3D11Window *d3d_window, int width, int height) {
+  g_d3d11.last_frame_path = path;
   d3d11_stats_init();
   if (!g_d3d11.stats.enabled) return;
   memset(&g_d3d11.stats.frame, 0, sizeof(g_d3d11.stats.frame));
@@ -457,6 +464,23 @@ bool anvil_d3d11_enabled(void) {
   }
 
   return true;
+}
+
+bool anvil_d3d11_is_present_paced(void) {
+  return anvil_d3d11_enabled() &&
+         !(anvil_resize_diag_live_resize() && d3d11_should_present_zero_live_resize());
+}
+
+double anvil_d3d11_last_present_ms(void) {
+  return g_d3d11.last_present_ms;
+}
+
+int anvil_d3d11_last_sync_interval(void) {
+  return g_d3d11.last_sync_interval;
+}
+
+const char *anvil_d3d11_last_frame_path(void) {
+  return g_d3d11.last_frame_path ? g_d3d11.last_frame_path : "none";
 }
 
 static HWND hwnd_from_sdl_window(SDL_Window *window) {
@@ -1465,6 +1489,8 @@ bool anvil_d3d11_end_frame(SDL_Window *window) {
   HRESULT hr = w->swapchain->lpVtbl->Present(w->swapchain, sync_interval, 0);
   QueryPerformanceCounter(&present_end);
   g_d3d11.stats.frame.present_ms = d3d11_ms_between(present_start, present_end);
+  g_d3d11.last_present_ms = g_d3d11.stats.frame.present_ms;
+  g_d3d11.last_sync_interval = (int)sync_interval;
   g_d3d11.active_window = NULL;
   g_d3d11.quad_instance_count = 0;
   g_d3d11.quad_batch_count = 0;
@@ -1541,6 +1567,8 @@ bool anvil_d3d11_present(SDL_Window *window, SDL_Surface *surface,
   HRESULT hr = w->swapchain->lpVtbl->Present(w->swapchain, 1, 0);
   QueryPerformanceCounter(&present_end);
   g_d3d11.stats.frame.present_ms = d3d11_ms_between(present_start, present_end);
+  g_d3d11.last_present_ms = g_d3d11.stats.frame.present_ms;
+  g_d3d11.last_sync_interval = 1;
   if (FAILED(hr)) {
     g_d3d11.stats.frame.fail_reason = "surface_present";
     d3d11_stats_end(false, hr);

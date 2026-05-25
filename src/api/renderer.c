@@ -4,6 +4,7 @@
 
 #include "api.h"
 #include "../renderer.h"
+#include "../d3d11_backend.h"
 #include "../rencache.h"
 #include "../renwindow.h"
 #include "utils/lxlauxlib.h"
@@ -521,6 +522,22 @@ static int f_draw_canvas(lua_State *L) {
   return 0;
 }
 
+static int f_is_present_paced(lua_State *L) {
+  lua_pushboolean(L, anvil_d3d11_is_present_paced());
+  return 1;
+}
+
+static int f_get_last_frame_stats(lua_State *L) {
+  lua_createtable(L, 0, 3);
+  lua_pushstring(L, anvil_d3d11_last_frame_path());
+  lua_setfield(L, -2, "path");
+  lua_pushinteger(L, anvil_d3d11_last_sync_interval());
+  lua_setfield(L, -2, "sync_interval");
+  lua_pushnumber(L, anvil_d3d11_last_present_ms());
+  lua_setfield(L, -2, "present_ms");
+  return 1;
+}
+
 static int f_to_canvas(lua_State *L) {
   lua_Number x = luaL_checknumber(L, 1);
   lua_Number y = luaL_checknumber(L, 2);
@@ -554,6 +571,8 @@ static const luaL_Reg lib[] = {
   { "get_size",           f_get_size           },
   { "begin_frame",        f_begin_frame        },
   { "end_frame",          f_end_frame          },
+  { "is_present_paced",   f_is_present_paced   },
+  { "get_last_frame_stats", f_get_last_frame_stats },
   { "set_clip_rect",      f_set_clip_rect      },
   { "draw_rect",          f_draw_rect          },
   { "draw_text",          f_draw_text          },

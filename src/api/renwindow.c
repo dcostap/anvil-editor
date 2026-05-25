@@ -103,9 +103,9 @@ static int f_get_refresh_rate(lua_State *L) {
 
   const SDL_DisplayMode *mode;
   if ((mode = SDL_GetCurrentDisplayMode(display)) && mode->refresh_rate > 0)
-    lua_pushnumber(L, SDL_round(mode->refresh_rate));
+    lua_pushnumber(L, mode->refresh_rate);
   else if ((mode = SDL_GetDesktopDisplayMode(display)) && mode->refresh_rate > 0)
-    lua_pushnumber(L, SDL_round(mode->refresh_rate));
+    lua_pushnumber(L, mode->refresh_rate);
   else
     lua_pushnil(L);
 

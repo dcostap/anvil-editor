@@ -37,6 +37,7 @@ static bool system_event_is_handled(uint32_t type) {
 
     /* Window events that f_poll_event handles */
     case SDL_EVENT_WINDOW_RESIZED:
+    case SDL_EVENT_WINDOW_MOVED:
     case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
     case SDL_EVENT_WINDOW_EXPOSED:
     case SDL_EVENT_WINDOW_MINIMIZED:
@@ -84,6 +85,7 @@ static bool system_event_is_handled(uint32_t type) {
 static uint32_t system_event_window_id(const SDL_Event *event) {
   switch (event->type) {
     case SDL_EVENT_WINDOW_RESIZED:
+    case SDL_EVENT_WINDOW_MOVED:
     case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
     case SDL_EVENT_WINDOW_EXPOSED:
     case SDL_EVENT_WINDOW_MINIMIZED:

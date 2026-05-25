@@ -328,6 +328,17 @@ function core.ensure_user_directory()
 end
 
 
+function core.refresh_display_timing(reason)
+  local hz = core.window and core.window:get_refresh_rate() or DEFAULT_FPS
+  if hz and hz >= 30 then
+    DEFAULT_FPS = hz
+    if config.auto_fps then config.fps = DEFAULT_FPS end
+    core.fps = config.fps
+    core.co_max_time = math.max(0.001, math.min(0.004, (1 / config.fps) * 0.25))
+  end
+  return DEFAULT_FPS
+end
+
 function core.configure_borderless_window()
   local using_native_frame = false
   if PLATFORM == "Windows" and system.set_window_native_frame then
@@ -540,10 +551,7 @@ function core.init()
   -- Refresh-rate detection before the window exists only sees the primary
   -- display. Re-query from the real window so high-refresh secondary displays
   -- do not stay capped at the primary display rate.
-  DEFAULT_FPS = core.window:get_refresh_rate() or DEFAULT_FPS
-  if config.auto_fps then config.fps = DEFAULT_FPS end
-  core.fps = config.fps
-  core.co_max_time = 1 / config.fps - 0.004
+  core.refresh_display_timing("window_create")
 
   -- Maximizing the window makes it lose the hidden attribute on Windows
   -- so we delay this to keep window hidden until args parsed. Also, on
@@ -1543,6 +1551,21 @@ local max_coroutines = 1000
 ---@type number
 local main_loop_time = 0
 
+local function env_truthy(name)
+  local value = os.getenv(name)
+  if not value or value == "" then return false end
+  value = value:lower():match("^%s*(.-)%s*$")
+  return value ~= "0" and value ~= "false" and value ~= "no" and value ~= "off"
+end
+
+local function rad_frame_pacing_enabled()
+  return env_truthy("ANVIL_RAD_PACING") or env_truthy("ANVIL_NO_POST_PRESENT_SLEEP")
+end
+
+local function renderer_present_paced()
+  return renderer.is_present_paced and renderer.is_present_paced() or false
+end
+
 function core.step(next_frame_time, options)
   options = options or {}
   -- handle events
@@ -1560,12 +1583,12 @@ function core.step(next_frame_time, options)
       event_received = type
       break
     elseif type == "displaychanged" then
-      DEFAULT_FPS = core.window:get_refresh_rate() or DEFAULT_FPS
-      if config.auto_fps then config.fps = DEFAULT_FPS end
+      core.refresh_display_timing("displaychanged")
+    elseif type == "moved" then
+      core.refresh_display_timing("moved")
     elseif type == "scalechanged" then
       update_scale(a)
-      DEFAULT_FPS = core.window:get_refresh_rate() or DEFAULT_FPS
-      if config.auto_fps then config.fps = DEFAULT_FPS end
+      core.refresh_display_timing("scalechanged")
     else
       local _, res = core.try(core.on_event, type, a, b, c, d)
       did_keymap = res or did_keymap
@@ -1630,36 +1653,47 @@ function core.step(next_frame_time, options)
 
   local frame_time = system.get_time() - start_time
   rendering_speed = math.max(0.001, frame_time)
-  local meets_fps = rendering_speed * config.fps < 1
 
-  if meets_fps or fps_drops < 3 then
-    -- Calculate max allowed coroutines run time based on rendering speed.
-    -- verbose formula: (1s - (rendering_speed * config.fps)) / config.fps
-    core.co_max_time = 1 / config.fps - rendering_speed
+  if rad_frame_pacing_enabled() and renderer_present_paced() then
+    -- D3D/SDL vsync present time is already the active frame clock. Do not
+    -- treat that wait as CPU render cost and downshift the animation target.
+    local frame_budget = 1 / config.fps
+    core.co_max_time = math.max(0.001, math.min(0.004, frame_budget * 0.25))
     core.fps = config.fps
+    fps_drops = 0
+    max_coroutines = 1000
+  else
+    local meets_fps = rendering_speed * config.fps < 1
 
-    if meets_fps then
-      fps_drops = math.max(fps_drops - 1, 0)
+    if meets_fps or fps_drops < 3 then
+      -- Calculate max allowed coroutines run time based on rendering speed.
+      -- verbose formula: (1s - (rendering_speed * config.fps)) / config.fps
+      core.co_max_time = 1 / config.fps - rendering_speed
+      core.fps = config.fps
+
+      if meets_fps then
+        fps_drops = math.max(fps_drops - 1, 0)
+      else
+        fps_drops = fps_drops + 1
+        core.co_max_time = rendering_speed / 3
+        max_coroutines = 1
+      end
     else
-      fps_drops = fps_drops + 1
+      -- If fps rendering dropped from config target we set the max time to
+      -- to consume a fourth of the time that would be spent rendering.
+      -- For example, if fps dropped from 60 to 25 then we use 1/4 of that time
+      -- to run coroutines, which leaves us with a total of 18.75fps and a
+      -- maximum time for coroutines of 0.013333333333333 per iteration.
+      -- verbose formula: (rendering_speed * (fps / 4)) / (fps - (fps / 4))
       core.co_max_time = rendering_speed / 3
       max_coroutines = 1
+
+      -- current frames per second substracting portion given to coroutines
+      core.fps = 1 / (rendering_speed + core.co_max_time)
+
+      -- reset cycle end time
+      cycle_end_time = 0
     end
-  else
-    -- If fps rendering dropped from config target we set the max time to
-    -- to consume a fourth of the time that would be spent rendering.
-    -- For example, if fps dropped from 60 to 25 then we use 1/4 of that time
-    -- to run coroutines, which leaves us with a total of 18.75fps and a
-    -- maximum time for coroutines of 0.013333333333333 per iteration.
-    -- verbose formula: (rendering_speed * (fps / 4)) / (fps - (fps / 4))
-    core.co_max_time = rendering_speed / 3
-    max_coroutines = 1
-
-    -- current frames per second substracting portion given to coroutines
-    core.fps = 1 / (rendering_speed + core.co_max_time)
-
-    -- reset cycle end time
-    cycle_end_time = 0
   end
 
   if stats_config then
@@ -1888,6 +1922,56 @@ local function resize_stats_log(fields)
   end
 end
 
+local frame_pacing_stats_file = nil
+local frame_pacing_stats_seq = 0
+local frame_pacing_stats_enabled = not not os.getenv("ANVIL_FRAME_PACING_STATS")
+
+local function frame_pacing_stats_log(fields)
+  if not frame_pacing_stats_enabled then return end
+  if not frame_pacing_stats_file then
+    local path = os.getenv("ANVIL_FRAME_PACING_STATS_FILE")
+    if not path or path == "" then
+      local tmp = os.getenv("TEMP") or os.getenv("TMP") or "."
+      path = tmp .. PATHSEP .. "anvil_frame_pacing_stats.csv"
+    end
+    frame_pacing_stats_file = io.open(path, "wb")
+    if not frame_pacing_stats_file then
+      frame_pacing_stats_enabled = false
+      return
+    end
+    frame_pacing_stats_file:write("time,seq,rad_pacing,immediate,reason,target_fps,core_fps,present_paced,active_present_paced,did_redraw,pending_events,queue_depth,run_threads_ms,core_step_ms,present_ms,sync_interval,renderer_path,sleep_requested_ms,sleep_actual_ms,skipped_post_present_sleep,total_ms,run_mode\n")
+    frame_pacing_stats_file:flush()
+  end
+  frame_pacing_stats_seq = frame_pacing_stats_seq + 1
+  frame_pacing_stats_file:write(table.concat({
+    string.format("%.6f", system.get_time()),
+    tostring(frame_pacing_stats_seq),
+    fields.rad_pacing and "1" or "0",
+    fields.immediate and "1" or "0",
+    csv_field(fields.reason),
+    string.format("%.3f", fields.target_fps or 0),
+    string.format("%.3f", fields.core_fps or 0),
+    fields.present_paced and "1" or "0",
+    fields.active_present_paced and "1" or "0",
+    fields.did_redraw and "1" or "0",
+    fields.pending_events and "1" or "0",
+    tostring(fields.queue_depth or 0),
+    string.format("%.3f", fields.run_threads_ms or 0),
+    string.format("%.3f", fields.core_step_ms or 0),
+    string.format("%.3f", fields.present_ms or 0),
+    tostring(fields.sync_interval or 0),
+    csv_field(fields.renderer_path),
+    string.format("%.3f", fields.sleep_requested_ms or 0),
+    string.format("%.3f", fields.sleep_actual_ms or 0),
+    fields.skipped_post_present_sleep and "1" or "0",
+    string.format("%.3f", fields.total_ms or 0),
+    csv_field(fields.run_mode)
+  }, ",") .. "\n")
+  if os.getenv("ANVIL_FRAME_PACING_STATS_FLUSH") then
+    frame_pacing_stats_file:flush()
+  end
+end
+
 -- Run-loop state shared between core.run() (setup) and core.run_step() (per-frame).
 local run_next_step       = nil
 local run_skip_no_focus   = 0
@@ -1924,6 +2008,10 @@ function core.run_step(options)
   local pending_events_at_start = system.has_pending_events()
   local now     = run_step_start
   local uncapped = config.draw_stats == "uncapped"
+  local rad_pacing = rad_frame_pacing_enabled()
+  local present_paced = renderer_present_paced()
+  local active_present_paced = false
+  local skipped_post_present_sleep = false
   core.frame_start = now
 
   local function run_step_sleep(seconds)
@@ -1968,6 +2056,10 @@ function core.run_step(options)
     run_next_step     = nil
     run_burst_events  = now + 3
   end
+
+  active_present_paced = rad_pacing and present_paced and (
+    immediate or pending_events_at_start or core.redraw or run_burst_events > now
+  )
 
   -- set the run mode
   if immediate then
@@ -2037,11 +2129,19 @@ function core.run_step(options)
         run_next_step = nil
       end
     else -- if we redrew, then make sure we only draw at most FPS/sec
-      local elapsed    = now - core.frame_start
-      local next_frame = math.max(0, 1 / core.fps - elapsed)
-      run_next_frame_time = now + next_frame
-      run_next_step = run_next_step or run_next_frame_time
-      run_step_sleep(math.min(uncapped and 0 or 1, next_frame, time_to_wake))
+      if active_present_paced then
+        -- A present-paced renderer already waited for vsync inside
+        -- renderer.end_frame(). Do not add SDL_Delay jitter after it.
+        run_next_frame_time = now
+        run_next_step = nil
+        skipped_post_present_sleep = true
+      else
+        local elapsed    = now - core.frame_start
+        local next_frame = math.max(0, 1 / core.fps - elapsed)
+        run_next_frame_time = now + next_frame
+        run_next_step = run_next_step or run_next_frame_time
+        run_step_sleep(math.min(uncapped and 0 or 1, next_frame, time_to_wake))
+      end
     end
   end
 
@@ -2056,6 +2156,7 @@ function core.run_step(options)
     (system.get_time() - core.frame_start) - threads_end_time
   )
 
+  local renderer_stats = renderer.get_last_frame_stats and renderer.get_last_frame_stats() or {}
   local live_resizing = core.window_resizing_until and core.window_resizing_until > system.get_time()
   resize_stats_log {
     immediate = immediate,
@@ -2067,6 +2168,28 @@ function core.run_step(options)
     core_step_ms = core_step_ms,
     sleep_requested_ms = sleep_requested_ms,
     sleep_actual_ms = sleep_actual_ms,
+    total_ms = (system.get_time() - run_step_start) * 1000,
+    run_mode = run_threads_mode,
+  }
+  frame_pacing_stats_log {
+    rad_pacing = rad_pacing,
+    immediate = immediate,
+    reason = immediate_reason,
+    target_fps = config.fps,
+    core_fps = core.fps,
+    present_paced = present_paced,
+    active_present_paced = active_present_paced,
+    did_redraw = did_redraw,
+    pending_events = pending_events_at_start,
+    queue_depth = system.pending_event_count and system.pending_event_count() or (system.has_pending_events() and 1 or 0),
+    run_threads_ms = run_threads_ms,
+    core_step_ms = core_step_ms,
+    present_ms = renderer_stats.present_ms,
+    sync_interval = renderer_stats.sync_interval,
+    renderer_path = renderer_stats.path,
+    sleep_requested_ms = sleep_requested_ms,
+    sleep_actual_ms = sleep_actual_ms,
+    skipped_post_present_sleep = skipped_post_present_sleep,
     total_ms = (system.get_time() - run_step_start) * 1000,
     run_mode = run_threads_mode,
   }
