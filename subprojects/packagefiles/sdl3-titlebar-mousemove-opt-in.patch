@@ -1,0 +1,17 @@
+diff --git a/src/video/windows/SDL_windowsevents.c b/src/video/windows/SDL_windowsevents.c
+index 282d52c0d..45eb30f02 100644
+--- a/src/video/windows/SDL_windowsevents.c
++++ b/src/video/windows/SDL_windowsevents.c
+@@ -1669,7 +1669,11 @@ LRESULT CALLBACK WIN_WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
+ 
+         // Fix for 500ms hang after user clicks on the title bar, but before moving mouse
+         // Reference: https://gamedev.net/forums/topic/672094-keeping-things-moving-during-win32-moveresize-events/5254386/
+-        if (SendMessage(hwnd, WM_NCHITTEST, wParam, lParam) == HTCAPTION) {
++        // Anvil: keep this SDL3 workaround opt-in. It can make the Windows cursor blink
++        // for one frame on ordinary titlebar clicks. Set ANVIL_SDL3_TITLEBAR_MOUSEMOVE_FIX=1
++        // to restore the upstream SDL3 behavior if the old titlebar-click delay is needed.
++        if (SDL_GetHintBoolean("ANVIL_SDL3_TITLEBAR_MOUSEMOVE_FIX", false) &&
++            SendMessage(hwnd, WM_NCHITTEST, wParam, lParam) == HTCAPTION) {
+             POINT cursorPos;
+             GetCursorPos(&cursorPos); // want the most current pos so as to not cause position change
+             ScreenToClient(hwnd, &cursorPos);

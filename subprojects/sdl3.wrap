@@ -3,6 +3,7 @@ url = https://github.com/libsdl-org/SDL.git
 revision = release-3.4.8
 depth = 1
 patch_directory = sdl3
+diff_files = sdl3-titlebar-mousemove-opt-in.patch
 
 [provide]
 sdl3 = sdl3_dep
