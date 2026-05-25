@@ -2261,6 +2261,14 @@ function core.run_step(options)
     end
     perf_last_redraw_time = t
   end
+  local active_doc = core.active_view and core.active_view.doc
+  local selection_count = active_doc and active_doc.selections and (#active_doc.selections / 4) or 0
+  local search_selection_count = 0
+  if active_doc and active_doc.search_selections then
+    for _ in pairs(active_doc.search_selections) do
+      search_selection_count = search_selection_count + 1
+    end
+  end
   core.performance_snapshot = {
     time = system.get_time(),
     rad_pacing = rad_pacing,
@@ -2272,6 +2280,8 @@ function core.run_step(options)
     present_paced = present_paced,
     active_present_paced = active_present_paced,
     did_redraw = did_redraw,
+    selection_count = selection_count,
+    search_selection_count = search_selection_count,
     pending_events = pending_events_at_start,
     queue_depth = system.pending_event_count and system.pending_event_count() or (system.has_pending_events() and 1 or 0),
     event_count = step_stats.event_count,

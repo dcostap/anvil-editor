@@ -78,7 +78,7 @@ end
 local function write_frame_header(file)
   file:write(table.concat({
     "time", "did_redraw", "fps", "target_fps", "active_present_paced",
-    "pending_events", "queue_depth", "run_mode",
+    "pending_events", "queue_depth", "run_mode", "selection_count", "search_selection_count",
     "frame_ms", "update_ms", "draw_emit_ms", "renderer_end_ms",
     "present_ms", "core_step_ms", "sleep_requested_ms", "sleep_actual_ms", "total_ms",
     "draw_calls", "quad_instances", "texture_uploads", "texture_upload_bytes",
@@ -107,6 +107,8 @@ function perf.on_frame(snapshot)
   else
     record.idle_iteration_count = record.idle_iteration_count + 1
   end
+  record.max_selection_count = math.max(record.max_selection_count, snapshot.selection_count or 0)
+  record.max_search_selection_count = math.max(record.max_search_selection_count, snapshot.search_selection_count or 0)
   if (snapshot.sleep_actual_ms or 0) > 0 then
     record.sleep_count = record.sleep_count + 1
     record.sleep_actual_total_ms = record.sleep_actual_total_ms + snapshot.sleep_actual_ms
@@ -121,6 +123,8 @@ function perf.on_frame(snapshot)
     snapshot.pending_events and "1" or "0",
     tostring(snapshot.queue_depth or 0),
     csv_escape(snapshot.run_mode or ""),
+    tostring(snapshot.selection_count or 0),
+    tostring(snapshot.search_selection_count or 0),
     string.format("%.3f", snapshot.frame_ms or 0),
     string.format("%.3f", snapshot.update_ms or 0),
     string.format("%.3f", snapshot.draw_emit_ms or 0),
@@ -204,6 +208,7 @@ local function write_summary(path)
     file:write(string.format("Redraw gaps >20ms: %d, >50ms: %d\n", over_20, over_50))
   end
   file:write(string.format("Sleep calls: %d, sleep actual total: %.1fms\n", record.sleep_count, record.sleep_actual_total_ms))
+  file:write(string.format("Max selections: %d, max search selections: %d\n", record.max_selection_count, record.max_search_selection_count))
   file:write(string.format("Over-budget redraw frames: %d (%.1f%%)\n\n",
     record.over_budget_count,
     record.frame_count > 0 and (record.over_budget_count * 100 / record.frame_count) or 0
@@ -252,6 +257,8 @@ function perf.start_recording()
     over_budget_count = 0,
     sleep_count = 0,
     sleep_actual_total_ms = 0,
+    max_selection_count = 0,
+    max_search_selection_count = 0,
     last_redraw_time = nil,
     redraw_intervals = {},
     lua_samples = {},
