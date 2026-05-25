@@ -2050,6 +2050,8 @@ local run_skip_no_focus   = 0
 local run_burst_events    = 0
 local run_has_focus       = true
 local run_next_frame_time = 0
+local perf_last_redraw_time = nil
+local perf_smoothed_fps = 0
 
 ---Set up the run-loop state.  Called once from C (SDL_AppInit → init_lua_state)
 ---via the init_code that also calls core.init().  SDL_AppIterate then drives the
@@ -2245,6 +2247,58 @@ function core.run_step(options)
     run_mode = run_threads_mode,
   }
   local docview_stats = core.docview_frame_stats or {}
+  local total_ms = (system.get_time() - run_step_start) * 1000
+  if did_redraw then
+    local t = system.get_time()
+    if perf_last_redraw_time and t > perf_last_redraw_time then
+      local instant_fps = 1 / (t - perf_last_redraw_time)
+      perf_smoothed_fps = perf_smoothed_fps > 0
+        and (perf_smoothed_fps * 0.85 + instant_fps * 0.15)
+        or instant_fps
+    end
+    perf_last_redraw_time = t
+  end
+  core.performance_snapshot = {
+    time = system.get_time(),
+    rad_pacing = rad_pacing,
+    immediate = immediate,
+    reason = immediate_reason,
+    target_fps = config.fps,
+    core_fps = core.fps,
+    fps = perf_smoothed_fps,
+    present_paced = present_paced,
+    active_present_paced = active_present_paced,
+    did_redraw = did_redraw,
+    event_ms = step_stats.event_ms,
+    update_ms = step_stats.update_ms,
+    pre_draw_ms = step_stats.pre_draw_ms,
+    draw_emit_ms = step_stats.draw_emit_ms,
+    renderer_end_ms = step_stats.renderer_end_ms,
+    frame_ms = step_stats.frame_time_ms,
+    frame_time_ms = step_stats.frame_time_ms,
+    run_threads_ms = run_threads_ms,
+    core_step_ms = core_step_ms,
+    present_ms = renderer_stats.present_ms,
+    sync_interval = renderer_stats.sync_interval,
+    renderer_path = renderer_stats.path,
+    draw_calls = renderer_stats.draw_calls,
+    quad_instances = renderer_stats.quad_instances,
+    texture_quads = renderer_stats.texture_quads,
+    texture_uploads = renderer_stats.texture_uploads,
+    texture_upload_bytes = renderer_stats.texture_upload_bytes,
+    docview_draw_ms = docview_stats.draw_ms,
+    docview_gutter_ms = docview_stats.gutter_ms,
+    docview_body_ms = docview_stats.body_ms,
+    docview_text_ms = docview_stats.text_ms,
+    docview_draw_text_calls = docview_stats.draw_text_calls,
+    sleep_actual_ms = sleep_actual_ms,
+    skipped_post_present_sleep = skipped_post_present_sleep,
+    total_ms = total_ms,
+    over_budget = did_redraw and (total_ms > (1000 / config.fps)),
+    run_mode = run_threads_mode,
+  }
+  local perf = package.loaded["core.perf"]
+  if perf and perf.on_frame then perf.on_frame(core.performance_snapshot) end
   frame_pacing_stats_log {
     rad_pacing = rad_pacing,
     immediate = immediate,
