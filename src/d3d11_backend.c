@@ -78,6 +78,8 @@ typedef struct D3D11FrameStats {
   int rect_vertices;
   int texture_quads;
   int texture_draws;
+  int texture_batch_breaks;
+  int quad_batches;
   int pixel_quads;
   int draw_calls;
   int quad_draws;
@@ -304,7 +306,7 @@ static void d3d11_stats_init(void) {
   if (!g_d3d11.stats.file) return;
   g_d3d11.stats.enabled = true;
   fprintf(g_d3d11.stats.file,
-          "frame,path,success,width,height,device,adapter,feature_level,cpu_ms,present_ms,dwm_flush_ms,live_resize,resize_done,resize_old_w,resize_old_h,resize_new_w,resize_new_h,resize_release_ms,resize_buffers_ms,resize_get_buffer_ms,resize_create_rtv_ms,resize_flush_ms,clear_state_ms,target_refresh_hz,sync_interval,buffer_count,swap_effect,resize_hr,draw_calls,quad_draws,quad_instances,quad_vertices,rect_pushes,rect_flushes,rect_draws,rect_vertices,texture_quads,texture_draws,pixel_quads,maps,texture_uploads,texture_upload_bytes,texture_recreates,texture_prunes,texture_cache_entries,hr,fail_reason\n");
+          "frame,path,success,width,height,device,adapter,feature_level,cpu_ms,present_ms,dwm_flush_ms,live_resize,resize_done,resize_old_w,resize_old_h,resize_new_w,resize_new_h,resize_release_ms,resize_buffers_ms,resize_get_buffer_ms,resize_create_rtv_ms,resize_flush_ms,clear_state_ms,target_refresh_hz,sync_interval,buffer_count,swap_effect,resize_hr,draw_calls,quad_draws,quad_instances,quad_vertices,rect_pushes,rect_flushes,rect_draws,rect_vertices,texture_quads,texture_draws,texture_batch_breaks,quad_batches,pixel_quads,maps,texture_uploads,texture_upload_bytes,texture_recreates,texture_prunes,texture_cache_entries,hr,fail_reason\n");
   fflush(g_d3d11.stats.file);
 }
 
@@ -335,7 +337,7 @@ static void d3d11_stats_end(bool success, HRESULT hr) {
   D3D11FrameStats *s = &g_d3d11.stats.frame;
   double cpu_ms = d3d11_ms_between(s->start_counter, end_counter);
   fprintf(g_d3d11.stats.file,
-          "%llu,%s,%d,%d,%d,%s,%s,%s,%.3f,%.3f,%.3f,%d,%d,%d,%d,%d,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%d,%s,0x%08lx,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%llu,%d,%d,%d,0x%08lx,%s\n",
+          "%llu,%s,%d,%d,%d,%s,%s,%s,%.3f,%.3f,%.3f,%d,%d,%d,%d,%d,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%d,%s,0x%08lx,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%llu,%d,%d,%d,0x%08lx,%s\n",
           (unsigned long long)++g_d3d11.stats.frame_index,
           s->path ? s->path : "unknown",
           success ? 1 : 0,
@@ -374,6 +376,8 @@ static void d3d11_stats_end(bool success, HRESULT hr) {
           s->rect_vertices,
           s->texture_quads,
           s->texture_draws,
+          s->texture_batch_breaks,
+          s->quad_batches,
           s->pixel_quads,
           s->maps,
           s->texture_uploads,
@@ -1346,6 +1350,7 @@ static bool d3d11_flush_quads(void) {
 
   g_d3d11.stats.frame.quad_instances += submitted_instances;
   g_d3d11.stats.frame.quad_vertices += submitted_instances * 4;
+  g_d3d11.stats.frame.quad_batches += g_d3d11.quad_batch_count;
 
   ID3D11ShaderResourceView *null_srv = NULL;
   g_d3d11.context->lpVtbl->PSSetShaderResources(g_d3d11.context, 0, 1, &null_srv);
@@ -1363,6 +1368,7 @@ static bool d3d11_queue_quad(ID3D11ShaderResourceView *srv,
     ? &g_d3d11.quad_batches[g_d3d11.quad_batch_count - 1]
     : NULL;
   if (batch && texture_dependent && batch->has_texture_dependent && batch->srv != srv) {
+    g_d3d11.stats.frame.texture_batch_breaks++;
     batch = NULL;
   }
   if (!batch) {
