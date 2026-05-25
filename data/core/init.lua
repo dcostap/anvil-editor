@@ -1559,7 +1559,12 @@ local function env_truthy(name)
 end
 
 local function rad_frame_pacing_enabled()
-  return env_truthy("ANVIL_RAD_PACING") or env_truthy("ANVIL_NO_POST_PRESENT_SLEEP")
+  if env_truthy("ANVIL_NO_POST_PRESENT_SLEEP") then return true end
+
+  local value = os.getenv("ANVIL_RAD_PACING")
+  if not value or value == "" then return true end
+  value = value:lower():match("^%s*(.-)%s*$")
+  return value ~= "0" and value ~= "false" and value ~= "no" and value ~= "off"
 end
 
 local function renderer_present_paced()

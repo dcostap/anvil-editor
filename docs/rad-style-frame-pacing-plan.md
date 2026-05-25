@@ -633,8 +633,8 @@ New proposed variables:
 ANVIL_FRAME_PACING_STATS=1
 ANVIL_FRAME_PACING_STATS_FILE=...
 ANVIL_FRAME_PACING_STATS_FLUSH=1
-ANVIL_RAD_PACING=1              # temporary rollout flag
-ANVIL_NO_POST_PRESENT_SLEEP=1   # temporary focused experiment
+ANVIL_RAD_PACING=0              # opt out of default RAD-style active-frame pacing
+ANVIL_NO_POST_PRESENT_SLEEP=1   # focused experiment / force skip post-present sleep
 ANVIL_IDLE_SLEEP_FOCUSED_MS=2
 ANVIL_IDLE_SLEEP_UNFOCUSED_MS=100
 ```
