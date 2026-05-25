@@ -186,6 +186,7 @@ static bool resize_reason_allows_same_size(const char *reason) {
   if (!reason) return false;
   return strcmp(reason, "wm_paint") == 0 ||
          strcmp(reason, "wm_paint_owned") == 0 ||
+         strcmp(reason, "wm_size_owned") == 0 ||
          strcmp(reason, "sdl_exposed") == 0 ||
          strcmp(reason, "exit_sizemove") == 0 ||
          strcmp(reason, "reentrant_final") == 0;

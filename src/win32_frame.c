@@ -26,6 +26,9 @@ void anvil_set_live_resize(bool live_resize);
 #ifndef DWMWCP_DEFAULT
 #define DWMWCP_DEFAULT 0
 #endif
+#ifndef WS_EX_NOREDIRECTIONBITMAP
+#define WS_EX_NOREDIRECTIONBITMAP 0x00200000L
+#endif
 
 #define ANVIL_WIN32_FRAME_PROP L"AnvilWin32FrameData"
 
@@ -61,6 +64,14 @@ static bool resize_dwm_flush_enabled(void) {
 
 static bool own_wm_paint_enabled(void) {
   return !env_value_is_false(getenv("ANVIL_WIN32_OWN_WM_PAINT"));
+}
+
+static bool own_wm_size_enabled(void) {
+  return !env_value_is_false(getenv("ANVIL_WIN32_OWN_WM_SIZE"));
+}
+
+static bool no_redirection_bitmap_enabled(void) {
+  return !env_value_is_false(getenv("ANVIL_WIN32_NOREDIRECTIONBITMAP"));
 }
 
 static void get_sdl_window_sizes(Win32FrameData *frame, int *point_w, int *point_h, int *pixel_w, int *pixel_h) {
@@ -381,6 +392,13 @@ static LRESULT CALLBACK frame_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
     case WM_SIZE:
       if (frame->enabled) {
         log_win32_message(frame, "WM_SIZE", wparam, lparam);
+        if (own_wm_size_enabled()) {
+          PAINTSTRUCT ps;
+          BeginPaint(hwnd, &ps);
+          if (wparam != SIZE_MINIMIZED) live_resize_frame(frame, "wm_size_owned");
+          EndPaint(hwnd, &ps);
+          return 0;
+        }
         LRESULT result = CallWindowProcW(frame->old_proc, hwnd, msg, wparam, lparam);
         if (wparam != SIZE_MINIMIZED) live_resize_frame(frame, "wm_size");
         return result;
@@ -532,6 +550,14 @@ bool win32_frame_enable(RenWindow *ren, bool enable) {
     style |= WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU;
     SetWindowLongPtrW(hwnd, GWL_STYLE, style);
   }
+
+  LONG_PTR exstyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+  if (enable && no_redirection_bitmap_enabled()) {
+    exstyle |= WS_EX_NOREDIRECTIONBITMAP;
+  } else {
+    exstyle &= ~WS_EX_NOREDIRECTIONBITMAP;
+  }
+  SetWindowLongPtrW(hwnd, GWL_EXSTYLE, exstyle);
   update_dwm(hwnd, enable);
 
   SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
