@@ -60,11 +60,15 @@ static bool env_value_is_false(const char *value) {
 }
 
 static bool resize_dwm_flush_enabled(void) {
-  return !env_value_is_false(getenv("ANVIL_D3D11_RESIZE_DWM_FLUSH"));
+  const char *value = getenv("ANVIL_D3D11_RESIZE_DWM_FLUSH");
+  if (value && value[0]) return !env_value_is_false(value);
+  return anvil_d3d11_enabled();
 }
 
 static bool own_wm_paint_enabled(void) {
-  return !env_value_is_false(getenv("ANVIL_WIN32_OWN_WM_PAINT"));
+  const char *value = getenv("ANVIL_WIN32_OWN_WM_PAINT");
+  if (value && value[0]) return !env_value_is_false(value);
+  return anvil_d3d11_enabled();
 }
 
 static bool own_wm_size_enabled(void) {
