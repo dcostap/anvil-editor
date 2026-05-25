@@ -105,6 +105,7 @@ The current D3D11 path is already command-based, but still carries old software-
 - One submit path for all 2D UI quads.
 - Current batch key is the first texture-dependent SRV in a run; solid rects are texture-independent and can be merged across texture runs without changing draw order.
 - Stats now report `quad_draws`, `quad_instances`, and `quad_vertices` for the unified path.
+- Frame-owned quad batches are uploaded to the dynamic instance buffer once per flush, then submitted as batch ranges with `StartInstanceLocation`, reducing map/discard traffic on multi-texture frames.
 
 ## Implemented checkpoints
 
