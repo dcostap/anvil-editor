@@ -1566,13 +1566,28 @@ local function renderer_present_paced()
   return renderer.is_present_paced and renderer.is_present_paced() or false
 end
 
+local last_core_step_stats = {}
+
 function core.step(next_frame_time, options)
   options = options or {}
+  local step_stats = {
+    event_ms = 0,
+    update_ms = 0,
+    pre_draw_ms = 0,
+    draw_emit_ms = 0,
+    renderer_end_ms = 0,
+    frame_time_ms = 0,
+    event_count = 0,
+  }
+  last_core_step_stats = step_stats
+
   -- handle events
   local did_keymap = false
 
+  local event_start_time = system.get_time()
   local event_received = false
   for type, a,b,c,d in system.poll_event do
+    step_stats.event_count = step_stats.event_count + 1
     if type == "textinput" and did_keymap then
       did_keymap = false
     elseif type == "mousemoved" then
@@ -1595,10 +1610,12 @@ function core.step(next_frame_time, options)
     end
     event_received = type
   end
+  step_stats.event_ms = (system.get_time() - event_start_time) * 1000
 
   local width, height = core.window:get_size()
 
   -- update
+  local update_start_time = system.get_time()
   local stats_config = config.draw_stats
   local uncapped = stats_config == "uncapped"
   local priority_event = event_received and event_received ~= "mousemoved"
@@ -1607,6 +1624,7 @@ function core.step(next_frame_time, options)
   if uncapped or resizing or priority_event or options.immediate or next_frame_time < system.get_time() then
     core.root_view:update()
   end
+  step_stats.update_ms = (system.get_time() - update_start_time) * 1000
 
   -- Skip drawing if there is time left before next frame, unless, an event is
   -- received or benchmarking. Skipping helps keep FPS near to the value set on
@@ -1622,6 +1640,8 @@ function core.step(next_frame_time, options)
     return false
   end
   core.redraw = false
+
+  local pre_draw_start_time = system.get_time()
 
   -- close unreferenced docs
   for i = #core.docs, 1, -1 do
@@ -1644,14 +1664,20 @@ function core.step(next_frame_time, options)
   end
 
   -- draw
+  step_stats.pre_draw_ms = (system.get_time() - pre_draw_start_time) * 1000
   local start_time = system.get_time()
   renderer.begin_frame(core.window)
   core.clip_rect_stack[1] = { 0, 0, width, height }
   renderer.set_clip_rect(table.unpack(core.clip_rect_stack[1]))
+  local draw_emit_start_time = system.get_time()
   core.root_view:draw()
+  step_stats.draw_emit_ms = (system.get_time() - draw_emit_start_time) * 1000
+  local renderer_end_start_time = system.get_time()
   renderer.end_frame()
+  step_stats.renderer_end_ms = (system.get_time() - renderer_end_start_time) * 1000
 
   local frame_time = system.get_time() - start_time
+  step_stats.frame_time_ms = frame_time * 1000
   rendering_speed = math.max(0.001, frame_time)
 
   if rad_frame_pacing_enabled() and renderer_present_paced() then
@@ -1939,7 +1965,7 @@ local function frame_pacing_stats_log(fields)
       frame_pacing_stats_enabled = false
       return
     end
-    frame_pacing_stats_file:write("time,seq,rad_pacing,immediate,reason,target_fps,core_fps,present_paced,active_present_paced,did_redraw,pending_events,queue_depth,run_threads_ms,core_step_ms,present_ms,sync_interval,renderer_path,sleep_requested_ms,sleep_actual_ms,skipped_post_present_sleep,total_ms,run_mode\n")
+    frame_pacing_stats_file:write("time,seq,rad_pacing,immediate,reason,target_fps,core_fps,present_paced,active_present_paced,did_redraw,pending_events,queue_depth,event_count,event_ms,update_ms,pre_draw_ms,draw_emit_ms,renderer_end_ms,frame_time_ms,run_threads_ms,core_step_ms,present_ms,sync_interval,renderer_path,draw_calls,quad_instances,texture_quads,texture_uploads,texture_upload_bytes,sleep_requested_ms,sleep_actual_ms,skipped_post_present_sleep,total_ms,run_mode\n")
     frame_pacing_stats_file:flush()
   end
   frame_pacing_stats_seq = frame_pacing_stats_seq + 1
@@ -1956,11 +1982,23 @@ local function frame_pacing_stats_log(fields)
     fields.did_redraw and "1" or "0",
     fields.pending_events and "1" or "0",
     tostring(fields.queue_depth or 0),
+    tostring(fields.event_count or 0),
+    string.format("%.3f", fields.event_ms or 0),
+    string.format("%.3f", fields.update_ms or 0),
+    string.format("%.3f", fields.pre_draw_ms or 0),
+    string.format("%.3f", fields.draw_emit_ms or 0),
+    string.format("%.3f", fields.renderer_end_ms or 0),
+    string.format("%.3f", fields.frame_time_ms or 0),
     string.format("%.3f", fields.run_threads_ms or 0),
     string.format("%.3f", fields.core_step_ms or 0),
     string.format("%.3f", fields.present_ms or 0),
     tostring(fields.sync_interval or 0),
     csv_field(fields.renderer_path),
+    tostring(fields.draw_calls or 0),
+    tostring(fields.quad_instances or 0),
+    tostring(fields.texture_quads or 0),
+    tostring(fields.texture_uploads or 0),
+    tostring(fields.texture_upload_bytes or 0),
     string.format("%.3f", fields.sleep_requested_ms or 0),
     string.format("%.3f", fields.sleep_actual_ms or 0),
     fields.skipped_post_present_sleep and "1" or "0",
@@ -2157,6 +2195,7 @@ function core.run_step(options)
   )
 
   local renderer_stats = renderer.get_last_frame_stats and renderer.get_last_frame_stats() or {}
+  local step_stats = did_redraw and last_core_step_stats or {}
   local live_resizing = core.window_resizing_until and core.window_resizing_until > system.get_time()
   resize_stats_log {
     immediate = immediate,
@@ -2182,11 +2221,23 @@ function core.run_step(options)
     did_redraw = did_redraw,
     pending_events = pending_events_at_start,
     queue_depth = system.pending_event_count and system.pending_event_count() or (system.has_pending_events() and 1 or 0),
+    event_count = step_stats.event_count,
+    event_ms = step_stats.event_ms,
+    update_ms = step_stats.update_ms,
+    pre_draw_ms = step_stats.pre_draw_ms,
+    draw_emit_ms = step_stats.draw_emit_ms,
+    renderer_end_ms = step_stats.renderer_end_ms,
+    frame_time_ms = step_stats.frame_time_ms,
     run_threads_ms = run_threads_ms,
     core_step_ms = core_step_ms,
     present_ms = renderer_stats.present_ms,
     sync_interval = renderer_stats.sync_interval,
     renderer_path = renderer_stats.path,
+    draw_calls = renderer_stats.draw_calls,
+    quad_instances = renderer_stats.quad_instances,
+    texture_quads = renderer_stats.texture_quads,
+    texture_uploads = renderer_stats.texture_uploads,
+    texture_upload_bytes = renderer_stats.texture_upload_bytes,
     sleep_requested_ms = sleep_requested_ms,
     sleep_actual_ms = sleep_actual_ms,
     skipped_post_present_sleep = skipped_post_present_sleep,

@@ -535,6 +535,16 @@ static int f_get_last_frame_stats(lua_State *L) {
   lua_setfield(L, -2, "sync_interval");
   lua_pushnumber(L, anvil_d3d11_last_present_ms());
   lua_setfield(L, -2, "present_ms");
+  lua_pushinteger(L, anvil_d3d11_last_draw_calls());
+  lua_setfield(L, -2, "draw_calls");
+  lua_pushinteger(L, anvil_d3d11_last_quad_instances());
+  lua_setfield(L, -2, "quad_instances");
+  lua_pushinteger(L, anvil_d3d11_last_texture_quads());
+  lua_setfield(L, -2, "texture_quads");
+  lua_pushinteger(L, anvil_d3d11_last_texture_uploads());
+  lua_setfield(L, -2, "texture_uploads");
+  lua_pushinteger(L, (lua_Integer)anvil_d3d11_last_texture_upload_bytes());
+  lua_setfield(L, -2, "texture_upload_bytes");
   return 1;
 }
 

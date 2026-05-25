@@ -483,6 +483,26 @@ const char *anvil_d3d11_last_frame_path(void) {
   return g_d3d11.last_frame_path ? g_d3d11.last_frame_path : "none";
 }
 
+int anvil_d3d11_last_draw_calls(void) {
+  return g_d3d11.stats.frame.draw_calls;
+}
+
+int anvil_d3d11_last_quad_instances(void) {
+  return g_d3d11.stats.frame.quad_instances;
+}
+
+int anvil_d3d11_last_texture_quads(void) {
+  return g_d3d11.stats.frame.texture_quads;
+}
+
+int anvil_d3d11_last_texture_uploads(void) {
+  return g_d3d11.stats.frame.texture_uploads;
+}
+
+size_t anvil_d3d11_last_texture_upload_bytes(void) {
+  return g_d3d11.stats.frame.texture_upload_bytes;
+}
+
 static HWND hwnd_from_sdl_window(SDL_Window *window) {
   SDL_PropertiesID props = SDL_GetWindowProperties(window);
   return (HWND) SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);

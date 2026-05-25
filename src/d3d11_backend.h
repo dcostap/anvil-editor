@@ -15,6 +15,11 @@ bool anvil_d3d11_is_present_paced(void);
 double anvil_d3d11_last_present_ms(void);
 int anvil_d3d11_last_sync_interval(void);
 const char *anvil_d3d11_last_frame_path(void);
+int anvil_d3d11_last_draw_calls(void);
+int anvil_d3d11_last_quad_instances(void);
+int anvil_d3d11_last_texture_quads(void);
+int anvil_d3d11_last_texture_uploads(void);
+size_t anvil_d3d11_last_texture_upload_bytes(void);
 bool anvil_d3d11_present(SDL_Window *window, SDL_Surface *surface,
                           float scale_x, float scale_y,
                           RenRect *rects, int rect_count);
@@ -42,6 +47,11 @@ static inline bool anvil_d3d11_is_present_paced(void) { return false; }
 static inline double anvil_d3d11_last_present_ms(void) { return 0.0; }
 static inline int anvil_d3d11_last_sync_interval(void) { return 0; }
 static inline const char *anvil_d3d11_last_frame_path(void) { return "none"; }
+static inline int anvil_d3d11_last_draw_calls(void) { return 0; }
+static inline int anvil_d3d11_last_quad_instances(void) { return 0; }
+static inline int anvil_d3d11_last_texture_quads(void) { return 0; }
+static inline int anvil_d3d11_last_texture_uploads(void) { return 0; }
+static inline size_t anvil_d3d11_last_texture_upload_bytes(void) { return 0; }
 static inline bool anvil_d3d11_present(SDL_Window *window, SDL_Surface *surface,
                                         float scale_x, float scale_y,
                                         RenRect *rects, int rect_count) {
