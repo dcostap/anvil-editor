@@ -17,6 +17,7 @@
 #include "custom_events.h"
 #include "../system_events.h"
 #include "../win32_frame.h"
+#include "../resize_diagnostics.h"
 #ifdef _WIN32
   #include <direct.h>
   #include <windows.h>
@@ -995,7 +996,17 @@ static int f_get_time(lua_State *L) {
 static int f_sleep(lua_State *L) {
   double n = luaL_checknumber(L, 1);
   if (n < 0) n = 0;
+  uint64_t start_ns = SDL_GetTicksNS();
   SDL_Delay(n * 1000);
+  uint64_t end_ns = SDL_GetTicksNS();
+  anvil_resize_diag_log(&(AnvilResizeDiagEvent){
+    .category = "lua_sleep",
+    .name = "system.sleep",
+    .live_resize = anvil_resize_diag_live_resize(),
+    .queue_depth = system_pending_event_count(),
+    .ms_a = n * 1000.0,
+    .ms_b = anvil_resize_diag_ticks_to_ms(start_ns, end_ns)
+  });
   return 0;
 }
 

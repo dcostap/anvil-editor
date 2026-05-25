@@ -2,6 +2,8 @@
 #include "renwindow.h"
 #include "win32_frame.h"
 #include "d3d11_backend.h"
+#include "resize_diagnostics.h"
+#include "system_events.h"
 
 #ifdef ANVIL_USE_SDL_RENDERER
 #include <math.h>
@@ -64,21 +66,65 @@ static void setup_renderer(RenWindow *ren, int w, int h) {
 static void init_surface(RenWindow *ren) {
   ren->scale_x = ren->scale_y = 1;
 #ifdef ANVIL_USE_SDL_RENDERER
+  uint64_t total_start_ns = SDL_GetTicksNS();
+  uint64_t destroy_start_ns = 0, destroy_end_ns = 0;
+  uint64_t query_start_ns = 0, query_end_ns = 0;
+  uint64_t create_start_ns = 0, create_end_ns = 0;
+  uint64_t setup_start_ns = 0, setup_end_ns = 0;
+  int old_w = ren->cache.rensurface.surface ? ren->cache.rensurface.surface->w : 0;
+  int old_h = ren->cache.rensurface.surface ? ren->cache.rensurface.surface->h : 0;
+
   if (ren->cache.rensurface.surface) {
+    destroy_start_ns = SDL_GetTicksNS();
     anvil_d3d11_forget_surface(ren->cache.rensurface.surface);
     SDL_DestroySurface(ren->cache.rensurface.surface);
+    destroy_end_ns = SDL_GetTicksNS();
   }
   int w, h;
+  query_start_ns = SDL_GetTicksNS();
   SDL_GetWindowSizeInPixels(ren->cache.window, &w, &h);
   SDL_PixelFormat format = SDL_GetWindowPixelFormat(ren->cache.window);
+  query_end_ns = SDL_GetTicksNS();
+  create_start_ns = SDL_GetTicksNS();
   ren->cache.rensurface.surface = SDL_CreateSurface(
     w, h, format == SDL_PIXELFORMAT_UNKNOWN ? SDL_PIXELFORMAT_BGRA32 : format
   );
+  create_end_ns = SDL_GetTicksNS();
   if (!ren->cache.rensurface.surface) {
     fprintf(stderr, "Error creating surface: %s", SDL_GetError());
     exit(1);
   }
+  setup_start_ns = SDL_GetTicksNS();
   setup_renderer(ren, w, h);
+  setup_end_ns = SDL_GetTicksNS();
+
+  anvil_resize_diag_log(&(AnvilResizeDiagEvent){
+    .category = "surface",
+    .name = "init_surface",
+    .window_id = SDL_GetWindowID(ren->cache.window),
+    .live_resize = anvil_resize_diag_live_resize(),
+    .queue_depth = system_pending_event_count(),
+    .pixel_w = w,
+    .pixel_h = h,
+    .count_a = old_w,
+    .count_b = old_h,
+    .ms_a = anvil_resize_diag_ticks_to_ms(total_start_ns, SDL_GetTicksNS()),
+    .ms_b = anvil_resize_diag_ticks_to_ms(create_start_ns, create_end_ns),
+    .ms_c = anvil_resize_diag_ticks_to_ms(setup_start_ns, setup_end_ns),
+    .detail = anvil_d3d11_enabled() ? "d3d11 destroy_ms/query_ms/create_ms/setup_ms" : "software destroy_ms/query_ms/create_ms/setup_ms"
+  });
+  anvil_resize_diag_log(&(AnvilResizeDiagEvent){
+    .category = "surface",
+    .name = "init_surface_parts",
+    .window_id = SDL_GetWindowID(ren->cache.window),
+    .live_resize = anvil_resize_diag_live_resize(),
+    .queue_depth = system_pending_event_count(),
+    .pixel_w = w,
+    .pixel_h = h,
+    .ms_a = anvil_resize_diag_ticks_to_ms(destroy_start_ns, destroy_end_ns),
+    .ms_b = anvil_resize_diag_ticks_to_ms(query_start_ns, query_end_ns),
+    .ms_c = anvil_resize_diag_ticks_to_ms(create_start_ns, create_end_ns)
+  });
 #endif
 }
 
@@ -126,18 +172,41 @@ void renwin_set_clip_rect(RenWindow *ren, RenRect rect) {
 
 void renwin_resize_surface(UNUSED RenWindow *ren) {
 #ifdef ANVIL_USE_SDL_RENDERER
+  uint64_t start_ns = SDL_GetTicksNS();
   int new_w, new_h;
   float new_scale;
+  int old_w = ren->cache.rensurface.surface ? ren->cache.rensurface.surface->w : 0;
+  int old_h = ren->cache.rensurface.surface ? ren->cache.rensurface.surface->h : 0;
+  float old_scale = ren->cache.rensurface.scale_x;
   SDL_GetWindowSizeInPixels(ren->cache.window, &new_w, &new_h);
   query_surface_scale(ren, &new_scale, NULL);
+  bool recreated = false;
   /* Note that (w, h) may differ from (new_w, new_h) on retina displays. */
   if (new_scale != ren->cache.rensurface.scale_x ||
       new_w != ren->cache.rensurface.surface->w ||
       new_h != ren->cache.rensurface.surface->h) {
+    recreated = true;
     init_surface(ren);
     renwin_clip_to_surface(ren);
     setup_renderer(ren, new_w, new_h);
   }
+  anvil_resize_diag_log(&(AnvilResizeDiagEvent){
+    .category = "surface",
+    .name = "resize_surface",
+    .window_id = SDL_GetWindowID(ren->cache.window),
+    .live_resize = anvil_resize_diag_live_resize(),
+    .queue_depth = system_pending_event_count(),
+    .pixel_w = new_w,
+    .pixel_h = new_h,
+    .count_a = recreated ? 1 : 0,
+    .count_b = anvil_d3d11_enabled() ? 1 : 0,
+    .ms_a = anvil_resize_diag_ticks_to_ms(start_ns, SDL_GetTicksNS()),
+    .ms_b = old_scale,
+    .ms_c = new_scale,
+    .detail = recreated ? "recreated" : "same_size"
+  });
+  (void)old_w;
+  (void)old_h;
 #endif
 }
 

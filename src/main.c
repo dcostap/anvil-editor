@@ -8,6 +8,7 @@
 #include "system_events.h"
 #include "renderer.h"
 #include "custom_events.h"
+#include "resize_diagnostics.h"
 
 #ifdef _WIN32
   #include <windows.h>
@@ -118,10 +119,35 @@ typedef struct {
   int        has_restarted;
   int        core_run_step_ref;
   bool       in_run_step;
+  bool       live_resize;
   Uint64     last_resize_step_ns;
+  uint64_t   resize_request_count;
+  uint64_t   resize_request_throttled;
+  uint64_t   resize_request_reentrant;
 } AppState;
 
 static AppState *live_resize_app = NULL;
+
+static void log_resize_request(AppState *app, const char *reason, const char *action,
+                               Uint64 since_last_ns, double run_ms) {
+  anvil_resize_diag_log(&(AnvilResizeDiagEvent){
+    .category = "resize_request",
+    .name = action,
+    .reason = reason,
+    .live_resize = app ? app->live_resize : anvil_resize_diag_live_resize(),
+    .in_run_step = app ? app->in_run_step : false,
+    .queue_depth = system_pending_event_count(),
+    .count_a = app ? (int)app->resize_request_count : 0,
+    .count_b = (int)(since_last_ns / 1000000ull),
+    .ms_a = run_ms
+  });
+}
+
+void anvil_set_live_resize(bool live_resize) {
+  AppState *app = live_resize_app;
+  if (app) app->live_resize = live_resize;
+  anvil_resize_diag_set_live_resize(live_resize);
+}
 
 /* Lua init-code: loads and starts the core.  core.run() is now non-blocking
  * (it only sets up the run-loop state); SDL_AppIterate drives the loop by
@@ -274,7 +300,11 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   app->has_restarted      = 0;
   app->core_run_step_ref  = -1;
   app->in_run_step        = false;
+  app->live_resize        = false;
   app->last_resize_step_ns = 0;
+  app->resize_request_count = 0;
+  app->resize_request_throttled = 0;
+  app->resize_request_reentrant = 0;
   *appstate = app;
   live_resize_app = app;
 
@@ -293,7 +323,14 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
 
 
 static SDL_AppResult app_run_step(AppState *app) {
-  if (!app || !app->L || app->in_run_step) return SDL_APP_CONTINUE;
+  if (!app || !app->L) return SDL_APP_CONTINUE;
+  if (app->in_run_step) {
+    app->resize_request_reentrant++;
+    log_resize_request(app, "app_run_step", "skip_reentrant", 0, 0.0);
+    return SDL_APP_CONTINUE;
+  }
+
+  Uint64 run_start_ns = SDL_GetTicksNS();
 
   /* Call core.run_step() — one frame of the main loop.
    * Returns true  → keep running
@@ -330,6 +367,14 @@ static SDL_AppResult app_run_step(AppState *app) {
   bool should_continue = lua_toboolean(app->L, -1);
   lua_pop(app->L, 1);
   app->in_run_step = false;
+  Uint64 run_end_ns = SDL_GetTicksNS();
+  anvil_resize_diag_log(&(AnvilResizeDiagEvent){
+    .category = "app_run_step",
+    .name = "end",
+    .live_resize = app->live_resize,
+    .queue_depth = system_pending_event_count(),
+    .ms_a = anvil_resize_diag_ticks_to_ms(run_start_ns, run_end_ns)
+  });
 
   if (!should_continue) {
     /* Distinguish between quit and restart. */
@@ -359,16 +404,38 @@ static SDL_AppResult app_run_step(AppState *app) {
 }
 
 
-void anvil_request_resize_frame(void) {
+void anvil_request_resize_frame_reason(const char *reason) {
   AppState *app = live_resize_app;
   if (!app || !app->L || app->core_run_step_ref == -1) return;
 
+  app->resize_request_count++;
   const Uint64 now = SDL_GetTicksNS();
+  const Uint64 since_last = app->last_resize_step_ns == 0 ? 0 : now - app->last_resize_step_ns;
   const Uint64 min_interval = SDL_NS_PER_SECOND / 120;
-  if (app->last_resize_step_ns == 0 || now - app->last_resize_step_ns >= min_interval) {
-    app->last_resize_step_ns = now;
-    (void)app_run_step(app);
+
+  if (app->in_run_step) {
+    app->resize_request_reentrant++;
+    log_resize_request(app, reason, "skip_reentrant", since_last, 0.0);
+    return;
   }
+
+  if (app->last_resize_step_ns != 0 && since_last < min_interval) {
+    app->resize_request_throttled++;
+    log_resize_request(app, reason, "skip_throttle", since_last, 0.0);
+    return;
+  }
+
+  app->last_resize_step_ns = now;
+  Uint64 run_start_ns = SDL_GetTicksNS();
+  SDL_AppResult result = app_run_step(app);
+  (void)result;
+  Uint64 run_end_ns = SDL_GetTicksNS();
+  log_resize_request(app, reason, "run", since_last,
+                     anvil_resize_diag_ticks_to_ms(run_start_ns, run_end_ns));
+}
+
+void anvil_request_resize_frame(void) {
+  anvil_request_resize_frame_reason("unknown");
 }
 
 static bool event_wants_immediate_resize_frame(const SDL_Event *event) {
@@ -393,7 +460,19 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
    * treats active resize as a frame-rate override, which keeps this from being
    * skipped by the normal FPS cap. */
   if (app && event_wants_immediate_resize_frame(event)) {
-    anvil_request_resize_frame();
+    const char *reason = anvil_resize_diag_event_reason(event->type);
+    anvil_resize_diag_log(&(AnvilResizeDiagEvent){
+      .category = "sdl_event",
+      .name = "immediate_resize_candidate",
+      .reason = reason,
+      .window_id = event->window.windowID,
+      .live_resize = app->live_resize,
+      .in_run_step = app->in_run_step,
+      .queue_depth = system_pending_event_count(),
+      .point_w = event->window.data1,
+      .point_h = event->window.data2
+    });
+    anvil_request_resize_frame_reason(reason);
   }
 
   return SDL_APP_CONTINUE;

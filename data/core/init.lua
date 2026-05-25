@@ -1829,6 +1829,54 @@ function collectgarbage(opt, ...)
   return ret
 end
 
+local resize_stats_file = nil
+local resize_stats_seq = 0
+local resize_stats_enabled = not not (
+  os.getenv("ANVIL_RESIZE_STATS") or os.getenv("ANVIL_LIVE_RESIZE_STATS") or os.getenv("ANVIL_LUA_RESIZE_STATS")
+)
+
+local function csv_field(value)
+  value = tostring(value or "")
+  return '"' .. value:gsub('"', '""') .. '"'
+end
+
+local function resize_stats_log(fields)
+  if not resize_stats_enabled then return end
+  if not resize_stats_file then
+    local path = os.getenv("ANVIL_LUA_RESIZE_STATS_FILE")
+    if not path or path == "" then
+      local tmp = os.getenv("TEMP") or os.getenv("TMP") or "."
+      path = tmp .. PATHSEP .. "anvil_lua_resize_stats.csv"
+    end
+    resize_stats_file = io.open(path, "wb")
+    if not resize_stats_file then
+      resize_stats_enabled = false
+      return
+    end
+    resize_stats_file:write("time,seq,immediate,reason,live_resizing,did_redraw,pending_events,run_threads_ms,core_step_ms,sleep_requested_ms,sleep_actual_ms,total_ms,run_mode\n")
+    resize_stats_file:flush()
+  end
+  resize_stats_seq = resize_stats_seq + 1
+  resize_stats_file:write(table.concat({
+    string.format("%.6f", system.get_time()),
+    tostring(resize_stats_seq),
+    fields.immediate and "1" or "0",
+    csv_field(fields.reason),
+    fields.live_resizing and "1" or "0",
+    fields.did_redraw and "1" or "0",
+    fields.pending_events and "1" or "0",
+    string.format("%.3f", fields.run_threads_ms or 0),
+    string.format("%.3f", fields.core_step_ms or 0),
+    string.format("%.3f", fields.sleep_requested_ms or 0),
+    string.format("%.3f", fields.sleep_actual_ms or 0),
+    string.format("%.3f", fields.total_ms or 0),
+    csv_field(fields.run_mode)
+  }, ",") .. "\n")
+  if os.getenv("ANVIL_RESIZE_STATS_FLUSH") or os.getenv("ANVIL_LUA_RESIZE_STATS_FLUSH") then
+    resize_stats_file:flush()
+  end
+end
+
 -- Run-loop state shared between core.run() (setup) and core.run_step() (per-frame).
 local run_next_step       = nil
 local run_skip_no_focus   = 0
@@ -1853,10 +1901,26 @@ end
 ---Called by C's SDL_AppIterate on every frame.
 ---
 ---@return boolean  true to keep running, false to quit or restart.
-function core.run_step()
-  local now     = system.get_time()
+function core.run_step(options)
+  options = options or {}
+  local immediate = not not options.immediate
+  local immediate_reason = options.reason or ""
+  local run_step_start = system.get_time()
+  local sleep_requested_ms = 0
+  local sleep_actual_ms = 0
+  local pending_events_at_start = system.has_pending_events()
+  local now     = run_step_start
   local uncapped = config.draw_stats == "uncapped"
   core.frame_start = now
+
+  local function run_step_sleep(seconds)
+    seconds = seconds or 0
+    if seconds <= 0 then return end
+    sleep_requested_ms = sleep_requested_ms + seconds * 1000
+    local sleep_start = system.get_time()
+    system.sleep(seconds)
+    sleep_actual_ms = sleep_actual_ms + (system.get_time() - sleep_start) * 1000
+  end
 
   -- start a new 1s cycle
   if core.frame_start >= cycle_end_time then
@@ -1866,8 +1930,10 @@ function core.run_step()
   end
 
   -- run all coroutine tasks
+  local threads_start = system.get_time()
   local time_to_wake   = run_threads()
-  local threads_end_time = system.get_time() - now
+  local threads_end_time = system.get_time() - threads_start
+  local run_threads_ms = threads_end_time * 1000
   now = now + threads_end_time
 
   -- respect coroutines redraw requests
@@ -1894,20 +1960,24 @@ function core.run_step()
     run_threads_mode = "all"
   end
 
+  local did_redraw = false
+  local core_step_ms = 0
+
   if run_threads_mode == "background" then
     -- run background threads, no drawing or events processing
     run_next_step = nil
     -- Cap sleep to 100 ms so focus / event changes are noticed quickly
-    system.sleep(math.min(time_to_wake, 0.1))
+    run_step_sleep(math.min(time_to_wake, 0.1))
     -- allow normal rendering when the mouse moves over the window
     if system.has_pending_events() then
       run_skip_no_focus = now + 5
     end
   else
     -- listen events and perform drawing as needed
-    local did_redraw = false
     if not run_next_step or now >= run_next_step then
+      local core_step_start = system.get_time()
       did_redraw    = core.step(run_next_frame_time)
+      core_step_ms  = (system.get_time() - core_step_start) * 1000
       now           = system.get_time()
       run_next_step = nil
     end
@@ -1929,12 +1999,12 @@ function core.run_step()
         -- be delivered via SDL_AppEvent on the next callback iteration.
         local sleep_time = math.min(run_next_step - now, time_to_wake, b)
         if sleep_time > 0 then
-          system.sleep(sleep_time)
+          run_step_sleep(sleep_time)
         end
       else
         -- No focus and nothing to do: sleep briefly to avoid spinning.
         -- SDL will call SDL_AppEvent when input arrives.
-        system.sleep(0.1)
+        run_step_sleep(0.1)
         -- allow normal rendering for up to 5 seconds after receiving event
         -- to let any animations render smoothly
         run_skip_no_focus = system.get_time() + 5
@@ -1946,7 +2016,7 @@ function core.run_step()
       local next_frame = math.max(0, 1 / core.fps - elapsed)
       run_next_frame_time = now + next_frame
       run_next_step = run_next_step or run_next_frame_time
-      system.sleep(math.min(uncapped and 0 or 1, next_frame, time_to_wake))
+      run_step_sleep(math.min(uncapped and 0 or 1, next_frame, time_to_wake))
     end
   end
 
@@ -1960,6 +2030,21 @@ function core.run_step()
   main_loop_time = main_loop_time + (
     (system.get_time() - core.frame_start) - threads_end_time
   )
+
+  local live_resizing = core.window_resizing_until and core.window_resizing_until > system.get_time()
+  resize_stats_log {
+    immediate = immediate,
+    reason = immediate_reason,
+    live_resizing = live_resizing,
+    did_redraw = did_redraw,
+    pending_events = pending_events_at_start,
+    run_threads_ms = run_threads_ms,
+    core_step_ms = core_step_ms,
+    sleep_requested_ms = sleep_requested_ms,
+    sleep_actual_ms = sleep_actual_ms,
+    total_ms = (system.get_time() - run_step_start) * 1000,
+    run_mode = run_threads_mode,
+  }
 
   return true
 end

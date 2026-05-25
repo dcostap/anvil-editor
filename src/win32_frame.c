@@ -8,9 +8,12 @@
 #include "renwindow.h"
 #include "renderer.h"
 #include "system_events.h"
+#include "resize_diagnostics.h"
 #include "win32_frame.h"
 
 void anvil_request_resize_frame(void);
+void anvil_request_resize_frame_reason(const char *reason);
+void anvil_set_live_resize(bool live_resize);
 
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
@@ -29,12 +32,49 @@ struct Win32FrameData {
   WNDPROC old_proc;
   RenWindow *ren;
   bool enabled;
+  bool live_resize;
+  int last_pixel_w;
+  int last_pixel_h;
 };
 typedef struct Win32FrameData Win32FrameData;
 
 static HWND get_hwnd(SDL_Window *window) {
   SDL_PropertiesID props = SDL_GetWindowProperties(window);
   return (HWND) SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
+}
+
+static void get_sdl_window_sizes(Win32FrameData *frame, int *point_w, int *point_h, int *pixel_w, int *pixel_h) {
+  if (point_w) *point_w = 0;
+  if (point_h) *point_h = 0;
+  if (pixel_w) *pixel_w = 0;
+  if (pixel_h) *pixel_h = 0;
+  if (!frame || !frame->ren || !frame->ren->cache.window) return;
+  SDL_GetWindowSize(frame->ren->cache.window, point_w, point_h);
+  SDL_GetWindowSizeInPixels(frame->ren->cache.window, pixel_w, pixel_h);
+}
+
+static void log_win32_message(Win32FrameData *frame, const char *name, WPARAM wparam, LPARAM lparam) {
+  int point_w = 0, point_h = 0, pixel_w = 0, pixel_h = 0;
+  get_sdl_window_sizes(frame, &point_w, &point_h, &pixel_w, &pixel_h);
+
+  RECT cr = {0};
+  if (frame && frame->hwnd) GetClientRect(frame->hwnd, &cr);
+
+  anvil_resize_diag_log(&(AnvilResizeDiagEvent){
+    .category = "win32_msg",
+    .name = name,
+    .window_id = frame && frame->ren && frame->ren->cache.window ? SDL_GetWindowID(frame->ren->cache.window) : 0,
+    .live_resize = frame ? frame->live_resize : anvil_resize_diag_live_resize(),
+    .queue_depth = system_pending_event_count(),
+    .point_w = point_w,
+    .point_h = point_h,
+    .pixel_w = pixel_w,
+    .pixel_h = pixel_h,
+    .client_w = (int)(cr.right - cr.left),
+    .client_h = (int)(cr.bottom - cr.top),
+    .count_a = (int)wparam,
+    .count_b = (int)lparam
+  });
 }
 
 static UINT dpi_for_window(HWND hwnd) {
@@ -221,12 +261,32 @@ static void push_sdl_resize_event(Win32FrameData *frame) {
   system_push_event(&event);
 }
 
-static void live_resize_frame(Win32FrameData *frame) {
+static void live_resize_frame(Win32FrameData *frame, const char *reason) {
   if (!frame || !frame->enabled || !frame->ren || !frame->ren->cache.window) return;
+  uint64_t start_ns = SDL_GetTicksNS();
+  int point_w = 0, point_h = 0, pixel_w = 0, pixel_h = 0;
+  get_sdl_window_sizes(frame, &point_w, &point_h, &pixel_w, &pixel_h);
   ren_resize_window(frame->ren);
   rencache_invalidate(&frame->ren->cache);
   push_sdl_resize_event(frame);
-  anvil_request_resize_frame();
+  uint64_t end_ns = SDL_GetTicksNS();
+  anvil_resize_diag_log(&(AnvilResizeDiagEvent){
+    .category = "win32_resize",
+    .name = "live_resize_frame",
+    .reason = reason,
+    .window_id = SDL_GetWindowID(frame->ren->cache.window),
+    .live_resize = frame->live_resize,
+    .queue_depth = system_pending_event_count(),
+    .point_w = point_w,
+    .point_h = point_h,
+    .pixel_w = pixel_w,
+    .pixel_h = pixel_h,
+    .count_a = (pixel_w == frame->last_pixel_w && pixel_h == frame->last_pixel_h) ? 1 : 0,
+    .ms_a = anvil_resize_diag_ticks_to_ms(start_ns, end_ns)
+  });
+  frame->last_pixel_w = pixel_w;
+  frame->last_pixel_h = pixel_h;
+  anvil_request_resize_frame_reason(reason ? reason : "win32_resize");
 }
 
 static void toggle_maximize(HWND hwnd) {
@@ -258,18 +318,38 @@ static LRESULT CALLBACK frame_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
   if (!frame) return DefWindowProcW(hwnd, msg, wparam, lparam);
 
   switch (msg) {
+    case WM_ENTERSIZEMOVE:
+      if (frame->enabled) {
+        frame->live_resize = true;
+        anvil_resize_diag_set_live_resize(true);
+        anvil_set_live_resize(true);
+        log_win32_message(frame, "WM_ENTERSIZEMOVE", wparam, lparam);
+      }
+      break;
+
+    case WM_EXITSIZEMOVE:
+      if (frame->enabled) {
+        log_win32_message(frame, "WM_EXITSIZEMOVE", wparam, lparam);
+        frame->live_resize = false;
+        anvil_resize_diag_set_live_resize(false);
+        anvil_set_live_resize(false);
+      }
+      break;
+
     case WM_SIZE:
       if (frame->enabled) {
+        log_win32_message(frame, "WM_SIZE", wparam, lparam);
         LRESULT result = CallWindowProcW(frame->old_proc, hwnd, msg, wparam, lparam);
-        if (wparam != SIZE_MINIMIZED) live_resize_frame(frame);
+        if (wparam != SIZE_MINIMIZED) live_resize_frame(frame, "wm_size");
         return result;
       }
       break;
 
     case WM_PAINT:
       if (frame->enabled) {
+        log_win32_message(frame, "WM_PAINT", wparam, lparam);
         LRESULT result = CallWindowProcW(frame->old_proc, hwnd, msg, wparam, lparam);
-        live_resize_frame(frame);
+        live_resize_frame(frame, "wm_paint");
         return result;
       }
       break;

@@ -19,6 +19,9 @@ void system_flush_events(uint32_t type);
  * Used by core.run_step() to detect burst-input mode without blocking. */
 bool system_has_pending_events(void);
 
+/* Number of events currently queued for Lua-side polling. */
+int system_pending_event_count(void);
+
 /* Pop the next event from the internal queue into *event.
  * Returns true if an event was available, false if the queue was empty. */
 bool system_event_pop(SDL_Event *event);

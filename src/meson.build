@@ -21,6 +21,7 @@ anvil_sources = [
     'arena_allocator.c',
     'custom_events.c',
     'system_events.c',
+    'resize_diagnostics.c',
     'renderer.c',
     'renwindow.c',
     'rencache.c',

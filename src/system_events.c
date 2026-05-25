@@ -1,5 +1,6 @@
 #include <SDL3/SDL.h>
 #include "system_events.h"
+#include "resize_diagnostics.h"
 
 /* ---------------------------------------------------------------------------
  * Internal event queue for SDL3 main-callback mode.
@@ -80,10 +81,52 @@ static bool system_event_is_handled(uint32_t type) {
   }
 }
 
+static uint32_t system_event_window_id(const SDL_Event *event) {
+  switch (event->type) {
+    case SDL_EVENT_WINDOW_RESIZED:
+    case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
+    case SDL_EVENT_WINDOW_EXPOSED:
+    case SDL_EVENT_WINDOW_MINIMIZED:
+    case SDL_EVENT_WINDOW_MAXIMIZED:
+    case SDL_EVENT_WINDOW_RESTORED:
+    case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+    case SDL_EVENT_WINDOW_FOCUS_LOST:
+    case SDL_EVENT_WINDOW_FOCUS_GAINED:
+    case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
+    case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+      return event->window.windowID;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+      return event->button.windowID;
+    case SDL_EVENT_MOUSE_MOTION:
+      return event->motion.windowID;
+    case SDL_EVENT_MOUSE_WHEEL:
+      return event->wheel.windowID;
+    case SDL_EVENT_TEXT_INPUT:
+      return event->text.windowID;
+    case SDL_EVENT_TEXT_EDITING:
+      return event->edit.windowID;
+    case SDL_EVENT_KEY_DOWN:
+    case SDL_EVENT_KEY_UP:
+      return event->key.windowID;
+    case SDL_EVENT_DROP_FILE:
+      return event->drop.windowID;
+    case SDL_EVENT_FINGER_DOWN:
+    case SDL_EVENT_FINGER_UP:
+    case SDL_EVENT_FINGER_MOTION:
+      return event->tfinger.windowID;
+    default:
+      return 0;
+  }
+}
+
 void system_push_event(const SDL_Event *event) {
   /* Discard event types that f_poll_event() never consumes */
   if (!system_event_is_handled(event->type))
     return;
+
+  int queue_depth_before = system_event_queue_count;
+  uint32_t event_window_id = system_event_window_id(event);
 
   /* Coalesce high-frequency events for the same window. During live window
    * resize, SDL can deliver many resize / pixel-size events before Lua gets a
@@ -97,6 +140,16 @@ void system_push_event(const SDL_Event *event) {
       if (system_event_queue[idx].type == event->type &&
           system_event_queue[idx].window.windowID == event->window.windowID) {
         system_event_queue[idx] = *event;
+        anvil_resize_diag_log(&(AnvilResizeDiagEvent){
+          .category = "event_queue",
+          .name = "coalesce",
+          .reason = anvil_resize_diag_event_reason(event->type),
+          .window_id = event->window.windowID,
+          .live_resize = anvil_resize_diag_live_resize(),
+          .queue_depth = system_event_queue_count,
+          .count_a = queue_depth_before,
+          .detail = "same_type_resize"
+        });
         return;
       }
     }
@@ -133,7 +186,25 @@ void system_push_event(const SDL_Event *event) {
                     % SYSTEM_EVENT_QUEUE_SIZE;
     system_event_queue[write_idx] = *event;
     system_event_queue_count++;
+    anvil_resize_diag_log(&(AnvilResizeDiagEvent){
+      .category = "event_queue",
+      .name = "push",
+      .reason = anvil_resize_diag_event_reason(event->type),
+      .window_id = event_window_id,
+      .live_resize = anvil_resize_diag_live_resize(),
+      .queue_depth = system_event_queue_count,
+      .count_a = queue_depth_before
+    });
   } else {
+    anvil_resize_diag_log(&(AnvilResizeDiagEvent){
+      .category = "event_queue",
+      .name = "drop_full",
+      .reason = anvil_resize_diag_event_reason(event->type),
+      .window_id = event_window_id,
+      .live_resize = anvil_resize_diag_live_resize(),
+      .queue_depth = system_event_queue_count,
+      .count_a = queue_depth_before
+    });
     SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                 "system event queue full; dropping event type 0x%x", event->type);
   }
@@ -157,6 +228,10 @@ void system_flush_events(uint32_t type) {
 
 bool system_has_pending_events(void) {
   return system_event_queue_count > 0;
+}
+
+int system_pending_event_count(void) {
+  return system_event_queue_count;
 }
 
 bool system_event_pop(SDL_Event *event) {
