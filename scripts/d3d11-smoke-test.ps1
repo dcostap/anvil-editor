@@ -140,6 +140,12 @@ try {
 
   for ($i = 1; $i -le $ScrollSteps; $i++) {
     [AnvilSmokeWin32]::SetForegroundWindow($hwnd) | Out-Null
+    $rect = New-Object AnvilSmokeWin32+RECT
+    [AnvilSmokeWin32]::GetWindowRect($hwnd, [ref]$rect) | Out-Null
+    $mx = [int](($rect.Left + $rect.Right) / 2)
+    $my = [int](($rect.Top + $rect.Bottom) / 2)
+    $lp = (($my -band 0xffff) -shl 16) -bor ($mx -band 0xffff)
+    [AnvilSmokeWin32]::PostMessage($hwnd, 0x020A, [IntPtr](-7864320), [IntPtr]$lp) | Out-Null
     [AnvilSmokeWin32]::PostMessage($hwnd, 0x0100, [IntPtr]0x22, [IntPtr]0) | Out-Null
     [AnvilSmokeWin32]::PostMessage($hwnd, 0x0101, [IntPtr]0x22, [IntPtr]0) | Out-Null
     Start-Sleep -Milliseconds 180
