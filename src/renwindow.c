@@ -188,7 +188,6 @@ void renwin_resize_surface(UNUSED RenWindow *ren) {
     recreated = true;
     init_surface(ren);
     renwin_clip_to_surface(ren);
-    setup_renderer(ren, new_w, new_h);
   }
   anvil_resize_diag_log(&(AnvilResizeDiagEvent){
     .category = "surface",
