@@ -29,6 +29,10 @@ typedef struct {
   SDL_Window *window;   /* The cache can be used for both a window or surface */
   RenSurface rensurface;
 #ifdef ANVIL_USE_SDL_RENDERER
+  int window_width;
+  int window_height;
+  int window_pixel_width;
+  int window_pixel_height;
   SDL_Renderer *renderer;
   SDL_Texture *texture;
 #endif
@@ -47,6 +51,7 @@ void  rencache_invalidate(RenCache *rc);
 void  rencache_begin_frame(RenCache *rc);
 void  rencache_end_frame(RenCache *rc);
 RenSurface rencache_get_surface(RenCache *rc);
+void rencache_get_size(RenCache *rc, int *w, int *h);
 void rencache_update_rects(RenCache *rc, RenRect *rects, int count);
 
 #endif

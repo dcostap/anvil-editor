@@ -338,8 +338,7 @@ static int f_get_size(lua_State *L) {
   int w = 0, h = 0;
   RenWindow *window = ren_get_target_window();
   if (window) {
-    RenSurface rs = rencache_get_surface(&window->cache);
-    ren_get_size(&rs, &w, &h);
+    rencache_get_size(&window->cache, &w, &h);
   }
   lua_pushnumber(L, w);
   lua_pushnumber(L, h);

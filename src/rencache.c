@@ -187,6 +187,10 @@ void rencache_init(RenCache *rc) {
   rc->window = NULL;
   rc->rensurface.surface = NULL;
 #ifdef ANVIL_USE_SDL_RENDERER
+  rc->window_width = 0;
+  rc->window_height = 0;
+  rc->window_pixel_width = 0;
+  rc->window_pixel_height = 0;
   rc->texture = NULL;
   rc->renderer = NULL;
 #endif
@@ -306,8 +310,7 @@ void rencache_begin_frame(RenCache *ren_cache) {
   /* reset all cells if the screen width/height has changed */
   int w, h;
   ren_cache->resize_issue = false;
-  RenSurface rs = rencache_get_surface(ren_cache);
-  ren_get_size(&rs, &w, &h);
+  rencache_get_size(ren_cache, &w, &h);
   if (ren_cache->screen_rect.width != w || h != ren_cache->screen_rect.height) {
     ren_cache->screen_rect.width = w;
     ren_cache->screen_rect.height = h;
@@ -349,9 +352,8 @@ static void push_rect(RenCache *ren_cache, RenRect r, int *count) {
 static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
   if (!anvil_d3d11_enabled() || !ren_cache || !ren_cache->window) return false;
 
-  RenSurface rs = rencache_get_surface(ren_cache);
   int width = 0, height = 0;
-  ren_get_size(&rs, &width, &height);
+  rencache_get_size(ren_cache, &width, &height);
   if (width <= 0 || height <= 0) return false;
 
   RenColor clear = { 0, 0, 0, 255 };
@@ -563,6 +565,21 @@ RenSurface rencache_get_surface(RenCache *ren_cache) {
   }
   return ren_cache->rensurface;
 #endif
+}
+
+void rencache_get_size(RenCache *ren_cache, int *w, int *h) {
+#ifdef ANVIL_USE_SDL_RENDERER
+  if (w) *w = 0;
+  if (h) *h = 0;
+  if (ren_cache && ren_cache->window && ren_cache->window_width > 0 && ren_cache->window_height > 0) {
+    if (w) *w = ren_cache->window_width;
+    if (h) *h = ren_cache->window_height;
+    return;
+  }
+#endif
+  if (!ren_cache) return;
+  RenSurface rs = rencache_get_surface(ren_cache);
+  ren_get_size(&rs, w, h);
 }
 
 

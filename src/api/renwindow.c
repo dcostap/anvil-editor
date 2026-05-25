@@ -68,8 +68,7 @@ static int f_renwin_gc(lua_State *L) {
 static int f_renwin_get_size(lua_State *L) {
   RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
   int w, h;
-  RenSurface rs = rencache_get_surface(&window_renderer->cache);
-  ren_get_size(&rs, &w, &h);
+  rencache_get_size(&window_renderer->cache, &w, &h);
   lua_pushnumber(L, w);
   lua_pushnumber(L, h);
   return 2;

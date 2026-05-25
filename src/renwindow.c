@@ -17,12 +17,24 @@ static void query_surface_scale(RenWindow *ren, float* scale_x, float* scale_y) 
   int w_points, h_points;
   SDL_GetWindowSizeInPixels(ren->cache.window, &w_pixels, &h_pixels);
   SDL_GetWindowSize(ren->cache.window, &w_points, &h_points);
-  float scaleX = (float) w_pixels / (float) w_points;
-  float scaleY = (float) h_pixels / (float) h_points;
+  float scaleX = w_points > 0 ? (float) w_pixels / (float) w_points : 1.0f;
+  float scaleY = h_points > 0 ? (float) h_pixels / (float) h_points : 1.0f;
   if(scale_x)
     *scale_x = round(scaleX * 100) / 100;
   if(scale_y)
     *scale_y = round(scaleY * 100) / 100;
+}
+
+static void update_cached_window_size(RenWindow *ren) {
+  int point_w = 0, point_h = 0;
+  int pixel_w = 0, pixel_h = 0;
+  SDL_GetWindowSize(ren->cache.window, &point_w, &point_h);
+  SDL_GetWindowSizeInPixels(ren->cache.window, &pixel_w, &pixel_h);
+  query_surface_scale(ren, &ren->cache.rensurface.scale_x, &ren->cache.rensurface.scale_y);
+  ren->cache.window_width = point_w;
+  ren->cache.window_height = point_h;
+  ren->cache.window_pixel_width = pixel_w;
+  ren->cache.window_pixel_height = pixel_h;
 }
 
 static void setup_renderer(RenWindow *ren, int w, int h) {
@@ -96,6 +108,7 @@ static void init_surface(RenWindow *ren) {
   }
   setup_start_ns = SDL_GetTicksNS();
   setup_renderer(ren, w, h);
+  update_cached_window_size(ren);
   setup_end_ns = SDL_GetTicksNS();
 
   anvil_resize_diag_log(&(AnvilResizeDiagEvent){
@@ -173,21 +186,29 @@ void renwin_set_clip_rect(RenWindow *ren, RenRect rect) {
 void renwin_resize_surface(UNUSED RenWindow *ren) {
 #ifdef ANVIL_USE_SDL_RENDERER
   uint64_t start_ns = SDL_GetTicksNS();
-  int new_w, new_h;
-  float new_scale;
+  int new_w = 0, new_h = 0;
+  float new_scale = 1.0f;
   int old_w = ren->cache.rensurface.surface ? ren->cache.rensurface.surface->w : 0;
   int old_h = ren->cache.rensurface.surface ? ren->cache.rensurface.surface->h : 0;
   float old_scale = ren->cache.rensurface.scale_x;
   SDL_GetWindowSizeInPixels(ren->cache.window, &new_w, &new_h);
   query_surface_scale(ren, &new_scale, NULL);
   bool recreated = false;
+  bool deferred = false;
   /* Note that (w, h) may differ from (new_w, new_h) on retina displays. */
   if (new_scale != ren->cache.rensurface.scale_x ||
       new_w != ren->cache.rensurface.surface->w ||
       new_h != ren->cache.rensurface.surface->h) {
-    recreated = true;
-    init_surface(ren);
-    renwin_clip_to_surface(ren);
+    if (anvil_d3d11_enabled() && anvil_resize_diag_live_resize()) {
+      deferred = true;
+      update_cached_window_size(ren);
+    } else {
+      recreated = true;
+      init_surface(ren);
+      renwin_clip_to_surface(ren);
+    }
+  } else {
+    update_cached_window_size(ren);
   }
   anvil_resize_diag_log(&(AnvilResizeDiagEvent){
     .category = "surface",
@@ -195,6 +216,8 @@ void renwin_resize_surface(UNUSED RenWindow *ren) {
     .window_id = SDL_GetWindowID(ren->cache.window),
     .live_resize = anvil_resize_diag_live_resize(),
     .queue_depth = system_pending_event_count(),
+    .point_w = ren->cache.window_width,
+    .point_h = ren->cache.window_height,
     .pixel_w = new_w,
     .pixel_h = new_h,
     .count_a = recreated ? 1 : 0,
@@ -202,7 +225,7 @@ void renwin_resize_surface(UNUSED RenWindow *ren) {
     .ms_a = anvil_resize_diag_ticks_to_ms(start_ns, SDL_GetTicksNS()),
     .ms_b = old_scale,
     .ms_c = new_scale,
-    .detail = recreated ? "recreated" : "same_size"
+    .detail = recreated ? "recreated" : (deferred ? "deferred_live_d3d11" : "same_size")
   });
   (void)old_w;
   (void)old_h;
