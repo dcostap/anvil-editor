@@ -99,11 +99,19 @@ The current D3D11 path is already command-based, but still carries old software-
 
 ### M5: Unified 2D batch groups
 
-- Optional deeper step after M3/M4 are stable:
-  - single quad instance type for rects, glyphs, images,
-  - white texture for solid rects,
-  - batch key includes texture/mode/clip,
-  - one submit path for all 2D UI quads.
+- Single quad instance type for rects, glyphs, images.
+- White texture/SRV for solid rects.
+- Per-instance mode so solid, glyph-alpha, color-key-ish, and RGBA quads share the same shader.
+- One submit path for all 2D UI quads.
+- Current batch key is the first texture-dependent SRV in a run; solid rects are texture-independent and can be merged across texture runs without changing draw order.
+- Stats now report `quad_draws`, `quad_instances`, and `quad_vertices` for the unified path.
+
+## Implemented checkpoints
+
+- M1-M2: smoke harness, hardware/WARP diagnostics, frame-latency policy.
+- M3-M4: instanced texture/glyph and rect quads via `SV_VertexID`.
+- M5: rects, text glyphs, images, and pixel uploads now use the unified D3D11 quad submit path.
+- Smoke screenshots are captured via `PrintWindow`, validated by distinct hashes after scroll, and stats are asserted to stay on successful hardware `commands` frames by default.
 
 ## Acceptance loop
 
