@@ -8,6 +8,7 @@
 #include <SDL3/SDL.h>
 #include "renwindow.h"
 #include "renderer.h"
+#include "d3d11_backend.h"
 #include "system_events.h"
 #include "resize_diagnostics.h"
 #include "win32_frame.h"
@@ -67,11 +68,15 @@ static bool own_wm_paint_enabled(void) {
 }
 
 static bool own_wm_size_enabled(void) {
-  return !env_value_is_false(getenv("ANVIL_WIN32_OWN_WM_SIZE"));
+  const char *value = getenv("ANVIL_WIN32_OWN_WM_SIZE");
+  if (value && value[0]) return !env_value_is_false(value);
+  return anvil_d3d11_enabled();
 }
 
 static bool no_redirection_bitmap_enabled(void) {
-  return !env_value_is_false(getenv("ANVIL_WIN32_NOREDIRECTIONBITMAP"));
+  const char *value = getenv("ANVIL_WIN32_NOREDIRECTIONBITMAP");
+  if (value && value[0]) return !env_value_is_false(value);
+  return anvil_d3d11_enabled();
 }
 
 static void get_sdl_window_sizes(Win32FrameData *frame, int *point_w, int *point_h, int *pixel_w, int *pixel_h) {
