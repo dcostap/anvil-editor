@@ -172,6 +172,7 @@ $oldRenderer = $env:ANVIL_RENDERER
 $oldStats = $env:ANVIL_D3D11_STATS
 $oldStatsFile = $env:ANVIL_D3D11_STATS_FILE
 $oldStatsFlush = $env:ANVIL_D3D11_STATS_FLUSH
+$proc = $null
 try {
   $smokeUserDir = Join-Path $runDir ".config\anvil"
   New-Item -ItemType Directory -Force -Path $smokeUserDir | Out-Null
@@ -232,13 +233,19 @@ try {
     throw "Scroll validation failed: captured screenshots are identical"
   }
 
-  if (!$KeepOpen) {
-    $proc.CloseMainWindow() | Out-Null
-    if (!$proc.WaitForExit(3000)) { $proc.Kill() }
-  }
-
   Write-Host "Smoke output: $outDir"
 } finally {
+  if ($proc -and !$KeepOpen) {
+    try {
+      $proc.Refresh()
+      if (!$proc.HasExited) {
+        $proc.CloseMainWindow() | Out-Null
+        if (!$proc.WaitForExit(3000)) { $proc.Kill() }
+      }
+    } catch {
+      try { if ($proc -and !$proc.HasExited) { $proc.Kill() } } catch {}
+    }
+  }
   $env:USERPROFILE = $oldUserProfile
   $env:ANVIL_USERDIR = $oldUserDir
   $env:ANVIL_RENDERER = $oldRenderer
