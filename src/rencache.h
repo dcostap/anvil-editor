@@ -15,6 +15,20 @@
 #define RENCACHE_CELLS_Y ((4320 + RENCACHE_CELL_SIZE) / RENCACHE_CELL_SIZE)
 
 typedef struct {
+  int commands;
+  int set_clip_commands;
+  int rect_commands;
+  int text_commands;
+  int canvas_commands;
+  int pixels_commands;
+  int poly_commands;
+  size_t command_bytes;
+  size_t text_bytes;
+  double draw_text_ms;
+  double draw_text_width_ms;
+} RenCacheFrameStats;
+
+typedef struct {
   uint8_t *command_buf;
   size_t command_buf_idx;
   size_t command_buf_size;
@@ -53,5 +67,7 @@ void  rencache_end_frame(RenCache *rc);
 RenSurface rencache_get_surface(RenCache *rc);
 void rencache_get_size(RenCache *rc, int *w, int *h);
 void rencache_update_rects(RenCache *rc, RenRect *rects, int count);
+const RenCacheFrameStats *rencache_get_last_frame_stats(void);
+
 
 #endif

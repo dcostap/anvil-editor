@@ -86,6 +86,14 @@ typedef struct {
 } DrawPixelsCommand;
 
 static bool show_debug = false;
+static RenCacheFrameStats g_rencache_frame_stats;
+static RenCacheFrameStats g_rencache_last_frame_stats;
+
+static double rencache_perf_ms(uint64_t start, uint64_t end) {
+  uint64_t freq = SDL_GetPerformanceFrequency();
+  if (!freq) return 0.0;
+  return ((double)(end - start) * 1000.0) / (double)freq;
+}
 
 static inline int rencache_min(int a, int b) { return a < b ? a : b; }
 static inline int rencache_max(int a, int b) { return a > b ? a : b; }
@@ -168,7 +176,23 @@ static void* push_command(RenCache *ren_cache, enum CommandType type, int size) 
   memset(cmd, 0, size);
   cmd->type = type;
   cmd->size = size;
+  if (ren_cache->window) {
+    g_rencache_frame_stats.commands++;
+    g_rencache_frame_stats.command_bytes += (size_t)size;
+    switch (type) {
+      case SET_CLIP: g_rencache_frame_stats.set_clip_commands++; break;
+      case DRAW_TEXT: g_rencache_frame_stats.text_commands++; break;
+      case DRAW_RECT: g_rencache_frame_stats.rect_commands++; break;
+      case DRAW_POLY: g_rencache_frame_stats.poly_commands++; break;
+      case DRAW_CANVAS: g_rencache_frame_stats.canvas_commands++; break;
+      case DRAW_PIXELS: g_rencache_frame_stats.pixels_commands++; break;
+    }
+  }
   return cmd->command;
+}
+
+const RenCacheFrameStats *rencache_get_last_frame_stats(void) {
+  return &g_rencache_last_frame_stats;
 }
 
 
@@ -239,8 +263,14 @@ void rencache_draw_rect(RenCache *ren_cache, RenRect rect, RenColor color, bool 
 
 double rencache_draw_text(RenCache *ren_cache, RenFont **fonts, const char *text, size_t len, double x, double y, RenColor color, RenTab tab)
 {
+  uint64_t draw_text_start = ren_cache && ren_cache->window ? SDL_GetPerformanceCounter() : 0;
   int x_offset;
+  uint64_t width_start = draw_text_start ? SDL_GetPerformanceCounter() : 0;
   double width = ren_font_group_get_width(fonts, text, len, tab, &x_offset);
+  if (width_start) {
+    uint64_t width_end = SDL_GetPerformanceCounter();
+    g_rencache_frame_stats.draw_text_width_ms += rencache_perf_ms(width_start, width_end);
+  }
   RenRect rect = { x + x_offset, y, (int)(width - x_offset), ren_font_group_get_height(fonts) };
   if (rects_overlap(ren_cache->last_clip_rect, rect)) {
     int sz = len + 1;
@@ -254,7 +284,12 @@ double rencache_draw_text(RenCache *ren_cache, RenFont **fonts, const char *text
       cmd->len = len;
       cmd->tab_size = ren_font_group_get_tab_size(fonts);
       cmd->tab = tab;
+      if (ren_cache->window) g_rencache_frame_stats.text_bytes += len;
     }
+  }
+  if (draw_text_start) {
+    uint64_t draw_text_end = SDL_GetPerformanceCounter();
+    g_rencache_frame_stats.draw_text_ms += rencache_perf_ms(draw_text_start, draw_text_end);
   }
   return x + width;
 }
@@ -307,6 +342,9 @@ void rencache_invalidate(RenCache *ren_cache) {
 
 
 void rencache_begin_frame(RenCache *ren_cache) {
+  if (ren_cache && ren_cache->window) {
+    memset(&g_rencache_frame_stats, 0, sizeof(g_rencache_frame_stats));
+  }
   /* reset all cells if the screen width/height has changed */
   int w, h;
   ren_cache->resize_issue = false;
@@ -460,6 +498,7 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
 
   if (!anvil_d3d11_end_frame(ren_cache->window)) return false;
   SDL_ShowWindow(ren_cache->window);
+  g_rencache_last_frame_stats = g_rencache_frame_stats;
   ren_cache->command_buf_idx = 0;
   return true;
 
@@ -570,6 +609,7 @@ void rencache_end_frame(RenCache *ren_cache) {
   unsigned *tmp = ren_cache->cells;
   ren_cache->cells = ren_cache->cells_prev;
   ren_cache->cells_prev = tmp;
+  if (ren_cache->window) g_rencache_last_frame_stats = g_rencache_frame_stats;
   ren_cache->command_buf_idx = 0;
 }
 

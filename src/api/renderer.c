@@ -528,7 +528,8 @@ static int f_is_present_paced(lua_State *L) {
 }
 
 static int f_get_last_frame_stats(lua_State *L) {
-  lua_createtable(L, 0, 3);
+  const RenCacheFrameStats *rc_stats = rencache_get_last_frame_stats();
+  lua_createtable(L, 0, 20);
   lua_pushstring(L, anvil_d3d11_last_frame_path());
   lua_setfield(L, -2, "path");
   lua_pushinteger(L, anvil_d3d11_last_sync_interval());
@@ -545,6 +546,22 @@ static int f_get_last_frame_stats(lua_State *L) {
   lua_setfield(L, -2, "texture_uploads");
   lua_pushinteger(L, (lua_Integer)anvil_d3d11_last_texture_upload_bytes());
   lua_setfield(L, -2, "texture_upload_bytes");
+  lua_pushinteger(L, rc_stats ? rc_stats->commands : 0);
+  lua_setfield(L, -2, "rencache_commands");
+  lua_pushinteger(L, rc_stats ? rc_stats->text_commands : 0);
+  lua_setfield(L, -2, "rencache_text_commands");
+  lua_pushinteger(L, rc_stats ? rc_stats->rect_commands : 0);
+  lua_setfield(L, -2, "rencache_rect_commands");
+  lua_pushinteger(L, rc_stats ? rc_stats->set_clip_commands : 0);
+  lua_setfield(L, -2, "rencache_set_clip_commands");
+  lua_pushinteger(L, rc_stats ? (lua_Integer)rc_stats->command_bytes : 0);
+  lua_setfield(L, -2, "rencache_command_bytes");
+  lua_pushinteger(L, rc_stats ? (lua_Integer)rc_stats->text_bytes : 0);
+  lua_setfield(L, -2, "rencache_text_bytes");
+  lua_pushnumber(L, rc_stats ? rc_stats->draw_text_ms : 0.0);
+  lua_setfield(L, -2, "rencache_draw_text_ms");
+  lua_pushnumber(L, rc_stats ? rc_stats->draw_text_width_ms : 0.0);
+  lua_setfield(L, -2, "rencache_draw_text_width_ms");
   return 1;
 }
 

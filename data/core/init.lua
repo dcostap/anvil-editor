@@ -1965,7 +1965,7 @@ local function frame_pacing_stats_log(fields)
       frame_pacing_stats_enabled = false
       return
     end
-    frame_pacing_stats_file:write("time,seq,rad_pacing,immediate,reason,target_fps,core_fps,present_paced,active_present_paced,did_redraw,pending_events,queue_depth,event_count,event_ms,update_ms,pre_draw_ms,draw_emit_ms,renderer_end_ms,frame_time_ms,run_threads_ms,core_step_ms,present_ms,sync_interval,renderer_path,draw_calls,quad_instances,texture_quads,texture_uploads,texture_upload_bytes,sleep_requested_ms,sleep_actual_ms,skipped_post_present_sleep,total_ms,run_mode\n")
+    frame_pacing_stats_file:write("time,seq,rad_pacing,immediate,reason,target_fps,core_fps,present_paced,active_present_paced,did_redraw,pending_events,queue_depth,event_count,event_ms,update_ms,pre_draw_ms,draw_emit_ms,renderer_end_ms,frame_time_ms,run_threads_ms,core_step_ms,present_ms,sync_interval,renderer_path,draw_calls,quad_instances,texture_quads,texture_uploads,texture_upload_bytes,rencache_commands,rencache_text_commands,rencache_rect_commands,rencache_set_clip_commands,rencache_command_bytes,rencache_text_bytes,rencache_draw_text_ms,rencache_draw_text_width_ms,sleep_requested_ms,sleep_actual_ms,skipped_post_present_sleep,total_ms,run_mode\n")
     frame_pacing_stats_file:flush()
   end
   frame_pacing_stats_seq = frame_pacing_stats_seq + 1
@@ -1999,6 +1999,14 @@ local function frame_pacing_stats_log(fields)
     tostring(fields.texture_quads or 0),
     tostring(fields.texture_uploads or 0),
     tostring(fields.texture_upload_bytes or 0),
+    tostring(fields.rencache_commands or 0),
+    tostring(fields.rencache_text_commands or 0),
+    tostring(fields.rencache_rect_commands or 0),
+    tostring(fields.rencache_set_clip_commands or 0),
+    tostring(fields.rencache_command_bytes or 0),
+    tostring(fields.rencache_text_bytes or 0),
+    string.format("%.3f", fields.rencache_draw_text_ms or 0),
+    string.format("%.3f", fields.rencache_draw_text_width_ms or 0),
     string.format("%.3f", fields.sleep_requested_ms or 0),
     string.format("%.3f", fields.sleep_actual_ms or 0),
     fields.skipped_post_present_sleep and "1" or "0",
@@ -2238,6 +2246,14 @@ function core.run_step(options)
     texture_quads = renderer_stats.texture_quads,
     texture_uploads = renderer_stats.texture_uploads,
     texture_upload_bytes = renderer_stats.texture_upload_bytes,
+    rencache_commands = renderer_stats.rencache_commands,
+    rencache_text_commands = renderer_stats.rencache_text_commands,
+    rencache_rect_commands = renderer_stats.rencache_rect_commands,
+    rencache_set_clip_commands = renderer_stats.rencache_set_clip_commands,
+    rencache_command_bytes = renderer_stats.rencache_command_bytes,
+    rencache_text_bytes = renderer_stats.rencache_text_bytes,
+    rencache_draw_text_ms = renderer_stats.rencache_draw_text_ms,
+    rencache_draw_text_width_ms = renderer_stats.rencache_draw_text_width_ms,
     sleep_requested_ms = sleep_requested_ms,
     sleep_actual_ms = sleep_actual_ms,
     skipped_post_present_sleep = skipped_post_present_sleep,
