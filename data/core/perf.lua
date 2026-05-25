@@ -5,7 +5,7 @@ local perf = {}
 local recording = false
 local record = nil
 local originals = {}
-local sample_interval = 1000
+local sample_interval = 10000
 
 local function csv_escape(value)
   value = tostring(value or "")
@@ -40,9 +40,18 @@ end
 
 local function hook()
   if not record then return end
-  local info = debug.getinfo(2, "Sl")
-  add_count(record.lua_samples, source_key(info), 1)
-  record.sample_count = record.sample_count + 1
+  local level = 2
+  while level < 16 do
+    local info = debug.getinfo(level, "Sl")
+    if not info then return end
+    local src = info.short_src or info.source or ""
+    if not src:find("core[/\\]perf%.lua") then
+      add_count(record.lua_samples, source_key(info), 1)
+      record.sample_count = record.sample_count + 1
+      return
+    end
+    level = level + 1
+  end
 end
 
 local function wrap_renderer_api(name)
@@ -86,6 +95,7 @@ function perf.on_frame(snapshot)
   if not recording or not record or not snapshot or not snapshot.did_redraw then return end
   record.frame_count = record.frame_count + 1
   if snapshot.over_budget then record.over_budget_count = record.over_budget_count + 1 end
+  local renderer_stats = renderer.get_last_frame_stats and renderer.get_last_frame_stats() or {}
   record.file:write(table.concat({
     string.format("%.6f", snapshot.time or system.get_time()),
     string.format("%.3f", snapshot.fps or 0),
@@ -97,10 +107,10 @@ function perf.on_frame(snapshot)
     string.format("%.3f", snapshot.present_ms or 0),
     string.format("%.3f", snapshot.core_step_ms or 0),
     string.format("%.3f", snapshot.total_ms or 0),
-    tostring(snapshot_value(snapshot, "draw_calls")),
-    tostring(snapshot_value(snapshot, "quad_instances")),
-    tostring(snapshot_value(snapshot, "texture_uploads")),
-    tostring(snapshot_value(snapshot, "texture_upload_bytes")),
+    tostring(renderer_stats.draw_calls or 0),
+    tostring(renderer_stats.quad_instances or 0),
+    tostring(renderer_stats.texture_uploads or 0),
+    tostring(renderer_stats.texture_upload_bytes or 0),
     string.format("%.3f", snapshot.docview_draw_ms or 0),
     string.format("%.3f", snapshot.docview_body_ms or 0),
     string.format("%.3f", snapshot.docview_text_ms or 0),
