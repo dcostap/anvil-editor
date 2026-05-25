@@ -537,6 +537,14 @@ function core.init()
   local restored_window = core.window or renwindow._restore()
   core.window = restored_window or renwindow.create("", table.unpack(session.window or {}))
 
+  -- Refresh-rate detection before the window exists only sees the primary
+  -- display. Re-query from the real window so high-refresh secondary displays
+  -- do not stay capped at the primary display rate.
+  DEFAULT_FPS = core.window:get_refresh_rate() or DEFAULT_FPS
+  if config.auto_fps then config.fps = DEFAULT_FPS end
+  core.fps = config.fps
+  core.co_max_time = 1 / config.fps - 0.004
+
   -- Maximizing the window makes it lose the hidden attribute on Windows
   -- so we delay this to keep window hidden until args parsed. Also, on
   -- Wayland we have issues applying the mode before showing the window
