@@ -14,7 +14,6 @@ require "plugins.untitled_tabs"
 core.reload_module("plugins.scale_debug_log")
 require "plugins.editor_wallpaper"
 require "plugins.centered_editor"
-require "plugins.linewrapping_deep_indent"
 require "plugins.custom_welcome"
 if core.intellij_actions_disable_conflict_shortcuts then
   core.intellij_actions_disable_conflict_shortcuts()
