@@ -212,6 +212,10 @@ static bool d3d11_should_resize_flush(void) {
   return d3d11_env_truthy("ANVIL_D3D11_RESIZE_FLUSH");
 }
 
+static bool d3d11_should_infer_swapchain_size(void) {
+  return d3d11_env_truthy("ANVIL_D3D11_INFER_SWAPCHAIN_SIZE");
+}
+
 static bool d3d11_should_flush_stats_each_frame(void) {
   return d3d11_env_truthy("ANVIL_D3D11_STATS_FLUSH") ||
          d3d11_env_truthy("ANVIL_D3D11_STATS_FLUSH_EVERY_FRAME");
@@ -772,8 +776,8 @@ static D3D11Window *d3d11_get_or_create_window(SDL_Window *window, int width, in
 
   DXGI_SWAP_CHAIN_DESC1 desc;
   memset(&desc, 0, sizeof(desc));
-  desc.Width = (UINT)width;
-  desc.Height = (UINT)height;
+  desc.Width = d3d11_should_infer_swapchain_size() ? 0 : (UINT)width;
+  desc.Height = d3d11_should_infer_swapchain_size() ? 0 : (UINT)height;
   desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
   desc.Stereo = FALSE;
   desc.SampleDesc.Count = 1;
@@ -837,7 +841,9 @@ static bool d3d11_resize_window(D3D11Window *w, int width, int height) {
   }
 
   QueryPerformanceCounter(&start);
-  HRESULT hr = w->swapchain->lpVtbl->ResizeBuffers(w->swapchain, 0, (UINT)width, (UINT)height, DXGI_FORMAT_UNKNOWN, 0);
+  UINT resize_width = d3d11_should_infer_swapchain_size() ? 0 : (UINT)width;
+  UINT resize_height = d3d11_should_infer_swapchain_size() ? 0 : (UINT)height;
+  HRESULT hr = w->swapchain->lpVtbl->ResizeBuffers(w->swapchain, 0, resize_width, resize_height, DXGI_FORMAT_UNKNOWN, 0);
   QueryPerformanceCounter(&end);
   if (g_d3d11.stats.enabled && g_d3d11.stats.active) {
     g_d3d11.stats.frame.resize_buffers_ms = d3d11_ms_between(start, end);
