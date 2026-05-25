@@ -115,7 +115,9 @@ function DocView:draw_line_body(line, x, y)
     local indent_px = self:get_font():get_width(string.rep(" ", indent_size))
     local lh = self:get_line_height()
     local lw = conf.line_width or math.max(1, SCALE)
-    local active_depth = active_indent_depth(self, indent_size)
+    local active_depth = conf.highlight_active and active_indent_depth(self, indent_size) or nil
+    local normal_color = guide_color(false)
+    local active_color = conf.highlight_active and guide_color(true) or normal_color
 
     -- Draw after the normal line body so blank-line backgrounds/highlights do
     -- not erase guide segments. Guides sit in indentation whitespace, so text
@@ -123,7 +125,7 @@ function DocView:draw_line_body(line, x, y)
     local first_depth = conf.show_zero_indent and 0 or 1
     for depth = first_depth, indent_levels - 1 do
       local gx = x + depth * indent_px
-      renderer.draw_rect(gx, y, lw, lh, guide_color(conf.highlight_active and depth == active_depth))
+      renderer.draw_rect(gx, y, lw, lh, depth == active_depth and active_color or normal_color)
     end
   end
 
