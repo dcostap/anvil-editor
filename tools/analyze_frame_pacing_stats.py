@@ -130,6 +130,8 @@ def summarize(frame_path, d3d_path, budget_ms):
             "texture_draws",
             "texture_batch_breaks",
             "quad_batches",
+            "unique_batch_srvs",
+            "repeated_batch_srvs",
             "texture_uploads",
             "texture_upload_bytes",
             "texture_recreates",
