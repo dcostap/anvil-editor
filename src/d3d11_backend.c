@@ -347,11 +347,11 @@ static const char *quad_shader_source =
   "  return output;\n"
   "}\n"
   "float4 ps_main(VSOut input) : SV_Target {\n"
-  "  if (input.mode > 2.5f) { return input.color; }\n"
+  "  if (input.mode > 2.5f) { return float4(input.color.rgb * input.color.a, input.color.a); }\n"
   "  float4 s = tex0.Sample(smp0, input.uv);\n"
-  "  if (input.mode < 0.5f) { return float4(input.color.rgb, input.color.a * s.r); }\n"
-  "  if (input.mode < 1.5f) { float a = max(s.r, max(s.g, s.b)); return float4(input.color.rgb * s.rgb, input.color.a * a); }\n"
-  "  return float4(s.rgb * input.color.rgb, s.a * input.color.a);\n"
+  "  if (input.mode < 0.5f) { float a = input.color.a * s.r; return float4(input.color.rgb * a, a); }\n"
+  "  if (input.mode < 1.5f) { float a = input.color.a * max(s.r, max(s.g, s.b)); return float4(input.color.rgb * input.color.a * s.rgb, a); }\n"
+  "  float a = s.a * input.color.a; return float4(s.rgb * input.color.rgb * a, a);\n"
   "}\n";
 
 
@@ -451,7 +451,7 @@ static bool d3d11_ensure_common_pipeline(void) {
   D3D11_BLEND_DESC bdesc;
   memset(&bdesc, 0, sizeof(bdesc));
   bdesc.RenderTarget[0].BlendEnable = TRUE;
-  bdesc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+  bdesc.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
   bdesc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
   bdesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
   bdesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
@@ -954,10 +954,17 @@ static bool d3d11_update_cached_texture(D3D11CachedTexture *t, SDL_Surface *surf
         dst[3] = 255;
       } else {
         const uint8_t *p = src + x * bpp;
-        dst[0] = bpp > 2 ? p[2] : 255;
-        dst[1] = bpp > 1 ? p[1] : 255;
-        dst[2] = bpp > 0 ? p[0] : 255;
-        dst[3] = bpp > 3 ? p[3] : 255;
+        if (surface->format == SDL_PIXELFORMAT_BGRA32 || surface->format == SDL_PIXELFORMAT_BGR24) {
+          dst[0] = bpp > 2 ? p[2] : 255;
+          dst[1] = bpp > 1 ? p[1] : 255;
+          dst[2] = bpp > 0 ? p[0] : 255;
+          dst[3] = bpp > 3 ? p[3] : 255;
+        } else {
+          dst[0] = bpp > 0 ? p[0] : 255;
+          dst[1] = bpp > 1 ? p[1] : 255;
+          dst[2] = bpp > 2 ? p[2] : 255;
+          dst[3] = bpp > 3 ? p[3] : 255;
+        }
       }
     }
   }
