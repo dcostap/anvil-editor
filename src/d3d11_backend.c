@@ -216,6 +216,11 @@ static bool d3d11_should_infer_swapchain_size(void) {
   return d3d11_env_truthy("ANVIL_D3D11_INFER_SWAPCHAIN_SIZE");
 }
 
+static bool d3d11_should_present_zero_live_resize(void) {
+  const char *value = getenv("ANVIL_D3D11_PRESENT0_LIVE_RESIZE");
+  return !value || !value[0] || !d3d11_env_value_is_false(value);
+}
+
 static bool d3d11_should_flush_stats_each_frame(void) {
   return d3d11_env_truthy("ANVIL_D3D11_STATS_FLUSH") ||
          d3d11_env_truthy("ANVIL_D3D11_STATS_FLUSH_EVERY_FRAME");
@@ -762,6 +767,17 @@ static bool d3d11_get_backbuffer(D3D11Window *w) {
   return d3d11_get_backbuffer_timed(w, NULL, NULL, NULL);
 }
 
+static void d3d11_set_swapchain_background(D3D11Window *w, RenColor color) {
+  if (!w || !w->swapchain) return;
+  DXGI_RGBA bg = {
+    color.r / 255.0f,
+    color.g / 255.0f,
+    color.b / 255.0f,
+    color.a / 255.0f,
+  };
+  w->swapchain->lpVtbl->SetBackgroundColor(w->swapchain, &bg);
+}
+
 static D3D11Window *d3d11_get_or_create_window(SDL_Window *window, int width, int height) {
   D3D11Window *w = d3d11_find_window(window);
   if (w) return w;
@@ -952,6 +968,7 @@ bool anvil_d3d11_begin_frame(SDL_Window *window, int width, int height, RenColor
   D3D11Window *w = d3d11_get_or_create_window(window, width, height);
   if (!w) return false;
   d3d11_stats_begin("commands", window, w, width, height);
+  d3d11_set_swapchain_background(w, clear_color);
   if (!d3d11_resize_window(w, width, height)) {
     g_d3d11.stats.frame.fail_reason = "resize";
     d3d11_stats_end(false, g_d3d11.stats.frame.resize_hr);
@@ -1442,8 +1459,10 @@ bool anvil_d3d11_end_frame(SDL_Window *window) {
   }
 
   LARGE_INTEGER present_start, present_end, dwm_start, dwm_end;
+  UINT sync_interval = (anvil_resize_diag_live_resize() && d3d11_should_present_zero_live_resize()) ? 0 : 1;
+  g_d3d11.stats.frame.sync_interval = (int)sync_interval;
   QueryPerformanceCounter(&present_start);
-  HRESULT hr = w->swapchain->lpVtbl->Present(w->swapchain, 1, 0);
+  HRESULT hr = w->swapchain->lpVtbl->Present(w->swapchain, sync_interval, 0);
   QueryPerformanceCounter(&present_end);
   g_d3d11.stats.frame.present_ms = d3d11_ms_between(present_start, present_end);
   g_d3d11.active_window = NULL;
