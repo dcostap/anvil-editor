@@ -137,8 +137,28 @@ void system_push_event(const SDL_Event *event) {
       event->type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED) {
     for (int i = system_event_queue_count - 1; i >= 0; i--) {
       int idx = (system_event_queue_read + i) % SYSTEM_EVENT_QUEUE_SIZE;
-      if (system_event_queue[idx].type == event->type &&
-          system_event_queue[idx].window.windowID == event->window.windowID) {
+      bool same_window = system_event_queue[idx].window.windowID == event->window.windowID;
+      bool same_type = system_event_queue[idx].type == event->type;
+      bool resize_or_pixel = event->type == SDL_EVENT_WINDOW_RESIZED ||
+                             event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED;
+      bool queued_resize_or_pixel = system_event_queue[idx].type == SDL_EVENT_WINDOW_RESIZED ||
+                                    system_event_queue[idx].type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED;
+      if (same_window && (same_type || (resize_or_pixel && queued_resize_or_pixel))) {
+        const char *detail = same_type ? "same_type_resize" : "resize_pixel_pair";
+        if (system_event_queue[idx].type == SDL_EVENT_WINDOW_RESIZED &&
+            event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
+          anvil_resize_diag_log(&(AnvilResizeDiagEvent){
+            .category = "event_queue",
+            .name = "coalesce",
+            .reason = anvil_resize_diag_event_reason(event->type),
+            .window_id = event->window.windowID,
+            .live_resize = anvil_resize_diag_live_resize(),
+            .queue_depth = system_event_queue_count,
+            .count_a = queue_depth_before,
+            .detail = detail
+          });
+          return;
+        }
         system_event_queue[idx] = *event;
         anvil_resize_diag_log(&(AnvilResizeDiagEvent){
           .category = "event_queue",
@@ -148,7 +168,7 @@ void system_push_event(const SDL_Event *event) {
           .live_resize = anvil_resize_diag_live_resize(),
           .queue_depth = system_event_queue_count,
           .count_a = queue_depth_before,
-          .detail = "same_type_resize"
+          .detail = detail
         });
         return;
       }
