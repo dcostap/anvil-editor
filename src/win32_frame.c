@@ -398,10 +398,14 @@ static LRESULT CALLBACK frame_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
       if (frame->enabled) {
         log_win32_message(frame, "WM_SIZE", wparam, lparam);
         if (own_wm_size_enabled()) {
-          PAINTSTRUCT ps;
-          BeginPaint(hwnd, &ps);
+          /* Let SDL's window proc ingest the new size first, so SDL_GetWindowSize*
+             sees the just-grown client area when our immediate D3D frame runs.
+             We still return handled: the important "owned" part is that Anvil
+             presents synchronously from WM_SIZE rather than waiting for SDL's
+             normal event-loop resize path. */
+          CallWindowProcW(frame->old_proc, hwnd, msg, wparam, lparam);
           if (wparam != SIZE_MINIMIZED) live_resize_frame(frame, "wm_size_owned");
-          EndPaint(hwnd, &ps);
+          ValidateRect(hwnd, NULL);
           return 0;
         }
         LRESULT result = CallWindowProcW(frame->old_proc, hwnd, msg, wparam, lparam);
