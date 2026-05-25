@@ -77,8 +77,10 @@ end
 
 local function write_frame_header(file)
   file:write(table.concat({
-    "time", "fps", "target_fps", "frame_ms", "update_ms", "draw_emit_ms",
-    "renderer_end_ms", "present_ms", "core_step_ms", "total_ms",
+    "time", "did_redraw", "fps", "target_fps", "active_present_paced",
+    "pending_events", "queue_depth", "run_mode",
+    "frame_ms", "update_ms", "draw_emit_ms", "renderer_end_ms",
+    "present_ms", "core_step_ms", "sleep_requested_ms", "sleep_actual_ms", "total_ms",
     "draw_calls", "quad_instances", "texture_uploads", "texture_upload_bytes",
     "docview_draw_ms", "docview_body_ms", "docview_text_ms",
     "docview_draw_text_calls", "over_budget"
@@ -92,20 +94,41 @@ local function snapshot_value(s, key)
 end
 
 function perf.on_frame(snapshot)
-  if not recording or not record or not snapshot or not snapshot.did_redraw then return end
-  record.frame_count = record.frame_count + 1
-  if snapshot.over_budget then record.over_budget_count = record.over_budget_count + 1 end
-  local renderer_stats = renderer.get_last_frame_stats and renderer.get_last_frame_stats() or {}
+  if not recording or not record or not snapshot then return end
+  local now = snapshot.time or system.get_time()
+  record.iteration_count = record.iteration_count + 1
+  if snapshot.did_redraw then
+    record.frame_count = record.frame_count + 1
+    if record.last_redraw_time then
+      record.redraw_intervals[#record.redraw_intervals + 1] = (now - record.last_redraw_time) * 1000
+    end
+    record.last_redraw_time = now
+    if snapshot.over_budget then record.over_budget_count = record.over_budget_count + 1 end
+  else
+    record.idle_iteration_count = record.idle_iteration_count + 1
+  end
+  if (snapshot.sleep_actual_ms or 0) > 0 then
+    record.sleep_count = record.sleep_count + 1
+    record.sleep_actual_total_ms = record.sleep_actual_total_ms + snapshot.sleep_actual_ms
+  end
+  local renderer_stats = snapshot.did_redraw and renderer.get_last_frame_stats and renderer.get_last_frame_stats() or {}
   record.file:write(table.concat({
-    string.format("%.6f", snapshot.time or system.get_time()),
+    string.format("%.6f", now),
+    snapshot.did_redraw and "1" or "0",
     string.format("%.3f", snapshot.fps or 0),
     string.format("%.3f", snapshot.target_fps or 0),
+    snapshot.active_present_paced and "1" or "0",
+    snapshot.pending_events and "1" or "0",
+    tostring(snapshot.queue_depth or 0),
+    csv_escape(snapshot.run_mode or ""),
     string.format("%.3f", snapshot.frame_ms or 0),
     string.format("%.3f", snapshot.update_ms or 0),
     string.format("%.3f", snapshot.draw_emit_ms or 0),
     string.format("%.3f", snapshot.renderer_end_ms or 0),
     string.format("%.3f", snapshot.present_ms or 0),
     string.format("%.3f", snapshot.core_step_ms or 0),
+    string.format("%.3f", snapshot.sleep_requested_ms or 0),
+    string.format("%.3f", snapshot.sleep_actual_ms or 0),
     string.format("%.3f", snapshot.total_ms or 0),
     tostring(renderer_stats.draw_calls or 0),
     tostring(renderer_stats.quad_instances or 0),
@@ -128,6 +151,12 @@ local function sorted_counts(tbl)
   return rows
 end
 
+local function percentile(values, q)
+  if #values == 0 then return 0 end
+  table.sort(values)
+  return values[math.min(#values, math.max(1, math.floor((#values - 1) * q) + 1))]
+end
+
 local function write_counts_csv(path, header, rows)
   local file = io.open(path, "wb")
   if not file then return end
@@ -144,11 +173,38 @@ local function write_summary(path)
   local elapsed = record.stop_time - record.start_time
   file:write("Anvil performance recording\n")
   file:write(string.format("Elapsed: %.3fs\n", elapsed))
+  file:write(string.format("Run-loop iterations: %d\n", record.iteration_count))
+  file:write(string.format("Idle/non-redraw iterations: %d\n", record.idle_iteration_count))
   file:write(string.format("Redraw frames: %d\n", record.frame_count))
   if elapsed > 0 then
-    file:write(string.format("Redraw FPS: %.1f\n", record.frame_count / elapsed))
+    file:write(string.format("Whole-record redraw FPS: %.1f\n", record.frame_count / elapsed))
   end
-  file:write(string.format("Over-budget frames: %d (%.1f%%)\n\n",
+  if #record.redraw_intervals > 0 then
+    local intervals = { table.unpack(record.redraw_intervals) }
+    local active_like = 0
+    local over_20 = 0
+    local over_50 = 0
+    for _, ms in ipairs(intervals) do
+      if ms <= 20 then active_like = active_like + 1 end
+      if ms > 20 then over_20 = over_20 + 1 end
+      if ms > 50 then over_50 = over_50 + 1 end
+    end
+    file:write(string.format(
+      "Redraw interval ms: p50 %.3f p90 %.3f p95 %.3f p99 %.3f max %.3f\n",
+      percentile(intervals, 0.50), percentile(intervals, 0.90),
+      percentile(intervals, 0.95), percentile(intervals, 0.99), intervals[#intervals]
+    ))
+    local active_elapsed = 0
+    for _, ms in ipairs(record.redraw_intervals) do
+      if ms <= 20 then active_elapsed = active_elapsed + ms / 1000 end
+    end
+    if active_elapsed > 0 then
+      file:write(string.format("Active-cadence redraw FPS (intervals <=20ms): %.1f\n", active_like / active_elapsed))
+    end
+    file:write(string.format("Redraw gaps >20ms: %d, >50ms: %d\n", over_20, over_50))
+  end
+  file:write(string.format("Sleep calls: %d, sleep actual total: %.1fms\n", record.sleep_count, record.sleep_actual_total_ms))
+  file:write(string.format("Over-budget redraw frames: %d (%.1f%%)\n\n",
     record.over_budget_count,
     record.frame_count > 0 and (record.over_budget_count * 100 / record.frame_count) or 0
   ))
@@ -190,8 +246,14 @@ function perf.start_recording()
     file = file,
     start_time = system.get_time(),
     stop_time = nil,
+    iteration_count = 0,
+    idle_iteration_count = 0,
     frame_count = 0,
     over_budget_count = 0,
+    sleep_count = 0,
+    sleep_actual_total_ms = 0,
+    last_redraw_time = nil,
+    redraw_intervals = {},
     lua_samples = {},
     sample_count = 0,
     api_calls = {},
