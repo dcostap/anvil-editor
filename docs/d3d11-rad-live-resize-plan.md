@@ -2,7 +2,24 @@
 
 Goal: make Anvil window resizing and frame pacing feel closer to RAD Debugger on Windows, while keeping normal editor behavior stable, measurable, and easy to roll back.
 
-This document is a plan only. Do **not** implement runtime behavior changes until the instrumentation stages identify the bottleneck.
+This document started as the implementation plan. Runtime changes are now underway and the sections below remain useful as design rationale and future-test guidance.
+
+## Implementation status
+
+Implemented milestones in this branch:
+
+- resize/D3D/Lua instrumentation gated by `ANVIL_RESIZE_STATS`, `ANVIL_LUA_RESIZE_STATS_FILE`, and existing `ANVIL_D3D11_STATS`;
+- Win32 live-resize tracking for `WM_ENTERSIZEMOVE` / `WM_EXITSIZEMOVE` and final resize frame requests;
+- immediate no-extra-sleep Lua frame path for live resize;
+- SDL resize immediate-render suppression while the Win32 modal resize path owns live rendering;
+- active-refresh-based C resize throttle outside true live resize;
+- D3D11 resize unbind, resize timing, resize result logging, and RAD-style `ClearState()` after present;
+- opt-in experiments: `ANVIL_D3D11_RESIZE_DWM_FLUSH=1`, `ANVIL_D3D11_RESIZE_FLUSH=1`, `ANVIL_WIN32_OWN_WM_PAINT=1`;
+- live-D3D resize defers full window-sized CPU surface recreation and updates cached window dimensions instead;
+- resize/pixel-size event queue churn is coalesced;
+- app cursor updates are suppressed while Win32 live resize is active.
+
+Automated synthetic live-resize smoke tests show no D3D present/resize failures, no Lua sleeps in immediate resize frames, and main surface recreation is deferred for live D3D resizes. Manual subjective testing is still the final judge for resize feel.
 
 ## Sources reviewed
 
