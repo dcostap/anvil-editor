@@ -204,14 +204,15 @@ static bool init_lua_state(AppState *app) {
   }
   lua_pcall(app->L, 0, 0, 0);
 
-  /* store reference to core.run_setup for faster lookup on SDL_AppIterate */
+  /* Store a reference to core.run_step for faster lookup on SDL_AppIterate. */
   app->core_run_step_ref = -1;
   lua_getglobal(app->L, "core");
   if (lua_istable(app->L, -1)) {
     lua_getfield(app->L, -1, "run_step");
-    lua_remove(app->L, -2);
     if (lua_isfunction(app->L, -1)) {
       app->core_run_step_ref = luaL_ref(app->L, LUA_REGISTRYINDEX);
+    } else {
+      lua_pop(app->L, 1);
     }
   }
   lua_pop(app->L, 1);
@@ -360,7 +361,7 @@ static SDL_AppResult app_run_step(AppState *app) {
 
 void anvil_request_resize_frame(void) {
   AppState *app = live_resize_app;
-  if (!app || !app->L) return;
+  if (!app || !app->L || app->core_run_step_ref == -1) return;
 
   const Uint64 now = SDL_GetTicksNS();
   const Uint64 min_interval = SDL_NS_PER_SECOND / 120;
