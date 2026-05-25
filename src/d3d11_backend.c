@@ -422,6 +422,7 @@ static const char *quad_shader_source =
   "cbuffer QuadConstants : register(b0) { float2 viewport; float2 _pad; };\n"
   "struct VSIn { float4 dst : POSITION; float4 uvrect : TEXCOORD0; float4 color : COLOR0; float4 style : TEXCOORD1; uint vertex_id : SV_VertexID; };\n"
   "struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; float4 color : COLOR0; float mode : TEXCOORD1; };\n"
+  "struct PSOut { float4 color : SV_Target0; float4 coverage : SV_Target1; };\n"
   "VSOut vs_main(VSIn input) {\n"
   "  VSOut output;\n"
   "  float2 positions[4] = {\n"
@@ -444,12 +445,32 @@ static const char *quad_shader_source =
   "  output.mode = input.style.x;\n"
   "  return output;\n"
   "}\n"
-  "float4 ps_main(VSOut input) : SV_Target {\n"
-  "  if (input.mode > 2.5f) { return float4(input.color.rgb * input.color.a, input.color.a); }\n"
+  "PSOut ps_main(VSOut input) {\n"
+  "  PSOut output;\n"
+  "  if (input.mode > 2.5f) {\n"
+  "    float a = input.color.a;\n"
+  "    output.color = float4(input.color.rgb * a, a);\n"
+  "    output.coverage = float4(a, a, a, a);\n"
+  "    return output;\n"
+  "  }\n"
   "  float4 s = tex0.Sample(smp0, input.uv);\n"
-  "  if (input.mode < 0.5f) { float a = input.color.a * s.r; return float4(input.color.rgb * a, a); }\n"
-  "  if (input.mode < 1.5f) { float a = input.color.a * max(s.r, max(s.g, s.b)); return float4(input.color.rgb * input.color.a * s.rgb, a); }\n"
-  "  float a = s.a * input.color.a; return float4(s.rgb * input.color.rgb * a, a);\n"
+  "  if (input.mode < 0.5f) {\n"
+  "    float a = input.color.a * s.r;\n"
+  "    output.color = float4(input.color.rgb * a, a);\n"
+  "    output.coverage = float4(a, a, a, a);\n"
+  "    return output;\n"
+  "  }\n"
+  "  if (input.mode < 1.5f) {\n"
+  "    float3 coverage = input.color.a * s.rgb;\n"
+  "    float a = max(coverage.r, max(coverage.g, coverage.b));\n"
+  "    output.color = float4(input.color.rgb * coverage, a);\n"
+  "    output.coverage = float4(coverage, a);\n"
+  "    return output;\n"
+  "  }\n"
+  "  float a = s.a * input.color.a;\n"
+  "  output.color = float4(s.rgb * input.color.rgb * a, a);\n"
+  "  output.coverage = float4(a, a, a, a);\n"
+  "  return output;\n"
   "}\n";
 
 
@@ -587,7 +608,7 @@ static bool d3d11_ensure_common_pipeline(void) {
   memset(&bdesc, 0, sizeof(bdesc));
   bdesc.RenderTarget[0].BlendEnable = TRUE;
   bdesc.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
-  bdesc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+  bdesc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC1_COLOR;
   bdesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
   bdesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
   bdesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
