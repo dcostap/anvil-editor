@@ -4,7 +4,8 @@ param(
   [int]$ScrollSteps = 8,
   [switch]$PrepareRunDir,
   [switch]$KeepOpen,
-  [switch]$NoKillExisting
+  [switch]$NoKillExisting,
+  [switch]$AllowWarp
 )
 
 $ErrorActionPreference = "Stop"
@@ -209,11 +210,20 @@ try {
   }
 
   Start-Sleep -Milliseconds 500
-  if (Test-Path $statsFile) {
-    Get-Content -LiteralPath $statsFile -Head 8 | Out-Host
-  } else {
-    Write-Warning "Stats file was not created: $statsFile"
+  if (!(Test-Path $statsFile)) {
+    throw "Stats file was not created: $statsFile"
   }
+  Get-Content -LiteralPath $statsFile -Head 8 | Out-Host
+  $statsRows = @(Import-Csv -LiteralPath $statsFile)
+  if ($statsRows.Count -lt 1) { throw "Stats file contains no frames: $statsFile" }
+  $latestStats = $statsRows[$statsRows.Count - 1]
+  if ($latestStats.path -ne "commands" -or $latestStats.success -ne "1") {
+    throw "D3D11 command renderer did not complete the latest frame successfully"
+  }
+  if (!$AllowWarp -and $latestStats.device -ne "hardware") {
+    throw "D3D11 smoke expected hardware device, got '$($latestStats.device)'"
+  }
+  Write-Host ("D3D11 summary: frame={0} device={1} adapter={2} draw_calls={3} quad_instances={4}" -f $latestStats.frame, $latestStats.device, $latestStats.adapter, $latestStats.draw_calls, $latestStats.quad_instances)
 
   $hashes = @($captures | ForEach-Object { Get-FileSha256 $_ })
   $uniqueHashes = @($hashes | Select-Object -Unique)
