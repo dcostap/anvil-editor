@@ -18,10 +18,10 @@
 #define SAFE_RELEASE(p) do { if (p) { (p)->lpVtbl->Release(p); (p) = NULL; } } while (0)
 #endif
 
-typedef struct D3D11RectVertex {
-  float x, y;
+typedef struct D3D11RectInstance {
+  float x0, y0, x1, y1;
   float r, g, b, a;
-} D3D11RectVertex;
+} D3D11RectInstance;
 
 typedef struct D3D11RectConstants {
   float width;
@@ -119,10 +119,10 @@ typedef struct D3D11State {
   ID3D11Buffer *rect_cbuf;
   ID3D11BlendState *rect_blend;
   ID3D11RasterizerState *rect_raster;
-  D3D11RectVertex *rect_vertices;
-  int rect_vertex_count;
-  int rect_vertex_capacity;
-  int rect_vbuf_capacity;
+  D3D11RectInstance *rect_instances;
+  int rect_instance_count;
+  int rect_instance_capacity;
+  int rect_instance_buffer_capacity;
   SDL_Window *rect_active_window;
   ID3D11VertexShader *tex_vs;
   ID3D11PixelShader *tex_ps;
@@ -322,16 +322,24 @@ static void d3d11_reset_device(void) {
 
 static const char *rect_shader_source =
   "cbuffer RectConstants : register(b0) { float2 viewport; float2 _pad; };\n"
-  "struct VSIn { float2 pos : POSITION; float4 color : COLOR0; };\n"
+  "struct VSIn { float4 dst : POSITION; float4 color : COLOR0; uint vertex_id : SV_VertexID; };\n"
   "struct VSOut { float4 pos : SV_Position; float4 color : COLOR0; };\n"
   "VSOut vs_main(VSIn input) {\n"
   "  VSOut output;\n"
-  "  float2 p = float2((input.pos.x / viewport.x) * 2.0f - 1.0f, 1.0f - (input.pos.y / viewport.y) * 2.0f);\n"
+  "  float2 positions[4] = {\n"
+  "    float2(input.dst.x, input.dst.w),\n"
+  "    float2(input.dst.x, input.dst.y),\n"
+  "    float2(input.dst.z, input.dst.w),\n"
+  "    float2(input.dst.z, input.dst.y)\n"
+  "  };\n"
+  "  uint vid = input.vertex_id & 3;\n"
+  "  float2 p = float2((positions[vid].x / viewport.x) * 2.0f - 1.0f, 1.0f - (positions[vid].y / viewport.y) * 2.0f);\n"
   "  output.pos = float4(p, 0.0f, 1.0f);\n"
   "  output.color = input.color;\n"
   "  return output;\n"
   "}\n"
   "float4 ps_main(VSOut input) : SV_Target { return input.color; }\n";
+
 
 static const char *texture_shader_source =
   "Texture2D tex0 : register(t0);\n"
@@ -495,8 +503,8 @@ static bool d3d11_ensure_rect_pipeline(void) {
   if (FAILED(hr)) goto fail;
 
   D3D11_INPUT_ELEMENT_DESC layout[] = {
-    { "POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-    { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 8, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+    { "POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0, D3D11_INPUT_PER_INSTANCE_DATA, 1 },
+    { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 16, D3D11_INPUT_PER_INSTANCE_DATA, 1 },
   };
   hr = g_d3d11.device->lpVtbl->CreateInputLayout(g_d3d11.device, layout, 2,
                                                   vs_blob->lpVtbl->GetBufferPointer(vs_blob),
@@ -504,10 +512,10 @@ static bool d3d11_ensure_rect_pipeline(void) {
                                                   &g_d3d11.rect_layout);
   if (FAILED(hr)) goto fail;
 
-  g_d3d11.rect_vbuf_capacity = 65536;
+  g_d3d11.rect_instance_buffer_capacity = 65536;
   D3D11_BUFFER_DESC vdesc;
   memset(&vdesc, 0, sizeof(vdesc));
-  vdesc.ByteWidth = (UINT)(sizeof(D3D11RectVertex) * g_d3d11.rect_vbuf_capacity);
+  vdesc.ByteWidth = (UINT)(sizeof(D3D11RectInstance) * g_d3d11.rect_instance_buffer_capacity);
   vdesc.Usage = D3D11_USAGE_DYNAMIC;
   vdesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
   vdesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
@@ -559,7 +567,7 @@ fail:
   SAFE_RELEASE(g_d3d11.rect_layout);
   SAFE_RELEASE(g_d3d11.rect_ps);
   SAFE_RELEASE(g_d3d11.rect_vs);
-  g_d3d11.rect_vbuf_capacity = 0;
+  g_d3d11.rect_instance_buffer_capacity = 0;
   return false;
 }
 
@@ -824,36 +832,36 @@ static RenRect d3d11_intersect_renrect(RenRect a, RenRect b) {
   return (RenRect){ x1, y1, x2 > x1 ? x2 - x1 : 0, y2 > y1 ? y2 - y1 : 0 };
 }
 
-static bool d3d11_reserve_rect_vertices(int extra) {
-  int needed = g_d3d11.rect_vertex_count + extra;
-  if (needed <= g_d3d11.rect_vertex_capacity) return true;
+static bool d3d11_reserve_rect_instances(int extra) {
+  int needed = g_d3d11.rect_instance_count + extra;
+  if (needed <= g_d3d11.rect_instance_capacity) return true;
 
-  int new_capacity = g_d3d11.rect_vertex_capacity ? g_d3d11.rect_vertex_capacity * 2 : 4096;
+  int new_capacity = g_d3d11.rect_instance_capacity ? g_d3d11.rect_instance_capacity * 2 : 4096;
   while (new_capacity < needed) new_capacity *= 2;
-  D3D11RectVertex *new_vertices = (D3D11RectVertex *)realloc(g_d3d11.rect_vertices,
-                                                              sizeof(D3D11RectVertex) * (size_t)new_capacity);
+  D3D11RectInstance *new_vertices = (D3D11RectInstance *)realloc(g_d3d11.rect_instances,
+                                                              sizeof(D3D11RectInstance) * (size_t)new_capacity);
   if (!new_vertices) return false;
-  g_d3d11.rect_vertices = new_vertices;
-  g_d3d11.rect_vertex_capacity = new_capacity;
+  g_d3d11.rect_instances = new_vertices;
+  g_d3d11.rect_instance_capacity = new_capacity;
   return true;
 }
 
-static bool d3d11_ensure_vertex_buffer_capacity(int vertex_count) {
-  if (vertex_count <= g_d3d11.rect_vbuf_capacity) return true;
+static bool d3d11_ensure_rect_instance_buffer_capacity(int vertex_count) {
+  if (vertex_count <= g_d3d11.rect_instance_buffer_capacity) return true;
 
   SAFE_RELEASE(g_d3d11.rect_vbuf);
-  int new_capacity = g_d3d11.rect_vbuf_capacity ? g_d3d11.rect_vbuf_capacity * 2 : 65536;
+  int new_capacity = g_d3d11.rect_instance_buffer_capacity ? g_d3d11.rect_instance_buffer_capacity * 2 : 65536;
   while (new_capacity < vertex_count) new_capacity *= 2;
 
   D3D11_BUFFER_DESC vdesc;
   memset(&vdesc, 0, sizeof(vdesc));
-  vdesc.ByteWidth = (UINT)(sizeof(D3D11RectVertex) * (size_t)new_capacity);
+  vdesc.ByteWidth = (UINT)(sizeof(D3D11RectInstance) * (size_t)new_capacity);
   vdesc.Usage = D3D11_USAGE_DYNAMIC;
   vdesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
   vdesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
   HRESULT hr = g_d3d11.device->lpVtbl->CreateBuffer(g_d3d11.device, &vdesc, NULL, &g_d3d11.rect_vbuf);
   if (FAILED(hr)) return false;
-  g_d3d11.rect_vbuf_capacity = new_capacity;
+  g_d3d11.rect_instance_buffer_capacity = new_capacity;
   return true;
 }
 
@@ -937,7 +945,7 @@ bool anvil_d3d11_begin_frame(SDL_Window *window, int width, int height, RenColor
   if ((g_d3d11.frame_index % 120u) == 0) {
     d3d11_prune_texture_cache(600u);
   }
-  g_d3d11.rect_vertex_count = 0;
+  g_d3d11.rect_instance_count = 0;
   g_d3d11.tex_instance_count = 0;
   g_d3d11.tex_batch_srv = NULL;
   g_d3d11.tex_batch_mode = 0.0f;
@@ -952,7 +960,7 @@ bool anvil_d3d11_push_rect(SDL_Window *window, RenRect rect, RenRect clip, RenCo
   g_d3d11.stats.frame.rect_pushes++;
   RenRect r = d3d11_intersect_renrect(rect, clip);
   if (r.width <= 0 || r.height <= 0) return true;
-  if (!d3d11_reserve_rect_vertices(6)) return false;
+  if (!d3d11_reserve_rect_instances(1)) return false;
 
   float x0 = (float)r.x;
   float y0 = (float)r.y;
@@ -963,12 +971,8 @@ bool anvil_d3d11_push_rect(SDL_Window *window, RenRect rect, RenRect clip, RenCo
   float cb = color.b / 255.0f;
   float ca = color.a / 255.0f;
 
-  D3D11RectVertex v[6] = {
-    { x0, y0, cr, cg, cb, ca }, { x1, y0, cr, cg, cb, ca }, { x1, y1, cr, cg, cb, ca },
-    { x0, y0, cr, cg, cb, ca }, { x1, y1, cr, cg, cb, ca }, { x0, y1, cr, cg, cb, ca },
-  };
-  memcpy(&g_d3d11.rect_vertices[g_d3d11.rect_vertex_count], v, sizeof(v));
-  g_d3d11.rect_vertex_count += 6;
+  D3D11RectInstance inst = { x0, y0, x1, y1, cr, cg, cb, ca };
+  g_d3d11.rect_instances[g_d3d11.rect_instance_count++] = inst;
   return true;
 }
 
@@ -1134,10 +1138,10 @@ static bool d3d11_ensure_upload_texture(int width, int height) {
 }
 
 static bool d3d11_flush_rects(void) {
-  if (g_d3d11.rect_vertex_count <= 0) return true;
+  if (g_d3d11.rect_instance_count <= 0) return true;
   D3D11Window *w = d3d11_find_window(g_d3d11.rect_active_window);
   if (!w || !w->rtv) return false;
-  if (!d3d11_ensure_vertex_buffer_capacity(g_d3d11.rect_vertex_count)) return false;
+  if (!d3d11_ensure_rect_instance_buffer_capacity(g_d3d11.rect_instance_count)) return false;
 
   g_d3d11.context->lpVtbl->OMSetRenderTargets(g_d3d11.context, 1, &w->rtv, NULL);
   D3D11_VIEWPORT viewport;
@@ -1158,27 +1162,27 @@ static bool d3d11_flush_rects(void) {
                                             0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
   if (FAILED(hr)) return false;
   g_d3d11.stats.frame.maps++;
-  memcpy(mapped.pData, g_d3d11.rect_vertices,
-         sizeof(D3D11RectVertex) * (size_t)g_d3d11.rect_vertex_count);
+  memcpy(mapped.pData, g_d3d11.rect_instances,
+         sizeof(D3D11RectInstance) * (size_t)g_d3d11.rect_instance_count);
   g_d3d11.context->lpVtbl->Unmap(g_d3d11.context, (ID3D11Resource *)g_d3d11.rect_vbuf, 0);
 
-  UINT stride = sizeof(D3D11RectVertex);
+  UINT stride = sizeof(D3D11RectInstance);
   UINT offset = 0;
   FLOAT blend_factor[4] = {0, 0, 0, 0};
   g_d3d11.context->lpVtbl->IASetInputLayout(g_d3d11.context, g_d3d11.rect_layout);
-  g_d3d11.context->lpVtbl->IASetPrimitiveTopology(g_d3d11.context, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+  g_d3d11.context->lpVtbl->IASetPrimitiveTopology(g_d3d11.context, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
   g_d3d11.context->lpVtbl->IASetVertexBuffers(g_d3d11.context, 0, 1, &g_d3d11.rect_vbuf, &stride, &offset);
   g_d3d11.context->lpVtbl->VSSetShader(g_d3d11.context, g_d3d11.rect_vs, NULL, 0);
   g_d3d11.context->lpVtbl->VSSetConstantBuffers(g_d3d11.context, 0, 1, &g_d3d11.rect_cbuf);
   g_d3d11.context->lpVtbl->PSSetShader(g_d3d11.context, g_d3d11.rect_ps, NULL, 0);
   g_d3d11.context->lpVtbl->RSSetState(g_d3d11.context, g_d3d11.rect_raster);
   g_d3d11.context->lpVtbl->OMSetBlendState(g_d3d11.context, g_d3d11.rect_blend, blend_factor, 0xffffffffu);
-  g_d3d11.context->lpVtbl->Draw(g_d3d11.context, (UINT)g_d3d11.rect_vertex_count, 0);
+  g_d3d11.context->lpVtbl->DrawInstanced(g_d3d11.context, 4, (UINT)g_d3d11.rect_instance_count, 0, 0);
   g_d3d11.stats.frame.draw_calls++;
   g_d3d11.stats.frame.rect_draws++;
   g_d3d11.stats.frame.rect_flushes++;
-  g_d3d11.stats.frame.rect_vertices += g_d3d11.rect_vertex_count;
-  g_d3d11.rect_vertex_count = 0;
+  g_d3d11.stats.frame.rect_vertices += g_d3d11.rect_instance_count * 4;
+  g_d3d11.rect_instance_count = 0;
   return true;
 }
 
@@ -1345,7 +1349,7 @@ bool anvil_d3d11_push_pixels(SDL_Window *window, const char *bytes, size_t len,
 void anvil_d3d11_abort_frame_reason(SDL_Window *window, const char *reason) {
   if (!window || window == g_d3d11.rect_active_window) {
     g_d3d11.rect_active_window = NULL;
-    g_d3d11.rect_vertex_count = 0;
+    g_d3d11.rect_instance_count = 0;
     g_d3d11.tex_instance_count = 0;
     g_d3d11.tex_batch_srv = NULL;
     g_d3d11.tex_batch_mode = 0.0f;
@@ -1380,7 +1384,7 @@ bool anvil_d3d11_end_frame(SDL_Window *window) {
   QueryPerformanceCounter(&present_end);
   g_d3d11.stats.frame.present_ms = d3d11_ms_between(present_start, present_end);
   g_d3d11.rect_active_window = NULL;
-  g_d3d11.rect_vertex_count = 0;
+  g_d3d11.rect_instance_count = 0;
   g_d3d11.tex_instance_count = 0;
   g_d3d11.tex_batch_srv = NULL;
   g_d3d11.tex_batch_mode = 0.0f;
@@ -1502,11 +1506,11 @@ void anvil_d3d11_shutdown(void) {
   SAFE_RELEASE(g_d3d11.rect_layout);
   SAFE_RELEASE(g_d3d11.rect_ps);
   SAFE_RELEASE(g_d3d11.rect_vs);
-  free(g_d3d11.rect_vertices);
-  g_d3d11.rect_vertices = NULL;
-  g_d3d11.rect_vertex_count = 0;
-  g_d3d11.rect_vertex_capacity = 0;
-  g_d3d11.rect_vbuf_capacity = 0;
+  free(g_d3d11.rect_instances);
+  g_d3d11.rect_instances = NULL;
+  g_d3d11.rect_instance_count = 0;
+  g_d3d11.rect_instance_capacity = 0;
+  g_d3d11.rect_instance_buffer_capacity = 0;
   free(g_d3d11.tex_instances);
   g_d3d11.tex_instances = NULL;
   g_d3d11.tex_instance_count = 0;

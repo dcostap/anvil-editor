@@ -35,6 +35,14 @@ cp build-windows-x86_64/start.lua .run/share/anvil/core/
 
 function New-ScrollFixture([string]$TestProject) {
   New-Item -ItemType Directory -Force -Path $TestProject | Out-Null
+  $projectConfig = Join-Path $TestProject ".anvil_project.lua"
+  @'
+local config = require "core.config"
+config.plugins.editor_wallpaper = false
+config.plugins.custom_welcome = false
+config.plugins.ipc = false
+config.plugins.workspace = false
+'@ | Set-Content -LiteralPath $projectConfig -Encoding UTF8
   $fixture = Join-Path $TestProject "render_scroll_fixture.txt"
   $lines = New-Object System.Collections.Generic.List[string]
   $lines.Add("Anvil D3D11 renderer smoke fixture")
@@ -116,6 +124,16 @@ if (!(Test-Path $exe)) {
   throw "Run-local executable not found: $exe. Re-run with -PrepareRunDir."
 }
 
+# Make screenshots deterministic and text-focused. The source tree defaults are
+# untouched; this only edits the ignored .run copy prepared for the smoke test.
+$defaultsCopy = Join-Path $runDir "share\anvil\plugins\anvil_defaults.lua"
+if (Test-Path $defaultsCopy) {
+  $defaultsText = Get-Content -LiteralPath $defaultsCopy -Raw
+  $defaultsText = $defaultsText.Replace('require "plugins.editor_wallpaper"', '-- smoke-test disabled: require "plugins.editor_wallpaper"')
+  $defaultsText = $defaultsText.Replace('require "plugins.custom_welcome"', '-- smoke-test disabled: require "plugins.custom_welcome"')
+  Set-Content -LiteralPath $defaultsCopy -Value $defaultsText -Encoding UTF8
+}
+
 $fixture = New-ScrollFixture $TestProject
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $outDir = Join-Path $TestProject "anvil-d3d11-smoke-$stamp"
@@ -134,8 +152,10 @@ try {
   $env:ANVIL_D3D11_STATS_FLUSH = "1"
   $env:ANVIL_D3D11_STATS_FILE = $statsFile
 
-  $proc = Start-Process -FilePath $exe -ArgumentList @($fixture) -WorkingDirectory $TestProject -PassThru
+  Remove-Item -LiteralPath (Join-Path $runDir ".config\anvil\session.lua") -Force -ErrorAction SilentlyContinue
+  $proc = Start-Process -FilePath $exe -ArgumentList @("edit", $fixture) -WorkingDirectory $TestProject -PassThru
   $hwnd = Wait-MainWindow $proc
+  Start-Sleep -Seconds 2
   Capture-Window $hwnd (Join-Path $outDir "00-open.png")
 
   for ($i = 1; $i -le $ScrollSteps; $i++) {
