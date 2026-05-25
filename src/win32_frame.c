@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <dwmapi.h>
+#include <stdlib.h>
 #include <SDL3/SDL.h>
 #include "renwindow.h"
 #include "renderer.h"
@@ -44,6 +45,20 @@ static HWND get_hwnd(SDL_Window *window) {
   return (HWND) SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
 }
 
+static bool env_value_is_false(const char *value) {
+  if (!value || !value[0]) return true;
+  while (*value == ' ' || *value == '\t') value++;
+  if (!value[0]) return true;
+  return value[0] == '0' ||
+         SDL_strcasecmp(value, "false") == 0 ||
+         SDL_strcasecmp(value, "no") == 0 ||
+         SDL_strcasecmp(value, "off") == 0;
+}
+
+static bool resize_dwm_flush_enabled(void) {
+  return !env_value_is_false(getenv("ANVIL_D3D11_RESIZE_DWM_FLUSH"));
+}
+
 static void get_sdl_window_sizes(Win32FrameData *frame, int *point_w, int *point_h, int *pixel_w, int *pixel_h) {
   if (point_w) *point_w = 0;
   if (point_h) *point_h = 0;
@@ -75,6 +90,23 @@ static void log_win32_message(Win32FrameData *frame, const char *name, WPARAM wp
     .client_h = (int)(cr.bottom - cr.top),
     .count_a = (int)wparam,
     .count_b = (int)lparam
+  });
+}
+
+static void maybe_resize_dwm_flush(Win32FrameData *frame, const char *reason) {
+  if (!resize_dwm_flush_enabled()) return;
+  uint64_t start_ns = SDL_GetTicksNS();
+  HRESULT hr = DwmFlush();
+  uint64_t end_ns = SDL_GetTicksNS();
+  anvil_resize_diag_log(&(AnvilResizeDiagEvent){
+    .category = "win32_resize",
+    .name = "resize_dwm_flush",
+    .reason = reason,
+    .window_id = frame && frame->ren && frame->ren->cache.window ? SDL_GetWindowID(frame->ren->cache.window) : 0,
+    .live_resize = frame ? frame->live_resize : anvil_resize_diag_live_resize(),
+    .queue_depth = system_pending_event_count(),
+    .count_a = (int)hr,
+    .ms_a = anvil_resize_diag_ticks_to_ms(start_ns, end_ns)
   });
 }
 
@@ -288,6 +320,7 @@ static void live_resize_frame(Win32FrameData *frame, const char *reason) {
   frame->last_pixel_w = pixel_w;
   frame->last_pixel_h = pixel_h;
   anvil_request_resize_frame_for_window(frame->ren->cache.window, reason ? reason : "win32_resize");
+  maybe_resize_dwm_flush(frame, reason ? reason : "win32_resize");
 }
 
 static void toggle_maximize(HWND hwnd) {
@@ -336,6 +369,7 @@ static LRESULT CALLBACK frame_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
         anvil_set_live_resize(false);
         if (frame->ren && frame->ren->cache.window) {
           anvil_request_resize_frame_for_window(frame->ren->cache.window, "exit_sizemove");
+          maybe_resize_dwm_flush(frame, "exit_sizemove");
         }
       }
       break;
