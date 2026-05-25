@@ -133,6 +133,8 @@ typedef struct D3D11State {
   ID3D11ShaderResourceView *upload_srv;
   int upload_width;
   int upload_height;
+  uint8_t *texture_upload_scratch;
+  size_t texture_upload_scratch_capacity;
   D3D11CachedTexture *textures;
   uint64_t frame_index;
   D3D11Window *windows;
@@ -910,6 +912,15 @@ static bool d3d11_recreate_cached_texture(D3D11CachedTexture *t, SDL_Surface *su
   return true;
 }
 
+static bool d3d11_ensure_texture_upload_scratch(size_t size) {
+  if (size <= g_d3d11.texture_upload_scratch_capacity) return true;
+  uint8_t *scratch = (uint8_t *)realloc(g_d3d11.texture_upload_scratch, size);
+  if (!scratch) return false;
+  g_d3d11.texture_upload_scratch = scratch;
+  g_d3d11.texture_upload_scratch_capacity = size;
+  return true;
+}
+
 static bool d3d11_update_cached_texture(D3D11CachedTexture *t, SDL_Surface *surface, int mode) {
   if (!surface || !surface->pixels || surface->w <= 0 || surface->h <= 0) return false;
   if (!t->texture || !t->srv || t->width != surface->w || t->height != surface->h ||
@@ -923,8 +934,9 @@ static bool d3d11_update_cached_texture(D3D11CachedTexture *t, SDL_Surface *surf
 
   const int width = surface->w;
   const int height = surface->h;
-  uint8_t *rgba = (uint8_t *)malloc((size_t)width * (size_t)height * 4u);
-  if (!rgba) return false;
+  size_t rgba_size = (size_t)width * (size_t)height * 4u;
+  if (!d3d11_ensure_texture_upload_scratch(rgba_size)) return false;
+  uint8_t *rgba = g_d3d11.texture_upload_scratch;
 
   const int bpp = SDL_BYTESPERPIXEL(surface->format);
   for (int y = 0; y < height; y++) {
@@ -954,8 +966,7 @@ static bool d3d11_update_cached_texture(D3D11CachedTexture *t, SDL_Surface *surf
                                              (ID3D11Resource *)t->texture,
                                              0, NULL, rgba, (UINT)(width * 4), 0);
   g_d3d11.stats.frame.texture_uploads++;
-  g_d3d11.stats.frame.texture_upload_bytes += (size_t)width * (size_t)height * 4u;
-  free(rgba);
+  g_d3d11.stats.frame.texture_upload_bytes += rgba_size;
   t->last_update_frame = update_key;
   return true;
 }
@@ -1383,6 +1394,9 @@ void anvil_d3d11_shutdown(void) {
   g_d3d11.textures = NULL;
   d3d11_release_white_texture();
   d3d11_release_upload_texture();
+  free(g_d3d11.texture_upload_scratch);
+  g_d3d11.texture_upload_scratch = NULL;
+  g_d3d11.texture_upload_scratch_capacity = 0;
   SAFE_RELEASE(g_d3d11.quad_sampler);
   SAFE_RELEASE(g_d3d11.quad_cbuf);
   SAFE_RELEASE(g_d3d11.quad_vbuf);
