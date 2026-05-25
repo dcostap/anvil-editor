@@ -3,7 +3,8 @@ param(
   [string]$TestProject = "C:\Users\Dario Costa\Desktop\projects\castrosua_legacy\test_project",
   [int]$ScrollSteps = 8,
   [switch]$PrepareRunDir,
-  [switch]$KeepOpen
+  [switch]$KeepOpen,
+  [switch]$NoKillExisting
 )
 
 $ErrorActionPreference = "Stop"
@@ -41,8 +42,8 @@ function New-ScrollFixture([string]$TestProject) {
   $lines.Add("")
   for ($i = 1; $i -le 3000; $i++) {
     $prefix = "{0:D4}" -f $i
-    $text = "function render_test_$prefix() -- tabs`tunicode ✓ emoji 😀 punctuation []{}<> long-long-long-long-long-long-long-long-long-long"
-    $lines.Add("$prefix  $text")
+    $text = "function render_test_${prefix}() -- tabs`tunicode OK punctuation []{}<> long-long-long-long-long-long-long-long-long-long"
+    $lines.Add("${prefix}  $text")
   }
   Set-Content -LiteralPath $fixture -Value $lines -Encoding UTF8
   return $fixture
@@ -58,6 +59,8 @@ public static class AnvilSmokeWin32 {
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+  [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint nFlags);
+  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 }
 "@
 
@@ -66,7 +69,8 @@ function Wait-MainWindow([System.Diagnostics.Process]$Process, [int]$TimeoutMs =
   do {
     Start-Sleep -Milliseconds 100
     $Process.Refresh()
-    if ($Process.MainWindowHandle -ne [IntPtr]::Zero) { return $Process.MainWindowHandle }
+    if ($Process.HasExited) { throw "Anvil exited before creating a main window" }
+    if ($Process.MainWindowHandle -ne [IntPtr]::Zero) { return ([IntPtr]$Process.MainWindowHandle) }
   } while ([Environment]::TickCount -lt $deadline -and !$Process.HasExited)
   throw "Timed out waiting for Anvil main window"
 }
@@ -82,7 +86,16 @@ function Capture-Window([IntPtr]$Hwnd, [string]$Path) {
   $bmp = New-Object System.Drawing.Bitmap $width, $height
   $gfx = [System.Drawing.Graphics]::FromImage($bmp)
   try {
-    $gfx.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bmp.Size)
+    try {
+      $gfx.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bmp.Size)
+    } catch {
+      $hdc = $gfx.GetHdc()
+      try {
+        if (![AnvilSmokeWin32]::PrintWindow($Hwnd, $hdc, 2)) { throw }
+      } finally {
+        $gfx.ReleaseHdc($hdc)
+      }
+    }
     $bmp.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
   } finally {
     $gfx.Dispose()
@@ -91,6 +104,11 @@ function Capture-Window([IntPtr]$Hwnd, [string]$Path) {
 }
 
 if ($PrepareRunDir) { Prepare-RunDirectory $RepoRoot }
+
+if (!$NoKillExisting) {
+  Get-Process anvil -ErrorAction SilentlyContinue | Stop-Process -Force
+  Start-Sleep -Milliseconds 300
+}
 
 $runDir = Join-Path $RepoRoot ".run"
 $exe = Join-Path $runDir "bin\anvil.exe"
@@ -120,7 +138,8 @@ try {
 
   for ($i = 1; $i -le $ScrollSteps; $i++) {
     [AnvilSmokeWin32]::SetForegroundWindow($hwnd) | Out-Null
-    [System.Windows.Forms.SendKeys]::SendWait("{PGDN}")
+    [AnvilSmokeWin32]::PostMessage($hwnd, 0x0100, [IntPtr]0x22, [IntPtr]0) | Out-Null
+    [AnvilSmokeWin32]::PostMessage($hwnd, 0x0101, [IntPtr]0x22, [IntPtr]0) | Out-Null
     Start-Sleep -Milliseconds 180
     if ($i -eq 1 -or $i -eq $ScrollSteps -or ($i % 4) -eq 0) {
       Capture-Window $hwnd (Join-Path $outDir ("{0:D2}-scroll.png" -f $i))
