@@ -900,26 +900,108 @@ function DocView:draw_caret(x, y, line, col)
 end
 
 
+---Prepare per-visible-line selection/highlight data for draw_line_body().
+---This avoids scanning every selection once per visible line and merges
+---overlapping same-color ranges into one rectangle.
+---@param minline integer First visible line
+---@param maxline integer Last visible line
+function DocView:prepare_line_body_draw_cache(minline, maxline)
+  local highlight_cache = {}
+  local selection_cache = {}
+  local gutter_selection_cache = {}
+  local hcl = config.highlight_current_line
+
+  if hcl ~= false then
+    for _, line1, col1, line2, col2 in self.doc:get_selections(false) do
+      if line1 > maxline then break end
+      if line1 >= minline then
+        if hcl == "no_selection" and ((line1 ~= line2) or (col1 ~= col2)) then
+          highlight_cache[line1] = false
+        elseif highlight_cache[line1] == nil then
+          highlight_cache[line1] = true
+        end
+      end
+    end
+  end
+
+  for _, line1, col1, line2, col2 in self.doc:get_selections(true) do
+    if line1 > maxline then break end
+    if line2 >= minline then
+      local from_line = math.max(line1, minline)
+      local to_line = math.min(line2, maxline)
+      for line = from_line, to_line do
+        gutter_selection_cache[line] = true
+        local text = self.doc.lines[line]
+        local c1 = line1 ~= line and 1 or col1
+        local c2 = line2 ~= line and #text + 1 or col2
+        if c1 ~= c2 then
+          local selection_color = style.selection
+          if self.doc:is_search_selection(line1, c1, line, c2) then
+            selection_color = style.search_selection or style.caret
+          end
+          local list = selection_cache[line]
+          if not list then
+            list = {}
+            selection_cache[line] = list
+          end
+          list[#list + 1] = { c1, c2, selection_color, selection_color ~= style.selection }
+        end
+      end
+    end
+  end
+
+  for line, list in pairs(selection_cache) do
+    if #list > 1 then
+      table.sort(list, function(a, b)
+        if a[4] ~= b[4] then return not a[4] end
+        if a[1] ~= b[1] then return a[1] < b[1] end
+        return a[2] < b[2]
+      end)
+      local merged = {}
+      for _, sel in ipairs(list) do
+        local last = merged[#merged]
+        if last and last[3] == sel[3] and sel[1] <= last[2] then
+          if sel[2] > last[2] then last[2] = sel[2] end
+        else
+          merged[#merged + 1] = sel
+        end
+      end
+      selection_cache[line] = merged
+    end
+  end
+
+  self.__line_body_highlight_cache = highlight_cache
+  self.__line_body_selection_cache = selection_cache
+  self.__line_gutter_selection_cache = gutter_selection_cache
+end
+
 ---Draw a complete line including highlight and selections.
 ---@param line integer Line number
   ---@param x number Screen x coordinate
 ---@param y number Screen y coordinate
 ---@return integer height Line height
 function DocView:draw_line_body(line, x, y)
-  -- draw highlight if any selection ends on this line
-  local draw_highlight = false
-  local hcl = config.highlight_current_line
-  if hcl ~= false then
-    for lidx, line1, col1, line2, col2 in self.doc:get_selections(false) do
-      if line1 == line then
-        if hcl == "no_selection" then
-          if (line1 ~= line2) or (col1 ~= col2) then
-            draw_highlight = false
-            break
+  local highlight_cache = self.__line_body_highlight_cache
+  local draw_highlight
+  if highlight_cache then
+    draw_highlight = highlight_cache[line] or false
+  else
+    -- draw highlight if any selection ends on this line
+    draw_highlight = false
+    local hcl = config.highlight_current_line
+    if hcl ~= false then
+      for lidx, line1, col1, line2, col2 in self.doc:get_selections(false) do
+        if line1 > line then break end
+        if line1 == line then
+          if hcl == "no_selection" then
+            if (line1 ~= line2) or (col1 ~= col2) then
+              draw_highlight = false
+              break
+            end
           end
+          draw_highlight = true
+          break
         end
-        draw_highlight = true
-        break
       end
     end
   end
@@ -929,19 +1011,32 @@ function DocView:draw_line_body(line, x, y)
 
   -- draw selection if it overlaps this line
   local lh = self:get_line_height()
-  for lidx, line1, col1, line2, col2 in self.doc:get_selections(true) do
-    if line >= line1 and line <= line2 then
-      local text = self.doc.lines[line]
-      if line1 ~= line then col1 = 1 end
-      if line2 ~= line then col2 = #text + 1 end
-      local x1 = x + self:get_col_x_offset(line, col1)
-      local x2 = x + self:get_col_x_offset(line, col2)
+  local selection_cache = self.__line_body_selection_cache
+  local cached_selections = selection_cache and selection_cache[line]
+  if cached_selections then
+    for _, sel in ipairs(cached_selections) do
+      local x1 = x + self:get_col_x_offset(line, sel[1])
+      local x2 = x + self:get_col_x_offset(line, sel[2])
       if x1 ~= x2 then
-        local selection_color = style.selection
-        if self.doc:is_search_selection(line1, col1, line, col2) then
-          selection_color = style.search_selection or style.caret
+        renderer.draw_rect(x1, y, x2 - x1, lh, sel[3])
+      end
+    end
+  elseif not selection_cache then
+    for lidx, line1, col1, line2, col2 in self.doc:get_selections(true) do
+      if line1 > line then break end
+      if line >= line1 and line <= line2 then
+        local text = self.doc.lines[line]
+        if line1 ~= line then col1 = 1 end
+        if line2 ~= line then col2 = #text + 1 end
+        local x1 = x + self:get_col_x_offset(line, col1)
+        local x2 = x + self:get_col_x_offset(line, col2)
+        if x1 ~= x2 then
+          local selection_color = style.selection
+          if self.doc:is_search_selection(line1, col1, line, col2) then
+            selection_color = style.search_selection or style.caret
+          end
+          renderer.draw_rect(x1, y, x2 - x1, lh, selection_color)
         end
-        renderer.draw_rect(x1, y, x2 - x1, lh, selection_color)
       end
     end
   end
@@ -961,10 +1056,16 @@ function DocView:draw_line_gutter(line, x, y, width)
   local lh = self:get_line_height()
   if config.show_line_numbers then
     local color = style.line_number
-    for _, line1, _, line2 in self.doc:get_selections(true) do
-      if line >= line1 and line <= line2 then
-        color = style.line_number2
-        break
+    local gutter_selection_cache = self.__line_gutter_selection_cache
+    if gutter_selection_cache then
+      if gutter_selection_cache[line] then color = style.line_number2 end
+    else
+      for _, line1, _, line2 in self.doc:get_selections(true) do
+        if line1 > line then break end
+        if line >= line1 and line <= line2 then
+          color = style.line_number2
+          break
+        end
       end
     end
     x = x + style.padding.x
@@ -1041,6 +1142,7 @@ function DocView:draw()
   local stats = core.docview_frame_stats
   local draw_start = stats and system.get_time()
   if stats then stats.visible_lines = stats.visible_lines + math.max(0, maxline - minline + 1) end
+  self:prepare_line_body_draw_cache(minline, maxline)
 
   local x, y = self:get_line_screen_position(minline)
   local gw, gpad = self:get_gutter_width()
@@ -1062,6 +1164,9 @@ function DocView:draw()
   if stats then stats.body_ms = stats.body_ms + (system.get_time() - body_start) * 1000 end
   self:draw_overlay()
   core.pop_clip_rect()
+  self.__line_body_highlight_cache = nil
+  self.__line_body_selection_cache = nil
+  self.__line_gutter_selection_cache = nil
 
   self:draw_scrollbar()
   if stats then stats.draw_ms = stats.draw_ms + (system.get_time() - draw_start) * 1000 end
