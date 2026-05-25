@@ -94,6 +94,14 @@ def summarize(frame_path, d3d_path, budget_ms):
                 "texture_quads",
                 "texture_uploads",
                 "texture_upload_bytes",
+                "rencache_commands",
+                "rencache_text_commands",
+                "rencache_rect_commands",
+                "rencache_set_clip_commands",
+                "rencache_command_bytes",
+                "rencache_text_bytes",
+                "rencache_draw_text_ms",
+                "rencache_draw_text_width_ms",
             ]:
                 if key in red[0]:
                     print(key, fmt(stats(as_float(r.get(key)) for r in red)))
@@ -104,7 +112,8 @@ def summarize(frame_path, d3d_path, budget_ms):
             for r in sorted(red, key=lambda r: as_float(r.get("frame_time_ms")) or -1, reverse=True)[:5]:
                 print({k: r.get(k) for k in [
                     "seq", "reason", "event_ms", "update_ms", "draw_emit_ms",
-                    "renderer_end_ms", "frame_time_ms", "draw_calls", "texture_uploads",
+                    "renderer_end_ms", "frame_time_ms", "draw_calls", "rencache_text_commands",
+                    "rencache_draw_text_ms", "rencache_draw_text_width_ms", "texture_uploads",
                     "texture_upload_bytes",
                 ]})
 

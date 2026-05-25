@@ -5,6 +5,7 @@ param(
   [int]$ScrollSeconds = 15,
   [int]$WheelEveryMs = 8,
   [int]$WheelDelta = -120,
+  [switch]$UseGlobalMouseWheel,
   [switch]$KeepOpen,
   [switch]$NoAnalyze,
   [switch]$NoKillExisting,
@@ -54,8 +55,12 @@ public static class Win32Input {
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, int dwData, UIntPtr dwExtraInfo);
+  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint Msg, UIntPtr wParam, IntPtr lParam);
   public const int SW_RESTORE = 9;
   public const uint MOUSEEVENTF_WHEEL = 0x0800;
+  public const uint WM_MOUSEWHEEL = 0x020A;
+  public static UIntPtr MakeWheelWParam(int delta) { return (UIntPtr)(unchecked((uint)(delta << 16))); }
+  public static IntPtr MakeLParam(int x, int y) { return (IntPtr)((y << 16) | (x & 0xffff)); }
   public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
 }
 "@
@@ -97,13 +102,22 @@ $cy = [int](($rect.Top + $rect.Bottom) / 2)
 Write-Host "Warmup ${WarmupSeconds}s..."
 Start-Sleep -Seconds $WarmupSeconds
 
-Write-Host "Scrolling ${ScrollSeconds}s: wheel delta $WheelDelta every ${WheelEveryMs}ms"
+$scrollMode = if ($UseGlobalMouseWheel) { "global mouse_event" } else { "direct WM_MOUSEWHEEL to Anvil hwnd" }
+Write-Host "Scrolling ${ScrollSeconds}s via ${scrollMode}: wheel delta $WheelDelta every ${WheelEveryMs}ms"
 $end = (Get-Date).AddSeconds($ScrollSeconds)
 $count = 0
 while ((Get-Date) -lt $end) {
   try { $targetProcess.Refresh() } catch {}
   if ($targetProcess.HasExited) { break }
-  [Win32Input]::mouse_event([Win32Input]::MOUSEEVENTF_WHEEL, 0, 0, $WheelDelta, [UIntPtr]::Zero)
+  if ($UseGlobalMouseWheel) {
+    [Win32Input]::SetForegroundWindow($hwnd) | Out-Null
+    [Win32Input]::SetCursorPos($cx, $cy) | Out-Null
+    [Win32Input]::mouse_event([Win32Input]::MOUSEEVENTF_WHEEL, 0, 0, $WheelDelta, [UIntPtr]::Zero)
+  } else {
+    # Send directly to Anvil's SDL window. This avoids accidentally scrolling
+    # whatever app has focus if Windows declines the foreground activation.
+    [Win32Input]::PostMessage($hwnd, [Win32Input]::WM_MOUSEWHEEL, [Win32Input]::MakeWheelWParam($WheelDelta), [Win32Input]::MakeLParam($cx, $cy)) | Out-Null
+  }
   $count++
   Start-Sleep -Milliseconds $WheelEveryMs
 }
