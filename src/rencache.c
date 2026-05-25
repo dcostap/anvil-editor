@@ -355,10 +355,8 @@ static RenColor rencache_detect_frame_clear_color(RenCache *ren_cache) {
 
   /* DXGI uses the swapchain background color for newly exposed pixels during
      fast live-resize before the next presented frame lands.  Anvil's command
-     renderer normally clears to black and then draws the theme background as a
-     full-window rect; using black as the swapchain background makes those
-     exposed pixels look like a black void.  Detect the full-screen opaque rect
-     and use that as both the D3D clear and swapchain background instead. */
+     renderer draws the theme background as a full-window rect, so detect that
+     rect and use its color for both the D3D clear and swapchain background. */
   Command *cmd = NULL;
   RenRect screen = ren_cache->screen_rect;
   while (next_command(ren_cache, &cmd)) {

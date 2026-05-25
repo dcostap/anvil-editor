@@ -14,12 +14,13 @@ Implemented milestones in this branch:
 - SDL resize immediate-render suppression while the Win32 modal resize path owns live rendering;
 - active-refresh-based C resize throttle outside true live resize;
 - D3D11 resize unbind, resize timing, resize result logging, and RAD-style `ClearState()` after present;
-- opt-in experiments: `ANVIL_D3D11_RESIZE_DWM_FLUSH=1`, `ANVIL_D3D11_RESIZE_FLUSH=1`, `ANVIL_WIN32_OWN_WM_PAINT=1`;
+- the default Windows/D3D11 live-resize path now uses `WS_EX_NOREDIRECTIONBITMAP`, owned `WM_SIZE` immediate frames, `Present(0, 0)` during live resize, and a DXGI swapchain background color matched to the detected theme background;
+- laggier synchronization options remain opt-in: `ANVIL_D3D11_RESIZE_DWM_FLUSH=1`, `ANVIL_D3D11_RESIZE_FLUSH=1`, `ANVIL_WIN32_OWN_WM_PAINT=1`;
 - live-D3D resize defers full window-sized CPU surface recreation and updates cached window dimensions instead;
 - resize/pixel-size event queue churn is coalesced;
 - app cursor updates are suppressed while Win32 live resize is active.
 
-Automated synthetic live-resize smoke tests show no D3D present/resize failures, no Lua sleeps in immediate resize frames, and main surface recreation is deferred for live D3D resizes. Manual subjective testing is still the final judge for resize feel.
+Automated synthetic live-resize smoke tests show no D3D present/resize failures, no Lua sleeps in immediate resize frames, and main surface recreation is deferred for live D3D resizes. Manual testing selected the default path above as the best trade-off found so far: smooth live resize with exposed swapchain-background artifacts reduced by matching the background color rather than using latency-heavy DWM flushes.
 
 ## Sources reviewed
 
