@@ -106,6 +106,9 @@ typedef struct D3D11Stats {
 typedef struct D3D11State {
   bool attempted_init;
   bool available;
+  bool device_is_warp;
+  D3D_FEATURE_LEVEL feature_level;
+  char adapter_name[128];
   ID3D11Device *device;
   ID3D11DeviceContext *context;
   IDXGIFactory2 *factory;
@@ -181,6 +184,32 @@ static bool d3d11_env_truthy(const char *name) {
   return !d3d11_env_value_is_false(getenv(name));
 }
 
+static bool d3d11_should_dwm_flush(void) {
+  return d3d11_env_truthy("ANVIL_D3D11_DWM_FLUSH");
+}
+
+static bool d3d11_should_flush_stats_each_frame(void) {
+  return d3d11_env_truthy("ANVIL_D3D11_STATS_FLUSH") ||
+         d3d11_env_truthy("ANVIL_D3D11_STATS_FLUSH_EVERY_FRAME");
+}
+
+static void d3d11_sanitize_csv_field(char *s) {
+  if (!s) return;
+  for (; *s; s++) {
+    if (*s == ',' || *s == '\n' || *s == '\r') *s = ' ';
+  }
+}
+
+static const char *d3d11_feature_level_string(D3D_FEATURE_LEVEL level) {
+  switch (level) {
+    case D3D_FEATURE_LEVEL_11_1: return "11_1";
+    case D3D_FEATURE_LEVEL_11_0: return "11_0";
+    case D3D_FEATURE_LEVEL_10_1: return "10_1";
+    case D3D_FEATURE_LEVEL_10_0: return "10_0";
+    default: return "unknown";
+  }
+}
+
 static double d3d11_ms_between(LARGE_INTEGER a, LARGE_INTEGER b) {
   if (g_d3d11.stats.freq.QuadPart == 0) return 0.0;
   return ((double)(b.QuadPart - a.QuadPart) * 1000.0) / (double)g_d3d11.stats.freq.QuadPart;
@@ -215,7 +244,7 @@ static void d3d11_stats_init(void) {
   if (!g_d3d11.stats.file) return;
   g_d3d11.stats.enabled = true;
   fprintf(g_d3d11.stats.file,
-          "frame,path,success,width,height,cpu_ms,present_ms,dwm_flush_ms,draw_calls,rect_pushes,rect_flushes,rect_draws,rect_vertices,texture_quads,texture_draws,pixel_quads,maps,texture_uploads,texture_upload_bytes,texture_recreates,texture_prunes,texture_cache_entries,hr,fail_reason\n");
+          "frame,path,success,width,height,device,adapter,feature_level,cpu_ms,present_ms,dwm_flush_ms,draw_calls,rect_pushes,rect_flushes,rect_draws,rect_vertices,texture_quads,texture_draws,pixel_quads,maps,texture_uploads,texture_upload_bytes,texture_recreates,texture_prunes,texture_cache_entries,hr,fail_reason\n");
   fflush(g_d3d11.stats.file);
 }
 
@@ -237,12 +266,15 @@ static void d3d11_stats_end(bool success, HRESULT hr) {
   D3D11FrameStats *s = &g_d3d11.stats.frame;
   double cpu_ms = d3d11_ms_between(s->start_counter, end_counter);
   fprintf(g_d3d11.stats.file,
-          "%llu,%s,%d,%d,%d,%.3f,%.3f,%.3f,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%llu,%d,%d,%d,0x%08lx,%s\n",
+          "%llu,%s,%d,%d,%d,%s,%s,%s,%.3f,%.3f,%.3f,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%llu,%d,%d,%d,0x%08lx,%s\n",
           (unsigned long long)++g_d3d11.stats.frame_index,
           s->path ? s->path : "unknown",
           success ? 1 : 0,
           s->width,
           s->height,
+          g_d3d11.device_is_warp ? "warp" : "hardware",
+          g_d3d11.adapter_name[0] ? g_d3d11.adapter_name : "unknown",
+          d3d11_feature_level_string(g_d3d11.feature_level),
           cpu_ms,
           s->present_ms,
           s->dwm_flush_ms,
@@ -263,7 +295,7 @@ static void d3d11_stats_end(bool success, HRESULT hr) {
           (unsigned long)hr,
           s->fail_reason ? s->fail_reason : "");
   g_d3d11.stats.active = false;
-  if (++g_d3d11.stats.lines_since_flush >= 60 || !success) {
+  if (d3d11_should_flush_stats_each_frame() || ++g_d3d11.stats.lines_since_flush >= 60 || !success) {
     fflush(g_d3d11.stats.file);
     g_d3d11.stats.lines_since_flush = 0;
   }
@@ -359,18 +391,22 @@ static bool d3d11_init(void) {
   };
   D3D_FEATURE_LEVEL selected = 0;
   UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+  bool used_warp = false;
 
   HRESULT hr = D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, flags,
                                  levels, (UINT)(sizeof(levels) / sizeof(levels[0])),
                                  D3D11_SDK_VERSION,
                                  &g_d3d11.device, &selected, &g_d3d11.context);
   if (FAILED(hr)) {
+    used_warp = true;
     hr = D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_WARP, NULL, flags,
                            levels, (UINT)(sizeof(levels) / sizeof(levels[0])),
                            D3D11_SDK_VERSION,
                            &g_d3d11.device, &selected, &g_d3d11.context);
   }
   if (FAILED(hr)) return false;
+  g_d3d11.device_is_warp = used_warp;
+  g_d3d11.feature_level = selected;
 
   IDXGIDevice *dxgi_device = NULL;
   IDXGIAdapter *adapter = NULL;
@@ -379,7 +415,22 @@ static bool d3d11_init(void) {
     hr = dxgi_device->lpVtbl->GetAdapter(dxgi_device, &adapter);
   }
   if (SUCCEEDED(hr)) {
+    DXGI_ADAPTER_DESC desc;
+    memset(&desc, 0, sizeof(desc));
+    if (SUCCEEDED(adapter->lpVtbl->GetDesc(adapter, &desc))) {
+      WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1,
+                          g_d3d11.adapter_name, (int)sizeof(g_d3d11.adapter_name),
+                          NULL, NULL);
+      d3d11_sanitize_csv_field(g_d3d11.adapter_name);
+    }
     hr = adapter->lpVtbl->GetParent(adapter, &IID_IDXGIFactory2, (void **)&g_d3d11.factory);
+  }
+  if (SUCCEEDED(hr)) {
+    IDXGIDevice1 *dxgi_device1 = NULL;
+    if (SUCCEEDED(g_d3d11.device->lpVtbl->QueryInterface(g_d3d11.device, &IID_IDXGIDevice1, (void **)&dxgi_device1))) {
+      dxgi_device1->lpVtbl->SetMaximumFrameLatency(dxgi_device1, 1);
+      SAFE_RELEASE(dxgi_device1);
+    }
   }
   SAFE_RELEASE(adapter);
   SAFE_RELEASE(dxgi_device);
@@ -697,9 +748,9 @@ static D3D11Window *d3d11_get_or_create_window(SDL_Window *window, int width, in
   desc.SampleDesc.Quality = 0;
   desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
   desc.BufferCount = 2;
-  desc.Scaling = DXGI_SCALING_STRETCH;
+  desc.Scaling = DXGI_SCALING_NONE;
   desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-  desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+  desc.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
 
   HRESULT hr = g_d3d11.factory->lpVtbl->CreateSwapChainForHwnd(
     g_d3d11.factory, (IUnknown *)g_d3d11.device, hwnd, &desc, NULL, NULL, &w->swapchain);
@@ -1336,10 +1387,14 @@ bool anvil_d3d11_end_frame(SDL_Window *window) {
     }
     return false;
   }
-  QueryPerformanceCounter(&dwm_start);
-  DwmFlush();
-  QueryPerformanceCounter(&dwm_end);
-  g_d3d11.stats.frame.dwm_flush_ms = d3d11_ms_between(dwm_start, dwm_end);
+  if (d3d11_should_dwm_flush()) {
+    QueryPerformanceCounter(&dwm_start);
+    DwmFlush();
+    QueryPerformanceCounter(&dwm_end);
+    g_d3d11.stats.frame.dwm_flush_ms = d3d11_ms_between(dwm_start, dwm_end);
+  } else {
+    g_d3d11.stats.frame.dwm_flush_ms = 0.0;
+  }
   d3d11_stats_end(true, hr);
   return true;
 }
@@ -1397,10 +1452,14 @@ bool anvil_d3d11_present(SDL_Window *window, SDL_Surface *surface,
     }
     return false;
   }
-  QueryPerformanceCounter(&dwm_start);
-  DwmFlush();
-  QueryPerformanceCounter(&dwm_end);
-  g_d3d11.stats.frame.dwm_flush_ms = d3d11_ms_between(dwm_start, dwm_end);
+  if (d3d11_should_dwm_flush()) {
+    QueryPerformanceCounter(&dwm_start);
+    DwmFlush();
+    QueryPerformanceCounter(&dwm_end);
+    g_d3d11.stats.frame.dwm_flush_ms = d3d11_ms_between(dwm_start, dwm_end);
+  } else {
+    g_d3d11.stats.frame.dwm_flush_ms = 0.0;
+  }
   d3d11_stats_end(true, hr);
   return true;
 }
@@ -1452,6 +1511,9 @@ void anvil_d3d11_shutdown(void) {
   SAFE_RELEASE(g_d3d11.factory);
   SAFE_RELEASE(g_d3d11.context);
   SAFE_RELEASE(g_d3d11.device);
+  g_d3d11.adapter_name[0] = 0;
+  g_d3d11.feature_level = 0;
+  g_d3d11.device_is_warp = false;
   g_d3d11.available = false;
 }
 

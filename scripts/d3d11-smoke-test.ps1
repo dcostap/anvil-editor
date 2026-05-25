@@ -126,10 +126,12 @@ $oldUserProfile = $env:USERPROFILE
 $oldRenderer = $env:ANVIL_RENDERER
 $oldStats = $env:ANVIL_D3D11_STATS
 $oldStatsFile = $env:ANVIL_D3D11_STATS_FILE
+$oldStatsFlush = $env:ANVIL_D3D11_STATS_FLUSH
 try {
   $env:USERPROFILE = $runDir
   $env:ANVIL_RENDERER = "d3d11"
   $env:ANVIL_D3D11_STATS = "1"
+  $env:ANVIL_D3D11_STATS_FLUSH = "1"
   $env:ANVIL_D3D11_STATS_FILE = $statsFile
 
   $proc = Start-Process -FilePath $exe -ArgumentList @($fixture) -WorkingDirectory $TestProject -PassThru
@@ -164,4 +166,5 @@ try {
   $env:ANVIL_RENDERER = $oldRenderer
   $env:ANVIL_D3D11_STATS = $oldStats
   $env:ANVIL_D3D11_STATS_FILE = $oldStatsFile
+  $env:ANVIL_D3D11_STATS_FLUSH = $oldStatsFlush
 }
