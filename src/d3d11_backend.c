@@ -28,8 +28,8 @@ typedef struct D3D11TextureInstance {
 typedef struct D3D11TextureConstants {
   float width;
   float height;
-  float mode;
   float pad0;
+  float pad1;
 } D3D11TextureConstants;
 
 typedef struct D3D11CachedTexture D3D11CachedTexture;
@@ -70,6 +70,9 @@ typedef struct D3D11FrameStats {
   int texture_draws;
   int pixel_quads;
   int draw_calls;
+  int quad_draws;
+  int quad_instances;
+  int quad_vertices;
   int maps;
   int texture_uploads;
   size_t texture_upload_bytes;
@@ -115,7 +118,6 @@ typedef struct D3D11State {
   int tex_instance_capacity;
   int tex_instance_buffer_capacity;
   ID3D11ShaderResourceView *tex_batch_srv;
-  float tex_batch_mode;
   bool tex_batch_has_texture_dependent;
   ID3D11Texture2D *white_texture;
   ID3D11ShaderResourceView *white_srv;
@@ -227,7 +229,7 @@ static void d3d11_stats_init(void) {
   if (!g_d3d11.stats.file) return;
   g_d3d11.stats.enabled = true;
   fprintf(g_d3d11.stats.file,
-          "frame,path,success,width,height,device,adapter,feature_level,cpu_ms,present_ms,dwm_flush_ms,draw_calls,rect_pushes,rect_flushes,rect_draws,rect_vertices,texture_quads,texture_draws,pixel_quads,maps,texture_uploads,texture_upload_bytes,texture_recreates,texture_prunes,texture_cache_entries,hr,fail_reason\n");
+          "frame,path,success,width,height,device,adapter,feature_level,cpu_ms,present_ms,dwm_flush_ms,draw_calls,quad_draws,quad_instances,quad_vertices,rect_pushes,rect_flushes,rect_draws,rect_vertices,texture_quads,texture_draws,pixel_quads,maps,texture_uploads,texture_upload_bytes,texture_recreates,texture_prunes,texture_cache_entries,hr,fail_reason\n");
   fflush(g_d3d11.stats.file);
 }
 
@@ -249,7 +251,7 @@ static void d3d11_stats_end(bool success, HRESULT hr) {
   D3D11FrameStats *s = &g_d3d11.stats.frame;
   double cpu_ms = d3d11_ms_between(s->start_counter, end_counter);
   fprintf(g_d3d11.stats.file,
-          "%llu,%s,%d,%d,%d,%s,%s,%s,%.3f,%.3f,%.3f,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%llu,%d,%d,%d,0x%08lx,%s\n",
+          "%llu,%s,%d,%d,%d,%s,%s,%s,%.3f,%.3f,%.3f,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%llu,%d,%d,%d,0x%08lx,%s\n",
           (unsigned long long)++g_d3d11.stats.frame_index,
           s->path ? s->path : "unknown",
           success ? 1 : 0,
@@ -262,6 +264,9 @@ static void d3d11_stats_end(bool success, HRESULT hr) {
           s->present_ms,
           s->dwm_flush_ms,
           s->draw_calls,
+          s->quad_draws,
+          s->quad_instances,
+          s->quad_vertices,
           s->rect_pushes,
           s->rect_flushes,
           s->rect_draws,
@@ -306,7 +311,7 @@ static void d3d11_reset_device(void) {
 static const char *texture_shader_source =
   "Texture2D tex0 : register(t0);\n"
   "SamplerState smp0 : register(s0);\n"
-  "cbuffer TextureConstants : register(b0) { float2 viewport; float mode; float _pad; };\n"
+  "cbuffer TextureConstants : register(b0) { float2 viewport; float2 _pad; };\n"
   "struct VSIn { float4 dst : POSITION; float4 uvrect : TEXCOORD0; float4 color : COLOR0; float4 style : TEXCOORD1; uint vertex_id : SV_VertexID; };\n"
   "struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; float4 color : COLOR0; float mode : TEXCOORD1; };\n"
   "VSOut vs_main(VSIn input) {\n"
@@ -762,7 +767,7 @@ static bool d3d11_flush_textures(void);
 static bool d3d11_ensure_white_texture(void);
 static bool d3d11_queue_texture_quad(ID3D11ShaderResourceView *srv,
                                      const D3D11TextureInstance *inst,
-                                     float mode, bool texture_dependent);
+                                     bool texture_dependent);
 
 bool anvil_d3d11_begin_frame(SDL_Window *window, int width, int height, RenColor clear_color) {
   if (!anvil_d3d11_enabled() || !window || width <= 0 || height <= 0) return false;
@@ -807,7 +812,6 @@ bool anvil_d3d11_begin_frame(SDL_Window *window, int width, int height, RenColor
   }
   g_d3d11.tex_instance_count = 0;
   g_d3d11.tex_batch_srv = NULL;
-  g_d3d11.tex_batch_mode = 0.0f;
   g_d3d11.tex_batch_has_texture_dependent = false;
   g_d3d11.rect_active_window = window;
   return true;
@@ -831,7 +835,7 @@ bool anvil_d3d11_push_rect(SDL_Window *window, RenRect rect, RenRect clip, RenCo
   float ca = color.a / 255.0f;
 
   D3D11TextureInstance inst = { x0, y0, x1, y1, 0, 0, 1, 1, cr, cg, cb, ca, 3.0f, 0, 0, 0 };
-  return d3d11_queue_texture_quad(g_d3d11.white_srv, &inst, 3.0f, false);
+  return d3d11_queue_texture_quad(g_d3d11.white_srv, &inst, false);
 }
 
 static D3D11CachedTexture *d3d11_find_cached_texture(SDL_Surface *surface, int mode) {
@@ -1057,7 +1061,7 @@ static bool d3d11_flush_textures(void) {
   if (!w || !w->rtv) return false;
   g_d3d11.context->lpVtbl->OMSetRenderTargets(g_d3d11.context, 1, &w->rtv, NULL);
 
-  D3D11TextureConstants constants = { (float)w->width, (float)w->height, g_d3d11.tex_batch_mode, 0.0f };
+  D3D11TextureConstants constants = { (float)w->width, (float)w->height, 0.0f, 0.0f };
   g_d3d11.context->lpVtbl->UpdateSubresource(g_d3d11.context,
                                              (ID3D11Resource *)g_d3d11.tex_cbuf,
                                              0, NULL, &constants, 0, 0);
@@ -1077,20 +1081,22 @@ static bool d3d11_flush_textures(void) {
   g_d3d11.context->lpVtbl->OMSetBlendState(g_d3d11.context, g_d3d11.blend, blend_factor, 0xffffffffu);
   g_d3d11.context->lpVtbl->DrawInstanced(g_d3d11.context, 4, (UINT)g_d3d11.tex_instance_count, 0, 0);
   g_d3d11.stats.frame.draw_calls++;
+  g_d3d11.stats.frame.quad_draws++;
+  g_d3d11.stats.frame.quad_instances += g_d3d11.tex_instance_count;
+  g_d3d11.stats.frame.quad_vertices += g_d3d11.tex_instance_count * 4;
   g_d3d11.stats.frame.texture_draws++;
 
   ID3D11ShaderResourceView *null_srv = NULL;
   g_d3d11.context->lpVtbl->PSSetShaderResources(g_d3d11.context, 0, 1, &null_srv);
   g_d3d11.tex_instance_count = 0;
   g_d3d11.tex_batch_srv = NULL;
-  g_d3d11.tex_batch_mode = 0.0f;
   g_d3d11.tex_batch_has_texture_dependent = false;
   return true;
 }
 
 static bool d3d11_queue_texture_quad(ID3D11ShaderResourceView *srv,
                                      const D3D11TextureInstance *inst,
-                                     float mode, bool texture_dependent) {
+                                     bool texture_dependent) {
   if (!srv || !inst) return false;
   if (g_d3d11.tex_instance_count > 0 && texture_dependent &&
       g_d3d11.tex_batch_has_texture_dependent && g_d3d11.tex_batch_srv != srv) {
@@ -1098,11 +1104,9 @@ static bool d3d11_queue_texture_quad(ID3D11ShaderResourceView *srv,
   }
   if (g_d3d11.tex_instance_count == 0) {
     g_d3d11.tex_batch_srv = srv;
-    g_d3d11.tex_batch_mode = mode;
     g_d3d11.tex_batch_has_texture_dependent = texture_dependent;
   } else if (texture_dependent && !g_d3d11.tex_batch_has_texture_dependent) {
     g_d3d11.tex_batch_srv = srv;
-    g_d3d11.tex_batch_mode = mode;
     g_d3d11.tex_batch_has_texture_dependent = true;
   }
   if (!d3d11_reserve_texture_instances(1)) return false;
@@ -1151,7 +1155,7 @@ bool anvil_d3d11_push_texture(SDL_Window *window, SDL_Surface *surface,
   float ca = color.a / 255.0f;
   D3D11TextureInstance inst = { cx0, cy0, cx1, cy1, u0, v0, u1, v1, cr, cg, cb, ca, (float)mode, 0, 0, 0 };
 
-  return d3d11_queue_texture_quad(tex->srv, &inst, (float)mode, true);
+  return d3d11_queue_texture_quad(tex->srv, &inst, true);
 }
 
 bool anvil_d3d11_push_pixels(SDL_Window *window, const char *bytes, size_t len,
@@ -1199,7 +1203,7 @@ bool anvil_d3d11_push_pixels(SDL_Window *window, const char *bytes, size_t len,
   float cr = 1.0f, cg = 1.0f, cb = 1.0f, ca = 1.0f;
   D3D11TextureInstance inst = { cx0, cy0, cx1, cy1, u0, v0, u1, v1, cr, cg, cb, ca, 2.0f, 0, 0, 0 };
 
-  if (!d3d11_queue_texture_quad(g_d3d11.upload_srv, &inst, 2.0f, true)) return false;
+  if (!d3d11_queue_texture_quad(g_d3d11.upload_srv, &inst, true)) return false;
   return d3d11_flush_textures();
 }
 
@@ -1208,7 +1212,6 @@ void anvil_d3d11_abort_frame_reason(SDL_Window *window, const char *reason) {
     g_d3d11.rect_active_window = NULL;
     g_d3d11.tex_instance_count = 0;
     g_d3d11.tex_batch_srv = NULL;
-    g_d3d11.tex_batch_mode = 0.0f;
     g_d3d11.tex_batch_has_texture_dependent = false;
     d3d11_stats_abort_reason(reason ? reason : "abort");
   }
@@ -1239,7 +1242,6 @@ bool anvil_d3d11_end_frame(SDL_Window *window) {
   g_d3d11.rect_active_window = NULL;
   g_d3d11.tex_instance_count = 0;
   g_d3d11.tex_batch_srv = NULL;
-  g_d3d11.tex_batch_mode = 0.0f;
   g_d3d11.tex_batch_has_texture_dependent = false;
   if (FAILED(hr)) {
     g_d3d11.stats.frame.fail_reason = "present";
@@ -1361,7 +1363,6 @@ void anvil_d3d11_shutdown(void) {
   g_d3d11.tex_instance_capacity = 0;
   g_d3d11.tex_instance_buffer_capacity = 0;
   g_d3d11.tex_batch_srv = NULL;
-  g_d3d11.tex_batch_mode = 0.0f;
   g_d3d11.tex_batch_has_texture_dependent = false;
   g_d3d11.rect_active_window = NULL;
   SAFE_RELEASE(g_d3d11.factory);
