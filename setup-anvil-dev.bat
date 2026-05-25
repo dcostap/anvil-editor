@@ -16,8 +16,19 @@ if not exist "%BASH%" (
 
 cd /d "%REPO%" || exit /b 1
 
+echo Closing running Anvil processes before setup...
+call :KillAnvil
+if errorlevel 1 exit /b 1
+
 echo === Building Anvil ===
 "%BASH%" -lc "%MSYS_ENV% cd /c/Projects/c_projects/anvil-editor && ./scripts/build.sh -f -P"
+if errorlevel 1 exit /b 1
+
+echo.
+echo === Temporarily removing source-data junctions ===
+call :RemoveLink "%DEST%\data\plugins"
+if errorlevel 1 exit /b 1
+call :RemoveLink "%DEST%\data\colors"
 if errorlevel 1 exit /b 1
 
 echo.
@@ -38,6 +49,30 @@ echo   %APP%
 echo.
 echo Launching Anvil...
 start "Anvil" "%APP%"
+exit /b 0
+
+:KillAnvil
+rem Close all running Anvil processes so installed files are not locked.
+taskkill /IM anvil.exe /T >nul 2>nul
+taskkill /IM anvil.com /T >nul 2>nul
+timeout /T 1 /NOBREAK >nul 2>nul
+taskkill /F /IM anvil.exe /T >nul 2>nul
+taskkill /F /IM anvil.com /T >nul 2>nul
+exit /b 0
+
+:RemoveLink
+set "LINK=%~1"
+if exist "%LINK%" (
+  rem Plain rmdir removes junctions safely. If setup previously failed and this
+  rem is a real copied directory, remove its contents too.
+  rmdir "%LINK%" 2>nul
+  if exist "%LINK%" rmdir /S /Q "%LINK%" 2>nul
+  if exist "%LINK%" (
+    echo Could not remove %LINK%.
+    echo Close Anvil and check that this folder is not in use.
+    exit /b 1
+  )
+)
 exit /b 0
 
 :LinkDir
