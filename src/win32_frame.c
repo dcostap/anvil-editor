@@ -310,7 +310,13 @@ static void push_sdl_resize_event(Win32FrameData *frame) {
   SDL_zero(event);
   event.type = SDL_EVENT_WINDOW_RESIZED;
   event.window.windowID = SDL_GetWindowID(frame->ren->cache.window);
-  SDL_GetWindowSize(frame->ren->cache.window, &event.window.data1, &event.window.data2);
+  RECT cr = {0};
+  if (GetClientRect(frame->hwnd, &cr)) {
+    event.window.data1 = (int)(cr.right - cr.left);
+    event.window.data2 = (int)(cr.bottom - cr.top);
+  } else {
+    SDL_GetWindowSize(frame->ren->cache.window, &event.window.data1, &event.window.data2);
+  }
   system_push_event(&event);
 }
 
@@ -320,6 +326,7 @@ static void live_resize_frame(Win32FrameData *frame, const char *reason) {
   int point_w = 0, point_h = 0, pixel_w = 0, pixel_h = 0;
   get_sdl_window_sizes(frame, &point_w, &point_h, &pixel_w, &pixel_h);
   ren_resize_window(frame->ren);
+  win32_frame_sync_client_size(frame->ren);
   rencache_invalidate(&frame->ren->cache);
   push_sdl_resize_event(frame);
   uint64_t end_ns = SDL_GetTicksNS();
@@ -586,6 +593,30 @@ bool win32_frame_get_metrics(RenWindow *ren, int *button_width, int *title_heigh
     *resize_border = system_metric_for_dpi(hwnd, SM_CXSIZEFRAME)
                    + system_metric_for_dpi(hwnd, SM_CXPADDEDBORDER);
   }
+  return true;
+}
+
+bool win32_frame_sync_client_size(RenWindow *ren) {
+  if (!ren || !ren->cache.window) return false;
+  HWND hwnd = get_hwnd(ren->cache.window);
+  if (!hwnd) return false;
+
+  RECT cr = {0};
+  if (!GetClientRect(hwnd, &cr)) return false;
+  int client_w = (int)(cr.right - cr.left);
+  int client_h = (int)(cr.bottom - cr.top);
+  if (client_w <= 0 || client_h <= 0) return false;
+
+  /* During Win32's modal sizing loop SDL's cached window size can trail the
+     real HWND client rect by a message, especially on fast outward drags.  With
+     WS_EX_NOREDIRECTIONBITMAP that trailing frame is visible as black exposed
+     area.  For the owned D3D resize path, make the render cache authoritative
+     from GetClientRect() so the swapchain is grown to the pixels Windows just
+     exposed. */
+  ren->cache.window_width = client_w;
+  ren->cache.window_height = client_h;
+  ren->cache.window_pixel_width = client_w;
+  ren->cache.window_pixel_height = client_h;
   return true;
 }
 

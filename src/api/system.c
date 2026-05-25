@@ -192,6 +192,7 @@ top:
         RenWindow* window_renderer = ren_find_window_from_id(e.window.windowID);
         if(!window_renderer) return 0;
         ren_resize_window(window_renderer);
+        if (anvil_resize_diag_live_resize()) win32_frame_sync_client_size(window_renderer);
         lua_pushstring(L, "resized");
         /* The size below will be in points. */
         lua_pushinteger(L, e.window.data1);
@@ -408,6 +409,7 @@ top:
       {
         RenWindow* window_renderer = ren_find_window_from_id(e.window.windowID);
         ren_resize_window(window_renderer);
+        if (anvil_resize_diag_live_resize()) win32_frame_sync_client_size(window_renderer);
         lua_pushstring(L, "scalechanged");
         float new_scale = SDL_GetWindowDisplayScale(window_renderer->cache.window);
         lua_pushnumber(L, new_scale);
