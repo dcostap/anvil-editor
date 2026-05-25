@@ -94,15 +94,15 @@ function Capture-Window([IntPtr]$Hwnd, [string]$Path) {
   $bmp = New-Object System.Drawing.Bitmap $width, $height
   $gfx = [System.Drawing.Graphics]::FromImage($bmp)
   try {
+    $printed = $false
+    $hdc = $gfx.GetHdc()
     try {
+      $printed = [AnvilSmokeWin32]::PrintWindow($Hwnd, $hdc, 2)
+    } finally {
+      $gfx.ReleaseHdc($hdc)
+    }
+    if (!$printed) {
       $gfx.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bmp.Size)
-    } catch {
-      $hdc = $gfx.GetHdc()
-      try {
-        if (![AnvilSmokeWin32]::PrintWindow($Hwnd, $hdc, 2)) { throw }
-      } finally {
-        $gfx.ReleaseHdc($hdc)
-      }
     }
     $bmp.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
   } finally {
@@ -111,12 +111,37 @@ function Capture-Window([IntPtr]$Hwnd, [string]$Path) {
   }
 }
 
-if ($PrepareRunDir) { Prepare-RunDirectory $RepoRoot }
+function Get-FileSha256([string]$Path) {
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  $stream = [System.IO.File]::OpenRead($Path)
+  try {
+    $hash = $sha.ComputeHash($stream)
+    return -join ($hash | ForEach-Object { $_.ToString("x2") })
+  } finally {
+    $stream.Dispose()
+    $sha.Dispose()
+  }
+}
+
+function Quote-CommandLineArg([string]$Arg) {
+  return '"' + ($Arg -replace '"', '\"') + '"'
+}
+
+function Start-AnvilProcess([string]$Exe, [string]$Fixture, [string]$WorkingDirectory) {
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $Exe
+  $psi.WorkingDirectory = $WorkingDirectory
+  $psi.UseShellExecute = $false
+  $psi.Arguments = "edit " + (Quote-CommandLineArg $Fixture)
+  return [System.Diagnostics.Process]::Start($psi)
+}
 
 if (!$NoKillExisting) {
   Get-Process anvil -ErrorAction SilentlyContinue | Stop-Process -Force
   Start-Sleep -Milliseconds 300
 }
+
+if ($PrepareRunDir) { Prepare-RunDirectory $RepoRoot }
 
 $runDir = Join-Path $RepoRoot ".run"
 $exe = Join-Path $runDir "bin\anvil.exe"
@@ -141,22 +166,29 @@ New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 $statsFile = Join-Path $outDir "d3d11-stats.csv"
 
 $oldUserProfile = $env:USERPROFILE
+$oldUserDir = $env:ANVIL_USERDIR
 $oldRenderer = $env:ANVIL_RENDERER
 $oldStats = $env:ANVIL_D3D11_STATS
 $oldStatsFile = $env:ANVIL_D3D11_STATS_FILE
 $oldStatsFlush = $env:ANVIL_D3D11_STATS_FLUSH
 try {
+  $smokeUserDir = Join-Path $runDir ".config\anvil"
+  New-Item -ItemType Directory -Force -Path $smokeUserDir | Out-Null
   $env:USERPROFILE = $runDir
+  $env:ANVIL_USERDIR = $smokeUserDir
   $env:ANVIL_RENDERER = "d3d11"
   $env:ANVIL_D3D11_STATS = "1"
   $env:ANVIL_D3D11_STATS_FLUSH = "1"
   $env:ANVIL_D3D11_STATS_FILE = $statsFile
 
-  Remove-Item -LiteralPath (Join-Path $runDir ".config\anvil\session.lua") -Force -ErrorAction SilentlyContinue
-  $proc = Start-Process -FilePath $exe -ArgumentList @("edit", $fixture) -WorkingDirectory $TestProject -PassThru
+  Remove-Item -LiteralPath (Join-Path $smokeUserDir "session.lua") -Force -ErrorAction SilentlyContinue
+  $proc = Start-AnvilProcess $exe $fixture $TestProject
   $hwnd = Wait-MainWindow $proc
   Start-Sleep -Seconds 2
-  Capture-Window $hwnd (Join-Path $outDir "00-open.png")
+  $captures = New-Object System.Collections.Generic.List[string]
+  $openCapture = Join-Path $outDir "00-open.png"
+  Capture-Window $hwnd $openCapture
+  $captures.Add($openCapture) | Out-Null
 
   for ($i = 1; $i -le $ScrollSteps; $i++) {
     [AnvilSmokeWin32]::SetForegroundWindow($hwnd) | Out-Null
@@ -170,7 +202,9 @@ try {
     [AnvilSmokeWin32]::PostMessage($hwnd, 0x0101, [IntPtr]0x22, [IntPtr]0) | Out-Null
     Start-Sleep -Milliseconds 180
     if ($i -eq 1 -or $i -eq $ScrollSteps -or ($i % 4) -eq 0) {
-      Capture-Window $hwnd (Join-Path $outDir ("{0:D2}-scroll.png" -f $i))
+      $capture = Join-Path $outDir ("{0:D2}-scroll.png" -f $i)
+      Capture-Window $hwnd $capture
+      $captures.Add($capture) | Out-Null
     }
   }
 
@@ -181,6 +215,13 @@ try {
     Write-Warning "Stats file was not created: $statsFile"
   }
 
+  $hashes = @($captures | ForEach-Object { Get-FileSha256 $_ })
+  $uniqueHashes = @($hashes | Select-Object -Unique)
+  Write-Host ("Screenshot hashes: {0} unique of {1}" -f $uniqueHashes.Count, $hashes.Count)
+  if ($ScrollSteps -gt 0 -and $uniqueHashes.Count -lt 2) {
+    throw "Scroll validation failed: captured screenshots are identical"
+  }
+
   if (!$KeepOpen) {
     $proc.CloseMainWindow() | Out-Null
     if (!$proc.WaitForExit(3000)) { $proc.Kill() }
@@ -189,6 +230,7 @@ try {
   Write-Host "Smoke output: $outDir"
 } finally {
   $env:USERPROFILE = $oldUserProfile
+  $env:ANVIL_USERDIR = $oldUserDir
   $env:ANVIL_RENDERER = $oldRenderer
   $env:ANVIL_D3D11_STATS = $oldStats
   $env:ANVIL_D3D11_STATS_FILE = $oldStatsFile
