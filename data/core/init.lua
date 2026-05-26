@@ -798,8 +798,20 @@ function core.add_plugins(plugins)
 end
 
 
+local function env_disabled_plugin_names()
+  local value = os.getenv("ANVIL_DISABLE_PLUGINS") or os.getenv("ANVIL_TEST_DISABLE_PLUGINS")
+  if not value or value == "" then return {} end
+  local disabled = {}
+  for name in value:gmatch("[^,;]+") do
+    name = name:lower():match("^%s*(.-)%s*$")
+    if name ~= "" then disabled[name] = true end
+  end
+  return disabled
+end
+
 function core.load_plugins()
   local no_errors = true
+  local env_disabled_plugins = env_disabled_plugin_names()
   local refused_list = {
     userdir = {dir = USERDIR, plugins = {}},
     datadir = {dir = DATADIR, plugins = {}},
@@ -834,6 +846,8 @@ function core.load_plugins()
       local rlist = plugin.file:find(USERDIR, 1, true) == 1
         and 'userdir' or 'datadir'
       table.insert(refused_list[rlist].plugins, plugin)
+    elseif env_disabled_plugins[plugin.name:lower()] then
+      core.log_quiet("Skipped plugin %q from ANVIL_DISABLE_PLUGINS", plugin.name)
     elseif config.plugins[plugin.name] ~= false then
       local start = system.get_time()
       local ok, loaded_plugin = core.try(plugin.load, plugin)
