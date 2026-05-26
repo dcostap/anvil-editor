@@ -31,13 +31,25 @@ local function load_session()
 end
 
 
+local function sane_window_bounds(bounds)
+  if type(bounds) ~= "table" then return false end
+  local w, h, x, y = bounds[1], bounds[2], bounds[3], bounds[4]
+  return type(w) == "number" and type(h) == "number"
+     and w >= 160 and h >= 120
+     and type(x) == "number" and type(y) == "number"
+     and x > -30000 and y > -30000
+end
+
 local function save_session()
   local fp = io.open(USERDIR .. PATHSEP .. "session.lua", "w")
   if fp then
+    local window = core.window_mode ~= "fullscreen"
+      and table.pack(system.get_window_size(core.window)) or core.window_size
+    if not sane_window_bounds(window) then window = core.window_size end
+    if not sane_window_bounds(window) then window = {800, 600, 0, 0} end
     local session = {
       recents = core.recent_projects,
-      window = core.window_mode ~= "fullscreen"
-        and table.pack(system.get_window_size(core.window)) or core.window_size,
+      window = window,
       window_mode = core.window_mode ~= "fullscreen"
         and core.window_mode or core.prev_window_mode,
       previous_find = core.previous_find,
@@ -397,6 +409,10 @@ function core.init()
   core.recent_projects = session.recents or {}
   core.previous_find = session.previous_find or {}
   core.previous_replace = session.previous_replace or {}
+  if not sane_window_bounds(session.window) then
+    session.window = {800, 600, 0, 0}
+    if session.window_mode == "normal" then session.window_mode = nil end
+  end
   core.window_mode = session.window_mode or "normal"
   core.prev_window_mode = core.window_mode
   core.window_size = session.window or {800, 600, 0, 0}
@@ -2495,7 +2511,7 @@ function core.on_error(err)
   -- save copy of all unsaved documents
   for _, doc in ipairs(core.docs) do
     if doc:is_dirty() and doc.filename then
-      doc:save(doc.filename .. "~")
+      pcall(doc.save, doc, doc.filename .. "~", doc.abs_filename and (doc.abs_filename .. "~"))
     end
   end
 end

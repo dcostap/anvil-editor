@@ -5,6 +5,10 @@ local core = require "core"
 local syntax = require "core.syntax"
 local config = require "core.config"
 local common = require "core.common"
+
+-- Match IntelliJ-style default: keep a backup and restore it if writing fails.
+-- Set config.safe_write = false to use the old direct truncate/write path.
+if config.safe_write == nil then config.safe_write = true end
 local tokenizer = require "core.tokenizer"
 
 ---@class core.doc : core.object
@@ -102,8 +106,10 @@ function Doc:needs_encoding_conversion()
   return false
 end
 
+local copy_file, prompt_stale_backup
 
 function Doc:load(filename)
+  if prompt_stale_backup then prompt_stale_backup(filename) end
   if not self.encoding then
     local errmsg
     self.encoding, self.bom, errmsg = encoding.detect(filename);
@@ -190,6 +196,148 @@ local function open_for_writing(filename)
 end
 
 
+local function split_path(filename)
+  local dir, base = filename:match("^(.*[\\/])([^\\/]*)$")
+  if dir then return dir, base end
+  return "", filename
+end
+
+
+local function unique_sidecar_name(filename, suffix)
+  local dir, base = split_path(filename)
+  local seed = tostring(math.floor(system.get_time() * 1000000))
+  for i = 1, 1000 do
+    local candidate = string.format("%s.%s.%s.%d.%s", dir, base, seed, i, suffix)
+    if not system.get_file_info(candidate) then return candidate end
+  end
+  error("could not allocate temporary filename for " .. filename)
+end
+
+
+local function check_io(ok, err)
+  if not ok then error(err or "I/O error") end
+  return ok
+end
+
+
+copy_file = function(src, dst)
+  local input = assert(io.open(src, "rb"))
+  local output, open_err = io.open(dst, "wb")
+  if not output then
+    input:close()
+    error(open_err or "could not open output file")
+  end
+  local ok, err = pcall(function()
+    while true do
+      local chunk = input:read(1024 * 1024)
+      if not chunk then break end
+      check_io(output:write(chunk))
+    end
+    check_io(output:flush())
+  end)
+  local close_in_ok, close_in_err = input:close()
+  local close_out_ok, close_out_err = output:close()
+  if not ok then error(err) end
+  check_io(close_in_ok, close_in_err)
+  check_io(close_out_ok, close_out_err)
+end
+
+
+local prompted_backups = {}
+
+local function find_stale_backup(filename)
+  local dir, base = split_path(filename)
+  local list_dir = dir ~= "" and dir:sub(1, -2) or "."
+  local items = system.list_dir(list_dir)
+  if not items then return nil end
+  local prefix = "." .. base .. "."
+  local best, best_time
+  for _, item in ipairs(items) do
+    if item:sub(1, #prefix) == prefix and item:match("%.anvil%-bak$") then
+      local path = dir .. item
+      local info = system.get_file_info(path)
+      if info and (not best_time or info.modified > best_time) then
+        best, best_time = path, info.modified
+      end
+    end
+  end
+  return best
+end
+
+prompt_stale_backup = function(filename)
+  local backup = find_stale_backup(filename)
+  if not backup or prompted_backups[backup] then return end
+  prompted_backups[backup] = true
+  core.nag_view:show(
+    "Save Backup Found",
+    string.format("Anvil found a backup created during an earlier save of %s. The previous save may have been interrupted.", filename),
+    {
+      { text = "Restore Backup" },
+      { text = "Delete Backup" },
+      { text = "Ignore", default_no = true },
+    },
+    function(item)
+      if item.text == "Restore Backup" then
+        local ok, err = pcall(copy_file, backup, filename)
+        if ok then
+          os.remove(backup)
+          for _, doc in ipairs(core.docs or {}) do
+            if doc.abs_filename == filename then
+              local sel = { doc:get_selection() }
+              local loaded, load_err = pcall(doc.load, doc, filename)
+              if loaded then
+                doc:clean()
+                doc:set_selection(table.unpack(sel))
+              else
+                core.error("Couldn't reload restored backup %s: %s", filename, load_err)
+              end
+            end
+          end
+          core.log("Restored save backup for %s", filename)
+        else
+          core.error("Couldn't restore save backup %s: %s", backup, err)
+        end
+      elseif item.text == "Delete Backup" then
+        local removed, err = os.remove(backup)
+        if not removed then core.error("Couldn't delete save backup %s: %s", backup, err) end
+      end
+    end
+  )
+end
+
+
+local function write_file_safely(filename, writer)
+  local backup
+  if config.safe_write ~= false and system.get_file_info(filename) then
+    backup = unique_sidecar_name(filename, "anvil-bak")
+    copy_file(filename, backup)
+  end
+
+  local fp = open_for_writing(filename)
+  local ok, err = pcall(function()
+    writer(fp)
+    check_io(fp:flush())
+    check_io(fp:close())
+  end)
+
+  if not ok then
+    pcall(function() fp:close() end)
+    if backup then
+      local restored, restore_err = pcall(copy_file, backup, filename)
+      if not restored then
+        error(string.format("%s; additionally failed to restore backup %s: %s", tostring(err), backup, tostring(restore_err)))
+      end
+    end
+    error(err)
+  end
+
+  if backup then
+    local removed, remove_err = os.remove(backup)
+    if not removed then core.error("Couldn't delete save backup %s: %s", backup, remove_err) end
+  end
+end
+
+
 function Doc:save(filename, abs_filename)
   if not filename then
     assert(self.filename, "no filename set to default to")
@@ -197,45 +345,40 @@ function Doc:save(filename, abs_filename)
     abs_filename = self.abs_filename
   else
     assert(self.filename or abs_filename, "calling save on unnamed doc without absolute path")
+    abs_filename = abs_filename or core.project_absolute_path(filename)
   end
-  local fp
-  local output = ""
-  local convert = self:needs_encoding_conversion()
-  if not convert then
-    fp = open_for_writing(abs_filename)
-    if self.bom then fp:write(self.bom) end
-    for _, line in ipairs(self.lines) do
-      if self.crlf then line = line:gsub("\n", "\r\n") end
-      fp:write(line)
-    end
-  else
-      output = table.concat(self.lines);
-      if self.crlf then output = output:gsub("\n", "\r\n") end
-  end
-  local conversion_error = false
-  if convert then
+
+  local output
+  if self:needs_encoding_conversion() then
+    output = table.concat(self.lines)
+    if self.crlf then output = output:gsub("\n", "\r\n") end
     local errmsg
     output, errmsg = encoding.convert(self.encoding, "UTF-8", output, {
       strict = true
     })
-    if output then
-      fp = open_for_writing(abs_filename)
-      if self.bom then fp:write(self.bom) end
-      fp:write(output)
-      fp:close()
-    else
-      conversion_error = true
+    if not output then
+      self.new_file = true
       core.error("%s", errmsg)
+      error(errmsg)
+    elseif self.bom then
+      output = self.bom .. output
     end
-  else
-    fp:close()
   end
+
+  write_file_safely(abs_filename, function(fp)
+    if output then
+      check_io(fp:write(output))
+    else
+      if self.bom then check_io(fp:write(self.bom)) end
+      for _, line in ipairs(self.lines) do
+        if self.crlf then line = line:gsub("\n", "\r\n") end
+        check_io(fp:write(line))
+      end
+    end
+  end)
+
   self:set_filename(filename, abs_filename)
-  if not conversion_error then
-    self.new_file = false
-  else
-    self.new_file = true
-  end
+  self.new_file = false
   self:clean()
 end
 

@@ -44,6 +44,7 @@ local function save(filename)
     core.log("Saved \"%s\"", saved_filename)
   else
     core.error(err)
+    if tostring(err):find("file changed on disk", 1, true) then return end
     core.nag_view:show("Saving failed", string.format("Couldn't save file \"%s\". Do you want to save to another location?", doc().filename), {
       { text = "Yes", default_yes = true },
       { text = "No", default_no = true }
@@ -59,7 +60,11 @@ local function save(filename)
 end
 
 local function save_existing(doc)
-  if doc.filename then doc:save() end
+  if not doc.filename then return end
+  local ok, err = pcall(doc.save, doc)
+  if not ok and not tostring(err):find("file changed on disk", 1, true) then
+    core.error("Couldn't save file \"%s\": %s", doc.filename, err)
+  end
 end
 
 local function cut_or_copy(delete)

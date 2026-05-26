@@ -166,8 +166,12 @@ function DocView:try_close(do_close)
         if item.text:match("^[cC]") then
           do_close()
         elseif item.text:match("^[sS]") then
-          self.doc:save()
-          do_close()
+          local ok, err = pcall(self.doc.save, self.doc)
+          if ok then
+            do_close()
+          elseif not tostring(err):find("file changed on disk", 1, true) then
+            core.error("Couldn't save file \"%s\": %s", self.doc.filename, err)
+          end
         end
       end,
       suggest = function(text)
