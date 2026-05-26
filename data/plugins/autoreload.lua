@@ -11,7 +11,7 @@ local DirWatch = require "core.dirwatch"
 ---Always ask before auto-reloading a file that changed.
 ---@field always_show_nagview boolean
 config.plugins.autoreload = common.merge({
-  always_show_nagview = true,
+  always_show_nagview = false,
   config_spec = {
     name = "Autoreload",
     {
@@ -20,7 +20,7 @@ config.plugins.autoreload = common.merge({
         .. "externally even if you haven't modified it.",
       path = "always_show_nagview",
       type = "toggle",
-      default = true
+      default = false
     }
   }
 }, config.plugins.autoreload)
