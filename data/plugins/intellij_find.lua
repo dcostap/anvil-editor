@@ -123,8 +123,10 @@ if not DocView.__intellij_find_search_outline then
     local secondary_outline = search_draw_active and (style.search_selection_secondary_outline or outline)
     if search_draw_active and secondary_outline then
       local line_height = self:get_line_height()
-      for i, match in ipairs(state.matches or {}) do
-        if i ~= state.current and match.line == line then
+      local matches = state.matches or {}
+      for _, match_index in ipairs((state.match_indexes_by_line and state.match_indexes_by_line[line]) or {}) do
+        if match_index ~= state.current then
+          local match = matches[match_index]
           local x1 = x + self:get_col_x_offset(line, match.col1) - match_pad_x
           local x2 = x + self:get_col_x_offset(line, match.col2) + match_pad_x
           renderer.draw_rect(x1, y - match_pad_y, x2 - x1, line_height + match_pad_y * 2, style.selectionhighlight or style.search_selection)
@@ -340,10 +342,30 @@ local function update_find_label(text, matches, current)
   core.command_view.label = ""
 end
 
+local function build_match_indexes_by_line(matches)
+  local by_line = {}
+  for i, match in ipairs(matches or {}) do
+    local line_matches = by_line[match.line]
+    if not line_matches then
+      line_matches = {}
+      by_line[match.line] = line_matches
+    end
+    line_matches[#line_matches + 1] = i
+  end
+  return by_line
+end
+
 local function set_find_state(d, text, matches, current)
   if d then
+    matches = matches or {}
     d.intellij_find_active = find_active
-    find_state_by_doc[d] = { active = find_active, text = text, matches = matches or {}, current = current or 0 }
+    find_state_by_doc[d] = {
+      active = find_active,
+      text = text,
+      matches = matches,
+      match_indexes_by_line = build_match_indexes_by_line(matches),
+      current = current or 0,
+    }
   end
 end
 
