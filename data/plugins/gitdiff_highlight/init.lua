@@ -34,6 +34,7 @@ style.gitdiff_modification = style.gitdiff_modification or { common.color "#0c7d
 style.gitdiff_deletion = style.gitdiff_deletion or { common.color "#94151b" }
 style.gitdiff_width = style.gitdiff_width or 3
 style.gitdiff_overview_min_height = style.gitdiff_overview_min_height or math.max(2, 2 * SCALE)
+style.gitdiff_overview_extra_width = style.gitdiff_overview_extra_width or math.max(4, 4 * SCALE)
 
 local function color_for_diff(diff)
 	if diff == "addition" then
@@ -508,7 +509,20 @@ function DocView:draw_scrollbar()
 		local y = sy + (((anchor - 1) * lh) / source_h) * sh
 		local h = math.max(min_h, (count * lh / source_h) * sh)
 		if y + h > sy + sh then h = sy + sh - y end
-		if h > 0 then renderer.draw_rect(sx, y, sw, h, color_for_diff(range.type)) end
+		if h > 0 then
+			-- Overview markers are a thin, stable stripe at the view's real right
+			-- edge. Keep this independent from scrollbar_end_padding and from the
+			-- animated expanded scrollbar width; otherwise markers become offset or
+			-- stretch during hover/sidebar layout changes.
+			-- Anchor to the scrollbar's own layout rect, not DocView.size. In some
+			-- layouts the view draw clip and scrollbar rect can diverge briefly, which
+			-- made the overview stripe render left of the real scrollbar.
+			local right_edge = self.v_scrollbar.rect.x + self.v_scrollbar.rect.w
+			local marker_w = (self.v_scrollbar.contracted_size or style.scrollbar_size)
+				+ style.gitdiff_overview_extra_width
+			local marker_x = right_edge - marker_w
+			renderer.draw_rect(marker_x, y, marker_w, h, color_for_diff(range.type))
+		end
 	end
 
 	-- We called the previous scrollbar draw first for override compatibility, so
