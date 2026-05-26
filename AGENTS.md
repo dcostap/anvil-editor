@@ -31,8 +31,9 @@ Use the BAT files in the repo root:
   - launches the app
 
 - `update-anvil-dev-build.bat`
-  - use after C/C++ changes
-  - close Anvil first
+  - default finalization step for most completed changes/features
+  - use after C/C++ changes, and also after Lua/plugin/default-data changes so the dev portable app is refreshed consistently
+  - close Anvil first if binaries may be replaced
   - rebuilds and updates the dev portable app
   - restores the source-data junctions
 
@@ -107,17 +108,19 @@ If installation is not approved, do not run package installation. As an emergenc
 build-windows-x86_64/subprojects/luajit/src/minilua.exe path/to/temp-syntax-script.lua
 ```
 
-## C/C++ development
+## Finalizing changes / updating the dev portable app
 
-C/C++ edits require rebuilding and restarting the app.
-
-Run:
+When a change or feature is finished, run the relevant BAT file from the repo root so `C:\Projects\c_projects\anvil-portable` is updated. In most cases, run:
 
 ```text
-update-anvil-dev-build.bat
+.\update-anvil-dev-build.bat
 ```
 
-Close Anvil before running it, because the exe may be locked.
+From the agent/MSYS bash, use the `cmd.exe` double-slash form documented below.
+
+C/C++ edits require rebuilding and restarting the app. Lua/plugin/color edits are junctioned into the portable app, but still run the BAT finalization step unless there is a clear reason not to, because it refreshes the portable install and restores the expected junctions.
+
+Close Anvil before running the BAT if binaries may be replaced, because the exe may be locked.
 
 ### Running BAT files from the agent/MSYS bash
 
