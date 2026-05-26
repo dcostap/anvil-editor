@@ -62,6 +62,8 @@ function scale.set(scale)
   style.scrollbar_size              = style.scrollbar_size              * s
   style.expanded_scrollbar_size     = style.expanded_scrollbar_size     * s
   style.minimum_thumb_size          = style.minimum_thumb_size          * s
+  style.scrollbar_resize_edge_guard = style.scrollbar_resize_edge_guard * s
+  style.scrollbar_end_padding      = style.scrollbar_end_padding      * s
   style.contracted_scrollbar_margin = style.contracted_scrollbar_margin * s
   style.expanded_scrollbar_margin   = style.expanded_scrollbar_margin   * s
   style.caret_width                 = style.caret_width                 * s

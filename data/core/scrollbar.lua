@@ -56,6 +56,27 @@ local Object = require "core.object"
 ---@field expanded_margin number? Override for style.expanded_scrollbar_margin
 local Scrollbar = Object:extend()
 
+local function blend_color(a, b, t)
+  if not b or t <= 0 then return a end
+  if t >= 1 then return b end
+  return {
+    (a[1] or 0) + ((b[1] or 0) - (a[1] or 0)) * t,
+    (a[2] or 0) + ((b[2] or 0) - (a[2] or 0)) * t,
+    (a[3] or 0) + ((b[3] or 0) - (a[3] or 0)) * t,
+    (a[4] or 255) + ((b[4] or 255) - (a[4] or 255)) * t,
+  }
+end
+
+local function lighten_color(color, amount)
+  amount = amount or 44
+  return {
+    common.clamp((color[1] or 0) + amount, 0, 255),
+    common.clamp((color[2] or 0) + amount, 0, 255),
+    common.clamp((color[3] or 0) + amount, 0, 255),
+    color[4] or 255,
+  }
+end
+
 function Scrollbar:__tostring() return "Scrollbar" end
 
 ---Constructor - initializes a scrollbar with specified orientation and style.
@@ -81,6 +102,7 @@ function Scrollbar:new(options)
   self.direction = options.direction or "v"
   self.alignment = options.alignment or "e"
   self.expand_percent = 0
+  self.hover_tint_percent = 0
   self.force_status = options.force_status
   self:set_forced_status(options.force_status)
   self.contracted_size = options.contracted_size
@@ -172,8 +194,9 @@ function Scrollbar:_get_thumb_rect_normal()
   local along_size = math.max(self.minimum_thumb_size or style.minimum_thumb_size, nr.along_size * nr.along_size / sz)
   local across_size = scrollbar_size
   across_size = across_size + (expanded_scrollbar_size - scrollbar_size) * self.expand_percent
+  local end_padding = self:get_end_padding()
   return
-    nr.across + nr.across_size - across_size,
+    nr.across + nr.across_size - across_size - end_padding,
     nr.along + self.percent * (nr.along_size - along_size),
     across_size,
     along_size
@@ -206,8 +229,9 @@ function Scrollbar:_get_track_rect_normal()
   local expanded_scrollbar_size = self.expanded_size or style.expanded_scrollbar_size
   local across_size = scrollbar_size
   across_size = across_size + (expanded_scrollbar_size - scrollbar_size) * self.expand_percent
+  local end_padding = self:get_end_padding()
   return
-    nr.across + nr.across_size - across_size,
+    nr.across + nr.across_size - across_size - end_padding,
     nr.along,
     across_size,
     nr.along_size
@@ -230,19 +254,28 @@ end
 ---@param y number Normalized y coordinate
 ---@return "thumb"|"track"|nil part What was hit, or nil if nothing
 function Scrollbar:_overlaps_normal(x, y)
-  local sx, sy, sw, sh = self:_get_thumb_rect_normal()
-  local scrollbar_margin =      self.expand_percent  * (self.expanded_margin or style.expanded_scrollbar_margin) +
-                           (1 - self.expand_percent) * (self.contracted_margin or style.contracted_scrollbar_margin)
-  local result
-  if x >= sx - scrollbar_margin and x <= sx + sw and y >= sy and y <= sy + sh then
-    result = "thumb"
-  else
-    sx, sy, sw, sh = self:_get_track_rect_normal()
-    if x >= sx - scrollbar_margin and x <= sx + sw and y >= sy and y <= sy + sh then
-      result = "track"
-    end
+  local nr = self.normal_rect
+  local sz = nr.scrollable
+  if sz <= nr.along_size or sz == math.huge then return nil end
+
+  -- Use a stable interaction band that matches the fully-expanded scrollbar.
+  -- The previous hit test mixed the current animated width with a one-sided
+  -- margin, which made hover feel offset while the bar was animating/inset.
+  local expanded_scrollbar_size = self.expanded_size or style.expanded_scrollbar_size
+  local contracted_scrollbar_size = self.contracted_size or style.scrollbar_size
+  local hit_size = math.max(expanded_scrollbar_size, contracted_scrollbar_size)
+  local end_padding = self:get_end_padding()
+  local sx = nr.across + nr.across_size - hit_size - end_padding
+  local sw = hit_size
+  if x < sx or x > sx + sw or y < nr.along or y > nr.along + nr.along_size then
+    return nil
   end
-  return result
+
+  local _, ty, _, th = self:_get_thumb_rect_normal()
+  if y >= ty and y <= ty + th then
+    return "thumb"
+  end
+  return "track"
 end
 
 
@@ -251,6 +284,7 @@ end
 ---@param y number Screen y coordinate
 ---@return "thumb"|"track"|nil part What was hit, or nil if nothing
 function Scrollbar:overlaps(x, y)
+  if self:_in_resize_edge_guard(x, y) then return nil end
   x, y = self:real_to_normal(x, y)
   return self:_overlaps_normal(x, y)
 end
@@ -290,6 +324,7 @@ end
 ---@return boolean|number? result True if thumb clicked, 0-1 percent if track clicked, falsy otherwise
 function Scrollbar:on_mouse_pressed(button, x, y, clicks)
   if button ~= "left" then return end
+  if self:_in_resize_edge_guard(x, y) then return end
   x, y = self:real_to_normal(x, y)
   return self:_on_mouse_pressed_normal(button, x, y, clicks)
 end
@@ -301,9 +336,13 @@ end
 ---@param y number Normalized y coordinate
 ---@return boolean hovering True if hovering track or thumb
 function Scrollbar:_update_hover_status_normal(x, y)
+  local old_thumb, old_track = self.hovering.thumb, self.hovering.track
   local overlaps = self:_overlaps_normal(x, y)
   self.hovering.thumb = overlaps == "thumb"
   self.hovering.track = self.hovering.thumb or overlaps == "track"
+  if old_thumb ~= self.hovering.thumb or old_track ~= self.hovering.track then
+    core.redraw = true
+  end
   return self.hovering.track or self.hovering.thumb
 end
 
@@ -359,6 +398,11 @@ end
 ---@param dy number Delta y since last move
 ---@return boolean|number? result True if hovering, 0-1 percent if dragging, falsy otherwise
 function Scrollbar:on_mouse_moved(x, y, dx, dy)
+  if not self.dragging and self:_in_resize_edge_guard(x, y) then
+    if self.hovering.track or self.hovering.thumb then core.redraw = true end
+    self.hovering.track, self.hovering.thumb = false, false
+    return false
+  end
   x, y = self:real_to_normal(x, y)
   dx, dy = self:real_to_normal(dx, dy) -- TODO: do we need this? (is this even correct?)
   return self:_on_mouse_moved_normal(x, y, dx, dy)
@@ -368,6 +412,7 @@ end
 ---Handle mouse leaving the scrollbar area.
 ---Clears all hover states.
 function Scrollbar:on_mouse_left()
+  if self.hovering.track or self.hovering.thumb then core.redraw = true end
   self.hovering.track, self.hovering.thumb = false, false
 end
 
@@ -396,22 +441,61 @@ function Scrollbar:set_percent(percent)
 end
 
 
+---Return visual padding between an end-aligned scrollbar and the owner edge.
+---@return number padding Padding in pixels
+function Scrollbar:get_end_padding()
+  if self.direction == "v" and self.alignment == "e" then
+    return style.scrollbar_end_padding or 0
+  end
+  return 0
+end
+
+
+---Return true when a vertical scrollbar should not claim the very outer window
+---edge, where native window resizing hit-tests live on Windows.
+---@param x number Screen x coordinate
+---@param y number Screen y coordinate
+---@return boolean in_guard True when point is in the guarded resize edge
+function Scrollbar:_in_resize_edge_guard(x, y)
+  if self.direction ~= "v" or self.alignment ~= "e" then return false end
+  local guard = style.scrollbar_resize_edge_guard or 0
+  if guard <= 0 then return false end
+  return x >= self.rect.x + self.rect.w - guard
+     and x <= self.rect.x + self.rect.w
+     and y >= self.rect.y
+     and y <= self.rect.y + self.rect.h
+end
+
+
 ---Update scrollbar animations (hover expansion).
 ---Call this every frame to animate the scrollbar width on hover.
 function Scrollbar:update()
   -- TODO: move the animation code to its own class
+  local hover_dest = (self.hovering.track or self.dragging) and 1 or 0
+  local function animation_rate()
+    local rate = 0.3
+    if core.fps ~= 60 or config.animation_rate ~= 1 then
+      local dt = 60 / core.fps
+      rate = 1 - common.clamp(1 - rate, 1e-8, 1 - 1e-8)^(config.animation_rate * dt)
+    end
+    return rate
+  end
+
+  local tint_diff = math.abs((self.hover_tint_percent or 0) - hover_dest)
+  if not config.transitions or tint_diff < 0.05 or config.disabled_transitions["scroll"] then
+    self.hover_tint_percent = hover_dest
+  else
+    self.hover_tint_percent = common.lerp(self.hover_tint_percent or 0, hover_dest, animation_rate())
+  end
+  if tint_diff > 1e-8 then core.redraw = true end
+
   if not self.force_status then
-    local dest = (self.hovering.track or self.dragging) and 1 or 0
+    local dest = hover_dest
     local diff = math.abs(self.expand_percent - dest)
     if not config.transitions or diff < 0.05 or config.disabled_transitions["scroll"] then
       self.expand_percent = dest
     else
-      local rate = 0.3
-      if core.fps ~= 60 or config.animation_rate ~= 1 then
-        local dt = 60 / core.fps
-        rate = 1 - common.clamp(1 - rate, 1e-8, 1 - 1e-8)^(config.animation_rate * dt)
-      end
-      self.expand_percent = common.lerp(self.expand_percent, dest, rate)
+      self.expand_percent = common.lerp(self.expand_percent, dest, animation_rate())
     end
     if diff > 1e-8 then
       core.redraw = true
@@ -442,8 +526,13 @@ end
 ---Draw the scrollbar thumb (draggable indicator).
 ---Highlights when hovered or being dragged.
 function Scrollbar:draw_thumb()
-  local highlight = self.hovering.thumb or self.dragging
-  local color = highlight and style.scrollbar2 or style.scrollbar
+  local hovering = self.hovering.track or self.hovering.thumb or self.dragging
+  -- Make hover feedback visible immediately, even before the next animation
+  -- update tick. The animated value then catches up for the smooth transition.
+  local t = self.hover_tint_percent or 0
+  if hovering then t = math.max(t, self.dragging and 1 or 0.55) end
+  local hover_color = style.scrollbar_hover or lighten_color(style.scrollbar, 44)
+  local color = blend_color(style.scrollbar, hover_color, math.min(1, t))
   local x, y, w, h = self:get_thumb_rect()
   renderer.draw_rect(x, y, w, h, color)
 end
