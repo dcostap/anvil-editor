@@ -228,6 +228,37 @@ static bool d3d11_should_present_zero_live_resize(void) {
   return !value || !value[0] || !d3d11_env_value_is_false(value);
 }
 
+static UINT d3d11_present_sync_interval(void) {
+  const char *value = getenv("ANVIL_D3D11_PRESENT_SYNC_INTERVAL");
+  if (!value || !value[0]) return 1;
+  int n = atoi(value);
+  return n <= 0 ? 0u : 1u;
+}
+
+static UINT d3d11_max_frame_latency(void) {
+  const char *value = getenv("ANVIL_D3D11_MAX_FRAME_LATENCY");
+  int n = value && value[0] ? atoi(value) : 2;
+  if (n < 1) n = 1;
+  if (n > 16) n = 16;
+  return (UINT)n;
+}
+
+static UINT d3d11_swapchain_buffer_count(void) {
+  const char *value = getenv("ANVIL_D3D11_BUFFER_COUNT");
+  int n = value && value[0] ? atoi(value) : 2;
+  if (n < 2) n = 2;
+  if (n > 3) n = 3;
+  return (UINT)n;
+}
+
+static bool d3d11_should_use_flip_sequential(void) {
+  return d3d11_env_truthy("ANVIL_D3D11_FLIP_SEQUENTIAL");
+}
+
+static bool d3d11_should_use_legacy_discard(void) {
+  return d3d11_env_truthy("ANVIL_D3D11_LEGACY_DISCARD");
+}
+
 static bool d3d11_should_flush_stats_each_frame(void) {
   return d3d11_env_truthy("ANVIL_D3D11_STATS_FLUSH") ||
          d3d11_env_truthy("ANVIL_D3D11_STATS_FLUSH_EVERY_FRAME");
@@ -495,8 +526,9 @@ bool anvil_d3d11_enabled(void) {
 }
 
 bool anvil_d3d11_is_present_paced(void) {
-  return anvil_d3d11_enabled() &&
-         !(anvil_resize_diag_live_resize() && d3d11_should_present_zero_live_resize());
+  if (!anvil_d3d11_enabled()) return false;
+  if (d3d11_present_sync_interval() == 0) return false;
+  return !(anvil_resize_diag_live_resize() && d3d11_should_present_zero_live_resize());
 }
 
 double anvil_d3d11_last_present_ms(void) {
@@ -585,7 +617,7 @@ static bool d3d11_init(void) {
   if (SUCCEEDED(hr)) {
     IDXGIDevice1 *dxgi_device1 = NULL;
     if (SUCCEEDED(g_d3d11.device->lpVtbl->QueryInterface(g_d3d11.device, &IID_IDXGIDevice1, (void **)&dxgi_device1))) {
-      dxgi_device1->lpVtbl->SetMaximumFrameLatency(dxgi_device1, 1);
+      dxgi_device1->lpVtbl->SetMaximumFrameLatency(dxgi_device1, d3d11_max_frame_latency());
       SAFE_RELEASE(dxgi_device1);
     }
   }
@@ -871,14 +903,20 @@ static D3D11Window *d3d11_get_or_create_window(SDL_Window *window, int width, in
   desc.SampleDesc.Count = 1;
   desc.SampleDesc.Quality = 0;
   desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-  desc.BufferCount = 2;
+  desc.BufferCount = d3d11_swapchain_buffer_count();
   desc.Scaling = DXGI_SCALING_NONE;
-  desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+  desc.SwapEffect = d3d11_should_use_flip_sequential()
+    ? DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL
+    : DXGI_SWAP_EFFECT_FLIP_DISCARD;
   desc.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
+  if (d3d11_should_use_legacy_discard()) {
+    desc.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+    desc.BufferCount = 1;
+  }
 
   HRESULT hr = g_d3d11.factory->lpVtbl->CreateSwapChainForHwnd(
     g_d3d11.factory, (IUnknown *)g_d3d11.device, hwnd, &desc, NULL, NULL, &w->swapchain);
-  if (FAILED(hr)) {
+  if (FAILED(hr) && desc.SwapEffect != DXGI_SWAP_EFFECT_DISCARD) {
     desc.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
     desc.BufferCount = 1;
     hr = g_d3d11.factory->lpVtbl->CreateSwapChainForHwnd(
@@ -1544,7 +1582,8 @@ bool anvil_d3d11_end_frame(SDL_Window *window) {
   }
 
   LARGE_INTEGER present_start, present_end, dwm_start, dwm_end;
-  UINT sync_interval = (anvil_resize_diag_live_resize() && d3d11_should_present_zero_live_resize()) ? 0 : 1;
+  UINT sync_interval = d3d11_present_sync_interval();
+  if (anvil_resize_diag_live_resize() && d3d11_should_present_zero_live_resize()) sync_interval = 0;
   g_d3d11.stats.frame.sync_interval = (int)sync_interval;
   QueryPerformanceCounter(&present_start);
   HRESULT hr = w->swapchain->lpVtbl->Present(w->swapchain, sync_interval, 0);
