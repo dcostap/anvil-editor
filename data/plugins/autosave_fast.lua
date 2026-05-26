@@ -97,26 +97,96 @@ local function clear_dirty_if_clean(doc)
   end
 end
 
-local function save_doc_as(doc, default_name)
-  core.command_view:enter("Save As", {
-    text = default_name or doc.filename,
-    submit = function(filename)
-      filename = common.home_expand(filename)
-      local normalized = core.normalize_to_project_dir(filename)
-      local abs = core.project_absolute_path(normalized)
-      local ok, err = pcall(doc.save, doc, normalized, abs)
-      if ok then
-        update_disk_state(doc)
-        clear_dirty_if_clean(doc)
-        core.log("Saved \"%s\"", doc.filename)
-      else
-        core.error("Couldn't save %s: %s", normalized, err)
-      end
-    end,
-    suggest = function(text)
-      return common.home_encode_list(common.path_suggest(common.home_expand(text)))
-    end,
-  })
+local function clone_lines(lines)
+  local copy = {}
+  for i, line in ipairs(lines or {}) do
+    copy[i] = line
+  end
+  if #copy == 0 then copy[1] = "\n" end
+  return copy
+end
+
+local function split_extension(name)
+  local stem, ext = name:match("^(.*)(%.[^%.]+)$")
+  if not stem or stem == "" then return name, "" end
+  return stem, ext
+end
+
+local function doc_is_open(abs_filename)
+  for _, open_doc in ipairs(core.docs or {}) do
+    if open_doc.abs_filename == abs_filename then return true end
+  end
+  return false
+end
+
+local function conflict_copy_path(doc)
+  local abs = doc and doc.abs_filename
+  if not abs then return nil, nil end
+  local dir = common.dirname(abs)
+  local base = common.basename(abs)
+  local stem, ext = split_extension(base)
+  local prefix = stem .. ".anvil-copy"
+  for i = 1, 1000 do
+    local suffix = i == 1 and "" or ("-" .. i)
+    local abs_candidate = (dir and (dir .. PATHSEP) or "") .. prefix .. suffix .. ext
+    if not system.get_file_info(abs_candidate) and not doc_is_open(abs_candidate) then
+      return core.normalize_to_project_dir(abs_candidate), abs_candidate
+    end
+  end
+  return nil, "could not allocate copy filename for " .. abs
+end
+
+local function save_conflict_copy_and_reload(doc)
+  if not doc or not doc.abs_filename then return false end
+
+  local original_name = doc.filename
+  local original_abs = doc.abs_filename
+  local selection = { doc:get_selection() }
+  local snapshot = {
+    lines = clone_lines(doc.lines),
+    crlf = doc.crlf,
+    encoding = doc.encoding,
+    bom = doc.bom,
+    binary = doc.binary,
+  }
+
+  local copy_name, copy_abs = conflict_copy_path(doc)
+  if not copy_name then
+    core.error("Couldn't save conflict copy: %s", copy_abs or "unknown error")
+    return false
+  end
+
+  local copy_doc = core.open_doc(copy_name)
+  copy_doc:reset()
+  copy_doc:set_filename(copy_name, copy_abs)
+  copy_doc.lines = clone_lines(snapshot.lines)
+  copy_doc.crlf = snapshot.crlf
+  copy_doc.encoding = snapshot.encoding
+  copy_doc.bom = snapshot.bom
+  copy_doc.binary = snapshot.binary or false
+  copy_doc:reset_syntax()
+  copy_doc:clear_undo_redo()
+  copy_doc:set_selection(table.unpack(selection))
+
+  local saved, save_err = pcall(copy_doc.save, copy_doc)
+  if not saved then
+    core.error("Couldn't save conflict copy %s: %s", copy_name, save_err)
+    return false
+  end
+
+  local reloaded, reload_err = pcall(doc.reload, doc)
+  if reloaded then
+    update_disk_state(doc)
+    clear_dirty_if_clean(doc)
+  else
+    core.error("Saved conflict copy %s, but couldn't reload %s: %s", copy_name, original_name or original_abs, reload_err)
+  end
+
+  update_disk_state(copy_doc)
+  clear_dirty_if_clean(copy_doc)
+  core.root_view:open_doc(copy_doc)
+  core.log("Saved conflict copy \"%s\"", copy_name)
+  return true
 end
 
 local function show_conflict_prompt(doc, explicit)
@@ -128,7 +198,7 @@ local function show_conflict_prompt(doc, explicit)
     { font = style.font, text = "Reload From Disk (Discard Anvil Edits)" },
   }
   if explicit then
-    buttons[#buttons + 1] = { font = style.font, text = "Save As..." }
+    buttons[#buttons + 1] = { font = style.font, text = "Save Copy of Current File" }
   end
   buttons[#buttons + 1] = { font = style.font, text = "Cancel", default_no = true }
 
@@ -161,9 +231,13 @@ local function show_conflict_prompt(doc, explicit)
         else
           core.error("Couldn't reload %s: %s", name, err)
         end
-      elseif item.text == "Save As..." then
+      elseif item.text == "Save Copy of Current File" then
         core.add_thread(function()
-          save_doc_as(doc, name)
+          -- Wait until NagView has finished closing; opening a new tab while
+          -- the modal owns the active locked node raises "Tried to add view
+          -- to locked node".
+          coroutine.yield(0)
+          save_conflict_copy_and_reload(doc)
         end)
       end
     end
