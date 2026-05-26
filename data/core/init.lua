@@ -1800,6 +1800,9 @@ end
 ---Flag that indicates which coroutines should be ran by run_threads().
 ---@type "all" | "background"
 local run_threads_mode = "all"
+local last_run_threads_slowest_loc = ""
+local last_run_threads_slowest_ms = 0
+local last_run_threads_runs = 0
 
 local run_threads = coroutine.wrap(function()
   while true do
@@ -1807,6 +1810,8 @@ local run_threads = coroutine.wrap(function()
     local minimal_time_to_wake = math.huge
     -- a count on the amount of threads that ran
     local runs = 0
+    local slowest_loc = ""
+    local slowest_time = 0
     -- used to re-adjust the minimal_time_to_wake to prioritize recurrent threads
     local run_start = system.get_time()
 
@@ -1829,6 +1834,10 @@ local run_threads = coroutine.wrap(function()
           local _, wait = assert(coroutine.resume(thread.cr))
           end_time = system.get_time() - start_time
           runs = runs + 1
+          if end_time > slowest_time then
+            slowest_time = end_time
+            slowest_loc = thread.loc or ""
+          end
           if coroutine.status(thread.cr) == "dead" then
             if type(k) == "number" then
               table.remove(core.threads, k)
@@ -1896,6 +1905,10 @@ local run_threads = coroutine.wrap(function()
         )
       end
     end
+
+    last_run_threads_slowest_loc = slowest_loc
+    last_run_threads_slowest_ms = slowest_time * 1000
+    last_run_threads_runs = runs
 
     -- if we reached here it means it was able to run coroutines without
     -- slow downs so we reset the maximum coroutines to amount it ran
@@ -2247,8 +2260,11 @@ function core.run_step(options)
   end
 
   -- run the garbage collector on request
+  local gc_ms = 0
   if core.collect_garbage then
+    local gc_start = system.get_time()
     collectgarbage("collect")
+    gc_ms = (system.get_time() - gc_start) * 1000
     core.collect_garbage = false
   end
 
@@ -2317,7 +2333,11 @@ function core.run_step(options)
     frame_ms = step_stats.frame_time_ms,
     frame_time_ms = step_stats.frame_time_ms,
     run_threads_ms = run_threads_ms,
+    run_threads_runs = last_run_threads_runs,
+    run_threads_slowest_ms = last_run_threads_slowest_ms,
+    run_threads_slowest_loc = last_run_threads_slowest_loc,
     core_step_ms = core_step_ms,
+    gc_ms = gc_ms,
     present_ms = renderer_stats.present_ms,
     sync_interval = renderer_stats.sync_interval,
     renderer_path = renderer_stats.path,
@@ -2359,7 +2379,11 @@ function core.run_step(options)
     renderer_end_ms = step_stats.renderer_end_ms,
     frame_time_ms = step_stats.frame_time_ms,
     run_threads_ms = run_threads_ms,
+    run_threads_runs = last_run_threads_runs,
+    run_threads_slowest_ms = last_run_threads_slowest_ms,
+    run_threads_slowest_loc = last_run_threads_slowest_loc,
     core_step_ms = core_step_ms,
+    gc_ms = gc_ms,
     present_ms = renderer_stats.present_ms,
     sync_interval = renderer_stats.sync_interval,
     renderer_path = renderer_stats.path,

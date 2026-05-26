@@ -79,8 +79,9 @@ local function write_frame_header(file)
   file:write(table.concat({
     "time", "did_redraw", "fps", "target_fps", "active_present_paced",
     "pending_events", "queue_depth", "run_mode", "selection_count", "search_selection_count",
-    "frame_ms", "update_ms", "draw_emit_ms", "renderer_end_ms",
-    "present_ms", "core_step_ms", "sleep_requested_ms", "sleep_actual_ms", "total_ms",
+    "event_count", "event_ms", "update_ms", "pre_draw_ms",
+    "frame_ms", "draw_emit_ms", "renderer_end_ms",
+    "present_ms", "run_threads_ms", "run_threads_runs", "run_threads_slowest_ms", "run_threads_slowest_loc", "core_step_ms", "gc_ms", "sleep_requested_ms", "sleep_actual_ms", "total_ms",
     "draw_calls", "quad_instances", "texture_uploads", "texture_upload_bytes",
     "docview_draw_ms", "docview_body_ms", "docview_text_ms",
     "docview_draw_text_calls", "over_budget"
@@ -96,6 +97,7 @@ end
 function perf.on_frame(snapshot)
   if not recording or not record or not snapshot then return end
   local now = snapshot.time or system.get_time()
+  local renderer_stats = snapshot.did_redraw and renderer.get_last_frame_stats and renderer.get_last_frame_stats() or {}
   record.iteration_count = record.iteration_count + 1
   if snapshot.did_redraw then
     record.frame_count = record.frame_count + 1
@@ -104,6 +106,37 @@ function perf.on_frame(snapshot)
     end
     record.last_redraw_time = now
     if snapshot.over_budget then record.over_budget_count = record.over_budget_count + 1 end
+    local total_ms = snapshot.total_ms or 0
+    local frame_ms = snapshot.frame_ms or 0
+    local present_ms = snapshot.present_ms or 0
+    if total_ms > 25 or frame_ms > 20 or present_ms > 18 then
+      local slow = record.slow_frames
+      slow[#slow + 1] = {
+        time = now,
+        total_ms = total_ms,
+        run_threads_ms = snapshot.run_threads_ms or 0,
+        run_threads_runs = snapshot.run_threads_runs or 0,
+        run_threads_slowest_ms = snapshot.run_threads_slowest_ms or 0,
+        run_threads_slowest_loc = snapshot.run_threads_slowest_loc or "",
+        core_step_ms = snapshot.core_step_ms or 0,
+        gc_ms = snapshot.gc_ms or 0,
+        event_count = snapshot.event_count or 0,
+        event_ms = snapshot.event_ms or 0,
+        update_ms = snapshot.update_ms or 0,
+        pre_draw_ms = snapshot.pre_draw_ms or 0,
+        frame_ms = frame_ms,
+        draw_emit_ms = snapshot.draw_emit_ms or 0,
+        renderer_end_ms = snapshot.renderer_end_ms or 0,
+        present_ms = present_ms,
+        draw_calls = renderer_stats.draw_calls or 0,
+        docview_draw_ms = snapshot.docview_draw_ms or 0,
+        docview_draw_text_calls = snapshot.docview_draw_text_calls or 0,
+        pending_events = snapshot.pending_events,
+        queue_depth = snapshot.queue_depth or 0,
+      }
+      table.sort(slow, function(a, b) return a.total_ms > b.total_ms end)
+      while #slow > 30 do table.remove(slow) end
+    end
   else
     record.idle_iteration_count = record.idle_iteration_count + 1
   end
@@ -113,7 +146,6 @@ function perf.on_frame(snapshot)
     record.sleep_count = record.sleep_count + 1
     record.sleep_actual_total_ms = record.sleep_actual_total_ms + snapshot.sleep_actual_ms
   end
-  local renderer_stats = snapshot.did_redraw and renderer.get_last_frame_stats and renderer.get_last_frame_stats() or {}
   record.file:write(table.concat({
     string.format("%.6f", now),
     snapshot.did_redraw and "1" or "0",
@@ -125,12 +157,20 @@ function perf.on_frame(snapshot)
     csv_escape(snapshot.run_mode or ""),
     tostring(snapshot.selection_count or 0),
     tostring(snapshot.search_selection_count or 0),
-    string.format("%.3f", snapshot.frame_ms or 0),
+    tostring(snapshot.event_count or 0),
+    string.format("%.3f", snapshot.event_ms or 0),
     string.format("%.3f", snapshot.update_ms or 0),
+    string.format("%.3f", snapshot.pre_draw_ms or 0),
+    string.format("%.3f", snapshot.frame_ms or 0),
     string.format("%.3f", snapshot.draw_emit_ms or 0),
     string.format("%.3f", snapshot.renderer_end_ms or 0),
     string.format("%.3f", snapshot.present_ms or 0),
+    string.format("%.3f", snapshot.run_threads_ms or 0),
+    tostring(snapshot.run_threads_runs or 0),
+    string.format("%.3f", snapshot.run_threads_slowest_ms or 0),
+    csv_escape(snapshot.run_threads_slowest_loc or ""),
     string.format("%.3f", snapshot.core_step_ms or 0),
+    string.format("%.3f", snapshot.gc_ms or 0),
     string.format("%.3f", snapshot.sleep_requested_ms or 0),
     string.format("%.3f", snapshot.sleep_actual_ms or 0),
     string.format("%.3f", snapshot.total_ms or 0),
@@ -214,6 +254,21 @@ local function write_summary(path)
     record.frame_count > 0 and (record.over_budget_count * 100 / record.frame_count) or 0
   ))
 
+  file:write("Slow redraw frames (top by total_ms; thresholds total>25ms/frame>20ms/present>18ms):\n")
+  file:write("time,total,run_threads,run_threads_runs,run_threads_slowest,run_threads_loc,core,gc,event_count,event,update,pre_draw,frame,draw_emit,renderer_end,present,draw_calls,docview_draw,docview_text_calls,pending_events,queue_depth\n")
+  for _, row in ipairs(record.slow_frames or {}) do
+    file:write(string.format(
+      "%.6f,%.3f,%.3f,%d,%.3f,%s,%.3f,%.3f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%.3f,%d,%d,%d\n",
+      row.time, row.total_ms, row.run_threads_ms, row.run_threads_runs,
+      row.run_threads_slowest_ms, csv_escape(row.run_threads_slowest_loc),
+      row.core_step_ms, row.gc_ms, row.event_count, row.event_ms,
+      row.update_ms, row.pre_draw_ms, row.frame_ms, row.draw_emit_ms,
+      row.renderer_end_ms, row.present_ms, row.draw_calls, row.docview_draw_ms,
+      row.docview_draw_text_calls, row.pending_events and 1 or 0, row.queue_depth
+    ))
+  end
+  file:write("\n")
+
   file:write("Top Lua samples:\n")
   for i, row in ipairs(sorted_counts(record.lua_samples)) do
     if i > 30 then break end
@@ -260,6 +315,7 @@ function perf.start_recording()
     max_selection_count = 0,
     max_search_selection_count = 0,
     last_redraw_time = nil,
+    slow_frames = {},
     redraw_intervals = {},
     lua_samples = {},
     sample_count = 0,
