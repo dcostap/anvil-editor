@@ -625,6 +625,24 @@ static int f_get_window_frame_metrics(lua_State *L) {
 static int f_get_window_size(lua_State *L) {
   RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
   int x, y, w, h;
+#if defined(SDL_PLATFORM_WINDOWS)
+  if (window_renderer->win32_frame) {
+    SDL_PropertiesID props = SDL_GetWindowProperties(window_renderer->cache.window);
+    HWND hwnd = (HWND) SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
+    RECT wr;
+    if (hwnd && GetWindowRect(hwnd, &wr)) {
+      x = wr.left;
+      y = wr.top;
+      w = wr.right - wr.left;
+      h = wr.bottom - wr.top;
+      lua_pushinteger(L, w);
+      lua_pushinteger(L, h);
+      lua_pushinteger(L, x);
+      lua_pushinteger(L, y);
+      return 4;
+    }
+  }
+#endif
   SDL_GetWindowSize(window_renderer->cache.window, &w, &h);
   SDL_GetWindowPosition(window_renderer->cache.window, &x, &y);
   lua_pushinteger(L, w);
@@ -641,6 +659,18 @@ static int f_set_window_size(lua_State *L) {
   double h = luaL_checknumber(L, 3);
   double x = luaL_checknumber(L, 4);
   double y = luaL_checknumber(L, 5);
+#if defined(SDL_PLATFORM_WINDOWS)
+  if (window_renderer->win32_frame) {
+    SDL_PropertiesID props = SDL_GetWindowProperties(window_renderer->cache.window);
+    HWND hwnd = (HWND) SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
+    if (hwnd) {
+      SetWindowPos(hwnd, NULL, (int) x, (int) y, (int) w, (int) h,
+        SWP_NOZORDER | SWP_NOACTIVATE);
+      ren_resize_window(window_renderer);
+      return 0;
+    }
+  }
+#endif
   SDL_SetWindowSize(window_renderer->cache.window, w, h);
   SDL_SetWindowPosition(window_renderer->cache.window, x, y);
   ren_resize_window(window_renderer);

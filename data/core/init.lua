@@ -559,9 +559,6 @@ function core.init()
   -- so we delay it on all platforms, except macOS. On macOS setting the
   -- mode to maximized seems to cause issues resetting its size so setting
   -- the size is all we need on that platform.
-  if session.window and not restored_window then
-    system.set_window_size(core.window, table.unpack(session.window))
-  end
   if session.window_mode == "maximized" and PLATFORM ~= "Mac OS X" and not restored_window then
     core.add_thread(function()
       system.set_window_mode(core.window, "maximized")
@@ -597,6 +594,14 @@ function core.init()
   end
 
   core.configure_borderless_window()
+
+  -- On Windows with Anvil's custom native frame, saved bounds must be applied
+  -- after the frame is enabled. Applying them before borderless setup treats the
+  -- saved outer HWND height as SDL client height, which can push the titlebar
+  -- above the monitor when restoring a screen-height window.
+  if session.window and not restored_window then
+    system.set_window_size(core.window, table.unpack(session.window))
+  end
 
   if #plugins_refuse_list.userdir.plugins > 0 or #plugins_refuse_list.datadir.plugins > 0 then
     local opt = {
