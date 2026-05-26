@@ -793,11 +793,17 @@ function DocView:draw_line_text(line, x, y)
   end
   local _, indent_size = self.doc:get_indent_info()
 
-  local search_selections = {}
-  for _, line1, col1, line2, col2 in self.doc:get_selections(true) do
-    if line == line1 and line <= line2 then
-      if self.doc:is_search_selection(line1, col1, line2, col2) then
-        table.insert(search_selections, {start = col1, stop = col2})
+  local search_selection_cache = self.__line_text_search_selection_cache
+  local search_selections = search_selection_cache and search_selection_cache[line]
+  if not search_selections then
+    search_selections = {}
+    if not search_selection_cache then
+      for _, line1, col1, line2, col2 in self.doc:get_selections(true) do
+        if line == line1 and line <= line2 then
+          if self.doc:is_search_selection(line1, col1, line2, col2) then
+            table.insert(search_selections, {start = col1, stop = col2})
+          end
+        end
       end
     end
   end
@@ -908,7 +914,9 @@ end
 function DocView:prepare_line_body_draw_cache(minline, maxline)
   local highlight_cache = {}
   local selection_cache = {}
+  local search_selection_cache = {}
   local gutter_selection_cache = {}
+  local visible_caret_cache = {}
   local hcl = config.highlight_current_line
 
   if hcl ~= false then
@@ -924,6 +932,12 @@ function DocView:prepare_line_body_draw_cache(minline, maxline)
     end
   end
 
+  for _, raw_line1, raw_col1, raw_line2, raw_col2 in self.doc:get_selections(false) do
+    if raw_line1 >= minline and raw_line1 <= maxline then
+      visible_caret_cache[#visible_caret_cache + 1] = { raw_line1, raw_col1, raw_line2, raw_col2 }
+    end
+  end
+
   for _, line1, col1, line2, col2 in self.doc:get_selections(true) do
     if line1 > maxline then break end
     if line2 >= minline then
@@ -936,8 +950,15 @@ function DocView:prepare_line_body_draw_cache(minline, maxline)
         local c2 = line2 ~= line and #text + 1 or col2
         if c1 ~= c2 then
           local selection_color = style.selection
-          if self.doc:is_search_selection(line1, c1, line, c2) then
+          local is_search_selection = self.doc:is_search_selection(line1, c1, line, c2)
+          if is_search_selection then
             selection_color = style.search_selection or style.caret
+            local search_list = search_selection_cache[line]
+            if not search_list then
+              search_list = {}
+              search_selection_cache[line] = search_list
+            end
+            search_list[#search_list + 1] = { start = c1, stop = c2 }
           end
           local list = selection_cache[line]
           if not list then
@@ -972,7 +993,9 @@ function DocView:prepare_line_body_draw_cache(minline, maxline)
 
   self.__line_body_highlight_cache = highlight_cache
   self.__line_body_selection_cache = selection_cache
+  self.__line_text_search_selection_cache = search_selection_cache
   self.__line_gutter_selection_cache = gutter_selection_cache
+  self.__visible_caret_cache = visible_caret_cache
 end
 
 ---Draw a complete line including highlight and selections.
@@ -1111,16 +1134,34 @@ function DocView:draw_overlay()
     local minline, maxline = self:get_visible_line_range()
     -- draw caret if it overlaps this line
     local T = config.blink_period
-    for _, line1, col1, line2, col2 in self.doc:get_selections() do
-      if line1 >= minline and line1 <= maxline
-      and system.window_has_focus(core.window) then
-        if ime.editing then
-          self:draw_ime_decoration(line1, col1, line2, col2)
-        else
-          if config.disable_blink
-          or (core.blink_timer - core.blink_start) % T < T / 2 then
-            local x, y = self:get_line_screen_position(line1, col1)
-            self:draw_caret(x, y, line1, col1)
+    local visible_carets = self.__visible_caret_cache
+    if visible_carets then
+      if system.window_has_focus(core.window) then
+        for _, caret in ipairs(visible_carets) do
+          local line1, col1, line2, col2 = caret[1], caret[2], caret[3], caret[4]
+          if ime.editing then
+            self:draw_ime_decoration(line1, col1, line2, col2)
+          else
+            if config.disable_blink
+            or (core.blink_timer - core.blink_start) % T < T / 2 then
+              local x, y = self:get_line_screen_position(line1, col1)
+              self:draw_caret(x, y, line1, col1)
+            end
+          end
+        end
+      end
+    else
+      for _, line1, col1, line2, col2 in self.doc:get_selections() do
+        if line1 >= minline and line1 <= maxline
+        and system.window_has_focus(core.window) then
+          if ime.editing then
+            self:draw_ime_decoration(line1, col1, line2, col2)
+          else
+            if config.disable_blink
+            or (core.blink_timer - core.blink_start) % T < T / 2 then
+              local x, y = self:get_line_screen_position(line1, col1)
+              self:draw_caret(x, y, line1, col1)
+            end
           end
         end
       end

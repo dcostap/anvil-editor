@@ -30,10 +30,16 @@ if not DocView.__intellij_find_search_text then
   DocView.__intellij_find_search_text = true
   local draw_line_text = DocView.draw_line_text
   function DocView:draw_line_text(line, x, y)
-    local search_selections = {}
-    for _, line1, col1, line2, col2 in self.doc:get_selections(true) do
-      if line == line1 and line <= line2 and self.doc:is_search_selection(line1, col1, line2, col2) then
-        table.insert(search_selections, { start = col1, stop = col2 })
+    local search_selection_cache = self.__line_text_search_selection_cache
+    local search_selections = search_selection_cache and search_selection_cache[line]
+    if not search_selections then
+      search_selections = {}
+      if not search_selection_cache then
+        for _, line1, col1, line2, col2 in self.doc:get_selections(true) do
+          if line == line1 and line <= line2 and self.doc:is_search_selection(line1, col1, line2, col2) then
+            table.insert(search_selections, { start = col1, stop = col2 })
+          end
+        end
       end
     end
     if #search_selections == 0 then
