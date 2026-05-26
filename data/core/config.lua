@@ -313,6 +313,36 @@ config.blink_period = 1.2
 ---@type boolean
 config.disable_blink = false
 
+---Enables animated caret movement.
+---
+---Defaults to true.
+---@type boolean
+config.animated_caret = true
+
+---Minimum animated caret movement speed; higher values catch up faster.
+---
+---Defaults to 45.
+---@type number
+config.animated_caret_min_speed = 45
+
+---Maximum animated caret movement speed; used for long jumps.
+---
+---Defaults to 95.
+---@type number
+config.animated_caret_max_speed = 95
+
+---Distance in pixels where animated caret speed starts ramping up.
+---
+---Defaults to 15.
+---@type number
+config.animated_caret_distance_min = 15
+
+---Distance in pixels where animated caret speed reaches maximum.
+---
+---Defaults to 450.
+---@type number
+config.animated_caret_distance_max = 450
+
 ---Draws whitespaces as dots.
 ---This option is deprecated.
 ---Please use the drawwhitespace plugin instead.

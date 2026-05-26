@@ -899,7 +899,47 @@ end
 ---@param y number Screen y coordinate
 ---@param line integer Line number (for overwrite mode char width)
 ---@param col integer Column number (for overwrite mode char width)
-function DocView:draw_caret(x, y, line, col)
+function DocView:draw_caret(x, y, line, col, caret_idx)
+  if config.animated_caret then
+    self.animated_caret_positions = self.animated_caret_positions or {}
+    caret_idx = caret_idx or 1
+    local pos = self.animated_caret_positions[caret_idx]
+    if not pos then
+      pos = { x = x, y = y }
+      self.animated_caret_positions[caret_idx] = pos
+    end
+
+    local now = system.get_time()
+    local last = pos.last_time or now
+    pos.last_time = now
+    -- Keep the first frame after an idle period from consuming the whole
+    -- animation. If this cap is too large, a caret move after a short pause can
+    -- almost snap to the target, making the animation feel like it vanished.
+    local dt = math.min(now - last, 1 / 120)
+    local dx = x - pos.x
+    local dy = y - pos.y
+    local distance = math.sqrt(dx * dx + dy * dy)
+    local distance_min = config.animated_caret_distance_min or 4
+    local distance_max = config.animated_caret_distance_max or 160
+    local distance_span = math.max(1, distance_max - distance_min)
+    local distance_t = math.max(0, math.min(1, (distance - distance_min) / distance_span))
+    local min_speed = config.animated_caret_min_speed or 35
+    local max_speed = config.animated_caret_max_speed or 100
+    local speed = min_speed + (max_speed - min_speed) * distance_t
+    local linear_t = 1 - math.exp(-speed * dt)
+    local t = 1 - math.pow(1 - linear_t, 3)
+    pos.x = pos.x + dx * t
+    pos.y = pos.y + dy * t
+
+    if math.abs(x - pos.x) > 0.1 or math.abs(y - pos.y) > 0.1 then
+      core.redraw = true
+    else
+      pos.x = x
+      pos.y = y
+    end
+    x, y = pos.x, pos.y
+  end
+
   local lh = self:get_line_height()
   if self.doc.overwrite then
     local w = self:get_font():get_width(self.doc:get_char(line, col))
@@ -1141,7 +1181,7 @@ function DocView:draw_overlay()
     local visible_carets = self.__visible_caret_cache
     if visible_carets then
       if system.window_has_focus(core.window) then
-        for _, caret in ipairs(visible_carets) do
+        for caret_idx, caret in ipairs(visible_carets) do
           local line1, col1, line2, col2 = caret[1], caret[2], caret[3], caret[4]
           if ime.editing then
             self:draw_ime_decoration(line1, col1, line2, col2)
@@ -1149,13 +1189,15 @@ function DocView:draw_overlay()
             if config.disable_blink
             or (core.blink_timer - core.blink_start) % T < T / 2 then
               local x, y = self:get_line_screen_position(line1, col1)
-              self:draw_caret(x, y, line1, col1)
+              self:draw_caret(x, y, line1, col1, caret_idx)
             end
           end
         end
       end
     else
+      local caret_idx = 0
       for _, line1, col1, line2, col2 in self.doc:get_selections() do
+        caret_idx = caret_idx + 1
         if line1 >= minline and line1 <= maxline
         and system.window_has_focus(core.window) then
           if ime.editing then
@@ -1164,7 +1206,7 @@ function DocView:draw_overlay()
             if config.disable_blink
             or (core.blink_timer - core.blink_start) % T < T / 2 then
               local x, y = self:get_line_screen_position(line1, col1)
-              self:draw_caret(x, y, line1, col1)
+              self:draw_caret(x, y, line1, col1, caret_idx)
             end
           end
         end
