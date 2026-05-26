@@ -75,6 +75,38 @@ The dev portable install uses junctions:
 
 So plugin/color edits are made directly in the repo and can usually be reloaded in the running app without reinstalling.
 
+### Lua syntax validation
+
+After editing Lua files, validate syntax without executing the files using the root checker:
+
+```sh
+luajit check-lua-syntax.lua data/plugins/example.lua
+```
+
+For several changed files, pass all of them as arguments:
+
+```sh
+luajit check-lua-syntax.lua data/plugins/autosave_fast.lua data/core/docview.lua
+```
+
+To check all bundled Lua files:
+
+```sh
+find data -name '*.lua' -print0 | xargs -0 luajit check-lua-syntax.lua
+```
+
+Use LuaJIT for this because Anvil runs LuaJIT in the normal dev build, so it is the closest parser/runtime match. If `luajit` is not installed or not on `PATH`, ask the user for permission before installing it. On this PC the expected install command is:
+
+```powershell
+winget install --id DEVCOM.LuaJIT -e
+```
+
+If installation is not approved, do not run package installation. As an emergency syntax-only fallback when the build directory exists, create a temporary Lua script with `assert(loadfile("path/to/file.lua"))` lines and run it with:
+
+```sh
+build-windows-x86_64/subprojects/luajit/src/minilua.exe path/to/temp-syntax-script.lua
+```
+
 ## C/C++ development
 
 C/C++ edits require rebuilding and restarting the app.
