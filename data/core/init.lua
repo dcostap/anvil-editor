@@ -1510,6 +1510,10 @@ function core.on_event(type, ...)
       callback(status, result)
     end
   elseif type == "focuslost" then
+    core.log_quiet(
+      "Focus diagnostics: received focuslost event active=%s window_has_focus=%s",
+      tostring(core.active_view), tostring(core.window and system.window_has_focus(core.window))
+    )
     core.root_view:on_focus_lost(...)
   elseif type == "quit" then
     core.quit()
@@ -2131,6 +2135,8 @@ local run_has_focus       = true
 local run_next_frame_time = 0
 local perf_last_redraw_time = nil
 local perf_smoothed_fps = 0
+local focus_diag_last_state = nil
+local focus_diag_last_anomaly_log = 0
 
 ---Set up the run-loop state.  Called once from C (SDL_AppInit → init_lua_state)
 ---via the init_code that also calls core.init().  SDL_AppIterate then drives the
@@ -2345,6 +2351,7 @@ function core.run_step(options)
   local active_view_name = active_view and tostring(active_view) or ""
   local active_view_is_docview = active_view and active_view.extends and active_view:extends(DocView) or false
   local window_has_focus = core.window and system.window_has_focus(core.window) or false
+  local queue_depth = system.pending_event_count and system.pending_event_count() or (system.has_pending_events() and 1 or 0)
   local selection_count = active_doc and active_doc.selections and (#active_doc.selections / 4) or 0
   local search_selection_count = 0
   if active_doc and active_doc.search_selections then
@@ -2352,6 +2359,32 @@ function core.run_step(options)
       search_selection_count = search_selection_count + 1
     end
   end
+
+  if focus_diag_last_state == nil or focus_diag_last_state ~= window_has_focus then
+    core.log_quiet(
+      "Focus diagnostics: window_has_focus=%s active=%s docview=%s redraw=%s event_count=%d pending=%s queue=%d run_mode=%s",
+      tostring(window_has_focus), active_view_name, tostring(active_view_is_docview),
+      tostring(did_redraw), step_stats.event_count, tostring(pending_events_at_start),
+      queue_depth, tostring(run_threads_mode)
+    )
+    focus_diag_last_state = window_has_focus
+  end
+
+  if active_view_is_docview and not window_has_focus then
+    local now = system.get_time()
+    if now - focus_diag_last_anomaly_log >= 2 then
+      local line1, col1, line2, col2 = active_doc and active_doc:get_selection()
+      core.log_quiet(
+        "Focus diagnostics: active DocView while window_has_focus=false file=%s selection_count=%s selection=%s,%s-%s,%s redraw=%s blink=%.3f event_count=%d pending=%s queue=%d",
+        tostring(active_doc and (active_doc.abs_filename or active_doc.filename) or ""),
+        tostring(selection_count), tostring(line1), tostring(col1), tostring(line2), tostring(col2),
+        tostring(did_redraw), core.blink_timer or 0, step_stats.event_count,
+        tostring(pending_events_at_start), queue_depth
+      )
+      focus_diag_last_anomaly_log = now
+    end
+  end
+
   core.performance_snapshot = {
     time = system.get_time(),
     rad_pacing = rad_pacing,
@@ -2369,7 +2402,7 @@ function core.run_step(options)
     selection_count = selection_count,
     search_selection_count = search_selection_count,
     pending_events = pending_events_at_start,
-    queue_depth = system.pending_event_count and system.pending_event_count() or (system.has_pending_events() and 1 or 0),
+    queue_depth = queue_depth,
     event_count = step_stats.event_count,
     event_ms = step_stats.event_ms,
     update_ms = step_stats.update_ms,
