@@ -52,6 +52,7 @@ end
 local BUNDLED_PLUGIN_DIR = DATADIR .. PATHSEP .. "plugins" .. PATHSEP .. "fuzzy_searcher"
 local USER_PLUGIN_DIR = USERDIR .. PATHSEP .. "plugins" .. PATHSEP .. "fuzzy_searcher"
 local RECENT_COMMANDS_FILE = USER_PLUGIN_DIR .. PATHSEP .. "recent_commands.txt"
+local RECENT_PROJECT_TIMES_FILE = USER_PLUGIN_DIR .. PATHSEP .. "recent_project_times.lua"
 
 local function bundled_tool(name)
   local bundled = BUNDLED_PLUGIN_DIR .. PATHSEP .. name
@@ -187,6 +188,7 @@ local files_cache_root, files_cache, files_indexing, files_generation = nil, nil
 local command_cache
 local recent_commands = {}
 local recent_command_set = {}
+local recent_project_times = {}
 local line_count_cache = {}
 local grep_proc
 local grep_generation = 0
@@ -210,6 +212,30 @@ local function fullpath(path)
   return project_dir() .. PATHSEP .. path:gsub("[/\\]", PATHSEP)
 end
 
+local function compact_age(ts)
+  ts = tonumber(ts)
+  if not ts then return nil end
+  local elapsed = math.max(0, os.time() - ts)
+  local hour = 60 * 60
+  local day = 24 * hour
+  local week = 7 * day
+  if elapsed < day then return tostring(math.floor(elapsed / hour)) .. "h" end
+  if elapsed < week then return tostring(math.floor(elapsed / day)) .. "d" end
+  return tostring(math.floor(elapsed / week)) .. "w"
+end
+
+local function existing_absolute_dir(text)
+  text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  if text == "" then return nil end
+  text = text:gsub("^\"(.-)\"$", "%1")
+  local expanded = common.home_expand(text)
+  local normalized = common.normalize_path(expanded)
+  if not normalized or not common.is_absolute_path(normalized) then return nil end
+  local abs = system.absolute_path(normalized)
+  local info = abs and system.get_file_info(abs)
+  if info and info.type == "dir" then return common.normalize_path(abs) end
+end
+
 local function get_recent_projects()
   local out, seen = {}, {}
   for _, path in ipairs(core.recent_projects or {}) do
@@ -221,6 +247,64 @@ local function get_recent_projects()
   end
   return out
 end
+
+local function load_recent_project_times()
+  local ok, t = pcall(dofile, RECENT_PROJECT_TIMES_FILE)
+  if ok and type(t) == "table" then recent_project_times = t end
+end
+
+local function save_recent_project_times()
+  common.mkdirp(USER_PLUGIN_DIR)
+  local fp = io.open(RECENT_PROJECT_TIMES_FILE, "wb")
+  if not fp then return end
+  fp:write("return " .. common.serialize(recent_project_times, { pretty = true }))
+  fp:close()
+end
+
+local function remember_project_open(path, when)
+  if type(path) == "table" then path = path.path end
+  path = common.normalize_path(path)
+  if not path or path == "" then return end
+  recent_project_times[path] = when or os.time()
+  save_recent_project_times()
+end
+
+local function ensure_recent_project_times()
+  local changed = false
+  local now = os.time()
+  for _, path in ipairs(get_recent_projects()) do
+    if not recent_project_times[path] then
+      recent_project_times[path] = now
+      changed = true
+    end
+  end
+  if changed then save_recent_project_times() end
+end
+
+local function wrap_project_openers()
+  if core.__fuzzy_searcher_original_open_project_in_same_window then
+    core.open_project_in_same_window = core.__fuzzy_searcher_original_open_project_in_same_window
+  end
+  if core.__fuzzy_searcher_original_open_project_in_new_window then
+    core.open_project_in_new_window = core.__fuzzy_searcher_original_open_project_in_new_window
+  end
+
+  core.__fuzzy_searcher_original_open_project_in_same_window = core.open_project_in_same_window
+  core.open_project_in_same_window = function(project, ...)
+    remember_project_open(project)
+    return core.__fuzzy_searcher_original_open_project_in_same_window(project, ...)
+  end
+
+  core.__fuzzy_searcher_original_open_project_in_new_window = core.open_project_in_new_window
+  core.open_project_in_new_window = function(project, ...)
+    remember_project_open(project)
+    return core.__fuzzy_searcher_original_open_project_in_new_window(project, ...)
+  end
+end
+
+load_recent_project_times()
+ensure_recent_project_times()
+wrap_project_openers()
 
 local function open_anvil_window(path)
   core.open_project_in_new_window(path)
@@ -1311,6 +1395,25 @@ local function result_list_label_and_spans(r)
   return text, r.match_spans or {}
 end
 
+local function draw_project_result_row(font, r, x, y, width)
+  local label, spans = result_list_label_and_spans(r)
+  local age = r.opened_at and compact_age(r.opened_at)
+  local gap = style.padding.x
+  local label_w = width
+  if age and age ~= "" then
+    local age_w = font:get_width(age)
+    renderer.draw_text(font, age, x + width - age_w, y, style.dim or style.text)
+    label_w = math.max(0, width - age_w - gap)
+  end
+  draw_highlighted_text(font, label, x, y, label_w, style.text, spans)
+end
+
+local function draw_new_project_result_row(font, r, x, y, width)
+  local prefix = "Open this new folder as project: "
+  local cx = renderer.draw_text(font, prefix, x, y, style.dim or style.text)
+  draw_highlighted_text(font, r.project or r.label or "", cx, y, math.max(0, x + width - cx), style.text, {})
+end
+
 local function draw_command_result_row(font, r, x, y, width)
   local label, spans = result_list_label_and_spans(r)
   local binding, preview = command_preview_parts(r.command)
@@ -1498,6 +1601,15 @@ function FSView:is_command_mode()
   return text:sub(1, 1) == ">"
 end
 
+function FSView:is_project_mode()
+  local text = self.input and self.input:get_text() or ""
+  return text:sub(1, 1) == "@"
+end
+
+function FSView:is_full_width_mode()
+  return self:is_command_mode() or self:is_project_mode()
+end
+
 function FSView:list_metrics(font)
   font = font or style.code_font
   local pad = style.padding.x
@@ -1505,7 +1617,7 @@ function FSView:list_metrics(font)
   local x, y = self.position.x, self.position.y
   local w, h = self.size.x, self.size.y
   local top = y + self.input.size.y + pad * 3 + lh
-  local list_w = self:is_command_mode() and w or w * (1 - fuzzy_searcher.preview_width)
+  local list_w = self:is_full_width_mode() and w or w * (1 - fuzzy_searcher.preview_width)
   local total_rows = math.max(0, math.floor((h - (top - y)) / lh))
   local result_rows = math.max(1, total_rows - 2) -- first/last rows are scroll indicators
   return {
@@ -2035,12 +2147,13 @@ function FSView:refresh_normal(base, line, reset_selection)
 
   local function add_project_results(query, max_items)
     if max_items <= 0 then self.has_more = true; return end
+    ensure_recent_project_times()
     local projects = get_recent_projects()
 
     if trim_query(query) == "" then
       for i, path in ipairs(projects) do
         if i > max_items then self.has_more = true; break end
-        out[#out+1] = { kind = "project", label = path, project = path, query = query, match_spans = {}, recent = true }
+        out[#out+1] = { kind = "project", label = path, project = path, query = query, match_spans = {}, recent = true, opened_at = recent_project_times[path] }
       end
       return
     end
@@ -2049,7 +2162,14 @@ function FSView:refresh_normal(base, line, reset_selection)
     for i, match in ipairs(matches) do
       if i > max_items then self.has_more = true; break end
       local path = match.item
-      out[#out+1] = { kind = "project", label = path, project = path, query = query, match_spans = match.spans }
+      out[#out+1] = { kind = "project", label = path, project = path, query = query, match_spans = match.spans, recent = true, opened_at = recent_project_times[path] }
+    end
+
+    if #out == 0 then
+      local path = existing_absolute_dir(query)
+      if path then
+        out[#out+1] = { kind = "new_project", label = path, project = path, query = query }
+      end
     end
   end
 
@@ -2416,10 +2536,10 @@ function FSView:confirm(new_window)
     command.perform(cmd)
     return
   end
-  if r.kind == "project" and r.project then
+  if (r.kind == "project" or r.kind == "new_project") and r.project then
     local path = r.project
     self:close()
-    if new_window then
+    if new_window or r.kind == "new_project" then
       open_anvil_window(path)
     else
       core.open_project_in_same_window(path)
@@ -2466,9 +2586,10 @@ function FSView:draw()
   self:ensure_selection_visible()
 
   renderer.draw_text(font, self.status or "", x + pad, y + self.input.size.y + pad * 1.5, style.dim or style.text)
+  local full_width_mode = self:is_full_width_mode()
   local command_mode = self:is_command_mode()
-  local divider_w = command_mode and 0 or style.divider_size
-  if not command_mode then
+  local divider_w = full_width_mode and 0 or style.divider_size
+  if not full_width_mode then
     renderer.draw_rect(x + list_w, top, style.divider_size, h - (top - y), style.divider)
   end
 
@@ -2506,6 +2627,10 @@ function FSView:draw()
         draw_file_result_row(font, r.file or r.label, r.match_spans, "", x + pad, yy, row_text_w)
       elseif r.kind == "command" then
         draw_command_result_row(font, r, x + pad, yy, row_text_w)
+      elseif r.kind == "project" then
+        draw_project_result_row(font, r, x + pad, yy, row_text_w)
+      elseif r.kind == "new_project" then
+        draw_new_project_result_row(font, r, x + pad, yy, row_text_w)
       else
         local label, spans = result_list_label_and_spans(r)
         draw_highlighted_text(font, label, x + pad, yy, row_text_w, style.text, spans)
@@ -2521,7 +2646,7 @@ function FSView:draw()
 
   local r = self:selected_result()
   local px, py, preview_w, preview_h = self:preview_bounds()
-  if command_mode then
+  if full_width_mode then
     self:clear_preview_view()
   elseif r and r.kind == "command" then
     self:clear_preview_view()
