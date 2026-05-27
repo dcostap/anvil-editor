@@ -545,8 +545,12 @@ function core.init()
   cur_node = cur_node:split("down", core.command_view, {y = true})
   cur_node = cur_node:split("down", core.status_view, {y = true})
 
-  -- Load default commands first so plugins can override them
+  -- Load default commands first so plugins/core features can override them.
   command.add_defaults()
+
+  -- Core right-side panel manager. It is initialized before plugins so panels
+  -- can register views into the shared side node during plugin loading.
+  require "core.sidepanel"
 
   local project_dir_abs = system.absolute_path(project_dir)
   -- We prevent set_project below to effectively add and scan the directory because the

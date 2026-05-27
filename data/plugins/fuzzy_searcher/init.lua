@@ -10,8 +10,8 @@ local process = require "core.process"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
 local ImageView = require "core.imageview"
-local file_context = require "plugins.file_context"
-local split_view = require "plugins.split_view"
+local file_context = require "core.file_context"
+local sidepanel = require "core.sidepanel"
 local Widget = require "widget"
 local TextBox = require "widget.textbox"
 
@@ -2687,7 +2687,7 @@ function FSView:confirm(new_window)
     local source_view = self.source_view
     self:close()
     if new_window then
-      split_view.open_path_in_side(path, {
+      sidepanel.open_path_in_side(path, {
         line = line,
         col = col,
         focus = false,

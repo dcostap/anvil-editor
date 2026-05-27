@@ -9,7 +9,7 @@ local search = require "core.doc.search"
 local config = require "core.config"
 local Doc = require "core.doc"
 local Node = require "core.node"
-local file_context = require "plugins.file_context"
+local file_context = require "core.file_context"
 
 local core_doc_paste = core.intellij_actions_core_doc_paste or command.map["doc:paste"]
 core.intellij_actions_core_doc_paste = core_doc_paste

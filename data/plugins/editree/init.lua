@@ -9,8 +9,8 @@ local keymap = require "core.keymap"
 local style = require "core.style"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
-local file_context = require "plugins.file_context"
-local split_view = require "plugins.split_view"
+local file_context = require "core.file_context"
+local sidepanel = require "core.sidepanel"
 
 local editree_config = {
   size = 650 * SCALE,
@@ -569,6 +569,7 @@ local function recover_known_line_meta(view)
 end
 
 local EditreeView = DocView:extend()
+EditreeView.context = "application"
 
 function EditreeView:__tostring() return "EditreeView" end
 
@@ -1676,7 +1677,7 @@ function EditreeView:open_selected_files()
 
   if #files <= 1 then return false end
   for _, entry in ipairs(files) do
-    split_view.open_path_in_main(entry.abs, { preserve_focus = true })
+    sidepanel.open_path_in_main(entry.abs, { preserve_focus = true })
   end
   return true
 end
@@ -1705,7 +1706,7 @@ function EditreeView:open_item()
     end
   else
     if info and info.type == "file" then
-      split_view.open_path_in_main(entry.abs, { preserve_focus = true })
+      sidepanel.open_path_in_main(entry.abs, { preserve_focus = true })
     end
   end
 end
@@ -2027,8 +2028,8 @@ end
 
 local view = EditreeView()
 file_context.exclude_main_view(view)
-split_view.register_panel("editree", view)
-view.node = split_view.side_node
+sidepanel.register_panel("editree", view)
+view.node = sidepanel.side_node
 
 local function wrap_doc_command(name, editree_handler)
   local base = command.map[name]
@@ -2066,7 +2067,7 @@ wrap_doc_command("doc:paste", function(v)
 end)
 
 local function current_main_view()
-  return split_view.current_main_view(view.last_main_view)
+  return sidepanel.current_main_view(view.last_main_view)
 end
 
 local function current_file_path()
@@ -2078,12 +2079,12 @@ local function remember_current_main_view()
 end
 
 local function hide_and_focus_main_view()
-  split_view.focus_main(true)
+  sidepanel.focus_main(true)
 end
 
 local function show_and_focus_editree()
   remember_current_main_view()
-  split_view.show("editree", { focus = true })
+  sidepanel.show("editree", { focus = true })
 end
 
 local function find_entry(filename)
@@ -2114,7 +2115,7 @@ local function focus_entry(entry, filename)
     view.scroll.x = 0
   end
 
-  split_view.show("editree", { focus = true })
+  sidepanel.show("editree", { focus = true })
   return true
 end
 
@@ -2123,7 +2124,7 @@ local function focus_file(filename)
   local root = core.root_project and core.root_project()
   if not filename or not root or not in_project(filename, root.path) then return end
 
-  split_view.show("editree", { focus = false })
+  sidepanel.show("editree", { focus = false })
   local refreshed = false
   if not in_project(filename, view.current_dir) then
     view.current_dir = root.path

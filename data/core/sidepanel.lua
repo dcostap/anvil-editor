@@ -1,5 +1,10 @@
--- mod-version:3 priority:50
--- Shared right-side split panel for local workflows.
+-- Core right-side panel manager.
+--
+-- The side panel is a persistent, locked right-side leaf node. It behaves like
+-- a hidden-tab container: multiple views can live in the node, while only one
+-- is active/visible at a time. This keeps side DocViews in the normal root node
+-- tree so document lifetime, autosave, autoreload, conflict checks, and close
+-- handling continue to work like ordinary editor tabs.
 
 local core = require "core"
 local command = require "core.command"
@@ -9,10 +14,10 @@ local Node = require "core.node"
 local View = require "core.view"
 local DocView = require "core.docview"
 local ImageView = require "core.imageview"
-local file_context = require "plugins.file_context"
+local file_context = require "core.file_context"
 
-local M = core.split_view or {}
-core.split_view = M
+local M = core.sidepanel or {}
+core.sidepanel = M
 
 M.panels = M.panels or {}
 M.side_views = M.side_views or setmetatable({}, { __mode = "k" })
@@ -25,6 +30,7 @@ M.container_node = M.container_node
 M.file_view = M.file_view
 M.file_view_path = M.file_view_path
 M.instant_size = M.instant_size
+M.width_ratio = M.width_ratio or 0.5
 
 local function has_no_locked_children(node)
   if not node or node.locked then return false end
@@ -43,7 +49,7 @@ end
 
 local function find_side_node(node)
   if not node then return nil end
-  if node.__split_view_side_node then return node end
+  if node.__sidepanel_side_node then return node end
   if node.type ~= "leaf" then
     return find_side_node(node.a) or find_side_node(node.b)
   end
@@ -53,11 +59,29 @@ local function side_placeholder()
   local view = M.placeholder
   if not view then
     view = View()
-    view.__split_view_placeholder = true
+    view.__sidepanel_placeholder = true
     view.size.x = 0
     M.placeholder = view
   end
   return view
+end
+
+local function view_index(node, view)
+  if not node or not view then return nil end
+  for i, item in ipairs(node.views or {}) do
+    if item == view then return i end
+  end
+end
+
+local function ensure_placeholder_in_node(node)
+  if not node then return end
+  local placeholder = side_placeholder()
+  if not view_index(node, placeholder) then
+    table.insert(node.views, 1, placeholder)
+  end
+  if not node.active_view or not view_index(node, node.active_view) then
+    node.active_view = placeholder
+  end
 end
 
 local function attach_locked_side_node(container)
@@ -71,8 +95,8 @@ local function attach_locked_side_node(container)
   container.b:add_view(placeholder)
   container.b.locked = { x = true }
   container.b.resizable = false
-  container.b.__split_view_side_node = true
-  container.__split_view_container_node = true
+  container.b.__sidepanel_side_node = true
+  container.__sidepanel_container_node = true
 
   M.container_node = container
   M.main_node = main
@@ -84,7 +108,8 @@ function M.ensure_side_node()
   local root = core.root_view and core.root_view.root_node
   if not root then return nil end
 
-  if M.side_node and M.side_node.__split_view_side_node then
+  if M.side_node and M.side_node.__sidepanel_side_node then
+    ensure_placeholder_in_node(M.side_node)
     return M.side_node
   end
 
@@ -93,6 +118,7 @@ function M.ensure_side_node()
     M.side_node = existing
     M.container_node = existing:get_parent_node(root)
     M.main_node = M.container_node and M.container_node.a or nil
+    ensure_placeholder_in_node(existing)
     return existing
   end
 
@@ -123,11 +149,10 @@ local function side_parent_width()
   return math.max(0, w)
 end
 
-function M.target_width(view)
+function M.target_width()
   if not M.visible then return 0 end
   local parent_width = side_parent_width()
-  local preferred = tonumber(view and view.target_size) or tonumber(M.width) or 650 * SCALE
-  return math.floor(common.clamp(preferred, 0, parent_width * 0.8))
+  return math.floor(parent_width * (tonumber(M.width_ratio) or 0.5))
 end
 
 function M.update_side_view_size(view)
@@ -138,7 +163,7 @@ function M.update_side_view_size(view)
     view.size.x = dest
     M.instant_size = false
   elseif math.abs((view.size.x or 0) - dest) > 0.5 then
-    view:move_towards(view.size, "x", dest, nil, "split_view")
+    view:move_towards(view.size, "x", dest, nil, "sidepanel")
     view.size.x = common.round(view.size.x)
     if math.abs(dest - view.size.x) < 2 then view.size.x = dest end
   else
@@ -149,30 +174,111 @@ end
 function M.attach_view(name, view)
   if not view then return end
   if name then
-    view.__split_view_panel_name = name
+    view.__sidepanel_panel_name = name
   end
   M.side_views[view] = true
   file_context.exclude_main_view(view)
 
-  if view.__split_view_size_wrapped then return view end
-  view.__split_view_size_wrapped = true
-  view.__split_view_original_update = view.update
+  if view.__sidepanel_size_wrapped then return view end
+  view.__sidepanel_size_wrapped = true
+  view.__sidepanel_original_update = view.update
   function view:update(...)
-    local manager = core.split_view
+    local manager = core.sidepanel
     if manager and manager.update_side_view_size then
       manager.update_side_view_size(self)
     end
-    return self.__split_view_original_update(self, ...)
+    return self.__sidepanel_original_update(self, ...)
   end
   return view
 end
 
+function M.add_view(view)
+  local side = M.ensure_side_node()
+  if not side or not view then return nil end
+  ensure_placeholder_in_node(side)
+  if not view_index(side, view) then
+    table.insert(side.views, view)
+  end
+  view.node = side
+  return side
+end
+
+function M.contains_view(view)
+  local side = M.ensure_side_node()
+  return not not (side and view and view_index(side, view))
+end
+
+function M.prune_stale_views()
+  local side = M.ensure_side_node()
+  if not side then return end
+
+  for name, view in pairs(M.panels) do
+    if not view_index(side, view) then
+      M.panels[name] = nil
+      M.side_views[view] = nil
+      if M.current_panel == name then M.current_panel = nil end
+      if M.file_view == view then
+        M.file_view = nil
+        M.file_view_path = nil
+      end
+    end
+  end
+
+  if M.file_view and not view_index(side, M.file_view) then
+    M.file_view = nil
+    M.file_view_path = nil
+  end
+end
+
+function M.remove_view(view, focus_main)
+  local side = M.ensure_side_node()
+  if not side or not view then return false end
+
+  view.visible = false
+  if view.on_mouse_left then view:on_mouse_left() end
+
+  local idx = view_index(side, view)
+  if idx then table.remove(side.views, idx) end
+  M.side_views[view] = nil
+
+  for name, panel in pairs(M.panels) do
+    if panel == view then
+      M.panels[name] = nil
+      if M.current_panel == name then M.current_panel = nil end
+    end
+  end
+
+  ensure_placeholder_in_node(side)
+  if side.active_view == view then
+    side.active_view = side.views[1] or side_placeholder()
+    side.active_view.visible = M.visible
+    M.update_side_view_size(side.active_view)
+  end
+
+  if core.active_view == view then
+    M.focus_main(false)
+  elseif focus_main and M.is_side_view(core.active_view) then
+    M.focus_main(false)
+  end
+
+  if core.root_view and core.root_view.root_node then
+    core.root_view.root_node:update_layout()
+  end
+  return true
+end
+
 function M.register_panel(name, view)
-  assert(type(name) == "string" and name ~= "", "split_view panel name expected")
-  assert(view, "split_view panel view expected")
+  assert(type(name) == "string" and name ~= "", "sidepanel panel name expected")
+  assert(view, "sidepanel panel view expected")
+
+  local old = M.panels[name]
+  if old and old ~= view then
+    M.remove_view(old, false)
+  end
+
   M.panels[name] = view
   M.attach_view(name, view)
-  M.ensure_side_node()
+  M.add_view(view)
   return view
 end
 
@@ -185,14 +291,16 @@ function M.set_side_view(view, focus)
   local side = M.ensure_side_node()
   if not side or not view then return end
 
-  M.attach_view(view.__split_view_panel_name, view)
+  M.attach_view(view.__sidepanel_panel_name, view)
+  M.add_view(view)
+  if view.__sidepanel_panel_name then M.current_panel = view.__sidepanel_panel_name end
+
   local old = side.active_view
-  if old ~= view and old and old.__split_view_placeholder ~= true then
+  if old ~= view and old and old.__sidepanel_placeholder ~= true then
     old.visible = false
     if old.on_mouse_left then old:on_mouse_left() end
   end
 
-  side.views = { view }
   side.active_view = view
   view.visible = M.visible
   M.update_side_view_size(view)
@@ -211,9 +319,10 @@ end
 
 function M.show(name, opts)
   opts = opts or {}
+  M.prune_stale_views()
   local view = type(name) == "table" and name or M.panels[name]
   if not view then return nil end
-  local panel_name = type(name) == "string" and name or view.__split_view_panel_name
+  local panel_name = type(name) == "string" and name or view.__sidepanel_panel_name
   if panel_name then M.current_panel = panel_name end
   M.visible = true
   M.ensure_side_node()
@@ -250,9 +359,10 @@ function M.focus_main(hide)
 end
 
 function M.focus_side()
+  M.prune_stale_views()
   local side = M.ensure_side_node()
   local view = side and side.active_view
-  if not view or view.__split_view_placeholder then
+  if not view or view.__sidepanel_placeholder then
     view = M.current_panel and M.panels[M.current_panel]
   end
   if view then
@@ -274,6 +384,31 @@ function M.toggle_focus()
   end
 end
 
+function M.switch_side_view(delta)
+  local side = M.ensure_side_node()
+  if not side then return nil end
+
+  local views = {}
+  for _, view in ipairs(side.views or {}) do
+    if not view.__sidepanel_placeholder then
+      views[#views + 1] = view
+    end
+  end
+  if #views == 0 then return nil end
+
+  local index = 1
+  for i, view in ipairs(views) do
+    if view == side.active_view then
+      index = i
+      break
+    end
+  end
+  index = ((index - 1 + delta) % #views) + 1
+
+  M.visible = true
+  return M.set_side_view(views[index], true)
+end
+
 local function copy_docview_position(src, dst)
   if not src or not dst or not src.doc or src.doc ~= dst.doc then return end
   dst.scroll.x, dst.scroll.to.x = src.scroll.x or 0, src.scroll.to.x or src.scroll.x or 0
@@ -283,6 +418,11 @@ end
 
 local function side_file_needs_preserve(doc)
   local old = M.file_view
+  if old and not M.contains_view(old) then
+    M.file_view = nil
+    M.file_view_path = nil
+    old = nil
+  end
   if not old or not old.doc or old.doc == doc then return false end
   if not old.doc:is_dirty() then return false end
   local refs = core.get_views_referencing_doc and core.get_views_referencing_doc(old.doc) or {}
@@ -300,7 +440,7 @@ local function preserve_dirty_side_file()
   if restore and core.active_view ~= restore then
     core.set_active_view(restore)
   end
-  core.log("Split view: kept dirty side file open in main before replacing")
+  core.log("Side panel: kept dirty side file open in main before replacing")
 end
 
 local function set_side_file_doc(doc, opts)
@@ -317,6 +457,7 @@ local function set_side_file_doc(doc, opts)
   end
 
   local view = M.file_view
+  if view and not M.contains_view(view) then view = nil end
   if not view or view.doc ~= doc then
     view = DocView(doc)
     M.file_view = view
@@ -324,6 +465,7 @@ local function set_side_file_doc(doc, opts)
     M.register_panel("file", view)
   else
     M.attach_view("file", view)
+    M.add_view(view)
   end
 
   copy_docview_position(source, view)
@@ -335,10 +477,12 @@ local function set_side_file_doc(doc, opts)
     view:scroll_to_make_visible(opts.line, col)
   end
 
-  if opts.focus == false and opts.restore_focus then
+  if opts.focus == false and opts.restore_focus and not M.is_side_view(opts.restore_focus) then
     core.set_active_view(opts.restore_focus)
   elseif opts.focus ~= true and source and core.active_view ~= source and not M.is_side_view(source) then
     core.set_active_view(source)
+  elseif opts.focus ~= true and M.is_side_view(core.active_view) then
+    M.focus_main(false)
   end
 
   return view
@@ -360,6 +504,7 @@ function M.open_path_in_side(path, opts)
 
     local source = opts.source_view or core.active_view
     local view = M.file_view
+    if view and not M.contains_view(view) then view = nil end
     if not view or view.path ~= path then
       view = ImageView(path)
       if not view.image then
@@ -371,12 +516,15 @@ function M.open_path_in_side(path, opts)
       M.register_panel("file", view)
     else
       M.attach_view("file", view)
+      M.add_view(view)
     end
     M.show("file", { focus = opts.focus == true })
-    if opts.focus == false and opts.restore_focus then
+    if opts.focus == false and opts.restore_focus and not M.is_side_view(opts.restore_focus) then
       core.set_active_view(opts.restore_focus)
     elseif opts.focus ~= true and source and not M.is_side_view(source) then
       core.set_active_view(source)
+    elseif opts.focus ~= true and M.is_side_view(core.active_view) then
+      M.focus_main(false)
     end
     return view
   end
@@ -402,28 +550,28 @@ function M.open_path_in_main(path, opts)
   return view
 end
 
-local base_set_active_view = core.split_view_base_set_active_view or core.set_active_view
-core.split_view_base_set_active_view = base_set_active_view
+local base_set_active_view = core.sidepanel_base_set_active_view or core.set_active_view
+core.sidepanel_base_set_active_view = base_set_active_view
 function core.set_active_view(view)
   local result = base_set_active_view(view)
-  if core.split_view then core.split_view.remember_main_view(view) end
+  if core.sidepanel then core.sidepanel.remember_main_view(view) end
   return result
 end
 
 command.add(nil, {
-  ["split-view:focus-main-and-hide"] = function()
+  ["sidepanel:focus-main-and-hide"] = function()
     M.focus_main(true)
   end,
-  ["split-view:toggle-focus"] = function()
+  ["sidepanel:toggle-focus"] = function()
     M.toggle_focus()
   end,
-  ["split-view:focus-side"] = function()
+  ["sidepanel:focus-side"] = function()
     M.focus_side()
   end,
-  ["split-view:hide"] = function()
+  ["sidepanel:hide"] = function()
     M.hide(true)
   end,
-  ["split-view:open-current-file"] = function()
+  ["sidepanel:open-current-file"] = function()
     local view = M.current_main_view(core.active_view)
     if not view or not view.extends or not view:extends(DocView) or not view.doc then return false end
     M.open_doc_in_side(view.doc, { source_view = view, focus = false })
@@ -434,21 +582,56 @@ command.add(nil, {
 command.add(function()
   return M.is_side_view(core.active_view)
 end, {
-  ["split-view:hide-active-side"] = function()
+  ["sidepanel:hide-active"] = function()
     M.hide(true)
+  end,
+  ["sidepanel:switch-to-next-view"] = function()
+    M.switch_side_view(1)
+  end,
+  ["sidepanel:switch-to-previous-view"] = function()
+    M.switch_side_view(-1)
   end,
 })
 
+local function wrap_root_tab_switch(name, delta)
+  local base = command.map[name]
+  if not base or base.__sidepanel_wrapped then return end
+
+  command.add(function(...)
+    if M.is_side_view(core.active_view) then return true, "sidepanel" end
+    local result = { base.predicate(...) }
+    if table.remove(result, 1) then
+      if #result > 0 then
+        return true, "base", table.unpack(result)
+      end
+      return true, "base", ...
+    end
+    return false
+  end, {
+    [name] = function(mode, ...)
+      if mode == "sidepanel" then
+        M.switch_side_view(delta)
+      elseif base then
+        base.perform(...)
+      end
+    end,
+  })
+  command.map[name].__sidepanel_wrapped = true
+end
+
+wrap_root_tab_switch("root:switch-to-next-tab", 1)
+wrap_root_tab_switch("root:switch-to-previous-tab", -1)
+
 local function install_keymaps()
   keymap.add({
-    ["ctrl+w"] = "split-view:hide-active-side",
+    ["ctrl+w"] = "sidepanel:hide-active",
   })
   keymap.add_direct({
-    ["alt+1"] = "split-view:focus-main-and-hide",
-    ["alt+º"] = "split-view:toggle-focus",
-    ["alt+grave"] = "split-view:toggle-focus",
-    ["alt+`"] = "split-view:toggle-focus",
-    ["ctrl+0"] = "split-view:open-current-file",
+    ["alt+1"] = "sidepanel:focus-main-and-hide",
+    ["alt+º"] = "sidepanel:toggle-focus",
+    ["alt+grave"] = "sidepanel:toggle-focus",
+    ["alt+`"] = "sidepanel:toggle-focus",
+    ["ctrl+0"] = "sidepanel:open-current-file",
   })
 end
 

@@ -1,11 +1,11 @@
--- mod-version:3
 -- Shared helpers for commands that operate on the current file/view.
 
 local core = require "core"
 local command = require "core.command"
 local common = require "core.common"
 
-local M = {}
+local M = core.file_context or {}
+core.file_context = M
 
 function M.view_file_path(view)
   if type(view) == "string" and view ~= "" then
@@ -20,10 +20,10 @@ function M.view_file_path(view)
   if path and path ~= "" then return common.normalize_path(path) end
 end
 
-local excluded_main_views = setmetatable({}, { __mode = "k" })
+M.excluded_main_views = M.excluded_main_views or setmetatable({}, { __mode = "k" })
 
 function M.exclude_main_view(view)
-  if view then excluded_main_views[view] = true end
+  if view then M.excluded_main_views[view] = true end
 end
 
 function M.is_file_view(view)
@@ -31,7 +31,7 @@ function M.is_file_view(view)
 end
 
 function M.is_main_view(view)
-  if not view or excluded_main_views[view] then return false end
+  if not view or M.excluded_main_views[view] then return false end
   if view == core.command_view or view == core.nag_view or view == core.status_view or view == core.title_view then return false end
   return view.context == "session" or M.is_file_view(view)
 end
