@@ -2391,10 +2391,11 @@ function core.run_step(options)
 
   if focus_diag_last_state == nil or focus_diag_last_state ~= window_has_focus then
     core.log_quiet(
-      "Focus diagnostics: window_has_focus=%s active=%s docview=%s redraw=%s event_count=%d pending=%s queue=%d run_mode=%s",
+      "Focus diagnostics: window_has_focus=%s active=%s docview=%s redraw=%s event_count=%d pending=%s queue=%d run_mode=%s native={%s}",
       tostring(window_has_focus), active_view_name, tostring(active_view_is_docview),
       tostring(did_redraw), step_stats.event_count, tostring(pending_events_at_start),
-      queue_depth, tostring(run_threads_mode)
+      queue_depth, tostring(run_threads_mode),
+      system.window_focus_diagnostics and core.window and system.window_focus_diagnostics(core.window) or "unavailable"
     )
     focus_diag_last_state = window_has_focus
   end
@@ -2407,11 +2408,12 @@ function core.run_step(options)
         line1, col1, line2, col2 = active_doc:get_selection()
       end
       core.log_quiet(
-        "Focus diagnostics: active DocView while window_has_focus=false file=%s selection_count=%s selection=%s,%s-%s,%s redraw=%s blink=%.3f event_count=%d pending=%s queue=%d",
+        "Focus diagnostics: active DocView while window_has_focus=false file=%s selection_count=%s selection=%s,%s-%s,%s redraw=%s blink=%.3f event_count=%d pending=%s queue=%d native={%s}",
         tostring(active_doc and (active_doc.abs_filename or active_doc.filename) or ""),
         tostring(selection_count), tostring(line1), tostring(col1), tostring(line2), tostring(col2),
         tostring(did_redraw), core.blink_timer or 0, step_stats.event_count,
-        tostring(pending_events_at_start), queue_depth
+        tostring(pending_events_at_start), queue_depth,
+        system.window_focus_diagnostics and core.window and system.window_focus_diagnostics(core.window) or "unavailable"
       )
       focus_diag_last_anomaly_log = now
     end

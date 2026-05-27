@@ -687,6 +687,75 @@ static int f_window_has_focus(lua_State *L) {
 }
 
 
+static int f_window_focus_diagnostics(lua_State *L) {
+  RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  SDL_Window *window = window_renderer->cache.window;
+  unsigned flags = SDL_GetWindowFlags(window);
+  char buf[2048];
+
+#ifdef _WIN32
+  SDL_PropertiesID props = SDL_GetWindowProperties(window);
+  HWND hwnd = (HWND) SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
+  HWND foreground = GetForegroundWindow();
+  HWND active = GetActiveWindow();
+  HWND focus = GetFocus();
+  DWORD current_thread = GetCurrentThreadId();
+  DWORD current_process = GetCurrentProcessId();
+  DWORD foreground_process = 0;
+  DWORD active_process = 0;
+  DWORD focus_process = 0;
+  DWORD foreground_thread = foreground ? GetWindowThreadProcessId(foreground, &foreground_process) : 0;
+  DWORD active_thread = active ? GetWindowThreadProcessId(active, &active_process) : 0;
+  DWORD focus_thread = focus ? GetWindowThreadProcessId(focus, &focus_process) : 0;
+  DWORD hwnd_process = 0;
+  DWORD hwnd_thread = hwnd ? GetWindowThreadProcessId(hwnd, &hwnd_process) : 0;
+  char foreground_title[128] = {0};
+  char foreground_class[128] = {0};
+  if (foreground) {
+    GetWindowTextA(foreground, foreground_title, sizeof(foreground_title));
+    GetClassNameA(foreground, foreground_class, sizeof(foreground_class));
+  }
+
+  snprintf(buf, sizeof(buf),
+    "sdl_flags=0x%x input=%s mouse=%s hidden=%s shown=%s minimized=%s maximized=%s "
+    "hwnd=%p hwnd_thread=%lu hwnd_pid=%lu current_thread=%lu current_pid=%lu "
+    "foreground=%p foreground_is_anvil=%s foreground_thread=%lu foreground_pid=%lu foreground_title='%s' foreground_class='%s' "
+    "active=%p active_is_anvil=%s active_thread=%lu active_pid=%lu "
+    "focus=%p focus_is_anvil=%s focus_thread=%lu focus_pid=%lu last_error=%lu",
+    flags,
+    (flags & SDL_WINDOW_INPUT_FOCUS) ? "true" : "false",
+    (flags & SDL_WINDOW_MOUSE_FOCUS) ? "true" : "false",
+    (flags & SDL_WINDOW_HIDDEN) ? "true" : "false",
+    (flags & SDL_WINDOW_HIDDEN) ? "false" : "true",
+    (flags & SDL_WINDOW_MINIMIZED) ? "true" : "false",
+    (flags & SDL_WINDOW_MAXIMIZED) ? "true" : "false",
+    (void*) hwnd, (unsigned long) hwnd_thread, (unsigned long) hwnd_process,
+    (unsigned long) current_thread, (unsigned long) current_process,
+    (void*) foreground, foreground == hwnd ? "true" : "false",
+    (unsigned long) foreground_thread, (unsigned long) foreground_process,
+    foreground_title, foreground_class,
+    (void*) active, active == hwnd ? "true" : "false",
+    (unsigned long) active_thread, (unsigned long) active_process,
+    (void*) focus, focus == hwnd ? "true" : "false",
+    (unsigned long) focus_thread, (unsigned long) focus_process,
+    (unsigned long) GetLastError()
+  );
+#else
+  snprintf(buf, sizeof(buf),
+    "sdl_flags=0x%x input=%s mouse=%s hidden=%s shown=%s minimized=%s maximized=%s",
+    flags,
+    (flags & SDL_WINDOW_INPUT_FOCUS) ? "true" : "false",
+    (flags & SDL_WINDOW_MOUSE_FOCUS) ? "true" : "false",
+    (flags & SDL_WINDOW_HIDDEN) ? "true" : "false",
+    (flags & SDL_WINDOW_HIDDEN) ? "false" : "true",
+    (flags & SDL_WINDOW_MINIMIZED) ? "true" : "false",
+    (flags & SDL_WINDOW_MAXIMIZED) ? "true" : "false"
+  );
+#endif
+  lua_pushstring(L, buf);
+  return 1;
+}
+
 static int f_get_window_mode(lua_State *L) {
   RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
   unsigned flags = SDL_GetWindowFlags(window_renderer->cache.window);
@@ -1754,6 +1823,7 @@ static const luaL_Reg lib[] = {
   { "set_text_input_rect",   f_set_text_input_rect   },
   { "clear_ime",             f_clear_ime             },
   { "window_has_focus",      f_window_has_focus      },
+  { "window_focus_diagnostics", f_window_focus_diagnostics },
   { "raise_window",          f_raise_window          },
   { "show_fatal_error",      f_show_fatal_error      },
   { "rmdir",                 f_rmdir                 },
