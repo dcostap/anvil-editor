@@ -462,20 +462,21 @@ local function get_recent_files()
 end
 
 local function get_file_search_items()
-  local out, seen = {}, {}
-  for _, f in ipairs(get_files()) do
-    local abs = fullpath(f)
-    if not seen[abs] then
-      seen[abs] = true
-      out[#out+1] = f
-    end
+  -- `fd` already returns a unique project-relative file list.  Avoid calling
+  -- fullpath()/normalize_path() for every indexed file on each keystroke; on
+  -- large projects that pre-scan allocation/normalization dominated latency.
+  local files = get_files()
+  local recents = get_recent_files()
+  if #recents == 0 then return files end
+
+  local out, recent_set = {}, {}
+  for _, f in ipairs(recents) do recent_set[f] = true end
+  for _, f in ipairs(files) do
+    out[#out+1] = f
+    recent_set[f] = nil
   end
-  for _, f in ipairs(get_recent_files()) do
-    local abs = fullpath(f)
-    if not seen[abs] then
-      seen[abs] = true
-      out[#out+1] = f
-    end
+  for _, f in ipairs(recents) do
+    if recent_set[f] then out[#out+1] = f end
   end
   return out
 end
@@ -749,6 +750,63 @@ local function fuzzy_match(query, text)
   if all_in_base then total = total + 80 end
 
   -- Prefer concise candidates once the match quality is otherwise similar.
+  total = total - math.floor(#text / 8)
+  return total, spans
+end
+
+local function fuzzy_match_file_fast_word(word, text, lower, base_start)
+  word = trim_query(word):lower()
+  if word == "" then return 0, {} end
+
+  local positions = {}
+  local score = 0
+  local scan = 1
+  local last = 0
+  for i = 1, #word do
+    local p = lower:find(word:sub(i, i), scan, true)
+    if not p then return nil end
+    positions[#positions+1] = p
+
+    local b = bonus_at(text, p)
+    score = score + SCORE_MATCH + b
+    if p == last + 1 then score = score + BONUS_CONSECUTIVE end
+    if p >= base_start then score = score + 8 end
+    if text:sub(p, p) == word:sub(i, i) then score = score + 1 end
+
+    last = p
+    scan = p + 1
+  end
+
+  score = score - (positions[1] or 1)
+  score = score - math.floor((positions[#positions] - positions[1]) / 3)
+  return score, positions_to_spans(positions)
+end
+
+local function fuzzy_match_file_fast(query, text)
+  query = trim_query(query)
+  text = tostring(text or "")
+  if query == "" then return 0, {} end
+
+  local lower = text:lower()
+  local base = text:match("[^/\\]+$") or text
+  local base_start = #text - #base + 1
+  local total, spans = 0, {}
+
+  for _, word in ipairs(split_words(query)) do
+    local exact_s, exact_e = lower:find(word:lower(), 1, true)
+    local score, word_spans
+    if exact_s then
+      score = SCORE_MATCH * #word + 120 - exact_s - math.floor((exact_e - exact_s) / 2)
+      if exact_s >= base_start then score = score + 120 end
+      word_spans = { { exact_s, exact_e } }
+    else
+      score, word_spans = fuzzy_match_file_fast_word(word, text, lower, base_start)
+      if not score then return nil end
+    end
+    total = total + score
+    for _, span in ipairs(word_spans) do spans[#spans+1] = span end
+  end
+
   total = total - math.floor(#text / 8)
   return total, spans
 end
@@ -2130,7 +2188,7 @@ function FSView:start_file_search(query, line, reset_selection)
       if empty_query then
         score, spans = 0, {}
       else
-        score, spans = fuzzy_match(query, item)
+        score, spans = fuzzy_match_file_fast(query, item)
       end
       if score and ((not line) or line_exists(item, line)) then
         matched = matched + 1
