@@ -258,15 +258,15 @@ function Scrollbar:_overlaps_normal(x, y)
   local sz = nr.scrollable
   if sz <= nr.along_size or sz == math.huge then return nil end
 
-  -- Use a stable interaction band that matches the fully-expanded scrollbar.
-  -- The previous hit test mixed the current animated width with a one-sided
-  -- margin, which made hover feel offset while the bar was animating/inset.
-  local expanded_scrollbar_size = self.expanded_size or style.expanded_scrollbar_size
-  local contracted_scrollbar_size = self.contracted_size or style.scrollbar_size
-  local hit_size = math.max(expanded_scrollbar_size, contracted_scrollbar_size)
-  local end_padding = self:get_end_padding()
-  local sx = nr.across + nr.across_size - hit_size - end_padding
-  local sw = hit_size
+  -- Keep the interaction band close to the rendered scrollbar.  The thumb is
+  -- intentionally easier to grab than the visible rect, but only by a small
+  -- amount on the leading/left side; using the fully-expanded width here made
+  -- the contracted scrollbar claim too much editor space.
+  local tx, _, tw = self:_get_track_rect_normal()
+  local leading_pad = style.scrollbar_hitbox_leading_padding
+    or math.floor((style.contracted_scrollbar_margin or 0) * 0.5)
+  local sx = tx - leading_pad
+  local sw = tw + leading_pad
   if x < sx or x > sx + sw or y < nr.along or y > nr.along + nr.along_size then
     return nil
   end
@@ -531,7 +531,7 @@ function Scrollbar:draw_thumb()
   -- update tick. The animated value then catches up for the smooth transition.
   local t = self.hover_tint_percent or 0
   if hovering then t = math.max(t, self.dragging and 1 or 0.55) end
-  local hover_color = style.scrollbar_hover or lighten_color(style.scrollbar, 44)
+  local hover_color = style.scrollbar_hover or style.scrollbar2 or lighten_color(style.scrollbar, 44)
   local color = blend_color(style.scrollbar, hover_color, math.min(1, t))
   local x, y, w, h = self:get_thumb_rect()
   renderer.draw_rect(x, y, w, h, color)
