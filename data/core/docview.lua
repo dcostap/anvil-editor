@@ -918,24 +918,31 @@ function DocView:draw_caret(x, y, line, col, caret_idx)
     local dt = math.min(now - last, 1 / 120)
     local dx = x - pos.x
     local dy = y - pos.y
-    local distance = math.sqrt(dx * dx + dy * dy)
-    local distance_min = config.animated_caret_distance_min or 4
-    local distance_max = config.animated_caret_distance_max or 160
-    local distance_span = math.max(1, distance_max - distance_min)
-    local distance_t = math.max(0, math.min(1, (distance - distance_min) / distance_span))
-    local min_speed = config.animated_caret_min_speed or 35
-    local max_speed = config.animated_caret_max_speed or 100
-    local speed = min_speed + (max_speed - min_speed) * distance_t
-    local linear_t = 1 - math.exp(-speed * dt)
-    local t = 1 - math.pow(1 - linear_t, 3)
-    pos.x = pos.x + dx * t
-    pos.y = pos.y + dy * t
 
-    if math.abs(x - pos.x) > 0.1 or math.abs(y - pos.y) > 0.1 then
-      core.redraw = true
-    else
+    if math.abs(dy) > 0.1 then
+      -- Line changes must not animate at all. Snap both axes so clicks or
+      -- vertical navigation never glide diagonally from the old line.
       pos.x = x
       pos.y = y
+    else
+      local distance = math.abs(dx)
+      local distance_min = config.animated_caret_distance_min or 4
+      local distance_max = config.animated_caret_distance_max or 160
+      local distance_span = math.max(1, distance_max - distance_min)
+      local distance_t = math.max(0, math.min(1, (distance - distance_min) / distance_span))
+      local min_speed = config.animated_caret_min_speed or 35
+      local max_speed = config.animated_caret_max_speed or 100
+      local speed = min_speed + (max_speed - min_speed) * distance_t
+      local linear_t = 1 - math.exp(-speed * dt)
+      local t = 1 - math.pow(1 - linear_t, 3)
+      pos.x = pos.x + dx * t
+      pos.y = y
+
+      if math.abs(x - pos.x) > 0.1 then
+        core.redraw = true
+      else
+        pos.x = x
+      end
     end
     x, y = pos.x, pos.y
   end
