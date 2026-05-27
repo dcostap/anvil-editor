@@ -78,7 +78,8 @@ end
 local function write_frame_header(file)
   file:write(table.concat({
     "time", "did_redraw", "fps", "target_fps", "active_present_paced",
-    "pending_events", "queue_depth", "run_mode", "selection_count", "search_selection_count",
+    "pending_events", "queue_depth", "run_mode", "window_has_focus", "active_view_is_docview", "active_view_name",
+    "selection_count", "search_selection_count", "docview_caret_draw_calls", "docview_selection_rect_calls",
     "event_count", "event_ms", "update_ms", "pre_draw_ms",
     "frame_ms", "draw_emit_ms", "renderer_end_ms",
     "present_ms", "run_threads_ms", "run_threads_runs", "run_threads_slowest_ms", "run_threads_slowest_loc", "core_step_ms", "gc_ms", "sleep_requested_ms", "sleep_actual_ms", "total_ms",
@@ -155,8 +156,13 @@ function perf.on_frame(snapshot)
     snapshot.pending_events and "1" or "0",
     tostring(snapshot.queue_depth or 0),
     csv_escape(snapshot.run_mode or ""),
+    snapshot.window_has_focus and "1" or "0",
+    snapshot.active_view_is_docview and "1" or "0",
+    csv_escape(snapshot.active_view_name or ""),
     tostring(snapshot.selection_count or 0),
     tostring(snapshot.search_selection_count or 0),
+    tostring(snapshot.docview_caret_draw_calls or 0),
+    tostring(snapshot.docview_selection_rect_calls or 0),
     tostring(snapshot.event_count or 0),
     string.format("%.3f", snapshot.event_ms or 0),
     string.format("%.3f", snapshot.update_ms or 0),

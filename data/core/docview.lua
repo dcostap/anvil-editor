@@ -940,6 +940,8 @@ function DocView:draw_caret(x, y, line, col, caret_idx)
     x, y = pos.x, pos.y
   end
 
+  local stats = core.docview_frame_stats
+  if stats then stats.caret_draw_calls = stats.caret_draw_calls + 1 end
   local lh = self:get_line_height()
   if self.doc.overwrite then
     local w = self:get_font():get_width(self.doc:get_char(line, col))
@@ -1085,6 +1087,8 @@ function DocView:draw_line_body(line, x, y)
       local x1 = x + self:get_col_x_offset(line, sel[1])
       local x2 = x + self:get_col_x_offset(line, sel[2])
       if x1 ~= x2 then
+        local stats = core.docview_frame_stats
+        if stats then stats.selection_rect_calls = stats.selection_rect_calls + 1 end
         renderer.draw_rect(x1, y, x2 - x1, lh, sel[3])
       end
     end
@@ -1098,6 +1102,8 @@ function DocView:draw_line_body(line, x, y)
         local x1 = x + self:get_col_x_offset(line, col1)
         local x2 = x + self:get_col_x_offset(line, col2)
         if x1 ~= x2 then
+          local stats = core.docview_frame_stats
+          if stats then stats.selection_rect_calls = stats.selection_rect_calls + 1 end
           local selection_color = style.selection
           if self.doc:is_search_selection(line1, col1, line, col2) then
             selection_color = style.search_selection or style.caret

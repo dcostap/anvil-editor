@@ -1745,6 +1745,8 @@ function core.step(next_frame_time, options)
       text_lines = 0,
       tokens = 0,
       draw_text_calls = 0,
+      caret_draw_calls = 0,
+      selection_rect_calls = 0,
     }
   else
     core.docview_frame_stats = nil
@@ -2338,7 +2340,11 @@ function core.run_step(options)
     end
     perf_last_redraw_time = t
   end
-  local active_doc = core.active_view and core.active_view.doc
+  local active_view = core.active_view
+  local active_doc = active_view and active_view.doc
+  local active_view_name = active_view and tostring(active_view) or ""
+  local active_view_is_docview = active_view and active_view.extends and active_view:extends(DocView) or false
+  local window_has_focus = core.window and system.window_has_focus(core.window) or false
   local selection_count = active_doc and active_doc.selections and (#active_doc.selections / 4) or 0
   local search_selection_count = 0
   if active_doc and active_doc.search_selections then
@@ -2357,6 +2363,9 @@ function core.run_step(options)
     present_paced = present_paced,
     active_present_paced = active_present_paced,
     did_redraw = did_redraw,
+    window_has_focus = window_has_focus,
+    active_view_name = active_view_name,
+    active_view_is_docview = active_view_is_docview,
     selection_count = selection_count,
     search_selection_count = search_selection_count,
     pending_events = pending_events_at_start,
@@ -2388,6 +2397,8 @@ function core.run_step(options)
     docview_body_ms = docview_stats.body_ms,
     docview_text_ms = docview_stats.text_ms,
     docview_draw_text_calls = docview_stats.draw_text_calls,
+    docview_caret_draw_calls = docview_stats.caret_draw_calls,
+    docview_selection_rect_calls = docview_stats.selection_rect_calls,
     sleep_requested_ms = sleep_requested_ms,
     sleep_actual_ms = sleep_actual_ms,
     skipped_post_present_sleep = skipped_post_present_sleep,
