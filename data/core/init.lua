@@ -1516,6 +1516,11 @@ function core.on_event(type, ...)
       core.active_file_dialogs[id] = nil
       callback(status, result)
     end
+  elseif type == "focusgained" then
+    core.log_quiet(
+      "Focus diagnostics: received focusgained event active=%s window_has_focus=%s",
+      tostring(core.active_view), tostring(core.window and system.window_has_focus(core.window))
+    )
   elseif type == "focuslost" then
     core.log_quiet(
       "Focus diagnostics: received focuslost event active=%s window_has_focus=%s",
@@ -2387,7 +2392,10 @@ function core.run_step(options)
   if active_view_is_docview and not window_has_focus then
     local now = system.get_time()
     if now - focus_diag_last_anomaly_log >= 2 then
-      local line1, col1, line2, col2 = active_doc and active_doc:get_selection()
+      local line1, col1, line2, col2
+      if active_doc then
+        line1, col1, line2, col2 = active_doc:get_selection()
+      end
       core.log_quiet(
         "Focus diagnostics: active DocView while window_has_focus=false file=%s selection_count=%s selection=%s,%s-%s,%s redraw=%s blink=%.3f event_count=%d pending=%s queue=%d",
         tostring(active_doc and (active_doc.abs_filename or active_doc.filename) or ""),
