@@ -112,13 +112,18 @@ function translate.next_block_end(doc, line, col)
 end
 
 
+local function start_of_indentation_col(doc, line)
+  local _, e = doc.lines[line]:find("^[\t ]*")
+  return e + 1
+end
+
 function translate.start_of_line(doc, line, col)
-  return line, 1
+  return line, col == 1 and start_of_indentation_col(doc, line) or 1
 end
 
 function translate.start_of_indentation(doc, line, col)
-  local s, e = doc.lines[line]:find("^%s*")
-  return line, col > e + 1 and e + 1 or 1
+  local indent_col = start_of_indentation_col(doc, line)
+  return line, col > indent_col and indent_col or (col == 1 and indent_col or 1)
 end
 
 function translate.end_of_line(doc, line, col)

@@ -560,9 +560,13 @@ function DocView:draw_line_gutter(line, x, y, width)
   return (old_draw_line_gutter(self, line, x, y, width) or lh) * count
 end
 
+local function wrapping_active_for_doc(doc)
+  return core.active_view and core.active_view.doc == doc and core.active_view.wrapped_settings
+end
+
 local old_translate_end_of_line = translate.end_of_line
 function translate.end_of_line(doc, line, col)
-  if not core.active_view or core.active_view.doc ~= doc or not core.active_view.wrapped_settings then old_translate_end_of_line(doc, line, col) end
+  if not wrapping_active_for_doc(doc) then return old_translate_end_of_line(doc, line, col) end
   local idx, ncol = get_line_idx_col_count(core.active_view, line, col)
   local nline, ncol2 = get_idx_line_col(core.active_view, idx + 1)
   if nline ~= line then return line, math.huge end
@@ -571,11 +575,19 @@ end
 
 local old_translate_start_of_line = translate.start_of_line
 function translate.start_of_line(doc, line, col)
-  if not core.active_view or core.active_view.doc ~= doc or not core.active_view.wrapped_settings then old_translate_start_of_line(doc, line, col) end
-  local idx, ncol = get_line_idx_col_count(core.active_view, line, col)
-  local nline, ncol2 = get_idx_line_col(core.active_view, idx - 1)
-  if nline ~= line then return line, 1 end
-  return line, ncol2 + 1
+  if not wrapping_active_for_doc(doc) then return old_translate_start_of_line(doc, line, col) end
+  local _, _, _, scol = get_line_idx_col_count(core.active_view, line, col)
+  if col == scol then return old_translate_start_of_line(doc, line, col) end
+  return line, scol
+end
+
+local old_translate_start_of_indentation = translate.start_of_indentation
+function translate.start_of_indentation(doc, line, col)
+  if not wrapping_active_for_doc(doc) then return old_translate_start_of_indentation(doc, line, col) end
+  local _, _, _, scol = get_line_idx_col_count(core.active_view, line, col)
+  if col == scol then return old_translate_start_of_indentation(doc, line, col) end
+  if scol ~= 1 then return line, scol end
+  return old_translate_start_of_indentation(doc, line, col)
 end
 
 local old_previous_line = DocView.translate.previous_line
