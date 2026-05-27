@@ -119,7 +119,7 @@ style.selectionhighlight = c("274324")
 style.indent_guide = { common.color "rgba(255, 255, 255, 0.09)" }
 style.indent_guide_active = { common.color "rgba(255, 255, 255, 0.24)" }
 style.whitespace = { common.color "rgba(255, 255, 255, 0.10)" }
-style.whitespace_trailing = { common.color "rgba(224, 108, 117, 0.55)" }
+style.whitespace_trailing = { common.color "rgba(255, 255, 255, 0.16)" }
 
 -- Anvil's common syntax slots.
 style.syntax["normal"] = c(C.text_fg)
