@@ -325,6 +325,28 @@ function common.fuzzy_match_with_recents(haystack, recents, needle)
 end
 
 
+local function list_dir_path_variants(path)
+  local files = system.list_dir(path)
+  if PLATFORM ~= "Windows" then return files, path end
+  if files and #files > 0 then return files, path end
+
+  local slash_path = path:gsub("\\", "/")
+  if slash_path ~= path then
+    local slash_files = system.list_dir(slash_path)
+    if slash_files and #slash_files > 0 then return slash_files, slash_path end
+    files = files or slash_files
+  end
+
+  local backslash_path = path:gsub("/", "\\")
+  if backslash_path ~= path then
+    local backslash_files = system.list_dir(backslash_path)
+    if backslash_files and #backslash_files > 0 then return backslash_files, backslash_path end
+    files = files or backslash_files
+  end
+
+  return files, path
+end
+
 ---Returns a list of paths that are relative to the input path.
 ---
 ---If a root directory is specified, the function returns paths
@@ -333,7 +355,7 @@ end
 ---@param root? string The root directory.
 ---@return string[]
 function common.path_suggest(text, root)
-  if root and root:sub(-1) ~= PATHSEP then
+  if root and ((PLATFORM == "Windows" and not root:match("[/\\]$")) or (PLATFORM ~= "Windows" and root:sub(-1) ~= PATHSEP)) then
     root = root .. PATHSEP
   end
 
@@ -354,23 +376,34 @@ function common.path_suggest(text, root)
     end
   end
 
-  -- Only in Windows allow using both styles of PATHSEP
-  if (PATHSEP == "\\" and not string.match(path:sub(-1), "[\\/]")) or
-     (PATHSEP ~= "\\" and path:sub(-1) ~= PATHSEP) then
+  -- On Windows allow both slash styles, even when Anvil's PATHSEP is '/'.
+  -- Do not append another separator after a pasted backslash path like
+  -- C:\foo\; that produced mixed trailing separators and broke listing.
+  if (PLATFORM == "Windows" and not path:match("[/\\]$")) or
+     (PLATFORM ~= "Windows" and path:sub(-1) ~= PATHSEP) then
     path = path .. PATHSEP
   end
-  local files = system.list_dir(path) or {}
+  local input_ends_with_separator = PLATFORM == "Windows" and text:match("[/\\]$") ~= nil
+    or PLATFORM ~= "Windows" and text:sub(-1) == PATHSEP
+  local files, list_path = list_dir_path_variants(path)
+  files = files or {}
+  local compare_text = text
+  local compare_root = root
+  if PLATFORM == "Windows" then
+    compare_text = compare_text:gsub("[/\\]", PATHSEP)
+    if compare_root then compare_root = compare_root:gsub("[/\\]", PATHSEP) end
+  end
   local res = {}
   for _, file in ipairs(files) do
-    file = path .. file
+    file = list_path .. file
     local info = system.get_file_info(file)
     if info then
       if info.type == "dir" then
         file = file .. PATHSEP
       end
-      if root then
+      if compare_root then
         -- remove root part from file path
-        local s, e = file:find(root, nil, true)
+        local s, e = file:find(compare_root, nil, true)
         if s == 1 then
           file = file:sub(e + 1)
         end
@@ -381,7 +414,9 @@ function common.path_suggest(text, root)
           file = file:sub(e + 1)
         end
       end
-      if file:lower():find(text:lower(), nil, true) == 1 then
+      local compare_file = file
+      if PLATFORM == "Windows" then compare_file = compare_file:gsub("[/\\]", PATHSEP) end
+      if input_ends_with_separator or compare_file:lower():find(compare_text:lower(), nil, true) == 1 then
         table.insert(res, file)
       end
     end
@@ -395,15 +430,26 @@ end
 ---@param root string The path to relate to.
 ---@return string[]
 function common.dir_path_suggest(text, root)
-  local path, name = text:match("^(.-)([^"..PATHSEP.."]*)$")
+  local pathsep = PATHSEP
+  if PLATFORM == "Windows" then
+    pathsep = "\\/"
+  end
+  local path, name = text:match("^(.-)([^"..pathsep.."]*)$")
   path = path == "" and (root or ".") or path
   path = path:gsub("[/\\]$", "") .. PATHSEP
-  local files = system.list_dir(path) or {}
+  local files, list_path = list_dir_path_variants(path)
+  files = files or {}
+  local compare_text = text
+  if PLATFORM == "Windows" then
+    compare_text = compare_text:gsub("[/\\]", PATHSEP)
+  end
   local res = {}
   for _, file in ipairs(files) do
-    file = path .. file
+    file = list_path .. file
     local info = system.get_file_info(file)
-    if info and info.type == "dir" and file:lower():find(text:lower(), nil, true) == 1 then
+    local compare_file = file
+    if PLATFORM == "Windows" then compare_file = compare_file:gsub("[/\\]", PATHSEP) end
+    if info and info.type == "dir" and compare_file:lower():find(compare_text:lower(), nil, true) == 1 then
       table.insert(res, file)
     end
   end
@@ -784,7 +830,11 @@ end
 ---@param path string
 ---@return boolean
 function common.is_absolute_path(path)
-  return path:sub(1, 1) == PATHSEP or path:match("^(%a):\\")
+  if PLATFORM == "Windows" then
+    return path:match("^(%a):[/\\]") ~= nil
+        or path:match("^[/\\][/\\]") ~= nil
+  end
+  return path:sub(1, 1) == PATHSEP
 end
 
 
