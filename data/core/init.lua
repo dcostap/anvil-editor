@@ -134,6 +134,16 @@ end
 
 function core.open_project_in_new_window(project)
   local exe = EXEFILE or (EXEDIR and (EXEDIR .. PATHSEP .. "anvil.exe")) or "anvil"
+
+  -- On Windows, launching detached through core.process can create a visible
+  -- Anvil window that Windows/SDL does not grant input focus to.  Preserve the
+  -- older WinExec-based launch path here so newly-opened project windows are
+  -- activated correctly.
+  if PLATFORM == "Windows" then
+    system.exec(string.format("%q %q", exe, project))
+    return true
+  end
+
   local ok, process = pcall(require, "core.process")
   if ok and process and process.start then
     local proc = process.start({ exe, project }, {
