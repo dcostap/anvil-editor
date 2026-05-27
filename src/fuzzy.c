@@ -155,12 +155,16 @@ static int score_word(FuzzyMode mode, const char *text, const char *lower, uint3
   const char *exact = find_substr(lower, len, word->text, word->len);
   if (exact) {
     uint32_t pos = (uint32_t)(exact - lower);
-    int score = 1000 + (int)word->len * 40;
+    /* A contiguous substring match is qualitatively better than a loose
+       subsequence match. Keep this base comfortably above any per-character
+       subsequence bonuses so adding the final query character cannot make
+       split matches jump above exact basename matches. */
+    int score = 10000 + (int)word->len * 220;
     score -= (int)pos;
-    if (is_boundary_at(text, pos)) score += 120;
-    if (mode == FUZZY_MODE_PATH && pos >= basename_start) score += 260;
-    if (mode == FUZZY_MODE_PATH && pos == basename_start) score += 180;
-    if (pos == 0) score += 120;
+    if (is_boundary_at(text, pos)) score += 300;
+    if (mode == FUZZY_MODE_PATH && pos >= basename_start) score += 700;
+    if (mode == FUZZY_MODE_PATH && pos == basename_start) score += 700;
+    if (pos == 0) score += 300;
     return score;
   }
 

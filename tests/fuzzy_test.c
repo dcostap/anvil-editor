@@ -83,6 +83,58 @@ static int test_path_basename_preference(void) {
   return 0;
 }
 
+static int test_contiguous_match_beats_split_subsequence(void) {
+  const char *items[] = {
+    "game/c_foo_inematic.cpp",
+    "game/cinematic.cpp",
+    "game/cutscene_cinematic_helper.cpp"
+  };
+  FuzzyIndex idx;
+  CHECK(fuzzy_index_build(&idx, items, 3, FUZZY_MODE_PATH));
+
+  uint32_t count = 0;
+  bool has_more = false;
+  FuzzySearchResult *r = fuzzy_index_search(&idx, "cinematic", 10, &count, &has_more);
+  CHECK(r != NULL);
+  CHECK(count == 3);
+  CHECK(strcmp(fuzzy_index_text(&idx, r[0].entry_index), "game/cinematic.cpp") == 0);
+  CHECK(find_text(&idx, r, count, "game/c_foo_inematic.cpp") > 0);
+  free(r);
+
+  fuzzy_index_free(&idx);
+  return 0;
+}
+
+static int test_extending_exact_query_keeps_exact_match_on_top(void) {
+  const char *items[] = {
+    "physics/k_foo_inematics.cpp",
+    "physics/kinematics.cpp",
+    "physics/kinematics.h"
+  };
+  FuzzyIndex idx;
+  CHECK(fuzzy_index_build(&idx, items, 3, FUZZY_MODE_PATH));
+
+  uint32_t count = 0;
+  bool has_more = false;
+  FuzzySearchResult *r = fuzzy_index_search(&idx, "kinematic", 10, &count, &has_more);
+  CHECK(r != NULL);
+  CHECK(count == 3);
+  CHECK(strcmp(fuzzy_index_text(&idx, r[0].entry_index), "physics/kinematics.cpp") == 0 ||
+        strcmp(fuzzy_index_text(&idx, r[0].entry_index), "physics/kinematics.h") == 0);
+  free(r);
+
+  r = fuzzy_index_search(&idx, "kinematics", 10, &count, &has_more);
+  CHECK(r != NULL);
+  CHECK(count == 3);
+  CHECK(strcmp(fuzzy_index_text(&idx, r[0].entry_index), "physics/kinematics.cpp") == 0 ||
+        strcmp(fuzzy_index_text(&idx, r[0].entry_index), "physics/kinematics.h") == 0);
+  CHECK(find_text(&idx, r, count, "physics/k_foo_inematics.cpp") > 0);
+  free(r);
+
+  fuzzy_index_free(&idx);
+  return 0;
+}
+
 static int test_spans(void) {
   const char *items[] = { "src/main_file.c" };
   FuzzyIndex idx;
@@ -147,6 +199,8 @@ int main(void) {
   rc |= test_generic_basic();
   rc |= test_case_insensitive_and_limit();
   rc |= test_path_basename_preference();
+  rc |= test_contiguous_match_beats_split_subsequence();
+  rc |= test_extending_exact_query_keeps_exact_match_on_top();
   rc |= test_spans();
   rc |= test_limit_zero();
   rc |= test_empty_query_deterministic();
