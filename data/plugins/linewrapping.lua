@@ -593,23 +593,15 @@ function DocView.translate.next_line(doc, line, col, dv)
 end
 
 command.add(nil, {
-  ["line-wrapping:enable"] = function()
-    if core.active_view and core.active_view.doc then
-      core.active_view.wrapping_enabled = true
-      LineWrapping.update_docview_breaks(core.active_view)
-    end
-  end,
-  ["line-wrapping:disable"] = function()
-    if core.active_view and core.active_view.doc then
-      core.active_view.wrapping_enabled = false
-      LineWrapping.reconstruct_breaks(core.active_view, core.active_view:get_font(), math.huge)
-    end
-  end,
   ["line-wrapping:toggle"] = function()
-    if core.active_view and core.active_view.doc and core.active_view.wrapped_settings then
-      command.perform("line-wrapping:disable")
-    else
-      command.perform("line-wrapping:enable")
+    if core.active_view and core.active_view.doc then
+      if core.active_view.wrapped_settings then
+        core.active_view.wrapping_enabled = false
+        LineWrapping.reconstruct_breaks(core.active_view, core.active_view:get_font(), math.huge)
+      else
+        core.active_view.wrapping_enabled = true
+        LineWrapping.update_docview_breaks(core.active_view)
+      end
     end
   end
 })
