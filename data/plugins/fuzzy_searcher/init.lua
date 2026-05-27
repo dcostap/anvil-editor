@@ -2526,18 +2526,20 @@ function FSView:start_grep(base, line, grep)
     local seen = {}
     local args = { fuzzy_searcher.rg, "--vimgrep", "--color", "never", "-i", "-F", "--hidden", "--glob", "!.git/**", "-e", grep }
     if scope then args[#args+1] = "--"; for _, f in ipairs(scope) do args[#args+1] = f end end
-    grep_proc = process.start(args, { cwd = root, stdout = process.REDIRECT_PIPE, stderr = process.REDIRECT_DISCARD, stdin = process.REDIRECT_DISCARD })
+    local proc = process.start(args, { cwd = root, stdout = process.REDIRECT_PIPE, stderr = process.REDIRECT_DISCARD, stdin = process.REDIRECT_DISCARD })
+    grep_proc = proc
 
-    if grep_proc then
-      while true do
-        local l = grep_proc.stdout:read("line", { scan = 1 / config.fps })
+    if proc then
+      while gen == grep_generation and active_view == self do
+        local l = proc.stdout:read("line", { scan = 1 / config.fps })
         if l then
           local r = parse_vimgrep(l)
           if r and not add_result(r, seen, true) then break end
-        elseif not grep_proc:running() then break else coroutine.yield(1 / config.fps) end
+        elseif not proc:running() then break else coroutine.yield(1 / config.fps) end
       end
-      if grep_proc:running() then pcall(function() grep_proc:kill() end) end
-      grep_proc:wait(process.WAIT_DEADLINE)
+      if proc:running() then pcall(function() proc:kill() end) end
+      proc:wait(process.WAIT_DEADLINE)
+      if grep_proc == proc then grep_proc = nil end
     end
 
     if gen ~= grep_generation or active_view ~= self then return end
