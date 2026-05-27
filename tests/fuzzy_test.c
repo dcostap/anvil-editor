@@ -98,6 +98,12 @@ static int test_spans(void) {
   CHECK(n >= 2);
   CHECK(spans[0].start == 1);
 
+  const FuzzyEntry *e = &idx.entries[0];
+  n = fuzzy_match_text_spans(idx.lower_arena + e->lower_offset, e->len, "main", spans, 8);
+  CHECK(n == 1);
+  CHECK(spans[0].start == 5);
+  CHECK(spans[0].end == 8);
+
   fuzzy_index_free(&idx);
   return 0;
 }

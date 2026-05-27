@@ -51,6 +51,7 @@ FuzzySearchResult *fuzzy_index_search(const FuzzyIndex *idx, const char *query, 
 const char *fuzzy_index_text(const FuzzyIndex *idx, uint32_t entry_index);
 
 int fuzzy_match_score(FuzzyMode mode, const char *text, const char *lower, uint32_t len, uint32_t basename_start, const char *query);
+uint32_t fuzzy_match_text_spans(const char *lower, uint32_t len, const char *query, FuzzySpan *spans, uint32_t max_spans);
 uint32_t fuzzy_match_spans(const FuzzyIndex *idx, uint32_t entry_index, const char *query, FuzzySpan *spans, uint32_t max_spans);
 
 #endif

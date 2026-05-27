@@ -187,12 +187,13 @@ static int f_filter(lua_State *L) {
   return 1;
 }
 
-static int f_score(lua_State *L) {
+static int match_text(lua_State *L, bool as_table) {
   size_t text_len, query_len;
   const char *text = luaL_checklstring(L, 1, &text_len);
   const char *query = luaL_checklstring(L, 2, &query_len);
   (void)query_len;
   FuzzyMode mode = opt_mode(L, 3);
+  bool include_spans = as_table ? opt_spans(L, 3) : false;
   if (text_len > UINT32_MAX) return 0;
 
   char *lower = (char *)malloc(text_len + 1);
@@ -207,10 +208,46 @@ static int f_score(lua_State *L) {
     }
   }
   int score = fuzzy_match_score(mode, text, lower, (uint32_t)text_len, basename_start, query);
-  free(lower);
-  if (score == INT_MIN) return 0;
+  if (score == INT_MIN) {
+    free(lower);
+    return 0;
+  }
+
+  if (!as_table) {
+    free(lower);
+    lua_pushinteger(L, score);
+    return 1;
+  }
+
+  lua_createtable(L, 0, include_spans ? 3 : 2);
   lua_pushinteger(L, score);
+  lua_setfield(L, -2, "score");
+  lua_pushstring(L, text);
+  lua_setfield(L, -2, "text");
+  if (include_spans) {
+    FuzzySpan spans[FUZZY_MAX_RETURN_SPANS];
+    uint32_t count = fuzzy_match_text_spans(lower, (uint32_t)text_len, query, spans, FUZZY_MAX_RETURN_SPANS);
+    lua_createtable(L, count, 0);
+    for (uint32_t i = 0; i < count; ++i) {
+      lua_createtable(L, 2, 0);
+      lua_pushinteger(L, spans[i].start);
+      lua_rawseti(L, -2, 1);
+      lua_pushinteger(L, spans[i].end);
+      lua_rawseti(L, -2, 2);
+      lua_rawseti(L, -2, i + 1);
+    }
+    lua_setfield(L, -2, "spans");
+  }
+  free(lower);
   return 1;
+}
+
+static int f_score(lua_State *L) {
+  return match_text(L, false);
+}
+
+static int f_match(lua_State *L) {
+  return match_text(L, true);
 }
 
 static const luaL_Reg index_methods[] = {
@@ -226,6 +263,7 @@ static const luaL_Reg lib[] = {
   { "filter", f_filter },
   { "index", f_index },
   { "score", f_score },
+  { "match", f_match },
   { NULL, NULL }
 };
 

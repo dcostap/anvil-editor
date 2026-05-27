@@ -14,8 +14,7 @@ local file_context = require "core.file_context"
 local sidepanel = require "core.sidepanel"
 local Widget = require "widget"
 local TextBox = require "widget.textbox"
-local fuzzy_ok, fuzzy_native = pcall(require, "fuzzy")
-if not fuzzy_ok then fuzzy_native = nil end
+local fuzzy_native = require "fuzzy"
 
 local PreviewDocView = DocView:extend()
 
@@ -379,7 +378,7 @@ local function clear_native_file_index()
 end
 
 local function rebuild_native_file_index()
-  if not fuzzy_native or not files_cache then return nil end
+  if not files_cache then return nil end
   if files_fuzzy_index and files_fuzzy_index_generation == files_generation then return files_fuzzy_index end
   clear_native_file_index()
   local ok, idx = pcall(function()
@@ -600,16 +599,12 @@ local function split_words(q)
 end
 
 local SCORE_MATCH = 16
-local SCORE_GAP_START = -3
-local SCORE_GAP_EXTENSION = -1
 local BONUS_BOUNDARY = SCORE_MATCH / 2
 local BONUS_BOUNDARY_WHITE = BONUS_BOUNDARY + 2
 local BONUS_BOUNDARY_DELIMITER = BONUS_BOUNDARY + 1
 local BONUS_NON_WORD = BONUS_BOUNDARY
-local BONUS_CAMEL123 = BONUS_BOUNDARY + SCORE_GAP_EXTENSION
-local BONUS_CONSECUTIVE = -(SCORE_GAP_START + SCORE_GAP_EXTENSION)
-local BONUS_FIRST_CHAR_MULTIPLIER = 2
-local NEG_SCORE = -1000000000
+local BONUS_CAMEL123 = BONUS_BOUNDARY - 1
+local BONUS_CONSECUTIVE = 4
 
 local function char_class_at(text, idx)
   if idx < 1 or idx > #text then return "white" end
@@ -661,129 +656,13 @@ local function positions_to_spans(positions, offset)
   return spans
 end
 
-local function fuzzy_match_word(word, text)
-  word = trim_query(word):lower()
-  text = tostring(text or "")
-  if word == "" then return 0, {}, {} end
-
-  local lower = text:lower()
-  local m, n = #word, #lower
-  if m > n then return nil end
-
-  -- Cheap subsequence pre-check. The dynamic-programming pass below then picks
-  -- the best alignment and returns the exact characters used for the score.
-  local scan = 1
-  for i = 1, m do
-    local p = lower:find(word:sub(i, i), scan, true)
-    if not p then return nil end
-    scan = p + 1
-  end
-
-  local parents = {}
-  local prev, prev_run_bonus = {}, {}
-  for i = 1, m do
-    local ch = word:sub(i, i)
-    local curr, parent, curr_run_bonus = {}, {}, {}
-    local matched = false
-    local best_gap_value, best_gap_pos = NEG_SCORE, nil
-
-    for j = 1, n do
-      if i > 1 then
-        local k = j - 2 -- non-consecutive transitions have at least one gap char
-        local ps = k >= 1 and prev[k]
-        if ps then
-          local value = ps - SCORE_GAP_EXTENSION * k
-          if value > best_gap_value then
-            best_gap_value, best_gap_pos = value, k
-          end
-        end
-      end
-
-      if lower:sub(j, j) == ch then
-        local b = bonus_at(text, j)
-        local best_score, best_parent, best_run_bonus
-
-        if i == 1 then
-          best_score = SCORE_MATCH + b * BONUS_FIRST_CHAR_MULTIPLIER - (j - 1)
-          best_parent = 0
-          best_run_bonus = b
-        else
-          if j > 1 and prev[j - 1] then
-            local inherited = prev_run_bonus[j - 1] or 0
-            local consecutive_bonus
-            if b >= BONUS_BOUNDARY and b > inherited then
-              consecutive_bonus = b
-              best_run_bonus = b
-            else
-              consecutive_bonus = math.max(BONUS_CONSECUTIVE, b, inherited)
-              best_run_bonus = inherited
-            end
-            best_score = prev[j - 1] + SCORE_MATCH + consecutive_bonus
-            best_parent = j - 1
-          end
-          if best_gap_pos then
-            local gap_score = best_gap_value + SCORE_GAP_START + SCORE_GAP_EXTENSION * (j - 2) + SCORE_MATCH + b
-            if not best_score or gap_score > best_score then
-              best_score, best_parent, best_run_bonus = gap_score, best_gap_pos, b
-            end
-          end
-        end
-
-        if best_score then
-          curr[j], parent[j], curr_run_bonus[j] = best_score, best_parent, best_run_bonus or 0
-          matched = true
-        end
-      end
-    end
-
-    if not matched then return nil end
-    parents[i] = parent
-    prev, prev_run_bonus = curr, curr_run_bonus
-  end
-
-  local best_j, best_score
-  for j, score in pairs(prev) do
-    if not best_score or score > best_score or (score == best_score and j < best_j) then
-      best_j, best_score = j, score
-    end
-  end
-  if not best_j then return nil end
-
-  local positions = {}
-  local j = best_j
-  for i = m, 1, -1 do
-    positions[i] = j
-    j = parents[i][j]
-    if not j or j == 0 then break end
-  end
-
-  return best_score, positions_to_spans(positions), positions
-end
-
 local function fuzzy_match(query, text)
   query = trim_query(query)
   text = tostring(text or "")
   if query == "" then return 0, {} end
-
-  local total, spans = 0, {}
-  for _, word in ipairs(split_words(query)) do
-    local score, word_spans = fuzzy_match_word(word, text)
-    if not score then return nil end
-    total = total + score
-    for _, span in ipairs(word_spans) do spans[#spans+1] = span end
-  end
-
-  local base = text:match("[^/\\]+$") or text
-  local base_start = #text - #base + 1
-  local all_in_base = #spans > 0
-  for _, span in ipairs(spans) do
-    if span[1] < base_start then all_in_base = false; break end
-  end
-  if all_in_base then total = total + 80 end
-
-  -- Prefer concise candidates once the match quality is otherwise similar.
-  total = total - math.floor(#text / 8)
-  return total, spans
+  local match = fuzzy_native.match(text, query, { mode = "generic", spans = true })
+  if not match then return nil end
+  return match.score, match.spans or {}
 end
 
 local function fuzzy_match_file_fast_word(word, text, lower, base_start)
@@ -873,28 +752,24 @@ local function fuzzy_filter(items, query, limit, make_text)
     return out
   end
 
-  if fuzzy_native and not make_text then
-    local ok, native_results = pcall(function()
-      return fuzzy_native.filter(items, query, { mode = "generic", limit = limit, spans = true })
-    end)
-    if ok and native_results then
-      local out = {}
-      for _, match in ipairs(native_results) do
-        out[#out+1] = {
-          item = items[match.index],
-          text = match.text,
-          score = match.score or 0,
-          spans = match.spans or {}
-        }
-      end
-      return out
+  if not make_text then
+    local native_results = fuzzy_native.filter(items, query, { mode = "generic", limit = limit, spans = true })
+    local out = {}
+    for _, match in ipairs(native_results) do
+      out[#out+1] = {
+        item = items[match.index],
+        text = match.text,
+        score = match.score or 0,
+        spans = match.spans or {}
+      }
     end
+    return out
   end
 
   -- Keep only the best requested results instead of collecting and sorting every
-  -- match. The picker never exposes entries beyond the requested cap (callers
-  -- pass max+1 when they need has_more), so this preserves visible ordering while
-  -- avoiding large allocations/sorts in projects with tens of thousands of files.
+  -- match. This fallback is only used for lists whose display text is produced
+  -- by a Lua callback, which v1 of the native engine intentionally avoids in the
+  -- hot loop.
   local scored = {}
   for _, item in ipairs(items) do
     local text = make_text and make_text(item) or item
