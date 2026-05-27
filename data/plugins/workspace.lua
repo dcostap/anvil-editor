@@ -1,5 +1,6 @@
 -- mod-version:3
 local core = require "core"
+local command = require "core.command"
 local common = require "core.common"
 local storage = require "core.storage"
 
@@ -163,6 +164,22 @@ local function save_workspace()
 end
 
 
+local function primary_workspace_is_empty()
+  local primary = core.root_view and core.root_view:get_primary_node()
+  return primary and primary:is_empty() and #core.docs == 0
+end
+
+local function maybe_show_empty_project_file_tree()
+  -- Let workspace restoration, command-line file opening, and autosave recovery
+  -- settle first. If the project still has no open file tabs, expose the file
+  -- tree so a newly opened empty workspace has an obvious next action.
+  coroutine.yield()
+  coroutine.yield()
+  if primary_workspace_is_empty() and command.is_valid("editree:focus-and-show") then
+    command.perform("editree:focus-and-show")
+  end
+end
+
 local function load_workspace()
   core.add_thread(function()
     local workspace = consume_workspace(core.root_project().path)
@@ -179,6 +196,7 @@ local function load_workspace()
         core.add_project(system.absolute_path(dir_name))
       end
     end
+    maybe_show_empty_project_file_tree()
   end)
 end
 
