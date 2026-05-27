@@ -121,6 +121,68 @@ local function current_picker()
   end
 end
 
+local function view_label(view)
+  if not view then return "nil" end
+  local label = view.type_name or view.name
+  if type(view.get_name) == "function" then
+    local ok, name = pcall(view.get_name, view)
+    if ok and name and name ~= "" then label = label and (label .. ":" .. name) or name end
+  end
+  return tostring(label or view)
+end
+
+local function fuzzy_focus_log(event, picker, extra)
+  picker = picker or current_picker()
+  local input = picker and picker.input
+  local input_textview = input and input.textview
+  local visible = picker and picker.is_visible and picker:is_visible() or false
+  local text_len = "nil"
+  if input and type(input.get_text) == "function" then
+    local ok, text = pcall(input.get_text, input)
+    if ok and text then text_len = tostring(#text) end
+  end
+  core.log_quiet(
+    "Fuzzy focus: %s active=%s child=%s input=%s textview=%s input_active=%s visible=%s text_len=%s%s",
+    tostring(event),
+    view_label(core.active_view),
+    view_label(picker and picker.child_active),
+    view_label(input),
+    view_label(input_textview),
+    tostring(input and input.active),
+    tostring(visible),
+    text_len,
+    extra and (" " .. tostring(extra)) or ""
+  )
+end
+
+local function ensure_input_focus(picker, reason)
+  if not picker or not picker.input then return end
+  picker:swap_active_child(picker.input)
+  -- core.set_active_view only toggles SDL text input when the active view
+  -- changes. After focus churn/restart, SDL can report text input disabled
+  -- while the fuzzy textbox is still the active view, so force it back on.
+  if core.window and system and system.text_input then
+    system.text_input(core.window, true)
+  end
+  if reason then fuzzy_focus_log(reason, picker) end
+end
+
+local function key_to_fallback_text(key)
+  if type(key) ~= "string" then return nil end
+  if key == "space" then return " " end
+  if #key ~= 1 then return nil end
+  if keymap.modkeys.ctrl or keymap.modkeys.alt or keymap.modkeys.super or keymap.modkeys.altgr then return nil end
+  if keymap.modkeys.shift and key:match("^%l$") then return key:upper() end
+  return key
+end
+
+local function queue_textinput_fallback(picker, key)
+  local text = key_to_fallback_text(key)
+  if not picker or not text then return end
+  picker._pending_textinput_fallback = picker._pending_textinput_fallback or {}
+  table.insert(picker._pending_textinput_fallback, text)
+end
+
 local function modal_fuzzy_command_allowed(cmd)
   return type(cmd) == "string" and cmd:match("^fuzzy%-searcher:") ~= nil
 end
@@ -1578,7 +1640,8 @@ function FSView:new(prefix)
   ensure_file_index()
   self:show()
   self:layout()
-  self:swap_active_child(self.input)
+  ensure_input_focus(self)
+  fuzzy_focus_log("open", self, "prefix_len=" .. tostring(#tostring(prefix or "")))
   self:refresh(self.input:get_text())
 end
 
@@ -1902,6 +1965,8 @@ function FSView:on_mouse_pressed(button, x, y, clicks)
   self.pressed_result = nil
   self.pressed_clicks = clicks or 1
   self.forward_mouse_to_child = false
+
+  fuzzy_focus_log("mouse-pressed", self, string.format("button=%s clicks=%s input_hit=%s preview_hit=%s", tostring(button), tostring(clicks), tostring(self.input and self.input:mouse_on_top(x, y)), tostring(self:preview_contains(x, y))))
 
   if not self:panel_contains(x, y) then
     self:close()
@@ -2482,12 +2547,16 @@ end
 function FSView:on_text_input(text)
   -- Text input is the authoritative path for all printable characters,
   -- especially layout-dependent ones like AltGr, dead keys and IME output.
-  self:swap_active_child(self.input)
+  self._pending_textinput_fallback = nil
+  fuzzy_focus_log("text-input-before", self, "bytes=" .. tostring(#tostring(text or "")))
+  ensure_input_focus(self)
   self.input:on_text_input(text)
+  fuzzy_focus_log("text-input-after", self, "bytes=" .. tostring(#tostring(text or "")))
   return true
 end
 
 function FSView:close()
+  fuzzy_focus_log("close", self)
   kill_file_search()
   kill_grep()
   kill_fuzzy_grep_sessions()
@@ -2568,6 +2637,24 @@ end
 function FSView:update()
   self:layout()
   FSView.super.update(self)
+  if self._pending_textinput_fallback and self.input then
+    local pending = self._pending_textinput_fallback
+    self._pending_textinput_fallback = nil
+    fuzzy_focus_log("textinput-fallback", self, "count=" .. tostring(#pending) .. " text=" .. table.concat(pending, ""))
+    ensure_input_focus(self)
+    for _, text in ipairs(pending) do
+      self.input:on_text_input(text)
+    end
+  end
+  if self.input and core.active_view ~= self.input.textview then
+    local state = view_label(core.active_view) .. "|" .. view_label(self.child_active)
+    if state ~= self._last_unexpected_focus_state then
+      self._last_unexpected_focus_state = state
+      fuzzy_focus_log("update-unexpected-active", self)
+    end
+  else
+    self._last_unexpected_focus_state = nil
+  end
   self:refresh(self.input:get_text())
 end
 
@@ -2780,18 +2867,26 @@ keymap.on_key_pressed = function(key, ...)
     return keymap.__fuzzy_searcher_original_on_key_pressed(key, ...)
   end
 
+  local picker = current_picker()
   local stroke = modal_key_to_stroke(key)
   local fuzzy_cmd = modal_fuzzy_command(stroke)
   local textbox_cmd = not fuzzy_cmd and modal_textbox_command(stroke)
   if fuzzy_cmd then
+    fuzzy_focus_log("key-fuzzy-command", picker, "key=" .. tostring(key) .. " stroke=" .. tostring(stroke) .. " cmd=" .. tostring(fuzzy_cmd))
     command.perform(fuzzy_cmd, ...)
   elseif textbox_cmd then
+    fuzzy_focus_log("key-textbox-command", picker, "key=" .. tostring(key) .. " stroke=" .. tostring(stroke) .. " cmd=" .. tostring(textbox_cmd))
     command.perform(textbox_cmd, ...)
   elseif modal_should_let_text_input_through(key, stroke) then
     -- Named printable keys such as "space", "minus", "comma", etc. also
     -- produce textinput events. Do not consume them; otherwise the fuzzy input
     -- never sees the character.
+    ensure_input_focus(picker)
+    queue_textinput_fallback(picker, key)
+    fuzzy_focus_log("key-let-textinput-through", picker, "key=" .. tostring(key) .. " stroke=" .. tostring(stroke))
     return false
+  else
+    fuzzy_focus_log("key-consumed", picker, "key=" .. tostring(key) .. " stroke=" .. tostring(stroke))
   end
   -- The picker is modal: every non-modifier keypress is consumed while it is
   -- open, even when it is not one of the picker/input shortcuts above.
