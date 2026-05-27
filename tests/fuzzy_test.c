@@ -135,6 +135,65 @@ static int test_extending_exact_query_keeps_exact_match_on_top(void) {
   return 0;
 }
 
+static int test_rejects_long_scattered_coincidence_matches(void) {
+  const char *items[] = {
+    "game/c_xx_i_xx_n_xx_e_xx_m_xx_a_xx_t_xx_i_xx_c.cpp",
+    "game/cinematic.cpp",
+    "engine/foo_bar.cpp"
+  };
+  FuzzyIndex idx;
+  CHECK(fuzzy_index_build(&idx, items, 3, FUZZY_MODE_PATH));
+
+  uint32_t count = 0;
+  bool has_more = false;
+  FuzzySearchResult *r = fuzzy_index_search(&idx, "cinematic", 10, &count, &has_more);
+  CHECK(r != NULL);
+  CHECK(count == 1);
+  CHECK(strcmp(fuzzy_index_text(&idx, r[0].entry_index), "game/cinematic.cpp") == 0);
+  CHECK(find_text(&idx, r, count, "game/c_xx_i_xx_n_xx_e_xx_m_xx_a_xx_t_xx_i_xx_c.cpp") < 0);
+  free(r);
+
+  fuzzy_index_free(&idx);
+  return 0;
+}
+
+static int test_keeps_short_acronym_matches(void) {
+  const char *items[] = { "foo_bar.cpp", "document_view.lua", "alpha.lua" };
+  FuzzyIndex idx;
+  CHECK(fuzzy_index_build(&idx, items, 3, FUZZY_MODE_GENERIC));
+
+  uint32_t count = 0;
+  bool has_more = false;
+  FuzzySearchResult *r = fuzzy_index_search(&idx, "fb", 10, &count, &has_more);
+  CHECK(r != NULL);
+  CHECK(find_text(&idx, r, count, "foo_bar.cpp") >= 0);
+  free(r);
+
+  r = fuzzy_index_search(&idx, "dv", 10, &count, &has_more);
+  CHECK(r != NULL);
+  CHECK(find_text(&idx, r, count, "document_view.lua") >= 0);
+  free(r);
+
+  fuzzy_index_free(&idx);
+  return 0;
+}
+
+static int test_allows_reasonably_compact_long_subsequence(void) {
+  const char *items[] = { "core/docview.lua", "core/d_o_c_v_i_e_w.lua" };
+  FuzzyIndex idx;
+  CHECK(fuzzy_index_build(&idx, items, 2, FUZZY_MODE_PATH));
+
+  uint32_t count = 0;
+  bool has_more = false;
+  FuzzySearchResult *r = fuzzy_index_search(&idx, "docview", 10, &count, &has_more);
+  CHECK(r != NULL);
+  CHECK(find_text(&idx, r, count, "core/docview.lua") >= 0);
+  free(r);
+
+  fuzzy_index_free(&idx);
+  return 0;
+}
+
 static int test_spans(void) {
   const char *items[] = { "src/main_file.c" };
   FuzzyIndex idx;
@@ -201,6 +260,9 @@ int main(void) {
   rc |= test_path_basename_preference();
   rc |= test_contiguous_match_beats_split_subsequence();
   rc |= test_extending_exact_query_keeps_exact_match_on_top();
+  rc |= test_rejects_long_scattered_coincidence_matches();
+  rc |= test_keeps_short_acronym_matches();
+  rc |= test_allows_reasonably_compact_long_subsequence();
   rc |= test_spans();
   rc |= test_limit_zero();
   rc |= test_empty_query_deterministic();

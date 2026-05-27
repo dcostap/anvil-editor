@@ -169,6 +169,7 @@ static int score_word(FuzzyMode mode, const char *text, const char *lower, uint3
   }
 
   uint32_t scan = 0, first = UINT32_MAX, last = 0, prev = UINT32_MAX;
+  uint32_t max_gap = 0, current_run = 0, longest_run = 0;
   int score = 0;
   for (uint32_t i = 0; i < word->len; ++i) {
     char ch = word->text[i];
@@ -176,17 +177,38 @@ static int score_word(FuzzyMode mode, const char *text, const char *lower, uint3
     if (scan >= len) return FUZZY_SCORE_NO_MATCH;
     if (first == UINT32_MAX) first = scan;
     last = scan;
+
+    bool consecutive = prev != UINT32_MAX && scan == prev + 1;
+    if (consecutive) {
+      current_run++;
+    } else {
+      current_run = 1;
+      if (prev != UINT32_MAX) {
+        uint32_t gap = scan - prev - 1;
+        if (gap > max_gap) max_gap = gap;
+      }
+    }
+    if (current_run > longest_run) longest_run = current_run;
+
     score += 100;
     if (is_boundary_at(text, scan)) score += 70;
-    if (prev != UINT32_MAX && scan == prev + 1) score += 90;
+    if (consecutive) score += 90;
     if (mode == FUZZY_MODE_PATH && scan >= basename_start) score += 24;
     prev = scan;
     scan++;
   }
 
+  uint32_t span = last - first + 1;
+  uint32_t gaps = span - word->len;
+  bool weak_long_match = false;
+  if (word->len >= 4 && (span > word->len * 3 + 4 || max_gap > 12)) weak_long_match = true;
+  if (word->len >= 6 && longest_run < 3 && gaps > word->len) weak_long_match = true;
+  if (word->len >= 8 && longest_run < 4 && span > word->len * 2 + 4) weak_long_match = true;
+  if (weak_long_match) return FUZZY_SCORE_NO_MATCH;
+
   if (mode == FUZZY_MODE_PATH && first >= basename_start) score += 160;
   score -= (int)first;
-  score -= (int)((last - first) / 2);
+  score -= (int)(gaps / 2);
   return score;
 }
 
