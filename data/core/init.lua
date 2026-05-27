@@ -1469,14 +1469,29 @@ end
 
 function core.on_event(type, ...)
   local did_keymap = false
+  local active = core.active_view
+  local active_type = active and active.type_name
+  local fuzzy_input_debug = active_type == "plugins.fuzzy_searcher"
   if type == "textinput" then
+    if fuzzy_input_debug then
+      local text = (...)
+      core.log_quiet("Fuzzy input event: textinput active=%s supports_text_input=%s bytes=%d text=%s", tostring(active_type), tostring(active and active:supports_text_input()), #tostring(text or ""), tostring(text or ""))
+    end
     core.root_view:on_text_input(...)
   elseif type == "textediting" then
+    if fuzzy_input_debug then
+      local text, start, len = ...
+      core.log_quiet("Fuzzy input event: textediting active=%s supports_text_input=%s bytes=%d text=%s start=%s len=%s", tostring(active_type), tostring(active and active:supports_text_input()), #tostring(text or ""), tostring(text or ""), tostring(start), tostring(len))
+    end
     ime.on_text_editing(...)
   elseif type == "keypressed" then
     -- In some cases during IME composition input is still sent to us
     -- so we just ignore it.
     if ime.editing then return false end
+    if fuzzy_input_debug then
+      local key = (...)
+      core.log_quiet("Fuzzy input event: keypressed active=%s supports_text_input=%s key=%s", tostring(active_type), tostring(active and active:supports_text_input()), tostring(key))
+    end
     did_keymap = keymap.on_key_pressed(...)
   elseif type == "keyreleased" then
     keymap.on_key_released(...)

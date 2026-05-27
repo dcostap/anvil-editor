@@ -112,6 +112,14 @@ local function modal_key_to_stroke(key)
   return modal_normalize_stroke(table.concat(keys, "+"))
 end
 
+local function modal_modkeys_string()
+  local keys = {}
+  for _, mod in ipairs(modal_modkeys) do
+    if keymap.modkeys[mod] then keys[#keys+1] = mod end
+  end
+  return #keys > 0 and table.concat(keys, "+") or "none"
+end
+
 local function current_picker()
   if active_view and active_view:is_visible() then return active_view end
   local view = core.fuzzy_searcher_active_view
@@ -158,29 +166,7 @@ end
 local function ensure_input_focus(picker, reason)
   if not picker or not picker.input then return end
   picker:swap_active_child(picker.input)
-  -- core.set_active_view only toggles SDL text input when the active view
-  -- changes. After focus churn/restart, SDL can report text input disabled
-  -- while the fuzzy textbox is still the active view, so force it back on.
-  if core.window and system and system.text_input then
-    system.text_input(core.window, true)
-  end
   if reason then fuzzy_focus_log(reason, picker) end
-end
-
-local function key_to_fallback_text(key)
-  if type(key) ~= "string" then return nil end
-  if key == "space" then return " " end
-  if #key ~= 1 then return nil end
-  if keymap.modkeys.ctrl or keymap.modkeys.alt or keymap.modkeys.super or keymap.modkeys.altgr then return nil end
-  if keymap.modkeys.shift and key:match("^%l$") then return key:upper() end
-  return key
-end
-
-local function queue_textinput_fallback(picker, key)
-  local text = key_to_fallback_text(key)
-  if not picker or not text then return end
-  picker._pending_textinput_fallback = picker._pending_textinput_fallback or {}
-  table.insert(picker._pending_textinput_fallback, text)
 end
 
 local function modal_fuzzy_command_allowed(cmd)
@@ -1719,6 +1705,7 @@ function FSView:load_more(select_next)
   local rows = self:list_metrics().result_rows
   if select_next then self.pending_select_index = current + 1 end
   self.loaded_limit = common.clamp(current + rows, rows, self:max_result_limit())
+  self.loading_more = true
   self.force_refresh = true
   self.dirty = true
   self:refresh(self.input:get_text())
@@ -2274,8 +2261,11 @@ function FSView:refresh_normal(base, line, reset_selection)
   self:ensure_selection_visible()
 end
 
-function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, gen)
-  local limit = self:result_limit()
+function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, gen, preserve_results)
+  -- Grep results are streamed asynchronously. Do not page them by clearing and
+  -- restarting the search while the user scrolls; publish a growing prefix and
+  -- let selection stop naturally at the currently available end.
+  local limit = self:max_result_limit()
   local tokens = terms_to_legacy_tokens(terms)
   local session, preferred_session = ensure_fuzzy_grep_session(root, scope, tokens)
   if not session then return end
@@ -2291,10 +2281,12 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
     return table.concat(names, "/")
   end
 
-  self.results = {}
-  self.selected = 1
-  self.viewport_offset = 1
-  self.hovered_result = nil
+  if not preserve_results then
+    self.results = {}
+    self.selected = 1
+    self.viewport_offset = 1
+    self.hovered_result = nil
+  end
   self.has_more = true
   self.status = exact_results and string.format("Searching '%s'…", sessions_label())
     or string.format("Expanding fuzzy text search from '%s'…", sessions_label())
@@ -2438,15 +2430,20 @@ function FSView:start_grep(base, line, grep)
   kill_file_search()
   kill_grep()
 
-  self.results = {}
-  self.selected = 1
-  self.viewport_offset = 1
-  self.hovered_result = nil
+  local preserve_results = self.loading_more
+  self.loading_more = false
+  self.loaded_limit = self:max_result_limit()
+  if not preserve_results then
+    self.results = {}
+    self.selected = 1
+    self.viewport_offset = 1
+    self.hovered_result = nil
+  end
   self.has_more = false
   self.status = grep == "" and "Type text after # to search inside files" or "Searching exact text matches…"
   if grep == "" then return end
 
-  local limit = self:result_limit()
+  local limit = self:max_result_limit()
   local root = project_dir()
   local scope = nil
   if base ~= "" or line then
@@ -2460,8 +2457,15 @@ function FSView:start_grep(base, line, grep)
   local terms = parse_code_search_terms(grep)
   local single_token_exact = #terms == 1 and not terms[1].exact and trim_query(grep):lower() == terms[1].text
   if not exact_query and (#terms > 1 or single_token_exact) then
-    self:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, gen)
+    self:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, gen, preserve_results)
     return
+  end
+
+  if preserve_results then
+    self.results = {}
+    self.selected = 1
+    self.viewport_offset = 1
+    self.hovered_result = nil
   end
 
   core.add_thread(function()
@@ -2544,14 +2548,18 @@ function FSView:refresh(text)
   end
 end
 
+function FSView:supports_text_input()
+  return true
+end
+
 function FSView:on_text_input(text)
   -- Text input is the authoritative path for all printable characters,
   -- especially layout-dependent ones like AltGr, dead keys and IME output.
-  self._pending_textinput_fallback = nil
-  fuzzy_focus_log("text-input-before", self, "bytes=" .. tostring(#tostring(text or "")))
+  self._awaiting_textinput = nil
+  fuzzy_focus_log("text-input-before", self, "bytes=" .. tostring(#tostring(text or "")) .. " text=" .. tostring(text or ""))
   ensure_input_focus(self)
   self.input:on_text_input(text)
-  fuzzy_focus_log("text-input-after", self, "bytes=" .. tostring(#tostring(text or "")))
+  fuzzy_focus_log("text-input-after", self, "bytes=" .. tostring(#tostring(text or "")) .. " text=" .. tostring(text or ""))
   return true
 end
 
@@ -2637,14 +2645,14 @@ end
 function FSView:update()
   self:layout()
   FSView.super.update(self)
-  if self._pending_textinput_fallback and self.input then
-    local pending = self._pending_textinput_fallback
-    self._pending_textinput_fallback = nil
-    fuzzy_focus_log("textinput-fallback", self, "count=" .. tostring(#pending) .. " text=" .. table.concat(pending, ""))
-    ensure_input_focus(self)
-    for _, text in ipairs(pending) do
-      self.input:on_text_input(text)
-    end
+  if self._awaiting_textinput and not self._awaiting_textinput.logged and system.get_time() - self._awaiting_textinput.time > 0.25 then
+    local a = self._awaiting_textinput
+    a.logged = true
+    fuzzy_focus_log("textinput-missing-after-key", self,
+      "key=" .. tostring(a.key) ..
+      " stroke=" .. tostring(a.stroke) ..
+      " before_len=" .. tostring(a.text_len) ..
+      " mods=" .. modal_modkeys_string())
   end
   if self.input and core.active_view ~= self.input.textview then
     local state = view_label(core.active_view) .. "|" .. view_label(self.child_active)
@@ -2878,12 +2886,16 @@ keymap.on_key_pressed = function(key, ...)
     fuzzy_focus_log("key-textbox-command", picker, "key=" .. tostring(key) .. " stroke=" .. tostring(stroke) .. " cmd=" .. tostring(textbox_cmd))
     command.perform(textbox_cmd, ...)
   elseif modal_should_let_text_input_through(key, stroke) then
-    -- Named printable keys such as "space", "minus", "comma", etc. also
-    -- produce textinput events. Do not consume them; otherwise the fuzzy input
-    -- never sees the character.
+    -- Printable keys must be handled by SDL textinput, not by key-name
+    -- fallbacks; this preserves keyboard layout, AltGr, dead keys and IME.
     ensure_input_focus(picker)
-    queue_textinput_fallback(picker, key)
-    fuzzy_focus_log("key-let-textinput-through", picker, "key=" .. tostring(key) .. " stroke=" .. tostring(stroke))
+    picker._awaiting_textinput = {
+      time = system.get_time(),
+      key = key,
+      stroke = stroke,
+      text_len = picker.input and #(picker.input:get_text() or "") or nil,
+    }
+    fuzzy_focus_log("key-let-textinput-through", picker, "key=" .. tostring(key) .. " stroke=" .. tostring(stroke) .. " mods=" .. modal_modkeys_string())
     return false
   else
     fuzzy_focus_log("key-consumed", picker, "key=" .. tostring(key) .. " stroke=" .. tostring(stroke))
