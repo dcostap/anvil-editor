@@ -498,6 +498,10 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
 
   if (!anvil_d3d11_end_frame(ren_cache->window)) return false;
   SDL_ShowWindow(ren_cache->window);
+  if (!ren_cache->window_shown) {
+    SDL_RaiseWindow(ren_cache->window);
+    ren_cache->window_shown = true;
+  }
   g_rencache_last_frame_stats = g_rencache_frame_stats;
   ren_cache->command_buf_idx = 0;
   return true;
@@ -678,6 +682,10 @@ void rencache_update_rects(RenCache *rc, RenRect *rects, int count) {
 #endif
     if (initial_window) {
       SDL_ShowWindow(rc->window);
+      if (!rc->window_shown) {
+        SDL_RaiseWindow(rc->window);
+        rc->window_shown = true;
+      }
       initial_window = false;
     }
   }

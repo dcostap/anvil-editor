@@ -41,6 +41,7 @@ typedef struct {
   RenRect screen_rect;
   RenRect last_clip_rect;
   SDL_Window *window;   /* The cache can be used for both a window or surface */
+  bool window_shown;
   RenSurface rensurface;
 #ifdef ANVIL_USE_SDL_RENDERER
   int window_width;
