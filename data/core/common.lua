@@ -1,6 +1,7 @@
 ---Utility functions.
 ---@class core.common
 local common = {}
+local native_fuzzy = require "fuzzy"
 
 
 ---Checks if the byte at offset is a UTF-8 continuation byte.
@@ -249,53 +250,46 @@ function common.splice(t, at, remove, insert)
 end
 
 
-local function compare_score(a, b)
-  return a.score > b.score
-end
-
 local function compare_text(a, b)
   return tostring(a.text) < tostring(b.text)
 end
 
 local function fuzzy_match_items(items, needle, files)
-  local res = {}
   needle = (PLATFORM == "Windows" and files) and needle:gsub('/', PATHSEP) or needle
-  for _, item in ipairs(items) do
-    local score = 0
-    if needle ~= "" then
-      score = system.fuzzy_match(tostring(item), needle, files)
-    end
-    if score then
-      table.insert(res, { text = item, score = score })
-    end
+  if needle == "" then
+    local res = {}
+    for _, item in ipairs(items) do table.insert(res, item) end
+    if not files then table.sort(res, compare_text) end
+    return res
   end
-  if needle ~= "" then
-    table.sort(res, compare_score)
-  elseif not files then
-    table.sort(res, compare_text)
-  end
-  for i, item in ipairs(res) do
-    res[i] = item.text
-  end
+
+  local matches = native_fuzzy.filter(items, needle, {
+    mode = files and "path" or "generic",
+    limit = #items,
+    spans = false
+  })
+  local res = {}
+  for _, match in ipairs(matches) do res[#res+1] = items[match.index] end
   return res
 end
 
 
 ---Performs fuzzy matching.
 ---
----If the haystack is a string, a score ranging from 0 to 1 is returned. </br>
----If the haystack is a table, a table containing the haystack sorted in ascending
----order of similarity is returned.
+---If the haystack is a string, a numeric score is returned, or nil on no match. </br>
+---If the haystack is a table, a table containing the haystack sorted from best
+---to worst match is returned.
 ---@param haystack string
 ---@param needle string
----@param files? boolean If true, the matching process will be performed in reverse to better match paths.
+---@param files? boolean If true, path-aware matching/ranking is used.
 ---@return number
 ---@overload fun(haystack: string[], needle: string, files?: boolean): string[]
 function common.fuzzy_match(haystack, needle, files)
   if type(haystack) == "table" then
     return fuzzy_match_items(haystack, needle, files)
   end
-  return system.fuzzy_match(haystack, needle, files)
+  needle = (PLATFORM == "Windows" and files) and needle:gsub('/', PATHSEP) or needle
+  return native_fuzzy.score(tostring(haystack), needle, { mode = files and "path" or "generic" })
 end
 
 

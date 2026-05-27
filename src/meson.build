@@ -12,6 +12,8 @@ anvil_sources = [
     'api/canvas.c',
     'api/utf8.c',
     'api/tokenizer.c',
+    'api/fuzzy.c',
+    'fuzzy.c',
     'tokenizer/arena.c',
     'tokenizer/regex.c',
     'tokenizer/lutf8.c',
@@ -160,6 +162,13 @@ elif host_machine.system() == 'darwin'
 endif
 
 anvil_includes += include_directories('.')
+
+fuzzy_test = executable('fuzzy_test',
+    ['../tests/fuzzy_test.c', 'fuzzy.c'],
+    include_directories: anvil_includes,
+    c_args: anvil_cargs,
+)
+test('fuzzy', fuzzy_test)
 
 # load and configure linenoise
 if get_option('repl_history')

@@ -14,6 +14,8 @@ local file_context = require "core.file_context"
 local sidepanel = require "core.sidepanel"
 local Widget = require "widget"
 local TextBox = require "widget.textbox"
+local fuzzy_ok, fuzzy_native = pcall(require, "fuzzy")
+if not fuzzy_ok then fuzzy_native = nil end
 
 local PreviewDocView = DocView:extend()
 
@@ -233,6 +235,7 @@ local function modal_should_let_text_input_through(key, stroke)
   return type(key) == "string" and key ~= ""
 end
 local files_cache_root, files_cache, files_indexing, files_generation = nil, nil, false, 0
+local files_fuzzy_index, files_fuzzy_index_generation = nil, -1
 local command_cache
 local recent_commands = {}
 local recent_command_set = {}
@@ -367,11 +370,39 @@ local function kill_file_search()
   file_search_generation = file_search_generation + 1
 end
 
+local function clear_native_file_index()
+  if files_fuzzy_index and files_fuzzy_index.free then
+    pcall(function() files_fuzzy_index:free() end)
+  end
+  files_fuzzy_index = nil
+  files_fuzzy_index_generation = -1
+end
+
+local function rebuild_native_file_index()
+  if not fuzzy_native or not files_cache then return nil end
+  if files_fuzzy_index and files_fuzzy_index_generation == files_generation then return files_fuzzy_index end
+  clear_native_file_index()
+  local ok, idx = pcall(function()
+    return fuzzy_native.index(files_cache, { mode = "path" })
+  end)
+  if ok then
+    files_fuzzy_index = idx
+    files_fuzzy_index_generation = files_generation
+    return idx
+  end
+  return nil
+end
+
+local function native_file_index_ready()
+  return files_fuzzy_index and files_fuzzy_index_generation == files_generation
+end
+
 local function ensure_file_index()
   local root = project_dir()
   if files_cache and files_cache_root == root then return end
   if files_indexing and files_cache_root == root then return end
 
+  clear_native_file_index()
   files_cache_root = root
   files_cache = {}
   files_indexing = true
@@ -420,6 +451,7 @@ local function ensure_file_index()
       table.sort(t)
       files_cache = t
       files_indexing = false
+      rebuild_native_file_index()
       if active_view then active_view.dirty = true; active_view:schedule_update(true) end
     end
   end)
@@ -839,6 +871,24 @@ local function fuzzy_filter(items, query, limit, make_text)
       out[#out+1] = { item = items[i], text = text, score = 0, spans = {} }
     end
     return out
+  end
+
+  if fuzzy_native and not make_text then
+    local ok, native_results = pcall(function()
+      return fuzzy_native.filter(items, query, { mode = "generic", limit = limit, spans = true })
+    end)
+    if ok and native_results then
+      local out = {}
+      for _, match in ipairs(native_results) do
+        out[#out+1] = {
+          item = items[match.index],
+          text = match.text,
+          score = match.score or 0,
+          spans = match.spans or {}
+        }
+      end
+      return out
+    end
   end
 
   -- Keep only the best requested results instead of collecting and sorting every
@@ -1628,8 +1678,19 @@ end
 
 local function build_scope(base, line, max_count)
   if base:sub(1, 1) == ">" then base = "" end
-  local matches = fuzzy_filter(get_files(), base, max_count or 200)
+  local limit = max_count or 200
   local list = {}
+  if not line and native_file_index_ready() then
+    local ok, matches = pcall(function()
+      return files_fuzzy_index:search(base, { limit = limit, spans = false })
+    end)
+    if ok and matches then
+      for _, match in ipairs(matches) do list[#list+1] = match.text end
+      return list
+    end
+  end
+
+  local matches = fuzzy_filter(get_files(), base, limit)
   for _, match in ipairs(matches) do
     local f = match.item
     if (not line) or line_exists(f, line) then list[#list+1] = f end
@@ -2144,6 +2205,37 @@ function FSView:start_file_search(query, line, reset_selection)
   self:schedule_update(true)
 
   core.add_thread(function()
+    if not line and native_file_index_ready() then
+      local ok, native_results = pcall(function()
+        return files_fuzzy_index:search(query, { limit = keep_limit, spans = true })
+      end)
+      if ok and native_results and gen == file_search_generation and active_view == self then
+        local current_limit = self:result_limit()
+        local out = {}
+        for i = 1, math.min(current_limit, #native_results) do
+          local match = native_results[i]
+          out[#out+1] = {
+            kind = "file", label = match.text, file = match.text,
+            line = line or 1, col = 1, query = query,
+            match_spans = match.spans or {}
+          }
+        end
+        self.results = out
+        self.has_more = native_results.has_more or #native_results > current_limit
+        if self.pending_select_index then
+          self.selected = common.clamp(self.pending_select_index, 1, math.max(1, #out))
+          self.pending_select_index = nil
+        else
+          self.selected = common.clamp(self.selected, 1, math.max(1, #out))
+        end
+        self:ensure_selection_visible()
+        self.status = string.format("%d file matches shown%s — %d files indexed — %s",
+          #out, self.has_more and "+" or "", #(files_cache or {}), display_root(root))
+        self:schedule_update(true)
+        return
+      end
+    end
+
     local items = get_file_search_items()
     local scored = {}
     local matched = 0

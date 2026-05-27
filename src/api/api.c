@@ -13,6 +13,7 @@ int luaopen_encoding(lua_State* L);
 int luaopen_diff(lua_State *L);
 int luaopen_canvas(lua_State* L);
 int luaopen_tokenizer(lua_State *L);
+int luaopen_fuzzy(lua_State *L);
 
 #ifdef ANVIL_NET
   int luaopen_net(lua_State* L);
@@ -63,6 +64,7 @@ static const luaL_Reg libs[] = {
   { "diff",       luaopen_diff       },
   { "canvas",     luaopen_canvas     },
   { "tokenizer",  luaopen_tokenizer  },
+  { "fuzzy",      luaopen_fuzzy      },
   LUA_NET
   LUA_REPL
   LUA53_COMPATIBILITY
