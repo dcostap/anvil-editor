@@ -66,10 +66,11 @@ end
 if core.fuzzy_searcher_install_global_keymaps then
   core.fuzzy_searcher_install_global_keymaps()
 end
--- Wrap long lines at word boundaries and indent continuations like VSCode's deepIndent.
+-- Wrap long lines at word boundaries and visually indent continuations.
 config.plugins.linewrapping = config.plugins.linewrapping or {}
 config.plugins.linewrapping.mode = "word"
-config.plugins.linewrapping.wrapping_indent = "deepIndent"
+config.plugins.linewrapping.indent = true
+config.plugins.linewrapping.wrapping_indent = 6
 -- Keep the current-line background visible even while text is selected.
 config.highlight_current_line = true
 -- Keep 28 lines of vertical context around the caret when moving/typing.

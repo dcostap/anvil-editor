@@ -20,6 +20,8 @@ local translate = require "core.doc.translate"
 ---@field guide boolean
 ---Whether or not we should indent ourselves like the first line of a wrapped block.
 ---@field indent boolean
+---Extra visual spaces added before wrapped continuation lines.
+---@field wrapping_indent integer
 ---Whether or not to enable wrapping by default when opening files.
 ---@field enable_by_default boolean
 ---Requires tokenization
@@ -33,6 +35,8 @@ config.plugins.linewrapping = common.merge({
   guide = true,
   -- Whether or not we should indent ourselves like the first line of a wrapped block.
   indent = true,
+  -- Extra visual spaces added before wrapped continuation lines.
+  wrapping_indent = 0,
   -- Whether or not to enable wrapping by default when opening files.
   enable_by_default = false,
   -- Requires tokenization
@@ -66,6 +70,13 @@ config.plugins.linewrapping = common.merge({
       default = true
     },
     {
+      label = "Wrapping Indent",
+      description = "Extra visual spaces added before wrapped continuation lines.",
+      path = "wrapping_indent",
+      type = "number",
+      default = 0
+    },
+    {
       label = "Enable by Default",
       description = "Whether or not to enable wrapping by default when opening files.",
       path = "enable_by_default",
@@ -88,6 +99,13 @@ local LineWrapping = {}
 -- Optimzation function. The tokenizer is relatively slow (at present), and
 -- so if we don't need to run it, should be run sparingly.
 local function spew_tokens(doc, line) if line < math.huge then return math.huge, "normal", doc:get_utf8_line(line) end end
+
+local function get_extra_wrapping_indent_width(default_font)
+  local spaces = tonumber(config.plugins.linewrapping.wrapping_indent) or 0
+  if spaces <= 0 then return 0 end
+  return default_font:get_width(string.rep(" ", spaces))
+end
+
 local function get_tokens(doc, line)
   if config.plugins.linewrapping.require_tokenization then
     return doc.highlighter:each_token(line)
@@ -105,6 +123,7 @@ function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode)
     if idx == 1 or idx == math.huge and config.plugins.linewrapping.indent then
       local _, indent_end = text:find("^%s+")
       if indent_end then begin_width = font:get_width(text:sub(1, indent_end)) end
+      begin_width = begin_width + get_extra_wrapping_indent_width(default_font)
     end
     local w = font:get_width(text)
     if xoffset + w > width then
