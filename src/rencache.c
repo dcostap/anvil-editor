@@ -18,6 +18,7 @@
 #endif
 
 #ifdef _WIN32
+  #include <windows.h>
   #include <dwmapi.h>
 #endif
 
@@ -33,6 +34,41 @@
 
 #define CMD_BUF_RESIZE_RATE 1.2
 #define CMD_BUF_INIT_SIZE (1024 * 512)
+
+#ifdef _WIN32
+static HWND rencache_get_hwnd(SDL_Window *window) {
+  SDL_PropertiesID props = SDL_GetWindowProperties(window);
+  return (HWND) SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
+}
+
+static void rencache_activate_window(SDL_Window *window) {
+  HWND hwnd = rencache_get_hwnd(window);
+  if (!hwnd) return;
+
+  if (IsIconic(hwnd)) ShowWindow(hwnd, SW_RESTORE);
+
+  /* SDL_RaiseWindow() is not enough in the failing startup path: the window is
+  ** visible, but Windows/SDL never reports input focus until the user alt-tabs.
+  ** Attach to the current foreground thread while activating so SetForegroundWindow
+  ** has the best chance to move keyboard focus to the newly shown editor window. */
+  HWND foreground = GetForegroundWindow();
+  DWORD foreground_thread = foreground ? GetWindowThreadProcessId(foreground, NULL) : 0;
+  DWORD current_thread = GetCurrentThreadId();
+  BOOL attached = FALSE;
+  if (foreground_thread && foreground_thread != current_thread) {
+    attached = AttachThreadInput(current_thread, foreground_thread, TRUE);
+  }
+
+  SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+  BringWindowToTop(hwnd);
+  SetActiveWindow(hwnd);
+  SetFocus(hwnd);
+  SetForegroundWindow(hwnd);
+
+  if (attached) AttachThreadInput(current_thread, foreground_thread, FALSE);
+}
+#endif
 #define CMD_BUF_CANVAS_INIT_SIZE (1024 * 64)
 #define COMMAND_BARE_SIZE offsetof(Command, command)
 
@@ -500,6 +536,9 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
   SDL_ShowWindow(ren_cache->window);
   if (!ren_cache->window_shown) {
     SDL_RaiseWindow(ren_cache->window);
+#ifdef _WIN32
+    rencache_activate_window(ren_cache->window);
+#endif
     ren_cache->window_shown = true;
   }
   g_rencache_last_frame_stats = g_rencache_frame_stats;
@@ -684,6 +723,9 @@ void rencache_update_rects(RenCache *rc, RenRect *rects, int count) {
       SDL_ShowWindow(rc->window);
       if (!rc->window_shown) {
         SDL_RaiseWindow(rc->window);
+#ifdef _WIN32
+        rencache_activate_window(rc->window);
+#endif
         rc->window_shown = true;
       }
       initial_window = false;
