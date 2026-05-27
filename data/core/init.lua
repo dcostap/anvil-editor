@@ -1355,7 +1355,14 @@ end
 
 
 function core.custom_log(level, show, backtrace, fmt, ...)
-  local text = string.format(fmt, ...)
+  local ok, text = pcall(string.format, fmt, ...)
+  if not ok then
+    local parts = { tostring(fmt) }
+    for i = 1, select("#", ...) do
+      parts[#parts + 1] = tostring(select(i, ...))
+    end
+    text = table.concat(parts, " ") .. " (log format error: " .. tostring(text) .. ")"
+  end
   if show then
     local s = style.log[level]
     if core.status_view then
@@ -2320,6 +2327,13 @@ function core.run_step(options)
 
   local renderer_stats = renderer.get_last_frame_stats and renderer.get_last_frame_stats() or {}
   local step_stats = did_redraw and last_core_step_stats or {}
+  step_stats.event_count = step_stats.event_count or 0
+  step_stats.event_ms = step_stats.event_ms or 0
+  step_stats.update_ms = step_stats.update_ms or 0
+  step_stats.pre_draw_ms = step_stats.pre_draw_ms or 0
+  step_stats.draw_emit_ms = step_stats.draw_emit_ms or 0
+  step_stats.renderer_end_ms = step_stats.renderer_end_ms or 0
+  step_stats.frame_time_ms = step_stats.frame_time_ms or 0
   local live_resizing = core.window_resizing_until and core.window_resizing_until > system.get_time()
   resize_stats_log {
     immediate = immediate,
