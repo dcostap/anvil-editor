@@ -125,11 +125,32 @@ function core.set_project(project)
 end
 
 
-function core.open_project(project)
+function core.open_project_in_same_window(project)
   local project = core.set_project(project)
   core.root_view:close_all_docviews()
   update_recents_project("add", project.path)
   command.perform("core:restart")
+end
+
+function core.open_project_in_new_window(project)
+  local exe = EXEFILE or (EXEDIR and (EXEDIR .. PATHSEP .. "anvil.exe")) or "anvil"
+  local ok, process = pcall(require, "core.process")
+  if ok and process and process.start then
+    local proc = process.start({ exe, project }, {
+      detach = true,
+      stdin = process.REDIRECT_DISCARD,
+      stdout = process.REDIRECT_DISCARD,
+      stderr = process.REDIRECT_DISCARD,
+    })
+    if proc then return true end
+  end
+  system.exec(string.format("%q %q", exe, project))
+  return true
+end
+
+-- Compatibility alias for existing plugins/user configs.
+function core.open_project(project)
+  return core.open_project_in_same_window(project)
 end
 
 

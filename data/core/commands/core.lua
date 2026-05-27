@@ -149,7 +149,7 @@ local function change_project_directory(use_dialog)
   open_directory("Change Project Folder", use_dialog, false, function(abs_path)
     if abs_path[1] == core.root_project().path then return end
     core.confirm_close_docs(core.docs, function(dirpath)
-      core.open_project(dirpath)
+      core.open_project_in_same_window(dirpath)
     end, abs_path[1])
   end)
 end
@@ -160,7 +160,7 @@ local function open_project_directory(use_dialog)
       core.error("Directory %q is currently opened", abs_path[1])
       return
     end
-    system.exec(string.format("%q %q", EXEFILE, abs_path[1]))
+    core.open_project_in_new_window(abs_path[1])
   end)
 end
 

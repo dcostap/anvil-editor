@@ -116,7 +116,7 @@ function EmptyView:new()
     local idx = self:get_selected()
     local data = self:get_row_data(idx)
     if clicks == 2 then
-      core.open_project(data.path)
+      core.open_project_in_same_window(data.path)
     end
   end
 

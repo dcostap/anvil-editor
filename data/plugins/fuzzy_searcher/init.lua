@@ -223,13 +223,7 @@ local function get_recent_projects()
 end
 
 local function open_anvil_window(path)
-  local exe = EXEFILE or (EXEDIR and (EXEDIR .. PATHSEP .. "anvil.exe")) or "anvil"
-  process.start({ exe, path }, {
-    detach = true,
-    stdin = process.REDIRECT_DISCARD,
-    stdout = process.REDIRECT_DISCARD,
-    stderr = process.REDIRECT_DISCARD,
-  })
+  core.open_project_in_new_window(path)
 end
 
 local function kill_grep()
@@ -2428,7 +2422,7 @@ function FSView:confirm(new_window)
     if new_window then
       open_anvil_window(path)
     else
-      core.open_project(path)
+      core.open_project_in_same_window(path)
     end
     return
   end

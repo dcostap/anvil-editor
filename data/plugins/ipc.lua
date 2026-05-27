@@ -895,7 +895,7 @@ system.get_time = function()
                 ipc:call_async(primary_instance, "core.change_directory", nil, path)
               else
                 if #cli.unhandled_arguments > 1 then
-                  system.exec(string.format("%q %q", EXEFILE, path))
+                  core.open_project_in_new_window(path)
                 else
                   open_directory = true
                 end
@@ -942,7 +942,7 @@ ipc:register_method("core.change_directory", function(directory)
     system.raise_window(core.window)
     if directory == core.root_project().path then return end
     core.confirm_close_docs(core.docs, function(dirpath)
-      core.open_project(dirpath)
+      core.open_project_in_same_window(dirpath)
     end, directory)
   end
 end, {{name = "directory", type = "string"}})
