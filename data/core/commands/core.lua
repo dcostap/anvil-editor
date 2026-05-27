@@ -108,7 +108,7 @@ local function open_file(use_dialog, label, selection_callback, allow_directorie
   })
 end
 
-local function open_directory(label, use_dialog, allow_many, callback)
+local function open_directory(label, use_dialog, allow_many, callback, select_text)
   local dirname = common.dirname(core.root_project().path)
   local text
   if dirname then
@@ -141,7 +141,8 @@ local function open_directory(label, use_dialog, allow_many, callback)
       end
       callback({abs_path})
     end,
-    suggest = suggest_directory
+    suggest = suggest_directory,
+    select_text = select_text
   })
 end
 
@@ -161,7 +162,7 @@ local function open_project_directory(use_dialog)
       return
     end
     core.open_project_in_new_window(abs_path[1])
-  end)
+  end, true)
 end
 
 local function add_project_directory(use_dialog)
