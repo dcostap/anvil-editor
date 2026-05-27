@@ -569,8 +569,10 @@ function translate.end_of_line(doc, line, col)
   if not wrapping_active_for_doc(doc) then return old_translate_end_of_line(doc, line, col) end
   local idx, ncol = get_line_idx_col_count(core.active_view, line, col)
   local nline, ncol2 = get_idx_line_col(core.active_view, idx + 1)
-  if nline ~= line then return line, math.huge end
-  return line, ncol2 - 1
+  if nline ~= line then return old_translate_end_of_line(doc, line, col) end
+  local wrapped_end_col = ncol2 - 1
+  if col == wrapped_end_col then return old_translate_end_of_line(doc, line, col) end
+  return line, wrapped_end_col
 end
 
 local old_translate_start_of_line = translate.start_of_line
