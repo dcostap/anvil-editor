@@ -846,11 +846,10 @@ local function detect_binary_preview(path)
 end
 
 local function tokenize_code_query(q)
-  local s = q:gsub("([a-z])([A-Z])", "%1 %2")
-             :gsub("([A-Z]+)([A-Z][a-z])", "%1 %2")
-             :gsub("[_%-%./\\]+", " ")
   local t = {}
-  for w in s:lower():gmatch("%S+") do if #w > 1 then t[#t+1] = w end end
+  for w in tostring(q or ""):lower():gmatch("%S+") do
+    if #w > 1 then t[#t+1] = w end
+  end
   return t
 end
 
