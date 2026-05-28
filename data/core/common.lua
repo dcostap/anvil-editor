@@ -250,8 +250,12 @@ function common.splice(t, at, remove, insert)
 end
 
 
+local function fuzzy_item_text(item)
+  return type(item) == "table" and tostring(item.text) or tostring(item)
+end
+
 local function compare_text(a, b)
-  return tostring(a.text) < tostring(b.text)
+  return fuzzy_item_text(a) < fuzzy_item_text(b)
 end
 
 local function fuzzy_match_items(items, needle, files)
@@ -263,7 +267,9 @@ local function fuzzy_match_items(items, needle, files)
     return res
   end
 
-  local matches = native_fuzzy.filter(items, needle, {
+  local texts = {}
+  for i, item in ipairs(items) do texts[i] = fuzzy_item_text(item) end
+  local matches = native_fuzzy.filter(texts, needle, {
     mode = files and "path" or "generic",
     limit = #items,
     spans = false
