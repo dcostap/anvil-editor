@@ -2868,10 +2868,28 @@ local function picker_previous()
   if view then view:select_delta(-1); view:schedule_update(true) end
 end
 
+local function selected_text_for_search()
+  local view = core.active_view
+  local doc = view and view.doc
+  if not doc then return "" end
+  local text = doc:get_text(table.unpack({ doc:get_selection() })) or ""
+  return text
+end
+
+local function quote_exact_query(text)
+  text = tostring(text or "")
+  return '"' .. text:gsub('"', '""') .. '"'
+end
+
 function open(prefix)
   local view = current_picker()
   if view then view:close() end
-  active_view = FSView(prefix or "")
+  prefix = prefix or ""
+  if prefix == "#" then
+    local selection = selected_text_for_search()
+    if selection ~= "" then prefix = "# " .. quote_exact_query(selection) end
+  end
+  active_view = FSView(prefix)
   core.fuzzy_searcher_active_view = active_view
 end
 
