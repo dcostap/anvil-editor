@@ -589,7 +589,7 @@ command.add(nil, {
   ["sidepanel:open-current-file"] = function()
     local view = M.current_main_view(core.active_view)
     if not view or not view.extends or not view:extends(DocView) or not view.doc then return false end
-    M.open_doc_in_side(view.doc, { source_view = view, focus = false })
+    M.open_doc_in_side(view.doc, { source_view = view, focus = true })
     return true
   end,
 })

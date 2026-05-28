@@ -342,6 +342,7 @@ keymap.add_direct {
 
   ["ctrl+z"] = "doc:undo",
   ["ctrl+y"] = "doc:redo",
+  ["ctrl+shift+z"] = "doc:redo",
   ["ctrl+x"] = "doc:cut",
   ["ctrl+c"] = { "markdown-view:copy", "doc:copy" },
   ["ctrl+v"] = "doc:paste",
