@@ -65,6 +65,10 @@ The old personal `~\.config\anvil` workflow has been promoted into the fork:
 
 `anvil_defaults.lua` replaces the old user `init.lua` for the default Anvil experience. Keep personal machine-only state out of the repo, such as sessions, logs, caches, and fuzzy-search recent command history.
 
+## Logging / diagnostics
+
+When adding new functionality, use `core.log_quiet(...)` liberally for diagnostics that could help debug future bugs or unexpected behavior. Prefer quiet logs for feature probes, optional integrations, state transitions, fallback decisions, and background task results. Quiet logs are useful in pasted logs without annoying the user. Use visible `core.log`, `core.warn`, or `core.error` only when the user should actively notice something.
+
 ## Lua/plugin development
 
 Built-in plugins live in this repo under `data\plugins`.

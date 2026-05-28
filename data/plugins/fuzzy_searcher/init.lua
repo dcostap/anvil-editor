@@ -7,6 +7,7 @@ local style = require "core.style"
 local common = require "core.common"
 local config = require "core.config"
 local process = require "core.process"
+local http = require "core.http"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
 local ImageView = require "core.imageview"
@@ -272,6 +273,22 @@ local function compact_age(ts)
   if elapsed < day then return tostring(math.floor(elapsed / hour)) .. "h" end
   if elapsed < week then return tostring(math.floor(elapsed / day)) .. "d" end
   return tostring(math.floor(elapsed / week)) .. "w"
+end
+
+local function filetime_to_time(filetime)
+  if filetime == nil then return nil end
+  local n = tonumber(filetime)
+  if not n then return nil end
+  return math.floor((n / 10000000) - 11644473600)
+end
+
+local function format_size(size)
+  local n = tonumber(size)
+  if not n then return "" end
+  if n < 1024 then return tostring(n) .. " B" end
+  if n < 1024 * 1024 then return string.format("%.1f KB", n / 1024) end
+  if n < 1024 * 1024 * 1024 then return string.format("%.1f MB", n / (1024 * 1024)) end
+  return string.format("%.2f GB", n / (1024 * 1024 * 1024))
 end
 
 local function existing_absolute_dir(text)
@@ -1444,6 +1461,24 @@ local function draw_new_project_result_row(font, r, x, y, width)
   draw_highlighted_text(font, r.project or r.label or "", cx, y, math.max(0, x + width - cx), style.text, {})
 end
 
+local function draw_everything_result_row(font, r, x, y, width)
+  local gap = style.padding.x
+  local kind_w = font:get_width("folder") + gap
+  local size_w = math.max(font:get_width("999.9 MB"), font:get_width(r.size_label or "")) + gap
+  local date_w = font:get_width("999w") + gap
+  local meta_w = kind_w + size_w + date_w
+  local path_w = math.max(0, width - meta_w)
+  local kind = r.is_folder and "folder" or "file"
+  local kind_color = r.is_folder and (style.accent or style.text) or (style.dim or style.text)
+  draw_file_result_row(font, r.path or r.label, r.match_spans, r.is_folder and "@ " or "", x, y, path_w)
+  local mx = x + path_w + gap
+  renderer.draw_text(font, kind, mx, y, kind_color)
+  mx = mx + kind_w
+  renderer.draw_text(font, truncate_text(font, r.size_label or "", size_w - gap), mx, y, style.dim or style.text)
+  mx = mx + size_w
+  renderer.draw_text(font, truncate_text(font, r.modified_label or "", date_w - gap), mx, y, style.dim or style.text)
+end
+
 local function draw_command_result_row(font, r, x, y, width)
   local label, spans = result_list_label_and_spans(r)
   local binding, preview = command_preview_parts(r.command)
@@ -1572,6 +1607,68 @@ local function build_scope(base, line, max_count)
   return list
 end
 
+local everything = {
+  state = "unknown",
+  probe_generation = 0,
+  search_generation = 0,
+  host = os.getenv("EVERYTHING_HOST") or "localhost",
+  port = os.getenv("EVERYTHING_PORT") or "54321",
+}
+
+local function everything_endpoint()
+  return "http://" .. everything.host .. ":" .. everything.port .. "/"
+end
+
+local function probe_everything(view)
+  if everything.state == "available" or everything.state == "unavailable" or everything.state == "probing" then return end
+  everything.state = "probing"
+  everything.probe_generation = everything.probe_generation + 1
+  local gen = everything.probe_generation
+  core.log_quiet("Fuzzy Everything: probing %s", everything_endpoint())
+  http.get(everything_endpoint(), { json = "1", search = "", count = "1" }, {
+    timeout = 1,
+    on_done = function(ok, err)
+      if gen ~= everything.probe_generation then return end
+      everything.state = ok and "available" or "unavailable"
+      core.log_quiet("Fuzzy Everything: probe %s%s", ok and "available" or "unavailable", err and (" — " .. tostring(err)) or "")
+      if ok and view and active_view == view and view:is_project_mode() then
+        view.dirty = true
+        view:schedule_update(true)
+      end
+    end
+  })
+end
+
+local function everything_full_path(item)
+  local path = tostring(item.path or "")
+  local name = item.name
+  if name and name ~= "" then
+    if path == "" then return common.normalize_path(name) end
+    return common.normalize_path(path .. PATHSEP .. name)
+  end
+  return common.normalize_path(path)
+end
+
+local function everything_result_from_item(item, query)
+  local path = everything_full_path(item)
+  if not path or path == "" then return nil end
+  local is_folder = item.type == "folder"
+  local modified_time = filetime_to_time(item.date_modified)
+  local _, spans = fuzzy_match(query or "", path)
+  return {
+    kind = "everything",
+    label = path,
+    path = path,
+    file = is_folder and nil or path,
+    project = is_folder and path or nil,
+    is_folder = is_folder,
+    query = query,
+    match_spans = spans or {},
+    size_label = is_folder and "" or format_size(item.size),
+    modified_label = modified_time and compact_age(modified_time) or "",
+  }
+end
+
 function FSView:new(prefix)
   FSView.super.new(self, nil, true) -- floating widget; widget lib owns RootView routing
   file_context.exclude_main_view(self)
@@ -1600,6 +1697,12 @@ function FSView:new(prefix)
   self.preview_highlight_key = nil
   self.preview_blocked = nil
   self.preview_mouse_pressed = false
+  self.everything_results = {}
+  self.everything_total = 0
+  self.everything_has_more = false
+  self.everything_loading = false
+  self.everything_query_key = nil
+  self.everything_status = ""
 
   local source_view = core.active_view
   local source_doc = source_view and source_view.doc
@@ -2192,7 +2295,77 @@ function FSView:start_file_search(query, line, reset_selection)
   end)
 end
 
-function FSView:refresh_normal(base, line, reset_selection)
+function FSView:start_everything_project_search(query, offset, append)
+  query = trim_query(query)
+  if query == "" then
+    self.everything_results = {}
+    self.everything_total = 0
+    self.everything_has_more = false
+    self.everything_loading = false
+    self.everything_status = ""
+    return
+  end
+  if everything.state ~= "available" then
+    core.log_quiet("Fuzzy Everything: search deferred; state=%s query=%q", tostring(everything.state), query)
+    probe_everything(self)
+    return
+  end
+
+  everything.search_generation = everything.search_generation + 1
+  local gen = everything.search_generation
+  local count = fuzzy_searcher.everything_page_size or 80
+  offset = offset or 0
+  self.everything_loading = true
+  self.everything_status = offset > 0 and "Loading more Everything results…" or "Searching Everything…"
+  core.log_quiet("Fuzzy Everything: searching query=%q offset=%d count=%d append=%s", query, offset, count, tostring(append))
+  self:schedule_update(true)
+
+  http.get(everything_endpoint(), {
+    json = "1",
+    search = query,
+    count = tostring(count),
+    offset = tostring(offset),
+    path_column = "1",
+    size_column = "1",
+    date_modified_column = "1",
+    sort = "name",
+    ascending = "1",
+    path = "1",
+  }, {
+    timeout = 2,
+    on_done = function(ok, _err, data)
+      if gen ~= everything.search_generation or active_view ~= self then return end
+      self.everything_loading = false
+      self.loading_more = false
+      if not ok or type(data) ~= "table" then
+        core.log_quiet("Fuzzy Everything: search failed query=%q err=%s data_type=%s", query, tostring(_err), type(data))
+        everything.state = "unavailable"
+        self.everything_results = {}
+        self.everything_total = 0
+        self.everything_has_more = false
+        self.everything_status = ""
+        self.dirty = true
+        self:schedule_update(true)
+        return
+      end
+      local total = tonumber(data.totalResults) or 0
+      local out = append and self.everything_results or {}
+      for _, item in ipairs(data.results or {}) do
+        local r = everything_result_from_item(item, query)
+        if r then out[#out+1] = r end
+      end
+      self.everything_results = out
+      self.everything_total = total
+      self.everything_has_more = #out < total
+      self.everything_status = string.format("%d Everything results%s", #out, self.everything_has_more and "+" or "")
+      core.log_quiet("Fuzzy Everything: search ok query=%q shown=%d total=%d has_more=%s", query, #out, total, tostring(self.everything_has_more))
+      self.dirty = true
+      self:schedule_update(true)
+    end
+  })
+end
+
+function FSView:refresh_normal(base, line, reset_selection, force_refresh)
   local limit = self:result_limit()
   local mode = base:sub(1, 1)
   if mode == ">" or mode == "@" then base = base:sub(2):gsub("^%s+", "") end
@@ -2274,7 +2447,35 @@ function FSView:refresh_normal(base, line, reset_selection)
     add_command_results(base, limit)
   elseif mode == "@" then
     kill_file_search()
-    add_project_results(base, limit)
+    local project_limit = limit
+    local project_query = base
+    if trim_query(project_query) ~= "" then
+      project_limit = math.max(1, math.floor(limit * 0.35))
+      if everything.state == "unknown" then probe_everything(self) end
+      if everything.state == "available" then
+        if self.everything_query_key ~= project_query then
+          self.everything_query_key = project_query
+          self:start_everything_project_search(project_query, 0, false)
+        elseif force_refresh and self.loading_more and self.everything_has_more and not self.everything_loading then
+          self:start_everything_project_search(project_query, #(self.everything_results or {}), true)
+        end
+      end
+    else
+      self.everything_results = {}
+      self.everything_total = 0
+      self.everything_has_more = false
+      self.everything_status = ""
+      self.everything_query_key = nil
+    end
+    add_project_results(project_query, project_limit)
+    if trim_query(project_query) ~= "" and everything.state == "available" then
+      out[#out+1] = { header = true, label = self.everything_loading and "Everything — searching…" or "Everything" }
+      local remaining = math.max(0, limit - #out)
+      for i = 1, math.min(remaining, #(self.everything_results or {})) do
+        out[#out+1] = self.everything_results[i]
+      end
+      self.has_more = self.has_more or self.everything_has_more
+    end
   else
     async = add_file_results(base, limit)
     if async then return end
@@ -2282,7 +2483,8 @@ function FSView:refresh_normal(base, line, reset_selection)
   end
 
   if mode == "@" then
-    self.status = string.format("%d recent projects", #get_recent_projects())
+    local extra = self.everything_status and self.everything_status ~= "" and (" — " .. self.everything_status) or ""
+    self.status = string.format("%d recent projects%s", #get_recent_projects(), extra)
   elseif files_indexing then
     self.status = string.format("Indexing files… %d found — %s", #(files_cache or {}), display_root(project_dir()))
   else
@@ -2589,7 +2791,7 @@ function FSView:refresh(text)
   else
     kill_grep()
     kill_fuzzy_grep_sessions()
-    self:refresh_normal(base, line, query_changed)
+    self:refresh_normal(base, line, query_changed, force_refresh)
   end
 end
 
@@ -2658,7 +2860,7 @@ function FSView:confirm(new_window)
     command.perform(cmd)
     return
   end
-  if (r.kind == "project" or r.kind == "new_project") and r.project then
+  if (r.kind == "project" or r.kind == "new_project" or (r.kind == "everything" and r.is_folder)) and r.project then
     local path = r.project
     self:close()
     if new_window or r.kind == "new_project" then
@@ -2777,6 +2979,8 @@ function FSView:draw()
         draw_command_result_row(font, r, x + pad, yy, row_text_w)
       elseif r.kind == "project" then
         draw_project_result_row(font, r, x + pad, yy, row_text_w)
+      elseif r.kind == "everything" then
+        draw_everything_result_row(font, r, x + pad, yy, row_text_w)
       elseif r.kind == "new_project" then
         draw_new_project_result_row(font, r, x + pad, yy, row_text_w)
       else
