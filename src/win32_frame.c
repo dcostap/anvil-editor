@@ -464,7 +464,16 @@ static LRESULT CALLBACK frame_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
       break;
 
     case WM_NCACTIVATE:
-      if (frame->enabled) return TRUE;
+      if (frame->enabled) {
+        /* Let SDL's window proc see activation changes so it can update its
+           internal keyboard focus state.  If we swallow this message, Win32
+           still focuses the HWND and keydown events arrive, but SDL keeps
+           SDL_WINDOW_INPUT_FOCUS / SDL_GetKeyboardFocus() false; then SDL's
+           WM_CHAR path refuses to emit SDL_EVENT_TEXT_INPUT, so text fields
+           appear focused but cannot type. */
+        CallWindowProcW(frame->old_proc, hwnd, msg, wparam, lparam);
+        return TRUE;
+      }
       break;
 
     case WM_MOUSEMOVE:
