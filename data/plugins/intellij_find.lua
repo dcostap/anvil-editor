@@ -359,7 +359,11 @@ local function select_match(view, state, index, scroll)
     view.doc:set_selection(match.line, match.col2, match.line, match.col1)
   end)
   if scroll ~= false then
-    view:scroll_to_make_visible(match.line, match.col1, true)
+    -- Match navigation should behave like the built-in find command: only move
+    -- the camera if the match is outside the visible range.  Using
+    -- scroll_to_make_visible() here keeps enforcing scroll-context padding and
+    -- makes nearby matches appear to jerk the viewport on each step.
+    view:scroll_to_line(match.line, true)
   end
   state.found = true
   set_status(state)
@@ -519,7 +523,7 @@ local function add_match_to_selection(view, state, reverse)
   end)
   state.current = index
   set_status(state)
-  view:scroll_to_make_visible(match.line, match.col1, true)
+  view:scroll_to_line(match.line, true)
   core.redraw = true
 end
 
