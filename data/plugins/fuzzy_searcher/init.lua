@@ -2886,7 +2886,7 @@ function open(prefix)
   prefix = prefix or ""
   if prefix == "#" then
     local selection = selected_text_for_search()
-    if selection ~= "" then prefix = "# " .. quote_exact_query(selection) end
+    if selection ~= "" then prefix = "#" .. quote_exact_query(selection) end
   end
   active_view = FSView(prefix)
   core.fuzzy_searcher_active_view = active_view
