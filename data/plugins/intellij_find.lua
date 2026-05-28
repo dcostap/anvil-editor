@@ -1,393 +1,298 @@
 -- mod-version:3
--- Local clone of Anvil's built-in in-file find commands.
--- Kept separate so we can evolve it toward IntelliJ-like search behavior without
--- patching Anvil's core files.
+-- View-local in-file find/replace overlay.
+--
+-- This intentionally does not use core.command_view: find is editor-local UI.
+-- Each DocView owns its own find state, so two splits of the same Doc can keep
+-- independent queries, current match, highlights, and visible input bars.
 
 local core = require "core"
 local command = require "core.command"
 local config = require "core.config"
 local keymap = require "core.keymap"
-local search = require "core.doc.search"
 local style = require "core.style"
+local common = require "core.common"
+local translate = require "core.doc.translate"
+local Doc = require "core.doc"
+local Highlighter = require "core.doc.highlighter"
 local DocView = require "core.docview"
 local CommandView = require "core.commandview"
 local MessageBox = require "widget.messagebox"
 
-local last_view, last_fn, last_text, last_sel
-local find_active = false
-local case_sensitive = config.find_case_sensitive or false
-local find_regex = config.find_regex or false
-local found_expression
-local find_label = "Find"
-local find_info_text = ""
-local find_info_error = false
-local replace_active = false
-local replace_text = ""
-local replace_focus = "find"
-local find_state_by_doc = setmetatable({}, { __mode = "k" })
+local find_state_by_view = setmetatable({}, { __mode = "k" })
+local last_global_query = ""
+local update_after_input
 
-if not DocView.__intellij_find_search_text then
-  DocView.__intellij_find_search_text = true
-  local draw_line_text = DocView.draw_line_text
-  function DocView:draw_line_text(line, x, y)
-    local search_selection_cache = self.__line_text_search_selection_cache
-    local search_selections = search_selection_cache and search_selection_cache[line]
-    if not search_selections then
-      search_selections = {}
-      if not search_selection_cache then
-        for _, line1, col1, line2, col2 in self.doc:get_selections(true) do
-          if line == line1 and line <= line2 and self.doc:is_search_selection(line1, col1, line2, col2) then
-            table.insert(search_selections, { start = col1, stop = col2 })
-          end
-        end
-      end
-    end
-    if #search_selections == 0 then
-      return draw_line_text(self, line, x, y)
-    end
+local SingleLineHighlighter = Highlighter:extend()
+function SingleLineHighlighter:get_line(idx)
+  return { text = self.doc.lines[1], tokens = { "normal", self.doc.lines[1] } }
+end
+function SingleLineHighlighter:start() end
 
-    local default_font = self:get_font()
-    local tx, ty = x, y + self:get_line_text_y_offset()
-    local tokens = self.doc.highlighter:get_line(line).tokens
-    local last_token = nil
-    if #tokens > 0 and string.sub(tokens[#tokens], -1) == "\n" then
-      last_token = #tokens - 1
-    end
-    local _, indent_size = self.doc:get_indent_info()
-    local col = 1
-    local start_tx = tx
+local SingleLineDoc = Doc:extend()
+function SingleLineDoc:reset()
+  SingleLineDoc.super.reset(self)
+  self.highlighter = SingleLineHighlighter(self)
+  self:reset_syntax()
+end
+function SingleLineDoc:insert(line, col, text)
+  SingleLineDoc.super.insert(self, line, col, tostring(text or ""):gsub("[\r\n]", ""))
+end
 
-    local function is_selected(c)
-      for _, sel in ipairs(search_selections) do
-        if c >= sel.start and c < sel.stop then return true end
-      end
-      return false
-    end
+local LocalFindInputView = DocView:extend()
+function LocalFindInputView:__tostring() return "LocalFindInputView" end
 
-    for tidx, type, text in self.doc.highlighter:each_token(line) do
-      local font = style.syntax_fonts[type] or default_font
-      if font ~= default_font then font:set_tab_size(indent_size) end
-      if tidx == last_token then text = text:sub(1, -2) end
-      local i, len = 1, #text
-      while i <= len do
-        local chunk_start = i
-        local selected = is_selected(col)
-        while i <= len and is_selected(col) == selected do
-          i = i + 1
-          col = col + 1
-        end
-        local chunk = text:sub(chunk_start, i - 1)
-        -- Keep syntax/default foreground unchanged for focused search matches;
-        -- the match is indicated by the background + outline only.
-        local color = style.syntax[type] or style.syntax["normal"]
-        tx = renderer.draw_text(font, chunk, tx, ty, color, { tab_offset = tx - start_tx })
-        if tx > self.position.x + self.size.x then break end
-      end
-      if tx > self.position.x + self.size.x then break end
-    end
+function LocalFindInputView:new(state, field_name)
+  LocalFindInputView.super.new(self, SingleLineDoc())
+  self.local_find_input = true
+  self.local_find_state = state
+  self.local_find_field = field_name
+  self.scrollable = false
+  self.hide_scrollbars = true
+  self.font = "font"
+  self.label = ""
+  self.gutter_width = 0
+  self.size.y = 0
 
-    return self:get_line_height()
+  local input = self
+  local raw_insert = self.doc.raw_insert
+  function self.doc:raw_insert(...)
+    raw_insert(self, ...)
+    input:on_doc_text_change()
+  end
+  local raw_remove = self.doc.raw_remove
+  function self.doc:raw_remove(...)
+    raw_remove(self, ...)
+    input:on_doc_text_change()
   end
 end
 
-if not DocView.__intellij_find_search_outline then
-  DocView.__intellij_find_search_outline = true
-  local draw_line_body = DocView.draw_line_body
-  local match_pad_x = math.max(1, SCALE)
-  local match_pad_y = 0
-
-  local function each_search_selection_rect(dv, line, x, y, fn)
-    local line_height = dv:get_line_height()
-    for _, line1, col1, line2, col2 in dv.doc:get_selections(true) do
-      if line >= line1 and line <= line2 then
-        local text = dv.doc.lines[line]
-        if line1 ~= line then col1 = 1 end
-        if line2 ~= line then col2 = #text + 1 end
-        if dv.doc:is_search_selection(line1, col1, line, col2) then
-          local x1 = x + dv:get_col_x_offset(line, col1)
-          local x2 = x + dv:get_col_x_offset(line, col2)
-          if x1 ~= x2 then
-            fn(x1 - match_pad_x, x2 + match_pad_x, y - match_pad_y, line_height + match_pad_y * 2)
-          end
-        end
-      end
+function LocalFindInputView:on_doc_text_change()
+  local state = self.local_find_state
+  if not state or state.suppress_input_change then return end
+  if self.local_find_field == "find" then
+    if update_after_input and state.owner_view then
+      update_after_input(state.owner_view, state)
     end
-  end
-
-  local function draw_outline(x1, x2, y, h, color)
-    local thickness = math.max(1, SCALE)
-    renderer.draw_rect(x1, y, x2 - x1, thickness, color)
-    renderer.draw_rect(x1, y + h - thickness, x2 - x1, thickness, color)
-    renderer.draw_rect(x1, y, thickness, h, color)
-    renderer.draw_rect(x2 - thickness, y, thickness, h, color)
-  end
-
-  function DocView:draw_line_body(line, x, y)
-    local state = find_state_by_doc[self.doc]
-    local search_draw_active = state and state.active
-    local outline = search_draw_active and style.search_selection_outline
-    local secondary_outline = search_draw_active and (style.search_selection_secondary_outline or outline)
-    if search_draw_active and secondary_outline then
-      local line_height = self:get_line_height()
-      local matches = state.matches or {}
-      for _, match_index in ipairs((state.match_indexes_by_line and state.match_indexes_by_line[line]) or {}) do
-        if match_index ~= state.current then
-          local match = matches[match_index]
-          local x1 = x + self:get_col_x_offset(line, match.col1) - match_pad_x
-          local x2 = x + self:get_col_x_offset(line, match.col2) + match_pad_x
-          renderer.draw_rect(x1, y - match_pad_y, x2 - x1, line_height + match_pad_y * 2, style.selectionhighlight or style.search_selection)
-          draw_outline(x1, x2, y - match_pad_y, line_height + match_pad_y * 2, secondary_outline)
-        end
-      end
-    end
-
-    local bg = search_draw_active and style.search_selection
-    if bg then
-      each_search_selection_rect(self, line, x, y, function(x1, x2, ry, rh)
-        renderer.draw_rect(x1, ry, x2 - x1, rh, bg)
-      end)
-    end
-
-    local lh = draw_line_body(self, line, x, y)
-    if outline then
-      each_search_selection_rect(self, line, x, y, function(x1, x2, ry, rh)
-        draw_outline(x1, x2, ry, rh, outline)
-      end)
-    end
-    return lh
+  else
+    core.redraw = true
   end
 end
 
-if not CommandView.__intellij_find_widget then
-  CommandView.__intellij_find_widget = true
-  local commandview_draw = CommandView.draw
-  local commandview_get_line_screen_position = CommandView.get_line_screen_position
+function LocalFindInputView:get_text()
+  return self.doc:get_text(1, 1, 1, math.huge)
+end
 
-  local function find_widget_layout(view)
-    local font = view:get_font()
-    local pad = style.padding.x
-    local sep = math.max(1, style.divider_size or SCALE)
-    local find_label = "Find:"
-    local replace_label = "Replace by:"
-    local left_w = font:get_width(find_label) + pad * 2
-    local info_w = find_info_text ~= "" and (font:get_width(find_info_text) + pad * 2) or (80 * SCALE)
-    local input_max_w = 420 * SCALE
-    local input_min_w = 120 * SCALE
-    local replace_label_w = replace_active and (font:get_width(replace_label) + pad * 2) or 0
-    local replace_w = replace_active and math.max(input_min_w, 220 * SCALE) or 0
-    local available = view.size.x - left_w - info_w - replace_label_w - replace_w - sep * (replace_active and 3 or 2) - pad * (replace_active and 3 or 2)
-    local input_w = math.max(input_min_w, math.min(input_max_w, available))
-    local input_x = view.position.x + left_w + sep + pad
-    local right_sep_x = input_x + input_w + pad
-    local info_x = right_sep_x + sep + pad
-    local replace_label_x = info_x + info_w + pad
-    local replace_sep_x = replace_label_x + replace_label_w
-    local replace_x = replace_sep_x + sep + pad
-    local replace_right_sep_x = replace_x + replace_w + pad
-    local lh = view:get_line_height()
-    local line_y = view.position.y + (view.size.y - lh) / 2
-    return {
-      font = font,
-      label = find_label,
-      replace_label = replace_label,
-      left_w = left_w,
-      sep = sep,
-      input_x = input_x,
-      input_w = input_w,
-      right_sep_x = right_sep_x,
-      info_x = info_x,
-      info_w = info_w,
-      replace_label_x = replace_label_x,
-      replace_label_w = replace_label_w,
-      replace_sep_x = replace_sep_x,
-      replace_x = replace_x,
-      replace_w = replace_w,
-      replace_right_sep_x = replace_right_sep_x,
-      line_y = line_y,
-      line_h = lh,
-      pad = pad,
-    }
+function LocalFindInputView:set_text(text, select)
+  self.doc:remove(1, 1, math.huge, math.huge)
+  self.doc:text_input(text or "")
+  if select then
+    self.doc:set_selection(math.huge, math.huge, 1, 1)
+  else
+    self.doc:set_selection(1, math.huge, 1, math.huge)
   end
+end
 
-  function CommandView:get_line_screen_position(line, col)
-    if find_active and self == core.command_view then
-      local layout = find_widget_layout(self)
-      local input_x = (replace_active and replace_focus == "replace") and layout.replace_x or layout.input_x
-      if col then
-        return input_x + self:get_col_x_offset(1, col), layout.line_y
-      end
-      return input_x, layout.line_y
-    end
-    return commandview_get_line_screen_position(self, line, col)
+function LocalFindInputView:select_all()
+  self.doc:set_selection(math.huge, math.huge, 1, 1)
+end
+
+function LocalFindInputView:move_to_end()
+  self.doc:set_selection(1, math.huge, 1, math.huge)
+end
+
+function LocalFindInputView:get_gutter_width()
+  return 0, 0
+end
+
+function LocalFindInputView:get_scrollable_size()
+  return self:get_line_height()
+end
+
+function LocalFindInputView:get_h_scrollable_size()
+  return math.huge
+end
+
+function LocalFindInputView:draw_scrollbar() end
+function LocalFindInputView:draw_line_highlight() end
+
+function LocalFindInputView:get_line_screen_position(line, col)
+  local x = self.position.x - self.scroll.x
+  local y = self.position.y + math.floor((self.size.y - self:get_line_height()) / 2)
+  if col then
+    return x + self:get_col_x_offset(1, col), y
   end
+  return x, y
+end
 
-  function CommandView:draw()
-    if not (find_active and self == core.command_view) then
-      return commandview_draw(self)
-    end
+function LocalFindInputView:draw()
+  local _, indent_size = self.doc:get_indent_info()
+  self:get_font():set_tab_size(indent_size)
+  self:prepare_line_body_draw_cache(1, 1)
+  local x, y = self:get_line_screen_position(1)
+  self:draw_line_body(1, x, y)
+  self:draw_overlay()
+  self.__line_body_highlight_cache = nil
+  self.__line_body_selection_cache = nil
+  self.__line_gutter_selection_cache = nil
+end
 
-    self:draw_background(style.background)
-    local layout = find_widget_layout(self)
-    local y = layout.line_y + self:get_line_text_y_offset()
-    renderer.draw_text(layout.font, layout.label, self.position.x + layout.pad, y, style.dim or style.text)
-    renderer.draw_rect(self.position.x + layout.left_w, self.position.y, layout.sep, self.size.y, style.divider)
-    renderer.draw_rect(layout.right_sep_x, self.position.y, layout.sep, self.size.y, style.divider)
-
-    if replace_active and replace_focus == "replace" then
-      renderer.draw_text(layout.font, last_text or "", layout.input_x, y, style.text)
-    else
-      core.push_clip_rect(layout.input_x, self.position.y, layout.input_w, self.size.y)
-      self:draw_line_body(1, layout.input_x, layout.line_y)
-      self:draw_overlay()
-      core.pop_clip_rect()
-    end
-
-    if find_info_text ~= "" then
-      renderer.draw_text(layout.font, find_info_text, layout.info_x, y, find_info_error and (style.error or style.text) or (style.dim or style.text))
-    end
-
-    if replace_active then
-      renderer.draw_text(layout.font, layout.replace_label, layout.replace_label_x, y, style.dim or style.text)
-      renderer.draw_rect(layout.replace_sep_x, self.position.y, layout.sep, self.size.y, style.divider)
-      renderer.draw_rect(layout.replace_right_sep_x, self.position.y, layout.sep, self.size.y, style.divider)
-      if replace_focus == "replace" then
-        core.push_clip_rect(layout.replace_x, self.position.y, layout.replace_w, self.size.y)
-        self:draw_line_body(1, layout.replace_x, layout.line_y)
-        self:draw_overlay()
-        core.pop_clip_rect()
-      else
-        renderer.draw_text(layout.font, replace_text or "", layout.replace_x, y, style.text)
-      end
-    end
-  end
+local function field_text(field)
+  return field and field:get_text() or ""
 end
 
 local function is_searchable_docview(view)
-  return view and view:extends(DocView) and not view:is(CommandView) and view.doc
+  return view and view.extends and view:extends(DocView)
+    and not view:is(CommandView)
+    and not view.local_find_input
+    and view.doc
 end
 
-local function doc()
-  return is_searchable_docview(core.active_view) and core.active_view.doc or (last_view and last_view.doc)
-end
-
-local function with_last_view(fn, ...)
-  if last_view and last_view.with_selection_state then
-    return last_view:with_selection_state(fn, ...)
+local function active_docview()
+  local view = core.active_view
+  if view and view.local_find_input then
+    local owner = view.local_find_state and view.local_find_state.owner_view
+    if is_searchable_docview(owner) then return true, owner end
   end
-  return fn(...)
+  if is_searchable_docview(view) then return true, view end
+  return false
 end
 
-local function get_find_tooltip()
-  local rf = keymap.get_binding("find-replace:repeat-find")
-  local ti = keymap.get_binding("find-replace:toggle-sensitivity")
-  local tr = keymap.get_binding("find-replace:toggle-regex")
-  return (find_regex and "[Regex] " or "") ..
-    (case_sensitive and "[Sensitive] " or "") ..
-    (rf and ("Press " .. rf .. " to select the next match.") or "") ..
-    (ti and (" " .. ti .. " toggles case sensitivity.") or "") ..
-    (tr and (" " .. tr .. " toggles regex find.") or "")
+local function copy_selection(view)
+  return view:with_selection_state(function()
+    return { view.doc:get_selection() }
+  end)
 end
 
-local function find_all_matches(d, text)
-  if not d or text == "" then return {} end
-
-  local matches = {}
-  local compiled
-  if find_regex then
-    local ok, result = pcall(regex.compile, text, case_sensitive and "" or "i")
-    if not ok or not result then return matches end
-    compiled = result
-  elseif not case_sensitive then
-    text = text:lower()
-  end
-
-  for line_nr, line_text in ipairs(d.lines) do
-    local source = (not find_regex and not case_sensitive) and line_text:lower() or line_text
-    local pos = 1
-    while pos <= #source do
-      local s, e
-      if find_regex then
-        s, e = regex.find_offsets(compiled, source, pos)
-      else
-        s, e = source:find(text, pos, true)
-      end
-      if not s then break end
-      if e >= s and (e ~= #source or s ~= e) then
-        matches[#matches+1] = {
-          line = line_nr,
-          col1 = s,
-          col2 = e == #source and e or e + 1,
-        }
-      end
-      pos = math.max(e + 1, s + 1)
-    end
-  end
-
-  return matches
+local function set_selection(view, sel)
+  if not view or not view.doc or not sel then return end
+  return view:with_selection_state(function()
+    view.doc:set_selection(table.unpack(sel))
+  end)
 end
 
-local function match_at_selection(matches)
-  if not last_view then return 0 end
-  local l1, c1, l2, c2 = last_view.doc:get_selection(true)
-  for i, match in ipairs(matches) do
-    if match.line == l1 and match.line == l2 and match.col1 == c1 and match.col2 == c2 then
-      return i
-    end
-  end
-  return 0
-end
-
-local function update_find_label(text, matches, current)
-  if not find_active then return end
-  matches = matches or {}
-  if text and text ~= "" then
-    if #matches == 0 then
-      find_info_text = "0 results"
-      find_info_error = true
-    else
-      find_info_text = string.format("%d / %d", current or 0, #matches)
-      find_info_error = false
-    end
+local function ensure_state(view)
+  local state = find_state_by_view[view]
+  if not state then
+    state = {
+      owner_view = view,
+      visible = false,
+      input_active = false,
+      mode = "find",
+      focus = "find",
+      origin = nil,
+      matches = {},
+      match_indexes_by_line = {},
+      current = 0,
+      found = false,
+      error = false,
+      case_sensitive = config.find_case_sensitive or false,
+      regex = config.find_regex or false,
+      change_id = -1,
+    }
+    state.find = LocalFindInputView(state, "find")
+    state.replace = LocalFindInputView(state, "replace")
+    find_state_by_view[view] = state
   else
-    find_info_text = ""
-    find_info_error = false
+    state.owner_view = view
   end
-  core.command_view.label = ""
+  return state
+end
+
+local function focus_field(view, state, field_name)
+  state.input_active = true
+  state.focus = field_name or state.focus or "find"
+  local field = state.focus == "replace" and state.replace or state.find
+  field.local_find_owner = view
+  core.set_active_view(field)
+  core.blink_reset()
+  core.redraw = true
+end
+
+local function active_find_state()
+  local active = core.active_view
+  if active and active.local_find_input then
+    local state = active.local_find_state
+    local view = state and state.owner_view
+    if state and state.visible and state.input_active and view then return true, view, state end
+  end
+  local ok, view = active_docview()
+  if not ok then return false end
+  local state = find_state_by_view[view]
+  if state and state.visible and state.input_active then return true, view, state end
+  return false
+end
+
+local function active_visible_find_state()
+  local ok, view = active_docview()
+  if not ok then return false end
+  local state = find_state_by_view[view]
+  if state and state.visible then return true, view, state end
+  return false
+end
+
+local function visible_find_state(view)
+  local state = view and find_state_by_view[view]
+  if state and state.visible then return state end
 end
 
 local function build_match_indexes_by_line(matches)
   local by_line = {}
   for i, match in ipairs(matches or {}) do
-    local line_matches = by_line[match.line]
-    if not line_matches then
-      line_matches = {}
-      by_line[match.line] = line_matches
+    local list = by_line[match.line]
+    if not list then
+      list = {}
+      by_line[match.line] = list
     end
-    line_matches[#line_matches + 1] = i
+    list[#list + 1] = i
   end
   return by_line
 end
 
-local function set_find_state(d, text, matches, current)
-  if d then
-    matches = matches or {}
-    d.intellij_find_active = find_active
-    find_state_by_doc[d] = {
-      active = find_active,
-      text = text,
-      matches = matches,
-      match_indexes_by_line = build_match_indexes_by_line(matches),
-      current = current or 0,
-    }
+local function find_all_matches(doc, state)
+  local query = field_text(state.find)
+  if not doc or query == "" then return {}, nil end
+
+  local matches = {}
+  local compiled
+  if state.regex then
+    local ok, result = pcall(regex.compile, query, state.case_sensitive and "" or "i")
+    if not ok or not result then return {}, "Invalid regex" end
+    compiled = result
+  elseif not state.case_sensitive then
+    query = query:lower()
   end
+
+  for line_nr, line_text in ipairs(doc.lines) do
+    local source = (not state.regex and not state.case_sensitive) and line_text:lower() or line_text
+    local pos = 1
+    while pos <= #source do
+      local s, e
+      if state.regex then
+        s, e = regex.find_offsets(compiled, source, pos)
+      else
+        s, e = source:find(query, pos, true)
+      end
+      if not s then break end
+      if e and e >= s and (e ~= #source or s ~= e) then
+        matches[#matches + 1] = { line = line_nr, col1 = s, col2 = e == #source and e or e + 1 }
+      end
+      pos = math.max((e or s) + 1, s + 1)
+    end
+  end
+
+  return matches, nil
 end
 
-local function clear_find_state(d)
-  if d then
-    d.intellij_find_active = nil
-    find_state_by_doc[d] = nil
-    d:clear_search_selections()
+local function selection_match_index(view, matches)
+  local l1, c1, l2, c2 = table.unpack(view:with_selection_state(function()
+    return { view.doc:get_selection(true) }
+  end))
+  for i, match in ipairs(matches or {}) do
+    if match.line == l1 and match.line == l2 and match.col1 == c1 and match.col2 == c2 then
+      return i
+    end
   end
+  return 0
 end
 
 local function compare_pos(line_a, col_a, line_b, col_b)
@@ -396,421 +301,738 @@ local function compare_pos(line_a, col_a, line_b, col_b)
   return 0
 end
 
-local function choose_match(matches, text, reverse)
+local function choose_match(view, state, reverse, from_origin)
+  local matches = state.matches or {}
   if #matches == 0 then return 0 end
 
-  if reverse == nil and text ~= "" then
-    local l1, c1, l2, c2 = last_view.doc:get_selection(true)
-    if c1 ~= c2 or l1 ~= l2 then
-      local selected_text = last_view.doc:get_text(l1, c1, l2, c2)
-      if selected_text == text then
-        local idx = match_at_selection(matches)
-        if idx > 0 then return idx end
-      end
+  if from_origin then
+    local origin = state.origin or copy_selection(view)
+    local line, col = origin[1] or 1, origin[2] or 1
+    for i, match in ipairs(matches) do
+      if match.line == line and match.col1 == col then return i end
     end
+    for i, match in ipairs(matches) do
+      if compare_pos(match.line, match.col1, line, col) >= 0 then return i end
+    end
+    return 1
   end
 
-  local start_line, start_col = last_sel[1], last_sel[2]
-  if reverse ~= nil then
-    local l1, c1, l2, c2 = last_view.doc:get_selection(true)
-    start_line, start_col = reverse and l1 or l2, reverse and c1 or c2
-  end
+  local l1, c1, l2, c2 = table.unpack(view:with_selection_state(function()
+    return { view.doc:get_selection(true) }
+  end))
+  local line, col = reverse and l1 or l2, reverse and c1 or c2
 
   if reverse then
     for i = #matches, 1, -1 do
       local match = matches[i]
-      if compare_pos(match.line, match.col1, start_line, start_col) < 0 then return i end
+      if compare_pos(match.line, match.col1, line, col) < 0 then return i end
     end
     return #matches
   end
 
   for i, match in ipairs(matches) do
-    local anchor_col = reverse == nil and match.col1 or match.col2
-    if compare_pos(match.line, anchor_col, start_line, start_col) > 0 then return i end
+    if compare_pos(match.line, match.col2, line, col) > 0 then return i end
   end
   return 1
 end
 
-local function update_preview(sel, search_fn, text, reverse)
-  return with_last_view(function()
-    local d = last_view.doc
-    d:clear_search_selections()
-
-    local matches = find_all_matches(d, text or "")
-    local current = text ~= "" and choose_match(matches, text, reverse) or 0
-    if current > 0 then
-      local match = matches[current]
-      d:add_search_selection(match.line, match.col1, match.line, match.col2)
-      d:set_selection(match.line, match.col2, match.line, match.col1)
-      last_view:scroll_to_line(match.line, true)
-      found_expression = true
-    else
-      d:set_selection(table.unpack(sel))
-      found_expression = false
-    end
-
-    set_find_state(d, text, matches, current)
-    update_find_label(text, matches, current)
-  end)
-end
-
-local function current_find_text()
-  return (replace_active and replace_focus == "replace") and (last_text or "") or core.command_view:get_text()
-end
-
-local function selection_match_index(d, match)
-  for idx, l1, c1, l2, c2 in d:get_selections(true, true) do
-    if l1 == match.line and l2 == match.line and c1 == match.col1 and c2 == match.col2 then
-      return idx
-    end
+local function set_status(state)
+  if field_text(state.find) == "" then
+    state.info = ""
+    state.error = false
+  elseif state.error and state.error ~= true then
+    state.info = tostring(state.error)
+  elseif #(state.matches or {}) == 0 then
+    state.info = "0 results"
+    state.error = "0 results"
+  else
+    state.info = string.format("%d / %d", state.current or 0, #state.matches)
+    state.error = false
   end
 end
 
-local function add_find_match_to_selection(reverse)
-  if not last_view or not last_fn then return end
-  return with_last_view(function()
-    local d = last_view.doc
-    if replace_active and replace_focus == "replace" then replace_text = core.command_view:get_text() end
-    local text = current_find_text()
-    last_text = text
+local function select_match(view, state, index, scroll)
+  local match = state.matches and state.matches[index]
+  state.current = match and index or 0
+  if not match then return false end
+  view:with_selection_state(function()
+    view.doc:set_selection(match.line, match.col2, match.line, match.col1)
+  end)
+  if scroll ~= false then
+    view:scroll_to_make_visible(match.line, match.col1, true)
+  end
+  state.found = true
+  set_status(state)
+  return true
+end
 
-    d:clear_search_selections()
-    local matches = find_all_matches(d, text or "")
-    local current = text ~= "" and choose_match(matches, text, reverse) or 0
-    if current > 0 then
-      local match = matches[current]
-      d:add_search_selection(match.line, match.col1, match.line, match.col2)
-      local existing_idx = selection_match_index(d, match)
-      if existing_idx then
-        -- When navigation wraps to an already-selected match, keep all existing
-        -- selections/cursors.  set_selection() would replace the whole selection
-        -- set, so just make the existing match the active cursor instead.
-        d.last_selection = existing_idx
-      else
-        d:add_selection(match.line, match.col2, match.line, match.col1)
+local function refresh_matches(view, state, opts)
+  opts = opts or {}
+  state.error = false
+  state.matches, state.error = find_all_matches(view.doc, state)
+  state.match_indexes_by_line = build_match_indexes_by_line(state.matches)
+  state.change_id = view.doc:get_change_id()
+
+  if state.error then
+    state.current = 0
+    state.found = false
+    set_status(state)
+    return
+  end
+
+  if field_text(state.find) == "" then
+    state.current = 0
+    state.found = false
+    set_status(state)
+    return
+  end
+
+  local current = selection_match_index(view, state.matches)
+  if opts.select == false then
+    if current == 0 then
+      current = common.clamp(state.current or 0, 0, #state.matches)
+      if current == 0 and #state.matches > 0 then
+        current = choose_match(view, state, false, false)
       end
-      last_view:scroll_to_line(match.line, true)
-      found_expression = true
+    end
+    state.current = current
+    state.found = current > 0
+    set_status(state)
+    return
+  end
+
+  if current == 0 or opts.from_origin then
+    current = choose_match(view, state, false, opts.from_origin)
+  end
+
+  if current > 0 then
+    select_match(view, state, current, opts.scroll)
+  elseif opts.restore_origin ~= false and state.origin then
+    set_selection(view, state.origin)
+    state.current = 0
+    state.found = false
+    set_status(state)
+  else
+    state.current = 0
+    state.found = false
+    set_status(state)
+  end
+end
+
+function update_after_input(view, state)
+  refresh_matches(view, state, { from_origin = true, restore_origin = true, scroll = true })
+  last_global_query = field_text(state.find)
+  core.redraw = true
+end
+
+local function single_line_selection_text(view)
+  local text = view:with_selection_state(function()
+    local l1, c1, l2, c2 = view.doc:get_selection(true)
+    if l1 ~= l2 or c1 == c2 then return "" end
+    return view.doc:get_text(l1, c1, l2, c2)
+  end)
+  if text and not text:find("\n", 1, true) then return text end
+  return ""
+end
+
+local function open_find(view, as_replace)
+  local state = ensure_state(view)
+  state.visible = true
+  state.input_active = true
+  state.mode = as_replace and "replace" or "find"
+  state.focus = "find"
+  state.origin = copy_selection(view)
+  state.found = false
+  state.error = false
+
+  state.suppress_input_change = true
+  local selected = single_line_selection_text(view)
+  if selected ~= "" then
+    state.find:set_text(selected)
+  elseif field_text(state.find) == "" and last_global_query ~= "" then
+    state.find:set_text(last_global_query)
+  end
+  state.find:select_all()
+  state.replace:move_to_end()
+  state.suppress_input_change = false
+
+  refresh_matches(view, state, { from_origin = true, restore_origin = false, scroll = true })
+  focus_field(view, state, "find")
+  core.log_quiet("Local find: opened %s overlay for %s", state.mode, view.doc.filename or "<untitled>")
+  core.redraw = true
+end
+
+local function close_find(view, state, hide)
+  state = state or find_state_by_view[view]
+  if not state then return end
+  state.input_active = false
+  if hide then
+    state.visible = false
+    state.matches = {}
+    state.match_indexes_by_line = {}
+    state.current = 0
+  end
+  if core.active_view and core.active_view.local_find_input and view then
+    core.set_active_view(view)
+  end
+  core.log_quiet("Local find: %s overlay for %s", hide and "closed" or "deactivated", view and view.doc and (view.doc.filename or "<untitled>") or "<no doc>")
+  core.redraw = true
+end
+
+local function navigate(view, state, reverse)
+  if not state or field_text(state.find) == "" then return end
+  if state.change_id ~= view.doc:get_change_id() then
+    refresh_matches(view, state, { scroll = false })
+  end
+  if #(state.matches or {}) == 0 then
+    state.current = 0
+    set_status(state)
+    core.error("Couldn't find %q", field_text(state.find))
+    return
+  end
+  local index = choose_match(view, state, reverse, false)
+  select_match(view, state, index, true)
+  core.redraw = true
+end
+
+local function add_match_to_selection(view, state, reverse)
+  if not state or field_text(state.find) == "" then return end
+  if state.change_id ~= view.doc:get_change_id() then
+    refresh_matches(view, state, { scroll = false })
+  end
+  local index = choose_match(view, state, reverse, false)
+  local match = state.matches and state.matches[index]
+  if not match then return end
+  view:with_selection_state(function()
+    local existing
+    for idx, l1, c1, l2, c2 in view.doc:get_selections(true, true) do
+      if l1 == match.line and l2 == match.line and c1 == match.col1 and c2 == match.col2 then
+        existing = idx
+        break
+      end
+    end
+    if existing then
+      view.doc.last_selection = existing
     else
-      found_expression = false
+      view.doc:add_selection(match.line, match.col2, match.line, match.col1)
     end
-
-    set_find_state(d, text, matches, current)
-    update_find_label(text, matches, current)
   end)
+  state.current = index
+  set_status(state)
+  view:scroll_to_make_visible(match.line, match.col1, true)
+  core.redraw = true
 end
 
-local function replace_current_match()
-  if not last_view then return end
-  return with_last_view(function()
-    local d = last_view.doc
+local function replace_current_match(view, state)
+  if not state or field_text(state.find) == "" then return end
+  if state.change_id ~= view.doc:get_change_id() then
+    refresh_matches(view, state, { scroll = false })
+  end
+
+  local replaced = false
+  view:with_selection_state(function()
+    local d = view.doc
     local l1, c1, l2, c2 = d:get_selection(true)
-    if l1 == l2 and c1 == c2 then return end
-    d:text_input(replace_text or "", d.last_selection)
-    last_sel = { d:get_selection() }
-    if last_fn and last_text and last_text ~= "" then
-      update_preview(last_sel, last_fn, last_text, false)
+    local match = state.matches and state.matches[state.current]
+    if not (match and match.line == l1 and match.line == l2 and match.col1 == c1 and match.col2 == c2) then
+      match = nil
+      for _, candidate in ipairs(state.matches or {}) do
+        if candidate.line == l1 and candidate.line == l2 and candidate.col1 == c1 and candidate.col2 == c2 then
+          match = candidate
+          break
+        end
+      end
     end
+    if not match then return end
+    d:set_selection(match.line, match.col2, match.line, match.col1)
+    d:text_input(field_text(state.replace), d.last_selection)
+    replaced = true
   end)
+
+  if not replaced then
+    set_status(state)
+    core.redraw = true
+    return
+  end
+  state.origin = copy_selection(view)
+  refresh_matches(view, state, { scroll = true })
 end
 
-local function perform_replace_all(matches, replacement)
-  if not last_view or not last_view.doc or #matches == 0 then return end
-  return with_last_view(function()
-    local d = last_view.doc
+local function perform_replace_all(view, state, matches, replacement)
+  if not view or not state or not matches or #matches == 0 then return end
+  view:with_selection_state(function()
+    local d = view.doc
     for i = #matches, 1, -1 do
       local match = matches[i]
       d:remove(match.line, match.col1, match.line, match.col2)
       d:insert(match.line, match.col1, replacement or "")
     end
-    d:clear_search_selections()
-    last_sel = { d:get_selection() }
-    found_expression = false
-    set_find_state(d, last_text, {}, 0)
-    update_find_label(last_text, {}, 0)
   end)
+  state.origin = copy_selection(view)
+  refresh_matches(view, state, { from_origin = true, scroll = true })
 end
 
-local function confirm_replace_all()
-  if not last_view then return end
-  if replace_active and replace_focus == "replace" then
-    replace_text = core.command_view:get_text()
-  else
-    last_text = core.command_view:get_text()
+local function confirm_replace_all(view, state)
+  if not state or field_text(state.find) == "" then return end
+  refresh_matches(view, state, { scroll = false })
+  local matches = {}
+  for i, match in ipairs(state.matches or {}) do
+    matches[i] = { line = match.line, col1 = match.col1, col2 = match.col2 }
   end
-
-  local text = last_text or ""
-  if text == "" then return end
-  local matches = find_all_matches(last_view.doc, text)
   local count = #matches
   if count == 0 then
-    update_find_label(text, matches, 0)
+    set_status(state)
     return
   end
-
-  local replacement = replace_text or ""
-  local was_active_view = core.active_view
+  local replacement = field_text(state.replace)
+  local query = field_text(state.find)
+  local restore = core.active_view
   MessageBox.warning(
     "Replace All",
-    string.format("Will replace %d instance%s of %q with %q.", count, count == 1 and "" or "s", text, replacement),
+    string.format("Will replace %d instance%s of %q with %q.", count, count == 1 and "" or "s", query, replacement),
     function(_, button_id)
       if button_id == 1 then
-        perform_replace_all(matches, replacement)
+        perform_replace_all(view, state, matches, replacement)
       end
-      if was_active_view then core.set_active_view(was_active_view) end
+      if restore then core.set_active_view(restore) end
     end,
     MessageBox.BUTTONS_OK_CANCEL
   )
 end
 
-local function set_find_widget_focus(field)
-  if not find_active or not replace_active then return end
-  if replace_focus == field then return end
-  if replace_focus == "find" then
-    last_text = core.command_view:get_text()
-    replace_focus = "replace"
-    core.command_view:set_text(replace_text or "")
+local function toggle_field_focus(view, state)
+  if state.mode ~= "replace" then return end
+  local next_focus = state.focus == "find" and "replace" or "find"
+  focus_field(view, state, next_focus)
+  local field = next_focus == "replace" and state.replace or state.find
+  field:select_all()
+end
+
+local function find_bar_layout(view, state)
+  local font = style.font
+  local pad = style.padding.x
+  local row_h = math.floor(font:get_height() * 1.45)
+  local h = row_h + math.max(2, SCALE * 2)
+  return {
+    x = view.position.x,
+    y = view.position.y + view.size.y - h,
+    w = view.size.x,
+    h = h,
+    row_h = row_h,
+    pad = pad,
+    sep = math.max(1, style.divider_size or SCALE),
+    font = font,
+  }
+end
+
+local function find_info_text(state)
+  local flags = {}
+  if state.regex then flags[#flags + 1] = "Regex" end
+  if state.case_sensitive then flags[#flags + 1] = "Aa" end
+  local suffix = #flags > 0 and (" [" .. table.concat(flags, " ") .. "]") or ""
+  return tostring(state.info or "") .. suffix
+end
+
+local function make_field_row(layout, label, x, input_x, input_w)
+  return {
+    label = label,
+    x = x,
+    y = layout.y + math.floor((layout.h - (layout.row_h - layout.pad / 2)) / 2),
+    input_x = input_x,
+    input_w = math.max(32 * SCALE, input_w),
+    input_h = layout.row_h - layout.pad / 2,
+    font = layout.font,
+  }
+end
+
+local function find_bar_rows(layout, state, info_text)
+  local font, pad, sep = layout.font, layout.pad, layout.sep
+  local x = layout.x + pad
+  local right = layout.x + layout.w - pad
+  local info_w = info_text ~= "" and math.min(font:get_width(info_text) + pad, math.max(80 * SCALE, layout.w * 0.24)) or 0
+  local find_label = "Find:"
+  local replace_label = "Replace:"
+  local find_label_w = font:get_width(find_label) + pad
+  local replace_label_w = font:get_width(replace_label) + pad
+
+  if state.mode == "replace" then
+    local available = right - x - find_label_w - replace_label_w - info_w - sep * 2 - pad
+    available = math.max(96 * SCALE, available)
+    local find_w = math.max(72 * SCALE, math.floor(available * 0.48))
+    local replace_w = math.max(72 * SCALE, available - find_w)
+    local find_row = make_field_row(layout, find_label, x, x + find_label_w, find_w)
+    local replace_x = find_row.input_x + find_row.input_w + sep + pad
+    local replace_row = make_field_row(layout, replace_label, replace_x, replace_x + replace_label_w, replace_w)
+    local info_x = replace_row.input_x + replace_row.input_w + sep + pad
+    return find_row, replace_row, { text = info_text, x = info_x, w = math.max(0, right - info_x) }
+  end
+
+  local available = right - x - find_label_w - info_w - sep
+  local find_row = make_field_row(layout, find_label, x, x + find_label_w, math.max(80 * SCALE, available))
+  local info_x = find_row.input_x + find_row.input_w + sep + pad
+  return find_row, nil, { text = info_text, x = info_x, w = math.max(0, right - info_x) }
+end
+
+local function draw_input_field(view, state, field, row, active)
+  local font = row.font or style.font
+  local pad = style.padding.x / 2
+  local x, y, w, h = row.input_x, row.y, row.input_w, row.input_h
+  local border = style.divider
+  local bg = active and (style.background3 or style.background) or (style.background2 or style.background)
+  local line = math.max(1, SCALE)
+  renderer.draw_rect(x, y, w, h, bg)
+  renderer.draw_rect(x, y, w, line, border)
+  renderer.draw_rect(x, y + h - line, w, line, active and (style.accent or style.caret) or border)
+  renderer.draw_rect(x, y, line, h, border)
+  renderer.draw_rect(x + w - line, y, line, h, border)
+
+  field.position.x = x + pad
+  field.position.y = y + 1
+  field.size.x = math.max(1, w - pad * 2)
+  field.size.y = math.max(1, h - 2)
+  local caret_line, caret_col = field.doc:get_selection()
+  field:scroll_to_make_visible(caret_line or 1, caret_col or 1, true)
+  field:update()
+
+  core.push_clip_rect(field.position.x, field.position.y, field.size.x, field.size.y)
+  if field_text(field) == "" then
+    local placeholder = row.label == "Replace:" and "replacement" or "search"
+    local py = field.position.y + math.floor((field.size.y - font:get_height()) / 2)
+    renderer.draw_text(font, placeholder, field.position.x - field.scroll.x, py, style.dim or style.text)
+  end
+  field:draw()
+  core.pop_clip_rect()
+end
+
+local function draw_local_find(view)
+  local state = visible_find_state(view)
+  if not state then return end
+  local layout = find_bar_layout(view, state)
+  local active = state.input_active
+  local bg = style.background2 or style.background
+  local top = math.max(1, SCALE)
+  renderer.draw_rect(layout.x, layout.y, layout.w, layout.h, bg)
+  renderer.draw_rect(layout.x, layout.y, layout.w, top, style.divider)
+
+  local info_text = find_info_text(state)
+  local find_row, replace_row, info = find_bar_rows(layout, state, info_text)
+  local label_y = find_row.y + (find_row.input_h - layout.font:get_height()) / 2
+  renderer.draw_text(layout.font, find_row.label, find_row.x, label_y, style.dim or style.text)
+  draw_input_field(view, state, state.find, find_row, active and core.active_view == state.find)
+
+  if replace_row then
+    local sep_x = find_row.input_x + find_row.input_w + math.floor(layout.sep / 2)
+    renderer.draw_rect(sep_x, layout.y, layout.sep, layout.h, style.divider)
+    renderer.draw_text(layout.font, replace_row.label, replace_row.x, label_y, style.dim or style.text)
+    draw_input_field(view, state, state.replace, replace_row, active and core.active_view == state.replace)
+  end
+
+  if info and info.text ~= "" and info.w > 0 then
+    local color = state.error and (style.error or style.text) or (style.dim or style.text)
+    core.push_clip_rect(info.x, layout.y, info.w, layout.h)
+    renderer.draw_text(layout.font, info.text, info.x, label_y, color)
+    core.pop_clip_rect()
+  end
+end
+
+local function point_in_rect(x, y, r)
+  return x >= r.x and x <= r.x + r.w and y >= r.y and y <= r.y + r.h
+end
+
+local function point_in_field(x, y, row)
+  return row and x >= row.x and x <= row.input_x + row.input_w and y >= row.y and y <= row.y + row.input_h
+end
+
+local function handle_find_mouse_pressed(view, state, x, y, clicks)
+  local layout = find_bar_layout(view, state)
+  if not point_in_rect(x, y, layout) then return false end
+  local find_row, replace_row = find_bar_rows(layout, state, find_info_text(state))
+  local target_field, target_name = state.find, "find"
+  if replace_row and point_in_field(x, y, replace_row) then
+    target_field, target_name = state.replace, "replace"
+  end
+  focus_field(view, state, target_name)
+
+  local line, col = target_field:resolve_screen_position(x, y)
+  if keymap.modkeys["shift"] then
+    local l1, c1 = target_field.doc:get_selection()
+    target_field.doc:set_selection(l1, c1, line, col)
   else
-    replace_text = core.command_view:get_text()
-    replace_focus = "find"
-    core.command_view:set_text(last_text or "")
+    target_field.doc:set_selection(line, col, line, col)
+  end
+  if clicks == 2 then
+    local line1, col1 = translate.start_of_word(target_field.doc, line, col)
+    local line2, col2 = translate.end_of_word(target_field.doc, line1, col1)
+    target_field.doc:set_selection(line2, col2, line1, col1)
+  elseif clicks == 3 then
+    target_field:select_all()
+  end
+  core.blink_reset()
+  core.redraw = true
+  return true
+end
+
+local function match_screen_rect(view, match)
+  local x1, y1 = view:get_line_screen_position(match.line, match.col1)
+  local x2, y2 = view:get_line_screen_position(match.line, match.col2)
+  if y2 ~= y1 then
+    -- A very long regex/plain match can cross a soft-wrap boundary.  We still
+    -- draw a useful first-segment marker rather than placing the whole match on
+    -- the physical line's first visual row.
+    x2 = view.position.x + view.size.x
+  end
+  return x1, y1, x2, view:get_line_height()
+end
+
+local function draw_match_rect(view, match, _x, _y, color)
+  local x1, y, x2, h = match_screen_rect(view, match)
+  if x2 <= x1 then return end
+  renderer.draw_rect(x1, y, x2 - x1, h, color)
+end
+
+local function draw_match_outline(view, match, _x, _y, color)
+  local x1, y, x2, h = match_screen_rect(view, match)
+  if x2 <= x1 then return end
+  local t = math.max(1, SCALE)
+  renderer.draw_rect(x1, y, x2 - x1, t, color)
+  renderer.draw_rect(x1, y + h - t, x2 - x1, t, color)
+  renderer.draw_rect(x1, y, t, h, color)
+  renderer.draw_rect(x2 - t, y, t, h, color)
+end
+
+-- Draw per-view find highlights. These are intentionally keyed by DocView, not
+-- Doc, so the same Doc open in two splits can show independent search state.
+--
+-- Other plugins (notably linewrapping) replace DocView draw/update methods
+-- after this module is first required from anvil_defaults.  Install these as
+-- re-wrappable shims and run the installer again after startup so local find is
+-- still outermost and split-local even when later plugins patch DocView.  Each
+-- shim captures its base function in an upvalue; do not read the base through a
+-- mutable DocView field from inside the shim, because later wrappers may have
+-- captured an older shim and would recurse when we re-wrap them.
+local docview_draw_line_body_wrapper
+local docview_draw_wrapper
+local docview_update_wrapper
+local docview_on_mouse_pressed_wrapper
+
+local function make_local_find_draw_line_body(base)
+  return function(self, line, x, y)
+    if (DocView.__local_find_draw_line_body_depth or 0) > 0 then
+      return base(self, line, x, y)
+    end
+
+    local old_depth = DocView.__local_find_draw_line_body_depth or 0
+    DocView.__local_find_draw_line_body_depth = old_depth + 1
+
+    local state = visible_find_state(self)
+    local line_matches = state and state.match_indexes_by_line and state.match_indexes_by_line[line]
+    if line_matches and #line_matches > 0 then
+      local normal = style.selectionhighlight or style.search_selection or style.selection
+      local current = style.search_selection or style.selection
+      for _, idx in ipairs(line_matches) do
+        local match = state.matches[idx]
+        draw_match_rect(self, match, x, y, idx == state.current and current or normal)
+      end
+    end
+
+    local lh = base(self, line, x, y)
+
+    if line_matches and #line_matches > 0 then
+      local outline = style.search_selection_outline or style.caret
+      local secondary = style.search_selection_secondary_outline or outline
+      for _, idx in ipairs(line_matches) do
+        local match = state.matches[idx]
+        draw_match_outline(self, match, x, y, idx == state.current and outline or secondary)
+      end
+    end
+
+    DocView.__local_find_draw_line_body_depth = old_depth
+    return lh
   end
 end
 
-local function insert_unique(t, v)
-  local n = #t
-  for i = 1, n do
-    if t[i] == v then
-      table.remove(t, i)
-      break
+local function make_local_find_draw(base)
+  return function(self, ...)
+    if (DocView.__local_find_draw_depth or 0) > 0 then
+      return base(self, ...)
     end
+
+    local old_depth = DocView.__local_find_draw_depth or 0
+    DocView.__local_find_draw_depth = old_depth + 1
+    local result = base(self, ...)
+    if result ~= false then
+      core.push_clip_rect(self.position.x, self.position.y, self.size.x, self.size.y)
+      draw_local_find(self)
+      core.pop_clip_rect()
+    end
+    DocView.__local_find_draw_depth = old_depth
+    return result
   end
-  table.insert(t, 1, v)
 end
 
-local function find(label, search_fn, as_replace)
-  if find_active and core.active_view:is(CommandView) and last_view then
-    if replace_active and replace_focus == "replace" then
-      replace_text = core.command_view:get_text()
-    else
-      last_text = core.command_view:get_text()
+local function make_local_find_update(base)
+  return function(self, ...)
+    if (DocView.__local_find_update_depth or 0) > 0 then
+      return base(self, ...)
     end
-    if as_replace then
-      replace_active = true
-      replace_focus = "find"
-      core.command_view:set_text(last_text or "")
+
+    local old_depth = DocView.__local_find_update_depth or 0
+    DocView.__local_find_update_depth = old_depth + 1
+    local state = visible_find_state(self)
+    if state and state.change_id ~= self.doc:get_change_id() then
+      refresh_matches(self, state, {
+        scroll = false,
+        restore_origin = false,
+        select = state.input_active and core.active_view == self,
+      })
     end
-    return
+    local result = base(self, ...)
+    DocView.__local_find_update_depth = old_depth
+    return result
+  end
+end
+
+local function make_local_find_on_mouse_pressed(base)
+  return function(self, button, x, y, clicks)
+    if (DocView.__local_find_on_mouse_pressed_depth or 0) > 0 then
+      return base(self, button, x, y, clicks)
+    end
+
+    local state = find_state_by_view[self]
+    if button == "left" and state and state.visible then
+      if handle_find_mouse_pressed(self, state, x, y, clicks) then return true end
+      state.input_active = false
+    end
+
+    local old_depth = DocView.__local_find_on_mouse_pressed_depth or 0
+    DocView.__local_find_on_mouse_pressed_depth = old_depth + 1
+    local result = base(self, button, x, y, clicks)
+    DocView.__local_find_on_mouse_pressed_depth = old_depth
+    return result
+  end
+end
+
+local function patch_docview_method(name, wrapper_field, base_field, current_wrapper, make_wrapper)
+  if DocView[name] == current_wrapper then return current_wrapper end
+
+  local base = DocView[name]
+  if DocView[wrapper_field] and base == DocView[wrapper_field] then
+    base = DocView[base_field]
   end
 
-  find_label = label
-  last_view, last_sel = core.active_view,
-    { core.active_view.doc:get_selection() }
-  local text = last_view.doc:get_text(table.unpack(last_sel))
-  found_expression = false
-  last_fn, last_text = search_fn, text
-  replace_active = as_replace or false
-  replace_text = ""
-  replace_focus = "find"
-
-  find_info_text = ""
-  find_info_error = false
-  find_active = true
-
-  core.command_view:enter(label, {
-    text = text,
-    select_text = true,
-    show_suggestions = false,
-    submit = function(text)
-      if replace_active and replace_focus == "replace" then
-        replace_text = text
-        replace_current_match()
-        return
-      end
-      insert_unique(core.previous_find, text)
-      find_active = false
-      replace_active = false
-      if found_expression then
-        last_fn, last_text = search_fn, text
-      else
-        clear_find_state(last_view.doc)
-        core.error("Couldn't find %q", text)
-        with_last_view(function()
-          last_view.doc:set_selection(table.unpack(last_sel))
-          last_view:scroll_to_make_visible(table.unpack(last_sel))
-        end)
-      end
-    end,
-    suggest = function(text)
-      if replace_active and replace_focus == "replace" then
-        replace_text = text
-      else
-        update_preview(last_sel, search_fn, text)
-        last_fn, last_text = search_fn, text
-      end
-      return core.previous_find
-    end,
-    cancel = function(explicit)
-      find_active = false
-      replace_active = false
-      clear_find_state(last_view.doc)
-      if explicit then
-        with_last_view(function()
-          last_view.doc:set_selection(table.unpack(last_sel))
-          last_view:scroll_to_make_visible(table.unpack(last_sel))
-        end)
-      end
-    end
-  })
+  local wrapper = make_wrapper(base)
+  DocView[base_field] = base
+  DocView[wrapper_field] = wrapper
+  DocView[name] = wrapper
+  core.log_quiet("Local find: patched DocView.%s", name)
+  return wrapper
 end
 
-local find_search_fn = function(d, line, col, text, sensitive, regex_enabled, reverse)
-  local opt = { wrap = true, no_case = not sensitive, regex = regex_enabled, reverse = reverse }
-  return search.find(d, line, col, text, opt)
+local function install_docview_patches()
+  docview_draw_line_body_wrapper = patch_docview_method(
+    "draw_line_body",
+    "__local_find_draw_line_body_wrapper",
+    "__local_find_draw_line_body_base",
+    docview_draw_line_body_wrapper,
+    make_local_find_draw_line_body
+  )
+  docview_draw_wrapper = patch_docview_method(
+    "draw",
+    "__local_find_draw_wrapper",
+    "__local_find_draw_base",
+    docview_draw_wrapper,
+    make_local_find_draw
+  )
+  docview_update_wrapper = patch_docview_method(
+    "update",
+    "__local_find_update_wrapper",
+    "__local_find_update_base",
+    docview_update_wrapper,
+    make_local_find_update
+  )
+  docview_on_mouse_pressed_wrapper = patch_docview_method(
+    "on_mouse_pressed",
+    "__local_find_on_mouse_pressed_wrapper",
+    "__local_find_on_mouse_pressed_base",
+    docview_on_mouse_pressed_wrapper,
+    make_local_find_on_mouse_pressed
+  )
 end
 
-local function find_text_command()
-  find("Find Text", find_search_fn, false)
-end
-
-local function replace_text_command()
-  find("Find Text", find_search_fn, true)
-end
-
-local function valid_for_finding()
-  -- Allow using repeat/previous while the command view is focused.
-  if core.active_view:is(CommandView) and last_view then
-    return true, last_view
-  end
-  return is_searchable_docview(core.active_view), core.active_view
-end
+install_docview_patches()
 
 command.add(function()
-  return is_searchable_docview(core.active_view), core.active_view
+  return active_docview()
 end, {
-  ["find-replace:find"] = find_text_command,
-  ["find-replace:replace"] = replace_text_command,
-  ["user:find"] = find_text_command,
-})
-
-command.add(valid_for_finding, {
-  ["find-replace:repeat-find"] = function(dv)
-    if not last_fn then
-      core.error("No find to continue from")
-    else
-      last_view = dv
-      last_sel = { dv.doc:get_selection() }
-      update_preview(last_sel, last_fn, last_text, false)
-      if not found_expression then core.error("Couldn't find %q", last_text) end
-    end
+  ["find-replace:find"] = function(view)
+    open_find(view, false)
   end,
-
-  ["find-replace:previous-find"] = function(dv)
-    if not last_fn then
-      core.error("No find to continue from")
-    else
-      last_view = dv
-      last_sel = { dv.doc:get_selection() }
-      update_preview(last_sel, last_fn, last_text, true)
-      if not found_expression then core.error("Couldn't find %q", last_text) end
-    end
+  ["find-replace:replace"] = function(view)
+    open_find(view, true)
+  end,
+  ["user:find"] = function(view)
+    open_find(view, false)
   end,
 })
 
-local function find_commandview_active()
-  return core.active_view:is(CommandView) and find_active
-end
-
-command.add(find_commandview_active, {
-  ["find-replace:replace"] = replace_text_command,
-
-  ["user:find-field-next"] = function()
-    if replace_active and replace_focus == "replace" then replace_text = core.command_view:get_text() end
-    last_text = current_find_text()
-    if last_fn and last_text ~= "" then
-      update_preview(last_sel, last_fn, last_text, false)
-    else
-      update_find_label(last_text)
-    end
+command.add(function()
+  local ok, view = active_docview()
+  if not ok then return false end
+  local state = find_state_by_view[view]
+  if state and state.visible and field_text(state.find) ~= "" then return true, view, state end
+  return false
+end, {
+  ["find-replace:repeat-find"] = function(view, state)
+    navigate(view, state, false)
   end,
-
-  ["user:find-field-previous"] = function()
-    if replace_active and replace_focus == "replace" then replace_text = core.command_view:get_text() end
-    last_text = current_find_text()
-    if last_fn and last_text ~= "" then
-      update_preview(last_sel, last_fn, last_text, true)
-    else
-      update_find_label(last_text)
-    end
-  end,
-
-  ["user:find-field-add-next"] = function()
-    add_find_match_to_selection(false)
-  end,
-
-  ["user:find-field-add-previous"] = function()
-    add_find_match_to_selection(true)
-  end,
-
-  ["user:find-toggle-replace-field"] = function()
-    if replace_active then
-      set_find_widget_focus(replace_focus == "find" and "replace" or "find")
-    end
-  end,
-
-  ["user:find-submit-or-replace"] = function()
-    if replace_active and replace_focus == "replace" then
-      replace_text = core.command_view:get_text()
-      replace_current_match()
-    else
-      core.command_view:submit()
-    end
-  end,
-
-  ["user:find-replace-all-confirm"] = function()
-    if replace_active then
-      confirm_replace_all()
-    end
-  end,
-
-  ["user:find-close"] = function()
-    find_active = false
-    replace_active = false
-    -- Treat closing the find field as accepting the current previewed result:
-    -- close the CommandView, return focus to the editor, and keep the current
-    -- match selection instead of restoring the pre-search caret.
-    clear_find_state(last_view and last_view.doc)
-    core.command_view:exit(true)
+  ["find-replace:previous-find"] = function(view, state)
+    navigate(view, state, true)
   end,
 })
 
--- search_ui also binds ctrl+f and was taking precedence. Replace the shortcut
--- outright so Ctrl+F opens this local CommandView-based find.
-keymap.add_direct {
-  ["ctrl+f"] = "find-replace:find",
-  ["ctrl+r"] = "find-replace:replace",
-}
-
-keymap.add {
-  ["up"] = { "user:find-field-previous", "command:select-previous", "doc:move-to-previous-line" },
-  ["down"] = { "user:find-field-next", "command:select-next", "doc:move-to-next-line" },
-  ["shift+up"] = { "user:find-field-add-previous", "doc:select-to-previous-line" },
-  ["shift+down"] = { "user:find-field-add-next", "doc:select-to-next-line" },
-  ["tab"] = { "user:find-toggle-replace-field", "command:complete", "doc:indent" },
-  ["return"] = { "user:find-submit-or-replace", "command:submit", "doc:newline", "dialog:select" },
-  ["keypad enter"] = { "user:find-submit-or-replace", "command:submit", "doc:newline", "dialog:select" },
-  ["ctrl+return"] = { "user:find-replace-all-confirm" },
-}
-
-command.add("core.commandview", {
-  ["find-replace:toggle-sensitivity"] = function()
-    case_sensitive = not case_sensitive
-    if last_sel then update_preview(last_sel, last_fn, last_text) end
+command.add(active_find_state, {
+  ["user:find-field-next"] = function(view, state)
+    navigate(view, state, false)
   end,
+  ["user:find-field-previous"] = function(view, state)
+    navigate(view, state, true)
+  end,
+  ["user:find-field-add-next"] = function(view, state)
+    add_match_to_selection(view, state, false)
+  end,
+  ["user:find-field-add-previous"] = function(view, state)
+    add_match_to_selection(view, state, true)
+  end,
+  ["user:find-toggle-replace-field"] = function(view, state)
+    toggle_field_focus(view, state)
+  end,
+  ["user:find-submit-or-replace"] = function(view, state)
+    if state.mode == "replace" and state.focus == "replace" then
+      replace_current_match(view, state)
+    else
+      state.input_active = false
+      core.set_active_view(view)
+      core.redraw = true
+    end
+  end,
+  ["user:find-replace-all-confirm"] = function(view, state)
+    if state.mode == "replace" then confirm_replace_all(view, state) end
+  end,
+  ["find-replace:toggle-sensitivity"] = function(view, state)
+    state.case_sensitive = not state.case_sensitive
+    refresh_matches(view, state, { from_origin = true, scroll = true })
+    core.redraw = true
+  end,
+  ["find-replace:toggle-regex"] = function(view, state)
+    state.regex = not state.regex
+    refresh_matches(view, state, { from_origin = true, scroll = true })
+    core.redraw = true
+  end,
+})
 
-  ["find-replace:toggle-regex"] = function()
-    find_regex = not find_regex
-    if last_sel then update_preview(last_sel, last_fn, last_text) end
+command.add(active_visible_find_state, {
+  ["user:find-close"] = function(view, state)
+    close_find(view, state, true)
   end,
 })
 
@@ -827,22 +1049,23 @@ local function install_find_shortcut_override()
   if config.plugins.search_ui then
     config.plugins.search_ui.replace_core_find = false
   end
-  command.add(function()
-    return is_searchable_docview(core.active_view), core.active_view
-  end, {
-    ["find-replace:find"] = find_text_command,
-    ["user:find"] = find_text_command,
-  })
-  command.add(function()
-    if find_commandview_active() then return true end
-    return is_searchable_docview(core.active_view), core.active_view
-  end, {
-    ["find-replace:replace"] = replace_text_command,
-  })
+
   keymap.add_direct {
     ["ctrl+f"] = "find-replace:find",
     ["ctrl+r"] = "find-replace:replace",
   }
+
+  keymap.add {
+    ["up"] = { "user:find-field-previous", "command:select-previous", "doc:move-to-previous-line" },
+    ["down"] = { "user:find-field-next", "command:select-next", "doc:move-to-next-line" },
+    ["shift+up"] = { "user:find-field-add-previous", "doc:select-to-previous-line" },
+    ["shift+down"] = { "user:find-field-add-next", "doc:select-to-next-line" },
+    ["tab"] = { "user:find-toggle-replace-field", "command:complete", "doc:indent" },
+    ["return"] = { "user:find-submit-or-replace", "command:submit", "doc:newline", "dialog:select" },
+    ["keypad enter"] = { "user:find-submit-or-replace", "command:submit", "doc:newline", "dialog:select" },
+    ["ctrl+return"] = { "user:find-replace-all-confirm", "doc:newline-below" },
+  }
+
   prioritize_key("escape", "user:find-close")
   prioritize_key("tab", "user:find-toggle-replace-field")
   prioritize_key("return", "user:find-submit-or-replace")
@@ -850,13 +1073,10 @@ local function install_find_shortcut_override()
   prioritize_key("ctrl+return", "user:find-replace-all-confirm")
 end
 
--- Some bundled plugins, notably search_ui, register after the user module in
--- certain startup paths. Re-apply our local find override once after startup so
--- Ctrl+F cannot fall through to search_ui's TextBox, where Up/Down move the
--- caret instead of navigating matches.
 core.intellij_find_install_shortcut_override = install_find_shortcut_override
 install_find_shortcut_override()
 core.add_thread(function()
   coroutine.yield(0.1)
+  install_docview_patches()
   install_find_shortcut_override()
 end)
