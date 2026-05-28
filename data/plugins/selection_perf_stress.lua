@@ -37,10 +37,12 @@ local function active_docview()
 end
 
 local function set_huge_selection(dv)
-  local doc = dv.doc
-  local last = math.min(#doc.lines, stress.start_line + stress.huge_lines)
-  doc.selections = { stress.start_line, 1, last, math.huge }
-  doc.last_selection = 1
+  dv:with_selection_state(function()
+    local doc = dv.doc
+    local last = math.min(#doc.lines, stress.start_line + stress.huge_lines)
+    doc.selections = { stress.start_line, 1, last, math.huge }
+    doc.last_selection = 1
+  end)
 end
 
 local function set_multiline_cursors(dv, base_line, phase)
@@ -61,8 +63,10 @@ local function set_multiline_cursors(dv, base_line, phase)
     selections[p + 2] = line2
     selections[p + 3] = col2
   end
-  doc.selections = selections
-  doc.last_selection = 1
+  dv:with_selection_state(function()
+    doc.selections = selections
+    doc.last_selection = 1
+  end)
 end
 
 core.add_thread(function()

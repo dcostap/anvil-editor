@@ -74,9 +74,37 @@ local navigation_forward_stack = {}
 local navigating_history = false
 local suppress_origin_clear = false
 
-local function clear_selection_origin(doc)
-  selection_history[doc] = nil
-  selection_origin[doc] = nil
+local function selection_state_key(doc)
+  local view = doc and doc.bound_selection_view
+  if not view and doc then
+    local ok, DocView = pcall(require, "core.docview")
+    if ok and DocView.get_doc_mirror_owner_view then
+      view = DocView.get_doc_mirror_owner_view(doc)
+    end
+  end
+  return view or doc
+end
+
+local function key_belongs_to_doc(key, doc)
+  return key == doc or (type(key) == "table" and key.doc == doc)
+end
+
+local function clear_selection_origin(doc, all_views)
+  if all_views then
+    for key in pairs(selection_history) do
+      if key_belongs_to_doc(key, doc) then selection_history[key] = nil end
+    end
+    for key in pairs(selection_origin) do
+      if key_belongs_to_doc(key, doc) then selection_origin[key] = nil end
+    end
+    for key in pairs(add_next_occurrence_state) do
+      if key_belongs_to_doc(key, doc) then add_next_occurrence_state[key] = nil end
+    end
+    return
+  end
+  local key = selection_state_key(doc)
+  selection_history[key] = nil
+  selection_origin[key] = nil
 end
 
 local function with_origin_clear_suppressed(fn, ...)
@@ -99,18 +127,42 @@ function Doc:set_selections(...)
   return doc_set_selections(self, ...)
 end
 
+local function set_selection_list(doc, selections, last_selection)
+  selections = selections or {}
+  if #selections < 4 then
+    with_origin_clear_suppressed(doc_set_selection, doc, 1, 1, 1, 1)
+    return
+  end
+  with_origin_clear_suppressed(function()
+    doc_set_selection(doc, selections[1], selections[2], selections[3], selections[4])
+    for i = 5, #selections, 4 do
+      doc_set_selections(
+        doc,
+        math.floor((i - 1) / 4) + 1,
+        selections[i], selections[i + 1], selections[i + 2], selections[i + 3],
+        nil, 0
+      )
+    end
+  end)
+  doc.last_selection = common.clamp(
+    math.floor(tonumber(last_selection) or 1),
+    1,
+    math.max(1, math.floor(#selections / 4))
+  )
+end
+
 local doc_insert = core.intellij_actions_original_doc_insert or Doc.insert
 local doc_remove = core.intellij_actions_original_doc_remove or Doc.remove
 core.intellij_actions_original_doc_insert = doc_insert
 core.intellij_actions_original_doc_remove = doc_remove
 
 function Doc:insert(...)
-  if not suppress_origin_clear then clear_selection_origin(self) end
+  if not suppress_origin_clear then clear_selection_origin(self, true) end
   return doc_insert(self, ...)
 end
 
 function Doc:remove(...)
-  if not suppress_origin_clear then clear_selection_origin(self) end
+  if not suppress_origin_clear then clear_selection_origin(self, true) end
   return doc_remove(self, ...)
 end
 
@@ -502,11 +554,12 @@ local function set_selection_offsets(doc, starts, start_offset, end_offset, reas
 end
 
 local function push_selection_history(doc, start_offset, end_offset)
-  local history = selection_history[doc] or {}
-  selection_history[doc] = history
-  if #history == 0 and not selection_origin[doc] then
+  local key = selection_state_key(doc)
+  local history = selection_history[key] or {}
+  selection_history[key] = history
+  if #history == 0 and not selection_origin[key] then
     local caret_l, caret_c = doc:get_selection(false)
-    selection_origin[doc] = pos_to_offset(select(2, build_text_index(doc)), caret_l, caret_c)
+    selection_origin[key] = pos_to_offset(select(2, build_text_index(doc)), caret_l, caret_c)
   end
   history[#history + 1] = { start_offset, end_offset }
 end
@@ -788,8 +841,9 @@ local function smart_selection_candidates(doc, text, starts, blocks, l1, c1, l2,
 end
 
 local function push_multi_selection_history(doc)
-  local history = selection_history[doc] or {}
-  selection_history[doc] = history
+  local key = selection_state_key(doc)
+  local history = selection_history[key] or {}
+  selection_history[key] = history
   history[#history + 1] = { multi = true, selections = { table.unpack(doc.selections) }, last_selection = doc.last_selection }
 end
 
@@ -830,14 +884,14 @@ end
 
 local function shrink_smart_selection(dv)
   local doc = dv.doc
-  local history = selection_history[doc]
+  local key = selection_state_key(doc)
+  local history = selection_history[key]
   if not history or #history == 0 then return end
   local text, starts = build_text_index(doc)
   local prev = table.remove(history)
-  if #history == 0 then selection_origin[doc] = nil end
+  if #history == 0 then selection_origin[key] = nil end
   if prev.multi then
-    doc.selections = { table.unpack(prev.selections or {}) }
-    doc.last_selection = prev.last_selection or 1
+    set_selection_list(doc, prev.selections, prev.last_selection)
     core.blink_reset()
   else
     set_selection_offsets(doc, starts, prev[1], prev[2], "shrink-history")
@@ -846,9 +900,10 @@ end
 
 local function restore_selection_origin_or_select_none(dv)
   local doc = dv.doc
-  local origin = selection_origin[doc]
-  selection_history[doc] = nil
-  selection_origin[doc] = nil
+  local key = selection_state_key(doc)
+  local origin = selection_origin[key]
+  selection_history[key] = nil
+  selection_origin[key] = nil
   if origin then
     local _, starts = build_text_index(doc)
     local line, col = offset_to_pos(doc, starts, origin)
@@ -869,7 +924,7 @@ local function patch_paste_undo_selection(doc, undo_start_idx, selections)
   for i = undo_start_idx, doc.undo_stack.idx - 1 do
     local cmd = doc.undo_stack[i]
     if cmd and cmd.type == "selection" then
-      doc.undo_stack[i] = { type = "selection", time = cmd.time, table.unpack(selections) }
+      doc.undo_stack[i] = { type = "selection", time = cmd.time, selection_session_id = cmd.selection_session_id, table.unpack(selections) }
       return
     end
   end
@@ -942,25 +997,20 @@ local function duplicate_current_line(dv)
     return a.idx < b.idx
   end)
 
-  doc.selections = {}
-  for idx, action in ipairs(actions) do
+  local new_selections = {}
+  for _, action in ipairs(actions) do
     local lines_inserted_before = 0
     for _, other in ipairs(actions) do
       if other.last_line < action.first_line then
         lines_inserted_before = lines_inserted_before + other.line_count
       end
     end
-    with_origin_clear_suppressed(
-      doc_set_selections,
-      doc,
-      idx,
-      action.l1 + lines_inserted_before + action.line_count,
-      action.c1,
-      action.l2 + lines_inserted_before + action.line_count,
-      action.c2
-    )
+    new_selections[#new_selections + 1] = action.l1 + lines_inserted_before + action.line_count
+    new_selections[#new_selections + 1] = action.c1
+    new_selections[#new_selections + 1] = action.l2 + lines_inserted_before + action.line_count
+    new_selections[#new_selections + 1] = action.c2
   end
-  doc.last_selection = math.min(last_selection, #actions)
+  set_selection_list(doc, new_selections, math.min(last_selection, #actions))
   clear_selection_origin(doc)
 end
 
@@ -1062,11 +1112,12 @@ end
 
 local function add_selection_for_next_occurrence(dv)
   local doc = dv.doc
+  local key = selection_state_key(doc)
   local had_selection = doc:has_selection()
   local text = selection_text_for_occurrences(dv)
   if not text then return end
   if not had_selection then
-    add_next_occurrence_state[doc] = nil
+    add_next_occurrence_state[key] = nil
     return
   end
 
@@ -1077,7 +1128,7 @@ local function add_selection_for_next_occurrence(dv)
   local _, _, active_l2, active_c2 = doc:get_selection_idx(doc.last_selection, true)
   local last_end_offset = pos_to_offset(starts, active_l2, active_c2)
 
-  local state = add_next_occurrence_state[doc]
+  local state = add_next_occurrence_state[key]
   local wrap_armed = state and state.text == text and state.armed
   local start_offset = wrap_armed and 0 or last_end_offset
   local find_text = config.select_add_next_no_case and text:lower() or text
@@ -1099,7 +1150,7 @@ local function add_selection_for_next_occurrence(dv)
 
   if not found_start then
     -- First press at EOF only arms wrap and does nothing. Press again to wrap.
-    add_next_occurrence_state[doc] = { text = text, armed = true }
+    add_next_occurrence_state[key] = { text = text, armed = true }
     return
   end
 
@@ -1107,7 +1158,7 @@ local function add_selection_for_next_occurrence(dv)
   local l2, c2 = offset_to_pos(doc, starts, found_end)
   doc:add_selection(l2, c2, l1, c1)
   dv:scroll_to_make_visible(l2, c2)
-  add_next_occurrence_state[doc] = nil
+  add_next_occurrence_state[key] = nil
 end
 
 local function select_all_occurrences(dv)
@@ -1131,12 +1182,14 @@ local function select_all_occurrences(dv)
   end
 
   if #selections == 0 then return end
-  doc.selections = {}
-  for idx, sel in ipairs(selections) do
-    with_origin_clear_suppressed(doc_set_selections, doc, idx, table.unpack(sel))
+  local new_selections = {}
+  for _, sel in ipairs(selections) do
+    for i = 1, 4 do
+      new_selections[#new_selections + 1] = sel[i]
+    end
   end
-  doc.last_selection = 1
-  add_next_occurrence_state[doc] = nil
+  set_selection_list(doc, new_selections, 1)
+  add_next_occurrence_state[selection_state_key(doc)] = nil
 end
 
 command.add(function()

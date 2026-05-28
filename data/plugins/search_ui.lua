@@ -182,11 +182,13 @@ end
 
 ---@param text string
 ---@param doc core.doc
-function Results:find(text, doc, force)
+---@param force? boolean
+---@param view? core.docview
+function Results:find(text, doc, force, view)
   if
     not force and self.text == text
     and
-    self.doc == doc and self.change_id == doc:get_change_id()
+    self.doc == doc and self.doc_view == view and self.change_id == doc:get_change_id()
   then
     self:set_status()
     return
@@ -201,6 +203,7 @@ function Results:find(text, doc, force)
 
   self.text = text
   self.doc = doc
+  self.doc_view = view
   self.change_id = doc:get_change_id()
 
   local search_func
@@ -289,14 +292,21 @@ end
 
 function Results:update()
   if #self.matches > 0 then
-    self:find(self.text, self.doc, true)
+    self:find(self.text, self.doc, true, self.doc_view)
   end
 end
 
 ---@return integer
 function Results:current()
   if not self.doc then return 0 end
-  local line1, col1, line2, col2 = self.doc:get_selection()
+  local line1, col1, line2, col2
+  if self.doc_view and self.doc_view.doc == self.doc and self.doc_view.with_selection_state then
+    line1, col1, line2, col2 = self.doc_view:with_selection_state(function()
+      return self.doc:get_selection()
+    end)
+  else
+    line1, col1, line2, col2 = self.doc:get_selection()
+  end
   if line1 == line2 and col1 == col2 then return 0 end
   local line = math.min(line1, line2)
   local col = math.min(col1, col2)
@@ -314,6 +324,7 @@ function Results:clear()
   self.text = ""
   self.matches = {}
   self.doc = nil
+  self.doc_view = nil
   status:set_label("")
 end
 
@@ -348,8 +359,19 @@ local function view_is_open(target_view)
   return found
 end
 
+local function with_doc_view_selection(fn, ...)
+  if doc_view and doc_view.with_selection_state then
+    return doc_view:with_selection_state(fn, ...)
+  end
+  return fn(...)
+end
+
 local find_enabled = true
 local function find(reverse, not_scroll, unselect_first, no_wrap)
+  if core.last_active_view and core.last_active_view:is(DocView) then
+    doc_view = core.last_active_view
+  end
+
   if
     not view_is_open(doc_view) or findtext:get_text() == "" or not find_enabled
   then
@@ -357,164 +379,165 @@ local function find(reverse, not_scroll, unselect_first, no_wrap)
     return
   end
 
-  if core.last_active_view and core.last_active_view:is(DocView) then
-    doc_view = core.last_active_view
-  end
-
-  local doc = doc_view.doc
-  local cline1, ccol1, _, ccol2 = doc:get_selection()
-  if unselect_first then
-    cline1, ccol1, _, ccol2 = doc:get_selection(true)
-    ccol2 = ccol1
-    doc:set_selection(cline1, ccol1)
-  end
-  local line, col = cline1, ccol1
-  if (reverse and ccol2 < ccol1) or (not reverse and col < ccol2) then
-    col = ccol2
-  end
-
-  local opt = {
-    wrap = not no_wrap and true or false,
-    no_case = not sensitive:is_toggled(),
-    whole_word = wholeword:is_toggled(),
-    pattern = patterncheck:is_toggled(),
-    regex = regexcheck:is_toggled(),
-    reverse = reverse
-  }
-
-  if opt.regex and not regex.compile(findtext:get_text()) then
-    return
-  end
-
-  status:set_label("")
-
-  core.try(function()
-    local line1, col1, line2, col2 = search.find(
-      doc, line, col, findtext:get_text(), opt
-    )
-
-    local current_text = doc:get_text(
-      table.unpack({ doc:get_selection() })
-    )
-
-    if opt.no_case and not opt.regex and not opt.pattern then
-      current_text = current_text:ulower()
+  return with_doc_view_selection(function()
+    local doc = doc_view.doc
+    local cline1, ccol1, _, ccol2 = doc:get_selection()
+    if unselect_first then
+      cline1, ccol1, _, ccol2 = doc:get_selection(true)
+      ccol2 = ccol1
+      doc:set_selection(cline1, ccol1)
+    end
+    local line, col = cline1, ccol1
+    if (reverse and ccol2 < ccol1) or (not reverse and col < ccol2) then
+      col = ccol2
     end
 
-    if line1 then
-      local text = findtext:get_text()
+    local opt = {
+      wrap = not no_wrap and true or false,
+      no_case = not sensitive:is_toggled(),
+      whole_word = wholeword:is_toggled(),
+      pattern = patterncheck:is_toggled(),
+      regex = regexcheck:is_toggled(),
+      reverse = reverse
+    }
+
+    if opt.regex and not regex.compile(findtext:get_text()) then
+      return
+    end
+
+    status:set_label("")
+
+    core.try(function()
+      local line1, col1, line2, col2 = search.find(
+        doc, line, col, findtext:get_text(), opt
+      )
+
+      local current_text = doc:get_text(
+        table.unpack({ doc:get_selection() })
+      )
+
       if opt.no_case and not opt.regex and not opt.pattern then
-        text = text:ulower()
+        current_text = current_text:ulower()
       end
-      if reverse or (current_text == text or current_text == "") then
-        doc:set_selection(line1, col2, line2, col1)
-      else
-        doc:set_selection(line1, col1, line2, col2)
+
+      if line1 then
+        local text = findtext:get_text()
+        if opt.no_case and not opt.regex and not opt.pattern then
+          text = text:ulower()
+        end
+        if reverse or (current_text == text or current_text == "") then
+          doc:set_selection(line1, col2, line2, col1)
+        else
+          doc:set_selection(line1, col1, line2, col2)
+        end
+        if not not_scroll then
+          doc_view:scroll_to_make_visible(line1, col1, true)
+        end
+        Results:find(text, doc, nil, doc_view)
       end
-      if not not_scroll then
-        doc_view:scroll_to_make_visible(line1, col1, true)
-      end
-      Results:find(text, doc)
-    end
+    end)
   end)
 end
 
 local function find_replace()
-  if core.last_active_view:is(DocView) then
+  if core.last_active_view and core.last_active_view:is(DocView) then
     doc_view = core.last_active_view
   end
+  if not view_is_open(doc_view) then return end
 
-  ---@type core.doc
-  local doc = doc_view.doc
-  local new = replacetext:get_text()
-  local in_selection = replaceinselection:is_toggled()
-  local selections = {}
+  return with_doc_view_selection(function()
+    ---@type core.doc
+    local doc = doc_view.doc
+    local new = replacetext:get_text()
+    local in_selection = replaceinselection:is_toggled()
+    local selections = {}
 
-  -- allows repeatedly performing a replace
-  if in_selection and doc:get_text(doc:get_selection()) == "" then
-    find(false)
-    return
-  end
-
-  local rexpr = regexcheck:is_toggled()
-    and regex.compile(
-      findtext:get_text(),
-      not sensitive:is_toggled() and "i" or ""
-    )
-    or false
-
-  local pattern = patterncheck:is_toggled()
-    and findtext:get_text()
-    or false
-
-  if not in_selection then
-    table.insert(selections, {1, 1, 1, 1})
-  else
-    for _, l1, c1, l2, c2 in doc:get_selections(true) do
-      table.insert(selections, {l1, c1, l2, c2})
+    -- allows repeatedly performing a replace
+    if in_selection and doc:get_text(doc:get_selection()) == "" then
+      find(false)
+      return
     end
-  end
 
-  local n = 0
-  for _, s in ipairs(selections) do
-    doc:set_selection(s[1], s[2])
+    local rexpr = regexcheck:is_toggled()
+      and regex.compile(
+        findtext:get_text(),
+        not sensitive:is_toggled() and "i" or ""
+      )
+      or false
 
-    local f1, fc1 -- save position of first replaced result
-    local p1, pc1, p2, pc2
-    local n1, nc1, n2, nc2
-    repeat
-      p1, pc1, p2, pc2 = doc:get_selection(true)
-      find(false, true, false, true)
-      n1, nc1, n2, nc2 = doc:get_selection(true)
-      if p1 ~= n1 or pc1 ~= nc1 or p2 ~= n2 or pc2 ~= nc2 then
-        if f1 == n1 and fc1 == nc1 then -- prevent recursive replacement
-          doc:set_selection(p1, pc1)
-          break
-        end
-        if in_selection then
-          if n1 > s[3] or (n1 == s[3] and nc1 > s[4]) then
+    local pattern = patterncheck:is_toggled()
+      and findtext:get_text()
+      or false
+
+    if not in_selection then
+      table.insert(selections, {1, 1, 1, 1})
+    else
+      for _, l1, c1, l2, c2 in doc:get_selections(true) do
+        table.insert(selections, {l1, c1, l2, c2})
+      end
+    end
+
+    local n = 0
+    for _, s in ipairs(selections) do
+      doc:set_selection(s[1], s[2])
+
+      local f1, fc1 -- save position of first replaced result
+      local p1, pc1, p2, pc2
+      local n1, nc1, n2, nc2
+      repeat
+        p1, pc1, p2, pc2 = doc:get_selection(true)
+        find(false, true, false, true)
+        n1, nc1, n2, nc2 = doc:get_selection(true)
+        if p1 ~= n1 or pc1 ~= nc1 or p2 ~= n2 or pc2 ~= nc2 then
+          if f1 == n1 and fc1 == nc1 then -- prevent recursive replacement
             doc:set_selection(p1, pc1)
             break
           end
-        end
-        if not f1 then f1, fc1 = n1, nc1 end
-        n = n + 1
-        doc:replace_cursor(0, n1, nc1, n2, nc2, function()
-          local replacement, subject = new, nil
-          if rexpr then
-            subject = doc:get_text(n1, nc1, n2, nc2)
-            replacement = rexpr:gsub(subject, replacement, 1)
-          elseif pattern then
-            subject = doc:get_text(n1, nc1, n2, nc2)
-            replacement = subject:gsub(pattern, replacement, 1)
+          if in_selection then
+            if n1 > s[3] or (n1 == s[3] and nc1 > s[4]) then
+              doc:set_selection(p1, pc1)
+              break
+            end
           end
-          local new_len = #replacement
-          local old_len = nc2 - nc1
-          if old_len < new_len then
-            nc2 = nc2 + (new_len - old_len)
-          else
-            nc2 = nc2 - (old_len - new_len)
+          if not f1 then f1, fc1 = n1, nc1 end
+          n = n + 1
+          doc:replace_cursor(0, n1, nc1, n2, nc2, function()
+            local replacement, subject = new, nil
+            if rexpr then
+              subject = doc:get_text(n1, nc1, n2, nc2)
+              replacement = rexpr:gsub(subject, replacement, 1)
+            elseif pattern then
+              subject = doc:get_text(n1, nc1, n2, nc2)
+              replacement = subject:gsub(pattern, replacement, 1)
+            end
+            local new_len = #replacement
+            local old_len = nc2 - nc1
+            if old_len < new_len then
+              nc2 = nc2 + (new_len - old_len)
+            else
+              nc2 = nc2 - (old_len - new_len)
+            end
+            return replacement or subject
+          end)
+          doc:set_selection(n2, nc2)
+          if in_selection then
+            if n2 > s[3] or (n2 == s[3] and nc2 > s[4]) then break end
           end
-          return replacement or subject
-        end)
-        doc:set_selection(n2, nc2)
-        if in_selection then
-          if n2 > s[3] or (n2 == s[3] and nc2 > s[4]) then break end
         end
-      end
-    until p1 == n1 and pc1 == nc1 and p2 == n2 and pc2 == nc2
-  end
-
-  if #selections > 1 then
-    doc:set_selection(selections[1][1], selections[1][2])
-    for i=2, #selections do
-      doc:add_selection(selections[i][1], selections[i][2])
+      until p1 == n1 and pc1 == nc1 and p2 == n2 and pc2 == nc2
     end
-  end
 
-  Results:clear()
+    if #selections > 1 then
+      doc:set_selection(selections[1][1], selections[1][2])
+      for i=2, #selections do
+        doc:add_selection(selections[i][1], selections[i][2])
+      end
+    end
 
-  status:set_label(string.format("Total Replaced: %d", n))
+    Results:clear()
+
+    status:set_label(string.format("Total Replaced: %d", n))
+  end)
 end
 
 local current_node = nil
@@ -578,31 +601,33 @@ local function show_find(av, toggle)
     if av then
       doc_view = av
       if view_is_open(doc_view) and doc_view.doc then
-        local is_pattern = regexcheck:is_toggled() or patterncheck:is_toggled()
-        local doc_text = doc_view.doc:get_text(
-          table.unpack({ doc_view.doc:get_selection() })
-        )
-        if not sensitive:is_toggled() then doc_text = doc_text:ulower() end
-        local current_text = findtext:get_text()
-        if not sensitive:is_toggled() then current_text = current_text:ulower() end
-        if not is_pattern and doc_text and doc_text ~= "" and current_text ~= doc_text then
-          local original_text = doc_view.doc:get_text(
+        with_doc_view_selection(function()
+          local is_pattern = regexcheck:is_toggled() or patterncheck:is_toggled()
+          local doc_text = doc_view.doc:get_text(
             table.unpack({ doc_view.doc:get_selection() })
           )
-          find_enabled = false
-          findtext:set_text(original_text)
-          find_enabled = true
-        elseif current_text ~= "" and doc_text == "" then
-          find(false)
-        end
-        if findtext:get_text() ~= "" then
-          if not is_pattern then
-            findtext.textview.doc:set_selection(1, math.huge, 1, 1)
+          if not sensitive:is_toggled() then doc_text = doc_text:ulower() end
+          local current_text = findtext:get_text()
+          if not sensitive:is_toggled() then current_text = current_text:ulower() end
+          if not is_pattern and doc_text and doc_text ~= "" and current_text ~= doc_text then
+            local original_text = doc_view.doc:get_text(
+              table.unpack({ doc_view.doc:get_selection() })
+            )
+            find_enabled = false
+            findtext:set_text(original_text)
+            find_enabled = true
+          elseif current_text ~= "" and doc_text == "" then
+            find(false)
           end
-          Results:find(findtext:get_text(), doc_view.doc)
-        else
-          Results:clear()
-        end
+          if findtext:get_text() ~= "" then
+            if not is_pattern then
+              findtext.textview.doc:set_selection(1, math.huge, 1, 1)
+            end
+            Results:find(findtext:get_text(), doc_view.doc, nil, doc_view)
+          else
+            Results:clear()
+          end
+        end)
       end
     end
   else
@@ -823,7 +848,7 @@ function core.set_active_view(...)
     ui.prev_view = doc_view
     local search_text = findtext:get_text()
     if search_text ~= "" then
-      Results:find(search_text, doc_view.doc)
+      Results:find(search_text, doc_view.doc, nil, doc_view)
     else
       Results:clear()
     end
@@ -902,7 +927,7 @@ command.add(function() return ui:is_visible() and not core.active_view:is(Comman
 command.add(
   function()
     local active = ui.child_active == findtext and findtext or replacetext
-    return ui:is_visible()
+    local valid = ui:is_visible()
       and
       not core.active_view:is(CommandView)
       and
@@ -911,21 +936,25 @@ command.add(
         and
         core.active_view == active.textview
       )
+    if valid and doc_view then return true, doc_view end
+    return false
   end,
   {
     ["search-replace:perform"] = function()
-      ---@type core.doc
-      local doc = doc_view.doc
-      local line1, col1, line2, col2 = doc:get_selection()
-      -- correct cursor position to properly search next result
-      if line1 ~= line2 or col1 ~= col2 then
-        doc:set_selection(
-          line1,
-          math.max(col1, col2),
-          line2,
-          math.min(col1, col2)
-        )
-      end
+      with_doc_view_selection(function()
+        ---@type core.doc
+        local doc = doc_view.doc
+        local line1, col1, line2, col2 = doc:get_selection()
+        -- correct cursor position to properly search next result
+        if line1 ~= line2 or col1 ~= col2 then
+          doc:set_selection(
+            line1,
+            math.max(col1, col2),
+            line2,
+            math.min(col1, col2)
+          )
+        end
+      end)
       find(false)
     end,
     ["search-replace:perform-previous"] = function()

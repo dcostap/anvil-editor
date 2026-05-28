@@ -73,9 +73,9 @@ end
 for _, dir in ipairs { "left", "right", "up", "down" } do
   t["root:split-" .. dir] = function(node)
     local av = node.active_view
-    node:split(dir)
+    local new_node = node:split(dir)
     if av:is(DocView) then
-      core.root_view:open_doc(av.doc)
+      core.root_view:open_doc(av.doc, { source_view = av, node = new_node })
     end
   end
 

@@ -46,6 +46,13 @@ local RootView = View:extend()
 
 function RootView:__tostring() return "RootView" end
 
+local function call_view_method(view, method, ...)
+  if view and view.with_selection_state then
+    return view:with_selection_state(method, view, ...)
+  end
+  return method(view, ...)
+end
+
 ---Constructor - initializes the root node tree and UI state.
 ---Called automatically by core at startup.
 function RootView:new()
@@ -156,9 +163,11 @@ end
 ---If document is already open, switches to that view instead.
 ---Creates a new DocView and adds it as a tab in the active node.
 ---@param doc core.doc Document to open
+---@param opts? table Options. opts.source_view copies scroll/selection from another DocView; opts.node targets a specific leaf node.
 ---@return core.docview view The view displaying the document
-function RootView:open_doc(doc)
-  local node = self:get_active_node_default()
+function RootView:open_doc(doc, opts)
+  opts = opts or {}
+  local node = opts.node or self:get_active_node_default()
   for i, view in ipairs(node.views) do
     if view.doc == doc then
       node:set_active_view(node.views[i])
@@ -166,9 +175,17 @@ function RootView:open_doc(doc)
     end
   end
   local view = DocView(doc)
+  if opts.source_view and opts.source_view.doc == doc and opts.source_view.get_selection_state then
+    view:set_selection_state(opts.source_view:get_selection_state())
+    view.scroll.x = opts.source_view.scroll.x or 0
+    view.scroll.to.x = opts.source_view.scroll.to.x or opts.source_view.scroll.x or 0
+    view.scroll.y = opts.source_view.scroll.y or 0
+    view.scroll.to.y = opts.source_view.scroll.to.y or opts.source_view.scroll.y or 0
+  end
   node:add_view(view)
   self.root_node:update_layout()
-  view:scroll_to_line(view.doc:get_selection(), true, true)
+  local line = view.selection_state and view.selection_state.selections[1] or view.doc:get_selection()
+  view:scroll_to_line(line, true, true)
   return view
 end
 
@@ -253,7 +270,8 @@ function RootView:on_mouse_pressed(button, x, y, clicks)
   elseif not self.dragged_node then -- avoid sending on_mouse_pressed events when dragging tabs
     core.set_active_view(node.active_view)
     self:grab_mouse(button, node.active_view)
-    return self.on_view_mouse_pressed(button, x, y, clicks) or node.active_view:on_mouse_pressed(button, x, y, clicks)
+    return self.on_view_mouse_pressed(button, x, y, clicks)
+      or call_view_method(node.active_view, node.active_view.on_mouse_pressed, button, x, y, clicks)
   end
 end
 
@@ -299,7 +317,7 @@ function RootView:on_mouse_released(button, x, y, ...)
   if self.grab then
     if self.grab.button == button then
       local grabbed_view = self.grab.view
-      grabbed_view:on_mouse_released(button, x, y, ...)
+      call_view_method(grabbed_view, grabbed_view.on_mouse_released, button, x, y, ...)
       self:ungrab_mouse(button)
 
       -- If the mouse was released over a different view, send it the mouse position
@@ -383,7 +401,7 @@ function RootView:on_mouse_moved(x, y, dx, dy)
   self.mouse.x, self.mouse.y = x, y
 
   if self.grab then
-    self.grab.view:on_mouse_moved(x, y, dx, dy)
+    call_view_method(self.grab.view, self.grab.view.on_mouse_moved, x, y, dx, dy)
     core.request_cursor(self.grab.view.cursor)
     return
   end
@@ -429,7 +447,7 @@ function RootView:on_mouse_moved(x, y, dx, dy)
 
   if not self.overlapping_view then return end
 
-  self.overlapping_view:on_mouse_moved(x, y, dx, dy)
+  call_view_method(self.overlapping_view, self.overlapping_view.on_mouse_moved, x, y, dx, dy)
   core.request_cursor(self.overlapping_view.cursor)
 
   if not overlapping_node then return end
@@ -461,7 +479,7 @@ end
 ---@return boolean handled True if event was handled
 function RootView:on_file_dropped(filename, x, y)
   local node = self.root_node:get_child_overlapping_point(x, y)
-  local result = node and node.active_view:on_file_dropped(filename, x, y)
+  local result = node and call_view_method(node.active_view, node.active_view.on_file_dropped, filename, x, y)
   if result then return result end
   local info = system.get_file_info(filename)
   if info and info.type == "dir" then
@@ -532,13 +550,13 @@ end
 function RootView:on_mouse_wheel(...)
   local x, y = self.mouse.x, self.mouse.y
   local node = self.root_node:get_child_overlapping_point(x, y)
-  return node.active_view:on_mouse_wheel(...)
+  return call_view_method(node.active_view, node.active_view.on_mouse_wheel, ...)
 end
 
 
 ---Forward text input events to the currently active view.
 function RootView:on_text_input(...)
-  core.active_view:on_text_input(...)
+  call_view_method(core.active_view, core.active_view.on_text_input, ...)
 end
 
 
@@ -591,14 +609,14 @@ function RootView:on_touch_moved(x, y, dx, dy, ...)
   -- avoid sending on_touch_moved events when dragging tabs
   if dn then return end
 
-  self.touched_view:on_touch_moved(x, y, dx, dy, ...)
+  call_view_method(self.touched_view, self.touched_view.on_touch_moved, x, y, dx, dy, ...)
 end
 
 
 ---Forward IME text editing events to the active view.
 ---Called during IME composition for text input.
 function RootView:on_ime_text_editing(...)
-  core.active_view:on_ime_text_editing(...)
+  call_view_method(core.active_view, core.active_view.on_ime_text_editing, ...)
 end
 
 

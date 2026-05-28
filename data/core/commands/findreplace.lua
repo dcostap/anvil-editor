@@ -28,17 +28,26 @@ local function get_find_tooltip()
     (tr and (" " .. tr .. " toggles regex find.") or "")
 end
 
-local function update_preview(sel, search_fn, text)
-  local ok, line1, col1, line2, col2 = pcall(search_fn, last_view.doc,
-    sel[1], sel[2], text, case_sensitive, find_regex)
-  if ok and line1 and text ~= "" then
-    last_view.doc:set_selection(line2, col2, line1, col1)
-    last_view:scroll_to_line(line2, true)
-    found_expression = true
-  else
-    last_view.doc:set_selection(table.unpack(sel))
-    found_expression = false
+local function with_last_view(fn, ...)
+  if last_view and last_view.with_selection_state then
+    return last_view:with_selection_state(fn, ...)
   end
+  return fn(...)
+end
+
+local function update_preview(sel, search_fn, text)
+  return with_last_view(function()
+    local ok, line1, col1, line2, col2 = pcall(search_fn, last_view.doc,
+      sel[1], sel[2], text, case_sensitive, find_regex)
+    if ok and line1 and text ~= "" then
+      last_view.doc:set_selection(line2, col2, line1, col1)
+      last_view:scroll_to_line(line2, true)
+      found_expression = true
+    else
+      last_view.doc:set_selection(table.unpack(sel))
+      found_expression = false
+    end
+  end)
 end
 
 
@@ -73,8 +82,10 @@ local function find(label, search_fn)
         last_fn, last_text = search_fn, text
       else
         core.error("Couldn't find %q", text)
-        last_view.doc:set_selection(table.unpack(last_sel))
-        last_view:scroll_to_make_visible(table.unpack(last_sel))
+        with_last_view(function()
+          last_view.doc:set_selection(table.unpack(last_sel))
+          last_view:scroll_to_make_visible(table.unpack(last_sel))
+        end)
       end
     end,
     suggest = function(text)
@@ -85,8 +96,10 @@ local function find(label, search_fn)
     cancel = function(explicit)
       core.status_view:remove_tooltip()
       if explicit then
-        last_view.doc:set_selection(table.unpack(last_sel))
-        last_view:scroll_to_make_visible(table.unpack(last_sel))
+        with_last_view(function()
+          last_view.doc:set_selection(table.unpack(last_sel))
+          last_view:scroll_to_make_visible(table.unpack(last_sel))
+        end)
       end
     end
   })
@@ -110,8 +123,10 @@ local function replace(kind, default, fn)
         submit = function(new)
           core.status_view:remove_tooltip()
           insert_unique(core.previous_replace, new)
-          local results = doc():replace(function(text)
-            return fn(text, old, new)
+          local results = with_last_view(function()
+            return doc():replace(function(text)
+              return fn(text, old, new)
+            end)
           end)
           local n = 0
           for _,v in pairs(results) do

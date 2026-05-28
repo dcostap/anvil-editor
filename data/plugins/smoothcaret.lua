@@ -9,8 +9,6 @@ local smoothcaret = {
   rate = 0.65,
 }
 
-local caret_idx = 1
-
 local docview_update = DocView.update
 function DocView:update()
   docview_update(self)
@@ -75,20 +73,21 @@ function DocView:update()
     end
   end
 
-  -- This is used by `DocView:draw_caret` to keep track of the current caret
-  caret_idx = 1
+  -- This is used by `DocView:draw_caret` to keep track of the current caret per view.
+  self.smoothcaret_draw_caret_idx = 1
 end
 
 local docview_draw_caret = DocView.draw_caret
-function DocView:draw_caret(x, y, line, col)
+function DocView:draw_caret(x, y, line, col, caret_idx_arg, color)
   if not smoothcaret.enabled then
-    docview_draw_caret(self, x, y, line, col)
+    docview_draw_caret(self, x, y, line, col, caret_idx_arg, color)
     return
   end
 
-  local c = self.visible_carets and self.visible_carets[caret_idx]
+  local idx = caret_idx_arg or self.smoothcaret_draw_caret_idx or 1
+  local c = self.visible_carets and self.visible_carets[idx]
     or { current = { x = x, y = y } }
-  docview_draw_caret(self, c.current.x - self.scroll.x, c.current.y - self.scroll.y, line, col)
+  docview_draw_caret(self, c.current.x - self.scroll.x, c.current.y - self.scroll.y, line, col, caret_idx_arg, color)
 
-  caret_idx = caret_idx + 1
+  self.smoothcaret_draw_caret_idx = idx + 1
 end

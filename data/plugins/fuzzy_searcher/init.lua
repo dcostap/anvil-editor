@@ -1818,6 +1818,13 @@ local function draw_preview_placeholder(message, detail, x, y, w, h)
   end
 end
 
+local function call_preview_view_method(view, method, ...)
+  if view and view.with_selection_state then
+    return view:with_selection_state(method, view, ...)
+  end
+  return method(view, ...)
+end
+
 local function draw_view_in_rect(view, x, y, w, h, result)
   -- Embedded core views may push their own clip rects. Give them a clean local
   -- clip stack rooted at the preview pane; otherwise they can intersect with a
@@ -1826,7 +1833,7 @@ local function draw_view_in_rect(view, x, y, w, h, result)
   local rx, ry, rw, rh = table.unpack(saved_stack[#saved_stack])
   core.clip_rect_stack = {{ x, y, w, h }}
   renderer.set_clip_rect(x, y, w, h)
-  view:draw()
+  call_preview_view_method(view, view.draw)
   draw_preview_debug(view, result, x, y, w, h)
   core.clip_rect_stack = saved_stack
   renderer.set_clip_rect(rx, ry, rw, rh)
@@ -1881,30 +1888,40 @@ function FSView:update_preview_view()
     target = common.clamp(target, 1, #view.doc.lines)
     local highlight_key = table.concat({ r.kind or "", r.grep_query or "", r.fuzzy_query or "", tostring(target), r.text or "" }, "\0")
     if self.preview_target_line ~= target or self.preview_highlight_key ~= highlight_key then
-      view.doc:clear_search_selections()
-      local selections = {}
-      if r.kind == "grep" then
-        for _, span in ipairs(grep_content_spans(view.doc.lines[target] or "", r, 0, target) or {}) do
-          local col1, col2 = span[1], span[2] + 1
-          view.doc:add_search_selection(target, col1, target, col2)
-          table.insert(selections, target)
-          table.insert(selections, col1)
-          table.insert(selections, target)
-          table.insert(selections, col2)
+      view:with_selection_state(function()
+        view.doc:clear_search_selections()
+        local selections = {}
+        if r.kind == "grep" then
+          for _, span in ipairs(grep_content_spans(view.doc.lines[target] or "", r, 0, target) or {}) do
+            local col1, col2 = span[1], span[2] + 1
+            view.doc:add_search_selection(target, col1, target, col2)
+            table.insert(selections, target)
+            table.insert(selections, col1)
+            table.insert(selections, target)
+            table.insert(selections, col2)
+          end
         end
-      end
-      if #selections > 0 then
-        view.doc.selections = selections
-      else
-        view.doc:set_selection(target, 1, target, 1)
-      end
+        if #selections > 0 then
+          view.doc:set_selection(selections[1], selections[2], selections[3], selections[4])
+          for i = 5, #selections, 4 do
+            view.doc:set_selections(
+              math.floor((i - 1) / 4) + 1,
+              selections[i], selections[i + 1], selections[i + 2], selections[i + 3],
+              nil, 0
+            )
+          end
+          view.doc.last_selection = 1
+        else
+          view.doc:set_selection(target, 1, target, 1)
+        end
+      end)
       view:scroll_to_line(target, false, true)
       self.preview_target_line = target
       self.preview_highlight_key = highlight_key
     end
   end
 
-  view:update()
+  call_preview_view_method(view, view.update)
   return view
 end
 
@@ -1965,7 +1982,7 @@ function FSView:on_mouse_pressed(button, x, y, clicks)
     local interactive = self.preview_view:extends(ImageView) or self.preview_view:scrollbar_overlaps_point(x, y)
     if interactive then
       self.preview_mouse_pressed = true
-      self.preview_view:on_mouse_pressed(button, x, y, clicks)
+      call_preview_view_method(self.preview_view, self.preview_view.on_mouse_pressed, button, x, y, clicks)
     end
     self:swap_active_child(self.input)
     self:schedule_update(true)
@@ -2002,7 +2019,9 @@ function FSView:on_mouse_released(button, x, y)
 
   if self.preview_mouse_pressed then
     self.preview_mouse_pressed = false
-    if self.preview_view then self.preview_view:on_mouse_released(button, x, y) end
+    if self.preview_view then
+      call_preview_view_method(self.preview_view, self.preview_view.on_mouse_released, button, x, y)
+    end
     self:swap_active_child(self.input)
     self:schedule_update(true)
     return true
@@ -2031,7 +2050,7 @@ function FSView:on_mouse_moved(x, y, dx, dy)
   end
 
   if self.preview_view and (self.preview_mouse_pressed or self:preview_contains(x, y)) then
-    self.preview_view:on_mouse_moved(x, y, dx, dy)
+    call_preview_view_method(self.preview_view, self.preview_view.on_mouse_moved, x, y, dx, dy)
     if self.preview_view.cursor then system.set_cursor(self.preview_view.cursor) end
     self.hovered_result = nil
     self:schedule_update(true)
@@ -2049,10 +2068,10 @@ end
 
 function FSView:on_mouse_wheel(y, x)
   if self.preview_view and self:preview_contains(self.mouse.x, self.mouse.y) then
-    if not self.preview_view:on_mouse_wheel(y, x) and self.preview_view.scrollable then
+    if not call_preview_view_method(self.preview_view, self.preview_view.on_mouse_wheel, y, x) and self.preview_view.scrollable then
       self.preview_view.scroll.to.y = self.preview_view.scroll.to.y + y * -config.mouse_wheel_scroll
     end
-    self.preview_view:update()
+    call_preview_view_method(self.preview_view, self.preview_view.update)
     self:schedule_update(true)
   elseif self:panel_contains(self.mouse.x, self.mouse.y) then
     self:select_delta(y < 0 and 1 or -1)
@@ -2664,7 +2683,15 @@ function FSView:confirm(new_window)
       })
     else
       local v = core.open_file(path)
-      if v and v.doc then v.doc:set_selection(line, col) end
+      if v and v.doc then
+        if v.with_selection_state then
+          v:with_selection_state(function()
+            v.doc:set_selection(line, col)
+          end)
+        else
+          v.doc:set_selection(line, col)
+        end
+      end
     end
   end
 end

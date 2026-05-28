@@ -270,6 +270,13 @@ local function doc()
   return is_searchable_docview(core.active_view) and core.active_view.doc or (last_view and last_view.doc)
 end
 
+local function with_last_view(fn, ...)
+  if last_view and last_view.with_selection_state then
+    return last_view:with_selection_state(fn, ...)
+  end
+  return fn(...)
+end
+
 local function get_find_tooltip()
   local rf = keymap.get_binding("find-replace:repeat-find")
   local ti = keymap.get_binding("find-replace:toggle-sensitivity")
@@ -425,24 +432,26 @@ local function choose_match(matches, text, reverse)
 end
 
 local function update_preview(sel, search_fn, text, reverse)
-  local d = last_view.doc
-  d:clear_search_selections()
+  return with_last_view(function()
+    local d = last_view.doc
+    d:clear_search_selections()
 
-  local matches = find_all_matches(d, text or "")
-  local current = text ~= "" and choose_match(matches, text, reverse) or 0
-  if current > 0 then
-    local match = matches[current]
-    d:add_search_selection(match.line, match.col1, match.line, match.col2)
-    d:set_selection(match.line, match.col2, match.line, match.col1)
-    last_view:scroll_to_line(match.line, true)
-    found_expression = true
-  else
-    d:set_selection(table.unpack(sel))
-    found_expression = false
-  end
+    local matches = find_all_matches(d, text or "")
+    local current = text ~= "" and choose_match(matches, text, reverse) or 0
+    if current > 0 then
+      local match = matches[current]
+      d:add_search_selection(match.line, match.col1, match.line, match.col2)
+      d:set_selection(match.line, match.col2, match.line, match.col1)
+      last_view:scroll_to_line(match.line, true)
+      found_expression = true
+    else
+      d:set_selection(table.unpack(sel))
+      found_expression = false
+    end
 
-  set_find_state(d, text, matches, current)
-  update_find_label(text, matches, current)
+    set_find_state(d, text, matches, current)
+    update_find_label(text, matches, current)
+  end)
 end
 
 local function current_find_text()
@@ -459,61 +468,67 @@ end
 
 local function add_find_match_to_selection(reverse)
   if not last_view or not last_fn then return end
-  local d = last_view.doc
-  if replace_active and replace_focus == "replace" then replace_text = core.command_view:get_text() end
-  local text = current_find_text()
-  last_text = text
+  return with_last_view(function()
+    local d = last_view.doc
+    if replace_active and replace_focus == "replace" then replace_text = core.command_view:get_text() end
+    local text = current_find_text()
+    last_text = text
 
-  d:clear_search_selections()
-  local matches = find_all_matches(d, text or "")
-  local current = text ~= "" and choose_match(matches, text, reverse) or 0
-  if current > 0 then
-    local match = matches[current]
-    d:add_search_selection(match.line, match.col1, match.line, match.col2)
-    local existing_idx = selection_match_index(d, match)
-    if existing_idx then
-      -- When navigation wraps to an already-selected match, keep all existing
-      -- selections/cursors.  set_selection() would replace the whole selection
-      -- set, so just make the existing match the active cursor instead.
-      d.last_selection = existing_idx
+    d:clear_search_selections()
+    local matches = find_all_matches(d, text or "")
+    local current = text ~= "" and choose_match(matches, text, reverse) or 0
+    if current > 0 then
+      local match = matches[current]
+      d:add_search_selection(match.line, match.col1, match.line, match.col2)
+      local existing_idx = selection_match_index(d, match)
+      if existing_idx then
+        -- When navigation wraps to an already-selected match, keep all existing
+        -- selections/cursors.  set_selection() would replace the whole selection
+        -- set, so just make the existing match the active cursor instead.
+        d.last_selection = existing_idx
+      else
+        d:add_selection(match.line, match.col2, match.line, match.col1)
+      end
+      last_view:scroll_to_line(match.line, true)
+      found_expression = true
     else
-      d:add_selection(match.line, match.col2, match.line, match.col1)
+      found_expression = false
     end
-    last_view:scroll_to_line(match.line, true)
-    found_expression = true
-  else
-    found_expression = false
-  end
 
-  set_find_state(d, text, matches, current)
-  update_find_label(text, matches, current)
+    set_find_state(d, text, matches, current)
+    update_find_label(text, matches, current)
+  end)
 end
 
 local function replace_current_match()
   if not last_view then return end
-  local d = last_view.doc
-  local l1, c1, l2, c2 = d:get_selection(true)
-  if l1 == l2 and c1 == c2 then return end
-  d:text_input(replace_text or "", d.last_selection)
-  last_sel = { d:get_selection() }
-  if last_fn and last_text and last_text ~= "" then
-    update_preview(last_sel, last_fn, last_text, false)
-  end
+  return with_last_view(function()
+    local d = last_view.doc
+    local l1, c1, l2, c2 = d:get_selection(true)
+    if l1 == l2 and c1 == c2 then return end
+    d:text_input(replace_text or "", d.last_selection)
+    last_sel = { d:get_selection() }
+    if last_fn and last_text and last_text ~= "" then
+      update_preview(last_sel, last_fn, last_text, false)
+    end
+  end)
 end
 
 local function perform_replace_all(matches, replacement)
-  local d = last_view and last_view.doc
-  if not d or #matches == 0 then return end
-  for i = #matches, 1, -1 do
-    local match = matches[i]
-    d:remove(match.line, match.col1, match.line, match.col2)
-    d:insert(match.line, match.col1, replacement or "")
-  end
-  d:clear_search_selections()
-  last_sel = { d:get_selection() }
-  found_expression = false
-  set_find_state(d, last_text, {}, 0)
-  update_find_label(last_text, {}, 0)
+  if not last_view or not last_view.doc or #matches == 0 then return end
+  return with_last_view(function()
+    local d = last_view.doc
+    for i = #matches, 1, -1 do
+      local match = matches[i]
+      d:remove(match.line, match.col1, match.line, match.col2)
+      d:insert(match.line, match.col1, replacement or "")
+    end
+    d:clear_search_selections()
+    last_sel = { d:get_selection() }
+    found_expression = false
+    set_find_state(d, last_text, {}, 0)
+    update_find_label(last_text, {}, 0)
+  end)
 end
 
 local function confirm_replace_all()
@@ -620,8 +635,10 @@ local function find(label, search_fn, as_replace)
       else
         clear_find_state(last_view.doc)
         core.error("Couldn't find %q", text)
-        last_view.doc:set_selection(table.unpack(last_sel))
-        last_view:scroll_to_make_visible(table.unpack(last_sel))
+        with_last_view(function()
+          last_view.doc:set_selection(table.unpack(last_sel))
+          last_view:scroll_to_make_visible(table.unpack(last_sel))
+        end)
       end
     end,
     suggest = function(text)
@@ -638,8 +655,10 @@ local function find(label, search_fn, as_replace)
       replace_active = false
       clear_find_state(last_view.doc)
       if explicit then
-        last_view.doc:set_selection(table.unpack(last_sel))
-        last_view:scroll_to_make_visible(table.unpack(last_sel))
+        with_last_view(function()
+          last_view.doc:set_selection(table.unpack(last_sel))
+          last_view:scroll_to_make_visible(table.unpack(last_sel))
+        end)
       end
     end
   })

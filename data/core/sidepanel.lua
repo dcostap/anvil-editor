@@ -411,9 +411,16 @@ end
 
 local function copy_docview_position(src, dst)
   if not src or not dst or not src.doc or src.doc ~= dst.doc then return end
+  if src.get_selection_state and dst.set_selection_state then
+    dst:set_selection_state(src:get_selection_state())
+  end
   dst.scroll.x, dst.scroll.to.x = src.scroll.x or 0, src.scroll.to.x or src.scroll.x or 0
   dst.scroll.y, dst.scroll.to.y = src.scroll.y or 0, src.scroll.to.y or src.scroll.y or 0
-  dst.last_line1, dst.last_col1, dst.last_line2, dst.last_col2 = src.doc:get_selection()
+  if dst.selection_state then
+    dst.last_line1, dst.last_col1, dst.last_line2, dst.last_col2 = table.unpack(dst.selection_state.selections, 1, 4)
+  else
+    dst.last_line1, dst.last_col1, dst.last_line2, dst.last_col2 = src.doc:get_selection()
+  end
 end
 
 local function side_file_needs_preserve(doc)
@@ -473,7 +480,9 @@ local function set_side_file_doc(doc, opts)
 
   if opts.line then
     local col = opts.col or 1
-    doc:set_selection(opts.line, col, opts.line, col)
+    view:with_selection_state(function()
+      doc:set_selection(opts.line, col, opts.line, col)
+    end)
     view:scroll_to_make_visible(opts.line, col)
   end
 
@@ -541,7 +550,13 @@ function M.open_path_in_main(path, opts)
   local view = core.open_file(path)
   if opts.line and view and view.doc then
     local col = opts.col or 1
-    view.doc:set_selection(opts.line, col, opts.line, col)
+    if view.with_selection_state then
+      view:with_selection_state(function()
+        view.doc:set_selection(opts.line, col, opts.line, col)
+      end)
+    else
+      view.doc:set_selection(opts.line, col, opts.line, col)
+    end
     view:scroll_to_make_visible(opts.line, col)
   end
   if restore and opts.preserve_focus ~= false then

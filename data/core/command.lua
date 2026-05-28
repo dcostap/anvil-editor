@@ -45,6 +45,34 @@ command.map = {}
 ---@type core.command.predicate_function
 local always_true = function() return true end
 
+local function pack(...)
+  return { n = select("#", ...), ... }
+end
+
+local function is_docview(value)
+  return type(value) == "table"
+    and type(value.with_selection_state) == "function"
+    and value.doc ~= nil
+end
+
+local function active_docview()
+  local view = core.active_view
+  if is_docview(view) then return view end
+end
+
+local function with_view_selection(view, fn, ...)
+  if is_docview(view) then
+    return view:with_selection_state(fn, ...)
+  end
+  return fn(...)
+end
+
+local function first_docview_arg(args, n)
+  for i = 1, n do
+    if is_docview(args[i]) then return args[i] end
+  end
+end
+
 
 ---This function takes in a predicate and produces a predicate function
 ---that is internally used to dispatch and execute commands.
@@ -72,7 +100,15 @@ function command.generate_predicate(predicate)
     end
   end
   ---@cast predicate core.command.predicate_function
-  return predicate
+  local raw_predicate = predicate
+  return function(...)
+    local args = pack(...)
+    return with_view_selection(
+      first_docview_arg(args, args.n) or active_docview(),
+      raw_predicate,
+      table.unpack(args, 1, args.n)
+    )
+  end
 end
 
 
@@ -140,16 +176,22 @@ end
 local function perform(name, ...)
   local cmd = command.map[name]
   if not cmd then return false end
-  local res = { cmd.predicate(...) }
-  if table.remove(res, 1) then
-    if #res > 0 then
+  local res = pack(cmd.predicate(...))
+  local valid = res[1]
+  if valid then
+    local args, n
+    if res.n > 1 then
       -- send values returned from predicate
-      cmd.perform(table.unpack(res))
+      args, n = { n = res.n - 1 }, res.n - 1
+      for i = 1, n do args[i] = res[i + 1] end
     else
       -- send original parameters
-      cmd.perform(...)
+      args, n = pack(...), select("#", ...)
     end
-    return true
+    return with_view_selection(first_docview_arg(args, n) or active_docview(), function()
+      cmd.perform(table.unpack(args, 1, n))
+      return true
+    end)
   end
   return false
 end

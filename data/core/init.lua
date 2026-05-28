@@ -1166,11 +1166,21 @@ function core.set_active_view(view)
       return
     end
     core.next_active_view = nil
+    local old_active_view = core.active_view
+    if old_active_view and old_active_view.extends and old_active_view:extends(DocView)
+    and old_active_view.doc and old_active_view.owns_doc_selection_mirror
+    and old_active_view:owns_doc_selection_mirror()
+    and not old_active_view.doc.bound_selection_view then
+      old_active_view:capture_selection_state()
+    end
     if view.doc and view.doc.abs_filename then
       core.set_visited(view.doc.abs_filename)
     end
-    core.last_active_view = core.active_view
+    core.last_active_view = old_active_view
     core.active_view = view
+    if view.extends and view:extends(DocView) and view.doc and view.become_selection_mirror_owner then
+      view:become_selection_mirror_owner()
+    end
   end
   if
     core.active_view:extends(DocView)

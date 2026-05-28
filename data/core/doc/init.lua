@@ -24,6 +24,11 @@ local function split_lines(text)
   return res
 end
 
+local reset_registered_selection_states
+local sanitize_registered_selection_states
+local snapshot_registered_selection_states
+local restore_registered_selection_states
+
 
 function Doc:new(filename, abs_filename, new_file)
   self.new_file = new_file
@@ -55,6 +60,7 @@ function Doc:reset()
   self.highlighter = Highlighter(self)
   self.overwrite = false
   self:reset_syntax()
+  reset_registered_selection_states(self)
 end
 
 
@@ -110,6 +116,7 @@ local copy_file, prompt_stale_backup
 
 function Doc:load(filename)
   if prompt_stale_backup then prompt_stale_backup(filename) end
+  local selection_snapshots = snapshot_registered_selection_states(self)
   if not self.encoding then
     local errmsg
     self.encoding, self.bom, errmsg = encoding.detect(filename);
@@ -163,15 +170,15 @@ function Doc:load(filename)
   end
   fp:close()
   self:reset_syntax()
+  restore_registered_selection_states(self, selection_snapshots)
 end
 
 
 function Doc:reload()
   if self.filename then
-    local sel = { self:get_selection() }
     self:load(self.abs_filename)
     self:clean()
-    self:set_selection(table.unpack(sel))
+    sanitize_registered_selection_states(self)
   end
 end
 
@@ -283,11 +290,10 @@ prompt_stale_backup = function(filename)
           os.remove(backup)
           for _, doc in ipairs(core.docs or {}) do
             if doc.abs_filename == filename then
-              local sel = { doc:get_selection() }
               local loaded, load_err = pcall(doc.load, doc, filename)
               if loaded then
                 doc:clean()
-                doc:set_selection(table.unpack(sel))
+                sanitize_registered_selection_states(doc)
               else
                 core.error("Couldn't reload restored backup %s: %s", filename, load_err)
               end
@@ -422,6 +428,178 @@ local function sort_positions(line1, col1, line2, col2)
   return line1, col1, line2, col2, false
 end
 
+local function selection_state_count(state)
+  return math.max(1, math.floor(#(state.selections or {}) / 4))
+end
+
+local function sync_unbound_selection_mutation(self)
+  if self.bound_selection_view or self.__selection_text_adjusting then return end
+  local ok, DocView = pcall(require, "core.docview")
+  if ok and DocView.sync_doc_mirror_owner_state then
+    DocView.sync_doc_mirror_owner_state(self)
+  end
+end
+
+reset_registered_selection_states = function(self)
+  local ok, DocView = pcall(require, "core.docview")
+  if ok and DocView.reset_registered_selection_states then
+    DocView.reset_registered_selection_states(self)
+  end
+end
+
+sanitize_registered_selection_states = function(self)
+  local ok, DocView = pcall(require, "core.docview")
+  if ok and DocView.sanitize_registered_selection_states then
+    DocView.sanitize_registered_selection_states(self)
+  end
+end
+
+snapshot_registered_selection_states = function(self)
+  local ok, DocView = pcall(require, "core.docview")
+  if ok and DocView.snapshot_registered_selection_states then
+    return DocView.snapshot_registered_selection_states(self)
+  end
+  return nil
+end
+
+restore_registered_selection_states = function(self, snapshots)
+  local ok, DocView = pcall(require, "core.docview")
+  if ok and DocView.restore_registered_selection_states then
+    DocView.restore_registered_selection_states(self, snapshots)
+  end
+end
+
+local function adjust_registered_selection_states(self, kind, ...)
+  local ok, DocView = pcall(require, "core.docview")
+  if ok and DocView.adjust_registered_selection_states then
+    DocView.adjust_registered_selection_states(self, kind, self.bound_selection_view, ...)
+  end
+end
+
+local function current_selection_session_id(self)
+  if self.bound_selection_session_id then return self.bound_selection_session_id end
+  local ok, DocView = pcall(require, "core.docview")
+  if ok and DocView.get_doc_mirror_owner_session_id then
+    return DocView.get_doc_mirror_owner_session_id(self)
+  end
+end
+
+local function registered_docview_count(self)
+  local ok, DocView = pcall(require, "core.docview")
+  if ok and DocView.count_registered_docviews then
+    return DocView.count_registered_docviews(self)
+  end
+  return 0
+end
+
+local function can_restore_selection_undo(self, cmd)
+  local owner = cmd.selection_session_id
+  if owner then
+    return owner == current_selection_session_id(self)
+  end
+  return registered_docview_count(self) <= 1
+end
+
+local function state_selection_iterator(invariant, idx)
+  local target = invariant[3] and (idx*4 - 7) or (idx*4 + 1)
+  if target > #invariant[1] or target <= 0 or (type(invariant[3]) == "number" and invariant[3] ~= idx - 1) then return end
+  if invariant[2] then
+    return idx+(invariant[3] and -1 or 1), sort_positions(table.unpack(invariant[1], target, target+4))
+  else
+    return idx+(invariant[3] and -1 or 1), table.unpack(invariant[1], target, target+4)
+  end
+end
+
+local function each_state_selection(state, sort_intra, idx_reverse)
+  local selections = state.selections
+  return state_selection_iterator, { selections, sort_intra, idx_reverse },
+    idx_reverse == true and ((#selections / 4) + 1) or ((idx_reverse or -1)+1)
+end
+
+local function set_state_selections(self, state, idx, line1, col1, line2, col2, swap, rm)
+  assert(not line2 == not col2, "expected 3 or 5 arguments")
+  if swap then line1, col1, line2, col2 = line2, col2, line1, col1 end
+  line1, col1 = self:sanitize_position(line1, col1)
+  line2, col2 = self:sanitize_position(line2 or line1, col2 or col1)
+  common.splice(state.selections, (idx - 1)*4 + 1, rm == nil and 4 or rm, { line1, col1, line2, col2 })
+end
+
+local function sanitize_selection_state(self, state)
+  if type(state.selections) ~= "table" or #state.selections < 4 then
+    local line, col = self:sanitize_position(1, 1)
+    state.selections = { line, col, line, col }
+  end
+  for idx, line1, col1, line2, col2 in each_state_selection(state, false) do
+    set_state_selections(self, state, idx, line1, col1, line2, col2)
+  end
+  state.last_selection = common.clamp(math.floor(tonumber(state.last_selection) or 1), 1, selection_state_count(state))
+end
+
+local function merge_state_cursors(state, idx)
+  local table_index = idx and (idx - 1) * 4 + 1
+  for i = (table_index or (#state.selections - 3)), (table_index or 5), -4 do
+    for j = 1, i - 4, 4 do
+      if state.selections[i] == state.selections[j] and
+        state.selections[i+1] == state.selections[j+1] then
+          common.splice(state.selections, i, 4)
+          if state.last_selection >= (i+3)/4 then
+            state.last_selection = state.last_selection - 1
+          end
+          break
+      end
+    end
+  end
+  state.last_selection = common.clamp(math.floor(tonumber(state.last_selection) or 1), 1, selection_state_count(state))
+end
+
+function Doc:adjust_selection_state_for_insert(state, line, col, lines, len)
+  sanitize_selection_state(self, state)
+  for idx, cline1, ccol1, cline2, ccol2 in each_state_selection(state, true, true) do
+    if cline1 < line then break end
+    local line_addition = (line < cline1 or col < ccol1) and #lines - 1 or 0
+    local column_addition = line == cline1 and ccol1 > col and len or 0
+    set_state_selections(self, state, idx, cline1 + line_addition, ccol1 + column_addition, cline2 + line_addition, ccol2 + column_addition)
+  end
+  sanitize_selection_state(self, state)
+end
+
+function Doc:adjust_selection_state_for_remove(state, line1, col1, line2, col2)
+  if type(state.selections) ~= "table" or #state.selections < 4 then
+    local line, col = self:sanitize_position(1, 1)
+    state.selections = { line, col, line, col }
+  end
+  local line_removal = line2 - line1
+  local col_removal = col2 - col1
+  local merge = false
+  for idx, cline1, ccol1, cline2, ccol2 in each_state_selection(state, true, true) do
+    if cline2 < line1 then break end
+    local l1, c1, l2, c2 = cline1, ccol1, cline2, ccol2
+
+    if cline1 > line1 or (cline1 == line1 and ccol1 > col1) then
+      if cline1 > line2 then
+        l1 = l1 - line_removal
+      else
+        l1 = line1
+        c1 = (cline1 == line2 and ccol1 > col2) and c1 - col_removal or col1
+      end
+    end
+
+    if cline2 > line1 or (cline2 == line1 and ccol2 > col1) then
+      if cline2 > line2 then
+        l2 = l2 - line_removal
+      else
+        l2 = line1
+        c2 = (cline2 == line2 and ccol2 > col2) and c2 - col_removal or col1
+      end
+    end
+
+    if l1 == line1 and c1 == col1 then merge = true end
+    set_state_selections(self, state, idx, l1, c1, l2, c2)
+  end
+  if merge then merge_state_cursors(state) end
+  sanitize_selection_state(self, state)
+end
+
 -- Cursor section. Cursor indices are *only* valid during a get_selections() call.
 -- Cursors will always be iterated in order from top to bottom. Through normal operation
 -- curors can never swap positions; only merge or split, or change their position in cursor
@@ -485,6 +663,7 @@ function Doc:set_selections(idx, line1, col1, line2, col2, swap, rm)
   line1, col1 = self:sanitize_position(line1, col1)
   line2, col2 = self:sanitize_position(line2 or line1, col2 or col1)
   common.splice(self.selections, (idx - 1)*4 + 1, rm == nil and 4 or rm, { line1, col1, line2, col2 })
+  sync_unbound_selection_mutation(self)
 end
 
 function Doc:add_selection(line1, col1, line2, col2, swap)
@@ -498,6 +677,7 @@ function Doc:add_selection(line1, col1, line2, col2, swap)
   end
   self:set_selections(target, line1, col1, line2, col2, swap, 0)
   self.last_selection = target
+  sync_unbound_selection_mutation(self)
 end
 
 
@@ -506,6 +686,12 @@ function Doc:remove_selection(idx)
     self.last_selection = self.last_selection - 1
   end
   common.splice(self.selections, (idx - 1) * 4 + 1, 4)
+  if #self.selections < 4 then
+    local line, col = self:sanitize_position(1, 1)
+    self.selections = { line, col, line, col }
+  end
+  self.last_selection = common.clamp(math.floor(tonumber(self.last_selection) or 1), 1, selection_state_count(self))
+  sync_unbound_selection_mutation(self)
 end
 
 
@@ -513,6 +699,7 @@ function Doc:set_selection(line1, col1, line2, col2, swap)
   self.selections = {}
   self:set_selections(1, line1, col1, line2, col2, swap)
   self.last_selection = 1
+  sync_unbound_selection_mutation(self)
 end
 
 function Doc:merge_cursors(idx)
@@ -529,6 +716,8 @@ function Doc:merge_cursors(idx)
       end
     end
   end
+  self.last_selection = common.clamp(math.floor(tonumber(self.last_selection) or 1), 1, selection_state_count(self))
+  sync_unbound_selection_mutation(self)
 end
 
 local function selection_iterator(invariant, idx)
@@ -636,6 +825,13 @@ local function push_undo(undo_stack, time, type, ...)
   undo_stack[undo_stack.idx] = { type = type, time = time, ... }
   undo_stack[undo_stack.idx - config.max_undos] = nil
   undo_stack.idx = undo_stack.idx + 1
+  return undo_stack[undo_stack.idx - 1]
+end
+
+local function push_selection_undo(self, undo_stack, time)
+  local cmd = push_undo(undo_stack, time, "selection", table.unpack(self.selections))
+  cmd.selection_session_id = current_selection_session_id(self)
+  return cmd
 end
 
 
@@ -653,8 +849,11 @@ local function pop_undo(self, undo_stack, redo_stack, modified)
     local line1, col1, line2, col2 = table.unpack(cmd)
     self:raw_remove(line1, col1, line2, col2, redo_stack, cmd.time)
   elseif cmd.type == "selection" then
-    self.selections = { table.unpack(cmd) }
-    self:sanitize_selection()
+    if can_restore_selection_undo(self, cmd) then
+      self.selections = { table.unpack(cmd) }
+      self:sanitize_selection()
+      sync_unbound_selection_mutation(self)
+    end
   end
 
   modified = modified or (cmd.type ~= "selection")
@@ -717,16 +916,17 @@ function Doc:raw_insert(line, col, text, undo_stack, time)
   update_clean_lines(self, line, ((line + #lines - 1) == line) and line or #self.lines)
 
   -- keep cursors where they should be
-  for idx, cline1, ccol1, cline2, ccol2 in self:get_selections(true, true) do
-    if cline1 < line then break end
-    local line_addition = (line < cline1 or col < ccol1) and #lines - 1 or 0
-    local column_addition = line == cline1 and ccol1 > col and len or 0
-    self:set_selections(idx, cline1 + line_addition, ccol1 + column_addition, cline2 + line_addition, ccol2 + column_addition)
-  end
+  local active_state = { selections = self.selections, last_selection = self.last_selection }
+  self.__selection_text_adjusting = true
+  self:adjust_selection_state_for_insert(active_state, line, col, lines, len)
+  self.__selection_text_adjusting = nil
+  self.selections = active_state.selections
+  self.last_selection = active_state.last_selection
+  adjust_registered_selection_states(self, "insert", line, col, lines, len)
 
   -- push undo
   local line2, col2 = self:position_offset(line, col, #text)
-  push_undo(undo_stack, time, "selection", table.unpack(self.selections))
+  push_selection_undo(self, undo_stack, time)
   push_undo(undo_stack, time, "remove", line, col, line2, col2)
 
   -- update highlighter and assure selection is in bounds
@@ -739,7 +939,7 @@ end
 function Doc:raw_remove(line1, col1, line2, col2, undo_stack, time)
   -- push undo
   local text = self:get_text(line1, col1, line2, col2)
-  push_undo(undo_stack, time, "selection", table.unpack(self.selections))
+  push_selection_undo(self, undo_stack, time)
   push_undo(undo_stack, time, "insert", line1, col1, text)
 
   -- get line content before/after removed text
@@ -754,42 +954,18 @@ function Doc:raw_remove(line1, col1, line2, col2, undo_stack, time)
 
   update_clean_lines(self, line1, line2 == line1 and line2 or #self.lines)
 
-  local merge = false
-
   -- keep selections in correct positions: each pair (line, col)
   -- * remains unchanged if before the deleted text
   -- * is set to (line1, col1) if in the deleted text
   -- * is set to (line1, col - col_removal) if on line2 but out of the deleted text
   -- * is set to (line - line_removal, col) if after line2
-  for idx, cline1, ccol1, cline2, ccol2 in self:get_selections(true, true) do
-    if cline2 < line1 then break end
-    local l1, c1, l2, c2 = cline1, ccol1, cline2, ccol2
-
-    if cline1 > line1 or (cline1 == line1 and ccol1 > col1) then
-      if cline1 > line2 then
-        l1 = l1 - line_removal
-      else
-        l1 = line1
-        c1 = (cline1 == line2 and ccol1 > col2) and c1 - col_removal or col1
-      end
-    end
-
-    if cline2 > line1 or (cline2 == line1 and ccol2 > col1) then
-      if cline2 > line2 then
-        l2 = l2 - line_removal
-      else
-        l2 = line1
-        c2 = (cline2 == line2 and ccol2 > col2) and c2 - col_removal or col1
-      end
-    end
-
-    if l1 == line1 and c1 == col1 then merge = true end
-    self:set_selections(idx, l1, c1, l2, c2)
-  end
-
-  if merge then
-    self:merge_cursors()
-  end
+  local active_state = { selections = self.selections, last_selection = self.last_selection }
+  self.__selection_text_adjusting = true
+  self:adjust_selection_state_for_remove(active_state, line1, col1, line2, col2)
+  self.__selection_text_adjusting = nil
+  self.selections = active_state.selections
+  self.last_selection = active_state.last_selection
+  adjust_registered_selection_states(self, "remove", line1, col1, line2, col2)
 
   -- update highlighter and assure selection is in bounds
   self.highlighter:remove_notify(line1, line_removal)

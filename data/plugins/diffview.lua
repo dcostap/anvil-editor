@@ -58,6 +58,17 @@ local element_b_text = nil
 ---@type integer
 local diff_updater_idx = 0
 
+local function with_docview_selection(view, fn, ...)
+  if view and view.with_selection_state then
+    return view:with_selection_state(fn, ...)
+  end
+  return fn(...)
+end
+
+local function call_docview_method(view, method, ...)
+  return with_docview_selection(view, method, view, ...)
+end
+
 ---@class plugins.diffview.view : core.view
 ---@field super core.view
 ---@field doc_view_a core.docview
@@ -297,18 +308,22 @@ function DiffView:sync(line, target_line, is_a)
     l = l + 1
   end
   if tag == "modify" then
-    to.doc:set_selection(target_line, 1, target_line+total-1, math.huge)
-    to.doc:replace(function() return text:sub(1, #text-1) end)
+    with_docview_selection(to, function()
+      to.doc:set_selection(target_line, 1, target_line+total-1, math.huge)
+      to.doc:replace(function() return text:sub(1, #text-1) end)
+    end)
     for i=target_line, target_line+total-1 do
       target_changes[i] = {tag = "equal"}
     end
   else
-    if line == 1 and target_line == 1 then
-      to.doc:insert(target_line, 1, text)
-      target_line = target_line - 1
-    else
-      to.doc:insert(target_line, math.huge, "\n" .. text:sub(1, #text - 1))
-    end
+    with_docview_selection(to, function()
+      if line == 1 and target_line == 1 then
+        to.doc:insert(target_line, 1, text)
+        target_line = target_line - 1
+      else
+        to.doc:insert(target_line, math.huge, "\n" .. text:sub(1, #text - 1))
+      end
+    end)
 
     -- update target changes and target gaps
     local changes_inserts = {}
@@ -395,14 +410,14 @@ function DiffView:on_mouse_pressed(button, x, y, clicks)
     self.doc_view_b.scroll.to.y = self.scroll.y
     self.doc_view_b.scroll.y = self.scroll.y
     return true
-  elseif self.doc_view_a:on_mouse_pressed(button, x, y, clicks) then
+  elseif call_docview_method(self.doc_view_a, self.doc_view_a.on_mouse_pressed, button, x, y, clicks) then
     self.doc_view_a.scroll.y = self.doc_view_a.scroll.to.y
     self.scroll.to.y = self.doc_view_a.scroll.y
     self.scroll.y = self.doc_view_a.scroll.y
     self.doc_view_b.scroll.to.y = self.doc_view_a.scroll.y
     self.doc_view_b.scroll.y = self.doc_view_a.scroll.y
     return true
-  elseif self.doc_view_b:on_mouse_pressed(button, x, y, clicks) then
+  elseif call_docview_method(self.doc_view_b, self.doc_view_b.on_mouse_pressed, button, x, y, clicks) then
     self.doc_view_b.scroll.y = self.doc_view_b.scroll.to.y
     self.scroll.to.y = self.doc_view_b.scroll.y
     self.scroll.y = self.doc_view_b.scroll.y
@@ -424,8 +439,8 @@ end
 
 function DiffView:on_mouse_released(...)
   DiffView.super.on_mouse_released(self, ...)
-  self.doc_view_a:on_mouse_released(...)
-  self.doc_view_b:on_mouse_released(...)
+  call_docview_method(self.doc_view_a, self.doc_view_a.on_mouse_released, ...)
+  call_docview_method(self.doc_view_b, self.doc_view_b.on_mouse_released, ...)
 end
 
 ---@param self plugins.diffview.view
@@ -488,7 +503,7 @@ function DiffView:on_mouse_moved(...)
       return true
     end
   end
-  self.doc_view_a:on_mouse_moved(...)
+  call_docview_method(self.doc_view_a, self.doc_view_a.on_mouse_moved, ...)
   if self.doc_view_a:scrollbar_dragging() then
     self.doc_view_a.scroll.y = self.doc_view_a.scroll.to.y
     self.scroll.to.y = self.doc_view_a.scroll.y
@@ -497,7 +512,7 @@ function DiffView:on_mouse_moved(...)
     self.doc_view_b.scroll.to.y = self.doc_view_a.scroll.y
     return true
   end
-  self.doc_view_b:on_mouse_moved(...)
+  call_docview_method(self.doc_view_b, self.doc_view_b.on_mouse_moved, ...)
   if self.doc_view_b:scrollbar_dragging() then
     self.doc_view_b.scroll.y = self.doc_view_b.scroll.to.y
     self.scroll.to.y = self.doc_view_b.scroll.y
@@ -539,8 +554,8 @@ end
 
 function DiffView:on_touch_moved(...)
   DiffView.super.on_touch_moved(self, ...)
-  self.doc_view_a:on_touch_moved(...)
-  self.doc_view_b:on_touch_moved(...)
+  call_docview_method(self.doc_view_a, self.doc_view_a.on_touch_moved, ...)
+  call_docview_method(self.doc_view_b, self.doc_view_b.on_touch_moved, ...)
 end
 
 function DiffView:get_scrollable_size()
@@ -1059,15 +1074,15 @@ function DiffView:update()
   self.doc_view_b.size.x = (self.size.x / 2) - scroll_w - 20 * SCALE
   self.doc_view_b.size.y = self.size.y
 
-  self.doc_view_a:update()
-  self.doc_view_b:update()
+  call_docview_method(self.doc_view_a, self.doc_view_a.update)
+  call_docview_method(self.doc_view_b, self.doc_view_b.update)
 end
 
 function DiffView:draw()
   DiffView.super.draw(self)
   self:draw_background(style.background)
-  self.doc_view_a:draw()
-  self.doc_view_b:draw()
+  call_docview_method(self.doc_view_a, self.doc_view_a.draw)
+  call_docview_method(self.doc_view_b, self.doc_view_b.draw)
   self:draw_scrollbar()
 end
 

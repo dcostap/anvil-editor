@@ -522,6 +522,13 @@ local function divider_size_for_node(node)
   return style.divider_size
 end
 
+local function call_view_method(view, method, ...)
+  if view and view.with_selection_state then
+    return view:with_selection_state(method, view, ...)
+  end
+  return method(view, ...)
+end
+
 ---Get the rectangle for this node's divider (for split nodes).
 ---@return number? x Screen x coordinate, or nil for leaf nodes
 ---@return number? y Screen y coordinate, or nil for leaf nodes
@@ -697,7 +704,7 @@ function Node:update()
   if self.type == "leaf" then
     self:scroll_tabs_to_visible()
     local view = self.active_view
-    view:update()
+    call_view_method(view, view.update)
     view._core_step_first_update = true
     self:tab_hovered_update(core.root_view.mouse.x, core.root_view.mouse.y)
     local tab_width = self:target_tab_width()
@@ -851,7 +858,7 @@ function Node:draw()
     local pos, size = view.position, view.size
     if view._core_step_first_update and size.x > 0 and size.y > 0 then
       core.push_clip_rect(pos.x, pos.y, size.x, size.y)
-      view:draw()
+      call_view_method(view, view.draw)
       core.pop_clip_rect()
     end
   else

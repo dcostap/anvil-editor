@@ -47,6 +47,335 @@ function DocView:__tostring() return "DocView" end
 
 DocView.context = "session"
 
+local next_selection_session_id = 0
+
+DocView.registry = DocView.registry or setmetatable({}, { __mode = "k" })
+DocView.mirror_owner = DocView.mirror_owner or setmetatable({}, { __mode = "k" })
+DocView.session_views = DocView.session_views or setmetatable({}, { __mode = "v" })
+
+local function copy_array(t)
+  local res = {}
+  if t then
+    for i = 1, #t do res[i] = t[i] end
+  end
+  return res
+end
+
+local function pack(...)
+  return { n = select("#", ...), ... }
+end
+
+local function new_selection_session_id()
+  next_selection_session_id = next_selection_session_id + 1
+  return next_selection_session_id
+end
+
+local function selection_count(selections)
+  return math.max(1, math.floor(#(selections or {}) / 4))
+end
+
+local function normalize_selection_state(doc, state)
+  state = state or {}
+  local selections = state.selections or state
+  local normalized = {}
+  if type(selections) == "table" then
+    for i = 1, #selections, 4 do
+      local line1, col1 = selections[i], selections[i + 1]
+      if not line1 or not col1 then break end
+      local line2 = selections[i + 2] or line1
+      local col2 = selections[i + 3] or col1
+      line1, col1 = doc:sanitize_position(line1, col1)
+      line2, col2 = doc:sanitize_position(line2, col2)
+      normalized[#normalized + 1] = line1
+      normalized[#normalized + 1] = col1
+      normalized[#normalized + 1] = line2
+      normalized[#normalized + 1] = col2
+    end
+  end
+  if #normalized == 0 then
+    local line, col = doc:sanitize_position(1, 1)
+    normalized = { line, col, line, col }
+  end
+  state.selections = normalized
+  state.last_selection = common.clamp(math.floor(tonumber(state.last_selection) or 1), 1, selection_count(normalized))
+  return state
+end
+
+local function ensure_selection_state(state, doc)
+  if not state or type(state.selections) ~= "table" or #state.selections < 4 then
+    return normalize_selection_state(doc, state)
+  end
+  state.last_selection = common.clamp(math.floor(tonumber(state.last_selection) or 1), 1, selection_count(state.selections))
+  return state
+end
+
+local function get_mirror_owner_view(doc)
+  local session_id = DocView.mirror_owner[doc]
+  local view = session_id and DocView.session_views[session_id]
+  if view and view.doc == doc and view.selection_state
+  and view.selection_state.session_id == session_id then
+    return view
+  end
+end
+
+local function register_view(view)
+  local doc = view.doc
+  local views = DocView.registry[doc]
+  if not views then
+    views = setmetatable({}, { __mode = "k" })
+    DocView.registry[doc] = views
+  end
+  views[view] = true
+  DocView.session_views[view.selection_state.session_id] = view
+  if not get_mirror_owner_view(doc) then
+    DocView.mirror_owner[doc] = view.selection_state.session_id
+  end
+end
+
+function DocView.get_doc_mirror_owner_view(doc)
+  return get_mirror_owner_view(doc)
+end
+
+function DocView.get_doc_mirror_owner_session_id(doc)
+  local view = get_mirror_owner_view(doc)
+  return view and view.selection_state.session_id
+end
+
+function DocView.count_registered_docviews(doc)
+  local count = 0
+  local views = DocView.registry[doc]
+  if views then
+    for view in pairs(views) do
+      if view.doc == doc then count = count + 1 end
+    end
+  end
+  return count
+end
+
+function DocView:owns_doc_selection_mirror()
+  return get_mirror_owner_view(self.doc) == self
+end
+
+function DocView:get_selection_state()
+  local selections = self.selection_state and self.selection_state.selections
+  local last_selection = self.selection_state and self.selection_state.last_selection or 1
+  if self.doc.bound_selection_view == self then
+    selections = self.doc.selections
+    last_selection = self.doc.last_selection
+  end
+  local state = normalize_selection_state(self.doc, {
+    selections = copy_array(selections),
+    last_selection = last_selection,
+  })
+  return {
+    selections = copy_array(state.selections),
+    last_selection = state.last_selection,
+  }
+end
+
+function DocView:set_selection_state(state)
+  local session_id = self.selection_state and self.selection_state.session_id or new_selection_session_id()
+  self.selection_state = normalize_selection_state(self.doc, {
+    selections = copy_array(state and state.selections or state),
+    last_selection = state and state.last_selection or 1,
+    session_id = session_id,
+  })
+  self.selection_state.session_id = session_id
+  DocView.session_views[session_id] = self
+  if self.doc.bound_selection_view == self then
+    self.doc.selections = self.selection_state.selections
+    self.doc.last_selection = self.selection_state.last_selection
+  elseif not self.doc.bound_selection_view and self:owns_doc_selection_mirror() then
+    self:apply_selection_state()
+  end
+end
+
+function DocView:capture_selection_state()
+  local session_id = self.selection_state and self.selection_state.session_id or new_selection_session_id()
+  if self.selection_state and self.doc.selections == self.selection_state.selections then
+    self.selection_state.last_selection = self.doc.last_selection
+    self.selection_state.session_id = session_id
+  else
+    self.selection_state = normalize_selection_state(self.doc, {
+      selections = copy_array(self.doc.selections),
+      last_selection = self.doc.last_selection,
+      session_id = session_id,
+    })
+    self.selection_state.session_id = session_id
+  end
+  DocView.session_views[session_id] = self
+end
+
+function DocView:apply_selection_state()
+  normalize_selection_state(self.doc, self.selection_state)
+  self.doc.selections = copy_array(self.selection_state.selections)
+  self.doc.last_selection = self.selection_state.last_selection
+end
+
+function DocView:become_selection_mirror_owner()
+  DocView.mirror_owner[self.doc] = self.selection_state.session_id
+  DocView.session_views[self.selection_state.session_id] = self
+  if not self.doc.bound_selection_view then
+    self:apply_selection_state()
+  end
+end
+
+function DocView.refresh_doc_selection_mirror(doc)
+  if doc.bound_selection_view then return false end
+  local view = get_mirror_owner_view(doc)
+  if view then
+    view:apply_selection_state()
+    return true
+  end
+  return false
+end
+
+function DocView.sync_doc_mirror_owner_state(doc)
+  if doc.bound_selection_view or doc.__selection_text_adjusting then return end
+  local view = get_mirror_owner_view(doc)
+  if view then view:capture_selection_state() end
+end
+
+function DocView.reset_registered_selection_states(doc)
+  local views = DocView.registry[doc]
+  if views then
+    for view in pairs(views) do
+      if view.doc == doc then
+        view:set_selection_state({ selections = doc.selections, last_selection = doc.last_selection })
+      end
+    end
+  end
+  DocView.refresh_doc_selection_mirror(doc)
+end
+
+function DocView.sanitize_registered_selection_states(doc)
+  local views = DocView.registry[doc]
+  if views then
+    for view in pairs(views) do
+      if view.doc == doc and view.selection_state then
+        normalize_selection_state(doc, view.selection_state)
+      end
+    end
+  end
+  DocView.refresh_doc_selection_mirror(doc)
+end
+
+function DocView.snapshot_registered_selection_states(doc)
+  local snapshots = {}
+  local views = DocView.registry[doc]
+  if views then
+    for view in pairs(views) do
+      if view.doc == doc then
+        snapshots[view] = view:get_selection_state()
+      end
+    end
+  end
+  return snapshots
+end
+
+function DocView.restore_registered_selection_states(doc, snapshots)
+  for view, state in pairs(snapshots or {}) do
+    if view.doc == doc then view:set_selection_state(state) end
+  end
+  DocView.sanitize_registered_selection_states(doc)
+end
+
+function DocView.adjust_registered_selection_states(doc, kind, active_view, ...)
+  local views = DocView.registry[doc]
+  if views then
+    for view in pairs(views) do
+      if view.doc == doc and view.selection_state
+      and view ~= active_view
+      and view.selection_state.selections ~= doc.selections then
+        if kind == "insert" then
+          doc:adjust_selection_state_for_insert(view.selection_state, ...)
+        elseif kind == "remove" then
+          doc:adjust_selection_state_for_remove(view.selection_state, ...)
+        end
+      end
+    end
+  end
+  if not doc.bound_selection_view then
+    DocView.refresh_doc_selection_mirror(doc)
+  end
+end
+
+function DocView:with_selection_state(fn, ...)
+  local doc = self.doc
+  if doc.bound_selection_view == self then
+    return fn(...)
+  end
+
+  local old_selections = doc.selections
+  local old_last_selection = doc.last_selection
+  local old_bound_view = doc.bound_selection_view
+  local old_bound_session_id = doc.bound_selection_session_id
+
+  -- If a nested binding suspends another view, make that view's owned state
+  -- point at its current live compatibility table before it is hidden.  This
+  -- lets inactive-edit adjustment update the suspended outer state instead of
+  -- an older table that was superseded by a bound set_selection() call.
+  if old_bound_view and old_bound_view.selection_state then
+    old_bound_view.selection_state.selections = old_selections
+    old_bound_view.selection_state.last_selection = old_last_selection
+    old_bound_view.selection_state.session_id = old_bound_session_id
+      or old_bound_view.selection_state.session_id
+  end
+
+  local stack = doc.__selection_binding_stack or {}
+  doc.__selection_binding_stack = stack
+  stack[#stack + 1] = {
+    view = self,
+    old_bound_view = old_bound_view,
+    old_selections = old_selections,
+    old_last_selection = old_last_selection,
+  }
+
+  self.selection_state = ensure_selection_state(self.selection_state, doc)
+  if not self.selection_state.session_id then
+    self.selection_state.session_id = new_selection_session_id()
+  end
+  DocView.session_views[self.selection_state.session_id] = self
+  doc.bound_selection_view = self
+  doc.bound_selection_session_id = self.selection_state.session_id
+  doc.selections = self.selection_state.selections
+  doc.last_selection = self.selection_state.last_selection
+
+  local args = pack(...)
+  local ok, res = xpcall(function()
+    return pack(fn(table.unpack(args, 1, args.n)))
+  end, debug.traceback)
+
+  local capture_ok, capture_err = xpcall(function()
+    self:capture_selection_state()
+  end, debug.traceback)
+
+  stack[#stack] = nil
+  if #stack == 0 then doc.__selection_binding_stack = nil end
+  local restore_selections = old_selections
+  local restore_last_selection = old_last_selection
+  if old_bound_view and old_bound_view.selection_state then
+    restore_selections = old_bound_view.selection_state.selections
+    restore_last_selection = old_bound_view.selection_state.last_selection
+  end
+  doc.selections = restore_selections
+  doc.last_selection = restore_last_selection
+  doc.bound_selection_view = old_bound_view
+  doc.bound_selection_session_id = old_bound_session_id
+
+  local mirror_ok, mirror_err = true, nil
+  if not old_bound_view then
+    mirror_ok, mirror_err = xpcall(function()
+      DocView.refresh_doc_selection_mirror(doc)
+    end, debug.traceback)
+  end
+
+  if not ok then error(res, 0) end
+  if not capture_ok then error(capture_err, 0) end
+  if not mirror_ok then error(mirror_err, 0) end
+  return table.unpack(res, 1, res.n)
+end
+
 ---Helper to move cursor vertically while preserving horizontal offset.
 ---@param dv core.docview
 ---@param line integer Current line
@@ -102,6 +431,12 @@ function DocView:new(doc)
   self.cursor = "ibeam"
   self.scrollable = true
   self.doc = assert(doc)
+  self.selection_state = normalize_selection_state(self.doc, {
+    selections = copy_array(self.doc.selections),
+    last_selection = self.doc.last_selection,
+    session_id = new_selection_session_id(),
+  })
+  register_view(self)
   self.doc.cache.col_x = {}
   self.doc.cache.ulen = {}
   self.font = "code_font"
@@ -119,9 +454,11 @@ end
 
 
 function DocView:get_state()
+  local selection_state = self:get_selection_state()
   return {
     filename = self.doc.filename,
-    selection = { self.doc:get_selection() },
+    selection = copy_array(selection_state.selections),
+    selection_state = selection_state,
     scroll = { x = self.scroll.to.x, y = self.scroll.to.y },
     crlf = self.doc.crlf,
     text = self.doc.new_file and self.doc:get_text(1, 1, math.huge, math.huge)
@@ -146,8 +483,12 @@ function DocView.from_state(state)
       dv.doc:insert(1, 1, state.text)
       dv.doc.crlf = state.crlf
     end
-    dv.doc:set_selection(table.unpack(state.selection))
-    dv.last_line1, dv.last_col1, dv.last_line2, dv.last_col2 = dv.doc:get_selection()
+    if state.selection_state then
+      dv:set_selection_state(state.selection_state)
+    elseif state.selection then
+      dv:set_selection_state({ selections = state.selection, last_selection = 1 })
+    end
+    dv.last_line1, dv.last_col1, dv.last_line2, dv.last_col2 = table.unpack(dv.selection_state.selections, 1, 4)
     dv.scroll.x, dv.scroll.to.x = state.scroll.x, state.scroll.x
     dv.scroll.y, dv.scroll.to.y = state.scroll.y, state.scroll.y
   end
@@ -899,7 +1240,8 @@ end
 ---@param y number Screen y coordinate
 ---@param line integer Line number (for overwrite mode char width)
 ---@param col integer Column number (for overwrite mode char width)
-function DocView:draw_caret(x, y, line, col, caret_idx)
+function DocView:draw_caret(x, y, line, col, caret_idx, color)
+  color = color or style.caret
   if config.animated_caret then
     self.animated_caret_positions = self.animated_caret_positions or {}
     caret_idx = caret_idx or 1
@@ -952,9 +1294,9 @@ function DocView:draw_caret(x, y, line, col, caret_idx)
   local lh = self:get_line_height()
   if self.doc.overwrite then
     local w = self:get_font():get_width(self.doc:get_char(line, col))
-    renderer.draw_rect(x, y + lh, w, style.caret_width * 2, style.caret)
+    renderer.draw_rect(x, y + lh, w, style.caret_width * 2, color)
   else
-    renderer.draw_rect(x, y, style.caret_width, lh, style.caret)
+    renderer.draw_rect(x, y, style.caret_width, lh, color)
   end
 end
 
@@ -1187,41 +1529,38 @@ end
 ---Draw overlay elements (carets, IME decoration).
 ---Called after main text to draw on top.
 function DocView:draw_overlay()
-  if core.active_view == self then
-    local minline, maxline = self:get_visible_line_range()
-    -- draw caret if it overlaps this line
-    local T = config.blink_period
-    local visible_carets = self.__visible_caret_cache
-    if visible_carets then
-      if system.window_has_focus(core.window) then
-        for caret_idx, caret in ipairs(visible_carets) do
-          local line1, col1, line2, col2 = caret[1], caret[2], caret[3], caret[4]
-          if ime.editing then
-            self:draw_ime_decoration(line1, col1, line2, col2)
-          else
-            if config.disable_blink
-            or (core.blink_timer - core.blink_start) % T < T / 2 then
-              local x, y = self:get_line_screen_position(line1, col1)
-              self:draw_caret(x, y, line1, col1, caret_idx)
-            end
-          end
-        end
+  local minline, maxline = self:get_visible_line_range()
+  local is_active = core.active_view == self
+  local window_focused = system.window_has_focus(core.window)
+  if not window_focused then return end
+
+  -- draw caret if it overlaps this line
+  local T = config.blink_period
+  local blink_visible = config.disable_blink
+    or not is_active
+    or (core.blink_timer - core.blink_start) % T < T / 2
+  local caret_color = is_active and style.caret or style.dim
+  local visible_carets = self.__visible_caret_cache
+  if visible_carets then
+    for caret_idx, caret in ipairs(visible_carets) do
+      local line1, col1, line2, col2 = caret[1], caret[2], caret[3], caret[4]
+      if is_active and ime.editing then
+        self:draw_ime_decoration(line1, col1, line2, col2)
+      elseif blink_visible then
+        local x, y = self:get_line_screen_position(line1, col1)
+        self:draw_caret(x, y, line1, col1, caret_idx, caret_color)
       end
-    else
-      local caret_idx = 0
-      for _, line1, col1, line2, col2 in self.doc:get_selections() do
-        caret_idx = caret_idx + 1
-        if line1 >= minline and line1 <= maxline
-        and system.window_has_focus(core.window) then
-          if ime.editing then
-            self:draw_ime_decoration(line1, col1, line2, col2)
-          else
-            if config.disable_blink
-            or (core.blink_timer - core.blink_start) % T < T / 2 then
-              local x, y = self:get_line_screen_position(line1, col1)
-              self:draw_caret(x, y, line1, col1, caret_idx)
-            end
-          end
+    end
+  else
+    local caret_idx = 0
+    for _, line1, col1, line2, col2 in self.doc:get_selections() do
+      caret_idx = caret_idx + 1
+      if line1 >= minline and line1 <= maxline then
+        if is_active and ime.editing then
+          self:draw_ime_decoration(line1, col1, line2, col2)
+        elseif blink_visible then
+          local x, y = self:get_line_screen_position(line1, col1)
+          self:draw_caret(x, y, line1, col1, caret_idx, caret_color)
         end
       end
     end
@@ -1270,6 +1609,26 @@ function DocView:draw()
 
   self:draw_scrollbar()
   if stats then stats.draw_ms = stats.draw_ms + (system.get_time() - draw_start) * 1000 end
+end
+
+local function bind_selection_method(name)
+  local fn = DocView[name]
+  DocView[name] = function(self, ...)
+    return self:with_selection_state(fn, self, ...)
+  end
+end
+
+for _, name in ipairs {
+  "on_mouse_moved",
+  "on_mouse_pressed",
+  "on_mouse_released",
+  "on_text_input",
+  "on_ime_text_editing",
+  "update_ime_location",
+  "update",
+  "draw",
+} do
+  bind_selection_method(name)
 end
 
 return DocView
