@@ -76,7 +76,12 @@ static bool own_wm_size_enabled(void) {
 static bool no_redirection_bitmap_enabled(void) {
   const char *value = getenv("ANVIL_WIN32_NOREDIRECTIONBITMAP");
   if (value && value[0]) return !env_value_is_false(value);
-  return anvil_d3d11_enabled();
+  /* WS_EX_NOREDIRECTIONBITMAP makes DWM stop keeping a redirection surface
+     for the HWND. That can improve exposed-area behavior during live resize,
+     but after alt-tab/occlusion DWM may have no retained pixels to show until
+     the app presents again, which looks like a transparent/unrendered window.
+     Keep it opt-in instead of enabling it for all D3D11 windows. */
+  return false;
 }
 
 static void get_sdl_window_sizes(Win32FrameData *frame, int *point_w, int *point_h, int *pixel_w, int *pixel_h) {

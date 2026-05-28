@@ -1544,6 +1544,9 @@ function core.on_event(type, ...)
     if core.window_mode == "normal" then
       core.window_size = table.pack(system.get_window_size(core.window))
     end
+    if type == "restored" then core.redraw = true end
+  elseif type == "exposed" then
+    core.redraw = true
   elseif type == "filedropped" then
     core.root_view:on_file_dropped(...)
   elseif type == "dialogfinished" then
@@ -1560,6 +1563,7 @@ function core.on_event(type, ...)
       "Focus diagnostics: received focusgained event active=%s window_has_focus=%s",
       tostring(core.active_view), tostring(core.window and system.window_has_focus(core.window))
     )
+    core.redraw = true
   elseif type == "focuslost" then
     core.log_quiet(
       "Focus diagnostics: received focuslost event active=%s window_has_focus=%s",

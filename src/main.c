@@ -188,6 +188,8 @@ static bool resize_reason_allows_same_size(const char *reason) {
          strcmp(reason, "wm_paint_owned") == 0 ||
          strcmp(reason, "wm_size_owned") == 0 ||
          strcmp(reason, "sdl_exposed") == 0 ||
+         strcmp(reason, "sdl_focus_gained") == 0 ||
+         strcmp(reason, "sdl_restored") == 0 ||
          strcmp(reason, "exit_sizemove") == 0 ||
          strcmp(reason, "reentrant_final") == 0;
 }
@@ -564,6 +566,8 @@ static bool event_wants_immediate_resize_frame(const SDL_Event *event) {
     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
     case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
     case SDL_EVENT_WINDOW_EXPOSED:
+    case SDL_EVENT_WINDOW_FOCUS_GAINED:
+    case SDL_EVENT_WINDOW_RESTORED:
       return true;
     default:
       return false;

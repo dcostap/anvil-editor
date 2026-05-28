@@ -106,6 +106,8 @@ const char *anvil_resize_diag_event_reason(uint32_t sdl_event_type) {
     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED: return "sdl_pixel_size";
     case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED: return "sdl_scale";
     case SDL_EVENT_WINDOW_EXPOSED: return "sdl_exposed";
+    case SDL_EVENT_WINDOW_FOCUS_GAINED: return "sdl_focus_gained";
+    case SDL_EVENT_WINDOW_RESTORED: return "sdl_restored";
     default: return "sdl_other";
   }
 }
