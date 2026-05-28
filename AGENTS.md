@@ -96,16 +96,16 @@ To check all bundled Lua files:
 find data -name '*.lua' -print0 | xargs -0 luajit check-lua-syntax.lua
 ```
 
-Use LuaJIT for this because Anvil runs LuaJIT in the normal dev build, so it is the closest parser/runtime match. If `luajit` is not installed or not on `PATH`, ask the user for permission before installing it. On this PC the expected install command is:
+Use LuaJIT for this because Anvil runs LuaJIT in the normal dev build, so it is the closest parser/runtime match. On this repo, use the checked-out LuaJIT executable directly instead of relying on a global `PATH` entry:
+
+```sh
+./subprojects/luajit/src/luajit.exe check-lua-syntax.lua data/plugins/example.lua
+```
+
+If the repo-local executable is missing, ask the user before installing anything globally. On this PC the expected install command is:
 
 ```powershell
 winget install --id DEVCOM.LuaJIT -e
-```
-
-If installation is not approved, do not run package installation. As an emergency syntax-only fallback when the build directory exists, create a temporary Lua script with `assert(loadfile("path/to/file.lua"))` lines and run it with:
-
-```sh
-build-windows-x86_64/subprojects/luajit/src/minilua.exe path/to/temp-syntax-script.lua
 ```
 
 ## Finalizing changes / updating the dev portable app
