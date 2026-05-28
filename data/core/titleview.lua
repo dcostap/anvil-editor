@@ -421,7 +421,7 @@ function TitleView:on_mouse_moved(px, py, ...)
     return
   end
   for item, x, y, w, h in self:each_control_item() do
-    if px > x and py > y and px <= x + w and py <= y + h then
+    if px >= x and py >= y and px <= x + w and py <= y + h then
       self.hovered_item = item
       return
     end
