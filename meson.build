@@ -381,7 +381,6 @@ endif
 
 install_data('licenses/licenses.md', install_dir : anvil_docdir)
 
-install_subdir('docs/api' , install_dir : anvil_datadir, strip_directory: true)
 install_subdir('data/core' , install_dir : anvil_datadir, exclude_files : 'start.lua')
 install_subdir('resources/icons' , install_dir : anvil_datadir)
 
