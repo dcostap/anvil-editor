@@ -32,6 +32,7 @@ local save_generation = 0
 local loop_running = false
 local recovery_restored = false
 local recovery_dirty = false
+local untitled_id_counter = 0
 
 local RECOVERY_MODULE = "untitled_recovery"
 local MAX_SNAPSHOT_CONTENT_SIZE = 5 * 1024 * 1024
@@ -51,6 +52,22 @@ end
 
 local function is_untitled_doc(doc)
   return doc and doc.intellij_untitled and doc.new_file and not doc.filename
+end
+
+local function new_untitled_id()
+  untitled_id_counter = untitled_id_counter + 1
+  return string.format(
+    "%s-%d-%d",
+    system.get_process_id and system.get_process_id() or 0,
+    math.floor(system.get_time() * 1000000),
+    untitled_id_counter
+  )
+end
+
+local function ensure_untitled_id(doc, id)
+  if not doc then return nil end
+  doc.intellij_untitled_id = id or doc.intellij_untitled_id or new_untitled_id()
+  return doc.intellij_untitled_id
 end
 
 local function read_file_contents(filename)
@@ -270,6 +287,7 @@ local function collect_untitled_recovery()
   for _, doc in ipairs(core.docs or {}) do
     if is_untitled_doc(doc) then
       items[#items + 1] = {
+        id = ensure_untitled_id(doc),
         name = doc.intellij_untitled_name,
         text = doc:get_text(1, 1, math.huge, math.huge),
         crlf = doc.crlf,
@@ -294,12 +312,15 @@ local function save_untitled_recovery(force)
   end
 end
 
-local function same_untitled_exists(name, text)
+local function same_untitled_exists(id, name, text)
   for _, doc in ipairs(core.docs or {}) do
-    if is_untitled_doc(doc)
-       and doc.intellij_untitled_name == name
-       and doc:get_text(1, 1, math.huge, math.huge) == text then
-      return true
+    if is_untitled_doc(doc) then
+      if id and doc.intellij_untitled_id == id then return true end
+      if not id
+         and doc.intellij_untitled_name == name
+         and doc:get_text(1, 1, math.huge, math.huge) == text then
+        return true
+      end
     end
   end
   return false
@@ -314,10 +335,11 @@ local function restore_untitled_recovery()
   local restored = 0
   for _, item in ipairs(data.documents) do
     if type(item) == "table" and type(item.text) == "string"
-       and not same_untitled_exists(item.name, item.text) then
+       and not same_untitled_exists(item.id, item.name, item.text) then
       local doc = core.open_doc()
       doc.intellij_untitled = true
       doc.intellij_untitled_name = item.name
+      ensure_untitled_id(doc, item.id)
       doc.crlf = item.crlf
       doc.lines = {}
       for line in (item.text .. "\n"):gmatch("(.-\n)") do

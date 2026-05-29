@@ -11,6 +11,7 @@ local DocView = require "core.docview"
 local Node = require "core.node"
 
 local M = {}
+local untitled_id_counter = 0
 
 local function is_untitled_doc(doc)
   return doc and doc.intellij_untitled and doc.new_file and not doc.filename
@@ -31,10 +32,29 @@ local function next_untitled_name()
   return "Untitled-" .. idx
 end
 
-local function tag_doc(doc, name)
+local function new_untitled_id()
+  untitled_id_counter = untitled_id_counter + 1
+  return string.format(
+    "%s-%d-%d",
+    system.get_process_id and system.get_process_id() or 0,
+    math.floor(system.get_time() * 1000000),
+    untitled_id_counter
+  )
+end
+
+local function ensure_untitled_id(doc, id)
+  if not doc then return nil end
+  doc.intellij_untitled_id = id or doc.intellij_untitled_id or new_untitled_id()
+  return doc.intellij_untitled_id
+end
+
+M.ensure_untitled_id = ensure_untitled_id
+
+local function tag_doc(doc, name, id)
   if not doc or doc.filename then return doc end
   doc.intellij_untitled = true
   doc.intellij_untitled_name = name or doc.intellij_untitled_name or next_untitled_name()
+  ensure_untitled_id(doc, id)
   return doc
 end
 
@@ -113,6 +133,7 @@ if not core.__untitled_tabs_patched then
     if is_untitled_doc(self.doc) then
       state.intellij_untitled = true
       state.intellij_untitled_name = self.doc.intellij_untitled_name
+      state.intellij_untitled_id = ensure_untitled_id(self.doc)
     end
     return state
   end
@@ -121,7 +142,7 @@ if not core.__untitled_tabs_patched then
   function DocView.from_state(state)
     local view = docview_from_state(state)
     if view and view.doc and state and state.intellij_untitled then
-      tag_doc(view.doc, state.intellij_untitled_name)
+      tag_doc(view.doc, state.intellij_untitled_name, state.intellij_untitled_id)
     end
     return view
   end
@@ -132,6 +153,7 @@ if not core.__untitled_tabs_patched then
     if self.intellij_untitled and self.filename then
       self.intellij_untitled = nil
       self.intellij_untitled_name = nil
+      self.intellij_untitled_id = nil
     end
     return result
   end

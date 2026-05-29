@@ -174,6 +174,26 @@ test.describe("core.common", function()
     end)
   end)
 
+  test.describe("filename component encoding", function()
+    test.test("encodes path separators and Windows-invalid filename characters", function()
+      local encoded = common.encode_filename_component([[C:\Users/Darius:repo*?"<>|]])
+      test.equal(encoded, [[C%3A%5CUsers%2FDarius%3Arepo%2A%3F%22%3C%3E%7C]])
+      test.equal(common.decode_filename_component(encoded), [[C:\Users/Darius:repo*?"<>|]])
+    end)
+
+    test.test("keeps distinct keys distinct", function()
+      test.not_equal(common.encode_filename_component("a/b"), common.encode_filename_component("a-b"))
+      test.not_equal(common.encode_filename_component("a%2Fb"), common.encode_filename_component("a/b"))
+    end)
+
+    test.test("avoids Windows reserved and trailing-dot names", function()
+      test.equal(common.decode_filename_component(common.encode_filename_component("CON.txt")), "CON.txt")
+      test.not_equal(common.encode_filename_component("CON.txt"), "CON.txt")
+      test.equal(common.encode_filename_component("name."), "name%2E")
+      test.equal(common.encode_filename_component("name "), "name%20")
+    end)
+  end)
+
   test.describe("normalize_path", function()
     test.test("normalizes dot and dot-dot components", function()
       if PLATFORM == "Windows" then

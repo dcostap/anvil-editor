@@ -708,6 +708,47 @@ function common.dirname(path)
 end
 
 
+local windows_reserved_filenames = {
+  CON = true, PRN = true, AUX = true, NUL = true,
+  COM1 = true, COM2 = true, COM3 = true, COM4 = true, COM5 = true,
+  COM6 = true, COM7 = true, COM8 = true, COM9 = true,
+  LPT1 = true, LPT2 = true, LPT3 = true, LPT4 = true, LPT5 = true,
+  LPT6 = true, LPT7 = true, LPT8 = true, LPT9 = true,
+}
+
+local function percent_encode_byte(ch)
+  return string.format("%%%02X", ch:byte())
+end
+
+---Encodes arbitrary text into a filesystem-safe filename component.
+---The encoding is byte-stable and avoids collisions with unencoded percent
+---escapes, path separators, Windows-invalid characters, trailing dots/spaces,
+---and Windows reserved device names.
+---@param text string|number
+---@return string
+function common.encode_filename_component(text)
+  local encoded = tostring(text or ""):gsub("([^A-Za-z0-9._ -])", percent_encode_byte)
+  encoded = encoded:gsub("[ .]+$", function(s)
+    return (s:gsub(".", percent_encode_byte))
+  end)
+  if encoded == "" then return "%00" end
+  local stem = encoded:match("^([^.]+)") or encoded
+  if windows_reserved_filenames[stem:upper()] then
+    encoded = percent_encode_byte(encoded:sub(1, 1)) .. encoded:sub(2)
+  end
+  return encoded
+end
+
+---Decodes a filename component produced by encode_filename_component.
+---@param text string
+---@return string
+function common.decode_filename_component(text)
+  return tostring(text or ""):gsub("%%(%x%x)", function(hex)
+    return string.char(tonumber(hex, 16))
+  end)
+end
+
+
 ---Returns a path where the user's home directory is replaced by `"~"`.
 ---@param text string
 ---@return string

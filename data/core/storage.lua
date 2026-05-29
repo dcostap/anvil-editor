@@ -2,7 +2,14 @@ local core = require "core"
 local common = require "core.common"
 
 local function module_key_to_path(module, key)
-  return USERDIR .. PATHSEP .. "storage" .. (module and (PATHSEP .. module .. (key and (PATHSEP .. key:gsub("[\\/]", "-")) or "")) or "")
+  local path = USERDIR .. PATHSEP .. "storage"
+  if module then
+    path = path .. PATHSEP .. common.encode_filename_component(module)
+    if key then
+      path = path .. PATHSEP .. common.encode_filename_component(key)
+    end
+  end
+  return path
 end
 
 
@@ -123,7 +130,11 @@ end
 ---@param module string The module under which the data is stored.
 ---@return table A table of keys under which data is stored for this module.
 function storage.keys(module)
-  return system.list_dir(module_key_to_path(module)) or {}
+  local keys = system.list_dir(module_key_to_path(module)) or {}
+  for i, key in ipairs(keys) do
+    keys[i] = common.decode_filename_component(key)
+  end
+  return keys
 end
 
 
