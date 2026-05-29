@@ -413,10 +413,28 @@ top:
       lua_pushstring(L, "enteredbackground");
       return 1;
 
-    case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
       {
         RenWindow* window_renderer = ren_find_window_from_id(e.window.windowID);
+        if (!window_renderer) goto top;
+        ren_resize_window(window_renderer);
+        if (anvil_resize_diag_live_resize()) win32_frame_sync_client_size(window_renderer);
+        /* Pixel-size changes can happen during resize/minimize/restore and do not
+         * necessarily mean the display scale changed. Keep the renderer surface in
+         * sync, but do not expose this as Lua "scalechanged". */
+        goto top;
+      }
+
+    case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
+      {
+        RenWindow* window_renderer = ren_find_window_from_id(e.window.windowID);
+        if (!window_renderer) goto top;
+        Uint64 flags = SDL_GetWindowFlags(window_renderer->cache.window);
+        if (flags & (SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN)) {
+          /* SDL/Win32 can report bogus display scale while a minimized/hidden
+           * window has a tiny iconic client rect, notably around lock/unlock. */
+          goto top;
+        }
         ren_resize_window(window_renderer);
         if (anvil_resize_diag_live_resize()) win32_frame_sync_client_size(window_renderer);
         lua_pushstring(L, "scalechanged");
