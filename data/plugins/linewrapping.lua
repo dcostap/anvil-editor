@@ -248,7 +248,7 @@ function LineWrapping.draw_guide(docview)
   if config.plugins.linewrapping.guide and docview.wrapped_settings.width ~= math.huge then
     local x, y = docview:get_content_offset()
     local gw = docview:get_gutter_width()
-    renderer.draw_rect(x + gw + docview.wrapped_settings.width, y, 1, core.root_view.size.y, style.selection)
+    renderer.draw_rect(x + gw + docview.wrapped_settings.width, y, 1, core.root_panel.size.y, style.selection)
   end
 end
 

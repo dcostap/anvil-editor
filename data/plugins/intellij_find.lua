@@ -1,7 +1,7 @@
 -- mod-version:3
 -- View-local in-file find/replace overlay.
 --
--- This intentionally does not use core.command_view: find is editor-local UI.
+-- This intentionally does not use core.global_prompt_bar: find is editor-local UI.
 -- Each DocView owns its own find state, so two splits of the same Doc can keep
 -- independent queries, current match, highlights, and visible input bars.
 
@@ -15,7 +15,7 @@ local translate = require "core.doc.translate"
 local Doc = require "core.doc"
 local Highlighter = require "core.doc.highlighter"
 local DocView = require "core.docview"
-local CommandView = require "core.commandview"
+local GlobalPromptBar = require "core.global_prompt_bar"
 local MessageBox = require "widget.messagebox"
 
 local find_state_by_view = setmetatable({}, { __mode = "k" })
@@ -142,7 +142,7 @@ end
 
 local function is_searchable_docview(view)
   return view and view.extends and view:extends(DocView)
-    and not view:is(CommandView)
+    and not view:is(GlobalPromptBar)
     and not view.local_find_input
     and view.doc
 end

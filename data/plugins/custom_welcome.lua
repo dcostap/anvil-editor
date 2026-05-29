@@ -180,8 +180,8 @@ local function patch_existing_node(node)
 end
 
 local function patch_existing()
-  if core.root_view and core.root_view.root_node then
-    patch_existing_node(core.root_view.root_node)
+  if core.root_panel and core.root_panel.root_node then
+    patch_existing_node(core.root_panel.root_node)
     core.redraw = true
   end
 end

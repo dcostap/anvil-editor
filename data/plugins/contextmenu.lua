@@ -5,33 +5,33 @@ local keymap = require "core.keymap"
 local ContextMenu = require "core.contextmenu"
 local DocView = require "core.docview"
 local MarkdownView = require "core.markdownview"
-local RootView = require "core.rootview"
+local RootPanel = require "core.rootpanel"
 local config = require "core.config"
 
 local menu = ContextMenu()
-local on_view_mouse_pressed = RootView.on_view_mouse_pressed
-local on_mouse_moved = RootView.on_mouse_moved
-local root_view_update = RootView.update
-local root_view_draw = RootView.draw
+local on_view_mouse_pressed = RootPanel.on_view_mouse_pressed
+local on_mouse_moved = RootPanel.on_mouse_moved
+local root_panel_update = RootPanel.update
+local root_panel_draw = RootPanel.draw
 
-function RootView:on_mouse_moved(...)
+function RootPanel:on_mouse_moved(...)
   if menu:on_mouse_moved(...) then return end
   on_mouse_moved(self, ...)
 end
 
-function RootView.on_view_mouse_pressed(button, x, y, clicks)
+function RootPanel.on_view_mouse_pressed(button, x, y, clicks)
   -- We give the priority to the menu to process mouse pressed events.
   local handled = menu:on_mouse_pressed(button, x, y, clicks)
   return handled or on_view_mouse_pressed(button, x, y, clicks)
 end
 
-function RootView:update(...)
-  root_view_update(self, ...)
+function RootPanel:update(...)
+  root_panel_update(self, ...)
   menu:update()
 end
 
-function RootView:draw(...)
-  root_view_draw(self, ...)
+function RootPanel:draw(...)
+  root_panel_draw(self, ...)
   menu:draw()
 end
 

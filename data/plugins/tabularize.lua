@@ -42,7 +42,7 @@ end
 
 command.add("core.docview", {
   ["tabularize:tabularize"] = function(dv)
-    core.command_view:enter("Tabularize On Delimiter", {
+    core.global_prompt_bar:enter("Tabularize On Delimiter", {
       submit = function(delim)
         if delim == "" then delim = " " end
 

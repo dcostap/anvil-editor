@@ -62,7 +62,7 @@ local LogView = View:extend()
 
 function LogView:__tostring() return "LogView" end
 
-LogView.context = "session"
+LogView.context = "workspace"
 
 
 ---Constructor - initializes the log viewer.
@@ -73,7 +73,7 @@ function LogView:new()
   self.scrollable = true
   self.yoffset = 0
 
-  core.status_view:show_message("i", style.text, "ctrl+click to copy entry")
+  core.status_bar:show_message("i", style.text, "ctrl+click to copy entry")
 end
 
 
@@ -159,7 +159,7 @@ function LogView:on_mouse_pressed(button, px, py, clicks)
   if selected then
     if keymap.modkeys["ctrl"] then
       system.set_clipboard(core.get_log(selected))
-      core.status_view:show_message("i", style.text, "copied entry #"..index.." to clipboard.")
+      core.status_bar:show_message("i", style.text, "copied entry #"..index.." to clipboard.")
     else
       self:expand_item(selected)
     end

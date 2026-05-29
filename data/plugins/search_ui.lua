@@ -1,6 +1,6 @@
 -- mod-version:3
 --
--- Replacement for the find/replace CommandView
+-- Replacement for the find/replace GlobalPromptBar
 -- interface using Widgets with some extra features.
 -- @copyright Jefferson Gonzalez <jgmdev@gmail.com>
 -- @license MIT
@@ -11,7 +11,7 @@ local common = require "core.common"
 local command = require "core.command"
 local keymap = require "core.keymap"
 local search = require "core.doc.search"
-local CommandView = require "core.commandview"
+local GlobalPromptBar = require "core.global_prompt_bar"
 local DocView = require "core.docview"
 local Widget = require "widget"
 local Button = require "widget.button"
@@ -346,7 +346,7 @@ end
 local function view_is_open(target_view)
   if not target_view then return false end
   local found = false
-  for _, view in ipairs(core.root_view.root_node:get_children()) do
+  for _, view in ipairs(core.root_panel.root_node:get_children()) do
     if
       view == target_view
       or
@@ -551,12 +551,12 @@ local function add_to_node()
       current_position ~= config.plugins.search_ui.position
     then
       ui:hide()
-      current_node:remove_view(core.root_view.root_node, ui)
-      core.root_view.root_node:update_layout()
+      current_node:remove_view(core.root_panel.root_node, ui)
+      core.root_panel.root_node:update_layout()
       ui:set_size(0, 0)
       ui.init_size = true
     end
-    local node = core.root_view:get_primary_node()
+    local node = core.root_panel:get_main_panel()
     if config.plugins.search_ui.position == "right" then
       current_node = node:split("right", ui, {x=true}, true)
       current_position = "right"
@@ -878,7 +878,7 @@ command.add(
   }
 )
 
-command.add(function() return ui:is_visible() and not core.active_view:is(CommandView) end, {
+command.add(function() return ui:is_visible() and not core.active_view:is(GlobalPromptBar) end, {
   ["search-replace:hide"] = function()
     ui:swap_active_child()
     if config.plugins.search_ui.position == "right" then
@@ -929,7 +929,7 @@ command.add(
     local active = ui.child_active == findtext and findtext or replacetext
     local valid = ui:is_visible()
       and
-      not core.active_view:is(CommandView)
+      not core.active_view:is(GlobalPromptBar)
       and
       (
         ui.child_active == active

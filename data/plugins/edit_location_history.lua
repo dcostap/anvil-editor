@@ -73,11 +73,11 @@ end
 
 local function is_real_editor_doc(doc)
   if not doc or not doc_in_core_docs(doc) then return false end
-  if doc == (core.command_view and core.command_view.doc) then return false end
+  if doc == (core.global_prompt_bar and core.global_prompt_bar.doc) then return false end
 
   local view = active_editor_for_doc(doc)
   if view then
-    if view == core.command_view or view == core.nag_view then return false end
+    if view == core.global_prompt_bar or view == core.nag_view then return false end
     if tostring(view) == "EditreeView" then return false end
   end
 
@@ -237,9 +237,9 @@ local function restore_place(place)
     local view
     if place.filename then
       doc = core.open_doc(place.filename)
-      view = core.root_view:open_doc(doc)
+      view = core.root_panel:open_doc(doc)
     elseif doc then
-      view = core.root_view:open_doc(doc)
+      view = core.root_panel:open_doc(doc)
     end
     if not doc or not view then return end
     doc:set_selection(place.line, place.col, place.line, place.col)

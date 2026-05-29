@@ -4,7 +4,7 @@ local common = require "core.common"
 local style = require "core.style"
 local command = require "core.command"
 local keymap = require "core.keymap"
-local RootView = require "core.rootview"
+local RootPanel = require "core.rootpanel"
 local perf = require "core.perf"
 
 local hud = {
@@ -58,7 +58,7 @@ local function draw_hud()
   end
   local w = width + pad * 2
   local h = #lines * line_h + pad * 2
-  local x = math.floor(core.root_view.size.x - w - 14 * SCALE)
+  local x = math.floor(core.root_panel.size.x - w - 14 * SCALE)
   local y = math.floor(14 * SCALE)
 
   renderer.draw_rect(x, y, w, h, recording and red_bg or black_bg)
@@ -69,8 +69,8 @@ local function draw_hud()
   end
 end
 
-local old_root_draw = RootView.draw
-function RootView:draw()
+local old_root_draw = RootPanel.draw
+function RootPanel:draw()
   old_root_draw(self)
   draw_hud()
 end

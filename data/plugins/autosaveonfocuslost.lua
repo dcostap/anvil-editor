@@ -1,16 +1,16 @@
 -- mod-version:3
 local config = require "core.config"
 local core = require "core"
-local CommandView = require "core.commandview"
+local GlobalPromptBar = require "core.global_prompt_bar"
 local DocView = require "core.docview"
-local RootView = require "core.rootview"
+local RootPanel = require "core.rootpanel"
 
 local autosave_fast
 if config.plugins.autosave_fast ~= false then
   autosave_fast = require "plugins.autosave_fast"
 end
 
-local on_focus_lost = RootView.on_focus_lost
+local on_focus_lost = RootPanel.on_focus_lost
 
 local function is_protected_doc(doc)
   if not doc or not doc.abs_filename then return false end
@@ -25,7 +25,7 @@ local function save_node_fallback(node)
     local i = 1
     while i <= #node.views do
       local view = node.views[i]
-      if view:is(DocView) and not view:is(CommandView)
+      if view:is(DocView) and not view:is(GlobalPromptBar)
           and view.doc.filename and view.doc:is_dirty()
           and not is_protected_doc(view.doc) then
         local ok, err = pcall(view.doc.save, view.doc)
@@ -43,11 +43,11 @@ local function save_node_fallback(node)
   end
 end
 
-function RootView:on_focus_lost(...)
+function RootPanel:on_focus_lost(...)
   if autosave_fast and autosave_fast.enabled ~= false then
     autosave_fast.save_all_dirty("application focus lost")
   else
-    save_node_fallback(core.root_view.root_node)
+    save_node_fallback(core.root_panel.root_node)
   end
   return on_focus_lost(self, ...)
 end

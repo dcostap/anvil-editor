@@ -61,7 +61,7 @@ config.images_background_color = { common.color "#ffffff" }
 ---@type number
 config.max_log_items = 800
 
----The timeout, in seconds, before a message dissapears from StatusView.
+---The timeout, in seconds, before a message dissapears from StatusBar.
 ---
 ---Defaults to 5.
 ---@type number
@@ -263,8 +263,8 @@ config.transitions = true
 config.disabled_transitions = {
   ---Disables scrolling transitions.
   scroll = false,
-  ---Disables transitions for CommandView's suggestions list.
-  commandview = false,
+  ---Disables transitions for GlobalPromptBar's suggestions list.
+  global_prompt_bar = false,
   ---Disables transitions for showing/hiding the context menu.
   contextmenu = false,
   ---Disables transitions when clicking on log items in LogView.

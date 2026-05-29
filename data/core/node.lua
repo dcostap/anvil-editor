@@ -33,7 +33,8 @@ local View = require "core.view"
 ---@field b core.node?
 ---@field locked core.node.lock?
 ---@field resizable boolean?
----@field is_primary_node boolean?
+---@field is_main_panel_node boolean? Marks the Main Panel node.
+---@field is_primary_node boolean? Deprecated compatibility alias for `is_main_panel_node`.
 ---@field move_towards function
 local Node = Object:extend()
 
@@ -158,7 +159,7 @@ end
 
 ---Remove a view from this node.
 ---If this is the last view, may collapse the node or replace with EmptyView.
----Handles primary node logic and tree restructuring.
+---Handles Main Panel logic and tree restructuring.
 ---@param root core.node The root node of the tree
 ---@param view core.view View to remove
 function Node:remove_view(root, view)
@@ -173,6 +174,17 @@ function Node:remove_view(root, view)
     end
   else
     local parent = self:get_parent_node(root)
+    if not parent then
+      local self_is_main_panel = self.is_main_panel_node or self.is_primary_node
+      self.views = {}
+      self:add_view(EmptyView())
+      if self_is_main_panel then
+        self.is_main_panel_node = true
+        self.is_primary_node = true
+      end
+      core.last_active_view = nil
+      return
+    end
     local is_a = (parent.a == self)
     local other = parent[is_a and "b" or "a"]
     local locked_size_x, locked_size_y = other:get_locked_size()
@@ -182,16 +194,17 @@ function Node:remove_view(root, view)
     else
       locked_size = locked_size_y
     end
-    local next_primary
-    if self.is_primary_node then
-      next_primary = core.root_view:select_next_primary_node()
+    local self_is_main_panel = self.is_main_panel_node or self.is_primary_node
+    local next_main_panel
+    if self_is_main_panel then
+      next_main_panel = core.root_panel:select_next_main_panel()
     end
-    if locked_size or (self.is_primary_node and not next_primary) then
+    if locked_size or (self_is_main_panel and not next_main_panel) then
       self.views = {}
       self:add_view(EmptyView())
     else
-      if other == next_primary then
-        next_primary = parent
+      if other == next_main_panel then
+        next_main_panel = parent
       end
       parent:consume(other)
       local p = parent
@@ -199,8 +212,9 @@ function Node:remove_view(root, view)
         p = p[is_a and "a" or "b"]
       end
       p:set_active_view(p.active_view)
-      if self.is_primary_node then
-        next_primary.is_primary_node = true
+      if self_is_main_panel then
+        next_main_panel.is_main_panel_node = true
+        next_main_panel.is_primary_node = true
       end
     end
   end
@@ -372,14 +386,14 @@ end
 ---@return boolean show True if tabs should be displayed
 function Node:should_show_tabs()
   if self.locked then return false end
-  if config.integrated_titlebar_tabs and core.title_view and core.title_view.visible and core.root_view then
-    local active_node = core.root_view:get_active_node()
+  if config.integrated_titlebar_tabs and core.title_bar and core.title_bar.visible and core.root_panel then
+    local active_node = core.root_panel:get_active_node()
     if active_node and active_node.locked and core.last_active_view then
-      active_node = core.root_view.root_node:get_node_for_view(core.last_active_view) or active_node
+      active_node = core.root_panel.root_node:get_node_for_view(core.last_active_view) or active_node
     end
     if active_node == self then return false end
   end
-  local dn = core.root_view.dragged_node
+  local dn = core.root_panel.dragged_node
   if config.hide_tabs then
     return false
   elseif #self.views > 1
@@ -516,7 +530,7 @@ local function node_contains_view(node, view)
 end
 
 local function divider_size_for_node(node)
-  if core.title_view and (node_contains_view(node.a, core.title_view) or node_contains_view(node.b, core.title_view)) then
+  if core.title_bar and (node_contains_view(node.a, core.title_bar) or node_contains_view(node.b, core.title_bar)) then
     return 0
   end
   return style.divider_size
@@ -706,7 +720,7 @@ function Node:update()
     local view = self.active_view
     call_view_method(view, view.update)
     view._core_step_first_update = true
-    self:tab_hovered_update(core.root_view.mouse.x, core.root_view.mouse.y)
+    self:tab_hovered_update(core.root_panel.mouse.x, core.root_panel.mouse.y)
     local tab_width = self:target_tab_width()
     self:move_towards("tab_shift", tab_width * (self.tab_offset - 1), nil, "tabs")
     self:move_towards("tab_width", tab_width, nil, "tabs")
@@ -864,7 +878,7 @@ function Node:draw()
   else
     local x, y, w, h = self:get_divider_rect()
     local color = style.divider
-    if core.title_view and (node_contains_view(self.a, core.title_view) or node_contains_view(self.b, core.title_view)) then
+    if core.title_bar and (node_contains_view(self.a, core.title_bar) or node_contains_view(self.b, core.title_bar)) then
       color = style.background2
     end
     renderer.draw_rect(x, y, w, h, color)
@@ -895,7 +909,7 @@ function Node:is_in_tab_area(x, y)
 end
 
 
----Close all document views (views with context="session").
+---Close all document views (views with context="workspace").
 ---Used when closing a project. May collapse empty nodes.
 ---@param keep_active boolean If true, keep the active view open
 function Node:close_all_docviews(keep_active)
@@ -905,7 +919,7 @@ function Node:close_all_docviews(keep_active)
     local i = 1
     while i <= #self.views do
       local view = self.views[i]
-      if view.context == "session" and (not keep_active or view ~= self.active_view) then
+      if (view.context == "workspace" or view.context == "session") and (not keep_active or view ~= self.active_view) then
         table.remove(self.views, i)
         if view == node_active_view then
           lost_active_view = true
@@ -915,11 +929,11 @@ function Node:close_all_docviews(keep_active)
       end
     end
     self.tab_offset = 1
-    if #self.views == 0 and self.is_primary_node then
-      -- if we are not the primary view and we had the active view it doesn't
-      -- matter to reattribute the active view because, within the close_all_docviews
-      -- top call, the primary node will take the active view anyway.
-      -- Set the empty view and takes the active view.
+    if #self.views == 0 and (self.is_main_panel_node or self.is_primary_node) then
+      -- If we are not in the Main Panel and had the active view, it does not
+      -- matter to reassign the active view because the close_all_docviews top
+      -- call will let the Main Panel take the active view anyway.
+      -- Set the empty view and take the active view.
       self:add_view(EmptyView())
     elseif #self.views > 0 and lost_active_view then
       -- In practice we never get there but if a view remain we need
@@ -929,9 +943,9 @@ function Node:close_all_docviews(keep_active)
   else
     self.a:close_all_docviews(keep_active)
     self.b:close_all_docviews(keep_active)
-    if self.a:is_empty() and not self.a.is_primary_node then
+    if self.a:is_empty() and not (self.a.is_main_panel_node or self.a.is_primary_node) then
       self:consume(self.b)
-    elseif self.b:is_empty() and not self.b.is_primary_node then
+    elseif self.b:is_empty() and not (self.b.is_main_panel_node or self.b.is_primary_node) then
       self:consume(self.a)
     end
   end

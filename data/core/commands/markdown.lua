@@ -20,7 +20,7 @@ local markdown_raw_split_directions = {
 
 local function get_doc_preview(dv)
   local doc = dv.doc
-  for _, view in ipairs(core.root_view.root_node:get_children()) do
+  for _, view in ipairs(core.root_panel.root_node:get_children()) do
     if view:extends(MarkdownView) and view.linked_doc == doc then
       return view
     end
@@ -28,7 +28,7 @@ local function get_doc_preview(dv)
 end
 
 local function get_raw_doc_view(path)
-  for _, view in ipairs(core.root_view.root_node:get_children()) do
+  for _, view in ipairs(core.root_panel.root_node:get_children()) do
     if view:extends(DocView) and view.doc and view.doc.abs_filename == path then
       return view
     end
@@ -47,8 +47,8 @@ end
 
 local function open_raw_doc_view(path, mv)
   local doc = core.open_doc(path)
-  local node = core.root_view.root_node:get_node_for_view(mv)
-    or core.root_view:get_active_node_default()
+  local node = core.root_panel.root_node:get_node_for_view(mv)
+    or core.root_panel:get_active_node_default()
   if config.markdown_preview_mode == "newtab" then
     for _, view in ipairs(node.views) do
       if view:extends(DocView) and view.doc == doc then
@@ -58,7 +58,7 @@ local function open_raw_doc_view(path, mv)
     end
     local view = DocView(doc)
     node:add_view(view)
-    core.root_view.root_node:update_layout()
+    core.root_panel.root_node:update_layout()
     view:scroll_to_line(view.doc:get_selection(), true, true)
     return view
   end
@@ -66,7 +66,7 @@ local function open_raw_doc_view(path, mv)
   local view = DocView(doc)
   local split_direction = markdown_raw_split_directions[config.markdown_preview_mode] or "left"
   node:split(split_direction, view)
-  core.root_view.root_node:update_layout()
+  core.root_panel.root_node:update_layout()
   view:scroll_to_line(view.doc:get_selection(), true, true)
   return view
 end
@@ -81,15 +81,15 @@ end, {
   ["markdown-view:preview"] = function(dv)
     local view = get_doc_preview(dv)
     if view then
-      local node = core.root_view.root_node:get_node_for_view(view)
+      local node = core.root_panel.root_node:get_node_for_view(view)
       if node then
         node:set_active_view(view)
       end
       return
     end
 
-    local node = core.root_view.root_node:get_node_for_view(dv)
-      or core.root_view:get_active_node_default()
+    local node = core.root_panel.root_node:get_node_for_view(dv)
+      or core.root_panel:get_active_node_default()
     view = MarkdownView({
       linked_doc = dv.doc,
       path = dv.doc.abs_filename,
@@ -100,12 +100,12 @@ end, {
     if mode == "newtab" then
       node:add_view(view)
     else
-      (split_direction and node or core.root_view:get_active_node_default()):split(
+      (split_direction and node or core.root_panel:get_active_node_default()):split(
         split_direction or "right",
         view
       )
     end
-    core.root_view.root_node:update_layout()
+    core.root_panel.root_node:update_layout()
   end
 })
 
@@ -155,7 +155,7 @@ end, {
   ["markdown-view:view-raw"] = function(mv)
     local raw_view = get_raw_doc_view(mv.path)
     if raw_view then
-      local node = core.root_view.root_node:get_node_for_view(raw_view)
+      local node = core.root_panel.root_node:get_node_for_view(raw_view)
       if node then
         node:set_active_view(raw_view)
       end

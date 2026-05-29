@@ -8,7 +8,7 @@ local LogView = require "core.logview"
 
 local previous_win_mode = "normal"
 local previous_win_pos = core.window_size
-local restore_title_view = false
+local restore_title_bar = false
 
 local function suggest_directory(text)
   text = common.home_expand(text)
@@ -59,7 +59,7 @@ local function open_file(use_dialog, label, selection_callback, allow_directorie
   	return
   end
 
-  core.command_view:enter(label or "Open File", {
+  core.global_prompt_bar:enter(label or "Open File", {
     text = default_text,
     submit = function(text)
       if not selection_callback then
@@ -130,7 +130,7 @@ local function open_directory(label, use_dialog, allow_many, callback, select_te
   	return
   end
 
-  core.command_view:enter(label, {
+  core.global_prompt_bar:enter(label, {
     text = text,
     submit = function(text)
       local path = common.home_expand(text)
@@ -204,18 +204,18 @@ command.add(nil, {
       end
     end
     if not fullscreen then
-      restore_title_view = core.title_view.visible
+      restore_title_bar = core.title_bar.visible
     end
     system.set_window_mode(core.window, fullscreen and previous_win_mode or "fullscreen")
-    core.show_title_bar(fullscreen and restore_title_view)
-    core.title_view:configure_hit_test(fullscreen and restore_title_view)
+    core.show_title_bar(fullscreen and restore_title_bar)
+    core.title_bar:configure_hit_test(fullscreen and restore_title_bar)
     if fullscreen and previous_win_mode == "normal" then
       system.set_window_size(core.window, table.unpack(previous_win_pos))
     end
   end,
 
   ["core:reload-module"] = function()
-    core.command_view:enter("Reload Module", {
+    core.global_prompt_bar:enter("Reload Module", {
       submit = function(text, item)
         text = item and item.text or text
         core.reload_module(text)
@@ -233,7 +233,7 @@ command.add(nil, {
 
   ["core:find-command"] = function()
     local commands = command.get_all_valid()
-    core.command_view:enter("Do Command", {
+    core.global_prompt_bar:enter("Do Command", {
       submit = function(text, item)
         if item then
           command.perform(item.command)
@@ -255,13 +255,13 @@ command.add(nil, {
   end,
 
   ["core:new-doc"] = function()
-    core.root_view:open_doc(core.open_doc())
+    core.root_panel:open_doc(core.open_doc())
   end,
 
   ["core:new-named-doc"] = function()
-    core.command_view:enter("File name", {
+    core.global_prompt_bar:enter("File name", {
       submit = function(text)
-        core.root_view:open_doc(core.open_doc(text))
+        core.root_panel:open_doc(core.open_doc(text))
       end
     })
   end,
@@ -274,19 +274,19 @@ command.add(nil, {
     open_file(true)
   end,
 
-  ["core:open-file-commandview"] = function()
+  ["core:open-file-global-prompt-bar"] = function()
     open_file(false)
   end,
 
   ["core:open-log"] = function()
-    local node = core.root_view:get_active_node_default()
+    local node = core.root_panel:get_active_node_default()
     node:add_view(LogView())
   end,
 
   ["core:open-user-module"] = function()
     local user_module_doc = core.open_doc(USERDIR .. "/init.lua")
     if not user_module_doc then return end
-    core.root_view:open_doc(user_module_doc)
+    core.root_panel:open_doc(user_module_doc)
   end,
 
   ["core:open-project-module"] = function()
@@ -294,7 +294,7 @@ command.add(nil, {
       core.try(core.write_init_project_module, ".anvil_project.lua")
     end
     local doc = core.open_doc(".anvil_project.lua")
-    core.root_view:open_doc(doc)
+    core.root_panel:open_doc(doc)
   end,
 
   ["core:change-project-folder"] = function()
@@ -305,7 +305,7 @@ command.add(nil, {
     change_project_directory(true)
   end,
 
-  ["core:change-project-folder-commandview"] = function()
+  ["core:change-project-folder-global-prompt-bar"] = function()
     change_project_directory(false)
   end,
 
@@ -317,7 +317,7 @@ command.add(nil, {
     open_project_directory(true)
   end,
 
-  ["core:open-project-folder-commandview"] = function()
+  ["core:open-project-folder-global-prompt-bar"] = function()
     open_project_directory(false)
   end,
 
@@ -329,7 +329,7 @@ command.add(nil, {
     add_project_directory(true)
   end,
 
-  ["core:add-directory-commandview"] = function()
+  ["core:add-directory-global-prompt-bar"] = function()
     add_project_directory(false)
   end,
 
@@ -339,7 +339,7 @@ command.add(nil, {
     for i = n, 2, -1 do
       dir_list[n - i + 1] = core.projects[i].name
     end
-    core.command_view:enter("Remove Directory", {
+    core.global_prompt_bar:enter("Remove Directory", {
       submit = function(text, item)
         text = common.home_expand(item and item.text or text)
         if not core.remove_project(text) then
@@ -361,3 +361,12 @@ command.add(nil, {
     common.open_in_system("https://github.com/dcostap/anvil-editor")
   end,
 })
+
+command.add_alias("core:open-file-commandview", "core:open-file-global-prompt-bar")
+command.add_alias("core:open-file-global_prompt_bar", "core:open-file-global-prompt-bar")
+command.add_alias("core:change-project-folder-commandview", "core:change-project-folder-global-prompt-bar")
+command.add_alias("core:change-project-folder-global_prompt_bar", "core:change-project-folder-global-prompt-bar")
+command.add_alias("core:open-project-folder-commandview", "core:open-project-folder-global-prompt-bar")
+command.add_alias("core:open-project-folder-global_prompt_bar", "core:open-project-folder-global-prompt-bar")
+command.add_alias("core:add-directory-commandview", "core:add-directory-global-prompt-bar")
+command.add_alias("core:add-directory-global_prompt_bar", "core:add-directory-global-prompt-bar")

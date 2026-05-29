@@ -668,7 +668,7 @@ function DiffView:patch_views()
             color = style.caret
           end
         end
-        core.root_view:defer_draw(function()
+        core.root_panel:defer_draw(function()
           core.push_clip_rect(parent.position.x, parent.position.y, parent.size.x, parent.size.y)
           local ay = y + (self:get_line_height() / 2) - (style.icon_font:get_height() / 2)
           renderer.draw_text(style.icon_font, icon, ax, ay, color)
@@ -1094,7 +1094,7 @@ local function start_compare()
     return
   end
   local view = DiffView(element_a, element_b, DiffView.type.FILE_FILE)
-  core.root_view:get_active_node_default():add_view(view)
+  core.root_panel:get_active_node_default():add_view(view)
   core.set_active_view(view)
   element_a = nil
   element_b = nil
@@ -1106,7 +1106,7 @@ local function start_compare_string()
     return
   end
   local view = DiffView(element_a_text, element_b_text, DiffView.type.STRING_STRING)
-  core.root_view:get_active_node_default():add_view(view)
+  core.root_panel:get_active_node_default():add_view(view)
   core.set_active_view(view)
   element_a_text = nil
   element_b_text = nil
@@ -1313,10 +1313,10 @@ local diffview = {
   Viewer = DiffView
 }
 
----Helper differences view to rootview add.
+---Helper differences view to rootpanel add.
 ---@param view plugins.diffview.view
 local function compare_add_to_root_node(view)
-  core.root_view:get_active_node_default():add_view(view)
+  core.root_panel:get_active_node_default():add_view(view)
   core.set_active_view(view)
 end
 
@@ -1338,7 +1338,7 @@ end
 ---Create a file to file diff viewer.
 ---@param a string
 ---@param b string
----@param noshow? boolean If true doesn't adds to the rootview
+---@param noshow? boolean If true doesn't adds to the rootpanel
 ---@return plugins.diffview.view
 function diffview.file_to_file(a, b, noshow)
   return compare_start(a, b, DiffView.type.FILE_FILE, nil, noshow)
@@ -1349,7 +1349,7 @@ end
 ---@param b string
 ---@param a_name? string
 ---@param b_name? string
----@param noshow? boolean If true doesn't adds to the rootview
+---@param noshow? boolean If true doesn't adds to the rootpanel
 ---@return plugins.diffview.view
 function diffview.string_to_string(a, b, a_name, b_name, noshow)
   return compare_start(
@@ -1361,7 +1361,7 @@ end
 ---@param a string
 ---@param b string
 ---@param b_name? string
----@param noshow? boolean If true doesn't adds to the rootview
+---@param noshow? boolean If true doesn't adds to the rootpanel
 ---@return plugins.diffview.view
 function diffview.file_to_string(a, b, b_name, noshow)
   return compare_start(a, b, DiffView.type.FILE_STRING, {b = b_name}, noshow)
@@ -1371,7 +1371,7 @@ end
 ---@param a string
 ---@param b string
 ---@param a_name? string
----@param noshow? boolean If true doesn't adds to the rootview
+---@param noshow? boolean If true doesn't adds to the rootpanel
 ---@return plugins.diffview.view
 function diffview.string_to_file(a, b, a_name, noshow)
   return compare_start(a, b, DiffView.type.STRING_FILE, {a = a_name}, noshow)

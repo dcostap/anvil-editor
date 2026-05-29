@@ -46,7 +46,7 @@ end
 
 local function activate_view(view)
   if not view then return nil end
-  local node = core.root_view and core.root_view.root_node and core.root_view.root_node:get_node_for_view(view)
+  local node = core.root_panel and core.root_panel.root_node and core.root_panel.root_node:get_node_for_view(view)
   if node then node:set_active_view(view) else core.set_active_view(view) end
   return view
 end
@@ -55,7 +55,7 @@ local function open_target_file()
   if stress.file == "" then return nil end
   local doc = core.open_doc(stress.file)
   if not doc then return nil end
-  return activate_view(core.root_view:open_doc(doc))
+  return activate_view(core.root_panel:open_doc(doc))
 end
 
 local function clamp_line(doc, line)

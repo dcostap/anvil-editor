@@ -128,11 +128,11 @@ function encodings.get_all()
   return all
 end
 
----Open a commandview to select a charset and executes the given callback,
----@param title_label string Title displayed on the commandview
+---Open the Global Prompt Bar to select a charset and execute the given callback.
+---@param title_label string Title displayed on the Global Prompt Bar
 ---@param callback fun(charset: string)
 function encodings.select_encoding(title_label, callback)
-  core.command_view:enter(title_label, {
+  core.global_prompt_bar:enter(title_label, {
     submit = function(_, item)
       callback(item.charset)
     end,

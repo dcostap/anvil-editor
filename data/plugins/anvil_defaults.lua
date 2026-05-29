@@ -8,7 +8,7 @@ core.reload_module("colors.onedark")
 -- IntelliJ-style custom actions/keybindings and local workflow plugins.
 require "plugins.intellij_actions"
 require "plugins.edit_location_history"
-core.reload_module("plugins.commandview_sanitize")
+core.reload_module("plugins.global_prompt_bar_sanitize")
 require "plugins.intellij_find"
 require "plugins.untitled_tabs"
 core.reload_module("plugins.scale_debug_log")

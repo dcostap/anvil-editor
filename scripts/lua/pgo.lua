@@ -154,7 +154,7 @@ end
 ---@param abs_path string
 local function file_stress(abs_path)
   ---@type core.docview
-  local dv = core.root_view:open_doc(core.open_doc(abs_path))
+  local dv = core.root_panel:open_doc(core.open_doc(abs_path))
 
   coroutine.yield()
 
@@ -211,7 +211,7 @@ local function input_stress(abs_path)
   config.scroll_context_lines = 0
 
    ---@type core.docview
-  local dv = core.root_view:open_doc(core.open_doc(abs_path))
+  local dv = core.root_panel:open_doc(core.open_doc(abs_path))
 
   coroutine.yield()
 
@@ -408,6 +408,40 @@ local function generate_html_stress(path, blocks)
   f:close()
 end
 
+---Generate markdown text to stress the tokenizer without depending on repo docs.
+---@param path string
+---@param blocks integer
+local function generate_markdown_stress(path, blocks)
+  blocks = blocks or 100
+  local f = assert(io.open(path, "w"))
+
+  f:write("# PGO Markdown Stress\n\n")
+
+  for i = 1, blocks do
+    f:write(string.format([[## Section %d
+
+This is generated markdown content for tokenizer and highlighter profiling. It
+contains **bold text**, *italic text*, `inline code`, [links](https://example.com/%d),
+and enough repeated structure to exercise scrolling and parsing.
+
+- Item %d.1
+- Item %d.2
+- Item %d.3
+
+```lua
+local value_%d = %d
+print("markdown stress", value_%d)
+```
+
+> Generated quote block %d.
+
+]], i, i, i, i, i, i, i, i))
+    coroutine.yield()
+  end
+
+  f:close()
+end
+
 
 --------------------------------------------------------------------------------
 -- Rotating cube code to stress the drawing of rectangles
@@ -575,11 +609,13 @@ core.add_background_thread(function()
     os.remove(sqlite_path)
   end
 
-  core.log("Generating stress HTML file...")
+  core.log("Generating stress files...")
   coroutine.yield()
 
   local html_file = CWD .. PATHSEP .. "stress.html"
+  local markdown_file = CWD .. PATHSEP .. "stress.md"
   generate_html_stress(html_file, 1000)
+  generate_markdown_stress(markdown_file, 1000)
 
   core.log("Scale stress...")
   coroutine.yield()
@@ -590,7 +626,7 @@ core.add_background_thread(function()
     html_file
   }) do
     if file ~= "none" then
-      core.root_view:open_doc(core.open_doc(file))
+      core.root_panel:open_doc(core.open_doc(file))
       coroutine.yield()
     end
     for _=1, 3 do
@@ -608,7 +644,7 @@ core.add_background_thread(function()
   end
 
   local files = {
-    CWD .. PATHSEP .. "README.md",
+    markdown_file,
     CWD .. PATHSEP .. "changelog.md",
     CWD .. PATHSEP .. "data"..PATHSEP.."core"..PATHSEP.."init.lua",
     CWD .. PATHSEP .. "src"..PATHSEP.."api"..PATHSEP.."system.c",
@@ -633,10 +669,11 @@ core.add_background_thread(function()
   input_stress(html_file)
 
   os.remove(html_file)
+  os.remove(markdown_file)
 
   core.log("Draw rect stress")
   coroutine.yield()
-  local node = core.root_view:get_active_node()
+  local node = core.root_panel:get_active_node()
   local c = Cube()
   node:add_view(c)
   core.set_active_view(c)

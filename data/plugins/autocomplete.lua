@@ -8,7 +8,7 @@ local style = require "core.style"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
 local MarkdownView = require "core.markdownview"
-local RootView = require "core.rootview"
+local RootPanel = require "core.rootpanel"
 
 ---@class plugins.autocomplete.symbolinfo
 ---Text value of the symbol displayed on the autocomplete box.
@@ -808,24 +808,24 @@ local function show_autocomplete()
 end
 
 --
--- Patch event logic into RootView and Doc
+-- Patch event logic into RootPanel and Doc
 --
-local on_text_input = RootView.on_text_input
+local on_text_input = RootPanel.on_text_input
 local on_text_remove = Doc.remove
 local on_doc_close = Doc.on_close
-local on_mouse_pressed = RootView.on_mouse_pressed
-local on_mouse_released = RootView.on_mouse_released
-local on_mouse_moved = RootView.on_mouse_moved
-local on_mouse_wheel = RootView.on_mouse_wheel
-local update = RootView.update
-local draw = RootView.draw
+local on_mouse_pressed = RootPanel.on_mouse_pressed
+local on_mouse_released = RootPanel.on_mouse_released
+local on_mouse_moved = RootPanel.on_mouse_moved
+local on_mouse_wheel = RootPanel.on_mouse_wheel
+local update = RootPanel.update
+local draw = RootPanel.draw
 
-RootView.on_text_input = function(...)
+RootPanel.on_text_input = function(...)
   on_text_input(...)
   show_autocomplete()
 end
 
-RootView.on_mouse_pressed = function(self, button, x, y, clicks)
+RootPanel.on_mouse_pressed = function(self, button, x, y, clicks)
   if desc_view and point_over_rect(x, y, desc_rect) then
     if desc_view:on_mouse_pressed(button, x, y, clicks) then
       return true
@@ -834,14 +834,14 @@ RootView.on_mouse_pressed = function(self, button, x, y, clicks)
   return on_mouse_pressed(self, button, x, y, clicks)
 end
 
-RootView.on_mouse_released = function(self, button, x, y)
+RootPanel.on_mouse_released = function(self, button, x, y)
   if desc_view then
     desc_view:on_mouse_released(button, x, y)
   end
   return on_mouse_released(self, button, x, y)
 end
 
-RootView.on_mouse_moved = function(self, x, y, dx, dy)
+RootPanel.on_mouse_moved = function(self, x, y, dx, dy)
   if desc_view and (point_over_rect(x, y, desc_rect) or desc_view:scrollbar_dragging()) then
     local handled = desc_view:on_mouse_moved(x, y, dx, dy)
     if handled then
@@ -859,8 +859,8 @@ RootView.on_mouse_moved = function(self, x, y, dx, dy)
   return on_mouse_moved(self, x, y, dx, dy)
 end
 
-RootView.on_mouse_wheel = function(self, y, x)
-  if desc_view and point_over_rect(core.root_view.mouse.x, core.root_view.mouse.y, desc_rect) then
+RootPanel.on_mouse_wheel = function(self, y, x)
+  if desc_view and point_over_rect(core.root_panel.mouse.x, core.root_panel.mouse.y, desc_rect) then
     if keymap.modkeys["shift"] then
       x = y
       y = 0
@@ -894,7 +894,7 @@ Doc.on_close = function(self)
   if cache[self] then cache[self] = nil end
 end
 
-RootView.update = function(...)
+RootPanel.update = function(...)
   update(...)
 
   if desc_view then
@@ -918,13 +918,13 @@ RootView.update = function(...)
   end
 end
 
-RootView.draw = function(...)
+RootPanel.draw = function(...)
   draw(...)
 
   local av = get_active_view()
   if av then
     -- draw suggestions box after everything else
-    core.root_view:defer_draw(draw_suggestions_box, av)
+    core.root_panel:defer_draw(draw_suggestions_box, av)
   end
 end
 

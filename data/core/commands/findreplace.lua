@@ -4,7 +4,7 @@ local config = require "core.config"
 local search = require "core.doc.search"
 local keymap = require "core.keymap"
 local DocView = require "core.docview"
-local CommandView = require "core.commandview"
+local GlobalPromptBar = require "core.global_prompt_bar"
 
 local last_view, last_fn, last_text, last_sel
 
@@ -13,7 +13,7 @@ local find_regex = config.find_regex or false
 local found_expression
 
 local function doc()
-  local is_DocView = core.active_view:is(DocView) and not core.active_view:is(CommandView)
+  local is_DocView = core.active_view:is(DocView) and not core.active_view:is(GlobalPromptBar)
   return is_DocView and core.active_view.doc or (last_view and last_view.doc)
 end
 
@@ -69,15 +69,15 @@ local function find(label, search_fn)
   local text = last_view.doc:get_text(table.unpack(last_sel))
   found_expression = false
 
-  core.status_view:show_tooltip(get_find_tooltip())
+  core.status_bar:show_tooltip(get_find_tooltip())
 
-  core.command_view:enter(label, {
+  core.global_prompt_bar:enter(label, {
     text = text,
     select_text = true,
     show_suggestions = false,
     submit = function(text, item)
       insert_unique(core.previous_find, text)
-      core.status_view:remove_tooltip()
+      core.status_bar:remove_tooltip()
       if found_expression then
         last_fn, last_text = search_fn, text
       else
@@ -94,7 +94,7 @@ local function find(label, search_fn)
       return core.previous_find
     end,
     cancel = function(explicit)
-      core.status_view:remove_tooltip()
+      core.status_bar:remove_tooltip()
       if explicit then
         with_last_view(function()
           last_view.doc:set_selection(table.unpack(last_sel))
@@ -107,8 +107,8 @@ end
 
 
 local function replace(kind, default, fn)
-  core.status_view:show_tooltip(get_find_tooltip())
-  core.command_view:enter("Find To Replace " .. kind, {
+  core.status_bar:show_tooltip(get_find_tooltip())
+  core.global_prompt_bar:enter("Find To Replace " .. kind, {
     text = default,
     select_text = true,
     show_suggestions = false,
@@ -116,12 +116,12 @@ local function replace(kind, default, fn)
       insert_unique(core.previous_find, old)
 
       local s = string.format("Replace %s %q With", kind, old)
-      core.command_view:enter(s, {
+      core.global_prompt_bar:enter(s, {
         text = old,
         select_text = true,
         show_suggestions = false,
         submit = function(new)
-          core.status_view:remove_tooltip()
+          core.status_bar:remove_tooltip()
           insert_unique(core.previous_replace, new)
           local results = with_last_view(function()
             return doc():replace(function(text)
@@ -136,13 +136,13 @@ local function replace(kind, default, fn)
         end,
         suggest = function() return core.previous_replace end,
         cancel = function()
-          core.status_view:remove_tooltip()
+          core.status_bar:remove_tooltip()
         end
       })
     end,
     suggest = function() return core.previous_find end,
     cancel = function()
-      core.status_view:remove_tooltip()
+      core.status_bar:remove_tooltip()
     end
   })
 end
@@ -273,8 +273,8 @@ command.add("core.docview!", {
 })
 
 local function valid_for_finding()
-  -- Allow using this while in the CommandView
-  if core.active_view:is(CommandView) and last_view then
+  -- Allow using this while in the GlobalPromptBar
+  if core.active_view:is(GlobalPromptBar) and last_view then
     return true, last_view
   end
   return core.active_view:is(DocView), core.active_view
@@ -312,16 +312,16 @@ command.add(valid_for_finding, {
   end,
 })
 
-command.add("core.commandview", {
+command.add("core.global_prompt_bar", {
   ["find-replace:toggle-sensitivity"] = function()
     case_sensitive = not case_sensitive
-    core.status_view:show_tooltip(get_find_tooltip())
+    core.status_bar:show_tooltip(get_find_tooltip())
     if last_sel then update_preview(last_sel, last_fn, last_text) end
   end,
 
   ["find-replace:toggle-regex"] = function()
     find_regex = not find_regex
-    core.status_view:show_tooltip(get_find_tooltip())
+    core.status_bar:show_tooltip(get_find_tooltip())
     if last_sel then update_preview(last_sel, last_fn, last_text) end
   end
 })

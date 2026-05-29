@@ -9,25 +9,25 @@ local Node = require "core.node"
 
 local t = {
   ["root:close"] = function(node)
-    node:close_active_view(core.root_view.root_node)
+    node:close_active_view(core.root_panel.root_node)
   end,
 
   ["root:close-or-quit"] = function(node)
-    if node and (not node:is_empty() or not node.is_primary_node) then
-      node:close_active_view(core.root_view.root_node)
+    if node and (not node:is_empty() or not (node.is_main_panel_node or node.is_primary_node)) then
+      node:close_active_view(core.root_panel.root_node)
     else
       core.quit()
     end
   end,
 
   ["root:close-all"] = function()
-    core.confirm_close_docs(core.docs, core.root_view.close_all_docviews, core.root_view)
+    core.confirm_close_docs(core.docs, core.root_panel.close_all_docviews, core.root_panel)
   end,
 
   ["root:close-all-others"] = function()
     local active_doc, docs = core.active_view and core.active_view.doc, {}
     for i, v in ipairs(core.docs) do if v ~= active_doc then table.insert(docs, v) end end
-    core.confirm_close_docs(docs, core.root_view.close_all_docviews, core.root_view, true)
+    core.confirm_close_docs(docs, core.root_panel.close_all_docviews, core.root_panel, true)
   end,
 
   ["root:move-tab-left"] = function(node)
@@ -47,13 +47,13 @@ local t = {
   end,
 
   ["root:shrink"] = function(node)
-    local parent = node:get_parent_node(core.root_view.root_node)
+    local parent = node:get_parent_node(core.root_panel.root_node)
     local n = (parent.a == node) and -0.1 or 0.1
     parent.divider = common.clamp(parent.divider + n, 0.1, 0.9)
   end,
 
   ["root:grow"] = function(node)
-    local parent = node:get_parent_node(core.root_view.root_node)
+    local parent = node:get_parent_node(core.root_panel.root_node)
     local n = (parent.a == node) and 0.1 or -0.1
     parent.divider = common.clamp(parent.divider + n, 0.1, 0.9)
   end
@@ -75,7 +75,7 @@ for _, dir in ipairs { "left", "right", "up", "down" } do
     local av = node.active_view
     local new_node = node:split(dir)
     if av:is(DocView) then
-      core.root_view:open_doc(av.doc, { source_view = av, node = new_node })
+      core.root_panel:open_doc(av.doc, { source_view = av, node = new_node })
     end
   end
 
@@ -88,7 +88,7 @@ for _, dir in ipairs { "left", "right", "up", "down" } do
       x = node.position.x + node.size.x / 2
       y = node.position.y + (dir == "up"   and -1 or node.size.y + style.divider_size)
     end
-    local node = core.root_view.root_node:get_child_overlapping_point(x, y)
+    local node = core.root_panel.root_node:get_child_overlapping_point(x, y)
     local sx, sy = node:get_locked_size()
     if not sx and not sy then
       core.set_active_view(node.active_view)
@@ -97,14 +97,14 @@ for _, dir in ipairs { "left", "right", "up", "down" } do
 end
 
 command.add(function()
-  local node = core.root_view:get_active_node()
+  local node = core.root_panel:get_active_node()
   local sx, sy = node:get_locked_size()
   return not sx and not sy, node
 end, t)
 
 command.add(nil, {
   ["root:scroll"] = function(delta)
-    local view = core.root_view.overlapping_view or core.active_view
+    local view = core.root_panel.overlapping_view or core.active_view
     if view and view.scrollable then
       view.scroll.to.y = view.scroll.to.y + delta * -config.mouse_wheel_scroll
       return true
@@ -112,7 +112,7 @@ command.add(nil, {
     return false
   end,
   ["root:horizontal-scroll"] = function(delta)
-    local view = core.root_view.overlapping_view or core.active_view
+    local view = core.root_panel.overlapping_view or core.active_view
     if view and view.scrollable then
       view.scroll.to.x = view.scroll.to.x + delta * -config.mouse_wheel_scroll
       return true
@@ -124,7 +124,7 @@ command.add(nil, {
 command.add(function(node)
     if not Node:is_extended_by(node) then node = nil end
     -- No node was specified, use the active one
-    node = node or core.root_view:get_active_node()
+    node = node or core.root_panel:get_active_node()
     if not node then return false end
     return true, node
   end,
@@ -154,7 +154,7 @@ command.add(function(node)
 )
 
 command.add(function()
-    local node = core.root_view.root_node:get_child_overlapping_point(core.root_view.mouse.x, core.root_view.mouse.y)
+    local node = core.root_panel.root_node:get_child_overlapping_point(core.root_panel.mouse.x, core.root_panel.mouse.y)
     if not node then return false end
     return (node.hovered_tab or node.hovered_scroll_button > 0) and true, node
   end,
@@ -179,7 +179,7 @@ command.add(function()
 
 -- double clicking the tab bar should open a new doc
 command.add(function(x, y)
-  local node = x and y and core.root_view.root_node:get_child_overlapping_point(x, y)
+  local node = x and y and core.root_panel.root_node:get_child_overlapping_point(x, y)
   return node and node:is_in_tab_area(x, y)
 end, {
   ["tabbar:new-doc"] = function()

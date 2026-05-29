@@ -8,10 +8,10 @@ local command
 local keymap
 local dirwatch
 local ime
-local RootView
-local StatusView
-local TitleView
-local CommandView
+local RootPanel
+local StatusBar
+local TitleBar
+local GlobalPromptBar
 local NagView
 local DocView
 local ImageView
@@ -25,9 +25,17 @@ local core = {}
 
 local map_new_syntax_colors
 
-local function load_session()
-  local ok, t = pcall(dofile, USERDIR .. PATHSEP .. "session.lua")
-  return ok and t or {}
+local APP_STATE_FILENAME = "appstate.lua"
+local LEGACY_SESSION_FILENAME = "session.lua"
+
+local function load_app_state()
+  local ok, t = pcall(dofile, USERDIR .. PATHSEP .. APP_STATE_FILENAME)
+  if ok and type(t) == "table" then return t end
+
+  -- Compatibility with older Anvil builds that stored global app state in
+  -- "session.lua".  New saves write "appstate.lua".
+  ok, t = pcall(dofile, USERDIR .. PATHSEP .. LEGACY_SESSION_FILENAME)
+  return ok and type(t) == "table" and t or {}
 end
 
 
@@ -40,14 +48,14 @@ local function sane_window_bounds(bounds)
      and x > -30000 and y > -30000
 end
 
-local function save_session()
-  local fp = io.open(USERDIR .. PATHSEP .. "session.lua", "w")
+local function save_app_state()
+  local fp = io.open(USERDIR .. PATHSEP .. APP_STATE_FILENAME, "w")
   if fp then
     local window = core.window_mode ~= "fullscreen"
       and table.pack(system.get_window_size(core.window)) or core.window_size
     if not sane_window_bounds(window) then window = core.window_size end
     if not sane_window_bounds(window) then window = {800, 600, 0, 0} end
-    local session = {
+    local app_state = {
       recents = core.recent_projects,
       window = window,
       window_mode = core.window_mode ~= "fullscreen"
@@ -55,7 +63,7 @@ local function save_session()
       previous_find = core.previous_find,
       previous_replace = core.previous_replace
     }
-    fp:write("return " .. common.serialize(session, {pretty = true}))
+    fp:write("return " .. common.serialize(app_state, {pretty = true}))
     fp:close()
   end
 end
@@ -127,7 +135,7 @@ end
 
 function core.open_project_in_same_window(project)
   local project = core.set_project(project)
-  core.root_view:close_all_docviews()
+  core.root_panel:close_all_docviews()
   update_recents_project("add", project.path)
   command.perform("core:restart")
 end
@@ -394,8 +402,8 @@ function core.configure_borderless_window()
   if not using_native_frame then
     system.set_window_bordered(core.window, not config.borderless)
   end
-  core.title_view:configure_hit_test(config.borderless)
-  core.title_view.visible = config.borderless
+  core.title_bar:configure_hit_test(config.borderless)
+  core.title_bar.visible = config.borderless
 end
 
 
@@ -416,10 +424,10 @@ function core.init()
   keymap = require "core.keymap"
   dirwatch = require "core.dirwatch"
   ime = require "core.ime"
-  RootView = require "core.rootview"
-  StatusView = require "core.statusview"
-  TitleView = require "core.titleview"
-  CommandView = require "core.commandview"
+  RootPanel = require "core.rootpanel"
+  StatusBar = require "core.statusbar"
+  TitleBar = require "core.titlebar"
+  GlobalPromptBar = require "core.global_prompt_bar"
   NagView = require "core.nagview"
   Project = require "core.project"
   DocView = require "core.docview"
@@ -436,17 +444,17 @@ function core.init()
     EXEDIR  = common.normalize_volume(EXEDIR)
   end
 
-  local session = load_session()
-  core.recent_projects = session.recents or {}
-  core.previous_find = session.previous_find or {}
-  core.previous_replace = session.previous_replace or {}
-  if not sane_window_bounds(session.window) then
-    session.window = {800, 600, 0, 0}
-    if session.window_mode == "normal" then session.window_mode = nil end
+  local app_state = load_app_state()
+  core.recent_projects = app_state.recents or {}
+  core.previous_find = app_state.previous_find or {}
+  core.previous_replace = app_state.previous_replace or {}
+  if not sane_window_bounds(app_state.window) then
+    app_state.window = {800, 600, 0, 0}
+    if app_state.window_mode == "normal" then app_state.window_mode = nil end
   end
-  core.window_mode = session.window_mode or "normal"
+  core.window_mode = app_state.window_mode or "normal"
   core.prev_window_mode = core.window_mode
-  core.window_size = session.window or {800, 600, 0, 0}
+  core.window_size = app_state.window or {800, 600, 0, 0}
 
   -- remove projects that don't exist any longer
   local projects_removed = 0;
@@ -524,26 +532,34 @@ function core.init()
   core.collect_garbage = false
 
   -- We load core views before plugins that may need them.
-  ---@type core.rootview
-  core.root_view = RootView()
-  ---@type core.commandview
-  core.command_view = CommandView()
-  ---@type core.statusview
-  core.status_view = StatusView()
+  ---@type core.rootpanel
+  core.root_panel = RootPanel()
+  ---@type core.global_prompt_bar
+  core.global_prompt_bar = GlobalPromptBar()
+  ---@type core.statusbar
+  core.status_bar = StatusBar()
   ---@type core.nagview
   core.nag_view = NagView()
-  ---@type core.titleview
-  core.title_view = TitleView()
+  ---@type core.titlebar
+  core.title_bar = TitleBar()
 
-  -- Some plugins (eg: console) require the nodes to be initialized to defaults
-  local cur_node = core.root_view.root_node
-  cur_node.is_primary_node = true
-  cur_node:split("up", core.title_view, {y = true})
+  -- Deprecated compatibility aliases for external plugins/user modules written
+  -- against older UI names. Built-in code should use the canonical names above.
+  core.root_view = core.root_panel
+  core.command_view = core.global_prompt_bar
+  core.status_view = core.status_bar
+  core.title_view = core.title_bar
+
+  -- Some plugins (eg: console) require the Root Panel layout tree to be initialized to defaults.
+  local cur_node = core.root_panel.root_node
+  cur_node.is_main_panel_node = true
+  cur_node.is_primary_node = true -- deprecated compatibility alias
+  cur_node:split("up", core.title_bar, {y = true})
   cur_node = cur_node.b
   cur_node:split("up", core.nag_view, {y = true})
   cur_node = cur_node.b
-  cur_node = cur_node:split("down", core.command_view, {y = true})
-  cur_node = cur_node:split("down", core.status_view, {y = true})
+  cur_node = cur_node:split("down", core.global_prompt_bar, {y = true})
+  cur_node = cur_node:split("down", core.status_bar, {y = true})
 
   -- Load default commands first so plugins/core features can override them.
   command.add_defaults()
@@ -597,7 +613,7 @@ function core.init()
   end
 
   local restored_window = core.window or renwindow._restore()
-  core.window = restored_window or renwindow.create("", table.unpack(session.window or {}))
+  core.window = restored_window or renwindow.create("", table.unpack(app_state.window or {}))
 
   -- Refresh-rate detection before the window exists only sees the primary
   -- display. Re-query from the real window so high-refresh secondary displays
@@ -610,7 +626,7 @@ function core.init()
   -- so we delay it on all platforms, except macOS. On macOS setting the
   -- mode to maximized seems to cause issues resetting its size so setting
   -- the size is all we need on that platform.
-  if session.window_mode == "maximized" and PLATFORM ~= "Mac OS X" and not restored_window then
+  if app_state.window_mode == "maximized" and PLATFORM ~= "Mac OS X" and not restored_window then
     core.add_thread(function()
       system.set_window_mode(core.window, "maximized")
     end)
@@ -650,8 +666,8 @@ function core.init()
   -- after the frame is enabled. Applying them before borderless setup treats the
   -- saved outer HWND height as SDL client height, which can push the titlebar
   -- above the monitor when restoring a screen-height window.
-  if session.window and not restored_window then
-    system.set_window_size(core.window, table.unpack(session.window))
+  if app_state.window and not restored_window then
+    system.set_window_size(core.window, table.unpack(app_state.window))
   end
 
   if #plugins_refuse_list.userdir.plugins > 0 or #plugins_refuse_list.datadir.plugins > 0 then
@@ -673,7 +689,7 @@ function core.init()
       "Refused Plugins",
       string.format(
         "Some plugins are not loaded due to version mismatch. Expected version %s.\n\n%s.\n\n" ..
-        "Please download a recent version from https://github.com/pragtical/plugins.",
+        "Please update or disable those plugins.",
         MOD_VERSION_STRING, table.concat(msg, ".\n\n")),
       opt, function(item)
         if item.text == "Exit" then os.exit(1) end
@@ -736,7 +752,7 @@ function core.exit(quit_fn, force)
   if force then
     core.delete_temp_files()
     while #core.projects > 1 do core.remove_project(core.projects[#core.projects]) end
-    save_session()
+    save_app_state()
     quit_fn()
   else
     core.confirm_close_docs(core.docs, core.exit, quit_fn, true)
@@ -1196,7 +1212,7 @@ end
 
 
 function core.show_title_bar(show)
-  core.title_view.visible = show
+  core.title_bar.visible = show
 end
 
 local function add_thread(f, weak_ref, background, ...)
@@ -1247,11 +1263,11 @@ function core.project_absolute_path(path) return core.root_project():absolute_pa
 
 local function close_doc_view(doc)
   core.add_thread(function()
-    local views = core.root_view.root_node:get_children()
+    local views = core.root_panel.root_node:get_children()
     for _, view in ipairs(views) do
       if view.doc == doc then
-        local node = core.root_view.root_node:get_node_for_view(view)
-        node:close_view(core.root_view.root_node, view)
+        local node = core.root_panel.root_node:get_node_for_view(view)
+        node:close_view(core.root_panel.root_node, view)
       end
     end
   end)
@@ -1297,7 +1313,7 @@ end
 
 function core.get_views_referencing_doc(doc)
   local res = {}
-  local views = core.root_view.root_node:get_children()
+  local views = core.root_panel.root_node:get_children()
   for _, view in ipairs(views) do
     if view.doc == doc then table.insert(res, view) end
   end
@@ -1315,7 +1331,7 @@ function core.open_image(filename)
     if not file then return false end
     file:close()
 
-    local node = core.root_view:get_active_node_default()
+    local node = core.root_panel:get_active_node_default()
     for i, view in ipairs(node.views) do
       if view.path == abs_filename then
         node:set_active_view(node.views[i])
@@ -1325,7 +1341,7 @@ function core.open_image(filename)
     local view = ImageView(abs_filename)
     if view.image then
       node:add_view(view)
-      core.root_view.root_node:update_layout()
+      core.root_panel.root_node:update_layout()
       return view
     else
       core.error(
@@ -1348,7 +1364,7 @@ function core.open_markdown(filename)
     end
     file:close()
 
-    local node = core.root_view:get_active_node_default()
+    local node = core.root_panel:get_active_node_default()
     for i, view in ipairs(node.views) do
       if view.path == filename then
         node:set_active_view(node.views[i])
@@ -1358,13 +1374,13 @@ function core.open_markdown(filename)
 
     local view = MarkdownView(filename)
     node:add_view(view)
-    core.root_view.root_node:update_layout()
+    core.root_panel.root_node:update_layout()
     return view
   end
 end
 
 
----Opens the given file path in the root view.
+---Opens the given file path in the Root Panel.
 ---If the given file is a supported image, it will open it in the image viewer;
 ---otherwise, it will open it as a normal text file.
 ---@param filename string Path to the file to open
@@ -1372,7 +1388,7 @@ end
 function core.open_file(filename)
   local view = core.open_image(filename)
   if not view then
-    return core.root_view:open_doc(core.open_doc(filename))
+    return core.root_panel:open_doc(core.open_doc(filename))
   end
   return view
 end
@@ -1389,8 +1405,8 @@ function core.custom_log(level, show, backtrace, fmt, ...)
   end
   if show then
     local s = style.log[level]
-    if core.status_view then
-      core.status_view:show_message(s.icon, s.color, text)
+    if core.status_bar then
+      core.status_bar:show_message(s.icon, s.color, text)
     end
   end
 
@@ -1491,7 +1507,7 @@ function core.on_event(type, ...)
       local text = (...)
       core.log_quiet("Fuzzy input event: textinput active=%s supports_text_input=%s bytes=%d text=%s", tostring(active_type), tostring(active and active:supports_text_input()), #tostring(text or ""), tostring(text or ""))
     end
-    core.root_view:on_text_input(...)
+    core.root_panel:on_text_input(...)
   elseif type == "textediting" then
     if fuzzy_input_debug then
       local text, start, len = ...
@@ -1510,25 +1526,25 @@ function core.on_event(type, ...)
   elseif type == "keyreleased" then
     keymap.on_key_released(...)
   elseif type == "mousemoved" then
-    core.root_view:on_mouse_moved(...)
+    core.root_panel:on_mouse_moved(...)
   elseif type == "mousepressed" then
-    if not core.root_view:on_mouse_pressed(...) then
+    if not core.root_panel:on_mouse_pressed(...) then
       did_keymap = keymap.on_mouse_pressed(...)
     end
   elseif type == "mousereleased" then
-    core.root_view:on_mouse_released(...)
+    core.root_panel:on_mouse_released(...)
   elseif type == "mouseleft" then
-    core.root_view:on_mouse_left()
+    core.root_panel:on_mouse_left()
   elseif type == "mousewheel" then
-    if not core.root_view:on_mouse_wheel(...) then
+    if not core.root_panel:on_mouse_wheel(...) then
       did_keymap = keymap.on_mouse_wheel(...)
     end
   elseif type == "touchpressed" then
-    core.root_view:on_touch_pressed(...)
+    core.root_panel:on_touch_pressed(...)
   elseif type == "touchreleased" then
-    core.root_view:on_touch_released(...)
+    core.root_panel:on_touch_released(...)
   elseif type == "touchmoved" then
-    core.root_view:on_touch_moved(...)
+    core.root_panel:on_touch_moved(...)
   elseif type == "resized" then
     core.window_resizing_until = system.get_time() + 0.20
     local window_mode = system.get_window_mode(core.window)
@@ -1548,7 +1564,7 @@ function core.on_event(type, ...)
   elseif type == "exposed" then
     core.redraw = true
   elseif type == "filedropped" then
-    core.root_view:on_file_dropped(...)
+    core.root_panel:on_file_dropped(...)
   elseif type == "dialogfinished" then
     local id, status, result = ...
     local callback = core.active_file_dialogs[id]
@@ -1569,7 +1585,7 @@ function core.on_event(type, ...)
       "Focus diagnostics: received focuslost event active=%s window_has_focus=%s",
       tostring(core.active_view), tostring(core.window and system.window_has_focus(core.window))
     )
-    core.root_view:on_focus_lost(...)
+    core.root_panel:on_focus_lost(...)
   elseif type == "quit" then
     core.quit()
   end
@@ -1740,9 +1756,9 @@ function core.step(next_frame_time, options)
   local uncapped = stats_config == "uncapped"
   local priority_event = event_received and event_received ~= "mousemoved"
   local resizing = options.live_resize or (core.window_resizing_until and core.window_resizing_until > system.get_time())
-  core.root_view.size.x, core.root_view.size.y = width, height
+  core.root_panel.size.x, core.root_panel.size.y = width, height
   if uncapped or resizing or priority_event or options.immediate or next_frame_time < system.get_time() then
-    core.root_view:update()
+    core.root_panel:update()
   end
   step_stats.update_ms = (system.get_time() - update_start_time) * 1000
 
@@ -1810,7 +1826,7 @@ function core.step(next_frame_time, options)
   else
     core.docview_frame_stats = nil
   end
-  core.root_view:draw()
+  core.root_panel:draw()
   step_stats.draw_emit_ms = (system.get_time() - draw_emit_start_time) * 1000
   local renderer_end_start_time = system.get_time()
   renderer.end_frame()
@@ -1889,7 +1905,7 @@ function core.step(next_frame_time, options)
       draw_stats_frames = {}
       draw_stats_cotimes = {}
     end
-    core.root_view:defer_draw(draw_stats)
+    core.root_panel:defer_draw(draw_stats)
   end
 
   return true

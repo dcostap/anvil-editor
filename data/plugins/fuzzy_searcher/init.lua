@@ -244,7 +244,7 @@ local line_count_cache = {}
 local grep_proc
 local grep_generation = 0
 local file_search_generation = 0
-local fuzzy_grep_sessions = {}
+local fuzzy_grep_jobs = {}
 
 local function project_dir()
   local p = core.root_project and core.root_project()
@@ -990,7 +990,7 @@ local function scope_key(scope)
   return table.concat(scope, "\0")
 end
 
-local function fuzzy_session_key(root, scope, seed)
+local function fuzzy_job_key(root, scope, seed)
   return root .. "\0" .. scope_key(scope) .. "\0" .. seed:lower()
 end
 
@@ -1000,15 +1000,15 @@ local function seed_for_tokens(tokens)
   return seed
 end
 
-local function kill_fuzzy_grep_sessions()
-  for _, session in pairs(fuzzy_grep_sessions) do
-    if session.proc and session.proc:running() then pcall(function() session.proc:kill() end) end
-    session.cancelled = true
+local function kill_fuzzy_grep_jobs()
+  for _, job in pairs(fuzzy_grep_jobs) do
+    if job.proc and job.proc:running() then pcall(function() job.proc:kill() end) end
+    job.cancelled = true
   end
-  fuzzy_grep_sessions = {}
+  fuzzy_grep_jobs = {}
 end
 
-local function ensure_fuzzy_grep_session(root, scope, tokens)
+local function ensure_fuzzy_grep_job(root, scope, tokens)
   if not tokens or #tokens == 0 then return nil end
 
   -- Prefer reusing an already-warm broader stream when the user appends tokens,
@@ -1017,16 +1017,16 @@ local function ensure_fuzzy_grep_session(root, scope, tokens)
   local preferred_seed = seed_for_tokens(tokens)
   local reusable
   for _, tok in ipairs(tokens) do
-    local existing = fuzzy_grep_sessions[fuzzy_session_key(root, scope, tok)]
+    local existing = fuzzy_grep_jobs[fuzzy_job_key(root, scope, tok)]
     if existing then reusable = existing; break end
   end
 
-  local function start_session(seed)
-    local key = fuzzy_session_key(root, scope, seed)
-    local session = fuzzy_grep_sessions[key]
-    if session then session.last_used = system.get_time(); return session end
+  local function start_job(seed)
+    local key = fuzzy_job_key(root, scope, seed)
+    local job = fuzzy_grep_jobs[key]
+    if job then job.last_used = system.get_time(); return job end
 
-    session = {
+    job = {
       key = key,
       root = root,
       scope = scope,
@@ -1040,29 +1040,29 @@ local function ensure_fuzzy_grep_session(root, scope, tokens)
       cancelled = false,
       last_used = system.get_time(),
     }
-    fuzzy_grep_sessions[key] = session
+    fuzzy_grep_jobs[key] = job
 
     core.add_thread(function()
       local args = { fuzzy_searcher.rg, "--vimgrep", "--color", "never", "-i", "-F", "--hidden", "--glob", "!.git/**", "-e", seed }
       if scope then args[#args+1] = "--"; for _, f in ipairs(scope) do args[#args+1] = f end end
       local proc = process.start(args, { cwd = root, stdout = process.REDIRECT_PIPE, stderr = process.REDIRECT_DISCARD, stdin = process.REDIRECT_DISCARD })
-      session.proc = proc
-      if not proc then session.done = true; session.version = session.version + 1; return end
+      job.proc = proc
+      if not proc then job.done = true; job.version = job.version + 1; return end
 
       local max_scanned = fuzzy_searcher.fuzzy_scan_limit or 10000
       local max_line_chars = fuzzy_searcher.fuzzy_line_max_chars or 1200
       local slice_start = system.get_time()
-      while not session.cancelled and session.scanned < max_scanned do
+      while not job.cancelled and job.scanned < max_scanned do
         local l = proc.stdout:read("line", { scan = 1 / config.fps })
         if l then
-          session.scanned = session.scanned + 1
+          job.scanned = job.scanned + 1
           local r = parse_vimgrep(l)
           if r and #(r.text or "") <= max_line_chars then
             local key = r.file .. ":" .. tostring(r.line)
-            if not session.seen[key] then
-              session.seen[key] = true
-              session.lines[#session.lines+1] = r
-              session.version = session.version + 1
+            if not job.seen[key] then
+              job.seen[key] = true
+              job.lines[#job.lines+1] = r
+              job.version = job.version + 1
             end
           end
           slice_start = yield_if_over_budget(slice_start)
@@ -1074,18 +1074,18 @@ local function ensure_fuzzy_grep_session(root, scope, tokens)
         end
       end
 
-      session.truncated = proc:running() or session.scanned >= max_scanned
+      job.truncated = proc:running() or job.scanned >= max_scanned
       if proc:running() then pcall(function() proc:kill() end) end
       proc:wait(process.WAIT_DEADLINE)
-      session.done = true
-      session.version = session.version + 1
+      job.done = true
+      job.version = job.version + 1
       if active_view then active_view:schedule_update(true) end
     end)
 
-    return session
+    return job
   end
 
-  local preferred = preferred_seed and start_session(preferred_seed) or nil
+  local preferred = preferred_seed and start_job(preferred_seed) or nil
   if reusable and preferred and reusable ~= preferred then return reusable, preferred end
   return reusable or preferred, preferred
 end
@@ -1670,8 +1670,8 @@ local function everything_result_from_item(item, query)
 end
 
 function FSView:new(prefix)
-  FSView.super.new(self, nil, true) -- floating widget; widget lib owns RootView routing
-  file_context.exclude_main_view(self)
+  FSView.super.new(self, nil, true) -- floating widget; widget lib owns RootPanel routing
+  file_context.exclude_main_panel_view(self)
   self.type_name = "plugins.fuzzy_searcher"
   self.name = "Fuzzy Searcher"
   self.background_color = style.background
@@ -1706,13 +1706,13 @@ function FSView:new(prefix)
 
   local source_view = core.active_view
   local source_doc = source_view and source_view.doc
-  self.source_view = file_context.current_main_view(source_view) or source_view
+  self.source_view = file_context.current_main_panel_view(source_view) or source_view
   self.source_file_path = file_context.view_file_path(source_view)
   self.source_file_line = source_doc and source_doc:get_selection(false) or 1
 
   self.input = TextBox(self, prefix or "", "")
-  file_context.exclude_main_view(self.input)
-  file_context.exclude_main_view(self.input.textview)
+  file_context.exclude_main_panel_view(self.input)
+  file_context.exclude_main_panel_view(self.input.textview)
   self.input.on_change = function(_, text)
     self.dirty = true
     self:refresh(text)
@@ -1728,7 +1728,7 @@ function FSView:new(prefix)
 end
 
 function FSView:layout()
-  local root = core.root_view
+  local root = core.root_panel
   local rw, rh = root.size.x, root.size.y
   local w = math.min(rw, math.max(rw * fuzzy_searcher.width, fuzzy_searcher.min_width or 0))
   local h = math.min(rh, math.max(rh * fuzzy_searcher.height, fuzzy_searcher.min_height or 0))
@@ -2512,17 +2512,17 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
   -- let selection stop naturally at the currently available end.
   local limit = self:max_result_limit()
   local tokens = terms_to_legacy_tokens(terms)
-  local session, preferred_session = ensure_fuzzy_grep_session(root, scope, tokens)
-  if not session then return end
-  local sessions = { session }
-  if preferred_session and preferred_session ~= session then sessions[#sessions+1] = preferred_session end
+  local job, preferred_job = ensure_fuzzy_grep_job(root, scope, tokens)
+  if not job then return end
+  local jobs = { job }
+  if preferred_job and preferred_job ~= job then jobs[#jobs+1] = preferred_job end
   local exact_results = #terms == 1 and not terms[1].exact and trim_query(grep):lower() == terms[1].text
   local fuzzy_query = terms_fuzzy_query(terms)
 
-  local function sessions_label()
-    if #sessions == 1 then return sessions[1].seed end
+  local function jobs_label()
+    if #jobs == 1 then return jobs[1].seed end
     local names = {}
-    for _, s in ipairs(sessions) do names[#names+1] = s.seed end
+    for _, s in ipairs(jobs) do names[#names+1] = s.seed end
     return table.concat(names, "/")
   end
 
@@ -2533,15 +2533,15 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
     self.hovered_result = nil
   end
   self.has_more = true
-  self.status = exact_results and string.format("Searching '%s'…", sessions_label())
-    or string.format("Expanding fuzzy text search from '%s'…", sessions_label())
+  self.status = exact_results and string.format("Searching '%s'…", jobs_label())
+    or string.format("Expanding fuzzy text search from '%s'…", jobs_label())
   self:schedule_update(true)
 
   core.add_thread(function()
     local base_query = base:sub(1, 1) == ">" and "" or base
     local candidates, candidate_seen = {}, {}
     local processed = {}
-    for _, s in ipairs(sessions) do processed[s.key] = 0 end
+    for _, s in ipairs(jobs) do processed[s.key] = 0 end
     local max_candidates = fuzzy_searcher.fuzzy_candidate_limit or 500
     local slice_start = system.get_time()
     local last_publish = 0
@@ -2588,9 +2588,9 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
       candidates[#candidates+1] = r
     end
 
-    local function session_stats()
+    local function job_stats()
       local running, truncated, scanned = false, false, 0
-      for _, s in ipairs(sessions) do
+      for _, s in ipairs(jobs) do
         running = running or not s.done
         truncated = truncated or s.truncated
         scanned = scanned + (s.scanned or 0)
@@ -2600,7 +2600,7 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
 
     local function publish(final)
       if gen ~= grep_generation or active_view ~= self then return false end
-      local running, truncated, scanned = session_stats()
+      local running, truncated, scanned = job_stats()
       table.sort(candidates, function(a, b)
         if a.fuzzy_score == b.fuzzy_score then
           local ak = tostring(a.file) .. tostring(a.line)
@@ -2627,17 +2627,17 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
       if exact_results then
         if final then
           self.status = truncated
-            and string.format("%d exact matches — limited scan from '%s'", fuzzy_count, sessions_label())
+            and string.format("%d exact matches — limited scan from '%s'", fuzzy_count, jobs_label())
             or string.format("%d exact matches", fuzzy_count)
         else
-          self.status = string.format("%d exact matches — scanning '%s'… %d lines", fuzzy_count, sessions_label(), scanned)
+          self.status = string.format("%d exact matches — scanning '%s'… %d lines", fuzzy_count, jobs_label(), scanned)
         end
       elseif final then
         self.status = truncated
-          and string.format("%d fuzzy matches — limited scan from '%s'", fuzzy_count, sessions_label())
+          and string.format("%d fuzzy matches — limited scan from '%s'", fuzzy_count, jobs_label())
           or string.format("%d fuzzy matches", fuzzy_count)
       else
-        self.status = string.format("%d fuzzy matches — scanning '%s'… %d lines", fuzzy_count, sessions_label(), scanned)
+        self.status = string.format("%d fuzzy matches — scanning '%s'… %d lines", fuzzy_count, jobs_label(), scanned)
       end
       self:schedule_update(true)
       last_publish = system.get_time()
@@ -2647,7 +2647,7 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
     while gen == grep_generation and active_view == self do
       local did_work = false
       local all_done = true
-      for _, s in ipairs(sessions) do
+      for _, s in ipairs(jobs) do
         while (processed[s.key] or 0) < #s.lines and #candidates < max_candidates do
           processed[s.key] = (processed[s.key] or 0) + 1
           add_candidate(s.lines[processed[s.key]])
@@ -2790,7 +2790,7 @@ function FSView:refresh(text)
     if query_changed or force_refresh then self:start_grep(base, line, grep) end
   else
     kill_grep()
-    kill_fuzzy_grep_sessions()
+    kill_fuzzy_grep_jobs()
     self:refresh_normal(base, line, query_changed, force_refresh)
   end
 end
@@ -2814,7 +2814,7 @@ function FSView:close()
   fuzzy_focus_log("close", self)
   kill_file_search()
   kill_grep()
-  kill_fuzzy_grep_sessions()
+  kill_fuzzy_grep_jobs()
   self:clear_preview_view()
   self:swap_active_child(nil)
   self:hide()
@@ -2923,7 +2923,7 @@ end
 
 function FSView:draw()
   if not self:is_visible() then return false end
-  local root = core.root_view
+  local root = core.root_panel
   renderer.draw_rect(root.position.x, root.position.y, root.size.x, root.size.y, {0, 0, 0, 110})
 
   if not FSView.super.draw(self) then return false end

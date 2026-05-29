@@ -153,8 +153,8 @@ if not core.__untitled_tabs_patched then
     if #dirty_untitled > 0 and close_fn ~= core.exit then
       local args = { ... }
       local text = #dirty_untitled == 1
-        and string.format("Closing %s will permanently discard this untitled buffer. Close it anyway?", dirty_untitled[1].intellij_untitled_name or "Untitled")
-        or string.format("Closing %d untitled buffers will permanently discard them. Close them anyway?", #dirty_untitled)
+        and string.format("Closing %s will permanently discard this untitled document. Close it anyway?", dirty_untitled[1].intellij_untitled_name or "Untitled")
+        or string.format("Closing %d untitled documents will permanently discard them. Close them anyway?", #dirty_untitled)
       core.nag_view:show(
         "Close Untitled Tabs",
         text,
@@ -182,7 +182,7 @@ if not core.__untitled_tabs_patched then
       local name = self.doc.intellij_untitled_name or "Untitled"
       core.nag_view:show(
         "Close Untitled Tab",
-        string.format("Closing %s will permanently discard this untitled buffer. Close it anyway?", name),
+        string.format("Closing %s will permanently discard this untitled document. Close it anyway?", name),
         {
           { text = "Close", default_yes = true },
           { text = "Cancel", default_no = true },
@@ -233,7 +233,7 @@ local function create_empty_file(filename)
   end
 
   local doc = core.open_doc(normalized)
-  core.root_view:open_doc(doc)
+  core.root_panel:open_doc(doc)
   local ok, err = pcall(doc.save, doc, normalized, abs)
   if ok then
     core.log("Created \"%s\"", normalized)
@@ -245,11 +245,11 @@ end
 command.add(nil, {
   ["user:new-untitled-tab"] = function()
     local doc = tag_doc(core.open_doc())
-    core.root_view:open_doc(doc)
+    core.root_panel:open_doc(doc)
   end,
 
   ["user:new-file-with-path"] = function()
-    core.command_view:enter("New File", {
+    core.global_prompt_bar:enter("New File", {
       text = default_new_file_text(),
       submit = create_empty_file,
       suggest = function(text)

@@ -56,7 +56,7 @@ command.add(predicate, {
     keymap.modkeys = clone(modkeys)
     for _, ev in ipairs(event_buffer) do
       on_event(table.unpack(ev))
-      core.root_view:update()
+      core.root_panel:update()
     end
     keymap.modkeys = mk
     state = "stopped"

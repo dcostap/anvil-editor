@@ -402,10 +402,13 @@ function common.path_suggest(text, root)
         file = file .. PATHSEP
       end
       if compare_root then
-        -- remove root part from file path
-        local s, e = file:find(compare_root, nil, true)
+        -- remove root part from file path. On Windows both `file` and `root`
+        -- can contain mixed slash styles (for example USERDIR from MSYS may
+        -- start with `C:/` while PATHSEP is `\\`), so compare normalized paths.
+        local match_file = PLATFORM == "Windows" and file:gsub("[/\\]", PATHSEP) or file
+        local s, e = match_file:find(compare_root, nil, true)
         if s == 1 then
-          file = file:sub(e + 1)
+          file = match_file:sub(e + 1)
         end
       elseif clean_dotslash then
         -- remove added dot slash
@@ -828,13 +831,12 @@ end
 
 ---Checks whether a path is absolute or relative.
 ---@param path string
----@return boolean
+---@return boolean? true when the path is absolute, nil otherwise
 function common.is_absolute_path(path)
   if PLATFORM == "Windows" then
-    return path:match("^(%a):[/\\]") ~= nil
-        or path:match("^[/\\][/\\]") ~= nil
+    return (path:match("^(%a):[/\\]") or path:match("^[/\\][/\\]")) and true or nil
   end
-  return path:sub(1, 1) == PATHSEP
+  return path:sub(1, 1) == PATHSEP and true or nil
 end
 
 

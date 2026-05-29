@@ -1,5 +1,5 @@
 -- mod-version:3
--- Insert sequential numbers at each cursor/selection using CommandView prompts.
+-- Insert sequential numbers at each cursor/selection using GlobalPromptBar prompts.
 
 local core = require "core"
 local command = require "core.command"
@@ -45,7 +45,7 @@ local function insert_numbers(dv, initial, stride)
 end
 
 local function prompt_stride(dv, initial)
-  core.command_view:enter("Sequential Numbers Stride", {
+  core.global_prompt_bar:enter("Sequential Numbers Stride", {
     text = "1",
     select_text = true,
     show_suggestions = false,
@@ -66,7 +66,7 @@ command.add(function()
   return true, core.active_view
 end, {
   ["doc:insert-sequential-numbers-on-cursors"] = function(dv)
-    core.command_view:enter("Sequential Numbers Initial", {
+    core.global_prompt_bar:enter("Sequential Numbers Initial", {
       text = "0",
       select_text = true,
       show_suggestions = false,

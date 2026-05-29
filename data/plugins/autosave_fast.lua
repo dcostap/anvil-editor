@@ -184,7 +184,7 @@ local function save_conflict_copy_and_reload(doc)
 
   update_disk_state(copy_doc)
   clear_dirty_if_clean(copy_doc)
-  core.root_view:open_doc(copy_doc)
+  core.root_panel:open_doc(copy_doc)
   core.log("Saved conflict copy \"%s\"", copy_name)
   return true
 end
@@ -327,12 +327,12 @@ local function restore_untitled_recovery()
       doc:reset_syntax()
       doc:clear_undo_redo()
       doc:clean()
-      core.root_view:open_doc(doc)
+      core.root_panel:open_doc(doc)
       restored = restored + 1
     end
   end
   if restored > 0 then
-    core.log_quiet("Restored %d untitled autosave buffer(s)", restored)
+    core.log_quiet("Restored %d untitled autosave document(s)", restored)
   end
 end
 
@@ -536,8 +536,8 @@ for _, doc in ipairs(core.docs or {}) do
 end
 
 core.add_thread(function()
-  -- Let workspace/session restoration run first, then add any autosaved
-  -- untitled buffers not already restored by workspace state.
+  -- Let workspace restoration run first, then add any autosaved
+  -- untitled documents not already restored by workspace state.
   coroutine.yield(3)
   restore_untitled_recovery()
 end)

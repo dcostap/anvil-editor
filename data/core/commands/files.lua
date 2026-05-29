@@ -4,7 +4,7 @@ local common = require "core.common"
 
 command.add(nil, {
   ["files:create-directory"] = function()
-    core.command_view:enter("New directory name", {
+    core.global_prompt_bar:enter("New directory name", {
       submit = function(text)
         local success, err, path = common.mkdirp(text)
         if not success then

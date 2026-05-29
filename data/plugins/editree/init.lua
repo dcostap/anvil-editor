@@ -2027,7 +2027,7 @@ function EditreeView:apply_edits()
 end
 
 local view = EditreeView()
-file_context.exclude_main_view(view)
+file_context.exclude_main_panel_view(view)
 sidepanel.register_panel("editree", view)
 view.node = sidepanel.side_node
 
@@ -2066,24 +2066,24 @@ wrap_doc_command("doc:paste", function(v)
   return v:paste_lines_with_metadata()
 end)
 
-local function current_main_view()
-  return sidepanel.current_main_view(view.last_main_view)
+local function current_main_panel_view()
+  return sidepanel.current_main_panel_view(view.last_main_panel_view)
 end
 
 local function current_file_path()
-  return file_context.current_file_path(view.last_main_view)
+  return file_context.current_file_path(view.last_main_panel_view)
 end
 
-local function remember_current_main_view()
-  view.last_main_view = current_main_view() or view.last_main_view
+local function remember_current_main_panel_view()
+  view.last_main_panel_view = current_main_panel_view() or view.last_main_panel_view
 end
 
-local function hide_and_focus_main_view()
+local function hide_and_focus_main_panel_view()
   sidepanel.focus_main(true)
 end
 
 local function show_and_focus_editree()
-  remember_current_main_view()
+  remember_current_main_panel_view()
   sidepanel.show("editree", { focus = true })
 end
 
@@ -2149,7 +2149,7 @@ end
 command.add(nil, {
   ["editree:toggle"] = function()
     if view.visible then
-      hide_and_focus_main_view()
+      hide_and_focus_main_panel_view()
     else
       show_and_focus_editree()
     end
@@ -2158,7 +2158,7 @@ command.add(nil, {
     show_and_focus_editree()
   end,
   ["editree:focus-editor-and-hide"] = function()
-    hide_and_focus_main_view()
+    hide_and_focus_main_panel_view()
   end,
   ["editree:focus-and-show"] = function()
     show_and_focus_editree()
@@ -2171,14 +2171,14 @@ command.add(nil, {
   -- Compatibility aliases while the standard treeview is disabled.
   ["treeview:toggle"] = function()
     if view.visible then
-      hide_and_focus_main_view()
+      hide_and_focus_main_panel_view()
     else
       show_and_focus_editree()
     end
   end,
   ["treeview:toggle-focus"] = function()
     if core.active_view == view then
-      hide_and_focus_main_view()
+      hide_and_focus_main_panel_view()
     else
       show_and_focus_editree()
     end

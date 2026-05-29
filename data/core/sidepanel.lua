@@ -23,7 +23,7 @@ M.panels = M.panels or {}
 M.side_views = M.side_views or setmetatable({}, { __mode = "k" })
 M.visible = M.visible or false
 M.current_panel = M.current_panel
-M.last_main_view = M.last_main_view
+M.last_main_panel_view = M.last_main_panel_view
 M.side_node = M.side_node
 M.main_node = M.main_node
 M.container_node = M.container_node
@@ -105,7 +105,7 @@ local function attach_locked_side_node(container)
 end
 
 function M.ensure_side_node()
-  local root = core.root_view and core.root_view.root_node
+  local root = core.root_panel and core.root_panel.root_node
   if not root then return nil end
 
   if M.side_node and M.side_node.__sidepanel_side_node then
@@ -131,21 +131,21 @@ function M.is_side_view(view)
   return not not (view and M.side_views and M.side_views[view])
 end
 
-function M.is_main_view(view)
-  return file_context.is_main_view(view) and not M.is_side_view(view)
+function M.is_main_panel_view(view)
+  return file_context.is_main_panel_view(view) and not M.is_side_view(view)
 end
 
-function M.remember_main_view(view)
-  if M.is_main_view(view) then
-    M.last_main_view = view
+function M.remember_main_panel_view(view)
+  if M.is_main_panel_view(view) then
+    M.last_main_panel_view = view
   end
 end
 
 local function side_parent_width()
   local side = M.ensure_side_node()
-  local root = core.root_view and core.root_view.root_node
+  local root = core.root_panel and core.root_panel.root_node
   local parent = side and side:get_parent_node(root)
-  local w = parent and parent.size and parent.size.x or (core.root_view and core.root_view.size.x) or 0
+  local w = parent and parent.size and parent.size.x or (core.root_panel and core.root_panel.size.x) or 0
   return math.max(0, w)
 end
 
@@ -177,7 +177,7 @@ function M.attach_view(name, view)
     view.__sidepanel_panel_name = name
   end
   M.side_views[view] = true
-  file_context.exclude_main_view(view)
+  file_context.exclude_main_panel_view(view)
 
   if view.__sidepanel_size_wrapped then return view end
   view.__sidepanel_size_wrapped = true
@@ -261,8 +261,8 @@ function M.remove_view(view, focus_main)
     M.focus_main(false)
   end
 
-  if core.root_view and core.root_view.root_node then
-    core.root_view.root_node:update_layout()
+  if core.root_panel and core.root_panel.root_node then
+    core.root_panel.root_node:update_layout()
   end
   return true
 end
@@ -311,8 +311,8 @@ function M.set_side_view(view, focus)
     M.focus_main(false)
   end
 
-  if core.root_view and core.root_view.root_node then
-    core.root_view.root_node:update_layout()
+  if core.root_panel and core.root_panel.root_node then
+    core.root_panel.root_node:update_layout()
   end
   return view
 end
@@ -343,16 +343,16 @@ function M.hide(focus_main)
   return true
 end
 
-function M.current_main_view(fallback)
-  return file_context.current_main_view(fallback or M.last_main_view)
+function M.current_main_panel_view(fallback)
+  return file_context.current_main_panel_view(fallback or M.last_main_panel_view)
 end
 
 function M.focus_main(hide)
   if hide then M.hide(false) end
-  local view = M.current_main_view(M.last_main_view)
+  local view = M.current_main_panel_view(M.last_main_panel_view)
   if not view then
-    local primary = core.root_view and core.root_view:get_primary_node()
-    view = primary and primary.active_view
+    local main_panel = core.root_panel and core.root_panel:get_main_panel()
+    view = main_panel and main_panel.active_view
   end
   if view then core.set_active_view(view) end
   return view
@@ -443,7 +443,7 @@ local function preserve_dirty_side_file()
   local old = M.file_view
   if not old or not old.doc then return end
   local restore = core.active_view
-  core.root_view:open_doc(old.doc)
+  core.root_panel:open_doc(old.doc)
   if restore and core.active_view ~= restore then
     core.set_active_view(restore)
   end
@@ -569,7 +569,7 @@ local base_set_active_view = core.sidepanel_base_set_active_view or core.set_act
 core.sidepanel_base_set_active_view = base_set_active_view
 function core.set_active_view(view)
   local result = base_set_active_view(view)
-  if core.sidepanel then core.sidepanel.remember_main_view(view) end
+  if core.sidepanel then core.sidepanel.remember_main_panel_view(view) end
   return result
 end
 
@@ -587,7 +587,7 @@ command.add(nil, {
     M.hide(true)
   end,
   ["sidepanel:open-current-file"] = function()
-    local view = M.current_main_view(core.active_view)
+    local view = M.current_main_panel_view(core.active_view)
     if not view or not view.extends or not view:extends(DocView) or not view.doc then return false end
     M.open_doc_in_side(view.doc, { source_view = view, focus = true })
     return true

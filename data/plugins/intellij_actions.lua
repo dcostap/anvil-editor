@@ -172,8 +172,8 @@ end
 
 local function is_file_bound_view(view)
   if not view then return false end
-  local CommandView = require "core.commandview"
-  if view:is(CommandView) then return false end
+  local GlobalPromptBar = require "core.global_prompt_bar"
+  if view:is(GlobalPromptBar) then return false end
   return file_context.is_file_view(view)
 end
 
@@ -225,7 +225,7 @@ local function open_file_as_raw_text(dv)
   local path = active_file_or_error(dv)
   if not path then return end
   local doc = core.open_doc(path)
-  core.root_view:open_doc(doc)
+  core.root_panel:open_doc(doc)
 end
 
 local function open_file_in_associated_program(dv)
@@ -306,7 +306,7 @@ local function restore_navigation_place(place)
   navigating_history = true
   local ok, err = pcall(function()
     local doc = core.open_doc(place.filename)
-    local view = core.root_view:open_doc(doc)
+    local view = core.root_panel:open_doc(doc)
     with_origin_clear_suppressed(doc_set_selection, doc, place.line, place.col, place.line, place.col)
     if view.scroll then
       view.scroll.to.x, view.scroll.x = place.scroll_x or 0, place.scroll_x or 0
@@ -924,7 +924,7 @@ local function patch_paste_undo_selection(doc, undo_start_idx, selections)
   for i = undo_start_idx, doc.undo_stack.idx - 1 do
     local cmd = doc.undo_stack[i]
     if cmd and cmd.type == "selection" then
-      doc.undo_stack[i] = { type = "selection", time = cmd.time, selection_session_id = cmd.selection_session_id, table.unpack(selections) }
+      doc.undo_stack[i] = { type = "selection", time = cmd.time, selection_owner_id = cmd.selection_owner_id, table.unpack(selections) }
       return
     end
   end
@@ -1194,9 +1194,9 @@ end
 
 command.add(function()
   local DocView = require "core.docview"
-  local CommandView = require "core.commandview"
+  local GlobalPromptBar = require "core.global_prompt_bar"
   local view = core.active_view
-  return view and view:extends(DocView) and not view:is(CommandView), view
+  return view and view:extends(DocView) and not view:is(GlobalPromptBar), view
 end, {
   ["user:extend-selection-smart"] = extend_smart_selection,
   ["user:shrink-selection-smart"] = shrink_smart_selection,
@@ -1237,7 +1237,7 @@ end, {
   ["user:reveal-active-file-in-explorer"] = reveal_active_file_in_explorer,
 })
 
--- CommandView (the small bottom input used by Open File, Command Palette,
+-- GlobalPromptBar (the small bottom input used by Open File, Command Palette,
 -- etc.) also inherits from DocView. Keep Ctrl+V valid there while still
 -- applying the multi-cursor undo fix in normal editor documents.
 command.add(function()
@@ -1282,7 +1282,7 @@ keymap.add({
   ["f7"] = "gitdiff:next-change",
 }, true)
 
--- Keep Escape cooperative: plugin panels (CommandView, project search,
+-- Keep Escape cooperative: plugin panels (GlobalPromptBar, project search,
 -- search/replace, fuzzy searcher, etc.) should get their normal close handlers,
 -- and this editor-only fallback runs only when those predicates do not apply.
 keymap.add({

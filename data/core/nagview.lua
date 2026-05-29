@@ -32,8 +32,8 @@ local noop = function() end
 ---@field force_focus boolean Whether to force focus on this view
 ---@field queue core.nagview.queue_item[] Queued dialogs waiting to show
 ---@field target_height number Target height for current message
----@field on_mouse_pressed_root function? Saved RootView.on_mouse_pressed for restoration
----@field new_on_mouse_pressed_root function? New RootView.on_mouse_pressed for validation
+---@field on_mouse_pressed_root function? Saved RootPanel.on_mouse_pressed for restoration
+---@field new_on_mouse_pressed_root function? New RootPanel.on_mouse_pressed for validation
 ---@field dim_alpha number Alpha for background dimming [0-1]
 ---@field visible boolean Whether dialog is currently visible
 ---@field title string? Current dialog title
@@ -120,8 +120,8 @@ end
 function NagView:dim_window_content()
   local ox, oy = self:get_content_offset()
   oy = oy + self.show_height
-  local w, h = core.root_view.size.x, core.root_view.size.y - oy
-  core.root_view:defer_draw(function()
+  local w, h = core.root_panel.size.x, core.root_panel.size.y - oy
+  core.root_panel:defer_draw(function()
     local dim_color = { table.unpack(style.nagbar_dim) }
     dim_color[4] = style.nagbar_dim[4] * self.dim_alpha
     renderer.draw_rect(ox, oy, w, h, dim_color)
@@ -185,12 +185,12 @@ end
 ---@param self core.nagview
 local function register_mouse_pressed(self)
   if self.on_mouse_pressed_root then return end
-  -- RootView is loaded locally to avoid NagView and RootView being
+  -- RootPanel is loaded locally to avoid NagView and RootPanel being
   -- mutually recursive
-  local RootView = require "core.rootview"
-  self.on_mouse_pressed_root = RootView.on_mouse_pressed
+  local RootPanel = require "core.rootpanel"
+  self.on_mouse_pressed_root = RootPanel.on_mouse_pressed
   local this = self
-  function RootView:on_mouse_pressed(button, x, y, clicks)
+  function RootPanel:on_mouse_pressed(button, x, y, clicks)
     if
       not this:on_mouse_pressed(button, x, y, clicks)
     then
@@ -199,7 +199,7 @@ local function register_mouse_pressed(self)
       return true
     end
   end
-  self.new_on_mouse_pressed_root = RootView.on_mouse_pressed
+  self.new_on_mouse_pressed_root = RootPanel.on_mouse_pressed
 end
 
 
@@ -207,16 +207,16 @@ end
 ---Validates hook hasn't been overwritten by other code before restoring.
 ---@param self core.nagview
 local function unregister_mouse_pressed(self)
-  local RootView = require "core.rootview"
+  local RootPanel = require "core.rootpanel"
   if
     self.on_mouse_pressed_root
     and
     -- just in case prevent overwriting what something else may
     -- have overwrote after us, but after testing with various
     -- plugins this doesn't seems to happen, but just in case
-    self.new_on_mouse_pressed_root == RootView.on_mouse_pressed
+    self.new_on_mouse_pressed_root == RootPanel.on_mouse_pressed
   then
-    RootView.on_mouse_pressed = self.on_mouse_pressed_root
+    RootPanel.on_mouse_pressed = self.on_mouse_pressed_root
     self.on_mouse_pressed_root = nil
     self.new_on_mouse_pressed_root = nil
   end
@@ -343,7 +343,7 @@ function NagView:draw()
   if (not self.visible and self.show_height <= 0) or not self.title then
     return
   end
-  core.root_view:defer_draw(draw_nagview_message, self)
+  core.root_panel:defer_draw(draw_nagview_message, self)
 end
 
 

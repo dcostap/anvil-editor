@@ -32,7 +32,7 @@ local Scrollbar = require "core.scrollbar"
 
 ---@alias core.view.mousebutton "'left'" | "'right'"
 
----@alias core.view.context "'application'" | "'session'"
+---@alias core.view.context "'application'" | "'workspace'" | "'session'" Deprecated: `session` is treated as `workspace` for old plugins.
 
 ---Base view.
 ---@class core.view : core.object
@@ -51,9 +51,10 @@ local View = Object:extend()
 
 function View:__tostring() return "View" end
 
--- context can be "application" or "session". The instance of objects
--- with context "session" will be closed when a project session is
--- terminated. The context "application" is for functional UI elements.
+-- context can be "application" or "workspace". Objects with context
+-- "workspace" are closed when the current workspace is closed or replaced.
+-- Legacy plugins may still set "session"; it is treated as "workspace".
+-- The context "application" is for functional UI elements.
 View.context = "application"
 
 ---Constructor - initializes a new view instance.
@@ -73,7 +74,7 @@ end
 
 ---Serialize this view into a persistable state table.
 ---
----This method is called when the editor is saving workspace/session state.
+---This method is called when the editor is saving workspace state.
 ---The returned table must contain only plain Lua data (no functions,
 ---userdata, metatables, or cyclic references).
 ---
@@ -88,7 +89,7 @@ end
 
 ---Create and initialize a new view instance from a previously saved state.
 ---
----This function is called when restoring workspace/session state.
+---This function is called when restoring workspace state.
 ---Implementations are responsible for:
 ---  * creating the view instance
 ---  * applying any persisted state
@@ -164,7 +165,9 @@ function View:move_towards(t, k, dest, rate, name)
   local val = t[k]
   -- we use epsilon comparison in case dest is inconsistent
   if math.abs(dest - val) < 1e-8 then return end
-  if core.in_live_resize_frame or not config.transitions or config.disabled_transitions[name] or config.fps < 30 then
+  local disabled_transition = config.disabled_transitions[name]
+    or (name == "global_prompt_bar" and config.disabled_transitions.commandview)
+  if core.in_live_resize_frame or not config.transitions or disabled_transition or config.fps < 30 then
     t[k] = dest
     t["move_data_"..k] = nil
   else
@@ -215,7 +218,7 @@ end
 
 ---Called when view is requested to close (e.g., tab close button).
 ---Override to show confirmation dialogs for unsaved changes.
----Example: `core.command_view:enter("Save?", {submit = do_close})`
+---Example: `core.global_prompt_bar:enter("Save?", {submit = do_close})`
 ---@param do_close function Call this function to actually close the view
 function View:try_close(do_close)
   do_close()

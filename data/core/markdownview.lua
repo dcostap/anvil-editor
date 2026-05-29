@@ -161,7 +161,7 @@ function MarkdownView:__tostring() return "MarkdownView" end
 
 MarkdownView.resolve_color = resolve_color
 
-MarkdownView.context = "session"
+MarkdownView.context = "workspace"
 
 local function trim(text)
   return (text:gsub("^%s+", ""):gsub("%s+$", ""))
@@ -3864,9 +3864,9 @@ function MarkdownView:set_hovered_link(url)
 
   self.hovered_link_url = url
   if url then
-    core.status_view:show_tooltip("Open " .. url)
+    core.status_bar:show_tooltip("Open " .. url)
   else
-    core.status_view:remove_tooltip()
+    core.status_bar:remove_tooltip()
   end
 end
 

@@ -20,58 +20,95 @@ function M.view_file_path(view)
   if path and path ~= "" then return common.normalize_path(path) end
 end
 
-M.excluded_main_views = M.excluded_main_views or setmetatable({}, { __mode = "k" })
+M.excluded_main_panel_views = M.excluded_main_panel_views or M.excluded_main_views or setmetatable({}, { __mode = "k" })
+M.excluded_main_views = M.excluded_main_panel_views -- deprecated compatibility alias
 
-function M.exclude_main_view(view)
-  if view then M.excluded_main_views[view] = true end
+function M.exclude_main_panel_view(view)
+  if view then M.excluded_main_panel_views[view] = true end
 end
 
 function M.is_file_view(view)
   return M.view_file_path(view) ~= nil
 end
 
-function M.is_main_view(view)
-  if not view or M.excluded_main_views[view] then return false end
-  if view == core.command_view or view == core.nag_view or view == core.status_view or view == core.title_view then return false end
-  return view.context == "session" or M.is_file_view(view)
+function M.is_main_panel_view(view)
+  if not view or M.excluded_main_panel_views[view] then return false end
+  if view == core.global_prompt_bar or view == core.nag_view or view == core.status_bar or view == core.title_bar then return false end
+  return view.context == "workspace" or view.context == "session" or M.is_file_view(view)
 end
 
 function M.active_file_path()
   return M.view_file_path(core.active_view)
 end
 
-function M.primary_file_view()
-  local node = core.root_view and core.root_view:get_primary_node()
+function M.main_panel_file_view()
+  local node = core.root_panel and core.root_panel:get_main_panel()
   local view = node and node.active_view
   if M.is_file_view(view) then return view end
 end
 
-function M.primary_file_path()
-  return M.view_file_path(M.primary_file_view())
+function M.main_panel_file_path()
+  return M.view_file_path(M.main_panel_file_view())
 end
 
 function M.current_file_path(fallback_view)
   return M.active_file_path()
-      or M.primary_file_path()
+      or M.main_panel_file_path()
       or M.view_file_path(fallback_view)
 end
 
 function M.current_file_view(fallback_view)
   if M.is_file_view(core.active_view) then return core.active_view end
-  return M.primary_file_view()
+  return M.main_panel_file_view()
       or (M.is_file_view(fallback_view) and fallback_view or nil)
 end
 
-function M.primary_main_view()
-  local node = core.root_view and core.root_view:get_primary_node()
+function M.main_panel_view()
+  local node = core.root_panel and core.root_panel:get_main_panel()
   local view = node and node.active_view
-  if M.is_main_view(view) then return view end
+  if M.is_main_panel_view(view) then return view end
 end
 
+function M.current_main_panel_view(fallback_view)
+  if M.is_main_panel_view(core.active_view) then return core.active_view end
+  if M.is_main_panel_view(fallback_view) then return fallback_view end
+  return M.main_panel_view()
+end
+
+---@deprecated Use `exclude_main_panel_view` instead.
+function M.exclude_main_view(view)
+  core.deprecation_log("file_context.exclude_main_view")
+  return M.exclude_main_panel_view(view)
+end
+
+---@deprecated Use `is_main_panel_view` instead.
+function M.is_main_view(view)
+  core.deprecation_log("file_context.is_main_view")
+  return M.is_main_panel_view(view)
+end
+
+---@deprecated Use `main_panel_file_view` instead.
+function M.primary_file_view()
+  core.deprecation_log("file_context.primary_file_view")
+  return M.main_panel_file_view()
+end
+
+---@deprecated Use `main_panel_file_path` instead.
+function M.primary_file_path()
+  core.deprecation_log("file_context.primary_file_path")
+  return M.main_panel_file_path()
+end
+
+---@deprecated Use `main_panel_view` instead.
+function M.primary_main_view()
+  core.deprecation_log("file_context.primary_main_view")
+  return M.main_panel_view()
+end
+
+---@deprecated Use `current_main_panel_view` instead.
 function M.current_main_view(fallback_view)
-  if M.is_main_view(core.active_view) then return core.active_view end
-  if M.is_main_view(fallback_view) then return fallback_view end
-  return M.primary_main_view()
+  core.deprecation_log("file_context.current_main_view")
+  return M.current_main_panel_view(fallback_view)
 end
 
 function M.mark_visited(view)
@@ -89,7 +126,7 @@ end
 
 local function closable_other_view(view, active_view)
   if view == active_view then return false end
-  return M.is_main_view(view)
+  return M.is_main_panel_view(view)
 end
 
 local function collect_other_dirty_docs(node, dirty_docs, seen)
@@ -130,7 +167,7 @@ end
 
 command.add(nil, {
   ["root:close-all-others"] = function()
-    local root = core.root_view and core.root_view.root_node
+    local root = core.root_panel and core.root_panel.root_node
     local dirty_docs = {}
     collect_other_dirty_docs(root, dirty_docs, {})
     core.confirm_close_docs(dirty_docs, function()

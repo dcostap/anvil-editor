@@ -751,7 +751,7 @@ function ResultsView:begin_search(path, text, search_type, insensitive, whole_wo
       if self.stop then
         break
       elseif not self.is_global then
-        local node = core.root_view:get_active_node_default()
+        local node = core.root_panel:get_active_node_default()
         local found = false
         for _, view in ipairs(node.views) do
           if view == self then
@@ -1065,9 +1065,9 @@ function ResultsView:open_selected_result()
   local item = self.results_list:get_selected()
   if not item or not item.position then return end
   core.try(function()
-    local dv = core.root_view:open_doc(core.open_doc(item.parent.file.path))
+    local dv = core.root_panel:open_doc(core.open_doc(item.parent.file.path))
     previous_view = dv
-    core.root_view.root_node:update_layout()
+    core.root_panel.root_node:update_layout()
     local l, c1, c2 = item.line.line, item.position.col1, item.position.col2+1
     dv.doc:set_selection(l, c2, l, c1)
     dv.doc:add_search_selection(l, c2, l, c1)
@@ -1234,7 +1234,7 @@ function ResultsView:draw()
 end
 
 
----Helper function to instantiate a new ResultsView and add it to root view.
+---Helper function to instantiate a new ResultsView and add it to the Root Panel.
 ---@param path? string
 ---@param text string
 ---@param search_type "plain" | "regex"
@@ -1248,7 +1248,7 @@ local function begin_search(path, text, search_type, insensitive, whole_word, re
     path, text, search_type, insensitive, whole_word, replacement
   )
   rv:show()
-  core.root_view:get_active_node_default():add_view(rv)
+  core.root_panel:get_active_node_default():add_view(rv)
   core.add_thread(function() core.set_active_view(rv) end)
   return rv
 end
@@ -1337,11 +1337,11 @@ function projectsearch.toggle(path, has_focus)
     local node, split_direction = nil, "left"
     if treeview then
       -- when treeview enabled split to the right of it for consistent position
-      node = core.root_view.root_node:get_node_for_view(treeview)
-      if not node then node = core.root_view:get_primary_node() end
+      node = core.root_panel.root_node:get_node_for_view(treeview)
+      if not node then node = core.root_panel:get_main_panel() end
       split_direction = "right"
     else
-      node = core.root_view:get_active_node()
+      node = core.root_panel:get_active_node()
     end
     global_project_search.node = node:split(
       split_direction, global_project_search, {x = true}, true
@@ -1426,7 +1426,7 @@ command.add(nil, {
   ["project-search:open-tab"] = function(path)
     local rv = ResultsView(path, "", "plain")
     rv:show()
-    core.root_view:get_active_node_default():add_view(rv)
+    core.root_panel:get_active_node_default():add_view(rv)
     core.add_thread(function()
       core.set_active_view(rv)
       rv:swap_active_child(rv.find_text)
@@ -1434,7 +1434,7 @@ command.add(nil, {
   end,
 
   ["project-search:find-plain"] = function(path)
-    core.command_view:enter("Find Text In " .. (path or "Project"), {
+    core.global_prompt_bar:enter("Find Text In " .. (path or "Project"), {
       text = get_selected_text(),
       select_text = true,
       submit = function(text)
@@ -1444,7 +1444,7 @@ command.add(nil, {
   end,
 
   ["project-search:find-regex"] = function(path)
-    core.command_view:enter("Find Regex In " .. (path or "Project"), {
+    core.global_prompt_bar:enter("Find Regex In " .. (path or "Project"), {
       submit = function(text)
         projectsearch.search_regex(text, path, true)
       end

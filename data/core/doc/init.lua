@@ -476,9 +476,13 @@ local function adjust_registered_selection_states(self, kind, ...)
   end
 end
 
-local function current_selection_session_id(self)
+local function current_selection_owner_id(self)
+  if self.bound_selection_owner_id then return self.bound_selection_owner_id end
   if self.bound_selection_session_id then return self.bound_selection_session_id end
   local ok, DocView = pcall(require, "core.docview")
+  if ok and DocView.get_doc_mirror_owner_id then
+    return DocView.get_doc_mirror_owner_id(self)
+  end
   if ok and DocView.get_doc_mirror_owner_session_id then
     return DocView.get_doc_mirror_owner_session_id(self)
   end
@@ -493,9 +497,9 @@ local function registered_docview_count(self)
 end
 
 local function can_restore_selection_undo(self, cmd)
-  local owner = cmd.selection_session_id
+  local owner = cmd.selection_owner_id or cmd.selection_session_id
   if owner then
-    return owner == current_selection_session_id(self)
+    return owner == current_selection_owner_id(self)
   end
   return registered_docview_count(self) <= 1
 end
@@ -830,7 +834,8 @@ end
 
 local function push_selection_undo(self, undo_stack, time)
   local cmd = push_undo(undo_stack, time, "selection", table.unpack(self.selections))
-  cmd.selection_session_id = current_selection_session_id(self)
+  cmd.selection_owner_id = current_selection_owner_id(self)
+  cmd.selection_session_id = cmd.selection_owner_id -- deprecated compatibility alias
   return cmd
 end
 

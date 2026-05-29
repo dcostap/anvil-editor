@@ -408,5 +408,5 @@ function NagView:draw()
   if (not self.visible and self.show_height <= 0) or not self.title then
     return
   end
-  core.root_view:defer_draw(draw_nagview, self)
+  core.root_panel:defer_draw(draw_nagview, self)
 end

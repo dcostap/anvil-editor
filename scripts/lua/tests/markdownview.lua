@@ -36,17 +36,17 @@ local function path_is_in_test_roots(context, path)
 end
 
 local function close_test_views_and_docs(context)
-  local views = core.root_view.root_node:get_children()
+  local views = core.root_panel.root_node:get_children()
   for i = #views, 1, -1 do
     local view = views[i]
     local path = view.path or (view.doc and view.doc.abs_filename)
     if path_is_in_test_roots(context, path) then
-      local node = core.root_view.root_node:get_node_for_view(view)
+      local node = core.root_panel.root_node:get_node_for_view(view)
       if node then
         if view:extends(DocView) and view.doc:is_dirty() then
           view.doc:clean()
         end
-        node:remove_view(core.root_view.root_node, view)
+        node:remove_view(core.root_panel.root_node, view)
       end
     end
   end
@@ -387,7 +387,7 @@ Paragraph with a footnote.[^note]
     test.equal(view:copy_selection(), true)
     test.equal(system.get_clipboard(), "Title")
 
-    local node = core.root_view:get_active_node_default()
+    local node = core.root_panel:get_active_node_default()
     node:add_view(view)
     node:set_active_view(view)
     system.set_clipboard("")
@@ -396,7 +396,7 @@ Paragraph with a footnote.[^note]
     local copy_shortcut = PLATFORM == "Mac OS X" and "cmd+c" or "ctrl+c"
     test.equal(keymap.map[copy_shortcut][1], "markdown-view:copy")
     test.equal(keymap.map[copy_shortcut][2], "doc:copy")
-    node:remove_view(core.root_view.root_node, view)
+    node:remove_view(core.root_panel.root_node, view)
   end)
 
   test.test("shows context copy entry when markdown text is selected", function()
@@ -1613,18 +1613,18 @@ For more detailed instructions visit: https://github.com/dcostap/anvil-editor#bu
 
     local opened
     local original = common.open_in_system
-    local original_show_tooltip = core.status_view.show_tooltip
-    local original_remove_tooltip = core.status_view.remove_tooltip
+    local original_show_tooltip = core.status_bar.show_tooltip
+    local original_remove_tooltip = core.status_bar.remove_tooltip
     local tooltip
     local tooltip_removed = 0
     common.open_in_system = function(url)
       opened = url
       return true
     end
-    core.status_view.show_tooltip = function(_, text)
+    core.status_bar.show_tooltip = function(_, text)
       tooltip = text
     end
-    core.status_view.remove_tooltip = function()
+    core.status_bar.remove_tooltip = function()
       tooltip_removed = tooltip_removed + 1
       tooltip = nil
     end
@@ -1649,8 +1649,8 @@ For more detailed instructions visit: https://github.com/dcostap/anvil-editor#bu
     test.equal(tooltip_removed, 1)
 
     common.open_in_system = original
-    core.status_view.show_tooltip = original_show_tooltip
-    core.status_view.remove_tooltip = original_remove_tooltip
+    core.status_bar.show_tooltip = original_show_tooltip
+    core.status_bar.remove_tooltip = original_remove_tooltip
   end)
 
   test.test("opens project markdown links in a new preview", function(context)
@@ -1745,10 +1745,10 @@ For more detailed instructions visit: https://github.com/dcostap/anvil-editor#bu
     local path = context.temp_root .. PATHSEP .. "opened.md"
     write_file(path, "# Opened\n\nFrom core.open_file.\n")
 
-    local node = core.root_view:get_active_node_default()
+    local node = core.root_panel:get_active_node_default()
     local view = core.open_file(path)
     test.ok(view:extends(DocView))
-    node:close_view(core.root_view.root_node, view)
+    node:close_view(core.root_panel.root_node, view)
   end)
 
   test.test("previews the active markdown doc", function(context)
@@ -1763,7 +1763,7 @@ For more detailed instructions visit: https://github.com/dcostap/anvil-editor#bu
     command.perform("markdown-view:preview")
 
     local preview
-    for _, view in ipairs(core.root_view.root_node:get_children()) do
+    for _, view in ipairs(core.root_panel.root_node:get_children()) do
       if view:extends(MarkdownView) and view.linked_doc == doc_view.doc then
         preview = view
         break
@@ -1775,10 +1775,10 @@ For more detailed instructions visit: https://github.com/dcostap/anvil-editor#bu
     preview:update()
     test.match(preview.text, "Unsaved change")
 
-    local preview_node = core.root_view.root_node:get_node_for_view(preview)
-    local doc_node = core.root_view.root_node:get_node_for_view(doc_view)
-    preview_node:close_view(core.root_view.root_node, preview)
-    doc_node:close_view(core.root_view.root_node, doc_view)
+    local preview_node = core.root_panel.root_node:get_node_for_view(preview)
+    local doc_node = core.root_panel.root_node:get_node_for_view(doc_view)
+    preview_node:close_view(core.root_panel.root_node, preview)
+    doc_node:close_view(core.root_panel.root_node, doc_view)
   end)
 
   test.test("places markdown previews according to config.markdown_preview_mode", function(context)
@@ -1797,12 +1797,12 @@ For more detailed instructions visit: https://github.com/dcostap/anvil-editor#bu
     for mode, direction in pairs(modes) do
       config.markdown_preview_mode = mode
       local doc_view = core.open_file(path)
-      local doc_node = core.root_view.root_node:get_node_for_view(doc_view)
+      local doc_node = core.root_panel.root_node:get_node_for_view(doc_view)
 
       command.perform("markdown-view:preview")
 
       local preview
-      for _, view in ipairs(core.root_view.root_node:get_children()) do
+      for _, view in ipairs(core.root_panel.root_node:get_children()) do
         if view:extends(MarkdownView) and view.linked_doc == doc_view.doc then
           preview = view
           break
@@ -1810,11 +1810,11 @@ For more detailed instructions visit: https://github.com/dcostap/anvil-editor#bu
       end
 
       test.not_nil(preview, mode)
-      local preview_node = core.root_view.root_node:get_node_for_view(preview)
+      local preview_node = core.root_panel.root_node:get_node_for_view(preview)
       if direction == "newtab" then
         test.equal(preview_node, doc_node)
       else
-        local parent = preview_node:get_parent_node(core.root_view.root_node)
+        local parent = preview_node:get_parent_node(core.root_panel.root_node)
         test.not_nil(parent, mode)
         local split_type = (direction == "left" or direction == "right") and "hsplit" or "vsplit"
         local split_child = (direction == "left" or direction == "up") and parent.a or parent.b
@@ -1822,9 +1822,9 @@ For more detailed instructions visit: https://github.com/dcostap/anvil-editor#bu
         test.equal(split_child, preview_node)
       end
 
-      preview_node:close_view(core.root_view.root_node, preview)
-      doc_node = core.root_view.root_node:get_node_for_view(doc_view)
-      doc_node:close_view(core.root_view.root_node, doc_view)
+      preview_node:close_view(core.root_panel.root_node, preview)
+      doc_node = core.root_panel.root_node:get_node_for_view(doc_view)
+      doc_node:close_view(core.root_panel.root_node, doc_view)
     end
 
     config.markdown_preview_mode = original_mode
@@ -1838,13 +1838,13 @@ For more detailed instructions visit: https://github.com/dcostap/anvil-editor#bu
     test.not_nil(preview)
     test.is_nil(preview.linked_doc)
 
-    local preview_node = core.root_view.root_node:get_node_for_view(preview)
+    local preview_node = core.root_panel.root_node:get_node_for_view(preview)
     preview_node:set_active_view(preview)
 
     test.ok(command.is_valid("markdown-view:view-raw"))
     command.perform("markdown-view:view-raw")
 
-    local raw_view = core.root_view.root_node:get_node_for_view(core.active_view).active_view
+    local raw_view = core.root_panel.root_node:get_node_for_view(core.active_view).active_view
     test.ok(raw_view:extends(DocView))
     test.equal(common.normalize_path(raw_view.doc.abs_filename), common.normalize_path(path))
     test.equal(common.normalize_path(preview.linked_doc.abs_filename), common.normalize_path(path))
@@ -1860,12 +1860,12 @@ For more detailed instructions visit: https://github.com/dcostap/anvil-editor#bu
 
     local raw_view = core.open_file(path)
     test.ok(raw_view:extends(DocView))
-    local doc_node = core.root_view.root_node:get_node_for_view(raw_view)
+    local doc_node = core.root_panel.root_node:get_node_for_view(raw_view)
     local preview = doc_node:split("right", MarkdownView(path)).active_view
     test.ok(preview:extends(MarkdownView))
     test.is_nil(preview.linked_doc)
 
-    local preview_node = core.root_view.root_node:get_node_for_view(preview)
+    local preview_node = core.root_panel.root_node:get_node_for_view(preview)
     preview_node:set_active_view(preview)
     command.perform("markdown-view:view-raw")
 
@@ -1880,16 +1880,16 @@ For more detailed instructions visit: https://github.com/dcostap/anvil-editor#bu
 
     local raw_view = core.open_file(path)
     local original_doc = raw_view.doc
-    local doc_node = core.root_view.root_node:get_node_for_view(raw_view)
+    local doc_node = core.root_panel.root_node:get_node_for_view(raw_view)
     local preview = doc_node:split("right", MarkdownView({
       linked_doc = raw_view.doc,
       path = path,
       title = raw_view.doc:get_name()
     })).active_view
-    local preview_node = core.root_view.root_node:get_node_for_view(preview)
+    local preview_node = core.root_panel.root_node:get_node_for_view(preview)
 
     preview_node:set_active_view(preview)
-    core.root_view.root_node:get_node_for_view(raw_view):close_view(core.root_view.root_node, raw_view)
+    core.root_panel.root_node:get_node_for_view(raw_view):close_view(core.root_panel.root_node, raw_view)
 
     command.perform("markdown-view:view-raw")
 
@@ -1900,13 +1900,13 @@ For more detailed instructions visit: https://github.com/dcostap/anvil-editor#bu
 
   test.test("view raw is invalid for markdown previews without a path", function()
     local preview = MarkdownView("# Preview\n\nText only.\n")
-    local node = core.root_view:get_active_node_default()
+    local node = core.root_panel:get_active_node_default()
     node:add_view(preview)
 
     test.equal(core.active_view, preview)
     test.not_ok(command.is_valid("markdown-view:view-raw"))
 
-    core.root_view.root_node:get_node_for_view(preview):close_view(core.root_view.root_node, preview)
+    core.root_panel.root_node:get_node_for_view(preview):close_view(core.root_panel.root_node, preview)
   end)
 
   test.test("view raw places doc views according to config.markdown_preview_mode", function(context)
@@ -1924,21 +1924,21 @@ For more detailed instructions visit: https://github.com/dcostap/anvil-editor#bu
 
     for mode, direction in pairs(modes) do
       config.markdown_preview_mode = mode
-      local node = core.root_view:get_active_node_default()
+      local node = core.root_panel:get_active_node_default()
       local preview = MarkdownView(path)
       node:add_view(preview)
-      node = core.root_view.root_node:get_node_for_view(preview)
+      node = core.root_panel.root_node:get_node_for_view(preview)
       node:set_active_view(preview)
 
       command.perform("markdown-view:view-raw")
 
       local raw_view = core.active_view
       test.ok(raw_view:extends(DocView), mode)
-      local raw_node = core.root_view.root_node:get_node_for_view(raw_view)
+      local raw_node = core.root_panel.root_node:get_node_for_view(raw_view)
       if direction == "newtab" then
         test.equal(raw_node, node)
       else
-        local parent = raw_node:get_parent_node(core.root_view.root_node)
+        local parent = raw_node:get_parent_node(core.root_panel.root_node)
         test.not_nil(parent, mode)
         local split_type = (direction == "left" or direction == "right") and "hsplit" or "vsplit"
         local split_child = (direction == "left" or direction == "up") and parent.a or parent.b
@@ -1946,9 +1946,9 @@ For more detailed instructions visit: https://github.com/dcostap/anvil-editor#bu
         test.equal(split_child, raw_node)
       end
 
-      raw_node:close_view(core.root_view.root_node, raw_view)
-      node = core.root_view.root_node:get_node_for_view(preview)
-      node:close_view(core.root_view.root_node, preview)
+      raw_node:close_view(core.root_panel.root_node, raw_view)
+      node = core.root_panel.root_node:get_node_for_view(preview)
+      node:close_view(core.root_panel.root_node, preview)
     end
 
     config.markdown_preview_mode = original_mode

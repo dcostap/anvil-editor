@@ -42,8 +42,32 @@ local command = {}
 ---@type { [string]: core.command.command }
 command.map = {}
 
+---@type table<string, string>
+command.aliases = command.aliases or {}
+
 ---@type core.command.predicate_function
 local always_true = function() return true end
+
+---Register a compatibility alias from one command name to another.
+---Aliases are resolved by `command.perform()` and `command.is_valid()` but are
+---not returned by `command.get_all_valid()`, so deprecated names do not clutter
+---the command picker.
+---@param alias core.command.command_name Deprecated command name.
+---@param target core.command.command_name Canonical command name.
+function command.add_alias(alias, target)
+  command.aliases[alias] = target
+end
+
+local function resolve_alias(name)
+  local seen
+  while command.aliases[name] do
+    seen = seen or {}
+    if seen[name] then return name end
+    seen[name] = true
+    name = command.aliases[name]
+  end
+  return name
+end
 
 local function pack(...)
   return { n = select("#", ...), ... }
@@ -170,10 +194,12 @@ end
 ---@param ... any
 ---@return boolean
 function command.is_valid(name, ...)
+  name = resolve_alias(name)
   return command.map[name] and command.map[name].predicate(...)
 end
 
 local function perform(name, ...)
+  name = resolve_alias(name)
   local cmd = command.map[name]
   if not cmd then return false end
   local res = pack(cmd.predicate(...))

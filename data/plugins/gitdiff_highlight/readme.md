@@ -1,4 +1,4 @@
-# lite-xl git diff highlight plugin
+# anvil git diff highlight plugin
 
 ![screenshot](screenshot.png)
 

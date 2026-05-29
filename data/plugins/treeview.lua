@@ -7,8 +7,8 @@ local keymap = require "core.keymap"
 local style = require "core.style"
 local View = require "core.view"
 local ContextMenu = require "core.contextmenu"
-local RootView = require "core.rootview"
-local CommandView = require "core.commandview"
+local RootPanel = require "core.rootpanel"
+local GlobalPromptBar = require "core.global_prompt_bar"
 local DocView = require "core.docview"
 local ImageView = require "core.imageview"
 local MarkdownView = require "core.markdownview"
@@ -331,14 +331,14 @@ function TreeView:update()
   -- this will make sure hovered_item is updated
   local dy = math.abs(self.last_scroll_y - self.scroll.y)
   if dy > 0 then
-    self:on_mouse_moved(core.root_view.mouse.x, core.root_view.mouse.y, 0, 0)
+    self:on_mouse_moved(core.root_panel.mouse.x, core.root_panel.mouse.y, 0, 0)
     self.last_scroll_y = self.scroll.y
   end
 
   local config = config.plugins.treeview
   if config.highlight_focused_file then
     -- Try to only highlight when we actually change tabs
-    local current_node = core.root_view:get_active_node()
+    local current_node = core.root_panel:get_active_node()
     local current_active_view = core.active_view
     if current_node and not current_node.locked
      and current_active_view ~= self and current_active_view ~= self.last_active_view then
@@ -379,7 +379,7 @@ function TreeView:draw_tooltip()
   local x, y = self.tooltip.x + tooltip_offset, self.tooltip.y + tooltip_offset
   w, h = w + style.padding.x, h + style.padding.y
 
-  if x + w > core.root_view.root_node.size.x then -- check if we can span right
+  if x + w > core.root_panel.root_node.size.x then -- check if we can span right
     x = x - w -- span left instead
   end
 
@@ -488,7 +488,7 @@ function TreeView:draw()
 
   self:draw_scrollbar()
   if self.hovered_item and self.tooltip.x and self.tooltip.alpha > 0 then
-    core.root_view:defer_draw(self.draw_tooltip, self)
+    core.root_panel:defer_draw(self.draw_tooltip, self)
   end
 end
 
@@ -559,13 +559,13 @@ function TreeView:open_doc(filename)
   if ImageView.is_supported(filename) then
     core.open_image(filename)
   else
-    core.root_view:open_doc(core.open_doc(filename))
+    core.root_panel:open_doc(core.open_doc(filename))
   end
 end
 
 -- init
 local view = TreeView()
-local node = core.root_view:get_active_node()
+local node = core.root_panel:get_active_node()
 view.node = node:split("left", view, {x = true}, true)
 
 -- The toolbarview plugin is special because it is plugged inside
@@ -611,17 +611,17 @@ end)
 -- Add a context menu to the treeview
 local menu = ContextMenu()
 
-local on_view_mouse_pressed = RootView.on_view_mouse_pressed
-local on_mouse_moved = RootView.on_mouse_moved
-local root_view_update = RootView.update
-local root_view_draw = RootView.draw
+local on_view_mouse_pressed = RootPanel.on_view_mouse_pressed
+local on_mouse_moved = RootPanel.on_mouse_moved
+local root_panel_update = RootPanel.update
+local root_panel_draw = RootPanel.draw
 
-function RootView:on_mouse_moved(...)
+function RootPanel:on_mouse_moved(...)
   if menu:on_mouse_moved(...) then return end
   on_mouse_moved(self, ...)
 end
 
-function RootView.on_view_mouse_pressed(button, x, y, clicks)
+function RootPanel.on_view_mouse_pressed(button, x, y, clicks)
   -- We give the priority to the menu to process mouse pressed events.
   if button == "right" then
     view.tooltip.alpha = 0
@@ -631,13 +631,13 @@ function RootView.on_view_mouse_pressed(button, x, y, clicks)
   return handled or on_view_mouse_pressed(button, x, y, clicks)
 end
 
-function RootView:update(...)
-  root_view_update(self, ...)
+function RootPanel:update(...)
+  root_panel_update(self, ...)
   menu:update()
 end
 
-function RootView:draw(...)
-  root_view_draw(self, ...)
+function RootPanel:draw(...)
+  root_panel_draw(self, ...)
   menu:draw()
 end
 
@@ -651,7 +651,7 @@ local function is_project_folder(item)
   return item.abs_filename == item.project.path
 end
 
-local function is_primary_project_folder(path)
+local function is_root_project_folder(path)
   return core.root_project().path == path
 end
 
@@ -701,7 +701,7 @@ menu:register(
   function()
     local item = treeitem()
     return core.active_view:is(TreeView) and item
-      and not is_primary_project_folder(item.abs_filename)
+      and not is_root_project_folder(item.abs_filename)
       and is_project_folder(item)
   end,
   {
@@ -729,13 +729,13 @@ command.add(nil, {
 
   ["treeview:toggle-focus"] = function()
     if not core.active_view:is(TreeView) then
-      if core.active_view:is(CommandView) then
+      if core.active_view:is(GlobalPromptBar) then
         previous_view = core.last_active_view
       else
         previous_view = core.active_view
       end
       if not previous_view then
-        previous_view = core.root_view:get_primary_node().active_view
+        previous_view = core.root_panel:get_main_panel().active_view
       end
       core.set_active_view(view)
       if not view.selected_item then
@@ -747,7 +747,7 @@ command.add(nil, {
 
     else
       core.set_active_view(
-        previous_view or core.root_view:get_primary_node().active_view
+        previous_view or core.root_panel:get_main_panel().active_view
       )
     end
   end
@@ -826,7 +826,7 @@ command.add(
 
   ["treeview-context:show"] = function()
     if view.hovered_item then
-      menu:show(core.root_view.mouse.x, core.root_view.mouse.y)
+      menu:show(core.root_panel.mouse.x, core.root_panel.mouse.y)
       return
     end
 
@@ -896,7 +896,7 @@ command.add(
   ["treeview:rename"] = function(item)
     local old_filename = core.normalize_to_project_dir(item.abs_filename)
     local old_abs_filename = item.abs_filename
-    core.command_view:enter("Rename", {
+    core.global_prompt_bar:enter("Rename", {
       text = old_filename,
       submit = function(filename)
         local abs_filename = filename
@@ -939,7 +939,7 @@ command.add(
     else
       path = item.project.path
     end
-    core.command_view:enter("Filename", {
+    core.global_prompt_bar:enter("Filename", {
       text = text,
       submit = function(filename)
         local doc_filename = path .. PATHSEP .. filename
@@ -974,7 +974,7 @@ command.add(
     else
       path = item.project.path
     end
-    core.command_view:enter("Folder Name", {
+    core.global_prompt_bar:enter("Folder Name", {
       text = text,
       submit = function(filename)
         local dir_path = path .. PATHSEP .. filename
@@ -1004,7 +1004,7 @@ command.add(
     return false
   end, {
   ["treeview:open-in-editor"] = function(item)
-    core.root_view:open_doc(core.open_doc(item.abs_filename))
+    core.root_panel:open_doc(core.open_doc(item.abs_filename))
   end
 })
 
@@ -1041,7 +1041,7 @@ end
 command.add(function()
     local item = treeitem()
     return item
-      and not is_primary_project_folder(item.abs_filename)
+      and not is_root_project_folder(item.abs_filename)
       and is_project_folder(item), item
   end, {
   ["treeview:remove-project-directory"] = function(item)

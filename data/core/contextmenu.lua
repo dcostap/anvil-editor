@@ -113,8 +113,8 @@ function ContextMenu:show(x, y)
     local w, h = self.items.width, self.items.height
 
     -- by default the box is opened on the right and below
-    x = common.clamp(x, 0, core.root_view.size.x - w - style.padding.x)
-    y = common.clamp(y, 0, core.root_view.size.y - h)
+    x = common.clamp(x, 0, core.root_panel.size.x - w - style.padding.x)
+    y = common.clamp(y, 0, core.root_panel.size.y - h)
 
     self.position.x, self.position.y = x, y
     self.show_context_menu = true
@@ -269,7 +269,7 @@ function ContextMenu:draw()
     end
     self.current_scale = SCALE
   end
-  core.root_view:defer_draw(self.draw_context_menu, self)
+  core.root_panel:defer_draw(self.draw_context_menu, self)
 end
 
 ---Draws the context menu.

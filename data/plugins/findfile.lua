@@ -5,7 +5,7 @@ local common = require "core.common"
 local command = require "core.command"
 local keymap = require "core.keymap"
 local style = require "core.style"
-local StatusView = require "core.statusview"
+local StatusBar = require "core.statusbar"
 local DocView = require "core.docview"
 
 ---Configuration options for `findfile` plugin.
@@ -102,11 +102,11 @@ end
 
 local function update_suggestions()
   if
-    core.active_view == core.command_view
+    core.active_view == core.global_prompt_bar
     and
-    core.command_view.label == active_find_file_label .. ": "
+    core.global_prompt_bar.label == active_find_file_label .. ": "
   then
-    core.command_view:update_suggestions()
+    core.global_prompt_bar:update_suggestions()
   end
 end
 
@@ -433,7 +433,7 @@ command.add(nil, {
     end
 
     active_find_file_label = label or "Open File From Project"
-    core.command_view:enter(active_find_file_label, {
+    core.global_prompt_bar:enter(active_find_file_label, {
       submit = function(text, suggestion)
         if not suggestion then
           if text == "" then return end
@@ -484,13 +484,13 @@ keymap.add({
 })
 
 
-core.status_view:add_item({
+core.status_bar:add_item({
   predicate = function()
-    return core.active_view == core.command_view
-      and core.command_view.label == active_find_file_label .. ": "
+    return core.active_view == core.global_prompt_bar
+      and core.global_prompt_bar.label == active_find_file_label .. ": "
   end,
   name = "command:find-file-matches",
-  alignment = StatusView.Item.LEFT,
+  alignment = StatusBar.Item.LEFT,
   get_item = function()
     return {
       style.text, style.font, loading_text
@@ -503,23 +503,23 @@ core.status_view:add_item({
   position = 1
 })
 
-core.status_view:add_item({
+core.status_bar:add_item({
   predicate = function()
-    return core.active_view == core.command_view
-      and core.command_view.label == active_find_file_label .. ": "
+    return core.active_view == core.global_prompt_bar
+      and core.global_prompt_bar.label == active_find_file_label .. ": "
       and not coroutine_running
       and config.plugins.findfile.enable_cache
       and #project_files > 0
   end,
   name = "command:find-file-clear-cache",
-  alignment = StatusView.Item.LEFT,
+  alignment = StatusBar.Item.LEFT,
   get_item = function()
     return {
       style.text, style.font, "Refresh Files List"
     }
   end,
   position = 2,
-  separator = StatusView.separator2,
+  separator = StatusBar.separator2,
   command = function()
     command.perform "core:find-file-clear-cache"
     command.perform "core:find-file"

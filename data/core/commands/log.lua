@@ -84,7 +84,7 @@ local function dump_debug_logs()
   fp:write("\n")
 
   dump_file_section(fp, USERDIR .. PATHSEP .. "error.txt", 512 * 1024)
-  dump_file_section(fp, USERDIR .. PATHSEP .. "session.lua", 256 * 1024)
+  dump_file_section(fp, USERDIR .. PATHSEP .. "appstate.lua", 256 * 1024)
 
   write_section(fp, "Recent temp Anvil diagnostic files")
   local files = {}
@@ -116,7 +116,7 @@ end
 command.add(nil, {
   ["log:open-as-doc"] = function()
     local doc = core.open_doc("logs.txt")
-    core.root_view:open_doc(doc)
+    core.root_panel:open_doc(doc)
     doc:insert(1, 1, core.get_log())
     doc.new_file = false
     doc:clean()

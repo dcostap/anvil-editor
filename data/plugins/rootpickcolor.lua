@@ -4,18 +4,18 @@ local common = require "core.common"
 local command = require "core.command"
 local keymap = require "core.keymap"
 local style = require "core.style"
-local RootView = require "core.rootview"
+local RootPanel = require "core.rootpanel"
 
 local cx, cy, pick_color, mode, color = 0, 0, false, "rgb", {0, 0, 0, 255}
 
-local rootview_on_mouse_moved = RootView.on_mouse_moved
-function RootView:on_mouse_moved(x, y, dx, dy)
-  rootview_on_mouse_moved(self, x, y, dx, dy)
+local rootpanel_on_mouse_moved = RootPanel.on_mouse_moved
+function RootPanel:on_mouse_moved(x, y, dx, dy)
+  rootpanel_on_mouse_moved(self, x, y, dx, dy)
   cx, cy = common.round(x), common.round(y)
 end
 
-local rootviewon_mouse_pressed = RootView.on_mouse_pressed
-function RootView:on_mouse_pressed(button, x, y, clicks)
+local rootpanelon_mouse_pressed = RootPanel.on_mouse_pressed
+function RootPanel:on_mouse_pressed(button, x, y, clicks)
   if pick_color and button == "left" then
     pick_color = false
     local c = string.format(
@@ -26,7 +26,7 @@ function RootView:on_mouse_pressed(button, x, y, clicks)
     system.set_clipboard(c)
     return true
   end
-  return rootviewon_mouse_pressed(self, button, x, y, clicks)
+  return rootpanelon_mouse_pressed(self, button, x, y, clicks)
 end
 
 local function draw_color_box()
@@ -41,13 +41,13 @@ local function draw_color_box()
   local by = cy
 
   -- Flip to left of cursor if overflowing right edge
-  if bx + size + border * 2 > core.root_view.size.x then
+  if bx + size + border * 2 > core.root_panel.size.x then
     bx = cx - spacing - size
   end
 
   -- Keep color preview fully visible when reaching window bottom
-  if by + size + border * 2 > core.root_view.size.y then
-    by = core.root_view.size.y - size - border
+  if by + size + border * 2 > core.root_panel.size.y then
+    by = core.root_panel.size.y - size - border
   end
 
   -- Keep color preview fully visible when reaching window top
@@ -64,12 +64,12 @@ local function draw_color_box()
   renderer.draw_rect(bx, by, size, size, color)
 end
 
-local rootview_draw = RootView.draw
-function RootView:draw()
-  rootview_draw(self)
+local rootpanel_draw = RootPanel.draw
+function RootPanel:draw()
+  rootpanel_draw(self)
   if pick_color then
     system.set_cursor("arrow")
-    core.root_view:defer_draw(draw_color_box)
+    core.root_panel:defer_draw(draw_color_box)
   end
 end
 

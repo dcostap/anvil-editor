@@ -48,7 +48,7 @@ local function settings()
 end
 
 local function root_node_for_view(view)
-  local root = core.root_view and core.root_view.root_node
+  local root = core.root_panel and core.root_panel.root_node
   return root and root.get_node_for_view and root:get_node_for_view(view) or nil
 end
 

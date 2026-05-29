@@ -371,8 +371,8 @@ settings.add("Graphics",
       default = false
     },
     {
-      label = "Disable Command View Transitions",
-      path = "disabled_transitions.commandview",
+      label = "Disable Global Prompt Bar Transitions",
+      path = "disabled_transitions.global_prompt_bar",
       type = settings.type.TOGGLE,
       default = false
     },
@@ -532,7 +532,7 @@ settings.add("User Interface",
       on_apply = function(value)
         local mode = config.force_scrollbar_status_mode or "global"
         local globally = mode == "global"
-        local views = core.root_view.root_node:get_children()
+        local views = core.root_panel.root_node:get_children()
         for _, view in ipairs(views) do
           if globally or view:extends(DocView) then
             view.h_scrollbar:set_forced_status(value)
@@ -556,7 +556,7 @@ settings.add("User Interface",
       },
       on_apply = function(value)
         local globally = value == "global"
-        local views = core.root_view.root_node:get_children()
+        local views = core.root_panel.root_node:get_children()
         for _, view in ipairs(views) do
           if globally or view:extends(DocView) then
             view.h_scrollbar:set_forced_status(config.force_scrollbar_status)
@@ -894,9 +894,9 @@ settings.add("Status Bar",
       default = true,
       on_apply = function(enabled)
         if enabled then
-          core.status_view:show()
+          core.status_bar:show()
         else
-          core.status_view:hide()
+          core.status_bar:hide()
         end
       end
     },
@@ -907,7 +907,7 @@ settings.add("Status Bar",
       type = settings.type.TOGGLE,
       default = true,
       on_apply = function(enabled)
-        core.status_view:display_messages(enabled)
+        core.status_bar:display_messages(enabled)
       end
     },
     {
@@ -2171,7 +2171,7 @@ function Settings:setup_about()
 
 local contributors_list = {
   { "Rxi", "Lite Founder", "https://github.com/rxi" },
-  { "Francesco Abbate", "Lite XL Founder", "https://github.com/franko" },
+  { "Francesco Abbate", "Original Editor Founder", "https://github.com/franko" },
   { "jgmdev", "Anvil Founder, Core, Plugins", "https://github.com/jgmdev" },
   { "AmerM137", "Anvil Contributor, Colors, Ninja", "https://github.com/AmerM137" },
   { "juliardi",	"Anvil Contributor, Evangelist", "https://github.com/juliardi" },
@@ -2453,7 +2453,7 @@ end
 ---@param view widget
 local function open_settings_view(view)
   view:show()
-  local node = core.root_view:get_active_node_default()
+  local node = core.root_panel:get_active_node_default()
   node:add_view(view)
   node:set_active_view(view)
 end
@@ -2554,7 +2554,7 @@ end
 command.add(nil, {
   ["ui:settings"] = function()
     settings.ui:show()
-    local node = core.root_view:get_active_node_default()
+    local node = core.root_panel:get_active_node_default()
     local found = false
     for _, view in ipairs(node.views) do
       if view == settings.ui then

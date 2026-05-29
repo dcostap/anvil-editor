@@ -181,7 +181,7 @@ function SS.get_sticky_lines(doc, start_line, max_sticky_lines, level_cache)
   return res
 end
 
--- TODO: Workaround - Remove when lite-xl/lite-xl#1382 is merged and released
+-- TODO: Workaround - Remove when anvil/anvil#1382 is merged and released
 local function get_visible_line_range(dv)
   local _, y, _, y2 = dv:get_content_bounds()
   local lh = dv:get_line_height()

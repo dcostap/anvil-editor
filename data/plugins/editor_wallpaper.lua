@@ -5,7 +5,7 @@ local core = require "core"
 local style = require "core.style"
 local common = require "core.common"
 local DocView = require "core.docview"
-local CommandView = require "core.commandview"
+local GlobalPromptBar = require "core.global_prompt_bar"
 
 local bundled_path = DATADIR .. PATHSEP .. "plugins" .. PATHSEP .. "editor_wallpaper" .. PATHSEP .. "wallpaper.jpg"
 local user_path = USERDIR .. PATHSEP .. "plugins" .. PATHSEP .. "editor_wallpaper" .. PATHSEP .. "wallpaper.jpg"
@@ -53,7 +53,7 @@ end
 local function draw_wallpaper_region(x, y, w, h, opacity)
   renderer.draw_rect(x, y, w, h, style.background)
 
-  local root = core.root_view
+  local root = core.root_panel
   local rw = root and root.size and root.size.x or w
   local rh = root and root.size and root.size.y or h
   local rx = root and root.position and root.position.x or 0

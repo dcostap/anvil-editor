@@ -45,13 +45,14 @@ local DocView = View:extend()
 
 function DocView:__tostring() return "DocView" end
 
-DocView.context = "session"
+DocView.context = "workspace"
 
-local next_selection_session_id = 0
+local next_selection_owner_id = 0
 
 DocView.registry = DocView.registry or setmetatable({}, { __mode = "k" })
 DocView.mirror_owner = DocView.mirror_owner or setmetatable({}, { __mode = "k" })
-DocView.session_views = DocView.session_views or setmetatable({}, { __mode = "v" })
+DocView.owner_views = DocView.owner_views or DocView.session_views or setmetatable({}, { __mode = "v" })
+DocView.session_views = DocView.owner_views -- deprecated compatibility alias
 
 local function copy_array(t)
   local res = {}
@@ -65,9 +66,9 @@ local function pack(...)
   return { n = select("#", ...), ... }
 end
 
-local function new_selection_session_id()
-  next_selection_session_id = next_selection_session_id + 1
-  return next_selection_session_id
+local function new_selection_owner_id()
+  next_selection_owner_id = next_selection_owner_id + 1
+  return next_selection_owner_id
 end
 
 local function selection_count(selections)
@@ -110,11 +111,11 @@ local function ensure_selection_state(state, doc)
 end
 
 local function get_mirror_owner_view(doc)
-  local session_id = DocView.mirror_owner[doc]
-  local view = session_id and DocView.session_views[session_id]
-  if view and view.doc == doc and view.selection_state
-  and view.selection_state.session_id == session_id then
-    return view
+  local owner_id = DocView.mirror_owner[doc]
+  local view = owner_id and DocView.owner_views[owner_id]
+  if view and view.doc == doc and view.selection_state then
+    local view_owner_id = view.selection_state.owner_id or view.selection_state.session_id
+    if view_owner_id == owner_id then return view end
   end
 end
 
@@ -126,9 +127,12 @@ local function register_view(view)
     DocView.registry[doc] = views
   end
   views[view] = true
-  DocView.session_views[view.selection_state.session_id] = view
+  local owner_id = view.selection_state.owner_id or view.selection_state.session_id
+  view.selection_state.owner_id = owner_id
+  view.selection_state.session_id = owner_id -- deprecated compatibility alias
+  DocView.owner_views[owner_id] = view
   if not get_mirror_owner_view(doc) then
-    DocView.mirror_owner[doc] = view.selection_state.session_id
+    DocView.mirror_owner[doc] = owner_id
   end
 end
 
@@ -136,9 +140,15 @@ function DocView.get_doc_mirror_owner_view(doc)
   return get_mirror_owner_view(doc)
 end
 
-function DocView.get_doc_mirror_owner_session_id(doc)
+function DocView.get_doc_mirror_owner_id(doc)
   local view = get_mirror_owner_view(doc)
-  return view and view.selection_state.session_id
+  return view and (view.selection_state.owner_id or view.selection_state.session_id)
+end
+
+---@deprecated Use `DocView.get_doc_mirror_owner_id` instead.
+function DocView.get_doc_mirror_owner_session_id(doc)
+  core.deprecation_log("DocView.get_doc_mirror_owner_session_id")
+  return DocView.get_doc_mirror_owner_id(doc)
 end
 
 function DocView.count_registered_docviews(doc)
@@ -174,14 +184,15 @@ function DocView:get_selection_state()
 end
 
 function DocView:set_selection_state(state)
-  local session_id = self.selection_state and self.selection_state.session_id or new_selection_session_id()
+  local owner_id = self.selection_state and (self.selection_state.owner_id or self.selection_state.session_id) or new_selection_owner_id()
   self.selection_state = normalize_selection_state(self.doc, {
     selections = copy_array(state and state.selections or state),
     last_selection = state and state.last_selection or 1,
-    session_id = session_id,
+    owner_id = owner_id,
   })
-  self.selection_state.session_id = session_id
-  DocView.session_views[session_id] = self
+  self.selection_state.owner_id = owner_id
+  self.selection_state.session_id = owner_id -- deprecated compatibility alias
+  DocView.owner_views[owner_id] = self
   if self.doc.bound_selection_view == self then
     self.doc.selections = self.selection_state.selections
     self.doc.last_selection = self.selection_state.last_selection
@@ -191,19 +202,21 @@ function DocView:set_selection_state(state)
 end
 
 function DocView:capture_selection_state()
-  local session_id = self.selection_state and self.selection_state.session_id or new_selection_session_id()
+  local owner_id = self.selection_state and (self.selection_state.owner_id or self.selection_state.session_id) or new_selection_owner_id()
   if self.selection_state and self.doc.selections == self.selection_state.selections then
     self.selection_state.last_selection = self.doc.last_selection
-    self.selection_state.session_id = session_id
+    self.selection_state.owner_id = owner_id
+    self.selection_state.session_id = owner_id -- deprecated compatibility alias
   else
     self.selection_state = normalize_selection_state(self.doc, {
       selections = copy_array(self.doc.selections),
       last_selection = self.doc.last_selection,
-      session_id = session_id,
+      owner_id = owner_id,
     })
-    self.selection_state.session_id = session_id
+    self.selection_state.owner_id = owner_id
+    self.selection_state.session_id = owner_id -- deprecated compatibility alias
   end
-  DocView.session_views[session_id] = self
+  DocView.owner_views[owner_id] = self
 end
 
 function DocView:apply_selection_state()
@@ -213,8 +226,11 @@ function DocView:apply_selection_state()
 end
 
 function DocView:become_selection_mirror_owner()
-  DocView.mirror_owner[self.doc] = self.selection_state.session_id
-  DocView.session_views[self.selection_state.session_id] = self
+  local owner_id = self.selection_state.owner_id or self.selection_state.session_id
+  self.selection_state.owner_id = owner_id
+  self.selection_state.session_id = owner_id -- deprecated compatibility alias
+  DocView.mirror_owner[self.doc] = owner_id
+  DocView.owner_views[owner_id] = self
   if not self.doc.bound_selection_view then
     self:apply_selection_state()
   end
@@ -309,7 +325,7 @@ function DocView:with_selection_state(fn, ...)
   local old_selections = doc.selections
   local old_last_selection = doc.last_selection
   local old_bound_view = doc.bound_selection_view
-  local old_bound_session_id = doc.bound_selection_session_id
+  local old_bound_owner_id = doc.bound_selection_owner_id or doc.bound_selection_session_id
 
   -- If a nested binding suspends another view, make that view's owned state
   -- point at its current live compatibility table before it is hidden.  This
@@ -318,8 +334,9 @@ function DocView:with_selection_state(fn, ...)
   if old_bound_view and old_bound_view.selection_state then
     old_bound_view.selection_state.selections = old_selections
     old_bound_view.selection_state.last_selection = old_last_selection
-    old_bound_view.selection_state.session_id = old_bound_session_id
-      or old_bound_view.selection_state.session_id
+    old_bound_view.selection_state.owner_id = old_bound_owner_id
+      or old_bound_view.selection_state.owner_id
+    old_bound_view.selection_state.session_id = old_bound_view.selection_state.owner_id
   end
 
   local stack = doc.__selection_binding_stack or {}
@@ -332,12 +349,14 @@ function DocView:with_selection_state(fn, ...)
   }
 
   self.selection_state = ensure_selection_state(self.selection_state, doc)
-  if not self.selection_state.session_id then
-    self.selection_state.session_id = new_selection_session_id()
+  if not self.selection_state.owner_id then
+    self.selection_state.owner_id = self.selection_state.session_id or new_selection_owner_id()
   end
-  DocView.session_views[self.selection_state.session_id] = self
+  self.selection_state.session_id = self.selection_state.owner_id -- deprecated compatibility alias
+  DocView.owner_views[self.selection_state.owner_id] = self
   doc.bound_selection_view = self
-  doc.bound_selection_session_id = self.selection_state.session_id
+  doc.bound_selection_owner_id = self.selection_state.owner_id
+  doc.bound_selection_session_id = self.selection_state.owner_id -- deprecated compatibility alias
   doc.selections = self.selection_state.selections
   doc.last_selection = self.selection_state.last_selection
 
@@ -361,7 +380,8 @@ function DocView:with_selection_state(fn, ...)
   doc.selections = restore_selections
   doc.last_selection = restore_last_selection
   doc.bound_selection_view = old_bound_view
-  doc.bound_selection_session_id = old_bound_session_id
+  doc.bound_selection_owner_id = old_bound_owner_id
+  doc.bound_selection_session_id = old_bound_owner_id
 
   local mirror_ok, mirror_err = true, nil
   if not old_bound_view then
@@ -431,10 +451,12 @@ function DocView:new(doc)
   self.cursor = "ibeam"
   self.scrollable = true
   self.doc = assert(doc)
+  local owner_id = new_selection_owner_id()
   self.selection_state = normalize_selection_state(self.doc, {
     selections = copy_array(self.doc.selections),
     last_selection = self.doc.last_selection,
-    session_id = new_selection_session_id(),
+    owner_id = owner_id,
+    session_id = owner_id, -- deprecated compatibility alias
   })
   register_view(self)
   self.doc.cache.col_x = {}
@@ -502,7 +524,7 @@ end
 function DocView:try_close(do_close)
   if self.doc:is_dirty()
   and #core.get_views_referencing_doc(self.doc) == 1 then
-    core.command_view:enter("Unsaved Changes; Confirm Close", {
+    core.global_prompt_bar:enter("Unsaved Changes; Confirm Close", {
       submit = function(_, item)
         if item.text:match("^[cC]") then
           do_close()

@@ -154,7 +154,7 @@ local function save_workspace()
   while id_list[id] do
     id = id + 1
   end
-  local root = get_unlocked_root(core.root_view.root_node)
+  local root = get_unlocked_root(core.root_panel.root_node)
   storage.save(STORAGE_MODULE, project_dir .. "-" .. id, {
     path = core.root_project().path,
     documents = save_node(root),
@@ -164,9 +164,9 @@ local function save_workspace()
 end
 
 
-local function primary_workspace_is_empty()
-  local primary = core.root_view and core.root_view:get_primary_node()
-  return primary and primary:is_empty() and #core.docs == 0
+local function main_panel_workspace_is_empty()
+  local main_panel = core.root_panel and core.root_panel:get_main_panel()
+  return main_panel and main_panel:is_empty() and #core.docs == 0
 end
 
 local function maybe_show_empty_project_file_tree()
@@ -175,7 +175,7 @@ local function maybe_show_empty_project_file_tree()
   -- tree so a newly opened empty workspace has an obvious next action.
   coroutine.yield()
   coroutine.yield()
-  if primary_workspace_is_empty() and command.is_valid("editree:focus-and-show") then
+  if main_panel_workspace_is_empty() and command.is_valid("editree:focus-and-show") then
     command.perform("editree:focus-and-show")
   end
 end
@@ -187,7 +187,7 @@ local function load_workspace()
       if workspace.visited_files then
         core.visited_files = workspace.visited_files
       end
-      local root = get_unlocked_root(core.root_view.root_node)
+      local root = get_unlocked_root(core.root_panel.root_node)
       local active_view = load_node(root, workspace.documents)
       if active_view then
         core.set_active_view(active_view)
