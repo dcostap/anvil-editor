@@ -666,7 +666,7 @@ local function wrap_root_tab_switch(name, delta)
   if not base or base.__sidepanel_wrapped then return end
 
   command.add(function(...)
-    if M.is_side_view(core.active_view) then return true, "sidepanel" end
+    if M.is_side_view(core.active_view) or side_focus_owner(core.active_view) then return true, "sidepanel" end
     local result = { base.predicate(...) }
     if table.remove(result, 1) then
       if #result > 0 then
