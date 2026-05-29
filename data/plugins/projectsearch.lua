@@ -1071,7 +1071,10 @@ function ResultsView:open_selected_result()
     local l, c1, c2 = item.line.line, item.position.col1, item.position.col2+1
     dv.doc:set_selection(l, c2, l, c1)
     dv.doc:add_search_selection(l, c2, l, c1)
-    dv:scroll_to_make_visible(l, c1, true)
+    dv:scroll_to_make_visible(l, c1, true, {
+      line2 = l,
+      col2 = c2,
+    })
     if self.is_global then core.set_active_view(self) end
   end)
   return true

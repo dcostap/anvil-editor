@@ -863,40 +863,75 @@ function DocView:supports_text_input()
 end
 
 
----Scroll to make a position visible with context padding.
----Ensures the position is visible with surrounding context lines.
+---Scroll to make a position or text range visible with context padding.
+---Ensures the position is visible with surrounding context lines. When a same-line
+---range is provided in opts, horizontal scrolling keeps the full range visible
+---with best-effort grace padding and resets to the baseline when the range fits
+---from horizontal scroll 0.
 ---@param line integer Line number
 ---@param col integer Column number
 ---@param instant? boolean Jump immediately without animation
-function DocView:scroll_to_make_visible(line, col, instant)
-  local _, oy = self:get_content_offset()
-  local _, ly = self:get_line_screen_position(line, col)
-  local lh = self:get_line_height()
-  local _, _, _, scroll_h = self.h_scrollbar:get_track_rect()
+---@param opts? table Optional range/scroll options
+function DocView:scroll_to_make_visible(line, col, instant, opts)
+  opts = opts or {}
+  if opts.vertical ~= false then
+    local _, oy = self:get_content_offset()
+    local _, ly = self:get_line_screen_position(line, col)
+    local lh = self:get_line_height()
+    local _, _, _, scroll_h = self.h_scrollbar:get_track_rect()
 
-  local minline, maxline = self:get_visible_line_range()
-  local visible_lines = maxline - minline
+    local minline, maxline = self:get_visible_line_range()
+    local visible_lines = maxline - minline
 
-  local requested_pad = config.scroll_context_lines
-  local max_pad = math.floor(visible_lines / 2)
-  local pad = not self.mouse_selecting and math.min(requested_pad, max_pad) or 1
-  local above = math.max(0, ly - oy - lh * pad)
-  local below = ly - oy - self.size.y + scroll_h + lh * (pad + 1)
+    local requested_pad = config.scroll_context_lines
+    local max_pad = math.floor(visible_lines / 2)
+    local pad = not self.mouse_selecting and math.min(requested_pad, max_pad) or 1
+    local above = math.max(0, ly - oy - lh * pad)
+    local below = ly - oy - self.size.y + scroll_h + lh * (pad + 1)
 
-  self.scroll.to.y = common.clamp(self.scroll.to.y, below, above)
+    self.scroll.to.y = common.clamp(self.scroll.to.y, below, above)
+  end
 
   local gw = self:get_gutter_width()
-  local xoffset = self:get_col_x_offset(line, col)
-  local xmargin = 3 * self:get_font():get_width(' ')
-  local xsup = xoffset + gw + xmargin
-  local xinf = xoffset - xmargin
   local _, _, scroll_w = self.v_scrollbar:get_track_rect()
   local size_x = math.max(0, self.size.x - scroll_w)
+  local line2, col2 = opts.line2, opts.col2
+  local range_line = line2 == line and col2 and line
+  local xmargin = opts.horizontal_grace
+  if xmargin == nil then
+    if range_line then
+      xmargin = math.min(80 * (SCALE or 1), size_x * 0.25)
+    else
+      xmargin = 3 * self:get_font():get_width(' ')
+    end
+  end
 
-  if xsup > self.scroll.x + size_x then
-    self.scroll.to.x = xsup - size_x
-  elseif xinf < self.scroll.x then
-    self.scroll.to.x = math.max(0, xinf)
+  local xinf, xsup
+  if range_line then
+    local x1 = self:get_col_x_offset(line, math.min(col, col2)) + gw
+    local x2 = self:get_col_x_offset(line, math.max(col, col2)) + gw
+    xinf, xsup = math.min(x1, x2), math.max(x1, x2)
+  else
+    local xoffset = self:get_col_x_offset(line, col)
+    xsup = xoffset + gw
+    xinf = xoffset
+  end
+
+  local desired_left = math.max(0, xinf - xmargin)
+  local desired_right = xsup + xmargin
+  if range_line and opts.reset_x_if_fits_at_zero ~= false and desired_right <= size_x then
+    self.scroll.to.x = 0
+  else
+    local current_x = self.scroll.to.x or self.scroll.x or 0
+    if (xsup + xmargin) > current_x + size_x then
+      if xsup - xinf > size_x then
+        self.scroll.to.x = desired_left
+      else
+        self.scroll.to.x = math.max(0, xsup + xmargin - size_x)
+      end
+    elseif desired_left < current_x then
+      self.scroll.to.x = desired_left
+    end
   end
 
   if instant then

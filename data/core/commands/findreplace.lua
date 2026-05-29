@@ -42,6 +42,11 @@ local function update_preview(sel, search_fn, text)
     if ok and line1 and text ~= "" then
       last_view.doc:set_selection(line2, col2, line1, col1)
       last_view:scroll_to_line(line2, true)
+      last_view:scroll_to_make_visible(line1, col1, false, {
+        line2 = line2,
+        col2 = col2,
+        vertical = false,
+      })
       found_expression = true
     else
       last_view.doc:set_selection(table.unpack(sel))
@@ -193,7 +198,10 @@ local function select_add_next(all)
       if l2 and not is_in_any_selection(l2, c2) then
         doc():add_selection(l2, c2, l1, c1)
         if not all then
-          core.active_view:scroll_to_make_visible(l2, c2)
+          core.active_view:scroll_to_make_visible(l1, c1, nil, {
+            line2 = l2,
+            col2 = c2,
+          })
           return
         end
       end
@@ -210,7 +218,13 @@ local function select_next(reverse)
   else
     l1, c1, l2, c2 = search.find(doc(), l2, c2, text, { wrap = true })
   end
-  if l2 then doc():set_selection(l2, c2, l1, c1) end
+  if l2 then
+    doc():set_selection(l2, c2, l1, c1)
+    core.active_view:scroll_to_make_visible(l1, c1, nil, {
+      line2 = l2,
+      col2 = c2,
+    })
+  end
 end
 
 ---@param in_selection? boolean whether to replace in the selections only, or in the whole file.
@@ -290,6 +304,11 @@ command.add(valid_for_finding, {
       if line1 then
         dv.doc:set_selection(line2, col2, line1, col1)
         dv:scroll_to_line(line2, true)
+        dv:scroll_to_make_visible(line1, col1, false, {
+          line2 = line2,
+          col2 = col2,
+          vertical = false,
+        })
       else
         core.error("Couldn't find %q", last_text)
       end
@@ -305,6 +324,11 @@ command.add(valid_for_finding, {
       if line1 then
         dv.doc:set_selection(line2, col2, line1, col1)
         dv:scroll_to_line(line2, true)
+        dv:scroll_to_make_visible(line1, col1, false, {
+          line2 = line2,
+          col2 = col2,
+          vertical = false,
+        })
       else
         core.error("Couldn't find %q", last_text)
       end
