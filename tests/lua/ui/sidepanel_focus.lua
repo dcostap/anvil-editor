@@ -563,4 +563,85 @@ test.describe("sidepanel focus", function()
     test.ok(command.perform("user:find-field-next"))
     test.equal(main_find.local_find_state.current, (main_navigated_match % 3) + 1)
   end)
+
+  test.it("restores main replace input after side focus switches", function(context)
+    local main_view, side_view = setup_main_and_side(context)
+
+    core.set_active_view(main_view)
+    test.ok(command.perform("find-replace:replace"))
+    local main_find = active_find_input_for(main_view)
+    main_find.__test_name = "local find input for main DocView"
+    type_into_active_view("alpha")
+
+    test.ok(command.perform("user:find-toggle-replace-field"))
+    local main_replace = active_find_input_for(main_view)
+    main_replace.__test_name = "local replace input for main DocView"
+    test.equal(main_replace.local_find_field, "replace")
+    type_into_active_view("omega")
+    set_selection(main_replace, 1, 2, 1, 5)
+    local expected_replace_selection = selection_state(main_replace)
+
+    test.ok(command.perform("sidepanel:toggle-focus"))
+    assert_active_view(side_view, "expected toggle away from main replace input to focus side DocView")
+    test.ok(command.perform("sidepanel:toggle-focus"))
+
+    assert_active_view(main_replace, "expected toggling back to restore main replace input")
+    test.equal(main_find:get_text(), "alpha")
+    test.equal(main_replace:get_text(), "omega")
+    test.same(selection_state(main_replace), expected_replace_selection)
+  end)
+
+  test.it("main and side find options remain independent for the same document", function(context)
+    local doc = new_doc(context, "Alpha alpha beta\n")
+    local main_view = track(context, "views", core.root_panel:open_doc(doc))
+    main_view.__test_name = "main shared DocView"
+    core.set_active_view(main_view)
+
+    local side_view = track(context, "side_views", sidepanel.open_doc_in_side(doc, {
+      focus = false,
+      restore_focus = main_view,
+    }))
+    side_view.__test_name = "side shared DocView"
+    track(context, "views", side_view)
+
+    local main_find = open_find_input(main_view)
+    main_find.__test_name = "local find input for main shared DocView"
+    type_into_active_view("alpha")
+    test.equal(main_find.local_find_state.case_sensitive, false)
+    test.equal(main_find.local_find_state.regex, false)
+    test.ok(command.perform("find-replace:toggle-sensitivity"))
+    test.ok(command.perform("find-replace:toggle-regex"))
+    test.equal(main_find.local_find_state.case_sensitive, true)
+    test.equal(main_find.local_find_state.regex, true)
+
+    test.ok(command.perform("sidepanel:toggle-focus"))
+    assert_active_view(side_view, "expected toggle to focus side shared DocView")
+    local side_find = open_find_input(side_view)
+    side_find.__test_name = "local find input for side shared DocView"
+    type_into_active_view("alpha")
+
+    test.equal(side_find.local_find_state.case_sensitive, false)
+    test.equal(side_find.local_find_state.regex, false)
+    test.equal(main_find.local_find_state.case_sensitive, true)
+    test.equal(main_find.local_find_state.regex, true)
+  end)
+
+  test.it("closing a main find input prevents it from being restored after side focus", function(context)
+    local main_view, side_view = setup_main_and_side(context)
+
+    local main_find = open_find_input(main_view)
+    main_find.__test_name = "local find input for main DocView"
+    type_into_active_view("alpha")
+
+    test.ok(command.perform("user:find-close"))
+    assert_active_view(main_view, "expected closing main find to focus its owning DocView")
+    test.equal(main_find.local_find_state.visible, false)
+
+    test.ok(command.perform("sidepanel:toggle-focus"))
+    assert_active_view(side_view, "expected toggle from main DocView to focus side DocView")
+    test.ok(command.perform("sidepanel:toggle-focus"))
+
+    assert_active_view(main_view, "expected toggling back to restore main DocView, not its closed find input")
+    test.equal(main_find.local_find_state.visible, false)
+  end)
 end)
