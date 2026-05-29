@@ -140,6 +140,10 @@ local function is_docview(view)
   return view and view.extends and view:extends(DocView)
 end
 
+local function is_side_docview(view)
+  return is_docview(view) and view.__sidepanel_docview == true
+end
+
 local function side_focus_owner(view)
   if M.is_side_view(view) then return view end
   local owner = view and view.__sidepanel_focus_owner
@@ -219,7 +223,7 @@ end
 
 function M.remember_docview_focus_owner(view)
   local owner = docview_focus_owner(view)
-  if owner and is_docview(owner) then
+  if owner and (M.is_main_panel_view(owner) or is_side_docview(owner)) then
     M.last_docview_focus_owner = owner
   end
   return owner
@@ -228,7 +232,7 @@ end
 function M.last_restorable_docview_focus_owner()
   local owner = M.last_docview_focus_owner
   if owner and M.is_side_view(owner) then
-    if is_docview(owner) and M.contains_view(owner) then return owner end
+    if is_side_docview(owner) and M.contains_view(owner) then return owner end
   elseif owner and is_docview(owner) then
     return file_context.current_main_panel_view(owner) or owner
   end
@@ -389,18 +393,18 @@ function M.restorable_side_docview()
   M.prune_stale_views()
   local side = M.ensure_side_node()
   local active = side and side.active_view
-  if is_docview(active) and M.is_side_view(active) then return active end
-  if is_docview(M.last_side_focus_owner) and M.contains_view(M.last_side_focus_owner) then
+  if is_side_docview(active) and M.is_side_view(active) then return active end
+  if is_side_docview(M.last_side_focus_owner) and M.contains_view(M.last_side_focus_owner) then
     return M.last_side_focus_owner
   end
-  if is_docview(M.file_view) and M.contains_view(M.file_view) then return M.file_view end
+  if is_side_docview(M.file_view) and M.contains_view(M.file_view) then return M.file_view end
   if side then
     -- Side DocViews are removable panels; if a non-DocView panel is active,
     -- Alt+1 can still restore the newest remaining Side DocView instead of
     -- treating the Side Panel as only a persistent tool panel.
     for i = #(side.views or {}), 1, -1 do
       local view = side.views[i]
-      if is_docview(view) and M.is_side_view(view) then return view end
+      if is_side_docview(view) and M.is_side_view(view) then return view end
     end
   end
 end
@@ -547,7 +551,7 @@ end
 
 function M.close_active_side_docview_or_hide()
   local owner = side_focus_owner(core.active_view)
-  if is_docview(owner) and M.contains_view(owner) then
+  if is_side_docview(owner) and M.contains_view(owner) then
     local function close_side_docview()
       core.log_quiet("Side panel: closed Side DocView")
       M.remove_view(owner, false)
@@ -657,10 +661,12 @@ local function set_side_file_doc(doc, opts)
   if view and not M.contains_view(view) then view = nil end
   if not view or view.doc ~= doc then
     view = DocView(doc)
+    view.__sidepanel_docview = true
     M.file_view = view
     M.file_view_path = doc.abs_filename
     M.register_panel("file", view)
   else
+    view.__sidepanel_docview = true
     M.attach_view("file", view)
     M.add_view(view)
   end

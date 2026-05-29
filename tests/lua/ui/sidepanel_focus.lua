@@ -1,5 +1,6 @@
 local core = require "core"
 local command = require "core.command"
+local keymap = require "core.keymap"
 local sidepanel = require "core.sidepanel"
 local test = require "core.test"
 local DocView = require "core.docview"
@@ -51,6 +52,7 @@ local function register_side_docview(context, name, text)
   local doc = new_doc(context, text)
   local view = track(context, "side_views", DocView(doc))
   view.__test_name = name .. " DocView"
+  view.__sidepanel_docview = true
   sidepanel.register_panel(name, view)
   track(context, "views", view)
   return view, doc
@@ -842,5 +844,26 @@ test.describe("sidepanel focus", function()
 
     assert_active_view(main_view, "expected toggling back to restore main DocView, not its closed find input")
     test.equal(main_find.local_find_state.visible, false)
+  end)
+
+  test.it("alt+1 hides the Editree file tree and focuses the main DocView", function(context)
+    local main_view = open_main_docview(context, "main alpha beta\n")
+    main_view.__test_name = "main DocView"
+    core.set_active_view(main_view)
+
+    local editree = require "plugins.editree"
+    track(context, "side_views", editree)
+    editree.__test_name = "Editree file tree"
+    sidepanel.register_panel("editree", editree)
+    sidepanel.show("editree", { focus = true })
+    assert_active_view(editree, "expected Editree file tree before alt+1")
+
+    keymap.modkeys.alt = true
+    local performed = keymap.on_key_pressed("1")
+    keymap.modkeys.alt = false
+
+    test.ok(performed, "expected alt+1 keymap to perform a command")
+    test.equal(sidepanel.visible, false)
+    assert_active_view(main_view, "expected alt+1 to hide Editree and focus the main DocView")
   end)
 end)
