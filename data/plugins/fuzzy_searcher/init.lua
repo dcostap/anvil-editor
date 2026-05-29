@@ -1990,6 +1990,7 @@ function FSView:update_preview_view()
     target = common.clamp(target, 1, #view.doc.lines)
     local highlight_key = table.concat({ r.kind or "", r.grep_query or "", r.fuzzy_query or "", tostring(target), r.text or "" }, "\0")
     if self.preview_target_line ~= target or self.preview_highlight_key ~= highlight_key then
+      local reveal_col1, reveal_col2
       view:with_selection_state(function()
         view.doc:clear_search_selections()
         local selections = {}
@@ -1997,6 +1998,7 @@ function FSView:update_preview_view()
           for _, span in ipairs(grep_content_spans(view.doc.lines[target] or "", r, 0, target) or {}) do
             local col1, col2 = span[1], span[2] + 1
             view.doc:add_search_selection(target, col1, target, col2)
+            if not reveal_col1 then reveal_col1, reveal_col2 = col1, col2 end
             table.insert(selections, target)
             table.insert(selections, col1)
             table.insert(selections, target)
@@ -2018,6 +2020,13 @@ function FSView:update_preview_view()
         end
       end)
       view:scroll_to_line(target, false, true)
+      if reveal_col1 then
+        view:scroll_to_make_visible(target, reveal_col1, true, {
+          line2 = target,
+          col2 = reveal_col2,
+          vertical = false,
+        })
+      end
       self.preview_target_line = target
       self.preview_highlight_key = highlight_key
     end
