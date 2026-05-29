@@ -506,6 +506,78 @@ test.describe("sidepanel focus", function()
     test.equal(side_view.scroll.y, 22)
   end)
 
+  test.it("open-current-file from side DocView opens it in main and copies position", function(context)
+    local main_view, side_view = setup_main_and_side(context)
+
+    test.ok(command.perform("sidepanel:toggle-focus"))
+    assert_active_view(side_view, "expected side DocView before opening in main")
+    set_selection(side_view, 1, 6, 1, 11)
+    side_view.scroll.x, side_view.scroll.to.x = 17, 17
+    side_view.scroll.y, side_view.scroll.to.y = 31, 31
+    local expected_selection = side_view:get_selection_state()
+
+    test.ok(command.perform("sidepanel:open-current-file"))
+    local opened = core.active_view
+    opened.__test_name = "main copy of side DocView"
+    track(context, "views", opened)
+
+    test.equal(sidepanel.visible, true)
+    test.ok(not sidepanel.is_side_view(opened), "expected opened view to be in the main panel")
+    test.ok(opened.doc == side_view.doc, "expected opened main DocView to share the side document")
+    test.same(opened:get_selection_state(), expected_selection)
+    test.equal(opened.scroll.x, 17)
+    test.equal(opened.scroll.y, 31)
+    test.ok(opened ~= main_view, "expected side document to open as a main panel tab")
+  end)
+
+  test.it("open-current-file from side find input opens owner in main", function(context)
+    local main_view, side_view = setup_main_and_side(context)
+
+    test.ok(command.perform("sidepanel:toggle-focus"))
+    local side_find = open_find_input(side_view)
+    type_into_active_view("alpha")
+    set_selection(side_view, 1, 7, 1, 11)
+    local expected_selection = side_view:get_selection_state()
+
+    test.ok(command.perform("sidepanel:open-current-file"))
+    local opened = core.active_view
+    opened.__test_name = "main copy of side find owner"
+    track(context, "views", opened)
+
+    test.ok(not opened.local_find_input, "expected command to focus the main DocView, not a find input")
+    test.ok(opened.doc == side_view.doc, "expected opened main DocView to share the side find owner document")
+    test.same(opened:get_selection_state(), expected_selection)
+    test.equal(side_find.local_find_state.visible, true)
+    test.equal(side_find:get_text(), "alpha")
+    test.ok(opened ~= main_view, "expected side document to open as a main panel tab")
+  end)
+
+  test.it("open-current-file from side DocView reuses existing main view and copies position", function(context)
+    local doc = new_doc(context, "shared one\nshared two\n")
+    local main_view = track(context, "views", core.root_panel:open_doc(doc))
+    main_view.__test_name = "existing main shared DocView"
+    core.set_active_view(main_view)
+
+    local side_view = track(context, "side_views", sidepanel.open_doc_in_side(doc, {
+      focus = true,
+      restore_focus = main_view,
+    }))
+    side_view.__test_name = "side shared DocView"
+    track(context, "views", side_view)
+
+    set_selection(side_view, 2, 3, 2, 9)
+    side_view.scroll.x, side_view.scroll.to.x = 23, 23
+    side_view.scroll.y, side_view.scroll.to.y = 47, 47
+    local expected_selection = side_view:get_selection_state()
+
+    test.ok(command.perform("sidepanel:open-current-file"))
+
+    assert_active_view(main_view, "expected command to reuse and focus existing main DocView")
+    test.same(main_view:get_selection_state(), expected_selection)
+    test.equal(main_view.scroll.x, 23)
+    test.equal(main_view.scroll.y, 47)
+  end)
+
   test.it("continues editing and navigating a side find field after focus switches", function(context)
     local main_view, side_view = setup_main_and_side(context)
     side_view.doc:remove(1, 1, math.huge, math.huge)

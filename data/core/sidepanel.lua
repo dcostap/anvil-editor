@@ -621,11 +621,19 @@ function M.open_path_in_side(path, opts)
   end
 end
 
-function M.open_path_in_main(path, opts)
+function M.open_doc_in_main(doc, opts)
   opts = opts or {}
-  local restore = opts.preserve_focus and core.active_view or opts.restore_focus
-  local view = core.open_file(path)
-  if opts.line and view and view.doc then
+  if not doc then return nil end
+
+  local main_panel = core.root_panel and core.root_panel:get_main_panel()
+  if not main_panel then return nil end
+
+  local view = core.root_panel:open_doc(doc, { node = main_panel, source_view = opts.source_view })
+  if opts.source_view then
+    copy_docview_position(opts.source_view, view)
+  end
+
+  if opts.line then
     local col = opts.col or 1
     if view.with_selection_state then
       view:with_selection_state(function()
@@ -635,6 +643,32 @@ function M.open_path_in_main(path, opts)
       view.doc:set_selection(opts.line, col, opts.line, col)
     end
     view:scroll_to_make_visible(opts.line, col)
+  end
+
+  if opts.focus ~= false then
+    core.set_active_view(view)
+  end
+  return view
+end
+
+function M.open_path_in_main(path, opts)
+  opts = opts or {}
+  local restore = opts.preserve_focus and core.active_view or opts.restore_focus
+  local view
+  if ImageView.is_supported(path) then
+    view = core.open_file(path)
+  else
+    local ok, doc = core.try(core.open_doc, path)
+    if ok and doc then
+      view = M.open_doc_in_main(doc, {
+        source_view = opts.source_view,
+        line = opts.line,
+        col = opts.col,
+        focus = opts.preserve_focus == true and false or true,
+      })
+    else
+      view = core.open_file(path)
+    end
   end
   if restore and opts.preserve_focus ~= false then
     core.set_active_view(restore)
@@ -667,7 +701,14 @@ command.add(nil, {
     M.hide(true)
   end,
   ["sidepanel:open-current-file"] = function()
-    local view = M.current_main_panel_view(core.active_view)
+    local active = core.active_view
+    local side_owner = side_focus_owner(active)
+    if side_owner and side_owner.extends and side_owner:extends(DocView) and side_owner.doc then
+      M.open_doc_in_main(side_owner.doc, { source_view = side_owner, focus = true })
+      return true
+    end
+
+    local view = M.current_main_panel_view(active)
     if not view or not view.extends or not view:extends(DocView) or not view.doc then return false end
     M.open_doc_in_side(view.doc, { source_view = view, focus = true })
     return true
