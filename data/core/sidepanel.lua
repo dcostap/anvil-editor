@@ -200,7 +200,10 @@ end
 function restorable_focus_view(view, owner)
   if view and view.local_find_input then
     local state = view.local_find_state
-    if not (state and state.visible and state.input_active) then return nil end
+    if not (state and state.visible) then return nil end
+    if owner and state.owner_view and state.owner_view ~= owner then return nil end
+    state.input_active = true
+    state.focus = view.local_find_field or state.focus
   end
   if owner and view and view.__sidepanel_focus_owner and view.__sidepanel_focus_owner ~= owner then return nil end
   return view
