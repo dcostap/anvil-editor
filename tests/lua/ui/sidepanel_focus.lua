@@ -3,6 +3,7 @@ local command = require "core.command"
 local sidepanel = require "core.sidepanel"
 local test = require "core.test"
 local DocView = require "core.docview"
+local View = require "core.view"
 
 require "plugins.intellij_find"
 
@@ -135,13 +136,27 @@ test.describe("sidepanel focus", function()
       end
     end
 
+    local side_node = sidepanel.ensure_side_node()
+    if side_node then
+      for i = #(side_node.views or {}), 1, -1 do
+        local view = side_node.views[i]
+        if view and not view.__sidepanel_placeholder then
+          sidepanel.remove_view(view, false)
+        end
+      end
+    end
+
     for _, doc in ipairs(context.docs or {}) do
       remove_doc(doc)
     end
 
+    sidepanel.file_view = nil
+    sidepanel.file_view_path = nil
+    sidepanel.current_panel = nil
     sidepanel.last_side_focus_view = nil
     sidepanel.last_side_focus_owner = nil
     sidepanel.side_focus_views = setmetatable({}, { __mode = "k" })
+    sidepanel.last_docview_focus_owner = nil
     sidepanel.hide(false)
     local main_panel = core.root_panel:get_main_panel()
     if main_panel and main_panel.active_view then
@@ -171,7 +186,7 @@ test.describe("sidepanel focus", function()
     assert_active_view(main_view, "expected main DocView after toggling from side DocView")
   end)
 
-  test.it("leaves a side DocView find input open when toggling focus back to main", function(context)
+  test.it("closes a side DocView prompt bar when toggling focus back to main", function(context)
     local main_view, side_view = setup_main_and_side(context)
 
     test.ok(command.perform("sidepanel:toggle-focus"))
@@ -185,12 +200,12 @@ test.describe("sidepanel focus", function()
     test.ok(command.perform("sidepanel:toggle-focus"))
 
     assert_active_view(main_view, "expected sidepanel toggle from side find input to focus main DocView")
-    test.equal(side_find.local_find_state.visible, true)
+    test.equal(side_find.local_find_state.visible, false)
     test.equal(side_find:get_text(), "side-query")
     test.same(selection_state(side_find), expected_selection)
   end)
 
-  test.it("restores the side DocView find input when toggling back from main find", function(context)
+  test.it("does not restore side or main prompt bars after focus leaves them", function(context)
     local main_view, side_view = setup_main_and_side(context)
 
     local side_find = open_find_input(side_view)
@@ -198,24 +213,22 @@ test.describe("sidepanel focus", function()
     set_selection(side_find, 1, 2, 1, 6)
     local expected_side_selection = selection_state(side_find)
 
-    -- This simulates the desired state after toggling away from the side panel:
-    -- the side find bar is still visible and stateful, while focus is in main.
     core.set_active_view(main_view)
-    test.equal(side_find.local_find_state.visible, true)
+    test.equal(side_find.local_find_state.visible, false)
 
     local main_find = open_find_input(main_view)
     type_into_active_view("main-query")
 
     test.ok(command.perform("sidepanel:toggle-focus"))
 
-    assert_active_view(side_find, "expected sidepanel toggle from main find input to restore side find input")
+    assert_active_view(side_view, "expected toggle from main find input to close it and focus the Side DocView")
     test.equal(side_find:get_text(), "side-query")
     test.same(selection_state(side_find), expected_side_selection)
-    test.equal(main_find.local_find_state.visible, true)
+    test.equal(main_find.local_find_state.visible, false)
     test.equal(main_find:get_text(), "main-query")
   end)
 
-  test.it("restores the side DocView replace input field", function(context)
+  test.it("does not restore the side DocView replace input field after focus leaves it", function(context)
     local main_view, side_view = setup_main_and_side(context)
 
     test.ok(command.perform("sidepanel:toggle-focus"))
@@ -238,13 +251,13 @@ test.describe("sidepanel focus", function()
     assert_active_view(main_view, "expected toggle from side replace input to focus main DocView")
 
     test.ok(command.perform("sidepanel:toggle-focus"))
-    assert_active_view(side_replace, "expected toggling back to restore side replace input")
+    assert_active_view(side_view, "expected toggling back to restore side DocView, not the closed replace input")
     test.equal(side_find:get_text(), "side-query")
     test.equal(side_replace:get_text(), "replacement")
     test.same(selection_state(side_replace), expected_replace_selection)
   end)
 
-  test.it("focus-main-and-hide hides the side panel from a side find input", function(context)
+  test.it("alt+1 closes a Side DocView prompt bar and focuses its owner", function(context)
     local main_view, side_view = setup_main_and_side(context)
 
     test.ok(command.perform("sidepanel:toggle-focus"))
@@ -253,13 +266,14 @@ test.describe("sidepanel focus", function()
 
     test.ok(command.perform("sidepanel:focus-main-and-hide"))
 
-    test.equal(sidepanel.visible, false)
-    assert_active_view(main_view, "expected focus-main-and-hide from side find input to focus main DocView")
-    test.equal(side_find.local_find_state.visible, true)
+    test.equal(sidepanel.visible, true)
+    test.equal(sidepanel.active_side_view(), side_view)
+    assert_active_view(side_view, "expected alt+1 from side find input to close it and focus its Side DocView")
+    test.equal(side_find.local_find_state.visible, false)
     test.equal(side_find:get_text(), "side-query")
   end)
 
-  test.it("hide focuses the main panel from a side find input", function(context)
+  test.it("hide closes a side prompt bar and focuses the main panel", function(context)
     local main_view, side_view = setup_main_and_side(context)
 
     test.ok(command.perform("sidepanel:toggle-focus"))
@@ -270,11 +284,11 @@ test.describe("sidepanel focus", function()
 
     test.equal(sidepanel.visible, false)
     assert_active_view(main_view, "expected sidepanel hide from side find input to focus main DocView")
-    test.equal(side_find.local_find_state.visible, true)
+    test.equal(side_find.local_find_state.visible, false)
     test.equal(side_find:get_text(), "side-query")
   end)
 
-  test.it("focus-side restores a hidden side find input", function(context)
+  test.it("focus-side restores the Side DocView after its prompt bar closed", function(context)
     local main_view, side_view = setup_main_and_side(context)
 
     test.ok(command.perform("sidepanel:toggle-focus"))
@@ -287,7 +301,7 @@ test.describe("sidepanel focus", function()
     test.ok(command.perform("sidepanel:focus-side"))
 
     test.equal(sidepanel.visible, true)
-    assert_active_view(side_find, "expected focus-side to restore hidden side find input")
+    assert_active_view(side_view, "expected focus-side to restore Side DocView, not the closed side find input")
     test.equal(side_find:get_text(), "side-query")
   end)
 
@@ -311,7 +325,7 @@ test.describe("sidepanel focus", function()
     assert_active_view(main_view, "expected toggle not to restore removed side find input")
   end)
 
-  test.it("switching side views restores each view's local find input", function(context)
+  test.it("switching side views focuses their DocViews after prompt bars close", function(context)
     local main_view = open_main_docview(context, "main alpha beta\n")
     main_view.__test_name = "main DocView"
     core.set_active_view(main_view)
@@ -335,11 +349,11 @@ test.describe("sidepanel focus", function()
     type_into_active_view("beta")
 
     sidepanel.switch_side_view(-1)
-    assert_active_view(find_a, "expected switching to side A to restore side A find input")
+    assert_active_view(side_a, "expected switching to side A to focus side A DocView")
     test.equal(find_a:get_text(), "alpha")
 
     sidepanel.switch_side_view(1)
-    assert_active_view(find_b, "expected switching back to side B to restore side B find input")
+    assert_active_view(side_b, "expected switching back to side B to focus side B DocView")
     test.equal(find_b:get_text(), "beta")
   end)
 
@@ -362,7 +376,7 @@ test.describe("sidepanel focus", function()
     test.equal(side_find.local_find_state.visible, false)
   end)
 
-  test.it("focus-main-and-hide preserves the hidden side find input for focus-side", function(context)
+  test.it("alt+1 does not restore a Side DocView prompt bar after closing it", function(context)
     local main_view, side_view = setup_main_and_side(context)
 
     test.ok(command.perform("sidepanel:toggle-focus"))
@@ -372,15 +386,136 @@ test.describe("sidepanel focus", function()
     local expected_selection = selection_state(side_find)
 
     test.ok(command.perform("sidepanel:focus-main-and-hide"))
-    test.equal(sidepanel.visible, false)
-    assert_active_view(main_view, "expected focus-main-and-hide to focus main DocView")
+    test.equal(sidepanel.visible, true)
+    assert_active_view(side_view, "expected alt+1 to close the side find input and focus its owner")
+    test.equal(side_find.local_find_state.visible, false)
 
     test.ok(command.perform("sidepanel:focus-side"))
 
     test.equal(sidepanel.visible, true)
-    assert_active_view(side_find, "expected focus-side to restore the hidden side find input")
+    assert_active_view(side_view, "expected focus-side not to restore a closed side find input")
     test.equal(side_find:get_text(), "side-query")
     test.same(selection_state(side_find), expected_selection)
+  end)
+
+  test.it("alt+1 restores a hidden Side DocView instead of hiding a non-DocView side panel", function(context)
+    local main_view = open_main_docview(context, "main alpha beta\n")
+    main_view.__test_name = "main DocView"
+    core.set_active_view(main_view)
+
+    local side_view = register_side_docview(context, "side doc", "side alpha beta\n")
+    local tool_view = track(context, "side_views", View())
+    tool_view.__test_name = "persistent side tool"
+    sidepanel.register_panel("test tool", tool_view)
+
+    sidepanel.show("side doc", { focus = true })
+    assert_active_view(side_view, "expected Side DocView to become last focused DocView")
+    core.set_active_view(main_view)
+    sidepanel.show("test tool", { focus = true })
+    assert_active_view(tool_view, "expected non-DocView side tool before alt+1")
+
+    test.ok(command.perform("sidepanel:focus-main-and-hide"))
+
+    test.equal(sidepanel.visible, true)
+    test.equal(sidepanel.active_side_view(), side_view)
+    assert_active_view(main_view, "expected alt+1 to restore Side DocView but keep last main DocView focus")
+  end)
+
+  test.it("alt+1 hides a non-DocView side panel when no Side DocView is restorable", function(context)
+    local main_view = open_main_docview(context, "main alpha beta\n")
+    main_view.__test_name = "main DocView"
+    core.set_active_view(main_view)
+
+    local tool_view = track(context, "side_views", View())
+    tool_view.__test_name = "persistent side tool"
+    sidepanel.register_panel("test tool", tool_view)
+    sidepanel.show("test tool", { focus = true })
+    test.equal(sidepanel.restorable_side_docview(), nil)
+
+    test.ok(command.perform("sidepanel:focus-main-and-hide"))
+
+    test.equal(sidepanel.visible, false)
+    assert_active_view(main_view, "expected alt+1 to hide side tool and focus main DocView")
+  end)
+
+  test.it("ctrl+w closes and hides the focused Side DocView", function(context)
+    local main_view = open_main_docview(context, "main alpha beta\n")
+    main_view.__test_name = "main DocView"
+    core.set_active_view(main_view)
+    local side_view = open_side_docview(context, "", main_view)
+    side_view.__test_name = "clean Side DocView"
+
+    test.ok(command.perform("sidepanel:toggle-focus"))
+    assert_active_view(side_view, "expected Side DocView before ctrl+w")
+    test.equal(side_view.doc:is_dirty(), false)
+
+    test.ok(command.perform("sidepanel:hide-active"))
+
+    test.equal(sidepanel.visible, false)
+    test.ok(not sidepanel.contains_view(side_view), "expected ctrl+w to remove the Side DocView from the Side Panel")
+    assert_active_view(main_view, "expected ctrl+w to return focus to the main DocView")
+  end)
+
+  test.it("ctrl+w closes a Side DocView from its local find input", function(context)
+    local main_view = open_main_docview(context, "main alpha beta\n")
+    main_view.__test_name = "main DocView"
+    core.set_active_view(main_view)
+    local side_view = open_side_docview(context, "", main_view)
+    side_view.__test_name = "clean Side DocView"
+
+    test.ok(command.perform("sidepanel:toggle-focus"))
+    local side_find = open_find_input(side_view)
+    type_into_active_view("side-query")
+    assert_active_view(side_find, "expected side find input before ctrl+w")
+    side_view.doc:clean()
+    test.equal(side_view.doc:is_dirty(), false)
+
+    test.ok(command.perform("sidepanel:hide-active"))
+
+    test.equal(sidepanel.visible, false)
+    test.ok(not sidepanel.contains_view(side_view), "expected ctrl+w from side find to remove its owning Side DocView")
+    assert_active_view(main_view, "expected ctrl+w from side find to return focus to the main DocView")
+  end)
+
+  test.it("ctrl+w removes a dirty shared Side DocView without prompting because the Document remains open in main", function(context)
+    local doc = new_doc(context, "shared alpha beta\n")
+    local main_view = track(context, "views", core.root_panel:open_doc(doc))
+    main_view.__test_name = "main shared DocView"
+    core.set_active_view(main_view)
+
+    local side_view = track(context, "side_views", sidepanel.open_doc_in_side(doc, {
+      focus = true,
+      restore_focus = main_view,
+    }))
+    side_view.__test_name = "side shared DocView"
+    track(context, "views", side_view)
+    doc:text_input("dirty")
+    test.ok(doc:is_dirty(), "expected shared Document to be dirty before closing duplicate Side DocView")
+
+    test.ok(command.perform("sidepanel:hide-active"))
+
+    test.equal(sidepanel.visible, false)
+    test.ok(not sidepanel.contains_view(side_view), "expected duplicate Side DocView to be removed")
+    test.ok(doc:is_dirty(), "expected dirty shared Document to remain open and dirty in main")
+    assert_active_view(main_view, "expected focus to return to the remaining main DocView")
+  end)
+
+  test.it("ctrl+w prompts instead of removing the last dirty Side DocView", function(context)
+    local main_view = open_main_docview(context, "main alpha beta\n")
+    main_view.__test_name = "main DocView"
+    core.set_active_view(main_view)
+
+    local side_view = register_side_docview(context, "side only", "side alpha beta\n")
+    sidepanel.show("side only", { focus = true })
+    side_view.doc:text_input("dirty")
+    test.ok(side_view.doc:is_dirty(), "expected side-only Document to be dirty before close")
+
+    test.ok(command.perform("sidepanel:hide-active"))
+
+    test.ok(sidepanel.contains_view(side_view), "expected dirty last Side DocView to stay open until close is confirmed")
+    test.equal(sidepanel.visible, true)
+    assert_active_view(core.global_prompt_bar, "expected dirty last Side DocView close to show the unsaved-changes prompt")
+    core.global_prompt_bar:exit(false)
   end)
 
   test.it("replacing the side file panel clears stale local find focus", function(context)
@@ -401,7 +536,7 @@ test.describe("sidepanel focus", function()
     assert_active_view(replacement_view, "expected toggle to focus replacement side DocView, not old side find input")
   end)
 
-  test.it("root tab switching from a side find input switches side-panel views", function(context)
+  test.it("root tab switching from a side find input closes it and switches side-panel views", function(context)
     local main_view = open_main_docview(context, "main alpha beta\n")
     main_view.__test_name = "main DocView"
     core.set_active_view(main_view)
@@ -422,7 +557,7 @@ test.describe("sidepanel focus", function()
     assert_active_view(find_b, "expected side B find input before root tab switch")
     test.ok(command.perform("root:switch-to-previous-tab"))
 
-    assert_active_view(find_a, "expected previous-tab from side find input to switch to side A find input")
+    assert_active_view(side_a, "expected previous-tab from side find input to close it and switch to side A DocView")
     test.equal(find_a:get_text(), "alpha")
   end)
 
@@ -435,7 +570,7 @@ test.describe("sidepanel focus", function()
 
     test.ok(command.perform("user:find-submit-or-replace"))
     assert_active_view(side_view, "expected submitting side find to return focus to the side DocView")
-    test.equal(side_find.local_find_state.visible, true)
+    test.equal(side_find.local_find_state.visible, false)
     test.equal(side_find.local_find_state.input_active, false)
 
     test.ok(command.perform("sidepanel:toggle-focus"))
@@ -474,12 +609,12 @@ test.describe("sidepanel focus", function()
     local expected_side_selection = selection_state(side_find)
 
     test.ok(command.perform("sidepanel:toggle-focus"))
-    assert_active_view(main_find, "expected toggling to main to restore main shared find input")
+    assert_active_view(main_view, "expected toggling to main to focus main shared DocView")
     test.equal(main_find:get_text(), "main-query")
     test.same(selection_state(main_find), expected_main_selection)
 
     test.ok(command.perform("sidepanel:toggle-focus"))
-    assert_active_view(side_find, "expected toggling to side to restore side shared find input")
+    assert_active_view(side_view, "expected toggling to side to focus side shared DocView")
     test.equal(side_find:get_text(), "side-query")
     test.same(selection_state(side_find), expected_side_selection)
   end)
@@ -547,7 +682,7 @@ test.describe("sidepanel focus", function()
     test.ok(not opened.local_find_input, "expected command to focus the main DocView, not a find input")
     test.ok(opened.doc == side_view.doc, "expected opened main DocView to share the side find owner document")
     test.same(opened:get_selection_state(), expected_selection)
-    test.equal(side_find.local_find_state.visible, true)
+    test.equal(side_find.local_find_state.visible, false)
     test.equal(side_find:get_text(), "alpha")
     test.ok(opened ~= main_view, "expected side document to open as a main panel tab")
   end)
@@ -578,7 +713,7 @@ test.describe("sidepanel focus", function()
     test.equal(main_view.scroll.y, 47)
   end)
 
-  test.it("continues editing and navigating a side find field after focus switches", function(context)
+  test.it("closes a side find field after focus switches", function(context)
     local main_view, side_view = setup_main_and_side(context)
     side_view.doc:remove(1, 1, math.huge, math.huge)
     side_view.doc:text_input("alpha beta alpha gamma alpha\n")
@@ -597,17 +732,13 @@ test.describe("sidepanel focus", function()
     test.ok(command.perform("sidepanel:toggle-focus"))
     assert_active_view(main_view, "expected toggle away from side find to focus main DocView")
     test.ok(command.perform("sidepanel:toggle-focus"))
-    assert_active_view(side_find, "expected toggling back to restore side find field")
-
-    type_into_active_view("pha")
-    test.equal(side_find:get_text(), "alpha")
-    test.equal(side_find.local_find_state.current, side_navigated_match)
-
-    test.ok(command.perform("user:find-field-next"))
-    test.equal(side_find.local_find_state.current, (side_navigated_match % 3) + 1)
+    assert_active_view(side_view, "expected toggling back to focus side DocView, not the closed find field")
+    test.equal(side_find.local_find_state.visible, false)
+    test.equal(side_find:get_text(), "al")
+    test.equal(side_find.local_find_state.current, 0)
   end)
 
-  test.it("continues editing and navigating a main find field after side focus switches", function(context)
+  test.it("closes a main find field after side focus switches", function(context)
     local main_view, side_view = setup_main_and_side(context)
     main_view.doc:remove(1, 1, math.huge, math.huge)
     main_view.doc:text_input("alpha beta alpha gamma alpha\n")
@@ -626,17 +757,13 @@ test.describe("sidepanel focus", function()
     test.ok(command.perform("sidepanel:toggle-focus"))
     assert_active_view(side_view, "expected toggle away from main find to focus side DocView")
     test.ok(command.perform("sidepanel:toggle-focus"))
-    assert_active_view(main_find, "expected toggling back to restore main find field")
-
-    type_into_active_view("ha")
-    test.equal(main_find:get_text(), "alpha")
-    test.equal(main_find.local_find_state.current, main_navigated_match)
-
-    test.ok(command.perform("user:find-field-next"))
-    test.equal(main_find.local_find_state.current, (main_navigated_match % 3) + 1)
+    assert_active_view(main_view, "expected toggling back to focus main DocView, not the closed find field")
+    test.equal(main_find.local_find_state.visible, false)
+    test.equal(main_find:get_text(), "alp")
+    test.equal(main_find.local_find_state.current, 0)
   end)
 
-  test.it("restores main replace input after side focus switches", function(context)
+  test.it("does not restore main replace input after side focus switches", function(context)
     local main_view, side_view = setup_main_and_side(context)
 
     core.set_active_view(main_view)
@@ -657,7 +784,7 @@ test.describe("sidepanel focus", function()
     assert_active_view(side_view, "expected toggle away from main replace input to focus side DocView")
     test.ok(command.perform("sidepanel:toggle-focus"))
 
-    assert_active_view(main_replace, "expected toggling back to restore main replace input")
+    assert_active_view(main_view, "expected toggling back to focus main DocView, not closed replace input")
     test.equal(main_find:get_text(), "alpha")
     test.equal(main_replace:get_text(), "omega")
     test.same(selection_state(main_replace), expected_replace_selection)

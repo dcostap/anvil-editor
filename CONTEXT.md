@@ -32,6 +32,10 @@ _Avoid_: Buffer
 A visual editor instance showing a Document. Multiple Document Views can show the same Document while keeping separate view state such as scroll and selection.
 _Avoid_: Editor tab, buffer view
 
+**Side DocView**:
+A Document View hosted in the Side Panel for the split-editor experience. Also valid: DocView in Side Panel, Side Panel DocView, Split DocView.
+_Avoid_: Side editor, secondary editor
+
 **Selection State**:
 The caret and selection state owned by a Document View.
 _Avoid_: Document selection, shared selection

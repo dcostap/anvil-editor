@@ -498,6 +498,30 @@ local function close_find(view, state, hide)
   core.redraw = true
 end
 
+local core_set_active_view_for_find = core.intellij_find_base_set_active_view or core.set_active_view
+core.intellij_find_base_set_active_view = core_set_active_view_for_find
+function core.set_active_view(view)
+  local previous = core.active_view
+  local previous_state = previous and previous.local_find_input and previous.local_find_state
+  local result = core_set_active_view_for_find(view)
+  local next = core.active_view
+  if previous_state and previous_state.visible and next ~= previous then
+    local next_state = next and next.local_find_input and next.local_find_state
+    if next_state ~= previous_state then
+      -- A DocView Prompt Bar is focus-owned UI: if it loses focus, it closes
+      -- instead of staying visible in the background.
+      previous_state.input_active = false
+      previous_state.visible = false
+      previous_state.matches = {}
+      previous_state.match_indexes_by_line = {}
+      previous_state.current = 0
+      core.log_quiet("Local find: closed overlay because prompt focus was lost")
+      core.redraw = true
+    end
+  end
+  return result
+end
+
 local function navigate(view, state, reverse)
   if not state or field_text(state.find) == "" then return end
   if state.change_id ~= view.doc:get_change_id() then
