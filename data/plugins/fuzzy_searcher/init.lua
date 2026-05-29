@@ -3140,10 +3140,48 @@ local function quote_exact_query(text)
   return '"' .. text:gsub('"', '""') .. '"'
 end
 
-function open(prefix)
-  local view = current_picker()
-  if view then view:close() end
+local fuzzy_mode_prefixes = { ["#"] = true, ["@"] = true, [">"] = true }
+
+local function split_mode_prefix(text)
+  text = tostring(text or "")
+  local prefix = text:sub(1, 1)
+  if fuzzy_mode_prefixes[prefix] then return prefix, text:sub(2) end
+  return "", text
+end
+
+local function switch_picker_prefix(view, prefix)
   prefix = prefix or ""
+  local old_text = view.input and view.input:get_text() or ""
+  local old_prefix, query = split_mode_prefix(old_text)
+  local new_text = prefix .. query
+
+  local doc = view.input and view.input.textview and view.input.textview.doc
+  local col = #new_text + 1
+  if doc then
+    local _line
+    _line, col = doc:get_selection(false)
+    local old_prefix_len = old_prefix ~= "" and #old_prefix or 0
+    local new_prefix_len = prefix ~= "" and #prefix or 0
+    col = (col or 1) - old_prefix_len + new_prefix_len
+    col = common.clamp(col, new_prefix_len + 1, #new_text + 1)
+  end
+
+  view.input:set_text(new_text)
+  if doc then doc:set_selection(1, col, 1, col) end
+  view.dirty = true
+  view.force_refresh = true
+  view:refresh(new_text)
+  view:schedule_update(true)
+  ensure_input_focus(view, "switch-prefix")
+end
+
+function open(prefix)
+  prefix = prefix or ""
+  local view = current_picker()
+  if view then
+    switch_picker_prefix(view, prefix)
+    return
+  end
   if prefix == "#" then
     local selection = selected_text_for_search()
     if selection ~= "" then prefix = "#" .. quote_exact_query(selection) end
