@@ -150,6 +150,8 @@ meson test -C build-windows-x86_64 anvil:lua-ui
 
 The Lua Meson tests use `tests/run-lua-tests.sh`, which prepares an isolated `.run-meson-tests/<suite>` app/user/test tree, sets `SDL_VIDEO_DRIVER=dummy`, and runs `anvil test` internally. This avoids source-tree test pollution and means agents usually do not need to call `./scripts/run-local ... test ...` directly.
 
+On Windows, Anvil Meson test targets use `anvil_test_env` with a sanitized `PATH` so Meson can print failure logs reliably even if the inherited user environment contains non-ASCII/hidden characters. Add future Anvil Meson tests to this environment unless they explicitly need something else.
+
 To run a specific Lua file or subdirectory without registering another Meson target, pass the path through Meson's `--test-args` to the relevant Lua suite target:
 
 ```sh
