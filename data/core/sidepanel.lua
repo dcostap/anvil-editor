@@ -26,6 +26,7 @@ M.current_panel = M.current_panel
 M.last_main_panel_view = M.last_main_panel_view
 M.last_side_focus_view = M.last_side_focus_view
 M.last_side_focus_owner = M.last_side_focus_owner
+M.side_focus_views = M.side_focus_views or setmetatable({}, { __mode = "k" })
 M.side_node = M.side_node
 M.main_node = M.main_node
 M.container_node = M.container_node
@@ -146,6 +147,7 @@ end
 function M.remember_side_focus_view(view)
   local owner = side_focus_owner(view)
   if owner then
+    M.side_focus_views[owner] = view
     M.last_side_focus_view = view
     M.last_side_focus_owner = owner
   end
@@ -154,14 +156,15 @@ end
 
 function M.restorable_side_focus_view(owner)
   if not owner or not M.contains_view(owner) then return nil end
-  local view = M.last_side_focus_view
-  if view and M.last_side_focus_owner == owner and side_focus_owner(view) == owner then
+  local view = M.side_focus_views[owner]
+  if view and side_focus_owner(view) == owner then
     return view
   end
   return owner
 end
 
 local function clear_side_focus_for_owner(owner)
+  if owner then M.side_focus_views[owner] = nil end
   if owner and (M.last_side_focus_owner == owner or M.last_side_focus_view == owner) then
     M.last_side_focus_view = nil
     M.last_side_focus_owner = nil
@@ -449,7 +452,11 @@ function M.switch_side_view(delta)
   index = ((index - 1 + delta) % #views) + 1
 
   M.visible = true
-  return M.set_side_view(views[index], true)
+  local view = M.set_side_view(views[index], false)
+  if view then
+    core.set_active_view(M.restorable_side_focus_view(view) or view)
+  end
+  return view
 end
 
 local function copy_docview_position(src, dst)

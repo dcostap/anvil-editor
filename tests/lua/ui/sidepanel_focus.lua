@@ -2,6 +2,7 @@ local core = require "core"
 local command = require "core.command"
 local sidepanel = require "core.sidepanel"
 local test = require "core.test"
+local DocView = require "core.docview"
 
 require "plugins.intellij_find"
 
@@ -43,6 +44,15 @@ local function setup_main_and_side(context)
   side_view.__test_name = "side DocView"
   test.equal(core.active_view, main_view)
   return main_view, side_view
+end
+
+local function register_side_docview(context, name, text)
+  local doc = new_doc(context, text)
+  local view = track(context, "side_views", DocView(doc))
+  view.__test_name = name .. " DocView"
+  sidepanel.register_panel(name, view)
+  track(context, "views", view)
+  return view, doc
 end
 
 local function active_find_input_for(owner_view)
@@ -131,6 +141,7 @@ test.describe("sidepanel focus", function()
 
     sidepanel.last_side_focus_view = nil
     sidepanel.last_side_focus_owner = nil
+    sidepanel.side_focus_views = setmetatable({}, { __mode = "k" })
     sidepanel.hide(false)
     local main_panel = core.root_panel:get_main_panel()
     if main_panel and main_panel.active_view then
@@ -261,5 +272,74 @@ test.describe("sidepanel focus", function()
     assert_active_view(main_view, "expected sidepanel hide from side find input to focus main DocView")
     test.equal(side_find.local_find_state.visible, true)
     test.equal(side_find:get_text(), "side-query")
+  end)
+
+  test.it("focus-side restores a hidden side find input", function(context)
+    local main_view, side_view = setup_main_and_side(context)
+
+    test.ok(command.perform("sidepanel:toggle-focus"))
+    local side_find = open_find_input(side_view)
+    type_into_active_view("side-query")
+
+    test.ok(command.perform("sidepanel:hide"))
+    assert_active_view(main_view, "expected sidepanel hide before focusing side again")
+
+    test.ok(command.perform("sidepanel:focus-side"))
+
+    test.equal(sidepanel.visible, true)
+    assert_active_view(side_find, "expected focus-side to restore hidden side find input")
+    test.equal(side_find:get_text(), "side-query")
+  end)
+
+  test.it("does not restore a stale side find input after the side view is removed", function(context)
+    local main_view, side_view = setup_main_and_side(context)
+
+    test.ok(command.perform("sidepanel:toggle-focus"))
+    local side_find = open_find_input(side_view)
+    type_into_active_view("side-query")
+    test.ok(command.perform("sidepanel:toggle-focus"))
+    assert_active_view(main_view, "expected main DocView before removing side view")
+
+    sidepanel.remove_view(side_view, false)
+
+    test.equal(sidepanel.last_side_focus_view, nil)
+    test.equal(sidepanel.last_side_focus_owner, nil)
+    test.equal(sidepanel.side_focus_views[side_view], nil)
+    test.equal(sidepanel.side_focus_owner(side_find), nil)
+
+    test.ok(command.perform("sidepanel:toggle-focus"))
+    assert_active_view(main_view, "expected toggle not to restore removed side find input")
+  end)
+
+  test.it("switching side views restores each view's local find input", function(context)
+    local main_view = open_main_docview(context, "main alpha beta\n")
+    main_view.__test_name = "main DocView"
+    core.set_active_view(main_view)
+
+    local side_a = register_side_docview(context, "side A", "side A alpha beta\n")
+    local side_b = register_side_docview(context, "side B", "side B alpha beta\n")
+
+    sidepanel.show("side A", { focus = true })
+    assert_active_view(side_a, "expected side A before opening its find input")
+    local find_a = open_find_input(side_a)
+    find_a.__test_name = "local find input for side A DocView"
+    type_into_active_view("alpha")
+
+    test.ok(command.perform("sidepanel:toggle-focus"))
+    assert_active_view(main_view, "expected main DocView before opening side B")
+
+    sidepanel.show("side B", { focus = true })
+    assert_active_view(side_b, "expected side B before opening its find input")
+    local find_b = open_find_input(side_b)
+    find_b.__test_name = "local find input for side B DocView"
+    type_into_active_view("beta")
+
+    sidepanel.switch_side_view(-1)
+    assert_active_view(find_a, "expected switching to side A to restore side A find input")
+    test.equal(find_a:get_text(), "alpha")
+
+    sidepanel.switch_side_view(1)
+    assert_active_view(find_b, "expected switching back to side B to restore side B find input")
+    test.equal(find_b:get_text(), "beta")
   end)
 end)
