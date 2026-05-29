@@ -10,10 +10,6 @@ local function keymap_macos(keymap)
     ["cmd+option+r"] = "core:restart",
     ["cmd+ctrl+return"] = "core:toggle-fullscreen",
 
-    ["cmd+ctrl+shift+j"] = "root:split-left",
-    ["cmd+ctrl+shift+l"] = "root:split-right",
-    ["cmd+ctrl+shift+i"] = "root:split-up",
-    ["cmd+ctrl+shift+k"] = "root:split-down",
     ["cmd+ctrl+j"] = "root:switch-to-left",
     ["cmd+ctrl+l"] = "root:switch-to-right",
     ["cmd+ctrl+i"] = "root:switch-to-up",

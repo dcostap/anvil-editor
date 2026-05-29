@@ -301,10 +301,6 @@ keymap.add_direct {
   ["alt+return"] = "core:toggle-fullscreen",
   ["f11"] = "core:toggle-fullscreen",
 
-  ["alt+shift+j"] = "root:split-left",
-  ["alt+shift+l"] = "root:split-right",
-  ["alt+shift+i"] = "root:split-up",
-  ["alt+shift+k"] = "root:split-down",
   ["alt+j"] = "root:switch-to-left",
   ["alt+l"] = "root:switch-to-right",
   ["alt+i"] = "root:switch-to-up",

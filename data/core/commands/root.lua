@@ -1,6 +1,5 @@
 local core = require "core"
 local style = require "core.style"
-local DocView = require "core.docview"
 local command = require "core.command"
 local common = require "core.common"
 local config = require "core.config"
@@ -71,14 +70,6 @@ end
 
 
 for _, dir in ipairs { "left", "right", "up", "down" } do
-  t["root:split-" .. dir] = function(node)
-    local av = node.active_view
-    local new_node = node:split(dir)
-    if av:is(DocView) then
-      core.root_panel:open_doc(av.doc, { source_view = av, node = new_node })
-    end
-  end
-
   t["root:switch-to-" .. dir] = function(node)
     local x, y
     if dir == "left" or dir == "right" then
