@@ -685,8 +685,9 @@ local function set_side_file_doc(doc, opts)
 
   if opts.line then
     local col = opts.col or 1
+    local line2, col2 = opts.line2 or opts.line, opts.col2 or col
     view:with_selection_state(function()
-      doc:set_selection(opts.line, col, opts.line, col)
+      doc:set_selection(opts.line, col, line2, col2)
     end)
     view:scroll_to_make_visible(opts.line, col)
   end

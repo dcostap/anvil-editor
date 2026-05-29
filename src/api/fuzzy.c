@@ -78,16 +78,36 @@ static LuaFuzzyIndex *check_index(lua_State *L, int idx) {
   return (LuaFuzzyIndex *)luaL_checkudata(L, idx, API_TYPE_FUZZY_INDEX);
 }
 
-static void push_spans(lua_State *L, const FuzzyIndex *index, uint32_t entry_index, const char *query) {
-  FuzzySpan spans[FUZZY_MAX_RETURN_SPANS];
+static void push_span_table(lua_State *L, const FuzzySpan *span) {
+  lua_createtable(L, 2, 0);
+  lua_pushinteger(L, span->start);
+  lua_rawseti(L, -2, 1);
+  lua_pushinteger(L, span->end);
+  lua_rawseti(L, -2, 2);
+}
+
+static void push_match_position_fields(lua_State *L, const FuzzySpan *spans, uint32_t count) {
+  if (count == 0) return;
+
+  uint32_t match_start = spans[0].start;
+  for (uint32_t i = 1; i < count; ++i) {
+    if (spans[i].start < match_start) match_start = spans[i].start;
+  }
+  lua_pushinteger(L, match_start);
+  lua_setfield(L, -2, "match_start");
+
+  if (count == 1) {
+    push_span_table(L, &spans[0]);
+    lua_setfield(L, -2, "selection_span");
+  }
+}
+
+static void push_spans(lua_State *L, const FuzzyIndex *index, uint32_t entry_index, const char *query, FuzzySpan *spans, uint32_t *out_count) {
   uint32_t count = fuzzy_match_spans(index, entry_index, query, spans, FUZZY_MAX_RETURN_SPANS);
+  if (out_count) *out_count = count;
   lua_createtable(L, count, 0);
   for (uint32_t i = 0; i < count; ++i) {
-    lua_createtable(L, 2, 0);
-    lua_pushinteger(L, spans[i].start);
-    lua_rawseti(L, -2, 1);
-    lua_pushinteger(L, spans[i].end);
-    lua_rawseti(L, -2, 2);
+    push_span_table(L, &spans[i]);
     lua_rawseti(L, -2, i + 1);
   }
 }
@@ -96,7 +116,7 @@ static void push_results(lua_State *L, const FuzzyIndex *index, const char *quer
   lua_createtable(L, count, 1);
   for (uint32_t i = 0; i < count; ++i) {
     FuzzySearchResult *r = &results[i];
-    lua_createtable(L, 0, include_spans ? 5 : 4);
+    lua_createtable(L, 0, include_spans ? 7 : 4);
 
     lua_pushinteger(L, r->source_index);
     lua_setfield(L, -2, "index");
@@ -107,8 +127,11 @@ static void push_results(lua_State *L, const FuzzyIndex *index, const char *quer
     lua_pushinteger(L, r->entry_index + 1);
     lua_setfield(L, -2, "entry_index");
     if (include_spans) {
-      push_spans(L, index, r->entry_index, query);
+      FuzzySpan spans[FUZZY_MAX_RETURN_SPANS];
+      uint32_t span_count = 0;
+      push_spans(L, index, r->entry_index, query, spans, &span_count);
       lua_setfield(L, -2, "spans");
+      push_match_position_fields(L, spans, span_count);
     }
 
     lua_rawseti(L, -2, i + 1);
@@ -219,7 +242,7 @@ static int match_text(lua_State *L, bool as_table) {
     return 1;
   }
 
-  lua_createtable(L, 0, include_spans ? 3 : 2);
+  lua_createtable(L, 0, include_spans ? 5 : 2);
   lua_pushinteger(L, score);
   lua_setfield(L, -2, "score");
   lua_pushstring(L, text);
@@ -229,14 +252,11 @@ static int match_text(lua_State *L, bool as_table) {
     uint32_t count = fuzzy_match_text_spans(lower, (uint32_t)text_len, query, spans, FUZZY_MAX_RETURN_SPANS);
     lua_createtable(L, count, 0);
     for (uint32_t i = 0; i < count; ++i) {
-      lua_createtable(L, 2, 0);
-      lua_pushinteger(L, spans[i].start);
-      lua_rawseti(L, -2, 1);
-      lua_pushinteger(L, spans[i].end);
-      lua_rawseti(L, -2, 2);
+      push_span_table(L, &spans[i]);
       lua_rawseti(L, -2, i + 1);
     }
     lua_setfield(L, -2, "spans");
+    push_match_position_fields(L, spans, count);
   }
   free(lower);
   return 1;

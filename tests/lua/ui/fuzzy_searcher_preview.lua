@@ -2,6 +2,7 @@ local core = require "core"
 local test = require "core.test"
 
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
+local DocView = require "core.docview"
 
 local function temp_file_path(name)
   local base = system.absolute_path(".")
@@ -16,6 +17,31 @@ end
 
 local function remove_file(path)
   pcall(os.remove, path)
+end
+
+local function close_file_views_and_docs(path)
+  for _, view in ipairs(core.root_panel.root_node:get_children()) do
+    local view_path = view.path or (view.doc and view.doc.abs_filename)
+    if view_path == path then
+      local node = core.root_panel.root_node:get_node_for_view(view)
+      if node then
+        if view:extends(DocView) and view.doc:is_dirty() then view.doc:clean() end
+        node:remove_view(core.root_panel.root_node, view)
+      end
+    end
+  end
+  for i = #core.docs, 1, -1 do
+    local doc = core.docs[i]
+    if doc.abs_filename == path then
+      if doc:is_dirty() then doc:clean() end
+      table.remove(core.docs, i)
+      doc:on_close()
+    end
+  end
+end
+
+local function selection_state(view)
+  return view:get_selection_state().selections
 end
 
 local function visible_text_right(view)
@@ -36,8 +62,67 @@ test.describe("Fuzzy Searcher preview", function()
       core.fuzzy_searcher_active_view:close()
     end
     for _, path in ipairs(context.files or {}) do
+      close_file_views_and_docs(path)
       remove_file(path)
     end
+  end)
+
+  test.it("selects a single contiguous content match when accepting a grep result", function(context)
+    local path = temp_file_path("fuzzy-confirm-select-match-test.txt")
+    context.files = { path }
+    write_file(path, "alpha NEEDLE omega\n")
+
+    fuzzy_searcher.open("#")
+    local picker = core.fuzzy_searcher_active_view
+    picker.results = {
+      {
+        kind = "grep",
+        file = path,
+        line = 1,
+        col = 7,
+        grep_query = "NEEDLE",
+        exact = true,
+        content_selection_span = { 7, 12 },
+        content_match_start = 7,
+        text = "alpha NEEDLE omega",
+      }
+    }
+    picker.selected = 1
+
+    picker:confirm(false)
+
+    local view = core.active_view
+    test.ok(view and view.doc and view.doc.abs_filename == path, "expected accepted grep result to open its file")
+    test.same(selection_state(view), { 1, 7, 1, 13 })
+  end)
+
+  test.it("moves to the leftmost fuzzy chunk without selecting separated chunks", function(context)
+    local path = temp_file_path("fuzzy-confirm-separated-chunks-test.txt")
+    context.files = { path }
+    write_file(path, "alpha beta\n")
+
+    fuzzy_searcher.open("#")
+    local picker = core.fuzzy_searcher_active_view
+    picker.results = {
+      {
+        kind = "grep",
+        file = path,
+        line = 1,
+        col = 7,
+        grep_query = "ab",
+        exact = false,
+        content_spans = { { 1, 1 }, { 7, 7 } },
+        content_match_start = 1,
+        text = "alpha beta",
+      }
+    }
+    picker.selected = 1
+
+    picker:confirm(false)
+
+    local view = core.active_view
+    test.ok(view and view.doc and view.doc.abs_filename == path, "expected accepted grep result to open its file")
+    test.same(selection_state(view), { 1, 1, 1, 1 })
   end)
 
   test.it("horizontally reveals off-screen content matches in the DocView preview", function(context)

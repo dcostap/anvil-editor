@@ -676,10 +676,10 @@ end
 local function fuzzy_match(query, text)
   query = trim_query(query)
   text = tostring(text or "")
-  if query == "" then return 0, {} end
+  if query == "" then return 0, {}, nil, nil end
   local match = fuzzy_native.match(text, query, { mode = "generic", spans = true })
   if not match then return nil end
-  return match.score, match.spans or {}
+  return match.score, match.spans or {}, match.selection_span, match.match_start
 end
 
 local function fuzzy_match_file_fast_word(word, text, lower, base_start)
@@ -1228,15 +1228,46 @@ end
 
 local function grep_content_spans(text, result, offset, line_nr)
   if not result or not result.grep_query or result.grep_query == "" then return {} end
-  if result.exact then
-    return literal_spans(text, result.grep_query, offset)
-  end
   if result.content_spans and (not line_nr or line_nr == result.line) then
     return offset_spans(result.content_spans, offset)
+  end
+  if result.exact then
+    return literal_spans(text, result.grep_query, offset)
   end
   if line_nr and line_nr ~= result.line then return {} end
   local _, spans = fuzzy_match(result.fuzzy_query or result.grep_query, text)
   return offset_spans(spans, offset)
+end
+
+local function single_span_or_leftmost(spans)
+  local first
+  for _, span in ipairs(spans or {}) do
+    local s, e = tonumber(span[1]), tonumber(span[2])
+    if s and e and s <= e then
+      if not first or s < first[1] then first = { s, e } end
+    end
+  end
+  if not first then return nil, nil end
+  if #(spans or {}) == 1 then return first, first[1] end
+  return nil, first[1]
+end
+
+local function grep_accept_range(result)
+  if not result or result.kind ~= "grep" then return nil end
+  local line = result.line or 1
+  if result.content_selection_span then
+    return line, result.content_selection_span[1], line, result.content_selection_span[2] + 1
+  end
+  if result.content_match_start then
+    return line, result.content_match_start
+  end
+  local selection_span, match_start = single_span_or_leftmost(result.content_spans)
+  if selection_span then return line, selection_span[1], line, selection_span[2] + 1 end
+  if match_start then return line, match_start end
+  if result.exact and result.col and result.grep_query and result.grep_query ~= "" then
+    return line, result.col, line, result.col + #result.grep_query
+  end
+  return line, result.col or 1
 end
 
 local small_path_font_cache, small_path_font_key
@@ -2567,13 +2598,18 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
         if not term.exact and not low:find(term.text, 1, true) then return end
       end
 
-      local score, fuzzy_spans = 0, {}
+      local score, fuzzy_spans, fuzzy_selection_span, fuzzy_match_start = 0, {}, nil, nil
       if fuzzy_query ~= "" then
-        score, fuzzy_spans = fuzzy_match(fuzzy_query, source.text)
+        score, fuzzy_spans, fuzzy_selection_span, fuzzy_match_start = fuzzy_match(fuzzy_query, source.text)
         if not score then return end
       end
       for _, span in ipairs(fuzzy_spans or {}) do spans[#spans+1] = span end
       score = score + (#spans * 4)
+      local content_selection_span, content_match_start = single_span_or_leftmost(spans)
+      if fuzzy_query ~= "" and fuzzy_selection_span and #(spans or {}) == 1 then
+        content_selection_span = fuzzy_selection_span
+      end
+      content_match_start = content_match_start or fuzzy_match_start
 
       local r = {
         kind = "grep",
@@ -2586,6 +2622,8 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
         fuzzy_query = fuzzy_query,
         fuzzy_score = score,
         content_spans = spans or {},
+        content_selection_span = content_selection_span,
+        content_match_start = content_match_start,
         base_query = base_query,
       }
       if base_query ~= "" then
@@ -2736,6 +2774,10 @@ function FSView:start_grep(base, line, grep)
       seen[key] = true
       r.exact = exact
       r.grep_query = grep
+      if exact and r.col and grep and grep ~= "" then
+        r.content_selection_span = { r.col, r.col + #grep - 1 }
+        r.content_match_start = r.col
+      end
       r.base_query = base:sub(1, 1) == ">" and "" or base
       if r.base_query ~= "" and not r.file_spans then
         local _, file_spans = fuzzy_match(r.base_query, r.file)
@@ -2881,13 +2923,18 @@ function FSView:confirm(new_window)
   end
   if r.file then
     local path = fullpath(r.file)
-    local line, col = r.line or 1, r.col or 1
+    local line, col, line2, col2 = r.line or 1, r.col or 1, nil, nil
+    if r.kind == "grep" then
+      line, col, line2, col2 = grep_accept_range(r)
+    end
     local source_view = self.source_view
     self:close()
     if new_window then
       sidepanel.open_path_in_side(path, {
         line = line,
         col = col,
+        line2 = line2,
+        col2 = col2,
         focus = false,
         restore_focus = source_view,
       })
@@ -2896,10 +2943,10 @@ function FSView:confirm(new_window)
       if v and v.doc then
         if v.with_selection_state then
           v:with_selection_state(function()
-            v.doc:set_selection(line, col)
+            if line2 and col2 then v.doc:set_selection(line, col, line2, col2) else v.doc:set_selection(line, col) end
           end)
         else
-          v.doc:set_selection(line, col)
+          if line2 and col2 then v.doc:set_selection(line, col, line2, col2) else v.doc:set_selection(line, col) end
         end
       end
     end
