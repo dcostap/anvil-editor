@@ -1890,6 +1890,8 @@ For more detailed instructions visit: https://github.com/dcostap/anvil-editor#bu
 
     preview_node:set_active_view(preview)
     core.root_panel.root_node:get_node_for_view(raw_view):close_view(core.root_panel.root_node, raw_view)
+    preview_node = core.root_panel.root_node:get_node_for_view(preview)
+    preview_node:set_active_view(preview)
 
     command.perform("markdown-view:view-raw")
 

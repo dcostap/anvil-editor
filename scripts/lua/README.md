@@ -1,19 +1,31 @@
 # Lua Scripts
 
-This directory contains lua scripts for running with Anvil.
+This directory contains Lua scripts for running with Anvil.
 
-### Tests
-
-Run the full Lua test suite:
+Lua tests live under `tests/lua` and are wired into Meson. Run automated tests with:
 
 ```sh
-SDL_VIDEO_DRIVER=dummy ./scripts/run-local build test scripts/lua/tests
+meson test -C build-windows-x86_64
 ```
 
-Run a single Lua test file:
+Run only Anvil's own suite with:
 
 ```sh
-SDL_VIDEO_DRIVER=dummy ./scripts/run-local build test scripts/lua/tests/tokenizer.lua
+meson test -C build-windows-x86_64 --suite anvil
+```
+
+Run only the Lua runtime or UI suite:
+
+```sh
+meson test -C build-windows-x86_64 anvil:lua-runtime
+meson test -C build-windows-x86_64 anvil:lua-ui
+```
+
+Run a specific Lua file or directory by passing a path through `--test-args`:
+
+```sh
+meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/tokenizer.lua
+meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/markdownview.lua
 ```
 
 ### Build
@@ -27,5 +39,5 @@ check the instructions included inside the file.
 an input file.
 
 ```sh
-./scripts/run-local build run scripts/lua/benchmarks/tokenizer.lua /path/to/file.ext
+./scripts/run-local build-windows-x86_64 run scripts/lua/benchmarks/tokenizer.lua /path/to/file.ext
 ```

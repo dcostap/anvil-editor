@@ -11,6 +11,8 @@ project('anvil',
 
 version = meson.project_version()
 mod_version = version.split('.')
+anvil_source_root = meson.current_source_dir()
+anvil_build_root = meson.current_build_dir()
 cc = meson.get_compiler('c')
 
 #===============================================================================

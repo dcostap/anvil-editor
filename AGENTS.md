@@ -111,6 +111,71 @@ A normal Meson build generates this executable. If the repo-local executable is 
 winget install --id DEVCOM.LuaJIT -e
 ```
 
+### Automated tests
+
+Anvil has a first-party Lua runtime test framework in `data/core/test.lua`. Tests use `test.describe`, `test.it` / `test.test`, hooks, coroutine yields, and assertion helpers such as `test.equal`, `test.same`, and `test.ok`.
+
+Current first-party tests live in:
+
+- `tests/lua/runtime` — Anvil-runtime Lua tests for non-visual APIs and behavior.
+- `tests/lua/ui` — in-process UI tests for views, widgets, layout, focus routing, rendering helpers, and panel behavior.
+- `tests/native` — native C/C++ tests wired into Meson, currently `anvil:fuzzy`.
+- `tests/gui/smoke` — actual GUI smoke tests that launch the real app window.
+
+Run tests through Meson by default. The full Meson test command now includes Anvil's native fuzzy test plus the Lua runtime and in-process UI suites:
+
+```sh
+meson test -C build-windows-x86_64
+```
+
+Use the Anvil suite filter when you want to skip third-party subproject tests:
+
+```sh
+meson test -C build-windows-x86_64 --suite anvil
+```
+
+If `meson` is not on `PATH` in the agent/MSYS shell on this PC, call it explicitly:
+
+```sh
+/c/msys64/mingw64/bin/meson.exe test -C build-windows-x86_64
+```
+
+Individual Anvil Meson test targets:
+
+```sh
+meson test -C build-windows-x86_64 anvil:fuzzy
+meson test -C build-windows-x86_64 anvil:lua-runtime
+meson test -C build-windows-x86_64 anvil:lua-ui
+```
+
+The Lua Meson tests use `tests/run-lua-tests.sh`, which prepares an isolated `.run-meson-tests/<suite>` app/user/test tree, sets `SDL_VIDEO_DRIVER=dummy`, and runs `anvil test` internally. This avoids source-tree test pollution and means agents usually do not need to call `./scripts/run-local ... test ...` directly.
+
+To run a specific Lua file or subdirectory without registering another Meson target, pass the path through Meson's `--test-args` to the relevant Lua suite target:
+
+```sh
+meson test -C build-windows-x86_64 anvil:lua-runtime --test-args tests/lua/runtime/tokenizer.lua
+meson test -C build-windows-x86_64 anvil:lua-ui --test-args tests/lua/ui/markdownview.lua
+```
+
+Short paths under `tests/lua` are also accepted:
+
+```sh
+meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/tokenizer.lua
+meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/markdownview.lua
+```
+
+Use `--no-rebuild` only when the build artifacts are known to be current.
+
+#### Test layers
+
+There is not a separate Lua framework for in-process UI tests: they are ordinary Lua runtime tests executed by Meson's `anvil:lua-ui` target through `anvil test`. The difference is the test style:
+
+- **Headless/runtime tests** instantiate non-visual objects such as Documents, commands, fuzzy indexes, processes, threads, and pure helper modules, then assert their state.
+- **In-process UI tests** instantiate or reuse Anvil UI objects such as Document Views, panels, prompt bars, widgets, tabs/nodes, fuzzy pickers, and settings views. They drive behavior by calling methods/event handlers programmatically, such as `core.on_event(...)`, `core.root_panel:on_mouse_pressed(...)`, `view:on_mouse_moved(...)`, `node:set_active_view(...)`, or widget `on_change(...)`, then assert Lua state/layout/focus directly. These are the preferred layer for TDD of editor UI behavior.
+- **Actual GUI black-box tests** launch the real Windows GUI and send OS-level input or inspect screenshots/stats. Current examples are `tests/gui/smoke/d3d11-smoke-test.ps1` and `tools/anvil_*_perf_test.ps1`. Use these sparingly for renderer/window/input diagnostics, not as the main regression-test layer.
+
+When adding or changing runtime/editor behavior, prefer adding or adjusting Lua tests in `tests/lua/runtime` or `tests/lua/ui` alongside the implementation. Use in-process UI tests for focus, layout, panel, widget, Document View, prompt bar, fuzzy picker, and command-routing behavior whenever possible.
+
 ## Finalizing changes / updating the dev portable app
 
 When a change or feature is finished, run the relevant BAT file from the repo root so `C:\Projects\c_projects\anvil-portable` is updated. In most cases, run:

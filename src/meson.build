@@ -164,7 +164,7 @@ endif
 anvil_includes += include_directories('.')
 
 fuzzy_test = executable('fuzzy_test',
-    ['../tests/fuzzy_test.c', 'fuzzy.c'],
+    ['../tests/native/fuzzy_test.c', 'fuzzy.c'],
     include_directories: anvil_includes,
     c_args: anvil_cargs,
 )
@@ -220,7 +220,7 @@ if get_option('net')
     anvil_cargs += '-DANVIL_NET'
 endif
 
-executable('anvil',
+anvil_exe = executable('anvil',
     anvil_sources + anvil_rc,
     include_directories: anvil_includes,
     dependencies: anvil_deps,
@@ -248,3 +248,38 @@ if host_machine.system() == 'windows'
         win_subsystem: 'console',
     )
 endif
+
+lua_test_runner = files('../tests/run-lua-tests.sh')
+lua_test_shell = find_program('bash', 'sh')
+lua_test_env = environment()
+lua_test_env.set('SDL_VIDEO_DRIVER', 'dummy')
+
+test('lua-runtime', lua_test_shell,
+    args: [
+        lua_test_runner,
+        anvil_build_root,
+        anvil_source_root,
+        anvil_exe.full_path(),
+        'tests/lua/runtime',
+        'lua-runtime',
+    ],
+    env: lua_test_env,
+    depends: anvil_exe,
+    timeout: 120,
+    is_parallel: false,
+)
+
+test('lua-ui', lua_test_shell,
+    args: [
+        lua_test_runner,
+        anvil_build_root,
+        anvil_source_root,
+        anvil_exe.full_path(),
+        'tests/lua/ui',
+        'lua-ui',
+    ],
+    env: lua_test_env,
+    depends: anvil_exe,
+    timeout: 180,
+    is_parallel: false,
+)
