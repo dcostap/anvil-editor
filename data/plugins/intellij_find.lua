@@ -824,34 +824,6 @@ local function handle_find_mouse_pressed(view, state, x, y, clicks)
   return true
 end
 
-local function match_screen_rect(view, match)
-  local x1, y1 = view:get_line_screen_position(match.line, match.col1)
-  local x2, y2 = view:get_line_screen_position(match.line, match.col2)
-  if y2 ~= y1 then
-    -- A very long regex/plain match can cross a soft-wrap boundary.  We still
-    -- draw a useful first-segment marker rather than placing the whole match on
-    -- the physical line's first visual row.
-    x2 = view.position.x + view.size.x
-  end
-  return x1, y1, x2, view:get_line_height()
-end
-
-local function draw_match_rect(view, match, _x, _y, color)
-  local x1, y, x2, h = match_screen_rect(view, match)
-  if x2 <= x1 then return end
-  renderer.draw_rect(x1, y, x2 - x1, h, color)
-end
-
-local function draw_match_outline(view, match, _x, _y, color)
-  local x1, y, x2, h = match_screen_rect(view, match)
-  if x2 <= x1 then return end
-  local t = math.max(1, SCALE)
-  renderer.draw_rect(x1, y, x2 - x1, t, color)
-  renderer.draw_rect(x1, y + h - t, x2 - x1, t, color)
-  renderer.draw_rect(x1, y, t, h, color)
-  renderer.draw_rect(x2 - t, y, t, h, color)
-end
-
 -- Draw per-view find highlights. These are intentionally keyed by DocView, not
 -- Doc, so the same Doc open in two splits can show independent search state.
 --
@@ -879,22 +851,18 @@ local function make_local_find_draw_line_body(base)
     local state = visible_find_state(self)
     local line_matches = state and state.match_indexes_by_line and state.match_indexes_by_line[line]
     if line_matches and #line_matches > 0 then
-      local normal = style.selectionhighlight or style.search_selection or style.selection
-      local current = style.search_selection or style.selection
       for _, idx in ipairs(line_matches) do
         local match = state.matches[idx]
-        draw_match_rect(self, match, x, y, idx == state.current and current or normal)
+        self:draw_search_match_background(match.line, match.col1, match.col2, idx == state.current)
       end
     end
 
     local lh = base(self, line, x, y)
 
     if line_matches and #line_matches > 0 then
-      local outline = style.search_selection_outline or style.caret
-      local secondary = style.search_selection_secondary_outline or outline
       for _, idx in ipairs(line_matches) do
         local match = state.matches[idx]
-        draw_match_outline(self, match, x, y, idx == state.current and outline or secondary)
+        self:draw_search_match_outline(match.line, match.col1, match.col2, idx == state.current)
       end
     end
 

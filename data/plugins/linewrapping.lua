@@ -526,23 +526,29 @@ function DocView:draw_line_body(line, x, y)
   if not self.wrapped_settings then return old_draw_line_body(self, line, x, y) end
   local lh = self:get_line_height()
   local idx0, _, count = get_line_idx_col_count(self, line)
+  local search_matches
   for lidx, line1, col1, line2, col2 in self.doc:get_selections(true) do
     if line >= line1 and line <= line2 then
       if line1 ~= line then col1 = 1 end
       if line2 ~= line then col2 = #self.doc.lines[line] + 1 end
       if col1 ~= col2 then
-        local idx1, ncol1 = get_line_idx_col_count(self, line, col1)
-        local idx2, ncol2 = get_line_idx_col_count(self, line, col2)
-        local start = 0
-        for i = idx1, idx2 do
-          local x1, x2 = x + (idx1 == i and self:get_col_x_offset(line1, col1) or 0)
-          if idx2 == i then
-            x2 = x + self:get_col_x_offset(line, col2)
-          else
-            start = start + get_idx_line_length(self, i, line)
-            x2 = x + self:get_col_x_offset(line, start + 1, true)
+        if self.doc:is_search_selection(line1, col1, line, col2) then
+          search_matches = search_matches or {}
+          search_matches[#search_matches + 1] = { col1, col2, true }
+        else
+          local idx1, ncol1 = get_line_idx_col_count(self, line, col1)
+          local idx2, ncol2 = get_line_idx_col_count(self, line, col2)
+          local start = 0
+          for i = idx1, idx2 do
+            local x1, x2 = x + (idx1 == i and self:get_col_x_offset(line1, col1) or 0)
+            if idx2 == i then
+              x2 = x + self:get_col_x_offset(line, col2)
+            else
+              start = start + get_idx_line_length(self, i, line)
+              x2 = x + self:get_col_x_offset(line, start + 1, true)
+            end
+            renderer.draw_rect(x1, y + (i - idx0) * lh, x2 - x1, lh, style.selection)
           end
-          renderer.draw_rect(x1, y + (i - idx0) * lh, x2 - x1, lh, style.selection)
         end
       end
     end
@@ -560,8 +566,18 @@ function DocView:draw_line_body(line, x, y)
       self:draw_line_highlight(x + self.scroll.x, y + lh * (i - 1))
     end
   end
+  for _, match in ipairs(search_matches or {}) do
+    self:draw_search_match_background(line, match[1], match[2], match[3])
+  end
+
   -- draw line's text
-  return self:draw_line_text(line, x, y)
+  local line_height = self:draw_line_text(line, x, y)
+
+  for _, match in ipairs(search_matches or {}) do
+    self:draw_search_match_outline(line, match[1], match[2], match[3])
+  end
+
+  return line_height
 end
 
 local old_draw = DocView.draw

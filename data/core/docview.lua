@@ -1197,22 +1197,6 @@ function DocView:draw_line_text(line, x, y)
   end
   local _, indent_size = self.doc:get_indent_info()
 
-  local search_selection_cache = self.__line_text_search_selection_cache
-  local search_selections = search_selection_cache and search_selection_cache[line]
-  if not search_selections then
-    search_selections = {}
-    if not search_selection_cache then
-      for _, line1, col1, line2, col2 in self.doc:get_selections(true) do
-        if line == line1 and line <= line2 then
-          if self.doc:is_search_selection(line1, col1, line2, col2) then
-            table.insert(search_selections, {start = col1, stop = col2})
-          end
-        end
-      end
-    end
-  end
-
-  local col = 1
   local start_tx = tx
   local pending_font, pending_color, pending_chunks, pending_len
   local function flush_pending_text()
@@ -1229,59 +1213,20 @@ function DocView:draw_line_text(line, x, y)
   local token_loop_start = stats and system.get_time()
   for tidx, type, text in self.doc.highlighter:each_token(line) do
     if stats then stats.tokens = stats.tokens + 1 end
-    if #search_selections == 0 then
-      local color = style.syntax[type] or style.syntax["normal"]
-      local font = style.syntax_fonts[type] or default_font
-      if font ~= default_font then font:set_tab_size(indent_size) end
-      -- do not render newline, fixes issue #1164
-      if tidx == last_token then text = text:sub(1, -2) end
-      if text ~= "" then
-        if pending_font ~= font or pending_color ~= color or (pending_len or 0) + #text > 512 then
-          if flush_pending_text() then break end
-        end
-        if not pending_font then
-          pending_font, pending_color, pending_chunks, pending_len = font, color, {}, 0
-        end
-        pending_len = pending_len + #text
-        pending_chunks[#pending_chunks + 1] = text
+    local color = style.syntax[type] or style.syntax["normal"]
+    local font = style.syntax_fonts[type] or default_font
+    if font ~= default_font then font:set_tab_size(indent_size) end
+    -- do not render newline, fixes issue #1164
+    if tidx == last_token then text = text:sub(1, -2) end
+    if text ~= "" then
+      if pending_font ~= font or pending_color ~= color or (pending_len or 0) + #text > 512 then
+        if flush_pending_text() then break end
       end
-    else
-      if flush_pending_text() then break end
-      local font = style.syntax_fonts[type] or default_font
-      if font ~= default_font then font:set_tab_size(indent_size) end
-      if tidx == last_token then text = text:sub(1, -2) end
-      local i = 1
-      local len = #text
-
-      local function is_selected(c)
-        for _, sel in ipairs(search_selections) do
-          if c >= sel.start and c < sel.stop then
-            return true
-          end
-        end
-        return false
+      if not pending_font then
+        pending_font, pending_color, pending_chunks, pending_len = font, color, {}, 0
       end
-
-      while i <= len do
-        local chunk_start = i
-        local c = col
-        local selected = is_selected(c)
-        -- advance through contiguous characters with the same selection status
-        while i <= len and is_selected(col) == selected do
-          i = i + 1
-          col = col + 1
-        end
-        local chunk = text:sub(chunk_start, i - 1)
-        local color = selected and (style.search_selection_text or style.background)
-          or (style.syntax[type] or style.syntax["normal"])
-        local draw_text_start = stats and system.get_time()
-        tx = renderer.draw_text(font, chunk, tx, ty, color, {tab_offset = tx - start_tx})
-        if stats then
-          stats.draw_text_calls = stats.draw_text_calls + 1
-          stats.renderer_draw_text_ms = stats.renderer_draw_text_ms + (system.get_time() - draw_text_start) * 1000
-        end
-        if tx > self.position.x + self.size.x then break end
-      end
+      pending_len = pending_len + #text
+      pending_chunks[#pending_chunks + 1] = text
     end
   end
   flush_pending_text()
@@ -1360,6 +1305,44 @@ function DocView:draw_caret(x, y, line, col, caret_idx, color)
 end
 
 
+function DocView:search_match_style(primary)
+  if primary then
+    return style.search_selection or style.selection, style.search_selection_outline or style.caret
+  end
+  return style.selectionhighlight or style.search_selection or style.selection,
+    style.search_selection_secondary_outline or style.search_selection_outline or style.caret
+end
+
+function DocView:search_match_screen_rect(line, col1, col2)
+  local x1, y1 = self:get_line_screen_position(line, col1)
+  local x2, y2 = self:get_line_screen_position(line, col2)
+  if y2 ~= y1 then
+    -- A very long match can cross a soft-wrap boundary. Draw a useful
+    -- first-segment marker rather than placing the whole match on the physical
+    -- line's first visual row.
+    x2 = self.position.x + self.size.x
+  end
+  return x1, y1, x2, self:get_line_height()
+end
+
+function DocView:draw_search_match_background(line, col1, col2, primary)
+  local x1, y, x2, h = self:search_match_screen_rect(line, col1, col2)
+  if x2 <= x1 then return end
+  local bg = self:search_match_style(primary)
+  renderer.draw_rect(x1, y, x2 - x1, h, bg)
+end
+
+function DocView:draw_search_match_outline(line, col1, col2, primary)
+  local x1, y, x2, h = self:search_match_screen_rect(line, col1, col2)
+  if x2 <= x1 then return end
+  local _, outline = self:search_match_style(primary)
+  local t = math.max(1, SCALE)
+  renderer.draw_rect(x1, y, x2 - x1, t, outline)
+  renderer.draw_rect(x1, y + h - t, x2 - x1, t, outline)
+  renderer.draw_rect(x1, y, t, h, outline)
+  renderer.draw_rect(x2 - t, y, t, h, outline)
+end
+
 ---Prepare per-visible-line selection/highlight data for draw_line_body().
 ---This avoids scanning every selection once per visible line and merges
 ---overlapping same-color ranges into one rectangle.
@@ -1368,7 +1351,7 @@ end
 function DocView:prepare_line_body_draw_cache(minline, maxline)
   local highlight_cache = {}
   local selection_cache = {}
-  local search_selection_cache = {}
+  local search_match_cache = {}
   local gutter_selection_cache = {}
   local visible_caret_cache = {}
   local hcl = config.highlight_current_line
@@ -1403,23 +1386,22 @@ function DocView:prepare_line_body_draw_cache(minline, maxline)
         local c1 = line1 ~= line and 1 or col1
         local c2 = line2 ~= line and #text + 1 or col2
         if c1 ~= c2 then
-          local selection_color = style.selection
           local is_search_selection = self.doc:is_search_selection(line1, c1, line, c2)
           if is_search_selection then
-            selection_color = style.search_selection or style.caret
-            local search_list = search_selection_cache[line]
+            local search_list = search_match_cache[line]
             if not search_list then
               search_list = {}
-              search_selection_cache[line] = search_list
+              search_match_cache[line] = search_list
             end
-            search_list[#search_list + 1] = { start = c1, stop = c2 }
+            search_list[#search_list + 1] = { c1, c2, true }
+          else
+            local list = selection_cache[line]
+            if not list then
+              list = {}
+              selection_cache[line] = list
+            end
+            list[#list + 1] = { c1, c2, style.selection, false }
           end
-          local list = selection_cache[line]
-          if not list then
-            list = {}
-            selection_cache[line] = list
-          end
-          list[#list + 1] = { c1, c2, selection_color, selection_color ~= style.selection }
         end
       end
     end
@@ -1447,7 +1429,7 @@ function DocView:prepare_line_body_draw_cache(minline, maxline)
 
   self.__line_body_highlight_cache = highlight_cache
   self.__line_body_selection_cache = selection_cache
-  self.__line_text_search_selection_cache = search_selection_cache
+  self.__line_body_search_match_cache = search_match_cache
   self.__line_gutter_selection_cache = gutter_selection_cache
   self.__visible_caret_cache = visible_caret_cache
 end
@@ -1489,6 +1471,7 @@ function DocView:draw_line_body(line, x, y)
   -- draw selection if it overlaps this line
   local lh = self:get_line_height()
   local selection_cache = self.__line_body_selection_cache
+  local fallback_search_matches
   local cached_selections = selection_cache and selection_cache[line]
   if cached_selections then
     for _, sel in ipairs(cached_selections) do
@@ -1507,23 +1490,40 @@ function DocView:draw_line_body(line, x, y)
         local text = self.doc.lines[line]
         if line1 ~= line then col1 = 1 end
         if line2 ~= line then col2 = #text + 1 end
-        local x1 = x + self:get_col_x_offset(line, col1)
-        local x2 = x + self:get_col_x_offset(line, col2)
-        if x1 ~= x2 then
-          local stats = core.docview_frame_stats
-          if stats then stats.selection_rect_calls = stats.selection_rect_calls + 1 end
-          local selection_color = style.selection
-          if self.doc:is_search_selection(line1, col1, line, col2) then
-            selection_color = style.search_selection or style.caret
+        if self.doc:is_search_selection(line1, col1, line, col2) then
+          fallback_search_matches = fallback_search_matches or {}
+          fallback_search_matches[#fallback_search_matches + 1] = { col1, col2, true }
+        else
+          local x1 = x + self:get_col_x_offset(line, col1)
+          local x2 = x + self:get_col_x_offset(line, col2)
+          if x1 ~= x2 then
+            local stats = core.docview_frame_stats
+            if stats then stats.selection_rect_calls = stats.selection_rect_calls + 1 end
+            renderer.draw_rect(x1, y, x2 - x1, lh, style.selection)
           end
-          renderer.draw_rect(x1, y, x2 - x1, lh, selection_color)
         end
       end
     end
   end
 
+  local search_match_cache = self.__line_body_search_match_cache
+  local cached_search_matches = (search_match_cache and search_match_cache[line]) or fallback_search_matches
+  if cached_search_matches then
+    for _, match in ipairs(cached_search_matches) do
+      self:draw_search_match_background(line, match[1], match[2], match[3])
+    end
+  end
+
   -- draw line's text
-  return self:draw_line_text(line, x, y)
+  local line_height = self:draw_line_text(line, x, y)
+
+  if cached_search_matches then
+    for _, match in ipairs(cached_search_matches) do
+      self:draw_search_match_outline(line, match[1], match[2], match[3])
+    end
+  end
+
+  return line_height
 end
 
 
