@@ -521,6 +521,37 @@ function DocView:draw_line_text(line, x, y)
   return lh * count
 end
 
+local function draw_wrapped_search_match_segment(view, x1, y, x2, h, primary, outline)
+  if x2 <= x1 then return end
+  local bg, border = view:search_match_style(primary)
+  if not outline then
+    renderer.draw_rect(x1, y, x2 - x1, h, bg)
+    return
+  end
+  local t = math.max(1, SCALE)
+  renderer.draw_rect(x1, y, x2 - x1, t, border)
+  renderer.draw_rect(x1, y + h - t, x2 - x1, t, border)
+  renderer.draw_rect(x1, y, t, h, border)
+  renderer.draw_rect(x2 - t, y, t, h, border)
+end
+
+local function draw_wrapped_search_match(view, line, col1, col2, x, y, idx0, lh, primary, outline)
+  local idx1 = get_line_idx_col_count(view, line, col1)
+  local idx2 = get_line_idx_col_count(view, line, col2)
+  local start = 0
+  for i = idx1, idx2 do
+    local x1 = x + (idx1 == i and view:get_col_x_offset(line, col1) or 0)
+    local x2
+    if idx2 == i then
+      x2 = x + view:get_col_x_offset(line, col2)
+    else
+      start = start + get_idx_line_length(view, i, line)
+      x2 = x + view:get_col_x_offset(line, start + 1, true)
+    end
+    draw_wrapped_search_match_segment(view, x1, y + (i - idx0) * lh, x2, lh, primary, outline)
+  end
+end
+
 local old_draw_line_body = DocView.draw_line_body
 function DocView:draw_line_body(line, x, y)
   if not self.wrapped_settings then return old_draw_line_body(self, line, x, y) end
@@ -567,14 +598,14 @@ function DocView:draw_line_body(line, x, y)
     end
   end
   for _, match in ipairs(search_matches or {}) do
-    self:draw_search_match_background(line, match[1], match[2], match[3])
+    draw_wrapped_search_match(self, line, match[1], match[2], x, y, idx0, lh, match[3], false)
   end
 
   -- draw line's text
   local line_height = self:draw_line_text(line, x, y)
 
   for _, match in ipairs(search_matches or {}) do
-    self:draw_search_match_outline(line, match[1], match[2], match[3])
+    draw_wrapped_search_match(self, line, match[1], match[2], x, y, idx0, lh, match[3], true)
   end
 
   return line_height
