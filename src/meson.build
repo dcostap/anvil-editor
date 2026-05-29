@@ -163,12 +163,32 @@ endif
 
 anvil_includes += include_directories('.')
 
+anvil_test_env = environment()
+anvil_test_env.set('SDL_VIDEO_DRIVER', 'dummy')
+if host_machine.system() == 'windows'
+    # Keep Meson failure output printable on machines with non-ASCII or hidden
+    # characters in PATH while preserving tools used by runtime tests.
+    anvil_test_env.set('PATH', [
+        'C:/msys64/mingw64/bin',
+        'C:/msys64/usr/bin',
+        'C:/Program Files/Git/usr/bin',
+        'C:/Program Files/Git/mingw64/bin',
+        'C:/Python312',
+        'C:/Python312/Scripts',
+        'C:/Windows/system32',
+        'C:/Windows',
+        'C:/Windows/System32/Wbem',
+        'C:/Windows/System32/WindowsPowerShell/v1.0',
+        'C:/Windows/System32/OpenSSH',
+    ])
+endif
+
 fuzzy_test = executable('fuzzy_test',
     ['../tests/native/fuzzy_test.c', 'fuzzy.c'],
     include_directories: anvil_includes,
     c_args: anvil_cargs,
 )
-test('fuzzy', fuzzy_test)
+test('fuzzy', fuzzy_test, env: anvil_test_env)
 
 # load and configure linenoise
 if get_option('repl_history')
@@ -251,8 +271,6 @@ endif
 
 lua_test_runner = files('../tests/run-lua-tests.sh')
 lua_test_shell = find_program('bash', 'sh')
-lua_test_env = environment()
-lua_test_env.set('SDL_VIDEO_DRIVER', 'dummy')
 
 test('lua-runtime', lua_test_shell,
     args: [
@@ -263,7 +281,7 @@ test('lua-runtime', lua_test_shell,
         'tests/lua/runtime',
         'lua-runtime',
     ],
-    env: lua_test_env,
+    env: anvil_test_env,
     depends: anvil_exe,
     timeout: 120,
     is_parallel: false,
@@ -278,7 +296,7 @@ test('lua-ui', lua_test_shell,
         'tests/lua/ui',
         'lua-ui',
     ],
-    env: lua_test_env,
+    env: anvil_test_env,
     depends: anvil_exe,
     timeout: 180,
     is_parallel: false,
