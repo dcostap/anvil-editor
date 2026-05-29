@@ -508,14 +508,19 @@ function core.set_active_view(view)
   if previous_state and previous_state.visible and next ~= previous then
     local next_state = next and next.local_find_input and next.local_find_state
     if next_state ~= previous_state then
-      -- A DocView Prompt Bar is focus-owned UI: if it loses focus, it closes
-      -- instead of staying visible in the background.
       previous_state.input_active = false
-      previous_state.visible = false
-      previous_state.matches = {}
-      previous_state.match_indexes_by_line = {}
-      previous_state.current = 0
-      core.log_quiet("Local find: closed overlay because prompt focus was lost")
+      if next == previous_state.owner_view then
+        -- A DocView Prompt Bar closes when focus returns to its owning DocView.
+        -- It may stay visible when focus moves elsewhere, such as from a Side
+        -- Editor prompt to the corresponding Main Editor.
+        previous_state.visible = false
+        previous_state.matches = {}
+        previous_state.match_indexes_by_line = {}
+        previous_state.current = 0
+        core.log_quiet("Local find: closed overlay because focus returned to owner")
+      else
+        core.log_quiet("Local find: deactivated overlay because focus moved elsewhere")
+      end
       core.redraw = true
     end
   end

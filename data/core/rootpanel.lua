@@ -4,6 +4,7 @@ local style = require "core.style"
 local Node = require "core.node"
 local View = require "core.view"
 local DocView = require "core.docview"
+local file_context = require "core.file_context"
 
 ---@class core.rootpanel.overlay.to
 ---@field x number
@@ -181,11 +182,12 @@ function RootPanel:open_doc(doc, opts)
   local node = opts.node or self:get_active_node_default()
   for i, view in ipairs(node.views) do
     if view.doc == doc then
+      file_context.mark_editor_view(view)
       node:set_active_view(node.views[i])
       return view
     end
   end
-  local view = DocView(doc)
+  local view = file_context.mark_editor_view(DocView(doc))
   if opts.source_view and opts.source_view.doc == doc and opts.source_view.get_selection_state then
     view:set_selection_state(opts.source_view:get_selection_state())
     view.scroll.x = opts.source_view.scroll.x or 0

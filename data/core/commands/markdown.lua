@@ -1,5 +1,6 @@
 local core = require "core"
 local command = require "core.command"
+local file_context = require "core.file_context"
 local config = require "core.config"
 local DocView = require "core.docview"
 local MarkdownView = require "core.markdownview"
@@ -52,18 +53,19 @@ local function open_raw_doc_view(path, mv)
   if config.markdown_preview_mode == "newtab" then
     for _, view in ipairs(node.views) do
       if view:extends(DocView) and view.doc == doc then
+        file_context.mark_editor_view(view)
         node:set_active_view(view)
         return view
       end
     end
-    local view = DocView(doc)
+    local view = file_context.mark_editor_view(DocView(doc))
     node:add_view(view)
     core.root_panel.root_node:update_layout()
     view:scroll_to_line(view.doc:get_selection(), true, true)
     return view
   end
 
-  local view = DocView(doc)
+  local view = file_context.mark_editor_view(DocView(doc))
   local split_direction = markdown_raw_split_directions[config.markdown_preview_mode] or "left"
   node:split(split_direction, view)
   core.root_panel.root_node:update_layout()

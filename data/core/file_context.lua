@@ -22,9 +22,19 @@ end
 
 M.excluded_main_panel_views = M.excluded_main_panel_views or M.excluded_main_views or setmetatable({}, { __mode = "k" })
 M.excluded_main_views = M.excluded_main_panel_views -- deprecated compatibility alias
+M.editor_views = M.editor_views or setmetatable({}, { __mode = "k" })
 
 function M.exclude_main_panel_view(view)
   if view then M.excluded_main_panel_views[view] = true end
+end
+
+function M.mark_editor_view(view)
+  if view then M.editor_views[view] = true end
+  return view
+end
+
+function M.is_editor_view(view)
+  return not not (view and M.editor_views[view])
 end
 
 function M.is_file_view(view)
@@ -34,7 +44,7 @@ end
 function M.is_main_panel_view(view)
   if not view or M.excluded_main_panel_views[view] then return false end
   if view == core.global_prompt_bar or view == core.nag_view or view == core.status_bar or view == core.title_bar then return false end
-  return view.context == "workspace" or view.context == "session" or M.is_file_view(view)
+  return M.is_editor_view(view) or view.context == "workspace" or view.context == "session" or M.is_file_view(view)
 end
 
 function M.active_file_path()

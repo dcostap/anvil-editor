@@ -489,6 +489,7 @@ end
 
 
 function DocView.from_state(state)
+  local file_context = require "core.file_context"
   local dv
   if not state.filename then
     -- document not associated to a file
@@ -501,6 +502,7 @@ function DocView.from_state(state)
     end
   end
   if dv and dv.doc then
+    file_context.mark_editor_view(dv)
     if dv.doc.new_file and state.text then
       dv.doc:insert(1, 1, state.text)
       dv.doc.crlf = state.crlf

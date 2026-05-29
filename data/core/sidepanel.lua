@@ -2,7 +2,7 @@
 --
 -- The side panel is a persistent, locked right-side leaf node. It behaves like
 -- a hidden-tab container: multiple views can live in the node, while only one
--- is active/visible at a time. This keeps side DocViews in the normal root node
+-- is active/visible at a time. This keeps side Editors in the normal root node
 -- tree so document lifetime, autosave, autoreload, conflict checks, and close
 -- handling continue to work like ordinary editor tabs.
 
@@ -28,7 +28,7 @@ M.main_focus_views = M.main_focus_views or setmetatable({}, { __mode = "k" })
 M.last_side_focus_view = M.last_side_focus_view
 M.last_side_focus_owner = M.last_side_focus_owner
 M.side_focus_views = M.side_focus_views or setmetatable({}, { __mode = "k" })
-M.last_docview_focus_owner = M.last_docview_focus_owner
+M.last_editor_focus_owner = M.last_editor_focus_owner
 M.side_node = M.side_node
 M.main_node = M.main_node
 M.container_node = M.container_node
@@ -140,8 +140,12 @@ local function is_docview(view)
   return view and view.extends and view:extends(DocView)
 end
 
-local function is_side_docview(view)
-  return is_docview(view) and view.__sidepanel_docview == true
+function M.is_side_editor(view)
+  return M.is_side_view(view) and file_context.is_editor_view(view)
+end
+
+local function is_side_editor(view)
+  return M.is_side_editor(view)
 end
 
 local function side_focus_owner(view)
@@ -217,22 +221,22 @@ function M.restorable_main_focus_view(owner)
   return restorable_focus_view(M.main_focus_views[owner], owner) or owner
 end
 
-local function docview_focus_owner(view)
+local function editor_focus_owner(view)
   return main_focus_owner(view) or side_focus_owner(view)
 end
 
-function M.remember_docview_focus_owner(view)
-  local owner = docview_focus_owner(view)
-  if owner and (M.is_main_panel_view(owner) or is_side_docview(owner)) then
-    M.last_docview_focus_owner = owner
+function M.remember_editor_focus_owner(view)
+  local owner = editor_focus_owner(view)
+  if owner and (M.is_main_panel_view(owner) or is_side_editor(owner)) then
+    M.last_editor_focus_owner = owner
   end
   return owner
 end
 
-function M.last_restorable_docview_focus_owner()
-  local owner = M.last_docview_focus_owner
+function M.last_restorable_editor_focus_owner()
+  local owner = M.last_editor_focus_owner
   if owner and M.is_side_view(owner) then
-    if is_side_docview(owner) and M.contains_view(owner) then return owner end
+    if is_side_editor(owner) and M.contains_view(owner) then return owner end
   elseif owner and is_docview(owner) then
     return file_context.current_main_panel_view(owner) or owner
   end
@@ -389,22 +393,22 @@ function M.active_side_view()
   return side and side.active_view
 end
 
-function M.restorable_side_docview()
+function M.restorable_side_editor()
   M.prune_stale_views()
   local side = M.ensure_side_node()
   local active = side and side.active_view
-  if is_side_docview(active) and M.is_side_view(active) then return active end
-  if is_side_docview(M.last_side_focus_owner) and M.contains_view(M.last_side_focus_owner) then
+  if is_side_editor(active) and M.is_side_view(active) then return active end
+  if is_side_editor(M.last_side_focus_owner) and M.contains_view(M.last_side_focus_owner) then
     return M.last_side_focus_owner
   end
-  if is_side_docview(M.file_view) and M.contains_view(M.file_view) then return M.file_view end
+  if is_side_editor(M.file_view) and M.contains_view(M.file_view) then return M.file_view end
   if side then
-    -- Side DocViews are removable panels; if a non-DocView panel is active,
-    -- Alt+1 can still restore the newest remaining Side DocView instead of
+    -- Side Editors are removable panels; if a non-Editor panel is active,
+    -- Alt+1 can still restore the newest remaining Side Editor instead of
     -- treating the Side Panel as only a persistent tool panel.
     for i = #(side.views or {}), 1, -1 do
       local view = side.views[i]
-      if is_side_docview(view) and M.is_side_view(view) then return view end
+      if is_side_editor(view) and M.is_side_view(view) then return view end
     end
   end
 end
@@ -507,33 +511,36 @@ function M.toggle_focus()
   end
 end
 
-function M.focus_docview_or_restore_side()
+function M.focus_editor_or_restore_side()
   local prompt_owner = side_focus_owner(core.active_view) or main_focus_owner(core.active_view)
+  if prompt_owner and not (M.is_main_panel_view(prompt_owner) or is_side_editor(prompt_owner)) then
+    prompt_owner = nil
+  end
   if core.active_view and core.active_view.local_find_input and prompt_owner then
-    -- Alt+1 from a DocView Prompt Bar is equivalent to closing that prompt:
-    -- focus returns to its owning DocView, regardless of Main/Side location.
+    -- Alt+1 from a DocView Prompt Bar is equivalent to closing that prompt,
+    -- but only when the prompt belongs to a real Editor.
     command.perform("user:find-close")
     return prompt_owner
   end
 
   M.prune_stale_views()
-  local side_docview = M.restorable_side_docview()
-  local focus_owner = M.last_restorable_docview_focus_owner()
+  local side_editor = M.restorable_side_editor()
+  local focus_owner = M.last_restorable_editor_focus_owner()
 
-  local should_hide_side_panel = not side_docview
-  if side_docview then
+  local should_hide_side_panel = not side_editor
+  if side_editor then
     M.visible = true
-    M.set_side_view(side_docview, false)
+    M.set_side_view(side_editor, false)
   else
-    -- Alt+1 is a DocView-focus command. Persistent non-DocView Side Panel
-    -- tools should get out of the way when there is no Side DocView to keep.
+    -- Alt+1 is an Editor-focus command. Persistent non-Editor Side Panel
+    -- tools should get out of the way when there is no Side Editor to keep.
     M.hide(false)
   end
 
   if not focus_owner then
     focus_owner = M.current_main_panel_view(M.last_main_panel_view)
       or (core.root_panel and core.root_panel:get_main_panel() and core.root_panel:get_main_panel().active_view)
-      or side_docview
+      or side_editor
   end
 
   if focus_owner then
@@ -549,25 +556,25 @@ function M.focus_docview_or_restore_side()
   return focus_owner
 end
 
-function M.close_active_side_docview_or_hide()
+function M.close_active_side_editor_or_hide()
   local owner = side_focus_owner(core.active_view)
-  if is_side_docview(owner) and M.contains_view(owner) then
-    local function close_side_docview()
-      core.log_quiet("Side panel: closed Side DocView")
+  if is_side_editor(owner) and M.contains_view(owner) then
+    local function close_side_editor()
+      core.log_quiet("Side panel: closed Side Editor")
       M.remove_view(owner, false)
       M.hide(false)
       M.focus_main(false)
       M.hide(false)
     end
 
-    -- Side DocViews are removed when closed. Use the normal DocView close path
+    -- Side Editors are removed when closed. Use the normal Editor close path
     -- only when this is the last dirty view, so save/conflict prompts remain
     -- identical to ordinary DocViews without prompting for duplicate views.
     local refs = owner.doc and core.get_views_referencing_doc and core.get_views_referencing_doc(owner.doc) or {}
     if not (owner.doc and owner.doc.is_dirty and owner.doc:is_dirty()) or #refs > 1 then
-      close_side_docview()
+      close_side_editor()
     else
-      owner:try_close(close_side_docview)
+      owner:try_close(close_side_editor)
     end
     return owner
   end
@@ -660,13 +667,12 @@ local function set_side_file_doc(doc, opts)
   local view = M.file_view
   if view and not M.contains_view(view) then view = nil end
   if not view or view.doc ~= doc then
-    view = DocView(doc)
-    view.__sidepanel_docview = true
+    view = file_context.mark_editor_view(DocView(doc))
     M.file_view = view
     M.file_view_path = doc.abs_filename
     M.register_panel("file", view)
   else
-    view.__sidepanel_docview = true
+    file_context.mark_editor_view(view)
     M.attach_view("file", view)
     M.add_view(view)
   end
@@ -802,14 +808,14 @@ function core.set_active_view(view)
   if core.sidepanel then
     core.sidepanel.remember_main_panel_view(view)
     core.sidepanel.remember_side_focus_view(view)
-    core.sidepanel.remember_docview_focus_owner(view)
+    core.sidepanel.remember_editor_focus_owner(view)
   end
   return result
 end
 
 command.add(nil, {
   ["sidepanel:focus-main-and-hide"] = function()
-    M.focus_docview_or_restore_side()
+    M.focus_editor_or_restore_side()
   end,
   ["sidepanel:toggle-focus"] = function()
     M.toggle_focus()
@@ -823,13 +829,13 @@ command.add(nil, {
   ["sidepanel:open-current-file"] = function()
     local active = core.active_view
     local side_owner = side_focus_owner(active)
-    if side_owner and side_owner.extends and side_owner:extends(DocView) and side_owner.doc then
+    if is_side_editor(side_owner) and side_owner.doc then
       M.open_doc_in_main(side_owner.doc, { source_view = side_owner, focus = true })
       return true
     end
 
     local view = M.current_main_panel_view(active)
-    if not view or not view.extends or not view:extends(DocView) or not view.doc then return false end
+    if not file_context.is_editor_view(view) or not view.doc then return false end
     M.open_doc_in_side(view.doc, { source_view = view, focus = true })
     return true
   end,
@@ -841,7 +847,7 @@ command.add(function()
   return M.is_side_view(core.active_view)
 end, {
   ["sidepanel:hide-active"] = function()
-    M.close_active_side_docview_or_hide()
+    M.close_active_side_editor_or_hide()
   end,
   ["sidepanel:switch-to-next-view"] = function()
     M.switch_side_view(1)

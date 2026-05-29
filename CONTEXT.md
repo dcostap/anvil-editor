@@ -29,12 +29,20 @@ The in-memory editable text for a file or untitled document.
 _Avoid_: Buffer
 
 **Document View / DocView**:
-A visual editor instance showing a Document. Multiple Document Views can show the same Document while keeping separate view state such as scroll and selection.
+A visual surface showing a Document. A Document View can be an Editor or a document-backed tool panel.
 _Avoid_: Editor tab, buffer view
 
-**Side DocView**:
-A Document View hosted in the Side Panel for the split-editor experience. Also valid: DocView in Side Panel, Side Panel DocView, Split DocView.
-_Avoid_: Side editor, secondary editor
+**Editor**:
+A Document View used to edit a file or untitled Document. Document-backed tool panels are not Editors, even when they use Document View mechanics.
+_Avoid_: Buffer, editor tab
+
+**Main Editor**:
+An Editor hosted in the Main Panel.
+_Avoid_: Main DocView, primary editor
+
+**Side Editor**:
+An Editor hosted in the Side Panel for the split-editor experience.
+_Avoid_: Side DocView, Side Panel DocView, Split DocView, side buffer
 
 **Selection State**:
 The caret and selection state owned by a Document View.
