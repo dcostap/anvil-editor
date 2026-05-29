@@ -24,6 +24,7 @@ M.side_views = M.side_views or setmetatable({}, { __mode = "k" })
 M.visible = M.visible or false
 M.current_panel = M.current_panel
 M.last_main_panel_view = M.last_main_panel_view
+M.main_focus_views = M.main_focus_views or setmetatable({}, { __mode = "k" })
 M.last_side_focus_view = M.last_side_focus_view
 M.last_side_focus_owner = M.last_side_focus_owner
 M.side_focus_views = M.side_focus_views or setmetatable({}, { __mode = "k" })
@@ -144,6 +145,8 @@ function M.side_focus_owner(view)
   return side_focus_owner(view)
 end
 
+local restorable_focus_view
+
 function M.remember_side_focus_view(view)
   local owner = side_focus_owner(view)
   if owner then
@@ -156,7 +159,7 @@ end
 
 function M.restorable_side_focus_view(owner)
   if not owner or not M.contains_view(owner) then return nil end
-  local view = M.side_focus_views[owner]
+  local view = restorable_focus_view(M.side_focus_views[owner], owner)
   if view and side_focus_owner(view) == owner then
     return view
   end
@@ -175,10 +178,34 @@ function M.is_main_panel_view(view)
   return file_context.is_main_panel_view(view) and not M.is_side_view(view)
 end
 
-function M.remember_main_panel_view(view)
-  if M.is_main_panel_view(view) then
-    M.last_main_panel_view = view
+local function main_focus_owner(view)
+  if M.is_main_panel_view(view) then return view end
+  local owner = view and view.__sidepanel_focus_owner
+  if M.is_main_panel_view(owner) then return owner end
+end
+
+function restorable_focus_view(view, owner)
+  if view and view.local_find_input then
+    local state = view.local_find_state
+    if not (state and state.visible and state.input_active) then return nil end
   end
+  if owner and view and view.__sidepanel_focus_owner and view.__sidepanel_focus_owner ~= owner then return nil end
+  return view
+end
+
+function M.remember_main_panel_view(view)
+  local owner = main_focus_owner(view)
+  if owner then
+    M.last_main_panel_view = owner
+    if view ~= owner then
+      M.main_focus_views[owner] = view
+    end
+  end
+end
+
+function M.restorable_main_focus_view(owner)
+  if not owner then return nil end
+  return restorable_focus_view(M.main_focus_views[owner], owner) or owner
 end
 
 local function side_parent_width()
@@ -399,7 +426,7 @@ function M.focus_main(hide)
     local main_panel = core.root_panel and core.root_panel:get_main_panel()
     view = main_panel and main_panel.active_view
   end
-  if view then core.set_active_view(view) end
+  if view then core.set_active_view(M.restorable_main_focus_view(view) or view) end
   return view
 end
 

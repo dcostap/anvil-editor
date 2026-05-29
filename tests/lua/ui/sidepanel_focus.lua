@@ -425,4 +425,84 @@ test.describe("sidepanel focus", function()
     assert_active_view(find_a, "expected previous-tab from side find input to switch to side A find input")
     test.equal(find_a:get_text(), "alpha")
   end)
+
+  test.it("does not restore a submitted side find input as focused", function(context)
+    local main_view, side_view = setup_main_and_side(context)
+
+    test.ok(command.perform("sidepanel:toggle-focus"))
+    local side_find = open_find_input(side_view)
+    type_into_active_view("side-query")
+
+    test.ok(command.perform("user:find-submit-or-replace"))
+    assert_active_view(side_view, "expected submitting side find to return focus to the side DocView")
+    test.equal(side_find.local_find_state.visible, true)
+    test.equal(side_find.local_find_state.input_active, false)
+
+    test.ok(command.perform("sidepanel:toggle-focus"))
+    assert_active_view(main_view, "expected toggle from side DocView to focus main DocView")
+    test.ok(command.perform("sidepanel:toggle-focus"))
+
+    assert_active_view(side_view, "expected toggling back to restore side DocView, not inactive side find input")
+    test.equal(side_find.local_find_state.input_active, false)
+  end)
+
+  test.it("side and main local find inputs stay independent for the same document", function(context)
+    local doc = new_doc(context, "shared alpha beta\nshared gamma\n")
+    local main_view = track(context, "views", core.root_panel:open_doc(doc))
+    main_view.__test_name = "main shared DocView"
+    core.set_active_view(main_view)
+
+    local side_view = track(context, "side_views", sidepanel.open_doc_in_side(doc, {
+      focus = false,
+      restore_focus = main_view,
+    }))
+    side_view.__test_name = "side shared DocView"
+    track(context, "views", side_view)
+
+    local main_find = open_find_input(main_view)
+    main_find.__test_name = "local find input for main shared DocView"
+    type_into_active_view("main-query")
+    set_selection(main_find, 1, 2, 1, 7)
+    local expected_main_selection = selection_state(main_find)
+
+    test.ok(command.perform("sidepanel:toggle-focus"))
+    assert_active_view(side_view, "expected toggle to focus side shared DocView")
+    local side_find = open_find_input(side_view)
+    side_find.__test_name = "local find input for side shared DocView"
+    type_into_active_view("side-query")
+    set_selection(side_find, 1, 3, 1, 8)
+    local expected_side_selection = selection_state(side_find)
+
+    test.ok(command.perform("sidepanel:toggle-focus"))
+    assert_active_view(main_find, "expected toggling to main to restore main shared find input")
+    test.equal(main_find:get_text(), "main-query")
+    test.same(selection_state(main_find), expected_main_selection)
+
+    test.ok(command.perform("sidepanel:toggle-focus"))
+    assert_active_view(side_find, "expected toggling to side to restore side shared find input")
+    test.equal(side_find:get_text(), "side-query")
+    test.same(selection_state(side_find), expected_side_selection)
+  end)
+
+  test.it("sidepanel open-current-file copies main selection and scroll", function(context)
+    local main_view = open_main_docview(context, "one\ntwo alpha\nthree\n")
+    main_view.__test_name = "main DocView"
+    core.set_active_view(main_view)
+    set_selection(main_view, 2, 5, 2, 10)
+    main_view.scroll.x, main_view.scroll.to.x = 11, 11
+    main_view.scroll.y, main_view.scroll.to.y = 22, 22
+    local expected_selection = main_view:get_selection_state()
+
+    test.ok(command.perform("sidepanel:open-current-file"))
+    local side_view = sidepanel.file_view
+    side_view.__test_name = "side file DocView"
+    track(context, "side_views", side_view)
+    track(context, "views", side_view)
+
+    assert_active_view(side_view, "expected open-current-file to focus the side file DocView")
+    test.ok(side_view.doc == main_view.doc, "expected side file DocView to share the main document")
+    test.same(side_view:get_selection_state(), expected_selection)
+    test.equal(side_view.scroll.x, 11)
+    test.equal(side_view.scroll.y, 22)
+  end)
 end)
