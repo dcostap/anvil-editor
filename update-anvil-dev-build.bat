@@ -29,7 +29,7 @@ if errorlevel 1 exit /b 1
 
 echo.
 echo === Building Anvil incrementally ===
-"%BASH%" -lc "%MSYS_ENV% cd /c/Projects/c_projects/anvil-editor && if [ -f build-windows-x86_64/build.ninja ]; then meson configure build-windows-x86_64 -Drenderer=true && meson compile -C build-windows-x86_64; else ./scripts/build.sh -f -P; fi"
+"%BASH%" -lc "%MSYS_ENV% cd /c/Projects/c_projects/anvil-editor && if [ -f build-windows-x86_64/build.ninja ]; then meson configure build-windows-x86_64 -Drenderer=true && meson compile -C build-windows-x86_64; else ./scripts/build.sh -f -P; fi && ./scripts/ensure-luajit-cli.sh"
 if errorlevel 1 exit /b 1
 
 echo.

@@ -21,7 +21,7 @@ call :KillAnvil
 if errorlevel 1 exit /b 1
 
 echo === Building Anvil ===
-"%BASH%" -lc "%MSYS_ENV% cd /c/Projects/c_projects/anvil-editor && ./scripts/build.sh -f -P"
+"%BASH%" -lc "%MSYS_ENV% cd /c/Projects/c_projects/anvil-editor && ./scripts/build.sh -f -P && ./scripts/ensure-luajit-cli.sh"
 if errorlevel 1 exit /b 1
 
 echo.

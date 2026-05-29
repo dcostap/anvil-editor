@@ -105,7 +105,7 @@ Use LuaJIT for this because Anvil runs LuaJIT in the normal dev build, so it is 
 ./build-windows-x86_64/subprojects/luajit/src/luajit.exe check-lua-syntax.lua data/plugins/example.lua
 ```
 
-A normal Meson build generates this executable. If the repo-local executable is missing and cannot be built, ask the user before installing anything globally. On this PC the expected install command is:
+A normal Meson build generates this executable. The dev setup/update BAT files also run `scripts/ensure-luajit-cli.sh`, which builds that CLI and refreshes a stale LuaJIT subproject checkout if needed. If the repo-local executable is still missing and cannot be built, ask the user before installing anything globally. On this PC the expected install command is:
 
 ```powershell
 winget install --id DEVCOM.LuaJIT -e
