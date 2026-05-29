@@ -24,6 +24,8 @@ M.side_views = M.side_views or setmetatable({}, { __mode = "k" })
 M.visible = M.visible or false
 M.current_panel = M.current_panel
 M.last_main_panel_view = M.last_main_panel_view
+M.last_side_focus_view = M.last_side_focus_view
+M.last_side_focus_owner = M.last_side_focus_owner
 M.side_node = M.side_node
 M.main_node = M.main_node
 M.container_node = M.container_node
@@ -131,6 +133,41 @@ function M.is_side_view(view)
   return not not (view and M.side_views and M.side_views[view])
 end
 
+local function side_focus_owner(view)
+  if M.is_side_view(view) then return view end
+  local owner = view and view.__sidepanel_focus_owner
+  if M.is_side_view(owner) then return owner end
+end
+
+function M.side_focus_owner(view)
+  return side_focus_owner(view)
+end
+
+function M.remember_side_focus_view(view)
+  local owner = side_focus_owner(view)
+  if owner then
+    M.last_side_focus_view = view
+    M.last_side_focus_owner = owner
+  end
+  return owner
+end
+
+function M.restorable_side_focus_view(owner)
+  if not owner or not M.contains_view(owner) then return nil end
+  local view = M.last_side_focus_view
+  if view and M.last_side_focus_owner == owner and side_focus_owner(view) == owner then
+    return view
+  end
+  return owner
+end
+
+local function clear_side_focus_for_owner(owner)
+  if owner and (M.last_side_focus_owner == owner or M.last_side_focus_view == owner) then
+    M.last_side_focus_view = nil
+    M.last_side_focus_owner = nil
+  end
+end
+
 function M.is_main_panel_view(view)
   return file_context.is_main_panel_view(view) and not M.is_side_view(view)
 end
@@ -228,6 +265,10 @@ function M.prune_stale_views()
     M.file_view = nil
     M.file_view_path = nil
   end
+
+  if M.last_side_focus_owner and not view_index(side, M.last_side_focus_owner) then
+    clear_side_focus_for_owner(M.last_side_focus_owner)
+  end
 end
 
 function M.remove_view(view, focus_main)
@@ -240,6 +281,7 @@ function M.remove_view(view, focus_main)
   local idx = view_index(side, view)
   if idx then table.remove(side.views, idx) end
   M.side_views[view] = nil
+  clear_side_focus_for_owner(view)
 
   for name, panel in pairs(M.panels) do
     if panel == view then
@@ -367,13 +409,14 @@ function M.focus_side()
   end
   if view then
     if not M.visible then M.visible = true end
-    M.set_side_view(view, true)
+    M.set_side_view(view, false)
+    core.set_active_view(M.restorable_side_focus_view(view) or view)
   end
   return view
 end
 
 function M.toggle_focus()
-  if M.is_side_view(core.active_view) then
+  if M.remember_side_focus_view(core.active_view) then
     return M.focus_main(false)
   end
   if M.visible then
@@ -569,7 +612,10 @@ local base_set_active_view = core.sidepanel_base_set_active_view or core.set_act
 core.sidepanel_base_set_active_view = base_set_active_view
 function core.set_active_view(view)
   local result = base_set_active_view(view)
-  if core.sidepanel then core.sidepanel.remember_main_panel_view(view) end
+  if core.sidepanel then
+    core.sidepanel.remember_main_panel_view(view)
+    core.sidepanel.remember_side_focus_view(view)
+  end
   return result
 end
 

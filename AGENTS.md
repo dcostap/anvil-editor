@@ -134,10 +134,10 @@ Use the Anvil suite filter when you want to skip third-party subproject tests:
 meson test -C build-windows-x86_64 --suite anvil --print-errorlogs
 ```
 
-If `meson` is not on `PATH` in the agent/MSYS shell on this PC, call it explicitly:
+If `meson` is not on `PATH` in the agent/MSYS shell on this PC, call it explicitly and prefix MinGW's bin directory so Meson can find `ninja` for rebuilds:
 
 ```sh
-/c/msys64/mingw64/bin/meson.exe test -C build-windows-x86_64 --print-errorlogs
+PATH=/c/msys64/mingw64/bin:$PATH /c/msys64/mingw64/bin/meson.exe test -C build-windows-x86_64 --print-errorlogs
 ```
 
 Individual Anvil Meson test targets:

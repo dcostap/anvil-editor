@@ -11,6 +11,7 @@ local config = require "core.config"
 local keymap = require "core.keymap"
 local style = require "core.style"
 local common = require "core.common"
+local file_context = require "core.file_context"
 local translate = require "core.doc.translate"
 local Doc = require "core.doc"
 local Highlighter = require "core.doc.highlighter"
@@ -191,6 +192,8 @@ local function ensure_state(view)
     }
     state.find = LocalFindInputView(state, "find")
     state.replace = LocalFindInputView(state, "replace")
+    file_context.exclude_main_panel_view(state.find)
+    file_context.exclude_main_panel_view(state.replace)
     find_state_by_view[view] = state
   else
     state.owner_view = view
@@ -203,6 +206,7 @@ local function focus_field(view, state, field_name)
   state.focus = field_name or state.focus or "find"
   local field = state.focus == "replace" and state.replace or state.find
   field.local_find_owner = view
+  field.__sidepanel_focus_owner = view
   core.set_active_view(field)
   core.blink_reset()
   core.redraw = true
