@@ -558,7 +558,7 @@ static int f_set_window_bordered(lua_State *L) {
   SDL_Window *win = window_renderer->cache.window;
   bool bordered = lua_toboolean(L, 2);
 #if defined(SDL_PLATFORM_WINDOWS)
-  // Hack on windows to force drawing of TitleView.
+  // Hack on windows to force drawing of TitleBar.
   // If maximized and removing borders, force a state "reset".
   // Fixes: https://github.com/anvil/anvil/issues/425
   bool was_maximized = (SDL_GetWindowFlags(win) & SDL_WINDOW_MAXIMIZED);
@@ -1300,7 +1300,7 @@ static int f_load_native_plugin(lua_State *L) {
   snprintf(entrypoint_name, sizeof(entrypoint_name), "luaopen_anvil_%s", basename);
   int (*ext_entrypoint) (lua_State *L, void* (*)(const char*));
   *(void**)(&ext_entrypoint) = SDL_LoadFunction(library, entrypoint_name);
-  /*compatibility with Lite XL entry point name*/
+  /* compatibility with older native plugin entry point names */
   if (!ext_entrypoint) {
     snprintf(entrypoint_name, sizeof(entrypoint_name), "luaopen_lite_xl_%s", basename);
     *(void**)(&ext_entrypoint) = SDL_LoadFunction(library, entrypoint_name);

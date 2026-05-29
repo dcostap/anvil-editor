@@ -131,6 +131,15 @@ else
                                 dependencies: system_deps)
 endif
 
+# Developer CLI used by repository tooling such as check-lua-syntax.lua.
+# It is generated in the build directory and intentionally not installed or
+# committed, so fresh clones get it automatically after a normal Meson build.
+luajit_cli = executable('luajit', 'luajit.c', luajit_h,
+                        link_with: luajit_lib,
+                        include_directories: src_inc,
+                        dependencies: system_deps,
+                        install: false)
+
 install_subdir(
     'jit',
     strip_directory: true,

@@ -183,6 +183,7 @@ try {
   $env:ANVIL_D3D11_STATS_FLUSH = "1"
   $env:ANVIL_D3D11_STATS_FILE = $statsFile
 
+  Remove-Item -LiteralPath (Join-Path $smokeUserDir "appstate.lua") -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath (Join-Path $smokeUserDir "session.lua") -Force -ErrorAction SilentlyContinue
   $proc = Start-AnvilProcess $exe $fixture $TestProject
   $hwnd = Wait-MainWindow $proc

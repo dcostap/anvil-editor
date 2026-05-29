@@ -64,7 +64,7 @@ local core = require "core"
 local cli = {
   app_name = "Anvil",
   app_version = VERSION,
-  app_description = "The practical and pragmatic code editor.",
+  app_description = "A fast, scriptable code editor.",
   commands = {},
   commands_count = 0,
   last_command = "",
@@ -343,14 +343,11 @@ function cli.print_help(command)
   if not command then
     -- ASCII Art generated with:
     -- https://patorjk.com/software/taag/#p=display&f=Big&t=Anvil
-    print [[ _____                 _   _           _ ]]
-    print [[|  __ \               | | (_)         | |]]
-    print [[| |__) | __ __ _  __ _| |_ _  ___ __ _| |]]
-    print [[|  ___/ '__/ _` |/ _` | __| |/ __/ _` | |]]
-    print [[| |   | | | (_| | (_| | |_| | (_| (_| | |]]
-    print [[|_|   |_|  \__,_|\__, |\__|_|\___\__,_|_|]]
-    print [[                  __/ |                  ]]
-    print [[                 |___/   ]]
+    print [[    _              _ _ ]]
+    print [[   / \   _ ____   _(_) |]]
+    print [[  / _ \ | '_ \ \ / / | |]]
+    print [[ / ___ \| | | \ V /| | |]]
+    print [[/_/   \_\_| |_|\_/ |_|_|]]
     print(
       cli.colorize(cli.app_name, "green")
       .. " "

@@ -5,7 +5,7 @@
     name="anvil"
     version="@PROJECT_ASSEMBLY_VERSION@"
   />
-  <description>Practical and Pragmatic Code Editor</description>
+  <description>A fast, scriptable code editor</description>
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>

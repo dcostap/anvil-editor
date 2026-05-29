@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Anvil
-Comment=The practical and pragmatic code editor.
+Comment=A fast, scriptable code editor.
 Exec=anvil %F
 Icon=anvil
 Terminal=false

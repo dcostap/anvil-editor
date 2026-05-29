@@ -6,6 +6,13 @@ local test = require "core.test"
 local temp_root
 local project_temp_root
 
+local function write_file(path, content)
+  local file, err = io.open(path, "wb")
+  test.not_nil(file, err)
+  file:write(content)
+  file:close()
+end
+
 test.describe("graphics apis", function()
   test.before_each(function(context)
     temp_root = USERDIR
@@ -26,15 +33,15 @@ test.describe("graphics apis", function()
   end)
 
   test.after_each(function(context)
-    local views = core.root_view.root_node:get_children()
+    local views = core.root_panel.root_node:get_children()
     for i = #views, 1, -1 do
       local view = views[i]
       if view:extends(ImageView)
           and view.path
           and common.path_belongs_to(view.path, context.project_temp_root) then
-        local node = core.root_view.root_node:get_node_for_view(view)
+        local node = core.root_panel.root_node:get_node_for_view(view)
         if node then
-          node:remove_view(core.root_view.root_node, view)
+          node:remove_view(core.root_panel.root_node, view)
         end
       end
     end
@@ -181,7 +188,8 @@ test.describe("graphics apis", function()
     local removed, remove_err = os.remove(png_path)
     test.ok(removed, remove_err)
 
-    local svg_path = system.absolute_path("resources/icons/logo.svg")
+    local svg_path = context.temp_root .. PATHSEP .. "sample.svg"
+    write_file(svg_path, [[<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" fill="#fff"/></svg>]])
     local svg_canvas, svg_err = canvas.load_svg_image(svg_path, 32, 32)
     test.not_nil(svg_canvas, svg_err)
     local svg_width, svg_height = svg_canvas:get_size()

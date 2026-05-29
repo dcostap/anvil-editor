@@ -48,7 +48,7 @@ test.describe("system", function()
       "mkdir", "list_dir", "absolute_path", "get_file_info", "get_fs_type",
       "get_clipboard", "set_clipboard", "get_primary_selection",
       "set_primary_selection", "get_process_id", "get_time", "sleep",
-      "exec", "fuzzy_match", "set_window_opacity", "load_native_plugin",
+      "exec", "set_window_opacity", "load_native_plugin",
       "path_compare", "setenv", "get_display_info", "open_file_dialog",
       "open_directory_dialog", "save_file_dialog", "get_sandbox"
     }) do
@@ -104,9 +104,6 @@ test.describe("system", function()
     test.ok(system.setenv(key, "ok"))
     test.equal(os.getenv(key), "ok")
 
-    local score = system.fuzzy_match("alphabet", "alphabet")
-    test.type(score, "number")
-    test.ok(score > 0)
     test.type(system.path_compare("a.lua", "file", "b.lua", "file"), "boolean")
 
     local current_scale, refresh_rate, width, height, default_scale =
