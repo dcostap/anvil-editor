@@ -23,6 +23,33 @@ local Project
 ---@class core
 local core = {}
 
+-- A focus/restored/exposed event can arrive while Windows is still showing the
+-- alt-tab/task-switcher transition.  The first D3D present may be accepted but
+-- not become the visible DWM contents, so keep repainting briefly after window
+-- reactivation instead of relying on one event-time frame.
+local WINDOW_REACTIVATION_REPAINT_SECONDS = 0.35
+local window_reactivation_repaint_until = 0
+
+function core.request_window_reactivation_repaint(reason, duration)
+  local seconds = duration or WINDOW_REACTIVATION_REPAINT_SECONDS
+  if seconds <= 0 then seconds = WINDOW_REACTIVATION_REPAINT_SECONDS end
+  local repaint_until = system.get_time() + seconds
+  if repaint_until > window_reactivation_repaint_until then
+    window_reactivation_repaint_until = repaint_until
+  end
+  core.redraw = true
+  if core.log_quiet then
+    core.log_quiet(
+      "Window repaint burst: scheduled reason=%s until=%.3f",
+      tostring(reason or "unknown"), window_reactivation_repaint_until
+    )
+  end
+end
+
+function core.window_reactivation_repaint_pending(now)
+  return window_reactivation_repaint_until > (now or system.get_time())
+end
+
 local map_new_syntax_colors
 
 local APP_STATE_FILENAME = "appstate.lua"
@@ -1560,9 +1587,9 @@ function core.on_event(type, ...)
     if core.window_mode == "normal" then
       core.window_size = table.pack(system.get_window_size(core.window))
     end
-    if type == "restored" then core.redraw = true end
+    if type == "restored" then core.request_window_reactivation_repaint("restored") end
   elseif type == "exposed" then
-    core.redraw = true
+    core.request_window_reactivation_repaint("exposed")
   elseif type == "filedropped" then
     core.root_panel:on_file_dropped(...)
   elseif type == "dialogfinished" then
@@ -1579,7 +1606,7 @@ function core.on_event(type, ...)
       "Focus diagnostics: received focusgained event active=%s window_has_focus=%s",
       tostring(core.active_view), tostring(core.window and system.window_has_focus(core.window))
     )
-    core.redraw = true
+    core.request_window_reactivation_repaint("focusgained")
   elseif type == "focuslost" then
     core.log_quiet(
       "Focus diagnostics: received focuslost event active=%s window_has_focus=%s",
@@ -2242,6 +2269,14 @@ function core.run_step(options)
   local present_paced = renderer_present_paced()
   local active_present_paced = false
   local skipped_post_present_sleep = false
+  local reactivation_repaint_active = core.window_reactivation_repaint_pending(now)
+  if reactivation_repaint_active then
+    core.redraw = true
+    run_next_step = nil
+    if run_burst_events < window_reactivation_repaint_until then
+      run_burst_events = window_reactivation_repaint_until
+    end
+  end
   core.frame_start = now
 
   local function run_step_sleep(seconds)
