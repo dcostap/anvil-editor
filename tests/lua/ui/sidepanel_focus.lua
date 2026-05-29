@@ -203,4 +203,63 @@ test.describe("sidepanel focus", function()
     test.equal(main_find.local_find_state.visible, true)
     test.equal(main_find:get_text(), "main-query")
   end)
+
+  test.it("restores the side DocView replace input field", function(context)
+    local main_view, side_view = setup_main_and_side(context)
+
+    test.ok(command.perform("sidepanel:toggle-focus"))
+    assert_active_view(side_view, "expected side DocView before opening replace input")
+
+    test.ok(command.perform("find-replace:replace"))
+    local side_find = active_find_input_for(side_view)
+    test.equal(side_find.local_find_field, "find")
+    type_into_active_view("side-query")
+
+    test.ok(command.perform("user:find-toggle-replace-field"))
+    local side_replace = active_find_input_for(side_view)
+    side_replace.__test_name = "local replace input for side DocView"
+    test.equal(side_replace.local_find_field, "replace")
+    type_into_active_view("replacement")
+    set_selection(side_replace, 1, 2, 1, 7)
+    local expected_replace_selection = selection_state(side_replace)
+
+    test.ok(command.perform("sidepanel:toggle-focus"))
+    assert_active_view(main_view, "expected toggle from side replace input to focus main DocView")
+
+    test.ok(command.perform("sidepanel:toggle-focus"))
+    assert_active_view(side_replace, "expected toggling back to restore side replace input")
+    test.equal(side_find:get_text(), "side-query")
+    test.equal(side_replace:get_text(), "replacement")
+    test.same(selection_state(side_replace), expected_replace_selection)
+  end)
+
+  test.it("focus-main-and-hide hides the side panel from a side find input", function(context)
+    local main_view, side_view = setup_main_and_side(context)
+
+    test.ok(command.perform("sidepanel:toggle-focus"))
+    local side_find = open_find_input(side_view)
+    type_into_active_view("side-query")
+
+    test.ok(command.perform("sidepanel:focus-main-and-hide"))
+
+    test.equal(sidepanel.visible, false)
+    assert_active_view(main_view, "expected focus-main-and-hide from side find input to focus main DocView")
+    test.equal(side_find.local_find_state.visible, true)
+    test.equal(side_find:get_text(), "side-query")
+  end)
+
+  test.it("hide focuses the main panel from a side find input", function(context)
+    local main_view, side_view = setup_main_and_side(context)
+
+    test.ok(command.perform("sidepanel:toggle-focus"))
+    local side_find = open_find_input(side_view)
+    type_into_active_view("side-query")
+
+    test.ok(command.perform("sidepanel:hide"))
+
+    test.equal(sidepanel.visible, false)
+    assert_active_view(main_view, "expected sidepanel hide from side find input to focus main DocView")
+    test.equal(side_find.local_find_state.visible, true)
+    test.equal(side_find:get_text(), "side-query")
+  end)
 end)

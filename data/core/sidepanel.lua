@@ -379,7 +379,7 @@ function M.hide(focus_main)
     view.visible = false
     M.update_side_view_size(view)
   end
-  if focus_main ~= false and M.is_side_view(core.active_view) then
+  if focus_main ~= false and M.remember_side_focus_view(core.active_view) then
     M.focus_main(false)
   end
   return true
