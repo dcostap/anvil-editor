@@ -505,4 +505,62 @@ test.describe("sidepanel focus", function()
     test.equal(side_view.scroll.x, 11)
     test.equal(side_view.scroll.y, 22)
   end)
+
+  test.it("continues editing and navigating a side find field after focus switches", function(context)
+    local main_view, side_view = setup_main_and_side(context)
+    side_view.doc:remove(1, 1, math.huge, math.huge)
+    side_view.doc:text_input("alpha beta alpha gamma alpha\n")
+
+    test.ok(command.perform("sidepanel:toggle-focus"))
+    local side_find = open_find_input(side_view)
+    type_into_active_view("al")
+    test.equal(side_find:get_text(), "al")
+    local side_initial_match = side_find.local_find_state.current
+    test.ok(side_initial_match > 0, "expected side find to select an initial match")
+    local side_navigated_match = (side_initial_match % 3) + 1
+
+    test.ok(command.perform("user:find-field-next"))
+    test.equal(side_find.local_find_state.current, side_navigated_match)
+
+    test.ok(command.perform("sidepanel:toggle-focus"))
+    assert_active_view(main_view, "expected toggle away from side find to focus main DocView")
+    test.ok(command.perform("sidepanel:toggle-focus"))
+    assert_active_view(side_find, "expected toggling back to restore side find field")
+
+    type_into_active_view("pha")
+    test.equal(side_find:get_text(), "alpha")
+    test.equal(side_find.local_find_state.current, side_navigated_match)
+
+    test.ok(command.perform("user:find-field-next"))
+    test.equal(side_find.local_find_state.current, (side_navigated_match % 3) + 1)
+  end)
+
+  test.it("continues editing and navigating a main find field after side focus switches", function(context)
+    local main_view, side_view = setup_main_and_side(context)
+    main_view.doc:remove(1, 1, math.huge, math.huge)
+    main_view.doc:text_input("alpha beta alpha gamma alpha\n")
+
+    local main_find = open_find_input(main_view)
+    main_find.__test_name = "local find input for main DocView"
+    type_into_active_view("alp")
+    test.equal(main_find:get_text(), "alp")
+    local main_initial_match = main_find.local_find_state.current
+    test.ok(main_initial_match > 0, "expected main find to select an initial match")
+    local main_navigated_match = (main_initial_match % 3) + 1
+
+    test.ok(command.perform("user:find-field-next"))
+    test.equal(main_find.local_find_state.current, main_navigated_match)
+
+    test.ok(command.perform("sidepanel:toggle-focus"))
+    assert_active_view(side_view, "expected toggle away from main find to focus side DocView")
+    test.ok(command.perform("sidepanel:toggle-focus"))
+    assert_active_view(main_find, "expected toggling back to restore main find field")
+
+    type_into_active_view("ha")
+    test.equal(main_find:get_text(), "alpha")
+    test.equal(main_find.local_find_state.current, main_navigated_match)
+
+    test.ok(command.perform("user:find-field-next"))
+    test.equal(main_find.local_find_state.current, (main_navigated_match % 3) + 1)
+  end)
 end)

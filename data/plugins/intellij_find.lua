@@ -428,7 +428,17 @@ local function refresh_matches(view, state, opts)
 end
 
 function update_after_input(view, state)
-  refresh_matches(view, state, { from_origin = true, restore_origin = true, scroll = true })
+  if state.preserve_current_after_input == false then
+    refresh_matches(view, state, { from_origin = true, restore_origin = true, scroll = true })
+    state.preserve_current_after_input = true
+  else
+    local previous_current = state.current or 0
+    refresh_matches(view, state, { select = false, scroll = false })
+    if field_text(state.find) ~= "" and #(state.matches or {}) > 0 then
+      local index = common.clamp(state.current ~= 0 and state.current or previous_current, 1, #state.matches)
+      select_match(view, state, index, true)
+    end
+  end
   last_global_query = field_text(state.find)
   core.redraw = true
 end
@@ -452,6 +462,7 @@ local function open_find(view, as_replace)
   state.origin = copy_selection(view)
   state.found = false
   state.error = false
+  state.preserve_current_after_input = false
 
   state.suppress_input_change = true
   local selected = single_line_selection_text(view)
