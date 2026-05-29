@@ -125,19 +125,19 @@ Current first-party tests live in:
 Run tests through Meson by default. The full Meson test command now includes Anvil's native fuzzy test plus the Lua runtime and in-process UI suites:
 
 ```sh
-meson test -C build-windows-x86_64
+meson test -C build-windows-x86_64 --print-errorlogs
 ```
 
 Use the Anvil suite filter when you want to skip third-party subproject tests:
 
 ```sh
-meson test -C build-windows-x86_64 --suite anvil
+meson test -C build-windows-x86_64 --suite anvil --print-errorlogs
 ```
 
 If `meson` is not on `PATH` in the agent/MSYS shell on this PC, call it explicitly:
 
 ```sh
-/c/msys64/mingw64/bin/meson.exe test -C build-windows-x86_64
+/c/msys64/mingw64/bin/meson.exe test -C build-windows-x86_64 --print-errorlogs
 ```
 
 Individual Anvil Meson test targets:

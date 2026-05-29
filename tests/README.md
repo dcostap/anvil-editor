@@ -15,19 +15,19 @@ Automated and diagnostic tests for Anvil.
 Run automated tests through Meson:
 
 ```sh
-meson test -C build-windows-x86_64
+meson test -C build-windows-x86_64 --print-errorlogs
 ```
 
 If Meson is not on `PATH` in the MSYS shell on this PC:
 
 ```sh
-/c/msys64/mingw64/bin/meson.exe test -C build-windows-x86_64
+/c/msys64/mingw64/bin/meson.exe test -C build-windows-x86_64 --print-errorlogs
 ```
 
 To run only Anvil's own tests and skip third-party subproject tests:
 
 ```sh
-meson test -C build-windows-x86_64 --suite anvil
+meson test -C build-windows-x86_64 --suite anvil --print-errorlogs
 ```
 
 Anvil's Meson suite contains:

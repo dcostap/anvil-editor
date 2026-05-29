@@ -5,13 +5,13 @@ This directory contains Lua scripts for running with Anvil.
 Lua tests live under `tests/lua` and are wired into Meson. Run automated tests with:
 
 ```sh
-meson test -C build-windows-x86_64
+meson test -C build-windows-x86_64 --print-errorlogs
 ```
 
 Run only Anvil's own suite with:
 
 ```sh
-meson test -C build-windows-x86_64 --suite anvil
+meson test -C build-windows-x86_64 --suite anvil --print-errorlogs
 ```
 
 Run only the Lua runtime or UI suite:
