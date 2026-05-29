@@ -21,8 +21,7 @@ The Lua/data files are not embedded in the exe. A runnable portable app is produ
 
 ## Dev portable workflow
 
-Use the BAT files in the repo root:
-
+Use the BAT files in the repo root
 - `setup-anvil-dev.bat`
   - first-time setup
   - builds the editor
@@ -100,13 +99,13 @@ To check all bundled Lua files:
 find data -name '*.lua' -print0 | xargs -0 luajit check-lua-syntax.lua
 ```
 
-Use LuaJIT for this because Anvil runs LuaJIT in the normal dev build, so it is the closest parser/runtime match. On this repo, use the checked-out LuaJIT executable directly instead of relying on a global `PATH` entry:
+Use LuaJIT for this because Anvil runs LuaJIT in the normal dev build, so it is the closest parser/runtime match. On this repo, use the Meson-built LuaJIT executable directly instead of relying on a global `PATH` entry:
 
 ```sh
-./subprojects/luajit/src/luajit.exe check-lua-syntax.lua data/plugins/example.lua
+./build-windows-x86_64/subprojects/luajit/src/luajit.exe check-lua-syntax.lua data/plugins/example.lua
 ```
 
-If the repo-local executable is missing, ask the user before installing anything globally. On this PC the expected install command is:
+A normal Meson build generates this executable. If the repo-local executable is missing and cannot be built, ask the user before installing anything globally. On this PC the expected install command is:
 
 ```powershell
 winget install --id DEVCOM.LuaJIT -e
@@ -160,3 +159,35 @@ When updating SDL3 upstream, verify this patch still applies. If it fails, rebas
 Do not use `C:\Program Files` for this dev install. It causes admin/write-permission issues and makes junction/rebuild workflows annoying. Use the writable dev portable folder instead.
 
 A real installer for `C:\Program Files\Anvil` can be created later for deployment.
+
+# Domain awareness
+
+During codebase exploration, also look for existing documentation:
+
+### File structure
+
+Most repos have a single context: CONTEXT.md
+
+## During the session
+
+### Challenge against the glossary
+
+When the user uses a term that conflicts with the existing language in `CONTEXT.md`, call it out immediately. "Your glossary defines 'cancellation' as X, but you seem to mean Y — which is it?"
+
+### Sharpen fuzzy language
+
+When the user uses vague or overloaded terms, propose a precise canonical term. "You're saying 'account' — do you mean the Customer or the User? Those are different things."
+
+### Discuss concrete scenarios
+
+When domain relationships are being discussed, stress-test them with specific scenarios. Invent scenarios that probe edge cases and force the user to be precise about the boundaries between concepts.
+
+### Cross-reference with code
+
+When the user states how something works, check whether the code agrees. If you find a contradiction, surface it: "Your code cancels entire Orders, but you just said partial cancellation is possible — which is right?"
+
+### Update CONTEXT.md inline
+
+When a term is resolved, update `CONTEXT.md` right there. Don't batch these up — capture them as they happen. Use the format in [CONTEXT-FORMAT.md](./CONTEXT-FORMAT.md).
+
+`CONTEXT.md` should be totally devoid of implementation details. Do not treat `CONTEXT.md` as a spec, a scratch pad, or a repository for implementation decisions. It is a glossary and nothing else.
