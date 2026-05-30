@@ -305,20 +305,39 @@ local function compare_pos(line_a, col_a, line_b, col_b)
   return 0
 end
 
+local function selection_search_start(sel)
+  if not sel then return 1, 1 end
+  local l1, c1, l2, c2 = sel[1], sel[2], sel[3], sel[4]
+  if not l1 or not c1 then return 1, 1 end
+  if
+    l2 and c2
+    and (l1 ~= l2 or c1 ~= c2)
+    and compare_pos(l2, c2, l1, c1) < 0
+  then
+    return l2, c2
+  end
+  return l1, c1
+end
+
+local function choose_match_from_position(matches, line, col)
+  if not matches or #matches == 0 then return 0 end
+  line, col = line or 1, col or 1
+  for i, match in ipairs(matches) do
+    if match.line == line and match.col1 == col then return i end
+  end
+  for i, match in ipairs(matches) do
+    if compare_pos(match.line, match.col1, line, col) >= 0 then return i end
+  end
+  return 1
+end
+
 local function choose_match(view, state, reverse, from_origin)
   local matches = state.matches or {}
   if #matches == 0 then return 0 end
 
   if from_origin then
-    local origin = state.origin or copy_selection(view)
-    local line, col = origin[1] or 1, origin[2] or 1
-    for i, match in ipairs(matches) do
-      if match.line == line and match.col1 == col then return i end
-    end
-    for i, match in ipairs(matches) do
-      if compare_pos(match.line, match.col1, line, col) >= 0 then return i end
-    end
-    return 1
+    local line, col = selection_search_start(state.origin or copy_selection(view))
+    return choose_match_from_position(matches, line, col)
   end
 
   local l1, c1, l2, c2 = table.unpack(view:with_selection_state(function()
@@ -432,17 +451,26 @@ local function refresh_matches(view, state, opts)
 end
 
 function update_after_input(view, state)
+  local origin = copy_selection(view)
+  local restore_origin = false
   if state.preserve_current_after_input == false then
-    refresh_matches(view, state, { from_origin = true, restore_origin = true, scroll = true })
+    origin = state.origin or origin
+    restore_origin = true
     state.preserve_current_after_input = true
-  else
-    local previous_current = state.current or 0
-    refresh_matches(view, state, { select = false, scroll = false })
-    if field_text(state.find) ~= "" and #(state.matches or {}) > 0 then
-      local index = common.clamp(state.current ~= 0 and state.current or previous_current, 1, #state.matches)
-      select_match(view, state, index, true)
-    end
   end
+
+  refresh_matches(view, state, { select = false, scroll = false })
+  if field_text(state.find) ~= "" and #(state.matches or {}) > 0 then
+    local line, col = selection_search_start(origin)
+    local index = choose_match_from_position(state.matches, line, col)
+    select_match(view, state, index, true)
+  elseif restore_origin and state.origin then
+    set_selection(view, state.origin)
+    state.current = 0
+    state.found = false
+    set_status(state)
+  end
+
   last_global_query = field_text(state.find)
   core.redraw = true
 end
