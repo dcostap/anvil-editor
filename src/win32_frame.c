@@ -202,7 +202,14 @@ static LRESULT handle_nccalcsize(HWND hwnd, WPARAM wparam, LPARAM lparam) {
      when maximized the client rect must be constrained to the monitor work area
      or the app draws under the taskbar. */
   if (is_maximized(hwnd)) {
-    HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    /* Use the proposed maximized rect instead of MonitorFromWindow().  During
+       restore from minimized, USER32 can still associate the HWND with its
+       old normal/iconic location while rgrc[0] already contains the real
+       maximized bounds.  MonitorFromWindow() then chooses the old monitor and
+       leaves a maximized window with a client area sized for that monitor
+       (for example 1920x1080 inside a 2560x1440 maximized frame), so D3D only
+       presents into part of the visible window. */
+    HMONITOR monitor = MonitorFromRect(&params->rgrc[0], MONITOR_DEFAULTTONEAREST);
     MONITORINFO mi;
     mi.cbSize = sizeof(mi);
     if (GetMonitorInfoW(monitor, &mi)) {

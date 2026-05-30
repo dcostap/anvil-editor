@@ -1583,8 +1583,9 @@ function core.on_event(type, ...)
     end
     core.window_mode = window_mode
   elseif type == "minimized" or type == "maximized" or type == "restored" then
-    core.window_mode = type == "restored" and "normal" or type
-    if core.window_mode == "normal" then
+    local window_mode = system.get_window_mode(core.window)
+    core.window_mode = window_mode
+    if window_mode == "normal" then
       core.window_size = table.pack(system.get_window_size(core.window))
     end
     if type == "restored" then core.request_window_reactivation_repaint("restored") end
