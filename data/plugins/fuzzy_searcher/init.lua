@@ -2901,7 +2901,7 @@ function FSView:reveal_selected_in_explorer()
   command.perform("user:reveal-active-file-in-explorer", path)
 end
 
-function FSView:confirm(new_window)
+function FSView:confirm(target_side)
   local r = self:selected_result()
   if not r then return end
   if r.kind == "command" then
@@ -2914,7 +2914,7 @@ function FSView:confirm(new_window)
   if (r.kind == "project" or r.kind == "new_project" or (r.kind == "everything" and r.is_folder)) and r.project then
     local path = r.project
     self:close()
-    if new_window or r.kind == "new_project" then
+    if target_side or r.kind == "new_project" then
       open_anvil_window(path)
     else
       core.open_project_in_same_window(path)
@@ -2929,13 +2929,13 @@ function FSView:confirm(new_window)
     end
     local source_view = self.source_view
     self:close()
-    if new_window then
+    if target_side then
       sidepanel.open_path_in_side(path, {
         line = line,
         col = col,
         line2 = line2,
         col2 = col2,
-        focus = false,
+        focus = true,
         restore_focus = source_view,
       })
     else
@@ -3102,7 +3102,7 @@ local function picker_confirm()
   if view then view:confirm(false) end
 end
 
-local function picker_confirm_new_window()
+local function picker_confirm_side()
   local view = current_picker()
   if view then view:confirm(true) end
 end
@@ -3201,8 +3201,7 @@ command.add(nil, {
 command.add(picker_active, {
   ["fuzzy-searcher:close"] = picker_close,
   ["fuzzy-searcher:confirm"] = picker_confirm,
-  ["fuzzy-searcher:confirm-side"] = picker_confirm_new_window,
-  ["fuzzy-searcher:confirm-new-window"] = picker_confirm_new_window,
+  ["fuzzy-searcher:confirm-side"] = picker_confirm_side,
   ["fuzzy-searcher:focus-selected-in-tree"] = picker_focus_selected_in_tree,
   ["fuzzy-searcher:reveal-selected-in-explorer"] = picker_reveal_selected_in_explorer,
   ["fuzzy-searcher:next"] = picker_next,
@@ -3229,7 +3228,9 @@ core.fuzzy_searcher_install_picker_keymaps = function()
     ["escape"] = "fuzzy-searcher:close",
     ["return"] = "fuzzy-searcher:confirm",
     ["keypad enter"] = "fuzzy-searcher:confirm",
+    ["alt+r"] = "fuzzy-searcher:confirm",
     ["ctrl+return"] = "fuzzy-searcher:confirm-side",
+    ["alt+shift+r"] = "fuzzy-searcher:confirm-side",
     ["ctrl+l"] = "fuzzy-searcher:focus-selected-in-tree",
     ["ctrl+shift+l"] = "fuzzy-searcher:reveal-selected-in-explorer",
     ["up"] = "fuzzy-searcher:previous",

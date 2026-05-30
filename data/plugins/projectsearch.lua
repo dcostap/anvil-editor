@@ -6,6 +6,7 @@ local command = require "core.command"
 local config = require "core.config"
 local style = require "core.style"
 local DocView = require "core.docview"
+local sidepanel = require "core.sidepanel"
 local Widget = require "widget"
 local Button = require "widget.button"
 local FilePicker = require "widget.filepicker"
@@ -1061,21 +1062,37 @@ end
 local previous_view
 
 ---Opens a DocView of the user selected match.
-function ResultsView:open_selected_result()
+function ResultsView:open_selected_result(target)
   local item = self.results_list:get_selected()
   if not item or not item.position then return end
   core.try(function()
-    local dv = core.root_panel:open_doc(core.open_doc(item.parent.file.path))
-    previous_view = dv
-    core.root_panel.root_node:update_layout()
     local l, c1, c2 = item.line.line, item.position.col1, item.position.col2+1
-    dv.doc:set_selection(l, c2, l, c1)
-    dv.doc:add_search_selection(l, c2, l, c1)
-    dv:scroll_to_make_visible(l, c1, true, {
-      line2 = l,
-      col2 = c2,
-    })
-    if self.is_global then core.set_active_view(self) end
+    local dv
+    if target == "side" then
+      dv = sidepanel.open_path_in_side(item.parent.file.path, {
+        line = l,
+        col = c2,
+        line2 = l,
+        col2 = c1,
+        focus = true,
+        source_view = previous_view,
+      })
+    else
+      dv = core.root_panel:open_doc(core.open_doc(item.parent.file.path))
+      if dv then
+        dv.doc:set_selection(l, c2, l, c1)
+        dv.doc:add_search_selection(l, c2, l, c1)
+        dv:scroll_to_make_visible(l, c1, true, {
+          line2 = l,
+          col2 = c2,
+        })
+      end
+      if self.is_global then core.set_active_view(self) end
+    end
+    if dv then
+      previous_view = dv
+      core.root_panel.root_node:update_layout()
+    end
   end)
   return true
 end
@@ -1569,6 +1586,10 @@ command.add(ResultsView, {
     view:open_selected_result()
   end,
 
+  ["project-search:open-selected-side"] = function(view)
+    view:open_selected_result("side")
+  end,
+
   ["project-search:move-to-previous-page"] = function(view)
     view.results_list.scroll.to.y = view.results_list.scroll.to.y - view.results_list.size.y
   end,
@@ -1614,7 +1635,8 @@ keymap.add {
 }
 
 keymap.add {
-  ["return"]             = "project-search:open-selected"
+  ["return"]             = "project-search:open-selected",
+  ["alt+shift+r"]        = "project-search:open-selected-side"
 }
 
 return projectsearch

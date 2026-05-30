@@ -3,6 +3,7 @@ local test = require "core.test"
 
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
 local DocView = require "core.docview"
+local sidepanel = require "core.sidepanel"
 
 local function temp_file_path(name)
   local base = system.absolute_path(".")
@@ -94,6 +95,29 @@ test.describe("Fuzzy Searcher preview", function()
     local view = core.active_view
     test.ok(view and view.doc and view.doc.abs_filename == path, "expected accepted grep result to open its file")
     test.same(selection_state(view), { 1, 7, 1, 13 })
+  end)
+
+  test.it("focuses the Side Editor when accepting a file for the Side Panel", function(context)
+    local path = temp_file_path("fuzzy-confirm-side-focus-test.txt")
+    context.files = { path }
+    write_file(path, "side target\n")
+
+    fuzzy_searcher.open("")
+    local picker = core.fuzzy_searcher_active_view
+    picker.results = {
+      {
+        kind = "file",
+        file = path,
+        text = path,
+      }
+    }
+    picker.selected = 1
+
+    picker:confirm(true)
+
+    local view = core.active_view
+    test.ok(view and view.doc and view.doc.abs_filename == path, "expected side-accepted file to become active")
+    test.ok(sidepanel.is_side_editor(view), "expected accepted file to be focused as a Side Editor")
   end)
 
   test.it("moves to the leftmost fuzzy chunk without selecting separated chunks", function(context)

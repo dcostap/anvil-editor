@@ -1682,9 +1682,9 @@ function EditreeView:open_selected_files()
   return true
 end
 
-function EditreeView:open_item()
+function EditreeView:open_item(target)
   self:sync_meta()
-  if self:open_selected_files() then return end
+  if target ~= "side" and self:open_selected_files() then return end
 
   local line = self.doc:get_selection(true)
   local entry, err = self:entry_for_line(line)
@@ -1706,7 +1706,11 @@ function EditreeView:open_item()
     end
   else
     if info and info.type == "file" then
-      sidepanel.open_path_in_main(entry.abs, { preserve_focus = true })
+      if target == "side" then
+        sidepanel.open_path_in_side(entry.abs, { focus = true, source_view = self.last_main_panel_view })
+      else
+        sidepanel.open_path_in_main(entry.abs, { preserve_focus = true })
+      end
     end
   end
 end
@@ -2195,6 +2199,9 @@ command.add(function() return core.active_view:is(EditreeView) end, {
   ["editree:open"] = function()
     view:open_item()
   end,
+  ["editree:open-side"] = function()
+    view:open_item("side")
+  end,
   ["editree:up-dir"] = function()
     view:up_dir()
   end,
@@ -2212,6 +2219,8 @@ keymap.add {
   ["alt+1"] = "editree:focus-editor-and-hide",
   ["alt+2"] = "editree:focus-and-show",
   ["alt+r"] = "editree:open",
+  ["alt+shift+r"] = "editree:open-side",
+  ["ctrl+return"] = "editree:open-side",
   ["ctrl+s"] = "editree:apply",
   ["f5"] = "editree:refresh",
   ["alt+left"] = "editree:up-dir",
