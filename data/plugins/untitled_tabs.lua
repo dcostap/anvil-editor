@@ -225,20 +225,48 @@ if not core.__untitled_tabs_patched then
   end
 end
 
+local function prompt_text_for_directory(dirname)
+  local root = core.root_project and core.root_project()
+  if dirname and root and (dirname == root.path or common.path_belongs_to(dirname, root.path)) then
+    if dirname == root.path then return "" end
+    local rel = common.relative_path(root.path, dirname)
+    return common.home_encode(rel) .. PATHSEP
+  elseif dirname then
+    return common.home_encode(dirname) .. PATHSEP
+  end
+  return ""
+end
+
+local function nearest_existing_directory(path)
+  while path and path ~= "" do
+    local info = system.get_file_info(path)
+    if info and info.type == "dir" then return path end
+    local parent = common.dirname(path)
+    if not parent or parent == path then break end
+    path = parent
+  end
+end
+
+local function selected_filetree_directory(view)
+  if tostring(view) ~= "FileTreeView" or type(view.entry_for_line) ~= "function" then return nil end
+  local doc = view.doc
+  if not doc or type(doc.get_selection) ~= "function" then return nil end
+  local line = doc:get_selection(true)
+  local ok, entry = pcall(view.entry_for_line, view, line)
+  if not ok or not entry or not entry.abs then return nil end
+  local path = entry.type == "dir" and entry.abs or common.dirname(entry.abs)
+  return nearest_existing_directory(path)
+end
+
 local function default_new_file_text()
   local view = core.active_view
+  local filetree_dir = selected_filetree_directory(view)
+  if filetree_dir then return prompt_text_for_directory(filetree_dir) end
+
   local doc = view and view.doc
   local filename = doc and doc.abs_filename
   if filename then
-    local dirname = common.dirname(filename)
-    local root = core.root_project and core.root_project()
-    if dirname and root and (dirname == root.path or common.path_belongs_to(dirname, root.path)) then
-      if dirname == root.path then return "" end
-      local rel = common.relative_path(root.path, dirname)
-      return common.home_encode(rel) .. PATHSEP
-    elseif dirname then
-      return common.home_encode(dirname) .. PATHSEP
-    end
+    return prompt_text_for_directory(common.dirname(filename))
   end
   return ""
 end
@@ -258,6 +286,7 @@ local function create_empty_file(filename)
   core.root_panel:open_doc(doc)
   local ok, err = pcall(doc.save, doc, normalized, abs)
   if ok then
+    command.perform("filetree:sync-path", abs)
     core.log("Created \"%s\"", normalized)
   else
     core.error(err)

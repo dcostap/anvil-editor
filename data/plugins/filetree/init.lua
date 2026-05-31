@@ -12,6 +12,7 @@ local DocView = require "core.docview"
 local file_context = require "core.file_context"
 local sidepanel = require "core.sidepanel"
 local storage = require "core.storage"
+local DirWatch = require "core.dirwatch"
 
 local FILETREE_SETTINGS_MODULE = "filetree"
 local FILETREE_SETTINGS_KEY = "settings"
@@ -701,6 +702,13 @@ function FileTreeView:new()
   self.last_lines = nil
   self.status_cache = nil
   self.has_possible_edits = false
+  self.filesystem_watch = DirWatch()
+  self.filesystem_watched_dirs = {}
+  self.filesystem_dir_signatures = {}
+  self.filesystem_watch_running = false
+  self.filesystem_sync_deferred = false
+  self.filesystem_watch_update_suppressed = 0
+  self.filesystem_watch_update_deferred = false
   self:set_caption "File Tree"
 
   local view = self
@@ -711,6 +719,7 @@ function FileTreeView:new()
   end
 
   self:refresh()
+  self:start_filesystem_watch()
 end
 
 function FileTreeView:get_name()
@@ -734,6 +743,128 @@ end
 
 function FileTreeView:update()
   FileTreeView.super.update(self)
+end
+
+function FileTreeView:filesystem_reveal_paths(path)
+  if not path then return nil end
+  return { path }
+end
+
+function FileTreeView:queue_filesystem_sync(path, reason)
+  if self.has_possible_edits then
+    if not self.filesystem_sync_deferred then
+      core.log_quiet("File Tree filesystem sync deferred because the editable tree has unapplied edits")
+    end
+    self.filesystem_sync_deferred = true
+    return false
+  end
+
+  core.log_quiet("File Tree filesystem sync from %s: %s", reason or "watch", tostring(path))
+  self:refresh(true, true, self:filesystem_reveal_paths(path))
+  self.filesystem_sync_deferred = false
+  return true
+end
+
+function FileTreeView:sync_path(path, reason)
+  if type(path) ~= "string" or path == "" then return false end
+  local expanded = common.home_expand(path)
+  path = common.normalize_path(system.absolute_path(expanded) or expanded)
+  local root = core.root_project and core.root_project()
+  if not root or not in_project(path, root.path) or not in_project(path, self.current_dir) then
+    return false
+  end
+  return self:queue_filesystem_sync(path, reason or "notification")
+end
+
+function FileTreeView:filesystem_dir_signature(dir)
+  local names = system.list_dir(dir)
+  if not names then return nil end
+  table.sort(names)
+
+  local parts = {}
+  for _, name in ipairs(names) do
+    if filetree_config.show_hidden or name:sub(1, 1) ~= "." then
+      local abs = path_join(dir, name)
+      local info = system.get_file_info(abs)
+      if info then
+        parts[#parts + 1] = table.concat({
+          name,
+          info.type or "",
+          tostring(info.size or ""),
+          tostring(info.modified or ""),
+        }, "\0")
+      end
+    end
+  end
+  return table.concat(parts, "\1")
+end
+
+function FileTreeView:update_filesystem_watches()
+  if not self.filesystem_watch then return end
+  if (self.filesystem_watch_update_suppressed or 0) > 0 then
+    self.filesystem_watch_update_deferred = true
+    return
+  end
+  self.filesystem_watch_update_deferred = false
+
+  local wanted = {}
+  wanted[self.current_dir] = true
+  local entries = self:build_entries(false)
+  for _, entry in ipairs(entries) do
+    if entry.type == "dir" and type(entry.meta) == "table" and entry.meta.expanded then
+      wanted[entry.abs] = true
+    end
+  end
+
+  for dir in pairs(self.filesystem_watched_dirs) do
+    if not wanted[dir] then
+      self.filesystem_watch:unwatch(dir)
+      self.filesystem_watched_dirs[dir] = nil
+      self.filesystem_dir_signatures[dir] = nil
+    end
+  end
+  for dir in pairs(wanted) do
+    if system.get_file_info(dir) then
+      if not self.filesystem_watched_dirs[dir] then
+        self.filesystem_watch:watch(dir)
+        self.filesystem_watched_dirs[dir] = true
+      end
+      self.filesystem_dir_signatures[dir] = self:filesystem_dir_signature(dir)
+    end
+  end
+end
+
+function FileTreeView:handle_filesystem_watch_change(changed_dir)
+  changed_dir = changed_dir and common.normalize_path(changed_dir)
+  if not changed_dir or not self.filesystem_watched_dirs[changed_dir] then return end
+
+  local old_signature = self.filesystem_dir_signatures[changed_dir]
+  local new_signature = self:filesystem_dir_signature(changed_dir)
+  if old_signature == new_signature then return end
+
+  self.filesystem_dir_signatures[changed_dir] = new_signature
+  self:queue_filesystem_sync(changed_dir, "watch")
+end
+
+function FileTreeView:start_filesystem_watch()
+  if self.filesystem_watch_running or not self.filesystem_watch then return end
+  self.filesystem_watch_running = true
+  local view = self
+  core.add_thread(function()
+    while true do
+      local ok, err = pcall(function()
+        view.filesystem_watch:check(function(changed_dir)
+          view:handle_filesystem_watch_change(changed_dir)
+        end)
+      end)
+      if not ok then
+        core.log_quiet("File Tree filesystem watch failed: %s", tostring(err))
+        coroutine.yield(5)
+      else
+        coroutine.yield(0.25)
+      end
+    end
+  end)
 end
 
 function FileTreeView:set_caption(text)
@@ -995,12 +1126,15 @@ function FileTreeView:refresh(keep_selection, preserve_expansion, reveal_paths)
   self.rendered_dir = self.current_dir
   self:snapshot_lines()
   self.status_cache = nil
+  self.filesystem_watch_update_suppressed = (self.filesystem_watch_update_suppressed or 0) + 1
   self:restore_expanded_paths(expanded)
+  self.filesystem_watch_update_suppressed = math.max(0, (self.filesystem_watch_update_suppressed or 1) - 1)
   self.has_possible_edits = false
 
   if keep_selection then
     self.doc:set_selection(math.min(l, #self.doc.lines), c)
   end
+  self:update_filesystem_watches()
 end
 
 function FileTreeView:get_sort_mode()
@@ -2009,6 +2143,7 @@ function FileTreeView:collapse_folder(line, entry)
     self:snapshot_lines()
     self.status_cache = nil
   end
+  self:update_filesystem_watches()
 end
 
 function FileTreeView:auto_expand_single_child_folder(parent_line, seen)
@@ -2060,6 +2195,7 @@ function FileTreeView:expand_folder(line, entry, auto_single, seen)
   if auto_single then
     self:auto_expand_single_child_folder(line, seen)
   end
+  self:update_filesystem_watches()
 end
 
 function FileTreeView:open_selected_files()
@@ -2582,6 +2718,9 @@ command.add(nil, {
     focus_file(current_file_path())
   end,
   ["filetree:focus-file"] = focus_file,
+  ["filetree:sync-path"] = function(path)
+    view:sync_path(path, "command")
+  end,
   ["filetree:sort-by-name"] = function()
     view:set_sort_mode("name")
   end,
