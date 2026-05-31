@@ -1,5 +1,5 @@
 -- mod-version:3
--- Prototype: editable, dired/mini.files-like project file panel.
+-- Editable, dired/mini.files-like project file panel.
 
 local core = require "core"
 local common = require "core.common"
@@ -12,7 +12,7 @@ local DocView = require "core.docview"
 local file_context = require "core.file_context"
 local sidepanel = require "core.sidepanel"
 
-local editree_config = {
+local filetree_config = {
   size = 650 * SCALE,
   visible = false,
   show_hidden = false,
@@ -289,8 +289,8 @@ local function make_meta(item)
   }
 end
 
-local function editree_clipboard_metas_for_lines(view, lines, start, count)
-  local payload = core.editree_clipboard
+local function filetree_clipboard_metas_for_lines(view, lines, start, count)
+  local payload = core.filetree_clipboard
   local items = payload and payload.items
   if not items or #items == 0 or count <= 0 or count % #items ~= 0 then return nil end
 
@@ -396,7 +396,7 @@ local function trash_windows_ffi(paths)
   local ok_bit, bit = pcall(require, "bit")
   if not ok_bit then return nil, "LuaJIT bit library unavailable" end
 
-  if not core.editree_wintrash_ffi_defined then
+  if not core.filetree_wintrash_ffi_defined then
     ffi.cdef[[
 typedef void* HWND;
 typedef unsigned int UINT;
@@ -417,7 +417,7 @@ int MultiByteToWideChar(UINT CodePage, unsigned long dwFlags, const char *lpMult
   int cbMultiByte, wchar_t *lpWideCharStr, int cchWideChar);
 unsigned long GetLastError(void);
 ]]
-    core.editree_wintrash_ffi_defined = true
+    core.filetree_wintrash_ffi_defined = true
   end
 
   local shell32 = ffi.load("shell32")
@@ -470,7 +470,7 @@ end
 local function trash_windows_powershell(paths)
   local dir = USERDIR .. PATHSEP .. "storage"
   common.mkdirp(dir)
-  local script = path_join(dir, "editree-trash-" .. tostring(system.get_time()):gsub("%W", "") .. ".ps1")
+  local script = path_join(dir, "filetree-trash-" .. tostring(system.get_time()):gsub("%W", "") .. ".ps1")
   local fp, err = io.open(script, "wb")
   if not fp then return nil, err end
   fp:write("$ErrorActionPreference = 'Stop'\r\n")
@@ -507,10 +507,10 @@ end
 
 local function trash_paths(paths)
   if #paths == 0 then return true end
-  if PLATFORM == "Windows" and editree_config.delete_to_trash then
+  if PLATFORM == "Windows" and filetree_config.delete_to_trash then
     local ok, err = trash_windows_ffi(paths)
     if ok then return true end
-    core.log("Editree: SHFileOperationW trash failed, falling back to PowerShell: %s", err)
+    core.log("File Tree: SHFileOperationW trash failed, falling back to PowerShell: %s", err)
     local ps_ok, ps_err = trash_windows_powershell(paths)
     if ps_ok then return true end
     return nil, string.format("%s; PowerShell fallback: %s", err, ps_err)
@@ -629,16 +629,16 @@ local function recover_known_line_meta(view)
   end
 end
 
-local EditreeView = DocView:extend()
-EditreeView.context = "application"
+local FileTreeView = DocView:extend()
+FileTreeView.context = "application"
 
-function EditreeView:__tostring() return "EditreeView" end
+function FileTreeView:__tostring() return "FileTreeView" end
 
-function EditreeView:new()
+function FileTreeView:new()
   local doc = Doc()
-  EditreeView.super.new(self, doc)
-  self.target_size = editree_config.size
-  self.visible = editree_config.visible
+  FileTreeView.super.new(self, doc)
+  self.target_size = filetree_config.size
+  self.visible = filetree_config.visible
   self.current_dir = core.root_project().path
   self.original_entries = {}
   self.original_by_name = {}
@@ -652,7 +652,7 @@ function EditreeView:new()
   self.last_lines = nil
   self.status_cache = nil
   self.has_possible_edits = false
-  self:set_caption "Editree"
+  self:set_caption "File Tree"
 
   local view = self
   function doc:on_text_change(type)
@@ -664,34 +664,34 @@ function EditreeView:new()
   self:refresh()
 end
 
-function EditreeView:get_name()
-  return "Editree: " .. common.relative_path(core.root_project().path, self.current_dir)
+function FileTreeView:get_name()
+  return "File Tree: " .. common.relative_path(core.root_project().path, self.current_dir)
 end
 
-function EditreeView:get_gutter_width()
+function FileTreeView:get_gutter_width()
   return style.padding.x * 2, style.padding.x
 end
 
-function EditreeView:set_target_size(axis, value)
+function FileTreeView:set_target_size(axis, value)
   if axis == "x" then
     self.target_size = value
     return true
   end
 end
 
-function EditreeView:on_scale_change(new_scale, prev_scale)
+function FileTreeView:on_scale_change(new_scale, prev_scale)
   self.target_size = self.target_size / prev_scale * new_scale
 end
 
-function EditreeView:update()
-  EditreeView.super.update(self)
+function FileTreeView:update()
+  FileTreeView.super.update(self)
 end
 
-function EditreeView:set_caption(text)
+function FileTreeView:set_caption(text)
   self.caption = text
 end
 
-function EditreeView:snapshot_lines()
+function FileTreeView:snapshot_lines()
   self.last_lines = {}
   for i, line in ipairs(self.doc.lines) do
     self.last_lines[i] = line_text(line)
@@ -706,7 +706,7 @@ function EditreeView:snapshot_lines()
   self.__line_hint_errors = nil
 end
 
-function EditreeView:sync_meta()
+function FileTreeView:sync_meta()
   if self.last_lines and self.last_change_id == self.doc:get_change_id() then return end
   if not self.last_lines then
     self:snapshot_lines()
@@ -775,9 +775,9 @@ function EditreeView:sync_meta()
   else
     -- Insertions/deletions can touch several disjoint ranges before we sync
     -- metadata. Preserve unchanged lines inside the changed block by matching
-    -- their text in order, and use structured editree clipboard metadata for
+    -- their text in order, and use structured filetree clipboard metadata for
     -- genuinely inserted rows when available.
-    local inserted_meta = editree_clipboard_metas_for_lines(self, new_lines, prefix + 1, new_count)
+    local inserted_meta = filetree_clipboard_metas_for_lines(self, new_lines, prefix + 1, new_count)
     for i = 1, new_count do
       local text = new_lines[prefix + i]
       local list = old_by_text[text]
@@ -800,11 +800,11 @@ function EditreeView:sync_meta()
   self.status_cache = nil
 end
 
-function EditreeView:remember_original(item)
+function FileTreeView:remember_original(item)
   self.known_originals[item.abs] = { abs = item.abs, type = item.type }
 end
 
-function EditreeView:capture_expanded_paths()
+function FileTreeView:capture_expanded_paths()
   if self.rendered_dir ~= self.current_dir then return {} end
 
   local expanded = {}
@@ -817,7 +817,7 @@ function EditreeView:capture_expanded_paths()
   return expanded
 end
 
-function EditreeView:add_reveal_paths(expanded, paths)
+function FileTreeView:add_reveal_paths(expanded, paths)
   for _, target in ipairs(paths or {}) do
     if target and in_project(target, self.current_dir) then
       local dir = parent_dir(target)
@@ -829,7 +829,7 @@ function EditreeView:add_reveal_paths(expanded, paths)
   end
 end
 
-function EditreeView:restore_expanded_paths(expanded)
+function FileTreeView:restore_expanded_paths(expanded)
   local paths = {}
   for path in pairs(expanded or {}) do
     if path ~= self.current_dir then paths[#paths + 1] = path end
@@ -854,12 +854,12 @@ function EditreeView:restore_expanded_paths(expanded)
   end
 end
 
-function EditreeView:refresh(keep_selection, preserve_expansion, reveal_paths)
+function FileTreeView:refresh(keep_selection, preserve_expansion, reveal_paths)
   local l, c = self.doc:get_selection()
   local expanded = preserve_expansion == false and {} or self:capture_expanded_paths()
   self:add_reveal_paths(expanded, reveal_paths)
 
-  self.original_entries = sorted_dir(self.current_dir, editree_config.show_hidden)
+  self.original_entries = sorted_dir(self.current_dir, filetree_config.show_hidden)
   self.original_by_name = {}
   self.known_originals = {}
   self.line_meta = {}
@@ -888,7 +888,7 @@ function EditreeView:refresh(keep_selection, preserve_expansion, reveal_paths)
   end
 end
 
-function EditreeView:doc_splice(at, remove, insert_lines, insert_meta)
+function FileTreeView:doc_splice(at, remove, insert_lines, insert_meta)
   insert_lines = insert_lines or {}
   insert_meta = insert_meta or {}
   common.splice(self.doc.lines, at, remove, insert_lines)
@@ -913,7 +913,7 @@ function EditreeView:doc_splice(at, remove, insert_lines, insert_meta)
   self.status_cache = nil
 end
 
-function EditreeView:copy_line_payload(slots)
+function FileTreeView:copy_line_payload(slots)
   local payload = { text = "", items = {}, slots = {} }
   local chunks = {}
   for _, slot in ipairs(slots) do
@@ -952,7 +952,7 @@ local function merge_line_ranges(ranges)
   return merged
 end
 
-function EditreeView:selected_whole_line_slots()
+function FileTreeView:selected_whole_line_slots()
   self:sync_meta()
   local slots = {}
   for _, line1, col1, line2, col2 in self.doc:get_selections(true) do
@@ -976,7 +976,7 @@ function EditreeView:selected_whole_line_slots()
   return slots
 end
 
-function EditreeView:selected_covered_line_slots()
+function FileTreeView:selected_covered_line_slots()
   self:sync_meta()
   local slots = {}
   for _, line1, col1, line2, col2 in self.doc:get_selections(true) do
@@ -995,7 +995,7 @@ function EditreeView:selected_covered_line_slots()
   return slots
 end
 
-function EditreeView:remove_line_range(first, last)
+function FileTreeView:remove_line_range(first, last)
   if first > last then return end
   if first == 1 and last >= #self.doc.lines then
     self.doc:remove(1, 1, #self.doc.lines, math.huge)
@@ -1006,10 +1006,10 @@ function EditreeView:remove_line_range(first, last)
   end
 end
 
-function EditreeView:copy_or_cut_lines(delete)
+function FileTreeView:copy_or_cut_lines(delete)
   local slots = self:selected_whole_line_slots()
   if not slots or #slots == 0 then
-    core.editree_clipboard = nil
+    core.filetree_clipboard = nil
     return false
   end
   local ranges = merge_line_ranges(slots)
@@ -1018,7 +1018,7 @@ function EditreeView:copy_or_cut_lines(delete)
   system.set_clipboard(payload.text)
   core.cursor_clipboard = {}
   core.cursor_clipboard_whole_line = {}
-  core.editree_clipboard = payload
+  core.filetree_clipboard = payload
 
   if delete then
     for i = #ranges, 1, -1 do
@@ -1029,8 +1029,8 @@ function EditreeView:copy_or_cut_lines(delete)
   return true
 end
 
-function EditreeView:paste_lines_with_metadata()
-  local payload = core.editree_clipboard
+function FileTreeView:paste_lines_with_metadata()
+  local payload = core.filetree_clipboard
   local clipboard = system.get_clipboard()
   if not payload or not payload.items or #payload.items == 0 then return false end
   if clipboard ~= payload.text then return false end
@@ -1078,18 +1078,18 @@ function EditreeView:paste_lines_with_metadata()
   return true
 end
 
-function EditreeView:parse_line(line)
+function FileTreeView:parse_line(line)
   local parsed = parse_text(line_text(self.doc.lines[line]))
   return parsed
 end
 
-function EditreeView:line_is_dir(line)
+function FileTreeView:line_is_dir(line)
   local meta = self.line_meta[line]
   local parsed = self:parse_line(line)
   return (parsed and parsed.wants_dir) or (type(meta) == "table" and meta.original_type == "dir")
 end
 
-function EditreeView:get_line_hint_entry(line)
+function FileTreeView:get_line_hint_entry(line)
   local change_id = self.doc:get_change_id()
   if self.__line_hint_entries_change_id ~= change_id
       or self.__line_hint_entries_dir ~= self.current_dir then
@@ -1105,12 +1105,12 @@ function EditreeView:get_line_hint_entry(line)
   return self.__line_hint_entries_by_line and self.__line_hint_entries_by_line[line]
 end
 
-function EditreeView:line_hint_count_key(abs, show_hidden)
-  if show_hidden == nil then show_hidden = editree_config.show_hidden end
+function FileTreeView:line_hint_count_key(abs, show_hidden)
+  if show_hidden == nil then show_hidden = filetree_config.show_hidden end
   return (show_hidden and "1" or "0") .. "\0" .. abs
 end
 
-function EditreeView:pop_line_hint_count_task()
+function FileTreeView:pop_line_hint_count_task()
   for i, task in ipairs(self.line_hint_count_queue or {}) do
     if task.priority then
       return table.remove(self.line_hint_count_queue, i)
@@ -1119,7 +1119,7 @@ function EditreeView:pop_line_hint_count_task()
   return table.remove(self.line_hint_count_queue, 1)
 end
 
-function EditreeView:start_line_hint_count_worker()
+function FileTreeView:start_line_hint_count_worker()
   if self.line_hint_count_worker_running then return end
   self.line_hint_count_worker_running = true
 
@@ -1145,7 +1145,7 @@ function EditreeView:start_line_hint_count_worker()
             error = err,
           }
           if err then
-            core.log_quiet("Editree Line Hint count failed for %s: %s", task.abs, err)
+            core.log_quiet("File Tree Line Hint count failed for %s: %s", task.abs, err)
           end
           batch_updated = true
         end
@@ -1169,7 +1169,7 @@ function EditreeView:start_line_hint_count_worker()
   end)
 end
 
-function EditreeView:get_folder_hint_counts(abs, modified, priority)
+function FileTreeView:get_folder_hint_counts(abs, modified, priority)
   self.line_hint_count_cache = self.line_hint_count_cache or {}
   self.line_hint_count_pending = self.line_hint_count_pending or {}
   self.line_hint_count_queue = self.line_hint_count_queue or {}
@@ -1181,7 +1181,7 @@ function EditreeView:get_folder_hint_counts(abs, modified, priority)
   local pending = self.line_hint_count_pending[key]
   if pending then
     pending.modified = modified
-    pending.show_hidden = editree_config.show_hidden
+    pending.show_hidden = filetree_config.show_hidden
     pending.priority = pending.priority or priority
     return nil, true
   end
@@ -1190,7 +1190,7 @@ function EditreeView:get_folder_hint_counts(abs, modified, priority)
     key = key,
     abs = abs,
     modified = modified,
-    show_hidden = editree_config.show_hidden,
+    show_hidden = filetree_config.show_hidden,
     priority = priority,
   }
   self.line_hint_count_pending[key] = pending
@@ -1199,7 +1199,7 @@ function EditreeView:get_folder_hint_counts(abs, modified, priority)
   return nil, true
 end
 
-function EditreeView:format_line_hint_for_path(abs, info)
+function FileTreeView:format_line_hint_for_path(abs, info)
   if not info or not info.type then return nil end
 
   local modified = format_modified_time(info.modified)
@@ -1233,8 +1233,8 @@ function EditreeView:format_line_hint_for_path(abs, info)
   end
 end
 
-function EditreeView:get_line_hint(line)
-  if not editree_config.show_line_hints then return nil end
+function FileTreeView:get_line_hint(line)
+  if not filetree_config.show_line_hints then return nil end
   if self.has_possible_edits and self:get_line_status(line) == "invalid" then return nil end
 
   local entry = self:get_line_hint_entry(line)
@@ -1253,13 +1253,13 @@ function EditreeView:get_line_hint(line)
   }
 end
 
-function EditreeView:draw_line_text(line, x, y)
+function FileTreeView:draw_line_text(line, x, y)
   if not self:line_is_dir(line) then
-    return EditreeView.super.draw_line_text(self, line, x, y)
+    return FileTreeView.super.draw_line_text(self, line, x, y)
   end
 
   local text = line_text(self.doc:get_utf8_line(line))
-  local color = editree_config.folder_color
+  local color = filetree_config.folder_color
     or style.dim
     or style.line_number2
     or style.syntax.comment
@@ -1272,7 +1272,7 @@ function EditreeView:draw_line_text(line, x, y)
   return self:get_line_height()
 end
 
-function EditreeView:draw_line_gutter(line, x, y, width)
+function FileTreeView:draw_line_gutter(line, x, y, width)
   local lh = self:get_line_height()
   local status = self:get_line_status(line)
   if status then
@@ -1285,7 +1285,7 @@ function EditreeView:draw_line_gutter(line, x, y, width)
   return lh
 end
 
-function EditreeView:collect_draft_rows(rows, draft, base_indent, parent_line)
+function FileTreeView:collect_draft_rows(rows, draft, base_indent, parent_line)
   if not draft then return end
   for i, rel in ipairs(draft.lines or {}) do
     local meta = (draft.meta and draft.meta[i]) or NO_META
@@ -1308,7 +1308,7 @@ function EditreeView:collect_draft_rows(rows, draft, base_indent, parent_line)
   end
 end
 
-function EditreeView:collect_rows(include_hidden)
+function FileTreeView:collect_rows(include_hidden)
   local rows = {}
   for i, line in ipairs(self.doc.lines) do
     local meta = self.line_meta[i] or NO_META
@@ -1324,7 +1324,7 @@ function EditreeView:collect_rows(include_hidden)
   return rows
 end
 
-function EditreeView:build_entries(include_hidden)
+function FileTreeView:build_entries(include_hidden)
   self:sync_meta()
   local rows = self:collect_rows(include_hidden)
   local entries, errors = {}, {}
@@ -1387,7 +1387,7 @@ function EditreeView:build_entries(include_hidden)
   return entries, errors
 end
 
-function EditreeView:plan_changes(status_only)
+function FileTreeView:plan_changes(status_only)
   local entries, errors = self:build_entries(true)
   local status = {}
   local invalid = false
@@ -1529,7 +1529,7 @@ function EditreeView:plan_changes(status_only)
       for _, e in ipairs(changed) do mark_invalid(e, "source no longer exists: " .. op_path(src)) end
     elseif kept_original or not source_known_here then
       -- Original still exists in this editable snapshot, or the source came
-      -- from stale/off-screen editree clipboard metadata. Extra occurrences are
+      -- from stale/off-screen filetree clipboard metadata. Extra occurrences are
       -- copies; never delete/move a source that this buffer did not own.
       for _, e in ipairs(changed) do
         local op = {
@@ -1595,7 +1595,7 @@ function EditreeView:plan_changes(status_only)
   -- If metadata was lost, a cut/paste can look like "create this basename" +
   -- "trash that same basename". Do not silently turn a file move/copy into
   -- destructive delete + empty create; force the user to resolve it by using
-  -- editree's metadata-preserving copy/cut/paste path.
+  -- filetree's metadata-preserving copy/cut/paste path.
   local creates_by_type = {}
   for _, create in ipairs(creates) do
     creates_by_type[create.type] = (creates_by_type[create.type] or 0) + 1
@@ -1761,7 +1761,7 @@ function EditreeView:plan_changes(status_only)
   return { creates = creates, copies = copies, moves = moves, trashes = trashes, status = status }
 end
 
-function EditreeView:get_line_status(line)
+function FileTreeView:get_line_status(line)
   self:sync_meta()
   if not self.has_possible_edits then return nil end
   if not self.status_cache then
@@ -1771,7 +1771,7 @@ function EditreeView:get_line_status(line)
   return self.status_cache[line]
 end
 
-function EditreeView:entry_for_line(line)
+function FileTreeView:entry_for_line(line)
   local entries, errors = self:build_entries(false)
   if errors[line] then return nil, errors[line] end
   for _, e in ipairs(entries) do
@@ -1780,9 +1780,9 @@ function EditreeView:entry_for_line(line)
   return nil
 end
 
-function EditreeView:read_folder_lines(abs, indent)
+function FileTreeView:read_folder_lines(abs, indent)
   local lines, metas = {}, {}
-  for _, item in ipairs(sorted_dir(abs, editree_config.show_hidden)) do
+  for _, item in ipairs(sorted_dir(abs, filetree_config.show_hidden)) do
     self:remember_original(item)
     lines[#lines + 1] = indent_prefix(indent) .. item.display .. "\n"
     metas[#metas + 1] = make_meta(item)
@@ -1790,7 +1790,7 @@ function EditreeView:read_folder_lines(abs, indent)
   return lines, metas
 end
 
-function EditreeView:relative_descendant_line(text, base_indent)
+function FileTreeView:relative_descendant_line(text, base_indent)
   local level = parse_leading_indent(text)
   if level and level >= base_indent then
     return strip_indent_levels(text, base_indent) .. "\n"
@@ -1798,7 +1798,7 @@ function EditreeView:relative_descendant_line(text, base_indent)
   return trim(text) .. "\n"
 end
 
-function EditreeView:descendant_range(line, indent)
+function FileTreeView:descendant_range(line, indent)
   local last = line
   for i = line + 1, #self.doc.lines do
     local text = line_text(self.doc.lines[i])
@@ -1813,7 +1813,7 @@ function EditreeView:descendant_range(line, indent)
   return line + 1, last
 end
 
-function EditreeView:collapse_folder(line, entry)
+function FileTreeView:collapse_folder(line, entry)
   local meta = self.line_meta[line]
   if type(meta) ~= "table" then
     meta = { expanded = true }
@@ -1837,7 +1837,7 @@ function EditreeView:collapse_folder(line, entry)
   end
 end
 
-function EditreeView:auto_expand_single_child_folder(parent_line, seen)
+function FileTreeView:auto_expand_single_child_folder(parent_line, seen)
   seen = seen or {}
   local parent = self:entry_for_line(parent_line)
   if not parent or parent.type ~= "dir" or seen[parent.abs] then return end
@@ -1863,7 +1863,7 @@ function EditreeView:auto_expand_single_child_folder(parent_line, seen)
   end
 end
 
-function EditreeView:expand_folder(line, entry, auto_single, seen)
+function FileTreeView:expand_folder(line, entry, auto_single, seen)
   local meta = self.line_meta[line]
   if type(meta) ~= "table" then
     meta = { expanded = false }
@@ -1888,7 +1888,7 @@ function EditreeView:expand_folder(line, entry, auto_single, seen)
   end
 end
 
-function EditreeView:open_selected_files()
+function FileTreeView:open_selected_files()
   local slots = merge_line_ranges(self:selected_covered_line_slots())
   local entries, errors = self:build_entries(false)
   local entries_by_line = {}
@@ -1899,7 +1899,7 @@ function EditreeView:open_selected_files()
     for line = slot.first, slot.last do
       local entry = entries_by_line[line]
       if errors[line] then
-        core.error("Editree: %s", errors[line])
+        core.error("File Tree: %s", errors[line])
         return false
       end
       if entry and entry.type == "file" and not seen[entry.abs] then
@@ -1919,14 +1919,14 @@ function EditreeView:open_selected_files()
   return true
 end
 
-function EditreeView:open_item(target)
+function FileTreeView:open_item(target)
   self:sync_meta()
   if target ~= "side" and self:open_selected_files() then return end
 
   local line = self.doc:get_selection(true)
   local entry, err = self:entry_for_line(line)
   if not entry then
-    if err then core.error("Editree: %s", err) end
+    if err then core.error("File Tree: %s", err) end
     return
   end
 
@@ -1952,7 +1952,7 @@ function EditreeView:open_item(target)
   end
 end
 
-function EditreeView:up_dir()
+function FileTreeView:up_dir()
   self.current_dir = parent_dir(self.current_dir)
   if not in_project(self.current_dir, core.root_project().path) then
     self.current_dir = core.root_project().path
@@ -1961,7 +1961,7 @@ function EditreeView:up_dir()
   self:refresh(false, false)
 end
 
-function EditreeView:apply_plan(plan)
+function FileTreeView:apply_plan(plan)
   local changed = false
 
   table.sort(plan.creates, function(a, b)
@@ -1973,25 +1973,25 @@ function EditreeView:apply_plan(plan)
     local existing = system.get_file_info(op.path)
     if existing then
       if op.type == "dir" and existing.type == "dir" then return true end
-      core.error("Editree: target already exists: %s", op.path)
+      core.error("File Tree: target already exists: %s", op.path)
       return false
     end
     local ok, err, path
     if op.type == "dir" then
       ok, err, path = common.mkdirp(op.path)
-      if not ok then core.error("Editree: mkdir failed: %s: %s", path or op.path, err); return false end
+      if not ok then core.error("File Tree: mkdir failed: %s: %s", path or op.path, err); return false end
     else
       local parent = parent_dir(op.path)
       if parent and not system.get_file_info(parent) then
         ok, err, path = common.mkdirp(parent)
-        if not ok then core.error("Editree: mkdir failed: %s: %s", path or parent, err); return false end
+        if not ok then core.error("File Tree: mkdir failed: %s: %s", path or parent, err); return false end
       end
       local fp
       fp, err = io.open(op.path, "wb")
-      if not fp then core.error("Editree: create failed: %s", err); return false end
+      if not fp then core.error("File Tree: create failed: %s", err); return false end
       fp:close()
     end
-    core.log("Editree: created %s", op.path)
+    core.log("File Tree: created %s", op.path)
     changed = true
     return true
   end
@@ -2005,27 +2005,27 @@ function EditreeView:apply_plan(plan)
 
   local ordered_moves, move_order_err = ordered_moves_or_cycle(plan.moves)
   if not ordered_moves then
-    core.error("Editree: %s", move_order_err)
+    core.error("File Tree: %s", move_order_err)
     return
   end
   for _, op in ipairs(ordered_moves) do
     if system.get_file_info(op.to) then
-      core.error("Editree: target already exists: %s", op.to)
+      core.error("File Tree: target already exists: %s", op.to)
       return
     end
     if op.type == "dir" and common.path_belongs_to(op.to, op.from) then
-      core.error("Editree: cannot move a folder into itself: %s -> %s", op.from, op.to)
+      core.error("File Tree: cannot move a folder into itself: %s -> %s", op.from, op.to)
       return
     end
     local parent = parent_dir(op.to)
     if parent and not system.get_file_info(parent) then
       local ok, err, path = common.mkdirp(parent)
-      if not ok then core.error("Editree: mkdir failed: %s: %s", path or parent, err); return end
+      if not ok then core.error("File Tree: mkdir failed: %s: %s", path or parent, err); return end
     end
     local ok, err = os.rename(op.from, op.to)
-    if not ok then core.error("Editree: move failed: %s", err); return end
+    if not ok then core.error("File Tree: move failed: %s", err); return end
     update_open_docs_after_rename(op.from, op.to, op.type)
-    core.log("Editree: moved %s -> %s", op.from, op.to)
+    core.log("File Tree: moved %s -> %s", op.from, op.to)
     changed = true
   end
 
@@ -2036,12 +2036,12 @@ function EditreeView:apply_plan(plan)
   table.sort(plan.copies, function(a, b) return path_depth(a.to) < path_depth(b.to) end)
   for _, op in ipairs(plan.copies) do
     if system.get_file_info(op.to) then
-      core.error("Editree: target already exists: %s", op.to)
+      core.error("File Tree: target already exists: %s", op.to)
       return
     end
     local ok, err = copy_recursive(op.apply_from or op.from, op.to, op.type)
-    if not ok then core.error("Editree: copy failed: %s", err); return end
-    core.log("Editree: copied %s -> %s", op.from, op.to)
+    if not ok then core.error("File Tree: copy failed: %s", err); return end
+    core.log("File Tree: copied %s -> %s", op.from, op.to)
     changed = true
   end
 
@@ -2056,9 +2056,9 @@ function EditreeView:apply_plan(plan)
   end
   if #trash_list > 0 then
     local ok, err = trash_paths(trash_list)
-    if not ok then core.error("Editree: trash/delete failed: %s", err); return end
+    if not ok then core.error("File Tree: trash/delete failed: %s", err); return end
     for _, path in ipairs(trash_list) do
-      core.log("Editree: %s %s", editree_config.delete_to_trash and PLATFORM == "Windows" and "trashed" or "deleted", path)
+      core.log("File Tree: %s %s", filetree_config.delete_to_trash and PLATFORM == "Windows" and "trashed" or "deleted", path)
     end
     changed = true
   end
@@ -2068,10 +2068,10 @@ function EditreeView:apply_plan(plan)
   for _, op in ipairs(plan.copies) do reveal_paths[#reveal_paths + 1] = op.to end
   for _, op in ipairs(plan.creates) do reveal_paths[#reveal_paths + 1] = op.path end
   self:refresh(true, true, reveal_paths)
-  if changed then core.log("Editree: applied edits") else core.log("Editree: nothing to apply") end
+  if changed then core.log("File Tree: applied edits") else core.log("File Tree: nothing to apply") end
 end
 
-function EditreeView:operation_lines(plan)
+function FileTreeView:operation_lines(plan)
   local rows = {}
   local function add_row(verb, type, from, to)
     rows[#rows + 1] = { verb = verb, type = type, from = from, to = to }
@@ -2127,12 +2127,12 @@ function EditreeView:operation_lines(plan)
   return lines
 end
 
-function EditreeView:operation_count(plan)
+function FileTreeView:operation_count(plan)
   return #plan.creates + #plan.copies + #plan.moves + #plan.trashes
 end
 
-function EditreeView:operation_summary(plan)
-  local trash_label = editree_config.delete_to_trash and PLATFORM == "Windows" and "Trash" or "Delete"
+function FileTreeView:operation_summary(plan)
+  local trash_label = filetree_config.delete_to_trash and PLATFORM == "Windows" and "Trash" or "Delete"
   return string.format(
     "Create: %d   Copy: %d   Move: %d   %s: %d",
     #plan.creates, #plan.copies, #plan.moves, trash_label, #plan.trashes
@@ -2147,15 +2147,15 @@ local operation_colors = {
   DELETE = { 255, 120, 120, 255 },
 }
 
-local function editree_operation_message(lines)
+local function filetree_operation_message(lines)
   if #lines == 0 then
-    return "Editree has no filesystem operations to apply."
+    return "File Tree has no filesystem operations to apply."
   end
 
   local message = {
-    editree_styled_nag_message = true,
+    filetree_styled_nag_message = true,
     lines = {
-      { { text = "Editree will perform these filesystem operations:" } },
+      { { text = "File Tree will perform these filesystem operations:" } },
       {},
     }
   }
@@ -2170,11 +2170,11 @@ local function editree_operation_message(lines)
   return message
 end
 
-function EditreeView:confirm_apply_plan(plan)
+function FileTreeView:confirm_apply_plan(plan)
   local lines = self:operation_lines(plan)
-  local message = editree_operation_message(lines)
+  local message = filetree_operation_message(lines)
 
-  core.nag_view:show("Apply Editree Operations", message, {
+  core.nag_view:show("Apply File Tree Operations", message, {
     { text = "Apply", default_yes = true },
     { text = "Cancel", default_no = true },
   }, function(item)
@@ -2182,7 +2182,7 @@ function EditreeView:confirm_apply_plan(plan)
   end)
 end
 
-function EditreeView:resolve_ambiguity(ambiguity)
+function FileTreeView:resolve_ambiguity(ambiguity)
   local lines = {
     string.format("%s '%s' could be a new empty item or a moved item.", ambiguity.type, op_path(ambiguity.path)),
     "",
@@ -2214,7 +2214,7 @@ function EditreeView:resolve_ambiguity(ambiguity)
     end
   end
 
-  core.nag_view:show("Resolve Editree Ambiguity", table.concat(lines, "\n"), options, function(item)
+  core.nag_view:show("Resolve File Tree Ambiguity", table.concat(lines, "\n"), options, function(item)
     local candidates = ambiguity.candidates or {}
     if item.candidate_index then
       local candidate = candidates[item.candidate_index]
@@ -2235,23 +2235,23 @@ function EditreeView:resolve_ambiguity(ambiguity)
   end)
 end
 
-function EditreeView:show_plan_errors(message, reasons, ambiguities)
+function FileTreeView:show_plan_errors(message, reasons, ambiguities)
   if ambiguities and #ambiguities > 0 then
     self:resolve_ambiguity(ambiguities[1])
     return
   end
 
-  local text = "Editree cannot apply these edits."
+  local text = "File Tree cannot apply these edits."
   if message then text = text .. "\n\n" .. message end
   if reasons and #reasons > 0 then
     text = text .. "\n\n" .. table.concat(reasons, "\n")
   end
-  core.nag_view:show("Editree Invalid Operations", text, {
+  core.nag_view:show("File Tree Invalid Operations", text, {
     { text = "OK", default_yes = true, default_no = true },
   })
 end
 
-function EditreeView:apply_edits()
+function FileTreeView:apply_edits()
   self:sync_meta()
   local plan, err, _, reasons, ambiguities = self:plan_changes()
   if not plan then self:show_plan_errors(err, reasons, ambiguities); return end
@@ -2260,22 +2260,22 @@ function EditreeView:apply_edits()
     self.doc:clean()
     self.has_possible_edits = false
     self.status_cache = nil
-    core.log("Editree: nothing to apply")
+    core.log("File Tree: nothing to apply")
     return
   end
 
   self:confirm_apply_plan(plan)
 end
 
-local view = EditreeView()
+local view = FileTreeView()
 file_context.exclude_main_panel_view(view)
-sidepanel.register_panel("editree", view)
+sidepanel.register_panel("filetree", view)
 view.node = sidepanel.side_node
 
-local function wrap_doc_command(name, editree_handler)
+local function wrap_doc_command(name, filetree_handler)
   local base = command.map[name]
   command.add(function(...)
-    if core.active_view == view then return true, "editree", view end
+    if core.active_view == view then return true, "filetree", view end
     if not base then return false end
     local result = { base.predicate(...) }
     if table.remove(result, 1) then
@@ -2287,10 +2287,10 @@ local function wrap_doc_command(name, editree_handler)
     return false
   end, {
     [name] = function(mode, ...)
-      if mode == "editree" then
-        if editree_handler(view, ...) then return end
+      if mode == "filetree" then
+        if filetree_handler(view, ...) then return end
       else
-        core.editree_clipboard = nil
+        core.filetree_clipboard = nil
       end
       if base then base.perform(...) end
     end
@@ -2323,9 +2323,9 @@ local function hide_and_focus_main_panel_view()
   sidepanel.focus_main(true)
 end
 
-local function show_and_focus_editree()
+local function show_and_focus_filetree()
   remember_current_main_panel_view()
-  sidepanel.show("editree", { focus = true })
+  sidepanel.show("filetree", { focus = true })
 end
 
 local function find_entry(filename)
@@ -2356,7 +2356,7 @@ local function focus_entry(entry, filename)
     view.scroll.x = 0
   end
 
-  sidepanel.show("editree", { focus = true })
+  sidepanel.show("filetree", { focus = true })
   return true
 end
 
@@ -2365,7 +2365,7 @@ local function focus_file(filename)
   local root = core.root_project and core.root_project()
   if not filename or not root or not in_project(filename, root.path) then return end
 
-  sidepanel.show("editree", { focus = false })
+  sidepanel.show("filetree", { focus = false })
   local refreshed = false
   if not in_project(filename, view.current_dir) then
     view.current_dir = root.path
@@ -2388,64 +2388,64 @@ local function focus_file(filename)
 end
 
 command.add(nil, {
-  ["editree:toggle"] = function()
+  ["filetree:toggle"] = function()
     if view.visible then
       hide_and_focus_main_panel_view()
     else
-      show_and_focus_editree()
+      show_and_focus_filetree()
     end
   end,
-  ["editree:focus"] = function()
-    show_and_focus_editree()
+  ["filetree:focus"] = function()
+    show_and_focus_filetree()
   end,
-  ["editree:focus-editor-and-hide"] = function()
+  ["filetree:focus-editor-and-hide"] = function()
     hide_and_focus_main_panel_view()
   end,
-  ["editree:focus-and-show"] = function()
-    show_and_focus_editree()
+  ["filetree:focus-and-show"] = function()
+    show_and_focus_filetree()
   end,
-  ["editree:focus-current-file"] = function()
+  ["filetree:focus-current-file"] = function()
     focus_file(current_file_path())
   end,
-  ["editree:focus-file"] = focus_file,
+  ["filetree:focus-file"] = focus_file,
 })
 
-command.add(function() return core.active_view:is(EditreeView) end, {
-  ["editree:refresh"] = function()
+command.add(function() return core.active_view:is(FileTreeView) end, {
+  ["filetree:refresh"] = function()
     view:refresh(true)
   end,
-  ["editree:apply"] = function()
+  ["filetree:apply"] = function()
     view:apply_edits()
   end,
-  ["editree:open"] = function()
+  ["filetree:open"] = function()
     view:open_item()
   end,
-  ["editree:open-side"] = function()
+  ["filetree:open-side"] = function()
     view:open_item("side")
   end,
-  ["editree:up-dir"] = function()
+  ["filetree:up-dir"] = function()
     view:up_dir()
   end,
-  ["editree:project-root"] = function()
+  ["filetree:project-root"] = function()
     view.current_dir = core.root_project().path
     view:refresh(false, false)
   end,
-  ["editree:select-all"] = function()
+  ["filetree:select-all"] = function()
     view.doc:set_selection(1, 1, #view.doc.lines, #view.doc.lines[#view.doc.lines])
   end,
 })
 
 keymap.add {
-  ["ctrl+\\"] = "editree:toggle",
-  ["alt+1"] = "editree:focus-editor-and-hide",
-  ["alt+2"] = "editree:focus-and-show",
-  ["alt+r"] = "editree:open",
-  ["alt+shift+r"] = "editree:open-side",
-  ["ctrl+return"] = "editree:open-side",
-  ["ctrl+s"] = "editree:apply",
-  ["f5"] = "editree:refresh",
-  ["alt+left"] = "editree:up-dir",
-  ["alt+home"] = "editree:project-root",
+  ["ctrl+\\"] = "filetree:toggle",
+  ["alt+1"] = "filetree:focus-editor-and-hide",
+  ["alt+2"] = "filetree:focus-and-show",
+  ["alt+r"] = "filetree:open",
+  ["alt+shift+r"] = "filetree:open-side",
+  ["ctrl+return"] = "filetree:open-side",
+  ["ctrl+s"] = "filetree:apply",
+  ["f5"] = "filetree:refresh",
+  ["alt+left"] = "filetree:up-dir",
+  ["alt+home"] = "filetree:project-root",
 }
 
 return view

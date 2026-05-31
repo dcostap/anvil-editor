@@ -50,7 +50,7 @@ local function outside_overlay_color(amount)
 end
 
 local function is_styled_message(message)
-  return type(message) == "table" and message.editree_styled_nag_message
+  return type(message) == "table" and message.filetree_styled_nag_message
 end
 
 local function styled_plain_text(message)

@@ -14,17 +14,17 @@ local function write_file(path, content)
   file:close()
 end
 
-local function find_editree_line(view, wanted)
+local function find_filetree_line(view, wanted)
   for i, line in ipairs(view.doc.lines) do
     if line_without_newline(line) == wanted then return i end
   end
 end
 
-local function wait_for_folder_counts(editree, line, folders_text, files_text, timeout)
+local function wait_for_folder_counts(filetree, line, folders_text, files_text, timeout)
   local deadline = system.get_time() + (timeout or 2)
   local hint
   repeat
-    hint = editree:get_line_hint(line).text
+    hint = filetree:get_line_hint(line).text
     if hint:find(folders_text, 1, true) and hint:find(files_text, 1, true) then
       return hint
     end
@@ -33,11 +33,11 @@ local function wait_for_folder_counts(editree, line, folders_text, files_text, t
   return hint
 end
 
-test.describe("Editree Line Hints", function()
+test.describe("File Tree Line Hints", function()
   test.after_each(function(context)
-    if context.editree and context.editree_previous_dir then
-      context.editree.current_dir = context.editree_previous_dir
-      context.editree:refresh(false, false)
+    if context.filetree and context.filetree_previous_dir then
+      context.filetree.current_dir = context.filetree_previous_dir
+      context.filetree:refresh(false, false)
     end
     if context.temp_root and system.get_file_info(context.temp_root) then
       local ok, err = common.rm(context.temp_root, true)
@@ -47,7 +47,7 @@ test.describe("Editree Line Hints", function()
 
   test.it("show file size/date and async direct folder counts/date", function(context)
     local temp_root = core.root_project().path
-      .. PATHSEP .. "editree-line-hints-tests-"
+      .. PATHSEP .. "filetree-line-hints-tests-"
       .. system.get_process_id() .. "-"
       .. math.floor(system.get_time() * 1000000)
     local ok, err = common.mkdirp(temp_root)
@@ -66,22 +66,22 @@ test.describe("Editree Line Hints", function()
 
     write_file(temp_root .. PATHSEP .. "file.bin", string.rep("x", 23 * 1024))
 
-    local editree = require "plugins.editree"
-    context.editree = editree
-    context.editree_previous_dir = editree.current_dir
-    editree.current_dir = temp_root
-    editree:refresh(false, false)
+    local filetree = require "plugins.filetree"
+    context.filetree = filetree
+    context.filetree_previous_dir = filetree.current_dir
+    filetree.current_dir = temp_root
+    filetree:refresh(false, false)
 
-    local folder_a_line = find_editree_line(editree, "folder-a/")
-    local folder_b_line = find_editree_line(editree, "folder-b/")
-    local file_line = find_editree_line(editree, "file.bin")
-    test.not_nil(folder_a_line, "expected first folder row in Editree")
-    test.not_nil(folder_b_line, "expected second folder row in Editree")
-    test.not_nil(file_line, "expected file row in Editree")
+    local folder_a_line = find_filetree_line(filetree, "folder-a/")
+    local folder_b_line = find_filetree_line(filetree, "folder-b/")
+    local file_line = find_filetree_line(filetree, "file.bin")
+    test.not_nil(folder_a_line, "expected first folder row in File Tree")
+    test.not_nil(folder_b_line, "expected second folder row in File Tree")
+    test.not_nil(file_line, "expected file row in File Tree")
 
-    local initial_folder_a_hint = editree:get_line_hint(folder_a_line).text
-    local initial_folder_b_hint = editree:get_line_hint(folder_b_line).text
-    local file_hint = editree:get_line_hint(file_line).text
+    local initial_folder_a_hint = filetree:get_line_hint(folder_a_line).text
+    local initial_folder_b_hint = filetree:get_line_hint(folder_b_line).text
+    local file_hint = filetree:get_line_hint(file_line).text
 
     test.ok(initial_folder_a_hint:find("   … 📁", 1, true), initial_folder_a_hint)
     test.ok(initial_folder_a_hint:find("   … 📄", 1, true), initial_folder_a_hint)
@@ -89,8 +89,8 @@ test.describe("Editree Line Hints", function()
     test.ok(initial_folder_b_hint:find("   … 📄", 1, true), initial_folder_b_hint)
     test.ok(initial_folder_a_hint:match("%d%d%d%d %a%a%a%s+%d+ %d%d:%d%d"), initial_folder_a_hint)
 
-    local folder_a_hint = wait_for_folder_counts(editree, folder_a_line, "   2 📁", "   1 📄")
-    local folder_b_hint = wait_for_folder_counts(editree, folder_b_line, "   1 📁", "   2 📄")
+    local folder_a_hint = wait_for_folder_counts(filetree, folder_a_line, "   2 📁", "   1 📄")
+    local folder_b_hint = wait_for_folder_counts(filetree, folder_b_line, "   1 📁", "   2 📄")
     test.ok(folder_a_hint:find("   2 📁", 1, true), folder_a_hint)
     test.ok(folder_a_hint:find("   1 📄", 1, true), folder_a_hint)
     test.ok(folder_a_hint:match("%d%d%d%d %a%a%a%s+%d+ %d%d:%d%d"), folder_a_hint)

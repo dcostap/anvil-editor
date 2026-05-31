@@ -78,7 +78,7 @@ local function is_real_editor_doc(doc)
   local view = active_editor_for_doc(doc)
   if view then
     if view == core.global_prompt_bar or view == core.nag_view then return false end
-    if tostring(view) == "EditreeView" then return false end
+    if tostring(view) == "FileTreeView" then return false end
   end
 
   -- Prefer real files, but allow still-open untitled editor documents as long

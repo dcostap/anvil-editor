@@ -1266,7 +1266,7 @@ keymap.add({
   ["ctrl+shift+w"] = "root:close-all-others",
   ["alt+z"] = "root:switch-to-previous-tab",
   ["alt+x"] = "root:switch-to-next-tab",
-  ["ctrl+l"] = "editree:focus-current-file",
+  ["ctrl+l"] = "filetree:focus-current-file",
   ["ctrl+shift+l"] = "user:reveal-active-file-in-explorer",
   ["ctrl+up"] = "user:move-caret-previous-paragraph",
   ["ctrl+down"] = "user:move-caret-next-paragraph",

@@ -37,7 +37,7 @@ local emoji_font = renderer.font.load(
 style.code_font = renderer.font.group({ code_font, emoji_font })
 -- First-party editable file tree.
 require "plugins.custom_nagview"
-require "plugins.editree"
+require "plugins.filetree"
 -- Use 4 spaces for soft tabs/indentation.
 config.indent_size = 4
 config.tab_type = "soft"

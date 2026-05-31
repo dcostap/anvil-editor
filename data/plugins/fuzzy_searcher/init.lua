@@ -2887,10 +2887,10 @@ function FSView:focus_selected_in_tree()
   local root = core.root_project and core.root_project()
   if not root or not common.path_belongs_to(path, root.path) then return end
 
-  -- Close first so editree remains the active view; otherwise its update() sees
+  -- Close first so filetree remains the active view; otherwise its update() sees
   -- the fuzzy input as active and collapses itself again.
   self:close()
-  command.perform("editree:focus-file", path)
+  command.perform("filetree:focus-file", path)
 end
 
 function FSView:reveal_selected_in_explorer()

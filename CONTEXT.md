@@ -74,7 +74,7 @@ _Avoid_: Side node, secondary panel
 
 **File Tree**:
 A Side Panel tool for viewing and editing Project files and directories.
-_Avoid_: Filetree, old file tree
+_Avoid_: old file tree
 
 **Global Prompt Bar**:
 The bottom-anchored, full-width prompt used for app-wide actions such as opening files, opening projects, renaming, and command entry.

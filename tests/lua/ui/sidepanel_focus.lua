@@ -925,17 +925,17 @@ test.describe("sidepanel focus", function()
     test.equal(main_find.local_find_state.visible, false)
   end)
 
-  test.it("alt+1 hides the Editree file tree and focuses the main Editor", function(context)
+  test.it("alt+1 hides the File Tree and focuses the main Editor", function(context)
     local main_view = open_main_editor(context, "main alpha beta\n")
     main_view.__test_name = "main Editor"
     core.set_active_view(main_view)
 
-    local editree = require "plugins.editree"
-    track(context, "side_views", editree)
-    editree.__test_name = "Editree file tree"
-    sidepanel.register_panel("editree", editree)
-    sidepanel.show("editree", { focus = true })
-    assert_active_view(editree, "expected Editree file tree before alt+1")
+    local filetree = require "plugins.filetree"
+    track(context, "side_views", filetree)
+    filetree.__test_name = "File Tree"
+    sidepanel.register_panel("filetree", filetree)
+    sidepanel.show("filetree", { focus = true })
+    assert_active_view(filetree, "expected File Tree before alt+1")
 
     keymap.modkeys.alt = true
     local performed = keymap.on_key_pressed("1")
@@ -943,39 +943,39 @@ test.describe("sidepanel focus", function()
 
     test.ok(performed, "expected alt+1 keymap to perform a command")
     test.equal(sidepanel.visible, false)
-    assert_active_view(main_view, "expected alt+1 to hide Editree and focus the main Editor")
+    assert_active_view(main_view, "expected alt+1 to hide the File Tree and focus the main Editor")
   end)
 
-  test.it("alt+1 from an Editree prompt bar hides Editree and focuses the main Editor", function(context)
+  test.it("alt+1 from a File Tree prompt bar hides the File Tree and focuses the main Editor", function(context)
     local main_view = open_main_editor(context, "main alpha beta\n")
     main_view.__test_name = "main Editor"
     core.set_active_view(main_view)
 
-    local editree = require "plugins.editree"
-    track(context, "side_views", editree)
-    editree.__test_name = "Editree file tree"
-    sidepanel.register_panel("editree", editree)
-    sidepanel.show("editree", { focus = true })
-    local editree_find = open_find_input(editree)
-    assert_active_view(editree_find, "expected Editree prompt bar before alt+1")
+    local filetree = require "plugins.filetree"
+    track(context, "side_views", filetree)
+    filetree.__test_name = "File Tree"
+    sidepanel.register_panel("filetree", filetree)
+    sidepanel.show("filetree", { focus = true })
+    local filetree_find = open_find_input(filetree)
+    assert_active_view(filetree_find, "expected File Tree prompt bar before alt+1")
 
     test.ok(command.perform("sidepanel:focus-main-and-hide"))
 
     test.equal(sidepanel.visible, false)
-    assert_active_view(main_view, "expected alt+1 from Editree prompt to hide Editree and focus the main Editor")
+    assert_active_view(main_view, "expected alt+1 from File Tree prompt to hide the File Tree and focus the main Editor")
   end)
 
-  test.it("open-current-file from Editree opens the current main Editor, not Editree's document", function(context)
+  test.it("open-current-file from File Tree opens the current main Editor, not the File Tree document", function(context)
     local main_view = open_main_editor(context, "main alpha beta\n")
     main_view.__test_name = "main Editor"
     core.set_active_view(main_view)
 
-    local editree = require "plugins.editree"
-    track(context, "side_views", editree)
-    editree.__test_name = "Editree file tree"
-    sidepanel.register_panel("editree", editree)
-    sidepanel.show("editree", { focus = true })
-    assert_active_view(editree, "expected Editree file tree before open-current-file")
+    local filetree = require "plugins.filetree"
+    track(context, "side_views", filetree)
+    filetree.__test_name = "File Tree"
+    sidepanel.register_panel("filetree", filetree)
+    sidepanel.show("filetree", { focus = true })
+    assert_active_view(filetree, "expected File Tree before open-current-file")
 
     test.ok(command.perform("sidepanel:open-current-file"))
     local side_view = sidepanel.file_view
@@ -984,7 +984,7 @@ test.describe("sidepanel focus", function()
     track(context, "views", side_view)
 
     test.ok(side_view.doc == main_view.doc, "expected open-current-file to use the current main Editor document")
-    test.ok(side_view.doc ~= editree.doc, "expected open-current-file not to use Editree's UI document")
-    assert_active_view(side_view, "expected open-current-file from Editree to focus the Side Editor")
+    test.ok(side_view.doc ~= filetree.doc, "expected open-current-file not to use File Tree UI document")
+    assert_active_view(side_view, "expected open-current-file from File Tree to focus the Side Editor")
   end)
 end)

@@ -175,8 +175,8 @@ local function maybe_show_empty_project_file_tree()
   -- tree so a newly opened empty workspace has an obvious next action.
   coroutine.yield()
   coroutine.yield()
-  if main_panel_workspace_is_empty() and command.is_valid("editree:focus-and-show") then
-    command.perform("editree:focus-and-show")
+  if main_panel_workspace_is_empty() and command.is_valid("filetree:focus-and-show") then
+    command.perform("filetree:focus-and-show")
   end
 end
 
