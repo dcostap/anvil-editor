@@ -1,7 +1,6 @@
 local core = require "core"
 local command = require "core.command"
 local file_context = require "core.file_context"
-local keymap = require "core.keymap"
 local sidepanel = require "core.sidepanel"
 local test = require "core.test"
 local Editor = require "core.docview"
@@ -265,7 +264,7 @@ test.describe("sidepanel focus", function()
     test.same(selection_state(side_replace), expected_replace_selection)
   end)
 
-  test.it("alt+1 closes a Side Editor prompt bar and focuses its owner", function(context)
+  test.it("focus-main-and-hide closes a Side Editor prompt bar and focuses its owner", function(context)
     local main_view, side_view = setup_main_and_side(context)
 
     test.ok(command.perform("sidepanel:toggle-focus"))
@@ -276,7 +275,7 @@ test.describe("sidepanel focus", function()
 
     test.equal(sidepanel.visible, true)
     test.equal(sidepanel.active_side_view(), side_view)
-    assert_active_view(side_view, "expected alt+1 from side find input to close it and focus its Side Editor")
+    assert_active_view(side_view, "expected focus-main-and-hide from side find input to close it and focus its Side Editor")
     test.equal(side_find.local_find_state.visible, false)
     test.equal(side_find:get_text(), "side-query")
   end)
@@ -388,7 +387,7 @@ test.describe("sidepanel focus", function()
     test.equal(side_find.local_find_state.visible, false)
   end)
 
-  test.it("alt+1 does not restore a Side Editor prompt bar after closing it", function(context)
+  test.it("focus-main-and-hide does not restore a Side Editor prompt bar after closing it", function(context)
     local main_view, side_view = setup_main_and_side(context)
 
     test.ok(command.perform("sidepanel:toggle-focus"))
@@ -399,7 +398,7 @@ test.describe("sidepanel focus", function()
 
     test.ok(command.perform("sidepanel:focus-main-and-hide"))
     test.equal(sidepanel.visible, true)
-    assert_active_view(side_view, "expected alt+1 to close the side find input and focus its owner")
+    assert_active_view(side_view, "expected focus-main-and-hide to close the side find input and focus its owner")
     test.equal(side_find.local_find_state.visible, false)
 
     test.ok(command.perform("sidepanel:focus-side"))
@@ -410,7 +409,7 @@ test.describe("sidepanel focus", function()
     test.same(selection_state(side_find), expected_selection)
   end)
 
-  test.it("alt+1 restores a hidden Side Editor instead of hiding a non-Editor side panel", function(context)
+  test.it("focus-main-and-hide restores a hidden Side Editor instead of hiding a non-Editor side panel", function(context)
     local main_view = open_main_editor(context, "main alpha beta\n")
     main_view.__test_name = "main Editor"
     core.set_active_view(main_view)
@@ -424,16 +423,16 @@ test.describe("sidepanel focus", function()
     assert_active_view(side_view, "expected Side Editor to become last focused Editor")
     core.set_active_view(main_view)
     sidepanel.show("test tool", { focus = true })
-    assert_active_view(tool_view, "expected non-Editor side tool before alt+1")
+    assert_active_view(tool_view, "expected non-Editor side tool before focus-main-and-hide")
 
     test.ok(command.perform("sidepanel:focus-main-and-hide"))
 
     test.equal(sidepanel.visible, true)
     test.equal(sidepanel.active_side_view(), side_view)
-    assert_active_view(main_view, "expected alt+1 to restore Side Editor but keep last main Editor focus")
+    assert_active_view(main_view, "expected focus-main-and-hide to restore Side Editor but keep last main Editor focus")
   end)
 
-  test.it("alt+1 hides a non-Editor side panel when no Side Editor is restorable", function(context)
+  test.it("focus-main-and-hide hides a non-Editor side panel when no Side Editor is restorable", function(context)
     local main_view = open_main_editor(context, "main alpha beta\n")
     main_view.__test_name = "main Editor"
     core.set_active_view(main_view)
@@ -447,10 +446,10 @@ test.describe("sidepanel focus", function()
     test.ok(command.perform("sidepanel:focus-main-and-hide"))
 
     test.equal(sidepanel.visible, false)
-    assert_active_view(main_view, "expected alt+1 to hide side tool and focus main Editor")
+    assert_active_view(main_view, "expected focus-main-and-hide to hide side tool and focus main Editor")
   end)
 
-  test.it("ctrl+w closes and hides the focused Side Editor", function(context)
+  test.it("hide-active closes and hides the focused Side Editor", function(context)
     local main_view = open_main_editor(context, "main alpha beta\n")
     main_view.__test_name = "main Editor"
     core.set_active_view(main_view)
@@ -458,17 +457,17 @@ test.describe("sidepanel focus", function()
     side_view.__test_name = "clean Side Editor"
 
     test.ok(command.perform("sidepanel:toggle-focus"))
-    assert_active_view(side_view, "expected Side Editor before ctrl+w")
+    assert_active_view(side_view, "expected Side Editor before hide-active")
     test.equal(side_view.doc:is_dirty(), false)
 
     test.ok(command.perform("sidepanel:hide-active"))
 
     test.equal(sidepanel.visible, false)
-    test.ok(not sidepanel.contains_view(side_view), "expected ctrl+w to remove the Side Editor from the Side Panel")
-    assert_active_view(main_view, "expected ctrl+w to return focus to the main Editor")
+    test.ok(not sidepanel.contains_view(side_view), "expected hide-active to remove the Side Editor from the Side Panel")
+    assert_active_view(main_view, "expected hide-active to return focus to the main Editor")
   end)
 
-  test.it("ctrl+w closes a Side Editor from its local find input", function(context)
+  test.it("hide-active closes a Side Editor from its local find input", function(context)
     local main_view = open_main_editor(context, "main alpha beta\n")
     main_view.__test_name = "main Editor"
     core.set_active_view(main_view)
@@ -478,18 +477,18 @@ test.describe("sidepanel focus", function()
     test.ok(command.perform("sidepanel:toggle-focus"))
     local side_find = open_find_input(side_view)
     type_into_active_view("side-query")
-    assert_active_view(side_find, "expected side find input before ctrl+w")
+    assert_active_view(side_find, "expected side find input before hide-active")
     side_view.doc:clean()
     test.equal(side_view.doc:is_dirty(), false)
 
     test.ok(command.perform("sidepanel:hide-active"))
 
     test.equal(sidepanel.visible, false)
-    test.ok(not sidepanel.contains_view(side_view), "expected ctrl+w from side find to remove its owning Side Editor")
-    assert_active_view(main_view, "expected ctrl+w from side find to return focus to the main Editor")
+    test.ok(not sidepanel.contains_view(side_view), "expected hide-active from side find to remove its owning Side Editor")
+    assert_active_view(main_view, "expected hide-active from side find to return focus to the main Editor")
   end)
 
-  test.it("ctrl+w removes a dirty shared Side Editor without prompting because the Document remains open in main", function(context)
+  test.it("hide-active removes a dirty shared Side Editor without prompting because the Document remains open in main", function(context)
     local doc = new_doc(context, "shared alpha beta\n")
     local main_view = track(context, "views", core.root_panel:open_doc(doc))
     main_view.__test_name = "main shared Editor"
@@ -512,7 +511,7 @@ test.describe("sidepanel focus", function()
     assert_active_view(main_view, "expected focus to return to the remaining main Editor")
   end)
 
-  test.it("ctrl+w prompts instead of removing the last dirty Side Editor", function(context)
+  test.it("hide-active prompts instead of removing the last dirty Side Editor", function(context)
     local main_view = open_main_editor(context, "main alpha beta\n")
     main_view.__test_name = "main Editor"
     core.set_active_view(main_view)
@@ -809,7 +808,7 @@ test.describe("sidepanel focus", function()
     test.same(selection_state(main_replace), expected_replace_selection)
   end)
 
-  test.it("alt+º restores the side DocView prompt field when returning to the Side Editor", function(context)
+  test.it("toggle-focus restores the side DocView prompt field when returning to the Side Editor", function(context)
     local main_view, side_view = setup_main_and_side(context)
 
     test.ok(command.perform("sidepanel:toggle-focus"))
@@ -828,12 +827,12 @@ test.describe("sidepanel focus", function()
     local expected_replace_selection = selection_state(side_replace)
 
     test.ok(command.perform("sidepanel:toggle-focus"))
-    assert_active_view(main_view, "expected alt+º away from side prompt to focus main Editor")
+    assert_active_view(main_view, "expected toggle-focus away from side prompt to focus main Editor")
     test.equal(side_replace.local_find_state.visible, true)
 
     test.ok(command.perform("sidepanel:toggle-focus"))
 
-    assert_active_view(side_replace, "expected alt+º back to side to restore the prompt field that had keyboard focus")
+    assert_active_view(side_replace, "expected toggle-focus back to side to restore the prompt field that had keyboard focus")
     test.equal(side_replace.local_find_state.input_active, true)
     test.equal(side_replace.local_find_field, "replace")
     test.same(selection_state(side_replace), expected_replace_selection)
@@ -841,7 +840,7 @@ test.describe("sidepanel focus", function()
     test.equal(side_replace:get_text(), "o!a")
   end)
 
-  test.it("alt+º restores the main DocView prompt field when returning from the Side Editor", function(context)
+  test.it("toggle-focus restores the main DocView prompt field when returning from the Side Editor", function(context)
     local main_view, side_view = setup_main_and_side(context)
 
     test.ok(command.perform("find-replace:replace"))
@@ -858,12 +857,12 @@ test.describe("sidepanel focus", function()
     local expected_replace_selection = selection_state(main_replace)
 
     test.ok(command.perform("sidepanel:toggle-focus"))
-    assert_active_view(side_view, "expected alt+º away from main prompt to focus Side Editor")
+    assert_active_view(side_view, "expected toggle-focus away from main prompt to focus Side Editor")
     test.equal(main_replace.local_find_state.visible, true)
 
     test.ok(command.perform("sidepanel:toggle-focus"))
 
-    assert_active_view(main_replace, "expected alt+º back to main to restore the prompt field that had keyboard focus")
+    assert_active_view(main_replace, "expected toggle-focus back to main to restore the prompt field that had keyboard focus")
     test.equal(main_replace.local_find_state.input_active, true)
     test.equal(main_replace.local_find_field, "replace")
     test.same(selection_state(main_replace), expected_replace_selection)
@@ -925,7 +924,7 @@ test.describe("sidepanel focus", function()
     test.equal(main_find.local_find_state.visible, false)
   end)
 
-  test.it("alt+1 hides the File Tree and focuses the main Editor", function(context)
+  test.it("focus-main-and-hide hides the File Tree and focuses the main Editor", function(context)
     local main_view = open_main_editor(context, "main alpha beta\n")
     main_view.__test_name = "main Editor"
     core.set_active_view(main_view)
@@ -935,18 +934,14 @@ test.describe("sidepanel focus", function()
     filetree.__test_name = "File Tree"
     sidepanel.register_panel("filetree", filetree)
     sidepanel.show("filetree", { focus = true })
-    assert_active_view(filetree, "expected File Tree before alt+1")
+    assert_active_view(filetree, "expected File Tree before focus-main-and-hide")
 
-    keymap.modkeys.alt = true
-    local performed = keymap.on_key_pressed("1")
-    keymap.modkeys.alt = false
-
-    test.ok(performed, "expected alt+1 keymap to perform a command")
+    test.ok(command.perform("sidepanel:focus-main-and-hide"))
     test.equal(sidepanel.visible, false)
-    assert_active_view(main_view, "expected alt+1 to hide the File Tree and focus the main Editor")
+    assert_active_view(main_view, "expected focus-main-and-hide to hide the File Tree and focus the main Editor")
   end)
 
-  test.it("alt+1 from a File Tree prompt bar hides the File Tree and focuses the main Editor", function(context)
+  test.it("focus-main-and-hide from a File Tree prompt bar hides the File Tree and focuses the main Editor", function(context)
     local main_view = open_main_editor(context, "main alpha beta\n")
     main_view.__test_name = "main Editor"
     core.set_active_view(main_view)
@@ -957,12 +952,12 @@ test.describe("sidepanel focus", function()
     sidepanel.register_panel("filetree", filetree)
     sidepanel.show("filetree", { focus = true })
     local filetree_find = open_find_input(filetree)
-    assert_active_view(filetree_find, "expected File Tree prompt bar before alt+1")
+    assert_active_view(filetree_find, "expected File Tree prompt bar before focus-main-and-hide")
 
     test.ok(command.perform("sidepanel:focus-main-and-hide"))
 
     test.equal(sidepanel.visible, false)
-    assert_active_view(main_view, "expected alt+1 from File Tree prompt to hide the File Tree and focus the main Editor")
+    assert_active_view(main_view, "expected focus-main-and-hide from File Tree prompt to hide the File Tree and focus the main Editor")
   end)
 
   test.it("open-current-file from File Tree opens the current main Editor, not the File Tree document", function(context)

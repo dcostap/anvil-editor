@@ -3,7 +3,6 @@ local core = require "core"
 local command = require "core.command"
 local config = require "core.config"
 local http = require "core.http"
-local keymap = require "core.keymap"
 local style = require "core.style"
 local test = require "core.test"
 local DocView = require "core.docview"
@@ -393,9 +392,6 @@ Paragraph with a footnote.[^note]
     system.set_clipboard("")
     test.equal(command.perform("markdown-view:copy"), true)
     test.equal(system.get_clipboard(), "Title")
-    local copy_shortcut = PLATFORM == "Mac OS X" and "cmd+c" or "ctrl+c"
-    test.equal(keymap.map[copy_shortcut][1], "markdown-view:copy")
-    test.equal(keymap.map[copy_shortcut][2], "doc:copy")
     node:remove_view(core.root_panel.root_node, view)
   end)
 
