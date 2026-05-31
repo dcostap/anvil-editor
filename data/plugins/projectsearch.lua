@@ -15,13 +15,6 @@ local SearchReplaceList = require "widget.searchreplacelist"
 local TextBox = require "widget.textbox"
 local ToggleButton = require "widget.togglebutton"
 
-local treeview
-core.add_thread(function()
-  if config.plugins.treeview ~= false then
-    treeview = require "plugins.treeview"
-  end
-end)
-
 config.plugins.projectsearch = common.merge({
   threading = {
     workers = math.ceil(thread.get_cpu_count() / 2) + 1
@@ -1324,14 +1317,10 @@ end
 ---@type plugins.projectsearch.resultsview?
 local global_project_search
 
----@type boolean?
-local previous_treeview_hidden
-
 ---@param path? string
 ---@param has_focus? boolean
 function projectsearch.toggle(path, has_focus)
   local visible = true
-  local toggle = true
 
   ---@type core.docview?
   local doc_view = (core.active_view and core.active_view:is(DocView))
@@ -1354,17 +1343,9 @@ function projectsearch.toggle(path, has_focus)
     global_project_search.is_global = true
     global_project_search:set_size(400 * SCALE)
     global_project_search:show()
-    local node, split_direction = nil, "left"
-    if treeview then
-      -- when treeview enabled split to the right of it for consistent position
-      node = core.root_panel.root_node:get_node_for_view(treeview)
-      if not node then node = core.root_panel:get_main_panel() end
-      split_direction = "right"
-    else
-      node = core.root_panel:get_active_node()
-    end
+    local node = core.root_panel:get_active_node()
     global_project_search.node = node:split(
-      split_direction, global_project_search, {x = true}, true
+      "left", global_project_search, {x = true}, true
     )
   else
     local gvisible = global_project_search:is_visible()
@@ -1372,27 +1353,11 @@ function projectsearch.toggle(path, has_focus)
     if selection ~= "" then
       if not gvisible then
         global_project_search:toggle_visible(true, false, true)
-      else
-        toggle = false
       end
-    elseif not has_focus and gvisible then
-      toggle = false
-    elseif not path or not gvisible then
+    elseif (has_focus or not gvisible) and (not path or not gvisible) then
       visible = not gvisible
       global_project_search:toggle_visible(true, false, true)
-    else
-      toggle = false
     end
-  end
-
-  if treeview and toggle then
-    local treeview_visible = not visible
-    if visible then
-      previous_treeview_hidden = not treeview.visible
-    elseif previous_treeview_hidden then
-      treeview_visible = false
-    end
-    treeview.visible = treeview_visible
   end
 
   core.add_thread(function()

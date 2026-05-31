@@ -1357,96 +1357,6 @@ static int f_load_native_plugin(lua_State *L) {
   return result;
 }
 
-#ifdef _WIN32
-#define PATHSEP '\\'
-#else
-#define PATHSEP '/'
-#endif
-
-/* Special purpose filepath compare function. Corresponds to the
-   order used in the TreeView view of the project's files. Returns true if
-   path1 < path2 in the TreeView order. */
-static int f_path_compare(lua_State *L) {
-  size_t len1, len2;
-  const char *path1 = luaL_checklstring(L, 1, &len1);
-  const char *type1_s = luaL_checkstring(L, 2);
-  const char *path2 = luaL_checklstring(L, 3, &len2);
-  const char *type2_s = luaL_checkstring(L, 4);
-  int type1 = strcmp(type1_s, "dir") != 0;
-  int type2 = strcmp(type2_s, "dir") != 0;
-  /* Find the index of the common part of the path. */
-  size_t offset = 0, i, j;
-  for (i = 0; i < len1 && i < len2; i++) {
-    if (path1[i] != path2[i]) break;
-    if (path1[i] == PATHSEP) {
-      offset = i + 1;
-    }
-  }
-  /* If a path separator is present in the name after the common part we consider
-     the entry like a directory. */
-  if (strchr(path1 + offset, PATHSEP)) {
-    type1 = 0;
-  }
-  if (strchr(path2 + offset, PATHSEP)) {
-    type2 = 0;
-  }
-  /* If types are different "dir" types comes before "file" types. */
-  if (type1 != type2) {
-    lua_pushboolean(L, type1 < type2);
-    return 1;
-  }
-  /* If types are the same compare the files' path alphabetically. */
-  int cfr = -1;
-  bool same_len = len1 == len2;
-  for (i = offset, j = offset; i <= len1 && j <= len2; i++, j++) {
-    if (path1[i] == 0 || path2[j] == 0) {
-      if (cfr < 0) cfr = 0; // The strings are equal
-      if (!same_len) {
-        cfr = (path1[i] == 0);
-      }
-    } else if (isdigit(path1[i]) && isdigit(path2[j])) {
-      size_t ii = 0, ij = 0;
-      while (isdigit(path1[i+ii])) { ii++; }
-      while (isdigit(path2[j+ij])) { ij++; }
-
-      size_t di = 0, dj = 0;
-      for (size_t ai = 0; ai < ii; ++ai) {
-        di = di * 10 + (path1[i+ai] - '0');
-      }
-      for (size_t aj = 0; aj < ij; ++aj) {
-        dj = dj * 10 + (path2[j+aj] - '0');
-      }
-
-      if (di == dj) {
-        continue;
-      }
-      cfr = (di < dj);
-    } else if (path1[i] == path2[j]) {
-      continue;
-    } else if (path1[i] == PATHSEP || path2[j] == PATHSEP) {
-      /* For comparison we treat PATHSEP as if it was the string terminator. */
-      cfr = (path1[i] == PATHSEP);
-    } else {
-      char a = path1[i], b = path2[j];
-      if (a >= 'A' && a <= 'Z') a += 32;
-      if (b >= 'A' && b <= 'Z') b += 32;
-      if (a == b) {
-        /* If the strings have the same length, we need
-           to keep the first case sensitive difference. */
-        if (same_len && cfr < 0) {
-          /* Give priority to lower-case characters */
-          cfr = (path1[i] > path2[j]);
-        }
-        continue;
-      }
-      cfr = (a < b);
-    }
-    break;
-  }
-  lua_pushboolean(L, cfr);
-  return 1;
-}
-
 
 static int f_text_input(lua_State* L) {
   RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
@@ -1858,7 +1768,6 @@ static const luaL_Reg lib[] = {
   { "exec",                  f_exec                  },
   { "set_window_opacity",    f_set_window_opacity    },
   { "load_native_plugin",    f_load_native_plugin    },
-  { "path_compare",          f_path_compare          },
   { "get_fs_type",           f_get_fs_type           },
   { "text_input",            f_text_input            },
   { "setenv",                f_setenv                },

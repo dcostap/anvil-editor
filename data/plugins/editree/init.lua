@@ -2408,22 +2408,6 @@ command.add(nil, {
     focus_file(current_file_path())
   end,
   ["editree:focus-file"] = focus_file,
-
-  -- Compatibility aliases while the standard treeview is disabled.
-  ["treeview:toggle"] = function()
-    if view.visible then
-      hide_and_focus_main_panel_view()
-    else
-      show_and_focus_editree()
-    end
-  end,
-  ["treeview:toggle-focus"] = function()
-    if core.active_view == view then
-      hide_and_focus_main_panel_view()
-    else
-      show_and_focus_editree()
-    end
-  end,
 })
 
 command.add(function() return core.active_view:is(EditreeView) end, {

@@ -35,14 +35,9 @@ local emoji_font = renderer.font.load(
   15 * SCALE
 )
 style.code_font = renderer.font.group({ code_font, emoji_font })
--- Prototype replacement for the standard file tree.
-config.plugins.treeview = false
+-- First-party editable file tree.
 require "plugins.custom_nagview"
 require "plugins.editree"
--- The standard treeview is disabled above, so the standard toolbar pane is not
--- attached. Do not set config.plugins.toolbarview=false here: some core plugins
--- may have already required the module by this point, which would emit a noisy
--- startup warning even though no toolbar pane is visible.
 -- Use 4 spaces for soft tabs/indentation.
 config.indent_size = 4
 config.tab_type = "soft"

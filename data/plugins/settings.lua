@@ -9,14 +9,6 @@ local tokenizer = require "core.tokenizer"
 local View = require "core.view"
 local DocView = require "core.docview"
 
--- Load treeview if enabled
-local treeview
-core.add_thread(function()
-  if config.plugins.treeview ~= false then
-    treeview = require "plugins.treeview"
-  end
-end)
-
 -- check if widget is installed before proceeding
 local widget_found, Widget = pcall(require, "widget")
 if not widget_found then
@@ -234,11 +226,6 @@ settings.add("General",
         for _, project in ipairs(core.projects) do
           project:compile_ignore_files()
         end
-        core.add_thread(function()
-          if treeview then
-            treeview.cache = {}
-          end
-        end)
       end
     },
     {
@@ -260,11 +247,6 @@ settings.add("General",
         for _, project in ipairs(core.projects) do
           project:compile_ignore_files()
         end
-        core.add_thread(function()
-          if treeview then
-            treeview.cache = {}
-          end
-        end)
       end
     },
     {
@@ -2572,24 +2554,6 @@ command.add(nil, {
 keymap.add {
   ["ctrl+alt+p"] = "ui:settings"
 }
-
---------------------------------------------------------------------------------
--- Overwrite toolbar preferences command to open the settings gui
---------------------------------------------------------------------------------
-if config.plugins.toolbarview ~= false then
-  local ToolbarView = require "plugins.toolbarview"
-  local toolbarview_on_mouse_moved = ToolbarView.on_mouse_moved
-  function ToolbarView:on_mouse_moved(px, py, ...)
-    toolbarview_on_mouse_moved(self, px, py, ...)
-    if
-      self.hovered_item
-      and
-      self.hovered_item.command == "core:open-user-module"
-    then
-      self.hovered_item.command = "ui:settings"
-    end
-  end
-end
 
 --------------------------------------------------------------------------------
 -- Overwrite View:new to allow setting force scrollbar status globally

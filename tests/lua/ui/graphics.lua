@@ -199,7 +199,7 @@ test.describe("graphics apis", function()
 
   test.test("opens project-relative images through core.open_file", function(context)
     local c = canvas.new(2, 2, {255, 0, 0, 255}, true)
-    local image_path = context.project_temp_root .. PATHSEP .. "treeview-image.png"
+    local image_path = context.project_temp_root .. PATHSEP .. "open-file-image.png"
     local saved, save_err = c:save_image(image_path)
     test.ok(saved, save_err)
 

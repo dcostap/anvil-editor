@@ -2,7 +2,7 @@ local style = require "core.style"
 local common = require "core.common"
 
 style.background = { common.color "#2e2e32" }  -- Docview
-style.background2 = { common.color "#252529" } -- Treeview
+style.background2 = { common.color "#252529" } -- Secondary views
 style.background3 = { common.color "#252529" } -- Command view
 style.text = { common.color "#ADADB3" }
 style.caret = { common.color "#93DDFA" }
