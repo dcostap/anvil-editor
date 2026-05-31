@@ -95,6 +95,12 @@ local function update_disk_state(doc)
   end
 end
 
+local function save_target_missing(doc)
+  if not doc or not doc.abs_filename then return false end
+  if not system.get_file_info(doc.abs_filename) then return true end
+  return false
+end
+
 local function disk_changed_since_load_or_save(doc)
   if not doc or not doc.abs_filename then return false end
   local old = disk_state[doc]
@@ -206,29 +212,83 @@ local function save_conflict_copy_and_reload(doc)
   return true
 end
 
+local function save_doc_recreating_missing_target(doc, name)
+  doc.autosave_allow_recreate_missing = true
+  local ok, err = pcall(doc.save, doc)
+  doc.autosave_allow_recreate_missing = nil
+  if ok then
+    update_disk_state(doc)
+    clear_dirty_if_clean(doc)
+    core.log("Saved \"%s\" as a new file", doc.filename or name)
+  else
+    core.error("Couldn't save %s as a new file: %s", name, err)
+  end
+end
+
+local function discard_missing_file_doc(doc, name)
+  if not doc then return end
+  dirty_docs[doc] = nil
+  disk_state[doc] = nil
+  doc:clean()
+  core.add_thread(function()
+    -- Wait until NagView has finished closing before changing tabs/nodes.
+    coroutine.yield(0)
+    local views = core.root_panel.root_node:get_children()
+    local closed = 0
+    for _, view in ipairs(views) do
+      if view.doc == doc then
+        local node = core.root_panel.root_node:get_node_for_view(view)
+        if node then
+          node:close_view(core.root_panel.root_node, view)
+          closed = closed + 1
+        end
+      end
+    end
+    core.log("Discarded missing file \"%s\"", doc.filename or name)
+    if closed == 0 then core.redraw = true end
+  end)
+end
+
 local function show_conflict_prompt(doc, explicit)
   if doc.autosave_conflict_prompt_visible then return end
   doc.autosave_conflict_prompt_visible = true
   local name = doc.filename or doc.abs_filename or "this file"
-  local buttons = {
-    { font = style.font, text = "Overwrite Disk", default_yes = false },
-    { font = style.font, text = "Reload From Disk (Discard Anvil Edits)" },
-  }
-  if explicit then
-    buttons[#buttons + 1] = { font = style.font, text = "Save Copy of Current File" }
+  local missing = save_target_missing(doc)
+  local buttons
+  if missing then
+    buttons = {
+      { font = style.font, text = "Save as New File", default_yes = true },
+      { font = style.font, text = "Discard File" },
+      { font = style.font, text = "Cancel", default_no = true },
+    }
+  else
+    buttons = {
+      { font = style.font, text = "Overwrite Disk", default_yes = false },
+      { font = style.font, text = "Reload From Disk (Discard Anvil Edits)" },
+    }
+    if explicit then
+      buttons[#buttons + 1] = { font = style.font, text = "Save Copy of Current File" }
+    end
+    buttons[#buttons + 1] = { font = style.font, text = "Cancel", default_no = true }
   end
-  buttons[#buttons + 1] = { font = style.font, text = "Cancel", default_no = true }
 
   core.nag_view:show(
-    "File Changed on Disk",
-    string.format(
+    missing and "File Missing on Disk" or "File Changed on Disk",
+    missing and string.format(
+      "%s no longer exists at its saved path.\n\nAnvil can save your current document as a new file at the same path and recreate any missing parent folders, or discard it and close the document.",
+      name
+    ) or string.format(
       "%s has changed on disk since Anvil loaded or saved it.\n\nAnvil did not overwrite it. Reloading from disk will discard your unsaved Anvil edits. What do you want to do?",
       name
     ),
     buttons,
     function(item)
       doc.autosave_conflict_prompt_visible = false
-      if item.text == "Overwrite Disk" then
+      if item.text == "Save as New File" then
+        save_doc_recreating_missing_target(doc, name)
+      elseif item.text == "Discard File" then
+        discard_missing_file_doc(doc, name)
+      elseif item.text == "Overwrite Disk" then
         doc.autosave_ignore_next_conflict = true
         local ok, err = pcall(doc.save, doc)
         doc.autosave_ignore_next_conflict = nil
@@ -473,10 +533,14 @@ function Doc:save(filename, abs_filename)
      and not self.autosave_ignore_next_conflict
      and not is_protected_doc(self)
      and disk_changed_since_load_or_save(self) then
-    if not self.deferred_reload then
-      show_conflict_prompt(self, not self.autosave_save_reason)
+    if self.autosave_allow_recreate_missing and save_target_missing(self) then
+      core.log_quiet("Saving missing file target as a new file: %s", self.filename)
+    else
+      if not self.deferred_reload then
+        show_conflict_prompt(self, not self.autosave_save_reason)
+      end
+      error(string.format("not saving %s: file changed on disk", self.filename))
     end
-    error(string.format("not saving %s: file changed on disk", self.filename))
   end
   local result = save(self, filename, abs_filename)
   update_disk_state(self)

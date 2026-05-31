@@ -312,7 +312,26 @@ prompt_stale_backup = function(filename)
 end
 
 
+local function ensure_parent_directory(filename)
+  local dir = common.dirname(filename)
+  if not dir then return end
+  local info = system.get_file_info(dir)
+  if info then
+    if info.type ~= "dir" then
+      error(string.format("parent path is not a directory: %s", dir))
+    end
+    return
+  end
+  local ok, err, path = common.mkdirp(dir)
+  if not ok then
+    error(string.format("could not create parent directory %s: %s", path or dir, err or "unknown error"))
+  end
+  core.log_quiet("Created parent directory hierarchy \"%s\" before saving", dir)
+end
+
 local function write_file_safely(filename, writer)
+  ensure_parent_directory(filename)
+
   local backup
   if config.safe_write ~= false and system.get_file_info(filename) then
     backup = unique_sidecar_name(filename, "anvil-bak")
