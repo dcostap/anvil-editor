@@ -18,6 +18,7 @@
 #include "../system_events.h"
 #include "../win32_frame.h"
 #include "../resize_diagnostics.h"
+#include "../win32_single_instance.h"
 #ifdef _WIN32
   #include <direct.h>
   #include <windows.h>
@@ -1148,6 +1149,13 @@ static int f_get_time(lua_State *L) {
 }
 
 
+static int f_set_native_single_instance_enabled(lua_State *L) {
+  bool enabled = lua_toboolean(L, 1);
+  anvil_single_instance_set_enabled(enabled);
+  return 0;
+}
+
+
 static int f_sleep(lua_State *L) {
   double n = luaL_checknumber(L, 1);
   if (n < 0) n = 0;
@@ -1845,6 +1853,7 @@ static const luaL_Reg lib[] = {
   { "set_primary_selection", f_set_primary_selection },
   { "get_process_id",        f_get_process_id        },
   { "get_time",              f_get_time              },
+  { "set_native_single_instance_enabled", f_set_native_single_instance_enabled },
   { "sleep",                 f_sleep                 },
   { "exec",                  f_exec                  },
   { "set_window_opacity",    f_set_window_opacity    },

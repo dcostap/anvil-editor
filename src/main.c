@@ -10,6 +10,7 @@
 #include "renderer.h"
 #include "custom_events.h"
 #include "resize_diagnostics.h"
+#include "win32_single_instance.h"
 
 #ifdef _WIN32
   #include <windows.h>
@@ -135,6 +136,8 @@ typedef struct {
 } AppState;
 
 static AppState *live_resize_app = NULL;
+static bool renderer_initialized = false;
+static bool custom_events_initialized = false;
 
 static void log_resize_request(AppState *app, const char *reason, const char *action,
                                Uint64 since_last_ns, double run_ms) {
@@ -306,6 +309,11 @@ static bool init_lua_state(AppState *app) {
 
 
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
+#ifdef _WIN32
+  if (anvil_single_instance_forward_or_own(argc, argv)) {
+    return SDL_APP_SUCCESS;
+  }
+#endif
 #ifndef _WIN32
   signal(SIGPIPE, SIG_IGN);
 #else
@@ -341,10 +349,18 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
     fprintf(stderr, "Error initializing renderer: %s\n", SDL_GetError());
     return SDL_APP_FAILURE;
   }
+  renderer_initialized = true;
 
   if (!init_custom_events()) {
     fprintf(stderr, "Error initializing custom events: %s\n", SDL_GetError());
     return SDL_APP_FAILURE;
+  }
+  custom_events_initialized = true;
+
+  if (!anvil_single_instance_start_server()) {
+    /* Non-fatal: release native ownership so secondaries do not wait on a
+     * pipe server that is unavailable. Existing Lua IPC remains fallback. */
+    anvil_single_instance_stop();
   }
 
   AppState *app = SDL_malloc(sizeof(AppState));
@@ -618,6 +634,13 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
     if (app->L) lua_close(app->L);
     SDL_free(app);
   }
-  free_custom_events();
-  ren_free();
+  anvil_single_instance_stop();
+  if (custom_events_initialized) {
+    free_custom_events();
+    custom_events_initialized = false;
+  }
+  if (renderer_initialized) {
+    ren_free();
+    renderer_initialized = false;
+  }
 }

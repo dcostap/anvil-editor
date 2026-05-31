@@ -444,6 +444,10 @@ function core.init()
   -- log functions depend on config so initialize after loading config
   core.log_items = {}
   core.log_quiet("Anvil version %s - mod-version %s", VERSION, MOD_VERSION_STRING)
+  if config.plugins and config.plugins.ipc and config.plugins.ipc.single_instance == false and system.set_native_single_instance_enabled then
+    system.set_native_single_instance_enabled(false)
+    core.log_quiet("Native single-instance handoff disabled by config.plugins.ipc.single_instance=false")
+  end
 
   style = require "colors.default"
   cli = require "core.cli"
@@ -1593,6 +1597,13 @@ function core.on_event(type, ...)
     core.request_window_reactivation_repaint("exposed")
   elseif type == "filedropped" then
     core.root_panel:on_file_dropped(...)
+  elseif type == "singleinstanceopen" then
+    local filename, secondary_elapsed_ms, transport_ms = ...
+    core.log_quiet("Native single-instance open: file=%s sender_elapsed=%.1fms transport=%.1fms", tostring(filename), tonumber(secondary_elapsed_ms) or -1, tonumber(transport_ms) or -1)
+    if filename and system.get_file_info(filename) then
+      system.raise_window(core.window)
+      core.open_file(filename)
+    end
   elseif type == "dialogfinished" then
     local id, status, result = ...
     local callback = core.active_file_dialogs[id]
