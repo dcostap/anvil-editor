@@ -63,6 +63,48 @@ test.describe("tokenizer", function()
     test.equal(nested._tokenizer_native_cache, nil)
   end)
 
+  test.test("native tokenizer defaults missing token type to normal", function()
+    local nested = {
+      patterns = {
+        { pattern = "[%a_]+", type = "symbol" }
+      },
+      symbols = {}
+    }
+    local syntax = {
+      patterns = {
+        { pattern = { "%[", "%]" }, syntax = nested }
+      },
+      symbols = {}
+    }
+    local using_native = tokenizer.is_using_native()
+    local original_error = core.error
+    local original_warn = core.warn
+    local log_messages = {}
+
+    core.error = function(...)
+      table.insert(log_messages, string.format(...))
+    end
+    core.warn = function(...)
+      table.insert(log_messages, string.format(...))
+    end
+
+    tokenizer.set_use_native(true)
+    tokenizer.clear_native_cache(syntax)
+    local ok, tokens, state = pcall(tokenizer.tokenize, syntax, "[name]", string.char(0))
+    tokenizer.set_use_native(using_native)
+    core.error = original_error
+    core.warn = original_warn
+
+    if not ok then error(tokens) end
+    test.same(log_messages, {})
+    test.equal(state, string.char(0))
+    test.same(tokens, {
+      "normal", "[",
+      "symbol", "name",
+      "normal", "]"
+    })
+  end)
+
   test.test("tokenizes regex captures and preserves token merging", function()
     local syntax = {
       patterns = {

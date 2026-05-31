@@ -821,6 +821,13 @@ static void tokenizer_report_bad_pattern(
 
 static TokenizerSyntax *tokenizer_get_syntax_cache(lua_State *L, int syntax_idx);
 
+static void tokenizer_pattern_set_default_type(TokenizerPattern *pattern) {
+  pattern->types.items = (TokenizerString *) calloc(1, sizeof(TokenizerString));
+  if (!pattern->types.items) return;
+  pattern->types.count = 1;
+  pattern->types.items[0] = tokenizer_string_dup("normal", sizeof("normal") - 1);
+}
+
 static void tokenizer_import_types(lua_State *L, int pattern_idx, TokenizerPattern *pattern) {
   pattern_idx = lua_absindex(L, pattern_idx);
   lua_getfield(L, pattern_idx, "type");
@@ -837,6 +844,8 @@ static void tokenizer_import_types(lua_State *L, int pattern_idx, TokenizerPatte
     pattern->types.items = (TokenizerString *) calloc(1, sizeof(TokenizerString));
     pattern->types.count = 1;
     pattern->types.items[0] = tokenizer_string_dup_lua(L, -1);
+  } else {
+    tokenizer_pattern_set_default_type(pattern);
   }
   lua_pop(L, 1);
 }
