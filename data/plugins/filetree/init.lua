@@ -45,6 +45,7 @@ local filetree_config = common.merge({
   show_hidden = false,
   delete_to_trash = PLATFORM == "Windows",
   folder_color = nil,
+  folder_row_background = { common.color "rgba(220, 220, 220, 0.05)" },
   show_line_hints = true,
   sort_mode = load_saved_sort_mode() or DEFAULT_SORT_MODE,
 }, config.plugins.filetree)
@@ -1409,6 +1410,24 @@ function FileTreeView:get_line_hint(line)
   }
 end
 
+function FileTreeView:draw_folder_row_background(line, x, y, width)
+  local color = filetree_config.folder_row_background
+  if not color or not self:line_is_dir(line) then return false end
+  renderer.draw_rect(x, y, width, self:get_line_height(), color)
+  return true
+end
+
+function FileTreeView:draw_line_body(line, x, y)
+  local gw = self:get_gutter_width()
+  self:draw_folder_row_background(
+    line,
+    x + self.scroll.x,
+    y,
+    math.max(0, self.size.x - gw)
+  )
+  return FileTreeView.super.draw_line_body(self, line, x, y)
+end
+
 function FileTreeView:draw_line_text(line, x, y)
   if not self:line_is_dir(line) then
     return FileTreeView.super.draw_line_text(self, line, x, y)
@@ -1430,6 +1449,8 @@ end
 
 function FileTreeView:draw_line_gutter(line, x, y, width)
   local lh = self:get_line_height()
+  local gw = self:get_gutter_width()
+  self:draw_folder_row_background(line, self.position.x, y, gw)
   local status = self:get_line_status(line)
   if status then
     local color = status == "addition" and (style.gitdiff_addition or { common.color "#587c0c" })
