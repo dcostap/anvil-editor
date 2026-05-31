@@ -67,7 +67,9 @@ local fuzzy_searcher = {
   max_result_limit = 500,
   width = 0.90,
   height = 0.80,
-  min_width = 1000 * SCALE,
+  side_padding_reduce_width = 1200 * SCALE,
+  min_width = 960 * SCALE,
+  min_side_padding = nil,
   min_height = 650 * SCALE,
   preview_width = 0.50,
   fd = bundled_tool("fd.exe"),
@@ -1761,7 +1763,19 @@ end
 function FSView:layout()
   local root = core.root_panel
   local rw, rh = root.size.x, root.size.y
-  local w = math.min(rw, math.max(rw * fuzzy_searcher.width, fuzzy_searcher.min_width or 0))
+  local width_ratio = fuzzy_searcher.width or 0.90
+  local reduce_at = fuzzy_searcher.side_padding_reduce_width or 1200 * SCALE
+  local min_width = fuzzy_searcher.min_width or 960 * SCALE
+  local min_side_padding = fuzzy_searcher.min_side_padding or style.padding.x
+  local normal_side_padding = rw * (1 - width_ratio) / 2
+  local side_padding = normal_side_padding
+  if rw < reduce_at and reduce_at > min_width then
+    local reduce_at_padding = reduce_at * (1 - width_ratio) / 2
+    local t = common.clamp((rw - min_width) / (reduce_at - min_width), 0, 1)
+    side_padding = min_side_padding + (reduce_at_padding - min_side_padding) * t
+  end
+  side_padding = common.clamp(side_padding, 0, math.max(0, rw / 2 - 1))
+  local w = math.max(1, rw - side_padding * 2)
   local h = math.min(rh, math.max(rh * fuzzy_searcher.height, fuzzy_searcher.min_height or 0))
   local x = root.position.x + (rw - w) / 2
   local y = root.position.y + (rh - h) / 2
