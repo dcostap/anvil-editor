@@ -76,6 +76,10 @@ _Avoid_: Side node, secondary panel
 A Side Panel tool for viewing and editing Project files and directories.
 _Avoid_: old file tree
 
+**File Tree Sort Mode**:
+The user-facing ordering applied to File Tree entries. Folder entries remain grouped before file entries.
+_Avoid_: filetree sorting
+
 **Global Prompt Bar**:
 The bottom-anchored, full-width prompt used for app-wide actions such as opening files, opening projects, renaming, and command entry.
 _Avoid_: Command prompt, command bar

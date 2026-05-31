@@ -33,6 +33,19 @@ local function wait_for_folder_counts(filetree, line, folders_text, files_text, 
   return hint
 end
 
+local function wait_for_file_only_folder_hint(filetree, line, files_text, timeout)
+  local deadline = system.get_time() + (timeout or 2)
+  local hint
+  repeat
+    hint = filetree:get_line_hint(line).text
+    if hint:find(files_text, 1, true) and not hint:find("📁", 1, true) then
+      return hint
+    end
+    coroutine.yield(0.02)
+  until system.get_time() >= deadline
+  return hint
+end
+
 test.describe("File Tree Line Hints", function()
   test.after_each(function(context)
     if context.filetree and context.filetree_previous_dir then
@@ -64,6 +77,14 @@ test.describe("File Tree Line Hints", function()
     write_file(folder_b .. PATHSEP .. "one.txt", "one")
     write_file(folder_b .. PATHSEP .. "two.txt", "two")
 
+    local folder_c = temp_root .. PATHSEP .. "folder-c"
+    test.ok(common.mkdirp(folder_c))
+    write_file(folder_c .. PATHSEP .. "one.txt", "one")
+    write_file(folder_c .. PATHSEP .. "two.txt", "two")
+
+    local folder_d = temp_root .. PATHSEP .. "folder-d"
+    test.ok(common.mkdirp(folder_d))
+
     write_file(temp_root .. PATHSEP .. "file.bin", string.rep("x", 23 * 1024))
 
     local filetree = require "plugins.filetree"
@@ -74,9 +95,13 @@ test.describe("File Tree Line Hints", function()
 
     local folder_a_line = find_filetree_line(filetree, "folder-a/")
     local folder_b_line = find_filetree_line(filetree, "folder-b/")
+    local folder_c_line = find_filetree_line(filetree, "folder-c/")
+    local folder_d_line = find_filetree_line(filetree, "folder-d/")
     local file_line = find_filetree_line(filetree, "file.bin")
     test.not_nil(folder_a_line, "expected first folder row in File Tree")
     test.not_nil(folder_b_line, "expected second folder row in File Tree")
+    test.not_nil(folder_c_line, "expected folder-only-file row in File Tree")
+    test.not_nil(folder_d_line, "expected empty folder row in File Tree")
     test.not_nil(file_line, "expected file row in File Tree")
 
     local initial_folder_a_hint = filetree:get_line_hint(folder_a_line).text
@@ -96,6 +121,13 @@ test.describe("File Tree Line Hints", function()
     test.ok(folder_a_hint:match("%d%d%d%d %a%a%a%s+%d+ %d%d:%d%d"), folder_a_hint)
     test.ok(folder_b_hint:find("   1 📁", 1, true), folder_b_hint)
     test.ok(folder_b_hint:find("   2 📄", 1, true), folder_b_hint)
+
+    local folder_c_hint = wait_for_file_only_folder_hint(filetree, folder_c_line, "   2 📄")
+    local folder_d_hint = wait_for_file_only_folder_hint(filetree, folder_d_line, "   0 📄")
+    test.not_ok(folder_c_hint:find("📁", 1, true), folder_c_hint)
+    test.ok(folder_c_hint:find("   2 📄", 1, true), folder_c_hint)
+    test.not_ok(folder_d_hint:find("📁", 1, true), folder_d_hint)
+    test.ok(folder_d_hint:find("   0 📄", 1, true), folder_d_hint)
 
     test.ok(file_hint:find(" 23 K", 1, true), file_hint)
     test.ok(file_hint:match("%d%d%d%d %a%a%a%s+%d+ %d%d:%d%d"), file_hint)

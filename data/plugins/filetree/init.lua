@@ -11,15 +11,46 @@ local Doc = require "core.doc"
 local DocView = require "core.docview"
 local file_context = require "core.file_context"
 local sidepanel = require "core.sidepanel"
+local storage = require "core.storage"
 
-local filetree_config = {
+local FILETREE_SETTINGS_MODULE = "filetree"
+local FILETREE_SETTINGS_KEY = "settings"
+local DEFAULT_SORT_MODE = "name"
+local SORT_LABELS = {
+  name = "filename",
+  modified = "date modified",
+}
+
+local function normalize_sort_mode(mode)
+  if mode == "name" or mode == "modified" then return mode end
+  return nil
+end
+
+local function load_saved_sort_mode()
+  local settings = storage.load(FILETREE_SETTINGS_MODULE, FILETREE_SETTINGS_KEY)
+  if type(settings) == "table" then
+    return normalize_sort_mode(settings.sort_mode)
+  end
+end
+
+local function save_sort_mode(sort_mode)
+  storage.save(FILETREE_SETTINGS_MODULE, FILETREE_SETTINGS_KEY, {
+    sort_mode = sort_mode,
+  })
+end
+
+local filetree_config = common.merge({
   size = 650 * SCALE,
   visible = false,
   show_hidden = false,
   delete_to_trash = PLATFORM == "Windows",
   folder_color = nil,
   show_line_hints = true,
-}
+  sort_mode = load_saved_sort_mode() or DEFAULT_SORT_MODE,
+}, config.plugins.filetree)
+filetree_config.sort_mode = normalize_sort_mode(filetree_config.sort_mode) or DEFAULT_SORT_MODE
+config.plugins.filetree = filetree_config
+filetree_config = config.plugins.filetree
 
 local INDENT = 1
 local INDENT_TEXT = "\t"
@@ -150,6 +181,26 @@ local function set_doc_lines(doc, lines)
   doc:set_selection(1, 1)
 end
 
+local function item_name_less(a, b)
+  if a.sort_name ~= b.sort_name then return a.sort_name < b.sort_name end
+  return a.name < b.name
+end
+
+local function item_modified_less(a, b)
+  local am = tonumber(a.modified) or -math.huge
+  local bm = tonumber(b.modified) or -math.huge
+  if am ~= bm then return am > bm end
+  return item_name_less(a, b)
+end
+
+local function filetree_item_less(a, b)
+  if a.type ~= b.type then return a.type == "dir" end
+  if filetree_config.sort_mode == "modified" then
+    return item_modified_less(a, b)
+  end
+  return item_name_less(a, b)
+end
+
 local function sorted_dir(path, show_hidden)
   local items = {}
   for _, name in ipairs(system.list_dir(path) or {}) do
@@ -169,10 +220,7 @@ local function sorted_dir(path, show_hidden)
       end
     end
   end
-  table.sort(items, function(a, b)
-    if a.type ~= b.type then return a.type == "dir" end
-    return a.sort_name < b.sort_name
-  end)
+  table.sort(items, filetree_item_less)
   return items
 end
 
@@ -854,6 +902,72 @@ function FileTreeView:restore_expanded_paths(expanded)
   end
 end
 
+function FileTreeView:capture_selection_paths()
+  self:sync_meta()
+  local entries, errors = self:build_entries(false)
+  local by_line = {}
+  for _, entry in ipairs(entries) do
+    if not errors[entry.line] then by_line[entry.line] = entry end
+  end
+
+  local selections = {}
+  for idx, line1, col1, line2, col2 in self.doc:get_selections(false) do
+    local entry1 = by_line[line1]
+    local entry2 = by_line[line2]
+    if not entry1 or not entry2 then return nil end
+    selections[idx] = {
+      line1_abs = entry1.abs,
+      col1 = col1,
+      line2_abs = entry2.abs,
+      col2 = col2,
+    }
+  end
+  if #selections == 0 then return nil end
+  return {
+    selections = selections,
+    last_selection = self.doc.last_selection,
+  }
+end
+
+function FileTreeView:restore_selection_paths(snapshot)
+  if not snapshot or not snapshot.selections then return false end
+
+  local entries = self:build_entries(false)
+  local by_abs = {}
+  for _, entry in ipairs(entries) do by_abs[entry.abs] = entry end
+
+  local function restore(selections, last_selection)
+    local restored = {}
+    local primary_line, primary_col
+    for idx, selection in ipairs(selections) do
+      local entry1 = by_abs[selection.line1_abs]
+      local entry2 = by_abs[selection.line2_abs]
+      if not entry1 or not entry2 then return false end
+      restored[#restored + 1] = entry1.line
+      restored[#restored + 1] = selection.col1
+      restored[#restored + 1] = entry2.line
+      restored[#restored + 1] = selection.col2
+      if idx == last_selection then
+        primary_line, primary_col = entry1.line, selection.col1
+      end
+    end
+    if #restored == 0 then return false end
+
+    last_selection = common.clamp(math.floor(tonumber(last_selection) or 1), 1, #restored / 4)
+    self:set_selection_state({ selections = restored, last_selection = last_selection })
+    if primary_line then self:scroll_to_make_visible(primary_line, primary_col or 1) end
+    return true
+  end
+
+  if restore(snapshot.selections, snapshot.last_selection) then return true end
+
+  local primary = snapshot.selections[snapshot.last_selection or 1]
+  if primary then
+    return restore({ primary }, 1)
+  end
+  return false
+end
+
 function FileTreeView:refresh(keep_selection, preserve_expansion, reveal_paths)
   local l, c = self.doc:get_selection()
   local expanded = preserve_expansion == false and {} or self:capture_expanded_paths()
@@ -886,6 +1000,45 @@ function FileTreeView:refresh(keep_selection, preserve_expansion, reveal_paths)
   if keep_selection then
     self.doc:set_selection(math.min(l, #self.doc.lines), c)
   end
+end
+
+function FileTreeView:get_sort_mode()
+  return filetree_config.sort_mode
+end
+
+function FileTreeView:apply_sort_mode(sort_mode)
+  local requested_sort_mode = sort_mode
+  sort_mode = normalize_sort_mode(sort_mode)
+  if not sort_mode then
+    core.warn("File Tree: unknown sort mode: %s", tostring(requested_sort_mode))
+    return false
+  end
+  if filetree_config.sort_mode == sort_mode then return true end
+
+  if self.has_possible_edits then
+    core.warn("File Tree: apply or refresh edits before changing sort")
+    core.log_quiet("File Tree sort change blocked because the editable tree has unapplied edits")
+    return false
+  end
+
+  local previous = filetree_config.sort_mode
+  local selection_paths = self:capture_selection_paths()
+  filetree_config.sort_mode = sort_mode
+  save_sort_mode(sort_mode)
+  core.log_quiet("File Tree sort changed from %s to %s", previous, sort_mode)
+
+  self:refresh(false, true)
+  if selection_paths and not self:restore_selection_paths(selection_paths) then
+    core.log_quiet("File Tree sort changed but selection path restore did not find the prior entry")
+  end
+  core.log("File Tree: sorted by %s", SORT_LABELS[sort_mode] or sort_mode)
+  return true
+end
+
+function FileTreeView:set_sort_mode(sort_mode)
+  return self:with_selection_state(function()
+    return self:apply_sort_mode(sort_mode)
+  end)
 end
 
 function FileTreeView:doc_splice(at, remove, insert_lines, insert_meta)
@@ -1227,6 +1380,9 @@ function FileTreeView:format_line_hint_for_path(abs, info)
     local counts = self:get_folder_hint_counts(abs, info.modified, true)
     if counts and counts.error then return modified end
     if counts and counts.folders and counts.files then
+      if counts.folders == 0 then
+        return string.format("%4d 📄 · %s", counts.files, modified)
+      end
       return string.format("%4d 📁 · %4d 📄 · %s", counts.folders, counts.files, modified)
     end
     return string.format("%s 📁 · %s 📄 · %s", "   …", "   …", modified)
@@ -2408,6 +2564,12 @@ command.add(nil, {
     focus_file(current_file_path())
   end,
   ["filetree:focus-file"] = focus_file,
+  ["filetree:sort-by-name"] = function()
+    view:set_sort_mode("name")
+  end,
+  ["filetree:sort-by-date-modified"] = function()
+    view:set_sort_mode("modified")
+  end,
 })
 
 command.add(function() return core.active_view:is(FileTreeView) end, {
