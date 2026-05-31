@@ -20,12 +20,12 @@ local function find_editree_line(view, wanted)
   end
 end
 
-local function wait_for_folder_counts(editree, line, timeout)
+local function wait_for_folder_counts(editree, line, folders_text, files_text, timeout)
   local deadline = system.get_time() + (timeout or 2)
   local hint
   repeat
     hint = editree:get_line_hint(line).text
-    if hint:find("   2 📁", 1, true) and hint:find("   1 📄", 1, true) then
+    if hint:find(folders_text, 1, true) and hint:find(files_text, 1, true) then
       return hint
     end
     coroutine.yield(0.02)
@@ -54,10 +54,16 @@ test.describe("Editree Line Hints", function()
     test.ok(ok, err)
     context.temp_root = temp_root
 
-    local folder = temp_root .. PATHSEP .. "folder"
-    test.ok(common.mkdirp(folder .. PATHSEP .. "subdir-a"))
-    test.ok(common.mkdirp(folder .. PATHSEP .. "subdir-b"))
-    write_file(folder .. PATHSEP .. "child.txt", "child")
+    local folder_a = temp_root .. PATHSEP .. "folder-a"
+    test.ok(common.mkdirp(folder_a .. PATHSEP .. "subdir-a"))
+    test.ok(common.mkdirp(folder_a .. PATHSEP .. "subdir-b"))
+    write_file(folder_a .. PATHSEP .. "child.txt", "child")
+
+    local folder_b = temp_root .. PATHSEP .. "folder-b"
+    test.ok(common.mkdirp(folder_b .. PATHSEP .. "nested"))
+    write_file(folder_b .. PATHSEP .. "one.txt", "one")
+    write_file(folder_b .. PATHSEP .. "two.txt", "two")
+
     write_file(temp_root .. PATHSEP .. "file.bin", string.rep("x", 23 * 1024))
 
     local editree = require "plugins.editree"
@@ -66,22 +72,30 @@ test.describe("Editree Line Hints", function()
     editree.current_dir = temp_root
     editree:refresh(false, false)
 
-    local folder_line = find_editree_line(editree, "folder/")
+    local folder_a_line = find_editree_line(editree, "folder-a/")
+    local folder_b_line = find_editree_line(editree, "folder-b/")
     local file_line = find_editree_line(editree, "file.bin")
-    test.not_nil(folder_line, "expected folder row in Editree")
+    test.not_nil(folder_a_line, "expected first folder row in Editree")
+    test.not_nil(folder_b_line, "expected second folder row in Editree")
     test.not_nil(file_line, "expected file row in Editree")
 
-    local initial_folder_hint = editree:get_line_hint(folder_line).text
+    local initial_folder_a_hint = editree:get_line_hint(folder_a_line).text
+    local initial_folder_b_hint = editree:get_line_hint(folder_b_line).text
     local file_hint = editree:get_line_hint(file_line).text
 
-    test.ok(initial_folder_hint:find("   … 📁", 1, true), initial_folder_hint)
-    test.ok(initial_folder_hint:find("   … 📄", 1, true), initial_folder_hint)
-    test.ok(initial_folder_hint:match("%d%d%d%d %a%a%a%s+%d+ %d%d:%d%d"), initial_folder_hint)
+    test.ok(initial_folder_a_hint:find("   … 📁", 1, true), initial_folder_a_hint)
+    test.ok(initial_folder_a_hint:find("   … 📄", 1, true), initial_folder_a_hint)
+    test.ok(initial_folder_b_hint:find("   … 📁", 1, true), initial_folder_b_hint)
+    test.ok(initial_folder_b_hint:find("   … 📄", 1, true), initial_folder_b_hint)
+    test.ok(initial_folder_a_hint:match("%d%d%d%d %a%a%a%s+%d+ %d%d:%d%d"), initial_folder_a_hint)
 
-    local folder_hint = wait_for_folder_counts(editree, folder_line)
-    test.ok(folder_hint:find("   2 📁", 1, true), folder_hint)
-    test.ok(folder_hint:find("   1 📄", 1, true), folder_hint)
-    test.ok(folder_hint:match("%d%d%d%d %a%a%a%s+%d+ %d%d:%d%d"), folder_hint)
+    local folder_a_hint = wait_for_folder_counts(editree, folder_a_line, "   2 📁", "   1 📄")
+    local folder_b_hint = wait_for_folder_counts(editree, folder_b_line, "   1 📁", "   2 📄")
+    test.ok(folder_a_hint:find("   2 📁", 1, true), folder_a_hint)
+    test.ok(folder_a_hint:find("   1 📄", 1, true), folder_a_hint)
+    test.ok(folder_a_hint:match("%d%d%d%d %a%a%a%s+%d+ %d%d:%d%d"), folder_a_hint)
+    test.ok(folder_b_hint:find("   1 📁", 1, true), folder_b_hint)
+    test.ok(folder_b_hint:find("   2 📄", 1, true), folder_b_hint)
 
     test.ok(file_hint:find(" 23 K", 1, true), file_hint)
     test.ok(file_hint:match("%d%d%d%d %a%a%a%s+%d+ %d%d:%d%d"), file_hint)

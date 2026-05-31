@@ -24,6 +24,8 @@ local editree_config = {
 local INDENT = 1
 local INDENT_TEXT = "\t"
 local NO_META = false
+local LINE_HINT_COUNT_WORKER_BUDGET = 0.008
+local LINE_HINT_COUNT_CHILD_BUDGET = 0.004
 local MONTH_NAMES = {
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
@@ -1108,18 +1110,32 @@ function EditreeView:line_hint_count_key(abs, show_hidden)
   return (show_hidden and "1" or "0") .. "\0" .. abs
 end
 
+function EditreeView:pop_line_hint_count_task()
+  for i, task in ipairs(self.line_hint_count_queue or {}) do
+    if task.priority then
+      return table.remove(self.line_hint_count_queue, i)
+    end
+  end
+  return table.remove(self.line_hint_count_queue, 1)
+end
+
 function EditreeView:start_line_hint_count_worker()
   if self.line_hint_count_worker_running then return end
   self.line_hint_count_worker_running = true
 
   core.add_thread(function()
+    local batch_updated = false
+    local batch_start = system.get_time()
+
     while true do
-      local task = table.remove(self.line_hint_count_queue, 1)
+      local task = self:pop_line_hint_count_task()
       if not task then break end
 
       local info = system.get_file_info(task.abs)
       if info and info.type == "dir" and info.modified == task.modified then
-        local folders, files, err = count_direct_children(task.abs, task.show_hidden, 0.004)
+        local folders, files, err = count_direct_children(
+          task.abs, task.show_hidden, LINE_HINT_COUNT_CHILD_BUDGET
+        )
         local latest = system.get_file_info(task.abs)
         if latest and latest.type == "dir" and latest.modified == task.modified then
           self.line_hint_count_cache[task.key] = {
@@ -1131,20 +1147,29 @@ function EditreeView:start_line_hint_count_worker()
           if err then
             core.log_quiet("Editree Line Hint count failed for %s: %s", task.abs, err)
           end
-          core.redraw = true
+          batch_updated = true
         end
       end
       if self.line_hint_count_pending[task.key] == task then
         self.line_hint_count_pending[task.key] = nil
       end
-      coroutine.yield(0)
+
+      if system.get_time() - batch_start >= LINE_HINT_COUNT_WORKER_BUDGET then
+        if batch_updated then
+          core.redraw = true
+          batch_updated = false
+        end
+        coroutine.yield(0)
+        batch_start = system.get_time()
+      end
     end
 
+    if batch_updated then core.redraw = true end
     self.line_hint_count_worker_running = false
   end)
 end
 
-function EditreeView:get_folder_hint_counts(abs, modified)
+function EditreeView:get_folder_hint_counts(abs, modified, priority)
   self.line_hint_count_cache = self.line_hint_count_cache or {}
   self.line_hint_count_pending = self.line_hint_count_pending or {}
   self.line_hint_count_queue = self.line_hint_count_queue or {}
@@ -1157,6 +1182,7 @@ function EditreeView:get_folder_hint_counts(abs, modified)
   if pending then
     pending.modified = modified
     pending.show_hidden = editree_config.show_hidden
+    pending.priority = pending.priority or priority
     return nil, true
   end
 
@@ -1165,6 +1191,7 @@ function EditreeView:get_folder_hint_counts(abs, modified)
     abs = abs,
     modified = modified,
     show_hidden = editree_config.show_hidden,
+    priority = priority,
   }
   self.line_hint_count_pending[key] = pending
   table.insert(self.line_hint_count_queue, pending)
@@ -1197,7 +1224,7 @@ function EditreeView:format_line_hint_for_path(abs, info)
     }
     return text
   elseif info.type == "dir" then
-    local counts = self:get_folder_hint_counts(abs, info.modified)
+    local counts = self:get_folder_hint_counts(abs, info.modified, true)
     if counts and counts.error then return modified end
     if counts and counts.folders and counts.files then
       return string.format("%4d 📁 · %4d 📄 · %s", counts.folders, counts.files, modified)
