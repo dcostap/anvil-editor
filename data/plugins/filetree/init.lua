@@ -1381,12 +1381,9 @@ function FileTreeView:format_line_hint_for_path(abs, info)
     local counts = self:get_folder_hint_counts(abs, info.modified, true)
     if counts and counts.error then return modified end
     if counts and counts.folders and counts.files then
-      if counts.folders == 0 then
-        return string.format("%4d 📄 · %s", counts.files, modified)
-      end
-      return string.format("%4d 📁 · %4d 📄 · %s", counts.folders, counts.files, modified)
+      return string.format("%4d   · %s", counts.folders + counts.files, modified)
     end
-    return string.format("%s 📁 · %s 📄 · %s", "   …", "   …", modified)
+    return string.format("%s   · %s", "   …", modified)
   end
 end
 
