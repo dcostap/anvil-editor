@@ -386,10 +386,11 @@ local function save_doc(doc, reason)
   end
   if disk_changed_since_load_or_save(doc) then
     show_conflict_prompt(doc, false)
+    return false, "conflict"
   else
     core.error("Autosave failed for %s: %s", doc.filename or "document", err)
   end
-  return false
+  return false, err
 end
 
 function autosave_fast.save_all_dirty(reason)
@@ -410,8 +411,16 @@ end
 
 function autosave_fast.save_before_close(doc, reason)
   if not should_autosave_doc(doc) then return false, false end
-  local saved = save_doc(doc, reason or "tab close")
-  return saved and not doc:is_dirty(), true
+  local saved, failure = save_doc(doc, reason or "tab close")
+  if saved and not doc:is_dirty() then return true, true end
+  if failure == "conflict" or doc.autosave_conflict_prompt_visible then
+    return false, true
+  end
+  core.log_quiet(
+    "Autosave before close failed for %s; falling back to normal dirty-close prompt",
+    doc.filename or "document"
+  )
+  return false, false
 end
 
 local function schedule_idle_save()

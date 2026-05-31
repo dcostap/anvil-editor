@@ -54,6 +54,46 @@ local function call_view_method(view, method, ...)
   return method(view, ...)
 end
 
+local function log_hex_bytes(text, max_bytes)
+  text = tostring(text or "")
+  max_bytes = max_bytes or 256
+  local bytes = {}
+  local count = math.min(#text, max_bytes)
+  for i = 1, count do
+    bytes[#bytes + 1] = string.format("%02X", text:byte(i))
+  end
+  if #text > count then
+    bytes[#bytes + 1] = string.format("...(+%d bytes)", #text - count)
+  end
+  return table.concat(bytes, " ")
+end
+
+local function quote_drop_text(text)
+  text = tostring(text or "")
+  return '"' .. text:gsub('[%z\1-\31\127-\255\\"]', function(ch)
+    if ch == "\\" then return "\\\\" end
+    if ch == '"' then return '\\"' end
+    if ch == "\n" then return "\\n" end
+    if ch == "\r" then return "\\r" end
+    if ch == "\t" then return "\\t" end
+    return string.format("\\x%02X", ch:byte())
+  end) .. '"'
+end
+
+local function log_file_drop(stage, filename, x, y, detail)
+  local path = tostring(filename or "")
+  core.log_quiet(
+    "File drop: %s path=%s bytes=%d hex=%s x=%s y=%s%s",
+    stage,
+    quote_drop_text(path),
+    #path,
+    log_hex_bytes(path),
+    tostring(x),
+    tostring(y),
+    detail and (" " .. detail) or ""
+  )
+end
+
 ---Constructor - initializes the root node tree and UI state.
 ---Called automatically by core at startup.
 function RootPanel:new()
@@ -491,11 +531,16 @@ end
 ---@param y number Screen y where dropped
 ---@return boolean handled True if event was handled
 function RootPanel:on_file_dropped(filename, x, y)
+  log_file_drop("received", filename, x, y)
   local node = self.root_node:get_child_overlapping_point(x, y)
   local result = node and call_view_method(node.active_view, node.active_view.on_file_dropped, filename, x, y)
-  if result then return result end
-  local info = system.get_file_info(filename)
+  if result then
+    log_file_drop("handled-by-view", filename, x, y)
+    return result
+  end
+  local info, info_err = system.get_file_info(filename)
   if info and info.type == "dir" then
+    log_file_drop("directory", filename, x, y)
     local abspath = system.absolute_path(filename) --[[@as string]]
     if self.first_update_done then
       -- ask the user if they want to open it here or somewhere else
@@ -535,7 +580,22 @@ function RootPanel:on_file_dropped(filename, x, y)
     end
     return true
   end
+  if not info then
+    log_file_drop(
+      "rejected-missing",
+      filename,
+      x,
+      y,
+      info_err and ("error=" .. quote_drop_text(info_err)) or nil
+    )
+    return true
+  end
+  if info.type ~= "file" then
+    log_file_drop("rejected-unsupported-type", filename, x, y, "type=" .. tostring(info.type))
+    return true
+  end
   -- defer opening docs in case nagview is visible (which will cause a locked node error)
+  log_file_drop("deferred-file", filename, x, y, "size=" .. tostring(info.size))
   table.insert(self.defer_open_docs, { filename, x, y })
   return true
 end
@@ -548,11 +608,19 @@ function RootPanel:process_defer_open_docs()
   for _, drop in ipairs(self.defer_open_docs) do
     -- file dragged into editor, try to open it
     local filename, x, y = table.unpack(drop)
-    local ok, doc = core.try(core.open_doc, filename)
-    if ok then
-      local node = core.root_panel.root_node:get_child_overlapping_point(x, y)
-      node:set_active_view(node.active_view)
-      core.root_panel:open_doc(doc)
+    local info, info_err = system.get_file_info(filename)
+    if not info or info.type ~= "file" then
+      local detail = info and ("type=" .. tostring(info.type))
+        or (info_err and ("error=" .. quote_drop_text(info_err)) or nil)
+      log_file_drop("deferred-rejected", filename, x, y, detail)
+    else
+      local ok, doc = core.try(core.open_doc, filename)
+      if ok then
+        local node = core.root_panel.root_node:get_child_overlapping_point(x, y)
+        node:set_active_view(node.active_view)
+        core.root_panel:open_doc(doc)
+        log_file_drop("opened-file", filename, x, y, "size=" .. tostring(info.size))
+      end
     end
   end
   self.defer_open_docs = {}
