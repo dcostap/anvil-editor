@@ -1,5 +1,7 @@
 local core = require "core"
 local command = require "core.command"
+local config = require "core.config"
+local style = require "core.style"
 local test = require "core.test"
 
 require "plugins.intellij_find"
@@ -55,6 +57,23 @@ test.describe("DocView selection scrolling", function()
       if doc:is_dirty() then doc:clean() end
       remove_doc(doc)
     end
+  end)
+
+  test.it("bundled defaults allow the final line to scroll to the top with blank space below", function(context)
+    test.equal(config.scroll_past_end, true, "expected bundled defaults to keep scroll-past-end enabled")
+
+    local view, doc = open_editor(context, "one\ntwo\nthree")
+    local lh = view:get_line_height()
+    local expected_max = lh * (#doc.lines - 1)
+
+    view.scroll.to.y = expected_max + view.size.y
+    view:clamp_scroll_position()
+    view.scroll.y = view.scroll.to.y
+
+    test.equal(view.scroll.y, expected_max)
+    local _, last_y = view:get_line_screen_position(#doc.lines)
+    test.equal(last_y, view.position.y + style.padding.y)
+    test.ok(last_y + lh < view.position.y + view.size.y, "expected blank viewport space after the last line")
   end)
 
   test.it("scroll_to_make_visible reveals an off-screen same-line range horizontally", function(context)

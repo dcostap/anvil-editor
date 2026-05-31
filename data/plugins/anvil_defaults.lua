@@ -77,7 +77,5 @@ config.scroll_animation_type = "constant"
 config.animation_rate = 4
 -- Mouse wheel step; default is 70 * SCALE.
 config.mouse_wheel_scroll = 120 * SCALE
--- Don't allow scrolling far beyond the end of a file.
-config.scroll_past_end = false
 -- Keep scrollbars visible in a small/contracted form instead of expanding/fading.
 config.force_scrollbar_status = "contracted"
