@@ -419,6 +419,15 @@ local function close_button_location(x, w)
 end
 
 
+local function get_tab_title_fit_width(view)
+  local text = view and view:get_name() or ""
+  return style.font:get_width(text)
+    + style.icon_font:get_width("C")
+    + style.padding.x
+    + style.divider_size * 2
+end
+
+
 ---Get which scroll button (left/right) is under a point.
 ---@param px number Screen x coordinate
 ---@param py number Screen y coordinate
@@ -699,15 +708,25 @@ end
 
 
 ---Calculate the target width for tabs.
----Adjusts based on number of visible tabs and available space.
+---Tabs default to style.tab_width, grow to fit visible titles when possible,
+---and shrink only when there is not enough space.
 ---@return number width Target tab width in pixels
 function Node:target_tab_width()
   local n = self:get_visible_tabs_number()
+  if n < 1 then return style.tab_width end
+
   local w = self.size.x
   if #self.views > n then
     w = self.size.x - get_scroll_button_width() * 2
   end
-  return common.clamp(style.tab_width, w / config.max_tabs, w / n)
+
+  local target = style.tab_width
+  local last = math.min(#self.views, self.tab_offset + n - 1)
+  for i = self.tab_offset, last do
+    target = math.max(target, get_tab_title_fit_width(self.views[i]))
+  end
+
+  return math.max(1, math.min(target, w / n))
 end
 
 

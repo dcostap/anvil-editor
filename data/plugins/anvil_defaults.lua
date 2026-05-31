@@ -49,9 +49,9 @@ if PLATFORM == "Windows" then
   config.borderless = true
   config.integrated_titlebar_tabs = false
 end
--- Cleaner tabs: hide cramped close buttons and reduce default tab width.
+-- Cleaner tabs: hide cramped close buttons and keep a roomier minimum tab width.
 config.tab_close_button = false
-style.tab_width = 120 * SCALE
+style.tab_width = 250 * SCALE
 -- Keep the official autosave plugin disabled if it ever gets installed later.
 config.plugins.autosave = false
 -- Re-apply local shortcuts after plugins that append their own bindings.
