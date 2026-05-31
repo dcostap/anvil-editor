@@ -8,6 +8,7 @@ local ime = require "core.ime"
 local View = require "core.view"
 
 local CACHE_LINE_LEN = 500
+local LINE_HINT_ELLIPSIS = "…"
 
 local IME_VIEW = nil
 local IME_STATE = {line1 = 0, col1 = 0, line2 = 0, col2 = 0, w = 0, h = 0}
@@ -1177,6 +1178,182 @@ function DocView:draw_line_highlight(x, y)
 end
 
 
+---Return a non-interactive visual hint for a line.
+---Override this in Document View subclasses or plugins. The result can be a
+---string, a single segment table `{ text, color?, font? }`, or a list of
+---segment tables. Hints are drawn right-aligned and are never part of the
+---Document text.
+---@param line integer Line number
+---@return string|table|nil hint
+function DocView:get_line_hint(line)
+  return nil
+end
+
+---Minimum horizontal gap between Document text and a Line Hint.
+---@param line integer Line number
+---@return number gap Pixel gap
+function DocView:get_line_hint_gap(line)
+  return style.padding.x * 2
+end
+
+function DocView:normalize_line_hint(hint)
+  if hint == nil or hint == false then return nil end
+
+  local default_font = self:get_font()
+  local default_color = style.dim or style.line_number2 or style.syntax.comment or style.text
+  local base_font = type(hint) == "table" and hint.font or nil
+  local base_color = type(hint) == "table" and hint.color or nil
+  local segments = {}
+
+  local function add_segment(segment)
+    if segment == nil or segment == false then return end
+    if type(segment) ~= "table" then
+      segment = { text = tostring(segment) }
+    end
+    if segment.text == nil then return end
+    local text = tostring(segment.text)
+    if text == "" then return end
+    segments[#segments + 1] = {
+      text = text,
+      font = segment.font or base_font or default_font,
+      color = segment.color or base_color or default_color,
+    }
+  end
+
+  if type(hint) == "table" and hint.text == nil and #hint > 0 then
+    for _, segment in ipairs(hint) do add_segment(segment) end
+  else
+    add_segment(hint)
+  end
+
+  return #segments > 0 and segments or nil
+end
+
+function DocView:measure_line_hint_segments(segments)
+  local width = 0
+  for _, segment in ipairs(segments or {}) do
+    width = width + segment.font:get_width(segment.text)
+  end
+  return width
+end
+
+local function copy_line_hint_segment(segment, text)
+  return {
+    text = text,
+    font = segment.font,
+    color = segment.color,
+  }
+end
+
+function DocView:truncate_line_hint_segments(segments, max_width)
+  max_width = math.max(0, max_width or 0)
+  if self:measure_line_hint_segments(segments) <= max_width then
+    return segments, false
+  end
+
+  local default_font = self:get_font()
+  local default_color = style.dim or style.line_number2 or style.syntax.comment or style.text
+  local ellipsis_font = default_font
+  local ellipsis_width = ellipsis_font:get_width(LINE_HINT_ELLIPSIS)
+  if ellipsis_width > max_width then return nil, true end
+
+  local remaining = max_width - ellipsis_width
+  local kept = {}
+  local kept_width = 0
+  for i = #segments, 1, -1 do
+    local segment = segments[i]
+    local chars = {}
+    for ch in common.utf8_chars(segment.text) do chars[#chars + 1] = ch end
+
+    local suffix = ""
+    local suffix_width = 0
+    for j = #chars, 1, -1 do
+      local candidate = chars[j] .. suffix
+      local candidate_width = segment.font:get_width(candidate)
+      if kept_width + candidate_width <= remaining then
+        suffix = candidate
+        suffix_width = candidate_width
+      else
+        break
+      end
+    end
+
+    if suffix ~= "" then
+      table.insert(kept, 1, copy_line_hint_segment(segment, suffix))
+      kept_width = kept_width + suffix_width
+    end
+    if suffix ~= segment.text then break end
+  end
+
+  if #kept == 0 then
+    return {{ text = LINE_HINT_ELLIPSIS, font = ellipsis_font, color = default_color }}, true
+  end
+
+  table.insert(kept, 1, {
+    text = LINE_HINT_ELLIPSIS,
+    font = ellipsis_font,
+    color = kept[1].color or default_color,
+  })
+  return kept, true
+end
+
+function DocView:get_line_hint_text_end_x(line, x)
+  local text = self.doc.lines[line] or ""
+  local text_len = #text
+  if text:sub(-1) == "\n" then text_len = text_len - 1 end
+  return x + self:get_col_x_offset(line, text_len + 1)
+end
+
+---Draw a Line Hint for a line, clipped/truncated so it never covers Document text.
+---@param line integer Line number
+---@param x number Screen x coordinate of the line's text origin
+---@param y number Screen y coordinate of the line
+---@return number? x_advance
+---@return number? x
+---@return number? width
+function DocView:draw_line_hint(line, x, y)
+  local segments = self:normalize_line_hint(self:get_line_hint(line))
+  if not segments then return end
+
+  local gw = self:get_gutter_width()
+  local _, _, vscroll_w = self.v_scrollbar:get_track_rect()
+  local content_left = self.position.x + gw
+  local content_right = self.position.x + self.size.x - (vscroll_w or 0) - style.padding.x
+  if content_right <= content_left then return end
+
+  local gap = self:get_line_hint_gap(line)
+  local text_end_x = self:get_line_hint_text_end_x(line, x)
+  local hint_left_limit = math.max(content_left, text_end_x) + gap
+  local available = content_right - hint_left_limit
+  if available <= 0 then return end
+
+  local width = self:measure_line_hint_segments(segments)
+  if width > available then
+    segments = self:truncate_line_hint_segments(segments, available)
+    if not segments then return end
+    width = self:measure_line_hint_segments(segments)
+    if width > available + 0.5 then return end
+  end
+
+  local draw_x = content_right - width
+  local tx = draw_x
+  local ty = y + self:get_line_text_y_offset()
+  local lh = self:get_line_height()
+  local stats = core.docview_frame_stats
+
+  core.push_clip_rect(hint_left_limit, y, math.max(0, content_right - hint_left_limit), lh)
+  for _, segment in ipairs(segments) do
+    local draw_text_start = stats and system.get_time()
+    tx = renderer.draw_text(segment.font, segment.text, tx, ty, segment.color)
+    if stats then
+      stats.draw_text_calls = stats.draw_text_calls + 1
+      stats.renderer_draw_text_ms = stats.renderer_draw_text_ms + (system.get_time() - draw_text_start) * 1000
+    end
+  end
+  core.pop_clip_rect()
+  return tx, draw_x, width
+end
+
 ---Draw the text content of a line with syntax highlighting.
 ---@param line integer Line number
 ---@param x number Screen x coordinate
@@ -1522,6 +1699,8 @@ function DocView:draw_line_body(line, x, y)
       self:draw_search_match_outline(line, match[1], match[2], match[3])
     end
   end
+
+  self:draw_line_hint(line, x, y)
 
   return line_height
 end

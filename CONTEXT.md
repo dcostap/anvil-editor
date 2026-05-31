@@ -32,6 +32,10 @@ _Avoid_: Buffer
 A visual surface showing a Document. A Document View can be an Editor or a document-backed tool panel.
 _Avoid_: Editor tab, buffer view
 
+**Line Hint**:
+Non-interactive text visually anchored to a Document View line that is not part of the Document.
+_Avoid_: Buffer hint, phantom text, inlay hint
+
 **Editor**:
 A Document View used to edit a file or untitled Document. Document-backed tool panels are not Editors, even when they use Document View mechanics.
 _Avoid_: Buffer, editor tab

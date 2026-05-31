@@ -18,11 +18,16 @@ local editree_config = {
   show_hidden = false,
   delete_to_trash = PLATFORM == "Windows",
   folder_color = nil,
+  show_line_hints = true,
 }
 
 local INDENT = 1
 local INDENT_TEXT = "\t"
 local NO_META = false
+local MONTH_NAMES = {
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+}
 
 local function indent_prefix(level)
   return string.rep(INDENT_TEXT, level)
@@ -155,6 +160,8 @@ local function sorted_dir(path, show_hidden)
           sort_name = name:lower(),
           abs = abs,
           type = info.type,
+          size = info.size,
+          modified = info.modified,
           display = name .. (info.type == "dir" and "/" or "")
         })
       end
@@ -165,6 +172,58 @@ local function sorted_dir(path, show_hidden)
     return a.sort_name < b.sort_name
   end)
   return items
+end
+
+local function format_file_size(size)
+  local units = { "B", "K", "M", "G", "T", "P" }
+  local value = math.max(0, tonumber(size) or 0)
+  local unit = 1
+  while value >= 1024 and unit < #units do
+    value = value / 1024
+    unit = unit + 1
+  end
+
+  local rounded = math.floor(value + 0.5)
+  if rounded >= 1000 and unit < #units then
+    value = value / 1024
+    unit = unit + 1
+    rounded = math.floor(value + 0.5)
+  end
+  return string.format("%3d %s", rounded, units[unit])
+end
+
+local function format_modified_time(modified)
+  local value = tonumber(modified)
+  if not value then return nil end
+  local t = os.date("*t", value)
+  if not t then return nil end
+  return string.format(
+    "%04d %s %2d %02d:%02d",
+    t.year, MONTH_NAMES[t.month] or "???", t.day, t.hour, t.min
+  )
+end
+
+local function count_direct_children(path, show_hidden, yield_budget)
+  local names, err = system.list_dir(path)
+  if not names then return nil, nil, err or "unable to list directory" end
+
+  local folders, files = 0, 0
+  local start_time = system.get_time()
+  for _, name in ipairs(names) do
+    if show_hidden or name:sub(1, 1) ~= "." then
+      local info = system.get_file_info(path_join(path, name))
+      if info and info.type == "dir" then
+        folders = folders + 1
+      elseif info and info.type == "file" then
+        files = files + 1
+      end
+    end
+    if yield_budget and system.get_time() - start_time > yield_budget then
+      coroutine.yield(0)
+      start_time = system.get_time()
+    end
+  end
+  return folders, files
 end
 
 local function in_project(abs, project_root)
@@ -583,6 +642,11 @@ function EditreeView:new()
   self.original_by_name = {}
   self.known_originals = {}
   self.line_meta = {}
+  self.line_hint_cache = {}
+  self.line_hint_count_cache = {}
+  self.line_hint_count_pending = {}
+  self.line_hint_count_queue = {}
+  self.line_hint_count_worker_running = false
   self.last_lines = nil
   self.status_cache = nil
   self.has_possible_edits = false
@@ -635,6 +699,9 @@ function EditreeView:snapshot_lines()
     self.line_meta[i] = nil
   end
   self.last_change_id = self.doc:get_change_id()
+  self.__line_hint_entries_change_id = nil
+  self.__line_hint_entries_by_line = nil
+  self.__line_hint_errors = nil
 end
 
 function EditreeView:sync_meta()
@@ -794,6 +861,10 @@ function EditreeView:refresh(keep_selection, preserve_expansion, reveal_paths)
   self.original_by_name = {}
   self.known_originals = {}
   self.line_meta = {}
+  self.line_hint_cache = {}
+  self.line_hint_count_cache = {}
+  self.line_hint_count_pending = {}
+  self.line_hint_count_queue = {}
 
   local out = {}
   for i, item in ipairs(self.original_entries) do
@@ -1014,6 +1085,145 @@ function EditreeView:line_is_dir(line)
   local meta = self.line_meta[line]
   local parsed = self:parse_line(line)
   return (parsed and parsed.wants_dir) or (type(meta) == "table" and meta.original_type == "dir")
+end
+
+function EditreeView:get_line_hint_entry(line)
+  local change_id = self.doc:get_change_id()
+  if self.__line_hint_entries_change_id ~= change_id
+      or self.__line_hint_entries_dir ~= self.current_dir then
+    local entries, errors = self:build_entries(false)
+    local by_line = {}
+    for _, entry in ipairs(entries) do by_line[entry.line] = entry end
+    self.__line_hint_entries_change_id = change_id
+    self.__line_hint_entries_dir = self.current_dir
+    self.__line_hint_entries_by_line = by_line
+    self.__line_hint_errors = errors
+  end
+  if self.__line_hint_errors and self.__line_hint_errors[line] then return nil end
+  return self.__line_hint_entries_by_line and self.__line_hint_entries_by_line[line]
+end
+
+function EditreeView:line_hint_count_key(abs, show_hidden)
+  if show_hidden == nil then show_hidden = editree_config.show_hidden end
+  return (show_hidden and "1" or "0") .. "\0" .. abs
+end
+
+function EditreeView:start_line_hint_count_worker()
+  if self.line_hint_count_worker_running then return end
+  self.line_hint_count_worker_running = true
+
+  core.add_thread(function()
+    while true do
+      local task = table.remove(self.line_hint_count_queue, 1)
+      if not task then break end
+
+      local info = system.get_file_info(task.abs)
+      if info and info.type == "dir" and info.modified == task.modified then
+        local folders, files, err = count_direct_children(task.abs, task.show_hidden, 0.004)
+        local latest = system.get_file_info(task.abs)
+        if latest and latest.type == "dir" and latest.modified == task.modified then
+          self.line_hint_count_cache[task.key] = {
+            modified = task.modified,
+            folders = folders,
+            files = files,
+            error = err,
+          }
+          if err then
+            core.log_quiet("Editree Line Hint count failed for %s: %s", task.abs, err)
+          end
+          core.redraw = true
+        end
+      end
+      if self.line_hint_count_pending[task.key] == task then
+        self.line_hint_count_pending[task.key] = nil
+      end
+      coroutine.yield(0)
+    end
+
+    self.line_hint_count_worker_running = false
+  end)
+end
+
+function EditreeView:get_folder_hint_counts(abs, modified)
+  self.line_hint_count_cache = self.line_hint_count_cache or {}
+  self.line_hint_count_pending = self.line_hint_count_pending or {}
+  self.line_hint_count_queue = self.line_hint_count_queue or {}
+
+  local key = self:line_hint_count_key(abs)
+  local cached = self.line_hint_count_cache[key]
+  if cached and cached.modified == modified then return cached end
+
+  local pending = self.line_hint_count_pending[key]
+  if pending then
+    pending.modified = modified
+    pending.show_hidden = editree_config.show_hidden
+    return nil, true
+  end
+
+  pending = {
+    key = key,
+    abs = abs,
+    modified = modified,
+    show_hidden = editree_config.show_hidden,
+  }
+  self.line_hint_count_pending[key] = pending
+  table.insert(self.line_hint_count_queue, pending)
+  self:start_line_hint_count_worker()
+  return nil, true
+end
+
+function EditreeView:format_line_hint_for_path(abs, info)
+  if not info or not info.type then return nil end
+
+  local modified = format_modified_time(info.modified)
+  if not modified then return nil end
+
+  if info.type == "file" then
+    self.line_hint_cache = self.line_hint_cache or {}
+    local key = self:line_hint_count_key(abs)
+    local cached = self.line_hint_cache[key]
+    if cached and cached.type == info.type
+        and cached.size == info.size
+        and cached.modified == info.modified then
+      return cached.text
+    end
+
+    local text = string.format("%s · %s", format_file_size(info.size), modified)
+    self.line_hint_cache[key] = {
+      type = info.type,
+      size = info.size,
+      modified = info.modified,
+      text = text,
+    }
+    return text
+  elseif info.type == "dir" then
+    local counts = self:get_folder_hint_counts(abs, info.modified)
+    if counts and counts.error then return modified end
+    if counts and counts.folders and counts.files then
+      return string.format("%4d 📁 · %4d 📄 · %s", counts.folders, counts.files, modified)
+    end
+    return string.format("%s 📁 · %s 📄 · %s", "   …", "   …", modified)
+  end
+end
+
+function EditreeView:get_line_hint(line)
+  if not editree_config.show_line_hints then return nil end
+  if self.has_possible_edits and self:get_line_status(line) == "invalid" then return nil end
+
+  local entry = self:get_line_hint_entry(line)
+  if not entry then return nil end
+
+  local info = system.get_file_info(entry.abs)
+  if not info or info.type ~= entry.type then return nil end
+
+  local text = self:format_line_hint_for_path(entry.abs, info)
+  if not text then return nil end
+
+  return {
+    text = text,
+    font = self:get_font(),
+    color = style.dim or style.line_number2 or style.syntax.comment or style.text,
+  }
 end
 
 function EditreeView:draw_line_text(line, x, y)
