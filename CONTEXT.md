@@ -84,6 +84,14 @@ _Avoid_: filetree sorting
 The bottom-anchored, full-width prompt used for app-wide actions such as opening files, opening projects, renaming, and command entry.
 _Avoid_: Command prompt, command bar
 
+**Command Slot**:
+A project-scoped shortcut slot that stores one shell command for quick reruns.
+_Avoid_: Command preset, command macro
+
+**Command Output View**:
+A read-only Document View showing the text output from a command run.
+_Avoid_: Command buffer, terminal buffer, output buffer
+
 **DocView Prompt Bar**:
 A bottom-anchored prompt scoped to a specific Document View.
 _Avoid_: Document find bar, local prompt, find bar
