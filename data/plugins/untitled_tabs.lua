@@ -271,16 +271,85 @@ local function default_new_file_text()
   return ""
 end
 
-local function create_empty_file(filename)
-  filename = common.home_expand(filename or "")
-  if filename == "" then return end
+local function trim_path_input(text)
+  return (text or ""):match("^%s*(.-)%s*$")
+end
+
+local function path_text_is_directory(text)
+  local last = text:sub(-1)
+  return last == "/" or last == "\\"
+end
+
+local function ensure_directory_exists(abs, display_path)
+  local info = system.get_file_info(abs)
+  if info then
+    if info.type == "dir" then return true, true end
+    core.error("Path exists and is not a directory: %s", display_path or abs)
+    return false
+  end
+
+  local ok, err, path = common.mkdirp(abs)
+  if not ok then
+    info = system.get_file_info(abs)
+    if err == "path exists" and info and info.type == "dir" then
+      return true, true
+    end
+    core.error("Cannot create directory %q: %s", path or abs, err or "unknown error")
+    return false
+  end
+  core.log_quiet("Created directory hierarchy \"%s\"", abs)
+  return true, false
+end
+
+local function ensure_parent_directory_exists(abs)
+  local parent = common.dirname(abs)
+  if not parent then return true end
+
+  local info = system.get_file_info(parent)
+  if info then
+    if info.type == "dir" then return true end
+    core.error("Parent path exists and is not a directory: %s", parent)
+    return false
+  end
+
+  local ok, err, path = common.mkdirp(parent)
+  if not ok then
+    info = system.get_file_info(parent)
+    if err == "path exists" and info and info.type == "dir" then return true end
+    core.error("Cannot create parent directory %q: %s", path or parent, err or "unknown error")
+    return false
+  end
+  core.log_quiet("Created parent directory hierarchy \"%s\"", parent)
+  return true
+end
+
+local function create_directory_path(normalized, abs)
+  local ok, existed = ensure_directory_exists(abs, normalized)
+  if not ok then return end
+
+  command.perform("filetree:sync-path", abs)
+  if existed then
+    core.log("Folder already exists \"%s\"", normalized)
+  else
+    core.log("Created folder \"%s\"", normalized)
+  end
+end
+
+local function create_empty_file(text)
+  local trimmed = trim_path_input(text)
+  if trimmed == "" then return end
+
+  local is_directory = path_text_is_directory(trimmed)
+  local filename = common.home_expand(trimmed)
   local normalized = core.normalize_to_project_dir(filename)
   local abs = core.project_absolute_path(normalized)
-  local parent = common.dirname(abs)
-  if parent and not system.get_file_info(parent) then
-    core.error("Directory does not exist: %s", parent)
+
+  if is_directory then
+    create_directory_path(normalized, abs)
     return
   end
+
+  if not ensure_parent_directory_exists(abs) then return end
 
   local doc = core.open_doc(normalized)
   core.root_panel:open_doc(doc)
@@ -300,7 +369,7 @@ command.add(nil, {
   end,
 
   ["user:new-file-with-path"] = function()
-    core.global_prompt_bar:enter("New File", {
+    core.global_prompt_bar:enter("New File or Folder", {
       text = default_new_file_text(),
       submit = create_empty_file,
       suggest = function(text)

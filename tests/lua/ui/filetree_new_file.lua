@@ -66,6 +66,16 @@ local function expected_prompt_text_for(path)
   return common.home_encode(rel) .. PATHSEP
 end
 
+local function saw_log_since(start_index, needle, level)
+  for i = start_index + 1, #core.log_items do
+    local item = core.log_items[i]
+    if (not level or item.level == level) and item.text:find(needle, 1, true) then
+      return true
+    end
+  end
+  return false
+end
+
 test.describe("File Tree New File integration", function()
   test.after_each(function(context)
     if core.active_view == core.global_prompt_bar then
@@ -132,5 +142,91 @@ test.describe("File Tree New File integration", function()
     test.not_nil(info, "expected New File prompt to create the file on disk")
     test.equal(info.type, "file")
     test.not_nil(find_filetree_line(filetree, "\tcreated.txt"), "expected File Tree to refresh and reveal the new file")
+  end)
+
+  test.it("creates missing parent folders for a new file path", function(context)
+    local filetree, paths = setup_tree(context)
+    local folder_line = find_filetree_line(filetree, "test/")
+    test.not_nil(folder_line, "expected folder row in File Tree")
+
+    filetree.doc:set_selection(folder_line, 1)
+    core.set_active_view(filetree)
+    test.ok(command.perform("user:new-file-with-path"))
+
+    local prompt_text = core.global_prompt_bar:get_text()
+    core.global_prompt_bar:set_text(prompt_text .. "alpha/beta/created.txt")
+    core.global_prompt_bar:submit()
+
+    local parent = paths.folder .. PATHSEP .. "alpha" .. PATHSEP .. "beta"
+    local created = parent .. PATHSEP .. "created.txt"
+    local parent_info = system.get_file_info(parent)
+    test.not_nil(parent_info, "expected New File prompt to create missing parent folders")
+    test.equal(parent_info.type, "dir")
+    local created_info = system.get_file_info(created)
+    test.not_nil(created_info, "expected New File prompt to create the nested file")
+    test.equal(created_info.type, "file")
+    test.not_nil(find_filetree_line(filetree, "\t\t\tcreated.txt"), "expected File Tree to reveal the nested file")
+  end)
+
+  test.it("creates a folder when the prompt text ends with a separator after trimming", function(context)
+    local filetree, paths = setup_tree(context)
+    local folder_line = find_filetree_line(filetree, "test/")
+    test.not_nil(folder_line, "expected folder row in File Tree")
+
+    filetree.doc:set_selection(folder_line, 1)
+    core.set_active_view(filetree)
+    test.ok(command.perform("user:new-file-with-path"))
+
+    local doc_count = #core.docs
+    local prompt_text = core.global_prompt_bar:get_text()
+    core.global_prompt_bar:set_text(prompt_text .. "created-folder/   ")
+    core.global_prompt_bar:submit()
+
+    local created = paths.folder .. PATHSEP .. "created-folder"
+    local info = system.get_file_info(created)
+    test.not_nil(info, "expected New File prompt to create the folder on disk")
+    test.equal(info.type, "dir")
+    test.equal(#core.docs, doc_count, "expected folder creation not to open a Document")
+    test.not_nil(find_filetree_line(filetree, "\tcreated-folder/"), "expected File Tree to refresh and reveal the new folder")
+  end)
+
+  test.it("notifies when the submitted folder already exists", function(context)
+    local filetree, paths = setup_tree(context)
+    local folder_line = find_filetree_line(filetree, "test/")
+    test.not_nil(folder_line, "expected folder row in File Tree")
+
+    filetree.doc:set_selection(folder_line, 1)
+    core.set_active_view(filetree)
+    test.ok(command.perform("user:new-file-with-path"))
+
+    local log_start = #core.log_items
+    core.global_prompt_bar:set_text(core.global_prompt_bar:get_text() .. "   ")
+    core.global_prompt_bar:submit()
+
+    local info = system.get_file_info(paths.folder)
+    test.not_nil(info, "expected existing folder to remain on disk")
+    test.equal(info.type, "dir")
+    test.ok(
+      saw_log_since(log_start, "Folder already exists", "INFO"),
+      "expected an existing-folder notification"
+    )
+  end)
+
+  test.it("reports an error when a trailing separator points at an existing file", function(context)
+    local filetree, paths = setup_tree(context)
+    core.set_active_view(filetree)
+    test.ok(command.perform("user:new-file-with-path"))
+
+    local log_start = #core.log_items
+    core.global_prompt_bar:set_text(expected_prompt_text_for(context.temp_root) .. "sibling.txt/")
+    core.global_prompt_bar:submit()
+
+    local info = system.get_file_info(paths.file)
+    test.not_nil(info, "expected sibling file to remain on disk")
+    test.equal(info.type, "file")
+    test.ok(
+      saw_log_since(log_start, "Path exists and is not a directory", "ERROR"),
+      "expected an error when folder creation targets an existing file"
+    )
   end)
 end)
