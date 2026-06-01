@@ -1172,9 +1172,47 @@ end
 ---Draw the current line highlight bar.
 ---@param x number Screen x coordinate
 ---@param y number Screen y coordinate
-function DocView:draw_line_highlight(x, y)
+function DocView:get_line_highlight_rect(x, y)
   local lh = self:get_line_height()
-  renderer.draw_rect(x, y, self.size.x, lh, style.line_highlight)
+  local pos_x = self.__full_width_highlight_position_x or self.position.x
+  local size_x = self.__full_width_highlight_size_x or self.size.x
+  return pos_x, y, size_x, lh
+end
+
+function DocView:draw_line_highlight(x, y)
+  local rx, ry, rw, rh = self:get_line_highlight_rect(x, y)
+  renderer.draw_rect(rx, ry, rw, rh, style.line_highlight)
+end
+
+function DocView:line_has_current_line_highlight(line)
+  if core.active_view ~= self then return false end
+  local highlight_cache = self.__line_body_highlight_cache
+  if highlight_cache then return highlight_cache[line] or false end
+
+  local hcl = config.highlight_current_line
+  if hcl == false then return false end
+  for lidx, line1, col1, line2, col2 in self.doc:get_selections(false) do
+    if line1 > line then break end
+    if line1 == line then
+      if hcl == "no_selection" and ((line1 ~= line2) or (col1 ~= col2)) then
+        return false
+      end
+      return true
+    end
+  end
+  return false
+end
+
+function DocView:draw_current_line_highlights(minline, maxline)
+  if core.active_view ~= self or config.highlight_current_line == false then return end
+  local _, y = self:get_line_screen_position(minline)
+  local lh = self:get_line_height()
+  for line = minline, maxline do
+    if self:line_has_current_line_highlight(line) then
+      self:draw_line_highlight(self.position.x, y)
+    end
+    y = y + lh
+  end
 end
 
 
@@ -1617,31 +1655,8 @@ end
 ---@param y number Screen y coordinate
 ---@return integer height Line height
 function DocView:draw_line_body(line, x, y)
-  local highlight_cache = self.__line_body_highlight_cache
-  local draw_highlight
-  if highlight_cache then
-    draw_highlight = highlight_cache[line] or false
-  else
-    -- draw highlight if any selection ends on this line
-    draw_highlight = false
-    local hcl = config.highlight_current_line
-    if hcl ~= false then
-      for lidx, line1, col1, line2, col2 in self.doc:get_selections(false) do
-        if line1 > line then break end
-        if line1 == line then
-          if hcl == "no_selection" then
-            if (line1 ~= line2) or (col1 ~= col2) then
-              draw_highlight = false
-              break
-            end
-          end
-          draw_highlight = true
-          break
-        end
-      end
-    end
-  end
-  if draw_highlight and core.active_view == self then
+  if not self.__current_line_highlights_drawn_before_content
+  and self:line_has_current_line_highlight(line) then
     self:draw_line_highlight(x + self.scroll.x, y)
   end
 
@@ -1820,6 +1835,8 @@ function DocView:draw()
   local draw_start = stats and system.get_time()
   if stats then stats.visible_lines = stats.visible_lines + math.max(0, maxline - minline + 1) end
   self:prepare_line_body_draw_cache(minline, maxline)
+  self:draw_current_line_highlights(minline, maxline)
+  self.__current_line_highlights_drawn_before_content = true
 
   local x, y = self:get_line_screen_position(minline)
   local gw, gpad = self:get_gutter_width()
@@ -1841,6 +1858,7 @@ function DocView:draw()
   if stats then stats.body_ms = stats.body_ms + (system.get_time() - body_start) * 1000 end
   self:draw_overlay()
   core.pop_clip_rect()
+  self.__current_line_highlights_drawn_before_content = nil
   self.__line_body_highlight_cache = nil
   self.__line_body_selection_cache = nil
   self.__line_gutter_selection_cache = nil

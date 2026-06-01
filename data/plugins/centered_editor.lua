@@ -107,9 +107,13 @@ function M.with_lane_geometry(view, fn, ...)
   local lane_x, lane_width = M.get_lane_rect(view)
   local old_x, old_w = view.position.x, view.size.x
   local old_flag = view.__centered_editor_in_lane_geometry
+  local old_highlight_x = view.__full_width_highlight_position_x
+  local old_highlight_w = view.__full_width_highlight_size_x
   view.position.x = lane_x
   view.size.x = lane_width
   view.__centered_editor_in_lane_geometry = true
+  view.__full_width_highlight_position_x = old_x
+  view.__full_width_highlight_size_x = old_w
 
   local args = pack(...)
   local results
@@ -120,6 +124,8 @@ function M.with_lane_geometry(view, fn, ...)
   view.position.x = old_x
   view.size.x = old_w
   view.__centered_editor_in_lane_geometry = old_flag
+  view.__full_width_highlight_position_x = old_highlight_x
+  view.__full_width_highlight_size_x = old_highlight_w
 
   if not ok then error(err, 0) end
   return unpack(results, 1, results.n)
