@@ -137,8 +137,9 @@ end
 function EmptyView:draw()
   if not self:is_visible() or self.size.x <= 0 or self.size.y <= 0 then return end
 
-  -- Draw a genuinely blank pane, bypassing the wallpaper patch on View:draw_background.
-  renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y, style.background)
+  -- Use the normal view background path so shared background customizations
+  -- such as the editor wallpaper are applied here too.
+  self:draw_background(style.background)
 
   local quote = self.quote or pick_quote()
   local text, byline = quote[1], quote[2]
