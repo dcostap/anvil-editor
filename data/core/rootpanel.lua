@@ -728,6 +728,13 @@ end
 ---Called automatically by core every frame.
 function RootPanel:update()
   Node.copy_position_and_size(self.root_node, self)
+  -- Keep view geometry current before per-view update hooks run.  View:update()
+  -- refreshes cached scrollbar rectangles from view position/size; after a tab
+  -- close the newly active view may still carry geometry from the last time it
+  -- was active, which can draw its scrollbar at a stale split/side-panel width
+  -- for one frame.  Run layout first, then again after updates in case update
+  -- hooks changed the tree or animated locked view sizes.
+  self.root_node:update_layout()
   self.root_node:update()
   self.root_node:update_layout()
 
