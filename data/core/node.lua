@@ -797,8 +797,8 @@ function Node:draw_tab_borders(view, is_active, is_hovered, x, y, w, h, standalo
   -- Tabs deviders
   local ds = style.divider_size
   local color = style.dim
-  local padding_y = style.padding.y
-  renderer.draw_rect(x + w, y + padding_y, ds, h - padding_y*2, style.dim)
+  local margin_y = style.margin.tab.top or 0
+  renderer.draw_rect(x + w, y - margin_y, ds, h + margin_y, { style.dim[1], style.dim[2], style.dim[3], 65 })
   if standalone then
     renderer.draw_rect(x-1, y-1, w+2, h+2, style.background2)
   end
