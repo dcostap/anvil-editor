@@ -365,6 +365,10 @@ local function tab_max_width()
   return math.max(tab_min_width(), style.tab_max_width or style.tab_width or tab_min_width())
 end
 
+local function tab_gap()
+  return 5 * SCALE
+end
+
 local function tab_title_width(view)
   local text = view and view:get_name() or ""
   return style.font:get_width(text) + style.padding.x * 2 + style.divider_size * 2
@@ -375,11 +379,12 @@ function Node:get_tab_width(idx)
 end
 
 function Node:get_tabs_width(first, last)
+  if last < first then return 0 end
   local width = 0
   for i = first, last do
     width = width + self:get_tab_width(i)
   end
-  return width
+  return width + tab_gap() * math.max(0, last - first)
 end
 
 ---Get the number of tabs currently visible (not scrolled out of view).
@@ -397,8 +402,9 @@ function Node:get_visible_tabs_number()
   local count = 0
   for i = self.tab_offset, #self.views do
     local width = self:get_tab_width(i)
-    if count > 0 and used + width > available then break end
-    used = used + width
+    local gap = count > 0 and tab_gap() or 0
+    if count > 0 and used + gap + width > available then break end
+    used = used + gap + width
     count = count + 1
   end
   return math.max(1, count)
@@ -530,9 +536,16 @@ end
 ---@return number margin_y Top margin
 function Node:get_tab_rect(idx)
   local maxw = self.size.x
-  local x0 = self.position.x
-  local x1 = x0 + common.clamp(self:get_tabs_width(1, idx - 1) - self.tab_shift, 0, maxw)
-  local x2 = x0 + common.clamp(self:get_tabs_width(1, idx) - self.tab_shift, 0, maxw)
+  local visible_count = self:get_visible_tabs_number()
+  local visible_last = math.min(#self.views, self.tab_offset + visible_count - 1)
+  local visible_width = self:get_tabs_width(self.tab_offset, visible_last)
+  local scroll_width = #self.views > visible_count and get_scroll_button_width() * 2 or 0
+  local available = math.max(0, maxw - scroll_width)
+  local centered_offset = math.max(0, (available - visible_width) / 2)
+  local x0 = self.position.x + centered_offset
+  local before = self:get_tabs_width(self.tab_offset, idx - 1)
+  local x1 = x0 + common.clamp(before, 0, maxw)
+  local x2 = x0 + common.clamp(before + self:get_tab_width(idx), 0, maxw)
   local h, pad_y, margin_y = get_tab_y_sizes()
   return x1, self.position.y, x2 - x1, h, margin_y
 end
@@ -866,6 +879,8 @@ function Node:draw()
     local color = style.divider
     if core.title_bar and (node_contains_view(self.a, core.title_bar) or node_contains_view(self.b, core.title_bar)) then
       color = style.background2
+    elseif core.status_bar and (node_contains_view(self.a, core.status_bar) or node_contains_view(self.b, core.status_bar)) then
+      color = style.tab_background or style.background2
     end
     renderer.draw_rect(x, y, w, h, color)
     self:propagate("draw")
