@@ -259,10 +259,30 @@ function CommandOutputDoc:_display_text()
   return text
 end
 
-function CommandOutputDoc:_replace_display_text()
+function CommandOutputDoc:_replace_display_text(selection_mode)
+  local old_last_line = #self.lines
+  local old_selections = { table.unpack(self.selections or {}) }
+  local old_last_selection = self.last_selection or 1
+
   self:reset()
   CommandOutputDoc.super.insert(self, 1, 1, self:_display_text())
-  self:set_selection(#self.lines, 1)
+
+  if selection_mode == "preserve" and #old_selections >= 4 then
+    self.selections = {}
+    for i = 1, #old_selections, 4 do
+      local function adjusted_position(line, col)
+        if line == old_last_line then line = #self.lines end
+        return self:sanitize_position(line, col)
+      end
+      local line1, col1 = adjusted_position(old_selections[i], old_selections[i + 1])
+      local line2, col2 = adjusted_position(old_selections[i + 2], old_selections[i + 3])
+      self:set_selections((i - 1) / 4 + 1, line1, col1, line2, col2)
+    end
+    self.last_selection = common.clamp(old_last_selection, 1, math.max(1, #self.selections / 4))
+  else
+    self:set_selection(#self.lines, 1)
+  end
+
   self:clear_undo_redo()
   self:clean()
 end
@@ -270,7 +290,7 @@ end
 function CommandOutputDoc:set_text(text)
   self.output_text = tostring(text or "")
   self:_with_internal_mutation(function()
-    self:_replace_display_text()
+    self:_replace_display_text("end")
   end)
 end
 
@@ -278,7 +298,7 @@ function CommandOutputDoc:append(text)
   if not text or text == "" then return end
   self.output_text = (self.output_text or "") .. text
   self:_with_internal_mutation(function()
-    self:_replace_display_text()
+    self:_replace_display_text("preserve")
   end)
 end
 
@@ -322,8 +342,21 @@ function CommandOutputView:clear_for_run(command_text, cwd)
 end
 
 function CommandOutputView:append_text(text)
+  local old_scroll_x, old_scroll_to_x = self.scroll.x, self.scroll.to.x
+  local old_scroll_y, old_scroll_to_y = self.scroll.y, self.scroll.to.y
+  local old_last_line = #self.doc.lines
+  local line1, col1, line2, col2 = self.doc:get_selection()
+  local follow_output = line1 == old_last_line and line2 == old_last_line
+
   self.doc:append(text)
-  self:scroll_to_make_visible(#self.doc.lines, math.huge, true)
+
+  if follow_output then
+    self:scroll_to_make_visible(#self.doc.lines, col1, false)
+    self.scroll.x, self.scroll.to.x = old_scroll_x, old_scroll_to_x
+  else
+    self.scroll.x, self.scroll.to.x = old_scroll_x, old_scroll_to_x
+    self.scroll.y, self.scroll.to.y = old_scroll_y, old_scroll_to_y
+  end
   core.redraw = true
 end
 

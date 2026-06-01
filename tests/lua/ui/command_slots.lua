@@ -93,7 +93,7 @@ test.describe("Command Slots", function()
     test.not_ok(doc:is_dirty())
   end)
 
-  test.it("keeps the command output caret pinned to a trailing blank line", function()
+  test.it("only advances command output carets that were on the trailing blank line", function()
     local doc = command_slots.CommandOutputDoc()
     doc:set_text("first")
     test.equal(doc:get_text(1, 1, math.huge, math.huge), "first\n")
@@ -106,7 +106,44 @@ test.describe("Command Slots", function()
     doc:append("\nthird\n")
     test.equal(doc:get_text(1, 1, math.huge, math.huge), "first second\nthird\n")
     test.same({ 3, 1, 3, 1 }, doc.selections)
+
+    doc:set_selection(1, 3, 1, 3)
+    doc:append("fourth\n")
+    test.equal(doc:get_text(1, 1, math.huge, math.huge), "first second\nthird\nfourth\n")
+    test.same({ 1, 3, 1, 3 }, doc.selections)
     test.not_ok(doc:is_dirty())
+  end)
+
+  test.it("preserves command output horizontal scroll while following appended output", function()
+    local view = command_slots.CommandOutputView({ label = "T" })
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 120, 60
+    view.doc:set_text("first")
+    view.scroll.x, view.scroll.to.x = 80, 80
+
+    view:append_text(" second\nthird\n")
+
+    test.equal(view.scroll.x, 80)
+    test.equal(view.scroll.to.x, 80)
+    test.same({ 3, 1, 3, 1 }, view.doc.selections)
+  end)
+
+  test.it("does not scroll command output when the caret is not on the trailing blank line", function()
+    local view = command_slots.CommandOutputView({ label = "T" })
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 120, 60
+    view.doc:set_text("one\ntwo")
+    view.doc:set_selection(1, 2, 1, 2)
+    view.scroll.x, view.scroll.to.x = 80, 80
+    view.scroll.y, view.scroll.to.y = 40, 40
+
+    view:append_text("\nthree\n")
+
+    test.equal(view.scroll.x, 80)
+    test.equal(view.scroll.to.x, 80)
+    test.equal(view.scroll.y, 40)
+    test.equal(view.scroll.to.y, 40)
+    test.same({ 1, 2, 1, 2 }, view.doc.selections)
   end)
 
   test.it("sends payloads to disposable warm PowerShell workers and closes stdin", function()
