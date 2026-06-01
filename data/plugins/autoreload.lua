@@ -90,7 +90,7 @@ core.add_thread(function()
   while true do
     watch:check(function(file)
       for _, doc in ipairs(core.docs) do
-        if doc.abs_filename == file then
+        if common.path_equals(doc.abs_filename, file) then
           local info = system.get_file_info(doc.abs_filename or "")
           if
             info and info.type == "file" and times[doc]

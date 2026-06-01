@@ -720,7 +720,7 @@ function M.open_path_in_side(path, opts)
     local source = opts.source_view or core.active_view
     local view = M.file_view
     if view and not M.contains_view(view) then view = nil end
-    if not view or view.path ~= path then
+    if not view or not common.path_equals(view.path, path) then
       view = ImageView(path)
       if not view.image then
         core.error("Image could not be loaded.%s", view.errmsg and " Error: " .. view.errmsg or "")

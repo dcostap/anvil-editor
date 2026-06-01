@@ -34,13 +34,13 @@ Doc.save = function(self, ...)
   local res = save(self, ...)
   local user = USERDIR .. PATHSEP .. "init.lua"
   local project = core.root_project().path .. PATHSEP .. ".anvil_project.lua"
-  if self.abs_filename == user or self.abs_filename == project then
+  if common.path_equals(self.abs_filename, user) or common.path_equals(self.abs_filename, project) then
     if config.plugins.autorestart.reload_type == "restart" then
       command.perform("core:restart")
     elseif config.plugins.autorestart.reload_type == "reload" then
       core.reload_absolute_module(self.abs_filename)
     elseif config.plugins.autorestart.reload_type == "ask" then
-      local title = self.abs_filename == project
+      local title = common.path_equals(self.abs_filename, project)
         and "Project Configuration Changed"
         or "User Configuration Changed"
       core.add_thread(function()

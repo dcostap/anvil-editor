@@ -227,8 +227,8 @@ end
 
 local function prompt_text_for_directory(dirname)
   local root = core.root_project and core.root_project()
-  if dirname and root and (dirname == root.path or common.path_belongs_to(dirname, root.path)) then
-    if dirname == root.path then return "" end
+  if dirname and root and (common.path_equals(dirname, root.path) or common.path_belongs_to(dirname, root.path)) then
+    if common.path_equals(dirname, root.path) then return "" end
     local rel = common.relative_path(root.path, dirname)
     return common.home_encode(rel) .. PATHSEP
   elseif dirname then

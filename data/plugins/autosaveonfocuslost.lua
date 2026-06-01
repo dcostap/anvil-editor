@@ -1,6 +1,7 @@
 -- mod-version:3
 local config = require "core.config"
 local core = require "core"
+local common = require "core.common"
 local GlobalPromptBar = require "core.global_prompt_bar"
 local DocView = require "core.docview"
 local RootPanel = require "core.rootpanel"
@@ -17,7 +18,8 @@ local function is_protected_doc(doc)
   local init_path = system.absolute_path(USERDIR .. PATHSEP .. "init.lua")
   local project_file = core.project_absolute_path and core.project_absolute_path(".anvil_project.lua")
     or system.absolute_path(".anvil_project.lua")
-  return doc.abs_filename == init_path or doc.abs_filename == project_file
+  return common.path_equals(doc.abs_filename, init_path)
+      or common.path_equals(doc.abs_filename, project_file)
 end
 
 local function save_node_fallback(node)

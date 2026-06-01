@@ -833,15 +833,22 @@ end
 function common.normalize_path(filename)
   if not filename then return end
   local volume
+  local volume_type
   if PATHSEP == '\\' then
     filename = filename:gsub('[/\\]', '\\')
     local drive, rem = filename:match('^([a-zA-Z]:\\)(.*)')
     if drive then
       volume, filename = drive:upper(), rem
+      volume_type = "drive"
     else
-      drive, rem = filename:match('^(\\\\[^\\]+\\[^\\]+\\)(.*)')
-      if drive then
-        volume, filename = drive, rem
+      local unc, unc_rem = filename:match('^(\\\\[^\\]+\\[^\\]+)\\(.*)$')
+      if not unc then
+        unc = filename:match('^(\\\\[^\\]+\\[^\\]+)$')
+        unc_rem = ""
+      end
+      if unc then
+        volume, filename = unc, unc_rem
+        volume_type = "unc"
       end
     end
   else
@@ -866,7 +873,56 @@ function common.normalize_path(filename)
     end
   end
   local npath = table.concat(accu, PATHSEP)
+  if volume_type == "unc" then
+    return npath == "" and volume or (volume .. PATHSEP .. npath)
+  end
+  if volume and npath == "" then return volume end
   return (volume or "") .. (npath == "" and PATHSEP or npath)
+end
+
+
+---Returns a normalized key for comparing path identity.
+---
+---On Windows, filesystem path identity is case-insensitive for the normal
+---project/workspace use cases in Anvil, so the key is folded to lowercase.
+---The key intentionally does not resolve symlinks or short names; it only
+---normalizes separators/dot components and platform case rules.
+---@param filename string|nil
+---@return string|nil
+function common.path_compare_key(filename)
+  if type(filename) ~= "string" then return end
+  if filename == "" then return "" end
+  local raw = filename:gsub('[/\\]', '\\')
+  local raw_trimmed = raw:gsub('\\+$', '')
+  local is_unc_root = false
+  if raw_trimmed:sub(1, 2) == "\\\\" then
+    local share_sep = raw_trimmed:find("\\", 3, true)
+    local child_sep = share_sep and raw_trimmed:find("\\", share_sep + 1, true)
+    is_unc_root = share_sep ~= nil and child_sep == nil and #raw_trimmed > share_sep
+  end
+  local ok, normalized = pcall(common.normalize_path, filename)
+  filename = ok and normalized or filename
+  if PATHSEP == '\\' then
+    filename = filename:gsub('[/\\]', '\\')
+    if is_unc_root and filename:sub(1, 2) ~= "\\\\" then
+      filename = "\\" .. filename
+    end
+    filename = filename:gsub('^(%a:\\)\\+$', '%1')
+    filename = filename:gsub('([^\\])\\+$', '%1')
+    return filename:lower()
+  end
+  filename = filename:gsub('/+$', '')
+  return filename ~= "" and filename or PATHSEP
+end
+
+
+---Compares two paths using platform path identity semantics.
+---@param a string|nil
+---@param b string|nil
+---@return boolean
+function common.path_equals(a, b)
+  local ak, bk = common.path_compare_key(a), common.path_compare_key(b)
+  return ak ~= nil and bk ~= nil and ak == bk
 end
 
 
@@ -886,7 +942,21 @@ end
 ---@param path string The parent path.
 ---@return boolean
 function common.path_belongs_to(filename, path)
-  return string.find(filename, path .. PATHSEP, 1, true) == 1
+  local filename_key = common.path_compare_key(filename)
+  local path_key = common.path_compare_key(path)
+  if not filename_key or not path_key or filename_key == "" or path_key == "" or filename_key == path_key then return false end
+  local prefix = path_key
+  if prefix:sub(-1) ~= PATHSEP then
+    prefix = prefix .. PATHSEP
+  end
+  return filename_key:find(prefix, 1, true) == 1
+end
+
+
+local function path_part_equals(a, b)
+  if a == b then return true end
+  if a == nil or b == nil then return false end
+  return PATHSEP == '\\' and a:lower() == b:lower() or false
 end
 
 
@@ -897,7 +967,7 @@ end
 function common.relative_path(ref_dir, dir)
   local drive_pattern = "^(%a):\\"
   local drive, ref_drive = dir:match(drive_pattern), ref_dir:match(drive_pattern)
-  if drive and ref_drive and drive ~= ref_drive then
+  if drive and ref_drive and not path_part_equals(drive, ref_drive) then
     -- Windows, different drives, system.absolute_path fails for C:\..\D:\
     return dir
   end
@@ -905,7 +975,7 @@ function common.relative_path(ref_dir, dir)
   local dir_ls = split_on_slash(dir)
   local i = 1
   while i <= #ref_ls do
-    if dir_ls[i] ~= ref_ls[i] then
+    if not path_part_equals(dir_ls[i], ref_ls[i]) then
       break
     end
     i = i + 1

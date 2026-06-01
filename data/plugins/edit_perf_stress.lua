@@ -3,6 +3,7 @@
 -- Does nothing unless ANVIL_EDIT_PERF_TEST is truthy.
 local core = require "core"
 local config = require "core.config"
+local common = require "core.common"
 local DocView = require "core.docview"
 local perf = require "core.perf"
 
@@ -38,7 +39,7 @@ local snippets = {
 local function active_docview()
   local view = core.active_view
   if view and view:is(DocView) and view.doc and #view.doc.lines > 0 then
-    if stress.file == "" or view.doc.abs_filename == stress.file then
+    if stress.file == "" or common.path_equals(view.doc.abs_filename, stress.file) then
       return view
     end
   end

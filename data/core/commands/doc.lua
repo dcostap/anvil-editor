@@ -636,7 +636,7 @@ local commands = {
     elseif last_doc and last_doc.filename then
       local dirname, filename = core.last_active_view.doc.abs_filename:match("(.*)[/\\](.+)$")
       text = core.normalize_to_project_dir(dirname) .. PATHSEP
-      if text == core.root_project().path then text = "" end
+      if common.path_equals(text, core.root_project().path) then text = "" end
     end
     core.global_prompt_bar:enter("Save As", {
       text = text,
@@ -663,6 +663,7 @@ local commands = {
 
   ["file:rename"] = function(dv)
     local old_filename = dv.doc.filename
+    local old_abs_filename = dv.doc.abs_filename
     if not old_filename then
       core.error("Cannot rename unsaved doc")
       return
@@ -670,10 +671,14 @@ local commands = {
     core.global_prompt_bar:enter("Rename", {
       text = old_filename,
       submit = function(filename)
-        save(common.home_expand(filename))
+        local expanded_filename = common.home_expand(filename)
+        local new_filename = core.normalize_to_project_dir(expanded_filename)
+        local new_abs_filename = core.project_absolute_path(new_filename)
+        save(expanded_filename)
+        if not common.path_equals(dv.doc.abs_filename, new_abs_filename) then return end
         core.log("Renamed \"%s\" to \"%s\"", old_filename, filename)
-        if filename ~= old_filename then
-          os.remove(old_filename)
+        if not common.path_equals(new_abs_filename, old_abs_filename) then
+          os.remove(old_abs_filename or old_filename)
         end
       end,
       suggest = function (text)

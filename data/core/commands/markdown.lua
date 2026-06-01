@@ -1,5 +1,6 @@
 local core = require "core"
 local command = require "core.command"
+local common = require "core.common"
 local file_context = require "core.file_context"
 local config = require "core.config"
 local DocView = require "core.docview"
@@ -30,7 +31,7 @@ end
 
 local function get_raw_doc_view(path)
   for _, view in ipairs(core.root_panel.root_node:get_children()) do
-    if view:extends(DocView) and view.doc and view.doc.abs_filename == path then
+    if view:extends(DocView) and view.doc and common.path_equals(view.doc.abs_filename, path) then
       return view
     end
   end

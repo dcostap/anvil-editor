@@ -96,15 +96,37 @@ local function save_app_state()
 end
 
 
+local function normalize_project_path(path)
+  if type(path) ~= "string" then return end
+  local abs_path = system.absolute_path(path)
+  return common.normalize_volume(abs_path or path)
+end
+
+
+local function project_arg_path(project)
+  if type(project) == "table" then return project.path end
+  return project
+end
+
+
+local function find_open_project(project)
+  local path = normalize_project_path(project_arg_path(project))
+  if not path then return end
+  for _, cproject in ipairs(core.projects or {}) do
+    if cproject.path and common.path_equals(path, cproject.path) then
+      return cproject
+    end
+  end
+end
+
+
 local function update_recents_project(action, dir_path_abs)
-  local dirname = common.normalize_volume(dir_path_abs)
+  local dirname = normalize_project_path(dir_path_abs)
   if not dirname then return end
   local recents = core.recent_projects
-  local n = #recents
-  for i = 1, n do
-    if dirname == recents[i] then
+  for i = #recents, 1, -1 do
+    if common.path_equals(dirname, recents[i]) then
       table.remove(recents, i)
-      break
     end
   end
   if action == "add" then
@@ -114,10 +136,10 @@ end
 
 
 function core.add_project(project)
-  project = type(project) == "string" and Project(common.normalize_volume(project)) or project
+  project = type(project) == "string" and Project(normalize_project_path(project) or project) or project
   local duplicate = false
   for _, cproject in ipairs(core.projects) do
-    if project.path == cproject.path then
+    if common.path_equals(project.path, cproject.path) then
       duplicate = true
       project = cproject
       core.warn("The project '%s' is already loaded.", common.basename(project.path))
@@ -133,14 +155,15 @@ end
 
 
 function core.remove_project(project, force)
+  local project_path = project_arg_path(project)
   for i = (force and 1 or 2), #core.projects do
-    if project == core.projects[i] or project == core.projects[i].path then
+    if project == core.projects[i] or common.path_equals(project_path, core.projects[i].path) then
       local project = core.projects[i]
       table.remove(core.projects, i)
       if
         core.projects[1]
         and
-        common.normalize_volume(system.getcwd()) == project.path
+        common.path_equals(system.getcwd(), project.path)
       then
         system.chdir(core.projects[1].path)
       end
@@ -168,6 +191,16 @@ function core.open_project_in_same_window(project)
 end
 
 function core.open_project_in_new_window(project)
+  local existing_project = find_open_project(project)
+  if existing_project then
+    core.log_quiet(
+      "Project %q is already open in the current window; raising instead of opening another window",
+      existing_project.path
+    )
+    if core.window then system.raise_window(core.window) end
+    return true
+  end
+
   local exe = EXEFILE or (EXEDIR and (EXEDIR .. PATHSEP .. "anvil.exe")) or "anvil"
 
   -- On Windows, launching detached through core.process can create a visible
@@ -487,14 +520,22 @@ function core.init()
   core.prev_window_mode = core.window_mode
   core.window_size = app_state.window or {800, 600, 0, 0}
 
-  -- remove projects that don't exist any longer
-  local projects_removed = 0;
-  for i, project_dir in ipairs(core.recent_projects) do
-    if not system.get_file_info(project_dir) then
-      table.remove(core.recent_projects, i - projects_removed)
-      projects_removed = projects_removed + 1
+  -- remove projects that don't exist any longer and collapse path-identity
+  -- duplicates such as Windows paths that differ only by case.
+  local recent_projects, seen_recent_projects = {}, {}
+  for _, project_dir in ipairs(core.recent_projects) do
+    local normalized_project_dir = normalize_project_path(project_dir)
+    local key = common.path_compare_key(normalized_project_dir)
+    if
+      normalized_project_dir
+      and not seen_recent_projects[key]
+      and system.get_file_info(normalized_project_dir)
+    then
+      recent_projects[#recent_projects + 1] = normalized_project_dir
+      seen_recent_projects[key] = true
     end
   end
+  core.recent_projects = recent_projects
 
   local project_dir = core.recent_projects[1] or "."
   local project_dir_explicit = false
@@ -512,7 +553,7 @@ function core.init()
           local filename = common.normalize_path(arg_filename)
           local abs_filename = system.absolute_path(filename or "")
           local file_abs
-          if filename == abs_filename then
+          if common.path_equals(filename, abs_filename) then
             file_abs = abs_filename
           else
             file_abs = system.absolute_path(".") .. PATHSEP .. filename
@@ -631,7 +672,7 @@ function core.init()
         local filename = common.normalize_path(arg_filename)
         local abs_filename = system.absolute_path(filename or "")
         local file_abs
-        if filename == abs_filename then
+        if common.path_equals(filename, abs_filename) then
           file_abs = abs_filename
         else
           file_abs = system.absolute_path(".") .. PATHSEP .. filename
@@ -1176,7 +1217,7 @@ function core.reload_absolute_module(filename)
       core.project_module_loaded = true
       if filename:match("%.anvil_project") then
         core.log_quiet("Reloaded project module")
-      elseif filename == USERDIR .. PATHSEP .. "init.lua" then
+      elseif common.path_equals(filename, USERDIR .. PATHSEP .. "init.lua") then
         core.log_quiet("Reloaded user module")
       else
         core.log_quiet("Reloaded module '%s'", filename)
@@ -1189,7 +1230,7 @@ end
 
 function core.set_visited(filename)
   for i = 1, #core.visited_files do
-    if core.visited_files[i] == filename then
+    if common.path_equals(core.visited_files[i], filename) then
       table.remove(core.visited_files, i)
       break
     end
@@ -1327,7 +1368,7 @@ function core.open_doc(filename)
       new_file = true
     end
     for _, doc in ipairs(core.docs) do
-      if doc.abs_filename and abs_filename == doc.abs_filename then
+      if doc.abs_filename and common.path_equals(abs_filename, doc.abs_filename) then
         if close_docview then close_doc_view(doc) end
         return doc
       end
@@ -1364,7 +1405,7 @@ function core.open_image(filename)
 
     local node = core.root_panel:get_active_node_default()
     for i, view in ipairs(node.views) do
-      if view.path == abs_filename then
+      if common.path_equals(view.path, abs_filename) then
         node:set_active_view(node.views[i])
         return view
       end
@@ -1397,7 +1438,7 @@ function core.open_markdown(filename)
 
     local node = core.root_panel:get_active_node_default()
     for i, view in ipairs(node.views) do
-      if view.path == filename then
+      if common.path_equals(view.path, filename) then
         node:set_active_view(node.views[i])
         return view
       end

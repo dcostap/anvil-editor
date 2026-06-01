@@ -200,10 +200,15 @@ test.describe("core.common", function()
         test.equal(common.normalize_path("C:\\Users\\.\\test"), "C:\\Users\\test")
         test.equal(common.normalize_path("C:\\Users\\username\\..\\test"), "C:\\Users\\test")
         test.equal(common.normalize_path("C:/Users/username/test"), "C:\\Users\\username\\test")
+        test.equal(common.normalize_path("C:\\"), "C:\\")
+        test.equal(common.normalize_path("\\\\server\\share"), "\\\\server\\share")
+        test.equal(common.normalize_path("\\\\server\\share\\"), "\\\\server\\share")
+        test.equal(common.normalize_path("\\\\server\\share\\folder"), "\\\\server\\share\\folder")
         test.error(function()
           common.normalize_path("C:\\..\\test")
         end)
       else
+        test.equal(common.normalize_path("/"), "/")
         test.equal(common.normalize_path("/home/./username/./test"), "/home/username/test")
         test.equal(common.normalize_path("/home/username/../test"), "/home/test")
         test.equal(common.normalize_path("../test"), "../test")
@@ -218,6 +223,15 @@ test.describe("core.common", function()
       local target = join_path(context.temp_root, "testdir", "file.lua")
       test.equal(common.relative_path(base, target), join_path("testdir", "file.lua"))
       test.equal(common.relative_path(base, base), ".")
+    end)
+
+    test.test("uses case-insensitive Windows path identity", function()
+      if PLATFORM == "Windows" then
+        test.equal(
+          common.relative_path("C:\\Projects\\GLP4", "c:\\projects\\glp4\\src\\main.lua"),
+          "src\\main.lua"
+        )
+      end
     end)
 
     test.test("preserves Windows paths on different drives", function()
@@ -242,6 +256,25 @@ test.describe("core.common", function()
         test.is_nil(common.is_absolute_path("home/username/test/file.lua"))
         test.is_nil(common.is_absolute_path("./test/file.lua"))
       end
+    end)
+  end)
+
+  test.describe("path identity", function()
+    test.test("compares Windows paths case-insensitively", function()
+      if PLATFORM == "Windows" then
+        test.ok(common.path_equals("C:\\Projects\\GLP4", "c:\\projects\\glp4\\"))
+        test.ok(common.path_equals("\\\\Server\\Share", "\\\\server\\share\\"))
+        test.ok(common.path_belongs_to("C:\\Projects\\GLP4\\src\\main.lua", "c:\\projects\\glp4"))
+      else
+        test.ok(not common.path_equals("/Projects/GLP4", "/projects/glp4"))
+        test.ok(not common.path_belongs_to("/Projects/GLP4/src/main.lua", "/projects/glp4"))
+      end
+    end)
+
+    test.test("does not treat empty paths as directory roots", function()
+      test.ok(common.path_equals("", ""))
+      test.ok(not common.path_equals("", PATHSEP))
+      test.ok(not common.path_belongs_to(PATHSEP .. "tmp", ""))
     end)
   end)
 

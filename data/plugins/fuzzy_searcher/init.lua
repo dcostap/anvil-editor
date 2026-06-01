@@ -309,9 +309,10 @@ local function get_recent_projects()
   local out, seen = {}, {}
   for _, path in ipairs(core.recent_projects or {}) do
     path = common.normalize_path(path)
-    if path and path ~= "" and not seen[path] then
+    local key = common.path_compare_key(path)
+    if path and path ~= "" and key and not seen[key] then
       out[#out+1] = path
-      seen[path] = true
+      seen[key] = true
     end
   end
   return out
@@ -334,6 +335,11 @@ local function remember_project_open(path, when)
   if type(path) == "table" then path = path.path end
   path = common.normalize_path(path)
   if not path or path == "" then return end
+  for existing in pairs(recent_project_times) do
+    if existing ~= path and common.path_equals(existing, path) then
+      recent_project_times[existing] = nil
+    end
+  end
   recent_project_times[path] = when or os.time()
   save_recent_project_times()
 end

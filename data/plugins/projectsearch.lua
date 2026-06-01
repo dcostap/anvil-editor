@@ -956,7 +956,7 @@ function ResultsView:begin_replace()
             self.results_list:apply_replacement(value)
             local item = self.results_list.items[value]
             for _, doc in ipairs(core.docs) do
-              if doc.abs_filename and item.file.path == doc.abs_filename then
+              if doc.abs_filename and common.path_equals(item.file.path, doc.abs_filename) then
                 doc:reload()
               end
             end

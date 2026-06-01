@@ -110,7 +110,7 @@ end
 
 local function same_file_or_doc(a, b)
   if not a or not b then return false end
-  if a.filename and b.filename then return a.filename == b.filename end
+  if a.filename and b.filename then return common.path_equals(a.filename, b.filename) end
   return a.doc and b.doc and a.doc == b.doc
 end
 

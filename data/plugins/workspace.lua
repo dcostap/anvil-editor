@@ -6,11 +6,20 @@ local storage = require "core.storage"
 
 local STORAGE_MODULE = "ws"
 
+local function workspace_key_matches_basename(key, basename)
+  local prefix = key:sub(1, #basename)
+  if PATHSEP == "\\" then
+    return prefix:lower() == basename:lower()
+  end
+  return prefix == basename
+end
+
+
 local function workspace_keys_for(project_dir)
   local basename = common.basename(project_dir)
   return coroutine.wrap(function()
     for _, key in ipairs(storage.keys(STORAGE_MODULE) or {}) do
-      if key:sub(1, #basename) == basename then
+      if workspace_key_matches_basename(key, basename) then
         local id = tonumber(key:sub(#basename + 1):match("^-(%d+)$"))
         if id then
           coroutine.yield(key, id)
@@ -24,7 +33,7 @@ end
 local function consume_workspace(project_dir)
   for key, id in workspace_keys_for(project_dir) do
     local workspace = storage.load(STORAGE_MODULE, key)
-    if workspace and workspace.path == project_dir then
+    if workspace and common.path_equals(workspace.path, project_dir) then
       storage.clear(STORAGE_MODULE, key)
       return workspace
     end

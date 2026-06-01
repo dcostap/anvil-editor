@@ -47,7 +47,8 @@ local function is_protected_doc(doc)
   local init_path = system.absolute_path(USERDIR .. PATHSEP .. "init.lua")
   local project_file = core.project_absolute_path and core.project_absolute_path(".anvil_project.lua")
     or system.absolute_path(".anvil_project.lua")
-  return doc.abs_filename == init_path or doc.abs_filename == project_file
+  return common.path_equals(doc.abs_filename, init_path)
+      or common.path_equals(doc.abs_filename, project_file)
 end
 
 local function is_untitled_doc(doc)
@@ -137,7 +138,7 @@ end
 
 local function doc_is_open(abs_filename)
   for _, open_doc in ipairs(core.docs or {}) do
-    if open_doc.abs_filename == abs_filename then return true end
+    if common.path_equals(open_doc.abs_filename, abs_filename) then return true end
   end
   return false
 end
@@ -527,7 +528,7 @@ local save = Doc.save
 function Doc:save(filename, abs_filename)
   local was_untitled = is_untitled_doc(self)
   local saving_current_file = not filename
-    or (self.abs_filename and abs_filename and self.abs_filename == abs_filename)
+    or (self.abs_filename and abs_filename and common.path_equals(self.abs_filename, abs_filename))
   if saving_current_file
      and self.filename
      and not self.autosave_ignore_next_conflict

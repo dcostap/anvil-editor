@@ -289,7 +289,7 @@ prompt_stale_backup = function(filename)
         if ok then
           os.remove(backup)
           for _, doc in ipairs(core.docs or {}) do
-            if doc.abs_filename == filename then
+            if common.path_equals(doc.abs_filename, filename) then
               local loaded, load_err = pcall(doc.load, doc, filename)
               if loaded then
                 doc:clean()

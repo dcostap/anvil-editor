@@ -14,8 +14,8 @@ local Project = Object:extend()
 
 ---Constructor
 function Project:new(path)
-  self.path = path
-  self.name = common.basename(path)
+  self.path = common.normalize_volume(common.normalize_path(path) or path)
+  self.name = common.basename(self.path)
   self:compile_ignore_files()
 end
 

@@ -278,15 +278,19 @@ local function count_direct_children(path, show_hidden, yield_budget)
   return folders, files
 end
 
+local function path_key(path)
+  return common.path_compare_key(path) or tostring(path)
+end
+
 local function in_project(abs, project_root)
-  return abs == project_root or common.path_belongs_to(abs, project_root)
+  return common.path_equals(abs, project_root) or common.path_belongs_to(abs, project_root)
 end
 
 local function update_open_docs_after_rename(old_abs, new_abs, entry_type)
   for _, doc in ipairs(core.docs) do
     local filename = doc.abs_filename
     local mapped
-    if filename == old_abs then
+    if common.path_equals(filename, old_abs) then
       mapped = new_abs
     elseif entry_type == "dir" and filename and common.path_belongs_to(filename, old_abs) then
       mapped = new_abs .. filename:sub(#old_abs + 1)
@@ -316,7 +320,8 @@ local function op_path(path)
 end
 
 local function is_rename_op(op)
-  return common.dirname(op.from) == common.dirname(op.to)
+  local from_dir, to_dir = common.dirname(op.from), common.dirname(op.to)
+  return from_dir == to_dir or common.path_equals(from_dir, to_dir)
 end
 
 local function clone_meta(meta, seen)
@@ -574,15 +579,16 @@ end
 
 local function ordered_moves_or_cycle(moves)
   local by_from = {}
-  for _, op in ipairs(moves or {}) do by_from[op.from] = op end
+  for _, op in ipairs(moves or {}) do by_from[path_key(op.from)] = op end
 
   local ordered, visiting, visited = {}, {}, {}
   local function visit(op)
-    if visited[op.from] then return true end
-    if visiting[op.from] then
+    local from_key = path_key(op.from)
+    if visited[from_key] then return true end
+    if visiting[from_key] then
       return nil, "move cycle detected involving " .. op_path(op.from) .. " -> " .. op_path(op.to), op
     end
-    visiting[op.from] = true
+    visiting[from_key] = true
 
     -- If this move targets another source, or a descendant of another source,
     -- that source must be vacated first. If this move's source is inside a
@@ -591,7 +597,7 @@ local function ordered_moves_or_cycle(moves)
     -- rejecting ancestor cycles like A->B, B->A/child.
     for dep_from, dep in pairs(by_from) do
       local needs_dep = dep ~= op and (
-        op.to == dep_from
+        common.path_equals(op.to, dep_from)
         or common.path_belongs_to(op.to, dep_from)
         or common.path_belongs_to(op.from, dep.to)
       )
@@ -601,8 +607,8 @@ local function ordered_moves_or_cycle(moves)
       end
     end
 
-    visiting[op.from] = nil
-    visited[op.from] = true
+    visiting[from_key] = nil
+    visited[from_key] = true
     ordered[#ordered + 1] = op
     return true
   end
@@ -650,7 +656,7 @@ local function recover_known_line_meta(view)
         local abs = system.absolute_path(path_join(parent.abs, parsed.name))
           or common.normalize_path(path_join(parent.abs, parsed.name))
         local meta = type(view.line_meta[i]) == "table" and view.line_meta[i] or nil
-        local known = view.known_originals[abs]
+        local known = view.known_originals[path_key(abs)]
         local entry_type = parsed.wants_dir and "dir"
           or (meta and meta.original_type)
           or (known and known.type)
@@ -981,11 +987,11 @@ function FileTreeView:sync_meta()
 end
 
 function FileTreeView:remember_original(item)
-  self.known_originals[item.abs] = { abs = item.abs, type = item.type }
+  self.known_originals[path_key(item.abs)] = { abs = item.abs, type = item.type }
 end
 
 function FileTreeView:capture_expanded_paths()
-  if self.rendered_dir ~= self.current_dir then return {} end
+  if self.rendered_dir ~= self.current_dir and not common.path_equals(self.rendered_dir, self.current_dir) then return {} end
 
   local expanded = {}
   local entries = self:build_entries(false)
@@ -1001,7 +1007,7 @@ function FileTreeView:add_reveal_paths(expanded, paths)
   for _, target in ipairs(paths or {}) do
     if target and in_project(target, self.current_dir) then
       local dir = parent_dir(target)
-      while dir and dir ~= self.current_dir and in_project(dir, self.current_dir) do
+      while dir and not common.path_equals(dir, self.current_dir) and in_project(dir, self.current_dir) do
         expanded[dir] = true
         dir = parent_dir(dir)
       end
@@ -1012,7 +1018,7 @@ end
 function FileTreeView:restore_expanded_paths(expanded)
   local paths = {}
   for path in pairs(expanded or {}) do
-    if path ~= self.current_dir then paths[#paths + 1] = path end
+    if not common.path_equals(path, self.current_dir) then paths[#paths + 1] = path end
   end
   table.sort(paths, function(a, b)
     local da, db = path_depth(a), path_depth(b)
@@ -1023,7 +1029,7 @@ function FileTreeView:restore_expanded_paths(expanded)
   for _, path in ipairs(paths) do
     local entries = self:build_entries(false)
     for _, entry in ipairs(entries) do
-      if entry.abs == path and entry.type == "dir" then
+      if common.path_equals(entry.abs, path) and entry.type == "dir" then
         local meta = self.line_meta[entry.line]
         if type(meta) == "table" and not meta.expanded and system.get_file_info(path) then
           self:expand_folder(entry.line, entry, false)
@@ -1066,14 +1072,14 @@ function FileTreeView:restore_selection_paths(snapshot)
 
   local entries = self:build_entries(false)
   local by_abs = {}
-  for _, entry in ipairs(entries) do by_abs[entry.abs] = entry end
+  for _, entry in ipairs(entries) do by_abs[path_key(entry.abs)] = entry end
 
   local function restore(selections, last_selection)
     local restored = {}
     local primary_line, primary_col
     for idx, selection in ipairs(selections) do
-      local entry1 = by_abs[selection.line1_abs]
-      local entry2 = by_abs[selection.line2_abs]
+      local entry1 = by_abs[path_key(selection.line1_abs)]
+      local entry2 = by_abs[path_key(selection.line2_abs)]
       if not entry1 or not entry2 then return false end
       restored[#restored + 1] = entry1.line
       restored[#restored + 1] = selection.col1
@@ -1719,8 +1725,9 @@ function FileTreeView:plan_changes(status_only)
 
   local by_abs = {}
   for _, e in ipairs(entries) do
-    by_abs[e.abs] = by_abs[e.abs] or {}
-    table.insert(by_abs[e.abs], e)
+    local key = path_key(e.abs)
+    by_abs[key] = by_abs[key] or {}
+    table.insert(by_abs[key], e)
   end
   for _, list in pairs(by_abs) do
     if #list > 1 then
@@ -1730,14 +1737,19 @@ function FileTreeView:plan_changes(status_only)
 
   local explicit_sources = {}
   for _, e in ipairs(entries) do
-    if e.original_abs then explicit_sources[e.original_abs] = true end
+    if e.original_abs then explicit_sources[path_key(e.original_abs)] = true end
   end
 
   local groups = {}
   local creates = {}
   local function add_group(src, e)
-    groups[src] = groups[src] or {}
-    groups[src][#groups[src] + 1] = e
+    local key = path_key(src)
+    local group = groups[key]
+    if not group then
+      group = { src = src, entries = {} }
+      groups[key] = group
+    end
+    group.entries[#group.entries + 1] = e
   end
 
   for _, e in ipairs(entries) do
@@ -1747,9 +1759,10 @@ function FileTreeView:plan_changes(status_only)
 
       -- If metadata was lost but the row still names a known original at the
       -- same path, treat it as that original instead of a conflicting create.
-      local known = self.known_originals[e.abs]
-      if not src and known and known.type == e.type and not explicit_sources[e.abs] then
-        src, src_type = e.abs, known.type
+      local entry_key = path_key(e.abs)
+      local known = self.known_originals[entry_key]
+      if not src and known and known.type == e.type and not explicit_sources[entry_key] then
+        src, src_type = known.abs, known.type
       end
 
       if src then
@@ -1759,7 +1772,7 @@ function FileTreeView:plan_changes(status_only)
           add_group(src, e)
         end
       else
-        local replaces_existing = explicit_sources[e.abs]
+        local replaces_existing = explicit_sources[path_key(e.abs)]
         if system.get_file_info(e.abs) and not replaces_existing then
           mark_invalid(e, "target already exists: " .. op_path(e.abs))
         else
@@ -1783,25 +1796,26 @@ function FileTreeView:plan_changes(status_only)
   local copies, moves, trashes = {}, {}, {}
   local seen_sources = {}
   local vacated_sources = {}
-  for src, list in pairs(groups) do
-    if self.known_originals[src] then
+  for _, group in pairs(groups) do
+    local src, list = group.src, group.entries
+    if self.known_originals[path_key(src)] then
       local kept_original = false
       for _, e in ipairs(list) do
-        if e.abs == src then kept_original = true; break end
+        if common.path_equals(e.abs, src) then kept_original = true; break end
       end
-      if not kept_original and system.get_file_info(src) then vacated_sources[src] = true end
+      if not kept_original and system.get_file_info(src) then vacated_sources[path_key(src)] = src end
     end
   end
 
   local function check_target(op, e, allow_vacated_target)
-    if op.to == op.from then return false end
+    if common.path_equals(op.to, op.from) then return false end
     if op.type == "dir" and common.path_belongs_to(op.to, op.from) then
       mark_invalid(e, "cannot move/copy a folder into itself: " .. op_path(op.from) .. " -> " .. op_path(op.to))
       return false
     end
-    local target_vacated = vacated_sources[op.to]
+    local target_vacated = vacated_sources[path_key(op.to)] ~= nil
     if allow_vacated_target and not target_vacated then
-      for vacated in pairs(vacated_sources) do
+      for _, vacated in pairs(vacated_sources) do
         if common.path_belongs_to(op.to, vacated) then target_vacated = true; break end
       end
     end
@@ -1812,18 +1826,19 @@ function FileTreeView:plan_changes(status_only)
     return true
   end
 
-  for src, list in pairs(groups) do
-    seen_sources[src] = true
+  for _, group in pairs(groups) do
+    local src, list = group.src, group.entries
+    seen_sources[path_key(src)] = true
     table.sort(list, function(a, b) return (a.line or 0) < (b.line or 0) end)
 
-    local orig = self.known_originals[src]
+    local orig = self.known_originals[path_key(src)]
     local source_known_here = orig ~= nil
     local source_type = (orig and orig.type) or (list[1] and list[1].original_type) or (list[1] and list[1].type)
 
     local kept_original
     local changed = {}
     for _, e in ipairs(list) do
-      if e.abs == src then
+      if common.path_equals(e.abs, src) then
         kept_original = e
       else
         changed[#changed + 1] = e
@@ -1879,8 +1894,9 @@ function FileTreeView:plan_changes(status_only)
     end
   end
 
-  for abs, orig in pairs(self.known_originals) do
-    if not seen_sources[abs] then
+  for _, orig in pairs(self.known_originals) do
+    local abs = orig.abs
+    if not seen_sources[path_key(abs)] then
       trashes[#trashes + 1] = { abs = abs, type = orig.type }
     end
   end
@@ -1952,7 +1968,7 @@ function FileTreeView:plan_changes(status_only)
       if parent.type == "dir" and common.path_belongs_to(op.from, parent.from) then
         local suffix = op.from:sub(#parent.from + 1)
         local mapped = parent.to .. suffix
-        if op.to == mapped then
+        if common.path_equals(op.to, mapped) then
           skip = true
         else
           op.from = mapped
@@ -1969,13 +1985,13 @@ function FileTreeView:plan_changes(status_only)
   -- the parent's new location after the parent move.
   table.sort(moves, function(a, b) return #a.from > #b.from end)
   local move_from = {}
-  for _, op in ipairs(moves) do move_from[op.from] = true end
+  for _, op in ipairs(moves) do move_from[path_key(op.from)] = true end
   for _, e in ipairs(entries) do
-    if e.original_abs and e.abs == e.original_abs and not move_from[e.original_abs] then
+    if e.original_abs and common.path_equals(e.abs, e.original_abs) and not move_from[path_key(e.original_abs)] then
       for _, parent in ipairs(moves) do
         if parent.type == "dir" and common.path_belongs_to(e.original_abs, parent.from) then
           local mapped = parent.to .. e.original_abs:sub(#parent.from + 1)
-          if mapped ~= e.abs then
+          if not common.path_equals(mapped, e.abs) then
             moves[#moves + 1] = {
               from = mapped,
               to = e.abs,
@@ -1985,7 +2001,7 @@ function FileTreeView:plan_changes(status_only)
               parent_line = e.parent_line,
             }
             status[draw_line(e)] = status[draw_line(e)] or "modification"
-            move_from[e.original_abs] = true
+            move_from[path_key(e.original_abs)] = true
           end
           break
         end
@@ -2005,8 +2021,8 @@ function FileTreeView:plan_changes(status_only)
     if copy.type == "dir" then
       for _, e in ipairs(entries) do
         local copied_child = e.original_abs
-          and (e.original_abs == copy.from or common.path_belongs_to(e.original_abs, copy.from))
-        if e.abs ~= copy.to and common.path_belongs_to(e.abs, copy.to) and copied_child then
+          and (common.path_equals(e.original_abs, copy.from) or common.path_belongs_to(e.original_abs, copy.from))
+        if not common.path_equals(e.abs, copy.to) and common.path_belongs_to(e.abs, copy.to) and copied_child then
           expanded_copy_dirs[copy] = true
           creates[#creates + 1] = {
             path = copy.to,
@@ -2029,7 +2045,7 @@ function FileTreeView:plan_changes(status_only)
     for _, parent in ipairs(filtered_copies) do
       if parent.type == "dir" and common.path_belongs_to(op.from, parent.from) then
         local suffix = op.from:sub(#parent.from + 1)
-        if op.to == parent.to .. suffix then
+        if common.path_equals(op.to, parent.to .. suffix) then
           skip = true
           break
         end
@@ -2043,7 +2059,7 @@ function FileTreeView:plan_changes(status_only)
   table.sort(moves, function(a, b) return #a.from > #b.from end)
   for _, trash in ipairs(trashes) do
     for _, move in ipairs(moves) do
-      if trash.abs == move.from or common.path_belongs_to(trash.abs, move.from) then
+      if common.path_equals(trash.abs, move.from) or common.path_belongs_to(trash.abs, move.from) then
         trash.abs = move.to .. trash.abs:sub(#move.from + 1)
         break
       end
@@ -2057,7 +2073,7 @@ function FileTreeView:plan_changes(status_only)
   for _, copy in ipairs(copies) do
     local apply_from = copy.from
     for _, move in ipairs(ordered_for_mapping) do
-      if apply_from == move.from or common.path_belongs_to(apply_from, move.from) then
+      if common.path_equals(apply_from, move.from) or common.path_belongs_to(apply_from, move.from) then
         apply_from = move.to .. apply_from:sub(#move.from + 1)
       end
     end
@@ -2641,7 +2657,7 @@ end
 local function find_entry(filename)
   local entries = view:build_entries(false)
   for _, entry in ipairs(entries) do
-    if entry.abs == filename then return entry end
+    if common.path_equals(entry.abs, filename) then return entry end
   end
 end
 
@@ -2680,7 +2696,7 @@ local function focus_file(filename)
   if not in_project(filename, view.current_dir) then
     view.current_dir = root.path
   end
-  if view.rendered_dir ~= view.current_dir then
+  if view.rendered_dir ~= view.current_dir and not common.path_equals(view.rendered_dir, view.current_dir) then
     view:refresh(false, true, { filename })
     refreshed = true
   else

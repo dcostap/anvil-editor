@@ -283,7 +283,7 @@ end
 
 local function same_navigation_place(a, b)
   return a and b
-     and a.filename == b.filename
+     and common.path_equals(a.filename, b.filename)
      and a.line == b.line
      and math.abs(a.col - b.col) <= 2
 end
@@ -332,7 +332,7 @@ function Node:set_active_view(view)
   local before = current_navigation_place()
   local result = node_set_active_view(self, view)
   local after = current_navigation_place()
-  if before and after and before.filename ~= after.filename then
+  if before and after and not common.path_equals(before.filename, after.filename) then
     push_navigation_place(navigation_back_stack, before)
     navigation_forward_stack = {}
   end

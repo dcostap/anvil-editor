@@ -76,7 +76,7 @@ local function open_file(use_dialog, label, selection_callback, allow_directorie
     validate = function(text)
       -- strip double quotes in case the user pasted the path
       text = text:gsub("^\"*(.-)\"*$", "%1", 1)
-      filename = root_dir == core.root_project().path and
+      filename = common.path_equals(root_dir, core.root_project().path) and
         core.root_project():absolute_path(
           common.home_expand(text)
         ) or system.absolute_path(
@@ -148,7 +148,7 @@ end
 
 local function change_project_directory(use_dialog)
   open_directory("Change Project Folder", use_dialog, false, function(abs_path)
-    if abs_path[1] == core.root_project().path then return end
+    if common.path_equals(abs_path[1], core.root_project().path) then return end
     core.confirm_close_docs(core.docs, function(dirpath)
       core.open_project_in_same_window(dirpath)
     end, abs_path[1])
@@ -157,7 +157,7 @@ end
 
 local function open_project_directory(use_dialog)
   open_directory("Open Project", use_dialog, false, function(abs_path)
-    if abs_path[1] == core.root_project().path then
+    if common.path_equals(abs_path[1], core.root_project().path) then
       core.error("Directory %q is currently opened", abs_path[1])
       return
     end
