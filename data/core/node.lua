@@ -393,6 +393,12 @@ function Node:get_visible_tabs_number()
   local remaining = #self.views - self.tab_offset + 1
   if remaining <= 0 then return 0 end
 
+  local centered_editor = core.centered_editor
+  local view = self.active_view
+  if centered_editor and centered_editor.should_center and centered_editor.should_center(view) then
+    return remaining
+  end
+
   local available = self.size.x
   if self:get_tabs_width(self.tab_offset, #self.views) > available then
     available = math.max(1, available - get_scroll_button_width() * 2)
@@ -535,17 +541,19 @@ end
 ---@return number h Height
 ---@return number margin_y Top margin
 function Node:get_tab_rect(idx)
-  local maxw = self.size.x
-  local visible_count = self:get_visible_tabs_number()
-  local visible_last = math.min(#self.views, self.tab_offset + visible_count - 1)
-  local visible_width = self:get_tabs_width(self.tab_offset, visible_last)
-  local scroll_width = #self.views > visible_count and get_scroll_button_width() * 2 or 0
-  local available = math.max(0, maxw - scroll_width)
-  local centered_offset = math.max(0, (available - visible_width) / 2)
-  local x0 = self.position.x + centered_offset
-  local before = self:get_tabs_width(self.tab_offset, idx - 1)
-  local x1 = x0 + common.clamp(before, 0, maxw)
-  local x2 = x0 + common.clamp(before + self:get_tab_width(idx), 0, maxw)
+  local tabs_width = self:get_tabs_width(1, #self.views)
+  local x0 = self.position.x
+  local centered_tabs = false
+  local centered_editor = core.centered_editor
+  local view = self.active_view
+  if centered_editor and centered_editor.should_center and centered_editor.should_center(view) then
+    local lane_x, lane_width = centered_editor.get_lane_rect(view)
+    x0 = tabs_width > lane_width and lane_x + (lane_width - tabs_width) / 2 or lane_x
+    centered_tabs = true
+  end
+  local before = self:get_tabs_width(1, idx - 1) - (centered_tabs and 0 or self.tab_shift)
+  local x1 = x0 + before
+  local x2 = x1 + self:get_tab_width(idx)
   local h, pad_y, margin_y = get_tab_y_sizes()
   return x1, self.position.y, x2 - x1, h, margin_y
 end
@@ -691,6 +699,11 @@ end
 ---Ensure the active view's tab is visible (not scrolled out of view).
 ---Adjusts tab_offset if needed to bring active tab into view.
 function Node:scroll_tabs_to_visible()
+  local centered_editor = core.centered_editor
+  if centered_editor and centered_editor.should_center and centered_editor.should_center(self.active_view) then
+    self.tab_offset = 1
+    return
+  end
   local index = self:get_view_idx(self.active_view)
   if index then
     local tabs_number = self:get_visible_tabs_number()
@@ -744,7 +757,9 @@ function Node:update()
     call_view_method(view, view.update)
     view._core_step_first_update = true
     self:tab_hovered_update(core.root_panel.mouse.x, core.root_panel.mouse.y)
-    self:move_towards("tab_shift", self:target_tab_shift(), nil, "tabs")
+    local centered_editor = core.centered_editor
+    local centered_tabs = centered_editor and centered_editor.should_center and centered_editor.should_center(view)
+    self:move_towards("tab_shift", centered_tabs and 0 or self:target_tab_shift(), nil, "tabs")
   else
     self.a:update()
     self.b:update()
