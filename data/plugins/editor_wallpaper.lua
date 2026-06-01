@@ -65,7 +65,6 @@ local function draw_wallpaper_region(x, y, w, h, opacity)
   local iy = ry + (rh - ih) / 2
   core.push_clip_rect(x, y, w, h)
   renderer.draw_canvas(img, ix, iy)
-  renderer.draw_rect(x, y, w, h, color_with_alpha(style.background, math.floor(255 * (1 - (opacity or wallpaper.opacity)))))
   core.pop_clip_rect()
 end
 

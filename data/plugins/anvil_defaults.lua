@@ -2,6 +2,7 @@
 -- Anvil first-party defaults, promoted from the old ~/.config/anvil/init.lua.
 local core = require "core"
 local config = require "core.config"
+config.plugins.editor_wallpaper = false
 local style = require "core.style"
 -- Theme.
 core.reload_module("colors.onedark")
@@ -12,7 +13,7 @@ core.reload_module("plugins.global_prompt_bar_sanitize")
 require "plugins.intellij_find"
 require "plugins.untitled_tabs"
 core.reload_module("plugins.scale_debug_log")
-require "plugins.editor_wallpaper"
+-- require "plugins.editor_wallpaper"
 require "plugins.centered_editor"
 require "plugins.custom_welcome"
 if core.intellij_actions_disable_conflict_shortcuts then
@@ -49,9 +50,9 @@ if PLATFORM == "Windows" then
   config.borderless = true
   config.integrated_titlebar_tabs = false
 end
--- Cleaner tabs: hide cramped close buttons and keep a roomier minimum tab width.
+-- Cleaner tabs: hide cramped close buttons and keep a compact tab width.
 config.tab_close_button = false
-style.tab_width = 250 * SCALE
+style.tab_width = 110 * SCALE
 -- Keep the official autosave plugin disabled if it ever gets installed later.
 config.plugins.autosave = false
 -- Re-apply local shortcuts after plugins that append their own bindings.

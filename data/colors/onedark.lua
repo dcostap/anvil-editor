@@ -75,7 +75,7 @@ local C = {
 }
 
 -- Core UI
-style.background = c(C.text_bg)
+style.background = c("1c1e26")
 style.background2 = c("26282b")
 style.background3 = c(C.text_bg)
 style.text = c(C.text_fg)

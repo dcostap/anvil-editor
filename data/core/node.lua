@@ -762,9 +762,8 @@ end
 function Node:draw_tab_title(view, font, is_active, is_hovered, x, y, w, h)
   local text = view and view:get_name() or ""
   local dots_width = font:get_width("…")
-  local align = "center"
+  local align = "left"
   if font:get_width(text) > w then
-    align = "left"
     local text_len = text:ulen()
     for i = 1, text_len do
       local reduced_text = text:usub(1, text_len - i)
@@ -836,7 +835,7 @@ function Node:draw_tab(view, is_active, is_hovered, is_close_hovered, x, y, w, h
     common.draw_text(style.icon_font, close_style, "C", nil, cx, y, cw, h)
   end
   -- Title
-  x = x + cpad
+  x = x + cpad + style.padding.x
   w = cx - x
   core.push_clip_rect(x, y, w, h)
   self:draw_tab_title(view, style.font, is_active, is_hovered, x, y, w, h)
