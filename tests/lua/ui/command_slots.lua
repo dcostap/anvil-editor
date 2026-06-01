@@ -1,8 +1,11 @@
 local core = require "core"
 local command = require "core.command"
+local config = require "core.config"
 local process = require "core.process"
+local sidepanel = require "core.sidepanel"
 local storage = require "core.storage"
 local test = require "core.test"
+local View = require "core.view"
 
 local command_slots = require "plugins.command_slots"
 
@@ -15,6 +18,7 @@ end
 test.describe("Command Slots", function()
   test.before_each(function(context)
     context.previous_active_view = core.active_view
+    context.previous_powershell_candidates = config.plugins.command_slots.powershell_candidates
     clear_prompt()
     storage.clear("command-slots")
     command_slots._reset_for_tests()
@@ -24,6 +28,7 @@ test.describe("Command Slots", function()
     clear_prompt()
     command_slots._reset_for_tests()
     storage.clear("command-slots")
+    config.plugins.command_slots.powershell_candidates = context.previous_powershell_candidates
     if context.previous_active_view then
       core.set_active_view(context.previous_active_view)
     end
@@ -144,6 +149,77 @@ test.describe("Command Slots", function()
     test.equal(view.scroll.y, 40)
     test.equal(view.scroll.to.y, 40)
     test.same({ 1, 2, 1, 2 }, view.doc.selections)
+  end)
+
+  test.it("shows one tabbed Command Output panel without stealing Main Panel focus", function()
+    config.plugins.command_slots.powershell_candidates = {}
+    if sidepanel.is_side_view(core.active_view) then
+      sidepanel.focus_main(false)
+    end
+    local previous = core.active_view
+
+    test.ok(command_slots.run_command(1, "Write-Output 'one'"))
+
+    test.equal(core.active_view, previous)
+    test.ok(command_slots.output_panel and command_slots.output_panel.command_output_panel)
+    test.ok(sidepanel.contains_view(command_slots.output_panel))
+    test.equal(command_slots.output_panel.active_slot_index, 1)
+    test.equal(command_slots.slots[1].view:get_name(), "A: Write-Output 'one'")
+    test.equal(command_slots.output_panel:slot_view(command_slots.slots[2]):get_name(), "S: No commands")
+  end)
+
+  test.it("focuses Command Output when a command is run from another Side Panel view", function()
+    config.plugins.command_slots.powershell_candidates = {}
+    local dummy = View()
+    sidepanel.register_panel("command-slots-test-side", dummy)
+    sidepanel.show("command-slots-test-side", { focus = true })
+    test.equal(core.active_view, dummy)
+
+    test.ok(command_slots.run_command(2, "Write-Output 'side'"))
+
+    test.ok(core.active_view and core.active_view.command_output_view)
+    test.equal(core.active_view.slot.index, 2)
+    test.equal(command_slots.output_panel.active_slot_index, 2)
+    sidepanel.remove_view(dummy, false)
+  end)
+
+  test.it("navigates per-slot Command Output History and new runs switch to newest", function()
+    config.plugins.command_slots.powershell_candidates = {}
+
+    test.ok(command_slots.run_command(1, "Write-Output 'first'"))
+    test.ok(command_slots.run_command(1, "Write-Output 'second'"))
+    local slot = command_slots.slots[1]
+    core.set_active_view(slot.view)
+
+    test.contains(slot.view.doc:get_text(1, 1, math.huge, math.huge), "second")
+    test.ok(command.perform("command-slots:history-previous"))
+    test.contains(slot.view.doc:get_text(1, 1, math.huge, math.huge), "first")
+    test.equal(slot.output_history_index, 1)
+
+    test.ok(command.perform("command-slots:history-next"))
+    test.contains(slot.view.doc:get_text(1, 1, math.huge, math.huge), "second")
+    test.equal(slot.output_history_index, 2)
+
+    test.ok(command.perform("command-slots:history-previous"))
+    test.contains(slot.view.doc:get_text(1, 1, math.huge, math.huge), "first")
+    test.ok(command_slots.run_command(1, "Write-Output 'third'"))
+    test.contains(slot.view.doc:get_text(1, 1, math.huge, math.huge), "third")
+    test.equal(slot.output_history_index, #slot.output_history)
+  end)
+
+  test.it("root tab switching commands switch Command Output tabs internally", function()
+    config.plugins.command_slots.powershell_candidates = {}
+
+    test.ok(command_slots.run_command(1, "Write-Output 'first'"))
+    local panel = command_slots.output_panel
+    panel:select_slot(1, { focus = true })
+    test.equal(core.active_view, command_slots.slots[1].view)
+
+    test.ok(command.perform("root:switch-to-next-tab"))
+
+    test.equal(panel.active_slot_index, 2)
+    test.equal(core.active_view, command_slots.slots[2].view)
+    test.equal(command_slots.slots[2].view:get_name(), "S: No commands")
   end)
 
   test.it("sends payloads to disposable warm PowerShell workers and closes stdin", function()

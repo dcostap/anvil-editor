@@ -8,8 +8,11 @@ local keymap = require "core.keymap"
 local json = require "core.json"
 local process = require "core.process"
 local storage = require "core.storage"
+local style = require "core.style"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
+local View = require "core.view"
+local file_context = require "core.file_context"
 local sidepanel = require "core.sidepanel"
 
 local M = core.command_slots or {}
@@ -27,9 +30,11 @@ local DONE_PREFIX = "__ANVIL_COMMAND_SLOT_DONE__"
 local MARKER_TAIL_BYTES = 512
 local DEFAULT_MAX_OUTPUT_BYTES = 10 * 1024 * 1024
 local READ_CHUNK_BYTES = 8192
+local COMMAND_OUTPUT_PANEL_VERSION = 1
 
 config.plugins.command_slots = common.merge({
   max_output_bytes = DEFAULT_MAX_OUTPUT_BYTES,
+  max_output_history = 100,
   max_history = 100,
   prewarm = true,
   strip_ansi = true,
@@ -58,6 +63,55 @@ end
 
 local function is_blank(text)
   return not text or text:match("^%s*$") ~= nil
+end
+
+local function trim(text)
+  return tostring(text or ""):match("^%s*(.-)%s*$") or ""
+end
+
+local function single_line(text)
+  return trim(text):gsub("%s+", " ")
+end
+
+local function output_history_limit()
+  return math.max(1, math.floor(tonumber(config.plugins.command_slots.max_output_history) or 100))
+end
+
+local function current_output_entry(slot)
+  local history = slot and slot.output_history or nil
+  if not history or #history == 0 then return nil end
+  local index = common.clamp(math.floor(tonumber(slot.output_history_index) or #history), 1, #history)
+  slot.output_history_index = index
+  return history[index]
+end
+
+local function output_tab_title(slot)
+  local label = slot and slot.label or "?"
+  local entry = current_output_entry(slot)
+  local command_text = entry and entry.command_text or slot and slot.last_command_text or ""
+  local snippet = single_line(command_text)
+  if snippet == "" then snippet = "No commands" end
+  if snippet:ulen() > 48 then
+    snippet = snippet:usub(1, 47) .. "…"
+  end
+  return string.format("%s: %s", label, snippet)
+end
+
+local function push_output_entry(slot, command_text, cwd, text)
+  slot.output_history = slot.output_history or {}
+  local entry = {
+    command_text = command_text or "",
+    cwd = cwd or "",
+    text = text or "",
+    started_at = system.get_time(),
+  }
+  table.insert(slot.output_history, entry)
+  while #slot.output_history > output_history_limit() do
+    table.remove(slot.output_history, 1)
+  end
+  slot.output_history_index = #slot.output_history
+  slot.current_output_entry = entry
+  return entry
 end
 
 local function normalize_history(history)
@@ -313,11 +367,11 @@ function CommandOutputView:new(slot)
   CommandOutputView.super.new(self, CommandOutputDoc())
   self.slot = slot
   self.command_output_view = true
+  file_context.exclude_main_panel_view(self)
 end
 
 function CommandOutputView:get_name()
-  local label = self.slot and self.slot.label or "?"
-  return "Command " .. label .. " Output"
+  return output_tab_title(self.slot)
 end
 
 function CommandOutputView:get_filename()
@@ -338,8 +392,43 @@ function CommandOutputView:try_close(do_close)
   do_close()
 end
 
+function CommandOutputView:save_displayed_entry_state()
+  local entry = self.displayed_entry
+  if not entry then return end
+  entry.selection_state = self:get_selection_state()
+  entry.scroll_x, entry.scroll_to_x = self.scroll.x or 0, self.scroll.to.x or self.scroll.x or 0
+  entry.scroll_y, entry.scroll_to_y = self.scroll.y or 0, self.scroll.to.y or self.scroll.y or 0
+end
+
+function CommandOutputView:show_entry(entry, opts)
+  opts = opts or {}
+  if self.displayed_entry and self.displayed_entry ~= entry then
+    self:save_displayed_entry_state()
+  end
+
+  self.displayed_entry = entry
+  self.doc:set_text(entry and entry.text or "")
+
+  if entry and entry.selection_state then
+    self:set_selection_state(entry.selection_state)
+    self.scroll.x = entry.scroll_x or entry.scroll_to_x or 0
+    self.scroll.to.x = entry.scroll_to_x or entry.scroll_x or 0
+    self.scroll.y = entry.scroll_y or entry.scroll_to_y or 0
+    self.scroll.to.y = entry.scroll_to_y or entry.scroll_y or 0
+  elseif opts.follow_end then
+    self.doc:set_selection(#self.doc.lines, 1)
+    self:scroll_to_make_visible(#self.doc.lines, math.huge, true)
+  else
+    self.doc:set_selection(1, 1)
+    self.scroll.x, self.scroll.to.x = 0, 0
+    self.scroll.y, self.scroll.to.y = 0, 0
+  end
+  core.redraw = true
+end
+
 function CommandOutputView:clear_for_run(command_text, cwd)
   local header = string.format("PS %s> %s\n\n", tostring(cwd or ""), tostring(command_text or ""))
+  self.displayed_entry = nil
   self.doc:set_text(header)
   self:scroll_to_make_visible(#self.doc.lines, math.huge, true)
 end
@@ -363,19 +452,229 @@ function CommandOutputView:append_text(text)
   core.redraw = true
 end
 
+local CommandOutputPanel = View:extend()
+
+function CommandOutputPanel:__tostring() return "CommandOutputPanel" end
+
+function CommandOutputPanel:new()
+  CommandOutputPanel.super.new(self)
+  self.command_output_panel = true
+  self.command_output_panel_version = COMMAND_OUTPUT_PANEL_VERSION
+  self.active_slot_index = self.active_slot_index or 1
+  self.hovered_tab_index = nil
+  self.cursor = "arrow"
+  file_context.exclude_main_panel_view(self)
+end
+
+function CommandOutputPanel:get_name()
+  return "Command Output"
+end
+
+function CommandOutputPanel:tab_bar_height()
+  return style.font:get_height() + style.padding.y * 2 + (style.margin.tab and style.margin.tab.top or 0)
+end
+
+function CommandOutputPanel:slot_view(slot)
+  if not slot then return nil end
+  if not slot.view then
+    slot.view = CommandOutputView(slot)
+    slot.view.__sidepanel_focus_owner = self
+  else
+    slot.view.__sidepanel_focus_owner = self
+  end
+  return slot.view
+end
+
+function CommandOutputPanel:active_slot()
+  return M.slots[self.active_slot_index] or M.slots[1]
+end
+
+function CommandOutputPanel:active_output_view()
+  return self:slot_view(self:active_slot())
+end
+
+function CommandOutputPanel:get_focus_view()
+  return self:active_output_view()
+end
+
+function CommandOutputPanel:layout_active_view()
+  local view = self:active_output_view()
+  if not view then return end
+  local th = self:tab_bar_height()
+  view.position.x = self.position.x
+  view.position.y = self.position.y + th
+  view.size.x = self.size.x
+  view.size.y = math.max(0, self.size.y - th)
+end
+
+function CommandOutputPanel:select_slot(index, opts)
+  opts = opts or {}
+  index = common.clamp(math.floor(tonumber(index) or 1), 1, #SLOT_DEFS)
+  local old_view = self:active_output_view()
+  if old_view then old_view:save_displayed_entry_state() end
+
+  self.active_slot_index = index
+  local slot = self:active_slot()
+  local view = self:slot_view(slot)
+  if old_view and old_view ~= view and old_view.on_mouse_left then
+    old_view:on_mouse_left()
+  end
+  if view then
+    view:show_entry(current_output_entry(slot), { follow_end = opts.follow_end == true })
+  end
+  self:layout_active_view()
+
+  if opts.focus == true and view then
+    core.set_active_view(view)
+  end
+  core.redraw = true
+  return view
+end
+
+function CommandOutputPanel:switch_tab(delta)
+  return self:select_slot(((self.active_slot_index - 1 + delta) % #SLOT_DEFS) + 1, { focus = true })
+end
+
+function CommandOutputPanel:switch_history(delta)
+  local slot = self:active_slot()
+  local history = slot and slot.output_history or nil
+  if not history or #history == 0 then return nil end
+  local view = self:active_output_view()
+  if view then view:save_displayed_entry_state() end
+  slot.output_history_index = common.clamp((slot.output_history_index or #history) + delta, 1, #history)
+  local entry = current_output_entry(slot)
+  if view then view:show_entry(entry) end
+  core.log_quiet("Command Slot %d: selected output history entry %d/%d", slot.index, slot.output_history_index or 0, #history)
+  core.redraw = true
+  return entry
+end
+
+function CommandOutputPanel:tab_at_point(x, y)
+  local th = self:tab_bar_height()
+  if y < self.position.y or y >= self.position.y + th then return nil end
+  if x < self.position.x or x >= self.position.x + self.size.x then return nil end
+  local w = self.size.x / #SLOT_DEFS
+  return common.clamp(math.floor((x - self.position.x) / w) + 1, 1, #SLOT_DEFS)
+end
+
+function CommandOutputPanel:draw_tabs()
+  local x, y = self.position.x, self.position.y
+  local w, h = self.size.x / #SLOT_DEFS, self:tab_bar_height()
+  local ds = style.divider_size
+  renderer.draw_rect(x, y, self.size.x, h, style.background2)
+  renderer.draw_rect(x, y + h - ds, self.size.x, ds, style.divider)
+
+  for _, def in ipairs(SLOT_DEFS) do
+    local tx = x + (def.index - 1) * w
+    local active = def.index == self.active_slot_index
+    local hovered = def.index == self.hovered_tab_index
+    local bg = active and style.background or style.background2
+    local fg = (active or hovered) and style.text or style.dim
+    renderer.draw_rect(tx, y, w, h, bg)
+    renderer.draw_rect(tx + w - ds, y + style.padding.y, ds, h - style.padding.y * 2, style.dim)
+    if active then
+      renderer.draw_rect(tx, y, w, ds, style.divider)
+      renderer.draw_rect(tx, y, ds, h, style.divider)
+      renderer.draw_rect(tx + w - ds, y, ds, h, style.divider)
+    end
+    local text_x = tx + style.padding.x
+    local text_w = math.max(0, w - style.padding.x * 2)
+    core.push_clip_rect(text_x, y, text_w, h)
+    common.draw_text(style.font, fg, output_tab_title(M.slots[def.index]), "left", text_x, y, text_w, h)
+    core.pop_clip_rect()
+  end
+end
+
+function CommandOutputPanel:update()
+  sidepanel.update_side_view_size(self)
+  self:layout_active_view()
+  local view = self:active_output_view()
+  if view then view:update() end
+  self.hovered_tab_index = self:tab_at_point(core.root_panel.mouse.x, core.root_panel.mouse.y)
+end
+
+function CommandOutputPanel:draw()
+  self:draw_background(style.background)
+  self:draw_tabs()
+  self:layout_active_view()
+  local view = self:active_output_view()
+  if view then
+    core.push_clip_rect(view.position.x, view.position.y, view.size.x, view.size.y)
+    view:draw()
+    core.pop_clip_rect()
+  end
+end
+
+function CommandOutputPanel:on_mouse_pressed(button, x, y, clicks)
+  local tab = self:tab_at_point(x, y)
+  if tab then
+    self:select_slot(tab, { focus = true })
+    return true
+  end
+  local view = self:active_output_view()
+  if view then
+    core.set_active_view(view)
+    return view:on_mouse_pressed(button, x, y, clicks)
+  end
+  return true
+end
+
+function CommandOutputPanel:on_mouse_released(button, x, y, ...)
+  local view = self:active_output_view()
+  if view then return view:on_mouse_released(button, x, y, ...) end
+end
+
+function CommandOutputPanel:on_mouse_moved(x, y, dx, dy)
+  self.hovered_tab_index = self:tab_at_point(x, y)
+  local view = self:active_output_view()
+  if view and not self.hovered_tab_index then
+    local result = view:on_mouse_moved(x, y, dx, dy)
+    self.cursor = view.cursor or "ibeam"
+    return result
+  end
+  self.cursor = "arrow"
+end
+
+function CommandOutputPanel:on_mouse_left()
+  self.hovered_tab_index = nil
+  local view = self:active_output_view()
+  if view then view:on_mouse_left() end
+end
+
+function CommandOutputPanel:on_mouse_wheel(...)
+  local view = self:active_output_view()
+  if view then return view:on_mouse_wheel(...) end
+end
+
+function CommandOutputPanel:try_close(do_close)
+  for _, slot in ipairs(M.slots) do
+    if slot.running then M.kill_slot(slot.index, "closed") end
+  end
+  do_close()
+end
+
 M.CommandOutputDoc = CommandOutputDoc
 M.CommandOutputView = CommandOutputView
+M.CommandOutputPanel = CommandOutputPanel
+
+local function ensure_output_panel()
+  if not M.output_panel or not M.output_panel.command_output_panel or M.output_panel.command_output_panel_version ~= COMMAND_OUTPUT_PANEL_VERSION then
+    if M.output_panel then sidepanel.remove_view(M.output_panel, false) end
+    M.output_panel = CommandOutputPanel()
+  end
+  if not sidepanel.contains_view(M.output_panel) then
+    sidepanel.register_panel("command-output", M.output_panel)
+  else
+    sidepanel.attach_view("command-output", M.output_panel)
+    sidepanel.add_view(M.output_panel)
+  end
+  return M.output_panel
+end
 
 local function ensure_output_view(slot, focus)
-  if slot.view and sidepanel.contains_view(slot.view) then
-    sidepanel.attach_view("command-slot-" .. slot.index, slot.view)
-    sidepanel.add_view(slot.view)
-  else
-    slot.view = CommandOutputView(slot)
-    sidepanel.register_panel("command-slot-" .. slot.index, slot.view)
-  end
-  sidepanel.show(slot.view, { focus = focus == true })
-  return slot.view
+  local panel = ensure_output_panel()
+  sidepanel.show(panel, { focus = focus == true })
+  return panel:select_slot(slot.index, { focus = focus == true, follow_end = true })
 end
 
 local function strip_ansi(text)
@@ -392,17 +691,31 @@ end
 
 M._strip_ansi = strip_ansi
 
+local function append_output_text(slot, text)
+  if not text or text == "" then return end
+  local entry = slot.current_output_entry or current_output_entry(slot)
+  local view = slot.view
+  if entry then
+    entry.text = (entry.text or "") .. text
+    if view and view.displayed_entry == entry then
+      view:append_text(text)
+    end
+  elseif view then
+    -- Tests and compatibility paths may inject a lightweight fake view without
+    -- using Command Output History. Keep those paths append-only as before.
+    view:append_text(text)
+  end
+end
+
 local function append_to_output(slot, text, force)
   if not text or text == "" then return end
   if config.plugins.command_slots.strip_ansi ~= false then
     text = strip_ansi(text)
     if text == "" then return end
   end
-  local view = slot.view
-  if not view then return end
 
   if force then
-    view:append_text(text)
+    append_output_text(slot, text)
     return
   end
 
@@ -415,7 +728,7 @@ local function append_to_output(slot, text, force)
   local allowed = max_bytes - slot.output_bytes
   if #text > allowed then
     if allowed > 0 then
-      view:append_text(text:sub(1, allowed))
+      append_output_text(slot, text:sub(1, allowed))
       slot.output_bytes = slot.output_bytes + allowed
     end
     slot.truncated = true
@@ -425,7 +738,7 @@ local function append_to_output(slot, text, force)
       true
     )
   else
-    view:append_text(text)
+    append_output_text(slot, text)
     slot.output_bytes = slot.output_bytes + #text
   end
 end
@@ -607,13 +920,20 @@ local function next_token(slot)
 end
 
 local function default_run_command(slot, command_text)
+  local active_before = core.active_view
+  local focus_output = not not (sidepanel.is_side_view(active_before) or sidepanel.side_focus_owner(active_before))
+
   if slot.running then
     M.kill_slot(slot.index, "rerun")
   end
 
   local cwd = root_project_path()
-  local view = ensure_output_view(slot, true)
-  view:clear_for_run(command_text, cwd)
+  local header = string.format("PS %s> %s\n\n", tostring(cwd or ""), tostring(command_text or ""))
+  local entry = push_output_entry(slot, command_text, cwd, header)
+  local view = ensure_output_view(slot, focus_output)
+  if view and view.displayed_entry ~= entry then
+    view:show_entry(entry, { follow_end = true })
+  end
 
   slot.running = true
   slot.token = next_token(slot)
@@ -717,6 +1037,31 @@ function M.prompt_slot(index, select_existing)
   })
 end
 
+local function active_output_panel()
+  local view = core.active_view
+  if view and view.command_output_panel then return view end
+  local owner = view and view.__sidepanel_focus_owner
+  if owner and owner.command_output_panel then return owner end
+end
+
+local function active_output_slot()
+  local view = core.active_view
+  if view and view.command_output_view and view.slot then return view.slot end
+  local panel = active_output_panel()
+  return panel and panel:active_slot()
+end
+
+function M.navigate_output_history(delta)
+  local panel = active_output_panel()
+  if not panel then
+    local slot = active_output_slot()
+    panel = slot and slot.view and slot.view.__sidepanel_focus_owner
+  end
+  if panel and panel.switch_history then
+    return panel:switch_history(delta)
+  end
+end
+
 local function install_commands()
   local map = {}
   for _, def in ipairs(SLOT_DEFS) do
@@ -729,16 +1074,31 @@ local function install_commands()
     end
   end
   map["command-slots:kill-active"] = function()
-    local view = core.active_view
-    if view and view.command_output_view and view.slot then
-      return M.kill_slot(view.slot.index, "command")
-    end
+    local slot = active_output_slot()
+    if slot then return M.kill_slot(slot.index, "command") end
     return false
   end
   command.add(nil, map)
+
+  command.add(function()
+    local slot = active_output_slot()
+    return slot ~= nil, slot
+  end, {
+    ["command-slots:history-previous"] = function()
+      M.navigate_output_history(-1)
+    end,
+    ["command-slots:history-next"] = function()
+      M.navigate_output_history(1)
+    end,
+  })
 end
 
 local function install_keymaps()
+  keymap.add({
+    ["alt+left"] = "command-slots:history-previous",
+    ["alt+right"] = "command-slots:history-next",
+  })
+
   local map = {}
   for _, def in ipairs(SLOT_DEFS) do
     map["alt+" .. def.key] = "command-slots:run-" .. def.key
@@ -748,7 +1108,8 @@ local function install_keymaps()
 end
 
 local function output_view_active()
-  return core.active_view and core.active_view.command_output_view == true
+  local view = core.active_view
+  return view and (view.command_output_view == true or view.command_output_panel == true)
 end
 
 local function wrap_command_to_block_output_view(name)
@@ -840,6 +1201,10 @@ function M.prewarm()
 end
 
 function M._reset_for_tests()
+  if M.output_panel then
+    sidepanel.remove_view(M.output_panel, false)
+    M.output_panel = nil
+  end
   for _, slot in ipairs(M.slots) do
     if slot.proc then kill_worker(slot) end
     slot.proc = nil
@@ -848,6 +1213,11 @@ function M._reset_for_tests()
     slot.run_generation = 0
     slot.token = nil
     slot.pending_output = ""
+    slot.output_history = {}
+    slot.output_history_index = 0
+    slot.current_output_entry = nil
+    slot.last_command_text = nil
+    slot.last_cwd = nil
     slot.view = nil
   end
   M.project_state_cache = {}
@@ -860,8 +1230,12 @@ for _, def in ipairs(SLOT_DEFS) do
   slot.key = def.key
   slot.label = def.label
   slot.pending_output = slot.pending_output or ""
+  slot.output_history = slot.output_history or {}
+  slot.output_history_index = slot.output_history_index or #slot.output_history
   M.slots[def.index] = slot
 end
+
+ensure_output_panel()
 
 install_commands()
 install_keymaps()

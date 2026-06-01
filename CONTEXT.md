@@ -92,6 +92,10 @@ _Avoid_: Command preset, command macro
 A read-only Document View showing the text output from a command run.
 _Avoid_: Command buffer, terminal buffer, output buffer
 
+**Command Output History**:
+The per-Command Slot sequence of Command Output View contents from command runs, navigated within that slot.
+_Avoid_: terminal scrollback, output buffer history
+
 **DocView Prompt Bar**:
 A bottom-anchored prompt scoped to a specific Document View.
 _Avoid_: Document find bar, local prompt, find bar

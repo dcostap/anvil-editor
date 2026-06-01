@@ -176,6 +176,12 @@ function M.restorable_side_focus_view(owner)
   if view and side_focus_owner(view) == owner then
     return view
   end
+  if type(owner.get_focus_view) == "function" then
+    view = restorable_focus_view(owner:get_focus_view(), owner)
+    if view and side_focus_owner(view) == owner then
+      return view
+    end
+  end
   return owner
 end
 
@@ -861,12 +867,31 @@ end, {
   end,
 })
 
+local function side_internal_tab_owner()
+  local owner = side_focus_owner(core.active_view)
+  if owner then return owner end
+  if M.is_side_view(core.active_view) then return core.active_view end
+end
+
+local function switch_side_internal_tab(owner, delta)
+  if owner and type(owner.switch_tab) == "function" then
+    return owner:switch_tab(delta)
+  end
+end
+
 local function wrap_root_tab_switch(name, delta)
   local base = command.map[name]
   if not base or base.__sidepanel_wrapped then return end
 
   command.add(function(...)
-    if M.is_side_view(core.active_view) or side_focus_owner(core.active_view) then return true, "sidepanel" end
+    local explicit_node = select(1, ...)
+    local owner = not Node:is_extended_by(explicit_node) and side_internal_tab_owner()
+    if owner then
+      if type(owner.switch_tab) == "function" then
+        return true, "sidepanel", owner
+      end
+      return false
+    end
     local result = { base.predicate(...) }
     if table.remove(result, 1) then
       if #result > 0 then
@@ -878,7 +903,7 @@ local function wrap_root_tab_switch(name, delta)
   end, {
     [name] = function(mode, ...)
       if mode == "sidepanel" then
-        M.switch_side_view(delta)
+        switch_side_internal_tab(..., delta)
       elseif base then
         base.perform(...)
       end

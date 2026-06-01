@@ -547,7 +547,7 @@ test.describe("sidepanel focus", function()
     assert_active_view(replacement_view, "expected toggle to focus replacement side Editor, not old side find input")
   end)
 
-  test.it("root tab switching from a side find input restores the target side prompt focus", function(context)
+  test.it("root tab switching is not a global Side Panel content switch", function(context)
     local main_view = open_main_editor(context, "main alpha beta\n")
     main_view.__test_name = "main Editor"
     core.set_active_view(main_view)
@@ -566,10 +566,12 @@ test.describe("sidepanel focus", function()
     type_into_active_view("beta")
 
     assert_active_view(find_b, "expected side B find input before root tab switch")
-    test.ok(command.perform("root:switch-to-previous-tab"))
+    test.not_ok(command.perform("root:switch-to-previous-tab"))
 
-    assert_active_view(find_a, "expected previous-tab from side find input to restore side A prompt focus")
-    test.equal(find_a.local_find_state.input_active, true)
+    assert_active_view(find_b, "expected previous-tab from side find input not to switch Side Panel contents")
+    test.equal(find_b.local_find_state.input_active, true)
+    test.equal(find_b:get_text(), "beta")
+    test.equal(find_a.local_find_state.input_active, false)
     test.equal(find_a:get_text(), "alpha")
   end)
 
