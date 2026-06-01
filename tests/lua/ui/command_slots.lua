@@ -66,6 +66,17 @@ test.describe("Command Slots", function()
     test.equal(runs[1].text, "Write-Output 'new'")
   end)
 
+  test.it("shares command history suggestions across slots", function()
+    command_slots.set_command(2, "Write-Output 'slot-s'")
+    command_slots.record_history("Write-Output 'from-a'")
+    command_slots.record_history("Get-ChildItem")
+
+    local suggestions = command_slots.suggest_commands("Write")
+    test.equal(#suggestions, 2)
+    test.equal(suggestions[1].text, "Write-Output 'from-a'")
+    test.equal(suggestions[2].text, "Write-Output 'slot-s'")
+  end)
+
   test.it("keeps Command Output View text read-only while allowing internal appends", function()
     local doc = command_slots.CommandOutputDoc()
     doc:set_text("first\n")
@@ -82,20 +93,37 @@ test.describe("Command Slots", function()
     test.not_ok(doc:is_dirty())
   end)
 
-  test.it("sends generated scripts to warm PowerShell without waiting for stdin close", function()
+  test.it("keeps the command output caret pinned to a trailing blank line", function()
+    local doc = command_slots.CommandOutputDoc()
+    doc:set_text("first")
+    test.equal(doc:get_text(1, 1, math.huge, math.huge), "first\n")
+    test.same({ 2, 1, 2, 1 }, doc.selections)
+
+    doc:append(" second")
+    test.equal(doc:get_text(1, 1, math.huge, math.huge), "first second\n")
+    test.same({ 2, 1, 2, 1 }, doc.selections)
+
+    doc:append("\nthird\n")
+    test.equal(doc:get_text(1, 1, math.huge, math.huge), "first second\nthird\n")
+    test.same({ 3, 1, 3, 1 }, doc.selections)
+    test.not_ok(doc:is_dirty())
+  end)
+
+  test.it("sends payloads to disposable warm PowerShell workers and closes stdin", function()
     test.skip_if(PLATFORM ~= "Windows", "Command Slots use PowerShell on Windows")
 
     local token = "warm-test"
     local marker = "__ANVIL_COMMAND_SLOT_DONE__" .. token .. ":"
-    local proc = process.start({ "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-" }, {
+    local proc = process.start({ "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command_slots._build_powershell_controller() }, {
       stdin = process.REDIRECT_PIPE,
       stdout = process.REDIRECT_PIPE,
       stderr = process.REDIRECT_STDOUT,
     })
     test.not_nil(proc, "expected Windows PowerShell to start")
 
-    local script = command_slots._build_powershell_script("Write-Output 'slot-script-ok'", core.root_project().path, token)
-    test.not_nil(proc.stdin:write(script))
+    local payload = command_slots._build_powershell_payload("cmd.exe /d /s /c sort; Write-Output 'slot-payload-ok'", core.root_project().path, token)
+    test.not_nil(proc.stdin:write(payload))
+    test.not_nil(proc.stdin:close())
 
     local output = ""
     local deadline = system.get_time() + 4
@@ -111,7 +139,7 @@ test.describe("Command Slots", function()
     end
     pcall(proc.kill, proc)
 
-    test.contains(output, "slot-script-ok")
+    test.contains(output, "slot-payload-ok")
     test.contains(output, marker .. "0")
   end)
 

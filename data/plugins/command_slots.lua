@@ -5,6 +5,7 @@ local command = require "core.command"
 local common = require "core.common"
 local config = require "core.config"
 local keymap = require "core.keymap"
+local json = require "core.json"
 local process = require "core.process"
 local storage = require "core.storage"
 local Doc = require "core.doc"
@@ -29,13 +30,14 @@ local READ_CHUNK_BYTES = 8192
 
 config.plugins.command_slots = common.merge({
   max_output_bytes = DEFAULT_MAX_OUTPUT_BYTES,
+  max_history = 100,
   prewarm = true,
   strip_ansi = true,
   powershell_candidates = { "pwsh.exe", "powershell.exe" },
 }, config.plugins.command_slots or {})
 
 M.slots = M.slots or {}
-M.project_cache = M.project_cache or {}
+M.project_state_cache = M.project_state_cache or {}
 M.token_counter = M.token_counter or 0
 
 local function running_lua_tests()
@@ -58,28 +60,48 @@ local function is_blank(text)
   return not text or text:match("^%s*$") ~= nil
 end
 
-local function project_commands(project_path)
-  project_path = project_path or root_project_path()
-  local commands = M.project_cache[project_path]
-  if not commands then
-    local loaded = storage.load(STORAGE_MODULE, project_path)
-    if type(loaded) == "table" and type(loaded.commands) == "table" then
-      loaded = loaded.commands
-    end
-    commands = {}
-    if type(loaded) == "table" then
-      for i = 1, #SLOT_DEFS do
-        local value = loaded[i]
-        commands[i] = type(value) == "string" and value or ""
+local function normalize_history(history)
+  local result, seen = {}, {}
+  if type(history) == "table" then
+    for _, value in ipairs(history) do
+      if type(value) == "string" and not is_blank(value) and not seen[value] then
+        seen[value] = true
+        result[#result + 1] = value
       end
     end
-    M.project_cache[project_path] = commands
   end
-  return commands, project_path
+  return result
 end
 
-local function save_project_commands(project_path, commands)
-  storage.save(STORAGE_MODULE, project_path, { commands = commands })
+local function project_state(project_path)
+  project_path = project_path or root_project_path()
+  local state = M.project_state_cache[project_path]
+  if not state then
+    local loaded = storage.load(STORAGE_MODULE, project_path)
+    state = { commands = {}, history = {} }
+    if type(loaded) == "table" then
+      local loaded_commands = type(loaded.commands) == "table" and loaded.commands or loaded
+      for i = 1, #SLOT_DEFS do
+        local value = loaded_commands[i]
+        state.commands[i] = type(value) == "string" and value or ""
+      end
+      state.history = normalize_history(loaded.history)
+    end
+    M.project_state_cache[project_path] = state
+  end
+  return state, project_path
+end
+
+local function project_commands(project_path)
+  local state, key = project_state(project_path)
+  return state.commands, key, state
+end
+
+local function save_project_state(project_path, state)
+  storage.save(STORAGE_MODULE, project_path, {
+    commands = state.commands,
+    history = state.history,
+  })
 end
 
 function M.get_command(index, project_path)
@@ -88,21 +110,50 @@ function M.get_command(index, project_path)
 end
 
 function M.set_command(index, text, project_path)
-  local commands, key = project_commands(project_path)
+  local commands, key, state = project_commands(project_path)
   commands[index] = text or ""
-  save_project_commands(key, commands)
+  save_project_state(key, state)
   core.log_quiet("Command Slot %d: stored command for project %s", index, tostring(key))
 end
 
-local function ps_quote(text)
-  text = tostring(text or "")
-  return "'" .. text:gsub("'", "''") .. "'"
+function M.record_history(command_text, project_path)
+  if is_blank(command_text) then return end
+  local state, key = project_state(project_path)
+  local history = normalize_history(state.history)
+  for i = #history, 1, -1 do
+    if history[i] == command_text then table.remove(history, i) end
+  end
+  table.insert(history, 1, command_text)
+  local max_history = math.max(1, tonumber(config.plugins.command_slots.max_history) or 100)
+  while #history > max_history do table.remove(history) end
+  state.history = history
+  save_project_state(key, state)
 end
 
-function M._build_powershell_script(command_text, cwd, token)
-  local marker = DONE_PREFIX .. tostring(token) .. ":"
+local function suggestion_matches(text, candidate)
+  if is_blank(text) then return true end
+  text = text:lower()
+  return tostring(candidate or ""):lower():find(text, 1, true) ~= nil
+end
+
+function M.suggest_commands(text, project_path)
+  local state = project_state(project_path)
+  local result, seen = {}, {}
+  local function add(value)
+    if type(value) ~= "string" or is_blank(value) or seen[value] or not suggestion_matches(text, value) then return end
+    seen[value] = true
+    result[#result + 1] = { text = value }
+  end
+  for _, value in ipairs(state.history or {}) do add(value) end
+  for i = 1, #SLOT_DEFS do add(state.commands[i]) end
+  return result
+end
+
+function M._build_powershell_controller()
   return table.concat({
     "$global:LASTEXITCODE = $null",
+    "$__anvil_token = 'unknown'",
+    "$__anvil_exit = 1",
     "try {",
     "  [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)",
     "  [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
@@ -111,8 +162,11 @@ function M._build_powershell_script(command_text, cwd, token)
     "  $env:NO_COLOR = '1'",
     "  $env:CLICOLOR = '0'",
     "  $env:TERM = 'dumb'",
-    "  Set-Location -LiteralPath " .. ps_quote(cwd),
-    "  $__anvil_script = [scriptblock]::Create(" .. ps_quote(command_text) .. ")",
+    "  $__anvil_payload_text = [Console]::In.ReadToEnd()",
+    "  $__anvil_payload = $__anvil_payload_text | ConvertFrom-Json",
+    "  $__anvil_token = [string]$__anvil_payload.token",
+    "  Set-Location -LiteralPath ([string]$__anvil_payload.cwd)",
+    "  $__anvil_script = [scriptblock]::Create([string]$__anvil_payload.command)",
     "  & $__anvil_script",
     "  $__anvil_success = $?",
     "  $__anvil_native_exit = $global:LASTEXITCODE",
@@ -121,8 +175,17 @@ function M._build_powershell_script(command_text, cwd, token)
     "  Write-Error $_",
     "  $__anvil_exit = 1",
     "}",
-    "[Console]::Out.WriteLine(" .. ps_quote(marker) .. " + $__anvil_exit)",
-  }, "\n") .. "\n\n"
+    "[Console]::Out.WriteLine('" .. DONE_PREFIX .. "' + $__anvil_token + ':' + $__anvil_exit)",
+    "exit $__anvil_exit",
+  }, "\n")
+end
+
+function M._build_powershell_payload(command_text, cwd, token)
+  return json.encode({
+    command = command_text or "",
+    cwd = cwd or root_project_path(),
+    token = tostring(token or "unknown"),
+  })
 end
 
 local CommandOutputDoc = Doc:extend()
@@ -131,6 +194,7 @@ function CommandOutputDoc:__tostring() return "CommandOutputDoc" end
 
 function CommandOutputDoc:new()
   CommandOutputDoc.super.new(self)
+  self.output_text = ""
   self:clean()
 end
 
@@ -187,25 +251,34 @@ end
 function CommandOutputDoc:indent_text()
 end
 
+function CommandOutputDoc:_display_text()
+  local text = self.output_text or ""
+  if text == "" or text:sub(-1) ~= "\n" then
+    text = text .. "\n"
+  end
+  return text
+end
+
+function CommandOutputDoc:_replace_display_text()
+  self:reset()
+  CommandOutputDoc.super.insert(self, 1, 1, self:_display_text())
+  self:set_selection(#self.lines, 1)
+  self:clear_undo_redo()
+  self:clean()
+end
+
 function CommandOutputDoc:set_text(text)
+  self.output_text = tostring(text or "")
   self:_with_internal_mutation(function()
-    self:reset()
-    if text and text ~= "" then
-      CommandOutputDoc.super.insert(self, 1, 1, text)
-    end
-    self:clear_undo_redo()
-    self:clean()
+    self:_replace_display_text()
   end)
 end
 
 function CommandOutputDoc:append(text)
   if not text or text == "" then return end
+  self.output_text = (self.output_text or "") .. text
   self:_with_internal_mutation(function()
-    local line = #self.lines
-    local col = #self.lines[line]
-    CommandOutputDoc.super.insert(self, line, col, text)
-    self:clear_undo_redo()
-    self:clean()
+    self:_replace_display_text()
   end)
 end
 
@@ -399,7 +472,7 @@ function M._process_worker_output(slot, chunk)
 end
 
 local function powershell_args(exe)
-  return { exe, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-" }
+  return { exe, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", M._build_powershell_controller() }
 end
 
 local function start_worker(slot)
@@ -419,22 +492,11 @@ local function start_worker(slot)
     })
     if proc then
       slot.proc = proc
+      slot.worker_consumed = false
       slot.worker_exe = exe
       slot.worker_generation = (slot.worker_generation or 0) + 1
       local generation = slot.worker_generation
-      core.log_quiet("Command Slot %d: started PowerShell worker %s", slot.index, exe)
-
-      -- The initialization script is ASCII so it is safe before InputEncoding is
-      -- switched. It keeps fallback Windows PowerShell output UTF-8-ish.
-      pcall(proc.write, proc, table.concat({
-        "[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)",
-        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
-        "$OutputEncoding = [Console]::OutputEncoding",
-        "if (Get-Variable -Name PSStyle -Scope Global -ErrorAction SilentlyContinue) { $PSStyle.OutputRendering = 'PlainText' }",
-        "$env:NO_COLOR = '1'",
-        "$env:CLICOLOR = '0'",
-        "$env:TERM = 'dumb'",
-      }, "\n") .. "\n\n")
+      core.log_quiet("Command Slot %d: started disposable PowerShell worker %s", slot.index, exe)
 
       core.add_thread(function()
         while slot.proc == proc and slot.worker_generation == generation do
@@ -454,9 +516,12 @@ local function start_worker(slot)
         if slot.proc == proc and slot.worker_generation == generation then
           local exit_code = proc:returncode()
           slot.proc = nil
+          slot.worker_consumed = false
           core.log_quiet("Command Slot %d: PowerShell worker exited code=%s", slot.index, tostring(exit_code))
           if slot.running then
             finish_run(slot, "worker-exited", exit_code)
+          elseif config.plugins.command_slots.prewarm ~= false then
+            start_worker(slot)
           end
         end
       end)
@@ -469,19 +534,22 @@ local function start_worker(slot)
   return nil, table.concat(errors, "; ")
 end
 
-local function ensure_worker(slot)
-  if slot.proc and slot.proc:running() then return slot.proc end
-  slot.proc = nil
-  return start_worker(slot)
-end
-
 local function kill_worker(slot)
   local proc = slot.proc
   slot.proc = nil
+  slot.worker_consumed = false
   slot.worker_generation = (slot.worker_generation or 0) + 1
   if proc then
     pcall(proc.kill, proc)
   end
+end
+
+local function ensure_worker(slot)
+  if slot.proc and slot.proc:running() and not slot.worker_consumed then return slot.proc end
+  if slot.proc and slot.proc:running() and slot.worker_consumed then kill_worker(slot) end
+  slot.proc = nil
+  slot.worker_consumed = false
+  return start_worker(slot)
 end
 
 function M.kill_slot(index, reason)
@@ -491,6 +559,7 @@ function M.kill_slot(index, reason)
   if was_running then
     finish_run(slot, "killed")
   end
+  slot.run_generation = (slot.run_generation or 0) + 1
   kill_worker(slot)
   core.log_quiet("Command Slot %d: killed worker reason=%s", index, tostring(reason or "manual"))
   return was_running
@@ -512,6 +581,9 @@ local function default_run_command(slot, command_text)
 
   slot.running = true
   slot.token = next_token(slot)
+  slot.run_generation = (slot.run_generation or 0) + 1
+  local run_generation = slot.run_generation
+  local run_token = slot.token
   slot.start_time = system.get_time()
   slot.pending_output = ""
   slot.output_bytes = 0
@@ -519,29 +591,48 @@ local function default_run_command(slot, command_text)
   slot.last_command_text = command_text
   slot.last_cwd = cwd
 
+  M.record_history(command_text, cwd)
   core.log_quiet("Command Slot %d: running command in %s: %s", slot.index, cwd, command_text)
 
   core.add_thread(function()
+    local function current_run()
+      return slot.running and slot.run_generation == run_generation and slot.token == run_token
+    end
+
+    if not current_run() then return end
     local proc, start_err = ensure_worker(slot)
     if not proc then
-      finish_run(slot, "start-error", nil, start_err)
+      if current_run() then finish_run(slot, "start-error", nil, start_err) end
       return
     end
 
-    local script = M._build_powershell_script(command_text, cwd, slot.token)
-    local written, write_err = proc.stdin:write(script)
-    if not written or written < #script then
-      core.log_quiet("Command Slot %d: PowerShell write failed; restarting worker: %s", slot.index, tostring(write_err))
-      kill_worker(slot)
-      proc, start_err = ensure_worker(slot)
-      if not proc then
-        finish_run(slot, "start-error", nil, start_err)
-        return
-      end
-      written, write_err = proc.stdin:write(script)
+    if not current_run() then return end
+    local payload = M._build_powershell_payload(command_text, cwd, run_token)
+    local written, write_err = proc.stdin:write(payload)
+    if written and written >= #payload then
+      if current_run() then slot.worker_consumed = true end
+      proc.stdin:close()
+      return
     end
 
-    if not written or written < #script then
+    if not current_run() then return end
+    core.log_quiet("Command Slot %d: PowerShell write failed; restarting worker: %s", slot.index, tostring(write_err))
+    kill_worker(slot)
+    proc, start_err = ensure_worker(slot)
+    if not proc then
+      if current_run() then finish_run(slot, "start-error", nil, start_err) end
+      return
+    end
+
+    if not current_run() then return end
+    written, write_err = proc.stdin:write(payload)
+    if written and written >= #payload then
+      if current_run() then slot.worker_consumed = true end
+      proc.stdin:close()
+      return
+    end
+
+    if current_run() then
       finish_run(slot, "write-error", nil, write_err)
       kill_worker(slot)
     end
@@ -574,7 +665,10 @@ function M.prompt_slot(index, select_existing)
   core.global_prompt_bar:enter("Command Slot " .. slot.label, {
     text = text,
     select_text = select_existing == true and not is_blank(text),
-    show_suggestions = false,
+    suggest = function(input)
+      return M.suggest_commands(input)
+    end,
+    show_suggestions = true,
     typeahead = false,
     submit = function(input)
       if is_blank(input) then
@@ -713,12 +807,14 @@ function M._reset_for_tests()
   for _, slot in ipairs(M.slots) do
     if slot.proc then kill_worker(slot) end
     slot.proc = nil
+    slot.worker_consumed = false
     slot.running = false
+    slot.run_generation = 0
     slot.token = nil
     slot.pending_output = ""
     slot.view = nil
   end
-  M.project_cache = {}
+  M.project_state_cache = {}
   M._run_command_impl = default_run_command
 end
 
