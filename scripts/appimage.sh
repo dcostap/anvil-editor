@@ -263,7 +263,7 @@ main() {
   cp "$ppm_file" Anvil.AppDir/usr/share/anvil/plugins/plugin_manager/
 
   # These could be symlinks but it seems they doesn't work with AppimageLauncher
-  cp resources/icons/logo.svg Anvil.AppDir/anvil.svg
+  cp resources/icons/logo.png Anvil.AppDir/anvil.png
   cp resources/linux/io.github.dcostap.Anvil.desktop Anvil.AppDir/
 
   if [[ $addons == true ]]; then
