@@ -405,7 +405,7 @@ end
 
 
 function TitleBar:draw()
-  self:draw_background(style.background2)
+  self:draw_background(style.titlebar or style.background2)
   self:draw_window_title()
   self:draw_titlebar_tabs()
   self:draw_window_controls()

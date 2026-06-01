@@ -75,8 +75,10 @@ local C = {
 }
 
 -- Core UI
-style.background = c("1c1e26")
+style.background = c("181a20")
 style.background2 = c("26282b")
+style.tab_background = c("1c1e26")
+style.titlebar = style.tab_background
 style.background3 = c(C.text_bg)
 style.text = c(C.text_fg)
 style.caret = c(C.ctrl_clickable)

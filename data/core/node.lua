@@ -785,7 +785,7 @@ end
 function Node:draw_tab_borders(view, is_active, is_hovered, x, y, w, h, standalone)
   local ds = style.divider_size
   local margin_y = style.margin.tab.top or 0
-  local tab_color = { 0x1c, 0x1e, 0x26, 255 }
+  local tab_color = style.tab_background or { 0x1c, 0x1e, 0x26, 255 }
   renderer.draw_rect(x, y - margin_y, w, h + margin_y, tab_color)
   return x + ds, y, w - ds*2, h
 end
@@ -819,7 +819,7 @@ function Node:draw_tabs()
   local ds = style.divider_size
   local dots_width = style.font:get_width("…")
   core.push_clip_rect(x, y, self.size.x, h)
-  renderer.draw_rect(x, y, self.size.x, h, { 0x1c, 0x1e, 0x26, 255 })
+  renderer.draw_rect(x, y, self.size.x, h, style.tab_background or { 0x1c, 0x1e, 0x26, 255 })
   local tabs_number = self:get_visible_tabs_number()
 
   for i = self.tab_offset, self.tab_offset + tabs_number - 1 do
