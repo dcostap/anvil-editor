@@ -264,7 +264,10 @@ function CommandOutputDoc:_replace_display_text(selection_mode)
   local old_selections = { table.unpack(self.selections or {}) }
   local old_last_selection = self.last_selection or 1
 
-  self:reset()
+  self.lines = { "\n" }
+  self.clean_lines = {}
+  self.cache = {}
+  self.highlighter:soft_reset()
   CommandOutputDoc.super.insert(self, 1, 1, self:_display_text())
 
   if selection_mode == "preserve" and #old_selections >= 4 then

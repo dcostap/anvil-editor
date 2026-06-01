@@ -23,11 +23,14 @@ function Highlighter:start()
     local prev_line = 0
     while self.first_invalid_line <= self.max_wanted_line do
       if not self.doc then return end
-      local max = math.min(self.first_invalid_line + 40, self.max_wanted_line)
+      local line_count = #self.doc.lines
+      if self.first_invalid_line > line_count then break end
+      local max = math.min(self.first_invalid_line + 40, self.max_wanted_line, line_count)
       local line
       local retokenized_from
       for i = self.first_invalid_line, max do
-        local state = (i > 1) and self.lines[i - 1].state
+        local prev = (i > 1) and self.lines[i - 1]
+        local state = prev and prev.state
         line = self.lines[i]
         if line and line.resume and (line.init_state ~= state or line.text ~= self.doc:get_utf8_line(i)) then
           -- Reset the progress if no longer valid
@@ -36,6 +39,10 @@ function Highlighter:start()
         if not (line and line.init_state == state and line.text == self.doc:get_utf8_line(i) and not line.resume) then
           retokenized_from = retokenized_from or i
           self.lines[i] = self:tokenize_line(i, state, line and line.resume)
+          if not self.lines[i] then
+            self.first_invalid_line = i
+            break
+          end
           if self.lines[i].resume then
             self.first_invalid_line = i
             goto yield
@@ -122,9 +129,11 @@ end
 
 
 function Highlighter:tokenize_line(idx, state, resume)
+  local text = self.doc:get_utf8_line(idx)
+  if not text then return nil end
   local res = {}
   res.init_state = state
-  res.text = self.doc:get_utf8_line(idx)
+  res.text = text
   res.tokens, res.state, res.resume = tokenizer.tokenize(self.doc.syntax, res.text, state, resume)
   return res
 end
@@ -136,6 +145,7 @@ function Highlighter:get_line(idx)
   if not line or line.text ~= self.doc:get_utf8_line(idx) then
     local prev = self.lines[idx - 1]
     line = self:tokenize_line(idx, prev and prev.state)
+    if not line then return {text="", tokens={"normal", ""}} end
     self.lines[idx] = line
     self:update_notify(idx, 0)
   end
