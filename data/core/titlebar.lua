@@ -207,12 +207,6 @@ function TitleBar:get_titlebar_tab_rect(node, idx)
   return x + (visible_pos - 1) * tw, y, tw, h
 end
 
-function TitleBar:get_titlebar_tab_close_rect(node, idx)
-  local x, y, w, h = self:get_titlebar_tab_rect(node, idx)
-  local close_w = math.min(math.floor(28 * SCALE), w)
-  return x + w - close_w, y, close_w, h
-end
-
 function TitleBar:get_titlebar_tab_at(px, py)
   if not config.integrated_titlebar_tabs then return nil end
   local node = self:get_tabs_node()
@@ -225,11 +219,7 @@ function TitleBar:get_titlebar_tab_at(px, py)
   local visible_count = math.floor(w / tw)
   local max_idx = math.min(#node.views, (node.tab_offset or 1) + visible_count - 1)
   if idx >= (node.tab_offset or 1) and idx <= max_idx and px < x + tw * visible_count then
-    local cx, cy, cw, ch = self:get_titlebar_tab_close_rect(node, idx)
-    local close = config.integrated_titlebar_tab_close_button
-      and (idx == self.hovered_tab_index or node.views[idx] == node.active_view)
-      and px >= cx and px < cx + cw and py >= cy and py < cy + ch
-    return node, idx, close
+    return node, idx
   end
 end
 
@@ -264,19 +254,7 @@ function TitleBar:draw_titlebar_tabs()
     renderer.draw_rect(tx + tab_w, ty + style.padding.y, ds, tab_h - style.padding.y * 2, style.divider)
 
     local title_w = tab_w - style.padding.x * 2
-    if config.integrated_titlebar_tab_close_button and (active or hovered) then
-      title_w = title_w - math.floor(22 * SCALE)
-    end
     node:draw_tab_title(view, style.font, active, hovered, tx + style.padding.x, ty, title_w, tab_h)
-
-    if config.integrated_titlebar_tab_close_button and (active or hovered) then
-      local cx, cy, cw, ch = self:get_titlebar_tab_close_rect(node, i)
-      local close_hovered = self.hovered_tab_close_index == i
-      if close_hovered then
-        renderer.draw_rect(cx, cy, cw, ch, { 255, 255, 255, 18 })
-      end
-      draw_caption_glyph({ id = "close" }, cx, cy, cw, ch, close_hovered and style.text or style.dim)
-    end
   end
   core.pop_clip_rect()
 end
@@ -374,7 +352,7 @@ function TitleBar:on_mouse_released(button, x, y)
   elseif self.hovered_tab_index then
     local node, idx, close = self:get_titlebar_tab_at(x, y)
     if node and idx == self.hovered_tab_index then
-      if button == "middle" or (button == "left" and close) then
+      if button == "middle" then
         node:close_view(core.root_panel.root_node, node.views[idx])
       elseif button == "left" and idx == self.pressed_tab_index then
         node:set_active_view(node.views[idx])
@@ -390,7 +368,6 @@ function TitleBar:on_mouse_left()
   TitleBar.super.on_mouse_left(self)
   self.hovered_item = nil
   self.hovered_tab_index = nil
-  self.hovered_tab_close_index = nil
   self.pressed_item = nil
   self.pressed_tab_index = nil
 end
@@ -413,12 +390,9 @@ function TitleBar:on_mouse_moved(px, py, ...)
   TitleBar.super.on_mouse_moved(self, px, py, ...)
   self.hovered_item = nil
   self.hovered_tab_index = nil
-  self.hovered_tab_close_index = nil
   local tab_node, tab_idx = self:get_titlebar_tab_at(px, py)
   if tab_node and tab_idx then
     self.hovered_tab_index = tab_idx
-    local _, _, close = self:get_titlebar_tab_at(px, py)
-    if close then self.hovered_tab_close_index = tab_idx end
     return
   end
   for item, x, y, w, h in self:each_control_item() do

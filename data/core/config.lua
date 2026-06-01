@@ -156,12 +156,6 @@ config.undo_merge_timeout = 0.3
 ---@type number
 config.max_undos = 10000
 
----The maximum number of tabs shown at a time.
----
----The default is 8.
----@type number
-config.max_tabs = 8
-
 ---The maximum number of entries shown at a time in the command palette.
 ---
 ---The default is 10.
@@ -364,11 +358,6 @@ config.borderless = false
 ---@type boolean
 config.integrated_titlebar_tabs = false
 
----Shows/hides close buttons on integrated titlebar tabs.
----Defaults to true.
----@type boolean
-config.integrated_titlebar_tab_close_button = true
-
 ---Minimum width for integrated titlebar tabs.
 ---Defaults to 80 * SCALE.
 ---@type number
@@ -378,13 +367,6 @@ config.integrated_titlebar_tab_min_width = 80 * SCALE
 ---Defaults to style.tab_width when not set.
 ---@type number?
 config.integrated_titlebar_tab_max_width = nil
-
----Shows/hides the close buttons on tabs.
----When hidden, users can close tabs via keyboard shortcuts or commands.
----
----Defaults to true.
----@type boolean
-config.tab_close_button = true
 
 ---Maximum number of clicks recognized by Anvil.
 ---

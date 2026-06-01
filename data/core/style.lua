@@ -10,7 +10,9 @@ style.expanded_scrollbar_margin = common.round(12 * SCALE)
 style.scrollbar_resize_edge_guard = common.round(5 * SCALE)
 style.scrollbar_end_padding = common.round(8 * SCALE)
 style.caret_width = common.round(2 * SCALE)
-style.tab_width = common.round(170 * SCALE)
+style.tab_min_width = common.round(110 * SCALE)
+style.tab_max_width = common.round(250 * SCALE)
+style.tab_width = style.tab_min_width
 
 style.padding = {
   x = common.round(14 * SCALE),

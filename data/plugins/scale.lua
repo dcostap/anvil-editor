@@ -69,6 +69,8 @@ function scale.set(scale)
   style.contracted_scrollbar_margin = style.contracted_scrollbar_margin * s
   style.expanded_scrollbar_margin   = style.expanded_scrollbar_margin   * s
   style.caret_width                 = style.caret_width                 * s
+  style.tab_min_width               = style.tab_min_width               * s
+  style.tab_max_width               = style.tab_max_width               * s
   style.tab_width                   = style.tab_width                   * s
   style.padding.x                   = style.padding.x                   * s
   style.padding.y                   = style.padding.y                   * s

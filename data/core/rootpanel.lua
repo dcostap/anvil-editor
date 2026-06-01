@@ -310,7 +310,7 @@ function RootPanel:on_mouse_pressed(button, x, y, clicks)
   end
   local idx = node:get_tab_overlapping_point(x, y)
   if idx then
-    if button == "middle" or node.hovered_close == idx then
+    if button == "middle" then
       node:close_view(self.root_node, node.views[idx])
       return true
     else

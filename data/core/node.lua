@@ -23,7 +23,6 @@ local View = require "core.view"
 ---@field views core.view[]
 ---@field divider number
 ---@field active_view core.view
----@field hovered_close integer
 ---@field hovered_tab integer?
 ---@field hovered_scroll_button integer
 ---@field tab_shift number
@@ -51,7 +50,6 @@ function Node:new(type)
   if self.type == "leaf" then
     self:add_view(EmptyView())
   end
-  self.hovered_close = 0
   self.tab_shift = 0
   self.tab_offset = 1
   self.tab_width = style.tab_width
@@ -359,10 +357,51 @@ function Node:get_divider_overlapping_point(px, py)
 end
 
 
+local function tab_min_width()
+  return math.max(1, style.tab_min_width or style.tab_width or 1)
+end
+
+local function tab_max_width()
+  return math.max(tab_min_width(), style.tab_max_width or style.tab_width or tab_min_width())
+end
+
+local function tab_title_width(view)
+  local text = view and view:get_name() or ""
+  return style.font:get_width(text) + style.padding.x * 2 + style.divider_size * 2
+end
+
+function Node:get_tab_width(idx)
+  return common.clamp(tab_title_width(self.views[idx]), tab_min_width(), tab_max_width())
+end
+
+function Node:get_tabs_width(first, last)
+  local width = 0
+  for i = first, last do
+    width = width + self:get_tab_width(i)
+  end
+  return width
+end
+
 ---Get the number of tabs currently visible (not scrolled out of view).
 ---@return integer count Number of visible tabs
 function Node:get_visible_tabs_number()
-  return math.min(#self.views - self.tab_offset + 1, config.max_tabs)
+  local remaining = #self.views - self.tab_offset + 1
+  if remaining <= 0 then return 0 end
+
+  local available = self.size.x
+  if self:get_tabs_width(self.tab_offset, #self.views) > available then
+    available = math.max(1, available - get_scroll_button_width() * 2)
+  end
+
+  local used = 0
+  local count = 0
+  for i = self.tab_offset, #self.views do
+    local width = self:get_tab_width(i)
+    if count > 0 and used + width > available then break end
+    used = used + width
+    count = count + 1
+  end
+  return math.max(1, count)
 end
 
 
@@ -373,10 +412,11 @@ end
 function Node:get_tab_overlapping_point(px, py)
   if not self:should_show_tabs() then return nil end
   local tabs_number = self:get_visible_tabs_number()
-  local x1, y1, w, h = self:get_tab_rect(self.tab_offset)
-  local x2, y2 = self:get_tab_rect(self.tab_offset + tabs_number)
-  if px >= x1 and py >= y1 and px < x2 and py < y1 + h then
-    return math.floor((px - x1) / w) + self.tab_offset
+  for i = self.tab_offset, self.tab_offset + tabs_number - 1 do
+    local x, y, w, h = self:get_tab_rect(i)
+    if px >= x and py >= y and px < x + w and py < y + h then
+      return i
+    end
   end
 end
 
@@ -406,28 +446,6 @@ function Node:should_show_tabs()
 end
 
 
----Calculate the position of a tab's close button.
----@param x number Tab x position
----@param w number Tab width
----@return number cx Close button x position
----@return number cw Close button width
----@return number pad Padding amount
-local function close_button_location(x, w)
-  local cw = style.icon_font:get_width("C")
-  local pad = style.padding.x / 2
-  return x + w - cw - pad, cw, pad
-end
-
-
-local function get_tab_title_fit_width(view)
-  local text = view and view:get_name() or ""
-  return style.font:get_width(text)
-    + style.icon_font:get_width("C")
-    + style.padding.x
-    + style.divider_size * 2
-end
-
-
 ---Get which scroll button (left/right) is under a point.
 ---@param px number Screen x coordinate
 ---@param py number Screen y coordinate
@@ -444,22 +462,15 @@ end
 
 
 ---Update hover state for tabs, close buttons, and scroll buttons.
----Sets hovered_tab, hovered_close, and hovered_scroll_button fields.
+---Sets hovered_tab and hovered_scroll_button fields.
 ---@param px number Screen x coordinate
 ---@param py number Screen y coordinate
 function Node:tab_hovered_update(px, py)
-  self.hovered_close = 0
   self.hovered_scroll_button = 0
   if not self:should_show_tabs() then self.hovered_tab = nil return end
   local tab_index = self:get_tab_overlapping_point(px, py)
   self.hovered_tab = tab_index
-  if tab_index then
-    local x, y, w, h = self:get_tab_rect(tab_index)
-    local cx, cw = close_button_location(x, w)
-    if px >= cx and px < cx + cw and py >= y and py < y + h and config.tab_close_button then
-      self.hovered_close = tab_index
-    end
-  elseif #self.views > self:get_visible_tabs_number() then
+  if not tab_index and #self.views > self:get_visible_tabs_number() then
     self.hovered_scroll_button = self:get_scroll_button_index(px, py) or 0
   end
 end
@@ -520,8 +531,8 @@ end
 function Node:get_tab_rect(idx)
   local maxw = self.size.x
   local x0 = self.position.x
-  local x1 = x0 + common.clamp(self.tab_width * (idx - 1) - self.tab_shift, 0, maxw)
-  local x2 = x0 + common.clamp(self.tab_width * idx - self.tab_shift, 0, maxw)
+  local x1 = x0 + common.clamp(self:get_tabs_width(1, idx - 1) - self.tab_shift, 0, maxw)
+  local x2 = x0 + common.clamp(self:get_tabs_width(1, idx) - self.tab_shift, 0, maxw)
   local h, pad_y, margin_y = get_tab_y_sizes()
   return x1, self.position.y, x2 - x1, h, margin_y
 end
@@ -674,8 +685,6 @@ function Node:scroll_tabs_to_visible()
       self.tab_offset = index
     elseif self.tab_offset + tabs_number - 1 < index then
       self.tab_offset = index - tabs_number + 1
-    elseif tabs_number < config.max_tabs and self.tab_offset > 1 then
-      self.tab_offset = #self.views - config.max_tabs + 1
     end
   end
 end
@@ -707,26 +716,8 @@ function Node:scroll_tabs(dir)
 end
 
 
----Calculate the target width for tabs.
----Tabs default to style.tab_width, grow to fit visible titles when possible,
----and shrink only when there is not enough space.
----@return number width Target tab width in pixels
-function Node:target_tab_width()
-  local n = self:get_visible_tabs_number()
-  if n < 1 then return style.tab_width end
-
-  local w = self.size.x
-  if #self.views > n then
-    w = self.size.x - get_scroll_button_width() * 2
-  end
-
-  local target = style.tab_width
-  local last = math.min(#self.views, self.tab_offset + n - 1)
-  for i = self.tab_offset, last do
-    target = math.max(target, get_tab_title_fit_width(self.views[i]))
-  end
-
-  return math.max(1, math.min(target, w / n))
+function Node:target_tab_shift()
+  return self:get_tabs_width(1, self.tab_offset - 1)
 end
 
 
@@ -740,9 +731,7 @@ function Node:update()
     call_view_method(view, view.update)
     view._core_step_first_update = true
     self:tab_hovered_update(core.root_panel.mouse.x, core.root_panel.mouse.y)
-    local tab_width = self:target_tab_width()
-    self:move_towards("tab_shift", tab_width * (self.tab_offset - 1), nil, "tabs")
-    self:move_towards("tab_width", tab_width, nil, "tabs")
+    self:move_towards("tab_shift", self:target_tab_shift(), nil, "tabs")
   else
     self.a:update()
     self.b:update()
@@ -794,22 +783,10 @@ end
 ---@return number w Adjusted width for content area
 ---@return number h Adjusted height for content area
 function Node:draw_tab_borders(view, is_active, is_hovered, x, y, w, h, standalone)
-  -- Tabs deviders
   local ds = style.divider_size
-  local color = style.dim
   local margin_y = style.margin.tab.top or 0
-  renderer.draw_rect(x + w, y - margin_y, ds, h + margin_y, { style.dim[1], style.dim[2], style.dim[3], 65 })
-  if standalone then
-    renderer.draw_rect(x-1, y-1, w+2, h+2, style.background2)
-  end
-  -- Full border
-  if is_active then
-    color = style.text
-    renderer.draw_rect(x, y, w, h, style.background)
-    renderer.draw_rect(x, y, w, ds, style.divider)
-    renderer.draw_rect(x + w, y, ds, h, style.divider)
-    renderer.draw_rect(x - ds, y, ds, h, style.divider)
-  end
+  local tab_color = { 0x1c, 0x1e, 0x26, 255 }
+  renderer.draw_rect(x, y - margin_y, w, h + margin_y, tab_color)
   return x + ds, y, w - ds*2, h
 end
 
@@ -818,25 +795,17 @@ end
 ---@param view core.view View for this tab
 ---@param is_active boolean Whether this is the active tab
 ---@param is_hovered boolean Whether mouse is over this tab
----@param is_close_hovered boolean Whether mouse is over close button
 ---@param x number Screen x coordinate
 ---@param y number Screen y coordinate
 ---@param w number Width
 ---@param h number Height
 ---@param standalone boolean If true, draw standalone tab (during drag)
-function Node:draw_tab(view, is_active, is_hovered, is_close_hovered, x, y, w, h, standalone)
+function Node:draw_tab(view, is_active, is_hovered, x, y, w, h, standalone)
   local _, padding_y, margin_y = get_tab_y_sizes()
   x, y, w, h = self:draw_tab_borders(view, is_active, is_hovered, x, y + margin_y, w, h - margin_y, standalone)
-  -- Close button
-  local cx, cw, cpad = close_button_location(x, w)
-  local show_close_button = ((is_active or is_hovered) and not standalone and config.tab_close_button)
-  if show_close_button then
-    local close_style = is_close_hovered and style.text or style.dim
-    common.draw_text(style.icon_font, close_style, "C", nil, cx, y, cw, h)
-  end
   -- Title
-  x = x + cpad + style.padding.x
-  w = cx - x
+  x = x + style.padding.x
+  w = w - style.padding.x * 2
   core.push_clip_rect(x, y, w, h)
   self:draw_tab_title(view, style.font, is_active, is_hovered, x, y, w, h)
   core.pop_clip_rect()
@@ -850,15 +819,14 @@ function Node:draw_tabs()
   local ds = style.divider_size
   local dots_width = style.font:get_width("…")
   core.push_clip_rect(x, y, self.size.x, h)
-  renderer.draw_rect(x, y, self.size.x, h, style.background2)
-  renderer.draw_rect(x, y + h - ds, self.size.x, ds, style.divider)
+  renderer.draw_rect(x, y, self.size.x, h, { 0x1c, 0x1e, 0x26, 255 })
   local tabs_number = self:get_visible_tabs_number()
 
   for i = self.tab_offset, self.tab_offset + tabs_number - 1 do
     local view = self.views[i]
     local x, y, w, h = self:get_tab_rect(i)
     self:draw_tab(view, view == self.active_view,
-                  i == self.hovered_tab, i == self.hovered_close,
+                  i == self.hovered_tab,
                   x, y, w, h)
   end
 

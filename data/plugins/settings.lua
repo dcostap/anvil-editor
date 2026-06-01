@@ -460,15 +460,6 @@ settings.add("User Interface",
       default = true
     },
     {
-      label = "Maximum Tabs",
-      description = "The maximum amount of visible document tabs.",
-      path = "max_tabs",
-      type = settings.type.NUMBER,
-      default = 8,
-      min = 1,
-      max = 100
-    },
-    {
       label = "Tabs Top Margin",
       description = "The amount of margin to apply on the top of tabs.",
       path = "tabs_top_margin",
@@ -477,13 +468,6 @@ settings.add("User Interface",
       on_apply = function(value)
         style.margin.tab.top = (tonumber(value) or -1) * SCALE
       end
-    },
-    {
-      label = "Close Button on Tabs",
-      description = "Display the close button on tabs.",
-      path = "tab_close_button",
-      type = settings.type.TOGGLE,
-      default = true
     },
     {
       label = "Mouse wheel scroll rate",

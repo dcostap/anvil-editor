@@ -25,9 +25,9 @@ end
 if core.fuzzy_searcher_install_global_keymaps then
   core.fuzzy_searcher_install_global_keymaps()
 end
--- Code font with programming ligatures and emoji fallback.
-local code_font = renderer.font.load(
-  "C:/Windows/Fonts/CascadiaCode.ttf",
+-- Shared UI/code font with Nerd Font glyphs and emoji fallback.
+local main_font = renderer.font.load(
+  DATADIR .. "/fonts/CaskaydiaCoveNerdFontMono-Regular.ttf",
   15 * SCALE,
   { ligatures = true }
 )
@@ -35,7 +35,9 @@ local emoji_font = renderer.font.load(
   "C:/Windows/Fonts/seguiemj.ttf",
   15 * SCALE
 )
-style.code_font = renderer.font.group({ code_font, emoji_font })
+local text_font = renderer.font.group({ main_font, emoji_font })
+style.font = text_font
+style.code_font = text_font
 -- First-party editable file tree.
 require "plugins.custom_nagview"
 require "plugins.filetree"
@@ -50,9 +52,10 @@ if PLATFORM == "Windows" then
   config.borderless = true
   config.integrated_titlebar_tabs = false
 end
--- Cleaner tabs: hide cramped close buttons and keep a compact tab width.
-config.tab_close_button = false
-style.tab_width = 110 * SCALE
+-- Cleaner tabs: grow to fit titles between compact min/max widths.
+style.tab_min_width = 110 * SCALE
+style.tab_max_width = 250 * SCALE
+style.tab_width = style.tab_min_width
 -- Keep the official autosave plugin disabled if it ever gets installed later.
 config.plugins.autosave = false
 -- Re-apply local shortcuts after plugins that append their own bindings.
