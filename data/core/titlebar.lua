@@ -254,7 +254,7 @@ function TitleBar:draw_titlebar_tabs()
     renderer.draw_rect(tx + tab_w, ty + style.padding.y, ds, tab_h - style.padding.y * 2, style.divider)
 
     local title_w = tab_w - style.padding.x * 2
-    node:draw_tab_title(view, style.font, active, hovered, tx + style.padding.x, ty, title_w, tab_h)
+    node:draw_tab_title(view, node:get_tab_title_font(), active, hovered, tx + style.padding.x, ty, title_w, tab_h)
   end
   core.pop_clip_rect()
 end

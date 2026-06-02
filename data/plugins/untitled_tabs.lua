@@ -83,13 +83,36 @@ local function truncate_to_width(font, text, max_w)
 end
 
 local function secondary_font()
-  if M._secondary_font and M._secondary_font_base == style.font then return M._secondary_font end
+  local base_size = style.font:get_size()
+  local desired_size = math.max(8 * SCALE, base_size * 0.85)
+  if M._secondary_font
+     and M._secondary_font_base == style.font
+     and M._secondary_font_size == desired_size then
+    return M._secondary_font
+  end
   local ok, font = pcall(function()
-    return style.font:copy(math.max(8 * SCALE, style.font:get_size() * 0.85))
+    return style.font:copy(desired_size)
   end)
   M._secondary_font_base = style.font
+  M._secondary_font_size = desired_size
   M._secondary_font = ok and font or style.font
   return M._secondary_font
+end
+
+local function untitled_tab_title_width(view, font)
+  local doc = view and view.doc
+  if not is_untitled_doc(doc) then return nil end
+
+  local secondary = doc.intellij_untitled_name or "Untitled"
+  if doc:is_dirty() then secondary = secondary .. "*" end
+
+  local primary = first_text_snippet(doc)
+  local sfont = secondary_font()
+  local width = sfont:get_width(secondary)
+  if primary and primary ~= "" then
+    width = width + style.padding.x + font:get_width(primary)
+  end
+  return width + style.padding.x * 2 + style.divider_size * 2
 end
 
 local function draw_untitled_tab_title(view, font, is_active, is_hovered, x, y, w, h)
@@ -100,8 +123,9 @@ local function draw_untitled_tab_title(view, font, is_active, is_hovered, x, y, 
   if doc:is_dirty() then secondary = secondary .. "*" end
 
   local primary = first_text_snippet(doc)
-  local primary_color = (is_active or is_hovered) and style.text or style.dim
-  local secondary_color = style.dim
+  local title_color = (is_active or is_hovered) and style.text or style.dim
+  local primary_color = title_color
+  local secondary_color = title_color
   local sfont = secondary_font()
   local gap = style.padding.x
 
@@ -216,6 +240,19 @@ if not core.__untitled_tabs_patched then
       return
     end
     return docview_try_close(self, do_close)
+  end
+
+  local node_get_tab_width = Node.get_tab_width
+  function Node:get_tab_width(idx)
+    local view = self.views and self.views[idx]
+    local font = self.get_tab_title_font and self:get_tab_title_font() or style.font
+    local width = untitled_tab_title_width(view, font)
+    if width then
+      local min_w = math.max(1, style.tab_min_width or style.tab_width or 1)
+      local max_w = math.max(min_w, style.tab_max_width or style.tab_width or min_w)
+      return common.clamp(width, min_w, max_w)
+    end
+    return node_get_tab_width(self, idx)
   end
 
   local node_draw_tab_title = Node.draw_tab_title

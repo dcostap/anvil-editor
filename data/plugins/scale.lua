@@ -81,6 +81,19 @@ function scale.set(scale)
     style[name]:set_size(s * style[name]:get_size())
   end
 
+  local Node = package.loaded["core.node"]
+  if Node then
+    Node._tab_title_font = nil
+    Node._tab_title_font_base = nil
+    Node._tab_title_font_size = nil
+  end
+  local untitled_tabs = package.loaded["plugins.untitled_tabs"]
+  if untitled_tabs then
+    untitled_tabs._secondary_font = nil
+    untitled_tabs._secondary_font_base = nil
+    untitled_tabs._secondary_font_size = nil
+  end
+
   -- restore scroll positions
   for view, n in pairs(v_scrolls) do
     view.scroll.y = n * (view:get_scrollable_size() - view.size.y)

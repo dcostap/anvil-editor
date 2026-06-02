@@ -369,9 +369,30 @@ local function tab_gap()
   return 5 * SCALE
 end
 
+local function tab_title_font()
+  local base_size = style.font:get_size()
+  local desired_size = math.max(8 * SCALE, base_size - 2 * SCALE)
+  if Node._tab_title_font
+     and Node._tab_title_font_base == style.font
+     and Node._tab_title_font_size == desired_size then
+    return Node._tab_title_font
+  end
+  local ok, font = pcall(function()
+    return style.font:copy(desired_size)
+  end)
+  Node._tab_title_font_base = style.font
+  Node._tab_title_font_size = desired_size
+  Node._tab_title_font = ok and font or style.font
+  return Node._tab_title_font
+end
+
+function Node:get_tab_title_font()
+  return tab_title_font()
+end
+
 local function tab_title_width(view)
   local text = view and view:get_name() or ""
-  return style.font:get_width(text) + style.padding.x * 2 + style.divider_size * 2
+  return tab_title_font():get_width(text) + style.padding.x * 2 + style.divider_size * 2
 end
 
 function Node:get_tab_width(idx)
@@ -835,7 +856,7 @@ function Node:draw_tab(view, is_active, is_hovered, x, y, w, h, standalone)
   x = x + style.padding.x
   w = w - style.padding.x * 2
   core.push_clip_rect(x, y, w, h)
-  self:draw_tab_title(view, style.font, is_active, is_hovered, x, y, w, h)
+  self:draw_tab_title(view, tab_title_font(), is_active, is_hovered, x, y, w, h)
   core.pop_clip_rect()
 end
 
@@ -845,7 +866,6 @@ function Node:draw_tabs()
   local _, y, w, h, scroll_padding = self:get_scroll_button_rect(1)
   local x = self.position.x
   local ds = style.divider_size
-  local dots_width = style.font:get_width("…")
   core.push_clip_rect(x, y, self.size.x, h)
   renderer.draw_rect(x, y, self.size.x, h, style.tab_background or { 0x1c, 0x1e, 0x26, 255 })
   local tabs_number = self:get_visible_tabs_number()
