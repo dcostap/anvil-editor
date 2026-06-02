@@ -628,10 +628,22 @@ end
 
 
 ---Forward mouse wheel events to the view under the mouse.
-function RootPanel:on_mouse_wheel(...)
+function RootPanel:on_mouse_wheel(delta_y, delta_x, ...)
   local x, y = self.mouse.x, self.mouse.y
   local node = self.root_node:get_child_overlapping_point(x, y)
-  return call_view_method(node.active_view, node.active_view.on_mouse_wheel, ...)
+  if node and node:is_in_tab_area(x, y) then
+    local dir
+    if math.abs(delta_x or 0) > math.abs(delta_y or 0) then
+      dir = delta_x > 0 and 1 or 2
+    elseif delta_y ~= 0 then
+      dir = delta_y > 0 and 1 or 2
+    end
+    if dir and node:can_scroll_tabs(dir) then
+      node:scroll_tabs(dir)
+      return true
+    end
+  end
+  return call_view_method(node.active_view, node.active_view.on_mouse_wheel, delta_y, delta_x, ...)
 end
 
 

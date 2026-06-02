@@ -91,6 +91,16 @@ test.describe("node tabs", function()
     test.ok(node:can_scroll_tabs(1))
   end)
 
+  test.it("keeps a manual page even when the active tab remains visible", function()
+    local node = make_leaf(500, { "a.lua", "b.lua", "c.lua", "d.lua", "e.lua", "f.lua" })
+    node:set_active_view(node.views[1])
+
+    node:scroll_tabs(2)
+    node:scroll_tabs_to_visible()
+
+    test.equal(node.tab_offset, 2)
+  end)
+
   test.it("does not hover disabled pagination chevrons", function()
     local node = make_leaf(260, { "a.lua", "b.lua", "c.lua", "d.lua" })
     local x, y, w, h = node:get_scroll_button_rect(1)

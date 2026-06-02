@@ -734,12 +734,7 @@ function Node:scroll_tabs_to_visible()
   local index = self:get_view_idx(self.active_view)
   if index then
     if self.manual_tab_scroll then
-      local tabs_number = self:get_visible_tabs_number()
-      if index >= self.tab_offset and index <= self.tab_offset + tabs_number - 1 then
-        self.manual_tab_scroll = nil
-      else
-        return
-      end
+      return
     end
     local old_offset = self.tab_offset
     local tabs_number = self:get_visible_tabs_number()
