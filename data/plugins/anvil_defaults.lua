@@ -25,19 +25,16 @@ end
 if core.fuzzy_searcher_install_global_keymaps then
   core.fuzzy_searcher_install_global_keymaps()
 end
--- Shared UI/code font with Nerd Font glyphs and emoji fallback.
-local main_font = renderer.font.load(
-  DATADIR .. "/fonts/CaskaydiaCoveNerdFontMono-Regular.ttf",
-  15 * SCALE,
-  { ligatures = true }
-)
-local emoji_font = renderer.font.load(
-  "C:/Windows/Fonts/seguiemj.ttf",
-  15 * SCALE
-)
-local text_font = renderer.font.group({ main_font, emoji_font })
-style.font = text_font
-style.code_font = text_font
+-- Matching UI/code fonts with separate objects so UI and code scaling can diverge.
+local font_path = DATADIR .. "/fonts/CaskaydiaCoveNerdFontMono-Regular.ttf"
+local emoji_font_path = "C:/Windows/Fonts/seguiemj.ttf"
+local function load_text_font()
+  local main_font = renderer.font.load(font_path, 15 * SCALE, { ligatures = true })
+  local emoji_font = renderer.font.load(emoji_font_path, 15 * SCALE)
+  return renderer.font.group({ main_font, emoji_font })
+end
+style.font = load_text_font()
+style.code_font = load_text_font()
 -- First-party editable file tree.
 require "plugins.custom_nagview"
 require "plugins.filetree"

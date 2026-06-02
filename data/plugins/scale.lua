@@ -37,7 +37,7 @@ function scale.set(scale)
   if current_scale == scale then return end
   system.setenv("ANVIL_SCALE_RESTART", scale)
 
-  scale = common.clamp(scale, 0.2, 6)
+  scale = common.clamp(scale, 0.7, 6)
 
   -- save scroll positions
   local v_scrolls = {}
@@ -111,7 +111,7 @@ function scale.set_code(scale)
   if current_code_scale == scale then return end
   system.setenv("ANVIL_SCALE_CODE_RESTART", scale)
 
-  scale = common.clamp(scale, 0.2, 6)
+  scale = common.clamp(scale, 0.7, 6)
 
   local s = scale / current_code_scale
   current_code_scale = scale
@@ -129,8 +129,9 @@ function scale.get()
 end
 
 function scale.reset()
+  local reset_code = current_scale == current_code_scale
   scale.set(DEFAULT_SCALE)
-  if current_scale == current_code_scale then
+  if reset_code then
     scale.set_code(DEFAULT_SCALE)
   end
 end
@@ -198,7 +199,7 @@ config.plugins.scale.config_spec = {
     type = "number",
     default = DEFAULT_SCALE,
     step = 0.05,
-    min = 0.80,
+    min = 0.70,
     max = 3.00,
     set_value = function(value)
       scale_set_by_user = value
@@ -219,23 +220,25 @@ config.plugins.scale.config_spec = {
   },
   {
     label = "Use MouseWheel",
-    description = "Allow using CTRL [+ SHIFT] + MouseWheel for changing the scale.",
+    description = "Allow using CTRL + MouseWheel for changing the scale.",
     path = "use_mousewheel",
     type = "toggle",
     default = true,
     on_apply = function(enabled)
+      keymap.unbind("ctrl+shift+wheelup", "scale:increase-code")
+      keymap.unbind("ctrl+shift+wheeldown", "scale:decrease-code")
       if enabled then
         keymap.add {
           ["ctrl+wheelup"] = "scale:increase",
           ["ctrl+wheeldown"] = "scale:decrease",
-          ["ctrl+shift+wheelup"] = "scale:increase-code",
-          ["ctrl+shift+wheeldown"] = "scale:decrease-code"
+          ["ctrl+shift+wheelup"] = "scale:increase",
+          ["ctrl+shift+wheeldown"] = "scale:decrease"
         }
       else
         keymap.unbind("ctrl+wheelup", "scale:increase")
         keymap.unbind("ctrl+wheeldown", "scale:decrease")
-        keymap.unbind("ctrl+shift+wheelup", "scale:increase-code")
-        keymap.unbind("ctrl+shift+wheeldown", "scale:decrease-code")
+        keymap.unbind("ctrl+shift+wheelup", "scale:increase")
+        keymap.unbind("ctrl+shift+wheeldown", "scale:decrease")
       end
     end
   }
@@ -248,27 +251,31 @@ command.add(nil, {
   ["scale:increase"] = function() scale.increase() end
 })
 
-command.add("core.docview", {
-  ["scale:reset-code"] = function() scale.reset_code() end,
-  ["scale:decrease-code"] = function() scale.decrease_code() end,
-  ["scale:increase-code"] = function() scale.increase_code() end,
-})
+command.map["scale:reset-code"] = nil
+command.map["scale:decrease-code"] = nil
+command.map["scale:increase-code"] = nil
+
+keymap.unbind("ctrl+shift+0", "scale:reset-code")
+keymap.unbind("ctrl+shift+-", "scale:decrease-code")
+keymap.unbind("ctrl+shift+=", "scale:increase-code")
+keymap.unbind("ctrl+shift+wheelup", "scale:increase-code")
+keymap.unbind("ctrl+shift+wheeldown", "scale:decrease-code")
 
 keymap.add {
   ["ctrl+0"] = "scale:reset",
   ["ctrl+-"] = "scale:decrease",
   ["ctrl+="] = "scale:increase",
-  ["ctrl+shift+0"] = "scale:reset-code",
-  ["ctrl+shift+-"] = "scale:decrease-code",
-  ["ctrl+shift+="] = "scale:increase-code"
+  ["ctrl+shift+0"] = "scale:reset",
+  ["ctrl+shift+-"] = "scale:decrease",
+  ["ctrl+shift+="] = "scale:increase"
 }
 
 if config.plugins.scale.use_mousewheel then
   keymap.add {
     ["ctrl+wheelup"] = "scale:increase",
     ["ctrl+wheeldown"] = "scale:decrease",
-    ["ctrl+shift+wheelup"] = "scale:increase-code",
-    ["ctrl+shift+wheeldown"] = "scale:decrease-code"
+    ["ctrl+shift+wheelup"] = "scale:increase",
+    ["ctrl+shift+wheeldown"] = "scale:decrease"
   }
 end
 
