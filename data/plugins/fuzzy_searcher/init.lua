@@ -124,6 +124,15 @@ local function modal_modkeys_string()
   return #keys > 0 and table.concat(keys, "+") or "none"
 end
 
+local function scale_mouse_wheel_modkeys_pressed()
+  local scale_key = PLATFORM == "Mac OS X" and "cmd" or "ctrl"
+  if not keymap.modkeys[scale_key] then return false end
+  for key, pressed in pairs(keymap.modkeys) do
+    if pressed and key ~= scale_key and key ~= "shift" then return false end
+  end
+  return true
+end
+
 local function current_picker()
   if active_view and active_view:is_visible() then return active_view end
   local view = core.fuzzy_searcher_active_view
@@ -2229,6 +2238,8 @@ function FSView:on_mouse_moved(x, y, dx, dy)
 end
 
 function FSView:on_mouse_wheel(y, x)
+  if scale_mouse_wheel_modkeys_pressed() then return false end
+
   if self.preview_view and self:preview_contains(self.mouse.x, self.mouse.y) then
     if not call_preview_view_method(self.preview_view, self.preview_view.on_mouse_wheel, y, x) and self.preview_view.scrollable then
       self.preview_view.scroll.to.y = self.preview_view.scroll.to.y + y * -config.mouse_wheel_scroll
@@ -3267,6 +3278,9 @@ keymap.on_key_pressed = function(key, ...)
 
   local picker = current_picker()
   local stroke = modal_key_to_stroke(key)
+  if key:match("^wheel") and scale_mouse_wheel_modkeys_pressed() then
+    return keymap.__fuzzy_searcher_original_on_key_pressed(key, ...)
+  end
   local fuzzy_cmd = modal_fuzzy_command(stroke)
   local textbox_cmd = not fuzzy_cmd and modal_textbox_command(stroke)
   if fuzzy_cmd then
