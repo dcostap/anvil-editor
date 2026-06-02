@@ -688,11 +688,23 @@ local function toggle_field_focus(view, state)
   field:select_all()
 end
 
+local function find_bar_background_color()
+  return style.tab_background or style.background2 or style.background
+end
+
+local function find_input_background_color()
+  local bg = find_bar_background_color()
+  if bg then
+    return common.lerp(bg, { 255, 255, 255, bg[4] or 255 }, 0.05)
+  end
+  return style.background3 or style.background
+end
+
 local function find_bar_layout(view, state)
   local font = style.font
   local pad = style.padding.x
-  local row_h = math.floor(font:get_height() * 1.45)
-  local h = row_h + math.max(2, SCALE * 2)
+  local row_h = font:get_height() + style.padding.y
+  local h = font:get_height() + style.padding.y * 2
   return {
     x = view.position.x,
     y = view.position.y + view.size.y - h,
@@ -717,10 +729,10 @@ local function make_field_row(layout, label, x, input_x, input_w)
   return {
     label = label,
     x = x,
-    y = layout.y + math.floor((layout.h - (layout.row_h - layout.pad / 2)) / 2),
+    y = layout.y + math.floor((layout.h - layout.row_h) / 2),
     input_x = input_x,
     input_w = math.max(32 * SCALE, input_w),
-    input_h = layout.row_h - layout.pad / 2,
+    input_h = layout.row_h,
     font = layout.font,
   }
 end
@@ -757,19 +769,12 @@ local function draw_input_field(view, state, field, row, active)
   local font = row.font or style.font
   local pad = style.padding.x / 2
   local x, y, w, h = row.input_x, row.y, row.input_w, row.input_h
-  local border = style.divider
-  local bg = active and (style.background3 or style.background) or (style.background2 or style.background)
-  local line = math.max(1, SCALE)
-  renderer.draw_rect(x, y, w, h, bg)
-  renderer.draw_rect(x, y, w, line, border)
-  renderer.draw_rect(x, y + h - line, w, line, active and (style.accent or style.caret) or border)
-  renderer.draw_rect(x, y, line, h, border)
-  renderer.draw_rect(x + w - line, y, line, h, border)
+  renderer.draw_rect(x, y, w, h, find_input_background_color())
 
   field.position.x = x + pad
-  field.position.y = y + 1
+  field.position.y = y
   field.size.x = math.max(1, w - pad * 2)
-  field.size.y = math.max(1, h - 2)
+  field.size.y = math.max(1, h)
   local caret_line, caret_col = field.doc:get_selection()
   field:scroll_to_make_visible(caret_line or 1, caret_col or 1, true)
   field:update()
@@ -789,10 +794,7 @@ local function draw_local_find(view)
   if not state then return end
   local layout = find_bar_layout(view, state)
   local active = state.input_active
-  local bg = style.background2 or style.background
-  local top = math.max(1, SCALE)
-  renderer.draw_rect(layout.x, layout.y, layout.w, layout.h, bg)
-  renderer.draw_rect(layout.x, layout.y, layout.w, top, style.divider)
+  renderer.draw_rect(layout.x, layout.y, layout.w, layout.h, find_bar_background_color())
 
   local info_text = find_info_text(state)
   local find_row, replace_row, info = find_bar_rows(layout, state, info_text)
@@ -801,8 +803,6 @@ local function draw_local_find(view)
   draw_input_field(view, state, state.find, find_row, active and core.active_view == state.find)
 
   if replace_row then
-    local sep_x = find_row.input_x + find_row.input_w + math.floor(layout.sep / 2)
-    renderer.draw_rect(sep_x, layout.y, layout.sep, layout.h, style.divider)
     renderer.draw_text(layout.font, replace_row.label, replace_row.x, label_y, style.dim or style.text)
     draw_input_field(view, state, state.replace, replace_row, active and core.active_view == state.replace)
   end
