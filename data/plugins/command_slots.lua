@@ -554,6 +554,9 @@ function CommandOutputPanel:select_slot(index, opts)
   self.active_slot_index = index
   self.active_view = self:slot_view(self:active_slot())
   self.manual_tab_scroll = nil
+  if self.active_view and sidepanel.side_focus_views then
+    sidepanel.side_focus_views[self] = self.active_view
+  end
   local view = self.active_view
   if old_view and old_view ~= view and old_view.on_mouse_left then
     old_view:on_mouse_left()

@@ -200,6 +200,28 @@ test.describe("Command Slots", function()
     test.equal(core.active_view.slot.index, command_slots.output_panel.active_slot_index)
   end)
 
+  test.it("restores focus to the visible Command Output slot after an unfocused run switches tabs", function()
+    config.plugins.command_slots.powershell_candidates = {}
+    if sidepanel.is_side_view(core.active_view) then
+      sidepanel.focus_main(false)
+    end
+    local previous = core.active_view
+
+    test.ok(command_slots.run_command(1, "Write-Output 'first'"))
+    local panel = command_slots.output_panel
+    panel:select_slot(1, { focus = true })
+    test.equal(core.active_view, command_slots.slots[1].view)
+
+    if previous then core.set_active_view(previous) end
+    test.ok(command_slots.run_command(2, "Write-Output 'second'"))
+    test.equal(core.active_view, previous)
+    test.equal(panel.active_slot_index, 2)
+
+    sidepanel.focus_side()
+
+    test.equal(core.active_view, command_slots.slots[2].view)
+  end)
+
   test.it("focuses Command Output when a command is run from another Side Panel view", function()
     config.plugins.command_slots.powershell_candidates = {}
     local dummy = View()
