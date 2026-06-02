@@ -442,6 +442,10 @@ end
 function Node:get_tab_overlapping_point(px, py)
   if not self:should_show_tabs() then return nil end
   local tabs_number = self:get_visible_tabs_number()
+  if #self.views > tabs_number then
+    local tabs_w = math.max(1, self.size.x - get_scroll_button_width() * 2)
+    if px >= self.position.x + tabs_w then return nil end
+  end
   for i = self.tab_offset, self.tab_offset + tabs_number - 1 do
     local x, y, w, h = self:get_tab_rect(i)
     if px >= x and py >= y and px < x + w and py < y + h then

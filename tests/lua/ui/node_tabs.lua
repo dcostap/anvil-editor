@@ -111,4 +111,13 @@ test.describe("node tabs", function()
 
     test.ok(tab_x + tab_w <= chevron_x)
   end)
+
+  test.it("does not hover tabs under the pagination chevron area", function()
+    local node = make_leaf(335, { "a.lua", "b.lua", "c.lua" })
+    node.tab_offset = 2
+    node.tab_shift = node:target_tab_shift()
+    local x, y, w, h = node:get_scroll_button_rect(1)
+
+    test.equal(node:get_tab_overlapping_point(x + w / 2, y + h / 2), nil)
+  end)
 end)
