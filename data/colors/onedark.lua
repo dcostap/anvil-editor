@@ -75,7 +75,7 @@ local C = {
 }
 
 -- Core UI
-style.background = c("181a20")
+style.background = c("16181e")
 style.background2 = c("26282b")
 style.tab_background = c("202126")
 style.titlebar = style.tab_background
