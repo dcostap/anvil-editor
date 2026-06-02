@@ -119,7 +119,7 @@ winget install --id DEVCOM.LuaJIT -e
 
 Anvil has a first-party Lua runtime test framework in `data/core/test.lua`. Tests use `test.describe`, `test.it` / `test.test`, hooks, coroutine yields, and assertion helpers such as `test.equal`, `test.same`, and `test.ok`.
 
-Do not test exact keyboard shortcuts or keymap bindings. Shortcuts are user-configurable workflow choices and may change freely. Test commands and behavior instead, usually by invoking `command.perform(...)` or direct view/model methods.
+Never test exact keyboard shortcuts or keymap bindings. Shortcuts are user-configurable workflow choices and may change freely. Test commands and behavior instead, usually by invoking `command.perform(...)` or direct view/model methods.
 
 #### What to test and what not to test
 
