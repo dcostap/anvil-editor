@@ -121,6 +121,29 @@ Anvil has a first-party Lua runtime test framework in `data/core/test.lua`. Test
 
 Do not test exact keyboard shortcuts or keymap bindings. Shortcuts are user-configurable workflow choices and may change freely. Test commands and behavior instead, usually by invoking `command.perform(...)` or direct view/model methods.
 
+#### What to test and what not to test
+
+Prefer tests for stable user-facing behavior and bug-prone logic:
+
+- command behavior
+- input/event routing
+- focus changes
+- selection state
+- layout rules with durable semantics
+- parsing, matching, indexing, persistence, and edge cases
+
+Avoid tests that only restate tweakable constants or personal visual preferences:
+
+- exact pixel values for cosmetic spacing
+- exact width/height breakpoints chosen by taste
+- exact keyboard shortcuts
+- theme colors
+- default UI tuning values
+
+If a visual/layout test is needed, test the durable behavior rather than a magic number. For example, test that a panel clamps to minimum padding when below its configured breakpoint, not that a hard-coded breakpoint is exactly `1200 * SCALE`.
+
+A test should generally fail when there is a bug, not merely because a preference was intentionally retuned. Tests should encode intent, not duplicate implementation/configuration.
+
 Current first-party tests live in:
 
 - `tests/lua/runtime` — Anvil-runtime Lua tests for non-visual APIs and behavior.
