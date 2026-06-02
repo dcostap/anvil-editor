@@ -22,6 +22,8 @@ if errorlevel 1 exit /b 1
 
 echo.
 echo === Temporarily removing source-data junctions ===
+call :RemoveLink "%DEST%\data\core"
+if errorlevel 1 exit /b 1
 call :RemoveLink "%DEST%\data\plugins"
 if errorlevel 1 exit /b 1
 call :RemoveLink "%DEST%\data\colors"
@@ -39,6 +41,8 @@ if errorlevel 1 exit /b 1
 
 echo.
 echo === Restoring editable source-data junctions ===
+call :LinkDir "%DEST%\data\core" "%REPO%\data\core"
+if errorlevel 1 exit /b 1
 call :LinkDir "%DEST%\data\plugins" "%REPO%\data\plugins"
 if errorlevel 1 exit /b 1
 call :LinkDir "%DEST%\data\colors" "%REPO%\data\colors"
