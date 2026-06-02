@@ -98,6 +98,25 @@ test.describe("Command Slots", function()
     test.not_ok(doc:is_dirty())
   end)
 
+  test.it("keeps Command Output View measurement caches valid after read-only text refreshes", function()
+    config.plugins.command_slots.powershell_candidates = {}
+
+    test.ok(command_slots.run_command(1, "Write-Output 'cache cache'"))
+    local view = command_slots.slots[1].view
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 500, 200
+    view.doc:set_selection(1, 1, 1, 6)
+
+    local col1, col2 = view:get_visible_cols_range(1, 300)
+    test.ok(col1 <= col2)
+    test.ok(view:get_col_x_offset(1, 2) >= 0)
+
+    view:append_text("cache cache\n")
+    col1, col2 = view:get_visible_cols_range(1, 300)
+    test.ok(col1 <= col2)
+    test.ok(view:get_col_x_offset(1, 2) >= 0)
+  end)
+
   test.it("only advances command output carets that were on the trailing blank line", function()
     local doc = command_slots.CommandOutputDoc()
     doc:set_text("first")
@@ -166,6 +185,19 @@ test.describe("Command Slots", function()
     test.equal(command_slots.output_panel.active_slot_index, 1)
     test.equal(command_slots.slots[1].view:get_name(), "A: Write-Output 'one'")
     test.equal(command_slots.output_panel:slot_view(command_slots.slots[2]):get_name(), "S: No commands")
+  end)
+
+  test.it("focuses Command Output panel on demand", function()
+    if sidepanel.is_side_view(core.active_view) then
+      sidepanel.focus_main(false)
+    end
+
+    test.ok(command.perform("command-slots:focus-output"))
+
+    test.ok(command_slots.output_panel and command_slots.output_panel.command_output_panel)
+    test.ok(sidepanel.contains_view(command_slots.output_panel))
+    test.ok(core.active_view and core.active_view.command_output_view)
+    test.equal(core.active_view.slot.index, command_slots.output_panel.active_slot_index)
   end)
 
   test.it("focuses Command Output when a command is run from another Side Panel view", function()

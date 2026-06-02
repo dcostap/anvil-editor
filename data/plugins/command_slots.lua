@@ -321,7 +321,10 @@ function CommandOutputDoc:_replace_display_text(selection_mode)
 
   self.lines = { "\n" }
   self.clean_lines = {}
-  self.cache = {}
+  self.cache = {
+    col_x = {},
+    ulen = {},
+  }
   self.highlighter:soft_reset()
   CommandOutputDoc.super.insert(self, 1, 1, self:_display_text())
 
@@ -1118,6 +1121,14 @@ local function install_commands()
     if slot then return M.kill_slot(slot.index, "command") end
     return false
   end
+  map["command-slots:focus-output"] = function()
+    local panel = ensure_output_panel()
+    sidepanel.show(panel, { focus = true })
+    local slot = panel:active_slot()
+    if slot then
+      panel:select_slot(slot.index, { focus = true, follow_end = true })
+    end
+  end
   command.add(nil, map)
 
   command.add(function()
@@ -1137,6 +1148,9 @@ local function install_keymaps()
   keymap.add({
     ["alt+left"] = "command-slots:history-previous",
     ["alt+right"] = "command-slots:history-next",
+  })
+  keymap.add_direct({
+    ["alt+3"] = "command-slots:focus-output",
   })
 
   local map = {}

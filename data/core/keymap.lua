@@ -314,7 +314,6 @@ keymap.add_direct {
   ["alt+1"] = "root:switch-to-tab-1",
   ["alt+2"] = "root:switch-to-tab-2",
   ["alt+3"] = "root:switch-to-tab-3",
-  ["alt+4"] = "root:switch-to-tab-4",
   ["alt+5"] = "root:switch-to-tab-5",
   ["alt+6"] = "root:switch-to-tab-6",
   ["alt+7"] = "root:switch-to-tab-7",
