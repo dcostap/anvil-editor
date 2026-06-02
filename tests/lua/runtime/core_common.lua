@@ -76,6 +76,22 @@ test.describe("core.common", function()
     end
   end)
 
+  test.describe("sanitize_prompt_path", function()
+    test.test("trims pasted path framing", function()
+      test.equal(
+        common.sanitize_prompt_path("  \"U:\\Informatica\\israel\\En Curso\\Consumos CS\\01 comprobacion consumo comunes Materiales.sql\"\r\n"),
+        "U:\\Informatica\\israel\\En Curso\\Consumos CS\\01 comprobacion consumo comunes Materiales.sql"
+      )
+    end)
+
+    test.test("preserves spaces inside paths", function()
+      test.equal(
+        common.sanitize_prompt_path("C:\\Some Folder\\file name.sql"),
+        "C:\\Some Folder\\file name.sql"
+      )
+    end)
+  end)
+
   test.describe("path_suggest", function()
     test.test("suggests relative paths from the current directory", function(context)
       system.chdir(context.temp_root)

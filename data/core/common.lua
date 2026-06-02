@@ -786,6 +786,25 @@ function common.home_expand(text)
 end
 
 
+---Removes prompt framing from a pasted path while preserving the path itself.
+---Useful for path prompts where users often paste quoted paths or clipboard
+---text with trailing CR/LF. This intentionally trims only leading/trailing
+---whitespace and one layer of matching surrounding quotes; spaces inside the
+---path are preserved.
+---@param text string|nil
+---@return string
+function common.sanitize_prompt_path(text)
+  text = tostring(text or "")
+  text = text:gsub("^%s+", ""):gsub("%s+$", "")
+  local quote = text:sub(1, 1)
+  if (quote == '"' or quote == "'") and text:sub(-1) == quote then
+    text = text:sub(2, -2)
+    text = text:gsub("^%s+", ""):gsub("%s+$", "")
+  end
+  return text
+end
+
+
 local function split_on_slash(s, sep_pattern)
   local t = {}
   if s:match("^["..PATHSEP.."]") then

@@ -641,10 +641,10 @@ local commands = {
     core.global_prompt_bar:enter("Save As", {
       text = text,
       submit = function(filename)
-        save(common.home_expand(filename))
+        save(common.home_expand(common.sanitize_prompt_path(filename)))
       end,
       suggest = function (text)
-        return common.home_encode_list(common.path_suggest(common.home_expand(text)))
+        return common.home_encode_list(common.path_suggest(common.home_expand(common.sanitize_prompt_path(text))))
       end
     })
   end,
@@ -671,6 +671,7 @@ local commands = {
     core.global_prompt_bar:enter("Rename", {
       text = old_filename,
       submit = function(filename)
+        filename = common.sanitize_prompt_path(filename)
         local expanded_filename = common.home_expand(filename)
         local new_filename = core.normalize_to_project_dir(expanded_filename)
         local new_abs_filename = core.project_absolute_path(new_filename)
@@ -682,7 +683,7 @@ local commands = {
         end
       end,
       suggest = function (text)
-        return common.home_encode_list(common.path_suggest(common.home_expand(text)))
+        return common.home_encode_list(common.path_suggest(common.home_expand(common.sanitize_prompt_path(text))))
       end
     })
   end,

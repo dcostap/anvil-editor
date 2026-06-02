@@ -70,12 +70,11 @@ local function open_file(use_dialog, label, selection_callback, allow_directorie
     end,
     suggest = function(text)
       return common.home_encode_list(
-        common.path_suggest(common.home_expand(text), root_dir)
+        common.path_suggest(common.home_expand(common.sanitize_prompt_path(text)), root_dir)
       )
     end,
     validate = function(text)
-      -- strip double quotes in case the user pasted the path
-      text = text:gsub("^\"*(.-)\"*$", "%1", 1)
+      text = common.sanitize_prompt_path(text)
       filename = common.path_equals(root_dir, core.root_project().path) and
         core.root_project():absolute_path(
           common.home_expand(text)
@@ -133,7 +132,7 @@ local function open_directory(label, use_dialog, allow_many, callback, select_te
   core.global_prompt_bar:enter(label, {
     text = text,
     submit = function(text)
-      local path = common.home_expand(text)
+      local path = common.home_expand(common.sanitize_prompt_path(text))
       local abs_path = check_directory_path(path)
       if not abs_path then
         core.error("Cannot open directory %q", path)
@@ -141,7 +140,9 @@ local function open_directory(label, use_dialog, allow_many, callback, select_te
       end
       callback({abs_path})
     end,
-    suggest = suggest_directory,
+    suggest = function(text)
+      return suggest_directory(common.sanitize_prompt_path(text))
+    end,
     select_text = select_text
   })
 end
@@ -261,7 +262,7 @@ command.add(nil, {
   ["core:new-named-doc"] = function()
     core.global_prompt_bar:enter("File name", {
       submit = function(text)
-        core.root_panel:open_doc(core.open_doc(text))
+        core.root_panel:open_doc(core.open_doc(common.sanitize_prompt_path(text)))
       end
     })
   end,
@@ -341,13 +342,13 @@ command.add(nil, {
     end
     core.global_prompt_bar:enter("Remove Directory", {
       submit = function(text, item)
-        text = common.home_expand(item and item.text or text)
+        text = common.home_expand(common.sanitize_prompt_path(item and item.text or text))
         if not core.remove_project(text) then
           core.error("No directory %q to be removed", text)
         end
       end,
       suggest = function(text)
-        text = common.home_expand(text)
+        text = common.home_expand(common.sanitize_prompt_path(text))
         return common.home_encode_list(common.dir_list_suggest(text, dir_list))
       end
     })

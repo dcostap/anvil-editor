@@ -309,7 +309,7 @@ local function default_new_file_text()
 end
 
 local function trim_path_input(text)
-  return (text or ""):match("^%s*(.-)%s*$")
+  return common.sanitize_prompt_path(text)
 end
 
 local function path_text_is_directory(text)
@@ -410,7 +410,7 @@ command.add(nil, {
       text = default_new_file_text(),
       submit = create_empty_file,
       suggest = function(text)
-        return common.home_encode_list(common.path_suggest(common.home_expand(text)))
+        return common.home_encode_list(common.path_suggest(common.home_expand(common.sanitize_prompt_path(text))))
       end,
     })
   end,
