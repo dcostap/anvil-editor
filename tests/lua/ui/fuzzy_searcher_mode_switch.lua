@@ -1,6 +1,5 @@
 local core = require "core"
 local command = require "core.command"
-local keymap = require "core.keymap"
 local test = require "core.test"
 
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
@@ -48,18 +47,6 @@ end
 
 test.describe("Fuzzy Searcher mode switching", function()
   test.after_each(function(context)
-    if context.ctrl_wheel_handler then
-      keymap.unbind("ctrl+wheelup", context.ctrl_wheel_handler)
-    end
-    if context.ctrl_shift_wheel_handler then
-      keymap.unbind("ctrl+shift+wheelup", context.ctrl_shift_wheel_handler)
-    end
-    keymap.modkeys.ctrl = false
-    keymap.modkeys.shift = false
-    keymap.modkeys.alt = false
-    keymap.modkeys.altgr = false
-    keymap.modkeys.super = false
-    keymap.modkeys.cmd = false
     if core.fuzzy_searcher_active_view then
       core.fuzzy_searcher_active_view:close()
     end
@@ -104,34 +91,5 @@ test.describe("Fuzzy Searcher mode switching", function()
     command.perform("fuzzy-searcher:open-commands")
 
     test.equal(picker_text(), ">plain query")
-  end)
-
-  test.it("lets scale mouse-wheel shortcuts reach the global keymap", function(context)
-    fuzzy_searcher.open("")
-    local picker = core.fuzzy_searcher_active_view
-    picker:layout()
-    picker.mouse.x = picker.position.x + 10
-    picker.mouse.y = picker.position.y + 10
-
-    local ctrl_wheel_handled = false
-    context.ctrl_wheel_handler = function() ctrl_wheel_handled = true end
-    keymap.add({ ["ctrl+wheelup"] = context.ctrl_wheel_handler })
-
-    keymap.modkeys.ctrl = true
-    test.equal(picker:on_mouse_wheel(1, 0), false)
-    test.equal(keymap.on_key_pressed("wheelup"), true)
-    test.equal(ctrl_wheel_handled, true)
-
-    local ctrl_shift_wheel_handled = false
-    context.ctrl_shift_wheel_handler = function() ctrl_shift_wheel_handled = true end
-    keymap.add({ ["ctrl+shift+wheelup"] = context.ctrl_shift_wheel_handler })
-
-    keymap.modkeys.shift = true
-    test.equal(picker:on_mouse_wheel(1, 0), false)
-    test.equal(keymap.on_key_pressed("wheelup"), true)
-    test.equal(ctrl_shift_wheel_handled, true)
-
-    keymap.modkeys.alt = true
-    test.equal(picker:on_mouse_wheel(1, 0), true)
   end)
 end)

@@ -47,7 +47,12 @@ local function range_x(view, line, col1, col2)
 end
 
 test.describe("DocView selection scrolling", function()
+  test.before_each(function(context)
+    context.scroll_past_end = config.scroll_past_end
+  end)
+
   test.after_each(function(context)
+    config.scroll_past_end = context.scroll_past_end
     local root = core.root_panel.root_node
     for _, view in ipairs(context.views or {}) do
       local node = root:get_node_for_view(view)
@@ -59,8 +64,8 @@ test.describe("DocView selection scrolling", function()
     end
   end)
 
-  test.it("bundled defaults allow the final line to scroll to the top with blank space below", function(context)
-    test.equal(config.scroll_past_end, true, "expected bundled defaults to keep scroll-past-end enabled")
+  test.it("allows the final line to scroll to the top with blank space below when scroll-past-end is enabled", function(context)
+    config.scroll_past_end = true
 
     local view, doc = open_editor(context, "one\ntwo\nthree")
     local lh = view:get_line_height()

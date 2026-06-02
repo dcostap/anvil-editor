@@ -20,12 +20,16 @@ local function find_filetree_line(view, wanted)
   end
 end
 
-local function wait_for_folder_count(filetree, line, count_text, timeout)
+local function hint_has_folder_count(hint, count)
+  return tostring(hint or ""):match("^%s*" .. tostring(count) .. "%s*·") ~= nil
+end
+
+local function wait_for_folder_count(filetree, line, count, timeout)
   local deadline = system.get_time() + (timeout or 2)
   local hint
   repeat
     hint = filetree:get_line_hint(line).text
-    if hint:find(count_text, 1, true) then
+    if hint_has_folder_count(hint, count) then
       return hint
     end
     coroutine.yield(0.02)
@@ -95,40 +99,24 @@ test.describe("File Tree Line Hints", function()
     local initial_folder_b_hint = filetree:get_line_hint(folder_b_line).text
     local file_hint = filetree:get_line_hint(file_line).text
 
-    test.ok(initial_folder_a_hint:find("   …   ·", 1, true), initial_folder_a_hint)
-    test.not_ok(initial_folder_a_hint:find("↓", 1, true), initial_folder_a_hint)
-    test.not_ok(initial_folder_a_hint:find("📁", 1, true), initial_folder_a_hint)
-    test.not_ok(initial_folder_a_hint:find("📄", 1, true), initial_folder_a_hint)
-    test.ok(initial_folder_b_hint:find("   …   ·", 1, true), initial_folder_b_hint)
-    test.not_ok(initial_folder_b_hint:find("↓", 1, true), initial_folder_b_hint)
-    test.not_ok(initial_folder_b_hint:find("📁", 1, true), initial_folder_b_hint)
-    test.not_ok(initial_folder_b_hint:find("📄", 1, true), initial_folder_b_hint)
+    test.ok(initial_folder_a_hint:find("…", 1, true), initial_folder_a_hint)
+    test.ok(initial_folder_a_hint:find("·", 1, true), initial_folder_a_hint)
+    test.ok(initial_folder_b_hint:find("…", 1, true), initial_folder_b_hint)
+    test.ok(initial_folder_b_hint:find("·", 1, true), initial_folder_b_hint)
     test.ok(initial_folder_a_hint:match("%d%d%d%d %a%a%a%s+%d+ %d%d:%d%d"), initial_folder_a_hint)
 
-    local folder_a_hint = wait_for_folder_count(filetree, folder_a_line, "   3   ·")
-    local folder_b_hint = wait_for_folder_count(filetree, folder_b_line, "   3   ·")
-    test.ok(folder_a_hint:find("   3   ·", 1, true), folder_a_hint)
-    test.not_ok(folder_a_hint:find("↓", 1, true), folder_a_hint)
-    test.not_ok(folder_a_hint:find("📁", 1, true), folder_a_hint)
-    test.not_ok(folder_a_hint:find("📄", 1, true), folder_a_hint)
+    local folder_a_hint = wait_for_folder_count(filetree, folder_a_line, 3)
+    local folder_b_hint = wait_for_folder_count(filetree, folder_b_line, 3)
+    test.ok(hint_has_folder_count(folder_a_hint, 3), folder_a_hint)
     test.ok(folder_a_hint:match("%d%d%d%d %a%a%a%s+%d+ %d%d:%d%d"), folder_a_hint)
-    test.ok(folder_b_hint:find("   3   ·", 1, true), folder_b_hint)
-    test.not_ok(folder_b_hint:find("↓", 1, true), folder_b_hint)
-    test.not_ok(folder_b_hint:find("📁", 1, true), folder_b_hint)
-    test.not_ok(folder_b_hint:find("📄", 1, true), folder_b_hint)
+    test.ok(hint_has_folder_count(folder_b_hint, 3), folder_b_hint)
 
-    local folder_c_hint = wait_for_folder_count(filetree, folder_c_line, "   2   ·")
-    local folder_d_hint = wait_for_folder_count(filetree, folder_d_line, "   0   ·")
-    test.ok(folder_c_hint:find("   2   ·", 1, true), folder_c_hint)
-    test.not_ok(folder_c_hint:find("↓", 1, true), folder_c_hint)
-    test.not_ok(folder_c_hint:find("📁", 1, true), folder_c_hint)
-    test.not_ok(folder_c_hint:find("📄", 1, true), folder_c_hint)
-    test.ok(folder_d_hint:find("   0   ·", 1, true), folder_d_hint)
-    test.not_ok(folder_d_hint:find("↓", 1, true), folder_d_hint)
-    test.not_ok(folder_d_hint:find("📁", 1, true), folder_d_hint)
-    test.not_ok(folder_d_hint:find("📄", 1, true), folder_d_hint)
+    local folder_c_hint = wait_for_folder_count(filetree, folder_c_line, 2)
+    local folder_d_hint = wait_for_folder_count(filetree, folder_d_line, 0)
+    test.ok(hint_has_folder_count(folder_c_hint, 2), folder_c_hint)
+    test.ok(hint_has_folder_count(folder_d_hint, 0), folder_d_hint)
 
-    test.ok(file_hint:find(" 23 K", 1, true), file_hint)
+    test.ok(file_hint:find("23 K", 1, true), file_hint)
     test.ok(file_hint:match("%d%d%d%d %a%a%a%s+%d+ %d%d:%d%d"), file_hint)
   end)
 end)

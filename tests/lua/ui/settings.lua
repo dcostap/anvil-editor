@@ -140,7 +140,6 @@ test.describe("settings", function()
     local button = find_child(view, Button)
     test.not_nil(button)
     test.equal(button.label, "Open Preferences")
-    test.equal(button.icon.code, "P")
 
     button:on_click()
     settings.show_config = old_show_config

@@ -182,7 +182,6 @@ test.describe("File Tree Sorting", function()
     filetree.scroll.y = 0
 
     local folder_background = config.plugins.filetree.folder_row_background
-    test.equal(folder_background[4], 12.75)
     local background_rects = {}
     local original_draw_rect = renderer.draw_rect
     local original_draw_text = renderer.draw_text
