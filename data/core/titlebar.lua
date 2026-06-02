@@ -31,6 +31,7 @@ local function caption_button_width()
 end
 
 local caption_font
+local caption_font_size
 local title_logo
 local title_logo_size
 local caption_glyphs = {
@@ -54,14 +55,19 @@ local function get_title_logo(size)
 end
 
 local function get_caption_font()
-  if caption_font == false then return nil end
-  if caption_font then return caption_font end
+  local size = 10 * SCALE
+  if caption_font == false and caption_font_size == size then return nil end
+  if caption_font and caption_font_size == size then return caption_font end
+
+  caption_font = nil
+  caption_font_size = size
+
   local candidates = {
     "C:/Windows/Fonts/segmdl2.ttf",
     "C:/Windows/Fonts/SegoeIcons.ttf",
   }
   for _, path in ipairs(candidates) do
-    local ok, font = pcall(renderer.font.load, path, 10 * SCALE, { antialiasing = "grayscale", hinting = "full" })
+    local ok, font = pcall(renderer.font.load, path, size, { antialiasing = "grayscale", hinting = "full" })
     if ok and font then
       caption_font = font
       return caption_font
@@ -137,6 +143,8 @@ function TitleBar:configure_hit_test(borderless)
 end
 
 function TitleBar:on_scale_change()
+  caption_font = nil
+  caption_font_size = nil
   self:configure_hit_test(self.visible)
 end
 
