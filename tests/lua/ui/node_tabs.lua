@@ -66,4 +66,49 @@ test.describe("node tabs", function()
     local node = make_leaf(260, { "a.lua", "very-very-very-very-long-tab-name.lua", "c.lua" })
     test.equal(node:get_visible_tabs_number(), 1)
   end)
+
+  test.it("pulls earlier tabs back into view after the node grows wider", function()
+    local node = make_leaf(625, { "a.lua", "b.lua", "c.lua", "d.lua", "e.lua", "f.lua" })
+    node:set_active_view(node.views[6])
+    node.tab_offset = 6
+
+    node:scroll_tabs_to_visible()
+
+    test.equal(node.tab_offset, 1)
+    test.equal(node:get_visible_tabs_number(), 6)
+  end)
+
+  test.it("pages tabs without changing the active tab", function()
+    local node = make_leaf(260, { "a.lua", "b.lua", "c.lua", "d.lua" })
+    node:set_active_view(node.views[1])
+
+    node:scroll_tabs(2)
+    node:scroll_tabs_to_visible()
+
+    test.equal(node.active_view, node.views[1])
+    test.equal(node.tab_offset, 2)
+    test.ok(node:can_scroll_tabs(2))
+    test.ok(node:can_scroll_tabs(1))
+  end)
+
+  test.it("does not hover disabled pagination chevrons", function()
+    local node = make_leaf(260, { "a.lua", "b.lua", "c.lua", "d.lua" })
+    local x, y, w, h = node:get_scroll_button_rect(1)
+
+    node:tab_hovered_update(x + w / 2, y + h / 2)
+
+    test.equal(node.hovered_scroll_button, 0)
+  end)
+
+  test.it("reserves chevron space when earlier tabs are paged out", function()
+    local node = make_leaf(335, { "a.lua", "b.lua", "c.lua" })
+    node.tab_offset = 2
+    node.tab_shift = node:target_tab_shift()
+
+    local visible = node:get_visible_tabs_number()
+    local tab_x, _, tab_w = node:get_tab_rect(node.tab_offset + visible - 1)
+    local chevron_x = node:get_scroll_button_rect(1)
+
+    test.ok(tab_x + tab_w <= chevron_x)
+  end)
 end)

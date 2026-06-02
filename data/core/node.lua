@@ -265,6 +265,7 @@ end
 function Node:set_active_view(view)
   assert(self.type == "leaf", "Tried to set active view on non-leaf node")
   local last_active_view = self.active_view
+  self.manual_tab_scroll = nil
   self.active_view = view
   core.set_active_view(view)
   if last_active_view and last_active_view ~= view then
@@ -324,12 +325,14 @@ function Node:get_children(t)
 end
 
 
+local tab_title_font
+
 ---Calculate scroll button width and padding.
 ---@return number width Total button width including padding
 ---@return number pad Padding amount
 local function get_scroll_button_width()
-  local w = style.icon_font:get_width(">")
-  local pad = w
+  local w = style.font:get_width(">")
+  local pad = math.max(7 * SCALE, math.floor(w * 1.25))
   return w + 2 * pad, pad
 end
 
@@ -369,7 +372,7 @@ local function tab_gap()
   return 5 * SCALE
 end
 
-local function tab_title_font()
+tab_title_font = function()
   local base_size = style.font:get_size()
   local desired_size = math.max(8 * SCALE, base_size - 2 * SCALE)
   if Node._tab_title_font
@@ -414,14 +417,8 @@ function Node:get_visible_tabs_number()
   local remaining = #self.views - self.tab_offset + 1
   if remaining <= 0 then return 0 end
 
-  local centered_editor = core.centered_editor
-  local view = self.active_view
-  if centered_editor and centered_editor.should_center and centered_editor.should_center(view) then
-    return remaining
-  end
-
   local available = self.size.x
-  if self:get_tabs_width(self.tab_offset, #self.views) > available then
+  if self.tab_offset > 1 or self:get_tabs_width(self.tab_offset, #self.views) > available then
     available = math.max(1, available - get_scroll_button_width() * 2)
   end
 
@@ -483,12 +480,24 @@ end
 ---@param px number Screen x coordinate
 ---@param py number Screen y coordinate
 ---@return integer? idx Button index (1=left, 2=right), or nil
+function Node:can_scroll_tabs(dir)
+  if #self.views <= 1 then return false end
+  if dir == 1 then
+    return self.tab_offset > 1
+  elseif dir == 2 then
+    return self.tab_offset + self:get_visible_tabs_number() - 1 < #self.views
+  end
+  return false
+end
+
 function Node:get_scroll_button_index(px, py)
   if #self.views == 1 then return end
   for i = 1, 2 do
-    local x, y, w, h = self:get_scroll_button_rect(i)
-    if px >= x and px < x + w and py >= y and py < y + h then
-      return i
+    if self:can_scroll_tabs(i) then
+      local x, y, w, h = self:get_scroll_button_rect(i)
+      if px >= x and px < x + w and py >= y and py < y + h then
+        return i
+      end
     end
   end
 end
@@ -562,18 +571,8 @@ end
 ---@return number h Height
 ---@return number margin_y Top margin
 function Node:get_tab_rect(idx)
-  local tabs_width = self:get_tabs_width(1, #self.views)
-  local x0 = self.position.x
-  local centered_tabs = false
-  local centered_editor = core.centered_editor
-  local view = self.active_view
-  if centered_editor and centered_editor.should_center and centered_editor.should_center(view) then
-    local lane_x, lane_width = centered_editor.get_lane_rect(view)
-    x0 = tabs_width > lane_width and lane_x + (lane_width - tabs_width) / 2 or lane_x
-    centered_tabs = true
-  end
-  local before = self:get_tabs_width(1, idx - 1) - (centered_tabs and 0 or self.tab_shift)
-  local x1 = x0 + before
+  local before = self:get_tabs_width(1, idx - 1) - self.tab_shift
+  local x1 = self.position.x + before
   local x2 = x1 + self:get_tab_width(idx)
   local h, pad_y, margin_y = get_tab_y_sizes()
   return x1, self.position.y, x2 - x1, h, margin_y
@@ -717,21 +716,51 @@ function Node:update_layout()
 end
 
 
+local function tab_available_width(node, first)
+  local available = node.size.x
+  if first > 1 or node:get_tabs_width(first, #node.views) > available then
+    available = math.max(1, available - get_scroll_button_width() * 2)
+  end
+  return available
+end
+
 ---Ensure the active view's tab is visible (not scrolled out of view).
 ---Adjusts tab_offset if needed to bring active tab into view.
 function Node:scroll_tabs_to_visible()
-  local centered_editor = core.centered_editor
-  if centered_editor and centered_editor.should_center and centered_editor.should_center(self.active_view) then
-    self.tab_offset = 1
-    return
-  end
   local index = self:get_view_idx(self.active_view)
   if index then
+    if self.manual_tab_scroll then
+      local tabs_number = self:get_visible_tabs_number()
+      if index >= self.tab_offset and index <= self.tab_offset + tabs_number - 1 then
+        self.manual_tab_scroll = nil
+      else
+        return
+      end
+    end
+    local old_offset = self.tab_offset
     local tabs_number = self:get_visible_tabs_number()
     if self.tab_offset > index then
       self.tab_offset = index
     elseif self.tab_offset + tabs_number - 1 < index then
       self.tab_offset = index - tabs_number + 1
+    end
+
+    -- When the node grows wider, pull earlier tabs back into view as soon as
+    -- they fit. Without this, a tab_offset chosen for a narrow window can stay
+    -- stuck at the active tab, leaving the tab bar mostly empty after resizing.
+    while self.tab_offset > 1 do
+      local candidate = self.tab_offset - 1
+      if self:get_tabs_width(candidate, index) > tab_available_width(self, candidate) then
+        break
+      end
+      self.tab_offset = candidate
+    end
+
+    if self.tab_offset ~= old_offset then
+      core.log_quiet(
+        "Node tabs: adjusted tab offset %d -> %d for active tab %d/%d at width %.0f",
+        old_offset, self.tab_offset, index, #self.views, self.size.x or 0
+      )
     end
   end
 end
@@ -741,24 +770,14 @@ end
 ---Used when clicking scroll buttons.
 ---@param dir integer Direction: 1=left, 2=right
 function Node:scroll_tabs(dir)
-  local view_index = self:get_view_idx(self.active_view)
-  if dir == 1 then
-    if self.tab_offset > 1 then
-      self.tab_offset = self.tab_offset - 1
-      local last_index = self.tab_offset + self:get_visible_tabs_number() - 1
-      if view_index > last_index then
-        self:set_active_view(self.views[last_index])
-      end
-    end
-  elseif dir == 2 then
-    local tabs_number = self:get_visible_tabs_number()
-    if self.tab_offset + tabs_number - 1 < #self.views then
-      self.tab_offset = self.tab_offset + 1
-      local view_index = self:get_view_idx(self.active_view)
-      if view_index < self.tab_offset then
-        self:set_active_view(self.views[self.tab_offset])
-      end
-    end
+  if self:can_scroll_tabs(dir) then
+    local old_offset = self.tab_offset
+    self.tab_offset = self.tab_offset + (dir == 1 and -1 or 1)
+    self.manual_tab_scroll = true
+    core.log_quiet(
+      "Node tabs: paged %s tab offset %d -> %d at width %.0f",
+      dir == 1 and "left" or "right", old_offset, self.tab_offset, self.size.x or 0
+    )
   end
 end
 
@@ -778,9 +797,7 @@ function Node:update()
     call_view_method(view, view.update)
     view._core_step_first_update = true
     self:tab_hovered_update(core.root_panel.mouse.x, core.root_panel.mouse.y)
-    local centered_editor = core.centered_editor
-    local centered_tabs = centered_editor and centered_editor.should_center and centered_editor.should_center(view)
-    self:move_towards("tab_shift", centered_tabs and 0 or self:target_tab_shift(), nil, "tabs")
+    self:move_towards("tab_shift", self:target_tab_shift(), nil, "tabs")
   else
     self.a:update()
     self.b:update()
@@ -869,7 +886,10 @@ function Node:draw_tabs()
   core.push_clip_rect(x, y, self.size.x, h)
   renderer.draw_rect(x, y, self.size.x, h, style.tab_background or { 0x1c, 0x1e, 0x26, 255 })
   local tabs_number = self:get_visible_tabs_number()
+  local show_scroll_buttons = #self.views > tabs_number
+  local tabs_clip_w = show_scroll_buttons and math.max(1, self.size.x - get_scroll_button_width() * 2) or self.size.x
 
+  core.push_clip_rect(x, y, tabs_clip_w, h)
   for i = self.tab_offset, self.tab_offset + tabs_number - 1 do
     local view = self.views[i]
     local x, y, w, h = self:get_tab_rect(i)
@@ -877,17 +897,20 @@ function Node:draw_tabs()
                   i == self.hovered_tab,
                   x, y, w, h)
   end
+  core.pop_clip_rect()
 
-  if #self.views > tabs_number then
-    local _, pad = get_scroll_button_width()
-    local xrb, yrb, wrb, hrb = self:get_scroll_button_rect(1)
-    renderer.draw_rect(xrb + pad, yrb, wrb * 2, hrb, style.background2)
-    local left_button_style = (self.hovered_scroll_button == 1 and self.tab_offset > 1) and style.text or style.dim
-    common.draw_text(style.icon_font, left_button_style, "<", nil, xrb + scroll_padding, yrb, 0, h)
+  if show_scroll_buttons then
+    local inactive_color = style.line_number or style.dim
+    local chevron_font = style.font
+    local xrb, yrb, wrb = self:get_scroll_button_rect(1)
+    local left_enabled = self:can_scroll_tabs(1)
+    local left_button_style = left_enabled and (self.hovered_scroll_button == 1 and style.text or style.dim) or inactive_color
+    common.draw_text(chevron_font, left_button_style, "<", "center", xrb, yrb, wrb, h)
 
     xrb, yrb, wrb = self:get_scroll_button_rect(2)
-    local right_button_style = (self.hovered_scroll_button == 2 and #self.views > self.tab_offset + tabs_number - 1) and style.text or style.dim
-    common.draw_text(style.icon_font, right_button_style, ">", nil, xrb + scroll_padding, yrb, 0, h)
+    local right_enabled = self:can_scroll_tabs(2)
+    local right_button_style = right_enabled and (self.hovered_scroll_button == 2 and style.text or style.dim) or inactive_color
+    common.draw_text(chevron_font, right_button_style, ">", "center", xrb, yrb, wrb, h)
   end
 
   core.pop_clip_rect()
