@@ -1,8 +1,12 @@
 -- this file is used by anvil to setup the Lua environment when starting
-VERSION = "@PROJECT_VERSION@"
-MOD_VERSION_MAJOR = tonumber("@MOD_VERSION_MAJOR@")
-MOD_VERSION_MINOR = tonumber("@MOD_VERSION_MINOR@")
-MOD_VERSION_PATCH = tonumber("@MOD_VERSION_PATCH@")
+local function configured_value(value, fallback)
+  return value:match("^@.-@$") and fallback or value
+end
+
+VERSION = configured_value("@PROJECT_VERSION@", "3.10.1-dev")
+MOD_VERSION_MAJOR = tonumber(configured_value("@MOD_VERSION_MAJOR@", "3"))
+MOD_VERSION_MINOR = tonumber(configured_value("@MOD_VERSION_MINOR@", "10"))
+MOD_VERSION_PATCH = tonumber(configured_value("@MOD_VERSION_PATCH@", "1"))
 MOD_VERSION_STRING = string.format("%d.%d.%d", MOD_VERSION_MAJOR, MOD_VERSION_MINOR, MOD_VERSION_PATCH)
 LUA_VERSION = tonumber(_VERSION:sub(-3))
 
