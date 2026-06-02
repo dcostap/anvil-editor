@@ -145,6 +145,10 @@ If a visual/layout test is needed, test the durable behavior rather than a magic
 
 A test should generally fail when there is a bug, not merely because a preference was intentionally retuned. Tests should encode intent, not duplicate implementation/configuration.
 
+#### Bugfix regression tests
+
+When adding a regression test for a bug, prefer proving the test fails before the fix and passes after the fix. If the fix is already applied, temporarily revert or disable only the implementation change and run the targeted test to confirm it goes red before committing. If red-first verification is impractical or too costly, mention that explicitly in the final summary.
+
 Current first-party tests live in:
 
 - `tests/lua/runtime` — Anvil-runtime Lua tests for non-visual APIs and behavior.
