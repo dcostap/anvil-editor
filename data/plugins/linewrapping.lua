@@ -389,8 +389,12 @@ function DocView:update()
 end
 
 function DocView:get_scrollable_size()
+  local text_height = self:get_line_height() * get_total_wrapped_lines(self) + style.padding.y * 2
+  if text_height <= self.size.y then
+    return self.size.y
+  end
   if not config.scroll_past_end then
-    return self:get_line_height() * get_total_wrapped_lines(self) + style.padding.y * 2
+    return text_height
   end
   return self:get_line_height() * (get_total_wrapped_lines(self) - 1) + self.size.y
 end

@@ -516,6 +516,7 @@ function DocView.from_state(state)
     dv.last_line1, dv.last_col1, dv.last_line2, dv.last_col2 = table.unpack(dv.selection_state.selections, 1, 4)
     dv.scroll.x, dv.scroll.to.x = state.scroll.x, state.scroll.x
     dv.scroll.y, dv.scroll.to.y = state.scroll.y, state.scroll.y
+    dv.needs_initial_scroll_validation = true
   end
   return dv
 end
@@ -576,9 +577,15 @@ end
 ---Get the total scrollable height of the document.
 ---@return number height Total height in pixels
 function DocView:get_scrollable_size()
+  local _, _, _, h_scroll = self.h_scrollbar:get_track_rect()
+  h_scroll = math.max(0, h_scroll or 0)
+  local text_height = self:get_line_height() * (#self.doc.lines) + style.padding.y * 2
+  local content_height = text_height + h_scroll
+  if text_height <= self.size.y then
+    return self.size.y
+  end
   if not config.scroll_past_end then
-    local _, _, _, h_scroll = self.h_scrollbar:get_track_rect()
-    return self:get_line_height() * (#self.doc.lines) + style.padding.y * 2 + h_scroll
+    return content_height
   end
   return self:get_line_height() * (#self.doc.lines - 1) + self.size.y
 end
@@ -845,7 +852,7 @@ end
 ---@param instant? boolean Jump immediately without animation
 function DocView:scroll_to_line(line, ignore_if_visible, instant)
   local min, max = self:get_visible_line_range()
-  if not (ignore_if_visible and line > min and line < max) then
+  if not (ignore_if_visible and line >= min and line <= max) then
     local x, y = self:get_line_screen_position(line)
     local ox, oy = self:get_content_offset()
     local _, _, _, scroll_h = self.h_scrollbar:get_track_rect()
@@ -876,10 +883,13 @@ end
 function DocView:scroll_to_make_visible(line, col, instant, opts)
   opts = opts or {}
   if opts.vertical ~= false then
+    self.scroll.y = math.max(0, self.scroll.y or 0)
+    self.scroll.to.y = math.max(0, self.scroll.to.y or 0)
     local _, oy = self:get_content_offset()
     local _, ly = self:get_line_screen_position(line, col)
     local lh = self:get_line_height()
     local _, _, _, scroll_h = self.h_scrollbar:get_track_rect()
+    scroll_h = math.max(0, scroll_h or 0)
 
     local minline, maxline = self:get_visible_line_range()
     local visible_lines = maxline - minline
@@ -887,10 +897,10 @@ function DocView:scroll_to_make_visible(line, col, instant, opts)
     local requested_pad = config.scroll_context_lines
     local max_pad = math.floor(visible_lines / 2)
     local pad = not self.mouse_selecting and math.min(requested_pad, max_pad) or 1
-    local above = math.max(0, ly - oy - lh * pad)
+    local above = math.max(0, ly - oy - style.padding.y - lh * pad)
     local below = ly - oy - self.size.y + scroll_h + lh * (pad + 1)
 
-    self.scroll.to.y = common.clamp(self.scroll.to.y, below, above)
+    self.scroll.to.y = math.max(0, common.clamp(self.scroll.to.y, below, above))
   end
 
   local gw = self:get_gutter_width()
@@ -1143,10 +1153,12 @@ function DocView:update()
 
   -- scroll to make caret visible and reset blink timer if it moved
   local line1, col1, line2, col2 = self.doc:get_selection()
-  if (line1 ~= self.last_line1 or col1 ~= self.last_col1 or
-      line2 ~= self.last_line2 or col2 ~= self.last_col2) and self.size.x > 0 then
+  local selection_moved = line1 ~= self.last_line1 or col1 ~= self.last_col1 or
+      line2 ~= self.last_line2 or col2 ~= self.last_col2
+  if (selection_moved or self.needs_initial_scroll_validation) and self.size.x > 0 then
     if core.active_view == self and not ime.editing then
-      self:scroll_to_make_visible(line1, col1)
+      self:scroll_to_make_visible(line1, col1, self.needs_initial_scroll_validation)
+      self.needs_initial_scroll_validation = nil
     end
     core.blink_reset()
     self.last_line1, self.last_col1 = line1, col1
