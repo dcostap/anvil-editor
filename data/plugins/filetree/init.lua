@@ -766,7 +766,7 @@ function FileTreeView:queue_filesystem_sync(path, reason)
   end
 
   core.log_quiet("File Tree filesystem sync from %s: %s", reason or "watch", tostring(path))
-  self:refresh(true, true, self:filesystem_reveal_paths(path))
+  self:refresh_preserving_selection_paths(true, self:filesystem_reveal_paths(path))
   self.filesystem_sync_deferred = false
   return true
 end
@@ -1104,6 +1104,47 @@ function FileTreeView:restore_selection_paths(snapshot)
     return restore({ primary }, 1)
   end
   return false
+end
+
+function FileTreeView:remap_selection_paths(snapshot, path_map)
+  if not snapshot or not snapshot.selections or not path_map then return snapshot end
+
+  local function remap_path(abs)
+    local direct = path_map[path_key(abs)]
+    if direct then return direct end
+    for _, move in ipairs(path_map.__moves or {}) do
+      if common.path_belongs_to(abs, move.from) then
+        local suffix = abs:sub(#move.from + 1)
+        if suffix:sub(1, 1) == PATHSEP then
+          return common.normalize_path(move.to .. suffix)
+        end
+      end
+    end
+    return abs
+  end
+
+  local remapped = {
+    selections = {},
+    last_selection = snapshot.last_selection,
+  }
+  for idx, selection in ipairs(snapshot.selections) do
+    remapped.selections[idx] = {
+      line1_abs = remap_path(selection.line1_abs),
+      col1 = selection.col1,
+      line2_abs = remap_path(selection.line2_abs),
+      col2 = selection.col2,
+    }
+  end
+  return remapped
+end
+
+function FileTreeView:refresh_preserving_selection_paths(preserve_expansion, reveal_paths, path_map, selection_paths)
+  selection_paths = selection_paths or self:capture_selection_paths()
+  self:refresh(false, preserve_expansion, reveal_paths)
+  selection_paths = self:remap_selection_paths(selection_paths, path_map)
+  if selection_paths and not self:restore_selection_paths(selection_paths) then
+    core.log_quiet("File Tree refresh could not restore selection by path")
+  end
 end
 
 function FileTreeView:refresh(keep_selection, preserve_expansion, reveal_paths)
@@ -2289,6 +2330,8 @@ end
 
 function FileTreeView:apply_plan(plan)
   local changed = false
+  local selection_path_map = { __moves = {} }
+  local selection_paths = self:capture_selection_paths()
 
   table.sort(plan.creates, function(a, b)
     if a.type ~= b.type then return a.type == "dir" end
@@ -2350,6 +2393,8 @@ function FileTreeView:apply_plan(plan)
     end
     local ok, err = os.rename(op.from, op.to)
     if not ok then core.error("File Tree: move failed: %s", err); return end
+    selection_path_map[path_key(op.from)] = op.to
+    selection_path_map.__moves[#selection_path_map.__moves + 1] = { from = op.from, to = op.to }
     update_open_docs_after_rename(op.from, op.to, op.type)
     core.log("File Tree: moved %s -> %s", op.from, op.to)
     changed = true
@@ -2393,7 +2438,7 @@ function FileTreeView:apply_plan(plan)
   for _, op in ipairs(plan.moves) do reveal_paths[#reveal_paths + 1] = op.to end
   for _, op in ipairs(plan.copies) do reveal_paths[#reveal_paths + 1] = op.to end
   for _, op in ipairs(plan.creates) do reveal_paths[#reveal_paths + 1] = op.path end
-  self:refresh(true, true, reveal_paths)
+  self:refresh_preserving_selection_paths(true, reveal_paths, selection_path_map, selection_paths)
   if changed then core.log("File Tree: applied edits") else core.log("File Tree: nothing to apply") end
 end
 
@@ -2747,7 +2792,7 @@ command.add(nil, {
 
 command.add(function() return core.active_view:is(FileTreeView) end, {
   ["filetree:refresh"] = function()
-    view:refresh(true)
+    view:refresh_preserving_selection_paths(true)
   end,
   ["filetree:apply"] = function()
     view:apply_edits()
