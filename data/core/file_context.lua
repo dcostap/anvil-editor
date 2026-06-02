@@ -134,44 +134,19 @@ function core.set_active_view(view)
   return result
 end
 
-local function closable_other_view(view, active_view)
-  if view == active_view then return false end
-  return M.is_main_panel_view(view)
-end
-
-local function collect_other_dirty_docs(node, dirty_docs, seen)
+local function collect_other_dirty_docs(node, keep_view, dirty_docs, seen)
   if not node then return end
   if node.type == "leaf" then
     for _, view in ipairs(node.views or {}) do
-      if closable_other_view(view, node.active_view) then
-        local doc = view.doc
-        if doc and not seen[doc] and doc:is_dirty() then
-          seen[doc] = true
-          dirty_docs[#dirty_docs + 1] = doc
-        end
+      local doc = view ~= keep_view and view.doc
+      if doc and not seen[doc] and doc:is_dirty() then
+        seen[doc] = true
+        dirty_docs[#dirty_docs + 1] = doc
       end
     end
   else
-    collect_other_dirty_docs(node.a, dirty_docs, seen)
-    collect_other_dirty_docs(node.b, dirty_docs, seen)
-  end
-end
-
-local function close_other_views(node)
-  if not node then return end
-  if node.type == "leaf" then
-    local i = 1
-    while i <= #(node.views or {}) do
-      if closable_other_view(node.views[i], node.active_view) then
-        table.remove(node.views, i)
-      else
-        i = i + 1
-      end
-    end
-    node.tab_offset = 1
-  else
-    close_other_views(node.a)
-    close_other_views(node.b)
+    collect_other_dirty_docs(node.a, keep_view, dirty_docs, seen)
+    collect_other_dirty_docs(node.b, keep_view, dirty_docs, seen)
   end
 end
 
@@ -179,10 +154,8 @@ command.add(nil, {
   ["root:close-all-others"] = function()
     local root = core.root_panel and core.root_panel.root_node
     local dirty_docs = {}
-    collect_other_dirty_docs(root, dirty_docs, {})
-    core.confirm_close_docs(dirty_docs, function()
-      close_other_views(root)
-    end)
+    collect_other_dirty_docs(root, core.active_view, dirty_docs, {})
+    core.confirm_close_docs(dirty_docs, core.root_panel.close_all_views, core.root_panel, core.active_view)
   end,
 })
 

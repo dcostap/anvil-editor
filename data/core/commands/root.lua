@@ -20,13 +20,15 @@ local t = {
   end,
 
   ["root:close-all"] = function()
-    core.confirm_close_docs(core.docs, core.root_panel.close_all_docviews, core.root_panel)
+    core.confirm_close_docs(core.docs, core.root_panel.close_all_views, core.root_panel)
   end,
 
   ["root:close-all-others"] = function()
     local active_doc, docs = core.active_view and core.active_view.doc, {}
-    for i, v in ipairs(core.docs) do if v ~= active_doc then table.insert(docs, v) end end
-    core.confirm_close_docs(docs, core.root_panel.close_all_docviews, core.root_panel, true)
+    for _, doc in ipairs(core.docs) do
+      if doc ~= active_doc then table.insert(docs, doc) end
+    end
+    core.confirm_close_docs(docs, core.root_panel.close_all_views, core.root_panel, core.active_view)
   end,
 
   ["root:move-tab-left"] = function(node)

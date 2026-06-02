@@ -967,6 +967,46 @@ function Node:is_in_tab_area(x, y)
 end
 
 
+---Close all tabs/views in the node tree.
+---Used by explicit tab closing commands. May collapse empty nodes.
+---@param keep_view core.view? View to keep open
+function Node:close_all_views(keep_view)
+  local node_active_view = self.active_view
+  local lost_active_view = false
+  if self.type == "leaf" then
+    -- Locked leaves are structural UI chrome/panels (title bar, prompt bar,
+    -- status bar, etc.), not user tabs. Explicit tab-closing commands should
+    -- be content-agnostic, but they must not remove the editor chrome itself.
+    if self.locked then return end
+    local i = 1
+    while i <= #self.views do
+      local view = self.views[i]
+      if view ~= keep_view then
+        table.remove(self.views, i)
+        if view == node_active_view then
+          lost_active_view = true
+        end
+      else
+        i = i + 1
+      end
+    end
+    self.tab_offset = 1
+    if #self.views == 0 and (self.is_main_panel_node or self.is_primary_node) then
+      self:add_view(EmptyView())
+    elseif #self.views > 0 and lost_active_view then
+      self:set_active_view(self.views[1])
+    end
+  else
+    self.a:close_all_views(keep_view)
+    self.b:close_all_views(keep_view)
+    if self.a:is_empty() and not (self.a.is_main_panel_node or self.a.is_primary_node) then
+      self:consume(self.b)
+    elseif self.b:is_empty() and not (self.b.is_main_panel_node or self.b.is_primary_node) then
+      self:consume(self.a)
+    end
+  end
+end
+
 ---Close all document views (views with context="workspace").
 ---Used when closing a project. May collapse empty nodes.
 ---@param keep_active boolean If true, keep the active view open

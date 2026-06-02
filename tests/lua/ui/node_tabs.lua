@@ -130,4 +130,46 @@ test.describe("node tabs", function()
 
     test.equal(node:get_tab_overlapping_point(x + w / 2, y + h / 2), nil)
   end)
+
+  test.it("close_all_views keeps only the requested tab across splits", function()
+    local root = make_leaf(1200, { "left-a", "left-b" })
+    local keep = root.views[1]
+    local right = root:split("right", named_view("right-a"))
+    right:add_view(named_view("right-b"))
+
+    root:close_all_views(keep)
+
+    local views = root:get_children()
+    test.equal(#views, 1)
+    test.equal(views[1], keep)
+  end)
+
+  test.it("close_all_views does not filter utility or non-file tabs", function()
+    local root = make_leaf(1200, { "file" })
+    local keep = root.views[1]
+    local utility = named_view("utility")
+    utility.context = "tool"
+    root:add_view(utility)
+    root:set_active_view(keep)
+
+    root:close_all_views(keep)
+
+    local views = root:get_children()
+    test.equal(#views, 1)
+    test.equal(views[1], keep)
+  end)
+
+  test.it("close_all_views preserves locked chrome leaves", function()
+    local root = make_leaf(1200, { "file" })
+    local keep = root.views[1]
+    local chrome = named_view("titlebar")
+    root:split("up", chrome, { y = true })
+
+    root:close_all_views(keep)
+
+    local views = root:get_children()
+    test.equal(#views, 2)
+    test.ok(root:get_node_for_view(keep))
+    test.ok(root:get_node_for_view(chrome))
+  end)
 end)

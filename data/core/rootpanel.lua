@@ -243,6 +243,13 @@ function RootPanel:open_doc(doc, opts)
 end
 
 
+---Close all tabs/views in the node tree.
+---Used by explicit tab closing commands.
+---@param keep_view core.view? View to keep open
+function RootPanel:close_all_views(keep_view)
+  self.root_node:close_all_views(keep_view)
+end
+
 ---Close all document views in the node tree.
 ---Used when closing a project or switching workspaces.
 ---@param keep_active boolean If true, keeps the currently active view open
