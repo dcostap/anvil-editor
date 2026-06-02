@@ -30,8 +30,9 @@ Use the BAT files in the repo root
   - launches the app
 
 - `update-anvil-dev-build.bat`
-  - default finalization step for most completed changes/features
-  - use after C/C++ changes, and also after Lua/plugin/default-data changes so the dev portable app is refreshed consistently
+  - default finalization step only when non-Lua files were edited
+  - use after C/C++, build-system, asset, or other non-Lua source/default-data changes so the dev portable app is refreshed consistently
+  - skip for Lua/plugin/color-only edits; those paths are junctioned into the portable app and can usually be reloaded in the running app
   - close Anvil first if binaries may be replaced
   - rebuilds and updates the dev portable app
   - restores the source-data junctions
@@ -209,7 +210,7 @@ When adding or changing runtime/editor behavior, prefer adding or adjusting Lua 
 
 ## Finalizing changes / updating the dev portable app
 
-When a change or feature is finished, run the relevant BAT file from the repo root so `C:\Projects\c_projects\anvil-portable` is updated. In most cases, run:
+When a change or feature is finished and non-Lua files were edited, run the relevant BAT file from the repo root so `C:\Projects\c_projects\anvil-portable` is updated. For non-Lua changes, usually run:
 
 ```text
 .\update-anvil-dev-build.bat
@@ -217,7 +218,7 @@ When a change or feature is finished, run the relevant BAT file from the repo ro
 
 From the agent/MSYS bash, use the `cmd.exe` double-slash form documented below.
 
-C/C++ edits require rebuilding and restarting the app. Lua/plugin/color edits are junctioned into the portable app, but still run the BAT finalization step unless there is a clear reason not to, because it refreshes the portable install and restores the expected junctions.
+C/C++ edits require rebuilding and restarting the app. Lua/plugin/color-only edits are junctioned into the portable app, so do not run the BAT just for those changes; validate Lua syntax and reload/restart Anvil as appropriate.
 
 Close Anvil before running the BAT if binaries may be replaced, because the exe may be locked.
 
