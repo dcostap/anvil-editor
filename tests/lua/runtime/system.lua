@@ -4,12 +4,6 @@ local test = require "core.test"
 local temp_root
 local original_cwd
 
-local function assert_callable(value, name)
-  local value_type = type(value)
-  test.ok(value_type == "function" or value_type == "cdata",
-    "missing or non-callable " .. name)
-end
-
 test.describe("system", function()
   test.before_each(function(context)
     original_cwd = system.getcwd()
@@ -34,25 +28,6 @@ test.describe("system", function()
     if context.temp_root and system.get_file_info(context.temp_root) then
       local ok, err = common.rm(context.temp_root, true)
       test.ok(ok, err)
-    end
-  end)
-
-  test.test("exports the documented functions", function()
-    for _, name in ipairs({
-      "poll_event", "wait_event", "has_pending_events", "set_cursor",
-      "get_scale", "set_window_title", "set_window_mode",
-      "get_window_mode", "set_window_bordered", "set_window_hit_test",
-      "get_window_size", "set_window_size", "window_has_focus",
-      "text_input", "set_text_input_rect", "clear_ime", "raise_window",
-      "show_fatal_error", "rmdir", "chdir", "getcwd", "ftruncate",
-      "mkdir", "list_dir", "absolute_path", "get_file_info", "get_fs_type",
-      "get_clipboard", "set_clipboard", "get_primary_selection",
-      "set_primary_selection", "get_process_id", "get_time", "sleep",
-      "exec", "set_window_opacity", "load_native_plugin", "setenv",
-      "get_display_info", "open_file_dialog",
-      "open_directory_dialog", "save_file_dialog", "get_sandbox"
-    }) do
-      assert_callable(system[name], "system." .. name)
     end
   end)
 

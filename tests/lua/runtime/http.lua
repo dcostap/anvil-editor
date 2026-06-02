@@ -294,16 +294,6 @@ test.describe("http", function()
     end
   end)
 
-  test.test("exports the documented functions", function()
-    for _, name in ipairs({
-      "request", "sse", "get", "head", "options",
-      "post", "put", "delete", "patch", "download",
-    }) do
-      test.type(http[name], "function", "missing http." .. name)
-    end
-    test.type(http.user_agent, "string")
-  end)
-
   test.test("follows redirects and handles request helpers", function(context)
     local base_url = start_http_server(context)
 

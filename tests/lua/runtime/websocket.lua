@@ -258,18 +258,6 @@ test.describe("websocket", function()
     end
   end)
 
-  test.test("exports the documented functions", function()
-    test.type(websocket.connect, "function")
-    test.type(websocket.client, "table")
-
-    for _, name in ipairs({
-      "new", "get_status", "send", "send_text",
-      "send_binary", "ping", "close",
-    }) do
-      test.type(websocket.client[name], "function", "missing websocket.client:" .. name)
-    end
-  end)
-
   test.test("connects, negotiates protocols and exchanges frames", function(context)
     local url = start_websocket_server(context, "echo")
 

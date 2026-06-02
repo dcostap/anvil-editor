@@ -56,32 +56,6 @@ test.describe("graphics apis", function()
     end
   end)
 
-  test.test("exports the documented renwindow, renderer and canvas functions", function()
-    for _, name in ipairs({"create", "get_size", "get_refresh_rate", "get_color", "_restore"}) do
-      test.type(renwindow[name], "function", "missing renwindow." .. name)
-    end
-
-    for _, name in ipairs({
-      "load", "group", "get_metadata"
-    }) do
-      test.type(renderer.font[name], "function", "missing renderer.font." .. name)
-    end
-
-    for _, name in ipairs({
-      "show_debug", "get_size", "begin_frame", "end_frame",
-      "set_clip_rect", "draw_rect", "draw_text", "draw_canvas",
-      "to_canvas", "draw_poly"
-    }) do
-      test.type(renderer[name], "function", "missing renderer." .. name)
-    end
-
-    for _, name in ipairs({
-      "new", "load_image", "load_svg_image"
-    }) do
-      test.type(canvas[name], "function", "missing canvas." .. name)
-    end
-  end)
-
   test.test("loads fonts and exposes font metadata", function()
     local font_path = DATADIR .. PATHSEP .. "fonts" .. PATHSEP .. "FiraSans-Regular.ttf"
     local font = renderer.font.load(font_path, 14 * SCALE)

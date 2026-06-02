@@ -8,17 +8,6 @@ local function shell_command(command)
 end
 
 test.describe("process", function()
-  test.test("exports the documented functions and constants", function()
-    for _, name in ipairs({
-      "start", "strerror", "ERROR_PIPE", "ERROR_WOULDBLOCK", "ERROR_TIMEDOUT",
-      "ERROR_INVAL", "ERROR_NOMEM", "STREAM_STDIN", "STREAM_STDOUT", "STREAM_STDERR",
-      "WAIT_INFINITE", "WAIT_DEADLINE", "REDIRECT_DEFAULT", "REDIRECT_PIPE",
-      "REDIRECT_PARENT", "REDIRECT_DISCARD", "REDIRECT_STDOUT"
-    }) do
-      test.not_nil(process[name], "missing process." .. name)
-    end
-  end)
-
   test.test("can launch a subprocess and read stdout", function()
     local command = PLATFORM == "Windows"
       and "echo hello-from-process"

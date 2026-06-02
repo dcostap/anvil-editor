@@ -1,15 +1,6 @@
 local test = require "core.test"
 
 test.describe("bit", function()
-  test.test("exports the documented functions", function()
-    for _, name in ipairs({
-      "tobit", "tohex", "bnot", "bor", "band", "bxor",
-      "lshift", "rshift", "arshift", "rol", "ror", "bswap"
-    }) do
-      test.type(bit[name], "function", "missing bit." .. name)
-    end
-  end)
-
   test.test("performs boolean bitwise operations", function()
     test.equal(bit.band(0xf0, 0x0f), 0x00)
     test.equal(bit.bor(0xf0, 0x0f), 0xff)

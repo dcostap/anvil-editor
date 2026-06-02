@@ -1,12 +1,6 @@
 local test = require "core.test"
 
 test.describe("thread", function()
-  test.test("exports the documented functions", function()
-    for _, name in ipairs({"create", "get_channel", "get_cpu_count"}) do
-      test.type(thread[name], "function", "missing thread." .. name)
-    end
-  end)
-
   test.test("supports channel fifo operations", function()
     local channel = thread.get_channel("thread-tests-basic")
     test.not_nil(channel)

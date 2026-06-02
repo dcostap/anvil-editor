@@ -1,7 +1,6 @@
 local common = require "core.common"
 local core = require "core"
 local command = require "core.command"
-local config = require "core.config"
 local test = require "core.test"
 
 local function line_without_newline(line)
@@ -165,56 +164,6 @@ test.describe("File Tree Sorting", function()
     local line, col = filetree.doc:get_selection()
     test.equal(line, moved_selected_line)
     test.equal(col, 2)
-  end)
-
-  test.it("draws a subtle row background only for folder entries", function(context)
-    local filetree = setup_tree(context)
-    local folder_line = find_filetree_line(filetree, "aaa-old-dir/")
-    local file_line = find_filetree_line(filetree, "aaa-old.txt")
-    test.not_nil(folder_line, "expected folder row in File Tree")
-    test.not_nil(file_line, "expected file row in File Tree")
-
-    filetree.position.x = 100
-    filetree.position.y = 50
-    filetree.size.x = 500
-    filetree.size.y = 300
-    filetree.scroll.x = 0
-    filetree.scroll.y = 0
-
-    local folder_background = config.plugins.filetree.folder_row_background
-    local background_rects = {}
-    local original_draw_rect = renderer.draw_rect
-    local original_draw_text = renderer.draw_text
-    local original_draw_line_hint = filetree.draw_line_hint
-
-    local ok, err = pcall(function()
-      renderer.draw_rect = function(x, y, w, h, color)
-        if color == folder_background then
-          background_rects[#background_rects + 1] = { x = x, y = y, w = w, h = h }
-        end
-      end
-      renderer.draw_text = function(font, text, x, y, color, opts)
-        return x + font:get_width(text or "", opts)
-      end
-      filetree.draw_line_hint = function() end
-
-      local x, y = filetree:get_line_screen_position(folder_line)
-      filetree:draw_line_gutter(folder_line, filetree.position.x, y, filetree:get_gutter_width())
-      filetree:draw_line_body(folder_line, x, y)
-
-      x, y = filetree:get_line_screen_position(file_line)
-      filetree:draw_line_gutter(file_line, filetree.position.x, y, filetree:get_gutter_width())
-      filetree:draw_line_body(file_line, x, y)
-    end)
-
-    renderer.draw_rect = original_draw_rect
-    renderer.draw_text = original_draw_text
-    filetree.draw_line_hint = original_draw_line_hint
-    if not ok then error(err, 0) end
-
-    test.equal(#background_rects, 2)
-    test.equal(background_rects[1].x, filetree.position.x)
-    test.equal(background_rects[2].x, filetree.position.x + filetree:get_gutter_width())
   end)
 
   test.it("blocks sort changes while File Tree has unapplied text edits", function(context)

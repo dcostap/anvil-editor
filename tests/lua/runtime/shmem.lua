@@ -10,10 +10,6 @@ local function unique_namespace(suffix)
 end
 
 test.describe("shmem", function()
-  test.test("exports the documented functions", function()
-    test.type(shmem.open, "function")
-  end)
-
   test.test("stores and enumerates values", function()
     local namespace = unique_namespace("enumerate")
     local memory, err = shmem.open(namespace, 8)

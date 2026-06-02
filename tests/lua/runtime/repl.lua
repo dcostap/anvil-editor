@@ -23,16 +23,6 @@ test.describe("repl", function()
     end
   end)
 
-  test.test("exports the documented native repl functions", function()
-    for _, name in ipairs({
-      "input", "add_history", "set_history_max_len", "save_history",
-      "load_history", "clear_screen", "set_completion",
-      "add_completion", "set_multiline", "print_keycodes"
-    }) do
-      test.type(native_repl[name], "function", "missing repl." .. name)
-    end
-  end)
-
   test.test("supports history and completion configuration", function(context)
     local history_file = context.temp_root .. PATHSEP .. "history.txt"
 

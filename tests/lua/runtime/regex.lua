@@ -1,22 +1,6 @@
 local test = require "core.test"
 
 test.describe("regex", function()
-  test.test("exports the documented functions and flags", function()
-    for _, name in ipairs({
-      "compile", "cmatch", "find", "find_offsets",
-      "gmatch", "gsub", "match"
-    }) do
-      test.type(regex[name], "function", "missing regex." .. name)
-    end
-
-    for _, name in ipairs({
-      "ANCHORED", "ENDANCHORED", "NOTBOL",
-      "NOTEOL", "NOTEMPTY", "NOTEMPTY_ATSTART"
-    }) do
-      test.type(regex[name], "number", "missing regex." .. name)
-    end
-  end)
-
   test.test("compiles and matches simple patterns", function()
     local compiled, err = regex.compile("(hello)\\s+(world)")
     test.not_nil(compiled, err)

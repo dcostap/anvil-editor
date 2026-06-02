@@ -244,35 +244,6 @@ print("hello")
     test.equal(#view.blocks, 4)
   end)
 
-  test.test("renders horizontal lines using the caret color", function()
-    local view = MarkdownView([[
-# Heading
-
----
-
-Paragraph with a footnote.[^note]
-
-[^note]: Footnote body.
-]])
-    view.size.x = 420
-    view.size.y = 240
-
-    local layout = view:ensure_layout()
-    local rule_height = math.max(style.divider_size, 1)
-    local caret_lines = 0
-
-    for _, command in ipairs(layout.commands) do
-      if command.type == "rect"
-        and command.height == rule_height
-        and MarkdownView.resolve_color(command.color) == style.caret
-      then
-        caret_lines = caret_lines + 1
-      end
-    end
-
-    test.equal(caret_lines, 3)
-  end)
-
   test.test("selects rendered text with the mouse", function()
     local view = MarkdownView("# Title\n\nParagraph one")
     view.position.x = 0

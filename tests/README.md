@@ -7,7 +7,6 @@ Automated and diagnostic tests for Anvil.
 - `lua/runtime/` — Anvil-runtime Lua tests for non-visual APIs and behavior.
 - `lua/ui/` — in-process UI tests. These use the same Lua test framework, but instantiate UI objects and call event handlers/methods directly.
 - `native/` — native C/C++ tests wired into Meson.
-- `gui/smoke/` — actual GUI smoke tests that launch the real app window.
 - `run-lua-tests.sh` — Meson helper that builds an isolated `.run-meson-tests/<suite>` app/user/test tree and invokes `anvil test` internally.
 
 ## Main test command
@@ -60,12 +59,4 @@ Short paths under `tests/lua` are also accepted:
 ```sh
 meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/tokenizer.lua
 meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/markdownview.lua
-```
-
-## GUI smoke tests
-
-GUI smoke tests are for renderer/window/input sanity checks, not the main behavioral regression layer.
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\gui\smoke\d3d11-smoke-test.ps1 -PrepareRunDir
 ```

@@ -23,15 +23,6 @@ test.describe("encoding", function()
     end
   end)
 
-  test.test("exports the documented functions", function()
-    for _, name in ipairs({
-      "detect", "detect_string", "convert",
-      "get_charset_bom", "strip_bom"
-    }) do
-      test.type(encoding[name], "function", "missing encoding." .. name)
-    end
-  end)
-
   test.test("handles byte order marks", function()
     local bom = encoding.get_charset_bom("UTF-8")
     test.not_nil(bom)

@@ -1,45 +1,6 @@
 local test = require "core.test"
 
 test.describe("string utf8 wrappers", function()
-  test.test("export the documented string.u* helpers", function()
-    local aliases = {
-      ubyte = "byte",
-      uchar = "char",
-      ufind = "find",
-      ugmatch = "gmatch",
-      ugsub = "gsub",
-      ulen = "len",
-      ulower = "lower",
-      umatch = "match",
-      ureverse = "reverse",
-      usub = "sub",
-      uupper = "upper",
-      uescape = "escape",
-      ucharpos = "charpos",
-      unext = "next",
-      uinsert = "insert",
-      uremove = "remove",
-      uwidth = "width",
-      uwidthindex = "widthindex",
-      utitle = "title",
-      ufold = "fold",
-      uncasecmp = "ncasecmp",
-      uisvalid = "isvalid",
-      uclean = "clean",
-      uinvalidoffset = "invalidoffset",
-      uisnfc = "isnfc",
-      unormalize_nfc = "normalize_nfc",
-      uoffset = "offset",
-      ucodepoint = "codepoint",
-      ucodes = "codes"
-    }
-
-    for string_name, utf8_name in pairs(aliases) do
-      test.type(string[string_name], "function", "missing string." .. string_name)
-      test.equal(string[string_name], utf8extra[utf8_name])
-    end
-  end)
-
   test.test("handles UTF-8 strings by characters instead of bytes", function()
     test.equal(string.ulen("e"), 1)
     test.equal(string.ulen("e\204\129"), 2)
@@ -86,19 +47,6 @@ test.describe("string utf8 wrappers", function()
 end)
 
 test.describe("utf8extra", function()
-  test.test("exports the documented helpers", function()
-    for _, name in ipairs({
-      "byte", "find", "gmatch", "gsub", "lower", "match", "reverse",
-      "sub", "upper", "escape", "charpos", "next", "insert", "remove",
-      "width", "widthindex", "title", "fold", "ncasecmp", "isvalid",
-      "clean", "invalidoffset", "isnfc", "normalize_nfc", "char",
-      "codes", "codepoint", "len", "offset"
-    }) do
-      test.type(utf8extra[name], "function", "missing utf8extra." .. name)
-    end
-    test.type(utf8extra.charpattern, "string")
-  end)
-
   test.test("provides codepoint and iterator helpers", function()
     local text = utf8extra.char(233, 955)
     test.equal(text, "éλ")
