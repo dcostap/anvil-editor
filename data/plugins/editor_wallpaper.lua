@@ -111,18 +111,13 @@ if not core.__editor_wallpaper_patched then
     local _, y, _, h = self:get_scroll_button_rect(1)
     draw_wallpaper_region(self.position.x, y, self.size.x, h, wallpaper.opacity)
 
-    -- Node:draw_tabs() itself immediately draws opaque style.background2 and
-    -- active-tab style.background rectangles with renderer.draw_rect(), so
-    -- drawing the wallpaper first is not enough. Make the row fill transparent
-    -- and give the active tab a translucent light overlay while preserving the
-    -- rest of the original tab rendering.
-    local old_background2 = style.background2
-    local old_background = style.background
-    style.background2 = { old_background2[1] or 0, old_background2[2] or 0, old_background2[3] or 0, 0 }
-    style.background = { 255, 255, 255, 18 }
+    -- The shared tab renderer fills the row with style.tab_background, so make
+    -- that fill transparent while preserving the rest of the tab rendering.
+    local old_tab_background = style.tab_background
+    local base = old_tab_background or style.background2 or style.background
+    style.tab_background = { base[1] or 0, base[2] or 0, base[3] or 0, 0 }
     local ok, a, b, c, d, e = pcall(node_draw_tabs, self, ...)
-    style.background2 = old_background2
-    style.background = old_background
+    style.tab_background = old_tab_background
     if not ok then error(a) end
     return a, b, c, d, e
   end

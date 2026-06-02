@@ -862,7 +862,7 @@ function RootPanel:draw_grabbed_tab()
   local x = self.mouse.x - w / 2
   local y = self.mouse.y - h / 2
   local view = dn.node.views[dn.idx]
-  self.root_node:draw_tab(view, true, true, false, x, y, w, h, true)
+  self.root_node:draw_tab(view, true, true, x, y, w, h, true)
 end
 
 

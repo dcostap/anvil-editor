@@ -81,11 +81,11 @@ function scale.set(scale)
     style[name]:set_size(s * style[name]:get_size())
   end
 
-  local Node = package.loaded["core.node"]
-  if Node then
-    Node._tab_title_font = nil
-    Node._tab_title_font_base = nil
-    Node._tab_title_font_size = nil
+  local Tabs = package.loaded["core.tabs"]
+  if Tabs then
+    Tabs._tab_title_font = nil
+    Tabs._tab_title_font_base = nil
+    Tabs._tab_title_font_size = nil
   end
   local untitled_tabs = package.loaded["plugins.untitled_tabs"]
   if untitled_tabs then

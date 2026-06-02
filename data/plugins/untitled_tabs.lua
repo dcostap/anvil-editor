@@ -8,7 +8,7 @@ local common = require "core.common"
 local style = require "core.style"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
-local Node = require "core.node"
+local Tabs = require "core.tabs"
 
 local M = {}
 local untitled_id_counter = 0
@@ -242,23 +242,23 @@ if not core.__untitled_tabs_patched then
     return docview_try_close(self, do_close)
   end
 
-  local node_get_tab_width = Node.get_tab_width
-  function Node:get_tab_width(idx)
-    local view = self.views and self.views[idx]
-    local font = self.get_tab_title_font and self:get_tab_title_font() or style.font
+  local tabs_get_tab_width = Tabs.get_tab_width
+  function Tabs:get_tab_width(idx)
+    local view = self:item(idx)
+    local font = self:get_tab_title_font()
     local width = untitled_tab_title_width(view, font)
     if width then
       local min_w = math.max(1, style.tab_min_width or style.tab_width or 1)
       local max_w = math.max(min_w, style.tab_max_width or style.tab_width or min_w)
       return common.clamp(width, min_w, max_w)
     end
-    return node_get_tab_width(self, idx)
+    return tabs_get_tab_width(self, idx)
   end
 
-  local node_draw_tab_title = Node.draw_tab_title
-  function Node:draw_tab_title(view, font, is_active, is_hovered, x, y, w, h)
+  local tabs_draw_tab_title = Tabs.draw_tab_title
+  function Tabs:draw_tab_title(view, font, is_active, is_hovered, x, y, w, h)
     if draw_untitled_tab_title(view, font, is_active, is_hovered, x, y, w, h) then return end
-    return node_draw_tab_title(self, view, font, is_active, is_hovered, x, y, w, h)
+    return tabs_draw_tab_title(self, view, font, is_active, is_hovered, x, y, w, h)
   end
 end
 

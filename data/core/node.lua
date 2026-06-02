@@ -5,6 +5,7 @@ local style = require "core.style"
 local Object = require "core.object"
 local EmptyView = require "core.emptyview"
 local View = require "core.view"
+local Tabs = require "core.tabs"
 
 ---@class core.node.lock
 ---@field x boolean
@@ -28,6 +29,7 @@ local View = require "core.view"
 ---@field tab_shift number
 ---@field tab_offset integer
 ---@field tab_width number
+---@field tab_bar core.tabs
 ---@field a core.node?
 ---@field b core.node?
 ---@field locked core.node.lock?
@@ -36,6 +38,22 @@ local View = require "core.view"
 ---@field is_primary_node boolean? Deprecated compatibility alias for `is_main_panel_node`.
 ---@field move_towards function
 local Node = Object:extend()
+
+local function new_tab_bar(owner)
+  return Tabs(owner, {
+    should_show = function(node) return node:should_show_tabs() end,
+    draw_tab = function(tabbar, view, active, hovered, x, y, w, h)
+      return tabbar.owner:draw_tab(view, active, hovered, x, y, w, h)
+    end,
+    draw_borders = function(tabbar, view, active, hovered, x, y, w, h, standalone)
+      return tabbar.owner:draw_tab_borders(view, active, hovered, x, y, w, h, standalone)
+    end,
+    draw_title = function(tabbar, view, font, active, hovered, x, y, w, h)
+      return tabbar.owner:draw_tab_title(view, font, active, hovered, x, y, w, h)
+    end,
+    log_prefix = "Node tabs",
+  })
+end
 
 function Node:__tostring() return "Node" end
 
@@ -55,6 +73,7 @@ function Node:new(type)
   self.tab_width = style.tab_width
   self.move_towards = View.move_towards
   self.hovered_scroll_button = 0
+  self.tab_bar = new_tab_bar(self)
 end
 
 
@@ -118,6 +137,7 @@ end
 function Node:consume(node)
   for k, _ in pairs(self) do self[k] = nil end
   for k, v in pairs(node) do self[k] = v   end
+  self.tab_bar = new_tab_bar(self)
 end
 
 
@@ -325,18 +345,6 @@ function Node:get_children(t)
 end
 
 
-local tab_title_font
-
----Calculate scroll button width and padding.
----@return number width Total button width including padding
----@return number pad Padding amount
-local function get_scroll_button_width()
-  local w = style.font:get_width(">")
-  local pad = math.max(7 * SCALE, math.floor(w * 1.25))
-  return w + 2 * pad, pad
-end
-
-
 ---Check if a point overlaps any resizable divider in the tree.
 ---Recursively searches for dividers that can be dragged.
 ---@param px number Screen x coordinate
@@ -360,100 +368,38 @@ function Node:get_divider_overlapping_point(px, py)
 end
 
 
-local function tab_min_width()
-  return math.max(1, style.tab_min_width or style.tab_width or 1)
-end
-
-local function tab_max_width()
-  return math.max(tab_min_width(), style.tab_max_width or style.tab_width or tab_min_width())
-end
-
-local function tab_gap()
-  return 5 * SCALE
-end
-
-tab_title_font = function()
-  local base_size = style.font:get_size()
-  local desired_size = math.max(8 * SCALE, base_size - 2 * SCALE)
-  if Node._tab_title_font
-     and Node._tab_title_font_base == style.font
-     and Node._tab_title_font_size == desired_size then
-    return Node._tab_title_font
+function Node:get_tab_bar()
+  if not self.tab_bar or self.tab_bar.owner ~= self then
+    self.tab_bar = new_tab_bar(self)
   end
-  local ok, font = pcall(function()
-    return style.font:copy(desired_size)
-  end)
-  Node._tab_title_font_base = style.font
-  Node._tab_title_font_size = desired_size
-  Node._tab_title_font = ok and font or style.font
-  return Node._tab_title_font
+  return self.tab_bar
 end
 
 function Node:get_tab_title_font()
-  return tab_title_font()
-end
-
-local function tab_title_width(view)
-  local text = view and view:get_name() or ""
-  return tab_title_font():get_width(text) + style.padding.x * 2 + style.divider_size * 2
+  return self:get_tab_bar():get_tab_title_font()
 end
 
 function Node:get_tab_width(idx)
-  return common.clamp(tab_title_width(self.views[idx]), tab_min_width(), tab_max_width())
+  return self:get_tab_bar():get_tab_width(idx)
 end
 
 function Node:get_tabs_width(first, last)
-  if last < first then return 0 end
-  local width = 0
-  for i = first, last do
-    width = width + self:get_tab_width(i)
-  end
-  return width + tab_gap() * math.max(0, last - first)
+  return self:get_tab_bar():get_tabs_width(first, last)
 end
 
 ---Get the number of tabs currently visible (not scrolled out of view).
 ---@return integer count Number of visible tabs
 function Node:get_visible_tabs_number()
-  local remaining = #self.views - self.tab_offset + 1
-  if remaining <= 0 then return 0 end
-
-  local available = self.size.x
-  if self.tab_offset > 1 or self:get_tabs_width(self.tab_offset, #self.views) > available then
-    available = math.max(1, available - get_scroll_button_width() * 2)
-  end
-
-  local used = 0
-  local count = 0
-  for i = self.tab_offset, #self.views do
-    local width = self:get_tab_width(i)
-    local gap = count > 0 and tab_gap() or 0
-    if count > 0 and used + gap + width > available then break end
-    used = used + gap + width
-    count = count + 1
-  end
-  return math.max(1, count)
+  return self:get_tab_bar():get_visible_tabs_number()
 end
-
 
 ---Get the index of the tab under a screen point.
 ---@param px number Screen x coordinate
 ---@param py number Screen y coordinate
 ---@return integer? idx Tab index, or nil if not over any tab
 function Node:get_tab_overlapping_point(px, py)
-  if not self:should_show_tabs() then return nil end
-  local tabs_number = self:get_visible_tabs_number()
-  if #self.views > tabs_number then
-    local tabs_w = math.max(1, self.size.x - get_scroll_button_width() * 2)
-    if px >= self.position.x + tabs_w then return nil end
-  end
-  for i = self.tab_offset, self.tab_offset + tabs_number - 1 do
-    local x, y, w, h = self:get_tab_rect(i)
-    if px >= x and py >= y and px < x + w and py < y + h then
-      return i
-    end
-  end
+  return self:get_tab_bar():get_tab_overlapping_point(px, py)
 end
-
 
 ---Determine if tabs should be shown for this node.
 ---Based on config settings, number of views, and drag state.
@@ -467,60 +413,37 @@ function Node:should_show_tabs()
     end
     if active_node == self then return false end
   end
-  local dn = core.root_panel.dragged_node
+  local dn = core.root_panel and core.root_panel.dragged_node
   if config.hide_tabs then
     return false
   elseif #self.views > 1
      or (dn and dn.dragging) then -- show tabs while dragging
     return true
   elseif config.always_show_tabs then
-    return not self.views[1]:is(EmptyView)
+    return self.views[1] and not self.views[1]:is(EmptyView)
   end
   return false
 end
-
 
 ---Get which scroll button (left/right) is under a point.
 ---@param px number Screen x coordinate
 ---@param py number Screen y coordinate
 ---@return integer? idx Button index (1=left, 2=right), or nil
 function Node:can_scroll_tabs(dir)
-  if #self.views <= 1 then return false end
-  if dir == 1 then
-    return self.tab_offset > 1
-  elseif dir == 2 then
-    return self.tab_offset + self:get_visible_tabs_number() - 1 < #self.views
-  end
-  return false
+  return self:get_tab_bar():can_scroll_tabs(dir)
 end
 
 function Node:get_scroll_button_index(px, py)
-  if #self.views == 1 then return end
-  for i = 1, 2 do
-    if self:can_scroll_tabs(i) then
-      local x, y, w, h = self:get_scroll_button_rect(i)
-      if px >= x and px < x + w and py >= y and py < y + h then
-        return i
-      end
-    end
-  end
+  return self:get_tab_bar():get_scroll_button_index(px, py)
 end
 
-
----Update hover state for tabs, close buttons, and scroll buttons.
+---Update hover state for tabs and scroll buttons.
 ---Sets hovered_tab and hovered_scroll_button fields.
 ---@param px number Screen x coordinate
 ---@param py number Screen y coordinate
 function Node:tab_hovered_update(px, py)
-  self.hovered_scroll_button = 0
-  if not self:should_show_tabs() then self.hovered_tab = nil return end
-  local tab_index = self:get_tab_overlapping_point(px, py)
-  self.hovered_tab = tab_index
-  if not tab_index and #self.views > self:get_visible_tabs_number() then
-    self.hovered_scroll_button = self:get_scroll_button_index(px, py) or 0
-  end
+  return self:get_tab_bar():update_hover(px, py)
 end
-
 
 ---Find the deepest leaf node at a screen point.
 ---Recursively traverses split nodes to find the leaf under the point.
@@ -539,19 +462,6 @@ function Node:get_child_overlapping_point(x, y)
   return child:get_child_overlapping_point(x, y)
 end
 
-
----Calculate tab bar vertical dimensions.
----@return number height Total tab height
----@return number padding Vertical padding
----@return number margin Top margin
-local function get_tab_y_sizes()
-  local height = style.font:get_height()
-  local padding = style.padding.y
-  local margin = style.margin.tab.top
-  return height + (padding * 2) + margin, padding, margin
-end
-
-
 ---Get the rectangle for a scroll button.
 ---@param index integer Button index (1=left, 2=right)
 ---@return number x Screen x coordinate
@@ -560,12 +470,8 @@ end
 ---@return number h Height
 ---@return number pad Padding amount
 function Node:get_scroll_button_rect(index)
-  local w, pad = get_scroll_button_width()
-  local h = get_tab_y_sizes()
-  local x = self.position.x + (index == 1 and self.size.x - w * 2 or self.size.x - w)
-  return x, self.position.y, w, h, pad
+  return self:get_tab_bar():get_scroll_button_rect(index)
 end
-
 
 ---Get the rectangle for a tab.
 ---@param idx integer Tab index
@@ -575,11 +481,7 @@ end
 ---@return number h Height
 ---@return number margin_y Top margin
 function Node:get_tab_rect(idx)
-  local before = self:get_tabs_width(1, idx - 1) - self.tab_shift
-  local x1 = self.position.x + before
-  local x2 = x1 + self:get_tab_width(idx)
-  local h, pad_y, margin_y = get_tab_y_sizes()
-  return x1, self.position.y, x2 - x1, h, margin_y
+  return self:get_tab_bar():get_tab_rect(idx)
 end
 
 
@@ -720,48 +622,10 @@ function Node:update_layout()
 end
 
 
-local function tab_available_width(node, first)
-  local available = node.size.x
-  if first > 1 or node:get_tabs_width(first, #node.views) > available then
-    available = math.max(1, available - get_scroll_button_width() * 2)
-  end
-  return available
-end
-
 ---Ensure the active view's tab is visible (not scrolled out of view).
 ---Adjusts tab_offset if needed to bring active tab into view.
 function Node:scroll_tabs_to_visible()
-  local index = self:get_view_idx(self.active_view)
-  if index then
-    if self.manual_tab_scroll then
-      return
-    end
-    local old_offset = self.tab_offset
-    local tabs_number = self:get_visible_tabs_number()
-    if self.tab_offset > index then
-      self.tab_offset = index
-    elseif self.tab_offset + tabs_number - 1 < index then
-      self.tab_offset = index - tabs_number + 1
-    end
-
-    -- When the node grows wider, pull earlier tabs back into view as soon as
-    -- they fit. Without this, a tab_offset chosen for a narrow window can stay
-    -- stuck at the active tab, leaving the tab bar mostly empty after resizing.
-    while self.tab_offset > 1 do
-      local candidate = self.tab_offset - 1
-      if self:get_tabs_width(candidate, index) > tab_available_width(self, candidate) then
-        break
-      end
-      self.tab_offset = candidate
-    end
-
-    if self.tab_offset ~= old_offset then
-      core.log_quiet(
-        "Node tabs: adjusted tab offset %d -> %d for active tab %d/%d at width %.0f",
-        old_offset, self.tab_offset, index, #self.views, self.size.x or 0
-      )
-    end
-  end
+  return self:get_tab_bar():scroll_to_visible()
 end
 
 
@@ -769,20 +633,12 @@ end
 ---Used when clicking scroll buttons.
 ---@param dir integer Direction: 1=left, 2=right
 function Node:scroll_tabs(dir)
-  if self:can_scroll_tabs(dir) then
-    local old_offset = self.tab_offset
-    self.tab_offset = self.tab_offset + (dir == 1 and -1 or 1)
-    self.manual_tab_scroll = true
-    core.log_quiet(
-      "Node tabs: paged %s tab offset %d -> %d at width %.0f",
-      dir == 1 and "left" or "right", old_offset, self.tab_offset, self.size.x or 0
-    )
-  end
+  return self:get_tab_bar():scroll_tabs(dir)
 end
 
 
 function Node:target_tab_shift()
-  return self:get_tabs_width(1, self.tab_offset - 1)
+  return self:get_tab_bar():target_tab_shift()
 end
 
 
@@ -795,8 +651,9 @@ function Node:update()
     local view = self.active_view
     call_view_method(view, view.update)
     view._core_step_first_update = true
-    self:tab_hovered_update(core.root_panel.mouse.x, core.root_panel.mouse.y)
-    self:move_towards("tab_shift", self:target_tab_shift(), nil, "tabs")
+    local mouse = core.root_panel and core.root_panel.mouse
+    if mouse then self:tab_hovered_update(mouse.x, mouse.y) end
+    self:get_tab_bar():update_animation()
   else
     self.a:update()
     self.b:update()
@@ -814,23 +671,7 @@ end
 ---@param w number Width
 ---@param h number Height
 function Node:draw_tab_title(view, font, is_active, is_hovered, x, y, w, h)
-  local text = view and view:get_name() or ""
-  local dots_width = font:get_width("…")
-  local align = "left"
-  if font:get_width(text) > w then
-    local text_len = text:ulen()
-    for i = 1, text_len do
-      local reduced_text = text:usub(1, text_len - i)
-      if font:get_width(reduced_text) + dots_width <= w then
-        text = reduced_text .. "…"
-        break
-      end
-    end
-  end
-  local color = style.dim
-  if is_active then color = style.text end
-  if is_hovered then color = style.text end
-  common.draw_text(font, color, text, align, x, y, w, h)
+  return self:get_tab_bar():draw_tab_title(view, font, is_active, is_hovered, x, y, w, h)
 end
 
 
@@ -848,15 +689,11 @@ end
 ---@return number w Adjusted width for content area
 ---@return number h Adjusted height for content area
 function Node:draw_tab_borders(view, is_active, is_hovered, x, y, w, h, standalone)
-  local ds = style.divider_size
-  local margin_y = style.margin.tab.top or 0
-  local tab_color = style.tab_background or { 0x1c, 0x1e, 0x26, 255 }
-  renderer.draw_rect(x, y - margin_y, w, h + margin_y, tab_color)
-  return x + ds, y, w - ds*2, h
+  return self:get_tab_bar():draw_tab_borders(view, is_active, is_hovered, x, y, w, h, standalone)
 end
 
 
----Draw a complete tab (borders, title, close button).
+---Draw a complete tab.
 ---@param view core.view View for this tab
 ---@param is_active boolean Whether this is the active tab
 ---@param is_hovered boolean Whether mouse is over this tab
@@ -866,53 +703,13 @@ end
 ---@param h number Height
 ---@param standalone boolean If true, draw standalone tab (during drag)
 function Node:draw_tab(view, is_active, is_hovered, x, y, w, h, standalone)
-  local _, padding_y, margin_y = get_tab_y_sizes()
-  x, y, w, h = self:draw_tab_borders(view, is_active, is_hovered, x, y + margin_y, w, h - margin_y, standalone)
-  -- Title
-  x = x + style.padding.x
-  w = w - style.padding.x * 2
-  core.push_clip_rect(x, y, w, h)
-  self:draw_tab_title(view, tab_title_font(), is_active, is_hovered, x, y, w, h)
-  core.pop_clip_rect()
+  return self:get_tab_bar():draw_tab(view, is_active, is_hovered, x, y, w, h, standalone)
 end
 
 
 ---Draw the entire tab bar including all visible tabs and scroll buttons.
 function Node:draw_tabs()
-  local _, y, w, h, scroll_padding = self:get_scroll_button_rect(1)
-  local x = self.position.x
-  local ds = style.divider_size
-  core.push_clip_rect(x, y, self.size.x, h)
-  renderer.draw_rect(x, y, self.size.x, h, style.tab_background or { 0x1c, 0x1e, 0x26, 255 })
-  local tabs_number = self:get_visible_tabs_number()
-  local show_scroll_buttons = #self.views > tabs_number
-  local tabs_clip_w = show_scroll_buttons and math.max(1, self.size.x - get_scroll_button_width() * 2) or self.size.x
-
-  core.push_clip_rect(x, y, tabs_clip_w, h)
-  for i = self.tab_offset, self.tab_offset + tabs_number - 1 do
-    local view = self.views[i]
-    local x, y, w, h = self:get_tab_rect(i)
-    self:draw_tab(view, view == self.active_view,
-                  i == self.hovered_tab,
-                  x, y, w, h)
-  end
-  core.pop_clip_rect()
-
-  if show_scroll_buttons then
-    local inactive_color = style.line_number or style.dim
-    local chevron_font = style.font
-    local xrb, yrb, wrb = self:get_scroll_button_rect(1)
-    local left_enabled = self:can_scroll_tabs(1)
-    local left_button_style = left_enabled and (self.hovered_scroll_button == 1 and style.text or style.dim) or inactive_color
-    common.draw_text(chevron_font, left_button_style, "<", "center", xrb, yrb, wrb, h)
-
-    xrb, yrb, wrb = self:get_scroll_button_rect(2)
-    local right_enabled = self:can_scroll_tabs(2)
-    local right_button_style = right_enabled and (self.hovered_scroll_button == 2 and style.text or style.dim) or inactive_color
-    common.draw_text(chevron_font, right_button_style, ">", "center", xrb, yrb, wrb, h)
-  end
-
-  core.pop_clip_rect()
+  return self:get_tab_bar():draw_tabs()
 end
 
 
@@ -961,9 +758,7 @@ end
 ---@param y number Screen y coordinate
 ---@return boolean in_tabs True if point is over the tab bar
 function Node:is_in_tab_area(x, y)
-  if not self:should_show_tabs() then return false end
-  local _, ty, _, th = self:get_scroll_button_rect(1)
-  return y >= ty and y < ty + th
+  return self:get_tab_bar():is_in_tab_area(x, y)
 end
 
 
@@ -1166,29 +961,7 @@ end
 ---@return number tab_w Overlay width
 ---@return number tab_h Overlay height
 function Node:get_drag_overlay_tab_position(x, y, dragged_node, dragged_index)
-  local tab_index = self:get_tab_overlapping_point(x, y)
-  if not tab_index then
-    local first_tab_x = self:get_tab_rect(1)
-    if x < first_tab_x then
-      -- mouse before first visible tab
-      tab_index = self.tab_offset or 1
-    else
-      -- mouse after last visible tab
-      tab_index = self:get_visible_tabs_number() + (self.tab_offset - 1 or 0)
-    end
-  end
-  local tab_x, tab_y, tab_w, tab_h, margin_y = self:get_tab_rect(tab_index)
-  if x > tab_x + tab_w / 2 and tab_index <= #self.views then
-    -- use next tab
-    tab_x = tab_x + tab_w
-    tab_index = tab_index + 1
-  end
-  if self == dragged_node and dragged_index and tab_index > dragged_index then
-    -- the tab we are moving is counted in tab_index
-    tab_index = tab_index - 1
-    tab_x = tab_x - tab_w
-  end
-  return tab_index, tab_x, tab_y + margin_y, tab_w, tab_h - margin_y
+  return self:get_tab_bar():get_drag_overlay_tab_position(x, y, dragged_node, dragged_index)
 end
 
 return Node

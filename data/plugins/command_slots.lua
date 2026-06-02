@@ -9,6 +9,7 @@ local json = require "core.json"
 local process = require "core.process"
 local storage = require "core.storage"
 local style = require "core.style"
+local Tabs = require "core.tabs"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
 local View = require "core.view"
@@ -30,7 +31,7 @@ local DONE_PREFIX = "__ANVIL_COMMAND_SLOT_DONE__"
 local MARKER_TAIL_BYTES = 512
 local DEFAULT_MAX_OUTPUT_BYTES = 10 * 1024 * 1024
 local READ_CHUNK_BYTES = 8192
-local COMMAND_OUTPUT_PANEL_VERSION = 1
+local COMMAND_OUTPUT_PANEL_VERSION = 2
 
 config.plugins.command_slots = common.merge({
   max_output_bytes = DEFAULT_MAX_OUTPUT_BYTES,
@@ -454,6 +455,13 @@ end
 
 local CommandOutputPanel = View:extend()
 
+local function new_command_output_tab_bar(owner)
+  return Tabs(owner, {
+    should_show = function() return true end,
+    log_prefix = "Command Output tabs",
+  })
+end
+
 function CommandOutputPanel:__tostring() return "CommandOutputPanel" end
 
 function CommandOutputPanel:new()
@@ -461,7 +469,12 @@ function CommandOutputPanel:new()
   self.command_output_panel = true
   self.command_output_panel_version = COMMAND_OUTPUT_PANEL_VERSION
   self.active_slot_index = self.active_slot_index or 1
-  self.hovered_tab_index = nil
+  self.views = self.views or {}
+  self.tab_offset = self.tab_offset or 1
+  self.tab_shift = self.tab_shift or 0
+  self.hovered_tab = nil
+  self.hovered_scroll_button = 0
+  self.tab_bar = new_command_output_tab_bar(self)
   self.cursor = "arrow"
   file_context.exclude_main_panel_view(self)
 end
@@ -470,19 +483,39 @@ function CommandOutputPanel:get_name()
   return "Command Output"
 end
 
+function CommandOutputPanel:get_tab_bar()
+  if not self.tab_bar or self.tab_bar.owner ~= self then
+    self.tab_bar = new_command_output_tab_bar(self)
+  end
+  return self.tab_bar
+end
+
 function CommandOutputPanel:tab_bar_height()
-  return style.font:get_height() + style.padding.y * 2 + (style.margin.tab and style.margin.tab.top or 0)
+  return self:get_tab_bar():get_height()
 end
 
 function CommandOutputPanel:slot_view(slot)
   if not slot then return nil end
   if not slot.view then
     slot.view = CommandOutputView(slot)
-    slot.view.__sidepanel_focus_owner = self
-  else
-    slot.view.__sidepanel_focus_owner = self
   end
+  slot.view.__sidepanel_focus_owner = self
+  self.views = self.views or {}
+  if slot.index then self.views[slot.index] = slot.view end
   return slot.view
+end
+
+function CommandOutputPanel:sync_slot_views()
+  self.views = self.views or {}
+  for _, slot in ipairs(M.slots) do
+    self.views[slot.index] = self:slot_view(slot)
+  end
+  for i = #SLOT_DEFS + 1, #self.views do
+    self.views[i] = nil
+  end
+  self.active_slot_index = common.clamp(math.floor(tonumber(self.active_slot_index) or 1), 1, #SLOT_DEFS)
+  self.active_view = self.views[self.active_slot_index] or self.views[1]
+  return self.views
 end
 
 function CommandOutputPanel:active_slot()
@@ -490,7 +523,8 @@ function CommandOutputPanel:active_slot()
 end
 
 function CommandOutputPanel:active_output_view()
-  return self:slot_view(self:active_slot())
+  self:sync_slot_views()
+  return self.active_view
 end
 
 function CommandOutputPanel:get_focus_view()
@@ -509,20 +543,23 @@ end
 
 function CommandOutputPanel:select_slot(index, opts)
   opts = opts or {}
+  self:sync_slot_views()
   index = common.clamp(math.floor(tonumber(index) or 1), 1, #SLOT_DEFS)
-  local old_view = self:active_output_view()
+  local old_view = self.active_view
   if old_view then old_view:save_displayed_entry_state() end
 
   self.active_slot_index = index
-  local slot = self:active_slot()
-  local view = self:slot_view(slot)
+  self.active_view = self:slot_view(self:active_slot())
+  self.manual_tab_scroll = nil
+  local view = self.active_view
   if old_view and old_view ~= view and old_view.on_mouse_left then
     old_view:on_mouse_left()
   end
   if view then
-    view:show_entry(current_output_entry(slot), { follow_end = opts.follow_end == true })
+    view:show_entry(current_output_entry(self:active_slot()), { follow_end = opts.follow_end == true })
   end
   self:layout_active_view()
+  self:get_tab_bar():scroll_to_visible(index)
 
   if opts.focus == true and view then
     core.set_active_view(view)
@@ -550,54 +587,34 @@ function CommandOutputPanel:switch_history(delta)
 end
 
 function CommandOutputPanel:tab_at_point(x, y)
-  local th = self:tab_bar_height()
-  if y < self.position.y or y >= self.position.y + th then return nil end
-  if x < self.position.x or x >= self.position.x + self.size.x then return nil end
-  local w = self.size.x / #SLOT_DEFS
-  return common.clamp(math.floor((x - self.position.x) / w) + 1, 1, #SLOT_DEFS)
+  self:sync_slot_views()
+  return self:get_tab_bar():get_tab_overlapping_point(x, y)
 end
 
 function CommandOutputPanel:draw_tabs()
-  local x, y = self.position.x, self.position.y
-  local w, h = self.size.x / #SLOT_DEFS, self:tab_bar_height()
-  local ds = style.divider_size
-  renderer.draw_rect(x, y, self.size.x, h, style.background2)
-  renderer.draw_rect(x, y + h - ds, self.size.x, ds, style.divider)
-
-  for _, def in ipairs(SLOT_DEFS) do
-    local tx = x + (def.index - 1) * w
-    local active = def.index == self.active_slot_index
-    local hovered = def.index == self.hovered_tab_index
-    local bg = active and style.background or style.background2
-    local fg = (active or hovered) and style.text or style.dim
-    renderer.draw_rect(tx, y, w, h, bg)
-    renderer.draw_rect(tx + w - ds, y + style.padding.y, ds, h - style.padding.y * 2, style.dim)
-    if active then
-      renderer.draw_rect(tx, y, w, ds, style.divider)
-      renderer.draw_rect(tx, y, ds, h, style.divider)
-      renderer.draw_rect(tx + w - ds, y, ds, h, style.divider)
-    end
-    local text_x = tx + style.padding.x
-    local text_w = math.max(0, w - style.padding.x * 2)
-    core.push_clip_rect(text_x, y, text_w, h)
-    common.draw_text(style.font, fg, output_tab_title(M.slots[def.index]), "left", text_x, y, text_w, h)
-    core.pop_clip_rect()
-  end
+  self:sync_slot_views()
+  return self:get_tab_bar():draw_tabs()
 end
 
 function CommandOutputPanel:update()
-  sidepanel.update_side_view_size(self)
+  self:sync_slot_views()
   self:layout_active_view()
-  local view = self:active_output_view()
+  local view = self.active_view
   if view then view:update() end
-  self.hovered_tab_index = self:tab_at_point(core.root_panel.mouse.x, core.root_panel.mouse.y)
+  local mouse = core.root_panel and core.root_panel.mouse
+  if mouse then
+    self:get_tab_bar():update(mouse.x, mouse.y)
+  else
+    self:get_tab_bar():scroll_to_visible()
+    self:get_tab_bar():update_animation()
+  end
 end
 
 function CommandOutputPanel:draw()
   self:draw_background(style.background)
   self:draw_tabs()
   self:layout_active_view()
-  local view = self:active_output_view()
+  local view = self.active_view
   if view then
     core.push_clip_rect(view.position.x, view.position.y, view.size.x, view.size.y)
     view:draw()
@@ -606,6 +623,12 @@ function CommandOutputPanel:draw()
 end
 
 function CommandOutputPanel:on_mouse_pressed(button, x, y, clicks)
+  local tab_bar = self:get_tab_bar()
+  local scroll_button = tab_bar:get_scroll_button_index(x, y)
+  if scroll_button then
+    tab_bar:scroll_tabs(scroll_button)
+    return true
+  end
   local tab = self:tab_at_point(x, y)
   if tab then
     self:select_slot(tab, { focus = true })
@@ -620,14 +643,16 @@ function CommandOutputPanel:on_mouse_pressed(button, x, y, clicks)
 end
 
 function CommandOutputPanel:on_mouse_released(button, x, y, ...)
+  if self:get_tab_bar():is_in_tab_area(x, y) then return true end
   local view = self:active_output_view()
   if view then return view:on_mouse_released(button, x, y, ...) end
 end
 
 function CommandOutputPanel:on_mouse_moved(x, y, dx, dy)
-  self.hovered_tab_index = self:tab_at_point(x, y)
+  local tab_bar = self:get_tab_bar()
+  tab_bar:update_hover(x, y)
   local view = self:active_output_view()
-  if view and not self.hovered_tab_index then
+  if view and not tab_bar:is_in_tab_area(x, y) then
     local result = view:on_mouse_moved(x, y, dx, dy)
     self.cursor = view.cursor or "ibeam"
     return result
@@ -636,14 +661,29 @@ function CommandOutputPanel:on_mouse_moved(x, y, dx, dy)
 end
 
 function CommandOutputPanel:on_mouse_left()
-  self.hovered_tab_index = nil
+  self.hovered_tab = nil
+  self.hovered_scroll_button = 0
   local view = self:active_output_view()
   if view then view:on_mouse_left() end
 end
 
-function CommandOutputPanel:on_mouse_wheel(...)
+function CommandOutputPanel:on_mouse_wheel(delta_y, delta_x, ...)
+  local mouse = core.root_panel and core.root_panel.mouse
+  local tab_bar = self:get_tab_bar()
+  if mouse and tab_bar:is_in_tab_area(mouse.x, mouse.y) then
+    local dir
+    if math.abs(delta_x or 0) > math.abs(delta_y or 0) then
+      dir = delta_x > 0 and 1 or 2
+    elseif delta_y ~= 0 then
+      dir = delta_y > 0 and 1 or 2
+    end
+    if dir and tab_bar:can_scroll_tabs(dir) then
+      tab_bar:scroll_tabs(dir)
+    end
+    return true
+  end
   local view = self:active_output_view()
-  if view then return view:on_mouse_wheel(...) end
+  if view then return view:on_mouse_wheel(delta_y, delta_x, ...) end
 end
 
 function CommandOutputPanel:try_close(do_close)
