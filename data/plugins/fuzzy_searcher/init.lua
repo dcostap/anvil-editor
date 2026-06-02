@@ -1305,6 +1305,10 @@ local function get_small_path_font(font)
   return small_path_font_cache
 end
 
+function PreviewDocView:get_font()
+  return get_small_path_font(DocView.get_font(self))
+end
+
 local function text_span_for_anchor(spans, text_len, anchor_pos)
   local first, best, best_distance
   anchor_pos = tonumber(anchor_pos)
@@ -1620,6 +1624,8 @@ local function draw_grep_result_row(font, result, x, y, width)
   local prefix = result.exact and "# " or "~# "
   draw_file_result_row(font, result.file or "", result.file_spans, prefix, x, y, path_w, ":" .. tostring(result.line or 1))
   if text_w <= 0 then return end
+  local preview_font = get_small_path_font(font)
+  local preview_y = y + math.max(0, math.floor((font:get_height() - preview_font:get_height()) / 2))
   local text_x = x + path_w + gap
   local text = tostring(result.text or "")
   local spans = grep_content_spans(text, result, 0)
@@ -1630,7 +1636,7 @@ local function draw_grep_result_row(font, result, x, y, width)
     spans = project_spans(spans, leading + 1, leading + #text, 0)
     if type(anchor) == "number" then anchor = math.max(1, anchor - leading) end
   end
-  draw_highlighted_text(font, text, text_x, y, text_w, style.text, spans, nil, anchor)
+  draw_highlighted_text(preview_font, text, text_x, preview_y, text_w, style.text, spans, nil, anchor)
 end
 
 local function build_scope(base, line, max_count)
