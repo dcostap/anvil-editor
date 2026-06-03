@@ -3,6 +3,7 @@
 local core = require "core"
 local config = require "core.config"
 config.plugins.editor_wallpaper = false
+local keymap = require "core.keymap"
 local style = require "core.style"
 -- Theme.
 core.reload_module("colors.onedark")
@@ -62,6 +63,10 @@ end
 if core.fuzzy_searcher_install_global_keymaps then
   core.fuzzy_searcher_install_global_keymaps()
 end
+keymap.add_direct({
+  ["ctrl+shift+d"] = "doc:go-to-line",
+  ["ctrl+shift+D"] = "doc:go-to-line",
+})
 -- Wrap long lines at word boundaries and visually indent continuations.
 config.plugins.linewrapping = config.plugins.linewrapping or {}
 config.plugins.linewrapping.mode = "word"
