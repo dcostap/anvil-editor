@@ -1716,6 +1716,7 @@ function FSView:new(prefix)
   self.type_name = "plugins.fuzzy_searcher"
   self.name = "Fuzzy Searcher"
   self.background_color = style.background
+  self.border.width = 0
   self.results = {}
   self.selected = 1
   self.viewport_offset = 1
@@ -1752,6 +1753,12 @@ function FSView:new(prefix)
   self.source_file_line = source_doc and source_doc:get_selection(false) or 1
 
   self.input = TextBox(self, prefix or "", "")
+  self.input.border.color = style.dim or style.text
+  self.input.activate = function(input)
+    TextBox.activate(input)
+    input.hover_border = style.dim or style.text
+    input.border.color = input.hover_border
+  end
   file_context.exclude_main_panel_view(self.input)
   file_context.exclude_main_panel_view(self.input.textview)
   self.input.on_change = function(_, text)
@@ -2980,6 +2987,9 @@ end
 function FSView:update()
   self:layout()
   FSView.super.update(self)
+  if self.input then
+    self.input.border.color = style.dim or style.text
+  end
   if self._awaiting_textinput and not self._awaiting_textinput.logged and system.get_time() - self._awaiting_textinput.time > 0.25 then
     local a = self._awaiting_textinput
     a.logged = true
