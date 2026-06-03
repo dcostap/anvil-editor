@@ -558,16 +558,72 @@ function DiffView:on_touch_moved(...)
   call_docview_method(self.doc_view_b, self.doc_view_b.on_touch_moved, ...)
 end
 
+local function wrapped_total_visual_lines(doc_view)
+  if not doc_view.wrapped_settings or not doc_view.wrapped_lines then
+    return doc_view.doc and #doc_view.doc.lines or 0
+  end
+  return #doc_view.wrapped_lines / 2
+end
+
+local function visual_rows_before_line(doc_view, line)
+  if not doc_view.wrapped_settings or not doc_view.wrapped_line_to_idx then
+    return math.max(0, line - 1)
+  end
+  local idx = doc_view.wrapped_line_to_idx[line]
+  if idx then return idx - 1 end
+  return math.max(0, math.min(wrapped_total_visual_lines(doc_view), line - 1))
+end
+
+local function visual_line_count(doc_view, line)
+  if not doc_view.wrapped_settings or not doc_view.wrapped_line_to_idx then return 1 end
+  local total = wrapped_total_visual_lines(doc_view)
+  local idx = doc_view.wrapped_line_to_idx[line]
+  if not idx then return 1 end
+  local next_idx = doc_view.wrapped_line_to_idx[line + 1] or (total + 1)
+  return math.max(1, next_idx - idx)
+end
+
+local function visual_row_offset_for_col(doc_view, line, col)
+  if not col or not doc_view.wrapped_settings or not doc_view.wrapped_lines then return 0 end
+  local idx = doc_view.wrapped_line_to_idx and doc_view.wrapped_line_to_idx[line]
+  if not idx then return 0 end
+  local offset = 0
+  local i = idx + 1
+  while doc_view.wrapped_lines[(i - 1) * 2 + 1] == line
+    and col >= doc_view.wrapped_lines[(i - 1) * 2 + 2]
+  do
+    offset = offset + 1
+    i = i + 1
+  end
+  return offset
+end
+
+local function gap_rows_before_line(gaps, line)
+  return gaps[line] and gaps[line][2] or 0
+end
+
+local function trailing_gap_rows(gaps, line)
+  return gaps[line] and gaps[line][1] or 0
+end
+
+local function diffview_visual_line_count(doc_view, gaps)
+  local line_count = #doc_view.doc.lines
+  if line_count == 0 then return 0 end
+  return visual_rows_before_line(doc_view, line_count)
+    + visual_line_count(doc_view, line_count)
+    + gap_rows_before_line(gaps, line_count)
+    + trailing_gap_rows(gaps, line_count)
+end
+
 function DiffView:get_scrollable_size()
-  local a_lines, b_lines = #self.doc_view_a.doc.lines, #self.doc_view_b.doc.lines
-  local a_gaps = (self.a_gaps[a_lines] and self.a_gaps[a_lines][2] or 0)
-  local b_gaps = (self.b_gaps[b_lines] and self.b_gaps[b_lines][2] or 0)
-  local lc = math.max(a_lines + a_gaps, b_lines + b_gaps)
+  local a_count = diffview_visual_line_count(self.doc_view_a, self.a_gaps)
+  local b_count = diffview_visual_line_count(self.doc_view_b, self.b_gaps)
+  local lc = math.max(a_count, b_count)
   if not config.scroll_past_end then
     local _, _, _, h_scroll = self.h_scrollbar:get_track_rect()
-    return self.doc_view_a:get_line_height() * (lc) + style.padding.y * 2 + h_scroll
+    return self.doc_view_a:get_line_height() * lc + style.padding.y * 2 + h_scroll
   end
-  return self.doc_view_a:get_line_height() * (lc - 1) + self.size.y
+  return self.doc_view_a:get_line_height() * math.max(0, lc - 1) + self.size.y
 end
 
 ---@param parent core.diffview
@@ -696,8 +752,9 @@ function DiffView:patch_views()
       local x, y = self:get_content_offset()
       local lh = self:get_line_height()
       local gaps = is_a and parent.a_gaps or parent.b_gaps
-      local gap_y = (gaps[line] and gaps[line][2] or 0) * lh
-      y = y + (line - 1) * lh + gap_y + style.padding.y
+      local visual_row = visual_rows_before_line(self, line) + visual_row_offset_for_col(self, line, col)
+      local gap_y = gap_rows_before_line(gaps, line) * lh
+      y = y + visual_row * lh + gap_y + style.padding.y
       if col then
         return x + self:get_gutter_width() + self:get_col_x_offset(line, col), y
       else
@@ -709,6 +766,7 @@ function DiffView:patch_views()
   ---@param doc_view core.docview
   ---@param is_a boolean
   local function wrap_resolve_screen_position(doc_view, is_a)
+    local orig = doc_view.resolve_screen_position
     doc_view.resolve_screen_position = function(self, x, y)
       local lines = self.doc.lines
       local lh = self:get_line_height()
@@ -716,15 +774,19 @@ function DiffView:patch_views()
 
       for i = 1, #lines do
         local line_x, line_y = self:get_line_screen_position(i)
+        local line_h = visual_line_count(self, i) * lh
+        local line_end_y = line_y + line_h
         local next_y
         if i < #lines then
           local _
           _, next_y = self:get_line_screen_position(i + 1)
         else
-          next_y = line_y + lh + ((gaps[i] and gaps[i][1] or 0) * lh)
+          next_y = line_end_y + trailing_gap_rows(gaps, i) * lh
         end
 
-        if (y >= line_y or i == 1) and y < next_y then
+        if y >= line_y and y < line_end_y then
+          return orig(self, x, y - gap_rows_before_line(gaps, i) * lh)
+        elseif (y >= line_y or i == 1) and y < next_y then
           local col = self:get_x_offset_col(i, x - line_x)
           return i, col
         end
@@ -745,26 +807,19 @@ function DiffView:patch_views()
       local lines = self.doc.lines
       local minline, maxline = 1, #lines
       local gaps = is_a and parent.a_gaps or parent.b_gaps
+      local found_min = false
 
-      local y = style.padding.y
       for i = 1, #lines do
-        local gap = (gaps[i] and gaps[i][2] or 0) * lh
-        local h = lh
-        local total = y + h
-        y = total
-        if total + gap > oy then
+        local row = visual_rows_before_line(self, i) + gap_rows_before_line(gaps, i)
+        local start_y = style.padding.y + row * lh
+        local end_y = start_y + visual_line_count(self, i) * lh
+        if not found_min and end_y > oy then
           minline = i
-          break
+          found_min = true
         end
-      end
-
-      for i = minline, #lines do
-        local gap = (gaps[i] and gaps[i][2] or 0) * lh
-        local h = lh
-        local total = y + h
-        y = total
-        if total + gap > y2 then
+        if found_min and start_y < y2 then
           maxline = i
+        elseif found_min then
           break
         end
       end
@@ -778,13 +833,12 @@ function DiffView:patch_views()
   local function wrap_get_scrollable_size(doc_view, is_a)
     doc_view.get_scrollable_size = function(self)
       local gaps = is_a and parent.a_gaps or parent.b_gaps
-      local lc = #self.doc.lines
-      lc = lc + (gaps[lc] and gaps[lc][2] or 0)
+      local lc = diffview_visual_line_count(self, gaps)
       if not config.scroll_past_end then
         local _, _, _, h_scroll = self.h_scrollbar:get_track_rect()
-        return self:get_line_height() * (lc) + style.padding.y * 2 + h_scroll
+        return self:get_line_height() * lc + style.padding.y * 2 + h_scroll
       end
-      return self:get_line_height() * (lc - 1) + self.size.y
+      return self:get_line_height() * math.max(0, lc - 1) + self.size.y
     end
   end
 

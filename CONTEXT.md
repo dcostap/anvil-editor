@@ -60,6 +60,10 @@ _Avoid_: Document selection, shared selection
 A background highlight that marks the visual row containing the active caret in a Document View.
 _Avoid_: Line highlighting, active line highlight
 
+**Wrapped Visual Row**:
+A visual row produced when one Document line wraps; it is not a separate Document line.
+_Avoid_: Fake line, wrapped file line
+
 **Selection Mirror**:
 A compatibility copy of one Document View's Selection State exposed through the Document for older command and plugin code.
 _Avoid_: Source selection, canonical selection

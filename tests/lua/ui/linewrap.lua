@@ -1,8 +1,10 @@
 local core = require "core"
+local common = require "core.common"
 local config = require "core.config"
 local style = require "core.style"
 local test = require "core.test"
 
+local diffview = require "plugins.diffview"
 local LineWrapping = require "plugins.linewrapping"
 
 local function track(context, kind, value)
@@ -35,13 +37,17 @@ end
 
 local function configure_wrapping_for_test(context, view)
   local cfg = config.plugins.linewrapping
-  context.linewrapping_config = {
-    mode = cfg.mode,
-    width_override = cfg.width_override,
-    indent = cfg.indent,
-    wrapping_indent = cfg.wrapping_indent,
-  }
-  context.highlight_current_line = config.highlight_current_line
+  if not context.linewrapping_config then
+    context.linewrapping_config = {
+      mode = cfg.mode,
+      width_override = cfg.width_override,
+      indent = cfg.indent,
+      wrapping_indent = cfg.wrapping_indent,
+    }
+  end
+  if context.highlight_current_line == nil then
+    context.highlight_current_line = config.highlight_current_line
+  end
 
   cfg.mode = "letter"
   cfg.indent = false
@@ -66,31 +72,56 @@ local function restore_config(context)
   end
 end
 
-local function collect_current_line_highlights(view, fn)
-  local highlights = {}
-  local old_draw_line_highlight = view.draw_line_highlight
+local function with_stubbed_renderer(fn)
   local old_draw_rect = renderer.draw_rect
   local old_draw_text = renderer.draw_text
   local old_set_clip_rect = renderer.set_clip_rect
+  local old_common_draw_text = common.draw_text
 
-  view.draw_line_highlight = function(_, x, y)
-    highlights[#highlights + 1] = { x = x, y = y }
-  end
   renderer.draw_rect = function() end
   renderer.draw_text = function(font, text, x)
     return x + font:get_width(text)
   end
   renderer.set_clip_rect = function() end
+  common.draw_text = function() end
 
-  local ok, err = pcall(fn)
+  local ok, a, b, c, d = pcall(fn)
 
-  view.draw_line_highlight = old_draw_line_highlight
   renderer.draw_rect = old_draw_rect
   renderer.draw_text = old_draw_text
   renderer.set_clip_rect = old_set_clip_rect
+  common.draw_text = old_common_draw_text
+
+  if not ok then error(a, 0) end
+  return a, b, c, d
+end
+
+local function collect_current_line_highlights(view, fn)
+  local highlights = {}
+  local old_draw_line_highlight = view.draw_line_highlight
+
+  view.draw_line_highlight = function(_, x, y)
+    highlights[#highlights + 1] = { x = x, y = y }
+  end
+
+  local ok, err = pcall(function()
+    with_stubbed_renderer(fn)
+  end)
+
+  view.draw_line_highlight = old_draw_line_highlight
 
   if not ok then error(err, 0) end
   return highlights
+end
+
+local function wait_until(predicate, timeout, message)
+  local deadline = system.get_time() + (timeout or 1)
+  while not predicate() do
+    if system.get_time() >= deadline then
+      test.fail(message or "timed out waiting for condition", 2)
+    end
+    coroutine.yield(0.01)
+  end
 end
 
 test.describe("line wrapping current line highlight", function()
@@ -139,5 +170,53 @@ test.describe("line wrapping current line highlight", function()
 
     test.equal(#highlights, 1)
     test.equal(highlights[1].y, expected_y)
+  end)
+end)
+
+test.describe("line wrapping diff hunk gutter line numbers", function()
+  test.after_each(function(context)
+    restore_config(context)
+    for _, diff in ipairs(context.diffviews or {}) do
+      diff.doc_view_a.wrapping_enabled = false
+      diff.doc_view_a.wrapped_settings = nil
+      diff.doc_view_b.wrapping_enabled = false
+      diff.doc_view_b.wrapped_settings = nil
+      diff.doc_view_a.doc:on_close()
+      diff.doc_view_b.doc:on_close()
+    end
+  end)
+
+  test.it("positions gutter line numbers after wrapped fake rows and diff hunk gap rows", function(context)
+    local long = string.rep("x", 40)
+    local view = track(context, "diffviews", diffview.string_to_string(
+      long .. "\nshared\nend",
+      long .. "\ninserted\nshared\nend",
+      "left",
+      "right",
+      true
+    ))
+
+    wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
+
+    local left = view.doc_view_a
+    left.position.x, left.position.y = 0, 0
+    left.size.x, left.size.y = 320, 240
+    left.scroll.x, left.scroll.to.x = 0, 0
+    left.scroll.y, left.scroll.to.y = 0, 0
+    configure_wrapping_for_test(context, left)
+
+    local line1_x, line1_y = left:get_line_screen_position(1)
+    local _, line2_y = left:get_line_screen_position(2)
+    local lh = left:get_line_height()
+    local line1_height = with_stubbed_renderer(function()
+      return left:draw_line_body(1, line1_x, line1_y)
+    end)
+    local gap_rows_before_line1 = view.a_gaps[1] and view.a_gaps[1][2] or 0
+    local gap_rows_before_line2 = view.a_gaps[2] and view.a_gaps[2][2] or 0
+    local hunk_gap_height = (gap_rows_before_line2 - gap_rows_before_line1) * lh
+
+    test.ok(line1_height > lh, "expected the first real line to wrap onto fake visual rows")
+    test.equal(hunk_gap_height, lh)
+    test.equal(line2_y, line1_y + line1_height + hunk_gap_height)
   end)
 end)
