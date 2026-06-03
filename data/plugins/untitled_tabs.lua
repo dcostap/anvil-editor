@@ -99,6 +99,10 @@ local function secondary_font()
   return M._secondary_font
 end
 
+local function title_gap()
+  return math.max(2 * SCALE, style.padding.x * 0.35)
+end
+
 local function untitled_tab_title_width(view, font)
   local doc = view and view.doc
   if not is_untitled_doc(doc) then return nil end
@@ -110,7 +114,7 @@ local function untitled_tab_title_width(view, font)
   local sfont = secondary_font()
   local width = sfont:get_width(secondary)
   if primary and primary ~= "" then
-    width = width + style.padding.x + font:get_width(primary)
+    width = width + title_gap() + font:get_width(primary)
   end
   return width + style.padding.x * 2 + style.divider_size * 2
 end
@@ -127,7 +131,7 @@ local function draw_untitled_tab_title(view, font, is_active, is_hovered, x, y, 
   local primary_color = title_color
   local secondary_color = title_color
   local sfont = secondary_font()
-  local gap = style.padding.x
+  local gap = title_gap()
 
   if not primary or primary == "" then
     common.draw_text(sfont, secondary_color, secondary, "center", x, y, w, h)
