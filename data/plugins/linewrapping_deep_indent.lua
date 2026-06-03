@@ -31,7 +31,10 @@ local function continuation_indent_width(font, text)
     width = font:get_width(text:sub(1, indent_end))
   end
 
-  if mode == "indent" or mode == "deepIndent" then
+  local numeric_spaces = tonumber(mode)
+  if numeric_spaces and numeric_spaces > 0 then
+    width = width + font:get_width(string.rep(" ", numeric_spaces))
+  elseif mode == "indent" or mode == "deepIndent" then
     local levels = mode == "deepIndent" and 2 or 1
     width = width + font:get_width(string.rep(" ", (config.indent_size or 4) * levels))
   end
