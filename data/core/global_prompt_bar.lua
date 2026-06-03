@@ -2,6 +2,7 @@ local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
 local style = require "core.style"
+local prompt_bar_renderer = require "core.prompt_bar_renderer"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
 local View = require "core.view"
@@ -127,8 +128,7 @@ end
 function GlobalPromptBar:get_line_screen_position(line, col)
   local x = GlobalPromptBar.super.get_line_screen_position(self, 1, col)
   local _, y = self:get_content_offset()
-  local lh = self:get_line_height()
-  return x, y + (self.size.y - lh) / 2
+  return x, prompt_bar_renderer.line_y(y, self.size.y, self:get_font())
 end
 
 
@@ -306,7 +306,7 @@ end
 ---Get line height for input text.
 ---@return integer height Line height in pixels
 function GlobalPromptBar:get_line_height()
-  return math.floor(self:get_font():get_height() * 1.2)
+  return prompt_bar_renderer.line_height(self:get_font())
 end
 
 
@@ -369,7 +369,7 @@ function GlobalPromptBar:update()
   self:move_towards("gutter_text_brightness", 0, 0.1, "global_prompt_bar")
 
   -- update gutter width
-  local dest = self:get_font():get_width(self.label) + style.padding.x
+  local dest = prompt_bar_renderer.label_width(self.label, self:get_font())
   if self.size.y <= 0 then
     self.gutter_width = dest
   else
@@ -388,7 +388,7 @@ function GlobalPromptBar:update()
   -- update size based on whether this is the active_view
   local dest = 0
   if self == core.active_view then
-    dest = style.font:get_height() + style.padding.y * 2
+    dest = prompt_bar_renderer.height(style.font)
   end
   self:move_towards(self.size, "y", dest, nil, "global_prompt_bar")
 end
@@ -406,13 +406,16 @@ end
 ---@param y number Gutter y position
 ---@return integer height Line height
 function GlobalPromptBar:draw_line_gutter(idx, x, y)
-  local yoffset = self:get_line_text_y_offset()
   local pos = self.position
-  local color = common.lerp(style.text, style.accent, self.gutter_text_brightness / 100)
-  core.push_clip_rect(pos.x, pos.y, self:get_gutter_width(), self.size.y)
-  x = x + style.padding.x
-  renderer.draw_text(self:get_font(), self.label, x, y + yoffset, color)
-  core.pop_clip_rect()
+  prompt_bar_renderer.draw_label(
+    self:get_font(),
+    self.label,
+    pos.x,
+    pos.y,
+    self:get_gutter_width(),
+    self.size.y,
+    self.gutter_text_brightness
+  )
   return self:get_line_height()
 end
 

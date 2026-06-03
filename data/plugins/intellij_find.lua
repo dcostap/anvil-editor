@@ -1,7 +1,9 @@
 -- mod-version:3
 -- View-local in-file find/replace overlay.
 --
--- This intentionally does not use core.global_prompt_bar: find is editor-local UI.
+-- This intentionally does not use the core.global_prompt_bar instance: find is
+-- editor-local UI.  It does share the prompt bar renderer so local find looks
+-- like Anvil's other prompt bars instead of carrying custom chrome.
 -- Each DocView owns its own find state, so two splits of the same Doc can keep
 -- independent queries, current match, highlights, and visible input bars.
 
@@ -10,6 +12,7 @@ local command = require "core.command"
 local config = require "core.config"
 local keymap = require "core.keymap"
 local style = require "core.style"
+local prompt_bar_renderer = require "core.prompt_bar_renderer"
 local common = require "core.common"
 local file_context = require "core.file_context"
 local translate = require "core.doc.translate"
@@ -52,6 +55,7 @@ function LocalFindInputView:new(state, field_name)
   self.font = "font"
   self.label = ""
   self.gutter_width = 0
+  self.gutter_text_brightness = 0
   self.size.y = 0
 
   local input = self
@@ -102,7 +106,11 @@ function LocalFindInputView:move_to_end()
 end
 
 function LocalFindInputView:get_gutter_width()
-  return 0, 0
+  return self.gutter_width or 0, 0
+end
+
+function LocalFindInputView:get_line_height()
+  return prompt_bar_renderer.line_height(self:get_font())
 end
 
 function LocalFindInputView:get_scrollable_size()
@@ -117,24 +125,33 @@ function LocalFindInputView:draw_scrollbar() end
 function LocalFindInputView:draw_line_highlight() end
 
 function LocalFindInputView:get_line_screen_position(line, col)
-  local x = self.position.x - self.scroll.x
-  local y = self.position.y + math.floor((self.size.y - self:get_line_height()) / 2)
-  if col then
-    return x + self:get_col_x_offset(1, col), y
+  local x = LocalFindInputView.super.get_line_screen_position(self, 1, col)
+  local _, y = self:get_content_offset()
+  return x, prompt_bar_renderer.line_y(y, self.size.y, self:get_font())
+end
+
+function LocalFindInputView:draw_line_gutter(idx, x, y)
+  local pos = self.position
+  prompt_bar_renderer.draw_label(
+    self:get_font(),
+    self.label,
+    pos.x,
+    pos.y,
+    self:get_gutter_width(),
+    self.size.y,
+    self.gutter_text_brightness
+  )
+  return self:get_line_height()
+end
+
+function LocalFindInputView:draw_overlay()
+  if core.active_view == self then
+    LocalFindInputView.super.draw_overlay(self)
   end
-  return x, y
 end
 
 function LocalFindInputView:draw()
-  local _, indent_size = self.doc:get_indent_info()
-  self:get_font():set_tab_size(indent_size)
-  self:prepare_line_body_draw_cache(1, 1)
-  local x, y = self:get_line_screen_position(1)
-  self:draw_line_body(1, x, y)
-  self:draw_overlay()
-  self.__line_body_highlight_cache = nil
-  self.__line_body_selection_cache = nil
-  self.__line_gutter_selection_cache = nil
+  LocalFindInputView.super.draw(self)
 end
 
 local function field_text(field)
@@ -688,31 +705,16 @@ local function toggle_field_focus(view, state)
   field:select_all()
 end
 
-local function find_bar_background_color()
-  return style.tab_background or style.background2 or style.background
-end
-
-local function find_input_background_color()
-  local bg = find_bar_background_color()
-  if bg then
-    return common.lerp(bg, { 255, 255, 255, bg[4] or 255 }, 0.05)
-  end
-  return style.background3 or style.background
-end
-
 local function find_bar_layout(view, state)
   local font = style.font
-  local pad = style.padding.x
-  local row_h = font:get_height() + style.padding.y
-  local h = font:get_height() + style.padding.y * 2
+  local h = prompt_bar_renderer.height(font)
   return {
     x = view.position.x,
     y = view.position.y + view.size.y - h,
     w = view.size.x,
     h = h,
-    row_h = row_h,
-    pad = pad,
-    sep = math.max(1, style.divider_size or SCALE),
+    pad = style.padding.x,
+    sep = math.max(style.padding.x, style.divider_size or SCALE),
     font = font,
   }
 end
@@ -725,66 +727,77 @@ local function find_info_text(state)
   return tostring(state.info or "") .. suffix
 end
 
-local function make_field_row(layout, label, x, input_x, input_w)
+local function make_field_row(layout, label, x, w)
+  local label_w = prompt_bar_renderer.label_width(label, layout.font)
+  w = math.max(label_w + 1, w)
   return {
     label = label,
+    label_w = label_w,
     x = x,
-    y = layout.y + math.floor((layout.h - layout.row_h) / 2),
-    input_x = input_x,
-    input_w = math.max(32 * SCALE, input_w),
-    input_h = layout.row_h,
+    y = layout.y,
+    w = w,
+    h = layout.h,
+    input_x = x + label_w,
+    input_w = math.max(1, w - label_w),
+    input_h = layout.h,
     font = layout.font,
   }
 end
 
 local function find_bar_rows(layout, state, info_text)
   local font, pad, sep = layout.font, layout.pad, layout.sep
-  local x = layout.x + pad
-  local right = layout.x + layout.w - pad
-  local info_w = info_text ~= "" and math.min(font:get_width(info_text) + pad, math.max(80 * SCALE, layout.w * 0.24)) or 0
-  local find_label = "Find:"
-  local replace_label = "Replace:"
-  local find_label_w = font:get_width(find_label) + pad
-  local replace_label_w = font:get_width(replace_label) + pad
+  local right = layout.x + layout.w
+  local info_w = prompt_bar_renderer.info_width(info_text, font, math.max(80 * SCALE, layout.w * 0.24))
+  local info = { text = info_text, x = right - info_w, w = info_w }
+  local field_right = info_w > 0 and (info.x - pad) or right
+  field_right = math.max(layout.x, field_right)
+  local find_label = "Find: "
+  local replace_label = "Replace: "
 
   if state.mode == "replace" then
-    local available = right - x - find_label_w - replace_label_w - info_w - sep * 2 - pad
-    available = math.max(96 * SCALE, available)
-    local find_w = math.max(72 * SCALE, math.floor(available * 0.48))
-    local replace_w = math.max(72 * SCALE, available - find_w)
-    local find_row = make_field_row(layout, find_label, x, x + find_label_w, find_w)
-    local replace_x = find_row.input_x + find_row.input_w + sep + pad
-    local replace_row = make_field_row(layout, replace_label, replace_x, replace_x + replace_label_w, replace_w)
-    local info_x = replace_row.input_x + replace_row.input_w + sep + pad
-    return find_row, replace_row, { text = info_text, x = info_x, w = math.max(0, right - info_x) }
+    local available = math.max(0, field_right - layout.x)
+    local find_label_w = prompt_bar_renderer.label_width(find_label, font)
+    local replace_label_w = prompt_bar_renderer.label_width(replace_label, font)
+    local gap = available >= find_label_w + replace_label_w + sep and sep or 0
+    local usable = math.max(0, available - gap - find_label_w - replace_label_w)
+    local find_input_w = math.floor(usable * 0.48)
+    local replace_input_w = usable - find_input_w
+    local find_w = find_label_w + find_input_w
+    local replace_w = replace_label_w + replace_input_w
+    local find_row = make_field_row(layout, find_label, layout.x, find_w)
+    local replace_row = make_field_row(layout, replace_label, layout.x + find_w + gap, replace_w)
+    return find_row, replace_row, info
   end
 
-  local available = right - x - find_label_w - info_w - sep
-  local find_row = make_field_row(layout, find_label, x, x + find_label_w, math.max(80 * SCALE, available))
-  local info_x = find_row.input_x + find_row.input_w + sep + pad
-  return find_row, nil, { text = info_text, x = info_x, w = math.max(0, right - info_x) }
+  local find_row = make_field_row(layout, find_label, layout.x, math.max(0, field_right - layout.x))
+  return find_row, nil, info
 end
 
-local function draw_input_field(view, state, field, row, active)
-  local font = row.font or style.font
-  local pad = style.padding.x / 2
-  local x, y, w, h = row.input_x, row.y, row.input_w, row.input_h
-  renderer.draw_rect(x, y, w, h, find_input_background_color())
+local function apply_field_row(field, row)
+  field.label = row.label
+  field.gutter_width = row.label_w
+  field.position.x = row.x
+  field.position.y = row.y
+  field.size.x = math.max(1, row.w)
+  field.size.y = math.max(1, row.h)
+end
 
-  field.position.x = x + pad
-  field.position.y = y
-  field.size.x = math.max(1, w - pad * 2)
-  field.size.y = math.max(1, h)
-  local caret_line, caret_col = field.doc:get_selection()
-  field:scroll_to_make_visible(caret_line or 1, caret_col or 1, true)
-  field:update()
+local function layout_find_fields(view, state)
+  local layout = find_bar_layout(view, state)
+  local find_row, replace_row, info = find_bar_rows(layout, state, find_info_text(state))
+  apply_field_row(state.find, find_row)
+  if replace_row then apply_field_row(state.replace, replace_row) end
+  return layout, find_row, replace_row, info
+end
 
+local function update_find_input_fields(view, state)
+  local _, _, replace_row = layout_find_fields(view, state)
+  state.find:update()
+  if replace_row then state.replace:update() end
+end
+
+local function draw_input_field(field)
   core.push_clip_rect(field.position.x, field.position.y, field.size.x, field.size.y)
-  if field_text(field) == "" then
-    local placeholder = row.label == "Replace:" and "replacement" or "search"
-    local py = field.position.y + math.floor((field.size.y - font:get_height()) / 2)
-    renderer.draw_text(font, placeholder, field.position.x - field.scroll.x, py, style.dim or style.text)
-  end
   field:draw()
   core.pop_clip_rect()
 end
@@ -792,27 +805,21 @@ end
 local function draw_local_find(view)
   local state = visible_find_state(view)
   if not state then return end
-  local layout = find_bar_layout(view, state)
-  local active = state.input_active
-  renderer.draw_rect(layout.x, layout.y, layout.w, layout.h, find_bar_background_color())
+  local layout, find_row, replace_row, info = layout_find_fields(view, state)
+  prompt_bar_renderer.draw_background(layout.x, layout.y, layout.w, layout.h)
 
-  local info_text = find_info_text(state)
-  local find_row, replace_row, info = find_bar_rows(layout, state, info_text)
-  local label_y = find_row.y + (find_row.input_h - layout.font:get_height()) / 2
-  renderer.draw_text(layout.font, find_row.label, find_row.x, label_y, style.dim or style.text)
-  draw_input_field(view, state, state.find, find_row, active and core.active_view == state.find)
+  draw_input_field(state.find)
 
   if replace_row then
-    renderer.draw_text(layout.font, replace_row.label, replace_row.x, label_y, style.dim or style.text)
-    draw_input_field(view, state, state.replace, replace_row, active and core.active_view == state.replace)
+    draw_input_field(state.replace)
   end
 
   if info and info.text ~= "" and info.w > 0 then
     local color = state.error and (style.error or style.text) or (style.dim or style.text)
-    core.push_clip_rect(info.x, layout.y, info.w, layout.h)
-    renderer.draw_text(layout.font, info.text, info.x, label_y, color)
-    core.pop_clip_rect()
+    prompt_bar_renderer.draw_info(layout.font, info.text, info.x, layout.y, info.w, layout.h, color)
   end
+
+  prompt_bar_renderer.draw_top_divider(layout.x, layout.y, layout.w)
 end
 
 local function point_in_rect(x, y, r)
@@ -820,13 +827,12 @@ local function point_in_rect(x, y, r)
 end
 
 local function point_in_field(x, y, row)
-  return row and x >= row.x and x <= row.input_x + row.input_w and y >= row.y and y <= row.y + row.input_h
+  return row and x >= row.x and x <= row.x + row.w and y >= row.y and y <= row.y + row.h
 end
 
 local function handle_find_mouse_pressed(view, state, x, y, clicks)
-  local layout = find_bar_layout(view, state)
+  local layout, find_row, replace_row = layout_find_fields(view, state)
   if not point_in_rect(x, y, layout) then return false end
-  local find_row, replace_row = find_bar_rows(layout, state, find_info_text(state))
   local target_field, target_name = state.find, "find"
   if replace_row and point_in_field(x, y, replace_row) then
     target_field, target_name = state.replace, "replace"
@@ -927,12 +933,15 @@ local function make_local_find_update(base)
     local old_depth = DocView.__local_find_update_depth or 0
     DocView.__local_find_update_depth = old_depth + 1
     local state = visible_find_state(self)
-    if state and state.change_id ~= self.doc:get_change_id() then
-      refresh_matches(self, state, {
-        scroll = false,
-        restore_origin = false,
-        select = state.input_active and core.active_view == self,
-      })
+    if state then
+      update_find_input_fields(self, state)
+      if state.change_id ~= self.doc:get_change_id() then
+        refresh_matches(self, state, {
+          scroll = false,
+          restore_origin = false,
+          select = state.input_active and core.active_view == self,
+        })
+      end
     end
     local result = base(self, ...)
     DocView.__local_find_update_depth = old_depth
