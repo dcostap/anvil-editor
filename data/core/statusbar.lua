@@ -262,9 +262,10 @@ function StatusBar:register_docview_items()
         end
       end
       if not filename then
+        local doc_name = dv.doc.intellij_untitled_name or dv.doc:get_name()
         filename = {
           dv.doc.filename and style.text or style.dim,
-          common.home_encode(dv.doc:get_name())
+          common.home_encode(doc_name)
         }
       end
       return {
