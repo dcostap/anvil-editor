@@ -1287,26 +1287,13 @@ local function grep_accept_range(result)
   return line, result.col or 1
 end
 
-local small_path_font_cache, small_path_font_key
-
 local function color_with_alpha(color, alpha)
   color = color or style.accent or style.text or {255, 255, 255, 255}
   return { color[1] or 255, color[2] or 255, color[3] or 255, alpha or color[4] or 255 }
 end
 
-local function get_small_path_font(font)
-  local size = math.max(1, math.floor((font:get_size() or 12) * 0.84 + 0.5))
-  local key = tostring(font) .. ":" .. tostring(size)
-  if not small_path_font_cache or small_path_font_key ~= key then
-    local ok, copied = pcall(function() return font:copy(size) end)
-    small_path_font_cache = ok and copied or font
-    small_path_font_key = key
-  end
-  return small_path_font_cache
-end
-
 function PreviewDocView:get_font()
-  return get_small_path_font(DocView.get_font(self))
+  return style.get_small_font(DocView.get_font(self))
 end
 
 local function text_span_for_anchor(spans, text_len, anchor_pos)
@@ -1565,7 +1552,7 @@ local function draw_file_result_row(font, file, spans, prefix, x, y, width, suff
   prefix = prefix or ""
   suffix = suffix or ""
 
-  local path_font = get_small_path_font(font)
+  local path_font = style.get_small_font(font)
   local prefix_color = style.dim or style.text
   local dir_color = style.dim or style.text
   local suffix_color = style.dim or style.text
@@ -1624,7 +1611,7 @@ local function draw_grep_result_row(font, result, x, y, width)
   local prefix = result.exact and "# " or "~# "
   draw_file_result_row(font, result.file or "", result.file_spans, prefix, x, y, path_w, ":" .. tostring(result.line or 1))
   if text_w <= 0 then return end
-  local preview_font = get_small_path_font(font)
+  local preview_font = style.get_small_font(font)
   local preview_y = y + math.max(0, math.floor((font:get_height() - preview_font:get_height()) / 2))
   local text_x = x + path_w + gap
   local text = tostring(result.text or "")

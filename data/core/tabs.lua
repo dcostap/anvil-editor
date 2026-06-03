@@ -99,20 +99,7 @@ function Tabs:get_size()
 end
 
 local function tab_title_font()
-  local base_size = style.font:get_size()
-  local desired_size = math.max(8 * SCALE, base_size - 2 * SCALE)
-  if Tabs._tab_title_font
-     and Tabs._tab_title_font_base == style.font
-     and Tabs._tab_title_font_size == desired_size then
-    return Tabs._tab_title_font
-  end
-  local ok, font = pcall(function()
-    return style.font:copy(desired_size)
-  end)
-  Tabs._tab_title_font_base = style.font
-  Tabs._tab_title_font_size = desired_size
-  Tabs._tab_title_font = ok and font or style.font
-  return Tabs._tab_title_font
+  return style.get_small_font(style.font)
 end
 
 function Tabs:get_tab_title_font()

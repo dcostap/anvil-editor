@@ -45,6 +45,31 @@ style.icon_font = renderer.font.load(DATADIR .. "/fonts/icons.ttf", 16 * SCALE, 
 style.icon_big_font = style.icon_font:copy(23 * SCALE)
 style.code_font = renderer.font.load(DATADIR .. "/fonts/JetBrainsMono-Regular.ttf", 15 * SCALE)
 
+local scaled_font_cache = {}
+
+---Return a cached copy of a font at a specific size.
+---@param font renderer.font
+---@param size number
+---@return renderer.font
+function style.get_scaled_font(font, size)
+  local key = tostring(font) .. ":" .. tostring(size)
+  local cached = scaled_font_cache[key]
+  if cached then return cached end
+  local ok, scaled = pcall(function()
+    return font:copy(size)
+  end)
+  scaled = ok and scaled or font
+  scaled_font_cache[key] = scaled
+  return scaled
+end
+
+---Return a cached font one scaled point smaller than the given font.
+---@param font renderer.font
+---@return renderer.font
+function style.get_small_font(font)
+  return style.get_scaled_font(font, math.max(8 * SCALE, font:get_size() - 1 * SCALE))
+end
+
 style.syntax = {}
 
 -- This can be used to override fonts per syntax group.

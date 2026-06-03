@@ -43,20 +43,7 @@ local StatusBar = View:extend()
 function StatusBar:__tostring() return "StatusBar" end
 
 local function statusbar_font()
-  local base_size = style.font:get_size()
-  local desired_size = math.max(8 * SCALE, base_size - 2 * SCALE)
-  if StatusBar._statusbar_font
-     and StatusBar._statusbar_font_base == style.font
-     and StatusBar._statusbar_font_size == desired_size then
-    return StatusBar._statusbar_font
-  end
-  local ok, font = pcall(function()
-    return style.font:copy(desired_size)
-  end)
-  StatusBar._statusbar_font_base = style.font
-  StatusBar._statusbar_font_size = desired_size
-  StatusBar._statusbar_font = ok and font or style.font
-  return StatusBar._statusbar_font
+  return style.get_small_font(style.font)
 end
 
 ---Space separator
