@@ -1598,10 +1598,11 @@ draw_file_result_row = function(font, file, spans, prefix, x, y, width, suffix)
 
   local name_available = suffix_width > 0 and math.max(0, available - suffix_width) or available
   cx = draw_highlighted_text(font, name, cx, y, name_available, name_color, name_spans)
+  local suffix_x = cx
   if suffix ~= "" and cx < right then
     cx = renderer.draw_text(font, truncate_text(font, suffix, right - cx), cx, y, suffix_color)
   end
-  return cx
+  return cx, suffix_x
 end
 
 local function grep_row_columns(width)
@@ -1617,11 +1618,20 @@ local function grep_row_columns(width)
   return path_w, gap, math.max(0, width - path_w - gap)
 end
 
-local function draw_grep_result_row(font, result, x, y, width)
+local function draw_grep_result_row(font, result, x, y, width, collapse_file, collapsed_line_x)
   local path_w, gap, text_w = grep_row_columns(width)
-  local prefix = result.exact and "# " or "~# "
-  draw_file_result_row(font, result.file or "", result.file_spans, prefix, x, y, path_w, ":" .. tostring(result.line or 1))
-  if text_w <= 0 then return end
+  local line = tonumber(result.line) or 1
+  local line_suffix = line <= 9999 and string.format(":%-4d", line) or ":" .. tostring(line)
+  local line_x = collapsed_line_x
+  if collapse_file then
+    line_x = common.clamp(line_x or x, x, x + path_w)
+    renderer.draw_text(font, truncate_text(font, line_suffix, math.max(0, x + path_w - line_x)), line_x, y, style.dim or style.text)
+  else
+    local prefix = result.exact and "# " or "~# "
+    local _end_x
+    _end_x, line_x = draw_file_result_row(font, result.file or "", result.file_spans, prefix, x, y, path_w, line_suffix)
+  end
+  if text_w <= 0 then return line_x end
   local preview_font = style.get_small_font(font)
   local preview_y = y + math.max(0, math.floor((font:get_height() - preview_font:get_height()) / 2))
   local text_x = x + path_w + gap
@@ -1635,6 +1645,7 @@ local function draw_grep_result_row(font, result, x, y, width)
     if type(anchor) == "number" then anchor = math.max(1, anchor - leading) end
   end
   draw_highlighted_text(preview_font, text, text_x, preview_y, text_w, style.text, spans, nil, anchor)
+  return line_x
 end
 
 local function build_scope(base, line, max_count)
@@ -3061,10 +3072,16 @@ function FSView:draw()
     local r = self.results[idx]
     if r and r.kind == "grep" then has_visible_grep = true; break end
   end
+  local previous_rendered_grep_file = nil
+  local previous_rendered_grep_line_x = nil
+  local previous_rendered_was_grep = false
   for idx = self.viewport_offset, last do
     local r = self.results[idx]
     local yy = m.results_top + (idx - self.viewport_offset) * lh
     if r.header then
+      previous_rendered_grep_file = nil
+      previous_rendered_grep_line_x = nil
+      previous_rendered_was_grep = false
       renderer.draw_text(font, truncate_text(font, r.label, row_text_w), x + pad, yy, style.accent or style.text)
     else
       if idx == self.selected then
@@ -3073,20 +3090,42 @@ function FSView:draw()
         renderer.draw_rect(x, yy, list_w, lh, style.background3 or color_with_alpha(style.text, 24))
       end
       if r.kind == "grep" then
-        draw_grep_result_row(font, r, x + pad, yy, row_text_w)
+        local file = tostring(r.file or "")
+        local collapse_file = file ~= "" and previous_rendered_was_grep and file == previous_rendered_grep_file
+        previous_rendered_grep_line_x = draw_grep_result_row(font, r, x + pad, yy, row_text_w, collapse_file, previous_rendered_grep_line_x)
+        previous_rendered_grep_file = file
+        previous_rendered_was_grep = true
       elseif r.kind == "file" then
+        previous_rendered_grep_file = nil
+        previous_rendered_grep_line_x = nil
+        previous_rendered_was_grep = false
         draw_file_result_row(font, r.file or r.label, r.match_spans, "", x + pad, yy, row_text_w)
       elseif r.kind == "command" then
+        previous_rendered_grep_file = nil
+        previous_rendered_grep_line_x = nil
+        previous_rendered_was_grep = false
         draw_command_result_row(font, r, x + pad, yy, row_text_w)
       elseif r.kind == "project" then
+        previous_rendered_grep_file = nil
+        previous_rendered_grep_line_x = nil
+        previous_rendered_was_grep = false
         draw_project_result_row(font, r, x + pad, yy, row_text_w)
       elseif r.kind == "everything" then
+        previous_rendered_grep_file = nil
+        previous_rendered_grep_line_x = nil
+        previous_rendered_was_grep = false
         draw_everything_result_row(font, r, x + pad, yy, row_text_w)
       elseif r.kind == "new_project" then
+        previous_rendered_grep_file = nil
+        previous_rendered_grep_line_x = nil
+        previous_rendered_was_grep = false
         draw_new_project_result_row(font, r, x + pad, yy, row_text_w)
       else
         local label, spans = result_list_label_and_spans(r)
         draw_highlighted_text(font, label, x + pad, yy, row_text_w, style.text, spans)
+        previous_rendered_grep_file = nil
+        previous_rendered_grep_line_x = nil
+        previous_rendered_was_grep = false
       end
     end
   end
