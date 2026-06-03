@@ -30,6 +30,26 @@ local user_scale = tonumber(
   os.getenv("ANVIL_SCALE_RESTART") or os.getenv("ANVIL_SCALE")
 )
 
+local function capture_active_docview_caret_y()
+  local DocView = package.loaded["core.docview"]
+  local view = core.active_view
+  if not DocView or not view or not view.extends or not view:extends(DocView) then return nil end
+  local line, col = view.doc:get_selection()
+  local _, y = view:get_line_screen_position(line, col)
+  return { view = view, line = line, col = col, y = y }
+end
+
+local function restore_active_docview_caret_y(anchor)
+  if not anchor or not anchor.view or not anchor.view.doc then return end
+  local view = anchor.view
+  local _, y = view:get_line_screen_position(anchor.line, anchor.col)
+  local target = (view.scroll.to.y or view.scroll.y or 0) + (y - anchor.y)
+  local max = view:get_scrollable_size() - view.size.y
+  target = common.clamp(target, 0, max)
+  view.scroll.y = target
+  view.scroll.to.y = target
+end
+
 ---@class plugins.scale
 local scale = {}
 
@@ -38,6 +58,8 @@ function scale.set(scale)
   system.setenv("ANVIL_SCALE_RESTART", scale)
 
   scale = common.clamp(scale, 0.7, 6)
+
+  local active_caret_y = capture_active_docview_caret_y()
 
   -- save scroll positions
   local v_scrolls = {}
@@ -104,6 +126,8 @@ function scale.set(scale)
     view.scroll.to.x = view.scroll.x
   end
 
+  restore_active_docview_caret_y(active_caret_y)
+
   core.redraw = true
 end
 
@@ -113,6 +137,8 @@ function scale.set_code(scale)
 
   scale = common.clamp(scale, 0.7, 6)
 
+  local active_caret_y = capture_active_docview_caret_y()
+
   local s = scale / current_code_scale
   current_code_scale = scale
 
@@ -120,6 +146,8 @@ function scale.set_code(scale)
   for name, font in pairs(style.syntax_fonts) do
     style.syntax_fonts[name]:set_size(s * font:get_size())
   end
+
+  restore_active_docview_caret_y(active_caret_y)
 
   core.redraw = true
 end
