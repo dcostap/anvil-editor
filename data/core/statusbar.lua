@@ -42,13 +42,30 @@ local StatusBar = View:extend()
 
 function StatusBar:__tostring() return "StatusBar" end
 
+local function statusbar_font()
+  local base_size = style.font:get_size()
+  local desired_size = math.max(8 * SCALE, base_size - 2 * SCALE)
+  if StatusBar._statusbar_font
+     and StatusBar._statusbar_font_base == style.font
+     and StatusBar._statusbar_font_size == desired_size then
+    return StatusBar._statusbar_font
+  end
+  local ok, font = pcall(function()
+    return style.font:copy(desired_size)
+  end)
+  StatusBar._statusbar_font_base = style.font
+  StatusBar._statusbar_font_size = desired_size
+  StatusBar._statusbar_font = ok and font or style.font
+  return StatusBar._statusbar_font
+end
+
 ---Space separator
 ---@type string
 StatusBar.separator  = "      "
 
----Pipe separator
+---Wide separator between status sections.
 ---@type string
-StatusBar.separator2 = "   |   "
+StatusBar.separator2 = "      "
 
 ---@alias core.statusbar.item.separator
 ---|>`StatusBar.separator`
@@ -187,10 +204,6 @@ function StatusBar:new()
   self:register_imageview_items()
 end
 
-local clicks = -1
-local gx, gy, dx, dy, gc = 0, 0, 2, -2, { table.unpack(style.text) }
-
-
 ---Register default status bar items for document views.
 ---Shows file, position, selections, indentation, encoding, line ending, etc.
 function StatusBar:register_docview_items()
@@ -223,8 +236,7 @@ function StatusBar:register_docview_items()
         }
       end
       return {
-        dv.doc:is_dirty() and style.accent or style.text, style.icon_font, "f",
-        style.dim, style.font, self.separator2, table.unpack(filename)
+        table.unpack(filename)
       }
     end
   })
@@ -319,28 +331,6 @@ function StatusBar:register_docview_items()
 
   self:add_item({
     predicate = predicate_docview,
-    name = "doc:stats",
-    alignment = StatusBar.Item.RIGHT,
-    get_item = function()
-      return config.stonks == nil and {} or {
-        style.text,
-        type(config.stonks) == "table" and config.stonks.font or style.icon_font,
-        type(config.stonks) == "table" and config.stonks.icon or ( config.stonks and "g" or "h" ),
-      }
-    end,
-    separator = self.separator2,
-    command = function(button, x, y)
-      if button == "left" then
-        clicks = clicks + 1
-      elseif button == "right" then
-        clicks = -1
-      end
-      gx, gy = x, y
-    end
-  })
-
-  self:add_item({
-    predicate = predicate_docview,
     name = "doc:lines",
     alignment = StatusBar.Item.RIGHT,
     get_item = function()
@@ -386,18 +376,6 @@ function StatusBar:register_docview_items()
     command = "doc:toggle-line-ending"
   })
 
-  self:add_item {
-    predicate = predicate_docview,
-    name = "doc:overwrite-mode",
-    alignment = StatusBar.Item.RIGHT,
-    get_item = function()
-      return {
-        style.text, core.active_view.doc.overwrite and "OVR" or "INS"
-      }
-    end,
-    command = "doc:toggle-overwrite",
-    separator = StatusBar.separator2
-  }
 end
 
 
@@ -413,7 +391,7 @@ function StatusBar:register_command_items()
     get_item = function()
       return {
         style.icon_font, "g",
-        style.font, style.dim, self.separator2
+        statusbar_font(), style.dim, self.separator2
       }
     end
   })
@@ -433,7 +411,7 @@ function StatusBar:register_imageview_items()
         local w, h = core.active_view.image:get_size()
         local dimensions = string.format("%dx%d", w, h)
         return {
-          style.font, style.accent,
+          statusbar_font(), style.accent,
           file,
           style.text,
           StatusBar.separator,
@@ -681,7 +659,7 @@ end
 ---@param y number Starting y coordinate
 ---@param draw_fn fun(font, color, text, align, x, y, w, h):number Drawing or measurement function
 local function draw_items(self, items, x, y, draw_fn)
-  local font = style.font
+  local font = statusbar_font()
   local color = style.text
 
   for _, item in ipairs(items) do
@@ -735,8 +713,9 @@ end
 function StatusBar:draw_item_tooltip(item)
   core.root_panel:defer_draw(function()
     local text = item.tooltip
-    local w = style.font:get_width(text)
-    local h = style.font:get_height()
+    local font = statusbar_font()
+    local w = font:get_width(text)
+    local h = font:get_height()
     local x = self.pointer.x - (w / 2) - (style.padding.x * 2)
 
     if x < 0 then x = 0 end
@@ -753,7 +732,7 @@ function StatusBar:draw_item_tooltip(item)
     )
 
     renderer.draw_text(
-      style.font,
+      font,
       text,
       -- we round the coords to prevent jumpy text on fractional scales
       common.round(x + (style.padding.x * 2)),
@@ -1232,7 +1211,7 @@ function StatusBar:update()
     return
   end
 
-  local height = style.font:get_height() + style.padding.y * 2;
+  local height = statusbar_font():get_height() + style.padding.y * 2;
 
   if self.size.y + 1 < height then
     self:move_towards(self.size, "y", height, nil, "statusbar")
@@ -1273,7 +1252,7 @@ end
 local function get_rendered_message(self)
   return {
     self.message.icon_color, style.icon_font, self.message.icon,
-    style.dim, style.font, StatusBar.separator2, style.text, self.message.text
+    style.dim, statusbar_font(), StatusBar.separator2, style.text, self.message.text
   }
 end
 
@@ -1353,24 +1332,6 @@ function StatusBar:draw()
     end
   end
 
-  if clicks > 5 then
-    if config.stonks == nil then clicks = -1 end
-    core.root_panel:defer_draw(function()
-      local font = type(config.stonks) == "table" and config.stonks.font or style.icon_font
-      local icon = type(config.stonks) == "table" and config.stonks.icon or ( config.stonks and "g" or "h" )
-      local xadv = renderer.draw_text(font, icon, gx, gy, gc)
-      local x2, y2 = core.root_panel.size.x - (xadv - gx), core.root_panel.size.y - font:get_height()
-      gx, gy = common.clamp(gx + dx, 0, x2), common.clamp(gy + dy, 0, y2)
-      local odx, ody = dx, dy
-      if gx <= 0 then dx = math.abs(dx) elseif gx >= x2 then dx = -math.abs(dx) end
-      if gy <= 0 then dy = math.abs(dy) elseif gy >= y2 then dy = -math.abs(dy) end
-      if odx ~= dx or ody ~= dy then
-        local major = math.random(1, 3)
-        for i = 1, 3 do gc[i] = major == i and math.random(200, 255) or math.random(0, 100) end
-      end
-      core.redraw = true
-    end)
-  end
 end
 
 return StatusBar

@@ -389,13 +389,6 @@ config.skip_plugins_version = false
 ---@type boolean
 config.log_slow_threads = false
 
----Increases the performance of the editor and its user.
----Do not change this unless you know what you are doing.
----
----Defaults to true.
----@type boolean | { font: renderer.font, icon: string } | nil
-config.stonks = true
-
 ---Specifies the dirmonitor backend to be used or nil
 ---to use the first available one.
 ---
