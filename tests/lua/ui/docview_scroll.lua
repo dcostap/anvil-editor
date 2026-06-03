@@ -88,14 +88,15 @@ test.describe("DocView selection scrolling", function()
     test.ok(last_y + lh < view.position.y + view.size.y, "expected blank viewport space after the last line")
   end)
 
-  test.it("does not scroll a fitting document when scroll-past-end is enabled", function(context)
+  test.it("allows fitting documents to scroll past end when scroll-past-end is enabled", function(context)
     config.scroll_past_end = true
 
-    local view = open_editor(context, "one\ntwo\nthree")
+    local view, doc = open_editor(context, "one\ntwo\nthree")
+    local expected_max = view:get_line_height() * (#doc.lines - 1)
     view.scroll.to.y = view.size.y
     view:clamp_scroll_position()
 
-    test.equal(view.scroll.to.y, 0)
+    test.equal(view.scroll.to.y, expected_max)
   end)
 
   test.it("scroll_to_make_visible reveals an off-screen same-line range horizontally", function(context)

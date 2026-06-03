@@ -579,15 +579,16 @@ end
 function DocView:get_scrollable_size()
   local _, _, _, h_scroll = self.h_scrollbar:get_track_rect()
   h_scroll = math.max(0, h_scroll or 0)
-  local text_height = self:get_line_height() * (#self.doc.lines) + style.padding.y * 2
+  local lh = self:get_line_height()
+  local text_height = lh * (#self.doc.lines) + style.padding.y * 2
   local content_height = text_height + h_scroll
+  if config.scroll_past_end then
+    return math.max(self.size.y, lh * math.max(0, #self.doc.lines - 1) + self.size.y)
+  end
   if text_height <= self.size.y then
     return self.size.y
   end
-  if not config.scroll_past_end then
-    return content_height
-  end
-  return self:get_line_height() * (#self.doc.lines - 1) + self.size.y
+  return content_height
 end
 
 
