@@ -9,7 +9,7 @@ local DocView = require "core.docview"
 config.plugins.centered_editor = config.plugins.centered_editor or {}
 local centered_editor = config.plugins.centered_editor
 if centered_editor.enabled == nil then centered_editor.enabled = true end
-centered_editor.max_width = centered_editor.max_width or 1450
+centered_editor.max_width = centered_editor.max_width or 1250
 centered_editor.scale_width = centered_editor.scale_width ~= false
 centered_editor.min_margin = centered_editor.min_margin or 0
 centered_editor.main_tabs_only = centered_editor.main_tabs_only ~= false

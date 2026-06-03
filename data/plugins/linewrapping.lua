@@ -259,9 +259,15 @@ end
 -- Draws a guide if applicable to show where wrapping is occurring.
 function LineWrapping.draw_guide(docview)
   if config.plugins.linewrapping.guide and docview.wrapped_settings.width ~= math.huge then
-    local x, y = docview:get_content_offset()
+    local x = docview:get_content_offset()
     local gw = docview:get_gutter_width()
-    renderer.draw_rect(x + gw + docview.wrapped_settings.width, y, 1, core.root_panel.size.y, guide_color())
+    renderer.draw_rect(
+      x + gw + docview.wrapped_settings.width,
+      docview.position.y,
+      math.max(1, math.floor(SCALE)),
+      docview.size.y,
+      guide_color()
+    )
   end
 end
 
