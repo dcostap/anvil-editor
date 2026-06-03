@@ -6,6 +6,7 @@ local test = require "core.test"
 
 local diffview = require "plugins.diffview"
 local LineWrapping = require "plugins.linewrapping"
+require "plugins.linewrapping_deep_indent"
 
 local function track(context, kind, value)
   context[kind] = context[kind] or {}
@@ -48,12 +49,16 @@ local function configure_wrapping_for_test(context, view)
   if context.highlight_current_line == nil then
     context.highlight_current_line = config.highlight_current_line
   end
+  if context.disable_blink == nil then
+    context.disable_blink = config.disable_blink
+  end
 
   cfg.mode = "letter"
   cfg.indent = false
   cfg.wrapping_indent = 0
   cfg.width_override = view:get_font():get_width("xxxxxxxx")
   config.highlight_current_line = true
+  config.disable_blink = true
 
   view.wrapping_enabled = true
   LineWrapping.update_docview_breaks(view)
@@ -69,6 +74,9 @@ local function restore_config(context)
   end
   if context.highlight_current_line ~= nil then
     config.highlight_current_line = context.highlight_current_line
+  end
+  if context.disable_blink ~= nil then
+    config.disable_blink = context.disable_blink
   end
 end
 
@@ -170,6 +178,31 @@ test.describe("line wrapping current line highlight", function()
 
     test.equal(#highlights, 1)
     test.equal(highlights[1].y, expected_y)
+  end)
+
+  test.it("refreshes visible caret cache during a full wrapped Document View draw", function(context)
+    local view, doc = open_editor(context, string.rep("x", 40) .. "\n")
+    configure_wrapping_for_test(context, view)
+    doc:set_selection(1, 20, 1, 20)
+    view.__visible_caret_cache = { { 1, 2, 1, 2 } }
+
+    local carets = {}
+    local old_draw_caret = view.draw_caret
+    view.draw_caret = function(_, x, y, line, col)
+      carets[#carets + 1] = { x = x, y = y, line = line, col = col }
+    end
+
+    local ok, err = pcall(function()
+      with_stubbed_renderer(function()
+        view:draw()
+      end)
+    end)
+    view.draw_caret = old_draw_caret
+    if not ok then error(err, 0) end
+
+    test.equal(#carets, 1)
+    test.equal(carets[1].line, 1)
+    test.equal(carets[1].col, 20)
   end)
 end)
 
