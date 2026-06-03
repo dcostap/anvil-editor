@@ -141,16 +141,13 @@ end
 local function draw_whitespace_run(self, idx, x, y, font, ty, substitution, start_col, end_col, color)
   if start_col >= end_col then return end
 
-  -- We need to draw tabs one at a time because they might have a different
-  -- visual width than the substituting glyph.
-  if substitution.char == "\t" then
-    for i = start_col, end_col - 1 do
-      local tx = self:get_col_x_offset(idx, i) + x
-      renderer.draw_text(font, substitution.sub, tx, ty, color)
-    end
-  else
-    local tx = self:get_col_x_offset(idx, start_col) + x
-    renderer.draw_text(font, string.rep(substitution.sub, end_col - start_col), tx, ty, color)
+  -- Draw each marker at the source column position. Tabs need this because
+  -- they can have a different visual width than the substituting glyph; spaces
+  -- need it because repeated middle-dot strings can be shaped/ligated by the
+  -- renderer and become visually incorrect with ligature-enabled fonts.
+  for i = start_col, end_col - 1 do
+    local tx = self:get_col_x_offset(idx, i) + x
+    renderer.draw_text(font, substitution.sub, tx, ty, color)
   end
 end
 
