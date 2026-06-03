@@ -46,6 +46,12 @@ local function range_x(view, line, col1, col2)
   return math.min(x1, x2), math.max(x1, x2)
 end
 
+local function numbered_lines(count)
+  local lines = {}
+  for i = 1, count do lines[i] = "line " .. i end
+  return table.concat(lines, "\n")
+end
+
 test.describe("DocView selection scrolling", function()
   test.before_each(function(context)
     context.scroll_past_end = config.scroll_past_end
@@ -64,11 +70,12 @@ test.describe("DocView selection scrolling", function()
     end
   end)
 
-  test.it("allows the final line to scroll to the top with blank space below when scroll-past-end is enabled", function(context)
+  test.it("allows the final overflowing line to scroll to the top with blank space below when scroll-past-end is enabled", function(context)
     config.scroll_past_end = true
 
-    local view, doc = open_editor(context, "one\ntwo\nthree")
+    local view, doc = open_editor(context, numbered_lines(20))
     local lh = view:get_line_height()
+    test.ok(lh * #doc.lines + style.padding.y * 2 > view.size.y, "expected test document to overflow vertically")
     local expected_max = lh * (#doc.lines - 1)
 
     view.scroll.to.y = expected_max + view.size.y
@@ -79,6 +86,16 @@ test.describe("DocView selection scrolling", function()
     local _, last_y = view:get_line_screen_position(#doc.lines)
     test.equal(last_y, view.position.y + style.padding.y)
     test.ok(last_y + lh < view.position.y + view.size.y, "expected blank viewport space after the last line")
+  end)
+
+  test.it("does not scroll a fitting document when scroll-past-end is enabled", function(context)
+    config.scroll_past_end = true
+
+    local view = open_editor(context, "one\ntwo\nthree")
+    view.scroll.to.y = view.size.y
+    view:clamp_scroll_position()
+
+    test.equal(view.scroll.to.y, 0)
   end)
 
   test.it("scroll_to_make_visible reveals an off-screen same-line range horizontally", function(context)
