@@ -302,16 +302,26 @@ function StatusBar:register_docview_items()
       col = col + ntabs * (indent_size - 1)
 
       local font = statusbar_font()
-      local reserved = "9999:9999"
-      local w = font:get_width(reserved)
+      local line_width = font:get_width("9999")
+      local colon_width = font:get_width(":")
+      local col_width = font:get_width("9999")
+      local w = line_width + colon_width + col_width
       if not calc_only then
         local ty = y + math.floor((h - font:get_height()) / 2)
-        local text1 = tostring(line) .. ":"
-        renderer.draw_text(font, text1, x, ty, style.text)
+        local line_text = tostring(line)
+        local col_text = tostring(col)
         renderer.draw_text(
           font,
-          tostring(col),
-          x + font:get_width(text1),
+          line_text,
+          x + line_width - font:get_width(line_text),
+          ty,
+          style.text
+        )
+        renderer.draw_text(font, ":", x + line_width, ty, style.text)
+        renderer.draw_text(
+          font,
+          col_text,
+          x + line_width + colon_width,
           ty,
           col > config.line_limit and style.accent or style.text
         )
