@@ -572,9 +572,20 @@ local function draw_wrapped_search_match(view, line, col1, col2, x, y, idx0, lh,
 end
 
 local old_draw_current_line_highlights = DocView.draw_current_line_highlights
-function DocView:draw_current_line_highlights(...)
-  if not self.wrapped_settings then return old_draw_current_line_highlights(self, ...) end
+function DocView:draw_current_line_highlights(minline, maxline)
+  if not self.wrapped_settings then return old_draw_current_line_highlights(self, minline, maxline) end
   if core.active_view ~= self or config.highlight_current_line == false then return end
+  local lh = self:get_line_height()
+  local hcl = config.highlight_current_line
+  for _, line1, col1, line2, col2 in self.doc:get_selections(false) do
+    if line1 > maxline then break end
+    if line1 >= minline and (hcl ~= "no_selection" or (line1 == line2 and col1 == col2)) then
+      local idx = get_line_idx_col_count(self, line1, col1)
+      local _, y = self:get_line_screen_position(line1)
+      local first_idx = get_line_idx_col_count(self, line1)
+      self:draw_line_highlight(self.position.x, y + lh * (idx - first_idx))
+    end
+  end
   self:draw_content_left_edge()
 end
 
@@ -585,7 +596,8 @@ function DocView:draw_line_body(line, x, y)
   local idx0, _, count = get_line_idx_col_count(self, line)
   local highlight_rows
   local hcl = config.highlight_current_line
-  if hcl ~= false and core.active_view == self then
+  if not self.__current_line_highlights_drawn_before_content
+  and hcl ~= false and core.active_view == self then
     for lidx, line1, col1, line2, col2 in self.doc:get_selections(false) do
       -- Draw the Current Line Highlight only on the wrapped visual row that
       -- contains the caret, not on every visual row belonging to the same

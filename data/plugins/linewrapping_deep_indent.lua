@@ -136,6 +136,7 @@ local function draw_wrapped_docview(self)
   local last_line = get_idx_line_col(self, maxidx)
 
   self:prepare_line_body_draw_cache(first_line, last_line)
+  self:draw_current_line_highlights(first_line, last_line)
   self.__current_line_highlights_drawn_before_content = true
 
   -- Draw the gutter once per logical line, at that line's first visual row.
