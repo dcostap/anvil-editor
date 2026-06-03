@@ -188,10 +188,14 @@ function TitleBar:draw_window_title()
   end
 
   local controls_width = caption_button_width() * #title_commands
-  local inset = math.max(logo_slot + style.padding.x * 2, controls_width + style.padding.x)
-  local x = ox + inset
-  local w = math.max(0, self.size.x - inset * 2)
-  common.draw_text(style.font, color, current_project_title(), "center", x, y, w, h)
+  local title_x = logo_slot + style.padding.x * 2
+  local right_x = self.size.x - controls_width - style.padding.x
+  if config.integrated_titlebar_tabs then
+    right_x = math.min(right_x, title_tabs_x() - style.padding.x)
+  end
+  local x = ox + title_x
+  local w = math.max(0, right_x - title_x)
+  common.draw_text(style.font, color, current_project_title(), "left", x, y, w, h)
 end
 
 function TitleBar:get_tabs_rect()
