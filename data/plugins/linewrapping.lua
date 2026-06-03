@@ -18,6 +18,8 @@ local translate = require "core.doc.translate"
 ---@field width_override? number | function():number
 ---Whether or not to draw a guide
 ---@field guide boolean
+---Color used for the wrapping guide. Defaults to the whitespace indicator color.
+---@field guide_color? renderer.color
 ---Whether or not we should indent ourselves like the first line of a wrapped block.
 ---@field indent boolean
 ---Extra visual spaces added before wrapped continuation lines.
@@ -33,6 +35,8 @@ config.plugins.linewrapping = common.merge({
   width_override = nil,
 	-- Whether or not to draw a guide
   guide = true,
+  -- Color used for the wrapping guide. Falls back to the whitespace indicator color.
+  guide_color = nil,
   -- Whether or not we should indent ourselves like the first line of a wrapped block.
   indent = true,
   -- Extra visual spaces added before wrapped continuation lines.
@@ -243,12 +247,21 @@ function LineWrapping.update_breaks(docview, old_line1, old_line2, net_lines)
   end
 end
 
+local function guide_color()
+  return config.plugins.linewrapping.guide_color
+    or style.line_wrapping_guide
+    or style.whitespace
+    or style.indent_guide
+    or style.line_number
+    or style.selection
+end
+
 -- Draws a guide if applicable to show where wrapping is occurring.
 function LineWrapping.draw_guide(docview)
   if config.plugins.linewrapping.guide and docview.wrapped_settings.width ~= math.huge then
     local x, y = docview:get_content_offset()
     local gw = docview:get_gutter_width()
-    renderer.draw_rect(x + gw + docview.wrapped_settings.width, y, 1, core.root_panel.size.y, style.selection)
+    renderer.draw_rect(x + gw + docview.wrapped_settings.width, y, 1, core.root_panel.size.y, guide_color())
   end
 end
 
