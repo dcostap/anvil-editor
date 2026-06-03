@@ -23,7 +23,6 @@ local filetype_overrides = {
   end,
   ["C"] = SS.get_level_ignore_open_bracket,
   ["C++"] = SS.get_level_ignore_open_bracket,
-  ["Plain Text"] = false
 }
 
 local sticky_scroll = {
