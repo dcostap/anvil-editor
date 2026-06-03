@@ -746,6 +746,13 @@ function http.request(method, url, options)
       while true do
         local data, err = reader:read_chunk(4096)
         if err then
+          -- HTTP/1.0 and some simple HTTP servers delimit the response body by
+          -- closing the connection instead of sending Content-Length or chunked
+          -- transfer encoding. Treat EOF after the headers as a normal end of
+          -- body for this close-delimited response mode.
+          if tostring(err):lower():find("end of stream", 1, true) then
+            break
+          end
           ok, errmsg = false, err
           break
         end

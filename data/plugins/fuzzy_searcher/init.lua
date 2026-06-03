@@ -1500,6 +1500,8 @@ local function draw_new_project_result_row(font, r, x, y, width)
   draw_highlighted_text(font, r.project or r.label or "", cx, y, math.max(0, x + width - cx), style.text, {})
 end
 
+local draw_file_result_row
+
 local function draw_everything_result_row(font, r, x, y, width)
   local gap = style.padding.x
   local kind_w = font:get_width("folder") + gap
@@ -1546,7 +1548,7 @@ local function draw_command_result_row(font, r, x, y, width)
   end
 end
 
-local function draw_file_result_row(font, file, spans, prefix, x, y, width, suffix)
+draw_file_result_row = function(font, file, spans, prefix, x, y, width, suffix)
   file = tostring(file or "")
   spans = spans or {}
   prefix = prefix or ""
@@ -1653,7 +1655,7 @@ local everything = {
   probe_generation = 0,
   search_generation = 0,
   host = os.getenv("EVERYTHING_HOST") or "localhost",
-  port = os.getenv("EVERYTHING_PORT") or "54321",
+  port = os.getenv("EVERYTHING_PORT") or "54367",
 }
 
 local function everything_endpoint()
