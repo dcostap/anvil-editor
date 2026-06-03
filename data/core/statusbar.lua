@@ -48,11 +48,11 @@ end
 
 ---Space separator
 ---@type string
-StatusBar.separator  = "      "
+StatusBar.separator  = "  "
 
 ---Wide separator between status sections.
 ---@type string
-StatusBar.separator2 = "      "
+StatusBar.separator2 = "  "
 
 ---@alias core.statusbar.item.separator
 ---|>`StatusBar.separator`
