@@ -1196,6 +1196,13 @@ function DocView:draw_line_highlight(x, y)
   renderer.draw_rect(rx, ry, rw, rh, style.line_highlight)
 end
 
+function DocView:draw_content_left_edge()
+  local edge_w = math.max(1, math.floor(SCALE))
+  local edge_padding = style.padding.x * 0.35
+  local x = self:get_line_screen_position(1) - edge_padding - edge_w
+  renderer.draw_rect(x, self.position.y, edge_w, self.size.y, style.whitespace or style.line_number or style.text)
+end
+
 function DocView:line_has_current_line_highlight(line)
   if core.active_view ~= self then return false end
   local highlight_cache = self.__line_body_highlight_cache
@@ -1225,6 +1232,7 @@ function DocView:draw_current_line_highlights(minline, maxline)
     end
     y = y + lh
   end
+  self:draw_content_left_edge()
 end
 
 

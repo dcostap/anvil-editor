@@ -6,7 +6,6 @@ local DocView = require "core.docview"
 
 local indent_guides = {
   enabled = true,
-  show_zero_indent = true,
   line_width = math.max(1, SCALE),
   highlight_active = false,
   blank_line_search_limit = 25,
@@ -122,8 +121,7 @@ function DocView:draw_line_body(line, x, y)
     -- Draw after the normal line body so blank-line backgrounds/highlights do
     -- not erase guide segments. Guides sit in indentation whitespace, so text
     -- overlap is normally not an issue.
-    local first_depth = conf.show_zero_indent and 0 or 1
-    for depth = first_depth, indent_levels - 1 do
+    for depth = 1, indent_levels - 1 do
       local gx = x + depth * indent_px
       renderer.draw_rect(gx, y, lw, lh, depth == active_depth and active_color or normal_color)
     end
