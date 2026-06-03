@@ -569,6 +569,13 @@ local function draw_wrapped_search_match(view, line, col1, col2, x, y, idx0, lh,
   end
 end
 
+local old_draw_current_line_highlights = DocView.draw_current_line_highlights
+function DocView:draw_current_line_highlights(...)
+  if not self.wrapped_settings then return old_draw_current_line_highlights(self, ...) end
+  if core.active_view ~= self or config.highlight_current_line == false then return end
+  self:draw_content_left_edge()
+end
+
 local old_draw_line_body = DocView.draw_line_body
 function DocView:draw_line_body(line, x, y)
   if not self.wrapped_settings then return old_draw_line_body(self, line, x, y) end
@@ -601,17 +608,27 @@ function DocView:draw_line_body(line, x, y)
       end
     end
   end
-  local draw_highlight = nil
-  for lidx, line1, col1, line2, col2 in self.doc:get_selections(true) do
-    -- draw line highlight if caret is on this line
-    if draw_highlight ~= false and config.highlight_current_line
-    and line1 == line and core.active_view == self then
-      draw_highlight = (line1 == line2 and col1 == col2)
+  local highlight_rows
+  local hcl = config.highlight_current_line
+  if hcl ~= false and core.active_view == self then
+    for lidx, line1, col1, line2, col2 in self.doc:get_selections(false) do
+      -- Draw the Current Line Highlight only on the wrapped visual row that
+      -- contains the caret, not on every visual row belonging to the same
+      -- Document line.
+      if line1 == line and (hcl ~= "no_selection" or (line1 == line2 and col1 == col2)) then
+        local idx = get_line_idx_col_count(self, line, col1)
+        if idx >= idx0 and idx < idx0 + count then
+          highlight_rows = highlight_rows or {}
+          highlight_rows[idx] = true
+        end
+      end
     end
   end
-  if draw_highlight then
-    for i=1,count do
-      self:draw_line_highlight(x + self.scroll.x, y + lh * (i - 1))
+  if highlight_rows then
+    for i = idx0, idx0 + count - 1 do
+      if highlight_rows[i] then
+        self:draw_line_highlight(x + self.scroll.x, y + lh * (i - idx0))
+      end
     end
   end
   for _, match in ipairs(search_matches or {}) do

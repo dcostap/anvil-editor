@@ -56,6 +56,10 @@ _Avoid_: Side DocView, Side Panel DocView, Split DocView, side buffer
 The caret and selection state owned by a Document View.
 _Avoid_: Document selection, shared selection
 
+**Current Line Highlight**:
+A background highlight that marks the visual row containing the active caret in a Document View.
+_Avoid_: Line highlighting, active line highlight
+
 **Selection Mirror**:
 A compatibility copy of one Document View's Selection State exposed through the Document for older command and plugin code.
 _Avoid_: Source selection, canonical selection
