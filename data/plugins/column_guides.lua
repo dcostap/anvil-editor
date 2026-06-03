@@ -1,5 +1,6 @@
 -- mod-version:3
 -- priority:110
+local core = require "core"
 local common = require "core.common"
 local command = require "core.command"
 local config = require "core.config"
@@ -73,38 +74,33 @@ local function guide_columns(conf)
   end
 end
 
-local function wrapped_line_count(dv, line)
-  if not dv.wrapped_settings then return 1 end
-
-  local total = #(dv.wrapped_lines or {}) / 2
-  local start_idx = (dv.wrapped_line_to_idx or {})[line] or total
-  local next_idx = (dv.wrapped_line_to_idx or {})[line + 1] or (total + 1)
-  return math.max(1, next_idx - start_idx)
-end
-
-local function draw_column_guides(dv, x, y, height)
+local function draw_column_guides(dv)
   local conf = config.plugins.column_guides
   if type(conf) ~= "table" or conf.enabled == false then return end
 
   local font = dv:get_font()
   local char_w = font:get_width("n")
   local line_w = math.max(1, math.floor(SCALE))
+  local gw = dv:get_gutter_width()
+  local x = dv:get_line_screen_position(1)
   local color = guide_color()
 
+  core.push_clip_rect(dv.position.x + gw, dv.position.y, dv.size.x - gw, dv.size.y)
   for column in guide_columns(conf) do
     local gx = x + char_w * column - math.floor(line_w / 2)
-    renderer.draw_rect(gx, y, line_w, height, color)
+    renderer.draw_rect(gx, dv.position.y, line_w, dv.size.y, color)
   end
+  core.pop_clip_rect()
 end
 
-local old_draw_line_body = DocView.draw_line_body
-function DocView:draw_line_body(line, x, y)
-  -- Draw after line backgrounds, including the current-line indicator, but
-  -- before the ordinary line body so selections, search matches, text, hints,
-  -- and carets always appear above the guides.
-  draw_column_guides(self, x, y, self:get_line_height() * wrapped_line_count(self, line))
+local old_draw_current_line_highlights = DocView.draw_current_line_highlights
+function DocView:draw_current_line_highlights(...)
+  old_draw_current_line_highlights(self, ...)
 
-  return old_draw_line_body(self, line, x, y)
+  -- Draw one uninterrupted viewport-height guide before line bodies are drawn.
+  -- This keeps the guide visible past EOF and below text, selections, search
+  -- matches, hints, and carets while remaining above current-line highlights.
+  draw_column_guides(self)
 end
 
 command.add(nil, {
