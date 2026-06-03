@@ -38,9 +38,9 @@ style.code_font = load_text_font()
 -- First-party editable file tree.
 require "plugins.custom_nagview"
 require "plugins.filetree"
--- Use 4 spaces for soft tabs/indentation.
+-- Use hard tabs for indentation, displayed at 4 columns.
 config.indent_size = 4
-config.tab_type = "soft"
+config.tab_type = "hard"
 -- Match IntelliJ/VSCode-style occurrence selection.
 config.select_add_next_no_case = true
 -- Integrated app-owned titlebar. On Windows this uses native non-client
