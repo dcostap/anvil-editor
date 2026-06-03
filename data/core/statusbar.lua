@@ -170,14 +170,20 @@ end
 local function get_doc_selection_counts(doc)
   local carets = math.floor(#doc.selections / 4)
   local chars = 0
-  local line_breaks = 0
+  local selected_lines = 0
+  local seen_lines = {}
   for _, line1, col1, line2, col2 in doc:get_selections(true) do
     if line1 ~= line2 or col1 ~= col2 then
-      line_breaks = line_breaks + (line2 - line1)
       chars = chars + doc:get_text(line1, col1, line2, col2):ulen(nil, nil, true) - (line2 - line1)
+      for line = line1, line2 do
+        if not seen_lines[line] then
+          seen_lines[line] = true
+          selected_lines = selected_lines + 1
+        end
+      end
     end
   end
-  return carets, chars, line_breaks
+  return carets, chars, selected_lines
 end
 
 local function draw_reserved_status_text(text, reserved_text, x, y, h, calc_only)
@@ -347,17 +353,17 @@ function StatusBar:register_docview_items()
 
   self:add_item({
     predicate = predicate_docview,
-    name = "doc:selected-line-breaks",
+    name = "doc:selected-lines",
     alignment = StatusBar.Item.LEFT,
     position = 5,
     get_item = {},
     on_draw = function(x, y, h, _, calc_only)
-      local _, _, line_breaks = get_doc_selection_counts(core.active_view.doc)
-      if line_breaks <= 0 then
-        return draw_reserved_status_text("", "9999 line breaks selected", x, y, h, calc_only)
+      local _, _, selected_lines = get_doc_selection_counts(core.active_view.doc)
+      if selected_lines <= 0 then
+        return draw_reserved_status_text("", "9999 lines selected", x, y, h, calc_only)
       end
-      local label = string.format(" line break%s selected", plural_suffix(line_breaks))
-      return draw_reserved_count_label(line_breaks, label, " line breaks selected", x, y, h, calc_only)
+      local label = string.format(" line%s selected", plural_suffix(selected_lines))
+      return draw_reserved_count_label(selected_lines, label, " lines selected", x, y, h, calc_only)
     end
   })
 
