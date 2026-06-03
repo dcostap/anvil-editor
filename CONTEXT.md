@@ -36,6 +36,10 @@ _Avoid_: Editor tab, buffer view
 Non-interactive text visually anchored to a Document View line that is not part of the Document.
 _Avoid_: Buffer hint, phantom text, inlay hint
 
+**Column Guide**:
+A non-interactive vertical visual marker at a configured character column in a Document View.
+_Avoid_: Line guide, ruler
+
 **Editor**:
 A Document View used to edit a file or untitled Document. Document-backed tool panels are not Editors, even when they use Document View mechanics.
 _Avoid_: Buffer, editor tab
