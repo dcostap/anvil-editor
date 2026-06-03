@@ -6,6 +6,10 @@ local storage = require "core.storage"
 
 local STORAGE_MODULE = "ws"
 
+local loaded_workspace_key
+local loaded_workspace_path
+local suppress_next_exit_workspace_save = false
+
 local function workspace_key_matches_basename(key, basename)
   local prefix = key:sub(1, #basename)
   if PATHSEP == "\\" then
@@ -15,29 +19,123 @@ local function workspace_key_matches_basename(key, basename)
 end
 
 
-local function workspace_keys_for(project_dir)
+local function workspace_key_id(key, basename)
+  if not workspace_key_matches_basename(key, basename) then return nil end
+  return tonumber(key:sub(#basename + 1):match("^-(%d+)$"))
+end
+
+
+local function workspace_key_entries_for(project_dir)
   local basename = common.basename(project_dir)
-  return coroutine.wrap(function()
-    for _, key in ipairs(storage.keys(STORAGE_MODULE) or {}) do
-      if workspace_key_matches_basename(key, basename) then
-        local id = tonumber(key:sub(#basename + 1):match("^-(%d+)$"))
-        if id then
-          coroutine.yield(key, id)
-        end
+  local entries = {}
+  for _, key in ipairs(storage.keys(STORAGE_MODULE) or {}) do
+    local id = workspace_key_id(key, basename)
+    if id then
+      entries[#entries + 1] = { key = key, id = id }
+    end
+  end
+  table.sort(entries, function(a, b) return a.id < b.id end)
+  return entries
+end
+
+
+local function count_saved_views(node)
+  if type(node) ~= "table" then return 0 end
+  if node.type == "leaf" then
+    return type(node.views) == "table" and #node.views or 0
+  end
+  return count_saved_views(node.a) + count_saved_views(node.b)
+end
+
+
+local function matching_workspace_entries(project_dir)
+  local entries = {}
+  for _, entry in ipairs(workspace_key_entries_for(project_dir)) do
+    local workspace = storage.load(STORAGE_MODULE, entry.key)
+    if type(workspace) == "table" and common.path_equals(workspace.path, project_dir) then
+      entry.workspace = workspace
+      entry.saved_view_count = count_saved_views(workspace.documents)
+      entries[#entries + 1] = entry
+    end
+  end
+  table.sort(entries, function(a, b)
+    local a_nonempty = a.saved_view_count > 0
+    local b_nonempty = b.saved_view_count > 0
+    if a_nonempty ~= b_nonempty then return a_nonempty end
+    if a.saved_view_count ~= b.saved_view_count then
+      return a.saved_view_count > b.saved_view_count
+    end
+    return a.id < b.id
+  end)
+  return entries
+end
+
+
+local function clear_duplicate_workspace_entries(entries, keep_key)
+  for _, entry in ipairs(entries) do
+    if entry.key ~= keep_key then
+      storage.clear(STORAGE_MODULE, entry.key)
+      if core.log_quiet then
+        core.log_quiet(
+          "Workspace: removed duplicate state %s for %s",
+          entry.key,
+          tostring(entry.workspace and entry.workspace.path)
+        )
       end
     end
-  end)
+  end
+end
+
+
+local function allocate_workspace_key(project_dir)
+  local basename = common.basename(project_dir)
+  local used_ids = {}
+  for _, entry in ipairs(workspace_key_entries_for(project_dir)) do
+    used_ids[entry.id] = true
+  end
+  local id = 1
+  while used_ids[id] do
+    id = id + 1
+  end
+  return basename .. "-" .. id
+end
+
+
+local function loaded_key_for(project_dir)
+  if loaded_workspace_key
+  and loaded_workspace_path
+  and common.path_equals(loaded_workspace_path, project_dir) then
+    return loaded_workspace_key
+  end
 end
 
 
 local function consume_workspace(project_dir)
-  for key, id in workspace_keys_for(project_dir) do
-    local workspace = storage.load(STORAGE_MODULE, key)
-    if workspace and common.path_equals(workspace.path, project_dir) then
-      storage.clear(STORAGE_MODULE, key)
-      return workspace
-    end
+  local entries = matching_workspace_entries(project_dir)
+  if #entries == 0 then
+    loaded_workspace_key = nil
+    loaded_workspace_path = nil
+    return nil
   end
+
+  local chosen = entries[1]
+  -- Preserve the original consume semantics: once state is restored, remove it
+  -- from disk so repeated load hooks in the same run cannot duplicate tabs.
+  for _, entry in ipairs(entries) do
+    storage.clear(STORAGE_MODULE, entry.key)
+  end
+  loaded_workspace_key = chosen.key
+  loaded_workspace_path = chosen.workspace.path or project_dir
+  if core.log_quiet then
+    core.log_quiet(
+      "Workspace: restored %s for %s with %d view(s), consumed %d duplicate(s)",
+      chosen.key,
+      tostring(chosen.workspace.path),
+      chosen.saved_view_count,
+      math.max(0, #entries - 1)
+    )
+  end
+  return chosen.workspace
 end
 
 
@@ -154,22 +252,35 @@ end
 
 
 local function save_workspace()
-  local project_dir = common.basename(core.root_project().path)
-  local id_list = {}
-  for filename, id in workspace_keys_for(project_dir) do
-    id_list[id] = true
+  local project = core.root_project and core.root_project()
+  if not (project and project.path) then return end
+
+  local project_dir = project.path
+  local key = loaded_key_for(project_dir)
+  local entries = matching_workspace_entries(project_dir)
+  if not key then
+    key = entries[1] and entries[1].key or allocate_workspace_key(project_dir)
   end
-  local id = 1
-  while id_list[id] do
-    id = id + 1
-  end
+  clear_duplicate_workspace_entries(entries, key)
+
   local root = get_unlocked_root(core.root_panel.root_node)
-  storage.save(STORAGE_MODULE, project_dir .. "-" .. id, {
-    path = core.root_project().path,
-    documents = save_node(root),
+  local documents = save_node(root)
+  storage.save(STORAGE_MODULE, key, {
+    path = project_dir,
+    documents = documents,
     directories = save_directories(),
     visited_files = core.visited_files
   })
+  loaded_workspace_key = key
+  loaded_workspace_path = project_dir
+  if core.log_quiet then
+    core.log_quiet(
+      "Workspace: saved %s for %s with %d view(s)",
+      key,
+      project_dir,
+      count_saved_views(documents)
+    )
+  end
 end
 
 
@@ -201,7 +312,7 @@ local function load_workspace()
       if active_view then
         core.set_active_view(active_view)
       end
-      for _, dir_name in ipairs(workspace.directories) do
+      for _, dir_name in ipairs(workspace.directories or {}) do
         core.add_project(system.absolute_path(dir_name))
       end
     end
@@ -223,9 +334,38 @@ function core.run(...)
       core.try(load_workspace)
       return project
     end
+
+    local open_project_in_same_window = core.open_project_in_same_window
+    function core.open_project_in_same_window(project, ...)
+      suppress_next_exit_workspace_save = true
+      local result = table.pack(pcall(open_project_in_same_window, project, ...))
+      if not result[1] then
+        suppress_next_exit_workspace_save = false
+        error(result[2], 0)
+      end
+      if suppress_next_exit_workspace_save then
+        -- The wrapped function did not reach core.exit, so do not let a stale
+        -- suppression skip an unrelated later quit.
+        suppress_next_exit_workspace_save = false
+      end
+      return table.unpack(result, 2, result.n)
+    end
+
     local exit = core.exit
     function core.exit(quit_fn, force)
-      if force then core.try(save_workspace) end
+      if force then
+        if suppress_next_exit_workspace_save then
+          suppress_next_exit_workspace_save = false
+          if core.log_quiet then
+            core.log_quiet(
+              "Workspace: skipped forced-exit save for %s during same-window project switch",
+              tostring(core.root_project() and core.root_project().path)
+            )
+          end
+        else
+          core.try(save_workspace)
+        end
+      end
       exit(quit_fn, force)
     end
 
