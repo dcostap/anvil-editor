@@ -1198,7 +1198,7 @@ end
 
 function DocView:draw_content_left_edge()
   local edge_w = math.max(1, math.floor(SCALE))
-  local edge_padding = style.padding.x * 0.35
+  local edge_padding = style.padding.x * 0.25
   local x = self:get_line_screen_position(1) - edge_padding - edge_w
   renderer.draw_rect(x, self.position.y, edge_w, self.size.y, style.whitespace or style.line_number or style.text)
 end
