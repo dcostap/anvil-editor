@@ -117,7 +117,7 @@ function StatusBarItem:new(options)
   self.command = type(options.command) == "string" and options.command or nil
   self.tooltip = options.tooltip or ""
   self.on_click = type(options.command) == "function" and options.command or nil
-  self.on_draw = nil
+  self.on_draw = options.on_draw
   self.background_color = nil
   self.background_color_hover = nil
   self.visible = options.visible == nil and true or options.visible
@@ -161,6 +161,45 @@ StatusBar.Item = StatusBarItem
 local function predicate_docview()
   return  core.active_view:is(DocView)
     and not core.active_view:is(GlobalPromptBar)
+end
+
+local function plural_suffix(n)
+  return n == 1 and "" or "s"
+end
+
+local function get_doc_selection_counts(doc)
+  local carets = math.floor(#doc.selections / 4)
+  local chars = 0
+  local line_breaks = 0
+  for _, line1, col1, line2, col2 in doc:get_selections(true) do
+    if line1 ~= line2 or col1 ~= col2 then
+      line_breaks = line_breaks + (line2 - line1)
+      chars = chars + doc:get_text(line1, col1, line2, col2):ulen(nil, nil, true) - (line2 - line1)
+    end
+  end
+  return carets, chars, line_breaks
+end
+
+local function draw_reserved_status_text(text, reserved_text, x, y, h, calc_only)
+  local font = statusbar_font()
+  local w = font:get_width(reserved_text)
+  if not calc_only and text ~= "" then
+    renderer.draw_text(font, text, x, y + math.floor((h - font:get_height()) / 2), style.text)
+  end
+  return w
+end
+
+local function draw_reserved_count_label(count, label, reserved_label, x, y, h, calc_only)
+  local font = statusbar_font()
+  local number_width = font:get_width("9999")
+  local w = number_width + font:get_width(reserved_label)
+  if not calc_only then
+    local ty = y + math.floor((h - font:get_height()) / 2)
+    local number = tostring(count)
+    renderer.draw_text(font, number, x + number_width - font:get_width(number), ty, style.text)
+    renderer.draw_text(font, label, x + number_width, ty, style.text)
+  end
+  return w
 end
 
 
@@ -232,7 +271,8 @@ function StatusBar:register_docview_items()
     predicate = predicate_docview,
     name = "doc:position",
     alignment = StatusBar.Item.LEFT,
-    get_item = function()
+    get_item = {},
+    on_draw = function(x, y, h, _, calc_only)
       local dv = core.active_view
       local line, col = dv.doc:get_selection()
       if config.caret_column_mode == "char" then
@@ -254,14 +294,71 @@ function StatusBar:register_docview_items()
         end
       end
       col = col + ntabs * (indent_size - 1)
-      return {
-        style.text, line, ":",
-        col > config.line_limit and style.accent or style.text, col,
-        style.text
-      }
+
+      local font = statusbar_font()
+      local reserved = "9999:9999"
+      local w = font:get_width(reserved)
+      if not calc_only then
+        local ty = y + math.floor((h - font:get_height()) / 2)
+        local text1 = tostring(line) .. ":"
+        renderer.draw_text(font, text1, x, ty, style.text)
+        renderer.draw_text(
+          font,
+          tostring(col),
+          x + font:get_width(text1),
+          ty,
+          col > config.line_limit and style.accent or style.text
+        )
+      end
+      return w
     end,
     command = "doc:go-to-line",
     tooltip = "line : column"
+  })
+
+  self:add_item({
+    predicate = predicate_docview,
+    name = "doc:carets",
+    alignment = StatusBar.Item.LEFT,
+    position = 3,
+    get_item = {},
+    on_draw = function(x, y, h, _, calc_only)
+      local carets = get_doc_selection_counts(core.active_view.doc)
+      local label = string.format(" caret%s", plural_suffix(carets))
+      return draw_reserved_count_label(carets, label, " carets", x, y, h, calc_only)
+    end
+  })
+
+  self:add_item({
+    predicate = predicate_docview,
+    name = "doc:selected-chars",
+    alignment = StatusBar.Item.LEFT,
+    position = 4,
+    get_item = {},
+    on_draw = function(x, y, h, _, calc_only)
+      local _, chars = get_doc_selection_counts(core.active_view.doc)
+      if chars <= 0 then
+        return draw_reserved_status_text("", "9999 chars selected", x, y, h, calc_only)
+      end
+      local label = string.format(" char%s selected", plural_suffix(chars))
+      return draw_reserved_count_label(chars, label, " chars selected", x, y, h, calc_only)
+    end
+  })
+
+  self:add_item({
+    predicate = predicate_docview,
+    name = "doc:selected-line-breaks",
+    alignment = StatusBar.Item.LEFT,
+    position = 5,
+    get_item = {},
+    on_draw = function(x, y, h, _, calc_only)
+      local _, _, line_breaks = get_doc_selection_counts(core.active_view.doc)
+      if line_breaks <= 0 then
+        return draw_reserved_status_text("", "9999 line breaks selected", x, y, h, calc_only)
+      end
+      local label = string.format(" line break%s selected", plural_suffix(line_breaks))
+      return draw_reserved_count_label(line_breaks, label, " line breaks selected", x, y, h, calc_only)
+    end
   })
 
   self:add_item({
@@ -278,20 +375,6 @@ function StatusBar:register_docview_items()
     tooltip = "caret position"
   })
 
-  self:add_item({
-    predicate = predicate_docview,
-    name = "doc:selections",
-    alignment = StatusBar.Item.LEFT,
-    get_item = function()
-      local dv = core.active_view
-      local nsel = math.floor(#dv.doc.selections / 4)
-      if nsel > 1 then
-        return { style.text, nsel, " selections" }
-      end
-
-      return {}
-    end
-  })
 
   self:add_item({
     predicate = predicate_docview,
