@@ -1141,6 +1141,46 @@ bool anvil_d3d11_push_rect(SDL_Window *window, RenRect rect, RenRect clip, RenCo
   return d3d11_queue_quad(g_d3d11.white_srv, &inst, false);
 }
 
+static inline RenRect d3d11_float_rect_to_grid(float x, float y, float w, float h) {
+  int x1 = (int)(x + 0.5f), y1 = (int)(y + 0.5f);
+  int x2 = (int)(x + w + 0.5f), y2 = (int)(y + h + 0.5f);
+  return (RenRect){ x1, y1, x2 - x1, y2 - y1 };
+}
+
+bool anvil_d3d11_push_rect_grid(SDL_Window *window, float x, float y, float step_x, float w, float h, int count, RenRect clip, RenColor color) {
+  if (window != g_d3d11.active_window) return false;
+  if (color.a == 0 || count <= 0 || step_x <= 0.0f || w <= 0.0f || h <= 0.0f) return true;
+  if (!d3d11_ensure_quad_pipeline() || !d3d11_ensure_white_texture()) return false;
+
+  float clip_x0 = (float)clip.x;
+  float clip_y0 = (float)clip.y;
+  float clip_x1 = (float)(clip.x + clip.width);
+  float clip_y1 = (float)(clip.y + clip.height);
+  if (y + h <= clip_y0 || y >= clip_y1) return true;
+
+  int first = (int)floorf((clip_x0 - w - x) / step_x) - 1;
+  int last = (int)ceilf((clip_x1 - x) / step_x) + 1;
+  if (first < 0) first = 0;
+  if (last > count - 1) last = count - 1;
+  if (last < first) return true;
+
+  float cr = color.r / 255.0f;
+  float cg = color.g / 255.0f;
+  float cb = color.b / 255.0f;
+  float ca = color.a / 255.0f;
+  for (int i = first; i <= last; i++) {
+    RenRect r = d3d11_intersect_renrect(d3d11_float_rect_to_grid(x + step_x * (float)i, y, w, h), clip);
+    if (r.width <= 0 || r.height <= 0) continue;
+    float x0 = (float)r.x;
+    float y0 = (float)r.y;
+    float x1 = (float)(r.x + r.width);
+    float y1 = (float)(r.y + r.height);
+    D3D11QuadInstance inst = { x0, y0, x1, y1, 0, 0, 1, 1, cr, cg, cb, ca, 3.0f, 0, 0, 0 };
+    if (!d3d11_queue_quad(g_d3d11.white_srv, &inst, false)) return false;
+  }
+  return true;
+}
+
 static D3D11CachedTexture *d3d11_find_cached_texture(SDL_Surface *surface, int mode) {
   for (D3D11CachedTexture *t = g_d3d11.textures; t; t = t->next) {
     if (t->surface == surface && t->mode == mode) return t;

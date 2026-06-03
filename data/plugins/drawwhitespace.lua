@@ -132,33 +132,220 @@ local function get_line_runs(self, idx)
     end
   end
 
-  entry = { text = text, line_len = line_len, runs = runs }
+  entry = {
+    text = text,
+    line_len = line_len,
+    runs = runs,
+    ascii_no_tabs = text:find("[\128-\255\t]") == nil,
+  }
   cache.lines[idx] = entry
   return entry
 end
 
-local function draw_whitespace_run(self, idx, x, y, font, ty, substitution, start_col, end_col, color)
+local marker_text_cache = {}
+local marker_font_cache = setmetatable({}, { __mode = "k" })
+local marker_width_cache = setmetatable({}, { __mode = "k" })
+
+local function repeated_marker(marker, count)
+  local by_marker = marker_text_cache[marker]
+  if not by_marker then
+    by_marker = {}
+    marker_text_cache[marker] = by_marker
+  end
+
+  if count <= 512 then
+    local cached = by_marker[count]
+    if cached then return cached end
+    cached = string.rep(marker, count)
+    by_marker[count] = cached
+    return cached
+  end
+
+  return string.rep(marker, count)
+end
+
+local function marker_font(font)
+  local size = font:get_size()
+  local by_size = marker_font_cache[font]
+  if not by_size then
+    by_size = {}
+    marker_font_cache[font] = by_size
+  end
+
+  if by_size[size] ~= nil then
+    return by_size[size] or font
+  end
+
+  -- Code fonts in the first-party defaults have ligatures enabled. Repeated
+  -- whitespace marker glyphs are semantically independent columns, so draw them
+  -- with a no-ligature copy when the renderer can provide one.
+  local ok, copy = pcall(function()
+    return font:copy(size, { ligatures = false })
+  end)
+  if ok and copy then
+    by_size[size] = copy
+    return copy
+  end
+
+  by_size[size] = false
+  core.log_quiet("draw-whitespace: using original font for whitespace markers; no-ligature copy failed: %s", copy)
+  return font
+end
+
+local function marker_matches_space_advance(font, marker)
+  local size = font:get_size()
+  local key = tostring(size) .. "\0" .. marker
+  local by_font = marker_width_cache[font]
+  if not by_font then
+    by_font = {}
+    marker_width_cache[font] = by_font
+  end
+
+  local cached = by_font[key]
+  if cached ~= nil then return cached end
+
+  cached = math.abs(font:get_width(marker) - font:get_width(" ")) < 0.01
+  by_font[key] = cached
+  return cached
+end
+
+local function current_clip_x_range(self)
+  local clip = core.clip_rect_stack and core.clip_rect_stack[#core.clip_rect_stack]
+  if clip then
+    return clip[1], clip[1] + clip[3]
+  end
+
+  local gw = self:get_gutter_width()
+  return self.position.x + gw, self.position.x + self.size.x
+end
+
+local function has_syntax_font_overrides()
+  return next(style.syntax_fonts) ~= nil
+end
+
+local function get_line_x_cache(self, idx, entry)
+  local font = self:get_font()
+  local _, indent_size = self.doc:get_indent_info()
+  local font_size = font:get_size()
+  local fast_space_width
+  local tokens
+
+  -- The common case in this fork is an ASCII, tab-free source line drawn with
+  -- one monospace code font and no syntax-specific font overrides. In that
+  -- case whitespace columns are simple arithmetic; don't walk highlighter
+  -- tokens and font widths just to place indentation dots.
+  if entry.ascii_no_tabs and not self.wrapped_settings and not has_syntax_font_overrides() then
+    fast_space_width = font:get_width(" ")
+  else
+    local hline = self.doc.highlighter:get_line(idx)
+    tokens = hline and hline.tokens
+  end
+
+  local x_cache = entry.x_cache
+  if
+    not x_cache
+    or x_cache.font ~= font
+    or x_cache.font_size ~= font_size
+    or x_cache.indent_size ~= indent_size
+    or x_cache.fast_space_width ~= fast_space_width
+    or x_cache.tokens ~= tokens
+    or x_cache.wrapped_settings ~= self.wrapped_settings
+  then
+    x_cache = {
+      font = font,
+      font_size = font_size,
+      indent_size = indent_size,
+      fast_space_width = fast_space_width,
+      tokens = tokens,
+      wrapped_settings = self.wrapped_settings,
+      offsets = {},
+    }
+    entry.x_cache = x_cache
+  end
+
+  return x_cache
+end
+
+local function cached_col_x_offset(self, idx, x_cache, col)
+  if x_cache.fast_space_width then
+    return (col - 1) * x_cache.fast_space_width
+  end
+
+  local offsets = x_cache.offsets
+  local offset = offsets[col]
+  if offset == nil then
+    offset = self:get_col_x_offset(idx, col)
+    offsets[col] = offset
+  end
+  return offset
+end
+
+local function draw_space_rects(self, idx, x, font, ty, start_col, end_col, color, x_cache)
+  local count = end_col - start_col
+  if count <= 0 then return end
+
+  local start_x = cached_col_x_offset(self, idx, x_cache, start_col) + x
+  local end_x = cached_col_x_offset(self, idx, x_cache, end_col) + x
+  if end_x <= start_x then return end
+
+  local clip_left, clip_right = current_clip_x_range(self)
+  if end_x <= clip_left or start_x >= clip_right then return end
+
+  local cell_width = (end_x - start_x) / count
+  local dot_size = math.max(2, math.floor(2 * SCALE))
+  local dot_origin = start_x + (cell_width - dot_size) / 2
+  local dot_y = math.floor(ty + (font:get_height() - dot_size) / 2)
+
+  -- get_visible_cols_range() is intentionally conservative and can hand us
+  -- huge offscreen runs. Avoid spending a Lua/FFI call on dots the renderer
+  -- would just clip away.
+  local first = math.max(0, math.floor((clip_left - dot_size - dot_origin) / cell_width) - 1)
+  local last = math.min(count - 1, math.ceil((clip_right - dot_origin) / cell_width) + 1)
+  local draw_count = last - first + 1
+  if draw_count <= 0 then return end
+
+  if renderer.draw_rect_grid then
+    renderer.draw_rect_grid(dot_origin + first * cell_width, dot_y, cell_width, dot_size, dot_size, draw_count, color)
+    return
+  end
+
+  for n = first, last do
+    local dot_x = math.floor(dot_origin + n * cell_width)
+    if dot_x + dot_size > clip_left and dot_x < clip_right then
+      renderer.draw_rect(dot_x, dot_y, dot_size, dot_size, color)
+    end
+  end
+end
+
+local function draw_whitespace_run(self, idx, x, y, font, ty, substitution, start_col, end_col, color, x_cache)
   if start_col >= end_col then return end
 
-  -- Draw each marker at the source column position. Tabs need this because
-  -- they can have a different visual width than the substituting glyph; spaces
-  -- need it because repeated middle-dot strings can be shaped/ligated by the
-  -- renderer and become visually incorrect with ligature-enabled fonts.
-  for i = start_col, end_col - 1 do
-    local tx = self:get_col_x_offset(idx, i) + x
-    if substitution.char == " " then
-      local next_tx = self:get_col_x_offset(idx, i + 1) + x
-      local dot_size = math.max(2, math.floor(2 * SCALE))
-      renderer.draw_rect(
-        math.floor(tx + (next_tx - tx - dot_size) / 2),
-        math.floor(ty + (font:get_height() - dot_size) / 2),
-        dot_size,
-        dot_size,
+  if substitution.char == " " then
+    local count = end_col - start_col
+    local marker = substitution.sub or "·"
+    local font = marker_font(font)
+
+    -- Spaces are by far the hot path. Draw one text run instead of one tiny
+    -- rectangle per column when the marker glyph advances exactly like a space
+    -- in the active font. This preserves per-column alignment while collapsing
+    -- thousands of renderer calls per second into one call per whitespace run.
+    if marker ~= "" and marker_matches_space_advance(font, marker) then
+      renderer.draw_text(
+        font,
+        repeated_marker(marker, count),
+        cached_col_x_offset(self, idx, x_cache, start_col) + x,
+        ty,
         color
       )
     else
-      renderer.draw_text(font, substitution.sub, tx, ty, color)
+      draw_space_rects(self, idx, x, font, ty, start_col, end_col, color, x_cache)
     end
+    return
+  end
+
+  -- Tabs still need per-column positioning because tab stops are contextual.
+  for i = start_col, end_col - 1 do
+    renderer.draw_text(font, substitution.sub, cached_col_x_offset(self, idx, x_cache, i) + x, ty, color)
   end
 end
 
@@ -193,6 +380,7 @@ function DocView:draw_line_text(idx, x, y)
 
   if not drawwhitespace.show_selected_only or self.drawwhitespace_selections.all then
     local entry = get_line_runs(self, idx)
+    local x_cache = get_line_x_cache(self, idx, entry)
     for _, run in ipairs(entry.runs) do
       local substitution = drawwhitespace.substitutions[run.substitution]
       local start_col = math.max(run.start_col, col1)
@@ -212,12 +400,14 @@ function DocView:draw_line_text(idx, x, y)
           color = get_option(substitution, "middle_color") or color
         end
         if draw then
-          draw_whitespace_run(self, idx, x, y, font, ty, substitution, start_col, end_col, color)
+          draw_whitespace_run(self, idx, x, y, font, ty, substitution, start_col, end_col, color, x_cache)
         end
       end
     end
   else
     local line_len = #self.doc.lines[idx]
+    local entry = get_line_runs(self, idx)
+    local x_cache = get_line_x_cache(self, idx, entry)
     for _, substitution in pairs(drawwhitespace.substitutions) do
       local offset = 1
       local pattern = substitution.char.."+"
@@ -239,7 +429,7 @@ function DocView:draw_line_text(idx, x, y)
           color = get_option(substitution, "middle_color") or color
         end
         if draw then
-          draw_whitespace_run(self, idx, x, y, font, ty, substitution, as, ae, color)
+          draw_whitespace_run(self, idx, x, y, font, ty, substitution, as, ae, color, x_cache)
         end
         offset = e + 1
       end

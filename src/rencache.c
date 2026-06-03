@@ -72,7 +72,7 @@ static void rencache_activate_window(SDL_Window *window) {
 #define CMD_BUF_CANVAS_INIT_SIZE (1024 * 64)
 #define COMMAND_BARE_SIZE offsetof(Command, command)
 
-enum CommandType { SET_CLIP, DRAW_TEXT, DRAW_RECT, DRAW_POLY, DRAW_CANVAS, DRAW_PIXELS };
+enum CommandType { SET_CLIP, DRAW_TEXT, DRAW_RECT, DRAW_RECT_GRID, DRAW_POLY, DRAW_CANVAS, DRAW_PIXELS };
 
 typedef struct {
   enum CommandType type;
@@ -102,6 +102,17 @@ typedef struct {
   RenColor color;
   bool replace;
 } DrawRectCommand;
+
+typedef struct {
+  RenRect rect;
+  float x;
+  float y;
+  float step_x;
+  float w;
+  float h;
+  int count;
+  RenColor color;
+} DrawRectGridCommand;
 
 typedef struct {
   RenRect rect;
@@ -218,7 +229,8 @@ static void* push_command(RenCache *ren_cache, enum CommandType type, int size) 
     switch (type) {
       case SET_CLIP: g_rencache_frame_stats.set_clip_commands++; break;
       case DRAW_TEXT: g_rencache_frame_stats.text_commands++; break;
-      case DRAW_RECT: g_rencache_frame_stats.rect_commands++; break;
+      case DRAW_RECT:
+      case DRAW_RECT_GRID: g_rencache_frame_stats.rect_commands++; break;
       case DRAW_POLY: g_rencache_frame_stats.poly_commands++; break;
       case DRAW_CANVAS: g_rencache_frame_stats.canvas_commands++; break;
       case DRAW_PIXELS: g_rencache_frame_stats.pixels_commands++; break;
@@ -294,6 +306,37 @@ void rencache_draw_rect(RenCache *ren_cache, RenRect rect, RenColor color, bool 
     cmd->rect = rect;
     cmd->color = color;
     cmd->replace = replace;
+  }
+}
+
+static inline RenRect float_rect_to_grid(float x, float y, float w, float h) {
+  int x1 = (int) (x + 0.5f), y1 = (int) (y + 0.5f);
+  int x2 = (int) (x + w + 0.5f), y2 = (int) (y + h + 0.5f);
+  return (RenRect) {x1, y1, x2 - x1, y2 - y1};
+}
+
+void rencache_draw_rect_grid(RenCache *ren_cache, float x, float y, float step_x, float w, float h, int count, RenColor color) {
+  if (!ren_cache || count <= 0 || w <= 0 || h <= 0 || step_x <= 0 || color.a == 0) {
+    return;
+  }
+
+  RenRect first = float_rect_to_grid(x, y, w, h);
+  RenRect last = float_rect_to_grid(x + step_x * (float)(count - 1), y, w, h);
+  RenRect bounds = merge_rects(first, last);
+  if (bounds.width == 0 || bounds.height == 0 || !rects_overlap(ren_cache->last_clip_rect, bounds)) {
+    return;
+  }
+
+  DrawRectGridCommand *cmd = push_command(ren_cache, DRAW_RECT_GRID, sizeof(DrawRectGridCommand));
+  if (cmd) {
+    cmd->rect = bounds;
+    cmd->x = x;
+    cmd->y = y;
+    cmd->step_x = step_x;
+    cmd->w = w;
+    cmd->h = h;
+    cmd->count = count;
+    cmd->color = color;
   }
 }
 
@@ -471,6 +514,10 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
         DrawRectCommand *rcmd = (DrawRectCommand*)&cmd->command;
         if (!anvil_d3d11_push_rect(ren_cache->window, rcmd->rect, clip, rcmd->color)) { fail_reason = "draw_rect"; goto fail; }
       } break;
+      case DRAW_RECT_GRID: {
+        DrawRectGridCommand *gcmd = (DrawRectGridCommand*)&cmd->command;
+        if (!anvil_d3d11_push_rect_grid(ren_cache->window, gcmd->x, gcmd->y, gcmd->step_x, gcmd->w, gcmd->h, gcmd->count, clip, gcmd->color)) { fail_reason = "draw_rect_grid"; goto fail; }
+      } break;
       case DRAW_TEXT: {
         DrawTextCommand *tcmd = (DrawTextCommand*)&cmd->command;
         ren_font_group_set_tab_size(tcmd->fonts, tcmd->tab_size);
@@ -605,6 +652,7 @@ void rencache_end_frame(RenCache *ren_cache) {
     while (next_command(ren_cache, &cmd)) {
       SetClipCommand *ccmd = (SetClipCommand*)&cmd->command;
       DrawRectCommand *rcmd = (DrawRectCommand*)&cmd->command;
+      DrawRectGridCommand *gcmd = (DrawRectGridCommand*)&cmd->command;
       DrawTextCommand *tcmd = (DrawTextCommand*)&cmd->command;
       DrawBezierCommand *bcmd = (DrawBezierCommand*)&cmd->command;
       DrawCanvasCommand *cvcmd = (DrawCanvasCommand*)&cmd->command;
@@ -615,6 +663,12 @@ void rencache_end_frame(RenCache *ren_cache) {
           break;
         case DRAW_RECT:
           ren_draw_rect(&rs, rcmd->rect, rcmd->color, rcmd->replace);
+          break;
+        case DRAW_RECT_GRID:
+          for (int i = 0; i < gcmd->count; i++) {
+            RenRect item = float_rect_to_grid(gcmd->x + gcmd->step_x * (float)i, gcmd->y, gcmd->w, gcmd->h);
+            ren_draw_rect(&rs, item, gcmd->color, false);
+          }
           break;
         case DRAW_TEXT:
           ren_font_group_set_tab_size(tcmd->fonts, tcmd->tab_size);

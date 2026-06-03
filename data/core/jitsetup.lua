@@ -48,6 +48,7 @@ ffi.cdef [[
   void* ren_get_target_window_ffi(void);
   void rencache_set_clip_rect_ffi(void *window_renderer, float x, float y, float w, float h);
   void rencache_draw_rect_ffi(void *window_renderer, float x, float y, float w, float h, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+  void rencache_draw_rect_grid_ffi(void *window_renderer, float x, float y, float step_x, float w, float h, int count, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
   double rencache_draw_text_ffi(void *window_renderer, void **font, const char *text, size_t len, double x, double y, unsigned char r, unsigned char g, unsigned char b, unsigned char a, double tab_offset);
   void rencache_begin_frame_ffi(void *window_renderer);
   void rencache_end_frame_ffi();
@@ -71,6 +72,24 @@ function renderer.draw_rect(x, y, w, h, color)
     x, y, w, h,
     color[1], color[2], color[3], color[4] or 255
   )
+end
+
+local has_draw_rect_grid = pcall(function() return ffi.C.rencache_draw_rect_grid_ffi end)
+if has_draw_rect_grid then
+  function renderer.draw_rect_grid(x, y, step_x, w, h, count, color)
+    if not color then
+      local core = require "core"
+      core.error("renderer.draw_rect_grid: color not provided")
+      color = {255, 255, 255, 255}
+    end
+    local win = ffi.C.ren_get_target_window_ffi()
+    if win == nil then ffi_error("no target window found") return end
+    ffi.C.rencache_draw_rect_grid_ffi(
+      win,
+      x, y, step_x, w, h, count,
+      color[1], color[2], color[3], color[4] or 255
+    )
+  end
 end
 
 renderer.draw_text_lua = renderer.draw_text

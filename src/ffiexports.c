@@ -66,6 +66,12 @@ EXPORT void rencache_draw_rect_ffi(RenWindow *window_renderer, float x, float y,
   rencache_draw_rect(&window_renderer->cache, rect, color, false);
 }
 
+EXPORT void rencache_draw_rect_grid_ffi(RenWindow *window_renderer, float x, float y, float step_x, float w, float h, int count, unsigned char r, unsigned char g, unsigned char b, unsigned char a)
+{
+  RenColor color = {.r = r, .g = g, .b = b, .a = a};
+  rencache_draw_rect_grid(&window_renderer->cache, x, y, step_x, w, h, count, color);
+}
+
 EXPORT double rencache_draw_text_ffi(RenWindow *window_renderer, RenFont **fonts, const char *text, size_t len, double x, double y, unsigned char r, unsigned char g, unsigned char b, unsigned char a, double tab_offset)
 {
   RenColor color = {.r = r, .g = g, .b = b, .a = a};

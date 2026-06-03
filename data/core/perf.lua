@@ -131,6 +131,8 @@ function perf.on_frame(snapshot)
         present_ms = present_ms,
         draw_calls = renderer_stats.draw_calls or 0,
         docview_draw_ms = snapshot.docview_draw_ms or 0,
+        docview_body_ms = snapshot.docview_body_ms or 0,
+        docview_text_ms = snapshot.docview_text_ms or 0,
         docview_draw_text_calls = snapshot.docview_draw_text_calls or 0,
         pending_events = snapshot.pending_events,
         queue_depth = snapshot.queue_depth or 0,
@@ -261,16 +263,17 @@ local function write_summary(path)
   ))
 
   file:write("Slow redraw frames (top by total_ms; thresholds total>25ms/frame>20ms/present>18ms):\n")
-  file:write("time,total,run_threads,run_threads_runs,run_threads_slowest,run_threads_loc,core,gc,event_count,event,update,pre_draw,frame,draw_emit,renderer_end,present,draw_calls,docview_draw,docview_text_calls,pending_events,queue_depth\n")
+  file:write("time,total,run_threads,run_threads_runs,run_threads_slowest,run_threads_loc,core,gc,event_count,event,update,pre_draw,frame,draw_emit,renderer_end,present,draw_calls,docview_draw,docview_body,docview_text,docview_text_calls,pending_events,queue_depth\n")
   for _, row in ipairs(record.slow_frames or {}) do
     file:write(string.format(
-      "%.6f,%.3f,%.3f,%d,%.3f,%s,%.3f,%.3f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%.3f,%d,%d,%d\n",
+      "%.6f,%.3f,%.3f,%d,%.3f,%s,%.3f,%.3f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%.3f,%.3f,%.3f,%d,%d,%d\n",
       row.time, row.total_ms, row.run_threads_ms, row.run_threads_runs,
       row.run_threads_slowest_ms, csv_escape(row.run_threads_slowest_loc),
       row.core_step_ms, row.gc_ms, row.event_count, row.event_ms,
       row.update_ms, row.pre_draw_ms, row.frame_ms, row.draw_emit_ms,
       row.renderer_end_ms, row.present_ms, row.draw_calls, row.docview_draw_ms,
-      row.docview_draw_text_calls, row.pending_events and 1 or 0, row.queue_depth
+      row.docview_body_ms, row.docview_text_ms, row.docview_draw_text_calls,
+      row.pending_events and 1 or 0, row.queue_depth
     ))
   end
   file:write("\n")
@@ -330,6 +333,7 @@ function perf.start_recording()
   recording = true
   wrap_renderer_api("draw_text")
   wrap_renderer_api("draw_rect")
+  wrap_renderer_api("draw_rect_grid")
   debug.sethook(hook, "", sample_interval)
   return frames_path
 end
