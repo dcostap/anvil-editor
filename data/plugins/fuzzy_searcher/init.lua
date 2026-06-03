@@ -179,6 +179,15 @@ end
 local function ensure_input_focus(picker, reason)
   if not picker or not picker.input then return end
   picker:swap_active_child(picker.input)
+  local input_view = picker.input.input_text and picker.input.textview or picker.input
+  if input_view and core.active_view ~= input_view then
+    local restore = file_context.current_main_panel_view(core.active_view) or core.active_view
+    if restore and restore ~= picker and restore ~= picker.input and restore ~= input_view then
+      picker.prev_view = restore
+    end
+    core.set_active_view(input_view)
+    picker.input:activate()
+  end
   if reason then fuzzy_focus_log(reason, picker) end
 end
 
@@ -3289,9 +3298,11 @@ keymap.on_key_pressed = function(key, ...)
   local fuzzy_cmd = modal_fuzzy_command(stroke)
   local textbox_cmd = not fuzzy_cmd and modal_textbox_command(stroke)
   if fuzzy_cmd then
+    ensure_input_focus(picker)
     fuzzy_focus_log("key-fuzzy-command", picker, "key=" .. tostring(key) .. " stroke=" .. tostring(stroke) .. " cmd=" .. tostring(fuzzy_cmd))
     command.perform(fuzzy_cmd, ...)
   elseif textbox_cmd then
+    ensure_input_focus(picker)
     fuzzy_focus_log("key-textbox-command", picker, "key=" .. tostring(key) .. " stroke=" .. tostring(stroke) .. " cmd=" .. tostring(textbox_cmd))
     command.perform(textbox_cmd, ...)
   elseif modal_should_let_text_input_through(key, stroke) then

@@ -291,11 +291,14 @@ end
 
 local function maybe_show_empty_project_file_tree()
   -- Let workspace restoration, command-line file opening, and autosave recovery
-  -- settle first. If the project still has no open file tabs, expose the file
-  -- tree so a newly opened empty workspace has an obvious next action.
+  -- settle first. If the user focuses anything during this grace period (for
+  -- example the fuzzy searcher), do not steal focus back to the file tree.
+  local initial_active_view = core.active_view
   coroutine.yield()
   coroutine.yield()
-  if main_panel_workspace_is_empty() and command.is_valid("filetree:focus-and-show") then
+  if core.active_view == initial_active_view
+  and main_panel_workspace_is_empty()
+  and command.is_valid("filetree:focus-and-show") then
     command.perform("filetree:focus-and-show")
   end
 end
