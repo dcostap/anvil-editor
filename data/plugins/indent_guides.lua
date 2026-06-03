@@ -11,6 +11,8 @@ local indent_guides = {
   blank_line_search_limit = 25,
 }
 
+local indent_cache_by_doc = setmetatable({}, { __mode = "k" })
+
 local function guide_color(active)
   if active then
     return style.indent_guide_active or { common.color "rgba(255, 255, 255, 0.24)" }
@@ -18,16 +20,37 @@ local function guide_color(active)
   return style.indent_guide or { common.color "rgba(255, 255, 255, 0.10)" }
 end
 
-local function leading_indent_cols(doc, line, indent_size)
+local function indent_cache(doc, indent_size)
+  local change_id = doc.get_change_id and doc:get_change_id() or 0
+  local limit = indent_guides.blank_line_search_limit or 25
+  local cache = indent_cache_by_doc[doc]
+  if
+    not cache
+    or cache.change_id ~= change_id
+    or cache.indent_size ~= indent_size
+    or cache.blank_line_search_limit ~= limit
+  then
+    cache = {
+      change_id = change_id,
+      indent_size = indent_size,
+      blank_line_search_limit = limit,
+      leading = {},
+      effective = {},
+    }
+    indent_cache_by_doc[doc] = cache
+  end
+  return cache
+end
+
+local function compute_leading_indent_cols(doc, line, indent_size)
   local text = doc.lines[line]
   if not text then return 0, true end
 
+  local whitespace = text:match("^[ \t]*") or ""
+  local next_char = text:sub(#whitespace + 1, #whitespace + 1)
   -- doc.lines entries commonly include their trailing newline. Do not let that
   -- newline count as indentation, and treat newline-only lines as blank.
-  text = text:gsub("[\r\n]+$", "")
-
-  local whitespace = text:match("^[ \t]*") or ""
-  local is_blank = text:match("^[ \t]*$") ~= nil
+  local is_blank = next_char == "" or next_char == "\r" or next_char == "\n"
   local cols = 0
   for i = 1, #whitespace do
     local ch = whitespace:sub(i, i)
@@ -37,6 +60,16 @@ local function leading_indent_cols(doc, line, indent_size)
       cols = cols + 1
     end
   end
+  return cols, is_blank
+end
+
+local function leading_indent_cols(doc, line, indent_size)
+  local cache = indent_cache(doc, indent_size)
+  local cached = cache.leading[line]
+  if cached then return cached[1], cached[2] end
+
+  local cols, is_blank = compute_leading_indent_cols(doc, line, indent_size)
+  cache.leading[line] = { cols, is_blank }
   return cols, is_blank
 end
 
@@ -57,15 +90,22 @@ local function next_nonblank_indent(doc, line, indent_size, limit)
 end
 
 local function effective_indent_cols(doc, line, indent_size)
-  local conf = indent_guides
-  local cols, blank = leading_indent_cols(doc, line, indent_size)
-  if not blank then return cols end
+  local cache = indent_cache(doc, indent_size)
+  local cached = cache.effective[line]
+  if cached ~= nil then return cached end
 
-  local limit = conf.blank_line_search_limit or 25
+  local cols, blank = leading_indent_cols(doc, line, indent_size)
+  if not blank then
+    cache.effective[line] = cols
+    return cols
+  end
+
+  local limit = cache.blank_line_search_limit
   local prev = previous_nonblank_indent(doc, line, indent_size, limit)
   local nexti = next_nonblank_indent(doc, line, indent_size, limit)
-  if prev and nexti then return math.max(prev, nexti) end
-  return prev or nexti or 0
+  cols = (prev and nexti) and math.max(prev, nexti) or (prev or nexti or 0)
+  cache.effective[line] = cols
+  return cols
 end
 
 local function is_closing_block_line(text)
