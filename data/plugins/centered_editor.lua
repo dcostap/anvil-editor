@@ -88,29 +88,50 @@ function M.get_lane_rect(view)
   return lane_x, lane_width
 end
 
-local function lane_contains_x(view, x)
-  local lane_x, lane_width = M.get_lane_rect(view)
-  return x >= lane_x and x < lane_x + lane_width
+function M.wrapping_limits_to_lane(view)
+  if not view then return false end
+  local wrapped = view.wrapped_settings and view.wrapped_settings.width ~= math.huge
+  return view.wrapping_enabled or wrapped or false
 end
 
-local function lane_contains_content_x(view, x)
-  local lane_x, lane_width = M.get_lane_rect(view)
+function M.get_shifted_full_rect(view)
+  local lane_x = M.get_lane_rect(view)
+  local view_right = view.position.x + view.size.x
+  return lane_x, math.max(0, view_right - lane_x)
+end
+
+function M.get_editor_rect(view)
+  if M.wrapping_limits_to_lane(view) then
+    return M.get_lane_rect(view)
+  end
+  return M.get_shifted_full_rect(view)
+end
+
+local function editor_contains_x(view, x)
+  local editor_x, editor_width = M.get_editor_rect(view)
+  return x >= editor_x and x < editor_x + editor_width
+end
+
+local function editor_contains_content_x(view, x)
+  local editor_x, editor_width = M.get_editor_rect(view)
   local gw = view:get_gutter_width()
-  return x >= lane_x + gw and x < lane_x + lane_width
+  return x >= editor_x + gw and x < editor_x + editor_width
 end
 
-function M.with_lane_geometry(view, fn, ...)
-  if not M.should_center(view) or view.__centered_editor_in_lane_geometry then
+local function with_geometry(view, rect_fn, fn, ...)
+  if not M.should_center(view) or view.__centered_editor_in_geometry then
     return fn(...)
   end
 
-  local lane_x, lane_width = M.get_lane_rect(view)
+  local geometry_x, geometry_width = rect_fn(view)
   local old_x, old_w = view.position.x, view.size.x
-  local old_flag = view.__centered_editor_in_lane_geometry
+  local old_geometry_flag = view.__centered_editor_in_geometry
+  local old_lane_flag = view.__centered_editor_in_lane_geometry
   local old_highlight_x = view.__full_width_highlight_position_x
   local old_highlight_w = view.__full_width_highlight_size_x
-  view.position.x = lane_x
-  view.size.x = lane_width
+  view.position.x = geometry_x
+  view.size.x = geometry_width
+  view.__centered_editor_in_geometry = true
   view.__centered_editor_in_lane_geometry = true
   view.__full_width_highlight_position_x = old_x
   view.__full_width_highlight_size_x = old_w
@@ -123,12 +144,21 @@ function M.with_lane_geometry(view, fn, ...)
 
   view.position.x = old_x
   view.size.x = old_w
-  view.__centered_editor_in_lane_geometry = old_flag
+  view.__centered_editor_in_geometry = old_geometry_flag
+  view.__centered_editor_in_lane_geometry = old_lane_flag
   view.__full_width_highlight_position_x = old_highlight_x
   view.__full_width_highlight_size_x = old_highlight_w
 
   if not ok then error(err, 0) end
   return unpack(results, 1, results.n)
+end
+
+function M.with_lane_geometry(view, fn, ...)
+  return with_geometry(view, M.get_lane_rect, fn, ...)
+end
+
+function M.with_editor_geometry(view, fn, ...)
+  return with_geometry(view, M.get_editor_rect, fn, ...)
 end
 
 local function save_docview_method(name)
@@ -137,7 +167,9 @@ end
 
 save_docview_method("get_content_offset")
 function DocView:get_content_offset(...)
-  if not M.should_center(self) or self.__centered_editor_in_lane_geometry then
+  if not M.should_center(self)
+  or self.__centered_editor_in_geometry
+  or self.__centered_editor_in_lane_geometry then
     return originals.docview.get_content_offset(self, ...)
   end
   local lane_x = M.get_lane_rect(self)
@@ -147,7 +179,7 @@ end
 
 save_docview_method("get_visible_cols_range")
 function DocView:get_visible_cols_range(...)
-  return M.with_lane_geometry(self, function(...)
+  return M.with_editor_geometry(self, function(...)
     return originals.docview.get_visible_cols_range(self, ...)
   end, ...)
 end
@@ -158,10 +190,11 @@ function DocView:draw(...)
     return originals.docview.draw(self, ...)
   end
 
-  -- Paint the whole tab background first; the existing draw chain will then
-  -- render the actual editor lane under temporary lane geometry.
+  -- Paint the whole tab background first; the existing draw chain then uses
+  -- centered geometry for the document origin while preserving the full
+  -- drawable width unless line wrapping is active.
   self:draw_background(style.background)
-  return M.with_lane_geometry(self, function(...)
+  return M.with_editor_geometry(self, function(...)
     return originals.docview.draw(self, ...)
   end, ...)
 end
@@ -170,7 +203,7 @@ save_docview_method("on_mouse_moved")
 function DocView:on_mouse_moved(x, y, ...)
   if M.should_center(self) and type(x) == "number" and type(y) == "number" then
     local in_vertical = y >= self.position.y and y < self.position.y + self.size.y
-    if in_vertical and not self.mouse_selecting and not self:scrollbar_dragging() and not lane_contains_x(self, x) then
+    if in_vertical and not self.mouse_selecting and not self:scrollbar_dragging() and not editor_contains_x(self, x) then
       self.cursor = "arrow"
       self.hovering_gutter = false
       self.v_scrollbar:on_mouse_left()
@@ -178,35 +211,35 @@ function DocView:on_mouse_moved(x, y, ...)
       return true
     end
   end
-  return M.with_lane_geometry(self, function(x, y, ...)
+  return M.with_editor_geometry(self, function(x, y, ...)
     return originals.docview.on_mouse_moved(self, x, y, ...)
   end, x, y, ...)
 end
 
 save_docview_method("on_mouse_pressed")
 function DocView:on_mouse_pressed(button, x, y, clicks, ...)
-  return M.with_lane_geometry(self, function(button, x, y, clicks, ...)
+  return M.with_editor_geometry(self, function(button, x, y, clicks, ...)
     return originals.docview.on_mouse_pressed(self, button, x, y, clicks, ...)
   end, button, x, y, clicks, ...)
 end
 
 save_docview_method("on_mouse_released")
 function DocView:on_mouse_released(...)
-  return M.with_lane_geometry(self, function(...)
+  return M.with_editor_geometry(self, function(...)
     return originals.docview.on_mouse_released(self, ...)
   end, ...)
 end
 
 save_docview_method("scroll_to_make_visible")
 function DocView:scroll_to_make_visible(...)
-  return M.with_lane_geometry(self, function(...)
+  return M.with_editor_geometry(self, function(...)
     return originals.docview.scroll_to_make_visible(self, ...)
   end, ...)
 end
 
 save_docview_method("scroll_to_line")
 function DocView:scroll_to_line(...)
-  return M.with_lane_geometry(self, function(...)
+  return M.with_editor_geometry(self, function(...)
     return originals.docview.scroll_to_line(self, ...)
   end, ...)
 end
@@ -244,7 +277,7 @@ local function patch_mouse_command(name)
     if not dv or not M.should_center(dv) then
       return unpack(res, 1, res.n)
     end
-    if not lane_contains_content_x(dv, x) then
+    if not editor_contains_content_x(dv, x) then
       return false
     end
     return unpack(res, 1, res.n)
