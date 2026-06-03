@@ -560,20 +560,24 @@ local function draw_wrapped_search_match_segment(view, x1, y, x2, h, primary, ou
   renderer.draw_rect(x2 - t, y, t, h, border)
 end
 
+local function get_wrapped_segment_bounds(view, line, col1, col2, idx1, idx2, idx)
+  local row_line, row_start_col = get_idx_line_col(view, idx)
+  if row_line ~= line then return nil, nil end
+  local next_line, next_start_col = get_idx_line_col(view, idx + 1)
+  local row_end_col = next_line == line and next_start_col or (#view.doc.lines[line] + 1)
+  local x1 = idx == idx1 and view:get_col_x_offset(line, col1) or view:get_col_x_offset(line, row_start_col)
+  local x2 = idx == idx2 and view:get_col_x_offset(line, col2) or view:get_col_x_offset(line, row_end_col, true)
+  return x1, x2
+end
+
 local function draw_wrapped_search_match(view, line, col1, col2, x, y, idx0, lh, primary, outline)
   local idx1 = get_line_idx_col_count(view, line, col1)
   local idx2 = get_line_idx_col_count(view, line, col2)
-  local start = 0
   for i = idx1, idx2 do
-    local x1 = x + (idx1 == i and view:get_col_x_offset(line, col1) or 0)
-    local x2
-    if idx2 == i then
-      x2 = x + view:get_col_x_offset(line, col2)
-    else
-      start = start + get_idx_line_length(view, i, line)
-      x2 = x + view:get_col_x_offset(line, start + 1, true)
+    local x1, x2 = get_wrapped_segment_bounds(view, line, col1, col2, idx1, idx2, i)
+    if x1 and x2 then
+      draw_wrapped_search_match_segment(view, x + x1, y + (i - idx0) * lh, x + x2, lh, primary, outline)
     end
-    draw_wrapped_search_match_segment(view, x1, y + (i - idx0) * lh, x2, lh, primary, outline)
   end
 end
 
@@ -635,18 +639,13 @@ function DocView:draw_line_body(line, x, y)
           search_matches = search_matches or {}
           search_matches[#search_matches + 1] = { col1, col2, true }
         else
-          local idx1, ncol1 = get_line_idx_col_count(self, line, col1)
-          local idx2, ncol2 = get_line_idx_col_count(self, line, col2)
-          local start = 0
+          local idx1 = get_line_idx_col_count(self, line, col1)
+          local idx2 = get_line_idx_col_count(self, line, col2)
           for i = idx1, idx2 do
-            local x1, x2 = x + (idx1 == i and self:get_col_x_offset(line1, col1) or 0)
-            if idx2 == i then
-              x2 = x + self:get_col_x_offset(line, col2)
-            else
-              start = start + get_idx_line_length(self, i, line)
-              x2 = x + self:get_col_x_offset(line, start + 1, true)
+            local x1, x2 = get_wrapped_segment_bounds(self, line, col1, col2, idx1, idx2, i)
+            if x1 and x2 and x2 > x1 then
+              renderer.draw_rect(x + x1, y + (i - idx0) * lh, x2 - x1, lh, style.selection)
             end
-            renderer.draw_rect(x1, y + (i - idx0) * lh, x2 - x1, lh, style.selection)
           end
         end
       end
