@@ -36,7 +36,7 @@ local function tab_max_width()
 end
 
 local function tab_gap()
-  return 5 * SCALE
+  return 10 * SCALE
 end
 
 local function get_scroll_button_width()
