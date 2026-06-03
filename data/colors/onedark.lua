@@ -120,7 +120,7 @@ style.fuzzy_searcher_match_background = c("ba9752")
 style.selectionhighlight = c("274324")
 style.indent_guide = { common.color "rgba(255, 255, 255, 0.09)" }
 style.indent_guide_active = { common.color "rgba(255, 255, 255, 0.24)" }
-style.whitespace = { common.color "rgba(255, 255, 255, 0.10)" }
+style.whitespace = { common.color "rgba(255, 255, 255, 0.13)" }
 style.whitespace_trailing = { common.color "rgba(255, 255, 255, 0.16)" }
 
 -- Anvil's common syntax slots.

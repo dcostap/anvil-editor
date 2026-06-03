@@ -147,7 +147,19 @@ local function draw_whitespace_run(self, idx, x, y, font, ty, substitution, star
   -- renderer and become visually incorrect with ligature-enabled fonts.
   for i = start_col, end_col - 1 do
     local tx = self:get_col_x_offset(idx, i) + x
-    renderer.draw_text(font, substitution.sub, tx, ty, color)
+    if substitution.char == " " then
+      local next_tx = self:get_col_x_offset(idx, i + 1) + x
+      local dot_size = math.max(2, math.floor(2 * SCALE))
+      renderer.draw_rect(
+        math.floor(tx + (next_tx - tx - dot_size) / 2),
+        math.floor(ty + (font:get_height() - dot_size) / 2),
+        dot_size,
+        dot_size,
+        color
+      )
+    else
+      renderer.draw_text(font, substitution.sub, tx, ty, color)
+    end
   end
 end
 
