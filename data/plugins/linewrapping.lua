@@ -583,6 +583,30 @@ function DocView:draw_line_body(line, x, y)
   if not self.wrapped_settings then return old_draw_line_body(self, line, x, y) end
   local lh = self:get_line_height()
   local idx0, _, count = get_line_idx_col_count(self, line)
+  local highlight_rows
+  local hcl = config.highlight_current_line
+  if hcl ~= false and core.active_view == self then
+    for lidx, line1, col1, line2, col2 in self.doc:get_selections(false) do
+      -- Draw the Current Line Highlight only on the wrapped visual row that
+      -- contains the caret, not on every visual row belonging to the same
+      -- Document line.
+      if line1 == line and (hcl ~= "no_selection" or (line1 == line2 and col1 == col2)) then
+        local idx = get_line_idx_col_count(self, line, col1)
+        if idx >= idx0 and idx < idx0 + count then
+          highlight_rows = highlight_rows or {}
+          highlight_rows[idx] = true
+        end
+      end
+    end
+  end
+  if highlight_rows then
+    for i = idx0, idx0 + count - 1 do
+      if highlight_rows[i] then
+        self:draw_line_highlight(x + self.scroll.x, y + lh * (i - idx0))
+      end
+    end
+  end
+
   local search_matches
   for lidx, line1, col1, line2, col2 in self.doc:get_selections(true) do
     if line >= line1 and line <= line2 then
@@ -607,29 +631,6 @@ function DocView:draw_line_body(line, x, y)
             renderer.draw_rect(x1, y + (i - idx0) * lh, x2 - x1, lh, style.selection)
           end
         end
-      end
-    end
-  end
-  local highlight_rows
-  local hcl = config.highlight_current_line
-  if hcl ~= false and core.active_view == self then
-    for lidx, line1, col1, line2, col2 in self.doc:get_selections(false) do
-      -- Draw the Current Line Highlight only on the wrapped visual row that
-      -- contains the caret, not on every visual row belonging to the same
-      -- Document line.
-      if line1 == line and (hcl ~= "no_selection" or (line1 == line2 and col1 == col2)) then
-        local idx = get_line_idx_col_count(self, line, col1)
-        if idx >= idx0 and idx < idx0 + count then
-          highlight_rows = highlight_rows or {}
-          highlight_rows[idx] = true
-        end
-      end
-    end
-  end
-  if highlight_rows then
-    for i = idx0, idx0 + count - 1 do
-      if highlight_rows[i] then
-        self:draw_line_highlight(x + self.scroll.x, y + lh * (i - idx0))
       end
     end
   end
