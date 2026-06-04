@@ -252,8 +252,8 @@ if not core.__untitled_tabs_patched then
     local font = self:get_tab_title_font()
     local width = untitled_tab_title_width(view, font)
     if width then
-      local min_w = math.max(1, style.tab_min_width or style.tab_width or 1)
-      local max_w = math.max(min_w, style.tab_max_width or style.tab_width or min_w)
+      local min_w = math.max(1, style.tab_min_width)
+      local max_w = math.max(min_w, style.tab_max_width)
       return common.clamp(width, min_w, max_w)
     end
     return tabs_get_tab_width(self, idx)

@@ -261,7 +261,7 @@ function TitleBar:draw_titlebar_tabs()
       renderer.draw_rect(tx, ty, tab_w, tab_h, style.background)
       renderer.draw_rect(tx, ty + tab_h - ds, tab_w, ds, style.caret)
     elseif hovered then
-      renderer.draw_rect(tx, ty, tab_w, tab_h, { 255, 255, 255, 12 })
+      renderer.draw_rect(tx, ty, tab_w, tab_h, style.titlebar_tab_hover)
     end
     renderer.draw_rect(tx + tab_w, ty + style.padding.y, ds, tab_h - style.padding.y * 2, style.divider)
 
@@ -336,12 +336,12 @@ function TitleBar:draw_window_controls()
     local pressed = item == self.pressed_item
     if hovered then
       if item.id == "close" then
-        renderer.draw_rect(x, y, w, h, pressed and { 153, 31, 32, 255 } or { 196, 43, 28, 255 })
+        renderer.draw_rect(x, y, w, h, pressed and style.titlebar_close_pressed or style.titlebar_close_hover)
       else
-        renderer.draw_rect(x, y, w, h, pressed and { 255, 255, 255, 32 } or { 255, 255, 255, 18 })
+        renderer.draw_rect(x, y, w, h, pressed and style.titlebar_control_pressed or style.titlebar_control_hover)
       end
     end
-    local color = (hovered and item.id == "close") and { 255, 255, 255, 255 } or (self:has_window_focus() and style.text or style.dim)
+    local color = (hovered and item.id == "close") and style.titlebar_close_text or (self:has_window_focus() and style.text or style.dim)
     draw_caption_glyph(item, x, y, w, h, color)
   end
 end
@@ -417,7 +417,7 @@ end
 
 
 function TitleBar:draw()
-  self:draw_background(style.titlebar or style.background2)
+  self:draw_background(style.titlebar)
   self:draw_window_title()
   self:draw_titlebar_tabs()
   self:draw_window_controls()

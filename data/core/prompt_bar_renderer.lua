@@ -50,7 +50,7 @@ function prompt_bar_renderer.label_color(brightness)
 end
 
 function prompt_bar_renderer.top_separator_color()
-  return style.tab_background or style.background2 or style.divider or style.dim or style.text
+  return style.tab_background
 end
 
 function prompt_bar_renderer.draw_background(x, y, w, h)
@@ -80,7 +80,7 @@ function prompt_bar_renderer.draw_info(font, text, x, y, w, h, color)
   if not text or text == "" or w <= 0 or h <= 0 then return end
   font = resolve_font(font)
   core.push_clip_rect(x, y, w, h)
-  common.draw_text(font, color or style.dim or style.text, text, "right", x, y, w, h)
+  common.draw_text(font, color or style.dim, text, "right", x, y, w, h)
   core.pop_clip_rect()
 end
 

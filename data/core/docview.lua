@@ -1269,7 +1269,7 @@ function DocView:draw_content_left_edge()
   local edge_w = math.max(1, math.floor(SCALE))
   local edge_padding = style.padding.x * 0.25
   local x = self:get_line_screen_position(1) - edge_padding - edge_w
-  renderer.draw_rect(x, self.position.y, edge_w, self.size.y, style.whitespace or style.line_number or style.text)
+  renderer.draw_rect(x, self.position.y, edge_w, self.size.y, style.docview_content_left_edge)
 end
 
 function DocView:line_has_current_line_highlight(line)
@@ -1327,7 +1327,7 @@ function DocView:normalize_line_hint(hint)
   if hint == nil or hint == false then return nil end
 
   local default_font = self:get_font()
-  local default_color = style.dim or style.line_number2 or style.syntax.comment or style.text
+  local default_color = style.line_hint
   local base_font = type(hint) == "table" and hint.font or nil
   local base_color = type(hint) == "table" and hint.color or nil
   local segments = {}
@@ -1379,7 +1379,7 @@ function DocView:truncate_line_hint_segments(segments, max_width)
   end
 
   local default_font = self:get_font()
-  local default_color = style.dim or style.line_number2 or style.syntax.comment or style.text
+  local default_color = style.line_hint
   local ellipsis_font = default_font
   local ellipsis_width = ellipsis_font:get_width(LINE_HINT_ELLIPSIS)
   if ellipsis_width > max_width then return nil, true end
@@ -1612,10 +1612,9 @@ end
 
 function DocView:search_match_style(primary)
   if primary then
-    return style.search_selection or style.selection, style.search_selection_outline or style.caret
+    return style.search_selection, style.search_selection_outline
   end
-  return style.selectionhighlight or style.search_selection or style.selection,
-    style.search_selection_secondary_outline or style.search_selection_outline or style.caret
+  return style.selectionhighlight, style.search_selection_secondary_outline
 end
 
 function DocView:search_match_screen_rect(line, col1, col2)

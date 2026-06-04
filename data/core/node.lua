@@ -734,7 +734,7 @@ function Node:draw()
     if core.title_bar and (node_contains_view(self.a, core.title_bar) or node_contains_view(self.b, core.title_bar)) then
       color = style.background2
     elseif core.status_bar and (node_contains_view(self.a, core.status_bar) or node_contains_view(self.b, core.status_bar)) then
-      color = style.tab_background or style.background2
+      color = style.tab_background
     end
     renderer.draw_rect(x, y, w, h, color)
     self:propagate("draw")

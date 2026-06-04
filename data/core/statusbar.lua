@@ -1348,7 +1348,7 @@ end
 function StatusBar:draw()
   if not self.visible and self.size.y <= 0 then return end
 
-  local background = style.tab_background or style.background2
+  local background = style.tab_background
   local ds = style.divider_size or 0
   renderer.draw_rect(self.position.x, self.position.y - ds, self.size.x, self.size.y + ds, background)
 

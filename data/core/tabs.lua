@@ -28,11 +28,11 @@ function Tabs:new(owner, options)
 end
 
 local function tab_min_width()
-  return math.max(1, style.tab_min_width or style.tab_width or 1)
+  return math.max(1, style.tab_min_width)
 end
 
 local function tab_max_width()
-  return math.max(tab_min_width(), style.tab_max_width or style.tab_width or tab_min_width())
+  return math.max(tab_min_width(), style.tab_max_width)
 end
 
 local function tab_gap()
@@ -384,8 +384,7 @@ end
 function Tabs:draw_tab_borders(item, is_active, is_hovered, x, y, w, h, standalone)
   local ds = style.divider_size
   local margin_y = style.margin.tab.top or 0
-  local tab_color = style.tab_background or { 0x1c, 0x1e, 0x26, 255 }
-  renderer.draw_rect(x, y - margin_y, w, h + margin_y, tab_color)
+  renderer.draw_rect(x, y - margin_y, w, h + margin_y, style.tab_background)
   return x + ds, y, w - ds*2, h
 end
 
@@ -427,7 +426,7 @@ function Tabs:draw_tabs(hooks)
   local size = self:get_size()
   local x = position.x
   core.push_clip_rect(x, y, size.x, h)
-  renderer.draw_rect(x, y, size.x, h, style.tab_background or { 0x1c, 0x1e, 0x26, 255 })
+  renderer.draw_rect(x, y, size.x, h, style.tab_background)
   local tabs_number = self:get_visible_tabs_number()
   local show_scroll_buttons = self:item_count() > tabs_number
   local tabs_clip_w = show_scroll_buttons and math.max(1, size.x - get_scroll_button_width() * 2) or size.x
@@ -450,7 +449,7 @@ function Tabs:draw_tabs(hooks)
   core.pop_clip_rect()
 
   if show_scroll_buttons then
-    local inactive_color = style.line_number or style.dim
+    local inactive_color = style.line_number
     local chevron_font = style.font
     local xrb, yrb, wrb = self:get_scroll_button_rect(1)
     local left_enabled = self:can_scroll_tabs(1)

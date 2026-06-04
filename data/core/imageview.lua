@@ -80,8 +80,8 @@ function ImageView:new(path, zoom_mode, zoom_scale)
   self.width = 0
   self.height = 0
   self.errmsg = nil
-  self.bg_mode = config.images_background_mode or "grid"
-  self.bg_color = config.images_background_color or { common.color "#ffffff" }
+  self.bg_mode = config.images_background_mode
+  self.bg_color = config.images_background_color
 
   self:load(path)
 end
@@ -205,8 +205,8 @@ function ImageView:scale_image()
       self.background = canvas.new(
         self.width, self.height, { common.color "rgb(0,0,0)" }, false
       )
-      local bright = { common.color "#AAAAAA" }
-      local dark = { common.color "#555555" }
+      local bright = style.image_grid_bright
+      local dark = style.image_grid_dark
       local bsize = 50
       local bhalf = bsize / 2
       for h=0, self.height+(bsize*2), bhalf do
