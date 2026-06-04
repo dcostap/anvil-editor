@@ -59,10 +59,20 @@ local INDENT_TEXT = "\t"
 local NO_META = false
 local LINE_HINT_COUNT_WORKER_BUDGET = 0.008
 local LINE_HINT_COUNT_CHILD_BUDGET = 0.004
+local GIT_STATUS_REFRESH_INTERVAL = 2
+local GIT_STATUS_MAX_OUTPUT = 2 * 1024 * 1024
 local MONTH_NAMES = {
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 }
+
+style.filetree_git_ignored = style.filetree_git_ignored or { common.color "#5f6368" }
+style.filetree_git_untracked = style.filetree_git_untracked or { common.color "#c98282" }
+style.filetree_git_added = style.filetree_git_added or (style.gitdiff_addition or { common.color "#587c0c" })
+style.filetree_git_modified = style.filetree_git_modified or { common.color "#3b82f6" }
+style.filetree_git_deleted = style.filetree_git_deleted or { common.color "#c98282" }
+style.filetree_git_additions = style.filetree_git_additions or (style.gitdiff_addition or { common.color "#587c0c" })
+style.filetree_git_deletions = style.filetree_git_deletions or (style.gitdiff_deletion or { common.color "#94151b" })
 
 local function indent_prefix(level)
   return string.rep(INDENT_TEXT, level)
@@ -317,6 +327,109 @@ end
 local function op_path(path)
   local path = rel_path(path):gsub("\\", "/")
   return path
+end
+
+local function run_process_capture(args, options, max_stdout)
+  if not process or not process.start then return nil, "", "process API unavailable" end
+
+  options = options or {}
+  options.stdout = process.REDIRECT_PIPE
+  options.stderr = process.REDIRECT_PIPE
+  options.stdin = process.REDIRECT_DISCARD
+
+  local proc, start_err = process.start(args, options)
+  if not proc then return nil, "", start_err or "process start failed" end
+
+  local stdout_chunks, stderr_chunks = {}, {}
+  local stdout_size, stderr_size = 0, 0
+  max_stdout = max_stdout or GIT_STATUS_MAX_OUTPUT
+
+  local function read_available(stream, chunks, size, cap)
+    while true do
+      local chunk, errmsg, errcode = proc:read(stream, 8192)
+      if chunk and #chunk > 0 then
+        chunks[#chunks + 1] = chunk
+        size = size + #chunk
+        if size > cap then proc:kill(); return size, false, "output too large" end
+      elseif errcode == process.ERROR_WOULDBLOCK or chunk == "" then
+        return size, true
+      elseif not chunk then
+        if errcode == process.ERROR_PIPE then return size, true end
+        return size, false, errmsg or "process read failed"
+      else
+        return size, true
+      end
+    end
+  end
+
+  while proc:running() do
+    local ok, err
+    stdout_size, ok, err = read_available(process.STREAM_STDOUT, stdout_chunks, stdout_size, max_stdout)
+    if not ok then return nil, table.concat(stdout_chunks), err end
+    stderr_size, ok, err = read_available(process.STREAM_STDERR, stderr_chunks, stderr_size, 64 * 1024)
+    if not ok then return nil, table.concat(stdout_chunks), err end
+    coroutine.yield(0.02)
+  end
+
+  stdout_size = select(1, read_available(process.STREAM_STDOUT, stdout_chunks, stdout_size, max_stdout))
+  stderr_size = select(1, read_available(process.STREAM_STDERR, stderr_chunks, stderr_size, 64 * 1024))
+  return proc:returncode() or 0, table.concat(stdout_chunks), table.concat(stderr_chunks)
+end
+
+local function split_nul(text)
+  local out, i = {}, 1
+  while i <= #text do
+    local j = text:find("%z", i)
+    if not j then
+      if i <= #text then out[#out + 1] = text:sub(i) end
+      break
+    end
+    out[#out + 1] = text:sub(i, j - 1)
+    i = j + 1
+  end
+  return out
+end
+
+local function normalize_git_rel(path)
+  if type(path) ~= "string" then return nil end
+  path = path:gsub("\\", "/")
+  path = path:gsub("^%./", "")
+  if path == "" then return nil end
+  return path
+end
+
+local function git_abs(root, rel)
+  rel = normalize_git_rel(rel)
+  if not rel then return nil end
+  return common.normalize_path(path_join(root, rel:gsub("/", PATHSEP)))
+end
+
+local function parent_rel_paths(rel)
+  local parents = {}
+  rel = normalize_git_rel(rel)
+  if not rel then return parents end
+  local current = common.dirname(rel:gsub("/", PATHSEP))
+  while current and current ~= "." and current ~= "" do
+    parents[#parents + 1] = current:gsub("\\", "/")
+    current = common.dirname(current)
+  end
+  return parents
+end
+
+local function git_status_kind(xy)
+  if xy == "!!" then return "ignored" end
+  if xy == "??" then return "untracked" end
+  local x, y = xy:sub(1, 1), xy:sub(2, 2)
+  if x == "D" or y == "D" then return "deleted" end
+  if x == "A" or y == "A" then return "added" end
+  if x ~= " " or y ~= " " then return "modified" end
+  return nil
+end
+
+local function stronger_git_kind(a, b)
+  local rank = { deleted = 5, added = 4, modified = 3, untracked = 2, ignored = 1 }
+  if not a or (rank[b] or 0) > (rank[a] or 0) then return b end
+  return a
 end
 
 local function is_rename_op(op)
@@ -707,6 +820,10 @@ function FileTreeView:new()
   self.line_hint_count_worker_running = false
   self.last_lines = nil
   self.status_cache = nil
+  self.git_status = { files = {}, dirs = {}, stats = {}, dir_stats = {}, generation = 0 }
+  self.git_status_worker_running = false
+  self.git_status_refresh_requested = false
+  self.git_status_last_refresh = 0
   self.has_possible_edits = false
   self.filesystem_watch = DirWatch()
   self.filesystem_watched_dirs = {}
@@ -734,6 +851,140 @@ end
 
 function FileTreeView:get_gutter_width()
   return style.padding.x * 2, style.padding.x
+end
+
+function FileTreeView:git_root()
+  local root = core.root_project and core.root_project()
+  return root and root.path or self.current_dir
+end
+
+function FileTreeView:schedule_git_status_refresh(reason, force)
+  local now = system.get_time()
+  if not force and now - (self.git_status_last_refresh or 0) < GIT_STATUS_REFRESH_INTERVAL then
+    return
+  end
+  self.git_status_last_refresh = now
+  self.git_status_refresh_requested = true
+  if self.git_status_worker_running then return end
+  self.git_status_worker_running = true
+
+  core.add_thread(function()
+    while self.git_status_refresh_requested do
+      self.git_status_refresh_requested = false
+      self:refresh_git_status(reason)
+    end
+    self.git_status_worker_running = false
+  end)
+end
+
+function FileTreeView:refresh_git_status(reason)
+  local root = self:git_root()
+  if not root then return end
+
+  local files, dirs = {}, {}
+  local stats, dir_stats = {}, {}
+  local in_repo = false
+
+  local code, out, err = run_process_capture(
+    { "git", "rev-parse", "--show-toplevel" }, { cwd = root }, 64 * 1024
+  )
+  if code == 0 and trim(out) ~= "" then
+    root = common.normalize_path(trim(out))
+    in_repo = true
+  end
+  if not in_repo then
+    self.git_status = { files = files, dirs = dirs, stats = stats, dir_stats = dir_stats, generation = (self.git_status and self.git_status.generation or 0) + 1 }
+    return
+  end
+
+  code, out, err = run_process_capture(
+    { "git", "status", "--porcelain=v1", "--ignored", "-uall", "-z" },
+    { cwd = root }, GIT_STATUS_MAX_OUTPUT
+  )
+  if code ~= 0 then
+    core.log_quiet("File Tree git status failed (%s): %s", tostring(reason or "refresh"), tostring(err))
+    return
+  end
+
+  local records = split_nul(out)
+  local i = 1
+  while i <= #records do
+    local record = records[i]
+    local xy = record:sub(1, 2)
+    local rel = normalize_git_rel(record:sub(4))
+    local kind = git_status_kind(xy)
+    if rel and kind then
+      local abs = git_abs(root, rel)
+      if abs then files[path_key(abs)] = stronger_git_kind(files[path_key(abs)], kind) end
+      for _, parent in ipairs(parent_rel_paths(rel)) do
+        local pabs = git_abs(root, parent)
+        if pabs then dirs[path_key(pabs)] = stronger_git_kind(dirs[path_key(pabs)], kind) end
+      end
+      if xy:sub(1, 1) == "R" or xy:sub(1, 1) == "C" then i = i + 1 end
+    end
+    i = i + 1
+  end
+
+  code, out, err = run_process_capture(
+    { "git", "diff", "--numstat", "--no-renames", "-z", "HEAD", "--" },
+    { cwd = root }, GIT_STATUS_MAX_OUTPUT
+  )
+  if code == 0 then
+    for _, record in ipairs(split_nul(out)) do
+      local added_text, deleted_text, rel = record:match("^([^\t]*)\t([^\t]*)\t(.+)$")
+      local added, deleted = tonumber(added_text), tonumber(deleted_text)
+      rel = normalize_git_rel(rel)
+      if added and deleted and rel then
+        local abs = git_abs(root, rel)
+        if abs then stats[path_key(abs)] = { additions = added, deletions = deleted } end
+        for _, parent in ipairs(parent_rel_paths(rel)) do
+          local pabs = git_abs(root, parent)
+          if pabs then
+            local key = path_key(pabs)
+            local total = dir_stats[key] or { additions = 0, deletions = 0 }
+            total.additions = total.additions + added
+            total.deletions = total.deletions + deleted
+            dir_stats[key] = total
+          end
+        end
+      end
+    end
+  else
+    core.log_quiet("File Tree git numstat failed (%s): %s", tostring(reason or "refresh"), tostring(err))
+  end
+
+  self.git_status = {
+    files = files,
+    dirs = dirs,
+    stats = stats,
+    dir_stats = dir_stats,
+    generation = (self.git_status and self.git_status.generation or 0) + 1,
+  }
+  core.redraw = true
+end
+
+function FileTreeView:get_git_info_for_entry(entry)
+  if not entry or not self.git_status then return nil end
+  local key = path_key(entry.abs)
+  local kind = self.git_status.files[key]
+  local stat = entry.type ~= "dir" and self.git_status.stats[key] or nil
+  if entry.type == "dir" then
+    kind = kind or self.git_status.dirs[key]
+  end
+  if kind or stat then return { kind = kind, stat = stat } end
+end
+
+function FileTreeView:get_git_info_for_line(line)
+  local entry = self:get_line_hint_entry(line)
+  return self:get_git_info_for_entry(entry)
+end
+
+function FileTreeView:git_text_color(kind)
+  if kind == "ignored" then return style.filetree_git_ignored end
+  if kind == "untracked" then return style.filetree_git_untracked end
+  if kind == "added" then return style.filetree_git_added end
+  if kind == "modified" then return style.filetree_git_modified end
+  if kind == "deleted" then return style.filetree_git_deleted end
 end
 
 function FileTreeView:set_target_size(axis, value)
@@ -1182,6 +1433,7 @@ function FileTreeView:refresh(keep_selection, preserve_expansion, reveal_paths)
     self.doc:set_selection(math.min(l, #self.doc.lines), c)
   end
   self:update_filesystem_watches()
+  self:schedule_git_status_refresh("filetree-refresh", true)
 end
 
 function FileTreeView:get_sort_mode()
@@ -1581,11 +1833,26 @@ function FileTreeView:get_line_hint(line)
   local text = self:format_line_hint_for_path(entry.abs, info)
   if not text then return nil end
 
-  return {
-    text = text,
-    font = self:get_font(),
-    color = style.dim or style.line_number2 or style.syntax.comment or style.text,
-  }
+  local font = self:get_font()
+  local dim = style.dim or style.line_number2 or style.syntax.comment or style.text
+  local git = self:get_git_info_for_entry(entry)
+  local segments = {}
+  if git and git.stat and ((git.stat.additions or 0) > 0 or (git.stat.deletions or 0) > 0) then
+    segments[#segments + 1] = {
+      text = string.format("+%d", git.stat.additions or 0),
+      font = font,
+      color = style.filetree_git_additions,
+    }
+    segments[#segments + 1] = {
+      text = string.format(" −%d   ", git.stat.deletions or 0),
+      font = font,
+      color = style.filetree_git_deletions,
+    }
+  elseif git and git.kind == "ignored" then
+    segments[#segments + 1] = { text = "ignored   ", font = font, color = style.filetree_git_ignored }
+  end
+  segments[#segments + 1] = { text = text, font = font, color = dim }
+  return segments
 end
 
 function FileTreeView:draw_folder_row_background(line, x, y, width)
@@ -1607,17 +1874,20 @@ function FileTreeView:draw_line_body(line, x, y)
 end
 
 function FileTreeView:draw_line_text(line, x, y)
-  if not self:line_is_dir(line) then
+  local git = self:get_git_info_for_line(line)
+  local color = git and self:git_text_color(git.kind)
+  if not color and self:line_is_dir(line) then
+    color = filetree_config.folder_color
+      or style.dim
+      or style.line_number2
+      or style.syntax.comment
+      or style.syntax.normal
+  end
+  if not color then
     return FileTreeView.super.draw_line_text(self, line, x, y)
   end
 
   local text = line_text(self.doc:get_utf8_line(line))
-  local color = filetree_config.folder_color
-    or style.dim
-    or style.line_number2
-    or style.syntax.comment
-    or style.syntax.normal
-
   renderer.draw_text(
     self:get_font(), text, x, y + self:get_line_text_y_offset(), color,
     { tab_offset = 0 }
