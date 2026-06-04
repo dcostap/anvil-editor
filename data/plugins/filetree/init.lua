@@ -2767,11 +2767,11 @@ function FileTreeView:operation_summary(plan)
 end
 
 local operation_colors = {
-  CREATE = { 130, 220, 140, 255 },
-  COPY = { 105, 210, 230, 255 },
-  MOVE = { 130, 175, 255, 255 },
-  RENAME = { 205, 170, 255, 255 },
-  DELETE = { 255, 120, 120, 255 },
+  CREATE = style.filetree_operation_create,
+  COPY = style.filetree_operation_copy,
+  MOVE = style.filetree_operation_move,
+  RENAME = style.filetree_operation_rename,
+  DELETE = style.filetree_operation_delete,
 }
 
 local function filetree_operation_message(lines)

@@ -1,6 +1,5 @@
 -- mod-version:3 priority:99
 local core = require "core"
-local common = require "core.common"
 local style = require "core.style"
 local command = require "core.command"
 local keymap = require "core.keymap"
@@ -11,11 +10,6 @@ local hud = {
   visible = false,
   last_saved_path = nil,
 }
-
-local black_bg = { common.color "rgba(0, 0, 0, 0.70)" }
-local red_bg = { common.color "rgba(140, 0, 0, 0.75)" }
-local white = { common.color "#ffffff" }
-local muted = { common.color "#c8c8c8" }
 
 local function fmt_ms(v)
   return string.format("%.2fms", tonumber(v) or 0)
@@ -29,7 +23,7 @@ local function draw_hud()
   if not hud.visible and not perf.is_recording() then return end
 
   local s = core.performance_snapshot or {}
-  local font = style.code_font or style.font
+  local font = style.code_font
   local pad = math.floor(10 * SCALE)
   local line_h = math.floor(font:get_height() * 1.25)
   local recording = perf.is_recording()
@@ -61,10 +55,10 @@ local function draw_hud()
   local x = math.floor(core.root_panel.size.x - w - 14 * SCALE)
   local y = math.floor(14 * SCALE)
 
-  renderer.draw_rect(x, y, w, h, recording and red_bg or black_bg)
+  renderer.draw_rect(x, y, w, h, recording and style.performance_hud_recording_background or style.performance_hud_background)
   local ty = y + pad
   for i, line in ipairs(lines) do
-    renderer.draw_text(font, line, x + pad, ty, i == 1 and white or muted)
+    renderer.draw_text(font, line, x + pad, ty, i == 1 and style.performance_hud_text or style.performance_hud_dim)
     ty = ty + line_h
   end
 end

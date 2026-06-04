@@ -122,6 +122,29 @@ style.indent_guide = { common.color "rgba(255, 255, 255, 0.09)" }
 style.indent_guide_active = { common.color "rgba(255, 255, 255, 0.24)" }
 style.whitespace = { common.color "rgba(255, 255, 255, 0.13)" }
 style.whitespace_trailing = { common.color "rgba(255, 255, 255, 0.16)" }
+style.transparent = { common.color "#00000000" }
+
+-- First-party plugin colors
+style.bracketmatch_color = style.syntax["function"]
+style.bracketmatch_char_color = style.syntax["keyword"]
+style.bracketmatch_block_char_color = style.background
+style.bracketmatch_block_color = style.line_number2
+style.bracketmatch_frame_color = style.line_number2
+style.guide = style.selection
+style.line_wrapping_guide = style.whitespace
+style.performance_hud_background = { common.color "rgba(0, 0, 0, 0.70)" }
+style.performance_hud_recording_background = { common.color "rgba(140, 0, 0, 0.75)" }
+style.performance_hud_text = c("ffffff")
+style.performance_hud_dim = c("c8c8c8")
+style.editor_wallpaper_line_highlight = { 64, 64, 64, 128 }
+style.editor_wallpaper_tab_hover = { 255, 255, 255, 10 }
+style.fuzzy_searcher_preview_background = { 0, 0, 0, 210 }
+style.fuzzy_searcher_overlay_background = { 0, 0, 0, 110 }
+style.filetree_operation_create = { 130, 220, 140, 255 }
+style.filetree_operation_copy = { 105, 210, 230, 255 }
+style.filetree_operation_move = { 130, 175, 255, 255 }
+style.filetree_operation_rename = { 205, 170, 255, 255 }
+style.filetree_operation_delete = { 255, 120, 120, 255 }
 
 -- Git/diff plugin colors
 style.gitdiff_addition = c("587c0c")

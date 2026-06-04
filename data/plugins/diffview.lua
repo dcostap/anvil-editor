@@ -38,7 +38,7 @@ config.plugins.diffview.config_spec = {
       description = "The color used on changed lines when plain text is enabled.",
       path = "plain_text_color",
       type = "color",
-      default = { common.color "#ffffff" }
+      default = config.plugins.diffview.plain_text_color
     }
   }
 

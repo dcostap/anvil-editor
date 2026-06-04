@@ -77,7 +77,7 @@ ui.init_size = true
 local label = Label(ui, "Find and Replace")
 
 local line_separator = Line(ui)
-line_separator.border.color = { common.color "#00000000" }
+line_separator.border.color = style.transparent
 
 local close = Button(ui)
 close:set_icon("C")

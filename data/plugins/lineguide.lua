@@ -104,7 +104,7 @@ function DocView:draw_overlay(...)
     local character_width = self:get_font():get_width("n")
     local ruler_width = config.plugins.lineguide.width
     local ruler_color = conf.use_custom_color and conf.custom_color
-      or (style.guide or style.selection)
+      or style.guide
 
     for k,v in ipairs(config.plugins.lineguide.rulers) do
       local ruler = get_ruler(v)

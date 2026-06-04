@@ -14,10 +14,7 @@ local indent_guides = {
 local indent_cache_by_doc = setmetatable({}, { __mode = "k" })
 
 local function guide_color(active)
-  if active then
-    return style.indent_guide_active or { common.color "rgba(255, 255, 255, 0.24)" }
-  end
-  return style.indent_guide or { common.color "rgba(255, 255, 255, 0.10)" }
+  return active and style.indent_guide_active or style.indent_guide
 end
 
 local function indent_cache(doc, indent_size)

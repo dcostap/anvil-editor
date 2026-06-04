@@ -229,12 +229,7 @@ function LineWrapping.update_breaks(docview, old_line1, old_line2, net_lines)
 end
 
 local function guide_color()
-  return config.plugins.linewrapping.guide_color
-    or style.line_wrapping_guide
-    or style.whitespace
-    or style.indent_guide
-    or style.line_number
-    or style.selection
+  return config.plugins.linewrapping.guide_color or style.line_wrapping_guide
 end
 
 -- Draws a guide if applicable to show where wrapping is occurring.

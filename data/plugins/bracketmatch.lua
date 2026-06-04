@@ -181,11 +181,12 @@ end
 --- @param width integer
 local function draw_decoration(dv, x, y, line, col, width)
   local conf = bracketmatch
-  local color = style.bracketmatch_color or style.syntax["function"]
-  local char_color = style.bracketmatch_char_color
-                     or (conf.style == "block" and style.background or style.syntax["keyword"])
-  local block_color = style.bracketmatch_block_color or style.line_number2
-  local frame_color = style.bracketmatch_frame_color or style.line_number2
+  local color = style.bracketmatch_color
+  local char_color = conf.style == "block"
+    and style.bracketmatch_block_char_color
+    or style.bracketmatch_char_color
+  local block_color = style.bracketmatch_block_color
+  local frame_color = style.bracketmatch_frame_color
 
   local thickness = conf.line_size
 

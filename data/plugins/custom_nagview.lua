@@ -39,7 +39,7 @@ local function outside_overlay_color(amount)
   -- renderer alpha blending, so the outside lanes remain visibly "red, dimmed"
   -- rather than turning into solid black on renderers/themes that treat alpha
   -- differently.
-  local base = style.nagbar or { 128, 0, 0, 255 }
+  local base = style.nagbar
   amount = common.clamp(amount or 0, 0, 1)
   return {
     math.floor((base[1] or 0) * (1 - amount) + 0.5),

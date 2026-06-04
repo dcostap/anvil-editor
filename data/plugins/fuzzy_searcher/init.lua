@@ -1297,7 +1297,7 @@ local function grep_accept_range(result)
 end
 
 local function color_with_alpha(color, alpha)
-  color = color or style.accent or style.text or {255, 255, 255, 255}
+  color = color or style.accent
   return { color[1] or 255, color[2] or 255, color[3] or 255, alpha or color[4] or 255 }
 end
 
@@ -1981,7 +1981,7 @@ local function draw_preview_debug(view, result, x, y, w, h)
   end
 
   local box_h = math.min(h - 8, (#lines * lh) + 8)
-  renderer.draw_rect(x + 4, y + 4, math.max(0, w - 8), box_h, {0, 0, 0, 210})
+  renderer.draw_rect(x + 4, y + 4, math.max(0, w - 8), box_h, style.fuzzy_searcher_preview_background)
   local yy = y + 8
   for i, line in ipairs(lines) do
     renderer.draw_text(font, truncate_text(font, line, w - 16), x + 8, yy, i == 1 and (style.accent or style.text) or style.text)
@@ -3036,7 +3036,7 @@ end
 function FSView:draw()
   if not self:is_visible() then return false end
   local root = core.root_panel
-  renderer.draw_rect(root.position.x, root.position.y, root.size.x, root.size.y, {0, 0, 0, 110})
+  renderer.draw_rect(root.position.x, root.position.y, root.size.x, root.size.y, style.fuzzy_searcher_overlay_background)
 
   if not FSView.super.draw(self) then return false end
 

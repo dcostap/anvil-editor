@@ -13,7 +13,7 @@ local user_path = USERDIR .. PATHSEP .. "plugins" .. PATHSEP .. "editor_wallpape
 local wallpaper = {
   path = system.get_file_info(bundled_path) and bundled_path or user_path,
   opacity = 0.18,
-  line_highlight = { 64, 64, 64, 128 },
+  line_highlight = style.editor_wallpaper_line_highlight,
   scale_mode = "linear",
 }
 
@@ -101,7 +101,7 @@ if not core.__editor_wallpaper_patched then
     local tab_x, tab_y, tab_w, tab_h = x, y, w, h
     local a, b, c, d = node_draw_tab_borders(self, view, is_active, is_hovered, x, y, w, h, standalone)
     if is_hovered then
-      renderer.draw_rect(tab_x, tab_y, tab_w, tab_h, { 255, 255, 255, 10 })
+      renderer.draw_rect(tab_x, tab_y, tab_w, tab_h, style.editor_wallpaper_tab_hover)
     end
     return a, b, c, d
   end
@@ -114,7 +114,7 @@ if not core.__editor_wallpaper_patched then
     -- The shared tab renderer fills the row with style.tab_background, so make
     -- that fill transparent while preserving the rest of the tab rendering.
     local old_tab_background = style.tab_background
-    local base = old_tab_background or style.background2 or style.background
+    local base = old_tab_background
     style.tab_background = { base[1] or 0, base[2] or 0, base[3] or 0, 0 }
     local ok, a, b, c, d, e = pcall(node_draw_tabs, self, ...)
     style.tab_background = old_tab_background
