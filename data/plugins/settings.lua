@@ -790,13 +790,6 @@ settings.add("Development",
       max = 2000
     },
     {
-      label = "Skip Plugins Version",
-      description = "Do not verify the plugins required versions at startup.",
-      path = "skip_plugins_version",
-      type = settings.type.TOGGLE,
-      default = false
-    },
-    {
       label = "Log Slow Coroutines",
       description = "Logs those taking more time than allowed.",
       path = "log_slow_threads",
@@ -2505,13 +2498,6 @@ if settings.config.disabled_plugins then
       config.plugins[name] = false
     end
   end
-end
-
--- properly apply skip_plugins_version before other plugins are loaded
-if settings.config.skip_plugins_version then
-  config.skip_plugins_version = true
-else
-  config.skip_plugins_version = false
 end
 
 --------------------------------------------------------------------------------

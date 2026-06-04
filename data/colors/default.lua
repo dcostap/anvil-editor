@@ -125,8 +125,8 @@ style.whitespace_trailing = { common.color "rgba(255, 255, 255, 0.16)" }
 style.transparent = { common.color "#00000000" }
 
 -- First-party plugin colors
-style.bracketmatch_color = style.syntax["function"]
-style.bracketmatch_char_color = style.syntax["keyword"]
+style.bracketmatch_color = c(C.function_declaration)
+style.bracketmatch_char_color = c(C.java_keyword)
 style.bracketmatch_block_char_color = style.background
 style.bracketmatch_block_color = style.line_number2
 style.bracketmatch_frame_color = style.line_number2

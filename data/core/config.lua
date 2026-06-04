@@ -379,8 +379,6 @@ config.max_clicks = 3
 ---
 ---Defaults to false.
 ---@type boolean
-config.skip_plugins_version = false
-
 ---Quiet logging of threads that are taking longer than the maximum time
 ---allowed on a per frame iteration basis. Enable only when troubleshooting
 ---performance issues, since enabling this may degrade performance.

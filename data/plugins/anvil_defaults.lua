@@ -13,6 +13,22 @@ local function plugin_defaults(name, defaults)
   end
 end
 
+local function require_core_plugin(name)
+  assert(
+    config.plugins[name] ~= false,
+    string.format('First-party core plugin "%s" cannot be disabled', name)
+  )
+  return require("plugins." .. name)
+end
+
+local function reload_core_plugin(name)
+  assert(
+    config.plugins[name] ~= false,
+    string.format('First-party core plugin "%s" cannot be disabled', name)
+  )
+  return core.reload_module("plugins." .. name)
+end
+
 plugin_defaults("autoreload", {
   always_show_nagview = false,
 })
@@ -127,15 +143,15 @@ plugin_defaults("trimwhitespace", {
   trim_empty_end_lines = false,
 })
 -- IntelliJ-style custom actions/keybindings and local workflow plugins.
-require "plugins.intellij_actions"
-require "plugins.edit_location_history"
-core.reload_module("plugins.global_prompt_bar_sanitize")
-require "plugins.intellij_find"
-require "plugins.untitled_tabs"
-core.reload_module("plugins.scale_debug_log")
--- require "plugins.editor_wallpaper"
-require "plugins.centered_editor"
-require "plugins.custom_welcome"
+require_core_plugin "intellij_actions"
+require_core_plugin "edit_location_history"
+reload_core_plugin "global_prompt_bar_sanitize"
+require_core_plugin "intellij_find"
+require_core_plugin "untitled_tabs"
+reload_core_plugin "scale_debug_log"
+-- require_core_plugin "editor_wallpaper"
+require_core_plugin "centered_editor"
+require_core_plugin "custom_welcome"
 if core.intellij_actions_disable_conflict_shortcuts then
   core.intellij_actions_disable_conflict_shortcuts()
 end
@@ -156,8 +172,8 @@ end
 style.font = load_text_font()
 style.code_font = load_text_font()
 -- First-party editable file tree.
-require "plugins.custom_nagview"
-require "plugins.filetree"
+require_core_plugin "custom_nagview"
+require_core_plugin "filetree"
 -- Use hard tabs for indentation, displayed at 4 columns.
 config.indent_size = 4
 config.tab_type = "hard"

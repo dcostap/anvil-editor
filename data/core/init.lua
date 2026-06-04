@@ -1012,9 +1012,10 @@ function core.load_plugins()
 
   local function load_defaults_plugin(load_start)
     if not defaults_plugin then return end
-    if not config.skip_plugins_version and not defaults_plugin.version_match then
+    if not defaults_plugin.version_match then
       reject_plugin_version(defaults_plugin)
     else
+      defaults_plugin.load = load_lua_plugin_if_exists
       load_plugin(defaults_plugin)
     end
   end
@@ -1028,7 +1029,7 @@ function core.load_plugins()
       defaults_loaded = true
     end
 
-    if not config.skip_plugins_version and not plugin.version_match then
+    if not plugin.version_match then
       reject_plugin_version(plugin)
     elseif env_disabled_plugins[plugin.name:lower()] then
       core.log_quiet("Skipped plugin %q from ANVIL_DISABLE_PLUGINS", plugin.name)
