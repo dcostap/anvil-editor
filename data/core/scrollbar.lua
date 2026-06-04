@@ -56,27 +56,6 @@ local Object = require "core.object"
 ---@field expanded_margin number? Override for style.expanded_scrollbar_margin
 local Scrollbar = Object:extend()
 
-local function blend_color(a, b, t)
-  if not b or t <= 0 then return a end
-  if t >= 1 then return b end
-  return {
-    (a[1] or 0) + ((b[1] or 0) - (a[1] or 0)) * t,
-    (a[2] or 0) + ((b[2] or 0) - (a[2] or 0)) * t,
-    (a[3] or 0) + ((b[3] or 0) - (a[3] or 0)) * t,
-    (a[4] or 255) + ((b[4] or 255) - (a[4] or 255)) * t,
-  }
-end
-
-local function lighten_color(color, amount)
-  amount = amount or 44
-  return {
-    common.clamp((color[1] or 0) + amount, 0, 255),
-    common.clamp((color[2] or 0) + amount, 0, 255),
-    common.clamp((color[3] or 0) + amount, 0, 255),
-    color[4] or 255,
-  }
-end
-
 function Scrollbar:__tostring() return "Scrollbar" end
 
 ---Constructor - initializes a scrollbar with specified orientation and style.
@@ -398,7 +377,7 @@ end
 ---@param dy number Delta y since last move
 ---@return boolean|number? result True if hovering, 0-1 percent if dragging, falsy otherwise
 function Scrollbar:on_mouse_moved(x, y, dx, dy)
-  if not self.dragging and self:_in_resize_edge_guard(x, y) then
+  if not self.dragging and (self:_in_resize_edge_guard(x, y) or self:_in_native_window_resize_edge(x, y)) then
     if self.hovering.track or self.hovering.thumb then core.redraw = true end
     self.hovering.track, self.hovering.thumb = false, false
     return false
@@ -467,6 +446,38 @@ function Scrollbar:_in_resize_edge_guard(x, y)
 end
 
 
+---Return true when this scrollbar is under the native window resize edge.
+---Mouse input there belongs to the OS resize hit-test, so the scrollbar should
+---not show hover feedback even if Lua receives a non-client mouse-move event.
+---@param x number Screen x coordinate
+---@param y number Screen y coordinate
+---@return boolean in_edge True when point is in the native resize edge
+function Scrollbar:_in_native_window_resize_edge(x, y)
+  if self.direction ~= "v" or self.alignment ~= "e" then return false end
+  if not core.window or not core.root_panel or not system.get_window_frame_metrics then return false end
+  if core.window_mode == "maximized" or core.window_mode == "fullscreen" then return false end
+
+  local ok, _, _, resize_border = pcall(system.get_window_frame_metrics, core.window)
+  resize_border = ok and tonumber(resize_border) or 0
+  if resize_border <= 0 then return false end
+
+  local root = core.root_panel
+  local root_right = (root.position and root.position.x or 0) + (root.size and root.size.x or 0)
+  if root_right <= 0 then return false end
+
+  -- Only treat it as a window resize edge when the owning view reaches the
+  -- window edge. Split/side-panel scrollbars away from the outer edge should
+  -- still hover normally.
+  local scrollbar_right = self.rect.x + self.rect.w
+  if math.abs(scrollbar_right - root_right) > 1 then return false end
+
+  return x >= root_right - resize_border
+     and x <= root_right
+     and y >= self.rect.y
+     and y <= self.rect.y + self.rect.h
+end
+
+
 ---Update scrollbar animations (hover expansion).
 ---Call this every frame to animate the scrollbar width on hover.
 function Scrollbar:update()
@@ -527,12 +538,8 @@ end
 ---Highlights when hovered or being dragged.
 function Scrollbar:draw_thumb()
   local hovering = self.hovering.track or self.hovering.thumb or self.dragging
-  -- Make hover feedback visible immediately, even before the next animation
-  -- update tick. The animated value then catches up for the smooth transition.
-  local t = self.hover_tint_percent or 0
-  if hovering then t = math.max(t, self.dragging and 1 or 0.55) end
-  local hover_color = style.scrollbar_hover or style.scrollbar2 or lighten_color(style.scrollbar, 44)
-  local color = blend_color(style.scrollbar, hover_color, math.min(1, t))
+  local color = { table.unpack(style.scrollbar) }
+  color[4] = (color[4] or 255) * (hovering and 0.65 or 0.45)
   local x, y, w, h = self:get_thumb_rect()
   renderer.draw_rect(x, y, w, h, color)
 end

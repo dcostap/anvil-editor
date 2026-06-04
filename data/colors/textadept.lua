@@ -21,7 +21,6 @@ style.selection           =     { common.color(b40) }
 style.line_number         =     { common.color(b40) }
 style.line_number2        =     { common.color(b80) }
 style.scrollbar           =     { common.color(b40) }
-style.scrollbar2          =     { common.color(b60) }
 style.nagbar              =     { common.color(red) }
 style.nagbar_text         =     { common.color(b00) }
 style.nagbar_dim          =     { common.color(b05) }

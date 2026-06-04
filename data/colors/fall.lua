@@ -14,7 +14,6 @@ style.line_number = { common.color "#575356" }
 style.line_number2 = { common.color "#857F81" }
 style.line_highlight = { common.color "#383637" }
 style.scrollbar = { common.color "#454344" }
-style.scrollbar2 = { common.color "#524F50" }
 
 style.search_selection = { common.color "#6a5acd" }
 style.search_selection_text = { common.color "#ffffff" }

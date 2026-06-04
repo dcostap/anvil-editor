@@ -16,7 +16,6 @@ style.line_number = { common.color "#525259" }
 style.line_number2 = { common.color "#FCFCFC" } -- With cursor
 style.line_highlight = { common.color "#3B3A3F" }
 style.scrollbar = { common.color "#8d8d8d" }
-style.scrollbar2 = { common.color "#adadad" } -- Hovered
 style.scrollbar_track = { common.color "#262626" }
 style.nagbar = { common.color "#DE374C" }
 style.nagbar_text = { common.color "#F6F5F4" }
