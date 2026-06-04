@@ -19,8 +19,8 @@ local function clone_caret_intellij(dv, direction)
   local doc = dv.doc
   local idx = doc.last_selection or 1
   local line, col = doc:get_selection_idx(idx)
-  if not line then return end
-  if line + direction < 1 or line + direction > #doc.lines then return end
+  if not line then return false end
+  if line + direction < 1 or line + direction > #doc.lines then return false end
 
   local translate = direction < 0
     and DocView.translate.previous_line
@@ -44,6 +44,17 @@ local function clone_caret_intellij(dv, direction)
     doc:add_selection(target_line, target_col, target_line, target_col)
   end
   core.blink_reset()
+  return true
+end
+
+local function clone_caret_until_edge_intellij(dv, direction)
+  local changed = false
+  while clone_caret_intellij(dv, direction) do
+    changed = true
+  end
+  if changed then
+    core.log_quiet("IntelliJ actions: cloned carets %s until document edge", direction < 0 and "above" or "below")
+  end
 end
 
 command.add(nil, {
@@ -62,6 +73,12 @@ end, {
   end,
   ["user:clone-caret-below-intellij"] = function(dv)
     clone_caret_intellij(dv, 1)
+  end,
+  ["user:clone-caret-above-until-first-line-intellij"] = function(dv)
+    clone_caret_until_edge_intellij(dv, -1)
+  end,
+  ["user:clone-caret-below-until-last-line-intellij"] = function(dv)
+    clone_caret_until_edge_intellij(dv, 1)
   end,
 })
 
@@ -1251,6 +1268,8 @@ end, {
 keymap.add({
   ["ctrl+alt+n"] = "user:clone-caret-above-intellij",
   ["ctrl+alt+m"] = "user:clone-caret-below-intellij",
+  ["ctrl+alt+shift+n"] = "user:clone-caret-above-until-first-line-intellij",
+  ["ctrl+alt+shift+m"] = "user:clone-caret-below-until-last-line-intellij",
   ["alt+w"] = "user:move-to-matching-bracket-with-history",
   ["alt+shift+p"] = "user:expand-selection-block",
   ["alt+p"] = "user:add-selection-next-occurrence",
