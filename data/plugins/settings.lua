@@ -45,6 +45,14 @@ settings.plugin_sections = {}
 settings.config = {}
 settings.default_keybindings = {}
 
+local function first_party_core_plugins()
+  return core.first_party_core_plugins or {}
+end
+
+local function is_first_party_core_plugin(plugin)
+  return first_party_core_plugins()[plugin] == true or plugin == "anvil_defaults"
+end
+
 ---Enumeration for the different types of settings.
 ---@type table<string, integer>
 settings.type = {
@@ -1823,6 +1831,10 @@ end
 ---Unload a plugin settings from plugins section.
 ---@param plugin string
 function Settings:disable_plugin(plugin)
+  if is_first_party_core_plugin(plugin) then
+    core.error('First-party core plugin "%s" cannot be disabled', plugin)
+    return
+  end
   for _, section in ipairs(settings.plugin_sections) do
     local plugins = settings.plugins[section]
 
@@ -1851,6 +1863,7 @@ end
 ---Load plugin and append its settings to the plugins section.
 ---@param plugin string
 function Settings:enable_plugin(plugin)
+  if is_first_party_core_plugin(plugin) then return end
   local loaded = false
   local config_type = type(config.plugins[plugin])
   if config_type == "boolean" or config_type == "nil" then
@@ -1935,7 +1948,7 @@ function Settings:load_plugin_settings()
 
   local plugins = get_installed_plugins()
   for _, plugin in ipairs(plugins) do
-    if plugin ~= "settings" then
+    if plugin ~= "settings" and not is_first_party_core_plugin(plugin) then
       local enabled = false
 
       if
@@ -2446,7 +2459,9 @@ function core.run()
   -- load plugins disabled by default and enabled by user
   if settings.config.enabled_plugins then
     for name, _ in pairs(settings.config.enabled_plugins) do
-      if config.plugins[name] == nil then
+      if is_first_party_core_plugin(name) then
+        settings.config.enabled_plugins[name] = nil
+      elseif config.plugins[name] == nil then
         require("plugins." .. name)
       end
     end
@@ -2494,7 +2509,9 @@ load_settings()
 -- only disable non already loaded plugins
 if settings.config.disabled_plugins then
   for name, _ in pairs(settings.config.disabled_plugins) do
-    if not package.loaded[name] then
+    if is_first_party_core_plugin(name) then
+      settings.config.disabled_plugins[name] = nil
+    elseif not package.loaded["plugins." .. name] then
       config.plugins[name] = false
     end
   end

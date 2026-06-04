@@ -13,19 +13,35 @@ local function plugin_defaults(name, defaults)
   end
 end
 
-local function require_core_plugin(name)
+local core_plugins = {
+  centered_editor = true,
+  custom_nagview = true,
+  custom_welcome = true,
+  edit_location_history = true,
+  filetree = true,
+  global_prompt_bar_sanitize = true,
+  intellij_actions = true,
+  intellij_find = true,
+  linewrapping = true,
+  scale_debug_log = true,
+  untitled_tabs = true,
+}
+core.first_party_core_plugins = core_plugins
+
+local function assert_core_plugin_enabled(name)
   assert(
     config.plugins[name] ~= false,
     string.format('First-party core plugin "%s" cannot be disabled', name)
   )
+end
+
+local function require_core_plugin(name)
+  assert_core_plugin_enabled(name)
   return require("plugins." .. name)
 end
 
 local function reload_core_plugin(name)
-  assert(
-    config.plugins[name] ~= false,
-    string.format('First-party core plugin "%s" cannot be disabled', name)
-  )
+  assert_core_plugin_enabled(name)
   return core.reload_module("plugins." .. name)
 end
 
@@ -202,6 +218,7 @@ keymap.add_direct({
   ["ctrl+shift+d"] = "doc:go-to-line",
   ["ctrl+shift+D"] = "doc:go-to-line",
 })
+require_core_plugin "linewrapping"
 -- Wrap long lines at word boundaries and visually indent continuations.
 config.plugins.linewrapping.mode = "word"
 config.plugins.linewrapping.indent = true

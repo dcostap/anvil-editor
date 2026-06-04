@@ -164,7 +164,6 @@ style.gitdiff_modification = c("0c7d9d")
 style.gitdiff_deletion = c("94151b")
 style.gitdiff_width = 3
 style.gitdiff_overview_min_height = math.max(2, 2 * SCALE)
-style.gitdiff_overview_extra_width = 0
 
 -- File tree Git status colors
 style.filetree_git_ignored = c("5f6368")

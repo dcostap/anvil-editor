@@ -1008,16 +1008,30 @@ function core.load_plugins()
     else
       no_errors = false
     end
+    return ok, loaded_plugin
   end
 
-  local function load_defaults_plugin(load_start)
-    if not defaults_plugin then return end
+  local function load_defaults_plugin()
+    if not defaults_plugin then
+      core.error("Mandatory first-party defaults plugin is missing: %s", DATADIR .. PATHSEP .. "plugins" .. PATHSEP .. "anvil_defaults.lua")
+      no_errors = false
+      return false
+    end
     if not defaults_plugin.version_match then
       reject_plugin_version(defaults_plugin)
-    else
-      defaults_plugin.load = load_lua_plugin_if_exists
-      load_plugin(defaults_plugin)
+      core.error("Mandatory first-party defaults plugin has an incompatible mod-version")
+      no_errors = false
+      return false
     end
+
+    defaults_plugin.load = load_lua_plugin_if_exists
+    local ok, loaded_plugin = load_plugin(defaults_plugin)
+    if ok then
+      package.loaded["plugins.anvil_defaults"] = loaded_plugin or true
+    else
+      core.error("Mandatory first-party defaults plugin failed to load")
+    end
+    return ok
   end
 
   local load_start = system.get_time()
@@ -1025,7 +1039,7 @@ function core.load_plugins()
   for i = 1, #core.plugin_list do
     local plugin = core.plugin_list[i]
     if not defaults_loaded and plugin.priority >= 0 then
-      load_defaults_plugin(load_start)
+      if not load_defaults_plugin() then return false, refused_list end
       defaults_loaded = true
     end
 
@@ -1040,7 +1054,7 @@ function core.load_plugins()
       end
     end
   end
-  if not defaults_loaded then load_defaults_plugin(load_start) end
+  if not defaults_loaded and not load_defaults_plugin() then return false, refused_list end
   core.log_quiet(
     "Loaded all plugins in %.1fms",
     (system.get_time() - load_start) * 1000
