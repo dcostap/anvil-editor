@@ -215,7 +215,7 @@ local function start_model_build(docview, doc, max_sticky_lines)
     local change_id = doc:get_change_id()
     local slice_start = system.get_time()
     local slice_lines = 0
-    local slice_budget = 0.0015
+    local slice_budget = 0.001
 
     for line = 1, #doc.lines do
       if doc:get_change_id() ~= change_id then break end
@@ -233,7 +233,7 @@ local function start_model_build(docview, doc, max_sticky_lines)
       end
       line_scope[line] = stack[#stack]
       slice_lines = slice_lines + 1
-      if slice_lines >= 100 or (slice_lines % 25 == 0 and system.get_time() - slice_start >= slice_budget) then
+      if slice_lines >= 50 or (slice_lines % 10 == 0 and system.get_time() - slice_start >= slice_budget) then
         coroutine.yield()
         slice_start = system.get_time()
         slice_lines = 0

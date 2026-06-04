@@ -309,9 +309,17 @@ core.add_thread(function()
     if doc.disable_symbols then return syntax_symbols end
     local i = 1
     local symbols_count = 0
+    local scanned_symbols = 0
     local symbol_pattern = doc:get_symbol_pattern()
+    local slice_start = system.get_time()
+    local slice_budget = 0.001
     while i <= #doc.lines do
       for sym in doc.lines[i]:gmatch(symbol_pattern) do
+        scanned_symbols = scanned_symbols + 1
+        if scanned_symbols % 200 == 0 and system.get_time() - slice_start >= slice_budget then
+          coroutine.yield()
+          slice_start = system.get_time()
+        end
         if not s[sym] and not syntax_symbols[sym] then
           symbols_count = symbols_count + 1
           if symbols_count > max_symbols then
@@ -335,7 +343,10 @@ core.add_thread(function()
         end
       end
       i = i + 1
-      if i % 100 == 0 then coroutine.yield() end
+      if i % 25 == 0 and system.get_time() - slice_start >= slice_budget then
+        coroutine.yield()
+        slice_start = system.get_time()
+      end
     end
     return s
   end
