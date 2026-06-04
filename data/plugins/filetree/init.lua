@@ -41,7 +41,9 @@ local function save_sort_mode(sort_mode)
 end
 
 local filetree_config = config.plugins.filetree
-filetree_config.sort_mode = normalize_sort_mode(load_saved_sort_mode() or filetree_config.sort_mode) or DEFAULT_SORT_MODE
+filetree_config.sort_mode = normalize_sort_mode(filetree_config.sort_mode)
+  or load_saved_sort_mode()
+  or DEFAULT_SORT_MODE
 
 local INDENT = 1
 local INDENT_TEXT = "\t"

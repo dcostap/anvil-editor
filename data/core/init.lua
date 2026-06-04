@@ -948,6 +948,10 @@ local function env_disabled_plugin_names()
   return disabled
 end
 
+local mandatory_plugins = {
+  anvil_defaults = true,
+}
+
 function core.load_plugins()
   local no_errors = true
   local env_disabled_plugins = env_disabled_plugin_names()
@@ -985,28 +989,36 @@ function core.load_plugins()
       local rlist = plugin.file:find(USERDIR, 1, true) == 1
         and 'userdir' or 'datadir'
       table.insert(refused_list[rlist].plugins, plugin)
-    elseif env_disabled_plugins[plugin.name:lower()] then
-      core.log_quiet("Skipped plugin %q from ANVIL_DISABLE_PLUGINS", plugin.name)
-    elseif config.plugins[plugin.name] ~= false then
-      local start = system.get_time()
-      local ok, loaded_plugin = core.try(plugin.load, plugin)
-      if ok then
-        local plugin_version = ""
-        if plugin.version_string and  plugin.version_string ~= MOD_VERSION_STRING then
-          plugin_version = "["..plugin.version_string.."]"
+    else
+      local mandatory = mandatory_plugins[plugin.name:lower()]
+      local plugin_config = config.plugins[plugin.name]
+      if mandatory and (env_disabled_plugins[plugin.name:lower()] or plugin_config == false) then
+        core.log_quiet("Mandatory plugin %q cannot be disabled; loading it anyway", plugin.name)
+        plugin_config = {}
+      end
+      if env_disabled_plugins[plugin.name:lower()] and not mandatory then
+        core.log_quiet("Skipped plugin %q from ANVIL_DISABLE_PLUGINS", plugin.name)
+      elseif plugin_config ~= false then
+        local start = system.get_time()
+        local ok, loaded_plugin = core.try(plugin.load, plugin)
+        if ok then
+          local plugin_version = ""
+          if plugin.version_string and  plugin.version_string ~= MOD_VERSION_STRING then
+            plugin_version = "["..plugin.version_string.."]"
+          end
+          core.log_quiet(
+            "Loaded plugin %q%s from %s in %.1fms",
+            plugin.name,
+            plugin_version,
+            common.dirname(plugin.file),
+            (system.get_time() - start) * 1000
+          )
+          if plugin_config.onload then
+            core.try(plugin_config.onload, loaded_plugin)
+          end
+        else
+          no_errors = false
         end
-        core.log_quiet(
-          "Loaded plugin %q%s from %s in %.1fms",
-          plugin.name,
-          plugin_version,
-          common.dirname(plugin.file),
-          (system.get_time() - start) * 1000
-        )
-        if config.plugins[plugin.name].onload then
-          core.try(config.plugins[plugin.name].onload, loaded_plugin)
-        end
-      else
-        no_errors = false
       end
     end
   end

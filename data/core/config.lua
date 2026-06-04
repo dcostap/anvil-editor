@@ -418,9 +418,9 @@ local plugins_config = {}
 ---A table containing configuration for all the plugins.
 ---
 ---This is a metatable that automaticaly creates a minimal
----configuration when a plugin is initially configured.
----Each plugins will then call `common.merge()` to get the finalized
----plugin config.
+---configuration table when a plugin is initially configured. First-party
+---plugin defaults are populated by the mandatory `anvil_defaults` plugin;
+---plugin modules should read their finalized config from this table.
 ---Do not use raw operations on this table.
 ---@type table
 config.plugins = {}

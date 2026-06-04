@@ -67,7 +67,6 @@ plugin_defaults("filetree", {
   folder_color = nil,
   folder_row_background = { common.color "rgba(220, 220, 220, 0.05)" },
   show_line_hints = true,
-  sort_mode = "name",
 })
 plugin_defaults("findfile", {
   show_recent = true,
