@@ -542,11 +542,11 @@ end
 ---@return number x
 ---@return number y
 function common.draw_text(font, color, text, align, x,y,w,h)
-  local tw, th = font:get_width(text), font:get_height()
+  local th = font:get_height()
   if align == "center" then
-    x = x + (w - tw) / 2
+    x = x + (w - font:get_width(text)) / 2
   elseif align == "right" then
-    x = x + (w - tw)
+    x = x + (w - font:get_width(text))
   end
   y = common.round(y + (h - th) / 2)
   return renderer.draw_text(font, text, x, y, color), y + th, x, y

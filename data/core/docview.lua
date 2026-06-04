@@ -1438,7 +1438,8 @@ function DocView:draw_line_text(line, x, y)
   local function flush_pending_text()
     if not pending_font then return false end
     local draw_text_start = stats and system.get_time()
-    tx = renderer.draw_text(pending_font, table.concat(pending_chunks), tx, ty, pending_color, {tab_offset = tx - start_tx})
+    local text = #pending_chunks == 1 and pending_chunks[1] or table.concat(pending_chunks)
+    tx = renderer.draw_text(pending_font, text, tx, ty, pending_color, {tab_offset = tx - start_tx})
     if stats then
       stats.draw_text_calls = stats.draw_text_calls + 1
       stats.renderer_draw_text_ms = stats.renderer_draw_text_ms + (system.get_time() - draw_text_start) * 1000
