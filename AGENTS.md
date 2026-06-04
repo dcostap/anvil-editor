@@ -60,7 +60,7 @@ Unset `ANVIL_RENDERER`, or set it to `d3d11`, to use the default D3D11 path. D3D
 The old personal `~\.config\anvil` workflow has been promoted into the fork:
 
 - bundled plugins: `data\plugins`
-- bundled theme: `data\colors\onedark.lua`
+- bundled default theme/style schema: `data\colors\default.lua`
 - first-party startup defaults: `data\plugins\anvil_defaults.lua`
 
 `anvil_defaults.lua` replaces the old user `init.lua` for the default Anvil experience. Keep personal machine-only state out of the repo, such as sessions, logs, caches, and fuzzy-search recent command history.
@@ -69,7 +69,7 @@ The old personal `~\.config\anvil` workflow has been promoted into the fork:
 
 Bundled Anvil plugins are first-party code in this fork. Do not hardcode fallback defaults inside first-party plugin modules for config/style keys they use. Put first-party defaults in the defaults layer instead:
 
-- style/color defaults belong in `data\colors\default.lua`; theme-specific overrides belong in theme files such as `data\colors\onedark.lua`
+- style/color defaults belong in `data\colors\default.lua`; theme-specific overrides belong in other theme files under `data\colors`
 - behavior/config defaults belong in `data\plugins\anvil_defaults.lua` or another explicit first-party defaults file if one is introduced
 
 First-party plugin code may assume its required first-party config/style keys exist after the defaults layer has loaded. Third-party/user plugins may still define their own fallback defaults for keys they own, because those keys are outside the first-party schema.

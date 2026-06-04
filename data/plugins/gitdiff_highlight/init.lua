@@ -5,7 +5,6 @@ local core = require "core"
 local config = require "core.config"
 local DocView = require "core.docview"
 local Doc = require "core.doc"
-local common = require "core.common"
 local command = require "core.command"
 local style = require "core.style"
 local ranges = require "plugins.gitdiff_highlight.ranges"
@@ -27,14 +26,6 @@ plugin_config.max_diff_cells = plugin_config.max_diff_cells or 2 * 1000 * 1000
 plugin_config.max_diff_lines = plugin_config.max_diff_lines or 50000
 plugin_config.overview = plugin_config.overview ~= false
 plugin_config.gutter = plugin_config.gutter ~= false
-
--- vscode defaults
-style.gitdiff_addition = style.gitdiff_addition or { common.color "#587c0c" }
-style.gitdiff_modification = style.gitdiff_modification or { common.color "#0c7d9d" }
-style.gitdiff_deletion = style.gitdiff_deletion or { common.color "#94151b" }
-style.gitdiff_width = style.gitdiff_width or 3
-style.gitdiff_overview_min_height = style.gitdiff_overview_min_height or math.max(2, 2 * SCALE)
-style.gitdiff_overview_extra_width = style.gitdiff_overview_extra_width or math.max(4, 4 * SCALE)
 
 local function color_for_diff(diff)
 	if diff == "addition" then

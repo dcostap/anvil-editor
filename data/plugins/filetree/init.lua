@@ -66,14 +66,6 @@ local MONTH_NAMES = {
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 }
 
-style.filetree_git_ignored = style.filetree_git_ignored or { common.color "#5f6368" }
-style.filetree_git_untracked = style.filetree_git_untracked or { common.color "#c98282" }
-style.filetree_git_added = style.filetree_git_added or (style.gitdiff_addition or { common.color "#587c0c" })
-style.filetree_git_modified = style.filetree_git_modified or { common.color "#3b82f6" }
-style.filetree_git_deleted = style.filetree_git_deleted or { common.color "#c98282" }
-style.filetree_git_additions = style.filetree_git_additions or (style.gitdiff_addition or { common.color "#587c0c" })
-style.filetree_git_deletions = style.filetree_git_deletions or (style.gitdiff_deletion or { common.color "#94151b" })
-
 local function indent_prefix(level)
   return string.rep(INDENT_TEXT, level)
 end
@@ -1901,10 +1893,10 @@ function FileTreeView:draw_line_gutter(line, x, y, width)
   self:draw_folder_row_background(line, self.position.x, y, gw)
   local status = self:get_line_status(line)
   if status then
-    local color = status == "addition" and (style.gitdiff_addition or { common.color "#587c0c" })
-      or status == "modification" and (style.gitdiff_modification or { common.color "#0c7d9d" })
-      or (style.gitdiff_deletion or { common.color "#94151b" })
-    local w = style.gitdiff_width or 3
+    local color = status == "addition" and style.gitdiff_addition
+      or status == "modification" and style.gitdiff_modification
+      or style.gitdiff_deletion
+    local w = style.gitdiff_width
     renderer.draw_rect(x + style.padding.x * 0.5, y, w, lh, color)
   end
   return lh

@@ -1190,12 +1190,19 @@ end
 function core.reload_module(name)
   local old = package.loaded[name]
   local is_color_scheme = name:match("^colors%..*")
-  package.loaded[name] = nil
-  -- clear previous color scheme syntax symbols
+
+  -- Every color scheme is layered over colors.default so first-party style
+  -- keys always have baseline values when users switch themes.
   if is_color_scheme then
     setmetatable(style.syntax, nil)
     map_new_syntax_colors(true)
+    if name ~= "colors.default" then
+      package.loaded["colors.default"] = nil
+      require "colors.default"
+    end
   end
+
+  package.loaded[name] = nil
   local new = require(name)
   if type(old) == "table" then
     for k, v in pairs(new) do old[k] = v end

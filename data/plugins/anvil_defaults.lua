@@ -5,8 +5,6 @@ local config = require "core.config"
 config.plugins.editor_wallpaper = false
 local keymap = require "core.keymap"
 local style = require "core.style"
--- Theme.
-core.reload_module("colors.onedark")
 -- IntelliJ-style custom actions/keybindings and local workflow plugins.
 require "plugins.intellij_actions"
 require "plugins.edit_location_history"
