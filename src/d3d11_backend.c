@@ -1163,6 +1163,7 @@ bool anvil_d3d11_push_rect_grid(SDL_Window *window, float x, float y, float step
   if (first < 0) first = 0;
   if (last > count - 1) last = count - 1;
   if (last < first) return true;
+  g_d3d11.stats.frame.rect_pushes += last - first + 1;
 
   float cr = color.r / 255.0f;
   float cg = color.g / 255.0f;
