@@ -1,10 +1,132 @@
 -- mod-version:3 priority:1
 -- Anvil first-party defaults, promoted from the old ~/.config/anvil/init.lua.
 local core = require "core"
+local common = require "core.common"
 local config = require "core.config"
 config.plugins.editor_wallpaper = false
 local keymap = require "core.keymap"
 local style = require "core.style"
+
+local function plugin_defaults(name, defaults)
+  if config.plugins[name] ~= false then
+    config.plugins[name] = common.merge(defaults, config.plugins[name] or {})
+  end
+end
+
+plugin_defaults("autoreload", {
+  always_show_nagview = false,
+})
+plugin_defaults("autorestart", {
+  reload_type = "ask",
+})
+plugin_defaults("autosave_fast", {
+  enabled = true,
+  timeout = 3,
+  hide_dirty_markers = true,
+})
+plugin_defaults("autocomplete", {
+  min_len = 3,
+  max_height = 6,
+  max_suggestions = 100,
+  max_symbols = 4000,
+  suggestions_scope = "global",
+  desc_font_size = 12,
+  hide_icons = false,
+  icon_position = "left",
+  hide_info = false,
+})
+plugin_defaults("column_guides", {
+  enabled = true,
+  columns = { 100, 150 },
+})
+plugin_defaults("centered_editor", {
+  enabled = true,
+  max_width = 1200,
+  scale_width = true,
+  min_margin = 0,
+  main_tabs_only = true,
+})
+plugin_defaults("command_slots", {
+  max_output_bytes = 10 * 1024 * 1024,
+  max_output_history = 100,
+  max_history = 100,
+  prewarm = true,
+  strip_ansi = true,
+  powershell_candidates = { "pwsh.exe", "powershell.exe" },
+})
+plugin_defaults("diffview", {
+  log_times = false,
+  plain_text = false,
+  plain_text_color = { common.color "#ffffff" },
+})
+plugin_defaults("filetree", {
+  size = 650 * SCALE,
+  visible = false,
+  show_hidden = false,
+  delete_to_trash = PLATFORM == "Windows",
+  folder_color = nil,
+  folder_row_background = { common.color "rgba(220, 220, 220, 0.05)" },
+  show_line_hints = true,
+  sort_mode = "name",
+})
+plugin_defaults("findfile", {
+  show_recent = true,
+  enable_cache = false,
+  cache_expiration = 60,
+})
+plugin_defaults("gitdiff_highlight", {
+  git_path = "git",
+  local_diff_debounce_ms = 200,
+  max_file_size = 2 * 1024 * 1024,
+  max_diff_cells = 2 * 1000 * 1000,
+  max_diff_lines = 50000,
+  overview = true,
+  gutter = true,
+})
+plugin_defaults("ipc", {
+  single_instance = true,
+  dirs_instance = "new",
+})
+plugin_defaults("language_lua", {
+  annotations = true,
+})
+plugin_defaults("lineguide", {
+  enabled = false,
+  width = 2,
+  rulers = { config.line_limit },
+  use_custom_color = false,
+  custom_color = style.selection,
+})
+plugin_defaults("linewrapping", {
+  mode = "letter",
+  width_override = nil,
+  guide = true,
+  guide_color = nil,
+  indent = true,
+  wrapping_indent = 0,
+  enable_by_default = false,
+  require_tokenization = false,
+})
+plugin_defaults("projectsearch", {
+  threading = {
+    workers = math.ceil(thread.get_cpu_count() / 2) + 1,
+  },
+  live_search = false,
+  syntax_highlighting = true,
+})
+plugin_defaults("scale", {
+  autodetect = true,
+  default_scale = DEFAULT_SCALE,
+  use_mousewheel = true,
+})
+plugin_defaults("search_ui", {
+  replace_core_find = true,
+  position = "bottom",
+})
+plugin_defaults("trimwhitespace", {
+  enabled = false,
+  trim_empty_end_lines = false,
+})
 -- IntelliJ-style custom actions/keybindings and local workflow plugins.
 require "plugins.intellij_actions"
 require "plugins.edit_location_history"
@@ -66,7 +188,6 @@ keymap.add_direct({
   ["ctrl+shift+D"] = "doc:go-to-line",
 })
 -- Wrap long lines at word boundaries and visually indent continuations.
-config.plugins.linewrapping = config.plugins.linewrapping or {}
 config.plugins.linewrapping.mode = "word"
 config.plugins.linewrapping.indent = true
 config.plugins.linewrapping.wrapping_indent = 6

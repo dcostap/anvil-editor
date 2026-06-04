@@ -28,25 +28,7 @@ local translate = require "core.doc.translate"
 ---@field enable_by_default boolean
 ---Requires tokenization
 ---@field require_tokenization boolean
-config.plugins.linewrapping = common.merge({
-	-- The type of wrapping to perform. Can be "letter" or "word".
-  mode = "letter",
-	-- If nil, uses the DocView's size, otherwise, uses this exact width. Can be a function.
-  width_override = nil,
-	-- Whether or not to draw a guide
-  guide = true,
-  -- Color used for the wrapping guide. Falls back to the whitespace indicator color.
-  guide_color = nil,
-  -- Whether or not we should indent ourselves like the first line of a wrapped block.
-  indent = true,
-  -- Extra visual spaces added before wrapped continuation lines.
-  wrapping_indent = 0,
-  -- Whether or not to enable wrapping by default when opening files.
-  enable_by_default = false,
-  -- Requires tokenization
-  require_tokenization = false,
-  -- The config specification used by gui generators
-  config_spec = {
+config.plugins.linewrapping.config_spec = {
     name = "Line Wrapping",
     {
       label = "Mode",
@@ -95,7 +77,6 @@ config.plugins.linewrapping = common.merge({
       default = false
     }
   }
-}, config.plugins.linewrapping)
 
 ---@class plugins.linewrapping
 local LineWrapping = {}

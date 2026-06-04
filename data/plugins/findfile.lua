@@ -16,12 +16,7 @@ local DocView = require "core.docview"
 ---@field enable_cache boolean
 ---Amount of minutes before having to re-index project files.
 ---@field cache_expiration number
-config.plugins.findfile = common.merge({
-  show_recent = true,
-  enable_cache = false,
-  cache_expiration = 60,
-  -- The config specification used by gui generators
-  config_spec = {
+config.plugins.findfile.config_spec = {
     name = "Find File",
     {
       label = "Show Recent Files",
@@ -46,7 +41,6 @@ config.plugins.findfile = common.merge({
       min = 1
     }
   }
-}, config.plugins.findfile)
 
 local project_files = {}
 local refresh_files = false

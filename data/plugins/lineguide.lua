@@ -1,5 +1,4 @@
 -- mod-version:3
-local common = require "core.common"
 local command = require "core.command"
 local config = require "core.config"
 local style = require "core.style"
@@ -17,19 +16,7 @@ local DocView = require "core.docview"
 ---@field use_custom_color boolean
 ---Applied when `use_custom_color` is enabled.
 ---@field custom_color renderer.color
-config.plugins.lineguide = common.merge({
-  enabled = false,
-  width = 2,
-  rulers = {
-    -- 80,
-    -- 100,
-    -- 120,
-    config.line_limit
-  },
-  use_custom_color = false,
-  custom_color = style.selection,
-  -- The config specification used by gui generators
-  config_spec = {
+config.plugins.lineguide.config_spec = {
     name = "Line Guide",
     {
       label = "Enabled",
@@ -92,7 +79,6 @@ config.plugins.lineguide = common.merge({
       default = style.selection
     },
   }
-}, config.plugins.lineguide)
 
 local function get_ruler(v)
   local result = nil

@@ -23,11 +23,7 @@ local MESSAGE_EXPIRATION=3
 ---@field single_instance boolean
 ---Control how to open directories in single instance mode.
 ---@field dirs_instance '"new"' | '"add"' | '"change"'
-config.plugins.ipc = common.merge({
-  single_instance = true,
-  dirs_instance = "new",
-  -- The config specification used by the settings gui
-  config_spec = {
+config.plugins.ipc.config_spec = {
     name = "Inter-process communication",
     {
       label = "Single Instance",
@@ -49,7 +45,6 @@ config.plugins.ipc = common.merge({
       }
     }
   }
-}, config.plugins.ipc)
 
 ---@alias plugins.ipc.onmessageread fun(message: plugins.ipc.message) | nil
 ---@alias plugins.ipc.onreplyread fun(reply: plugins.ipc.reply) | nil

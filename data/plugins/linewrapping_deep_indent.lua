@@ -7,9 +7,6 @@ local style = require "core.style"
 local DocView = require "core.docview"
 local LineWrapping = require "plugins.linewrapping"
 
-config.plugins.linewrapping = config.plugins.linewrapping or {}
-config.plugins.linewrapping.wrapping_indent = config.plugins.linewrapping.wrapping_indent or "deepIndent"
-
 local function get_tokens(doc, line)
   if config.plugins.linewrapping.require_tokenization then
     return doc.highlighter:each_token(line)

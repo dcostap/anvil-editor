@@ -15,14 +15,7 @@ local SearchReplaceList = require "widget.searchreplacelist"
 local TextBox = require "widget.textbox"
 local ToggleButton = require "widget.togglebutton"
 
-config.plugins.projectsearch = common.merge({
-  threading = {
-    workers = math.ceil(thread.get_cpu_count() / 2) + 1
-  },
-  live_search = false,
-  syntax_highlighting = true,
-  -- The config specification used by gui generators
-  config_spec = {
+config.plugins.projectsearch.config_spec = {
     name = "Project Search",
     {
       label = "Workers",
@@ -47,7 +40,6 @@ config.plugins.projectsearch = common.merge({
       default = true
     }
   }
-}, config.plugins.projectsearch)
 
 ---Unique id used to allow multiple threaded searches to be launched
 ---@type integer

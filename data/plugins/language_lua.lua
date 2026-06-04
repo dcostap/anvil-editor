@@ -1,5 +1,4 @@
 -- mod-version:3
-local common = require "core.common"
 local config = require "core.config"
 local syntax = require "core.syntax"
 
@@ -270,10 +269,7 @@ local annotations_pattern = {
   type = "comment"
 }
 
-config.plugins.language_lua = common.merge({
-  annotations = true,
-  -- The config specification used by the settings gui
-  config_spec = {
+config.plugins.language_lua.config_spec = {
     name = "Language Lua",
     {
       label = "Annotations",
@@ -293,7 +289,6 @@ config.plugins.language_lua = common.merge({
       end
     }
   }
-}, config.plugins.language_lua)
 
 syntax.add {
   name = "Lua",

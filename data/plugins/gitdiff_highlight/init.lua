@@ -14,18 +14,9 @@ local function pack_results(...)
 	return { n = select("#", ...), ... }
 end
 
-config.plugins.gitdiff_highlight = config.plugins.gitdiff_highlight or {}
 local plugin_config = config.plugins.gitdiff_highlight
 
 local gitdiff_highlight = {}
-
-plugin_config.git_path = plugin_config.git_path or "git"
-plugin_config.local_diff_debounce_ms = plugin_config.local_diff_debounce_ms or 200
-plugin_config.max_file_size = plugin_config.max_file_size or 2 * 1024 * 1024
-plugin_config.max_diff_cells = plugin_config.max_diff_cells or 2 * 1000 * 1000
-plugin_config.max_diff_lines = plugin_config.max_diff_lines or 50000
-plugin_config.overview = plugin_config.overview ~= false
-plugin_config.gutter = plugin_config.gutter ~= false
 
 local function color_for_diff(diff)
 	if diff == "addition" then

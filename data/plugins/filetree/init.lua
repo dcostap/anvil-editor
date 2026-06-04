@@ -40,19 +40,8 @@ local function save_sort_mode(sort_mode)
   })
 end
 
-local filetree_config = common.merge({
-  size = 650 * SCALE,
-  visible = false,
-  show_hidden = false,
-  delete_to_trash = PLATFORM == "Windows",
-  folder_color = nil,
-  folder_row_background = { common.color "rgba(220, 220, 220, 0.05)" },
-  show_line_hints = true,
-  sort_mode = load_saved_sort_mode() or DEFAULT_SORT_MODE,
-}, config.plugins.filetree)
-filetree_config.sort_mode = normalize_sort_mode(filetree_config.sort_mode) or DEFAULT_SORT_MODE
-config.plugins.filetree = filetree_config
-filetree_config = config.plugins.filetree
+local filetree_config = config.plugins.filetree
+filetree_config.sort_mode = normalize_sort_mode(load_saved_sort_mode() or filetree_config.sort_mode) or DEFAULT_SORT_MODE
 
 local INDENT = 1
 local INDENT_TEXT = "\t"
@@ -1842,6 +1831,9 @@ function FileTreeView:get_line_hint(line)
     }
   elseif git and git.kind == "ignored" then
     segments[#segments + 1] = { text = "ignored   ", font = font, color = style.filetree_git_ignored }
+  end
+  if #segments == 0 then
+    return { text = text, font = font, color = dim }
   end
   segments[#segments + 1] = { text = text, font = font, color = dim }
   return segments

@@ -1,7 +1,6 @@
 -- mod-version:3
 -- priority:110
 local core = require "core"
-local common = require "core.common"
 local command = require "core.command"
 local config = require "core.config"
 local style = require "core.style"
@@ -13,10 +12,7 @@ local DocView = require "core.docview"
 ---@field enabled boolean
 ---Character columns where guides are drawn.
 ---@field columns table<integer,integer>
-config.plugins.column_guides = common.merge({
-  enabled = true,
-  columns = { 100, 150 },
-  config_spec = {
+config.plugins.column_guides.config_spec = {
     name = "Column Guides",
     {
       label = "Enabled",
@@ -51,8 +47,7 @@ config.plugins.column_guides = common.merge({
         return values
       end,
     },
-  },
-}, config.plugins.column_guides)
+  }
 
 local function guide_color()
   return style.whitespace

@@ -14,15 +14,6 @@ local style = require "core.style"
 ---@field default_scale number
 ---Allow using CTRL + MouseWheel for changing the scale.
 ---@field use_mousewheel boolean
-config.plugins.scale = common.merge({
-  -- Toggle auto detection of system scale.
-  autodetect = true,
-  -- Default scale applied at startup.
-  default_scale = DEFAULT_SCALE,
-  -- Allow using CTRL + MouseWheel for changing the scale.
-  use_mousewheel = true
-}, config.plugins.scale)
-
 local scale_steps = 0.05
 local current_scale = SCALE
 local current_code_scale = SCALE

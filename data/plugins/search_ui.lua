@@ -35,10 +35,7 @@ local inside_node = false
 ---@field replace_core_find boolean
 ---Location of search interface.
 ---@field position "top" | "right" | "bottom"
-config.plugins.search_ui = common.merge({
-  replace_core_find = true,
-  position = "bottom",
-  config_spec = {
+config.plugins.search_ui.config_spec = {
     name = "Search User Interface",
     {
       label = "Replace Core Find",
@@ -67,7 +64,6 @@ config.plugins.search_ui = common.merge({
       end
     }
   }
-}, config.plugins.search_ui)
 
 ---@type core.docview
 local doc_view

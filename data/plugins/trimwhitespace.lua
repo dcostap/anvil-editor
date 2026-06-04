@@ -1,5 +1,4 @@
 -- mod-version:3
-local common = require "core.common"
 local config = require "core.config"
 local command = require "core.command"
 local Doc = require "core.doc"
@@ -10,10 +9,7 @@ local Doc = require "core.doc"
 ---@field enabled boolean
 ---Remove any empty new lines at the end of documents.
 ---@field trim_empty_end_lines boolean
-config.plugins.trimwhitespace = common.merge({
-  enabled = false,
-  trim_empty_end_lines = false,
-  config_spec = {
+config.plugins.trimwhitespace.config_spec = {
     name = "Trim Whitespace",
     {
       label = "Enabled",
@@ -30,7 +26,6 @@ config.plugins.trimwhitespace = common.merge({
       default = false
     }
   }
-}, config.plugins.trimwhitespace)
 
 ---@class plugins.trimwhitespace
 local trimwhitespace = {}

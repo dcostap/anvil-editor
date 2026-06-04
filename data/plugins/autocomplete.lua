@@ -75,27 +75,7 @@ local cache = setmetatable({}, { __mode = "k" })
 ---@field icon_position "left" | "right"
 ---Do not show the additional information related to a suggestion
 ---@field hide_info boolean
-config.plugins.autocomplete = common.merge({
-  -- Amount of characters that need to be written for autocomplete
-  min_len = 3,
-  -- The max amount of visible items
-  max_height = 6,
-  -- The max amount of scrollable items
-  max_suggestions = 100,
-  -- Maximum amount of symbols to cache per document
-  max_symbols = 4000,
-  -- Which symbols to show on the suggestions list: global, local, related, none
-  suggestions_scope = "global",
-  -- Font size of the description box
-  desc_font_size = 12,
-  -- Do not show the icons associated to the suggestions
-  hide_icons = false,
-  -- Position where icons will be displayed on the suggestions list
-  icon_position = "left",
-  -- Do not show the additional information related to a suggestion
-  hide_info = false,
-  -- The config specification used by gui generators
-  config_spec = {
+config.plugins.autocomplete.config_spec = {
     name = "Autocomplete",
     {
       label = "Minimum Length",
@@ -187,7 +167,6 @@ config.plugins.autocomplete = common.merge({
       default = false
     }
   }
-}, config.plugins.autocomplete)
 
 ---@class plugins.autocomplete
 local autocomplete = {}

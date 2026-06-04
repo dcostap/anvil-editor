@@ -6,13 +6,7 @@ local config = require "core.config"
 local style = require "core.style"
 local DocView = require "core.docview"
 
-config.plugins.centered_editor = config.plugins.centered_editor or {}
 local centered_editor = config.plugins.centered_editor
-if centered_editor.enabled == nil then centered_editor.enabled = true end
-centered_editor.max_width = centered_editor.max_width or 1200
-centered_editor.scale_width = centered_editor.scale_width ~= false
-centered_editor.min_margin = centered_editor.min_margin or 0
-centered_editor.main_tabs_only = centered_editor.main_tabs_only ~= false
 
 local M = {}
 
@@ -35,7 +29,6 @@ if originals then
     end
   end
   if originals.linewrapping_width_override_marker then
-    config.plugins.linewrapping = config.plugins.linewrapping or {}
     config.plugins.linewrapping.width_override = originals.linewrapping_width_override
   end
 else
@@ -290,7 +283,6 @@ end
 
 -- If the official linewrapping plugin is active and the user has not supplied
 -- an override, wrap to the centered lane instead of the full tab width.
-config.plugins.linewrapping = config.plugins.linewrapping or {}
 if config.plugins.linewrapping.width_override == nil then
   originals.linewrapping_width_override = config.plugins.linewrapping.width_override
   originals.linewrapping_width_override_marker = true

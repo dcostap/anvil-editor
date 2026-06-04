@@ -11,16 +11,7 @@ if config.plugins.autosave_fast == false then
   return { enabled = false, save_all_dirty = function() return 0 end }
 end
 
-local autosave_fast = common.merge({
-  enabled = true,
-  -- Save after this many seconds with no further edits.
-  timeout = 3,
-  -- IntelliJ-style autosave keeps normal file tabs visually clean: dirty
-  -- file-backed docs are saved automatically, so don't expose a transient
-  -- unsaved marker while the idle timer has not fired yet.
-  hide_dirty_markers = true,
-}, type(config.plugins.autosave_fast) == "table" and config.plugins.autosave_fast or {})
-config.plugins.autosave_fast = autosave_fast
+local autosave_fast = config.plugins.autosave_fast
 
 if autosave_fast.enabled == false then
   return { enabled = false, save_all_dirty = function() return 0 end }

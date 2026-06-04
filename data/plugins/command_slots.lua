@@ -29,18 +29,8 @@ local SLOT_DEFS = {
 local STORAGE_MODULE = "command-slots"
 local DONE_PREFIX = "__ANVIL_COMMAND_SLOT_DONE__"
 local MARKER_TAIL_BYTES = 512
-local DEFAULT_MAX_OUTPUT_BYTES = 10 * 1024 * 1024
 local READ_CHUNK_BYTES = 8192
 local COMMAND_OUTPUT_PANEL_VERSION = 2
-
-config.plugins.command_slots = common.merge({
-  max_output_bytes = DEFAULT_MAX_OUTPUT_BYTES,
-  max_output_history = 100,
-  max_history = 100,
-  prewarm = true,
-  strip_ansi = true,
-  powershell_candidates = { "pwsh.exe", "powershell.exe" },
-}, config.plugins.command_slots or {})
 
 M.slots = M.slots or {}
 M.project_state_cache = M.project_state_cache or {}
@@ -765,7 +755,7 @@ local function append_to_output(slot, text, force)
     return
   end
 
-  local max_bytes = tonumber(config.plugins.command_slots.max_output_bytes) or DEFAULT_MAX_OUTPUT_BYTES
+  local max_bytes = tonumber(config.plugins.command_slots.max_output_bytes)
   if slot.truncated or slot.output_bytes >= max_bytes then
     slot.truncated = true
     return

@@ -17,11 +17,7 @@ local View = require "core.view"
 ---@field plain_text boolean
 ---The color used on changed lines when plain text is enabled.
 ---@field plain_text_color renderer.color
-config.plugins.diffview = common.merge({
-  log_times = false,
-  plain_text = false,
-  plain_text_color = { common.color "#ffffff" },
-  config_spec = {
+config.plugins.diffview.config_spec = {
     name = "Differences Viewer",
     {
       label = "Log Times",
@@ -45,7 +41,6 @@ config.plugins.diffview = common.merge({
       default = { common.color "#ffffff" }
     }
   }
-}, config.plugins.diffview)
 
 ---@type string?
 local element_a = nil

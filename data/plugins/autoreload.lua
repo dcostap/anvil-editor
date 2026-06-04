@@ -10,9 +10,7 @@ local DirWatch = require "core.dirwatch"
 ---@class config.plugins.autoreload
 ---Always ask before auto-reloading a file that changed.
 ---@field always_show_nagview boolean
-config.plugins.autoreload = common.merge({
-  always_show_nagview = false,
-  config_spec = {
+config.plugins.autoreload.config_spec = {
     name = "Autoreload",
     {
       label = "Always Show Nagview",
@@ -23,7 +21,6 @@ config.plugins.autoreload = common.merge({
       default = false
     }
   }
-}, config.plugins.autoreload)
 
 local watch = DirWatch()
 local times = setmetatable({}, { __mode = "k" })

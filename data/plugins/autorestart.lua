@@ -10,9 +10,7 @@ local common = require "core.common"
 ---@class config.plugins.autorestart
 ---The type of reload to perform.
 ---@field reload_type "ask" | "reload" | "restart"
-config.plugins.autorestart = common.merge({
-  reload_type = "ask",
-  config_spec = {
+config.plugins.autorestart.config_spec = {
     name = "Autorestart",
     {
       label = "Reload Type",
@@ -27,7 +25,6 @@ config.plugins.autorestart = common.merge({
       }
     }
   }
-}, config.plugins.autorestart)
 
 local save = Doc.save
 Doc.save = function(self, ...)
