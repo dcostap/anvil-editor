@@ -26,7 +26,7 @@ Use the BAT files in the repo root
   - first-time setup
   - builds the editor
   - installs a dev portable app to `C:\Projects\c_projects\anvil-portable`
-  - creates Windows junctions so portable `data\plugins` and `data\colors` point back to this repo
+  - creates Windows junctions so portable `data\core`, `data\plugins`, and `data\colors` point back to this repo
   - launches the app
 
 - `update-anvil-dev-build.bat`
@@ -63,16 +63,34 @@ The old personal `~\.config\anvil` workflow has been promoted into the fork:
 - bundled default theme/style schema: `data\colors\default.lua`
 - first-party startup defaults: `data\plugins\anvil_defaults.lua`
 
-`anvil_defaults.lua` replaces the old user `init.lua` for the default Anvil experience. Keep personal machine-only state out of the repo, such as sessions, logs, caches, and fuzzy-search recent command history.
+`anvil_defaults.lua` replaces the old user `init.lua` for the default Anvil experience. It is mandatory first-party code and is loaded outside the normal plugin-disabling flow. The core/mandatory first-party plugin list is owned by `data\plugins\anvil_defaults.lua` through `core.first_party_core_plugins`; those plugins are part of this editor fork's core experience and should not be disabled through settings/plugin-disable flows.
+
+Keep personal machine-only state out of the repo, such as app state, workspace data, logs, caches, and fuzzy-search recent command history.
+
+### DATADIR vs USERDIR in the dev portable install
+
+`DATADIR` is the bundled app data root. In the dev portable install, the editable data directories are Windows junctions back to this repo:
+
+- `anvil-portable\data\core    -> anvil-editor\data\core`
+- `anvil-portable\data\plugins -> anvil-editor\data\plugins`
+- `anvil-portable\data\colors  -> anvil-editor\data\colors`
+
+`USERDIR` is the portable/user state and local-config root:
+
+- `C:\Projects\c_projects\anvil-portable\user`
+
+User plugins and machine-local state belong under `USERDIR`. First-party core/default behavior, bundled plugins, and bundled theme/style schema belong under `DATADIR` in the repo.
 
 ### First-party defaults policy
 
-Bundled Anvil plugins are first-party code in this fork. Do not hardcode fallback defaults inside first-party plugin modules for config/style keys they use. Put first-party defaults in the defaults layer instead:
+Bundled Anvil plugins are first-party code in this fork. Since this is a personal customized editor, most plugins developed as part of the fork should be treated as core or mandatory unless there is a clear reason for them to be optional/user-owned. Do not hardcode fallback defaults inside first-party plugin modules for config/style keys they use. Put first-party defaults in the defaults layer instead:
 
 - style/color defaults belong in `data\colors\default.lua`; theme-specific overrides belong in other theme files under `data\colors`
 - behavior/config defaults belong in `data\plugins\anvil_defaults.lua` or another explicit first-party defaults file if one is introduced
 
 First-party plugin code may assume its required first-party config/style keys exist after the defaults layer has loaded. Third-party/user plugins may still define their own fallback defaults for keys they own, because those keys are outside the first-party schema.
+
+When adding or changing first-party plugin behavior, do not parameterize every constant by default. Promote a value into config/style only when it has a clear user-facing purpose and effect, and when it makes sense as something customizable now or likely to be changed on the fly/future-tuned. Once promoted, keep its default in the appropriate defaults file rather than in the plugin implementation.
 
 When adding a new first-party style key, ensure the base style schema remains complete so switching themes does not leave missing keys. Themes should override keys, not be the only place where required first-party keys are defined.
 
@@ -90,10 +108,11 @@ Built-in plugins live in this repo under `data\plugins`.
 
 The dev portable install uses junctions:
 
+- `anvil-portable\data\core    -> anvil-editor\data\core`
 - `anvil-portable\data\plugins -> anvil-editor\data\plugins`
 - `anvil-portable\data\colors  -> anvil-editor\data\colors`
 
-So plugin/color edits are made directly in the repo and can usually be reloaded in the running app without reinstalling.
+So core/plugin/color edits are made directly in the repo and can usually be reloaded in the running app without reinstalling.
 
 ### Lua syntax validation
 
