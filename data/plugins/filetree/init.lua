@@ -1817,7 +1817,7 @@ function FileTreeView:get_line_hint(line)
   if not text then return nil end
 
   local font = self:get_font()
-  local dim = style.dim or style.line_number2 or style.syntax.comment or style.text
+  local dim = style.dim
   local git = self:get_git_info_for_entry(entry)
   local segments = {}
   if git and git.stat and ((git.stat.additions or 0) > 0 or (git.stat.deletions or 0) > 0) then
@@ -1863,11 +1863,7 @@ function FileTreeView:draw_line_text(line, x, y)
   local git = self:get_git_info_for_line(line)
   local color = git and self:git_text_color(git.kind)
   if not color and self:line_is_dir(line) then
-    color = filetree_config.folder_color
-      or style.dim
-      or style.line_number2
-      or style.syntax.comment
-      or style.syntax.normal
+    color = filetree_config.folder_color or style.filetree_folder
   end
   if not color then
     return FileTreeView.super.draw_line_text(self, line, x, y)

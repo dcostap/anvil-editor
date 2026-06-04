@@ -18,7 +18,7 @@ local drawwhitespace = {
   color = style.whitespace,
   leading_color = style.whitespace,
   middle_color = nil,
-  trailing_color = style.whitespace_trailing or style.whitespace,
+  trailing_color = style.whitespace_trailing,
 
   substitutions = {
     {

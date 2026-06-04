@@ -57,7 +57,7 @@ plugin_defaults("command_slots", {
 plugin_defaults("diffview", {
   log_times = false,
   plain_text = false,
-  plain_text_color = { common.color "#ffffff" },
+  plain_text_color = style.diffview_plain_text,
 })
 plugin_defaults("filetree", {
   size = 650 * SCALE,
@@ -65,7 +65,7 @@ plugin_defaults("filetree", {
   show_hidden = false,
   delete_to_trash = PLATFORM == "Windows",
   folder_color = nil,
-  folder_row_background = { common.color "rgba(220, 220, 220, 0.05)" },
+  folder_row_background = style.filetree_folder_row_background,
   show_line_hints = true,
 })
 plugin_defaults("findfile", {

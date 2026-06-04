@@ -1418,8 +1418,8 @@ local function draw_highlighted_text(font, text, x, y, width, color, spans, matc
   local clipped
   clipped, spans = clip_highlighted_text(font, text, width, spans, anchor_to_match)
   spans = merge_spans(spans or {}, #clipped)
-  local highlight_bg = style.fuzzy_searcher_match_background or color_with_alpha(style.search_selection or style.accent or style.selection or style.text, 70)
-  local highlight_fg = match_color or style.fuzzy_searcher_match or style.search_selection_text or style.text or color
+  local highlight_bg = style.fuzzy_searcher_match_background
+  local highlight_fg = match_color or style.fuzzy_searcher_match
   local pos = 1
   local cx = x
   local line_h = font:get_height()
@@ -1497,7 +1497,7 @@ local function draw_project_result_row(font, r, x, y, width)
   local label_w = width
   if age and age ~= "" then
     local age_w = font:get_width(age)
-    renderer.draw_text(font, age, x + width - age_w, y, style.dim or style.text)
+    renderer.draw_text(font, age, x + width - age_w, y, style.dim)
     label_w = math.max(0, width - age_w - gap)
   end
   draw_highlighted_text(font, label, x, y, label_w, style.text, spans)
@@ -1505,7 +1505,7 @@ end
 
 local function draw_new_project_result_row(font, r, x, y, width)
   local prefix = "Open this new folder as project: "
-  local cx = renderer.draw_text(font, prefix, x, y, style.dim or style.text)
+  local cx = renderer.draw_text(font, prefix, x, y, style.dim)
   draw_highlighted_text(font, r.project or r.label or "", cx, y, math.max(0, x + width - cx), style.text, {})
 end
 
@@ -1519,14 +1519,14 @@ local function draw_everything_result_row(font, r, x, y, width)
   local meta_w = kind_w + size_w + date_w
   local path_w = math.max(0, width - meta_w)
   local kind = r.is_folder and "folder" or "file"
-  local kind_color = r.is_folder and (style.accent or style.text) or (style.dim or style.text)
+  local kind_color = r.is_folder and (style.accent) or (style.dim)
   draw_file_result_row(font, r.path or r.label, r.match_spans, r.is_folder and "@ " or "", x, y, path_w)
   local mx = x + path_w + gap
   renderer.draw_text(font, kind, mx, y, kind_color)
   mx = mx + kind_w
-  renderer.draw_text(font, truncate_text(font, r.size_label or "", size_w - gap), mx, y, style.dim or style.text)
+  renderer.draw_text(font, truncate_text(font, r.size_label or "", size_w - gap), mx, y, style.dim)
   mx = mx + size_w
-  renderer.draw_text(font, truncate_text(font, r.modified_label or "", date_w - gap), mx, y, style.dim or style.text)
+  renderer.draw_text(font, truncate_text(font, r.modified_label or "", date_w - gap), mx, y, style.dim)
 end
 
 local function draw_command_result_row(font, r, x, y, width)
@@ -1550,10 +1550,10 @@ local function draw_command_result_row(font, r, x, y, width)
   local preview_x = x + label_w + gap
   local binding_x = preview_x + preview_w + gap
   if preview and preview ~= "" then
-    renderer.draw_text(font, truncate_text(font, preview, preview_w), preview_x, y, style.dim or style.text)
+    renderer.draw_text(font, truncate_text(font, preview, preview_w), preview_x, y, style.dim)
   end
   if binding and binding ~= "" then
-    renderer.draw_text(font, truncate_text(font, binding, binding_w), binding_x, y, style.dim or style.text)
+    renderer.draw_text(font, truncate_text(font, binding, binding_w), binding_x, y, style.dim)
   end
 end
 
@@ -1564,9 +1564,9 @@ draw_file_result_row = function(font, file, spans, prefix, x, y, width, suffix)
   suffix = suffix or ""
 
   local path_font = style.get_small_font(font)
-  local prefix_color = style.dim or style.text
-  local dir_color = style.dim or style.text
-  local suffix_color = style.dim or style.text
+  local prefix_color = style.dim
+  local dir_color = style.dim
+  local suffix_color = style.dim
   local name_color = style.text
   local line_h = font:get_height()
   local path_y = y + math.max(0, math.floor((line_h - path_font:get_height()) / 2))
@@ -1625,7 +1625,7 @@ local function draw_grep_result_row(font, result, x, y, width, collapse_file, co
   local line_x = collapsed_line_x
   if collapse_file then
     line_x = common.clamp(line_x or x, x, x + path_w)
-    renderer.draw_text(font, truncate_text(font, line_suffix, math.max(0, x + path_w - line_x)), line_x, y, style.dim or style.text)
+    renderer.draw_text(font, truncate_text(font, line_suffix, math.max(0, x + path_w - line_x)), line_x, y, style.dim)
   else
     local prefix = result.exact and "# " or "~# "
     local _end_x
@@ -1775,10 +1775,10 @@ function FSView:new(prefix)
   self.source_file_line = source_doc and source_doc:get_selection(false) or 1
 
   self.input = TextBox(self, prefix or "", "")
-  self.input.border.color = style.dim or style.text
+  self.input.border.color = style.dim
   self.input.activate = function(input)
     TextBox.activate(input)
-    input.hover_border = style.dim or style.text
+    input.hover_border = style.dim
     input.border.color = input.hover_border
   end
   file_context.exclude_main_panel_view(self.input)
@@ -1972,7 +1972,7 @@ local function draw_preview_debug(view, result, x, y, w, h)
     lines[#lines+1] = string.format("raw[%d] len=%d: %s", minline, #raw, sample:sub(1, 90))
     lines[#lines+1] = string.format("utf8[%d] len=%d: %s", minline, #utf8, usample:sub(1, 90))
     lines[#lines+1] = string.format("tokens=%d first=(%s,%s)", #tok, tostring(tok[1]), tostring(tok[2] and tok[2]:sub(1, 40)))
-    renderer.draw_rect(tx, ty, math.max(2, font:get_width("TEXT ORIGIN PROBE")), lh, color_with_alpha(style.accent or style.text, 90))
+    renderer.draw_rect(tx, ty, math.max(2, font:get_width("TEXT ORIGIN PROBE")), lh, color_with_alpha(style.accent, 90))
     renderer.draw_text(font, "TEXT ORIGIN PROBE", tx, ty, style.text)
   else
     lines[#lines+1] = "PREVIEW DEBUG: " .. tostring(view)
@@ -1984,7 +1984,7 @@ local function draw_preview_debug(view, result, x, y, w, h)
   renderer.draw_rect(x + 4, y + 4, math.max(0, w - 8), box_h, style.fuzzy_searcher_preview_background)
   local yy = y + 8
   for i, line in ipairs(lines) do
-    renderer.draw_text(font, truncate_text(font, line, w - 16), x + 8, yy, i == 1 and (style.accent or style.text) or style.text)
+    renderer.draw_text(font, truncate_text(font, line, w - 16), x + 8, yy, i == 1 and (style.accent) or style.text)
     yy = yy + lh
     if yy > y + box_h then break end
   end
@@ -1995,10 +1995,10 @@ local function draw_preview_placeholder(message, detail, x, y, w, h)
   local font = style.code_font
   local lh = font:get_height()
   local yy = y + style.padding.y
-  renderer.draw_text(font, message or "Preview unavailable", x + style.padding.x, yy, style.accent or style.text)
+  renderer.draw_text(font, message or "Preview unavailable", x + style.padding.x, yy, style.accent)
   yy = yy + lh * 1.4
   if detail and detail ~= "" then
-    draw_highlighted_text(font, detail, x + style.padding.x, yy, w - style.padding.x * 2, style.dim or style.text, {})
+    draw_highlighted_text(font, detail, x + style.padding.x, yy, w - style.padding.x * 2, style.dim, {})
   end
 end
 
@@ -3010,7 +3010,7 @@ function FSView:update()
   self:layout()
   FSView.super.update(self)
   if self.input then
-    self.input.border.color = style.dim or style.text
+    self.input.border.color = style.dim
   end
   if self._awaiting_textinput and not self._awaiting_textinput.logged and system.get_time() - self._awaiting_textinput.time > 0.25 then
     local a = self._awaiting_textinput
@@ -3047,7 +3047,7 @@ function FSView:draw()
   local top, list_w, lh = m.top, m.list_w, m.lh
   self:ensure_selection_visible()
 
-  renderer.draw_text(font, self.status or "", x + pad, y + self.input.size.y + pad * 1.5, style.dim or style.text)
+  renderer.draw_text(font, self.status or "", x + pad, y + self.input.size.y + pad * 1.5, style.dim)
   local full_width_mode = self:is_full_width_mode()
   local command_mode = self:is_command_mode()
   local divider_w = full_width_mode and 0 or style.divider_size
@@ -3057,7 +3057,7 @@ function FSView:draw()
 
   core.push_clip_rect(x, top, list_w - divider_w, h - (top - y))
   local row_text_w = list_w - (pad * 2) - divider_w
-  local arrow_color = style.dim or style.text
+  local arrow_color = style.dim
   local up_arrow, down_arrow = "▲", "▼"
   if self.viewport_offset > 1 then
     renderer.draw_text(font, up_arrow, x + (list_w - font:get_width(up_arrow)) / 2, top, arrow_color)
@@ -3082,10 +3082,10 @@ function FSView:draw()
       previous_rendered_grep_file = nil
       previous_rendered_grep_line_x = nil
       previous_rendered_was_grep = false
-      renderer.draw_text(font, truncate_text(font, r.label, row_text_w), x + pad, yy, style.accent or style.text)
+      renderer.draw_text(font, truncate_text(font, r.label, row_text_w), x + pad, yy, style.accent)
     else
       if idx == self.selected then
-        renderer.draw_rect(x, yy, list_w, lh, style.line_highlight or style.selection)
+        renderer.draw_rect(x, yy, list_w, lh, style.line_highlight)
       elseif idx == self.hovered_result then
         renderer.draw_rect(x, yy, list_w, lh, style.background3 or color_with_alpha(style.text, 24))
       end
@@ -3143,20 +3143,20 @@ function FSView:draw()
   elseif r and r.kind == "command" then
     self:clear_preview_view()
     core.push_clip_rect(px, py, preview_w, preview_h)
-    renderer.draw_text(font, "Command", px, py, style.accent or style.text)
+    renderer.draw_text(font, "Command", px, py, style.accent)
     draw_highlighted_text(font, r.command, px, py + lh, preview_w, style.text, r.match_spans or {})
     local info = r.info or command_preview_info(r.command)
     if info and info ~= "" then
-      renderer.draw_text(font, info, px, py + lh * 2, style.dim or style.text)
+      renderer.draw_text(font, info, px, py + lh * 2, style.dim)
     end
     core.pop_clip_rect()
   elseif r and r.kind == "project" then
     self:clear_preview_view()
     core.push_clip_rect(px, py, preview_w, preview_h)
-    renderer.draw_text(font, "Project", px, py, style.accent or style.text)
+    renderer.draw_text(font, "Project", px, py, style.accent)
     draw_highlighted_text(font, display_root(r.project), px, py + lh, preview_w, style.text, r.match_spans or {})
-    renderer.draw_text(font, "Enter: open here", px, py + lh * 3, style.dim or style.text)
-    renderer.draw_text(font, "Ctrl+Enter: open in new Anvil window", px, py + lh * 4, style.dim or style.text)
+    renderer.draw_text(font, "Enter: open here", px, py + lh * 3, style.dim)
+    renderer.draw_text(font, "Ctrl+Enter: open in new Anvil window", px, py + lh * 4, style.dim)
     core.pop_clip_rect()
   else
     local preview = self:update_preview_view()

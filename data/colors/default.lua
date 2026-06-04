@@ -145,6 +145,8 @@ style.filetree_operation_copy = { 105, 210, 230, 255 }
 style.filetree_operation_move = { 130, 175, 255, 255 }
 style.filetree_operation_rename = { 205, 170, 255, 255 }
 style.filetree_operation_delete = { 255, 120, 120, 255 }
+style.filetree_folder_row_background = { common.color "rgba(220, 220, 220, 0.05)" }
+style.diffview_plain_text = c("ffffff")
 
 -- Git/diff plugin colors
 style.gitdiff_addition = c("587c0c")
@@ -162,6 +164,7 @@ style.filetree_git_modified = c("3b82f6")
 style.filetree_git_deleted = c("c98282")
 style.filetree_git_additions = style.gitdiff_addition
 style.filetree_git_deletions = style.gitdiff_deletion
+style.filetree_folder = style.dim
 
 -- Anvil's common syntax slots.
 style.syntax["normal"] = c(C.text_fg)

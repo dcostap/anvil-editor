@@ -73,7 +73,7 @@ function DocView:draw_line_body(line, x, y)
         if line ~= line1 or absolute_start_col ~= col1 then
           local x1 = x + self:get_col_x_offset(line, absolute_start_col)
           local x2 = x + self:get_col_x_offset(line, vcol1 + end_col)
-          local color = style.selectionhighlight or style.syntax.comment
+          local color = style.selectionhighlight
           renderer.draw_rect(x1, y, x2 - x1, lh, color)
         end
         last_col = end_col + 1

@@ -815,7 +815,7 @@ local function draw_local_find(view)
   end
 
   if info and info.text ~= "" and info.w > 0 then
-    local color = state.error and (style.error or style.text) or (style.dim or style.text)
+    local color = state.error and style.error or style.dim
     prompt_bar_renderer.draw_info(layout.font, info.text, info.x, layout.y, info.w, layout.h, color)
   end
 
