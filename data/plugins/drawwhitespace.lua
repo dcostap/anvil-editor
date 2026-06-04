@@ -145,6 +145,7 @@ end
 local marker_text_cache = {}
 local marker_font_cache = setmetatable({}, { __mode = "k" })
 local marker_width_cache = setmetatable({}, { __mode = "k" })
+local syntax_fonts_signature_state = { by_name = {}, signature = nil, count = 0 }
 
 local function repeated_marker(marker, count)
   local by_marker = marker_text_cache[marker]
@@ -219,8 +220,53 @@ local function current_clip_x_range(self)
   return self.position.x + gw, self.position.x + self.size.x
 end
 
-local function has_syntax_font_overrides()
-  return next(style.syntax_fonts) ~= nil
+local function syntax_fonts_signature()
+  local fonts = style.syntax_fonts
+  if next(fonts) == nil then
+    if syntax_fonts_signature_state.count ~= 0 then
+      syntax_fonts_signature_state = { by_name = {}, signature = nil, count = 0 }
+    end
+    return nil
+  end
+
+  local state = syntax_fonts_signature_state
+  local seen = {}
+  local count = 0
+  local changed = false
+
+  for name, font in pairs(fonts) do
+    count = count + 1
+    seen[name] = true
+    local size = font and font.get_size and font:get_size() or ""
+    local value = tostring(font) .. ":" .. tostring(size)
+    if state.by_name[name] ~= value then
+      state.by_name[name] = value
+      changed = true
+    end
+  end
+
+  if count ~= state.count then
+    state.count = count
+    changed = true
+  end
+
+  for name in pairs(state.by_name) do
+    if not seen[name] then
+      state.by_name[name] = nil
+      changed = true
+    end
+  end
+
+  if changed or not state.signature then
+    local parts = {}
+    for name, value in pairs(state.by_name) do
+      parts[#parts + 1] = tostring(name) .. "=" .. value
+    end
+    table.sort(parts)
+    state.signature = table.concat(parts, "\n")
+  end
+
+  return state.signature
 end
 
 local function get_line_x_cache(self, idx, entry)
@@ -229,12 +275,16 @@ local function get_line_x_cache(self, idx, entry)
   local font_size = font:get_size()
   local fast_space_width
   local tokens
+  local syntax_fonts_key = syntax_fonts_signature()
 
   -- The common case in this fork is an ASCII, tab-free source line drawn with
   -- one monospace code font and no syntax-specific font overrides. In that
   -- case whitespace columns are simple arithmetic; don't walk highlighter
   -- tokens and font widths just to place indentation dots.
-  if entry.ascii_no_tabs and not self.wrapped_settings and not has_syntax_font_overrides() then
+  -- TODO: Guard this arithmetic fast path with explicit monospace-font
+  -- detection before supporting proportional editor fonts; otherwise markers
+  -- after non-space text can be horizontally misplaced.
+  if entry.ascii_no_tabs and not self.wrapped_settings and not syntax_fonts_key then
     fast_space_width = font:get_width(" ")
   else
     local hline = self.doc.highlighter:get_line(idx)
@@ -249,6 +299,7 @@ local function get_line_x_cache(self, idx, entry)
     or x_cache.indent_size ~= indent_size
     or x_cache.fast_space_width ~= fast_space_width
     or x_cache.tokens ~= tokens
+    or x_cache.syntax_fonts_key ~= syntax_fonts_key
     or x_cache.wrapped_settings ~= self.wrapped_settings
   then
     x_cache = {
@@ -257,6 +308,7 @@ local function get_line_x_cache(self, idx, entry)
       indent_size = indent_size,
       fast_space_width = fast_space_width,
       tokens = tokens,
+      syntax_fonts_key = syntax_fonts_key,
       wrapped_settings = self.wrapped_settings,
       offsets = {},
     }
@@ -323,13 +375,14 @@ local function draw_whitespace_run(self, idx, x, y, font, ty, substitution, star
   if substitution.char == " " then
     local count = end_col - start_col
     local marker = substitution.sub or "·"
+    if marker == "" then return end
     local font = marker_font(font)
 
     -- Spaces are by far the hot path. Draw one text run instead of one tiny
     -- rectangle per column when the marker glyph advances exactly like a space
     -- in the active font. This preserves per-column alignment while collapsing
     -- thousands of renderer calls per second into one call per whitespace run.
-    if marker ~= "" and marker_matches_space_advance(font, marker) then
+    if marker_matches_space_advance(font, marker) then
       renderer.draw_text(
         font,
         repeated_marker(marker, count),
@@ -406,6 +459,9 @@ function DocView:draw_line_text(idx, x, y)
     end
   else
     local line_len = #self.doc.lines[idx]
+    -- TODO: Selected-only mode still builds full-line whitespace/x-offset
+    -- caches before scanning the selected substring; consider a selection-local
+    -- path if very long selected lines become hot again.
     local entry = get_line_runs(self, idx)
     local x_cache = get_line_x_cache(self, idx, entry)
     for _, substitution in pairs(drawwhitespace.substitutions) do
