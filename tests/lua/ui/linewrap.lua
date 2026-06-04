@@ -78,6 +78,12 @@ local function restore_config(context)
   if context.disable_blink ~= nil then
     config.disable_blink = context.disable_blink
   end
+  if context.scroll_past_end ~= nil then
+    config.scroll_past_end = context.scroll_past_end
+  end
+  if context.scroll_context_lines ~= nil then
+    config.scroll_context_lines = context.scroll_context_lines
+  end
 end
 
 local function with_stubbed_renderer(fn)
@@ -203,6 +209,29 @@ test.describe("line wrapping current line highlight", function()
     test.equal(#carets, 1)
     test.equal(carets[1].line, 1)
     test.equal(carets[1].col, 20)
+  end)
+
+  test.it("limits wrapped scroll-past-end to the final visual row's context boundary", function(context)
+    context.scroll_past_end = config.scroll_past_end
+    context.scroll_context_lines = config.scroll_context_lines
+    config.scroll_past_end = true
+    config.scroll_context_lines = 2
+
+    local view, doc = open_editor(context, string.rep("x", 200))
+    view.size.y = 120
+    configure_wrapping_for_test(context, view)
+    local lh = view:get_line_height()
+
+    view.scroll.to.y = view:get_scrollable_size() + view.size.y
+    view:clamp_scroll_position()
+    view.scroll.y = view.scroll.to.y
+    view:update_scrollbar()
+
+    test.equal(view.scroll.y, view:get_scrollable_size() - view.size.y)
+    test.equal(view.v_scrollbar.percent, 1)
+    local last_line = #doc.lines
+    local _, last_y = view:get_line_screen_position(last_line, #doc.lines[last_line])
+    test.equal(last_y + lh, view.position.y + view.size.y - config.scroll_context_lines * lh)
   end)
 end)
 

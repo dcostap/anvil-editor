@@ -574,21 +574,79 @@ function DocView:get_filename()
 end
 
 
----Get the total scrollable height of the document.
----@return number height Total height in pixels
-function DocView:get_scrollable_size()
+---Get the height reserved for the horizontal scrollbar, if it is visible.
+---@return number height Reserved height in pixels
+function DocView:get_horizontal_scrollbar_height()
   local _, _, _, h_scroll = self.h_scrollbar:get_track_rect()
-  h_scroll = math.max(0, h_scroll or 0)
+  return math.max(0, h_scroll or 0)
+end
+
+
+---Get the vertical viewport height available for document rows.
+---@return number height Viewport height in pixels
+function DocView:get_vertical_viewport_height()
+  return math.max(0, self.size.y - self:get_horizontal_scrollbar_height())
+end
+
+
+---Get the number of visual rows in the document scroll model.
+---@return integer count Visual row count
+function DocView:get_scrollable_line_count()
+  return #self.doc.lines
+end
+
+
+local function normalize_scroll_context_lines()
+  return math.max(0, math.floor(tonumber(config.scroll_context_lines) or 0))
+end
+
+
+---Get the normal caret scroll context that can fit above and below the caret.
+---@return integer count Context line count
+function DocView:get_visible_scroll_context_lines()
   local lh = self:get_line_height()
-  local text_height = lh * (#self.doc.lines) + style.padding.y * 2
+  if lh <= 0 then return 0 end
+  local visible_span = math.max(0, math.floor((self:get_vertical_viewport_height() - style.padding.y) / lh))
+  return math.min(normalize_scroll_context_lines(), math.floor(visible_span / 2))
+end
+
+
+---Get the bottom overscroll context used when scroll-past-end is enabled.
+---@return integer count Context line count
+function DocView:get_scroll_past_end_context_lines()
+  local lh = self:get_line_height()
+  if lh <= 0 then return 0 end
+  local max_context = math.max(0, math.floor((self:get_vertical_viewport_height() - style.padding.y - lh) / lh))
+  return math.min(normalize_scroll_context_lines(), max_context)
+end
+
+
+---Get scrollable height for a document with the given visual row count.
+---@param line_count integer Visual row count
+---@return number height Total scrollable height in pixels
+function DocView:get_scrollable_size_for_line_count(line_count)
+  line_count = math.max(1, math.floor(tonumber(line_count) or 1))
+  local h_scroll = self:get_horizontal_scrollbar_height()
+  local lh = self:get_line_height()
+  local text_height = lh * line_count + style.padding.y * 2
   local content_height = text_height + h_scroll
   if config.scroll_past_end then
-    return math.max(self.size.y, lh * math.max(0, #self.doc.lines - 1) + self.size.y)
+    local pad = self:get_scroll_past_end_context_lines()
+    local last_line_y = style.padding.y + lh * math.max(0, line_count - 1)
+    local max_scroll = math.max(0, last_line_y - self:get_vertical_viewport_height() + lh * (pad + 1))
+    return math.max(self.size.y, max_scroll + self.size.y)
   end
   if text_height <= self.size.y then
     return self.size.y
   end
   return content_height
+end
+
+
+---Get the total scrollable height of the document.
+---@return number height Total height in pixels
+function DocView:get_scrollable_size()
+  return self:get_scrollable_size_for_line_count(self:get_scrollable_line_count())
 end
 
 
@@ -889,17 +947,27 @@ function DocView:scroll_to_make_visible(line, col, instant, opts)
     local _, oy = self:get_content_offset()
     local _, ly = self:get_line_screen_position(line, col)
     local lh = self:get_line_height()
-    local _, _, _, scroll_h = self.h_scrollbar:get_track_rect()
-    scroll_h = math.max(0, scroll_h or 0)
+    local scroll_h = self:get_horizontal_scrollbar_height()
 
-    local minline, maxline = self:get_visible_line_range()
-    local visible_lines = maxline - minline
+    local pad = self:get_visible_scroll_context_lines()
+    if self.mouse_selecting then
+      pad = math.min(pad, 1)
+    end
 
-    local requested_pad = config.scroll_context_lines
-    local max_pad = math.floor(visible_lines / 2)
-    local pad = not self.mouse_selecting and math.min(requested_pad, max_pad) or 1
+    local below_pad = pad
+    if config.scroll_past_end and not self.mouse_selecting then
+      local end_pad = self:get_scroll_past_end_context_lines()
+      if end_pad > below_pad then
+        local target_idx = math.max(1, math.floor((ly - oy - style.padding.y) / lh) + 1)
+        local rows_below = math.max(0, self:get_scrollable_line_count() - target_idx)
+        if rows_below < end_pad then
+          below_pad = end_pad
+        end
+      end
+    end
+
     local above = math.max(0, ly - oy - style.padding.y - lh * pad)
-    local below = ly - oy - self.size.y + scroll_h + lh * (pad + 1)
+    local below = ly - oy - self.size.y + scroll_h + lh * (below_pad + 1)
 
     self.scroll.to.y = math.max(0, common.clamp(self.scroll.to.y, below, above))
   end

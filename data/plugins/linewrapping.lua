@@ -407,17 +407,14 @@ function DocView:update()
   end
 end
 
+local old_get_scrollable_line_count = DocView.get_scrollable_line_count
+function DocView:get_scrollable_line_count()
+  if not self.wrapped_settings then return old_get_scrollable_line_count(self) end
+  return get_total_wrapped_lines(self)
+end
+
 function DocView:get_scrollable_size()
-  local total_lines = get_total_wrapped_lines(self)
-  local lh = self:get_line_height()
-  local text_height = lh * total_lines + style.padding.y * 2
-  if config.scroll_past_end then
-    return math.max(self.size.y, lh * math.max(0, total_lines - 1) + self.size.y)
-  end
-  if text_height <= self.size.y then
-    return self.size.y
-  end
-  return text_height
+  return self:get_scrollable_size_for_line_count(self:get_scrollable_line_count())
 end
 
 local old_get_h_scrollable_size = DocView.get_h_scrollable_size
