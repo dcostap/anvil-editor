@@ -65,6 +65,17 @@ The old personal `~\.config\anvil` workflow has been promoted into the fork:
 
 `anvil_defaults.lua` replaces the old user `init.lua` for the default Anvil experience. Keep personal machine-only state out of the repo, such as sessions, logs, caches, and fuzzy-search recent command history.
 
+### First-party defaults policy
+
+Bundled Anvil plugins are first-party code in this fork. Do not hardcode fallback defaults inside first-party plugin modules for config/style keys they use. Put first-party defaults in the defaults layer instead:
+
+- style/color defaults belong in `data\colors\default.lua`; theme-specific overrides belong in theme files such as `data\colors\onedark.lua`
+- behavior/config defaults belong in `data\plugins\anvil_defaults.lua` or another explicit first-party defaults file if one is introduced
+
+First-party plugin code may assume its required first-party config/style keys exist after the defaults layer has loaded. Third-party/user plugins may still define their own fallback defaults for keys they own, because those keys are outside the first-party schema.
+
+When adding a new first-party style key, ensure the base style schema remains complete so switching themes does not leave missing keys. Themes should override keys, not be the only place where required first-party keys are defined.
+
 ## Logging / diagnostics
 
 When adding new functionality, use `core.log_quiet(...)` liberally for diagnostics that could help debug future bugs or unexpected behavior. Prefer quiet logs for feature probes, optional integrations, state transitions, fallback decisions, and background task results. Quiet logs are useful in pasted logs without annoying the user. Use visible `core.log`, `core.warn`, or `core.error` only when the user should actively notice something.
