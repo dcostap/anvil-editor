@@ -948,10 +948,6 @@ local function env_disabled_plugin_names()
   return disabled
 end
 
-local mandatory_plugins = {
-  anvil_defaults = true,
-}
-
 function core.load_plugins()
   local no_errors = true
   local env_disabled_plugins = env_disabled_plugin_names()
@@ -959,6 +955,9 @@ function core.load_plugins()
     userdir = {dir = USERDIR, plugins = {}},
     datadir = {dir = DATADIR, plugins = {}},
   }
+  local defaults_plugin = core.get_plugin_details(
+    DATADIR .. PATHSEP .. "plugins" .. PATHSEP .. "anvil_defaults.lua"
+  )
   local files, ordered = {}, {
     { priority = -2, load = load_lua_plugin_if_exists, version_match = true, file = USERDIR .. PATHSEP .. "init.lua", name = "User Module" },
     { priority = -1, load = load_lua_plugin_if_exists, version_match = true, file = core.root_project().path .. PATHSEP .. ".anvil_project.lua", name = "Project Module" }
@@ -968,7 +967,7 @@ function core.load_plugins()
     for _, filename in ipairs(system.list_dir(plugin_dir) or {}) do
       if not files[filename] then
         local details = core.get_plugin_details(plugin_dir .. PATHSEP .. filename)
-        if details then table.insert(ordered, details) end
+        if details and details.name ~= "anvil_defaults" then table.insert(ordered, details) end
       end
       -- user plugins will always replace system plugins
       files[filename] = plugin_dir
@@ -976,52 +975,71 @@ function core.load_plugins()
   end
   core.add_plugins(ordered)
 
+  local function reject_plugin_version(plugin)
+    core.log_quiet(
+      "Version mismatch for plugin %q[%s] from %s",
+      plugin.name,
+      plugin.version_string,
+      common.dirname(plugin.file)
+    )
+    local rlist = plugin.file:find(USERDIR, 1, true) == 1
+      and 'userdir' or 'datadir'
+    table.insert(refused_list[rlist].plugins, plugin)
+  end
+
+  local function load_plugin(plugin, plugin_config)
+    local start = system.get_time()
+    local ok, loaded_plugin = core.try(plugin.load, plugin)
+    if ok then
+      local plugin_version = ""
+      if plugin.version_string and  plugin.version_string ~= MOD_VERSION_STRING then
+        plugin_version = "["..plugin.version_string.."]"
+      end
+      core.log_quiet(
+        "Loaded plugin %q%s from %s in %.1fms",
+        plugin.name,
+        plugin_version,
+        common.dirname(plugin.file),
+        (system.get_time() - start) * 1000
+      )
+      if plugin_config and plugin_config.onload then
+        core.try(plugin_config.onload, loaded_plugin)
+      end
+    else
+      no_errors = false
+    end
+  end
+
+  local function load_defaults_plugin(load_start)
+    if not defaults_plugin then return end
+    if not config.skip_plugins_version and not defaults_plugin.version_match then
+      reject_plugin_version(defaults_plugin)
+    else
+      load_plugin(defaults_plugin)
+    end
+  end
+
   local load_start = system.get_time()
+  local defaults_loaded = false
   for i = 1, #core.plugin_list do
     local plugin = core.plugin_list[i]
+    if not defaults_loaded and plugin.priority >= 0 then
+      load_defaults_plugin(load_start)
+      defaults_loaded = true
+    end
+
     if not config.skip_plugins_version and not plugin.version_match then
-      core.log_quiet(
-        "Version mismatch for plugin %q[%s] from %s",
-        plugin.name,
-        plugin.version_string,
-        common.dirname(plugin.file)
-      )
-      local rlist = plugin.file:find(USERDIR, 1, true) == 1
-        and 'userdir' or 'datadir'
-      table.insert(refused_list[rlist].plugins, plugin)
+      reject_plugin_version(plugin)
+    elseif env_disabled_plugins[plugin.name:lower()] then
+      core.log_quiet("Skipped plugin %q from ANVIL_DISABLE_PLUGINS", plugin.name)
     else
-      local mandatory = mandatory_plugins[plugin.name:lower()]
       local plugin_config = config.plugins[plugin.name]
-      if mandatory and (env_disabled_plugins[plugin.name:lower()] or plugin_config == false) then
-        core.log_quiet("Mandatory plugin %q cannot be disabled; loading it anyway", plugin.name)
-        plugin_config = {}
-      end
-      if env_disabled_plugins[plugin.name:lower()] and not mandatory then
-        core.log_quiet("Skipped plugin %q from ANVIL_DISABLE_PLUGINS", plugin.name)
-      elseif plugin_config ~= false then
-        local start = system.get_time()
-        local ok, loaded_plugin = core.try(plugin.load, plugin)
-        if ok then
-          local plugin_version = ""
-          if plugin.version_string and  plugin.version_string ~= MOD_VERSION_STRING then
-            plugin_version = "["..plugin.version_string.."]"
-          end
-          core.log_quiet(
-            "Loaded plugin %q%s from %s in %.1fms",
-            plugin.name,
-            plugin_version,
-            common.dirname(plugin.file),
-            (system.get_time() - start) * 1000
-          )
-          if plugin_config.onload then
-            core.try(plugin_config.onload, loaded_plugin)
-          end
-        else
-          no_errors = false
-        end
+      if plugin_config ~= false then
+        load_plugin(plugin, plugin_config)
       end
     end
   end
+  if not defaults_loaded then load_defaults_plugin(load_start) end
   core.log_quiet(
     "Loaded all plugins in %.1fms",
     (system.get_time() - load_start) * 1000
