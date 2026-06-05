@@ -20,7 +20,7 @@ end
 command.add("core.docview", {
   ["quote:quote"] = function(dv)
     dv.doc:replace(function(text)
-      return '"' .. text:gsub("[\0-\31\\\"]", replace) .. '"'
+      return '"' .. text:gsub("[%z\001-\031\\\"]", replace) .. '"'
     end)
   end,
 })

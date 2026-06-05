@@ -366,7 +366,7 @@ Audit and migrate in-repo callers that loop edits:
 - `search_ui.lua` replace-all — migrated
 - core find/replace replacement paths where they loop replacements
 - `diffview.lua` apply/copy actions and raw mutation wrappers
-- `quote.lua`, `reflow.lua`, `tabularize.lua` through `Doc:replace`
+- `quote.lua`, `reflow.lua`, `tabularize.lua` through `Doc:replace` — covered by UI tests
 - `autocomplete.lua` completion replacement if it remains a hot multi-edit path
 - any remaining `rg "get_selections.*(insert|remove|text_input|delete_to_cursor|replace_cursor)"` matches
 

@@ -64,6 +64,18 @@ Completed coverage:
 - different-length multi-selection replacements in one document change
 - unchanged replacements returning callback results without text-change notifications
 
+## Just completed: transform plugin coverage
+
+Transform plugins that route through `Doc:replace` now have UI coverage confirming they apply as one document change.
+
+Completed coverage:
+
+- `quote:quote`
+- `reflow:reflow`
+- `tabularize:tabularize`
+
+Also fixed `quote.lua`'s control-character pattern so NUL is matched with `%z` instead of embedding a NUL byte in the Lua pattern string.
+
 ## Current next target: remaining search/replace paths
 
 Inspect remaining search/replace command code and plugin paths for per-selection edit loops that still call:
