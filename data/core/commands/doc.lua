@@ -167,23 +167,30 @@ local function line_comment(comment, line1, col1, line2, col2)
   end
 
   local end_line = col2 == #doc().lines[line2]
+  local edits = {}
   for line = line1, line2 do
     local text = doc().lines[line]
     local s = text:find("%S")
     if s and uncomment then
       if end_comment and text:sub(#text - #end_comment, #text - 1) == end_comment then
-        doc():remove(line, #text - #end_comment, line, #text)
+        edits[#edits + 1] = { line1 = line, col1 = #text - #end_comment, line2 = line, col2 = #text, text = "" }
       end
       local cs, ce = text:find(start_comment, s, true)
       if ce then
-        doc():remove(line, cs, line, ce + 1)
+        edits[#edits + 1] = { line1 = line, col1 = cs, line2 = line, col2 = ce + 1, text = "" }
       end
     elseif s then
-      doc():insert(line, start_offset, start_comment)
+      edits[#edits + 1] = { line1 = line, col1 = start_offset, line2 = line, col2 = start_offset, text = start_comment }
       if end_comment then
-        doc():insert(line, #doc().lines[line], " " .. comment[2])
+        edits[#edits + 1] = { line1 = line, col1 = #text, line2 = line, col2 = #text, text = " " .. comment[2] }
       end
     end
+  end
+  if #edits > 0 then
+    doc():apply_edits(edits, {
+      type = uncomment and "remove" or "insert",
+      merge_cursors = false,
+    })
   end
   col1 = col1 + (col1 > start_offset and #start_comment or 0) * (uncomment and -1 or 1)
   col2 = col2 + (col2 > start_offset and #start_comment or 0) * (uncomment and -1 or 1)
@@ -213,17 +220,29 @@ local function block_comment(comment, line1, col1, line2, col2)
       stop_len = stop_len + 1
     end
 
-    doc():remove(line1, col1, line1, col1 + start_len)
+    doc():apply_edits({
+      { line1 = line1, col1 = col1, line2 = line1, col2 = col1 + start_len, text = "" },
+      { line1 = line2, col1 = col2 - stop_len, line2 = line2, col2 = col2, text = "" },
+    }, { type = "remove", merge_cursors = false })
     col2 = col2 - (line1 == line2 and start_len or 0)
-    doc():remove(line2, col2 - stop_len, line2, col2)
 
     return line1, col1, line2, col2 - stop_len
   else
-    doc():insert(line1, col1, comment[1] .. " ")
-    col2 = col2 + (line1 == line2 and (#comment[1] + 1) or 0)
-    doc():insert(line2, col2, " " .. comment[2])
+    local prefix = comment[1] .. " "
+    local suffix = " " .. comment[2]
+    if line1 == line2 and col1 == col2 then
+      doc():apply_edits({
+        { line1 = line1, col1 = col1, line2 = line1, col2 = col1, text = prefix .. suffix },
+      }, { type = "insert", merge_cursors = false })
+    else
+      doc():apply_edits({
+        { line1 = line1, col1 = col1, line2 = line1, col2 = col1, text = prefix },
+        { line1 = line2, col1 = col2, line2 = line2, col2 = col2, text = suffix },
+      }, { type = "insert", merge_cursors = false })
+    end
+    col2 = col2 + (line1 == line2 and #prefix or 0)
 
-    return line1, col1, line2, col2 + #comment[2] + 1
+    return line1, col1, line2, col2 + #suffix
   end
 end
 
@@ -242,6 +261,42 @@ local function insert_paste(doc, value, whole_line, idx)
   else
     doc:text_input(value:gsub("\r", ""), idx)
   end
+end
+
+local function newline_count(text)
+  local n = 0
+  for _ in tostring(text or ""):gmatch("\n") do n = n + 1 end
+  return n
+end
+
+local function paste_matching_whole_lines(doc, text_by_idx)
+  local edits = {}
+  local entries = {}
+  for idx, line1, col1 in doc:get_selections(false) do
+    local text = tostring(text_by_idx[idx] or ""):gsub("\r", "") .. "\n"
+    edits[#edits + 1] = { line1 = line1, col1 = 1, line2 = line1, col2 = 1, text = text, idx = idx }
+    entries[#entries + 1] = { idx = idx, line = line1, col = col1, line_delta = newline_count(text) }
+  end
+  table.sort(entries, function(a, b)
+    if a.line == b.line then return a.idx < b.idx end
+    return a.line < b.line
+  end)
+  local selections = {}
+  local cumulative_line_delta = 0
+  for _, entry in ipairs(entries) do
+    local line = entry.line + cumulative_line_delta + entry.line_delta
+    selections[#selections + 1] = line
+    selections[#selections + 1] = entry.col
+    selections[#selections + 1] = line
+    selections[#selections + 1] = entry.col
+    cumulative_line_delta = cumulative_line_delta + entry.line_delta
+  end
+  return doc:apply_edits(edits, {
+    type = "insert",
+    selections = selections,
+    last_selection = doc.last_selection,
+    merge_cursors = false,
+  })
 end
 
 local commands = {
@@ -296,8 +351,14 @@ local commands = {
     if #core.cursor_clipboard_whole_line == (#dv.doc.selections/4) then
     -- If we have the same number of clipboards and selections,
     -- paste each clipboard into its corresponding selection
-      for idx in dv.doc:get_selections() do
-        insert_paste(dv.doc, core.cursor_clipboard[idx], only_whole_lines, idx)
+      if only_whole_lines then
+        paste_matching_whole_lines(dv.doc, core.cursor_clipboard)
+      else
+        local text_by_idx = {}
+        for idx in dv.doc:get_selections() do
+          text_by_idx[idx] = tostring(core.cursor_clipboard[idx] or ""):gsub("\r", "")
+        end
+        dv.doc:text_input_by_selection(text_by_idx, nil, { type = "insert" })
       end
     else
       -- Paste every clipboard and add a selection at the end of each one
@@ -335,6 +396,8 @@ local commands = {
   end,
 
   ["doc:newline"] = function(dv)
+    local text_by_idx = {}
+    local fallback = false
     for idx, line, col in dv.doc:get_selections(false, true) do
       local indent = dv.doc.lines[line]:match("^[\t ]*")
       if col <= #indent then
@@ -342,9 +405,24 @@ local commands = {
       end
       -- Remove current line if it contains only whitespace
       if not config.keep_newline_whitespace and dv.doc.lines[line]:match("^%s+$") then
-        dv.doc:remove(line, 1, line, math.huge)
+        fallback = true
+        break
       end
-      dv.doc:text_input("\n" .. indent, idx)
+      text_by_idx[idx] = "\n" .. indent
+    end
+    if fallback then
+      for idx, line, col in dv.doc:get_selections(false, true) do
+        local indent = dv.doc.lines[line]:match("^[\t ]*")
+        if col <= #indent then
+          indent = indent:sub(#indent + 2 - col)
+        end
+        if not config.keep_newline_whitespace and dv.doc.lines[line]:match("^%s+$") then
+          dv.doc:remove(line, 1, line, math.huge)
+        end
+        dv.doc:text_input("\n" .. indent, idx)
+      end
+    else
+      dv.doc:text_input_by_selection(text_by_idx, nil, { type = "insert" })
     end
   end,
 
@@ -365,26 +443,51 @@ local commands = {
   end,
 
   ["doc:delete"] = function(dv)
-    for idx, line1, col1, line2, col2 in dv.doc:get_selections(true, true) do
+    local fallback = false
+    for _, line1, col1, line2, col2 in dv.doc:get_selections(true, true) do
       if line1 == line2 and col1 == col2 and dv.doc.lines[line1]:find("^%s*$", col1) then
-        dv.doc:remove(line1, col1, line1, math.huge)
+        fallback = true
+        break
       end
-      dv.doc:delete_to_cursor(idx, translate.next_char)
+    end
+    if fallback then
+      for idx, line1, col1, line2, col2 in dv.doc:get_selections(true, true) do
+        if line1 == line2 and col1 == col2 and dv.doc.lines[line1]:find("^%s*$", col1) then
+          dv.doc:remove(line1, col1, line1, math.huge)
+        end
+        dv.doc:delete_to_cursor(idx, translate.next_char)
+      end
+    else
+      dv.doc:delete_to(translate.next_char)
     end
   end,
 
   ["doc:backspace"] = function(dv)
     local _, indent_size = dv.doc:get_indent_info()
-    for idx, line1, col1, line2, col2 in dv.doc:get_selections(true, true) do
+    local fallback = false
+    for _, line1, col1, line2, col2 in dv.doc:get_selections(true, true) do
       if line1 == line2 and col1 == col2 then
         local text = dv.doc:get_text(line1, 1, line1, col1)
         if #text >= indent_size and text:find("^ *$") then
-          dv.doc:delete_to_cursor(idx, 0, -indent_size)
-          goto continue
+          fallback = true
+          break
         end
       end
-      dv.doc:delete_to_cursor(idx, translate.previous_char)
-      ::continue::
+    end
+    if fallback then
+      for idx, line1, col1, line2, col2 in dv.doc:get_selections(true, true) do
+        if line1 == line2 and col1 == col2 then
+          local text = dv.doc:get_text(line1, 1, line1, col1)
+          if #text >= indent_size and text:find("^ *$") then
+            dv.doc:delete_to_cursor(idx, 0, -indent_size)
+            goto continue
+          end
+        end
+        dv.doc:delete_to_cursor(idx, translate.previous_char)
+        ::continue::
+      end
+    else
+      dv.doc:delete_to(translate.previous_char)
     end
   end,
 
@@ -416,18 +519,54 @@ local commands = {
   end,
 
   ["doc:join-lines"] = function(dv)
+    local actions, fallback = {}, false
     for idx, line1, col1, line2, col2 in dv.doc:get_selections(true) do
+      local had_selection = line1 ~= line2 or col1 ~= col2
       if line1 == line2 then line2 = line2 + 1 end
+      if not had_selection or line2 > #dv.doc.lines then fallback = true; break end
       local text = dv.doc:get_text(line1, 1, line2, math.huge)
       text = text:gsub("(.-)\n[\t ]*", function(x)
         return x:find("^%s*$") and x or x .. " "
       end)
-      dv.doc:insert(line1, 1, text)
-      dv.doc:remove(line1, #text + 1, line2, math.huge)
-      if line1 ~= line2 or col1 ~= col2 then
-        dv.doc:set_selections(idx, line1, math.huge)
-      end
+      actions[#actions + 1] = { idx = idx, line1 = line1, line2 = line2, text = text, line_delta = line2 - line1 }
     end
+    table.sort(actions, function(a, b) return a.line1 < b.line1 end)
+    for i = 2, #actions do
+      if actions[i - 1].line2 >= actions[i].line1 then fallback = true; break end
+    end
+    if fallback then
+      for idx, line1, col1, line2, col2 in dv.doc:get_selections(true) do
+        if line1 == line2 then line2 = line2 + 1 end
+        local text = dv.doc:get_text(line1, 1, line2, math.huge)
+        text = text:gsub("(.-)\n[\t ]*", function(x)
+          return x:find("^%s*$") and x or x .. " "
+        end)
+        dv.doc:insert(line1, 1, text)
+        dv.doc:remove(line1, #text + 1, line2, math.huge)
+        if line1 ~= line2 or col1 ~= col2 then
+          dv.doc:set_selections(idx, line1, math.huge)
+        end
+      end
+      return
+    end
+    local edits, selections, removed_before = {}, {}, 0
+    for _, action in ipairs(actions) do
+      edits[#edits + 1] = {
+        line1 = action.line1,
+        col1 = 1,
+        line2 = action.line2,
+        col2 = #dv.doc.lines[action.line2],
+        text = action.text,
+        idx = action.idx,
+      }
+      local line = action.line1 - removed_before
+      selections[#selections + 1] = line
+      selections[#selections + 1] = #action.text + 1
+      selections[#selections + 1] = line
+      selections[#selections + 1] = #action.text + 1
+      removed_before = removed_before + action.line_delta
+    end
+    dv.doc:apply_edits(edits, { type = "replace", selections = selections, last_selection = dv.doc.last_selection, merge_cursors = false })
   end,
 
   ["doc:indent"] = function(dv)
@@ -449,45 +588,146 @@ local commands = {
   end,
 
   ["doc:duplicate-lines"] = function(dv)
+    local actions, fallback = {}, false
     for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
-      append_line_if_last_line(line2)
+      if line2 >= #dv.doc.lines then fallback = true; break end
       local text = doc():get_text(line1, 1, line2 + 1, 1)
-      dv.doc:insert(line2 + 1, 1, text)
-      local n = line2 - line1 + 1
-      dv.doc:set_selections(idx, line1 + n, col1, line2 + n, col2)
+      actions[#actions + 1] = { idx = idx, line1 = line1, col1 = col1, line2 = line2, col2 = col2, text = text, n = line2 - line1 + 1 }
     end
+    if fallback then
+      for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
+        append_line_if_last_line(line2)
+        local text = doc():get_text(line1, 1, line2 + 1, 1)
+        dv.doc:insert(line2 + 1, 1, text)
+        local n = line2 - line1 + 1
+        dv.doc:set_selections(idx, line1 + n, col1, line2 + n, col2)
+      end
+      return
+    end
+    local edits, selections = {}, {}
+    for _, action in ipairs(actions) do
+      edits[#edits + 1] = { line1 = action.line2 + 1, col1 = 1, line2 = action.line2 + 1, col2 = 1, text = action.text, idx = action.idx }
+      local inserted_before = 0
+      for _, other in ipairs(actions) do
+        if other.line2 < action.line1 then inserted_before = inserted_before + other.n end
+      end
+      selections[#selections + 1] = action.line1 + action.n + inserted_before
+      selections[#selections + 1] = action.col1
+      selections[#selections + 1] = action.line2 + action.n + inserted_before
+      selections[#selections + 1] = action.col2
+    end
+    dv.doc:apply_edits(edits, { type = "insert", selections = selections, last_selection = dv.doc.last_selection, merge_cursors = false })
   end,
 
   ["doc:delete-lines"] = function(dv)
+    local actions, fallback = {}, false
     for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
-      append_line_if_last_line(line2)
-      dv.doc:remove(line1, 1, line2 + 1, 1)
-      dv.doc:set_selections(idx, line1, col1)
+      if line2 >= #dv.doc.lines then fallback = true; break end
+      actions[#actions + 1] = { idx = idx, line1 = line1, col1 = col1, line2 = line2, col2 = col2, n = line2 - line1 + 1 }
     end
+    if fallback then
+      for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
+        append_line_if_last_line(line2)
+        dv.doc:remove(line1, 1, line2 + 1, 1)
+        dv.doc:set_selections(idx, line1, col1)
+      end
+      return
+    end
+    local edits, selections = {}, {}
+    for _, action in ipairs(actions) do
+      edits[#edits + 1] = { line1 = action.line1, col1 = 1, line2 = action.line2 + 1, col2 = 1, text = "", idx = action.idx }
+      local removed_before = 0
+      for _, other in ipairs(actions) do
+        if other.line2 < action.line1 then removed_before = removed_before + other.n end
+      end
+      selections[#selections + 1] = action.line1 - removed_before
+      selections[#selections + 1] = action.col1
+      selections[#selections + 1] = action.line1 - removed_before
+      selections[#selections + 1] = action.col1
+    end
+    dv.doc:apply_edits(edits, { type = "remove", selections = selections, last_selection = dv.doc.last_selection, merge_cursors = true })
   end,
 
   ["doc:move-lines-up"] = function(dv)
+    local actions, fallback = {}, false
     for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
-      append_line_if_last_line(line2)
-      if line1 > 1 then
-        local text = doc().lines[line1 - 1]
-        dv.doc:insert(line2 + 1, 1, text)
-        dv.doc:remove(line1 - 1, 1, line1, 1)
-        dv.doc:set_selections(idx, line1 - 1, col1, line2 - 1, col2)
-      end
+      if line1 <= 1 or line2 >= #dv.doc.lines then fallback = true; break end
+      actions[#actions + 1] = {
+        idx = idx, line1 = line1, col1 = col1, line2 = line2, col2 = col2,
+        start_line = line1 - 1, end_line = line2,
+      }
     end
+    table.sort(actions, function(a, b) return a.start_line < b.start_line end)
+    for i = 2, #actions do
+      if actions[i - 1].end_line >= actions[i].start_line then fallback = true; break end
+    end
+    if fallback then
+      for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
+        append_line_if_last_line(line2)
+        if line1 > 1 then
+          local text = doc().lines[line1 - 1]
+          dv.doc:insert(line2 + 1, 1, text)
+          dv.doc:remove(line1 - 1, 1, line1, 1)
+          dv.doc:set_selections(idx, line1 - 1, col1, line2 - 1, col2)
+        end
+      end
+      return
+    end
+    local edits, selections = {}, {}
+    for _, action in ipairs(actions) do
+      local block_text = dv.doc:get_text(action.line1, 1, action.line2 + 1, 1)
+      local previous_line = dv.doc.lines[action.line1 - 1]
+      edits[#edits + 1] = {
+        line1 = action.line1 - 1, col1 = 1, line2 = action.line2 + 1, col2 = 1,
+        text = block_text .. previous_line, idx = action.idx,
+      }
+      selections[#selections + 1] = action.line1 - 1
+      selections[#selections + 1] = action.col1
+      selections[#selections + 1] = action.line2 - 1
+      selections[#selections + 1] = action.col2
+    end
+    dv.doc:apply_edits(edits, { type = "batch", selections = selections, last_selection = dv.doc.last_selection, merge_cursors = false })
   end,
 
   ["doc:move-lines-down"] = function(dv)
+    local actions, fallback = {}, false
     for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
-      append_line_if_last_line(line2 + 1)
-      if line2 < #dv.doc.lines then
-        local text = dv.doc.lines[line2 + 1]
-        dv.doc:remove(line2 + 1, 1, line2 + 2, 1)
-        dv.doc:insert(line1, 1, text)
-        dv.doc:set_selections(idx, line1 + 1, col1, line2 + 1, col2)
-      end
+      if line2 >= #dv.doc.lines then fallback = true; break end
+      actions[#actions + 1] = {
+        idx = idx, line1 = line1, col1 = col1, line2 = line2, col2 = col2,
+        start_line = line1, end_line = line2 + 1,
+      }
     end
+    table.sort(actions, function(a, b) return a.start_line < b.start_line end)
+    for i = 2, #actions do
+      if actions[i - 1].end_line >= actions[i].start_line then fallback = true; break end
+    end
+    if fallback then
+      for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
+        append_line_if_last_line(line2 + 1)
+        if line2 < #dv.doc.lines then
+          local text = dv.doc.lines[line2 + 1]
+          dv.doc:remove(line2 + 1, 1, line2 + 2, 1)
+          dv.doc:insert(line1, 1, text)
+          dv.doc:set_selections(idx, line1 + 1, col1, line2 + 1, col2)
+        end
+      end
+      return
+    end
+    local edits, selections = {}, {}
+    for _, action in ipairs(actions) do
+      local block_text = dv.doc:get_text(action.line1, 1, action.line2 + 1, 1)
+      local next_line = dv.doc.lines[action.line2 + 1]
+      edits[#edits + 1] = {
+        line1 = action.line1, col1 = 1, line2 = action.line2 + 2, col2 = 1,
+        text = next_line .. block_text, idx = action.idx,
+      }
+      selections[#selections + 1] = action.line1 + 1
+      selections[#selections + 1] = action.col1
+      selections[#selections + 1] = action.line2 + 1
+      selections[#selections + 1] = action.col2
+    end
+    dv.doc:apply_edits(edits, { type = "batch", selections = selections, last_selection = dv.doc.last_selection, merge_cursors = false })
   end,
 
   ["doc:toggle-block-comments"] = function(dv)

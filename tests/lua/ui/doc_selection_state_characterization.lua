@@ -239,6 +239,169 @@ test.describe("Document View Selection State edit characterization", function()
     })
   end)
 
+  test.it("join-lines joins each selected line range with spaces", function(context)
+    local doc, main = new_shared_views(context, "aa\n  bb\ncc")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      1, 1, 1, 1,
+      2, 1, 3, 1,
+    })
+
+    test.ok(command.perform("doc:join-lines"))
+
+    test.equal(text(doc), "aa bb cc\n")
+    test.same(selection(main), {
+      1, 9, 1, 9,
+      1, 9, 1, 9,
+    })
+  end)
+
+  test.it("join-lines batches independent selected line ranges", function(context)
+    local doc, main = new_shared_views(context, "aa\n  bb\ncc\n  dd\nee")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      1, 1, 2, 1,
+      4, 1, 5, 1,
+    })
+
+    test.ok(command.perform("doc:join-lines"))
+
+    test.equal(text(doc), "aa bb\ncc\n  dd ee\n")
+    test.same(selection(main), {
+      1, 6, 1, 6,
+      3, 8, 3, 8,
+    })
+  end)
+
+  test.it("move-lines-up moves selected line blocks upward", function(context)
+    local doc, main = new_shared_views(context, "aa\nbb\ncc\ndd")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      2, 1, 2, 1,
+      4, 1, 4, 1,
+    })
+
+    test.ok(command.perform("doc:move-lines-up"))
+
+    test.equal(text(doc), "bb\naa\ndd\ncc\n\n")
+    test.same(selection(main), {
+      1, 1, 1, 1,
+      3, 1, 3, 1,
+    })
+  end)
+
+  test.it("move-lines-down moves selected line blocks downward", function(context)
+    local doc, main = new_shared_views(context, "aa\nbb\ncc\ndd")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      1, 1, 1, 1,
+      3, 1, 3, 1,
+    })
+
+    test.ok(command.perform("doc:move-lines-down"))
+
+    test.equal(text(doc), "bb\naa\ndd\ncc\n\n")
+    test.same(selection(main), {
+      2, 1, 2, 1,
+      4, 1, 4, 1,
+    })
+  end)
+
+  test.it("move-lines-up batches independent non-final selected lines", function(context)
+    local doc, main = new_shared_views(context, "aa\nbb\ncc\ndd\nee")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      2, 1, 2, 1,
+      4, 1, 4, 1,
+    })
+
+    test.ok(command.perform("doc:move-lines-up"))
+
+    test.equal(text(doc), "bb\naa\ndd\ncc\nee\n")
+    test.same(selection(main), {
+      1, 1, 1, 1,
+      3, 1, 3, 1,
+    })
+  end)
+
+  test.it("move-lines-down batches independent non-final selected lines", function(context)
+    local doc, main = new_shared_views(context, "aa\nbb\ncc\ndd\nee")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      1, 1, 1, 1,
+      3, 1, 3, 1,
+    })
+
+    test.ok(command.perform("doc:move-lines-down"))
+
+    test.equal(text(doc), "bb\naa\ndd\ncc\nee\n")
+    test.same(selection(main), {
+      2, 1, 2, 1,
+      4, 1, 4, 1,
+    })
+  end)
+
+  test.it("toggle-block-comments wraps and unwraps a selected range", function(context)
+    local doc, main = new_shared_views(context, "aa")
+    doc.syntax.block_comment = { "/*", "*/" }
+    core.set_active_view(main)
+    set_view_selection(main, 1, 1, 1, 3)
+
+    test.ok(command.perform("doc:toggle-block-comments"))
+    test.equal(text(doc), "/* aa */\n")
+    test.same(selection(main), { 1, 1, 1, 9 })
+
+    test.ok(command.perform("doc:toggle-block-comments"))
+    test.equal(text(doc), "aa\n")
+    test.same(selection(main), { 1, 1, 1, 3 })
+  end)
+
+  test.it("toggle-line-comments comments and uncomments multiple selected line ranges", function(context)
+    local doc, main = new_shared_views(context, "aa\nbb\ncc")
+    doc.syntax.comment = "//"
+    core.set_active_view(main)
+    set_view_selections(main, {
+      1, 1, 1, 1,
+      2, 1, 3, 1,
+    })
+
+    test.ok(command.perform("doc:toggle-line-comments"))
+    test.equal(text(doc), "// aa\n// bb\ncc\n")
+    test.same(selection(main), {
+      1, 1, 1, 1,
+      2, 1, 2, 6,
+    })
+
+    test.ok(command.perform("doc:toggle-line-comments"))
+    test.equal(text(doc), "aa\nbb\ncc\n")
+    test.same(selection(main), {
+      1, 1, 1, 1,
+      2, 1, 2, 3,
+    })
+  end)
+
+  test.it("indent at a collapsed caret in leading whitespace indents the line and jumps to text", function(context)
+    local doc, main = new_shared_views(context, "  aa")
+    core.set_active_view(main)
+    set_view_selection(main, 1, 2, 1, 2)
+
+    test.ok(command.perform("doc:indent"))
+
+    test.equal(text(doc), "    aa\n")
+    test.same(selection(main), { 1, 5, 1, 5 })
+  end)
+
+  test.it("indent at a collapsed caret after leading text inserts the stop text", function(context)
+    local doc, main = new_shared_views(context, "aa")
+    core.set_active_view(main)
+    set_view_selection(main, 1, 2, 1, 2)
+
+    test.ok(command.perform("doc:indent"))
+
+    test.equal(text(doc), "a a\n")
+    test.same(selection(main), { 1, 3, 1, 3 })
+  end)
+
   test.it("indent and unindent adjust multiple selected line ranges", function(context)
     local doc, main = new_shared_views(context, "aa\nbb\ncc")
     core.set_active_view(main)
