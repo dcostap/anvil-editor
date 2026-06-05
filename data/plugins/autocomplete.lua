@@ -1025,21 +1025,40 @@ command.add(predicate, {
       local current_partial = autocomplete.get_partial_symbol()
       local sz = #current_partial
 
-      for _, line1, col1, line2, _ in doc:get_selections(true) do
+      local edits = {}
+      local final_by_idx = {}
+      for idx, line1, col1, line2, col2 in doc:get_selections(true) do
         local n = col1 - 1
         local line = doc.lines[line1]
+        local replace_line1, replace_col1 = line1, col1
         for i = 1, sz + 1 do
           local j = sz - i
           local subline = line:sub(n - j, n)
           local subpartial = current_partial:sub(i, -1)
           if subpartial == subline then
-            doc:remove(line1, col1, line2, n - j)
+            replace_col1 = n - j
             break
           end
         end
+        edits[#edits + 1] = {
+          line1 = replace_line1,
+          col1 = replace_col1,
+          line2 = line2,
+          col2 = col2,
+          text = item.text,
+          idx = idx,
+        }
+        final_by_idx[idx] = "end"
       end
 
-      doc:text_input(item.text)
+      if #edits > 0 then
+        doc:apply_edits(edits, {
+          type = "insert",
+          selections = doc:selections_after_edits(edits, final_by_idx),
+          last_selection = doc.last_selection,
+          merge_cursors = false,
+        })
+      end
     end
     reset_suggestions()
   end,

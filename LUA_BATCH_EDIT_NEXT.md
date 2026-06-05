@@ -95,6 +95,15 @@ Completed coverage:
 - multi-line uncomment behavior
 - asserts each command emits one public document `on_text_change` notification
 
+## Just completed: autocomplete completion replacement
+
+`autocomplete:complete` now replaces matching partials at all carets through one `Doc:apply_edits(...)` transaction when the selected completion item does not handle insertion itself.
+
+Completed coverage:
+
+- multi-caret partial completion
+- asserts completion emits one public document `on_text_change` notification
+
 ## Current next target: remaining first-party edit loops
 
 Inspect remaining command/plugin paths for per-selection edit loops that still call:
