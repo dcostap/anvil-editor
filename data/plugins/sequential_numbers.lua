@@ -22,7 +22,7 @@ end
 
 local function insert_numbers(dv, initial, stride)
   local doc = dv.doc
-  local selections = {}
+  local selections, final_by_idx = {}, {}
   for idx, line1, col1, line2, col2 in doc:get_selections(true) do
     selections[#selections + 1] = {
       idx = idx,
@@ -32,16 +32,16 @@ local function insert_numbers(dv, initial, stride)
       col2 = col2,
       text = number_text(initial + (#selections * stride)),
     }
+    final_by_idx[idx] = "end"
   end
 
-  for i = #selections, 1, -1 do
-    local sel = selections[i]
-    if sel.line1 ~= sel.line2 or sel.col1 ~= sel.col2 then
-      doc:remove(sel.line1, sel.col1, sel.line2, sel.col2)
-    end
-    doc:insert(sel.line1, sel.col1, sel.text)
-    doc:set_selections(sel.idx, sel.line1, sel.col1 + #sel.text)
-  end
+  if #selections == 0 then return end
+  doc:apply_edits(selections, {
+    type = "replace",
+    selections = doc:selections_after_edits(selections, final_by_idx),
+    last_selection = doc.last_selection,
+    merge_cursors = false,
+  })
 end
 
 local function prompt_stride(dv, initial)
@@ -56,7 +56,9 @@ local function prompt_stride(dv, initial)
       if not is_docview(dv) then return end
       local stride = parse_number(text)
       if not stride then return end
-      insert_numbers(dv, initial, stride)
+      dv:with_selection_state(function()
+        insert_numbers(dv, initial, stride)
+      end)
     end,
   })
 end

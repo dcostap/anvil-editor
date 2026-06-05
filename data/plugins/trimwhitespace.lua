@@ -47,6 +47,7 @@ end
 ---@param doc core.doc
 function trimwhitespace.trim(doc)
   local cline, ccol = doc:get_selection()
+  local edits = {}
   for i = 1, #doc.lines do
     local old_text = doc:get_text(i, 1, i, math.huge)
     local new_text = old_text:gsub("%s*$", "")
@@ -57,9 +58,24 @@ function trimwhitespace.trim(doc)
     end
 
     if old_text ~= new_text then
-      doc:insert(i, 1, new_text)
-      doc:remove(i, #new_text + 1, i, math.huge)
+      edits[#edits + 1] = {
+        line1 = i,
+        col1 = 1,
+        line2 = i,
+        col2 = #doc.lines[i],
+        text = new_text,
+      }
     end
+  end
+  if #edits > 0 then
+    local selections = {}
+    for i = 1, #(doc.selections or {}) do selections[i] = doc.selections[i] end
+    doc:apply_edits(edits, {
+      type = "replace",
+      selections = selections,
+      last_selection = doc.last_selection,
+      merge_cursors = false,
+    })
   end
 end
 
@@ -67,22 +83,33 @@ end
 ---@param doc core.doc
 ---@param raw_remove? boolean Perform the removal not registering to undo stack
 function trimwhitespace.trim_empty_end_lines(doc, raw_remove)
-  for _=#doc.lines, 1, -1 do
-    local l = #doc.lines
-    if l > 1 and doc.lines[l] == "\n" then
-      local current_line = doc:get_selection()
-      if current_line == l then
-        doc:set_selection(l-1, math.huge, l-1, math.huge)
-      end
-      if not raw_remove then
-        doc:remove(l-1, math.huge, l, math.huge)
-      else
+  if raw_remove then
+    for _=#doc.lines, 1, -1 do
+      local l = #doc.lines
+      if l > 1 and doc.lines[l] == "\n" then
         table.remove(doc.lines, l)
+      else
+        break
       end
+    end
+    return
+  end
+
+  local first_empty
+  for l = #doc.lines, 2, -1 do
+    if doc.lines[l] == "\n" then
+      first_empty = l
     else
       break
     end
   end
+  if not first_empty then return end
+
+  local current_line = doc:get_selection()
+  if current_line and current_line >= first_empty then
+    doc:set_selection(first_empty - 1, math.huge, first_empty - 1, math.huge)
+  end
+  doc:remove(first_empty - 1, math.huge, #doc.lines, math.huge)
 end
 
 
