@@ -45,6 +45,15 @@ Completed coverage:
 - selected-range replacement returns the callback result
 - collapsed cursor replacement keeps selecting the inserted text
 
+## Just completed: Search UI replace-all
+
+`data/plugins/search_ui.lua` replace-all now collects replacements and applies them through one `Doc:apply_edits(...)` transaction.
+
+Completed coverage:
+
+- UI characterization for Search UI replace-all replacing multiple matches
+- asserts replace-all emits one public document `on_text_change` notification
+
 ## Current next target: remaining search/replace paths
 
 Inspect remaining search/replace command code and plugin paths for per-selection edit loops that still call:

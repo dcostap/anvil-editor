@@ -477,61 +477,70 @@ local function find_replace()
       end
     end
 
+    local opt = {
+      wrap = false,
+      no_case = not sensitive:is_toggled(),
+      whole_word = wholeword:is_toggled(),
+      pattern = patterncheck:is_toggled(),
+      regex = regexcheck:is_toggled(),
+    }
+
+    local edits = {}
     local n = 0
     for _, s in ipairs(selections) do
-      doc:set_selection(s[1], s[2])
-
+      local search_line, search_col = s[1], s[2]
       local f1, fc1 -- save position of first replaced result
-      local p1, pc1, p2, pc2
-      local n1, nc1, n2, nc2
-      repeat
-        p1, pc1, p2, pc2 = doc:get_selection(true)
-        find(false, true, false, true)
-        n1, nc1, n2, nc2 = doc:get_selection(true)
-        if p1 ~= n1 or pc1 ~= nc1 or p2 ~= n2 or pc2 ~= nc2 then
-          if f1 == n1 and fc1 == nc1 then -- prevent recursive replacement
-            doc:set_selection(p1, pc1)
-            break
-          end
-          if in_selection then
-            if n1 > s[3] or (n1 == s[3] and nc1 > s[4]) then
-              doc:set_selection(p1, pc1)
-              break
-            end
-          end
-          if not f1 then f1, fc1 = n1, nc1 end
-          n = n + 1
-          doc:replace_cursor(0, n1, nc1, n2, nc2, function()
-            local replacement, subject = new, nil
-            if rexpr then
-              subject = doc:get_text(n1, nc1, n2, nc2)
-              replacement = rexpr:gsub(subject, replacement, 1)
-            elseif pattern then
-              subject = doc:get_text(n1, nc1, n2, nc2)
-              replacement = subject:gsub(pattern, replacement, 1)
-            end
-            local new_len = #replacement
-            local old_len = nc2 - nc1
-            if old_len < new_len then
-              nc2 = nc2 + (new_len - old_len)
-            else
-              nc2 = nc2 - (old_len - new_len)
-            end
-            return replacement or subject
-          end)
-          doc:set_selection(n2, nc2)
-          if in_selection then
-            if n2 > s[3] or (n2 == s[3] and nc2 > s[4]) then break end
+      while true do
+        local n1, nc1, n2, nc2 = search.find(doc, search_line, search_col, findtext:get_text(), opt)
+        if not n1 then break end
+        if f1 == n1 and fc1 == nc1 then break end -- prevent recursive replacement
+        if in_selection and (n1 > s[3] or (n1 == s[3] and nc1 > s[4])) then break end
+        if not f1 then f1, fc1 = n1, nc1 end
+
+        local replacement = new
+        if rexpr or pattern then
+          local subject = doc:get_text(n1, nc1, n2, nc2)
+          if rexpr then
+            replacement = rexpr:gsub(subject, replacement, 1)
+          else
+            replacement = subject:gsub(pattern, replacement, 1)
           end
         end
-      until p1 == n1 and pc1 == nc1 and p2 == n2 and pc2 == nc2
+
+        n = n + 1
+        edits[#edits + 1] = {
+          line1 = n1,
+          col1 = nc1,
+          line2 = n2,
+          col2 = nc2,
+          text = replacement or "",
+          idx = 1,
+        }
+
+        search_line, search_col = n2, nc2
+        if n1 == n2 and nc1 == nc2 then break end
+      end
     end
 
-    if #selections > 1 then
-      doc:set_selection(selections[1][1], selections[1][2])
-      for i=2, #selections do
-        doc:add_selection(selections[i][1], selections[i][2])
+    if #edits > 0 then
+      local final_selections
+      if #selections > 1 then
+        final_selections = {}
+        for _, s in ipairs(selections) do
+          final_selections[#final_selections + 1] = s[1]
+          final_selections[#final_selections + 1] = s[2]
+          final_selections[#final_selections + 1] = s[1]
+          final_selections[#final_selections + 1] = s[2]
+        end
+      else
+        final_selections = doc:selections_after_edits(edits, { [1] = "end" }, doc.last_selection)
       end
+      doc:apply_edits(edits, {
+        type = "replace",
+        selections = final_selections,
+        last_selection = doc.last_selection,
+        merge_cursors = false,
+      })
     end
 
     Results:clear()

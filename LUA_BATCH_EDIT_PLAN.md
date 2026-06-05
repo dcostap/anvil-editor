@@ -363,7 +363,8 @@ Audit and migrate in-repo callers that loop edits:
 - `trimwhitespace.lua`
 - `intellij_actions.lua` duplicate/comment/paste-related actions
 - `intellij_find.lua` replacement paths — local find replace-all migrated; single replace already routes through text input
-- `search_ui.lua` and core find/replace replacement paths where they loop replacements
+- `search_ui.lua` replace-all — migrated
+- core find/replace replacement paths where they loop replacements
 - `diffview.lua` apply/copy actions and raw mutation wrappers
 - `quote.lua`, `reflow.lua`, `tabularize.lua` through `Doc:replace`
 - `autocomplete.lua` completion replacement if it remains a hot multi-edit path
@@ -380,7 +381,7 @@ All command builders should snapshot selections and needed original text before 
 - **Indent/unindent**: coalesce by affected line, compute per-line prefix replacement from the original document, then adjust selection endpoints from per-line deltas.
 - **Line duplicate/delete/move**: coalesce overlapping line selections before creating edits. Moving adjacent selected blocks needs explicit tests; avoid double-moving shared boundaries.
 - **Comment toggles**: calculate comment/uncomment decisions from the original document, then emit prefix/suffix edits. Coalesce line-comment ranges that overlap.
-- **Transforms/replace**: return the same result table shape as `Doc:replace` currently returns. `Doc:replace_cursor` is migrated and preserves collapsed-cursor inserted-text selection behavior. Local IntelliJ find replace-all is migrated to one batch transaction.
+- **Transforms/replace**: return the same result table shape as `Doc:replace` currently returns. `Doc:replace_cursor` is migrated and preserves collapsed-cursor inserted-text selection behavior. Local IntelliJ find replace-all and Search UI replace-all are migrated to one batch transaction.
 - **Trim whitespace/save-time edits**: use one batch per document save, and ensure autosave/dirty semantics are intentional.
 
 ## Testing Strategy
