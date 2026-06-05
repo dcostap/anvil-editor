@@ -1455,9 +1455,22 @@ local function final_selections_after_edits(self, normalized, final_by_idx, last
   local new_starts, new_total = line_starts_for(new_lines)
   local final_offsets = {}
   local delta = 0
+  local function final_offset_for(target, new_start, edit)
+    if target == "start" then return new_start end
+    if type(target) == "number" then return new_start + target end
+    return new_start + #edit.text
+  end
   for _, edit in ipairs(normalized) do
     local new_start = edit.start_offset + delta
-    final_offsets[edit.idx] = final_by_idx and final_by_idx[edit.idx] == "start" and new_start or (new_start + #edit.text)
+    local target = final_by_idx and final_by_idx[edit.idx]
+    if type(target) == "table" then
+      final_offsets[edit.idx] = {}
+      for i, item in ipairs(target) do
+        final_offsets[edit.idx][i] = final_offset_for(item, new_start, edit)
+      end
+    else
+      final_offsets[edit.idx] = final_offset_for(target, new_start, edit)
+    end
     delta = delta + #edit.text - (edit.end_offset - edit.start_offset)
   end
 
@@ -1485,11 +1498,14 @@ local function final_selections_after_edits(self, normalized, final_by_idx, last
     local selection_idx = (i - 1) / 4 + 1
     local final_offset = final_offsets[selection_idx]
     if final_offset then
-      local line, col = offset_to_position(new_lines, new_starts, new_total, final_offset)
-      new_selections[#new_selections + 1] = line
-      new_selections[#new_selections + 1] = col
-      new_selections[#new_selections + 1] = line
-      new_selections[#new_selections + 1] = col
+      local offsets = type(final_offset) == "table" and final_offset or { final_offset }
+      for _, offset in ipairs(offsets) do
+        local line, col = offset_to_position(new_lines, new_starts, new_total, offset)
+        new_selections[#new_selections + 1] = line
+        new_selections[#new_selections + 1] = col
+        new_selections[#new_selections + 1] = line
+        new_selections[#new_selections + 1] = col
+      end
     else
       local l1, c1 = map_position(self.selections[i], self.selections[i + 1])
       local l2, c2 = map_position(self.selections[i + 2], self.selections[i + 3])

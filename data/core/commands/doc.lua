@@ -269,6 +269,32 @@ local function newline_count(text)
   return n
 end
 
+local function paste_all_normal_clipboards(doc)
+  local payloads = {}
+  for cb_idx in ipairs(core.cursor_clipboard_whole_line) do
+    payloads[#payloads + 1] = tostring(core.cursor_clipboard[cb_idx] or ""):gsub("\r", "")
+  end
+  if #payloads == 0 then return end
+
+  local edits, final_by_idx = {}, {}
+  for idx, line1, col1, line2, col2 in doc:get_selections(true) do
+    local text, final_offsets = "", {}
+    for _, payload in ipairs(payloads) do
+      text = text .. payload
+      final_offsets[#final_offsets + 1] = #text
+    end
+    edits[#edits + 1] = { line1 = line1, col1 = col1, line2 = line2, col2 = col2, text = text, idx = idx }
+    final_by_idx[idx] = final_offsets
+  end
+  if #edits == 0 then return end
+  return doc:apply_edits(edits, {
+    type = "insert",
+    selections = doc:selections_after_edits(edits, final_by_idx),
+    last_selection = doc.last_selection,
+    merge_cursors = false,
+  })
+end
+
 local function paste_matching_whole_lines(doc, text_by_idx)
   local edits = {}
   local entries = {}
@@ -361,17 +387,16 @@ local commands = {
       end
     else
       -- Paste every clipboard and add a selection at the end of each one
+      if not only_whole_lines then
+        paste_all_normal_clipboards(dv.doc)
+        return
+      end
       local new_selections = {}
       for idx in dv.doc:get_selections() do
         for cb_idx in ipairs(core.cursor_clipboard_whole_line) do
           insert_paste(dv.doc, core.cursor_clipboard[cb_idx], only_whole_lines, idx)
-          if not only_whole_lines then
-            table.insert(new_selections, {dv.doc:get_selection_idx(idx)})
-          end
         end
-        if only_whole_lines then
-          table.insert(new_selections, {dv.doc:get_selection_idx(idx)})
-        end
+        table.insert(new_selections, {dv.doc:get_selection_idx(idx)})
       end
       local first = true
       for _,selection in pairs(new_selections) do
