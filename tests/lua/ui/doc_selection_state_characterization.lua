@@ -302,6 +302,29 @@ test.describe("Document View Selection State edit characterization", function()
     })
   end)
 
+  test.it("cut removes whole lines at multiple carets in one document change", function(context)
+    local doc, main = new_shared_views(context, "aa\nbb\ncc\ndd")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      1, 1, 1, 1,
+      3, 1, 3, 1,
+    })
+    local changes = 0
+    function doc:on_text_change()
+      changes = changes + 1
+    end
+
+    test.ok(command.perform("doc:cut"))
+
+    test.equal(text(doc), "bb\ndd\n")
+    test.equal(changes, 1)
+    test.same(selection(main), {
+      1, 1, 1, 1,
+      2, 1, 2, 1,
+    })
+    test.equal(system.get_clipboard(), "aa\ncc\n")
+  end)
+
   test.it("newline removes whitespace-only selected lines and inserts indentation", function(context)
     local doc, main = new_shared_views(context, "aa\n  \n  cc")
     core.set_active_view(main)

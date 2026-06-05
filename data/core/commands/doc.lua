@@ -46,8 +46,7 @@ local function append_line_if_last_line_for(target_doc, line)
   end
 end
 
-local function run_legacy_doc_command_as_batch(dv, change_type, fn)
-  local source = dv.doc
+local function run_legacy_doc_edit_as_batch(source, change_type, fn)
   local temp = Doc()
   temp.lines = {}
   for i = 1, #source.lines do temp.lines[i] = source.lines[i] end
@@ -73,6 +72,10 @@ local function run_legacy_doc_command_as_batch(dv, change_type, fn)
     source.last_selection = temp.last_selection
   end
   temp:on_close()
+end
+
+local function run_legacy_doc_command_as_batch(dv, change_type, fn)
+  return run_legacy_doc_edit_as_batch(dv.doc, change_type, fn)
 end
 
 local function save(filename)
@@ -120,28 +123,33 @@ local function cut_or_copy(delete)
       text = doc():get_text(line1, col1, line2, col2)
       full_text = full_text == "" and text or (text .. " " .. full_text)
       core.cursor_clipboard_whole_line[idx] = false
-      if delete then
-        doc():delete_to_cursor(idx, 0)
-      end
     else -- Cut/copy whole line
       -- Remove newline from the text. It will be added as needed on paste.
       text = string.sub(doc().lines[line1], 1, -2)
       full_text = full_text == "" and text .. "\n" or (text .. "\n" .. full_text)
       core.cursor_clipboard_whole_line[idx] = true
-      if delete then
-        if line1 < #doc().lines then
-          doc():remove(line1, 1, line1 + 1, 1)
-        elseif #doc().lines == 1 then
-          doc():remove(line1, 1, line1, math.huge)
-        else
-          doc():remove(line1 - 1, math.huge, line1, math.huge)
-        end
-        doc():set_selections(idx, line1, col1, line2, col2)
-      end
     end
     core.cursor_clipboard[idx] = text
   end
-  if delete then doc():merge_cursors() end
+  if delete then
+    run_legacy_doc_edit_as_batch(doc(), "remove", function(target_doc)
+      for idx, line1, col1, line2, col2 in target_doc:get_selections(true, true) do
+        if line1 ~= line2 or col1 ~= col2 then
+          target_doc:delete_to_cursor(idx, 0)
+        else
+          if line1 < #target_doc.lines then
+            target_doc:remove(line1, 1, line1 + 1, 1)
+          elseif #target_doc.lines == 1 then
+            target_doc:remove(line1, 1, line1, math.huge)
+          else
+            target_doc:remove(line1 - 1, math.huge, line1, math.huge)
+          end
+          target_doc:set_selections(idx, line1, col1, line2, col2)
+        end
+      end
+      target_doc:merge_cursors()
+    end)
+  end
   core.cursor_clipboard["full"] = full_text
   system.set_clipboard(full_text)
 end
