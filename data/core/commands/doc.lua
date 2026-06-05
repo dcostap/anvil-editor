@@ -334,9 +334,8 @@ local commands = {
     if core.cursor_clipboard["full"] ~= clipboard then
       core.cursor_clipboard = {}
       core.cursor_clipboard_whole_line = {}
-      for idx in dv.doc:get_selections() do
-        insert_paste(dv.doc, clipboard, false, idx)
-      end
+      local text = clipboard:gsub("\r", "")
+      dv.doc:text_input_by_selection(function() return text end, nil, { type = "insert" })
       return
     end
     -- Use internal clipboard(s)

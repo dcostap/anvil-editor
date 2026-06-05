@@ -141,10 +141,15 @@ test.describe("Document View Selection State edit characterization", function()
     core.cursor_clipboard = { full = "" }
     core.cursor_clipboard_whole_line = {}
     system.set_clipboard("X")
+    local changes = 0
+    function doc:on_text_change()
+      changes = changes + 1
+    end
 
     test.ok(command.perform("doc:paste"))
 
     test.equal(text(doc), "aXb\ncXd\n")
+    test.equal(changes, 1)
     test.same(selection(main), {
       1, 3, 1, 3,
       2, 3, 2, 3,
