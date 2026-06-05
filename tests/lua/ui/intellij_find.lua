@@ -1,6 +1,7 @@
 local core = require "core"
 local command = require "core.command"
 local test = require "core.test"
+local MessageBox = require "widget.messagebox"
 
 require "plugins.intellij_find"
 
@@ -41,6 +42,17 @@ end
 
 local function assert_selection(view, line1, col1, line2, col2)
   test.same({ line1, col1, line2, col2 }, selection_range(view))
+end
+
+local function active_find_input_for(owner_view)
+  local view = core.active_view
+  test.ok(view and view.local_find_input, "expected a local find input to be focused")
+  test.equal(view.local_find_state and view.local_find_state.owner_view, owner_view)
+  return view
+end
+
+local function type_into_active_view(text)
+  core.root_panel:on_text_input(text)
 end
 
 test.describe("DocView Prompt Bar find", function()
@@ -84,5 +96,30 @@ test.describe("DocView Prompt Bar find", function()
     test.ok(command.perform("find-replace:find"))
 
     assert_selection(view, 1, 1, 1, 6)
+  end)
+
+  test.it("replace all batches local find matches into one text change", function(context)
+    local view, doc = open_editor(context, "alpha beta alpha\nalpha\n")
+    local changes = 0
+    function doc:on_text_change()
+      changes = changes + 1
+    end
+
+    test.ok(command.perform("find-replace:replace"))
+    active_find_input_for(view)
+    type_into_active_view("alpha")
+    test.ok(command.perform("user:find-toggle-replace-field"))
+    active_find_input_for(view)
+    type_into_active_view("omega")
+
+    local warning = MessageBox.warning
+    MessageBox.warning = function(title, message, callback)
+      callback(nil, 1)
+    end
+    test.ok(command.perform("user:find-replace-all-confirm"))
+    MessageBox.warning = warning
+
+    test.equal(table.concat(doc.lines), "omega beta omega\nomega\n\n")
+    test.equal(changes, 1)
   end)
 end)

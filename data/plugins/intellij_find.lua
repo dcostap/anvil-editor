@@ -656,11 +656,21 @@ local function perform_replace_all(view, state, matches, replacement)
   if not view or not state or not matches or #matches == 0 then return end
   view:with_selection_state(function()
     local d = view.doc
-    for i = #matches, 1, -1 do
-      local match = matches[i]
-      d:remove(match.line, match.col1, match.line, match.col2)
-      d:insert(match.line, match.col1, replacement or "")
+    local edits = {}
+    for _, match in ipairs(matches) do
+      edits[#edits + 1] = {
+        line1 = match.line,
+        col1 = match.col1,
+        line2 = match.line,
+        col2 = match.col2,
+        text = replacement or "",
+      }
     end
+    d:apply_edits(edits, {
+      type = "replace",
+      last_selection = d.last_selection,
+      merge_cursors = false,
+    })
   end)
   state.origin = copy_selection(view)
   refresh_matches(view, state, { from_origin = true, scroll = true })

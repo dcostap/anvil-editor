@@ -27,7 +27,16 @@ Completed cleanup:
 - shared helper owns edit construction, line-delta selection math, and the final `apply_edits(...)` call
 - existing paste characterization tests continue to pass
 
-## Current next target: search/replace paths
+## Just completed: IntelliJ local find replace-all
+
+The local find plugin's replace-all operation now builds one replacement edit per match and applies them in one batch transaction.
+
+Completed coverage:
+
+- UI characterization for local find replace-all replacing multiple matches
+- asserts replace-all emits one public document `on_text_change` notification
+
+## Current next target: remaining search/replace paths
 
 Inspect remaining search/replace command code and plugin paths for per-selection edit loops that still call:
 
