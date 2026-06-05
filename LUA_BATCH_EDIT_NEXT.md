@@ -1,59 +1,33 @@
 # Lua Batch Edit Refactor — Next Work
 
-## Current next target: `Doc:ime_text_editing`
+## Just completed: `Doc:ime_text_editing`
 
-`Doc:ime_text_editing` still uses per-selection legacy operations:
+`Doc:ime_text_editing` has been migrated to the Lua batch edit transaction path.
 
-- `delete_to_cursor`
-- `insert`
-- `set_selections`
+Completed coverage:
 
-It should be migrated to the Lua batch edit transaction path.
+- collapsed multi-caret IME input
+- selected range replacement
+- final composition selection anchor direction (`end -> start`)
+- one public `on_text_change` notification for multi-caret IME input
 
-### Why this is next
+Implementation notes:
 
-- It is conceptually close to text input.
-- It still performs one or more edits per selection.
-- It has special final selection behavior that should be characterized before refactoring:
+- the method now builds one edit per original selection
+- final selections are computed explicitly so the composing text remains selected backwards
+- `start` and `length` remain part of the public signature but are not interpreted by the migrated path
 
-```lua
-self:set_selections(sidx, line1, col1 + #text, line1, col1)
-```
+## Just completed: paste helper cleanup
 
-That means the final selection/caret anchor direction matters.
+Whole-line paste helper duplication has been consolidated.
 
-### Suggested implementation steps
+Completed cleanup:
 
-1. Add runtime characterization tests for `Doc:ime_text_editing`:
-   - collapsed multi-caret input
-   - selected range replacement
-   - final selection anchor direction
-2. Refactor `Doc:ime_text_editing` to:
-   - build one edit list
-   - compute explicit final selections
-   - call `Doc:apply_edits(...)`
-3. Run targeted tests.
-4. Run full Lua runtime/UI tests.
-5. Commit separately.
+- `paste_matching_whole_lines(...)` and `paste_all_whole_line_clipboards(...)` now share `paste_whole_lines_by_selection(...)`
+- shared helper owns edit construction, line-delta selection math, and the final `apply_edits(...)` call
+- existing paste characterization tests continue to pass
 
-## Next cleanup target: paste helpers
-
-Paste is now substantially batched, but helper structure can be cleaned up.
-
-### Candidate cleanup
-
-- `paste_matching_whole_lines(...)`
-- `paste_all_whole_line_clipboards(...)`
-
-These share similar selection/line-delta logic and could be consolidated.
-
-### Goal
-
-Reduce duplicate paste selection math while preserving characterized behavior.
-
-## Later targets
-
-### Search/replace paths
+## Current next target: search/replace paths
 
 Inspect remaining search/replace command code and plugin paths for per-selection edit loops that still call:
 
@@ -66,4 +40,4 @@ Migrate safe paths to `apply_edits` after adding characterization tests.
 
 ### Documentation update
 
-Update `LUA_BATCH_EDIT_PLAN.md` after the next implementation chunk to reflect completed paste batching and remaining work.
+Keep `LUA_BATCH_EDIT_PLAN.md` current as each implementation chunk lands.

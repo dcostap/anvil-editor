@@ -74,6 +74,57 @@ test.describe("core.doc edit behavior characterization", function()
     })
   end)
 
+  test.it("IME editing inserts at multiple collapsed carets and selects the composing text backwards", function()
+    local doc = Doc()
+    set_text(doc, "one\ntwo")
+    set_selections(doc, {
+      1, 1, 1, 1,
+      2, 1, 2, 1,
+    })
+
+    local changes = 0
+    function doc:on_text_change()
+      changes = changes + 1
+    end
+
+    doc:ime_text_editing("X", 0, 0)
+
+    test.equal(text(doc), "Xone\nXtwo\n")
+    test.equal(changes, 1)
+    test.same(doc.selections, {
+      1, 2, 1, 1,
+      2, 2, 2, 1,
+    })
+  end)
+
+  test.it("IME editing replaces multiple selected ranges", function()
+    local doc = Doc()
+    set_text(doc, "abc def")
+    set_selections(doc, {
+      1, 1, 1, 4,
+      1, 5, 1, 8,
+    })
+
+    doc:ime_text_editing("X", 0, 0)
+
+    test.equal(text(doc), "X X\n")
+    test.same(doc.selections, {
+      1, 2, 1, 1,
+      1, 4, 1, 3,
+    })
+  end)
+
+  test.it("IME editing keeps the final selection anchor at the composition start", function()
+    local doc = Doc()
+    set_text(doc, "abc")
+    doc:set_selection(1, 2, 1, 2)
+
+    doc:ime_text_editing("XY", 0, 0)
+
+    test.equal(text(doc), "aXYbc\n")
+    test.same(doc.selections, { 1, 4, 1, 2 })
+  end)
+
   test.it("typing handles mixed collapsed carets and selected ranges in one edit", function()
     local doc = Doc()
     set_text(doc, "abc def ghi\none two three")

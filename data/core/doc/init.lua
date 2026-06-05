@@ -1528,6 +1528,66 @@ function Doc:selections_after_edits(edits, final_by_idx, last_selection, opts)
   return final_selections_after_edits(self, normalized, final_by_idx, last_selection)
 end
 
+local function selection_ranges_after_edits(self, normalized, ranges_by_idx, last_selection)
+  local old_lines = self.lines
+  local old_starts = line_starts_for(old_lines)
+  local new_lines = build_lines_for_normalized_edits(old_lines, normalized)
+  local new_starts, new_total = line_starts_for(new_lines)
+  local range_offsets = {}
+  local delta = 0
+  for _, edit in ipairs(normalized) do
+    local new_start = edit.start_offset + delta
+    local range = ranges_by_idx and ranges_by_idx[edit.idx]
+    if range then
+      local start_offset = range[1] == "end" and new_start + #edit.text or new_start
+      local end_offset = range[2] == "end" and new_start + #edit.text or new_start
+      range_offsets[edit.idx] = { start_offset, end_offset }
+    end
+    delta = delta + #edit.text - (edit.end_offset - edit.start_offset)
+  end
+
+  local function map_position(line, col, affinity)
+    line, col = sanitize_position_in_lines(old_lines, line, col)
+    local pos = position_to_offset(old_starts, line, col)
+    local map_delta = 0
+    for _, edit in ipairs(normalized) do
+      if pos < edit.start_offset then
+        break
+      elseif edit.start_offset == edit.end_offset and pos == edit.start_offset then
+        if affinity == "after" then map_delta = map_delta + #edit.text end
+        break
+      elseif pos <= edit.end_offset then
+        return offset_to_position(new_lines, new_starts, new_total, edit.start_offset + map_delta)
+      else
+        map_delta = map_delta + #edit.text - (edit.end_offset - edit.start_offset)
+      end
+    end
+    return offset_to_position(new_lines, new_starts, new_total, pos + map_delta)
+  end
+
+  local new_selections = {}
+  for i = 1, #self.selections, 4 do
+    local selection_idx = (i - 1) / 4 + 1
+    local range = range_offsets[selection_idx]
+    if range then
+      local l1, c1 = offset_to_position(new_lines, new_starts, new_total, range[1])
+      local l2, c2 = offset_to_position(new_lines, new_starts, new_total, range[2])
+      new_selections[#new_selections + 1] = l1
+      new_selections[#new_selections + 1] = c1
+      new_selections[#new_selections + 1] = l2
+      new_selections[#new_selections + 1] = c2
+    else
+      local l1, c1 = map_position(self.selections[i], self.selections[i + 1])
+      local l2, c2 = map_position(self.selections[i + 2], self.selections[i + 3])
+      new_selections[#new_selections + 1] = l1
+      new_selections[#new_selections + 1] = c1
+      new_selections[#new_selections + 1] = l2
+      new_selections[#new_selections + 1] = c2
+    end
+  end
+  return new_selections, last_selection or self.last_selection
+end
+
 
 function Doc:text_input_by_selection(text_by_idx, idx, opts)
   opts = opts or {}
@@ -1570,13 +1630,25 @@ end
 
 
 function Doc:ime_text_editing(text, start, length, idx)
+  text = tostring(text or "")
+  local edits = {}
+  local ranges_by_idx = {}
   for sidx, line1, col1, line2, col2 in self:get_selections(true, idx or true) do
-    if line1 ~= line2 or col1 ~= col2 then
-      self:delete_to_cursor(sidx)
-    end
-    self:insert(line1, col1, text)
-    self:set_selections(sidx, line1, col1 + #text, line1, col1)
+    edits[#edits + 1] = {
+      line1 = line1, col1 = col1, line2 = line2, col2 = col2,
+      text = text, idx = sidx,
+    }
+    ranges_by_idx[sidx] = { "end", "start" }
   end
+  if #edits == 0 then return end
+  local normalized = self:plan_edits(edits)
+  local selections, last_selection = selection_ranges_after_edits(self, normalized, ranges_by_idx, self.last_selection)
+  return self:apply_edits(edits, {
+    type = "insert",
+    selections = selections,
+    last_selection = last_selection,
+    merge_cursors = false,
+  })
 end
 
 

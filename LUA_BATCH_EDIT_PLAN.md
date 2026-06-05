@@ -22,7 +22,7 @@ Important constraints verified in the code:
 - `data/core/doc/init.lua` has the current hot path:
   - `Doc:raw_insert` / `Doc:raw_remove` mutate `doc.lines`, update active selections, push undo entries, notify the highlighter/cache, and adjust inactive registered Document View Selection States.
   - `Doc:insert` / `Doc:remove` wrap the raw calls, clear redo, update clean ids partially, and call `on_text_change`.
-  - `Doc:text_input`, `Doc:ime_text_editing`, `Doc:delete_to_cursor`, `Doc:replace`, `Doc:indent_text`, and many commands loop selections and repeatedly call `insert`/`remove`.
+  - `Doc:text_input`, `Doc:ime_text_editing`, `Doc:delete_to_cursor`, and substantial paste/command paths now route through batch edit transactions; `Doc:replace`, `Doc:indent_text`, and remaining commands/plugins still need audit for repeated `insert`/`remove` loops.
   - `Doc:remove` does not currently mirror `Doc:insert`'s clean-id guard when editing after undo; centralizing mutation should fix and test this rather than preserve the inconsistency.
 - Selection State is view-owned:
   - `DocView:with_selection_state` temporarily exposes a Document View's Selection State through the Document Selection Mirror (`doc.selections` / `doc.last_selection`).
@@ -330,9 +330,9 @@ Migrate first after infrastructure and hook migration are in place:
 
 - `Doc:insert`
 - `Doc:remove`
-- `Doc:text_input`
-- `Doc:ime_text_editing`
-- `Doc:delete_to_cursor` / `Doc:delete_to`
+- `Doc:text_input` — migrated
+- `Doc:ime_text_editing` — migrated; final composition selection is explicitly preserved from end to start
+- `Doc:delete_to_cursor` / `Doc:delete_to` — migrated
 - `Doc:replace_cursor` / `Doc:replace`
 - `Doc:indent_text`
 
@@ -372,10 +372,10 @@ Audit and migrate in-repo callers that loop edits:
 
 All command builders should snapshot selections and needed original text before calling `apply_edits`. Do not iterate live selections while mutating.
 
-- **Typing/text input**: build one replacement per original selection. Selected ranges are replaced; collapsed carets insert. Overwrite mode changes the range to the next character for single-character input. Final carets go after inserted text, matching current `move_to_cursor(sidx, #text)` behavior.
-- **IME composition**: preserve current behavior first: inserted text creates a composition selection from end to start. Characterize `start`/`length` before attempting behavior changes.
-- **Delete/backspace/delete-to**: selected ranges delete directly; collapsed carets delete the translated range. Zero-length deletes should not dirty the document or create undo entries.
-- **Paste**: build all paste edits in one transaction, including whole-line paste. Preserve current one-clipboard-per-caret and many-clipboards-per-caret behavior. Explicitly test selections after whole-line paste at column 1 vs middle-of-line.
+- **Typing/text input**: migrated. Build one replacement per original selection. Selected ranges are replaced; collapsed carets insert. Overwrite mode changes the range to the next character for single-character input. Final carets go after inserted text, matching current `move_to_cursor(sidx, #text)` behavior.
+- **IME composition**: migrated. Inserted text creates a composition selection from end to start. `start`/`length` are still passed through the existing signature but are not otherwise interpreted.
+- **Delete/backspace/delete-to**: `Doc:delete_to_cursor` / `delete_to` are migrated; command-specific fallback cases still need audit. Selected ranges delete directly; collapsed carets delete the translated range. Zero-length deletes should not dirty the document or create undo entries.
+- **Paste**: migrated for external paste, matching per-caret payloads, mismatched normal payloads, and mismatched whole-line payloads. Whole-line paste helper selection math has been consolidated.
 - **Indent/unindent**: coalesce by affected line, compute per-line prefix replacement from the original document, then adjust selection endpoints from per-line deltas.
 - **Line duplicate/delete/move**: coalesce overlapping line selections before creating edits. Moving adjacent selected blocks needs explicit tests; avoid double-moving shared boundaries.
 - **Comment toggles**: calculate comment/uncomment decisions from the original document, then emit prefix/suffix edits. Coalesce line-comment ranges that overlap.
@@ -463,10 +463,10 @@ Run syntax/tests with the repo-local LuaJIT/Meson commands documented in `AGENTS
 
 ### Phase 4: High-Impact Multi-Caret Paths
 
-1. Migrate `Doc:text_input` and `Doc:ime_text_editing`.
-2. Migrate `Doc:delete_to_cursor` / `delete_to`.
-3. Migrate `doc:paste` and remove the paste undo patch.
-4. Migrate newline/delete/backspace commands.
+1. Migrate `Doc:text_input` and `Doc:ime_text_editing`. — done
+2. Migrate `Doc:delete_to_cursor` / `delete_to`. — done
+3. Migrate `doc:paste` and remove the paste undo patch. — substantially done; whole-line paste helper cleanup done
+4. Migrate/audit newline/delete/backspace command fallback paths.
 5. Measure 1,000+ carets and inspect quiet logs.
 
 ### Phase 5: Line and Transform Commands
