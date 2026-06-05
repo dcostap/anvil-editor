@@ -1090,11 +1090,12 @@ local function line_comment_at_start(dv)
     end
   end
 
-  for line = last_line, first_line, -1 do
+  local edits = {}
+  for line = first_line, last_line do
     if uncomment then
-      with_origin_clear_suppressed(function() doc:remove(line, 1, line, #comment + 1) end)
+      edits[#edits + 1] = { line1 = line, col1 = 1, line2 = line, col2 = #comment + 1, text = "" }
     else
-      with_origin_clear_suppressed(function() doc:insert(line, 1, comment) end)
+      edits[#edits + 1] = { line1 = line, col1 = 1, line2 = line, col2 = 1, text = comment }
     end
   end
 
@@ -1105,7 +1106,20 @@ local function line_comment_at_start(dv)
     end
     return col
   end
-  doc:set_selection(l1, adjust_col(l1, c1), l2, adjust_col(l2, c2))
+  local selections = { l1, adjust_col(l1, c1), l2, adjust_col(l2, c2) }
+  if #edits > 0 then
+    with_origin_clear_suppressed(function()
+      doc:apply_edits(edits, {
+        type = uncomment and "remove" or "insert",
+        selections = selections,
+        last_selection = doc.last_selection,
+        merge_cursors = false,
+      })
+    end)
+  else
+    doc:set_selection(table.unpack(selections))
+  end
+  clear_selection_origin(doc)
 end
 
 local function offset_in_any_selection(doc, starts, offset)

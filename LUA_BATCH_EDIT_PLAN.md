@@ -361,7 +361,7 @@ Audit and migrate in-repo callers that loop edits:
 
 - `sequential_numbers.lua`
 - `trimwhitespace.lua`
-- `intellij_actions.lua` duplicate/comment/paste-related actions — duplicate-current-line migrated; comment helpers remain to audit
+- `intellij_actions.lua` duplicate/comment/paste-related actions — duplicate-current-line and line-comment-at-start migrated; remaining helpers still need audit
 - `intellij_find.lua` replacement paths — local find replace-all migrated; single replace already routes through text input
 - `search_ui.lua` replace-all — migrated
 - core find/replace replacement paths where they loop replacements

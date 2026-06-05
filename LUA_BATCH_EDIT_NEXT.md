@@ -85,6 +85,16 @@ Completed coverage:
 - multi-selection duplicate-current-line behavior
 - asserts the command emits one public document `on_text_change` notification
 
+## Just completed: IntelliJ line-comment-at-start
+
+`user:comment-with-line-comment-at-start` now builds comment/uncomment edits and applies them through one `Doc:apply_edits(...)` transaction.
+
+Completed coverage:
+
+- multi-line comment behavior
+- multi-line uncomment behavior
+- asserts each command emits one public document `on_text_change` notification
+
 ## Current next target: remaining first-party edit loops
 
 Inspect remaining command/plugin paths for per-selection edit loops that still call:

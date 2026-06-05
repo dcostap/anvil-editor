@@ -76,4 +76,34 @@ test.describe("IntelliJ actions batch behavior", function()
       5, 1, 5, 1,
     })
   end)
+
+  test.it("line comment at start comments selected lines in one document change", function(context)
+    local view, doc = open_editor(context, "aa\nbb\ncc")
+    set_view_selections(view, { 1, 2, 3, 3 })
+    local changes = 0
+    function doc:on_text_change()
+      changes = changes + 1
+    end
+
+    test.ok(command.perform("user:comment-with-line-comment-at-start"))
+
+    test.equal(table.concat(doc.lines), "//aa\n//bb\n//cc\n")
+    test.equal(changes, 1)
+    test.same(view_selections(view), { 1, 4, 3, 5 })
+  end)
+
+  test.it("line comment at start uncomments selected lines in one document change", function(context)
+    local view, doc = open_editor(context, "//aa\n//bb\n//cc")
+    set_view_selections(view, { 1, 4, 3, 5 })
+    local changes = 0
+    function doc:on_text_change()
+      changes = changes + 1
+    end
+
+    test.ok(command.perform("user:comment-with-line-comment-at-start"))
+
+    test.equal(table.concat(doc.lines), "aa\nbb\ncc\n")
+    test.equal(changes, 1)
+    test.same(view_selections(view), { 1, 2, 3, 3 })
+  end)
 end)
