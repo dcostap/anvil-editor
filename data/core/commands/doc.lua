@@ -5,6 +5,7 @@ local config = require "core.config"
 local encodings = require "core.doc.encodings"
 local translate = require "core.doc.translate"
 local style = require "core.style"
+local Doc = require "core.doc"
 local DocView = require "core.docview"
 local tokenizer = require "core.tokenizer"
 
@@ -24,6 +25,13 @@ local function doc_multiline_selections(sort)
     end
     return idx, line1, col1, line2, col2
   end
+end
+
+local function sort_positions(line1, col1, line2, col2)
+  if line1 > line2 or line1 == line2 and col1 > col2 then
+    return line2, col2, line1, col1, true
+  end
+  return line1, col1, line2, col2, false
 end
 
 local function append_line_if_last_line(line)
@@ -419,16 +427,32 @@ local commands = {
       text_by_idx[idx] = "\n" .. indent
     end
     if fallback then
-      for idx, line, col in dv.doc:get_selections(false, true) do
-        local indent = dv.doc.lines[line]:match("^[\t ]*")
+      local temp = Doc()
+      temp.lines = {}
+      for i = 1, #dv.doc.lines do temp.lines[i] = dv.doc.lines[i] end
+      temp.selections = { table.unpack(dv.doc.selections) }
+      temp.last_selection = dv.doc.last_selection
+      function temp:on_text_change() end
+      for idx, line, col in temp:get_selections(false, true) do
+        local indent = temp.lines[line]:match("^[\t ]*")
         if col <= #indent then
           indent = indent:sub(#indent + 2 - col)
         end
-        if not config.keep_newline_whitespace and dv.doc.lines[line]:match("^%s+$") then
-          dv.doc:remove(line, 1, line, math.huge)
+        if not config.keep_newline_whitespace and temp.lines[line]:match("^%s+$") then
+          temp:remove(line, 1, line, math.huge)
         end
-        dv.doc:text_input("\n" .. indent, idx)
+        temp:text_input("\n" .. indent, idx)
       end
+      local text = table.concat(temp.lines):gsub("\n$", "")
+      dv.doc:apply_edits({
+        { line1 = 1, col1 = 1, line2 = #dv.doc.lines, col2 = math.huge, text = text },
+      }, {
+        type = "insert",
+        selections = temp.selections,
+        last_selection = temp.last_selection,
+        merge_cursors = false,
+      })
+      temp:on_close()
     else
       dv.doc:text_input_by_selection(text_by_idx, nil, { type = "insert" })
     end
@@ -503,12 +527,26 @@ local commands = {
       end
     end
     if fallback then
+      local edits, final_by_idx = {}, {}
       for idx, line1, col1, line2, col2 in dv.doc:get_selections(true, true) do
-        if line1 == line2 and col1 == col2 and dv.doc.lines[line1]:find("^%s*$", col1) then
-          dv.doc:remove(line1, col1, line1, math.huge)
+        local start_line, start_col, end_line, end_col = line1, col1, line2, col2
+        if line1 == line2 and col1 == col2 then
+          if dv.doc.lines[line1]:find("^%s*$", col1) and line1 < #dv.doc.lines then
+            end_line, end_col = line1 + 1, 1
+          else
+            local l2, c2 = dv.doc:position_offset(line1, col1, translate.next_char)
+            start_line, start_col, end_line, end_col = sort_positions(line1, col1, l2, c2)
+          end
         end
-        dv.doc:delete_to_cursor(idx, translate.next_char)
+        edits[#edits + 1] = { line1 = start_line, col1 = start_col, line2 = end_line, col2 = end_col, text = "", idx = idx }
+        final_by_idx[idx] = "start"
       end
+      dv.doc:apply_edits(edits, {
+        type = "remove",
+        selections = dv.doc:selections_after_edits(edits, final_by_idx),
+        last_selection = dv.doc.last_selection,
+        merge_cursors = true,
+      })
     else
       dv.doc:delete_to(translate.next_char)
     end
@@ -527,17 +565,28 @@ local commands = {
       end
     end
     if fallback then
+      local edits, final_by_idx = {}, {}
       for idx, line1, col1, line2, col2 in dv.doc:get_selections(true, true) do
+        local start_line, start_col, end_line, end_col = line1, col1, line2, col2
         if line1 == line2 and col1 == col2 then
           local text = dv.doc:get_text(line1, 1, line1, col1)
+          local l2, c2
           if #text >= indent_size and text:find("^ *$") then
-            dv.doc:delete_to_cursor(idx, 0, -indent_size)
-            goto continue
+            l2, c2 = dv.doc:position_offset(line1, col1, 0, -indent_size)
+          else
+            l2, c2 = dv.doc:position_offset(line1, col1, translate.previous_char)
           end
+          start_line, start_col, end_line, end_col = sort_positions(line1, col1, l2, c2)
         end
-        dv.doc:delete_to_cursor(idx, translate.previous_char)
-        ::continue::
+        edits[#edits + 1] = { line1 = start_line, col1 = start_col, line2 = end_line, col2 = end_col, text = "", idx = idx }
+        final_by_idx[idx] = "start"
       end
+      dv.doc:apply_edits(edits, {
+        type = "remove",
+        selections = dv.doc:selections_after_edits(edits, final_by_idx),
+        last_selection = dv.doc.last_selection,
+        merge_cursors = true,
+      })
     else
       dv.doc:delete_to(translate.previous_char)
     end
@@ -573,9 +622,8 @@ local commands = {
   ["doc:join-lines"] = function(dv)
     local actions, fallback = {}, false
     for idx, line1, col1, line2, col2 in dv.doc:get_selections(true) do
-      local had_selection = line1 ~= line2 or col1 ~= col2
       if line1 == line2 then line2 = line2 + 1 end
-      if not had_selection or line2 > #dv.doc.lines then fallback = true; break end
+      if line2 > #dv.doc.lines then fallback = true; break end
       local text = dv.doc:get_text(line1, 1, line2, math.huge)
       text = text:gsub("(.-)\n[\t ]*", function(x)
         return x:find("^%s*$") and x or x .. " "

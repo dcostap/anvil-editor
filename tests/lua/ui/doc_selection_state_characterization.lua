@@ -64,6 +64,7 @@ test.describe("Document View Selection State edit characterization", function()
     context.previous_cursor_clipboard_whole_line = core.cursor_clipboard_whole_line
     context.previous_tab_type = config.tab_type
     context.previous_indent_size = config.indent_size
+    context.previous_keep_newline_whitespace = config.keep_newline_whitespace
     config.tab_type = "soft"
     config.indent_size = 2
   end)
@@ -71,6 +72,7 @@ test.describe("Document View Selection State edit characterization", function()
   test.after_each(function(context)
     config.tab_type = context.previous_tab_type
     config.indent_size = context.previous_indent_size
+    config.keep_newline_whitespace = context.previous_keep_newline_whitespace
     system.set_clipboard(context.previous_clipboard or "")
     core.cursor_clipboard = context.previous_cursor_clipboard
     core.cursor_clipboard_whole_line = context.previous_cursor_clipboard_whole_line
@@ -297,6 +299,96 @@ test.describe("Document View Selection State edit characterization", function()
     test.same(selection(main), {
       2, 1, 2, 1,
       4, 1, 4, 1,
+    })
+  end)
+
+  test.it("newline removes whitespace-only selected lines and inserts indentation", function(context)
+    local doc, main = new_shared_views(context, "aa\n  \n  cc")
+    core.set_active_view(main)
+    config.keep_newline_whitespace = false
+    set_view_selections(main, {
+      2, 2, 2, 2,
+      3, 3, 3, 3,
+    })
+    local changes = 0
+    function doc:on_text_change()
+      changes = changes + 1
+    end
+
+    test.ok(command.perform("doc:newline"))
+
+    test.equal(text(doc), "aa\n\n \n  \n  cc\n")
+    test.equal(changes, 1)
+    test.same(selection(main), {
+      3, 2, 3, 2,
+      5, 3, 5, 3,
+    })
+  end)
+
+  test.it("delete trims trailing whitespace before deleting the line break", function(context)
+    local doc, main = new_shared_views(context, "aa   \nbb   \ncc")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      1, 3, 1, 3,
+      2, 3, 2, 3,
+    })
+    local changes = 0
+    function doc:on_text_change()
+      changes = changes + 1
+    end
+
+    test.ok(command.perform("doc:delete"))
+
+    test.equal(text(doc), "aabbcc\n")
+    test.equal(changes, 1)
+    test.same(selection(main), {
+      1, 3, 1, 3,
+      1, 5, 1, 5,
+    })
+  end)
+
+  test.it("backspace removes indentation stops and previous characters together", function(context)
+    local doc, main = new_shared_views(context, "    aa\nbb")
+    core.set_active_view(main)
+    config.indent_size = 2
+    set_view_selections(main, {
+      1, 5, 1, 5,
+      2, 2, 2, 2,
+    })
+    local changes = 0
+    function doc:on_text_change()
+      changes = changes + 1
+    end
+
+    test.ok(command.perform("doc:backspace"))
+
+    test.equal(text(doc), "  aa\nb\n")
+    test.equal(changes, 1)
+    test.same(selection(main), {
+      1, 3, 1, 3,
+      2, 1, 2, 1,
+    })
+  end)
+
+  test.it("join-lines joins multiple collapsed carets", function(context)
+    local doc, main = new_shared_views(context, "aa\nbb\ncc\ndd")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      1, 1, 1, 1,
+      3, 1, 3, 1,
+    })
+    local changes = 0
+    function doc:on_text_change()
+      changes = changes + 1
+    end
+
+    test.ok(command.perform("doc:join-lines"))
+
+    test.equal(text(doc), "aa bb\ncc dd\n")
+    test.equal(changes, 1)
+    test.same(selection(main), {
+      1, 6, 1, 6,
+      2, 6, 2, 6,
     })
   end)
 

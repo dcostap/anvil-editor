@@ -114,6 +114,18 @@ Completed coverage:
 - multi-caret newline below behavior
 - asserts each command emits one public document `on_text_change` notification
 
+## Just completed: core command fallback paths
+
+The special-case fallback paths in core document commands now apply one document transaction for the characterized multi-caret cases.
+
+Completed coverage:
+
+- `doc:newline` whitespace-only line fallback
+- `doc:delete` trailing-whitespace-before-linebreak fallback
+- `doc:backspace` indentation fallback mixed with normal backspace
+- `doc:join-lines` collapsed multi-caret fallback
+- asserts each command emits one public document `on_text_change` notification
+
 ## Current next target: remaining first-party edit loops
 
 Inspect remaining command/plugin paths for per-selection edit loops that still call:
