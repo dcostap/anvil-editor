@@ -369,6 +369,25 @@ function Doc:raw_remove(line1, col1, line2, col2, undo_stack, time)
   end
 end
 
+local old_doc_on_text_transaction = Doc.on_text_transaction
+function Doc:on_text_transaction(transaction)
+  local result = old_doc_on_text_transaction(self, transaction)
+  local ranges = transaction and transaction.changed_ranges
+  if ranges and open_files[self] then
+    for _, docview in ipairs(open_files[self]) do
+      if docview.wrapped_settings then
+        if #ranges == 1 then
+          local range = ranges[1]
+          LineWrapping.update_breaks(docview, range.old_line1, range.old_line2, range.line_delta or 0)
+        else
+          LineWrapping.reconstruct_breaks(docview, docview.wrapped_settings.font, docview.wrapped_settings.width)
+        end
+      end
+    end
+  end
+  return result
+end
+
 local old_doc_on_close = Doc.on_close
 function Doc:on_close()
   old_doc_on_close(self)

@@ -122,6 +122,17 @@ function Highlighter:remove_notify(line, n)
   common.splice(self.lines, line, n)
 end
 
+function Highlighter:batch_notify(changed_ranges)
+  local first_line
+  for _, range in ipairs(changed_ranges or {}) do
+    local line = math.min(range.old_line1 or math.huge, range.new_line1 or math.huge)
+    if line ~= math.huge then first_line = math.min(first_line or line, line) end
+  end
+  if not first_line then return end
+  self:soft_reset()
+  self:invalidate(first_line)
+end
+
 function Highlighter:update_notify(line, n)
   -- plugins can hook here to be notified that lines have been retokenized
   self.doc:clear_cache(line, n)

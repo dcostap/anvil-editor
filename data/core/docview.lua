@@ -317,6 +317,33 @@ function DocView.adjust_registered_selection_states(doc, kind, active_view, ...)
   end
 end
 
+function DocView.adjust_registered_selection_states_for_batch(doc, active_view, mapper, transaction)
+  local views = DocView.registry[doc]
+  if views then
+    for view in pairs(views) do
+      if view.doc == doc and view.selection_state
+      and view ~= active_view
+      and view.selection_state.selections ~= doc.selections then
+        local selections = view.selection_state.selections
+        local mapped = {}
+        for i = 1, #selections, 4 do
+          local l1, c1 = mapper(selections[i], selections[i + 1])
+          local l2, c2 = mapper(selections[i + 2], selections[i + 3])
+          mapped[#mapped + 1] = l1
+          mapped[#mapped + 1] = c1
+          mapped[#mapped + 1] = l2
+          mapped[#mapped + 1] = c2
+        end
+        view.selection_state.selections = mapped
+        normalize_selection_state(doc, view.selection_state)
+      end
+    end
+  end
+  if not doc.bound_selection_view then
+    DocView.refresh_doc_selection_mirror(doc)
+  end
+end
+
 function DocView:with_selection_state(fn, ...)
   local doc = self.doc
   if doc.bound_selection_view == self then

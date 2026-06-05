@@ -259,7 +259,18 @@ test.describe("core.doc edit behavior characterization", function()
     test.ok(doc:is_dirty())
   end)
 
-  test.skip("remove after undo should mark the document dirty instead of reusing the old clean change id", "known current Doc:remove clean_change_id bug; enable when fixing the batch edit path")
+  test.it("remove after undo marks the document dirty instead of reusing the old clean change id", function()
+    local doc = Doc()
+    set_text(doc, "abc")
+    doc:insert(1, 4, "X")
+    doc:clean()
+
+    doc:undo()
+    doc:remove(1, 1, 1, 2)
+
+    test.equal(text(doc), "bc\n")
+    test.ok(doc:is_dirty())
+  end)
 
   test.it("undo and redo restore text for a timestamp-merged multi-caret text input", function()
     local doc = Doc()
@@ -299,5 +310,9 @@ test.describe("core.doc edit behavior characterization", function()
 
     test.equal(text(doc), "ONE TWO\n")
     test.same(results, { 3, 3 })
+    test.same(doc.selections, {
+      1, 1, 1, 1,
+      1, 5, 1, 5,
+    })
   end)
 end)

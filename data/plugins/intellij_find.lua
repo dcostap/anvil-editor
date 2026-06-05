@@ -38,8 +38,12 @@ function SingleLineDoc:reset()
   self.highlighter = SingleLineHighlighter(self)
   self:reset_syntax()
 end
+function SingleLineDoc:normalize_edit_text(text, edit, opts)
+  return tostring(text or ""):gsub("[\r\n]", "")
+end
+
 function SingleLineDoc:insert(line, col, text)
-  SingleLineDoc.super.insert(self, line, col, tostring(text or ""):gsub("[\r\n]", ""))
+  SingleLineDoc.super.insert(self, line, col, self:normalize_edit_text(text))
 end
 
 local LocalFindInputView = DocView:extend()
@@ -59,14 +63,7 @@ function LocalFindInputView:new(state, field_name)
   self.size.y = 0
 
   local input = self
-  local raw_insert = self.doc.raw_insert
-  function self.doc:raw_insert(...)
-    raw_insert(self, ...)
-    input:on_doc_text_change()
-  end
-  local raw_remove = self.doc.raw_remove
-  function self.doc:raw_remove(...)
-    raw_remove(self, ...)
+  function self.doc:on_text_change(...)
     input:on_doc_text_change()
   end
 end

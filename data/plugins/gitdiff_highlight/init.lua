@@ -515,8 +515,8 @@ function DocView:draw_scrollbar()
 end
 
 local old_text_change = Doc.on_text_change
-function Doc:on_text_change(change_type)
-	local result = old_text_change(self, change_type)
+function Doc:on_text_change(change_type, transaction, ...)
+	local result = old_text_change(self, change_type, transaction, ...)
 	if get_state(self).is_in_repo then schedule_local_diff(self, "text-change") end
 	return result
 end

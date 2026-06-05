@@ -495,6 +495,13 @@ local function adjust_registered_selection_states(self, kind, ...)
   end
 end
 
+local function adjust_registered_selection_states_for_batch(self, mapper, transaction)
+  local ok, DocView = pcall(require, "core.docview")
+  if ok and DocView.adjust_registered_selection_states_for_batch then
+    DocView.adjust_registered_selection_states_for_batch(self, self.bound_selection_view, mapper, transaction)
+  end
+end
+
 local function current_selection_owner_id(self)
   if self.bound_selection_owner_id then return self.bound_selection_owner_id end
   if self.bound_selection_session_id then return self.bound_selection_session_id end
@@ -851,6 +858,29 @@ local function push_undo(undo_stack, time, type, ...)
   return undo_stack[undo_stack.idx - 1]
 end
 
+local function copy_undo_array(t)
+  local res = {}
+  if t then for i = 1, #t do res[i] = t[i] end end
+  return res
+end
+
+local function push_batch_undo(undo_stack, time, transaction, before_selections, before_last_selection, after_selections, after_last_selection)
+  undo_stack[undo_stack.idx] = {
+    type = "batch",
+    time = time,
+    change_type = transaction.type,
+    selection_owner_id = transaction.selection_owner_id,
+    before_selections = before_selections,
+    before_last_selection = before_last_selection,
+    after_selections = after_selections,
+    after_last_selection = after_last_selection,
+    edits = transaction.inverse_edits,
+  }
+  undo_stack[undo_stack.idx - config.max_undos] = nil
+  undo_stack.idx = undo_stack.idx + 1
+  return undo_stack[undo_stack.idx - 1]
+end
+
 local function push_selection_undo(self, undo_stack, time)
   local cmd = push_undo(undo_stack, time, "selection", table.unpack(self.selections))
   cmd.selection_owner_id = current_selection_owner_id(self)
@@ -872,6 +902,46 @@ local function pop_undo(self, undo_stack, redo_stack, modified)
   elseif cmd.type == "remove" then
     local line1, col1, line2, col2 = table.unpack(cmd)
     self:raw_remove(line1, col1, line2, col2, redo_stack, cmd.time)
+  elseif cmd.type == "batch" then
+    local is_redo = undo_stack == self.redo_stack
+    local current_selections = copy_undo_array(self.selections)
+    local current_last_selection = self.last_selection or 1
+    local restore_selection = can_restore_selection_undo(self, cmd)
+    local selections = restore_selection and (is_redo and cmd.after_selections or cmd.before_selections) or nil
+    local last_selection = restore_selection and (is_redo and cmd.after_last_selection or cmd.before_last_selection) or nil
+    local tx = self:apply_edits(cmd.edits, {
+      type = is_redo and "redo" or "undo",
+      record_undo = false,
+      notify = false,
+      clear_redo = false,
+      selections = selections,
+      last_selection = last_selection,
+      merge_cursors = false,
+      owner_id = cmd.selection_owner_id,
+    })
+    if tx and tx.applied and tx.changed then
+      local before_selections, before_last_selection, after_selections, after_last_selection
+      if is_redo then
+        before_selections = current_selections
+        before_last_selection = current_last_selection
+        after_selections = tx.new_selections
+        after_last_selection = tx.new_last_selection
+      else
+        before_selections = tx.new_selections
+        before_last_selection = tx.new_last_selection
+        after_selections = current_selections
+        after_last_selection = current_last_selection
+      end
+      push_batch_undo(
+        redo_stack,
+        cmd.time,
+        tx,
+        before_selections,
+        before_last_selection,
+        after_selections,
+        after_last_selection
+      )
+    end
   elseif cmd.type == "selection" then
     if can_restore_selection_undo(self, cmd) then
       self.selections = { table.unpack(cmd) }
@@ -919,6 +989,316 @@ function Doc:clear_cache(l, n)
       if line == lines then break end
     end
   end
+end
+
+function Doc:normalize_edit_text(text, edit, opts)
+  return tostring(text or "")
+end
+
+function Doc:can_apply_edits(edits, opts)
+  return true
+end
+
+local function copy_array(t)
+  local res = {}
+  if t then for i = 1, #t do res[i] = t[i] end end
+  return res
+end
+
+local function line_starts_for(lines)
+  local starts, offset = {}, 0
+  for i = 1, #lines do
+    starts[i] = offset
+    offset = offset + #lines[i]
+  end
+  return starts, offset
+end
+
+local function sanitize_position_in_lines(lines, line, col)
+  local nlines = #lines
+  if line > nlines then
+    return nlines, #(lines[nlines] or "")
+  elseif line < 1 then
+    return 1, 1
+  end
+  return line, common.clamp(col, 1, #(lines[line] or ""))
+end
+
+local function position_to_offset(starts, line, col)
+  return starts[line] + col - 1
+end
+
+local function offset_to_position(lines, starts, total, offset)
+  if offset <= 0 then return 1, 1 end
+  if offset >= total then return #lines, #(lines[#lines] or "") end
+  local lo, hi = 1, #lines
+  while lo <= hi do
+    local mid = math.floor((lo + hi) / 2)
+    local next_start = starts[mid + 1] or total + 1
+    if offset < starts[mid] then
+      hi = mid - 1
+    elseif offset >= next_start then
+      lo = mid + 1
+    else
+      return mid, offset - starts[mid] + 1
+    end
+  end
+  return #lines, #(lines[#lines] or "")
+end
+
+local function text_from_lines(lines, line1, col1, line2, col2)
+  if line1 == line2 then
+    return lines[line1]:sub(col1, col2 - 1)
+  end
+  local parts = { lines[line1]:sub(col1) }
+  for line = line1 + 1, line2 - 1 do
+    parts[#parts + 1] = lines[line]
+  end
+  parts[#parts + 1] = lines[line2]:sub(1, col2 - 1)
+  return table.concat(parts)
+end
+
+local function append_text_linewise(out, text)
+  local pos = 1
+  while true do
+    local nl = text:find("\n", pos, true)
+    if not nl then
+      out[#out] = out[#out] .. text:sub(pos)
+      break
+    end
+    out[#out] = out[#out] .. text:sub(pos, nl)
+    out[#out + 1] = ""
+    pos = nl + 1
+  end
+end
+
+local function append_span(out, lines, line1, col1, line2, col2)
+  if line1 > line2 or (line1 == line2 and col1 >= col2) then return end
+  if line1 == line2 then
+    append_text_linewise(out, lines[line1]:sub(col1, col2 - 1))
+    return
+  end
+  append_text_linewise(out, lines[line1]:sub(col1))
+  for line = line1 + 1, line2 - 1 do
+    append_text_linewise(out, lines[line])
+  end
+  append_text_linewise(out, lines[line2]:sub(1, col2 - 1))
+end
+
+local function append_span_to_end(out, lines, line, col)
+  if line > #lines then return end
+  append_text_linewise(out, lines[line]:sub(col))
+  for i = line + 1, #lines do
+    append_text_linewise(out, lines[i])
+  end
+end
+
+local function finalize_lines(out)
+  if #out > 1 and out[#out] == "" then out[#out] = nil end
+  if #out == 0 or (#out == 1 and out[1] == "") then return { "\n" } end
+  return out
+end
+
+function Doc:apply_edits(edits, opts)
+  opts = opts or {}
+  local time = opts.time or system.get_time()
+  local owner_id = opts.owner_id or current_selection_owner_id(self)
+  local old_lines = self.lines
+  local old_starts = line_starts_for(old_lines)
+  local old_selections = copy_array(self.selections)
+  local old_last_selection = self.last_selection or 1
+  local normalized = {}
+  local transaction = {
+    applied = false,
+    changed = false,
+    selection_changed = false,
+    rejected = false,
+    type = opts.type or "batch",
+    edits = normalized,
+    inverse_edits = {},
+    changed_ranges = {},
+    old_selections = old_selections,
+    new_selections = old_selections,
+    old_last_selection = old_last_selection,
+    new_last_selection = old_last_selection,
+    selection_owner_id = owner_id,
+  }
+
+  if type(edits) ~= "table" then
+    transaction.rejected = true
+    transaction.reason = "edits must be a table"
+    if opts.strict then error(transaction.reason) end
+    return transaction
+  end
+
+  for i, edit in ipairs(edits) do
+    local line1, col1 = sanitize_position_in_lines(old_lines, edit.line1 or 1, edit.col1 or 1)
+    local line2, col2 = sanitize_position_in_lines(old_lines, edit.line2 or line1, edit.col2 or col1)
+    line1, col1, line2, col2 = sort_positions(line1, col1, line2, col2)
+    local text = self:normalize_edit_text(edit.text or "", edit, opts)
+    local old_text = text_from_lines(old_lines, line1, col1, line2, col2)
+    if opts.allow_selection_only or old_text ~= text then
+      local start_offset = position_to_offset(old_starts, line1, col1)
+      local end_offset = position_to_offset(old_starts, line2, col2)
+      normalized[#normalized + 1] = {
+        line1 = line1, col1 = col1, line2 = line2, col2 = col2,
+        text = text, old_text = old_text, idx = edit.idx, selection = edit.selection,
+        affinity = edit.affinity, start_offset = start_offset, end_offset = end_offset,
+        order = i,
+      }
+    end
+  end
+
+  table.sort(normalized, function(a, b)
+    if a.start_offset == b.start_offset then return a.end_offset < b.end_offset end
+    return a.start_offset < b.start_offset
+  end)
+
+  for i = 2, #normalized do
+    local prev, cur = normalized[i - 1], normalized[i]
+    if prev.end_offset > cur.start_offset
+    or (prev.start_offset == prev.end_offset and cur.start_offset == cur.end_offset and prev.start_offset == cur.start_offset) then
+      transaction.rejected = true
+      transaction.reason = "overlapping edits"
+      core.log_quiet("Rejected batch edit for %s: %s", self:get_name(), transaction.reason)
+      if opts.strict then error(transaction.reason) end
+      return transaction
+    end
+  end
+
+  if not self:can_apply_edits(normalized, opts) then
+    transaction.rejected = true
+    transaction.reason = "document rejected edits"
+    core.log_quiet("Rejected batch edit for %s: %s", self:get_name(), transaction.reason)
+    if opts.strict then error(transaction.reason) end
+    return transaction
+  end
+
+  local changed = #normalized > 0
+  local out = { "" }
+  local cursor_line, cursor_col = 1, 1
+  for _, edit in ipairs(normalized) do
+    append_span(out, old_lines, cursor_line, cursor_col, edit.line1, edit.col1)
+    append_text_linewise(out, edit.text)
+    cursor_line, cursor_col = edit.line2, edit.col2
+  end
+  append_span_to_end(out, old_lines, cursor_line, cursor_col)
+  local new_lines = finalize_lines(out)
+  local new_starts, new_total = line_starts_for(new_lines)
+
+  local delta = 0
+  for _, edit in ipairs(normalized) do
+    local new_start = edit.start_offset + delta
+    local new_end = new_start + #edit.text
+    local il1, ic1 = offset_to_position(new_lines, new_starts, new_total, new_start)
+    local il2, ic2 = offset_to_position(new_lines, new_starts, new_total, new_end)
+    transaction.inverse_edits[#transaction.inverse_edits + 1] = {
+      line1 = il1, col1 = ic1, line2 = il2, col2 = ic2, text = edit.old_text,
+    }
+    transaction.changed_ranges[#transaction.changed_ranges + 1] = {
+      old_line1 = edit.line1,
+      old_line2 = edit.line2,
+      new_line1 = il1,
+      new_line2 = il2,
+      old_line_count = edit.line2 - edit.line1 + 1,
+      new_line_count = il2 - il1 + 1,
+      line_delta = (il2 - il1) - (edit.line2 - edit.line1),
+    }
+    delta = delta + #edit.text - (edit.end_offset - edit.start_offset)
+  end
+
+  self.lines = new_lines
+
+  local function map_position(line, col, affinity)
+    line, col = sanitize_position_in_lines(old_lines, line, col)
+    local pos = position_to_offset(old_starts, line, col)
+    local map_delta = 0
+    for _, edit in ipairs(normalized) do
+      if pos < edit.start_offset then
+        break
+      elseif edit.start_offset == edit.end_offset and pos == edit.start_offset then
+        if affinity == "after" then map_delta = map_delta + #edit.text end
+        break
+      elseif pos <= edit.end_offset then
+        return offset_to_position(new_lines, new_starts, new_total, edit.start_offset + map_delta)
+      else
+        map_delta = map_delta + #edit.text - (edit.end_offset - edit.start_offset)
+      end
+    end
+    return offset_to_position(new_lines, new_starts, new_total, pos + map_delta)
+  end
+
+  local new_selections
+  if opts.selections then
+    new_selections = copy_array(opts.selections)
+  else
+    new_selections = {}
+    local by_idx = {}
+    for _, edit in ipairs(normalized) do
+      if edit.selection then by_idx[edit.idx or edit.order] = edit.selection end
+    end
+    if next(by_idx) then
+      for i = 1, math.max(1, #old_selections / 4) do
+        local selection = by_idx[i]
+        if selection then
+          for j = 1, 4 do new_selections[#new_selections + 1] = selection[j] end
+        end
+      end
+    else
+      for i = 1, #old_selections, 4 do
+        local l1, c1 = map_position(old_selections[i], old_selections[i + 1])
+        local l2, c2 = map_position(old_selections[i + 2], old_selections[i + 3])
+        new_selections[#new_selections + 1] = l1
+        new_selections[#new_selections + 1] = c1
+        new_selections[#new_selections + 1] = l2
+        new_selections[#new_selections + 1] = c2
+      end
+    end
+  end
+  if #new_selections == 0 then new_selections = { 1, 1, 1, 1 } end
+  local state = { selections = new_selections, last_selection = opts.last_selection or old_last_selection }
+  sanitize_selection_state(self, state)
+  if opts.merge_cursors then merge_state_cursors(state) end
+  local selection_target = self.selections
+  if type(selection_target) == "table" then
+    for i = #selection_target, 1, -1 do selection_target[i] = nil end
+    for i = 1, #state.selections do selection_target[i] = state.selections[i] end
+    self.selections = selection_target
+  else
+    self.selections = state.selections
+  end
+  self.last_selection = state.last_selection
+  transaction.new_selections = copy_array(self.selections)
+  transaction.new_last_selection = self.last_selection
+  transaction.selection_changed = true
+
+  transaction.applied = true
+  transaction.changed = changed
+
+  if changed then
+    local first_line = transaction.changed_ranges[1] and transaction.changed_ranges[1].new_line1 or 1
+    update_clean_lines(self, first_line, #self.lines)
+    if self.highlighter.batch_notify then
+      self.highlighter:batch_notify(transaction.changed_ranges)
+    else
+      self.highlighter:soft_reset()
+    end
+    self:clear_cache(first_line, #self.lines - first_line)
+    adjust_registered_selection_states_for_batch(self, map_position, transaction)
+
+    if opts.record_undo ~= false then
+      if opts.clear_redo ~= false then self.redo_stack = { idx = 1 } end
+      if self:get_change_id() < self.clean_change_id then self.clean_change_id = -1 end
+      push_batch_undo(self.undo_stack, time, transaction, old_selections, old_last_selection, transaction.new_selections, transaction.new_last_selection)
+    end
+    self:on_text_transaction(transaction)
+    if opts.notify ~= false then self:on_text_change(transaction.type, transaction) end
+    core.log_quiet("Applied batch edit to %s: edits=%d lines=%d", self:get_name(), #normalized, #self.lines)
+  else
+    sync_unbound_selection_mutation(self)
+  end
+
+  return transaction
 end
 
 
@@ -999,24 +1379,26 @@ end
 
 
 function Doc:insert(line, col, text)
-  self.redo_stack = { idx = 1 }
-  -- Reset the clean id when we're pushing something new before it
-  if self:get_change_id() < self.clean_change_id then
-    self.clean_change_id = -1
-  end
   line, col = self:sanitize_position(line, col)
-  self:raw_insert(line, col, text, self.undo_stack, system.get_time())
-  self:on_text_change("insert")
+  return self:apply_edits({
+    { line1 = line, col1 = col, line2 = line, col2 = col, text = text },
+  }, {
+    type = "insert",
+    merge_cursors = false,
+  })
 end
 
 
 function Doc:remove(line1, col1, line2, col2)
-  self.redo_stack = { idx = 1 }
   line1, col1 = self:sanitize_position(line1, col1)
   line2, col2 = self:sanitize_position(line2, col2)
   line1, col1, line2, col2 = sort_positions(line1, col1, line2, col2)
-  self:raw_remove(line1, col1, line2, col2, self.undo_stack, system.get_time())
-  self:on_text_change("remove")
+  return self:apply_edits({
+    { line1 = line1, col1 = col1, line2 = line2, col2 = col2, text = "" },
+  }, {
+    type = "remove",
+    merge_cursors = true,
+  })
 end
 
 
@@ -1029,23 +1411,145 @@ function Doc:redo()
   pop_undo(self, self.redo_stack, self.undo_stack, false)
 end
 
+local function build_lines_for_normalized_edits(old_lines, normalized)
+  local out = { "" }
+  local cursor_line, cursor_col = 1, 1
+  for _, edit in ipairs(normalized) do
+    append_span(out, old_lines, cursor_line, cursor_col, edit.line1, edit.col1)
+    append_text_linewise(out, edit.text)
+    cursor_line, cursor_col = edit.line2, edit.col2
+  end
+  append_span_to_end(out, old_lines, cursor_line, cursor_col)
+  return finalize_lines(out)
+end
 
-function Doc:text_input(text, idx)
-  for sidx, line1, col1, line2, col2 in self:get_selections(true, idx or true) do
-    if line1 ~= line2 or col1 ~= col2 then
-      self:delete_to_cursor(sidx)
+local function plan_normalized_edits(self, edits, opts)
+  opts = opts or {}
+  local old_lines = self.lines
+  local starts = line_starts_for(old_lines)
+  local normalized = {}
+  for _, edit in ipairs(edits) do
+    local line1, col1 = sanitize_position_in_lines(old_lines, edit.line1, edit.col1)
+    local line2, col2 = sanitize_position_in_lines(old_lines, edit.line2, edit.col2)
+    line1, col1, line2, col2 = sort_positions(line1, col1, line2, col2)
+    local text = self:normalize_edit_text(edit.text or "", edit, opts)
+    local start_offset = position_to_offset(starts, line1, col1)
+    local end_offset = position_to_offset(starts, line2, col2)
+    normalized[#normalized + 1] = {
+      line1 = line1, col1 = col1, line2 = line2, col2 = col2,
+      text = text, idx = edit.idx,
+      start_offset = start_offset, end_offset = end_offset,
+    }
+  end
+  table.sort(normalized, function(a, b)
+    if a.start_offset == b.start_offset then return a.end_offset < b.end_offset end
+    return a.start_offset < b.start_offset
+  end)
+  return normalized
+end
+
+local function final_selections_after_edits(self, normalized, final_by_idx, last_selection)
+  local old_lines = self.lines
+  local old_starts = line_starts_for(old_lines)
+  local new_lines = build_lines_for_normalized_edits(old_lines, normalized)
+  local new_starts, new_total = line_starts_for(new_lines)
+  local final_offsets = {}
+  local delta = 0
+  for _, edit in ipairs(normalized) do
+    local new_start = edit.start_offset + delta
+    final_offsets[edit.idx] = final_by_idx and final_by_idx[edit.idx] == "start" and new_start or (new_start + #edit.text)
+    delta = delta + #edit.text - (edit.end_offset - edit.start_offset)
+  end
+
+  local function map_position(line, col, affinity)
+    line, col = sanitize_position_in_lines(old_lines, line, col)
+    local pos = position_to_offset(old_starts, line, col)
+    local map_delta = 0
+    for _, edit in ipairs(normalized) do
+      if pos < edit.start_offset then
+        break
+      elseif edit.start_offset == edit.end_offset and pos == edit.start_offset then
+        if affinity == "after" then map_delta = map_delta + #edit.text end
+        break
+      elseif pos <= edit.end_offset then
+        return offset_to_position(new_lines, new_starts, new_total, edit.start_offset + map_delta)
+      else
+        map_delta = map_delta + #edit.text - (edit.end_offset - edit.start_offset)
+      end
     end
+    return offset_to_position(new_lines, new_starts, new_total, pos + map_delta)
+  end
 
-    if self.overwrite
+  local new_selections = {}
+  for i = 1, #self.selections, 4 do
+    local selection_idx = (i - 1) / 4 + 1
+    local final_offset = final_offsets[selection_idx]
+    if final_offset then
+      local line, col = offset_to_position(new_lines, new_starts, new_total, final_offset)
+      new_selections[#new_selections + 1] = line
+      new_selections[#new_selections + 1] = col
+      new_selections[#new_selections + 1] = line
+      new_selections[#new_selections + 1] = col
+    else
+      local l1, c1 = map_position(self.selections[i], self.selections[i + 1])
+      local l2, c2 = map_position(self.selections[i + 2], self.selections[i + 3])
+      new_selections[#new_selections + 1] = l1
+      new_selections[#new_selections + 1] = c1
+      new_selections[#new_selections + 1] = l2
+      new_selections[#new_selections + 1] = c2
+    end
+  end
+  return new_selections, last_selection or self.last_selection
+end
+
+function Doc:plan_edits(edits, opts)
+  return plan_normalized_edits(self, edits, opts)
+end
+
+function Doc:selections_after_edits(edits, final_by_idx, last_selection, opts)
+  opts = opts or {}
+  local normalized = opts.normalized and edits or plan_normalized_edits(self, edits, opts)
+  return final_selections_after_edits(self, normalized, final_by_idx, last_selection)
+end
+
+
+function Doc:text_input_by_selection(text_by_idx, idx, opts)
+  opts = opts or {}
+  local edits = {}
+  local final_by_idx = {}
+  for sidx, line1, col1, line2, col2 in self:get_selections(true, idx or true) do
+    local text = type(text_by_idx) == "function" and text_by_idx(sidx, line1, col1, line2, col2) or text_by_idx[sidx]
+    text = tostring(text or "")
+    local edit_line1, edit_col1, edit_line2, edit_col2 = line1, col1, line2, col2
+
+    if opts.overwrite ~= false
+    and self.overwrite
     and (line1 == line2 and col1 == col2)
     and col1 < #self:get_utf8_line(line1)
     and text:ulen(nil, nil, true) == 1 then
-      self:remove(line1, col1, translate.next_char(self, line1, col1))
+      edit_line2, edit_col2 = translate.next_char(self, line1, col1)
     end
 
-    self:insert(line1, col1, text)
-    self:move_to_cursor(sidx, #text)
+    edits[#edits + 1] = {
+      line1 = edit_line1, col1 = edit_col1, line2 = edit_line2, col2 = edit_col2,
+      text = text, idx = sidx,
+    }
+    final_by_idx[sidx] = "end"
   end
+  if #edits == 0 then return end
+  local normalized = self:plan_edits(edits, opts)
+  local new_selections, new_last_selection = self:selections_after_edits(normalized, final_by_idx, self.last_selection, { normalized = true })
+  return self:apply_edits(edits, {
+    type = opts.type or "insert",
+    selections = new_selections,
+    last_selection = new_last_selection,
+    merge_cursors = opts.merge_cursors or false,
+  })
+end
+
+function Doc:text_input(text, idx)
+  text = tostring(text or "")
+  return self:text_input_by_selection(function() return text end, idx, { type = "insert" })
 end
 
 
@@ -1075,33 +1579,94 @@ function Doc:replace_cursor(idx, line1, col1, line2, col2, fn)
 end
 
 function Doc:replace(fn)
-  local has_selection, results = false, { }
+  local has_selection, results, edits, final_by_idx = false, { }, {}, {}
   for idx, line1, col1, line2, col2 in self:get_selections(true) do
     if line1 ~= line2 or col1 ~= col2 then
-      results[idx] = self:replace_cursor(idx, line1, col1, line2, col2, fn)
+      local old_text = self:get_text(line1, col1, line2, col2)
+      local new_text, res = fn(old_text)
+      results[idx] = res
+      if old_text ~= new_text then
+        edits[#edits + 1] = { line1 = line1, col1 = col1, line2 = line2, col2 = col2, text = new_text, idx = idx }
+        final_by_idx[idx] = "start"
+      end
       has_selection = true
     end
   end
   if not has_selection then
     self:set_selection(table.unpack(self.selections))
-    results[1] = self:replace_cursor(1, 1, 1, #self.lines, #self.lines[#self.lines], fn)
+    local line1, col1, line2, col2 = 1, 1, #self.lines, #self.lines[#self.lines]
+    local old_text = self:get_text(line1, col1, line2, col2)
+    local new_text, res = fn(old_text)
+    results[1] = res
+    if old_text ~= new_text then
+      edits[#edits + 1] = { line1 = line1, col1 = col1, line2 = line2, col2 = col2, text = new_text, idx = 1 }
+    end
+  end
+  if #edits > 0 then
+    local normalized = self:plan_edits(edits)
+    local selections, last_selection
+    if next(final_by_idx) then
+      selections, last_selection = self:selections_after_edits(normalized, final_by_idx, self.last_selection, { normalized = true })
+    end
+    self:apply_edits(edits, {
+      type = "replace",
+      selections = selections,
+      last_selection = last_selection,
+      merge_cursors = false,
+    })
   end
   return results
 end
 
 
 function Doc:delete_to_cursor(idx, ...)
+  local edits = {}
+  local final_by_idx = {}
+  local final_positions = {}
   for sidx, line1, col1, line2, col2 in self:get_selections(true, idx) do
-    if line1 ~= line2 or col1 ~= col2 then
-      self:remove(line1, col1, line2, col2)
-    else
+    local start_line, start_col, end_line, end_col = line1, col1, line2, col2
+    if line1 == line2 and col1 == col2 then
       local l2, c2 = self:position_offset(line1, col1, ...)
-      self:remove(line1, col1, l2, c2)
-      line1, col1 = sort_positions(line1, col1, l2, c2)
+      start_line, start_col, end_line, end_col = sort_positions(line1, col1, l2, c2)
     end
-    self:set_selections(sidx, line1, col1)
+    edits[#edits + 1] = {
+      line1 = start_line, col1 = start_col, line2 = end_line, col2 = end_col,
+      text = "", idx = sidx,
+    }
+    final_by_idx[sidx] = "start"
+    final_positions[sidx] = { start_line, start_col }
   end
-  self:merge_cursors(idx)
+  if #edits == 0 then return end
+  local normalized = self:plan_edits(edits)
+  local changed_edits = {}
+  local changed_final_by_idx = {}
+  for _, edit in ipairs(normalized) do
+    if edit.start_offset ~= edit.end_offset then
+      changed_edits[#changed_edits + 1] = edit
+      changed_final_by_idx[edit.idx] = "start"
+    end
+  end
+  local new_selections
+  if #changed_edits > 0 then
+    new_selections = self:selections_after_edits(changed_edits, changed_final_by_idx, self.last_selection, { normalized = true })
+  else
+    new_selections = copy_array(self.selections)
+    for sidx, pos in pairs(final_positions) do
+      local i = (sidx - 1) * 4 + 1
+      new_selections[i], new_selections[i + 1], new_selections[i + 2], new_selections[i + 3] = pos[1], pos[2], pos[1], pos[2]
+    end
+  end
+  local tx = self:apply_edits(edits, {
+    type = "remove",
+    selections = new_selections,
+    last_selection = self.last_selection,
+    merge_cursors = true,
+  })
+  if not (tx and tx.changed) then
+    self.selections = new_selections
+    self:merge_cursors(idx)
+  end
+  return tx
 end
 function Doc:delete_to(...) return self:delete_to_cursor(nil, ...) end
 
@@ -1168,31 +1733,49 @@ function Doc:indent_text(unindent, line1, col1, line2, col2)
   local in_beginning_whitespace = col1 == 1 or (se and col1 <= se + 1)
   local has_selection = line1 ~= line2 or col1 ~= col2
   if unindent or has_selection or in_beginning_whitespace then
-    local l1d, l2d = #self.lines[line1], #self.lines[line2]
+    local line1_delta, line2_delta = 0, 0
+    local edits = {}
     for line = line1, line2 do
       if not has_selection or #self.lines[line] > 1 then -- don't indent empty lines in a selection
         local e, rnded = self:get_line_indent(self.lines[line], unindent)
-        self:remove(line, 1, line, (e or 0) + 1)
-        self:insert(
-          line, 1, unindent and rnded:sub(
-            1, #rnded - (#text - (#text == #text_stop and 0 or #text_stop))
-          ) or rnded .. text
-        )
+        local removed = e or 0
+        local replacement = unindent and rnded:sub(
+          1, #rnded - (#text - (#text == #text_stop and 0 or #text_stop))
+        ) or rnded .. text
+        edits[#edits + 1] = {
+          line1 = line,
+          col1 = 1,
+          line2 = line,
+          col2 = removed + 1,
+          text = replacement,
+        }
+        local delta = #replacement - removed
+        if line == line1 then line1_delta = delta end
+        if line == line2 then line2_delta = delta end
       end
     end
-    l1d, l2d = #self.lines[line1] - l1d, #self.lines[line2] - l2d
+    if #edits > 0 then
+      self:apply_edits(edits, {
+        type = unindent and "remove" or "insert",
+        merge_cursors = false,
+      })
+    end
     if (unindent or in_beginning_whitespace) and not has_selection then
-      local start_cursor = (se and se + 1 or 1) + l1d or #(self.lines[line1])
+      local start_cursor = (se and se + 1 or 1) + line1_delta or #(self.lines[line1])
       return line1, start_cursor, line2, start_cursor
     end
-    return line1, col1 + l1d, line2, col2 + l2d
+    return line1, col1 + line1_delta, line2, col2 + line2_delta
   end
   self:insert(line1, col1, text_stop)
   return line1, col1 + #text_stop, line1, col1 + #text_stop
 end
 
+-- Internal transaction hook for batch-aware document change observers.
+function Doc:on_text_transaction(transaction)
+end
+
 -- For plugins to add custom actions of document change
-function Doc:on_text_change(type)
+function Doc:on_text_change(type, transaction)
 end
 
 -- For plugins to get notified when a document is closed

@@ -80,6 +80,53 @@ test.describe("core.doc batch edit primitive", function()
     test.equal(text(doc), "abc\n")
   end)
 
+  test.it("runs the internal transaction hook even when public notification is suppressed", function()
+    local doc = Doc()
+    set_text(doc, "abc")
+    local transactions = {}
+    local changes = {}
+    function doc:on_text_transaction(tx)
+      transactions[#transactions + 1] = tx
+    end
+    function doc:on_text_change(change_type, tx)
+      changes[#changes + 1] = { change_type, tx }
+    end
+
+    local tx = doc:apply_edits({
+      { line1 = 1, col1 = 2, line2 = 1, col2 = 2, text = "X" },
+    }, { type = "insert", notify = false })
+
+    test.ok(tx.applied)
+    test.equal(text(doc), "aXbc\n")
+    test.equal(#transactions, 1)
+    test.equal(transactions[1], tx)
+    test.equal(#changes, 0)
+  end)
+
+  test.it("previews final selections after batch edits", function()
+    local doc = Doc()
+    set_text(doc, "a b c")
+    doc.selections = {
+      1, 1, 1, 1,
+      1, 3, 1, 3,
+      1, 5, 1, 5,
+    }
+
+    local edits = {
+      { idx = 1, line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "10" },
+      { idx = 2, line1 = 1, col1 = 3, line2 = 1, col2 = 3, text = "15" },
+      { idx = 3, line1 = 1, col1 = 5, line2 = 1, col2 = 5, text = "20" },
+    }
+    local final_by_idx = { "end", "end", "end" }
+
+    test.same(doc:selections_after_edits(edits, final_by_idx), {
+      1, 3, 1, 3,
+      1, 7, 1, 7,
+      1, 11, 1, 11,
+    })
+    test.equal(text(doc), "a b c\n")
+  end)
+
   test.it("uses explicit final selections and creates one undoable transaction", function()
     local doc = Doc()
     set_text(doc, "abc\ndef")

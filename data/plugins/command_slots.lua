@@ -272,6 +272,10 @@ function CommandOutputDoc:remove(line1, col1, line2, col2)
   return CommandOutputDoc.super.remove(self, line1, col1, line2, col2)
 end
 
+function CommandOutputDoc:can_apply_edits(edits, opts)
+  return self.__command_output_mutating == true
+end
+
 function CommandOutputDoc:text_input()
 end
 

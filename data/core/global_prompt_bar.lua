@@ -22,8 +22,12 @@ function SingleLineDoc:__tostring() return "SingleLineDoc" end
 ---@param line integer Line number
 ---@param col integer Column number
 ---@param text string Text to insert (newlines will be removed)
+function SingleLineDoc:normalize_edit_text(text, edit, opts)
+  return tostring(text or ""):gsub("[\r\n]", "")
+end
+
 function SingleLineDoc:insert(line, col, text)
-  SingleLineDoc.super.insert(self, line, col, text:gsub("[\r\n]", ""))
+  SingleLineDoc.super.insert(self, line, col, self:normalize_edit_text(text))
 end
 
 

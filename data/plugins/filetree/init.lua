@@ -818,8 +818,9 @@ function FileTreeView:new()
   self:set_caption "File Tree"
 
   local view = self
-  function doc:on_text_change(type)
+  function doc:on_text_change(type, transaction)
     view.last_text_change_type = type
+    view.last_text_transaction = transaction
     view.status_cache = nil
     view.has_possible_edits = true
   end

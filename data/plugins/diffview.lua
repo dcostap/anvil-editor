@@ -904,6 +904,15 @@ function DiffView:patch_views()
     end
   end
 
+  ---@param doc_view core.docview
+  local function wrap_doc_transaction(doc_view)
+    local orig = doc_view.doc.on_text_transaction
+    doc_view.doc.on_text_transaction = function(doc, transaction)
+      parent:update_diff()
+      return orig(doc, transaction)
+    end
+  end
+
   ---@param changes diff.changes[]
   local function has_changes(changes)
     for _, change in ipairs(changes) do
@@ -1027,6 +1036,7 @@ function DiffView:patch_views()
     wrap_draw(side.view)
     wrap_doc_raw_insert(side.view)
     wrap_doc_raw_remove(side.view)
+    wrap_doc_transaction(side.view)
     wrap_prev_change(side.view, side.is_a)
     wrap_next_change(side.view, side.is_a)
   end

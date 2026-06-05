@@ -493,8 +493,8 @@ local function schedule_idle_save()
 end
 
 local on_text_change = Doc.on_text_change
-function Doc:on_text_change(type)
-  local result = on_text_change(self, type)
+function Doc:on_text_change(type, transaction, ...)
+  local result = on_text_change(self, type, transaction, ...)
   if autosave_fast.enabled then
     if is_untitled_doc(self) then
       note_untitled_snapshot(self)
