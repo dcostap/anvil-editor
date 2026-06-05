@@ -36,6 +36,15 @@ Completed coverage:
 - UI characterization for local find replace-all replacing multiple matches
 - asserts replace-all emits one public document `on_text_change` notification
 
+## Just completed: `Doc:replace_cursor`
+
+`Doc:replace_cursor` now routes changed replacements through `Doc:apply_edits(...)`.
+
+Completed coverage:
+
+- selected-range replacement returns the callback result
+- collapsed cursor replacement keeps selecting the inserted text
+
 ## Current next target: remaining search/replace paths
 
 Inspect remaining search/replace command code and plugin paths for per-selection edit loops that still call:

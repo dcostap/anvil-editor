@@ -366,4 +366,31 @@ test.describe("core.doc edit behavior characterization", function()
       1, 5, 1, 5,
     })
   end)
+
+  test.it("replace_cursor replaces a selected range and returns the callback result", function()
+    local doc = Doc()
+    set_text(doc, "abc def")
+    doc:set_selection(1, 1, 1, 4)
+
+    local result = doc:replace_cursor(1, 1, 1, 1, 4, function(old)
+      return old:upper(), #old
+    end)
+
+    test.equal(text(doc), "ABC def\n")
+    test.equal(result, 3)
+    test.same(doc.selections, { 1, 1, 1, 1 })
+  end)
+
+  test.it("replace_cursor selects inserted text for a collapsed cursor replacement", function()
+    local doc = Doc()
+    set_text(doc, "abc")
+    doc:set_selection(1, 2, 1, 2)
+
+    doc:replace_cursor(1, 1, 2, 1, 2, function()
+      return "XY"
+    end)
+
+    test.equal(text(doc), "aXYbc\n")
+    test.same(doc.selections, { 1, 2, 1, 4 })
+  end)
 end)

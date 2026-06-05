@@ -1656,12 +1656,19 @@ function Doc:replace_cursor(idx, line1, col1, line2, col2, fn)
   local old_text = self:get_text(line1, col1, line2, col2)
   local new_text, res = fn(old_text)
   if old_text ~= new_text then
-    self:insert(line2, col2, new_text)
-    self:remove(line1, col1, line2, col2)
-    if line1 == line2 and col1 == col2 then
-      line2, col2 = self:position_offset(line1, col1, #new_text)
-      self:set_selections(idx, line1, col1, line2, col2)
+    new_text = tostring(new_text or "")
+    local edit = { line1 = line1, col1 = col1, line2 = line2, col2 = col2, text = new_text, idx = idx }
+    local selections, last_selection
+    if idx and line1 == line2 and col1 == col2 then
+      local normalized = self:plan_edits({ edit })
+      selections, last_selection = selection_ranges_after_edits(self, normalized, { [idx] = { "start", "end" } }, self.last_selection)
     end
+    self:apply_edits({ edit }, {
+      type = "replace",
+      selections = selections,
+      last_selection = last_selection,
+      merge_cursors = false,
+    })
   end
   return res
 end
