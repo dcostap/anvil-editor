@@ -167,14 +167,63 @@ local function plural_suffix(n)
   return n == 1 and "" or "s"
 end
 
+local selection_counts_cache = {
+  doc = nil,
+  key = nil,
+  carets = 0,
+  chars = 0,
+  selected_lines = 0,
+  chars_pending = false
+}
+
+local max_sync_selection_count_bytes = 200000
+local max_sync_selection_count_lines = 2000
+
 local function get_doc_selection_counts(doc)
+  local key_parts = {}
   local carets = math.floor(#doc.selections / 4)
+  for i = 1, #doc.selections do
+    key_parts[i] = doc.selections[i]
+  end
+  local key = table.concat(key_parts, ":")
+  if selection_counts_cache.doc == doc and selection_counts_cache.key == key then
+    return
+      selection_counts_cache.carets,
+      selection_counts_cache.chars,
+      selection_counts_cache.selected_lines,
+      selection_counts_cache.chars_pending
+  end
+
   local chars = 0
   local selected_lines = 0
   local seen_lines = {}
+  local count_chars = true
+  local estimated_bytes = 0
+  local estimated_lines = 0
+
   for _, line1, col1, line2, col2 in doc:get_selections(true) do
     if line1 ~= line2 or col1 ~= col2 then
-      chars = chars + doc:get_text(line1, col1, line2, col2):ulen(nil, nil, true) - (line2 - line1)
+      estimated_lines = estimated_lines + line2 - line1 + 1
+      if count_chars then
+        if line1 == line2 then
+          estimated_bytes = estimated_bytes + math.max(0, col2 - col1)
+        else
+          estimated_bytes = estimated_bytes + #doc.lines[line1] - col1 + 1 + col2 - 1
+          for line = line1 + 1, line2 - 1 do
+            estimated_bytes = estimated_bytes + #doc.lines[line]
+            if estimated_bytes > max_sync_selection_count_bytes then break end
+          end
+        end
+        if
+          estimated_bytes > max_sync_selection_count_bytes
+          or estimated_lines > max_sync_selection_count_lines
+        then
+          count_chars = false
+        end
+      end
+      if count_chars then
+        chars = chars + doc:get_text(line1, col1, line2, col2):ulen(nil, nil, true) - (line2 - line1)
+      end
       for line = line1, line2 do
         if not seen_lines[line] then
           seen_lines[line] = true
@@ -183,7 +232,15 @@ local function get_doc_selection_counts(doc)
       end
     end
   end
-  return carets, chars, selected_lines
+
+  selection_counts_cache.doc = doc
+  selection_counts_cache.key = key
+  selection_counts_cache.carets = carets
+  selection_counts_cache.chars = count_chars and chars or 0
+  selection_counts_cache.selected_lines = selected_lines
+  selection_counts_cache.chars_pending = not count_chars
+
+  return carets, selection_counts_cache.chars, selected_lines, not count_chars
 end
 
 local function draw_reserved_status_text(text, reserved_text, x, y, h, calc_only)
@@ -353,8 +410,8 @@ function StatusBar:register_docview_items()
     position = 4,
     get_item = {},
     on_draw = function(x, y, h, _, calc_only)
-      local _, chars = get_doc_selection_counts(core.active_view.doc)
-      if chars <= 0 then
+      local _, chars, _, chars_pending = get_doc_selection_counts(core.active_view.doc)
+      if chars_pending or chars <= 0 then
         return draw_reserved_status_text("", "9999 chars selected", x, y, h, calc_only)
       end
       local label = string.format(" char%s selected", plural_suffix(chars))
