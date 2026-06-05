@@ -313,10 +313,14 @@ function DiffView:sync(line, target_line, is_a)
   else
     with_docview_selection(to, function()
       if line == 1 and target_line == 1 then
-        to.doc:insert(target_line, 1, text)
+        to.doc:apply_edits({
+          { line1 = target_line, col1 = 1, line2 = target_line, col2 = 1, text = text },
+        }, { type = "insert", merge_cursors = false })
         target_line = target_line - 1
       else
-        to.doc:insert(target_line, math.huge, "\n" .. text:sub(1, #text - 1))
+        to.doc:apply_edits({
+          { line1 = target_line, col1 = math.huge, line2 = target_line, col2 = math.huge, text = "\n" .. text:sub(1, #text - 1) },
+        }, { type = "insert", merge_cursors = false })
       end
     end)
 
