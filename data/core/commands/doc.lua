@@ -246,23 +246,6 @@ local function block_comment(comment, line1, col1, line2, col2)
   end
 end
 
-local function insert_paste(doc, value, whole_line, idx)
-  if whole_line then
-    local line1, col1 = doc:get_selection_idx(idx)
-    doc:insert(line1, 1, value:gsub("\r", "").."\n")
-    -- Because we're inserting at the start of the line,
-    -- if the cursor is in the middle of the line
-    -- it gets carried to the next line along with the old text.
-    -- If it's at the start of the line it doesn't get carried,
-    -- so we move it of as many characters as we're adding.
-    if col1 == 1 then
-      doc:move_to_cursor(idx, #value+1)
-    end
-  else
-    doc:text_input(value:gsub("\r", ""), idx)
-  end
-end
-
 local function newline_count(text)
   local n = 0
   for _ in tostring(text or ""):gmatch("\n") do n = n + 1 end
@@ -290,6 +273,41 @@ local function paste_all_normal_clipboards(doc)
   return doc:apply_edits(edits, {
     type = "insert",
     selections = doc:selections_after_edits(edits, final_by_idx),
+    last_selection = doc.last_selection,
+    merge_cursors = false,
+  })
+end
+
+local function paste_all_whole_line_clipboards(doc)
+  local text = ""
+  for cb_idx in ipairs(core.cursor_clipboard_whole_line) do
+    text = text .. tostring(core.cursor_clipboard[cb_idx] or ""):gsub("\r", "") .. "\n"
+  end
+  if text == "" then return end
+
+  local edits = {}
+  local entries = {}
+  for idx, line1, col1 in doc:get_selections(false) do
+    edits[#edits + 1] = { line1 = line1, col1 = 1, line2 = line1, col2 = 1, text = text, idx = idx }
+    entries[#entries + 1] = { idx = idx, line = line1, col = col1, line_delta = newline_count(text) }
+  end
+  table.sort(entries, function(a, b)
+    if a.line == b.line then return a.idx < b.idx end
+    return a.line < b.line
+  end)
+  local selections = {}
+  local cumulative_line_delta = 0
+  for _, entry in ipairs(entries) do
+    local line = entry.line + cumulative_line_delta + entry.line_delta
+    selections[#selections + 1] = line
+    selections[#selections + 1] = entry.col
+    selections[#selections + 1] = line
+    selections[#selections + 1] = entry.col
+    cumulative_line_delta = cumulative_line_delta + entry.line_delta
+  end
+  return doc:apply_edits(edits, {
+    type = "insert",
+    selections = selections,
     last_selection = doc.last_selection,
     merge_cursors = false,
   })
@@ -391,22 +409,7 @@ local commands = {
         paste_all_normal_clipboards(dv.doc)
         return
       end
-      local new_selections = {}
-      for idx in dv.doc:get_selections() do
-        for cb_idx in ipairs(core.cursor_clipboard_whole_line) do
-          insert_paste(dv.doc, core.cursor_clipboard[cb_idx], only_whole_lines, idx)
-        end
-        table.insert(new_selections, {dv.doc:get_selection_idx(idx)})
-      end
-      local first = true
-      for _,selection in pairs(new_selections) do
-        if first then
-          dv.doc:set_selection(table.unpack(selection))
-          first = false
-        else
-          dv.doc:add_selection(table.unpack(selection))
-        end
-      end
+      paste_all_whole_line_clipboards(dv.doc)
     end
   end,
 

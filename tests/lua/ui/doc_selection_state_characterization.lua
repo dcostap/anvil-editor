@@ -242,6 +242,64 @@ test.describe("Document View Selection State edit characterization", function()
     })
   end)
 
+  test.it("internal paste inserts every whole-line clipboard payload at one caret when counts differ", function(context)
+    local doc, main = new_shared_views(context, "aa\nbb")
+    core.set_active_view(main)
+    set_view_selection(main, 2, 1, 2, 1)
+    core.cursor_clipboard = {
+      [1] = "XX",
+      [2] = "YY",
+      full = "XX\nYY\n",
+    }
+    core.cursor_clipboard_whole_line = {
+      [1] = true,
+      [2] = true,
+    }
+    system.set_clipboard("XX\nYY\n")
+    local changes = 0
+    function doc:on_text_change()
+      changes = changes + 1
+    end
+
+    test.ok(command.perform("doc:paste"))
+
+    test.equal(text(doc), "aa\nXX\nYY\nbb\n")
+    test.equal(changes, 1)
+    test.same(selection(main), {
+      4, 1, 4, 1,
+    })
+  end)
+
+  test.it("internal paste inserts one whole-line clipboard payload at every caret when counts differ", function(context)
+    local doc, main = new_shared_views(context, "aa\nbb")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      1, 1, 1, 1,
+      2, 1, 2, 1,
+    })
+    core.cursor_clipboard = {
+      [1] = "XX",
+      full = "XX\n",
+    }
+    core.cursor_clipboard_whole_line = {
+      [1] = true,
+    }
+    system.set_clipboard("XX\n")
+    local changes = 0
+    function doc:on_text_change()
+      changes = changes + 1
+    end
+
+    test.ok(command.perform("doc:paste"))
+
+    test.equal(text(doc), "XX\naa\nXX\nbb\n")
+    test.equal(changes, 1)
+    test.same(selection(main), {
+      2, 1, 2, 1,
+      4, 1, 4, 1,
+    })
+  end)
+
   test.it("whole-line paste inserts each payload at the start of each caret line", function(context)
     local doc, main = new_shared_views(context, "aa\nbb")
     core.set_active_view(main)
