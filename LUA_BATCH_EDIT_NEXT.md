@@ -76,9 +76,18 @@ Completed coverage:
 
 Also fixed `quote.lua`'s control-character pattern so NUL is matched with `%z` instead of embedding a NUL byte in the Lua pattern string.
 
-## Current next target: remaining search/replace paths
+## Just completed: IntelliJ duplicate-current-line
 
-Inspect remaining search/replace command code and plugin paths for per-selection edit loops that still call:
+`user:duplicate-current-line` now builds all duplicate-line insertions and applies them through one `Doc:apply_edits(...)` transaction.
+
+Completed coverage:
+
+- multi-selection duplicate-current-line behavior
+- asserts the command emits one public document `on_text_change` notification
+
+## Current next target: remaining first-party edit loops
+
+Inspect remaining command/plugin paths for per-selection edit loops that still call:
 
 - `insert`
 - `remove`

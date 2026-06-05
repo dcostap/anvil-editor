@@ -985,10 +985,7 @@ local function duplicate_current_line(dv)
     }
   end
 
-  table.sort(actions, function(a, b)
-    return a.last_line > b.last_line
-  end)
-
+  local edits = {}
   for _, action in ipairs(actions) do
     if action.last_line >= #doc.lines then
       -- Doc positions are clamped to existing characters.  Inserting at
@@ -1004,9 +1001,9 @@ local function duplicate_current_line(dv)
       else
         text = final_text:sub(-1) .. "\n" .. action.text:sub(1, -2)
       end
-      with_origin_clear_suppressed(function() doc:insert(#doc.lines, col, text) end)
+      edits[#edits + 1] = { line1 = #doc.lines, col1 = col, line2 = #doc.lines, col2 = col, text = text, idx = action.idx }
     else
-      with_origin_clear_suppressed(function() doc:insert(action.last_line + 1, 1, action.text) end)
+      edits[#edits + 1] = { line1 = action.last_line + 1, col1 = 1, line2 = action.last_line + 1, col2 = 1, text = action.text, idx = action.idx }
     end
   end
 
@@ -1027,7 +1024,18 @@ local function duplicate_current_line(dv)
     new_selections[#new_selections + 1] = action.l2 + lines_inserted_before + action.line_count
     new_selections[#new_selections + 1] = action.c2
   end
-  set_selection_list(doc, new_selections, math.min(last_selection, #actions))
+  if #edits > 0 then
+    with_origin_clear_suppressed(function()
+      doc:apply_edits(edits, {
+        type = "insert",
+        selections = new_selections,
+        last_selection = math.min(last_selection, #actions),
+        merge_cursors = false,
+      })
+    end)
+  else
+    set_selection_list(doc, new_selections, math.min(last_selection, #actions))
+  end
   clear_selection_origin(doc)
 end
 
