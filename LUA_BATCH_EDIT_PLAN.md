@@ -344,7 +344,7 @@ Keep method names and external signatures stable.
 Migrate high-impact commands next:
 
 - `doc:paste`
-- `doc:newline`, `doc:newline-above`, `doc:newline-below`
+- `doc:newline`, `doc:newline-above`, `doc:newline-below` — common paths migrated; `doc:newline` whitespace-removal fallback remains to audit
 - `doc:delete`, `doc:backspace`
 - generated `doc:delete-to-*`
 - `doc:join-lines`
@@ -468,7 +468,7 @@ Run syntax/tests with the repo-local LuaJIT/Meson commands documented in `AGENTS
 1. Migrate `Doc:text_input` and `Doc:ime_text_editing`. — done
 2. Migrate `Doc:delete_to_cursor` / `delete_to`. — done
 3. Migrate `doc:paste` and remove the paste undo patch. — substantially done; whole-line paste helper cleanup done
-4. Migrate/audit newline/delete/backspace command fallback paths.
+4. Migrate/audit newline/delete/backspace command fallback paths. (`doc:newline-above` and `doc:newline-below` are migrated.)
 5. Measure 1,000+ carets and inspect quiet logs.
 
 ### Phase 5: Line and Transform Commands

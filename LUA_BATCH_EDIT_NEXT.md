@@ -104,6 +104,16 @@ Completed coverage:
 - multi-caret partial completion
 - asserts completion emits one public document `on_text_change` notification
 
+## Just completed: newline-above/newline-below commands
+
+`doc:newline-above` and `doc:newline-below` now build all newline insertions and apply them through one `Doc:apply_edits(...)` transaction.
+
+Completed coverage:
+
+- multi-caret newline above behavior
+- multi-caret newline below behavior
+- asserts each command emits one public document `on_text_change` notification
+
 ## Current next target: remaining first-party edit loops
 
 Inspect remaining command/plugin paths for per-selection edit loops that still call:

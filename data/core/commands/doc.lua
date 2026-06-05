@@ -435,19 +435,63 @@ local commands = {
   end,
 
   ["doc:newline-below"] = function(dv)
-    for idx, line in dv.doc:get_selections(false, true) do
+    local edits = {}
+    local entries = {}
+    for idx, line in dv.doc:get_selections(false) do
       local indent = dv.doc.lines[line]:match("^[\t ]*")
-      dv.doc:insert(line, math.huge, "\n" .. indent)
-      dv.doc:set_selections(idx, line + 1, math.huge)
+      edits[#edits + 1] = { line1 = line, col1 = math.huge, line2 = line, col2 = math.huge, text = "\n" .. indent, idx = idx }
+      entries[#entries + 1] = { idx = idx, line = line, col = #indent + 1 }
     end
+    table.sort(entries, function(a, b)
+      if a.line == b.line then return a.idx < b.idx end
+      return a.line < b.line
+    end)
+    local selections = {}
+    local cumulative_line_delta = 0
+    for _, entry in ipairs(entries) do
+      local line = entry.line + cumulative_line_delta + 1
+      selections[#selections + 1] = line
+      selections[#selections + 1] = entry.col
+      selections[#selections + 1] = line
+      selections[#selections + 1] = entry.col
+      cumulative_line_delta = cumulative_line_delta + 1
+    end
+    dv.doc:apply_edits(edits, {
+      type = "insert",
+      selections = selections,
+      last_selection = dv.doc.last_selection,
+      merge_cursors = false,
+    })
   end,
 
   ["doc:newline-above"] = function(dv)
-    for idx, line in dv.doc:get_selections(false, true) do
+    local edits = {}
+    local entries = {}
+    for idx, line in dv.doc:get_selections(false) do
       local indent = dv.doc.lines[line]:match("^[\t ]*")
-      dv.doc:insert(line, 1, indent .. "\n")
-      dv.doc:set_selections(idx, line, math.huge)
+      edits[#edits + 1] = { line1 = line, col1 = 1, line2 = line, col2 = 1, text = indent .. "\n", idx = idx }
+      entries[#entries + 1] = { idx = idx, line = line, col = #indent + 1 }
     end
+    table.sort(entries, function(a, b)
+      if a.line == b.line then return a.idx < b.idx end
+      return a.line < b.line
+    end)
+    local selections = {}
+    local cumulative_line_delta = 0
+    for _, entry in ipairs(entries) do
+      local line = entry.line + cumulative_line_delta
+      selections[#selections + 1] = line
+      selections[#selections + 1] = entry.col
+      selections[#selections + 1] = line
+      selections[#selections + 1] = entry.col
+      cumulative_line_delta = cumulative_line_delta + 1
+    end
+    dv.doc:apply_edits(edits, {
+      type = "insert",
+      selections = selections,
+      last_selection = dv.doc.last_selection,
+      merge_cursors = false,
+    })
   end,
 
   ["doc:delete"] = function(dv)

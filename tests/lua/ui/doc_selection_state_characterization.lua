@@ -300,6 +300,50 @@ test.describe("Document View Selection State edit characterization", function()
     })
   end)
 
+  test.it("newline below inserts below multiple carets in one document change", function(context)
+    local doc, main = new_shared_views(context, "aa\nbb\ncc")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      1, 1, 1, 1,
+      3, 1, 3, 1,
+    })
+    local changes = 0
+    function doc:on_text_change()
+      changes = changes + 1
+    end
+
+    test.ok(command.perform("doc:newline-below"))
+
+    test.equal(text(doc), "aa\n\nbb\ncc\n\n")
+    test.equal(changes, 1)
+    test.same(selection(main), {
+      2, 1, 2, 1,
+      5, 1, 5, 1,
+    })
+  end)
+
+  test.it("newline above inserts above multiple carets in one document change", function(context)
+    local doc, main = new_shared_views(context, "aa\nbb\ncc")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      1, 1, 1, 1,
+      3, 1, 3, 1,
+    })
+    local changes = 0
+    function doc:on_text_change()
+      changes = changes + 1
+    end
+
+    test.ok(command.perform("doc:newline-above"))
+
+    test.equal(text(doc), "\naa\nbb\n\ncc\n")
+    test.equal(changes, 1)
+    test.same(selection(main), {
+      1, 1, 1, 1,
+      4, 1, 4, 1,
+    })
+  end)
+
   test.it("whole-line paste inserts each payload at the start of each caret line", function(context)
     local doc, main = new_shared_views(context, "aa\nbb")
     core.set_active_view(main)
