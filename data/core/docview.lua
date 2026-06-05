@@ -76,8 +76,13 @@ local function selection_count(selections)
   return math.max(1, math.floor(#(selections or {}) / 4))
 end
 
-local function normalize_selection_state(doc, state)
+local function normalize_selection_state(doc, state, force)
   state = state or {}
+  if not force and state.normalized and type(state.selections) == "table" and #state.selections >= 4 then
+    state.last_selection = common.clamp(math.floor(tonumber(state.last_selection) or 1), 1, selection_count(state.selections))
+    return state
+  end
+
   local selections = state.selections or state
   local normalized = {}
   if type(selections) == "table" then
@@ -99,13 +104,14 @@ local function normalize_selection_state(doc, state)
     normalized = { line, col, line, col }
   end
   state.selections = normalized
+  state.normalized = true
   state.last_selection = common.clamp(math.floor(tonumber(state.last_selection) or 1), 1, selection_count(normalized))
   return state
 end
 
 local function ensure_selection_state(state, doc)
   if not state or type(state.selections) ~= "table" or #state.selections < 4 then
-    return normalize_selection_state(doc, state)
+    return normalize_selection_state(doc, state, true)
   end
   state.last_selection = common.clamp(math.floor(tonumber(state.last_selection) or 1), 1, selection_count(state.selections))
   return state
@@ -177,6 +183,7 @@ function DocView:get_selection_state()
   local state = normalize_selection_state(self.doc, {
     selections = copy_array(selections),
     last_selection = last_selection,
+    normalized = true,
   })
   return {
     selections = copy_array(state.selections),
@@ -213,6 +220,7 @@ function DocView:capture_selection_state()
       selections = copy_array(self.doc.selections),
       last_selection = self.doc.last_selection,
       owner_id = owner_id,
+      normalized = true,
     })
     self.selection_state.owner_id = owner_id
     self.selection_state.session_id = owner_id -- deprecated compatibility alias
@@ -270,7 +278,7 @@ function DocView.sanitize_registered_selection_states(doc)
   if views then
     for view in pairs(views) do
       if view.doc == doc and view.selection_state then
-        normalize_selection_state(doc, view.selection_state)
+        normalize_selection_state(doc, view.selection_state, true)
       end
     end
   end
@@ -335,7 +343,8 @@ function DocView.adjust_registered_selection_states_for_batch(doc, active_view, 
           mapped[#mapped + 1] = c2
         end
         view.selection_state.selections = mapped
-        normalize_selection_state(doc, view.selection_state)
+        view.selection_state.normalized = false
+        normalize_selection_state(doc, view.selection_state, true)
       end
     end
   end
@@ -485,6 +494,7 @@ function DocView:new(doc)
     last_selection = self.doc.last_selection,
     owner_id = owner_id,
     session_id = owner_id, -- deprecated compatibility alias
+    normalized = true,
   })
   register_view(self)
   self.doc.cache.col_x = {}

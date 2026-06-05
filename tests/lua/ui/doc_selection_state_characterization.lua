@@ -833,4 +833,32 @@ test.describe("Document View Selection State edit characterization", function()
     })
 
   end)
+
+  test.it("reapplying an already-normalized Selection State does not resanitize every cursor", function(context)
+    local doc, main = new_shared_views(context, "abc")
+    main:set_selection_state({ selections = { 1, 1, 1, 1, 1, 2, 1, 2 }, last_selection = 2 })
+
+    local original_sanitize_position = doc.sanitize_position
+    local calls = 0
+    doc.sanitize_position = function(...)
+      calls = calls + 1
+      return original_sanitize_position(...)
+    end
+
+    main:apply_selection_state()
+
+    doc.sanitize_position = original_sanitize_position
+    test.equal(calls, 0)
+    test.same(selection(main), { 1, 1, 1, 1, 1, 2, 1, 2 })
+  end)
+
+  test.it("explicit Selection State sanitization still clamps invalid normalized states", function(context)
+    local doc, main = new_shared_views(context, "abc")
+    main.selection_state.selections = { 99, 99, 99, 99 }
+    main.selection_state.normalized = true
+
+    DocView.sanitize_registered_selection_states(doc)
+
+    test.same(selection(main), { 1, 4, 1, 4 })
+  end)
 end)
