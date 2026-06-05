@@ -40,6 +40,41 @@ local function append_line_if_last_line(line)
   end
 end
 
+local function append_line_if_last_line_for(target_doc, line)
+  if line >= #target_doc.lines then
+    target_doc:insert(line, math.huge, "\n")
+  end
+end
+
+local function run_legacy_doc_command_as_batch(dv, change_type, fn)
+  local source = dv.doc
+  local temp = Doc()
+  temp.lines = {}
+  for i = 1, #source.lines do temp.lines[i] = source.lines[i] end
+  temp.selections = { table.unpack(source.selections) }
+  temp.last_selection = source.last_selection
+  function temp:on_text_change() end
+
+  fn(temp)
+
+  local old_text = table.concat(source.lines)
+  local new_text = table.concat(temp.lines)
+  if old_text ~= new_text then
+    source:apply_edits({
+      { line1 = 1, col1 = 1, line2 = #source.lines, col2 = #source.lines[#source.lines], text = new_text:gsub("\n$", "") },
+    }, {
+      type = change_type or "batch",
+      selections = temp.selections,
+      last_selection = temp.last_selection,
+      merge_cursors = false,
+    })
+  else
+    source.selections = temp.selections
+    source.last_selection = temp.last_selection
+  end
+  temp:on_close()
+end
+
 local function save(filename)
   local abs_filename
   if filename then
@@ -695,13 +730,16 @@ local commands = {
       actions[#actions + 1] = { idx = idx, line1 = line1, col1 = col1, line2 = line2, col2 = col2, text = text, n = line2 - line1 + 1 }
     end
     if fallback then
-      for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
-        append_line_if_last_line(line2)
-        local text = doc():get_text(line1, 1, line2 + 1, 1)
-        dv.doc:insert(line2 + 1, 1, text)
-        local n = line2 - line1 + 1
-        dv.doc:set_selections(idx, line1 + n, col1, line2 + n, col2)
-      end
+      run_legacy_doc_command_as_batch(dv, "insert", function(target_doc)
+        for idx, line1, col1, line2, col2 in target_doc:get_selections(true) do
+          if line2 > line1 and col2 == 1 then line2, col2 = line2 - 1, #target_doc.lines[line2 - 1] end
+          append_line_if_last_line_for(target_doc, line2)
+          local text = target_doc:get_text(line1, 1, line2 + 1, 1)
+          target_doc:insert(line2 + 1, 1, text)
+          local n = line2 - line1 + 1
+          target_doc:set_selections(idx, line1 + n, col1, line2 + n, col2)
+        end
+      end)
       return
     end
     local edits, selections = {}, {}
@@ -726,11 +764,14 @@ local commands = {
       actions[#actions + 1] = { idx = idx, line1 = line1, col1 = col1, line2 = line2, col2 = col2, n = line2 - line1 + 1 }
     end
     if fallback then
-      for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
-        append_line_if_last_line(line2)
-        dv.doc:remove(line1, 1, line2 + 1, 1)
-        dv.doc:set_selections(idx, line1, col1)
-      end
+      run_legacy_doc_command_as_batch(dv, "remove", function(target_doc)
+        for idx, line1, col1, line2, col2 in target_doc:get_selections(true) do
+          if line2 > line1 and col2 == 1 then line2, col2 = line2 - 1, #target_doc.lines[line2 - 1] end
+          append_line_if_last_line_for(target_doc, line2)
+          target_doc:remove(line1, 1, line2 + 1, 1)
+          target_doc:set_selections(idx, line1, col1)
+        end
+      end)
       return
     end
     local edits, selections = {}, {}
@@ -762,15 +803,18 @@ local commands = {
       if actions[i - 1].end_line >= actions[i].start_line then fallback = true; break end
     end
     if fallback then
-      for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
-        append_line_if_last_line(line2)
-        if line1 > 1 then
-          local text = doc().lines[line1 - 1]
-          dv.doc:insert(line2 + 1, 1, text)
-          dv.doc:remove(line1 - 1, 1, line1, 1)
-          dv.doc:set_selections(idx, line1 - 1, col1, line2 - 1, col2)
+      run_legacy_doc_command_as_batch(dv, "batch", function(target_doc)
+        for idx, line1, col1, line2, col2 in target_doc:get_selections(true) do
+          if line2 > line1 and col2 == 1 then line2, col2 = line2 - 1, #target_doc.lines[line2 - 1] end
+          append_line_if_last_line_for(target_doc, line2)
+          if line1 > 1 then
+            local text = target_doc.lines[line1 - 1]
+            target_doc:insert(line2 + 1, 1, text)
+            target_doc:remove(line1 - 1, 1, line1, 1)
+            target_doc:set_selections(idx, line1 - 1, col1, line2 - 1, col2)
+          end
         end
-      end
+      end)
       return
     end
     local edits, selections = {}, {}
@@ -803,15 +847,18 @@ local commands = {
       if actions[i - 1].end_line >= actions[i].start_line then fallback = true; break end
     end
     if fallback then
-      for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
-        append_line_if_last_line(line2 + 1)
-        if line2 < #dv.doc.lines then
-          local text = dv.doc.lines[line2 + 1]
-          dv.doc:remove(line2 + 1, 1, line2 + 2, 1)
-          dv.doc:insert(line1, 1, text)
-          dv.doc:set_selections(idx, line1 + 1, col1, line2 + 1, col2)
+      run_legacy_doc_command_as_batch(dv, "batch", function(target_doc)
+        for idx, line1, col1, line2, col2 in target_doc:get_selections(true) do
+          if line2 > line1 and col2 == 1 then line2, col2 = line2 - 1, #target_doc.lines[line2 - 1] end
+          append_line_if_last_line_for(target_doc, line2 + 1)
+          if line2 < #target_doc.lines then
+            local text = target_doc.lines[line2 + 1]
+            target_doc:remove(line2 + 1, 1, line2 + 2, 1)
+            target_doc:insert(line1, 1, text)
+            target_doc:set_selections(idx, line1 + 1, col1, line2 + 1, col2)
+          end
         end
-      end
+      end)
       return
     end
     local edits, selections = {}, {}

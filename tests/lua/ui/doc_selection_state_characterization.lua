@@ -463,6 +463,82 @@ test.describe("Document View Selection State edit characterization", function()
     })
   end)
 
+  test.it("duplicate-lines duplicates a final-line selection", function(context)
+    local doc, main = new_shared_views(context, "aa\nbb")
+    core.set_active_view(main)
+    set_view_selection(main, 2, 1, 2, 1)
+    local changes = 0
+    function doc:on_text_change()
+      changes = changes + 1
+    end
+
+    test.ok(command.perform("doc:duplicate-lines"))
+
+    test.equal(text(doc), "aa\nbb\nbb\n\n")
+    test.equal(changes, 1)
+    test.same(selection(main), { 3, 1, 3, 1 })
+  end)
+
+  test.it("delete-lines deletes a final-line selection", function(context)
+    local doc, main = new_shared_views(context, "aa\nbb")
+    core.set_active_view(main)
+    set_view_selection(main, 2, 1, 2, 1)
+    local changes = 0
+    function doc:on_text_change()
+      changes = changes + 1
+    end
+
+    test.ok(command.perform("doc:delete-lines"))
+
+    test.equal(text(doc), "aa\n\n")
+    test.equal(changes, 1)
+    test.same(selection(main), { 2, 1, 2, 1 })
+  end)
+
+  test.it("move-lines-up handles a boundary selection while moving later lines", function(context)
+    local doc, main = new_shared_views(context, "aa\nbb\ncc")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      1, 1, 1, 1,
+      3, 1, 3, 1,
+    })
+    local changes = 0
+    function doc:on_text_change()
+      changes = changes + 1
+    end
+
+    test.ok(command.perform("doc:move-lines-up"))
+
+    test.equal(text(doc), "aa\ncc\nbb\n\n")
+    test.equal(changes, 1)
+    test.same(selection(main), {
+      1, 1, 1, 1,
+      2, 1, 2, 1,
+    })
+  end)
+
+  test.it("move-lines-down handles a boundary selection while moving earlier lines", function(context)
+    local doc, main = new_shared_views(context, "aa\nbb\ncc")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      1, 1, 1, 1,
+      3, 1, 3, 1,
+    })
+    local changes = 0
+    function doc:on_text_change()
+      changes = changes + 1
+    end
+
+    test.ok(command.perform("doc:move-lines-down"))
+
+    test.equal(text(doc), "bb\naa\n\ncc\n\n")
+    test.equal(changes, 1)
+    test.same(selection(main), {
+      2, 1, 2, 1,
+      4, 1, 4, 1,
+    })
+  end)
+
   test.it("duplicate-lines preserves independent multi-line selections after duplication", function(context)
     local doc, main = new_shared_views(context, "aa\nbb\ncc\ndd")
     core.set_active_view(main)
