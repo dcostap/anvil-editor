@@ -1592,10 +1592,23 @@ function FileTreeView:copy_or_cut_lines(delete)
   core.filetree_clipboard = payload
 
   if delete then
-    for i = #ranges, 1, -1 do
-      self:remove_line_range(ranges[i].first, ranges[i].last)
+    local edits = {}
+    for _, range in ipairs(ranges) do
+      if range.first == 1 and range.last >= #self.doc.lines then
+        edits[#edits + 1] = { line1 = 1, col1 = 1, line2 = #self.doc.lines, col2 = math.huge, text = "" }
+      elseif range.last < #self.doc.lines then
+        edits[#edits + 1] = { line1 = range.first, col1 = 1, line2 = range.last + 1, col2 = 1, text = "" }
+      else
+        edits[#edits + 1] = { line1 = range.first - 1, col1 = math.huge, line2 = range.last, col2 = math.huge, text = "" }
+      end
     end
-    self:sync_meta()
+    self.doc:apply_edits(edits, { type = "remove", merge_cursors = true })
+    for i = #ranges, 1, -1 do
+      local range = ranges[i]
+      common.splice(self.line_meta, range.first, range.last - range.first + 1)
+    end
+    if #self.line_meta == 0 then self.line_meta[1] = NO_META end
+    self:snapshot_lines()
   end
   return true
 end
@@ -1639,9 +1652,14 @@ function FileTreeView:paste_lines_with_metadata()
     end
   end
 
+  local edits = {}
+  for _, record in ipairs(records) do
+    edits[#edits + 1] = { line1 = record.line, col1 = 1, line2 = record.line, col2 = 1, text = record.text }
+  end
+  self.doc:apply_edits(edits, { type = "insert", merge_cursors = false })
+
   table.sort(records, function(a, b) return a.line > b.line end)
   for _, record in ipairs(records) do
-    self.doc:insert(record.line, 1, record.text)
     common.splice(self.line_meta, record.line, 0, record.metas)
   end
   self:snapshot_lines()
