@@ -367,6 +367,70 @@ test.describe("core.doc edit behavior characterization", function()
     })
   end)
 
+  test.it("replace transforms the whole document when there is no selection", function()
+    local doc = Doc()
+    set_text(doc, "one\ntwo")
+    doc:set_selection(1, 2, 1, 2)
+
+    local results = doc:replace(function(old)
+      return old:gsub("o", "O"), #old
+    end)
+
+    test.equal(text(doc), "One\ntwO\n")
+    test.same(results, { 7 })
+    test.same(doc.selections, { 1, 1, 1, 1 })
+  end)
+
+  test.it("replace handles different-length selected replacements in one document change", function()
+    local doc = Doc()
+    set_text(doc, "aa bb cc")
+    set_selections(doc, {
+      1, 1, 1, 3,
+      1, 4, 1, 6,
+      1, 7, 1, 9,
+    })
+    local changes = 0
+    function doc:on_text_change()
+      changes = changes + 1
+    end
+
+    local results = doc:replace(function(old)
+      return old == "aa" and "A" or old == "bb" and "BBBB" or "C", old
+    end)
+
+    test.equal(text(doc), "A BBBB C\n")
+    test.same(results, { "aa", "bb", "cc" })
+    test.equal(changes, 1)
+    test.same(doc.selections, {
+      1, 1, 1, 1,
+      1, 3, 1, 3,
+      1, 8, 1, 8,
+    })
+  end)
+
+  test.it("replace with unchanged text returns results without changing the document", function()
+    local doc = Doc()
+    set_text(doc, "one two")
+    set_selections(doc, {
+      1, 1, 1, 4,
+      1, 5, 1, 8,
+    })
+    local changes = 0
+    function doc:on_text_change()
+      changes = changes + 1
+    end
+    local before_selections = { table.unpack(doc.selections) }
+
+    local results = doc:replace(function(old)
+      return old, #old
+    end)
+
+    test.equal(text(doc), "one two\n")
+    test.same(results, { 3, 3 })
+    test.equal(changes, 0)
+    test.same(doc.selections, before_selections)
+  end)
+
   test.it("replace_cursor replaces a selected range and returns the callback result", function()
     local doc = Doc()
     set_text(doc, "abc def")

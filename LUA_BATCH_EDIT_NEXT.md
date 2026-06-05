@@ -54,6 +54,16 @@ Completed coverage:
 - UI characterization for Search UI replace-all replacing multiple matches
 - asserts replace-all emits one public document `on_text_change` notification
 
+## Just completed: `Doc:replace` characterization
+
+`Doc:replace` behavior is now covered for the remaining semantics transform callers depend on.
+
+Completed coverage:
+
+- no-selection whole-document replace behavior and result shape
+- different-length multi-selection replacements in one document change
+- unchanged replacements returning callback results without text-change notifications
+
 ## Current next target: remaining search/replace paths
 
 Inspect remaining search/replace command code and plugin paths for per-selection edit loops that still call:

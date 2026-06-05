@@ -381,7 +381,7 @@ All command builders should snapshot selections and needed original text before 
 - **Indent/unindent**: coalesce by affected line, compute per-line prefix replacement from the original document, then adjust selection endpoints from per-line deltas.
 - **Line duplicate/delete/move**: coalesce overlapping line selections before creating edits. Moving adjacent selected blocks needs explicit tests; avoid double-moving shared boundaries.
 - **Comment toggles**: calculate comment/uncomment decisions from the original document, then emit prefix/suffix edits. Coalesce line-comment ranges that overlap.
-- **Transforms/replace**: return the same result table shape as `Doc:replace` currently returns. `Doc:replace_cursor` is migrated and preserves collapsed-cursor inserted-text selection behavior. Local IntelliJ find replace-all and Search UI replace-all are migrated to one batch transaction.
+- **Transforms/replace**: `Doc:replace` result shape, whole-document no-selection behavior, different-length selection mapping, and unchanged no-op behavior are characterized. `Doc:replace_cursor` is migrated and preserves collapsed-cursor inserted-text selection behavior. Local IntelliJ find replace-all and Search UI replace-all are migrated to one batch transaction.
 - **Trim whitespace/save-time edits**: use one batch per document save, and ensure autosave/dirty semantics are intentional.
 
 ## Testing Strategy
@@ -474,7 +474,7 @@ Run syntax/tests with the repo-local LuaJIT/Meson commands documented in `AGENTS
 ### Phase 5: Line and Transform Commands
 
 1. Migrate indent/unindent, duplicate/delete/move lines, join lines, comments.
-2. Migrate `Doc:replace` and transform plugins through the primitive. (`Doc:replace_cursor` is migrated.)
+2. Migrate `Doc:replace` and transform plugins through the primitive. (`Doc:replace` is characterized and already batched; `Doc:replace_cursor` is migrated.)
 3. Migrate remaining first-party plugin edit loops.
 4. Remove obsolete first-party compatibility patches/hooks.
 
