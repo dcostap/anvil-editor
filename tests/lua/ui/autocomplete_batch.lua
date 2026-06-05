@@ -38,7 +38,9 @@ end
 
 local function view_selections(view)
   return view:with_selection_state(function()
-    return { table.unpack(view.doc.selections) }
+    local selections = {}
+    for i = 1, #view.doc.selections do selections[i] = view.doc.selections[i] end
+    return selections
   end)
 end
 
@@ -54,6 +56,32 @@ test.describe("autocomplete batch behavior", function()
       if doc:is_dirty() then doc:clean() end
       remove_doc(doc)
     end
+  end)
+
+  test.it("typing over many overlapping selected ranges should not be rejected into autocomplete-only state", function(context)
+    local line = string.rep("alpha", 20)
+    local selections = {}
+    for i = 1, 20 do
+      local start_col = (i - 1) * 2 + 1
+      selections[#selections + 1] = 1
+      selections[#selections + 1] = start_col + 5
+      selections[#selections + 1] = 1
+      selections[#selections + 1] = start_col
+    end
+    local view, doc = open_editor(context, line)
+    set_view_selections(view, selections)
+    autocomplete.add({
+      name = "test-overlap-autocomplete-regression",
+      files = ".*",
+      items = { alphabet = "" },
+    })
+
+    core.root_panel:on_text_input("z")
+
+    test.ok(
+      table.concat(doc.lines) ~= line .. "\n" and not autocomplete.is_open(),
+      "typing should modify the document instead of leaving the autocomplete popup open"
+    )
   end)
 
   test.it("completes matching partials at multiple carets in one document change", function(context)

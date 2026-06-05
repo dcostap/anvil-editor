@@ -1528,6 +1528,39 @@ function Doc:selections_after_edits(edits, final_by_idx, last_selection, opts)
   return final_selections_after_edits(self, normalized, final_by_idx, last_selection)
 end
 
+local function clip_overlapping_edits_to_later_starts(self, normalized)
+  if #normalized < 2 then return normalized end
+  local old_lines = self.lines
+  local starts, total = line_starts_for(old_lines)
+  local clipped = {}
+  local next_start
+  for i = #normalized, 1, -1 do
+    local edit = normalized[i]
+    local end_offset = edit.end_offset
+    if next_start and edit.start_offset < next_start and end_offset > next_start then
+      end_offset = next_start
+    end
+    if edit.start_offset < end_offset or edit.start_offset == edit.end_offset then
+      local line2, col2 = offset_to_position(old_lines, starts, total, end_offset)
+      clipped[#clipped + 1] = {
+        line1 = edit.line1,
+        col1 = edit.col1,
+        line2 = line2,
+        col2 = col2,
+        text = edit.text,
+        idx = edit.idx,
+        start_offset = edit.start_offset,
+        end_offset = end_offset,
+      }
+      if not next_start or edit.start_offset < next_start then next_start = edit.start_offset end
+    end
+  end
+  for i = 1, math.floor(#clipped / 2) do
+    clipped[i], clipped[#clipped - i + 1] = clipped[#clipped - i + 1], clipped[i]
+  end
+  return clipped
+end
+
 local function selection_ranges_after_edits(self, normalized, ranges_by_idx, last_selection)
   local old_lines = self.lines
   local old_starts = line_starts_for(old_lines)
@@ -1613,9 +1646,23 @@ function Doc:text_input_by_selection(text_by_idx, idx, opts)
     final_by_idx[sidx] = "end"
   end
   if #edits == 0 then return end
-  local normalized = self:plan_edits(edits, opts)
-  local new_selections, new_last_selection = self:selections_after_edits(normalized, final_by_idx, self.last_selection, { normalized = true })
-  return self:apply_edits(edits, {
+  local normalized = clip_overlapping_edits_to_later_starts(self, self:plan_edits(edits, opts))
+  if #normalized == 0 then return end
+  local clipped_edits = {}
+  local clipped_final_by_idx = {}
+  for _, edit in ipairs(normalized) do
+    clipped_edits[#clipped_edits + 1] = {
+      line1 = edit.line1,
+      col1 = edit.col1,
+      line2 = edit.line2,
+      col2 = edit.col2,
+      text = edit.text,
+      idx = edit.idx,
+    }
+    clipped_final_by_idx[edit.idx] = final_by_idx[edit.idx]
+  end
+  local new_selections, new_last_selection = self:selections_after_edits(normalized, clipped_final_by_idx, self.last_selection, { normalized = true })
+  return self:apply_edits(clipped_edits, {
     type = opts.type or "insert",
     selections = new_selections,
     last_selection = new_last_selection,

@@ -125,6 +125,23 @@ test.describe("core.doc edit behavior characterization", function()
     test.same(doc.selections, { 1, 4, 1, 2 })
   end)
 
+  test.it("typing overlapping selected ranges lets later selections own the overlap", function()
+    local doc = Doc()
+    set_text(doc, "abcdefghij")
+    set_selections(doc, {
+      1, 1, 1, 7,
+      1, 4, 1, 9,
+    })
+
+    doc:text_input("X")
+
+    test.equal(text(doc), "XXij\n")
+    test.same(doc.selections, {
+      1, 2, 1, 2,
+      1, 3, 1, 3,
+    })
+  end)
+
   test.it("typing handles mixed collapsed carets and selected ranges in one edit", function()
     local doc = Doc()
     set_text(doc, "abc def ghi\none two three")
