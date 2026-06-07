@@ -861,4 +861,25 @@ test.describe("Document View Selection State edit characterization", function()
 
     test.same(selection(main), { 1, 4, 1, 4 })
   end)
+
+  test.it("visible caret cache breaks on sorted selection top line, not raw caret line", function(context)
+    local lines = {}
+    for i = 1, 100 do lines[i] = "x" end
+    local doc, main = new_shared_views(context, table.concat(lines, "\n"))
+    main:set_selection_state({
+      selections = {
+        100, 1, 1, 1,
+        50, 1, 50, 1,
+      },
+      last_selection = 1,
+    })
+
+    main:with_selection_state(function()
+      main:prepare_line_body_draw_cache(40, 75)
+    end)
+
+    test.same(main.__visible_caret_cache, {
+      { 50, 1, 50, 1 },
+    })
+  end)
 end)

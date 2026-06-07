@@ -1699,8 +1699,9 @@ function DocView:prepare_line_body_draw_cache(minline, maxline)
 
   if hcl ~= false then
     for _, line1, col1, line2, col2 in self.doc:get_selections(false) do
-      if line1 > maxline then break end
-      if line1 >= minline then
+      local top_line = math.min(line1, line2)
+      if top_line > maxline then break end
+      if line1 >= minline and line1 <= maxline then
         if hcl == "no_selection" and ((line1 ~= line2) or (col1 ~= col2)) then
           highlight_cache[line1] = false
         elseif highlight_cache[line1] == nil then
@@ -1710,7 +1711,12 @@ function DocView:prepare_line_body_draw_cache(minline, maxline)
     end
   end
 
-  for _, raw_line1, raw_col1, raw_line2, raw_col2 in self.doc:get_selections(false) do
+  local selections = self.doc.selections
+  for i = 1, #selections, 4 do
+    local raw_line1, raw_col1 = selections[i], selections[i + 1]
+    local raw_line2, raw_col2 = selections[i + 2], selections[i + 3]
+    local top_line = math.min(raw_line1, raw_line2)
+    if top_line > maxline then break end
     if raw_line1 >= minline and raw_line1 <= maxline then
       visible_caret_cache[#visible_caret_cache + 1] = { raw_line1, raw_col1, raw_line2, raw_col2 }
     end

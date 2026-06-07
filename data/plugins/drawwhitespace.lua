@@ -53,10 +53,20 @@ function DocView:update()
     and
     drawwhitespace.show_selected_only
   then
+    local vl1, vl2 = self:get_visible_line_range()
+    local cache_key = table.concat({
+      tostring(self.doc:get_change_id()),
+      tostring(self.doc.selection_revision or 0),
+      tostring(vl1),
+      tostring(vl2),
+    }, ":")
+    if self.drawwhitespace_selections_cache_key == cache_key then return end
+
     local selections = {}
     local col1, col2
-    local vl1, vl2 = self:get_visible_line_range()
     for _, l1, c1, l2, c2 in self.doc:get_selections(true) do
+      if l1 > vl2 then break end
+      if l2 < vl1 then goto skip end
       -- everything selected treat as not show_selected_only
       if l1 < vl1 and l2 > vl2 then
         selections.all = true
@@ -95,8 +105,10 @@ function DocView:update()
     end
     ::out_of_loop::
     self.drawwhitespace_selections = selections
+    self.drawwhitespace_selections_cache_key = cache_key
   elseif self.drawwhitespace_selections then
     self.drawwhitespace_selections = nil
+    self.drawwhitespace_selections_cache_key = nil
   end
 end
 

@@ -180,12 +180,8 @@ local max_sync_selection_count_bytes = 200000
 local max_sync_selection_count_lines = 2000
 
 local function get_doc_selection_counts(doc)
-  local key_parts = {}
   local carets = math.floor(#doc.selections / 4)
-  for i = 1, #doc.selections do
-    key_parts[i] = doc.selections[i]
-  end
-  local key = table.concat(key_parts, ":")
+  local key = tostring(doc:get_change_id()) .. ":" .. tostring(doc.selection_revision or 0) .. ":" .. tostring(#doc.selections)
   if selection_counts_cache.doc == doc and selection_counts_cache.key == key then
     return
       selection_counts_cache.carets,

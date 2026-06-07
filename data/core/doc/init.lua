@@ -452,6 +452,7 @@ local function selection_state_count(state)
 end
 
 local function sync_unbound_selection_mutation(self)
+  self.selection_revision = (self.selection_revision or 0) + 1
   if self.bound_selection_view or self.__selection_text_adjusting then return end
   local ok, DocView = pcall(require, "core.docview")
   if ok and DocView.sync_doc_mirror_owner_state then
