@@ -106,4 +106,32 @@ test.describe("IntelliJ actions batch behavior", function()
     test.equal(changes, 1)
     test.same(view_selections(view), { 1, 2, 3, 3 })
   end)
+
+  test.it("clone caret below until last line adds carets in one bulk selection update", function(context)
+    local view, doc = open_editor(context, "aa\nbb\ncc\ndd")
+    set_view_selections(view, { 2, 2, 2, 2 })
+
+    test.ok(command.perform("user:clone-caret-below-until-last-line-intellij"))
+
+    test.same(view_selections(view), {
+      2, 2, 2, 2,
+      3, 2, 3, 2,
+      4, 2, 4, 2,
+    })
+    test.equal(view.selection_state.last_selection, 3)
+  end)
+
+  test.it("select all occurrences replaces selections in bulk", function(context)
+    local view = open_editor(context, "aa xx aa\naa")
+    set_view_selections(view, { 1, 1, 1, 3 })
+
+    test.ok(command.perform("user:select-all-occurrences"))
+
+    test.same(view_selections(view), {
+      1, 3, 1, 1,
+      1, 9, 1, 7,
+      2, 3, 2, 1,
+    })
+    test.equal(view.selection_state.last_selection, 1)
+  end)
 end)

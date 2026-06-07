@@ -47,13 +47,80 @@ local function clone_caret_intellij(dv, direction)
   return true
 end
 
+local function selection_key(line, col)
+  return line .. ":" .. col
+end
+
 local function clone_caret_until_edge_intellij(dv, direction)
+  local DocView = require "core.docview"
+  local doc = dv.doc
   local changed = false
-  while clone_caret_intellij(dv, direction) do
+
+  dv:with_selection_state(function()
+    local idx = doc.last_selection or 1
+    local line, col = doc:get_selection_idx(idx)
+    if not line then return end
+
+    local translate = direction < 0
+      and DocView.translate.previous_line
+      or DocView.translate.next_line
+    local existing = {}
+    for _, l, c in doc:get_selections(true) do
+      existing[selection_key(l, c)] = true
+    end
+
+    local additions = {}
+    local target_line, target_col = line, col
+    while target_line + direction >= 1 and target_line + direction <= #doc.lines do
+      target_line, target_col = translate(doc, target_line, target_col, dv)
+      local key = selection_key(target_line, target_col)
+      if existing[key] then
+        -- Existing-caret toggling is uncommon for the bulk edge command and is
+        -- subtle because removing the previous caret changes the walk origin.
+        -- Keep that path exact and only use the fast path for pure additions.
+        while clone_caret_intellij(dv, direction) do
+          changed = true
+        end
+        return
+      end
+      existing[key] = true
+      additions[#additions + 1] = { target_line, target_col }
+    end
+
+    if #additions == 0 then return end
+
+    local merged = {}
+    for _, l, c, l2, c2 in doc:get_selections() do
+      merged[#merged + 1] = { l, c, l2, c2 }
+    end
+    for _, pos in ipairs(additions) do
+      merged[#merged + 1] = { pos[1], pos[2], pos[1], pos[2] }
+    end
+    table.sort(merged, function(a, b)
+      if a[1] ~= b[1] then return a[1] < b[1] end
+      return a[2] < b[2]
+    end)
+
+    local last_line, last_col = additions[#additions][1], additions[#additions][2]
+    local last_selection = 1
+    local selections = {}
+    for i, sel in ipairs(merged) do
+      selections[#selections + 1] = sel[1]
+      selections[#selections + 1] = sel[2]
+      selections[#selections + 1] = sel[3]
+      selections[#selections + 1] = sel[4]
+      if sel[1] == last_line and sel[2] == last_col and sel[3] == last_line and sel[4] == last_col then
+        last_selection = i
+      end
+    end
+    doc.selections = selections
+    doc.last_selection = last_selection
     changed = true
-  end
+  end)
+
   if changed then
     core.log_quiet("IntelliJ actions: cloned carets %s until document edge", direction < 0 and "above" or "below")
+    core.blink_reset()
   end
 end
 
@@ -144,28 +211,44 @@ function Doc:set_selections(...)
   return doc_set_selections(self, ...)
 end
 
+local function sync_selection_list_assignment(doc)
+  local bound_view = doc.bound_selection_view
+  if bound_view and bound_view.selection_state then
+    bound_view.selection_state.selections = doc.selections
+    bound_view.selection_state.last_selection = doc.last_selection
+  elseif not doc.__selection_text_adjusting then
+    local ok, DocView = pcall(require, "core.docview")
+    if ok and DocView.sync_doc_mirror_owner_state then
+      DocView.sync_doc_mirror_owner_state(doc)
+    end
+  end
+end
+
 local function set_selection_list(doc, selections, last_selection)
   selections = selections or {}
   if #selections < 4 then
     with_origin_clear_suppressed(doc_set_selection, doc, 1, 1, 1, 1)
     return
   end
-  with_origin_clear_suppressed(function()
-    doc_set_selection(doc, selections[1], selections[2], selections[3], selections[4])
-    for i = 5, #selections, 4 do
-      doc_set_selections(
-        doc,
-        math.floor((i - 1) / 4) + 1,
-        selections[i], selections[i + 1], selections[i + 2], selections[i + 3],
-        nil, 0
-      )
-    end
-  end)
+
+  local normalized = {}
+  local usable_count = #selections - (#selections % 4)
+  for i = 1, usable_count, 4 do
+    local line1, col1 = doc:sanitize_position(selections[i], selections[i + 1])
+    local line2, col2 = doc:sanitize_position(selections[i + 2], selections[i + 3])
+    normalized[#normalized + 1] = line1
+    normalized[#normalized + 1] = col1
+    normalized[#normalized + 1] = line2
+    normalized[#normalized + 1] = col2
+  end
+
+  doc.selections = normalized
   doc.last_selection = common.clamp(
     math.floor(tonumber(last_selection) or 1),
     1,
-    math.max(1, math.floor(#selections / 4))
+    math.max(1, math.floor(#normalized / 4))
   )
+  sync_selection_list_assignment(doc)
 end
 
 local doc_insert = core.intellij_actions_original_doc_insert or Doc.insert
