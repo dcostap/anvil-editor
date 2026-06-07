@@ -53,6 +53,14 @@ test.describe("Fuzzy Searcher mode switching", function()
     cleanup_editor_views(context)
   end)
 
+  test.it("places the caret after the initial mode prefix when opened", function()
+    fuzzy_searcher.open("#")
+
+    local picker = core.fuzzy_searcher_active_view
+
+    test.same({ picker.input.textview.doc:get_selection() }, { 1, 2, 1, 2 })
+  end)
+
   test.it("preserves prompt text and replaces the mode prefix when another fuzzy mode is opened", function(context)
     local view, doc = open_editor(context, "underlying selection should not be copied\n")
     doc:set_selection(1, 1, 1, 20)

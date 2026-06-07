@@ -1775,6 +1775,7 @@ function FSView:new(prefix)
   self.source_file_line = source_doc and source_doc:get_selection(false) or 1
 
   self.input = TextBox(self, prefix or "", "")
+  self.input.textview.doc:set_selection(1, #(prefix or "") + 1, 1, #(prefix or "") + 1)
   self.input.border.color = style.dim
   self.input.activate = function(input)
     TextBox.activate(input)
