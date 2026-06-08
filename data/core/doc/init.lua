@@ -736,26 +736,31 @@ end
 function Doc:set_selection_list(selections, last_selection, opts)
   opts = opts or {}
   selections = selections or {}
-  local normalized = {}
   local usable_count = #selections - (#selections % 4)
+  local normalized
 
-  for i = 1, usable_count, 4 do
-    local line1, col1 = selections[i], selections[i + 1]
-    local line2, col2 = selections[i + 2], selections[i + 3]
-    if not opts.sanitized then
-      line1, col1 = self:sanitize_position(line1, col1)
-      if line1 == line2 and col1 == col2 then
-        line2, col2 = line1, col1
+  if opts.sanitized and opts.take_ownership and usable_count == #selections then
+    normalized = selections
+  else
+    normalized = {}
+    for i = 1, usable_count, 4 do
+      local line1, col1 = selections[i], selections[i + 1]
+      local line2, col2 = selections[i + 2], selections[i + 3]
+      if not opts.sanitized then
+        line1, col1 = self:sanitize_position(line1, col1)
+        if line1 == line2 and col1 == col2 then
+          line2, col2 = line1, col1
+        else
+          line2, col2 = self:sanitize_position(line2 or line1, col2 or col1)
+        end
       else
-        line2, col2 = self:sanitize_position(line2 or line1, col2 or col1)
+        line2, col2 = line2 or line1, col2 or col1
       end
-    else
-      line2, col2 = line2 or line1, col2 or col1
+      normalized[#normalized + 1] = line1
+      normalized[#normalized + 1] = col1
+      normalized[#normalized + 1] = line2
+      normalized[#normalized + 1] = col2
     end
-    normalized[#normalized + 1] = line1
-    normalized[#normalized + 1] = col1
-    normalized[#normalized + 1] = line2
-    normalized[#normalized + 1] = col2
   end
 
   if #normalized < 4 then

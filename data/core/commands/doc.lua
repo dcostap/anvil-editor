@@ -1246,6 +1246,14 @@ local function move_line_batch(dv, line_offset)
   local x_by_line_col = {}
   local col_by_line_x = {}
   local last_x_offset = dv.last_x_offset
+  local has_syntax_fonts = false
+  for _ in pairs(style.syntax_fonts) do
+    has_syntax_fonts = true
+    break
+  end
+  local simple_line_cache = {}
+  local seen = {}
+  local mapped_last_selection = nil
 
   local function get_cached_x(line, col)
     local by_col = x_by_line_col[line]
@@ -1275,33 +1283,69 @@ local function move_line_batch(dv, line_offset)
     return col
   end
 
+  local function is_simple_line(line)
+    if has_syntax_fonts then return false end
+    local simple = simple_line_cache[line]
+    if simple == nil then
+      simple = not not doc.lines[line] and not doc.lines[line]:find("[\t\128-\255]")
+      simple_line_cache[line] = simple
+    end
+    return simple
+  end
+
+  local function add_cursor(old_idx, line, col)
+    local by_col = seen[line]
+    if not by_col then
+      by_col = {}
+      seen[line] = by_col
+    end
+    local selection_idx = by_col[col]
+    if not selection_idx then
+      selection_idx = #selections / 4 + 1
+      by_col[col] = selection_idx
+      selections[#selections + 1] = line
+      selections[#selections + 1] = col
+      selections[#selections + 1] = line
+      selections[#selections + 1] = col
+    end
+    if old_idx == last_selection then
+      mapped_last_selection = selection_idx
+    end
+  end
+
   for i = 1, #old, 4 do
+    local old_idx = (i - 1) / 4 + 1
     local line, col = old[i], old[i + 1]
     local target_line, target_col
     if line_offset < 0 and line <= 1 then
       target_line, target_col = 1, 1
     elseif line_offset > 0 and line >= last_line then
-      target_line, target_col = last_line, #doc:get_utf8_line(last_line)
+      target_line, target_col = last_line, #doc.lines[last_line]
     else
-      local x
-      if last_x_offset.line == line and last_x_offset.col == col then
-        x = last_x_offset.offset
-      else
-        x = get_cached_x(line, col)
-      end
       target_line = line + line_offset
-      target_col = get_cached_col(target_line, x)
-      last_x_offset.offset = x
-      last_x_offset.line = target_line
-      last_x_offset.col = target_col
+      if is_simple_line(line) and is_simple_line(target_line) then
+        local x = (col - 1) * dv:get_font():get_width(" ")
+        target_col = common.clamp(col, 1, #doc.lines[target_line])
+        last_x_offset.offset = x
+        last_x_offset.line = target_line
+        last_x_offset.col = target_col
+      else
+        local x
+        if last_x_offset.line == line and last_x_offset.col == col then
+          x = last_x_offset.offset
+        else
+          x = get_cached_x(line, col)
+        end
+        target_col = common.clamp(get_cached_col(target_line, x), 1, #doc.lines[target_line])
+        last_x_offset.offset = x
+        last_x_offset.line = target_line
+        last_x_offset.col = target_col
+      end
     end
-    selections[#selections + 1] = target_line
-    selections[#selections + 1] = target_col
-    selections[#selections + 1] = target_line
-    selections[#selections + 1] = target_col
+    add_cursor(old_idx, target_line, target_col)
   end
 
-  doc:set_selection_list(selections, last_selection, { merge_cursors = true })
+  doc:set_selection_list(selections, mapped_last_selection or last_selection, { sanitized = true, take_ownership = true })
 end
 
 commands["doc:move-to-previous-line"] = function(dv)

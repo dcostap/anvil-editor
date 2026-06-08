@@ -948,7 +948,7 @@ test.describe("Document View Selection State edit characterization", function()
 
     local ok, err = pcall(function()
       test.ok(command.perform("doc:move-to-previous-line"))
-      test.equal(merge_calls, 1)
+      test.equal(merge_calls, 0)
       test.same(selection(main), {
         1, 3, 1, 3,
         2, 4, 2, 4,
