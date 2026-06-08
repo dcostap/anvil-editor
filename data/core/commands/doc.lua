@@ -1415,4 +1415,161 @@ commands["doc:move-to-start-of-indentation"] = function(dv)
   move_collapsed_carets_batch(dv, move_to_start_of_indentation)
 end
 
+local function add_selection_endpoint(selections, seen, old_idx, last_selection, mapped_last_selection, line1, col1, line2, col2)
+  local by_col = seen[line1]
+  if not by_col then
+    by_col = {}
+    seen[line1] = by_col
+  end
+  local selection_idx = by_col[col1]
+  if not selection_idx then
+    selection_idx = #selections / 4 + 1
+    by_col[col1] = selection_idx
+    selections[#selections + 1] = line1
+    selections[#selections + 1] = col1
+    selections[#selections + 1] = line2
+    selections[#selections + 1] = col2
+  end
+  if old_idx == last_selection then
+    mapped_last_selection = selection_idx
+  end
+  return mapped_last_selection
+end
+
+local function select_char_batch(dv, move_fn)
+  local doc = dv.doc
+  local old = doc.selections
+  local selections = {}
+  local seen = {}
+  local last_selection = doc.last_selection
+  local mapped_last_selection = nil
+
+  for i = 1, #old, 4 do
+    local old_idx = (i - 1) / 4 + 1
+    local line, col = move_fn(doc, old[i], old[i + 1], dv)
+    mapped_last_selection = add_selection_endpoint(
+      selections, seen, old_idx, last_selection, mapped_last_selection,
+      line, col, old[i + 2], old[i + 3]
+    )
+  end
+
+  doc:set_selection_list(selections, mapped_last_selection or last_selection, { sanitized = true, take_ownership = true })
+  set_primary_selection(doc)
+end
+
+local function select_line_batch(dv, line_offset)
+  local doc = dv.doc
+  local old = doc.selections
+  local selections = {}
+  local seen = {}
+  local last_selection = doc.last_selection
+  local mapped_last_selection = nil
+  local last_line = #doc.lines
+  local x_by_line_col = {}
+  local col_by_line_x = {}
+  local last_x_offset = dv.last_x_offset
+  local has_relevant_syntax_fonts = false
+  local syntax_name = tostring(doc.syntax and doc.syntax.name or ""):lower()
+  local is_markdown = syntax_name:find("markdown", 1, true) ~= nil
+  for name in pairs(style.syntax_fonts) do
+    if is_markdown or not tostring(name):match("^markdown_") then
+      has_relevant_syntax_fonts = true
+      break
+    end
+  end
+  local simple_line_cache = {}
+
+  local function get_cached_x(line, col)
+    local by_col = x_by_line_col[line]
+    if not by_col then
+      by_col = {}
+      x_by_line_col[line] = by_col
+    end
+    local x = by_col[col]
+    if x == nil then
+      x = dv:get_col_x_offset(line, col)
+      by_col[col] = x
+    end
+    return x
+  end
+
+  local function get_cached_col(line, x)
+    local by_x = col_by_line_x[line]
+    if not by_x then
+      by_x = {}
+      col_by_line_x[line] = by_x
+    end
+    local col = by_x[x]
+    if col == nil then
+      col = dv:get_x_offset_col(line, x)
+      by_x[x] = col
+    end
+    return col
+  end
+
+  local function is_simple_line(line)
+    if has_relevant_syntax_fonts then return false end
+    local simple = simple_line_cache[line]
+    if simple == nil then
+      simple = not not doc.lines[line] and not doc.lines[line]:find("[\t\128-\255]")
+      simple_line_cache[line] = simple
+    end
+    return simple
+  end
+
+  for i = 1, #old, 4 do
+    local old_idx = (i - 1) / 4 + 1
+    local line, col = old[i], old[i + 1]
+    local target_line, target_col
+    if line_offset < 0 and line <= 1 then
+      target_line, target_col = 1, 1
+    elseif line_offset > 0 and line >= last_line then
+      target_line, target_col = last_line, #doc.lines[last_line]
+    else
+      target_line = line + line_offset
+      if is_simple_line(line) and is_simple_line(target_line) then
+        local x = (col - 1) * dv:get_font():get_width(" ")
+        target_col = common.clamp(col, 1, #doc.lines[target_line])
+        last_x_offset.offset = x
+        last_x_offset.line = target_line
+        last_x_offset.col = target_col
+      else
+        local x
+        if last_x_offset.line == line and last_x_offset.col == col then
+          x = last_x_offset.offset
+        else
+          x = get_cached_x(line, col)
+        end
+        target_col = common.clamp(get_cached_col(target_line, x), 1, #doc.lines[target_line])
+        last_x_offset.offset = x
+        last_x_offset.line = target_line
+        last_x_offset.col = target_col
+      end
+    end
+    mapped_last_selection = add_selection_endpoint(
+      selections, seen, old_idx, last_selection, mapped_last_selection,
+      target_line, target_col, old[i + 2], old[i + 3]
+    )
+  end
+
+  doc:set_selection_list(selections, mapped_last_selection or last_selection, { sanitized = true, take_ownership = true })
+  set_primary_selection(doc)
+end
+
+commands["doc:select-to-previous-char"] = function(dv)
+  select_char_batch(dv, translate.previous_char)
+end
+
+commands["doc:select-to-next-char"] = function(dv)
+  select_char_batch(dv, translate.next_char)
+end
+
+commands["doc:select-to-previous-line"] = function(dv)
+  select_line_batch(dv, -1)
+end
+
+commands["doc:select-to-next-line"] = function(dv)
+  select_line_batch(dv, 1)
+end
+
 command.add("core.docview", commands)

@@ -1023,6 +1023,59 @@ test.describe("Document View Selection State edit characterization", function()
     if not ok then error(err) end
   end)
 
+  test.it("selection extension char and line commands batch cursor updates", function(context)
+    local _, main = new_shared_views(context, "abcd\nwxyz\n1234")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      1, 2, 1, 2,
+      2, 3, 2, 3,
+    }, 2)
+
+    local doc = main.doc
+    local original_set_selections = doc.set_selections
+    local original_merge_cursors = doc.merge_cursors
+    local merge_calls = 0
+    doc.set_selections = function()
+      error("selection extension should use batched selection replacement")
+    end
+    doc.merge_cursors = function(self, ...)
+      merge_calls = merge_calls + 1
+      return original_merge_cursors(self, ...)
+    end
+
+    local ok, err = pcall(function()
+      test.ok(command.perform("doc:select-to-previous-char"))
+      test.equal(merge_calls, 0)
+      test.same(selection(main), {
+        1, 1, 1, 2,
+        2, 2, 2, 3,
+      })
+      test.equal(main:get_selection_state().last_selection, 2)
+    end)
+    doc.set_selections = original_set_selections
+    if ok then
+      set_view_selections(main, {
+        2, 2, 2, 2,
+        3, 4, 3, 4,
+      }, 2)
+      doc.set_selections = function()
+        error("selection extension should use batched selection replacement")
+      end
+      ok, err = pcall(function()
+        test.ok(command.perform("doc:select-to-previous-line"))
+        test.equal(merge_calls, 0)
+        test.same(selection(main), {
+          1, 2, 2, 2,
+          2, 4, 3, 4,
+        })
+        test.equal(main:get_selection_state().last_selection, 2)
+      end)
+    end
+    doc.set_selections = original_set_selections
+    doc.merge_cursors = original_merge_cursors
+    if not ok then error(err) end
+  end)
+
   test.it("paste handles mixed collapsed carets and selected ranges through the document command", function(context)
     local doc, main = new_shared_views(context, "abc def ghi\none two three")
     core.set_active_view(main)
