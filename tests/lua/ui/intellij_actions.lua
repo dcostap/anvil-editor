@@ -134,4 +134,27 @@ test.describe("IntelliJ actions batch behavior", function()
     })
     test.equal(view.selection_state.last_selection, 1)
   end)
+
+  test.it("select all occurrences builds many selections without per-occurrence set_selections", function(context)
+    local lines = {}
+    for i = 1, 200 do lines[i] = "aa xx" end
+    local view, doc = open_editor(context, table.concat(lines, "\n"))
+    set_view_selections(view, { 1, 1, 1, 3 })
+
+    local original_set_selections = doc.set_selections
+    doc.set_selections = function()
+      error("user:select-all-occurrences should use batched selection replacement")
+    end
+
+    local ok, err = pcall(function()
+      test.ok(command.perform("user:select-all-occurrences"))
+      local selections = view_selections(view)
+      test.equal(#selections / 4, 200)
+      test.same({ selections[1], selections[2], selections[3], selections[4] }, { 1, 3, 1, 1 })
+      test.same({ selections[#selections - 3], selections[#selections - 2], selections[#selections - 1], selections[#selections] }, { 200, 3, 200, 1 })
+      test.equal(view.selection_state.last_selection, 1)
+    end)
+    doc.set_selections = original_set_selections
+    if not ok then error(err) end
+  end)
 end)

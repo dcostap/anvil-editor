@@ -486,6 +486,17 @@ local function offset_to_pos(doc, starts, offset)
   return doc:sanitize_position(#doc.lines, math.huge)
 end
 
+local function monotonic_offset_to_pos(doc, starts)
+  local line = 1
+  return function(offset)
+    offset = math.max(0, offset)
+    while starts[line + 1] and offset >= starts[line + 1] do
+      line = line + 1
+    end
+    return doc:sanitize_position(line, offset - starts[line] + 1)
+  end
+end
+
 local function is_identifier_char(ch)
   return ch ~= nil and ch:match("[%w_$]") ~= nil
 end
@@ -1297,26 +1308,24 @@ local function select_all_occurrences(dv)
   local full_text, starts = build_text_index(doc)
   local find_text = config.select_add_next_no_case and text:lower() or text
   local haystack = config.select_add_next_no_case and full_text:lower() or full_text
-  local selections = {}
   local search_at = 1
+  local to_pos = monotonic_offset_to_pos(doc, starts)
+  local new_selections = {}
 
   while true do
     local s, e = haystack:find(find_text, search_at, true)
     if not s then break end
-    local l1, c1 = offset_to_pos(doc, starts, s - 1)
-    local l2, c2 = offset_to_pos(doc, starts, e)
-    selections[#selections + 1] = { l2, c2, l1, c1 }
+    local l1, c1 = to_pos(s - 1)
+    local l2, c2 = to_pos(e)
+    new_selections[#new_selections + 1] = l2
+    new_selections[#new_selections + 1] = c2
+    new_selections[#new_selections + 1] = l1
+    new_selections[#new_selections + 1] = c1
     search_at = e + 1
   end
 
-  if #selections == 0 then return end
-  local new_selections = {}
-  for _, sel in ipairs(selections) do
-    for i = 1, 4 do
-      new_selections[#new_selections + 1] = sel[i]
-    end
-  end
-  set_selection_list(doc, new_selections, 1)
+  if #new_selections == 0 then return end
+  doc:set_selection_list(new_selections, 1, { sanitized = true })
   add_next_occurrence_state[selection_state_key(doc)] = nil
 end
 
