@@ -1246,10 +1246,14 @@ local function move_line_batch(dv, line_offset)
   local x_by_line_col = {}
   local col_by_line_x = {}
   local last_x_offset = dv.last_x_offset
-  local has_syntax_fonts = false
-  for _ in pairs(style.syntax_fonts) do
-    has_syntax_fonts = true
-    break
+  local has_relevant_syntax_fonts = false
+  local syntax_name = tostring(doc.syntax and doc.syntax.name or ""):lower()
+  local is_markdown = syntax_name:find("markdown", 1, true) ~= nil
+  for name in pairs(style.syntax_fonts) do
+    if is_markdown or not tostring(name):match("^markdown_") then
+      has_relevant_syntax_fonts = true
+      break
+    end
   end
   local simple_line_cache = {}
   local seen = {}
@@ -1284,7 +1288,7 @@ local function move_line_batch(dv, line_offset)
   end
 
   local function is_simple_line(line)
-    if has_syntax_fonts then return false end
+    if has_relevant_syntax_fonts then return false end
     local simple = simple_line_cache[line]
     if simple == nil then
       simple = not not doc.lines[line] and not doc.lines[line]:find("[\t\128-\255]")
