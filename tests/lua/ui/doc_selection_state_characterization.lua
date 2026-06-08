@@ -926,6 +926,53 @@ test.describe("Document View Selection State edit characterization", function()
     test.equal(main:get_selection_state().last_selection, 2)
   end)
 
+  test.it("line movement commands batch cursor updates", function(context)
+    local _, main = new_shared_views(context, "aaaa\naaaa\naaaa\naaaa")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      2, 3, 2, 3,
+      3, 4, 3, 4,
+    }, 2)
+
+    local doc = main.doc
+    local merge_calls = 0
+    local original_merge_cursors = doc.merge_cursors
+    local original_set_selections = doc.set_selections
+    doc.merge_cursors = function(self, ...)
+      merge_calls = merge_calls + 1
+      return original_merge_cursors(self, ...)
+    end
+    doc.set_selections = function()
+      error("line movement should use batched selection replacement")
+    end
+
+    local ok, err = pcall(function()
+      test.ok(command.perform("doc:move-to-previous-line"))
+      test.equal(merge_calls, 1)
+      test.same(selection(main), {
+        1, 3, 1, 3,
+        2, 4, 2, 4,
+      })
+    end)
+    doc.merge_cursors = original_merge_cursors
+    doc.set_selections = original_set_selections
+    if not ok then error(err) end
+  end)
+
+  test.it("line movement commands clamp at document boundaries and merge duplicates", function(context)
+    local _, main = new_shared_views(context, "aaaa\naaaa")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      1, 1, 1, 1,
+      2, 1, 2, 1,
+    }, 2)
+
+    test.ok(command.perform("doc:move-to-previous-line"))
+
+    test.same(selection(main), { 1, 1, 1, 1 })
+    test.equal(main:get_selection_state().last_selection, 1)
+  end)
+
   test.it("paste handles mixed collapsed carets and selected ranges through the document command", function(context)
     local doc, main = new_shared_views(context, "abc def ghi\none two three")
     core.set_active_view(main)

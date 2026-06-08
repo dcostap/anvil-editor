@@ -1237,4 +1237,79 @@ commands["doc:move-to-next-char"] = function(dv)
   move_char_batch(dv, translate.next_char, true)
 end
 
+local function move_line_batch(dv, line_offset)
+  local doc = dv.doc
+  local old = doc.selections
+  local selections = {}
+  local last_selection = doc.last_selection
+  local last_line = #doc.lines
+  local x_by_line_col = {}
+  local col_by_line_x = {}
+  local last_x_offset = dv.last_x_offset
+
+  local function get_cached_x(line, col)
+    local by_col = x_by_line_col[line]
+    if not by_col then
+      by_col = {}
+      x_by_line_col[line] = by_col
+    end
+    local x = by_col[col]
+    if x == nil then
+      x = dv:get_col_x_offset(line, col)
+      by_col[col] = x
+    end
+    return x
+  end
+
+  local function get_cached_col(line, x)
+    local by_x = col_by_line_x[line]
+    if not by_x then
+      by_x = {}
+      col_by_line_x[line] = by_x
+    end
+    local col = by_x[x]
+    if col == nil then
+      col = dv:get_x_offset_col(line, x)
+      by_x[x] = col
+    end
+    return col
+  end
+
+  for i = 1, #old, 4 do
+    local line, col = old[i], old[i + 1]
+    local target_line, target_col
+    if line_offset < 0 and line <= 1 then
+      target_line, target_col = 1, 1
+    elseif line_offset > 0 and line >= last_line then
+      target_line, target_col = last_line, #doc:get_utf8_line(last_line)
+    else
+      local x
+      if last_x_offset.line == line and last_x_offset.col == col then
+        x = last_x_offset.offset
+      else
+        x = get_cached_x(line, col)
+      end
+      target_line = line + line_offset
+      target_col = get_cached_col(target_line, x)
+      last_x_offset.offset = x
+      last_x_offset.line = target_line
+      last_x_offset.col = target_col
+    end
+    selections[#selections + 1] = target_line
+    selections[#selections + 1] = target_col
+    selections[#selections + 1] = target_line
+    selections[#selections + 1] = target_col
+  end
+
+  doc:set_selection_list(selections, last_selection, { merge_cursors = true })
+end
+
+commands["doc:move-to-previous-line"] = function(dv)
+  move_line_batch(dv, -1)
+end
+
+commands["doc:move-to-next-line"] = function(dv)
+  move_line_batch(dv, 1)
+end
+
 command.add("core.docview", commands)
