@@ -38,6 +38,18 @@ local function add_count(tbl, key, amount)
   tbl[key] = (tbl[key] or 0) + (amount or 1)
 end
 
+function perf.add_detail(key, amount)
+  if not recording or not record or not key then return end
+  add_count(record.detail_counts, key, amount or 1)
+end
+
+function perf.frame_add(key, amount)
+  local stats = core.perf_frame_stats
+  if not stats or not key then return end
+  stats[key] = (stats[key] or 0) + (amount or 1)
+  perf.add_detail(key, amount or 1)
+end
+
 local function hook()
   if not record then return end
   local level = 2
@@ -80,12 +92,17 @@ local function write_frame_header(file)
     "time", "did_redraw", "fps", "target_fps", "active_present_paced",
     "pending_events", "queue_depth", "run_mode", "window_has_focus", "active_view_is_docview", "active_view_name",
     "selection_count", "search_selection_count", "docview_caret_draw_calls", "docview_selection_rect_calls",
-    "event_count", "event_ms", "update_ms", "pre_draw_ms",
+    "event_count", "event_ms", "event_types", "slowest_event_type", "slowest_event_ms", "update_ms", "pre_draw_ms",
     "frame_ms", "draw_emit_ms", "renderer_end_ms",
     "present_ms", "run_threads_ms", "run_threads_runs", "run_threads_slowest_ms", "run_threads_slowest_loc", "core_step_ms", "gc_ms", "sleep_requested_ms", "sleep_actual_ms", "total_ms",
     "draw_calls", "quad_instances", "texture_uploads", "texture_upload_bytes",
-    "docview_draw_ms", "docview_body_ms", "docview_text_ms",
-    "docview_draw_text_calls", "over_budget"
+    "docview_draw_ms", "docview_prepare_ms", "docview_prepare_highlight_ms", "docview_prepare_caret_ms", "docview_prepare_selection_ms", "docview_prepare_merge_ms", "docview_gutter_ms", "docview_body_ms", "docview_text_ms", "docview_overlay_ms",
+    "docview_highlighter_get_line_ms", "docview_token_loop_ms", "docview_renderer_draw_text_ms",
+    "docview_visible_lines", "docview_text_lines", "docview_tokens", "docview_draw_text_calls",
+    "docview_prepare_highlight_iters", "docview_prepare_caret_scan_count", "docview_visible_carets", "docview_prepare_selection_iters", "docview_visible_selection_ranges", "docview_selection_cache_lines", "docview_selection_cache_ranges", "docview_selection_cache_merged_ranges",
+    "doc_get_selections_calls", "doc_get_selections_iters", "doc_set_selections_calls", "doc_set_selections_ms", "doc_add_selection_calls", "doc_add_selection_ms", "doc_merge_cursors_calls", "doc_merge_cursors_ms", "doc_sanitize_selection_calls", "doc_sanitize_selection_ms", "doc_apply_edits_calls", "doc_apply_edits_ms",
+    "command_calls", "command_total_ms", "command_predicate_ms", "command_body_ms", "slowest_command_ms", "slowest_command_name",
+    "statusbar_selection_ms", "statusbar_selection_cache_hits", "statusbar_selection_cache_misses", "over_budget"
   }, ",") .. "\n")
 end
 
@@ -123,6 +140,9 @@ function perf.on_frame(snapshot)
         gc_ms = snapshot.gc_ms or 0,
         event_count = snapshot.event_count or 0,
         event_ms = snapshot.event_ms or 0,
+        event_types = snapshot.event_types or "",
+        slowest_event_type = snapshot.slowest_event_type or "",
+        slowest_event_ms = snapshot.slowest_event_ms or 0,
         update_ms = snapshot.update_ms or 0,
         pre_draw_ms = snapshot.pre_draw_ms or 0,
         frame_ms = frame_ms,
@@ -131,9 +151,25 @@ function perf.on_frame(snapshot)
         present_ms = present_ms,
         draw_calls = renderer_stats.draw_calls or 0,
         docview_draw_ms = snapshot.docview_draw_ms or 0,
+        docview_prepare_ms = snapshot.docview_prepare_ms or 0,
+        docview_prepare_caret_ms = snapshot.docview_prepare_caret_ms or 0,
+        docview_prepare_selection_ms = snapshot.docview_prepare_selection_ms or 0,
+        docview_gutter_ms = snapshot.docview_gutter_ms or 0,
         docview_body_ms = snapshot.docview_body_ms or 0,
         docview_text_ms = snapshot.docview_text_ms or 0,
+        docview_overlay_ms = snapshot.docview_overlay_ms or 0,
         docview_draw_text_calls = snapshot.docview_draw_text_calls or 0,
+        doc_get_selections_calls = snapshot.doc_get_selections_calls or 0,
+        doc_get_selections_iters = snapshot.doc_get_selections_iters or 0,
+        doc_set_selections_calls = snapshot.doc_set_selections_calls or 0,
+        doc_set_selections_ms = snapshot.doc_set_selections_ms or 0,
+        command_calls = snapshot.command_calls or 0,
+        command_total_ms = snapshot.command_total_ms or 0,
+        command_predicate_ms = snapshot.command_predicate_ms or 0,
+        command_body_ms = snapshot.command_body_ms or 0,
+        slowest_command_ms = snapshot.slowest_command_ms or 0,
+        slowest_command_name = snapshot.slowest_command_name or "",
+        statusbar_selection_ms = snapshot.statusbar_selection_ms or 0,
         pending_events = snapshot.pending_events,
         queue_depth = snapshot.queue_depth or 0,
       }
@@ -167,6 +203,9 @@ function perf.on_frame(snapshot)
     tostring(snapshot.docview_selection_rect_calls or 0),
     tostring(snapshot.event_count or 0),
     string.format("%.3f", snapshot.event_ms or 0),
+    csv_escape(snapshot.event_types or ""),
+    csv_escape(snapshot.slowest_event_type or ""),
+    string.format("%.3f", snapshot.slowest_event_ms or 0),
     string.format("%.3f", snapshot.update_ms or 0),
     string.format("%.3f", snapshot.pre_draw_ms or 0),
     string.format("%.3f", snapshot.frame_ms or 0),
@@ -187,9 +226,51 @@ function perf.on_frame(snapshot)
     tostring(renderer_stats.texture_uploads or 0),
     tostring(renderer_stats.texture_upload_bytes or 0),
     string.format("%.3f", snapshot.docview_draw_ms or 0),
+    string.format("%.3f", snapshot.docview_prepare_ms or 0),
+    string.format("%.3f", snapshot.docview_prepare_highlight_ms or 0),
+    string.format("%.3f", snapshot.docview_prepare_caret_ms or 0),
+    string.format("%.3f", snapshot.docview_prepare_selection_ms or 0),
+    string.format("%.3f", snapshot.docview_prepare_merge_ms or 0),
+    string.format("%.3f", snapshot.docview_gutter_ms or 0),
     string.format("%.3f", snapshot.docview_body_ms or 0),
     string.format("%.3f", snapshot.docview_text_ms or 0),
+    string.format("%.3f", snapshot.docview_overlay_ms or 0),
+    string.format("%.3f", snapshot.docview_highlighter_get_line_ms or 0),
+    string.format("%.3f", snapshot.docview_token_loop_ms or 0),
+    string.format("%.3f", snapshot.docview_renderer_draw_text_ms or 0),
+    tostring(snapshot_value(snapshot, "docview_visible_lines")),
+    tostring(snapshot_value(snapshot, "docview_text_lines")),
+    tostring(snapshot_value(snapshot, "docview_tokens")),
     tostring(snapshot_value(snapshot, "docview_draw_text_calls")),
+    tostring(snapshot_value(snapshot, "docview_prepare_highlight_iters")),
+    tostring(snapshot_value(snapshot, "docview_prepare_caret_scan_count")),
+    tostring(snapshot_value(snapshot, "docview_visible_carets")),
+    tostring(snapshot_value(snapshot, "docview_prepare_selection_iters")),
+    tostring(snapshot_value(snapshot, "docview_visible_selection_ranges")),
+    tostring(snapshot_value(snapshot, "docview_selection_cache_lines")),
+    tostring(snapshot_value(snapshot, "docview_selection_cache_ranges")),
+    tostring(snapshot_value(snapshot, "docview_selection_cache_merged_ranges")),
+    tostring(snapshot_value(snapshot, "doc_get_selections_calls")),
+    tostring(snapshot_value(snapshot, "doc_get_selections_iters")),
+    tostring(snapshot_value(snapshot, "doc_set_selections_calls")),
+    string.format("%.3f", snapshot.doc_set_selections_ms or 0),
+    tostring(snapshot_value(snapshot, "doc_add_selection_calls")),
+    string.format("%.3f", snapshot.doc_add_selection_ms or 0),
+    tostring(snapshot_value(snapshot, "doc_merge_cursors_calls")),
+    string.format("%.3f", snapshot.doc_merge_cursors_ms or 0),
+    tostring(snapshot_value(snapshot, "doc_sanitize_selection_calls")),
+    string.format("%.3f", snapshot.doc_sanitize_selection_ms or 0),
+    tostring(snapshot_value(snapshot, "doc_apply_edits_calls")),
+    string.format("%.3f", snapshot.doc_apply_edits_ms or 0),
+    tostring(snapshot_value(snapshot, "command_calls")),
+    string.format("%.3f", snapshot.command_total_ms or 0),
+    string.format("%.3f", snapshot.command_predicate_ms or 0),
+    string.format("%.3f", snapshot.command_body_ms or 0),
+    string.format("%.3f", snapshot.slowest_command_ms or 0),
+    csv_escape(snapshot.slowest_command_name or ""),
+    string.format("%.3f", snapshot.statusbar_selection_ms or 0),
+    tostring(snapshot_value(snapshot, "statusbar_selection_cache_hits")),
+    tostring(snapshot_value(snapshot, "statusbar_selection_cache_misses")),
     snapshot.over_budget and "1" or "0",
   }, ",") .. "\n")
 end
@@ -263,17 +344,22 @@ local function write_summary(path)
   ))
 
   file:write("Slow redraw frames (top by total_ms; thresholds total>25ms/frame>20ms/present>18ms):\n")
-  file:write("time,total,run_threads,run_threads_runs,run_threads_slowest,run_threads_loc,core,gc,event_count,event,update,pre_draw,frame,draw_emit,renderer_end,present,draw_calls,docview_draw,docview_body,docview_text,docview_text_calls,pending_events,queue_depth\n")
+  file:write("time,total,run_threads,run_threads_runs,run_threads_slowest,run_threads_loc,core,gc,event_count,event,event_types,slowest_event,slowest_event_ms,command_calls,command_total,slowest_command,slowest_command_name,update,pre_draw,frame,draw_emit,renderer_end,present,draw_calls,docview_draw,docview_prepare,docview_prepare_caret,docview_prepare_selection,docview_gutter,docview_body,docview_text,docview_overlay,docview_text_calls,doc_get_selections_calls,doc_get_selections_iters,doc_set_selections_calls,doc_set_selections_ms,statusbar_selection,pending_events,queue_depth\n")
   for _, row in ipairs(record.slow_frames or {}) do
     file:write(string.format(
-      "%.6f,%.3f,%.3f,%d,%.3f,%s,%.3f,%.3f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%.3f,%.3f,%.3f,%d,%d,%d\n",
+      "%.6f,%.3f,%.3f,%d,%.3f,%s,%.3f,%.3f,%d,%.3f,%s,%s,%.3f,%d,%.3f,%.3f,%s,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%d,%d,%d,%.3f,%.3f,%d,%d\n",
       row.time, row.total_ms, row.run_threads_ms, row.run_threads_runs,
       row.run_threads_slowest_ms, csv_escape(row.run_threads_slowest_loc),
       row.core_step_ms, row.gc_ms, row.event_count, row.event_ms,
+      csv_escape(row.event_types), csv_escape(row.slowest_event_type), row.slowest_event_ms,
+      row.command_calls, row.command_total_ms, row.slowest_command_ms, csv_escape(row.slowest_command_name),
       row.update_ms, row.pre_draw_ms, row.frame_ms, row.draw_emit_ms,
       row.renderer_end_ms, row.present_ms, row.draw_calls, row.docview_draw_ms,
-      row.docview_body_ms, row.docview_text_ms, row.docview_draw_text_calls,
-      row.pending_events and 1 or 0, row.queue_depth
+      row.docview_prepare_ms, row.docview_prepare_caret_ms, row.docview_prepare_selection_ms,
+      row.docview_gutter_ms, row.docview_body_ms, row.docview_text_ms, row.docview_overlay_ms,
+      row.docview_draw_text_calls, row.doc_get_selections_calls, row.doc_get_selections_iters,
+      row.doc_set_selections_calls, row.doc_set_selections_ms,
+      row.statusbar_selection_ms, row.pending_events and 1 or 0, row.queue_depth
     ))
   end
   file:write("\n")
@@ -283,6 +369,12 @@ local function write_summary(path)
     if i > 30 then break end
     local pct = record.sample_count > 0 and (row.count * 100 / record.sample_count) or 0
     file:write(string.format("%6.2f%% %7d %s\n", pct, row.count, row.key))
+  end
+
+  file:write("\nTop perf detail counters/timers:\n")
+  for i, row in ipairs(sorted_counts(record.detail_counts)) do
+    if i > 60 then break end
+    file:write(string.format("%12.3f %s\n", row.count, row.key))
   end
 
   file:write("\nTop renderer API callers:\n")
@@ -312,6 +404,7 @@ function perf.start_recording()
     summary_path = base .. "_summary.txt",
     samples_path = base .. "_lua_samples.csv",
     api_path = base .. "_api_calls.csv",
+    detail_path = base .. "_details.csv",
     file = file,
     start_time = system.get_time(),
     stop_time = nil,
@@ -329,6 +422,7 @@ function perf.start_recording()
     lua_samples = {},
     sample_count = 0,
     api_calls = {},
+    detail_counts = {},
   }
   recording = true
   wrap_renderer_api("draw_text")
@@ -346,6 +440,7 @@ function perf.stop_recording()
   record.file:close()
   write_counts_csv(record.samples_path, "samples,source", sorted_counts(record.lua_samples))
   write_counts_csv(record.api_path, "calls,api_source", sorted_counts(record.api_calls))
+  write_counts_csv(record.detail_path, "value,metric", sorted_counts(record.detail_counts))
   write_summary(record.summary_path)
   local summary_path = record.summary_path
   recording = false

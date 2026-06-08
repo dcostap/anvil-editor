@@ -38,7 +38,8 @@ local function draw_hud()
   lines[#lines + 1] = string.format("Frame %s  Present %s", fmt_ms(s.frame_ms), fmt_ms(s.present_ms))
   lines[#lines + 1] = string.format("Draw %s  Update %s", fmt_ms(s.draw_emit_ms), fmt_ms(s.update_ms))
   lines[#lines + 1] = string.format("D3D draws %s  uploads %s", fmt_num(s.draw_calls), fmt_num(s.texture_uploads))
-  lines[#lines + 1] = string.format("DocView %s", fmt_ms(s.docview_draw_ms))
+  lines[#lines + 1] = string.format("DocView %s  prep %s", fmt_ms(s.docview_draw_ms), fmt_ms(s.docview_prepare_ms))
+  lines[#lines + 1] = string.format("Selections %.0f  sel-iters %.0f", tonumber(s.selection_count) or 0, tonumber(s.doc_get_selections_iters) or 0)
   if not recording then
     lines[#lines + 1] = "F11 record detailed metrics"
   end

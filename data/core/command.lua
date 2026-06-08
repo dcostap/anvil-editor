@@ -97,6 +97,39 @@ local function first_docview_arg(args, n)
   end
 end
 
+local function perf_start()
+  if core.perf_frame_stats then return system.get_time() end
+  local perf = package.loaded["core.perf"]
+  if perf and perf.is_recording and perf.is_recording() then return system.get_time() end
+end
+
+local function perf_detail_add(key, amount)
+  local perf = package.loaded["core.perf"]
+  if perf and perf.add_detail then perf.add_detail(key, amount or 1) end
+end
+
+local function perf_frame_add(key, amount)
+  local stats = core.perf_frame_stats
+  if stats then stats[key] = (stats[key] or 0) + (amount or 1) end
+end
+
+local function perf_command_time(name, kind, start_time)
+  if not start_time then return end
+  local elapsed = (system.get_time() - start_time) * 1000
+  name = tostring(name or "<unknown>")
+  perf_detail_add("command_" .. kind .. "_ms:" .. name, elapsed)
+  perf_frame_add("command_" .. kind .. "_ms", elapsed)
+  if kind == "total" then
+    perf_detail_add("command_calls:" .. name, 1)
+    perf_frame_add("command_calls", 1)
+    local stats = core.perf_frame_stats
+    if stats and elapsed > (stats.slowest_command_ms or 0) then
+      stats.slowest_command_ms = elapsed
+      stats.slowest_command_name = name
+    end
+  end
+end
+
 
 ---This function takes in a predicate and produces a predicate function
 ---that is internally used to dispatch and execute commands.
@@ -200,9 +233,12 @@ end
 
 local function perform(name, ...)
   name = resolve_alias(name)
+  local command_start = perf_start()
   local cmd = command.map[name]
   if not cmd then return false end
+  local predicate_start = perf_start()
   local res = pack(cmd.predicate(...))
+  perf_command_time(name, "predicate", predicate_start)
   local valid = res[1]
   if valid then
     local args, n
@@ -214,11 +250,16 @@ local function perform(name, ...)
       -- send original parameters
       args, n = pack(...), select("#", ...)
     end
-    return with_view_selection(first_docview_arg(args, n) or active_docview(), function()
+    local body_start = perf_start()
+    local result = with_view_selection(first_docview_arg(args, n) or active_docview(), function()
       cmd.perform(table.unpack(args, 1, n))
       return true
     end)
+    perf_command_time(name, "body", body_start)
+    perf_command_time(name, "total", command_start)
+    return result
   end
+  perf_command_time(name, "total", command_start)
   return false
 end
 

@@ -460,6 +460,35 @@ local function sync_unbound_selection_mutation(self)
   end
 end
 
+local function perf_frame_add(key, amount)
+  local stats = core.perf_frame_stats
+  if not stats then return end
+  stats[key] = (stats[key] or 0) + (amount or 1)
+end
+
+local function perf_detail_add(key, amount)
+  local perf = package.loaded["core.perf"]
+  if perf and perf.add_detail then perf.add_detail(key, amount or 1) end
+end
+
+local function perf_add(key, amount)
+  perf_frame_add(key, amount)
+  perf_detail_add(key, amount)
+end
+
+local function perf_start()
+  if core.perf_frame_stats then return system.get_time() end
+  local perf = package.loaded["core.perf"]
+  if perf and perf.is_recording and perf.is_recording() then return system.get_time() end
+end
+
+local function perf_time_add(key, start_time)
+  if not start_time then return end
+  local elapsed = (system.get_time() - start_time) * 1000
+  perf_frame_add(key, elapsed)
+  perf_detail_add(key, elapsed)
+end
+
 reset_registered_selection_states = function(self)
   local ok, DocView = pcall(require, "core.docview")
   if ok and DocView.reset_registered_selection_states then
@@ -683,21 +712,29 @@ function Doc:has_any_selection()
 end
 
 function Doc:sanitize_selection()
+  local perf_t = perf_start()
+  perf_add("doc_sanitize_selection_calls", 1)
   for idx, line1, col1, line2, col2 in self:get_selections() do
     self:set_selections(idx, line1, col1, line2, col2)
   end
+  perf_time_add("doc_sanitize_selection_ms", perf_t)
 end
 
 function Doc:set_selections(idx, line1, col1, line2, col2, swap, rm)
+  local perf_t = perf_start()
+  perf_add("doc_set_selections_calls", 1)
   assert(not line2 == not col2, "expected 3 or 5 arguments")
   if swap then line1, col1, line2, col2 = line2, col2, line1, col1 end
   line1, col1 = self:sanitize_position(line1, col1)
   line2, col2 = self:sanitize_position(line2 or line1, col2 or col1)
   common.splice(self.selections, (idx - 1)*4 + 1, rm == nil and 4 or rm, { line1, col1, line2, col2 })
   sync_unbound_selection_mutation(self)
+  perf_time_add("doc_set_selections_ms", perf_t)
 end
 
 function Doc:add_selection(line1, col1, line2, col2, swap)
+  local perf_t = perf_start()
+  perf_add("doc_add_selection_calls", 1)
   local l1, c1 = sort_positions(line1, col1, line2 or line1, col2 or col1)
   local target = #self.selections / 4 + 1
   for idx, tl1, tc1 in self:get_selections(true) do
@@ -709,10 +746,12 @@ function Doc:add_selection(line1, col1, line2, col2, swap)
   self:set_selections(target, line1, col1, line2, col2, swap, 0)
   self.last_selection = target
   sync_unbound_selection_mutation(self)
+  perf_time_add("doc_add_selection_ms", perf_t)
 end
 
 
 function Doc:remove_selection(idx)
+  perf_add("doc_remove_selection_calls", 1)
   if self.last_selection >= idx then
     self.last_selection = self.last_selection - 1
   end
@@ -734,6 +773,8 @@ function Doc:set_selection(line1, col1, line2, col2, swap)
 end
 
 function Doc:set_selection_list(selections, last_selection, opts)
+  local perf_t = perf_start()
+  perf_add("doc_set_selection_list_calls", 1)
   opts = opts or {}
   selections = selections or {}
   local usable_count = #selections - (#selections % 4)
@@ -780,9 +821,12 @@ function Doc:set_selection_list(selections, last_selection, opts)
   else
     sync_unbound_selection_mutation(self)
   end
+  perf_time_add("doc_set_selection_list_ms", perf_t)
 end
 
 function Doc:merge_cursors(idx)
+  local perf_t = perf_start()
+  perf_add("doc_merge_cursors_calls", 1)
   if idx then
     local table_index = (idx - 1) * 4 + 1
     for i = table_index, table_index, -4 do
@@ -840,11 +884,13 @@ function Doc:merge_cursors(idx)
   end
   self.last_selection = common.clamp(math.floor(tonumber(self.last_selection) or 1), 1, selection_state_count(self))
   sync_unbound_selection_mutation(self)
+  perf_time_add("doc_merge_cursors_ms", perf_t)
 end
 
 local function selection_iterator(invariant, idx)
   local target = invariant[3] and (idx*4 - 7) or (idx*4 + 1)
   if target > #invariant[1] or target <= 0 or (type(invariant[3]) == "number" and invariant[3] ~= idx - 1) then return end
+  perf_frame_add("doc_get_selections_iters", 1)
   if invariant[2] then
     return idx+(invariant[3] and -1 or 1), sort_positions(table.unpack(invariant[1], target, target+4))
   else
@@ -855,6 +901,9 @@ end
 -- If idx_reverse is true, it'll reverse iterate. If nil, or false, regular iterate.
 -- If a number, runs for exactly that iteration.
 function Doc:get_selections(sort_intra, idx_reverse)
+  perf_add("doc_get_selections_calls", 1)
+  if sort_intra then perf_detail_add("doc_get_selections_sorted_calls", 1) end
+  if idx_reverse then perf_detail_add("doc_get_selections_reverse_or_idx_calls", 1) end
   return selection_iterator, { self.selections, sort_intra, idx_reverse },
     idx_reverse == true and ((#self.selections / 4) + 1) or ((idx_reverse or -1)+1)
 end
@@ -1192,6 +1241,8 @@ local function finalize_lines(out)
 end
 
 function Doc:apply_edits(edits, opts)
+  local perf_t = perf_start()
+  perf_add("doc_apply_edits_calls", 1)
   opts = opts or {}
   local time = opts.time or system.get_time()
   local owner_id = opts.owner_id or current_selection_owner_id(self)
@@ -1220,6 +1271,7 @@ function Doc:apply_edits(edits, opts)
     transaction.rejected = true
     transaction.reason = "edits must be a table"
     if opts.strict then error(transaction.reason) end
+    perf_time_add("doc_apply_edits_ms", perf_t)
     return transaction
   end
 
@@ -1254,6 +1306,7 @@ function Doc:apply_edits(edits, opts)
       transaction.reason = "overlapping edits"
       core.log_quiet("Rejected batch edit for %s: %s", self:get_name(), transaction.reason)
       if opts.strict then error(transaction.reason) end
+      perf_time_add("doc_apply_edits_ms", perf_t)
       return transaction
     end
   end
@@ -1263,6 +1316,7 @@ function Doc:apply_edits(edits, opts)
     transaction.reason = "document rejected edits"
     core.log_quiet("Rejected batch edit for %s: %s", self:get_name(), transaction.reason)
     if opts.strict then error(transaction.reason) end
+    perf_time_add("doc_apply_edits_ms", perf_t)
     return transaction
   end
 
@@ -1390,6 +1444,7 @@ function Doc:apply_edits(edits, opts)
     sync_unbound_selection_mutation(self)
   end
 
+  perf_time_add("doc_apply_edits_ms", perf_t)
   return transaction
 end
 

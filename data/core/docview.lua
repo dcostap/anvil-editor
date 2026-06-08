@@ -1690,6 +1690,8 @@ end
 ---@param minline integer First visible line
 ---@param maxline integer Last visible line
 function DocView:prepare_line_body_draw_cache(minline, maxline)
+  local stats = core.docview_frame_stats
+  local prepare_start = stats and system.get_time()
   local highlight_cache = {}
   local selection_cache = {}
   local search_match_cache = {}
@@ -1697,8 +1699,10 @@ function DocView:prepare_line_body_draw_cache(minline, maxline)
   local visible_caret_cache = {}
   local hcl = config.highlight_current_line
 
+  local phase_start = stats and system.get_time()
   if hcl ~= false then
     for _, line1, col1, line2, col2 in self.doc:get_selections(false) do
+      if stats then stats.prepare_highlight_iters = stats.prepare_highlight_iters + 1 end
       local top_line = math.min(line1, line2)
       if top_line > maxline then break end
       if line1 >= minline and line1 <= maxline then
@@ -1710,9 +1714,12 @@ function DocView:prepare_line_body_draw_cache(minline, maxline)
       end
     end
   end
+  if stats then stats.prepare_highlight_ms = stats.prepare_highlight_ms + (system.get_time() - phase_start) * 1000 end
 
+  phase_start = stats and system.get_time()
   local selections = self.doc.selections
   for i = 1, #selections, 4 do
+    if stats then stats.prepare_caret_scan_count = stats.prepare_caret_scan_count + 1 end
     local raw_line1, raw_col1 = selections[i], selections[i + 1]
     local raw_line2, raw_col2 = selections[i + 2], selections[i + 3]
     local top_line = math.min(raw_line1, raw_line2)
@@ -1721,10 +1728,17 @@ function DocView:prepare_line_body_draw_cache(minline, maxline)
       visible_caret_cache[#visible_caret_cache + 1] = { raw_line1, raw_col1, raw_line2, raw_col2 }
     end
   end
+  if stats then
+    stats.visible_carets = stats.visible_carets + #visible_caret_cache
+    stats.prepare_caret_ms = stats.prepare_caret_ms + (system.get_time() - phase_start) * 1000
+  end
 
+  phase_start = stats and system.get_time()
   for _, line1, col1, line2, col2 in self.doc:get_selections(true) do
+    if stats then stats.prepare_selection_iters = stats.prepare_selection_iters + 1 end
     if line1 > maxline then break end
     if line2 >= minline then
+      if stats then stats.visible_selection_ranges = stats.visible_selection_ranges + 1 end
       local from_line = math.max(line1, minline)
       local to_line = math.min(line2, maxline)
       for line = from_line, to_line do
@@ -1748,13 +1762,17 @@ function DocView:prepare_line_body_draw_cache(minline, maxline)
               selection_cache[line] = list
             end
             list[#list + 1] = { c1, c2, style.selection, false }
+            if stats then stats.selection_cache_ranges = stats.selection_cache_ranges + 1 end
           end
         end
       end
     end
   end
+  if stats then stats.prepare_selection_ms = stats.prepare_selection_ms + (system.get_time() - phase_start) * 1000 end
 
+  phase_start = stats and system.get_time()
   for line, list in pairs(selection_cache) do
+    if stats then stats.selection_cache_lines = stats.selection_cache_lines + 1 end
     if #list > 1 then
       table.sort(list, function(a, b)
         if a[4] ~= b[4] then return not a[4] end
@@ -1771,7 +1789,14 @@ function DocView:prepare_line_body_draw_cache(minline, maxline)
         end
       end
       selection_cache[line] = merged
+      if stats then stats.selection_cache_merged_ranges = stats.selection_cache_merged_ranges + #merged end
+    elseif stats then
+      stats.selection_cache_merged_ranges = stats.selection_cache_merged_ranges + #list
     end
+  end
+  if stats then
+    stats.prepare_merge_ms = stats.prepare_merge_ms + (system.get_time() - phase_start) * 1000
+    stats.prepare_ms = stats.prepare_ms + (system.get_time() - prepare_start) * 1000
   end
 
   self.__line_body_highlight_cache = highlight_cache
@@ -1914,6 +1939,8 @@ end
 ---Draw overlay elements (carets, IME decoration).
 ---Called after main text to draw on top.
 function DocView:draw_overlay()
+  local stats = core.docview_frame_stats
+  local overlay_start = stats and system.get_time()
   local minline, maxline = self:get_visible_line_range()
   local is_active = core.active_view == self
   local window_focused = system.window_has_focus(core.window)
@@ -1950,6 +1977,7 @@ function DocView:draw_overlay()
       end
     end
   end
+  if stats then stats.overlay_ms = stats.overlay_ms + (system.get_time() - overlay_start) * 1000 end
 end
 
 

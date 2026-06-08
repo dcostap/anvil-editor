@@ -1836,6 +1836,64 @@ end
 
 local last_core_step_stats = {}
 
+local function perf_stats_enabled()
+  local perf = package.loaded["core.perf"]
+  return os.getenv("ANVIL_DOCVIEW_STATS") or (perf and perf.is_recording and perf.is_recording())
+end
+
+local function new_perf_frame_stats()
+  return {
+    draw_ms = 0,
+    prepare_ms = 0,
+    prepare_highlight_ms = 0,
+    prepare_caret_ms = 0,
+    prepare_selection_ms = 0,
+    prepare_merge_ms = 0,
+    gutter_ms = 0,
+    body_ms = 0,
+    text_ms = 0,
+    overlay_ms = 0,
+    highlighter_get_line_ms = 0,
+    token_loop_ms = 0,
+    renderer_draw_text_ms = 0,
+    visible_lines = 0,
+    text_lines = 0,
+    tokens = 0,
+    draw_text_calls = 0,
+    caret_draw_calls = 0,
+    selection_rect_calls = 0,
+    prepare_highlight_iters = 0,
+    prepare_caret_scan_count = 0,
+    visible_carets = 0,
+    prepare_selection_iters = 0,
+    visible_selection_ranges = 0,
+    selection_cache_lines = 0,
+    selection_cache_ranges = 0,
+    selection_cache_merged_ranges = 0,
+    doc_get_selections_calls = 0,
+    doc_get_selections_iters = 0,
+    doc_set_selections_calls = 0,
+    doc_set_selections_ms = 0,
+    doc_add_selection_calls = 0,
+    doc_add_selection_ms = 0,
+    doc_merge_cursors_calls = 0,
+    doc_merge_cursors_ms = 0,
+    doc_sanitize_selection_calls = 0,
+    doc_sanitize_selection_ms = 0,
+    doc_apply_edits_calls = 0,
+    doc_apply_edits_ms = 0,
+    command_calls = 0,
+    command_total_ms = 0,
+    command_predicate_ms = 0,
+    command_body_ms = 0,
+    slowest_command_ms = 0,
+    slowest_command_name = "",
+    statusbar_selection_ms = 0,
+    statusbar_selection_cache_hits = 0,
+    statusbar_selection_cache_misses = 0,
+  }
+end
+
 function core.step(next_frame_time, options)
   options = options or {}
   local step_stats = {
@@ -1848,13 +1906,30 @@ function core.step(next_frame_time, options)
     event_count = 0,
   }
   last_core_step_stats = step_stats
+  core.perf_frame_stats = perf_stats_enabled() and new_perf_frame_stats() or nil
+  core.docview_frame_stats = nil
 
   -- handle events
   local did_keymap = false
 
   local event_start_time = system.get_time()
   local event_received = false
+  local event_type_counts = {}
+  local event_type_order = {}
+  local function note_event(event_type, event_item_start)
+    if not event_type_counts[event_type] then
+      event_type_order[#event_type_order + 1] = event_type
+      event_type_counts[event_type] = 0
+    end
+    event_type_counts[event_type] = event_type_counts[event_type] + 1
+    local elapsed = (system.get_time() - event_item_start) * 1000
+    if elapsed > (step_stats.slowest_event_ms or 0) then
+      step_stats.slowest_event_ms = elapsed
+      step_stats.slowest_event_type = event_type
+    end
+  end
   for type, a,b,c,d in system.poll_event do
+    local event_item_start = system.get_time()
     step_stats.event_count = step_stats.event_count + 1
     if type == "textinput" and did_keymap then
       did_keymap = false
@@ -1864,6 +1939,7 @@ function core.step(next_frame_time, options)
       -- to break our frame refresh in two if we get entering/entered at the same time.
       -- required to avoid flashing and refresh issues on mobile
       event_received = type
+      note_event(type, event_item_start)
       break
     elseif type == "displaychanged" then
       core.refresh_display_timing("displaychanged")
@@ -1876,9 +1952,17 @@ function core.step(next_frame_time, options)
       local _, res = core.try(core.on_event, type, a, b, c, d)
       did_keymap = res or did_keymap
     end
+    note_event(type, event_item_start)
     event_received = type
   end
   step_stats.event_ms = (system.get_time() - event_start_time) * 1000
+  if #event_type_order > 0 then
+    local event_types = {}
+    for i, event_type in ipairs(event_type_order) do
+      event_types[i] = string.format("%s:%d", event_type, event_type_counts[event_type])
+    end
+    step_stats.event_types = table.concat(event_types, " ")
+  end
 
   local width, height = core.window:get_size()
 
@@ -1938,26 +2022,7 @@ function core.step(next_frame_time, options)
   core.clip_rect_stack[1] = { 0, 0, width, height }
   renderer.set_clip_rect(table.unpack(core.clip_rect_stack[1]))
   local draw_emit_start_time = system.get_time()
-  local perf = package.loaded["core.perf"]
-  if os.getenv("ANVIL_DOCVIEW_STATS") or (perf and perf.is_recording and perf.is_recording()) then
-    core.docview_frame_stats = {
-      draw_ms = 0,
-      gutter_ms = 0,
-      body_ms = 0,
-      text_ms = 0,
-      highlighter_get_line_ms = 0,
-      token_loop_ms = 0,
-      renderer_draw_text_ms = 0,
-      visible_lines = 0,
-      text_lines = 0,
-      tokens = 0,
-      draw_text_calls = 0,
-      caret_draw_calls = 0,
-      selection_rect_calls = 0,
-    }
-  else
-    core.docview_frame_stats = nil
-  end
+  core.docview_frame_stats = core.perf_frame_stats
   core.root_panel:draw()
   step_stats.draw_emit_ms = (system.get_time() - draw_emit_start_time) * 1000
   local renderer_end_start_time = system.get_time()
@@ -2552,7 +2617,7 @@ function core.run_step(options)
     total_ms = (system.get_time() - run_step_start) * 1000,
     run_mode = run_threads_mode,
   }
-  local docview_stats = core.docview_frame_stats or {}
+  local docview_stats = core.perf_frame_stats or core.docview_frame_stats or {}
   local total_ms = (system.get_time() - run_step_start) * 1000
   if did_redraw then
     local t = system.get_time()
@@ -2628,6 +2693,9 @@ function core.run_step(options)
     queue_depth = queue_depth,
     event_count = step_stats.event_count,
     event_ms = step_stats.event_ms,
+    event_types = step_stats.event_types,
+    slowest_event_type = step_stats.slowest_event_type,
+    slowest_event_ms = step_stats.slowest_event_ms,
     update_ms = step_stats.update_ms,
     pre_draw_ms = step_stats.pre_draw_ms,
     draw_emit_ms = step_stats.draw_emit_ms,
@@ -2649,12 +2717,53 @@ function core.run_step(options)
     texture_uploads = renderer_stats.texture_uploads,
     texture_upload_bytes = renderer_stats.texture_upload_bytes,
     docview_draw_ms = docview_stats.draw_ms,
+    docview_prepare_ms = docview_stats.prepare_ms,
+    docview_prepare_highlight_ms = docview_stats.prepare_highlight_ms,
+    docview_prepare_caret_ms = docview_stats.prepare_caret_ms,
+    docview_prepare_selection_ms = docview_stats.prepare_selection_ms,
+    docview_prepare_merge_ms = docview_stats.prepare_merge_ms,
     docview_gutter_ms = docview_stats.gutter_ms,
     docview_body_ms = docview_stats.body_ms,
     docview_text_ms = docview_stats.text_ms,
+    docview_overlay_ms = docview_stats.overlay_ms,
+    docview_highlighter_get_line_ms = docview_stats.highlighter_get_line_ms,
+    docview_token_loop_ms = docview_stats.token_loop_ms,
+    docview_renderer_draw_text_ms = docview_stats.renderer_draw_text_ms,
+    docview_visible_lines = docview_stats.visible_lines,
+    docview_text_lines = docview_stats.text_lines,
+    docview_tokens = docview_stats.tokens,
     docview_draw_text_calls = docview_stats.draw_text_calls,
     docview_caret_draw_calls = docview_stats.caret_draw_calls,
     docview_selection_rect_calls = docview_stats.selection_rect_calls,
+    docview_prepare_highlight_iters = docview_stats.prepare_highlight_iters,
+    docview_prepare_caret_scan_count = docview_stats.prepare_caret_scan_count,
+    docview_visible_carets = docview_stats.visible_carets,
+    docview_prepare_selection_iters = docview_stats.prepare_selection_iters,
+    docview_visible_selection_ranges = docview_stats.visible_selection_ranges,
+    docview_selection_cache_lines = docview_stats.selection_cache_lines,
+    docview_selection_cache_ranges = docview_stats.selection_cache_ranges,
+    docview_selection_cache_merged_ranges = docview_stats.selection_cache_merged_ranges,
+    doc_get_selections_calls = docview_stats.doc_get_selections_calls,
+    doc_get_selections_iters = docview_stats.doc_get_selections_iters,
+    doc_set_selections_calls = docview_stats.doc_set_selections_calls,
+    doc_set_selections_ms = docview_stats.doc_set_selections_ms,
+    doc_add_selection_calls = docview_stats.doc_add_selection_calls,
+    doc_add_selection_ms = docview_stats.doc_add_selection_ms,
+    doc_merge_cursors_calls = docview_stats.doc_merge_cursors_calls,
+    doc_merge_cursors_ms = docview_stats.doc_merge_cursors_ms,
+    doc_sanitize_selection_calls = docview_stats.doc_sanitize_selection_calls,
+    doc_sanitize_selection_ms = docview_stats.doc_sanitize_selection_ms,
+    doc_apply_edits_calls = docview_stats.doc_apply_edits_calls,
+    doc_apply_edits_ms = docview_stats.doc_apply_edits_ms,
+    command_calls = docview_stats.command_calls,
+    command_total_ms = docview_stats.command_total_ms,
+    command_predicate_ms = docview_stats.command_predicate_ms,
+    command_body_ms = docview_stats.command_body_ms,
+    slowest_command_ms = docview_stats.slowest_command_ms,
+    slowest_command_name = docview_stats.slowest_command_name,
+    statusbar_selection_ms = docview_stats.statusbar_selection_ms,
+    statusbar_selection_cache_hits = docview_stats.statusbar_selection_cache_hits,
+    statusbar_selection_cache_misses = docview_stats.statusbar_selection_cache_misses,
     sleep_requested_ms = sleep_requested_ms,
     sleep_actual_ms = sleep_actual_ms,
     skipped_post_present_sleep = skipped_post_present_sleep,

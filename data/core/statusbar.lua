@@ -179,10 +179,20 @@ local selection_counts_cache = {
 local max_sync_selection_count_bytes = 200000
 local max_sync_selection_count_lines = 2000
 
+local function perf_stat_add(key, amount)
+  local stats = core.perf_frame_stats
+  if stats then stats[key] = (stats[key] or 0) + (amount or 1) end
+  local perf = package.loaded["core.perf"]
+  if perf and perf.add_detail then perf.add_detail(key, amount or 1) end
+end
+
 local function get_doc_selection_counts(doc)
+  local perf_t = core.perf_frame_stats and system.get_time()
   local carets = math.floor(#doc.selections / 4)
   local key = tostring(doc:get_change_id()) .. ":" .. tostring(doc.selection_revision or 0) .. ":" .. tostring(#doc.selections)
   if selection_counts_cache.doc == doc and selection_counts_cache.key == key then
+    perf_stat_add("statusbar_selection_cache_hits", 1)
+    if perf_t then perf_stat_add("statusbar_selection_ms", (system.get_time() - perf_t) * 1000) end
     return
       selection_counts_cache.carets,
       selection_counts_cache.chars,
@@ -190,6 +200,7 @@ local function get_doc_selection_counts(doc)
       selection_counts_cache.chars_pending
   end
 
+  perf_stat_add("statusbar_selection_cache_misses", 1)
   local chars = 0
   local selected_lines = 0
   local seen_lines = {}
@@ -236,6 +247,7 @@ local function get_doc_selection_counts(doc)
   selection_counts_cache.selected_lines = selected_lines
   selection_counts_cache.chars_pending = not count_chars
 
+  if perf_t then perf_stat_add("statusbar_selection_ms", (system.get_time() - perf_t) * 1000) end
   return carets, selection_counts_cache.chars, selected_lines, not count_chars
 end
 
