@@ -973,6 +973,56 @@ test.describe("Document View Selection State edit characterization", function()
     test.equal(main:get_selection_state().last_selection, 1)
   end)
 
+  test.it("line endpoint movement commands batch cursor updates", function(context)
+    local _, main = new_shared_views(context, "  ab\n    xyz")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      1, 1, 1, 1,
+      2, 6, 2, 6,
+    }, 2)
+
+    local doc = main.doc
+    local original_set_selections = doc.set_selections
+    local original_merge_cursors = doc.merge_cursors
+    local merge_calls = 0
+    doc.set_selections = function()
+      error("line endpoint movement should use batched selection replacement")
+    end
+    doc.merge_cursors = function(self, ...)
+      merge_calls = merge_calls + 1
+      return original_merge_cursors(self, ...)
+    end
+
+    local ok, err = pcall(function()
+      test.ok(command.perform("doc:move-to-end-of-line"))
+      test.equal(merge_calls, 0)
+      test.same(selection(main), {
+        1, 5, 1, 5,
+        2, 8, 2, 8,
+      })
+
+      doc.set_selections = original_set_selections
+      set_view_selections(main, {
+        1, 1, 1, 1,
+        1, 5, 1, 5,
+        2, 6, 2, 6,
+      }, 3)
+      doc.set_selections = function()
+        error("line endpoint movement should use batched selection replacement")
+      end
+      test.ok(command.perform("doc:move-to-start-of-indentation"))
+      test.equal(merge_calls, 0)
+      test.same(selection(main), {
+        1, 3, 1, 3,
+        2, 5, 2, 5,
+      })
+      test.equal(main:get_selection_state().last_selection, 2)
+    end)
+    doc.set_selections = original_set_selections
+    doc.merge_cursors = original_merge_cursors
+    if not ok then error(err) end
+  end)
+
   test.it("paste handles mixed collapsed carets and selected ranges through the document command", function(context)
     local doc, main = new_shared_views(context, "abc def ghi\none two three")
     core.set_active_view(main)

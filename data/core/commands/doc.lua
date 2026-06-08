@@ -1360,4 +1360,59 @@ commands["doc:move-to-next-line"] = function(dv)
   move_line_batch(dv, 1)
 end
 
+local function move_collapsed_carets_batch(dv, move_fn)
+  local doc = dv.doc
+  local old = doc.selections
+  local selections = {}
+  local seen = {}
+  local last_selection = doc.last_selection
+  local mapped_last_selection = nil
+
+  local function add_cursor(old_idx, line, col)
+    local by_col = seen[line]
+    if not by_col then
+      by_col = {}
+      seen[line] = by_col
+    end
+    local selection_idx = by_col[col]
+    if not selection_idx then
+      selection_idx = #selections / 4 + 1
+      by_col[col] = selection_idx
+      selections[#selections + 1] = line
+      selections[#selections + 1] = col
+      selections[#selections + 1] = line
+      selections[#selections + 1] = col
+    end
+    if old_idx == last_selection then
+      mapped_last_selection = selection_idx
+    end
+  end
+
+  for i = 1, #old, 4 do
+    local old_idx = (i - 1) / 4 + 1
+    local line, col = move_fn(doc, old[i], old[i + 1])
+    add_cursor(old_idx, line, col)
+  end
+
+  doc:set_selection_list(selections, mapped_last_selection or last_selection, { sanitized = true, take_ownership = true })
+end
+
+local function move_to_end_of_line(doc, line)
+  return line, #doc.lines[line]
+end
+
+local function move_to_start_of_indentation(doc, line, col)
+  local _, indent_end = doc.lines[line]:find("^[\t ]*")
+  local indent_col = indent_end + 1
+  return line, col > indent_col and indent_col or (col == 1 and indent_col or 1)
+end
+
+commands["doc:move-to-end-of-line"] = function(dv)
+  move_collapsed_carets_batch(dv, move_to_end_of_line)
+end
+
+commands["doc:move-to-start-of-indentation"] = function(dv)
+  move_collapsed_carets_batch(dv, move_to_start_of_indentation)
+end
+
 command.add("core.docview", commands)
