@@ -285,6 +285,78 @@ test.describe("core.doc edit behavior characterization", function()
     test.equal(doc.last_selection, 1)
   end)
 
+  test.it("merge_cursors keeps first caret and maps active duplicate to survivor", function()
+    local doc = Doc()
+    set_text(doc, "abc\nxyz")
+    set_selections(doc, {
+      1, 2, 1, 2,
+      1, 2, 1, 4,
+      2, 1, 2, 1,
+      1, 2, 1, 2,
+    }, 4)
+
+    doc:merge_cursors()
+
+    test.same(doc.selections, {
+      1, 2, 1, 2,
+      2, 1, 2, 1,
+    })
+    test.equal(doc.last_selection, 1)
+  end)
+
+  test.it("merge_cursors with an index only merges the targeted cursor", function()
+    local doc = Doc()
+    set_text(doc, "abc\nxyz")
+    set_selections(doc, {
+      1, 1, 1, 1,
+      2, 1, 2, 1,
+      1, 1, 1, 1,
+      2, 1, 2, 1,
+    }, 4)
+
+    doc:merge_cursors(3)
+
+    test.same(doc.selections, {
+      1, 1, 1, 1,
+      2, 1, 2, 1,
+      2, 1, 2, 1,
+    })
+    test.equal(doc.last_selection, 3)
+  end)
+
+  test.it("full merge_cursors avoids repeated splice removals", function()
+    local doc = Doc()
+    local common = require "core.common"
+    set_text(doc, "abc")
+    doc.selections = {}
+    for i = 1, 64 do
+      doc.selections[#doc.selections + 1] = 1
+      doc.selections[#doc.selections + 1] = 1 + (i % 3)
+      doc.selections[#doc.selections + 1] = 1
+      doc.selections[#doc.selections + 1] = 1 + (i % 3)
+    end
+    doc.last_selection = 64
+
+    local original_splice = common.splice
+    local splices = 0
+    common.splice = function(...)
+      splices = splices + 1
+      return original_splice(...)
+    end
+    local ok, err = pcall(function()
+      doc:merge_cursors()
+      test.equal(splices, 0)
+      test.same(doc.selections, {
+        1, 2, 1, 2,
+        1, 3, 1, 3,
+        1, 1, 1, 1,
+      })
+      test.equal(doc.last_selection, 1)
+    end)
+    common.splice = original_splice
+    if not ok then error(err) end
+  end)
+
   test.it("overwrite mode replaces the next character for single-character text input", function()
     local doc = Doc()
     set_text(doc, "abcd")

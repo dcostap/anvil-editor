@@ -211,6 +211,12 @@ function Doc:set_selections(...)
   return doc_set_selections(self, ...)
 end
 
+local doc_set_selection_list = Doc.set_selection_list
+function Doc:set_selection_list(...)
+  if not suppress_origin_clear then clear_selection_origin(self) end
+  return doc_set_selection_list(self, ...)
+end
+
 local function sync_selection_list_assignment(doc)
   local bound_view = doc.bound_selection_view
   if bound_view and bound_view.selection_state then

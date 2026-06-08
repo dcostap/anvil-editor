@@ -733,19 +733,105 @@ function Doc:set_selection(line1, col1, line2, col2, swap)
   sync_unbound_selection_mutation(self)
 end
 
+function Doc:set_selection_list(selections, last_selection, opts)
+  opts = opts or {}
+  selections = selections or {}
+  local normalized = {}
+  local usable_count = #selections - (#selections % 4)
+
+  for i = 1, usable_count, 4 do
+    local line1, col1 = selections[i], selections[i + 1]
+    local line2, col2 = selections[i + 2], selections[i + 3]
+    if not opts.sanitized then
+      line1, col1 = self:sanitize_position(line1, col1)
+      if line1 == line2 and col1 == col2 then
+        line2, col2 = line1, col1
+      else
+        line2, col2 = self:sanitize_position(line2 or line1, col2 or col1)
+      end
+    else
+      line2, col2 = line2 or line1, col2 or col1
+    end
+    normalized[#normalized + 1] = line1
+    normalized[#normalized + 1] = col1
+    normalized[#normalized + 1] = line2
+    normalized[#normalized + 1] = col2
+  end
+
+  if #normalized < 4 then
+    local line, col = self:sanitize_position(1, 1)
+    normalized = { line, col, line, col }
+  end
+
+  self.selections = normalized
+  self.last_selection = common.clamp(
+    math.floor(tonumber(last_selection or self.last_selection) or 1),
+    1,
+    selection_state_count(self)
+  )
+
+  if opts.merge_cursors then
+    self:merge_cursors()
+  else
+    sync_unbound_selection_mutation(self)
+  end
+end
+
 function Doc:merge_cursors(idx)
-  local table_index = idx and (idx - 1) * 4 + 1
-  for i = (table_index or (#self.selections - 3)), (table_index or 5), -4 do
-    for j = 1, i - 4, 4 do
-      if self.selections[i] == self.selections[j] and
-        self.selections[i+1] == self.selections[j+1] then
-          common.splice(self.selections, i, 4)
-          if self.last_selection >= (i+3)/4 then
-            self.last_selection = self.last_selection - 1
-          end
-          break
+  if idx then
+    local table_index = (idx - 1) * 4 + 1
+    for i = table_index, table_index, -4 do
+      for j = 1, i - 4, 4 do
+        if self.selections[i] == self.selections[j] and
+          self.selections[i+1] == self.selections[j+1] then
+            common.splice(self.selections, i, 4)
+            if self.last_selection >= (i+3)/4 then
+              self.last_selection = self.last_selection - 1
+            end
+            break
+        end
       end
     end
+  else
+    local old = self.selections or {}
+    local old_last = common.clamp(
+      math.floor(tonumber(self.last_selection) or 1),
+      1,
+      math.max(1, math.floor(#old / 4))
+    )
+    local seen = {}
+    local normalized = {}
+    local old_to_new = {}
+
+    for old_idx = 1, math.floor(#old / 4) do
+      local i = (old_idx - 1) * 4 + 1
+      local line, col = old[i], old[i + 1]
+      local by_col = seen[line]
+      if not by_col then
+        by_col = {}
+        seen[line] = by_col
+      end
+      local kept_idx = by_col[col]
+      if kept_idx then
+        old_to_new[old_idx] = kept_idx
+      else
+        local new_idx = math.floor(#normalized / 4) + 1
+        by_col[col] = new_idx
+        old_to_new[old_idx] = new_idx
+        normalized[#normalized + 1] = old[i]
+        normalized[#normalized + 1] = old[i + 1]
+        normalized[#normalized + 1] = old[i + 2]
+        normalized[#normalized + 1] = old[i + 3]
+      end
+    end
+
+    if #normalized < 4 then
+      local line, col = self:sanitize_position(1, 1)
+      normalized = { line, col, line, col }
+    end
+
+    self.selections = normalized
+    self.last_selection = common.clamp(old_to_new[old_last] or old_last, 1, selection_state_count(self))
   end
   self.last_selection = common.clamp(math.floor(tonumber(self.last_selection) or 1), 1, selection_state_count(self))
   sync_unbound_selection_mutation(self)

@@ -811,6 +811,121 @@ test.describe("Document View Selection State edit characterization", function()
     })
   end)
 
+  test.it("previous-char command preserves multi-caret state and clamps at document start", function(context)
+    local _, main = new_shared_views(context, "abcd\nwxyz")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      1, 1, 1, 1,
+      1, 3, 1, 3,
+      2, 2, 2, 2,
+    })
+
+    test.ok(command.perform("doc:move-to-previous-char"))
+
+    test.same(selection(main), {
+      1, 1, 1, 1,
+      1, 2, 1, 2,
+      2, 1, 2, 1,
+    })
+  end)
+
+  test.it("char movement commands collapse selected ranges to sorted endpoints", function(context)
+    local _, main = new_shared_views(context, "abcd\nwxyz")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      1, 4, 1, 2,
+      2, 2, 2, 5,
+    })
+
+    test.ok(command.perform("doc:move-to-next-char"))
+    test.same(selection(main), {
+      1, 4, 1, 4,
+      2, 5, 2, 5,
+    })
+
+    set_view_selections(main, {
+      1, 4, 1, 2,
+      2, 2, 2, 5,
+    })
+
+    test.ok(command.perform("doc:move-to-previous-char"))
+    test.same(selection(main), {
+      1, 2, 1, 2,
+      2, 2, 2, 2,
+    })
+  end)
+
+  test.it("char movement batches cursor updates and merges once", function(context)
+    local _, main = new_shared_views(context, "abcdefghij")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      1, 1, 1, 1,
+      1, 2, 1, 2,
+      1, 4, 1, 4,
+      1, 6, 1, 6,
+      1, 8, 1, 8,
+    }, 5)
+
+    local doc = main.doc
+    local merge_calls = 0
+    local original_merge_cursors = doc.merge_cursors
+    local original_move_to_cursor = doc.move_to_cursor
+    doc.merge_cursors = function(self, ...)
+      merge_calls = merge_calls + 1
+      return original_merge_cursors(self, ...)
+    end
+    doc.move_to_cursor = function()
+      error("doc:move-to-next-char should not call Doc:move_to_cursor per caret")
+    end
+
+    local ok, err = pcall(function()
+      test.ok(command.perform("doc:move-to-next-char"))
+      test.equal(merge_calls, 1)
+      test.same(selection(main), {
+        1, 2, 1, 2,
+        1, 3, 1, 3,
+        1, 5, 1, 5,
+        1, 7, 1, 7,
+        1, 9, 1, 9,
+      })
+    end)
+    doc.merge_cursors = original_merge_cursors
+    doc.move_to_cursor = original_move_to_cursor
+    if not ok then error(err) end
+  end)
+
+  test.it("char movement command merges duplicate carets after batched movement", function(context)
+    local _, main = new_shared_views(context, "abc")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      1, 1, 1, 1,
+      1, 2, 1, 2,
+    }, 2)
+
+    test.ok(command.perform("doc:move-to-previous-char"))
+
+    test.same(selection(main), { 1, 1, 1, 1 })
+    test.equal(main:get_selection_state().last_selection, 1)
+  end)
+
+  test.it("previous-char command does not skip later carets when earlier movement merges", function(context)
+    local _, main = new_shared_views(context, "abc")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      1, 1, 1, 1,
+      1, 2, 1, 2,
+      1, 3, 1, 3,
+    }, 3)
+
+    test.ok(command.perform("doc:move-to-previous-char"))
+
+    test.same(selection(main), {
+      1, 1, 1, 1,
+      1, 2, 1, 2,
+    })
+    test.equal(main:get_selection_state().last_selection, 2)
+  end)
+
   test.it("paste handles mixed collapsed carets and selected ranges through the document command", function(context)
     local doc, main = new_shared_views(context, "abc def ghi\none two three")
     core.set_active_view(main)

@@ -1206,26 +1206,35 @@ for name, obj in pairs(translations) do
   end
 end
 
-commands["doc:move-to-previous-char"] = function(dv)
-  for idx, line1, col1, line2, col2 in dv.doc:get_selections(true) do
+local function move_char_batch(dv, move_fn, collapse_to_end)
+  local doc = dv.doc
+  local selections = {}
+  local last_selection = doc.last_selection
+  for _, line1, col1, line2, col2 in doc:get_selections(true) do
+    local line, col
     if line1 ~= line2 or col1 ~= col2 then
-      dv.doc:set_selections(idx, line1, col1)
+      if collapse_to_end then
+        line, col = line2, col2
+      else
+        line, col = line1, col1
+      end
     else
-      dv.doc:move_to_cursor(idx, translate.previous_char)
+      line, col = move_fn(doc, line1, col1, dv)
     end
+    selections[#selections + 1] = line
+    selections[#selections + 1] = col
+    selections[#selections + 1] = line
+    selections[#selections + 1] = col
   end
-  dv.doc:merge_cursors()
+  doc:set_selection_list(selections, last_selection, { merge_cursors = true, sanitized = true })
+end
+
+commands["doc:move-to-previous-char"] = function(dv)
+  move_char_batch(dv, translate.previous_char, false)
 end
 
 commands["doc:move-to-next-char"] = function(dv)
-  for idx, line1, col1, line2, col2 in dv.doc:get_selections(true) do
-    if line1 ~= line2 or col1 ~= col2 then
-      dv.doc:set_selections(idx, line2, col2)
-    else
-      dv.doc:move_to_cursor(idx, translate.next_char)
-    end
-  end
-  dv.doc:merge_cursors()
+  move_char_batch(dv, translate.next_char, true)
 end
 
 command.add("core.docview", commands)
