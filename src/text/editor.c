@@ -520,6 +520,119 @@ bool editor_insert_newline(Editor *editor) {
   return editor_insert_buffer(editor, newline, len);
 }
 
+static char *line_leading_indent(const Buffer *buffer, size_t line, size_t *len_out) {
+  if (len_out) *len_out = 0;
+  if (!buffer) return NULL;
+  BufferLineRange range;
+  if (!buffer_line_range_crlf(buffer, line, &range)) return NULL;
+  size_t line_len = 0;
+  char *line_bytes = buffer_range_to_string(buffer, range.start, range.end, &line_len);
+  if (!line_bytes) return NULL;
+
+  size_t indent_len = 0;
+  while (indent_len < line_len && (line_bytes[indent_len] == ' ' || line_bytes[indent_len] == '\t')) {
+    ++indent_len;
+  }
+
+  char *indent = (char *) malloc(indent_len + 1);
+  if (!indent) {
+    free(line_bytes);
+    return NULL;
+  }
+  if (indent_len > 0) memcpy(indent, line_bytes, indent_len);
+  indent[indent_len] = '\0';
+  free(line_bytes);
+  if (len_out) *len_out = indent_len;
+  return indent;
+}
+
+static bool editor_open_line(Editor *editor, bool below) {
+  if (!editor) return false;
+  Buffer *buffer = editor_buffer(editor);
+  if (!buffer) return false;
+
+  editor_clear_multi_cursors(editor);
+
+  BufferLineCol lc;
+  if (!buffer_offset_to_line_col(buffer, editor->core_cursor.cursor, &lc)) return false;
+
+  size_t indent_len = 0;
+  char *indent = line_leading_indent(buffer, lc.line, &indent_len);
+  if (!indent) return false;
+
+  size_t newline_len = 0;
+  const char *newline = buffer_line_ending_bytes(buffer, &newline_len);
+  size_t insert_len = indent_len + newline_len;
+  char *insert_text = (char *) malloc(insert_len + 1);
+  if (!insert_text) {
+    free(indent);
+    return false;
+  }
+
+  size_t insert_offset = 0;
+  size_t cursor_offset = 0;
+  if (!below) {
+    if (!buffer_line_start(buffer, lc.line, &insert_offset)) {
+      free(insert_text);
+      free(indent);
+      return false;
+    }
+    if (indent_len > 0) memcpy(insert_text, indent, indent_len);
+    memcpy(insert_text + indent_len, newline, newline_len);
+    cursor_offset = insert_offset + indent_len;
+  } else {
+    size_t line_count = buffer_line_count(buffer);
+    if (lc.line + 1 < line_count) {
+      if (!buffer_line_start(buffer, lc.line + 1, &insert_offset)) {
+        free(insert_text);
+        free(indent);
+        return false;
+      }
+      if (indent_len > 0) memcpy(insert_text, indent, indent_len);
+      memcpy(insert_text + indent_len, newline, newline_len);
+      cursor_offset = insert_offset + indent_len;
+    } else {
+      if (!line_end_no_lf(buffer, lc.line, &insert_offset)) {
+        free(insert_text);
+        free(indent);
+        return false;
+      }
+      memcpy(insert_text, newline, newline_len);
+      if (indent_len > 0) memcpy(insert_text + newline_len, indent, indent_len);
+      cursor_offset = insert_offset + newline_len + indent_len;
+    }
+  }
+  insert_text[insert_len] = '\0';
+  free(indent);
+
+  BatchEditItem item;
+  memset(&item, 0, sizeof(item));
+  item.start_offset = insert_offset;
+  item.end_offset = insert_offset;
+  item.text = insert_text;
+  item.text_len = insert_len;
+  item.cursor_index = 0;
+  BatchEditResult result = buffer_manager_apply_edits_from(editor->buffer_manager, &item, 1, editor);
+  free(insert_text);
+  if (!result.applied) {
+    batch_edit_result_dispose(&result);
+    return false;
+  }
+  batch_edit_result_dispose(&result);
+
+  editor->core_cursor = make_cursor(cursor_offset, EDITOR_SELECTION_SENTINEL);
+  clear_desired_column(&editor->core_cursor);
+  return true;
+}
+
+bool editor_open_line_above(Editor *editor) {
+  return editor_open_line(editor, false);
+}
+
+bool editor_open_line_below(Editor *editor) {
+  return editor_open_line(editor, true);
+}
+
 bool editor_backspace(Editor *editor) {
   if (!editor) return false;
   editor_sort_and_merge_cursors(editor);

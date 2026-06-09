@@ -74,6 +74,42 @@ static int test_insert_newline_uses_buffer_line_ending_mode(void) {
   return 0;
 }
 
+static int test_open_line_above_preserves_indent(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "  alpha\nbeta"));
+  CHECK(editor_set_cursor(&f.editor, 4, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_open_line_above(&f.editor));
+  CHECK(expect_text(&f, "  \n  alpha\nbeta") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 2, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_open_line_below_preserves_indent_before_next_line(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "  alpha\nbeta"));
+  CHECK(editor_set_cursor(&f.editor, 4, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_open_line_below(&f.editor));
+  CHECK(expect_text(&f, "  alpha\n  \nbeta") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 10, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_open_line_below_last_line_uses_crlf_and_clears_multi_cursors(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "  alpha\r\n\tbeta"));
+  CHECK(editor_set_cursor(&f.editor, 10, 9));
+  CHECK(editor_add_cursor(&f.editor, 14, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_cursor_count(&f.editor) == 2);
+  CHECK(editor_open_line_below(&f.editor));
+  CHECK(expect_text(&f, "  alpha\r\n\tbeta\r\n\t") == 0);
+  CHECK(editor_cursor_count(&f.editor) == 1);
+  CHECK(expect_cursor(&f.editor, 0, 17, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
 static int test_insert_replaces_selection(void) {
   EditorFixture f;
   CHECK(fixture_init(&f, "abcdef"));
@@ -508,6 +544,9 @@ int main(void) {
   int rc = 0;
   rc |= test_insert_buffer_at_cursor();
   rc |= test_insert_newline_uses_buffer_line_ending_mode();
+  rc |= test_open_line_above_preserves_indent();
+  rc |= test_open_line_below_preserves_indent_before_next_line();
+  rc |= test_open_line_below_last_line_uses_crlf_and_clears_multi_cursors();
   rc |= test_insert_replaces_selection();
   rc |= test_backspace_and_delete();
   rc |= test_delete_line();

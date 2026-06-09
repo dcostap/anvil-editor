@@ -37,6 +37,8 @@ void editor_sort_and_merge_cursors(Editor *editor);
 bool editor_insert_buffer(Editor *editor, const char *text, size_t len);
 bool editor_insert_char(Editor *editor, char ch);
 bool editor_insert_newline(Editor *editor);
+bool editor_open_line_above(Editor *editor);
+bool editor_open_line_below(Editor *editor);
 bool editor_backspace(Editor *editor);
 bool editor_del(Editor *editor);
 bool editor_backspace_word(Editor *editor);
