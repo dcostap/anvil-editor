@@ -585,6 +585,18 @@ static int test_end_of_line_stops_before_crlf(void) {
   return 0;
 }
 
+static int test_buffer_start_end_movement(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "abc\ndef"));
+  CHECK(editor_set_cursor(&f.editor, 2, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_end_of_buffer(&f.editor, false));
+  CHECK(expect_cursor(&f.editor, 0, 7, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_start_of_buffer(&f.editor, true));
+  CHECK(expect_cursor(&f.editor, 0, 0, 7) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
 static int test_first_nonempty_of_line(void) {
   EditorFixture f;
   CHECK(fixture_init(&f, "alpha\n  beta\n   "));
@@ -958,6 +970,7 @@ int main(void) {
   rc |= test_left_right_selection_behavior();
   rc |= test_line_start_end_movement();
   rc |= test_end_of_line_stops_before_crlf();
+  rc |= test_buffer_start_end_movement();
   rc |= test_first_nonempty_of_line();
   rc |= test_home_toggle_of_line();
   rc |= test_word_left_right_movement();

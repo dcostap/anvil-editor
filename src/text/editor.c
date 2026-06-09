@@ -1971,6 +1971,34 @@ bool editor_end_of_line(Editor *editor, bool update_selection) {
   return true;
 }
 
+static bool editor_buffer_edge_move(Editor *editor, bool update_selection, bool end) {
+  if (!editor) return false;
+  Buffer *buffer = editor_buffer(editor);
+  if (!buffer) return false;
+
+  size_t target = end ? buffer_len(buffer) : 0;
+  size_t count = 0;
+  Cursor *cursors = active_cursors(editor, &count);
+  for (size_t i = 0; i < count; ++i) {
+    Cursor *cursor = &cursors[i];
+    if (!move_cursor_to(editor, cursor, target, update_selection)) return false;
+    clear_desired_column(cursor);
+  }
+
+  editor_sort_and_merge_cursors(editor);
+  sync_core_from_multi(editor);
+  reset_last_insert(editor);
+  return true;
+}
+
+bool editor_start_of_buffer(Editor *editor, bool update_selection) {
+  return editor_buffer_edge_move(editor, update_selection, false);
+}
+
+bool editor_end_of_buffer(Editor *editor, bool update_selection) {
+  return editor_buffer_edge_move(editor, update_selection, true);
+}
+
 static bool editor_line_move(Editor *editor, bool update_selection, int direction) {
   if (!editor) return false;
   Buffer *buffer = editor_buffer(editor);

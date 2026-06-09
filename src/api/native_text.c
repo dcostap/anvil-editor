@@ -322,6 +322,42 @@ static int l_editor_line_down(lua_State *L) {
   return 1;
 }
 
+static int l_editor_word_left(lua_State *L) {
+  NativeTextEditor *native = check_editor(L, 1);
+  lua_pushboolean(L, editor_word_left(&native->editor, lua_toboolean(L, 2)));
+  return 1;
+}
+
+static int l_editor_word_right(lua_State *L) {
+  NativeTextEditor *native = check_editor(L, 1);
+  lua_pushboolean(L, editor_word_right(&native->editor, lua_toboolean(L, 2)));
+  return 1;
+}
+
+static int l_editor_home_toggle_of_line(lua_State *L) {
+  NativeTextEditor *native = check_editor(L, 1);
+  lua_pushboolean(L, editor_home_toggle_of_line(&native->editor, lua_toboolean(L, 2)));
+  return 1;
+}
+
+static int l_editor_end_of_line(lua_State *L) {
+  NativeTextEditor *native = check_editor(L, 1);
+  lua_pushboolean(L, editor_end_of_line(&native->editor, lua_toboolean(L, 2)));
+  return 1;
+}
+
+static int l_editor_start_of_buffer(lua_State *L) {
+  NativeTextEditor *native = check_editor(L, 1);
+  lua_pushboolean(L, editor_start_of_buffer(&native->editor, lua_toboolean(L, 2)));
+  return 1;
+}
+
+static int l_editor_end_of_buffer(lua_State *L) {
+  NativeTextEditor *native = check_editor(L, 1);
+  lua_pushboolean(L, editor_end_of_buffer(&native->editor, lua_toboolean(L, 2)));
+  return 1;
+}
+
 static int l_editor_dup_cursor_up(lua_State *L) {
   NativeTextEditor *native = check_editor(L, 1);
   lua_pushboolean(L, editor_dup_cursor_up(&native->editor));
@@ -389,6 +425,12 @@ static const luaL_Reg editor_methods[] = {
   { "right", l_editor_right },
   { "line_up", l_editor_line_up },
   { "line_down", l_editor_line_down },
+  { "word_left", l_editor_word_left },
+  { "word_right", l_editor_word_right },
+  { "home_toggle_of_line", l_editor_home_toggle_of_line },
+  { "end_of_line", l_editor_end_of_line },
+  { "start_of_buffer", l_editor_start_of_buffer },
+  { "end_of_buffer", l_editor_end_of_buffer },
   { "dup_cursor_up", l_editor_dup_cursor_up },
   { "dup_cursor_down", l_editor_dup_cursor_down },
   { NULL, NULL }

@@ -76,6 +76,8 @@ bool editor_beginning_of_line(Editor *editor, bool update_selection);
 bool editor_first_nonempty_of_line(Editor *editor, bool update_selection);
 bool editor_home_toggle_of_line(Editor *editor, bool update_selection);
 bool editor_end_of_line(Editor *editor, bool update_selection);
+bool editor_start_of_buffer(Editor *editor, bool update_selection);
+bool editor_end_of_buffer(Editor *editor, bool update_selection);
 bool editor_line_up(Editor *editor, bool update_selection);
 bool editor_line_down(Editor *editor, bool update_selection);
 bool editor_empty_line_up(Editor *editor, bool update_selection);
