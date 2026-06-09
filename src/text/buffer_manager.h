@@ -53,6 +53,8 @@ typedef struct BatchEditResult {
   bool applied;
   bool rejected;
   size_t edit_count;
+  UndoRedoNode *undo_node_before;
+  UndoRedoNode *undo_node_after;
   size_t changed_start;
   size_t changed_old_end;
   size_t changed_new_end;
@@ -69,6 +71,8 @@ typedef struct BatchEditResult {
 typedef struct BufferSnapResult {
   bool applied;
   bool rejected;
+  UndoRedoNode *undo_node_before;
+  UndoRedoNode *undo_node_after;
   size_t old_len;
   size_t new_len;
   size_t changed_start;

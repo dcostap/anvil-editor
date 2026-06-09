@@ -158,6 +158,8 @@ static BufferSnapResult buffer_manager_make_snap_result(
 ) {
   if (!manager || !manager->buffer || !target) return rejected_snap_result();
 
+  UndoRedoNode *undo_before = manager->buffer->has_undo_graph ? manager->buffer->undo_graph.current : NULL;
+
   size_t old_len = 0;
   char *old_text = buffer_to_string(manager->buffer, &old_len);
   if (!old_text) return rejected_snap_result();
@@ -187,6 +189,8 @@ static BufferSnapResult buffer_manager_make_snap_result(
   BufferSnapResult result;
   memset(&result, 0, sizeof(result));
   result.applied = true;
+  result.undo_node_before = undo_before;
+  result.undo_node_after = manager->buffer->has_undo_graph ? manager->buffer->undo_graph.current : NULL;
   result.old_len = old_len;
   result.new_len = new_len;
   result.changed_start = prefix;
@@ -242,6 +246,8 @@ static BatchEditResult buffer_manager_apply_edits_internal(
   result.edit_count = edit_count;
 
   if (!manager || !manager->buffer) return rejected_result(edit_count);
+  result.undo_node_before = manager->buffer->has_undo_graph ? manager->buffer->undo_graph.current : NULL;
+  result.undo_node_after = result.undo_node_before;
   if (edit_count == 0) {
     result.applied = true;
     result.changed_start = buffer_len(manager->buffer);
@@ -417,6 +423,7 @@ static BatchEditResult buffer_manager_apply_edits_internal(
     } else {
       undo_ok = undo_graph_commit(&manager->buffer->undo_graph, &manager->buffer->tree, changed_start) != NULL;
     }
+    result.undo_node_after = manager->buffer->undo_graph.current;
     if (!undo_ok) {
       piece_tree_restore_snapshot(&manager->buffer->tree, &before);
       piece_tree_snapshot_release(&before);

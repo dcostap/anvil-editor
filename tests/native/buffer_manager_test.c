@@ -371,6 +371,8 @@ typedef struct ListenerProbe {
   size_t last_changed_start;
   size_t last_changed_old_end;
   size_t last_changed_new_end;
+  UndoRedoNode *last_undo_before;
+  UndoRedoNode *last_undo_after;
 } ListenerProbe;
 
 static void probe_on_edit(void *user, const BatchEditResult *result, void *source) {
@@ -380,6 +382,8 @@ static void probe_on_edit(void *user, const BatchEditResult *result, void *sourc
   probe->last_changed_start = result->changed_start;
   probe->last_changed_old_end = result->changed_old_end;
   probe->last_changed_new_end = result->changed_new_end;
+  probe->last_undo_before = result->undo_node_before;
+  probe->last_undo_after = result->undo_node_after;
 }
 
 static void probe_on_snap(void *user, const BufferSnapResult *result, void *source) {
@@ -389,6 +393,8 @@ static void probe_on_snap(void *user, const BufferSnapResult *result, void *sour
   probe->last_changed_start = result->changed_start;
   probe->last_changed_old_end = result->changed_old_end;
   probe->last_changed_new_end = result->changed_new_end;
+  probe->last_undo_before = result->undo_node_before;
+  probe->last_undo_after = result->undo_node_after;
 }
 
 static int test_registered_listener_receives_edit_and_snap_notifications(void) {
@@ -400,15 +406,22 @@ static int test_registered_listener_receives_edit_and_snap_notifications(void) {
   buffer_manager_init(&manager, &buffer);
   CHECK(buffer_manager_register_listener(&manager, &probe, probe_on_edit, probe_on_snap));
 
+  UndoRedoNode *root_node = buffer.undo_graph.current;
   BatchEditItem edit = { 1, 3, "XY", 2, 0 };
   BatchEditResult result = buffer_manager_apply_edits_from(&manager, &edit, 1, &source_token);
   CHECK(result.applied);
+  CHECK(result.undo_node_before == root_node);
+  CHECK(result.undo_node_after != NULL);
+  CHECK(result.undo_node_after != root_node);
   CHECK(probe.edit_count == 1);
   CHECK(probe.last_source == &source_token);
   CHECK(probe.last_changed_start == 1);
   CHECK(probe.last_changed_old_end == 3);
   CHECK(probe.last_changed_new_end == 3);
+  CHECK(probe.last_undo_before == result.undo_node_before);
+  CHECK(probe.last_undo_after == result.undo_node_after);
   CHECK(expect_buffer_text(&buffer, "aXYdef") == 0);
+  UndoRedoNode *edit_node = result.undo_node_after;
   batch_edit_result_dispose(&result);
 
   size_t op_offset = 999;
@@ -419,6 +432,8 @@ static int test_registered_listener_receives_edit_and_snap_notifications(void) {
   CHECK(probe.last_changed_start == 1);
   CHECK(probe.last_changed_old_end == 3);
   CHECK(probe.last_changed_new_end == 3);
+  CHECK(probe.last_undo_before == edit_node);
+  CHECK(probe.last_undo_after == root_node);
   CHECK(expect_buffer_text(&buffer, "abcdef") == 0);
 
   buffer_manager_unregister_listener(&manager, &probe);

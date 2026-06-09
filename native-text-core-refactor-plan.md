@@ -370,7 +370,7 @@ Transaction output should include:
 - Changed line ranges. **Implemented initially as half-open byte-derived line ranges.**
 - Cursor mapping results. **Implemented initially.**
 - Tree-sitter-style edit descriptors. **Initial byte/point descriptors implemented in BatchEditResult.**
-- Undo graph node info later.
+- Undo graph node transition info. **Implemented initially in edit/snap results.**
 - View notification payload later. **Initial source-aware listener callbacks implemented for native Editor propagation.**
 
 Rules:
