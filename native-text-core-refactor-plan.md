@@ -378,20 +378,22 @@ src/text/undo_graph.h
 
 Implement:
 
-- Commit edit transaction as child of current undo node.
-- Undo to parent.
-- Redo to selected/default child.
-- Branch creation after undo.
-- Save node tracking.
-- Dirty state based on current node/snapshot compared to save node.
+- Commit edit transaction as child of current undo node. **Implemented initially.**
+- Undo to parent. **Implemented initially.**
+- Redo to selected/default child. **Implemented initially; default redo follows Fred's newest/last child behavior.**
+- Branch creation after undo. **Implemented initially.**
+- Save node tracking. **Implemented initially.**
+- Dirty state based on current node/snapshot compared to save node. **Implemented initially with Fred-style node identity tracking.**
+- Update current undo snapshot for coalesced/native operations. **Implemented initially.**
+- Snap to arbitrary undo graph nodes. **Implemented initially at UndoGraph/Buffer/BufferManager layers.**
 - Selection snapshots associated with the editing view.
 
 Policy decisions to settle before implementation:
 
-- Which child redo chooses by default when multiple children exist.
 - Whether selection-only moves create undo graph nodes.
 - How typing merge windows update the current undo node.
 - How undo graph UI should expose branches.
+- How snap-to should propagate diff edits through registered native Editor views; Fred updates registered editors from diff records in `BufferManager::snap_to`.
 
 Exit criteria:
 
