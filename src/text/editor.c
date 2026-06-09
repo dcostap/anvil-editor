@@ -927,6 +927,105 @@ bool editor_join_line_below(Editor *editor) {
   return true;
 }
 
+bool editor_tab(Editor *editor) {
+  if (!editor) return false;
+  if (editor->multi_cursor_count == 0 && !cursor_has_selection(&editor->core_cursor)) {
+    return editor_insert_buffer(editor, "\t", 1);
+  }
+
+  Buffer *buffer = editor_buffer(editor);
+  if (!buffer) return false;
+  editor_clear_multi_cursors(editor);
+
+  LineDeleteRange lines;
+  if (!cursor_line_range(editor, &editor->core_cursor, &lines)) return false;
+  size_t line_count = lines.last_line - lines.first_line + 1;
+  BatchEditItem *items = (BatchEditItem *) calloc(line_count, sizeof(BatchEditItem));
+  if (!items) return false;
+
+  for (size_t i = 0; i < line_count; ++i) {
+    size_t offset = 0;
+    if (!buffer_line_start(buffer, lines.first_line + i, &offset)) {
+      free(items);
+      return false;
+    }
+    items[i].start_offset = offset;
+    items[i].end_offset = offset;
+    items[i].text = "\t";
+    items[i].text_len = 1;
+    items[i].cursor_index = (unsigned int) i;
+  }
+
+  size_t old_first = cursor_start(&editor->core_cursor);
+  size_t old_last = cursor_end(&editor->core_cursor);
+  bool cursor_at_first = editor->core_cursor.cursor == old_first;
+  BatchEditResult result = buffer_manager_apply_edits_from(editor->buffer_manager, items, line_count, editor);
+  free(items);
+  if (!result.applied) {
+    batch_edit_result_dispose(&result);
+    return false;
+  }
+  batch_edit_result_dispose(&result);
+
+  size_t new_cursor = cursor_at_first ? old_first + 1 : old_last + line_count;
+  if (new_cursor > buffer_len(buffer)) new_cursor = buffer_len(buffer);
+  editor->core_cursor = make_cursor(new_cursor, EDITOR_SELECTION_SENTINEL);
+  reset_last_insert(editor);
+  return true;
+}
+
+bool editor_untab(Editor *editor) {
+  if (!editor) return false;
+  Buffer *buffer = editor_buffer(editor);
+  if (!buffer) return false;
+  editor_clear_multi_cursors(editor);
+
+  LineDeleteRange lines;
+  if (!cursor_line_range(editor, &editor->core_cursor, &lines)) return false;
+  size_t line_count = lines.last_line - lines.first_line + 1;
+  BatchEditItem *items = (BatchEditItem *) calloc(line_count, sizeof(BatchEditItem));
+  if (!items) return false;
+
+  size_t edit_count = 0;
+  for (size_t i = 0; i < line_count; ++i) {
+    size_t offset = 0;
+    if (!buffer_line_start(buffer, lines.first_line + i, &offset)) {
+      free(items);
+      return false;
+    }
+    char ch = 0;
+    if (piece_tree_byte_at(&buffer->tree, offset, &ch) && ch == '\t') {
+      items[edit_count].start_offset = offset;
+      items[edit_count].end_offset = offset + 1;
+      items[edit_count].text = NULL;
+      items[edit_count].text_len = 0;
+      items[edit_count].cursor_index = (unsigned int) edit_count;
+      ++edit_count;
+    }
+  }
+
+  if (edit_count == 0) {
+    free(items);
+    return true;
+  }
+
+  Cursor mapped = editor->core_cursor;
+  BatchEditResult result = buffer_manager_apply_edits_from(editor->buffer_manager, items, edit_count, editor);
+  free(items);
+  if (!result.applied) {
+    batch_edit_result_dispose(&result);
+    return false;
+  }
+  if (result.cursor_mapping_count > 0) {
+    map_cursor_through_sorted_mappings(&mapped, result.cursor_mappings, result.cursor_mapping_count);
+  }
+  batch_edit_result_dispose(&result);
+
+  editor->core_cursor = make_cursor(mapped.cursor, EDITOR_SELECTION_SENTINEL);
+  reset_last_insert(editor);
+  return true;
+}
+
 bool editor_backspace(Editor *editor) {
   if (!editor) return false;
   editor_sort_and_merge_cursors(editor);

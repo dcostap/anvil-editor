@@ -251,6 +251,50 @@ static int test_join_line_below_final_crlf_line_preserves_current_terminator(voi
   return 0;
 }
 
+static int test_tab_inserts_tab_at_cursor(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "ab"));
+  CHECK(editor_set_cursor(&f.editor, 1, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_tab(&f.editor));
+  CHECK(expect_text(&f, "a\tb") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 2, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_tab_selection_indents_selected_lines(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "aa\nbb\ncc"));
+  CHECK(editor_set_cursor(&f.editor, 5, 0));
+  CHECK(editor_tab(&f.editor));
+  CHECK(expect_text(&f, "\taa\n\tbb\ncc") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 7, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_untab_removes_leading_tab_from_current_line(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "\tabc\ndef"));
+  CHECK(editor_set_cursor(&f.editor, 2, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_untab(&f.editor));
+  CHECK(expect_text(&f, "abc\ndef") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 1, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_untab_selection_removes_leading_tabs_from_selected_lines(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "\taa\n\tbb\ncc"));
+  CHECK(editor_set_cursor(&f.editor, 7, 0));
+  CHECK(editor_untab(&f.editor));
+  CHECK(expect_text(&f, "aa\nbb\ncc") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 5, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
 static int test_backspace_removes_selection(void) {
   EditorFixture f;
   CHECK(fixture_init(&f, "abcdef"));
@@ -659,6 +703,10 @@ int main(void) {
   rc |= test_move_line_down_uses_crlf_and_clears_multi_cursors();
   rc |= test_join_line_below_trims_leading_spaces();
   rc |= test_join_line_below_final_crlf_line_preserves_current_terminator();
+  rc |= test_tab_inserts_tab_at_cursor();
+  rc |= test_tab_selection_indents_selected_lines();
+  rc |= test_untab_removes_leading_tab_from_current_line();
+  rc |= test_untab_selection_removes_leading_tabs_from_selected_lines();
   rc |= test_backspace_removes_selection();
   rc |= test_multi_cursor_insert_uses_pre_edit_coordinates();
   rc |= test_multi_cursor_backspace();
