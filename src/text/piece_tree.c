@@ -249,6 +249,51 @@ static bool node_byte_at(const PieceTree *tree, const PieceTreeNode *node, size_
   return node_byte_at(tree, node->right, offset - node->len, byte_out);
 }
 
+static bool find_lf_offset(const PieceTree *tree, const PieceTreeNode *node, size_t lf_index, size_t base_offset, size_t *offset_out) {
+  if (!tree || !node || !offset_out || lf_index == 0 || lf_index > node_lf_count(node)) return false;
+  size_t left_lf = node_lf_count(node->left);
+  if (lf_index <= left_lf) return find_lf_offset(tree, node->left, lf_index, base_offset, offset_out);
+  lf_index -= left_lf;
+
+  const char *bytes = piece_bytes(tree, node);
+  size_t left_len = node_len(node->left);
+  for (size_t i = 0; i < node->len; ++i) {
+    if (bytes[i] == '\n') {
+      if (--lf_index == 0) {
+        *offset_out = base_offset + left_len + i;
+        return true;
+      }
+    }
+  }
+
+  return find_lf_offset(tree, node->right, lf_index, base_offset + left_len + node->len, offset_out);
+}
+
+static void consume_node_prefix(const PieceTree *tree, const PieceTreeNode *node, size_t len, size_t *line, size_t *col) {
+  if (!tree || !node || len == 0) return;
+  size_t left_len = node_len(node->left);
+  if (len <= left_len) {
+    consume_node_prefix(tree, node->left, len, line, col);
+    return;
+  }
+
+  consume_node_prefix(tree, node->left, left_len, line, col);
+  len -= left_len;
+
+  const char *bytes = piece_bytes(tree, node);
+  size_t piece_len = len < node->len ? len : node->len;
+  for (size_t i = 0; i < piece_len; ++i) {
+    if (bytes[i] == '\n') {
+      ++*line;
+      *col = 0;
+    } else {
+      ++*col;
+    }
+  }
+  len -= piece_len;
+  if (len > 0) consume_node_prefix(tree, node->right, len, line, col);
+}
+
 bool piece_tree_init(PieceTree *tree, const char *text, size_t len) {
   if (!tree) return false;
   memset(tree, 0, sizeof(*tree));
@@ -413,22 +458,10 @@ bool piece_tree_line_start(const PieceTree *tree, size_t line, size_t *offset_ou
     return true;
   }
 
-  size_t len = 0;
-  char *text = piece_tree_to_string(tree, &len);
-  if (!text) return false;
-  size_t current_line = 0;
-  for (size_t i = 0; i < len; ++i) {
-    if (text[i] == '\n') {
-      ++current_line;
-      if (current_line == line) {
-        *offset_out = i + 1;
-        free(text);
-        return true;
-      }
-    }
-  }
-  free(text);
-  return false;
+  size_t lf_offset = 0;
+  if (!find_lf_offset(tree, tree->root, line, 0, &lf_offset)) return false;
+  *offset_out = lf_offset + 1;
+  return true;
 }
 
 bool piece_tree_line_range_with_newline(const PieceTree *tree, size_t line, PieceTreeLineRange *out) {
@@ -485,28 +518,13 @@ bool piece_tree_line_range_crlf(const PieceTree *tree, size_t line, PieceTreeLin
 
 bool piece_tree_offset_to_line_col(const PieceTree *tree, size_t offset, PieceTreeLineCol *out) {
   if (!tree || !out) return false;
-  size_t len = 0;
-  char *text = piece_tree_to_string(tree, &len);
-  if (!text) return false;
-  if (offset > len) {
-    free(text);
-    return false;
-  }
+  if (offset > piece_tree_len(tree)) return false;
 
   size_t line = 0;
   size_t col = 0;
-  for (size_t i = 0; i < offset; ++i) {
-    if (text[i] == '\n') {
-      ++line;
-      col = 0;
-    } else {
-      ++col;
-    }
-  }
-
+  consume_node_prefix(tree, tree->root, offset, &line, &col);
   out->line = line;
   out->col = col;
-  free(text);
   return true;
 }
 
@@ -515,23 +533,20 @@ bool piece_tree_line_col_to_offset(const PieceTree *tree, size_t line, size_t co
   size_t start = 0;
   if (!piece_tree_line_start(tree, line, &start)) return false;
 
-  size_t len = 0;
-  char *text = piece_tree_to_string(tree, &len);
-  if (!text) return false;
+  PieceTreeWalker walker;
+  if (!piece_tree_walker_init(&walker, tree, start)) return false;
 
   size_t offset = start;
   size_t remaining_col = col;
   while (remaining_col > 0) {
-    if (offset >= len || text[offset] == '\n') {
-      free(text);
-      return false;
-    }
-    ++offset;
+    char ch = 0;
+    size_t byte_offset = 0;
+    if (!piece_tree_walker_next(&walker, &ch, &byte_offset) || ch == '\n') return false;
+    offset = byte_offset + 1;
     --remaining_col;
   }
 
   *offset_out = offset;
-  free(text);
   return true;
 }
 

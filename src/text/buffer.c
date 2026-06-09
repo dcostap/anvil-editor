@@ -208,35 +208,51 @@ char *buffer_range_to_string(const Buffer *buffer, size_t start_offset, size_t e
 char *buffer_get_line(const Buffer *buffer, size_t line, size_t *len_out) {
   if (!buffer) return NULL;
 
-  size_t start = 0;
-  if (!piece_tree_line_start(&buffer->tree, line, &start)) return NULL;
+  BufferLineRange range;
+  if (!buffer_line_range_with_newline(buffer, line, &range)) return NULL;
+  return buffer_range_to_string(buffer, range.start, range.end, len_out);
+}
 
-  size_t end = 0;
-  if (line + 1 < piece_tree_line_count(&buffer->tree)) {
-    if (!piece_tree_line_start(&buffer->tree, line + 1, &end)) return NULL;
-  } else {
-    end = piece_tree_len(&buffer->tree);
+BufferVisibleLine *buffer_visible_lines(const Buffer *buffer, size_t first_line, size_t last_line, size_t *count_out) {
+  if (count_out) *count_out = 0;
+  if (!buffer) return NULL;
+  size_t line_count = buffer_line_count(buffer);
+  if (line_count == 0 || first_line >= line_count) return NULL;
+  if (last_line >= line_count) last_line = line_count - 1;
+  if (last_line < first_line) return NULL;
+
+  size_t count = last_line - first_line + 1;
+  BufferVisibleLine *lines = (BufferVisibleLine *) calloc(count, sizeof(BufferVisibleLine));
+  if (!lines) return NULL;
+
+  for (size_t i = 0; i < count; ++i) {
+    size_t line = first_line + i;
+    BufferLineRange range;
+    if (!buffer_line_range_with_newline(buffer, line, &range)) {
+      buffer_visible_lines_free(lines, i);
+      return NULL;
+    }
+    size_t text_len = 0;
+    char *text = buffer_range_to_string(buffer, range.start, range.end, &text_len);
+    if (!text) {
+      buffer_visible_lines_free(lines, i);
+      return NULL;
+    }
+    lines[i].line = line;
+    lines[i].start_offset = range.start;
+    lines[i].end_offset = range.end;
+    lines[i].text = text;
+    lines[i].text_len = text_len;
   }
 
-  size_t flat_len = 0;
-  char *flat = piece_tree_to_string(&buffer->tree, &flat_len);
-  if (!flat) return NULL;
-  if (start > end || end > flat_len) {
-    free(flat);
-    return NULL;
-  }
+  if (count_out) *count_out = count;
+  return lines;
+}
 
-  size_t len = end - start;
-  char *line_text = (char *) malloc(len + 1);
-  if (!line_text) {
-    free(flat);
-    return NULL;
-  }
-  memcpy(line_text, flat + start, len);
-  line_text[len] = '\0';
-  free(flat);
-  if (len_out) *len_out = len;
-  return line_text;
+void buffer_visible_lines_free(BufferVisibleLine *lines, size_t count) {
+  if (!lines) return;
+  for (size_t i = 0; i < count; ++i) free(lines[i].text);
+  free(lines);
 }
 
 bool buffer_line_start(const Buffer *buffer, size_t line, size_t *offset_out) {

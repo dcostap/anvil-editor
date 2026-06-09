@@ -116,6 +116,29 @@ static int l_buffer_line(lua_State *L) {
   return 1;
 }
 
+static int l_buffer_visible_lines(lua_State *L) {
+  NativeTextBuffer *native = check_buffer(L, 1);
+  size_t first_line = check_offset(L, 2);
+  size_t last_line = check_offset(L, 3);
+  size_t count = 0;
+  BufferVisibleLine *lines = buffer_visible_lines(&native->buffer, first_line, last_line, &count);
+  lua_newtable(L);
+  for (size_t i = 0; i < count; ++i) {
+    lua_newtable(L);
+    lua_pushnumber(L, (lua_Number) lines[i].line);
+    lua_setfield(L, -2, "line");
+    lua_pushnumber(L, (lua_Number) lines[i].start_offset);
+    lua_setfield(L, -2, "start_offset");
+    lua_pushnumber(L, (lua_Number) lines[i].end_offset);
+    lua_setfield(L, -2, "end_offset");
+    lua_pushlstring(L, lines[i].text, lines[i].text_len);
+    lua_setfield(L, -2, "text");
+    lua_rawseti(L, -2, (int) i + 1);
+  }
+  buffer_visible_lines_free(lines, count);
+  return 1;
+}
+
 static int l_buffer_offset_to_line_col(lua_State *L) {
   NativeTextBuffer *native = check_buffer(L, 1);
   size_t offset = check_offset(L, 2);
@@ -439,6 +462,7 @@ static const luaL_Reg buffer_methods[] = {
   { "text", l_buffer_text },
   { "line_count", l_buffer_line_count },
   { "line", l_buffer_line },
+  { "visible_lines", l_buffer_visible_lines },
   { "offset_to_line_col", l_buffer_offset_to_line_col },
   { "line_col_to_offset", l_buffer_line_col_to_offset },
   { "set_line_ending_mode", l_buffer_set_line_ending_mode },

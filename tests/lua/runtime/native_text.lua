@@ -16,6 +16,9 @@ test.describe("native_text API bridge", function()
     test.equal(buffer:len(), 3)
     test.equal(buffer:line_count(), 1)
     test.equal(buffer:line(0), "abc")
+    test.same(buffer:visible_lines(0, 0), {
+      { line = 0, start_offset = 0, end_offset = 3, text = "abc" }
+    })
     test.same(buffer:offset_to_line_col(2), { line = 0, col = 2 })
     test.equal(buffer:line_col_to_offset(0, 2), 2)
 
@@ -31,6 +34,19 @@ test.describe("native_text API bridge", function()
     test.ok(editor:redo())
     test.equal(buffer:text(), "aXYbc")
     test.same(editor:cursor(), { cursor = 3 })
+  end)
+
+  test.it("returns walker-backed visible lines", function()
+    local buffer = native_text.new_buffer("aa\nbb\n")
+    test.same(buffer:visible_lines(0, 2), {
+      { line = 0, start_offset = 0, end_offset = 3, text = "aa\n" },
+      { line = 1, start_offset = 3, end_offset = 6, text = "bb\n" },
+      { line = 2, start_offset = 6, end_offset = 6, text = "" },
+    })
+    test.same(buffer:visible_lines(1, 99), {
+      { line = 1, start_offset = 3, end_offset = 6, text = "bb\n" },
+      { line = 2, start_offset = 6, end_offset = 6, text = "" },
+    })
   end)
 
   test.it("loads, saves, and reports file-backed Buffer state", function()

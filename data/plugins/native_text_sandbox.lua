@@ -96,15 +96,16 @@ function NativeTextSandboxView:draw_caret_for_cursor(cursor)
   renderer.draw_rect(caret_x, caret_y, math.max(1, SCALE), style.font:get_height(), style.caret)
 end
 
-function NativeTextSandboxView:draw_line_text(line, text, row_y, highlights)
+function NativeTextSandboxView:draw_line_text(line_info, row_y, highlights)
+  local text = line_info.text or ""
   local x = self.position.x + self:get_gutter_width() + style.padding.x - self.scroll.x
   if not highlights or #highlights == 0 then
     renderer.draw_text(style.font, text, x, row_y, style.text)
     return
   end
 
-  local line_start = self.buffer:line_col_to_offset(line, 0) or 0
-  local line_end = line_start + #text
+  local line_start = line_info.start_offset or 0
+  local line_end = line_info.end_offset or (line_start + #text)
   local spans = {}
   for _, span in ipairs(highlights) do
     if span.end_offset > line_start and span.start_offset < line_end then
@@ -224,19 +225,20 @@ function NativeTextSandboxView:draw()
     self:draw_selection_for_cursor(self.editor:cursor(i))
   end
 
+  local visible_lines = self.buffer:visible_lines(first_line, last_line)
   local highlights = nil
-  if self.tree_sitter_enabled and line_count > 0 then
-    local visible_start = self.buffer:line_col_to_offset(first_line, 0) or 0
-    local last_text = self.buffer:line(last_line) or ""
-    local visible_end = self.buffer:line_col_to_offset(last_line, #last_text) or self.buffer:len()
+  if self.tree_sitter_enabled and #visible_lines > 0 then
+    local visible_start = visible_lines[1].start_offset or 0
+    local visible_end = visible_lines[#visible_lines].end_offset or self.buffer:len()
     highlights = self.buffer:tree_sitter_highlights(visible_start, visible_end)
   end
 
-  for line = first_line, last_line do
+  for _, line_info in ipairs(visible_lines) do
+    local line = line_info.line
     local row_y = y + style.padding.y - self.scroll.y + line * lh
     local line_number = tostring(line + 1)
     common.draw_text(style.font, style.dim, line_number, "right", x, row_y, gutter_w - style.padding.x, lh)
-    self:draw_line_text(line, self.buffer:line(line) or "", row_y, highlights)
+    self:draw_line_text(line_info, row_y, highlights)
   end
 
   for i = 1, self.editor:cursor_count() do
