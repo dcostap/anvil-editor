@@ -2,6 +2,7 @@
 #define ANVIL_TEXT_BUFFER_H
 
 #include "text/piece_tree.h"
+#include "text/undo_graph.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -11,6 +12,8 @@ typedef struct Buffer {
   char *path;
   PieceTreeSnapshot clean_snapshot;
   bool has_clean_snapshot;
+  UndoRedoGraph undo_graph;
+  bool has_undo_graph;
 } Buffer;
 
 typedef PieceTreeLineCol BufferLineCol;
@@ -32,5 +35,9 @@ bool buffer_line_col_to_offset(const Buffer *buffer, size_t line, size_t col, si
 
 void buffer_mark_clean(Buffer *buffer);
 bool buffer_is_dirty(const Buffer *buffer);
+bool buffer_can_undo(const Buffer *buffer);
+bool buffer_can_redo(const Buffer *buffer);
+bool buffer_undo(Buffer *buffer);
+bool buffer_redo(Buffer *buffer);
 
 #endif

@@ -117,6 +117,15 @@ BatchEditResult buffer_manager_apply_edits(
       return rejected_result(edit_count);
     }
   }
+
+  if (changed && manager->buffer->has_undo_graph &&
+      !undo_graph_commit(&manager->buffer->undo_graph, &manager->buffer->tree, changed_start)) {
+    piece_tree_restore_snapshot(&manager->buffer->tree, &before);
+    piece_tree_snapshot_release(&before);
+    free(sorted);
+    return rejected_result(edit_count);
+  }
+
   piece_tree_snapshot_release(&before);
 
   free(sorted);

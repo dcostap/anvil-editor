@@ -10,10 +10,22 @@ static void clear_clean_snapshot(Buffer *buffer) {
   }
 }
 
+static void clear_undo_graph(Buffer *buffer) {
+  if (buffer->has_undo_graph) {
+    undo_graph_dispose(&buffer->undo_graph);
+    buffer->has_undo_graph = false;
+  }
+}
+
 bool buffer_init(Buffer *buffer, const char *bytes, size_t len) {
   if (!buffer) return false;
   memset(buffer, 0, sizeof(*buffer));
   if (!piece_tree_init(&buffer->tree, bytes, len)) return false;
+  if (!undo_graph_init(&buffer->undo_graph, &buffer->tree, 0)) {
+    piece_tree_dispose(&buffer->tree);
+    return false;
+  }
+  buffer->has_undo_graph = true;
   buffer_mark_clean(buffer);
   return true;
 }
@@ -21,6 +33,7 @@ bool buffer_init(Buffer *buffer, const char *bytes, size_t len) {
 void buffer_dispose(Buffer *buffer) {
   if (!buffer) return;
   clear_clean_snapshot(buffer);
+  clear_undo_graph(buffer);
   free(buffer->path);
   piece_tree_dispose(&buffer->tree);
   memset(buffer, 0, sizeof(*buffer));
@@ -29,10 +42,16 @@ void buffer_dispose(Buffer *buffer) {
 bool buffer_load_bytes(Buffer *buffer, const char *bytes, size_t len) {
   if (!buffer) return false;
   clear_clean_snapshot(buffer);
+  clear_undo_graph(buffer);
   free(buffer->path);
   buffer->path = NULL;
   piece_tree_dispose(&buffer->tree);
   if (!piece_tree_init(&buffer->tree, bytes, len)) return false;
+  if (!undo_graph_init(&buffer->undo_graph, &buffer->tree, 0)) {
+    piece_tree_dispose(&buffer->tree);
+    return false;
+  }
+  buffer->has_undo_graph = true;
   buffer_mark_clean(buffer);
   return true;
 }
@@ -104,10 +123,28 @@ void buffer_mark_clean(Buffer *buffer) {
   clear_clean_snapshot(buffer);
   buffer->clean_snapshot = piece_tree_snapshot_acquire(&buffer->tree);
   buffer->has_clean_snapshot = true;
+  if (buffer->has_undo_graph) undo_graph_mark_save(&buffer->undo_graph);
 }
 
 bool buffer_is_dirty(const Buffer *buffer) {
   if (!buffer) return false;
+  if (buffer->has_undo_graph) return undo_graph_is_dirty(&buffer->undo_graph);
   if (!buffer->has_clean_snapshot) return true;
   return !piece_tree_matches_snapshot(&buffer->tree, &buffer->clean_snapshot);
+}
+
+bool buffer_can_undo(const Buffer *buffer) {
+  return buffer && buffer->has_undo_graph && undo_graph_can_undo(&buffer->undo_graph);
+}
+
+bool buffer_can_redo(const Buffer *buffer) {
+  return buffer && buffer->has_undo_graph && undo_graph_can_redo(&buffer->undo_graph);
+}
+
+bool buffer_undo(Buffer *buffer) {
+  return buffer && buffer->has_undo_graph && undo_graph_undo(&buffer->undo_graph, &buffer->tree);
+}
+
+bool buffer_redo(Buffer *buffer) {
+  return buffer && buffer->has_undo_graph && undo_graph_redo(&buffer->undo_graph, &buffer->tree);
 }

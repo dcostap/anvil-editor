@@ -18,6 +18,7 @@ anvil_sources = [
     'text/buffer.c',
     'text/buffer_manager.c',
     'text/editor.c',
+    'text/undo_graph.c',
     'tokenizer/arena.c',
     'tokenizer/regex.c',
     'tokenizer/lutf8.c',
@@ -208,6 +209,7 @@ buffer_manager_test = executable('buffer_manager_test',
         'text/piece_tree.c',
         'text/buffer.c',
         'text/buffer_manager.c',
+        'text/undo_graph.c',
     ],
     include_directories: anvil_includes,
     c_args: anvil_cargs,
@@ -221,11 +223,25 @@ editor_test = executable('editor_test',
         'text/buffer.c',
         'text/buffer_manager.c',
         'text/editor.c',
+        'text/undo_graph.c',
     ],
     include_directories: anvil_includes,
     c_args: anvil_cargs,
 )
 test('editor', editor_test, env: anvil_test_env)
+
+undo_graph_test = executable('undo_graph_test',
+    [
+        '../tests/native/undo_graph_test.c',
+        'text/piece_tree.c',
+        'text/buffer.c',
+        'text/buffer_manager.c',
+        'text/undo_graph.c',
+    ],
+    include_directories: anvil_includes,
+    c_args: anvil_cargs,
+)
+test('undo_graph', undo_graph_test, env: anvil_test_env)
 
 # load and configure linenoise
 if get_option('repl_history')
