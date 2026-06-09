@@ -237,6 +237,18 @@ static void flatten_node(const PieceTree *tree, const PieceTreeNode *node, char 
   flatten_node(tree, node->right, out, offset);
 }
 
+static bool node_byte_at(const PieceTree *tree, const PieceTreeNode *node, size_t offset, char *byte_out) {
+  if (!tree || !node || !byte_out) return false;
+  size_t left_len = node_len(node->left);
+  if (offset < left_len) return node_byte_at(tree, node->left, offset, byte_out);
+  offset -= left_len;
+  if (offset < node->len) {
+    *byte_out = piece_bytes(tree, node)[offset];
+    return true;
+  }
+  return node_byte_at(tree, node->right, offset - node->len, byte_out);
+}
+
 bool piece_tree_init(PieceTree *tree, const char *text, size_t len) {
   if (!tree) return false;
   memset(tree, 0, sizeof(*tree));
@@ -320,6 +332,48 @@ char *piece_tree_to_string(const PieceTree *tree, size_t *len_out) {
   text[len] = '\0';
   if (len_out) *len_out = len;
   return text;
+}
+
+bool piece_tree_byte_at(const PieceTree *tree, size_t offset, char *byte_out) {
+  if (!tree || !byte_out) return false;
+  if (offset >= piece_tree_len(tree)) return false;
+  return node_byte_at(tree, tree->root, offset, byte_out);
+}
+
+bool piece_tree_walker_init(PieceTreeWalker *walker, const PieceTree *tree, size_t offset) {
+  if (!walker || !tree) return false;
+  if (offset > piece_tree_len(tree)) return false;
+  walker->tree = tree;
+  walker->offset = offset;
+  return true;
+}
+
+bool piece_tree_walker_next(PieceTreeWalker *walker, char *byte_out, size_t *offset_out) {
+  if (!walker || !walker->tree || !byte_out) return false;
+  if (walker->offset >= piece_tree_len(walker->tree)) return false;
+  size_t offset = walker->offset;
+  if (!piece_tree_byte_at(walker->tree, offset, byte_out)) return false;
+  if (offset_out) *offset_out = offset;
+  walker->offset = offset + 1;
+  return true;
+}
+
+bool piece_tree_reverse_walker_init(PieceTreeWalker *walker, const PieceTree *tree, size_t offset) {
+  if (!walker || !tree) return false;
+  if (offset > piece_tree_len(tree)) return false;
+  walker->tree = tree;
+  walker->offset = offset;
+  return true;
+}
+
+bool piece_tree_walker_prev(PieceTreeWalker *walker, char *byte_out, size_t *offset_out) {
+  if (!walker || !walker->tree || !byte_out) return false;
+  if (walker->offset == 0) return false;
+  size_t offset = walker->offset - 1;
+  if (!piece_tree_byte_at(walker->tree, offset, byte_out)) return false;
+  if (offset_out) *offset_out = offset;
+  walker->offset = offset;
+  return true;
 }
 
 bool piece_tree_line_start(const PieceTree *tree, size_t line, size_t *offset_out) {

@@ -247,7 +247,7 @@ Implement first:
 
 Then add:
 
-- Forward and reverse walkers.
+- Forward and reverse walkers. **Implemented initially.**
 - CRLF-aware line start/end helpers.
 - Better balancing/invariant diagnostics if needed.
 
@@ -354,7 +354,7 @@ Transaction output should include:
 - Applied/rejected flag. **Implemented initially.**
 - Changed byte ranges. **Implemented initially.**
 - Changed line ranges. **Implemented initially as half-open byte-derived line ranges.**
-- Cursor mapping results.
+- Cursor mapping results. **Implemented initially.**
 - Tree-sitter edit descriptors later.
 - Undo graph node info later.
 - View notification payload later.

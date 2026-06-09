@@ -141,6 +141,48 @@ static int test_snapshot_restore(void) {
   return 0;
 }
 
+static int test_byte_at_and_walkers(void) {
+  PieceTree tree;
+  CHECK(piece_tree_init(&tree, "abcd", 4));
+  CHECK(piece_tree_insert(&tree, 2, "XY", 2));
+  CHECK(piece_tree_remove(&tree, 0, 1));
+  CHECK(expect_text(&tree, "bXYcd") == 0);
+
+  char ch = 0;
+  CHECK(piece_tree_byte_at(&tree, 0, &ch));
+  CHECK(ch == 'b');
+  CHECK(piece_tree_byte_at(&tree, 2, &ch));
+  CHECK(ch == 'Y');
+  CHECK(!piece_tree_byte_at(&tree, piece_tree_len(&tree), &ch));
+
+  PieceTreeWalker walker;
+  CHECK(piece_tree_walker_init(&walker, &tree, 1));
+  char forward[8];
+  size_t offsets[8];
+  size_t count = 0;
+  while (piece_tree_walker_next(&walker, &ch, &offsets[count])) {
+    forward[count++] = ch;
+  }
+  CHECK(count == 4);
+  CHECK(memcmp(forward, "XYcd", 4) == 0);
+  CHECK(offsets[0] == 1);
+  CHECK(offsets[3] == 4);
+
+  CHECK(piece_tree_reverse_walker_init(&walker, &tree, piece_tree_len(&tree)));
+  char reverse[8];
+  count = 0;
+  while (piece_tree_walker_prev(&walker, &ch, &offsets[count])) {
+    reverse[count++] = ch;
+  }
+  CHECK(count == 5);
+  CHECK(memcmp(reverse, "dcYXb", 5) == 0);
+  CHECK(offsets[0] == 4);
+  CHECK(offsets[4] == 0);
+
+  piece_tree_dispose(&tree);
+  return 0;
+}
+
 typedef struct FlatString {
   char *data;
   size_t len;
@@ -238,6 +280,7 @@ int main(void) {
   rc |= test_trailing_newline_line();
   rc |= test_crlf_and_bytes_are_preserved();
   rc |= test_snapshot_restore();
+  rc |= test_byte_at_and_walkers();
   rc |= test_random_edits_against_flat_oracle();
   return rc;
 }
