@@ -43,6 +43,7 @@ bool editor_backspace_word(Editor *editor);
 bool editor_del_word(Editor *editor);
 bool editor_select_all(Editor *editor);
 bool editor_select_word(Editor *editor);
+bool editor_select_line(Editor *editor);
 bool editor_left(Editor *editor, bool update_selection);
 bool editor_right(Editor *editor, bool update_selection);
 bool editor_word_left(Editor *editor, bool update_selection);

@@ -325,6 +325,7 @@ Implement:
 - Select variants of movement. **Implemented initially for character, line, and word movement.**
 - Remove selections. **Implemented initially.**
 - Select word. **Implemented initially.**
+- Select line. **Implemented initially with CRLF-aware line ranges.**
 - Insert text at one or many cursors. **Implemented initially.**
 - Backspace/delete. **Implemented initially.**
 - Backspace word/delete word. **Implemented initially.**

@@ -604,6 +604,21 @@ bool editor_select_word(Editor *editor) {
   return true;
 }
 
+bool editor_select_line(Editor *editor) {
+  if (!editor) return false;
+  Buffer *buffer = editor_buffer(editor);
+  if (!buffer) return false;
+
+  BufferLineCol lc;
+  if (!buffer_offset_to_line_col(buffer, editor->core_cursor.cursor, &lc)) return false;
+  BufferLineRange range;
+  if (!buffer_line_range_crlf(buffer, lc.line, &range)) return false;
+
+  editor_clear_multi_cursors(editor);
+  editor->core_cursor = make_cursor(range.end, range.start);
+  return true;
+}
+
 bool editor_left(Editor *editor, bool update_selection) {
   if (!editor) return false;
   size_t count = 0;
