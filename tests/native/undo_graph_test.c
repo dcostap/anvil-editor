@@ -26,6 +26,7 @@ static int apply_one(BufferManager *manager, size_t start, size_t end, const cha
   BatchEditItem edit = { start, end, text, text ? strlen(text) : 0, 0 };
   BatchEditResult result = buffer_manager_apply_edits(manager, &edit, 1);
   CHECK(result.applied);
+  batch_edit_result_dispose(&result);
   return 0;
 }
 

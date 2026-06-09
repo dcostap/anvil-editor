@@ -72,8 +72,16 @@ static int test_apply_single_batch_edit(void) {
   CHECK(result.changed_old_end_line == 1);
   CHECK(result.changed_new_start_line == 0);
   CHECK(result.changed_new_end_line == 1);
+  CHECK(result.cursor_mapping_count == 1);
+  CHECK(result.cursor_mappings[0].cursor_index == 0);
+  CHECK(result.cursor_mappings[0].old_start_offset == 1);
+  CHECK(result.cursor_mappings[0].old_end_offset == 2);
+  CHECK(result.cursor_mappings[0].new_start_offset == 1);
+  CHECK(result.cursor_mappings[0].new_end_offset == 4);
+  CHECK(result.cursor_mappings[0].new_cursor_offset == 4);
   CHECK(buffer_is_dirty(&buffer));
   CHECK(expect_buffer_text(&buffer, "aXYZc\ndef") == 0);
+  batch_edit_result_dispose(&result);
 
   buffer_mark_clean(&buffer);
   CHECK(!buffer_is_dirty(&buffer));
@@ -102,7 +110,15 @@ static int test_apply_multiple_pre_edit_coordinate_edits(void) {
   CHECK(result.changed_old_end_line == 3);
   CHECK(result.changed_new_start_line == 0);
   CHECK(result.changed_new_end_line == 3);
+  CHECK(result.cursor_mapping_count == 3);
+  CHECK(result.cursor_mappings[0].cursor_index == 0);
+  CHECK(result.cursor_mappings[0].new_cursor_offset == 2);
+  CHECK(result.cursor_mappings[1].cursor_index == 1);
+  CHECK(result.cursor_mappings[1].new_cursor_offset == 7);
+  CHECK(result.cursor_mappings[2].cursor_index == 2);
+  CHECK(result.cursor_mappings[2].new_cursor_offset == 13);
   CHECK(expect_buffer_text(&buffer, "aXc\ndYYf\ngZZZi") == 0);
+  batch_edit_result_dispose(&result);
 
   buffer_dispose(&buffer);
   return 0;
@@ -123,6 +139,7 @@ static int test_rejects_overlaps_atomically(void) {
   CHECK(result.rejected);
   CHECK(!buffer_is_dirty(&buffer));
   CHECK(expect_buffer_text(&buffer, "abcdef") == 0);
+  batch_edit_result_dispose(&result);
 
   buffer_dispose(&buffer);
   return 0;
@@ -142,6 +159,7 @@ static int test_rejects_duplicate_zero_width_edits(void) {
   CHECK(!result.applied);
   CHECK(result.rejected);
   CHECK(expect_buffer_text(&buffer, "abcdef") == 0);
+  batch_edit_result_dispose(&result);
 
   buffer_dispose(&buffer);
   return 0;
@@ -159,7 +177,13 @@ static int test_remove_and_insert_boundaries(void) {
   };
   BatchEditResult result = buffer_manager_apply_edits(&manager, edits, 2);
   CHECK(result.applied);
+  CHECK(result.cursor_mapping_count == 2);
+  CHECK(result.cursor_mappings[0].cursor_index == 0);
+  CHECK(result.cursor_mappings[0].new_cursor_offset == 0);
+  CHECK(result.cursor_mappings[1].cursor_index == 1);
+  CHECK(result.cursor_mappings[1].new_cursor_offset == 6);
   CHECK(expect_buffer_text(&buffer, "bcdef!") == 0);
+  batch_edit_result_dispose(&result);
 
   buffer_dispose(&buffer);
   return 0;
@@ -182,6 +206,7 @@ static int test_changed_line_ranges_for_newline_insert(void) {
   CHECK(result.changed_new_start_line == 0);
   CHECK(result.changed_new_end_line == 2);
   CHECK(expect_buffer_text(&buffer, "abc\nXY\ndef") == 0);
+  batch_edit_result_dispose(&result);
 
   buffer_dispose(&buffer);
   return 0;
@@ -204,6 +229,7 @@ static int test_changed_line_ranges_for_multiline_remove(void) {
   CHECK(result.changed_new_start_line == 0);
   CHECK(result.changed_new_end_line == 1);
   CHECK(expect_buffer_text(&buffer, "aa\ndd") == 0);
+  batch_edit_result_dispose(&result);
 
   buffer_dispose(&buffer);
   return 0;

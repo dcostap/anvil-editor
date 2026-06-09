@@ -18,6 +18,15 @@ typedef struct BatchEditItem {
   unsigned int cursor_index;
 } BatchEditItem;
 
+typedef struct BatchCursorMapping {
+  unsigned int cursor_index;
+  size_t old_start_offset;
+  size_t old_end_offset;
+  size_t new_start_offset;
+  size_t new_end_offset;
+  size_t new_cursor_offset;
+} BatchCursorMapping;
+
 typedef struct BatchEditResult {
   bool applied;
   bool rejected;
@@ -29,6 +38,8 @@ typedef struct BatchEditResult {
   size_t changed_old_end_line;
   size_t changed_new_start_line;
   size_t changed_new_end_line;
+  BatchCursorMapping *cursor_mappings;
+  size_t cursor_mapping_count;
 } BatchEditResult;
 
 void buffer_manager_init(BufferManager *manager, Buffer *buffer);
@@ -40,5 +51,6 @@ BatchEditResult buffer_manager_apply_edits(
   const BatchEditItem *edits,
   size_t edit_count
 );
+void batch_edit_result_dispose(BatchEditResult *result);
 
 #endif

@@ -315,27 +315,26 @@ static bool apply_cursor_edits(Editor *editor, CursorEdit *cursor_edits, size_t 
 
   BatchEditResult result = buffer_manager_apply_edits(editor->buffer_manager, items, count);
   free(items);
-  if (!result.applied) return false;
+  if (!result.applied) {
+    batch_edit_result_dispose(&result);
+    return false;
+  }
 
-  for (size_t i = 0; i < count; ++i) {
-    ptrdiff_t delta = 0;
-    for (size_t j = 0; j < count; ++j) {
-      if (cursor_edits[j].edit.start_offset < cursor_edits[i].edit.start_offset) {
-        size_t removed = cursor_edits[j].edit.end_offset - cursor_edits[j].edit.start_offset;
-        size_t inserted = cursor_edits[j].edit.text_len;
-        delta += (ptrdiff_t) inserted - (ptrdiff_t) removed;
-      }
-    }
-    size_t new_cursor = (size_t) ((ptrdiff_t) cursor_edits[i].edit.start_offset + delta)
-      + cursor_edits[i].edit.text_len;
-    size_t cursor_index = cursor_edits[i].cursor_index;
+  for (size_t i = 0; i < result.cursor_mapping_count; ++i) {
+    BatchCursorMapping mapping = result.cursor_mappings[i];
+    size_t cursor_index = (size_t) mapping.cursor_index;
     if (editor->multi_cursor_count > 0) {
-      editor->multi_cursors[cursor_index] = make_cursor(new_cursor, EDITOR_SELECTION_SENTINEL);
+      if (cursor_index >= editor->multi_cursor_count) {
+        batch_edit_result_dispose(&result);
+        return false;
+      }
+      editor->multi_cursors[cursor_index] = make_cursor(mapping.new_cursor_offset, EDITOR_SELECTION_SENTINEL);
     } else {
-      editor->core_cursor = make_cursor(new_cursor, EDITOR_SELECTION_SENTINEL);
+      editor->core_cursor = make_cursor(mapping.new_cursor_offset, EDITOR_SELECTION_SENTINEL);
     }
   }
 
+  batch_edit_result_dispose(&result);
   editor_sort_and_merge_cursors(editor);
   sync_core_from_multi(editor);
   return true;
