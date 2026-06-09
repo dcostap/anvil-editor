@@ -13,16 +13,23 @@ function NativeTextSandboxView:__tostring() return "NativeTextSandboxView" end
 
 NativeTextSandboxView.context = "workspace"
 
-function NativeTextSandboxView:new(text)
+function NativeTextSandboxView:new(text, filename)
   NativeTextSandboxView.super.new(self)
   self.buffer = native_text.new_buffer(text or "Native text sandbox\n\nType here. This view is backed by src/text Buffer/Editor userdata.")
+  if filename then
+    local ok = self.buffer:load_file(filename)
+    if not ok then core.error("Failed to open native Buffer: %s", filename) end
+  end
   self.editor = self.buffer:new_editor()
   self.scrollable = true
   self.cursor = "ibeam"
 end
 
 function NativeTextSandboxView:get_name()
-  return "Native Text Sandbox"
+  local path = self.buffer:path()
+  local name = path and common.basename(path) or "Native Text Sandbox"
+  if self.buffer:is_dirty() then name = "*" .. name end
+  return name
 end
 
 function NativeTextSandboxView:supports_text_input()
@@ -140,9 +147,23 @@ local function with_active_native_view(fn)
   end
 end
 
+local function open_native_text_file(filename)
+  if not filename or filename == "" then return end
+  core.root_panel:get_active_node_default():add_view(NativeTextSandboxView(nil, filename))
+end
+
 command.add(nil, {
   ["native-text-sandbox:open"] = function()
     core.root_panel:get_active_node_default():add_view(NativeTextSandboxView())
+  end,
+  ["native-text-sandbox:open-file"] = function()
+    core.open_file_dialog(core.window, function(status, result)
+      if status == "accept" then
+        for _, filename in ipairs(result) do open_native_text_file(filename) end
+      elseif status == "error" then
+        core.error("Error while opening native text dialog: %s", result or "")
+      end
+    end, { allow_many = true })
   end,
 })
 
@@ -156,6 +177,9 @@ command.add(NativeTextSandboxView, {
   ["native-text-sandbox:down"] = with_active_native_view(function(view) view.editor:line_down(false) end),
   ["native-text-sandbox:undo"] = with_active_native_view(function(view) view.editor:undo() end),
   ["native-text-sandbox:redo"] = with_active_native_view(function(view) view.editor:redo() end),
+  ["native-text-sandbox:save"] = with_active_native_view(function(view)
+    if not view.buffer:save_file() then core.error("Failed to save native Buffer") end
+  end),
   ["native-text-sandbox:duplicate-cursor-up"] = with_active_native_view(function(view) view.editor:dup_cursor_up() end),
   ["native-text-sandbox:duplicate-cursor-down"] = with_active_native_view(function(view) view.editor:dup_cursor_down() end),
 })
@@ -170,6 +194,7 @@ keymap.add {
   ["down"] = "native-text-sandbox:down",
   ["ctrl+z"] = "native-text-sandbox:undo",
   ["ctrl+y"] = "native-text-sandbox:redo",
+  ["ctrl+s"] = "native-text-sandbox:save",
   ["ctrl+shift+up"] = "native-text-sandbox:duplicate-cursor-up",
   ["ctrl+shift+down"] = "native-text-sandbox:duplicate-cursor-down",
 }

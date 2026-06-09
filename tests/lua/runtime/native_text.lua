@@ -1,6 +1,12 @@
 local native_text = require "native_text"
 local test = require "core.test"
 
+local core = require "core"
+
+local function tmp_file(name)
+  return core.temp_filename(name or "native-text-test")
+end
+
 test.describe("native_text API bridge", function()
   test.it("edits a native Buffer through an Editor", function()
     local buffer = native_text.new_buffer("abc")
@@ -25,6 +31,36 @@ test.describe("native_text API bridge", function()
     test.ok(editor:redo())
     test.equal(buffer:text(), "aXYbc")
     test.same(editor:cursor(), { cursor = 3 })
+  end)
+
+  test.it("loads, saves, and reports file-backed Buffer state", function()
+    local path = tmp_file("native-text-load-save")
+    local saved = tmp_file("native-text-save-as")
+    local fp = assert(io.open(path, "wb"))
+    fp:write("aa\r\nbb")
+    fp:close()
+
+    local buffer = native_text.new_buffer()
+    test.ok(buffer:load_file(path))
+    test.equal(buffer:path(), path)
+    test.equal(buffer:text(), "aa\r\nbb")
+    test.not_ok(buffer:is_dirty())
+
+    local editor = buffer:new_editor()
+    test.ok(editor:set_cursor(2))
+    test.ok(editor:insert("XX"))
+    test.ok(buffer:is_dirty())
+    test.ok(buffer:save_file(saved))
+    test.equal(buffer:path(), saved)
+    test.not_ok(buffer:is_dirty())
+
+    local rf = assert(io.open(saved, "rb"))
+    local data = rf:read("*a")
+    rf:close()
+    test.equal(data, "aaXX\r\nbb")
+
+    os.remove(path)
+    os.remove(saved)
   end)
 
   test.it("exposes native multi-cursor commands", function()

@@ -54,6 +54,34 @@ static int l_buffer_gc(lua_State *L) {
   return 0;
 }
 
+static int l_buffer_path(lua_State *L) {
+  NativeTextBuffer *native = check_buffer(L, 1);
+  const char *path = buffer_path(&native->buffer);
+  if (path) lua_pushstring(L, path);
+  else lua_pushnil(L);
+  return 1;
+}
+
+static int l_buffer_is_dirty(lua_State *L) {
+  NativeTextBuffer *native = check_buffer(L, 1);
+  lua_pushboolean(L, buffer_is_dirty(&native->buffer));
+  return 1;
+}
+
+static int l_buffer_load_file(lua_State *L) {
+  NativeTextBuffer *native = check_buffer(L, 1);
+  const char *path = luaL_checkstring(L, 2);
+  lua_pushboolean(L, buffer_load_file(&native->buffer, path));
+  return 1;
+}
+
+static int l_buffer_save_file(lua_State *L) {
+  NativeTextBuffer *native = check_buffer(L, 1);
+  const char *path = luaL_optstring(L, 2, NULL);
+  lua_pushboolean(L, buffer_save_file(&native->buffer, path));
+  return 1;
+}
+
 static int l_buffer_len(lua_State *L) {
   NativeTextBuffer *native = check_buffer(L, 1);
   lua_pushnumber(L, (lua_Number) buffer_len(&native->buffer));
@@ -308,7 +336,7 @@ static int l_editor_dup_cursor_down(lua_State *L) {
 
 static int l_new_buffer(lua_State *L) {
   size_t len = 0;
-  const char *text = luaL_optlstring(L, 1, "", &len);
+  const char *text = lua_isnoneornil(L, 1) ? "" : luaL_checklstring(L, 1, &len);
   NativeTextBuffer *native = (NativeTextBuffer *) lua_newuserdata(L, sizeof(NativeTextBuffer));
   memset(native, 0, sizeof(*native));
   if (!buffer_init(&native->buffer, text, len)) {
@@ -322,6 +350,10 @@ static int l_new_buffer(lua_State *L) {
 }
 
 static const luaL_Reg buffer_methods[] = {
+  { "path", l_buffer_path },
+  { "is_dirty", l_buffer_is_dirty },
+  { "load_file", l_buffer_load_file },
+  { "save_file", l_buffer_save_file },
   { "len", l_buffer_len },
   { "text", l_buffer_text },
   { "line_count", l_buffer_line_count },
