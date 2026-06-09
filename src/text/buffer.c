@@ -365,6 +365,14 @@ void buffer_disable_tree_sitter(Buffer *buffer) {
   buffer->treesitter = NULL;
 }
 
+bool buffer_reparse_tree_sitter(Buffer *buffer) {
+  return buffer && buffer->treesitter ? native_treesitter_reparse(buffer->treesitter, buffer) : false;
+}
+
+bool buffer_tree_sitter_is_dirty(const Buffer *buffer) {
+  return buffer && buffer->treesitter ? native_treesitter_is_dirty(buffer->treesitter) : false;
+}
+
 const char *buffer_tree_sitter_language_name(const Buffer *buffer) {
   return buffer && buffer->treesitter ? native_treesitter_language_name(buffer->treesitter) : NULL;
 }

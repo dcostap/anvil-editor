@@ -20,6 +20,7 @@ void native_treesitter_free(NativeTreeSitter *state);
 bool native_treesitter_set_language(NativeTreeSitter *state, Buffer *buffer, const char *language_name);
 const char *native_treesitter_language_name(const NativeTreeSitter *state);
 const char *native_treesitter_root_kind(const NativeTreeSitter *state);
+bool native_treesitter_is_dirty(const NativeTreeSitter *state);
 bool native_treesitter_reparse(NativeTreeSitter *state, Buffer *buffer);
 bool native_treesitter_after_edit(NativeTreeSitter *state, Buffer *buffer, const BatchEditResult *result);
 bool native_treesitter_after_snap(NativeTreeSitter *state, Buffer *buffer);

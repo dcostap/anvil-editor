@@ -79,6 +79,8 @@ bool buffer_redo_op_offset(Buffer *buffer, size_t *op_offset_out);
 
 bool buffer_enable_tree_sitter(Buffer *buffer, const char *language_name);
 void buffer_disable_tree_sitter(Buffer *buffer);
+bool buffer_reparse_tree_sitter(Buffer *buffer);
+bool buffer_tree_sitter_is_dirty(const Buffer *buffer);
 const char *buffer_tree_sitter_language_name(const Buffer *buffer);
 const char *buffer_tree_sitter_root_kind(const Buffer *buffer);
 NativeTreeSitterHighlightSpan *buffer_tree_sitter_highlights(

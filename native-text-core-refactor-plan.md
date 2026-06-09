@@ -139,6 +139,7 @@ Observed architecture:
 
 - Edits compute Tree-sitter byte/point ranges as part of the native transaction.
 - `ts_tree_edit` is called before reparsing.
+- Reparse work is not performed synchronously in the keystroke edit path: Fred schedules Tree-sitter parse work through its background task system, tracks `Parsing` / `ParsingNeedsReparse` state, and reparses from piece-tree snapshots.
 - Rendering/highlighting queries captures over visible byte ranges.
 - Text can be streamed from the piece tree into Tree-sitter without flattening the whole Buffer.
 
@@ -433,8 +434,8 @@ Implement after the text core and transaction engine are stable:
 
 - Parser/tree/query state per Buffer.
 - Language selection from filename/content.
-- `ts_tree_edit` for transaction edits. **Initial C-language integration implemented; single-edit transactions use `ts_tree_edit`, multi-edit/snap paths conservatively reparse.**
-- Reparse once after batch edit. **Implemented initially.**
+- `ts_tree_edit` for transaction edits. **Initial C-language integration implemented; single-edit transactions update the old tree with `ts_tree_edit`; multi-edit/snap paths mark the tree as needing a full reparse.**
+- Reparse once after batch edit. **Replaced by dirty/deferred reparsing so the edit path does not synchronously parse large files; the sandbox currently reparses after a short idle debounce, with true background parsing still a future Fred-parity improvement.**
 - Query visible byte range for syntax captures. **Implemented initially.**
 - Native APIs for render/highlight spans. **Implemented initially through `native_text`.**
 

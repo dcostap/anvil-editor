@@ -15,6 +15,8 @@ struct NativeTreeSitter {
   TSQuery *highlight_query;
   const TSLanguage *language;
   char *language_name;
+  bool dirty;
+  bool incremental_tree_valid;
 };
 
 typedef struct ParseInput {
@@ -125,6 +127,8 @@ static bool parse_buffer(NativeTreeSitter *state, Buffer *buffer, TSTree *old_tr
   if (!new_tree) return false;
   if (state->tree) ts_tree_delete(state->tree);
   state->tree = new_tree;
+  state->dirty = false;
+  state->incremental_tree_valid = true;
   return true;
 }
 
@@ -183,6 +187,7 @@ bool native_treesitter_set_language(NativeTreeSitter *state, Buffer *buffer, con
   state->language = language;
   free(state->language_name);
   state->language_name = name_copy;
+  state->incremental_tree_valid = false;
 
   return native_treesitter_reparse(state, buffer);
 }
@@ -197,9 +202,14 @@ const char *native_treesitter_root_kind(const NativeTreeSitter *state) {
   return ts_node_type(root);
 }
 
+bool native_treesitter_is_dirty(const NativeTreeSitter *state) {
+  return state ? state->dirty : false;
+}
+
 bool native_treesitter_reparse(NativeTreeSitter *state, Buffer *buffer) {
   if (!state || !buffer) return false;
-  return parse_buffer(state, buffer, NULL);
+  TSTree *old_tree = state->incremental_tree_valid ? state->tree : NULL;
+  return parse_buffer(state, buffer, old_tree);
 }
 
 static TSPoint point_from_batch(BatchEditPoint point) {
@@ -210,7 +220,8 @@ static TSPoint point_from_batch(BatchEditPoint point) {
 }
 
 bool native_treesitter_after_edit(NativeTreeSitter *state, Buffer *buffer, const BatchEditResult *result) {
-  if (!state || !buffer || !result || !result->applied) return false;
+  (void) buffer;
+  if (!state || !result || !result->applied) return false;
   if (!result->edit_descriptor_count) return true;
 
   if (state->tree && result->edit_descriptor_count == 1) {
@@ -224,14 +235,21 @@ bool native_treesitter_after_edit(NativeTreeSitter *state, Buffer *buffer, const
     edit.old_end_point = point_from_batch(desc->old_end_point);
     edit.new_end_point = point_from_batch(desc->new_end_point);
     ts_tree_edit(state->tree, &edit);
-    return parse_buffer(state, buffer, state->tree);
+    state->incremental_tree_valid = true;
+  } else {
+    state->incremental_tree_valid = false;
   }
 
-  return native_treesitter_reparse(state, buffer);
+  state->dirty = true;
+  return true;
 }
 
 bool native_treesitter_after_snap(NativeTreeSitter *state, Buffer *buffer) {
-  return native_treesitter_reparse(state, buffer);
+  (void) buffer;
+  if (!state) return false;
+  state->dirty = true;
+  state->incremental_tree_valid = false;
+  return true;
 }
 
 static bool append_highlight_span(

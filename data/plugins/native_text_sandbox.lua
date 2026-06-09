@@ -7,6 +7,8 @@ local style = require "core.style"
 local View = require "core.view"
 local native_text = require "native_text"
 
+local TREE_SITTER_REPARSE_DELAY = 0.25
+
 local NativeTextSandboxView = View:extend()
 
 local highlight_priority = {
@@ -50,6 +52,7 @@ function NativeTextSandboxView:new(text, filename)
     end
   end
   self.editor = self.buffer:new_editor()
+  self.tree_sitter_dirty_since = nil
   self.scrollable = true
   self.cursor = "ibeam"
 end
@@ -63,6 +66,39 @@ end
 
 function NativeTextSandboxView:supports_text_input()
   return true
+end
+
+function NativeTextSandboxView:note_tree_sitter_mutation()
+  if self.tree_sitter_enabled and self.buffer:tree_sitter_is_dirty() then
+    self.tree_sitter_dirty_since = system.get_time()
+    core.redraw = true
+  end
+end
+
+function NativeTextSandboxView:update_tree_sitter()
+  if not self.tree_sitter_enabled then return end
+  if not self.buffer:tree_sitter_is_dirty() then
+    self.tree_sitter_dirty_since = nil
+    return
+  end
+
+  local now = system.get_time()
+  self.tree_sitter_dirty_since = self.tree_sitter_dirty_since or now
+  if now - self.tree_sitter_dirty_since >= TREE_SITTER_REPARSE_DELAY then
+    if self.buffer:reparse_tree_sitter() then
+      core.log_quiet("Native text sandbox reparsed Tree-sitter buffer after idle debounce")
+      self.tree_sitter_dirty_since = nil
+    else
+      core.log_quiet("Native text sandbox Tree-sitter reparse failed; will retry after debounce")
+      self.tree_sitter_dirty_since = now
+    end
+  end
+  core.redraw = true
+end
+
+function NativeTextSandboxView:update()
+  NativeTextSandboxView.super.update(self)
+  self:update_tree_sitter()
 end
 
 function NativeTextSandboxView:get_line_height()
@@ -176,6 +212,7 @@ end
 function NativeTextSandboxView:on_text_input(text)
   if text and text ~= "" then
     self.editor:insert(text)
+    self:note_tree_sitter_mutation()
     self:scroll_to_cursor()
     core.redraw = true
   end
@@ -249,11 +286,12 @@ function NativeTextSandboxView:draw()
   self:draw_scrollbar()
 end
 
-local function with_active_native_view(fn)
+local function with_active_native_view(fn, affects_text)
   return function(view)
     view = view or core.active_view
     if view and view:is(NativeTextSandboxView) then
       fn(view)
+      if affects_text then view:note_tree_sitter_mutation() end
       view:scroll_to_cursor()
       core.redraw = true
     end
@@ -281,9 +319,9 @@ command.add(nil, {
 })
 
 command.add(NativeTextSandboxView, {
-  ["native-text-sandbox:newline"] = with_active_native_view(function(view) view.editor:newline() end),
-  ["native-text-sandbox:backspace"] = with_active_native_view(function(view) view.editor:backspace() end),
-  ["native-text-sandbox:delete"] = with_active_native_view(function(view) view.editor:delete() end),
+  ["native-text-sandbox:newline"] = with_active_native_view(function(view) view.editor:newline() end, true),
+  ["native-text-sandbox:backspace"] = with_active_native_view(function(view) view.editor:backspace() end, true),
+  ["native-text-sandbox:delete"] = with_active_native_view(function(view) view.editor:delete() end, true),
   ["native-text-sandbox:left"] = with_active_native_view(function(view) view.editor:left(false) end),
   ["native-text-sandbox:right"] = with_active_native_view(function(view) view.editor:right(false) end),
   ["native-text-sandbox:up"] = with_active_native_view(function(view) view.editor:line_up(false) end),
@@ -304,8 +342,8 @@ command.add(NativeTextSandboxView, {
   ["native-text-sandbox:end-of-buffer"] = with_active_native_view(function(view) view.editor:end_of_buffer(false) end),
   ["native-text-sandbox:select-start-of-buffer"] = with_active_native_view(function(view) view.editor:start_of_buffer(true) end),
   ["native-text-sandbox:select-end-of-buffer"] = with_active_native_view(function(view) view.editor:end_of_buffer(true) end),
-  ["native-text-sandbox:undo"] = with_active_native_view(function(view) view.editor:undo() end),
-  ["native-text-sandbox:redo"] = with_active_native_view(function(view) view.editor:redo() end),
+  ["native-text-sandbox:undo"] = with_active_native_view(function(view) view.editor:undo() end, true),
+  ["native-text-sandbox:redo"] = with_active_native_view(function(view) view.editor:redo() end, true),
   ["native-text-sandbox:save"] = with_active_native_view(function(view)
     if not view.buffer:save_file() then core.error("Failed to save native Buffer") end
   end),

@@ -70,6 +70,9 @@ static int test_single_edit_incrementally_reparses(void) {
   CHECK(result.applied);
   batch_edit_result_dispose(&result);
 
+  CHECK(buffer_tree_sitter_is_dirty(&buffer));
+  CHECK(buffer_reparse_tree_sitter(&buffer));
+  CHECK(!buffer_tree_sitter_is_dirty(&buffer));
   CHECK(strcmp(buffer_tree_sitter_root_kind(&buffer), "translation_unit") == 0);
   CHECK(has_highlight(&buffer, "keyword", "static"));
   CHECK(has_highlight(&buffer, "function", "main"));
@@ -101,6 +104,9 @@ static int test_multi_edit_falls_back_to_full_reparse(void) {
   CHECK(result.applied);
   batch_edit_result_dispose(&result);
 
+  CHECK(buffer_tree_sitter_is_dirty(&buffer));
+  CHECK(buffer_reparse_tree_sitter(&buffer));
+  CHECK(!buffer_tree_sitter_is_dirty(&buffer));
   CHECK(strcmp(buffer_tree_sitter_root_kind(&buffer), "translation_unit") == 0);
   CHECK(has_highlight(&buffer, "comment", "// hello"));
   CHECK(has_highlight(&buffer, "number", "2"));
