@@ -30,6 +30,7 @@ void buffer_dispose(Buffer *buffer);
 
 bool buffer_load_bytes(Buffer *buffer, const char *bytes, size_t len);
 bool buffer_load_file(Buffer *buffer, const char *path);
+bool buffer_save_file(Buffer *buffer, const char *path);
 bool buffer_set_path(Buffer *buffer, const char *path);
 const char *buffer_path(const Buffer *buffer);
 

@@ -296,6 +296,7 @@ Initial public operations:
 - `buffer_free()`
 - `buffer_load_bytes(...)`
 - `buffer_load_file(...)` **Implemented initially.**
+- `buffer_save_file(...)` **Implemented initially.**
 - `buffer_len()`
 - `buffer_line_count()`
 - `buffer_get_line(...)`

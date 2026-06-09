@@ -120,6 +120,41 @@ static int test_buffer_load_file_preserves_bytes_and_sets_path(void) {
   return 0;
 }
 
+static int test_buffer_save_file_preserves_bytes_sets_path_and_marks_clean(void) {
+  const char *path = "buffer_save_file_test.tmp";
+  const char expected[] = { 'a', 'X', '\0', 'b' };
+  Buffer buffer;
+  CHECK(buffer_init(&buffer, "a\0b", 3));
+  BufferManager manager;
+  buffer_manager_init(&manager, &buffer);
+  BatchEditItem item = { 0 };
+  item.start_offset = 1;
+  item.end_offset = 1;
+  item.text = "X";
+  item.text_len = 1;
+  BatchEditResult result = buffer_manager_apply_edits(&manager, &item, 1);
+  CHECK(result.applied);
+  batch_edit_result_dispose(&result);
+  CHECK(buffer_is_dirty(&buffer));
+
+  CHECK(buffer_save_file(&buffer, path));
+  CHECK(!buffer_is_dirty(&buffer));
+  CHECK(buffer_path(&buffer) != NULL);
+  CHECK(strcmp(buffer_path(&buffer), path) == 0);
+
+  FILE *file = fopen(path, "rb");
+  CHECK(file != NULL);
+  char actual[sizeof(expected)] = { 0 };
+  CHECK(fread(actual, 1, sizeof(actual), file) == sizeof(actual));
+  CHECK(fclose(file) == 0);
+  CHECK(memcmp(actual, expected, sizeof(expected)) == 0);
+
+  buffer_manager_dispose(&manager);
+  buffer_dispose(&buffer);
+  CHECK(remove(path) == 0);
+  return 0;
+}
+
 static int test_apply_single_batch_edit(void) {
   Buffer buffer;
   BufferManager manager;
@@ -370,6 +405,7 @@ int main(void) {
   rc |= test_buffer_detects_crlf_line_endings();
   rc |= test_buffer_path_is_owned_and_reset_on_load();
   rc |= test_buffer_load_file_preserves_bytes_and_sets_path();
+  rc |= test_buffer_save_file_preserves_bytes_sets_path_and_marks_clean();
   rc |= test_apply_single_batch_edit();
   rc |= test_apply_multiple_pre_edit_coordinate_edits();
   rc |= test_rejects_overlaps_atomically();

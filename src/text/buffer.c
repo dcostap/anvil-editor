@@ -116,6 +116,30 @@ bool buffer_load_file(Buffer *buffer, const char *path) {
   return buffer_set_path(buffer, path);
 }
 
+bool buffer_save_file(Buffer *buffer, const char *path) {
+  if (!buffer) return false;
+  const char *target_path = path ? path : buffer->path;
+  if (!target_path) return false;
+
+  size_t len = 0;
+  char *bytes = buffer_to_string(buffer, &len);
+  if (!bytes) return false;
+
+  FILE *file = fopen(target_path, "wb");
+  if (!file) {
+    free(bytes);
+    return false;
+  }
+  bool ok = len == 0 || fwrite(bytes, 1, len, file) == len;
+  if (fclose(file) != 0) ok = false;
+  free(bytes);
+  if (!ok) return false;
+
+  if (!buffer_set_path(buffer, target_path)) return false;
+  buffer_mark_clean(buffer);
+  return true;
+}
+
 bool buffer_set_path(Buffer *buffer, const char *path) {
   if (!buffer) return false;
   char *copy = buffer_strdup(path);
