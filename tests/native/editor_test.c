@@ -227,6 +227,28 @@ static int test_select_line(void) {
   return 0;
 }
 
+static int test_selection_to_string(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "alpha beta gamma"));
+  CHECK(editor_set_cursor(&f.editor, 10, 6));
+  size_t len = 0;
+  char *selection = editor_selection_to_string(&f.editor, &len);
+  CHECK(selection != NULL);
+  CHECK(len == 4);
+  CHECK(memcmp(selection, "beta", 4) == 0);
+  free(selection);
+
+  CHECK(editor_set_cursor(&f.editor, 5, 0));
+  CHECK(editor_add_cursor(&f.editor, 16, 11));
+  selection = editor_selection_to_string(&f.editor, &len);
+  CHECK(selection != NULL);
+  CHECK(len == 11);
+  CHECK(memcmp(selection, "alpha\ngamma", 11) == 0);
+  free(selection);
+  fixture_dispose(&f);
+  return 0;
+}
+
 static int test_left_right_selection_behavior(void) {
   EditorFixture f;
   CHECK(fixture_init(&f, "abcd"));
@@ -471,6 +493,7 @@ int main(void) {
   rc |= test_select_all_and_replace();
   rc |= test_select_word();
   rc |= test_select_line();
+  rc |= test_selection_to_string();
   rc |= test_left_right_selection_behavior();
   rc |= test_line_start_end_movement();
   rc |= test_end_of_line_stops_before_crlf();

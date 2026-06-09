@@ -45,6 +45,7 @@ bool editor_delete_line(Editor *editor);
 bool editor_select_all(Editor *editor);
 bool editor_select_word(Editor *editor);
 bool editor_select_line(Editor *editor);
+char *editor_selection_to_string(const Editor *editor, size_t *len_out);
 bool editor_left(Editor *editor, bool update_selection);
 bool editor_right(Editor *editor, bool update_selection);
 bool editor_word_left(Editor *editor, bool update_selection);

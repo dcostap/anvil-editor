@@ -37,6 +37,10 @@ static bool cursor_has_selection(const Cursor *cursor) {
   return cursor->selection != EDITOR_SELECTION_SENTINEL && cursor->selection != cursor->cursor;
 }
 
+static bool cursor_has_selection_or_anchor(const Cursor *cursor) {
+  return cursor->selection != EDITOR_SELECTION_SENTINEL;
+}
+
 static size_t cursor_start(const Cursor *cursor) {
   return cursor_has_selection(cursor) && cursor->selection < cursor->cursor
     ? cursor->selection
@@ -50,6 +54,15 @@ static size_t cursor_end(const Cursor *cursor) {
 }
 
 static Cursor *active_cursors(Editor *editor, size_t *count_out) {
+  if (editor->multi_cursor_count > 0) {
+    *count_out = editor->multi_cursor_count;
+    return editor->multi_cursors;
+  }
+  *count_out = 1;
+  return &editor->core_cursor;
+}
+
+static const Cursor *active_cursors_const(const Editor *editor, size_t *count_out) {
   if (editor->multi_cursor_count > 0) {
     *count_out = editor->multi_cursor_count;
     return editor->multi_cursors;
@@ -99,6 +112,30 @@ static bool ensure_multi_capacity(Editor *editor, size_t needed) {
   if (!cursors) return false;
   editor->multi_cursors = cursors;
   editor->multi_cursor_capacity = cap;
+  return true;
+}
+
+static bool append_bytes(char **data, size_t *len, size_t *cap, const char *bytes, size_t byte_count) {
+  if (!data || !len || !cap || (byte_count > 0 && !bytes)) return false;
+  if (byte_count > SIZE_MAX - *len - 1) return false;
+  size_t needed = *len + byte_count + 1;
+  if (needed > *cap) {
+    size_t new_cap = *cap ? *cap : 32;
+    while (new_cap < needed) {
+      if (new_cap > SIZE_MAX / 2) {
+        new_cap = needed;
+        break;
+      }
+      new_cap *= 2;
+    }
+    char *new_data = (char *) realloc(*data, new_cap);
+    if (!new_data) return false;
+    *data = new_data;
+    *cap = new_cap;
+  }
+  if (byte_count > 0) memcpy(*data + *len, bytes, byte_count);
+  *len += byte_count;
+  (*data)[*len] = '\0';
   return true;
 }
 
@@ -789,6 +826,47 @@ bool editor_select_line(Editor *editor) {
   editor_clear_multi_cursors(editor);
   editor->core_cursor = make_cursor(range.end, range.start);
   return true;
+}
+
+char *editor_selection_to_string(const Editor *editor, size_t *len_out) {
+  if (!editor) return NULL;
+  Buffer *buffer = editor_buffer(editor);
+  if (!buffer) return NULL;
+
+  char *out = NULL;
+  size_t len = 0;
+  size_t cap = 0;
+  if (!append_bytes(&out, &len, &cap, "", 0)) return NULL;
+
+  size_t count = 0;
+  const Cursor *cursors = active_cursors_const(editor, &count);
+  bool appended_selection = false;
+  for (size_t i = 0; i < count; ++i) {
+    if (!cursor_has_selection_or_anchor(&cursors[i])) continue;
+    size_t start = cursor_start(&cursors[i]);
+    size_t end = cursor_end(&cursors[i]);
+    size_t range_len = 0;
+    char *range = buffer_range_to_string(buffer, start, end, &range_len);
+    if (!range) {
+      free(out);
+      return NULL;
+    }
+    if (appended_selection && !append_bytes(&out, &len, &cap, "\n", 1)) {
+      free(range);
+      free(out);
+      return NULL;
+    }
+    if (!append_bytes(&out, &len, &cap, range, range_len)) {
+      free(range);
+      free(out);
+      return NULL;
+    }
+    appended_selection = true;
+    free(range);
+  }
+
+  if (len_out) *len_out = len;
+  return out;
 }
 
 bool editor_left(Editor *editor, bool update_selection) {

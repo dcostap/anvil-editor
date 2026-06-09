@@ -327,6 +327,7 @@ Implement:
 - Remove selections. **Implemented initially.**
 - Select word. **Implemented initially.**
 - Select line. **Implemented initially with CRLF-aware line ranges.**
+- Selection readback. **Implemented initially for single and multi-selection.**
 - Insert text at one or many cursors. **Implemented initially.**
 - Backspace/delete. **Implemented initially.**
 - Backspace word/delete word. **Implemented initially.**
