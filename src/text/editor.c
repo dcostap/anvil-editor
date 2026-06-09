@@ -834,7 +834,15 @@ static char *line_block_to_string(const Buffer *buffer, size_t first_line, size_
   return out;
 }
 
-static bool apply_single_replace(Editor *editor, size_t start, size_t end, const char *text, size_t text_len) {
+static bool apply_single_replace(
+  Editor *editor,
+  size_t start,
+  size_t end,
+  const char *text,
+  size_t text_len,
+  UndoRedoNode **undo_before_out,
+  UndoRedoNode **undo_after_out
+) {
   BatchEditItem item;
   memset(&item, 0, sizeof(item));
   item.start_offset = start;
@@ -847,6 +855,8 @@ static bool apply_single_replace(Editor *editor, size_t start, size_t end, const
     batch_edit_result_dispose(&result);
     return false;
   }
+  if (undo_before_out) *undo_before_out = result.undo_node_before;
+  if (undo_after_out) *undo_after_out = result.undo_node_after;
   batch_edit_result_dispose(&result);
   return true;
 }
@@ -964,14 +974,30 @@ static bool editor_move_line(Editor *editor, int direction) {
     free(next_text);
   }
 
+  Cursor *before_cursors = NULL;
+  size_t before_cursor_count = 0;
+  if (!capture_active_cursor_snapshot(editor, &before_cursors, &before_cursor_count)) {
+    free(selected_text);
+    free(new_text);
+    return false;
+  }
+
   free(selected_text);
-  bool ok = apply_single_replace(editor, replace_start, replace_end, new_text, new_len);
+  UndoRedoNode *undo_before = NULL;
+  UndoRedoNode *undo_after = NULL;
+  bool ok = apply_single_replace(editor, replace_start, replace_end, new_text, new_len, &undo_before, &undo_after);
   free(new_text);
-  if (!ok) return false;
+  if (!ok) {
+    free(before_cursors);
+    return false;
+  }
 
   size_t len = buffer_len(buffer);
   if (new_cursor > len) new_cursor = len;
   editor->core_cursor = make_cursor(new_cursor, EDITOR_SELECTION_SENTINEL);
+  bool stored = editor_store_undo_selection_transition(editor, undo_before, undo_after, before_cursors, before_cursor_count);
+  free(before_cursors);
+  if (!stored) return false;
   reset_last_insert(editor);
   return true;
 }

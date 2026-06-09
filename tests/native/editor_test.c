@@ -206,6 +206,19 @@ static int test_move_line_up(void) {
   return 0;
 }
 
+static int test_move_line_undo_restores_cursor_snapshot(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "aa\nbb\ncc"));
+  CHECK(editor_set_cursor(&f.editor, 4, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_move_line_up(&f.editor));
+  CHECK(expect_text(&f, "bb\naa\ncc") == 0);
+  CHECK(editor_undo(&f.editor));
+  CHECK(expect_text(&f, "aa\nbb\ncc") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 4, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
 static int test_move_line_down(void) {
   EditorFixture f;
   CHECK(fixture_init(&f, "aa\nbb\ncc"));
@@ -856,6 +869,7 @@ int main(void) {
   rc |= test_delete_line_removes_selected_line_span();
   rc |= test_multi_cursor_delete_line_merges_overlapping_line_ranges();
   rc |= test_move_line_up();
+  rc |= test_move_line_undo_restores_cursor_snapshot();
   rc |= test_move_line_down();
   rc |= test_move_selected_line_span_up();
   rc |= test_move_line_down_uses_crlf_and_clears_multi_cursors();
