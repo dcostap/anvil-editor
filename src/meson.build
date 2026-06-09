@@ -14,6 +14,7 @@ anvil_sources = [
     'api/tokenizer.c',
     'api/fuzzy.c',
     'api/native_text.c',
+    'thread_pool.c',
     'fuzzy.c',
     'text/piece_tree.c',
     'text/buffer.c',
@@ -205,6 +206,14 @@ piece_tree_test = executable('piece_tree_test',
 )
 test('piece_tree', piece_tree_test, env: anvil_test_env)
 
+thread_pool_test = executable('thread_pool_test',
+    ['../tests/native/thread_pool_test.c', 'thread_pool.c'],
+    include_directories: anvil_includes,
+    dependencies: [sdl_dep],
+    c_args: anvil_cargs,
+)
+test('thread_pool', thread_pool_test, env: anvil_test_env)
+
 buffer_manager_test = executable('buffer_manager_test',
     [
         '../tests/native/buffer_manager_test.c',
@@ -213,9 +222,10 @@ buffer_manager_test = executable('buffer_manager_test',
         'text/buffer_manager.c',
         'text/undo_graph.c',
         'text/treesitter.c',
+        'thread_pool.c',
     ],
     include_directories: anvil_includes,
-    dependencies: [tree_sitter_dep, tree_sitter_c_dep],
+    dependencies: [sdl_dep, tree_sitter_dep, tree_sitter_c_dep],
     c_args: anvil_cargs,
 )
 test('buffer_manager', buffer_manager_test, env: anvil_test_env)
@@ -228,9 +238,10 @@ treesitter_test = executable('treesitter_test',
         'text/buffer_manager.c',
         'text/undo_graph.c',
         'text/treesitter.c',
+        'thread_pool.c',
     ],
     include_directories: anvil_includes,
-    dependencies: [tree_sitter_dep, tree_sitter_c_dep],
+    dependencies: [sdl_dep, tree_sitter_dep, tree_sitter_c_dep],
     c_args: anvil_cargs,
 )
 test('treesitter', treesitter_test, env: anvil_test_env)
@@ -244,9 +255,10 @@ editor_test = executable('editor_test',
         'text/editor.c',
         'text/undo_graph.c',
         'text/treesitter.c',
+        'thread_pool.c',
     ],
     include_directories: anvil_includes,
-    dependencies: [tree_sitter_dep, tree_sitter_c_dep],
+    dependencies: [sdl_dep, tree_sitter_dep, tree_sitter_c_dep],
     c_args: anvil_cargs,
 )
 test('editor', editor_test, env: anvil_test_env)
@@ -259,9 +271,10 @@ undo_graph_test = executable('undo_graph_test',
         'text/buffer_manager.c',
         'text/undo_graph.c',
         'text/treesitter.c',
+        'thread_pool.c',
     ],
     include_directories: anvil_includes,
-    dependencies: [tree_sitter_dep, tree_sitter_c_dep],
+    dependencies: [sdl_dep, tree_sitter_dep, tree_sitter_c_dep],
     c_args: anvil_cargs,
 )
 test('undo_graph', undo_graph_test, env: anvil_test_env)

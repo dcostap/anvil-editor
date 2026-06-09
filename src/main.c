@@ -11,6 +11,7 @@
 #include "custom_events.h"
 #include "resize_diagnostics.h"
 #include "win32_single_instance.h"
+#include "thread_pool.h"
 
 #ifdef _WIN32
   #include <windows.h>
@@ -357,6 +358,11 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   }
   custom_events_initialized = true;
 
+  if (!anvil_thread_pool_startup(0)) {
+    fprintf(stderr, "Error initializing worker thread pool: %s\n", SDL_GetError());
+    return SDL_APP_FAILURE;
+  }
+
   if (!anvil_single_instance_start_server()) {
     /* Non-fatal: release native ownership so secondaries do not wait on a
      * pipe server that is unavailable. Existing Lua IPC remains fallback. */
@@ -635,6 +641,7 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
     SDL_free(app);
   }
   anvil_single_instance_stop();
+  anvil_thread_pool_shutdown();
   if (custom_events_initialized) {
     free_custom_events();
     custom_events_initialized = false;

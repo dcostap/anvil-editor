@@ -49,6 +49,7 @@ Fred's text editing architecture is a native C++ editor core centered on:
 - byte-offset cursors
 - native multi-cursor editing
 - incremental Tree-sitter integration
+- a native worker thread pool for expensive background tasks
 - cheap snapshots through retained tree roots
 - graph-shaped undo/redo
 
@@ -143,6 +144,25 @@ Observed architecture:
 - Rendering/highlighting queries captures over visible byte ranges.
 - Text can be streamed from the piece tree into Tree-sitter without flattening the whole Buffer.
 
+### Native worker thread pool
+
+Fred uses a process-wide native thread pool rather than doing expensive editor work in the UI path.
+
+Observed architecture:
+
+- A global/system Thread Pool is created at startup with workers based on CPU count.
+- Work is submitted as typed background tasks with opaque handles.
+- The UI/editor side polls `result_if_complete`-style APIs rather than blocking.
+- Handles can be cancelled; long-running work checks cancellation/stale state.
+- Tree-sitter parsing, file metadata, suggestions, line guides, recursive file work, and search use the same pool shape.
+- Worker results are duration-tracked and marshalled back to the main/editor side before mutating UI-owned state.
+
+Anvil-owned implementation status:
+
+- A first native `src/thread_pool.c/.h` system worker pool is implemented with SDL threads, mutexes, condition variables, task handles, cancellation flags, result polling, and shutdown joining.
+- It is intentionally generic and smaller than Fred's typed C++ overload set, but preserves the important handle/result/cancel/poll shape.
+- Native Tree-sitter can now schedule parses onto the worker pool and apply completed results on the main thread.
+
 ### Cheap snapshots and undo graph
 
 Fred has piece-tree snapshots plus an editor-level undo graph.
@@ -165,6 +185,7 @@ src/text/buffer_manager.c/.h   transaction coordinator for shared Buffer state
 src/text/editor.c/.h           per-view cursor/selection/editing state over a Buffer
 src/text/undo_graph.c/.h       graph-shaped undo/redo snapshots
 src/text/treesitter.*          later Tree-sitter integration
+src/thread_pool.c/.h           native worker thread pool for expensive background work
 src/api/native_text.c          initial Lua/API bridge for sandbox UI
 ```
 
@@ -435,7 +456,7 @@ Implement after the text core and transaction engine are stable:
 - Parser/tree/query state per Buffer.
 - Language selection from filename/content.
 - `ts_tree_edit` for transaction edits. **Initial C-language integration implemented; single-edit transactions update the old tree with `ts_tree_edit`; multi-edit/snap paths mark the tree as needing a full reparse.**
-- Reparse once after batch edit. **Replaced by dirty/deferred reparsing so the edit path does not synchronously parse large files; the sandbox currently reparses after a short idle debounce, with true background parsing still a future Fred-parity improvement.**
+- Reparse once after batch edit. **Replaced by dirty/deferred reparsing so the edit path does not synchronously parse large files; the sandbox now schedules Tree-sitter parsing onto the native worker pool after a short idle debounce and applies completed results on the main thread.**
 - Query visible byte range for syntax captures. **Implemented initially.**
 - Native APIs for render/highlight spans. **Implemented initially through `native_text`.**
 

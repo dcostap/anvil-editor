@@ -21,7 +21,10 @@ bool native_treesitter_set_language(NativeTreeSitter *state, Buffer *buffer, con
 const char *native_treesitter_language_name(const NativeTreeSitter *state);
 const char *native_treesitter_root_kind(const NativeTreeSitter *state);
 bool native_treesitter_is_dirty(const NativeTreeSitter *state);
+bool native_treesitter_parse_pending(const NativeTreeSitter *state);
 bool native_treesitter_reparse(NativeTreeSitter *state, Buffer *buffer);
+bool native_treesitter_schedule_reparse(NativeTreeSitter *state, Buffer *buffer);
+bool native_treesitter_poll_reparse(NativeTreeSitter *state);
 bool native_treesitter_after_edit(NativeTreeSitter *state, Buffer *buffer, const BatchEditResult *result);
 bool native_treesitter_after_snap(NativeTreeSitter *state, Buffer *buffer);
 

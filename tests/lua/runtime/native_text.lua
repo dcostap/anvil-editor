@@ -142,8 +142,14 @@ test.describe("native_text API bridge", function()
     test.ok(editor:set_cursor(0))
     test.ok(editor:insert("static "))
     test.ok(buffer:tree_sitter_is_dirty())
-    test.ok(buffer:reparse_tree_sitter())
+    test.ok(buffer:schedule_tree_sitter_reparse())
+    test.ok(buffer:tree_sitter_parse_pending())
+    for _ = 1, 500 do
+      if buffer:poll_tree_sitter_reparse() then break end
+      coroutine.yield(0.001)
+    end
     test.not_ok(buffer:tree_sitter_is_dirty())
+    test.not_ok(buffer:tree_sitter_parse_pending())
     test.ok(has_highlight("keyword", "static"))
   end)
 

@@ -1,6 +1,9 @@
 #include "text/buffer.h"
 #include "text/buffer_manager.h"
 #include "text/treesitter.h"
+#include "thread_pool.h"
+
+#include <SDL3/SDL.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -82,6 +85,46 @@ static int test_single_edit_incrementally_reparses(void) {
   return 0;
 }
 
+static int test_async_reparse_applies_completed_tree(void) {
+  Buffer buffer;
+  BufferManager manager;
+  const char *source = "int main(void) {\n  return 1;\n}\n";
+  CHECK(buffer_init(&buffer, source, strlen(source)));
+  buffer_manager_init(&manager, &buffer);
+  CHECK(buffer_enable_tree_sitter(&buffer, "c"));
+
+  BatchEditItem edit;
+  memset(&edit, 0, sizeof(edit));
+  edit.start_offset = 0;
+  edit.end_offset = 0;
+  edit.text = "static ";
+  edit.text_len = 7;
+  BatchEditResult result = buffer_manager_apply_edits(&manager, &edit, 1);
+  CHECK(result.applied);
+  batch_edit_result_dispose(&result);
+
+  CHECK(buffer_tree_sitter_is_dirty(&buffer));
+  CHECK(buffer_schedule_tree_sitter_reparse(&buffer));
+  CHECK(buffer_tree_sitter_parse_pending(&buffer));
+
+  int applied = 0;
+  for (int i = 0; i < 500; ++i) {
+    if (buffer_poll_tree_sitter_reparse(&buffer)) {
+      applied = 1;
+      break;
+    }
+    SDL_Delay(1);
+  }
+  CHECK(applied);
+  CHECK(!buffer_tree_sitter_is_dirty(&buffer));
+  CHECK(!buffer_tree_sitter_parse_pending(&buffer));
+  CHECK(has_highlight(&buffer, "keyword", "static"));
+
+  buffer_manager_dispose(&manager);
+  buffer_dispose(&buffer);
+  return 0;
+}
+
 static int test_multi_edit_falls_back_to_full_reparse(void) {
   Buffer buffer;
   BufferManager manager;
@@ -117,9 +160,23 @@ static int test_multi_edit_falls_back_to_full_reparse(void) {
 }
 
 int main(void) {
+  if (!SDL_Init(SDL_INIT_EVENTS)) {
+    fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
+    return 1;
+  }
+  if (!anvil_thread_pool_startup(2)) {
+    fprintf(stderr, "thread pool startup failed: %s\n", SDL_GetError());
+    SDL_Quit();
+    return 1;
+  }
+
   int rc = 0;
   rc |= test_parse_and_highlight_c_buffer();
   rc |= test_single_edit_incrementally_reparses();
+  rc |= test_async_reparse_applies_completed_tree();
   rc |= test_multi_edit_falls_back_to_full_reparse();
+
+  anvil_thread_pool_shutdown();
+  SDL_Quit();
   return rc;
 }

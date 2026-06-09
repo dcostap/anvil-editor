@@ -77,6 +77,13 @@ end
 
 function NativeTextSandboxView:update_tree_sitter()
   if not self.tree_sitter_enabled then return end
+  if self.buffer:poll_tree_sitter_reparse() then
+    core.log_quiet("Native text sandbox applied background Tree-sitter parse")
+    self.tree_sitter_dirty_since = nil
+    core.redraw = true
+    return
+  end
+
   if not self.buffer:tree_sitter_is_dirty() then
     self.tree_sitter_dirty_since = nil
     return
@@ -84,12 +91,13 @@ function NativeTextSandboxView:update_tree_sitter()
 
   local now = system.get_time()
   self.tree_sitter_dirty_since = self.tree_sitter_dirty_since or now
-  if now - self.tree_sitter_dirty_since >= TREE_SITTER_REPARSE_DELAY then
-    if self.buffer:reparse_tree_sitter() then
-      core.log_quiet("Native text sandbox reparsed Tree-sitter buffer after idle debounce")
-      self.tree_sitter_dirty_since = nil
+  if not self.buffer:tree_sitter_parse_pending()
+    and now - self.tree_sitter_dirty_since >= TREE_SITTER_REPARSE_DELAY
+  then
+    if self.buffer:schedule_tree_sitter_reparse() then
+      core.log_quiet("Native text sandbox scheduled background Tree-sitter parse after idle debounce")
     else
-      core.log_quiet("Native text sandbox Tree-sitter reparse failed; will retry after debounce")
+      core.log_quiet("Native text sandbox failed to schedule Tree-sitter parse; will retry after debounce")
       self.tree_sitter_dirty_since = now
     end
   end

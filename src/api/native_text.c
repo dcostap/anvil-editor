@@ -196,9 +196,27 @@ static int l_buffer_tree_sitter_is_dirty(lua_State *L) {
   return 1;
 }
 
+static int l_buffer_tree_sitter_parse_pending(lua_State *L) {
+  NativeTextBuffer *native = check_buffer(L, 1);
+  lua_pushboolean(L, buffer_tree_sitter_parse_pending(&native->buffer));
+  return 1;
+}
+
 static int l_buffer_reparse_tree_sitter(lua_State *L) {
   NativeTextBuffer *native = check_buffer(L, 1);
   lua_pushboolean(L, buffer_reparse_tree_sitter(&native->buffer));
+  return 1;
+}
+
+static int l_buffer_schedule_tree_sitter_reparse(lua_State *L) {
+  NativeTextBuffer *native = check_buffer(L, 1);
+  lua_pushboolean(L, buffer_schedule_tree_sitter_reparse(&native->buffer));
+  return 1;
+}
+
+static int l_buffer_poll_tree_sitter_reparse(lua_State *L) {
+  NativeTextBuffer *native = check_buffer(L, 1);
+  lua_pushboolean(L, buffer_poll_tree_sitter_reparse(&native->buffer));
   return 1;
 }
 
@@ -480,7 +498,10 @@ static const luaL_Reg buffer_methods[] = {
   { "set_line_ending_mode", l_buffer_set_line_ending_mode },
   { "enable_tree_sitter", l_buffer_enable_tree_sitter },
   { "tree_sitter_is_dirty", l_buffer_tree_sitter_is_dirty },
+  { "tree_sitter_parse_pending", l_buffer_tree_sitter_parse_pending },
   { "reparse_tree_sitter", l_buffer_reparse_tree_sitter },
+  { "schedule_tree_sitter_reparse", l_buffer_schedule_tree_sitter_reparse },
+  { "poll_tree_sitter_reparse", l_buffer_poll_tree_sitter_reparse },
   { "tree_sitter_language", l_buffer_tree_sitter_language },
   { "tree_sitter_root_kind", l_buffer_tree_sitter_root_kind },
   { "tree_sitter_highlights", l_buffer_tree_sitter_highlights },

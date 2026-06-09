@@ -369,8 +369,20 @@ bool buffer_reparse_tree_sitter(Buffer *buffer) {
   return buffer && buffer->treesitter ? native_treesitter_reparse(buffer->treesitter, buffer) : false;
 }
 
+bool buffer_schedule_tree_sitter_reparse(Buffer *buffer) {
+  return buffer && buffer->treesitter ? native_treesitter_schedule_reparse(buffer->treesitter, buffer) : false;
+}
+
+bool buffer_poll_tree_sitter_reparse(Buffer *buffer) {
+  return buffer && buffer->treesitter ? native_treesitter_poll_reparse(buffer->treesitter) : false;
+}
+
 bool buffer_tree_sitter_is_dirty(const Buffer *buffer) {
   return buffer && buffer->treesitter ? native_treesitter_is_dirty(buffer->treesitter) : false;
+}
+
+bool buffer_tree_sitter_parse_pending(const Buffer *buffer) {
+  return buffer && buffer->treesitter ? native_treesitter_parse_pending(buffer->treesitter) : false;
 }
 
 const char *buffer_tree_sitter_language_name(const Buffer *buffer) {

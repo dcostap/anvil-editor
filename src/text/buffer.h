@@ -80,7 +80,10 @@ bool buffer_redo_op_offset(Buffer *buffer, size_t *op_offset_out);
 bool buffer_enable_tree_sitter(Buffer *buffer, const char *language_name);
 void buffer_disable_tree_sitter(Buffer *buffer);
 bool buffer_reparse_tree_sitter(Buffer *buffer);
+bool buffer_schedule_tree_sitter_reparse(Buffer *buffer);
+bool buffer_poll_tree_sitter_reparse(Buffer *buffer);
 bool buffer_tree_sitter_is_dirty(const Buffer *buffer);
+bool buffer_tree_sitter_parse_pending(const Buffer *buffer);
 const char *buffer_tree_sitter_language_name(const Buffer *buffer);
 const char *buffer_tree_sitter_root_kind(const Buffer *buffer);
 NativeTreeSitterHighlightSpan *buffer_tree_sitter_highlights(

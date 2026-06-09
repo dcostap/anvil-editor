@@ -1,4 +1,5 @@
 #include "text/treesitter.h"
+#include "thread_pool.h"
 
 #include <tree_sitter/api.h>
 #include <tree_sitter/tree-sitter-c.h>
@@ -17,7 +18,22 @@ struct NativeTreeSitter {
   char *language_name;
   bool dirty;
   bool incremental_tree_valid;
+  uint64_t parse_generation;
+  AnvilTask *parse_task;
 };
+
+typedef struct AsyncParsePayload {
+  char *source;
+  size_t source_len;
+  TSTree *old_tree;
+  const TSLanguage *language;
+  uint64_t generation;
+} AsyncParsePayload;
+
+typedef struct AsyncParseResult {
+  TSTree *tree;
+  uint64_t generation;
+} AsyncParseResult;
 
 typedef struct ParseInput {
   Buffer *buffer;
@@ -82,6 +98,58 @@ static char *ts_strdup_len(const char *text, size_t len) {
 
 static char *ts_strdup(const char *text) {
   return text ? ts_strdup_len(text, strlen(text)) : NULL;
+}
+
+static void free_async_parse_payload(void *ptr) {
+  AsyncParsePayload *payload = (AsyncParsePayload *) ptr;
+  if (!payload) return;
+  free(payload->source);
+  if (payload->old_tree) ts_tree_delete(payload->old_tree);
+  free(payload);
+}
+
+static void free_async_parse_result(void *ptr) {
+  AsyncParseResult *result = (AsyncParseResult *) ptr;
+  if (!result) return;
+  if (result->tree) ts_tree_delete(result->tree);
+  free(result);
+}
+
+static void *async_parse_task(void *ptr, SDL_AtomicInt *cancelled) {
+  AsyncParsePayload *payload = (AsyncParsePayload *) ptr;
+  if (!payload || !payload->language || SDL_GetAtomicInt(cancelled)) return NULL;
+
+  TSParser *parser = ts_parser_new();
+  if (!parser) return NULL;
+  if (!ts_parser_set_language(parser, payload->language)) {
+    ts_parser_delete(parser);
+    return NULL;
+  }
+
+  TSTree *tree = NULL;
+  if (!SDL_GetAtomicInt(cancelled)) {
+    tree = ts_parser_parse_string(parser, payload->old_tree, payload->source, (uint32_t) payload->source_len);
+  }
+  ts_parser_delete(parser);
+  if (!tree || SDL_GetAtomicInt(cancelled)) {
+    if (tree) ts_tree_delete(tree);
+    return NULL;
+  }
+
+  AsyncParseResult *result = (AsyncParseResult *) calloc(1, sizeof(AsyncParseResult));
+  if (!result) {
+    ts_tree_delete(tree);
+    return NULL;
+  }
+  result->tree = tree;
+  result->generation = payload->generation;
+  return result;
+}
+
+static void cancel_parse_task(NativeTreeSitter *state) {
+  if (!state || !state->parse_task) return;
+  anvil_task_release(state->parse_task);
+  state->parse_task = NULL;
 }
 
 static const char *read_from_buffer(void *payload, uint32_t byte_index, TSPoint position, uint32_t *bytes_read) {
@@ -156,6 +224,7 @@ NativeTreeSitter *native_treesitter_new(Buffer *buffer, const char *language_nam
 
 void native_treesitter_free(NativeTreeSitter *state) {
   if (!state) return;
+  cancel_parse_task(state);
   if (state->highlight_query) ts_query_delete(state->highlight_query);
   if (state->tree) ts_tree_delete(state->tree);
   if (state->parser) ts_parser_delete(state->parser);
@@ -165,6 +234,7 @@ void native_treesitter_free(NativeTreeSitter *state) {
 
 bool native_treesitter_set_language(NativeTreeSitter *state, Buffer *buffer, const char *language_name) {
   if (!state || !buffer) return false;
+  cancel_parse_task(state);
   const TSLanguage *language = NULL;
   const char *query_source = NULL;
   if (!language_for_name(language_name, &language, &query_source)) return false;
@@ -188,6 +258,7 @@ bool native_treesitter_set_language(NativeTreeSitter *state, Buffer *buffer, con
   free(state->language_name);
   state->language_name = name_copy;
   state->incremental_tree_valid = false;
+  state->parse_generation++;
 
   return native_treesitter_reparse(state, buffer);
 }
@@ -206,10 +277,69 @@ bool native_treesitter_is_dirty(const NativeTreeSitter *state) {
   return state ? state->dirty : false;
 }
 
+bool native_treesitter_parse_pending(const NativeTreeSitter *state) {
+  return state && state->parse_task;
+}
+
 bool native_treesitter_reparse(NativeTreeSitter *state, Buffer *buffer) {
   if (!state || !buffer) return false;
+  cancel_parse_task(state);
   TSTree *old_tree = state->incremental_tree_valid ? state->tree : NULL;
   return parse_buffer(state, buffer, old_tree);
+}
+
+bool native_treesitter_schedule_reparse(NativeTreeSitter *state, Buffer *buffer) {
+  if (!state || !buffer || !state->language || state->parse_task) return state && state->parse_task;
+
+  size_t source_len = 0;
+  char *source = buffer_to_string(buffer, &source_len);
+  if (!source) return false;
+
+  AsyncParsePayload *payload = (AsyncParsePayload *) calloc(1, sizeof(AsyncParsePayload));
+  if (!payload) {
+    free(source);
+    return false;
+  }
+  payload->source = source;
+  payload->source_len = source_len;
+  payload->language = state->language;
+  payload->generation = state->parse_generation;
+  payload->old_tree = state->incremental_tree_valid && state->tree ? ts_tree_copy(state->tree) : NULL;
+
+  state->parse_task = anvil_thread_pool_submit(
+    anvil_system_thread_pool(),
+    "tree-sitter-parse",
+    async_parse_task,
+    payload,
+    free_async_parse_payload,
+    free_async_parse_result
+  );
+  if (!state->parse_task) {
+    free_async_parse_payload(payload);
+    return false;
+  }
+  return true;
+}
+
+bool native_treesitter_poll_reparse(NativeTreeSitter *state) {
+  if (!state || !state->parse_task) return false;
+  AnvilTaskResult task_result = anvil_task_result_if_complete(state->parse_task);
+  if (!task_result.complete) return false;
+  state->parse_task = NULL;
+
+  AsyncParseResult *result = (AsyncParseResult *) task_result.result;
+  if (!result || !result->tree || task_result.being_cancelled || result->generation != state->parse_generation) {
+    free_async_parse_result(result);
+    return false;
+  }
+
+  if (state->tree) ts_tree_delete(state->tree);
+  state->tree = result->tree;
+  result->tree = NULL;
+  state->dirty = false;
+  state->incremental_tree_valid = true;
+  free_async_parse_result(result);
+  return true;
 }
 
 static TSPoint point_from_batch(BatchEditPoint point) {
@@ -224,7 +354,9 @@ bool native_treesitter_after_edit(NativeTreeSitter *state, Buffer *buffer, const
   if (!state || !result || !result->applied) return false;
   if (!result->edit_descriptor_count) return true;
 
-  if (state->tree && result->edit_descriptor_count == 1) {
+  state->parse_generation++;
+
+  if (state->tree && state->incremental_tree_valid && result->edit_descriptor_count == 1) {
     const BatchEditDescriptor *desc = &result->edit_descriptors[0];
     TSInputEdit edit;
     memset(&edit, 0, sizeof(edit));
@@ -249,6 +381,7 @@ bool native_treesitter_after_snap(NativeTreeSitter *state, Buffer *buffer) {
   if (!state) return false;
   state->dirty = true;
   state->incremental_tree_valid = false;
+  state->parse_generation++;
   return true;
 }
 
