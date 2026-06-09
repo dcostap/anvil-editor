@@ -1,5 +1,6 @@
 #include "text/piece_tree.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -264,6 +265,56 @@ static uint32_t fuzz_next(uint32_t *state) {
   return x;
 }
 
+static int compare_line_metadata_to_flat(PieceTree *tree, const FlatString *flat) {
+  size_t line_count = 1;
+  for (size_t i = 0; i < flat->len; ++i) {
+    if (flat->data[i] == '\n') ++line_count;
+  }
+  CHECK(piece_tree_line_count(tree) == line_count);
+  CHECK(piece_tree_lf_count(tree) + 1 == line_count);
+
+  size_t *line_starts = (size_t *) malloc(sizeof(size_t) * line_count);
+  CHECK(line_starts != NULL);
+  size_t line = 0;
+  line_starts[line++] = 0;
+  for (size_t i = 0; i < flat->len; ++i) {
+    if (flat->data[i] == '\n') line_starts[line++] = i + 1;
+  }
+  CHECK(line == line_count);
+
+  for (size_t i = 0; i < line_count; ++i) {
+    size_t offset = SIZE_MAX;
+    CHECK(piece_tree_line_start(tree, i, &offset));
+    CHECK(offset == line_starts[i]);
+  }
+  size_t invalid_offset = 0;
+  CHECK(!piece_tree_line_start(tree, line_count, &invalid_offset));
+
+  for (size_t offset = 0; offset <= flat->len; ++offset) {
+    size_t expected_line = 0;
+    while (expected_line + 1 < line_count && line_starts[expected_line + 1] <= offset) {
+      ++expected_line;
+    }
+    size_t expected_col = offset - line_starts[expected_line];
+    PieceTreeLineCol lc;
+    CHECK(piece_tree_offset_to_line_col(tree, offset, &lc));
+    CHECK(lc.line == expected_line);
+    CHECK(lc.col == expected_col);
+
+    size_t line_end = expected_line + 1 < line_count
+      ? line_starts[expected_line + 1] - 1
+      : flat->len;
+    if (offset <= line_end) {
+      size_t roundtrip = SIZE_MAX;
+      CHECK(piece_tree_line_col_to_offset(tree, lc.line, lc.col, &roundtrip));
+      CHECK(roundtrip == offset);
+    }
+  }
+
+  free(line_starts);
+  return 0;
+}
+
 static int compare_tree_to_flat(PieceTree *tree, const FlatString *flat) {
   size_t len = 0;
   char *actual = piece_tree_to_string(tree, &len);
@@ -272,6 +323,7 @@ static int compare_tree_to_flat(PieceTree *tree, const FlatString *flat) {
   CHECK(memcmp(actual, flat->data, flat->len) == 0);
   free(actual);
   CHECK(piece_tree_check_invariants(tree));
+  CHECK(compare_line_metadata_to_flat(tree, flat) == 0);
   return 0;
 }
 

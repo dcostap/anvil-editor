@@ -260,9 +260,9 @@ Tests:
 - LF and CRLF byte-preservation cases.
 - UTF-8 byte-preservation cases.
 - Invalid UTF-8 byte-preservation cases.
-- Random edit fuzz tests against a flat-string oracle.
+- Random edit fuzz tests against a flat-string oracle. **Implemented initially.**
 - Snapshot restore tests.
-- Line lookup tests after many edits.
+- Line lookup tests after many edits. **Implemented in the random edit oracle.**
 - CRLF-aware line range tests. **Implemented initially.**
 
 Exit criteria:
