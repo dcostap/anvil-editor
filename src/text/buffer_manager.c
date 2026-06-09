@@ -33,6 +33,10 @@ void buffer_manager_init(BufferManager *manager, Buffer *buffer) {
   manager->buffer = buffer;
 }
 
+bool buffer_manager_update_undo(BufferManager *manager, size_t op_offset) {
+  return manager && manager->buffer && buffer_update_undo(manager->buffer, op_offset);
+}
+
 BatchEditResult buffer_manager_apply_edits(
   BufferManager *manager,
   const BatchEditItem *edits,

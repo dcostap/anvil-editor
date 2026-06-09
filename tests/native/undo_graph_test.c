@@ -128,11 +128,36 @@ static int test_mark_clean_tracks_current_graph_node(void) {
   return 0;
 }
 
+static int test_update_undo_replaces_current_snapshot(void) {
+  Buffer buffer;
+  BufferManager manager;
+  CHECK(buffer_init(&buffer, "a", 1));
+  buffer_manager_init(&manager, &buffer);
+
+  CHECK(apply_one(&manager, 1, 1, "b") == 0);
+  CHECK(expect_text(&buffer, "ab") == 0);
+  CHECK(piece_tree_insert(&buffer.tree, 2, "c", 1));
+  CHECK(buffer_manager_update_undo(&manager, 2));
+  CHECK(expect_text(&buffer, "abc") == 0);
+
+  size_t op_offset = 99;
+  CHECK(buffer_undo_op_offset(&buffer, &op_offset));
+  CHECK(expect_text(&buffer, "a") == 0);
+  CHECK(op_offset == 0);
+  CHECK(buffer_redo_op_offset(&buffer, &op_offset));
+  CHECK(expect_text(&buffer, "abc") == 0);
+  CHECK(op_offset == 2);
+
+  buffer_dispose(&buffer);
+  return 0;
+}
+
 int main(void) {
   int rc = 0;
   rc |= test_linear_undo_redo();
   rc |= test_multiple_undo_redo_steps();
   rc |= test_branching_redo_uses_latest_child();
   rc |= test_mark_clean_tracks_current_graph_node();
+  rc |= test_update_undo_replaces_current_snapshot();
   return rc;
 }

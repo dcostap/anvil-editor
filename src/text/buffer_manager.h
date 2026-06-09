@@ -28,6 +28,7 @@ typedef struct BatchEditResult {
 } BatchEditResult;
 
 void buffer_manager_init(BufferManager *manager, Buffer *buffer);
+bool buffer_manager_update_undo(BufferManager *manager, size_t op_offset);
 
 BatchEditResult buffer_manager_apply_edits(
   BufferManager *manager,

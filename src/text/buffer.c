@@ -133,6 +133,16 @@ bool buffer_is_dirty(const Buffer *buffer) {
   return !piece_tree_matches_snapshot(&buffer->tree, &buffer->clean_snapshot);
 }
 
+bool buffer_update_undo(Buffer *buffer, size_t op_offset) {
+  if (!buffer) return false;
+  if (!buffer->has_undo_graph) {
+    if (!undo_graph_init(&buffer->undo_graph, &buffer->tree, op_offset)) return false;
+    buffer->has_undo_graph = true;
+    return true;
+  }
+  return undo_graph_update_current_snapshot(&buffer->undo_graph, &buffer->tree, op_offset);
+}
+
 bool buffer_can_undo(const Buffer *buffer) {
   return buffer && buffer->has_undo_graph && undo_graph_can_undo(&buffer->undo_graph);
 }
