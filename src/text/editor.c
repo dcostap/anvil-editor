@@ -1561,6 +1561,54 @@ char *editor_selection_to_string(const Editor *editor, size_t *len_out) {
   return out;
 }
 
+char *editor_copy_selection(const Editor *editor, size_t *len_out) {
+  return editor_selection_to_string(editor, len_out);
+}
+
+char *editor_cut_selection(Editor *editor, size_t *len_out) {
+  if (!editor) return NULL;
+  editor_sort_and_merge_cursors(editor);
+
+  size_t copied_len = 0;
+  char *copied = editor_selection_to_string(editor, &copied_len);
+  if (!copied) return NULL;
+  if (len_out) *len_out = copied_len;
+  if (copied_len == 0) return copied;
+
+  size_t count = 0;
+  Cursor *cursors = active_cursors(editor, &count);
+  CursorEdit *edits = (CursorEdit *) calloc(count, sizeof(CursorEdit));
+  if (!edits) {
+    free(copied);
+    return NULL;
+  }
+
+  size_t edit_count = 0;
+  for (size_t i = 0; i < count; ++i) {
+    if (!cursor_has_selection(&cursors[i])) continue;
+    edits[edit_count].edit.start_offset = cursor_start(&cursors[i]);
+    edits[edit_count].edit.end_offset = cursor_end(&cursors[i]);
+    edits[edit_count].edit.text = NULL;
+    edits[edit_count].edit.text_len = 0;
+    edits[edit_count].edit.cursor_index = (unsigned int) i;
+    edits[edit_count].cursor_index = i;
+    ++edit_count;
+  }
+
+  bool ok = apply_cursor_edits(editor, edits, edit_count);
+  free(edits);
+  if (!ok) {
+    free(copied);
+    return NULL;
+  }
+  reset_last_insert(editor);
+  return copied;
+}
+
+bool editor_paste(Editor *editor, const char *text, size_t len) {
+  return editor_insert_buffer(editor, text, len);
+}
+
 bool editor_left(Editor *editor, bool update_selection) {
   if (!editor) return false;
   size_t count = 0;

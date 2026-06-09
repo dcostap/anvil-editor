@@ -330,7 +330,7 @@ Implement:
 - Remove selections. **Implemented initially.**
 - Select word. **Implemented initially.**
 - Select line. **Implemented initially with CRLF-aware line ranges.**
-- Selection readback. **Implemented initially for single and multi-selection.**
+- Selection readback and clipboard-shaped copy/cut/paste primitives. **Implemented initially for single and multi-selection.**
 - Insert text at one or many cursors. **Implemented initially.**
 - Open line above/below with Buffer line-ending mode and first-pass leading-indent preservation. **Implemented initially.**
 - Backspace/delete. **Implemented initially.**

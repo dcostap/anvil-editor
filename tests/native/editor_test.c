@@ -450,6 +450,52 @@ static int test_selection_to_string_uses_crlf_between_multi_selections(void) {
   return 0;
 }
 
+static int test_copy_cut_and_paste_selection(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "abcdef"));
+  CHECK(editor_set_cursor(&f.editor, 4, 1));
+
+  size_t len = 0;
+  char *copied = editor_copy_selection(&f.editor, &len);
+  CHECK(copied != NULL);
+  CHECK(len == 3);
+  CHECK(memcmp(copied, "bcd", 3) == 0);
+  free(copied);
+
+  char *cut = editor_cut_selection(&f.editor, &len);
+  CHECK(cut != NULL);
+  CHECK(len == 3);
+  CHECK(memcmp(cut, "bcd", 3) == 0);
+  free(cut);
+  CHECK(expect_text(&f, "aef") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 1, EDITOR_SELECTION_SENTINEL) == 0);
+
+  CHECK(editor_paste(&f.editor, "XYZ", 3));
+  CHECK(expect_text(&f, "aXYZef") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 4, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_cut_multi_selection_joins_copy_with_line_ending(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "aa\nbb\ncc"));
+  CHECK(editor_set_cursor(&f.editor, 2, 0));
+  CHECK(editor_add_cursor(&f.editor, 8, 6));
+
+  size_t len = 0;
+  char *cut = editor_cut_selection(&f.editor, &len);
+  CHECK(cut != NULL);
+  CHECK(len == 5);
+  CHECK(memcmp(cut, "aa\ncc", 5) == 0);
+  free(cut);
+  CHECK(expect_text(&f, "\nbb\n") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 0, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(expect_cursor(&f.editor, 1, 4, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
 static int test_left_right_selection_behavior(void) {
   EditorFixture f;
   CHECK(fixture_init(&f, "abcd"));
@@ -815,6 +861,8 @@ int main(void) {
   rc |= test_select_line();
   rc |= test_selection_to_string();
   rc |= test_selection_to_string_uses_crlf_between_multi_selections();
+  rc |= test_copy_cut_and_paste_selection();
+  rc |= test_cut_multi_selection_joins_copy_with_line_ending();
   rc |= test_left_right_selection_behavior();
   rc |= test_line_start_end_movement();
   rc |= test_end_of_line_stops_before_crlf();
