@@ -38,7 +38,7 @@ Key files inspected:
 - `D_\git_projects\fred\inc\undo-data.h`
 - `D_\git_projects\fred\src\basic-textedit.cpp`
 
-Do not paste decompiled Fred code into Anvil. Reimplement the architecture, behavior, and invariants cleanly in Anvil-owned C code, with tests as the executable specification.
+Fred's recovered/decompiled sources are the golden reference and source of truth for the new native core's vocabulary, architecture, and behavior. Refer back to them during development rather than inventing Anvil-specific substitutes. Do not paste decompiled Fred code into Anvil; reimplement the architecture, behavior, and invariants cleanly in Anvil-owned C code, with tests as the executable specification.
 
 ## What we learned from Fred
 

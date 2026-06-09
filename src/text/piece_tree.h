@@ -44,6 +44,7 @@ bool piece_tree_line_col_to_offset(const PieceTree *tree, size_t line, size_t co
 PieceTreeSnapshot piece_tree_snapshot_acquire(const PieceTree *tree);
 void piece_tree_snapshot_release(PieceTreeSnapshot *snapshot);
 bool piece_tree_restore_snapshot(PieceTree *tree, const PieceTreeSnapshot *snapshot);
+bool piece_tree_matches_snapshot(const PieceTree *tree, const PieceTreeSnapshot *snapshot);
 
 bool piece_tree_check_invariants(const PieceTree *tree);
 

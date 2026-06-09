@@ -420,6 +420,11 @@ bool piece_tree_restore_snapshot(PieceTree *tree, const PieceTreeSnapshot *snaps
   return true;
 }
 
+bool piece_tree_matches_snapshot(const PieceTree *tree, const PieceTreeSnapshot *snapshot) {
+  if (!tree || !snapshot) return false;
+  return tree->root == snapshot->root;
+}
+
 static bool check_node_invariants(const PieceTreeNode *node, size_t *len_out, size_t *lf_out) {
   if (!node) {
     *len_out = 0;

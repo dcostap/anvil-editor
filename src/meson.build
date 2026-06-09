@@ -15,6 +15,8 @@ anvil_sources = [
     'api/fuzzy.c',
     'fuzzy.c',
     'text/piece_tree.c',
+    'text/buffer.c',
+    'text/buffer_manager.c',
     'tokenizer/arena.c',
     'tokenizer/regex.c',
     'tokenizer/lutf8.c',
@@ -198,6 +200,18 @@ piece_tree_test = executable('piece_tree_test',
     c_args: anvil_cargs,
 )
 test('piece_tree', piece_tree_test, env: anvil_test_env)
+
+buffer_manager_test = executable('buffer_manager_test',
+    [
+        '../tests/native/buffer_manager_test.c',
+        'text/piece_tree.c',
+        'text/buffer.c',
+        'text/buffer_manager.c',
+    ],
+    include_directories: anvil_includes,
+    c_args: anvil_cargs,
+)
+test('buffer_manager', buffer_manager_test, env: anvil_test_env)
 
 # load and configure linenoise
 if get_option('repl_history')
