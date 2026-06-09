@@ -1387,14 +1387,22 @@ bool editor_delete_line(Editor *editor) {
   Buffer *buffer = editor_buffer(editor);
   if (!buffer) return false;
 
+  Cursor *before_cursors = NULL;
+  size_t before_cursor_count = 0;
+  if (!capture_active_cursor_snapshot(editor, &before_cursors, &before_cursor_count)) return false;
+
   size_t count = 0;
   Cursor *cursors = active_cursors(editor, &count);
   LineDeleteRange *ranges = (LineDeleteRange *) calloc(count, sizeof(LineDeleteRange));
-  if (!ranges) return false;
+  if (!ranges) {
+    free(before_cursors);
+    return false;
+  }
 
   size_t range_count = 0;
   for (size_t i = 0; i < count; ++i) {
     if (!cursor_line_range(editor, &cursors[i], &ranges[range_count])) {
+      free(before_cursors);
       free(ranges);
       return false;
     }
@@ -1413,6 +1421,7 @@ bool editor_delete_line(Editor *editor) {
 
   BatchEditItem *items = (BatchEditItem *) calloc(merged_count, sizeof(BatchEditItem));
   if (!items) {
+    free(before_cursors);
     free(ranges);
     return false;
   }
@@ -1421,6 +1430,7 @@ bool editor_delete_line(Editor *editor) {
     size_t start = 0;
     size_t end = 0;
     if (!line_delete_range_to_offsets(buffer, ranges[i], &start, &end)) {
+      free(before_cursors);
       free(items);
       free(ranges);
       return false;
@@ -1436,6 +1446,7 @@ bool editor_delete_line(Editor *editor) {
   free(items);
   free(ranges);
   if (!result.applied) {
+    free(before_cursors);
     batch_edit_result_dispose(&result);
     return false;
   }
@@ -1444,6 +1455,7 @@ bool editor_delete_line(Editor *editor) {
   if (result.cursor_mapping_count > 0) {
     mappings = (BatchCursorMapping *) malloc(sizeof(BatchCursorMapping) * result.cursor_mapping_count);
     if (!mappings) {
+      free(before_cursors);
       batch_edit_result_dispose(&result);
       return false;
     }
@@ -1455,16 +1467,22 @@ bool editor_delete_line(Editor *editor) {
   for (size_t i = 0; i < count; ++i) {
     if (mappings) map_cursor_through_sorted_mappings(&cursors[i], mappings, result.cursor_mapping_count);
     if (!move_cursor_to_current_line_start(editor, &cursors[i])) {
+      free(before_cursors);
       free(mappings);
       batch_edit_result_dispose(&result);
       return false;
     }
   }
 
+  UndoRedoNode *undo_before = result.undo_node_before;
+  UndoRedoNode *undo_after = result.undo_node_after;
   free(mappings);
   batch_edit_result_dispose(&result);
   editor_sort_and_merge_cursors(editor);
   sync_core_from_multi(editor);
+  bool stored = editor_store_undo_selection_transition(editor, undo_before, undo_after, before_cursors, before_cursor_count);
+  free(before_cursors);
+  if (!stored) return false;
   reset_last_insert(editor);
   return true;
 }
