@@ -108,6 +108,21 @@ bool buffer_line_start(const Buffer *buffer, size_t line, size_t *offset_out) {
   return piece_tree_line_start(&buffer->tree, line, offset_out);
 }
 
+bool buffer_line_range(const Buffer *buffer, size_t line, BufferLineRange *out) {
+  if (!buffer) return false;
+  return piece_tree_line_range(&buffer->tree, line, out);
+}
+
+bool buffer_line_range_crlf(const Buffer *buffer, size_t line, BufferLineRange *out) {
+  if (!buffer) return false;
+  return piece_tree_line_range_crlf(&buffer->tree, line, out);
+}
+
+bool buffer_line_range_with_newline(const Buffer *buffer, size_t line, BufferLineRange *out) {
+  if (!buffer) return false;
+  return piece_tree_line_range_with_newline(&buffer->tree, line, out);
+}
+
 bool buffer_offset_to_line_col(const Buffer *buffer, size_t offset, BufferLineCol *out) {
   if (!buffer) return false;
   return piece_tree_offset_to_line_col(&buffer->tree, offset, out);

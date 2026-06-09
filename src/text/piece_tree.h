@@ -26,6 +26,11 @@ typedef struct PieceTreeLineCol {
   size_t col;
 } PieceTreeLineCol;
 
+typedef struct PieceTreeLineRange {
+  size_t start;
+  size_t end;
+} PieceTreeLineRange;
+
 typedef struct PieceTreeWalker {
   const PieceTree *tree;
   size_t offset;
@@ -48,6 +53,9 @@ bool piece_tree_walker_next(PieceTreeWalker *walker, char *byte_out, size_t *off
 bool piece_tree_reverse_walker_init(PieceTreeWalker *walker, const PieceTree *tree, size_t offset);
 bool piece_tree_walker_prev(PieceTreeWalker *walker, char *byte_out, size_t *offset_out);
 bool piece_tree_line_start(const PieceTree *tree, size_t line, size_t *offset_out);
+bool piece_tree_line_range(const PieceTree *tree, size_t line, PieceTreeLineRange *out);
+bool piece_tree_line_range_crlf(const PieceTree *tree, size_t line, PieceTreeLineRange *out);
+bool piece_tree_line_range_with_newline(const PieceTree *tree, size_t line, PieceTreeLineRange *out);
 bool piece_tree_offset_to_line_col(const PieceTree *tree, size_t offset, PieceTreeLineCol *out);
 bool piece_tree_line_col_to_offset(const PieceTree *tree, size_t line, size_t col, size_t *offset_out);
 

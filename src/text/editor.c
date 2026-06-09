@@ -86,18 +86,9 @@ static void sync_core_from_multi(Editor *editor) {
 
 static bool line_end_no_lf(const Buffer *buffer, size_t line, size_t *offset_out) {
   if (!buffer || !offset_out) return false;
-  size_t line_count = buffer_line_count(buffer);
-  if (line >= line_count) return false;
-
-  size_t end = 0;
-  if (line + 1 < line_count) {
-    if (!buffer_line_start(buffer, line + 1, &end)) return false;
-    if (end > 0) --end;
-  } else {
-    end = buffer_len(buffer);
-  }
-
-  *offset_out = end;
+  BufferLineRange range;
+  if (!buffer_line_range_crlf(buffer, line, &range)) return false;
+  *offset_out = range.end;
   return true;
 }
 

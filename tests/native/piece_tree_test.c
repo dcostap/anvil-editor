@@ -117,6 +117,37 @@ static int test_crlf_and_bytes_are_preserved(void) {
   return 0;
 }
 
+static int test_line_ranges_and_crlf_line_end(void) {
+  PieceTree tree;
+  CHECK(piece_tree_init(&tree, "a\r\nb\nc\rx", 8));
+
+  PieceTreeLineRange range;
+  CHECK(piece_tree_line_range_with_newline(&tree, 0, &range));
+  CHECK(range.start == 0 && range.end == 3);
+  CHECK(piece_tree_line_range(&tree, 0, &range));
+  CHECK(range.start == 0 && range.end == 2);
+  CHECK(piece_tree_line_range_crlf(&tree, 0, &range));
+  CHECK(range.start == 0 && range.end == 1);
+
+  CHECK(piece_tree_line_range_with_newline(&tree, 1, &range));
+  CHECK(range.start == 3 && range.end == 5);
+  CHECK(piece_tree_line_range(&tree, 1, &range));
+  CHECK(range.start == 3 && range.end == 4);
+  CHECK(piece_tree_line_range_crlf(&tree, 1, &range));
+  CHECK(range.start == 3 && range.end == 4);
+
+  CHECK(piece_tree_line_range_with_newline(&tree, 2, &range));
+  CHECK(range.start == 5 && range.end == 8);
+  CHECK(piece_tree_line_range(&tree, 2, &range));
+  CHECK(range.start == 5 && range.end == 8);
+  CHECK(piece_tree_line_range_crlf(&tree, 2, &range));
+  CHECK(range.start == 5 && range.end == 8);
+  CHECK(!piece_tree_line_range(&tree, 3, &range));
+
+  piece_tree_dispose(&tree);
+  return 0;
+}
+
 static int test_snapshot_restore(void) {
   PieceTree tree;
   CHECK(piece_tree_init(&tree, "one\ntwo", 7));
@@ -279,6 +310,7 @@ int main(void) {
   rc |= test_line_lookup();
   rc |= test_trailing_newline_line();
   rc |= test_crlf_and_bytes_are_preserved();
+  rc |= test_line_ranges_and_crlf_line_end();
   rc |= test_snapshot_restore();
   rc |= test_byte_at_and_walkers();
   rc |= test_random_edits_against_flat_oracle();

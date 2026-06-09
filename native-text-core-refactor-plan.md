@@ -248,7 +248,7 @@ Implement first:
 Then add:
 
 - Forward and reverse walkers. **Implemented initially.**
-- CRLF-aware line start/end helpers.
+- CRLF-aware line start/end helpers. **Implemented initially through line range helpers.**
 - Better balancing/invariant diagnostics if needed.
 
 Tests:
@@ -261,6 +261,7 @@ Tests:
 - Random edit fuzz tests against a flat-string oracle.
 - Snapshot restore tests.
 - Line lookup tests after many edits.
+- CRLF-aware line range tests. **Implemented initially.**
 
 Exit criteria:
 

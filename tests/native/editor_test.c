@@ -191,6 +191,16 @@ static int test_line_start_end_movement(void) {
   return 0;
 }
 
+static int test_end_of_line_stops_before_crlf(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "ab\r\ncd"));
+  CHECK(editor_set_cursor(&f.editor, 0, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_end_of_line(&f.editor, false));
+  CHECK(expect_cursor(&f.editor, 0, 2, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
 static int test_word_left_right_movement(void) {
   EditorFixture f;
   CHECK(fixture_init(&f, "foo bar,baz\nqux"));
@@ -394,6 +404,7 @@ int main(void) {
   rc |= test_select_word();
   rc |= test_left_right_selection_behavior();
   rc |= test_line_start_end_movement();
+  rc |= test_end_of_line_stops_before_crlf();
   rc |= test_word_left_right_movement();
   rc |= test_word_delete_commands();
   rc |= test_word_delete_removes_selection();

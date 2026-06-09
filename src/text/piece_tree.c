@@ -402,6 +402,58 @@ bool piece_tree_line_start(const PieceTree *tree, size_t line, size_t *offset_ou
   return false;
 }
 
+bool piece_tree_line_range_with_newline(const PieceTree *tree, size_t line, PieceTreeLineRange *out) {
+  if (!tree || !out) return false;
+  size_t line_count = piece_tree_line_count(tree);
+  if (line >= line_count) return false;
+
+  size_t start = 0;
+  size_t end = 0;
+  if (!piece_tree_line_start(tree, line, &start)) return false;
+  if (line + 1 < line_count) {
+    if (!piece_tree_line_start(tree, line + 1, &end)) return false;
+  } else {
+    end = piece_tree_len(tree);
+  }
+
+  out->start = start;
+  out->end = end;
+  return true;
+}
+
+bool piece_tree_line_range(const PieceTree *tree, size_t line, PieceTreeLineRange *out) {
+  if (!tree || !out) return false;
+  PieceTreeLineRange range;
+  if (!piece_tree_line_range_with_newline(tree, line, &range)) return false;
+
+  char ch = 0;
+  if (range.end > range.start && piece_tree_byte_at(tree, range.end - 1, &ch) && ch == '\n') {
+    --range.end;
+  }
+
+  *out = range;
+  return true;
+}
+
+bool piece_tree_line_range_crlf(const PieceTree *tree, size_t line, PieceTreeLineRange *out) {
+  if (!tree || !out) return false;
+  PieceTreeLineRange range;
+  if (!piece_tree_line_range_with_newline(tree, line, &range)) return false;
+
+  char ch = 0;
+  bool had_lf = false;
+  if (range.end > range.start && piece_tree_byte_at(tree, range.end - 1, &ch) && ch == '\n') {
+    --range.end;
+    had_lf = true;
+  }
+  if (had_lf && range.end > range.start && piece_tree_byte_at(tree, range.end - 1, &ch) && ch == '\r') {
+    --range.end;
+  }
+
+  *out = range;
+  return true;
+}
+
 bool piece_tree_offset_to_line_col(const PieceTree *tree, size_t offset, PieceTreeLineCol *out) {
   if (!tree || !out) return false;
   size_t len = 0;

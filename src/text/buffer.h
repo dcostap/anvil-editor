@@ -17,6 +17,7 @@ typedef struct Buffer {
 } Buffer;
 
 typedef PieceTreeLineCol BufferLineCol;
+typedef PieceTreeLineRange BufferLineRange;
 
 bool buffer_init(Buffer *buffer, const char *bytes, size_t len);
 void buffer_dispose(Buffer *buffer);
@@ -30,6 +31,9 @@ char *buffer_to_string(const Buffer *buffer, size_t *len_out);
 char *buffer_get_line(const Buffer *buffer, size_t line, size_t *len_out);
 
 bool buffer_line_start(const Buffer *buffer, size_t line, size_t *offset_out);
+bool buffer_line_range(const Buffer *buffer, size_t line, BufferLineRange *out);
+bool buffer_line_range_crlf(const Buffer *buffer, size_t line, BufferLineRange *out);
+bool buffer_line_range_with_newline(const Buffer *buffer, size_t line, BufferLineRange *out);
 bool buffer_offset_to_line_col(const Buffer *buffer, size_t offset, BufferLineCol *out);
 bool buffer_line_col_to_offset(const Buffer *buffer, size_t line, size_t col, size_t *offset_out);
 
