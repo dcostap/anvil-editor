@@ -36,6 +36,7 @@ bool buffer_line_col_to_offset(const Buffer *buffer, size_t line, size_t col, si
 void buffer_mark_clean(Buffer *buffer);
 bool buffer_is_dirty(const Buffer *buffer);
 bool buffer_update_undo(Buffer *buffer, size_t op_offset);
+bool buffer_snap_to_undo_node(Buffer *buffer, UndoRedoNode *target, size_t *op_offset_out);
 bool buffer_can_undo(const Buffer *buffer);
 bool buffer_can_redo(const Buffer *buffer);
 bool buffer_undo(Buffer *buffer);

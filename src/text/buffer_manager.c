@@ -37,6 +37,10 @@ bool buffer_manager_update_undo(BufferManager *manager, size_t op_offset) {
   return manager && manager->buffer && buffer_update_undo(manager->buffer, op_offset);
 }
 
+bool buffer_manager_snap_to(BufferManager *manager, UndoRedoNode *target, size_t *op_offset_out) {
+  return manager && manager->buffer && buffer_snap_to_undo_node(manager->buffer, target, op_offset_out);
+}
+
 BatchEditResult buffer_manager_apply_edits(
   BufferManager *manager,
   const BatchEditItem *edits,

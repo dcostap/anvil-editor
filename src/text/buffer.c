@@ -143,6 +143,11 @@ bool buffer_update_undo(Buffer *buffer, size_t op_offset) {
   return undo_graph_update_current_snapshot(&buffer->undo_graph, &buffer->tree, op_offset);
 }
 
+bool buffer_snap_to_undo_node(Buffer *buffer, UndoRedoNode *target, size_t *op_offset_out) {
+  if (!buffer || !buffer->has_undo_graph) return false;
+  return undo_graph_snap_to(&buffer->undo_graph, &buffer->tree, target, op_offset_out);
+}
+
 bool buffer_can_undo(const Buffer *buffer) {
   return buffer && buffer->has_undo_graph && undo_graph_can_undo(&buffer->undo_graph);
 }

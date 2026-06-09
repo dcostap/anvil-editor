@@ -152,6 +152,31 @@ static int test_update_undo_replaces_current_snapshot(void) {
   return 0;
 }
 
+static int test_snap_to_arbitrary_undo_node(void) {
+  Buffer buffer;
+  BufferManager manager;
+  CHECK(buffer_init(&buffer, "a", 1));
+  buffer_manager_init(&manager, &buffer);
+
+  CHECK(apply_one(&manager, 1, 1, "b") == 0);
+  UndoRedoNode *ab = buffer.undo_graph.current;
+  CHECK(apply_one(&manager, 2, 2, "c") == 0);
+  CHECK(expect_text(&buffer, "abc") == 0);
+  CHECK(buffer_undo(&buffer));
+  CHECK(expect_text(&buffer, "ab") == 0);
+  CHECK(apply_one(&manager, 2, 2, "d") == 0);
+  CHECK(expect_text(&buffer, "abd") == 0);
+
+  size_t op_offset = 99;
+  CHECK(buffer_manager_snap_to(&manager, ab, &op_offset));
+  CHECK(expect_text(&buffer, "ab") == 0);
+  CHECK(op_offset == 1);
+  CHECK(buffer_can_redo(&buffer));
+
+  buffer_dispose(&buffer);
+  return 0;
+}
+
 int main(void) {
   int rc = 0;
   rc |= test_linear_undo_redo();
@@ -159,5 +184,6 @@ int main(void) {
   rc |= test_branching_redo_uses_latest_child();
   rc |= test_mark_clean_tracks_current_graph_node();
   rc |= test_update_undo_replaces_current_snapshot();
+  rc |= test_snap_to_arbitrary_undo_node();
   return rc;
 }
