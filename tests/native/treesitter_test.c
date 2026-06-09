@@ -1,6 +1,7 @@
 #include "text/buffer.h"
 #include "text/buffer_manager.h"
 #include "text/treesitter.h"
+#include "text/treesitter_registry.h"
 #include "thread_pool.h"
 
 #include <SDL3/SDL.h>
@@ -41,6 +42,10 @@ static int has_highlight(Buffer *buffer, const char *capture, const char *text) 
 }
 
 static int test_language_registry_detects_c_files(void) {
+  CHECK(native_treesitter_registry_language_count() >= 1);
+  CHECK(native_treesitter_registry_find("c") != NULL);
+  CHECK(native_treesitter_registry_find("c")->language_fn != NULL);
+  CHECK(native_treesitter_registry_find("c")->highlight_query_asset != NULL);
   CHECK(strcmp(native_treesitter_language_for_filename("foo.c"), "c") == 0);
   CHECK(strcmp(native_treesitter_language_for_filename("C:/tmp/foo.H"), "c") == 0);
   CHECK(native_treesitter_language_for_filename("foo.txt") == NULL);

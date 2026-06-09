@@ -1,36 +1,15 @@
 #include "text/treesitter.h"
+#include "text/treesitter_registry.h"
 #include "thread_pool.h"
 
 #include <SDL3/SDL.h>
 #include <tree_sitter/api.h>
-#include <tree_sitter/tree-sitter-c.h>
 
-#include <ctype.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-extern const TSLanguage *tree_sitter_c(void);
-
-typedef const TSLanguage *(*NativeTreeSitterLanguageFn)(void);
-
-typedef struct NativeTreeSitterCaptureStyle {
-  const char *capture;
-  const char *style;
-  int priority;
-} NativeTreeSitterCaptureStyle;
-
-typedef struct NativeTreeSitterLanguageDef {
-  const char *id;
-  NativeTreeSitterLanguageFn language_fn;
-  const char *highlight_query_asset;
-  const char *const *extensions;
-  size_t extension_count;
-  const NativeTreeSitterCaptureStyle *capture_styles;
-  size_t capture_style_count;
-} NativeTreeSitterLanguageDef;
 
 struct NativeTreeSitter {
   TSParser *parser;
@@ -85,33 +64,8 @@ typedef struct NativeTreeSitterQueryCacheEntry {
   size_t refcount;
 } NativeTreeSitterQueryCacheEntry;
 
-static const char *const c_extensions[] = { "c", "h" };
-
-static const NativeTreeSitterCaptureStyle c_capture_styles[] = {
-  { "keyword", "keyword", 100 },
-  { "string", "string", 90 },
-  { "comment", "comment", 90 },
-  { "number", "number", 80 },
-  { "type", "type", 75 },
-  { "function", "function", 70 },
-  { "property", "property", 65 },
-  { "label", "label", 60 },
-  { "variable", "variable", 10 },
-};
-
-static const NativeTreeSitterLanguageDef language_defs[] = {
-  {
-    "c",
-    tree_sitter_c,
-    "c/highlights.scm",
-    c_extensions,
-    sizeof(c_extensions) / sizeof(c_extensions[0]),
-    c_capture_styles,
-    sizeof(c_capture_styles) / sizeof(c_capture_styles[0]),
-  },
-};
-
-static NativeTreeSitterQueryCacheEntry query_cache[sizeof(language_defs) / sizeof(language_defs[0])];
+static NativeTreeSitterQueryCacheEntry *query_cache = NULL;
+static size_t query_cache_count = 0;
 static SDL_Mutex *query_cache_mutex = NULL;
 
 static bool trace_enabled(void) {
@@ -141,16 +95,6 @@ static char *ts_strdup_len(const char *text, size_t len) {
 
 static char *ts_strdup(const char *text) {
   return text ? ts_strdup_len(text, strlen(text)) : NULL;
-}
-
-static int ascii_casecmp(const char *a, const char *b) {
-  if (!a || !b) return a == b ? 0 : (a ? 1 : -1);
-  while (*a && *b) {
-    int ca = tolower((unsigned char) *a++);
-    int cb = tolower((unsigned char) *b++);
-    if (ca != cb) return ca - cb;
-  }
-  return (unsigned char) *a - (unsigned char) *b;
 }
 
 static char *path_join2(const char *a, const char *b) {
@@ -245,18 +189,20 @@ static char *load_query_asset(const char *asset, size_t *len_out) {
   return NULL;
 }
 
-static const NativeTreeSitterLanguageDef *language_def_for_name(const char *name) {
-  if (!name) return NULL;
-  for (size_t i = 0; i < sizeof(language_defs) / sizeof(language_defs[0]); ++i) {
-    if (strcmp(language_defs[i].id, name) == 0) return &language_defs[i];
-  }
-  return NULL;
-}
-
 static bool query_cache_lock(void) {
   if (!query_cache_mutex) {
     query_cache_mutex = SDL_CreateMutex();
     if (!query_cache_mutex) return false;
+  }
+  if (!query_cache) {
+    query_cache_count = native_treesitter_registry_language_count();
+    query_cache = (NativeTreeSitterQueryCacheEntry *) calloc(query_cache_count, sizeof(NativeTreeSitterQueryCacheEntry));
+    if (!query_cache) {
+      query_cache_count = 0;
+      SDL_DestroyMutex(query_cache_mutex);
+      query_cache_mutex = NULL;
+      return false;
+    }
   }
   SDL_LockMutex(query_cache_mutex);
   return true;
@@ -264,8 +210,8 @@ static bool query_cache_lock(void) {
 
 static NativeTreeSitterQueryCacheEntry *query_cache_entry_for_def(const NativeTreeSitterLanguageDef *def) {
   if (!def) return NULL;
-  size_t index = (size_t) (def - language_defs);
-  if (index >= sizeof(query_cache) / sizeof(query_cache[0])) return NULL;
+  size_t index = native_treesitter_registry_index_of(def);
+  if (index >= query_cache_count) return NULL;
   NativeTreeSitterQueryCacheEntry *entry = &query_cache[index];
   if (!entry->def) entry->def = def;
   return entry;
@@ -324,20 +270,23 @@ static void query_cache_release(const NativeTreeSitterLanguageDef *def) {
 void native_treesitter_shutdown_cache(void) {
   if (!query_cache_mutex) return;
   SDL_LockMutex(query_cache_mutex);
-  for (size_t i = 0; i < sizeof(query_cache) / sizeof(query_cache[0]); ++i) {
+  for (size_t i = 0; i < query_cache_count; ++i) {
     if (query_cache[i].query) ts_query_delete(query_cache[i].query);
     memset(&query_cache[i], 0, sizeof(query_cache[i]));
   }
+  free(query_cache);
+  query_cache = NULL;
+  query_cache_count = 0;
   SDL_UnlockMutex(query_cache_mutex);
   SDL_DestroyMutex(query_cache_mutex);
   query_cache_mutex = NULL;
 }
 
 size_t native_treesitter_cached_query_count(void) {
-  if (!query_cache_mutex) return 0;
+  if (!query_cache_mutex || !query_cache) return 0;
   size_t count = 0;
   SDL_LockMutex(query_cache_mutex);
-  for (size_t i = 0; i < sizeof(query_cache) / sizeof(query_cache[0]); ++i) {
+  for (size_t i = 0; i < query_cache_count; ++i) {
     if (query_cache[i].query) count++;
   }
   SDL_UnlockMutex(query_cache_mutex);
@@ -345,58 +294,7 @@ size_t native_treesitter_cached_query_count(void) {
 }
 
 const char *native_treesitter_language_for_filename(const char *filename) {
-  if (!filename) return NULL;
-  const char *last_sep = strrchr(filename, '/');
-  const char *last_backslash = strrchr(filename, '\\');
-  if (!last_sep || (last_backslash && last_backslash > last_sep)) last_sep = last_backslash;
-  const char *name = last_sep ? last_sep + 1 : filename;
-  const char *dot = strrchr(name, '.');
-  if (!dot || !dot[1]) return NULL;
-  const char *ext = dot + 1;
-
-  for (size_t i = 0; i < sizeof(language_defs) / sizeof(language_defs[0]); ++i) {
-    const NativeTreeSitterLanguageDef *def = &language_defs[i];
-    for (size_t j = 0; j < def->extension_count; ++j) {
-      if (ascii_casecmp(ext, def->extensions[j]) == 0) return def->id;
-    }
-  }
-  return NULL;
-}
-
-static void capture_style_for_name(
-  const NativeTreeSitterLanguageDef *def,
-  const char *capture,
-  size_t capture_len,
-  const char **style_out,
-  int *priority_out
-) {
-  if (style_out) *style_out = NULL;
-  if (priority_out) *priority_out = 0;
-  if (!def || !capture) return;
-
-  for (size_t i = 0; i < def->capture_style_count; ++i) {
-    const NativeTreeSitterCaptureStyle *style = &def->capture_styles[i];
-    if (strlen(style->capture) == capture_len && memcmp(style->capture, capture, capture_len) == 0) {
-      if (style_out) *style_out = style->style;
-      if (priority_out) *priority_out = style->priority;
-      return;
-    }
-  }
-
-  const char *dot = memchr(capture, '.', capture_len);
-  if (dot) {
-    size_t base_len = (size_t) (dot - capture);
-    for (size_t i = 0; i < def->capture_style_count; ++i) {
-      const NativeTreeSitterCaptureStyle *style = &def->capture_styles[i];
-      if (strlen(style->capture) == base_len && memcmp(style->capture, capture, base_len) == 0) {
-        if (style_out) *style_out = style->style;
-        if (priority_out) *priority_out = style->priority;
-        return;
-      }
-    }
-  }
-
-  if (style_out) *style_out = "normal";
+  return native_treesitter_registry_language_for_filename(filename);
 }
 
 static void free_async_parse_payload(void *ptr) {
@@ -573,7 +471,7 @@ void native_treesitter_free(NativeTreeSitter *state) {
 bool native_treesitter_set_language(NativeTreeSitter *state, Buffer *buffer, const char *language_name) {
   if (!state || !buffer) return false;
   cancel_parse_task(state);
-  const NativeTreeSitterLanguageDef *def = language_def_for_name(language_name);
+  const NativeTreeSitterLanguageDef *def = native_treesitter_registry_find(language_name);
   if (!def) return false;
   const TSLanguage *language = def->language_fn ? def->language_fn() : NULL;
   if (!language) return false;
@@ -912,7 +810,7 @@ NativeTreeSitterHighlightSpan *native_treesitter_highlights(
       if (end > end_offset) end = end_offset;
       const char *style_name = NULL;
       int priority = 0;
-      capture_style_for_name(state->language_def, capture_name, capture_name_len, &style_name, &priority);
+      native_treesitter_registry_capture_style(state->language_def, capture_name, capture_name_len, &style_name, &priority);
       if (!append_raw_highlight_span(&raw, &raw_count, &raw_capacity, start, end, capture_name, capture_name_len, style_name, priority)) {
         raw_highlights_free(raw, raw_count);
         ts_query_cursor_delete(cursor);

@@ -185,6 +185,7 @@ src/text/buffer_manager.c/.h   transaction coordinator for shared Buffer state
 src/text/editor.c/.h           per-view cursor/selection/editing state over a Buffer
 src/text/undo_graph.c/.h       graph-shaped undo/redo snapshots
 src/text/treesitter.*          later Tree-sitter integration
+src/text/treesitter_registry.* native Tree-sitter language/query/capture registry
 src/thread_pool.c/.h           native worker thread pool for expensive background work
 src/api/native_text.c          initial Lua/API bridge for sandbox UI
 ```
@@ -454,7 +455,7 @@ src/text/treesitter.h
 Implement after the text core and transaction engine are stable:
 
 - Parser/tree/query state per Buffer.
-- Language selection from filename/content. **Initial native language registry implemented for C/.h so language detection is no longer sandbox hardcoding.**
+- Language selection from filename/content. **Native language registry implemented in `src/text/treesitter_registry.c/.h` for C/.h so language detection, parser lookup, query asset metadata, and capture style mapping are isolated from parse/task logic.**
 - Query asset loading. **Initial bundled query asset loading implemented from `data/treesitter/queries/<language>/highlights.scm`, with C query text moved out of source. Compiled queries are cached per native language definition and shared across Buffers until Tree-sitter cache shutdown.**
 - Capture/style mapping and overlap resolution. **Initial native capture priority/style mapping and deterministic non-overlapping highlight span normalization implemented.**
 - `ts_tree_edit` for transaction edits. **Initial C-language integration implemented; single-edit transactions update the old tree with `ts_tree_edit`; multi-edit/snap paths mark the tree as needing a full reparse.**
@@ -466,7 +467,7 @@ Implement after the text core and transaction engine are stable:
 Fred-parity infrastructure status:
 
 - Snapshot-backed async parsing from retained piece-tree roots and stable copied piece storage is implemented, so worker parses no longer flatten the Buffer into one contiguous string before submission. This is an Anvil-owned first pass toward Fred's retained-storage snapshots; future work can make storage retention cheaper by sharing immutable backing buffers instead of copying the original/add arenas.
-- Initial query cache policy is implemented: one compiled `TSQuery` per registered language, refcounted by active Buffer Tree-sitter states and freed by `native_treesitter_shutdown_cache()` during app shutdown/tests. Future work can split the language registry into its own module when more languages are added.
+- Initial query cache policy is implemented: one compiled `TSQuery` per registered language, refcounted by active Buffer Tree-sitter states and freed by `native_treesitter_shutdown_cache()` during app shutdown/tests.
 - Still missing: language injections and embedded-language query handling.
 
 Exit criteria:
