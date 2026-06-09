@@ -45,8 +45,7 @@ struct NativeTreeSitter {
 };
 
 typedef struct AsyncParsePayload {
-  char *source;
-  size_t source_len;
+  PieceTreeTextSnapshot snapshot;
   TSTree *old_tree;
   const TSLanguage *language;
   uint64_t generation;
@@ -64,10 +63,11 @@ typedef struct ParseInput {
   size_t scratch_len;
 } ParseInput;
 
-typedef struct StringParseInput {
-  const char *source;
-  size_t source_len;
-} StringParseInput;
+typedef struct SnapshotParseInput {
+  const PieceTreeTextSnapshot *snapshot;
+  char *scratch;
+  size_t scratch_len;
+} SnapshotParseInput;
 
 typedef struct RawHighlightSpan {
   size_t start_offset;
@@ -283,7 +283,7 @@ static void capture_style_for_name(
 static void free_async_parse_payload(void *ptr) {
   AsyncParsePayload *payload = (AsyncParsePayload *) ptr;
   if (!payload) return;
-  free(payload->source);
+  piece_tree_text_snapshot_release(&payload->snapshot);
   if (payload->old_tree) ts_tree_delete(payload->old_tree);
   free(payload);
 }
@@ -295,17 +295,30 @@ static void free_async_parse_result(void *ptr) {
   free(result);
 }
 
-static const char *read_from_string(void *payload, uint32_t byte_index, TSPoint position, uint32_t *bytes_read) {
+static const char *read_from_snapshot(void *payload, uint32_t byte_index, TSPoint position, uint32_t *bytes_read) {
   (void) position;
-  StringParseInput *input = (StringParseInput *) payload;
-  if (!input || !bytes_read || (size_t) byte_index >= input->source_len) {
-    if (bytes_read) *bytes_read = 0;
+  SnapshotParseInput *input = (SnapshotParseInput *) payload;
+  if (!input || !input->snapshot || !bytes_read) return NULL;
+
+  free(input->scratch);
+  input->scratch = NULL;
+  input->scratch_len = 0;
+
+  size_t len = piece_tree_text_snapshot_len(input->snapshot);
+  if ((size_t) byte_index >= len) {
+    *bytes_read = 0;
     return "";
   }
-  size_t remaining = input->source_len - (size_t) byte_index;
-  if (remaining > 4096) remaining = 4096;
-  *bytes_read = (uint32_t) remaining;
-  return input->source + byte_index;
+
+  size_t end = (size_t) byte_index + 4096;
+  if (end > len) end = len;
+  input->scratch = piece_tree_text_snapshot_range_to_string(input->snapshot, byte_index, end, &input->scratch_len);
+  if (!input->scratch) {
+    *bytes_read = 0;
+    return "";
+  }
+  *bytes_read = (uint32_t) input->scratch_len;
+  return input->scratch;
 }
 
 static bool parse_cancelled(TSParseState *state) {
@@ -325,14 +338,14 @@ static void *async_parse_task(void *ptr, SDL_AtomicInt *cancelled) {
     return NULL;
   }
 
-  StringParseInput string_input;
-  string_input.source = payload->source;
-  string_input.source_len = payload->source_len;
+  SnapshotParseInput snapshot_input;
+  memset(&snapshot_input, 0, sizeof(snapshot_input));
+  snapshot_input.snapshot = &payload->snapshot;
 
   TSInput input;
   memset(&input, 0, sizeof(input));
-  input.payload = &string_input;
-  input.read = read_from_string;
+  input.payload = &snapshot_input;
+  input.read = read_from_snapshot;
   input.encoding = TSInputEncodingUTF8;
 
   TSParseOptions options;
@@ -344,6 +357,7 @@ static void *async_parse_task(void *ptr, SDL_AtomicInt *cancelled) {
   if (!SDL_GetAtomicInt(cancelled)) {
     tree = ts_parser_parse_with_options(parser, payload->old_tree, input, options);
   }
+  free(snapshot_input.scratch);
   ts_parser_delete(parser);
 
   AsyncParseResult *result = (AsyncParseResult *) calloc(1, sizeof(AsyncParseResult));
@@ -502,17 +516,12 @@ bool native_treesitter_reparse(NativeTreeSitter *state, Buffer *buffer) {
 bool native_treesitter_schedule_reparse(NativeTreeSitter *state, Buffer *buffer) {
   if (!state || !buffer || !state->language || state->parse_task) return state && state->parse_task;
 
-  size_t source_len = 0;
-  char *source = buffer_to_string(buffer, &source_len);
-  if (!source) return false;
-
   AsyncParsePayload *payload = (AsyncParsePayload *) calloc(1, sizeof(AsyncParsePayload));
-  if (!payload) {
-    free(source);
+  if (!payload) return false;
+  if (!piece_tree_text_snapshot_acquire(&buffer->tree, &payload->snapshot)) {
+    free(payload);
     return false;
   }
-  payload->source = source;
-  payload->source_len = source_len;
   payload->language = state->language;
   payload->generation = state->parse_generation;
   payload->old_tree = state->incremental_tree_valid && state->tree ? ts_tree_copy(state->tree) : NULL;

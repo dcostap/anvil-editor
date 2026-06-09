@@ -462,11 +462,11 @@ Implement after the text core and transaction engine are stable:
 - Query visible byte range for syntax captures. **Implemented initially.**
 - Native APIs for render/highlight spans. **Implemented initially through `native_text`; spans now include capture, style, and priority.**
 
-Still missing for Fred-parity infrastructure:
+Fred-parity infrastructure status:
 
-- Snapshot-backed async parsing from retained piece-tree storage/walkers instead of flattening a Buffer string before worker submission.
-- A scalable parser/query cache policy for many Buffers and future languages.
-- Language injections and embedded-language query handling.
+- Snapshot-backed async parsing from retained piece-tree roots and stable copied piece storage is implemented, so worker parses no longer flatten the Buffer into one contiguous string before submission. This is an Anvil-owned first pass toward Fred's retained-storage snapshots; future work can make storage retention cheaper by sharing immutable backing buffers instead of copying the original/add arenas.
+- Still missing: a scalable parser/query cache policy for many Buffers and future languages.
+- Still missing: language injections and embedded-language query handling.
 
 Exit criteria:
 

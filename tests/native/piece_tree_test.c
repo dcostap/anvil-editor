@@ -173,6 +173,31 @@ static int test_snapshot_restore(void) {
   return 0;
 }
 
+static int test_text_snapshot_stays_stable_after_edits(void) {
+  PieceTree tree;
+  CHECK(piece_tree_init(&tree, "alpha\nbeta\n", 11));
+  CHECK(piece_tree_insert(&tree, 6, "old ", 4));
+
+  PieceTreeTextSnapshot snapshot;
+  CHECK(piece_tree_text_snapshot_acquire(&tree, &snapshot));
+  CHECK(piece_tree_text_snapshot_len(&snapshot) == 15);
+
+  CHECK(piece_tree_remove(&tree, 0, piece_tree_len(&tree)));
+  CHECK(piece_tree_insert(&tree, 0, "new text", 8));
+  CHECK(expect_text(&tree, "new text") == 0);
+
+  size_t len = 0;
+  char *snapshot_text = piece_tree_text_snapshot_range_to_string(&snapshot, 0, piece_tree_text_snapshot_len(&snapshot), &len);
+  CHECK(snapshot_text != NULL);
+  CHECK(len == 15);
+  CHECK(memcmp(snapshot_text, "alpha\nold beta\n", 15) == 0);
+  free(snapshot_text);
+
+  piece_tree_text_snapshot_release(&snapshot);
+  piece_tree_dispose(&tree);
+  return 0;
+}
+
 static int test_byte_at_and_walkers(void) {
   PieceTree tree;
   CHECK(piece_tree_init(&tree, "abcd", 4));
@@ -372,6 +397,7 @@ int main(void) {
   rc |= test_crlf_and_bytes_are_preserved();
   rc |= test_line_ranges_and_crlf_line_end();
   rc |= test_snapshot_restore();
+  rc |= test_text_snapshot_stays_stable_after_edits();
   rc |= test_byte_at_and_walkers();
   rc |= test_random_edits_against_flat_oracle();
   return rc;

@@ -21,6 +21,14 @@ typedef struct PieceTreeSnapshot {
   PieceTreeNode *root;
 } PieceTreeSnapshot;
 
+typedef struct PieceTreeTextSnapshot {
+  PieceTreeNode *root;
+  char *original;
+  size_t original_len;
+  char *add;
+  size_t add_len;
+} PieceTreeTextSnapshot;
+
 typedef struct PieceTreeLineCol {
   size_t line;
   size_t col;
@@ -67,6 +75,23 @@ PieceTreeSnapshot piece_tree_snapshot_acquire(const PieceTree *tree);
 void piece_tree_snapshot_release(PieceTreeSnapshot *snapshot);
 bool piece_tree_restore_snapshot(PieceTree *tree, const PieceTreeSnapshot *snapshot);
 bool piece_tree_matches_snapshot(const PieceTree *tree, const PieceTreeSnapshot *snapshot);
+
+bool piece_tree_text_snapshot_acquire(const PieceTree *tree, PieceTreeTextSnapshot *snapshot);
+void piece_tree_text_snapshot_release(PieceTreeTextSnapshot *snapshot);
+size_t piece_tree_text_snapshot_len(const PieceTreeTextSnapshot *snapshot);
+bool piece_tree_text_snapshot_walk_range(
+  const PieceTreeTextSnapshot *snapshot,
+  size_t start_offset,
+  size_t end_offset,
+  PieceTreeRangeCallback callback,
+  void *user
+);
+char *piece_tree_text_snapshot_range_to_string(
+  const PieceTreeTextSnapshot *snapshot,
+  size_t start_offset,
+  size_t end_offset,
+  size_t *len_out
+);
 
 bool piece_tree_check_invariants(const PieceTree *tree);
 

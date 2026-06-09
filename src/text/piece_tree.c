@@ -1,5 +1,6 @@
 #include "text/piece_tree.h"
 
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -11,7 +12,7 @@ typedef enum PieceSource {
 } PieceSource;
 
 struct PieceTreeNode {
-  uint32_t refcount;
+  atomic_uint refcount;
   uint32_t priority;
   struct PieceTreeNode *left;
   struct PieceTreeNode *right;
@@ -39,10 +40,22 @@ static size_t count_lf(const char *text, size_t len) {
   return count;
 }
 
-static const char *piece_bytes(const PieceTree *tree, const PieceTreeNode *node) {
+static const char *piece_bytes_from_storage(
+  const char *original,
+  const char *add,
+  const PieceTreeNode *node
+) {
   return node->source == PIECE_SOURCE_ORIGINAL
-    ? tree->original + node->start
-    : tree->add + node->start;
+    ? original + node->start
+    : add + node->start;
+}
+
+static const char *piece_bytes(const PieceTree *tree, const PieceTreeNode *node) {
+  return piece_bytes_from_storage(tree->original, tree->add, node);
+}
+
+static const char *snapshot_piece_bytes(const PieceTreeTextSnapshot *snapshot, const PieceTreeNode *node) {
+  return piece_bytes_from_storage(snapshot->original, snapshot->add, node);
 }
 
 static void node_refresh(PieceTreeNode *node) {
@@ -62,13 +75,13 @@ static uint32_t next_priority(PieceTree *tree) {
 }
 
 static PieceTreeNode *node_ref(PieceTreeNode *node) {
-  if (node) ++node->refcount;
+  if (node) atomic_fetch_add_explicit(&node->refcount, 1, memory_order_relaxed);
   return node;
 }
 
 static void node_unref(PieceTreeNode *node) {
   if (!node) return;
-  if (--node->refcount != 0) return;
+  if (atomic_fetch_sub_explicit(&node->refcount, 1, memory_order_acq_rel) != 1) return;
   node_unref(node->left);
   node_unref(node->right);
   free(node);
@@ -84,7 +97,7 @@ static PieceTreeNode *node_new_with_priority(
   if (len == 0) return NULL;
   PieceTreeNode *node = (PieceTreeNode *) calloc(1, sizeof(PieceTreeNode));
   if (!node) abort();
-  node->refcount = 1;
+  atomic_init(&node->refcount, 1);
   node->priority = priority;
   node->source = source;
   node->start = start;
@@ -115,8 +128,12 @@ static PieceTreeNode *node_clone_owned(
   }
   PieceTreeNode *copy = (PieceTreeNode *) calloc(1, sizeof(PieceTreeNode));
   if (!copy) abort();
-  *copy = *node;
-  copy->refcount = 1;
+  atomic_init(&copy->refcount, 1);
+  copy->priority = node->priority;
+  copy->source = node->source;
+  copy->start = node->start;
+  copy->len = node->len;
+  copy->piece_lf_count = node->piece_lf_count;
   copy->left = left;
   copy->right = right;
   node_refresh(copy);
@@ -302,16 +319,17 @@ static size_t count_lfs_before_offset(const PieceTree *tree, const PieceTreeNode
   return count;
 }
 
-static bool walk_node_range(
-  const PieceTree *tree,
+static bool walk_node_range_with_reader(
   const PieceTreeNode *node,
   size_t node_start,
   size_t start_offset,
   size_t end_offset,
   PieceTreeRangeCallback callback,
-  void *user
+  void *user,
+  const char *(*bytes_for_node)(void *reader_user, const PieceTreeNode *node),
+  void *reader_user
 ) {
-  if (!tree || !node || !callback || start_offset >= end_offset) return true;
+  if (!node || !callback || start_offset >= end_offset) return true;
 
   size_t left_len = node_len(node->left);
   size_t piece_start = node_start + left_len;
@@ -319,19 +337,37 @@ static bool walk_node_range(
   size_t node_end = node_start + node->subtree_len;
 
   if (start_offset < piece_start) {
-    if (!walk_node_range(tree, node->left, node_start, start_offset, end_offset, callback, user)) return false;
+    if (!walk_node_range_with_reader(node->left, node_start, start_offset, end_offset, callback, user, bytes_for_node, reader_user)) return false;
   }
 
   size_t chunk_start = start_offset > piece_start ? start_offset : piece_start;
   size_t chunk_end = end_offset < piece_end ? end_offset : piece_end;
   if (chunk_start < chunk_end) {
-    if (!callback(piece_bytes(tree, node) + (chunk_start - piece_start), chunk_end - chunk_start, chunk_start, user)) return false;
+    if (!callback(bytes_for_node(reader_user, node) + (chunk_start - piece_start), chunk_end - chunk_start, chunk_start, user)) return false;
   }
 
   if (end_offset > piece_end && piece_end < node_end) {
-    if (!walk_node_range(tree, node->right, piece_end, start_offset, end_offset, callback, user)) return false;
+    if (!walk_node_range_with_reader(node->right, piece_end, start_offset, end_offset, callback, user, bytes_for_node, reader_user)) return false;
   }
   return true;
+}
+
+typedef struct TreeReader {
+  const PieceTree *tree;
+} TreeReader;
+
+static const char *tree_reader_bytes_for_node(void *reader_user, const PieceTreeNode *node) {
+  TreeReader *reader = (TreeReader *) reader_user;
+  return piece_bytes(reader->tree, node);
+}
+
+typedef struct SnapshotReader {
+  const PieceTreeTextSnapshot *snapshot;
+} SnapshotReader;
+
+static const char *snapshot_reader_bytes_for_node(void *reader_user, const PieceTreeNode *node) {
+  SnapshotReader *reader = (SnapshotReader *) reader_user;
+  return snapshot_piece_bytes(reader->snapshot, node);
 }
 
 bool piece_tree_init(PieceTree *tree, const char *text, size_t len) {
@@ -460,7 +496,9 @@ bool piece_tree_walk_range(const PieceTree *tree, size_t start_offset, size_t en
   size_t tree_len = piece_tree_len(tree);
   if (start_offset > end_offset || end_offset > tree_len) return false;
   if (start_offset == end_offset) return true;
-  return walk_node_range(tree, tree->root, 0, start_offset, end_offset, callback, user);
+  TreeReader reader;
+  reader.tree = tree;
+  return walk_node_range_with_reader(tree->root, 0, start_offset, end_offset, callback, user, tree_reader_bytes_for_node, &reader);
 }
 
 bool piece_tree_byte_at(const PieceTree *tree, size_t offset, char *byte_out) {
@@ -635,6 +673,90 @@ bool piece_tree_matches_snapshot(const PieceTree *tree, const PieceTreeSnapshot 
   return tree->root == snapshot->root;
 }
 
+bool piece_tree_text_snapshot_acquire(const PieceTree *tree, PieceTreeTextSnapshot *snapshot) {
+  if (!tree || !snapshot) return false;
+  memset(snapshot, 0, sizeof(*snapshot));
+
+  if (tree->original_len > 0) {
+    snapshot->original = (char *) malloc(tree->original_len);
+    if (!snapshot->original) {
+      piece_tree_text_snapshot_release(snapshot);
+      return false;
+    }
+    memcpy(snapshot->original, tree->original, tree->original_len);
+    snapshot->original_len = tree->original_len;
+  }
+
+  if (tree->add_len > 0) {
+    snapshot->add = (char *) malloc(tree->add_len);
+    if (!snapshot->add) {
+      piece_tree_text_snapshot_release(snapshot);
+      return false;
+    }
+    memcpy(snapshot->add, tree->add, tree->add_len);
+    snapshot->add_len = tree->add_len;
+  }
+
+  snapshot->root = node_ref(tree->root);
+  return true;
+}
+
+void piece_tree_text_snapshot_release(PieceTreeTextSnapshot *snapshot) {
+  if (!snapshot) return;
+  node_unref(snapshot->root);
+  free(snapshot->original);
+  free(snapshot->add);
+  memset(snapshot, 0, sizeof(*snapshot));
+}
+
+size_t piece_tree_text_snapshot_len(const PieceTreeTextSnapshot *snapshot) {
+  return snapshot ? node_len(snapshot->root) : 0;
+}
+
+bool piece_tree_text_snapshot_walk_range(
+  const PieceTreeTextSnapshot *snapshot,
+  size_t start_offset,
+  size_t end_offset,
+  PieceTreeRangeCallback callback,
+  void *user
+) {
+  if (!snapshot || !callback) return false;
+  size_t snapshot_len = piece_tree_text_snapshot_len(snapshot);
+  if (start_offset > end_offset || end_offset > snapshot_len) return false;
+  if (start_offset == end_offset) return true;
+  SnapshotReader reader;
+  reader.snapshot = snapshot;
+  return walk_node_range_with_reader(snapshot->root, 0, start_offset, end_offset, callback, user, snapshot_reader_bytes_for_node, &reader);
+}
+
+char *piece_tree_text_snapshot_range_to_string(
+  const PieceTreeTextSnapshot *snapshot,
+  size_t start_offset,
+  size_t end_offset,
+  size_t *len_out
+) {
+  if (!snapshot) return NULL;
+  size_t snapshot_len = piece_tree_text_snapshot_len(snapshot);
+  if (start_offset > end_offset || end_offset > snapshot_len) return NULL;
+
+  size_t len = end_offset - start_offset;
+  char *text = (char *) malloc(len + 1);
+  if (!text) return NULL;
+
+  RangeStringBuilder builder;
+  builder.text = text;
+  builder.start_offset = start_offset;
+  builder.len = 0;
+  if (!piece_tree_text_snapshot_walk_range(snapshot, start_offset, end_offset, append_range_string_chunk, &builder)) {
+    free(text);
+    return NULL;
+  }
+
+  text[len] = '\0';
+  if (len_out) *len_out = len;
+  return text;
+}
+
 static bool check_node_invariants(const PieceTreeNode *node, size_t *len_out, size_t *lf_out) {
   if (!node) {
     *len_out = 0;
@@ -642,7 +764,7 @@ static bool check_node_invariants(const PieceTreeNode *node, size_t *len_out, si
     return true;
   }
 
-  if (node->refcount == 0 || node->len == 0) return false;
+  if (atomic_load_explicit(&node->refcount, memory_order_relaxed) == 0 || node->len == 0) return false;
   if (node->left && node->left->priority < node->priority) return false;
   if (node->right && node->right->priority < node->priority) return false;
 

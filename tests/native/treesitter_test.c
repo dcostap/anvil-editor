@@ -132,6 +132,62 @@ static int test_async_reparse_applies_completed_tree(void) {
   return 0;
 }
 
+static int test_async_reparse_discards_stale_snapshot_result(void) {
+  Buffer buffer;
+  BufferManager manager;
+  const char *source = "int main(void) {\n  return 1;\n}\n";
+  CHECK(buffer_init(&buffer, source, strlen(source)));
+  buffer_manager_init(&manager, &buffer);
+  CHECK(buffer_enable_tree_sitter(&buffer, "c"));
+
+  BatchEditItem edit;
+  memset(&edit, 0, sizeof(edit));
+  edit.start_offset = 0;
+  edit.end_offset = 0;
+  edit.text = "static ";
+  edit.text_len = 7;
+  BatchEditResult result = buffer_manager_apply_edits(&manager, &edit, 1);
+  CHECK(result.applied);
+  batch_edit_result_dispose(&result);
+
+  CHECK(buffer_schedule_tree_sitter_reparse(&buffer));
+  CHECK(buffer_tree_sitter_parse_pending(&buffer));
+
+  memset(&edit, 0, sizeof(edit));
+  edit.start_offset = 0;
+  edit.end_offset = 0;
+  edit.text = "volatile ";
+  edit.text_len = 9;
+  result = buffer_manager_apply_edits(&manager, &edit, 1);
+  CHECK(result.applied);
+  batch_edit_result_dispose(&result);
+
+  for (int i = 0; i < 500 && buffer_tree_sitter_parse_pending(&buffer); ++i) {
+    CHECK(!buffer_poll_tree_sitter_reparse(&buffer));
+    SDL_Delay(1);
+  }
+  CHECK(!buffer_tree_sitter_parse_pending(&buffer));
+  CHECK(buffer_tree_sitter_is_dirty(&buffer));
+
+  CHECK(buffer_schedule_tree_sitter_reparse(&buffer));
+  int applied = 0;
+  for (int i = 0; i < 500; ++i) {
+    if (buffer_poll_tree_sitter_reparse(&buffer)) {
+      applied = 1;
+      break;
+    }
+    SDL_Delay(1);
+  }
+  CHECK(applied);
+  CHECK(!buffer_tree_sitter_is_dirty(&buffer));
+  CHECK(has_highlight(&buffer, "keyword", "volatile"));
+  CHECK(has_highlight(&buffer, "keyword", "static"));
+
+  buffer_manager_dispose(&manager);
+  buffer_dispose(&buffer);
+  return 0;
+}
+
 static int test_multi_edit_falls_back_to_full_reparse(void) {
   Buffer buffer;
   BufferManager manager;
@@ -182,6 +238,7 @@ int main(void) {
   rc |= test_parse_and_highlight_c_buffer();
   rc |= test_single_edit_incrementally_reparses();
   rc |= test_async_reparse_applies_completed_tree();
+  rc |= test_async_reparse_discards_stale_snapshot_result();
   rc |= test_multi_edit_falls_back_to_full_reparse();
 
   anvil_thread_pool_shutdown();
