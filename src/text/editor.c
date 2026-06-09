@@ -144,6 +144,12 @@ static void sync_core_from_multi(Editor *editor) {
   if (editor->multi_cursor_count > 0) editor->core_cursor = editor->multi_cursors[0];
 }
 
+static void reset_last_insert(Editor *editor) {
+  if (!editor) return;
+  editor->last_insert = 0;
+  editor->has_last_insert = false;
+}
+
 static bool line_end_no_lf(const Buffer *buffer, size_t line, size_t *offset_out) {
   if (!buffer || !offset_out) return false;
   BufferLineRange range;
@@ -360,6 +366,7 @@ bool editor_init(Editor *editor, BufferManager *buffer_manager) {
   memset(editor, 0, sizeof(*editor));
   editor->buffer_manager = buffer_manager;
   editor->core_cursor = make_cursor(0, EDITOR_SELECTION_SENTINEL);
+  reset_last_insert(editor);
   if (!buffer_manager_register_listener(buffer_manager, editor, editor_on_buffer_edit, editor_on_buffer_snap)) {
     memset(editor, 0, sizeof(*editor));
     return false;
@@ -393,6 +400,7 @@ bool editor_set_cursor(Editor *editor, size_t cursor, size_t selection) {
   if (selection != EDITOR_SELECTION_SENTINEL && !valid_locus(editor, selection)) return false;
   editor_clear_multi_cursors(editor);
   editor->core_cursor = make_cursor(cursor, selection);
+  reset_last_insert(editor);
   return true;
 }
 
@@ -406,6 +414,7 @@ bool editor_add_cursor(Editor *editor, size_t cursor, size_t selection) {
     return false;
   }
   editor->multi_cursors[editor->multi_cursor_count++] = make_cursor(cursor, selection);
+  reset_last_insert(editor);
   editor_sort_and_merge_cursors(editor);
   return true;
 }
@@ -453,13 +462,21 @@ void editor_sort_and_merge_cursors(Editor *editor) {
   sync_core_from_multi(editor);
 }
 
-static bool apply_cursor_edits(Editor *editor, CursorEdit *cursor_edits, size_t count) {
+static bool apply_cursor_edits_with_undo_mode(
+  Editor *editor,
+  CursorEdit *cursor_edits,
+  size_t count,
+  bool update_current_undo,
+  size_t op_offset
+) {
   if (count == 0) return true;
   BatchEditItem *items = (BatchEditItem *) malloc(sizeof(BatchEditItem) * count);
   if (!items) return false;
   for (size_t i = 0; i < count; ++i) items[i] = cursor_edits[i].edit;
 
-  BatchEditResult result = buffer_manager_apply_edits_from(editor->buffer_manager, items, count, editor);
+  BatchEditResult result = update_current_undo
+    ? buffer_manager_apply_edits_update_undo_from(editor->buffer_manager, items, count, op_offset, editor)
+    : buffer_manager_apply_edits_from(editor->buffer_manager, items, count, editor);
   free(items);
   if (!result.applied) {
     batch_edit_result_dispose(&result);
@@ -486,6 +503,10 @@ static bool apply_cursor_edits(Editor *editor, CursorEdit *cursor_edits, size_t 
   return true;
 }
 
+static bool apply_cursor_edits(Editor *editor, CursorEdit *cursor_edits, size_t count) {
+  return apply_cursor_edits_with_undo_mode(editor, cursor_edits, count, false, 0);
+}
+
 bool editor_insert_buffer(Editor *editor, const char *text, size_t len) {
   if (!editor || (len > 0 && !text)) return false;
   editor_sort_and_merge_cursors(editor);
@@ -494,6 +515,13 @@ bool editor_insert_buffer(Editor *editor, const char *text, size_t len) {
   Cursor *cursors = active_cursors(editor, &count);
   CursorEdit *edits = (CursorEdit *) malloc(sizeof(CursorEdit) * count);
   if (!edits) return false;
+
+  bool simple_single_insert = count == 1 && len > 0 && !cursor_has_selection(&cursors[0]);
+  size_t insert_offset = simple_single_insert ? cursors[0].cursor : 0;
+  Buffer *buffer = editor_buffer(editor);
+  bool coalesce_insert = simple_single_insert && editor->has_last_insert && editor->last_insert == insert_offset &&
+    buffer && buffer->has_undo_graph && buffer->undo_graph.current;
+  size_t op_offset = coalesce_insert ? buffer->undo_graph.current->op_offset : 0;
 
   for (size_t i = 0; i < count; ++i) {
     edits[i].edit.start_offset = cursor_start(&cursors[i]);
@@ -504,9 +532,17 @@ bool editor_insert_buffer(Editor *editor, const char *text, size_t len) {
     edits[i].cursor_index = i;
   }
 
-  bool ok = apply_cursor_edits(editor, edits, count);
+  bool ok = apply_cursor_edits_with_undo_mode(editor, edits, count, coalesce_insert, op_offset);
   free(edits);
-  return ok;
+  if (!ok) return false;
+
+  if (simple_single_insert) {
+    editor->last_insert = insert_offset + len;
+    editor->has_last_insert = true;
+  } else {
+    reset_last_insert(editor);
+  }
+  return true;
 }
 
 bool editor_insert_char(Editor *editor, char ch) {
@@ -623,6 +659,7 @@ static bool editor_open_line(Editor *editor, bool below) {
 
   editor->core_cursor = make_cursor(cursor_offset, EDITOR_SELECTION_SENTINEL);
   clear_desired_column(&editor->core_cursor);
+  reset_last_insert(editor);
   return true;
 }
 
@@ -811,6 +848,7 @@ static bool editor_move_line(Editor *editor, int direction) {
   size_t len = buffer_len(buffer);
   if (new_cursor > len) new_cursor = len;
   editor->core_cursor = make_cursor(new_cursor, EDITOR_SELECTION_SENTINEL);
+  reset_last_insert(editor);
   return true;
 }
 
@@ -885,6 +923,7 @@ bool editor_join_line_below(Editor *editor) {
   batch_edit_result_dispose(&result);
 
   editor->core_cursor = make_cursor(current_end, EDITOR_SELECTION_SENTINEL);
+  reset_last_insert(editor);
   return true;
 }
 
@@ -915,6 +954,7 @@ bool editor_backspace(Editor *editor) {
 
   bool ok = edit_count == 0 ? true : apply_cursor_edits(editor, edits, edit_count);
   free(edits);
+  if (ok && edit_count > 0) reset_last_insert(editor);
   return ok;
 }
 
@@ -949,6 +989,7 @@ bool editor_del(Editor *editor) {
 
   bool ok = edit_count == 0 ? true : apply_cursor_edits(editor, edits, edit_count);
   free(edits);
+  if (ok && edit_count > 0) reset_last_insert(editor);
   return ok;
 }
 
@@ -1099,6 +1140,7 @@ bool editor_delete_line(Editor *editor) {
   batch_edit_result_dispose(&result);
   editor_sort_and_merge_cursors(editor);
   sync_core_from_multi(editor);
+  reset_last_insert(editor);
   return true;
 }
 
@@ -1146,6 +1188,7 @@ static bool editor_word_delete(Editor *editor, int direction) {
   free(bytes);
   bool ok = edit_count == 0 ? true : apply_cursor_edits(editor, edits, edit_count);
   free(edits);
+  if (ok && edit_count > 0) reset_last_insert(editor);
   return ok;
 }
 
@@ -1163,6 +1206,7 @@ bool editor_select_all(Editor *editor) {
   if (!buffer) return false;
   editor_clear_multi_cursors(editor);
   editor->core_cursor = make_cursor(buffer_len(buffer), 0);
+  reset_last_insert(editor);
   return true;
 }
 
@@ -1182,6 +1226,7 @@ bool editor_select_word(Editor *editor) {
   free(bytes);
 
   editor->core_cursor = make_cursor(end, start);
+  reset_last_insert(editor);
   return true;
 }
 
@@ -1197,6 +1242,7 @@ bool editor_select_line(Editor *editor) {
 
   editor_clear_multi_cursors(editor);
   editor->core_cursor = make_cursor(range.end, range.start);
+  reset_last_insert(editor);
   return true;
 }
 
@@ -1268,6 +1314,7 @@ bool editor_left(Editor *editor, bool update_selection) {
   }
   editor_sort_and_merge_cursors(editor);
   sync_core_from_multi(editor);
+  reset_last_insert(editor);
   return true;
 }
 
@@ -1297,6 +1344,7 @@ bool editor_right(Editor *editor, bool update_selection) {
   }
   editor_sort_and_merge_cursors(editor);
   sync_core_from_multi(editor);
+  reset_last_insert(editor);
   return true;
 }
 
@@ -1332,6 +1380,7 @@ static bool editor_word_move(Editor *editor, bool update_selection, int directio
   free(bytes);
   editor_sort_and_merge_cursors(editor);
   sync_core_from_multi(editor);
+  reset_last_insert(editor);
   return true;
 }
 
@@ -1362,6 +1411,7 @@ bool editor_beginning_of_line(Editor *editor, bool update_selection) {
 
   editor_sort_and_merge_cursors(editor);
   sync_core_from_multi(editor);
+  reset_last_insert(editor);
   return true;
 }
 
@@ -1384,6 +1434,7 @@ bool editor_end_of_line(Editor *editor, bool update_selection) {
 
   editor_sort_and_merge_cursors(editor);
   sync_core_from_multi(editor);
+  reset_last_insert(editor);
   return true;
 }
 
@@ -1426,6 +1477,7 @@ static bool editor_line_move(Editor *editor, bool update_selection, int directio
 
   editor_sort_and_merge_cursors(editor);
   sync_core_from_multi(editor);
+  reset_last_insert(editor);
   return true;
 }
 
@@ -1452,6 +1504,7 @@ static bool editor_restore_undo_redo(Editor *editor, bool redo) {
   size_t len = buffer_len(buffer);
   if (op_offset > len) op_offset = len;
   editor->core_cursor = make_cursor(op_offset, EDITOR_SELECTION_SENTINEL);
+  reset_last_insert(editor);
   return true;
 }
 

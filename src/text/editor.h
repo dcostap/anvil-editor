@@ -18,6 +18,8 @@ typedef struct Cursor {
 typedef struct Editor {
   BufferManager *buffer_manager;
   Cursor core_cursor;
+  size_t last_insert;
+  bool has_last_insert;
   Cursor *multi_cursors;
   size_t multi_cursor_count;
   size_t multi_cursor_capacity;

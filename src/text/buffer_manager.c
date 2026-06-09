@@ -212,19 +212,18 @@ bool buffer_manager_redo_from(BufferManager *manager, size_t *op_offset_out, voi
   return buffer_manager_snap_to_from(manager, graph->current->last_child, op_offset_out, source);
 }
 
-BatchEditResult buffer_manager_apply_edits(
-  BufferManager *manager,
-  const BatchEditItem *edits,
-  size_t edit_count
-) {
-  return buffer_manager_apply_edits_from(manager, edits, edit_count, NULL);
-}
+typedef enum ApplyUndoMode {
+  APPLY_UNDO_COMMIT,
+  APPLY_UNDO_UPDATE_CURRENT,
+} ApplyUndoMode;
 
-BatchEditResult buffer_manager_apply_edits_from(
+static BatchEditResult buffer_manager_apply_edits_internal(
   BufferManager *manager,
   const BatchEditItem *edits,
   size_t edit_count,
-  void *source
+  void *source,
+  ApplyUndoMode undo_mode,
+  size_t op_offset
 ) {
   BatchEditResult result;
   memset(&result, 0, sizeof(result));
@@ -365,13 +364,20 @@ BatchEditResult buffer_manager_apply_edits_from(
     return rejected_result(edit_count);
   }
 
-  if (changed && manager->buffer->has_undo_graph &&
-      !undo_graph_commit(&manager->buffer->undo_graph, &manager->buffer->tree, changed_start)) {
-    piece_tree_restore_snapshot(&manager->buffer->tree, &before);
-    piece_tree_snapshot_release(&before);
-    free(cursor_mappings);
-    free(sorted);
-    return rejected_result(edit_count);
+  if (changed && manager->buffer->has_undo_graph) {
+    bool undo_ok = false;
+    if (undo_mode == APPLY_UNDO_UPDATE_CURRENT) {
+      undo_ok = buffer_update_undo(manager->buffer, op_offset);
+    } else {
+      undo_ok = undo_graph_commit(&manager->buffer->undo_graph, &manager->buffer->tree, changed_start) != NULL;
+    }
+    if (!undo_ok) {
+      piece_tree_restore_snapshot(&manager->buffer->tree, &before);
+      piece_tree_snapshot_release(&before);
+      free(cursor_mappings);
+      free(sorted);
+      return rejected_result(edit_count);
+    }
   }
 
   if (changed) buffer_refresh_line_ending_mode(manager->buffer);
@@ -393,4 +399,31 @@ BatchEditResult buffer_manager_apply_edits_from(
   result.cursor_mapping_count = edit_count;
   notify_edit(manager, &result, source);
   return result;
+}
+
+BatchEditResult buffer_manager_apply_edits(
+  BufferManager *manager,
+  const BatchEditItem *edits,
+  size_t edit_count
+) {
+  return buffer_manager_apply_edits_from(manager, edits, edit_count, NULL);
+}
+
+BatchEditResult buffer_manager_apply_edits_from(
+  BufferManager *manager,
+  const BatchEditItem *edits,
+  size_t edit_count,
+  void *source
+) {
+  return buffer_manager_apply_edits_internal(manager, edits, edit_count, source, APPLY_UNDO_COMMIT, 0);
+}
+
+BatchEditResult buffer_manager_apply_edits_update_undo_from(
+  BufferManager *manager,
+  const BatchEditItem *edits,
+  size_t edit_count,
+  size_t op_offset,
+  void *source
+) {
+  return buffer_manager_apply_edits_internal(manager, edits, edit_count, source, APPLY_UNDO_UPDATE_CURRENT, op_offset);
 }

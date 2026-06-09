@@ -405,7 +405,7 @@ Implement:
 Policy decisions to settle before implementation:
 
 - Whether selection-only moves create undo graph nodes.
-- How typing merge windows update the current undo node.
+- How typing merge windows update the current undo node. **Initial contiguous single-cursor insert coalescing implemented.**
 - How undo graph UI should expose branches.
 - How snap-to should propagate diff edits through registered native Editor views; Fred updates registered editors from diff records in `BufferManager::snap_to`. **Initial registered Editor propagation implemented for edit and snap paths.**
 

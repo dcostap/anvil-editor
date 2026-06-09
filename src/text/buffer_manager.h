@@ -93,6 +93,13 @@ BatchEditResult buffer_manager_apply_edits_from(
   size_t edit_count,
   void *source
 );
+BatchEditResult buffer_manager_apply_edits_update_undo_from(
+  BufferManager *manager,
+  const BatchEditItem *edits,
+  size_t edit_count,
+  size_t op_offset,
+  void *source
+);
 void batch_edit_result_dispose(BatchEditResult *result);
 
 #endif
