@@ -40,6 +40,13 @@ static int has_highlight(Buffer *buffer, const char *capture, const char *text) 
   return found;
 }
 
+static int test_language_registry_detects_c_files(void) {
+  CHECK(strcmp(native_treesitter_language_for_filename("foo.c"), "c") == 0);
+  CHECK(strcmp(native_treesitter_language_for_filename("C:/tmp/foo.H"), "c") == 0);
+  CHECK(native_treesitter_language_for_filename("foo.txt") == NULL);
+  return 0;
+}
+
 static int test_parse_and_highlight_c_buffer(void) {
   Buffer buffer;
   const char *source = "int main(void) {\n  return 1;\n}\n";
@@ -171,6 +178,7 @@ int main(void) {
   }
 
   int rc = 0;
+  rc |= test_language_registry_detects_c_files();
   rc |= test_parse_and_highlight_c_buffer();
   rc |= test_single_edit_incrementally_reparses();
   rc |= test_async_reparse_applies_completed_tree();

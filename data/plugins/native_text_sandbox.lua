@@ -11,26 +11,6 @@ local TREE_SITTER_REPARSE_DELAY = 0.25
 
 local NativeTextSandboxView = View:extend()
 
-local highlight_priority = {
-  keyword = 100,
-  string = 90,
-  comment = 90,
-  number = 80,
-  type = 75,
-  ["function"] = 70,
-  property = 65,
-  label = 60,
-  variable = 10,
-}
-
-local function tree_sitter_language_for_filename(filename)
-  if not filename then return nil end
-  local ext = filename:match("%.([^%.\\/]*)$")
-  if ext then ext = ext:lower() end
-  if ext == "c" or ext == "h" then return "c" end
-  return nil
-end
-
 function NativeTextSandboxView:__tostring() return "NativeTextSandboxView" end
 
 NativeTextSandboxView.context = "workspace"
@@ -42,7 +22,7 @@ function NativeTextSandboxView:new(text, filename)
     local ok = self.buffer:load_file(filename)
     if not ok then core.error("Failed to open native Buffer: %s", filename) end
   end
-  local language = tree_sitter_language_for_filename(filename)
+  local language = filename and native_text.tree_sitter_language_for_filename(filename) or nil
   self.tree_sitter_enabled = language and self.buffer:enable_tree_sitter(language) or false
   if language then
     if self.tree_sitter_enabled then
@@ -156,12 +136,6 @@ function NativeTextSandboxView:draw_line_text(line_info, row_y, highlights)
       spans[#spans + 1] = span
     end
   end
-  table.sort(spans, function(a, b)
-    if a.start_offset ~= b.start_offset then return a.start_offset < b.start_offset end
-    if a.end_offset ~= b.end_offset then return a.end_offset > b.end_offset end
-    return (highlight_priority[a.capture] or 0) > (highlight_priority[b.capture] or 0)
-  end)
-
   local col = 0
   local function draw_segment(first_col, last_col, color)
     if last_col <= first_col then return end
@@ -175,7 +149,7 @@ function NativeTextSandboxView:draw_line_text(line_info, row_y, highlights)
     local end_col = math.min(#text, span.end_offset - line_start)
     if end_col > col then
       draw_segment(col, start_col, style.text)
-      local capture = span.capture and span.capture:match("^[^%.]+") or "normal"
+      local capture = span.style or (span.capture and span.capture:match("^[^%.]+")) or "normal"
       draw_segment(math.max(col, start_col), end_col, style.syntax[capture] or style.text)
       col = end_col
     end

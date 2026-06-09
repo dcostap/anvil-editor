@@ -120,6 +120,9 @@ test.describe("native_text API bridge", function()
 
   test.it("exposes native Tree-sitter parsing and highlights", function()
     local buffer = native_text.new_buffer("int main(void) {\n  return 1;\n}\n")
+    test.equal(native_text.tree_sitter_language_for_filename("foo.c"), "c")
+    test.equal(native_text.tree_sitter_language_for_filename("foo.txt"), nil)
+
     test.ok(buffer:enable_tree_sitter("c"))
     test.not_ok(buffer:tree_sitter_is_dirty())
     test.equal(buffer:tree_sitter_language(), "c")
@@ -127,7 +130,7 @@ test.describe("native_text API bridge", function()
 
     local function has_highlight(capture, text)
       for _, span in ipairs(buffer:tree_sitter_highlights()) do
-        if span.capture == capture and buffer:text():sub(span.start_offset + 1, span.end_offset) == text then
+        if span.capture == capture and span.style and span.priority and buffer:text():sub(span.start_offset + 1, span.end_offset) == text then
           return true
         end
       end

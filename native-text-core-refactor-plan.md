@@ -454,11 +454,19 @@ src/text/treesitter.h
 Implement after the text core and transaction engine are stable:
 
 - Parser/tree/query state per Buffer.
-- Language selection from filename/content.
+- Language selection from filename/content. **Initial native language registry implemented for C/.h so language detection is no longer sandbox hardcoding.**
+- Query asset loading. **Initial bundled query asset loading implemented from `data/treesitter/queries/<language>/highlights.scm`, with C query text moved out of source.**
+- Capture/style mapping and overlap resolution. **Initial native capture priority/style mapping and deterministic non-overlapping highlight span normalization implemented.**
 - `ts_tree_edit` for transaction edits. **Initial C-language integration implemented; single-edit transactions update the old tree with `ts_tree_edit`; multi-edit/snap paths mark the tree as needing a full reparse.**
-- Reparse once after batch edit. **Replaced by dirty/deferred reparsing so the edit path does not synchronously parse large files; the sandbox now schedules Tree-sitter parsing onto the native worker pool after a short idle debounce and applies completed results on the main thread.**
+- Reparse once after batch edit. **Replaced by dirty/deferred reparsing so the edit path does not synchronously parse large files; the sandbox now schedules Tree-sitter parsing onto the native worker pool after a short idle debounce and applies completed results on the main thread. Background parses use Tree-sitter parse progress callbacks for cancellation.**
 - Query visible byte range for syntax captures. **Implemented initially.**
-- Native APIs for render/highlight spans. **Implemented initially through `native_text`.**
+- Native APIs for render/highlight spans. **Implemented initially through `native_text`; spans now include capture, style, and priority.**
+
+Still missing for Fred-parity infrastructure:
+
+- Snapshot-backed async parsing from retained piece-tree storage/walkers instead of flattening a Buffer string before worker submission.
+- A scalable parser/query cache policy for many Buffers and future languages.
+- Language injections and embedded-language query handling.
 
 Exit criteria:
 

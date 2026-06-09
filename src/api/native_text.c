@@ -251,6 +251,10 @@ static int l_buffer_tree_sitter_highlights(lua_State *L) {
     lua_setfield(L, -2, "end_offset");
     lua_pushstring(L, spans[i].capture_name ? spans[i].capture_name : "normal");
     lua_setfield(L, -2, "capture");
+    lua_pushstring(L, spans[i].style_name ? spans[i].style_name : "normal");
+    lua_setfield(L, -2, "style");
+    lua_pushnumber(L, (lua_Number) spans[i].priority);
+    lua_setfield(L, -2, "priority");
     lua_rawseti(L, -2, (int) i + 1);
   }
   buffer_tree_sitter_highlights_free(spans, count);
@@ -468,6 +472,14 @@ static int l_editor_dup_cursor_down(lua_State *L) {
   return 1;
 }
 
+static int l_tree_sitter_language_for_filename(lua_State *L) {
+  const char *filename = luaL_checkstring(L, 1);
+  const char *language = native_treesitter_language_for_filename(filename);
+  if (language) lua_pushstring(L, language);
+  else lua_pushnil(L);
+  return 1;
+}
+
 static int l_new_buffer(lua_State *L) {
   size_t len = 0;
   const char *text = lua_isnoneornil(L, 1) ? "" : luaL_checklstring(L, 1, &len);
@@ -565,5 +577,7 @@ int luaopen_native_text(lua_State *L) {
   lua_newtable(L);
   lua_pushcfunction(L, l_new_buffer);
   lua_setfield(L, -2, "new_buffer");
+  lua_pushcfunction(L, l_tree_sitter_language_for_filename);
+  lua_setfield(L, -2, "tree_sitter_language_for_filename");
   return 1;
 }

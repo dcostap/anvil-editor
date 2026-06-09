@@ -12,11 +12,14 @@ typedef struct NativeTreeSitterHighlightSpan {
   size_t start_offset;
   size_t end_offset;
   char *capture_name;
+  char *style_name;
+  int priority;
 } NativeTreeSitterHighlightSpan;
 
 NativeTreeSitter *native_treesitter_new(Buffer *buffer, const char *language_name);
 void native_treesitter_free(NativeTreeSitter *state);
 
+const char *native_treesitter_language_for_filename(const char *filename);
 bool native_treesitter_set_language(NativeTreeSitter *state, Buffer *buffer, const char *language_name);
 const char *native_treesitter_language_name(const NativeTreeSitter *state);
 const char *native_treesitter_root_kind(const NativeTreeSitter *state);

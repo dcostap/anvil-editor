@@ -110,7 +110,8 @@ endif
 anvil_includes = []
 anvil_cargs = [
     '-DPCRE2_STATIC',
-    '-DANVIL_PROJECT_VERSION_STR="@0@"'.format(version)
+    '-DANVIL_PROJECT_VERSION_STR="@0@"'.format(version),
+    '-DANVIL_SOURCE_ROOT="@0@"'.format(anvil_source_root)
 ]
 if get_option('renderer')
     anvil_cargs += '-DANVIL_USE_SDL_RENDERER'
@@ -395,7 +396,7 @@ install_subdir('resources/icons' , install_dir : anvil_datadir)
 
 fs = import('fs')
 
-data_dirs = ['fonts', 'plugins', 'colors', 'widget']
+data_dirs = ['fonts', 'plugins', 'colors', 'widget', 'treesitter']
 if lua_compat_needed
     data_dirs += ['compat']
 endif
