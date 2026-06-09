@@ -432,10 +432,10 @@ Implement after the text core and transaction engine are stable:
 
 - Parser/tree/query state per Buffer.
 - Language selection from filename/content.
-- `ts_tree_edit` for transaction edits. **Initial transaction descriptors are available; actual Tree-sitter integration still pending.**
-- Reparse once after batch edit.
-- Query visible byte range for syntax captures.
-- Native APIs for render/highlight spans.
+- `ts_tree_edit` for transaction edits. **Initial C-language integration implemented; single-edit transactions use `ts_tree_edit`, multi-edit/snap paths conservatively reparse.**
+- Reparse once after batch edit. **Implemented initially.**
+- Query visible byte range for syntax captures. **Implemented initially.**
+- Native APIs for render/highlight spans. **Implemented initially through `native_text`.**
 
 Exit criteria:
 
@@ -451,6 +451,7 @@ Initial sandbox/API features:
 - Lua `native_text` module for creating native Buffers and Editors. **Initial bridge implemented.**
 - Open a native Buffer from bytes/file. **Initial in-memory and file-backed sandbox commands implemented.**
 - Draw visible lines from piece-tree walkers. **Initial sandbox draws through native Buffer line reads; direct walker-backed drawing still pending.**
+- Draw native Tree-sitter highlight spans. **Initial C/.h sandbox highlighting implemented.**
 - Basic caret rendering. **Initial sandbox implemented, including multi-cursor carets.**
 - Basic selection rendering. **Initial sandbox implemented.**
 - Basic keyboard text input. **Initial sandbox implemented, including word, line-edge, and Buffer-edge movement bindings.**

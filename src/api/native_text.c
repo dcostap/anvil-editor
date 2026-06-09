@@ -3,6 +3,7 @@
 #include "text/buffer.h"
 #include "text/buffer_manager.h"
 #include "text/editor.h"
+#include "text/treesitter.h"
 
 #include <stdbool.h>
 #include <stdlib.h>
@@ -156,6 +157,50 @@ static int l_buffer_set_line_ending_mode(lua_State *L) {
     return luaL_error(L, "line ending mode must be 'lf' or 'crlf'");
   }
   lua_pushboolean(L, buffer_set_line_ending_mode(&native->buffer, ending));
+  return 1;
+}
+
+static int l_buffer_enable_tree_sitter(lua_State *L) {
+  NativeTextBuffer *native = check_buffer(L, 1);
+  const char *language = luaL_optstring(L, 2, "c");
+  lua_pushboolean(L, buffer_enable_tree_sitter(&native->buffer, language));
+  return 1;
+}
+
+static int l_buffer_tree_sitter_language(lua_State *L) {
+  NativeTextBuffer *native = check_buffer(L, 1);
+  const char *language = buffer_tree_sitter_language_name(&native->buffer);
+  if (language) lua_pushstring(L, language);
+  else lua_pushnil(L);
+  return 1;
+}
+
+static int l_buffer_tree_sitter_root_kind(lua_State *L) {
+  NativeTextBuffer *native = check_buffer(L, 1);
+  const char *kind = buffer_tree_sitter_root_kind(&native->buffer);
+  if (kind) lua_pushstring(L, kind);
+  else lua_pushnil(L);
+  return 1;
+}
+
+static int l_buffer_tree_sitter_highlights(lua_State *L) {
+  NativeTextBuffer *native = check_buffer(L, 1);
+  size_t start = lua_isnoneornil(L, 2) ? 0 : check_offset(L, 2);
+  size_t end = lua_isnoneornil(L, 3) ? buffer_len(&native->buffer) : check_offset(L, 3);
+  size_t count = 0;
+  NativeTreeSitterHighlightSpan *spans = buffer_tree_sitter_highlights(&native->buffer, start, end, &count);
+  lua_newtable(L);
+  for (size_t i = 0; i < count; ++i) {
+    lua_newtable(L);
+    lua_pushnumber(L, (lua_Number) spans[i].start_offset);
+    lua_setfield(L, -2, "start_offset");
+    lua_pushnumber(L, (lua_Number) spans[i].end_offset);
+    lua_setfield(L, -2, "end_offset");
+    lua_pushstring(L, spans[i].capture_name ? spans[i].capture_name : "normal");
+    lua_setfield(L, -2, "capture");
+    lua_rawseti(L, -2, (int) i + 1);
+  }
+  buffer_tree_sitter_highlights_free(spans, count);
   return 1;
 }
 
@@ -397,6 +442,10 @@ static const luaL_Reg buffer_methods[] = {
   { "offset_to_line_col", l_buffer_offset_to_line_col },
   { "line_col_to_offset", l_buffer_line_col_to_offset },
   { "set_line_ending_mode", l_buffer_set_line_ending_mode },
+  { "enable_tree_sitter", l_buffer_enable_tree_sitter },
+  { "tree_sitter_language", l_buffer_tree_sitter_language },
+  { "tree_sitter_root_kind", l_buffer_tree_sitter_root_kind },
+  { "tree_sitter_highlights", l_buffer_tree_sitter_highlights },
   { "new_editor", l_buffer_new_editor },
   { NULL, NULL }
 };

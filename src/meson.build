@@ -20,6 +20,7 @@ anvil_sources = [
     'text/buffer_manager.c',
     'text/editor.c',
     'text/undo_graph.c',
+    'text/treesitter.c',
     'tokenizer/arena.c',
     'tokenizer/regex.c',
     'tokenizer/lutf8.c',
@@ -211,11 +212,28 @@ buffer_manager_test = executable('buffer_manager_test',
         'text/buffer.c',
         'text/buffer_manager.c',
         'text/undo_graph.c',
+        'text/treesitter.c',
     ],
     include_directories: anvil_includes,
+    dependencies: [tree_sitter_dep, tree_sitter_c_dep],
     c_args: anvil_cargs,
 )
 test('buffer_manager', buffer_manager_test, env: anvil_test_env)
+
+treesitter_test = executable('treesitter_test',
+    [
+        '../tests/native/treesitter_test.c',
+        'text/piece_tree.c',
+        'text/buffer.c',
+        'text/buffer_manager.c',
+        'text/undo_graph.c',
+        'text/treesitter.c',
+    ],
+    include_directories: anvil_includes,
+    dependencies: [tree_sitter_dep, tree_sitter_c_dep],
+    c_args: anvil_cargs,
+)
+test('treesitter', treesitter_test, env: anvil_test_env)
 
 editor_test = executable('editor_test',
     [
@@ -225,8 +243,10 @@ editor_test = executable('editor_test',
         'text/buffer_manager.c',
         'text/editor.c',
         'text/undo_graph.c',
+        'text/treesitter.c',
     ],
     include_directories: anvil_includes,
+    dependencies: [tree_sitter_dep, tree_sitter_c_dep],
     c_args: anvil_cargs,
 )
 test('editor', editor_test, env: anvil_test_env)
@@ -238,8 +258,10 @@ undo_graph_test = executable('undo_graph_test',
         'text/buffer.c',
         'text/buffer_manager.c',
         'text/undo_graph.c',
+        'text/treesitter.c',
     ],
     include_directories: anvil_includes,
+    dependencies: [tree_sitter_dep, tree_sitter_c_dep],
     c_args: anvil_cargs,
 )
 test('undo_graph', undo_graph_test, env: anvil_test_env)

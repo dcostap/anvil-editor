@@ -9,6 +9,26 @@ local native_text = require "native_text"
 
 local NativeTextSandboxView = View:extend()
 
+local highlight_priority = {
+  keyword = 100,
+  string = 90,
+  comment = 90,
+  number = 80,
+  type = 75,
+  ["function"] = 70,
+  property = 65,
+  label = 60,
+  variable = 10,
+}
+
+local function tree_sitter_language_for_filename(filename)
+  if not filename then return nil end
+  local ext = filename:match("%.([^%.\\/]*)$")
+  if ext then ext = ext:lower() end
+  if ext == "c" or ext == "h" then return "c" end
+  return nil
+end
+
 function NativeTextSandboxView:__tostring() return "NativeTextSandboxView" end
 
 NativeTextSandboxView.context = "workspace"
@@ -19,6 +39,15 @@ function NativeTextSandboxView:new(text, filename)
   if filename then
     local ok = self.buffer:load_file(filename)
     if not ok then core.error("Failed to open native Buffer: %s", filename) end
+  end
+  local language = tree_sitter_language_for_filename(filename)
+  self.tree_sitter_enabled = language and self.buffer:enable_tree_sitter(language) or false
+  if language then
+    if self.tree_sitter_enabled then
+      core.log_quiet("Native text sandbox enabled Tree-sitter language '%s' for %s", language, filename or "scratch")
+    else
+      core.log_quiet("Native text sandbox failed to enable Tree-sitter language '%s' for %s", language, filename or "scratch")
+    end
   end
   self.editor = self.buffer:new_editor()
   self.scrollable = true
@@ -65,6 +94,48 @@ function NativeTextSandboxView:draw_caret_for_cursor(cursor)
   local cursor_line, cursor_col = self:cursor_line_col(cursor.cursor or 0)
   local caret_x, caret_y = self:line_col_to_screen(cursor_line, cursor_col)
   renderer.draw_rect(caret_x, caret_y, math.max(1, SCALE), style.font:get_height(), style.caret)
+end
+
+function NativeTextSandboxView:draw_line_text(line, text, row_y, highlights)
+  local x = self.position.x + self:get_gutter_width() + style.padding.x - self.scroll.x
+  if not highlights or #highlights == 0 then
+    renderer.draw_text(style.font, text, x, row_y, style.text)
+    return
+  end
+
+  local line_start = self.buffer:line_col_to_offset(line, 0) or 0
+  local line_end = line_start + #text
+  local spans = {}
+  for _, span in ipairs(highlights) do
+    if span.end_offset > line_start and span.start_offset < line_end then
+      spans[#spans + 1] = span
+    end
+  end
+  table.sort(spans, function(a, b)
+    if a.start_offset ~= b.start_offset then return a.start_offset < b.start_offset end
+    if a.end_offset ~= b.end_offset then return a.end_offset > b.end_offset end
+    return (highlight_priority[a.capture] or 0) > (highlight_priority[b.capture] or 0)
+  end)
+
+  local col = 0
+  local function draw_segment(first_col, last_col, color)
+    if last_col <= first_col then return end
+    local segment = text:sub(first_col + 1, last_col)
+    local sx = x + style.font:get_width(text:sub(1, first_col))
+    renderer.draw_text(style.font, segment, sx, row_y, color)
+  end
+
+  for _, span in ipairs(spans) do
+    local start_col = math.max(0, span.start_offset - line_start)
+    local end_col = math.min(#text, span.end_offset - line_start)
+    if end_col > col then
+      draw_segment(col, start_col, style.text)
+      local capture = span.capture and span.capture:match("^[^%.]+") or "normal"
+      draw_segment(math.max(col, start_col), end_col, style.syntax[capture] or style.text)
+      col = end_col
+    end
+  end
+  draw_segment(col, #text, style.text)
 end
 
 function NativeTextSandboxView:draw_selection_for_cursor(cursor)
@@ -153,11 +224,19 @@ function NativeTextSandboxView:draw()
     self:draw_selection_for_cursor(self.editor:cursor(i))
   end
 
+  local highlights = nil
+  if self.tree_sitter_enabled and line_count > 0 then
+    local visible_start = self.buffer:line_col_to_offset(first_line, 0) or 0
+    local last_text = self.buffer:line(last_line) or ""
+    local visible_end = self.buffer:line_col_to_offset(last_line, #last_text) or self.buffer:len()
+    highlights = self.buffer:tree_sitter_highlights(visible_start, visible_end)
+  end
+
   for line = first_line, last_line do
     local row_y = y + style.padding.y - self.scroll.y + line * lh
     local line_number = tostring(line + 1)
     common.draw_text(style.font, style.dim, line_number, "right", x, row_y, gutter_w - style.padding.x, lh)
-    renderer.draw_text(style.font, self.buffer:line(line) or "", x + gutter_w + style.padding.x - self.scroll.x, row_y, style.text)
+    self:draw_line_text(line, self.buffer:line(line) or "", row_y, highlights)
   end
 
   for i = 1, self.editor:cursor_count() do

@@ -261,6 +261,13 @@ if not get_option('source-only')
         default_options: default_fallback_options + ['default_library=static', 'test=false']
     )
 
+    tree_sitter_dep = dependency('tree-sitter', fallback: ['tree-sitter', 'tree_sitter_dep'],
+        default_options: default_fallback_options + ['default_library=static']
+    )
+    tree_sitter_c_dep = dependency('tree-sitter-c', fallback: ['tree-sitter-c', 'tree_sitter_c_dep'],
+        default_options: default_fallback_options + ['default_library=static']
+    )
+
     if get_option('wrap_mode') != 'forcefallback'
         sdl_dep = dependency('sdl3')
     else
@@ -326,7 +333,7 @@ if not get_option('source-only')
         default_options: default_fallback_options + ['default_library=static']
     )
 
-    anvil_deps = [lua_dep, sdl_dep, sdl_image, freetype_dep, harfbuzz_anvil_dep, pcre2_dep, uchardet_dep, libm, libdl, librt]
+    anvil_deps = [lua_dep, sdl_dep, sdl_image, freetype_dep, harfbuzz_anvil_dep, pcre2_dep, uchardet_dep, tree_sitter_dep, tree_sitter_c_dep, libm, libdl, librt]
 endif
 
 lua_compat_needed = lua_dep.version() < '5.3.0'

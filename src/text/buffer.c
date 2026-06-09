@@ -1,4 +1,5 @@
 #include "text/buffer.h"
+#include "text/treesitter.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,6 +57,8 @@ void buffer_dispose(Buffer *buffer) {
   clear_clean_snapshot(buffer);
   clear_undo_graph(buffer);
   free(buffer->path);
+  native_treesitter_free(buffer->treesitter);
+  buffer->treesitter = NULL;
   piece_tree_dispose(&buffer->tree);
   memset(buffer, 0, sizeof(*buffer));
 }
@@ -66,6 +69,8 @@ bool buffer_load_bytes(Buffer *buffer, const char *bytes, size_t len) {
   clear_undo_graph(buffer);
   free(buffer->path);
   buffer->path = NULL;
+  native_treesitter_free(buffer->treesitter);
+  buffer->treesitter = NULL;
   piece_tree_dispose(&buffer->tree);
   if (!piece_tree_init(&buffer->tree, bytes, len)) return false;
   buffer->line_ending_mode = detect_line_ending_mode_from_bytes(bytes, len);
@@ -293,6 +298,7 @@ bool buffer_snap_to_undo_node(Buffer *buffer, UndoRedoNode *target, size_t *op_o
   if (!buffer || !buffer->has_undo_graph) return false;
   if (!undo_graph_snap_to(&buffer->undo_graph, &buffer->tree, target, op_offset_out)) return false;
   buffer_refresh_line_ending_mode(buffer);
+  if (buffer->treesitter) native_treesitter_after_snap(buffer->treesitter, buffer);
   return true;
 }
 
@@ -316,6 +322,7 @@ bool buffer_undo_op_offset(Buffer *buffer, size_t *op_offset_out) {
   if (!buffer || !buffer->has_undo_graph) return false;
   if (!undo_graph_undo(&buffer->undo_graph, &buffer->tree, op_offset_out)) return false;
   buffer_refresh_line_ending_mode(buffer);
+  if (buffer->treesitter) native_treesitter_after_snap(buffer->treesitter, buffer);
   return true;
 }
 
@@ -323,5 +330,46 @@ bool buffer_redo_op_offset(Buffer *buffer, size_t *op_offset_out) {
   if (!buffer || !buffer->has_undo_graph) return false;
   if (!undo_graph_redo(&buffer->undo_graph, &buffer->tree, op_offset_out)) return false;
   buffer_refresh_line_ending_mode(buffer);
+  if (buffer->treesitter) native_treesitter_after_snap(buffer->treesitter, buffer);
   return true;
+}
+
+bool buffer_enable_tree_sitter(Buffer *buffer, const char *language_name) {
+  if (!buffer || !language_name) return false;
+  if (!buffer->treesitter) {
+    buffer->treesitter = native_treesitter_new(buffer, language_name);
+    return buffer->treesitter != NULL;
+  }
+  return native_treesitter_set_language(buffer->treesitter, buffer, language_name);
+}
+
+void buffer_disable_tree_sitter(Buffer *buffer) {
+  if (!buffer) return;
+  native_treesitter_free(buffer->treesitter);
+  buffer->treesitter = NULL;
+}
+
+const char *buffer_tree_sitter_language_name(const Buffer *buffer) {
+  return buffer && buffer->treesitter ? native_treesitter_language_name(buffer->treesitter) : NULL;
+}
+
+const char *buffer_tree_sitter_root_kind(const Buffer *buffer) {
+  return buffer && buffer->treesitter ? native_treesitter_root_kind(buffer->treesitter) : NULL;
+}
+
+NativeTreeSitterHighlightSpan *buffer_tree_sitter_highlights(
+  Buffer *buffer,
+  size_t start_offset,
+  size_t end_offset,
+  size_t *count_out
+) {
+  if (!buffer || !buffer->treesitter) {
+    if (count_out) *count_out = 0;
+    return NULL;
+  }
+  return native_treesitter_highlights(buffer->treesitter, start_offset, end_offset, count_out);
+}
+
+void buffer_tree_sitter_highlights_free(NativeTreeSitterHighlightSpan *spans, size_t count) {
+  native_treesitter_highlights_free(spans, count);
 }

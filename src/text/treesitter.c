@@ -1,0 +1,309 @@
+#include "text/treesitter.h"
+
+#include <tree_sitter/api.h>
+#include <tree_sitter/tree-sitter-c.h>
+
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+extern const TSLanguage *tree_sitter_c(void);
+
+struct NativeTreeSitter {
+  TSParser *parser;
+  TSTree *tree;
+  TSQuery *highlight_query;
+  const TSLanguage *language;
+  char *language_name;
+};
+
+typedef struct ParseInput {
+  Buffer *buffer;
+  char *scratch;
+  size_t scratch_len;
+} ParseInput;
+
+static const char c_highlight_query[] =
+  "\"break\" @keyword\n"
+  "\"case\" @keyword\n"
+  "\"const\" @keyword\n"
+  "\"continue\" @keyword\n"
+  "\"default\" @keyword\n"
+  "\"do\" @keyword\n"
+  "\"else\" @keyword\n"
+  "\"enum\" @keyword\n"
+  "\"extern\" @keyword\n"
+  "\"for\" @keyword\n"
+  "\"if\" @keyword\n"
+  "\"inline\" @keyword\n"
+  "\"return\" @keyword\n"
+  "\"sizeof\" @keyword\n"
+  "\"static\" @keyword\n"
+  "\"struct\" @keyword\n"
+  "\"switch\" @keyword\n"
+  "\"typedef\" @keyword\n"
+  "\"union\" @keyword\n"
+  "\"volatile\" @keyword\n"
+  "\"while\" @keyword\n"
+  "\"#define\" @keyword\n"
+  "\"#elif\" @keyword\n"
+  "\"#else\" @keyword\n"
+  "\"#endif\" @keyword\n"
+  "\"#if\" @keyword\n"
+  "\"#ifdef\" @keyword\n"
+  "\"#ifndef\" @keyword\n"
+  "\"#include\" @keyword\n"
+  "(preproc_directive) @keyword\n"
+  "(comment) @comment\n"
+  "(string_literal) @string\n"
+  "(system_lib_string) @string\n"
+  "(number_literal) @number\n"
+  "(char_literal) @number\n"
+  "(primitive_type) @type\n"
+  "(sized_type_specifier) @type\n"
+  "(type_identifier) @type\n"
+  "(field_identifier) @property\n"
+  "(statement_identifier) @label\n"
+  "(call_expression function: (identifier) @function)\n"
+  "(call_expression function: (field_expression field: (field_identifier) @function))\n"
+  "(function_declarator declarator: (identifier) @function)\n"
+  "(preproc_function_def name: (identifier) @function)\n"
+  "(identifier) @variable\n";
+
+static char *ts_strdup_len(const char *text, size_t len) {
+  char *copy = (char *) malloc(len + 1);
+  if (!copy) return NULL;
+  if (len > 0) memcpy(copy, text, len);
+  copy[len] = '\0';
+  return copy;
+}
+
+static char *ts_strdup(const char *text) {
+  return text ? ts_strdup_len(text, strlen(text)) : NULL;
+}
+
+static const char *read_from_buffer(void *payload, uint32_t byte_index, TSPoint position, uint32_t *bytes_read) {
+  (void) position;
+  ParseInput *input = (ParseInput *) payload;
+  if (!input || !input->buffer || !bytes_read) return NULL;
+
+  free(input->scratch);
+  input->scratch = NULL;
+  input->scratch_len = 0;
+
+  size_t len = buffer_len(input->buffer);
+  if ((size_t) byte_index >= len) {
+    *bytes_read = 0;
+    return "";
+  }
+
+  size_t end = (size_t) byte_index + 4096;
+  if (end > len) end = len;
+  input->scratch = buffer_range_to_string(input->buffer, byte_index, end, &input->scratch_len);
+  if (!input->scratch) {
+    *bytes_read = 0;
+    return "";
+  }
+  *bytes_read = (uint32_t) input->scratch_len;
+  return input->scratch;
+}
+
+static bool parse_buffer(NativeTreeSitter *state, Buffer *buffer, TSTree *old_tree) {
+  if (!state || !state->parser || !buffer) return false;
+  ParseInput payload;
+  memset(&payload, 0, sizeof(payload));
+  payload.buffer = buffer;
+
+  TSInput input;
+  memset(&input, 0, sizeof(input));
+  input.payload = &payload;
+  input.read = read_from_buffer;
+  input.encoding = TSInputEncodingUTF8;
+
+  TSTree *new_tree = ts_parser_parse(state->parser, old_tree, input);
+  free(payload.scratch);
+  if (!new_tree) return false;
+  if (state->tree) ts_tree_delete(state->tree);
+  state->tree = new_tree;
+  return true;
+}
+
+static bool language_for_name(const char *name, const TSLanguage **language_out, const char **query_out) {
+  if (!name || strcmp(name, "c") != 0) return false;
+  if (language_out) *language_out = tree_sitter_c();
+  if (query_out) *query_out = c_highlight_query;
+  return true;
+}
+
+NativeTreeSitter *native_treesitter_new(Buffer *buffer, const char *language_name) {
+  NativeTreeSitter *state = (NativeTreeSitter *) calloc(1, sizeof(NativeTreeSitter));
+  if (!state) return NULL;
+  state->parser = ts_parser_new();
+  if (!state->parser) {
+    native_treesitter_free(state);
+    return NULL;
+  }
+  if (!native_treesitter_set_language(state, buffer, language_name)) {
+    native_treesitter_free(state);
+    return NULL;
+  }
+  return state;
+}
+
+void native_treesitter_free(NativeTreeSitter *state) {
+  if (!state) return;
+  if (state->highlight_query) ts_query_delete(state->highlight_query);
+  if (state->tree) ts_tree_delete(state->tree);
+  if (state->parser) ts_parser_delete(state->parser);
+  free(state->language_name);
+  free(state);
+}
+
+bool native_treesitter_set_language(NativeTreeSitter *state, Buffer *buffer, const char *language_name) {
+  if (!state || !buffer) return false;
+  const TSLanguage *language = NULL;
+  const char *query_source = NULL;
+  if (!language_for_name(language_name, &language, &query_source)) return false;
+
+  if (!ts_parser_set_language(state->parser, language)) return false;
+
+  TSQueryError error_type = TSQueryErrorNone;
+  uint32_t error_offset = 0;
+  TSQuery *query = ts_query_new(language, query_source, (uint32_t) strlen(query_source), &error_offset, &error_type);
+  if (!query) return false;
+
+  char *name_copy = ts_strdup(language_name);
+  if (!name_copy) {
+    ts_query_delete(query);
+    return false;
+  }
+
+  if (state->highlight_query) ts_query_delete(state->highlight_query);
+  state->highlight_query = query;
+  state->language = language;
+  free(state->language_name);
+  state->language_name = name_copy;
+
+  return native_treesitter_reparse(state, buffer);
+}
+
+const char *native_treesitter_language_name(const NativeTreeSitter *state) {
+  return state ? state->language_name : NULL;
+}
+
+const char *native_treesitter_root_kind(const NativeTreeSitter *state) {
+  if (!state || !state->tree) return NULL;
+  TSNode root = ts_tree_root_node(state->tree);
+  return ts_node_type(root);
+}
+
+bool native_treesitter_reparse(NativeTreeSitter *state, Buffer *buffer) {
+  if (!state || !buffer) return false;
+  return parse_buffer(state, buffer, NULL);
+}
+
+static TSPoint point_from_batch(BatchEditPoint point) {
+  TSPoint out;
+  out.row = (uint32_t) point.line;
+  out.column = (uint32_t) point.col;
+  return out;
+}
+
+bool native_treesitter_after_edit(NativeTreeSitter *state, Buffer *buffer, const BatchEditResult *result) {
+  if (!state || !buffer || !result || !result->applied) return false;
+  if (!result->edit_descriptor_count) return true;
+
+  if (state->tree && result->edit_descriptor_count == 1) {
+    const BatchEditDescriptor *desc = &result->edit_descriptors[0];
+    TSInputEdit edit;
+    memset(&edit, 0, sizeof(edit));
+    edit.start_byte = (uint32_t) desc->old_start_offset;
+    edit.old_end_byte = (uint32_t) desc->old_end_offset;
+    edit.new_end_byte = (uint32_t) desc->new_end_offset;
+    edit.start_point = point_from_batch(desc->old_start_point);
+    edit.old_end_point = point_from_batch(desc->old_end_point);
+    edit.new_end_point = point_from_batch(desc->new_end_point);
+    ts_tree_edit(state->tree, &edit);
+    return parse_buffer(state, buffer, state->tree);
+  }
+
+  return native_treesitter_reparse(state, buffer);
+}
+
+bool native_treesitter_after_snap(NativeTreeSitter *state, Buffer *buffer) {
+  return native_treesitter_reparse(state, buffer);
+}
+
+static bool append_highlight_span(
+  NativeTreeSitterHighlightSpan **spans,
+  size_t *count,
+  size_t *capacity,
+  size_t start,
+  size_t end,
+  const char *name,
+  size_t name_len
+) {
+  if (start >= end || !name) return true;
+  if (*count == *capacity) {
+    size_t cap = *capacity ? *capacity * 2 : 32;
+    NativeTreeSitterHighlightSpan *new_spans = (NativeTreeSitterHighlightSpan *) realloc(*spans, cap * sizeof(NativeTreeSitterHighlightSpan));
+    if (!new_spans) return false;
+    *spans = new_spans;
+    *capacity = cap;
+  }
+  char *capture = ts_strdup_len(name, name_len);
+  if (!capture) return false;
+  (*spans)[*count].start_offset = start;
+  (*spans)[*count].end_offset = end;
+  (*spans)[*count].capture_name = capture;
+  *count += 1;
+  return true;
+}
+
+NativeTreeSitterHighlightSpan *native_treesitter_highlights(
+  NativeTreeSitter *state,
+  size_t start_offset,
+  size_t end_offset,
+  size_t *count_out
+) {
+  if (count_out) *count_out = 0;
+  if (!state || !state->tree || !state->highlight_query || start_offset > end_offset) return NULL;
+
+  TSQueryCursor *cursor = ts_query_cursor_new();
+  if (!cursor) return NULL;
+
+  TSNode root = ts_tree_root_node(state->tree);
+  ts_query_cursor_exec(cursor, state->highlight_query, root);
+  ts_query_cursor_set_byte_range(cursor, (uint32_t) start_offset, (uint32_t) end_offset);
+
+  NativeTreeSitterHighlightSpan *spans = NULL;
+  size_t count = 0;
+  size_t capacity = 0;
+  TSQueryMatch match;
+  while (ts_query_cursor_next_match(cursor, &match)) {
+    for (uint16_t i = 0; i < match.capture_count; ++i) {
+      TSQueryCapture capture = match.captures[i];
+      uint32_t capture_name_len = 0;
+      const char *capture_name = ts_query_capture_name_for_id(state->highlight_query, capture.index, &capture_name_len);
+      size_t start = ts_node_start_byte(capture.node);
+      size_t end = ts_node_end_byte(capture.node);
+      if (start < start_offset) start = start_offset;
+      if (end > end_offset) end = end_offset;
+      if (!append_highlight_span(&spans, &count, &capacity, start, end, capture_name, capture_name_len)) {
+        native_treesitter_highlights_free(spans, count);
+        ts_query_cursor_delete(cursor);
+        return NULL;
+      }
+    }
+  }
+
+  ts_query_cursor_delete(cursor);
+  if (count_out) *count_out = count;
+  return spans;
+}
+
+void native_treesitter_highlights_free(NativeTreeSitterHighlightSpan *spans, size_t count) {
+  if (!spans) return;
+  for (size_t i = 0; i < count; ++i) free(spans[i].capture_name);
+  free(spans);
+}

@@ -102,6 +102,31 @@ test.describe("native_text API bridge", function()
     test.same(editor:cursor(), { cursor = 13, selection = 0 })
   end)
 
+  test.it("exposes native Tree-sitter parsing and highlights", function()
+    local buffer = native_text.new_buffer("int main(void) {\n  return 1;\n}\n")
+    test.ok(buffer:enable_tree_sitter("c"))
+    test.equal(buffer:tree_sitter_language(), "c")
+    test.equal(buffer:tree_sitter_root_kind(), "translation_unit")
+
+    local function has_highlight(capture, text)
+      for _, span in ipairs(buffer:tree_sitter_highlights()) do
+        if span.capture == capture and buffer:text():sub(span.start_offset + 1, span.end_offset) == text then
+          return true
+        end
+      end
+      return false
+    end
+
+    test.ok(has_highlight("type", "int"))
+    test.ok(has_highlight("function", "main"))
+    test.ok(has_highlight("keyword", "return"))
+
+    local editor = buffer:new_editor()
+    test.ok(editor:set_cursor(0))
+    test.ok(editor:insert("static "))
+    test.ok(has_highlight("keyword", "static"))
+  end)
+
   test.it("uses Buffer line-ending mode for native newline insertion", function()
     local buffer = native_text.new_buffer("ab")
     local editor = buffer:new_editor()

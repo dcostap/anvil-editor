@@ -1,4 +1,5 @@
 #include "text/buffer_manager.h"
+#include "text/treesitter.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -453,6 +454,7 @@ static BatchEditResult buffer_manager_apply_edits_internal(
   result.cursor_mapping_count = edit_count;
   result.edit_descriptors = edit_descriptors;
   result.edit_descriptor_count = edit_count;
+  if (changed && manager->buffer->treesitter) native_treesitter_after_edit(manager->buffer->treesitter, manager->buffer, &result);
   notify_edit(manager, &result, source);
   return result;
 }

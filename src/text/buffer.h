@@ -7,6 +7,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+typedef struct NativeTreeSitter NativeTreeSitter;
+typedef struct NativeTreeSitterHighlightSpan NativeTreeSitterHighlightSpan;
+
 typedef enum BufferLineEndingMode {
   BUFFER_LINE_ENDING_LF,
   BUFFER_LINE_ENDING_CRLF,
@@ -20,6 +23,7 @@ typedef struct Buffer {
   bool has_clean_snapshot;
   UndoRedoGraph undo_graph;
   bool has_undo_graph;
+  NativeTreeSitter *treesitter;
 } Buffer;
 
 typedef PieceTreeLineCol BufferLineCol;
@@ -62,5 +66,17 @@ bool buffer_undo(Buffer *buffer);
 bool buffer_redo(Buffer *buffer);
 bool buffer_undo_op_offset(Buffer *buffer, size_t *op_offset_out);
 bool buffer_redo_op_offset(Buffer *buffer, size_t *op_offset_out);
+
+bool buffer_enable_tree_sitter(Buffer *buffer, const char *language_name);
+void buffer_disable_tree_sitter(Buffer *buffer);
+const char *buffer_tree_sitter_language_name(const Buffer *buffer);
+const char *buffer_tree_sitter_root_kind(const Buffer *buffer);
+NativeTreeSitterHighlightSpan *buffer_tree_sitter_highlights(
+  Buffer *buffer,
+  size_t start_offset,
+  size_t end_offset,
+  size_t *count_out
+);
+void buffer_tree_sitter_highlights_free(NativeTreeSitterHighlightSpan *spans, size_t count);
 
 #endif
