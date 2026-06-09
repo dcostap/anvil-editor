@@ -27,6 +27,11 @@ static int test_buffer_read_apis(void) {
   CHECK(buffer_init(&buffer, "alpha\nbeta\ngamma", 16));
   CHECK(buffer_len(&buffer) == 16);
   CHECK(buffer_line_count(&buffer) == 3);
+  CHECK(buffer_line_ending_mode(&buffer) == BUFFER_LINE_ENDING_LF);
+  size_t newline_len = 0;
+  const char *newline = buffer_line_ending_bytes(&buffer, &newline_len);
+  CHECK(newline_len == 1);
+  CHECK(memcmp(newline, "\n", 1) == 0);
   CHECK(!buffer_is_dirty(&buffer));
 
   size_t len = 0;
@@ -56,6 +61,20 @@ static int test_buffer_read_apis(void) {
   CHECK(buffer_offset_to_line_col(&buffer, 14, &lc));
   CHECK(lc.line == 2 && lc.col == 3);
 
+  buffer_dispose(&buffer);
+  return 0;
+}
+
+static int test_buffer_detects_crlf_line_endings(void) {
+  Buffer buffer;
+  CHECK(buffer_init(&buffer, "alpha\r\nbeta", 11));
+  CHECK(buffer_line_ending_mode(&buffer) == BUFFER_LINE_ENDING_CRLF);
+  size_t newline_len = 0;
+  const char *newline = buffer_line_ending_bytes(&buffer, &newline_len);
+  CHECK(newline_len == 2);
+  CHECK(memcmp(newline, "\r\n", 2) == 0);
+  CHECK(buffer_load_bytes(&buffer, "alpha\nbeta", 10));
+  CHECK(buffer_line_ending_mode(&buffer) == BUFFER_LINE_ENDING_LF);
   buffer_dispose(&buffer);
   return 0;
 }
@@ -307,6 +326,7 @@ static int test_registered_listener_receives_edit_and_snap_notifications(void) {
 int main(void) {
   int rc = 0;
   rc |= test_buffer_read_apis();
+  rc |= test_buffer_detects_crlf_line_endings();
   rc |= test_apply_single_batch_edit();
   rc |= test_apply_multiple_pre_edit_coordinate_edits();
   rc |= test_rejects_overlaps_atomically();

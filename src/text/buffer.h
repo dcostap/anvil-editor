@@ -7,9 +7,15 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+typedef enum BufferLineEndingMode {
+  BUFFER_LINE_ENDING_LF,
+  BUFFER_LINE_ENDING_CRLF,
+} BufferLineEndingMode;
+
 typedef struct Buffer {
   PieceTree tree;
   char *path;
+  BufferLineEndingMode line_ending_mode;
   PieceTreeSnapshot clean_snapshot;
   bool has_clean_snapshot;
   UndoRedoGraph undo_graph;
@@ -26,6 +32,9 @@ bool buffer_load_bytes(Buffer *buffer, const char *bytes, size_t len);
 
 size_t buffer_len(const Buffer *buffer);
 size_t buffer_line_count(const Buffer *buffer);
+BufferLineEndingMode buffer_line_ending_mode(const Buffer *buffer);
+const char *buffer_line_ending_bytes(const Buffer *buffer, size_t *len_out);
+void buffer_refresh_line_ending_mode(Buffer *buffer);
 
 char *buffer_to_string(const Buffer *buffer, size_t *len_out);
 char *buffer_range_to_string(const Buffer *buffer, size_t start_offset, size_t end_offset, size_t *len_out);

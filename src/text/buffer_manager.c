@@ -374,6 +374,8 @@ BatchEditResult buffer_manager_apply_edits_from(
     return rejected_result(edit_count);
   }
 
+  if (changed) buffer_refresh_line_ending_mode(manager->buffer);
+
   piece_tree_snapshot_release(&before);
 
   free(sorted);

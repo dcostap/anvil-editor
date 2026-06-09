@@ -63,6 +63,17 @@ static int test_insert_buffer_at_cursor(void) {
   return 0;
 }
 
+static int test_insert_newline_uses_buffer_line_ending_mode(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "ab\r\ncd"));
+  CHECK(editor_set_cursor(&f.editor, 2, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_insert_newline(&f.editor));
+  CHECK(expect_text(&f, "ab\r\n\r\ncd") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 4, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
 static int test_insert_replaces_selection(void) {
   EditorFixture f;
   CHECK(fixture_init(&f, "abcdef"));
@@ -244,6 +255,21 @@ static int test_selection_to_string(void) {
   CHECK(selection != NULL);
   CHECK(len == 11);
   CHECK(memcmp(selection, "alpha\ngamma", 11) == 0);
+  free(selection);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_selection_to_string_uses_crlf_between_multi_selections(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "alpha\r\nbeta\r\ngamma"));
+  CHECK(editor_set_cursor(&f.editor, 5, 0));
+  CHECK(editor_add_cursor(&f.editor, 18, 13));
+  size_t len = 0;
+  char *selection = editor_selection_to_string(&f.editor, &len);
+  CHECK(selection != NULL);
+  CHECK(len == 12);
+  CHECK(memcmp(selection, "alpha\r\ngamma", 12) == 0);
   free(selection);
   fixture_dispose(&f);
   return 0;
@@ -481,6 +507,7 @@ static int test_registered_editors_track_external_edits_and_snap(void) {
 int main(void) {
   int rc = 0;
   rc |= test_insert_buffer_at_cursor();
+  rc |= test_insert_newline_uses_buffer_line_ending_mode();
   rc |= test_insert_replaces_selection();
   rc |= test_backspace_and_delete();
   rc |= test_delete_line();
@@ -494,6 +521,7 @@ int main(void) {
   rc |= test_select_word();
   rc |= test_select_line();
   rc |= test_selection_to_string();
+  rc |= test_selection_to_string_uses_crlf_between_multi_selections();
   rc |= test_left_right_selection_behavior();
   rc |= test_line_start_end_movement();
   rc |= test_end_of_line_stops_before_crlf();

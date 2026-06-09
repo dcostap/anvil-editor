@@ -17,10 +17,21 @@ static void clear_undo_graph(Buffer *buffer) {
   }
 }
 
+static BufferLineEndingMode detect_line_ending_mode_from_bytes(const char *bytes, size_t len) {
+  if (!bytes) return BUFFER_LINE_ENDING_LF;
+  for (size_t i = 0; i < len; ++i) {
+    if (bytes[i] == '\n') return i > 0 && bytes[i - 1] == '\r'
+      ? BUFFER_LINE_ENDING_CRLF
+      : BUFFER_LINE_ENDING_LF;
+  }
+  return BUFFER_LINE_ENDING_LF;
+}
+
 bool buffer_init(Buffer *buffer, const char *bytes, size_t len) {
   if (!buffer) return false;
   memset(buffer, 0, sizeof(*buffer));
   if (!piece_tree_init(&buffer->tree, bytes, len)) return false;
+  buffer->line_ending_mode = detect_line_ending_mode_from_bytes(bytes, len);
   if (!undo_graph_init(&buffer->undo_graph, &buffer->tree, 0)) {
     piece_tree_dispose(&buffer->tree);
     return false;
@@ -47,6 +58,7 @@ bool buffer_load_bytes(Buffer *buffer, const char *bytes, size_t len) {
   buffer->path = NULL;
   piece_tree_dispose(&buffer->tree);
   if (!piece_tree_init(&buffer->tree, bytes, len)) return false;
+  buffer->line_ending_mode = detect_line_ending_mode_from_bytes(bytes, len);
   if (!undo_graph_init(&buffer->undo_graph, &buffer->tree, 0)) {
     piece_tree_dispose(&buffer->tree);
     return false;
@@ -62,6 +74,28 @@ size_t buffer_len(const Buffer *buffer) {
 
 size_t buffer_line_count(const Buffer *buffer) {
   return buffer ? piece_tree_line_count(&buffer->tree) : 0;
+}
+
+BufferLineEndingMode buffer_line_ending_mode(const Buffer *buffer) {
+  return buffer ? buffer->line_ending_mode : BUFFER_LINE_ENDING_LF;
+}
+
+const char *buffer_line_ending_bytes(const Buffer *buffer, size_t *len_out) {
+  if (buffer_line_ending_mode(buffer) == BUFFER_LINE_ENDING_CRLF) {
+    if (len_out) *len_out = 2;
+    return "\r\n";
+  }
+  if (len_out) *len_out = 1;
+  return "\n";
+}
+
+void buffer_refresh_line_ending_mode(Buffer *buffer) {
+  if (!buffer) return;
+  size_t len = 0;
+  char *bytes = buffer_to_string(buffer, &len);
+  if (!bytes) return;
+  buffer->line_ending_mode = detect_line_ending_mode_from_bytes(bytes, len);
+  free(bytes);
 }
 
 char *buffer_to_string(const Buffer *buffer, size_t *len_out) {
@@ -165,7 +199,9 @@ bool buffer_update_undo(Buffer *buffer, size_t op_offset) {
 
 bool buffer_snap_to_undo_node(Buffer *buffer, UndoRedoNode *target, size_t *op_offset_out) {
   if (!buffer || !buffer->has_undo_graph) return false;
-  return undo_graph_snap_to(&buffer->undo_graph, &buffer->tree, target, op_offset_out);
+  if (!undo_graph_snap_to(&buffer->undo_graph, &buffer->tree, target, op_offset_out)) return false;
+  buffer_refresh_line_ending_mode(buffer);
+  return true;
 }
 
 bool buffer_can_undo(const Buffer *buffer) {
@@ -186,10 +222,14 @@ bool buffer_redo(Buffer *buffer) {
 
 bool buffer_undo_op_offset(Buffer *buffer, size_t *op_offset_out) {
   if (!buffer || !buffer->has_undo_graph) return false;
-  return undo_graph_undo(&buffer->undo_graph, &buffer->tree, op_offset_out);
+  if (!undo_graph_undo(&buffer->undo_graph, &buffer->tree, op_offset_out)) return false;
+  buffer_refresh_line_ending_mode(buffer);
+  return true;
 }
 
 bool buffer_redo_op_offset(Buffer *buffer, size_t *op_offset_out) {
   if (!buffer || !buffer->has_undo_graph) return false;
-  return undo_graph_redo(&buffer->undo_graph, &buffer->tree, op_offset_out);
+  if (!undo_graph_redo(&buffer->undo_graph, &buffer->tree, op_offset_out)) return false;
+  buffer_refresh_line_ending_mode(buffer);
+  return true;
 }

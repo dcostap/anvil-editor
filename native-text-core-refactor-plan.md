@@ -192,6 +192,7 @@ Initial UI integration should be a sandbox/experimental native-backed Buffer/Edi
 - Count LF (`\n`) as the primary line separator.
 - Preserve CRLF bytes exactly.
 - Add explicit CRLF-aware helpers for operations that need logical line ends.
+- Track initial Buffer line-ending mode from loaded bytes and use it for native newline insertion and multi-selection joins. **Implemented initially.**
 
 ### Selection State ownership
 
@@ -303,7 +304,7 @@ Initial public operations:
 
 Exit criteria:
 
-- Native tests can create, edit, snapshot, save-state mark, and inspect a Buffer without Lua.
+- Native tests can create, edit, snapshot, save-state mark, inspect a Buffer without Lua, and preserve basic line-ending mode behavior.
 
 ## Phase 3: Editor state
 

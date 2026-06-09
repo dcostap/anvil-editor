@@ -513,7 +513,11 @@ bool editor_insert_char(Editor *editor, char ch) {
 }
 
 bool editor_insert_newline(Editor *editor) {
-  return editor_insert_buffer(editor, "\n", 1);
+  Buffer *buffer = editor_buffer(editor);
+  if (!buffer) return false;
+  size_t len = 0;
+  const char *newline = buffer_line_ending_bytes(buffer, &len);
+  return editor_insert_buffer(editor, newline, len);
 }
 
 bool editor_backspace(Editor *editor) {
@@ -851,10 +855,14 @@ char *editor_selection_to_string(const Editor *editor, size_t *len_out) {
       free(out);
       return NULL;
     }
-    if (appended_selection && !append_bytes(&out, &len, &cap, "\n", 1)) {
-      free(range);
-      free(out);
-      return NULL;
+    if (appended_selection) {
+      size_t newline_len = 0;
+      const char *newline = buffer_line_ending_bytes(buffer, &newline_len);
+      if (!append_bytes(&out, &len, &cap, newline, newline_len)) {
+        free(range);
+        free(out);
+        return NULL;
+      }
     }
     if (!append_bytes(&out, &len, &cap, range, range_len)) {
       free(range);
