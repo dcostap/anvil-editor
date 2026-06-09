@@ -110,6 +110,19 @@ static int test_open_line_below_last_line_uses_crlf_and_clears_multi_cursors(voi
   return 0;
 }
 
+static int test_open_line_undo_restores_cursor_snapshot(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "abc"));
+  CHECK(editor_set_cursor(&f.editor, 1, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_open_line_below(&f.editor));
+  CHECK(expect_text(&f, "abc\n") == 0);
+  CHECK(editor_undo(&f.editor));
+  CHECK(expect_text(&f, "abc") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 1, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
 static int test_insert_replaces_selection(void) {
   EditorFixture f;
   CHECK(fixture_init(&f, "abcdef"));
@@ -835,6 +848,7 @@ int main(void) {
   rc |= test_open_line_above_preserves_indent();
   rc |= test_open_line_below_preserves_indent_before_next_line();
   rc |= test_open_line_below_last_line_uses_crlf_and_clears_multi_cursors();
+  rc |= test_open_line_undo_restores_cursor_snapshot();
   rc |= test_insert_replaces_selection();
   rc |= test_backspace_and_delete();
   rc |= test_delete_line();
