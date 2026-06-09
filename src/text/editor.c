@@ -436,6 +436,61 @@ bool editor_del(Editor *editor) {
   return ok;
 }
 
+static bool editor_word_delete(Editor *editor, int direction) {
+  if (!editor) return false;
+  editor_sort_and_merge_cursors(editor);
+  Buffer *buffer = editor_buffer(editor);
+  if (!buffer) return false;
+
+  size_t len = 0;
+  char *bytes = buffer_to_string(buffer, &len);
+  if (!bytes) return false;
+
+  size_t count = 0;
+  Cursor *cursors = active_cursors(editor, &count);
+  CursorEdit *edits = (CursorEdit *) calloc(count, sizeof(CursorEdit));
+  if (!edits) {
+    free(bytes);
+    return false;
+  }
+
+  size_t edit_count = 0;
+  for (size_t i = 0; i < count; ++i) {
+    size_t start = cursor_start(&cursors[i]);
+    size_t end = cursor_end(&cursors[i]);
+    if (start == end) {
+      if (direction < 0) {
+        if (start == 0) continue;
+        start = retract_by_word_bytes(bytes, len, start);
+      } else {
+        if (end >= len) continue;
+        end = extend_by_word_bytes(bytes, len, end);
+      }
+    }
+    if (start == end) continue;
+    edits[edit_count].edit.start_offset = start;
+    edits[edit_count].edit.end_offset = end;
+    edits[edit_count].edit.text = NULL;
+    edits[edit_count].edit.text_len = 0;
+    edits[edit_count].edit.cursor_index = (unsigned int) i;
+    edits[edit_count].cursor_index = i;
+    ++edit_count;
+  }
+
+  free(bytes);
+  bool ok = edit_count == 0 ? true : apply_cursor_edits(editor, edits, edit_count);
+  free(edits);
+  return ok;
+}
+
+bool editor_backspace_word(Editor *editor) {
+  return editor_word_delete(editor, -1);
+}
+
+bool editor_del_word(Editor *editor) {
+  return editor_word_delete(editor, 1);
+}
+
 bool editor_select_all(Editor *editor) {
   if (!editor) return false;
   Buffer *buffer = editor_buffer(editor);

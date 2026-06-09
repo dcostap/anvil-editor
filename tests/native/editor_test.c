@@ -189,6 +189,44 @@ static int test_word_left_right_movement(void) {
   return 0;
 }
 
+static int test_word_delete_commands(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "foo bar,baz"));
+  CHECK(editor_set_cursor(&f.editor, 7, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_backspace_word(&f.editor));
+  CHECK(expect_text(&f, "foo ,baz") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 4, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_del_word(&f.editor));
+  CHECK(expect_text(&f, "foo baz") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 4, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_word_delete_removes_selection(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "alpha beta gamma"));
+  CHECK(editor_set_cursor(&f.editor, 11, 6));
+  CHECK(editor_backspace_word(&f.editor));
+  CHECK(expect_text(&f, "alpha gamma") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 6, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_multi_cursor_word_delete(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "aa bb\ncc dd"));
+  CHECK(editor_set_cursor(&f.editor, 2, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_add_cursor(&f.editor, 8, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_backspace_word(&f.editor));
+  CHECK(expect_text(&f, " bb\n dd") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 0, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(expect_cursor(&f.editor, 1, 4, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
 static int test_word_movement_selection_behavior(void) {
   EditorFixture f;
   CHECK(fixture_init(&f, "alpha beta gamma"));
@@ -295,6 +333,9 @@ int main(void) {
   rc |= test_left_right_selection_behavior();
   rc |= test_line_start_end_movement();
   rc |= test_word_left_right_movement();
+  rc |= test_word_delete_commands();
+  rc |= test_word_delete_removes_selection();
+  rc |= test_multi_cursor_word_delete();
   rc |= test_word_movement_selection_behavior();
   rc |= test_multi_cursor_word_movement();
   rc |= test_line_down_up_preserves_desired_column();

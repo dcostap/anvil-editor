@@ -39,6 +39,8 @@ bool editor_insert_char(Editor *editor, char ch);
 bool editor_insert_newline(Editor *editor);
 bool editor_backspace(Editor *editor);
 bool editor_del(Editor *editor);
+bool editor_backspace_word(Editor *editor);
+bool editor_del_word(Editor *editor);
 bool editor_select_all(Editor *editor);
 bool editor_left(Editor *editor, bool update_selection);
 bool editor_right(Editor *editor, bool update_selection);
