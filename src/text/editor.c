@@ -105,6 +105,20 @@ static void map_cursor_through_sorted_mappings(
   size_t mapping_count
 );
 
+static bool ensure_undo_selection_snapshot_capacity(Editor *editor, size_t needed) {
+  if (needed <= editor->undo_selection_snapshot_capacity) return true;
+  size_t cap = editor->undo_selection_snapshot_capacity ? editor->undo_selection_snapshot_capacity : 8;
+  while (cap < needed) cap *= 2;
+  EditorUndoSelectionSnapshot *snapshots = (EditorUndoSelectionSnapshot *) realloc(
+    editor->undo_selection_snapshots,
+    cap * sizeof(EditorUndoSelectionSnapshot)
+  );
+  if (!snapshots) return false;
+  editor->undo_selection_snapshots = snapshots;
+  editor->undo_selection_snapshot_capacity = cap;
+  return true;
+}
+
 static bool ensure_multi_capacity(Editor *editor, size_t needed) {
   if (needed <= editor->multi_cursor_capacity) return true;
   size_t cap = editor->multi_cursor_capacity ? editor->multi_cursor_capacity : 4;
@@ -142,6 +156,56 @@ static bool append_bytes(char **data, size_t *len, size_t *cap, const char *byte
 
 static void sync_core_from_multi(Editor *editor) {
   if (editor->multi_cursor_count > 0) editor->core_cursor = editor->multi_cursors[0];
+}
+
+static bool capture_active_cursor_snapshot(const Editor *editor, Cursor **cursors_out, size_t *count_out) {
+  if (!editor || !cursors_out || !count_out) return false;
+  size_t count = 0;
+  const Cursor *cursors = active_cursors_const(editor, &count);
+  Cursor *copy = (Cursor *) malloc(sizeof(Cursor) * count);
+  if (!copy) return false;
+  memcpy(copy, cursors, sizeof(Cursor) * count);
+  *cursors_out = copy;
+  *count_out = count;
+  return true;
+}
+
+static bool editor_store_undo_selection_snapshot(Editor *editor, UndoRedoNode *node, const Cursor *cursors, size_t count) {
+  if (!editor || !node || !cursors || count == 0) return false;
+  for (size_t i = 0; i < editor->undo_selection_snapshot_count; ++i) {
+    EditorUndoSelectionSnapshot *snapshot = &editor->undo_selection_snapshots[i];
+    if (snapshot->node == node) {
+      Cursor *copy = (Cursor *) malloc(sizeof(Cursor) * count);
+      if (!copy) return false;
+      memcpy(copy, cursors, sizeof(Cursor) * count);
+      free(snapshot->cursors);
+      snapshot->cursors = copy;
+      snapshot->cursor_count = count;
+      return true;
+    }
+  }
+
+  if (!ensure_undo_selection_snapshot_capacity(editor, editor->undo_selection_snapshot_count + 1)) return false;
+  Cursor *copy = (Cursor *) malloc(sizeof(Cursor) * count);
+  if (!copy) return false;
+  memcpy(copy, cursors, sizeof(Cursor) * count);
+  EditorUndoSelectionSnapshot *snapshot = &editor->undo_selection_snapshots[editor->undo_selection_snapshot_count++];
+  snapshot->node = node;
+  snapshot->cursors = copy;
+  snapshot->cursor_count = count;
+  return true;
+}
+
+static bool editor_restore_undo_selection_snapshot(Editor *editor, UndoRedoNode *node) {
+  if (!editor || !node) return false;
+  for (size_t i = 0; i < editor->undo_selection_snapshot_count; ++i) {
+    EditorUndoSelectionSnapshot *snapshot = &editor->undo_selection_snapshots[i];
+    if (snapshot->node != node || snapshot->cursor_count == 0) continue;
+    editor_clear_multi_cursors(editor);
+    editor->core_cursor = snapshot->cursors[0];
+    return true;
+  }
+  return false;
 }
 
 static void reset_last_insert(Editor *editor) {
@@ -378,6 +442,10 @@ void editor_dispose(Editor *editor) {
   if (!editor) return;
   if (editor->buffer_manager) buffer_manager_unregister_listener(editor->buffer_manager, editor);
   free(editor->multi_cursors);
+  for (size_t i = 0; i < editor->undo_selection_snapshot_count; ++i) {
+    free(editor->undo_selection_snapshots[i].cursors);
+  }
+  free(editor->undo_selection_snapshots);
   memset(editor, 0, sizeof(*editor));
 }
 
@@ -470,8 +538,15 @@ static bool apply_cursor_edits_with_undo_mode(
   size_t op_offset
 ) {
   if (count == 0) return true;
+  Cursor *before_cursors = NULL;
+  size_t before_cursor_count = 0;
+  if (!capture_active_cursor_snapshot(editor, &before_cursors, &before_cursor_count)) return false;
+
   BatchEditItem *items = (BatchEditItem *) malloc(sizeof(BatchEditItem) * count);
-  if (!items) return false;
+  if (!items) {
+    free(before_cursors);
+    return false;
+  }
   for (size_t i = 0; i < count; ++i) items[i] = cursor_edits[i].edit;
 
   BatchEditResult result = update_current_undo
@@ -479,6 +554,7 @@ static bool apply_cursor_edits_with_undo_mode(
     : buffer_manager_apply_edits_from(editor->buffer_manager, items, count, editor);
   free(items);
   if (!result.applied) {
+    free(before_cursors);
     batch_edit_result_dispose(&result);
     return false;
   }
@@ -488,6 +564,7 @@ static bool apply_cursor_edits_with_undo_mode(
     size_t cursor_index = (size_t) mapping.cursor_index;
     if (editor->multi_cursor_count > 0) {
       if (cursor_index >= editor->multi_cursor_count) {
+        free(before_cursors);
         batch_edit_result_dispose(&result);
         return false;
       }
@@ -497,9 +574,27 @@ static bool apply_cursor_edits_with_undo_mode(
     }
   }
 
+  UndoRedoNode *undo_before = result.undo_node_before;
+  UndoRedoNode *undo_after = result.undo_node_after;
   batch_edit_result_dispose(&result);
   editor_sort_and_merge_cursors(editor);
   sync_core_from_multi(editor);
+
+  size_t after_cursor_count = 0;
+  const Cursor *after_cursors = active_cursors_const(editor, &after_cursor_count);
+  if (undo_before && undo_after && undo_before != undo_after) {
+    if (!editor_store_undo_selection_snapshot(editor, undo_before, before_cursors, before_cursor_count)) {
+      free(before_cursors);
+      return false;
+    }
+  }
+  if (undo_after) {
+    if (!editor_store_undo_selection_snapshot(editor, undo_after, after_cursors, after_cursor_count)) {
+      free(before_cursors);
+      return false;
+    }
+  }
+  free(before_cursors);
   return true;
 }
 
@@ -1805,12 +1900,22 @@ static bool editor_restore_undo_redo(Editor *editor, bool redo) {
   Buffer *buffer = editor_buffer(editor);
   if (!buffer) return false;
 
+  UndoRedoNode *target = NULL;
+  if (buffer->has_undo_graph && buffer->undo_graph.current) {
+    target = redo ? buffer->undo_graph.current->last_child : buffer->undo_graph.current->parent;
+  }
+
   editor_clear_multi_cursors(editor);
   size_t op_offset = 0;
   bool ok = redo
     ? buffer_manager_redo_from(editor->buffer_manager, &op_offset, editor)
     : buffer_manager_undo_from(editor->buffer_manager, &op_offset, editor);
   if (!ok) return false;
+
+  if (target && editor_restore_undo_selection_snapshot(editor, target)) {
+    reset_last_insert(editor);
+    return true;
+  }
 
   size_t len = buffer_len(buffer);
   if (op_offset > len) op_offset = len;

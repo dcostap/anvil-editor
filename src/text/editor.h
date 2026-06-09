@@ -15,6 +15,12 @@ typedef struct Cursor {
   size_t desired_column;
 } Cursor;
 
+typedef struct EditorUndoSelectionSnapshot {
+  UndoRedoNode *node;
+  Cursor *cursors;
+  size_t cursor_count;
+} EditorUndoSelectionSnapshot;
+
 typedef struct Editor {
   BufferManager *buffer_manager;
   Cursor core_cursor;
@@ -23,6 +29,9 @@ typedef struct Editor {
   Cursor *multi_cursors;
   size_t multi_cursor_count;
   size_t multi_cursor_capacity;
+  EditorUndoSelectionSnapshot *undo_selection_snapshots;
+  size_t undo_selection_snapshot_count;
+  size_t undo_selection_snapshot_capacity;
 } Editor;
 
 bool editor_init(Editor *editor, BufferManager *buffer_manager);

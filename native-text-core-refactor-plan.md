@@ -403,7 +403,7 @@ Implement:
 - Dirty state based on current node/snapshot compared to save node. **Implemented initially with Fred-style node identity tracking.**
 - Update current undo snapshot for coalesced/native operations. **Implemented initially.**
 - Snap to arbitrary undo graph nodes. **Implemented initially at UndoGraph/Buffer/BufferManager layers.**
-- Selection snapshots associated with the editing view.
+- Selection snapshots associated with the editing view. **Implemented initially for the primary cursor-edit path; undo/redo still clears multi-cursors Fred-style.**
 
 Policy decisions to settle before implementation:
 

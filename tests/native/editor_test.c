@@ -657,7 +657,7 @@ static int test_empty_line_down_moves_to_eof_when_none_found(void) {
   return 0;
 }
 
-static int test_editor_undo_redo_places_cursor_at_operation_offset(void) {
+static int test_editor_undo_redo_restores_cursor_snapshots(void) {
   EditorFixture f;
   CHECK(fixture_init(&f, "abc"));
   CHECK(editor_set_cursor(&f.editor, 1, EDITOR_SELECTION_SENTINEL));
@@ -667,11 +667,30 @@ static int test_editor_undo_redo_places_cursor_at_operation_offset(void) {
 
   CHECK(editor_undo(&f.editor));
   CHECK(expect_text(&f, "abc") == 0);
-  CHECK(expect_cursor(&f.editor, 0, 0, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(expect_cursor(&f.editor, 0, 1, EDITOR_SELECTION_SENTINEL) == 0);
 
   CHECK(editor_redo(&f.editor));
   CHECK(expect_text(&f, "aXYZbc") == 0);
-  CHECK(expect_cursor(&f.editor, 0, 1, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(expect_cursor(&f.editor, 0, 4, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_editor_undo_redo_restores_selection_snapshot(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "abcdef"));
+  CHECK(editor_set_cursor(&f.editor, 4, 1));
+  CHECK(editor_insert_buffer(&f.editor, "X", 1));
+  CHECK(expect_text(&f, "aXef") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 2, EDITOR_SELECTION_SENTINEL) == 0);
+
+  CHECK(editor_undo(&f.editor));
+  CHECK(expect_text(&f, "abcdef") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 4, 1) == 0);
+
+  CHECK(editor_redo(&f.editor));
+  CHECK(expect_text(&f, "aXef") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 2, EDITOR_SELECTION_SENTINEL) == 0);
   fixture_dispose(&f);
   return 0;
 }
@@ -688,7 +707,7 @@ static int test_editor_undo_clears_multi_cursors(void) {
   CHECK(editor_undo(&f.editor));
   CHECK(expect_text(&f, "abc\ndef") == 0);
   CHECK(editor_cursor_count(&f.editor) == 1);
-  CHECK(expect_cursor(&f.editor, 0, 0, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(expect_cursor(&f.editor, 0, 1, EDITOR_SELECTION_SENTINEL) == 0);
   fixture_dispose(&f);
   return 0;
 }
@@ -705,7 +724,7 @@ static int test_contiguous_single_cursor_inserts_coalesce_undo(void) {
   CHECK(expect_cursor(&f.editor, 0, 0, EDITOR_SELECTION_SENTINEL) == 0);
   CHECK(editor_redo(&f.editor));
   CHECK(expect_text(&f, "abc") == 0);
-  CHECK(expect_cursor(&f.editor, 0, 0, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(expect_cursor(&f.editor, 0, 3, EDITOR_SELECTION_SENTINEL) == 0);
   fixture_dispose(&f);
   return 0;
 }
@@ -753,7 +772,7 @@ static int test_registered_editors_track_external_edits_and_snap(void) {
   CHECK(len == 6);
   CHECK(memcmp(actual, "abcdef", 6) == 0);
   free(actual);
-  CHECK(expect_cursor(&source, 0, 0, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(expect_cursor(&source, 0, 1, EDITOR_SELECTION_SENTINEL) == 0);
   CHECK(expect_cursor(&peer, 0, 5, 2) == 0);
 
   editor_dispose(&peer);
@@ -811,7 +830,8 @@ int main(void) {
   rc |= test_line_movement_extends_selection();
   rc |= test_empty_line_down_up_movement();
   rc |= test_empty_line_down_moves_to_eof_when_none_found();
-  rc |= test_editor_undo_redo_places_cursor_at_operation_offset();
+  rc |= test_editor_undo_redo_restores_cursor_snapshots();
+  rc |= test_editor_undo_redo_restores_selection_snapshot();
   rc |= test_editor_undo_clears_multi_cursors();
   rc |= test_contiguous_single_cursor_inserts_coalesce_undo();
   rc |= test_cursor_movement_breaks_insert_undo_coalescing();
