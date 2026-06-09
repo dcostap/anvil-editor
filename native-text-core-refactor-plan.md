@@ -339,7 +339,7 @@ Implement:
 - Move line up/down for the core cursor or selected line span. **Implemented initially.**
 - Join line below with CRLF-aware line ranges and Fred-style leading-space trim. **Implemented initially.**
 - Tab/untab with Fred default tab-byte indentation behavior. **Implemented initially.**
-- First-nonempty-of-line and home-toggle-of-line movement. **Implemented initially.**
+- First-nonempty-of-line, home-toggle-of-line, and empty-line up/down movement. **Implemented initially.**
 - Unify line endings to the Buffer's selected line-ending mode. **Implemented initially.**
 
 Exit criteria:

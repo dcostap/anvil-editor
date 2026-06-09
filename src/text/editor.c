@@ -1720,6 +1720,86 @@ bool editor_line_down(Editor *editor, bool update_selection) {
   return editor_line_move(editor, update_selection, 1);
 }
 
+static bool line_is_whitespace_only(const Buffer *buffer, size_t line, bool *empty_out) {
+  if (!buffer || !empty_out) return false;
+  BufferLineRange range;
+  if (!buffer_line_range_crlf(buffer, line, &range)) return false;
+  for (size_t i = range.start; i < range.end; ++i) {
+    char ch = 0;
+    if (!piece_tree_byte_at(&buffer->tree, i, &ch)) return false;
+    if (!isspace((int) (unsigned char) ch)) {
+      *empty_out = false;
+      return true;
+    }
+  }
+  *empty_out = true;
+  return true;
+}
+
+static bool editor_empty_line_move(Editor *editor, bool update_selection, int direction) {
+  if (!editor) return false;
+  Buffer *buffer = editor_buffer(editor);
+  if (!buffer) return false;
+  size_t line_count = buffer_line_count(buffer);
+  size_t len = buffer_len(buffer);
+
+  size_t count = 0;
+  Cursor *cursors = active_cursors(editor, &count);
+  for (size_t i = 0; i < count; ++i) {
+    Cursor *cursor = &cursors[i];
+    BufferLineCol lc;
+    if (!buffer_offset_to_line_col(buffer, cursor->cursor, &lc)) return false;
+
+    bool saw_nonempty = false;
+    bool found = false;
+    size_t found_line = lc.line;
+    if (direction > 0) {
+      for (size_t line = lc.line; line < line_count; ++line) {
+        bool empty = false;
+        if (!line_is_whitespace_only(buffer, line, &empty)) return false;
+        if (empty && saw_nonempty) {
+          found = true;
+          found_line = line;
+          break;
+        }
+        if (!empty) saw_nonempty = true;
+      }
+    } else {
+      size_t line = lc.line;
+      for (;;) {
+        bool empty = false;
+        if (!line_is_whitespace_only(buffer, line, &empty)) return false;
+        if (empty && saw_nonempty) {
+          found = true;
+          found_line = line;
+          break;
+        }
+        if (!empty) saw_nonempty = true;
+        if (line == 0) break;
+        --line;
+      }
+    }
+
+    size_t target = direction > 0 ? len : 0;
+    if (found && !buffer_line_start(buffer, found_line, &target)) return false;
+    if (!move_cursor_to(editor, cursor, target, update_selection)) return false;
+    clear_desired_column(cursor);
+  }
+
+  editor_sort_and_merge_cursors(editor);
+  sync_core_from_multi(editor);
+  reset_last_insert(editor);
+  return true;
+}
+
+bool editor_empty_line_up(Editor *editor, bool update_selection) {
+  return editor_empty_line_move(editor, update_selection, -1);
+}
+
+bool editor_empty_line_down(Editor *editor, bool update_selection) {
+  return editor_empty_line_move(editor, update_selection, 1);
+}
+
 static bool editor_restore_undo_redo(Editor *editor, bool redo) {
   if (!editor) return false;
   Buffer *buffer = editor_buffer(editor);

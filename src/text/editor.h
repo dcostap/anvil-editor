@@ -66,6 +66,8 @@ bool editor_home_toggle_of_line(Editor *editor, bool update_selection);
 bool editor_end_of_line(Editor *editor, bool update_selection);
 bool editor_line_up(Editor *editor, bool update_selection);
 bool editor_line_down(Editor *editor, bool update_selection);
+bool editor_empty_line_up(Editor *editor, bool update_selection);
+bool editor_empty_line_down(Editor *editor, bool update_selection);
 bool editor_undo(Editor *editor);
 bool editor_redo(Editor *editor);
 
