@@ -500,6 +500,25 @@ bool editor_select_all(Editor *editor) {
   return true;
 }
 
+bool editor_select_word(Editor *editor) {
+  if (!editor) return false;
+  Buffer *buffer = editor_buffer(editor);
+  if (!buffer) return false;
+  size_t len = 0;
+  char *bytes = buffer_to_string(buffer, &len);
+  if (!bytes) return false;
+
+  editor_clear_multi_cursors(editor);
+  size_t start = editor->core_cursor.cursor;
+  if (start > len) start = len;
+  if (start != 0) start = retract_by_word_bytes(bytes, len, start);
+  size_t end = extend_by_word_bytes(bytes, len, start);
+  free(bytes);
+
+  editor->core_cursor = make_cursor(end, start);
+  return true;
+}
+
 bool editor_left(Editor *editor, bool update_selection) {
   if (!editor) return false;
   size_t count = 0;

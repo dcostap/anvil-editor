@@ -141,6 +141,27 @@ static int test_select_all_and_replace(void) {
   return 0;
 }
 
+static int test_select_word(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "foo bar,baz"));
+  CHECK(editor_set_cursor(&f.editor, 6, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_select_word(&f.editor));
+  CHECK(expect_cursor(&f.editor, 0, 7, 4) == 0);
+
+  CHECK(editor_set_cursor(&f.editor, 9, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_select_word(&f.editor));
+  CHECK(expect_cursor(&f.editor, 0, 11, 8) == 0);
+
+  CHECK(editor_set_cursor(&f.editor, 8, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_add_cursor(&f.editor, 0, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_cursor_count(&f.editor) == 2);
+  CHECK(editor_select_word(&f.editor));
+  CHECK(editor_cursor_count(&f.editor) == 1);
+  CHECK(expect_cursor(&f.editor, 0, 3, 0) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
 static int test_left_right_selection_behavior(void) {
   EditorFixture f;
   CHECK(fixture_init(&f, "abcd"));
@@ -330,6 +351,7 @@ int main(void) {
   rc |= test_multi_cursor_insert_uses_pre_edit_coordinates();
   rc |= test_multi_cursor_backspace();
   rc |= test_select_all_and_replace();
+  rc |= test_select_word();
   rc |= test_left_right_selection_behavior();
   rc |= test_line_start_end_movement();
   rc |= test_word_left_right_movement();
