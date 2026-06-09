@@ -366,7 +366,7 @@ Transaction output should include:
 - Changed byte ranges. **Implemented initially.**
 - Changed line ranges. **Implemented initially as half-open byte-derived line ranges.**
 - Cursor mapping results. **Implemented initially.**
-- Tree-sitter edit descriptors later.
+- Tree-sitter-style edit descriptors. **Initial byte/point descriptors implemented in BatchEditResult.**
 - Undo graph node info later.
 - View notification payload later. **Initial source-aware listener callbacks implemented for native Editor propagation.**
 
@@ -428,7 +428,7 @@ Implement after the text core and transaction engine are stable:
 
 - Parser/tree/query state per Buffer.
 - Language selection from filename/content.
-- `ts_tree_edit` for transaction edits.
+- `ts_tree_edit` for transaction edits. **Initial transaction descriptors are available; actual Tree-sitter integration still pending.**
 - Reparse once after batch edit.
 - Query visible byte range for syntax captures.
 - Native APIs for render/highlight spans.

@@ -40,6 +40,18 @@ void batch_edit_result_dispose(BatchEditResult *result) {
   free(result->cursor_mappings);
   result->cursor_mappings = NULL;
   result->cursor_mapping_count = 0;
+  free(result->edit_descriptors);
+  result->edit_descriptors = NULL;
+  result->edit_descriptor_count = 0;
+}
+
+static bool point_for_offset(const Buffer *buffer, size_t offset, BatchEditPoint *out) {
+  if (!buffer || !out) return false;
+  BufferLineCol lc;
+  if (!buffer_offset_to_line_col(buffer, offset, &lc)) return false;
+  out->line = lc.line;
+  out->col = lc.col;
+  return true;
 }
 
 static bool changed_line_range(
@@ -298,9 +310,13 @@ static BatchEditResult buffer_manager_apply_edits_internal(
     : original_len;
 
   BatchCursorMapping *cursor_mappings = NULL;
+  BatchEditDescriptor *edit_descriptors = NULL;
   if (edit_count > 0) {
     cursor_mappings = (BatchCursorMapping *) calloc(edit_count, sizeof(BatchCursorMapping));
-    if (!cursor_mappings) {
+    edit_descriptors = (BatchEditDescriptor *) calloc(edit_count, sizeof(BatchEditDescriptor));
+    if (!cursor_mappings || !edit_descriptors) {
+      free(edit_descriptors);
+      free(cursor_mappings);
       free(sorted);
       return rejected_result(edit_count);
     }
@@ -317,6 +333,20 @@ static BatchEditResult buffer_manager_apply_edits_internal(
       cursor_mappings[original_index].new_start_offset = new_start;
       cursor_mappings[original_index].new_end_offset = new_end;
       cursor_mappings[original_index].new_cursor_offset = new_end;
+
+      edit_descriptors[original_index].cursor_index = edit.cursor_index;
+      edit_descriptors[original_index].old_start_offset = edit.start_offset;
+      edit_descriptors[original_index].old_end_offset = edit.end_offset;
+      edit_descriptors[original_index].new_start_offset = new_start;
+      edit_descriptors[original_index].new_end_offset = new_end;
+      if (!point_for_offset(manager->buffer, edit.start_offset, &edit_descriptors[original_index].old_start_point) ||
+          !point_for_offset(manager->buffer, edit.end_offset, &edit_descriptors[original_index].old_end_point)) {
+        free(edit_descriptors);
+        free(cursor_mappings);
+        free(sorted);
+        return rejected_result(edit_count);
+      }
+
       removed_before += edit.end_offset - edit.start_offset;
       inserted_before += edit.text_len;
     }
@@ -327,6 +357,7 @@ static BatchEditResult buffer_manager_apply_edits_internal(
   if (!changed_line_range(manager->buffer, changed ? changed_start : original_len,
                           changed ? changed_old_end : original_len, changed,
                           &changed_old_start_line, &changed_old_end_line)) {
+    free(edit_descriptors);
     free(cursor_mappings);
     free(sorted);
     return rejected_result(edit_count);
@@ -339,6 +370,7 @@ static BatchEditResult buffer_manager_apply_edits_internal(
     if (remove_len > 0 && !piece_tree_remove(&manager->buffer->tree, edit.start_offset, remove_len)) {
       piece_tree_restore_snapshot(&manager->buffer->tree, &before);
       piece_tree_snapshot_release(&before);
+      free(edit_descriptors);
       free(cursor_mappings);
       free(sorted);
       return rejected_result(edit_count);
@@ -346,6 +378,7 @@ static BatchEditResult buffer_manager_apply_edits_internal(
     if (edit.text_len > 0 && !piece_tree_insert(&manager->buffer->tree, edit.start_offset, edit.text, edit.text_len)) {
       piece_tree_restore_snapshot(&manager->buffer->tree, &before);
       piece_tree_snapshot_release(&before);
+      free(edit_descriptors);
       free(cursor_mappings);
       free(sorted);
       return rejected_result(edit_count);
@@ -359,9 +392,22 @@ static BatchEditResult buffer_manager_apply_edits_internal(
                           &changed_new_start_line, &changed_new_end_line)) {
     piece_tree_restore_snapshot(&manager->buffer->tree, &before);
     piece_tree_snapshot_release(&before);
+    free(edit_descriptors);
     free(cursor_mappings);
     free(sorted);
     return rejected_result(edit_count);
+  }
+
+  for (size_t i = 0; i < edit_count; ++i) {
+    if (!point_for_offset(manager->buffer, edit_descriptors[i].new_start_offset, &edit_descriptors[i].new_start_point) ||
+        !point_for_offset(manager->buffer, edit_descriptors[i].new_end_offset, &edit_descriptors[i].new_end_point)) {
+      piece_tree_restore_snapshot(&manager->buffer->tree, &before);
+      piece_tree_snapshot_release(&before);
+      free(edit_descriptors);
+      free(cursor_mappings);
+      free(sorted);
+      return rejected_result(edit_count);
+    }
   }
 
   if (changed && manager->buffer->has_undo_graph) {
@@ -374,6 +420,7 @@ static BatchEditResult buffer_manager_apply_edits_internal(
     if (!undo_ok) {
       piece_tree_restore_snapshot(&manager->buffer->tree, &before);
       piece_tree_snapshot_release(&before);
+      free(edit_descriptors);
       free(cursor_mappings);
       free(sorted);
       return rejected_result(edit_count);
@@ -397,6 +444,8 @@ static BatchEditResult buffer_manager_apply_edits_internal(
   result.changed_new_end_line = changed_new_end_line;
   result.cursor_mappings = cursor_mappings;
   result.cursor_mapping_count = edit_count;
+  result.edit_descriptors = edit_descriptors;
+  result.edit_descriptor_count = edit_count;
   notify_edit(manager, &result, source);
   return result;
 }

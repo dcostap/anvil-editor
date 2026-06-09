@@ -32,6 +32,23 @@ typedef struct BatchCursorMapping {
   size_t new_cursor_offset;
 } BatchCursorMapping;
 
+typedef struct BatchEditPoint {
+  size_t line;
+  size_t col;
+} BatchEditPoint;
+
+typedef struct BatchEditDescriptor {
+  unsigned int cursor_index;
+  size_t old_start_offset;
+  size_t old_end_offset;
+  size_t new_start_offset;
+  size_t new_end_offset;
+  BatchEditPoint old_start_point;
+  BatchEditPoint old_end_point;
+  BatchEditPoint new_start_point;
+  BatchEditPoint new_end_point;
+} BatchEditDescriptor;
+
 typedef struct BatchEditResult {
   bool applied;
   bool rejected;
@@ -45,6 +62,8 @@ typedef struct BatchEditResult {
   size_t changed_new_end_line;
   BatchCursorMapping *cursor_mappings;
   size_t cursor_mapping_count;
+  BatchEditDescriptor *edit_descriptors;
+  size_t edit_descriptor_count;
 } BatchEditResult;
 
 typedef struct BufferSnapResult {
