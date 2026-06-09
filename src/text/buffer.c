@@ -69,6 +69,11 @@ char *buffer_to_string(const Buffer *buffer, size_t *len_out) {
   return piece_tree_to_string(&buffer->tree, len_out);
 }
 
+char *buffer_range_to_string(const Buffer *buffer, size_t start_offset, size_t end_offset, size_t *len_out) {
+  if (!buffer) return NULL;
+  return piece_tree_range_to_string(&buffer->tree, start_offset, end_offset, len_out);
+}
+
 char *buffer_get_line(const Buffer *buffer, size_t line, size_t *len_out) {
   if (!buffer) return NULL;
 

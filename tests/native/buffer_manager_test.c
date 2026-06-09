@@ -30,6 +30,12 @@ static int test_buffer_read_apis(void) {
   CHECK(!buffer_is_dirty(&buffer));
 
   size_t len = 0;
+  char *range = buffer_range_to_string(&buffer, 6, 10, &len);
+  CHECK(range != NULL);
+  CHECK(len == 4);
+  CHECK(memcmp(range, "beta", 4) == 0);
+  free(range);
+
   char *line = buffer_get_line(&buffer, 1, &len);
   CHECK(line != NULL);
   CHECK(len == 5);

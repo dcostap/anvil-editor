@@ -186,6 +186,14 @@ static int test_byte_at_and_walkers(void) {
   CHECK(ch == 'Y');
   CHECK(!piece_tree_byte_at(&tree, piece_tree_len(&tree), &ch));
 
+  size_t range_len = 0;
+  char *range = piece_tree_range_to_string(&tree, 1, 4, &range_len);
+  CHECK(range != NULL);
+  CHECK(range_len == 3);
+  CHECK(memcmp(range, "XYc", 3) == 0);
+  free(range);
+  CHECK(!piece_tree_range_to_string(&tree, 4, 99, &range_len));
+
   PieceTreeWalker walker;
   CHECK(piece_tree_walker_init(&walker, &tree, 1));
   char forward[8];

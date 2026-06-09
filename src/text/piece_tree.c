@@ -334,6 +334,35 @@ char *piece_tree_to_string(const PieceTree *tree, size_t *len_out) {
   return text;
 }
 
+char *piece_tree_range_to_string(const PieceTree *tree, size_t start_offset, size_t end_offset, size_t *len_out) {
+  if (!tree) return NULL;
+  size_t tree_len = piece_tree_len(tree);
+  if (start_offset > end_offset || end_offset > tree_len) return NULL;
+
+  size_t len = end_offset - start_offset;
+  char *text = (char *) malloc(len + 1);
+  if (!text) return NULL;
+
+  PieceTreeWalker walker;
+  if (!piece_tree_walker_init(&walker, tree, start_offset)) {
+    free(text);
+    return NULL;
+  }
+
+  for (size_t i = 0; i < len; ++i) {
+    char ch = 0;
+    if (!piece_tree_walker_next(&walker, &ch, NULL)) {
+      free(text);
+      return NULL;
+    }
+    text[i] = ch;
+  }
+
+  text[len] = '\0';
+  if (len_out) *len_out = len;
+  return text;
+}
+
 bool piece_tree_byte_at(const PieceTree *tree, size_t offset, char *byte_out) {
   if (!tree || !byte_out) return false;
   if (offset >= piece_tree_len(tree)) return false;

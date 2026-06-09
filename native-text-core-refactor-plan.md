@@ -84,6 +84,7 @@ Observed architecture:
 - Byte offset lookup, line lookup, and line starts are derived from metadata instead of flattening the file.
 - Tree roots/nodes can be retained for cheap snapshots.
 - Walkers traverse text without materializing the whole Buffer.
+- Range extraction can be built on walkers for rendering/search without requiring whole-buffer flattening. **Implemented initially.**
 
 ### Native Buffer coordination
 
@@ -285,7 +286,7 @@ Responsibilities:
 - Own a piece tree.
 - Track file path and file metadata.
 - Track dirty/save snapshot identity.
-- Provide read APIs needed by rendering and tests.
+- Provide read APIs needed by rendering and tests. **Initial line and byte-range reads implemented.**
 - Provide one transaction entry point for edits.
 
 Initial public operations:

@@ -28,6 +28,7 @@ size_t buffer_len(const Buffer *buffer);
 size_t buffer_line_count(const Buffer *buffer);
 
 char *buffer_to_string(const Buffer *buffer, size_t *len_out);
+char *buffer_range_to_string(const Buffer *buffer, size_t start_offset, size_t end_offset, size_t *len_out);
 char *buffer_get_line(const Buffer *buffer, size_t line, size_t *len_out);
 
 bool buffer_line_start(const Buffer *buffer, size_t line, size_t *offset_out);
