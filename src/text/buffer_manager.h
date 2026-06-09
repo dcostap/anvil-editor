@@ -25,6 +25,10 @@ typedef struct BatchEditResult {
   size_t changed_start;
   size_t changed_old_end;
   size_t changed_new_end;
+  size_t changed_old_start_line;
+  size_t changed_old_end_line;
+  size_t changed_new_start_line;
+  size_t changed_new_end_line;
 } BatchEditResult;
 
 void buffer_manager_init(BufferManager *manager, Buffer *buffer);

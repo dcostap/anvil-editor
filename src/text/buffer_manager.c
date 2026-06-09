@@ -28,6 +28,33 @@ static BatchEditResult rejected_result(size_t edit_count) {
   return result;
 }
 
+static bool changed_line_range(
+  const Buffer *buffer,
+  size_t start_offset,
+  size_t end_offset,
+  bool changed,
+  size_t *start_line_out,
+  size_t *end_line_out
+) {
+  if (!buffer || !start_line_out || !end_line_out) return false;
+  BufferLineCol lc;
+  if (!buffer_offset_to_line_col(buffer, start_offset, &lc)) return false;
+  *start_line_out = lc.line;
+
+  if (!changed) {
+    *end_line_out = lc.line;
+    return true;
+  }
+
+  if (end_offset > start_offset) {
+    if (!buffer_offset_to_line_col(buffer, end_offset - 1, &lc)) return false;
+    *end_line_out = lc.line + 1;
+  } else {
+    *end_line_out = *start_line_out + 1;
+  }
+  return true;
+}
+
 void buffer_manager_init(BufferManager *manager, Buffer *buffer) {
   if (!manager) return;
   manager->buffer = buffer;
@@ -56,6 +83,12 @@ BatchEditResult buffer_manager_apply_edits(
     result.changed_start = buffer_len(manager->buffer);
     result.changed_old_end = result.changed_start;
     result.changed_new_end = result.changed_start;
+    if (!changed_line_range(manager->buffer, result.changed_start, result.changed_start, false,
+                            &result.changed_old_start_line, &result.changed_old_end_line)) {
+      return rejected_result(edit_count);
+    }
+    result.changed_new_start_line = result.changed_old_start_line;
+    result.changed_new_end_line = result.changed_old_end_line;
     return result;
   }
   if (!edits) return rejected_result(edit_count);
@@ -108,6 +141,19 @@ BatchEditResult buffer_manager_apply_edits(
     changed = changed || edit.start_offset != edit.end_offset || edit.text_len != 0;
   }
 
+  size_t changed_new_end = changed
+    ? changed_old_end - removed_total + inserted_total
+    : original_len;
+
+  size_t changed_old_start_line = 0;
+  size_t changed_old_end_line = 0;
+  if (!changed_line_range(manager->buffer, changed ? changed_start : original_len,
+                          changed ? changed_old_end : original_len, changed,
+                          &changed_old_start_line, &changed_old_end_line)) {
+    free(sorted);
+    return rejected_result(edit_count);
+  }
+
   PieceTreeSnapshot before = piece_tree_snapshot_acquire(&manager->buffer->tree);
   for (size_t i = edit_count; i > 0; --i) {
     BatchEditItem edit = sorted[i - 1].edit;
@@ -126,6 +172,17 @@ BatchEditResult buffer_manager_apply_edits(
     }
   }
 
+  size_t changed_new_start_line = 0;
+  size_t changed_new_end_line = 0;
+  if (!changed_line_range(manager->buffer, changed ? changed_start : original_len,
+                          changed_new_end, changed,
+                          &changed_new_start_line, &changed_new_end_line)) {
+    piece_tree_restore_snapshot(&manager->buffer->tree, &before);
+    piece_tree_snapshot_release(&before);
+    free(sorted);
+    return rejected_result(edit_count);
+  }
+
   if (changed && manager->buffer->has_undo_graph &&
       !undo_graph_commit(&manager->buffer->undo_graph, &manager->buffer->tree, changed_start)) {
     piece_tree_restore_snapshot(&manager->buffer->tree, &before);
@@ -142,8 +199,10 @@ BatchEditResult buffer_manager_apply_edits(
   result.rejected = false;
   result.changed_start = changed ? changed_start : original_len;
   result.changed_old_end = changed ? changed_old_end : original_len;
-  result.changed_new_end = changed
-    ? changed_old_end - removed_total + inserted_total
-    : original_len;
+  result.changed_new_end = changed_new_end;
+  result.changed_old_start_line = changed_old_start_line;
+  result.changed_old_end_line = changed_old_end_line;
+  result.changed_new_start_line = changed_new_start_line;
+  result.changed_new_end_line = changed_new_end_line;
   return result;
 }

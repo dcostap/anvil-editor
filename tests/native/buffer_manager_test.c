@@ -68,6 +68,10 @@ static int test_apply_single_batch_edit(void) {
   CHECK(result.changed_start == 1);
   CHECK(result.changed_old_end == 2);
   CHECK(result.changed_new_end == 4);
+  CHECK(result.changed_old_start_line == 0);
+  CHECK(result.changed_old_end_line == 1);
+  CHECK(result.changed_new_start_line == 0);
+  CHECK(result.changed_new_end_line == 1);
   CHECK(buffer_is_dirty(&buffer));
   CHECK(expect_buffer_text(&buffer, "aXYZc\ndef") == 0);
 
@@ -94,6 +98,10 @@ static int test_apply_multiple_pre_edit_coordinate_edits(void) {
   CHECK(result.changed_start == 1);
   CHECK(result.changed_old_end == 10);
   CHECK(result.changed_new_end == 13);
+  CHECK(result.changed_old_start_line == 0);
+  CHECK(result.changed_old_end_line == 3);
+  CHECK(result.changed_new_start_line == 0);
+  CHECK(result.changed_new_end_line == 3);
   CHECK(expect_buffer_text(&buffer, "aXc\ndYYf\ngZZZi") == 0);
 
   buffer_dispose(&buffer);
@@ -157,6 +165,50 @@ static int test_remove_and_insert_boundaries(void) {
   return 0;
 }
 
+static int test_changed_line_ranges_for_newline_insert(void) {
+  Buffer buffer;
+  BufferManager manager;
+  CHECK(buffer_init(&buffer, "abcdef", 6));
+  buffer_manager_init(&manager, &buffer);
+
+  BatchEditItem edit = { 3, 3, "\nXY\n", 4, 0 };
+  BatchEditResult result = buffer_manager_apply_edits(&manager, &edit, 1);
+  CHECK(result.applied);
+  CHECK(result.changed_start == 3);
+  CHECK(result.changed_old_end == 3);
+  CHECK(result.changed_new_end == 7);
+  CHECK(result.changed_old_start_line == 0);
+  CHECK(result.changed_old_end_line == 1);
+  CHECK(result.changed_new_start_line == 0);
+  CHECK(result.changed_new_end_line == 2);
+  CHECK(expect_buffer_text(&buffer, "abc\nXY\ndef") == 0);
+
+  buffer_dispose(&buffer);
+  return 0;
+}
+
+static int test_changed_line_ranges_for_multiline_remove(void) {
+  Buffer buffer;
+  BufferManager manager;
+  CHECK(buffer_init(&buffer, "aa\nbb\ncc\ndd", 11));
+  buffer_manager_init(&manager, &buffer);
+
+  BatchEditItem edit = { 2, 8, "", 0, 0 };
+  BatchEditResult result = buffer_manager_apply_edits(&manager, &edit, 1);
+  CHECK(result.applied);
+  CHECK(result.changed_start == 2);
+  CHECK(result.changed_old_end == 8);
+  CHECK(result.changed_new_end == 2);
+  CHECK(result.changed_old_start_line == 0);
+  CHECK(result.changed_old_end_line == 3);
+  CHECK(result.changed_new_start_line == 0);
+  CHECK(result.changed_new_end_line == 1);
+  CHECK(expect_buffer_text(&buffer, "aa\ndd") == 0);
+
+  buffer_dispose(&buffer);
+  return 0;
+}
+
 int main(void) {
   int rc = 0;
   rc |= test_buffer_read_apis();
@@ -165,5 +217,7 @@ int main(void) {
   rc |= test_rejects_overlaps_atomically();
   rc |= test_rejects_duplicate_zero_width_edits();
   rc |= test_remove_and_insert_boundaries();
+  rc |= test_changed_line_ranges_for_newline_insert();
+  rc |= test_changed_line_ranges_for_multiline_remove();
   return rc;
 }
