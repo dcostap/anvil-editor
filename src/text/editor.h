@@ -42,6 +42,8 @@ bool editor_del(Editor *editor);
 bool editor_select_all(Editor *editor);
 bool editor_left(Editor *editor, bool update_selection);
 bool editor_right(Editor *editor, bool update_selection);
+bool editor_word_left(Editor *editor, bool update_selection);
+bool editor_word_right(Editor *editor, bool update_selection);
 bool editor_beginning_of_line(Editor *editor, bool update_selection);
 bool editor_end_of_line(Editor *editor, bool update_selection);
 bool editor_line_up(Editor *editor, bool update_selection);

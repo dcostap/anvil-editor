@@ -1,5 +1,6 @@
 #include "text/editor.h"
 
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -131,6 +132,86 @@ static bool ensure_desired_column(Editor *editor, Cursor *cursor) {
   if (!buffer_offset_to_line_col(editor_buffer(editor), cursor->cursor, &lc)) return false;
   cursor->desired_column = lc.col;
   return true;
+}
+
+typedef enum WordSort {
+  WORD_SORT_NONE,
+  WORD_SORT_REGULAR,
+  WORD_SORT_SEPARATOR,
+  WORD_SORT_WHITESPACE,
+  WORD_SORT_CR,
+  WORD_SORT_NEWLINE,
+} WordSort;
+
+static bool is_separator_byte(unsigned char ch) {
+  return strchr("`~!@#$%^&*()-=+[{]}\\|;:'\",.<>/?", (int) ch) != NULL;
+}
+
+static WordSort categorize_byte(unsigned char ch) {
+  if (ch == '\n') return WORD_SORT_NEWLINE;
+  if (ch == '\r') return WORD_SORT_CR;
+  if (isspace((int) ch)) return WORD_SORT_WHITESPACE;
+  if (isalnum((int) ch) || ch == '_' || ch >= 0x80) return WORD_SORT_REGULAR;
+  if (is_separator_byte(ch)) return WORD_SORT_SEPARATOR;
+  return WORD_SORT_NONE;
+}
+
+static size_t extend_by_word_bytes(const char *bytes, size_t len, size_t offset) {
+  if (!bytes || offset >= len) return len;
+  int state = 0;
+  size_t pos = offset;
+  while (pos < len) {
+    WordSort sort = categorize_byte((unsigned char) bytes[pos]);
+    bool boundary = false;
+    if (sort == WORD_SORT_REGULAR) {
+      boundary = state == 2;
+      state = 1;
+    } else if (sort == WORD_SORT_SEPARATOR) {
+      boundary = state == 1;
+      state = 2;
+    } else if (sort == WORD_SORT_WHITESPACE) {
+      boundary = state != 0 && state != 3;
+      state = 3;
+    } else if (sort == WORD_SORT_CR) {
+      state = 4;
+    } else if (sort == WORD_SORT_NEWLINE) {
+      boundary = state != 0;
+      state = 5;
+    }
+    if (boundary) return pos;
+    ++pos;
+  }
+  return len;
+}
+
+static size_t retract_by_word_bytes(const char *bytes, size_t len, size_t offset) {
+  if (!bytes || offset == 0) return 0;
+  if (offset > len) offset = len;
+  int state = 0;
+  size_t pos = offset;
+  while (pos > 0) {
+    size_t cur = pos - 1;
+    WordSort sort = categorize_byte((unsigned char) bytes[cur]);
+    bool boundary = false;
+    if (sort == WORD_SORT_REGULAR) {
+      boundary = state == 2;
+      state = 1;
+    } else if (sort == WORD_SORT_SEPARATOR) {
+      boundary = state == 1;
+      state = 2;
+    } else if (sort == WORD_SORT_WHITESPACE) {
+      boundary = state != 0 && state != 3;
+      state = 3;
+    } else if (sort == WORD_SORT_CR) {
+      state = 4;
+    } else if (sort == WORD_SORT_NEWLINE) {
+      boundary = state != 0;
+      state = 5;
+    }
+    if (boundary) return pos;
+    pos = cur;
+  }
+  return 0;
 }
 
 bool editor_init(Editor *editor, BufferManager *buffer_manager) {
@@ -417,6 +498,49 @@ bool editor_right(Editor *editor, bool update_selection) {
   editor_sort_and_merge_cursors(editor);
   sync_core_from_multi(editor);
   return true;
+}
+
+static bool editor_word_move(Editor *editor, bool update_selection, int direction) {
+  if (!editor) return false;
+  Buffer *buffer = editor_buffer(editor);
+  if (!buffer) return false;
+  size_t len = 0;
+  char *bytes = buffer_to_string(buffer, &len);
+  if (!bytes) return false;
+
+  size_t count = 0;
+  Cursor *cursors = active_cursors(editor, &count);
+  for (size_t i = 0; i < count; ++i) {
+    Cursor *cursor = &cursors[i];
+    if (!update_selection && cursor_has_selection(cursor)) {
+      cursor->cursor = direction < 0 ? cursor_start(cursor) : cursor_end(cursor);
+      cursor->selection = EDITOR_SELECTION_SENTINEL;
+      clear_desired_column(cursor);
+      continue;
+    }
+
+    size_t target = direction < 0
+      ? retract_by_word_bytes(bytes, len, cursor->cursor)
+      : extend_by_word_bytes(bytes, len, cursor->cursor);
+    if (!move_cursor_to(editor, cursor, target, update_selection)) {
+      free(bytes);
+      return false;
+    }
+    clear_desired_column(cursor);
+  }
+
+  free(bytes);
+  editor_sort_and_merge_cursors(editor);
+  sync_core_from_multi(editor);
+  return true;
+}
+
+bool editor_word_left(Editor *editor, bool update_selection) {
+  return editor_word_move(editor, update_selection, -1);
+}
+
+bool editor_word_right(Editor *editor, bool update_selection) {
+  return editor_word_move(editor, update_selection, 1);
 }
 
 bool editor_beginning_of_line(Editor *editor, bool update_selection) {

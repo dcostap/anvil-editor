@@ -169,6 +169,56 @@ static int test_line_start_end_movement(void) {
   return 0;
 }
 
+static int test_word_left_right_movement(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "foo bar,baz\nqux"));
+  CHECK(editor_set_cursor(&f.editor, 0, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_word_right(&f.editor, false));
+  CHECK(expect_cursor(&f.editor, 0, 3, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_word_right(&f.editor, false));
+  CHECK(expect_cursor(&f.editor, 0, 7, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_word_right(&f.editor, false));
+  CHECK(expect_cursor(&f.editor, 0, 8, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_word_right(&f.editor, false));
+  CHECK(expect_cursor(&f.editor, 0, 11, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_word_left(&f.editor, false));
+  CHECK(expect_cursor(&f.editor, 0, 8, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_word_left(&f.editor, false));
+  CHECK(expect_cursor(&f.editor, 0, 7, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_word_movement_selection_behavior(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "alpha beta gamma"));
+  CHECK(editor_set_cursor(&f.editor, 0, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_word_right(&f.editor, true));
+  CHECK(expect_cursor(&f.editor, 0, 5, 0) == 0);
+  CHECK(editor_word_right(&f.editor, false));
+  CHECK(expect_cursor(&f.editor, 0, 5, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_set_cursor(&f.editor, 8, 2));
+  CHECK(editor_word_left(&f.editor, false));
+  CHECK(expect_cursor(&f.editor, 0, 2, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_set_cursor(&f.editor, 2, 8));
+  CHECK(editor_word_right(&f.editor, false));
+  CHECK(expect_cursor(&f.editor, 0, 8, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_multi_cursor_word_movement(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "aa bb\ncc dd"));
+  CHECK(editor_set_cursor(&f.editor, 0, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_add_cursor(&f.editor, 6, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_word_right(&f.editor, false));
+  CHECK(expect_cursor(&f.editor, 0, 2, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(expect_cursor(&f.editor, 1, 8, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
 static int test_line_down_up_preserves_desired_column(void) {
   EditorFixture f;
   CHECK(fixture_init(&f, "abcd\nxy\n123456"));
@@ -244,6 +294,9 @@ int main(void) {
   rc |= test_select_all_and_replace();
   rc |= test_left_right_selection_behavior();
   rc |= test_line_start_end_movement();
+  rc |= test_word_left_right_movement();
+  rc |= test_word_movement_selection_behavior();
+  rc |= test_multi_cursor_word_movement();
   rc |= test_line_down_up_preserves_desired_column();
   rc |= test_line_movement_extends_selection();
   rc |= test_editor_undo_redo_places_cursor_at_operation_offset();
