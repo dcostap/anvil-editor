@@ -55,10 +55,38 @@ function NativeTextSandboxView:line_col_to_screen(line, col)
   return x, y
 end
 
-function NativeTextSandboxView:cursor_line_col()
-  local cursor = self.editor:cursor().cursor or 0
+function NativeTextSandboxView:cursor_line_col(cursor)
+  cursor = cursor or (self.editor:cursor().cursor or 0)
   local lc = self.buffer:offset_to_line_col(cursor)
   return lc and lc.line or 0, lc and lc.col or 0
+end
+
+function NativeTextSandboxView:draw_caret_for_cursor(cursor)
+  local cursor_line, cursor_col = self:cursor_line_col(cursor.cursor or 0)
+  local caret_x, caret_y = self:line_col_to_screen(cursor_line, cursor_col)
+  renderer.draw_rect(caret_x, caret_y, math.max(1, SCALE), style.font:get_height(), style.caret)
+end
+
+function NativeTextSandboxView:draw_selection_for_cursor(cursor)
+  if not cursor.selection or cursor.selection == cursor.cursor then return end
+  local first = math.min(cursor.cursor, cursor.selection)
+  local last = math.max(cursor.cursor, cursor.selection)
+  local start_lc = self.buffer:offset_to_line_col(first)
+  local end_lc = self.buffer:offset_to_line_col(last)
+  if not start_lc or not end_lc then return end
+
+  local lh = self:get_line_height()
+  for line = start_lc.line, end_lc.line do
+    local line_text = self.buffer:line(line) or ""
+    local start_col = line == start_lc.line and start_lc.col or 0
+    local end_col = line == end_lc.line and end_lc.col or #line_text
+    if end_col >= start_col then
+      local x1, y1 = self:line_col_to_screen(line, start_col)
+      local x2 = self:line_col_to_screen(line, end_col)
+      if x2 == x1 then x2 = x1 + math.max(1, SCALE) end
+      renderer.draw_rect(x1, y1, x2 - x1, lh, style.selection)
+    end
+  end
 end
 
 function NativeTextSandboxView:scroll_to_cursor()
@@ -121,6 +149,10 @@ function NativeTextSandboxView:draw()
   core.push_clip_rect(x, y, w, h)
   renderer.draw_rect(x, y, gutter_w, h, style.line_number_background or style.background2)
 
+  for i = 1, self.editor:cursor_count() do
+    self:draw_selection_for_cursor(self.editor:cursor(i))
+  end
+
   for line = first_line, last_line do
     local row_y = y + style.padding.y - self.scroll.y + line * lh
     local line_number = tostring(line + 1)
@@ -128,9 +160,9 @@ function NativeTextSandboxView:draw()
     renderer.draw_text(style.font, self.buffer:line(line) or "", x + gutter_w + style.padding.x - self.scroll.x, row_y, style.text)
   end
 
-  local cursor_line, cursor_col = self:cursor_line_col()
-  local caret_x, caret_y = self:line_col_to_screen(cursor_line, cursor_col)
-  renderer.draw_rect(caret_x, caret_y, math.max(1, SCALE), style.font:get_height(), style.caret)
+  for i = 1, self.editor:cursor_count() do
+    self:draw_caret_for_cursor(self.editor:cursor(i))
+  end
 
   core.pop_clip_rect()
   self:draw_scrollbar()
@@ -175,6 +207,10 @@ command.add(NativeTextSandboxView, {
   ["native-text-sandbox:right"] = with_active_native_view(function(view) view.editor:right(false) end),
   ["native-text-sandbox:up"] = with_active_native_view(function(view) view.editor:line_up(false) end),
   ["native-text-sandbox:down"] = with_active_native_view(function(view) view.editor:line_down(false) end),
+  ["native-text-sandbox:select-left"] = with_active_native_view(function(view) view.editor:left(true) end),
+  ["native-text-sandbox:select-right"] = with_active_native_view(function(view) view.editor:right(true) end),
+  ["native-text-sandbox:select-up"] = with_active_native_view(function(view) view.editor:line_up(true) end),
+  ["native-text-sandbox:select-down"] = with_active_native_view(function(view) view.editor:line_down(true) end),
   ["native-text-sandbox:undo"] = with_active_native_view(function(view) view.editor:undo() end),
   ["native-text-sandbox:redo"] = with_active_native_view(function(view) view.editor:redo() end),
   ["native-text-sandbox:save"] = with_active_native_view(function(view)
@@ -192,6 +228,10 @@ keymap.add {
   ["right"] = "native-text-sandbox:right",
   ["up"] = "native-text-sandbox:up",
   ["down"] = "native-text-sandbox:down",
+  ["shift+left"] = "native-text-sandbox:select-left",
+  ["shift+right"] = "native-text-sandbox:select-right",
+  ["shift+up"] = "native-text-sandbox:select-up",
+  ["shift+down"] = "native-text-sandbox:select-down",
   ["ctrl+z"] = "native-text-sandbox:undo",
   ["ctrl+y"] = "native-text-sandbox:redo",
   ["ctrl+s"] = "native-text-sandbox:save",

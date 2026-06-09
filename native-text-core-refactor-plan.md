@@ -451,7 +451,8 @@ Initial sandbox/API features:
 - Lua `native_text` module for creating native Buffers and Editors. **Initial bridge implemented.**
 - Open a native Buffer from bytes/file. **Initial in-memory and file-backed sandbox commands implemented.**
 - Draw visible lines from piece-tree walkers. **Initial sandbox draws through native Buffer line reads; direct walker-backed drawing still pending.**
-- Basic caret rendering. **Initial sandbox implemented.**
+- Basic caret rendering. **Initial sandbox implemented, including multi-cursor carets.**
+- Basic selection rendering. **Initial sandbox implemented.**
 - Basic keyboard text input. **Initial sandbox implemented.**
 - Basic mouse hit testing. **Initial sandbox implemented.**
 - Scroll. **Initial sandbox implemented.**
