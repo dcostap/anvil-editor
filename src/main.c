@@ -12,6 +12,7 @@
 #include "resize_diagnostics.h"
 #include "win32_single_instance.h"
 #include "thread_pool.h"
+#include "text/treesitter.h"
 
 #ifdef _WIN32
   #include <windows.h>
@@ -641,6 +642,7 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
     SDL_free(app);
   }
   anvil_single_instance_stop();
+  native_treesitter_shutdown_cache();
   anvil_thread_pool_shutdown();
   if (custom_events_initialized) {
     free_custom_events();

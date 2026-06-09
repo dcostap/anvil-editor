@@ -6,6 +6,7 @@
 #include <tree_sitter/tree-sitter-c.h>
 
 #include <ctype.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -77,6 +78,13 @@ typedef struct RawHighlightSpan {
   int priority;
 } RawHighlightSpan;
 
+typedef struct NativeTreeSitterQueryCacheEntry {
+  const NativeTreeSitterLanguageDef *def;
+  const TSLanguage *language;
+  TSQuery *query;
+  size_t refcount;
+} NativeTreeSitterQueryCacheEntry;
+
 static const char *const c_extensions[] = { "c", "h" };
 
 static const NativeTreeSitterCaptureStyle c_capture_styles[] = {
@@ -102,6 +110,26 @@ static const NativeTreeSitterLanguageDef language_defs[] = {
     sizeof(c_capture_styles) / sizeof(c_capture_styles[0]),
   },
 };
+
+static NativeTreeSitterQueryCacheEntry query_cache[sizeof(language_defs) / sizeof(language_defs[0])];
+static SDL_Mutex *query_cache_mutex = NULL;
+
+static bool trace_enabled(void) {
+  static int enabled = -1;
+  if (enabled < 0) {
+    const char *value = getenv("ANVIL_TREE_SITTER_LOG");
+    enabled = value && value[0] && strcmp(value, "0") != 0 && strcmp(value, "false") != 0 ? 1 : 0;
+  }
+  return enabled != 0;
+}
+
+static void trace_log(const char *fmt, ...) {
+  if (!trace_enabled()) return;
+  va_list args;
+  va_start(args, fmt);
+  SDL_LogMessageV(SDL_LOG_CATEGORY_APPLICATION, SDL_LOG_PRIORITY_DEBUG, fmt, args);
+  va_end(args);
+}
 
 static char *ts_strdup_len(const char *text, size_t len) {
   char *copy = (char *) malloc(len + 1);
@@ -223,6 +251,97 @@ static const NativeTreeSitterLanguageDef *language_def_for_name(const char *name
     if (strcmp(language_defs[i].id, name) == 0) return &language_defs[i];
   }
   return NULL;
+}
+
+static bool query_cache_lock(void) {
+  if (!query_cache_mutex) {
+    query_cache_mutex = SDL_CreateMutex();
+    if (!query_cache_mutex) return false;
+  }
+  SDL_LockMutex(query_cache_mutex);
+  return true;
+}
+
+static NativeTreeSitterQueryCacheEntry *query_cache_entry_for_def(const NativeTreeSitterLanguageDef *def) {
+  if (!def) return NULL;
+  size_t index = (size_t) (def - language_defs);
+  if (index >= sizeof(query_cache) / sizeof(query_cache[0])) return NULL;
+  NativeTreeSitterQueryCacheEntry *entry = &query_cache[index];
+  if (!entry->def) entry->def = def;
+  return entry;
+}
+
+static TSQuery *query_cache_acquire(
+  const NativeTreeSitterLanguageDef *def,
+  const TSLanguage *language
+) {
+  if (!def || !language) return NULL;
+  if (!query_cache_lock()) return NULL;
+  NativeTreeSitterQueryCacheEntry *entry = query_cache_entry_for_def(def);
+  if (!entry) {
+    SDL_UnlockMutex(query_cache_mutex);
+    return NULL;
+  }
+
+  if (!entry->query) {
+    size_t query_len = 0;
+    char *query_source = load_query_asset(def->highlight_query_asset, &query_len);
+    if (!query_source) {
+      trace_log("Tree-sitter query load failed language=%s asset=%s", def->id, def->highlight_query_asset ? def->highlight_query_asset : "");
+      SDL_UnlockMutex(query_cache_mutex);
+      return NULL;
+    }
+
+    TSQueryError error_type = TSQueryErrorNone;
+    uint32_t error_offset = 0;
+    entry->query = ts_query_new(language, query_source, (uint32_t) query_len, &error_offset, &error_type);
+    free(query_source);
+    if (!entry->query) {
+      trace_log("Tree-sitter query compile failed language=%s offset=%u error=%d", def->id, error_offset, (int) error_type);
+      SDL_UnlockMutex(query_cache_mutex);
+      return NULL;
+    }
+    entry->language = language;
+    trace_log("Tree-sitter query compiled language=%s", def->id);
+  } else {
+    trace_log("Tree-sitter query cache hit language=%s refs=%zu", def->id, entry->refcount);
+  }
+
+  entry->refcount++;
+  TSQuery *query = entry->query;
+  SDL_UnlockMutex(query_cache_mutex);
+  return query;
+}
+
+static void query_cache_release(const NativeTreeSitterLanguageDef *def) {
+  if (!def || !query_cache_mutex) return;
+  SDL_LockMutex(query_cache_mutex);
+  NativeTreeSitterQueryCacheEntry *entry = query_cache_entry_for_def(def);
+  if (entry && entry->refcount > 0) entry->refcount--;
+  SDL_UnlockMutex(query_cache_mutex);
+}
+
+void native_treesitter_shutdown_cache(void) {
+  if (!query_cache_mutex) return;
+  SDL_LockMutex(query_cache_mutex);
+  for (size_t i = 0; i < sizeof(query_cache) / sizeof(query_cache[0]); ++i) {
+    if (query_cache[i].query) ts_query_delete(query_cache[i].query);
+    memset(&query_cache[i], 0, sizeof(query_cache[i]));
+  }
+  SDL_UnlockMutex(query_cache_mutex);
+  SDL_DestroyMutex(query_cache_mutex);
+  query_cache_mutex = NULL;
+}
+
+size_t native_treesitter_cached_query_count(void) {
+  if (!query_cache_mutex) return 0;
+  size_t count = 0;
+  SDL_LockMutex(query_cache_mutex);
+  for (size_t i = 0; i < sizeof(query_cache) / sizeof(query_cache[0]); ++i) {
+    if (query_cache[i].query) count++;
+  }
+  SDL_UnlockMutex(query_cache_mutex);
+  return count;
 }
 
 const char *native_treesitter_language_for_filename(const char *filename) {
@@ -443,7 +562,8 @@ NativeTreeSitter *native_treesitter_new(Buffer *buffer, const char *language_nam
 void native_treesitter_free(NativeTreeSitter *state) {
   if (!state) return;
   cancel_parse_task(state);
-  if (state->highlight_query) ts_query_delete(state->highlight_query);
+  query_cache_release(state->language_def);
+  state->highlight_query = NULL;
   if (state->tree) ts_tree_delete(state->tree);
   if (state->parser) ts_parser_delete(state->parser);
   free(state->language_name);
@@ -460,23 +580,16 @@ bool native_treesitter_set_language(NativeTreeSitter *state, Buffer *buffer, con
 
   if (!ts_parser_set_language(state->parser, language)) return false;
 
-  size_t query_len = 0;
-  char *query_source = load_query_asset(def->highlight_query_asset, &query_len);
-  if (!query_source) return false;
-
-  TSQueryError error_type = TSQueryErrorNone;
-  uint32_t error_offset = 0;
-  TSQuery *query = ts_query_new(language, query_source, (uint32_t) query_len, &error_offset, &error_type);
-  free(query_source);
+  TSQuery *query = query_cache_acquire(def, language);
   if (!query) return false;
 
   char *name_copy = ts_strdup(def->id);
   if (!name_copy) {
-    ts_query_delete(query);
+    query_cache_release(def);
     return false;
   }
 
-  if (state->highlight_query) ts_query_delete(state->highlight_query);
+  query_cache_release(state->language_def);
   state->highlight_query = query;
   state->language = language;
   state->language_def = def;
@@ -522,6 +635,7 @@ bool native_treesitter_schedule_reparse(NativeTreeSitter *state, Buffer *buffer)
     free(payload);
     return false;
   }
+  size_t snapshot_len = piece_tree_text_snapshot_len(&payload->snapshot);
   payload->language = state->language;
   payload->generation = state->parse_generation;
   payload->old_tree = state->incremental_tree_valid && state->tree ? ts_tree_copy(state->tree) : NULL;
@@ -535,9 +649,11 @@ bool native_treesitter_schedule_reparse(NativeTreeSitter *state, Buffer *buffer)
     free_async_parse_result
   );
   if (!state->parse_task) {
+    trace_log("Tree-sitter parse schedule failed language=%s generation=%llu bytes=%zu", state->language_name ? state->language_name : "", (unsigned long long) payload->generation, snapshot_len);
     free_async_parse_payload(payload);
     return false;
   }
+  trace_log("Tree-sitter parse scheduled language=%s generation=%llu bytes=%zu incremental=%d", state->language_name ? state->language_name : "", (unsigned long long) payload->generation, snapshot_len, payload->old_tree != NULL);
   return true;
 }
 
@@ -549,10 +665,19 @@ bool native_treesitter_poll_reparse(NativeTreeSitter *state) {
 
   AsyncParseResult *result = (AsyncParseResult *) task_result.result;
   if (!result || !result->tree || result->cancelled || task_result.being_cancelled || result->generation != state->parse_generation) {
+    trace_log(
+      "Tree-sitter parse discarded language=%s result_generation=%llu current_generation=%llu cancelled=%d duration_ms=%llu",
+      state->language_name ? state->language_name : "",
+      result ? (unsigned long long) result->generation : 0ull,
+      (unsigned long long) state->parse_generation,
+      result ? (int) result->cancelled : (int) task_result.being_cancelled,
+      (unsigned long long) task_result.duration_ms
+    );
     free_async_parse_result(result);
     return false;
   }
 
+  trace_log("Tree-sitter parse applied language=%s generation=%llu duration_ms=%llu", state->language_name ? state->language_name : "", (unsigned long long) result->generation, (unsigned long long) task_result.duration_ms);
   if (state->tree) ts_tree_delete(state->tree);
   state->tree = result->tree;
   result->tree = NULL;

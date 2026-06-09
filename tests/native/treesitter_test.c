@@ -47,6 +47,28 @@ static int test_language_registry_detects_c_files(void) {
   return 0;
 }
 
+static int test_query_cache_reuses_compiled_query(void) {
+  native_treesitter_shutdown_cache();
+  CHECK(native_treesitter_cached_query_count() == 0);
+
+  Buffer first;
+  Buffer second;
+  const char *source = "int main(void) { return 1; }\n";
+  CHECK(buffer_init(&first, source, strlen(source)));
+  CHECK(buffer_init(&second, source, strlen(source)));
+  CHECK(buffer_enable_tree_sitter(&first, "c"));
+  CHECK(native_treesitter_cached_query_count() == 1);
+  CHECK(buffer_enable_tree_sitter(&second, "c"));
+  CHECK(native_treesitter_cached_query_count() == 1);
+
+  buffer_dispose(&first);
+  buffer_dispose(&second);
+  CHECK(native_treesitter_cached_query_count() == 1);
+  native_treesitter_shutdown_cache();
+  CHECK(native_treesitter_cached_query_count() == 0);
+  return 0;
+}
+
 static int test_parse_and_highlight_c_buffer(void) {
   Buffer buffer;
   const char *source = "int main(void) {\n  return 1;\n}\n";
@@ -235,12 +257,14 @@ int main(void) {
 
   int rc = 0;
   rc |= test_language_registry_detects_c_files();
+  rc |= test_query_cache_reuses_compiled_query();
   rc |= test_parse_and_highlight_c_buffer();
   rc |= test_single_edit_incrementally_reparses();
   rc |= test_async_reparse_applies_completed_tree();
   rc |= test_async_reparse_discards_stale_snapshot_result();
   rc |= test_multi_edit_falls_back_to_full_reparse();
 
+  native_treesitter_shutdown_cache();
   anvil_thread_pool_shutdown();
   SDL_Quit();
   return rc;

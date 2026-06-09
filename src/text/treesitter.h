@@ -20,6 +20,8 @@ NativeTreeSitter *native_treesitter_new(Buffer *buffer, const char *language_nam
 void native_treesitter_free(NativeTreeSitter *state);
 
 const char *native_treesitter_language_for_filename(const char *filename);
+void native_treesitter_shutdown_cache(void);
+size_t native_treesitter_cached_query_count(void);
 bool native_treesitter_set_language(NativeTreeSitter *state, Buffer *buffer, const char *language_name);
 const char *native_treesitter_language_name(const NativeTreeSitter *state);
 const char *native_treesitter_root_kind(const NativeTreeSitter *state);
