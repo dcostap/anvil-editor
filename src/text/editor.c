@@ -1249,14 +1249,25 @@ bool editor_unify_line_endings(Editor *editor) {
   if (!buffer) return false;
 
   editor_clear_multi_cursors(editor);
+
+  Cursor *before_cursors = NULL;
+  size_t before_cursor_count = 0;
+  if (!capture_active_cursor_snapshot(editor, &before_cursors, &before_cursor_count)) return false;
+
   BufferLineEndingMode target_mode = buffer_line_ending_mode(buffer);
 
   BufferLineCol original_lc;
-  if (!buffer_offset_to_line_col(buffer, editor->core_cursor.cursor, &original_lc)) return false;
+  if (!buffer_offset_to_line_col(buffer, editor->core_cursor.cursor, &original_lc)) {
+    free(before_cursors);
+    return false;
+  }
 
   size_t len = 0;
   char *bytes = buffer_to_string(buffer, &len);
-  if (!bytes) return false;
+  if (!bytes) {
+    free(before_cursors);
+    return false;
+  }
 
   size_t max_edits = 0;
   for (size_t i = 0; i < len; ++i) {
@@ -1265,6 +1276,7 @@ bool editor_unify_line_endings(Editor *editor) {
 
   BatchEditItem *items = max_edits > 0 ? (BatchEditItem *) calloc(max_edits, sizeof(BatchEditItem)) : NULL;
   if (max_edits > 0 && !items) {
+    free(before_cursors);
     free(bytes);
     return false;
   }
@@ -1295,6 +1307,7 @@ bool editor_unify_line_endings(Editor *editor) {
   free(bytes);
 
   if (edit_count == 0) {
+    free(before_cursors);
     free(items);
     buffer_set_line_ending_mode(buffer, target_mode);
     reset_last_insert(editor);
@@ -1304,9 +1317,12 @@ bool editor_unify_line_endings(Editor *editor) {
   BatchEditResult result = buffer_manager_apply_edits_from(editor->buffer_manager, items, edit_count, editor);
   free(items);
   if (!result.applied) {
+    free(before_cursors);
     batch_edit_result_dispose(&result);
     return false;
   }
+  UndoRedoNode *undo_before = result.undo_node_before;
+  UndoRedoNode *undo_after = result.undo_node_after;
   batch_edit_result_dispose(&result);
   buffer_set_line_ending_mode(buffer, target_mode);
 
@@ -1315,6 +1331,9 @@ bool editor_unify_line_endings(Editor *editor) {
     target = buffer_len(buffer);
   }
   editor->core_cursor = make_cursor(target, EDITOR_SELECTION_SENTINEL);
+  bool stored = editor_store_undo_selection_transition(editor, undo_before, undo_after, before_cursors, before_cursor_count);
+  free(before_cursors);
+  if (!stored) return false;
   reset_last_insert(editor);
   return true;
 }

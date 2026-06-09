@@ -352,6 +352,9 @@ static int test_unify_line_endings_to_lf(void) {
   CHECK(expect_text(&f, "aa\nbb\ncc\n") == 0);
   CHECK(buffer_line_ending_mode(&f.buffer) == BUFFER_LINE_ENDING_LF);
   CHECK(expect_cursor(&f.editor, 0, 4, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_undo(&f.editor));
+  CHECK(expect_text(&f, "aa\r\nbb\ncc\r\n") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 5, EDITOR_SELECTION_SENTINEL) == 0);
   fixture_dispose(&f);
   return 0;
 }
