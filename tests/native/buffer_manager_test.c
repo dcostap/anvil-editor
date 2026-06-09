@@ -79,6 +79,22 @@ static int test_buffer_detects_crlf_line_endings(void) {
   return 0;
 }
 
+static int test_buffer_path_is_owned_and_reset_on_load(void) {
+  Buffer buffer;
+  CHECK(buffer_init(&buffer, "abc", 3));
+  char path[] = "C:/tmp/example.txt";
+  CHECK(buffer_set_path(&buffer, path));
+  path[7] = 'X';
+  CHECK(buffer_path(&buffer) != NULL);
+  CHECK(strcmp(buffer_path(&buffer), "C:/tmp/example.txt") == 0);
+  CHECK(buffer_set_path(&buffer, "D:/other.txt"));
+  CHECK(strcmp(buffer_path(&buffer), "D:/other.txt") == 0);
+  CHECK(buffer_load_bytes(&buffer, "def", 3));
+  CHECK(buffer_path(&buffer) == NULL);
+  buffer_dispose(&buffer);
+  return 0;
+}
+
 static int test_apply_single_batch_edit(void) {
   Buffer buffer;
   BufferManager manager;
@@ -327,6 +343,7 @@ int main(void) {
   int rc = 0;
   rc |= test_buffer_read_apis();
   rc |= test_buffer_detects_crlf_line_endings();
+  rc |= test_buffer_path_is_owned_and_reset_on_load();
   rc |= test_apply_single_batch_edit();
   rc |= test_apply_multiple_pre_edit_coordinate_edits();
   rc |= test_rejects_overlaps_atomically();

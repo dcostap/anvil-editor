@@ -285,7 +285,7 @@ src/text/buffer_manager.h
 Responsibilities:
 
 - Own a piece tree.
-- Track file path and file metadata.
+- Track file path and file metadata. **Initial owned path storage implemented.**
 - Track dirty/save snapshot identity.
 - Provide read APIs needed by rendering and tests. **Initial line and byte-range reads implemented.**
 - Provide one transaction entry point for edits.

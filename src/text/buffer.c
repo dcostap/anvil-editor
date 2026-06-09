@@ -27,6 +27,15 @@ static BufferLineEndingMode detect_line_ending_mode_from_bytes(const char *bytes
   return BUFFER_LINE_ENDING_LF;
 }
 
+static char *buffer_strdup(const char *text) {
+  if (!text) return NULL;
+  size_t len = strlen(text);
+  char *copy = (char *) malloc(len + 1);
+  if (!copy) return NULL;
+  memcpy(copy, text, len + 1);
+  return copy;
+}
+
 bool buffer_init(Buffer *buffer, const char *bytes, size_t len) {
   if (!buffer) return false;
   memset(buffer, 0, sizeof(*buffer));
@@ -66,6 +75,19 @@ bool buffer_load_bytes(Buffer *buffer, const char *bytes, size_t len) {
   buffer->has_undo_graph = true;
   buffer_mark_clean(buffer);
   return true;
+}
+
+bool buffer_set_path(Buffer *buffer, const char *path) {
+  if (!buffer) return false;
+  char *copy = buffer_strdup(path);
+  if (path && !copy) return false;
+  free(buffer->path);
+  buffer->path = copy;
+  return true;
+}
+
+const char *buffer_path(const Buffer *buffer) {
+  return buffer ? buffer->path : NULL;
 }
 
 size_t buffer_len(const Buffer *buffer) {

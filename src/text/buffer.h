@@ -29,6 +29,8 @@ bool buffer_init(Buffer *buffer, const char *bytes, size_t len);
 void buffer_dispose(Buffer *buffer);
 
 bool buffer_load_bytes(Buffer *buffer, const char *bytes, size_t len);
+bool buffer_set_path(Buffer *buffer, const char *path);
+const char *buffer_path(const Buffer *buffer);
 
 size_t buffer_len(const Buffer *buffer);
 size_t buffer_line_count(const Buffer *buffer);
