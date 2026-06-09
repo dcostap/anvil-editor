@@ -334,6 +334,7 @@ Implement:
 - Backspace/delete. **Implemented initially.**
 - Backspace word/delete word. **Implemented initially.**
 - Delete line. **Implemented initially, including selected line spans and merged multi-cursor line ranges.**
+- Move line up/down for the core cursor or selected line span. **Implemented initially.**
 
 Exit criteria:
 

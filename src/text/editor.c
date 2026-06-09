@@ -98,6 +98,7 @@ static int compare_line_delete_ranges(const void *a, const void *b) {
 }
 
 static int compare_cursor_mappings_by_old_range(const void *a, const void *b);
+static bool cursor_line_range(Editor *editor, const Cursor *cursor, LineDeleteRange *out);
 static void map_cursor_through_sorted_mappings(
   Cursor *cursor,
   const BatchCursorMapping *mappings,
@@ -631,6 +632,194 @@ bool editor_open_line_above(Editor *editor) {
 
 bool editor_open_line_below(Editor *editor) {
   return editor_open_line(editor, true);
+}
+
+static char *line_block_to_string(const Buffer *buffer, size_t first_line, size_t last_line, size_t *len_out) {
+  if (len_out) *len_out = 0;
+  if (!buffer || last_line < first_line) return NULL;
+
+  char *out = NULL;
+  size_t len = 0;
+  size_t cap = 0;
+  if (!append_bytes(&out, &len, &cap, "", 0)) return NULL;
+
+  size_t newline_len = 0;
+  const char *newline = buffer_line_ending_bytes(buffer, &newline_len);
+  for (size_t line = first_line; line <= last_line; ++line) {
+    if (line > first_line && !append_bytes(&out, &len, &cap, newline, newline_len)) {
+      free(out);
+      return NULL;
+    }
+    BufferLineRange range;
+    if (!buffer_line_range_crlf(buffer, line, &range)) {
+      free(out);
+      return NULL;
+    }
+    size_t line_len = 0;
+    char *line_text = buffer_range_to_string(buffer, range.start, range.end, &line_len);
+    if (!line_text) {
+      free(out);
+      return NULL;
+    }
+    bool ok = append_bytes(&out, &len, &cap, line_text, line_len);
+    free(line_text);
+    if (!ok) {
+      free(out);
+      return NULL;
+    }
+  }
+
+  if (len_out) *len_out = len;
+  return out;
+}
+
+static bool apply_single_replace(Editor *editor, size_t start, size_t end, const char *text, size_t text_len) {
+  BatchEditItem item;
+  memset(&item, 0, sizeof(item));
+  item.start_offset = start;
+  item.end_offset = end;
+  item.text = text;
+  item.text_len = text_len;
+  item.cursor_index = 0;
+  BatchEditResult result = buffer_manager_apply_edits_from(editor->buffer_manager, &item, 1, editor);
+  if (!result.applied) {
+    batch_edit_result_dispose(&result);
+    return false;
+  }
+  batch_edit_result_dispose(&result);
+  return true;
+}
+
+static bool editor_move_line(Editor *editor, int direction) {
+  if (!editor) return false;
+  Buffer *buffer = editor_buffer(editor);
+  if (!buffer) return false;
+
+  editor_clear_multi_cursors(editor);
+
+  LineDeleteRange selected;
+  if (!cursor_line_range(editor, &editor->core_cursor, &selected)) return false;
+  size_t line_count = buffer_line_count(buffer);
+  if (line_count == 0) return true;
+  if (selected.last_line >= line_count) selected.last_line = line_count - 1;
+
+  size_t newline_len = 0;
+  const char *newline = buffer_line_ending_bytes(buffer, &newline_len);
+  size_t selected_len = 0;
+  char *selected_text = line_block_to_string(buffer, selected.first_line, selected.last_line, &selected_len);
+  if (!selected_text) return false;
+
+  size_t replace_start = 0;
+  size_t replace_end = 0;
+  size_t new_len = 0;
+  char *new_text = NULL;
+  size_t new_cursor = editor->core_cursor.cursor;
+
+  if (direction < 0) {
+    if (selected.first_line == 0) {
+      free(selected_text);
+      return true;
+    }
+
+    size_t prev_line = selected.first_line - 1;
+    size_t prev_len = 0;
+    char *prev_text = line_block_to_string(buffer, prev_line, prev_line, &prev_len);
+    if (!prev_text) {
+      free(selected_text);
+      return false;
+    }
+    if (!buffer_line_start(buffer, prev_line, &replace_start) ||
+        !line_end_no_lf(buffer, selected.last_line, &replace_end)) {
+      free(prev_text);
+      free(selected_text);
+      return false;
+    }
+
+    if (selected_len > SIZE_MAX - newline_len || selected_len + newline_len > SIZE_MAX - prev_len) {
+      free(prev_text);
+      free(selected_text);
+      return false;
+    }
+    new_len = selected_len + newline_len + prev_len;
+    new_text = (char *) malloc(new_len + 1);
+    if (!new_text) {
+      free(prev_text);
+      free(selected_text);
+      return false;
+    }
+    memcpy(new_text, selected_text, selected_len);
+    memcpy(new_text + selected_len, newline, newline_len);
+    memcpy(new_text + selected_len + newline_len, prev_text, prev_len);
+    new_text[new_len] = '\0';
+
+    size_t selected_start = 0;
+    if (!buffer_line_start(buffer, selected.first_line, &selected_start)) {
+      free(new_text);
+      free(prev_text);
+      free(selected_text);
+      return false;
+    }
+    size_t delta = selected_start - replace_start;
+    new_cursor = editor->core_cursor.cursor >= delta ? editor->core_cursor.cursor - delta : replace_start;
+    free(prev_text);
+  } else {
+    if (selected.last_line + 1 >= line_count) {
+      free(selected_text);
+      return true;
+    }
+
+    size_t next_line = selected.last_line + 1;
+    size_t next_len = 0;
+    char *next_text = line_block_to_string(buffer, next_line, next_line, &next_len);
+    if (!next_text) {
+      free(selected_text);
+      return false;
+    }
+    if (!buffer_line_start(buffer, selected.first_line, &replace_start) ||
+        !line_end_no_lf(buffer, next_line, &replace_end)) {
+      free(next_text);
+      free(selected_text);
+      return false;
+    }
+
+    if (next_len > SIZE_MAX - newline_len || next_len + newline_len > SIZE_MAX - selected_len) {
+      free(next_text);
+      free(selected_text);
+      return false;
+    }
+    new_len = next_len + newline_len + selected_len;
+    new_text = (char *) malloc(new_len + 1);
+    if (!new_text) {
+      free(next_text);
+      free(selected_text);
+      return false;
+    }
+    memcpy(new_text, next_text, next_len);
+    memcpy(new_text + next_len, newline, newline_len);
+    memcpy(new_text + next_len + newline_len, selected_text, selected_len);
+    new_text[new_len] = '\0';
+
+    new_cursor = editor->core_cursor.cursor + next_len + newline_len;
+    free(next_text);
+  }
+
+  free(selected_text);
+  bool ok = apply_single_replace(editor, replace_start, replace_end, new_text, new_len);
+  free(new_text);
+  if (!ok) return false;
+
+  size_t len = buffer_len(buffer);
+  if (new_cursor > len) new_cursor = len;
+  editor->core_cursor = make_cursor(new_cursor, EDITOR_SELECTION_SENTINEL);
+  return true;
+}
+
+bool editor_move_line_up(Editor *editor) {
+  return editor_move_line(editor, -1);
+}
+
+bool editor_move_line_down(Editor *editor) {
+  return editor_move_line(editor, 1);
 }
 
 bool editor_backspace(Editor *editor) {

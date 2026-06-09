@@ -182,6 +182,53 @@ static int test_multi_cursor_delete_line_merges_overlapping_line_ranges(void) {
   return 0;
 }
 
+static int test_move_line_up(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "aa\nbb\ncc"));
+  CHECK(editor_set_cursor(&f.editor, 4, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_move_line_up(&f.editor));
+  CHECK(expect_text(&f, "bb\naa\ncc") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 1, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_move_line_down(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "aa\nbb\ncc"));
+  CHECK(editor_set_cursor(&f.editor, 4, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_move_line_down(&f.editor));
+  CHECK(expect_text(&f, "aa\ncc\nbb") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 7, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_move_selected_line_span_up(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "aa\nbb\ncc\ndd"));
+  CHECK(editor_set_cursor(&f.editor, 7, 3));
+  CHECK(editor_move_line_up(&f.editor));
+  CHECK(expect_text(&f, "bb\ncc\naa\ndd") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 4, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_move_line_down_uses_crlf_and_clears_multi_cursors(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "aa\r\nbb\r\ncc"));
+  CHECK(editor_set_cursor(&f.editor, 5, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_add_cursor(&f.editor, 10, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_cursor_count(&f.editor) == 2);
+  CHECK(editor_move_line_down(&f.editor));
+  CHECK(expect_text(&f, "aa\r\ncc\r\nbb") == 0);
+  CHECK(editor_cursor_count(&f.editor) == 1);
+  CHECK(expect_cursor(&f.editor, 0, 9, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
 static int test_backspace_removes_selection(void) {
   EditorFixture f;
   CHECK(fixture_init(&f, "abcdef"));
@@ -553,6 +600,10 @@ int main(void) {
   rc |= test_delete_final_crlf_line_removes_previous_line_ending();
   rc |= test_delete_line_removes_selected_line_span();
   rc |= test_multi_cursor_delete_line_merges_overlapping_line_ranges();
+  rc |= test_move_line_up();
+  rc |= test_move_line_down();
+  rc |= test_move_selected_line_span_up();
+  rc |= test_move_line_down_uses_crlf_and_clears_multi_cursors();
   rc |= test_backspace_removes_selection();
   rc |= test_multi_cursor_insert_uses_pre_edit_coordinates();
   rc |= test_multi_cursor_backspace();
