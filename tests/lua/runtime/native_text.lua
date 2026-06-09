@@ -10,6 +10,8 @@ test.describe("native_text API bridge", function()
     test.equal(buffer:len(), 3)
     test.equal(buffer:line_count(), 1)
     test.equal(buffer:line(0), "abc")
+    test.same(buffer:offset_to_line_col(2), { line = 0, col = 2 })
+    test.equal(buffer:line_col_to_offset(0, 2), 2)
 
     test.ok(editor:set_cursor(1))
     test.ok(editor:insert("XY"))

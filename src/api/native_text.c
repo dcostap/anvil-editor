@@ -87,6 +87,35 @@ static int l_buffer_line(lua_State *L) {
   return 1;
 }
 
+static int l_buffer_offset_to_line_col(lua_State *L) {
+  NativeTextBuffer *native = check_buffer(L, 1);
+  size_t offset = check_offset(L, 2);
+  BufferLineCol lc;
+  if (!buffer_offset_to_line_col(&native->buffer, offset, &lc)) {
+    lua_pushnil(L);
+    return 1;
+  }
+  lua_newtable(L);
+  lua_pushnumber(L, (lua_Number) lc.line);
+  lua_setfield(L, -2, "line");
+  lua_pushnumber(L, (lua_Number) lc.col);
+  lua_setfield(L, -2, "col");
+  return 1;
+}
+
+static int l_buffer_line_col_to_offset(lua_State *L) {
+  NativeTextBuffer *native = check_buffer(L, 1);
+  size_t line = check_offset(L, 2);
+  size_t col = check_offset(L, 3);
+  size_t offset = 0;
+  if (!buffer_line_col_to_offset(&native->buffer, line, col, &offset)) {
+    lua_pushnil(L);
+    return 1;
+  }
+  lua_pushnumber(L, (lua_Number) offset);
+  return 1;
+}
+
 static int l_buffer_set_line_ending_mode(lua_State *L) {
   NativeTextBuffer *native = check_buffer(L, 1);
   const char *mode = luaL_checkstring(L, 2);
@@ -180,6 +209,18 @@ static int l_editor_insert(lua_State *L) {
 static int l_editor_newline(lua_State *L) {
   NativeTextEditor *native = check_editor(L, 1);
   lua_pushboolean(L, editor_insert_newline(&native->editor));
+  return 1;
+}
+
+static int l_editor_backspace(lua_State *L) {
+  NativeTextEditor *native = check_editor(L, 1);
+  lua_pushboolean(L, editor_backspace(&native->editor));
+  return 1;
+}
+
+static int l_editor_delete(lua_State *L) {
+  NativeTextEditor *native = check_editor(L, 1);
+  lua_pushboolean(L, editor_del(&native->editor));
   return 1;
 }
 
@@ -285,6 +326,8 @@ static const luaL_Reg buffer_methods[] = {
   { "text", l_buffer_text },
   { "line_count", l_buffer_line_count },
   { "line", l_buffer_line },
+  { "offset_to_line_col", l_buffer_offset_to_line_col },
+  { "line_col_to_offset", l_buffer_line_col_to_offset },
   { "set_line_ending_mode", l_buffer_set_line_ending_mode },
   { "new_editor", l_buffer_new_editor },
   { NULL, NULL }
@@ -303,6 +346,8 @@ static const luaL_Reg editor_methods[] = {
   { "clear_multi_cursors", l_editor_clear_multi_cursors },
   { "insert", l_editor_insert },
   { "newline", l_editor_newline },
+  { "backspace", l_editor_backspace },
+  { "delete", l_editor_delete },
   { "paste", l_editor_paste },
   { "copy_selection", l_editor_copy_selection },
   { "cut_selection", l_editor_cut_selection },
