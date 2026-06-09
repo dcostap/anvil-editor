@@ -1017,32 +1017,58 @@ bool editor_join_line_below(Editor *editor) {
 
   editor_clear_multi_cursors(editor);
 
+  Cursor *before_cursors = NULL;
+  size_t before_cursor_count = 0;
+  if (!capture_active_cursor_snapshot(editor, &before_cursors, &before_cursor_count)) return false;
+
   BufferLineCol lc;
-  if (!buffer_offset_to_line_col(buffer, editor->core_cursor.cursor, &lc)) return false;
+  if (!buffer_offset_to_line_col(buffer, editor->core_cursor.cursor, &lc)) {
+    free(before_cursors);
+    return false;
+  }
   size_t line_count = buffer_line_count(buffer);
-  if (lc.line + 1 >= line_count) return true;
+  if (lc.line + 1 >= line_count) {
+    free(before_cursors);
+    return true;
+  }
 
   size_t current_end = 0;
   size_t next_start = 0;
   size_t next_remove_end = 0;
-  if (!line_end_no_lf(buffer, lc.line, &current_end)) return false;
-  if (!buffer_line_start(buffer, lc.line + 1, &next_start)) return false;
+  if (!line_end_no_lf(buffer, lc.line, &current_end)) {
+    free(before_cursors);
+    return false;
+  }
+  if (!buffer_line_start(buffer, lc.line + 1, &next_start)) {
+    free(before_cursors);
+    return false;
+  }
   if (lc.line + 2 < line_count) {
-    if (!buffer_line_start(buffer, lc.line + 2, &next_remove_end)) return false;
+    if (!buffer_line_start(buffer, lc.line + 2, &next_remove_end)) {
+      free(before_cursors);
+      return false;
+    }
   } else {
     next_remove_end = buffer_len(buffer);
   }
 
   BufferLineRange next_range;
-  if (!buffer_line_range_crlf(buffer, lc.line + 1, &next_range)) return false;
+  if (!buffer_line_range_crlf(buffer, lc.line + 1, &next_range)) {
+    free(before_cursors);
+    return false;
+  }
   size_t next_len = 0;
   char *next_text = buffer_range_to_string(buffer, next_range.start, next_range.end, &next_len);
-  if (!next_text) return false;
+  if (!next_text) {
+    free(before_cursors);
+    return false;
+  }
   size_t trim = 0;
   while (trim < next_len && next_text[trim] == ' ') ++trim;
   size_t insert_len = 1 + (next_len - trim);
   char *insert_text = (char *) malloc(insert_len + 1);
   if (!insert_text) {
+    free(before_cursors);
     free(next_text);
     return false;
   }
@@ -1067,12 +1093,18 @@ bool editor_join_line_below(Editor *editor) {
   BatchEditResult result = buffer_manager_apply_edits_from(editor->buffer_manager, items, 2, editor);
   free(insert_text);
   if (!result.applied) {
+    free(before_cursors);
     batch_edit_result_dispose(&result);
     return false;
   }
+  UndoRedoNode *undo_before = result.undo_node_before;
+  UndoRedoNode *undo_after = result.undo_node_after;
   batch_edit_result_dispose(&result);
 
   editor->core_cursor = make_cursor(current_end, EDITOR_SELECTION_SENTINEL);
+  bool stored = editor_store_undo_selection_transition(editor, undo_before, undo_after, before_cursors, before_cursor_count);
+  free(before_cursors);
+  if (!stored) return false;
   reset_last_insert(editor);
   return true;
 }

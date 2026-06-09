@@ -275,6 +275,9 @@ static int test_join_line_below_trims_leading_spaces(void) {
   CHECK(editor_join_line_below(&f.editor));
   CHECK(expect_text(&f, "aa bb\ncc") == 0);
   CHECK(expect_cursor(&f.editor, 0, 2, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_undo(&f.editor));
+  CHECK(expect_text(&f, "aa\n  bb\ncc") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 1, EDITOR_SELECTION_SENTINEL) == 0);
   fixture_dispose(&f);
   return 0;
 }
