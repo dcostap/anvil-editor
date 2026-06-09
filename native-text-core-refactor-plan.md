@@ -1,4 +1,4 @@
-# Native Document Core From-Scratch Plan
+# Native Buffer Core From-Scratch Plan
 
 ## Direction change
 
@@ -6,10 +6,13 @@ The refactor is no longer framed as a gradual rewrite of Anvil's current Lua `Do
 
 The goal is to build a new Fred-style native text editor core from almost scratch, beside the existing Anvil editor, and only reuse Anvil's windowing/rendering/input shell when the new core is ready for UI experiments.
 
-Important naming note for Anvil code and docs:
+Vocabulary decision for the new core:
 
-- Use **Document / Doc** for Anvil's in-memory editable text.
-- Avoid introducing **Buffer** as the Anvil-facing term. Fred uses buffer terminology internally, but Anvil's glossary reserves Document/Doc.
+- Use Fred's vocabulary for the new native core, even where it differs from the existing Anvil editor model.
+- Use **Buffer** for the shared editable text state.
+- Use **Buffer Manager** for the coordinator that owns shared Buffer state and applies edits.
+- Use **Editor** for per-view editing state over a Buffer.
+- Keep **Document / Doc** for the existing Lua editor model until that model is replaced.
 
 ## Fred decomp location
 
@@ -42,7 +45,7 @@ Do not paste decompiled Fred code into Anvil. Reimplement the architecture, beha
 Fred's text editing architecture is a native C++ editor core centered on:
 
 - a persistent piece-tree text store
-- a shared native document/text-state manager
+- a shared native Buffer Manager
 - byte-offset cursors
 - native multi-cursor editing
 - incremental Tree-sitter integration
@@ -80,9 +83,9 @@ Observed architecture:
 - Nodes cache subtree byte length and newline metadata.
 - Byte offset lookup, line lookup, and line starts are derived from metadata instead of flattening the file.
 - Tree roots/nodes can be retained for cheap snapshots.
-- Walkers traverse text without materializing the whole Document.
+- Walkers traverse text without materializing the whole Buffer.
 
-### Native document coordination
+### Native Buffer coordination
 
 Fred coordinates edits through `Editor::BufferManager` in `ed-buffer-manager.cpp`.
 
@@ -136,7 +139,7 @@ Observed architecture:
 - Edits compute Tree-sitter byte/point ranges as part of the native transaction.
 - `ts_tree_edit` is called before reparsing.
 - Rendering/highlighting queries captures over visible byte ranges.
-- Text can be streamed from the piece tree into Tree-sitter without flattening the whole Document.
+- Text can be streamed from the piece tree into Tree-sitter without flattening the whole Buffer.
 
 ### Cheap snapshots and undo graph
 
@@ -151,30 +154,31 @@ Observed architecture:
 
 ## New architecture to build
 
-Build a new native stack beside the old Lua `Doc` stack:
+Build a new native Fred-vocabulary stack beside the old Lua `Doc` stack:
 
 ```text
 src/text/piece_tree.c/.h       low-level text storage
-src/text/native_doc.c/.h       shared Document text state, file metadata, transactions
-src/text/native_editor.c/.h    per-view cursor/selection/editing state
+src/text/buffer.c/.h           shared Buffer text state and file metadata
+src/text/buffer_manager.c/.h   transaction coordinator for shared Buffer state
+src/text/editor.c/.h           per-view cursor/selection/editing state over a Buffer
 src/text/undo_graph.c/.h       graph-shaped undo/redo snapshots
-src/text/native_treesitter.*   later Tree-sitter integration
-src/api/native_doc.c/.h        later Lua/API bridge for sandbox UI
+src/text/treesitter.*          later Tree-sitter integration
+src/api/buffer.c/.h            later Lua/API bridge for sandbox UI
 ```
 
-Initial UI integration should be a sandbox/experimental native-backed Document View, not a compatibility layer for the existing Lua `Doc`.
+Initial UI integration should be a sandbox/experimental native-backed Buffer/Editor view, not a compatibility layer for the existing Lua `Doc`.
 
 ## Core decisions
 
 ### Canonical coordinates
 
-- Native text offsets are **0-based byte offsets**.
+- Native Buffer offsets are **0-based byte offsets**.
 - Native line indexes are **0-based**.
 - Native columns are **0-based byte columns from the line start**.
 - Lua-facing/UI compatibility APIs may translate to Anvil's existing 1-based line/column conventions later.
 - Visual columns, grapheme movement, tabs, and wrapping are view-layer concepts, not canonical storage coordinates.
 
-### Document text bytes
+### Buffer text bytes
 
 - The native piece tree stores bytes.
 - The first implementation should preserve byte sequences exactly.
@@ -190,9 +194,9 @@ Initial UI integration should be a sandbox/experimental native-backed Document V
 
 ### Selection State ownership
 
-- Selection State remains owned by a Document View / native editor view state.
-- The shared Document owns text, file metadata, parse state, and the undo graph.
-- Undo selection snapshots must be associated with the editing view that created the transaction, not treated as one global Document selection.
+- Selection State remains owned by an Editor / native per-view state.
+- The shared Buffer owns text, file metadata, parse state, and the undo graph.
+- Undo selection snapshots must be associated with the editing view that created the transaction, not treated as one global Buffer selection.
 
 ### Compatibility policy
 
@@ -213,7 +217,7 @@ Only after core editing invariants are solid, add an experimental view using Anv
 
 ### Track C: Replacement
 
-Once the sandbox is strong enough, switch Anvil's primary editor to the native Document core and delete the old Lua text core instead of maintaining long-term adapters.
+Once the sandbox is strong enough, switch Anvil's primary editor to the native Buffer core and delete the old Lua text core instead of maintaining long-term adapters.
 
 ## Phase 1: Piece-tree library
 
@@ -250,7 +254,7 @@ Then add:
 Tests:
 
 - Deterministic insert/remove cases.
-- Empty Document and EOF edge cases.
+- Empty Buffer and EOF edge cases.
 - LF and CRLF byte-preservation cases.
 - UTF-8 byte-preservation cases.
 - Invalid UTF-8 byte-preservation cases.
@@ -264,13 +268,15 @@ Exit criteria:
 - Snapshot restore is cheap and correct.
 - Line lookup remains correct after insert/remove edge cases.
 
-## Phase 2: Native Document shell
+## Phase 2: Native Buffer shell
 
 Likely files:
 
 ```text
-src/text/native_doc.c
-src/text/native_doc.h
+src/text/buffer.c
+src/text/buffer.h
+src/text/buffer_manager.c
+src/text/buffer_manager.h
 ```
 
 Responsibilities:
@@ -283,27 +289,27 @@ Responsibilities:
 
 Initial public operations:
 
-- `native_doc_new()`
-- `native_doc_free()`
-- `native_doc_load_bytes(...)`
-- `native_doc_len()`
-- `native_doc_line_count()`
-- `native_doc_get_line(...)`
-- `native_doc_line_col_to_offset(...)`
-- `native_doc_offset_to_line_col(...)`
-- `native_doc_apply_edits(...)`
+- `buffer_new()`
+- `buffer_free()`
+- `buffer_load_bytes(...)`
+- `buffer_len()`
+- `buffer_line_count()`
+- `buffer_get_line(...)`
+- `buffer_line_col_to_offset(...)`
+- `buffer_offset_to_line_col(...)`
+- `buffer_manager_apply_edits(...)`
 
 Exit criteria:
 
-- Native tests can create, edit, snapshot, save-state mark, and inspect a Document without Lua.
+- Native tests can create, edit, snapshot, save-state mark, and inspect a Buffer without Lua.
 
-## Phase 3: Native editor/view state
+## Phase 3: Editor state
 
 Likely files:
 
 ```text
-src/text/native_editor.c
-src/text/native_editor.h
+src/text/editor.c
+src/text/editor.h
 ```
 
 Implement:
@@ -324,20 +330,20 @@ Exit criteria:
 - Native tests can drive core editing behavior without Lua selection mutation logic.
 - Multi-cursor edits are native and batch-based.
 
-## Phase 4: Native transaction engine
+## Phase 4: Buffer Manager transaction engine
 
-Centralize every mutation through one native transaction path.
+Centralize every mutation through one Buffer Manager transaction path.
 
-Transaction input shape:
+Batch edit input shape:
 
 ```c
-typedef struct NativeEdit {
+typedef struct BatchEditItem {
   uint64_t start_offset;
   uint64_t end_offset;
   const char *text;
   size_t text_len;
   uint32_t cursor_index;
-} NativeEdit;
+} BatchEditItem;
 ```
 
 Transaction output should include:
@@ -352,7 +358,7 @@ Transaction output should include:
 
 Rules:
 
-- Edits are expressed in old-Document coordinates.
+- Edits are expressed in pre-edit Buffer coordinates.
 - Edits are sorted by start offset.
 - Overlaps are rejected unless an operation explicitly opts into clipping.
 - All text-editing commands go through this path.
@@ -398,13 +404,13 @@ Exit criteria:
 Likely files:
 
 ```text
-src/text/native_treesitter.c
-src/text/native_treesitter.h
+src/text/treesitter.c
+src/text/treesitter.h
 ```
 
 Implement after the text core and transaction engine are stable:
 
-- Parser/tree/query state per Document.
+- Parser/tree/query state per Buffer.
 - Language selection from filename/content.
 - `ts_tree_edit` for transaction edits.
 - Reparse once after batch edit.
@@ -416,13 +422,13 @@ Exit criteria:
 - Tree-sitter parse updates correctly after inserts/removes/multicursor edits.
 - Visible-range syntax captures can replace Lua highlighter output in the sandbox view.
 
-## Phase 7: Sandbox Document View using Anvil rendering
+## Phase 7: Sandbox Buffer/Editor view using Anvil rendering
 
-Build an experimental native-backed Document View that uses Anvil's renderer/window/input infrastructure but not the old Lua `Doc` internals.
+Build an experimental native-backed Buffer/Editor view that uses Anvil's renderer/window/input infrastructure but not the old Lua `Doc` internals.
 
 Initial sandbox features:
 
-- Open a native Document from bytes/file.
+- Open a native Buffer from bytes/file.
 - Draw visible lines from piece-tree walkers.
 - Basic caret rendering.
 - Basic keyboard text input.
@@ -439,7 +445,7 @@ Exit criteria:
 
 Only after the sandbox is robust:
 
-- Switch primary editor creation to the native Document stack.
+- Switch primary editor creation to the native Buffer stack.
 - Migrate required first-party commands/plugins to native APIs or new Lua glue.
 - Delete old Lua text-core code and direct `Doc.lines` assumptions.
 - Keep Anvil's rendering/UI shell and user-facing app concepts.
@@ -447,4 +453,4 @@ Only after the sandbox is robust:
 Exit criteria:
 
 - The old Lua `Doc` text storage/mutation path is gone.
-- The native Document core is the only editing core.
+- The native Buffer core is the only editing core.

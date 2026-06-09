@@ -25,8 +25,16 @@ The per-project editor state that restores open views, tabs, splits, scroll posi
 _Avoid_: Session, app state
 
 **Document / Doc**:
-The in-memory editable text for a file or untitled document.
-_Avoid_: Buffer
+The in-memory editable text for a file or untitled document in the existing Anvil editor model.
+_Avoid_: Buffer when discussing the existing editor model
+
+**Buffer**:
+The shared editable text state in the new Fred-style editor core.
+_Avoid_: Document, Doc when discussing the new Fred-style editor core
+
+**Buffer Manager**:
+The coordinator for shared Buffer state in the new Fred-style editor core.
+_Avoid_: Document manager, Doc manager
 
 **Document View / DocView**:
 A visual surface showing a Document. A Document View can be an Editor or a document-backed tool panel.
@@ -41,8 +49,8 @@ A non-interactive vertical visual marker at a configured character column in a D
 _Avoid_: Line guide, ruler
 
 **Editor**:
-A Document View used to edit a file or untitled Document. Document-backed tool panels are not Editors, even when they use Document View mechanics.
-_Avoid_: Buffer, editor tab
+A Document View used to edit a file or untitled Document in the existing Anvil editor model; in the new Fred-style editor core, the per-view editing state over a Buffer.
+_Avoid_: editor tab
 
 **Main Editor**:
 An Editor hosted in the Main Panel.
