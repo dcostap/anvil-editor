@@ -82,6 +82,57 @@ static void sync_core_from_multi(Editor *editor) {
   if (editor->multi_cursor_count > 0) editor->core_cursor = editor->multi_cursors[0];
 }
 
+static bool line_end_no_lf(const Buffer *buffer, size_t line, size_t *offset_out) {
+  if (!buffer || !offset_out) return false;
+  size_t line_count = buffer_line_count(buffer);
+  if (line >= line_count) return false;
+
+  size_t end = 0;
+  if (line + 1 < line_count) {
+    if (!buffer_line_start(buffer, line + 1, &end)) return false;
+    if (end > 0) --end;
+  } else {
+    end = buffer_len(buffer);
+  }
+
+  *offset_out = end;
+  return true;
+}
+
+static bool line_length_no_lf(const Buffer *buffer, size_t line, size_t *len_out) {
+  if (!buffer || !len_out) return false;
+  size_t start = 0;
+  size_t end = 0;
+  if (!buffer_line_start(buffer, line, &start)) return false;
+  if (!line_end_no_lf(buffer, line, &end)) return false;
+  *len_out = end >= start ? end - start : 0;
+  return true;
+}
+
+static bool move_cursor_to(Editor *editor, Cursor *cursor, size_t offset, bool update_selection) {
+  if (!valid_locus(editor, offset)) return false;
+  size_t old = cursor->cursor;
+  cursor->cursor = offset;
+  if (update_selection) {
+    if (cursor->selection == EDITOR_SELECTION_SENTINEL) cursor->selection = old;
+  } else {
+    cursor->selection = EDITOR_SELECTION_SENTINEL;
+  }
+  return true;
+}
+
+static void clear_desired_column(Cursor *cursor) {
+  cursor->desired_column = EDITOR_DESIRED_COLUMN_SENTINEL;
+}
+
+static bool ensure_desired_column(Editor *editor, Cursor *cursor) {
+  if (cursor->desired_column != EDITOR_DESIRED_COLUMN_SENTINEL) return true;
+  BufferLineCol lc;
+  if (!buffer_offset_to_line_col(editor_buffer(editor), cursor->cursor, &lc)) return false;
+  cursor->desired_column = lc.col;
+  return true;
+}
+
 bool editor_init(Editor *editor, BufferManager *buffer_manager) {
   if (!editor || !buffer_manager || !buffer_manager->buffer) return false;
   memset(editor, 0, sizeof(*editor));
@@ -322,6 +373,7 @@ bool editor_left(Editor *editor, bool update_selection) {
     if (!update_selection && cursor_has_selection(cursor)) {
       cursor->cursor = cursor_start(cursor);
       cursor->selection = EDITOR_SELECTION_SENTINEL;
+      clear_desired_column(cursor);
       continue;
     }
     size_t old = cursor->cursor;
@@ -331,7 +383,7 @@ bool editor_left(Editor *editor, bool update_selection) {
     } else {
       cursor->selection = EDITOR_SELECTION_SENTINEL;
     }
-    cursor->desired_column = EDITOR_DESIRED_COLUMN_SENTINEL;
+    clear_desired_column(cursor);
   }
   editor_sort_and_merge_cursors(editor);
   sync_core_from_multi(editor);
@@ -350,6 +402,7 @@ bool editor_right(Editor *editor, bool update_selection) {
     if (!update_selection && cursor_has_selection(cursor)) {
       cursor->cursor = cursor_end(cursor);
       cursor->selection = EDITOR_SELECTION_SENTINEL;
+      clear_desired_column(cursor);
       continue;
     }
     size_t old = cursor->cursor;
@@ -359,9 +412,103 @@ bool editor_right(Editor *editor, bool update_selection) {
     } else {
       cursor->selection = EDITOR_SELECTION_SENTINEL;
     }
-    cursor->desired_column = EDITOR_DESIRED_COLUMN_SENTINEL;
+    clear_desired_column(cursor);
   }
   editor_sort_and_merge_cursors(editor);
   sync_core_from_multi(editor);
   return true;
+}
+
+bool editor_beginning_of_line(Editor *editor, bool update_selection) {
+  if (!editor) return false;
+  Buffer *buffer = editor_buffer(editor);
+  if (!buffer) return false;
+
+  size_t count = 0;
+  Cursor *cursors = active_cursors(editor, &count);
+  for (size_t i = 0; i < count; ++i) {
+    Cursor *cursor = &cursors[i];
+    BufferLineCol lc;
+    size_t target = 0;
+    if (!buffer_offset_to_line_col(buffer, cursor->cursor, &lc)) return false;
+    if (!buffer_line_start(buffer, lc.line, &target)) return false;
+    if (!move_cursor_to(editor, cursor, target, update_selection)) return false;
+    clear_desired_column(cursor);
+  }
+
+  editor_sort_and_merge_cursors(editor);
+  sync_core_from_multi(editor);
+  return true;
+}
+
+bool editor_end_of_line(Editor *editor, bool update_selection) {
+  if (!editor) return false;
+  Buffer *buffer = editor_buffer(editor);
+  if (!buffer) return false;
+
+  size_t count = 0;
+  Cursor *cursors = active_cursors(editor, &count);
+  for (size_t i = 0; i < count; ++i) {
+    Cursor *cursor = &cursors[i];
+    BufferLineCol lc;
+    size_t target = 0;
+    if (!buffer_offset_to_line_col(buffer, cursor->cursor, &lc)) return false;
+    if (!line_end_no_lf(buffer, lc.line, &target)) return false;
+    if (!move_cursor_to(editor, cursor, target, update_selection)) return false;
+    clear_desired_column(cursor);
+  }
+
+  editor_sort_and_merge_cursors(editor);
+  sync_core_from_multi(editor);
+  return true;
+}
+
+static bool editor_line_move(Editor *editor, bool update_selection, int direction) {
+  if (!editor) return false;
+  Buffer *buffer = editor_buffer(editor);
+  if (!buffer) return false;
+
+  size_t line_count = buffer_line_count(buffer);
+  size_t count = 0;
+  Cursor *cursors = active_cursors(editor, &count);
+  for (size_t i = 0; i < count; ++i) {
+    Cursor *cursor = &cursors[i];
+
+    if (!update_selection && cursor_has_selection(cursor)) {
+      cursor->cursor = direction > 0 ? cursor_end(cursor) : cursor_start(cursor);
+      cursor->selection = EDITOR_SELECTION_SENTINEL;
+    }
+
+    if (!ensure_desired_column(editor, cursor)) return false;
+
+    BufferLineCol lc;
+    if (!buffer_offset_to_line_col(buffer, cursor->cursor, &lc)) return false;
+    size_t target_line = lc.line;
+    if (direction > 0) {
+      if (target_line + 1 < line_count) ++target_line;
+    } else if (target_line > 0) {
+      --target_line;
+    }
+
+    size_t target_line_len = 0;
+    size_t target_line_start = 0;
+    if (!line_length_no_lf(buffer, target_line, &target_line_len)) return false;
+    if (!buffer_line_start(buffer, target_line, &target_line_start)) return false;
+    size_t target_col = cursor->desired_column < target_line_len
+      ? cursor->desired_column
+      : target_line_len;
+    if (!move_cursor_to(editor, cursor, target_line_start + target_col, update_selection)) return false;
+  }
+
+  editor_sort_and_merge_cursors(editor);
+  sync_core_from_multi(editor);
+  return true;
+}
+
+bool editor_line_up(Editor *editor, bool update_selection) {
+  return editor_line_move(editor, update_selection, -1);
+}
+
+bool editor_line_down(Editor *editor, bool update_selection) {
+  return editor_line_move(editor, update_selection, 1);
 }
