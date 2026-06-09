@@ -142,9 +142,19 @@ bool buffer_can_redo(const Buffer *buffer) {
 }
 
 bool buffer_undo(Buffer *buffer) {
-  return buffer && buffer->has_undo_graph && undo_graph_undo(&buffer->undo_graph, &buffer->tree);
+  return buffer_undo_op_offset(buffer, NULL);
 }
 
 bool buffer_redo(Buffer *buffer) {
-  return buffer && buffer->has_undo_graph && undo_graph_redo(&buffer->undo_graph, &buffer->tree);
+  return buffer_redo_op_offset(buffer, NULL);
+}
+
+bool buffer_undo_op_offset(Buffer *buffer, size_t *op_offset_out) {
+  if (!buffer || !buffer->has_undo_graph) return false;
+  return undo_graph_undo(&buffer->undo_graph, &buffer->tree, op_offset_out);
+}
+
+bool buffer_redo_op_offset(Buffer *buffer, size_t *op_offset_out) {
+  if (!buffer || !buffer->has_undo_graph) return false;
+  return undo_graph_redo(&buffer->undo_graph, &buffer->tree, op_offset_out);
 }

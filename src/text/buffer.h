@@ -39,5 +39,7 @@ bool buffer_can_undo(const Buffer *buffer);
 bool buffer_can_redo(const Buffer *buffer);
 bool buffer_undo(Buffer *buffer);
 bool buffer_redo(Buffer *buffer);
+bool buffer_undo_op_offset(Buffer *buffer, size_t *op_offset_out);
+bool buffer_redo_op_offset(Buffer *buffer, size_t *op_offset_out);
 
 #endif

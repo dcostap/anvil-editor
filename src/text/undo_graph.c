@@ -78,19 +78,21 @@ bool undo_graph_can_redo(const UndoRedoGraph *graph) {
   return graph && graph->current && graph->current->last_child;
 }
 
-bool undo_graph_undo(UndoRedoGraph *graph, PieceTree *tree) {
+bool undo_graph_undo(UndoRedoGraph *graph, PieceTree *tree, size_t *op_offset_out) {
   if (!undo_graph_can_undo(graph) || !tree) return false;
   UndoRedoNode *target = graph->current->parent;
   if (!piece_tree_restore_snapshot(tree, &target->snapshot)) return false;
   graph->current = target;
+  if (op_offset_out) *op_offset_out = target->op_offset;
   return true;
 }
 
-bool undo_graph_redo(UndoRedoGraph *graph, PieceTree *tree) {
+bool undo_graph_redo(UndoRedoGraph *graph, PieceTree *tree, size_t *op_offset_out) {
   if (!undo_graph_can_redo(graph) || !tree) return false;
   UndoRedoNode *target = graph->current->last_child;
   if (!piece_tree_restore_snapshot(tree, &target->snapshot)) return false;
   graph->current = target;
+  if (op_offset_out) *op_offset_out = target->op_offset;
   return true;
 }
 

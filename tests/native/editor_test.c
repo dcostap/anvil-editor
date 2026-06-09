@@ -197,6 +197,42 @@ static int test_line_movement_extends_selection(void) {
   return 0;
 }
 
+static int test_editor_undo_redo_places_cursor_at_operation_offset(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "abc"));
+  CHECK(editor_set_cursor(&f.editor, 1, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_insert_buffer(&f.editor, "XYZ", 3));
+  CHECK(expect_text(&f, "aXYZbc") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 4, EDITOR_SELECTION_SENTINEL) == 0);
+
+  CHECK(editor_undo(&f.editor));
+  CHECK(expect_text(&f, "abc") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 0, EDITOR_SELECTION_SENTINEL) == 0);
+
+  CHECK(editor_redo(&f.editor));
+  CHECK(expect_text(&f, "aXYZbc") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 1, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_editor_undo_clears_multi_cursors(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "abc\ndef"));
+  CHECK(editor_set_cursor(&f.editor, 1, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_add_cursor(&f.editor, 5, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_insert_buffer(&f.editor, "X", 1));
+  CHECK(expect_text(&f, "aXbc\ndXef") == 0);
+  CHECK(editor_cursor_count(&f.editor) == 2);
+
+  CHECK(editor_undo(&f.editor));
+  CHECK(expect_text(&f, "abc\ndef") == 0);
+  CHECK(editor_cursor_count(&f.editor) == 1);
+  CHECK(expect_cursor(&f.editor, 0, 0, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
 int main(void) {
   int rc = 0;
   rc |= test_insert_buffer_at_cursor();
@@ -210,5 +246,7 @@ int main(void) {
   rc |= test_line_start_end_movement();
   rc |= test_line_down_up_preserves_desired_column();
   rc |= test_line_movement_extends_selection();
+  rc |= test_editor_undo_redo_places_cursor_at_operation_offset();
+  rc |= test_editor_undo_clears_multi_cursors();
   return rc;
 }

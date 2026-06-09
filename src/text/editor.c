@@ -512,3 +512,29 @@ bool editor_line_up(Editor *editor, bool update_selection) {
 bool editor_line_down(Editor *editor, bool update_selection) {
   return editor_line_move(editor, update_selection, 1);
 }
+
+static bool editor_restore_undo_redo(Editor *editor, bool redo) {
+  if (!editor) return false;
+  Buffer *buffer = editor_buffer(editor);
+  if (!buffer) return false;
+
+  editor_clear_multi_cursors(editor);
+  size_t op_offset = 0;
+  bool ok = redo
+    ? buffer_redo_op_offset(buffer, &op_offset)
+    : buffer_undo_op_offset(buffer, &op_offset);
+  if (!ok) return false;
+
+  size_t len = buffer_len(buffer);
+  if (op_offset > len) op_offset = len;
+  editor->core_cursor = make_cursor(op_offset, EDITOR_SELECTION_SENTINEL);
+  return true;
+}
+
+bool editor_undo(Editor *editor) {
+  return editor_restore_undo_redo(editor, false);
+}
+
+bool editor_redo(Editor *editor) {
+  return editor_restore_undo_redo(editor, true);
+}

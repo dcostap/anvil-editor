@@ -32,8 +32,8 @@ bool undo_graph_update_current_snapshot(UndoRedoGraph *graph, const PieceTree *t
 
 bool undo_graph_can_undo(const UndoRedoGraph *graph);
 bool undo_graph_can_redo(const UndoRedoGraph *graph);
-bool undo_graph_undo(UndoRedoGraph *graph, PieceTree *tree);
-bool undo_graph_redo(UndoRedoGraph *graph, PieceTree *tree);
+bool undo_graph_undo(UndoRedoGraph *graph, PieceTree *tree, size_t *op_offset_out);
+bool undo_graph_redo(UndoRedoGraph *graph, PieceTree *tree, size_t *op_offset_out);
 
 void undo_graph_mark_save(UndoRedoGraph *graph);
 bool undo_graph_is_dirty(const UndoRedoGraph *graph);
