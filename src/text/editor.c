@@ -1087,15 +1087,26 @@ bool editor_tab(Editor *editor) {
   if (!buffer) return false;
   editor_clear_multi_cursors(editor);
 
+  Cursor *before_cursors = NULL;
+  size_t before_cursor_count = 0;
+  if (!capture_active_cursor_snapshot(editor, &before_cursors, &before_cursor_count)) return false;
+
   LineDeleteRange lines;
-  if (!cursor_line_range(editor, &editor->core_cursor, &lines)) return false;
+  if (!cursor_line_range(editor, &editor->core_cursor, &lines)) {
+    free(before_cursors);
+    return false;
+  }
   size_t line_count = lines.last_line - lines.first_line + 1;
   BatchEditItem *items = (BatchEditItem *) calloc(line_count, sizeof(BatchEditItem));
-  if (!items) return false;
+  if (!items) {
+    free(before_cursors);
+    return false;
+  }
 
   for (size_t i = 0; i < line_count; ++i) {
     size_t offset = 0;
     if (!buffer_line_start(buffer, lines.first_line + i, &offset)) {
+      free(before_cursors);
       free(items);
       return false;
     }
@@ -1112,14 +1123,20 @@ bool editor_tab(Editor *editor) {
   BatchEditResult result = buffer_manager_apply_edits_from(editor->buffer_manager, items, line_count, editor);
   free(items);
   if (!result.applied) {
+    free(before_cursors);
     batch_edit_result_dispose(&result);
     return false;
   }
+  UndoRedoNode *undo_before = result.undo_node_before;
+  UndoRedoNode *undo_after = result.undo_node_after;
   batch_edit_result_dispose(&result);
 
   size_t new_cursor = cursor_at_first ? old_first + 1 : old_last + line_count;
   if (new_cursor > buffer_len(buffer)) new_cursor = buffer_len(buffer);
   editor->core_cursor = make_cursor(new_cursor, EDITOR_SELECTION_SENTINEL);
+  bool stored = editor_store_undo_selection_transition(editor, undo_before, undo_after, before_cursors, before_cursor_count);
+  free(before_cursors);
+  if (!stored) return false;
   reset_last_insert(editor);
   return true;
 }
@@ -1130,16 +1147,27 @@ bool editor_untab(Editor *editor) {
   if (!buffer) return false;
   editor_clear_multi_cursors(editor);
 
+  Cursor *before_cursors = NULL;
+  size_t before_cursor_count = 0;
+  if (!capture_active_cursor_snapshot(editor, &before_cursors, &before_cursor_count)) return false;
+
   LineDeleteRange lines;
-  if (!cursor_line_range(editor, &editor->core_cursor, &lines)) return false;
+  if (!cursor_line_range(editor, &editor->core_cursor, &lines)) {
+    free(before_cursors);
+    return false;
+  }
   size_t line_count = lines.last_line - lines.first_line + 1;
   BatchEditItem *items = (BatchEditItem *) calloc(line_count, sizeof(BatchEditItem));
-  if (!items) return false;
+  if (!items) {
+    free(before_cursors);
+    return false;
+  }
 
   size_t edit_count = 0;
   for (size_t i = 0; i < line_count; ++i) {
     size_t offset = 0;
     if (!buffer_line_start(buffer, lines.first_line + i, &offset)) {
+      free(before_cursors);
       free(items);
       return false;
     }
@@ -1155,6 +1183,7 @@ bool editor_untab(Editor *editor) {
   }
 
   if (edit_count == 0) {
+    free(before_cursors);
     free(items);
     return true;
   }
@@ -1163,15 +1192,21 @@ bool editor_untab(Editor *editor) {
   BatchEditResult result = buffer_manager_apply_edits_from(editor->buffer_manager, items, edit_count, editor);
   free(items);
   if (!result.applied) {
+    free(before_cursors);
     batch_edit_result_dispose(&result);
     return false;
   }
+  UndoRedoNode *undo_before = result.undo_node_before;
+  UndoRedoNode *undo_after = result.undo_node_after;
   if (result.cursor_mapping_count > 0) {
     map_cursor_through_sorted_mappings(&mapped, result.cursor_mappings, result.cursor_mapping_count);
   }
   batch_edit_result_dispose(&result);
 
   editor->core_cursor = make_cursor(mapped.cursor, EDITOR_SELECTION_SENTINEL);
+  bool stored = editor_store_undo_selection_transition(editor, undo_before, undo_after, before_cursors, before_cursor_count);
+  free(before_cursors);
+  if (!stored) return false;
   reset_last_insert(editor);
   return true;
 }

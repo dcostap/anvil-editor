@@ -308,6 +308,9 @@ static int test_tab_selection_indents_selected_lines(void) {
   CHECK(editor_tab(&f.editor));
   CHECK(expect_text(&f, "\taa\n\tbb\ncc") == 0);
   CHECK(expect_cursor(&f.editor, 0, 7, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_undo(&f.editor));
+  CHECK(expect_text(&f, "aa\nbb\ncc") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 5, 0) == 0);
   fixture_dispose(&f);
   return 0;
 }
@@ -330,6 +333,9 @@ static int test_untab_selection_removes_leading_tabs_from_selected_lines(void) {
   CHECK(editor_untab(&f.editor));
   CHECK(expect_text(&f, "aa\nbb\ncc") == 0);
   CHECK(expect_cursor(&f.editor, 0, 5, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_undo(&f.editor));
+  CHECK(expect_text(&f, "\taa\n\tbb\ncc") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 7, 0) == 0);
   fixture_dispose(&f);
   return 0;
 }
