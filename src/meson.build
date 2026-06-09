@@ -13,6 +13,7 @@ anvil_sources = [
     'api/utf8.c',
     'api/tokenizer.c',
     'api/fuzzy.c',
+    'api/native_text.c',
     'fuzzy.c',
     'text/piece_tree.c',
     'text/buffer.c',

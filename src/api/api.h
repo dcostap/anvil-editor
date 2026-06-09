@@ -18,6 +18,8 @@
 #define API_TYPE_NATIVE_PLUGIN "NativePlugin"
 #define API_TYPE_SHARED_MEMORY "SharedMemory"
 #define API_TYPE_RENWINDOW "RenWindow"
+#define API_TYPE_NATIVE_TEXT_BUFFER "NativeTextBuffer"
+#define API_TYPE_NATIVE_TEXT_EDITOR "NativeTextEditor"
 
 #define API_CONSTANT_DEFINE(L, idx, key, n) (lua_pushnumber(L, n), lua_setfield(L, idx - 1, key))
 

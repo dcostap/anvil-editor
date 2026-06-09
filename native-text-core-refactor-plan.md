@@ -164,7 +164,7 @@ src/text/buffer_manager.c/.h   transaction coordinator for shared Buffer state
 src/text/editor.c/.h           per-view cursor/selection/editing state over a Buffer
 src/text/undo_graph.c/.h       graph-shaped undo/redo snapshots
 src/text/treesitter.*          later Tree-sitter integration
-src/api/buffer.c/.h            later Lua/API bridge for sandbox UI
+src/api/native_text.c          initial Lua/API bridge for sandbox UI
 ```
 
 Initial UI integration should be a sandbox/experimental native-backed Buffer/Editor view, not a compatibility layer for the existing Lua `Doc`.
@@ -446,8 +446,9 @@ Exit criteria:
 
 Build an experimental native-backed Buffer/Editor view that uses Anvil's renderer/window/input infrastructure but not the old Lua `Doc` internals.
 
-Initial sandbox features:
+Initial sandbox/API features:
 
+- Lua `native_text` module for creating native Buffers and Editors. **Initial bridge implemented.**
 - Open a native Buffer from bytes/file.
 - Draw visible lines from piece-tree walkers.
 - Basic caret rendering.
