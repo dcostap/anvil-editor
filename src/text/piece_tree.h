@@ -36,6 +36,8 @@ typedef struct PieceTreeWalker {
   size_t offset;
 } PieceTreeWalker;
 
+typedef bool (*PieceTreeRangeCallback)(const char *bytes, size_t len, size_t offset, void *user);
+
 bool piece_tree_init(PieceTree *tree, const char *text, size_t len);
 void piece_tree_dispose(PieceTree *tree);
 
@@ -48,6 +50,7 @@ bool piece_tree_remove(PieceTree *tree, size_t offset, size_t len);
 
 char *piece_tree_to_string(const PieceTree *tree, size_t *len_out);
 char *piece_tree_range_to_string(const PieceTree *tree, size_t start_offset, size_t end_offset, size_t *len_out);
+bool piece_tree_walk_range(const PieceTree *tree, size_t start_offset, size_t end_offset, PieceTreeRangeCallback callback, void *user);
 bool piece_tree_byte_at(const PieceTree *tree, size_t offset, char *byte_out);
 bool piece_tree_walker_init(PieceTreeWalker *walker, const PieceTree *tree, size_t offset);
 bool piece_tree_walker_next(PieceTreeWalker *walker, char *byte_out, size_t *offset_out);

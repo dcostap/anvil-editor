@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define PIECE_TREE_CHUNK_SIZE 4096
+
 typedef enum PieceSource {
   PIECE_SOURCE_ORIGINAL,
   PIECE_SOURCE_ADD,
@@ -139,6 +141,20 @@ static PieceTreeNode *merge_nodes(PieceTree *tree, PieceTreeNode *left, PieceTre
   return result;
 }
 
+static PieceTreeNode *node_chain_new(PieceTree *tree, PieceSource source, size_t start, size_t len) {
+  PieceTreeNode *root = NULL;
+  size_t remaining = len;
+  size_t offset = start;
+  while (remaining > 0) {
+    size_t chunk_len = remaining > PIECE_TREE_CHUNK_SIZE ? PIECE_TREE_CHUNK_SIZE : remaining;
+    PieceTreeNode *chunk = node_new(tree, source, offset, chunk_len);
+    root = merge_nodes(tree, root, chunk);
+    offset += chunk_len;
+    remaining -= chunk_len;
+  }
+  return root;
+}
+
 static void split_node(
   PieceTree *tree,
   PieceTreeNode *node,
@@ -269,29 +285,53 @@ static bool find_lf_offset(const PieceTree *tree, const PieceTreeNode *node, siz
   return find_lf_offset(tree, node->right, lf_index, base_offset + left_len + node->len, offset_out);
 }
 
-static void consume_node_prefix(const PieceTree *tree, const PieceTreeNode *node, size_t len, size_t *line, size_t *col) {
-  if (!tree || !node || len == 0) return;
+static size_t count_lfs_before_offset(const PieceTree *tree, const PieceTreeNode *node, size_t offset) {
+  if (!tree || !node || offset == 0) return 0;
   size_t left_len = node_len(node->left);
-  if (len <= left_len) {
-    consume_node_prefix(tree, node->left, len, line, col);
-    return;
-  }
+  if (offset <= left_len) return count_lfs_before_offset(tree, node->left, offset);
 
-  consume_node_prefix(tree, node->left, left_len, line, col);
-  len -= left_len;
+  size_t count = node_lf_count(node->left);
+  offset -= left_len;
 
   const char *bytes = piece_bytes(tree, node);
-  size_t piece_len = len < node->len ? len : node->len;
-  for (size_t i = 0; i < piece_len; ++i) {
-    if (bytes[i] == '\n') {
-      ++*line;
-      *col = 0;
-    } else {
-      ++*col;
-    }
+  size_t piece_len = offset < node->len ? offset : node->len;
+  count += count_lf(bytes, piece_len);
+  offset -= piece_len;
+
+  if (offset > 0) count += count_lfs_before_offset(tree, node->right, offset);
+  return count;
+}
+
+static bool walk_node_range(
+  const PieceTree *tree,
+  const PieceTreeNode *node,
+  size_t node_start,
+  size_t start_offset,
+  size_t end_offset,
+  PieceTreeRangeCallback callback,
+  void *user
+) {
+  if (!tree || !node || !callback || start_offset >= end_offset) return true;
+
+  size_t left_len = node_len(node->left);
+  size_t piece_start = node_start + left_len;
+  size_t piece_end = piece_start + node->len;
+  size_t node_end = node_start + node->subtree_len;
+
+  if (start_offset < piece_start) {
+    if (!walk_node_range(tree, node->left, node_start, start_offset, end_offset, callback, user)) return false;
   }
-  len -= piece_len;
-  if (len > 0) consume_node_prefix(tree, node->right, len, line, col);
+
+  size_t chunk_start = start_offset > piece_start ? start_offset : piece_start;
+  size_t chunk_end = end_offset < piece_end ? end_offset : piece_end;
+  if (chunk_start < chunk_end) {
+    if (!callback(piece_bytes(tree, node) + (chunk_start - piece_start), chunk_end - chunk_start, chunk_start, user)) return false;
+  }
+
+  if (end_offset > piece_end && piece_end < node_end) {
+    if (!walk_node_range(tree, node->right, piece_end, start_offset, end_offset, callback, user)) return false;
+  }
+  return true;
 }
 
 bool piece_tree_init(PieceTree *tree, const char *text, size_t len) {
@@ -304,7 +344,7 @@ bool piece_tree_init(PieceTree *tree, const char *text, size_t len) {
     if (!tree->original) return false;
     memcpy(tree->original, text, len);
     tree->original_len = len;
-    tree->root = node_new(tree, PIECE_SOURCE_ORIGINAL, 0, len);
+    tree->root = node_chain_new(tree, PIECE_SOURCE_ORIGINAL, 0, len);
   }
   return true;
 }
@@ -337,7 +377,7 @@ bool piece_tree_insert(PieceTree *tree, size_t offset, const char *text, size_t 
 
   size_t add_start = 0;
   if (!append_add_bytes(tree, text, len, &add_start)) return false;
-  PieceTreeNode *inserted = node_new(tree, PIECE_SOURCE_ADD, add_start, len);
+  PieceTreeNode *inserted = node_chain_new(tree, PIECE_SOURCE_ADD, add_start, len);
   PieceTreeNode *left = NULL;
   PieceTreeNode *right = NULL;
   split_node(tree, tree->root, offset, &left, &right);
@@ -379,6 +419,19 @@ char *piece_tree_to_string(const PieceTree *tree, size_t *len_out) {
   return text;
 }
 
+typedef struct RangeStringBuilder {
+  char *text;
+  size_t start_offset;
+  size_t len;
+} RangeStringBuilder;
+
+static bool append_range_string_chunk(const char *bytes, size_t len, size_t offset, void *user) {
+  RangeStringBuilder *builder = (RangeStringBuilder *) user;
+  memcpy(builder->text + (offset - builder->start_offset), bytes, len);
+  builder->len += len;
+  return true;
+}
+
 char *piece_tree_range_to_string(const PieceTree *tree, size_t start_offset, size_t end_offset, size_t *len_out) {
   if (!tree) return NULL;
   size_t tree_len = piece_tree_len(tree);
@@ -388,24 +441,26 @@ char *piece_tree_range_to_string(const PieceTree *tree, size_t start_offset, siz
   char *text = (char *) malloc(len + 1);
   if (!text) return NULL;
 
-  PieceTreeWalker walker;
-  if (!piece_tree_walker_init(&walker, tree, start_offset)) {
+  RangeStringBuilder builder;
+  builder.text = text;
+  builder.start_offset = start_offset;
+  builder.len = 0;
+  if (!piece_tree_walk_range(tree, start_offset, end_offset, append_range_string_chunk, &builder)) {
     free(text);
     return NULL;
-  }
-
-  for (size_t i = 0; i < len; ++i) {
-    char ch = 0;
-    if (!piece_tree_walker_next(&walker, &ch, NULL)) {
-      free(text);
-      return NULL;
-    }
-    text[i] = ch;
   }
 
   text[len] = '\0';
   if (len_out) *len_out = len;
   return text;
+}
+
+bool piece_tree_walk_range(const PieceTree *tree, size_t start_offset, size_t end_offset, PieceTreeRangeCallback callback, void *user) {
+  if (!tree || !callback) return false;
+  size_t tree_len = piece_tree_len(tree);
+  if (start_offset > end_offset || end_offset > tree_len) return false;
+  if (start_offset == end_offset) return true;
+  return walk_node_range(tree, tree->root, 0, start_offset, end_offset, callback, user);
 }
 
 bool piece_tree_byte_at(const PieceTree *tree, size_t offset, char *byte_out) {
@@ -520,11 +575,16 @@ bool piece_tree_offset_to_line_col(const PieceTree *tree, size_t offset, PieceTr
   if (!tree || !out) return false;
   if (offset > piece_tree_len(tree)) return false;
 
-  size_t line = 0;
-  size_t col = 0;
-  consume_node_prefix(tree, tree->root, offset, &line, &col);
+  size_t line = count_lfs_before_offset(tree, tree->root, offset);
+  size_t line_start = 0;
+  if (line > 0) {
+    size_t lf_offset = 0;
+    if (!find_lf_offset(tree, tree->root, line, 0, &lf_offset)) return false;
+    line_start = lf_offset + 1;
+  }
+
   out->line = line;
-  out->col = col;
+  out->col = offset - line_start;
   return true;
 }
 

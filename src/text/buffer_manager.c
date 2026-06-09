@@ -435,8 +435,6 @@ static BatchEditResult buffer_manager_apply_edits_internal(
     }
   }
 
-  if (changed) buffer_refresh_line_ending_mode(manager->buffer);
-
   piece_tree_snapshot_release(&before);
 
   free(sorted);

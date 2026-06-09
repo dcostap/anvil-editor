@@ -236,6 +236,7 @@ Implement first:
 - Original byte storage.
 - Append-only modification byte storage.
 - Tree of pieces referencing original/add storage.
+- Chunked original/add pieces so large-file line lookup can skip by subtree metadata. **Implemented.**
 - Cached subtree byte length and LF count.
 - Insert by byte offset.
 - Remove by byte range.
@@ -269,7 +270,7 @@ Exit criteria:
 
 - Piece tree survives large random edit sequences and exactly matches the flat-string oracle.
 - Snapshot restore is cheap and correct.
-- Line lookup remains correct after insert/remove edge cases.
+- Line lookup remains correct after insert/remove edge cases and avoids whole-buffer/prefix scans on large files.
 
 ## Phase 2: Native Buffer shell
 
