@@ -314,16 +314,19 @@ src/text/editor.h
 
 Implement:
 
-- Cursor array owned by native editor/view state.
-- Caret offset.
-- Optional anchor offset.
-- Desired column state.
-- Cursor sort/merge.
-- Move left/right/up/down.
-- Select variants of movement.
-- Remove selections.
-- Insert text at one or many cursors.
-- Backspace/delete.
+- Cursor array owned by native editor/view state. **Implemented initially.**
+- Caret offset. **Implemented initially.**
+- Optional anchor offset. **Implemented initially.**
+- Desired column state. **Implemented initially for line movement.**
+- Cursor sort/merge. **Implemented initially.**
+- Move left/right/up/down. **Implemented initially.**
+- Word left/right. **Implemented initially with Fred-style byte-category boundaries.**
+- Select variants of movement. **Implemented initially for character, line, and word movement.**
+- Remove selections. **Implemented initially.**
+- Select word. **Implemented initially.**
+- Insert text at one or many cursors. **Implemented initially.**
+- Backspace/delete. **Implemented initially.**
+- Backspace word/delete word. **Implemented initially.**
 
 Exit criteria:
 
@@ -348,9 +351,9 @@ typedef struct BatchEditItem {
 
 Transaction output should include:
 
-- Applied/rejected flag.
-- Changed byte ranges.
-- Changed line ranges.
+- Applied/rejected flag. **Implemented initially.**
+- Changed byte ranges. **Implemented initially.**
+- Changed line ranges. **Implemented initially as half-open byte-derived line ranges.**
 - Cursor mapping results.
 - Tree-sitter edit descriptors later.
 - Undo graph node info later.
