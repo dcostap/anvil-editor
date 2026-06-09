@@ -329,6 +329,7 @@ Implement:
 - Insert text at one or many cursors. **Implemented initially.**
 - Backspace/delete. **Implemented initially.**
 - Backspace word/delete word. **Implemented initially.**
+- Delete line. **Implemented initially, including selected line spans and merged multi-cursor line ranges.**
 
 Exit criteria:
 

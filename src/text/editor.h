@@ -41,6 +41,7 @@ bool editor_backspace(Editor *editor);
 bool editor_del(Editor *editor);
 bool editor_backspace_word(Editor *editor);
 bool editor_del_word(Editor *editor);
+bool editor_delete_line(Editor *editor);
 bool editor_select_all(Editor *editor);
 bool editor_select_word(Editor *editor);
 bool editor_select_line(Editor *editor);

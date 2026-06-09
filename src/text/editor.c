@@ -10,6 +10,11 @@ typedef struct CursorEdit {
   size_t cursor_index;
 } CursorEdit;
 
+typedef struct LineDeleteRange {
+  size_t first_line;
+  size_t last_line;
+} LineDeleteRange;
+
 static Cursor make_cursor(size_t cursor, size_t selection) {
   Cursor c;
   c.cursor = cursor;
@@ -68,6 +73,23 @@ static int compare_cursors(const void *a, const void *b) {
   if (ca->cursor > cb->cursor) return 1;
   return 0;
 }
+
+static int compare_line_delete_ranges(const void *a, const void *b) {
+  const LineDeleteRange *ra = (const LineDeleteRange *) a;
+  const LineDeleteRange *rb = (const LineDeleteRange *) b;
+  if (ra->first_line < rb->first_line) return -1;
+  if (ra->first_line > rb->first_line) return 1;
+  if (ra->last_line < rb->last_line) return -1;
+  if (ra->last_line > rb->last_line) return 1;
+  return 0;
+}
+
+static int compare_cursor_mappings_by_old_range(const void *a, const void *b);
+static void map_cursor_through_sorted_mappings(
+  Cursor *cursor,
+  const BatchCursorMapping *mappings,
+  size_t mapping_count
+);
 
 static bool ensure_multi_capacity(Editor *editor, size_t needed) {
   if (needed <= editor->multi_cursor_capacity) return true;
@@ -519,6 +541,156 @@ bool editor_del(Editor *editor) {
   bool ok = edit_count == 0 ? true : apply_cursor_edits(editor, edits, edit_count);
   free(edits);
   return ok;
+}
+
+static bool line_delete_range_to_offsets(
+  const Buffer *buffer,
+  LineDeleteRange line_range,
+  size_t *start_out,
+  size_t *end_out
+) {
+  if (!buffer || !start_out || !end_out) return false;
+  size_t line_count = buffer_line_count(buffer);
+  if (line_count == 0 || line_range.first_line >= line_count) return false;
+  if (line_range.last_line >= line_count) line_range.last_line = line_count - 1;
+  if (line_range.last_line < line_range.first_line) return false;
+
+  size_t start = 0;
+  size_t end = 0;
+  if (!buffer_line_start(buffer, line_range.first_line, &start)) return false;
+  if (line_range.last_line + 1 < line_count) {
+    if (!buffer_line_start(buffer, line_range.last_line + 1, &end)) return false;
+  } else {
+    end = buffer_len(buffer);
+    if (line_range.first_line > 0) {
+      char ch = 0;
+      if (start > 0 && piece_tree_byte_at(&buffer->tree, start - 1, &ch) && ch == '\n') {
+        --start;
+        if (start > 0 && piece_tree_byte_at(&buffer->tree, start - 1, &ch) && ch == '\r') --start;
+      }
+    }
+  }
+
+  *start_out = start;
+  *end_out = end;
+  return true;
+}
+
+static bool cursor_line_range(Editor *editor, const Cursor *cursor, LineDeleteRange *out) {
+  if (!editor || !cursor || !out) return false;
+  Buffer *buffer = editor_buffer(editor);
+  if (!buffer) return false;
+
+  size_t start = cursor_start(cursor);
+  size_t end = cursor_end(cursor);
+  BufferLineCol lc;
+  if (!buffer_offset_to_line_col(buffer, start, &lc)) return false;
+  out->first_line = lc.line;
+  if (!buffer_offset_to_line_col(buffer, end, &lc)) return false;
+  out->last_line = lc.line;
+  return true;
+}
+
+static bool move_cursor_to_current_line_start(Editor *editor, Cursor *cursor) {
+  Buffer *buffer = editor_buffer(editor);
+  if (!buffer) return false;
+  size_t len = buffer_len(buffer);
+  if (cursor->cursor > len) cursor->cursor = len;
+  BufferLineCol lc;
+  if (!buffer_offset_to_line_col(buffer, cursor->cursor, &lc)) return false;
+  size_t start = 0;
+  if (!buffer_line_start(buffer, lc.line, &start)) return false;
+  cursor->cursor = start;
+  cursor->selection = EDITOR_SELECTION_SENTINEL;
+  clear_desired_column(cursor);
+  return true;
+}
+
+bool editor_delete_line(Editor *editor) {
+  if (!editor) return false;
+  editor_sort_and_merge_cursors(editor);
+  Buffer *buffer = editor_buffer(editor);
+  if (!buffer) return false;
+
+  size_t count = 0;
+  Cursor *cursors = active_cursors(editor, &count);
+  LineDeleteRange *ranges = (LineDeleteRange *) calloc(count, sizeof(LineDeleteRange));
+  if (!ranges) return false;
+
+  size_t range_count = 0;
+  for (size_t i = 0; i < count; ++i) {
+    if (!cursor_line_range(editor, &cursors[i], &ranges[range_count])) {
+      free(ranges);
+      return false;
+    }
+    ++range_count;
+  }
+
+  qsort(ranges, range_count, sizeof(LineDeleteRange), compare_line_delete_ranges);
+  size_t merged_count = 0;
+  for (size_t i = 0; i < range_count; ++i) {
+    if (merged_count == 0 || ranges[i].first_line > ranges[merged_count - 1].last_line + 1) {
+      ranges[merged_count++] = ranges[i];
+    } else if (ranges[i].last_line > ranges[merged_count - 1].last_line) {
+      ranges[merged_count - 1].last_line = ranges[i].last_line;
+    }
+  }
+
+  BatchEditItem *items = (BatchEditItem *) calloc(merged_count, sizeof(BatchEditItem));
+  if (!items) {
+    free(ranges);
+    return false;
+  }
+
+  for (size_t i = 0; i < merged_count; ++i) {
+    size_t start = 0;
+    size_t end = 0;
+    if (!line_delete_range_to_offsets(buffer, ranges[i], &start, &end)) {
+      free(items);
+      free(ranges);
+      return false;
+    }
+    items[i].start_offset = start;
+    items[i].end_offset = end;
+    items[i].text = NULL;
+    items[i].text_len = 0;
+    items[i].cursor_index = (unsigned int) i;
+  }
+
+  BatchEditResult result = buffer_manager_apply_edits_from(editor->buffer_manager, items, merged_count, editor);
+  free(items);
+  free(ranges);
+  if (!result.applied) {
+    batch_edit_result_dispose(&result);
+    return false;
+  }
+
+  BatchCursorMapping *mappings = NULL;
+  if (result.cursor_mapping_count > 0) {
+    mappings = (BatchCursorMapping *) malloc(sizeof(BatchCursorMapping) * result.cursor_mapping_count);
+    if (!mappings) {
+      batch_edit_result_dispose(&result);
+      return false;
+    }
+    memcpy(mappings, result.cursor_mappings, sizeof(BatchCursorMapping) * result.cursor_mapping_count);
+    qsort(mappings, result.cursor_mapping_count, sizeof(BatchCursorMapping), compare_cursor_mappings_by_old_range);
+  }
+
+  cursors = active_cursors(editor, &count);
+  for (size_t i = 0; i < count; ++i) {
+    if (mappings) map_cursor_through_sorted_mappings(&cursors[i], mappings, result.cursor_mapping_count);
+    if (!move_cursor_to_current_line_start(editor, &cursors[i])) {
+      free(mappings);
+      batch_edit_result_dispose(&result);
+      return false;
+    }
+  }
+
+  free(mappings);
+  batch_edit_result_dispose(&result);
+  editor_sort_and_merge_cursors(editor);
+  sync_core_from_multi(editor);
+  return true;
 }
 
 static bool editor_word_delete(Editor *editor, int direction) {
