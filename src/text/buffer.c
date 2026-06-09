@@ -165,6 +165,13 @@ BufferLineEndingMode buffer_line_ending_mode(const Buffer *buffer) {
   return buffer ? buffer->line_ending_mode : BUFFER_LINE_ENDING_LF;
 }
 
+bool buffer_set_line_ending_mode(Buffer *buffer, BufferLineEndingMode mode) {
+  if (!buffer) return false;
+  if (mode != BUFFER_LINE_ENDING_LF && mode != BUFFER_LINE_ENDING_CRLF) return false;
+  buffer->line_ending_mode = mode;
+  return true;
+}
+
 const char *buffer_line_ending_bytes(const Buffer *buffer, size_t *len_out) {
   if (buffer_line_ending_mode(buffer) == BUFFER_LINE_ENDING_CRLF) {
     if (len_out) *len_out = 2;

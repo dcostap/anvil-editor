@@ -1026,6 +1026,82 @@ bool editor_untab(Editor *editor) {
   return true;
 }
 
+bool editor_unify_line_endings(Editor *editor) {
+  if (!editor) return false;
+  Buffer *buffer = editor_buffer(editor);
+  if (!buffer) return false;
+
+  editor_clear_multi_cursors(editor);
+  BufferLineEndingMode target_mode = buffer_line_ending_mode(buffer);
+
+  BufferLineCol original_lc;
+  if (!buffer_offset_to_line_col(buffer, editor->core_cursor.cursor, &original_lc)) return false;
+
+  size_t len = 0;
+  char *bytes = buffer_to_string(buffer, &len);
+  if (!bytes) return false;
+
+  size_t max_edits = 0;
+  for (size_t i = 0; i < len; ++i) {
+    if (bytes[i] == '\n') ++max_edits;
+  }
+
+  BatchEditItem *items = max_edits > 0 ? (BatchEditItem *) calloc(max_edits, sizeof(BatchEditItem)) : NULL;
+  if (max_edits > 0 && !items) {
+    free(bytes);
+    return false;
+  }
+
+  size_t edit_count = 0;
+  if (target_mode == BUFFER_LINE_ENDING_CRLF) {
+    for (size_t i = 0; i < len; ++i) {
+      if (bytes[i] != '\n') continue;
+      if (i > 0 && bytes[i - 1] == '\r') continue;
+      items[edit_count].start_offset = i;
+      items[edit_count].end_offset = i;
+      items[edit_count].text = "\r";
+      items[edit_count].text_len = 1;
+      items[edit_count].cursor_index = (unsigned int) edit_count;
+      ++edit_count;
+    }
+  } else {
+    for (size_t i = 0; i < len; ++i) {
+      if (bytes[i] != '\n' || i == 0 || bytes[i - 1] != '\r') continue;
+      items[edit_count].start_offset = i - 1;
+      items[edit_count].end_offset = i;
+      items[edit_count].text = NULL;
+      items[edit_count].text_len = 0;
+      items[edit_count].cursor_index = (unsigned int) edit_count;
+      ++edit_count;
+    }
+  }
+  free(bytes);
+
+  if (edit_count == 0) {
+    free(items);
+    buffer_set_line_ending_mode(buffer, target_mode);
+    reset_last_insert(editor);
+    return true;
+  }
+
+  BatchEditResult result = buffer_manager_apply_edits_from(editor->buffer_manager, items, edit_count, editor);
+  free(items);
+  if (!result.applied) {
+    batch_edit_result_dispose(&result);
+    return false;
+  }
+  batch_edit_result_dispose(&result);
+  buffer_set_line_ending_mode(buffer, target_mode);
+
+  size_t target = 0;
+  if (!buffer_line_col_to_offset(buffer, original_lc.line, original_lc.col, &target)) {
+    target = buffer_len(buffer);
+  }
+  editor->core_cursor = make_cursor(target, EDITOR_SELECTION_SENTINEL);
+  reset_last_insert(editor);
+  return true;
+}
+
 bool editor_backspace(Editor *editor) {
   if (!editor) return false;
   editor_sort_and_merge_cursors(editor);

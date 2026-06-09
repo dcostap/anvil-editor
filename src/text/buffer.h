@@ -37,6 +37,7 @@ const char *buffer_path(const Buffer *buffer);
 size_t buffer_len(const Buffer *buffer);
 size_t buffer_line_count(const Buffer *buffer);
 BufferLineEndingMode buffer_line_ending_mode(const Buffer *buffer);
+bool buffer_set_line_ending_mode(Buffer *buffer, BufferLineEndingMode mode);
 const char *buffer_line_ending_bytes(const Buffer *buffer, size_t *len_out);
 void buffer_refresh_line_ending_mode(Buffer *buffer);
 

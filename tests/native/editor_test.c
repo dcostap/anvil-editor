@@ -295,6 +295,32 @@ static int test_untab_selection_removes_leading_tabs_from_selected_lines(void) {
   return 0;
 }
 
+static int test_unify_line_endings_to_lf(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "aa\r\nbb\ncc\r\n"));
+  CHECK(buffer_set_line_ending_mode(&f.buffer, BUFFER_LINE_ENDING_LF));
+  CHECK(editor_set_cursor(&f.editor, 5, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_unify_line_endings(&f.editor));
+  CHECK(expect_text(&f, "aa\nbb\ncc\n") == 0);
+  CHECK(buffer_line_ending_mode(&f.buffer) == BUFFER_LINE_ENDING_LF);
+  CHECK(expect_cursor(&f.editor, 0, 4, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_unify_line_endings_to_crlf(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "aa\nbb\r\ncc\n"));
+  CHECK(buffer_set_line_ending_mode(&f.buffer, BUFFER_LINE_ENDING_CRLF));
+  CHECK(editor_set_cursor(&f.editor, 4, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_unify_line_endings(&f.editor));
+  CHECK(expect_text(&f, "aa\r\nbb\r\ncc\r\n") == 0);
+  CHECK(buffer_line_ending_mode(&f.buffer) == BUFFER_LINE_ENDING_CRLF);
+  CHECK(expect_cursor(&f.editor, 0, 5, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
 static int test_backspace_removes_selection(void) {
   EditorFixture f;
   CHECK(fixture_init(&f, "abcdef"));
@@ -734,6 +760,8 @@ int main(void) {
   rc |= test_tab_selection_indents_selected_lines();
   rc |= test_untab_removes_leading_tab_from_current_line();
   rc |= test_untab_selection_removes_leading_tabs_from_selected_lines();
+  rc |= test_unify_line_endings_to_lf();
+  rc |= test_unify_line_endings_to_crlf();
   rc |= test_backspace_removes_selection();
   rc |= test_multi_cursor_insert_uses_pre_edit_coordinates();
   rc |= test_multi_cursor_backspace();

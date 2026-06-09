@@ -192,7 +192,7 @@ Initial UI integration should be a sandbox/experimental native-backed Buffer/Edi
 - Count LF (`\n`) as the primary line separator.
 - Preserve CRLF bytes exactly.
 - Add explicit CRLF-aware helpers for operations that need logical line ends.
-- Track initial Buffer line-ending mode from loaded bytes and use it for native newline insertion and multi-selection joins. **Implemented initially.**
+- Track initial Buffer line-ending mode from loaded bytes and use it for native newline insertion, multi-selection joins, and line-ending unification. **Implemented initially.**
 
 ### Selection State ownership
 
@@ -340,6 +340,7 @@ Implement:
 - Join line below with CRLF-aware line ranges and Fred-style leading-space trim. **Implemented initially.**
 - Tab/untab with Fred default tab-byte indentation behavior. **Implemented initially.**
 - First-nonempty-of-line and home-toggle-of-line movement. **Implemented initially.**
+- Unify line endings to the Buffer's selected line-ending mode. **Implemented initially.**
 
 Exit criteria:
 

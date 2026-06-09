@@ -51,6 +51,7 @@ bool editor_move_line_down(Editor *editor);
 bool editor_join_line_below(Editor *editor);
 bool editor_tab(Editor *editor);
 bool editor_untab(Editor *editor);
+bool editor_unify_line_endings(Editor *editor);
 bool editor_select_all(Editor *editor);
 bool editor_select_word(Editor *editor);
 bool editor_select_line(Editor *editor);
