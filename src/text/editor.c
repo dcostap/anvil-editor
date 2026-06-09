@@ -822,6 +822,72 @@ bool editor_move_line_down(Editor *editor) {
   return editor_move_line(editor, 1);
 }
 
+bool editor_join_line_below(Editor *editor) {
+  if (!editor) return false;
+  Buffer *buffer = editor_buffer(editor);
+  if (!buffer) return false;
+
+  editor_clear_multi_cursors(editor);
+
+  BufferLineCol lc;
+  if (!buffer_offset_to_line_col(buffer, editor->core_cursor.cursor, &lc)) return false;
+  size_t line_count = buffer_line_count(buffer);
+  if (lc.line + 1 >= line_count) return true;
+
+  size_t current_end = 0;
+  size_t next_start = 0;
+  size_t next_remove_end = 0;
+  if (!line_end_no_lf(buffer, lc.line, &current_end)) return false;
+  if (!buffer_line_start(buffer, lc.line + 1, &next_start)) return false;
+  if (lc.line + 2 < line_count) {
+    if (!buffer_line_start(buffer, lc.line + 2, &next_remove_end)) return false;
+  } else {
+    next_remove_end = buffer_len(buffer);
+  }
+
+  BufferLineRange next_range;
+  if (!buffer_line_range_crlf(buffer, lc.line + 1, &next_range)) return false;
+  size_t next_len = 0;
+  char *next_text = buffer_range_to_string(buffer, next_range.start, next_range.end, &next_len);
+  if (!next_text) return false;
+  size_t trim = 0;
+  while (trim < next_len && next_text[trim] == ' ') ++trim;
+  size_t insert_len = 1 + (next_len - trim);
+  char *insert_text = (char *) malloc(insert_len + 1);
+  if (!insert_text) {
+    free(next_text);
+    return false;
+  }
+  insert_text[0] = ' ';
+  if (next_len > trim) memcpy(insert_text + 1, next_text + trim, next_len - trim);
+  insert_text[insert_len] = '\0';
+  free(next_text);
+
+  BatchEditItem items[2];
+  memset(items, 0, sizeof(items));
+  items[0].start_offset = current_end;
+  items[0].end_offset = current_end;
+  items[0].text = insert_text;
+  items[0].text_len = insert_len;
+  items[0].cursor_index = 0;
+  items[1].start_offset = next_start;
+  items[1].end_offset = next_remove_end;
+  items[1].text = NULL;
+  items[1].text_len = 0;
+  items[1].cursor_index = 0;
+
+  BatchEditResult result = buffer_manager_apply_edits_from(editor->buffer_manager, items, 2, editor);
+  free(insert_text);
+  if (!result.applied) {
+    batch_edit_result_dispose(&result);
+    return false;
+  }
+  batch_edit_result_dispose(&result);
+
+  editor->core_cursor = make_cursor(current_end, EDITOR_SELECTION_SENTINEL);
+  return true;
+}
+
 bool editor_backspace(Editor *editor) {
   if (!editor) return false;
   editor_sort_and_merge_cursors(editor);

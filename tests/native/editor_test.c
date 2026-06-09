@@ -229,6 +229,28 @@ static int test_move_line_down_uses_crlf_and_clears_multi_cursors(void) {
   return 0;
 }
 
+static int test_join_line_below_trims_leading_spaces(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "aa\n  bb\ncc"));
+  CHECK(editor_set_cursor(&f.editor, 1, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_join_line_below(&f.editor));
+  CHECK(expect_text(&f, "aa bb\ncc") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 2, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_join_line_below_final_crlf_line_preserves_current_terminator(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "aa\r\n  bb"));
+  CHECK(editor_set_cursor(&f.editor, 1, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_join_line_below(&f.editor));
+  CHECK(expect_text(&f, "aa bb\r\n") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 2, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
 static int test_backspace_removes_selection(void) {
   EditorFixture f;
   CHECK(fixture_init(&f, "abcdef"));
@@ -604,6 +626,8 @@ int main(void) {
   rc |= test_move_line_down();
   rc |= test_move_selected_line_span_up();
   rc |= test_move_line_down_uses_crlf_and_clears_multi_cursors();
+  rc |= test_join_line_below_trims_leading_spaces();
+  rc |= test_join_line_below_final_crlf_line_preserves_current_terminator();
   rc |= test_backspace_removes_selection();
   rc |= test_multi_cursor_insert_uses_pre_edit_coordinates();
   rc |= test_multi_cursor_backspace();
