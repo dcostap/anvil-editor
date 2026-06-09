@@ -95,6 +95,31 @@ static int test_buffer_path_is_owned_and_reset_on_load(void) {
   return 0;
 }
 
+static int test_buffer_load_file_preserves_bytes_and_sets_path(void) {
+  const char *path = "buffer_load_file_test.tmp";
+  const char bytes[] = { 'a', '\0', 'b', '\r', '\n' };
+  FILE *file = fopen(path, "wb");
+  CHECK(file != NULL);
+  CHECK(fwrite(bytes, 1, sizeof(bytes), file) == sizeof(bytes));
+  CHECK(fclose(file) == 0);
+
+  Buffer buffer;
+  CHECK(buffer_init(&buffer, "old", 3));
+  CHECK(buffer_load_file(&buffer, path));
+  CHECK(buffer_path(&buffer) != NULL);
+  CHECK(strcmp(buffer_path(&buffer), path) == 0);
+  CHECK(buffer_line_ending_mode(&buffer) == BUFFER_LINE_ENDING_CRLF);
+  size_t len = 0;
+  char *actual = buffer_to_string(&buffer, &len);
+  CHECK(actual != NULL);
+  CHECK(len == sizeof(bytes));
+  CHECK(memcmp(actual, bytes, sizeof(bytes)) == 0);
+  free(actual);
+  buffer_dispose(&buffer);
+  CHECK(remove(path) == 0);
+  return 0;
+}
+
 static int test_apply_single_batch_edit(void) {
   Buffer buffer;
   BufferManager manager;
@@ -344,6 +369,7 @@ int main(void) {
   rc |= test_buffer_read_apis();
   rc |= test_buffer_detects_crlf_line_endings();
   rc |= test_buffer_path_is_owned_and_reset_on_load();
+  rc |= test_buffer_load_file_preserves_bytes_and_sets_path();
   rc |= test_apply_single_batch_edit();
   rc |= test_apply_multiple_pre_edit_coordinate_edits();
   rc |= test_rejects_overlaps_atomically();

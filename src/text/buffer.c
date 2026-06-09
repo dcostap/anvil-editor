@@ -1,5 +1,6 @@
 #include "text/buffer.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -75,6 +76,44 @@ bool buffer_load_bytes(Buffer *buffer, const char *bytes, size_t len) {
   buffer->has_undo_graph = true;
   buffer_mark_clean(buffer);
   return true;
+}
+
+bool buffer_load_file(Buffer *buffer, const char *path) {
+  if (!buffer || !path) return false;
+  FILE *file = fopen(path, "rb");
+  if (!file) return false;
+
+  if (fseek(file, 0, SEEK_END) != 0) {
+    fclose(file);
+    return false;
+  }
+  long file_len = ftell(file);
+  if (file_len < 0) {
+    fclose(file);
+    return false;
+  }
+  if (fseek(file, 0, SEEK_SET) != 0) {
+    fclose(file);
+    return false;
+  }
+
+  size_t len = (size_t) file_len;
+  char *bytes = (char *) malloc(len ? len : 1);
+  if (!bytes) {
+    fclose(file);
+    return false;
+  }
+  if (len > 0 && fread(bytes, 1, len, file) != len) {
+    free(bytes);
+    fclose(file);
+    return false;
+  }
+  fclose(file);
+
+  bool ok = buffer_load_bytes(buffer, bytes, len);
+  free(bytes);
+  if (!ok) return false;
+  return buffer_set_path(buffer, path);
 }
 
 bool buffer_set_path(Buffer *buffer, const char *path) {
