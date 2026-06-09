@@ -6,8 +6,13 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+typedef struct BufferManagerListener BufferManagerListener;
+
 typedef struct BufferManager {
   Buffer *buffer;
+  BufferManagerListener *listeners;
+  size_t listener_count;
+  size_t listener_capacity;
 } BufferManager;
 
 typedef struct BatchEditItem {
@@ -42,14 +47,51 @@ typedef struct BatchEditResult {
   size_t cursor_mapping_count;
 } BatchEditResult;
 
+typedef struct BufferSnapResult {
+  bool applied;
+  bool rejected;
+  size_t old_len;
+  size_t new_len;
+  size_t changed_start;
+  size_t changed_old_end;
+  size_t changed_new_end;
+  size_t op_offset;
+} BufferSnapResult;
+
+typedef void (*BufferManagerEditCallback)(void *user, const BatchEditResult *result, void *source);
+typedef void (*BufferManagerSnapCallback)(void *user, const BufferSnapResult *result, void *source);
+
+struct BufferManagerListener {
+  void *user;
+  BufferManagerEditCallback on_edit;
+  BufferManagerSnapCallback on_snap;
+};
+
 void buffer_manager_init(BufferManager *manager, Buffer *buffer);
+void buffer_manager_dispose(BufferManager *manager);
+bool buffer_manager_register_listener(
+  BufferManager *manager,
+  void *user,
+  BufferManagerEditCallback on_edit,
+  BufferManagerSnapCallback on_snap
+);
+void buffer_manager_unregister_listener(BufferManager *manager, void *user);
 bool buffer_manager_update_undo(BufferManager *manager, size_t op_offset);
 bool buffer_manager_snap_to(BufferManager *manager, UndoRedoNode *target, size_t *op_offset_out);
+bool buffer_manager_snap_to_from(BufferManager *manager, UndoRedoNode *target, size_t *op_offset_out, void *source);
+bool buffer_manager_undo_from(BufferManager *manager, size_t *op_offset_out, void *source);
+bool buffer_manager_redo_from(BufferManager *manager, size_t *op_offset_out, void *source);
 
 BatchEditResult buffer_manager_apply_edits(
   BufferManager *manager,
   const BatchEditItem *edits,
   size_t edit_count
+);
+BatchEditResult buffer_manager_apply_edits_from(
+  BufferManager *manager,
+  const BatchEditItem *edits,
+  size_t edit_count,
+  void *source
 );
 void batch_edit_result_dispose(BatchEditResult *result);
 

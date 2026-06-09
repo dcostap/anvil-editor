@@ -357,7 +357,7 @@ Transaction output should include:
 - Cursor mapping results. **Implemented initially.**
 - Tree-sitter edit descriptors later.
 - Undo graph node info later.
-- View notification payload later.
+- View notification payload later. **Initial source-aware listener callbacks implemented for native Editor propagation.**
 
 Rules:
 
@@ -396,7 +396,7 @@ Policy decisions to settle before implementation:
 - Whether selection-only moves create undo graph nodes.
 - How typing merge windows update the current undo node.
 - How undo graph UI should expose branches.
-- How snap-to should propagate diff edits through registered native Editor views; Fred updates registered editors from diff records in `BufferManager::snap_to`.
+- How snap-to should propagate diff edits through registered native Editor views; Fred updates registered editors from diff records in `BufferManager::snap_to`. **Initial registered Editor propagation implemented for edit and snap paths.**
 
 Exit criteria:
 

@@ -235,6 +235,69 @@ static int test_changed_line_ranges_for_multiline_remove(void) {
   return 0;
 }
 
+typedef struct ListenerProbe {
+  int edit_count;
+  int snap_count;
+  void *last_source;
+  size_t last_changed_start;
+  size_t last_changed_old_end;
+  size_t last_changed_new_end;
+} ListenerProbe;
+
+static void probe_on_edit(void *user, const BatchEditResult *result, void *source) {
+  ListenerProbe *probe = (ListenerProbe *) user;
+  ++probe->edit_count;
+  probe->last_source = source;
+  probe->last_changed_start = result->changed_start;
+  probe->last_changed_old_end = result->changed_old_end;
+  probe->last_changed_new_end = result->changed_new_end;
+}
+
+static void probe_on_snap(void *user, const BufferSnapResult *result, void *source) {
+  ListenerProbe *probe = (ListenerProbe *) user;
+  ++probe->snap_count;
+  probe->last_source = source;
+  probe->last_changed_start = result->changed_start;
+  probe->last_changed_old_end = result->changed_old_end;
+  probe->last_changed_new_end = result->changed_new_end;
+}
+
+static int test_registered_listener_receives_edit_and_snap_notifications(void) {
+  Buffer buffer;
+  BufferManager manager;
+  ListenerProbe probe = { 0 };
+  int source_token = 0;
+  CHECK(buffer_init(&buffer, "abcdef", 6));
+  buffer_manager_init(&manager, &buffer);
+  CHECK(buffer_manager_register_listener(&manager, &probe, probe_on_edit, probe_on_snap));
+
+  BatchEditItem edit = { 1, 3, "XY", 2, 0 };
+  BatchEditResult result = buffer_manager_apply_edits_from(&manager, &edit, 1, &source_token);
+  CHECK(result.applied);
+  CHECK(probe.edit_count == 1);
+  CHECK(probe.last_source == &source_token);
+  CHECK(probe.last_changed_start == 1);
+  CHECK(probe.last_changed_old_end == 3);
+  CHECK(probe.last_changed_new_end == 3);
+  CHECK(expect_buffer_text(&buffer, "aXYdef") == 0);
+  batch_edit_result_dispose(&result);
+
+  size_t op_offset = 999;
+  CHECK(buffer_manager_undo_from(&manager, &op_offset, &source_token));
+  CHECK(op_offset == 0);
+  CHECK(probe.snap_count == 1);
+  CHECK(probe.last_source == &source_token);
+  CHECK(probe.last_changed_start == 1);
+  CHECK(probe.last_changed_old_end == 3);
+  CHECK(probe.last_changed_new_end == 3);
+  CHECK(expect_buffer_text(&buffer, "abcdef") == 0);
+
+  buffer_manager_unregister_listener(&manager, &probe);
+  buffer_manager_dispose(&manager);
+  buffer_dispose(&buffer);
+  return 0;
+}
+
 int main(void) {
   int rc = 0;
   rc |= test_buffer_read_apis();
@@ -245,5 +308,6 @@ int main(void) {
   rc |= test_remove_and_insert_boundaries();
   rc |= test_changed_line_ranges_for_newline_insert();
   rc |= test_changed_line_ranges_for_multiline_remove();
+  rc |= test_registered_listener_receives_edit_and_snap_notifications();
   return rc;
 }

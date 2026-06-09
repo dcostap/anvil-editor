@@ -31,6 +31,7 @@ static bool fixture_init(EditorFixture *fixture, const char *text) {
 
 static void fixture_dispose(EditorFixture *fixture) {
   editor_dispose(&fixture->editor);
+  buffer_manager_dispose(&fixture->manager);
   buffer_dispose(&fixture->buffer);
 }
 
@@ -342,6 +343,45 @@ static int test_editor_undo_clears_multi_cursors(void) {
   return 0;
 }
 
+static int test_registered_editors_track_external_edits_and_snap(void) {
+  Buffer buffer;
+  BufferManager manager;
+  Editor source;
+  Editor peer;
+  CHECK(buffer_init(&buffer, "abcdef", 6));
+  buffer_manager_init(&manager, &buffer);
+  CHECK(editor_init(&source, &manager));
+  CHECK(editor_init(&peer, &manager));
+
+  CHECK(editor_set_cursor(&source, 1, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_set_cursor(&peer, 5, 2));
+  CHECK(editor_insert_buffer(&source, "XX", 2));
+
+  size_t len = 0;
+  char *actual = buffer_to_string(&buffer, &len);
+  CHECK(actual != NULL);
+  CHECK(len == 8);
+  CHECK(memcmp(actual, "aXXbcdef", 8) == 0);
+  free(actual);
+  CHECK(expect_cursor(&source, 0, 3, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(expect_cursor(&peer, 0, 7, 4) == 0);
+
+  CHECK(editor_undo(&source));
+  actual = buffer_to_string(&buffer, &len);
+  CHECK(actual != NULL);
+  CHECK(len == 6);
+  CHECK(memcmp(actual, "abcdef", 6) == 0);
+  free(actual);
+  CHECK(expect_cursor(&source, 0, 0, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(expect_cursor(&peer, 0, 5, 2) == 0);
+
+  editor_dispose(&peer);
+  editor_dispose(&source);
+  buffer_manager_dispose(&manager);
+  buffer_dispose(&buffer);
+  return 0;
+}
+
 int main(void) {
   int rc = 0;
   rc |= test_insert_buffer_at_cursor();
@@ -364,5 +404,6 @@ int main(void) {
   rc |= test_line_movement_extends_selection();
   rc |= test_editor_undo_redo_places_cursor_at_operation_offset();
   rc |= test_editor_undo_clears_multi_cursors();
+  rc |= test_registered_editors_track_external_edits_and_snap();
   return rc;
 }

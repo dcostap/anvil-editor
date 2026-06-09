@@ -1,6 +1,7 @@
 #include "text/editor.h"
 
 #include <ctype.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -214,16 +215,110 @@ static size_t retract_by_word_bytes(const char *bytes, size_t len, size_t offset
   return 0;
 }
 
+static int compare_cursor_mappings_by_old_range(const void *a, const void *b) {
+  const BatchCursorMapping *ma = (const BatchCursorMapping *) a;
+  const BatchCursorMapping *mb = (const BatchCursorMapping *) b;
+  if (ma->old_start_offset < mb->old_start_offset) return -1;
+  if (ma->old_start_offset > mb->old_start_offset) return 1;
+  if (ma->old_end_offset < mb->old_end_offset) return -1;
+  if (ma->old_end_offset > mb->old_end_offset) return 1;
+  return 0;
+}
+
+static size_t add_signed_delta(size_t value, ptrdiff_t delta) {
+  if (delta < 0) {
+    size_t abs_delta = (size_t) -delta;
+    return value > abs_delta ? value - abs_delta : 0;
+  }
+  if ((size_t) delta > SIZE_MAX - value) return SIZE_MAX;
+  return value + (size_t) delta;
+}
+
+static size_t map_locus_through_sorted_mappings(
+  size_t locus,
+  const BatchCursorMapping *mappings,
+  size_t mapping_count
+) {
+  ptrdiff_t delta = 0;
+  for (size_t i = 0; i < mapping_count; ++i) {
+    size_t start = mappings[i].old_start_offset;
+    size_t end = mappings[i].old_end_offset;
+    size_t inserted_len = mappings[i].new_end_offset - mappings[i].new_start_offset;
+    if (locus <= start) return add_signed_delta(locus, delta);
+    if (locus <= end) return add_signed_delta(start, delta);
+    delta += (ptrdiff_t) inserted_len - (ptrdiff_t) (end - start);
+  }
+  return add_signed_delta(locus, delta);
+}
+
+static void map_cursor_through_sorted_mappings(
+  Cursor *cursor,
+  const BatchCursorMapping *mappings,
+  size_t mapping_count
+) {
+  cursor->cursor = map_locus_through_sorted_mappings(cursor->cursor, mappings, mapping_count);
+  if (cursor->selection != EDITOR_SELECTION_SENTINEL) {
+    cursor->selection = map_locus_through_sorted_mappings(cursor->selection, mappings, mapping_count);
+  }
+  clear_desired_column(cursor);
+}
+
+static void editor_finish_external_buffer_update(Editor *editor) {
+  editor_sort_and_merge_cursors(editor);
+  sync_core_from_multi(editor);
+}
+
+static void editor_on_buffer_edit(void *user, const BatchEditResult *result, void *source) {
+  Editor *editor = (Editor *) user;
+  if (!editor || editor == source || !result || !result->applied || result->cursor_mapping_count == 0) return;
+
+  BatchCursorMapping *mappings = (BatchCursorMapping *) malloc(sizeof(BatchCursorMapping) * result->cursor_mapping_count);
+  if (!mappings) return;
+  memcpy(mappings, result->cursor_mappings, sizeof(BatchCursorMapping) * result->cursor_mapping_count);
+  qsort(mappings, result->cursor_mapping_count, sizeof(BatchCursorMapping), compare_cursor_mappings_by_old_range);
+
+  size_t count = 0;
+  Cursor *cursors = active_cursors(editor, &count);
+  for (size_t i = 0; i < count; ++i) map_cursor_through_sorted_mappings(&cursors[i], mappings, result->cursor_mapping_count);
+
+  free(mappings);
+  editor_finish_external_buffer_update(editor);
+}
+
+static void editor_on_buffer_snap(void *user, const BufferSnapResult *result, void *source) {
+  Editor *editor = (Editor *) user;
+  if (!editor || editor == source || !result || !result->applied) return;
+  if (result->changed_start == result->changed_old_end && result->changed_start == result->changed_new_end) return;
+
+  BatchCursorMapping mapping;
+  memset(&mapping, 0, sizeof(mapping));
+  mapping.old_start_offset = result->changed_start;
+  mapping.old_end_offset = result->changed_old_end;
+  mapping.new_start_offset = result->changed_start;
+  mapping.new_end_offset = result->changed_new_end;
+
+  size_t count = 0;
+  Cursor *cursors = active_cursors(editor, &count);
+  for (size_t i = 0; i < count; ++i) map_cursor_through_sorted_mappings(&cursors[i], &mapping, 1);
+
+  editor_finish_external_buffer_update(editor);
+}
+
 bool editor_init(Editor *editor, BufferManager *buffer_manager) {
   if (!editor || !buffer_manager || !buffer_manager->buffer) return false;
   memset(editor, 0, sizeof(*editor));
   editor->buffer_manager = buffer_manager;
   editor->core_cursor = make_cursor(0, EDITOR_SELECTION_SENTINEL);
+  if (!buffer_manager_register_listener(buffer_manager, editor, editor_on_buffer_edit, editor_on_buffer_snap)) {
+    memset(editor, 0, sizeof(*editor));
+    return false;
+  }
   return true;
 }
 
 void editor_dispose(Editor *editor) {
   if (!editor) return;
+  if (editor->buffer_manager) buffer_manager_unregister_listener(editor->buffer_manager, editor);
   free(editor->multi_cursors);
   memset(editor, 0, sizeof(*editor));
 }
@@ -313,7 +408,7 @@ static bool apply_cursor_edits(Editor *editor, CursorEdit *cursor_edits, size_t 
   if (!items) return false;
   for (size_t i = 0; i < count; ++i) items[i] = cursor_edits[i].edit;
 
-  BatchEditResult result = buffer_manager_apply_edits(editor->buffer_manager, items, count);
+  BatchEditResult result = buffer_manager_apply_edits_from(editor->buffer_manager, items, count, editor);
   free(items);
   if (!result.applied) {
     batch_edit_result_dispose(&result);
@@ -718,8 +813,8 @@ static bool editor_restore_undo_redo(Editor *editor, bool redo) {
   editor_clear_multi_cursors(editor);
   size_t op_offset = 0;
   bool ok = redo
-    ? buffer_redo_op_offset(buffer, &op_offset)
-    : buffer_undo_op_offset(buffer, &op_offset);
+    ? buffer_manager_redo_from(editor->buffer_manager, &op_offset, editor)
+    : buffer_manager_undo_from(editor->buffer_manager, &op_offset, editor);
   if (!ok) return false;
 
   size_t len = buffer_len(buffer);

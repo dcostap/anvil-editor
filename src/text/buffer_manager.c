@@ -28,6 +28,13 @@ static BatchEditResult rejected_result(size_t edit_count) {
   return result;
 }
 
+static BufferSnapResult rejected_snap_result(void) {
+  BufferSnapResult result;
+  memset(&result, 0, sizeof(result));
+  result.rejected = true;
+  return result;
+}
+
 void batch_edit_result_dispose(BatchEditResult *result) {
   if (!result) return;
   free(result->cursor_mappings);
@@ -64,21 +71,160 @@ static bool changed_line_range(
 
 void buffer_manager_init(BufferManager *manager, Buffer *buffer) {
   if (!manager) return;
+  memset(manager, 0, sizeof(*manager));
   manager->buffer = buffer;
+}
+
+void buffer_manager_dispose(BufferManager *manager) {
+  if (!manager) return;
+  free(manager->listeners);
+  memset(manager, 0, sizeof(*manager));
+}
+
+bool buffer_manager_register_listener(
+  BufferManager *manager,
+  void *user,
+  BufferManagerEditCallback on_edit,
+  BufferManagerSnapCallback on_snap
+) {
+  if (!manager || !user || (!on_edit && !on_snap)) return false;
+  for (size_t i = 0; i < manager->listener_count; ++i) {
+    if (manager->listeners[i].user == user) {
+      manager->listeners[i].on_edit = on_edit;
+      manager->listeners[i].on_snap = on_snap;
+      return true;
+    }
+  }
+  if (manager->listener_count == manager->listener_capacity) {
+    size_t cap = manager->listener_capacity ? manager->listener_capacity * 2 : 4;
+    BufferManagerListener *listeners = (BufferManagerListener *) realloc(manager->listeners, cap * sizeof(BufferManagerListener));
+    if (!listeners) return false;
+    manager->listeners = listeners;
+    manager->listener_capacity = cap;
+  }
+  manager->listeners[manager->listener_count].user = user;
+  manager->listeners[manager->listener_count].on_edit = on_edit;
+  manager->listeners[manager->listener_count].on_snap = on_snap;
+  manager->listener_count += 1;
+  return true;
+}
+
+void buffer_manager_unregister_listener(BufferManager *manager, void *user) {
+  if (!manager || !user) return;
+  size_t out = 0;
+  for (size_t i = 0; i < manager->listener_count; ++i) {
+    if (manager->listeners[i].user != user) {
+      manager->listeners[out++] = manager->listeners[i];
+    }
+  }
+  manager->listener_count = out;
+}
+
+static void notify_edit(BufferManager *manager, const BatchEditResult *result, void *source) {
+  if (!manager || !result || !result->applied) return;
+  for (size_t i = 0; i < manager->listener_count; ++i) {
+    if (manager->listeners[i].on_edit) manager->listeners[i].on_edit(manager->listeners[i].user, result, source);
+  }
+}
+
+static void notify_snap(BufferManager *manager, const BufferSnapResult *result, void *source) {
+  if (!manager || !result || !result->applied) return;
+  for (size_t i = 0; i < manager->listener_count; ++i) {
+    if (manager->listeners[i].on_snap) manager->listeners[i].on_snap(manager->listeners[i].user, result, source);
+  }
 }
 
 bool buffer_manager_update_undo(BufferManager *manager, size_t op_offset) {
   return manager && manager->buffer && buffer_update_undo(manager->buffer, op_offset);
 }
 
+static BufferSnapResult buffer_manager_make_snap_result(
+  BufferManager *manager,
+  UndoRedoNode *target,
+  size_t *op_offset_out,
+  void *source
+) {
+  if (!manager || !manager->buffer || !target) return rejected_snap_result();
+
+  size_t old_len = 0;
+  char *old_text = buffer_to_string(manager->buffer, &old_len);
+  if (!old_text) return rejected_snap_result();
+
+  size_t op_offset = 0;
+  if (!buffer_snap_to_undo_node(manager->buffer, target, &op_offset)) {
+    free(old_text);
+    return rejected_snap_result();
+  }
+
+  size_t new_len = 0;
+  char *new_text = buffer_to_string(manager->buffer, &new_len);
+  if (!new_text) {
+    free(old_text);
+    return rejected_snap_result();
+  }
+
+  size_t prefix = 0;
+  while (prefix < old_len && prefix < new_len && old_text[prefix] == new_text[prefix]) ++prefix;
+
+  size_t suffix = 0;
+  while (suffix < old_len - prefix && suffix < new_len - prefix &&
+         old_text[old_len - 1 - suffix] == new_text[new_len - 1 - suffix]) {
+    ++suffix;
+  }
+
+  BufferSnapResult result;
+  memset(&result, 0, sizeof(result));
+  result.applied = true;
+  result.old_len = old_len;
+  result.new_len = new_len;
+  result.changed_start = prefix;
+  result.changed_old_end = old_len - suffix;
+  result.changed_new_end = new_len - suffix;
+  result.op_offset = op_offset;
+
+  if (op_offset_out) *op_offset_out = op_offset;
+  notify_snap(manager, &result, source);
+  free(old_text);
+  free(new_text);
+  return result;
+}
+
 bool buffer_manager_snap_to(BufferManager *manager, UndoRedoNode *target, size_t *op_offset_out) {
-  return manager && manager->buffer && buffer_snap_to_undo_node(manager->buffer, target, op_offset_out);
+  return buffer_manager_snap_to_from(manager, target, op_offset_out, NULL);
+}
+
+bool buffer_manager_snap_to_from(BufferManager *manager, UndoRedoNode *target, size_t *op_offset_out, void *source) {
+  BufferSnapResult result = buffer_manager_make_snap_result(manager, target, op_offset_out, source);
+  return result.applied;
+}
+
+bool buffer_manager_undo_from(BufferManager *manager, size_t *op_offset_out, void *source) {
+  if (!manager || !manager->buffer || !manager->buffer->has_undo_graph) return false;
+  UndoRedoGraph *graph = &manager->buffer->undo_graph;
+  if (!undo_graph_can_undo(graph)) return false;
+  return buffer_manager_snap_to_from(manager, graph->current->parent, op_offset_out, source);
+}
+
+bool buffer_manager_redo_from(BufferManager *manager, size_t *op_offset_out, void *source) {
+  if (!manager || !manager->buffer || !manager->buffer->has_undo_graph) return false;
+  UndoRedoGraph *graph = &manager->buffer->undo_graph;
+  if (!undo_graph_can_redo(graph)) return false;
+  return buffer_manager_snap_to_from(manager, graph->current->last_child, op_offset_out, source);
 }
 
 BatchEditResult buffer_manager_apply_edits(
   BufferManager *manager,
   const BatchEditItem *edits,
   size_t edit_count
+) {
+  return buffer_manager_apply_edits_from(manager, edits, edit_count, NULL);
+}
+
+BatchEditResult buffer_manager_apply_edits_from(
+  BufferManager *manager,
+  const BatchEditItem *edits,
+  size_t edit_count,
+  void *source
 ) {
   BatchEditResult result;
   memset(&result, 0, sizeof(result));
@@ -243,5 +389,6 @@ BatchEditResult buffer_manager_apply_edits(
   result.changed_new_end_line = changed_new_end_line;
   result.cursor_mappings = cursor_mappings;
   result.cursor_mapping_count = edit_count;
+  notify_edit(manager, &result, source);
   return result;
 }
