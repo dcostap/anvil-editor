@@ -462,6 +462,33 @@ static int test_end_of_line_stops_before_crlf(void) {
   return 0;
 }
 
+static int test_first_nonempty_of_line(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "alpha\n  beta\n   "));
+  CHECK(editor_set_cursor(&f.editor, 8, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_first_nonempty_of_line(&f.editor, false));
+  CHECK(expect_cursor(&f.editor, 0, 8, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_set_cursor(&f.editor, 14, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_first_nonempty_of_line(&f.editor, false));
+  CHECK(expect_cursor(&f.editor, 0, 16, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_home_toggle_of_line(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "alpha\n  beta"));
+  CHECK(editor_set_cursor(&f.editor, 10, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_home_toggle_of_line(&f.editor, false));
+  CHECK(expect_cursor(&f.editor, 0, 8, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_home_toggle_of_line(&f.editor, false));
+  CHECK(expect_cursor(&f.editor, 0, 6, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_home_toggle_of_line(&f.editor, true));
+  CHECK(expect_cursor(&f.editor, 0, 8, 6) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
 static int test_word_left_right_movement(void) {
   EditorFixture f;
   CHECK(fixture_init(&f, "foo bar,baz\nqux"));
@@ -718,6 +745,8 @@ int main(void) {
   rc |= test_left_right_selection_behavior();
   rc |= test_line_start_end_movement();
   rc |= test_end_of_line_stops_before_crlf();
+  rc |= test_first_nonempty_of_line();
+  rc |= test_home_toggle_of_line();
   rc |= test_word_left_right_movement();
   rc |= test_word_delete_commands();
   rc |= test_word_delete_removes_selection();

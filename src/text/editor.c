@@ -1514,6 +1514,62 @@ bool editor_beginning_of_line(Editor *editor, bool update_selection) {
   return true;
 }
 
+static bool first_nonempty_offset_of_line(const Buffer *buffer, size_t line, size_t *offset_out) {
+  if (!buffer || !offset_out) return false;
+  BufferLineRange range;
+  if (!buffer_line_range_crlf(buffer, line, &range)) return false;
+  size_t pos = range.start;
+  while (pos < range.end) {
+    char ch = 0;
+    if (!piece_tree_byte_at(&buffer->tree, pos, &ch)) return false;
+    if (!isspace((int) (unsigned char) ch)) break;
+    ++pos;
+  }
+  *offset_out = pos;
+  return true;
+}
+
+static bool editor_line_start_kind_move(Editor *editor, bool update_selection, int kind) {
+  if (!editor) return false;
+  Buffer *buffer = editor_buffer(editor);
+  if (!buffer) return false;
+
+  size_t count = 0;
+  Cursor *cursors = active_cursors(editor, &count);
+  for (size_t i = 0; i < count; ++i) {
+    Cursor *cursor = &cursors[i];
+    BufferLineCol lc;
+    size_t line_start = 0;
+    size_t first_nonempty = 0;
+    size_t target = 0;
+    if (!buffer_offset_to_line_col(buffer, cursor->cursor, &lc)) return false;
+    if (!buffer_line_start(buffer, lc.line, &line_start)) return false;
+    if (!first_nonempty_offset_of_line(buffer, lc.line, &first_nonempty)) return false;
+    if (kind == 0) {
+      target = line_start;
+    } else if (kind == 1) {
+      target = first_nonempty;
+    } else {
+      target = cursor->cursor == first_nonempty ? line_start : first_nonempty;
+    }
+    if (!move_cursor_to(editor, cursor, target, update_selection)) return false;
+    clear_desired_column(cursor);
+  }
+
+  editor_sort_and_merge_cursors(editor);
+  sync_core_from_multi(editor);
+  reset_last_insert(editor);
+  return true;
+}
+
+bool editor_first_nonempty_of_line(Editor *editor, bool update_selection) {
+  return editor_line_start_kind_move(editor, update_selection, 1);
+}
+
+bool editor_home_toggle_of_line(Editor *editor, bool update_selection) {
+  return editor_line_start_kind_move(editor, update_selection, 2);
+}
+
 bool editor_end_of_line(Editor *editor, bool update_selection) {
   if (!editor) return false;
   Buffer *buffer = editor_buffer(editor);
