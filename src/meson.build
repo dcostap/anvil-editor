@@ -14,6 +14,7 @@ anvil_sources = [
     'api/tokenizer.c',
     'api/fuzzy.c',
     'fuzzy.c',
+    'text/piece_tree.c',
     'tokenizer/arena.c',
     'tokenizer/regex.c',
     'tokenizer/lutf8.c',
@@ -190,6 +191,13 @@ fuzzy_test = executable('fuzzy_test',
     c_args: anvil_cargs,
 )
 test('fuzzy', fuzzy_test, env: anvil_test_env)
+
+piece_tree_test = executable('piece_tree_test',
+    ['../tests/native/piece_tree_test.c', 'text/piece_tree.c'],
+    include_directories: anvil_includes,
+    c_args: anvil_cargs,
+)
+test('piece_tree', piece_tree_test, env: anvil_test_env)
 
 # load and configure linenoise
 if get_option('repl_history')
