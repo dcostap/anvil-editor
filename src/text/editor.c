@@ -2022,6 +2022,76 @@ bool editor_line_down(Editor *editor, bool update_selection) {
   return editor_line_move(editor, update_selection, 1);
 }
 
+static bool move_cursor_one_line(Editor *editor, Cursor *cursor, int direction) {
+  if (!editor || !cursor) return false;
+  Buffer *buffer = editor_buffer(editor);
+  if (!buffer) return false;
+
+  cursor->selection = EDITOR_SELECTION_SENTINEL;
+  if (!ensure_desired_column(editor, cursor)) return false;
+
+  BufferLineCol lc;
+  if (!buffer_offset_to_line_col(buffer, cursor->cursor, &lc)) return false;
+  size_t line_count = buffer_line_count(buffer);
+  size_t target_line = lc.line;
+  if (direction > 0) {
+    if (target_line + 1 < line_count) ++target_line;
+  } else if (target_line > 0) {
+    --target_line;
+  }
+
+  size_t target_line_len = 0;
+  size_t target_line_start = 0;
+  if (!line_length_no_lf(buffer, target_line, &target_line_len)) return false;
+  if (!buffer_line_start(buffer, target_line, &target_line_start)) return false;
+  size_t target_col = cursor->desired_column < target_line_len
+    ? cursor->desired_column
+    : target_line_len;
+  cursor->cursor = target_line_start + target_col;
+  return true;
+}
+
+static bool editor_dup_cursor(Editor *editor, int direction) {
+  if (!editor) return false;
+  Buffer *buffer = editor_buffer(editor);
+  if (!buffer) return false;
+
+  Cursor old_core = editor->core_cursor;
+  old_core.selection = EDITOR_SELECTION_SENTINEL;
+  clear_desired_column(&old_core);
+
+  Cursor moved = old_core;
+  if (!move_cursor_one_line(editor, &moved, direction)) return false;
+
+  size_t old_count = editor->multi_cursor_count;
+  size_t needed = old_count > 0 ? old_count + 1 : 2;
+  if (!ensure_multi_capacity(editor, needed)) return false;
+  if (old_count == 0) {
+    editor->multi_cursors[0] = old_core;
+    editor->multi_cursors[1] = moved;
+    editor->multi_cursor_count = 2;
+  } else {
+    editor->multi_cursors[old_count] = moved;
+    editor->multi_cursor_count = old_count + 1;
+  }
+
+  editor_sort_and_merge_cursors(editor);
+  if (editor->multi_cursor_count <= 1) {
+    editor->multi_cursor_count = 0;
+  }
+  editor->core_cursor = moved;
+  reset_last_insert(editor);
+  return true;
+}
+
+bool editor_dup_cursor_up(Editor *editor) {
+  return editor_dup_cursor(editor, -1);
+}
+
+bool editor_dup_cursor_down(Editor *editor) {
+  return editor_dup_cursor(editor, 1);
+}
+
 static bool line_is_whitespace_only(const Buffer *buffer, size_t line, bool *empty_out) {
   if (!buffer || !empty_out) return false;
   BufferLineRange range;

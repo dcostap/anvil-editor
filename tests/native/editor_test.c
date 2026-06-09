@@ -728,6 +728,44 @@ static int test_line_movement_extends_selection(void) {
   return 0;
 }
 
+static int test_dup_cursor_down_adds_cursor_on_next_line(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "aa\nbbbb\nc"));
+  CHECK(editor_set_cursor(&f.editor, 5, 0));
+  CHECK(editor_dup_cursor_down(&f.editor));
+  CHECK(editor_cursor_count(&f.editor) == 2);
+  CHECK(expect_cursor(&f.editor, 0, 5, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(expect_cursor(&f.editor, 1, 9, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_dup_cursor_up_adds_cursor_on_previous_line(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "aa\nbbbb\nc"));
+  CHECK(editor_set_cursor(&f.editor, 5, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_dup_cursor_up(&f.editor));
+  CHECK(editor_cursor_count(&f.editor) == 2);
+  CHECK(expect_cursor(&f.editor, 0, 2, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(expect_cursor(&f.editor, 1, 5, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_dup_cursor_down_repeats_from_moved_core_cursor(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "a\nb\nc"));
+  CHECK(editor_set_cursor(&f.editor, 1, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_dup_cursor_down(&f.editor));
+  CHECK(editor_dup_cursor_down(&f.editor));
+  CHECK(editor_cursor_count(&f.editor) == 3);
+  CHECK(expect_cursor(&f.editor, 0, 1, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(expect_cursor(&f.editor, 1, 3, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(expect_cursor(&f.editor, 2, 5, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
 static int test_empty_line_down_up_movement(void) {
   EditorFixture f;
   CHECK(fixture_init(&f, "\nalpha\n  \nbeta\n\ngamma"));
@@ -930,6 +968,9 @@ int main(void) {
   rc |= test_multi_cursor_word_movement();
   rc |= test_line_down_up_preserves_desired_column();
   rc |= test_line_movement_extends_selection();
+  rc |= test_dup_cursor_down_adds_cursor_on_next_line();
+  rc |= test_dup_cursor_up_adds_cursor_on_previous_line();
+  rc |= test_dup_cursor_down_repeats_from_moved_core_cursor();
   rc |= test_empty_line_down_up_movement();
   rc |= test_empty_line_down_moves_to_eof_when_none_found();
   rc |= test_editor_undo_redo_restores_cursor_snapshots();

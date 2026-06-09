@@ -340,6 +340,7 @@ Implement:
 - Join line below with CRLF-aware line ranges and Fred-style leading-space trim. **Implemented initially.**
 - Tab/untab with Fred default tab-byte indentation behavior. **Implemented initially.**
 - First-nonempty-of-line, home-toggle-of-line, and empty-line up/down movement. **Implemented initially.**
+- Duplicate cursor up/down. **Implemented initially with Fred-style moved core cursor behavior.**
 - Unify line endings to the Buffer's selected line-ending mode. **Implemented initially.**
 
 Exit criteria:
@@ -403,7 +404,7 @@ Implement:
 - Dirty state based on current node/snapshot compared to save node. **Implemented initially with Fred-style node identity tracking.**
 - Update current undo snapshot for coalesced/native operations. **Implemented initially.**
 - Snap to arbitrary undo graph nodes. **Implemented initially at UndoGraph/Buffer/BufferManager layers.**
-- Selection snapshots associated with the editing view. **Implemented initially for the primary cursor-edit path; undo/redo still clears multi-cursors Fred-style.**
+- Selection snapshots associated with the editing view. **Implemented initially across primary cursor edits and direct line/indent/line-ending commands; undo/redo still clears multi-cursors Fred-style when no stored snapshot applies.**
 
 Policy decisions to settle before implementation:
 

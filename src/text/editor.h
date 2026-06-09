@@ -80,6 +80,8 @@ bool editor_line_up(Editor *editor, bool update_selection);
 bool editor_line_down(Editor *editor, bool update_selection);
 bool editor_empty_line_up(Editor *editor, bool update_selection);
 bool editor_empty_line_down(Editor *editor, bool update_selection);
+bool editor_dup_cursor_up(Editor *editor);
+bool editor_dup_cursor_down(Editor *editor);
 bool editor_undo(Editor *editor);
 bool editor_redo(Editor *editor);
 
