@@ -318,8 +318,34 @@ function NativeTextSandboxView:draw_line_text(line_info, row_y, highlights)
   draw_segment(col, #text, style.text)
 end
 
+function NativeTextSandboxView:cursor_has_selection(cursor)
+  return cursor.selection and cursor.selection ~= cursor.cursor
+end
+
+function NativeTextSandboxView:has_selection()
+  for i = 1, self.editor:cursor_count() do
+    if self:cursor_has_selection(self.editor:cursor(i)) then return true end
+  end
+  return false
+end
+
+function NativeTextSandboxView:draw_current_line_highlights()
+  if core.active_view ~= self or config.highlight_current_line == false then return end
+  if config.highlight_current_line == "no_selection" and self:has_selection() then return end
+  local lh = self:get_line_height()
+  local seen = {}
+  for i = 1, self.editor:cursor_count() do
+    local line = self:cursor_line_col(self.editor:cursor(i).cursor or 0)
+    if not seen[line] then
+      local y = self.position.y + style.padding.y - self.scroll.y + line * lh
+      renderer.draw_rect(self.position.x, y, self.size.x, lh, style.line_highlight)
+      seen[line] = true
+    end
+  end
+end
+
 function NativeTextSandboxView:draw_selection_for_cursor(cursor)
-  if not cursor.selection or cursor.selection == cursor.cursor then return end
+  if not self:cursor_has_selection(cursor) then return end
   local first = math.min(cursor.cursor, cursor.selection)
   local last = math.max(cursor.cursor, cursor.selection)
   local start_lc = self.buffer:offset_to_line_col(first)
@@ -462,6 +488,7 @@ function NativeTextSandboxView:draw()
 
   core.push_clip_rect(x, y, w, h)
   renderer.draw_rect(x, y, gutter_w, h, style.line_number_background or style.background2)
+  self:draw_current_line_highlights()
 
   for i = 1, self.editor:cursor_count() do
     self:draw_selection_for_cursor(self.editor:cursor(i))
