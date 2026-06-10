@@ -34,6 +34,7 @@ function NativeTextSandboxView:new(text, filename)
   self.external_reload_prompting = false
   self:update_file_signature()
   self.tree_sitter_dirty_since = nil
+  self.h_scrollable_size = 0
   self.scrollable = true
   self.cursor = "ibeam"
 end
@@ -239,6 +240,10 @@ function NativeTextSandboxView:get_scrollable_size()
   return math.max(self.size.y, self.buffer:line_count() * self:get_line_height() + style.padding.y * 2)
 end
 
+function NativeTextSandboxView:get_h_scrollable_size()
+  return math.max(self.size.x, self.h_scrollable_size or 0)
+end
+
 function NativeTextSandboxView:line_col_to_screen(line, col)
   local lh = self:get_line_height()
   local x = self.position.x + self:get_gutter_width() + style.padding.x - self.scroll.x + style.font:get_width(string.rep(" ", col))
@@ -277,6 +282,8 @@ end
 function NativeTextSandboxView:draw_line_text(line_info, row_y, highlights)
   local text = line_info.text or ""
   local x = self.position.x + self:get_gutter_width() + style.padding.x - self.scroll.x
+  local width = self:get_gutter_width() + style.padding.x * 2 + style.font:get_width(text)
+  if width > (self.h_scrollable_size or 0) then self.h_scrollable_size = width end
   if not highlights or #highlights == 0 then
     renderer.draw_text(style.font, text, x, row_y, style.text)
     return
@@ -334,13 +341,23 @@ function NativeTextSandboxView:draw_selection_for_cursor(cursor)
 end
 
 function NativeTextSandboxView:scroll_to_cursor()
-  local line = self:cursor_line_col()
+  local line, col = self:cursor_line_col()
   local lh = self:get_line_height()
   local y = line * lh
   if y < self.scroll.to.y then
     self.scroll.to.y = y
   elseif y + lh > self.scroll.to.y + self.size.y then
     self.scroll.to.y = y + lh - self.size.y + style.padding.y * 2
+  end
+
+  local gutter_w = self:get_gutter_width()
+  local available_w = math.max(1, self.size.x - gutter_w - style.padding.x * 2)
+  local x = style.font:get_width(string.rep(" ", col))
+  self.h_scrollable_size = math.max(self.h_scrollable_size or 0, gutter_w + style.padding.x * 2 + x + style.font:get_width(" "))
+  if x < self.scroll.to.x then
+    self.scroll.to.x = x
+  elseif x > self.scroll.to.x + available_w then
+    self.scroll.to.x = x - available_w + style.font:get_width(" ")
   end
   self:clamp_scroll_position()
 end
