@@ -116,6 +116,32 @@ static int l_buffer_line(lua_State *L) {
   return 1;
 }
 
+static bool opt_table_bool(lua_State *L, int index, const char *field, bool fallback) {
+  if (!lua_istable(L, index)) return fallback;
+  lua_getfield(L, index, field);
+  bool value = lua_isnil(L, -1) ? fallback : lua_toboolean(L, -1);
+  lua_pop(L, 1);
+  return value;
+}
+
+static int l_buffer_find_literal(lua_State *L) {
+  NativeTextBuffer *native = check_buffer(L, 1);
+  size_t needle_len = 0;
+  const char *needle = luaL_checklstring(L, 2, &needle_len);
+  size_t start_offset = lua_isnoneornil(L, 3) ? 0 : check_offset(L, 3);
+  bool case_sensitive = opt_table_bool(L, 4, "case_sensitive", true);
+  bool backwards = opt_table_bool(L, 4, "backwards", false);
+
+  BufferSearchResult result;
+  if (!buffer_find_literal(&native->buffer, needle, needle_len, start_offset, case_sensitive, backwards, &result)) {
+    lua_pushnil(L);
+    return 1;
+  }
+  lua_pushnumber(L, (lua_Number) result.start_offset);
+  lua_pushnumber(L, (lua_Number) result.end_offset);
+  return 2;
+}
+
 static int l_buffer_visible_lines(lua_State *L) {
   NativeTextBuffer *native = check_buffer(L, 1);
   size_t first_line = check_offset(L, 2);
@@ -582,6 +608,7 @@ static const luaL_Reg buffer_methods[] = {
   { "text", l_buffer_text },
   { "line_count", l_buffer_line_count },
   { "line", l_buffer_line },
+  { "find_literal", l_buffer_find_literal },
   { "visible_lines", l_buffer_visible_lines },
   { "offset_to_line_col", l_buffer_offset_to_line_col },
   { "line_col_to_offset", l_buffer_line_col_to_offset },

@@ -65,6 +65,29 @@ static int test_buffer_read_apis(void) {
   return 0;
 }
 
+static int test_buffer_find_literal(void) {
+  Buffer buffer;
+  CHECK(buffer_init(&buffer, "Alpha beta alpha BETA", 21));
+  BufferSearchResult result;
+
+  CHECK(buffer_find_literal(&buffer, "beta", 4, 0, true, false, &result));
+  CHECK(result.start_offset == 6);
+  CHECK(result.end_offset == 10);
+
+  CHECK(buffer_find_literal(&buffer, "beta", 4, 10, false, false, &result));
+  CHECK(result.start_offset == 17);
+  CHECK(result.end_offset == 21);
+
+  CHECK(buffer_find_literal(&buffer, "alpha", 5, buffer_len(&buffer), false, true, &result));
+  CHECK(result.start_offset == 11);
+  CHECK(result.end_offset == 16);
+
+  CHECK(!buffer_find_literal(&buffer, "missing", 7, 0, true, false, &result));
+
+  buffer_dispose(&buffer);
+  return 0;
+}
+
 static int test_buffer_detects_crlf_line_endings(void) {
   Buffer buffer;
   CHECK(buffer_init(&buffer, "alpha\r\nbeta", 11));
@@ -445,6 +468,7 @@ static int test_registered_listener_receives_edit_and_snap_notifications(void) {
 int main(void) {
   int rc = 0;
   rc |= test_buffer_read_apis();
+  rc |= test_buffer_find_literal();
   rc |= test_buffer_detects_crlf_line_endings();
   rc |= test_buffer_path_is_owned_and_reset_on_load();
   rc |= test_buffer_load_file_preserves_bytes_and_sets_path();

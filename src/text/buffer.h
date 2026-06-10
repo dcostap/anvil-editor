@@ -23,6 +23,11 @@ typedef struct BufferVisibleLine {
   size_t text_len;
 } BufferVisibleLine;
 
+typedef struct BufferSearchResult {
+  size_t start_offset;
+  size_t end_offset;
+} BufferSearchResult;
+
 typedef struct Buffer {
   PieceTree tree;
   char *path;
@@ -55,6 +60,15 @@ void buffer_refresh_line_ending_mode(Buffer *buffer);
 
 char *buffer_to_string(const Buffer *buffer, size_t *len_out);
 char *buffer_range_to_string(const Buffer *buffer, size_t start_offset, size_t end_offset, size_t *len_out);
+bool buffer_find_literal(
+  const Buffer *buffer,
+  const char *needle,
+  size_t needle_len,
+  size_t start_offset,
+  bool case_sensitive,
+  bool backwards,
+  BufferSearchResult *out
+);
 char *buffer_get_line(const Buffer *buffer, size_t line, size_t *len_out);
 BufferVisibleLine *buffer_visible_lines(const Buffer *buffer, size_t first_line, size_t last_line, size_t *count_out);
 void buffer_visible_lines_free(BufferVisibleLine *lines, size_t count);

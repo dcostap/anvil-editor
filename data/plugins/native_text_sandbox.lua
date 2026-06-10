@@ -12,6 +12,7 @@ local TREE_SITTER_REPARSE_DELAY = 0.25
 
 local plugin_config = config.plugins.native_text_sandbox
 local save_native_view_as
+local last_find_text
 
 local NativeTextSandboxView = View:extend()
 
@@ -306,6 +307,27 @@ function NativeTextSandboxView:on_mouse_released(button, x, y)
   if button == "left" then self.mouse_selecting = nil end
 end
 
+function NativeTextSandboxView:find_literal(text, backwards)
+  if not text or text == "" then return false end
+  local cursor = self.editor:cursor()
+  local cursor_offset = cursor.cursor or 0
+  local selection_offset = cursor.selection or cursor_offset
+  local first = math.min(cursor_offset, selection_offset)
+  local last = math.max(cursor_offset, selection_offset)
+  local start_offset = backwards and math.max(0, first > 0 and first - 1 or 0) or last
+  local options = { backwards = backwards, case_sensitive = config.find_case_sensitive == true }
+  local start_match, end_match = self.buffer:find_literal(text, start_offset, options)
+  if not start_match then
+    start_offset = backwards and self.buffer:len() or 0
+    start_match, end_match = self.buffer:find_literal(text, start_offset, options)
+  end
+  if not start_match then return false end
+  self.editor:set_cursor(end_match, start_match)
+  self:scroll_to_cursor()
+  core.redraw = true
+  return true
+end
+
 function NativeTextSandboxView:draw()
   self:draw_background(style.background)
   self:update()
@@ -366,6 +388,34 @@ end
 local function copy_native_selection(view)
   local text = view.editor:copy_selection()
   if text and text ~= "" then system.set_clipboard(text) end
+end
+
+local function find_native_text(view, backwards)
+  local selected = view.editor:copy_selection()
+  core.global_prompt_bar:enter(backwards and "Native Find Previous" or "Native Find", {
+    text = (selected and selected ~= "" and selected) or last_find_text or "",
+    select_text = true,
+    show_suggestions = false,
+    submit = function(text)
+      last_find_text = text
+      if not view:find_literal(text, backwards) then
+        core.error("Couldn't find %q", text)
+      end
+    end,
+    suggest = function()
+      return {}
+    end,
+  })
+end
+
+local function repeat_native_find(view, backwards)
+  if not last_find_text or last_find_text == "" then
+    find_native_text(view, backwards)
+    return
+  end
+  if not view:find_literal(last_find_text, backwards) then
+    core.error("Couldn't find %q", last_find_text)
+  end
 end
 
 function save_native_view_as(view, close_after_save)
@@ -475,6 +525,9 @@ command.add(NativeTextSandboxView, {
   ["native-text-sandbox:page-down"] = with_active_native_view(function(view) view:page_move(1, false) end),
   ["native-text-sandbox:select-page-up"] = with_active_native_view(function(view) view:page_move(-1, true) end),
   ["native-text-sandbox:select-page-down"] = with_active_native_view(function(view) view:page_move(1, true) end),
+  ["native-text-sandbox:find"] = with_active_native_view(function(view) find_native_text(view, false) end),
+  ["native-text-sandbox:find-next"] = with_active_native_view(function(view) repeat_native_find(view, false) end),
+  ["native-text-sandbox:find-previous"] = with_active_native_view(function(view) repeat_native_find(view, true) end),
   ["native-text-sandbox:word-left"] = with_active_native_view(function(view) view.editor:word_left(false) end),
   ["native-text-sandbox:word-right"] = with_active_native_view(function(view) view.editor:word_right(false) end),
   ["native-text-sandbox:select-word-left"] = with_active_native_view(function(view) view.editor:word_left(true) end),
@@ -531,6 +584,9 @@ keymap.add {
   ["pagedown"] = "native-text-sandbox:page-down",
   ["shift+pageup"] = "native-text-sandbox:select-page-up",
   ["shift+pagedown"] = "native-text-sandbox:select-page-down",
+  ["ctrl+f"] = "native-text-sandbox:find",
+  ["f3"] = "native-text-sandbox:find-next",
+  ["shift+f3"] = "native-text-sandbox:find-previous",
   ["ctrl+left"] = "native-text-sandbox:word-left",
   ["ctrl+right"] = "native-text-sandbox:word-right",
   ["ctrl+shift+left"] = "native-text-sandbox:select-word-left",

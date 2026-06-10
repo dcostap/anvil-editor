@@ -1,6 +1,7 @@
 #include "text/buffer.h"
 #include "text/treesitter.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -203,6 +204,72 @@ char *buffer_to_string(const Buffer *buffer, size_t *len_out) {
 char *buffer_range_to_string(const Buffer *buffer, size_t start_offset, size_t end_offset, size_t *len_out) {
   if (!buffer) return NULL;
   return piece_tree_range_to_string(&buffer->tree, start_offset, end_offset, len_out);
+}
+
+static bool search_byte_equal(char a, char b, bool case_sensitive) {
+  if (case_sensitive) return a == b;
+  return tolower((unsigned char) a) == tolower((unsigned char) b);
+}
+
+static bool search_matches_at(const char *haystack, const char *needle, size_t needle_len, size_t offset, bool case_sensitive) {
+  for (size_t i = 0; i < needle_len; ++i) {
+    if (!search_byte_equal(haystack[offset + i], needle[i], case_sensitive)) return false;
+  }
+  return true;
+}
+
+bool buffer_find_literal(
+  const Buffer *buffer,
+  const char *needle,
+  size_t needle_len,
+  size_t start_offset,
+  bool case_sensitive,
+  bool backwards,
+  BufferSearchResult *out
+) {
+  if (!buffer || !needle || !out) return false;
+  size_t len = 0;
+  char *haystack = buffer_to_string(buffer, &len);
+  if (!haystack) return false;
+
+  if (start_offset > len) start_offset = len;
+  if (needle_len == 0) {
+    out->start_offset = start_offset;
+    out->end_offset = start_offset;
+    free(haystack);
+    return true;
+  }
+  if (needle_len > len) {
+    free(haystack);
+    return false;
+  }
+
+  if (backwards) {
+    size_t max_start = len - needle_len;
+    size_t offset = start_offset < max_start ? start_offset : max_start;
+    for (;;) {
+      if (search_matches_at(haystack, needle, needle_len, offset, case_sensitive)) {
+        out->start_offset = offset;
+        out->end_offset = offset + needle_len;
+        free(haystack);
+        return true;
+      }
+      if (offset == 0) break;
+      --offset;
+    }
+  } else if (start_offset <= len - needle_len) {
+    for (size_t offset = start_offset; offset <= len - needle_len; ++offset) {
+      if (search_matches_at(haystack, needle, needle_len, offset, case_sensitive)) {
+        out->start_offset = offset;
+        out->end_offset = offset + needle_len;
+        free(haystack);
+        return true;
+      }
+    }
+  }
+
+  free(haystack);
+  return false;
 }
 
 char *buffer_get_line(const Buffer *buffer, size_t line, size_t *len_out) {

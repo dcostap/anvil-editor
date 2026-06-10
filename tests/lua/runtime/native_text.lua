@@ -79,6 +79,24 @@ test.describe("native_text API bridge", function()
     os.remove(saved)
   end)
 
+  test.it("exposes native literal Buffer search", function()
+    local buffer = native_text.new_buffer("Alpha beta alpha BETA")
+
+    local start_offset, end_offset = buffer:find_literal("beta")
+    test.equal(start_offset, 6)
+    test.equal(end_offset, 10)
+
+    start_offset, end_offset = buffer:find_literal("beta", 10, { case_sensitive = false })
+    test.equal(start_offset, 17)
+    test.equal(end_offset, 21)
+
+    start_offset, end_offset = buffer:find_literal("alpha", buffer:len(), { case_sensitive = false, backwards = true })
+    test.equal(start_offset, 11)
+    test.equal(end_offset, 16)
+
+    test.equal(buffer:find_literal("missing"), nil)
+  end)
+
   test.it("exposes native selection and clipboard primitives", function()
     local buffer = native_text.new_buffer("alpha beta\ngamma")
     local editor = buffer:new_editor()
