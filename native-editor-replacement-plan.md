@@ -11,7 +11,9 @@ This is not a plan to preserve the Lua `Doc` API indefinitely. The intended dire
 3. Replace the default editor creation path.
 4. Delete the old Lua text storage/mutation stack when it is no longer needed.
 
-The user is also considering an eventual pure C application shell. This plan therefore avoids building new long-term Lua abstractions unless they are temporary sandbox glue.
+The user is also considering how far the application should move toward C versus Lua. The current strategic answer is not an immediate pure-C rewrite. Anvil should first become a native-core editor with a Lua extension/configuration shell. C should own durable editor state, text mutation, undo/redo, parsing, search/replace over large Buffers, cursor normalization, and other performance-critical or correctness-critical mechanics. Lua can remain valuable for non-core-text-editing behavior such as commands, keybindings, prompt flows, project/file-tree behavior, default configuration, non-hot-path plugins, and fast UI experimentation.
+
+This plan therefore avoids building new long-term Lua abstractions around the old `Doc` model, but it does not require deleting Lua from the whole application. The intended split is: C owns the native Buffer/Editor core and efficient editor primitives; Lua orchestrates app-shell behavior and customization through explicit native capabilities. If Lua later proves to be architectural drag for a specific subsystem, that subsystem can be migrated to C after the native editor path is stable.
 
 ## Vocabulary
 
@@ -22,6 +24,41 @@ Use the Fred vocabulary for the new native core:
 - **Editor**: per-view cursor, selection, and editing state over a Buffer.
 
 Keep **Document / Doc** only for Anvil's existing Lua editor until replacement.
+
+## Fred reference notes
+
+The native replacement is intentionally Fred-style. Fred's recovered/decompiled sources remain the golden reference for the native core's vocabulary, architecture, behavior, and invariants. Refer back to them during development rather than inventing Anvil-specific substitutes when an equivalent Fred concept already exists.
+
+Fred decomp location:
+
+```text
+C:\Projects\my_decomps\fred_src_dump
+```
+
+Most relevant recovered source roots:
+
+```text
+C:\Projects\my_decomps\fred_src_dump\D_\git_projects\fred\src
+C:\Projects\my_decomps\fred_src_dump\D_\git_projects\fred\inc
+```
+
+Key files to consult when extending or debugging the native core:
+
+- `D_\git_projects\fred\src\fredbuf.cpp` — piece tree text storage, walkers, snapshots, line helpers.
+- `D_\git_projects\fred\src\ed.cpp` — Editor cursor/selection/editing behavior.
+- `D_\git_projects\fred\src\ed-buffer-manager.cpp` — Buffer Manager transactions, registered editor propagation, snap-to behavior.
+- `D_\git_projects\fred\src\undo-graph.cpp` — graph-shaped undo/redo behavior.
+- `D_\git_projects\fred\inc\undo-data.h` — undo data structures and invariants.
+- `D_\git_projects\fred\src\basic-textedit.cpp` — baseline text editing behavior.
+
+Guidelines:
+
+- Use Fred as the behavioral and architectural reference for native Buffer/Buffer Manager/Editor/undo decisions.
+- Do not paste decompiled Fred code into Anvil.
+- Reimplement the architecture, behavior, and invariants cleanly in Anvil-owned C code.
+- Prefer tests as the executable specification for Fred-inspired behavior.
+- When behavior is unclear, inspect Fred first, then adapt only where Anvil has an intentional reason to differ.
+- Record intentional deviations in this plan or nearby implementation comments when they affect future maintenance.
 
 ## Context: what has been built so far
 
@@ -188,6 +225,10 @@ Important status:
 
 The next work should stop treating Tree-sitter as the main project. The next milestone is native editor replacement readiness.
 
+The strategic target is a **native-core editor with a Lua extension/configuration shell**, not a big-bang pure-C rewrite. The practical boundary is ownership: C owns the Buffer, Buffer Manager, Editor, undo graph, Tree-sitter state, search/replace helpers, and hot view/rendering primitives; Lua owns orchestration, commands, keybindings, prompts, settings, project/file-tree flows, and first-party plugins unless those paths become performance-critical or correctness-critical.
+
+Do not preserve the old Lua `Doc` API as a long-term compatibility layer. In particular, avoid rebuilding `Doc.lines` or old selection structures on top of the native core. If a plugin needs old internals, either port it to native capabilities, keep it as temporary transition glue, or delete it.
+
 The replacement should proceed in layers:
 
 1. Inventory what the Lua editor currently provides.
@@ -337,14 +378,44 @@ Questions:
 - Which plugins assume Lua `Doc` internals?
 - Which plugins should be ported to C/native APIs?
 - Which plugins can be deleted because this is a personal fork?
+- Which plugins are app-shell/customization behavior that can stay in Lua indefinitely?
+- Which plugins are performance-critical or correctness-critical enough to become native C behavior?
 
 Output:
 
 - A table of plugin/command dependencies with one of:
-  - keep and port
+  - keep in Lua as app-shell/customization behavior
+  - keep and port to native capabilities
+  - port fully into C/native core
   - keep temporarily through Lua glue
   - delete/drop
   - defer
+
+### Native editor boundary / API contract
+
+Define the long-term boundary between Lua and the native editor before promoting the native view from sandbox to default.
+
+Lua and first-party plugins may interact with native Buffers/Editors through stable capability APIs such as:
+
+- current command target lookup
+- selected text retrieval
+- replace selections / apply edits through Buffer Manager transactions
+- cursor and selection movement commands
+- save/save-as/close lifecycle operations
+- visible range and scroll/camera queries
+- diagnostics, line hints, decorations, and highlight overlays
+- file path, dirty state, language, and encoding/line-ending metadata
+
+Lua and first-party plugins should not depend on:
+
+- `Doc.lines`-style text arrays
+- direct piece-tree internals
+- undo graph internals
+- Tree-sitter tree ownership
+- native cursor arrays or selection normalization internals
+- renderer-specific view implementation details
+
+The goal is to keep Lua useful without making it the owner of core text-editing state again.
 
 ## Phase B: Dogfooding readiness checklist
 
@@ -457,6 +528,7 @@ After completing the inventory, implement in this order:
 - Do not parameterize every UI constant prematurely.
 - Do not preserve deprecated native APIs just for internal callers; update in-repo callers instead.
 - Do not replace the whole Lua UI shell before the native editor is dogfoodable.
+- Do not treat pure C as the default endpoint for every subsystem; migrate specific Lua-owned subsystems only when there is a concrete performance, correctness, maintainability, or architecture reason.
 
 ## Validation expectations
 
