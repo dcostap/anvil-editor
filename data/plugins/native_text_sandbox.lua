@@ -114,6 +114,14 @@ function NativeTextSandboxView:get_name()
   return name
 end
 
+function NativeTextSandboxView:get_filename()
+  local path = self.buffer:path()
+  if path then
+    return common.home_encode(path) .. (self.buffer:is_dirty() and "*" or "")
+  end
+  return self:get_name()
+end
+
 function NativeTextSandboxView:try_close(do_close)
   if not self.buffer:is_dirty() then
     do_close()
@@ -659,6 +667,7 @@ local function open_native_text_file(filename)
   end
   local view = NativeTextSandboxView(nil, filename)
   core.root_panel:get_active_node_default():add_view(view)
+  if core.set_visited then core.set_visited(filename) end
   return view
 end
 
