@@ -55,6 +55,7 @@ bool editor_del(Editor *editor);
 bool editor_backspace_word(Editor *editor);
 bool editor_del_word(Editor *editor);
 bool editor_delete_line(Editor *editor);
+bool editor_duplicate_line(Editor *editor);
 bool editor_move_line_up(Editor *editor);
 bool editor_move_line_down(Editor *editor);
 bool editor_join_line_below(Editor *editor);

@@ -183,6 +183,31 @@ static int test_delete_final_crlf_line_removes_previous_line_ending(void) {
   return 0;
 }
 
+static int test_duplicate_line(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "aa\nbb\ncc"));
+  CHECK(editor_set_cursor(&f.editor, 4, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_duplicate_line(&f.editor));
+  CHECK(expect_text(&f, "aa\nbb\nbb\ncc") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 7, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_undo(&f.editor));
+  CHECK(expect_text(&f, "aa\nbb\ncc") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 4, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_duplicate_final_line(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "aa\nbb"));
+  CHECK(editor_set_cursor(&f.editor, 4, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_duplicate_line(&f.editor));
+  CHECK(expect_text(&f, "aa\nbb\nbb") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 7, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
 static int test_delete_line_removes_selected_line_span(void) {
   EditorFixture f;
   CHECK(fixture_init(&f, "aa\nbb\ncc\ndd"));
@@ -942,6 +967,8 @@ int main(void) {
   rc |= test_delete_line();
   rc |= test_delete_line_undo_restores_cursor_snapshot();
   rc |= test_delete_final_crlf_line_removes_previous_line_ending();
+  rc |= test_duplicate_line();
+  rc |= test_duplicate_final_line();
   rc |= test_delete_line_removes_selected_line_span();
   rc |= test_multi_cursor_delete_line_merges_overlapping_line_ranges();
   rc |= test_move_line_up();

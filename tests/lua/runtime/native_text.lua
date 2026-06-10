@@ -157,6 +157,12 @@ test.describe("native_text API bridge", function()
     test.equal(buffer:text(), "one\ntwo")
 
     test.ok(editor:set_cursor(0))
+    test.ok(editor:duplicate_line())
+    test.equal(buffer:text(), "one\none\ntwo")
+    test.ok(editor:undo())
+    test.equal(buffer:text(), "one\ntwo")
+
+    test.ok(editor:set_cursor(0))
     test.ok(editor:tab())
     test.equal(buffer:text(), "\tone\ntwo")
     test.ok(editor:untab())

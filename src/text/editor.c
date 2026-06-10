@@ -1010,6 +1010,73 @@ bool editor_move_line_down(Editor *editor) {
   return editor_move_line(editor, 1);
 }
 
+bool editor_duplicate_line(Editor *editor) {
+  if (!editor) return false;
+  Buffer *buffer = editor_buffer(editor);
+  if (!buffer) return false;
+
+  editor_clear_multi_cursors(editor);
+
+  LineDeleteRange selected;
+  if (!cursor_line_range(editor, &editor->core_cursor, &selected)) return false;
+  size_t line_count = buffer_line_count(buffer);
+  if (line_count == 0) return true;
+  if (selected.last_line >= line_count) selected.last_line = line_count - 1;
+
+  size_t selected_len = 0;
+  char *selected_text = line_block_to_string(buffer, selected.first_line, selected.last_line, &selected_len);
+  if (!selected_text) return false;
+
+  size_t newline_len = 0;
+  const char *newline = buffer_line_ending_bytes(buffer, &newline_len);
+  if (selected_len > SIZE_MAX - newline_len) {
+    free(selected_text);
+    return false;
+  }
+  size_t insert_len = newline_len + selected_len;
+  char *insert_text = (char *) malloc(insert_len + 1);
+  if (!insert_text) {
+    free(selected_text);
+    return false;
+  }
+  memcpy(insert_text, newline, newline_len);
+  memcpy(insert_text + newline_len, selected_text, selected_len);
+  insert_text[insert_len] = '\0';
+  free(selected_text);
+
+  size_t insert_offset = 0;
+  if (!line_end_no_lf(buffer, selected.last_line, &insert_offset)) {
+    free(insert_text);
+    return false;
+  }
+
+  Cursor *before_cursors = NULL;
+  size_t before_cursor_count = 0;
+  if (!capture_active_cursor_snapshot(editor, &before_cursors, &before_cursor_count)) {
+    free(insert_text);
+    return false;
+  }
+
+  UndoRedoNode *undo_before = NULL;
+  UndoRedoNode *undo_after = NULL;
+  bool ok = apply_single_replace(editor, insert_offset, insert_offset, insert_text, insert_len, &undo_before, &undo_after);
+  free(insert_text);
+  if (!ok) {
+    free(before_cursors);
+    return false;
+  }
+
+  size_t len = buffer_len(buffer);
+  size_t new_cursor = editor->core_cursor.cursor + insert_len;
+  if (new_cursor > len) new_cursor = len;
+  editor->core_cursor = make_cursor(new_cursor, EDITOR_SELECTION_SENTINEL);
+  bool stored = editor_store_undo_selection_transition(editor, undo_before, undo_after, before_cursors, before_cursor_count);
+  free(before_cursors);
+  if (!stored) return false;
+  reset_last_insert(editor);
+  return true;
+}
+
 bool editor_join_line_below(Editor *editor) {
   if (!editor) return false;
   Buffer *buffer = editor_buffer(editor);

@@ -469,6 +469,12 @@ static int l_editor_delete_line(lua_State *L) {
   return 1;
 }
 
+static int l_editor_duplicate_line(lua_State *L) {
+  NativeTextEditor *native = check_editor(L, 1);
+  lua_pushboolean(L, editor_duplicate_line(&native->editor));
+  return 1;
+}
+
 static int l_editor_move_line_up(lua_State *L) {
   NativeTextEditor *native = check_editor(L, 1);
   lua_pushboolean(L, editor_move_line_up(&native->editor));
@@ -706,6 +712,7 @@ static const luaL_Reg editor_methods[] = {
   { "open_line_above", l_editor_open_line_above },
   { "open_line_below", l_editor_open_line_below },
   { "delete_line", l_editor_delete_line },
+  { "duplicate_line", l_editor_duplicate_line },
   { "move_line_up", l_editor_move_line_up },
   { "move_line_down", l_editor_move_line_down },
   { "join_line_below", l_editor_join_line_below },
