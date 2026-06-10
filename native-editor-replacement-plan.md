@@ -218,7 +218,7 @@ Implemented:
 - Movement shortcuts, duplicate cursor shortcuts, page movement, and go-to-line.
 - Find next/previous, replace current match, and replace all.
 - Clipboard copy/cut/paste.
-- Save-as, dirty close/quit prompts, external reload prompts, duplicate-open focusing, and native file Buffer registry reuse.
+- Save-as, dirty close/quit prompts, external reload prompts, save-conflict prompts, duplicate-open focusing, and native file Buffer registry reuse.
 - Current-line highlight, horizontal scroll-to-cursor, status bar file/position/line-ending items, and recent/visited tracking.
 - Workspace-style `get_state` / `from_state` serialization.
 - Undo/redo.

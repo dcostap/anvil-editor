@@ -13,6 +13,7 @@ local TREE_SITTER_REPARSE_DELAY = 0.25
 
 local plugin_config = config.plugins.native_text_sandbox
 local save_native_view_as
+local save_existing_native_view
 local last_find_text
 local close_native_view
 
@@ -113,8 +114,8 @@ function NativeTextSandboxView:check_external_file_change()
   if not path or self.external_reload_prompting then return end
   local current = file_signature(path)
   if same_file_signature(self.file_signature, current) then return end
-  self.file_signature = current
   if not self.buffer:is_dirty() then
+    self.file_signature = current
     self:reload_from_disk()
     return
   end
@@ -160,12 +161,7 @@ function NativeTextSandboxView:try_close(do_close)
         close_native_view(self, do_close)
       elseif item.text:match("^[sS]") then
         if path then
-          if self.buffer:save_file() then
-            self:update_file_signature()
-            close_native_view(self, do_close)
-          else
-            core.error("Failed to save native Buffer: %s", path)
-          end
+          save_existing_native_view(self, true, do_close)
         elseif save_native_view_as then
           save_native_view_as(self, true)
         end
@@ -710,6 +706,55 @@ local function register_saved_native_buffer(view, filename)
   update_shared_buffer_identity(view.buffer, new_key)
 end
 
+local function finish_native_save(view, close_after_save, close_fn)
+  view:update_file_signature()
+  if close_after_save then
+    if close_fn then
+      close_native_view(view, close_fn)
+    else
+      local node = core.root_panel.root_node:get_node_for_view(view)
+      if node then close_native_view(view, function() node:close_view(core.root_panel.root_node, view) end) end
+    end
+  end
+  core.redraw = true
+end
+
+local function save_native_buffer_now(view, close_after_save, close_fn)
+  local path = view.buffer:path()
+  if view.buffer:save_file() then
+    finish_native_save(view, close_after_save, close_fn)
+    return true
+  end
+  core.error("Failed to save native Buffer%s", path and ": " .. path or "")
+  return false
+end
+
+function save_existing_native_view(view, close_after_save, close_fn)
+  local path = view.buffer:path()
+  if not path then
+    return save_native_view_as(view, close_after_save)
+  end
+
+  local current = file_signature(path)
+  if not same_file_signature(view.file_signature, current) then
+    core.log_quiet("Native Buffer save conflict detected for %s", path)
+    view.external_reload_prompting = true
+    local action = close_after_save and "Overwrite and close" or "Overwrite disk"
+    core.nag_view:show("Native Buffer Save Conflict", path .. " changed on disk since this Buffer was loaded or saved.", {
+      { text = action, default_yes = true },
+      { text = "Cancel", default_no = true },
+    }, function(item)
+      view.external_reload_prompting = false
+      if item.text == action then
+        save_native_buffer_now(view, close_after_save, close_fn)
+      end
+    end)
+    return false
+  end
+
+  return save_native_buffer_now(view, close_after_save, close_fn)
+end
+
 function save_native_view_as(view, close_after_save)
   core.save_file_dialog(core.window, function(status, result)
     if status == "accept" then
@@ -907,15 +952,7 @@ command.add(NativeTextSandboxView, {
   ["native-text-sandbox:undo"] = with_active_native_view(function(view) view.editor:undo() end, true),
   ["native-text-sandbox:redo"] = with_active_native_view(function(view) view.editor:redo() end, true),
   ["native-text-sandbox:save"] = with_active_native_view(function(view)
-    if view.buffer:path() then
-      if view.buffer:save_file() then
-        view:update_file_signature()
-      else
-        core.error("Failed to save native Buffer")
-      end
-    else
-      save_native_view_as(view)
-    end
+    save_existing_native_view(view)
   end),
   ["native-text-sandbox:save-as"] = with_active_native_view(function(view) save_native_view_as(view) end),
   ["native-text-sandbox:duplicate-cursor-up"] = with_active_native_view(function(view) view.editor:dup_cursor_up() end),
