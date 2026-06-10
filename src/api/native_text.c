@@ -253,6 +253,12 @@ static int l_buffer_line_col_to_offset(lua_State *L) {
   return 1;
 }
 
+static int l_buffer_line_ending_mode(lua_State *L) {
+  NativeTextBuffer *native = check_buffer(L, 1);
+  lua_pushstring(L, buffer_line_ending_mode(&native->buffer) == BUFFER_LINE_ENDING_CRLF ? "crlf" : "lf");
+  return 1;
+}
+
 static int l_buffer_set_line_ending_mode(lua_State *L) {
   NativeTextBuffer *native = check_buffer(L, 1);
   const char *mode = luaL_checkstring(L, 2);
@@ -678,6 +684,7 @@ static const luaL_Reg buffer_methods[] = {
   { "visible_lines", l_buffer_visible_lines },
   { "offset_to_line_col", l_buffer_offset_to_line_col },
   { "line_col_to_offset", l_buffer_line_col_to_offset },
+  { "line_ending_mode", l_buffer_line_ending_mode },
   { "set_line_ending_mode", l_buffer_set_line_ending_mode },
   { "enable_tree_sitter", l_buffer_enable_tree_sitter },
   { "tree_sitter_is_dirty", l_buffer_tree_sitter_is_dirty },

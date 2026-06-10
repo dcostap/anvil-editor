@@ -5,6 +5,7 @@ local common = require "core.common"
 local config = require "core.config"
 local keymap = require "core.keymap"
 local style = require "core.style"
+local StatusBar = require "core.statusbar"
 local View = require "core.view"
 local native_text = require "native_text"
 
@@ -733,6 +734,47 @@ command.add(nil, {
     end, { allow_many = true })
   end,
 })
+
+local function register_statusbar_items()
+  if not core.status_bar then return end
+  if not core.status_bar:get_item("native-text:file") then
+    core.status_bar:add_item({
+      predicate = NativeTextSandboxView,
+      name = "native-text:file",
+      alignment = StatusBar.Item.LEFT,
+      get_item = function()
+        local view = core.active_view
+        local path = view.buffer:path()
+        return { path and style.text or style.dim, path and common.home_encode(path) or "Native Text Sandbox" }
+      end,
+    })
+  end
+  if not core.status_bar:get_item("native-text:position") then
+    core.status_bar:add_item({
+      predicate = NativeTextSandboxView,
+      name = "native-text:position",
+      alignment = StatusBar.Item.LEFT,
+      get_item = function()
+        local view = core.active_view
+        local line, col = view:cursor_line_col()
+        return { style.text, string.format("%d:%d", line + 1, col + 1) }
+      end,
+    })
+  end
+  if not core.status_bar:get_item("native-text:line-ending") then
+    core.status_bar:add_item({
+      predicate = NativeTextSandboxView,
+      name = "native-text:line-ending",
+      alignment = StatusBar.Item.RIGHT,
+      get_item = function()
+        local view = core.active_view
+        return { style.text, view.buffer:line_ending_mode():upper() }
+      end,
+    })
+  end
+end
+
+register_statusbar_items()
 
 command.add(NativeTextSandboxView, {
   ["native-text-sandbox:newline"] = with_active_native_view(function(view) view.editor:newline() end, true),
