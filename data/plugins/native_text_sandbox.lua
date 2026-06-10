@@ -592,9 +592,47 @@ local function go_to_native_line(view)
   })
 end
 
-local function replace_all_native_text(view)
+local function native_text_matches(a, b)
+  if config.find_case_sensitive == true then return a == b end
+  return tostring(a or ""):lower() == tostring(b or ""):lower()
+end
+
+local function replace_one_native_text(view)
   local selected = view.editor:copy_selection()
   core.global_prompt_bar:enter("Native Replace Text", {
+    text = (selected and selected ~= "" and selected) or last_find_text or "",
+    select_text = true,
+    show_suggestions = false,
+    submit = function(find_text)
+      if not find_text or find_text == "" then return end
+      core.global_prompt_bar:enter("Native Replace With", {
+        text = "",
+        show_suggestions = false,
+        submit = function(replacement)
+          replacement = replacement or ""
+          local current = view.editor:copy_selection()
+          if not (current and current ~= "" and native_text_matches(current, find_text)) then
+            if not view:find_literal(find_text, false) then
+              core.error("Couldn't find %q", find_text)
+              return
+            end
+          end
+          view.editor:paste(replacement)
+          last_find_text = find_text
+          view:note_tree_sitter_mutation()
+          view:scroll_to_cursor()
+          core.redraw = true
+        end,
+        suggest = function() return {} end,
+      })
+    end,
+    suggest = function() return {} end,
+  })
+end
+
+local function replace_all_native_text(view)
+  local selected = view.editor:copy_selection()
+  core.global_prompt_bar:enter("Native Replace All Text", {
     text = (selected and selected ~= "" and selected) or last_find_text or "",
     select_text = true,
     show_suggestions = false,
@@ -738,6 +776,7 @@ command.add(NativeTextSandboxView, {
   ["native-text-sandbox:find"] = with_active_native_view(function(view) find_native_text(view, false) end),
   ["native-text-sandbox:find-next"] = with_active_native_view(function(view) repeat_native_find(view, false) end),
   ["native-text-sandbox:find-previous"] = with_active_native_view(function(view) repeat_native_find(view, true) end),
+  ["native-text-sandbox:replace"] = with_active_native_view(function(view) replace_one_native_text(view) end),
   ["native-text-sandbox:replace-all"] = with_active_native_view(function(view) replace_all_native_text(view) end),
   ["native-text-sandbox:word-left"] = with_active_native_view(function(view) view.editor:word_left(false) end),
   ["native-text-sandbox:word-right"] = with_active_native_view(function(view) view.editor:word_right(false) end),
@@ -803,7 +842,8 @@ keymap.add {
   ["shift+pageup"] = "native-text-sandbox:select-page-up",
   ["shift+pagedown"] = "native-text-sandbox:select-page-down",
   ["ctrl+f"] = "native-text-sandbox:find",
-  ["ctrl+r"] = "native-text-sandbox:replace-all",
+  ["ctrl+r"] = "native-text-sandbox:replace",
+  ["ctrl+shift+r"] = "native-text-sandbox:replace-all",
   ["f3"] = "native-text-sandbox:find-next",
   ["shift+f3"] = "native-text-sandbox:find-previous",
   ["ctrl+left"] = "native-text-sandbox:word-left",
