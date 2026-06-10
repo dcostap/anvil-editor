@@ -97,6 +97,20 @@ test.describe("native_text API bridge", function()
     test.equal(buffer:find_literal("missing"), nil)
   end)
 
+  test.it("exposes native literal replace-all as one undoable transaction", function()
+    local buffer = native_text.new_buffer("one two one TWO")
+    local editor = buffer:new_editor()
+
+    test.equal(buffer:replace_all_literal("one", "1"), 2)
+    test.equal(buffer:text(), "1 two 1 TWO")
+    test.ok(editor:undo())
+    test.equal(buffer:text(), "one two one TWO")
+
+    test.equal(buffer:replace_all_literal("two", "2", { case_sensitive = false }), 2)
+    test.equal(buffer:text(), "one 2 one 2")
+    test.equal(buffer:replace_all_literal("missing", "x"), 0)
+  end)
+
   test.it("exposes native selection and clipboard primitives", function()
     local buffer = native_text.new_buffer("alpha beta\ngamma")
     local editor = buffer:new_editor()

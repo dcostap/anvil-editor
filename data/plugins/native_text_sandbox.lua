@@ -418,6 +418,37 @@ local function repeat_native_find(view, backwards)
   end
 end
 
+local function replace_all_native_text(view)
+  local selected = view.editor:copy_selection()
+  core.global_prompt_bar:enter("Native Replace Text", {
+    text = (selected and selected ~= "" and selected) or last_find_text or "",
+    select_text = true,
+    show_suggestions = false,
+    submit = function(find_text)
+      if not find_text or find_text == "" then return end
+      core.global_prompt_bar:enter("Native Replace With", {
+        text = "",
+        show_suggestions = false,
+        submit = function(replacement)
+          local count = view.buffer:replace_all_literal(find_text, replacement or "", {
+            case_sensitive = config.find_case_sensitive == true,
+          })
+          last_find_text = find_text
+          if count and count > 0 then
+            view:note_tree_sitter_mutation()
+            view:scroll_to_cursor()
+            core.log("Replaced %d occurrence%s", count, count == 1 and "" or "s")
+          else
+            core.error("Couldn't find %q", find_text)
+          end
+        end,
+        suggest = function() return {} end,
+      })
+    end,
+    suggest = function() return {} end,
+  })
+end
+
 function save_native_view_as(view, close_after_save)
   core.save_file_dialog(core.window, function(status, result)
     if status == "accept" then
@@ -528,6 +559,7 @@ command.add(NativeTextSandboxView, {
   ["native-text-sandbox:find"] = with_active_native_view(function(view) find_native_text(view, false) end),
   ["native-text-sandbox:find-next"] = with_active_native_view(function(view) repeat_native_find(view, false) end),
   ["native-text-sandbox:find-previous"] = with_active_native_view(function(view) repeat_native_find(view, true) end),
+  ["native-text-sandbox:replace-all"] = with_active_native_view(function(view) replace_all_native_text(view) end),
   ["native-text-sandbox:word-left"] = with_active_native_view(function(view) view.editor:word_left(false) end),
   ["native-text-sandbox:word-right"] = with_active_native_view(function(view) view.editor:word_right(false) end),
   ["native-text-sandbox:select-word-left"] = with_active_native_view(function(view) view.editor:word_left(true) end),
@@ -585,6 +617,7 @@ keymap.add {
   ["shift+pageup"] = "native-text-sandbox:select-page-up",
   ["shift+pagedown"] = "native-text-sandbox:select-page-down",
   ["ctrl+f"] = "native-text-sandbox:find",
+  ["ctrl+r"] = "native-text-sandbox:replace-all",
   ["f3"] = "native-text-sandbox:find-next",
   ["shift+f3"] = "native-text-sandbox:find-previous",
   ["ctrl+left"] = "native-text-sandbox:word-left",

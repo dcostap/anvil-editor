@@ -142,6 +142,65 @@ static int l_buffer_find_literal(lua_State *L) {
   return 2;
 }
 
+static int l_buffer_replace_all_literal(lua_State *L) {
+  NativeTextBuffer *native = check_buffer(L, 1);
+  size_t needle_len = 0;
+  const char *needle = luaL_checklstring(L, 2, &needle_len);
+  size_t replacement_len = 0;
+  const char *replacement = luaL_checklstring(L, 3, &replacement_len);
+  bool case_sensitive = opt_table_bool(L, 4, "case_sensitive", true);
+  if (needle_len == 0) {
+    lua_pushnumber(L, 0);
+    return 1;
+  }
+
+  BatchEditItem *edits = NULL;
+  size_t edit_count = 0;
+  size_t edit_capacity = 0;
+  size_t start_offset = 0;
+  BufferSearchResult match;
+  while (buffer_find_literal(&native->buffer, needle, needle_len, start_offset, case_sensitive, false, &match)) {
+    if (edit_count == edit_capacity) {
+      size_t cap = edit_capacity ? edit_capacity * 2 : 16;
+      BatchEditItem *new_edits = (BatchEditItem *) realloc(edits, cap * sizeof(BatchEditItem));
+      if (!new_edits) {
+        free(edits);
+        return luaL_error(L, "failed to allocate replacement edits");
+      }
+      edits = new_edits;
+      edit_capacity = cap;
+    }
+    edits[edit_count].start_offset = match.start_offset;
+    edits[edit_count].end_offset = match.end_offset;
+    edits[edit_count].text = replacement;
+    edits[edit_count].text_len = replacement_len;
+    edits[edit_count].cursor_index = (unsigned int) edit_count;
+    ++edit_count;
+    start_offset = match.end_offset;
+  }
+
+  if (edit_count == 0) {
+    free(edits);
+    lua_pushnumber(L, 0);
+    return 1;
+  }
+
+  BatchEditResult result = buffer_manager_apply_edits_from(
+    &native->manager,
+    edits,
+    edit_count,
+    native
+  );
+  free(edits);
+  if (!result.applied) {
+    batch_edit_result_dispose(&result);
+    return luaL_error(L, "native replacement transaction was rejected");
+  }
+  batch_edit_result_dispose(&result);
+  lua_pushnumber(L, (lua_Number) edit_count);
+  return 1;
+}
+
 static int l_buffer_visible_lines(lua_State *L) {
   NativeTextBuffer *native = check_buffer(L, 1);
   size_t first_line = check_offset(L, 2);
@@ -609,6 +668,7 @@ static const luaL_Reg buffer_methods[] = {
   { "line_count", l_buffer_line_count },
   { "line", l_buffer_line },
   { "find_literal", l_buffer_find_literal },
+  { "replace_all_literal", l_buffer_replace_all_literal },
   { "visible_lines", l_buffer_visible_lines },
   { "offset_to_line_col", l_buffer_offset_to_line_col },
   { "line_col_to_offset", l_buffer_line_col_to_offset },
