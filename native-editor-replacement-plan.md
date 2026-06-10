@@ -227,7 +227,9 @@ The next work should stop treating Tree-sitter as the main project. The next mil
 
 The strategic target is a **native-core editor with a Lua extension/configuration shell**, not a big-bang pure-C rewrite. The practical boundary is ownership: C owns the Buffer, Buffer Manager, Editor, undo graph, Tree-sitter state, search/replace helpers, and hot view/rendering primitives; Lua owns orchestration, commands, keybindings, prompts, settings, project/file-tree flows, and first-party plugins unless those paths become performance-critical or correctness-critical.
 
-Do not preserve the old Lua `Doc` API as a long-term compatibility layer. In particular, avoid rebuilding `Doc.lines` or old selection structures on top of the native core. If a plugin needs old internals, either port it to native capabilities, keep it as temporary transition glue, or delete it.
+Do not preserve the old Lua `Doc` API as a long-term compatibility layer. In particular, avoid rebuilding `Doc.lines` or old selection structures on top of the native core. If a plugin needs old internals, either port it to native capabilities, keep it as temporary transition glue, or deprecate/archive it out of the supported load path.
+
+First-party Lua plugins that implement behavior belonging in the native editor core should not be adapted around old Lua editor internals. Classify them explicitly instead: keep in Lua when they are app orchestration/customization, port to native capability APIs when Lua should only request or configure the behavior, port fully into C/native core when the behavior is durable editor mechanics, keep temporary glue only with a removal target, or deprecate/archive the plugin so it is no longer loaded or supported.
 
 The replacement should proceed in layers:
 
@@ -370,14 +372,14 @@ Native gaps likely to close:
 - Language additions are deferred.
 - Tokenizer compatibility should not become a long-term goal unless needed for first-party features.
 
-### Plugin compatibility / deletion candidates
+### Plugin compatibility / deprecation candidates
 
 Questions:
 
 - Which bundled plugins are mandatory first-party behavior?
 - Which plugins assume Lua `Doc` internals?
 - Which plugins should be ported to C/native APIs?
-- Which plugins can be deleted because this is a personal fork?
+- Which plugins should be deprecated and archived because this is a personal fork and they are no longer part of the supported native-editor path?
 - Which plugins are app-shell/customization behavior that can stay in Lua indefinitely?
 - Which plugins are performance-critical or correctness-critical enough to become native C behavior?
 
@@ -388,8 +390,40 @@ Output:
   - keep and port to native capabilities
   - port fully into C/native core
   - keep temporarily through Lua glue
-  - delete/drop
+  - deprecate/archive out of the supported plugin load path
   - defer
+- Include columns for old-editor coupling and migration risk:
+  - uses `Doc.lines` or direct text arrays
+  - uses old Lua selection structures
+  - monkey-patches `Doc`, `DocView`, commands, or tokenizer/highlighter paths
+  - requires view rendering/gutter/scrollbar integration
+  - is required for daily dogfooding
+  - is performance-critical or correctness-critical enough to become native
+
+### Deprecated plugin archive policy
+
+When a bundled Lua plugin is no longer part of the supported native-editor path, do not delete it by default. Move it out of the normal plugin discovery path into a clearly marked archive, preferably:
+
+```text
+data/deprecated/plugins/<plugin-name>/
+```
+
+The deprecated archive is source history and reference material only. Archived plugins should not be loaded by `core.load_plugins`, should not be required by `anvil_defaults.lua`, and should not receive compatibility work. If an archived plugin contains behavior still wanted in Anvil, create a new native capability or supported Lua orchestration layer for that behavior instead of adapting the archived implementation around old `Doc`/`DocView` internals.
+
+Add a small README in the archive explaining that these plugins are intentionally unsupported after native editor replacement and may depend on removed Lua `Doc` APIs.
+
+### Decoration and marker producers
+
+Some current plugins compute editor-adjacent state in Lua but render by patching `DocView` or depending on `Doc.lines`. Do not rebuild those against the old editor API for native replacement.
+
+Git diff markers are the model example:
+
+- Temporary Lua ownership is acceptable for git process orchestration, config, commands, and debug tooling.
+- Native Buffer/View capabilities should own changed-line decoration state, efficient line mapping, gutter markers, overview/scrollbar markers, and navigation by decoration kind.
+- Lua may become a producer that requests or updates diff decorations through a stable native API.
+- Remove old `Doc.lines` diffing, `DocView.draw_line_gutter` monkey-patching, scrollbar monkey-patching, and `Doc:on_text_change` hooks from the active supported path once the native decoration path exists. Preserve the old plugin source in the deprecated archive if useful as reference material.
+
+Prefer a generic native decoration layer over a one-off git-diff renderer so diagnostics, search results, line hints, and VCS diff markers can share the same view/rendering path.
 
 ### Native editor boundary / API contract
 
@@ -415,6 +449,8 @@ Lua and first-party plugins should not depend on:
 - native cursor arrays or selection normalization internals
 - renderer-specific view implementation details
 
+Native replacement must also define a text/encoding policy at the API boundary. The current native core is byte-offset based, but user-facing behavior needs an explicit stance for UTF-8 cursor movement, invalid UTF-8 display/sanitization, NUL bytes, non-UTF encodings, byte offsets versus visual columns, and how those choices surface in Lua APIs.
+
 The goal is to keep Lua useful without making it the owner of core text-editing state again.
 
 ## Phase B: Dogfooding readiness checklist
@@ -424,7 +460,9 @@ The native editor is ready for day-to-day dogfooding when these are complete:
 ### Required editor behavior
 
 - Open/save/save-as file-backed Buffers.
+- Duplicate-open policy through a native Buffer registry or equivalent file identity mechanism, so the same path does not silently create conflicting independent Buffers.
 - Dirty close prompt or safe refusal to close dirty native views.
+- Dirty quit handling for native views.
 - OS clipboard copy/cut/paste.
 - Select all.
 - Mouse drag selection.
@@ -471,19 +509,22 @@ The native editor is ready to become the default editor when dogfooding is stabl
 
 - `core.open_doc` / file open path can create native Buffers/views for normal text files.
 - Existing tabs/splits/root panel can host native editor views without special sandbox commands.
+- Workspace restoration can serialize and restore native editor views, including open file identity, tab/split placement, scroll position, and selection/cursor state.
 - Save/close/quit flows handle native views.
 - Search UI works on native Buffers.
 - Command palette commands target native editor views.
 - First-party default keybindings route to native commands.
-- Critical first-party plugins are ported, adapted, or explicitly deleted.
+- Critical first-party plugins are ported, adapted, or explicitly moved to the deprecated archive and no longer loaded.
 - Old Lua `Doc` no longer owns the primary editing experience.
 
 ## Phase D: Lua `Doc` deletion checklist
 
 Only after the native editor is default and stable:
 
-- Remove or quarantine old `data/core/doc` text mutation code.
+- Remove or quarantine old `data/core/doc` text mutation code for main editor text storage and mutation.
 - Remove `Doc.lines` assumptions from bundled plugins/commands.
+- Move unsupported/deprecated bundled Lua plugins to `data/deprecated/plugins` rather than deleting them, unless the user explicitly chooses deletion.
+- Audit text-backed tool views separately. Command output, file tree internals, prompt text, generated/read-only text views, and similar tools should either move to native Buffer, move to purpose-built view models, stay as temporary Lua glue with a removal target, or be explicitly kept if they are outside the main editor replacement boundary.
 - Remove compatibility glue that only existed for transition.
 - Keep Lua only if it still serves the temporary app shell/plugin role.
 - If pursuing pure C, begin moving command/keymap/view infrastructure into C after text editor replacement is stable.
@@ -492,32 +533,41 @@ Only after the native editor is default and stable:
 
 After completing the inventory, implement in this order:
 
-1. **OS clipboard integration for native sandbox/view**
+1. **OS clipboard integration and native selection command bridge for native sandbox/view**
    - Wire copy/cut/paste commands to native Editor.
+   - Expose already-built native primitives such as select-all, select-word, and select-line through the Lua bridge where needed.
    - Use existing platform clipboard APIs exposed to Lua initially if fastest.
-   - Add native tests for copied text shape and cut/paste undo.
+   - Add native/API tests for copied text shape and cut/paste undo.
 
-2. **Select all + mouse selection polish**
-   - Add native `editor_select_all`.
-   - Add drag selection in sandbox.
+2. **Safe file lifecycle basics**
+   - Save-as.
+   - Dirty close prompt or safe refusal to close dirty native views.
+   - Dirty quit handling for native views.
+   - Better file error reporting.
+
+3. **Duplicate-open / Buffer identity policy**
+   - Add or choose the native Buffer registry/file identity mechanism before normal default-open dogfooding.
+   - Ensure opening the same path reuses or focuses the existing native Buffer/view instead of silently creating conflicting independent Buffers.
+
+4. **Mouse selection polish**
+   - Add drag selection in sandbox/native view.
    - Add double-click word and triple-click line selection.
 
-3. **Page movement and camera polish**
+5. **Page movement and camera polish**
    - Add native page up/down commands based on visible line count from view.
    - Keep cursor visible after every command.
    - Improve horizontal scroll/long-line handling.
 
-4. **Find/replace core helpers**
+6. **Find/replace core helpers**
    - Add native Buffer search primitives.
    - Add Editor find-next/find-prev selection behavior.
    - Add replace and replace-all through Buffer Manager.
 
-5. **File lifecycle integration**
-   - Save-as.
-   - Dirty close prompt integration.
-   - External reload handling.
+7. **External reload handling**
+   - Detect when file-backed native Buffers changed on disk.
+   - Integrate reload prompts or safe refusal when native Buffers have unsaved edits.
 
-6. **Default-open experiment**
+8. **Default-open experiment**
    - Add an opt-in setting or command path that opens normal files in the native editor view instead of the old `DocView`.
    - Dogfood with common project files.
 

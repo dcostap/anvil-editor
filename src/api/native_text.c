@@ -354,6 +354,84 @@ static int l_editor_delete(lua_State *L) {
   return 1;
 }
 
+static int l_editor_backspace_word(lua_State *L) {
+  NativeTextEditor *native = check_editor(L, 1);
+  lua_pushboolean(L, editor_backspace_word(&native->editor));
+  return 1;
+}
+
+static int l_editor_delete_word(lua_State *L) {
+  NativeTextEditor *native = check_editor(L, 1);
+  lua_pushboolean(L, editor_del_word(&native->editor));
+  return 1;
+}
+
+static int l_editor_open_line_above(lua_State *L) {
+  NativeTextEditor *native = check_editor(L, 1);
+  lua_pushboolean(L, editor_open_line_above(&native->editor));
+  return 1;
+}
+
+static int l_editor_open_line_below(lua_State *L) {
+  NativeTextEditor *native = check_editor(L, 1);
+  lua_pushboolean(L, editor_open_line_below(&native->editor));
+  return 1;
+}
+
+static int l_editor_delete_line(lua_State *L) {
+  NativeTextEditor *native = check_editor(L, 1);
+  lua_pushboolean(L, editor_delete_line(&native->editor));
+  return 1;
+}
+
+static int l_editor_move_line_up(lua_State *L) {
+  NativeTextEditor *native = check_editor(L, 1);
+  lua_pushboolean(L, editor_move_line_up(&native->editor));
+  return 1;
+}
+
+static int l_editor_move_line_down(lua_State *L) {
+  NativeTextEditor *native = check_editor(L, 1);
+  lua_pushboolean(L, editor_move_line_down(&native->editor));
+  return 1;
+}
+
+static int l_editor_join_line_below(lua_State *L) {
+  NativeTextEditor *native = check_editor(L, 1);
+  lua_pushboolean(L, editor_join_line_below(&native->editor));
+  return 1;
+}
+
+static int l_editor_tab(lua_State *L) {
+  NativeTextEditor *native = check_editor(L, 1);
+  lua_pushboolean(L, editor_tab(&native->editor));
+  return 1;
+}
+
+static int l_editor_untab(lua_State *L) {
+  NativeTextEditor *native = check_editor(L, 1);
+  lua_pushboolean(L, editor_untab(&native->editor));
+  return 1;
+}
+
+static int l_editor_select_all(lua_State *L) {
+  NativeTextEditor *native = check_editor(L, 1);
+  lua_pushboolean(L, editor_select_all(&native->editor));
+  return 1;
+}
+
+static int l_editor_select_word(lua_State *L) {
+  NativeTextEditor *native = check_editor(L, 1);
+  lua_pushboolean(L, editor_select_word(&native->editor));
+  return 1;
+}
+
+static int l_editor_select_line(lua_State *L) {
+  NativeTextEditor *native = check_editor(L, 1);
+  lua_pushboolean(L, editor_select_line(&native->editor));
+  return 1;
+}
+
 static int l_editor_paste(lua_State *L) {
   NativeTextEditor *native = check_editor(L, 1);
   size_t len = 0;
@@ -536,6 +614,19 @@ static const luaL_Reg editor_methods[] = {
   { "newline", l_editor_newline },
   { "backspace", l_editor_backspace },
   { "delete", l_editor_delete },
+  { "backspace_word", l_editor_backspace_word },
+  { "delete_word", l_editor_delete_word },
+  { "open_line_above", l_editor_open_line_above },
+  { "open_line_below", l_editor_open_line_below },
+  { "delete_line", l_editor_delete_line },
+  { "move_line_up", l_editor_move_line_up },
+  { "move_line_down", l_editor_move_line_down },
+  { "join_line_below", l_editor_join_line_below },
+  { "tab", l_editor_tab },
+  { "untab", l_editor_untab },
+  { "select_all", l_editor_select_all },
+  { "select_word", l_editor_select_word },
+  { "select_line", l_editor_select_line },
   { "paste", l_editor_paste },
   { "copy_selection", l_editor_copy_selection },
   { "cut_selection", l_editor_cut_selection },

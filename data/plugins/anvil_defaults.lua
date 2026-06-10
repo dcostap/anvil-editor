@@ -106,6 +106,9 @@ plugin_defaults("findfile", {
   enable_cache = false,
   cache_expiration = 60,
 })
+plugin_defaults("native_text_sandbox", {
+  default_open = false,
+})
 plugin_defaults("gitdiff_highlight", {
   git_path = "git",
   local_diff_debounce_ms = 200,

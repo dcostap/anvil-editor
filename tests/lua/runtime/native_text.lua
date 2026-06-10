@@ -79,6 +79,58 @@ test.describe("native_text API bridge", function()
     os.remove(saved)
   end)
 
+  test.it("exposes native selection and clipboard primitives", function()
+    local buffer = native_text.new_buffer("alpha beta\ngamma")
+    local editor = buffer:new_editor()
+
+    test.ok(editor:set_cursor(8))
+    test.ok(editor:select_word())
+    test.same(editor:cursor(), { cursor = 10, selection = 6 })
+    test.equal(editor:copy_selection(), "beta")
+
+    test.ok(editor:select_all())
+    test.same(editor:cursor(), { cursor = 16, selection = 0 })
+    test.equal(editor:copy_selection(), "alpha beta\ngamma")
+
+    test.ok(editor:set_cursor(12))
+    test.ok(editor:select_line())
+    test.equal(editor:copy_selection(), "gamma")
+    test.equal(editor:cut_selection(), "gamma")
+    test.equal(buffer:text(), "alpha beta\n")
+
+    test.ok(editor:paste("delta"))
+    test.equal(buffer:text(), "alpha beta\ndelta")
+  end)
+
+  test.it("exposes native line and word editing primitives", function()
+    local buffer = native_text.new_buffer("one two\nthree")
+    local editor = buffer:new_editor()
+
+    test.ok(editor:set_cursor(7))
+    test.ok(editor:backspace_word())
+    test.equal(buffer:text(), "one \nthree")
+
+    test.ok(editor:delete_word())
+    test.equal(buffer:text(), "one ")
+
+    buffer = native_text.new_buffer("one\ntwo")
+    editor = buffer:new_editor()
+    test.ok(editor:set_cursor(5))
+    test.ok(editor:open_line_above())
+    test.equal(buffer:text(), "one\n\ntwo")
+    test.ok(editor:insert("inserted"))
+    test.equal(buffer:text(), "one\ninserted\ntwo")
+
+    test.ok(editor:delete_line())
+    test.equal(buffer:text(), "one\ntwo")
+
+    test.ok(editor:set_cursor(0))
+    test.ok(editor:tab())
+    test.equal(buffer:text(), "\tone\ntwo")
+    test.ok(editor:untab())
+    test.equal(buffer:text(), "one\ntwo")
+  end)
+
   test.it("exposes native multi-cursor commands", function()
     local buffer = native_text.new_buffer("a\nb\nc")
     local editor = buffer:new_editor()
