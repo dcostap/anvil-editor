@@ -972,6 +972,13 @@ command.add(NativeTextSandboxView, {
     save_existing_native_view(view)
   end),
   ["native-text-sandbox:save-as"] = with_active_native_view(function(view) save_native_view_as(view) end),
+  ["native-text-sandbox:toggle-line-ending"] = with_active_native_view(function(view)
+    local mode = view.buffer:line_ending_mode() == "crlf" and "lf" or "crlf"
+    if view.buffer:set_line_ending_mode(mode) then
+      core.log_quiet("Native Buffer line ending mode changed to %s", mode:upper())
+      core.redraw = true
+    end
+  end),
   ["native-text-sandbox:duplicate-cursor-up"] = with_active_native_view(function(view) view.editor:dup_cursor_up() end),
   ["native-text-sandbox:duplicate-cursor-down"] = with_active_native_view(function(view) view.editor:dup_cursor_down() end),
 })

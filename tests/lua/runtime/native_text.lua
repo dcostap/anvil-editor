@@ -2,6 +2,7 @@ local native_text = require "native_text"
 local test = require "core.test"
 
 local core = require "core"
+local command = require "core.command"
 local common = require "core.common"
 
 local function tmp_file(name)
@@ -294,6 +295,20 @@ test.describe("native_text API bridge", function()
     test.equal(restored.scroll.y, 7)
     test.equal(restored.scroll.to.x, 5)
     test.equal(restored.scroll.to.y, 11)
+  end)
+
+  test.it("toggles native sandbox line ending mode through its command", function()
+    local NativeTextSandboxView = require "plugins.native_text_sandbox"
+    local original_active_view = core.active_view
+    local ok, err = pcall(function()
+      local view = NativeTextSandboxView("abc")
+      core.active_view = view
+      test.equal(view.buffer:line_ending_mode(), "lf")
+      test.ok(command.perform("native-text-sandbox:toggle-line-ending"))
+      test.equal(view.buffer:line_ending_mode(), "crlf")
+    end)
+    core.active_view = original_active_view
+    if not ok then error(err) end
   end)
 
   test.it("restores file-backed native sandbox views through registered Buffer identity", function()
