@@ -407,6 +407,31 @@ Output:
   - is required for daily dogfooding
   - is performance-critical or correctness-critical enough to become native
 
+### Initial plugin/command inventory
+
+This is the working inventory for native-editor migration. Keep it current as plugins are ported, archived, or reclassified.
+
+| Area / plugin(s) | Old-editor coupling | Native-editor classification | Notes |
+| --- | --- | --- | --- |
+| `native_text_sandbox.lua` | none to old `Doc`; Lua-hosted native Buffer/View glue | keep temporarily through Lua glue, then promote to real editor path | Current dogfooding surface. Should shrink as native view/default-open becomes first-class. |
+| `anvil_defaults.lua` | config/keybinding defaults only | keep in Lua as app-shell/customization behavior | Route defaults to native commands as default editor changes. |
+| `workspace.lua` | generic view state; no text internals | keep in Lua as app-shell behavior, port state coverage to native capabilities | Native sandbox now has `get_state` / `from_state`; real workspace restore still needs default editor integration. |
+| `core/commands/doc.lua`, `core/commands/findreplace.lua` | heavy `Doc.lines`, old selections, tokenizer/highlighter, `DocView` predicates | port to native capabilities, then delete old command path | Native command coverage should replace behavior command-by-command, not adapt `Doc.lines`. |
+| `autoreload.lua` | `core.docs`, `Doc` dirty/reload lifecycle | keep and port to native lifecycle capabilities | Native sandbox has local external reload handling; final path should centralize file signatures/reload prompts. |
+| `autosave_fast.lua`, `autosaveonfocuslost.lua` | `DocView`, `view.doc`, `doc:save` | keep and port to native save lifecycle capabilities | App orchestration can stay Lua; dirty/save state must be native Buffer-owned. |
+| `search_ui.lua`, `intellij_find.lua` | current search commands route through old docs/selections | keep UI in Lua, port to native search/replace capabilities | Native literal find/replace exists; regex/search result decorations remain future native capabilities. |
+| `gitdiff_highlight/` | `Doc.lines`, text-change hooks, `DocView`/scrollbar/gutter monkey-patching | keep Lua git orchestration; port rendering/state to native decoration layer | Model example for generic native decorations. Archive old renderer when native decoration path exists. |
+| `bracketmatch.lua` | `DocView` patching, `doc.highlighter`, `doc.lines`, old selections | port to native decorations, probably Tree-sitter-aware | Should become native editor feature or native decoration producer; do not preserve tokenizer dependency. |
+| `autocomplete.lua` | patches root input/mouse/update/draw and `Doc.remove`; reads `doc.lines`/highlighter/selections | defer or port to native completion capability | Not a blocker for initial dogfooding unless daily workflow requires it. |
+| `linewrapping.lua`, `linewrapping_deep_indent.lua` | deep `Doc`/`DocView` rendering and positioning monkey-patches | port fully into native view/rendering or defer | Too invasive for compatibility glue. Archive old implementation if native wrapping is redesigned. |
+| `diffview.lua` | custom paired `DocView`s, many `DocView` monkey-patches, `Doc.raw_insert/remove` hooks | port fully into native diff view or archive unsupported | Do not adapt around old `DocView`; use native Buffers/views if diff remains wanted. |
+| `drawwhitespace.lua`, `indent_guides.lua`, `column_guides.lua`, `lineguide.lua`, `selectionhighlight.lua`, `smoothcaret.lua`, `sticky_scroll.lua`, `centered_editor.lua`, `editor_wallpaper.lua` | renderer/gutter/overlay hooks into `DocView`; some read `Doc.lines`/selections/highlighter | port to native view decorations or keep as Lua configuration over native render capabilities | Visual behavior should not monkey-patch final native view internals. |
+| `detectindent.lua`, `trimwhitespace.lua`, `reflow.lua`, `quote.lua`, `tabularize.lua`, `sequential_numbers.lua`, `intellij_actions.lua` | old selections/text arrays/commands | port to native editor command/edit APIs where wanted | Text transforms should apply through Buffer Manager transactions. Archive unwanted commands. |
+| `language_*.lua` tokenizer plugins | tokenizer/highlighter definitions for old Lua highlighter | defer; port wanted languages to native Tree-sitter/grammar registry | C/C++ Tree-sitter exists. Avoid long-term tokenizer compatibility unless a specific first-party feature needs it. |
+| `filetree/`, `findfile.lua`, `fuzzy_searcher/`, `projectsearch.lua`, `command_slots.lua`, `contextmenu.lua`, `ipc.lua`, `settings.lua`, `performance_hud.lua`, `scale*.lua`, `custom_*`, `rootpickcolor.lua`, `macro.lua` | app/project/UI behavior; little or no `Doc.lines` dependence | keep in Lua as app-shell/customization behavior unless a hotspot appears | May need command-target adapters for native views, but not text-core owners. |
+| `edit_perf_stress.lua`, `selection_perf_stress.lua` | directly stresses old `DocView`/selection internals | deprecate/archive or rewrite as native tests/tools | Old stress tools should not block replacement. |
+| `autorestart.lua`, `untitled_tabs.lua`, `global_prompt_bar_sanitize.lua` | small lifecycle/UI hooks, some `Doc` awareness | keep in Lua; port only the doc-specific edge if still wanted | Low migration risk. |
+
 ### Deprecated plugin archive policy
 
 When a bundled Lua plugin is no longer part of the supported native-editor path, do not delete it by default. Move it out of the normal plugin discovery path into a clearly marked archive, preferably:
