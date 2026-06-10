@@ -519,6 +519,27 @@ local function repeat_native_find(view, backwards)
   end
 end
 
+local function go_to_native_line(view)
+  local current_line = view:cursor_line_col() + 1
+  core.global_prompt_bar:enter("Native Go To Line", {
+    text = tostring(current_line),
+    select_text = true,
+    show_suggestions = false,
+    submit = function(text)
+      local line = tonumber(text)
+      if not line then return end
+      line = common.clamp(math.floor(line), 1, math.max(1, view.buffer:line_count()))
+      local offset = view.buffer:line_col_to_offset(line - 1, 0)
+      if offset then
+        view.editor:set_cursor(offset)
+        view:scroll_to_cursor()
+        core.redraw = true
+      end
+    end,
+    suggest = function() return {} end,
+  })
+end
+
 local function replace_all_native_text(view)
   local selected = view.editor:copy_selection()
   core.global_prompt_bar:enter("Native Replace Text", {
@@ -637,6 +658,8 @@ command.add(NativeTextSandboxView, {
   ["native-text-sandbox:tab"] = with_active_native_view(function(view) view.editor:tab() end, true),
   ["native-text-sandbox:untab"] = with_active_native_view(function(view) view.editor:untab() end, true),
   ["native-text-sandbox:select-all"] = with_active_native_view(function(view) view.editor:select_all() end),
+  ["native-text-sandbox:select-line"] = with_active_native_view(function(view) view.editor:select_line() end),
+  ["native-text-sandbox:go-to-line"] = with_active_native_view(function(view) go_to_native_line(view) end),
   ["native-text-sandbox:copy"] = with_active_native_view(function(view) copy_native_selection(view) end),
   ["native-text-sandbox:cut"] = with_active_native_view(function(view)
     local text = view.editor:cut_selection()
@@ -707,6 +730,8 @@ keymap.add {
   ["tab"] = "native-text-sandbox:tab",
   ["shift+tab"] = "native-text-sandbox:untab",
   ["ctrl+a"] = "native-text-sandbox:select-all",
+  ["ctrl+l"] = "native-text-sandbox:select-line",
+  ["ctrl+g"] = "native-text-sandbox:go-to-line",
   ["ctrl+c"] = "native-text-sandbox:copy",
   ["ctrl+x"] = "native-text-sandbox:cut",
   ["ctrl+v"] = "native-text-sandbox:paste",
