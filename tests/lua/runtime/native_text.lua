@@ -2,6 +2,7 @@ local native_text = require "native_text"
 local test = require "core.test"
 
 local core = require "core"
+local common = require "core.common"
 
 local function tmp_file(name)
   return core.temp_filename(name or "native-text-test")
@@ -293,6 +294,28 @@ test.describe("native_text API bridge", function()
     test.equal(restored.scroll.y, 7)
     test.equal(restored.scroll.to.x, 5)
     test.equal(restored.scroll.to.y, 11)
+  end)
+
+  test.it("restores file-backed native sandbox views through registered Buffer identity", function()
+    local NativeTextSandboxView = require "plugins.native_text_sandbox"
+    local path = tmp_file("native-text-view-state-file")
+    local fp = assert(io.open(path, "wb"))
+    fp:write("abc")
+    fp:close()
+
+    local view = NativeTextSandboxView(nil, path)
+    local state = view:get_state()
+    local restored = NativeTextSandboxView.from_state(state)
+    test.equal(restored.buffer, view.buffer)
+
+    local editor = restored.buffer:new_editor()
+    test.ok(editor:set_cursor(3))
+    test.ok(editor:insert("def"))
+    test.equal(view.buffer:text(), "abcdef")
+
+    local absolute = system.absolute_path(path) or path
+    native_text.release_file_buffer(common.path_compare_key(absolute), view.buffer)
+    os.remove(path)
   end)
 
   test.it("uses Buffer line-ending mode for native newline insertion", function()
