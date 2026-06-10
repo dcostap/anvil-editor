@@ -95,16 +95,23 @@ end
 function NativeTextSandboxView:reload_from_disk()
   local path = self.buffer:path()
   if not path then return false end
-  if not self.buffer:load_file(path) then
+  local buffer = self.buffer
+  if not buffer:load_file(path) then
     core.error("Failed to reload native Buffer: %s", path)
     return false
   end
-  self:enable_tree_sitter_for_path(path)
-  self.editor:set_cursor(0)
-  self:update_file_signature()
-  self.external_reload_prompting = false
-  self.tree_sitter_dirty_since = nil
-  core.log_quiet("Reloaded native Buffer from disk: %s", path)
+  local root = core.root_panel and core.root_panel.root_node
+  local views = root and root:get_children() or { self }
+  for _, view in ipairs(views) do
+    if view:is(NativeTextSandboxView) and view.buffer == buffer then
+      view:enable_tree_sitter_for_path(path)
+      view.editor:set_cursor(0)
+      view:update_file_signature()
+      view.external_reload_prompting = false
+      view.tree_sitter_dirty_since = nil
+    end
+  end
+  core.log_quiet("Reloaded shared native Buffer from disk: %s", path)
   core.redraw = true
   return true
 end
@@ -686,14 +693,20 @@ local function replace_all_native_text(view)
   })
 end
 
-local function update_shared_buffer_identity(buffer, identity_key)
+local function for_each_native_buffer_view(buffer, fn)
   local root = core.root_panel and core.root_panel.root_node
   if not root then return end
   for _, view in ipairs(root:get_children()) do
     if view:is(NativeTextSandboxView) and view.buffer == buffer then
-      view.buffer_identity_key = identity_key
+      fn(view)
     end
   end
+end
+
+local function update_shared_buffer_identity(buffer, identity_key)
+  for_each_native_buffer_view(buffer, function(view)
+    view.buffer_identity_key = identity_key
+  end)
 end
 
 local function register_saved_native_buffer(view, filename)
@@ -707,6 +720,10 @@ local function register_saved_native_buffer(view, filename)
 end
 
 local function finish_native_save(view, close_after_save, close_fn)
+  for_each_native_buffer_view(view.buffer, function(shared_view)
+    shared_view:update_file_signature()
+    shared_view.external_reload_prompting = false
+  end)
   view:update_file_signature()
   if close_after_save then
     if close_fn then
