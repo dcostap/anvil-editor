@@ -27,6 +27,18 @@ function NativeTextSandboxView:new(text, filename)
     local ok = self.buffer:load_file(filename)
     if not ok then core.error("Failed to open native Buffer: %s", filename) end
   end
+  self.tree_sitter_enabled = false
+  self:enable_tree_sitter_for_path(filename)
+  self.editor = self.buffer:new_editor()
+  self.file_signature = nil
+  self.external_reload_prompting = false
+  self:update_file_signature()
+  self.tree_sitter_dirty_since = nil
+  self.scrollable = true
+  self.cursor = "ibeam"
+end
+
+function NativeTextSandboxView:enable_tree_sitter_for_path(filename)
   local language = filename and native_text.tree_sitter_language_for_filename(filename) or nil
   self.tree_sitter_enabled = language and self.buffer:enable_tree_sitter(language) or false
   if language then
@@ -36,10 +48,62 @@ function NativeTextSandboxView:new(text, filename)
       core.log_quiet("Native text sandbox failed to enable Tree-sitter language '%s' for %s", language, filename or "scratch")
     end
   end
-  self.editor = self.buffer:new_editor()
+end
+
+local function file_signature(path)
+  local info = path and system.get_file_info(path)
+  if not info or info.type ~= "file" then return nil end
+  return { modified = info.modified, size = info.size }
+end
+
+local function same_file_signature(a, b)
+  if not a or not b then return a == b end
+  return a.modified == b.modified and a.size == b.size
+end
+
+function NativeTextSandboxView:update_file_signature()
+  self.file_signature = file_signature(self.buffer:path())
+end
+
+function NativeTextSandboxView:reload_from_disk()
+  local path = self.buffer:path()
+  if not path then return false end
+  if not self.buffer:load_file(path) then
+    core.error("Failed to reload native Buffer: %s", path)
+    return false
+  end
+  self:enable_tree_sitter_for_path(path)
+  self.editor:set_cursor(0)
+  self:update_file_signature()
+  self.external_reload_prompting = false
   self.tree_sitter_dirty_since = nil
-  self.scrollable = true
-  self.cursor = "ibeam"
+  core.log_quiet("Reloaded native Buffer from disk: %s", path)
+  core.redraw = true
+  return true
+end
+
+function NativeTextSandboxView:check_external_file_change()
+  local path = self.buffer:path()
+  if not path or self.external_reload_prompting then return end
+  local current = file_signature(path)
+  if same_file_signature(self.file_signature, current) then return end
+  self.file_signature = current
+  if not self.buffer:is_dirty() then
+    self:reload_from_disk()
+    return
+  end
+  self.external_reload_prompting = true
+  core.nag_view:show("Native Buffer Changed", path .. " changed on disk. Reload this file?", {
+    { text = "Reload From Disk", default_yes = true },
+    { text = "Ignore", default_no = true },
+  }, function(item)
+    if item.text == "Reload From Disk" then
+      self:reload_from_disk()
+    else
+      self.external_reload_prompting = false
+      self:update_file_signature()
+    end
+  end)
 end
 
 function NativeTextSandboxView:get_name()
@@ -63,6 +127,7 @@ function NativeTextSandboxView:try_close(do_close)
       elseif item.text:match("^[sS]") then
         if path then
           if self.buffer:save_file() then
+            self:update_file_signature()
             do_close()
           else
             core.error("Failed to save native Buffer: %s", path)
@@ -455,6 +520,7 @@ function save_native_view_as(view, close_after_save)
       local filename = type(result) == "table" and result[1] or result
       if filename and filename ~= "" then
         if view.buffer:save_file(filename) then
+          view:update_file_signature()
           if close_after_save then
             local node = core.root_panel.root_node:get_node_for_view(view)
             if node then node:close_view(core.root_panel.root_node, view) end
@@ -576,7 +642,11 @@ command.add(NativeTextSandboxView, {
   ["native-text-sandbox:redo"] = with_active_native_view(function(view) view.editor:redo() end, true),
   ["native-text-sandbox:save"] = with_active_native_view(function(view)
     if view.buffer:path() then
-      if not view.buffer:save_file() then core.error("Failed to save native Buffer") end
+      if view.buffer:save_file() then
+        view:update_file_signature()
+      else
+        core.error("Failed to save native Buffer")
+      end
     else
       save_native_view_as(view)
     end
@@ -653,6 +723,18 @@ local function dirty_native_views()
   end
   return dirty
 end
+
+core.add_thread(function()
+  while true do
+    local root = core.root_panel and core.root_panel.root_node
+    if root then
+      for _, view in ipairs(root:get_children()) do
+        if view:is(NativeTextSandboxView) then view:check_external_file_change() end
+      end
+    end
+    coroutine.yield(1)
+  end
+end)
 
 function core.exit(quit_fn, force)
   if force then return core_exit(quit_fn, force) end
