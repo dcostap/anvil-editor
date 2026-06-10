@@ -240,6 +240,26 @@ test.describe("native_text API bridge", function()
     test.ok(has_highlight("keyword", "static"))
   end)
 
+  test.it("round-trips native sandbox view state", function()
+    local NativeTextSandboxView = require "plugins.native_text_sandbox"
+    local view = NativeTextSandboxView("abc\nxyz")
+    view.editor:set_cursor(2)
+    view.editor:add_cursor(6)
+    view.scroll.x = 3
+    view.scroll.y = 7
+    view.scroll.to.x = 5
+    view.scroll.to.y = 11
+
+    local restored = NativeTextSandboxView.from_state(view:get_state())
+    test.equal(restored.buffer:text(), "abc\nxyz")
+    test.same(restored.editor:cursor(1), { cursor = 2 })
+    test.same(restored.editor:cursor(2), { cursor = 6 })
+    test.equal(restored.scroll.x, 3)
+    test.equal(restored.scroll.y, 7)
+    test.equal(restored.scroll.to.x, 5)
+    test.equal(restored.scroll.to.y, 11)
+  end)
+
   test.it("uses Buffer line-ending mode for native newline insertion", function()
     local buffer = native_text.new_buffer("ab")
     local editor = buffer:new_editor()

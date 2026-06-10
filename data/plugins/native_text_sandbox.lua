@@ -150,6 +150,42 @@ function NativeTextSandboxView:supports_text_input()
   return true
 end
 
+function NativeTextSandboxView:get_state()
+  local cursors = {}
+  for i = 1, self.editor:cursor_count() do
+    cursors[i] = self.editor:cursor(i)
+  end
+  return {
+    filename = self.buffer:path(),
+    text = self.buffer:path() and nil or self.buffer:text(),
+    scroll = { x = self.scroll.x, y = self.scroll.y },
+    scroll_to = { x = self.scroll.to.x, y = self.scroll.to.y },
+    cursors = cursors,
+  }
+end
+
+function NativeTextSandboxView.from_state(state)
+  state = state or {}
+  local view = NativeTextSandboxView(state.text, state.filename)
+  local scroll = state.scroll or {}
+  local scroll_to = state.scroll_to or scroll
+  view.scroll.x = scroll.x or 0
+  view.scroll.y = scroll.y or 0
+  view.scroll.to.x = scroll_to.x or view.scroll.x
+  view.scroll.to.y = scroll_to.y or view.scroll.y
+  if type(state.cursors) == "table" and #state.cursors > 0 then
+    view.editor:clear_multi_cursors()
+    for i, cursor in ipairs(state.cursors) do
+      if i == 1 then
+        view.editor:set_cursor(cursor.cursor or 0, cursor.selection)
+      else
+        view.editor:add_cursor(cursor.cursor or 0, cursor.selection)
+      end
+    end
+  end
+  return view
+end
+
 function NativeTextSandboxView:note_tree_sitter_mutation()
   if self.tree_sitter_enabled and self.buffer:tree_sitter_is_dirty() then
     self.tree_sitter_dirty_since = system.get_time()
