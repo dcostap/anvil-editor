@@ -14,6 +14,24 @@ local TREE_SITTER_REPARSE_DELAY = 0.25
 local plugin_config = config.plugins.native_text_sandbox
 local save_native_view_as
 local last_find_text
+local close_native_view
+
+local function native_file_identity(filename)
+  if type(filename) ~= "string" or filename == "" then return nil end
+  local ok, absolute = pcall(system.absolute_path, filename)
+  if ok and absolute then filename = absolute end
+  return common.path_compare_key(filename)
+end
+
+local function open_registered_native_buffer(filename)
+  local identity_key = native_file_identity(filename)
+  local buffer, reused_or_error = native_text.open_file_buffer(filename, identity_key or filename)
+  if not buffer then
+    core.error("%s", reused_or_error or string.format("Failed to open native Buffer: %s", filename))
+    return nil, identity_key, false
+  end
+  return buffer, identity_key, reused_or_error == true
+end
 
 local NativeTextSandboxView = View:extend()
 
@@ -21,15 +39,21 @@ function NativeTextSandboxView:__tostring() return "NativeTextSandboxView" end
 
 NativeTextSandboxView.context = "workspace"
 
-function NativeTextSandboxView:new(text, filename)
+function NativeTextSandboxView:new(text, filename, buffer, identity_key)
   NativeTextSandboxView.super.new(self)
-  self.buffer = native_text.new_buffer(text or "Native text sandbox\n\nType here. This view is backed by src/text Buffer/Editor userdata.")
-  if filename then
+  self.buffer = buffer or native_text.new_buffer(text or "Native text sandbox\n\nType here. This view is backed by src/text Buffer/Editor userdata.")
+  self.buffer_identity_key = identity_key
+  if filename and not buffer then
     local ok = self.buffer:load_file(filename)
-    if not ok then core.error("Failed to open native Buffer: %s", filename) end
+    if ok then
+      self.buffer_identity_key = native_file_identity(filename)
+      if self.buffer_identity_key then native_text.register_file_buffer(self.buffer_identity_key, self.buffer) end
+    else
+      core.error("Failed to open native Buffer: %s", filename)
+    end
   end
   self.tree_sitter_enabled = false
-  self:enable_tree_sitter_for_path(filename)
+  self:enable_tree_sitter_for_path(filename or self.buffer:path())
   self.editor = self.buffer:new_editor()
   self.file_signature = nil
   self.external_reload_prompting = false
@@ -125,7 +149,7 @@ end
 
 function NativeTextSandboxView:try_close(do_close)
   if not self.buffer:is_dirty() then
-    do_close()
+    close_native_view(self, do_close)
     return
   end
 
@@ -133,12 +157,12 @@ function NativeTextSandboxView:try_close(do_close)
   core.global_prompt_bar:enter("Unsaved Native Buffer; Confirm Close", {
     submit = function(_, item)
       if item.text:match("^[cC]") then
-        do_close()
+        close_native_view(self, do_close)
       elseif item.text:match("^[sS]") then
         if path then
           if self.buffer:save_file() then
             self:update_file_signature()
-            do_close()
+            close_native_view(self, do_close)
           else
             core.error("Failed to save native Buffer: %s", path)
           end
@@ -176,7 +200,11 @@ end
 
 function NativeTextSandboxView.from_state(state)
   state = state or {}
-  local view = NativeTextSandboxView(state.text, state.filename)
+  local buffer, identity_key
+  if state.filename then
+    buffer, identity_key = open_registered_native_buffer(state.filename)
+  end
+  local view = NativeTextSandboxView(state.text, state.filename, buffer, identity_key)
   local scroll = state.scroll or {}
   local scroll_to = state.scroll_to or scroll
   view.scroll.x = scroll.x or 0
@@ -662,16 +690,37 @@ local function replace_all_native_text(view)
   })
 end
 
+local function update_shared_buffer_identity(buffer, identity_key)
+  local root = core.root_panel and core.root_panel.root_node
+  if not root then return end
+  for _, view in ipairs(root:get_children()) do
+    if view:is(NativeTextSandboxView) and view.buffer == buffer then
+      view.buffer_identity_key = identity_key
+    end
+  end
+end
+
+local function register_saved_native_buffer(view, filename)
+  local old_key = view.buffer_identity_key
+  local new_key = native_file_identity(filename)
+  if old_key and old_key ~= new_key then
+    native_text.release_file_buffer(old_key, view.buffer)
+  end
+  if new_key then native_text.register_file_buffer(new_key, view.buffer) end
+  update_shared_buffer_identity(view.buffer, new_key)
+end
+
 function save_native_view_as(view, close_after_save)
   core.save_file_dialog(core.window, function(status, result)
     if status == "accept" then
       local filename = type(result) == "table" and result[1] or result
       if filename and filename ~= "" then
         if view.buffer:save_file(filename) then
+          register_saved_native_buffer(view, filename)
           view:update_file_signature()
           if close_after_save then
             local node = core.root_panel.root_node:get_node_for_view(view)
-            if node then node:close_view(core.root_panel.root_node, view) end
+            if node then close_native_view(view, function() node:close_view(core.root_panel.root_node, view) end) end
           end
           core.redraw = true
         else
@@ -695,6 +744,26 @@ local function find_open_native_text_file(filename)
   end
 end
 
+local function find_open_native_text_buffer(buffer, excluded_view)
+  local root = core.root_panel and core.root_panel.root_node
+  if not root or not buffer then return nil end
+  for _, view in ipairs(root:get_children()) do
+    if view ~= excluded_view and view:is(NativeTextSandboxView) and view.buffer == buffer then
+      return view
+    end
+  end
+end
+
+function close_native_view(view, do_close)
+  local should_release = view.buffer_identity_key and not find_open_native_text_buffer(view.buffer, view)
+  local identity_key = view.buffer_identity_key
+  local buffer = view.buffer
+  do_close()
+  if should_release then
+    native_text.release_file_buffer(identity_key, buffer)
+  end
+end
+
 local function open_native_text_file(filename)
   if not filename or filename == "" then return end
   local existing = find_open_native_text_file(filename)
@@ -704,9 +773,12 @@ local function open_native_text_file(filename)
     core.log_quiet("Focused already-open native Buffer: %s", filename)
     return existing
   end
-  local view = NativeTextSandboxView(nil, filename)
+  local buffer, identity_key, reused = open_registered_native_buffer(filename)
+  if not buffer then return end
+  local view = NativeTextSandboxView(nil, filename, buffer, identity_key)
   core.root_panel:get_active_node_default():add_view(view)
   if core.set_visited then core.set_visited(filename) end
+  core.log_quiet("Opened native Buffer%s: %s", reused and " from registry" or "", filename)
   return view
 end
 

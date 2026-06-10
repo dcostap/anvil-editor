@@ -80,6 +80,34 @@ test.describe("native_text API bridge", function()
     os.remove(saved)
   end)
 
+  test.it("reuses registered file-backed Buffers by identity", function()
+    local path = tmp_file("native-text-registry")
+    local fp = assert(io.open(path, "wb"))
+    fp:write("one")
+    fp:close()
+
+    local first, reused = native_text.open_file_buffer(path, path)
+    test.ok(first)
+    test.not_ok(reused)
+    local second
+    second, reused = native_text.open_file_buffer(path, path)
+    test.equal(second, first)
+    test.ok(reused)
+
+    local editor = first:new_editor()
+    test.ok(editor:set_cursor(3))
+    test.ok(editor:insert(" two"))
+    test.equal(second:text(), "one two")
+
+    test.ok(native_text.release_file_buffer(path, first))
+    second, reused = native_text.open_file_buffer(path, path)
+    test.ok(second)
+    test.not_ok(reused)
+    test.equal(second:text(), "one")
+
+    os.remove(path)
+  end)
+
   test.it("exposes native literal Buffer search", function()
     local buffer = native_text.new_buffer("Alpha beta alpha BETA")
 

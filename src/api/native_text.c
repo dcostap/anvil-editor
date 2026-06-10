@@ -21,6 +21,8 @@ typedef struct NativeTextEditor {
   bool initialized;
 } NativeTextEditor;
 
+static char native_text_file_buffer_registry_key;
+
 static NativeTextBuffer *check_buffer(lua_State *L, int index) {
   return (NativeTextBuffer *) luaL_checkudata(L, index, API_TYPE_NATIVE_TEXT_BUFFER);
 }
@@ -43,6 +45,31 @@ static void push_cursor(lua_State *L, Cursor cursor) {
     lua_pushnumber(L, (lua_Number) cursor.selection);
     lua_setfield(L, -2, "selection");
   }
+}
+
+static NativeTextBuffer *push_new_buffer_userdata(lua_State *L, const char *text, size_t len) {
+  NativeTextBuffer *native = (NativeTextBuffer *) lua_newuserdata(L, sizeof(NativeTextBuffer));
+  memset(native, 0, sizeof(*native));
+  if (!buffer_init(&native->buffer, text, len)) {
+    luaL_error(L, "failed to create native buffer");
+    return NULL;
+  }
+  buffer_manager_init(&native->manager, &native->buffer);
+  native->initialized = true;
+  luaL_getmetatable(L, API_TYPE_NATIVE_TEXT_BUFFER);
+  lua_setmetatable(L, -2);
+  return native;
+}
+
+static void push_file_buffer_registry(lua_State *L) {
+  lua_pushlightuserdata(L, &native_text_file_buffer_registry_key);
+  lua_gettable(L, LUA_REGISTRYINDEX);
+  if (lua_istable(L, -1)) return;
+  lua_pop(L, 1);
+  lua_newtable(L);
+  lua_pushlightuserdata(L, &native_text_file_buffer_registry_key);
+  lua_pushvalue(L, -2);
+  lua_settable(L, LUA_REGISTRYINDEX);
 }
 
 static int l_buffer_gc(lua_State *L) {
@@ -658,15 +685,74 @@ static int l_tree_sitter_language_for_filename(lua_State *L) {
 static int l_new_buffer(lua_State *L) {
   size_t len = 0;
   const char *text = lua_isnoneornil(L, 1) ? "" : luaL_checklstring(L, 1, &len);
-  NativeTextBuffer *native = (NativeTextBuffer *) lua_newuserdata(L, sizeof(NativeTextBuffer));
-  memset(native, 0, sizeof(*native));
-  if (!buffer_init(&native->buffer, text, len)) {
-    return luaL_error(L, "failed to create native buffer");
+  push_new_buffer_userdata(L, text, len);
+  return 1;
+}
+
+static int l_open_file_buffer(lua_State *L) {
+  const char *path = luaL_checkstring(L, 1);
+  const char *identity_key = luaL_optstring(L, 2, path);
+
+  push_file_buffer_registry(L);
+  int registry_index = lua_gettop(L);
+  lua_getfield(L, registry_index, identity_key);
+  if (!lua_isnil(L, -1)) {
+    lua_pushboolean(L, true);
+    lua_remove(L, registry_index);
+    return 2;
   }
-  buffer_manager_init(&native->manager, &native->buffer);
-  native->initialized = true;
-  luaL_getmetatable(L, API_TYPE_NATIVE_TEXT_BUFFER);
-  lua_setmetatable(L, -2);
+  lua_pop(L, 1);
+
+  NativeTextBuffer *native = push_new_buffer_userdata(L, "", 0);
+  int buffer_index = lua_gettop(L);
+  if (!buffer_load_file(&native->buffer, path)) {
+    buffer_manager_dispose(&native->manager);
+    buffer_dispose(&native->buffer);
+    native->initialized = false;
+    lua_pushnil(L);
+    lua_pushfstring(L, "failed to open native Buffer: %s", path);
+    lua_remove(L, registry_index);
+    lua_remove(L, buffer_index - 1);
+    return 2;
+  }
+
+  lua_pushvalue(L, buffer_index);
+  lua_setfield(L, registry_index, identity_key);
+  lua_pushboolean(L, false);
+  lua_remove(L, registry_index);
+  return 2;
+}
+
+static int l_register_file_buffer(lua_State *L) {
+  const char *identity_key = luaL_checkstring(L, 1);
+  check_buffer(L, 2);
+  push_file_buffer_registry(L);
+  lua_pushvalue(L, 2);
+  lua_setfield(L, -2, identity_key);
+  lua_pushboolean(L, true);
+  return 1;
+}
+
+static int l_release_file_buffer(lua_State *L) {
+  const char *identity_key = luaL_checkstring(L, 1);
+  bool require_match = !lua_isnoneornil(L, 2);
+  if (require_match) check_buffer(L, 2);
+
+  push_file_buffer_registry(L);
+  int registry_index = lua_gettop(L);
+  lua_getfield(L, registry_index, identity_key);
+  if (lua_isnil(L, -1)) {
+    lua_pushboolean(L, false);
+    return 1;
+  }
+  if (require_match && !lua_rawequal(L, -1, 2)) {
+    lua_pushboolean(L, false);
+    return 1;
+  }
+  lua_pop(L, 1);
+  lua_pushnil(L);
+  lua_setfield(L, registry_index, identity_key);
+  lua_pushboolean(L, true);
   return 1;
 }
 
@@ -769,6 +855,12 @@ int luaopen_native_text(lua_State *L) {
   lua_newtable(L);
   lua_pushcfunction(L, l_new_buffer);
   lua_setfield(L, -2, "new_buffer");
+  lua_pushcfunction(L, l_open_file_buffer);
+  lua_setfield(L, -2, "open_file_buffer");
+  lua_pushcfunction(L, l_register_file_buffer);
+  lua_setfield(L, -2, "register_file_buffer");
+  lua_pushcfunction(L, l_release_file_buffer);
+  lua_setfield(L, -2, "release_file_buffer");
   lua_pushcfunction(L, l_tree_sitter_language_for_filename);
   lua_setfield(L, -2, "tree_sitter_language_for_filename");
   return 1;

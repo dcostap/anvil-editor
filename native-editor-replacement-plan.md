@@ -98,6 +98,7 @@ Implemented:
 - Central batch-edit transaction path.
 - Pre-edit coordinate batch edits, applied in sorted/descending-safe order.
 - Cursor mapping results.
+- Lua-facing file Buffer registry keyed by normalized path identity so native views can share file-backed Buffers instead of creating conflicting independent Buffers.
 - Changed byte/line ranges.
 - Tree-sitter edit descriptors with byte and point data.
 - Listener callbacks for native Editor propagation.
@@ -212,8 +213,14 @@ Implemented:
 - Multiple carets.
 - Selection rendering.
 - Basic mouse placement.
+- Mouse drag selection, shift-click selection extension, double-click word selection, and triple-click line selection.
 - Typing/editing.
-- Movement shortcuts and duplicate cursor shortcuts.
+- Movement shortcuts, duplicate cursor shortcuts, page movement, and go-to-line.
+- Find next/previous, replace current match, and replace all.
+- Clipboard copy/cut/paste.
+- Save-as, dirty close/quit prompts, external reload prompts, duplicate-open focusing, and native file Buffer registry reuse.
+- Current-line highlight, horizontal scroll-to-cursor, status bar file/position/line-ending items, and recent/visited tracking.
+- Workspace-style `get_state` / `from_state` serialization.
 - Undo/redo.
 
 Important status:
