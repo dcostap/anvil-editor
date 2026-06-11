@@ -107,7 +107,7 @@ plugin_defaults("findfile", {
   cache_expiration = 60,
 })
 plugin_defaults("native_editor", {
-  default_open = false,
+  default_open = true,
 })
 -- Keep the old sandbox plugin filename as a compatibility module only. The
 -- canonical first-party plugin entry point is now native_editor.

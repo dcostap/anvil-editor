@@ -1,4 +1,5 @@
 local core = require "core"
+local config = require "core.config"
 local test = require "core.test"
 
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
@@ -58,7 +59,14 @@ local function range_x(view, line, col1, col2)
 end
 
 test.describe("Fuzzy Searcher preview", function()
+  test.before_each(function(context)
+    context.old_native_default_open = config.plugins.native_editor and config.plugins.native_editor.default_open
+    config.plugins.native_editor = config.plugins.native_editor or {}
+    config.plugins.native_editor.default_open = false
+  end)
+
   test.after_each(function(context)
+    config.plugins.native_editor.default_open = context.old_native_default_open
     if core.fuzzy_searcher_active_view then
       core.fuzzy_searcher_active_view:close()
     end

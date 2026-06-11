@@ -1,6 +1,7 @@
 local core = require "core"
 local command = require "core.command"
 local common = require "core.common"
+local config = require "core.config"
 local test = require "core.test"
 
 local function write_file(path, text)
@@ -17,7 +18,10 @@ test.describe("open file prompt", function()
   local old_error
   local errors
 
-  test.before_each(function()
+  test.before_each(function(context)
+    context.old_native_default_open = config.plugins.native_editor and config.plugins.native_editor.default_open
+    config.plugins.native_editor = config.plugins.native_editor or {}
+    config.plugins.native_editor.default_open = false
     old_error = core.error
     errors = {}
     core.error = function(fmt, ...)
@@ -25,7 +29,8 @@ test.describe("open file prompt", function()
     end
   end)
 
-  test.after_each(function()
+  test.after_each(function(context)
+    config.plugins.native_editor.default_open = context.old_native_default_open
     core.error = old_error
     if core.global_prompt_bar then
       core.global_prompt_bar:exit(true)

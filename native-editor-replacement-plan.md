@@ -237,7 +237,7 @@ Important status:
 - Sandbox is usable for manual testing.
 - Sandbox is still Lua-owned UI glue, not the final replacement editor.
 - Native editor commands now have a non-sandbox namespace, but normal `doc:*` command routing remains intentionally separate until the default editor path is stable.
-- The native file-open implementation is exposed through a core facade, and `core.open_file` dynamically uses it when the opt-in native default-open setting is enabled.
+- The native file-open implementation is exposed through a core facade, and `core.open_file` dynamically uses it when native default-open is enabled. The first-party default now enables native default-open for hands-on dogfooding.
 - Native editor workspace state now saves under canonical `plugins.native_editor` module name; old sandbox module remains loadable for transition restore.
 - Core project/title/visited-file helpers can now see native editor Buffer paths instead of assuming every file-backed editor view has `view.doc.abs_filename`.
 - Root close-all / close-all-others now use view-level dirty confirmation so native editor views are included in unsaved-change prompts, including the `core.file_context` close-all-others override.
@@ -652,7 +652,7 @@ cmd.exe //d //s //c "call C:\Projects\c_projects\anvil-editor\update-anvil-dev-b
 Manual dogfooding should use:
 
 - `native-editor:open-file` while sandbox-hosted.
-- Later, the opt-in native default-open path.
+- The native default-open path is now enabled by first-party default for dogfooding.
 
 ## Success criteria for this plan
 

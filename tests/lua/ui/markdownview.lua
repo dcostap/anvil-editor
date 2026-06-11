@@ -77,6 +77,10 @@ end
 
 test.describe("markdownview", function()
   test.before_each(function(context)
+    context.old_native_default_open = config.plugins.native_editor and config.plugins.native_editor.default_open
+    config.plugins.native_editor = config.plugins.native_editor or {}
+    config.plugins.native_editor.default_open = false
+
     temp_root = USERDIR
       .. PATHSEP .. "markdownview-tests-"
       .. system.get_process_id() .. "-"
@@ -95,6 +99,7 @@ test.describe("markdownview", function()
   end)
 
   test.after_each(function(context)
+    config.plugins.native_editor.default_open = context.old_native_default_open
     close_test_views_and_docs(context)
     if PLATFORM ~= "Windows" then
       if context.temp_root and system.get_file_info(context.temp_root) then
