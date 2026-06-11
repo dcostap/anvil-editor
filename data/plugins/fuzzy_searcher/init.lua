@@ -2955,6 +2955,33 @@ function FSView:reveal_selected_in_explorer()
   command.perform("user:reveal-active-file-in-explorer", path)
 end
 
+local function set_opened_view_selection(view, line, col, line2, col2)
+  if view and view.doc then
+    if view.with_selection_state then
+      view:with_selection_state(function()
+        if line2 and col2 then view.doc:set_selection(line, col, line2, col2) else view.doc:set_selection(line, col) end
+      end)
+    else
+      if line2 and col2 then view.doc:set_selection(line, col, line2, col2) else view.doc:set_selection(line, col) end
+    end
+    return true
+  end
+  if core.is_native_editor_view and core.is_native_editor_view(view) then
+    local start_offset = view.buffer:line_col_to_offset(math.max(0, (line or 1) - 1), math.max(0, (col or 1) - 1))
+    if not start_offset then return false end
+    if line2 and col2 then
+      local end_offset = view.buffer:line_col_to_offset(math.max(0, line2 - 1), math.max(0, col2 - 1))
+      view.editor:set_cursor(end_offset or start_offset, start_offset)
+    else
+      view.editor:set_cursor(start_offset)
+    end
+    if view.scroll_to_cursor then view:scroll_to_cursor() end
+    core.redraw = true
+    return true
+  end
+  return false
+end
+
 function FSView:confirm(target_side)
   local r = self:selected_result()
   if not r then return end
@@ -2993,16 +3020,7 @@ function FSView:confirm(target_side)
         restore_focus = source_view,
       })
     else
-      local v = core.open_file(path)
-      if v and v.doc then
-        if v.with_selection_state then
-          v:with_selection_state(function()
-            if line2 and col2 then v.doc:set_selection(line, col, line2, col2) else v.doc:set_selection(line, col) end
-          end)
-        else
-          if line2 and col2 then v.doc:set_selection(line, col, line2, col2) else v.doc:set_selection(line, col) end
-        end
-      end
+      set_opened_view_selection(core.open_file(path), line, col, line2, col2)
     end
   end
 end

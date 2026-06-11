@@ -1,3 +1,4 @@
+local common = require "core.common"
 local core = require "core"
 local config = require "core.config"
 local test = require "core.test"
@@ -23,8 +24,8 @@ end
 
 local function close_file_views_and_docs(path)
   for _, view in ipairs(core.root_panel.root_node:get_children()) do
-    local view_path = view.path or (view.doc and view.doc.abs_filename)
-    if view_path == path then
+    local view_path = core.view_file_path and core.view_file_path(view) or view.path or (view.doc and view.doc.abs_filename)
+    if view_path and common.path_equals(view_path, path) then
       local node = core.root_panel.root_node:get_node_for_view(view)
       if node then
         if view:extends(DocView) and view.doc:is_dirty() then view.doc:clean() end
@@ -44,6 +45,15 @@ end
 
 local function selection_state(view)
   return view:get_selection_state().selections
+end
+
+local function native_selection_state(view)
+  local cursor = view.editor:cursor(1)
+  local start_offset = math.min(cursor.cursor or 0, cursor.selection or cursor.cursor or 0)
+  local end_offset = math.max(cursor.cursor or 0, cursor.selection or cursor.cursor or 0)
+  local start = view.buffer:offset_to_line_col(start_offset)
+  local finish = view.buffer:offset_to_line_col(end_offset)
+  return { start.line + 1, start.col + 1, finish.line + 1, finish.col + 1 }
 end
 
 local function visible_text_right(view)
@@ -103,6 +113,37 @@ test.describe("Fuzzy Searcher preview", function()
     local view = core.active_view
     test.ok(view and view.doc and view.doc.abs_filename == path, "expected accepted grep result to open its file")
     test.same(selection_state(view), { 1, 7, 1, 13 })
+  end)
+
+  test.it("selects a grep result in a native editor when native default-open is enabled", function(context)
+    config.plugins.native_editor.default_open = true
+    local path = temp_file_path("fuzzy-confirm-native-select-match-test.txt")
+    context.files = { path }
+    write_file(path, "alpha NEEDLE omega\n")
+
+    fuzzy_searcher.open("#")
+    local picker = core.fuzzy_searcher_active_view
+    picker.results = {
+      {
+        kind = "grep",
+        file = path,
+        line = 1,
+        col = 7,
+        grep_query = "NEEDLE",
+        exact = true,
+        content_selection_span = { 7, 12 },
+        content_match_start = 7,
+        text = "alpha NEEDLE omega",
+      }
+    }
+    picker.selected = 1
+
+    picker:confirm(false)
+
+    local view = core.active_view
+    test.ok(core.is_native_editor_view(view), "expected accepted grep result to open a native editor view")
+    test.ok(common.path_equals(core.view_file_path(view), path))
+    test.same(native_selection_state(view), { 1, 7, 1, 13 })
   end)
 
   test.it("focuses the Side Editor when accepting a file for the Side Panel", function(context)
