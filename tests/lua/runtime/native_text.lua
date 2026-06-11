@@ -278,8 +278,8 @@ test.describe("native_text API bridge", function()
   end)
 
   test.it("round-trips native editor view state", function()
-    local NativeTextSandboxView = require "plugins.native_editor"
-    local view = NativeTextSandboxView("abc\nxyz")
+    local NativeEditorView = require "plugins.native_editor"
+    local view = NativeEditorView("abc\nxyz")
     view.editor:set_cursor(2)
     view.editor:add_cursor(6)
     view.scroll.x = 3
@@ -287,7 +287,7 @@ test.describe("native_text API bridge", function()
     view.scroll.to.x = 5
     view.scroll.to.y = 11
 
-    local restored = NativeTextSandboxView.from_state(view:get_state())
+    local restored = NativeEditorView.from_state(view:get_state())
     test.equal(restored.buffer:text(), "abc\nxyz")
     test.same(restored.editor:cursor(1), { cursor = 2 })
     test.same(restored.editor:cursor(2), { cursor = 6 })
@@ -298,10 +298,10 @@ test.describe("native_text API bridge", function()
   end)
 
   test.it("routes native editor commands through the canonical namespace", function()
-    local NativeTextSandboxView = require "plugins.native_editor"
+    local NativeEditorView = require "plugins.native_editor"
     local original_active_view = core.active_view
     local ok, err = pcall(function()
-      local view = NativeTextSandboxView("abc")
+      local view = NativeEditorView("abc")
       core.active_view = view
       test.ok(command.is_valid("native-editor:toggle-line-ending"))
       test.ok(command.is_valid("native-text-sandbox:toggle-line-ending"))
@@ -367,15 +367,15 @@ test.describe("native_text API bridge", function()
   end)
 
   test.it("restores file-backed native editor views through registered Buffer identity", function()
-    local NativeTextSandboxView = require "plugins.native_editor"
+    local NativeEditorView = require "plugins.native_editor"
     local path = tmp_file("native-text-view-state-file")
     local fp = assert(io.open(path, "wb"))
     fp:write("abc")
     fp:close()
 
-    local view = NativeTextSandboxView(nil, path)
+    local view = NativeEditorView(nil, path)
     local state = view:get_state()
-    local restored = NativeTextSandboxView.from_state(state)
+    local restored = NativeEditorView.from_state(state)
     test.equal(restored.buffer, view.buffer)
 
     local editor = restored.buffer:new_editor()

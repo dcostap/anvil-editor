@@ -201,8 +201,8 @@ Important status:
 
 Implemented:
 
-- `data/plugins/native_editor.lua` canonical plugin entry point.
-- `data/plugins/native_text_sandbox.lua` transition implementation module retained for old workspace/plugin references.
+- `data/plugins/native_editor.lua` canonical plugin and Lua-hosted native editor view implementation.
+- `data/plugins/native_text_sandbox.lua` legacy module shim retained only for old workspace/plugin references.
 - `native_text` Lua bridge in `src/api/native_text.c`.
 - `native-editor:open` (`native-text-sandbox:open` alias during transition)
 - `native-editor:open-file` (`native-text-sandbox:open-file` alias during transition)
@@ -424,7 +424,7 @@ This is the working inventory for native-editor migration. Keep it current as pl
 
 | Area / plugin(s) | Old-editor coupling | Native-editor classification | Notes |
 | --- | --- | --- | --- |
-| `native_editor.lua` / `native_text_sandbox.lua` | none to old `Doc`; Lua-hosted native Buffer/View glue | keep temporarily through Lua glue, then promote to real editor path | `native_editor.lua` is the canonical plugin/workspace module; `native_text_sandbox.lua` remains a transition implementation/compatibility module until the view moves out of sandbox glue. |
+| `native_editor.lua` / `native_text_sandbox.lua` | none to old `Doc`; Lua-hosted native Buffer/View glue | keep temporarily through Lua glue, then promote to real editor path | `native_editor.lua` is the canonical plugin/workspace module and owns the Lua-hosted native view implementation; `native_text_sandbox.lua` is only a legacy restore shim. |
 | `anvil_defaults.lua` | config/keybinding defaults only | keep in Lua as app-shell/customization behavior | Route defaults to native commands as default editor changes. |
 | `workspace.lua` | generic view state; no text internals | keep in Lua as app-shell behavior, port state coverage to native capabilities | Native sandbox now has `get_state` / `from_state`; real workspace restore still needs default editor integration. |
 | `core/commands/doc.lua`, `core/commands/findreplace.lua` | heavy `Doc.lines`, old selections, tokenizer/highlighter, `DocView` predicates | port to native capabilities, then delete old command path | Native command coverage should replace behavior command-by-command, not adapt `Doc.lines`. |

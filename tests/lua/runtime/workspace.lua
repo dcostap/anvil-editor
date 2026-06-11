@@ -239,8 +239,8 @@ test.describe("Workspace persistence", function()
     core.visited_files = { file_b }
     core.root_panel = make_node_root_panel()
 
-    local NativeTextSandboxView = require "plugins.native_editor"
-    local view_a = NativeTextSandboxView(nil, file_a)
+    local NativeEditorView = require "plugins.native_editor"
+    local view_a = NativeEditorView(nil, file_a)
     view_a.editor:set_cursor(2)
     view_a.scroll.x = 3
     view_a.scroll.y = 7
@@ -248,7 +248,7 @@ test.describe("Workspace persistence", function()
     view_a.scroll.to.y = 11
     core.root_panel.root_node:add_view(view_a)
     local right = core.root_panel.root_node:split("right")
-    local view_b = NativeTextSandboxView(nil, file_b)
+    local view_b = NativeEditorView(nil, file_b)
     view_b.editor:set_cursor(4, 1)
     right:add_view(view_b)
     core.root_panel.root_node.divider = 0.4
