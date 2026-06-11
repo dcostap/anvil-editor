@@ -593,7 +593,7 @@ The native editor is ready to become the default editor when dogfooding is stabl
 
 Before moving from dogfooding into old `DocView` deletion, the native editor needs an explicit basic-parity pass against the old `DocView`. This is not a mandate to preserve the old implementation or plugin monkey-patch surface forever; it is a checklist for the visible/editor-shell behavior that should feel normal before the native editor is treated as the primary editor.
 
-Current known basic-parity gaps:
+Current known basic-parity gaps are listed below. This list is intentionally not exhaustive: more gaps may be discovered through side-by-side dogfooding against the old `DocView`, especially visual/tactile details that are hard to identify from code inspection alone. Add newly discovered basic-parity issues here as they become concrete.
 
 - **IME composition support** — old `DocView` has IME location tracking and composition underline/selection drawing; native editor currently handles normal text input but not full IME composition UX.
 - **UTF-8 and visual column behavior** — native editor still exposes mostly byte-offset/byte-column behavior in view helpers and status calculations; old `DocView` has more UTF-8-aware column handling and configurable caret column display.
