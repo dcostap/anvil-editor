@@ -251,6 +251,7 @@ Important status:
 - User/project module opens and native-editor file dialog accepts now route through `core.open_file`, preserving default native routing and non-text special cases.
 - Native default-open now covers missing files and unnamed scratch buffers: new named files open as dirty native Buffers, and `core:new-doc` opens a native scratch Buffer while native default-open is enabled.
 - Autosave focus/idle paths can save dirty native editor Buffers through `core.save_native_editor_view`, while preserving protected-file exclusions.
+- Generic cursor-position helper (`core.view_cursor_position`) supports native editor views and is used by IntelliJ-style file/line copy and navigation history paths.
 - Workspace save/restore now has runtime coverage for native editor views in split layouts.
 
 ## Current strategic direction

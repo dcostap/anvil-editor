@@ -305,8 +305,7 @@ end
 local function copy_absolute_filepath_with_line(dv)
   local path = active_file_or_error(dv)
   if not path then return end
-  local doc = dv and dv.doc
-  local line = doc and doc:get_selection(false) or 1
+  local line = core.view_cursor_position and core.view_cursor_position(dv) or 1
   copy_text_to_clipboard("absolute filepath with line", string.format("%s:%d", path, line or 1))
 end
 
@@ -377,14 +376,9 @@ local function current_navigation_place()
   local filename = core.view_file_path and core.view_file_path(view)
   if not filename then return nil end
   local line, col = 1, 1
-  if view.doc then
-    line, col = view.doc:get_selection(false)
-  elseif core.is_native_editor_view and core.is_native_editor_view(view) then
-    local cursor = view.editor:cursor()
-    local lc = view.buffer:offset_to_line_col(cursor.cursor or 0)
-    if lc then
-      line, col = lc.line + 1, lc.col + 1
-    end
+  if core.view_cursor_position then
+    line, col = core.view_cursor_position(view)
+    line, col = line or 1, col or 1
   end
   return {
     filename = filename,

@@ -257,6 +257,18 @@ function core.view_is_dirty(view)
   return false
 end
 
+function core.view_cursor_position(view)
+  if not view then return nil end
+  if view.doc then
+    return view.doc:get_selection(false)
+  end
+  if view.buffer and view.editor then
+    local cursor = view.editor:cursor()
+    local lc = cursor and view.buffer:offset_to_line_col(cursor.cursor or 0)
+    if lc then return lc.line + 1, lc.col + 1 end
+  end
+end
+
 function core.set_view_selection(view, line, col, line2, col2)
   if not view then return false end
   if view.doc then
