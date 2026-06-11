@@ -249,7 +249,8 @@ end
 ---@return integer line2
 ---@return integer col2
 function autocomplete.get_partial_symbol()
-  local doc = core.active_view.doc
+  local doc = core.active_view and core.active_view.doc
+  if not doc then return "", 1, 1, 1, 1 end
   local line2, col2 = doc:get_selection()
   local line1, col1 = doc:position_offset(line2, col2, translate_start_of_word)
   return doc:get_text(line1, col1, line2, col2), line1, col1, line2, col2
@@ -405,7 +406,7 @@ local function reset_suggestions(skip_close)
   triggered_manually = false
 
   if not skip_close then
-    local doc = core.active_view.doc
+    local doc = core.active_view and core.active_view.doc
     if autocomplete.on_close then
       autocomplete.on_close(doc, suggestions[suggestions_idx])
       autocomplete.on_close = nil
@@ -415,7 +416,7 @@ local function reset_suggestions(skip_close)
 end
 
 local function update_suggestions()
-  local doc = core.active_view.doc
+  local doc = core.active_view and core.active_view.doc
   local filename = doc and doc.filename or ""
 
   local assigned_sym = {}

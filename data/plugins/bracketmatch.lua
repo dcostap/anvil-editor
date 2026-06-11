@@ -85,7 +85,7 @@ local function update_state(line_limit)
   line_limit = line_limit or math.huge
 
   -- reset if we don't have a document (eg. DocView isn't focused)
-  local doc = core.active_view.doc
+  local doc = core.active_view and core.active_view.doc
   if not doc then
     state = {}
     return

@@ -254,6 +254,7 @@ Important status:
 - Generic cursor-position helper (`core.view_cursor_position`) supports native editor views and is used by IntelliJ-style file/line copy and navigation history paths.
 - Project-folder switch confirmation now checks dirty views, not just dirty `Doc` objects, so dirty native editor Buffers participate in the same safety prompt.
 - First-party untitled/new-file commands now honor native default-open: untitled tabs become native scratch Buffers and explicit new-file creation opens through `core.open_file`.
+- Legacy DocView-adjacent plugins that remain loaded during dogfooding now guard obvious active-view `doc` accesses so native editor focus does not trip nil-field errors.
 - Workspace save/restore now has runtime coverage for native editor views in split layouts.
 
 ## Current strategic direction

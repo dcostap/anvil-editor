@@ -72,11 +72,11 @@ end
 local core_set_active_view = core.set_active_view
 function core.set_active_view(view)
   core_set_active_view(view)
-  if core.active_view.doc and changed[core.active_view.doc] then
+  if core.active_view and core.active_view.doc and changed[core.active_view.doc] then
     local doc = core.active_view.doc
     core.add_thread(function()
       -- validate doc in case the active view rapidly changed
-      if doc == core.active_view.doc then
+      if core.active_view and doc == core.active_view.doc then
         autoreload_doc(doc)
       end
     end)
