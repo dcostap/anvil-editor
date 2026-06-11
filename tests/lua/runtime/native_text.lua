@@ -393,6 +393,10 @@ test.describe("native_text API bridge", function()
       test.ok(view:on_mouse_pressed("left", x, y, 2))
       test.equal(view.editor:copy_selection(), "gamma\n")
       test.ok(view:line_has_cursor_or_selection(1))
+      view:scroll_to_line(2, true, true)
+      test.ok(view.scroll.y >= 0)
+      view:scroll_to_make_visible(1, 1, true)
+      test.equal(view.scroll.y, 0)
     end)
     keymap.modkeys["ctrl"], keymap.modkeys["shift"] = old_ctrl, old_shift
     if not ok then error(err) end

@@ -291,9 +291,37 @@ function NativeEditorView:update_tree_sitter()
   core.redraw = true
 end
 
+function NativeEditorView:cursor_signature()
+  local parts = {}
+  for i = 1, self.editor:cursor_count() do
+    local cursor = self.editor:cursor(i)
+    parts[#parts + 1] = tostring(cursor.cursor or 0) .. ":" .. tostring(cursor.selection or "")
+  end
+  return table.concat(parts, ";")
+end
+
+function NativeEditorView:update_blink()
+  if config.disable_blink or core.active_view ~= self or self.mouse_selecting then return end
+  if not system.window_has_focus(core.window) then return end
+  local period = config.blink_period or 0.8
+  local t0 = core.blink_start or 0
+  local previous = core.blink_timer or 0
+  local now = system.get_time()
+  if ((now - t0) % period < period / 2) ~= ((previous - t0) % period < period / 2) then
+    core.redraw = true
+  end
+  core.blink_timer = now
+end
+
 function NativeEditorView:update()
   NativeEditorView.super.update(self)
   self:update_tree_sitter()
+  local signature = self:cursor_signature()
+  if signature ~= self.last_cursor_signature then
+    self.last_cursor_signature = signature
+    core.blink_reset()
+  end
+  self:update_blink()
 end
 
 function NativeEditorView:get_font()
@@ -380,9 +408,15 @@ function NativeEditorView:resolve_screen_position(x, y)
 end
 
 function NativeEditorView:draw_caret_for_cursor(cursor)
+  if core.active_view == self and not config.disable_blink and not self.mouse_selecting and system.window_has_focus(core.window) then
+    local period = config.blink_period or 0.8
+    local t0 = core.blink_start or 0
+    if (system.get_time() - t0) % period >= period / 2 then return end
+  end
   local cursor_line, cursor_col = self:cursor_line_col(cursor.cursor or 0)
   local caret_x, caret_y = self:line_col_to_screen(cursor_line, cursor_col)
-  renderer.draw_rect(caret_x, caret_y, style.caret_width or math.max(1, SCALE), self:get_line_height(), style.caret)
+  local color = core.active_view == self and style.caret or style.dim
+  renderer.draw_rect(caret_x, caret_y, style.caret_width or math.max(1, SCALE), self:get_line_height(), color)
 end
 
 function NativeEditorView:draw_line_text(line_info, row_y, highlights)
@@ -503,8 +537,9 @@ function NativeEditorView:draw_selection_for_cursor(cursor)
   end
 end
 
-function NativeEditorView:scroll_to_cursor()
-  local line, col = self:cursor_line_col()
+function NativeEditorView:scroll_to_make_visible(line, col, instant)
+  line = math.max(1, line or 1) - 1
+  col = math.max(1, col or 1) - 1
   local lh = self:get_line_height()
   local y = line * lh
   if y < self.scroll.to.y then
@@ -524,6 +559,27 @@ function NativeEditorView:scroll_to_cursor()
     self.scroll.to.x = x - available_w + self:get_font():get_width(" ")
   end
   self:clamp_scroll_position()
+  if instant then
+    self.scroll.x = self.scroll.to.x
+    self.scroll.y = self.scroll.to.y
+  end
+end
+
+function NativeEditorView:scroll_to_line(line, center, instant)
+  line = math.max(1, line or 1) - 1
+  local lh = self:get_line_height()
+  if center then
+    self.scroll.to.y = line * lh - self.size.y / 2 + lh / 2
+  else
+    self.scroll.to.y = line * lh
+  end
+  self:clamp_scroll_position()
+  if instant then self.scroll.y = self.scroll.to.y end
+end
+
+function NativeEditorView:scroll_to_cursor()
+  local line, col = self:cursor_line_col()
+  self:scroll_to_make_visible(line + 1, col + 1)
 end
 
 function NativeEditorView:page_move(direction, update_selection)
