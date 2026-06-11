@@ -330,8 +330,7 @@ end
 local function open_file_as_raw_text(dv)
   local path = active_file_or_error(dv)
   if not path then return end
-  local doc = core.open_doc(path)
-  core.root_panel:open_doc(doc)
+  core.open_file(path)
 end
 
 local function open_file_in_associated_program(dv)
@@ -375,11 +374,20 @@ end
 
 local function current_navigation_place()
   local view = core.active_view
-  local doc = view and view.doc
-  if not doc or not doc.abs_filename then return nil end
-  local line, col = doc:get_selection(false)
+  local filename = core.view_file_path and core.view_file_path(view)
+  if not filename then return nil end
+  local line, col = 1, 1
+  if view.doc then
+    line, col = view.doc:get_selection(false)
+  elseif core.is_native_editor_view and core.is_native_editor_view(view) then
+    local cursor = view.editor:cursor()
+    local lc = view.buffer:offset_to_line_col(cursor.cursor or 0)
+    if lc then
+      line, col = lc.line + 1, lc.col + 1
+    end
+  end
   return {
-    filename = doc.abs_filename,
+    filename = filename,
     line = line,
     col = col,
     scroll_x = view.scroll and view.scroll.to.x or 0,
@@ -411,14 +419,14 @@ local function restore_navigation_place(place)
   if not place then return end
   navigating_history = true
   local ok, err = pcall(function()
-    local doc = core.open_doc(place.filename)
-    local view = core.root_panel:open_doc(doc)
-    with_origin_clear_suppressed(doc_set_selection, doc, place.line, place.col, place.line, place.col)
-    if view.scroll then
+    local view = core.open_file(place.filename)
+    if view and core.set_view_selection then core.set_view_selection(view, place.line, place.col, place.line, place.col) end
+    if view and view.doc then with_origin_clear_suppressed(doc_set_selection, view.doc, place.line, place.col, place.line, place.col) end
+    if view and view.scroll then
       view.scroll.to.x, view.scroll.x = place.scroll_x or 0, place.scroll_x or 0
       view.scroll.to.y, view.scroll.y = place.scroll_y or 0, place.scroll_y or 0
     end
-    view:scroll_to_make_visible(place.line, place.col)
+    if view and view.scroll_to_make_visible then view:scroll_to_make_visible(place.line, place.col) end
   end)
   navigating_history = false
   if not ok then core.error("Failed to restore navigation place: %s", err) end

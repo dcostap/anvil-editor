@@ -789,24 +789,17 @@ end
 function M.open_path_in_main(path, opts)
   opts = opts or {}
   local restore = opts.preserve_focus and core.active_view or opts.restore_focus
-  local view
-  if ImageView.is_supported(path) then
-    view = core.open_file(path)
-  else
-    local ok, doc = core.try(core.open_doc, path)
-    if ok and doc then
-      view = M.open_doc_in_main(doc, {
-        source_view = opts.source_view,
-        line = opts.line,
-        col = opts.col,
-        focus = opts.preserve_focus == true and false or true,
-      })
-    else
-      view = core.open_file(path)
-    end
+  local view = core.open_file(path)
+  if view and opts.line and core.set_view_selection then
+    core.set_view_selection(view, opts.line, opts.col or 1, opts.line, opts.col or 1)
+  end
+  if view and opts.source_view and view.doc then
+    copy_docview_position(opts.source_view, view)
   end
   if restore and opts.preserve_focus ~= false then
     core.set_active_view(restore)
+  elseif view and opts.preserve_focus ~= true and opts.focus ~= false then
+    core.set_active_view(view)
   end
   return view
 end
