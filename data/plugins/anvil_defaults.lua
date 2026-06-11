@@ -109,6 +109,9 @@ plugin_defaults("findfile", {
 plugin_defaults("native_editor", {
   default_open = true,
 })
+-- Phase C dogfooding: force native editor file opens even if an older saved
+-- settings value still contains default_open=false from the sandbox phase.
+config.plugins.native_editor.default_open = true
 -- Keep the old sandbox plugin filename as a compatibility module only. The
 -- canonical first-party plugin entry point is now native_editor.
 config.plugins.native_text_sandbox = false
