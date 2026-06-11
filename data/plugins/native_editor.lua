@@ -842,6 +842,11 @@ function save_existing_native_view(view, close_after_save, close_fn)
   return save_native_buffer_now(view, close_after_save, close_fn)
 end
 
+function core.save_native_editor_view(view, close_after_save, close_fn)
+  if not is_native_editor_view(view) then return false end
+  return save_existing_native_view(view, close_after_save, close_fn)
+end
+
 function save_native_view_as(view, close_after_save)
   core.save_file_dialog(core.window, function(status, result)
     if status == "accept" then

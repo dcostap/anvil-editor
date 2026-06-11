@@ -33,13 +33,18 @@ local function project_key()
   return project and project.path or "default"
 end
 
-local function is_protected_doc(doc)
-  if not doc or not doc.abs_filename then return false end
+local function is_protected_path(path)
+  if not path then return false end
   local init_path = system.absolute_path(USERDIR .. PATHSEP .. "init.lua")
   local project_file = core.project_absolute_path and core.project_absolute_path(".anvil_project.lua")
     or system.absolute_path(".anvil_project.lua")
-  return common.path_equals(doc.abs_filename, init_path)
-      or common.path_equals(doc.abs_filename, project_file)
+  return common.path_equals(path, init_path)
+      or common.path_equals(path, project_file)
+end
+
+local function is_protected_doc(doc)
+  if not doc or not doc.abs_filename then return false end
+  return is_protected_path(doc.abs_filename)
 end
 
 local function is_untitled_doc(doc)
@@ -445,6 +450,25 @@ local function save_doc(doc, reason)
   return false, err
 end
 
+local function should_autosave_native_view(view)
+  if not (core.is_native_editor_view and core.is_native_editor_view(view)) then return false end
+  if not core.view_is_dirty(view) then return false end
+  local path = core.view_file_path(view)
+  return path and not is_protected_path(path)
+end
+
+local function save_native_view(view, reason)
+  if not (core.save_native_editor_view and should_autosave_native_view(view)) then return false end
+  local path = core.view_file_path(view)
+  local ok, saved = pcall(core.save_native_editor_view, view)
+  if ok and saved then
+    core.log_quiet("Autosaved native Buffer \"%s\"%s", path, reason and (" (" .. reason .. ")") or "")
+    return true
+  end
+  if not ok then core.error("Autosave failed for native Buffer %s: %s", path or "document", saved) end
+  return false
+end
+
 function autosave_fast.save_all_dirty(reason)
   -- Include docs dirtied by commands/plugins that may not route through
   -- Doc:on_text_change after this plugin was loaded.
@@ -457,6 +481,16 @@ function autosave_fast.save_all_dirty(reason)
   local saved = 0
   for doc in pairs(dirty_docs) do
     if save_doc(doc, reason) then saved = saved + 1 end
+  end
+
+  local root = core.root_panel and core.root_panel.root_node
+  local seen_buffers = {}
+  for _, view in ipairs(root and root:get_children() or {}) do
+    local buffer = view.buffer
+    if buffer and not seen_buffers[buffer] and save_native_view(view, reason) then
+      seen_buffers[buffer] = true
+      saved = saved + 1
+    end
   end
   return saved
 end

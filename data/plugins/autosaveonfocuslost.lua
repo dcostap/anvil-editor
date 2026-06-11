@@ -13,13 +13,18 @@ end
 
 local on_focus_lost = RootPanel.on_focus_lost
 
-local function is_protected_doc(doc)
-  if not doc or not doc.abs_filename then return false end
+local function is_protected_path(path)
+  if not path then return false end
   local init_path = system.absolute_path(USERDIR .. PATHSEP .. "init.lua")
   local project_file = core.project_absolute_path and core.project_absolute_path(".anvil_project.lua")
     or system.absolute_path(".anvil_project.lua")
-  return common.path_equals(doc.abs_filename, init_path)
-      or common.path_equals(doc.abs_filename, project_file)
+  return common.path_equals(path, init_path)
+      or common.path_equals(path, project_file)
+end
+
+local function is_protected_doc(doc)
+  if not doc or not doc.abs_filename then return false end
+  return is_protected_path(doc.abs_filename)
 end
 
 local function save_node_fallback(node)
@@ -35,6 +40,17 @@ local function save_node_fallback(node)
           core.log_quiet("Saved doc \"%s\"", view.doc.filename)
         elseif not tostring(err):find("file changed on disk", 1, true) then
           core.error("Couldn't save file \"%s\": %s", view.doc.filename, err)
+        end
+      elseif core.is_native_editor_view and core.is_native_editor_view(view)
+          and core.view_is_dirty(view) and core.view_file_path(view)
+          and not is_protected_path(core.view_file_path(view))
+          and core.save_native_editor_view then
+        local path = core.view_file_path(view)
+        local ok, saved = pcall(core.save_native_editor_view, view)
+        if ok and saved then
+          core.log_quiet("Saved native Buffer \"%s\"", path)
+        elseif not ok then
+          core.error("Couldn't save native Buffer \"%s\": %s", path, saved)
         end
       end
       i = i + 1

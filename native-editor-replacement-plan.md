@@ -250,6 +250,7 @@ Important status:
 - Side/main panel file-opening and IntelliJ-style navigation history restore through `core.open_file` / generic selection so native default-open applies there too.
 - User/project module opens and native-editor file dialog accepts now route through `core.open_file`, preserving default native routing and non-text special cases.
 - Native default-open now covers missing files and unnamed scratch buffers: new named files open as dirty native Buffers, and `core:new-doc` opens a native scratch Buffer while native default-open is enabled.
+- Autosave focus/idle paths can save dirty native editor Buffers through `core.save_native_editor_view`, while preserving protected-file exclusions.
 - Workspace save/restore now has runtime coverage for native editor views in split layouts.
 
 ## Current strategic direction
@@ -442,7 +443,7 @@ This is the working inventory for native-editor migration. Keep it current as pl
 | `workspace.lua` | generic view state; no text internals | keep in Lua as app-shell behavior, port state coverage to native capabilities | Native sandbox now has `get_state` / `from_state`; real workspace restore still needs default editor integration. |
 | `core/commands/doc.lua`, `core/commands/findreplace.lua` | heavy `Doc.lines`, old selections, tokenizer/highlighter, `DocView` predicates | port to native capabilities, then delete old command path | Native command coverage should replace behavior command-by-command, not adapt `Doc.lines`. |
 | `autoreload.lua` | `core.docs`, `Doc` dirty/reload lifecycle | keep and port to native lifecycle capabilities | Native sandbox has local external reload handling; final path should centralize file signatures/reload prompts. |
-| `autosave_fast.lua`, `autosaveonfocuslost.lua` | `DocView`, `view.doc`, `doc:save` | keep and port to native save lifecycle capabilities | App orchestration can stay Lua; dirty/save state must be native Buffer-owned. |
+| `autosave_fast.lua`, `autosaveonfocuslost.lua` | historically `DocView`, `view.doc`, `doc:save`; now also uses generic/native save helpers | keep in Lua as app-shell save orchestration | Native Buffers are saved through `core.save_native_editor_view`; dirty/save state remains native Buffer-owned. |
 | `search_ui.lua`, `intellij_find.lua` | current search commands route through old docs/selections | keep UI in Lua, port to native search/replace capabilities | Native literal find/replace exists; regex/search result decorations remain future native capabilities. |
 | `gitdiff_highlight/` | `Doc.lines`, text-change hooks, `DocView`/scrollbar/gutter monkey-patching | keep Lua git orchestration; port rendering/state to native decoration layer | Model example for generic native decorations. Archive old renderer when native decoration path exists. |
 | `bracketmatch.lua` | `DocView` patching, `doc.highlighter`, `doc.lines`, old selections | port to native decorations, probably Tree-sitter-aware | Should become native editor feature or native decoration producer; do not preserve tokenizer dependency. |

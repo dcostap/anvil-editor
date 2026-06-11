@@ -441,6 +441,30 @@ test.describe("native_text API bridge", function()
     os.remove(path)
   end)
 
+  test.it("autosaves dirty native editor Buffers", function()
+    require "plugins.native_editor"
+    local autosave_fast = require "plugins.autosave_fast"
+    test.skip_if(autosave_fast.enabled == false, "autosave_fast disabled")
+    local path = tmp_file("native-editor-autosave")
+    local fp = assert(io.open(path, "wb"))
+    fp:write("abc")
+    fp:close()
+
+    local view = core.open_native_editor_file(path)
+    view.editor:set_cursor(3)
+    view.editor:insert("d")
+    test.ok(core.view_is_dirty(view))
+    test.ok(autosave_fast.save_all_dirty("native test") >= 1)
+    test.not_ok(core.view_is_dirty(view))
+    fp = assert(io.open(path, "rb"))
+    test.equal(fp:read("*a"), "abcd")
+    fp:close()
+
+    local node = core.root_panel.root_node:get_node_for_view(view)
+    if node then node:close_view(core.root_panel.root_node, view) end
+    os.remove(path)
+  end)
+
   test.it("routes core.open_file through native editor when default-open is enabled", function()
     require "plugins.native_editor"
     local path = tmp_file("native-editor-default-open")
