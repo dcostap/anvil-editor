@@ -243,6 +243,7 @@ Important status:
 - Root close-all / close-all-others now use view-level dirty confirmation so native editor views are included in unsaved-change prompts, including the `core.file_context` close-all-others override.
 - Fuzzy searcher accepted file/grep results can set cursor/selection in native editor views opened by native default-open.
 - Generic `core.set_view_selection` supports both old DocViews and native editor views; find-file and project-search result navigation use it for native editor compatibility.
+- Edit-location history records native editor edits and restores native editor file positions through the default open path.
 - Workspace save/restore now has runtime coverage for native editor views in split layouts.
 
 ## Current strategic direction

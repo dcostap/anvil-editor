@@ -462,6 +462,7 @@ function NativeEditorView:on_text_input(text)
   if text and text ~= "" then
     self.editor:insert(text)
     self:note_tree_sitter_mutation()
+    if core.record_native_edit_location then core.record_native_edit_location(self) end
     self:scroll_to_cursor()
     core.redraw = true
   end
@@ -587,7 +588,10 @@ local function with_active_native_view(fn, affects_text)
     view = view or core.active_view
     if is_native_editor_view(view) then
       fn(view)
-      if affects_text then view:note_tree_sitter_mutation() end
+      if affects_text then
+        view:note_tree_sitter_mutation()
+        if core.record_native_edit_location then core.record_native_edit_location(view) end
+      end
       view:scroll_to_cursor()
       core.redraw = true
     end

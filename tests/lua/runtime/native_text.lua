@@ -339,6 +339,43 @@ test.describe("native_text API bridge", function()
     os.remove(path)
   end)
 
+  test.it("records and restores native editor edit locations", function()
+    require "plugins.native_editor"
+    require "plugins.edit_location_history"
+    local path_a = tmp_file("native-edit-location-a")
+    local path_b = tmp_file("native-edit-location-b")
+    local fp = assert(io.open(path_a, "wb"))
+    fp:write("alpha")
+    fp:close()
+    fp = assert(io.open(path_b, "wb"))
+    fp:write("beta")
+    fp:close()
+
+    local view_a = core.open_native_editor_file(path_a)
+    local view_b = core.open_native_editor_file(path_b)
+    local original_active_view = core.active_view
+    local ok, err = pcall(function()
+      core.active_view = view_a
+      view_a.editor:set_cursor(2)
+      core.record_native_edit_location(view_a)
+      core.active_view = view_b
+      view_b.editor:set_cursor(4)
+      core.record_native_edit_location(view_b)
+
+      test.ok(command.perform("user:navigate-last-edit-location"))
+      test.ok(common.path_equals(core.view_file_path(core.active_view), path_a))
+      test.same(core.active_view.editor:cursor(1), { cursor = 2, selection = 2 })
+    end)
+    core.active_view = original_active_view
+    for _, view in ipairs({ view_a, view_b }) do
+      local node = core.root_panel.root_node:get_node_for_view(view)
+      if node then node:close_view(core.root_panel.root_node, view) end
+    end
+    os.remove(path_a)
+    os.remove(path_b)
+    if not ok then error(err) end
+  end)
+
   test.it("releases native file Buffer registry entries when force-closing all views", function()
     require "plugins.native_editor"
     local path = tmp_file("native-editor-close-all-release")

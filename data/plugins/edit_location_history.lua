@@ -102,10 +102,27 @@ local function make_place(doc)
   }
 end
 
+local function make_view_place(view)
+  if not view then return nil end
+  if view.doc then return make_place(view.doc) end
+  if core.is_native_editor_view and core.is_native_editor_view(view) then
+    local cursor = view.editor:cursor()
+    local lc = view.buffer:offset_to_line_col(cursor.cursor or 0)
+    local filename = core.view_file_path and core.view_file_path(view)
+    if not (lc and filename) then return nil end
+    return {
+      native_editor = true,
+      filename = common.normalize_path(filename),
+      line = lc.line + 1,
+      col = lc.col + 1,
+      scroll_x = view.scroll and view.scroll.to.x or 0,
+      scroll_y = view.scroll and view.scroll.to.y or 0,
+    }
+  end
+end
+
 local function current_place()
-  local view = core.active_view
-  local doc = view and view.doc
-  return make_place(doc)
+  return make_view_place(core.active_view)
 end
 
 local function same_file_or_doc(a, b)
@@ -193,27 +210,36 @@ local function ensure_flush_thread()
   end)
 end
 
-local function mark_doc_edited(doc)
-  if suppress_recording then debug_log("skip mark suppressed %s", tostring(doc)); return end
-  if not is_real_editor_doc(doc) then debug_log("skip mark non-editor %s", tostring(doc)); return end
-
-  local place = make_place(doc)
+local function mark_place_edited(place, owner)
+  if suppress_recording then debug_log("skip mark suppressed %s", tostring(owner)); return end
   if not place then return end
-  local pending = pending_places[doc]
+  local pending = pending_places[owner]
   if pending and same_file_or_doc(pending, place)
      and math.abs((pending.line or 1) - (place.line or 1)) >= M.merge_line_distance
   then
     debug_log("far edit: flush pending %s before new %s", place_label(pending), place_label(place))
     append_place(pending)
-    pending_docs[doc] = nil
-    pending_places[doc] = nil
+    pending_docs[owner] = nil
+    pending_places[owner] = nil
   end
 
   debug_log("mark edited %s", place_label(place))
-  pending_docs[doc] = true
-  pending_places[doc] = place
+  pending_docs[owner] = true
+  pending_places[owner] = place
   pending_last_edit_time = system.get_time()
   ensure_flush_thread()
+end
+
+local function mark_doc_edited(doc)
+  if not is_real_editor_doc(doc) then debug_log("skip mark non-editor %s", tostring(doc)); return end
+
+  local place = make_place(doc)
+  mark_place_edited(place, doc)
+end
+
+function core.record_native_edit_location(view)
+  if not (core.is_native_editor_view and core.is_native_editor_view(view)) then return end
+  mark_place_edited(make_view_place(view), view.buffer or view)
 end
 
 function Doc:insert(...)
@@ -233,16 +259,14 @@ local function restore_place(place)
   if not place_valid(place) then debug_log("restore invalid %s", place_label(place)); return false end
   suppress_recording = true
   local ok, err = pcall(function()
-    local doc = place.doc
     local view
     if place.filename then
-      doc = core.open_doc(place.filename)
-      view = core.root_panel:open_doc(doc)
-    elseif doc then
-      view = core.root_panel:open_doc(doc)
+      view = core.open_file(place.filename)
+    elseif place.doc then
+      view = core.root_panel:open_doc(place.doc)
     end
-    if not doc or not view then return end
-    doc:set_selection(place.line, place.col, place.line, place.col)
+    if not view then return end
+    if core.set_view_selection then core.set_view_selection(view, place.line, place.col, place.line, place.col) end
     if view.scroll then
       view.scroll.to.x, view.scroll.x = place.scroll_x or 0, place.scroll_x or 0
       view.scroll.to.y, view.scroll.y = place.scroll_y or 0, place.scroll_y or 0
