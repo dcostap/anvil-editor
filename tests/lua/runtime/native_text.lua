@@ -339,6 +339,25 @@ test.describe("native_text API bridge", function()
     os.remove(path)
   end)
 
+  test.it("releases native file Buffer registry entries when force-closing all views", function()
+    require "plugins.native_editor"
+    local path = tmp_file("native-editor-close-all-release")
+    local fp = assert(io.open(path, "wb"))
+    fp:write("abc")
+    fp:close()
+
+    local view = core.open_native_editor_file(path)
+    local original_buffer = view.buffer
+    core.root_panel:close_all_views()
+    local absolute = system.absolute_path(path) or path
+    local key = common.path_compare_key(absolute)
+    local buffer, reused = native_text.open_file_buffer(path, key)
+    test.not_equal(buffer, original_buffer)
+    test.not_ok(reused)
+    native_text.release_file_buffer(key, buffer)
+    os.remove(path)
+  end)
+
   test.it("routes core.open_file through native editor when default-open is enabled", function()
     require "plugins.native_editor"
     local path = tmp_file("native-editor-default-open")

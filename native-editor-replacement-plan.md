@@ -230,6 +230,7 @@ Implemented:
 - Canonical workspace/plugin module name `plugins.native_editor`; old `plugins.native_text_sandbox` is kept as a transition module alias.
 - Generic core helpers for file-backed views (`core.view_file_path`, `core.view_is_dirty`) now understand native editor Buffers as well as old DocViews.
 - Generic close confirmation (`core.confirm_close_views`) can prompt for dirty native editor Buffers, and root close-all commands use it instead of assuming all dirty state lives in `core.docs`.
+- Forced view-tree close paths call view close hooks so native file Buffer registry entries are released when native editor views are removed by close-all/project-switch flows.
 
 Important status:
 

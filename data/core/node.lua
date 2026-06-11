@@ -39,6 +39,10 @@ local Tabs = require "core.tabs"
 ---@field move_towards function
 local Node = Object:extend()
 
+local function close_removed_view(view)
+  if view and type(view.on_close) == "function" then view:on_close() end
+end
+
 local function new_tab_bar(owner)
   return Tabs(owner, {
     should_show = function(node) return node:should_show_tabs() end,
@@ -777,6 +781,7 @@ function Node:close_all_views(keep_view)
     while i <= #self.views do
       local view = self.views[i]
       if view ~= keep_view then
+        close_removed_view(view)
         table.remove(self.views, i)
         if view == node_active_view then
           lost_active_view = true
@@ -813,6 +818,7 @@ function Node:close_all_docviews(keep_active)
     while i <= #self.views do
       local view = self.views[i]
       if (view.context == "workspace" or view.context == "session") and (not keep_active or view ~= self.active_view) then
+        close_removed_view(view)
         table.remove(self.views, i)
         if view == node_active_view then
           lost_active_view = true

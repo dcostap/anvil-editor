@@ -16,6 +16,7 @@ local save_native_view_as
 local save_existing_native_view
 local last_find_text
 local close_native_view
+local find_open_native_text_buffer
 
 local function native_file_identity(filename)
   if type(filename) ~= "string" or filename == "" then return nil end
@@ -169,6 +170,13 @@ function NativeEditorView:get_filename()
     return common.home_encode(path) .. (self.buffer:is_dirty() and "*" or "")
   end
   return self:get_name()
+end
+
+function NativeEditorView:on_close()
+  if self.buffer_identity_key and not find_open_native_text_buffer(self.buffer, self) then
+    native_text.release_file_buffer(self.buffer_identity_key, self.buffer)
+    self.buffer_identity_key = nil
+  end
 end
 
 function NativeEditorView:try_close(do_close)
@@ -822,11 +830,11 @@ local function find_open_native_text_file(filename)
   end
 end
 
-local function find_open_native_text_buffer(buffer, excluded_view)
+function find_open_native_text_buffer(buffer, excluded_view)
   local root = core.root_panel and core.root_panel.root_node
   if not root or not buffer then return nil end
   for _, view in ipairs(root:get_children()) do
-    if view ~= excluded_view and view:is(NativeEditorView) and view.buffer == buffer then
+    if view ~= excluded_view and is_native_editor_view(view) and view.buffer == buffer then
       return view
     end
   end
