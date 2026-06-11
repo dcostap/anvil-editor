@@ -995,7 +995,7 @@ end)
 ipc:register_method("core.open_file", function(file)
   if system.get_file_info(file) then
     system.raise_window(core.window)
-    core.root_panel:open_doc(core.open_doc(file))
+    core.open_file(file)
   end
 end, {{name = "file", type = "string"}})
 
@@ -1036,11 +1036,10 @@ function RootPanel:on_mouse_moved(x, y, dx, dy)
     and
     not rootpanel_tab_dragging
   then
-    ---@type core.doc
-    local doc = core.active_view.doc
-    if doc and doc.abs_filename then
+    local path = core.view_file_path and core.view_file_path(core.active_view)
+    if path then
       rootpanel_tab_dragging = true
-      ipc:signal(nil, "core.tab_drag_start", doc.abs_filename)
+      ipc:signal(nil, "core.tab_drag_start", path)
       rootpanel_dragged_node = self.dragged_node
     end
   elseif rootpanel_dragged_node then
@@ -1059,7 +1058,7 @@ function RootPanel:on_mouse_moved(x, y, dx, dy)
       "core.tab_drag_received",
       rootpanel_waiting_drop_file
     )
-    core.root_panel:open_doc(core.open_doc(rootpanel_waiting_drop_file))
+    core.open_file(rootpanel_waiting_drop_file)
     rootpanel_waiting_drop_file = ""
     rootpanel_waiting_drop_instance = ""
   end

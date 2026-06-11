@@ -245,6 +245,7 @@ Important status:
 - Generic `core.set_view_selection` supports both old DocViews and native editor views; find-file and project-search result navigation use it for native editor compatibility.
 - Edit-location history records native editor edits and restores native editor file positions through the default open path.
 - First-party default keymap fallbacks now prefer native editor find/replace/save/go-to-line commands while preserving old DocView command fallback.
+- IPC open-file and tab-drag handoff paths route through generic file-backed views / `core.open_file`, so native editor default-open applies across single-instance and drag/drop flows.
 - Workspace save/restore now has runtime coverage for native editor views in split layouts.
 
 ## Current strategic direction
