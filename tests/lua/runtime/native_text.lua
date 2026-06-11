@@ -519,6 +519,21 @@ test.describe("native_text API bridge", function()
     os.remove(path)
   end)
 
+  test.it("registers DocView-like native editor status bar items", function()
+    require "plugins.native_editor"
+    local status_bar = core.status_bar
+    test.ok(status_bar:get_item("native:file"))
+    test.ok(status_bar:get_item("native:position"))
+    test.ok(status_bar:get_item("native:carets"))
+    test.ok(status_bar:get_item("native:selected-chars"))
+    test.ok(status_bar:get_item("native:selected-lines"))
+    test.ok(status_bar:get_item("native:position-percent"))
+    test.ok(status_bar:get_item("native:indentation"))
+    test.ok(status_bar:get_item("native:lines"))
+    test.ok(status_bar:get_item("native:encoding"))
+    test.ok(status_bar:get_item("native:line-ending"))
+  end)
+
   test.it("routes deferred file drops through native editor default-open", function()
     require "plugins.native_editor"
     local path = tmp_file("native-editor-file-drop")

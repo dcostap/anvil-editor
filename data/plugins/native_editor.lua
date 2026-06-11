@@ -1329,43 +1329,225 @@ local native_editor_global_commands = {
 command.add(nil, native_editor_global_commands)
 add_native_editor_legacy_aliases(native_editor_global_commands)
 
+local function statusbar_font()
+  return style.get_small_font(style.font)
+end
+
+local function plural_suffix(count)
+  return count == 1 and "" or "s"
+end
+
+local function draw_reserved_status_text(text, reserved_text, x, y, h, calc_only)
+  local font = statusbar_font()
+  local w = font:get_width(reserved_text)
+  if not calc_only and text ~= "" then
+    renderer.draw_text(font, text, x, y + math.floor((h - font:get_height()) / 2), style.text)
+  end
+  return w
+end
+
+local function draw_reserved_count_label(count, label, reserved_label, x, y, h, calc_only)
+  local font = statusbar_font()
+  local number_width = font:get_width("9999")
+  local w = number_width + font:get_width(reserved_label)
+  if not calc_only then
+    local ty = y + math.floor((h - font:get_height()) / 2)
+    local number = tostring(count)
+    renderer.draw_text(font, number, x + number_width - font:get_width(number), ty, style.text)
+    renderer.draw_text(font, label, x + number_width, ty, style.text)
+  end
+  return w
+end
+
+local function native_selection_counts(view)
+  local carets = view.editor:cursor_count()
+  local chars = 0
+  local selected_lines = 0
+  local seen_lines = {}
+  for i = 1, carets do
+    local cursor = view.editor:cursor(i)
+    if view:cursor_has_selection(cursor) then
+      local first = math.min(cursor.cursor, cursor.selection)
+      local last = math.max(cursor.cursor, cursor.selection)
+      local first_lc = view.buffer:offset_to_line_col(first)
+      local last_lc = view.buffer:offset_to_line_col(last)
+      if first_lc and last_lc then
+        if first_lc.line == last_lc.line then
+          chars = chars + math.max(0, last_lc.col - first_lc.col)
+        else
+          chars = chars + math.max(0, #view:get_line_text(first_lc.line) - first_lc.col)
+          for line = first_lc.line + 1, last_lc.line - 1 do
+            chars = chars + #view:get_line_text(line)
+          end
+          chars = chars + math.max(0, last_lc.col)
+        end
+        for line = first_lc.line, last_lc.line do
+          if not seen_lines[line] then
+            seen_lines[line] = true
+            selected_lines = selected_lines + 1
+          end
+        end
+      end
+    end
+  end
+  return carets, chars, selected_lines
+end
+
 local function register_statusbar_items()
   if not core.status_bar then return end
-  if not core.status_bar:get_item("native-text:file") then
-    core.status_bar:add_item({
-      predicate = NativeEditorView,
-      name = "native-text:file",
-      alignment = StatusBar.Item.LEFT,
-      get_item = function()
-        local view = core.active_view
-        local path = view.buffer:path()
-        return { path and style.text or style.dim, path and common.home_encode(path) or "Native Editor" }
-      end,
-    })
+  for _, name in ipairs { "native-text:file", "native-text:position", "native-text:line-ending" } do
+    if core.status_bar:get_item(name) then core.status_bar:remove_item(name) end
   end
-  if not core.status_bar:get_item("native-text:position") then
-    core.status_bar:add_item({
-      predicate = NativeEditorView,
-      name = "native-text:position",
-      alignment = StatusBar.Item.LEFT,
-      get_item = function()
-        local view = core.active_view
-        local line, col = view:cursor_line_col()
-        return { style.text, string.format("%d:%d", line + 1, col + 1) }
-      end,
-    })
-  end
-  if not core.status_bar:get_item("native-text:line-ending") then
-    core.status_bar:add_item({
-      predicate = NativeEditorView,
-      name = "native-text:line-ending",
-      alignment = StatusBar.Item.RIGHT,
-      get_item = function()
-        local view = core.active_view
-        return { style.text, view.buffer:line_ending_mode():upper() }
-      end,
-    })
-  end
+
+  if core.status_bar:get_item("native:file") then return end
+
+  core.status_bar:add_item({
+    predicate = NativeEditorView,
+    name = "native:file",
+    alignment = StatusBar.Item.LEFT,
+    get_item = function()
+      local view = core.active_view
+      local path = view.buffer:path()
+      local filename
+      if #core.projects > 1 and path then
+        local project, is_open, belongs = core.current_project(path)
+        if project and is_open and belongs then
+          filename = {
+            style.accent,
+            common.basename(project.path),
+            style.text,
+            PATHSEP .. common.relative_path(project.path, path)
+          }
+        end
+      end
+      if not filename then
+        filename = { path and style.text or style.dim, path and common.home_encode(path) or "Native Editor" }
+      end
+      return { table.unpack(filename) }
+    end
+  })
+
+  core.status_bar:add_item({
+    predicate = NativeEditorView,
+    name = "native:position",
+    alignment = StatusBar.Item.LEFT,
+    get_item = {},
+    on_draw = function(x, y, h, _, calc_only)
+      local view = core.active_view
+      local line, col = view:cursor_line_col()
+      line, col = line + 1, col + 1
+      local font = statusbar_font()
+      local line_width = font:get_width("9999")
+      local colon_width = font:get_width(":")
+      local col_width = font:get_width("9999")
+      local w = line_width + colon_width + col_width
+      if not calc_only then
+        local ty = y + math.floor((h - font:get_height()) / 2)
+        local line_text = tostring(line)
+        local col_text = tostring(col)
+        renderer.draw_text(font, line_text, x + line_width - font:get_width(line_text), ty, style.text)
+        renderer.draw_text(font, ":", x + line_width, ty, style.text)
+        renderer.draw_text(font, col_text, x + line_width + colon_width, ty, col > config.line_limit and style.accent or style.text)
+      end
+      return w
+    end,
+    command = "native-editor:go-to-line",
+    tooltip = "line : column"
+  })
+
+  core.status_bar:add_item({
+    predicate = NativeEditorView,
+    name = "native:carets",
+    alignment = StatusBar.Item.LEFT,
+    position = 3,
+    get_item = {},
+    on_draw = function(x, y, h, _, calc_only)
+      local carets = native_selection_counts(core.active_view)
+      local label = string.format(" caret%s", plural_suffix(carets))
+      return draw_reserved_count_label(carets, label, " carets", x, y, h, calc_only)
+    end
+  })
+
+  core.status_bar:add_item({
+    predicate = NativeEditorView,
+    name = "native:selected-chars",
+    alignment = StatusBar.Item.LEFT,
+    position = 4,
+    get_item = {},
+    on_draw = function(x, y, h, _, calc_only)
+      local _, chars = native_selection_counts(core.active_view)
+      if chars <= 0 then return draw_reserved_status_text("", "9999 chars selected", x, y, h, calc_only) end
+      local label = string.format(" char%s selected", plural_suffix(chars))
+      return draw_reserved_count_label(chars, label, " chars selected", x, y, h, calc_only)
+    end
+  })
+
+  core.status_bar:add_item({
+    predicate = NativeEditorView,
+    name = "native:selected-lines",
+    alignment = StatusBar.Item.LEFT,
+    position = 5,
+    get_item = {},
+    on_draw = function(x, y, h, _, calc_only)
+      local _, _, selected_lines = native_selection_counts(core.active_view)
+      if selected_lines <= 0 then return draw_reserved_status_text("", "9999 lines selected", x, y, h, calc_only) end
+      local label = string.format(" line%s selected", plural_suffix(selected_lines))
+      return draw_reserved_count_label(selected_lines, label, " lines selected", x, y, h, calc_only)
+    end
+  })
+
+  core.status_bar:add_item({
+    predicate = NativeEditorView,
+    name = "native:position-percent",
+    alignment = StatusBar.Item.LEFT,
+    get_item = function()
+      local view = core.active_view
+      local line = view:cursor_line_col() + 1
+      return { string.format("%.f%%", line / math.max(1, view.buffer:line_count()) * 100) }
+    end,
+    tooltip = "caret position"
+  })
+
+  core.status_bar:add_item({
+    predicate = NativeEditorView,
+    name = "native:indentation",
+    alignment = StatusBar.Item.RIGHT,
+    get_item = function()
+      local indent_label = (config.tab_type == "hard") and "tabs: " or "spaces: "
+      return { style.text, indent_label, config.indent_size }
+    end,
+    separator = core.status_bar.separator2
+  })
+
+  core.status_bar:add_item({
+    predicate = NativeEditorView,
+    name = "native:lines",
+    alignment = StatusBar.Item.RIGHT,
+    get_item = function()
+      return { style.text, core.active_view.buffer:line_count(), " lines" }
+    end,
+    separator = core.status_bar.separator2
+  })
+
+  core.status_bar:add_item({
+    predicate = NativeEditorView,
+    name = "native:encoding",
+    alignment = StatusBar.Item.RIGHT,
+    get_item = function()
+      return { style.text, "none" }
+    end,
+    tooltip = "encoding"
+  })
+
+  core.status_bar:add_item({
+    predicate = NativeEditorView,
+    name = "native:line-ending",
+    alignment = StatusBar.Item.RIGHT,
+    get_item = function()
+      return { style.text, core.active_view.buffer:line_ending_mode():upper() }
+    end,
+    command = "native-editor:toggle-line-ending"
+  })
 end
 
 register_statusbar_items()
