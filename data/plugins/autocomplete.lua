@@ -515,7 +515,7 @@ local function update_suggestions()
 end
 
 local function get_active_view()
-  if core.active_view:is(DocView) then
+  if core.active_view and core.active_view:is(DocView) then
     return core.active_view
   end
 end

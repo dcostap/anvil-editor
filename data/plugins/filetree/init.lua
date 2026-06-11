@@ -3064,7 +3064,7 @@ command.add(nil, {
   end,
 })
 
-command.add(function() return core.active_view:is(FileTreeView) end, {
+command.add(function() return core.active_view and core.active_view:is(FileTreeView) end, {
   ["filetree:refresh"] = function()
     view:refresh_preserving_selection_paths(true)
   end,

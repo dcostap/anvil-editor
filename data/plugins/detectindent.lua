@@ -399,7 +399,7 @@ command.add("core.docview", {
 
 command.add(
   function()
-    return core.active_view:is(DocView)
+    return core.active_view and core.active_view:is(DocView)
       and cache[core.active_view.doc]
       and cache[core.active_view.doc].type == "soft"
   end, {
@@ -410,7 +410,7 @@ command.add(
 
 command.add(
   function()
-    return core.active_view:is(DocView)
+    return core.active_view and core.active_view:is(DocView)
       and cache[core.active_view.doc]
       and cache[core.active_view.doc].type == "hard"
   end, {

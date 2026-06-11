@@ -869,7 +869,7 @@ end
 --------------------------------------------------------------------------------
 command.add(
   function()
-    if core.active_view:is(DocView) then
+    if core.active_view and core.active_view:is(DocView) then
       return true, core.active_view
     elseif ui:is_visible() then
       return true, doc_view
@@ -887,7 +887,7 @@ command.add(
   }
 )
 
-command.add(function() return ui:is_visible() and not core.active_view:is(GlobalPromptBar) end, {
+command.add(function() return ui:is_visible() and not (core.active_view and core.active_view:is(GlobalPromptBar)) end, {
   ["search-replace:hide"] = function()
     ui:swap_active_child()
     if config.plugins.search_ui.position == "right" then
@@ -938,7 +938,7 @@ command.add(
     local active = ui.child_active == findtext and findtext or replacetext
     local valid = ui:is_visible()
       and
-      not core.active_view:is(GlobalPromptBar)
+      not (core.active_view and core.active_view:is(GlobalPromptBar))
       and
       (
         ui.child_active == active
