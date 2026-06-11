@@ -226,6 +226,13 @@ if core.fuzzy_searcher_install_global_keymaps then
   core.fuzzy_searcher_install_global_keymaps()
 end
 keymap.add_direct({
+  ["ctrl+f"] = { "native-editor:find", "find-replace:find" },
+  ["ctrl+r"] = { "native-editor:replace", "find-replace:replace" },
+  ["ctrl+shift+r"] = { "native-editor:replace-all", "find-replace:replace-in-selection" },
+  ["f3"] = { "native-editor:find-next", "find-replace:repeat-find" },
+  ["shift+f3"] = { "native-editor:find-previous", "find-replace:previous-find" },
+  ["ctrl+s"] = { "native-editor:save", "doc:save" },
+  ["ctrl+shift+s"] = { "native-editor:save-as", "doc:save-as" },
   ["ctrl+shift+d"] = { "native-editor:go-to-line", "doc:go-to-line" },
   ["ctrl+shift+D"] = { "native-editor:go-to-line", "doc:go-to-line" },
 })
