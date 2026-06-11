@@ -286,17 +286,14 @@ command.add(nil, {
   end,
 
   ["core:open-user-module"] = function()
-    local user_module_doc = core.open_doc(USERDIR .. "/init.lua")
-    if not user_module_doc then return end
-    core.root_panel:open_doc(user_module_doc)
+    core.open_file(USERDIR .. "/init.lua")
   end,
 
   ["core:open-project-module"] = function()
     if not system.get_file_info(".anvil_project.lua") then
       core.try(core.write_init_project_module, ".anvil_project.lua")
     end
-    local doc = core.open_doc(".anvil_project.lua")
-    core.root_panel:open_doc(doc)
+    core.open_file(".anvil_project.lua")
   end,
 
   ["core:change-project-folder"] = function()

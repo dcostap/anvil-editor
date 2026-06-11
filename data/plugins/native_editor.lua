@@ -942,7 +942,7 @@ local native_editor_global_commands = {
   ["native-editor:open-file"] = function()
     core.open_file_dialog(core.window, function(status, result)
       if status == "accept" then
-        for _, filename in ipairs(result) do core.open_native_editor_file(filename) end
+        for _, filename in ipairs(result) do core.open_file(filename) end
       elseif status == "error" then
         core.error("Error while opening native text dialog: %s", result or "")
       end
