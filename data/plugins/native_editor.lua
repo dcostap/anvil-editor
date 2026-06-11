@@ -567,6 +567,15 @@ function NativeEditorView:draw_content_left_edge()
   renderer.draw_rect(x, self.position.y, edge_w, self.size.y, style.docview_content_left_edge or style.whitespace or style.divider)
 end
 
+function NativeEditorView:get_line_highlight_rect(x, y)
+  return self.position.x, y, self.size.x, self:get_line_height()
+end
+
+function NativeEditorView:draw_line_highlight(x, y)
+  local rx, ry, rw, rh = self:get_line_highlight_rect(x, y)
+  renderer.draw_rect(rx, ry, rw, rh, style.line_highlight)
+end
+
 function NativeEditorView:draw_current_line_highlights()
   if core.active_view ~= self or config.highlight_current_line == false then return end
   if config.highlight_current_line == "no_selection" and self:has_selection() then return end
@@ -576,11 +585,27 @@ function NativeEditorView:draw_current_line_highlights()
     local line = self:cursor_line_col(self.editor:cursor(i).cursor or 0)
     if not seen[line] then
       local y = self.position.y + style.padding.y - self.scroll.y + line * lh
-      renderer.draw_rect(self.position.x, y, self.size.x, lh, style.line_highlight)
+      self:draw_line_highlight(self.position.x, y)
       seen[line] = true
     end
   end
   self:draw_content_left_edge()
+end
+
+function NativeEditorView:draw_line_gutter(line, x, y, width)
+  local lh = self:get_line_height()
+  if config.show_line_numbers then
+    local line_index = math.max(0, (line or 1) - 1)
+    local color = self:line_has_cursor_or_selection(line_index) and (style.line_number2 or style.line_number) or style.line_number
+    common.draw_text(self:get_font(), color, tostring(line), "right", x + style.padding.x, y + self:get_line_text_y_offset(), width - style.padding.x * 2, lh)
+  end
+  return lh
+end
+
+function NativeEditorView:draw_overlay()
+  for i = 1, self.editor:cursor_count() do
+    self:draw_caret_for_cursor(self.editor:cursor(i))
+  end
 end
 
 function NativeEditorView:draw_selection_for_cursor(cursor)
@@ -893,16 +918,11 @@ function NativeEditorView:draw()
   for _, line_info in ipairs(visible_lines) do
     local line = line_info.line
     local row_y = y + style.padding.y - self.scroll.y + line * lh
-    if config.show_line_numbers then
-      local color = self:line_has_cursor_or_selection(line) and (style.line_number2 or style.line_number) or style.line_number
-      common.draw_text(self:get_font(), color, tostring(line + 1), "right", x + style.padding.x, row_y + self:get_line_text_y_offset(), gutter_w - style.padding.x * 2, lh)
-    end
+    self:draw_line_gutter(line + 1, x, row_y, gutter_w)
     self:draw_line_text(line_info, row_y, highlights)
   end
 
-  for i = 1, self.editor:cursor_count() do
-    self:draw_caret_for_cursor(self.editor:cursor(i))
-  end
+  self:draw_overlay()
 
   core.pop_clip_rect()
   self:draw_scrollbar()
