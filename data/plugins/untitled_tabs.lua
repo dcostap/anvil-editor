@@ -3,6 +3,7 @@
 
 local core = require "core"
 local command = require "core.command"
+local config = require "core.config"
 local keymap = require "core.keymap"
 local common = require "core.common"
 local style = require "core.style"
@@ -392,21 +393,25 @@ local function create_empty_file(text)
 
   if not ensure_parent_directory_exists(abs) then return end
 
-  local doc = core.open_doc(normalized)
-  core.root_panel:open_doc(doc)
-  local ok, err = pcall(doc.save, doc, normalized, abs)
-  if ok then
-    command.perform("filetree:sync-path", abs)
-    core.log("Created \"%s\"", normalized)
-  else
-    core.error(err)
+  local fp, err = io.open(abs, "ab")
+  if not fp then
+    core.error("Cannot create file %q: %s", normalized, err or "unknown error")
+    return
   end
+  fp:close()
+  core.open_file(abs)
+  command.perform("filetree:sync-path", abs)
+  core.log("Created \"%s\"", normalized)
 end
 
 command.add(nil, {
   ["user:new-untitled-tab"] = function()
-    local doc = tag_doc(core.open_doc())
-    core.root_panel:open_doc(doc)
+    if core.open_native_editor_scratch and (config.plugins.native_editor or {}).default_open then
+      core.open_native_editor_scratch()
+    else
+      local doc = tag_doc(core.open_doc())
+      core.root_panel:open_doc(doc)
+    end
   end,
 
   ["user:new-file-with-path"] = function()

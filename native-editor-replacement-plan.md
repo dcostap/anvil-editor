@@ -253,6 +253,7 @@ Important status:
 - Autosave focus/idle paths can save dirty native editor Buffers through `core.save_native_editor_view`, while preserving protected-file exclusions.
 - Generic cursor-position helper (`core.view_cursor_position`) supports native editor views and is used by IntelliJ-style file/line copy and navigation history paths.
 - Project-folder switch confirmation now checks dirty views, not just dirty `Doc` objects, so dirty native editor Buffers participate in the same safety prompt.
+- First-party untitled/new-file commands now honor native default-open: untitled tabs become native scratch Buffers and explicit new-file creation opens through `core.open_file`.
 - Workspace save/restore now has runtime coverage for native editor views in split layouts.
 
 ## Current strategic direction
@@ -457,7 +458,7 @@ This is the working inventory for native-editor migration. Keep it current as pl
 | `language_*.lua` tokenizer plugins | tokenizer/highlighter definitions for old Lua highlighter | defer; port wanted languages to native Tree-sitter/grammar registry | C/C++ Tree-sitter exists. Avoid long-term tokenizer compatibility unless a specific first-party feature needs it. |
 | `filetree/`, `findfile.lua`, `fuzzy_searcher/`, `projectsearch.lua`, `command_slots.lua`, `contextmenu.lua`, `ipc.lua`, `settings.lua`, `performance_hud.lua`, `scale*.lua`, `custom_*`, `rootpickcolor.lua`, `macro.lua` | app/project/UI behavior; little or no `Doc.lines` dependence | keep in Lua as app-shell/customization behavior unless a hotspot appears | May need command-target adapters for native views, but not text-core owners. |
 | `edit_perf_stress.lua`, `selection_perf_stress.lua` | directly stresses old `DocView`/selection internals | deprecated/archived out of supported plugin load path | Moved to `data/deprecated/plugins/`; rewrite as native tests/tools only if this workflow is wanted again. |
-| `autorestart.lua`, `untitled_tabs.lua`, `global_prompt_bar_sanitize.lua` | small lifecycle/UI hooks, some `Doc` awareness | keep in Lua; port only the doc-specific edge if still wanted | Low migration risk. |
+| `autorestart.lua`, `untitled_tabs.lua`, `global_prompt_bar_sanitize.lua` | small lifecycle/UI hooks, some `Doc` awareness | keep in Lua; port only the doc-specific edge if still wanted | `untitled_tabs.lua` now routes native-default untitled/new-file creation through native scratch/default open paths. |
 
 ### Deprecated plugin archive policy
 
