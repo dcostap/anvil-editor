@@ -110,6 +110,13 @@ static int l_buffer_save_file(lua_State *L) {
   return 1;
 }
 
+static int l_buffer_set_path(lua_State *L) {
+  NativeTextBuffer *native = check_buffer(L, 1);
+  const char *path = luaL_checkstring(L, 2);
+  lua_pushboolean(L, buffer_set_path(&native->buffer, path));
+  return 1;
+}
+
 static int l_buffer_len(lua_State *L) {
   NativeTextBuffer *native = check_buffer(L, 1);
   lua_pushnumber(L, (lua_Number) buffer_len(&native->buffer));
@@ -761,6 +768,7 @@ static const luaL_Reg buffer_methods[] = {
   { "is_dirty", l_buffer_is_dirty },
   { "load_file", l_buffer_load_file },
   { "save_file", l_buffer_save_file },
+  { "set_path", l_buffer_set_path },
   { "len", l_buffer_len },
   { "text", l_buffer_text },
   { "line_count", l_buffer_line_count },

@@ -70,7 +70,10 @@ test.describe("native_text API bridge", function()
     test.ok(editor:set_cursor(2))
     test.ok(editor:insert("XX"))
     test.ok(buffer:is_dirty())
-    test.ok(buffer:save_file(saved))
+    test.ok(buffer:set_path(saved))
+    test.equal(buffer:path(), saved)
+    test.ok(buffer:is_dirty())
+    test.ok(buffer:save_file())
     test.equal(buffer:path(), saved)
     test.not_ok(buffer:is_dirty())
 
@@ -337,6 +340,31 @@ test.describe("native_text API bridge", function()
     local node = core.root_panel.root_node:get_node_for_view(view)
     if node then node:close_view(core.root_panel.root_node, view) end
     os.remove(path)
+  end)
+
+  test.it("updates native editor Buffer paths after filetree-style renames", function()
+    require "plugins.native_editor"
+    local old_path = tmp_file("native-editor-rename-old")
+    local new_path = tmp_file("native-editor-rename-new")
+    local fp = assert(io.open(old_path, "wb"))
+    fp:write("abc")
+    fp:close()
+    os.remove(new_path)
+
+    local view = core.open_native_editor_file(old_path)
+    test.ok(os.rename(old_path, new_path))
+    test.equal(core.rename_native_editor_buffer_path(old_path, new_path, "file"), 1)
+    test.ok(common.path_equals(view.buffer:path(), new_path))
+
+    local key = common.path_compare_key(system.absolute_path(new_path) or new_path)
+    local buffer, reused = native_text.open_file_buffer(new_path, key)
+    test.equal(buffer, view.buffer)
+    test.ok(reused)
+    native_text.release_file_buffer(key, buffer)
+
+    local node = core.root_panel.root_node:get_node_for_view(view)
+    if node then node:close_view(core.root_panel.root_node, view) end
+    os.remove(new_path)
   end)
 
   test.it("records and restores native editor edit locations", function()

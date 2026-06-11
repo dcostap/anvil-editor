@@ -737,6 +737,43 @@ local function update_shared_buffer_identity(buffer, identity_key)
   end)
 end
 
+function core.rename_native_editor_buffer_path(old_abs, new_abs, entry_type)
+  local root = core.root_panel and core.root_panel.root_node
+  if not (root and old_abs and new_abs) then return 0 end
+  local updated = 0
+  local seen = {}
+  for _, view in ipairs(root:get_children()) do
+    if is_native_editor_view(view) and not seen[view.buffer] then
+      local path = view.buffer:path()
+      local mapped
+      if path and common.path_equals(path, old_abs) then
+        mapped = new_abs
+      elseif entry_type == "dir" and path and common.path_belongs_to(path, old_abs) then
+        mapped = new_abs .. path:sub(#old_abs + 1)
+      end
+      if mapped then
+        seen[view.buffer] = true
+        local old_key = view.buffer_identity_key or native_file_identity(path)
+        local new_key = native_file_identity(mapped)
+        if old_key then native_text.release_file_buffer(old_key, view.buffer) end
+        if view.buffer.set_path and view.buffer:set_path(mapped) then
+          if new_key then native_text.register_file_buffer(new_key, view.buffer) end
+          update_shared_buffer_identity(view.buffer, new_key)
+          for_each_native_buffer_view(view.buffer, function(shared_view)
+            shared_view:enable_tree_sitter_for_path(mapped)
+            shared_view:update_file_signature()
+          end)
+          updated = updated + 1
+        elseif old_key then
+          native_text.register_file_buffer(old_key, view.buffer)
+        end
+      end
+    end
+  end
+  if updated > 0 then core.log_quiet("Updated %d native editor Buffer path(s) after rename", updated) end
+  return updated
+end
+
 local function register_saved_native_buffer(view, filename)
   local old_key = view.buffer_identity_key
   local new_key = native_file_identity(filename)

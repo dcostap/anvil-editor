@@ -280,6 +280,9 @@ local function in_project(abs, project_root)
 end
 
 local function update_open_docs_after_rename(old_abs, new_abs, entry_type)
+  if core.rename_native_editor_buffer_path then
+    core.rename_native_editor_buffer_path(old_abs, new_abs, entry_type)
+  end
   for _, doc in ipairs(core.docs) do
     local filename = doc.abs_filename
     local mapped
