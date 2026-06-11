@@ -151,7 +151,9 @@ end
 local function change_project_directory(use_dialog)
   open_directory("Change Project Folder", use_dialog, false, function(abs_path)
     if common.path_equals(abs_path[1], core.root_project().path) then return end
-    core.confirm_close_docs(core.docs, function(dirpath)
+    local root = core.root_panel and core.root_panel.root_node
+    local views = root and root:get_children() or {}
+    core.confirm_close_views(views, function(dirpath)
       core.open_project_in_same_window(dirpath)
     end, abs_path[1])
   end)
