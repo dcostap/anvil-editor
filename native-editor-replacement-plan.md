@@ -268,6 +268,14 @@ Do not preserve the old Lua `Doc` API as a long-term compatibility layer. In par
 
 First-party Lua plugins that implement behavior belonging in the native editor core should not be adapted around old Lua editor internals. Classify them explicitly instead: keep in Lua when they are app orchestration/customization, port to native capability APIs when Lua should only request or configure the behavior, port fully into C/native core when the behavior is durable editor mechanics, keep temporary glue only with a removal target, or deprecate/archive the plugin so it is no longer loaded or supported.
 
+### Temporary Lua view-shell policy
+
+`NativeEditorView` is allowed to implement basic view glue during dogfooding, including mouse routing, scroll helpers, simple gutter/caret/selection drawing, command wiring, context menu integration, and workspace view state. This is a temporary stabilization layer, not a decision that final editor rendering, hit-testing, decorations, or viewport/camera mechanics belong in Lua.
+
+The boundary remains: native C owns durable editor mechanics and performance-sensitive state; Lua may orchestrate and prototype the app-facing view shell while behavior is being proven. Once a behavior stabilizes, becomes performance-sensitive, needs precise native data, or is a foundation for other editor features, promote it into native Buffer/Editor/view capability APIs and leave Lua as configuration/orchestration.
+
+Do not use the Lua view shell to recreate the old `Doc` model. In particular, do not rebuild `Doc.lines`, old selection tables, tokenizer compatibility, or old `DocView` monkey-patch surfaces around the native core. Basic `DocView`-shaped helper methods on `NativeEditorView` are acceptable only as view/app integration affordances backed by native Buffer/Editor state, not as compatibility ownership of text state.
+
 The replacement should proceed in layers:
 
 1. Inventory what the Lua editor currently provides.
