@@ -277,8 +277,8 @@ test.describe("native_text API bridge", function()
     test.ok(has_highlight("keyword", "static"))
   end)
 
-  test.it("round-trips native sandbox view state", function()
-    local NativeTextSandboxView = require "plugins.native_text_sandbox"
+  test.it("round-trips native editor view state", function()
+    local NativeTextSandboxView = require "plugins.native_editor"
     local view = NativeTextSandboxView("abc\nxyz")
     view.editor:set_cursor(2)
     view.editor:add_cursor(6)
@@ -297,22 +297,77 @@ test.describe("native_text API bridge", function()
     test.equal(restored.scroll.to.y, 11)
   end)
 
-  test.it("toggles native sandbox line ending mode through its command", function()
-    local NativeTextSandboxView = require "plugins.native_text_sandbox"
+  test.it("routes native editor commands through the canonical namespace", function()
+    local NativeTextSandboxView = require "plugins.native_editor"
     local original_active_view = core.active_view
     local ok, err = pcall(function()
       local view = NativeTextSandboxView("abc")
       core.active_view = view
+      test.ok(command.is_valid("native-editor:toggle-line-ending"))
+      test.ok(command.is_valid("native-text-sandbox:toggle-line-ending"))
       test.equal(view.buffer:line_ending_mode(), "lf")
-      test.ok(command.perform("native-text-sandbox:toggle-line-ending"))
+      test.ok(command.perform("native-editor:toggle-line-ending"))
       test.equal(view.buffer:line_ending_mode(), "crlf")
+      test.ok(command.perform("native-text-sandbox:toggle-line-ending"))
+      test.equal(view.buffer:line_ending_mode(), "lf")
+
+      local valid = command.get_all_valid()
+      test.contains(valid, "native-editor:toggle-line-ending")
+      for _, name in ipairs(valid) do
+        test.not_equal(name, "native-text-sandbox:toggle-line-ending")
+      end
     end)
     core.active_view = original_active_view
     if not ok then error(err) end
   end)
 
-  test.it("restores file-backed native sandbox views through registered Buffer identity", function()
-    local NativeTextSandboxView = require "plugins.native_text_sandbox"
+  test.it("opens file-backed native editor views through the core facade", function()
+    require "plugins.native_editor"
+    local path = tmp_file("native-editor-core-open")
+    local fp = assert(io.open(path, "wb"))
+    fp:write("abc")
+    fp:close()
+
+    local view = core.open_native_editor_file(path)
+    test.ok(core.is_native_editor_view(view))
+    test.equal(view.buffer:text(), "abc")
+    test.equal(core.open_native_editor_file(path), view)
+
+    local node = core.root_panel.root_node:get_node_for_view(view)
+    if node then node:close_view(core.root_panel.root_node, view) end
+    os.remove(path)
+  end)
+
+  test.it("exposes native editor file paths through generic core view helpers", function()
+    local NativeEditorView = require "plugins.native_editor"
+    local path = tmp_file("native-editor-core-path")
+    local fp = assert(io.open(path, "wb"))
+    fp:write("abc")
+    fp:close()
+
+    local view = NativeEditorView(nil, path)
+    local original_active_view = core.active_view
+    local ok, err = pcall(function()
+      core.active_view = view
+      test.ok(common.path_equals(core.view_file_path(view), path))
+      test.equal(core.view_is_dirty(view), false)
+      view.editor:insert("d")
+      test.equal(core.view_is_dirty(view), true)
+      local title = core.get_view_title(view)
+      test.contains(title, common.basename(path))
+      test.contains(title, "*")
+      local project = core.current_project()
+      test.ok(project and project.path)
+    end)
+    core.active_view = original_active_view
+    local absolute = system.absolute_path(path) or path
+    native_text.release_file_buffer(common.path_compare_key(absolute), view.buffer)
+    os.remove(path)
+    if not ok then error(err) end
+  end)
+
+  test.it("restores file-backed native editor views through registered Buffer identity", function()
+    local NativeTextSandboxView = require "plugins.native_editor"
     local path = tmp_file("native-text-view-state-file")
     local fp = assert(io.open(path, "wb"))
     fp:write("abc")

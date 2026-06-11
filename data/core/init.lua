@@ -232,7 +232,31 @@ function core.open_project(project)
 end
 
 
----Get project for currently opened DocView or given filename path.
+function core.view_file_path(view)
+  if not view then return nil end
+  local doc = view.doc
+  if doc and doc.abs_filename then return doc.abs_filename end
+  local buffer = view.buffer
+  if buffer and type(buffer.path) == "function" then
+    local ok, path = pcall(buffer.path, buffer)
+    if ok and path then return path end
+  end
+  if type(view.path) == "string" then return view.path end
+end
+
+function core.view_is_dirty(view)
+  if not view then return false end
+  local doc = view.doc
+  if doc and type(doc.is_dirty) == "function" then return doc:is_dirty() end
+  local buffer = view.buffer
+  if buffer and type(buffer.is_dirty) == "function" then
+    local ok, dirty = pcall(buffer.is_dirty, buffer)
+    return ok and dirty or false
+  end
+  return false
+end
+
+---Get project for currently opened file-backed view or given filename path.
 ---If the given path does not belongs to any of the opened projects a new
 ---project object will be created and returned using the directory of the
 ---given filename path.
@@ -242,15 +266,8 @@ end
 ---@return boolean belongs The file belongs to the returned project
 function core.current_project(filename)
   if not filename then
-    if
-      core.active_view:extends(DocView)
-      and
-      core.active_view.doc and core.active_view.doc.abs_filename
-    then
-      filename = core.active_view.doc.abs_filename
-    else
-      return core.projects[1], true, false
-    end
+    filename = core.view_file_path(core.active_view)
+    if not filename then return core.projects[1], true, false end
   end
   if #core.projects > 1 then
     for _, project in ipairs(core.projects) do
@@ -1313,23 +1330,17 @@ function core.set_active_view(view)
     and not old_active_view.doc.bound_selection_view then
       old_active_view:capture_selection_state()
     end
-    if view.doc and view.doc.abs_filename then
-      core.set_visited(view.doc.abs_filename)
-    end
+    local filename = core.view_file_path(view)
+    if filename then core.set_visited(filename) end
     core.last_active_view = old_active_view
     core.active_view = view
     if view.extends and view:extends(DocView) and view.doc and view.become_selection_mirror_owner then
       view:become_selection_mirror_owner()
     end
   end
-  if
-    core.active_view:extends(DocView)
-    and
-    core.active_view.doc and core.active_view.doc.abs_filename
-  then
-    local project = core.current_project(
-      core.active_view.doc.abs_filename
-    )
+  local active_filename = core.view_file_path(core.active_view)
+  if active_filename then
+    local project = core.current_project(active_filename)
     if project then system.chdir(project.path) end
   end
 end
@@ -1729,12 +1740,13 @@ function core.get_view_title(view)
   local title = ""
   local project = core.projects[1]
   if view.get_filename and view:get_filename() then
-    if view.doc.abs_filename then
-      local prj, is_open, belongs = core.current_project(view.doc.abs_filename)
+    local filename = core.view_file_path(view)
+    if filename then
+      local prj, is_open, belongs = core.current_project(filename)
       if prj and is_open and belongs then
         project = prj
-        title = common.relative_path(project.path, view.doc.abs_filename)
-        if view.doc:is_dirty() then title = title .. "*" end
+        title = common.relative_path(project.path, filename)
+        if core.view_is_dirty(view) then title = title .. "*" end
       else
         title = view:get_filename()
       end

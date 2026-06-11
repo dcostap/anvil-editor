@@ -11,7 +11,7 @@ local native_text = require "native_text"
 
 local TREE_SITTER_REPARSE_DELAY = 0.25
 
-local plugin_config = config.plugins.native_text_sandbox
+local plugin_config = config.plugins.native_editor or config.plugins.native_text_sandbox or {}
 local save_native_view_as
 local save_existing_native_view
 local last_find_text
@@ -39,10 +39,26 @@ local NativeTextSandboxView = View:extend()
 function NativeTextSandboxView:__tostring() return "NativeTextSandboxView" end
 
 NativeTextSandboxView.context = "workspace"
+NativeTextSandboxView.native_editor_view = true
+NativeTextSandboxView._module_name = "plugins.native_editor"
+
+local function is_native_editor_view(view)
+  return type(view) == "table"
+    and view.native_editor_view == true
+    and view.buffer ~= nil
+    and view.editor ~= nil
+end
+core.is_native_editor_view = is_native_editor_view
+
+local function active_native_editor_view()
+  local view = core.active_view
+  if is_native_editor_view(view) then return true, view end
+  return false
+end
 
 function NativeTextSandboxView:new(text, filename, buffer, identity_key)
   NativeTextSandboxView.super.new(self)
-  self.buffer = buffer or native_text.new_buffer(text or "Native text sandbox\n\nType here. This view is backed by src/text Buffer/Editor userdata.")
+  self.buffer = buffer or native_text.new_buffer(text or "Native editor\n\nType here. This view is backed by src/text Buffer/Editor userdata.")
   self.buffer_identity_key = identity_key
   if filename and not buffer then
     local ok = self.buffer:load_file(filename)
@@ -70,9 +86,9 @@ function NativeTextSandboxView:enable_tree_sitter_for_path(filename)
   self.tree_sitter_enabled = language and self.buffer:enable_tree_sitter(language) or false
   if language then
     if self.tree_sitter_enabled then
-      core.log_quiet("Native text sandbox enabled Tree-sitter language '%s' for %s", language, filename or "scratch")
+      core.log_quiet("Native editor enabled Tree-sitter language '%s' for %s", language, filename or "scratch")
     else
-      core.log_quiet("Native text sandbox failed to enable Tree-sitter language '%s' for %s", language, filename or "scratch")
+      core.log_quiet("Native editor failed to enable Tree-sitter language '%s' for %s", language, filename or "scratch")
     end
   end
 end
@@ -142,7 +158,7 @@ end
 
 function NativeTextSandboxView:get_name()
   local path = self.buffer:path()
-  local name = path and common.basename(path) or "Native Text Sandbox"
+  local name = path and common.basename(path) or "Native Editor"
   if self.buffer:is_dirty() then name = "*" .. name end
   return name
 end
@@ -237,7 +253,7 @@ end
 function NativeTextSandboxView:update_tree_sitter()
   if not self.tree_sitter_enabled then return end
   if self.buffer:poll_tree_sitter_reparse() then
-    core.log_quiet("Native text sandbox applied background Tree-sitter parse")
+    core.log_quiet("Native editor applied background Tree-sitter parse")
     self.tree_sitter_dirty_since = nil
     core.redraw = true
     return
@@ -254,9 +270,9 @@ function NativeTextSandboxView:update_tree_sitter()
     and now - self.tree_sitter_dirty_since >= TREE_SITTER_REPARSE_DELAY
   then
     if self.buffer:schedule_tree_sitter_reparse() then
-      core.log_quiet("Native text sandbox scheduled background Tree-sitter parse after idle debounce")
+      core.log_quiet("Native editor scheduled background Tree-sitter parse after idle debounce")
     else
-      core.log_quiet("Native text sandbox failed to schedule Tree-sitter parse; will retry after debounce")
+      core.log_quiet("Native editor failed to schedule Tree-sitter parse; will retry after debounce")
       self.tree_sitter_dirty_since = now
     end
   end
@@ -561,7 +577,7 @@ end
 local function with_active_native_view(fn, affects_text)
   return function(view)
     view = view or core.active_view
-    if view and view:is(NativeTextSandboxView) then
+    if is_native_editor_view(view) then
       fn(view)
       if affects_text then view:note_tree_sitter_mutation() end
       view:scroll_to_cursor()
@@ -844,30 +860,43 @@ local function open_native_text_file(filename)
   return view
 end
 
+function core.open_native_editor_file(filename)
+  return open_native_text_file(filename)
+end
+
 if plugin_config.default_open then
   local core_open_file = core.open_file
   function core.open_file(filename)
     local image_view = core.open_image(filename)
     if image_view then return image_view end
-    return open_native_text_file(filename) or core_open_file(filename)
+    return core.open_native_editor_file(filename) or core_open_file(filename)
   end
-  core.log_quiet("Native text sandbox default-open experiment is enabled")
+  core.log_quiet("Native editor default-open experiment is enabled")
 end
 
-command.add(nil, {
-  ["native-text-sandbox:open"] = function()
+local function add_native_editor_legacy_aliases(map)
+  for name in pairs(map) do
+    local legacy_name = name:gsub("^native%-editor:", "native-text-sandbox:")
+    if legacy_name ~= name then command.add_alias(legacy_name, name) end
+  end
+end
+
+local native_editor_global_commands = {
+  ["native-editor:open"] = function()
     core.root_panel:get_active_node_default():add_view(NativeTextSandboxView())
   end,
-  ["native-text-sandbox:open-file"] = function()
+  ["native-editor:open-file"] = function()
     core.open_file_dialog(core.window, function(status, result)
       if status == "accept" then
-        for _, filename in ipairs(result) do open_native_text_file(filename) end
+        for _, filename in ipairs(result) do core.open_native_editor_file(filename) end
       elseif status == "error" then
         core.error("Error while opening native text dialog: %s", result or "")
       end
     end, { allow_many = true })
   end,
-})
+}
+command.add(nil, native_editor_global_commands)
+add_native_editor_legacy_aliases(native_editor_global_commands)
 
 local function register_statusbar_items()
   if not core.status_bar then return end
@@ -879,7 +908,7 @@ local function register_statusbar_items()
       get_item = function()
         local view = core.active_view
         local path = view.buffer:path()
-        return { path and style.text or style.dim, path and common.home_encode(path) or "Native Text Sandbox" }
+        return { path and style.text or style.dim, path and common.home_encode(path) or "Native Editor" }
       end,
     })
   end
@@ -910,135 +939,137 @@ end
 
 register_statusbar_items()
 
-command.add(NativeTextSandboxView, {
-  ["native-text-sandbox:newline"] = with_active_native_view(function(view) view.editor:newline() end, true),
-  ["native-text-sandbox:newline-below"] = with_active_native_view(function(view) view.editor:open_line_below() end, true),
-  ["native-text-sandbox:newline-above"] = with_active_native_view(function(view) view.editor:open_line_above() end, true),
-  ["native-text-sandbox:backspace"] = with_active_native_view(function(view) view.editor:backspace() end, true),
-  ["native-text-sandbox:delete"] = with_active_native_view(function(view) view.editor:delete() end, true),
-  ["native-text-sandbox:backspace-word"] = with_active_native_view(function(view) view.editor:backspace_word() end, true),
-  ["native-text-sandbox:delete-word"] = with_active_native_view(function(view) view.editor:delete_word() end, true),
-  ["native-text-sandbox:delete-line"] = with_active_native_view(function(view) view.editor:delete_line() end, true),
-  ["native-text-sandbox:duplicate-line"] = with_active_native_view(function(view) view.editor:duplicate_line() end, true),
-  ["native-text-sandbox:move-line-up"] = with_active_native_view(function(view) view.editor:move_line_up() end, true),
-  ["native-text-sandbox:move-line-down"] = with_active_native_view(function(view) view.editor:move_line_down() end, true),
-  ["native-text-sandbox:join-line"] = with_active_native_view(function(view) view.editor:join_line_below() end, true),
-  ["native-text-sandbox:tab"] = with_active_native_view(function(view) view.editor:tab() end, true),
-  ["native-text-sandbox:untab"] = with_active_native_view(function(view) view.editor:untab() end, true),
-  ["native-text-sandbox:select-all"] = with_active_native_view(function(view) view.editor:select_all() end),
-  ["native-text-sandbox:select-line"] = with_active_native_view(function(view) view.editor:select_line() end),
-  ["native-text-sandbox:go-to-line"] = with_active_native_view(function(view) go_to_native_line(view) end),
-  ["native-text-sandbox:copy"] = with_active_native_view(function(view) copy_native_selection(view) end),
-  ["native-text-sandbox:cut"] = with_active_native_view(function(view)
+local native_editor_commands = {
+  ["native-editor:newline"] = with_active_native_view(function(view) view.editor:newline() end, true),
+  ["native-editor:newline-below"] = with_active_native_view(function(view) view.editor:open_line_below() end, true),
+  ["native-editor:newline-above"] = with_active_native_view(function(view) view.editor:open_line_above() end, true),
+  ["native-editor:backspace"] = with_active_native_view(function(view) view.editor:backspace() end, true),
+  ["native-editor:delete"] = with_active_native_view(function(view) view.editor:delete() end, true),
+  ["native-editor:backspace-word"] = with_active_native_view(function(view) view.editor:backspace_word() end, true),
+  ["native-editor:delete-word"] = with_active_native_view(function(view) view.editor:delete_word() end, true),
+  ["native-editor:delete-line"] = with_active_native_view(function(view) view.editor:delete_line() end, true),
+  ["native-editor:duplicate-line"] = with_active_native_view(function(view) view.editor:duplicate_line() end, true),
+  ["native-editor:move-line-up"] = with_active_native_view(function(view) view.editor:move_line_up() end, true),
+  ["native-editor:move-line-down"] = with_active_native_view(function(view) view.editor:move_line_down() end, true),
+  ["native-editor:join-line"] = with_active_native_view(function(view) view.editor:join_line_below() end, true),
+  ["native-editor:tab"] = with_active_native_view(function(view) view.editor:tab() end, true),
+  ["native-editor:untab"] = with_active_native_view(function(view) view.editor:untab() end, true),
+  ["native-editor:select-all"] = with_active_native_view(function(view) view.editor:select_all() end),
+  ["native-editor:select-line"] = with_active_native_view(function(view) view.editor:select_line() end),
+  ["native-editor:go-to-line"] = with_active_native_view(function(view) go_to_native_line(view) end),
+  ["native-editor:copy"] = with_active_native_view(function(view) copy_native_selection(view) end),
+  ["native-editor:cut"] = with_active_native_view(function(view)
     local text = view.editor:cut_selection()
     if text and text ~= "" then system.set_clipboard(text) end
   end, true),
-  ["native-text-sandbox:paste"] = with_active_native_view(function(view)
+  ["native-editor:paste"] = with_active_native_view(function(view)
     local text = system.get_clipboard()
     if text and text ~= "" then view.editor:paste(text) end
   end, true),
-  ["native-text-sandbox:left"] = with_active_native_view(function(view) view.editor:left(false) end),
-  ["native-text-sandbox:right"] = with_active_native_view(function(view) view.editor:right(false) end),
-  ["native-text-sandbox:up"] = with_active_native_view(function(view) view.editor:line_up(false) end),
-  ["native-text-sandbox:down"] = with_active_native_view(function(view) view.editor:line_down(false) end),
-  ["native-text-sandbox:select-left"] = with_active_native_view(function(view) view.editor:left(true) end),
-  ["native-text-sandbox:select-right"] = with_active_native_view(function(view) view.editor:right(true) end),
-  ["native-text-sandbox:select-up"] = with_active_native_view(function(view) view.editor:line_up(true) end),
-  ["native-text-sandbox:select-down"] = with_active_native_view(function(view) view.editor:line_down(true) end),
-  ["native-text-sandbox:page-up"] = with_active_native_view(function(view) view:page_move(-1, false) end),
-  ["native-text-sandbox:page-down"] = with_active_native_view(function(view) view:page_move(1, false) end),
-  ["native-text-sandbox:select-page-up"] = with_active_native_view(function(view) view:page_move(-1, true) end),
-  ["native-text-sandbox:select-page-down"] = with_active_native_view(function(view) view:page_move(1, true) end),
-  ["native-text-sandbox:find"] = with_active_native_view(function(view) find_native_text(view, false) end),
-  ["native-text-sandbox:find-next"] = with_active_native_view(function(view) repeat_native_find(view, false) end),
-  ["native-text-sandbox:find-previous"] = with_active_native_view(function(view) repeat_native_find(view, true) end),
-  ["native-text-sandbox:replace"] = with_active_native_view(function(view) replace_one_native_text(view) end),
-  ["native-text-sandbox:replace-all"] = with_active_native_view(function(view) replace_all_native_text(view) end),
-  ["native-text-sandbox:word-left"] = with_active_native_view(function(view) view.editor:word_left(false) end),
-  ["native-text-sandbox:word-right"] = with_active_native_view(function(view) view.editor:word_right(false) end),
-  ["native-text-sandbox:select-word-left"] = with_active_native_view(function(view) view.editor:word_left(true) end),
-  ["native-text-sandbox:select-word-right"] = with_active_native_view(function(view) view.editor:word_right(true) end),
-  ["native-text-sandbox:home"] = with_active_native_view(function(view) view.editor:home_toggle_of_line(false) end),
-  ["native-text-sandbox:end"] = with_active_native_view(function(view) view.editor:end_of_line(false) end),
-  ["native-text-sandbox:select-home"] = with_active_native_view(function(view) view.editor:home_toggle_of_line(true) end),
-  ["native-text-sandbox:select-end"] = with_active_native_view(function(view) view.editor:end_of_line(true) end),
-  ["native-text-sandbox:start-of-buffer"] = with_active_native_view(function(view) view.editor:start_of_buffer(false) end),
-  ["native-text-sandbox:end-of-buffer"] = with_active_native_view(function(view) view.editor:end_of_buffer(false) end),
-  ["native-text-sandbox:select-start-of-buffer"] = with_active_native_view(function(view) view.editor:start_of_buffer(true) end),
-  ["native-text-sandbox:select-end-of-buffer"] = with_active_native_view(function(view) view.editor:end_of_buffer(true) end),
-  ["native-text-sandbox:undo"] = with_active_native_view(function(view) view.editor:undo() end, true),
-  ["native-text-sandbox:redo"] = with_active_native_view(function(view) view.editor:redo() end, true),
-  ["native-text-sandbox:save"] = with_active_native_view(function(view)
+  ["native-editor:left"] = with_active_native_view(function(view) view.editor:left(false) end),
+  ["native-editor:right"] = with_active_native_view(function(view) view.editor:right(false) end),
+  ["native-editor:up"] = with_active_native_view(function(view) view.editor:line_up(false) end),
+  ["native-editor:down"] = with_active_native_view(function(view) view.editor:line_down(false) end),
+  ["native-editor:select-left"] = with_active_native_view(function(view) view.editor:left(true) end),
+  ["native-editor:select-right"] = with_active_native_view(function(view) view.editor:right(true) end),
+  ["native-editor:select-up"] = with_active_native_view(function(view) view.editor:line_up(true) end),
+  ["native-editor:select-down"] = with_active_native_view(function(view) view.editor:line_down(true) end),
+  ["native-editor:page-up"] = with_active_native_view(function(view) view:page_move(-1, false) end),
+  ["native-editor:page-down"] = with_active_native_view(function(view) view:page_move(1, false) end),
+  ["native-editor:select-page-up"] = with_active_native_view(function(view) view:page_move(-1, true) end),
+  ["native-editor:select-page-down"] = with_active_native_view(function(view) view:page_move(1, true) end),
+  ["native-editor:find"] = with_active_native_view(function(view) find_native_text(view, false) end),
+  ["native-editor:find-next"] = with_active_native_view(function(view) repeat_native_find(view, false) end),
+  ["native-editor:find-previous"] = with_active_native_view(function(view) repeat_native_find(view, true) end),
+  ["native-editor:replace"] = with_active_native_view(function(view) replace_one_native_text(view) end),
+  ["native-editor:replace-all"] = with_active_native_view(function(view) replace_all_native_text(view) end),
+  ["native-editor:word-left"] = with_active_native_view(function(view) view.editor:word_left(false) end),
+  ["native-editor:word-right"] = with_active_native_view(function(view) view.editor:word_right(false) end),
+  ["native-editor:select-word-left"] = with_active_native_view(function(view) view.editor:word_left(true) end),
+  ["native-editor:select-word-right"] = with_active_native_view(function(view) view.editor:word_right(true) end),
+  ["native-editor:home"] = with_active_native_view(function(view) view.editor:home_toggle_of_line(false) end),
+  ["native-editor:end"] = with_active_native_view(function(view) view.editor:end_of_line(false) end),
+  ["native-editor:select-home"] = with_active_native_view(function(view) view.editor:home_toggle_of_line(true) end),
+  ["native-editor:select-end"] = with_active_native_view(function(view) view.editor:end_of_line(true) end),
+  ["native-editor:start-of-buffer"] = with_active_native_view(function(view) view.editor:start_of_buffer(false) end),
+  ["native-editor:end-of-buffer"] = with_active_native_view(function(view) view.editor:end_of_buffer(false) end),
+  ["native-editor:select-start-of-buffer"] = with_active_native_view(function(view) view.editor:start_of_buffer(true) end),
+  ["native-editor:select-end-of-buffer"] = with_active_native_view(function(view) view.editor:end_of_buffer(true) end),
+  ["native-editor:undo"] = with_active_native_view(function(view) view.editor:undo() end, true),
+  ["native-editor:redo"] = with_active_native_view(function(view) view.editor:redo() end, true),
+  ["native-editor:save"] = with_active_native_view(function(view)
     save_existing_native_view(view)
   end),
-  ["native-text-sandbox:save-as"] = with_active_native_view(function(view) save_native_view_as(view) end),
-  ["native-text-sandbox:toggle-line-ending"] = with_active_native_view(function(view)
+  ["native-editor:save-as"] = with_active_native_view(function(view) save_native_view_as(view) end),
+  ["native-editor:toggle-line-ending"] = with_active_native_view(function(view)
     local mode = view.buffer:line_ending_mode() == "crlf" and "lf" or "crlf"
     if view.buffer:set_line_ending_mode(mode) then
       core.log_quiet("Native Buffer line ending mode changed to %s", mode:upper())
       core.redraw = true
     end
   end),
-  ["native-text-sandbox:duplicate-cursor-up"] = with_active_native_view(function(view) view.editor:dup_cursor_up() end),
-  ["native-text-sandbox:duplicate-cursor-down"] = with_active_native_view(function(view) view.editor:dup_cursor_down() end),
-})
+  ["native-editor:duplicate-cursor-up"] = with_active_native_view(function(view) view.editor:dup_cursor_up() end),
+  ["native-editor:duplicate-cursor-down"] = with_active_native_view(function(view) view.editor:dup_cursor_down() end),
+}
+command.add(active_native_editor_view, native_editor_commands)
+add_native_editor_legacy_aliases(native_editor_commands)
 
 keymap.add {
-  ["return"] = "native-text-sandbox:newline",
-  ["ctrl+return"] = "native-text-sandbox:newline-below",
-  ["ctrl+shift+return"] = "native-text-sandbox:newline-above",
-  ["backspace"] = "native-text-sandbox:backspace",
-  ["delete"] = "native-text-sandbox:delete",
-  ["ctrl+backspace"] = "native-text-sandbox:backspace-word",
-  ["ctrl+delete"] = "native-text-sandbox:delete-word",
-  ["ctrl+shift+k"] = "native-text-sandbox:delete-line",
-  ["ctrl+d"] = "native-text-sandbox:duplicate-line",
-  ["ctrl+up"] = "native-text-sandbox:move-line-up",
-  ["ctrl+down"] = "native-text-sandbox:move-line-down",
-  ["ctrl+j"] = "native-text-sandbox:join-line",
-  ["tab"] = "native-text-sandbox:tab",
-  ["shift+tab"] = "native-text-sandbox:untab",
-  ["ctrl+a"] = "native-text-sandbox:select-all",
-  ["ctrl+l"] = "native-text-sandbox:select-line",
-  ["ctrl+g"] = "native-text-sandbox:go-to-line",
-  ["ctrl+c"] = "native-text-sandbox:copy",
-  ["ctrl+x"] = "native-text-sandbox:cut",
-  ["ctrl+v"] = "native-text-sandbox:paste",
-  ["left"] = "native-text-sandbox:left",
-  ["right"] = "native-text-sandbox:right",
-  ["up"] = "native-text-sandbox:up",
-  ["down"] = "native-text-sandbox:down",
-  ["shift+left"] = "native-text-sandbox:select-left",
-  ["shift+right"] = "native-text-sandbox:select-right",
-  ["shift+up"] = "native-text-sandbox:select-up",
-  ["shift+down"] = "native-text-sandbox:select-down",
-  ["pageup"] = "native-text-sandbox:page-up",
-  ["pagedown"] = "native-text-sandbox:page-down",
-  ["shift+pageup"] = "native-text-sandbox:select-page-up",
-  ["shift+pagedown"] = "native-text-sandbox:select-page-down",
-  ["ctrl+f"] = "native-text-sandbox:find",
-  ["ctrl+r"] = "native-text-sandbox:replace",
-  ["ctrl+shift+r"] = "native-text-sandbox:replace-all",
-  ["f3"] = "native-text-sandbox:find-next",
-  ["shift+f3"] = "native-text-sandbox:find-previous",
-  ["ctrl+left"] = "native-text-sandbox:word-left",
-  ["ctrl+right"] = "native-text-sandbox:word-right",
-  ["ctrl+shift+left"] = "native-text-sandbox:select-word-left",
-  ["ctrl+shift+right"] = "native-text-sandbox:select-word-right",
-  ["home"] = "native-text-sandbox:home",
-  ["end"] = "native-text-sandbox:end",
-  ["shift+home"] = "native-text-sandbox:select-home",
-  ["shift+end"] = "native-text-sandbox:select-end",
-  ["ctrl+home"] = "native-text-sandbox:start-of-buffer",
-  ["ctrl+end"] = "native-text-sandbox:end-of-buffer",
-  ["ctrl+shift+home"] = "native-text-sandbox:select-start-of-buffer",
-  ["ctrl+shift+end"] = "native-text-sandbox:select-end-of-buffer",
-  ["ctrl+z"] = "native-text-sandbox:undo",
-  ["ctrl+y"] = "native-text-sandbox:redo",
-  ["ctrl+s"] = "native-text-sandbox:save",
-  ["ctrl+shift+s"] = "native-text-sandbox:save-as",
-  ["ctrl+shift+up"] = "native-text-sandbox:duplicate-cursor-up",
-  ["ctrl+shift+down"] = "native-text-sandbox:duplicate-cursor-down",
+  ["return"] = "native-editor:newline",
+  ["ctrl+return"] = "native-editor:newline-below",
+  ["ctrl+shift+return"] = "native-editor:newline-above",
+  ["backspace"] = "native-editor:backspace",
+  ["delete"] = "native-editor:delete",
+  ["ctrl+backspace"] = "native-editor:backspace-word",
+  ["ctrl+delete"] = "native-editor:delete-word",
+  ["ctrl+shift+k"] = "native-editor:delete-line",
+  ["ctrl+d"] = "native-editor:duplicate-line",
+  ["ctrl+up"] = "native-editor:move-line-up",
+  ["ctrl+down"] = "native-editor:move-line-down",
+  ["ctrl+j"] = "native-editor:join-line",
+  ["tab"] = "native-editor:tab",
+  ["shift+tab"] = "native-editor:untab",
+  ["ctrl+a"] = "native-editor:select-all",
+  ["ctrl+l"] = "native-editor:select-line",
+  ["ctrl+g"] = "native-editor:go-to-line",
+  ["ctrl+c"] = "native-editor:copy",
+  ["ctrl+x"] = "native-editor:cut",
+  ["ctrl+v"] = "native-editor:paste",
+  ["left"] = "native-editor:left",
+  ["right"] = "native-editor:right",
+  ["up"] = "native-editor:up",
+  ["down"] = "native-editor:down",
+  ["shift+left"] = "native-editor:select-left",
+  ["shift+right"] = "native-editor:select-right",
+  ["shift+up"] = "native-editor:select-up",
+  ["shift+down"] = "native-editor:select-down",
+  ["pageup"] = "native-editor:page-up",
+  ["pagedown"] = "native-editor:page-down",
+  ["shift+pageup"] = "native-editor:select-page-up",
+  ["shift+pagedown"] = "native-editor:select-page-down",
+  ["ctrl+f"] = "native-editor:find",
+  ["ctrl+r"] = "native-editor:replace",
+  ["ctrl+shift+r"] = "native-editor:replace-all",
+  ["f3"] = "native-editor:find-next",
+  ["shift+f3"] = "native-editor:find-previous",
+  ["ctrl+left"] = "native-editor:word-left",
+  ["ctrl+right"] = "native-editor:word-right",
+  ["ctrl+shift+left"] = "native-editor:select-word-left",
+  ["ctrl+shift+right"] = "native-editor:select-word-right",
+  ["home"] = "native-editor:home",
+  ["end"] = "native-editor:end",
+  ["shift+home"] = "native-editor:select-home",
+  ["shift+end"] = "native-editor:select-end",
+  ["ctrl+home"] = "native-editor:start-of-buffer",
+  ["ctrl+end"] = "native-editor:end-of-buffer",
+  ["ctrl+shift+home"] = "native-editor:select-start-of-buffer",
+  ["ctrl+shift+end"] = "native-editor:select-end-of-buffer",
+  ["ctrl+z"] = "native-editor:undo",
+  ["ctrl+y"] = "native-editor:redo",
+  ["ctrl+s"] = "native-editor:save",
+  ["ctrl+shift+s"] = "native-editor:save-as",
+  ["ctrl+shift+up"] = "native-editor:duplicate-cursor-up",
+  ["ctrl+shift+down"] = "native-editor:duplicate-cursor-down",
 }
 
 local core_exit = core.__native_text_sandbox_original_exit or core.exit

@@ -201,11 +201,12 @@ Important status:
 
 Implemented:
 
-- `data/plugins/native_text_sandbox.lua`
+- `data/plugins/native_editor.lua` canonical plugin entry point.
+- `data/plugins/native_text_sandbox.lua` transition implementation module retained for old workspace/plugin references.
 - `native_text` Lua bridge in `src/api/native_text.c`.
-- `native-text-sandbox:open`
-- `native-text-sandbox:open-file`
-- `native-text-sandbox:save`
+- `native-editor:open` (`native-text-sandbox:open` alias during transition)
+- `native-editor:open-file` (`native-text-sandbox:open-file` alias during transition)
+- `native-editor:save` (`native-text-sandbox:save` alias during transition)
 - File-backed native Buffers.
 - Dirty marker in tab title.
 - Visible line rendering from native walkers.
@@ -221,12 +222,22 @@ Implemented:
 - Save-as, dirty close/quit prompts, external reload prompts, save-conflict prompts, duplicate-open focusing, and native file Buffer registry reuse.
 - Current-line highlight, horizontal scroll-to-cursor, status bar file/position/line-ending items, and recent/visited tracking.
 - Workspace-style `get_state` / `from_state` serialization.
+- Runtime coverage for saving and restoring native editor views through `workspace.lua` split/tab state.
 - Undo/redo.
+- Canonical `native-editor:*` command names for native editor behavior, routed through a native-editor view capability predicate, with `native-text-sandbox:*` aliases kept only as transition compatibility.
+- `core.open_native_editor_file(filename)` facade for opening file-backed native editor views without calling sandbox-local helpers.
+- Canonical workspace/plugin module name `plugins.native_editor`; old `plugins.native_text_sandbox` is kept as a transition module alias.
+- Generic core helpers for file-backed views (`core.view_file_path`, `core.view_is_dirty`) now understand native editor Buffers as well as old DocViews.
 
 Important status:
 
 - Sandbox is usable for manual testing.
 - Sandbox is still Lua-owned UI glue, not the final replacement editor.
+- Native editor commands now have a non-sandbox namespace, but normal `doc:*` command routing remains intentionally separate until the default editor path is stable.
+- The native file-open implementation is exposed through a core facade, but the default `core.open_file` path still only uses it when the opt-in native default-open setting is enabled.
+- Native editor workspace state now saves under canonical `plugins.native_editor` module name; old sandbox module remains loadable for transition restore.
+- Core project/title/visited-file helpers can now see native editor Buffer paths instead of assuming every file-backed editor view has `view.doc.abs_filename`.
+- Workspace save/restore now has runtime coverage for native editor views in split layouts.
 
 ## Current strategic direction
 
@@ -413,7 +424,7 @@ This is the working inventory for native-editor migration. Keep it current as pl
 
 | Area / plugin(s) | Old-editor coupling | Native-editor classification | Notes |
 | --- | --- | --- | --- |
-| `native_text_sandbox.lua` | none to old `Doc`; Lua-hosted native Buffer/View glue | keep temporarily through Lua glue, then promote to real editor path | Current dogfooding surface. Should shrink as native view/default-open becomes first-class. |
+| `native_editor.lua` / `native_text_sandbox.lua` | none to old `Doc`; Lua-hosted native Buffer/View glue | keep temporarily through Lua glue, then promote to real editor path | `native_editor.lua` is the canonical plugin/workspace module; `native_text_sandbox.lua` remains a transition implementation/compatibility module until the view moves out of sandbox glue. |
 | `anvil_defaults.lua` | config/keybinding defaults only | keep in Lua as app-shell/customization behavior | Route defaults to native commands as default editor changes. |
 | `workspace.lua` | generic view state; no text internals | keep in Lua as app-shell behavior, port state coverage to native capabilities | Native sandbox now has `get_state` / `from_state`; real workspace restore still needs default editor integration. |
 | `core/commands/doc.lua`, `core/commands/findreplace.lua` | heavy `Doc.lines`, old selections, tokenizer/highlighter, `DocView` predicates | port to native capabilities, then delete old command path | Native command coverage should replace behavior command-by-command, not adapt `Doc.lines`. |
@@ -539,9 +550,11 @@ Prefer Lua UI/sandbox tests only for temporary view glue:
 
 The native editor is ready to become the default editor when dogfooding is stable and these are complete:
 
+- Canonical native editor command target layer exists outside the sandbox namespace. (Started: `native-editor:*` commands now target native-editor-capable views; `native-text-sandbox:*` remains an alias layer only.)
+- Opt-in core-facing native open path exists. (Started: `core.open_native_editor_file(filename)` opens/reuses file-backed native editor views; `core.open_file` can route through it when native default-open is enabled.)
 - `core.open_doc` / file open path can create native Buffers/views for normal text files.
 - Existing tabs/splits/root panel can host native editor views without special sandbox commands.
-- Workspace restoration can serialize and restore native editor views, including open file identity, tab/split placement, scroll position, and selection/cursor state.
+- Workspace restoration can serialize and restore native editor views, including open file identity, tab/split placement, scroll position, and selection/cursor state. (Runtime split-layout save/restore coverage added; keep validating in real sessions.)
 - Save/close/quit flows handle native views.
 - Search UI works on native Buffers.
 - Command palette commands target native editor views.
@@ -634,7 +647,7 @@ cmd.exe //d //s //c "call C:\Projects\c_projects\anvil-editor\update-anvil-dev-b
 
 Manual dogfooding should use:
 
-- `native-text-sandbox:open-file` while sandbox-hosted.
+- `native-editor:open-file` while sandbox-hosted.
 - Later, the opt-in native default-open path.
 
 ## Success criteria for this plan

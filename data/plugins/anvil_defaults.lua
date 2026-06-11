@@ -23,7 +23,7 @@ local core_plugins = {
   intellij_actions = true,
   intellij_find = true,
   linewrapping = true,
-  native_text_sandbox = true,
+  native_editor = true,
   scale_debug_log = true,
   untitled_tabs = true,
 }
@@ -106,9 +106,12 @@ plugin_defaults("findfile", {
   enable_cache = false,
   cache_expiration = 60,
 })
-plugin_defaults("native_text_sandbox", {
+plugin_defaults("native_editor", {
   default_open = false,
 })
+-- Keep the old sandbox plugin filename as a compatibility module only. The
+-- canonical first-party plugin entry point is now native_editor.
+config.plugins.native_text_sandbox = false
 plugin_defaults("gitdiff_highlight", {
   git_path = "git",
   local_diff_debounce_ms = 200,
@@ -172,7 +175,7 @@ reload_core_plugin "scale_debug_log"
 -- require_core_plugin "editor_wallpaper"
 require_core_plugin "centered_editor"
 require_core_plugin "custom_welcome"
-require_core_plugin "native_text_sandbox"
+require_core_plugin "native_editor"
 if core.intellij_actions_disable_conflict_shortcuts then
   core.intellij_actions_disable_conflict_shortcuts()
 end
@@ -220,8 +223,8 @@ if core.fuzzy_searcher_install_global_keymaps then
   core.fuzzy_searcher_install_global_keymaps()
 end
 keymap.add_direct({
-  ["ctrl+shift+d"] = "doc:go-to-line",
-  ["ctrl+shift+D"] = "doc:go-to-line",
+  ["ctrl+shift+d"] = { "native-editor:go-to-line", "doc:go-to-line" },
+  ["ctrl+shift+D"] = { "native-editor:go-to-line", "doc:go-to-line" },
 })
 require_core_plugin "linewrapping"
 -- Wrap long lines at word boundaries and visually indent continuations.
