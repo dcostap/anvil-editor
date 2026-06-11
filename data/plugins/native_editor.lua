@@ -900,7 +900,9 @@ function NativeEditorView:draw()
   local last_line = math.min(line_count - 1, first_line + math.ceil(h / lh) + 1)
 
   core.push_clip_rect(x, y, w, h)
-  renderer.draw_rect(x, y, gutter_w, h, style.line_number_background or style.scrollbar_track or style.background2)
+  -- Match DocView: the whole editor uses style.background; the gutter does not
+  -- get a separate scrollbar-track/background fill. Current-line highlights and
+  -- line numbers draw over the shared editor background.
   self:draw_current_line_highlights()
 
   for i = 1, self.editor:cursor_count() do
