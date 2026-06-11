@@ -37,7 +37,7 @@ end
 
 command.add(function()
   local view = core.active_view
-  return view and (view:extends(DocView) or view:extends(MarkdownView)), view
+  return view and (view:extends(DocView) or view:extends(MarkdownView) or (core.is_native_editor_view and core.is_native_editor_view(view))), view
 end, {
   ["context:show"] = function(view)
     menu:show(view.position.x, view.position.y)
@@ -87,6 +87,17 @@ if config.plugins.scale ~= false and require("plugins.scale") then
 end
 
 menu:register("core.docview", cmds)
+
+menu:register(function()
+  return core.is_native_editor_view and core.is_native_editor_view(core.active_view)
+end, {
+  { text = "Cut",     command = "native-editor:cut" },
+  { text = "Copy",    command = "native-editor:copy" },
+  { text = "Paste",   command = "native-editor:paste" },
+  ContextMenu.DIVIDER,
+  { text = "Find",    command = "native-editor:find"    },
+  { text = "Replace", command = "native-editor:replace" }
+})
 
 local function markdown_selection_predicate()
   local view = core.active_view
