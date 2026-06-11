@@ -255,7 +255,7 @@ Important status:
 - Project-folder switch confirmation now checks dirty views, not just dirty `Doc` objects, so dirty native editor Buffers participate in the same safety prompt.
 - First-party untitled/new-file commands now honor native default-open: untitled tabs become native scratch Buffers and explicit new-file creation opens through `core.open_file`.
 - Legacy DocView-adjacent plugins that remain loaded during dogfooding now guard obvious active-view `doc` accesses so native editor focus does not trip nil-field errors.
-- Native editor basic view behavior is closer to old `DocView`: code font/line-height, line-number gutter colors, content-left edge marker, newline-stripped line rendering/measurement, nearest-column mouse hit-testing, gutter line selection, double/triple-click drag snapping, and ctrl-click cursor addition.
+- Native editor basic view behavior is closer to old `DocView`: code font/line-height/text centering, line-number gutter colors for cursor/selection lines, content-left edge marker, newline-stripped line rendering/measurement, nearest-column mouse hit-testing, DocView-style one-based screen-position helpers, gutter line selection, double/triple-click drag snapping, ctrl-click cursor addition, and full-line selection paint padding.
 - Workspace save/restore now has runtime coverage for native editor views in split layouts.
 
 ## Current strategic direction

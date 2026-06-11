@@ -380,6 +380,8 @@ test.describe("native_text API bridge", function()
     local ok, err = pcall(function()
       keymap.modkeys["ctrl"], keymap.modkeys["shift"] = false, false
       local x, y = view:line_col_to_screen(0, 6)
+      test.same({ view:resolve_screen_position(x, y) }, { 1, 7 })
+      test.same({ view:get_line_screen_position(1, 7) }, { x, y })
       test.ok(view:on_mouse_pressed("left", x, y, 1))
       test.same(view.editor:cursor(), { cursor = 6 })
 
@@ -390,6 +392,7 @@ test.describe("native_text API bridge", function()
       x, y = view.position.x + 1, select(2, view:line_col_to_screen(1, 0))
       test.ok(view:on_mouse_pressed("left", x, y, 2))
       test.equal(view.editor:copy_selection(), "gamma\n")
+      test.ok(view:line_has_cursor_or_selection(1))
     end)
     keymap.modkeys["ctrl"], keymap.modkeys["shift"] = old_ctrl, old_shift
     if not ok then error(err) end
