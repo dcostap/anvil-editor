@@ -315,11 +315,13 @@ local function open_file_in_project(project, path, line)
     local line_num = line or 1
     local view = core.open_file(filename)
 
-    if view:is(DocView) then
+    if core.set_view_selection then
+      core.set_view_selection(view, line_num, 1, line_num, 1)
+    elseif view:is(DocView) then
       local doc = view.doc
       local line = math.min(line_num, math.max(1, #doc.lines))
-      doc:set_selection(line_num, 1, line_num, 1)
-      view:scroll_to_line(line_num, true, true)
+      doc:set_selection(line, 1, line, 1)
+      view:scroll_to_line(line, true, true)
     end
   end
 end

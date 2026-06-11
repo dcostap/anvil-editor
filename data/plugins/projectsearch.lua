@@ -1046,15 +1046,15 @@ end
 ---@type core.view?
 local previous_view
 
----Opens a DocView of the user selected match.
+---Opens an editor view for the user selected match.
 function ResultsView:open_selected_result(target)
   local item = self.results_list:get_selected()
   if not item or not item.position then return end
   core.try(function()
     local l, c1, c2 = item.line.line, item.position.col1, item.position.col2+1
-    local dv
+    local view
     if target == "side" then
-      dv = sidepanel.open_path_in_side(item.parent.file.path, {
+      view = sidepanel.open_path_in_side(item.parent.file.path, {
         line = l,
         col = c2,
         line2 = l,
@@ -1063,19 +1063,21 @@ function ResultsView:open_selected_result(target)
         source_view = previous_view,
       })
     else
-      dv = core.root_panel:open_doc(core.open_doc(item.parent.file.path))
-      if dv then
-        dv.doc:set_selection(l, c2, l, c1)
-        dv.doc:add_search_selection(l, c2, l, c1)
-        dv:scroll_to_make_visible(l, c1, true, {
-          line2 = l,
-          col2 = c2,
-        })
+      view = core.open_file(item.parent.file.path)
+      if view then
+        if view.doc then
+          view.doc:add_search_selection(l, c2, l, c1)
+          view:scroll_to_make_visible(l, c1, true, {
+            line2 = l,
+            col2 = c2,
+          })
+        end
+        if core.set_view_selection then core.set_view_selection(view, l, c2, l, c1) end
       end
       if self.is_global then core.set_active_view(self) end
     end
-    if dv then
-      previous_view = dv
+    if view then
+      previous_view = view
       core.root_panel.root_node:update_layout()
     end
   end)

@@ -256,6 +256,34 @@ function core.view_is_dirty(view)
   return false
 end
 
+function core.set_view_selection(view, line, col, line2, col2)
+  if not view then return false end
+  if view.doc then
+    local function set_doc_selection()
+      if line2 and col2 then view.doc:set_selection(line, col, line2, col2) else view.doc:set_selection(line, col) end
+    end
+    if view.with_selection_state then view:with_selection_state(set_doc_selection) else set_doc_selection() end
+    if view.scroll_to_line then view:scroll_to_line(line or 1, true, true) end
+    return true
+  end
+  if view.buffer and view.editor then
+    line = math.max(1, line or 1)
+    col = math.max(1, col or 1)
+    local start_offset = view.buffer:line_col_to_offset(line - 1, col - 1)
+    if not start_offset then return false end
+    if line2 and col2 then
+      local end_offset = view.buffer:line_col_to_offset(math.max(0, line2 - 1), math.max(0, col2 - 1))
+      view.editor:set_cursor(end_offset or start_offset, start_offset)
+    else
+      view.editor:set_cursor(start_offset)
+    end
+    if view.scroll_to_cursor then view:scroll_to_cursor() end
+    core.redraw = true
+    return true
+  end
+  return false
+end
+
 ---Get project for currently opened file-backed view or given filename path.
 ---If the given path does not belongs to any of the opened projects a new
 ---project object will be created and returned using the directory of the
