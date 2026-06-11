@@ -406,6 +406,38 @@ test.describe("native_text API bridge", function()
     if not ok then error(err) end
   end)
 
+  test.it("includes dirty native editor views in close-all-others routing", function()
+    require "core.file_context"
+    local NativeEditorView = require "plugins.native_editor"
+    local keep = NativeEditorView("keep")
+    local dirty = NativeEditorView("dirty")
+    dirty.editor:insert("!")
+    local node = core.root_panel:get_active_node_default()
+    node:add_view(dirty)
+    node:add_view(keep)
+    node:set_active_view(keep)
+
+    local original_nag_view = core.nag_view
+    local captured
+    local ok, err = pcall(function()
+      core.nag_view = {
+        show = function(_, title, text, options, callback)
+          captured = { title = title, text = text, options = options, callback = callback }
+        end
+      }
+      test.ok(command.perform("root:close-all-others"))
+      test.equal(captured.title, "Unsaved Changes")
+      test.ok(node:get_view_idx(dirty))
+      captured.callback({ text = "Yes" })
+      test.not_ok(node:get_view_idx(dirty))
+      test.ok(node:get_view_idx(keep))
+    end)
+    core.nag_view = original_nag_view
+    if node:get_view_idx(keep) then node:close_view(core.root_panel.root_node, keep) end
+    if node:get_view_idx(dirty) then node:remove_view(core.root_panel.root_node, dirty) end
+    if not ok then error(err) end
+  end)
+
   test.it("exposes native editor file paths through generic core view helpers", function()
     local NativeEditorView = require "plugins.native_editor"
     local path = tmp_file("native-editor-core-path")

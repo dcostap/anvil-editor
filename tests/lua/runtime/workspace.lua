@@ -36,6 +36,13 @@ local function has_key(keys, expected)
   return false
 end
 
+local function assert_same_paths(actual, expected)
+  test.equal(#actual, #expected)
+  for i, path in ipairs(expected) do
+    test.ok(common.path_equals(actual[i], path), string.format("expected path %s but got %s", tostring(path), tostring(actual[i])))
+  end
+end
+
 local function workspace_keys_for_path(project_path)
   local matches = {}
   for _, key in ipairs(storage.keys("ws") or {}) do
@@ -269,7 +276,7 @@ test.describe("Workspace persistence", function()
     test.equal(saved.documents.b.views[1].module, "plugins.native_editor")
     test.equal(saved.documents.b.views[1].state.filename, file_b)
     test.same(saved.documents.b.views[1].state.cursors[1], { cursor = 4, selection = 1 })
-    test.same(saved.visited_files, { file_a, file_b })
+    assert_same_paths(saved.visited_files, { file_a, file_b })
 
     for _, view in ipairs({ view_a, view_b }) do
       local path = view.buffer:path()
@@ -389,7 +396,7 @@ test.describe("Workspace persistence", function()
     test.same(native_views[1].editor:cursor(1), { cursor = 2 })
     test.same(native_views[2].editor:cursor(1), { cursor = 4, selection = 1 })
     test.equal(core.active_view, native_views[1])
-    test.same(core.visited_files, { file_a, file_b })
+    assert_same_paths(core.visited_files, { file_a, file_b })
     test.same(workspace_keys_for_path(project_path), {})
 
     for _, view in ipairs(native_views) do

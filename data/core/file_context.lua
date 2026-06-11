@@ -12,8 +12,7 @@ function M.view_file_path(view)
     return common.normalize_path(view)
   end
 
-  local doc = view and view.doc
-  local path = doc and doc.abs_filename
+  local path = core.view_file_path and core.view_file_path(view)
   if not path and view and type(view.path) == "string" then
     path = view.path
   end
@@ -134,28 +133,28 @@ function core.set_active_view(view)
   return result
 end
 
-local function collect_other_dirty_docs(node, keep_view, dirty_docs, seen)
+local function collect_other_dirty_views(node, keep_view, dirty_views, seen)
   if not node then return end
   if node.type == "leaf" then
     for _, view in ipairs(node.views or {}) do
-      local doc = view ~= keep_view and view.doc
-      if doc and not seen[doc] and doc:is_dirty() then
-        seen[doc] = true
-        dirty_docs[#dirty_docs + 1] = doc
+      local owner = view ~= keep_view and core.view_is_dirty and core.view_is_dirty(view) and (view.doc or view.buffer or view)
+      if owner and not seen[owner] then
+        seen[owner] = true
+        dirty_views[#dirty_views + 1] = view
       end
     end
   else
-    collect_other_dirty_docs(node.a, keep_view, dirty_docs, seen)
-    collect_other_dirty_docs(node.b, keep_view, dirty_docs, seen)
+    collect_other_dirty_views(node.a, keep_view, dirty_views, seen)
+    collect_other_dirty_views(node.b, keep_view, dirty_views, seen)
   end
 end
 
 command.add(nil, {
   ["root:close-all-others"] = function()
     local root = core.root_panel and core.root_panel.root_node
-    local dirty_docs = {}
-    collect_other_dirty_docs(root, core.active_view, dirty_docs, {})
-    core.confirm_close_docs(dirty_docs, core.root_panel.close_all_views, core.root_panel, core.active_view)
+    local dirty_views = {}
+    collect_other_dirty_views(root, core.active_view, dirty_views, {})
+    core.confirm_close_views(dirty_views, core.root_panel.close_all_views, core.root_panel, core.active_view)
   end,
 })
 

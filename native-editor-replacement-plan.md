@@ -240,7 +240,7 @@ Important status:
 - The native file-open implementation is exposed through a core facade, and `core.open_file` dynamically uses it when the opt-in native default-open setting is enabled.
 - Native editor workspace state now saves under canonical `plugins.native_editor` module name; old sandbox module remains loadable for transition restore.
 - Core project/title/visited-file helpers can now see native editor Buffer paths instead of assuming every file-backed editor view has `view.doc.abs_filename`.
-- Root close-all / close-all-others now use view-level dirty confirmation so native editor views are included in unsaved-change prompts.
+- Root close-all / close-all-others now use view-level dirty confirmation so native editor views are included in unsaved-change prompts, including the `core.file_context` close-all-others override.
 - Workspace save/restore now has runtime coverage for native editor views in split layouts.
 
 ## Current strategic direction
