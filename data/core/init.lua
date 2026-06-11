@@ -787,6 +787,43 @@ function core.init()
 end
 
 
+local function dirty_view_owner(view)
+  if not core.view_is_dirty(view) then return nil end
+  return view.doc or view.buffer or view
+end
+
+function core.confirm_close_views(views, close_fn, ...)
+  local dirty_count = 0
+  local dirty_name
+  local seen = {}
+  for _, view in ipairs(views or {}) do
+    local owner = dirty_view_owner(view)
+    if owner and not seen[owner] then
+      seen[owner] = true
+      dirty_count = dirty_count + 1
+      dirty_name = view.get_name and view:get_name() or tostring(view)
+    end
+  end
+  if dirty_count > 0 then
+    local text
+    if dirty_count == 1 then
+      text = string.format("\"%s\" has unsaved changes. Close anyway?", dirty_name)
+    else
+      text = string.format("%d views have unsaved changes. Close anyway?", dirty_count)
+    end
+    local args = {...}
+    local opt = {
+      { text = "Yes", default_yes = true },
+      { text = "No", default_no = true }
+    }
+    core.nag_view:show("Unsaved Changes", text, opt, function(item)
+      if item.text == "Yes" then close_fn(table.unpack(args)) end
+    end)
+  else
+    close_fn(...)
+  end
+end
+
 function core.confirm_close_docs(docs, close_fn, ...)
   local dirty_count = 0
   local dirty_name

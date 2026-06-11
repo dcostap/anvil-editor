@@ -29,8 +29,9 @@ end
 local function open_file(use_dialog, label, selection_callback, allow_directories)
   local view = core.active_view
   local default_text, root_dir, filename = "", core.root_project().path, ""
-  if view.doc and view.doc.abs_filename then
-    local dirname = common.dirname(view.doc.abs_filename)
+  local view_filename = core.view_file_path and core.view_file_path(view)
+  if view_filename then
+    local dirname = common.dirname(view_filename)
     if dirname and common.path_belongs_to(dirname, root_dir) then
       dirname = core.normalize_to_project_dir(dirname)
       default_text = dirname == root_dir and "" or common.home_encode(dirname) .. PATHSEP

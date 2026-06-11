@@ -361,6 +361,32 @@ test.describe("native_text API bridge", function()
     if not ok then error(err) end
   end)
 
+  test.it("confirms dirty native editor views through generic close helper", function()
+    local NativeEditorView = require "plugins.native_editor"
+    local view = NativeEditorView("abc")
+    view.editor:insert("d")
+    local original_nag_view = core.nag_view
+    local closed = false
+    local captured
+    local ok, err = pcall(function()
+      core.nag_view = {
+        show = function(_, title, text, options, callback)
+          captured = { title = title, text = text, options = options, callback = callback }
+        end
+      }
+      core.confirm_close_views({ view }, function() closed = true end)
+      test.equal(closed, false)
+      test.equal(captured.title, "Unsaved Changes")
+      test.contains(captured.text, "Close anyway?")
+      captured.callback({ text = "No" })
+      test.equal(closed, false)
+      captured.callback({ text = "Yes" })
+      test.equal(closed, true)
+    end)
+    core.nag_view = original_nag_view
+    if not ok then error(err) end
+  end)
+
   test.it("exposes native editor file paths through generic core view helpers", function()
     local NativeEditorView = require "plugins.native_editor"
     local path = tmp_file("native-editor-core-path")
