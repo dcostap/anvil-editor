@@ -352,7 +352,7 @@ function NativeEditorView:get_gutter_width()
   -- between line numbers and text so the content edge and future diff markers do
   -- not cause the text to shift when they appear.
   local marker_lane = style.padding.x * (style.gitdiff_width or 3) / 12
-  return math.max(style.padding.x, width + padding + marker_lane)
+  return math.max(style.padding.x, width + padding + marker_lane), padding
 end
 
 function NativeEditorView:get_horizontal_scrollbar_height()
@@ -605,25 +605,35 @@ function NativeEditorView:draw_selection_for_cursor(cursor)
   end
 end
 
-function NativeEditorView:scroll_to_make_visible(line, col, instant)
+function NativeEditorView:scroll_to_make_visible(line, col, instant, opts)
+  opts = opts or {}
   line = math.max(1, line or 1) - 1
   col = math.max(1, col or 1) - 1
   local lh = self:get_line_height()
   local y = line * lh
-  local pad = self.mouse_selecting and math.min(self:get_visible_scroll_context_lines(), 1) or self:get_visible_scroll_context_lines()
-  local above = math.max(0, y - style.padding.y - lh * pad)
-  local below = y - self.size.y + self:get_horizontal_scrollbar_height() + lh * (pad + 1)
-  self.scroll.to.y = math.max(0, common.clamp(self.scroll.to.y, below, above))
+  if opts.vertical ~= false then
+    local pad = self.mouse_selecting and math.min(self:get_visible_scroll_context_lines(), 1) or self:get_visible_scroll_context_lines()
+    local below_pad = pad
+    if config.scroll_past_end and not self.mouse_selecting then
+      below_pad = math.max(below_pad, self:get_scroll_past_end_context_lines())
+    end
+    local above = math.max(0, y - style.padding.y - lh * pad)
+    local below = y - self.size.y + self:get_horizontal_scrollbar_height() + lh * (below_pad + 1)
+    self.scroll.to.y = math.max(0, common.clamp(self.scroll.to.y, below, above))
+  end
 
-  local gutter_w = self:get_gutter_width()
-  local available_w = math.max(1, self.size.x - gutter_w - style.padding.x * 2)
-  local text = self:get_line_text(line)
-  local x = self:get_font():get_width(text:sub(1, common.clamp(col, 0, #text)))
-  self.h_scrollable_size = math.max(self.h_scrollable_size or 0, gutter_w + style.padding.x * 2 + x + self:get_font():get_width(" "))
-  if x < self.scroll.to.x then
-    self.scroll.to.x = x
-  elseif x > self.scroll.to.x + available_w then
-    self.scroll.to.x = x - available_w + self:get_font():get_width(" ")
+  if opts.horizontal ~= false then
+    local gutter_w = self:get_gutter_width()
+    local available_w = math.max(1, self.size.x - gutter_w - style.padding.x * 2)
+    local text = self:get_line_text(line)
+    local x = self:get_font():get_width(text:sub(1, common.clamp(col, 0, #text)))
+    local x2 = opts.x2 or x
+    self.h_scrollable_size = math.max(self.h_scrollable_size or 0, gutter_w + style.padding.x * 2 + math.max(x, x2) + self:get_font():get_width(" "))
+    if x < self.scroll.to.x then
+      self.scroll.to.x = x
+    elseif x2 > self.scroll.to.x + available_w then
+      self.scroll.to.x = x2 - available_w + self:get_font():get_width(" ")
+    end
   end
   self:clamp_scroll_position()
   if instant then
@@ -632,14 +642,12 @@ function NativeEditorView:scroll_to_make_visible(line, col, instant)
   end
 end
 
-function NativeEditorView:scroll_to_line(line, center, instant)
-  line = math.max(1, line or 1) - 1
+function NativeEditorView:scroll_to_line(line, ignore_if_visible, instant)
+  line = math.max(1, line or 1)
+  local minline, maxline = self:get_visible_line_range()
+  if ignore_if_visible and line >= minline and line <= maxline then return end
   local lh = self:get_line_height()
-  if center then
-    self.scroll.to.y = line * lh - self.size.y / 2 + lh / 2
-  else
-    self.scroll.to.y = line * lh
-  end
+  self.scroll.to.y = math.max(0, (line - 1) * lh - (self.size.y - self:get_horizontal_scrollbar_height()) / 2)
   self:clamp_scroll_position()
   if instant then self.scroll.y = self.scroll.to.y end
 end
@@ -664,7 +672,9 @@ function NativeEditorView:line_bounds(line)
 end
 
 local function native_word_char(char)
-  return char and char:match("[%w_]") ~= nil
+  if not char or char == "" then return false end
+  local non_word = config.non_word_chars or " \t\n/\\()\"':,.;<>~!@#$%^&*|+=[]{}`?-"
+  return not non_word:find(char, 1, true)
 end
 
 function NativeEditorView:word_bounds_at_offset(offset)
@@ -799,6 +809,11 @@ end
 function NativeEditorView:on_mouse_released(button, x, y)
   NativeEditorView.super.on_mouse_released(self, button, x, y)
   if button == "left" then self.mouse_selecting = nil end
+end
+
+function NativeEditorView:on_mouse_left()
+  NativeEditorView.super.on_mouse_left(self)
+  if not self.mouse_selecting then self.cursor = "ibeam" end
 end
 
 function NativeEditorView:find_literal(text, backwards)

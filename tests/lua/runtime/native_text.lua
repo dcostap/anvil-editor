@@ -383,6 +383,9 @@ test.describe("native_text API bridge", function()
       test.same({ view:resolve_screen_position(x, y) }, { 1, 7 })
       test.same({ view:get_line_screen_position(1, 7) }, { x, y })
       test.equal(view:get_x_offset_col(1, view:get_col_x_offset(1, 7)), 7)
+      local gutter_width, gutter_padding = view:get_gutter_width()
+      test.ok(gutter_width > 0)
+      test.ok(gutter_padding > 0)
       test.ok(view:on_mouse_pressed("left", x, y, 1))
       test.same(view.editor:cursor(), { cursor = 6 })
 
@@ -499,6 +502,33 @@ test.describe("native_text API bridge", function()
     local node = core.root_panel.root_node:get_node_for_view(view)
     if node then node:close_view(core.root_panel.root_node, view) end
     os.remove(path)
+  end)
+
+  test.it("routes deferred file drops through native editor default-open", function()
+    require "plugins.native_editor"
+    local path = tmp_file("native-editor-file-drop")
+    local fp = assert(io.open(path, "wb"))
+    fp:write("dropped")
+    fp:close()
+
+    local native_config = config.plugins.native_editor
+    local old_default_open = native_config.default_open
+    local ok, err = pcall(function()
+      native_config.default_open = true
+      local node = core.root_panel:get_active_node_default()
+      local x = (node.position and node.position.x or 0) + 1
+      local y = (node.position and node.position.y or 0) + 1
+      core.root_panel.defer_open_docs = { { path, x, y } }
+      core.root_panel:process_defer_open_docs()
+      local view = core.active_view
+      test.ok(core.is_native_editor_view(view), "expected dropped file to open as native editor")
+      test.ok(common.path_equals(core.view_file_path(view), path))
+      node = core.root_panel.root_node:get_node_for_view(view)
+      if node then node:close_view(core.root_panel.root_node, view) end
+    end)
+    native_config.default_open = old_default_open
+    os.remove(path)
+    if not ok then error(err) end
   end)
 
   test.it("routes core.open_file through native editor when default-open is enabled", function()

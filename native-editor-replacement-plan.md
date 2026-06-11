@@ -245,7 +245,7 @@ Important status:
 - Generic `core.set_view_selection` supports both old DocViews and native editor views; find-file and project-search result navigation use it for native editor compatibility.
 - Edit-location history records native editor edits and restores native editor file positions through the default open path.
 - First-party default keymap fallbacks now prefer native editor find/replace/save/go-to-line commands while preserving old DocView command fallback.
-- IPC open-file and tab-drag handoff paths route through generic file-backed views / `core.open_file`, so native editor default-open applies across single-instance and drag/drop flows.
+- IPC open-file, tab-drag handoff, and OS file-drop deferred-open paths route through generic file-backed views / `core.open_file`, so native editor default-open applies across single-instance and drag/drop flows.
 - Native Buffer paths can be updated without saving (`buffer:set_path`), and filetree rename flows update open native editor Buffer paths/registry identities.
 - Side/main panel file-opening and IntelliJ-style navigation history restore through `core.open_file` / generic selection so native default-open applies there too.
 - User/project module opens and native-editor file dialog accepts now route through `core.open_file`, preserving default native routing and non-text special cases.

@@ -1010,7 +1010,9 @@ ipc:register_method("core.change_directory", function(directory)
   if system.get_file_info(directory) then
     system.raise_window(core.window)
     if common.path_equals(directory, core.root_project().path) then return end
-    core.confirm_close_docs(core.docs, function(dirpath)
+    local root = core.root_panel and core.root_panel.root_node
+    local views = root and root:get_children() or {}
+    core.confirm_close_views(views, function(dirpath)
       core.open_project_in_same_window(dirpath)
     end, directory)
   end

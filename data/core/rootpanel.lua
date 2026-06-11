@@ -580,7 +580,9 @@ function RootPanel:on_file_dropped(filename, x, y)
       system.exec(string.format("%q %q", EXEFILE, filename))
     else
       -- change project directory
-      core.confirm_close_docs(core.docs, function(dirpath)
+      local root = core.root_panel and core.root_panel.root_node
+      local views = root and root:get_children() or {}
+      core.confirm_close_views(views, function(dirpath)
         core.open_folder_project(dirpath)
       end, system.absolute_path(filename))
       self.first_dnd_processed = true
@@ -621,11 +623,10 @@ function RootPanel:process_defer_open_docs()
         or (info_err and ("error=" .. quote_drop_text(info_err)) or nil)
       log_file_drop("deferred-rejected", filename, x, y, detail)
     else
-      local ok, doc = core.try(core.open_doc, filename)
-      if ok then
-        local node = core.root_panel.root_node:get_child_overlapping_point(x, y)
-        node:set_active_view(node.active_view)
-        core.root_panel:open_doc(doc)
+      local node = core.root_panel.root_node:get_child_overlapping_point(x, y)
+      if node and node.active_view then node:set_active_view(node.active_view) end
+      local ok, view = core.try(core.open_file, filename)
+      if ok and view then
         log_file_drop("opened-file", filename, x, y, "size=" .. tostring(info.size))
       end
     end
