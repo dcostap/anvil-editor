@@ -392,6 +392,16 @@ test.describe("native_text API bridge", function()
       x, y = view:line_col_to_screen(0, 7)
       test.ok(view:on_mouse_pressed("left", x, y, 2))
       test.equal(view.editor:copy_selection(), "beta")
+      if system.get_primary_selection then
+        test.equal(system.get_primary_selection(), "beta")
+      end
+
+      if system.set_primary_selection then
+        system.set_primary_selection(" MID")
+        x, y = view:line_col_to_screen(0, 10)
+        test.ok(view:on_mouse_pressed("middle", x, y, 1))
+        test.equal(view.buffer:text(), "alpha beta MID\ngamma\n")
+      end
 
       x, y = view.position.x + 1, select(2, view:line_col_to_screen(1, 0))
       test.ok(view:on_mouse_pressed("left", x, y, 2))

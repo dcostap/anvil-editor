@@ -538,6 +538,12 @@ function NativeEditorView:has_selection()
   return false
 end
 
+function NativeEditorView:update_primary_selection()
+  if not (system.set_primary_selection and self:has_selection()) then return end
+  local text = self.editor:copy_selection()
+  if text and text ~= "" then system.set_primary_selection(text) end
+end
+
 function NativeEditorView:line_has_cursor_or_selection(line)
   for i = 1, self.editor:cursor_count() do
     local cursor = self.editor:cursor(i)
@@ -724,6 +730,7 @@ function NativeEditorView:set_mouse_selection(anchor, offset, snap_type)
   else
     self.editor:set_cursor(last, first)
   end
+  self:update_primary_selection()
 end
 
 function NativeEditorView:on_text_input(text)
@@ -739,11 +746,25 @@ end
 
 function NativeEditorView:on_mouse_pressed(button, x, y, clicks)
   if NativeEditorView.super.on_mouse_pressed(self, button, x, y, clicks) then return true end
-  if button ~= "left" then return false end
+  if button ~= "left" and button ~= "middle" then return false end
 
   local line, col = self:screen_to_line_col(x, y)
   local offset = self.buffer:line_col_to_offset(line, col)
   if not offset then return true end
+
+  if button == "middle" then
+    self.editor:set_cursor(offset)
+    local text = system.get_primary_selection and system.get_primary_selection() or ""
+    if text and text ~= "" then
+      self.editor:paste(text)
+      self:note_tree_sitter_mutation()
+      if core.record_native_edit_location then core.record_native_edit_location(self) end
+      self:scroll_to_cursor()
+    end
+    self.mouse_selecting = nil
+    core.redraw = true
+    return true
+  end
 
   local gutter_w = self:get_gutter_width()
   local in_gutter = x >= self.position.x and x <= self.position.x + gutter_w
@@ -756,6 +777,7 @@ function NativeEditorView:on_mouse_pressed(button, x, y, clicks)
       self.mouse_selecting = { anchor = anchor, snap_type = "lines" }
     elseif clicks and clicks >= 2 then
       self.editor:set_cursor(line_end, line_start)
+      self:update_primary_selection()
       self.mouse_selecting = { anchor = line_start, snap_type = "lines" }
     else
       self.editor:set_cursor(line_start)
@@ -891,6 +913,7 @@ local function with_active_native_view(fn, affects_text)
     view = view or core.active_view
     if is_native_editor_view(view) then
       fn(view)
+      if view.has_selection and view:has_selection() then view:update_primary_selection() end
       if affects_text then
         view:note_tree_sitter_mutation()
         if core.record_native_edit_location then core.record_native_edit_location(view) end
