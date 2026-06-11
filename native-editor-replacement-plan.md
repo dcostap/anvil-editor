@@ -589,6 +589,30 @@ The native editor is ready to become the default editor when dogfooding is stabl
 - Critical first-party plugins are ported, adapted, or explicitly moved to the deprecated archive and no longer loaded.
 - Old Lua `Doc` no longer owns the primary editing experience.
 
+### Native editor DocView parity baseline
+
+Before moving from dogfooding into old `DocView` deletion, the native editor needs an explicit basic-parity pass against the old `DocView`. This is not a mandate to preserve the old implementation or plugin monkey-patch surface forever; it is a checklist for the visible/editor-shell behavior that should feel normal before the native editor is treated as the primary editor.
+
+Current known basic-parity gaps:
+
+- **IME composition support** — old `DocView` has IME location tracking and composition underline/selection drawing; native editor currently handles normal text input but not full IME composition UX.
+- **UTF-8 and visual column behavior** — native editor still exposes mostly byte-offset/byte-column behavior in view helpers and status calculations; old `DocView` has more UTF-8-aware column handling and configurable caret column display.
+- **Tab/indent measurement details** — native editor sets the code-font tab size, but old `DocView` has richer indentation/syntax-font-aware column measurement and cache behavior.
+- **Overwrite mode** — old `DocView`/`Doc` supports overwrite mode and alternate caret drawing; native editor does not expose overwrite mode yet.
+- **Advanced selection shapes and mouse gestures** — native editor has basic multi-cursor, gutter selection, word/line drag snapping, primary selection, and ctrl-click cursor creation, but not every mature old `DocView` selection/mouse path.
+- **Line-body hooks and plugin draw surfaces** — native editor now has basic gutter/highlight/overlay hooks, but old `DocView` has a larger draw surface such as `draw_line_body`, line hints, selection/caret caches, and plugin extension points.
+- **Scroll polish** — native editor has scroll context and scroll-past-end basics, but old `DocView` has more careful horizontal range scrolling and scrollbar edge-case behavior.
+- **Status bar accuracy** — native editor now mirrors the broad status bar item set, but encoding is a placeholder, indentation is config-based rather than Buffer-detected, and selection character counts are simpler.
+- **Syntax/render parity** — native editor uses native Tree-sitter for supported languages; old `DocView` has many Lua tokenizer languages and syntax-font details. Long-term tokenizer compatibility is still not a goal, but obvious render regressions should be tracked here.
+- **Plugin compatibility** — visual/editor-shell plugins such as centered editor, sticky scroll, whitespace/indent guides, selection highlight, and smooth caret still mostly expect old `DocView`. Either port them to native capabilities, keep them DocView-only and harmless, or archive/replace them.
+
+Guidelines for this parity work:
+
+- Implement obvious visible/editor-shell parity in the Lua `NativeEditorView` only while it remains temporary dogfooding glue.
+- Do not rebuild old `Doc` text state or `Doc.lines` compatibility.
+- When a parity item needs durable editor semantics, high-performance rendering, native text metrics, or shared plugin capabilities, promote it into C/native APIs instead of expanding the Lua view shell indefinitely.
+- Add tests for behavior that can be verified without screenshots; reserve manual dogfooding for visual/tactile issues such as exact gutter feel, IME behavior, and selection drag polish.
+
 ## Phase D: Lua `Doc` deletion checklist
 
 Only after the native editor is default and stable:
