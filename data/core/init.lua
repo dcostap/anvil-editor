@@ -246,6 +246,7 @@ end
 
 function core.view_is_dirty(view)
   if not view then return false end
+  if type(view.is_dirty) == "function" then return view:is_dirty() end
   local doc = view.doc
   if doc and type(doc.is_dirty) == "function" then return doc:is_dirty() end
   local buffer = view.buffer

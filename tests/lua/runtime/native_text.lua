@@ -423,6 +423,24 @@ test.describe("native_text API bridge", function()
     os.remove(path)
   end)
 
+  test.it("opens missing files as dirty native editor Buffers", function()
+    require "plugins.native_editor"
+    local path = tmp_file("native-editor-new-file")
+    os.remove(path)
+
+    local view = core.open_native_editor_file(path)
+    test.ok(core.is_native_editor_view(view))
+    test.ok(common.path_equals(view.buffer:path(), path))
+    test.ok(core.view_is_dirty(view))
+    test.ok(command.perform("native-editor:save"))
+    test.not_ok(core.view_is_dirty(view))
+    test.ok(system.get_file_info(path))
+
+    local node = core.root_panel.root_node:get_node_for_view(view)
+    if node then node:close_view(core.root_panel.root_node, view) end
+    os.remove(path)
+  end)
+
   test.it("routes core.open_file through native editor when default-open is enabled", function()
     require "plugins.native_editor"
     local path = tmp_file("native-editor-default-open")

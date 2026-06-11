@@ -138,7 +138,7 @@ function NativeEditorView:check_external_file_change()
   if not path or self.external_reload_prompting then return end
   local current = file_signature(path)
   if same_file_signature(self.file_signature, current) then return end
-  if not self.buffer:is_dirty() then
+  if not self:is_dirty() then
     self.file_signature = current
     self:reload_from_disk()
     return
@@ -157,17 +157,21 @@ function NativeEditorView:check_external_file_change()
   end)
 end
 
+function NativeEditorView:is_dirty()
+  return self.native_new_file == true or self.buffer:is_dirty()
+end
+
 function NativeEditorView:get_name()
   local path = self.buffer:path()
   local name = path and common.basename(path) or "Native Editor"
-  if self.buffer:is_dirty() then name = "*" .. name end
+  if self:is_dirty() then name = "*" .. name end
   return name
 end
 
 function NativeEditorView:get_filename()
   local path = self.buffer:path()
   if path then
-    return common.home_encode(path) .. (self.buffer:is_dirty() and "*" or "")
+    return common.home_encode(path) .. (self:is_dirty() and "*" or "")
   end
   return self:get_name()
 end
@@ -180,7 +184,7 @@ function NativeEditorView:on_close()
 end
 
 function NativeEditorView:try_close(do_close)
-  if not self.buffer:is_dirty() then
+  if not self:is_dirty() then
     close_native_view(self, do_close)
     return
   end
@@ -786,6 +790,7 @@ end
 
 local function finish_native_save(view, close_after_save, close_fn)
   for_each_native_buffer_view(view.buffer, function(shared_view)
+    shared_view.native_new_file = false
     shared_view:update_file_signature()
     shared_view.external_reload_prompting = false
   end)
@@ -844,7 +849,10 @@ function save_native_view_as(view, close_after_save)
       if filename and filename ~= "" then
         if view.buffer:save_file(filename) then
           register_saved_native_buffer(view, filename)
-          view:update_file_signature()
+          for_each_native_buffer_view(view.buffer, function(shared_view)
+            shared_view.native_new_file = false
+            shared_view:update_file_signature()
+          end)
           if close_after_save then
             local node = core.root_panel.root_node:get_node_for_view(view)
             if node then close_native_view(view, function() node:close_view(core.root_panel.root_node, view) end) end
@@ -900,17 +908,37 @@ local function open_native_text_file(filename)
     core.log_quiet("Focused already-open native Buffer: %s", filename)
     return existing
   end
-  local buffer, identity_key, reused = open_registered_native_buffer(filename)
-  if not buffer then return end
+  local file_info = system.get_file_info(filename)
+  local buffer, identity_key, reused
+  local native_new_file = false
+  if file_info then
+    if file_info.type ~= "file" then return end
+    buffer, identity_key, reused = open_registered_native_buffer(filename)
+    if not buffer then return end
+  else
+    buffer = native_text.new_buffer("")
+    identity_key = native_file_identity(filename)
+    if not buffer:set_path(filename) then return end
+    if identity_key then native_text.register_file_buffer(identity_key, buffer) end
+    native_new_file = true
+  end
   local view = NativeEditorView(nil, filename, buffer, identity_key)
+  view.native_new_file = native_new_file
   core.root_panel:get_active_node_default():add_view(view)
   if core.set_visited then core.set_visited(filename) end
-  core.log_quiet("Opened native Buffer%s: %s", reused and " from registry" or "", filename)
+  core.log_quiet("Opened native Buffer%s: %s", reused and " from registry" or (native_new_file and " for new file" or ""), filename)
   return view
 end
 
 function core.open_native_editor_file(filename)
   return open_native_text_file(filename)
+end
+
+function core.open_native_editor_scratch(text)
+  local view = NativeEditorView(text or "")
+  core.root_panel:get_active_node_default():add_view(view)
+  core.log_quiet("Opened native scratch Buffer")
+  return view
 end
 
 local core_open_file = core.__native_editor_original_open_file or core.open_file
@@ -1133,7 +1161,7 @@ local function dirty_native_views()
   local root = core.root_panel and core.root_panel.root_node
   if not root then return dirty end
   for _, view in ipairs(root:get_children()) do
-    if view:is(NativeEditorView) and view.buffer:is_dirty() then
+    if view:is(NativeEditorView) and view:is_dirty() then
       dirty[#dirty + 1] = view
     end
   end

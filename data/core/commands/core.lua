@@ -257,13 +257,17 @@ command.add(nil, {
   end,
 
   ["core:new-doc"] = function()
-    core.root_panel:open_doc(core.open_doc())
+    if core.open_native_editor_scratch and (config.plugins.native_editor or {}).default_open then
+      core.open_native_editor_scratch()
+    else
+      core.root_panel:open_doc(core.open_doc())
+    end
   end,
 
   ["core:new-named-doc"] = function()
     core.global_prompt_bar:enter("File name", {
       submit = function(text)
-        core.root_panel:open_doc(core.open_doc(common.sanitize_prompt_path(text)))
+        core.open_file(common.sanitize_prompt_path(text))
       end
     })
   end,

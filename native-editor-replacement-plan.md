@@ -249,6 +249,7 @@ Important status:
 - Native Buffer paths can be updated without saving (`buffer:set_path`), and filetree rename flows update open native editor Buffer paths/registry identities.
 - Side/main panel file-opening and IntelliJ-style navigation history restore through `core.open_file` / generic selection so native default-open applies there too.
 - User/project module opens and native-editor file dialog accepts now route through `core.open_file`, preserving default native routing and non-text special cases.
+- Native default-open now covers missing files and unnamed scratch buffers: new named files open as dirty native Buffers, and `core:new-doc` opens a native scratch Buffer while native default-open is enabled.
 - Workspace save/restore now has runtime coverage for native editor views in split layouts.
 
 ## Current strategic direction
@@ -564,7 +565,7 @@ The native editor is ready to become the default editor when dogfooding is stabl
 
 - Canonical native editor command target layer exists outside the sandbox namespace. (Started: `native-editor:*` commands now target native-editor-capable views; `native-text-sandbox:*` remains an alias layer only.)
 - Opt-in core-facing native open path exists. (Started: `core.open_native_editor_file(filename)` opens/reuses file-backed native editor views; `core.open_file` dynamically routes through it when native default-open is enabled.)
-- `core.open_doc` / file open path can create native Buffers/views for normal text files.
+- `core.open_doc` / file open path can create native Buffers/views for normal text files. (In progress: `core.open_file` routes existing and missing text paths through native default-open; old `core.open_doc` remains for legacy/tool views.)
 - Existing tabs/splits/root panel can host native editor views without special sandbox commands.
 - Workspace restoration can serialize and restore native editor views, including open file identity, tab/split placement, scroll position, and selection/cursor state. (Runtime split-layout save/restore coverage added; keep validating in real sessions.)
 - Save/close/quit flows handle native views.
