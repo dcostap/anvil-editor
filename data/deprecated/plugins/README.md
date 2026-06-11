@@ -1,7 +1,7 @@
 # Deprecated bundled plugins
 
-This archive is for bundled Lua plugins that are no longer part of Anvil's supported native-editor path.
+This directory stores old bundled plugin source that is intentionally outside Anvil's normal plugin discovery path.
 
-Plugins placed here are retained as source history/reference material only. They are outside the normal `data/plugins` discovery path, should not be required by `data/plugins/anvil_defaults.lua`, and should not receive compatibility work for removed Lua `Doc`/`DocView` internals.
+Archived plugins are reference material only. They are not loaded by `core.load_plugins`, are not supported during the native editor replacement, and may depend on Lua `Doc` / `DocView` APIs that are planned for removal.
 
-If archived behavior is still wanted, reintroduce it through a supported native capability or Lua orchestration layer instead of adapting the archived plugin around old editor internals.
+If behavior from an archived plugin is wanted again, implement it through native editor capabilities or supported Lua app-shell orchestration instead of adapting the archived code around old editor internals.
