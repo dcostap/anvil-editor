@@ -80,6 +80,9 @@ function NativeEditorView:new(text, filename, buffer, identity_key)
   self.h_scrollable_size = 0
   self.scrollable = true
   self.cursor = "ibeam"
+  self.font = "code_font"
+  self.v_scrollbar:set_forced_status(config.force_scrollbar_status)
+  self.h_scrollbar:set_forced_status(config.force_scrollbar_status)
 end
 
 function NativeEditorView:enable_tree_sitter_for_path(filename)
@@ -325,7 +328,9 @@ function NativeEditorView:update()
 end
 
 function NativeEditorView:get_font()
-  return style.code_font or style.font
+  local font = style[self.font or "code_font"] or style.code_font or style.font
+  if font.set_tab_size then font:set_tab_size(config.indent_size) end
+  return font
 end
 
 function NativeEditorView:get_line_height()
@@ -350,19 +355,90 @@ function NativeEditorView:get_gutter_width()
   return math.max(style.padding.x, width + padding + marker_lane)
 end
 
+function NativeEditorView:get_horizontal_scrollbar_height()
+  local _, _, _, h_scroll = self.h_scrollbar:get_track_rect()
+  return h_scroll or 0
+end
+
+function NativeEditorView:get_vertical_viewport_height()
+  return math.max(0, self.size.y - self:get_horizontal_scrollbar_height())
+end
+
+local function native_normalize_scroll_context_lines()
+  return math.max(0, math.floor(tonumber(config.scroll_context_lines) or 0))
+end
+
+function NativeEditorView:get_visible_scroll_context_lines()
+  local lh = self:get_line_height()
+  if lh <= 0 then return 0 end
+  local visible_span = math.max(0, math.floor((self:get_vertical_viewport_height() - style.padding.y) / lh))
+  return math.min(native_normalize_scroll_context_lines(), math.floor(visible_span / 2))
+end
+
+function NativeEditorView:get_scroll_past_end_context_lines()
+  local lh = self:get_line_height()
+  if lh <= 0 then return 0 end
+  local max_context = math.max(0, math.floor((self:get_vertical_viewport_height() - style.padding.y - lh) / lh))
+  return math.min(native_normalize_scroll_context_lines(), max_context)
+end
+
 function NativeEditorView:get_scrollable_size()
-  return math.max(self.size.y, self.buffer:line_count() * self:get_line_height() + style.padding.y * 2)
+  local line_count = math.max(1, self.buffer:line_count())
+  local lh = self:get_line_height()
+  local text_height = line_count * lh + style.padding.y * 2
+  if config.scroll_past_end then
+    local pad = self:get_scroll_past_end_context_lines()
+    local last_line_y = style.padding.y + lh * math.max(0, line_count - 1)
+    local max_scroll = math.max(0, last_line_y - self:get_vertical_viewport_height() + lh * (pad + 1))
+    return math.max(self.size.y, max_scroll + self.size.y)
+  end
+  if text_height <= self.size.y then return self.size.y end
+  return text_height + self:get_horizontal_scrollbar_height()
 end
 
 function NativeEditorView:get_h_scrollable_size()
   return math.max(self.size.x, self.h_scrollable_size or 0)
 end
 
+function NativeEditorView:get_visible_line_range()
+  local lh = self:get_line_height()
+  local minline = math.max(1, math.floor((self.scroll.y - style.padding.y) / lh) + 1)
+  local maxline = math.min(math.max(1, self.buffer:line_count()), math.floor((self.scroll.y + self.size.y - style.padding.y) / lh) + 1)
+  return minline, maxline
+end
+
+function NativeEditorView:get_visible_cols_range(line, extra_cols)
+  extra_cols = extra_cols or 100
+  local text = self:get_line_text((line or 1) - 1)
+  local char_width = math.max(1, self:get_font():get_width("m"))
+  local first = math.max(1, math.floor(self.scroll.x / char_width) - extra_cols)
+  local last = math.min(#text + 1, math.ceil((self.scroll.x + self.size.x) / char_width) + extra_cols)
+  return first, last, first, last
+end
+
+function NativeEditorView:get_col_x_offset(line, col)
+  local text = self:get_line_text((line or 1) - 1)
+  col = common.clamp(col or 1, 1, #text + 1)
+  return self:get_font():get_width(text:sub(1, col - 1))
+end
+
+function NativeEditorView:get_x_offset_col(line, xoffset)
+  local text = self:get_line_text((line or 1) - 1)
+  xoffset = math.max(0, xoffset or 0)
+  local col = 1
+  for i = 1, #text do
+    local prev_width = self:get_font():get_width(text:sub(1, i - 1))
+    local next_width = self:get_font():get_width(text:sub(1, i))
+    if xoffset < (prev_width + next_width) / 2 then break end
+    col = i + 1
+  end
+  return col
+end
+
 function NativeEditorView:line_col_to_screen(line, col)
   local lh = self:get_line_height()
-  local text = self:get_line_text(line)
-  col = common.clamp(col or 0, 0, #text)
-  local x = self.position.x + self:get_gutter_width() + style.padding.x - self.scroll.x + self:get_font():get_width(text:sub(1, col))
+  col = common.clamp(col or 0, 0, #self:get_line_text(line))
+  local x = self.position.x + self:get_gutter_width() + style.padding.x - self.scroll.x + self:get_col_x_offset(line + 1, col + 1)
   local y = self.position.y + style.padding.y - self.scroll.y + line * lh
   return x, y
 end
@@ -384,17 +460,9 @@ function NativeEditorView:screen_to_line_col(x, y)
   local lh = self:get_line_height()
   local line = math.floor((y - self.position.y + self.scroll.y - style.padding.y) / lh)
   line = common.clamp(line, 0, math.max(0, self.buffer:line_count() - 1))
-  local text = self:get_line_text(line)
   local text_x = self.position.x + self:get_gutter_width() + style.padding.x - self.scroll.x
   local relx = math.max(0, x - text_x)
-  local col = 0
-  for i = 1, #text do
-    local prev_width = self:get_font():get_width(text:sub(1, i - 1))
-    local next_width = self:get_font():get_width(text:sub(1, i))
-    if relx < (prev_width + next_width) / 2 then break end
-    col = i
-  end
-  return line, col
+  return line, self:get_x_offset_col(line + 1, relx) - 1
 end
 
 function NativeEditorView:screen_to_offset(x, y)
@@ -542,11 +610,10 @@ function NativeEditorView:scroll_to_make_visible(line, col, instant)
   col = math.max(1, col or 1) - 1
   local lh = self:get_line_height()
   local y = line * lh
-  if y < self.scroll.to.y then
-    self.scroll.to.y = y
-  elseif y + lh > self.scroll.to.y + self.size.y then
-    self.scroll.to.y = y + lh - self.size.y + style.padding.y * 2
-  end
+  local pad = self.mouse_selecting and math.min(self:get_visible_scroll_context_lines(), 1) or self:get_visible_scroll_context_lines()
+  local above = math.max(0, y - style.padding.y - lh * pad)
+  local below = y - self.size.y + self:get_horizontal_scrollbar_height() + lh * (pad + 1)
+  self.scroll.to.y = math.max(0, common.clamp(self.scroll.to.y, below, above))
 
   local gutter_w = self:get_gutter_width()
   local available_w = math.max(1, self.size.x - gutter_w - style.padding.x * 2)

@@ -382,6 +382,7 @@ test.describe("native_text API bridge", function()
       local x, y = view:line_col_to_screen(0, 6)
       test.same({ view:resolve_screen_position(x, y) }, { 1, 7 })
       test.same({ view:get_line_screen_position(1, 7) }, { x, y })
+      test.equal(view:get_x_offset_col(1, view:get_col_x_offset(1, 7)), 7)
       test.ok(view:on_mouse_pressed("left", x, y, 1))
       test.same(view.editor:cursor(), { cursor = 6 })
 
