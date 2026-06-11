@@ -367,6 +367,34 @@ test.describe("native_text API bridge", function()
     os.remove(new_path)
   end)
 
+  test.it("supports DocView-like native editor mouse placement and selection", function()
+    local NativeEditorView = require "plugins.native_editor"
+    local keymap = require "core.keymap"
+    local view = NativeEditorView("alpha beta\ngamma\n")
+    view.position.x, view.position.y = 10, 20
+    view.size.x, view.size.y = 500, 300
+    view.scroll.x, view.scroll.y = 0, 0
+    view.scroll.to.x, view.scroll.to.y = 0, 0
+
+    local old_ctrl, old_shift = keymap.modkeys["ctrl"], keymap.modkeys["shift"]
+    local ok, err = pcall(function()
+      keymap.modkeys["ctrl"], keymap.modkeys["shift"] = false, false
+      local x, y = view:line_col_to_screen(0, 6)
+      test.ok(view:on_mouse_pressed("left", x, y, 1))
+      test.same(view.editor:cursor(), { cursor = 6 })
+
+      x, y = view:line_col_to_screen(0, 7)
+      test.ok(view:on_mouse_pressed("left", x, y, 2))
+      test.equal(view.editor:copy_selection(), "beta")
+
+      x, y = view.position.x + 1, select(2, view:line_col_to_screen(1, 0))
+      test.ok(view:on_mouse_pressed("left", x, y, 2))
+      test.equal(view.editor:copy_selection(), "gamma\n")
+    end)
+    keymap.modkeys["ctrl"], keymap.modkeys["shift"] = old_ctrl, old_shift
+    if not ok then error(err) end
+  end)
+
   test.it("records and restores native editor edit locations", function()
     require "plugins.native_editor"
     require "plugins.edit_location_history"

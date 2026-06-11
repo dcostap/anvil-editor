@@ -296,12 +296,26 @@ function NativeEditorView:update()
   self:update_tree_sitter()
 end
 
+function NativeEditorView:get_font()
+  return style.code_font or style.font
+end
+
 function NativeEditorView:get_line_height()
-  return style.font:get_height() + math.floor(style.padding.y / 2)
+  return math.floor(self:get_font():get_height() * config.line_height)
+end
+
+function NativeEditorView:get_line_text(line)
+  return (self.buffer:line(line) or ""):gsub("\r?\n$", "")
 end
 
 function NativeEditorView:get_gutter_width()
-  return style.font:get_width(tostring(math.max(1, self.buffer:line_count()))) + style.padding.x * 2
+  local padding = style.padding.x * 2
+  local width = config.show_line_numbers and self:get_font():get_width(tostring(math.max(1, self.buffer:line_count()))) or 0
+  -- Match the old DocView/gitdiff layout habit of reserving a tiny marker lane
+  -- between line numbers and text so the content edge and future diff markers do
+  -- not cause the text to shift when they appear.
+  local marker_lane = style.padding.x * (style.gitdiff_width or 3) / 12
+  return math.max(style.padding.x, width + padding + marker_lane)
 end
 
 function NativeEditorView:get_scrollable_size()
@@ -314,7 +328,9 @@ end
 
 function NativeEditorView:line_col_to_screen(line, col)
   local lh = self:get_line_height()
-  local x = self.position.x + self:get_gutter_width() + style.padding.x - self.scroll.x + style.font:get_width(string.rep(" ", col))
+  local text = self:get_line_text(line)
+  col = common.clamp(col or 0, 0, #text)
+  local x = self.position.x + self:get_gutter_width() + style.padding.x - self.scroll.x + self:get_font():get_width(text:sub(1, col))
   local y = self.position.y + style.padding.y - self.scroll.y + line * lh
   return x, y
 end
@@ -325,35 +341,41 @@ function NativeEditorView:cursor_line_col(cursor)
   return lc and lc.line or 0, lc and lc.col or 0
 end
 
-function NativeEditorView:screen_to_offset(x, y)
+function NativeEditorView:screen_to_line_col(x, y)
   local lh = self:get_line_height()
   local line = math.floor((y - self.position.y + self.scroll.y - style.padding.y) / lh)
   line = common.clamp(line, 0, math.max(0, self.buffer:line_count() - 1))
-  local text = self.buffer:line(line) or ""
+  local text = self:get_line_text(line)
   local text_x = self.position.x + self:get_gutter_width() + style.padding.x - self.scroll.x
-  local col = 0
   local relx = math.max(0, x - text_x)
+  local col = 0
   for i = 1, #text do
-    local next_width = style.font:get_width(text:sub(1, i))
-    if next_width > relx then break end
+    local prev_width = self:get_font():get_width(text:sub(1, i - 1))
+    local next_width = self:get_font():get_width(text:sub(1, i))
+    if relx < (prev_width + next_width) / 2 then break end
     col = i
   end
+  return line, col
+end
+
+function NativeEditorView:screen_to_offset(x, y)
+  local line, col = self:screen_to_line_col(x, y)
   return self.buffer:line_col_to_offset(line, col)
 end
 
 function NativeEditorView:draw_caret_for_cursor(cursor)
   local cursor_line, cursor_col = self:cursor_line_col(cursor.cursor or 0)
   local caret_x, caret_y = self:line_col_to_screen(cursor_line, cursor_col)
-  renderer.draw_rect(caret_x, caret_y, math.max(1, SCALE), style.font:get_height(), style.caret)
+  renderer.draw_rect(caret_x, caret_y, math.max(1, SCALE), self:get_font():get_height(), style.caret)
 end
 
 function NativeEditorView:draw_line_text(line_info, row_y, highlights)
-  local text = line_info.text or ""
+  local text = (line_info.text or ""):gsub("\r?\n$", "")
   local x = self.position.x + self:get_gutter_width() + style.padding.x - self.scroll.x
-  local width = self:get_gutter_width() + style.padding.x * 2 + style.font:get_width(text)
+  local width = self:get_gutter_width() + style.padding.x * 2 + self:get_font():get_width(text)
   if width > (self.h_scrollable_size or 0) then self.h_scrollable_size = width end
   if not highlights or #highlights == 0 then
-    renderer.draw_text(style.font, text, x, row_y, style.text)
+    renderer.draw_text(self:get_font(), text, x, row_y, style.text)
     return
   end
 
@@ -369,8 +391,8 @@ function NativeEditorView:draw_line_text(line_info, row_y, highlights)
   local function draw_segment(first_col, last_col, color)
     if last_col <= first_col then return end
     local segment = text:sub(first_col + 1, last_col)
-    local sx = x + style.font:get_width(text:sub(1, first_col))
-    renderer.draw_text(style.font, segment, sx, row_y, color)
+    local sx = x + self:get_font():get_width(text:sub(1, first_col))
+    renderer.draw_text(self:get_font(), segment, sx, row_y, color)
   end
 
   for _, span in ipairs(spans) do
@@ -397,6 +419,13 @@ function NativeEditorView:has_selection()
   return false
 end
 
+function NativeEditorView:draw_content_left_edge()
+  local edge_w = math.max(1, math.floor(SCALE))
+  local edge_padding = style.padding.x * 0.25
+  local x = self.position.x + self:get_gutter_width() + style.padding.x - self.scroll.x - edge_padding - edge_w
+  renderer.draw_rect(x, self.position.y, edge_w, self.size.y, style.docview_content_left_edge or style.whitespace or style.divider)
+end
+
 function NativeEditorView:draw_current_line_highlights()
   if core.active_view ~= self or config.highlight_current_line == false then return end
   if config.highlight_current_line == "no_selection" and self:has_selection() then return end
@@ -410,6 +439,7 @@ function NativeEditorView:draw_current_line_highlights()
       seen[line] = true
     end
   end
+  self:draw_content_left_edge()
 end
 
 function NativeEditorView:draw_selection_for_cursor(cursor)
@@ -422,9 +452,11 @@ function NativeEditorView:draw_selection_for_cursor(cursor)
 
   local lh = self:get_line_height()
   for line = start_lc.line, end_lc.line do
-    local line_text = self.buffer:line(line) or ""
+    local line_text = self:get_line_text(line)
     local start_col = line == start_lc.line and start_lc.col or 0
     local end_col = line == end_lc.line and end_lc.col or #line_text
+    start_col = common.clamp(start_col, 0, #line_text)
+    end_col = common.clamp(end_col, 0, #line_text)
     if end_col >= start_col then
       local x1, y1 = self:line_col_to_screen(line, start_col)
       local x2 = self:line_col_to_screen(line, end_col)
@@ -446,12 +478,13 @@ function NativeEditorView:scroll_to_cursor()
 
   local gutter_w = self:get_gutter_width()
   local available_w = math.max(1, self.size.x - gutter_w - style.padding.x * 2)
-  local x = style.font:get_width(string.rep(" ", col))
-  self.h_scrollable_size = math.max(self.h_scrollable_size or 0, gutter_w + style.padding.x * 2 + x + style.font:get_width(" "))
+  local text = self:get_line_text(line)
+  local x = self:get_font():get_width(text:sub(1, common.clamp(col, 0, #text)))
+  self.h_scrollable_size = math.max(self.h_scrollable_size or 0, gutter_w + style.padding.x * 2 + x + self:get_font():get_width(" "))
   if x < self.scroll.to.x then
     self.scroll.to.x = x
   elseif x > self.scroll.to.x + available_w then
-    self.scroll.to.x = x - available_w + style.font:get_width(" ")
+    self.scroll.to.x = x - available_w + self:get_font():get_width(" ")
   end
   self:clamp_scroll_position()
 end
@@ -460,6 +493,67 @@ function NativeEditorView:page_move(direction, update_selection)
   local lines = math.max(1, math.floor(self.size.y / self:get_line_height()) - 1)
   local move = direction < 0 and self.editor.line_up or self.editor.line_down
   for _ = 1, lines do move(self.editor, update_selection) end
+end
+
+function NativeEditorView:line_bounds(line)
+  line = common.clamp(line or 0, 0, math.max(0, self.buffer:line_count() - 1))
+  local start_offset = self.buffer:line_col_to_offset(line, 0) or 0
+  local next_offset = self.buffer:line_col_to_offset(line + 1, 0)
+  local end_offset = next_offset or (start_offset + #self:get_line_text(line))
+  return start_offset, end_offset
+end
+
+local function native_word_char(char)
+  return char and char:match("[%w_]") ~= nil
+end
+
+function NativeEditorView:word_bounds_at_offset(offset)
+  local lc = self.buffer:offset_to_line_col(offset or 0)
+  if not lc then return offset or 0, offset or 0 end
+  local text = self:get_line_text(lc.line)
+  local col = common.clamp(lc.col or 0, 0, #text)
+  if col == #text and col > 0 then col = col - 1 end
+  local char = text:sub(col + 1, col + 1)
+  if not native_word_char(char) then
+    return self.buffer:line_col_to_offset(lc.line, lc.col) or offset, self.buffer:line_col_to_offset(lc.line, lc.col) or offset
+  end
+  local start_col = col
+  while start_col > 0 and native_word_char(text:sub(start_col, start_col)) do
+    start_col = start_col - 1
+  end
+  local end_col = col + 1
+  while end_col < #text and native_word_char(text:sub(end_col + 1, end_col + 1)) do
+    end_col = end_col + 1
+  end
+  return self.buffer:line_col_to_offset(lc.line, start_col) or offset,
+         self.buffer:line_col_to_offset(lc.line, end_col) or offset
+end
+
+function NativeEditorView:selection_bounds_for_mouse(anchor, offset, snap_type)
+  if snap_type == "word" then
+    local a1, a2 = self:word_bounds_at_offset(anchor)
+    local b1, b2 = self:word_bounds_at_offset(offset)
+    if offset < anchor then return b1, a2 end
+    return a1, b2
+  elseif snap_type == "lines" then
+    local anchor_lc = self.buffer:offset_to_line_col(anchor)
+    local offset_lc = self.buffer:offset_to_line_col(offset)
+    local line1 = math.min(anchor_lc and anchor_lc.line or 0, offset_lc and offset_lc.line or 0)
+    local line2 = math.max(anchor_lc and anchor_lc.line or 0, offset_lc and offset_lc.line or 0)
+    local first = self:line_bounds(line1)
+    local _, last = self:line_bounds(line2)
+    return first, last
+  end
+  return anchor, offset
+end
+
+function NativeEditorView:set_mouse_selection(anchor, offset, snap_type)
+  local first, last = self:selection_bounds_for_mouse(anchor, offset, snap_type)
+  if offset < anchor then
+    self.editor:set_cursor(first, last)
+  else
+    self.editor:set_cursor(last, first)
+  end
 end
 
 function NativeEditorView:on_text_input(text)
@@ -477,25 +571,46 @@ function NativeEditorView:on_mouse_pressed(button, x, y, clicks)
   if NativeEditorView.super.on_mouse_pressed(self, button, x, y, clicks) then return true end
   if button ~= "left" then return false end
 
-  local offset = self:screen_to_offset(x, y)
-  if offset then
-    local anchor
+  local line, col = self:screen_to_line_col(x, y)
+  local offset = self.buffer:line_col_to_offset(line, col)
+  if not offset then return true end
+
+  local gutter_w = self:get_gutter_width()
+  local in_gutter = x >= self.position.x and x <= self.position.x + gutter_w
+  if in_gutter then
+    local line_start, line_end = self:line_bounds(line)
     if keymap.modkeys["shift"] then
       local cursor = self.editor:cursor()
-      anchor = cursor.selection or cursor.cursor
-      self.editor:set_cursor(offset, anchor)
+      local anchor = cursor.selection or cursor.cursor or line_start
+      self:set_mouse_selection(anchor, line_end, "lines")
+      self.mouse_selecting = { anchor = anchor, snap_type = "lines" }
+    elseif clicks and clicks >= 2 then
+      self.editor:set_cursor(line_end, line_start)
+      self.mouse_selecting = { anchor = line_start, snap_type = "lines" }
     else
-      self.editor:set_cursor(offset)
-      anchor = offset
+      self.editor:set_cursor(line_start)
+      self.mouse_selecting = { anchor = line_start, snap_type = "lines" }
     end
-    self.mouse_selecting = { anchor = anchor }
-    if clicks == 2 then
-      self.editor:select_word()
-      self.mouse_selecting = nil
-    elseif clicks and clicks >= 3 then
-      self.editor:select_line()
-      self.mouse_selecting = nil
-    end
+    core.redraw = true
+    return true
+  end
+
+  local snap_type
+  if clicks == 2 then snap_type = "word" elseif clicks and clicks >= 3 then snap_type = "lines" end
+  if keymap.modkeys["ctrl"] and not keymap.modkeys["shift"] then
+    self.editor:add_cursor(offset)
+    self.mouse_selecting = { anchor = offset }
+  elseif keymap.modkeys["shift"] then
+    local cursor = self.editor:cursor()
+    local anchor = cursor.selection or cursor.cursor or offset
+    self:set_mouse_selection(anchor, offset, snap_type)
+    self.mouse_selecting = { anchor = anchor, snap_type = snap_type }
+  elseif snap_type then
+    self:set_mouse_selection(offset, offset, snap_type)
+    self.mouse_selecting = { anchor = offset, snap_type = snap_type }
+  else
+    self.editor:set_cursor(offset)
+    self.mouse_selecting = { anchor = offset }
   end
   core.redraw = true
   return true
@@ -503,11 +618,17 @@ end
 
 function NativeEditorView:on_mouse_moved(x, y, ...)
   NativeEditorView.super.on_mouse_moved(self, x, y, ...)
-  self.cursor = "ibeam"
+  local gutter_w = self:get_gutter_width()
+  if self:scrollbar_hovering() or self:scrollbar_dragging()
+      or (x >= self.position.x and x <= self.position.x + gutter_w) then
+    self.cursor = "arrow"
+  else
+    self.cursor = "ibeam"
+  end
   if self.mouse_selecting then
     local offset = self:screen_to_offset(x, y)
     if offset then
-      self.editor:set_cursor(offset, self.mouse_selecting.anchor)
+      self:set_mouse_selection(self.mouse_selecting.anchor, offset, self.mouse_selecting.snap_type)
       self:scroll_to_cursor()
       core.redraw = true
     end
@@ -556,7 +677,7 @@ function NativeEditorView:draw()
   local last_line = math.min(line_count - 1, first_line + math.ceil(h / lh) + 1)
 
   core.push_clip_rect(x, y, w, h)
-  renderer.draw_rect(x, y, gutter_w, h, style.line_number_background or style.background2)
+  renderer.draw_rect(x, y, gutter_w, h, style.line_number_background or style.scrollbar_track or style.background2)
   self:draw_current_line_highlights()
 
   for i = 1, self.editor:cursor_count() do
@@ -574,8 +695,17 @@ function NativeEditorView:draw()
   for _, line_info in ipairs(visible_lines) do
     local line = line_info.line
     local row_y = y + style.padding.y - self.scroll.y + line * lh
-    local line_number = tostring(line + 1)
-    common.draw_text(style.font, style.dim, line_number, "right", x, row_y, gutter_w - style.padding.x, lh)
+    if config.show_line_numbers then
+      local color = style.line_number
+      for i = 1, self.editor:cursor_count() do
+        local cursor_line = self:cursor_line_col(self.editor:cursor(i).cursor or 0)
+        if cursor_line == line then
+          color = style.line_number2 or color
+          break
+        end
+      end
+      common.draw_text(self:get_font(), color, tostring(line + 1), "right", x + style.padding.x, row_y, gutter_w - style.padding.x * 2, lh)
+    end
     self:draw_line_text(line_info, row_y, highlights)
   end
 
