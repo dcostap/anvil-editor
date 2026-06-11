@@ -864,13 +864,18 @@ function core.open_native_editor_file(filename)
   return open_native_text_file(filename)
 end
 
-if plugin_config.default_open then
-  local core_open_file = core.open_file
-  function core.open_file(filename)
+local core_open_file = core.__native_editor_original_open_file or core.open_file
+core.__native_editor_original_open_file = core_open_file
+function core.open_file(filename)
+  local native_config = config.plugins.native_editor or {}
+  if native_config.default_open then
     local image_view = core.open_image(filename)
     if image_view then return image_view end
     return core.open_native_editor_file(filename) or core_open_file(filename)
   end
+  return core_open_file(filename)
+end
+if plugin_config.default_open then
   core.log_quiet("Native editor default-open experiment is enabled")
 end
 

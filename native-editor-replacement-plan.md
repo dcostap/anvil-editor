@@ -226,6 +226,7 @@ Implemented:
 - Undo/redo.
 - Canonical `native-editor:*` command names for native editor behavior, routed through a native-editor view capability predicate, with `native-text-sandbox:*` aliases kept only as transition compatibility.
 - `core.open_native_editor_file(filename)` facade for opening file-backed native editor views without calling sandbox-local helpers.
+- Dynamic opt-in `core.open_file` routing through native editor when `config.plugins.native_editor.default_open` is enabled.
 - Canonical workspace/plugin module name `plugins.native_editor`; old `plugins.native_text_sandbox` is kept as a transition module alias.
 - Generic core helpers for file-backed views (`core.view_file_path`, `core.view_is_dirty`) now understand native editor Buffers as well as old DocViews.
 
@@ -234,7 +235,7 @@ Important status:
 - Sandbox is usable for manual testing.
 - Sandbox is still Lua-owned UI glue, not the final replacement editor.
 - Native editor commands now have a non-sandbox namespace, but normal `doc:*` command routing remains intentionally separate until the default editor path is stable.
-- The native file-open implementation is exposed through a core facade, but the default `core.open_file` path still only uses it when the opt-in native default-open setting is enabled.
+- The native file-open implementation is exposed through a core facade, and `core.open_file` dynamically uses it when the opt-in native default-open setting is enabled.
 - Native editor workspace state now saves under canonical `plugins.native_editor` module name; old sandbox module remains loadable for transition restore.
 - Core project/title/visited-file helpers can now see native editor Buffer paths instead of assuming every file-backed editor view has `view.doc.abs_filename`.
 - Workspace save/restore now has runtime coverage for native editor views in split layouts.
@@ -551,7 +552,7 @@ Prefer Lua UI/sandbox tests only for temporary view glue:
 The native editor is ready to become the default editor when dogfooding is stable and these are complete:
 
 - Canonical native editor command target layer exists outside the sandbox namespace. (Started: `native-editor:*` commands now target native-editor-capable views; `native-text-sandbox:*` remains an alias layer only.)
-- Opt-in core-facing native open path exists. (Started: `core.open_native_editor_file(filename)` opens/reuses file-backed native editor views; `core.open_file` can route through it when native default-open is enabled.)
+- Opt-in core-facing native open path exists. (Started: `core.open_native_editor_file(filename)` opens/reuses file-backed native editor views; `core.open_file` dynamically routes through it when native default-open is enabled.)
 - `core.open_doc` / file open path can create native Buffers/views for normal text files.
 - Existing tabs/splits/root panel can host native editor views without special sandbox commands.
 - Workspace restoration can serialize and restore native editor views, including open file identity, tab/split placement, scroll position, and selection/cursor state. (Runtime split-layout save/restore coverage added; keep validating in real sessions.)

@@ -4,6 +4,7 @@ local test = require "core.test"
 local core = require "core"
 local command = require "core.command"
 local common = require "core.common"
+local config = require "core.config"
 
 local function tmp_file(name)
   return core.temp_filename(name or "native-text-test")
@@ -336,6 +337,28 @@ test.describe("native_text API bridge", function()
     local node = core.root_panel.root_node:get_node_for_view(view)
     if node then node:close_view(core.root_panel.root_node, view) end
     os.remove(path)
+  end)
+
+  test.it("routes core.open_file through native editor when default-open is enabled", function()
+    require "plugins.native_editor"
+    local path = tmp_file("native-editor-default-open")
+    local fp = assert(io.open(path, "wb"))
+    fp:write("abc")
+    fp:close()
+
+    local native_config = config.plugins.native_editor
+    local old_default_open = native_config.default_open
+    local ok, err = pcall(function()
+      native_config.default_open = true
+      local view = core.open_file(path)
+      test.ok(core.is_native_editor_view(view))
+      test.equal(view.buffer:text(), "abc")
+      local node = core.root_panel.root_node:get_node_for_view(view)
+      if node then node:close_view(core.root_panel.root_node, view) end
+    end)
+    native_config.default_open = old_default_open
+    os.remove(path)
+    if not ok then error(err) end
   end)
 
   test.it("exposes native editor file paths through generic core view helpers", function()
