@@ -124,7 +124,7 @@ Implemented:
 - Selection copy/cut/paste primitives.
 - Backspace/delete and word deletion.
 - Line operations: delete line, move line, join line, open line.
-- Tab/untab and line-ending unification.
+- Tab/untab, auto-indent newline insertion, and line-ending unification.
 - Undo/redo integration with selection snapshots.
 
 Important status:
@@ -255,7 +255,7 @@ Important status:
 - Project-folder switch confirmation now checks dirty views, not just dirty `Doc` objects, so dirty native editor Buffers participate in the same safety prompt.
 - First-party untitled/new-file commands now honor native default-open: untitled tabs become native scratch Buffers and explicit new-file creation opens through `core.open_file`.
 - Legacy DocView-adjacent plugins that remain loaded during dogfooding now guard obvious active-view `doc` accesses so native editor focus does not trip nil-field errors.
-- Native editor basic view behavior is closer to old `DocView`: code font/line-height/text centering, configured caret width, forced scrollbar status, active blink/dim inactive carets, shared editor/gutter background, line-number gutter colors for cursor/selection lines, content-left edge marker, DocView-shaped gutter/highlight/overlay draw hooks, newline-stripped line rendering/measurement, nearest-column mouse hit-testing, DocView-style one-based screen-position/column/visible-range/scroll helpers, scroll-context/scroll-past-end basics, gutter line selection, double/triple-click drag snapping, ctrl-click cursor addition, primary-selection updates, middle-click primary paste, full-line selection paint padding, and DocView-like status bar items for file/position/carets/selection/percent/indentation/line count/encoding/line endings.
+- Native editor basic view behavior is closer to old `DocView`: code font/line-height/text centering, configured caret width, forced scrollbar status, active blink/dim inactive carets, overwrite-mode caret drawing, animated-caret positioning, shared editor/gutter background, line-number gutter colors for cursor/selection lines, content-left edge marker, DocView-shaped gutter/highlight/overlay draw hooks, bracket-match highlighting/navigation basics, basic file-extension-based line-comment toggling, configured column-guide/lineguide rendering, draw-whitespace marker rendering, indent-guide rendering including blank-line effective indentation, selection-highlight occurrence rendering, centered-editor geometry for native draw/hit-test helpers, newline-stripped line rendering/measurement, nearest-column mouse hit-testing, DocView-style one-based screen-position/column/visible-range/scroll helpers, UTF-8 codepoint-aware left/right/up/down/delete/backspace basics, auto-indent newline behavior, UTF-8-aware mouse hit-testing and basic status-bar column/selection counts, detected indentation for native tab metrics/status, scroll-context/scroll-past-end basics, gutter line selection, double/triple-click drag snapping, ctrl-click cursor addition, select-none command behavior, whole-line copy/cut/paste when there is no selection, primary-selection updates, middle-click primary paste, IME composition replacement/location/decoration basics, full-line selection paint padding, and DocView-like status bar items for file/position/carets/selection/percent/indentation/line count/encoding/line endings.
 - Workspace save/restore now has runtime coverage for native editor views in split layouts.
 
 ## Current strategic direction
@@ -366,6 +366,7 @@ Native gaps likely to close:
 - OS clipboard integration in sandbox/native view.
 - Cut/copy/paste commands wired to native Editor.
 - Multi-selection clipboard behavior tested.
+- Whole-line clipboard behavior when copying/cutting/pasting without an active selection. (Basic native parity implemented.)
 
 ### Search/find/replace
 
@@ -459,7 +460,7 @@ This is the working inventory for native-editor migration. Keep it current as pl
 | `autosave_fast.lua`, `autosaveonfocuslost.lua` | historically `DocView`, `view.doc`, `doc:save`; now also uses generic/native save helpers | keep in Lua as app-shell save orchestration | Native Buffers are saved through `core.save_native_editor_view`; dirty/save state remains native Buffer-owned. |
 | `search_ui.lua`, `intellij_find.lua` | current search commands route through old docs/selections | keep UI in Lua, port to native search/replace capabilities | Native literal find/replace exists; regex/search result decorations remain future native capabilities. |
 | `gitdiff_highlight/` | `Doc.lines`, text-change hooks, `DocView`/scrollbar/gutter monkey-patching | keep Lua git orchestration; port rendering/state to native decoration layer | Model example for generic native decorations. Archive old renderer when native decoration path exists. |
-| `bracketmatch.lua` | `DocView` patching, `doc.highlighter`, `doc.lines`, old selections | port to native decorations, probably Tree-sitter-aware | Should become native editor feature or native decoration producer; do not preserve tokenizer dependency. |
+| `bracketmatch.lua` | `DocView` patching, `doc.highlighter`, `doc.lines`, old selections | port to native decorations, probably Tree-sitter-aware | Basic native ASCII bracket-match highlighting/navigation now exists in `native_editor.lua`; remaining parity should promote this to a native decoration/capability and add syntax-aware/comment-aware matching instead of preserving tokenizer dependency. |
 | `autocomplete.lua` | patches root input/mouse/update/draw and `Doc.remove`; reads `doc.lines`/highlighter/selections | defer or port to native completion capability | Not a blocker for initial dogfooding unless daily workflow requires it. |
 | `linewrapping.lua`, `linewrapping_deep_indent.lua` | deep `Doc`/`DocView` rendering and positioning monkey-patches | port fully into native view/rendering or defer | Too invasive for compatibility glue. Archive old implementation if native wrapping is redesigned. |
 | `diffview.lua` | custom paired `DocView`s, many `DocView` monkey-patches, `Doc.raw_insert/remove` hooks | port fully into native diff view or archive unsupported | Do not adapt around old `DocView`; use native Buffers/views if diff remains wanted. |
@@ -595,16 +596,16 @@ Before moving from dogfooding into old `DocView` deletion, the native editor nee
 
 Current known basic-parity gaps are listed below. This list is intentionally not exhaustive: more gaps may be discovered through side-by-side dogfooding against the old `DocView`, especially visual/tactile details that are hard to identify from code inspection alone. Add newly discovered basic-parity issues here as they become concrete.
 
-- **IME composition support** — old `DocView` has IME location tracking and composition underline/selection drawing; native editor currently handles normal text input but not full IME composition UX.
-- **UTF-8 and visual column behavior** — native editor still exposes mostly byte-offset/byte-column behavior in view helpers and status calculations; old `DocView` has more UTF-8-aware column handling and configurable caret column display.
-- **Tab/indent measurement details** — native editor sets the code-font tab size, but old `DocView` has richer indentation/syntax-font-aware column measurement and cache behavior.
-- **Overwrite mode** — old `DocView`/`Doc` supports overwrite mode and alternate caret drawing; native editor does not expose overwrite mode yet.
+- **IME composition support** — basic native editor IME composition replacement, candidate-window location, underline/selection decoration, and committed-text replacement are implemented. Still needs manual dogfooding with real Windows IMEs and follow-up for edge cases such as multi-line/preedit quirks and exact platform event ordering.
+- **UTF-8 and visual column behavior** — native editor now handles basic left/right/up/down selection movement, delete/backspace, mouse hit-testing, and status column/selection counts on UTF-8 codepoint boundaries. It still exposes byte offsets internally and does not yet match old `DocView`'s fuller visual column handling, grapheme-cluster behavior, bidi shaping expectations, or configurable caret column display.
+- **Tab/indent measurement details** — native editor now detects basic soft/hard indentation and applies it to code-font tab size. Old `DocView` still has richer syntax-font-aware column measurement and cache behavior.
+- **Overwrite mode** — basic native Editor overwrite mode is implemented for single-character UTF-8 insertions with Insert-key command routing and alternate caret drawing. Remaining polish is mostly visual/status UX and broader UTF-8/grapheme correctness.
 - **Advanced selection shapes and mouse gestures** — native editor has basic multi-cursor, gutter selection, word/line drag snapping, primary selection, and ctrl-click cursor creation, but not every mature old `DocView` selection/mouse path.
 - **Line-body hooks and plugin draw surfaces** — native editor now has basic gutter/highlight/overlay hooks, but old `DocView` has a larger draw surface such as `draw_line_body`, line hints, selection/caret caches, and plugin extension points.
 - **Scroll polish** — native editor has scroll context and scroll-past-end basics, but old `DocView` has more careful horizontal range scrolling and scrollbar edge-case behavior.
-- **Status bar accuracy** — native editor now mirrors the broad status bar item set, but encoding is a placeholder, indentation is config-based rather than Buffer-detected, and selection character counts are simpler.
+- **Status bar accuracy** — native editor now mirrors the broad status bar item set, displays UTF-8 as the current native encoding policy, detects basic indentation for status/tab metrics, and counts selected UTF-8 codepoints. Remaining gaps include true file encoding detection/conversion policy and fuller grapheme/visual selection counts.
 - **Syntax/render parity** — native editor uses native Tree-sitter for supported languages; old `DocView` has many Lua tokenizer languages and syntax-font details. Long-term tokenizer compatibility is still not a goal, but obvious render regressions should be tracked here.
-- **Plugin compatibility** — visual/editor-shell plugins such as centered editor, sticky scroll, whitespace/indent guides, selection highlight, and smooth caret still mostly expect old `DocView`. Either port them to native capabilities, keep them DocView-only and harmless, or archive/replace them.
+- **Plugin compatibility** — native editor now honors bracket-match basics, configured column guides, lineguide, draw-whitespace markers, indent guides, selection-highlight behavior, centered-editor geometry, and animated-caret behavior directly. Other visual/editor-shell plugins such as sticky scroll still mostly expect old `DocView`. Either port them to native capabilities, keep them DocView-only and harmless, or archive/replace them.
 
 Guidelines for this parity work:
 
@@ -612,6 +613,34 @@ Guidelines for this parity work:
 - Do not rebuild old `Doc` text state or `Doc.lines` compatibility.
 - When a parity item needs durable editor semantics, high-performance rendering, native text metrics, or shared plugin capabilities, promote it into C/native APIs instead of expanding the Lua view shell indefinitely.
 - Add tests for behavior that can be verified without screenshots; reserve manual dogfooding for visual/tactile issues such as exact gutter feel, IME behavior, and selection drag polish.
+
+### Native editor roadmap from the current parity inventory
+
+The native editor has crossed the threshold where many remaining gaps should no longer be solved by adding one more old-`DocView`-shaped Lua patch. The next work should be split between (1) user-visible parity still needed for dogfooding and (2) promoting recently proven Lua-shell behavior into stable native capabilities so the Lua view shell does not become the new long-term editor implementation.
+
+| Priority | Roadmap item | Why it is next | Likely layer | Notes |
+| --- | --- | --- | --- | --- |
+| P0 | Manual dogfood pass on the Unicode stress file and ordinary code files | Recent UTF-8/IME/measurement changes need real tactile validation before more abstractions are built on top | manual + targeted tests | Use `C:\Users\Darius\Downloads\test-big-repository\unicode_test.txt`; look for caret landing inside characters, wrong hit-test positions, bidi/emoji rendering surprises, long-line scroll issues, and status count lies. |
+| P0 | Consolidate native editor command semantics | Basic commands now exist, but some are Lua-shell implementations with ad-hoc behavior | C Editor / Lua bridge | Promote durable commands such as comment toggling, bracket navigation, newline behavior, and whole-line clipboard policy into native editor APIs where feasible. Lua should call capabilities, not own text semantics. |
+| P0 | Native decoration layer | Guides, whitespace, bracket match, selection highlight, search matches, git diff, diagnostics, and line hints all want the same drawing/lifetime/line-mapping machinery | native Buffer/View capability with Lua producers | This is the main architectural unlock. Stop adding one-off render helpers after the basic parity pass; design generic line/inline/gutter/overview decorations. |
+| P0 | Search UI integration polish | Literal find/replace exists, but old search UI/IntelliJ find has richer behavior and decorations | native search helpers + Lua UI | Add regex/case toggles if still wanted, persistent search decorations, select-next/all behavior, and undo-safe replace flows through native transactions. |
+| P1 | Git diff/highlight native path | Git diff markers are a daily visible feature and currently old-DocView-coupled | Lua git producer + native decorations | Implement as the model decoration producer: changed-line state, gutter markers, overview markers, and navigation by diff hunk. Archive old renderer after replacement. |
+| P1 | Line wrapping decision | Old linewrapping is deeply DocView-coupled and native editor currently has long-line/h-scroll behavior only | native view/layout, not compatibility glue | Decide whether wrapping is required for daily use. If yes, implement a native layout/wrap model; do not port the old monkey patches. |
+| P1 | Sticky scroll decision | Useful but depends on old token/syntax/doc internals | likely Tree-sitter/native decorations | If wanted, implement as native sticky header/decorations using Tree-sitter or a lightweight line-scope model. Otherwise keep DocView-only/archive. |
+| P1 | Autocomplete/completion target layer | Current autocomplete is old editor coupled; daily usefulness depends on workflow | native editor capability + Lua UI | First expose native replacement/edit/cursor APIs needed by completion UI; then port UI without `Doc.lines`. Not a text-core blocker unless daily workflow needs it. |
+| P1 | Encoding and invalid-text policy | Status currently says UTF-8, but file loading is still byte-preserving with no true conversion/sanitization story | Buffer/file IO + Lua metadata | Define UTF-8-only vs conversion support, invalid UTF-8 display, NUL handling, and how status/save/reload expose this. |
+| P2 | Grapheme/visual column/bidi correctness | Current UTF-8 support is codepoint-level, not full user-perceived character/visual layout support | native text metrics/layout | Emoji ZWJ, combining marks, East Asian width, bidi, and fallback fonts need a real shaping/measurement policy; do not fake this through byte-column helpers. |
+| P2 | Mouse/selection edge polish | Basic mouse gestures work, but mature DocView paths include many edge cases | native view shell or native hit-test API | Re-test drag-outside autoscroll, multi-cursor drag interactions, selection snapping reversals, gutter edge cases, and primary selection. |
+| P2 | Plugin archive/deprecation sweep | Unsupported DocView monkey patches should stop being treated as supported native-editor features | repo hygiene | Move unwanted old-editor-only plugins to `data/deprecated/plugins` with README; keep only app-shell plugins active. |
+| P2 | Old `Doc` deletion prep | The default editor path is native, but old `Doc` still backs legacy text views and commands | architecture cleanup | Inventory generated/read-only/tool text views separately before deleting old text storage. |
+
+Recommended next implementation order:
+
+1. Run a short manual dogfood/bug-harvest pass on the Unicode stress file and normal project files.
+2. Design the native decoration API before adding more visual plugin parity.
+3. Port git diff markers or search result decorations as the first real decoration producer.
+4. Promote ad-hoc Lua command semantics that survived dogfooding into C/native editor APIs.
+5. Decide explicitly whether line wrapping, sticky scroll, and autocomplete are required for first native-primary release or can be deferred/archived.
 
 ## Phase D: Lua `Doc` deletion checklist
 
