@@ -74,6 +74,28 @@ static int test_insert_newline_uses_buffer_line_ending_mode(void) {
   return 0;
 }
 
+static int test_newline_auto_indent_preserves_current_indent(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "  alpha\n\tbeta"));
+  CHECK(editor_set_cursor(&f.editor, 5, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_insert_newline_auto_indent(&f.editor));
+  CHECK(expect_text(&f, "  alp\n  ha\n\tbeta") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 8, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_newline_auto_indent_uses_remaining_indent_when_split_inside_indent(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "    alpha"));
+  CHECK(editor_set_cursor(&f.editor, 2, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_insert_newline_auto_indent(&f.editor));
+  CHECK(expect_text(&f, "  \n    alpha") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 5, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
 static int test_open_line_above_preserves_indent(void) {
   EditorFixture f;
   CHECK(fixture_init(&f, "  alpha\nbeta"));
@@ -208,6 +230,25 @@ static int test_duplicate_final_line(void) {
   return 0;
 }
 
+static int test_utf8_line_operations_preserve_codepoint_offsets(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "α\nβ\nγ"));
+  CHECK(editor_set_cursor(&f.editor, 5, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_duplicate_line(&f.editor));
+  CHECK(expect_text(&f, "α\nβ\nβ\nγ") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 8, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_undo(&f.editor));
+  CHECK(expect_text(&f, "α\nβ\nγ") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 5, EDITOR_SELECTION_SENTINEL) == 0);
+
+  CHECK(editor_set_cursor(&f.editor, 3, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_delete_line(&f.editor));
+  CHECK(expect_text(&f, "α\nγ") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 3, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
 static int test_delete_line_removes_selected_line_span(void) {
   EditorFixture f;
   CHECK(fixture_init(&f, "aa\nbb\ncc\ndd"));
@@ -293,6 +334,20 @@ static int test_move_line_down_uses_crlf_and_clears_multi_cursors(void) {
   return 0;
 }
 
+static int test_utf8_selected_line_span_move_preserves_codepoint_offsets(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "α\nβ\nγ\nδ"));
+  CHECK(editor_set_cursor(&f.editor, 8, 3));
+  CHECK(editor_move_line_up(&f.editor));
+  CHECK(expect_text(&f, "β\nγ\nα\nδ") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 5, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_undo(&f.editor));
+  CHECK(expect_text(&f, "α\nβ\nγ\nδ") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 8, 3) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
 static int test_join_line_below_trims_leading_spaces(void) {
   EditorFixture f;
   CHECK(fixture_init(&f, "aa\n  bb\ncc"));
@@ -313,6 +368,20 @@ static int test_join_line_below_final_crlf_line_preserves_current_terminator(voi
   CHECK(editor_set_cursor(&f.editor, 1, EDITOR_SELECTION_SENTINEL));
   CHECK(editor_join_line_below(&f.editor));
   CHECK(expect_text(&f, "aa bb\r\n") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 2, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_join_utf8_line_below_preserves_codepoint_offsets(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "α\n  β\nγ"));
+  CHECK(editor_set_cursor(&f.editor, 2, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_join_line_below(&f.editor));
+  CHECK(expect_text(&f, "α β\nγ") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 2, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_undo(&f.editor));
+  CHECK(expect_text(&f, "α\n  β\nγ") == 0);
   CHECK(expect_cursor(&f.editor, 0, 2, EDITOR_SELECTION_SENTINEL) == 0);
   fixture_dispose(&f);
   return 0;
@@ -364,6 +433,27 @@ static int test_untab_selection_removes_leading_tabs_from_selected_lines(void) {
   CHECK(editor_undo(&f.editor));
   CHECK(expect_text(&f, "\taa\n\tbb\ncc") == 0);
   CHECK(expect_cursor(&f.editor, 0, 7, 0) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_utf8_tab_and_untab_selection_preserve_codepoint_offsets(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "α\nβ\nγ"));
+  CHECK(editor_set_cursor(&f.editor, 5, 0));
+  CHECK(editor_tab(&f.editor));
+  CHECK(expect_text(&f, "\tα\n\tβ\nγ") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 7, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_undo(&f.editor));
+  CHECK(expect_text(&f, "α\nβ\nγ") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 5, 0) == 0);
+  fixture_dispose(&f);
+
+  CHECK(fixture_init(&f, "\tα\n\tβ\nγ"));
+  CHECK(editor_set_cursor(&f.editor, 7, 0));
+  CHECK(editor_untab(&f.editor));
+  CHECK(expect_text(&f, "α\nβ\nγ") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 5, EDITOR_SELECTION_SENTINEL) == 0);
   fixture_dispose(&f);
   return 0;
 }
@@ -439,6 +529,25 @@ static int test_multi_cursor_backspace(void) {
   return 0;
 }
 
+static int test_multi_cursor_insert_at_utf8_boundaries_uses_pre_edit_coordinates(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "a中\nb😀\ncé"));
+  CHECK(editor_set_cursor(&f.editor, 1, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_add_cursor(&f.editor, 6, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_add_cursor(&f.editor, 12, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_cursor_count(&f.editor) == 3);
+  CHECK(editor_insert_buffer(&f.editor, "X", 1));
+  CHECK(expect_text(&f, "aX中\nbX😀\ncXé") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 2, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(expect_cursor(&f.editor, 1, 8, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(expect_cursor(&f.editor, 2, 15, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_undo(&f.editor));
+  CHECK(expect_text(&f, "a中\nb😀\ncé") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 1, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
 static int test_select_all_and_replace(void) {
   EditorFixture f;
   CHECK(fixture_init(&f, "abc\ndef"));
@@ -468,6 +577,22 @@ static int test_select_word(void) {
   CHECK(editor_select_word(&f.editor));
   CHECK(editor_cursor_count(&f.editor) == 1);
   CHECK(expect_cursor(&f.editor, 0, 3, 0) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_select_word_spans_utf8_without_splitting_codepoints(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "aa 中😀 bb"));
+  CHECK(editor_set_cursor(&f.editor, 4, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_select_word(&f.editor));
+  CHECK(expect_cursor(&f.editor, 0, 10, 3) == 0);
+  size_t len = 0;
+  char *selection = editor_selection_to_string(&f.editor, &len);
+  CHECK(selection != NULL);
+  CHECK(len == 7);
+  CHECK(memcmp(selection, "中😀", 7) == 0);
+  free(selection);
   fixture_dispose(&f);
   return 0;
 }
@@ -521,6 +646,21 @@ static int test_selection_to_string_uses_crlf_between_multi_selections(void) {
   CHECK(selection != NULL);
   CHECK(len == 12);
   CHECK(memcmp(selection, "alpha\r\ngamma", 12) == 0);
+  free(selection);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_selection_to_string_preserves_utf8_and_crlf_separators(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "α\r\nβ中\r\n😀"));
+  CHECK(editor_set_cursor(&f.editor, 2, 0));
+  CHECK(editor_add_cursor(&f.editor, 15, 11));
+  size_t len = 0;
+  char *selection = editor_selection_to_string(&f.editor, &len);
+  CHECK(selection != NULL);
+  CHECK(len == 8);
+  CHECK(memcmp(selection, "α\r\n😀", 8) == 0);
   free(selection);
   fixture_dispose(&f);
   return 0;
@@ -683,6 +823,31 @@ static int test_word_delete_commands(void) {
   return 0;
 }
 
+static int test_utf8_word_movement_and_delete_use_codepoint_boundaries(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "aa 中😀 bb"));
+  CHECK(editor_set_cursor(&f.editor, 0, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_word_right(&f.editor, false));
+  CHECK(expect_cursor(&f.editor, 0, 2, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_word_right(&f.editor, false));
+  CHECK(expect_cursor(&f.editor, 0, 10, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_word_left(&f.editor, false));
+  CHECK(expect_cursor(&f.editor, 0, 3, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_set_cursor(&f.editor, 10, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_backspace_word(&f.editor));
+  CHECK(expect_text(&f, "aa  bb") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 3, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+
+  CHECK(fixture_init(&f, "aa 中😀 bb"));
+  CHECK(editor_set_cursor(&f.editor, 3, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_del_word(&f.editor));
+  CHECK(expect_text(&f, "aa  bb") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 3, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
 static int test_word_delete_removes_selection(void) {
   EditorFixture f;
   CHECK(fixture_init(&f, "alpha beta gamma"));
@@ -785,6 +950,26 @@ static int test_dup_cursor_up_adds_cursor_on_previous_line(void) {
   CHECK(editor_cursor_count(&f.editor) == 2);
   CHECK(expect_cursor(&f.editor, 0, 2, EDITOR_SELECTION_SENTINEL) == 0);
   CHECK(expect_cursor(&f.editor, 1, 5, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_dup_cursor_utf8_preserves_codepoint_column(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "αβ\n中😀\nxy"));
+  CHECK(editor_set_cursor(&f.editor, 2, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_dup_cursor_down(&f.editor));
+  CHECK(editor_cursor_count(&f.editor) == 2);
+  CHECK(expect_cursor(&f.editor, 0, 2, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(expect_cursor(&f.editor, 1, 8, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+
+  CHECK(fixture_init(&f, "αβ\n中😀\nxy"));
+  CHECK(editor_set_cursor(&f.editor, 8, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_dup_cursor_up(&f.editor));
+  CHECK(editor_cursor_count(&f.editor) == 2);
+  CHECK(expect_cursor(&f.editor, 0, 2, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(expect_cursor(&f.editor, 1, 8, EDITOR_SELECTION_SENTINEL) == 0);
   fixture_dispose(&f);
   return 0;
 }
@@ -915,6 +1100,131 @@ static int test_cursor_movement_breaks_insert_undo_coalescing(void) {
   return 0;
 }
 
+static int test_utf8_character_movement_and_delete_use_codepoint_boundaries(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "a©b"));
+  CHECK(editor_set_cursor(&f.editor, 1, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_right(&f.editor, false));
+  CHECK(expect_cursor(&f.editor, 0, 3, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_left(&f.editor, false));
+  CHECK(expect_cursor(&f.editor, 0, 1, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_del(&f.editor));
+  CHECK(expect_text(&f, "ab") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 1, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_insert_buffer(&f.editor, "©", 2));
+  CHECK(expect_text(&f, "a©b") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 3, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_backspace(&f.editor));
+  CHECK(expect_text(&f, "ab") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 1, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_utf8_line_movement_uses_codepoint_columns(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "a\néé\nxyz"));
+  CHECK(editor_set_cursor(&f.editor, 1, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_line_down(&f.editor, false));
+  CHECK(expect_cursor(&f.editor, 0, 4, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_line_down(&f.editor, false));
+  CHECK(expect_cursor(&f.editor, 0, 8, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_utf8_selection_extension_uses_codepoint_boundaries(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "a©b"));
+  CHECK(editor_set_cursor(&f.editor, 1, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_right(&f.editor, true));
+  CHECK(expect_cursor(&f.editor, 0, 3, 1) == 0);
+  CHECK(editor_left(&f.editor, true));
+  CHECK(expect_cursor(&f.editor, 0, 1, 1) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_utf8_mixed_width_navigation_never_enters_codepoints(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "a中b😀c"));
+  CHECK(editor_set_cursor(&f.editor, 1, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_right(&f.editor, false));
+  CHECK(expect_cursor(&f.editor, 0, 4, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_right(&f.editor, false));
+  CHECK(expect_cursor(&f.editor, 0, 5, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_right(&f.editor, false));
+  CHECK(expect_cursor(&f.editor, 0, 9, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_left(&f.editor, false));
+  CHECK(expect_cursor(&f.editor, 0, 5, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_del(&f.editor));
+  CHECK(expect_text(&f, "a中bc") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 5, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_backspace(&f.editor));
+  CHECK(expect_text(&f, "a中c") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 4, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_utf8_line_movement_preserves_codepoint_desired_column(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "a😀z\néx\nabcd"));
+  CHECK(editor_set_cursor(&f.editor, 5, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_line_down(&f.editor, false));
+  CHECK(expect_cursor(&f.editor, 0, 10, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_line_down(&f.editor, false));
+  CHECK(expect_cursor(&f.editor, 0, 13, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_line_up(&f.editor, true));
+  CHECK(expect_cursor(&f.editor, 0, 10, 13) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_overwrite_mode_replaces_next_character(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "abc\n"));
+  CHECK(!editor_overwrite_mode(&f.editor));
+  CHECK(editor_toggle_overwrite_mode(&f.editor));
+  CHECK(editor_overwrite_mode(&f.editor));
+  CHECK(editor_set_cursor(&f.editor, 1, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_insert_buffer(&f.editor, "X", 1));
+  CHECK(expect_text(&f, "aXc\n") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 2, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_overwrite_mode_stops_at_line_end_and_handles_utf8(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "a©c\n"));
+  editor_set_overwrite_mode(&f.editor, true);
+  CHECK(editor_set_cursor(&f.editor, 1, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_insert_buffer(&f.editor, "é", 2));
+  CHECK(expect_text(&f, "aéc\n") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 3, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_set_cursor(&f.editor, 4, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_insert_buffer(&f.editor, "Z", 1));
+  CHECK(expect_text(&f, "aécZ\n") == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
+static int test_overwrite_mode_replaces_emoji_with_utf8_character(void) {
+  EditorFixture f;
+  CHECK(fixture_init(&f, "a😀c\n"));
+  editor_set_overwrite_mode(&f.editor, true);
+  CHECK(editor_set_cursor(&f.editor, 1, EDITOR_SELECTION_SENTINEL));
+  CHECK(editor_insert_buffer(&f.editor, "中", 3));
+  CHECK(expect_text(&f, "a中c\n") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 4, EDITOR_SELECTION_SENTINEL) == 0);
+  CHECK(editor_undo(&f.editor));
+  CHECK(expect_text(&f, "a😀c\n") == 0);
+  CHECK(expect_cursor(&f.editor, 0, 1, EDITOR_SELECTION_SENTINEL) == 0);
+  fixture_dispose(&f);
+  return 0;
+}
+
 static int test_registered_editors_track_external_edits_and_snap(void) {
   Buffer buffer;
   BufferManager manager;
@@ -958,6 +1268,8 @@ int main(void) {
   int rc = 0;
   rc |= test_insert_buffer_at_cursor();
   rc |= test_insert_newline_uses_buffer_line_ending_mode();
+  rc |= test_newline_auto_indent_preserves_current_indent();
+  rc |= test_newline_auto_indent_uses_remaining_indent_when_split_inside_indent();
   rc |= test_open_line_above_preserves_indent();
   rc |= test_open_line_below_preserves_indent_before_next_line();
   rc |= test_open_line_below_last_line_uses_crlf_and_clears_multi_cursors();
@@ -969,6 +1281,7 @@ int main(void) {
   rc |= test_delete_final_crlf_line_removes_previous_line_ending();
   rc |= test_duplicate_line();
   rc |= test_duplicate_final_line();
+  rc |= test_utf8_line_operations_preserve_codepoint_offsets();
   rc |= test_delete_line_removes_selected_line_span();
   rc |= test_multi_cursor_delete_line_merges_overlapping_line_ranges();
   rc |= test_move_line_up();
@@ -976,22 +1289,28 @@ int main(void) {
   rc |= test_move_line_down();
   rc |= test_move_selected_line_span_up();
   rc |= test_move_line_down_uses_crlf_and_clears_multi_cursors();
+  rc |= test_utf8_selected_line_span_move_preserves_codepoint_offsets();
   rc |= test_join_line_below_trims_leading_spaces();
   rc |= test_join_line_below_final_crlf_line_preserves_current_terminator();
+  rc |= test_join_utf8_line_below_preserves_codepoint_offsets();
   rc |= test_tab_inserts_tab_at_cursor();
   rc |= test_tab_selection_indents_selected_lines();
   rc |= test_untab_removes_leading_tab_from_current_line();
   rc |= test_untab_selection_removes_leading_tabs_from_selected_lines();
+  rc |= test_utf8_tab_and_untab_selection_preserve_codepoint_offsets();
   rc |= test_unify_line_endings_to_lf();
   rc |= test_unify_line_endings_to_crlf();
   rc |= test_backspace_removes_selection();
   rc |= test_multi_cursor_insert_uses_pre_edit_coordinates();
   rc |= test_multi_cursor_backspace();
+  rc |= test_multi_cursor_insert_at_utf8_boundaries_uses_pre_edit_coordinates();
   rc |= test_select_all_and_replace();
   rc |= test_select_word();
+  rc |= test_select_word_spans_utf8_without_splitting_codepoints();
   rc |= test_select_line();
   rc |= test_selection_to_string();
   rc |= test_selection_to_string_uses_crlf_between_multi_selections();
+  rc |= test_selection_to_string_preserves_utf8_and_crlf_separators();
   rc |= test_copy_cut_and_paste_selection();
   rc |= test_cut_multi_selection_joins_copy_with_line_ending();
   rc |= test_left_right_selection_behavior();
@@ -1002,6 +1321,7 @@ int main(void) {
   rc |= test_home_toggle_of_line();
   rc |= test_word_left_right_movement();
   rc |= test_word_delete_commands();
+  rc |= test_utf8_word_movement_and_delete_use_codepoint_boundaries();
   rc |= test_word_delete_removes_selection();
   rc |= test_multi_cursor_word_delete();
   rc |= test_word_movement_selection_behavior();
@@ -1010,6 +1330,7 @@ int main(void) {
   rc |= test_line_movement_extends_selection();
   rc |= test_dup_cursor_down_adds_cursor_on_next_line();
   rc |= test_dup_cursor_up_adds_cursor_on_previous_line();
+  rc |= test_dup_cursor_utf8_preserves_codepoint_column();
   rc |= test_dup_cursor_down_repeats_from_moved_core_cursor();
   rc |= test_empty_line_down_up_movement();
   rc |= test_empty_line_down_moves_to_eof_when_none_found();
@@ -1018,6 +1339,14 @@ int main(void) {
   rc |= test_editor_undo_clears_multi_cursors();
   rc |= test_contiguous_single_cursor_inserts_coalesce_undo();
   rc |= test_cursor_movement_breaks_insert_undo_coalescing();
+  rc |= test_utf8_character_movement_and_delete_use_codepoint_boundaries();
+  rc |= test_utf8_line_movement_uses_codepoint_columns();
+  rc |= test_utf8_selection_extension_uses_codepoint_boundaries();
+  rc |= test_utf8_mixed_width_navigation_never_enters_codepoints();
+  rc |= test_utf8_line_movement_preserves_codepoint_desired_column();
+  rc |= test_overwrite_mode_replaces_next_character();
+  rc |= test_overwrite_mode_stops_at_line_end_and_handles_utf8();
+  rc |= test_overwrite_mode_replaces_emoji_with_utf8_character();
   rc |= test_registered_editors_track_external_edits_and_snap();
   return rc;
 }
