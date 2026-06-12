@@ -55,6 +55,29 @@ test.describe("Search UI replace", function()
     end
   end)
 
+  test.it("installs native editor search decorations", function(context)
+    local NativeEditorView = require "plugins.native_editor"
+    local view = track(context, "views", NativeEditorView("alpha beta alpha\n"))
+    core.root_panel:get_active_node_default():add_view(view)
+    core.set_active_view(view)
+
+    config.plugins.search_ui.replace_core_find = true
+    test.ok(command.perform("search-replace:show"))
+    type_into_active_view("alpha")
+
+    local results = view.buffer:decorations(0, view.buffer:len(), { producer = "search.results" })
+    test.equal(#results, 2)
+    test.equal(results[1].plane, "background")
+    local active = view.buffer:decorations(0, view.buffer:len(), { producer = "search.active" })
+    test.equal(#active, 1)
+    test.equal(active[1].plane, "outline")
+
+    test.ok(command.perform("search-replace:perform"))
+    active = view.buffer:decorations(0, view.buffer:len(), { producer = "search.active" })
+    test.equal(#active, 1)
+    test.equal(active[1].start_offset, 11)
+  end)
+
   test.it("replace all applies multiple replacements as one document change", function(context)
     local view, doc = open_editor(context, "alpha beta alpha\nalpha")
     local changes = 0

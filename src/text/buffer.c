@@ -42,10 +42,12 @@ static char *buffer_strdup(const char *text) {
 bool buffer_init(Buffer *buffer, const char *bytes, size_t len) {
   if (!buffer) return false;
   memset(buffer, 0, sizeof(*buffer));
+  native_decoration_store_init(&buffer->decorations);
   if (!piece_tree_init(&buffer->tree, bytes, len)) return false;
   buffer->line_ending_mode = detect_line_ending_mode_from_bytes(bytes, len);
   if (!undo_graph_init(&buffer->undo_graph, &buffer->tree, 0)) {
     piece_tree_dispose(&buffer->tree);
+    native_decoration_store_dispose(&buffer->decorations);
     return false;
   }
   buffer->has_undo_graph = true;
@@ -60,6 +62,7 @@ void buffer_dispose(Buffer *buffer) {
   free(buffer->path);
   native_treesitter_free(buffer->treesitter);
   buffer->treesitter = NULL;
+  native_decoration_store_dispose(&buffer->decorations);
   piece_tree_dispose(&buffer->tree);
   memset(buffer, 0, sizeof(*buffer));
 }
@@ -72,6 +75,7 @@ bool buffer_load_bytes(Buffer *buffer, const char *bytes, size_t len) {
   buffer->path = NULL;
   native_treesitter_free(buffer->treesitter);
   buffer->treesitter = NULL;
+  native_decoration_store_clear_all(&buffer->decorations);
   piece_tree_dispose(&buffer->tree);
   if (!piece_tree_init(&buffer->tree, bytes, len)) return false;
   buffer->line_ending_mode = detect_line_ending_mode_from_bytes(bytes, len);
@@ -320,6 +324,70 @@ void buffer_visible_lines_free(BufferVisibleLine *lines, size_t count) {
   if (!lines) return;
   for (size_t i = 0; i < count; ++i) free(lines[i].text);
   free(lines);
+}
+
+bool buffer_set_decorations(Buffer *buffer, const char *producer, const NativeDecorationInput *items, size_t count, bool clear_on_edit) {
+  if (!buffer) return false;
+  return native_decoration_store_set(&buffer->decorations, producer, items, count, clear_on_edit);
+}
+
+bool buffer_clear_decorations(Buffer *buffer, const char *producer) {
+  if (!buffer) return false;
+  return native_decoration_store_clear(&buffer->decorations, producer);
+}
+
+void buffer_decorations_after_edit(Buffer *buffer) {
+  if (!buffer) return;
+  native_decoration_store_after_edit(&buffer->decorations);
+}
+
+uint64_t buffer_decoration_generation(const Buffer *buffer) {
+  return buffer ? native_decoration_store_generation(&buffer->decorations) : 0;
+}
+
+NativeDecorationQueryItem *buffer_decorations(
+  const Buffer *buffer,
+  size_t start_offset,
+  size_t end_offset,
+  const char *producer,
+  bool filter_producer,
+  NativeDecorationPlane plane,
+  bool filter_plane,
+  NativeDecorationKind kind,
+  bool filter_kind,
+  size_t *count_out
+) {
+  if (count_out) *count_out = 0;
+  if (!buffer) return NULL;
+  size_t len = buffer_len(buffer);
+  if (start_offset > len) start_offset = len;
+  if (end_offset > len) end_offset = len;
+  if (end_offset < start_offset) end_offset = start_offset;
+
+  BufferLineCol start_lc = { 0, 0 };
+  BufferLineCol end_lc = { 0, 0 };
+  buffer_offset_to_line_col(buffer, start_offset, &start_lc);
+  size_t end_probe = end_offset > start_offset ? end_offset - 1 : start_offset;
+  buffer_offset_to_line_col(buffer, end_probe, &end_lc);
+
+  return native_decoration_store_query(
+    &buffer->decorations,
+    start_offset,
+    end_offset,
+    start_lc.line,
+    end_lc.line,
+    producer,
+    filter_producer,
+    plane,
+    filter_plane,
+    kind,
+    filter_kind,
+    count_out
+  );
+}
+
+void buffer_decorations_free(NativeDecorationQueryItem *items) {
+  native_decoration_store_query_free(items);
 }
 
 bool buffer_line_start(const Buffer *buffer, size_t line, size_t *offset_out) {

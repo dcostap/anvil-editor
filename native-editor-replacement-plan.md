@@ -62,6 +62,14 @@ Do not manually retest all semantics; tests now cover much of that.
 
 This is the real architectural next step.
 
+Draft design document and initial native Buffer decoration store:
+
+```text
+docs/native-decoration-api.md
+src/text/decorations.c
+src/text/decorations.h
+```
+
 Stop adding one-off Lua drawing helpers. We need a generic decoration layer for:
 
 - search result highlights
@@ -73,10 +81,11 @@ Stop adding one-off Lua drawing helpers. We need a generic decoration layer for:
 
 #### 3. First decoration producer
 
-Recommended first producer:
+Initial search result decoration producer is implemented for native editor find/Search UI literal searches:
 
 ```text
-search result decorations first
+search.results
+search.active
 ```
 
 Reason: smaller than git diff, exercises inline range highlights and lifecycle cleanly.

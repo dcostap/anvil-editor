@@ -386,6 +386,301 @@ static int l_buffer_tree_sitter_highlights(lua_State *L) {
   return 1;
 }
 
+static bool decoration_kind_from_string(const char *name, NativeDecorationKind *out) {
+  if (!name || !out) return false;
+  if (strcmp(name, "range") == 0) *out = NATIVE_DECORATION_RANGE;
+  else if (strcmp(name, "line") == 0) *out = NATIVE_DECORATION_LINE;
+  else if (strcmp(name, "line-hint") == 0) *out = NATIVE_DECORATION_LINE_HINT;
+  else return false;
+  return true;
+}
+
+static bool decoration_plane_from_string(const char *name, NativeDecorationPlane *out) {
+  if (!name || !out) return false;
+  if (strcmp(name, "line-background") == 0) *out = NATIVE_DECORATION_LINE_BACKGROUND;
+  else if (strcmp(name, "background") == 0) *out = NATIVE_DECORATION_BACKGROUND;
+  else if (strcmp(name, "gutter") == 0) *out = NATIVE_DECORATION_GUTTER;
+  else if (strcmp(name, "overview") == 0) *out = NATIVE_DECORATION_OVERVIEW;
+  else if (strcmp(name, "underline") == 0) *out = NATIVE_DECORATION_UNDERLINE;
+  else if (strcmp(name, "outline") == 0) *out = NATIVE_DECORATION_OUTLINE;
+  else if (strcmp(name, "text") == 0) *out = NATIVE_DECORATION_TEXT;
+  else if (strcmp(name, "hint") == 0) *out = NATIVE_DECORATION_HINT;
+  else if (strcmp(name, "overlay") == 0) *out = NATIVE_DECORATION_OVERLAY;
+  else return false;
+  return true;
+}
+
+static bool table_string_field(lua_State *L, int index, const char *field, const char **out, bool required) {
+  lua_getfield(L, index, field);
+  if (lua_isnil(L, -1)) {
+    lua_pop(L, 1);
+    if (out) *out = NULL;
+    return !required;
+  }
+  if (!lua_isstring(L, -1)) {
+    lua_pop(L, 1);
+    return false;
+  }
+  if (out) *out = lua_tostring(L, -1);
+  lua_pop(L, 1);
+  return true;
+}
+
+static bool table_size_field(lua_State *L, int index, const char *field, size_t *out, bool required) {
+  lua_getfield(L, index, field);
+  if (lua_isnil(L, -1)) {
+    lua_pop(L, 1);
+    return !required;
+  }
+  if (!lua_isnumber(L, -1)) {
+    lua_pop(L, 1);
+    return false;
+  }
+  lua_Number n = lua_tonumber(L, -1);
+  lua_pop(L, 1);
+  if (n < 0) return false;
+  if (out) *out = (size_t) n;
+  return true;
+}
+
+static bool table_field_is_nil(lua_State *L, int index, const char *field) {
+  lua_getfield(L, index, field);
+  bool is_nil = lua_isnil(L, -1);
+  lua_pop(L, 1);
+  return is_nil;
+}
+
+static bool table_int_field(lua_State *L, int index, const char *field, int *out, int fallback) {
+  lua_getfield(L, index, field);
+  if (lua_isnil(L, -1)) {
+    lua_pop(L, 1);
+    if (out) *out = fallback;
+    return true;
+  }
+  if (!lua_isnumber(L, -1)) {
+    lua_pop(L, 1);
+    return false;
+  }
+  if (out) *out = (int) lua_tointeger(L, -1);
+  lua_pop(L, 1);
+  return true;
+}
+
+static int decoration_nil_error(lua_State *L, const char *message) {
+  lua_pushnil(L);
+  lua_pushstring(L, message);
+  return 2;
+}
+
+static int l_buffer_set_decorations(lua_State *L) {
+  NativeTextBuffer *native = check_buffer(L, 1);
+  const char *producer = luaL_checkstring(L, 2);
+  luaL_checktype(L, 3, LUA_TTABLE);
+  bool clear_on_edit = opt_table_bool(L, 4, "clear_on_edit", false);
+
+  size_t count = lua_rawlen(L, 3);
+  NativeDecorationInput *items = NULL;
+  if (count > 0) {
+    items = (NativeDecorationInput *) calloc(count, sizeof(NativeDecorationInput));
+    if (!items) return luaL_error(L, "failed to allocate native decoration inputs");
+  }
+
+  for (size_t i = 0; i < count; ++i) {
+    lua_rawgeti(L, 3, (int) i + 1);
+    if (!lua_istable(L, -1)) {
+      free(items);
+      lua_pop(L, 1);
+      return decoration_nil_error(L, "decoration item must be a table");
+    }
+    int item_index = lua_gettop(L);
+    NativeDecorationInput *item = &items[i];
+
+    const char *kind_name = NULL;
+    if (!table_string_field(L, item_index, "kind", &kind_name, false)) {
+      free(items);
+      lua_pop(L, 1);
+      return decoration_nil_error(L, "decoration kind must be a string");
+    }
+    if (!kind_name) kind_name = "range";
+    if (!decoration_kind_from_string(kind_name, &item->kind)) {
+      free(items);
+      lua_pop(L, 1);
+      return decoration_nil_error(L, "unknown decoration kind");
+    }
+
+    const char *plane_name = NULL;
+    if (!table_string_field(L, item_index, "plane", &plane_name, false)) {
+      free(items);
+      lua_pop(L, 1);
+      return decoration_nil_error(L, "decoration plane must be a string");
+    }
+    if (!plane_name) {
+      plane_name = item->kind == NATIVE_DECORATION_LINE_HINT
+        ? "hint"
+        : (item->kind == NATIVE_DECORATION_LINE ? "line-background" : "background");
+    }
+    if (!decoration_plane_from_string(plane_name, &item->plane)) {
+      free(items);
+      lua_pop(L, 1);
+      return decoration_nil_error(L, "unknown decoration plane");
+    }
+
+    if (!table_int_field(L, item_index, "priority", &item->priority, 0)) {
+      free(items);
+      lua_pop(L, 1);
+      return decoration_nil_error(L, "decoration priority must be a number");
+    }
+    if (!table_string_field(L, item_index, "style", &item->style_key, false)) {
+      free(items);
+      lua_pop(L, 1);
+      return decoration_nil_error(L, "decoration style must be a string");
+    }
+    if (!table_string_field(L, item_index, "text", &item->text, false)) {
+      free(items);
+      lua_pop(L, 1);
+      return decoration_nil_error(L, "decoration text must be a string");
+    }
+
+    if (item->kind == NATIVE_DECORATION_RANGE) {
+      if (!table_size_field(L, item_index, "start_offset", &item->start_offset, true) ||
+          !table_size_field(L, item_index, "end_offset", &item->end_offset, true) ||
+          item->start_offset >= item->end_offset || item->end_offset > buffer_len(&native->buffer)) {
+        free(items);
+        lua_pop(L, 1);
+        return decoration_nil_error(L, "range decoration requires valid start_offset/end_offset");
+      }
+    } else {
+      if (!table_field_is_nil(L, item_index, "line")) {
+        if (!table_size_field(L, item_index, "line", &item->line_first, true)) {
+          free(items);
+          lua_pop(L, 1);
+          return decoration_nil_error(L, "line decoration line must be a number");
+        }
+        item->line_last = item->line_first;
+      } else {
+        if (!table_size_field(L, item_index, "line_first", &item->line_first, true) ||
+            !table_size_field(L, item_index, "line_last", &item->line_last, true)) {
+          free(items);
+          lua_pop(L, 1);
+          return decoration_nil_error(L, "line decoration line range must be numeric");
+        }
+      }
+      if (item->line_last < item->line_first || item->line_last >= buffer_line_count(&native->buffer)) {
+        free(items);
+        lua_pop(L, 1);
+        return decoration_nil_error(L, "line decoration requires a valid line range");
+      }
+    }
+    lua_pop(L, 1);
+  }
+
+  bool ok = buffer_set_decorations(&native->buffer, producer, items, count, clear_on_edit);
+  free(items);
+  if (!ok) return decoration_nil_error(L, "failed to install native decorations");
+  lua_pushboolean(L, true);
+  return 1;
+}
+
+static int l_buffer_clear_decorations(lua_State *L) {
+  NativeTextBuffer *native = check_buffer(L, 1);
+  const char *producer = luaL_checkstring(L, 2);
+  lua_pushboolean(L, buffer_clear_decorations(&native->buffer, producer));
+  return 1;
+}
+
+static int l_buffer_decoration_generation(lua_State *L) {
+  NativeTextBuffer *native = check_buffer(L, 1);
+  lua_pushnumber(L, (lua_Number) buffer_decoration_generation(&native->buffer));
+  return 1;
+}
+
+static int l_buffer_decorations(lua_State *L) {
+  NativeTextBuffer *native = check_buffer(L, 1);
+  size_t start = lua_isnoneornil(L, 2) ? 0 : check_offset(L, 2);
+  size_t end = lua_isnoneornil(L, 3) ? buffer_len(&native->buffer) : check_offset(L, 3);
+
+  const char *producer = NULL;
+  bool filter_producer = false;
+  NativeDecorationPlane plane = NATIVE_DECORATION_BACKGROUND;
+  bool filter_plane = false;
+  NativeDecorationKind kind = NATIVE_DECORATION_RANGE;
+  bool filter_kind = false;
+  if (lua_istable(L, 4)) {
+    if (!table_string_field(L, 4, "producer", &producer, false)) return luaL_error(L, "decoration producer filter must be a string");
+    filter_producer = producer != NULL;
+    const char *plane_name = NULL;
+    if (!table_string_field(L, 4, "plane", &plane_name, false)) return luaL_error(L, "decoration plane filter must be a string");
+    if (plane_name) {
+      if (!decoration_plane_from_string(plane_name, &plane)) return luaL_error(L, "unknown decoration plane filter");
+      filter_plane = true;
+    }
+    const char *kind_name = NULL;
+    if (!table_string_field(L, 4, "kind", &kind_name, false)) return luaL_error(L, "decoration kind filter must be a string");
+    if (kind_name) {
+      if (!decoration_kind_from_string(kind_name, &kind)) return luaL_error(L, "unknown decoration kind filter");
+      filter_kind = true;
+    }
+  }
+
+  size_t count = 0;
+  NativeDecorationQueryItem *items = buffer_decorations(
+    &native->buffer,
+    start,
+    end,
+    producer,
+    filter_producer,
+    plane,
+    filter_plane,
+    kind,
+    filter_kind,
+    &count
+  );
+  lua_newtable(L);
+  for (size_t i = 0; i < count; ++i) {
+    const NativeDecorationQueryItem *query_item = &items[i];
+    const NativeDecoration *decoration = query_item->decoration;
+    lua_newtable(L);
+    lua_pushstring(L, query_item->producer ? query_item->producer : "");
+    lua_setfield(L, -2, "producer");
+    lua_pushnumber(L, (lua_Number) query_item->generation);
+    lua_setfield(L, -2, "generation");
+    lua_pushboolean(L, query_item->clear_on_edit);
+    lua_setfield(L, -2, "clear_on_edit");
+    lua_pushstring(L, native_decoration_kind_name(decoration->kind));
+    lua_setfield(L, -2, "kind");
+    lua_pushstring(L, native_decoration_plane_name(decoration->plane));
+    lua_setfield(L, -2, "plane");
+    lua_pushnumber(L, (lua_Number) decoration->priority);
+    lua_setfield(L, -2, "priority");
+    if (decoration->style_key) {
+      lua_pushstring(L, decoration->style_key);
+      lua_setfield(L, -2, "style");
+    }
+    if (decoration->text) {
+      lua_pushstring(L, decoration->text);
+      lua_setfield(L, -2, "text");
+    }
+    if (decoration->kind == NATIVE_DECORATION_RANGE) {
+      lua_pushnumber(L, (lua_Number) decoration->start_offset);
+      lua_setfield(L, -2, "start_offset");
+      lua_pushnumber(L, (lua_Number) decoration->end_offset);
+      lua_setfield(L, -2, "end_offset");
+    } else {
+      lua_pushnumber(L, (lua_Number) decoration->line_first);
+      lua_setfield(L, -2, "line_first");
+      lua_pushnumber(L, (lua_Number) decoration->line_last);
+      lua_setfield(L, -2, "line_last");
+      if (decoration->line_first == decoration->line_last) {
+        lua_pushnumber(L, (lua_Number) decoration->line_first);
+        lua_setfield(L, -2, "line");
+      }
+    }
+    lua_rawseti(L, -2, (int) i + 1);
+  }
+  buffer_decorations_free(items);
+  return 1;
+}
+
 static int l_buffer_new_editor(lua_State *L) {
   NativeTextBuffer *native = check_buffer(L, 1);
   NativeTextEditor *editor = (NativeTextEditor *) lua_newuserdata(L, sizeof(NativeTextEditor));
@@ -813,6 +1108,10 @@ static const luaL_Reg buffer_methods[] = {
   { "tree_sitter_language", l_buffer_tree_sitter_language },
   { "tree_sitter_root_kind", l_buffer_tree_sitter_root_kind },
   { "tree_sitter_highlights", l_buffer_tree_sitter_highlights },
+  { "set_decorations", l_buffer_set_decorations },
+  { "clear_decorations", l_buffer_clear_decorations },
+  { "decoration_generation", l_buffer_decoration_generation },
+  { "decorations", l_buffer_decorations },
   { "new_editor", l_buffer_new_editor },
   { NULL, NULL }
 };

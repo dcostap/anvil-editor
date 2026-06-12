@@ -761,6 +761,69 @@ function NativeEditorView:draw_selection_highlights(line, row_y)
   end
 end
 
+function NativeEditorView:decoration_color(decoration, fallback)
+  local key = decoration and decoration.style
+  if key and style[key] then return style[key] end
+  if key and style.syntax and style.syntax[key] then return style.syntax[key] end
+  return fallback or style.accent
+end
+
+function NativeEditorView:get_range_decoration_rects(line_info, decoration, row_y)
+  if not (line_info and decoration and decoration.kind == "range") then return {} end
+  local line = line_info.line or 0
+  local line_start = line_info.start_offset or 0
+  local text = (line_info.text or ""):gsub("\r?\n$", "")
+  local text_end = line_start + #text
+  local line_end = line_info.end_offset or text_end
+  if decoration.end_offset <= line_start or decoration.start_offset >= line_end then return {} end
+
+  local first = math.max(decoration.start_offset or 0, line_start)
+  local last = math.min(decoration.end_offset or 0, text_end)
+  local start_col = common.clamp(first - line_start, 0, #text)
+  local end_col = common.clamp(last - line_start, start_col, #text)
+  local x1, y = self:line_col_to_screen(line, start_col)
+  local x2 = self:line_col_to_screen(line, end_col)
+  if (decoration.end_offset or 0) > text_end and (decoration.start_offset or 0) <= text_end then
+    x2 = x2 + self:get_font():get_width(" ")
+  end
+  if x2 <= x1 then x2 = x1 + math.max(1, SCALE) end
+  return {{
+    x = x1,
+    y = row_y or y,
+    w = x2 - x1,
+    h = self:get_line_height(),
+    color = self:decoration_color(decoration, style.search_selection or style.selectionhighlight),
+    decoration = decoration,
+  }}
+end
+
+function NativeEditorView:draw_range_decoration_rect(rect, plane)
+  local color = rect.color
+  if plane == "outline" then
+    local t = math.max(1, math.ceil(SCALE))
+    renderer.draw_rect(rect.x - t, rect.y - t, rect.w + t, t, color)
+    renderer.draw_rect(rect.x, rect.y + rect.h - t, rect.w, t, color)
+    renderer.draw_rect(rect.x - t, rect.y, t, rect.h, color)
+    renderer.draw_rect(rect.x + rect.w - t, rect.y, t, rect.h, color)
+  elseif plane == "underline" then
+    local t = math.max(1, math.ceil(SCALE))
+    renderer.draw_rect(rect.x, rect.y + rect.h - t, rect.w, t, color)
+  else
+    renderer.draw_rect(rect.x, rect.y, rect.w, rect.h, color)
+  end
+end
+
+function NativeEditorView:draw_range_decorations(line_info, row_y, decorations, plane)
+  if not decorations then return end
+  for _, decoration in ipairs(decorations) do
+    if decoration.kind == "range" and decoration.plane == plane then
+      for _, rect in ipairs(self:get_range_decoration_rects(line_info, decoration, row_y)) do
+        self:draw_range_decoration_rect(rect, plane)
+      end
+    end
+  end
+end
+
 local native_bracket_pairs = { ["("] = ")", ["["] = "]", ["{"] = "}" }
 local native_bracket_closers = { [")"] = "(", ["]"] = "[", ["}"] = "{" }
 
@@ -955,7 +1018,7 @@ function NativeEditorView:draw_bracket_matches(line)
   end
 end
 
-function NativeEditorView:draw_line_text(line_info, row_y, highlights)
+function NativeEditorView:draw_line_text(line_info, row_y, highlights, decorations)
   local text = (line_info.text or ""):gsub("\r?\n$", "")
   local body_y = row_y
   row_y = row_y + self:get_line_text_y_offset()
@@ -968,6 +1031,8 @@ function NativeEditorView:draw_line_text(line_info, row_y, highlights)
   self:draw_whitespace_markers(line, x, row_y)
   if not highlights or #highlights == 0 then
     renderer.draw_text(self:get_font(), text, x, row_y, style.text)
+    self:draw_range_decorations(line_info, body_y, decorations, "underline")
+    self:draw_range_decorations(line_info, body_y, decorations, "outline")
     self:draw_bracket_matches(line)
     return
   end
@@ -999,6 +1064,8 @@ function NativeEditorView:draw_line_text(line_info, row_y, highlights)
     end
   end
   draw_segment(col, #text, style.text)
+  self:draw_range_decorations(line_info, body_y, decorations, "underline")
+  self:draw_range_decorations(line_info, body_y, decorations, "outline")
   self:draw_bracket_matches(line)
 end
 
@@ -1585,6 +1652,40 @@ function NativeEditorView:on_mouse_left()
   if not self.mouse_selecting then self.cursor = "ibeam" end
 end
 
+function NativeEditorView:update_search_decorations(text, active_start, active_end)
+  self.buffer:clear_decorations("search.results")
+  self.buffer:clear_decorations("search.active")
+  if not text or text == "" then return end
+
+  local items = {}
+  local options = { case_sensitive = config.find_case_sensitive == true }
+  local start_offset = 0
+  while start_offset <= self.buffer:len() do
+    local start_match, end_match = self.buffer:find_literal(text, start_offset, options)
+    if not start_match then break end
+    items[#items + 1] = {
+      kind = "range",
+      start_offset = start_match,
+      end_offset = end_match,
+      plane = "background",
+      style = "search_selection",
+      priority = 100,
+    }
+    start_offset = math.max(end_match, start_match + 1)
+  end
+  self.buffer:set_decorations("search.results", items, { clear_on_edit = true })
+  if active_start and active_end and active_end > active_start then
+    self.buffer:set_decorations("search.active", {{
+      kind = "range",
+      start_offset = active_start,
+      end_offset = active_end,
+      plane = "outline",
+      style = "search_selection_outline",
+      priority = 200,
+    }}, { clear_on_edit = true })
+  end
+end
+
 function NativeEditorView:find_literal(text, backwards)
   if not text or text == "" then return false end
   local cursor = self.editor:cursor()
@@ -1600,6 +1701,7 @@ function NativeEditorView:find_literal(text, backwards)
     start_match, end_match = self.buffer:find_literal(text, start_offset, options)
   end
   if not start_match then return false end
+  self:update_search_decorations(text, start_match, end_match)
   self.editor:set_cursor(end_match, start_match)
   self:scroll_to_cursor()
   core.redraw = true
@@ -1621,6 +1723,17 @@ function NativeEditorView:draw_editor_contents()
   local last_line = math.min(line_count - 1, first_line + math.ceil(h / lh) + 1)
 
   self.bracket_match_state = self:compute_bracket_match_state()
+  local visible_lines = self.buffer:visible_lines(first_line, last_line)
+  local highlights = nil
+  local decorations = nil
+  if #visible_lines > 0 then
+    local visible_start = visible_lines[1].start_offset or 0
+    local visible_end = visible_lines[#visible_lines].end_offset or self.buffer:len()
+    if self.tree_sitter_enabled then
+      highlights = self.buffer:tree_sitter_highlights(visible_start, visible_end)
+    end
+    decorations = self.buffer:decorations(visible_start, visible_end)
+  end
 
   core.push_clip_rect(x, y, w, h)
   -- Match DocView: the whole editor uses style.background; the gutter does not
@@ -1628,23 +1741,21 @@ function NativeEditorView:draw_editor_contents()
   -- line numbers draw over the shared editor background.
   self:draw_current_line_highlights()
 
-  for i = 1, self.editor:cursor_count() do
-    self:draw_selection_for_cursor(self.editor:cursor(i))
+  for _, line_info in ipairs(visible_lines) do
+    local line = line_info.line
+    local row_y = y + style.padding.y - self.scroll.y + line * lh
+    self:draw_range_decorations(line_info, row_y, decorations, "background")
   end
 
-  local visible_lines = self.buffer:visible_lines(first_line, last_line)
-  local highlights = nil
-  if self.tree_sitter_enabled and #visible_lines > 0 then
-    local visible_start = visible_lines[1].start_offset or 0
-    local visible_end = visible_lines[#visible_lines].end_offset or self.buffer:len()
-    highlights = self.buffer:tree_sitter_highlights(visible_start, visible_end)
+  for i = 1, self.editor:cursor_count() do
+    self:draw_selection_for_cursor(self.editor:cursor(i))
   end
 
   for _, line_info in ipairs(visible_lines) do
     local line = line_info.line
     local row_y = y + style.padding.y - self.scroll.y + line * lh
     self:draw_line_gutter(line + 1, x, row_y, gutter_w)
-    self:draw_line_text(line_info, row_y, highlights)
+    self:draw_line_text(line_info, row_y, highlights, decorations)
   end
 
   self:draw_overlay()

@@ -133,6 +133,99 @@ test.describe("native_text API bridge", function()
     test.equal(buffer:find_literal("missing"), nil)
   end)
 
+  test.it("stores and queries native Buffer decorations by producer", function()
+    local buffer = native_text.new_buffer("alpha\nbeta\ngamma")
+
+    test.ok(buffer:set_decorations("search.results", {
+      { start_offset = 0, end_offset = 5, plane = "background", style = "search_selection", priority = 20 },
+      { start_offset = 11, end_offset = 16, plane = "outline", style = "search_selection_outline", priority = 10 },
+    }, { clear_on_edit = true }))
+    test.ok(buffer:set_decorations("gitdiff", {
+      { kind = "line", line = 1, plane = "gutter", style = "gitdiff_modification", priority = 5 },
+    }))
+
+    local all = buffer:decorations(0, buffer:len())
+    test.equal(#all, 3)
+    test.same(all[1], {
+      producer = "search.results",
+      generation = all[1].generation,
+      clear_on_edit = true,
+      kind = "range",
+      plane = "background",
+      priority = 20,
+      style = "search_selection",
+      start_offset = 0,
+      end_offset = 5,
+    })
+    test.equal(all[2].producer, "gitdiff")
+    test.equal(all[2].kind, "line")
+    test.equal(all[2].line, 1)
+    test.equal(all[2].plane, "gutter")
+    test.equal(all[3].producer, "search.results")
+    test.equal(all[3].plane, "outline")
+
+    local search = buffer:decorations(0, 6, { producer = "search.results" })
+    test.equal(#search, 1)
+    test.equal(search[1].start_offset, 0)
+
+    local gutter = buffer:decorations(0, buffer:len(), { plane = "gutter" })
+    test.equal(#gutter, 1)
+    test.equal(gutter[1].style, "gitdiff_modification")
+
+    test.ok(buffer:clear_decorations("search.results"))
+    all = buffer:decorations(0, buffer:len())
+    test.equal(#all, 1)
+    test.equal(all[1].producer, "gitdiff")
+  end)
+
+  test.it("clears edit-sensitive native Buffer decorations on mutation and undo snaps", function()
+    local buffer = native_text.new_buffer("abcdef")
+    local editor = buffer:new_editor()
+
+    test.ok(buffer:set_decorations("search.results", {
+      { start_offset = 1, end_offset = 3, plane = "background", style = "search_selection" },
+    }, { clear_on_edit = true }))
+    test.ok(buffer:set_decorations("diagnostics", {
+      { start_offset = 3, end_offset = 6, plane = "underline", style = "warning_effect" },
+    }))
+
+    test.equal(#buffer:decorations(0, buffer:len()), 2)
+    local before = buffer:decoration_generation()
+    test.ok(editor:set_cursor(0))
+    test.ok(editor:insert("x"))
+    test.ok(buffer:decoration_generation() > before)
+
+    local remaining = buffer:decorations(0, buffer:len())
+    test.equal(#remaining, 1)
+    test.equal(remaining[1].producer, "diagnostics")
+
+    test.ok(buffer:set_decorations("search.results", {
+      { start_offset = 0, end_offset = 1, plane = "background", style = "search_selection" },
+    }, { clear_on_edit = true }))
+    test.equal(#buffer:decorations(0, buffer:len(), { producer = "search.results" }), 1)
+    test.ok(editor:undo())
+    test.equal(#buffer:decorations(0, buffer:len(), { producer = "search.results" }), 0)
+  end)
+
+  test.it("rejects invalid native Buffer decoration batches atomically", function()
+    local buffer = native_text.new_buffer("abcdef")
+    test.ok(buffer:set_decorations("search.results", {
+      { start_offset = 0, end_offset = 2, plane = "background", style = "search_selection" },
+    }))
+
+    local ok, err = buffer:set_decorations("search.results", {
+      { start_offset = 0, end_offset = 2, plane = "background", style = "search_selection" },
+      { start_offset = 5, end_offset = 4, plane = "background", style = "search_selection" },
+    })
+    test.equal(ok, nil)
+    test.ok(type(err) == "string")
+
+    local remaining = buffer:decorations(0, buffer:len(), { producer = "search.results" })
+    test.equal(#remaining, 1)
+    test.equal(remaining[1].start_offset, 0)
+    test.equal(remaining[1].end_offset, 2)
+  end)
+
   test.it("exposes native literal replace-all as one undoable transaction", function()
     local buffer = native_text.new_buffer("one two one TWO")
     local editor = buffer:new_editor()
@@ -499,6 +592,47 @@ test.describe("native_text API bridge", function()
     end)
     core.active_view = original_active_view
     if not ok then error(err) end
+  end)
+
+  test.it("computes native editor range decoration rects and search decorations", function()
+    local NativeEditorView = require "plugins.native_editor"
+    local view = NativeEditorView("alpha beta alpha\nnext alpha\n")
+    view.position.x, view.position.y = 10, 20
+    view.size.x, view.size.y = 500, 300
+
+    test.ok(view:find_literal("alpha", false))
+    test.same(view.editor:cursor(), { cursor = 5, selection = 0 })
+
+    local results = view.buffer:decorations(0, view.buffer:len(), { producer = "search.results" })
+    test.equal(#results, 3)
+    test.equal(results[1].plane, "background")
+    test.equal(results[1].style, "search_selection")
+
+    local active = view.buffer:decorations(0, view.buffer:len(), { producer = "search.active" })
+    test.equal(#active, 1)
+    test.equal(active[1].plane, "outline")
+    test.equal(active[1].start_offset, 0)
+    test.equal(active[1].end_offset, 5)
+
+    local line_info = view.buffer:visible_lines(0, 0)[1]
+    local rects = view:get_range_decoration_rects(line_info, results[1], 20)
+    test.equal(#rects, 1)
+    local x1 = view:line_col_to_screen(0, 0)
+    local x2 = view:line_col_to_screen(0, 5)
+    test.equal(rects[1].x, x1)
+    test.equal(rects[1].w, x2 - x1)
+    test.equal(rects[1].h, view:get_line_height())
+
+    view.buffer:set_decorations("test.multiline", {{
+      start_offset = 11,
+      end_offset = 21,
+      plane = "background",
+      style = "search_selection",
+    }})
+    local multiline = view.buffer:decorations(0, view.buffer:len(), { producer = "test.multiline" })[1]
+    rects = view:get_range_decoration_rects(line_info, multiline, 20)
+    test.equal(#rects, 1)
+    test.ok(rects[1].w > 0)
   end)
 
   test.it("computes native editor bracket match rects", function()

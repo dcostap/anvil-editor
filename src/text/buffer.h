@@ -1,6 +1,7 @@
 #ifndef ANVIL_TEXT_BUFFER_H
 #define ANVIL_TEXT_BUFFER_H
 
+#include "text/decorations.h"
 #include "text/piece_tree.h"
 #include "text/undo_graph.h"
 
@@ -37,6 +38,7 @@ typedef struct Buffer {
   UndoRedoGraph undo_graph;
   bool has_undo_graph;
   NativeTreeSitter *treesitter;
+  NativeDecorationStore decorations;
 } Buffer;
 
 typedef PieceTreeLineCol BufferLineCol;
@@ -72,6 +74,24 @@ bool buffer_find_literal(
 char *buffer_get_line(const Buffer *buffer, size_t line, size_t *len_out);
 BufferVisibleLine *buffer_visible_lines(const Buffer *buffer, size_t first_line, size_t last_line, size_t *count_out);
 void buffer_visible_lines_free(BufferVisibleLine *lines, size_t count);
+
+bool buffer_set_decorations(Buffer *buffer, const char *producer, const NativeDecorationInput *items, size_t count, bool clear_on_edit);
+bool buffer_clear_decorations(Buffer *buffer, const char *producer);
+void buffer_decorations_after_edit(Buffer *buffer);
+uint64_t buffer_decoration_generation(const Buffer *buffer);
+NativeDecorationQueryItem *buffer_decorations(
+  const Buffer *buffer,
+  size_t start_offset,
+  size_t end_offset,
+  const char *producer,
+  bool filter_producer,
+  NativeDecorationPlane plane,
+  bool filter_plane,
+  NativeDecorationKind kind,
+  bool filter_kind,
+  size_t *count_out
+);
+void buffer_decorations_free(NativeDecorationQueryItem *items);
 
 bool buffer_line_start(const Buffer *buffer, size_t line, size_t *offset_out);
 bool buffer_line_range(const Buffer *buffer, size_t line, BufferLineRange *out);

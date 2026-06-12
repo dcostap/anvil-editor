@@ -66,8 +66,16 @@ config.plugins.search_ui.config_spec = {
     }
   }
 
----@type core.docview
+---@type core.docview|plugins.native_editor.NativeEditorView
 local doc_view
+
+local function is_native_editor_view(view)
+  return core.is_native_editor_view and core.is_native_editor_view(view)
+end
+
+local function is_searchable_editor_view(view)
+  return view and ((view.is and view:is(DocView)) or is_native_editor_view(view))
+end
 
 ui.name = "Search and Replace"
 ui:set_border_width(0)
@@ -177,11 +185,92 @@ local function is_whole_match(line_text, col1, col2)
   return true
 end
 
+function Results:current_native()
+  local view = self.native_view
+  if not (view and self.matches and #self.matches > 0) then return 0 end
+  local cursor = view.editor:cursor()
+  local cursor_offset = cursor.cursor or 0
+  local selection_offset = cursor.selection or cursor_offset
+  local first = math.min(cursor_offset, selection_offset)
+  local last = math.max(cursor_offset, selection_offset)
+  if first == last then return 0 end
+  for i, result in ipairs(self.matches) do
+    if result.start_offset == first and result.end_offset == last then return i end
+  end
+  return 0
+end
+
+local function native_whole_word_match(text, start_offset, end_offset)
+  local before = start_offset > 0 and text:sub(start_offset, start_offset) or ""
+  local after = end_offset < #text and text:sub(end_offset + 1, end_offset + 1) or ""
+  return not before:match("[%w_]") and not after:match("[%w_]")
+end
+
+function Results:find_native(text, view, force)
+  if not (view and view.buffer) then return end
+  if self.native_view and self.native_view ~= view and self.native_view.buffer then
+    self.native_view.buffer:clear_decorations("search.results")
+    self.native_view.buffer:clear_decorations("search.active")
+  end
+  self.text = text
+  self.doc = nil
+  self.doc_view = nil
+  self.native_view = view
+  self.matches = {}
+
+  view.buffer:clear_decorations("search.results")
+  view.buffer:clear_decorations("search.active")
+  if not text or text == "" or regexcheck:is_toggled() or patterncheck:is_toggled() then
+    self:set_status()
+    return
+  end
+
+  local full_text = wholeword:is_toggled() and view.buffer:text() or nil
+  local items = {}
+  local start_offset = 0
+  local options = { case_sensitive = sensitive:is_toggled() }
+  while start_offset <= view.buffer:len() do
+    local start_match, end_match = view.buffer:find_literal(text, start_offset, options)
+    if not start_match then break end
+    local whole = not wholeword:is_toggled() or native_whole_word_match(full_text, start_match, end_match)
+    if whole then
+      self.matches[#self.matches + 1] = { start_offset = start_match, end_offset = end_match }
+      items[#items + 1] = {
+        kind = "range",
+        start_offset = start_match,
+        end_offset = end_match,
+        plane = "background",
+        style = "search_selection",
+        priority = 100,
+      }
+    end
+    start_offset = math.max(end_match, start_match + 1)
+  end
+  view.buffer:set_decorations("search.results", items, { clear_on_edit = true })
+  local current = self:current_native()
+  local active = current > 0 and self.matches[current] or self.matches[1]
+  if active then
+    view.buffer:set_decorations("search.active", {{
+      kind = "range",
+      start_offset = active.start_offset,
+      end_offset = active.end_offset,
+      plane = "outline",
+      style = "search_selection_outline",
+      priority = 200,
+    }}, { clear_on_edit = true })
+  end
+  self:set_status()
+  ui:schedule_update()
+end
+
 ---@param text string
 ---@param doc core.doc
 ---@param force? boolean
 ---@param view? core.docview
 function Results:find(text, doc, force, view)
+  if is_native_editor_view(view) then
+    return self:find_native(text, view, force)
+  end
   if
     not force and self.text == text
     and
@@ -295,6 +384,7 @@ end
 
 ---@return integer
 function Results:current()
+  if self.native_view then return self:current_native() end
   if not self.doc then return 0 end
   local line1, col1, line2, col2
   if self.doc_view and self.doc_view.doc == self.doc and self.doc_view.with_selection_state then
@@ -318,10 +408,15 @@ function Results:current()
 end
 
 function Results:clear()
+  if self.native_view and self.native_view.buffer then
+    self.native_view.buffer:clear_decorations("search.results")
+    self.native_view.buffer:clear_decorations("search.active")
+  end
   self.text = ""
   self.matches = {}
   self.doc = nil
   self.doc_view = nil
+  self.native_view = nil
   status:set_label("")
 end
 
@@ -364,9 +459,70 @@ local function with_doc_view_selection(fn, ...)
 end
 
 local find_enabled = true
+
+local function native_find(reverse, not_scroll, unselect_first, no_wrap)
+  local view = doc_view
+  local text = findtext:get_text()
+  if not (is_native_editor_view(view) and view_is_open(view)) or text == "" or not find_enabled then
+    Results:clear()
+    return
+  end
+  if regexcheck:is_toggled() or patterncheck:is_toggled() then
+    Results:find(text, nil, true, view)
+    return
+  end
+
+  local cursor = view.editor:cursor()
+  local cursor_offset = cursor.cursor or 0
+  local selection_offset = cursor.selection or cursor_offset
+  local first = math.min(cursor_offset, selection_offset)
+  local last = math.max(cursor_offset, selection_offset)
+  if unselect_first then
+    view.editor:set_cursor(cursor_offset)
+    first, last = cursor_offset, cursor_offset
+  end
+  local start_offset = reverse and math.max(0, first > 0 and first - 1 or 0) or last
+  local options = { backwards = reverse, case_sensitive = sensitive:is_toggled() }
+  local start_match, end_match = view.buffer:find_literal(text, start_offset, options)
+  if not start_match and not no_wrap then
+    start_match, end_match = view.buffer:find_literal(text, reverse and view.buffer:len() or 0, options)
+  end
+  if not start_match then
+    Results:find(text, nil, true, view)
+    return
+  end
+
+  if wholeword:is_toggled() then
+    local full_text = view.buffer:text()
+    local guard = 0
+    while start_match and not native_whole_word_match(full_text, start_match, end_match) and guard <= view.buffer:len() do
+      guard = guard + 1
+      local next_start = reverse and math.max(0, start_match > 0 and start_match - 1 or 0) or math.max(end_match, start_match + 1)
+      start_match, end_match = view.buffer:find_literal(text, next_start, options)
+      if not start_match and not no_wrap then
+        start_match, end_match = view.buffer:find_literal(text, reverse and view.buffer:len() or 0, options)
+        no_wrap = true
+      end
+    end
+  end
+  if not start_match then
+    Results:find(text, nil, true, view)
+    return
+  end
+
+  view.editor:set_cursor(end_match, start_match)
+  if not not_scroll then view:scroll_to_cursor() end
+  Results:find(text, nil, true, view)
+  core.redraw = true
+end
+
 local function find(reverse, not_scroll, unselect_first, no_wrap)
-  if core.last_active_view and core.last_active_view:is(DocView) then
+  if core.last_active_view and is_searchable_editor_view(core.last_active_view) then
     doc_view = core.last_active_view
+  end
+
+  if is_native_editor_view(doc_view) then
+    return native_find(reverse, not_scroll, unselect_first, no_wrap)
   end
 
   if
@@ -440,10 +596,26 @@ local function find(reverse, not_scroll, unselect_first, no_wrap)
 end
 
 local function find_replace()
-  if core.last_active_view and core.last_active_view:is(DocView) then
+  if core.last_active_view and is_searchable_editor_view(core.last_active_view) then
     doc_view = core.last_active_view
   end
   if not view_is_open(doc_view) then return end
+
+  if is_native_editor_view(doc_view) then
+    if regexcheck:is_toggled() or patterncheck:is_toggled() or wholeword:is_toggled() or replaceinselection:is_toggled() then
+      core.log_quiet("Native search UI replace currently supports plain whole-buffer literal replacement only")
+      return
+    end
+    local count = doc_view.buffer:replace_all_literal(findtext:get_text(), replacetext:get_text() or "", {
+      case_sensitive = sensitive:is_toggled(),
+    })
+    doc_view.buffer:clear_decorations("search.results")
+    doc_view.buffer:clear_decorations("search.active")
+    Results:clear()
+    status:set_label(string.format("Total Replaced: %d", count or 0))
+    core.redraw = true
+    return
+  end
 
   return with_doc_view_selection(function()
     ---@type core.doc
@@ -582,7 +754,7 @@ local function add_to_node()
 end
 
 ---Show or hide the search pane.
----@param av? core.docview
+---@param av? core.docview|plugins.native_editor.NativeEditorView
 ---@param toggle? boolean
 local function show_find(av, toggle)
   ui.prev_view = av
@@ -609,7 +781,29 @@ local function show_find(av, toggle)
     ui:swap_active_child(findtext)
     if av then
       doc_view = av
-      if view_is_open(doc_view) and doc_view.doc then
+      if is_native_editor_view(doc_view) and view_is_open(doc_view) then
+        local is_pattern = regexcheck:is_toggled() or patterncheck:is_toggled()
+        local selected = doc_view.editor:copy_selection()
+        local doc_text = selected or ""
+        local current_text = findtext:get_text()
+        if not sensitive:is_toggled() then
+          doc_text = doc_text:ulower()
+          current_text = current_text:ulower()
+        end
+        if not is_pattern and doc_text ~= "" and current_text ~= doc_text then
+          find_enabled = false
+          findtext:set_text(selected)
+          find_enabled = true
+        elseif current_text ~= "" and doc_text == "" then
+          find(false)
+        end
+        if findtext:get_text() ~= "" then
+          if not is_pattern then findtext.textview.doc:set_selection(1, math.huge, 1, 1) end
+          Results:find(findtext:get_text(), nil, nil, doc_view)
+        else
+          Results:clear()
+        end
+      elseif view_is_open(doc_view) and doc_view.doc then
         with_doc_view_selection(function()
           local is_pattern = regexcheck:is_toggled() or patterncheck:is_toggled()
           local doc_text = doc_view.doc:get_text(
@@ -845,19 +1039,19 @@ function core.set_active_view(...)
     and
     ui:is_visible()
     and
-    view:extends(DocView)
+    is_searchable_editor_view(view)
     and
     view ~= findtext.textview
     and
     view ~= replacetext.textview
     and
-    view.doc.filename
+    (is_native_editor_view(view) or view.doc.filename)
   then
     doc_view = view
     ui.prev_view = doc_view
     local search_text = findtext:get_text()
     if search_text ~= "" then
-      Results:find(search_text, doc_view.doc, nil, doc_view)
+      Results:find(search_text, is_native_editor_view(doc_view) and nil or doc_view.doc, nil, doc_view)
     else
       Results:clear()
     end
@@ -869,7 +1063,7 @@ end
 --------------------------------------------------------------------------------
 command.add(
   function()
-    if core.active_view and core.active_view:is(DocView) then
+    if is_searchable_editor_view(core.active_view) then
       return true, core.active_view
     elseif ui:is_visible() then
       return true, doc_view
@@ -950,20 +1144,22 @@ command.add(
   end,
   {
     ["search-replace:perform"] = function()
-      with_doc_view_selection(function()
-        ---@type core.doc
-        local doc = doc_view.doc
-        local line1, col1, line2, col2 = doc:get_selection()
-        -- correct cursor position to properly search next result
-        if line1 ~= line2 or col1 ~= col2 then
-          doc:set_selection(
-            line1,
-            math.max(col1, col2),
-            line2,
-            math.min(col1, col2)
-          )
-        end
-      end)
+      if not is_native_editor_view(doc_view) then
+        with_doc_view_selection(function()
+          ---@type core.doc
+          local doc = doc_view.doc
+          local line1, col1, line2, col2 = doc:get_selection()
+          -- correct cursor position to properly search next result
+          if line1 ~= line2 or col1 ~= col2 then
+            doc:set_selection(
+              line1,
+              math.max(col1, col2),
+              line2,
+              math.min(col1, col2)
+            )
+          end
+        end)
+      end
       find(false)
     end,
     ["search-replace:perform-previous"] = function()

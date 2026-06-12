@@ -200,6 +200,7 @@ static BufferSnapResult buffer_manager_make_snap_result(
   result.op_offset = op_offset;
 
   if (op_offset_out) *op_offset_out = op_offset;
+  buffer_decorations_after_edit(manager->buffer);
   notify_snap(manager, &result, source);
   free(old_text);
   free(new_text);
@@ -453,6 +454,7 @@ static BatchEditResult buffer_manager_apply_edits_internal(
   result.edit_descriptors = edit_descriptors;
   result.edit_descriptor_count = edit_count;
   if (changed && manager->buffer->treesitter) native_treesitter_after_edit(manager->buffer->treesitter, manager->buffer, &result);
+  if (changed) buffer_decorations_after_edit(manager->buffer);
   notify_edit(manager, &result, source);
   return result;
 }

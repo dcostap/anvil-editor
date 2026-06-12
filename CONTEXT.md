@@ -68,6 +68,10 @@ _Avoid_: Document selection, shared selection
 A background highlight that marks the visual row containing the active caret in a Document View.
 _Avoid_: Line highlighting, active line highlight
 
+**Decoration**:
+A non-text visual annotation anchored to editor content or editor view space, such as a search result highlight, diff marker, diagnostic marker, or line hint.
+_Avoid_: DocView monkey patch, overlay hack
+
 **Wrapped Visual Row**:
 A visual row produced when one Document line wraps; it is not a separate Document line.
 _Avoid_: Fake line, wrapped file line
