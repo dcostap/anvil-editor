@@ -1,5 +1,105 @@
 # Native Editor Replacement Plan
 
+## Current state and next actions
+
+We are now past the "write targeted programmatic tests" detour.
+
+### Where we are
+
+The native editor is in a much stronger dogfood state:
+
+- Default native-open path exists.
+- Native Buffer/Editor/undo/search/Tree-sitter basics exist.
+- Lots of old `DocView`-feel parity has been added.
+- UTF-8 codepoint-level behavior is now covered much better.
+- Native editor lifecycle is covered better:
+  - dirty close
+  - save/save-as
+  - save conflict
+  - external reload
+  - autosave
+  - workspace/file identity
+- Whole-line clipboard, IME basics, overwrite, comment toggle, bracket jump, guides, selection highlights, and status bar items now have coverage.
+- Full Anvil suite passes.
+
+So the test safety net is now good enough to stop polishing the Lua shell blindly.
+
+### What is next
+
+Back to the original plan:
+
+#### 1. Short manual dogfood pass
+
+This is now the actual next step.
+
+Use native editor on:
+
+```text
+C:\Users\Darius\Downloads\test-big-repository\unicode_test.txt
+```
+
+And normal files:
+
+```text
+data/plugins/native_editor.lua
+src/text/editor.c
+src/text/buffer.c
+```
+
+Look for only tactile/visual bugs:
+
+- caret visually in wrong place
+- click/hit-test feels wrong
+- selection rectangles don't match text
+- horizontal scroll weirdness
+- IME candidate/composition placement issues
+- emoji/CJK/bidi visual surprises
+- anything corrupts text
+
+Do not manually retest all semantics; tests now cover much of that.
+
+#### 2. Then design native decoration API
+
+This is the real architectural next step.
+
+Stop adding one-off Lua drawing helpers. We need a generic decoration layer for:
+
+- search result highlights
+- git diff gutter/overview markers
+- diagnostics
+- bracket match
+- selection occurrence highlights
+- whitespace/guides/line hints where appropriate
+
+#### 3. First decoration producer
+
+Recommended first producer:
+
+```text
+search result decorations first
+```
+
+Reason: smaller than git diff, exercises inline range highlights and lifecycle cleanly.
+
+Then:
+
+```text
+git diff markers second
+```
+
+Reason: validates line/gutter/overview decoration support.
+
+Recommended order:
+
+```text
+Manual dogfood pass
+→ fix only blocker/tactile bugs found
+→ write native decoration API design doc/sketch
+→ implement search decorations as first vertical slice
+```
+
+We should not keep expanding `native_editor.lua` as the long-term solution. The tests gave us confidence; now we move architecture forward.
+
 ## Purpose
 
 This plan starts the next phase after the native Buffer/Editor/Tree-sitter foundation work. The goal is to move from an experimental native-backed sandbox toward replacing Anvil's current Lua `Doc`/`DocView` editing path with the Fred-style native core.
@@ -654,47 +754,44 @@ Only after the native editor is default and stable:
 - Keep Lua only if it still serves the temporary app shell/plugin role.
 - If pursuing pure C, begin moving command/keymap/view infrastructure into C after text editor replacement is stable.
 
-## Suggested immediate implementation order
+## Substantially completed earlier immediate checklist
 
-After completing the inventory, implement in this order:
+This section is retained as history. The following items were the earlier immediate implementation order and are now substantially complete for the current dogfood/native-default path. Do not treat this as the active next roadmap; use **Current state and next actions** and **Native editor roadmap from the current parity inventory** above.
 
-1. **OS clipboard integration and native selection command bridge for native sandbox/view**
-   - Wire copy/cut/paste commands to native Editor.
-   - Expose already-built native primitives such as select-all, select-word, and select-line through the Lua bridge where needed.
-   - Use existing platform clipboard APIs exposed to Lua initially if fastest.
-   - Add native/API tests for copied text shape and cut/paste undo.
+1. **[Substantially complete] OS clipboard integration and native selection command bridge for native sandbox/view**
+   - Copy/cut/paste commands are wired to native Editor behavior.
+   - Select-all, select-word, select-line, select-none, whole-line copy/cut/paste, primary selection, and middle-click paste are covered.
+   - Native/API tests cover copied text shape, UTF-8 behavior, whole-line policy, and undo for relevant edit paths.
 
-2. **Safe file lifecycle basics**
-   - Save-as.
-   - Dirty close prompt or safe refusal to close dirty native views.
-   - Dirty quit handling for native views.
-   - Better file error reporting.
+2. **[Substantially complete] Safe file lifecycle basics**
+   - Save, save-as, dirty close prompts, dirty quit/close-all integration, missing-file creation, autosave, save conflict prompts, and external reload prompts are implemented and tested.
+   - Remaining work is polish and manual validation of UX edge cases, not baseline capability.
 
-3. **Duplicate-open / Buffer identity policy**
-   - Add or choose the native Buffer registry/file identity mechanism before normal default-open dogfooding.
-   - Ensure opening the same path reuses or focuses the existing native Buffer/view instead of silently creating conflicting independent Buffers.
+3. **[Substantially complete] Duplicate-open / Buffer identity policy**
+   - File-backed native Buffers are registered by normalized path identity.
+   - Duplicate opens reuse/focus existing native views/Buffers.
+   - Save-as and filetree rename flows update native Buffer identity.
 
-4. **Mouse selection polish**
-   - Add drag selection in sandbox/native view.
-   - Add double-click word and triple-click line selection.
+4. **[Substantially complete] Mouse selection polish**
+   - Mouse placement, drag selection, shift-click, ctrl-click cursor addition, gutter selection, double-click word selection, triple-click line selection, drag snapping, primary selection, and UTF-8 boundary behavior are implemented and tested.
+   - Remaining work is tactile manual validation such as drag-outside autoscroll and edge polish.
 
-5. **Page movement and camera polish**
-   - Add native page up/down commands based on visible line count from view.
-   - Keep cursor visible after every command.
-   - Improve horizontal scroll/long-line handling.
+5. **[Substantially complete] Page movement and camera polish**
+   - Native page up/down, shift-page selection, scroll-to-cursor, horizontal scroll-to-caret, scroll context, and scroll-past-end basics are implemented and tested.
+   - Remaining work is long-line and visual/tactile dogfood polish.
 
-6. **Find/replace core helpers**
-   - Add native Buffer search primitives.
-   - Add Editor find-next/find-prev selection behavior.
-   - Add replace and replace-all through Buffer Manager.
+6. **[Substantially complete] Find/replace core helpers**
+   - Native Buffer literal search, find next/previous, replace current, and replace-all through native transactions exist and are tested, including UTF-8 and undoable replace-all.
+   - Remaining work belongs to search UI integration and decoration-backed persistent search result highlights.
 
-7. **External reload handling**
-   - Detect when file-backed native Buffers changed on disk.
-   - Integrate reload prompts or safe refusal when native Buffers have unsaved edits.
+7. **[Substantially complete] External reload handling**
+   - Native file-backed Buffers detect disk changes.
+   - Clean Buffers reload automatically; dirty Buffers prompt; save conflicts prompt before overwrite.
+   - Runtime tests cover reload, ignore, overwrite, and cancel paths.
 
-8. **Default-open experiment**
-   - Add an opt-in setting or command path that opens normal files in the native editor view instead of the old `DocView`.
-   - Dogfood with common project files.
+8. **[Substantially complete] Default-open experiment**
+   - Native default-open is enabled by first-party default for dogfooding.
+   - Normal file opens, missing files, scratch/new docs, IPC/drop/open-file paths, side/main panel navigation, fuzzy accepted results, and workspace restore route through native-capable paths where appropriate.
 
 ## Explicit non-goals for this phase
 
