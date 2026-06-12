@@ -29,6 +29,7 @@ typedef struct Editor {
   Cursor *multi_cursors;
   size_t multi_cursor_count;
   size_t multi_cursor_capacity;
+  bool overwrite;
   EditorUndoSelectionSnapshot *undo_selection_snapshots;
   size_t undo_selection_snapshot_count;
   size_t undo_selection_snapshot_capacity;
@@ -45,9 +46,13 @@ bool editor_add_cursor(Editor *editor, size_t cursor, size_t selection);
 void editor_clear_multi_cursors(Editor *editor);
 void editor_sort_and_merge_cursors(Editor *editor);
 
+bool editor_overwrite_mode(const Editor *editor);
+void editor_set_overwrite_mode(Editor *editor, bool overwrite);
+bool editor_toggle_overwrite_mode(Editor *editor);
 bool editor_insert_buffer(Editor *editor, const char *text, size_t len);
 bool editor_insert_char(Editor *editor, char ch);
 bool editor_insert_newline(Editor *editor);
+bool editor_insert_newline_auto_indent(Editor *editor);
 bool editor_open_line_above(Editor *editor);
 bool editor_open_line_below(Editor *editor);
 bool editor_backspace(Editor *editor);

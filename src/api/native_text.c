@@ -453,6 +453,24 @@ static int l_editor_clear_multi_cursors(lua_State *L) {
   return 0;
 }
 
+static int l_editor_overwrite_mode(lua_State *L) {
+  NativeTextEditor *native = check_editor(L, 1);
+  lua_pushboolean(L, editor_overwrite_mode(&native->editor));
+  return 1;
+}
+
+static int l_editor_set_overwrite_mode(lua_State *L) {
+  NativeTextEditor *native = check_editor(L, 1);
+  editor_set_overwrite_mode(&native->editor, lua_toboolean(L, 2));
+  return 0;
+}
+
+static int l_editor_toggle_overwrite_mode(lua_State *L) {
+  NativeTextEditor *native = check_editor(L, 1);
+  lua_pushboolean(L, editor_toggle_overwrite_mode(&native->editor));
+  return 1;
+}
+
 static int l_editor_insert(lua_State *L) {
   NativeTextEditor *native = check_editor(L, 1);
   size_t len = 0;
@@ -464,6 +482,12 @@ static int l_editor_insert(lua_State *L) {
 static int l_editor_newline(lua_State *L) {
   NativeTextEditor *native = check_editor(L, 1);
   lua_pushboolean(L, editor_insert_newline(&native->editor));
+  return 1;
+}
+
+static int l_editor_newline_auto_indent(lua_State *L) {
+  NativeTextEditor *native = check_editor(L, 1);
+  lua_pushboolean(L, editor_insert_newline_auto_indent(&native->editor));
   return 1;
 }
 
@@ -804,8 +828,12 @@ static const luaL_Reg editor_methods[] = {
   { "set_cursor", l_editor_set_cursor },
   { "add_cursor", l_editor_add_cursor },
   { "clear_multi_cursors", l_editor_clear_multi_cursors },
+  { "overwrite_mode", l_editor_overwrite_mode },
+  { "set_overwrite_mode", l_editor_set_overwrite_mode },
+  { "toggle_overwrite_mode", l_editor_toggle_overwrite_mode },
   { "insert", l_editor_insert },
   { "newline", l_editor_newline },
+  { "newline_auto_indent", l_editor_newline_auto_indent },
   { "backspace", l_editor_backspace },
   { "delete", l_editor_delete },
   { "backspace_word", l_editor_backspace_word },

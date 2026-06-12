@@ -5,6 +5,7 @@ local common = require "core.common"
 local config = require "core.config"
 local keymap = require "core.keymap"
 local style = require "core.style"
+local ime = require "core.ime"
 local StatusBar = require "core.statusbar"
 local View = require "core.view"
 local native_text = require "native_text"
@@ -83,6 +84,8 @@ function NativeEditorView:new(text, filename, buffer, identity_key)
   self.font = "code_font"
   self.v_scrollbar:set_forced_status(config.force_scrollbar_status)
   self.h_scrollbar:set_forced_status(config.force_scrollbar_status)
+  self.ime_selection = { from = 0, size = 0 }
+  self.ime_status = false
 end
 
 function NativeEditorView:enable_tree_sitter_for_path(filename)
@@ -129,6 +132,7 @@ function NativeEditorView:reload_from_disk()
       view:update_file_signature()
       view.external_reload_prompting = false
       view.tree_sitter_dirty_since = nil
+      view.native_indent_info = nil
     end
   end
   core.log_quiet("Reloaded shared native Buffer from disk: %s", path)
@@ -259,6 +263,7 @@ function NativeEditorView.from_state(state)
 end
 
 function NativeEditorView:note_tree_sitter_mutation()
+  self.native_indent_info = nil
   if self.tree_sitter_enabled and self.buffer:tree_sitter_is_dirty() then
     self.tree_sitter_dirty_since = system.get_time()
     core.redraw = true
@@ -325,16 +330,88 @@ function NativeEditorView:update()
     core.blink_reset()
   end
   self:update_blink()
+  self:update_ime_location()
+end
+
+local function native_indent_occurs_near(stat, idx)
+  return (stat[idx - 1] and stat[idx - 1] == stat[idx])
+    or (stat[idx + 1] and stat[idx + 1] == stat[idx])
+end
+
+local function native_optimal_indent_from_stat(stat)
+  if #stat == 0 then return nil, 0 end
+  table.sort(stat, function(a, b) return a > b end)
+  local best_indent = 0
+  local best_score = 0
+  for x = 1, #stat do
+    local indent = stat[x]
+    local score = 0
+    for y = 1, #stat do
+      if y ~= x and stat[y] % indent == 0 then
+        score = score + 1
+      elseif indent > stat[y] and (native_indent_occurs_near(stat, y) or (y == #stat and stat[y] > 1)) then
+        score = 0
+        break
+      end
+    end
+    if score > best_score then
+      best_indent = indent
+      best_score = score
+    end
+    if score > 0 then break end
+  end
+  return best_score > 0 and best_indent or nil, best_score
+end
+
+function NativeEditorView:get_indent_info()
+  if self.native_indent_info then
+    return self.native_indent_info.type, self.native_indent_info.size, self.native_indent_info.confirmed
+  end
+
+  local stat = {}
+  local tab_count = 0
+  local max_lines = math.min(math.max(1, self.buffer:line_count()), 750)
+  for line = 0, max_lines - 1 do
+    local text = self:get_line_text(line)
+    if text:find("%S") then
+      local spaces = text:match("^ +")
+      if spaces then stat[#stat + 1] = #spaces end
+      if text:match("^\t+") then tab_count = tab_count + 1 end
+    end
+  end
+
+  local indent, score = native_optimal_indent_from_stat(stat)
+  local indent_type, indent_size
+  if tab_count > score then
+    indent_type, indent_size, score = "hard", config.indent_size, tab_count
+  else
+    indent_type, indent_size = "soft", indent or config.indent_size
+  end
+  local confirmed = score >= 2
+  if not confirmed then
+    indent_type, indent_size = config.tab_type, config.indent_size
+  end
+  self.native_indent_info = { type = indent_type, size = indent_size, confirmed = confirmed }
+  return indent_type, indent_size, confirmed
 end
 
 function NativeEditorView:get_font()
   local font = style[self.font or "code_font"] or style.code_font or style.font
-  if font.set_tab_size then font:set_tab_size(config.indent_size) end
+  local _, indent_size = self:get_indent_info()
+  if font.set_tab_size then font:set_tab_size(indent_size) end
   return font
 end
 
 function NativeEditorView:get_line_height()
   return math.floor(self:get_font():get_height() * config.line_height)
+end
+
+function NativeEditorView:with_centered_editor_geometry(fn, ...)
+  local centered = core.centered_editor
+  if centered and centered.with_editor_geometry and centered.should_center and centered.should_center(self) then
+    return centered.with_editor_geometry(self, fn, ...)
+  end
+  return fn(...)
 end
 
 function NativeEditorView:get_line_text_y_offset()
@@ -422,25 +499,55 @@ function NativeEditorView:get_col_x_offset(line, col)
   return self:get_font():get_width(text:sub(1, col - 1))
 end
 
+local function next_utf8_byte_index(text, byte_index)
+  byte_index = common.clamp(byte_index or 1, 1, #text + 1)
+  local ok, next_index = pcall(utf8.offset, text, 2, byte_index)
+  if ok and next_index then return next_index end
+  return math.min(#text + 1, byte_index + 1)
+end
+
+local function utf8_char_count_range(text, start_col, end_col)
+  start_col = common.clamp(start_col or 0, 0, #text)
+  end_col = common.clamp(end_col or #text, start_col, #text)
+  local count = 0
+  local byte_index = start_col + 1
+  while byte_index <= end_col do
+    local next_index = next_utf8_byte_index(text, byte_index)
+    if next_index - 1 > end_col then break end
+    count = count + 1
+    byte_index = next_index
+  end
+  return count
+end
+
+local function utf8_char_count_prefix(text, byte_count)
+  return utf8_char_count_range(text, 0, byte_count or #text)
+end
+
 function NativeEditorView:get_x_offset_col(line, xoffset)
   local text = self:get_line_text((line or 1) - 1)
   xoffset = math.max(0, xoffset or 0)
   local col = 1
-  for i = 1, #text do
-    local prev_width = self:get_font():get_width(text:sub(1, i - 1))
-    local next_width = self:get_font():get_width(text:sub(1, i))
+  local byte_index = 1
+  while byte_index <= #text do
+    local next_index = next_utf8_byte_index(text, byte_index)
+    local prev_width = self:get_font():get_width(text:sub(1, byte_index - 1))
+    local next_width = self:get_font():get_width(text:sub(1, next_index - 1))
     if xoffset < (prev_width + next_width) / 2 then break end
-    col = i + 1
+    col = next_index
+    byte_index = next_index
   end
   return col
 end
 
 function NativeEditorView:line_col_to_screen(line, col)
-  local lh = self:get_line_height()
-  col = common.clamp(col or 0, 0, #self:get_line_text(line))
-  local x = self.position.x + self:get_gutter_width() + style.padding.x - self.scroll.x + self:get_col_x_offset(line + 1, col + 1)
-  local y = self.position.y + style.padding.y - self.scroll.y + line * lh
-  return x, y
+  return self:with_centered_editor_geometry(function(line, col)
+    local lh = self:get_line_height()
+    col = common.clamp(col or 0, 0, #self:get_line_text(line))
+    local x = self.position.x + self:get_gutter_width() + style.padding.x - self.scroll.x + self:get_col_x_offset(line + 1, col + 1)
+    local y = self.position.y + style.padding.y - self.scroll.y + line * lh
+    return x, y
+  end, line, col)
 end
 
 -- DocView-compatible helpers use one-based line/column coordinates. They make
@@ -457,12 +564,14 @@ function NativeEditorView:cursor_line_col(cursor)
 end
 
 function NativeEditorView:screen_to_line_col(x, y)
-  local lh = self:get_line_height()
-  local line = math.floor((y - self.position.y + self.scroll.y - style.padding.y) / lh)
-  line = common.clamp(line, 0, math.max(0, self.buffer:line_count() - 1))
-  local text_x = self.position.x + self:get_gutter_width() + style.padding.x - self.scroll.x
-  local relx = math.max(0, x - text_x)
-  return line, self:get_x_offset_col(line + 1, relx) - 1
+  return self:with_centered_editor_geometry(function(x, y)
+    local lh = self:get_line_height()
+    local line = math.floor((y - self.position.y + self.scroll.y - style.padding.y) / lh)
+    line = common.clamp(line, 0, math.max(0, self.buffer:line_count() - 1))
+    local text_x = self.position.x + self:get_gutter_width() + style.padding.x - self.scroll.x
+    local relx = math.max(0, x - text_x)
+    return line, self:get_x_offset_col(line + 1, relx) - 1
+  end, x, y)
 end
 
 function NativeEditorView:screen_to_offset(x, y)
@@ -475,7 +584,50 @@ function NativeEditorView:resolve_screen_position(x, y)
   return line + 1, col + 1
 end
 
-function NativeEditorView:draw_caret_for_cursor(cursor)
+function NativeEditorView:get_caret_draw_position(caret_idx, x, y)
+  if not config.animated_caret then return x, y end
+  caret_idx = caret_idx or 1
+  self.animated_caret_positions = self.animated_caret_positions or {}
+  local pos = self.animated_caret_positions[caret_idx]
+  if not pos then
+    pos = { x = x, y = y }
+    self.animated_caret_positions[caret_idx] = pos
+    return x, y
+  end
+
+  local now = system.get_time()
+  local last = pos.last_time or now
+  pos.last_time = now
+  local dt = math.min(now - last, 1 / 120)
+  local dx = x - pos.x
+  local dy = y - pos.y
+
+  if math.abs(dy) > 0.1 then
+    pos.x = x
+    pos.y = y
+  else
+    local distance = math.abs(dx)
+    local distance_min = config.animated_caret_distance_min or 4
+    local distance_max = config.animated_caret_distance_max or 160
+    local distance_span = math.max(1, distance_max - distance_min)
+    local distance_t = math.max(0, math.min(1, (distance - distance_min) / distance_span))
+    local min_speed = config.animated_caret_min_speed or 35
+    local max_speed = config.animated_caret_max_speed or 100
+    local speed = min_speed + (max_speed - min_speed) * distance_t
+    local linear_t = 1 - math.exp(-speed * dt)
+    local t = 1 - math.pow(1 - linear_t, 3)
+    pos.x = pos.x + dx * t
+    pos.y = y
+    if math.abs(x - pos.x) > 0.1 then
+      core.redraw = true
+    else
+      pos.x = x
+    end
+  end
+  return pos.x, pos.y
+end
+
+function NativeEditorView:draw_caret_for_cursor(cursor, caret_idx)
   if core.active_view == self and not config.disable_blink and not self.mouse_selecting and system.window_has_focus(core.window) then
     local period = config.blink_period or 0.8
     local t0 = core.blink_start or 0
@@ -483,18 +635,340 @@ function NativeEditorView:draw_caret_for_cursor(cursor)
   end
   local cursor_line, cursor_col = self:cursor_line_col(cursor.cursor or 0)
   local caret_x, caret_y = self:line_col_to_screen(cursor_line, cursor_col)
+  caret_x, caret_y = self:get_caret_draw_position(caret_idx, caret_x, caret_y)
   local color = core.active_view == self and style.caret or style.dim
-  renderer.draw_rect(caret_x, caret_y, style.caret_width or math.max(1, SCALE), self:get_line_height(), color)
+  local caret_width = style.caret_width or math.max(1, SCALE)
+  if self.editor.overwrite_mode and self.editor:overwrite_mode() then
+    local text = self:get_line_text(cursor_line)
+    local byte_index = common.clamp(cursor_col + 1, 1, #text + 1)
+    local next_index = next_utf8_byte_index(text, byte_index)
+    local char = text:sub(byte_index, next_index - 1)
+    local width = char ~= "" and self:get_font():get_width(char) or caret_width
+    renderer.draw_rect(caret_x, caret_y + self:get_line_height() - caret_width * 2, width, caret_width * 2, color)
+  else
+    renderer.draw_rect(caret_x, caret_y, caret_width, self:get_line_height(), color)
+  end
+end
+
+local function native_whitespace_option(conf, substitution, option)
+  if substitution[option] ~= nil then return substitution[option] end
+  return conf[option]
+end
+
+function NativeEditorView:get_whitespace_markers(line)
+  local conf = core.draw_whitespace
+  if not (type(conf) == "table" and conf.enabled) then return {} end
+  if conf.show_selected_only then return {} end
+
+  local text = self:get_line_text(line)
+  local substitutions = conf.substitutions or {}
+  local markers = {}
+  for _, substitution in ipairs(substitutions) do
+    local char = substitution.char
+    if char and char ~= "" then
+      local offset = 1
+      while offset <= #text do
+        local start_col = text:find(char, offset, true)
+        if not start_col then break end
+        local end_col = start_col
+        while text:sub(end_col + 1, end_col + #char) == char do
+          end_col = end_col + #char
+        end
+        local run_len = math.floor((end_col - start_col + 1) / #char)
+        local leading = start_col == 1
+        local trailing = end_col == #text
+        local draw = false
+        local color = native_whitespace_option(conf, substitution, "color") or style.whitespace
+        if trailing then
+          draw = native_whitespace_option(conf, substitution, "show_trailing")
+          color = native_whitespace_option(conf, substitution, "trailing_color") or color
+        elseif leading then
+          draw = native_whitespace_option(conf, substitution, "show_leading")
+          color = native_whitespace_option(conf, substitution, "leading_color") or color
+        else
+          draw = native_whitespace_option(conf, substitution, "show_middle")
+            and run_len >= (native_whitespace_option(conf, substitution, "show_middle_min") or 1)
+          color = native_whitespace_option(conf, substitution, "middle_color") or color
+        end
+        if draw then
+          for col = start_col - 1, end_col - 1, #char do
+            markers[#markers + 1] = {
+              col = col,
+              text = substitution.sub or char,
+              color = color,
+              kind = char == "\t" and "tab" or "space",
+            }
+          end
+        end
+        offset = end_col + 1
+      end
+    end
+  end
+  return markers
+end
+
+function NativeEditorView:draw_whitespace_markers(line, x, y)
+  local markers = self:get_whitespace_markers(line)
+  if #markers == 0 then return end
+  local font = self:get_font()
+  for _, marker in ipairs(markers) do
+    local mx = x + self:get_col_x_offset(line + 1, marker.col + 1)
+    renderer.draw_text(font, marker.text, mx, y, marker.color)
+  end
+end
+
+function NativeEditorView:get_selection_highlight_rects(line, row_y)
+  local cursor = self.editor:cursor()
+  if not self:cursor_has_selection(cursor) then return {} end
+  local first = math.min(cursor.cursor, cursor.selection)
+  local last = math.max(cursor.cursor, cursor.selection)
+  local first_lc = self.buffer:offset_to_line_col(first)
+  local last_lc = self.buffer:offset_to_line_col(last)
+  if not first_lc or not last_lc or first_lc.line ~= last_lc.line then return {} end
+
+  local selected_text = self:get_line_text(first_lc.line):sub(first_lc.col + 1, last_lc.col)
+  if #selected_text <= 1 or selected_text:match("^%s+$") then return {} end
+
+  local current_text = self:get_line_text(line)
+  local search_text = selected_text:lower()
+  local search_line = current_text:lower()
+  local rects = {}
+  local offset = 1
+  while true do
+    local start_col, end_col = search_line:find(search_text, offset, true)
+    if not start_col then break end
+    local zero_start = start_col - 1
+    local zero_end = end_col
+    if line ~= first_lc.line or zero_start ~= first_lc.col then
+      local x1, y = self:line_col_to_screen(line, zero_start)
+      local x2 = self:line_col_to_screen(line, zero_end)
+      rects[#rects + 1] = {
+        x = x1,
+        y = row_y or y,
+        w = x2 - x1,
+        h = self:get_line_height(),
+        color = style.selectionhighlight,
+      }
+    end
+    offset = end_col + 1
+  end
+  return rects
+end
+
+function NativeEditorView:draw_selection_highlights(line, row_y)
+  for _, rect in ipairs(self:get_selection_highlight_rects(line, row_y)) do
+    renderer.draw_rect(rect.x, rect.y, rect.w, rect.h, rect.color)
+  end
+end
+
+local native_bracket_pairs = { ["("] = ")", ["["] = "]", ["{"] = "}" }
+local native_bracket_closers = { [")"] = "(", ["]"] = "[", ["}"] = "{" }
+
+function NativeEditorView:find_matching_bracket_in_text(text, offset, open_ch, close_ch, direction, line_limit)
+  local anchor_lc = self.buffer:offset_to_line_col(offset)
+  local depth = 0
+  if direction > 0 then
+    for i = offset + 1, #text do
+      local lc = self.buffer:offset_to_line_col(i - 1)
+      if anchor_lc and lc and math.abs(lc.line - anchor_lc.line) > line_limit then break end
+      local ch = text:sub(i, i)
+      if ch == open_ch then
+        depth = depth + 1
+      elseif ch == close_ch then
+        depth = depth - 1
+        if depth == 0 then return i - 1 end
+      end
+    end
+  else
+    for i = offset + 1, 1, -1 do
+      local lc = self.buffer:offset_to_line_col(i - 1)
+      if anchor_lc and lc and math.abs(lc.line - anchor_lc.line) > line_limit then break end
+      local ch = text:sub(i, i)
+      if ch == close_ch then
+        depth = depth + 1
+      elseif ch == open_ch then
+        depth = depth - 1
+        if depth == 0 then return i - 1 end
+      end
+    end
+  end
+end
+
+function NativeEditorView:compute_bracket_match_state()
+  local cursor = self.editor:cursor().cursor or 0
+  local text = self.buffer:text()
+  local line_limit = 3000
+  for _, offset in ipairs { cursor, cursor > 0 and cursor - 1 or nil } do
+    if offset and offset >= 0 and offset < #text then
+      local ch = text:sub(offset + 1, offset + 1)
+      local close = native_bracket_pairs[ch]
+      if close then
+        local match = self:find_matching_bracket_in_text(text, offset, ch, close, 1, line_limit)
+        if match then return { anchor = offset, match = match } end
+      end
+      local open = native_bracket_closers[ch]
+      if open then
+        local match = self:find_matching_bracket_in_text(text, offset, open, ch, -1, line_limit)
+        if match then return { anchor = offset, match = match } end
+      end
+    end
+  end
+end
+
+local native_line_comment_tokens = {
+  c = "//", h = "//", cc = "//", cpp = "//", cxx = "//", hpp = "//", hh = "//", hxx = "//",
+  js = "//", jsx = "//", ts = "//", tsx = "//", java = "//", cs = "//", go = "//", rs = "//",
+  lua = "--", py = "#", rb = "#", sh = "#", bash = "#", zsh = "#", ps1 = "#", toml = "#", yaml = "#", yml = "#",
+}
+
+function NativeEditorView:line_comment_token()
+  local path = self.buffer:path()
+  local ext = path and path:match("%.([^%.%/\\]+)$")
+  return ext and native_line_comment_tokens[ext:lower()] or nil
+end
+
+function NativeEditorView:selected_line_ranges()
+  local ranges = {}
+  for i = 1, self.editor:cursor_count() do
+    local cursor = self.editor:cursor(i)
+    local first = math.min(cursor.cursor or 0, cursor.selection or cursor.cursor or 0)
+    local last = math.max(cursor.cursor or 0, cursor.selection or cursor.cursor or 0)
+    local first_lc = self.buffer:offset_to_line_col(first)
+    local last_lc = self.buffer:offset_to_line_col(last)
+    if first_lc and last_lc then
+      local last_line = last_lc.line
+      if last > first and last_lc.col == 0 and last_line > first_lc.line then
+        last_line = last_line - 1
+      end
+      ranges[#ranges + 1] = { first = first_lc.line, last = last_line }
+    end
+  end
+  return ranges
+end
+
+function NativeEditorView:toggle_line_comments()
+  local token = self:line_comment_token()
+  if not token then
+    core.error("No native line comment token for this file type")
+    return false
+  end
+
+  local lines = {}
+  local seen = {}
+  for _, range in ipairs(self:selected_line_ranges()) do
+    for line = range.first, range.last do
+      if not seen[line] then
+        seen[line] = true
+        lines[#lines + 1] = line
+      end
+    end
+  end
+  table.sort(lines)
+  if #lines == 0 then return false end
+
+  local line_infos = {}
+  local uncomment = true
+  local token_with_space = token .. " "
+  for _, line in ipairs(lines) do
+    local text = self:get_line_text(line)
+    local first_nonspace = text:find("%S")
+    if first_nonspace then
+      local has_comment = text:sub(first_nonspace, first_nonspace + #token_with_space - 1) == token_with_space
+      line_infos[#line_infos + 1] = { line = line, col = first_nonspace - 1, text = text, commented = has_comment }
+      if not has_comment then uncomment = false end
+    end
+  end
+  if #line_infos == 0 then return false end
+
+  self.editor:clear_multi_cursors()
+  if uncomment then
+    for i, info in ipairs(line_infos) do
+      local start_offset = self.buffer:line_col_to_offset(info.line, info.col)
+      local end_offset = self.buffer:line_col_to_offset(info.line, info.col + #token_with_space)
+      if start_offset and end_offset then
+        if i == 1 then self.editor:set_cursor(end_offset, start_offset) else self.editor:add_cursor(end_offset, start_offset) end
+      end
+    end
+    self.editor:paste("")
+  else
+    for i, info in ipairs(line_infos) do
+      local offset = self.buffer:line_col_to_offset(info.line, info.col)
+      if offset then
+        if i == 1 then self.editor:set_cursor(offset) else self.editor:add_cursor(offset) end
+      end
+    end
+    self.editor:paste(token_with_space)
+  end
+  return true
+end
+
+function NativeEditorView:move_to_matching_bracket(select_match)
+  local state = self:compute_bracket_match_state()
+  if not state then return false end
+  if select_match then
+    if state.match > state.anchor then
+      self.editor:set_cursor(state.match + 1, state.anchor)
+    else
+      self.editor:set_cursor(state.match, state.anchor + 1)
+    end
+  else
+    self.editor:set_cursor(state.match)
+  end
+  self.bracket_match_state = state
+  self:scroll_to_cursor()
+  core.redraw = true
+  return true
+end
+
+function NativeEditorView:get_bracket_match_rects(line)
+  local state = self.bracket_match_state or self:compute_bracket_match_state()
+  if not state then return {} end
+  local rects = {}
+  local thickness = math.ceil(SCALE)
+  for _, offset in ipairs { state.anchor, state.match } do
+    local lc = self.buffer:offset_to_line_col(offset)
+    if lc and lc.line == line then
+      local x1, y = self:line_col_to_screen(lc.line, lc.col)
+      local x2 = self:line_col_to_screen(lc.line, lc.col + 1)
+      rects[#rects + 1] = {
+        x = x1,
+        y = y,
+        w = math.max(1, x2 - x1),
+        h = self:get_line_height(),
+        thickness = thickness,
+        color = style.bracketmatch_frame_color or style.bracketmatch_color or style.accent,
+        offset = offset,
+      }
+    end
+  end
+  return rects
+end
+
+function NativeEditorView:draw_bracket_matches(line)
+  for _, rect in ipairs(self:get_bracket_match_rects(line)) do
+    local t = rect.thickness
+    local color = rect.color
+    renderer.draw_rect(rect.x - t, rect.y - t, rect.w + t, t, color)
+    renderer.draw_rect(rect.x, rect.y + rect.h - t, rect.w, t, color)
+    renderer.draw_rect(rect.x - t, rect.y, t, rect.h, color)
+    renderer.draw_rect(rect.x + rect.w - t, rect.y, t, rect.h, color)
+  end
 end
 
 function NativeEditorView:draw_line_text(line_info, row_y, highlights)
   local text = (line_info.text or ""):gsub("\r?\n$", "")
+  local body_y = row_y
   row_y = row_y + self:get_line_text_y_offset()
   local x = self.position.x + self:get_gutter_width() + style.padding.x - self.scroll.x
   local width = self:get_gutter_width() + style.padding.x * 2 + self:get_font():get_width(text)
+  local line = line_info.line or 0
   if width > (self.h_scrollable_size or 0) then self.h_scrollable_size = width end
+  self:draw_indent_guides(line, body_y)
+  self:draw_selection_highlights(line, body_y)
+  self:draw_whitespace_markers(line, x, row_y)
   if not highlights or #highlights == 0 then
     renderer.draw_text(self:get_font(), text, x, row_y, style.text)
+    self:draw_bracket_matches(line)
     return
   end
 
@@ -525,6 +999,7 @@ function NativeEditorView:draw_line_text(line_info, row_y, highlights)
     end
   end
   draw_segment(col, #text, style.text)
+  self:draw_bracket_matches(line)
 end
 
 function NativeEditorView:cursor_has_selection(cursor)
@@ -576,20 +1051,173 @@ function NativeEditorView:draw_line_highlight(x, y)
   renderer.draw_rect(rx, ry, rw, rh, style.line_highlight)
 end
 
-function NativeEditorView:draw_current_line_highlights()
-  if core.active_view ~= self or config.highlight_current_line == false then return end
-  if config.highlight_current_line == "no_selection" and self:has_selection() then return end
-  local lh = self:get_line_height()
-  local seen = {}
-  for i = 1, self.editor:cursor_count() do
-    local line = self:cursor_line_col(self.editor:cursor(i).cursor or 0)
-    if not seen[line] then
-      local y = self.position.y + style.padding.y - self.scroll.y + line * lh
-      self:draw_line_highlight(self.position.x, y)
-      seen[line] = true
+function NativeEditorView:get_column_guide_rects()
+  local rects = {}
+  local text_x = self.position.x + self:get_gutter_width() + style.padding.x - self.scroll.x
+  local char_w = self:get_font():get_width("n")
+
+  local column_guides = config.plugins.column_guides
+  if type(column_guides) == "table" and column_guides.enabled ~= false and type(column_guides.columns) == "table" then
+    local width = math.max(1, math.floor(SCALE))
+    for _, column in ipairs(column_guides.columns) do
+      column = tonumber(column)
+      if column and column > 0 then
+        rects[#rects + 1] = {
+          x = text_x + char_w * math.floor(column) - math.floor(width / 2),
+          y = self.position.y,
+          w = width,
+          h = self.size.y,
+          color = style.whitespace,
+          kind = "column-guide",
+        }
+      end
     end
   end
-  self:draw_content_left_edge()
+
+  local lineguide = config.plugins.lineguide
+  if type(lineguide) == "table" and lineguide.enabled and type(lineguide.rulers) == "table" then
+    local width = lineguide.width or 1
+    local color = lineguide.use_custom_color and lineguide.custom_color or style.guide
+    for _, ruler in ipairs(lineguide.rulers) do
+      local columns = type(ruler) == "table" and ruler.columns or ruler
+      columns = tonumber(columns)
+      if columns and columns > 0 then
+        rects[#rects + 1] = {
+          x = text_x + char_w * columns,
+          y = self.position.y,
+          w = width,
+          h = self.size.y,
+          color = type(ruler) == "table" and ruler.color or color,
+          kind = "lineguide",
+        }
+      end
+    end
+  end
+
+  return rects
+end
+
+function NativeEditorView:draw_column_guides()
+  local rects = self:get_column_guide_rects()
+  if #rects == 0 then return end
+  local gutter_w = self:get_gutter_width()
+  core.push_clip_rect(self.position.x + gutter_w, self.position.y, self.size.x - gutter_w, self.size.y)
+  for _, rect in ipairs(rects) do
+    renderer.draw_rect(rect.x, rect.y, rect.w, rect.h, rect.color)
+  end
+  core.pop_clip_rect()
+end
+
+local function native_leading_indent_cols(view, line, indent_size)
+  local text = view:get_line_text(line)
+  local whitespace = text:match("^[ \t]*") or ""
+  local is_blank = text:find("%S") == nil
+  local cols = 0
+  for i = 1, #whitespace do
+    local ch = whitespace:sub(i, i)
+    if ch == "\t" then
+      cols = cols + (indent_size - (cols % indent_size))
+    else
+      cols = cols + 1
+    end
+  end
+  return cols, is_blank
+end
+
+local function native_nonblank_indent_in_direction(view, line, indent_size, direction, limit)
+  local stop = direction < 0 and math.max(0, line - limit) or math.min(view.buffer:line_count() - 1, line + limit)
+  local i = line + direction
+  while direction < 0 and i >= stop or direction > 0 and i <= stop do
+    local cols, blank = native_leading_indent_cols(view, i, indent_size)
+    if not blank then return cols, i end
+    i = i + direction
+  end
+end
+
+local function native_effective_indent_cols(view, line, indent_size, limit)
+  local cols, blank = native_leading_indent_cols(view, line, indent_size)
+  if not blank then return cols end
+  local prev = native_nonblank_indent_in_direction(view, line, indent_size, -1, limit)
+  local nexti = native_nonblank_indent_in_direction(view, line, indent_size, 1, limit)
+  return (prev and nexti) and math.max(prev, nexti) or (prev or nexti or 0)
+end
+
+local function native_is_closing_block_line(text)
+  return text and text:match("^%s*[%]%)}][,;]?%s*$") ~= nil
+end
+
+function NativeEditorView:active_indent_depth(indent_size, limit)
+  local line = self:cursor_line_col()
+  line = common.clamp(line or 0, 0, math.max(0, self.buffer:line_count() - 1))
+  local cols, blank = native_leading_indent_cols(self, line, indent_size)
+  local text = self:get_line_text(line)
+
+  if blank then
+    local prev = native_nonblank_indent_in_direction(self, line, indent_size, -1, limit)
+    local nexti = native_nonblank_indent_in_direction(self, line, indent_size, 1, limit)
+    cols = math.max(prev or 0, nexti or 0)
+  elseif native_is_closing_block_line(text) then
+    local prev = native_nonblank_indent_in_direction(self, line, indent_size, -1, limit)
+    if prev and prev > cols then cols = prev end
+  else
+    local nexti = native_nonblank_indent_in_direction(self, line, indent_size, 1, 1)
+    if nexti and nexti > cols then cols = nexti end
+  end
+
+  local depth = math.floor(cols / indent_size) - 1
+  return depth >= 0 and depth or nil
+end
+
+function NativeEditorView:get_indent_guide_rects(line, row_y)
+  local conf = core.indent_guides
+  if not (type(conf) == "table" and conf.enabled) then return {} end
+  local _, indent_size = self:get_indent_info()
+  indent_size = indent_size or config.indent_size or 2
+  local limit = conf.blank_line_search_limit or 25
+  local indent_cols = native_effective_indent_cols(self, line, indent_size, limit)
+  local indent_levels = math.floor(indent_cols / indent_size)
+  local active_depth = conf.highlight_active and self:active_indent_depth(indent_size, limit) or nil
+  local normal_color = style.indent_guide
+  local active_color = conf.highlight_active and style.indent_guide_active or normal_color
+  local indent_px = self:get_font():get_width(string.rep(" ", indent_size))
+  local x = self.position.x + self:get_gutter_width() + style.padding.x - self.scroll.x
+  local rects = {}
+  for depth = 1, indent_levels - 1 do
+    rects[#rects + 1] = {
+      x = x + depth * indent_px,
+      y = row_y,
+      w = conf.line_width or math.max(1, SCALE),
+      h = self:get_line_height(),
+      color = depth == active_depth and active_color or normal_color,
+      depth = depth,
+    }
+  end
+  return rects
+end
+
+function NativeEditorView:draw_indent_guides(line, row_y)
+  for _, rect in ipairs(self:get_indent_guide_rects(line, row_y)) do
+    renderer.draw_rect(rect.x, rect.y, rect.w, rect.h, rect.color)
+  end
+end
+
+function NativeEditorView:draw_current_line_highlights()
+  if core.active_view == self and config.highlight_current_line ~= false then
+    if config.highlight_current_line ~= "no_selection" or not self:has_selection() then
+      local lh = self:get_line_height()
+      local seen = {}
+      for i = 1, self.editor:cursor_count() do
+        local line = self:cursor_line_col(self.editor:cursor(i).cursor or 0)
+        if not seen[line] then
+          local y = self.position.y + style.padding.y - self.scroll.y + line * lh
+          self:draw_line_highlight(self.position.x, y)
+          seen[line] = true
+        end
+      end
+      self:draw_content_left_edge()
+    end
+  end
+  self:draw_column_guides()
 end
 
 function NativeEditorView:draw_line_gutter(line, x, y, width)
@@ -602,9 +1230,68 @@ function NativeEditorView:draw_line_gutter(line, x, y, width)
   return lh
 end
 
+function NativeEditorView:ime_composition_offsets(cursor)
+  cursor = cursor or self.editor:cursor()
+  local cursor_offset = cursor.cursor or 0
+  local selection_offset = cursor.selection or cursor_offset
+  return math.min(cursor_offset, selection_offset), math.max(cursor_offset, selection_offset)
+end
+
+function NativeEditorView:update_ime_location()
+  if core.active_view ~= self then return end
+  local first, last = self:ime_composition_offsets()
+  local focus_first, focus_last = first, last
+  if self.ime_status and (self.ime_selection.size or 0) > 0 then
+    focus_first = first + (self.ime_selection.from or 0)
+    focus_last = focus_first + (self.ime_selection.size or 0)
+  end
+  focus_first = common.clamp(focus_first, 0, self.buffer:len())
+  focus_last = common.clamp(focus_last, 0, self.buffer:len())
+  local start_lc = self.buffer:offset_to_line_col(focus_first)
+  local end_lc = self.buffer:offset_to_line_col(focus_last)
+  if not start_lc or not end_lc then return end
+  local x1, y = self:line_col_to_screen(start_lc.line, start_lc.col)
+  local x2 = self:line_col_to_screen(end_lc.line, end_lc.col)
+  ime.set_location(x1, y, math.max(1, math.abs(x2 - x1)), self:get_line_height())
+end
+
+function NativeEditorView:draw_ime_decoration(cursor)
+  if not self.ime_status then return false end
+  local first, last = self:ime_composition_offsets(cursor)
+  local start_lc = self.buffer:offset_to_line_col(first)
+  local end_lc = self.buffer:offset_to_line_col(last)
+  if not start_lc or not end_lc then return false end
+
+  local line_size = math.max(1, SCALE)
+  local lh = self:get_line_height()
+  local x1, y = self:line_col_to_screen(start_lc.line, start_lc.col)
+  local x2 = self:line_col_to_screen(end_lc.line, end_lc.col)
+  renderer.draw_rect(math.min(x1, x2), y + lh - line_size, math.abs(x1 - x2), line_size, style.text)
+
+  local caret_offset = common.clamp(first + (self.ime_selection.from or 0), 0, self.buffer:len())
+  local caret_lc = self.buffer:offset_to_line_col(caret_offset)
+  if caret_lc then
+    local caret_x, caret_y = self:line_col_to_screen(caret_lc.line, caret_lc.col)
+    local to_offset = common.clamp(caret_offset + (self.ime_selection.size or 0), 0, self.buffer:len())
+    if to_offset ~= caret_offset then
+      local to_lc = self.buffer:offset_to_line_col(to_offset)
+      if to_lc then
+        local to_x = self:line_col_to_screen(to_lc.line, to_lc.col)
+        renderer.draw_rect(math.min(caret_x, to_x), caret_y + lh - (style.caret_width or line_size), math.abs(to_x - caret_x), style.caret_width or line_size, style.caret)
+      end
+    end
+    renderer.draw_rect(caret_x, caret_y, style.caret_width or line_size, lh, style.caret)
+  end
+  return true
+end
+
 function NativeEditorView:draw_overlay()
+  if core.active_view == self and self.ime_status then
+    self:draw_ime_decoration(self.editor:cursor())
+    return
+  end
   for i = 1, self.editor:cursor_count() do
-    self:draw_caret_for_cursor(self.editor:cursor(i))
+    self:draw_caret_for_cursor(self.editor:cursor(i), i)
   end
 end
 
@@ -758,8 +1445,38 @@ function NativeEditorView:set_mouse_selection(anchor, offset, snap_type)
   self:update_primary_selection()
 end
 
+function NativeEditorView:on_ime_text_editing(text, start, length)
+  text = text or ""
+  start = math.max(0, start or 0)
+  length = math.max(0, length or 0)
+  local overwrite = self.editor.overwrite_mode and self.editor:overwrite_mode()
+  if overwrite then self.editor:set_overwrite_mode(false) end
+  self.editor:paste(text)
+  if overwrite then self.editor:set_overwrite_mode(true) end
+  local cursor = self.editor:cursor()
+  local cursor_offset = cursor.cursor or 0
+  local composition_start = common.clamp(cursor_offset - #text, 0, self.buffer:len())
+  self.ime_status = text ~= ""
+  self.ime_selection.from = start
+  self.ime_selection.size = length
+  if self.ime_status then
+    self.editor:set_cursor(cursor_offset, composition_start)
+  else
+    self.editor:set_cursor(composition_start)
+  end
+  self:note_tree_sitter_mutation()
+  self:update_ime_location()
+  local line, col = self:cursor_line_col(composition_start)
+  self:scroll_to_make_visible(line + 1, col + start + 1)
+  core.redraw = true
+  return true
+end
+
 function NativeEditorView:on_text_input(text)
   if text and text ~= "" then
+    self.ime_status = false
+    self.ime_selection.from = 0
+    self.ime_selection.size = 0
     self.editor:insert(text)
     self:note_tree_sitter_mutation()
     if core.record_native_edit_location then core.record_native_edit_location(self) end
@@ -770,6 +1487,7 @@ function NativeEditorView:on_text_input(text)
 end
 
 function NativeEditorView:on_mouse_pressed(button, x, y, clicks)
+  return self:with_centered_editor_geometry(function(button, x, y, clicks)
   if NativeEditorView.super.on_mouse_pressed(self, button, x, y, clicks) then return true end
   if button ~= "left" and button ~= "middle" then return false end
 
@@ -831,10 +1549,13 @@ function NativeEditorView:on_mouse_pressed(button, x, y, clicks)
   end
   core.redraw = true
   return true
+  end, button, x, y, clicks)
 end
 
 function NativeEditorView:on_mouse_moved(x, y, ...)
-  NativeEditorView.super.on_mouse_moved(self, x, y, ...)
+  local args = { ... }
+  return self:with_centered_editor_geometry(function(x, y)
+  NativeEditorView.super.on_mouse_moved(self, x, y, table.unpack(args))
   local gutter_w = self:get_gutter_width()
   if self:scrollbar_hovering() or self:scrollbar_dragging()
       or (x >= self.position.x and x <= self.position.x + gutter_w) then
@@ -851,6 +1572,7 @@ function NativeEditorView:on_mouse_moved(x, y, ...)
     end
     return true
   end
+  end, x, y)
 end
 
 function NativeEditorView:on_mouse_released(button, x, y)
@@ -884,8 +1606,7 @@ function NativeEditorView:find_literal(text, backwards)
   return true
 end
 
-function NativeEditorView:draw()
-  self:draw_background(style.background)
+function NativeEditorView:draw_editor_contents()
   self:update()
 
   local x = self.position.x
@@ -898,6 +1619,8 @@ function NativeEditorView:draw()
   local line_count = self.buffer:line_count()
   local first_line = math.max(0, math.floor(self.scroll.y / lh))
   local last_line = math.min(line_count - 1, first_line + math.ceil(h / lh) + 1)
+
+  self.bracket_match_state = self:compute_bracket_match_state()
 
   core.push_clip_rect(x, y, w, h)
   -- Match DocView: the whole editor uses style.background; the gutter does not
@@ -930,6 +1653,13 @@ function NativeEditorView:draw()
   self:draw_scrollbar()
 end
 
+function NativeEditorView:draw()
+  self:draw_background(style.background)
+  return self:with_centered_editor_geometry(function()
+    return self:draw_editor_contents()
+  end)
+end
+
 local function with_active_native_view(fn, affects_text)
   return function(view)
     view = view or core.active_view
@@ -946,8 +1676,104 @@ local function with_active_native_view(fn, affects_text)
   end
 end
 
+local function native_line_ending_text(view)
+  return view.buffer:line_ending_mode() == "crlf" and "\r\n" or "\n"
+end
+
+local function native_current_lines_text(view)
+  local lines = {}
+  local seen = {}
+  for i = 1, view.editor:cursor_count() do
+    local line = view:cursor_line_col(view.editor:cursor(i).cursor or 0)
+    if not seen[line] then
+      seen[line] = true
+      lines[#lines + 1] = line
+    end
+  end
+  table.sort(lines)
+
+  local parts = {}
+  core.cursor_clipboard = {}
+  core.cursor_clipboard_whole_line = {}
+  for idx, line in ipairs(lines) do
+    local text = view.buffer:line(line) or ""
+    text = text:gsub("\r?\n$", "")
+    parts[#parts + 1] = text
+    core.cursor_clipboard[idx] = text
+    core.cursor_clipboard_whole_line[idx] = true
+  end
+  local full = table.concat(parts, native_line_ending_text(view))
+  if full ~= "" then full = full .. native_line_ending_text(view) end
+  core.cursor_clipboard["full"] = full
+  return full
+end
+
+local function native_whole_line_clipboard_payload(text)
+  if not (text and text ~= "" and core.cursor_clipboard) then return nil end
+  local full = core.cursor_clipboard["full"]
+  if not (full and full ~= "") then return nil end
+  local found = false
+  for idx, whole_line in pairs(core.cursor_clipboard_whole_line or {}) do
+    if type(idx) == "number" then
+      found = true
+      if not whole_line then return nil end
+    end
+  end
+  if not found then return nil end
+  if full == text then return text end
+  -- SDL/OS clipboard round-trips may normalize CRLF to LF in tests or on some
+  -- platforms. Preserve Anvil's internal whole-line payload when the clipboard
+  -- text is otherwise equivalent so CRLF Buffers keep their line-ending policy.
+  if tostring(full):gsub("\r\n", "\n") == tostring(text):gsub("\r\n", "\n") then return full end
+  return nil
+end
+
+local function native_newline_count(text)
+  local count = 0
+  for _ in tostring(text or ""):gmatch("\n") do count = count + 1 end
+  return count
+end
+
+local function paste_native_whole_lines(view, text)
+  local cursors = {}
+  local seen_lines = {}
+  for i = 1, view.editor:cursor_count() do
+    local cursor = view.editor:cursor(i)
+    local line, col = view:cursor_line_col(cursor.cursor or 0)
+    if not seen_lines[line] then
+      seen_lines[line] = true
+      cursors[#cursors + 1] = { line = line, col = col }
+    end
+  end
+  table.sort(cursors, function(a, b) return a.line < b.line end)
+  if #cursors == 0 then return false end
+
+  view.editor:clear_multi_cursors()
+  for i, cursor in ipairs(cursors) do
+    local offset = view.buffer:line_col_to_offset(cursor.line, 0)
+    if offset then
+      if i == 1 then view.editor:set_cursor(offset) else view.editor:add_cursor(offset) end
+    end
+  end
+  view.editor:paste(text)
+
+  local line_delta = native_newline_count(text)
+  view.editor:clear_multi_cursors()
+  local cumulative = 0
+  for i, cursor in ipairs(cursors) do
+    local target_line = cursor.line + cumulative + line_delta
+    local offset = view.buffer:line_col_to_offset(target_line, cursor.col)
+      or view.buffer:line_col_to_offset(target_line, 0)
+      or view.buffer:len()
+    if i == 1 then view.editor:set_cursor(offset) else view.editor:add_cursor(offset) end
+    cumulative = cumulative + line_delta
+  end
+  return true
+end
+
 local function copy_native_selection(view)
   local text = view.editor:copy_selection()
+  if not text or text == "" then text = native_current_lines_text(view) end
   if text and text ~= "" then system.set_clipboard(text) end
 end
 
@@ -1373,13 +2199,14 @@ local function native_selection_counts(view)
       local last_lc = view.buffer:offset_to_line_col(last)
       if first_lc and last_lc then
         if first_lc.line == last_lc.line then
-          chars = chars + math.max(0, last_lc.col - first_lc.col)
+          chars = chars + utf8_char_count_range(view:get_line_text(first_lc.line), first_lc.col, last_lc.col)
         else
-          chars = chars + math.max(0, #view:get_line_text(first_lc.line) - first_lc.col)
+          local first_line_text = view:get_line_text(first_lc.line)
+          chars = chars + utf8_char_count_range(first_line_text, first_lc.col, #first_line_text)
           for line = first_lc.line + 1, last_lc.line - 1 do
-            chars = chars + #view:get_line_text(line)
+            chars = chars + utf8_char_count_prefix(view:get_line_text(line))
           end
-          chars = chars + math.max(0, last_lc.col)
+          chars = chars + utf8_char_count_prefix(view:get_line_text(last_lc.line), last_lc.col)
         end
         for line = first_lc.line, last_lc.line do
           if not seen_lines[line] then
@@ -1435,7 +2262,8 @@ local function register_statusbar_items()
     on_draw = function(x, y, h, _, calc_only)
       local view = core.active_view
       local line, col = view:cursor_line_col()
-      line, col = line + 1, col + 1
+      local line_text = view:get_line_text(line)
+      line, col = line + 1, utf8_char_count_prefix(line_text, col) + 1
       local font = statusbar_font()
       local line_width = font:get_width("9999")
       local colon_width = font:get_width(":")
@@ -1513,8 +2341,9 @@ local function register_statusbar_items()
     name = "native:indentation",
     alignment = StatusBar.Item.RIGHT,
     get_item = function()
-      local indent_label = (config.tab_type == "hard") and "tabs: " or "spaces: "
-      return { style.text, indent_label, config.indent_size }
+      local indent_type, indent_size = core.active_view:get_indent_info()
+      local indent_label = (indent_type == "hard") and "tabs: " or "spaces: "
+      return { style.text, indent_label, indent_size }
     end,
     separator = core.status_bar.separator2
   })
@@ -1534,7 +2363,7 @@ local function register_statusbar_items()
     name = "native:encoding",
     alignment = StatusBar.Item.RIGHT,
     get_item = function()
-      return { style.text, "none" }
+      return { style.text, "UTF-8" }
     end,
     tooltip = "encoding"
   })
@@ -1553,7 +2382,7 @@ end
 register_statusbar_items()
 
 local native_editor_commands = {
-  ["native-editor:newline"] = with_active_native_view(function(view) view.editor:newline() end, true),
+  ["native-editor:newline"] = with_active_native_view(function(view) view.editor:newline_auto_indent() end, true),
   ["native-editor:newline-below"] = with_active_native_view(function(view) view.editor:open_line_below() end, true),
   ["native-editor:newline-above"] = with_active_native_view(function(view) view.editor:open_line_above() end, true),
   ["native-editor:backspace"] = with_active_native_view(function(view) view.editor:backspace() end, true),
@@ -1568,16 +2397,34 @@ local native_editor_commands = {
   ["native-editor:tab"] = with_active_native_view(function(view) view.editor:tab() end, true),
   ["native-editor:untab"] = with_active_native_view(function(view) view.editor:untab() end, true),
   ["native-editor:select-all"] = with_active_native_view(function(view) view.editor:select_all() end),
+  ["native-editor:select-none"] = with_active_native_view(function(view)
+    local cursor = view.editor:cursor()
+    view.editor:set_cursor(cursor.cursor or 0)
+  end),
+  ["native-editor:select-word"] = with_active_native_view(function(view) view.editor:select_word() end),
   ["native-editor:select-line"] = with_active_native_view(function(view) view.editor:select_line() end),
   ["native-editor:go-to-line"] = with_active_native_view(function(view) go_to_native_line(view) end),
   ["native-editor:copy"] = with_active_native_view(function(view) copy_native_selection(view) end),
   ["native-editor:cut"] = with_active_native_view(function(view)
     local text = view.editor:cut_selection()
-    if text and text ~= "" then system.set_clipboard(text) end
+    if text and text ~= "" then
+      system.set_clipboard(text)
+    else
+      text = native_current_lines_text(view)
+      if text and text ~= "" then system.set_clipboard(text) end
+      view.editor:delete_line()
+    end
   end, true),
   ["native-editor:paste"] = with_active_native_view(function(view)
     local text = system.get_clipboard()
-    if text and text ~= "" then view.editor:paste(text) end
+    if text and text ~= "" then
+      local whole_line_text = native_whole_line_clipboard_payload(text)
+      if whole_line_text then
+        paste_native_whole_lines(view, whole_line_text)
+      else
+        view.editor:paste(text)
+      end
+    end
   end, true),
   ["native-editor:left"] = with_active_native_view(function(view) view.editor:left(false) end),
   ["native-editor:right"] = with_active_native_view(function(view) view.editor:right(false) end),
@@ -1596,6 +2443,9 @@ local native_editor_commands = {
   ["native-editor:find-previous"] = with_active_native_view(function(view) repeat_native_find(view, true) end),
   ["native-editor:replace"] = with_active_native_view(function(view) replace_one_native_text(view) end),
   ["native-editor:replace-all"] = with_active_native_view(function(view) replace_all_native_text(view) end),
+  ["native-editor:toggle-line-comment"] = with_active_native_view(function(view) view:toggle_line_comments() end, true),
+  ["native-editor:move-to-matching-bracket"] = with_active_native_view(function(view) view:move_to_matching_bracket(false) end),
+  ["native-editor:select-to-matching-bracket"] = with_active_native_view(function(view) view:move_to_matching_bracket(true) end),
   ["native-editor:word-left"] = with_active_native_view(function(view) view.editor:word_left(false) end),
   ["native-editor:word-right"] = with_active_native_view(function(view) view.editor:word_right(false) end),
   ["native-editor:select-word-left"] = with_active_native_view(function(view) view.editor:word_left(true) end),
@@ -1621,6 +2471,11 @@ local native_editor_commands = {
       core.redraw = true
     end
   end),
+  ["native-editor:toggle-overwrite"] = with_active_native_view(function(view)
+    local overwrite = view.editor:toggle_overwrite_mode()
+    core.log_quiet("Native editor overwrite mode %s", overwrite and "enabled" or "disabled")
+    core.blink_reset()
+  end),
   ["native-editor:duplicate-cursor-up"] = with_active_native_view(function(view) view.editor:dup_cursor_up() end),
   ["native-editor:duplicate-cursor-down"] = with_active_native_view(function(view) view.editor:dup_cursor_down() end),
 }
@@ -1643,11 +2498,15 @@ keymap.add {
   ["tab"] = "native-editor:tab",
   ["shift+tab"] = "native-editor:untab",
   ["ctrl+a"] = "native-editor:select-all",
+  ["escape"] = "native-editor:select-none",
   ["ctrl+l"] = "native-editor:select-line",
   ["ctrl+g"] = "native-editor:go-to-line",
   ["ctrl+c"] = "native-editor:copy",
   ["ctrl+x"] = "native-editor:cut",
   ["ctrl+v"] = "native-editor:paste",
+  ["ctrl+insert"] = "native-editor:copy",
+  ["shift+insert"] = "native-editor:paste",
+  ["insert"] = "native-editor:toggle-overwrite",
   ["left"] = "native-editor:left",
   ["right"] = "native-editor:right",
   ["up"] = "native-editor:up",
@@ -1663,8 +2522,10 @@ keymap.add {
   ["ctrl+f"] = "native-editor:find",
   ["ctrl+r"] = "native-editor:replace",
   ["ctrl+shift+r"] = "native-editor:replace-all",
+  ["ctrl+/"] = "native-editor:toggle-line-comment",
   ["f3"] = "native-editor:find-next",
   ["shift+f3"] = "native-editor:find-previous",
+  ["ctrl+shift+m"] = "native-editor:select-to-matching-bracket",
   ["ctrl+left"] = "native-editor:word-left",
   ["ctrl+right"] = "native-editor:word-right",
   ["ctrl+shift+left"] = "native-editor:select-word-left",

@@ -37,6 +37,9 @@ local drawwhitespace = {
   },
 }
 
+-- First-party native editor path reads the same settings instead of depending
+-- on the old DocView monkey-patch surface.
+core.draw_whitespace = drawwhitespace
 
 local function get_option(substitution, option)
   if substitution[option] == nil then

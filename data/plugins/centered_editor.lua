@@ -48,7 +48,9 @@ end
 function M.should_center(view)
   local cfg = settings()
   if not cfg.enabled then return false end
-  if not view or getmetatable(view) ~= DocView or not view.doc then return false end
+  local is_docview = view and getmetatable(view) == DocView and view.doc ~= nil
+  local is_native_editor = view and view.native_editor_view == true
+  if not (is_docview or is_native_editor) then return false end
   if cfg.main_tabs_only then
     local node = root_node_for_view(view)
     if not node or not node.get_view_idx or not node:get_view_idx(view) then

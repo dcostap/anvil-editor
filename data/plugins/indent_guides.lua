@@ -1,4 +1,5 @@
 -- mod-version:3
+local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
 local style = require "core.style"
@@ -10,6 +11,10 @@ local indent_guides = {
   highlight_active = false,
   blank_line_search_limit = 25,
 }
+
+-- First-party native editor path reads the same settings instead of depending
+-- on the old DocView monkey-patch surface.
+core.indent_guides = indent_guides
 
 local indent_cache_by_doc = setmetatable({}, { __mode = "k" })
 

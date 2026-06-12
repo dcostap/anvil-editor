@@ -238,13 +238,140 @@ static bool line_end_no_lf(const Buffer *buffer, size_t line, size_t *offset_out
   return true;
 }
 
-static bool line_length_no_lf(const Buffer *buffer, size_t line, size_t *len_out) {
-  if (!buffer || !len_out) return false;
-  size_t start = 0;
-  size_t end = 0;
-  if (!buffer_line_start(buffer, line, &start)) return false;
-  if (!line_end_no_lf(buffer, line, &end)) return false;
-  *len_out = end >= start ? end - start : 0;
+static bool text_is_single_utf8_char(const char *text, size_t len) {
+  if (!text || len == 0) return false;
+  unsigned char first = (unsigned char) text[0];
+  if (first < 0x80) return len == 1;
+  size_t needed = 0;
+  if (first >= 0xC2 && first <= 0xDF) needed = 2;
+  else if (first >= 0xE0 && first <= 0xEF) needed = 3;
+  else if (first >= 0xF0 && first <= 0xF4) needed = 4;
+  else return false;
+  if (len != needed) return false;
+  for (size_t i = 1; i < len; ++i) {
+    unsigned char ch = (unsigned char) text[i];
+    if ((ch & 0xC0) != 0x80) return false;
+  }
+  return true;
+}
+
+static size_t utf8_char_len_at(const char *bytes, size_t len, size_t offset) {
+  if (!bytes || offset >= len) return 0;
+  unsigned char first = (unsigned char) bytes[offset];
+  size_t needed = 1;
+  if (first < 0x80) return 1;
+  if (first >= 0xC2 && first <= 0xDF) needed = 2;
+  else if (first >= 0xE0 && first <= 0xEF) needed = 3;
+  else if (first >= 0xF0 && first <= 0xF4) needed = 4;
+  else return 1;
+  if (needed > len - offset) return 1;
+  for (size_t i = 1; i < needed; ++i) {
+    unsigned char ch = (unsigned char) bytes[offset + i];
+    if ((ch & 0xC0) != 0x80) return 1;
+  }
+  return needed;
+}
+
+static size_t next_utf8_offset_in_line(const Buffer *buffer, size_t offset, size_t line_end) {
+  if (!buffer || offset >= line_end) return offset;
+  size_t probe_end = line_end - offset > 4 ? offset + 4 : line_end;
+  size_t len = 0;
+  char *bytes = buffer_range_to_string(buffer, offset, probe_end, &len);
+  if (!bytes || len == 0) {
+    free(bytes);
+    return offset + 1;
+  }
+
+  size_t needed = utf8_char_len_at(bytes, len, 0);
+  if (needed == 0 || offset + needed > line_end) needed = 1;
+  free(bytes);
+  return offset + needed;
+}
+
+static size_t previous_utf8_offset_in_line(const Buffer *buffer, size_t offset, size_t line_start) {
+  if (!buffer || offset <= line_start) return offset;
+  size_t len = 0;
+  char *bytes = buffer_range_to_string(buffer, line_start, offset, &len);
+  if (!bytes || len == 0) {
+    free(bytes);
+    return offset - 1;
+  }
+
+  size_t previous = 0;
+  size_t pos = 0;
+  while (pos < len) {
+    size_t char_len = utf8_char_len_at(bytes, len, pos);
+    if (char_len == 0 || pos + char_len > len) break;
+    previous = pos;
+    pos += char_len;
+  }
+  free(bytes);
+  return line_start + previous;
+}
+
+static size_t previous_text_unit_offset(const Buffer *buffer, size_t offset) {
+  if (!buffer || offset == 0) return offset;
+  BufferLineCol lc;
+  BufferLineRange range;
+  if (buffer_offset_to_line_col(buffer, offset, &lc) && buffer_line_range_crlf(buffer, lc.line, &range)
+      && offset > range.start && offset <= range.end) {
+    return previous_utf8_offset_in_line(buffer, offset, range.start);
+  }
+  return offset - 1;
+}
+
+static size_t next_text_unit_offset(const Buffer *buffer, size_t offset) {
+  if (!buffer) return offset;
+  size_t len = buffer_len(buffer);
+  if (offset >= len) return offset;
+  BufferLineCol lc;
+  BufferLineRange range;
+  if (buffer_offset_to_line_col(buffer, offset, &lc) && buffer_line_range_crlf(buffer, lc.line, &range)
+      && offset < range.end) {
+    return next_utf8_offset_in_line(buffer, offset, range.end);
+  }
+  return offset + 1;
+}
+
+static bool utf8_column_for_offset_in_line(const Buffer *buffer, size_t line, size_t offset, size_t *column_out) {
+  if (!buffer || !column_out) return false;
+  BufferLineRange range;
+  if (!buffer_line_range_crlf(buffer, line, &range)) return false;
+  if (offset < range.start) offset = range.start;
+  if (offset > range.end) offset = range.end;
+  size_t len = 0;
+  char *bytes = buffer_range_to_string(buffer, range.start, offset, &len);
+  if (!bytes) return false;
+  size_t column = 0;
+  size_t pos = 0;
+  while (pos < len) {
+    size_t char_len = utf8_char_len_at(bytes, len, pos);
+    if (char_len == 0) break;
+    pos += char_len;
+    ++column;
+  }
+  free(bytes);
+  *column_out = column;
+  return true;
+}
+
+static bool offset_for_utf8_column_in_line(const Buffer *buffer, size_t line, size_t column, size_t *offset_out) {
+  if (!buffer || !offset_out) return false;
+  BufferLineRange range;
+  if (!buffer_line_range_crlf(buffer, line, &range)) return false;
+  size_t len = 0;
+  char *bytes = buffer_range_to_string(buffer, range.start, range.end, &len);
+  if (!bytes) return false;
+  size_t pos = 0;
+  size_t current_column = 0;
+  while (pos < len && current_column < column) {
+    size_t char_len = utf8_char_len_at(bytes, len, pos);
+    if (char_len == 0 || pos + char_len > len) break;
+    pos += char_len;
+    ++current_column;
+  }
+  free(bytes);
+  *offset_out = range.start + pos;
   return true;
 }
 
@@ -266,10 +393,10 @@ static void clear_desired_column(Cursor *cursor) {
 
 static bool ensure_desired_column(Editor *editor, Cursor *cursor) {
   if (cursor->desired_column != EDITOR_DESIRED_COLUMN_SENTINEL) return true;
+  Buffer *buffer = editor_buffer(editor);
   BufferLineCol lc;
-  if (!buffer_offset_to_line_col(editor_buffer(editor), cursor->cursor, &lc)) return false;
-  cursor->desired_column = lc.col;
-  return true;
+  if (!buffer_offset_to_line_col(buffer, cursor->cursor, &lc)) return false;
+  return utf8_column_for_offset_in_line(buffer, lc.line, cursor->cursor, &cursor->desired_column);
 }
 
 typedef enum WordSort {
@@ -470,6 +597,22 @@ size_t editor_cursor_count(const Editor *editor) {
   return editor->multi_cursor_count > 0 ? editor->multi_cursor_count : 1;
 }
 
+bool editor_overwrite_mode(const Editor *editor) {
+  return editor && editor->overwrite;
+}
+
+void editor_set_overwrite_mode(Editor *editor, bool overwrite) {
+  if (!editor) return;
+  editor->overwrite = overwrite;
+  reset_last_insert(editor);
+}
+
+bool editor_toggle_overwrite_mode(Editor *editor) {
+  if (!editor) return false;
+  editor_set_overwrite_mode(editor, !editor->overwrite);
+  return editor->overwrite;
+}
+
 Cursor editor_get_cursor(const Editor *editor, size_t index) {
   if (!editor) return make_cursor(0, EDITOR_SELECTION_SENTINEL);
   if (editor->multi_cursor_count > 0) {
@@ -618,7 +761,7 @@ static bool apply_cursor_edits(Editor *editor, CursorEdit *cursor_edits, size_t 
   return apply_cursor_edits_with_undo_mode(editor, cursor_edits, count, false, 0);
 }
 
-bool editor_insert_buffer(Editor *editor, const char *text, size_t len) {
+static bool editor_insert_buffer_impl(Editor *editor, const char *text, size_t len, bool allow_overwrite) {
   if (!editor || (len > 0 && !text)) return false;
   editor_sort_and_merge_cursors(editor);
 
@@ -627,16 +770,26 @@ bool editor_insert_buffer(Editor *editor, const char *text, size_t len) {
   CursorEdit *edits = (CursorEdit *) malloc(sizeof(CursorEdit) * count);
   if (!edits) return false;
 
-  bool simple_single_insert = count == 1 && len > 0 && !cursor_has_selection(&cursors[0]);
-  size_t insert_offset = simple_single_insert ? cursors[0].cursor : 0;
   Buffer *buffer = editor_buffer(editor);
+  bool overwrite_char = allow_overwrite && editor->overwrite && text_is_single_utf8_char(text, len);
+  bool simple_single_insert = count == 1 && len > 0 && !cursor_has_selection(&cursors[0]) && !overwrite_char;
+  size_t insert_offset = simple_single_insert ? cursors[0].cursor : 0;
   bool coalesce_insert = simple_single_insert && editor->has_last_insert && editor->last_insert == insert_offset &&
     buffer && buffer->has_undo_graph && buffer->undo_graph.current;
   size_t op_offset = coalesce_insert ? buffer->undo_graph.current->op_offset : 0;
 
   for (size_t i = 0; i < count; ++i) {
-    edits[i].edit.start_offset = cursor_start(&cursors[i]);
-    edits[i].edit.end_offset = cursor_end(&cursors[i]);
+    size_t start = cursor_start(&cursors[i]);
+    size_t end = cursor_end(&cursors[i]);
+    if (overwrite_char && start == end && buffer) {
+      BufferLineCol lc;
+      BufferLineRange range;
+      if (buffer_offset_to_line_col(buffer, start, &lc) && buffer_line_range_crlf(buffer, lc.line, &range) && start < range.end) {
+        end = next_utf8_offset_in_line(buffer, start, range.end);
+      }
+    }
+    edits[i].edit.start_offset = start;
+    edits[i].edit.end_offset = end;
     edits[i].edit.text = text;
     edits[i].edit.text_len = len;
     edits[i].edit.cursor_index = (unsigned int) i;
@@ -656,6 +809,10 @@ bool editor_insert_buffer(Editor *editor, const char *text, size_t len) {
   return true;
 }
 
+bool editor_insert_buffer(Editor *editor, const char *text, size_t len) {
+  return editor_insert_buffer_impl(editor, text, len, true);
+}
+
 bool editor_insert_char(Editor *editor, char ch) {
   return editor_insert_buffer(editor, &ch, 1);
 }
@@ -665,7 +822,93 @@ bool editor_insert_newline(Editor *editor) {
   if (!buffer) return false;
   size_t len = 0;
   const char *newline = buffer_line_ending_bytes(buffer, &len);
-  return editor_insert_buffer(editor, newline, len);
+  return editor_insert_buffer_impl(editor, newline, len, false);
+}
+
+static char *line_indent_for_newline_at_cursor(const Buffer *buffer, size_t cursor, size_t *len_out) {
+  if (len_out) *len_out = 0;
+  if (!buffer) return NULL;
+  BufferLineCol lc;
+  BufferLineRange range;
+  if (!buffer_offset_to_line_col(buffer, cursor, &lc)) return NULL;
+  if (!buffer_line_range_crlf(buffer, lc.line, &range)) return NULL;
+  size_t line_len = 0;
+  char *line_bytes = buffer_range_to_string(buffer, range.start, range.end, &line_len);
+  if (!line_bytes) return NULL;
+
+  size_t indent_len = 0;
+  while (indent_len < line_len && (line_bytes[indent_len] == ' ' || line_bytes[indent_len] == '\t')) {
+    ++indent_len;
+  }
+
+  size_t indent_start = 0;
+  if (lc.col < indent_len) indent_start = lc.col;
+  size_t adjusted_len = indent_len - indent_start;
+  char *indent = (char *) malloc(adjusted_len + 1);
+  if (!indent) {
+    free(line_bytes);
+    return NULL;
+  }
+  if (adjusted_len > 0) memcpy(indent, line_bytes + indent_start, adjusted_len);
+  indent[adjusted_len] = '\0';
+  free(line_bytes);
+  if (len_out) *len_out = adjusted_len;
+  return indent;
+}
+
+bool editor_insert_newline_auto_indent(Editor *editor) {
+  if (!editor) return false;
+  Buffer *buffer = editor_buffer(editor);
+  if (!buffer) return false;
+  editor_sort_and_merge_cursors(editor);
+
+  size_t count = 0;
+  Cursor *cursors = active_cursors(editor, &count);
+  CursorEdit *edits = (CursorEdit *) calloc(count, sizeof(CursorEdit));
+  char **texts = (char **) calloc(count, sizeof(char *));
+  if (!edits || !texts) {
+    free(edits);
+    free(texts);
+    return false;
+  }
+
+  size_t newline_len = 0;
+  const char *newline = buffer_line_ending_bytes(buffer, &newline_len);
+  bool ok = true;
+  for (size_t i = 0; i < count; ++i) {
+    size_t indent_len = 0;
+    char *indent = line_indent_for_newline_at_cursor(buffer, cursors[i].cursor, &indent_len);
+    if (!indent) {
+      ok = false;
+      break;
+    }
+    size_t text_len = newline_len + indent_len;
+    char *text = (char *) malloc(text_len + 1);
+    if (!text) {
+      free(indent);
+      ok = false;
+      break;
+    }
+    memcpy(text, newline, newline_len);
+    if (indent_len > 0) memcpy(text + newline_len, indent, indent_len);
+    text[text_len] = '\0';
+    free(indent);
+    texts[i] = text;
+
+    edits[i].edit.start_offset = cursor_start(&cursors[i]);
+    edits[i].edit.end_offset = cursor_end(&cursors[i]);
+    edits[i].edit.text = text;
+    edits[i].edit.text_len = text_len;
+    edits[i].edit.cursor_index = (unsigned int) i;
+    edits[i].cursor_index = i;
+  }
+
+  if (ok) ok = apply_cursor_edits(editor, edits, count);
+  for (size_t i = 0; i < count; ++i) free(texts[i]);
+  free(texts);
+  free(edits);
+  if (ok) reset_last_insert(editor);
+  return ok;
 }
 
 static char *line_leading_indent(const Buffer *buffer, size_t line, size_t *len_out) {
@@ -1419,7 +1662,8 @@ bool editor_backspace(Editor *editor) {
     size_t end = cursor_end(&cursors[i]);
     if (start == end) {
       if (start == 0) continue;
-      --start;
+      Buffer *buffer = editor_buffer(editor);
+      start = previous_text_unit_offset(buffer, start);
     }
     edits[edit_count].edit.start_offset = start;
     edits[edit_count].edit.end_offset = end;
@@ -1454,7 +1698,7 @@ bool editor_del(Editor *editor) {
     size_t end = cursor_end(&cursors[i]);
     if (start == end) {
       if (end >= buffer_length) continue;
-      ++end;
+      end = next_text_unit_offset(buffer, end);
     }
     edits[edit_count].edit.start_offset = start;
     edits[edit_count].edit.end_offset = end;
@@ -1837,6 +2081,8 @@ bool editor_paste(Editor *editor, const char *text, size_t len) {
 
 bool editor_left(Editor *editor, bool update_selection) {
   if (!editor) return false;
+  Buffer *buffer = editor_buffer(editor);
+  if (!buffer) return false;
   size_t count = 0;
   Cursor *cursors = active_cursors(editor, &count);
   for (size_t i = 0; i < count; ++i) {
@@ -1848,7 +2094,7 @@ bool editor_left(Editor *editor, bool update_selection) {
       continue;
     }
     size_t old = cursor->cursor;
-    if (old > 0) --cursor->cursor;
+    cursor->cursor = previous_text_unit_offset(buffer, old);
     if (update_selection) {
       if (cursor->selection == EDITOR_SELECTION_SENTINEL) cursor->selection = old;
     } else {
@@ -1866,7 +2112,6 @@ bool editor_right(Editor *editor, bool update_selection) {
   if (!editor) return false;
   Buffer *buffer = editor_buffer(editor);
   if (!buffer) return false;
-  size_t len = buffer_len(buffer);
   size_t count = 0;
   Cursor *cursors = active_cursors(editor, &count);
   for (size_t i = 0; i < count; ++i) {
@@ -1878,7 +2123,7 @@ bool editor_right(Editor *editor, bool update_selection) {
       continue;
     }
     size_t old = cursor->cursor;
-    if (old < len) ++cursor->cursor;
+    cursor->cursor = next_text_unit_offset(buffer, old);
     if (update_selection) {
       if (cursor->selection == EDITOR_SELECTION_SENTINEL) cursor->selection = old;
     } else {
@@ -2093,14 +2338,9 @@ static bool editor_line_move(Editor *editor, bool update_selection, int directio
       --target_line;
     }
 
-    size_t target_line_len = 0;
-    size_t target_line_start = 0;
-    if (!line_length_no_lf(buffer, target_line, &target_line_len)) return false;
-    if (!buffer_line_start(buffer, target_line, &target_line_start)) return false;
-    size_t target_col = cursor->desired_column < target_line_len
-      ? cursor->desired_column
-      : target_line_len;
-    if (!move_cursor_to(editor, cursor, target_line_start + target_col, update_selection)) return false;
+    size_t target_offset = 0;
+    if (!offset_for_utf8_column_in_line(buffer, target_line, cursor->desired_column, &target_offset)) return false;
+    if (!move_cursor_to(editor, cursor, target_offset, update_selection)) return false;
   }
 
   editor_sort_and_merge_cursors(editor);
@@ -2135,14 +2375,9 @@ static bool move_cursor_one_line(Editor *editor, Cursor *cursor, int direction) 
     --target_line;
   }
 
-  size_t target_line_len = 0;
-  size_t target_line_start = 0;
-  if (!line_length_no_lf(buffer, target_line, &target_line_len)) return false;
-  if (!buffer_line_start(buffer, target_line, &target_line_start)) return false;
-  size_t target_col = cursor->desired_column < target_line_len
-    ? cursor->desired_column
-    : target_line_len;
-  cursor->cursor = target_line_start + target_col;
+  size_t target_offset = 0;
+  if (!offset_for_utf8_column_in_line(buffer, target_line, cursor->desired_column, &target_offset)) return false;
+  cursor->cursor = target_offset;
   return true;
 }
 
