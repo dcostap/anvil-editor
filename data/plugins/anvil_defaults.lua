@@ -179,11 +179,51 @@ if core.fuzzy_searcher_install_global_keymaps then
 end
 -- Matching UI/code fonts with separate objects so UI and code scaling can diverge.
 local font_path = DATADIR .. "/fonts/CaskaydiaCoveNerdFontMono-Regular.ttf"
-local emoji_font_path = "C:/Windows/Fonts/seguiemj.ttf"
+local font_size = 15 * SCALE
+local max_default_font_group = 10 -- native renderer FONT_FALLBACK_MAX
+
+local default_font_fallbacks = {
+  -- Keep color emoji early so broad Unicode fonts do not steal emoji glyphs.
+  { "C:/Windows/Fonts/seguiemj.ttf" },
+  -- Broad glyph coverage for the Unicode stress-test/general Windows installs.
+  { "C:/Windows/Fonts/ARIALUNI.TTF" },
+  -- Extra CJK/supplemental and common script coverage when Arial Unicode is absent/incomplete.
+  { "C:/Windows/Fonts/YuGothR.ttc", "C:/Windows/Fonts/msgothic.ttc" },
+  { "C:/Windows/Fonts/malgun.ttf" },
+  { "C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/simsun.ttc" },
+  { "C:/Windows/Fonts/seguisym.ttf" },
+  { "C:/Windows/Fonts/segoeui.ttf", "C:/Windows/Fonts/NotoSans-Regular.ttf" },
+  { "C:/Windows/Fonts/Nirmala.ttc" },
+  { "C:/Windows/Fonts/LeelawUI.ttf" },
+  -- These fill remaining slots on machines without some of the broader fonts above.
+  { "C:/Windows/Fonts/NotoNaskhArabic-Regular.ttf", "C:/Windows/Fonts/NotoSansArabic-Regular.ttf" },
+  { "C:/Windows/Fonts/NotoSansHebrew-Regular.ttf" },
+  { "C:/Windows/Fonts/msjh.ttc", "C:/Windows/Fonts/mingliub.ttc" },
+}
+
+local function load_optional_font(paths, fonts)
+  if #fonts >= max_default_font_group then return end
+  for _, path in ipairs(paths) do
+    if system.get_file_info(path) then
+      local ok, font_or_error = pcall(renderer.font.load, path, font_size)
+      if ok and font_or_error then
+        table.insert(fonts, font_or_error)
+        core.log_quiet("Default font fallback loaded: %s", path)
+        return
+      end
+      core.log_quiet("Default font fallback failed: %s (%s)", path, tostring(font_or_error))
+    end
+  end
+end
+
 local function load_text_font()
-  local main_font = renderer.font.load(font_path, 15 * SCALE, { ligatures = true })
-  local emoji_font = renderer.font.load(emoji_font_path, 15 * SCALE)
-  return renderer.font.group({ main_font, emoji_font })
+  local fonts = {
+    renderer.font.load(font_path, font_size, { ligatures = true }),
+  }
+  for _, paths in ipairs(default_font_fallbacks) do
+    load_optional_font(paths, fonts)
+  end
+  return renderer.font.group(fonts)
 end
 style.font = load_text_font()
 style.code_font = load_text_font()
