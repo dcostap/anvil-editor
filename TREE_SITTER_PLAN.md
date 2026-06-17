@@ -22,10 +22,15 @@ Agent rules:
 
 Readiness status:
 
-- Phase 1 can be implemented once the exact runtime/grammar packaging choice below is confirmed or resolved by the agent with tracked files.
-- Phases 2-5 are specified here as the first editor-facing landing.
-- Phase 6 is specified at a command/API level but may be split into smaller pull-style changes.
-- Phases 7-8 are architectural constraints, not immediate implementation tasks.
+- This plan is ready to drive implementation only as a gated milestone sequence, not as a single open-ended "implement everything" task.
+- Phase 0 and Phase 1 are the first implementation assignment. Phase 0 must make every dependency input reproducible from tracked files before any editor-facing code is attempted.
+- Phases 2-5 are specified as the first editor-facing landing, but each phase needs its own implementation/validation checkpoint before the next phase starts.
+- Phase 6 is a feature family. Treat outline, syntax-node selection, symbol navigation, and local definition/reference fallback as separate sub-milestones.
+- Phases 7-8 are architectural constraints and future integration direction, not immediate implementation tasks.
+
+Milestone handoff rule:
+
+- An implementation agent should receive exactly one milestone at a time. At the end of each milestone, the agent must report changed files, test commands/results, any version/API mismatches, and any plan ambiguities discovered. The reviewer then updates this plan or issues the next milestone instruction.
 
 ## References
 
@@ -229,8 +234,15 @@ state:cancel()
 state:close()       -- idempotent; cancels active job and releases current tree
 
 -- Scheduling copies doc lines into native memory on the main thread before queueing.
--- `edits` is either nil/full parse, or a single normalized edit for initial incremental support.
-state:schedule_parse(lines, generation, edits_or_nil) -> true | nil, err
+-- For a full parse, edit is nil.
+-- For the first incremental path, edit is one normalized transaction edit in old-document coordinates.
+-- If edit is provided and the current tree is safely renderable, native code must:
+--   1. build TSInputEdit from the edit,
+--   2. call ts_tree_edit on the main-thread current tree,
+--   3. copy the edited tree with ts_tree_copy for the worker old_tree,
+--   4. leave the main-thread edited tree renderable as safely-stale.
+-- If any step fails, mark the current tree stale-unrenderable and queue a full parse instead.
+state:schedule_parse(lines, generation, edit_or_nil) -> true | nil, err
 
 -- Poll is main-thread-only. It swaps a completed current result into `state`.
 -- It never blocks.
@@ -324,8 +336,22 @@ Preferred packaging decision:
 subprojects/tree-sitter.wrap
 subprojects/tree-sitter-c.wrap
 subprojects/tree-sitter-cpp.wrap
-subprojects/packagefiles/tree-sitter*.patch or meson.build files as needed
+subprojects/packagefiles/tree-sitter/meson.build       -- if upstream runtime has no usable Meson build
+subprojects/packagefiles/tree-sitter-c/meson.build     -- if grammar has no usable Meson build
+subprojects/packagefiles/tree-sitter-cpp/meson.build   -- if grammar has no usable Meson build
 ```
+
+Phase 0 must pin exact wrap revisions. Preferred starting pins:
+
+```text
+tree-sitter runtime: https://github.com/tree-sitter/tree-sitter.git, prefer a current stable tag with TSParseOptions/ts_parser_parse_with_options support.
+tree-sitter-c:       https://github.com/tree-sitter/tree-sitter-c.git, prefer v0.24.2 or newer compatible pinned revision.
+tree-sitter-cpp:     https://github.com/tree-sitter/tree-sitter-cpp.git, prefer v0.23.4 or newer compatible pinned revision.
+```
+
+If the exact tags above are unavailable or a newer stable tag is selected, Phase 0 must update this plan's runtime/API/version text before Phase 1 code is written. Do not use floating branches such as `master` or `main`. A commit hash is acceptable when a tag is unavailable, but it must be documented in this file and in license/version notes.
+
+Existing local directories such as `subprojects/tree-sitter` and `subprojects/tree-sitter-c` are ignored by `.gitignore`; they may be inspected as references but must not be the source of reproducible build inputs unless corresponding wraps/packagefiles are checked in.
 
 If Meson wraps are awkward for a grammar, the acceptable fallback is to vendor generated grammar sources under an Anvil-owned tracked directory, for example:
 
@@ -468,7 +494,8 @@ Native parse service:
 - Start a small global worker pool lazily on first scheduled parse. Initial worker count: `max(1, min(2, cpu_count - 1))` unless implementation simplicity favors exactly one worker first.
 - Maintain one current queued/parsing job per Document state. Scheduling a new job for the same state cancels the old job and lets the worker discard it.
 - Completed jobs are pushed to a completed queue. Main thread polls with `state:poll(current_generation)` and/or a global `ts.poll_all()` from `core.run_step`/a background coroutine.
-- When a worker completes a job, wake the app. Preferred: register/push a custom SDL event named `treesitter_complete` through the existing custom event system, or otherwise ensure `core.redraw = true` and sleeping `run_step` wakes promptly. Do not rely on a future user event to notice parse completion.
+- When a worker completes a job, wake the app with a custom SDL event named `treesitter_complete` through the existing custom event system. This event must be registered with a native callback that returns a Lua event, e.g. `"treesitter_complete"`, so `core.on_event` can dispatch it. Registering a custom SDL event with no Lua-visible callback is not enough, because it may be consumed by the native event poller without notifying Lua.
+- The Lua event handler should poll completed Tree-sitter jobs, invalidate affected render caches, and set `core.redraw = true`. Do not rely on a future user event to notice parse completion.
 - On app shutdown/native module unload, cancel outstanding jobs, signal workers, join them, then release remaining snapshots/trees.
 
 Cancellation with current Tree-sitter APIs:
@@ -552,6 +579,7 @@ Highlighter:invalidate_render_cache(first_line, last_line)
 - Update `DocView` text drawing and pixel/column measuring to use `each_render_token` / `get_render_line`.
 - Leave command logic that needs tokenizer state on `get_line()` until a later language-intelligence abstraction replaces it.
 - Other visual consumers can migrate to render tokens opportunistically, but the first highlighting landing must at least update `DocView:draw_line_text`, `DocView:get_col_x_offset`, and `DocView:get_x_offset_col` so displayed colors and hit-testing use the same token stream.
+- Phase 4 must audit in-repo visual plugins that wrap drawing or measure text, especially `drawwhitespace`, `diffview`, and `bracketmatch`. They may continue using legacy `get_line()` where appropriate, but they must not create a mismatch where Tree-sitter-colored text is measured with a different token stream than the one drawn.
 
 When a render line is requested:
 
@@ -568,7 +596,10 @@ Query predicates/directives required for real bundled queries:
 
 - Support at least `#eq?`, `#not-eq?`, `#match?`, `#not-match?`, `#any-of?`, `#not-any-of?` for filtering matches.
 - Support `#set! priority <number>` or equivalent metadata for highlight priority if bundled queries use it.
+- Predicate evaluation must be implemented against native snapshot text, not Lua strings. Capture text extraction must use capture byte ranges from the current snapshot.
+- `#match?` / `#not-match?` should use Anvil's existing native regex infrastructure if practical; otherwise document the chosen C regex engine before implementing it.
 - Unsupported predicates/directives must quiet-log once per query and either conservatively reject that pattern or disable the query; do not silently mis-highlight.
+- Phase 4 must include a small fixture query that exercises every supported predicate/directive before C/C++ bundled queries are trusted.
 
 Cache query results by document generation/tree generation, query id, and visible line/byte range. Do not run an unbounded Tree-sitter query inside every per-line draw call. A simple first cache can be per-line render tokens keyed by `{tree_generation, line_index, line_text}` and invalidated on text transactions/theme/query changes.
 
@@ -854,13 +885,27 @@ meson test -C build-windows-x86_64 --suite anvil --print-errorlogs
 Deliverables:
 
 - This expanded plan is checked in.
-- Confirm exact packaging path: tracked Meson wraps or tracked vendored generated sources.
-- Confirm exact runtime/grammar versions.
+- Add or update tracked Meson wraps/packagefiles for the Tree-sitter runtime and the Phase 1 grammar.
+- Confirm exact runtime/grammar versions and record them in this plan and license/version notes.
+- Confirm the runtime header contains the cancellation/query APIs the implementation will use. If the pinned runtime differs from this plan's API assumptions, update this plan before writing Phase 1 native code.
 - Remove or ignore any temptation to use untracked local `subprojects/tree-sitter*` state.
+- Decide whether C++ grammar is included now or deferred to Phase 5; do not let C++ packaging delay the C native proof.
+
+Suggested Phase 0 file outputs:
+
+```text
+subprojects/tree-sitter.wrap
+subprojects/tree-sitter-c.wrap
+subprojects/packagefiles/tree-sitter/meson.build       -- if needed
+subprojects/packagefiles/tree-sitter-c/meson.build     -- if needed
+licenses/tree-sitter.md                                -- or equivalent section referenced from licenses/licenses.md
+```
 
 Exit criteria:
 
-- An agent can run `git status --short` and see every new dependency input represented by tracked files after Phase 1.
+- `git status --short` shows every new dependency input represented by tracked files.
+- `meson setup --reconfigure build-windows-x86_64` or the equivalent Meson configure step can resolve the pinned runtime and grammar from tracked wraps/packagefiles.
+- No editor-facing code has been added yet.
 
 #### Phase 1: Native Tree-sitter build + tests only
 
