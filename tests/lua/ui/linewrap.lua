@@ -1,6 +1,7 @@
 local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
+local command = require "core.command"
 local style = require "core.style"
 local test = require "core.test"
 
@@ -232,6 +233,71 @@ test.describe("line wrapping current line highlight", function()
     local last_line = #doc.lines
     local _, last_y = view:get_line_screen_position(last_line, #doc.lines[last_line])
     test.equal(last_y + lh, view.position.y + view.size.y - config.scroll_context_lines * lh)
+  end)
+end)
+
+test.describe("line wrapping visual navigation", function()
+  test.after_each(function(context)
+    restore_config(context)
+    local root = core.root_panel.root_node
+    for _, view in ipairs(context.views or {}) do
+      view.wrapping_enabled = false
+      view.wrapped_settings = nil
+      local node = root:get_node_for_view(view)
+      if node then node:remove_view(root, view) end
+    end
+    for _, doc in ipairs(context.docs or {}) do
+      if doc:is_dirty() then doc:clean() end
+      remove_doc(doc)
+    end
+  end)
+
+  test.it("moves up and down by wrapped visual rows", function(context)
+    local view, doc = open_editor(context, string.rep("x", 40))
+    configure_wrapping_for_test(context, view)
+    doc:set_selection(1, 1, 1, 1)
+
+    command.perform("doc:move-to-next-line")
+    local line, col = doc:get_selection()
+    test.equal(line, 1)
+    test.equal(col, 9)
+
+    command.perform("doc:move-to-next-line")
+    line, col = doc:get_selection()
+    test.equal(line, 1)
+    test.equal(col, 17)
+
+    command.perform("doc:move-to-previous-line")
+    line, col = doc:get_selection()
+    test.equal(line, 1)
+    test.equal(col, 9)
+  end)
+
+  test.it("moves home/end to visual row boundaries before actual line boundaries", function(context)
+    local view, doc = open_editor(context, string.rep("x", 40))
+    configure_wrapping_for_test(context, view)
+
+    doc:set_selection(1, 12, 1, 12)
+    command.perform("doc:move-to-start-of-indentation")
+    local line, col = doc:get_selection()
+    test.equal(line, 1)
+    test.equal(col, 9)
+
+    command.perform("doc:move-to-start-of-indentation")
+    line, col = doc:get_selection()
+    test.equal(line, 1)
+    test.equal(col, 1)
+
+    doc:set_selection(1, 12, 1, 12)
+    command.perform("doc:move-to-end-of-line")
+    line, col = doc:get_selection()
+    test.equal(line, 1)
+    test.equal(col, 16)
+
+    command.perform("doc:move-to-end-of-line")
+    line, col = doc:get_selection()
+    test.equal(line, 1)
+    test.equal(col, #doc.lines[1])
   end)
 end)
 

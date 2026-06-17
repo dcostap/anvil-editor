@@ -718,6 +718,62 @@ function DocView.translate.next_line(doc, line, col, dv)
   return get_line_col_from_index_and_x(dv, idx + 1, dv:get_col_x_offset(line, col))
 end
 
+local old_navigation_commands = {}
+for _, name in ipairs({
+  "doc:move-to-previous-line",
+  "doc:move-to-next-line",
+  "doc:select-to-previous-line",
+  "doc:select-to-next-line",
+  "doc:move-to-start-of-indentation",
+  "doc:move-to-end-of-line",
+}) do
+  old_navigation_commands[name] = command.map[name]
+end
+
+local function perform_old_navigation(name, dv)
+  local old = old_navigation_commands[name]
+  if old and old.perform then return old.perform(dv) end
+end
+
+local function set_primary_selection(doc)
+  -- Doesn't work on Windows, so avoid spending time getting the text.
+  if PLATFORM ~= "Windows" then
+    system.set_primary_selection(doc:get_selection_text())
+  end
+end
+
+local function wrapped_move_to(dv, name, move_fn, ...)
+  if not dv.wrapped_settings then return perform_old_navigation(name, dv) end
+  dv.doc:move_to(move_fn, ...)
+end
+
+local function wrapped_select_to(dv, name, move_fn, ...)
+  if not dv.wrapped_settings then return perform_old_navigation(name, dv) end
+  dv.doc:select_to(move_fn, ...)
+  set_primary_selection(dv.doc)
+end
+
+command.add("core.docview", {
+  ["doc:move-to-previous-line"] = function(dv)
+    return wrapped_move_to(dv, "doc:move-to-previous-line", DocView.translate.previous_line, dv)
+  end,
+  ["doc:move-to-next-line"] = function(dv)
+    return wrapped_move_to(dv, "doc:move-to-next-line", DocView.translate.next_line, dv)
+  end,
+  ["doc:select-to-previous-line"] = function(dv)
+    return wrapped_select_to(dv, "doc:select-to-previous-line", DocView.translate.previous_line, dv)
+  end,
+  ["doc:select-to-next-line"] = function(dv)
+    return wrapped_select_to(dv, "doc:select-to-next-line", DocView.translate.next_line, dv)
+  end,
+  ["doc:move-to-start-of-indentation"] = function(dv)
+    return wrapped_move_to(dv, "doc:move-to-start-of-indentation", translate.start_of_indentation)
+  end,
+  ["doc:move-to-end-of-line"] = function(dv)
+    return wrapped_move_to(dv, "doc:move-to-end-of-line", translate.end_of_line)
+  end,
+})
+
 command.add(nil, {
   ["line-wrapping:toggle"] = function()
     if core.active_view and core.active_view.doc then
