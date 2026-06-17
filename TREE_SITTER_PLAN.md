@@ -83,6 +83,13 @@ C:\Projects\c_projects\anvil-editor\data\plugins\language_*.lua
 
 Anvil currently has a line-oriented regex/pattern tokenizer with a native C backend. There is no Tree-sitter integration yet. The existing highlighter is cooperative: it tokenizes batches and yields through Anvil's coroutine system. A blocking Tree-sitter parse on the UI thread would be a regression for large files.
 
+Important current-model details for the integration:
+
+- `Doc.lines` stores UTF-8 text as Lua strings, usually one trailing `\n` per line.
+- CRLF files are normalized internally to `\n`; `doc.crlf` is output/save metadata, not part of the live line strings.
+- Doc positions/columns are 1-based byte offsets into those Lua strings. Character movement is layered on top by skipping UTF-8 continuation bytes.
+- Binary/invalid UTF-8 documents use cleaned display lines through `Doc:get_utf8_line`; Tree-sitter should be disabled for binary docs unless a later design explicitly parses raw bytes.
+
 ## Goals
 
 1. Use Tree-sitter for rich syntax highlighting.
@@ -94,15 +101,16 @@ Anvil currently has a line-oriented regex/pattern tokenizer with a native C back
    - local symbol / definition / reference approximations where reliable
 3. Keep the editor responsive on large files.
 4. Fall back quietly to Anvil's current tokenizer when Tree-sitter is unavailable, slow, missing a grammar, or disabled for a Document.
-5. Make adding languages mostly data-driven.
+5. Make adding bundled languages mostly data-driven.
 6. Build the architecture so LSP can later layer on top cleanly.
 
 ## Non-goals for the first Tree-sitter landing
 
 - No user-facing synchronous parse path.
 - No immediate full Zed-equivalent language extension marketplace.
+- No user-provided grammar/query extension system; this fork is bundled-first and single-user.
 - No promise that Tree-sitter alone gives robust cross-file go-to-definition or go-to-usages.
-- No replacement of the existing tokenizer until Tree-sitter behavior is proven.
+- No replacement of the existing tokenizer fallback.
 - No hard requirement that every existing language plugin be migrated immediately.
 
 ## Key design principle
@@ -196,6 +204,7 @@ Suggested data layout:
 ```text
 data\treesitter\languages\cpp\config.lua
 data\treesitter\languages\cpp\highlights.scm
+data\treesitter\languages\cpp\injections.scm
 data\treesitter\languages\cpp\locals.scm
 data\treesitter\languages\cpp\outline.scm
 data\treesitter\languages\cpp\brackets.scm
@@ -213,6 +222,7 @@ return {
   block_comment = { "/*", "*/" },
   queries = {
     highlights = "highlights.scm",
+    injections = "injections.scm",
     locals = "locals.scm",
     outline = "outline.scm",
     brackets = "brackets.scm",
@@ -227,17 +237,17 @@ Why Lua config instead of TOML initially:
 - Avoids adding a TOML parser just for Tree-sitter language metadata.
 - Keeps first-party defaults consistent with the rest of the fork.
 
-Later, this can be extended to support user-provided languages under `USERDIR`.
+User-provided languages under `USERDIR` are intentionally out of scope. This fork should treat Tree-sitter languages as bundled first-party editor features.
 
 ### 3. Grammar packaging
 
 Start with statically compiled grammars, like Fred. This is easiest and most reliable on Windows.
 
-Initial candidate grammars:
+Initial grammar order:
 
-- `tree-sitter-c`
-- `tree-sitter-cpp`
-- `tree-sitter-lua`
+1. `tree-sitter-c`
+2. `tree-sitter-cpp`
+3. `tree-sitter-lua` later, after the C/C++ path proves the integration
 
 Possible Meson shape:
 
@@ -251,6 +261,13 @@ subprojects/tree-sitter-lua.wrap
 Or vendor generated parser sources under an Anvil-owned source directory if Meson wraps are awkward.
 
 Do not start with dynamic grammar DLL loading. It can come later, but it adds Windows ABI, compiler, and security complexity.
+
+Packaging notes that should be settled before Phase 1 lands:
+
+- Track grammar/runtime versions and licenses in-repo.
+- Include generated `parser.c` plus any external `scanner.c` / `scanner.cc` sources required by a grammar.
+- Keep grammar registration explicit: grammar id -> `tree_sitter_<lang>()` function.
+- Prefer reproducible Meson wraps or checked-in Anvil-owned package files over untracked local subproject edits.
 
 ### 4. Document state
 
@@ -276,6 +293,7 @@ Important details:
 - The old ready tree remains usable while a new parse is queued/parsing.
 - Results are swapped in only when the parse generation still matches the Document generation.
 - If the language changes, old parse jobs are cancelled and discarded.
+- When a Document is closed or garbage-collected, outstanding jobs must be cancelled and native state must release without touching Lua from worker threads.
 
 ### 5. Snapshot model
 
@@ -283,10 +301,12 @@ Tree-sitter workers must not read Lua state from background threads. Lua strings
 
 Initial safe approach:
 
-1. On the main thread, build an immutable native-owned UTF-8 snapshot of the Document.
+1. On the main thread, build an immutable native-owned UTF-8 snapshot of the Document's internal LF-normalized text.
 2. Pass that snapshot to the native worker.
 3. Worker parses only native-owned memory.
 4. When complete, worker returns a tree plus metadata tagged with the Document generation.
+
+Do not include save-time CRLF translation in the snapshot. Tree-sitter points and byte offsets should refer to the same internal text that `Doc.lines` and rendering use.
 
 Potential issue: copying a huge Document on the UI thread can itself stall. Guardrails:
 
@@ -348,16 +368,16 @@ TSInputEdit {
 
 Required mappings:
 
-- Document line/column -> UTF-8 byte offset.
-- Edited range old/new points.
-- CRLF/LF handling.
+- Anvil's 1-based `(line, col)` byte positions -> Tree-sitter's 0-based `TSPoint { row, column }` byte positions.
+- Absolute byte offsets in the LF-normalized document snapshot.
+- Edited range old/new points and byte lengths.
 
-Anvil already tracks Document lines and changed ranges in transaction paths. The Tree-sitter layer should hook into the same mutation points where the current highlighter gets notified.
+Anvil already tracks Document lines and changed ranges in transaction paths. The Tree-sitter layer should hook into `Doc:apply_edits` / `Doc:on_text_transaction` style mutation points where batch edits are available, rather than relying only on legacy `raw_insert` / `raw_remove` paths.
 
 Important:
 
-- Tree-sitter byte offsets are bytes, not UTF-8 character indices.
-- Anvil's renderer and selection code often reason in character columns. The integration must explicitly maintain byte/point conversion helpers.
+- Tree-sitter byte offsets and point columns are bytes, not UTF-8 character indices.
+- Anvil Doc columns are also byte offsets today, but many user-facing movements operate by UTF-8 characters. Keep conversion helpers explicit and tested so structural commands do not land inside continuation bytes.
 
 ### 8. Highlighting path
 
@@ -373,15 +393,21 @@ When a Document View draws visible lines:
 6. Map capture names to `style.syntax[...]` keys.
 7. Draw using existing Document View text rendering machinery.
 
+Initial integration should prefer adapting the existing highlighter/token iteration boundary, or a parallel per-line span cache with the same semantics, so callers such as `DocView:draw_line_text`, minimap/search previews, and command UI do not each grow their own Tree-sitter path.
+
+Cache query results by document generation, tree generation, query id, and visible line/byte range. Do not run an unbounded Tree-sitter query inside every per-line draw call.
+
 Fallback behavior:
 
 - If no ready tree: current `doc.highlighter` tokens.
 - If query fails or language missing: current tokenizer.
+- Tree-sitter and the regex tokenizer should never both render overlapping highlights for the same range. Pick one source per rendered span/line/range, with regex as fallback only.
 - If query time exceeds budget repeatedly: temporarily disable Tree-sitter highlighting for that Document.
 
 Capture mapping:
 
-- Prefer Tree-sitter capture names directly, e.g. `function`, `function.method`, `type.builtin`, `punctuation.bracket`.
+- Fully support the richer Tree-sitter capture vocabulary directly, e.g. `function`, `function.method`, `type.builtin`, `punctuation.bracket`.
+- Add aliases/fallbacks where helpful for compatibility with existing Anvil style keys.
 - Ensure `data\colors\default.lua` has complete first-party defaults for new style keys used by bundled query files.
 - Preserve Anvil's existing `style.syntax` fallback behavior for unknown dotted scopes.
 
@@ -479,24 +505,25 @@ Tree-sitter syntax captures
 
 Required from the first editor-facing integration:
 
-- File size cap for Tree-sitter enablement.
-- Parse timeout/cancellation.
+- Parse cancellation.
 - Debounced reparsing after edits.
 - One current parse job per Document.
+- Global worker queue/backpressure so many open files cannot spawn unbounded jobs.
 - Generation checks before result swap.
 - Visible-range query only for rendering.
-- Query timeout or capture-count cap.
+- Query timeout or capture-count/match-limit guard.
 - Quiet logs for parse duration, query duration, snapshot size, cancellation, fallback, and disable reasons.
 - Automatic fallback to current tokenizer on repeated failures.
 
-Initial default caps can be conservative and first-party configurable later.
+Do not add arbitrary normal-use file-size limits just because a file is large. Fred appears to rely on async parsing, cancellation, piece-tree snapshots, and visible-range queries rather than a simple user-facing size cap. Anvil should aim for the same end state.
 
-Example defaults to consider:
+One exception: if the first implementation uses a naïve full-document copy on the UI thread, keep an internal emergency snapshot memory/time guard so a pathological file cannot freeze or exhaust the editor. Treat that as a temporary safety rail, not a product policy; quiet-log it and fall back to the regex tokenizer.
+
+Example internal defaults to consider only if needed:
 
 ```lua
 config.treesitter = {
   enabled = true,
-  max_file_size = 2 * 1024 * 1024,
   parse_timeout_ms = 750,
   edit_debounce_ms = 120,
   max_query_captures = 50000,
@@ -508,7 +535,7 @@ Per project policy says not every constant needs config immediately. Promote onl
 
 ### 13. Threading model
 
-Do not use Lua coroutines for actual parsing. They are cooperative and still run on the UI thread.
+Do not use Lua coroutines for actual parsing. They are cooperative and still run on the UI thread. Also avoid the Lua `thread` module for parsing: it creates separate Lua states and adds serialization/lifetime complexity that is unnecessary for C-only Tree-sitter work.
 
 Use a native worker:
 
@@ -535,7 +562,7 @@ Adding a bundled language should require:
 5. Add style defaults only for new first-party capture keys.
 6. Add a small parse/highlight test fixture.
 
-Longer-term, user languages under `USERDIR` could provide query/config files, but grammar binaries are a separate problem on Windows. Dynamic grammars should be a later design.
+User languages under `USERDIR` and dynamic grammars are intentionally out of scope for this fork. New language support should be added as bundled first-party code.
 
 ### 15. Testing plan
 
@@ -544,6 +571,7 @@ Native tests:
 - Load grammar.
 - Compile queries.
 - Parse simple source.
+- Convert between Anvil byte positions and Tree-sitter byte offsets/points.
 - Apply `TSInputEdit` and incremental reparse.
 - Query visible byte range.
 - Cancel parse.
@@ -569,9 +597,9 @@ Stress tests:
 - Large C++ file.
 - Long minified line.
 - Rapid typing while parse is active.
-- CRLF file.
-- UTF-8 identifiers/strings.
-- Repeated open/close to catch leaks.
+- CRLF file, verifying internal LF-normalized offsets.
+- UTF-8 identifiers/strings, verifying commands never select inside continuation bytes.
+- Repeated open/close to catch leaks and stale worker completions.
 
 ### 16. Implementation phases
 
@@ -584,7 +612,8 @@ Stress tests:
 #### Phase 1: Native Tree-sitter build + tests only
 
 - Add Tree-sitter runtime and one grammar to Meson.
-- Add native test program or Meson test target proving parse/query/edit/cancel.
+- Add explicit grammar registration and license/version notes.
+- Add native test program or Meson test target proving parse/query/edit/cancel and byte/point conversion.
 - This may include synchronous calls, but only in tests/tools. It is not the editor-facing MVP.
 
 #### Phase 2: Async native parse service
@@ -600,7 +629,8 @@ Stress tests:
 - Detect language.
 - Schedule parses on open/edit/language change.
 - Keep current tokenizer rendering.
-- Expose status for logs/debug command.
+- Expose status through quiet logs/debug command.
+- Use statusbar/user-visible feedback only for important errors that need attention.
 
 #### Phase 4: Tree-sitter highlighting path
 
@@ -611,9 +641,9 @@ Stress tests:
 
 #### Phase 5: First bundled languages
 
-- Start with C/C++ or Lua.
+- Start with C/C++.
 - Add query files and tests.
-- Tune style defaults.
+- Tune style defaults for the richer Tree-sitter capture vocabulary.
 
 #### Phase 6: Structure/navigation
 
@@ -633,13 +663,17 @@ Stress tests:
 - Add LSP semantic tokens, definitions, references, document symbols, diagnostics.
 - Overlay or replace Tree-sitter features according to settings and availability.
 
-## Open questions
+## User decisions
 
-1. Which first language should prove the path: C/C++ because this repo is C-heavy, or Lua because Anvil's core/plugins are Lua-heavy?
-2. Should query files use Zed-compatible capture names exactly, or an Anvil subset with aliases?
-3. What default max file size is acceptable before Tree-sitter disables itself?
-4. Should parse status be visible anywhere, or only logged quietly?
-5. Should old regex tokenizer remain enabled permanently as fallback, or eventually become plain-text fallback only?
+1. First language path: C/C++ first, Lua later.
+2. Parse/status visibility: quiet by default. Use quiet logs and debug/status commands; show statusbar feedback only for important errors that need user attention.
+3. Fallback policy: keep the old regex tokenizer permanently as fallback. It must not conflict with or overlap Tree-sitter highlighting.
+4. Capture vocabulary: fully support richer Tree-sitter capture names, with aliases/fallbacks where useful.
+5. Performance policy: avoid arbitrary normal-use file-size caps. Prefer async parsing, cancellation, visible-range queries, and backpressure; only use temporary emergency guards for naïve snapshot stalls/OOM risks.
+6. Structure/navigation priority: all listed Tree-sitter structure features are desired after highlighting.
+7. Stale highlighting: keep the old ready Tree-sitter tree while a new parse is pending when safe; fall back only on failure or excessive staleness.
+8. Language extensibility: bundled first-party languages only; no user language extension system.
+9. LSP precedence: combined mode by default, with Tree-sitter as base and LSP semantic tokens/features overlaying or replacing where appropriate.
 
 ## Summary
 
