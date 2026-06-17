@@ -326,7 +326,13 @@ if not get_option('source-only')
         default_options: default_fallback_options + ['default_library=static']
     )
 
-    anvil_deps = [lua_dep, sdl_dep, sdl_image, freetype_dep, harfbuzz_anvil_dep, pcre2_dep, uchardet_dep, libm, libdl, librt]
+    tree_sitter_dep = subproject('tree-sitter',
+        default_options: default_fallback_options + ['default_library=static']
+    ).get_variable('tree_sitter_dep')
+    tree_sitter_c_dep = subproject('tree-sitter-c',
+        default_options: default_fallback_options + ['default_library=static']
+    ).get_variable('tree_sitter_c_dep')
+    anvil_deps = [lua_dep, sdl_dep, sdl_image, freetype_dep, harfbuzz_anvil_dep, pcre2_dep, uchardet_dep, tree_sitter_dep, tree_sitter_c_dep, libm, libdl, librt]
 endif
 
 lua_compat_needed = lua_dep.version() < '5.3.0'
@@ -381,14 +387,14 @@ else
     endif
 endif
 
-install_data('licenses/licenses.md', install_dir : anvil_docdir)
+install_data('licenses/licenses.md', 'licenses/tree-sitter.md', install_dir : anvil_docdir)
 
 install_subdir('data/core' , install_dir : anvil_datadir, exclude_files : 'start.lua')
 install_subdir('resources/icons' , install_dir : anvil_datadir)
 
 fs = import('fs')
 
-data_dirs = ['fonts', 'plugins', 'colors', 'widget']
+data_dirs = ['fonts', 'plugins', 'colors', 'widget', 'treesitter']
 if lua_compat_needed
     data_dirs += ['compat']
 endif

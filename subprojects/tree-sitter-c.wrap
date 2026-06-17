@@ -1,0 +1,7 @@
+[wrap-git]
+url = https://github.com/tree-sitter/tree-sitter-c.git
+revision = b780e47fc780ddc8da13afa35a3f4ed5c157823d
+patch_directory = tree-sitter-c
+
+[provide]
+tree-sitter-c = tree_sitter_c_dep

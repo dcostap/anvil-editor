@@ -11,6 +11,7 @@
 #include "custom_events.h"
 #include "resize_diagnostics.h"
 #include "win32_single_instance.h"
+#include "treesitter/service.h"
 
 #ifdef _WIN32
   #include <windows.h>
@@ -128,6 +129,7 @@ typedef struct {
   uint64_t   resize_request_reentrant;
   uint64_t   resize_request_same_size;
   bool       pending_resize_frame;
+  bool       running_lua_tests;
   SDL_Window *pending_resize_window;
   char       pending_resize_reason[64];
   Uint32     last_rendered_resize_window_id;
@@ -381,6 +383,13 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   app->resize_request_reentrant = 0;
   app->resize_request_same_size = 0;
   app->pending_resize_frame = false;
+  app->running_lua_tests = false;
+  for (int i = 1; i < argc; i++) {
+    if (strcmp(argv[i], "test") == 0) {
+      app->running_lua_tests = true;
+      break;
+    }
+  }
   app->pending_resize_window = NULL;
   app->pending_resize_reason[0] = '\0';
   app->last_rendered_resize_window_id = 0;
@@ -631,7 +640,11 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
   AppState *app = appstate;
   if (app) {
     if (live_resize_app == app) live_resize_app = NULL;
-    if (app->L) lua_close(app->L);
+    anvil_ts_service_shutdown();
+    /* The CLI test command exits the process immediately after reporting.
+     * Avoid LuaJIT close-time allocator teardown in that path; native services
+     * are still shut down above, and the OS reclaims the short-lived test state. */
+    if (app->L && !app->running_lua_tests) lua_close(app->L);
     SDL_free(app);
   }
   anvil_single_instance_stop();

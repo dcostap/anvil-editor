@@ -12,8 +12,12 @@ anvil_sources = [
     'api/canvas.c',
     'api/utf8.c',
     'api/tokenizer.c',
+    'api/treesitter.c',
     'api/fuzzy.c',
     'fuzzy.c',
+    'treesitter/languages.c',
+    'treesitter/service.c',
+    'treesitter/snapshot.c',
     'tokenizer/arena.c',
     'tokenizer/regex.c',
     'tokenizer/lutf8.c',
@@ -190,6 +194,20 @@ fuzzy_test = executable('fuzzy_test',
     c_args: anvil_cargs,
 )
 test('fuzzy', fuzzy_test, env: anvil_test_env)
+
+treesitter_test = executable('treesitter_test',
+    [
+        '../tests/native/treesitter_test.c',
+        'treesitter/languages.c',
+        'treesitter/service.c',
+        'treesitter/snapshot.c',
+        'custom_events.c',
+    ],
+    include_directories: anvil_includes,
+    dependencies: [tree_sitter_dep, tree_sitter_c_dep, sdl_dep, lua_dep],
+    c_args: anvil_cargs,
+)
+test('treesitter', treesitter_test, env: anvil_test_env)
 
 # load and configure linenoise
 if get_option('repl_history')

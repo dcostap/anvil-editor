@@ -13,6 +13,7 @@ int luaopen_encoding(lua_State* L);
 int luaopen_diff(lua_State *L);
 int luaopen_canvas(lua_State* L);
 int luaopen_tokenizer(lua_State *L);
+int luaopen_treesitter(lua_State *L);
 int luaopen_fuzzy(lua_State *L);
 
 #ifdef ANVIL_NET
@@ -50,6 +51,20 @@ int luaopen_fuzzy(lua_State *L);
   #define LUA53_COMPATIBILITY
 #endif
 
+static void preload_treesitter(lua_State *L) {
+  lua_getglobal(L, "package");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    return;
+  }
+  lua_getfield(L, -1, "preload");
+  if (lua_istable(L, -1)) {
+    lua_pushcfunction(L, luaopen_treesitter);
+    lua_setfield(L, -2, "treesitter");
+  }
+  lua_pop(L, 2);
+}
+
 static const luaL_Reg libs[] = {
   { "system",     luaopen_system     },
   { "renderer",   luaopen_renderer   },
@@ -75,6 +90,9 @@ static const luaL_Reg libs[] = {
 #undef LUABIT_COMPATIBILITY
 
 void api_load_libs(lua_State *L) {
-  for (int i = 0; libs[i].name; i++)
+  for (int i = 0; libs[i].name; i++) {
     luaL_requiref(L, libs[i].name, libs[i].func, 1);
+    lua_pop(L, 1);
+  }
+  preload_treesitter(L);
 }

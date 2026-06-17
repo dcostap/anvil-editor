@@ -498,6 +498,7 @@ function core.init()
   ImageView = require "core.imageview"
   MarkdownView = require "core.markdownview"
   Doc = require "core.doc"
+  core.treesitter = require "core.treesitter"
 
   -- apply to default color scheme
   map_new_syntax_colors()

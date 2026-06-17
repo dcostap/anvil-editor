@@ -1,5 +1,7 @@
 # Licenses
 
+Additional dependency notes and license text for Tree-sitter are in `tree-sitter.md`.
+
 ## rxi/lite
 
 Copyright (c) 2020 rxi

@@ -1,0 +1,530 @@
+#include "api.h"
+#include "../treesitter/languages.h"
+#include "../treesitter/service.h"
+#include "../treesitter/snapshot.h"
+
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#ifndef ANVIL_TREE_SITTER_RUNTIME_VERSION
+#define ANVIL_TREE_SITTER_RUNTIME_VERSION "0.27.0"
+#endif
+
+#define API_TYPE_TREESITTER_QUERY "TreeSitterQuery"
+#define API_TYPE_TREESITTER_STATE "TreeSitterDocumentState"
+
+typedef struct {
+  TSQuery *query;
+  const AnvilTSLanguage *language;
+} AnvilTSQueryUserdata;
+
+typedef struct {
+  AnvilTSDocumentState *state;
+} AnvilTSStateUserdata;
+
+static AnvilTSQueryUserdata *check_query(lua_State *L, int idx) {
+  return (AnvilTSQueryUserdata *) luaL_checkudata(L, idx, API_TYPE_TREESITTER_QUERY);
+}
+
+static AnvilTSStateUserdata *check_state(lua_State *L, int idx) {
+  return (AnvilTSStateUserdata *) luaL_checkudata(L, idx, API_TYPE_TREESITTER_STATE);
+}
+
+static char *treesitter_strdup(const char *text) {
+  if (!text) return NULL;
+  size_t len = strlen(text);
+  char *copy = (char *) malloc(len + 1);
+  if (!copy) return NULL;
+  memcpy(copy, text, len + 1);
+  return copy;
+}
+
+static void push_language_version(lua_State *L, const AnvilTSLanguage *language) {
+  const TSLanguage *ts_language = anvil_ts_language_ptr(language);
+  lua_newtable(L);
+
+  lua_pushinteger(L, ts_language ? (lua_Integer) ts_language_abi_version(ts_language) : 0);
+  lua_setfield(L, -2, "abi");
+
+  lua_pushinteger(L, TREE_SITTER_LANGUAGE_VERSION);
+  lua_setfield(L, -2, "runtime_abi");
+
+  lua_pushinteger(L, TREE_SITTER_MIN_COMPATIBLE_LANGUAGE_VERSION);
+  lua_setfield(L, -2, "min_compatible_abi");
+
+  lua_pushboolean(L, ts_language && anvil_ts_language_is_compatible(language));
+  lua_setfield(L, -2, "compatible");
+
+  if (language->semantic_version) {
+    lua_pushstring(L, language->semantic_version);
+    lua_setfield(L, -2, "semantic");
+  } else if (ts_language) {
+    const TSLanguageMetadata *metadata = ts_language_metadata(ts_language);
+    if (metadata) {
+      char semantic[32];
+      snprintf(
+        semantic,
+        sizeof(semantic),
+        "%u.%u.%u",
+        (unsigned) metadata->major_version,
+        (unsigned) metadata->minor_version,
+        (unsigned) metadata->patch_version
+      );
+      lua_pushstring(L, semantic);
+      lua_setfield(L, -2, "semantic");
+    }
+  }
+}
+
+static int f_runtime_version(lua_State *L) {
+  lua_pushstring(L, ANVIL_TREE_SITTER_RUNTIME_VERSION);
+  return 1;
+}
+
+static int f_runtime_abi_version(lua_State *L) {
+  lua_pushinteger(L, TREE_SITTER_LANGUAGE_VERSION);
+  return 1;
+}
+
+static int f_language_ids(lua_State *L) {
+  lua_newtable(L);
+  size_t count = anvil_ts_language_count();
+  for (size_t i = 0; i < count; i++) {
+    const AnvilTSLanguage *language = anvil_ts_language_at(i);
+    lua_pushstring(L, language->id);
+    lua_rawseti(L, -2, (int) i + 1);
+  }
+  return 1;
+}
+
+static int f_has_language(lua_State *L) {
+  const char *id = luaL_checkstring(L, 1);
+  const AnvilTSLanguage *language = anvil_ts_language_by_id(id);
+  lua_pushboolean(L, language && anvil_ts_language_is_compatible(language));
+  return 1;
+}
+
+static int f_language_version(lua_State *L) {
+  const char *id = luaL_checkstring(L, 1);
+  const AnvilTSLanguage *language = anvil_ts_language_by_id(id);
+  if (!language) {
+    lua_pushnil(L);
+    return 1;
+  }
+  push_language_version(L, language);
+  return 1;
+}
+
+static int f_compile_query(lua_State *L) {
+  const char *language_id = luaL_checkstring(L, 1);
+  int source_index = lua_gettop(L) >= 3 ? 3 : 2;
+  size_t source_len = 0;
+  const char *source = luaL_checklstring(L, source_index, &source_len);
+
+  const AnvilTSLanguage *language = anvil_ts_language_by_id(language_id);
+  if (!language || !anvil_ts_language_is_compatible(language)) {
+    lua_pushnil(L);
+    lua_pushfstring(L, "unknown or incompatible Tree-sitter language '%s'", language_id);
+    return 2;
+  }
+
+  uint32_t error_offset = 0;
+  TSQueryError error_type = TSQueryErrorNone;
+  TSQuery *query = ts_query_new(
+    anvil_ts_language_ptr(language),
+    source,
+    (uint32_t) source_len,
+    &error_offset,
+    &error_type
+  );
+  if (!query) {
+    lua_pushnil(L);
+    lua_pushfstring(
+      L,
+      "Tree-sitter query error %d at byte %d",
+      (int) error_type,
+      (int) error_offset
+    );
+    return 2;
+  }
+
+  AnvilTSQueryUserdata *userdata = (AnvilTSQueryUserdata *) lua_newuserdata(L, sizeof(*userdata));
+  userdata->query = query;
+  userdata->language = language;
+  luaL_setmetatable(L, API_TYPE_TREESITTER_QUERY);
+  return 1;
+}
+
+static uint32_t option_uint32(lua_State *L, int idx, const char *field, uint32_t fallback) {
+  if (!lua_istable(L, idx)) return fallback;
+  lua_getfield(L, idx, field);
+  uint32_t value = fallback;
+  if (lua_isnumber(L, -1)) {
+    lua_Integer raw = lua_tointeger(L, -1);
+    if (raw > 0 && raw <= UINT32_MAX) value = (uint32_t) raw;
+  }
+  lua_pop(L, 1);
+  return value;
+}
+
+static bool lua_integer_field(lua_State *L, int idx, const char *field, uint32_t *out) {
+  lua_getfield(L, idx, field);
+  if (!lua_isnumber(L, -1)) {
+    lua_pop(L, 1);
+    return false;
+  }
+  lua_Integer raw = lua_tointeger(L, -1);
+  lua_pop(L, 1);
+  if (raw < 0 || raw > UINT32_MAX) return false;
+  *out = (uint32_t) raw;
+  return true;
+}
+
+static bool edit_from_lua(lua_State *L, int idx, AnvilTSEdit *edit, char **error) {
+  if (error) *error = NULL;
+  if (!lua_istable(L, idx) || !edit) {
+    if (error) *error = treesitter_strdup("Tree-sitter edit must be a table");
+    return false;
+  }
+
+  uint32_t line1 = 0, col1 = 0, line2 = 0, col2 = 0, start_offset = 0, end_offset = 0;
+  if (!lua_integer_field(L, idx, "line1", &line1) || line1 == 0 ||
+      !lua_integer_field(L, idx, "col1", &col1) || col1 == 0 ||
+      !lua_integer_field(L, idx, "line2", &line2) || line2 == 0 ||
+      !lua_integer_field(L, idx, "col2", &col2) || col2 == 0 ||
+      !lua_integer_field(L, idx, "start_offset", &start_offset) ||
+      !lua_integer_field(L, idx, "end_offset", &end_offset) ||
+      end_offset < start_offset) {
+    if (error) *error = treesitter_strdup("Tree-sitter edit has invalid position fields");
+    return false;
+  }
+
+  lua_getfield(L, idx, "text");
+  size_t text_len = 0;
+  const char *text = lua_tolstring(L, -1, &text_len);
+  if (!text || text_len > UINT32_MAX || start_offset > UINT32_MAX - (uint32_t) text_len) {
+    lua_pop(L, 1);
+    if (error) *error = treesitter_strdup("Tree-sitter edit has invalid text");
+    return false;
+  }
+
+  TSPoint new_end_point;
+  new_end_point.row = line1 - 1;
+  new_end_point.column = col1 - 1;
+  for (size_t i = 0; i < text_len; i++) {
+    if (text[i] == '\n') {
+      new_end_point.row++;
+      new_end_point.column = 0;
+    } else {
+      new_end_point.column++;
+    }
+  }
+  lua_pop(L, 1);
+
+  edit->input_edit.start_byte = start_offset;
+  edit->input_edit.old_end_byte = end_offset;
+  edit->input_edit.new_end_byte = start_offset + (uint32_t) text_len;
+  edit->input_edit.start_point.row = line1 - 1;
+  edit->input_edit.start_point.column = col1 - 1;
+  edit->input_edit.old_end_point.row = line2 - 1;
+  edit->input_edit.old_end_point.column = col2 - 1;
+  edit->input_edit.new_end_point = new_end_point;
+  return true;
+}
+
+static int f_register_complete_event(lua_State *L) {
+  if (!anvil_ts_service_register_complete_event()) {
+    lua_pushnil(L);
+    lua_pushstring(L, "failed to register treesitter_complete event");
+    return 2;
+  }
+  lua_pushboolean(L, true);
+  return 1;
+}
+
+static int f_new_document_state(lua_State *L) {
+  const char *language_id = luaL_checkstring(L, 1);
+  const AnvilTSLanguage *language = anvil_ts_language_by_id(language_id);
+  if (!language || !anvil_ts_language_is_compatible(language)) {
+    lua_pushnil(L);
+    lua_pushfstring(L, "unknown or incompatible Tree-sitter language '%s'", language_id);
+    return 2;
+  }
+
+  uint32_t parse_timeout_ms = option_uint32(L, 2, "parse_timeout_ms", 750);
+  AnvilTSDocumentState *state = anvil_ts_document_state_new(language, parse_timeout_ms);
+  if (!state) {
+    lua_pushnil(L);
+    lua_pushstring(L, "failed to create Tree-sitter document state");
+    return 2;
+  }
+
+  AnvilTSStateUserdata *userdata = (AnvilTSStateUserdata *) lua_newuserdata(L, sizeof(*userdata));
+  userdata->state = state;
+  luaL_setmetatable(L, API_TYPE_TREESITTER_STATE);
+  return 1;
+}
+
+static AnvilTSSnapshot *snapshot_from_lua_lines(lua_State *L, int idx, char **error) {
+  if (error) *error = NULL;
+  luaL_checktype(L, idx, LUA_TTABLE);
+  lua_Unsigned raw_count = (lua_Unsigned) lua_rawlen(L, idx);
+  if (raw_count > UINT32_MAX) {
+    if (error) *error = treesitter_strdup("too many Tree-sitter snapshot lines");
+    return NULL;
+  }
+  uint32_t line_count = (uint32_t) raw_count;
+  const char **lines = line_count ? (const char **) calloc(line_count, sizeof(char *)) : NULL;
+  uint32_t *line_lengths = line_count ? (uint32_t *) calloc(line_count, sizeof(uint32_t)) : NULL;
+  if (line_count && (!lines || !line_lengths)) {
+    free(lines);
+    free(line_lengths);
+    if (error) *error = treesitter_strdup("out of memory preparing Tree-sitter snapshot lines");
+    return NULL;
+  }
+
+  for (uint32_t i = 0; i < line_count; i++) {
+    lua_rawgeti(L, idx, (int) i + 1);
+    size_t len = 0;
+    const char *line = lua_tolstring(L, -1, &len);
+    if (!line) {
+      lua_pop(L, 1);
+      free(lines);
+      free(line_lengths);
+      if (error) *error = treesitter_strdup("Tree-sitter snapshot line is not a string");
+      return NULL;
+    }
+    if (len > UINT32_MAX) {
+      lua_pop(L, 1);
+      free(lines);
+      free(line_lengths);
+      if (error) *error = treesitter_strdup("Tree-sitter snapshot line exceeds 4GB byte limit");
+      return NULL;
+    }
+    lines[i] = line;
+    line_lengths[i] = (uint32_t) len;
+    lua_pop(L, 1);
+  }
+
+  AnvilTSSnapshot *snapshot = anvil_ts_snapshot_new_from_lines(lines, line_lengths, line_count, error);
+  free(lines);
+  free(line_lengths);
+  return snapshot;
+}
+
+static int state_language_id(lua_State *L) {
+  AnvilTSStateUserdata *userdata = check_state(L, 1);
+  luaL_argcheck(L, userdata->state != NULL, 1, "closed Tree-sitter document state");
+  lua_pushstring(L, anvil_ts_document_state_language_id(userdata->state));
+  return 1;
+}
+
+static int state_status(lua_State *L) {
+  AnvilTSStateUserdata *userdata = check_state(L, 1);
+  if (!userdata->state) {
+    lua_pushstring(L, "closed");
+    lua_pushstring(L, "closed");
+    return 2;
+  }
+  AnvilTSStateStatus status = ANVIL_TS_STATE_FAILED;
+  char *reason = NULL;
+  if (!anvil_ts_document_state_status_snapshot(userdata->state, &status, &reason)) {
+    lua_pushstring(L, "failed");
+    lua_pushstring(L, "failed to read Tree-sitter document state status");
+    return 2;
+  }
+  lua_pushstring(L, anvil_ts_document_state_status_string(status));
+  if (reason) lua_pushstring(L, reason); else lua_pushnil(L);
+  free(reason);
+  return 2;
+}
+
+static int state_generation(lua_State *L) {
+  AnvilTSStateUserdata *userdata = check_state(L, 1);
+  lua_pushinteger(L, userdata->state ? (lua_Integer) anvil_ts_document_state_generation(userdata->state) : 0);
+  return 1;
+}
+
+static int state_tree_generation(lua_State *L) {
+  AnvilTSStateUserdata *userdata = check_state(L, 1);
+  lua_pushinteger(L, userdata->state ? (lua_Integer) anvil_ts_document_state_tree_generation(userdata->state) : 0);
+  return 1;
+}
+
+static int state_has_tree(lua_State *L) {
+  AnvilTSStateUserdata *userdata = check_state(L, 1);
+  lua_pushboolean(L, userdata->state && anvil_ts_document_state_has_tree(userdata->state));
+  return 1;
+}
+
+static int state_schedule_parse(lua_State *L) {
+  AnvilTSStateUserdata *userdata = check_state(L, 1);
+  luaL_argcheck(L, userdata->state != NULL, 1, "closed Tree-sitter document state");
+  luaL_checktype(L, 2, LUA_TTABLE);
+  uint64_t generation = (uint64_t) luaL_checkinteger(L, 3);
+  AnvilTSEdit edit;
+  AnvilTSEdit *edit_ptr = NULL;
+  char *error = NULL;
+  if (!lua_isnoneornil(L, 4)) {
+    if (!edit_from_lua(L, 4, &edit, &error)) {
+      lua_pushnil(L);
+      lua_pushstring(L, error ? error : "invalid Tree-sitter edit");
+      free(error);
+      return 2;
+    }
+    edit_ptr = &edit;
+  }
+
+  AnvilTSSnapshot *snapshot = snapshot_from_lua_lines(L, 2, &error);
+  if (!snapshot) {
+    lua_pushnil(L);
+    lua_pushstring(L, error ? error : "failed to create Tree-sitter snapshot");
+    free(error);
+    return 2;
+  }
+
+  if (!anvil_ts_document_state_schedule_parse_with_edit(userdata->state, snapshot, generation, edit_ptr, &error)) {
+    anvil_ts_snapshot_free(snapshot);
+    lua_pushnil(L);
+    lua_pushstring(L, error ? error : "failed to schedule Tree-sitter parse");
+    free(error);
+    return 2;
+  }
+  lua_pushboolean(L, true);
+  return 1;
+}
+
+static int state_poll(lua_State *L) {
+  AnvilTSStateUserdata *userdata = check_state(L, 1);
+  luaL_argcheck(L, userdata->state != NULL, 1, "closed Tree-sitter document state");
+  uint64_t generation = (uint64_t) luaL_checkinteger(L, 2);
+  AnvilTSPollResult result = anvil_ts_document_state_poll(userdata->state, generation);
+  lua_pushstring(L, anvil_ts_document_state_status_string(result.status));
+  lua_pushboolean(L, result.changed);
+  lua_pushboolean(L, result.discarded_stale);
+  return 3;
+}
+
+static int state_cancel(lua_State *L) {
+  AnvilTSStateUserdata *userdata = check_state(L, 1);
+  if (userdata->state) anvil_ts_document_state_cancel(userdata->state);
+  return 0;
+}
+
+static int state_close(lua_State *L) {
+  AnvilTSStateUserdata *userdata = check_state(L, 1);
+  if (userdata->state) anvil_ts_document_state_close(userdata->state);
+  return 0;
+}
+
+static int state_gc(lua_State *L) {
+  AnvilTSStateUserdata *userdata = check_state(L, 1);
+  if (userdata->state) {
+    anvil_ts_document_state_close(userdata->state);
+    anvil_ts_document_state_release(userdata->state);
+    userdata->state = NULL;
+  }
+  return 0;
+}
+
+static int query_gc(lua_State *L) {
+  AnvilTSQueryUserdata *userdata = check_query(L, 1);
+  if (userdata->query) {
+    ts_query_delete(userdata->query);
+    userdata->query = NULL;
+  }
+  userdata->language = NULL;
+  return 0;
+}
+
+static int query_capture_names(lua_State *L) {
+  AnvilTSQueryUserdata *userdata = check_query(L, 1);
+  luaL_argcheck(L, userdata->query != NULL, 1, "closed Tree-sitter query");
+
+  lua_newtable(L);
+  uint32_t count = ts_query_capture_count(userdata->query);
+  for (uint32_t i = 0; i < count; i++) {
+    uint32_t len = 0;
+    const char *name = ts_query_capture_name_for_id(userdata->query, i, &len);
+    lua_pushlstring(L, name, len);
+    lua_rawseti(L, -2, (int) i + 1);
+  }
+  return 1;
+}
+
+static int query_pattern_count(lua_State *L) {
+  AnvilTSQueryUserdata *userdata = check_query(L, 1);
+  luaL_argcheck(L, userdata->query != NULL, 1, "closed Tree-sitter query");
+  lua_pushinteger(L, ts_query_pattern_count(userdata->query));
+  return 1;
+}
+
+static int query_language_id(lua_State *L) {
+  AnvilTSQueryUserdata *userdata = check_query(L, 1);
+  lua_pushstring(L, userdata->language ? userdata->language->id : NULL);
+  return 1;
+}
+
+static const luaL_Reg query_methods[] = {
+  { "capture_names", query_capture_names },
+  { "pattern_count", query_pattern_count },
+  { "language_id", query_language_id },
+  { NULL, NULL }
+};
+
+static const luaL_Reg query_meta[] = {
+  { "__gc", query_gc },
+  { NULL, NULL }
+};
+
+static const luaL_Reg state_methods[] = {
+  { "language_id", state_language_id },
+  { "status", state_status },
+  { "generation", state_generation },
+  { "tree_generation", state_tree_generation },
+  { "has_tree", state_has_tree },
+  { "schedule_parse", state_schedule_parse },
+  { "poll", state_poll },
+  { "cancel", state_cancel },
+  { "close", state_close },
+  { NULL, NULL }
+};
+
+static const luaL_Reg state_meta[] = {
+  { "__gc", state_gc },
+  { NULL, NULL }
+};
+
+static const luaL_Reg lib[] = {
+  { "runtime_version", f_runtime_version },
+  { "runtime_abi_version", f_runtime_abi_version },
+  { "language_ids", f_language_ids },
+  { "has_language", f_has_language },
+  { "language_version", f_language_version },
+  { "compile_query", f_compile_query },
+  { "register_complete_event", f_register_complete_event },
+  { "new_document_state", f_new_document_state },
+  { NULL, NULL }
+};
+
+int luaopen_treesitter(lua_State *L) {
+  luaL_newmetatable(L, API_TYPE_TREESITTER_QUERY);
+  luaL_setfuncs(L, query_meta, 0);
+  lua_newtable(L);
+  luaL_setfuncs(L, query_methods, 0);
+  lua_setfield(L, -2, "__index");
+  lua_pop(L, 1);
+
+  luaL_newmetatable(L, API_TYPE_TREESITTER_STATE);
+  luaL_setfuncs(L, state_meta, 0);
+  lua_newtable(L);
+  luaL_setfuncs(L, state_methods, 0);
+  lua_setfield(L, -2, "__index");
+  lua_pop(L, 1);
+
+  luaL_newlib(L, lib);
+  return 1;
+}

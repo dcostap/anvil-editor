@@ -341,15 +341,15 @@ subprojects/packagefiles/tree-sitter-c/meson.build     -- if grammar has no usab
 subprojects/packagefiles/tree-sitter-cpp/meson.build   -- if grammar has no usable Meson build
 ```
 
-Phase 0 must pin exact wrap revisions. Preferred starting pins:
+Phase 0 must pin exact wrap revisions. Selected Phase 0/1 pins:
 
 ```text
-tree-sitter runtime: https://github.com/tree-sitter/tree-sitter.git, prefer a current stable tag with TSParseOptions/ts_parser_parse_with_options support.
-tree-sitter-c:       https://github.com/tree-sitter/tree-sitter-c.git, prefer v0.24.2 or newer compatible pinned revision.
-tree-sitter-cpp:     https://github.com/tree-sitter/tree-sitter-cpp.git, prefer v0.23.4 or newer compatible pinned revision.
+tree-sitter runtime: https://github.com/tree-sitter/tree-sitter.git, commit 519d511488497f6af43698d4c856f4b3f1f0b80c, version 0.27.0.
+tree-sitter-c:       https://github.com/tree-sitter/tree-sitter-c.git, commit b780e47fc780ddc8da13afa35a3f4ed5c157823d, version 0.24.2.
+tree-sitter-cpp:     deferred; do not let C++ packaging delay the C native proof.
 ```
 
-If the exact tags above are unavailable or a newer stable tag is selected, Phase 0 must update this plan's runtime/API/version text before Phase 1 code is written. Do not use floating branches such as `master` or `main`. A commit hash is acceptable when a tag is unavailable, but it must be documented in this file and in license/version notes.
+Do not use floating branches such as `master` or `main`. A commit hash is acceptable when a tag is unavailable, but it must be documented in this file and in license/version notes.
 
 Existing local directories such as `subprojects/tree-sitter` and `subprojects/tree-sitter-c` are ignored by `.gitignore`; they may be inspected as references but must not be the source of reproducible build inputs unless corresponding wraps/packagefiles are checked in.
 
@@ -365,9 +365,11 @@ Do **not** rely on current ignored local directories under `subprojects/tree-sit
 
 Version/API decision:
 
-- Target Tree-sitter runtime API: the version pinned by the tracked wrap. If using the currently observed local runtime (`0.27.0`), cancellation is done with `ts_parser_parse_with_options` and `TSParseOptions.progress_callback`, not `ts_parser_set_cancellation_flag`.
+- Target Tree-sitter runtime API: pinned runtime `0.27.0` from commit `519d511488497f6af43698d4c856f4b3f1f0b80c`.
+- Cancellation is done with `ts_parser_parse_with_options` and `TSParseOptions.progress_callback`, not `ts_parser_set_cancellation_flag`.
 - Query timeout/cancellation should use `ts_query_cursor_exec_with_options` and `TSQueryCursorOptions.progress_callback` when available, plus `ts_query_cursor_set_match_limit`.
-- If a different runtime version is pinned, update this section and native tests to match the actual header before implementation proceeds.
+- The pinned header exposes `ts_language_abi_version` and `ts_language_metadata`; the Phase 1 registry/API/tests use those for grammar compatibility and semantic version checks.
+- If a different runtime version is pinned later, update this section and native tests to match the actual header before implementation proceeds.
 
 Initial grammar order:
 
