@@ -3,6 +3,7 @@ local test = require "core.test"
 local treesitter = require "core.treesitter"
 local registry = require "core.treesitter.registry"
 local native = require "treesitter"
+local ts_highlight = require "core.treesitter.highlight"
 
 local function set_text(doc, text)
   doc.lines = {}
@@ -13,6 +14,14 @@ local function set_text(doc, text)
   doc:clear_undo_redo()
   doc:clean()
   doc:set_selection(1, 1)
+end
+
+local function token_type_for_text(tokens, needle)
+  for i = 1, #tokens, 2 do
+    local token_type, text = tokens[i], tokens[i + 1]
+    local start = text and text:find(needle, 1, true)
+    if start then return token_type end
+  end
 end
 
 local function wait_ready(doc, timeout)
@@ -46,12 +55,13 @@ local function c_doc(text, filename)
 end
 
 test.describe("core.treesitter phase 3 document integration", function()
-  test.it("registry loads C config", function()
+  test.it("registry loads C config and highlight query", function()
     registry.reload()
     local config = registry.get("example.c", "")
     test.ok(config)
     test.equal(config.id, "c")
     test.equal(config.grammar, "c")
+    test.ok(config.query_sources.highlights)
   end)
 
   test.it("C file/document attaches state", function()
@@ -138,5 +148,82 @@ test.describe("core.treesitter phase 3 document integration", function()
     test.equal(doc.treesitter, nil)
     treesitter.poll_all()
     test.equal(doc.treesitter, nil)
+  end)
+
+  test.it("render line falls back to tokenizer while Tree-sitter is unready", function()
+    local doc = c_doc("int main(void) { return VALUE; }")
+    local line = doc.highlighter:get_render_line(1)
+    test.equal(line.source, "tokenizer")
+    doc:on_close()
+  end)
+
+  test.it("render line uses Tree-sitter highlight tokens when ready", function()
+    local doc = c_doc("int main(void) { return VALUE; }")
+    test.ok(wait_ready(doc))
+    local line = doc.highlighter:get_render_line(1)
+    test.equal(line.source, "treesitter")
+    test.equal(token_type_for_text(line.tokens, "int"), "type.builtin")
+    test.equal(token_type_for_text(line.tokens, "main"), "function")
+    test.equal(token_type_for_text(line.tokens, "return"), "keyword")
+    test.equal(token_type_for_text(line.tokens, "VALUE"), "constant")
+    doc:on_close()
+  end)
+
+  test.it("stale-unrenderable documents fall back to tokenizer render tokens", function()
+    local doc = c_doc("int value(void) { return 1; }")
+    test.ok(wait_ready(doc))
+    doc.treesitter.stale_unrenderable = true
+    local line = doc.highlighter:get_render_line(1)
+    test.equal(line.source, "tokenizer")
+    doc:on_close()
+  end)
+
+  test.it("span resolver is deterministic for overlaps and priority", function()
+    local tokens = ts_highlight.resolve_line_tokens("abcdef\n", 0, 7, {
+      { capture = "variable", start_byte = 0, end_byte = 6, priority = 0, pattern_index = 0, capture_index = 0, order = 0 },
+      { capture = "function.call", start_byte = 1, end_byte = 5, priority = 0, pattern_index = 1, capture_index = 0, order = 1 },
+      { capture = "keyword", start_byte = 2, end_byte = 4, priority = 5, pattern_index = 0, capture_index = 0, order = 2 },
+    })
+    test.same(tokens, {
+      "variable", "a",
+      "function.call", "b",
+      "keyword", "cd",
+      "function.call", "e",
+      "variable", "f",
+      "normal", "\n",
+    })
+  end)
+
+  test.it("query predicates and priority directives filter captures", function()
+    local state = assert(native.new_document_state("c", { parse_timeout_ms = 5000 }))
+    assert(state:schedule_parse({ "int ABC = 1; int value = 2;\n" }, 1, nil))
+    local status = wait_native_poll(state, 1)
+    test.equal(status, "ready")
+    local query = assert(native.compile_query("c", "predicate-test", [[
+      ((identifier) @constant (#match? @constant "^[A-Z]+$") (#set! priority 2))
+      ((identifier) @variable (#not-match? @variable "^[A-Z]+$"))
+      ((identifier) @constant (#eq? @constant "ABC"))
+      ((identifier) @variable (#not-eq? @variable "ABC"))
+      ((identifier) @constant (#any-of? @constant "ABC" "XYZ"))
+      ((identifier) @variable (#not-any-of? @variable "ABC" "XYZ"))
+    ]]))
+    local captures = assert(state:query_captures(query, 0, #"int ABC = 1; int value = 2;\n", {
+      match_limit = 128,
+      max_captures = 128,
+      timeout_ms = 100,
+    }))
+    local constants, variables, priority_constants = 0, 0, 0
+    for _, capture in ipairs(captures) do
+      if capture.capture == "constant" then
+        constants = constants + 1
+        if capture.priority == 2 then priority_constants = priority_constants + 1 end
+      elseif capture.capture == "variable" then
+        variables = variables + 1
+      end
+    end
+    test.ok(constants >= 3)
+    test.ok(variables >= 3)
+    test.ok(priority_constants >= 1)
+    state:close()
   end)
 end)

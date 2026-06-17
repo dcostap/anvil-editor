@@ -408,6 +408,142 @@ static int state_poll(lua_State *L) {
   return 3;
 }
 
+typedef struct LuaCaptureCopy {
+  char *name;
+  uint32_t name_len;
+  uint32_t start_byte;
+  uint32_t end_byte;
+  TSPoint start_point;
+  TSPoint end_point;
+  int32_t priority;
+  uint32_t pattern_index;
+  uint32_t capture_index;
+  uint32_t order;
+} LuaCaptureCopy;
+
+typedef struct LuaCaptureCollectContext {
+  LuaCaptureCopy *items;
+  uint32_t count;
+  uint32_t capacity;
+  bool failed;
+} LuaCaptureCollectContext;
+
+static void free_capture_copies(LuaCaptureCollectContext *context) {
+  if (!context) return;
+  for (uint32_t i = 0; i < context->count; i++) free(context->items[i].name);
+  free(context->items);
+  context->items = NULL;
+  context->count = 0;
+  context->capacity = 0;
+}
+
+static bool collect_query_capture(const AnvilTSQueryCapture *capture, void *payload) {
+  LuaCaptureCollectContext *context = (LuaCaptureCollectContext *) payload;
+  if (context->count == context->capacity) {
+    uint32_t next_capacity = context->capacity ? context->capacity * 2 : 64;
+    LuaCaptureCopy *next = (LuaCaptureCopy *) realloc(context->items, sizeof(*next) * next_capacity);
+    if (!next) {
+      context->failed = true;
+      return false;
+    }
+    context->items = next;
+    context->capacity = next_capacity;
+  }
+  LuaCaptureCopy *copy = &context->items[context->count];
+  memset(copy, 0, sizeof(*copy));
+  copy->name = (char *) malloc((size_t) capture->name_len + 1);
+  if (!copy->name) {
+    context->failed = true;
+    return false;
+  }
+  memcpy(copy->name, capture->name, capture->name_len);
+  copy->name[capture->name_len] = '\0';
+  copy->name_len = capture->name_len;
+  copy->start_byte = capture->start_byte;
+  copy->end_byte = capture->end_byte;
+  copy->start_point = capture->start_point;
+  copy->end_point = capture->end_point;
+  copy->priority = capture->priority;
+  copy->pattern_index = capture->pattern_index;
+  copy->capture_index = capture->capture_index;
+  copy->order = capture->order;
+  context->count++;
+  return true;
+}
+
+static void push_capture_copy(lua_State *L, const LuaCaptureCopy *capture) {
+  lua_newtable(L);
+  lua_pushlstring(L, capture->name, capture->name_len);
+  lua_setfield(L, -2, "capture");
+  lua_pushinteger(L, (lua_Integer) capture->start_byte);
+  lua_setfield(L, -2, "start_byte");
+  lua_pushinteger(L, (lua_Integer) capture->end_byte);
+  lua_setfield(L, -2, "end_byte");
+  lua_pushinteger(L, (lua_Integer) capture->start_point.row + 1);
+  lua_setfield(L, -2, "start_line");
+  lua_pushinteger(L, (lua_Integer) capture->start_point.column + 1);
+  lua_setfield(L, -2, "start_col");
+  lua_pushinteger(L, (lua_Integer) capture->end_point.row + 1);
+  lua_setfield(L, -2, "end_line");
+  lua_pushinteger(L, (lua_Integer) capture->end_point.column + 1);
+  lua_setfield(L, -2, "end_col");
+  lua_pushinteger(L, (lua_Integer) capture->priority);
+  lua_setfield(L, -2, "priority");
+  lua_pushinteger(L, (lua_Integer) capture->pattern_index);
+  lua_setfield(L, -2, "pattern_index");
+  lua_pushinteger(L, (lua_Integer) capture->capture_index);
+  lua_setfield(L, -2, "capture_index");
+  lua_pushinteger(L, (lua_Integer) capture->order);
+  lua_setfield(L, -2, "order");
+}
+
+static int state_query_captures(lua_State *L) {
+  AnvilTSStateUserdata *state_userdata = check_state(L, 1);
+  AnvilTSQueryUserdata *query_userdata = check_query(L, 2);
+  luaL_argcheck(L, state_userdata->state != NULL, 1, "closed Tree-sitter document state");
+  luaL_argcheck(L, query_userdata->query != NULL, 2, "closed Tree-sitter query");
+  uint32_t byte_start = (uint32_t) luaL_checkinteger(L, 3);
+  uint32_t byte_end = (uint32_t) luaL_checkinteger(L, 4);
+  uint32_t match_limit = option_uint32(L, 5, "match_limit", 50000);
+  uint32_t max_captures = option_uint32(L, 5, "max_captures", 50000);
+  uint32_t timeout_ms = option_uint32(L, 5, "timeout_ms", 8);
+
+  LuaCaptureCollectContext context;
+  memset(&context, 0, sizeof(context));
+  bool exceeded_match_limit = false;
+  char *error = NULL;
+  bool ok = anvil_ts_document_state_query_captures(
+    state_userdata->state,
+    query_userdata->query,
+    byte_start,
+    byte_end,
+    match_limit,
+    max_captures,
+    timeout_ms,
+    collect_query_capture,
+    &context,
+    &exceeded_match_limit,
+    &error
+  );
+  if (!ok) {
+    lua_pushnil(L);
+    lua_pushstring(L, error ? error : (context.failed ? "out of memory collecting Tree-sitter captures" : "Tree-sitter query failed"));
+    free(error);
+    free_capture_copies(&context);
+    return 2;
+  }
+
+  lua_newtable(L);
+  for (uint32_t i = 0; i < context.count; i++) {
+    push_capture_copy(L, &context.items[i]);
+    lua_rawseti(L, -2, (int) i + 1);
+  }
+  free_capture_copies(&context);
+  lua_pushboolean(L, exceeded_match_limit);
+  lua_setfield(L, -2, "exceeded_match_limit");
+  return 1;
+}
+
 static int state_cancel(lua_State *L) {
   AnvilTSStateUserdata *userdata = check_state(L, 1);
   if (userdata->state) anvil_ts_document_state_cancel(userdata->state);
@@ -488,6 +624,7 @@ static const luaL_Reg state_methods[] = {
   { "has_tree", state_has_tree },
   { "schedule_parse", state_schedule_parse },
   { "poll", state_poll },
+  { "query_captures", state_query_captures },
   { "cancel", state_cancel },
   { "close", state_close },
   { NULL, NULL }

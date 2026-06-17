@@ -841,7 +841,7 @@ function DocView:get_col_x_offset(line, col)
   local _, indent_size = self.doc:get_indent_info()
   default_font:set_tab_size(indent_size)
   local scol = column > 1 and column or nil
-  for _, type, text in self.doc.highlighter:each_token(line, scol) do
+  for _, type, text in self.doc.highlighter:each_render_token(line, scol) do
     local font = style.syntax_fonts[type] or default_font
     if font ~= default_font then font:set_tab_size(indent_size) end
     local length = #text
@@ -903,7 +903,7 @@ function DocView:get_x_offset_col(line, x)
   local default_font = self:get_font()
   local _, indent_size = self.doc:get_indent_info()
   default_font:set_tab_size(indent_size)
-  for _, type, text in self.doc.highlighter:each_token(line) do
+  for _, type, text in self.doc.highlighter:each_render_token(line) do
     local font = style.syntax_fonts[type] or default_font
     if font ~= default_font then font:set_tab_size(indent_size) end
     local width = font:get_width(text, {tab_offset = xoffset})
@@ -1530,7 +1530,7 @@ function DocView:draw_line_text(line, x, y)
   local tx, ty = x, y + self:get_line_text_y_offset()
   local last_token = nil
   local get_line_start = stats and system.get_time()
-  local tokens = self.doc.highlighter:get_line(line).tokens
+  local tokens = self.doc.highlighter:get_render_line(line).tokens
   if stats then stats.highlighter_get_line_ms = stats.highlighter_get_line_ms + (system.get_time() - get_line_start) * 1000 end
   local tokens_count = #tokens
   if tokens_count > 0 and string.sub(tokens[tokens_count], -1) == "\n" then
@@ -1553,7 +1553,7 @@ function DocView:draw_line_text(line, x, y)
     return tx > self.position.x + self.size.x
   end
   local token_loop_start = stats and system.get_time()
-  for tidx, type, text in self.doc.highlighter:each_token(line) do
+  for tidx, type, text in self.doc.highlighter:each_render_token(line) do
     if stats then stats.tokens = stats.tokens + 1 end
     local color = style.syntax[type] or style.syntax["normal"]
     local font = style.syntax_fonts[type] or default_font

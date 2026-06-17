@@ -50,6 +50,13 @@ typedef struct {
   bool cancel;
 } ProgressState;
 
+typedef struct {
+  uint32_t total;
+  uint32_t constants;
+  uint32_t variables;
+  uint32_t priority_constants;
+} CaptureStats;
+
 static void offset_index_free(OffsetIndex *index) {
   free(index->line_starts);
   free(index->normalized);
@@ -462,6 +469,74 @@ static int test_service_shutdown_cleanup(void) {
   return 0;
 }
 
+static bool count_service_capture(const AnvilTSQueryCapture *capture, void *payload) {
+  CaptureStats *stats = (CaptureStats *) payload;
+  stats->total++;
+  if (capture->name_len == strlen("constant") && strncmp(capture->name, "constant", capture->name_len) == 0) {
+    stats->constants++;
+    if (capture->priority == 2) stats->priority_constants++;
+  }
+  if (capture->name_len == strlen("variable") && strncmp(capture->name, "variable", capture->name_len) == 0) {
+    stats->variables++;
+  }
+  return true;
+}
+
+static int test_service_query_predicates_and_directives(void) {
+  const char *source = "int ABC = 1; int value = 2;\n";
+  AnvilTSDocumentState *state = anvil_ts_document_state_new(checked_c_registry_language(), 5000);
+  CHECK(state != NULL);
+  CHECK(anvil_ts_document_state_schedule_parse(state, new_snapshot_from_single_line(source), 40, NULL));
+  AnvilTSPollResult result;
+  CHECK(wait_poll_until_done(state, 40, &result, 3000));
+  CHECK(result.status == ANVIL_TS_STATE_READY);
+
+  const char *query_source =
+    "((identifier) @constant (#match? @constant \"^[A-Z]+$\") (#set! priority 2))\n"
+    "((identifier) @variable (#not-match? @variable \"^[A-Z]+$\"))\n"
+    "((identifier) @constant (#eq? @constant \"ABC\"))\n"
+    "((identifier) @variable (#not-eq? @variable \"ABC\"))\n"
+    "((identifier) @constant (#any-of? @constant \"ABC\" \"XYZ\"))\n"
+    "((identifier) @variable (#not-any-of? @variable \"ABC\" \"XYZ\"))\n";
+  uint32_t error_offset = 0;
+  TSQueryError error_type = TSQueryErrorNone;
+  TSQuery *query = ts_query_new(
+    anvil_ts_language_ptr(checked_c_registry_language()),
+    query_source,
+    (uint32_t) strlen(query_source),
+    &error_offset,
+    &error_type
+  );
+  CHECK(query != NULL);
+
+  CaptureStats stats = {0};
+  bool exceeded = false;
+  char *error = NULL;
+  CHECK(anvil_ts_document_state_query_captures(
+    state,
+    query,
+    0,
+    (uint32_t) strlen(source),
+    128,
+    128,
+    100,
+    count_service_capture,
+    &stats,
+    &exceeded,
+    &error
+  ));
+  CHECK(error == NULL);
+  CHECK(!exceeded);
+  CHECK(stats.constants >= 3);
+  CHECK(stats.variables >= 3);
+  CHECK(stats.priority_constants >= 1);
+
+  ts_query_delete(query);
+  anvil_ts_document_state_close(state);
+  anvil_ts_document_state_release(state);
+  return 0;
+}
+
 static int test_query_cancellation_smoke(void) {
   const char *source = "int a0; int a1; int a2; int a3; int a4;\n";
   TSParser *parser = ts_parser_new();
@@ -543,6 +618,7 @@ int main(void) {
   result |= test_stale_generation_discard();
   result |= test_close_while_queued_or_running();
   result |= test_service_shutdown_cleanup();
+  result |= test_service_query_predicates_and_directives();
   result |= test_query_cancellation_smoke();
   result |= test_parse_cancellation_smoke();
   anvil_ts_service_shutdown();

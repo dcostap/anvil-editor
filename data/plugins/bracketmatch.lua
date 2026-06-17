@@ -45,6 +45,14 @@ local function get_token_at(doc, line, col)
   end
 end
 
+local function get_render_token_at(doc, line, col)
+  local column = 0
+  for _,type,text in doc.highlighter:each_render_token(line) do
+    column = column + #text
+    if column >= col then return type, text end
+  end
+end
+
 
 --- @param doc core.doc
 --- @param line integer
@@ -150,7 +158,7 @@ end
 --- @param bg_color renderer.color | boolean
 --- @param char_color renderer.color | boolean
 local function redraw_char(dv, x, y, screen_x, screen_y, width, height, line, col, bg_color, char_color)
-  local token = get_token_at(dv.doc, line, col)
+  local token = get_render_token_at(dv.doc, line, col)
   if not char_color then
     char_color = style.syntax[token]
   end

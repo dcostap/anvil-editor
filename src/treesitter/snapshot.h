@@ -13,6 +13,7 @@ extern "C" {
 
 typedef struct AnvilTSSnapshot {
   uint64_t id;
+  uint32_t refcount;
   char *bytes;
   uint32_t byte_len;
   uint32_t line_count;
@@ -31,6 +32,7 @@ AnvilTSSnapshot *anvil_ts_snapshot_new_from_lines(
   uint32_t line_count,
   char **error
 );
+void anvil_ts_snapshot_retain(AnvilTSSnapshot *snapshot);
 void anvil_ts_snapshot_free(AnvilTSSnapshot *snapshot);
 
 bool anvil_ts_snapshot_position_from_anvil(

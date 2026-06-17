@@ -9,5 +9,7 @@ return {
   headers = {},
   line_comments = { "//" },
   block_comment = { "/*", "*/" },
-  queries = {},
+  queries = {
+    highlights = "highlights.scm",
+  },
 }

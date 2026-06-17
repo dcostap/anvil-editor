@@ -981,6 +981,10 @@ Exit criteria:
 - No overlapping double-highlighting.
 - Existing tokenizer tests still pass.
 
+Phase 4 implementation note:
+
+- Completed for bundled C highlighting only. C++ grammar/config/highlighting, structure/navigation, and LSP layering remain deferred to later phases.
+
 #### Phase 5: First bundled C/C++ language support
 
 Deliverables:

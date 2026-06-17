@@ -3,6 +3,20 @@ local common = require "core.common"
 local tokenizer = require "core.tokenizer"
 local Object = require "core.object"
 
+local treesitter_highlight
+local treesitter_highlight_checked = false
+
+local function get_treesitter_highlight()
+  if not treesitter_highlight_checked then
+    local ok, module = pcall(require, "core.treesitter.highlight")
+    if ok then
+      treesitter_highlight = module
+      treesitter_highlight_checked = true
+    end
+  end
+  return treesitter_highlight
+end
+
 
 local Highlighter = Object:extend()
 
@@ -99,6 +113,7 @@ function Highlighter:soft_reset()
   for i=1,#self.lines do
     self.lines[i] = false
   end
+  self:invalidate_render_cache()
   self.first_invalid_line = 1
   self.max_wanted_line = 0
 end
@@ -110,6 +125,7 @@ end
 
 function Highlighter:insert_notify(line, n)
   self:invalidate(line)
+  self:invalidate_render_cache(line)
   local blanks = { }
   for i = 1, n do
     blanks[i] = false
@@ -119,10 +135,12 @@ end
 
 function Highlighter:remove_notify(line, n)
   self:invalidate(line)
+  self:invalidate_render_cache(line)
   common.splice(self.lines, line, n)
 end
 
 function Highlighter:batch_notify(changed_ranges)
+  self:invalidate_render_cache()
   local first_line
   for _, range in ipairs(changed_ranges or {}) do
     local line = math.min(range.old_line1 or math.huge, range.new_line1 or math.huge)
@@ -136,6 +154,18 @@ end
 function Highlighter:update_notify(line, n)
   -- plugins can hook here to be notified that lines have been retokenized
   self.doc:clear_cache(line, n)
+end
+
+function Highlighter:invalidate_render_cache(first_line, last_line)
+  local ts_highlight = get_treesitter_highlight()
+  if ts_highlight and self.doc then
+    ts_highlight.invalidate_doc(self.doc, first_line, last_line)
+  end
+  if self.doc and first_line then
+    self.doc:clear_cache(first_line, (last_line or first_line) - first_line)
+  elseif self.doc then
+    self.doc:clear_cache(1, #self.doc.lines)
+  end
 end
 
 
@@ -167,6 +197,24 @@ end
 
 function Highlighter:each_token(idx, scol)
   return tokenizer.each_token(self:get_line(idx).tokens, scol)
+end
+
+function Highlighter:get_render_line(idx)
+  if not self.doc then return {text="", tokens={"normal", ""}, source="tokenizer"} end
+  local text = self.doc:get_utf8_line(idx) or ""
+  local ts_highlight = get_treesitter_highlight()
+  if ts_highlight then
+    local tokens = ts_highlight.line_tokens(self.doc, idx)
+    if tokens then
+      return { text = text, tokens = tokens, source = "treesitter" }
+    end
+  end
+  local line = self:get_line(idx)
+  return { text = line.text, tokens = line.tokens, source = "tokenizer" }
+end
+
+function Highlighter:each_render_token(idx, scol)
+  return tokenizer.each_token(self:get_render_line(idx).tokens, scol)
 end
 
 return Highlighter

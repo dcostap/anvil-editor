@@ -37,6 +37,24 @@ typedef struct AnvilTSEdit {
   TSInputEdit input_edit;
 } AnvilTSEdit;
 
+typedef struct AnvilTSQueryCapture {
+  const char *name;
+  uint32_t name_len;
+  uint32_t start_byte;
+  uint32_t end_byte;
+  TSPoint start_point;
+  TSPoint end_point;
+  int32_t priority;
+  uint32_t pattern_index;
+  uint32_t capture_index;
+  uint32_t order;
+} AnvilTSQueryCapture;
+
+typedef bool (*AnvilTSQueryCaptureCallback)(
+  const AnvilTSQueryCapture *capture,
+  void *payload
+);
+
 AnvilTSDocumentState *anvil_ts_document_state_new(
   const AnvilTSLanguage *language,
   uint32_t parse_timeout_ms
@@ -55,6 +73,19 @@ bool anvil_ts_document_state_status_snapshot(
 uint64_t anvil_ts_document_state_generation(const AnvilTSDocumentState *state);
 uint64_t anvil_ts_document_state_tree_generation(const AnvilTSDocumentState *state);
 bool anvil_ts_document_state_has_tree(const AnvilTSDocumentState *state);
+bool anvil_ts_document_state_query_captures(
+  AnvilTSDocumentState *state,
+  const TSQuery *query,
+  uint32_t byte_start,
+  uint32_t byte_end,
+  uint32_t match_limit,
+  uint32_t max_captures,
+  uint32_t timeout_ms,
+  AnvilTSQueryCaptureCallback callback,
+  void *payload,
+  bool *exceeded_match_limit,
+  char **error
+);
 
 bool anvil_ts_document_state_schedule_parse(
   AnvilTSDocumentState *state,

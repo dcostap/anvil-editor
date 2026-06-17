@@ -4,6 +4,9 @@
 
 #include <SDL3/SDL.h>
 
+#define PCRE2_CODE_UNIT_WIDTH 8
+#include <pcre2.h>
+
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -359,6 +362,306 @@ bool anvil_ts_document_state_has_tree(const AnvilTSDocumentState *state) {
   return has_tree;
 }
 
+typedef struct AnvilTSQueryRun {
+  uint64_t started_ticks;
+  uint32_t timeout_ms;
+} AnvilTSQueryRun;
+
+static bool query_progress(TSQueryCursorState *cursor_state) {
+  AnvilTSQueryRun *run = (AnvilTSQueryRun *) cursor_state->payload;
+  if (!run || run->timeout_ms == 0) return false;
+  return SDL_GetTicks() - run->started_ticks >= run->timeout_ms;
+}
+
+static const char *query_string_value(const TSQuery *query, uint32_t id, uint32_t *len) {
+  const char *value = ts_query_string_value_for_id(query, id, len);
+  return value ? value : "";
+}
+
+static bool query_step_text_equals(const TSQuery *query, const TSQueryPredicateStep *step, const char *text) {
+  if (!step || step->type != TSQueryPredicateStepTypeString || !text) return false;
+  uint32_t len = 0;
+  const char *value = query_string_value(query, step->value_id, &len);
+  return strlen(text) == len && strncmp(value, text, len) == 0;
+}
+
+static const TSQueryCapture *match_capture_for_id(const TSQueryMatch *match, uint32_t capture_id) {
+  for (uint16_t i = 0; i < match->capture_count; i++) {
+    if (match->captures[i].index == capture_id) return &match->captures[i];
+  }
+  return NULL;
+}
+
+static bool capture_text_range(
+  const AnvilTSSnapshot *snapshot,
+  const TSQueryCapture *capture,
+  uint32_t *start,
+  uint32_t *end
+) {
+  if (!snapshot || !capture || !start || !end) return false;
+  *start = ts_node_start_byte(capture->node);
+  *end = ts_node_end_byte(capture->node);
+  if (*end < *start || *end > snapshot->byte_len) return false;
+  return true;
+}
+
+static bool predicate_arg_text(
+  const TSQuery *query,
+  const AnvilTSSnapshot *snapshot,
+  const TSQueryMatch *match,
+  const TSQueryPredicateStep *step,
+  const char **text,
+  uint32_t *len
+) {
+  if (!query || !snapshot || !match || !step || !text || !len) return false;
+  if (step->type == TSQueryPredicateStepTypeString) {
+    *text = query_string_value(query, step->value_id, len);
+    return true;
+  }
+  if (step->type == TSQueryPredicateStepTypeCapture) {
+    const TSQueryCapture *capture = match_capture_for_id(match, step->value_id);
+    uint32_t start = 0, end = 0;
+    if (!capture_text_range(snapshot, capture, &start, &end)) return false;
+    *text = snapshot->bytes + start;
+    *len = end - start;
+    return true;
+  }
+  return false;
+}
+
+static bool text_equals(const char *a, uint32_t a_len, const char *b, uint32_t b_len) {
+  return a_len == b_len && (a_len == 0 || strncmp(a, b, a_len) == 0);
+}
+
+static bool text_matches_regex(const char *text, uint32_t text_len, const char *pattern, uint32_t pattern_len, char **error) {
+  int error_number = 0;
+  PCRE2_SIZE error_offset = 0;
+  pcre2_code *re = pcre2_compile(
+    (PCRE2_SPTR) pattern,
+    pattern_len,
+    PCRE2_UTF,
+    &error_number,
+    &error_offset,
+    NULL
+  );
+  if (!re) {
+    service_set_error(error, "invalid Tree-sitter #match? predicate regex");
+    return false;
+  }
+  pcre2_match_data *match_data = pcre2_match_data_create_from_pattern(re, NULL);
+  if (!match_data) {
+    pcre2_code_free(re);
+    service_set_error(error, "out of memory evaluating Tree-sitter #match? predicate");
+    return false;
+  }
+  int rc = pcre2_match(re, (PCRE2_SPTR) text, text_len, 0, 0, match_data, NULL);
+  pcre2_match_data_free(match_data);
+  pcre2_code_free(re);
+  return rc >= 0;
+}
+
+static int32_t query_pattern_priority(const TSQuery *query, uint32_t pattern_index) {
+  uint32_t step_count = 0;
+  const TSQueryPredicateStep *steps = ts_query_predicates_for_pattern(query, pattern_index, &step_count);
+  int32_t priority = 0;
+  for (uint32_t i = 0; i < step_count;) {
+    const TSQueryPredicateStep *op = &steps[i++];
+    uint32_t arg_start = i;
+    while (i < step_count && steps[i].type != TSQueryPredicateStepTypeDone) i++;
+    uint32_t arg_end = i;
+    if (i < step_count && steps[i].type == TSQueryPredicateStepTypeDone) i++;
+    if (query_step_text_equals(query, op, "set!") && arg_end >= arg_start + 2 &&
+        query_step_text_equals(query, &steps[arg_start], "priority") &&
+        steps[arg_start + 1].type == TSQueryPredicateStepTypeString) {
+      uint32_t len = 0;
+      const char *value = query_string_value(query, steps[arg_start + 1].value_id, &len);
+      char buffer[32];
+      uint32_t copy_len = len < sizeof(buffer) - 1 ? len : (uint32_t) sizeof(buffer) - 1;
+      memcpy(buffer, value, copy_len);
+      buffer[copy_len] = '\0';
+      priority = (int32_t) strtol(buffer, NULL, 10);
+    }
+  }
+  return priority;
+}
+
+static bool query_match_predicates(
+  const TSQuery *query,
+  const AnvilTSSnapshot *snapshot,
+  const TSQueryMatch *match,
+  char **error
+) {
+  uint32_t step_count = 0;
+  const TSQueryPredicateStep *steps = ts_query_predicates_for_pattern(query, match->pattern_index, &step_count);
+  for (uint32_t i = 0; i < step_count;) {
+    const TSQueryPredicateStep *op = &steps[i++];
+    uint32_t arg_start = i;
+    while (i < step_count && steps[i].type != TSQueryPredicateStepTypeDone) i++;
+    uint32_t arg_end = i;
+    if (i < step_count && steps[i].type == TSQueryPredicateStepTypeDone) i++;
+
+    if (query_step_text_equals(query, op, "set!")) {
+      continue;
+    }
+
+    bool negate = false;
+    enum { PRED_UNKNOWN, PRED_EQ, PRED_MATCH, PRED_ANY_OF } kind = PRED_UNKNOWN;
+    if (query_step_text_equals(query, op, "eq?")) kind = PRED_EQ;
+    else if (query_step_text_equals(query, op, "not-eq?")) { kind = PRED_EQ; negate = true; }
+    else if (query_step_text_equals(query, op, "match?")) kind = PRED_MATCH;
+    else if (query_step_text_equals(query, op, "not-match?")) { kind = PRED_MATCH; negate = true; }
+    else if (query_step_text_equals(query, op, "any-of?")) kind = PRED_ANY_OF;
+    else if (query_step_text_equals(query, op, "not-any-of?")) { kind = PRED_ANY_OF; negate = true; }
+    else {
+      service_set_error(error, "unsupported Tree-sitter query predicate");
+      return false;
+    }
+
+    bool result = false;
+    if (kind == PRED_EQ) {
+      if (arg_end < arg_start + 2) return false;
+      const char *a = NULL, *b = NULL;
+      uint32_t a_len = 0, b_len = 0;
+      if (!predicate_arg_text(query, snapshot, match, &steps[arg_start], &a, &a_len) ||
+          !predicate_arg_text(query, snapshot, match, &steps[arg_start + 1], &b, &b_len)) return false;
+      result = text_equals(a, a_len, b, b_len);
+    } else if (kind == PRED_MATCH) {
+      if (arg_end < arg_start + 2) return false;
+      const char *text = NULL, *pattern = NULL;
+      uint32_t text_len = 0, pattern_len = 0;
+      if (!predicate_arg_text(query, snapshot, match, &steps[arg_start], &text, &text_len) ||
+          !predicate_arg_text(query, snapshot, match, &steps[arg_start + 1], &pattern, &pattern_len)) return false;
+      result = text_matches_regex(text, text_len, pattern, pattern_len, error);
+      if (error && *error) return false;
+    } else if (kind == PRED_ANY_OF) {
+      if (arg_end < arg_start + 2) return false;
+      const char *text = NULL;
+      uint32_t text_len = 0;
+      if (!predicate_arg_text(query, snapshot, match, &steps[arg_start], &text, &text_len)) return false;
+      for (uint32_t arg = arg_start + 1; arg < arg_end; arg++) {
+        const char *candidate = NULL;
+        uint32_t candidate_len = 0;
+        if (!predicate_arg_text(query, snapshot, match, &steps[arg], &candidate, &candidate_len)) return false;
+        if (text_equals(text, text_len, candidate, candidate_len)) {
+          result = true;
+          break;
+        }
+      }
+    }
+    if (negate) result = !result;
+    if (!result) return false;
+  }
+  return true;
+}
+
+bool anvil_ts_document_state_query_captures(
+  AnvilTSDocumentState *state,
+  const TSQuery *query,
+  uint32_t byte_start,
+  uint32_t byte_end,
+  uint32_t match_limit,
+  uint32_t max_captures,
+  uint32_t timeout_ms,
+  AnvilTSQueryCaptureCallback callback,
+  void *payload,
+  bool *exceeded_match_limit,
+  char **error
+) {
+  if (error) *error = NULL;
+  if (exceeded_match_limit) *exceeded_match_limit = false;
+  if (!state || !query || !callback) {
+    service_set_error(error, "invalid Tree-sitter query request");
+    return false;
+  }
+  if (!service_ensure_initialized() || !service_lock()) {
+    service_set_error(error, "failed to lock Tree-sitter service");
+    return false;
+  }
+  if (!state->current_tree || !state->current_snapshot || state->closed) {
+    service_unlock();
+    service_set_error(error, "Tree-sitter tree is not ready");
+    return false;
+  }
+
+  TSTree *tree = state->current_tree;
+  AnvilTSSnapshot *snapshot = state->current_snapshot;
+  if (byte_end > snapshot->byte_len) byte_end = snapshot->byte_len;
+  if (byte_start > byte_end) byte_start = byte_end;
+  TSNode root = ts_tree_root_node(tree);
+  TSQueryCursor *cursor = ts_query_cursor_new();
+  if (!cursor) {
+    service_unlock();
+    service_set_error(error, "failed to allocate Tree-sitter query cursor");
+    return false;
+  }
+  if (match_limit > 0) ts_query_cursor_set_match_limit(cursor, match_limit);
+  ts_query_cursor_set_byte_range(cursor, byte_start, byte_end);
+  AnvilTSQueryRun run;
+  run.started_ticks = SDL_GetTicks();
+  run.timeout_ms = timeout_ms;
+  TSQueryCursorOptions options;
+  options.payload = &run;
+  options.progress_callback = query_progress;
+  ts_query_cursor_exec_with_options(cursor, query, root, &options);
+
+  bool ok = true;
+  uint32_t order = 0;
+  TSQueryMatch match;
+  char *predicate_error = NULL;
+  while (ts_query_cursor_next_match(cursor, &match)) {
+    if (!query_match_predicates(query, snapshot, &match, &predicate_error)) {
+      if (predicate_error) {
+        ok = false;
+        break;
+      }
+      continue;
+    }
+    int32_t priority = query_pattern_priority(query, match.pattern_index);
+    for (uint16_t i = 0; i < match.capture_count; i++) {
+      const TSQueryCapture *capture = &match.captures[i];
+      uint32_t start = ts_node_start_byte(capture->node);
+      uint32_t end = ts_node_end_byte(capture->node);
+      if (end <= byte_start || start >= byte_end || end <= start) continue;
+      if (max_captures > 0 && order >= max_captures) {
+        service_set_error(error, "Tree-sitter query capture limit exceeded");
+        ok = false;
+        goto done;
+      }
+      uint32_t name_len = 0;
+      const char *name = ts_query_capture_name_for_id(query, capture->index, &name_len);
+      AnvilTSQueryCapture out;
+      out.name = name;
+      out.name_len = name_len;
+      out.start_byte = start;
+      out.end_byte = end;
+      out.start_point = ts_node_start_point(capture->node);
+      out.end_point = ts_node_end_point(capture->node);
+      out.priority = priority;
+      out.pattern_index = match.pattern_index;
+      out.capture_index = capture->index;
+      out.order = order++;
+      if (!callback(&out, payload)) {
+        ok = false;
+        goto done;
+      }
+    }
+  }
+
+done:
+  if (predicate_error) {
+    service_set_error(error, predicate_error);
+    free(predicate_error);
+  }
+  if (exceeded_match_limit) *exceeded_match_limit = ts_query_cursor_did_exceed_match_limit(cursor);
+  if (exceeded_match_limit && *exceeded_match_limit && ok) {
+    service_set_error(error, "Tree-sitter query match limit exceeded");
+    ok = false;
+  }
+  ts_query_cursor_delete(cursor);
+  service_unlock();
+  return ok;
+}
+
 static bool document_state_schedule_parse_internal(
   AnvilTSDocumentState *state,
   AnvilTSSnapshot *snapshot,
@@ -409,6 +712,9 @@ static bool document_state_schedule_parse_internal(
       service_set_error(error, "failed to copy Tree-sitter tree for incremental parse");
       return false;
     }
+    anvil_ts_snapshot_retain(snapshot);
+    anvil_ts_snapshot_free(state->current_snapshot);
+    state->current_snapshot = snapshot;
   }
   SDL_SetAtomicInt(&job->cancel, 0);
   state->refcount++;

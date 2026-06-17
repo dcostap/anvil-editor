@@ -299,7 +299,7 @@ local function get_line_x_cache(self, idx, entry)
   if entry.ascii_no_tabs and not self.wrapped_settings and not syntax_fonts_key then
     fast_space_width = font:get_width(" ")
   else
-    local hline = self.doc.highlighter:get_line(idx)
+    local hline = self.doc.highlighter:get_render_line(idx)
     tokens = hline and hline.tokens
   end
 

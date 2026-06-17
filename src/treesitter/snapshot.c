@@ -47,6 +47,7 @@ AnvilTSSnapshot *anvil_ts_snapshot_new_from_lines(
   }
 
   snapshot->id = next_snapshot_id++;
+  snapshot->refcount = 1;
   snapshot->byte_len = (uint32_t) total;
   snapshot->line_count = line_count;
   snapshot->bytes = (char *) malloc((size_t) snapshot->byte_len + 1);
@@ -69,8 +70,17 @@ AnvilTSSnapshot *anvil_ts_snapshot_new_from_lines(
   return snapshot;
 }
 
+void anvil_ts_snapshot_retain(AnvilTSSnapshot *snapshot) {
+  if (!snapshot) return;
+  snapshot->refcount++;
+}
+
 void anvil_ts_snapshot_free(AnvilTSSnapshot *snapshot) {
   if (!snapshot) return;
+  if (snapshot->refcount > 1) {
+    snapshot->refcount--;
+    return;
+  }
   free(snapshot->bytes);
   free(snapshot->line_starts);
   free(snapshot->line_lengths);

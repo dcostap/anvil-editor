@@ -126,6 +126,11 @@ function treesitter.schedule_parse(doc, edit)
   ts.status = "snapshotting"
   ts.reason = nil
   ts.last_poll_changed = false
+  ts.highlight_cache = {}
+  ts.line_starts = nil
+  if doc.highlighter and doc.highlighter.invalidate_render_cache then
+    doc.highlighter:invalidate_render_cache()
+  end
   local ok, err = ts.native:schedule_parse(doc.lines, ts.generation, edit)
   if not ok then
     ts.status = "failed"
@@ -251,6 +256,11 @@ function treesitter.poll_doc(doc)
     ts.reason = reason
   end
   if changed or discarded_stale then
+    ts.highlight_cache = {}
+    ts.line_starts = nil
+    if doc.highlighter and doc.highlighter.invalidate_render_cache then
+      doc.highlighter:invalidate_render_cache()
+    end
     core.redraw = true
     log_quiet("Tree-sitter: polled %s status=%s changed=%s stale=%s generation=%d tree_generation=%d", doc_name(doc), tostring(ts.status), tostring(changed), tostring(discarded_stale), ts.generation or 0, ts.tree_generation or 0)
   end
