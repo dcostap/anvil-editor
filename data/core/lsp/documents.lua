@@ -12,6 +12,9 @@ local DEFAULT_SNAPSHOT_LIMIT = 16
 
 local clients = setmetatable({}, { __mode = "k" })
 local doc_close_handlers = {}
+local doc_metadata_handlers = {}
+local content_loaded = setmetatable({}, { __mode = "k" })
+local content_loading = setmetatable({}, { __mode = "k" })
 local patched = false
 
 local function quiet_log(...)
@@ -343,7 +346,17 @@ function documents.snapshot_for_change_id(state, change_id)
   return nil
 end
 
-function documents.on_doc_metadata_changed(doc, _reason)
+function documents.is_content_ready(doc)
+  if not doc then return false end
+  if content_loading[doc] then return false end
+  if doc.new_file then return true end
+  local path = doc_path(doc)
+  if not path then return true end
+  if not system.get_file_info(path) then return true end
+  return content_loaded[doc] == true
+end
+
+function documents.on_doc_metadata_changed(doc, reason)
   for _, state in ipairs(documents.states_for_doc(doc)) do
     local new_uri = doc_uri(doc)
     if new_uri and new_uri ~= state.uri then
@@ -353,6 +366,22 @@ function documents.on_doc_metadata_changed(doc, _reason)
       documents.attach(client, doc, opts)
     end
   end
+  for id, handler in pairs(doc_metadata_handlers) do
+    local ok, err = pcall(handler, doc, reason)
+    if not ok then
+      quiet_log("LSP document metadata handler %s failed: %s", tostring(id), tostring(err))
+    end
+  end
+end
+
+function documents.register_doc_metadata_changed_handler(id, fn)
+  assert(type(id) == "string" and id ~= "", "doc metadata handler id must be a non-empty string")
+  assert(type(fn) == "function", "doc metadata handler must be a function")
+  doc_metadata_handlers[id] = fn
+end
+
+function documents.unregister_doc_metadata_changed_handler(id)
+  doc_metadata_handlers[id] = nil
 end
 
 function documents.register_doc_close_handler(id, fn)
@@ -390,9 +419,14 @@ local function patch_doc()
 
   local old_load = Doc.load
   function Doc:load(...)
-    local result = old_load(self, ...)
+    content_loading[self] = true
+    content_loaded[self] = false
+    local result = { pcall(old_load, self, ...) }
+    content_loading[self] = nil
+    if not result[1] then error(result[2], 0) end
+    content_loaded[self] = true
     documents.on_doc_metadata_changed(self, "load")
-    return result
+    return table.unpack(result, 2)
   end
 
   local old_reset_syntax = Doc.reset_syntax

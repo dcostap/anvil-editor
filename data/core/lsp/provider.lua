@@ -248,6 +248,8 @@ function provider.unregister_client(client)
   clients[client] = nil
   cache[client] = nil
   inflight[client] = nil
+  navigation_cache[client] = nil
+  navigation_inflight[client] = nil
 end
 
 local function matching_clients(doc, feature)
@@ -326,6 +328,7 @@ function provider.clear()
   inflight = setmetatable({}, { __mode = "k" })
   navigation_cache = setmetatable({}, { __mode = "k" })
   navigation_inflight = setmetatable({}, { __mode = "k" })
+  language_intelligence.register_provider(provider)
 end
 
 function provider.document_outline(doc, opts)

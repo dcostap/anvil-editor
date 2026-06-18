@@ -439,6 +439,8 @@ function lsp_config.select_for_path(definitions, path, options)
           definition = definition,
           available = false,
           reason = reason or (status and status.reason) or "unavailable",
+          executable_status = status,
+          command = status and status.command,
         }
       end
     end

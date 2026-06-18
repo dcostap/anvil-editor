@@ -61,12 +61,11 @@ local function read_until(predicate)
   end
 end
 
-local function initialize_result(position_encoding)
+local function initialize_result(position_encoding, capabilities)
+  capabilities = capabilities or { textDocumentSync = 0 }
+  capabilities.positionEncoding = capabilities.positionEncoding or position_encoding or "utf-16"
   return {
-    capabilities = {
-      positionEncoding = position_encoding or "utf-16",
-      textDocumentSync = 0,
-    },
+    capabilities = capabilities,
     serverInfo = {
       name = "anvil-fake-lsp",
       version = "8.4",
@@ -127,6 +126,49 @@ elseif mode == "crash_before_initialize" then
   os.exit(42)
 elseif mode == "delayed_initialize" then
   serve_lifecycle("utf-16", { delay_initialize = 0.6 })
+elseif mode == "manager_integration" then
+  local initialize = assert(read_until(function(message)
+    return message.kind == "request" and message.method == "initialize"
+  end))
+  send(jsonrpc.response(initialize.id, initialize_result("utf-16", {
+    textDocumentSync = 1,
+    documentSymbolProvider = true,
+    definitionProvider = true,
+    referencesProvider = true,
+  })))
+  assert(read_until(function(message)
+    return message.kind == "notification" and message.method == "initialized"
+  end))
+  while true do
+    local message = assert(read_message())
+    if message.kind == "notification" and message.method == "textDocument/didOpen" then
+      local text_document = message.params and message.params.textDocument or {}
+      local text = tostring(text_document.text or "")
+      write_stderr("didOpen=" .. tostring(text_document.uri) .. "\n")
+      write_stderr("didOpenTextLength=" .. tostring(#text) .. "\n")
+      write_stderr("didOpenText=" .. text:gsub("\r", "\\r"):gsub("\n", "\\n") .. "\n")
+      if os.getenv("ANVIL_LSP_FAKE_SERVER_PUBLISH_DIAGNOSTICS") == "1" then
+        send(jsonrpc.notification("textDocument/publishDiagnostics", {
+          textDocument = { uri = text_document.uri, version = text_document.version },
+          diagnostics = {
+            {
+              range = { start = { line = 0, character = 0 }, ["end"] = { line = 0, character = 4 } },
+              severity = 1,
+              source = "fake-lsp",
+              message = "fake diagnostic",
+            },
+          },
+        }))
+      end
+    elseif message.kind == "notification" and message.method == "textDocument/didChange" then
+      local text_document = message.params and message.params.textDocument or {}
+      write_stderr("didChange=" .. tostring(text_document.version) .. "\n")
+    elseif message.kind == "request" and message.method == "shutdown" then
+      send(jsonrpc.response(message.id, lsp_json.null))
+    elseif message.kind == "notification" and message.method == "exit" then
+      return
+    end
+  end
 elseif mode == "server_requests" then
   serve_lifecycle("utf-16", {
     after_initialized = function()
