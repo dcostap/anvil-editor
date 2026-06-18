@@ -346,7 +346,7 @@ Phase 0 must pin exact wrap revisions. Selected Phase 0/1 pins:
 ```text
 tree-sitter runtime: https://github.com/tree-sitter/tree-sitter.git, commit 519d511488497f6af43698d4c856f4b3f1f0b80c, version 0.27.0.
 tree-sitter-c:       https://github.com/tree-sitter/tree-sitter-c.git, commit b780e47fc780ddc8da13afa35a3f4ed5c157823d, version 0.24.2.
-tree-sitter-cpp:     deferred; do not let C++ packaging delay the C native proof.
+tree-sitter-cpp:     https://github.com/tree-sitter/tree-sitter-cpp.git, commit f41e1a044c8a84ea9fa8577fdd2eab92ec96de02, version 0.23.4.
 ```
 
 Do not use floating branches such as `master` or `main`. A commit hash is acceptable when a tag is unavailable, but it must be documented in this file and in license/version notes.
@@ -983,7 +983,7 @@ Exit criteria:
 
 Phase 4 implementation note:
 
-- Completed for bundled C highlighting only. C++ grammar/config/highlighting, structure/navigation, and LSP layering remain deferred to later phases.
+- Completed for bundled C highlighting only. Structure/navigation and LSP layering remain deferred to later phases. C++ highlighting is added in Phase 5.
 
 #### Phase 5: First bundled C/C++ language support
 
@@ -1000,6 +1000,10 @@ Exit criteria:
 - C and C++ files highlight through Tree-sitter when ready.
 - Missing grammar/query can be simulated and falls back quietly.
 - Dev portable install includes `data/treesitter` junction/data.
+
+Phase 5 implementation note:
+
+- Completed with bundled `tree-sitter-cpp` 0.23.4 and first-party C++ highlight query/config. Structure/navigation remains deferred.
 
 #### Phase 6: Structure/navigation
 

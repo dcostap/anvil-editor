@@ -4,13 +4,16 @@
 
 - Tree-sitter runtime: `tree-sitter/tree-sitter` commit `519d511488497f6af43698d4c856f4b3f1f0b80c`, version `0.27.0`.
 - Tree-sitter C grammar: `tree-sitter/tree-sitter-c` commit `b780e47fc780ddc8da13afa35a3f4ed5c157823d`, version `0.24.2`.
+- Tree-sitter C++ grammar: `tree-sitter/tree-sitter-cpp` commit `f41e1a044c8a84ea9fa8577fdd2eab92ec96de02`, version `0.23.4`.
 
 The build uses tracked Meson wraps plus tracked packagefile Meson build definitions:
 
 - `subprojects/tree-sitter.wrap`
 - `subprojects/tree-sitter-c.wrap`
+- `subprojects/tree-sitter-cpp.wrap`
 - `subprojects/packagefiles/tree-sitter/meson.build`
 - `subprojects/packagefiles/tree-sitter-c/meson.build`
+- `subprojects/packagefiles/tree-sitter-cpp/meson.build`
 
 ## API notes
 
@@ -23,10 +26,11 @@ Runtime `0.27.0` provides the APIs assumed by `TREE_SITTER_PLAN.md` for Phase 1:
 Runtime ABI version: `15`.
 Minimum compatible grammar ABI version: `13`.
 Tree-sitter C grammar ABI version: `15`.
+Tree-sitter C++ grammar ABI version: `14`.
 
 ## Licenses
 
-Both dependencies are MIT licensed.
+All Tree-sitter dependencies listed here are MIT licensed.
 
 ### Tree-sitter runtime
 
@@ -60,6 +64,28 @@ in the Software without restriction, including without limitation the rights to
 use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
 of the Software, and to permit persons to whom the Software is furnished to do
 so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+### Tree-sitter C++ grammar
+
+Copyright (c) 2014 Max Brunsfeld
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
 The above copyright notice and this permission notice shall be included in all
 copies or substantial portions of the Software.

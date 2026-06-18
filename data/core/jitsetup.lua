@@ -94,6 +94,7 @@ end
 
 renderer.draw_text_lua = renderer.draw_text
 local fonts_pointer_cache = setmetatable({}, { __mode = "k" })
+local FONT_FALLBACK_MAX = 10
 function renderer.draw_text(font, text, x, y, color, tab)
   if not color then
     local core = require "core"
@@ -105,11 +106,12 @@ function renderer.draw_text(font, text, x, y, color, tab)
     if type(font) ~= "table" then
       fonts_list = {font}
     end
-    local fonts = ffi.new("void*[10]")
-    for i, f in pairs(fonts_list) do
-      fonts[i-1] = ffi.cast("void**", f)[0]
+    local fonts = ffi.new("void*[?]", FONT_FALLBACK_MAX + 1)
+    local count = math.min(#fonts_list, FONT_FALLBACK_MAX)
+    for i = 1, count do
+      fonts[i - 1] = ffi.cast("void**", fonts_list[i])[0]
     end
-    fonts[#fonts_list] = nil
+    fonts[count] = nil
     fonts_pointer_cache[font] = fonts
   end
   text = type(text) == "string" and text or tostring(text)

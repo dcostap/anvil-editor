@@ -140,11 +140,19 @@ static bool query_progress(TSQueryCursorState *state) {
   return progress->cancel;
 }
 
-static const AnvilTSLanguage *checked_c_registry_language(void) {
-  const AnvilTSLanguage *language = anvil_ts_language_by_id("c");
+static const AnvilTSLanguage *checked_registry_language(const char *id) {
+  const AnvilTSLanguage *language = anvil_ts_language_by_id(id);
   if (!language) return NULL;
   if (!anvil_ts_language_is_compatible(language)) return NULL;
   return language;
+}
+
+static const AnvilTSLanguage *checked_c_registry_language(void) {
+  return checked_registry_language("c");
+}
+
+static const AnvilTSLanguage *checked_cpp_registry_language(void) {
+  return checked_registry_language("cpp");
 }
 
 static AnvilTSSnapshot *new_snapshot_from_single_line(const char *text) {
@@ -177,7 +185,7 @@ static bool wait_poll_until_done(
 }
 
 static int test_grammar_load(void) {
-  CHECK(anvil_ts_language_count() >= 1);
+  CHECK(anvil_ts_language_count() >= 2);
   const AnvilTSLanguage *language = checked_c_registry_language();
   CHECK(language != NULL);
   CHECK_STREQ(language->id, "c");
@@ -197,6 +205,20 @@ static int test_grammar_load(void) {
   CHECK(parser != NULL);
   CHECK(ts_parser_set_language(parser, ts_language));
   ts_parser_delete(parser);
+
+  language = checked_cpp_registry_language();
+  CHECK(language != NULL);
+  CHECK_STREQ(language->id, "cpp");
+  ts_language = anvil_ts_language_ptr(language);
+  CHECK(ts_language != NULL);
+  CHECK(ts_language_abi_version(ts_language) >= TREE_SITTER_MIN_COMPATIBLE_LANGUAGE_VERSION);
+  CHECK(ts_language_abi_version(ts_language) <= TREE_SITTER_LANGUAGE_VERSION);
+  CHECK(ts_language_abi_version(ts_language) == 14);
+  CHECK_STREQ(language->semantic_version, "0.23.4");
+  parser = ts_parser_new();
+  CHECK(parser != NULL);
+  CHECK(ts_parser_set_language(parser, ts_language));
+  ts_parser_delete(parser);
   return 0;
 }
 
@@ -205,6 +227,25 @@ static int test_simple_c_parse(void) {
   TSParser *parser = ts_parser_new();
   CHECK(parser != NULL);
   CHECK(ts_parser_set_language(parser, anvil_ts_language_ptr(checked_c_registry_language())));
+
+  TSTree *tree = ts_parser_parse_string(parser, NULL, source, (uint32_t) strlen(source));
+  CHECK(tree != NULL);
+  TSNode root = ts_tree_root_node(tree);
+  CHECK_STREQ(ts_node_type(root), "translation_unit");
+  CHECK(!ts_node_has_error(root));
+  CHECK(ts_node_start_byte(root) == 0);
+  CHECK(ts_node_end_byte(root) == strlen(source));
+
+  ts_tree_delete(tree);
+  ts_parser_delete(parser);
+  return 0;
+}
+
+static int test_simple_cpp_parse(void) {
+  const char *source = "#include <vector>\nnamespace demo { template <typename T> class Box {}; }\nint main() { auto value = std::vector<int>{}; return 0; }\n";
+  TSParser *parser = ts_parser_new();
+  CHECK(parser != NULL);
+  CHECK(ts_parser_set_language(parser, anvil_ts_language_ptr(checked_cpp_registry_language())));
 
   TSTree *tree = ts_parser_parse_string(parser, NULL, source, (uint32_t) strlen(source));
   CHECK(tree != NULL);
@@ -265,6 +306,58 @@ static int test_simple_query(void) {
   }
   CHECK(found_add);
   CHECK(!ts_query_cursor_did_exceed_match_limit(cursor));
+
+  ts_query_cursor_delete(cursor);
+  ts_query_delete(query);
+  ts_tree_delete(tree);
+  ts_parser_delete(parser);
+  return 0;
+}
+
+static int test_cpp_query(void) {
+  const char *source = "namespace demo { template <typename T> class Box {}; }\nint main() { auto value = demo::Box<int>{}; return 0; }\n";
+  TSParser *parser = ts_parser_new();
+  CHECK(parser != NULL);
+  CHECK(ts_parser_set_language(parser, anvil_ts_language_ptr(checked_cpp_registry_language())));
+  TSTree *tree = ts_parser_parse_string(parser, NULL, source, (uint32_t) strlen(source));
+  CHECK(tree != NULL);
+
+  const char *query_source =
+    "(class_specifier name: (type_identifier) @type)\n"
+    "(function_declarator declarator: (identifier) @function)\n"
+    "(namespace_identifier) @namespace\n"
+    "(auto) @type.builtin\n";
+  uint32_t error_offset = 0;
+  TSQueryError error_type = TSQueryErrorNone;
+  TSQuery *query = ts_query_new(
+    anvil_ts_language_ptr(checked_cpp_registry_language()),
+    query_source,
+    (uint32_t) strlen(query_source),
+    &error_offset,
+    &error_type
+  );
+  CHECK(query != NULL);
+
+  TSQueryCursor *cursor = ts_query_cursor_new();
+  CHECK(cursor != NULL);
+  ts_query_cursor_exec(cursor, query, ts_tree_root_node(tree));
+  TSQueryMatch match;
+  bool found_box = false;
+  bool found_main = false;
+  bool found_demo = false;
+  while (ts_query_cursor_next_match(cursor, &match)) {
+    for (uint16_t i = 0; i < match.capture_count; i++) {
+      TSNode node = match.captures[i].node;
+      uint32_t start = ts_node_start_byte(node);
+      uint32_t end = ts_node_end_byte(node);
+      if (end > start && end <= strlen(source) && strncmp(source + start, "Box", end - start) == 0) found_box = true;
+      if (end > start && end <= strlen(source) && strncmp(source + start, "main", end - start) == 0) found_main = true;
+      if (end > start && end <= strlen(source) && strncmp(source + start, "demo", end - start) == 0) found_demo = true;
+    }
+  }
+  CHECK(found_box);
+  CHECK(found_main);
+  CHECK(found_demo);
 
   ts_query_cursor_delete(cursor);
   ts_query_delete(query);
@@ -609,7 +702,9 @@ int main(void) {
   int result = 0;
   result |= test_grammar_load();
   result |= test_simple_c_parse();
+  result |= test_simple_cpp_parse();
   result |= test_simple_query();
+  result |= test_cpp_query();
   result |= test_offset_conversion();
   result |= test_incremental_edit();
   result |= test_snapshot_basics();

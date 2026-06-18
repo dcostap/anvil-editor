@@ -3,9 +3,11 @@
 #include <string.h>
 
 const TSLanguage *tree_sitter_c(void);
+const TSLanguage *tree_sitter_cpp(void);
 
 static const AnvilTSLanguage anvil_ts_languages[] = {
   { "c", "0.24.2", tree_sitter_c },
+  { "cpp", "0.23.4", tree_sitter_cpp },
 };
 
 size_t anvil_ts_language_count(void) {

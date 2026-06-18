@@ -189,6 +189,9 @@ style.syntax["literal"] = c(C.java_keyword)
 style.syntax["string"] = c(C.string)
 style.syntax["operator"] = c(C.semicolon)
 style.syntax["function"] = c(C.function_declaration)
+style.syntax["function.call"] = c(C.function_declaration)
+style.syntax["function.method"] = c(C.function_declaration)
+style.syntax["function.method.call"] = c(C.function_declaration)
 
 -- Extra semantic-ish slots for languages/plugins that emit more specific types.
 style.syntax["class"] = c(C.class_name)

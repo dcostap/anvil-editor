@@ -1108,6 +1108,9 @@ map_new_syntax_colors = function(clear_new)
     ["float"]                 = { alt = "number"    },
     -- function name in a call
     ["function.call"]         = {                   },
+    -- method names represented by Tree-sitter capture vocabularies
+    ["function.method"]       = { alt = "function"  },
+    ["function.method.call"]  = { alt = "function"  },
     -- a function call that was declared as a macro like in: #define myfunc()
     ["function.macro"]        = {                   },
     -- keywords like: include, import, require

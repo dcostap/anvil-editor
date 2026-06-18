@@ -63,6 +63,13 @@ local function doc_path(doc)
   return path
 end
 
+local function doc_fingerprint(doc)
+  if not doc or not doc.lines then return "0:0::" end
+  local byte_len = 0
+  for _, line in ipairs(doc.lines) do byte_len = byte_len + #line end
+  return table.concat({ tostring(#doc.lines), tostring(byte_len), doc.lines[1] or "", doc.lines[#doc.lines] or "" }, "\0")
+end
+
 -- Avoid requiring core.common before core has finished bootstrap in unusual test loaders.
 local common = require "core.common"
 
@@ -126,6 +133,7 @@ function treesitter.schedule_parse(doc, edit)
   ts.status = "snapshotting"
   ts.reason = nil
   ts.last_poll_changed = false
+  ts.scheduled_fingerprint = doc_fingerprint(doc)
   ts.highlight_cache = {}
   ts.line_starts = nil
   if doc.highlighter and doc.highlighter.invalidate_render_cache then
@@ -169,6 +177,9 @@ function treesitter.attach_or_update_doc(doc, reason)
 
   local ts = doc.treesitter
   if ts and ts.native and ts.language_id == language.id and ts.grammar == language.grammar then
+    if ts.scheduled_fingerprint ~= doc_fingerprint(doc) then
+      treesitter.schedule_parse(doc, nil)
+    end
     return ts
   end
 

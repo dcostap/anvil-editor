@@ -30,6 +30,22 @@ local builtin_configs = {
       highlights = "highlights.scm",
     },
   },
+  cpp = {
+    id = "cpp",
+    name = "C++",
+    grammar = "cpp",
+    files = {
+      "%.cc$", "%.cpp$", "%.cxx$", "%.c%+%+$",
+      "%.hh$", "%.hpp$", "%.hxx$", "%.h%+%+$", "%.inl$",
+    },
+    headers = {},
+    line_comments = { "//" },
+    block_comment = { "/*", "*/" },
+    parse_timeout_ms = 5000,
+    queries = {
+      highlights = "highlights.scm",
+    },
+  },
 }
 
 local function copy_table(t)
@@ -91,7 +107,7 @@ end
 
 function registry.reload()
   local languages = {}
-  local ids = { "c" }
+  local ids = { "c", "cpp" }
   for _, id in ipairs(ids) do
     local config = load_config(id)
     if config then

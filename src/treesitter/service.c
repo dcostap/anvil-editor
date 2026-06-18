@@ -45,6 +45,7 @@ struct AnvilTSParseJob {
   TSTree *old_tree;
   TSTree *result_tree;
   bool canceled;
+  bool timed_out;
   bool failed;
   char *error;
 };
@@ -171,7 +172,10 @@ static bool parse_progress(TSParseState *parse_state) {
   if (SDL_GetAtomicInt(&job->cancel)) return true;
   if (job->parse_timeout_ms > 0) {
     uint64_t now = SDL_GetTicks();
-    if (now - job->started_ticks >= job->parse_timeout_ms) return true;
+    if (now - job->started_ticks >= job->parse_timeout_ms) {
+      job->timed_out = true;
+      return true;
+    }
   }
   return false;
 }
@@ -219,13 +223,24 @@ static int service_worker_main(void *userdata) {
         options.progress_callback = parse_progress;
         job->started_ticks = SDL_GetTicks();
         job->result_tree = ts_parser_parse_with_options(parser, job->old_tree, input, options);
-        if (!job->result_tree) {
-          if (SDL_GetAtomicInt(&job->cancel)) {
-            job->canceled = true;
-          } else {
-            job->failed = true;
-            job->error = service_strdup("Tree-sitter parse canceled by timeout or returned no tree");
+        if (SDL_GetAtomicInt(&job->cancel)) {
+          job->canceled = true;
+          if (job->result_tree) {
+            ts_tree_delete(job->result_tree);
+            job->result_tree = NULL;
           }
+          ts_parser_reset(parser);
+        } else if (job->timed_out) {
+          job->failed = true;
+          job->error = service_strdup("Tree-sitter parse timed out");
+          if (job->result_tree) {
+            ts_tree_delete(job->result_tree);
+            job->result_tree = NULL;
+          }
+          ts_parser_reset(parser);
+        } else if (!job->result_tree) {
+          job->failed = true;
+          job->error = service_strdup("Tree-sitter parse returned no tree");
           ts_parser_reset(parser);
         }
       }

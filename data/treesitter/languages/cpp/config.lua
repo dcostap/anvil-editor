@@ -1,0 +1,23 @@
+return {
+  id = "cpp",
+  name = "C++",
+  grammar = "cpp",
+  files = {
+    "%.cc$",
+    "%.cpp$",
+    "%.cxx$",
+    "%.c%+%+$",
+    "%.hh$",
+    "%.hpp$",
+    "%.hxx$",
+    "%.h%+%+$",
+    "%.inl$",
+  },
+  headers = {},
+  line_comments = { "//" },
+  block_comment = { "/*", "*/" },
+  parse_timeout_ms = 5000,
+  queries = {
+    highlights = "highlights.scm",
+  },
+}

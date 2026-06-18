@@ -188,6 +188,30 @@ test.describe("graphics apis", function()
     test.equal(view.path, image_path)
   end)
 
+  test.test("draws text with maximum-size FFI font fallback group", function()
+    local font_path = DATADIR .. PATHSEP .. "fonts" .. PATHSEP .. "FiraSans-Regular.ttf"
+    local base_font = renderer.font.load(font_path, 12 * SCALE)
+    test.not_nil(base_font)
+
+    local fonts = { base_font }
+    for i = 2, 10 do
+      fonts[i] = base_font:copy((11 + i) * SCALE)
+      test.not_nil(fonts[i])
+    end
+    local group = renderer.font.group(fonts)
+    test.not_nil(group)
+    test.equal(#group:get_path(), 10)
+
+    local window = renwindow.create("graphics-font-fallback-test-window", 64, 64)
+    test.not_nil(window)
+    renderer.begin_frame(window)
+    for _ = 1, 20 do
+      test.type(renderer.draw_text(group, "fallback", 0, 0, {255, 255, 255, 255}), "number")
+    end
+    renderer.end_frame()
+    collectgarbage("collect")
+  end)
+
   test.test("renders to a temporary window", function()
     local font = renderer.font.load(
       DATADIR .. PATHSEP .. "fonts" .. PATHSEP .. "FiraSans-Regular.ttf",

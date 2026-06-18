@@ -22,6 +22,13 @@ local function c_doc(text)
   return doc
 end
 
+local function cpp_doc(text)
+  local doc = Doc()
+  set_text(doc, text or "namespace demo { class Box {}; } int main() { auto value = demo::Box{}; return 0; }")
+  doc:set_filename("ui_tree_sitter.cpp", "ui_tree_sitter.cpp")
+  return doc
+end
+
 local function wait_ready(doc, timeout)
   local deadline = system.get_time() + (timeout or 3)
   while system.get_time() < deadline do
@@ -46,8 +53,25 @@ local function with_fake_draw_text(fn)
 end
 
 test.describe("Tree-sitter DocView highlighting", function()
-  test.it("DocView draw uses Tree-sitter render tokens when ready", function()
+  test.it("DocView draw uses Tree-sitter C render tokens when ready", function()
     local doc = c_doc("int main(void) { return VALUE; }")
+    test.ok(wait_ready(doc))
+    local view = DocView(doc)
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 1000, 1000
+    local render_line = doc.highlighter:get_render_line(1)
+    test.equal(render_line.source, "treesitter")
+    local calls = with_fake_draw_text(function()
+      view:draw_line_text(1, 0, 0)
+    end)
+    local drawn = {}
+    for _, call in ipairs(calls) do drawn[#drawn + 1] = call.text end
+    test.equal(table.concat(drawn), doc.lines[1]:sub(1, -2))
+    doc:on_close()
+  end)
+
+  test.it("DocView draw uses Tree-sitter C++ render tokens when ready", function()
+    local doc = cpp_doc("namespace demo { class Box {}; }\nint main() { auto value = demo::Box{}; return 0; }")
     test.ok(wait_ready(doc))
     local view = DocView(doc)
     view.position.x, view.position.y = 0, 0
