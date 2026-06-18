@@ -1,6 +1,8 @@
 local core = require "core"
 local command = require "core.command"
+local language_intelligence = require "core.language_intelligence"
 local registry = require "core.treesitter.registry"
+local ts_highlight = require "core.treesitter.highlight"
 local ts_outline = require "core.treesitter.outline"
 local ts_selection = require "core.treesitter.selection"
 local ts_navigation = require "core.treesitter.navigation"
@@ -15,6 +17,7 @@ treesitter.outline = ts_outline
 treesitter.selection = ts_selection
 treesitter.navigation = ts_navigation
 treesitter.locals = ts_locals
+treesitter.language_intelligence = language_intelligence
 treesitter.enabled = true
 
 local attached_docs = setmetatable({}, { __mode = "k" })
@@ -311,75 +314,75 @@ function treesitter.poll_all()
 end
 
 function treesitter.get_document_outline(doc, opts)
-  return ts_outline.get_document_outline(doc, opts)
+  return language_intelligence.document_outline(doc, opts)
 end
 
 function treesitter.get_current_document_outline(opts)
-  return ts_outline.get_current_document_outline(opts)
+  return language_intelligence.current_document_outline(opts)
 end
 
 function treesitter.get_node_ranges(doc, line1, col1, line2, col2, opts)
-  return ts_selection.get_node_ranges(doc, line1, col1, line2, col2, opts)
+  return language_intelligence.node_ranges(doc, line1, col1, line2, col2, opts)
 end
 
 function treesitter.get_current_node_ranges(opts)
-  return ts_selection.get_current_node_ranges(opts)
+  return language_intelligence.current_node_ranges(opts)
 end
 
 function treesitter.expand_selection(doc)
-  return ts_selection.expand_selection(doc)
+  return language_intelligence.expand_selection(doc)
 end
 
 function treesitter.shrink_selection(doc)
-  return ts_selection.shrink_selection(doc)
+  return language_intelligence.shrink_selection(doc)
 end
 
 function treesitter.get_enclosing_symbol(doc, line1, col1, line2, col2, opts)
-  return ts_navigation.get_enclosing_symbol(doc, line1, col1, line2, col2, opts)
+  return language_intelligence.enclosing_symbol(doc, line1, col1, line2, col2, opts)
 end
 
 function treesitter.get_next_symbol(doc, line, col, opts)
-  return ts_navigation.get_next_symbol(doc, line, col, opts)
+  return language_intelligence.next_symbol(doc, line, col, opts)
 end
 
 function treesitter.get_previous_symbol(doc, line, col, opts)
-  return ts_navigation.get_previous_symbol(doc, line, col, opts)
+  return language_intelligence.previous_symbol(doc, line, col, opts)
 end
 
 function treesitter.goto_enclosing_symbol(doc)
-  return ts_navigation.goto_enclosing_symbol(doc)
+  return language_intelligence.goto_enclosing_symbol(doc)
 end
 
 function treesitter.goto_next_symbol(doc)
-  return ts_navigation.goto_next_symbol(doc)
+  return language_intelligence.goto_next_symbol(doc)
 end
 
 function treesitter.goto_previous_symbol(doc)
-  return ts_navigation.goto_previous_symbol(doc)
+  return language_intelligence.goto_previous_symbol(doc)
 end
 
 function treesitter.get_local_definition(doc, line1, col1, line2, col2, opts)
-  return ts_locals.get_local_definition(doc, line1, col1, line2, col2, opts)
+  return language_intelligence.local_definition(doc, line1, col1, line2, col2, opts)
 end
 
 function treesitter.get_local_declaration(doc, line1, col1, line2, col2, opts)
-  return ts_locals.get_local_definition(doc, line1, col1, line2, col2, opts)
+  return language_intelligence.local_declaration(doc, line1, col1, line2, col2, opts)
 end
 
 function treesitter.get_local_references(doc, line1, col1, line2, col2, opts)
-  return ts_locals.get_local_references(doc, line1, col1, line2, col2, opts)
+  return language_intelligence.local_references(doc, line1, col1, line2, col2, opts)
 end
 
 function treesitter.goto_local_definition(doc)
-  return ts_locals.goto_local_definition(doc)
+  return language_intelligence.goto_local_definition(doc)
 end
 
 function treesitter.goto_local_declaration(doc)
-  return ts_locals.goto_local_declaration(doc)
+  return language_intelligence.goto_local_declaration(doc)
 end
 
 function treesitter.select_local_references(doc)
-  return ts_locals.select_local_references(doc)
+  return language_intelligence.select_local_references(doc)
 end
 
 function treesitter.log_document_status(doc)
@@ -450,6 +453,98 @@ if type(previous_on_event) == "function" and not core.__treesitter_on_event_wrap
     return previous_on_event(type, ...)
   end
 end
+
+language_intelligence.register_provider({
+  id = "treesitter",
+  name = "Tree-sitter",
+  priority = 10,
+  kind = "syntactic-local-fallback",
+  features = {
+    render_tokens = true,
+    document_outline = true,
+    node_ranges = true,
+    expand_selection = true,
+    shrink_selection = true,
+    enclosing_symbol = true,
+    next_symbol = true,
+    previous_symbol = true,
+    local_definition = true,
+    local_declaration = true,
+    local_references = true,
+  },
+
+  render_tokens = function(doc, line_idx, opts)
+    return ts_highlight.line_tokens(doc, line_idx, opts)
+  end,
+
+  invalidate_render_cache = function(doc, first_line, last_line)
+    return ts_highlight.invalidate_doc(doc, first_line, last_line)
+  end,
+
+  document_outline = function(doc, opts)
+    return ts_outline.get_document_outline(doc, opts)
+  end,
+
+  node_ranges = function(doc, line1, col1, line2, col2, opts)
+    return ts_selection.get_node_ranges(doc, line1, col1, line2, col2, opts)
+  end,
+
+  expand_selection = function(doc)
+    return ts_selection.expand_selection(doc)
+  end,
+
+  shrink_selection = function(doc)
+    return ts_selection.shrink_selection(doc)
+  end,
+
+  enclosing_symbol = function(doc, line1, col1, line2, col2, opts)
+    return ts_navigation.get_enclosing_symbol(doc, line1, col1, line2, col2, opts)
+  end,
+
+  next_symbol = function(doc, line, col, opts)
+    return ts_navigation.get_next_symbol(doc, line, col, opts)
+  end,
+
+  previous_symbol = function(doc, line, col, opts)
+    return ts_navigation.get_previous_symbol(doc, line, col, opts)
+  end,
+
+  goto_enclosing_symbol = function(doc)
+    return ts_navigation.goto_enclosing_symbol(doc)
+  end,
+
+  goto_next_symbol = function(doc)
+    return ts_navigation.goto_next_symbol(doc)
+  end,
+
+  goto_previous_symbol = function(doc)
+    return ts_navigation.goto_previous_symbol(doc)
+  end,
+
+  local_definition = function(doc, line1, col1, line2, col2, opts)
+    return ts_locals.get_local_definition(doc, line1, col1, line2, col2, opts)
+  end,
+
+  local_declaration = function(doc, line1, col1, line2, col2, opts)
+    return ts_locals.get_local_definition(doc, line1, col1, line2, col2, opts)
+  end,
+
+  local_references = function(doc, line1, col1, line2, col2, opts)
+    return ts_locals.get_local_references(doc, line1, col1, line2, col2, opts)
+  end,
+
+  goto_local_definition = function(doc)
+    return ts_locals.goto_local_definition(doc)
+  end,
+
+  goto_local_declaration = function(doc)
+    return ts_locals.goto_local_declaration(doc)
+  end,
+
+  select_local_references = function(doc)
+    return ts_locals.select_local_references(doc)
+  end,
+})
 
 local function doc_command_predicate()
   local view = core.active_view

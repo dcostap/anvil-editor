@@ -3,18 +3,16 @@ local common = require "core.common"
 local tokenizer = require "core.tokenizer"
 local Object = require "core.object"
 
-local treesitter_highlight
-local treesitter_highlight_checked = false
+local language_intelligence
+local language_intelligence_checked = false
 
-local function get_treesitter_highlight()
-  if not treesitter_highlight_checked then
-    local ok, module = pcall(require, "core.treesitter.highlight")
-    if ok then
-      treesitter_highlight = module
-      treesitter_highlight_checked = true
-    end
+local function get_language_intelligence()
+  if not language_intelligence_checked then
+    language_intelligence_checked = true
+    local ok, module = pcall(require, "core.language_intelligence")
+    if ok then language_intelligence = module end
   end
-  return treesitter_highlight
+  return language_intelligence
 end
 
 
@@ -157,9 +155,9 @@ function Highlighter:update_notify(line, n)
 end
 
 function Highlighter:invalidate_render_cache(first_line, last_line)
-  local ts_highlight = get_treesitter_highlight()
-  if ts_highlight and self.doc then
-    ts_highlight.invalidate_doc(self.doc, first_line, last_line)
+  local intelligence = get_language_intelligence()
+  if intelligence and self.doc then
+    intelligence.invalidate_render_cache(self.doc, first_line, last_line)
   end
   if self.doc and first_line then
     self.doc:clear_cache(first_line, (last_line or first_line) - first_line)
@@ -202,11 +200,11 @@ end
 function Highlighter:get_render_line(idx)
   if not self.doc then return {text="", tokens={"normal", ""}, source="tokenizer"} end
   local text = self.doc:get_utf8_line(idx) or ""
-  local ts_highlight = get_treesitter_highlight()
-  if ts_highlight then
-    local tokens = ts_highlight.line_tokens(self.doc, idx)
+  local intelligence = get_language_intelligence()
+  if intelligence then
+    local tokens, _, provider_id = intelligence.render_tokens(self.doc, idx)
     if tokens then
-      return { text = text, tokens = tokens, source = "treesitter" }
+      return { text = text, tokens = tokens, source = provider_id or "language-intelligence" }
     end
   end
   local line = self:get_line(idx)

@@ -5,6 +5,7 @@ local DocView = require "core.docview"
 local test = require "core.test"
 local tokenizer = require "core.tokenizer"
 local treesitter = require "core.treesitter"
+local intelligence = require "core.language_intelligence"
 
 local function set_text(doc, text)
   doc.lines = {}
@@ -153,6 +154,22 @@ int second(void) {
     doc:set_selection_list(state.selections, state.last_selection, { sanitized = true })
     test.equal(doc:get_selection_text(), "value\nvalue")
 
+    if previous then core.set_active_view(previous) end
+    doc:on_close()
+  end)
+
+  test.it("Tree-sitter commands no-op cleanly when language intelligence provider is unavailable", function()
+    local doc = cpp_doc("int helper() { return 1; }\nint main() { return helper(); }")
+    test.ok(wait_ready(doc))
+    local previous = core.active_view
+    local view = DocView(doc)
+    core.set_active_view(view)
+    view:set_selection_state({ selections = { 2, 5, 2, 5 }, last_selection = 1 })
+    intelligence.without_provider("treesitter", function()
+      test.ok(command.perform("tree-sitter:go-to-next-symbol"))
+    end)
+    local state = view:get_selection_state()
+    test.same(state.selections, { 2, 5, 2, 5 })
     if previous then core.set_active_view(previous) end
     doc:on_close()
   end)

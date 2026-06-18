@@ -1,6 +1,7 @@
 local Doc = require "core.doc"
 local test = require "core.test"
 local treesitter = require "core.treesitter"
+local intelligence = require "core.language_intelligence"
 local registry = require "core.treesitter.registry"
 local native = require "treesitter"
 local ts_highlight = require "core.treesitter.highlight"
@@ -126,6 +127,34 @@ test.describe("core.treesitter phase 3 document integration", function()
     test.ok(native.has_language("cpp"))
   end)
 
+  test.it("Tree-sitter registers as a language intelligence provider", function()
+    local provider = intelligence.get_provider("treesitter")
+    test.ok(provider)
+    test.equal(provider.kind, "syntactic-local-fallback")
+    test.ok(provider.document_outline)
+    test.ok(provider.node_ranges)
+    test.ok(provider.local_definition)
+  end)
+
+  test.it("language intelligence abstraction no-provider paths fall back cleanly", function()
+    local doc = c_doc("int main(void) { return 0; }")
+    test.ok(wait_ready(doc))
+    intelligence.without_provider("treesitter", function()
+      local symbols, reason = intelligence.document_outline(doc)
+      test.equal(#symbols, 0)
+      test.equal(reason, "no-provider")
+      local tokens
+      tokens, reason = intelligence.render_tokens(doc, 1)
+      test.equal(tokens, nil)
+      test.equal(reason, "no-provider")
+      local ok
+      ok, reason = intelligence.goto_next_symbol(doc)
+      test.equal(ok, false)
+      test.equal(reason, "no-provider")
+    end)
+    doc:on_close()
+  end)
+
   test.it("C and C++ file/documents attach state", function()
     local doc = c_doc()
     test.ok(doc.treesitter)
@@ -216,6 +245,15 @@ test.describe("core.treesitter phase 3 document integration", function()
     test.equal(doc.treesitter, nil)
     treesitter.poll_all()
     test.equal(doc.treesitter, nil)
+  end)
+
+  test.it("document outline is available through language intelligence", function()
+    local doc = c_doc("int helper(void) { return 1; }")
+    test.ok(wait_ready(doc))
+    local symbols = intelligence.document_outline(doc)
+    test.ok(#symbols >= 1)
+    test.equal(symbols[1].name, "helper")
+    doc:on_close()
   end)
 
   test.it("document outline gracefully returns empty when unsupported or unready", function()
