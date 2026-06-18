@@ -1,12 +1,14 @@
 local core = require "core"
 local command = require "core.command"
 local registry = require "core.treesitter.registry"
+local ts_outline = require "core.treesitter.outline"
 local Doc = require "core.doc"
 
 local native_ok, native = nil, nil
 
 local treesitter = {}
 treesitter.registry = registry
+treesitter.outline = ts_outline
 treesitter.enabled = true
 
 local attached_docs = setmetatable({}, { __mode = "k" })
@@ -136,6 +138,7 @@ function treesitter.schedule_parse(doc, edit)
   ts.scheduled_fingerprint = doc_fingerprint(doc)
   ts.highlight_cache = {}
   ts.line_starts = nil
+  ts.outline_line_starts = nil
   if doc.highlighter and doc.highlighter.invalidate_render_cache then
     doc.highlighter:invalidate_render_cache()
   end
@@ -269,6 +272,7 @@ function treesitter.poll_doc(doc)
   if changed or discarded_stale then
     ts.highlight_cache = {}
     ts.line_starts = nil
+    ts.outline_line_starts = nil
     if doc.highlighter and doc.highlighter.invalidate_render_cache then
       doc.highlighter:invalidate_render_cache()
     end
@@ -290,6 +294,14 @@ function treesitter.poll_all()
   end
   if any_changed then core.redraw = true end
   return any_changed
+end
+
+function treesitter.get_document_outline(doc, opts)
+  return ts_outline.get_document_outline(doc, opts)
+end
+
+function treesitter.get_current_document_outline(opts)
+  return ts_outline.get_current_document_outline(opts)
 end
 
 function treesitter.log_document_status(doc)

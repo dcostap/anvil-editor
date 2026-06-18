@@ -45,6 +45,7 @@ typedef struct AnvilTSQueryCapture {
   TSPoint start_point;
   TSPoint end_point;
   int32_t priority;
+  uint32_t match_id;
   uint32_t pattern_index;
   uint32_t capture_index;
   uint32_t order;

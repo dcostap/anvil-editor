@@ -1,3 +1,4 @@
+local core = require "core"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
 local test = require "core.test"
@@ -97,6 +98,27 @@ test.describe("Tree-sitter DocView highlighting", function()
     with_fake_draw_text(function()
       view:draw_line_text(1, 0, 0)
     end)
+    doc:on_close()
+  end)
+
+  test.it("current document outline reads the active DocView document", function()
+    local doc = cpp_doc([[namespace demo {
+class MenuGui {
+public:
+  void draw_settings() { }
+};
+}]])
+    test.ok(wait_ready(doc))
+    local previous = core.active_view
+    local view = DocView(doc)
+    core.set_active_view(view)
+    local symbols = treesitter.get_current_document_outline()
+    local names = {}
+    for _, symbol in ipairs(symbols) do names[#names + 1] = symbol.name .. ":" .. symbol.kind end
+    test.ok(table.concat(names, "|"):find("demo:namespace", 1, true))
+    test.ok(table.concat(names, "|"):find("MenuGui:class", 1, true))
+    test.ok(table.concat(names, "|"):find("draw_settings:method", 1, true))
+    if previous then core.set_active_view(previous) end
     doc:on_close()
   end)
 

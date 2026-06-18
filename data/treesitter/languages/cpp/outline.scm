@@ -1,0 +1,52 @@
+; Bundled first-party C++ outline query.
+; Each pattern captures one outline item as @outline.<kind> and its display name
+; as @name. Lua groups captures by Tree-sitter match id.
+
+(namespace_definition
+  name: (_) @name) @outline.namespace
+
+(class_specifier
+  name: (_) @name
+  body: (field_declaration_list)) @outline.class
+
+(struct_specifier
+  name: (_) @name
+  body: (field_declaration_list)) @outline.struct
+
+(union_specifier
+  name: (_) @name
+  body: (field_declaration_list)) @outline.union
+
+(enum_specifier
+  name: (_) @name
+  body: (enumerator_list)) @outline.enum
+
+(function_definition
+  declarator: (function_declarator
+    declarator: (identifier) @name)) @outline.function
+
+(function_definition
+  declarator: (function_declarator
+    declarator: (field_identifier) @name)) @outline.method
+
+(function_definition
+  declarator: (function_declarator
+    declarator: (qualified_identifier
+      name: (_) @name))) @outline.method
+
+(function_definition
+  declarator: (pointer_declarator
+    declarator: (function_declarator
+      declarator: (identifier) @name))) @outline.function
+
+(function_definition
+  declarator: (reference_declarator
+    (function_declarator
+      declarator: (identifier) @name))) @outline.function
+
+(type_definition
+  declarator: (type_identifier) @name) @outline.type
+
+(type_definition
+  declarator: (qualified_identifier
+    name: (_) @name)) @outline.type

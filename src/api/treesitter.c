@@ -416,6 +416,7 @@ typedef struct LuaCaptureCopy {
   TSPoint start_point;
   TSPoint end_point;
   int32_t priority;
+  uint32_t match_id;
   uint32_t pattern_index;
   uint32_t capture_index;
   uint32_t order;
@@ -464,6 +465,7 @@ static bool collect_query_capture(const AnvilTSQueryCapture *capture, void *payl
   copy->start_point = capture->start_point;
   copy->end_point = capture->end_point;
   copy->priority = capture->priority;
+  copy->match_id = capture->match_id;
   copy->pattern_index = capture->pattern_index;
   copy->capture_index = capture->capture_index;
   copy->order = capture->order;
@@ -489,6 +491,8 @@ static void push_capture_copy(lua_State *L, const LuaCaptureCopy *capture) {
   lua_setfield(L, -2, "end_col");
   lua_pushinteger(L, (lua_Integer) capture->priority);
   lua_setfield(L, -2, "priority");
+  lua_pushinteger(L, (lua_Integer) capture->match_id);
+  lua_setfield(L, -2, "match_id");
   lua_pushinteger(L, (lua_Integer) capture->pattern_index);
   lua_setfield(L, -2, "pattern_index");
   lua_pushinteger(L, (lua_Integer) capture->capture_index);

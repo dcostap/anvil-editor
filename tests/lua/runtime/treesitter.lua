@@ -31,6 +31,12 @@ local function all_tokens_normal(tokens)
   return true
 end
 
+local function find_symbol(symbols, name, kind)
+  for _, symbol in ipairs(symbols or {}) do
+    if symbol.name == name and (not kind or symbol.kind == kind) then return symbol end
+  end
+end
+
 local function wait_ready(doc, timeout)
   local deadline = system.get_time() + (timeout or 3)
   while system.get_time() < deadline do
@@ -107,12 +113,14 @@ test.describe("core.treesitter phase 3 document integration", function()
     test.equal(config.id, "c")
     test.equal(config.grammar, "c")
     test.ok(config.query_sources.highlights)
+    test.ok(config.query_sources.outline)
 
     config = registry.get("example.cpp", "")
     test.ok(config)
     test.equal(config.id, "cpp")
     test.equal(config.grammar, "cpp")
     test.ok(config.query_sources.highlights)
+    test.ok(config.query_sources.outline)
     test.ok(native.has_language("cpp"))
   end)
 
@@ -206,6 +214,79 @@ test.describe("core.treesitter phase 3 document integration", function()
     test.equal(doc.treesitter, nil)
     treesitter.poll_all()
     test.equal(doc.treesitter, nil)
+  end)
+
+  test.it("document outline gracefully returns empty when unsupported or unready", function()
+    local doc = Doc()
+    set_text(doc, "plain text")
+    doc:set_filename("notes.txt", "notes.txt")
+    local symbols, reason = treesitter.get_document_outline(doc)
+    test.equal(#symbols, 0)
+    test.equal(reason, "unsupported")
+    doc:on_close()
+
+    doc = c_doc("int main(void) { return 0; }")
+    symbols, reason = treesitter.get_document_outline(doc)
+    test.equal(#symbols, 0)
+    test.equal(reason, "not-ready")
+    doc:on_close()
+  end)
+
+  test.it("document outline gracefully returns empty when outline query is missing", function()
+    local doc = c_doc("int main(void) { return 0; }")
+    test.ok(wait_ready(doc))
+    doc.treesitter.queries.outline = nil
+    local symbols, reason = treesitter.get_document_outline(doc)
+    test.equal(#symbols, 0)
+    test.equal(reason, "missing-query")
+    doc:on_close()
+  end)
+
+  test.it("C document outline returns sorted symbols with ranges", function()
+    local doc = c_doc([[struct Point { int x; int y; };
+enum Color { RED, BLUE };
+static int helper(void) { return 1; }
+int main(void) { return helper(); }]])
+    test.ok(wait_ready(doc))
+    local symbols = treesitter.get_document_outline(doc)
+    test.ok(#symbols >= 4)
+    test.same({ symbols[1].name, symbols[1].kind }, { "Point", "struct" })
+    test.same({ symbols[2].name, symbols[2].kind }, { "Color", "enum" })
+    test.same({ symbols[3].name, symbols[3].kind }, { "helper", "function" })
+    test.same({ symbols[4].name, symbols[4].kind }, { "main", "function" })
+    local main = find_symbol(symbols, "main", "function")
+    test.ok(main)
+    test.equal(main.start_line, 4)
+    test.ok(main.end_line >= main.start_line)
+    test.ok(main.range and main.range.start and main.range["end"])
+    test.ok(main.name_range and main.name_range.start)
+    doc:on_close()
+  end)
+
+  test.it("C++ document outline includes straightforward parent nesting", function()
+    local doc = cpp_doc([[namespace demo {
+class MenuGui {
+public:
+  void draw_settings() { }
+};
+}
+int main() { return 0; }]])
+    test.ok(wait_ready(doc))
+    local symbols = treesitter.get_document_outline(doc)
+    local namespace = find_symbol(symbols, "demo", "namespace")
+    local class = find_symbol(symbols, "MenuGui", "class")
+    local method = find_symbol(symbols, "draw_settings", "method")
+    local main = find_symbol(symbols, "main", "function")
+    test.ok(namespace)
+    test.ok(class)
+    test.ok(method)
+    test.ok(main)
+    test.equal(class.parent, namespace.index)
+    test.equal(method.parent, class.index)
+    test.equal(main.parent, nil)
+    test.ok(#namespace.children >= 1)
+    test.ok(#class.children >= 1)
+    doc:on_close()
   end)
 
   test.it("render line falls back to tokenizer while Tree-sitter is unready", function()

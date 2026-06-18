@@ -19,5 +19,6 @@ return {
   parse_timeout_ms = 5000,
   queries = {
     highlights = "highlights.scm",
+    outline = "outline.scm",
   },
 }

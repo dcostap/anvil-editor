@@ -28,6 +28,7 @@ local builtin_configs = {
     block_comment = { "/*", "*/" },
     queries = {
       highlights = "highlights.scm",
+      outline = "outline.scm",
     },
   },
   cpp = {
@@ -44,6 +45,7 @@ local builtin_configs = {
     parse_timeout_ms = 5000,
     queries = {
       highlights = "highlights.scm",
+      outline = "outline.scm",
     },
   },
 }

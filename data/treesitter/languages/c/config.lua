@@ -11,5 +11,6 @@ return {
   block_comment = { "/*", "*/" },
   queries = {
     highlights = "highlights.scm",
+    outline = "outline.scm",
   },
 }

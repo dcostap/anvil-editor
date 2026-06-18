@@ -652,6 +652,7 @@ bool anvil_ts_document_state_query_captures(
       out.start_point = ts_node_start_point(capture->node);
       out.end_point = ts_node_end_point(capture->node);
       out.priority = priority;
+      out.match_id = match.id;
       out.pattern_index = match.pattern_index;
       out.capture_index = capture->index;
       out.order = order++;
