@@ -2,6 +2,7 @@ local core = require "core"
 local command = require "core.command"
 local completion = require "core.lsp.completion"
 local diagnostics = require "core.lsp.diagnostics"
+local hover = require "core.lsp.hover"
 local manager = require "core.lsp.manager"
 
 local function is_doc_view(value)
@@ -40,10 +41,17 @@ command.add(doc_view_predicate, {
       core.log_quiet("LSP completion: %s", tostring(reason or status or "pending"))
     end
   end,
+  ["lsp:hover-current-position"] = function(view)
+    local _hover, reason, status = hover.start_current_position(view)
+    if status ~= "fresh" and core.log_quiet then
+      core.log_quiet("LSP hover: %s", tostring(reason or status or "pending"))
+    end
+  end,
 })
 
 return {
   completion = completion,
   diagnostics = diagnostics,
+  hover = hover,
   manager = manager,
 }

@@ -1064,6 +1064,18 @@ Deliverables:
 
 Manual gate required.
 
+### Phase 8.14: Hover provider/prototype
+
+Deliverables:
+
+- Manual `textDocument/hover` request path and command.
+- Normalize conservative Hover content forms into plain/markdown text.
+- Cache/discard hover responses by document version, position, and client generation.
+- Use a small existing UI surface such as status/log output; no mouse-hover popup yet.
+- Preserve no-op/fallback behavior when LSP is unavailable or pending.
+
+Manual gate required.
+
 ## Open decisions before implementation
 
 1. What exact status tuple should `core.language_intelligence` return for async providers?

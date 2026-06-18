@@ -6,6 +6,7 @@ local config = require "core.lsp.config"
 local completion = require "core.lsp.completion"
 local diagnostics = require "core.lsp.diagnostics"
 local documents = require "core.lsp.documents"
+local hover = require "core.lsp.hover"
 local provider = require "core.lsp.provider"
 
 local manager = {}
@@ -336,6 +337,7 @@ function manager.stop_entry(entry, opts)
   for doc in pairs(entry.pending_docs) do entry.pending_docs[doc] = nil end
   completion.clear_client(entry.client)
   diagnostics.clear_client(entry.client)
+  hover.clear_client(entry.client)
   provider.unregister_client(entry.client)
   if not opts.no_shutdown and entry.client and entry.client.state ~= "exited" then
     entry.client:shutdown(opts.timeout or 1, opts.scan or 0.01)
