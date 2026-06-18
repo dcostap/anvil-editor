@@ -87,28 +87,67 @@ Local reference repo:
 C:\Users\Darius\AppData\Local\pi-web-smart-fetch\github-cache\zed-industries\zed
 ```
 
-Useful files and observed lessons:
+Useful files and observed lessons. Line numbers are from the local cached checkout and are included so future agents do not need to rediscover the same evidence from scratch:
 
 ```text
 crates/lsp/src/input_handler.rs
+  - around 22-27: bounded incoming queue/backpressure comments
+  - around 35-99: incremental Content-Length header/body parsing
+  - around 146-188: tests for not buffering unlimited messages
 crates/lsp/src/lsp.rs
+  - around 421-438: spawn with piped stdin/stdout/stderr
+  - around 535-545: stderr drain task
+  - around 734-740: outbound Content-Length framing
+  - around 772-787: root URI/path and UTF-16 position encoding
+  - around 789-999: advertised capabilities/dynamic registrations
+  - around 1055-1082: initialize, capabilities, initialized
+  - around 1086-1141: shutdown timeout, exit, kill
+  - around 1715-1733: didOpen/didClose
+  - around 1822-2020: `FakeLanguageServer` test support
+  - around 2248-2270: tests preserve numeric/string request IDs
 crates/project/src/lsp_store.rs
+  - around 626-665: startup failure and stderr reporting
+  - around 875-907: publishDiagnostics handling
+  - around 910-970: workspace/configuration handling
+  - around 998-1019: window/workDoneProgress/create handling
+  - around 1023-1079: client/registerCapability and unregisterCapability
+  - around 2708-2785: diagnostics sorting/remap/clipping
+  - around 3104-3140: retained snapshots by LSP version
+  - around 8272-8343: full/incremental didChange and version increment
+  - around 11308-11367: clear diagnostics on server stop
+  - around 11859-11977: insert running server/capabilities/open buffers
+  - around 12040-12066: initial per-server buffer snapshot and didOpen
 crates/project/src/lsp_store/document_symbols.rs
+  - around 38-97: versioned cache and in-flight request dedupe
+  - around 139-163: only update cache when versions match
+  - around 245-285: flatten hierarchical symbols
 crates/project/src/lsp_store/semantic_tokens.rs
+  - around 32-52: stylizers/rules per server/language
+  - around 544-599: chunked token conversion
+  - around 621-625: multi-server overlap precedence
 crates/project/src/lsp_command.rs
+  - around 1182-1256: scalar/array/link definition responses and cross-file targets
+  - around 1417-1445: references across files/buffers
 crates/language/src/language.rs
-crates/language/src/language_registry.rs
+  - around 1478-1500: UTF-16/LSP position conversion
+crates/text/src/text.rs
+  - around 2225-2262: UTF-16 point/offset conversion
+  - around 2685-2687: clipping UTF-16 points into buffer bounds
 crates/project/src/manifest_tree/server_tree.rs
+  - around 1-7, 151-163, 305-314: server root/reuse tree
 crates/project/src/trusted_worktrees.rs
+  - around 19-35: trust gate rationale for starting servers
 crates/editor/src/diagnostics.rs
+  - around 70-95 and 203-251: diagnostic navigation
 crates/diagnostics/src/buffer_diagnostics.rs
+  - around 45-79: diagnostics panel separated from storage
 ```
 
 Concrete takeaways for Anvil:
 
-- **Framing and backpressure:** Zed parses `Content-Length` framing incrementally and uses a bounded incoming queue. Anvil should not use a blocking read helper that waits to fill a large requested byte count before returning LSP chunks.
+- **Framing and backpressure:** Zed parses `Content-Length` framing incrementally and uses a bounded incoming queue. Anvil should not use a blocking read helper that waits to fill a large requested byte count before returning LSP chunks, and should enforce max header/body sizes.
 - **Lifecycle:** Zed starts servers with piped stdio, captures stderr, stores response handlers by ID, initializes, sends `initialized`, shuts down with timeout, sends `exit`, then kills if necessary.
-- **Capability negotiation:** Initialize params include root URI/path, workspace folders, client capabilities, and explicit position encoding. Dynamic registrations are handled via `client/registerCapability` / `client/unregisterCapability`.
+- **Capability negotiation:** Initialize params include root URI/path, workspace folders, client capabilities, and explicit position encoding. Dynamic registrations are handled via `client/registerCapability` / `client/unregisterCapability`. Do not advertise dynamic/config/progress capabilities until Anvil actually handles them.
 - **Document sync:** Zed tracks per-buffer/per-server snapshots and sends full or incremental sync depending on capability. Anvil should start with full sync but still track per-client document state and versions.
 - **Position encoding:** Zed uses UTF-16 points in LSP-facing paths and clips server ranges into buffers. Anvil byte columns make this a major hidden complexity.
 - **Diagnostics:** Zed stores diagnostics separately from UI, per worktree/path/server, remaps or discards stale diagnostics, and only later displays/navigation them.
@@ -116,7 +155,7 @@ Concrete takeaways for Anvil:
 - **Definition/references:** Zed handles scalar/array/link responses and cross-file buffers. Multiple results are a real UX case; silently selecting the first is not acceptable.
 - **Semantic tokens:** Zed keeps Tree-sitter/base syntax and overlays semantic token styles with versioned caches. Anvil should defer semantic tokens until style/overlay policy is explicit.
 - **Server identity/root reuse:** Zed keys language servers by worktree/manifest root/language/server and reuses/rebases them across settings changes. Anvil needs a simpler but explicit client identity key.
-- **Testing:** Zed has fake language servers/pipes and fake adapters. Anvil tests must use fake/mock servers, not installed `clangd`.
+- **Testing:** Zed has fake language servers/pipes and fake adapters. Anvil tests must use fake/mock servers, not installed `clangd`. Use an in-memory scripted transport for protocol/client-state tests and a separate fake process server for stdio/process tests.
 
 ### Fred recovered source
 
@@ -147,6 +186,10 @@ I do not see evidence of LSP/JSON-RPC/language-server architecture in Fred. Its 
 8. **Prefer clear fallback behavior over clever partial semantics.** If semantic truth is uncertain, fall back or label as local/syntactic.
 9. **Async/cache provider contract.** LSP-backed provider methods must return cached/fallback/pending status, not synchronously wait for server responses.
 10. **No arbitrary first-result jumps.** Multiple definitions/references must return a structured list and use a picker/result UI when available.
+11. **Truthful capability advertisement.** Do not set LSP dynamic-registration/configuration/progress capability flags to true until matching handlers exist.
+12. **Trust before executable project config.** Bundled server commands are fine; workspace-provided executable commands need explicit trust/opt-in before launch.
+13. **JSON correctness before LSP messages.** LSP needs explicit empty arrays and explicit `null`; Anvil's current generic JSON module is not safe enough unchanged.
+14. **Empty results are real results.** A fresh empty LSP outline/reference list is authoritative and must not be treated as provider failure.
 
 ## Non-goals for the first LSP landing
 
@@ -167,6 +210,7 @@ Initial Lua-first structure:
 
 ```text
 data/core/lsp/init.lua             -- public facade, client registry, commands later
+data/core/lsp/json.lua             -- LSP-safe JSON wrappers/sentinels if core.json is not extended
 data/core/lsp/jsonrpc.lua          -- Content-Length framing, encode/decode, ids
 data/core/lsp/transport.lua        -- transport interface + queues/backpressure
 data/core/lsp/client.lua           -- client state machine, request dispatch, lifecycle
@@ -183,6 +227,7 @@ data/core/lsp/provider.lua         -- language_intelligence provider bridge
 Tests:
 
 ```text
+tests/lua/runtime/lsp_json.lua
 tests/lua/runtime/lsp_jsonrpc.lua
 tests/lua/runtime/lsp_transport.lua
 tests/lua/runtime/lsp_position.lua
@@ -193,10 +238,11 @@ tests/lua/runtime/lsp_diagnostics.lua
 tests/lua/ui/lsp_provider.lua
 ```
 
-Fake servers/scripts:
+Fake transports and servers:
 
 ```text
-tests/fixtures/lsp/fake_server.lua
+tests/fixtures/lsp/fake_transport.lua -- in-memory scripted transport for protocol/client tests
+tests/fixtures/lsp/fake_server.lua    -- subprocess stdio fixture for process/lifecycle tests
 ```
 
 Do not add native code unless Lua process/pipe APIs prove insufficient. If current process APIs are insufficient, first improve generic process APIs in a small milestone.
@@ -218,6 +264,17 @@ LSP provider methods must not block waiting for a response. A provider may:
 value, reason, provider_id, status
 ```
 
+Or, if the API is refactored more aggressively:
+
+```lua
+{
+  value = {},
+  status = "fresh" | "stale" | "pending" | "unavailable" | "error",
+  provider_id = "lsp",
+  reason = nil,
+}
+```
+
 Where `status` can be:
 
 ```text
@@ -230,9 +287,31 @@ error
 
 Fallback rule:
 
-- If a higher-priority LSP provider returns `fresh`, use it.
+- If a higher-priority LSP provider returns `fresh`, use it, even if the value is an empty table.
 - If it returns `pending`, `unavailable`, or `error`, call lower-priority providers such as Tree-sitter unless the caller explicitly asked for LSP-only.
 - If it returns `stale`, the caller may use stale data if the UX allows, but should still refresh in background.
+
+Current `core.language_intelligence.first_value` skips empty tables, which is correct for current Tree-sitter fallback probing but wrong for LSP. A `fresh` empty outline/reference/diagnostic-related result is an authoritative server answer. Fallback should depend on status, not `#value > 0` or `next(value) ~= nil`.
+
+### JSON codec constraints
+
+Before implementing JSON-RPC, audit Anvil's existing `core.json`.
+
+Known current issues:
+
+- Empty Lua tables encode as `{}`, not `[]`.
+- JSON `null` decodes to Lua `nil`, losing the distinction between a missing field and an explicit `null` result.
+- `json.null` exists for encoding, but decode preservation and empty-array/object control are not sufficient for LSP without additional helpers.
+
+LSP requires explicit empty arrays, explicit null values, and preserving string/numeric request IDs. Phase 8.1 must either extend `core.json` or introduce `core.lsp.json` with LSP-safe sentinels such as:
+
+```lua
+lsp_json.array({})
+lsp_json.object({})
+lsp_json.null
+```
+
+Do not build JSON-RPC on the current generic JSON behavior unchanged.
 
 ### JSON-RPC / stdio framing
 
@@ -253,14 +332,30 @@ Requirements:
 - Use byte length, not character count.
 - Unknown headers ignored.
 - Invalid framing logs quietly and fails the client safely.
+- Enforce configurable maximum header bytes and maximum body bytes; oversized messages fail the client safely.
 - Incoming queue should be bounded to prevent memory growth if the server floods messages.
 - Outgoing writes should include correct byte-length header.
 
 Message types:
 
 - Request: `{ jsonrpc="2.0", id, method, params }`
-- Response: `{ jsonrpc="2.0", id, result }` or `{ id, error }`
+- Response: `{ jsonrpc="2.0", id, result }` or `{ jsonrpc="2.0", id, error = { code, message, data? } }`
 - Notification: `{ jsonrpc="2.0", method, params }`
+
+Outbound request IDs may be numeric, but inbound server request IDs may be string or number. Responses to server requests must preserve the original ID type.
+
+Suggested normalized message shape:
+
+```lua
+{
+  kind = "request" | "response" | "notification",
+  id = number_or_string_or_nil,
+  method = method_or_nil,
+  params = params_or_nil,
+  result = result_or_nil,
+  error = { code = number, message = string, data = any_or_nil } or nil,
+}
+```
 
 Request bookkeeping:
 
@@ -276,9 +371,12 @@ Request bookkeeping:
 
 Before real client lifecycle, verify Anvil can read available stdout/stderr chunks without waiting to fill a requested byte count.
 
-Known risk:
+Known local evidence:
 
-- Lua `process.stream:read(n)` may try to fill `n` bytes in a coroutine. That is bad for event-style LSP chunk reads.
+- Native `proc:read(fd, max)` drains available stdout/stderr chunks and returns up to the requested size.
+- Lua `process.stream:read(n)` waits toward a target byte count in yieldable coroutines. That wrapper behavior is bad for event-style LSP chunk reads.
+
+Phase 8.2 should prefer native `proc:read_stdout/read_stderr` or a thin `read_available(max_bytes)` wrapper, not `process.stream:read(n)`. Still test the behavior explicitly so future process API changes do not silently break LSP.
 
 Phase 8.2 must answer:
 
@@ -342,11 +440,14 @@ Minimum safe behavior:
 - Unknown notifications: quiet log at most.
 - `window/logMessage`: quiet log with rate/size cap.
 - `window/showMessage`: initially quiet log or visible warning only for severe messages.
-- `window/workDoneProgress/create`, `$/progress`: store/log minimal progress later; ignore safely at first.
-- `client/registerCapability` and `client/unregisterCapability`: log and ignore safely at first, then implement selected registrations later.
-- `workspace/configuration`: respond with configured server settings when implemented, safe default earlier.
+- `window/workDoneProgress/create`, `$/progress`: do not advertise support until handled; still respond safely if received.
+- `client/registerCapability` and `client/unregisterCapability`: do not advertise dynamic registration support until handled; still respond safely if received.
+- `workspace/applyEdit`: do not advertise until implemented; if received anyway, return failure safely.
+- `workspace/configuration`: do not advertise `workspace.configuration = true` until configured responses exist.
+- File watching/file operations: do not advertise until Anvil has handlers and policy.
+- Completion resolve, semantic tokens, diagnostics pull, and other feature-specific dynamic registrations: advertise only when the corresponding implementation exists.
 
-Dynamic registration is not required in the first lifecycle milestone, but the protocol dispatcher must not crash or hang when servers send these messages.
+Dynamic registration is not required in the first lifecycle milestone, but the protocol dispatcher must not crash or hang when servers send these messages. Safe unknown-request handling is necessary; truthful capability advertisement is mandatory.
 
 ### Server configuration, discovery, root detection, and client identity
 
@@ -360,8 +461,14 @@ config.lsp = {
   servers = {
     clangd = {
       command = { "clangd", "--background-index" },
+      language_id = "cpp",
       file_patterns = { "%.c$", "%.h$", "%.cc$", "%.cpp$", "%.cxx$", "%.hpp$", "%.hxx$" },
       root_markers = { "compile_commands.json", ".clangd", ".git" },
+      initialization_options = {},
+      settings = {},
+      env = {},
+      cwd_policy = "root",
+      request_timeout = 10,
     },
   },
 }
@@ -373,6 +480,7 @@ Rules:
 - No server auto-install in initial milestones.
 - User/local server overrides belong in `USERDIR` config, not repo state.
 - Tests use fake server path, not real server discovery.
+- If project-local config is ever allowed to define executable commands, add a trust/opt-in gate before launching them. Bundled first-party server definitions are safe defaults; arbitrary workspace-provided commands are not.
 
 Root URI should be based on active project/document.
 
@@ -448,6 +556,7 @@ LSP document sync is its own milestone after lifecycle/config/position basics.
 
 Required model:
 
+- Centralize LSP document lifecycle hooks in one module. Use the same core extension points Tree-sitter already uses: filename/load/reset_syntax for attach/update, `Doc:on_text_transaction` for changes, and `Doc:on_close` for didClose/cleanup. Do not let each LSP feature patch `Doc` independently.
 - One `DocumentState` per `(client, document URI)`.
 - Send `textDocument/didOpen` when a supported doc is opened and client ready.
 - Send `textDocument/didChange` after edits.
@@ -461,10 +570,11 @@ Suggested `DocumentState` fields:
   doc = doc,
   uri = uri,
   language_id = language_id,
-  lsp_version = 1,
+  lsp_version = 0,
   last_synced_change_id = doc:get_change_id(),
+  snapshots = {}, -- bounded doc_change_id/lsp_version/text metadata
   pending_full_sync = false,
-  opened = true,
+  opened = false,
   closing = false,
 }
 ```
@@ -593,7 +703,27 @@ DiagnosticStore[server_id][uri] = {
   diagnostics = diagnostics,
   received_at = system.get_time(),
 }
+
+Diagnostic = {
+  uri = uri,
+  path = path_or_nil,
+  lsp_range = raw_lsp_range,
+  doc_range = converted_range_or_nil,
+  severity = severity,
+  code = code,
+  code_description = code_description,
+  source = source,
+  message = message,
+  tags = tags,
+  related_information = related_information,
+  data = data,
+  version = version_or_nil,
+  server_id = server_id,
+  stale = boolean,
+}
 ```
+
+Store raw URI/LSP ranges and normalized metadata first. Convert to Anvil byte-range `doc_range` lazily only when a matching `Doc` is open or a UI needs rendering/navigation. This is required for diagnostics on unopened files and workspace-wide diagnostics. Keep summaries by URI/path separate from render/navigation state.
 
 Initial display/apply rule:
 
@@ -655,11 +785,16 @@ Visible `core.warn/error` only when the user needs to act, e.g. a manually confi
 
 ## Testing strategy
 
-### Fake server
+### Fake transports and servers
 
-A fake server is mandatory for automation. It should:
+Two fake-server layers are mandatory for automation:
 
-- read/write LSP stdio framing
+1. **In-memory scripted transport** for JSON-RPC dispatch, request bookkeeping, client state, and server-request policy tests. These tests should not launch subprocesses.
+2. **Process stdio fake server** for pipe/framing/lifecycle tests. These tests verify Anvil's process APIs and stdio behavior.
+
+Fake layers should:
+
+- read/write LSP framing where relevant
 - respond to `initialize`
 - record notifications
 - optionally send diagnostics
@@ -673,13 +808,14 @@ Tests must not require clangd.
 
 Test pure/protocol pieces:
 
+- LSP-safe JSON encoding/decoding for empty arrays, objects, explicit nulls, and request ID preservation
 - header parsing with partial chunks
 - multiple messages in one chunk
-- invalid header/body handling
+- invalid header/body handling and max header/body size rejection
 - bounded queue/backpressure behavior
-- request ID dispatch
+- request ID dispatch, including numeric outbound IDs and string/numeric inbound server request IDs
 - timeout/cancel behavior
-- initialize/shutdown lifecycle with fake server
+- initialize/shutdown lifecycle with in-memory fake transport first, then process fake server
 - server crash/restart/generation handling
 - stderr draining/rate limiting
 - path/URI conversions
@@ -688,13 +824,14 @@ Test pure/protocol pieces:
 - document versioning and didOpen/didChange/didClose payloads
 - stale response discard
 - dynamic capability request safe handling
-- diagnostics storage and stale-version behavior
+- diagnostics storage and stale-version behavior, including unopened-file diagnostics with raw URI/LSP ranges
 
 ### UI/in-process tests
 
 Test behavior through Anvil APIs:
 
 - provider registration and precedence over Tree-sitter where capability exists
+- fresh empty LSP results are authoritative and do not fall through accidentally
 - fallback to Tree-sitter when LSP provider unavailable/pending/error
 - no-op behavior when neither provider exists
 - commands do not test exact keybindings
@@ -728,12 +865,14 @@ Exit criteria:
 
 Deliverables:
 
+- LSP-safe JSON codec or wrappers for empty arrays, objects, explicit nulls, and request ID preservation.
 - JSON-RPC framing parser/encoder.
 - Request/response/notification type helpers.
 - Request ID bookkeeping independent of process.
 - Transport interface abstraction.
+- In-memory scripted transport fixture for protocol/client tests.
 - Bounded incoming queue/backpressure policy.
-- Pure runtime tests for partial/multiple/malformed messages and response dispatch.
+- Pure runtime tests for JSON codec behavior, partial/multiple/malformed messages, bounded queues, and response dispatch.
 
 No real clangd integration.
 No document sync.
@@ -748,7 +887,9 @@ Exit criteria:
 
 Deliverables:
 
-- Verify or extend Anvil process APIs for nonblocking/read-available stdout/stderr.
+- Verify native `proc:read(fd, max)` drains available chunks and returns up to requested size.
+- Avoid `process.stream:read(n)` for event-style LSP reads.
+- Extend Anvil process APIs with a thin `read_available(max_bytes)` wrapper if needed.
 - Stdio transport implementation over process APIs.
 - Fake server process fixture.
 - Tests for chunked output, stderr drain, process exit, write failure, and timeout.
@@ -780,6 +921,7 @@ Deliverables:
 - Client state machine.
 - Capability storage and negotiated position encoding.
 - Server-initiated request safe handling.
+- Truthful client capability policy: do not advertise dynamicRegistration/workspace.configuration/workDoneProgress until handled.
 - Quiet logging/stderr tail.
 - Crash/timeout/restart generation handling.
 
@@ -793,7 +935,8 @@ Exit criteria:
 
 Deliverables:
 
-- Config schema for server definitions.
+- Config schema for server definitions including command, language_id, file patterns, root markers, initialization_options, settings, env, cwd/root policy, and request timeout defaults.
+- Trust/opt-in policy for any future project-local executable server commands.
 - Root marker detection.
 - Client identity key and reuse/restart rules.
 - Missing executable fallback behavior.
@@ -810,7 +953,8 @@ Deliverables:
 
 - didOpen/didChange/didClose/didSave support.
 - Full sync first.
-- DocumentState with version/change-id mapping.
+- Centralized Doc lifecycle hooks modeled after Tree-sitter's Doc patching.
+- DocumentState with version/change-id/snapshot mapping.
 - Debounced change flushing.
 - Flush-before-request hook.
 - Large-file guard.
@@ -827,9 +971,10 @@ Exit criteria:
 Deliverables:
 
 - Extend provider dispatch to represent `fresh`, `stale`, `pending`, `unavailable`, `error`.
+- Define empty-result semantics: `fresh` with `{}` is a real answer, not provider failure.
 - Add generic semantic APIs needed by LSP, e.g. `definitions`, `declarations`, `references`, `diagnostics`.
 - Preserve Tree-sitter provider behavior and fallback.
-- Tests for provider precedence and fallback with pending/error LSP provider.
+- Tests for provider precedence, fresh empty results, and fallback with pending/error LSP provider.
 
 Exit criteria:
 
@@ -842,15 +987,17 @@ Deliverables:
 
 - Handle `textDocument/publishDiagnostics` notifications.
 - Store diagnostics by server and URI with version.
+- Preserve raw URI/LSP ranges for unopened files and convert to doc byte ranges lazily for open docs/UI.
+- Preserve normalized diagnostic metadata: severity, source, code/codeDescription, tags, relatedInformation, data, server_id, URI, version, received_at, stale/current state.
 - Mark or hide stale diagnostics.
 - Clear diagnostics on server exit/doc close as appropriate.
-- Tests with fake server diagnostics.
+- Tests with fake server diagnostics, including diagnostics for unopened files.
 
 No visible diagnostics UI yet.
 
 Exit criteria:
 
-- Storage behavior is correct and version-aware.
+- Storage behavior is correct, version-aware, and supports unopened-file diagnostics.
 
 ### Phase 8.9: LSP document symbols provider
 
@@ -929,6 +1076,7 @@ Manual gate required.
 8. How should server stderr be surfaced when debugging LSP issues?
 9. What max file size should disable full sync?
 10. How aggressively should clients restart after crashes?
+11. Should `core.json` be extended globally, or should LSP use a narrow `core.lsp.json` wrapper with array/object/null sentinels?
 
 ## Suggested first implementation task
 
