@@ -678,6 +678,68 @@ done:
   return ok;
 }
 
+bool anvil_ts_document_state_node_ranges(
+  AnvilTSDocumentState *state,
+  uint32_t byte_start,
+  uint32_t byte_end,
+  bool named_only,
+  uint32_t max_nodes,
+  AnvilTSNodeRangeCallback callback,
+  void *payload,
+  char **error
+) {
+  if (error) *error = NULL;
+  if (!state || !callback) {
+    service_set_error(error, "invalid Tree-sitter node range request");
+    return false;
+  }
+  if (!service_ensure_initialized() || !service_lock()) {
+    service_set_error(error, "failed to lock Tree-sitter service");
+    return false;
+  }
+  if (!state->current_tree || !state->current_snapshot || state->closed) {
+    service_unlock();
+    service_set_error(error, "Tree-sitter tree is not ready");
+    return false;
+  }
+
+  const AnvilTSSnapshot *snapshot = state->current_snapshot;
+  if (byte_end > snapshot->byte_len) byte_end = snapshot->byte_len;
+  if (byte_start > byte_end) byte_start = byte_end;
+  uint32_t query_end = byte_end;
+  if (byte_end > byte_start) query_end = byte_end - 1;
+  if (query_end > snapshot->byte_len) query_end = snapshot->byte_len;
+
+  TSNode root = ts_tree_root_node(state->current_tree);
+  TSNode node = named_only
+    ? ts_node_named_descendant_for_byte_range(root, byte_start, query_end)
+    : ts_node_descendant_for_byte_range(root, byte_start, query_end);
+  uint32_t emitted = 0;
+  while (!ts_node_is_null(node)) {
+    if (!named_only || ts_node_is_named(node)) {
+      const char *type = ts_node_type(node);
+      AnvilTSNodeRange range;
+      memset(&range, 0, sizeof(range));
+      range.type = type;
+      range.type_len = type ? (uint32_t) strlen(type) : 0;
+      range.start_byte = ts_node_start_byte(node);
+      range.end_byte = ts_node_end_byte(node);
+      range.start_point = ts_node_start_point(node);
+      range.end_point = ts_node_end_point(node);
+      range.named = ts_node_is_named(node);
+      if (!callback(&range, payload)) {
+        service_unlock();
+        return false;
+      }
+      emitted++;
+      if (max_nodes > 0 && emitted >= max_nodes) break;
+    }
+    node = ts_node_parent(node);
+  }
+  service_unlock();
+  return true;
+}
+
 static bool document_state_schedule_parse_internal(
   AnvilTSDocumentState *state,
   AnvilTSSnapshot *snapshot,

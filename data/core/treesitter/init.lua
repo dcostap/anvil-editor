@@ -2,6 +2,7 @@ local core = require "core"
 local command = require "core.command"
 local registry = require "core.treesitter.registry"
 local ts_outline = require "core.treesitter.outline"
+local ts_selection = require "core.treesitter.selection"
 local Doc = require "core.doc"
 
 local native_ok, native = nil, nil
@@ -9,6 +10,7 @@ local native_ok, native = nil, nil
 local treesitter = {}
 treesitter.registry = registry
 treesitter.outline = ts_outline
+treesitter.selection = ts_selection
 treesitter.enabled = true
 
 local attached_docs = setmetatable({}, { __mode = "k" })
@@ -137,8 +139,10 @@ function treesitter.schedule_parse(doc, edit)
   ts.last_poll_changed = false
   ts.scheduled_fingerprint = doc_fingerprint(doc)
   ts.highlight_cache = {}
+  ts.selection_history = {}
   ts.line_starts = nil
   ts.outline_line_starts = nil
+  ts.selection_line_starts = nil
   if doc.highlighter and doc.highlighter.invalidate_render_cache then
     doc.highlighter:invalidate_render_cache()
   end
@@ -271,8 +275,10 @@ function treesitter.poll_doc(doc)
   end
   if changed or discarded_stale then
     ts.highlight_cache = {}
+    ts.selection_history = {}
     ts.line_starts = nil
     ts.outline_line_starts = nil
+    ts.selection_line_starts = nil
     if doc.highlighter and doc.highlighter.invalidate_render_cache then
       doc.highlighter:invalidate_render_cache()
     end
@@ -302,6 +308,22 @@ end
 
 function treesitter.get_current_document_outline(opts)
   return ts_outline.get_current_document_outline(opts)
+end
+
+function treesitter.get_node_ranges(doc, line1, col1, line2, col2, opts)
+  return ts_selection.get_node_ranges(doc, line1, col1, line2, col2, opts)
+end
+
+function treesitter.get_current_node_ranges(opts)
+  return ts_selection.get_current_node_ranges(opts)
+end
+
+function treesitter.expand_selection(doc)
+  return ts_selection.expand_selection(doc)
+end
+
+function treesitter.shrink_selection(doc)
+  return ts_selection.shrink_selection(doc)
 end
 
 function treesitter.log_document_status(doc)
@@ -372,6 +394,22 @@ if type(previous_on_event) == "function" and not core.__treesitter_on_event_wrap
     return previous_on_event(type, ...)
   end
 end
+
+local function doc_command_predicate()
+  local view = core.active_view
+  local doc = view and view.doc
+  return doc and type(doc.get_selection) == "function", doc
+end
+
+command.add(doc_command_predicate, {
+  ["tree-sitter:expand-selection"] = function(doc)
+    treesitter.expand_selection(doc)
+  end,
+
+  ["tree-sitter:shrink-selection"] = function(doc)
+    treesitter.shrink_selection(doc)
+  end,
+})
 
 command.add(nil, {
   ["tree-sitter:log-document-status"] = function()

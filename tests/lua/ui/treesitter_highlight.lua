@@ -1,4 +1,5 @@
 local core = require "core"
+local command = require "core.command"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
 local test = require "core.test"
@@ -118,6 +119,50 @@ public:
     test.ok(table.concat(names, "|"):find("demo:namespace", 1, true))
     test.ok(table.concat(names, "|"):find("MenuGui:class", 1, true))
     test.ok(table.concat(names, "|"):find("draw_settings:method", 1, true))
+    if previous then core.set_active_view(previous) end
+    doc:on_close()
+  end)
+
+  test.it("commands expand and shrink selection by Tree-sitter node", function()
+    local doc = cpp_doc("int main() { return 0; }")
+    test.ok(wait_ready(doc))
+    local previous = core.active_view
+    local view = DocView(doc)
+    core.set_active_view(view)
+    local col = assert(doc.lines[1]:find("main", 1, true))
+    view:set_selection_state({ selections = { 1, col, 1, col }, last_selection = 1 })
+
+    test.ok(command.perform("tree-sitter:expand-selection"))
+    local state = view:get_selection_state()
+    doc:set_selection_list(state.selections, state.last_selection, { sanitized = true })
+    test.equal(doc:get_selection_text(), "main")
+
+    test.ok(command.perform("tree-sitter:expand-selection"))
+    state = view:get_selection_state()
+    doc:set_selection_list(state.selections, state.last_selection, { sanitized = true })
+    test.ok(#doc:get_selection_text() > #"main")
+    test.ok(doc:get_selection_text():find("main", 1, true))
+
+    test.ok(command.perform("tree-sitter:shrink-selection"))
+    state = view:get_selection_state()
+    doc:set_selection_list(state.selections, state.last_selection, { sanitized = true })
+    test.equal(doc:get_selection_text(), "main")
+
+    if previous then core.set_active_view(previous) end
+    doc:on_close()
+  end)
+
+  test.it("expand selection command gracefully no-ops without ready Tree-sitter", function()
+    local doc = Doc()
+    set_text(doc, "plain text")
+    doc:set_filename("plain.txt", "plain.txt")
+    local previous = core.active_view
+    local view = DocView(doc)
+    core.set_active_view(view)
+    view:set_selection_state({ selections = { 1, 2, 1, 2 }, last_selection = 1 })
+    test.ok(command.perform("tree-sitter:expand-selection"))
+    local state = view:get_selection_state()
+    test.same(state.selections, { 1, 2, 1, 2 })
     if previous then core.set_active_view(previous) end
     doc:on_close()
   end)

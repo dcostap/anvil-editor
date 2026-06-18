@@ -51,8 +51,23 @@ typedef struct AnvilTSQueryCapture {
   uint32_t order;
 } AnvilTSQueryCapture;
 
+typedef struct AnvilTSNodeRange {
+  const char *type;
+  uint32_t type_len;
+  uint32_t start_byte;
+  uint32_t end_byte;
+  TSPoint start_point;
+  TSPoint end_point;
+  bool named;
+} AnvilTSNodeRange;
+
 typedef bool (*AnvilTSQueryCaptureCallback)(
   const AnvilTSQueryCapture *capture,
+  void *payload
+);
+
+typedef bool (*AnvilTSNodeRangeCallback)(
+  const AnvilTSNodeRange *range,
   void *payload
 );
 
@@ -85,6 +100,16 @@ bool anvil_ts_document_state_query_captures(
   AnvilTSQueryCaptureCallback callback,
   void *payload,
   bool *exceeded_match_limit,
+  char **error
+);
+bool anvil_ts_document_state_node_ranges(
+  AnvilTSDocumentState *state,
+  uint32_t byte_start,
+  uint32_t byte_end,
+  bool named_only,
+  uint32_t max_nodes,
+  AnvilTSNodeRangeCallback callback,
+  void *payload,
   char **error
 );
 

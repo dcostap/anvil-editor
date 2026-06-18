@@ -501,6 +501,127 @@ static void push_capture_copy(lua_State *L, const LuaCaptureCopy *capture) {
   lua_setfield(L, -2, "order");
 }
 
+typedef struct LuaNodeRangeCopy {
+  char *type;
+  uint32_t type_len;
+  uint32_t start_byte;
+  uint32_t end_byte;
+  TSPoint start_point;
+  TSPoint end_point;
+  bool named;
+} LuaNodeRangeCopy;
+
+typedef struct LuaNodeRangeCollectContext {
+  LuaNodeRangeCopy *items;
+  uint32_t count;
+  uint32_t capacity;
+  bool failed;
+} LuaNodeRangeCollectContext;
+
+static void free_node_range_copies(LuaNodeRangeCollectContext *context) {
+  if (!context) return;
+  for (uint32_t i = 0; i < context->count; i++) free(context->items[i].type);
+  free(context->items);
+  context->items = NULL;
+  context->count = 0;
+  context->capacity = 0;
+}
+
+static bool collect_node_range(const AnvilTSNodeRange *range, void *payload) {
+  LuaNodeRangeCollectContext *context = (LuaNodeRangeCollectContext *) payload;
+  if (context->count == context->capacity) {
+    uint32_t next_capacity = context->capacity ? context->capacity * 2 : 32;
+    LuaNodeRangeCopy *next = (LuaNodeRangeCopy *) realloc(context->items, sizeof(*next) * next_capacity);
+    if (!next) {
+      context->failed = true;
+      return false;
+    }
+    context->items = next;
+    context->capacity = next_capacity;
+  }
+  LuaNodeRangeCopy *copy = &context->items[context->count];
+  memset(copy, 0, sizeof(*copy));
+  copy->type = (char *) malloc((size_t) range->type_len + 1);
+  if (!copy->type) {
+    context->failed = true;
+    return false;
+  }
+  memcpy(copy->type, range->type, range->type_len);
+  copy->type[range->type_len] = '\0';
+  copy->type_len = range->type_len;
+  copy->start_byte = range->start_byte;
+  copy->end_byte = range->end_byte;
+  copy->start_point = range->start_point;
+  copy->end_point = range->end_point;
+  copy->named = range->named;
+  context->count++;
+  return true;
+}
+
+static void push_node_range_copy(lua_State *L, const LuaNodeRangeCopy *range) {
+  lua_newtable(L);
+  lua_pushlstring(L, range->type, range->type_len);
+  lua_setfield(L, -2, "type");
+  lua_pushboolean(L, range->named);
+  lua_setfield(L, -2, "named");
+  lua_pushinteger(L, (lua_Integer) range->start_byte);
+  lua_setfield(L, -2, "start_byte");
+  lua_pushinteger(L, (lua_Integer) range->end_byte);
+  lua_setfield(L, -2, "end_byte");
+  lua_pushinteger(L, (lua_Integer) range->start_point.row + 1);
+  lua_setfield(L, -2, "start_line");
+  lua_pushinteger(L, (lua_Integer) range->start_point.column + 1);
+  lua_setfield(L, -2, "start_col");
+  lua_pushinteger(L, (lua_Integer) range->end_point.row + 1);
+  lua_setfield(L, -2, "end_line");
+  lua_pushinteger(L, (lua_Integer) range->end_point.column + 1);
+  lua_setfield(L, -2, "end_col");
+}
+
+static int state_node_ranges(lua_State *L) {
+  AnvilTSStateUserdata *state_userdata = check_state(L, 1);
+  luaL_argcheck(L, state_userdata->state != NULL, 1, "closed Tree-sitter document state");
+  uint32_t byte_start = (uint32_t) luaL_checkinteger(L, 2);
+  uint32_t byte_end = (uint32_t) luaL_checkinteger(L, 3);
+  bool named_only = true;
+  uint32_t max_nodes = 128;
+  if (lua_istable(L, 4)) {
+    lua_getfield(L, 4, "named_only");
+    if (lua_isboolean(L, -1)) named_only = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+    max_nodes = option_uint32(L, 4, "max_nodes", max_nodes);
+  }
+
+  LuaNodeRangeCollectContext context;
+  memset(&context, 0, sizeof(context));
+  char *error = NULL;
+  bool ok = anvil_ts_document_state_node_ranges(
+    state_userdata->state,
+    byte_start,
+    byte_end,
+    named_only,
+    max_nodes,
+    collect_node_range,
+    &context,
+    &error
+  );
+  if (!ok) {
+    lua_pushnil(L);
+    lua_pushstring(L, error ? error : (context.failed ? "out of memory collecting Tree-sitter node ranges" : "Tree-sitter node range query failed"));
+    free(error);
+    free_node_range_copies(&context);
+    return 2;
+  }
+
+  lua_newtable(L);
+  for (uint32_t i = 0; i < context.count; i++) {
+    push_node_range_copy(L, &context.items[i]);
+    lua_rawseti(L, -2, (int) i + 1);
+  }
+  free_node_range_copies(&context);
+  return 1;
+}
+
 static int state_query_captures(lua_State *L) {
   AnvilTSStateUserdata *state_userdata = check_state(L, 1);
   AnvilTSQueryUserdata *query_userdata = check_query(L, 2);
@@ -629,6 +750,7 @@ static const luaL_Reg state_methods[] = {
   { "schedule_parse", state_schedule_parse },
   { "poll", state_poll },
   { "query_captures", state_query_captures },
+  { "node_ranges", state_node_ranges },
   { "cancel", state_cancel },
   { "close", state_close },
   { NULL, NULL }
