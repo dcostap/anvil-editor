@@ -13,6 +13,8 @@ provider.name = "LSP"
 provider.priority = 100
 provider.kind = "semantic-project"
 provider.features = {
+  render_tokens = true,
+  invalidate_render_cache = true,
   document_outline = true,
   definitions = true,
   declarations = true,
@@ -24,6 +26,9 @@ local cache = setmetatable({}, { __mode = "k" })
 local inflight = setmetatable({}, { __mode = "k" })
 local navigation_cache = setmetatable({}, { __mode = "k" })
 local navigation_inflight = setmetatable({}, { __mode = "k" })
+local semantic_cache = setmetatable({}, { __mode = "k" })
+local semantic_inflight = setmetatable({}, { __mode = "k" })
+local semantic_line_cache = setmetatable({}, { __mode = "k" })
 
 local SYMBOL_KIND = {
   [1] = "file",
@@ -80,6 +85,10 @@ local function feature_supported(client, feature)
     return capability_enabled(capabilities.declarationProvider)
   elseif feature == "references" then
     return capability_enabled(capabilities.referencesProvider)
+  elseif feature == "render_tokens" or feature == "invalidate_render_cache" then
+    local semantic = capabilities.semanticTokensProvider
+    if type(semantic) ~= "table" then return false end
+    return semantic.full == true or type(semantic.full) == "table"
   end
   return false
 end
@@ -250,6 +259,9 @@ function provider.unregister_client(client)
   inflight[client] = nil
   navigation_cache[client] = nil
   navigation_inflight[client] = nil
+  semantic_cache[client] = nil
+  semantic_inflight[client] = nil
+  semantic_line_cache[client] = nil
 end
 
 local function matching_clients(doc, feature)
@@ -328,7 +340,347 @@ function provider.clear()
   inflight = setmetatable({}, { __mode = "k" })
   navigation_cache = setmetatable({}, { __mode = "k" })
   navigation_inflight = setmetatable({}, { __mode = "k" })
+  semantic_cache = setmetatable({}, { __mode = "k" })
+  semantic_inflight = setmetatable({}, { __mode = "k" })
+  semantic_line_cache = setmetatable({}, { __mode = "k" })
   language_intelligence.register_provider(provider)
+end
+
+local SEMANTIC_TOKEN_TYPE_MAP = {
+  namespace = "type",
+  type = "type",
+  class = "class",
+  enum = "type",
+  interface = "interface",
+  struct = "type",
+  typeParameter = "type",
+  parameter = "parameter",
+  variable = "variable",
+  property = "property",
+  enumMember = "constant",
+  event = "function",
+  function_ = "function",
+  method = "function.method",
+  macro = "function",
+  keyword = "keyword",
+  modifier = "keyword2",
+  comment = "comment",
+  string = "string",
+  number = "number",
+  regexp = "string",
+  operator = "operator",
+  decorator = "annotation",
+}
+SEMANTIC_TOKEN_TYPE_MAP["function"] = "function"
+
+local function semantic_capability(client)
+  local capabilities = client_capabilities(client)
+  local semantic = capabilities.semanticTokensProvider
+  if type(semantic) ~= "table" then return nil end
+  if not (semantic.full == true or type(semantic.full) == "table") then return nil end
+  local legend = type(semantic.legend) == "table" and semantic.legend or {}
+  return semantic, {
+    tokenTypes = type(legend.tokenTypes) == "table" and legend.tokenTypes or {},
+    tokenModifiers = type(legend.tokenModifiers) == "table" and legend.tokenModifiers or {},
+  }
+end
+
+local function semantic_legend_key(legend)
+  legend = legend or {}
+  return table.concat(legend.tokenTypes or {}, "\31") .. "\30" .. table.concat(legend.tokenModifiers or {}, "\31")
+end
+
+local function semantic_modifiers(bitset, legend)
+  local out = {}
+  for i, modifier in ipairs(legend.tokenModifiers or {}) do
+    local flag = 2 ^ (i - 1)
+    if math.floor((tonumber(bitset) or 0) / flag) % 2 >= 1 then out[modifier] = true end
+  end
+  return out
+end
+
+function provider.semantic_style(token_type, modifiers)
+  modifiers = modifiers or {}
+  if modifiers.readonly and (token_type == "variable" or token_type == "property") then
+    return "constant"
+  end
+  return SEMANTIC_TOKEN_TYPE_MAP[token_type] or token_type or "normal"
+end
+
+local function line_start_offsets(doc)
+  local offsets = {}
+  local offset = 0
+  for i = 1, #(doc.lines or {}) do
+    offsets[i] = offset
+    offset = offset + #(doc.lines[i] or "")
+  end
+  offsets[#(doc.lines or {}) + 1] = offset
+  return offsets
+end
+
+function provider.decode_semantic_tokens(doc, data, legend, encoding)
+  local out = {}
+  if type(data) ~= "table" then return out end
+  legend = legend or {}
+  encoding = encoding or "utf-16"
+  local current_line = 0
+  local current_start = 0
+  local starts = line_start_offsets(doc)
+  for i = 1, #data, 5 do
+    local delta_line = tonumber(data[i]) or 0
+    local delta_start = tonumber(data[i + 1]) or 0
+    local length = tonumber(data[i + 2]) or 0
+    local token_type_index = tonumber(data[i + 3]) or 0
+    local modifier_bits = tonumber(data[i + 4]) or 0
+    current_line = current_line + delta_line
+    if delta_line == 0 then
+      current_start = current_start + delta_start
+    else
+      current_start = delta_start
+    end
+    local token_type = (legend.tokenTypes or {})[token_type_index + 1]
+    local modifiers = semantic_modifiers(modifier_bits, legend)
+    local line1, col1 = position.lsp_to_doc(doc, { line = current_line, character = current_start }, encoding)
+    local line2, col2 = position.lsp_to_doc(doc, { line = current_line, character = current_start + length }, encoding, "right")
+    if line1 == line2 and col2 > col1 then
+      out[#out + 1] = {
+        line1 = line1,
+        col1 = col1,
+        line2 = line2,
+        col2 = col2,
+        start_byte = (starts[line1] or 0) + col1 - 1,
+        end_byte = (starts[line2] or 0) + col2 - 1,
+        token_type = token_type,
+        token_modifiers = modifiers,
+        style = provider.semantic_style(token_type, modifiers),
+      }
+    end
+  end
+  return out
+end
+
+local function add_token(tokens, token_type, text)
+  if text == "" then return end
+  local n = #tokens
+  if n >= 2 and tokens[n - 1] == token_type then
+    tokens[n] = tokens[n] .. text
+  else
+    tokens[n + 1] = token_type
+    tokens[n + 2] = text
+  end
+end
+
+local function base_spans(text, base_tokens, line_start)
+  local spans = {}
+  local offset = line_start
+  for i = 1, #(base_tokens or {}), 2 do
+    local token_type = base_tokens[i] or "normal"
+    local token_text = base_tokens[i + 1] or ""
+    local next_offset = offset + #token_text
+    if next_offset > offset then
+      spans[#spans + 1] = { start_byte = offset, end_byte = next_offset, style = token_type }
+    end
+    offset = next_offset
+  end
+  if #spans == 0 then spans[1] = { start_byte = line_start, end_byte = line_start + #text, style = "normal" } end
+  return spans
+end
+
+local function semantic_winner(spans, start_byte, end_byte)
+  local winner
+  for _, span in ipairs(spans or {}) do
+    if span.start_byte <= start_byte and span.end_byte >= end_byte then
+      if not winner or (span.end_byte - span.start_byte) <= (winner.end_byte - winner.start_byte) then
+        winner = span
+      end
+    end
+  end
+  return winner
+end
+
+local function base_winner(spans, start_byte, end_byte)
+  for _, span in ipairs(spans or {}) do
+    if span.start_byte <= start_byte and span.end_byte >= end_byte then return span end
+  end
+end
+
+function provider.overlay_semantic_tokens(text, base_tokens, line_start, semantic_spans)
+  line_start = line_start or 0
+  local line_end = line_start + #(text or "")
+  local boundaries = { line_start, line_end }
+  local base = base_spans(text or "", base_tokens, line_start)
+  for _, span in ipairs(base) do
+    boundaries[#boundaries + 1] = math.max(line_start, math.min(line_end, span.start_byte))
+    boundaries[#boundaries + 1] = math.max(line_start, math.min(line_end, span.end_byte))
+  end
+  for _, span in ipairs(semantic_spans or {}) do
+    local s = math.max(line_start, math.min(line_end, span.start_byte or 0))
+    local e = math.max(line_start, math.min(line_end, span.end_byte or 0))
+    if e > s then
+      boundaries[#boundaries + 1] = s
+      boundaries[#boundaries + 1] = e
+    end
+  end
+  table.sort(boundaries)
+  local tokens = {}
+  local last
+  for _, boundary in ipairs(boundaries) do
+    if boundary ~= last then
+      if last and boundary > last then
+        local semantic = semantic_winner(semantic_spans, last, boundary)
+        local base_span = base_winner(base, last, boundary)
+        local style = semantic and semantic.style or (base_span and base_span.style) or "normal"
+        add_token(tokens, style, (text or ""):sub(last - line_start + 1, boundary - line_start))
+      end
+      last = boundary
+    end
+  end
+  if #tokens == 0 then tokens = { "normal", text or "" } end
+  return tokens
+end
+
+local function semantic_cache_bucket(client, document_uri, legend_key)
+  local by_uri = semantic_cache[client]
+  if not by_uri then by_uri = {}; semantic_cache[client] = by_uri end
+  local by_legend = by_uri[document_uri]
+  if not by_legend then by_legend = {}; by_uri[document_uri] = by_legend end
+  local by_version = by_legend[legend_key]
+  if not by_version then by_version = {}; by_legend[legend_key] = by_version end
+  return by_version
+end
+
+local function semantic_latest(client, document_uri, legend_key, version)
+  local by_uri = semantic_cache[client]
+  local by_legend = by_uri and by_uri[document_uri]
+  local by_version = by_legend and by_legend[legend_key]
+  return by_version and by_version[version] or nil
+end
+
+local function semantic_line_cache_bucket(client, document_uri, legend_key)
+  local by_uri = semantic_line_cache[client]
+  if not by_uri then by_uri = {}; semantic_line_cache[client] = by_uri end
+  local by_legend = by_uri[document_uri]
+  if not by_legend then by_legend = {}; by_uri[document_uri] = by_legend end
+  local by_line = by_legend[legend_key]
+  if not by_line then by_line = {}; by_legend[legend_key] = by_line end
+  return by_line
+end
+
+local function base_render_tokens(doc, line_idx)
+  local tokens = language_intelligence.without_provider("lsp", function()
+    return language_intelligence.render_tokens(doc, line_idx)
+  end)
+  if tokens then return tokens end
+  if doc and doc.highlighter and doc.highlighter.get_line then
+    local line = doc.highlighter:get_line(line_idx)
+    return line and line.tokens or nil
+  end
+  return { "normal", doc and doc.lines and doc.lines[line_idx] or "" }
+end
+
+function provider.schedule_semantic_tokens(client, state, doc)
+  local _semantic, legend = semantic_capability(client)
+  if not legend then return nil, "semantic tokens unsupported" end
+  if type(client.send_request) ~= "function" then return nil, "client has no request API" end
+  documents.flush_before_request(client, state.uri)
+  state = documents.state(client, state.uri) or state
+  local legend_key = semantic_legend_key(legend)
+  local pending = bucket_for(semantic_inflight, client, state.uri)
+  local key = tostring(state.lsp_version) .. ":" .. legend_key
+  if pending[key] then return false, "in-flight" end
+  pending[key] = true
+  local requested_version = state.lsp_version
+  local requested_generation = client_generation(client)
+  local ok, err = client:send_request("textDocument/semanticTokens/full", {
+    textDocument = { uri = state.uri },
+  }, function(result, error_obj)
+    pending[key] = nil
+    local current_state = documents.state(client, state.uri)
+    if error_obj then
+      quiet_log("LSP semanticTokens/full failed for %s: %s", state.uri, tostring(error_obj.message or error_obj.code))
+      return
+    end
+    if client_generation(client) ~= requested_generation then
+      quiet_log("LSP semanticTokens/full dropped stale generation response for %s", state.uri)
+      return
+    end
+    if not current_state or current_state.lsp_version ~= requested_version then
+      quiet_log("LSP semanticTokens/full dropped stale version response for %s", state.uri)
+      return
+    end
+    result = type(result) == "table" and result or {}
+    local decoded = provider.decode_semantic_tokens(doc, result.data or result, legend, client.position_encoding or "utf-16")
+    semantic_cache_bucket(client, state.uri, legend_key)[requested_version] = {
+      version = requested_version,
+      legend_key = legend_key,
+      legend = legend,
+      tokens = decoded,
+      received_at = system.get_time(),
+      generation = requested_generation,
+    }
+    semantic_line_cache[client] = nil
+    if doc.highlighter and doc.highlighter.invalidate_render_cache then
+      doc.highlighter:invalidate_render_cache()
+    end
+  end, { generation = requested_generation })
+  if not ok then
+    pending[key] = nil
+    return nil, err
+  end
+  return true
+end
+
+function provider.render_tokens(doc, line_idx, opts)
+  opts = opts or {}
+  local matches = matching_clients(doc, "render_tokens")
+  if #matches == 0 then return nil, "unavailable", "unavailable" end
+  for _, item in ipairs(matches) do
+    local client, state = item.client, item.state
+    local _semantic, legend = semantic_capability(client)
+    local legend_key = semantic_legend_key(legend)
+    local entry = semantic_latest(client, state.uri, legend_key, state.lsp_version)
+    if entry then
+      local text = doc:get_utf8_line(line_idx) or ""
+      local starts = line_start_offsets(doc)
+      local line_start = starts[line_idx] or 0
+      local line_end = line_start + #text
+      local line_cache = semantic_line_cache_bucket(client, state.uri, legend_key)
+      local line_key = table.concat({ tostring(state.lsp_version), tostring(line_idx), text }, "\0")
+      local cached = line_cache[line_idx]
+      if cached and cached.key == line_key then return cached.tokens, nil, "fresh" end
+      local spans = {}
+      for _, token in ipairs(entry.tokens or {}) do
+        local s = math.max(line_start, math.min(line_end, token.start_byte or 0))
+        local e = math.max(line_start, math.min(line_end, token.end_byte or 0))
+        if e > s then
+          spans[#spans + 1] = { start_byte = s, end_byte = e, style = token.style }
+        end
+      end
+      local tokens = provider.overlay_semantic_tokens(text, base_render_tokens(doc, line_idx), line_start, spans)
+      line_cache[line_idx] = { key = line_key, tokens = tokens }
+      return tokens, nil, "fresh"
+    end
+    provider.schedule_semantic_tokens(client, state, doc)
+  end
+  return nil, "pending", "pending"
+end
+
+function provider.invalidate_render_cache(doc, first_line, last_line)
+  for client in pairs(semantic_line_cache) do
+    local state = documents.state(client, doc)
+    if state and semantic_line_cache[client] then
+      if not first_line then
+        semantic_line_cache[client][state.uri] = nil
+      else
+        local by_uri = semantic_line_cache[client][state.uri]
+        if by_uri then
+          for _, by_line in pairs(by_uri) do
+            for line = first_line, last_line or first_line do by_line[line] = nil end
+          end
+        end
+      end
+    end
+  end
 end
 
 function provider.document_outline(doc, opts)
