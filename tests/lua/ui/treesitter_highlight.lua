@@ -123,6 +123,55 @@ public:
     doc:on_close()
   end)
 
+  test.it("local Tree-sitter fallback commands select definitions and references", function()
+    local doc = c_doc([[int first(void) {
+  int value = 1;
+  return value;
+}
+int second(void) {
+  int value = 2;
+  return value;
+}]])
+    test.ok(wait_ready(doc))
+    local previous = core.active_view
+    local view = DocView(doc)
+    core.set_active_view(view)
+    local ref_col = assert(doc.lines[7]:find("value", 1, true))
+    view:set_selection_state({ selections = { 7, ref_col, 7, ref_col }, last_selection = 1 })
+
+    test.ok(command.perform("tree-sitter:go-to-local-definition"))
+    local state = view:get_selection_state()
+    doc:set_selection_list(state.selections, state.last_selection, { sanitized = true })
+    test.equal(doc:get_selection_text(), "value")
+    local line1 = select(1, doc:get_selection(true))
+    test.equal(line1, 6)
+
+    view:set_selection_state({ selections = { 7, ref_col, 7, ref_col }, last_selection = 1 })
+    test.ok(command.perform("tree-sitter:select-local-references"))
+    state = view:get_selection_state()
+    test.equal(#state.selections / 4, 2)
+    doc:set_selection_list(state.selections, state.last_selection, { sanitized = true })
+    test.equal(doc:get_selection_text(), "value\nvalue")
+
+    if previous then core.set_active_view(previous) end
+    doc:on_close()
+  end)
+
+  test.it("local Tree-sitter fallback command gracefully no-ops without ready locals", function()
+    local doc = Doc()
+    set_text(doc, "plain text")
+    doc:set_filename("plain.txt", "plain.txt")
+    local previous = core.active_view
+    local view = DocView(doc)
+    core.set_active_view(view)
+    view:set_selection_state({ selections = { 1, 2, 1, 2 }, last_selection = 1 })
+    test.ok(command.perform("tree-sitter:go-to-local-definition"))
+    local state = view:get_selection_state()
+    test.same(state.selections, { 1, 2, 1, 2 })
+    if previous then core.set_active_view(previous) end
+    doc:on_close()
+  end)
+
   test.it("symbol navigation commands select stable symbol name ranges", function()
     local doc = cpp_doc([[namespace demo {
 class MenuGui {

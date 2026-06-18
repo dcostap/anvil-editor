@@ -20,5 +20,6 @@ return {
   queries = {
     highlights = "highlights.scm",
     outline = "outline.scm",
+    locals = "locals.scm",
   },
 }

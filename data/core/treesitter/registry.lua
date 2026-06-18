@@ -29,6 +29,7 @@ local builtin_configs = {
     queries = {
       highlights = "highlights.scm",
       outline = "outline.scm",
+      locals = "locals.scm",
     },
   },
   cpp = {
@@ -46,6 +47,7 @@ local builtin_configs = {
     queries = {
       highlights = "highlights.scm",
       outline = "outline.scm",
+      locals = "locals.scm",
     },
   },
 }

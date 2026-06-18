@@ -114,6 +114,7 @@ test.describe("core.treesitter phase 3 document integration", function()
     test.equal(config.grammar, "c")
     test.ok(config.query_sources.highlights)
     test.ok(config.query_sources.outline)
+    test.ok(config.query_sources.locals)
 
     config = registry.get("example.cpp", "")
     test.ok(config)
@@ -121,6 +122,7 @@ test.describe("core.treesitter phase 3 document integration", function()
     test.equal(config.grammar, "cpp")
     test.ok(config.query_sources.highlights)
     test.ok(config.query_sources.outline)
+    test.ok(config.query_sources.locals)
     test.ok(native.has_language("cpp"))
   end)
 
@@ -332,6 +334,65 @@ int main() { return helper(); }]])
     doc.treesitter.queries.outline = nil
     symbol, reason = treesitter.get_enclosing_symbol(doc, 1, 5)
     test.equal(symbol, nil)
+    test.equal(reason, "missing-query")
+    doc:on_close()
+  end)
+
+  test.it("local Tree-sitter fallback finds current-document definitions and references", function()
+    local doc = c_doc([[int first(void) {
+  int value = 1;
+  return value;
+}
+int second(void) {
+  int value = 2;
+  return value;
+}]])
+    test.ok(wait_ready(doc))
+    local ref_col = assert(doc.lines[7]:find("value", 1, true))
+    local definition = treesitter.get_local_definition(doc, 7, ref_col)
+    test.ok(definition)
+    test.equal(definition.name, "value")
+    test.equal(definition.kind, "var")
+    test.equal(definition.start_line, 6)
+    test.ok(definition.local_tree_sitter_fallback)
+
+    local refs = treesitter.get_local_references(doc, 7, ref_col)
+    test.equal(#refs, 2)
+    test.equal(refs[1].start_line, 6)
+    test.equal(refs[2].start_line, 7)
+    for _, ref in ipairs(refs) do
+      test.equal(ref.name, "value")
+      test.ok(ref.local_tree_sitter_fallback)
+    end
+    doc:on_close()
+  end)
+
+  test.it("local Tree-sitter fallback handles C++ parameters", function()
+    local doc = cpp_doc([[int add(int amount) {
+  return amount;
+}]])
+    test.ok(wait_ready(doc))
+    local ref_col = assert(doc.lines[2]:find("amount", 1, true))
+    local definition = treesitter.get_local_declaration(doc, 2, ref_col)
+    test.ok(definition)
+    test.equal(definition.name, "amount")
+    test.equal(definition.kind, "parameter")
+    test.equal(definition.start_line, 1)
+    local refs = treesitter.get_local_references(doc, 2, ref_col)
+    test.equal(#refs, 2)
+    doc:on_close()
+  end)
+
+  test.it("local Tree-sitter fallback gracefully returns empty without locals query", function()
+    local doc = c_doc("int main(void) { return 0; }")
+    test.ok(wait_ready(doc))
+    doc.treesitter.queries.locals = nil
+    local definition, reason = treesitter.get_local_definition(doc, 1, 5)
+    test.equal(definition, nil)
+    test.equal(reason, "missing-query")
+    local refs
+    refs, reason = treesitter.get_local_references(doc, 1, 5)
+    test.equal(#refs, 0)
     test.equal(reason, "missing-query")
     doc:on_close()
   end)
