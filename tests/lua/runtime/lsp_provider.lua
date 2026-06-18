@@ -268,4 +268,201 @@ test.describe("core.lsp.provider document symbols", function()
     test.equal(symbols[1].name, "fallback")
     test.equal(provider_id, "test-provider-unsupported-fallback")
   end)
+
+  local function register_definition_fallback(id)
+    registered[#registered + 1] = id
+    intelligence.register_provider({
+      id = id,
+      priority = 1,
+      definitions = function()
+        return { { uri = "file:///fallback.cpp", origin = "local" } }
+      end,
+      declarations = function()
+        return { { uri = "file:///fallback-decl.cpp", origin = "local" } }
+      end,
+      references = function()
+        return { { uri = "file:///fallback-ref.cpp", origin = "local" } }
+      end,
+    })
+  end
+
+  local function attach_navigation(context, capabilities)
+    return attach(context, {
+      capabilities = capabilities or {
+        definitionProvider = true,
+        declarationProvider = true,
+        referencesProvider = true,
+      },
+      text = "int value;\nint main() {\n  return value;\n}",
+    })
+  end
+
+  test.test("definition request is async and falls back while pending", function(context)
+    local doc, client = attach_navigation(context)
+    register_definition_fallback("test-def-pending-fallback")
+
+    local results, _reason, provider_id, status = intelligence.definitions(doc, 3, 10)
+    test.equal(#client.requests, 1)
+    test.equal(client.requests[1].method, "textDocument/definition")
+    test.equal(client.requests[1].params.position.line, 2)
+    test.equal(results[1].uri, "file:///fallback.cpp")
+    test.equal(provider_id, "test-def-pending-fallback")
+    test.equal(status, "fresh")
+  end)
+
+  test.test("definition scalar Location maps to structured same-file result", function(context)
+    local doc, client = attach_navigation(context)
+    register_definition_fallback("test-def-location-fallback")
+    intelligence.definitions(doc, 3, 10)
+    local document_uri = documents.state(client, doc).uri
+    complete_request(client, 1, {
+      uri = document_uri,
+      range = lsp_range(0, 4, 0, 9),
+    })
+
+    local results, reason, provider_id, status = intelligence.definitions(doc, 3, 10)
+    test.is_nil(reason)
+    test.equal(provider_id, "lsp")
+    test.equal(status, "fresh")
+    test.equal(#results, 1)
+    test.equal(results[1].uri, document_uri)
+    test.equal(results[1].path, common.normalize_path(doc.abs_filename))
+    test.equal(results[1].origin, "lsp")
+    test.equal(results[1].kind, "definitions")
+    test.equal(results[1].range.line1, 1)
+    test.equal(results[1].range.col1, 5)
+    test.equal(results[1].range.col2, 10)
+    test.equal(results[1].selection_range.line1, 1)
+  end)
+
+  test.test("definition array maps cross-file locations without requiring target docs", function(context)
+    local doc, client = attach_navigation(context)
+    intelligence.definitions(doc, 3, 10)
+    local other_path = join_path(temp_root, "other.cpp")
+    local other_uri = require("core.lsp.uri").path_to_uri(other_path)
+    complete_request(client, 1, {
+      { uri = documents.state(client, doc).uri, range = lsp_range(0, 4, 0, 9) },
+      { uri = other_uri, range = lsp_range(10, 2, 10, 8) },
+    })
+
+    local results = intelligence.definitions(doc, 3, 10)
+    test.equal(#results, 2)
+    test.equal(results[2].uri, other_uri)
+    test.equal(results[2].path, common.normalize_path(other_path))
+    test.is_nil(results[2].range)
+    test.same(results[2].lsp_range, lsp_range(10, 2, 10, 8))
+  end)
+
+  test.test("declaration LocationLink maps target and selection ranges", function(context)
+    local doc, client = attach_navigation(context)
+    intelligence.declarations(doc, 3, 10)
+    local document_uri = documents.state(client, doc).uri
+    complete_request(client, 1, {
+      {
+        targetUri = document_uri,
+        targetRange = lsp_range(0, 0, 0, 10),
+        targetSelectionRange = lsp_range(0, 4, 0, 9),
+      },
+    })
+
+    local results, _reason, provider_id = intelligence.declarations(doc, 3, 10)
+    test.equal(provider_id, "lsp")
+    test.equal(#results, 1)
+    test.equal(results[1].kind, "declarations")
+    test.equal(results[1].range.col1, 1)
+    test.equal(results[1].selection_range.col1, 5)
+  end)
+
+  test.test("references include context and multiple structured results", function(context)
+    local doc, client = attach_navigation(context)
+    intelligence.references(doc, 3, 10, nil, nil, { include_declaration = false })
+    test.equal(client.requests[1].method, "textDocument/references")
+    test.equal(client.requests[1].params.context.includeDeclaration, false)
+    local document_uri = documents.state(client, doc).uri
+    complete_request(client, 1, {
+      { uri = document_uri, range = lsp_range(0, 4, 0, 9) },
+      { uri = document_uri, range = lsp_range(2, 9, 2, 14) },
+    })
+
+    local results, _reason, provider_id = intelligence.references(doc, 3, 10, nil, nil, { include_declaration = false })
+    test.equal(provider_id, "lsp")
+    test.equal(#results, 2)
+    test.equal(results[2].kind, "references")
+    test.equal(results[2].range.line1, 3)
+  end)
+
+  test.test("fresh empty definition result is authoritative", function(context)
+    local doc, client = attach_navigation(context)
+    register_definition_fallback("test-def-empty-fallback")
+    intelligence.definitions(doc, 3, 10)
+    complete_request(client, 1, {})
+
+    local results, _reason, provider_id, status = intelligence.definitions(doc, 3, 10)
+    test.same(results, {})
+    test.equal(provider_id, "lsp")
+    test.equal(status, "fresh")
+  end)
+
+  test.test("null definition result is cached as fresh empty", function(context)
+    local doc, client = attach_navigation(context)
+    intelligence.definitions(doc, 3, 10)
+    complete_request(client, 1, require("core.lsp.json").null)
+
+    local results, _reason, provider_id, status = intelligence.definitions(doc, 3, 10)
+    test.same(results, {})
+    test.equal(provider_id, "lsp")
+    test.equal(status, "fresh")
+  end)
+
+  test.test("stale navigation cache returns stale and schedules refresh", function(context)
+    local doc, client = attach_navigation(context)
+    intelligence.definitions(doc, 3, 10)
+    complete_request(client, 1, { uri = documents.state(client, doc).uri, range = lsp_range(0, 4, 0, 9) })
+
+    doc:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "// " } })
+    documents.flush(client, doc)
+    local results, reason, provider_id, status = intelligence.definitions(doc, 3, 10)
+    test.equal(#results, 1)
+    test.equal(reason, "refresh scheduled")
+    test.equal(provider_id, "lsp")
+    test.equal(status, "stale")
+    test.equal(#client.requests, 2)
+  end)
+
+  test.test("stale navigation responses are discarded and in-flight requests dedupe", function(context)
+    local doc, client = attach_navigation(context)
+    register_definition_fallback("test-def-stale-fallback")
+    intelligence.definitions(doc, 3, 10)
+    intelligence.definitions(doc, 3, 10)
+    test.equal(#client.requests, 1)
+
+    doc:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "// " } })
+    documents.flush(client, doc)
+    complete_request(client, 1, { uri = documents.state(client, doc).uri, range = lsp_range(0, 4, 0, 9) })
+    local results, _reason, provider_id = intelligence.definitions(doc, 3, 10)
+    test.equal(results[1].uri, "file:///fallback.cpp")
+    test.equal(provider_id, "test-def-stale-fallback")
+    test.equal(#client.requests, 2)
+  end)
+
+  test.test("generation-stale navigation responses are discarded", function(context)
+    local doc, client = attach_navigation(context)
+    register_definition_fallback("test-def-generation-fallback")
+    intelligence.definitions(doc, 3, 10)
+    client.generation = client.generation + 1
+    complete_request(client, 1, { uri = documents.state(client, doc).uri, range = lsp_range(0, 4, 0, 9) })
+
+    local results, _reason, provider_id = intelligence.definitions(doc, 3, 10)
+    test.equal(results[1].uri, "file:///fallback.cpp")
+    test.equal(provider_id, "test-def-generation-fallback")
+  end)
+
+  test.test("unsupported definition capability falls back", function(context)
+    local doc, client = attach_navigation(context, { referencesProvider = true })
+    register_definition_fallback("test-def-unsupported-fallback")
+    local results, _reason, provider_id = intelligence.definitions(doc, 3, 10)
+    test.equal(#client.requests, 0)
+    test.equal(results[1].uri, "file:///fallback.cpp")
+    test.equal(provider_id, "test-def-unsupported-fallback")
+  end)
 end)
