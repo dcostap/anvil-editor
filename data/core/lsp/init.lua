@@ -10,5 +10,6 @@ lsp.position = require "core.lsp.position"
 lsp.config = require "core.lsp.config"
 lsp.documents = require "core.lsp.documents"
 lsp.diagnostics = require "core.lsp.diagnostics"
+lsp.provider = require "core.lsp.provider"
 
 return lsp
