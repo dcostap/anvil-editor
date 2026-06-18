@@ -9,5 +9,6 @@ lsp.uri = require "core.lsp.uri"
 lsp.position = require "core.lsp.position"
 lsp.config = require "core.lsp.config"
 lsp.documents = require "core.lsp.documents"
+lsp.diagnostics = require "core.lsp.diagnostics"
 
 return lsp

@@ -139,6 +139,13 @@ function client_mt:_set_state(state)
   self.state = state
 end
 
+local function clear_diagnostics_for_client(self)
+  local ok, lsp_diagnostics = pcall(require, "core.lsp.diagnostics")
+  if ok and lsp_diagnostics and lsp_diagnostics.clear_client then
+    lsp_diagnostics.clear_client(self)
+  end
+end
+
 function client_mt:_fail(err)
   self.failed = true
   self.error = err
@@ -146,6 +153,7 @@ function client_mt:_fail(err)
   if self.requests and self.requests.fail_all then
     self.requests:fail_all(jsonrpc.ERROR_INTERNAL_ERROR, tostring(err or "client failed"))
   end
+  clear_diagnostics_for_client(self)
   self.incoming:close(err)
   return nil, err
 end
@@ -434,6 +442,7 @@ function client_mt:shutdown(timeout, scan)
   if self.requests and self.requests.fail_all then
     self.requests:fail_all(jsonrpc.ERROR_REQUEST_CANCELLED, "client exited")
   end
+  clear_diagnostics_for_client(self)
   self:_set_state("exited")
   self.incoming:close("client exited")
   return true

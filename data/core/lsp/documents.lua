@@ -11,6 +11,7 @@ local DEFAULT_DEBOUNCE_SECONDS = 0.2
 local DEFAULT_SNAPSHOT_LIMIT = 16
 
 local clients = setmetatable({}, { __mode = "k" })
+local doc_close_handlers = {}
 local patched = false
 
 local function quiet_log(...)
@@ -354,9 +355,25 @@ function documents.on_doc_metadata_changed(doc, _reason)
   end
 end
 
+function documents.register_doc_close_handler(id, fn)
+  assert(type(id) == "string" and id ~= "", "doc close handler id must be a non-empty string")
+  assert(type(fn) == "function", "doc close handler must be a function")
+  doc_close_handlers[id] = fn
+end
+
+function documents.unregister_doc_close_handler(id)
+  doc_close_handlers[id] = nil
+end
+
 function documents.on_doc_close(doc)
   for _, state in ipairs(documents.states_for_doc(doc)) do
     documents.detach(state.client, state.uri)
+  end
+  for id, handler in pairs(doc_close_handlers) do
+    local ok, err = pcall(handler, doc)
+    if not ok then
+      quiet_log("LSP document close handler %s failed: %s", tostring(id), tostring(err))
+    end
   end
 end
 

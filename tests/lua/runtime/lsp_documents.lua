@@ -156,15 +156,21 @@ test.describe("core.lsp.documents", function()
     test.ok(doc.crlf)
   end)
 
-  test.test("sends didClose and removes state on document close", function(context)
+  test.test("sends didClose, removes state, and runs centralized close handlers", function(context)
     local doc = track_doc(context, new_doc(join_path(temp_root, "main.cpp"), "abc"))
     local client = fake_client("cpp")
     documents.attach(client, doc, { language_id = "cpp" })
+    local closed_doc
+    documents.register_doc_close_handler("test-close-handler", function(closing_doc)
+      closed_doc = closing_doc
+    end)
 
     doc:on_close()
+    documents.unregister_doc_close_handler("test-close-handler")
     local closes = messages(client, "textDocument/didClose")
     test.equal(#closes, 1)
     test.is_nil(documents.state(client, doc))
+    test.equal(closed_doc, doc)
   end)
 
   test.test("does not sync unsupported documents", function(context)
