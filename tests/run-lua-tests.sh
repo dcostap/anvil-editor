@@ -73,6 +73,9 @@ cp "$builddir/start.lua" "$datadir/core/"
 # Keep test fixtures isolated from the source tree. Some Windows UI tests leave
 # temp project files until process shutdown; those are discarded with rundir.
 cp -R "$sourcedir/tests/lua" "$workdir/tests/"
+if [ -d "$sourcedir/tests/fixtures" ]; then
+  cp -R "$sourcedir/tests/fixtures" "$workdir/tests/"
+fi
 
 cd "$workdir"
 export SDL_VIDEO_DRIVER="${SDL_VIDEO_DRIVER:-dummy}"

@@ -1,0 +1,36 @@
+local test = require "core.test"
+local transport = require "core.lsp.transport"
+local jsonrpc = require "core.lsp.jsonrpc"
+local fake_transport = dofile("tests/fixtures/lsp/fake_transport.lua")
+
+test.describe("core.lsp.transport", function()
+  test.test("incoming queue fails safely when full by default", function()
+    local queue = transport.new_incoming_queue({ max_messages = 1 })
+    test.equal(queue:push({ id = 1 }), true)
+    local ok, err = queue:push({ id = 2 })
+    test.is_nil(ok)
+    test.contains(err, "queue full")
+    test.ok(queue:is_failed())
+    test.equal(queue:size(), 1)
+  end)
+
+  test.test("incoming queue can drop newest with explicit policy", function()
+    local queue = transport.new_incoming_queue({ max_messages = 1, overflow = "drop_newest" })
+    test.equal(queue:push({ id = 1 }), true)
+    local ok, err = queue:push({ id = 2 })
+    test.equal(ok, false)
+    test.contains(err, "queue full")
+    test.equal(queue.dropped, 1)
+    test.equal(queue:pop().id, 1)
+  end)
+
+  test.test("wrap validates and forwards transport operations", function()
+    local fake = fake_transport.new()
+    fake:push_message(jsonrpc.notification("hello"))
+    local wrapped = transport.wrap(fake)
+    local chunk = test.not_nil(wrapped:read(1024))
+    test.contains(chunk, "Content-Length")
+    test.equal(wrapped:write("abc"), true)
+    test.equal(fake:written_bytes(), "abc")
+  end)
+end)
