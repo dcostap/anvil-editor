@@ -60,11 +60,33 @@ function intelligence.get_provider(id)
   return providers[id]
 end
 
-function intelligence.providers_for(feature, doc)
+local statuses = {
+  fresh = true,
+  stale = true,
+  pending = true,
+  unavailable = true,
+  error = true,
+}
+
+intelligence.status = statuses
+
+local function provider_allowed(provider, opts)
+  if not provider then return false end
+  opts = opts or {}
+  local requested_provider = opts.provider_id or opts.provider
+  if requested_provider and provider.id ~= requested_provider then return false end
+  if opts.lsp_only and provider.id ~= "lsp" and provider.kind ~= "semantic-project" then return false end
+  return true
+end
+
+function intelligence.providers_for(feature, doc, opts)
   local result = {}
   for _, id in ipairs(provider_order) do
     local provider = providers[id]
-    if has_feature(provider, feature) and (not provider.is_available or provider.is_available(doc, feature)) then
+    if provider_allowed(provider, opts)
+      and has_feature(provider, feature)
+      and (not provider.is_available or provider.is_available(doc, feature))
+    then
       result[#result + 1] = provider
     end
   end
@@ -84,30 +106,67 @@ function intelligence.without_provider(id, fn, ...)
   return table.unpack(result, 2)
 end
 
+local function is_empty_table(value)
+  return type(value) == "table" and #value == 0 and next(value) == nil
+end
+
+local function normalize_result(value, reason, status)
+  if status == nil and type(value) == "table" and statuses[value.status] and rawget(value, "value") ~= nil then
+    return value.value, value.reason or reason, value.status
+  end
+  if status ~= nil and not statuses[status] then
+    status = nil
+  end
+  return value, reason, status
+end
+
+local function should_use_value(value, status)
+  if status == "fresh" or status == "stale" then return value ~= nil end
+  if status == "pending" or status == "unavailable" or status == "error" then return false end
+  -- Legacy providers do not return status. Preserve their old fallback behavior:
+  -- empty tables are treated as no answer so syntactic/local fallback probing keeps
+  -- working. New async providers must return status="fresh" when an empty table is
+  -- an authoritative result.
+  return value and not is_empty_table(value)
+end
+
+local function options_from_last_arg(args)
+  local last = args[args.n]
+  return type(last) == "table" and last or nil
+end
+
 local function first_value(feature, empty_value, doc, ...)
+  local args = { n = select("#", ...), ... }
+  local opts = options_from_last_arg(args)
   local saw_provider = false
   local last_reason = "no-provider"
-  for _, provider in ipairs(intelligence.providers_for(feature, doc)) do
+  local last_status = "unavailable"
+  for _, provider in ipairs(intelligence.providers_for(feature, doc, opts)) do
     saw_provider = true
-    local value, reason = provider[feature](doc, ...)
-    if value and (type(value) ~= "table" or #value > 0 or next(value) ~= nil) then
-      return value, reason, provider.id
+    local value, reason, status = normalize_result(provider[feature](doc, table.unpack(args, 1, args.n)))
+    if should_use_value(value, status) then
+      return value, reason, provider.id, status or "fresh"
     end
     last_reason = reason or last_reason
+    last_status = status or last_status
   end
-  return empty_value, saw_provider and last_reason or "no-provider"
+  return empty_value, saw_provider and last_reason or "no-provider", nil, saw_provider and last_status or "unavailable"
 end
 
 local function first_bool(feature, doc, ...)
+  local args = { n = select("#", ...), ... }
+  local opts = options_from_last_arg(args)
   local saw_provider = false
   local last_reason = "no-provider"
-  for _, provider in ipairs(intelligence.providers_for(feature, doc)) do
+  local last_status = "unavailable"
+  for _, provider in ipairs(intelligence.providers_for(feature, doc, opts)) do
     saw_provider = true
-    local ok, reason = provider[feature](doc, ...)
-    if ok then return true, nil, provider.id end
+    local ok, reason, status = normalize_result(provider[feature](doc, table.unpack(args, 1, args.n)))
+    if ok then return true, nil, provider.id, status or "fresh" end
     last_reason = reason or last_reason
+    last_status = status or last_status
   end
-  return false, saw_provider and last_reason or "no-provider"
+  return false, saw_provider and last_reason or "no-provider", nil, saw_provider and last_status or "unavailable"
 end
 
 function intelligence.render_tokens(doc, line_idx, opts)
@@ -180,6 +239,22 @@ end
 
 function intelligence.local_references(doc, line1, col1, line2, col2, opts)
   return first_value("local_references", {}, doc, line1, col1, line2, col2, opts)
+end
+
+function intelligence.definitions(doc, line1, col1, line2, col2, opts)
+  return first_value("definitions", {}, doc, line1, col1, line2, col2, opts)
+end
+
+function intelligence.declarations(doc, line1, col1, line2, col2, opts)
+  return first_value("declarations", {}, doc, line1, col1, line2, col2, opts)
+end
+
+function intelligence.references(doc, line1, col1, line2, col2, opts)
+  return first_value("references", {}, doc, line1, col1, line2, col2, opts)
+end
+
+function intelligence.diagnostics(doc, opts)
+  return first_value("diagnostics", {}, doc, opts)
 end
 
 function intelligence.goto_local_definition(doc)
