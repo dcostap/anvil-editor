@@ -1,5 +1,6 @@
 local core = require "core"
 local command = require "core.command"
+local completion = require "core.lsp.completion"
 local diagnostics = require "core.lsp.diagnostics"
 local manager = require "core.lsp.manager"
 
@@ -33,9 +34,16 @@ command.add(doc_view_predicate, {
   ["lsp:show-status"] = function()
     if core.log then core.log("%s", manager.status()) end
   end,
+  ["lsp:complete-current-document"] = function(view)
+    local _items, reason, status = completion.start_current_document(view)
+    if status ~= "fresh" and core.log_quiet then
+      core.log_quiet("LSP completion: %s", tostring(reason or status or "pending"))
+    end
+  end,
 })
 
 return {
+  completion = completion,
   diagnostics = diagnostics,
   manager = manager,
 }

@@ -12,5 +12,6 @@ lsp.documents = require "core.lsp.documents"
 lsp.diagnostics = require "core.lsp.diagnostics"
 lsp.provider = require "core.lsp.provider"
 lsp.manager = require "core.lsp.manager"
+lsp.completion = require "core.lsp.completion"
 
 return lsp

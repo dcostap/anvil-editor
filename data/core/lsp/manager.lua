@@ -3,6 +3,7 @@ local common = require "core.common"
 local core_config = require "core.config"
 local client_mod = require "core.lsp.client"
 local config = require "core.lsp.config"
+local completion = require "core.lsp.completion"
 local diagnostics = require "core.lsp.diagnostics"
 local documents = require "core.lsp.documents"
 local provider = require "core.lsp.provider"
@@ -333,6 +334,7 @@ function manager.stop_entry(entry, opts)
   clients_by_key[entry.key] = nil
   for doc in pairs(entry.docs) do documents.detach(entry.client, doc) end
   for doc in pairs(entry.pending_docs) do entry.pending_docs[doc] = nil end
+  completion.clear_client(entry.client)
   diagnostics.clear_client(entry.client)
   provider.unregister_client(entry.client)
   if not opts.no_shutdown and entry.client and entry.client.state ~= "exited" then
