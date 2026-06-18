@@ -123,6 +123,60 @@ public:
     doc:on_close()
   end)
 
+  test.it("symbol navigation commands select stable symbol name ranges", function()
+    local doc = cpp_doc([[namespace demo {
+class MenuGui {
+public:
+  void draw_settings() { int local = 1; }
+};
+}
+int helper() { return 1; }
+int main() { return helper(); }]])
+    test.ok(wait_ready(doc))
+    local previous = core.active_view
+    local view = DocView(doc)
+    core.set_active_view(view)
+    view:set_selection_state({ selections = { 4, 35, 4, 35 }, last_selection = 1 })
+
+    test.ok(command.perform("tree-sitter:go-to-enclosing-symbol"))
+    local state = view:get_selection_state()
+    doc:set_selection_list(state.selections, state.last_selection, { sanitized = true })
+    test.equal(doc:get_selection_text(), "draw_settings")
+
+    test.ok(command.perform("tree-sitter:go-to-next-symbol"))
+    state = view:get_selection_state()
+    doc:set_selection_list(state.selections, state.last_selection, { sanitized = true })
+    test.equal(doc:get_selection_text(), "helper")
+
+    test.ok(command.perform("tree-sitter:go-to-next-symbol"))
+    state = view:get_selection_state()
+    doc:set_selection_list(state.selections, state.last_selection, { sanitized = true })
+    test.equal(doc:get_selection_text(), "main")
+
+    test.ok(command.perform("tree-sitter:go-to-previous-symbol"))
+    state = view:get_selection_state()
+    doc:set_selection_list(state.selections, state.last_selection, { sanitized = true })
+    test.equal(doc:get_selection_text(), "helper")
+
+    if previous then core.set_active_view(previous) end
+    doc:on_close()
+  end)
+
+  test.it("symbol navigation command gracefully no-ops without ready Tree-sitter", function()
+    local doc = Doc()
+    set_text(doc, "plain text")
+    doc:set_filename("plain.txt", "plain.txt")
+    local previous = core.active_view
+    local view = DocView(doc)
+    core.set_active_view(view)
+    view:set_selection_state({ selections = { 1, 2, 1, 2 }, last_selection = 1 })
+    test.ok(command.perform("tree-sitter:go-to-next-symbol"))
+    local state = view:get_selection_state()
+    test.same(state.selections, { 1, 2, 1, 2 })
+    if previous then core.set_active_view(previous) end
+    doc:on_close()
+  end)
+
   test.it("commands expand and shrink selection by Tree-sitter node", function()
     local doc = cpp_doc("int main() { return 0; }")
     test.ok(wait_ready(doc))

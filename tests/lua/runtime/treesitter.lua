@@ -289,6 +289,53 @@ int main() { return 0; }]])
     doc:on_close()
   end)
 
+  test.it("symbol navigation API uses outline symbols", function()
+    local doc = cpp_doc([[namespace demo {
+class MenuGui {
+public:
+  void draw_settings() { int local = 1; }
+};
+}
+int helper() { return 1; }
+int main() { return helper(); }]])
+    test.ok(wait_ready(doc))
+
+    local enclosing = treesitter.get_enclosing_symbol(doc, 4, 27)
+    test.ok(enclosing)
+    test.same({ enclosing.name, enclosing.kind }, { "draw_settings", "method" })
+
+    local first = treesitter.get_next_symbol(doc, 1, 1)
+    test.ok(first)
+    test.same({ first.name, first.kind }, { "demo", "namespace" })
+
+    local next_after_method = treesitter.get_next_symbol(doc, 4, 8)
+    test.ok(next_after_method)
+    test.same({ next_after_method.name, next_after_method.kind }, { "helper", "function" })
+
+    local previous_from_main = treesitter.get_previous_symbol(doc, 8, 5)
+    test.ok(previous_from_main)
+    test.same({ previous_from_main.name, previous_from_main.kind }, { "helper", "function" })
+    doc:on_close()
+  end)
+
+  test.it("symbol navigation API gracefully returns nil without outline data", function()
+    local doc = Doc()
+    set_text(doc, "plain text")
+    doc:set_filename("notes.txt", "notes.txt")
+    local symbol, reason = treesitter.get_next_symbol(doc, 1, 1)
+    test.equal(symbol, nil)
+    test.equal(reason, "unsupported")
+    doc:on_close()
+
+    doc = c_doc("int main(void) { return 0; }")
+    test.ok(wait_ready(doc))
+    doc.treesitter.queries.outline = nil
+    symbol, reason = treesitter.get_enclosing_symbol(doc, 1, 5)
+    test.equal(symbol, nil)
+    test.equal(reason, "missing-query")
+    doc:on_close()
+  end)
+
   test.it("node range API returns syntax ancestry and graceful fallbacks", function()
     local doc = Doc()
     set_text(doc, "plain text")

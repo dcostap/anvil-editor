@@ -3,6 +3,7 @@ local command = require "core.command"
 local registry = require "core.treesitter.registry"
 local ts_outline = require "core.treesitter.outline"
 local ts_selection = require "core.treesitter.selection"
+local ts_navigation = require "core.treesitter.navigation"
 local Doc = require "core.doc"
 
 local native_ok, native = nil, nil
@@ -11,6 +12,7 @@ local treesitter = {}
 treesitter.registry = registry
 treesitter.outline = ts_outline
 treesitter.selection = ts_selection
+treesitter.navigation = ts_navigation
 treesitter.enabled = true
 
 local attached_docs = setmetatable({}, { __mode = "k" })
@@ -143,6 +145,7 @@ function treesitter.schedule_parse(doc, edit)
   ts.line_starts = nil
   ts.outline_line_starts = nil
   ts.selection_line_starts = nil
+  ts.navigation_line_starts = nil
   if doc.highlighter and doc.highlighter.invalidate_render_cache then
     doc.highlighter:invalidate_render_cache()
   end
@@ -279,6 +282,7 @@ function treesitter.poll_doc(doc)
     ts.line_starts = nil
     ts.outline_line_starts = nil
     ts.selection_line_starts = nil
+    ts.navigation_line_starts = nil
     if doc.highlighter and doc.highlighter.invalidate_render_cache then
       doc.highlighter:invalidate_render_cache()
     end
@@ -324,6 +328,30 @@ end
 
 function treesitter.shrink_selection(doc)
   return ts_selection.shrink_selection(doc)
+end
+
+function treesitter.get_enclosing_symbol(doc, line1, col1, line2, col2, opts)
+  return ts_navigation.get_enclosing_symbol(doc, line1, col1, line2, col2, opts)
+end
+
+function treesitter.get_next_symbol(doc, line, col, opts)
+  return ts_navigation.get_next_symbol(doc, line, col, opts)
+end
+
+function treesitter.get_previous_symbol(doc, line, col, opts)
+  return ts_navigation.get_previous_symbol(doc, line, col, opts)
+end
+
+function treesitter.goto_enclosing_symbol(doc)
+  return ts_navigation.goto_enclosing_symbol(doc)
+end
+
+function treesitter.goto_next_symbol(doc)
+  return ts_navigation.goto_next_symbol(doc)
+end
+
+function treesitter.goto_previous_symbol(doc)
+  return ts_navigation.goto_previous_symbol(doc)
 end
 
 function treesitter.log_document_status(doc)
@@ -408,6 +436,18 @@ command.add(doc_command_predicate, {
 
   ["tree-sitter:shrink-selection"] = function(doc)
     treesitter.shrink_selection(doc)
+  end,
+
+  ["tree-sitter:go-to-enclosing-symbol"] = function(doc)
+    treesitter.goto_enclosing_symbol(doc)
+  end,
+
+  ["tree-sitter:go-to-next-symbol"] = function(doc)
+    treesitter.goto_next_symbol(doc)
+  end,
+
+  ["tree-sitter:go-to-previous-symbol"] = function(doc)
+    treesitter.goto_previous_symbol(doc)
   end,
 })
 
