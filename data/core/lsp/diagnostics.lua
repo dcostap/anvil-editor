@@ -1,3 +1,5 @@
+local core = require "core"
+local command = require "core.command"
 local common = require "core.common"
 local position = require "core.lsp.position"
 local uri = require "core.lsp.uri"
@@ -169,6 +171,17 @@ function diagnostics.current(client, doc_or_uri)
   return out
 end
 
+function diagnostics.current_for_doc(doc)
+  local document_uri = doc_uri(doc)
+  if not document_uri then return {} end
+  local out = {}
+  for client in pairs(stores) do
+    local items = diagnostics.current(client, document_uri)
+    for _, item in ipairs(items) do out[#out + 1] = item end
+  end
+  return out
+end
+
 function diagnostics.doc_range(item, doc, encoding, bias)
   if not item or not item.lsp_range or not doc then return nil end
   encoding = encoding or item.position_encoding
@@ -217,6 +230,122 @@ function diagnostics.clear_doc(doc)
   end
   return count
 end
+
+local function diagnostic_position(item, doc)
+  local range = diagnostics.doc_range(item, doc)
+  if not range then return nil end
+  return range.line1, range.col1, range.line2, range.col2
+end
+
+local function compare_diagnostics(a, b)
+  if a.line1 ~= b.line1 then return a.line1 < b.line1 end
+  if a.col1 ~= b.col1 then return a.col1 < b.col1 end
+  return tostring(a.message or "") < tostring(b.message or "")
+end
+
+function diagnostics.current_document_items(doc)
+  local items = {}
+  for _, item in ipairs(diagnostics.current_for_doc(doc)) do
+    local line1, col1, line2, col2 = diagnostic_position(item, doc)
+    if line1 then
+      items[#items + 1] = {
+        diagnostic = item,
+        line1 = line1,
+        col1 = col1,
+        line2 = line2,
+        col2 = col2,
+      }
+    end
+  end
+  table.sort(items, compare_diagnostics)
+  return items
+end
+
+local function after_cursor(item, line, col)
+  return item.line1 > line or (item.line1 == line and item.col1 > col)
+end
+
+local function before_cursor(item, line, col)
+  return item.line1 < line or (item.line1 == line and item.col1 < col)
+end
+
+function diagnostics.next_in_doc(doc, line, col, direction)
+  local items = diagnostics.current_document_items(doc)
+  if #items == 0 then return nil, "no-diagnostics" end
+  line, col = doc:sanitize_position(line or 1, col or 1)
+  direction = direction or 1
+  if direction < 0 then
+    for i = #items, 1, -1 do
+      if before_cursor(items[i], line, col) then return items[i] end
+    end
+    return items[#items]
+  end
+  for _, item in ipairs(items) do
+    if after_cursor(item, line, col) then return item end
+  end
+  return items[1]
+end
+
+function diagnostics.navigate(view, direction)
+  local doc = view and view.doc
+  if not doc then return nil, "no-document" end
+  local line, col = doc:get_selection(true)
+  local item, reason = diagnostics.next_in_doc(doc, line, col, direction)
+  if not item then return nil, reason end
+  doc:set_selection(item.line1, item.col1, item.line2, item.col2)
+  if view.scroll_to_make_visible then
+    view:scroll_to_make_visible(item.line1, item.col1, true, {
+      range_line2 = item.line2,
+      range_col2 = item.col2,
+    })
+  elseif view.scroll_to_line then
+    view:scroll_to_line(item.line1, true, true)
+  end
+  local diagnostic = item.diagnostic
+  if core and core.log then
+    core.log("LSP diagnostic: %s", tostring(diagnostic.message or diagnostic.code or "diagnostic"))
+  end
+  return item
+end
+
+function diagnostics.summary(doc)
+  local items = diagnostics.current_document_items(doc)
+  if #items == 0 then return "No current LSP diagnostics" end
+  local counts = {}
+  for _, item in ipairs(items) do
+    local severity = item.diagnostic.severity or "unknown"
+    counts[severity] = (counts[severity] or 0) + 1
+  end
+  return string.format("%d current LSP diagnostic%s", #items, #items == 1 and "" or "s"), counts
+end
+
+local function is_doc_view(value)
+  return type(value) == "table" and value.doc ~= nil
+end
+
+local function active_or_arg_view(view)
+  if is_doc_view(view) then return view end
+  if is_doc_view(core.active_view) then return core.active_view end
+end
+
+local function command_predicate(view)
+  local docview = active_or_arg_view(view)
+  return docview ~= nil, docview
+end
+
+command.add(command_predicate, {
+  ["lsp:next-diagnostic"] = function(view)
+    local item, reason = diagnostics.navigate(view, 1)
+    if not item and core.log then core.log("LSP diagnostics: %s", reason or "none") end
+  end,
+  ["lsp:previous-diagnostic"] = function(view)
+    local item, reason = diagnostics.navigate(view, -1)
+    if not item and core.log then core.log("LSP diagnostics: %s", reason or "none") end
+  end,
+  ["lsp:show-document-diagnostics"] = function(view)
+    if core.log then core.log("%s", diagnostics.summary(view.doc)) end
+  end,
+})
 
 local ok, documents = pcall(require, "core.lsp.documents")
 if ok and documents and documents.register_doc_close_handler then
