@@ -291,6 +291,30 @@ function tracker:cancel(id, reason)
   return entry ~= nil
 end
 
+function tracker:fail_all(code, message, data)
+  local pending = self.pending
+  self.pending = {}
+  local count = 0
+  local error_obj = { code = code or jsonrpc.ERROR_INTERNAL_ERROR, message = message or "request failed" }
+  if data ~= nil then error_obj.data = data end
+  for _, entry in pairs(pending) do
+    count = count + 1
+    if entry.callback then
+      entry.callback(nil, error_obj, entry)
+    end
+  end
+  return count
+end
+
+function tracker:clear()
+  local count = 0
+  for id in pairs(self.pending) do
+    self.pending[id] = nil
+    count = count + 1
+  end
+  return count
+end
+
 function tracker:dispatch_response(message, generation)
   if not message or message.kind ~= "response" then
     return nil, "not a response"
