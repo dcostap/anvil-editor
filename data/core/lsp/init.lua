@@ -7,5 +7,6 @@ lsp.client = require "core.lsp.client"
 lsp.process = require "core.lsp.process"
 lsp.uri = require "core.lsp.uri"
 lsp.position = require "core.lsp.position"
+lsp.config = require "core.lsp.config"
 
 return lsp
