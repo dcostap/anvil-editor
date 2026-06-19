@@ -26,6 +26,7 @@ local Object = require "core.object"
 ---@field active_items core.statusbar.item[] Currently visible items that pass predicates
 ---@field hovered_item core.statusbar.item Item currently under mouse cursor
 ---@field message_timeout number Timestamp when current message expires
+---@field message_pulse_start number Timestamp when current message retrigger pulse started
 ---@field message core.statusbar.styledtext Current temporary message content
 ---@field tooltip_mode boolean Whether persistent tooltip is active
 ---@field tooltip core.statusbar.styledtext Persistent tooltip content
@@ -45,6 +46,9 @@ function StatusBar:__tostring() return "StatusBar" end
 local function statusbar_font()
   return style.get_small_font(style.font)
 end
+
+local MESSAGE_PULSE_DURATION = 0.15
+local MESSAGE_PULSE_AMPLITUDE = 7 * SCALE
 
 ---Space separator
 ---@type string
@@ -278,6 +282,7 @@ end
 function StatusBar:new()
   StatusBar.super.new(self)
   self.message_timeout = 0
+  self.message_pulse_start = 0
   self.message = nil
   self.tooltip_mode = false
   self.tooltip = {}
@@ -778,7 +783,10 @@ function StatusBar:show_message(icon, icon_color, text)
     icon_color = icon_color,
     text = text
   }
-  self.message_timeout = system.get_time() + config.message_timeout
+  local now = system.get_time()
+  self.message_timeout = now + config.message_timeout
+  self.message_pulse_start = now
+  core.redraw = true
 end
 
 
@@ -1371,8 +1379,12 @@ function StatusBar:update()
     self.size.y = height
   end
 
-  if self.message and system.get_time() < self.message_timeout then
+  local now = system.get_time()
+  if self.message and now < self.message_timeout then
     self.scroll.to.y = self.size.y
+    if now - self.message_pulse_start < MESSAGE_PULSE_DURATION then
+      core.redraw = true
+    end
   else
     self.scroll.to.y = 0
   end
@@ -1408,6 +1420,13 @@ local function get_rendered_message(self)
   }
 end
 
+local function get_message_pulse_yoffset(self)
+  local elapsed = system.get_time() - self.message_pulse_start
+  if elapsed < 0 or elapsed >= MESSAGE_PULSE_DURATION then return 0 end
+  local t = elapsed / MESSAGE_PULSE_DURATION
+  return math.sin(t * math.pi) * MESSAGE_PULSE_AMPLITUDE
+end
+
 
 ---Render the status bar with all active items, messages, and tooltips.
 function StatusBar:draw()
@@ -1418,7 +1437,7 @@ function StatusBar:draw()
   renderer.draw_rect(self.position.x, self.position.y - ds, self.size.x, self.size.y + ds, background)
 
   if self.message and system.get_time() <= self.message_timeout then
-    self:draw_items(get_rendered_message(self), false, 0, self.size.y)
+    self:draw_items(get_rendered_message(self), false, 0, self.size.y + get_message_pulse_yoffset(self))
   else
     if self.message then self.message = nil end
     if self.tooltip_mode then

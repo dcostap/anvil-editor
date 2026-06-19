@@ -63,9 +63,9 @@ config.max_log_items = 800
 
 ---The timeout, in seconds, before a message dissapears from StatusBar.
 ---
----Defaults to 5.
+---Defaults to 1.5.
 ---@type number
-config.message_timeout = 5
+config.message_timeout = 1.5
 
 ---The number of pixels scrolled per-step.
 ---

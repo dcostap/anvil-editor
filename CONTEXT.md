@@ -119,3 +119,7 @@ _Avoid_: TitleView
 **Status Bar**:
 The bottom information bar that shows state, messages, tooltips, and context for the currently focused view.
 _Avoid_: StatusView, bottom bar
+
+**Navigation Boundary Feedback**:
+A brief user-facing message shown when a directional target-navigation command cannot move because there is no target farther in that direction.
+_Avoid_: wraparound feedback, no-op warning

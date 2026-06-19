@@ -55,6 +55,18 @@ local function with_fake_draw_text(fn)
   return calls
 end
 
+local function capture_status_messages(fn)
+  local old_show_message = core.status_bar.show_message
+  local messages = {}
+  core.status_bar.show_message = function(_, icon, color, text)
+    messages[#messages + 1] = { icon = icon, color = color, text = text }
+  end
+  local ok, err = pcall(fn, messages)
+  core.status_bar.show_message = old_show_message
+  if not ok then error(err) end
+  return messages
+end
+
 test.describe("Tree-sitter DocView highlighting", function()
   test.it("DocView draw uses Tree-sitter C render tokens when ready", function()
     local doc = c_doc("int main(void) { return VALUE; }")
@@ -223,6 +235,36 @@ int main() { return helper(); }]])
     state = view:get_selection_state()
     doc:set_selection_list(state.selections, state.last_selection, { sanitized = true })
     test.equal(doc:get_selection_text(), "helper")
+
+    if previous then core.set_active_view(previous) end
+    doc:on_close()
+  end)
+
+  test.it("symbol navigation shows Status Bar feedback at directional boundaries", function()
+    local doc = cpp_doc([[int first() { return 1; }
+int second() { return 2; }]])
+    test.ok(wait_ready(doc))
+    local previous = core.active_view
+    local view = DocView(doc)
+    core.set_active_view(view)
+
+    local first_col = assert(doc.lines[1]:find("first", 1, true))
+    view:set_selection_state({ selections = { 1, first_col, 1, first_col }, last_selection = 1 })
+    local messages = capture_status_messages(function()
+      test.ok(command.perform("tree-sitter:go-to-previous-symbol"))
+    end)
+    test.equal(messages[#messages].text, "No previous symbol")
+    local state = view:get_selection_state()
+    test.same(state.selections, { 1, first_col, 1, first_col })
+
+    local second_col = assert(doc.lines[2]:find("second", 1, true))
+    view:set_selection_state({ selections = { 2, second_col, 2, second_col }, last_selection = 1 })
+    messages = capture_status_messages(function()
+      test.ok(command.perform("tree-sitter:go-to-next-symbol"))
+    end)
+    test.equal(messages[#messages].text, "No next symbol")
+    state = view:get_selection_state()
+    test.same(state.selections, { 2, second_col, 2, second_col })
 
     if previous then core.set_active_view(previous) end
     doc:on_close()

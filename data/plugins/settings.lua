@@ -882,7 +882,7 @@ settings.add("Status Bar",
       description = "The amount in seconds before a notification dissapears.",
       path = "message_timeout",
       type = settings.type.NUMBER,
-      default = 5,
+      default = 1.5,
       min = 1,
       max = 30
     },

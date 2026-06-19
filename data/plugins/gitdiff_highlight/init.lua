@@ -7,6 +7,7 @@ local DocView = require "core.docview"
 local Doc = require "core.doc"
 local command = require "core.command"
 local style = require "core.style"
+local navigation_feedback = require "core.navigation_feedback"
 local ranges = require "plugins.gitdiff_highlight.ranges"
 
 local unpack = table.unpack or unpack
@@ -583,22 +584,50 @@ local function range_for_line_or_prev(state, line)
 	return prev
 end
 
+local function show_unavailable_gitdiff_feedback(state)
+	if state.loading then
+		navigation_feedback.warning("Git changes are still loading")
+		return true
+	end
+	if state.too_large then
+		navigation_feedback.warning("Git changes unavailable: diff too large")
+		return true
+	end
+	if not state.is_in_repo then
+		navigation_feedback.warning("Git changes unavailable")
+		return true
+	end
+	if not state.ranges or #state.ranges == 0 then
+		navigation_feedback.none("Git changes")
+		return true
+	end
+	return false
+end
+
 local function jump_to_next_change()
 	local doc = core.active_view.doc
 	local line, col = doc:get_selection()
 	local state = get_state(doc)
-	if not state.is_in_repo then return end
+	if show_unavailable_gitdiff_feedback(state) then return end
 	local range = range_for_line_or_next(state, line)
-	if range then doc:set_selection(math.min(#doc.lines, math.max(1, range.current_start)), col) end
+	if range then
+		doc:set_selection(math.min(#doc.lines, math.max(1, range.current_start)), col)
+	else
+		navigation_feedback.no_more(1, "Git change")
+	end
 end
 
 local function jump_to_previous_change()
 	local doc = core.active_view.doc
 	local line, col = doc:get_selection()
 	local state = get_state(doc)
-	if not state.is_in_repo then return end
+	if show_unavailable_gitdiff_feedback(state) then return end
 	local range = range_for_line_or_prev(state, line)
-	if range then doc:set_selection(math.min(#doc.lines, math.max(1, range.current_start)), col) end
+	if range then
+		doc:set_selection(math.min(#doc.lines, math.max(1, range.current_start)), col)
+	else
+		navigation_feedback.no_more(-1, "Git change")
+	end
 end
 
 command.add("core.docview", {

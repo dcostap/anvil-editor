@@ -1,6 +1,7 @@
 local core = require "core"
 local command = require "core.command"
 local language_intelligence = require "core.language_intelligence"
+local navigation_feedback = require "core.navigation_feedback"
 local registry = require "core.treesitter.registry"
 local ts_highlight = require "core.treesitter.highlight"
 local ts_outline = require "core.treesitter.outline"
@@ -570,11 +571,25 @@ command.add(doc_command_predicate, {
   end,
 
   ["tree-sitter:go-to-next-symbol"] = function(doc)
-    treesitter.goto_next_symbol(doc)
+    local ok, reason = treesitter.goto_next_symbol(doc)
+    if not ok then
+      if reason == "no-symbols" or reason == "no-navigable-symbols" then
+        navigation_feedback.none("symbols")
+      else
+        navigation_feedback.no_more(1, "symbol")
+      end
+    end
   end,
 
   ["tree-sitter:go-to-previous-symbol"] = function(doc)
-    treesitter.goto_previous_symbol(doc)
+    local ok, reason = treesitter.goto_previous_symbol(doc)
+    if not ok then
+      if reason == "no-symbols" or reason == "no-navigable-symbols" then
+        navigation_feedback.none("symbols")
+      else
+        navigation_feedback.no_more(-1, "symbol")
+      end
+    end
   end,
 
   ["tree-sitter:go-to-local-definition"] = function(doc)
