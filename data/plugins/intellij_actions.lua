@@ -964,8 +964,27 @@ local function push_multi_selection_history(doc)
   history[#history + 1] = { multi = true, selections = { table.unpack(doc.selections) }, last_selection = doc.last_selection }
 end
 
+local function try_treesitter_expand_selection(doc)
+  local ok, treesitter = pcall(require, "core.treesitter")
+  if not ok or not treesitter or not treesitter.expand_selection then return false end
+  local expanded, reason = treesitter.expand_selection(doc)
+  if expanded then return true end
+  if core.log_quiet then core.log_quiet("Tree-sitter smart selection expand fallback: %s", tostring(reason)) end
+  return false
+end
+
+local function try_treesitter_shrink_selection(doc)
+  local ok, treesitter = pcall(require, "core.treesitter")
+  if not ok or not treesitter or not treesitter.shrink_selection then return false end
+  local shrunk, reason = treesitter.shrink_selection(doc)
+  if shrunk then return true end
+  if core.log_quiet then core.log_quiet("Tree-sitter smart selection shrink fallback: %s", tostring(reason)) end
+  return false
+end
+
 local function extend_smart_selection(dv)
   local doc = dv.doc
+  if try_treesitter_expand_selection(doc) then return end
   local text, starts = build_text_index(doc)
   local blocks = smart_selection_blocks(text)
 
@@ -1001,6 +1020,7 @@ end
 
 local function shrink_smart_selection(dv)
   local doc = dv.doc
+  if try_treesitter_shrink_selection(doc) then return end
   local key = selection_state_key(doc)
   local history = selection_history[key]
   if not history or #history == 0 then return end
