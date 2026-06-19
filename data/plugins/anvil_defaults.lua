@@ -58,7 +58,6 @@ plugin_defaults("autosave_fast", {
 })
 plugin_defaults("autocomplete", {
   min_len = 3,
-  max_height = 6,
   max_suggestions = 100,
   max_symbols = 4000,
   suggestions_scope = "global",

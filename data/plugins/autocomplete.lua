@@ -59,8 +59,6 @@ local cache = setmetatable({}, { __mode = "k" })
 ---@class config.plugins.autocomplete
 ---Amount of characters that need to be written for autocomplete
 ---@field min_len integer
----The max amount of visible items
----@field max_height integer
 ---The max amount of scrollable items
 ---@field max_suggestions integer
 ---Maximum amount of symbols to cache per document
@@ -85,15 +83,6 @@ config.plugins.autocomplete.config_spec = {
       default = 3,
       min = 1,
       max = 5
-    },
-    {
-      label = "Maximum Height",
-      description = "The maximum amount of visible items.",
-      path = "max_height",
-      type = "number",
-      default = 6,
-      min = 1,
-      max = 20
     },
     {
       label = "Maximum Suggestions",
@@ -384,6 +373,17 @@ local suggestions_offset = 1
 local suggestions_idx = 1
 local suggestions = {}
 local last_line, last_col
+
+local function display_info(suggestion)
+  local info = suggestion and suggestion.info
+  if info == "normal" then return nil end
+  return info
+end
+
+local function display_icon(suggestion)
+  return suggestion and (suggestion.icon or display_info(suggestion))
+end
+
 local desc_view
 local desc_view_text
 local desc_view_font
@@ -538,10 +538,11 @@ local function get_suggestions_rect(av)
   local win_width = system.get_window_size(core.window) - style.padding.x  * 2
   for i, s in ipairs(suggestions) do
     local w = font:get_width(s.text)
-    if s.info and not hide_info then
-      w = w + style.font:get_width(s.info) + style.padding.x
+    local info = display_info(s)
+    if info and not hide_info then
+      w = w + style.font:get_width(info) + style.padding.x
     end
-    local icon = s.icon or s.info
+    local icon = display_icon(s)
     if not hide_icons and icon and autocomplete.icons[icon] then
       w = w + autocomplete.icons[icon].font:get_width(
         autocomplete.icons[icon].char
@@ -555,15 +556,27 @@ local function get_suggestions_rect(av)
     end
   end
 
-  local ah = config.plugins.autocomplete.max_height
+  local lh = th + style.padding.y
+  local view_top = av.position.y
+  local view_bottom = av.position.y + av.size.y
+  local _, window_height = system.get_window_size(core.window)
+  view_bottom = math.min(view_bottom, window_height - style.padding.y)
 
-  local max_items = #suggestions
-  if max_items > ah then
-    max_items = ah
+  local below_rect_y = y - style.padding.y
+  local above_bottom = y - av:get_line_height() - style.padding.y
+
+  local function visible_count_for(available_height)
+    return math.max(1, math.min(#suggestions, math.floor((available_height - style.padding.y) / lh)))
   end
 
-  -- additional line to display total items
-  max_items = max_items + 1
+  local below_count = visible_count_for(view_bottom - below_rect_y)
+  local above_count = visible_count_for(above_bottom - view_top)
+  local max_items = below_count
+  local rect_y = below_rect_y
+  if below_count < #suggestions and above_count > below_count then
+    max_items = above_count
+    rect_y = above_bottom - (max_items * lh + style.padding.y)
+  end
 
   if max_width < 150 then
     max_width = 150
@@ -583,10 +596,19 @@ local function get_suggestions_rect(av)
 
   return
     x - style.padding.x,
-    y - style.padding.y,
+    rect_y,
     max_width + style.padding.x * 2,
-    max_items * (th + style.padding.y) + style.padding.y,
-    has_icons
+    max_items * lh + style.padding.y,
+    has_icons,
+    max_items
+end
+
+local function get_visible_suggestion_count(av)
+  if #suggestions == 0 then return 0 end
+  av = av or get_active_view()
+  if not av then return #suggestions end
+  local _, _, _, _, _, visible_count = get_suggestions_rect(av)
+  return math.max(1, math.min(#suggestions, visible_count or #suggestions))
 end
 
 local function point_over_rect(x, y, rect)
@@ -655,10 +677,8 @@ local function draw_suggestions_box(av)
     return
   end
 
-  local ah = config.plugins.autocomplete.max_height
-
   -- draw background rect
-  local rx, ry, rw, rh, has_icons = get_suggestions_rect(av)
+  local rx, ry, rw, rh, has_icons, visible_count = get_suggestions_rect(av)
   renderer.draw_rect(rx, ry, rw, rh, style.background3)
   desc_rect = nil
 
@@ -666,7 +686,7 @@ local function draw_suggestions_box(av)
   local font = av:get_font()
   local lh = font:get_height() + style.padding.y
   local y = ry + style.padding.y / 2
-  local show_count = math.min(#suggestions, ah)
+  local show_count = math.min(#suggestions, visible_count)
   local start_index = suggestions_offset
   local hide_info = config.plugins.autocomplete.hide_info
   local dots_width = font:get_width("...")
@@ -680,7 +700,7 @@ local function draw_suggestions_box(av)
     local icon_l_padding, icon_r_padding = 0, 0
 
     if has_icons then
-      local icon = s.icon or s.info
+      local icon = display_icon(s)
       if icon and autocomplete.icons[icon] then
         local ifont = autocomplete.icons[icon].font
         local itext = autocomplete.icons[icon].char
@@ -707,9 +727,10 @@ local function draw_suggestions_box(av)
     local color = (i == suggestions_idx) and style.text or style.dim
 
     local iw = 0
-    if s.info and not hide_info then
+    local info = display_info(s)
+    if info and not hide_info then
       local ix2, _, ix1, _ = common.draw_text(
-        style.font, color, s.info, "right",
+        style.font, color, info, "right",
         rx, y, rw - icon_r_padding - style.padding.x, lh
       )
       iw = ix2 - ix1 + style.padding.x
@@ -747,22 +768,6 @@ local function draw_suggestions_box(av)
     end
   end
 
-  renderer.draw_rect(rx, y, rw, 2, style.caret)
-  renderer.draw_rect(rx, y+2, rw, lh, style.background)
-  common.draw_text(
-    style.font,
-    style.accent,
-    "Items",
-    "left",
-    rx + style.padding.x, y, rw, lh
-  )
-  common.draw_text(
-    style.font,
-    style.accent,
-    tostring(suggestions_idx) .. "/" .. tostring(#suggestions),
-    "right",
-    rx, y, rw - style.padding.x, lh
-  )
 end
 
 local function show_autocomplete()
@@ -1063,10 +1068,10 @@ command.add(predicate, {
     reset_suggestions()
   end,
 
-  ["autocomplete:previous"] = function()
+  ["autocomplete:previous"] = function(dv)
     suggestions_idx = (suggestions_idx - 2) % #suggestions + 1
 
-    local ah = math.min(config.plugins.autocomplete.max_height, #suggestions)
+    local ah = get_visible_suggestion_count(dv)
     if suggestions_offset > suggestions_idx then
       suggestions_offset = suggestions_idx
     elseif suggestions_offset + ah < suggestions_idx + 1 then
@@ -1074,10 +1079,10 @@ command.add(predicate, {
     end
   end,
 
-  ["autocomplete:next"] = function()
+  ["autocomplete:next"] = function(dv)
     suggestions_idx = (suggestions_idx % #suggestions) + 1
 
-    local ah = math.min(config.plugins.autocomplete.max_height, #suggestions)
+    local ah = get_visible_suggestion_count(dv)
     if suggestions_offset + ah < suggestions_idx + 1 then
       suggestions_offset = suggestions_idx - ah + 1
     elseif suggestions_offset > suggestions_idx then
