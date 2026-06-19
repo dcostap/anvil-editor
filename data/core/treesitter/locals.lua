@@ -226,6 +226,29 @@ local function target_context(doc, line1, col1, line2, col2, opts)
   return captures, item_from_capture(doc, target), scope, nil, name
 end
 
+function locals.get_document_symbols(doc, opts)
+  local captures, reason = query_captures(doc, opts)
+  if #captures == 0 then return empty_list(reason) end
+  local items = {}
+  local seen = {}
+  for _, capture in ipairs(captures) do
+    if is_definition(capture) then
+      local item = item_from_capture(doc, capture)
+      local key = table.concat({ item.name or "", item.kind or "" }, "\0")
+      if item.name ~= "" and not seen[key] then
+        seen[key] = true
+        items[#items + 1] = item
+      end
+    end
+  end
+  table.sort(items, function(a, b)
+    if a.name ~= b.name then return a.name < b.name end
+    if a.kind ~= b.kind then return tostring(a.kind) < tostring(b.kind) end
+    return (a.start_byte or 0) < (b.start_byte or 0)
+  end)
+  return items
+end
+
 function locals.get_local_definition(doc, line1, col1, line2, col2, opts)
   local captures, target, scope, reason, name = target_context(doc, line1, col1, line2, col2, opts)
   if not captures then return empty(reason) end

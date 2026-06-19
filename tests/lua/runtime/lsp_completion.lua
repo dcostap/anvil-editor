@@ -142,17 +142,39 @@ test.describe("core.lsp.completion", function()
     })
     test.ok(incomplete)
     test.equal(items[1].label, "member")
-    test.equal(items[1].text, "member()")
+    test.equal(items[1].text, "member")
+    test.equal(items[1].insert_text, "member()")
     test.equal(items[1].info, "method")
   end)
 
-  test.test("manual invoke schedules textDocument/completion and opens autocomplete on response", function(context)
+  test.test("function-like completions display parameter lists without changing insertion text", function(context)
+    local doc, client = attach(context)
+    local items = completion.map_items(client, doc, {
+      {
+        label = "printf",
+        kind = 3,
+        detail = "int printf(const char *format, ...)",
+        insertText = "printf",
+      },
+      {
+        label = "push_back",
+        kind = 2,
+        labelDetails = { detail = "(const T &value)", description = "void" },
+      },
+    })
+    test.equal(items[1].display_label, "printf(const char *format, ...)")
+    test.equal(items[1].text, "printf(const char *format, ...)")
+    test.equal(items[1].insert_text, "printf")
+    test.equal(items[2].display_label, "push_back(const T &value)")
+  end)
+
+  test.test("general autocomplete trigger schedules textDocument/completion and opens autocomplete on response", function(context)
     local doc, client = attach(context, { text = "pri" })
     local view = DocView(doc)
     core.active_view = view
     doc:set_selection(1, 4)
 
-    test.ok(command.perform("lsp:complete-current-document", view))
+    test.ok(command.perform("autocomplete:trigger", view))
     test.equal(#client.requests, 1)
     test.equal(client.requests[1].method, "textDocument/completion")
     test.equal(client.requests[1].params.context.triggerKind, 1)
@@ -201,7 +223,7 @@ test.describe("core.lsp.completion", function()
     test.is_nil(items)
   end)
 
-  test.test("textEdit completion applies server range", function(context)
+  test.test("textEdit completion applies server range and leaves cursor at insertion end", function(context)
     local doc, client = attach(context, { text = "pri" })
     local items = completion.map_items(client, doc, {
       {
@@ -214,6 +236,7 @@ test.describe("core.lsp.completion", function()
     })
     test.ok(items[1].onselect())
     test.equal(doc:get_text(1, 1, 1, 7), "printf")
+    test.same({ doc:get_selection() }, { 1, 7, 1, 7 })
   end)
 
   test.test("insertText completion replaces current partial conservatively", function(context)
@@ -232,7 +255,7 @@ test.describe("core.lsp.completion", function()
     core.active_view = view
     doc:set_selection(1, 4)
 
-    test.ok(command.perform("lsp:complete-current-document", view))
+    test.ok(command.perform("autocomplete:trigger", view))
     test.not_ok(autocomplete.is_open())
   end)
 end)

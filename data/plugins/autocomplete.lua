@@ -127,7 +127,7 @@ config.plugins.autocomplete.config_spec = {
       description = "Font size of the description box.",
       path = "desc_font_size",
       type = "number",
-      default = 12,
+      default = 15,
       min = 8
     },
     {
@@ -384,6 +384,126 @@ local function display_icon(suggestion)
   return suggestion and (suggestion.icon or display_info(suggestion))
 end
 
+local update_suggestions
+local lsp_completion_items = nil
+local lsp_completion_context = nil
+local force_basic_suggestions = true
+
+local function lsp_completion_module()
+  local ok, completion = pcall(require, "core.lsp.completion")
+  return ok and completion or nil
+end
+
+local function tree_sitter_locals_module()
+  local ok, locals = pcall(require, "core.treesitter.locals")
+  return ok and locals or nil
+end
+
+local function has_lsp_completion(doc)
+  local completion = lsp_completion_module()
+  return completion and completion.has_available_client and completion.has_available_client(doc) or false
+end
+
+local function at_word_completion_position()
+  return partial:match("%a") ~= nil
+end
+
+local function reset_lsp_completion_items()
+  lsp_completion_items = nil
+  lsp_completion_context = nil
+end
+
+local function completion_context_key(doc, line, col)
+  return table.concat({ tostring(doc), tostring(doc.get_change_id and doc:get_change_id() or 0), tostring(line), tostring(col) }, ":")
+end
+
+local function set_lsp_completion_items(doc, line, col, items)
+  if not lsp_completion_context or lsp_completion_context.key ~= completion_context_key(doc, line, col) then return end
+  lsp_completion_items = items or {}
+  update_suggestions()
+  core.redraw = true
+end
+
+local function annotate_match(item, needle)
+  if type(item) ~= "table" then return item end
+  item.autocomplete_matches = nil
+  needle = tostring(needle or "")
+  if needle == "" then return item end
+  local text = tostring(item.text or "")
+  local lower_text = text:lower()
+  local lower_needle = needle:lower()
+  local matches = {}
+  local search_from = 1
+  for i = 1, #lower_needle do
+    local ch = lower_needle:sub(i, i)
+    local pos = lower_text:find(ch, search_from, true)
+    if not pos then
+      item.autocomplete_matches = nil
+      return item
+    end
+    matches[pos] = true
+    search_from = pos + 1
+  end
+  item.autocomplete_matches = matches
+  return item
+end
+
+local function annotate_matches(items, needle)
+  for _, item in ipairs(items or {}) do annotate_match(item, needle) end
+  return items
+end
+
+local function completion_sort_text(item)
+  if type(item) ~= "table" then return tostring(item or "") end
+  return tostring(item.insert_text or item.label or item.text or ""):gsub("^%s+", "")
+end
+
+local function match_stats(text, needle)
+  text = tostring(text or ""):lower()
+  needle = tostring(needle or ""):lower()
+  if needle == "" then return nil end
+  local exact = text:find(needle, 1, true)
+  if exact then
+    return { exact = true, first = exact, last = exact + #needle - 1, width = #needle }
+  end
+  local first, last
+  local search_from = 1
+  for i = 1, #needle do
+    local pos = text:find(needle:sub(i, i), search_from, true)
+    if not pos then return nil end
+    first = first or pos
+    last = pos
+    search_from = pos + 1
+  end
+  return { exact = false, first = first, last = last, width = last - first + 1 }
+end
+
+local function sort_display_matches(items, needle)
+  needle = tostring(needle or "")
+  if needle == "" then return items end
+  local original_index = {}
+  for i, item in ipairs(items or {}) do original_index[item] = i end
+  table.sort(items, function(a, b)
+    local at = tostring(a and a.text or a)
+    local bt = tostring(b and b.text or b)
+    local am = match_stats(at, needle)
+    local bm = match_stats(bt, needle)
+    if am and bm then
+      if am.exact ~= bm.exact then return am.exact end
+      if am.width ~= bm.width then return am.width < bm.width end
+      if am.first ~= bm.first then return am.first < bm.first end
+      local al = completion_sort_text(a)
+      local bl = completion_sort_text(b)
+      if #al ~= #bl then return #al < #bl end
+      if #at ~= #bt then return #at < #bt end
+    elseif am or bm then
+      return am ~= nil
+    end
+    return (original_index[a] or 0) < (original_index[b] or 0)
+  end)
+  return items
+end
+
 local desc_view
 local desc_view_text
 local desc_view_font
@@ -403,6 +523,8 @@ local function reset_suggestions(skip_close)
   desc_view_font = nil
 
   triggered_manually = false
+  force_basic_suggestions = true
+  reset_lsp_completion_items()
 
   if not skip_close then
     local doc = core.active_view.doc
@@ -414,19 +536,23 @@ local function reset_suggestions(skip_close)
   end
 end
 
-local function update_suggestions()
+function update_suggestions()
   local doc = core.active_view.doc
   local filename = doc and doc.filename or ""
 
   local assigned_sym = {}
 
+  local lsp_available = has_lsp_completion(doc)
+
   -- get all relevant suggestions for given filename
   local items = {}
-  for _, v in pairs(autocomplete.map) do
-    if common.match_pattern(filename, v.files) then
-      for _, item in pairs(v.items) do
-        table.insert(items, item)
-        assigned_sym[item.text] = true
+  if not lsp_available and force_basic_suggestions then
+    for _, v in pairs(autocomplete.map) do
+      if common.match_pattern(filename, v.files) then
+        for _, item in pairs(v.items) do
+          table.insert(items, item)
+          assigned_sym[item.text] = true
+        end
       end
     end
   end
@@ -441,11 +567,16 @@ local function update_suggestions()
       end
     end
   end
+  if lsp_available then
+    for _, item in ipairs(lsp_completion_items or {}) do
+      table.insert(manual_items, item)
+    end
+  end
 
   -- Append the global, local or related text symbols if applicable
   local scope = config.plugins.autocomplete.suggestions_scope
 
-  if not triggered_manually then
+  if not lsp_available and force_basic_suggestions then
     local text_symbols = nil
 
     if scope == "global" then
@@ -472,7 +603,18 @@ local function update_suggestions()
       for name in pairs(text_symbols) do
         if not assigned_sym[name] then
           table.insert(items, setmetatable({text = name, info = "normal"}, mt))
+          assigned_sym[name] = true
         end
+      end
+    end
+
+    local locals = tree_sitter_locals_module()
+    local symbols = locals and locals.get_document_symbols and locals.get_document_symbols(doc) or nil
+    for _, symbol in ipairs(symbols or {}) do
+      local name = symbol.name
+      if name and name ~= "" and not assigned_sym[name] then
+        table.insert(items, setmetatable({text = name, info = symbol.kind or "symbol", icon = symbol.kind}, mt))
+        assigned_sym[name] = true
       end
     end
   end
@@ -487,7 +629,7 @@ local function update_suggestions()
 
   -- we prioritize the manually added symbols
   if #manual_items > 0 then
-    manual_items = common.fuzzy_match(manual_items, partial, false)
+    manual_items = sort_display_matches(annotate_matches(common.fuzzy_match(manual_items, partial, false), partial), partial)
     for i = 1, max_items do
       suggestions[i] = manual_items[i]
     end
@@ -497,7 +639,7 @@ local function update_suggestions()
 
   -- fuzzy match, remove duplicates and store
   if max_items > 0 then
-    items = common.fuzzy_match(items, partial, false)
+    items = sort_display_matches(annotate_matches(common.fuzzy_match(items, partial, false), partial), partial)
     local j = 1
     for i = 1, max_items do
       suggestions[si+i] = items[j]
@@ -517,6 +659,32 @@ local function get_active_view()
   if core.active_view:is(DocView) then
     return core.active_view
   end
+end
+
+local function request_lsp_completion(av, opts)
+  opts = opts or {}
+  local doc = av and av.doc
+  local completion = doc and lsp_completion_module()
+  if not completion or not completion.has_available_client or not completion.has_available_client(doc) then return false end
+  local line, col = doc:get_selection()
+  local key = completion_context_key(doc, line, col)
+  if lsp_completion_context and lsp_completion_context.key == key and lsp_completion_context.pending then return true end
+  lsp_completion_context = { key = key, pending = true }
+  lsp_completion_items = nil
+  local trigger_character = opts.trigger_character
+  completion.request(doc, {
+    show = false,
+    manual = opts.manual,
+    trigger_character = trigger_character,
+    trigger_kind = trigger_character and 2 or 1,
+    on_items = function(items)
+      if lsp_completion_context and lsp_completion_context.key == key then
+        lsp_completion_context.pending = false
+      end
+      set_lsp_completion_items(doc, line, col, items)
+    end,
+  })
+  return true
 end
 
 local function get_suggestions_rect(av)
@@ -641,6 +809,29 @@ local function get_description_view(text)
   return desc_view
 end
 
+local function draw_matched_text(font, base_color, match_color, item, x, y, w, h)
+  local text = tostring(item and item.text or "")
+  local matches = item and item.autocomplete_matches
+  local draw_x = x
+  local run_text = ""
+  local run_color = nil
+  local function flush()
+    if run_text == "" then return end
+    common.draw_text(font, run_color or base_color, run_text, "left", draw_x, y, w, h)
+    draw_x = draw_x + font:get_width(run_text)
+    run_text = ""
+  end
+  for i = 1, #text do
+    local color = matches and matches[i] and match_color or base_color
+    if run_color ~= color then
+      flush()
+      run_color = color
+    end
+    run_text = run_text .. text:sub(i, i)
+  end
+  flush()
+end
+
 local function draw_description_box(text, sx, sy, sw, sh)
   local ww, wh = system.get_window_size(core.window)
   local gap = style.padding.x / 4
@@ -696,6 +887,10 @@ local function draw_suggestions_box(av)
       break
     end
     local s = suggestions[i]
+    local selected = suggestions_idx == i
+    if selected then
+      renderer.draw_rect(rx, y, rw, lh, style.background2)
+    end
 
     local icon_l_padding, icon_r_padding = 0, 0
 
@@ -704,12 +899,7 @@ local function draw_suggestions_box(av)
       if icon and autocomplete.icons[icon] then
         local ifont = autocomplete.icons[icon].font
         local itext = autocomplete.icons[icon].char
-        local icolor = autocomplete.icons[icon].color
-        if i == suggestions_idx then
-          icolor = style.accent
-        elseif type(icolor) == "string" then
-          icolor = style.syntax[icolor]
-        end
+        local icolor = style.dim
         if config.plugins.autocomplete.icon_position == "left" then
           common.draw_text(
             ifont, icolor, itext, "left", rx + style.padding.x, y, rw, lh
@@ -724,7 +914,7 @@ local function draw_suggestions_box(av)
       end
     end
 
-    local color = (i == suggestions_idx) and style.text or style.dim
+    local color = selected and style.text or style.dim
 
     local iw = 0
     local info = display_info(s)
@@ -735,16 +925,14 @@ local function draw_suggestions_box(av)
       )
       iw = ix2 - ix1 + style.padding.x
     end
-    color = (i == suggestions_idx) and style.accent or style.text
+    color = style.text
     local icon_padding = icon_l_padding > 0 and icon_l_padding or icon_r_padding
     local text_width = rw - icon_padding - style.padding.x - iw
     local text_padding = rx + icon_l_padding + style.padding.x
     core.push_clip_rect(text_padding, y, text_width, lh)
-    local tx2, _, tx1, _ = common.draw_text(
-      font, color, s.text, "left",
-      text_padding, y, text_width, lh
-    )
-    if tx2 - tx1 > text_width then
+    draw_matched_text(font, color, style.accent, s, text_padding, y, text_width, lh)
+    local text_draw_width = font:get_width(s.text)
+    if text_draw_width > text_width then
       renderer.draw_rect(
         text_padding + text_width - dots_width, y,
         dots_width, lh,
@@ -757,7 +945,7 @@ local function draw_suggestions_box(av)
     end
     core.pop_clip_rect()
     y = y + lh
-    if suggestions_idx == i then
+    if selected then
       if s.onhover then
         s.onhover(suggestions_idx, s)
         s.onhover = nil
@@ -770,13 +958,28 @@ local function draw_suggestions_box(av)
 
 end
 
-local function show_autocomplete()
+local function show_autocomplete(opts)
+  opts = opts or {}
   local av = get_active_view()
   if av then
     -- update partial symbol and suggestions
     partial = autocomplete.get_partial_symbol()
 
-    if #partial >= config.plugins.autocomplete.min_len or triggered_manually then
+    local doc = av.doc
+    local completion = lsp_completion_module()
+    local lsp_available = completion and completion.has_available_client and completion.has_available_client(doc)
+    local trigger_character = nil
+    if lsp_available and opts.text and completion.is_trigger_character and completion.is_trigger_character(doc, opts.text) then
+      trigger_character = opts.text:sub(-1)
+    end
+    local should_open = triggered_manually
+      or #partial >= config.plugins.autocomplete.min_len
+      or trigger_character ~= nil
+
+    if should_open then
+      if lsp_available then
+        request_lsp_completion(av, { manual = triggered_manually, trigger_character = trigger_character })
+      end
       update_suggestions()
 
       if not triggered_manually then
@@ -785,7 +988,7 @@ local function show_autocomplete()
         local line, col = av.doc:get_selection()
         local char = av.doc:get_char(line, col-1, line, col-1)
 
-        if char:match("%s") or (char:match("%p") and col ~= last_col) then
+        if char:match("%s") or (char:match("%p") and col ~= last_col and not lsp_available) then
           reset_suggestions()
         end
       end
@@ -815,9 +1018,9 @@ local on_mouse_wheel = RootPanel.on_mouse_wheel
 local update = RootPanel.update
 local draw = RootPanel.draw
 
-RootPanel.on_text_input = function(...)
-  on_text_input(...)
-  show_autocomplete()
+RootPanel.on_text_input = function(self, text, ...)
+  on_text_input(self, text, ...)
+  show_autocomplete({ text = text })
 end
 
 RootPanel.on_mouse_pressed = function(self, button, x, y, clicks)
@@ -929,7 +1132,9 @@ end
 
 ---Manually invoke the completion list using already registered symbols.
 ---@param on_close? plugins.autocomplete.onclose
-function autocomplete.open(on_close)
+---@param opts? table
+function autocomplete.open(on_close, opts)
+  opts = opts or {}
   triggered_manually = true
 
   if on_close then
@@ -947,9 +1152,19 @@ function autocomplete.open(on_close)
   local av = get_active_view()
   if av then
     partial = autocomplete.get_partial_symbol()
+    if opts.force_basic ~= nil then
+      force_basic_suggestions = opts.force_basic == true
+    else
+      force_basic_suggestions = at_word_completion_position()
+    end
     last_line, last_col = av.doc:get_selection()
+    request_lsp_completion(av, { manual = true })
     update_suggestions()
   end
+end
+
+function autocomplete.trigger()
+  autocomplete.open()
 end
 
 ---Manually close the completions list.
@@ -971,7 +1186,7 @@ function autocomplete.complete(completions, on_close)
 
   autocomplete.add(completions, true)
 
-  autocomplete.open(on_close)
+  autocomplete.open(on_close, { force_basic = false })
 end
 
 ---Check if autocomplete can be triggered by checking if current
@@ -1013,10 +1228,21 @@ end
 --
 -- Commands
 --
+local function docview_predicate()
+  local active_docview = get_active_view()
+  return active_docview ~= nil, active_docview
+end
+
 local function predicate()
   local active_docview = get_active_view()
   return active_docview and #suggestions > 0, active_docview
 end
+
+command.add(docview_predicate, {
+  ["autocomplete:trigger"] = function()
+    autocomplete.trigger()
+  end,
+})
 
 command.add(predicate, {
   ["autocomplete:complete"] = function(dv)
@@ -1104,10 +1330,11 @@ command.add(predicate, {
 -- Keymaps
 --
 keymap.add {
-  ["tab"]    = "autocomplete:complete",
-  ["up"]     = "autocomplete:previous",
-  ["down"]   = "autocomplete:next",
-  ["escape"] = "autocomplete:cancel",
+  ["alt+space"] = "autocomplete:trigger",
+  ["tab"]       = "autocomplete:complete",
+  ["up"]        = "autocomplete:previous",
+  ["down"]      = "autocomplete:next",
+  ["escape"]    = "autocomplete:cancel",
 }
 
 

@@ -83,11 +83,17 @@ local function serve_lifecycle(position_encoding, opts)
   local workspace = capabilities.workspace or {}
   local window = capabilities.window or {}
   local text_document = capabilities.textDocument or {}
+  local completion = text_document.completion
+  local allowed_completion = type(completion) == "table"
+    and type(completion.completionItem) == "table"
+    and completion.completionItem.labelDetailsSupport == true
+    and next(completion.completionItem, "labelDetailsSupport") == nil
+    and next(completion, "completionItem") == nil
   local bad_capability = workspace.configuration
     or workspace.applyEdit
     or window.workDoneProgress
     or (text_document.semanticTokens ~= nil)
-    or (text_document.completion ~= nil)
+    or (completion ~= nil and not allowed_completion)
     or (text_document.diagnostic ~= nil)
   write_stderr(bad_capability and "truthful-capabilities=bad\n" or "truthful-capabilities=ok\n")
   if opts.delay_initialize then sleep(opts.delay_initialize) end

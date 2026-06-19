@@ -1,6 +1,5 @@
 local core = require "core"
 local command = require "core.command"
-local completion = require "core.lsp.completion"
 local diagnostics = require "core.lsp.diagnostics"
 local hover = require "core.lsp.hover"
 local manager = require "core.lsp.manager"
@@ -36,12 +35,6 @@ command.add(doc_view_predicate, {
   ["lsp:show-status"] = function()
     if core.log then core.log("%s", manager.status()) end
   end,
-  ["lsp:complete-current-document"] = function(view)
-    local _items, reason, status = completion.start_current_document(view)
-    if status ~= "fresh" and core.log_quiet then
-      core.log_quiet("LSP completion: %s", tostring(reason or status or "pending"))
-    end
-  end,
   ["lsp:hover-current-position"] = function(view)
     local _hover, reason, status = hover.start_current_position(view)
     if status ~= "fresh" and core.log_quiet then
@@ -57,7 +50,6 @@ command.add(doc_view_predicate, {
 })
 
 return {
-  completion = completion,
   diagnostics = diagnostics,
   hover = hover,
   manager = manager,

@@ -310,7 +310,13 @@ function client_mt:initialize_params(options)
         positionEncodings = lsp_json.array({ "utf-16", "utf-8" }),
       },
       workspace = {},
-      textDocument = {},
+      textDocument = {
+        completion = {
+          completionItem = {
+            labelDetailsSupport = true,
+          },
+        },
+      },
       window = {},
     },
     trace = "off",

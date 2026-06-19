@@ -103,6 +103,27 @@ local function item_text(item)
   return item.insertText or item.label or ""
 end
 
+local function function_like_kind(kind)
+  return kind == 2 or kind == 3 or kind == 4
+end
+
+local function display_label(item)
+  local label = tostring(item.label or ""):gsub("^%s+", "")
+  if not function_like_kind(item.kind) then return label end
+  local details = type(item.labelDetails) == "table" and item.labelDetails or nil
+  local detail = details and details.detail
+  if type(detail) == "string" and detail:match("^%s*%(") then
+    return label .. detail
+  end
+  detail = item.detail
+  if type(detail) == "string" then
+    local escaped = label:gsub("([^%w_])", "%%%1")
+    local params = detail:match(escaped .. "%s*(%b())")
+    if params then return label .. params end
+  end
+  return label
+end
+
 local function lsp_text_edit(item)
   local edit = item.textEdit
   if type(edit) ~= "table" then return nil end
@@ -146,13 +167,22 @@ end
 local function apply_text_edit(doc, client, edit)
   if not edit or not edit.range then return false end
   local range = position.range_lsp_to_doc(doc, edit.range, client.position_encoding or "utf-16")
-  doc:apply_edits({ {
+  local selection_idx = doc.last_selection or 1
+  local doc_edit = {
     line1 = range.line1,
     col1 = range.col1,
     line2 = range.line2,
     col2 = range.col2,
     text = edit.newText or "",
-  } }, { type = "insert" })
+    idx = selection_idx,
+  }
+  local final_by_idx = { [selection_idx] = "end" }
+  doc:apply_edits({ doc_edit }, {
+    type = "insert",
+    selections = doc:selections_after_edits({ doc_edit }, final_by_idx, doc.last_selection),
+    last_selection = doc.last_selection,
+    merge_cursors = false,
+  })
   return true
 end
 
@@ -182,9 +212,12 @@ function completion.map_items(client, doc, result)
     elseif type(raw) == "table" and type(raw.label) == "string" and raw.label ~= "" then
       local label = raw.label
       local insert_text = item_text(raw)
+      local rendered_label = display_label(raw)
       mapped[#mapped + 1] = {
         label = label,
-        text = insert_text ~= "" and insert_text or label,
+        display_label = rendered_label,
+        insert_text = insert_text ~= "" and insert_text or label,
+        text = rendered_label,
         info = raw.detail or COMPLETION_KIND[raw.kind] or raw.kind,
         desc = documentation_text(raw.documentation),
         icon = COMPLETION_KIND[raw.kind],
@@ -212,7 +245,7 @@ function completion.symbols_from_items(items, opts)
     items = {},
   }
   for i, item in ipairs(items or {}) do
-    local key = item.label
+    local key = item.display_label or item.label
     if symbols.items[key] ~= nil then key = key .. " #" .. tostring(i) end
     symbols.items[key] = {
       info = item.info,
@@ -237,6 +270,22 @@ function completion.available_clients(doc)
     return tostring(a.client.server_id or a.client.id or a.client) < tostring(b.client.server_id or b.client.id or b.client)
   end)
   return out
+end
+
+function completion.has_available_client(doc)
+  return #completion.available_clients(doc) > 0
+end
+
+function completion.is_trigger_character(doc, text)
+  if type(text) ~= "string" or text == "" then return false end
+  local char = text:sub(-1)
+  for _, match in ipairs(completion.available_clients(doc)) do
+    local capability = completion_capability(match.client)
+    for _, trigger in ipairs(capability and capability.triggerCharacters or {}) do
+      if trigger == char then return true end
+    end
+  end
+  return false
 end
 
 local function show_items(items, opts)
@@ -268,6 +317,7 @@ function completion.request(doc, opts)
     state = documents.state(client, state.uri) or state
     local entry = completion.latest(client, state.uri, key, state.lsp_version)
     if entry then
+      if opts.on_items then opts.on_items(entry.items, { client = client, state = state, source = "cache" }) end
       if opts.show ~= false then show_items(entry.items, { name = "lsp-completion" }) end
       return entry.items, nil, "fresh"
     end
@@ -331,6 +381,7 @@ function completion.schedule(client, state, doc, line, col, opts)
       received_at = system.get_time(),
       generation = requested_generation,
     }
+    if opts.on_items then opts.on_items(mapped, { client = client, state = current_state, source = "response" }) end
     if opts.show ~= false then show_items(mapped, { name = "lsp-completion" }) end
   end, { generation = requested_generation })
   if not id then return nil, err end

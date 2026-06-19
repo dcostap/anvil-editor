@@ -61,7 +61,7 @@ plugin_defaults("autocomplete", {
   max_suggestions = 100,
   max_symbols = 4000,
   suggestions_scope = "global",
-  desc_font_size = 12,
+  desc_font_size = 15,
   hide_icons = false,
   icon_position = "left",
   hide_info = false,
