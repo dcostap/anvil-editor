@@ -272,6 +272,41 @@ int main() { return helper(); }]])
     doc:on_close()
   end)
 
+  test.it("expand selection selects block contents before block delimiters", function()
+    local source = table.concat({
+      "int main() {",
+      "  int x = 1;",
+      "  return x;",
+      "}",
+    }, "\n")
+    local doc = cpp_doc(source)
+    test.ok(wait_ready(doc))
+    local previous = core.active_view
+    local view = DocView(doc)
+    core.set_active_view(view)
+    local line = 3
+    local col = assert(doc.lines[line]:find("x", 1, true))
+    view:set_selection_state({ selections = { line, col, line, col }, last_selection = 1 })
+
+    local seen_content_at, seen_full_at
+    for i = 1, 12 do
+      test.ok(command.perform("tree-sitter:expand-selection"))
+      local state = view:get_selection_state()
+      doc:set_selection_list(state.selections, state.last_selection, { sanitized = true })
+      local text = doc:get_selection_text()
+      if text == "\n  int x = 1;\n  return x;\n" then seen_content_at = seen_content_at or i end
+      if text == "{\n  int x = 1;\n  return x;\n}" then seen_full_at = seen_full_at or i end
+      if seen_content_at and seen_full_at then break end
+    end
+
+    test.not_nil(seen_content_at)
+    test.not_nil(seen_full_at)
+    test.ok(seen_content_at < seen_full_at)
+
+    if previous then core.set_active_view(previous) end
+    doc:on_close()
+  end)
+
   test.it("expand selection command gracefully no-ops without ready Tree-sitter", function()
     local doc = Doc()
     set_text(doc, "plain text")

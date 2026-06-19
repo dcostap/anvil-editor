@@ -90,6 +90,38 @@ local function range_from_node(doc, node)
   }
 end
 
+local DELIMITER_PAIRS = { ["{"] = "}", ["("] = ")", ["["] = "]" }
+
+local function delimiter_content_range(doc, node_range)
+  if not doc or not node_range then return nil end
+  local opening = doc:get_char(node_range.start_line, node_range.start_col)
+  local expected_close = DELIMITER_PAIRS[opening]
+  if not expected_close then return nil end
+  local close_line, close_col = doc:position_offset(node_range.end_line, node_range.end_col, -1)
+  local closing = doc:get_char(close_line, close_col)
+  if closing ~= expected_close then return nil end
+  local start_line, start_col = doc:position_offset(node_range.start_line, node_range.start_col, 1)
+  local end_line, end_col = close_line, close_col
+  local start_byte = (node_range.start_byte or 0) + 1
+  local end_byte = (node_range.end_byte or 0) - 1
+  if end_byte <= start_byte then return nil end
+  return {
+    type = tostring(node_range.type or "node") .. ".content",
+    named = node_range.named,
+    delimiter_content = true,
+    start_line = start_line,
+    start_col = start_col,
+    end_line = end_line,
+    end_col = end_col,
+    start_byte = start_byte,
+    end_byte = end_byte,
+    range = {
+      start = { line = start_line, col = start_col },
+      ["end"] = { line = end_line, col = end_col },
+    },
+  }
+end
+
 local function tree_ready(ts)
   return ts and ts.native and ts.native.has_tree and ts.native:has_tree()
       and ts.status == "ready" and not ts.stale_unrenderable
@@ -123,7 +155,10 @@ function selection.get_node_ranges(doc, line1, col1, line2, col2, opts)
   local ranges = {}
   for _, node in ipairs(nodes) do
     if node.end_byte and node.start_byte and node.end_byte > node.start_byte then
-      ranges[#ranges + 1] = range_from_node(doc, node)
+      local node_range = range_from_node(doc, node)
+      local content_range = delimiter_content_range(doc, node_range)
+      if content_range then ranges[#ranges + 1] = content_range end
+      ranges[#ranges + 1] = node_range
     end
   end
   return ranges
