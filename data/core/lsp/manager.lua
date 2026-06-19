@@ -295,6 +295,7 @@ function manager.start_current_document(view)
 end
 
 function manager.on_doc_metadata_changed(doc)
+  if doc and doc.disable_language_services then return end
   if auto_start then manager.ensure_doc(doc, { auto = true }) end
 end
 

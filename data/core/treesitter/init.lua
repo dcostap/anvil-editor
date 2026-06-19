@@ -170,6 +170,10 @@ end
 
 function treesitter.attach_or_update_doc(doc, reason)
   if not doc then return nil end
+  if doc.disable_treesitter or doc.disable_language_services then
+    treesitter.close_doc(doc)
+    return nil
+  end
   if doc.binary then
     disable_doc(doc, "binary")
     log_quiet("Tree-sitter: disabled binary document %s", doc_name(doc))

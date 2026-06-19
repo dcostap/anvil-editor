@@ -2064,7 +2064,16 @@ function FSView:update_preview_view()
     if key:sub(1, 6) == "image:" then
       view = ImageView(path, "fit")
     else
-      local ok, doc = pcall(Doc, core.normalize_to_project_dir(path), path, false)
+      local ok, doc = pcall(Doc)
+      if ok and doc then
+        doc.disable_language_services = true
+        doc.disable_treesitter = true
+        local filename = core.normalize_to_project_dir(path)
+        ok = pcall(function()
+          doc:set_filename(filename, path)
+          doc:load(path)
+        end)
+      end
       if not ok or not doc then
         self.preview_blocked = { reason = "Cannot open file", path = path }
         return nil
