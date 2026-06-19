@@ -14,7 +14,7 @@ local style = require "core.style"
 ---@field default_scale number
 ---Allow using CTRL + MouseWheel for changing the scale.
 ---@field use_mousewheel boolean
-local scale_steps = 0.05
+local scale_factor = 1.1
 local current_scale = SCALE
 local current_code_scale = SCALE
 local user_scale = tonumber(
@@ -155,13 +155,13 @@ function scale.reset()
 end
 
 function scale.increase()
-  scale.set(current_scale + scale_steps)
-  scale.set_code(current_code_scale + scale_steps)
+  scale.set(current_scale * scale_factor)
+  scale.set_code(current_code_scale * scale_factor)
 end
 
 function scale.decrease()
-  scale.set(current_scale - scale_steps)
-  scale.set_code(current_code_scale - scale_steps)
+  scale.set(current_scale / scale_factor)
+  scale.set_code(current_code_scale / scale_factor)
 end
 
 function scale.get_code()
@@ -173,11 +173,11 @@ function scale.reset_code()
 end
 
 function scale.increase_code()
-  scale.set_code(current_code_scale + scale_steps)
+  scale.set_code(current_code_scale * scale_factor)
 end
 
 function scale.decrease_code()
-  scale.set_code(current_code_scale - scale_steps)
+  scale.set_code(current_code_scale / scale_factor)
 end
 
 if DEFAULT_SCALE ~= config.plugins.scale.default_scale then
