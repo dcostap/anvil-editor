@@ -86,6 +86,7 @@ local fuzzy_searcher = {
 local FSView = Widget:extend()
 local active_view
 local open
+local open_static_results
 
 local modal_modkey_map = {
   ["left ctrl"] = "ctrl", ["right ctrl"] = "ctrl",
@@ -1732,7 +1733,8 @@ local function everything_result_from_item(item, query)
   }
 end
 
-function FSView:new(prefix)
+function FSView:new(prefix, opts)
+  opts = opts or {}
   FSView.super.new(self, nil, true) -- floating widget; widget lib owns RootPanel routing
   file_context.exclude_main_panel_view(self)
   self.type_name = "plugins.fuzzy_searcher"
@@ -1767,6 +1769,9 @@ function FSView:new(prefix)
   self.everything_loading = false
   self.everything_query_key = nil
   self.everything_status = ""
+  self.static_mode = opts.static == true
+  self.static_results = opts.results or {}
+  self.static_status = opts.status or ""
 
   local source_view = core.active_view
   local source_doc = source_view and source_view.doc
@@ -1785,12 +1790,17 @@ function FSView:new(prefix)
   file_context.exclude_main_panel_view(self.input)
   file_context.exclude_main_panel_view(self.input.textview)
   self.input.on_change = function(_, text)
+    if self.static_mode then return end
     self.dirty = true
     self:refresh(text)
     self:schedule_update(true)
   end
 
-  ensure_file_index()
+  if self.static_mode then
+    self.input.textview.doc.readonly = true
+  end
+
+  if not self.static_mode then ensure_file_index() end
   self:show()
   self:layout()
   ensure_input_focus(self)
@@ -1825,11 +1835,13 @@ function FSView:layout()
 end
 
 function FSView:is_command_mode()
+  if self.static_mode then return false end
   local text = self.input and self.input:get_text() or ""
   return text:sub(1, 1) == ">"
 end
 
 function FSView:is_project_mode()
+  if self.static_mode then return false end
   local text = self.input and self.input:get_text() or ""
   return text:sub(1, 1) == "@"
 end
@@ -2873,7 +2885,31 @@ function FSView:start_grep(base, line, grep)
   end)
 end
 
+function FSView:refresh_static()
+  self.results = self.static_results or {}
+  self.has_more = false
+  self.hovered_result = nil
+  self.status = self.static_status or ""
+  self.selected = common.clamp(self.selected or 1, 1, math.max(1, #self.results))
+  self:ensure_selection_visible()
+end
+
+function FSView:set_static_results(results, status)
+  if not self.static_mode then return end
+  self.static_results = results or {}
+  self.static_status = status or ""
+  self.dirty = true
+  self:refresh_static()
+  self:schedule_update(true)
+end
+
 function FSView:refresh(text)
+  if self.static_mode then
+    self:refresh_static()
+    self.dirty = false
+    self.force_refresh = false
+    return
+  end
   text = text or self.input:get_text()
   local files_changed = self.last_files_generation ~= files_generation
   local base, line, grep = parse_query(text)
@@ -2905,6 +2941,7 @@ function FSView:supports_text_input()
 end
 
 function FSView:on_text_input(text)
+  if self.static_mode then return true end
   -- Text input is the authoritative path for all printable characters,
   -- especially layout-dependent ones like AltGr, dead keys and IME output.
   self._awaiting_textinput = nil
@@ -3275,6 +3312,20 @@ function open(prefix)
   core.fuzzy_searcher_active_view = active_view
 end
 
+function open_static_results(title, results, opts)
+  opts = opts or {}
+  title = title or "Results"
+  local view = current_picker()
+  if view then view:close() end
+  active_view = FSView(title, {
+    static = true,
+    results = results or {},
+    status = opts.status or title,
+  })
+  core.fuzzy_searcher_active_view = active_view
+  return active_view
+end
+
 command.add(nil, {
   ["fuzzy-searcher:open"] = function() open("") end,
   ["fuzzy-searcher:open-files"] = function() open("") end,
@@ -3341,11 +3392,11 @@ keymap.on_key_pressed = function(key, ...)
     ensure_input_focus(picker)
     fuzzy_focus_log("key-fuzzy-command", picker, "key=" .. tostring(key) .. " stroke=" .. tostring(stroke) .. " cmd=" .. tostring(fuzzy_cmd))
     command.perform(fuzzy_cmd, ...)
-  elseif textbox_cmd then
+  elseif textbox_cmd and not picker.static_mode then
     ensure_input_focus(picker)
     fuzzy_focus_log("key-textbox-command", picker, "key=" .. tostring(key) .. " stroke=" .. tostring(stroke) .. " cmd=" .. tostring(textbox_cmd))
     command.perform(textbox_cmd, ...)
-  elseif modal_should_let_text_input_through(key, stroke) then
+  elseif modal_should_let_text_input_through(key, stroke) and not picker.static_mode then
     -- Printable keys must be handled by SDL textinput, not by key-name
     -- fallbacks; this preserves keyboard layout, AltGr, dead keys and IME.
     ensure_input_focus(picker)
@@ -3365,4 +3416,4 @@ keymap.on_key_pressed = function(key, ...)
   return true
 end
 
-return { open = open }
+return { open = open, open_static_results = open_static_results }

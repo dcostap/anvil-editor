@@ -780,6 +780,7 @@ local function map_location(client, current_doc, current_uri, raw, feature)
     lsp_range = raw_range,
     lsp_selection_range = raw_selection,
     server_id = client.server_id or client.id or "lsp",
+    position_encoding = client.position_encoding or "utf-16",
     origin = "lsp",
     source = "lsp",
     kind = feature,
