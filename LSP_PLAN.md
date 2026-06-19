@@ -1076,6 +1076,18 @@ Deliverables:
 
 Manual gate required.
 
+### Phase 8.15: Signature help provider/prototype
+
+Deliverables:
+
+- Manual `textDocument/signatureHelp` request path and command.
+- Normalize SignatureHelp signatures, documentation, parameters, active signature, and active parameter.
+- Cache/discard signature-help responses by document version, position/context, and client generation.
+- Use a small existing UI surface such as status/log output; no automatic trigger-character popup yet.
+- Preserve no-op/fallback behavior when LSP is unavailable or pending.
+
+Manual gate required.
+
 ## Open decisions before implementation
 
 1. What exact status tuple should `core.language_intelligence` return for async providers?

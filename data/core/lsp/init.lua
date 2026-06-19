@@ -14,5 +14,6 @@ lsp.provider = require "core.lsp.provider"
 lsp.manager = require "core.lsp.manager"
 lsp.completion = require "core.lsp.completion"
 lsp.hover = require "core.lsp.hover"
+lsp.signature_help = require "core.lsp.signature_help"
 
 return lsp

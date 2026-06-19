@@ -4,6 +4,7 @@ local completion = require "core.lsp.completion"
 local diagnostics = require "core.lsp.diagnostics"
 local hover = require "core.lsp.hover"
 local manager = require "core.lsp.manager"
+local signature_help = require "core.lsp.signature_help"
 
 local function is_doc_view(value)
   return type(value) == "table" and value.doc ~= nil
@@ -47,6 +48,12 @@ command.add(doc_view_predicate, {
       core.log_quiet("LSP hover: %s", tostring(reason or status or "pending"))
     end
   end,
+  ["lsp:signature-help-current-position"] = function(view)
+    local _signature_help, reason, status = signature_help.start_current_position(view)
+    if status ~= "fresh" and core.log_quiet then
+      core.log_quiet("LSP signature help: %s", tostring(reason or status or "pending"))
+    end
+  end,
 })
 
 return {
@@ -54,4 +61,5 @@ return {
   diagnostics = diagnostics,
   hover = hover,
   manager = manager,
+  signature_help = signature_help,
 }

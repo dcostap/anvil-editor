@@ -8,6 +8,7 @@ local diagnostics = require "core.lsp.diagnostics"
 local documents = require "core.lsp.documents"
 local hover = require "core.lsp.hover"
 local provider = require "core.lsp.provider"
+local signature_help = require "core.lsp.signature_help"
 
 local manager = {}
 
@@ -339,6 +340,7 @@ function manager.stop_entry(entry, opts)
   diagnostics.clear_client(entry.client)
   hover.clear_client(entry.client)
   provider.unregister_client(entry.client)
+  signature_help.clear_client(entry.client)
   if not opts.no_shutdown and entry.client and entry.client.state ~= "exited" then
     entry.client:shutdown(opts.timeout or 1, opts.scan or 0.01)
   end
