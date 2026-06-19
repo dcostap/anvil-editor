@@ -177,7 +177,7 @@ if core.fuzzy_searcher_install_global_keymaps then
   core.fuzzy_searcher_install_global_keymaps()
 end
 -- Matching UI/code fonts with separate objects so UI and code scaling can diverge.
-local font_path = DATADIR .. "/fonts/CaskaydiaCoveNerdFontMono-Medium.ttf"
+local font_path = DATADIR .. "/fonts/CaskaydiaCoveNerdFontMono-Regular.ttf"
 local font_size = 15 * SCALE
 local max_default_font_group = 10 -- native renderer FONT_FALLBACK_MAX
 
