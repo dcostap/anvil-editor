@@ -303,6 +303,141 @@ local function newline_count(text)
   return n
 end
 
+local smart_newline_pairs = { ["("] = ")", ["["] = "]", ["{"] = "}" }
+
+local function leading_indent(text)
+  return tostring(text or ""):match("^[\t ]*") or ""
+end
+
+local function one_indent_string(doc)
+  local text = doc:get_indent_string(1)
+  return text
+end
+
+local function line_end_col(text)
+  local nl = tostring(text or ""):find("\n", 1, true)
+  return nl or (#tostring(text or "") + 1)
+end
+
+local function token_at(doc, line, col)
+  local column = 0
+  for _, token_type, token_text in doc.highlighter:each_token(line) do
+    column = column + #token_text
+    if column >= col then return token_type end
+  end
+  return "normal"
+end
+
+local function token_is_code(token_type)
+  return token_type ~= "comment" and token_type ~= "string"
+end
+
+local function position_is_code(doc, line, col)
+  return token_is_code(token_at(doc, line, col))
+end
+
+local function previous_non_space_on_line(text, col)
+  for i = col - 1, 1, -1 do
+    local ch = text:sub(i, i)
+    if ch == "\n" or ch == "\r" then return nil end
+    if ch ~= " " and ch ~= "\t" then return ch, i end
+  end
+end
+
+local function next_non_space_on_line(text, col)
+  for i = col, #text do
+    local ch = text:sub(i, i)
+    if ch == "\n" or ch == "\r" then return nil end
+    if ch ~= " " and ch ~= "\t" then return ch, i end
+  end
+end
+
+local function opening_brace_is_unmatched(doc, line, col)
+  local depth = 1
+  for l = line, #doc.lines do
+    local text = doc.lines[l]
+    local start_col = l == line and col + 1 or 1
+    for i = start_col, #text do
+      local ch = text:sub(i, i)
+      if (ch == "{" or ch == "}") and position_is_code(doc, l, i) then
+        if ch == "{" then
+          depth = depth + 1
+        else
+          depth = depth - 1
+          if depth == 0 then return false end
+        end
+      end
+    end
+  end
+  return true
+end
+
+local function edits_are_non_overlapping(doc, edits)
+  local normalized = doc:plan_edits(edits)
+  for i = 2, #normalized do
+    local prev, cur = normalized[i - 1], normalized[i]
+    if prev.end_offset > cur.start_offset
+    or (prev.start_offset == prev.end_offset and cur.start_offset == cur.end_offset and prev.start_offset == cur.start_offset) then
+      return false
+    end
+  end
+  return true, normalized
+end
+
+local function smart_newline_edit(doc, line1, col1, line2, col2)
+  if line1 ~= line2 or col1 ~= col2 then return nil end
+
+  local text = doc.lines[line1] or ""
+  local opener, opener_col = previous_non_space_on_line(text, col1)
+  local closer = opener and smart_newline_pairs[opener]
+  if not closer or not position_is_code(doc, line1, opener_col) then return nil end
+
+  local base_indent = leading_indent(text)
+  local inner_indent = base_indent .. one_indent_string(doc)
+  local next_char, next_col = next_non_space_on_line(text, col1)
+
+  if next_char == closer and position_is_code(doc, line1, next_col) then
+    local insert_text = "\n" .. inner_indent .. "\n" .. base_indent
+    return {
+      line1 = line1,
+      col1 = opener_col + 1,
+      line2 = line1,
+      col2 = next_col,
+      text = insert_text,
+      caret_offset = #("\n" .. inner_indent),
+      reason = "between-pair",
+    }
+  end
+
+  if next_char ~= nil then return nil end
+
+  local edit_start = opener_col + 1
+  local edit_end = line_end_col(text)
+  if opener == "{" and opening_brace_is_unmatched(doc, line1, opener_col) then
+    local insert_text = "\n" .. inner_indent .. "\n" .. base_indent .. "}"
+    return {
+      line1 = line1,
+      col1 = edit_start,
+      line2 = line1,
+      col2 = edit_end,
+      text = insert_text,
+      caret_offset = #("\n" .. inner_indent),
+      reason = "after-unmatched-brace",
+    }
+  end
+
+  local insert_text = "\n" .. inner_indent
+  return {
+    line1 = line1,
+    col1 = edit_start,
+    line2 = line1,
+    col2 = edit_end,
+    text = insert_text,
+    caret_offset = #insert_text,
+    reason = "after-opener",
+  }
+end
+
 local function paste_all_normal_clipboards(doc)
   local payloads = {}
   for cb_idx in ipairs(core.cursor_clipboard_whole_line) do
@@ -456,8 +591,14 @@ local commands = {
 
   ["doc:newline"] = function(dv)
     local text_by_idx = {}
+    local normal_text_by_idx = {}
+    local edits = {}
+    local final_by_idx = {}
     local fallback = false
-    for idx, line, col in dv.doc:get_selections(false, true) do
+    local has_smart_newline = false
+    for idx, line1, col1, line2, col2 in dv.doc:get_selections(true, true) do
+      local line = line1
+      local col = col1
       local indent = dv.doc.lines[line]:match("^[\t ]*")
       if col <= #indent then
         indent = indent:sub(#indent + 2 - col)
@@ -467,7 +608,36 @@ local commands = {
         fallback = true
         break
       end
-      text_by_idx[idx] = "\n" .. indent
+
+      normal_text_by_idx[idx] = "\n" .. indent
+      local smart_edit = smart_newline_edit(dv.doc, line1, col1, line2, col2)
+      local text
+      if smart_edit then
+        has_smart_newline = true
+        text = smart_edit.text
+        final_by_idx[idx] = smart_edit.caret_offset
+        core.log_quiet("Smart newline %s in %s at %d:%d", smart_edit.reason, dv.doc:get_name(), line1, col1)
+        edits[#edits + 1] = {
+          line1 = smart_edit.line1,
+          col1 = smart_edit.col1,
+          line2 = smart_edit.line2,
+          col2 = smart_edit.col2,
+          text = text,
+          idx = idx,
+        }
+      else
+        text = "\n" .. indent
+        final_by_idx[idx] = "end"
+        edits[#edits + 1] = {
+          line1 = line1,
+          col1 = col1,
+          line2 = line2,
+          col2 = col2,
+          text = text,
+          idx = idx,
+        }
+      end
+      text_by_idx[idx] = text
     end
     if fallback then
       local temp = Doc()
@@ -496,6 +666,20 @@ local commands = {
         merge_cursors = false,
       })
       temp:on_close()
+    elseif has_smart_newline then
+      local non_overlapping, normalized = edits_are_non_overlapping(dv.doc, edits)
+      if not non_overlapping then
+        core.log_quiet("Smart newline skipped for %s because selections overlap", dv.doc:get_name())
+        dv.doc:text_input_by_selection(normal_text_by_idx, nil, { type = "insert" })
+        return
+      end
+      local selections, last_selection = dv.doc:selections_after_edits(normalized, final_by_idx, dv.doc.last_selection, { normalized = true })
+      dv.doc:apply_edits(edits, {
+        type = "insert",
+        selections = selections,
+        last_selection = last_selection,
+        merge_cursors = false,
+      })
     else
       dv.doc:text_input_by_selection(text_by_idx, nil, { type = "insert" })
     end

@@ -66,7 +66,18 @@ local function expected_prompt_text_for(path)
   return common.home_encode(rel) .. PATHSEP
 end
 
-local function saw_log_since(start_index, needle, level)
+local function saw_log_since(anchor, needle, level)
+  local start_index = 0
+  if type(anchor) == "number" then
+    start_index = anchor
+  elseif anchor then
+    for i = #core.log_items, 1, -1 do
+      if core.log_items[i] == anchor then
+        start_index = i
+        break
+      end
+    end
+  end
   for i = start_index + 1, #core.log_items do
     local item = core.log_items[i]
     if (not level or item.level == level) and item.text:find(needle, 1, true) then
@@ -199,7 +210,7 @@ test.describe("File Tree New File integration", function()
     core.set_active_view(filetree)
     test.ok(command.perform("user:new-file-with-path"))
 
-    local log_start = #core.log_items
+    local log_start = core.log_items[#core.log_items]
     core.global_prompt_bar:set_text(core.global_prompt_bar:get_text() .. "   ")
     core.global_prompt_bar:submit()
 
@@ -217,7 +228,7 @@ test.describe("File Tree New File integration", function()
     core.set_active_view(filetree)
     test.ok(command.perform("user:new-file-with-path"))
 
-    local log_start = #core.log_items
+    local log_start = core.log_items[#core.log_items]
     core.global_prompt_bar:set_text(expected_prompt_text_for(context.temp_root) .. "sibling.txt/")
     core.global_prompt_bar:submit()
 

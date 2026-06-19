@@ -348,6 +348,107 @@ test.describe("Document View Selection State edit characterization", function()
     })
   end)
 
+  test.it("newline between paired delimiters indents inside and moves the closer to its own line", function(context)
+    local doc, main = new_shared_views(context, "fun test() {\n}")
+    core.set_active_view(main)
+    set_view_selection(main, 1, 10, 1, 10)
+    local changes = 0
+    function doc:on_text_change()
+      changes = changes + 1
+    end
+
+    test.ok(command.perform("doc:newline"))
+
+    test.equal(text(doc), "fun test(\n  \n) {\n}\n")
+    test.equal(changes, 1)
+    test.same(selection(main), { 2, 3, 2, 3 })
+  end)
+
+  test.it("newline between paired delimiters keeps the closer at the opener line indentation", function(context)
+    local doc, main = new_shared_views(context, "  call()")
+    core.set_active_view(main)
+    set_view_selection(main, 1, 8, 1, 8)
+
+    test.ok(command.perform("doc:newline"))
+
+    test.equal(text(doc), "  call(\n    \n  )\n")
+    test.same(selection(main), { 2, 5, 2, 5 })
+  end)
+
+  test.it("newline between spaced paired delimiters cleans the interior spacing", function(context)
+    local doc, main = new_shared_views(context, "  call(   )")
+    core.set_active_view(main)
+    set_view_selection(main, 1, 10, 1, 10)
+
+    test.ok(command.perform("doc:newline"))
+
+    test.equal(text(doc), "  call(\n    \n  )\n")
+    test.same(selection(main), { 2, 5, 2, 5 })
+  end)
+
+  test.it("newline after an unmatched opening brace inserts an indented line and closing brace", function(context)
+    local doc, main = new_shared_views(context, "if (x) {")
+    core.set_active_view(main)
+    set_view_selection(main, 1, 9, 1, 9)
+    local changes = 0
+    function doc:on_text_change()
+      changes = changes + 1
+    end
+
+    test.ok(command.perform("doc:newline"))
+
+    test.equal(text(doc), "if (x) {\n  \n}\n")
+    test.equal(changes, 1)
+    test.same(selection(main), { 2, 3, 2, 3 })
+  end)
+
+  test.it("newline after an opening delimiter indents without synthesizing an already matched brace", function(context)
+    local doc, main = new_shared_views(context, "if (x) {\n  y()\n}")
+    core.set_active_view(main)
+    set_view_selection(main, 1, 9, 1, 9)
+
+    test.ok(command.perform("doc:newline"))
+
+    test.equal(text(doc), "if (x) {\n  \n  y()\n}\n")
+    test.same(selection(main), { 2, 3, 2, 3 })
+  end)
+
+  test.it("smart newline ignores delimiters inside strings", function(context)
+    local doc, main = new_shared_views(context, "printf(\"(\");")
+    doc:set_filename("smart_newline.c", "smart_newline.c")
+    core.set_active_view(main)
+    set_view_selection(main, 1, 10, 1, 10)
+
+    test.ok(command.perform("doc:newline"))
+
+    test.equal(text(doc), "printf(\"(\n\");\n")
+    test.same(selection(main), { 2, 1, 2, 1 })
+  end)
+
+  test.it("smart newline ignores delimiters inside comments", function(context)
+    local doc, main = new_shared_views(context, "// {")
+    doc:set_filename("smart_newline.c", "smart_newline.c")
+    core.set_active_view(main)
+    set_view_selection(main, 1, 5, 1, 5)
+
+    test.ok(command.perform("doc:newline"))
+
+    test.equal(text(doc), "// {\n\n")
+    test.same(selection(main), { 2, 1, 2, 1 })
+  end)
+
+  test.it("unmatched brace detection ignores closing braces inside strings and comments", function(context)
+    local doc, main = new_shared_views(context, "if (x) {\n  printf(\"}\");\n  // } ignored")
+    doc:set_filename("smart_newline.c", "smart_newline.c")
+    core.set_active_view(main)
+    set_view_selection(main, 1, 9, 1, 9)
+
+    test.ok(command.perform("doc:newline"))
+
+    test.equal(text(doc), "if (x) {\n  \n}\n  printf(\"}\");\n  // } ignored\n")
+    test.same(selection(main), { 2, 3, 2, 3 })
+  end)
+
   test.it("delete trims trailing whitespace before deleting the line break", function(context)
     local doc, main = new_shared_views(context, "aa   \nbb   \ncc")
     core.set_active_view(main)
