@@ -568,8 +568,12 @@ function update_suggestions()
     end
   end
   if lsp_available then
+    local allow_private = partial:sub(1, 1) == "_"
     for _, item in ipairs(lsp_completion_items or {}) do
-      table.insert(manual_items, item)
+      local label = tostring(item.insert_text or item.label or item.text or ""):gsub("^%s+", "")
+      if allow_private or label:sub(1, 1) ~= "_" then
+        table.insert(manual_items, item)
+      end
     end
   end
 
