@@ -36,6 +36,10 @@ _Avoid_: Editor tab, buffer view
 Non-interactive text visually anchored to a Document View line that is not part of the Document.
 _Avoid_: Buffer hint, phantom text, inlay hint
 
+**Diagnostic Underline**:
+A non-interactive underline marking a diagnostic range in a Document View.
+_Avoid_: Squiggle, lint underline
+
 **Column Guide**:
 A non-interactive vertical visual marker at a configured character column in a Document View.
 _Avoid_: Line guide, ruler

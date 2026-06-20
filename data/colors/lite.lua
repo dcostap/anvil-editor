@@ -25,6 +25,8 @@ style.drag_overlay_tab = { common.color "#93DDFA" }
 style.good = { common.color "#72b886" }
 style.warn = { common.color "#FFA94D" }
 style.error = { common.color "#FF3333" }
+style.diagnostic_error_underline = style.error
+style.diagnostic_warning_underline = style.warn
 style.modified = { common.color "#1c7c9c" }
 
 style.search_selection = { common.color "#6a5acd" }

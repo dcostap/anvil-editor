@@ -8,6 +8,7 @@ local config = require "core.config"
 local command = require "core.command"
 local keymap = require "core.keymap"
 local translate = require "core.doc.translate"
+local diagnostic_underlines = select(2, pcall(require, "core.lsp.diagnostic_underlines"))
 
 
 ---Configuration options for `linewrapping` plugin.
@@ -654,6 +655,9 @@ function DocView:draw_line_body(line, x, y)
     draw_wrapped_search_match(self, line, match[1], match[2], x, y, idx0, lh, match[3], true)
   end
 
+  if diagnostic_underlines and diagnostic_underlines.draw_line then
+    diagnostic_underlines.draw_line(self, line, x, y)
+  end
   self:draw_line_hint(line, x, y + lh * (count - 1))
 
   return line_height
