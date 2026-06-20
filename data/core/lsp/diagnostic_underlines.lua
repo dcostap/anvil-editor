@@ -89,15 +89,48 @@ function diagnostic_underlines.ranges_for_line(doc, line)
   return cached_line_ranges(doc)[line] or {}
 end
 
-local function underline_metrics(view, y)
+local function squiggle_metrics(view, y)
   local font = view:get_font()
   local font_height = font:get_height()
-  -- Match the editor font rather than the full visual row: the underline sits
-  -- at the bottom of the rendered code text and scales like FreeType's own
-  -- underline fallback in the native renderer.
+  -- Match the editor font rather than the full visual row: the squiggle sits
+  -- at the bottom of the rendered code text and scales with the same font that
+  -- produced the diagnostic text range.
   local thickness = math.max(1, math.ceil(font_height / 14))
-  local baseline = y + view:get_line_text_y_offset() + font_height - thickness
-  return baseline, thickness
+  local wave_height = math.max(thickness * 2, math.ceil(font_height / 7))
+  local step = math.max(wave_height, math.ceil(font_height / 4))
+  local text_bottom = y + view:get_line_text_y_offset() + font_height
+  local bottom = text_bottom - math.ceil(thickness / 2)
+  local top = bottom - wave_height
+  return top, bottom, thickness, step
+end
+
+local function rounded_point(x, y)
+  return { math.floor(x + 0.5), math.floor(y + 0.5) }
+end
+
+local function draw_squiggle(x1, x2, top, bottom, thickness, step, color)
+  local half_up = math.floor(thickness / 2)
+  local half_down = math.ceil(thickness / 2)
+  local centers = { { x = x1, y = top } }
+  local index = 0
+  local x = x1
+  while x < x2 do
+    index = index + 1
+    x = math.min(x2, x1 + index * step)
+    centers[#centers + 1] = { x = x, y = index % 2 == 1 and bottom or top }
+  end
+  if #centers < 2 then return end
+
+  local points = {}
+  for i = 1, #centers do
+    local point = centers[i]
+    points[#points + 1] = rounded_point(point.x, point.y - half_up)
+  end
+  for i = #centers, 1, -1 do
+    local point = centers[i]
+    points[#points + 1] = rounded_point(point.x, point.y + half_down)
+  end
+  renderer.draw_poly(points, color)
 end
 
 local function draw_segment(view, x1, x2, y, severity)
@@ -107,8 +140,8 @@ local function draw_segment(view, x1, x2, y, severity)
     local width = view:get_font():get_width(" ")
     x2 = x1 + math.max(width, style.caret_width or 1)
   end
-  local uy, thickness = underline_metrics(view, y)
-  renderer.draw_rect(x1, uy, x2 - x1, thickness, color)
+  local top, bottom, thickness, step = squiggle_metrics(view, y)
+  draw_squiggle(x1, x2, top, bottom, thickness, step, color)
 end
 
 local function draw_unwrapped_line(view, line, x, y, ranges)

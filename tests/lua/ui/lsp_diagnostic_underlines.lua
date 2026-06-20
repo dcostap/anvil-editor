@@ -66,16 +66,28 @@ local function publish(client, params)
   handler(params)
 end
 
-local function with_fake_draw_rect(fn)
-  local old_draw_rect = renderer.draw_rect
+local function with_fake_draw_poly(fn)
+  local old_draw_poly = renderer.draw_poly
   local calls = {}
-  renderer.draw_rect = function(x, y, w, h, color)
-    calls[#calls + 1] = { x = x, y = y, w = w, h = h, color = color }
+  renderer.draw_poly = function(points, color)
+    calls[#calls + 1] = { points = points, color = color }
   end
   local ok, err = pcall(fn, calls)
-  renderer.draw_rect = old_draw_rect
+  renderer.draw_poly = old_draw_poly
   if not ok then error(err, 0) end
   return calls
+end
+
+local function point_bounds(points)
+  local min_x, min_y, max_x, max_y
+  for _, point in ipairs(points or {}) do
+    local x, y = point[1], point[2]
+    min_x = min_x and math.min(min_x, x) or x
+    min_y = min_y and math.min(min_y, y) or y
+    max_x = max_x and math.max(max_x, x) or x
+    max_y = max_y and math.max(max_y, y) or y
+  end
+  return min_x, min_y, max_x, max_y
 end
 
 test.describe("LSP Diagnostic Underlines", function()
@@ -137,7 +149,7 @@ test.describe("LSP Diagnostic Underlines", function()
     })
 
     local view = DocView(doc)
-    local calls = with_fake_draw_rect(function()
+    local calls = with_fake_draw_poly(function()
       diagnostic_underlines.draw_line(view, 1, 10, 20)
       diagnostic_underlines.draw_line(view, 2, 10, 40)
       diagnostic_underlines.draw_line(view, 3, 10, 60)
@@ -146,8 +158,12 @@ test.describe("LSP Diagnostic Underlines", function()
     test.equal(#calls, 2)
     test.equal(calls[1].color, style.diagnostic_error_underline)
     test.equal(calls[2].color, style.diagnostic_warning_underline)
-    test.ok(calls[1].w > 0)
-    test.ok(calls[2].w > 0)
+    for _, call in ipairs(calls) do
+      local min_x, min_y, max_x, max_y = point_bounds(call.points)
+      test.ok(max_x > min_x)
+      test.ok(max_y > min_y)
+      test.ok(#call.points > 4, "diagnostic underline should be a squiggle polygon")
+    end
   end)
 
   test.it("keeps stale-tracked underlines visible when document sync makes diagnostics stale", function(context)
@@ -160,7 +176,7 @@ test.describe("LSP Diagnostic Underlines", function()
     })
 
     local view = DocView(doc)
-    local calls = with_fake_draw_rect(function()
+    local calls = with_fake_draw_poly(function()
       diagnostic_underlines.draw_line(view, 1, 0, 0)
       doc:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "new " } })
       diagnostic_underlines.draw_line(view, 1, 0, 0)
@@ -303,12 +319,13 @@ test.describe("LSP Diagnostic Underlines", function()
     })
 
     local view = DocView(doc)
-    local calls = with_fake_draw_rect(function()
+    local calls = with_fake_draw_poly(function()
       diagnostic_underlines.draw_line(view, 1, 0, 0)
     end)
 
     test.equal(#calls, 1)
-    test.ok(calls[1].w > 0)
+    local min_x, _, max_x = point_bounds(calls[1].points)
+    test.ok(max_x > min_x)
   end)
 
   test.it("resolves underline colors at draw time", function(context)
@@ -325,14 +342,14 @@ test.describe("LSP Diagnostic Underlines", function()
     local view = DocView(doc)
     style.diagnostic_warning_underline = replacement
 
-    local calls = with_fake_draw_rect(function()
+    local calls = with_fake_draw_poly(function()
       diagnostic_underlines.draw_line(view, 1, 0, 0)
     end)
 
     test.equal(calls[1].color, replacement)
   end)
 
-  test.it("scales underline thickness and position with the code font", function(context)
+  test.it("scales squiggle thickness and position with the code font", function(context)
     local doc, client, document_uri = setup(context)
     publish(client, {
       textDocument = { uri = document_uri, version = 0 },
@@ -351,13 +368,15 @@ test.describe("LSP Diagnostic Underlines", function()
     style[context.test_font_key] = fake_font
     view.font = context.test_font_key
 
-    local calls = with_fake_draw_rect(function()
+    local calls = with_fake_draw_poly(function()
       diagnostic_underlines.draw_line(view, 1, 5, 11)
     end)
 
-    local expected_thickness = math.ceil(fake_font:get_height() / 14)
-    test.equal(calls[1].h, expected_thickness)
-    test.equal(calls[1].y, 11 + view:get_line_text_y_offset() + fake_font:get_height() - expected_thickness)
+    local _, min_y, _, max_y = point_bounds(calls[1].points)
+    local text_bottom = 11 + view:get_line_text_y_offset() + fake_font:get_height()
+    local expected_minimum_span = math.ceil(fake_font:get_height() / 14)
+    test.ok(max_y <= math.ceil(text_bottom))
+    test.ok(max_y - min_y > expected_minimum_span)
   end)
 
   test.it("splits wrapped underline ranges across visual rows", function(context)
@@ -380,14 +399,14 @@ test.describe("LSP Diagnostic Underlines", function()
     view.wrapped_line_offsets = { 0 }
 
     local lh = view:get_line_height()
-    local calls = with_fake_draw_rect(function()
+    local calls = with_fake_draw_poly(function()
       diagnostic_underlines.draw_line(view, 1, 0, 100)
     end)
 
-    local thickness = math.ceil(view:get_font():get_height() / 14)
-    local row_offset = view:get_line_text_y_offset() + view:get_font():get_height() - thickness
     test.equal(#calls, 2)
-    test.equal(calls[1].y, 100 + row_offset)
-    test.equal(calls[2].y, 100 + lh + row_offset)
+    local _, min_y1, _, max_y1 = point_bounds(calls[1].points)
+    local _, min_y2, _, max_y2 = point_bounds(calls[2].points)
+    test.equal(min_y2 - min_y1, lh)
+    test.equal(max_y2 - max_y1, lh)
   end)
 end)
