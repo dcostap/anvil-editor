@@ -654,6 +654,8 @@ function DocView:draw_line_body(line, x, y)
     draw_wrapped_search_match(self, line, match[1], match[2], x, y, idx0, lh, match[3], true)
   end
 
+  self:draw_line_hint(line, x, y + lh * (count - 1))
+
   return line_height
 end
 

@@ -1,5 +1,6 @@
 local core = require "core"
 local command = require "core.command"
+local diagnostic_hints = require "core.lsp.diagnostic_hints"
 local diagnostics = require "core.lsp.diagnostics"
 local hover = require "core.lsp.hover"
 local manager = require "core.lsp.manager"
@@ -50,6 +51,7 @@ command.add(doc_view_predicate, {
 })
 
 return {
+  diagnostic_hints = diagnostic_hints,
   diagnostics = diagnostics,
   hover = hover,
   manager = manager,

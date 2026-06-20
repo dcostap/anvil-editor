@@ -7,6 +7,16 @@ local uri = require "core.lsp.uri"
 local diagnostics = {}
 
 local stores = setmetatable({}, { __mode = "k" })
+local generation = 0
+
+local function bump_generation()
+  generation = generation + 1
+  return generation
+end
+
+function diagnostics.generation()
+  return generation
+end
 
 local function server_id_for(client, opts)
   opts = opts or {}
@@ -127,6 +137,7 @@ function diagnostics.handle_publish_diagnostics(client, params, opts)
     received_at = received_at,
     server_id = store.server_id,
   }
+  bump_generation()
   return store.by_uri[document_uri]
 end
 
@@ -206,6 +217,7 @@ function diagnostics.clear_uri(client, document_uri)
   if not document_uri then return 0 end
   local existed = store.by_uri[document_uri] ~= nil
   store.by_uri[document_uri] = nil
+  if existed then bump_generation() end
   return existed and 1 or 0
 end
 
@@ -218,6 +230,7 @@ function diagnostics.clear_client(client)
     count = count + 1
   end
   stores[client] = nil
+  if count > 0 then bump_generation() end
   return count
 end
 
