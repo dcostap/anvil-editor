@@ -413,6 +413,39 @@ test.describe("Document View Selection State edit characterization", function()
     test.same(selection(main), { 2, 3, 2, 3 })
   end)
 
+  test.it("newline replacing selected text after an opening brace keeps smart indentation", function(context)
+    local doc, main = new_shared_views(context, "fun test() {selected_word\n}")
+    core.set_active_view(main)
+    set_view_selection(main, 1, 13, 1, 26)
+
+    test.ok(command.perform("doc:newline"))
+
+    test.equal(text(doc), "fun test() {\n  \n}\n")
+    test.same(selection(main), { 2, 3, 2, 3 })
+  end)
+
+  test.it("newline replacing selected text between paired delimiters keeps smart indentation", function(context)
+    local doc, main = new_shared_views(context, "call(selected_word)")
+    core.set_active_view(main)
+    set_view_selection(main, 1, 6, 1, 19)
+
+    test.ok(command.perform("doc:newline"))
+
+    test.equal(text(doc), "call(\n  \n)\n")
+    test.same(selection(main), { 2, 3, 2, 3 })
+  end)
+
+  test.it("smart newline ignores a closing brace inside replaced selected text", function(context)
+    local doc, main = new_shared_views(context, "if (x) {selected_}")
+    core.set_active_view(main)
+    set_view_selection(main, 1, 9, 1, 19)
+
+    test.ok(command.perform("doc:newline"))
+
+    test.equal(text(doc), "if (x) {\n  \n}\n")
+    test.same(selection(main), { 2, 3, 2, 3 })
+  end)
+
   test.it("smart newline ignores delimiters inside strings", function(context)
     local doc, main = new_shared_views(context, "printf(\"(\");")
     doc:set_filename("smart_newline.c", "smart_newline.c")

@@ -352,14 +352,22 @@ local function next_non_space_on_line(text, col)
   end
 end
 
-local function opening_brace_is_unmatched(doc, line, col)
+local function position_is_inside_range(line, col, line1, col1, line2, col2)
+  if not line1 then return false end
+  return (line > line1 or line == line1 and col >= col1)
+     and (line < line2 or line == line2 and col < col2)
+end
+
+local function opening_brace_is_unmatched(doc, line, col, skip_line1, skip_col1, skip_line2, skip_col2)
   local depth = 1
   for l = line, #doc.lines do
     local text = doc.lines[l]
     local start_col = l == line and col + 1 or 1
     for i = start_col, #text do
       local ch = text:sub(i, i)
-      if (ch == "{" or ch == "}") and position_is_code(doc, l, i) then
+      if not position_is_inside_range(l, i, skip_line1, skip_col1, skip_line2, skip_col2)
+      and (ch == "{" or ch == "}")
+      and position_is_code(doc, l, i) then
         if ch == "{" then
           depth = depth + 1
         else
@@ -385,24 +393,38 @@ local function edits_are_non_overlapping(doc, edits)
 end
 
 local function smart_newline_edit(doc, line1, col1, line2, col2)
-  if line1 ~= line2 or col1 ~= col2 then return nil end
+  if line1 ~= line2 then return nil end
 
   local text = doc.lines[line1] or ""
-  local opener, opener_col = previous_non_space_on_line(text, col1)
+  local selection_delta = col2 - col1
+  local virtual_text = text
+  if selection_delta > 0 then
+    virtual_text = text:sub(1, col1 - 1) .. text:sub(col2)
+  end
+
+  local function real_col(virtual_col, affinity)
+    if selection_delta <= 0 or virtual_col < col1 then return virtual_col end
+    if virtual_col == col1 and affinity == "start" then return col1 end
+    return virtual_col + selection_delta
+  end
+
+  local opener, opener_col = previous_non_space_on_line(virtual_text, col1)
+  local opener_real_col = opener_col and real_col(opener_col)
   local closer = opener and smart_newline_pairs[opener]
-  if not closer or not position_is_code(doc, line1, opener_col) then return nil end
+  if not closer or not position_is_code(doc, line1, opener_real_col) then return nil end
 
-  local base_indent = leading_indent(text)
+  local base_indent = leading_indent(virtual_text)
   local inner_indent = base_indent .. one_indent_string(doc)
-  local next_char, next_col = next_non_space_on_line(text, col1)
+  local next_char, next_col = next_non_space_on_line(virtual_text, col1)
+  local next_real_col = next_col and real_col(next_col, "end")
 
-  if next_char == closer and position_is_code(doc, line1, next_col) then
+  if next_char == closer and position_is_code(doc, line1, next_real_col) then
     local insert_text = "\n" .. inner_indent .. "\n" .. base_indent
     return {
       line1 = line1,
-      col1 = opener_col + 1,
+      col1 = real_col(opener_col + 1, "start"),
       line2 = line1,
-      col2 = next_col,
+      col2 = next_real_col,
       text = insert_text,
       caret_offset = #("\n" .. inner_indent),
       reason = "between-pair",
@@ -411,9 +433,9 @@ local function smart_newline_edit(doc, line1, col1, line2, col2)
 
   if next_char ~= nil then return nil end
 
-  local edit_start = opener_col + 1
-  local edit_end = line_end_col(text)
-  if opener == "{" and opening_brace_is_unmatched(doc, line1, opener_col) then
+  local edit_start = real_col(opener_col + 1, "start")
+  local edit_end = real_col(line_end_col(virtual_text), "end")
+  if opener == "{" and opening_brace_is_unmatched(doc, line1, opener_real_col, line1, col1, line2, col2) then
     local insert_text = "\n" .. inner_indent .. "\n" .. base_indent .. "}"
     return {
       line1 = line1,

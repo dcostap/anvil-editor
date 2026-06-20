@@ -177,7 +177,17 @@ A test should generally fail when there is a bug, not merely because a preferenc
 
 #### Bugfix regression tests
 
-When adding a regression test for a bug, prefer proving the test fails before the fix and passes after the fix. If the fix is already applied, temporarily revert or disable only the implementation change and run the targeted test to confirm it goes red before committing. If red-first verification is impractical or too costly, mention that explicitly in the final summary.
+For user-reported bugs and behavior discrepancies, use a red-green regression workflow by default:
+
+1. Add or identify a targeted test/repro that demonstrates the bug.
+2. Run it before changing the implementation and confirm it fails for the expected reason.
+3. Apply the smallest appropriate fix.
+4. Re-run the same targeted test and confirm it passes.
+5. Run the relevant broader suite when appropriate.
+
+Do not skip the red step just because the implementation gap seems obvious. If the fix was already applied before the red step, temporarily revert or disable only the implementation change while keeping the regression test, then run the targeted test to confirm it goes red before committing. If red-first verification is impractical or too costly, call that out before or during the work and mention it explicitly in the final summary.
+
+When reporting a bugfix, summarize the red-green evidence: which targeted test failed before the fix, what failure it showed, and which test/suite passed after the fix.
 
 Current first-party tests live in:
 
