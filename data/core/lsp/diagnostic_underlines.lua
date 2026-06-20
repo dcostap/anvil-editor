@@ -1,8 +1,7 @@
 local core = require "core"
 local style = require "core.style"
 local DocView = require "core.docview"
-local diagnostics = require "core.lsp.diagnostics"
-local documents = require "core.lsp.documents"
+local diagnostic_markers = require "core.lsp.diagnostic_markers"
 
 local diagnostic_underlines = {}
 
@@ -23,23 +22,6 @@ local function severity_color(severity)
   if severity == 1 then return style.diagnostic_error_underline or style.error end
   if severity == 2 then return style.diagnostic_warning_underline or style.warn or style.error end
   return style.line_hint
-end
-
-local function doc_sync_key(doc)
-  if not doc then return "" end
-  local states = documents.states_for_doc(doc)
-  if #states == 0 then return "" end
-  local parts = {}
-  for _, state in ipairs(states) do
-    local client = state.client or {}
-    parts[#parts + 1] = table.concat({
-      tostring(client.id or client.server_id or client),
-      tostring(state.uri or ""),
-      tostring(state.lsp_version or ""),
-    }, "\31")
-  end
-  table.sort(parts)
-  return table.concat(parts, "\30")
 end
 
 local function line_visual_end_col(doc, line)
@@ -68,7 +50,7 @@ end
 
 local function build_line_ranges(doc)
   local by_line = {}
-  for _, item in ipairs(diagnostics.current_document_items(doc)) do
+  for _, item in ipairs(diagnostic_markers.visual_document_items(doc)) do
     local diagnostic = item.diagnostic or {}
     local severity = tonumber(diagnostic.severity)
     if visible_severity(severity) and item.line1 then
@@ -89,16 +71,13 @@ end
 
 local function cached_line_ranges(doc)
   if not doc then return {} end
-  local generation = diagnostics.generation and diagnostics.generation() or 0
+  local generation = diagnostic_markers.generation and diagnostic_markers.generation() or 0
   local change_id = doc_change_id(doc)
-  local sync_key = doc_sync_key(doc)
   local entry = cache[doc]
-  if not entry or entry.generation ~= generation or entry.change_id ~= change_id
-      or entry.sync_key ~= sync_key then
+  if not entry or entry.generation ~= generation or entry.change_id ~= change_id then
     entry = {
       generation = generation,
       change_id = change_id,
-      sync_key = sync_key,
       by_line = build_line_ranges(doc),
     }
     cache[doc] = entry
@@ -193,6 +172,7 @@ function diagnostic_underlines.draw_line(view, line, x, y)
 end
 
 function diagnostic_underlines.install()
+  DocView.__lsp_diagnostic_underlines_module = diagnostic_underlines
   if DocView.__lsp_diagnostic_underlines_installed then return false end
   local base_draw_line_body = DocView.draw_line_body
   DocView.__lsp_diagnostic_underlines_installed = true
@@ -200,7 +180,8 @@ function diagnostic_underlines.install()
 
   function DocView:draw_line_body(line, x, y)
     local height = base_draw_line_body(self, line, x, y)
-    diagnostic_underlines.draw_line(self, line, x, y)
+    local module = DocView.__lsp_diagnostic_underlines_module or diagnostic_underlines
+    module.draw_line(self, line, x, y)
     return height
   end
 

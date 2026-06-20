@@ -1,8 +1,7 @@
 local core = require "core"
 local style = require "core.style"
 local DocView = require "core.docview"
-local diagnostics = require "core.lsp.diagnostics"
-local documents = require "core.lsp.documents"
+local diagnostic_markers = require "core.lsp.diagnostic_markers"
 
 local diagnostic_hints = {}
 
@@ -25,23 +24,6 @@ local function severity_color(severity)
   return style.line_hint
 end
 
-local function doc_sync_key(doc)
-  if not doc then return "" end
-  local states = documents.states_for_doc(doc)
-  if #states == 0 then return "" end
-  local parts = {}
-  for _, state in ipairs(states) do
-    local client = state.client or {}
-    parts[#parts + 1] = table.concat({
-      tostring(client.id or client.server_id or client),
-      tostring(state.uri or ""),
-      tostring(state.lsp_version or ""),
-    }, "\31")
-  end
-  table.sort(parts)
-  return table.concat(parts, "\30")
-end
-
 local function diagnostic_message(diagnostic)
   local message = diagnostic and diagnostic.message
   if message == nil or tostring(message) == "" then
@@ -60,7 +42,7 @@ end
 
 local function build_line_hints(doc)
   local by_line = {}
-  for _, item in ipairs(diagnostics.current_document_items(doc)) do
+  for _, item in ipairs(diagnostic_markers.visual_document_items(doc)) do
     local diagnostic = item.diagnostic or {}
     local severity = tonumber(diagnostic.severity)
     if visible_severity(severity) and item.line1 then
@@ -83,16 +65,13 @@ end
 
 local function cached_line_hints(doc)
   if not doc then return {} end
-  local generation = diagnostics.generation and diagnostics.generation() or 0
+  local generation = diagnostic_markers.generation and diagnostic_markers.generation() or 0
   local change_id = doc_change_id(doc)
-  local sync_key = doc_sync_key(doc)
   local entry = cache[doc]
-  if not entry or entry.generation ~= generation or entry.change_id ~= change_id
-      or entry.sync_key ~= sync_key then
+  if not entry or entry.generation ~= generation or entry.change_id ~= change_id then
     entry = {
       generation = generation,
       change_id = change_id,
-      sync_key = sync_key,
       by_line = build_line_hints(doc),
     }
     cache[doc] = entry
@@ -125,6 +104,7 @@ local function append_hint(view, base_hint, diagnostic_hint)
 end
 
 function diagnostic_hints.install()
+  DocView.__lsp_diagnostic_hints_module = diagnostic_hints
   if DocView.__lsp_diagnostic_hints_installed then return false end
   local base_get_line_hint = DocView.get_line_hint
   DocView.__lsp_diagnostic_hints_installed = true
@@ -132,7 +112,8 @@ function diagnostic_hints.install()
 
   function DocView:get_line_hint(line)
     local base_hint = base_get_line_hint(self, line)
-    local diagnostic_hint = diagnostic_hints.get_line_hint(self.doc, line)
+    local module = DocView.__lsp_diagnostic_hints_module or diagnostic_hints
+    local diagnostic_hint = module.get_line_hint(self.doc, line)
     return append_hint(self, base_hint, diagnostic_hint)
   end
 

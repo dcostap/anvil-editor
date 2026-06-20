@@ -2,6 +2,7 @@ local core = require "core"
 local command = require "core.command"
 local common = require "core.common"
 local position = require "core.lsp.position"
+local diagnostic_markers = require "core.lsp.diagnostic_markers"
 local uri = require "core.lsp.uri"
 
 local diagnostics = {}
@@ -70,17 +71,36 @@ local function document_state(client, document_uri)
   return documents.state(client, document_uri)
 end
 
-local function is_stale_for_state(version, state)
-  if version == nil then return false end
-  if not state then return false end
-  return state.lsp_version ~= version
+local function doc_change_id(doc)
+  if doc and doc.get_change_id then return doc:get_change_id() end
+  return nil
 end
 
-local function normalize_diagnostic(raw, document_uri, version, received_at, store, state)
+local function is_authoritative_at_receipt(version, state)
+  if not state then return true end
+  if version ~= nil and state.lsp_version ~= version then return false end
+  local change_id = doc_change_id(state.doc)
+  return change_id ~= nil and change_id == state.last_synced_change_id
+end
+
+local function is_stale_for_state(version, state, received_change_id, authoritative_at_receipt)
+  if not state then return false end
+  if version ~= nil then
+    if state.lsp_version ~= version then return true end
+    return doc_change_id(state.doc) ~= state.last_synced_change_id
+  end
+  if authoritative_at_receipt == false then return true end
+  if received_change_id ~= nil and doc_change_id(state.doc) ~= received_change_id then return true end
+  return false
+end
+
+local function normalize_diagnostic(raw, document_uri, version, received_at, store, state, client)
   raw = type(raw) == "table" and raw or {}
   local code_description = raw.codeDescription or raw.code_description
   local related_information = raw.relatedInformation or raw.related_information
-  local stale = is_stale_for_state(version, state)
+  local received_change_id = state and doc_change_id(state.doc) or nil
+  local authoritative = is_authoritative_at_receipt(version, state)
+  local stale = is_stale_for_state(version, state, received_change_id, authoritative)
   return {
     uri = document_uri,
     path = path_from_uri(document_uri),
@@ -98,6 +118,9 @@ local function normalize_diagnostic(raw, document_uri, version, received_at, sto
     server_id = store.server_id,
     version = version,
     received_at = received_at,
+    received_change_id = received_change_id,
+    authoritative_at_receipt = authoritative,
+    position_encoding = client and client.position_encoding or nil,
     stale = stale,
     current = not stale,
     raw = raw,
@@ -107,7 +130,7 @@ end
 local function refresh_entry_staleness(client, entry)
   local state = document_state(client, entry.uri)
   for _, item in ipairs(entry.diagnostics) do
-    item.stale = is_stale_for_state(item.version, state)
+    item.stale = is_stale_for_state(item.version, state, item.received_change_id, item.authoritative_at_receipt)
     item.current = not item.stale
   end
 end
@@ -126,7 +149,7 @@ function diagnostics.handle_publish_diagnostics(client, params, opts)
   local state = document_state(client, document_uri)
   local normalized = {}
   for _, raw in ipairs(type(params.diagnostics) == "table" and params.diagnostics or {}) do
-    normalized[#normalized + 1] = normalize_diagnostic(raw, document_uri, version, received_at, store, state)
+    normalized[#normalized + 1] = normalize_diagnostic(raw, document_uri, version, received_at, store, state, client)
   end
 
   store.by_uri[document_uri] = {
@@ -138,6 +161,7 @@ function diagnostics.handle_publish_diagnostics(client, params, opts)
     server_id = store.server_id,
   }
   bump_generation()
+  diagnostic_markers.on_publish(client, document_uri, version, normalized)
   return store.by_uri[document_uri]
 end
 
@@ -217,7 +241,10 @@ function diagnostics.clear_uri(client, document_uri)
   if not document_uri then return 0 end
   local existed = store.by_uri[document_uri] ~= nil
   store.by_uri[document_uri] = nil
-  if existed then bump_generation() end
+  if existed then
+    diagnostic_markers.clear_uri(client, document_uri)
+    bump_generation()
+  end
   return existed and 1 or 0
 end
 
@@ -230,6 +257,7 @@ function diagnostics.clear_client(client)
     count = count + 1
   end
   stores[client] = nil
+  diagnostic_markers.clear_client(client)
   if count > 0 then bump_generation() end
   return count
 end

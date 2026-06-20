@@ -141,7 +141,7 @@ function highlight.line_tokens(doc, idx)
   local cache = ts.highlight_cache or {}
   ts.highlight_cache = cache
   local tree_generation = ts.native:tree_generation()
-  local key = table.concat({ tostring(tree_generation), tostring(ts.generation or 0), tostring(idx), line }, "\0")
+  local key = table.concat({ tostring(tree_generation), tostring(idx), line }, "\0")
   local cached = cache[idx]
   if cached and cached.key == key then return cached.tokens, nil, "treesitter" end
 

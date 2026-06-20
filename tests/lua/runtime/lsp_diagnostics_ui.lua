@@ -161,7 +161,7 @@ test.describe("core.lsp.diagnostics UI/navigation helpers", function()
     test.equal(#view.scrolled, 0)
   end)
 
-  test.test("stale diagnostics are hidden from navigation", function(context)
+  test.test("stale diagnostics are hidden from navigation immediately after local edits", function(context)
     local doc, client, document_uri = setup(context)
     local view = fake_view(doc)
     publish(client, {
@@ -169,9 +169,12 @@ test.describe("core.lsp.diagnostics UI/navigation helpers", function()
       diagnostics = { { range = lsp_range(0, 0, 0, 5), message = "old" } },
     })
     doc:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 1, text = "new " } })
-    documents.flush(client, doc)
 
     doc:set_selection(1, 1)
+    test.ok(command.perform("lsp:next-diagnostic", view))
+    test.same(selection4(doc), { 1, 1, 1, 1 })
+
+    documents.flush(client, doc)
     test.ok(command.perform("lsp:next-diagnostic", view))
     test.same(selection4(doc), { 1, 1, 1, 1 })
   end)

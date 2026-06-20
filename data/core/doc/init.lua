@@ -2059,8 +2059,30 @@ function Doc:indent_text(unindent, line1, col1, line2, col2)
   return line1, col1 + #text_stop, line1, col1 + #text_stop
 end
 
+local text_transaction_handlers = {}
+
+---Register a batch-aware document transaction observer.
+---Handlers are called from Doc:on_text_transaction after text has been applied.
+---@param id string
+---@param fn function
+function Doc.register_text_transaction_handler(id, fn)
+  assert(type(id) == "string" and id ~= "", "text transaction handler id must be a non-empty string")
+  assert(type(fn) == "function", "text transaction handler must be a function")
+  text_transaction_handlers[id] = fn
+end
+
+function Doc.unregister_text_transaction_handler(id)
+  text_transaction_handlers[id] = nil
+end
+
 -- Internal transaction hook for batch-aware document change observers.
 function Doc:on_text_transaction(transaction)
+  for id, handler in pairs(text_transaction_handlers) do
+    local ok, err = pcall(handler, self, transaction)
+    if not ok and core and core.log_quiet then
+      core.log_quiet("Doc text transaction handler %s failed for %s: %s", tostring(id), self:get_name(), tostring(err))
+    end
+  end
 end
 
 -- For plugins to add custom actions of document change

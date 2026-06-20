@@ -655,8 +655,9 @@ function DocView:draw_line_body(line, x, y)
     draw_wrapped_search_match(self, line, match[1], match[2], x, y, idx0, lh, match[3], true)
   end
 
-  if diagnostic_underlines and diagnostic_underlines.draw_line then
-    diagnostic_underlines.draw_line(self, line, x, y)
+  local underline_module = DocView.__lsp_diagnostic_underlines_module or diagnostic_underlines
+  if underline_module and underline_module.draw_line then
+    underline_module.draw_line(self, line, x, y)
   end
   self:draw_line_hint(line, x, y + lh * (count - 1))
 

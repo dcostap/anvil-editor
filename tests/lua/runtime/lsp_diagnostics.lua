@@ -199,7 +199,7 @@ test.describe("core.lsp.diagnostics", function()
     test.ok(unversioned.current)
   end)
 
-  test.test("recomputes stale state when document sync version advances", function(context)
+  test.test("recomputes stale state for local edits before and after document sync advances", function(context)
     local path = join_path(temp_root, "main.cpp")
     local doc = track_doc(context, new_doc(path, "abc"))
     local client = track_client(context, fake_client("fake-d"))
@@ -213,6 +213,9 @@ test.describe("core.lsp.diagnostics", function()
     test.not_ok(diagnostics.get(client, doc)[1].stale)
 
     doc:apply_edits({ { line1 = 1, col1 = 4, line2 = 1, col2 = 4, text = "d" } })
+    test.ok(diagnostics.get(client, doc)[1].stale)
+    test.equal(#diagnostics.current(client, doc), 0)
+
     documents.flush(client, doc)
     test.ok(diagnostics.get(client, doc)[1].stale)
   end)

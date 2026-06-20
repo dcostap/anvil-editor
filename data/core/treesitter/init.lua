@@ -137,6 +137,23 @@ local function disable_doc(doc, reason)
   }
 end
 
+local function count_newlines(text)
+  local count = 0
+  for _ in tostring(text or ""):gmatch("\n") do count = count + 1 end
+  return count
+end
+
+local function remap_stale_highlight_cache(ts, edit, line_count)
+  if not edit or not ts.highlight_cache then return false end
+  local old_count = math.max(1, (edit.line2 or edit.line1) - (edit.line1 or 1) + 1)
+  local new_count = math.max(1, count_newlines(edit.text) + 1)
+  local blanks = {}
+  for i = 1, new_count do blanks[i] = false end
+  common.splice(ts.highlight_cache, edit.line1 or 1, old_count, blanks)
+  for i = line_count + 1, #ts.highlight_cache do ts.highlight_cache[i] = nil end
+  return true
+end
+
 function treesitter.schedule_parse(doc, edit)
   local ts = doc and doc.treesitter
   if not ts or not ts.native or not doc.lines then return false end
@@ -146,7 +163,8 @@ function treesitter.schedule_parse(doc, edit)
   ts.reason = nil
   ts.last_poll_changed = false
   ts.scheduled_fingerprint = doc_fingerprint(doc)
-  ts.highlight_cache = {}
+  local remapped_stale_cache = edit and ts.stale_renderable and remap_stale_highlight_cache(ts, edit, #doc.lines)
+  if not remapped_stale_cache then ts.highlight_cache = {} end
   ts.selection_history = {}
   ts.line_starts = nil
   ts.outline_line_starts = nil
@@ -154,7 +172,11 @@ function treesitter.schedule_parse(doc, edit)
   ts.navigation_line_starts = nil
   ts.locals_line_starts = nil
   if doc.highlighter and doc.highlighter.invalidate_render_cache then
-    doc.highlighter:invalidate_render_cache()
+    if remapped_stale_cache then
+      doc.highlighter:invalidate_render_cache(edit.line1 or 1, #doc.lines)
+    else
+      doc.highlighter:invalidate_render_cache()
+    end
   end
   local ok, err = ts.native:schedule_parse(doc.lines, ts.generation, edit)
   if not ok then

@@ -3,6 +3,7 @@ local Doc = require "core.doc"
 local DocView = require "core.docview"
 local style = require "core.style"
 local test = require "core.test"
+local diagnostic_markers = require "core.lsp.diagnostic_markers"
 local diagnostic_underlines = require "core.lsp.diagnostic_underlines"
 local diagnostics = require "core.lsp.diagnostics"
 local documents = require "core.lsp.documents"
@@ -89,6 +90,7 @@ test.describe("LSP Diagnostic Underlines", function()
   test.after_each(function(context)
     if context.original_error_underline then style.diagnostic_error_underline = context.original_error_underline end
     if context.original_warning_underline then style.diagnostic_warning_underline = context.original_warning_underline end
+    if context.original_removal_grace then diagnostic_markers.set_removal_grace_seconds(context.original_removal_grace) end
     if context.test_font_key then style[context.test_font_key] = nil end
     if context.docs then
       for _, doc in ipairs(context.docs) do pcall(function() doc:on_close() end) end
@@ -148,7 +150,7 @@ test.describe("LSP Diagnostic Underlines", function()
     test.ok(calls[2].w > 0)
   end)
 
-  test.it("drops cached underlines when document sync makes diagnostics stale", function(context)
+  test.it("keeps stale-tracked underlines visible when document sync makes diagnostics stale", function(context)
     local doc, client, document_uri = setup(context)
     publish(client, {
       textDocument = { uri = document_uri, version = 0 },
@@ -166,7 +168,147 @@ test.describe("LSP Diagnostic Underlines", function()
       diagnostic_underlines.draw_line(view, 1, 0, 0)
     end)
 
-    test.equal(#calls, 2)
+    test.equal(#calls, 3)
+  end)
+
+  test.it("shifts stale-tracked underlines to the original diagnostic line when inserting newline at diagnostic start", function(context)
+    local doc, client, document_uri = setup(context)
+    publish(client, {
+      textDocument = { uri = document_uri, version = 0 },
+      diagnostics = {
+        { range = lsp_range(1, 0, 1, 6), severity = 1, message = "moves down" },
+      },
+    })
+
+    doc:insert(2, 1, "\n")
+
+    test.equal(#diagnostic_underlines.ranges_for_line(doc, 2), 0)
+    local shifted = diagnostic_underlines.ranges_for_line(doc, 3)
+    test.equal(#shifted, 1)
+    test.equal(shifted[1].col1, 1)
+    test.equal(shifted[1].col2, 7)
+  end)
+
+  test.it("preserves underlines through broad replacements that keep diagnostic text", function(context)
+    local doc, client, document_uri = setup(context)
+    publish(client, {
+      textDocument = { uri = document_uri, version = 0 },
+      diagnostics = {
+        { range = lsp_range(1, 0, 1, 6), severity = 1, message = "preserved" },
+      },
+    })
+
+    doc:apply_edits({
+      { line1 = 1, col1 = 1, line2 = 3, col2 = #doc.lines[3], text = "zero\nfirst\nsecond\nthird\n" },
+    })
+
+    test.equal(#diagnostic_underlines.ranges_for_line(doc, 2), 0)
+    local shifted = diagnostic_underlines.ranges_for_line(doc, 3)
+    test.equal(#shifted, 1)
+    test.equal(shifted[1].col1, 1)
+    test.equal(shifted[1].col2, 7)
+  end)
+
+  test.it("shifts stale-tracked underlines when inserting lines before diagnostics", function(context)
+    local doc, client, document_uri = setup(context)
+    publish(client, {
+      textDocument = { uri = document_uri, version = 0 },
+      diagnostics = {
+        { range = lsp_range(1, 0, 1, 6), severity = 1, message = "moves down" },
+      },
+    })
+
+    test.equal(#diagnostic_underlines.ranges_for_line(doc, 2), 1)
+    doc:insert(1, 1, "inserted\n")
+    test.equal(#diagnostic_underlines.ranges_for_line(doc, 2), 0)
+    local shifted = diagnostic_underlines.ranges_for_line(doc, 3)
+    test.equal(#shifted, 1)
+    test.equal(shifted[1].col1, 1)
+    test.equal(shifted[1].col2, 7)
+    documents.flush(client, doc)
+    test.equal(#diagnostic_underlines.ranges_for_line(doc, 3), 1)
+  end)
+
+  test.it("does not create visual markers from same-version publishes while local edits are pending", function(context)
+    local doc, client, document_uri = setup(context)
+    doc:insert(1, 1, "dirty ")
+    publish(client, {
+      textDocument = { uri = document_uri, version = 0 },
+      diagnostics = {
+        { range = lsp_range(0, 0, 0, 5), severity = 1, message = "stale publish" },
+      },
+    })
+
+    test.equal(#diagnostic_underlines.ranges_for_line(doc, 1), 0)
+  end)
+
+  test.it("authoritative empty publishes defer marker removal to avoid flicker", function(context)
+    local doc, client, document_uri = setup(context)
+    context.original_removal_grace = diagnostic_markers.set_removal_grace_seconds(60)
+    publish(client, {
+      textDocument = { uri = document_uri, version = 0 },
+      diagnostics = {
+        { range = lsp_range(0, 0, 0, 5), severity = 1, message = "kept briefly" },
+      },
+    })
+    publish(client, {
+      textDocument = { uri = document_uri, version = 0 },
+      diagnostics = {},
+    })
+
+    test.equal(#diagnostic_underlines.ranges_for_line(doc, 1), 1)
+  end)
+
+  test.it("expired deferred marker removals stop rendering", function(context)
+    local doc, client, document_uri = setup(context)
+    context.original_removal_grace = diagnostic_markers.set_removal_grace_seconds(0)
+    publish(client, {
+      textDocument = { uri = document_uri, version = 0 },
+      diagnostics = {
+        { range = lsp_range(0, 0, 0, 5), severity = 1, message = "removed" },
+      },
+    })
+    publish(client, {
+      textDocument = { uri = document_uri, version = 0 },
+      diagnostics = {},
+    })
+
+    test.equal(#diagnostic_underlines.ranges_for_line(doc, 1), 0)
+  end)
+
+  test.it("same-version empty publishes while dirty do not clear tracked underlines", function(context)
+    local doc, client, document_uri = setup(context)
+    publish(client, {
+      textDocument = { uri = document_uri, version = 0 },
+      diagnostics = {
+        { range = lsp_range(0, 0, 0, 5), severity = 1, message = "kept" },
+      },
+    })
+    doc:insert(1, 1, "dirty ")
+    publish(client, {
+      textDocument = { uri = document_uri, version = 0 },
+      diagnostics = {},
+    })
+
+    test.equal(#diagnostic_underlines.ranges_for_line(doc, 1), 1)
+  end)
+
+  test.it("keeps zero-width diagnostics visible", function(context)
+    local doc, client, document_uri = setup(context, "abc")
+    publish(client, {
+      textDocument = { uri = document_uri, version = 0 },
+      diagnostics = {
+        { range = lsp_range(0, 1, 0, 1), severity = 1, message = "zero" },
+      },
+    })
+
+    local view = DocView(doc)
+    local calls = with_fake_draw_rect(function()
+      diagnostic_underlines.draw_line(view, 1, 0, 0)
+    end)
+
+    test.equal(#calls, 1)
+    test.ok(calls[1].w > 0)
   end)
 
   test.it("resolves underline colors at draw time", function(context)

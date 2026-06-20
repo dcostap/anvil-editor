@@ -164,6 +164,20 @@ test.describe("core.lsp.provider semantic tokens", function()
     test.equal(#client.requests, 1)
   end)
 
+  test.test("semantic token cache is not reused while local edits are pending", function(context)
+    local doc, client = attach(context)
+    doc.highlighter:get_render_line(1)
+    complete_request(client, 1, { data = { 0, 4, 4, 0, 0 } })
+    test.equal(doc.highlighter:get_render_line(1).source, "lsp")
+
+    doc:insert(1, 1, "x")
+    local line = doc.highlighter:get_render_line(1)
+
+    test.not_equal(line.source, "lsp")
+    test.equal(#client.requests, 2)
+    test.equal(client.sent[#client.sent].method, "textDocument/didChange")
+  end)
+
   test.test("stale version semantic token responses are discarded", function(context)
     local doc, client = attach(context)
     doc.highlighter:get_render_line(1)

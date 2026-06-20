@@ -63,6 +63,11 @@ local function quiet_log(...)
   if core and core.log_quiet then core.log_quiet(...) end
 end
 
+local function doc_change_id(doc)
+  if doc and doc.get_change_id then return doc:get_change_id() end
+  return nil
+end
+
 local function capability_enabled(value)
   return value ~= nil and value ~= false
 end
@@ -590,6 +595,7 @@ function provider.schedule_semantic_tokens(client, state, doc)
   if pending[key] then return false, "in-flight" end
   pending[key] = true
   local requested_version = state.lsp_version
+  local requested_change_id = state.last_synced_change_id
   local requested_generation = client_generation(client)
   local ok, err = client:send_request("textDocument/semanticTokens/full", {
     textDocument = { uri = state.uri },
@@ -608,10 +614,16 @@ function provider.schedule_semantic_tokens(client, state, doc)
       quiet_log("LSP semanticTokens/full dropped stale version response for %s", state.uri)
       return
     end
+    if current_state.last_synced_change_id ~= requested_change_id
+    or doc_change_id(current_state.doc) ~= current_state.last_synced_change_id then
+      quiet_log("LSP semanticTokens/full dropped locally stale response for %s", state.uri)
+      return
+    end
     result = type(result) == "table" and result or {}
     local decoded = provider.decode_semantic_tokens(doc, result.data or result, legend, client.position_encoding or "utf-16")
     semantic_cache_bucket(client, state.uri, legend_key)[requested_version] = {
       version = requested_version,
+      doc_change_id = requested_change_id,
       legend_key = legend_key,
       legend = legend,
       tokens = decoded,
@@ -639,13 +651,17 @@ function provider.render_tokens(doc, line_idx, opts)
     local _semantic, legend = semantic_capability(client)
     local legend_key = semantic_legend_key(legend)
     local entry = semantic_latest(client, state.uri, legend_key, state.lsp_version)
-    if entry then
+    local current_change_id = doc_change_id(doc)
+    local entry_current = entry
+      and entry.doc_change_id == state.last_synced_change_id
+      and current_change_id == state.last_synced_change_id
+    if entry_current then
       local text = doc:get_utf8_line(line_idx) or ""
       local starts = line_start_offsets(doc)
       local line_start = starts[line_idx] or 0
       local line_end = line_start + #text
       local line_cache = semantic_line_cache_bucket(client, state.uri, legend_key)
-      local line_key = table.concat({ tostring(state.lsp_version), tostring(line_idx), text }, "\0")
+      local line_key = table.concat({ tostring(state.lsp_version), tostring(entry.doc_change_id), tostring(line_idx), text }, "\0")
       local cached = line_cache[line_idx]
       if cached and cached.key == line_key then return cached.tokens, nil, "fresh" end
       local spans = {}
@@ -659,6 +675,8 @@ function provider.render_tokens(doc, line_idx, opts)
       local tokens = provider.overlay_semantic_tokens(text, base_render_tokens(doc, line_idx), line_start, spans)
       line_cache[line_idx] = { key = line_key, tokens = tokens }
       return tokens, nil, "fresh"
+    elseif entry then
+      quiet_log("LSP semantic token cache is locally stale for %s", state.uri)
     end
     provider.schedule_semantic_tokens(client, state, doc)
   end

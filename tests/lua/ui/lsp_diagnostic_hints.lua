@@ -153,7 +153,7 @@ test.describe("LSP diagnostic Line Hints", function()
     test.equal(hint.color, style.warn)
   end)
 
-  test.it("drops cached hints when document sync makes diagnostics stale", function(context)
+  test.it("keeps stale-tracked hints visible when document sync makes diagnostics stale", function(context)
     local doc, client, document_uri = setup(context)
     publish(client, {
       textDocument = { uri = document_uri, version = 0 },
@@ -169,7 +169,62 @@ test.describe("LSP diagnostic Line Hints", function()
     test.equal(view:get_line_hint(1).text, "stale error")
     documents.flush(client, doc)
 
+    test.equal(view:get_line_hint(1).text, "stale error")
+  end)
+
+  test.it("shifts stale-tracked hints to the original diagnostic line when inserting newline at diagnostic start", function(context)
+    local doc, client, document_uri = setup(context)
+    publish(client, {
+      textDocument = { uri = document_uri, version = 0 },
+      diagnostics = {
+        { range = lsp_range(1, 0, 1, 6), severity = 1, message = "moves down" },
+      },
+    })
+
+    local view = DocView(doc)
+    doc:insert(2, 1, "\n")
+
+    test.is_nil(view:get_line_hint(2))
+    test.equal(view:get_line_hint(3).text, "moves down")
+  end)
+
+  test.it("preserves hints through broad replacements that keep diagnostic text", function(context)
+    local doc, client, document_uri = setup(context)
+    publish(client, {
+      textDocument = { uri = document_uri, version = 0 },
+      diagnostics = {
+        { range = lsp_range(1, 0, 1, 6), severity = 1, message = "preserved" },
+      },
+    })
+
+    local view = DocView(doc)
+    doc:apply_edits({
+      { line1 = 1, col1 = 1, line2 = 3, col2 = #doc.lines[3], text = "zero\nfirst\nsecond\nthird\n" },
+    })
+
+    test.is_nil(view:get_line_hint(2))
+    test.equal(view:get_line_hint(3).text, "preserved")
+  end)
+
+  test.it("shifts stale-tracked hints when inserting lines before diagnostics", function(context)
+    local doc, client, document_uri = setup(context)
+    publish(client, {
+      textDocument = { uri = document_uri, version = 0 },
+      diagnostics = {
+        { range = lsp_range(1, 0, 1, 6), severity = 1, message = "moves down" },
+      },
+    })
+
+    local view = DocView(doc)
     test.is_nil(view:get_line_hint(1))
+    test.equal(view:get_line_hint(2).text, "moves down")
+
+    doc:insert(1, 1, "inserted\n")
+    test.is_nil(view:get_line_hint(2))
+    test.equal(view:get_line_hint(3).text, "moves down")
+
+    documents.flush(client, doc)
+    test.equal(view:get_line_hint(3).text, "moves down")
   end)
 
   test.it("resolves hint colors at read time", function(context)
