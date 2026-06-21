@@ -5,6 +5,9 @@ local transport = {}
 transport.__index = transport
 
 local DEFAULT_READ_BYTES = 8192
+local DEFAULT_WRITE_BYTES = 8192
+local DEFAULT_WRITE_SCAN = 0.005
+local DEFAULT_WRITE_STALL_TIMEOUT = 5
 
 local function native_process(proc)
   return proc and (proc.process or proc)
@@ -34,6 +37,8 @@ function lsp_process.new(proc, options)
     stdin_closed = false,
     stderr_tail = "",
     stderr_tail_limit = (options and options.stderr_tail_limit) or 8192,
+    write_scan = (options and options.write_scan) or DEFAULT_WRITE_SCAN,
+    write_stall_timeout = (options and options.write_stall_timeout) or DEFAULT_WRITE_STALL_TIMEOUT,
   }, transport)
 end
 
@@ -83,14 +88,29 @@ function transport:write(bytes)
 
   local remaining = bytes
   local total = 0
+  local last_progress = system.get_time()
   while #remaining > 0 do
-    local written, err, errcode = self.native:write(remaining)
+    local chunk = remaining:sub(1, DEFAULT_WRITE_BYTES)
+    local written, err, errcode = self.native:write(chunk)
     if not written then return nil, err, errcode end
     if written == 0 then
-      return nil, total > 0 and "write would block after partial write" or "write would block"
+      if system.get_time() - last_progress > self.write_stall_timeout then
+        return nil, total > 0 and "write stalled after partial write" or "write stalled"
+      end
+      if coroutine.isyieldable() then
+        coroutine.yield(self.write_scan)
+      else
+        system.sleep(self.write_scan)
+      end
+    else
+      total = total + written
+      last_progress = system.get_time()
+      if written < #chunk then
+        remaining = chunk:sub(written + 1) .. remaining:sub(#chunk + 1)
+      else
+        remaining = remaining:sub(#chunk + 1)
+      end
     end
-    total = total + written
-    remaining = remaining:sub(written + 1)
   end
   return total
 end

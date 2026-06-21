@@ -1,4 +1,5 @@
 local common = require "core.common"
+local core = require "core"
 local core_config = require "core.config"
 local Doc = require "core.doc"
 local diagnostics = require "core.lsp.diagnostics"
@@ -97,6 +98,7 @@ test.describe("core.lsp.manager", function()
   test.after_each(function(context)
     manager.reset_for_tests()
     core_config.lsp = context.original_lsp_config
+    if context.added_project then core.remove_project(context.added_project) end
     if context.docs then
       for _, doc in ipairs(context.docs) do pcall(function() doc:on_close() end) end
     end
@@ -160,6 +162,23 @@ test.describe("core.lsp.manager", function()
     wait_for(3, function()
       return (client.transport.stderr_tail or ""):find("didOpen=", 1, true) ~= nil
     end)
+  end)
+
+  test.test("uses containing Project root for LSP even when a nested marker exists", function(context)
+    manager.set_server_definitions({ fake = fake_definition({ root_markers = { "compile_commands.json", ".git" } }) })
+    local root = mkdir(join_path(context.temp_root, "project-root-for-lsp"))
+    local src = mkdir(join_path(root, "src", "deep"))
+    write_file(join_path(src, "compile_commands.json"), "[]")
+    context.added_project = core.add_project(root)
+    local doc = track_doc(context, new_doc(join_path(src, "main.fakecpp"), "abcd"))
+
+    test.not_nil(manager.ensure_doc(doc))
+    wait_for(3, function() return ready_entry_for_doc(doc) ~= nil end)
+
+    local _client, entry = manager.client_for_doc(doc)
+    test.not_nil(entry)
+    test.equal(entry.root.root, common.normalize_path(root))
+    test.equal(entry.root.source, "fallback_root")
   end)
 
   test.test("documents with same identity reuse one client", function(context)

@@ -53,6 +53,7 @@ local function fake_client(opts)
   return {
     server_id = opts.server_id or "fake-lsp",
     generation = opts.generation or 1,
+    state = opts.state or "ready",
     position_encoding = opts.position_encoding or "utf-16",
     capabilities = opts.capabilities or { documentSymbolProvider = true },
     sent = {},
@@ -455,6 +456,87 @@ test.describe("core.lsp.provider document symbols", function()
     local results, _reason, provider_id = intelligence.definitions(doc, 3, 10)
     test.equal(results[1].uri, "file:///fallback.cpp")
     test.equal(provider_id, "test-def-generation-fallback")
+  end)
+
+  test.test("navigation waits for and merges all capable LSP clients", function(context)
+    local doc, client_a = attach_navigation(context)
+    local client_b = fake_client({
+      server_id = "fake-lsp-b",
+      capabilities = { definitionProvider = true },
+    })
+    documents.attach(client_b, doc, { language_id = "cpp" })
+    provider.register_client(client_b)
+
+    local results, reason, _provider_id, status = intelligence.definitions(doc, 3, 10)
+    test.same(results, {})
+    test.equal(reason, "pending")
+    test.equal(status, "pending")
+    test.equal(#client_a.requests, 1)
+    test.equal(#client_b.requests, 1)
+
+    local document_uri = documents.state(client_a, doc).uri
+    complete_request(client_a, 1, { uri = document_uri, range = lsp_range(0, 4, 0, 9) })
+    results, reason, _provider_id, status = intelligence.definitions(doc, 3, 10)
+    test.same(results, {})
+    test.equal(status, "pending")
+
+    complete_request(client_b, 1, {
+      { uri = document_uri, range = lsp_range(0, 4, 0, 9) },
+      { uri = document_uri, range = lsp_range(2, 9, 2, 14) },
+    })
+    results, reason, _provider_id, status = intelligence.definitions(doc, 3, 10)
+    test.is_nil(reason)
+    test.equal(status, "fresh")
+    test.equal(#results, 2)
+    test.equal(results[1].range.line1, 1)
+    test.equal(results[2].range.line1, 3)
+  end)
+
+  test.test("workspace symbols query all ready capable LSP clients", function(context)
+    local doc, client_a = attach_navigation(context, { workspaceSymbolProvider = true })
+    local client_b = fake_client({
+      server_id = "fake-lsp-b",
+      capabilities = { workspaceSymbolProvider = true },
+    })
+    provider.register_client(client_b)
+
+    local results, reason, status = provider.workspace_symbols("value")
+    test.is_nil(results)
+    test.equal(reason, "pending")
+    test.equal(status, "pending")
+    test.equal(client_a.requests[1].method, "workspace/symbol")
+    test.equal(client_b.requests[1].method, "workspace/symbol")
+    test.equal(client_a.requests[1].params.query, "value")
+    test.is_nil(client_a.requests[1].params.workDoneProgressParams)
+    test.is_nil(client_a.requests[1].params.partialResultParams)
+
+    local document_uri = documents.state(client_a, doc).uri
+    complete_request(client_a, 1, {
+      { name = "value", kind = 13, location = { uri = document_uri, range = lsp_range(0, 4, 0, 9) } },
+    })
+    local pending_reason
+    results, pending_reason, status = provider.workspace_symbols("value")
+    test.is_nil(results)
+    test.equal(status, "pending")
+
+    complete_request(client_b, 1, {
+      { name = "main", kind = 12, location = { uri = document_uri, range = lsp_range(1, 4, 1, 8) } },
+    })
+    results, reason, status = provider.workspace_symbols("value")
+    test.is_nil(reason)
+    test.equal(status, "fresh")
+    test.equal(#results, 2)
+    test.equal(results[1].name, "value")
+    test.equal(results[1].kind, "variable")
+    test.equal(results[2].name, "main")
+    test.equal(results[2].kind, "function")
+
+    results, reason, status = provider.workspace_symbols("value", { force = true })
+    test.is_nil(results)
+    test.equal(reason, "pending")
+    test.equal(status, "pending")
+    test.equal(#client_a.requests, 2)
+    test.equal(#client_b.requests, 2)
   end)
 
   test.test("unsupported definition capability falls back", function(context)

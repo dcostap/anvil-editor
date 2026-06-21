@@ -171,6 +171,28 @@ test.describe("core.lsp.process stdio transport", function()
     test.contains(transport.stderr_tail, "stderr-two")
   end)
 
+  test.test("stdio transport chunks large writes", function()
+    local calls = 0
+    local native = {
+      read = function() return "" end,
+      write = function(_, bytes)
+        calls = calls + 1
+        test.ok(#bytes <= 8192, "write chunk was too large: " .. tostring(#bytes))
+        return #bytes
+      end,
+      close_stream = function() return true end,
+      running = function() return true end,
+      returncode = function() return nil end,
+      wait = function() return nil end,
+    }
+    local transport = lsp_process.new({ process = native })
+    local payload = ("x"):rep(20000)
+    local written, err = transport:write(payload)
+
+    test.equal(written, #payload, err)
+    test.ok(calls >= 3)
+  end)
+
   test.test("stdio transport reports writes after stdin is closed", function()
     local transport = start_transport("echo_stdin")
     test.not_nil(transport:close_stdin())
@@ -181,7 +203,29 @@ test.describe("core.lsp.process stdio transport", function()
     test.contains(err, "stdin closed")
   end)
 
-  test.test("stdio transport treats partial write followed by not-ready as failure", function()
+  test.test("stdio transport waits for not-ready writes and resumes after backpressure", function()
+    local calls = 0
+    local native = {
+      read = function() return "" end,
+      write = function(_, bytes)
+        calls = calls + 1
+        if calls == 1 then return math.min(2, #bytes) end
+        if calls <= 3 then return 0 end
+        return #bytes
+      end,
+      close_stream = function() return true end,
+      running = function() return true end,
+      returncode = function() return nil end,
+      wait = function() return nil end,
+    }
+    local transport = lsp_process.new({ process = native }, { write_stall_timeout = 0.25, write_scan = 0.001 })
+    local written, err = transport:write("abcdef")
+
+    test.equal(written, 6, err)
+    test.ok(calls >= 4)
+  end)
+
+  test.test("stdio transport fails writes that remain not-ready", function()
     local calls = 0
     local native = {
       read = function() return "" end,
@@ -191,15 +235,15 @@ test.describe("core.lsp.process stdio transport", function()
         return 0
       end,
       close_stream = function() return true end,
-      running = function() return false end,
-      returncode = function() return 0 end,
-      wait = function() return 0 end,
+      running = function() return true end,
+      returncode = function() return nil end,
+      wait = function() return nil end,
     }
-    local transport = lsp_process.new({ process = native })
+    local transport = lsp_process.new({ process = native }, { write_stall_timeout = 0.01, write_scan = 0.001 })
     local written, err = transport:write("abcdef")
 
     test.is_nil(written)
-    test.contains(err, "partial write")
+    test.contains(err, "write stalled")
   end)
 
   test.test("stdio transport wait returns wrapped wait timeout without native fallback", function()

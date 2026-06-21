@@ -265,6 +265,7 @@ local line_count_cache = {}
 local grep_proc
 local grep_generation = 0
 local file_search_generation = 0
+local symbol_generation = 0
 local fuzzy_grep_jobs = {}
 
 local function project_dir()
@@ -1487,6 +1488,10 @@ local function result_list_label_and_spans(r)
     local text = r.label or r.project or ""
     return "@ " .. display_root(text), offset_spans(r.match_spans or {}, 2)
   end
+  if r.kind == "symbol" then
+    local text = r.label or r.name or ""
+    return "$ " .. text, offset_spans(r.match_spans or {}, 2)
+  end
   local text = r.label or r.file or ""
   return text, r.match_spans or {}
 end
@@ -1508,6 +1513,22 @@ local function draw_new_project_result_row(font, r, x, y, width)
   local prefix = "Open this new folder as project: "
   local cx = renderer.draw_text(font, prefix, x, y, style.dim)
   draw_highlighted_text(font, r.project or r.label or "", cx, y, math.max(0, x + width - cx), style.text, {})
+end
+
+local function draw_symbol_result_row(font, r, x, y, width)
+  local gap = style.padding.x
+  local kind = r.symbol_kind_label or r.symbol_kind or "symbol"
+  local kind_w = font:get_width(kind) + gap
+  local location = r.file or ""
+  if r.line then location = string.format("%s:%d", location, r.line) end
+  local loc_w = math.min(width * 0.45, font:get_width(location))
+  local name_w = math.max(0, width - kind_w - loc_w - gap)
+  local label = r.label or r.name or ""
+  draw_highlighted_text(font, label, x, y, name_w, style.text, r.match_spans or {})
+  local mx = x + name_w + gap
+  renderer.draw_text(font, kind, mx, y, style.dim)
+  mx = mx + kind_w
+  draw_highlighted_text(font, location, mx, y, loc_w, style.dim, r.file_spans or {})
 end
 
 local draw_file_result_row
@@ -2483,7 +2504,7 @@ end
 function FSView:refresh_normal(base, line, reset_selection, force_refresh)
   local limit = self:result_limit()
   local mode = base:sub(1, 1)
-  if mode == ">" or mode == "@" then base = base:sub(2):gsub("^%s+", "") end
+  if mode == ">" or mode == "@" or mode == "$" then base = base:sub(2):gsub("^%s+", "") end
 
   local out = {}
   self.has_more = false
@@ -2560,6 +2581,10 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
   if mode == ">" then
     kill_file_search()
     add_command_results(base, limit)
+  elseif mode == "$" then
+    kill_file_search()
+    self:start_symbol_search(base, reset_selection)
+    return
   elseif mode == "@" then
     kill_file_search()
     local project_limit = limit
@@ -2894,6 +2919,102 @@ function FSView:start_grep(base, line, grep)
   end)
 end
 
+local SYMBOL_KIND_LABELS = {
+  file = "file",
+  module = "module",
+  namespace = "namespace",
+  package = "package",
+  class = "class",
+  method = "method",
+  property = "property",
+  field = "field",
+  constructor = "ctor",
+  enum = "enum",
+  interface = "interface",
+  ["function"] = "function",
+  variable = "variable",
+  constant = "constant",
+  struct = "struct",
+  enum_member = "member",
+  type_parameter = "type param",
+}
+
+local function symbol_display_file(path)
+  path = common.normalize_path(path or "")
+  local root = project_dir()
+  if path ~= "" and common.path_belongs_to(path, root) then
+    return common.relative_path(root, path):gsub("\\", "/")
+  end
+  return path
+end
+
+function FSView:start_symbol_search(query, reset_selection)
+  symbol_generation = symbol_generation + 1
+  local gen = symbol_generation
+  local limit = self:max_result_limit()
+  query = trim_query(query)
+  self.results = {}
+  self.has_more = false
+  self.hovered_result = nil
+  if reset_selection then
+    self.selected = 1
+    self.viewport_offset = 1
+  end
+  self.status = query == "" and "Type after $ to find Project symbols" or "Finding symbols…"
+  self:schedule_update(true)
+  if query == "" then return end
+
+  core.add_thread(function()
+    local lsp_provider = require "core.lsp.provider"
+    local deadline = system.get_time() + ((config.lsp and config.lsp.navigation_timeout) or 10)
+    local results, reason, status = lsp_provider.workspace_symbols(query, { force = true })
+    while status ~= "fresh" and status ~= "stale" and status ~= "unavailable" and system.get_time() < deadline do
+      if gen ~= symbol_generation or active_view ~= self then return end
+      coroutine.yield(0.05)
+      results, reason, status = lsp_provider.workspace_symbols(query)
+    end
+
+    if gen ~= symbol_generation or active_view ~= self then return end
+    local out = {}
+    if status == "fresh" or status == "stale" then
+      for i, item in ipairs(results or {}) do
+        if i > limit then self.has_more = true; break end
+        local file = symbol_display_file(item.path)
+        local label = item.name or ""
+        local _, name_spans = fuzzy_match(query, label)
+        local _, file_spans = fuzzy_match(query, file)
+        out[#out + 1] = {
+          kind = "symbol",
+          label = label,
+          name = label,
+          symbol_kind = item.kind,
+          symbol_kind_label = SYMBOL_KIND_LABELS[item.kind] or item.kind or "symbol",
+          detail = item.detail,
+          file = file,
+          path = item.path,
+          line = item.line or 1,
+          col = item.col or 1,
+          line2 = item.line2,
+          col2 = item.col2,
+          query = query,
+          match_spans = name_spans or {},
+          file_spans = file_spans or {},
+        }
+      end
+      self.status = string.format("%d symbol%s", #(results or {}), #(results or {}) == 1 and "" or "s")
+    elseif status == "unavailable" then
+      self.status = "No LSP workspace-symbol provider available"
+    else
+      self.status = "Finding symbols timed out"
+    end
+    self.results = out
+    self.selected = common.clamp(self.selected or 1, 1, math.max(1, #out))
+    self:ensure_selection_visible()
+    self:schedule_update(true)
+    if reason and status ~= "fresh" then core.log_quiet("Fuzzy symbols: %s", tostring(reason)) end
+  end)
+end
+
 function FSView:refresh_static()
   self.results = self.static_results or {}
   self.has_more = false
@@ -3147,6 +3268,11 @@ function FSView:draw()
         previous_rendered_grep_line_x = nil
         previous_rendered_was_grep = false
         draw_file_result_row(font, r.file or r.label, r.match_spans, "", x + pad, yy, row_text_w)
+      elseif r.kind == "symbol" then
+        previous_rendered_grep_file = nil
+        previous_rendered_grep_line_x = nil
+        previous_rendered_was_grep = false
+        draw_symbol_result_row(font, r, x + pad, yy, row_text_w)
       elseif r.kind == "command" then
         previous_rendered_grep_file = nil
         previous_rendered_grep_line_x = nil
@@ -3271,7 +3397,7 @@ local function quote_exact_query(text)
   return '"' .. text:gsub('"', '""') .. '"'
 end
 
-local fuzzy_mode_prefixes = { ["#"] = true, ["@"] = true, [">"] = true }
+local fuzzy_mode_prefixes = { ["#"] = true, ["@"] = true, [">"] = true, ["$"] = true }
 
 local function split_mode_prefix(text)
   text = tostring(text or "")
@@ -3340,6 +3466,7 @@ command.add(nil, {
   ["fuzzy-searcher:open-files"] = function() open("") end,
   ["fuzzy-searcher:open-projects"] = function() open("@") end,
   ["fuzzy-searcher:open-grep"] = function() open("#") end,
+  ["fuzzy-searcher:open-symbols"] = function() open("$") end,
   ["fuzzy-searcher:open-commands"] = function() open(">") end,
 })
 
@@ -3358,7 +3485,7 @@ core.fuzzy_searcher_install_global_keymaps = function()
   keymap.add({
     ["ctrl+shift+e"] = "fuzzy-searcher:open-projects",
     ["ctrl+e"] = "fuzzy-searcher:open-files",
-    ["ctrl+shift+j"] = "fuzzy-searcher:open-grep",
+    ["ctrl+shift+j"] = "fuzzy-searcher:open-symbols",
     ["ctrl+shift+f"] = "fuzzy-searcher:open-grep",
     ["ctrl+shift+a"] = "fuzzy-searcher:open-commands",
   }, true)

@@ -60,6 +60,27 @@ local function negotiate_position_encoding(result)
   return "utf-16"
 end
 
+local function progress_token_key(token)
+  if type(token) == "table" then return tostring(token.value or token[1] or token) end
+  return tostring(token)
+end
+
+local function progress_token_value(token)
+  if type(token) == "table" then return token.value or token[1] or tostring(token) end
+  return token
+end
+
+local function normalize_progress_value(value)
+  if type(value) ~= "table" then return nil end
+  return {
+    kind = value.kind,
+    title = value.title,
+    message = value.message,
+    percentage = tonumber(value.percentage),
+    cancellable = value.cancellable == true,
+  }
+end
+
 local function install_default_handlers(self)
   self:on_request("workspace/applyEdit", function()
     return {
@@ -76,7 +97,10 @@ local function install_default_handlers(self)
   self:on_request("client/unregisterCapability", function()
     return lsp_json.null
   end)
-  self:on_request("window/workDoneProgress/create", function()
+  self:on_request("window/workDoneProgress/create", function(params)
+    if type(params) == "table" and params.token ~= nil then
+      self.progress_tokens[progress_token_key(params.token)] = progress_token_value(params.token)
+    end
     return lsp_json.null
   end)
 
@@ -87,6 +111,7 @@ local function install_default_handlers(self)
     self:_quiet_server_log("window/showMessage", params)
   end)
   self:on_notification("$/progress", function(params)
+    self:_handle_progress(params)
     self:_quiet_server_log("$/progress", params)
   end)
 end
@@ -113,6 +138,9 @@ function client.new(driver, options)
     capabilities = nil,
     server_info = nil,
     position_encoding = "utf-16",
+    progress_tokens = {},
+    progress = {},
+    progress_revision = 0,
     initialize_result = nil,
     initialize_id = nil,
     shutdown_id = nil,
@@ -165,9 +193,58 @@ function client_mt:_quiet_server_log(kind, params)
   quiet_log("LSP server %s: %s", kind, truncate_text(message, self.max_log_message_bytes))
 end
 
+function client_mt:_handle_progress(params)
+  if type(params) ~= "table" or params.token == nil then return end
+  local value = normalize_progress_value(params.value)
+  if not value or value.kind == nil then return end
+  local key = progress_token_key(params.token)
+  self.progress_tokens[key] = progress_token_value(params.token)
+  if value.kind == "end" then
+    self.progress[key] = nil
+  else
+    local existing = self.progress[key] or {}
+    existing.token = self.progress_tokens[key]
+    existing.kind = value.kind
+    existing.title = value.title or existing.title
+    existing.message = value.message or existing.message
+    existing.percentage = value.percentage or existing.percentage
+    existing.cancellable = value.cancellable == true
+    existing.updated_at = system.get_time()
+    self.progress[key] = existing
+  end
+  self.progress_revision = (self.progress_revision or 0) + 1
+  core.redraw = true
+end
+
+function client_mt:active_progress()
+  local best
+  for _, item in pairs(self.progress or {}) do
+    if not best or (item.updated_at or 0) > (best.updated_at or 0) then best = item end
+  end
+  return best
+end
+
+function client_mt:active_progress_label()
+  local item = self:active_progress()
+  if not item then return nil end
+  local parts = {}
+  if item.title and item.title ~= "" then parts[#parts + 1] = tostring(item.title) end
+  if item.message and item.message ~= "" then parts[#parts + 1] = tostring(item.message) end
+  local label = table.concat(parts, ": ")
+  if label == "" then label = "working" end
+  if item.percentage then label = string.format("%s %.0f%%", label, item.percentage) end
+  return label, item
+end
+
 function client_mt:send_raw(message)
   if self.failed then return nil, self.error or "client failed" end
-  return self.transport:write(jsonrpc.encode(message))
+  local ok, err = self.transport:write(jsonrpc.encode(message))
+  if not ok then
+    self:_drain_stderr()
+    if self:_check_process_exit() and self.failed then return nil, self.error end
+    return self:_fail(err or "write failed")
+  end
+  return ok
 end
 
 function client_mt:send_request(method, params, callback, options)
@@ -281,7 +358,15 @@ function client_mt:_check_process_exit()
   self.exit_code = self.transport:returncode()
   self.exited = true
   if self.state ~= "exited" and self.state ~= "failed" then
-    return self:_fail("LSP server process exited")
+    local message = "LSP server process exited"
+    if self.exit_code ~= nil then message = message .. " with code " .. tostring(self.exit_code) end
+    local stderr_tail = self.transport.stderr_tail
+    if type(stderr_tail) == "string" and stderr_tail ~= "" then
+      stderr_tail = stderr_tail:gsub("[\r\n]+", " | ")
+      if #stderr_tail > 1000 then stderr_tail = "..." .. stderr_tail:sub(-1000) end
+      message = message .. "; stderr: " .. stderr_tail
+    end
+    return self:_fail(message)
   end
   return true
 end
@@ -309,7 +394,11 @@ function client_mt:initialize_params(options)
       general = {
         positionEncodings = lsp_json.array({ "utf-16", "utf-8" }),
       },
-      workspace = {},
+      workspace = {
+        -- TODO(multi-Project Workspace): advertise workspaceFolders and answer
+        -- workspace/workspaceFolders once Anvil can load multiple Projects in
+        -- one Workspace and decide which roots belong to each LSP client.
+      },
       textDocument = {
         completion = {
           completionItem = {
@@ -317,7 +406,9 @@ function client_mt:initialize_params(options)
           },
         },
       },
-      window = {},
+      window = {
+        workDoneProgress = true,
+      },
     },
     trace = "off",
     initializationOptions = options.initialization_options or nil,

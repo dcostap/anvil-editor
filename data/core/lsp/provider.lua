@@ -19,6 +19,7 @@ provider.features = {
   definitions = true,
   declarations = true,
   references = true,
+  workspace_symbols = true,
 }
 
 local clients = setmetatable({}, { __mode = "k" })
@@ -26,6 +27,9 @@ local cache = setmetatable({}, { __mode = "k" })
 local inflight = setmetatable({}, { __mode = "k" })
 local navigation_cache = setmetatable({}, { __mode = "k" })
 local navigation_inflight = setmetatable({}, { __mode = "k" })
+local workspace_symbol_cache = {}
+local workspace_symbol_inflight = {}
+local WORKSPACE_SYMBOL_CACHE_TTL_SECONDS = 2
 local semantic_cache = setmetatable({}, { __mode = "k" })
 local semantic_inflight = setmetatable({}, { __mode = "k" })
 local semantic_line_cache = setmetatable({}, { __mode = "k" })
@@ -90,6 +94,8 @@ local function feature_supported(client, feature)
     return capability_enabled(capabilities.declarationProvider)
   elseif feature == "references" then
     return capability_enabled(capabilities.referencesProvider)
+  elseif feature == "workspace_symbols" then
+    return capability_enabled(capabilities.workspaceSymbolProvider)
   elseif feature == "render_tokens" or feature == "invalidate_render_cache" then
     local semantic = capabilities.semanticTokensProvider
     if type(semantic) ~= "table" then return false end
@@ -264,6 +270,8 @@ function provider.unregister_client(client)
   inflight[client] = nil
   navigation_cache[client] = nil
   navigation_inflight[client] = nil
+  workspace_symbol_cache = {}
+  workspace_symbol_inflight = {}
   semantic_cache[client] = nil
   semantic_inflight[client] = nil
   semantic_line_cache[client] = nil
@@ -345,6 +353,8 @@ function provider.clear()
   inflight = setmetatable({}, { __mode = "k" })
   navigation_cache = setmetatable({}, { __mode = "k" })
   navigation_inflight = setmetatable({}, { __mode = "k" })
+  workspace_symbol_cache = {}
+  workspace_symbol_inflight = {}
   semantic_cache = setmetatable({}, { __mode = "k" })
   semantic_inflight = setmetatable({}, { __mode = "k" })
   semantic_line_cache = setmetatable({}, { __mode = "k" })
@@ -823,6 +833,33 @@ local function map_navigation_response(client, doc, state, result, feature)
   return out
 end
 
+local function location_dedupe_key(item)
+  if type(item) ~= "table" then return tostring(item) end
+  local range = item.lsp_selection_range or item.lsp_range
+  if type(range) == "table" then
+    local s = range.start or {}
+    local e = range["end"] or {}
+    return table.concat({ item.uri or item.path or "", tostring(s.line), tostring(s.character), tostring(e.line), tostring(e.character) }, ":")
+  end
+  range = item.selection_range or item.range
+  if type(range) == "table" then
+    return table.concat({ item.uri or item.path or "", tostring(range.line1), tostring(range.col1), tostring(range.line2), tostring(range.col2) }, ":")
+  end
+  return tostring(item.uri or item.path or item)
+end
+
+local function dedupe_locations(items)
+  local out, seen = {}, {}
+  for _, item in ipairs(items or {}) do
+    local key = location_dedupe_key(item)
+    if not seen[key] then
+      seen[key] = true
+      out[#out + 1] = item
+    end
+  end
+  return out
+end
+
 function provider.map_locations(client, doc, state, result, feature)
   return map_navigation_response(client, doc, state, result, feature or "location")
 end
@@ -853,6 +890,16 @@ function provider.schedule_navigation_request(feature, client, state, doc, line,
     local current_state = documents.state(client, state.uri)
     if error_obj then
       quiet_log("LSP %s failed for %s: %s", method, state.uri, tostring(error_obj.message or error_obj.code))
+      navigation_bucket(navigation_cache, client, state.uri, pos_key)[requested_version] = {
+        version = requested_version,
+        results = {},
+        received_at = system.get_time(),
+        generation = requested_generation,
+        line = line,
+        col = col,
+        feature = feature,
+        error = error_obj,
+      }
       return
     end
     if client_generation(client) ~= requested_generation then
@@ -887,24 +934,38 @@ local function navigation(feature, doc, line1, col1, line2, col2, opts)
   if #matches == 0 then return nil, "unavailable", "unavailable" end
   local line, col = request_position(doc, line1, col1)
   local pos_key = navigation_position_key(feature, line, col, opts)
+  local results = {}
+  local have_result = false
+  local have_stale = false
+  local have_pending = false
   local first_reason = "pending"
+
   for _, item in ipairs(matches) do
     local client, state = item.client, item.state
     local entry, status = latest_navigation_cache(client, state.uri, pos_key, state.lsp_version)
-    if status == "fresh" then
-      return entry.results, nil, "fresh"
-    elseif status == "stale" then
-      provider.schedule_navigation_request(feature, client, state, doc, line, col, opts)
-      return entry.results, "refresh scheduled", "stale"
-    end
-    local ok, reason = provider.schedule_navigation_request(feature, client, state, doc, line, col, opts)
-    if ok == false then
-      first_reason = reason or "pending"
-    elseif ok == nil then
-      first_reason = reason or "unavailable"
+    if status == "fresh" or status == "stale" then
+      have_result = true
+      if status == "stale" then
+        have_stale = true
+        provider.schedule_navigation_request(feature, client, state, doc, line, col, opts)
+      end
+      for _, result in ipairs(entry.results or {}) do results[#results + 1] = result end
     else
-      first_reason = "pending"
+      local ok, reason = provider.schedule_navigation_request(feature, client, state, doc, line, col, opts)
+      if ok == nil then
+        first_reason = reason or first_reason
+      else
+        have_pending = true
+        first_reason = reason or "pending"
+      end
     end
+  end
+
+  if have_pending and not opts.allow_partial_results then
+    return nil, first_reason, "pending"
+  end
+  if have_result then
+    return dedupe_locations(results), have_stale and "refresh scheduled" or nil, have_stale and "stale" or "fresh"
   end
   return nil, first_reason, first_reason == "unavailable" and "unavailable" or "pending"
 end
@@ -919,6 +980,122 @@ end
 
 function provider.references(doc, line1, col1, line2, col2, opts)
   return navigation("references", doc, line1, col1, line2, col2, opts)
+end
+
+local function workspace_symbol_clients()
+  local out = {}
+  for client in pairs(clients) do
+    if client.state == "ready" and feature_supported(client, "workspace_symbols") then
+      out[#out + 1] = client
+    end
+  end
+  table.sort(out, function(a, b)
+    return tostring(a.server_id or a.id or a) < tostring(b.server_id or b.id or b)
+  end)
+  return out
+end
+
+local function map_workspace_symbol(client, raw)
+  if type(raw) ~= "table" then return nil end
+  local location = raw.location
+  if type(location) ~= "table" then return nil end
+  local target_uri = location.uri or raw.uri
+  local raw_range = location.range or raw.range
+  if not target_uri then return nil end
+  local path = uri.uri_to_path(target_uri)
+  if path then path = common.normalize_path(path) end
+  local line, col, line2, col2 = 1, 1, nil, nil
+  if type(raw_range) == "table" then
+    local start = raw_range.start or {}
+    local finish = raw_range["end"] or {}
+    line = (tonumber(start.line) or 0) + 1
+    col = (tonumber(start.character) or 0) + 1
+    line2 = (tonumber(finish.line) or (line - 1)) + 1
+    col2 = (tonumber(finish.character) or (col - 1)) + 1
+  end
+  return {
+    name = raw.name or "",
+    detail = raw.containerName or raw.container_name,
+    symbol_kind = raw.kind,
+    kind = SYMBOL_KIND[raw.kind] or "symbol",
+    uri = target_uri,
+    path = path,
+    line = line,
+    col = col,
+    line2 = line2,
+    col2 = col2,
+    lsp_range = raw_range,
+    server_id = client.server_id or client.id or "lsp",
+    origin = "lsp",
+    source = "lsp",
+  }
+end
+
+local function workspace_symbol_key(item)
+  return table.concat({ tostring(item.uri or item.path or ""), tostring(item.name or ""), tostring(item.kind or ""), tostring(item.line or ""), tostring(item.col or "") }, "\0")
+end
+
+local function finish_workspace_symbol_query(query, generation, client, result, error_obj)
+  local entry = workspace_symbol_cache[query]
+  if not entry or entry.generation ~= generation then return end
+  workspace_symbol_inflight[query] = math.max(0, (workspace_symbol_inflight[query] or 1) - 1)
+  if error_obj then
+    quiet_log("LSP workspace/symbol failed for %s: %s", tostring(client.server_id or client.id), tostring(error_obj.message or error_obj.code))
+  elseif type(result) == "table" and not lsp_json.is_null(result) then
+    local seen = entry.seen or {}
+    entry.seen = seen
+    for _, raw in ipairs(result) do
+      local mapped = map_workspace_symbol(client, raw)
+      if mapped and mapped.path then
+        local key = workspace_symbol_key(mapped)
+        if not seen[key] then
+          seen[key] = true
+          entry.results[#entry.results + 1] = mapped
+        end
+      end
+    end
+  end
+  if workspace_symbol_inflight[query] == 0 then
+    entry.status = "fresh"
+    entry.received_at = system.get_time()
+    entry.seen = nil
+    core.redraw = true
+  end
+end
+
+function provider.workspace_symbols(query, opts)
+  opts = opts or {}
+  query = tostring(query or "")
+  local entry = workspace_symbol_cache[query]
+  local ttl = tonumber(opts.cache_ttl_seconds or WORKSPACE_SYMBOL_CACHE_TTL_SECONDS) or 0
+  if entry and entry.status == "fresh" and not opts.force then
+    if ttl <= 0 or system.get_time() - (entry.received_at or 0) <= ttl then
+      return entry.results, nil, "fresh"
+    end
+  end
+  if entry and entry.status == "pending" and not opts.force then return nil, "pending", "pending" end
+
+  local matching = workspace_symbol_clients()
+  if #matching == 0 then return nil, "unavailable", "unavailable" end
+
+  local generation = (entry and entry.generation or 0) + 1
+  entry = { status = "pending", results = {}, generation = generation, requested_at = system.get_time(), seen = {} }
+  workspace_symbol_cache[query] = entry
+  workspace_symbol_inflight[query] = #matching
+
+  for _, client in ipairs(matching) do
+    local params = {
+      query = query,
+    }
+    local ok, err = client:send_request("workspace/symbol", params, function(result, error_obj)
+      finish_workspace_symbol_query(query, generation, client, result, error_obj)
+    end, { generation = client_generation(client) })
+    if not ok then
+      finish_workspace_symbol_query(query, generation, client, nil, { message = err or "request failed" })
+    end
+  end
+
+  return nil, "pending", "pending"
 end
 
 language_intelligence.register_provider(provider)

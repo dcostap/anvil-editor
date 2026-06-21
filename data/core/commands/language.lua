@@ -1,14 +1,22 @@
 local core = require "core"
 local command = require "core.command"
 local common = require "core.common"
+local config = require "core.config"
 local keymap = require "core.keymap"
 local intelligence = require "core.language_intelligence"
 local lsp_position = require "core.lsp.position"
 
 local language = {}
 
-local NAVIGATION_TIMEOUT = 3.0
+local DEFAULT_NAVIGATION_TIMEOUT = 10.0
 local NAVIGATION_POLL_SECONDS = 0.03
+
+local function navigation_timeout(opts)
+  opts = opts or {}
+  if opts.timeout then return opts.timeout end
+  local lsp_cfg = type(config.lsp) == "table" and config.lsp or nil
+  return tonumber(lsp_cfg and lsp_cfg.navigation_timeout) or DEFAULT_NAVIGATION_TIMEOUT
+end
 
 local function is_doc_view(value)
   return type(value) == "table" and value.doc ~= nil
@@ -175,7 +183,7 @@ end
 
 local function request_until_ready(request_fn, on_ready, on_unavailable, opts)
   opts = opts or {}
-  local deadline = system.get_time() + (opts.timeout or NAVIGATION_TIMEOUT)
+  local deadline = system.get_time() + navigation_timeout(opts)
   local function step()
     local results, reason, _provider, status = request_fn()
     if status == "fresh" or status == "stale" then

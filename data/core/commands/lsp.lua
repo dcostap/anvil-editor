@@ -6,6 +6,28 @@ local diagnostics = require "core.lsp.diagnostics"
 local hover = require "core.lsp.hover"
 local manager = require "core.lsp.manager"
 local signature_help = require "core.lsp.signature_help"
+local StatusBar = require "core.statusbar"
+local style = require "core.style"
+
+local function install_statusbar_item()
+  if not core.status_bar or core.status_bar:get_item("lsp:progress") then return end
+  core.status_bar:add_item({
+    name = "lsp:progress",
+    alignment = StatusBar.Item.RIGHT,
+    separator = StatusBar.separator2,
+    predicate = function()
+      return manager.active_progress_status() ~= nil
+    end,
+    get_item = function()
+      local text = manager.active_progress_status()
+      return text and { style.accent, text } or {}
+    end,
+    command = "lsp:show-status",
+    tooltip = "language server work",
+  })
+end
+
+install_statusbar_item()
 
 local function is_doc_view(value)
   return type(value) == "table" and value.doc ~= nil

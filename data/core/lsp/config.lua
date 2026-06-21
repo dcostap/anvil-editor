@@ -318,6 +318,20 @@ function lsp_config.find_root(path, definition, options)
   if not doc_dir then return nil, "document path has no directory" end
 
   local boundaries = options.root_boundaries or options.fallback_roots or {}
+  if options.prefer_fallback_roots then
+    for _, fallback in ipairs(options.fallback_roots or {}) do
+      local root = common.normalize_path(fallback)
+      if common.path_equals(doc_dir, root) or common.path_belongs_to(doc_dir, root) then
+        return {
+          root = root,
+          marker = nil,
+          source = "fallback_root",
+          root_uri = uri.path_to_uri(root),
+        }
+      end
+    end
+  end
+
   local dirs = {}
   for _, dir in ipairs(ancestors_from(doc_dir)) do
     if within_root_boundaries(dir, boundaries) then

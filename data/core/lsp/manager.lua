@@ -24,7 +24,10 @@ local definitions = nil
 local sync_options = {}
 local pump_thread_started = false
 local recent_attempts = {}
+local notified_failures = {}
+local notified_root_warnings = {}
 local RECENT_ATTEMPT_LIMIT = 20
+local FAILURE_NOTIFY_COOLDOWN = 30
 
 local function quiet_log(...)
   if core and core.log_quiet then core.log_quiet(...) end
@@ -165,6 +168,97 @@ local function record_attempt(definition, path, status, detail)
   return entry
 end
 
+local function client_failure_detail(c)
+  local detail = tostring(c and c.error or "client failed")
+  local stderr_tail = c and c.transport and c.transport.stderr_tail
+  if type(stderr_tail) == "string" and stderr_tail ~= "" then
+    stderr_tail = stderr_tail:gsub("[\r\n]+", " | ")
+    if #stderr_tail > 1000 then stderr_tail = "..." .. stderr_tail:sub(-1000) end
+    detail = detail .. "; stderr: " .. stderr_tail
+  end
+  return detail
+end
+
+local function notify_failure(definition, path, status, detail)
+  local server_id = definition and definition.id or "<unknown>"
+  local failure_status = status or "failed"
+  local detail_text = tostring(detail or "unknown error")
+  local key = table.concat({ server_id, tostring(path or ""), failure_status, detail_text }, "\0")
+  local now = system.get_time()
+  if notified_failures[key] and now - notified_failures[key] < FAILURE_NOTIFY_COOLDOWN then return end
+  notified_failures[key] = now
+
+  local text = string.format("LSP %s %s: %s", server_id, failure_status:gsub("_", " "), detail_text)
+  if running_tests() then
+    quiet_log("%s", text)
+  elseif core and core.warn then
+    core.warn("%s", text)
+  else
+    quiet_log("%s", text)
+  end
+end
+
+local function child_path(root, ...)
+  local path = root
+  for i = 1, select("#", ...) do
+    path = path .. PATHSEP .. select(i, ...)
+  end
+  return path
+end
+
+local function file_exists(path)
+  return path and system.get_file_info(path) ~= nil
+end
+
+local function find_compile_commands(root)
+  if not root or root == "" then return nil end
+  root = common.normalize_path(root)
+  local candidates = {
+    child_path(root, "compile_commands.json"),
+    child_path(root, "build", "compile_commands.json"),
+    child_path(root, "Build", "compile_commands.json"),
+    child_path(root, "build-debug", "compile_commands.json"),
+    child_path(root, "build-release", "compile_commands.json"),
+    child_path(root, "out", "build", "compile_commands.json"),
+    child_path(root, "out", "Default", "compile_commands.json"),
+  }
+  for _, path in ipairs(candidates) do
+    if file_exists(path) then return path end
+  end
+  return nil
+end
+
+local function clangd_limited_index_reason(root)
+  if not root or root == "" then return "no Project root" end
+  root = common.normalize_path(root)
+  if find_compile_commands(root) then return nil end
+  if file_exists(child_path(root, "compile_flags.txt")) then
+    return "compile_flags.txt only; no compile_commands.json for full background index"
+  end
+  if file_exists(child_path(root, ".clangd")) then
+    return "no compile_commands.json found in Project root/build dirs; .clangd may only improve opened files"
+  end
+  return "no compile_commands.json found in Project root/build dirs"
+end
+
+local function maybe_warn_limited_clangd_index(definition, root)
+  if not definition or definition.id ~= "clangd" or not root or root == "" then return end
+  root = common.normalize_path(root)
+  local reason = clangd_limited_index_reason(root)
+  if not reason then return end
+  local key = "clangd-limited-index\0" .. tostring(root) .. "\0" .. reason
+  if notified_root_warnings[key] then return end
+  notified_root_warnings[key] = true
+  local text = "LSP clangd: " .. reason .. "; Project-wide symbols/references may be incomplete"
+  if running_tests() then
+    quiet_log("%s", text)
+  elseif core and core.warn then
+    core.warn("%s", text)
+  else
+    quiet_log("%s", text)
+  end
+end
+
 local function start_pump_thread()
   if pump_thread_started or not core.add_background_thread then return end
   pump_thread_started = true
@@ -182,13 +276,18 @@ end
 
 local function create_entry(selection, path, opts)
   local command = command_with_executable(selection.definition.command, selection.executable)
-  quiet_log("LSP manager starting %s for root %s", selection.definition.id,
-    tostring(selection.root and selection.root.root or doc_dir(path)))
-  local c, err, partial = client_mod.start(command, client_options(selection, path))
+  local options = client_options(selection, path)
+  quiet_log("LSP manager starting %s executable=%s root=%s%s cwd=%s", selection.definition.id,
+    tostring(selection.executable or (type(command) == "table" and command[1]) or command),
+    tostring(selection.root and selection.root.root or doc_dir(path)),
+    selection.root and selection.root.source and (" (" .. selection.root.source .. ")") or "",
+    tostring(options.cwd))
+  local c, err, partial = client_mod.start(command, options)
   c = c or partial
   if not c then
     quiet_log("LSP manager failed to start %s: %s", selection.definition.id, tostring(err))
     record_attempt(selection.definition, path, "start failed", err)
+    notify_failure(selection.definition, path, "start failed", err)
     return nil, err
   end
   c.server_id = selection.definition.id
@@ -196,6 +295,8 @@ local function create_entry(selection, path, opts)
   c.identity = selection.identity
   c.definition = selection.definition
   c.language_id = selection.definition.language_id
+
+  maybe_warn_limited_clangd_index(selection.definition, selection.root and selection.root.root)
 
   local entry = {
     key = selection.identity.key,
@@ -207,6 +308,9 @@ local function create_entry(selection, path, opts)
     pending_docs = setmetatable({}, { __mode = "k" }),
     started_at = system.get_time(),
     last_error = err,
+    limited_index_reason = selection.definition.id == "clangd"
+      and selection.root and selection.root.root
+      and clangd_limited_index_reason(selection.root.root) or nil,
   }
   clients_by_key[entry.key] = entry
   diagnostics.attach_client(c, { server_id = selection.definition.id })
@@ -215,11 +319,44 @@ local function create_entry(selection, path, opts)
   return entry
 end
 
+local function add_unique_path(list, path)
+  path = path and common.normalize_path(path)
+  if not path or path == "" then return end
+  for _, existing in ipairs(list) do
+    if common.path_equals(existing, path) then return end
+  end
+  list[#list + 1] = path
+end
+
+local function project_fallback_roots(path)
+  local roots = {}
+  if core.current_project then
+    local project = core.current_project(path)
+    if project and project.path then add_unique_path(roots, project.path) end
+  end
+  if core.root_project then
+    local root_project = core.root_project()
+    if root_project and root_project.path then add_unique_path(roots, root_project.path) end
+  end
+  return roots
+end
+
+local function select_options_for_doc(path, opts)
+  opts = opts or {}
+  local select_options = copy_table(opts.select_options or opts)
+  local fallback_roots = copy_array(select_options.fallback_roots)
+  for _, root in ipairs(project_fallback_roots(path)) do add_unique_path(fallback_roots, root) end
+  if #fallback_roots > 0 then
+    select_options.fallback_roots = fallback_roots
+    select_options.prefer_fallback_roots = select_options.prefer_fallback_roots ~= false
+  end
+  return select_options
+end
+
 local function selected_servers_for_doc(doc, opts)
   local path = doc_path(doc)
   if not path then return nil, "document has no filename" end
-  opts = opts or {}
-  local select_options = opts.select_options or opts
+  local select_options = select_options_for_doc(path, opts)
   local selected, err = config.select_for_path(merged_server_definitions(), path, select_options)
   if not selected then return nil, err end
   return selected, nil, path
@@ -270,6 +407,7 @@ function manager.ensure_doc(doc, opts)
       quiet_log("LSP manager server %s unavailable for %s: %s",
         selection.definition and selection.definition.id or "<unknown>", tostring(path), tostring(selection.reason))
       record_attempt(selection.definition, path, selection.reason or "unavailable", detail)
+      notify_failure(selection.definition, path, selection.reason or "unavailable", detail)
     elseif selection.identity then
       local entry = clients_by_key[selection.identity.key]
       if not entry or entry.client.failed or entry.client.exited then
@@ -308,11 +446,15 @@ function manager.update()
       if ok == nil then
         entry.last_error = err
         quiet_log("LSP manager pump failed for %s: %s", key, tostring(err))
+        if c._fail then c:_fail(err or "pump failed") end
       end
       if c.state == "ready" then attach_pending_docs(entry) end
     elseif c and c.failed then
-      entry.last_error = c.error
-      quiet_log("LSP manager removing failed client %s: %s", key, tostring(c.error))
+      local detail = client_failure_detail(c)
+      entry.last_error = detail
+      quiet_log("LSP manager removing failed client %s: %s", key, detail)
+      record_attempt(entry.definition, entry.root and entry.root.root or key, "client failed", detail)
+      notify_failure(entry.definition, entry.root and entry.root.root or key, "client failed", c.error)
       manager.stop_entry(entry, { no_shutdown = true })
     end
   end
@@ -371,12 +513,31 @@ function manager.restart_current_document(view)
   return manager.restart_doc(view.doc)
 end
 
+function manager.active_progress_status()
+  local best_entry, best_label, best_item
+  for key, entry in pairs(clients_by_key) do
+    local c = entry.client
+    if c and c.active_progress_label then
+      local label, item = c:active_progress_label()
+      if label and (not best_item or (item.updated_at or 0) > (best_item.updated_at or 0)) then
+        best_entry, best_label, best_item = entry, label, item
+      end
+    end
+  end
+  if not best_label then return nil end
+  local name = best_entry and best_entry.definition and best_entry.definition.id or "LSP"
+  return string.format("%s: %s", tostring(name), best_label), best_entry, best_item
+end
+
 function manager.status()
   local lines = {}
   for key, entry in pairs(clients_by_key) do
     local c = entry.client
-    lines[#lines + 1] = string.format("%s: %s%s", key, c and c.state or "missing",
-      c and c.error and (" (" .. tostring(c.error) .. ")") or "")
+    local progress = c and c.active_progress_label and c:active_progress_label()
+    local progress_suffix = progress and (" — " .. progress) or ""
+    local limited_suffix = entry.limited_index_reason and (" — limited index: " .. entry.limited_index_reason) or ""
+    lines[#lines + 1] = string.format("%s: %s%s%s%s", key, c and c.state or "missing",
+      c and c.error and (" (" .. tostring(c.error) .. ")") or "", progress_suffix, limited_suffix)
   end
   table.sort(lines)
   for _, attempt in ipairs(recent_attempts) do
@@ -394,6 +555,8 @@ function manager.reset_for_tests()
   definitions = nil
   sync_options = {}
   recent_attempts = {}
+  notified_failures = {}
+  notified_root_warnings = {}
   auto_start = false
 end
 

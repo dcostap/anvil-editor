@@ -5,6 +5,13 @@ local client = require "core.lsp.client"
 local fake_transport = dofile("tests/fixtures/lsp/fake_transport.lua")
 
 test.describe("core.lsp.client Phase 8.1 dispatch", function()
+  test.test("advertises work-done progress support", function()
+    local fake = fake_transport.new()
+    local c = client.new(fake)
+    local params = c:initialize_params({})
+    test.equal(params.capabilities.window.workDoneProgress, true)
+  end)
+
   test.test("sends outbound requests with monotonic numeric ids", function()
     local fake = fake_transport.new()
     local c = client.new(fake)
@@ -67,6 +74,37 @@ test.describe("core.lsp.client Phase 8.1 dispatch", function()
     test.equal(responses[1].kind, "response")
     test.equal(responses[1].id, 9)
     test.equal(responses[1].error.code, jsonrpc.ERROR_METHOD_NOT_FOUND)
+  end)
+
+  test.test("write failures mark the client failed", function()
+    local fake = fake_transport.new({ write_error = "pipe error" })
+    local c = client.new(fake)
+    local ok, err = c:send_notification("initialized", {})
+    test.is_nil(ok)
+    test.contains(err, "pipe error")
+    test.ok(c.failed)
+  end)
+
+  test.test("tracks server work-done progress notifications", function()
+    local fake = fake_transport.new()
+    local c = client.new(fake)
+    fake:push_message(jsonrpc.notification("$/progress", {
+      token = "index",
+      value = { kind = "begin", title = "Indexing", message = "project", percentage = 25 },
+    }))
+    test.equal(c:read_once(), 1)
+    test.equal(c:process_all(), 1)
+    local label = test.not_nil(c:active_progress_label())
+    test.contains(label, "Indexing")
+    test.contains(label, "25%")
+
+    fake:push_message(jsonrpc.notification("$/progress", {
+      token = "index",
+      value = { kind = "end" },
+    }))
+    test.equal(c:read_once(), 1)
+    test.equal(c:process_all(), 1)
+    test.is_nil(c:active_progress_label())
   end)
 
   test.test("fails safely when incoming queue limit is exceeded", function()
