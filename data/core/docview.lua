@@ -1620,6 +1620,49 @@ function DocView:draw_line_hint(line, x, y)
   return tx, draw_x, width
 end
 
+local function fast_ascii_monospace_width(text, space_width, tab_width, tab_offset)
+  local x = tab_offset or 0
+  local start_x = x
+  for i = 1, #text do
+    if text:byte(i) == 9 then
+      x = (math.floor(x / tab_width) + 1) * tab_width
+    else
+      x = x + space_width
+    end
+  end
+  return x - start_x
+end
+
+local function cached_fast_ascii_monospace_width(self, line, text, font, indent_size)
+  local font_size = font:get_size()
+  local change_id = self.doc:get_change_id()
+  local cache = self.__fast_ascii_monospace_width_cache
+  if
+    not cache
+    or cache.change_id ~= change_id
+    or cache.font ~= font
+    or cache.font_size ~= font_size
+    or cache.indent_size ~= indent_size
+  then
+    cache = {
+      change_id = change_id,
+      font = font,
+      font_size = font_size,
+      indent_size = indent_size,
+      space_width = font:get_width(" "),
+      lines = {},
+    }
+    cache.tab_width = cache.space_width * (indent_size or 2)
+    self.__fast_ascii_monospace_width_cache = cache
+  end
+
+  local entry = cache.lines[line]
+  if entry and entry.text == text then return entry.width end
+  local width = fast_ascii_monospace_width(text, cache.space_width, cache.tab_width, 0)
+  cache.lines[line] = { text = text, width = width }
+  return width
+end
+
 ---Draw the text content of a line with syntax highlighting.
 ---@param line integer Line number
 ---@param x number Screen x coordinate
@@ -1644,6 +1687,45 @@ function DocView:draw_line_text(line, x, y)
     last_token = tokens_count - 1
   end
   local _, indent_size = self.doc:get_indent_info()
+  local token_loop_start = stats and system.get_time()
+
+  if
+    renderer.draw_text_known_bounds
+    and core.window
+    and not package.loaded["core.test"]
+    and tokens_count == 2
+    and tokens[1] == "normal"
+    and not style.syntax_fonts.normal
+    and render_line.text:find("[\128-\255]") == nil
+  then
+    local text = tokens[2]
+    if text:sub(-1) == "\n" then text = text:sub(1, -2) end
+    if text ~= "" then
+      local draw_text_start = stats and system.get_time()
+      local width = cached_fast_ascii_monospace_width(self, line, text, default_font, indent_size)
+      tx = renderer.draw_text_known_bounds(
+        default_font,
+        text,
+        tx,
+        ty,
+        math.floor(tx),
+        math.floor(ty),
+        math.max(1, math.ceil(width)),
+        math.max(1, math.ceil(default_font:get_height())),
+        normal_color,
+        has_tabs and { tab_offset = 0 } or nil
+      )
+      if stats then
+        stats.tokens = stats.tokens + 1
+        stats.draw_text_calls = stats.draw_text_calls + 1
+        stats.renderer_draw_text_ms = stats.renderer_draw_text_ms + (system.get_time() - draw_text_start) * 1000
+        stats.token_loop_ms = stats.token_loop_ms + (system.get_time() - token_loop_start) * 1000
+        stats.text_ms = stats.text_ms + (system.get_time() - text_start) * 1000
+        stats.text_lines = stats.text_lines + 1
+      end
+      return self:get_line_height()
+    end
+  end
 
   local start_tx = tx
   local pending_font, pending_color, pending_chunks, pending_len
@@ -1663,7 +1745,6 @@ function DocView:draw_line_text(line, x, y)
     pending_font, pending_color, pending_chunks, pending_len = nil, nil, nil, nil
     return tx > self.position.x + self.size.x
   end
-  local token_loop_start = stats and system.get_time()
   for tidx, type, text in tokenizer.each_token(tokens) do
     if stats then stats.tokens = stats.tokens + 1 end
     local color = syntax[type] or normal_color

@@ -148,6 +148,7 @@ local function get_line_runs(self, idx)
     text = text,
     line_len = line_len,
     runs = runs,
+    ascii = text:find("[\128-\255]") == nil,
     ascii_no_tabs = text:find("[\128-\255\t]") == nil,
   }
   cache.lines[idx] = entry
@@ -158,6 +159,8 @@ local marker_text_cache = {}
 local tab_marker_text_cache = {}
 local marker_font_cache = setmetatable({}, { __mode = "k" })
 local marker_width_cache = setmetatable({}, { __mode = "k" })
+local tab_metrics_cache = setmetatable({}, { __mode = "k" })
+local font_height_cache = setmetatable({}, { __mode = "k" })
 local syntax_fonts_signature_state = { by_name = {}, signature = nil, count = 0 }
 
 local function repeated_marker(marker, count)
@@ -243,6 +246,34 @@ local function marker_matches_space_advance(font, marker)
   return cached
 end
 
+local function cached_font_height(font)
+  local size = font:get_size()
+  local value = font_height_cache[font]
+  if value and value.size == size then return value.height end
+  local height = font:get_height()
+  font_height_cache[font] = { size = size, height = height }
+  return height
+end
+
+local function cached_tab_metrics(font, marker, indent_size)
+  local size = font:get_size()
+  local key = tostring(size) .. "\0" .. tostring(indent_size) .. "\0" .. marker
+  local by_font = tab_metrics_cache[font]
+  if not by_font then
+    by_font = {}
+    tab_metrics_cache[font] = by_font
+  end
+
+  local metrics = by_font[key]
+  if metrics then return metrics.marker_width, metrics.tab_width end
+
+  local marker_width = font:get_width(marker)
+  if font.set_tab_size then font:set_tab_size(indent_size) end
+  local tab_width = font:get_width(string.rep(" ", indent_size))
+  by_font[key] = { marker_width = marker_width, tab_width = tab_width }
+  return marker_width, tab_width
+end
+
 local function current_clip_x_range(self)
   local clip = core.clip_rect_stack and core.clip_rect_stack[#core.clip_rect_stack]
   if clip then
@@ -307,21 +338,41 @@ local function get_line_x_cache(self, idx, entry)
   local _, indent_size = self.doc:get_indent_info()
   local font_size = font:get_size()
   local fast_space_width
+  local fast_tab_width
   local tokens
   local syntax_fonts_key = syntax_fonts_signature()
 
-  -- The common case in this fork is an ASCII, tab-free source line drawn with
-  -- one monospace code font and no syntax-specific font overrides. In that
-  -- case whitespace columns are simple arithmetic; don't walk highlighter
-  -- tokens and font widths just to place indentation dots.
+  -- The common case in this fork is an ASCII line drawn with one monospace code
+  -- font and no syntax-specific font overrides. In that case whitespace columns
+  -- are simple arithmetic; don't walk highlighter tokens and font widths just
+  -- to place whitespace markers. Tabs are handled with the same tab-stop math
+  -- as the renderer uses for monospace tab layout.
   -- TODO: Guard this arithmetic fast path with explicit monospace-font
   -- detection before supporting proportional editor fonts; otherwise markers
   -- after non-space text can be horizontally misplaced.
-  if entry.ascii_no_tabs and not self.wrapped_settings and not syntax_fonts_key then
-    fast_space_width = font:get_width(" ")
-  else
-    local hline = self.doc.highlighter:get_render_line(idx)
-    tokens = hline and hline.tokens
+  if entry.ascii and not self.wrapped_settings then
+    local can_use_fast_widths = not syntax_fonts_key
+    if not can_use_fast_widths then
+      local hline = self.doc.highlighter:get_render_line(idx)
+      tokens = hline and hline.tokens
+      can_use_fast_widths = true
+      for i = 1, #(tokens or {}), 2 do
+        if style.syntax_fonts[tokens[i]] then
+          can_use_fast_widths = false
+          break
+        end
+      end
+    end
+    if can_use_fast_widths then
+      fast_space_width = font:get_width(" ")
+      if not entry.ascii_no_tabs then
+        fast_tab_width = fast_space_width * (indent_size or 2)
+      end
+    end
+  end
+  if not fast_space_width then
+    local hline = tokens and nil or self.doc.highlighter:get_render_line(idx)
+    tokens = tokens or (hline and hline.tokens)
   end
 
   local x_cache = entry.x_cache
@@ -331,6 +382,7 @@ local function get_line_x_cache(self, idx, entry)
     or x_cache.font_size ~= font_size
     or x_cache.indent_size ~= indent_size
     or x_cache.fast_space_width ~= fast_space_width
+    or x_cache.fast_tab_width ~= fast_tab_width
     or x_cache.tokens ~= tokens
     or x_cache.syntax_fonts_key ~= syntax_fonts_key
     or x_cache.wrapped_settings ~= self.wrapped_settings
@@ -340,6 +392,10 @@ local function get_line_x_cache(self, idx, entry)
       font_size = font_size,
       indent_size = indent_size,
       fast_space_width = fast_space_width,
+      fast_tab_width = fast_tab_width,
+      fast_text = fast_tab_width and entry.text or nil,
+      fast_max_col = 1,
+      fast_max_offset = 0,
       tokens = tokens,
       syntax_fonts_key = syntax_fonts_key,
       wrapped_settings = self.wrapped_settings,
@@ -353,7 +409,37 @@ end
 
 local function cached_col_x_offset(self, idx, x_cache, col)
   if x_cache.fast_space_width then
-    return (col - 1) * x_cache.fast_space_width
+    if not x_cache.fast_tab_width then
+      return (col - 1) * x_cache.fast_space_width
+    end
+
+    local offsets = x_cache.offsets
+    local offset = offsets[col]
+    if offset ~= nil then return offset end
+
+    local text = x_cache.fast_text
+    local space_width = x_cache.fast_space_width
+    local tab_width = x_cache.fast_tab_width
+    local from_col = x_cache.fast_max_col or 1
+    local xoffset = x_cache.fast_max_offset or 0
+    if from_col > col then
+      from_col = 1
+      xoffset = 0
+    end
+    offsets[1] = offsets[1] or 0
+    for i = from_col, col - 1 do
+      if text:byte(i) == 9 then
+        xoffset = (math.floor(xoffset / tab_width) + 1) * tab_width
+      else
+        xoffset = xoffset + space_width
+      end
+      offsets[i + 1] = xoffset
+    end
+    if col >= (x_cache.fast_max_col or 1) then
+      x_cache.fast_max_col = col
+      x_cache.fast_max_offset = xoffset
+    end
+    return xoffset
   end
 
   local offsets = x_cache.offsets
@@ -363,6 +449,24 @@ local function cached_col_x_offset(self, idx, x_cache, col)
     offsets[col] = offset
   end
   return offset
+end
+
+local function draw_text_known_bounds(font, text, x, y, color, rect_x, rect_y, rect_w, rect_h, tab)
+  if renderer.draw_text_known_bounds and core.window and not package.loaded["core.test"] then
+    return renderer.draw_text_known_bounds(
+      font,
+      text,
+      x,
+      y,
+      math.floor(rect_x),
+      math.floor(rect_y),
+      math.max(1, math.ceil(rect_w)),
+      math.max(1, math.ceil(rect_h)),
+      color,
+      tab
+    )
+  end
+  return renderer.draw_text(font, text, x, y, color, tab)
 end
 
 local function draw_space_rects(self, idx, x, font, ty, start_col, end_col, color, x_cache)
@@ -407,11 +511,9 @@ local function draw_tab_markers(self, idx, x, font, ty, substitution, start_col,
   if marker == "" then return end
 
   local clip_left, clip_right = current_clip_x_range(self)
-  local marker_width = font:get_width(marker)
   local _, indent_size = self.doc:get_indent_info()
   indent_size = indent_size or 2
-  if font.set_tab_size then font:set_tab_size(indent_size) end
-  local tab_width = font:get_width(string.rep(" ", indent_size))
+  local marker_width, tab_width = cached_tab_metrics(font, marker, indent_size)
   local batch_tabs = tab_width > 0 and marker_width < tab_width
   local first_col, last_col, first_x, first_offset
 
@@ -431,12 +533,17 @@ local function draw_tab_markers(self, idx, x, font, ty, substitution, start_col,
   end
 
   if batch_tabs and first_col then
-    renderer.draw_text(
+    local end_x = cached_col_x_offset(self, idx, x_cache, last_col + 1) + x
+    draw_text_known_bounds(
       font,
       repeated_tab_marker(marker, last_col - first_col + 1),
       first_x,
       ty,
       color,
+      first_x,
+      ty,
+      end_x - first_x,
+      cached_font_height(font),
       { tab_offset = first_offset }
     )
   end
@@ -456,12 +563,18 @@ local function draw_whitespace_run(self, idx, x, y, font, ty, substitution, star
     -- in the active font. This preserves per-column alignment while collapsing
     -- thousands of renderer calls per second into one call per whitespace run.
     if marker_matches_space_advance(font, marker) then
-      renderer.draw_text(
+      local start_x = cached_col_x_offset(self, idx, x_cache, start_col) + x
+      local end_x = cached_col_x_offset(self, idx, x_cache, end_col) + x
+      draw_text_known_bounds(
         font,
         repeated_marker(marker, count),
-        cached_col_x_offset(self, idx, x_cache, start_col) + x,
+        start_x,
         ty,
-        color
+        color,
+        start_x,
+        ty,
+        end_x - start_x,
+        cached_font_height(font)
       )
     else
       draw_space_rects(self, idx, x, font, ty, start_col, end_col, color, x_cache)
