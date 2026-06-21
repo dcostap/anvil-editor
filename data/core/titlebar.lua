@@ -96,12 +96,31 @@ local function title_tabs_right_padding()
   return math.floor(80 * SCALE)
 end
 
+local TITLE_ELLIPSIS = "…"
+
 local function current_project_title()
   local project = core.root_project and core.root_project()
   if project and project.path and project.path ~= "" then
     return common.basename(project.path)
   end
   return "Anvil"
+end
+
+local function truncate_text_right(font, text, max_width)
+  max_width = math.max(0, max_width or 0)
+  if font:get_width(text) <= max_width then return text end
+
+  local ellipsis_width = font:get_width(TITLE_ELLIPSIS)
+  if ellipsis_width > max_width then return "" end
+
+  local remaining = max_width - ellipsis_width
+  local prefix = ""
+  for ch in common.utf8_chars(text) do
+    local candidate = prefix .. ch
+    if font:get_width(candidate) > remaining then break end
+    prefix = candidate
+  end
+  return prefix .. TITLE_ELLIPSIS
 end
 
 function TitleBar:new()
@@ -195,7 +214,8 @@ function TitleBar:draw_window_title()
   end
   local x = ox + title_x
   local w = math.max(0, right_x - title_x)
-  common.draw_text(style.font, color, current_project_title(), "left", x, y, w, h)
+  local title = truncate_text_right(style.font, current_project_title(), w)
+  common.draw_text(style.font, color, title, "left", x, y, w, h)
 end
 
 function TitleBar:get_tabs_rect()
