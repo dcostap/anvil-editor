@@ -879,7 +879,7 @@ settings.add("Status Bar",
     },
     {
       label = "Messages Timeout",
-      description = "The amount in seconds before a notification dissapears.",
+      description = "The minimum seconds before a notification disappears; longer messages stay up to four times longer.",
       path = "message_timeout",
       type = settings.type.NUMBER,
       default = 1.5,

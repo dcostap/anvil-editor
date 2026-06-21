@@ -61,7 +61,8 @@ config.images_background_color = { common.color "#ffffff" }
 ---@type number
 config.max_log_items = 800
 
----The timeout, in seconds, before a message dissapears from StatusBar.
+---The minimum timeout, in seconds, before a message disappears from StatusBar.
+---Longer messages scale linearly up to four times this value.
 ---
 ---Defaults to 1.5.
 ---@type number

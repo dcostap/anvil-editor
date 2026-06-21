@@ -49,6 +49,25 @@ end
 
 local MESSAGE_PULSE_DURATION = 0.15
 local MESSAGE_PULSE_AMPLITUDE = 7 * SCALE
+local MESSAGE_MIN_LENGTH = 20
+local MESSAGE_MAX_LENGTH = 100
+local MESSAGE_MAX_TIMEOUT_MULTIPLIER = 4
+
+local function message_text_length(text)
+  if type(text) ~= "string" then text = tostring(text or "") end
+  local ok, len = pcall(function() return text:ulen(nil, nil, true) end)
+  return ok and len or #text
+end
+
+local function message_timeout_duration(text)
+  local base = config.message_timeout
+  local length = message_text_length(text)
+  if length <= MESSAGE_MIN_LENGTH then return base end
+  if length >= MESSAGE_MAX_LENGTH then return base * MESSAGE_MAX_TIMEOUT_MULTIPLIER end
+
+  local progress = (length - MESSAGE_MIN_LENGTH) / (MESSAGE_MAX_LENGTH - MESSAGE_MIN_LENGTH)
+  return base * (1 + progress * (MESSAGE_MAX_TIMEOUT_MULTIPLIER - 1))
+end
 
 ---Space separator
 ---@type string
@@ -772,7 +791,8 @@ end
 
 
 ---Display a temporary message in the status bar.
----Message duration is controlled by `config.message_timeout`.
+---Message duration uses `config.message_timeout` as the minimum, then scales
+---linearly up to four times that value for longer messages.
 ---@param icon string Icon character to display
 ---@param icon_color renderer.color Icon color
 ---@param text string Message text
@@ -784,7 +804,7 @@ function StatusBar:show_message(icon, icon_color, text)
     text = text
   }
   local now = system.get_time()
-  self.message_timeout = now + config.message_timeout
+  self.message_timeout = now + message_timeout_duration(text)
   self.message_pulse_start = now
   core.redraw = true
 end
