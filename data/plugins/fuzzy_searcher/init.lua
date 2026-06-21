@@ -1734,6 +1734,56 @@ local function everything_full_path(item)
   return common.normalize_path(path)
 end
 
+local function everything_project_search_query(query)
+  -- Project mode is looking for folders to open. Do not set Everything's
+  -- path=1 flag here: a query like "sm64" would match every descendant whose
+  -- parent path contains sm64 and bury the actual project folder.
+  query = trim_query(query)
+  if query == "" then return query end
+  if query:lower():find("folder:", 1, true) then return query end
+  return "folder: " .. query
+end
+
+local function everything_project_search_params(query, count, offset)
+  return {
+    json = "1",
+    search = everything_project_search_query(query),
+    count = tostring(count),
+    offset = tostring(offset or 0),
+    path_column = "1",
+    size_column = "1",
+    date_modified_column = "1",
+    sort = "path",
+    ascending = "1",
+  }
+end
+
+local function everything_path_depth(path)
+  path = tostring(path or "")
+  local depth = 0
+  for part in path:gmatch("[^/\\]+") do
+    if part ~= "" then depth = depth + 1 end
+  end
+  return depth
+end
+
+local function sort_everything_project_results(results)
+  table.sort(results, function(a, b)
+    local af = a and a.is_folder and 0 or 1
+    local bf = b and b.is_folder and 0 or 1
+    if af ~= bf then return af < bf end
+
+    local ap = tostring((a and (a.path or a.label)) or "")
+    local bp = tostring((b and (b.path or b.label)) or "")
+    local ad, bd = everything_path_depth(ap), everything_path_depth(bp)
+    if ad ~= bd then return ad < bd end
+
+    local al, bl = ap:lower(), bp:lower()
+    if al ~= bl then return al < bl end
+    return ap < bp
+  end)
+end
+
 local function everything_result_from_item(item, query)
   local path = everything_full_path(item)
   if not path or path == "" then return nil end
@@ -2453,21 +2503,11 @@ function FSView:start_everything_project_search(query, offset, append)
   offset = offset or 0
   self.everything_loading = true
   self.everything_status = offset > 0 and "Loading more Everything results…" or "Searching Everything…"
-  core.log_quiet("Fuzzy Everything: searching query=%q offset=%d count=%d append=%s", query, offset, count, tostring(append))
+  local params = everything_project_search_params(query, count, offset)
+  core.log_quiet("Fuzzy Everything: searching query=%q everything_search=%q offset=%d count=%d append=%s", query, params.search, offset, count, tostring(append))
   self:schedule_update(true)
 
-  http.get(everything_endpoint(), {
-    json = "1",
-    search = query,
-    count = tostring(count),
-    offset = tostring(offset),
-    path_column = "1",
-    size_column = "1",
-    date_modified_column = "1",
-    sort = "name",
-    ascending = "1",
-    path = "1",
-  }, {
+  http.get(everything_endpoint(), params, {
     timeout = 2,
     on_done = function(ok, _err, data)
       if gen ~= everything.search_generation or active_view ~= self then return end
@@ -2490,10 +2530,11 @@ function FSView:start_everything_project_search(query, offset, append)
         local r = everything_result_from_item(item, query)
         if r then out[#out+1] = r end
       end
+      sort_everything_project_results(out)
       self.everything_results = out
       self.everything_total = total
       self.everything_has_more = #out < total
-      self.everything_status = string.format("%d Everything results%s", #out, self.everything_has_more and "+" or "")
+      self.everything_status = string.format("%d Everything folders%s", #out, self.everything_has_more and "+" or "")
       core.log_quiet("Fuzzy Everything: search ok query=%q shown=%d total=%d has_more=%s", query, #out, total, tostring(self.everything_has_more))
       self.dirty = true
       self:schedule_update(true)
@@ -3552,4 +3593,13 @@ keymap.on_key_pressed = function(key, ...)
   return true
 end
 
-return { open = open, open_static_results = open_static_results }
+return {
+  open = open,
+  open_static_results = open_static_results,
+  _test = {
+    everything_project_search_params = everything_project_search_params,
+    everything_project_search_query = everything_project_search_query,
+    everything_path_depth = everything_path_depth,
+    sort_everything_project_results = sort_everything_project_results,
+  },
+}
