@@ -1927,6 +1927,7 @@ function core.step(next_frame_time, options)
   last_core_step_stats = step_stats
   core.perf_frame_stats = perf_stats_enabled() and new_perf_frame_stats() or nil
   core.docview_frame_stats = nil
+  core.render_frame_active = false
 
   -- handle events
   local did_keymap = false
@@ -2042,7 +2043,10 @@ function core.step(next_frame_time, options)
   renderer.set_clip_rect(table.unpack(core.clip_rect_stack[1]))
   local draw_emit_start_time = system.get_time()
   core.docview_frame_stats = core.perf_frame_stats
+  core.render_frame_id = (core.render_frame_id or 0) + 1
+  core.render_frame_active = true
   core.root_panel:draw()
+  core.render_frame_active = false
   step_stats.draw_emit_ms = (system.get_time() - draw_emit_start_time) * 1000
   local renderer_end_start_time = system.get_time()
   renderer.end_frame()

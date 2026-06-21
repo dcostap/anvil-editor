@@ -1,3 +1,4 @@
+local core = require "core"
 local common = require "core.common"
 local Doc = require "core.doc"
 local documents = require "core.lsp.documents"
@@ -92,6 +93,8 @@ test.describe("core.lsp.provider semantic tokens", function()
   end)
 
   test.after_each(function(context)
+    core.render_frame_active = false
+    core.perf_frame_stats = nil
     provider.clear()
     if context.docs then
       for _, doc in ipairs(context.docs) do pcall(function() doc:on_close() end) end
@@ -162,6 +165,27 @@ test.describe("core.lsp.provider semantic tokens", function()
     test.ok(has_token(line.tokens, "function", "main"))
     doc.highlighter:get_render_line(1)
     test.equal(#client.requests, 1)
+  end)
+
+  test.test("render line cache avoids duplicate semantic lookup only within a draw frame", function(context)
+    local doc, client = attach(context)
+    doc.highlighter:get_render_line(1)
+    complete_request(client, 1, { data = { 0, 4, 4, 0, 0 } })
+
+    local stats = {}
+    core.perf_frame_stats = stats
+    core.render_frame_id = (core.render_frame_id or 0) + 1
+    core.render_frame_active = true
+    local line1 = doc.highlighter:get_render_line(1)
+    local line2 = doc.highlighter:get_render_line(1)
+    test.equal(line1.source, "lsp")
+    test.equal(line2.source, "lsp")
+    test.equal(stats.lsp_render_tokens_calls, 1)
+
+    core.render_frame_id = core.render_frame_id + 1
+    local line3 = doc.highlighter:get_render_line(1)
+    test.equal(line3.source, "lsp")
+    test.equal(stats.lsp_render_tokens_calls, 2)
   end)
 
   test.test("semantic token cache is not reused while local edits are pending", function(context)

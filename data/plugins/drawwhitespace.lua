@@ -424,6 +424,11 @@ function DocView:draw_line_text(idx, x, y)
     return draw_line_text(self, idx, x, y)
   end
 
+  local line_text = self.doc.lines[idx]
+  if not line_text or not line_text:find("[ \t]") then
+    return draw_line_text(self, idx, x, y)
+  end
+
   if not self.drawwhitespace_selections then
     self.drawwhitespace_selections = {}
   end
@@ -445,7 +450,7 @@ function DocView:draw_line_text(idx, x, y)
 
   if not drawwhitespace.show_selected_only or self.drawwhitespace_selections.all then
     local entry = get_line_runs(self, idx)
-    local x_cache = get_line_x_cache(self, idx, entry)
+    local x_cache
     for _, run in ipairs(entry.runs) do
       local substitution = drawwhitespace.substitutions[run.substitution]
       local start_col = math.max(run.start_col, col1)
@@ -465,6 +470,7 @@ function DocView:draw_line_text(idx, x, y)
           color = get_option(substitution, "middle_color") or color
         end
         if draw then
+          x_cache = x_cache or get_line_x_cache(self, idx, entry)
           draw_whitespace_run(self, idx, x, y, font, ty, substitution, start_col, end_col, color, x_cache)
         end
       end
@@ -475,7 +481,7 @@ function DocView:draw_line_text(idx, x, y)
     -- caches before scanning the selected substring; consider a selection-local
     -- path if very long selected lines become hot again.
     local entry = get_line_runs(self, idx)
-    local x_cache = get_line_x_cache(self, idx, entry)
+    local x_cache
     for _, substitution in pairs(drawwhitespace.substitutions) do
       local offset = 1
       local pattern = substitution.char.."+"
@@ -497,6 +503,7 @@ function DocView:draw_line_text(idx, x, y)
           color = get_option(substitution, "middle_color") or color
         end
         if draw then
+          x_cache = x_cache or get_line_x_cache(self, idx, entry)
           draw_whitespace_run(self, idx, x, y, font, ty, substitution, as, ae, color, x_cache)
         end
         offset = e + 1

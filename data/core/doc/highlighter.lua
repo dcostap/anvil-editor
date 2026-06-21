@@ -169,6 +169,7 @@ function Highlighter:update_notify(line, n)
 end
 
 function Highlighter:invalidate_render_cache(first_line, last_line)
+  self.render_line_frame_cache = nil
   local intelligence = get_language_intelligence()
   if intelligence and self.doc then
     intelligence.invalidate_render_cache(self.doc, first_line, last_line)
@@ -213,16 +214,48 @@ end
 
 function Highlighter:get_render_line(idx)
   if not self.doc then return {text="", tokens={"normal", ""}, source="tokenizer"} end
+
+  local function make_line(text, tokens, source)
+    return { text = text, tokens = tokens, source = source }
+  end
+
   local text = self.doc:get_utf8_line(idx) or ""
+  local frame_cache
+  local frame_id = core.render_frame_active and core.render_frame_id
+  if frame_id then
+    frame_cache = self.render_line_frame_cache
+    if not frame_cache or frame_cache.frame_id ~= frame_id then
+      frame_cache = { frame_id = frame_id, lines = {} }
+      self.render_line_frame_cache = frame_cache
+    end
+
+    local cached = frame_cache.lines[idx]
+    if cached and cached.text == text then
+      return make_line(cached.render_text, cached.tokens, cached.source)
+    end
+  end
+
+  local function finish(render_text, tokens, source)
+    if frame_cache then
+      frame_cache.lines[idx] = {
+        text = text,
+        render_text = render_text,
+        tokens = tokens,
+        source = source,
+      }
+    end
+    return make_line(render_text, tokens, source)
+  end
+
   local intelligence = get_language_intelligence()
   if intelligence then
     local tokens, _, provider_id = intelligence.render_tokens(self.doc, idx)
     if tokens then
-      return { text = text, tokens = tokens, source = provider_id or "language-intelligence" }
+      return finish(text, tokens, provider_id or "language-intelligence")
     end
   end
   local line = self:get_line(idx)
-  return { text = line.text, tokens = line.tokens, source = "tokenizer" }
+  return finish(line.text, line.tokens, "tokenizer")
 end
 
 function Highlighter:each_render_token(idx, scol)
