@@ -1531,38 +1531,6 @@ function DocView:get_line_hint_text_end_x(line, x)
   return x + self:get_col_x_offset(line, text_len + 1)
 end
 
-function DocView:get_line_hint_visible_text_end_x(x)
-  local minline = self.__line_hint_visible_minline
-  local maxline = self.__line_hint_visible_maxline
-  if not minline or not maxline then
-    minline, maxline = self:get_visible_line_range()
-  end
-
-  local change_id = self.doc.get_change_id and self.doc:get_change_id() or nil
-  local cache = self.__line_hint_visible_text_end_x_cache
-  if cache
-  and cache.x == x
-  and cache.minline == minline
-  and cache.maxline == maxline
-  and cache.change_id == change_id then
-    return cache.text_end_x
-  end
-
-  local text_end_x = x
-  for line = minline, maxline do
-    text_end_x = math.max(text_end_x, self:get_line_hint_text_end_x(line, x))
-  end
-
-  self.__line_hint_visible_text_end_x_cache = {
-    x = x,
-    minline = minline,
-    maxline = maxline,
-    change_id = change_id,
-    text_end_x = text_end_x,
-  }
-  return text_end_x
-end
-
 ---Draw a Line Hint for a line, clipped/truncated so it never covers Document text.
 ---@param line integer Line number
 ---@param x number Screen x coordinate of the line's text origin
@@ -1582,9 +1550,7 @@ function DocView:draw_line_hint(line, x, y)
 
   local gap = self:get_line_hint_gap(line, segments)
   local placement = segments.placement
-  local text_end_x = placement == "after_visible_document_text"
-    and self:get_line_hint_visible_text_end_x(x)
-    or self:get_line_hint_text_end_x(line, x)
+  local text_end_x = self:get_line_hint_text_end_x(line, x)
   local hint_left_limit = math.max(content_left, text_end_x) + gap
   local available = content_right - hint_left_limit
   if available <= 0 then return end
@@ -1597,7 +1563,7 @@ function DocView:draw_line_hint(line, x, y)
     if width > available + 0.5 then return end
   end
 
-  local draw_x = placement == "after_visible_document_text" and hint_left_limit or content_right - width
+  local draw_x = placement == "after_line_document_text" and hint_left_limit or content_right - width
   local tx = draw_x
   local ty = y + self:get_line_text_y_offset()
   local lh = self:get_line_height()
@@ -2093,8 +2059,6 @@ function DocView:draw()
   local draw_start = stats and system.get_time()
   if stats then stats.visible_lines = stats.visible_lines + math.max(0, maxline - minline + 1) end
   self:prepare_line_body_draw_cache(minline, maxline)
-  self.__line_hint_visible_minline = minline
-  self.__line_hint_visible_maxline = maxline
   self:draw_current_line_highlights(minline, maxline)
   self.__current_line_highlights_drawn_before_content = true
 
@@ -2119,8 +2083,6 @@ function DocView:draw()
   self:draw_overlay()
   core.pop_clip_rect()
   self.__current_line_highlights_drawn_before_content = nil
-  self.__line_hint_visible_minline = nil
-  self.__line_hint_visible_maxline = nil
   self.__line_body_highlight_cache = nil
   self.__line_body_selection_cache = nil
   self.__line_gutter_selection_cache = nil

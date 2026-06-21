@@ -85,7 +85,7 @@ function diagnostic_hints.get_line_hint(doc, line)
   return {
     text = entry.hint.text,
     color = severity_color(entry.hint.severity),
-    placement = "after_visible_document_text",
+    placement = "after_line_document_text",
     gap_spaces = 4,
     truncate = "right",
   }
