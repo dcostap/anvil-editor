@@ -1540,46 +1540,83 @@ end
 ---@return number? x
 ---@return number? width
 function DocView:draw_line_hint(line, x, y)
-  local segments = self:normalize_line_hint(self:get_line_hint(line))
-  if not segments then return end
+  local stats = core.docview_frame_stats
+  local total_start = stats and system.get_time()
+  if stats then stats.line_hint_calls = stats.line_hint_calls + 1 end
 
+  local function finish(skip_key)
+    if stats then
+      if skip_key then stats[skip_key] = (stats[skip_key] or 0) + 1 end
+      stats.line_hint_ms = stats.line_hint_ms + (system.get_time() - total_start) * 1000
+    end
+  end
+
+  local phase_start = stats and system.get_time()
+  local hint = self:get_line_hint(line)
+  if stats then stats.line_hint_get_ms = stats.line_hint_get_ms + (system.get_time() - phase_start) * 1000 end
+
+  phase_start = stats and system.get_time()
+  local segments = self:normalize_line_hint(hint)
+  if stats then stats.line_hint_normalize_ms = stats.line_hint_normalize_ms + (system.get_time() - phase_start) * 1000 end
+  if not segments then finish("line_hint_skip_no_hint"); return end
+
+  phase_start = stats and system.get_time()
   local gw = self:get_gutter_width()
   local _, _, vscroll_w = self.v_scrollbar:get_track_rect()
   local content_left = self.position.x + gw
   local content_right = self.position.x + self.size.x - (vscroll_w or 0) - style.padding.x
-  if content_right <= content_left then return end
+  if content_right <= content_left then
+    if stats then stats.line_hint_layout_ms = stats.line_hint_layout_ms + (system.get_time() - phase_start) * 1000 end
+    finish("line_hint_skip_no_space")
+    return
+  end
 
   local gap = self:get_line_hint_gap(line, segments)
   local placement = segments.placement
   local text_end_x = self:get_line_hint_text_end_x(line, x)
   local hint_left_limit = math.max(content_left, text_end_x) + gap
   local available = content_right - hint_left_limit
-  if available <= 0 then return end
+  if stats then stats.line_hint_layout_ms = stats.line_hint_layout_ms + (system.get_time() - phase_start) * 1000 end
+  if available <= 0 then finish("line_hint_skip_no_space"); return end
 
+  phase_start = stats and system.get_time()
   local width = self:measure_line_hint_segments(segments)
+  if stats then stats.line_hint_measure_ms = stats.line_hint_measure_ms + (system.get_time() - phase_start) * 1000 end
   if width > available then
+    phase_start = stats and system.get_time()
     segments = self:truncate_line_hint_segments(segments, available, segments.truncate)
-    if not segments then return end
+    if stats then stats.line_hint_truncate_ms = stats.line_hint_truncate_ms + (system.get_time() - phase_start) * 1000 end
+    if not segments then finish("line_hint_skip_truncated"); return end
+    phase_start = stats and system.get_time()
     width = self:measure_line_hint_segments(segments)
-    if width > available + 0.5 then return end
+    if stats then stats.line_hint_measure_ms = stats.line_hint_measure_ms + (system.get_time() - phase_start) * 1000 end
+    if width > available + 0.5 then finish("line_hint_skip_truncated"); return end
   end
 
   local draw_x = placement == "after_line_document_text" and hint_left_limit or content_right - width
   local tx = draw_x
   local ty = y + self:get_line_text_y_offset()
   local lh = self:get_line_height()
-  local stats = core.docview_frame_stats
 
+  phase_start = stats and system.get_time()
   core.push_clip_rect(hint_left_limit, y, math.max(0, content_right - hint_left_limit), lh)
   for _, segment in ipairs(segments) do
     local draw_text_start = stats and system.get_time()
     tx = renderer.draw_text(segment.font, segment.text, tx, ty, segment.color)
     if stats then
+      local elapsed = (system.get_time() - draw_text_start) * 1000
       stats.draw_text_calls = stats.draw_text_calls + 1
-      stats.renderer_draw_text_ms = stats.renderer_draw_text_ms + (system.get_time() - draw_text_start) * 1000
+      stats.renderer_draw_text_ms = stats.renderer_draw_text_ms + elapsed
+      stats.line_hint_draw_text_calls = stats.line_hint_draw_text_calls + 1
+      stats.line_hint_draw_text_ms = stats.line_hint_draw_text_ms + elapsed
     end
   end
   core.pop_clip_rect()
+  if stats then
+    stats.line_hint_draw_ms = stats.line_hint_draw_ms + (system.get_time() - phase_start) * 1000
+    stats.line_hint_drawn = stats.line_hint_drawn + 1
+  end
+  finish()
   return tx, draw_x, width
 end
 

@@ -4,7 +4,8 @@ local perf = {}
 
 local recording = false
 local record = nil
-local originals = {}
+local renderer_originals = {}
+local system_originals = {}
 local sample_interval = 10000
 
 local function csv_escape(value)
@@ -38,6 +39,10 @@ local function add_count(tbl, key, amount)
   tbl[key] = (tbl[key] or 0) + (amount or 1)
 end
 
+local function pack(...)
+  return { n = select("#", ...), ... }
+end
+
 function perf.add_detail(key, amount)
   if not recording or not record or not key then return end
   add_count(record.detail_counts, key, amount or 1)
@@ -67,13 +72,13 @@ local function hook()
 end
 
 local function wrap_renderer_api(name)
-  if originals[name] or type(renderer[name]) ~= "function" then return end
+  if renderer_originals[name] or type(renderer[name]) ~= "function" then return end
   local original = renderer[name]
-  originals[name] = original
+  renderer_originals[name] = original
   renderer[name] = function(...)
     if record then
       local info = debug.getinfo(2, "Sl")
-      local key = name .. "," .. source_key(info)
+      local key = "renderer." .. name .. "," .. source_key(info)
       add_count(record.api_calls, key, 1)
     end
     return original(...)
@@ -81,10 +86,35 @@ local function wrap_renderer_api(name)
 end
 
 local function unwrap_renderer_api()
-  for name, fn in pairs(originals) do
+  for name, fn in pairs(renderer_originals) do
     renderer[name] = fn
   end
-  originals = {}
+  renderer_originals = {}
+end
+
+local function wrap_system_api(name)
+  if system_originals[name] or type(system[name]) ~= "function" then return end
+  local original = system[name]
+  system_originals[name] = original
+  system[name] = function(...)
+    if not record then return original(...) end
+    local info = debug.getinfo(2, "Sl")
+    local source = source_key(info)
+    local key = "system." .. name .. "," .. source
+    add_count(record.api_calls, key, 1)
+    local start = system_originals.get_time and system_originals.get_time() or system.get_time()
+    local result = pack(original(...))
+    local elapsed = ((system_originals.get_time and system_originals.get_time() or system.get_time()) - start) * 1000
+    add_count(record.detail_counts, "system." .. name .. "_ms," .. source, elapsed)
+    return table.unpack(result, 1, result.n)
+  end
+end
+
+local function unwrap_system_api()
+  for name, fn in pairs(system_originals) do
+    system[name] = fn
+  end
+  system_originals = {}
 end
 
 local function write_frame_header(file)
@@ -105,7 +135,10 @@ local function write_frame_header(file)
     "docview_prepare_highlight_iters", "docview_prepare_caret_scan_count", "docview_visible_carets", "docview_prepare_selection_iters", "docview_visible_selection_ranges", "docview_selection_cache_lines", "docview_selection_cache_ranges", "docview_selection_cache_merged_ranges",
     "doc_get_selections_calls", "doc_get_selections_iters", "doc_set_selections_calls", "doc_set_selections_ms", "doc_add_selection_calls", "doc_add_selection_ms", "doc_merge_cursors_calls", "doc_merge_cursors_ms", "doc_sanitize_selection_calls", "doc_sanitize_selection_ms", "doc_apply_edits_calls", "doc_apply_edits_ms",
     "command_calls", "command_total_ms", "command_predicate_ms", "command_body_ms", "slowest_command_ms", "slowest_command_name",
-    "statusbar_selection_ms", "statusbar_selection_cache_hits", "statusbar_selection_cache_misses", "over_budget"
+    "statusbar_selection_ms", "statusbar_selection_cache_hits", "statusbar_selection_cache_misses",
+    "docview_line_hint_calls", "docview_line_hint_drawn", "docview_line_hint_ms", "docview_line_hint_get_ms", "docview_line_hint_normalize_ms", "docview_line_hint_layout_ms", "docview_line_hint_measure_ms", "docview_line_hint_truncate_ms", "docview_line_hint_draw_ms", "docview_line_hint_draw_text_calls", "docview_line_hint_draw_text_ms", "docview_line_hint_skip_no_hint", "docview_line_hint_skip_no_space", "docview_line_hint_skip_truncated",
+    "filetree_line_hint_calls", "filetree_line_hint_ms", "filetree_line_hint_get_file_info_calls", "filetree_line_hint_get_file_info_ms", "filetree_line_hint_format_ms", "filetree_line_hint_git_ms", "filetree_line_hint_segments", "filetree_line_hint_cache_hits", "filetree_line_hint_cache_misses", "filetree_line_hint_folder_count_hits", "filetree_line_hint_folder_count_pending", "filetree_line_hint_entry_calls", "filetree_line_hint_entry_ms", "filetree_line_hint_entry_rebuilds", "filetree_line_hint_entry_build_ms", "filetree_folder_row_background_calls", "filetree_folder_row_background_rects", "filetree_folder_row_background_ms", "filetree_line_is_dir_calls", "filetree_line_is_dir_ms", "filetree_draw_line_body_calls", "filetree_draw_line_body_ms", "filetree_draw_line_text_calls", "filetree_draw_line_text_ms", "filetree_draw_line_text_git_ms", "filetree_draw_line_text_colored_calls", "filetree_draw_line_text_plain_calls",
+    "over_budget"
   }, ",") .. "\n")
 end
 
@@ -113,6 +146,59 @@ local function snapshot_value(s, key)
   local value = s and s[key]
   if type(value) == "boolean" then return value and 1 or 0 end
   return value or 0
+end
+
+local aggregate_detail_keys = {
+  "docview_line_hint_calls",
+  "docview_line_hint_drawn",
+  "docview_line_hint_ms",
+  "docview_line_hint_get_ms",
+  "docview_line_hint_normalize_ms",
+  "docview_line_hint_layout_ms",
+  "docview_line_hint_measure_ms",
+  "docview_line_hint_truncate_ms",
+  "docview_line_hint_draw_ms",
+  "docview_line_hint_draw_text_calls",
+  "docview_line_hint_draw_text_ms",
+  "docview_line_hint_skip_no_hint",
+  "docview_line_hint_skip_no_space",
+  "docview_line_hint_skip_truncated",
+  "filetree_line_hint_calls",
+  "filetree_line_hint_ms",
+  "filetree_line_hint_get_file_info_calls",
+  "filetree_line_hint_get_file_info_ms",
+  "filetree_line_hint_format_ms",
+  "filetree_line_hint_git_ms",
+  "filetree_line_hint_segments",
+  "filetree_line_hint_cache_hits",
+  "filetree_line_hint_cache_misses",
+  "filetree_line_hint_folder_count_hits",
+  "filetree_line_hint_folder_count_pending",
+  "filetree_line_hint_entry_calls",
+  "filetree_line_hint_entry_ms",
+  "filetree_line_hint_entry_rebuilds",
+  "filetree_line_hint_entry_build_ms",
+  "filetree_folder_row_background_calls",
+  "filetree_folder_row_background_rects",
+  "filetree_folder_row_background_ms",
+  "filetree_line_is_dir_calls",
+  "filetree_line_is_dir_ms",
+  "filetree_draw_line_body_calls",
+  "filetree_draw_line_body_ms",
+  "filetree_draw_line_text_calls",
+  "filetree_draw_line_text_ms",
+  "filetree_draw_line_text_git_ms",
+  "filetree_draw_line_text_colored_calls",
+  "filetree_draw_line_text_plain_calls",
+}
+
+local function aggregate_snapshot_details(snapshot)
+  for _, key in ipairs(aggregate_detail_keys) do
+    local value = snapshot[key]
+    if type(value) == "number" and value ~= 0 then
+      add_count(record.detail_counts, key, value)
+    end
+  end
 end
 
 function perf.on_frame(snapshot)
@@ -188,6 +274,7 @@ function perf.on_frame(snapshot)
   else
     record.idle_iteration_count = record.idle_iteration_count + 1
   end
+  aggregate_snapshot_details(snapshot)
   record.max_selection_count = math.max(record.max_selection_count, snapshot.selection_count or 0)
   record.max_search_selection_count = math.max(record.max_search_selection_count, snapshot.search_selection_count or 0)
   if (snapshot.sleep_actual_ms or 0) > 0 then
@@ -295,6 +382,47 @@ function perf.on_frame(snapshot)
     string.format("%.3f", snapshot.statusbar_selection_ms or 0),
     tostring(snapshot_value(snapshot, "statusbar_selection_cache_hits")),
     tostring(snapshot_value(snapshot, "statusbar_selection_cache_misses")),
+    tostring(snapshot_value(snapshot, "docview_line_hint_calls")),
+    tostring(snapshot_value(snapshot, "docview_line_hint_drawn")),
+    string.format("%.3f", snapshot.docview_line_hint_ms or 0),
+    string.format("%.3f", snapshot.docview_line_hint_get_ms or 0),
+    string.format("%.3f", snapshot.docview_line_hint_normalize_ms or 0),
+    string.format("%.3f", snapshot.docview_line_hint_layout_ms or 0),
+    string.format("%.3f", snapshot.docview_line_hint_measure_ms or 0),
+    string.format("%.3f", snapshot.docview_line_hint_truncate_ms or 0),
+    string.format("%.3f", snapshot.docview_line_hint_draw_ms or 0),
+    tostring(snapshot_value(snapshot, "docview_line_hint_draw_text_calls")),
+    string.format("%.3f", snapshot.docview_line_hint_draw_text_ms or 0),
+    tostring(snapshot_value(snapshot, "docview_line_hint_skip_no_hint")),
+    tostring(snapshot_value(snapshot, "docview_line_hint_skip_no_space")),
+    tostring(snapshot_value(snapshot, "docview_line_hint_skip_truncated")),
+    tostring(snapshot_value(snapshot, "filetree_line_hint_calls")),
+    string.format("%.3f", snapshot.filetree_line_hint_ms or 0),
+    tostring(snapshot_value(snapshot, "filetree_line_hint_get_file_info_calls")),
+    string.format("%.3f", snapshot.filetree_line_hint_get_file_info_ms or 0),
+    string.format("%.3f", snapshot.filetree_line_hint_format_ms or 0),
+    string.format("%.3f", snapshot.filetree_line_hint_git_ms or 0),
+    tostring(snapshot_value(snapshot, "filetree_line_hint_segments")),
+    tostring(snapshot_value(snapshot, "filetree_line_hint_cache_hits")),
+    tostring(snapshot_value(snapshot, "filetree_line_hint_cache_misses")),
+    tostring(snapshot_value(snapshot, "filetree_line_hint_folder_count_hits")),
+    tostring(snapshot_value(snapshot, "filetree_line_hint_folder_count_pending")),
+    tostring(snapshot_value(snapshot, "filetree_line_hint_entry_calls")),
+    string.format("%.3f", snapshot.filetree_line_hint_entry_ms or 0),
+    tostring(snapshot_value(snapshot, "filetree_line_hint_entry_rebuilds")),
+    string.format("%.3f", snapshot.filetree_line_hint_entry_build_ms or 0),
+    tostring(snapshot_value(snapshot, "filetree_folder_row_background_calls")),
+    tostring(snapshot_value(snapshot, "filetree_folder_row_background_rects")),
+    string.format("%.3f", snapshot.filetree_folder_row_background_ms or 0),
+    tostring(snapshot_value(snapshot, "filetree_line_is_dir_calls")),
+    string.format("%.3f", snapshot.filetree_line_is_dir_ms or 0),
+    tostring(snapshot_value(snapshot, "filetree_draw_line_body_calls")),
+    string.format("%.3f", snapshot.filetree_draw_line_body_ms or 0),
+    tostring(snapshot_value(snapshot, "filetree_draw_line_text_calls")),
+    string.format("%.3f", snapshot.filetree_draw_line_text_ms or 0),
+    string.format("%.3f", snapshot.filetree_draw_line_text_git_ms or 0),
+    tostring(snapshot_value(snapshot, "filetree_draw_line_text_colored_calls")),
+    tostring(snapshot_value(snapshot, "filetree_draw_line_text_plain_calls")),
     snapshot.over_budget and "1" or "0",
   }, ",") .. "\n")
 end
@@ -390,6 +518,35 @@ local function write_summary(path)
   end
   file:write("\n")
 
+  local function drill_metric(label, key)
+    local total = record.detail_counts[key] or 0
+    local avg = record.frame_count > 0 and total / record.frame_count or 0
+    file:write(string.format("  %-42s total %10.3f  avg/redraw %8.3f\n", label, total, avg))
+  end
+  file:write("DocView/FileTree drilldown totals (avg per redraw frame):\n")
+  drill_metric("docview line hint calls", "docview_line_hint_calls")
+  drill_metric("docview line hint drawn", "docview_line_hint_drawn")
+  drill_metric("docview line hint total ms", "docview_line_hint_ms")
+  drill_metric("docview line hint get ms", "docview_line_hint_get_ms")
+  drill_metric("docview line hint layout ms", "docview_line_hint_layout_ms")
+  drill_metric("docview line hint measure ms", "docview_line_hint_measure_ms")
+  drill_metric("docview line hint truncate ms", "docview_line_hint_truncate_ms")
+  drill_metric("docview line hint draw ms", "docview_line_hint_draw_ms")
+  drill_metric("filetree line hint calls", "filetree_line_hint_calls")
+  drill_metric("filetree line hint total ms", "filetree_line_hint_ms")
+  drill_metric("filetree get_file_info calls", "filetree_line_hint_get_file_info_calls")
+  drill_metric("filetree get_file_info ms", "filetree_line_hint_get_file_info_ms")
+  drill_metric("filetree line hint format ms", "filetree_line_hint_format_ms")
+  drill_metric("filetree line hint git ms", "filetree_line_hint_git_ms")
+  drill_metric("filetree line hint entry ms", "filetree_line_hint_entry_ms")
+  drill_metric("filetree folder row bg rects", "filetree_folder_row_background_rects")
+  drill_metric("filetree folder row bg ms", "filetree_folder_row_background_ms")
+  drill_metric("filetree line_is_dir calls", "filetree_line_is_dir_calls")
+  drill_metric("filetree line_is_dir ms", "filetree_line_is_dir_ms")
+  drill_metric("filetree draw_line_body ms", "filetree_draw_line_body_ms")
+  drill_metric("filetree draw_line_text ms", "filetree_draw_line_text_ms")
+  file:write("\n")
+
   file:write("Top Lua samples:\n")
   for i, row in ipairs(sorted_counts(record.lua_samples)) do
     if i > 30 then break end
@@ -403,7 +560,7 @@ local function write_summary(path)
     file:write(string.format("%12.3f %s\n", row.count, row.key))
   end
 
-  file:write("\nTop renderer API callers:\n")
+  file:write("\nTop API callers:\n")
   local total_api = 0
   for _, count in pairs(record.api_calls) do total_api = total_api + count end
   for i, row in ipairs(sorted_counts(record.api_calls)) do
@@ -454,6 +611,9 @@ function perf.start_recording()
   wrap_renderer_api("draw_text")
   wrap_renderer_api("draw_rect")
   wrap_renderer_api("draw_rect_grid")
+  wrap_system_api("get_file_info")
+  wrap_system_api("list_dir")
+  wrap_system_api("absolute_path")
   debug.sethook(hook, "", sample_interval)
   return frames_path
 end
@@ -462,6 +622,7 @@ function perf.stop_recording()
   if not recording or not record then return nil end
   debug.sethook()
   unwrap_renderer_api()
+  unwrap_system_api()
   record.stop_time = system.get_time()
   record.file:close()
   write_counts_csv(record.samples_path, "samples,source", sorted_counts(record.lua_samples))
