@@ -103,9 +103,9 @@ config.force_scrollbar_status = false
 ---The file size limit, in megabytes.
 ---Files larger than this size will not be shown in the file picker.
 ---
----Defaults to 10.
+---Defaults to 100.
 ---@type number
-config.file_size_limit = 10
+config.file_size_limit = 100
 
 ---A list of files and directories to ignore.
 ---Each element is a Lua pattern, where patterns ending with a forward slash
