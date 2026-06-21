@@ -85,6 +85,9 @@ function diagnostic_hints.get_line_hint(doc, line)
   return {
     text = entry.hint.text,
     color = severity_color(entry.hint.severity),
+    placement = "after_visible_document_text",
+    gap_spaces = 4,
+    truncate = "right",
   }
 end
 
@@ -100,6 +103,10 @@ local function append_hint(view, base_hint, diagnostic_hint)
     color = style.line_hint,
   }
   segments[#segments + 1] = diagnostic_hint
+  segments.placement = diagnostic_hint.placement
+  segments.gap = diagnostic_hint.gap
+  segments.gap_spaces = diagnostic_hint.gap_spaces
+  segments.truncate = diagnostic_hint.truncate
   return segments
 end
 

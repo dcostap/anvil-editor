@@ -1345,8 +1345,8 @@ end
 ---Return a non-interactive visual hint for a line.
 ---Override this in Document View subclasses or plugins. The result can be a
 ---string, a single segment table `{ text, color?, font? }`, or a list of
----segment tables. Hints are drawn right-aligned and are never part of the
----Document text.
+---segment tables. Hints are drawn right-aligned by default and are never part
+---of the Document text.
 ---@param line integer Line number
 ---@return string|table|nil hint
 function DocView:get_line_hint(line)
@@ -1355,8 +1355,14 @@ end
 
 ---Minimum horizontal gap between Document text and a Line Hint.
 ---@param line integer Line number
+---@param hint_options? table Normalized Line Hint options
 ---@return number gap Pixel gap
-function DocView:get_line_hint_gap(line)
+function DocView:get_line_hint_gap(line, hint_options)
+  local gap_spaces = hint_options and hint_options.gap_spaces
+  if gap_spaces then
+    return self:get_font():get_width(string.rep(" ", math.max(0, gap_spaces)))
+  end
+  if hint_options and hint_options.gap then return math.max(0, hint_options.gap) end
   return style.padding.x * 2
 end
 
@@ -1390,7 +1396,16 @@ function DocView:normalize_line_hint(hint)
     add_segment(hint)
   end
 
-  return #segments > 0 and segments or nil
+  if #segments == 0 then return nil end
+
+  if type(hint) == "table" then
+    segments.placement = hint.placement
+    segments.gap = hint.gap
+    segments.gap_spaces = hint.gap_spaces
+    segments.truncate = hint.truncate
+  end
+
+  return segments
 end
 
 function DocView:measure_line_hint_segments(segments)
@@ -1409,7 +1424,15 @@ local function copy_line_hint_segment(segment, text)
   }
 end
 
-function DocView:truncate_line_hint_segments(segments, max_width)
+local function copy_line_hint_options(target, source)
+  target.placement = source.placement
+  target.gap = source.gap
+  target.gap_spaces = source.gap_spaces
+  target.truncate = source.truncate
+  return target
+end
+
+function DocView:truncate_line_hint_segments(segments, max_width, direction)
   max_width = math.max(0, max_width or 0)
   if self:measure_line_hint_segments(segments) <= max_width then
     return segments, false
@@ -1424,6 +1447,46 @@ function DocView:truncate_line_hint_segments(segments, max_width)
   local remaining = max_width - ellipsis_width
   local kept = {}
   local kept_width = 0
+  direction = direction or segments.truncate or "left"
+
+  if direction == "right" then
+    for i = 1, #segments do
+      local segment = segments[i]
+      local chars = {}
+      for ch in common.utf8_chars(segment.text) do chars[#chars + 1] = ch end
+
+      local prefix = ""
+      local prefix_width = 0
+      for j = 1, #chars do
+        local candidate = prefix .. chars[j]
+        local candidate_width = segment.font:get_width(candidate)
+        if kept_width + candidate_width <= remaining then
+          prefix = candidate
+          prefix_width = candidate_width
+        else
+          break
+        end
+      end
+
+      if prefix ~= "" then
+        kept[#kept + 1] = copy_line_hint_segment(segment, prefix)
+        kept_width = kept_width + prefix_width
+      end
+      if prefix ~= segment.text then break end
+    end
+
+    if #kept == 0 then
+      return copy_line_hint_options({{ text = LINE_HINT_ELLIPSIS, font = ellipsis_font, color = default_color }}, segments), true
+    end
+
+    kept[#kept + 1] = {
+      text = LINE_HINT_ELLIPSIS,
+      font = ellipsis_font,
+      color = kept[#kept].color or default_color,
+    }
+    return copy_line_hint_options(kept, segments), true
+  end
+
   for i = #segments, 1, -1 do
     local segment = segments[i]
     local chars = {}
@@ -1450,7 +1513,7 @@ function DocView:truncate_line_hint_segments(segments, max_width)
   end
 
   if #kept == 0 then
-    return {{ text = LINE_HINT_ELLIPSIS, font = ellipsis_font, color = default_color }}, true
+    return copy_line_hint_options({{ text = LINE_HINT_ELLIPSIS, font = ellipsis_font, color = default_color }}, segments), true
   end
 
   table.insert(kept, 1, {
@@ -1458,7 +1521,7 @@ function DocView:truncate_line_hint_segments(segments, max_width)
     font = ellipsis_font,
     color = kept[1].color or default_color,
   })
-  return kept, true
+  return copy_line_hint_options(kept, segments), true
 end
 
 function DocView:get_line_hint_text_end_x(line, x)
@@ -1466,6 +1529,38 @@ function DocView:get_line_hint_text_end_x(line, x)
   local text_len = #text
   if text:sub(-1) == "\n" then text_len = text_len - 1 end
   return x + self:get_col_x_offset(line, text_len + 1)
+end
+
+function DocView:get_line_hint_visible_text_end_x(x)
+  local minline = self.__line_hint_visible_minline
+  local maxline = self.__line_hint_visible_maxline
+  if not minline or not maxline then
+    minline, maxline = self:get_visible_line_range()
+  end
+
+  local change_id = self.doc.get_change_id and self.doc:get_change_id() or nil
+  local cache = self.__line_hint_visible_text_end_x_cache
+  if cache
+  and cache.x == x
+  and cache.minline == minline
+  and cache.maxline == maxline
+  and cache.change_id == change_id then
+    return cache.text_end_x
+  end
+
+  local text_end_x = x
+  for line = minline, maxline do
+    text_end_x = math.max(text_end_x, self:get_line_hint_text_end_x(line, x))
+  end
+
+  self.__line_hint_visible_text_end_x_cache = {
+    x = x,
+    minline = minline,
+    maxline = maxline,
+    change_id = change_id,
+    text_end_x = text_end_x,
+  }
+  return text_end_x
 end
 
 ---Draw a Line Hint for a line, clipped/truncated so it never covers Document text.
@@ -1485,21 +1580,24 @@ function DocView:draw_line_hint(line, x, y)
   local content_right = self.position.x + self.size.x - (vscroll_w or 0) - style.padding.x
   if content_right <= content_left then return end
 
-  local gap = self:get_line_hint_gap(line)
-  local text_end_x = self:get_line_hint_text_end_x(line, x)
+  local gap = self:get_line_hint_gap(line, segments)
+  local placement = segments.placement
+  local text_end_x = placement == "after_visible_document_text"
+    and self:get_line_hint_visible_text_end_x(x)
+    or self:get_line_hint_text_end_x(line, x)
   local hint_left_limit = math.max(content_left, text_end_x) + gap
   local available = content_right - hint_left_limit
   if available <= 0 then return end
 
   local width = self:measure_line_hint_segments(segments)
   if width > available then
-    segments = self:truncate_line_hint_segments(segments, available)
+    segments = self:truncate_line_hint_segments(segments, available, segments.truncate)
     if not segments then return end
     width = self:measure_line_hint_segments(segments)
     if width > available + 0.5 then return end
   end
 
-  local draw_x = content_right - width
+  local draw_x = placement == "after_visible_document_text" and hint_left_limit or content_right - width
   local tx = draw_x
   local ty = y + self:get_line_text_y_offset()
   local lh = self:get_line_height()
@@ -1995,6 +2093,8 @@ function DocView:draw()
   local draw_start = stats and system.get_time()
   if stats then stats.visible_lines = stats.visible_lines + math.max(0, maxline - minline + 1) end
   self:prepare_line_body_draw_cache(minline, maxline)
+  self.__line_hint_visible_minline = minline
+  self.__line_hint_visible_maxline = maxline
   self:draw_current_line_highlights(minline, maxline)
   self.__current_line_highlights_drawn_before_content = true
 
@@ -2019,6 +2119,8 @@ function DocView:draw()
   self:draw_overlay()
   core.pop_clip_rect()
   self.__current_line_highlights_drawn_before_content = nil
+  self.__line_hint_visible_minline = nil
+  self.__line_hint_visible_maxline = nil
   self.__line_body_highlight_cache = nil
   self.__line_body_selection_cache = nil
   self.__line_gutter_selection_cache = nil

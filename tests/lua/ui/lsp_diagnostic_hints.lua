@@ -244,6 +244,104 @@ test.describe("LSP diagnostic Line Hints", function()
     test.equal(view:get_line_hint(1).color, replacement)
   end)
 
+  test.it("draws diagnostic hints left-aligned after the rightmost visible Document text", function(context)
+    local doc, client, document_uri = setup(context)
+    set_text(doc, "short\nrightmost text\nerr")
+    publish(client, {
+      textDocument = { uri = document_uri, version = 0 },
+      diagnostics = {
+        { range = lsp_range(0, 0, 0, 5), severity = 1, message = "aligned error" },
+      },
+    })
+
+    local view = DocView(doc)
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 800, 240
+
+    local original_draw_text = renderer.draw_text
+    local original_push_clip_rect = core.push_clip_rect
+    local original_pop_clip_rect = core.pop_clip_rect
+    local draws = {}
+    local clips = {}
+
+    renderer.draw_text = function(font, text, x, y, color)
+      draws[#draws + 1] = { font = font, text = text, x = x, y = y, color = color }
+      return x + font:get_width(text)
+    end
+    core.push_clip_rect = function(x, y, w, h)
+      clips[#clips + 1] = { x = x, y = y, w = w, h = h }
+    end
+    core.pop_clip_rect = function() end
+
+    local ok, err = pcall(function()
+      local x, y = view:get_line_screen_position(1)
+      view:draw_line_hint(1, x, y)
+      local expected_x = view:get_line_hint_text_end_x(2, x) + view:get_font():get_width("    ")
+      test.equal(#draws, 1)
+      test.equal(draws[1].text, "aligned error")
+      test.equal(draws[1].x, expected_x)
+      test.equal(clips[1].x, expected_x)
+    end)
+
+    renderer.draw_text = original_draw_text
+    core.push_clip_rect = original_push_clip_rect
+    core.pop_clip_rect = original_pop_clip_rect
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("truncates diagnostic hints on the right when they do not fit", function(context)
+    local doc, client, document_uri = setup(context)
+    set_text(doc, "err\nrightmost text")
+    publish(client, {
+      textDocument = { uri = document_uri, version = 0 },
+      diagnostics = {
+        {
+          range = lsp_range(0, 0, 0, 3),
+          severity = 1,
+          message = "prefix-abcdefghijklmnopqrstuvwxyz-SUFFIX",
+        },
+      },
+    })
+
+    local view = DocView(doc)
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 800, 240
+
+    local original_draw_text = renderer.draw_text
+    local original_push_clip_rect = core.push_clip_rect
+    local original_pop_clip_rect = core.pop_clip_rect
+    local draws = {}
+
+    renderer.draw_text = function(font, text, x, y, color)
+      draws[#draws + 1] = { font = font, text = text, x = x, y = y, color = color }
+      return x + font:get_width(text)
+    end
+    core.push_clip_rect = function() end
+    core.pop_clip_rect = function() end
+
+    local ok, err = pcall(function()
+      local font = view:get_font()
+      local x, y = view:get_line_screen_position(1)
+      local hint_left = view:get_line_hint_text_end_x(2, x) + font:get_width("    ")
+      local _, _, scroll_w = view.v_scrollbar:get_track_rect()
+      local available = font:get_width("prefix-abcdef" .. "…")
+      view.size.x = hint_left - view.position.x + (scroll_w or 0) + style.padding.x + available
+
+      view:draw_line_hint(1, x, y)
+
+      local text = ""
+      for _, draw in ipairs(draws) do text = text .. draw.text end
+      test.ok(text:find("^prefix%-"), text)
+      test.ok(text:find("…$"), text)
+      test.ok(not text:find("SUFFIX", 1, true), text)
+    end)
+
+    renderer.draw_text = original_draw_text
+    core.push_clip_rect = original_push_clip_rect
+    core.pop_clip_rect = original_pop_clip_rect
+    if not ok then error(err, 0) end
+  end)
+
   test.it("draws wrapped line hints on the last wrapped visual row", function(context)
     diagnostic_hints.install()
     require "plugins.linewrapping"
