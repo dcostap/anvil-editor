@@ -301,6 +301,16 @@ Do not use `C:\Program Files` for this dev install. It causes admin/write-permis
 
 A real installer for `C:\Program Files\Anvil` can be created later for deployment.
 
+## Optional reference source caches
+
+Only consult these external reference sources if the user explicitly mentions them or asks for comparisons/inspiration involving them:
+
+- Fred editor dump:
+  - `C:\Projects\my_decomps\fred_src_dump`
+  - source root: `C:\Projects\my_decomps\fred_src_dump\D_\git_projects\fred`
+- IntelliJ IDEA Community cache:
+  - `C:\Users\Darius\AppData\Local\pi-web-smart-fetch\github-cache\JetBrains\intellij-community`
+
 # Domain awareness
 
 During codebase exploration, also look for existing documentation:
