@@ -20,6 +20,9 @@ compile_commands.json
 error.txt
 pragtical*
 Pragtical*
+tools/perf-results/
+tools/baselines/whitespace_perf_*.png
+tools/baselines/whitespace_perf_best.json
 
 !resources/windows/*.diff
 !resources/windows/*.exe.manifest.in
