@@ -1595,8 +1595,13 @@ function DocView:draw_line_text(line, x, y)
   local tx, ty = x, y + self:get_line_text_y_offset()
   local last_token = nil
   local get_line_start = stats and system.get_time()
-  local tokens = self.doc.highlighter:get_render_line(line).tokens
+  local render_line = self.doc.highlighter:get_render_line(line)
+  local tokens = render_line.tokens
   if stats then stats.highlighter_get_line_ms = stats.highlighter_get_line_ms + (system.get_time() - get_line_start) * 1000 end
+  local has_tabs = render_line.text:find("\t", 1, true) ~= nil
+  local syntax = style.syntax
+  local syntax_fonts = style.syntax_fonts
+  local normal_color = syntax.normal
   local tokens_count = #tokens
   if tokens_count > 0 and string.sub(tokens[tokens_count], -1) == "\n" then
     last_token = tokens_count - 1
@@ -1609,7 +1614,11 @@ function DocView:draw_line_text(line, x, y)
     if not pending_font then return false end
     local draw_text_start = stats and system.get_time()
     local text = #pending_chunks == 1 and pending_chunks[1] or table.concat(pending_chunks)
-    tx = renderer.draw_text(pending_font, text, tx, ty, pending_color, {tab_offset = tx - start_tx})
+    if has_tabs then
+      tx = renderer.draw_text(pending_font, text, tx, ty, pending_color, {tab_offset = tx - start_tx})
+    else
+      tx = renderer.draw_text(pending_font, text, tx, ty, pending_color)
+    end
     if stats then
       stats.draw_text_calls = stats.draw_text_calls + 1
       stats.renderer_draw_text_ms = stats.renderer_draw_text_ms + (system.get_time() - draw_text_start) * 1000
@@ -1620,8 +1629,8 @@ function DocView:draw_line_text(line, x, y)
   local token_loop_start = stats and system.get_time()
   for tidx, type, text in tokenizer.each_token(tokens) do
     if stats then stats.tokens = stats.tokens + 1 end
-    local color = style.syntax[type] or style.syntax["normal"]
-    local font = style.syntax_fonts[type] or default_font
+    local color = syntax[type] or normal_color
+    local font = syntax_fonts[type] or default_font
     if font ~= default_font then font:set_tab_size(indent_size) end
     -- do not render newline, fixes issue #1164
     if tidx == last_token then text = text:sub(1, -2) end
