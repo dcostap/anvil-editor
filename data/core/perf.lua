@@ -98,6 +98,9 @@ local function write_frame_header(file)
     "draw_calls", "quad_instances", "texture_uploads", "texture_upload_bytes",
     "docview_draw_ms", "docview_prepare_ms", "docview_prepare_highlight_ms", "docview_prepare_caret_ms", "docview_prepare_selection_ms", "docview_prepare_merge_ms", "docview_gutter_ms", "docview_body_ms", "docview_text_ms", "docview_overlay_ms",
     "docview_highlighter_get_line_ms", "docview_token_loop_ms", "docview_renderer_draw_text_ms",
+    "lsp_render_tokens_calls", "lsp_render_tokens_ms", "lsp_render_tokens_matching_ms", "lsp_render_tokens_capability_ms", "lsp_render_tokens_latest_ms",
+    "lsp_render_tokens_cache_hits", "lsp_render_tokens_cache_misses", "lsp_render_tokens_line_offsets_ms", "lsp_render_tokens_line_offsets_lines",
+    "lsp_render_tokens_scan_ms", "lsp_render_tokens_scan_tokens", "lsp_render_tokens_spans", "lsp_render_tokens_base_ms", "lsp_render_tokens_overlay_ms", "lsp_render_tokens_schedule_calls",
     "docview_visible_lines", "docview_text_lines", "docview_tokens", "docview_draw_text_calls",
     "docview_prepare_highlight_iters", "docview_prepare_caret_scan_count", "docview_visible_carets", "docview_prepare_selection_iters", "docview_visible_selection_ranges", "docview_selection_cache_lines", "docview_selection_cache_ranges", "docview_selection_cache_merged_ranges",
     "doc_get_selections_calls", "doc_get_selections_iters", "doc_set_selections_calls", "doc_set_selections_ms", "doc_add_selection_calls", "doc_add_selection_ms", "doc_merge_cursors_calls", "doc_merge_cursors_ms", "doc_sanitize_selection_calls", "doc_sanitize_selection_ms", "doc_apply_edits_calls", "doc_apply_edits_ms",
@@ -159,6 +162,12 @@ function perf.on_frame(snapshot)
         docview_text_ms = snapshot.docview_text_ms or 0,
         docview_overlay_ms = snapshot.docview_overlay_ms or 0,
         docview_draw_text_calls = snapshot.docview_draw_text_calls or 0,
+        lsp_render_tokens_calls = snapshot.lsp_render_tokens_calls or 0,
+        lsp_render_tokens_ms = snapshot.lsp_render_tokens_ms or 0,
+        lsp_render_tokens_line_offsets_ms = snapshot.lsp_render_tokens_line_offsets_ms or 0,
+        lsp_render_tokens_scan_ms = snapshot.lsp_render_tokens_scan_ms or 0,
+        lsp_render_tokens_cache_hits = snapshot.lsp_render_tokens_cache_hits or 0,
+        lsp_render_tokens_cache_misses = snapshot.lsp_render_tokens_cache_misses or 0,
         doc_get_selections_calls = snapshot.doc_get_selections_calls or 0,
         doc_get_selections_iters = snapshot.doc_get_selections_iters or 0,
         doc_set_selections_calls = snapshot.doc_set_selections_calls or 0,
@@ -238,6 +247,21 @@ function perf.on_frame(snapshot)
     string.format("%.3f", snapshot.docview_highlighter_get_line_ms or 0),
     string.format("%.3f", snapshot.docview_token_loop_ms or 0),
     string.format("%.3f", snapshot.docview_renderer_draw_text_ms or 0),
+    tostring(snapshot_value(snapshot, "lsp_render_tokens_calls")),
+    string.format("%.3f", snapshot.lsp_render_tokens_ms or 0),
+    string.format("%.3f", snapshot.lsp_render_tokens_matching_ms or 0),
+    string.format("%.3f", snapshot.lsp_render_tokens_capability_ms or 0),
+    string.format("%.3f", snapshot.lsp_render_tokens_latest_ms or 0),
+    tostring(snapshot_value(snapshot, "lsp_render_tokens_cache_hits")),
+    tostring(snapshot_value(snapshot, "lsp_render_tokens_cache_misses")),
+    string.format("%.3f", snapshot.lsp_render_tokens_line_offsets_ms or 0),
+    tostring(snapshot_value(snapshot, "lsp_render_tokens_line_offsets_lines")),
+    string.format("%.3f", snapshot.lsp_render_tokens_scan_ms or 0),
+    tostring(snapshot_value(snapshot, "lsp_render_tokens_scan_tokens")),
+    tostring(snapshot_value(snapshot, "lsp_render_tokens_spans")),
+    string.format("%.3f", snapshot.lsp_render_tokens_base_ms or 0),
+    string.format("%.3f", snapshot.lsp_render_tokens_overlay_ms or 0),
+    tostring(snapshot_value(snapshot, "lsp_render_tokens_schedule_calls")),
     tostring(snapshot_value(snapshot, "docview_visible_lines")),
     tostring(snapshot_value(snapshot, "docview_text_lines")),
     tostring(snapshot_value(snapshot, "docview_tokens")),
@@ -344,10 +368,10 @@ local function write_summary(path)
   ))
 
   file:write("Slow redraw frames (top by total_ms; thresholds total>25ms/frame>20ms/present>18ms):\n")
-  file:write("time,total,run_threads,run_threads_runs,run_threads_slowest,run_threads_loc,core,gc,event_count,event,event_types,slowest_event,slowest_event_ms,command_calls,command_total,slowest_command,slowest_command_name,update,pre_draw,frame,draw_emit,renderer_end,present,draw_calls,docview_draw,docview_prepare,docview_prepare_caret,docview_prepare_selection,docview_gutter,docview_body,docview_text,docview_overlay,docview_text_calls,doc_get_selections_calls,doc_get_selections_iters,doc_set_selections_calls,doc_set_selections_ms,statusbar_selection,pending_events,queue_depth\n")
+  file:write("time,total,run_threads,run_threads_runs,run_threads_slowest,run_threads_loc,core,gc,event_count,event,event_types,slowest_event,slowest_event_ms,command_calls,command_total,slowest_command,slowest_command_name,update,pre_draw,frame,draw_emit,renderer_end,present,draw_calls,docview_draw,docview_prepare,docview_prepare_caret,docview_prepare_selection,docview_gutter,docview_body,docview_text,docview_overlay,docview_text_calls,lsp_tokens_ms,lsp_offsets_ms,lsp_scan_ms,lsp_calls,lsp_hits,lsp_misses,doc_get_selections_calls,doc_get_selections_iters,doc_set_selections_calls,doc_set_selections_ms,statusbar_selection,pending_events,queue_depth\n")
   for _, row in ipairs(record.slow_frames or {}) do
     file:write(string.format(
-      "%.6f,%.3f,%.3f,%d,%.3f,%s,%.3f,%.3f,%d,%.3f,%s,%s,%.3f,%d,%.3f,%.3f,%s,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%d,%d,%d,%.3f,%.3f,%d,%d\n",
+      "%.6f,%.3f,%.3f,%d,%.3f,%s,%.3f,%.3f,%d,%.3f,%s,%s,%.3f,%d,%.3f,%.3f,%s,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%.3f,%.3f,%.3f,%d,%d,%d,%d,%d,%d,%.3f,%.3f,%d,%d\n",
       row.time, row.total_ms, row.run_threads_ms, row.run_threads_runs,
       row.run_threads_slowest_ms, csv_escape(row.run_threads_slowest_loc),
       row.core_step_ms, row.gc_ms, row.event_count, row.event_ms,
@@ -357,7 +381,9 @@ local function write_summary(path)
       row.renderer_end_ms, row.present_ms, row.draw_calls, row.docview_draw_ms,
       row.docview_prepare_ms, row.docview_prepare_caret_ms, row.docview_prepare_selection_ms,
       row.docview_gutter_ms, row.docview_body_ms, row.docview_text_ms, row.docview_overlay_ms,
-      row.docview_draw_text_calls, row.doc_get_selections_calls, row.doc_get_selections_iters,
+      row.docview_draw_text_calls, row.lsp_render_tokens_ms, row.lsp_render_tokens_line_offsets_ms,
+      row.lsp_render_tokens_scan_ms, row.lsp_render_tokens_calls, row.lsp_render_tokens_cache_hits,
+      row.lsp_render_tokens_cache_misses, row.doc_get_selections_calls, row.doc_get_selections_iters,
       row.doc_set_selections_calls, row.doc_set_selections_ms,
       row.statusbar_selection_ms, row.pending_events and 1 or 0, row.queue_depth
     ))

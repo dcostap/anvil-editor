@@ -4,6 +4,7 @@ local config = require "core.config"
 local style = require "core.style"
 local keymap = require "core.keymap"
 local translate = require "core.doc.translate"
+local tokenizer = require "core.tokenizer"
 local ime = require "core.ime"
 local View = require "core.view"
 
@@ -1617,7 +1618,7 @@ function DocView:draw_line_text(line, x, y)
     return tx > self.position.x + self.size.x
   end
   local token_loop_start = stats and system.get_time()
-  for tidx, type, text in self.doc.highlighter:each_render_token(line) do
+  for tidx, type, text in tokenizer.each_token(tokens) do
     if stats then stats.tokens = stats.tokens + 1 end
     local color = style.syntax[type] or style.syntax["normal"]
     local font = style.syntax_fonts[type] or default_font

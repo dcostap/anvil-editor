@@ -33,6 +33,28 @@ local WORKSPACE_SYMBOL_CACHE_TTL_SECONDS = 2
 local semantic_cache = setmetatable({}, { __mode = "k" })
 local semantic_inflight = setmetatable({}, { __mode = "k" })
 local semantic_line_cache = setmetatable({}, { __mode = "k" })
+local line_start_cache = setmetatable({}, { __mode = "k" })
+
+local function perf_stats()
+  return core.perf_frame_stats or core.docview_frame_stats
+end
+
+local function perf_count(key, amount)
+  local stats = perf_stats()
+  if not stats then return end
+  amount = amount or 1
+  stats[key] = (stats[key] or 0) + amount
+  local perf = package.loaded["core.perf"]
+  if perf and perf.add_detail then perf.add_detail(key, amount) end
+end
+
+local function perf_time()
+  return perf_stats() and system.get_time() or nil
+end
+
+local function perf_ms(key, start_time)
+  if start_time then perf_count(key, (system.get_time() - start_time) * 1000) end
+end
 
 local SYMBOL_KIND = {
   [1] = "file",
@@ -358,6 +380,7 @@ function provider.clear()
   semantic_cache = setmetatable({}, { __mode = "k" })
   semantic_inflight = setmetatable({}, { __mode = "k" })
   semantic_line_cache = setmetatable({}, { __mode = "k" })
+  line_start_cache = setmetatable({}, { __mode = "k" })
   language_intelligence.register_provider(provider)
 end
 
@@ -423,13 +446,24 @@ function provider.semantic_style(token_type, modifiers)
 end
 
 local function line_start_offsets(doc)
+  local lines = doc.lines or {}
+  local line_count = #lines
+  local change_id = doc_change_id(doc)
+  local cached = change_id ~= nil and line_start_cache[doc] or nil
+  if cached and cached.change_id == change_id and cached.line_count == line_count then
+    return cached.offsets
+  end
+
   local offsets = {}
   local offset = 0
-  for i = 1, #(doc.lines or {}) do
+  for i = 1, line_count do
     offsets[i] = offset
-    offset = offset + #(doc.lines[i] or "")
+    offset = offset + #(lines[i] or "")
   end
-  offsets[#(doc.lines or {}) + 1] = offset
+  offsets[line_count + 1] = offset
+  if change_id ~= nil then
+    line_start_cache[doc] = { change_id = change_id, line_count = line_count, offsets = offsets }
+  end
   return offsets
 end
 
@@ -653,44 +687,76 @@ function provider.schedule_semantic_tokens(client, state, doc)
 end
 
 function provider.render_tokens(doc, line_idx, opts)
+  local total_start = perf_time()
+  local function finish(...)
+    perf_ms("lsp_render_tokens_ms", total_start)
+    return ...
+  end
+
+  perf_count("lsp_render_tokens_calls")
   opts = opts or {}
+  local matching_start = perf_time()
   local matches = matching_clients(doc, "render_tokens")
-  if #matches == 0 then return nil, "unavailable", "unavailable" end
+  perf_ms("lsp_render_tokens_matching_ms", matching_start)
+  if #matches == 0 then return finish(nil, "unavailable", "unavailable") end
   for _, item in ipairs(matches) do
     local client, state = item.client, item.state
+    local capability_start = perf_time()
     local _semantic, legend = semantic_capability(client)
     local legend_key = semantic_legend_key(legend)
+    perf_ms("lsp_render_tokens_capability_ms", capability_start)
+    local latest_start = perf_time()
     local entry = semantic_latest(client, state.uri, legend_key, state.lsp_version)
+    perf_ms("lsp_render_tokens_latest_ms", latest_start)
     local current_change_id = doc_change_id(doc)
     local entry_current = entry
       and entry.doc_change_id == state.last_synced_change_id
       and current_change_id == state.last_synced_change_id
     if entry_current then
       local text = doc:get_utf8_line(line_idx) or ""
-      local starts = line_start_offsets(doc)
-      local line_start = starts[line_idx] or 0
-      local line_end = line_start + #text
       local line_cache = semantic_line_cache_bucket(client, state.uri, legend_key)
       local line_key = table.concat({ tostring(state.lsp_version), tostring(entry.doc_change_id), tostring(line_idx), text }, "\0")
       local cached = line_cache[line_idx]
-      if cached and cached.key == line_key then return cached.tokens, nil, "fresh" end
+      if cached and cached.key == line_key then
+        perf_count("lsp_render_tokens_cache_hits")
+        return finish(cached.tokens, nil, "fresh")
+      end
+      perf_count("lsp_render_tokens_cache_misses")
+      local offsets_start = perf_time()
+      local starts = line_start_offsets(doc)
+      perf_count("lsp_render_tokens_line_offsets_lines", #(doc.lines or {}))
+      perf_ms("lsp_render_tokens_line_offsets_ms", offsets_start)
+      local line_start = starts[line_idx] or 0
+      local line_end = line_start + #text
       local spans = {}
+      local scan_start = perf_time()
+      local scan_tokens = 0
       for _, token in ipairs(entry.tokens or {}) do
+        scan_tokens = scan_tokens + 1
         local s = math.max(line_start, math.min(line_end, token.start_byte or 0))
         local e = math.max(line_start, math.min(line_end, token.end_byte or 0))
         if e > s then
           spans[#spans + 1] = { start_byte = s, end_byte = e, style = token.style }
         end
       end
-      local tokens = provider.overlay_semantic_tokens(text, base_render_tokens(doc, line_idx), line_start, spans)
+      perf_count("lsp_render_tokens_scan_tokens", scan_tokens)
+      perf_count("lsp_render_tokens_spans", #spans)
+      perf_ms("lsp_render_tokens_scan_ms", scan_start)
+      local base_start = perf_time()
+      local base_tokens = base_render_tokens(doc, line_idx)
+      perf_ms("lsp_render_tokens_base_ms", base_start)
+      local overlay_start = perf_time()
+      local tokens = provider.overlay_semantic_tokens(text, base_tokens, line_start, spans)
+      perf_ms("lsp_render_tokens_overlay_ms", overlay_start)
       line_cache[line_idx] = { key = line_key, tokens = tokens }
-      return tokens, nil, "fresh"
+      return finish(tokens, nil, "fresh")
     elseif entry then
       quiet_log("LSP semantic token cache is locally stale for %s", state.uri)
     end
+    perf_count("lsp_render_tokens_schedule_calls")
     provider.schedule_semantic_tokens(client, state, doc)
   end
-  return nil, "pending", "pending"
+  return finish(nil, "pending", "pending")
 end
 
 function provider.invalidate_render_cache(doc, first_line, last_line)
