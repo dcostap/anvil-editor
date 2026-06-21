@@ -51,6 +51,28 @@ local NO_META = false
 local LINE_HINT_COUNT_WORKER_BUDGET = 0.008
 local LINE_HINT_COUNT_CHILD_BUDGET = 0.004
 local GIT_STATUS_REFRESH_INTERVAL = 2
+
+local function perf_stats()
+  return core.docview_frame_stats
+end
+
+local function perf_add(stats, key, amount)
+  if stats then stats[key] = (stats[key] or 0) + (amount or 1) end
+end
+
+local function perf_start(stats)
+  return stats and system.get_time()
+end
+
+local function perf_finish(stats, key, start)
+  if stats and start then stats[key] = (stats[key] or 0) + (system.get_time() - start) * 1000 end
+end
+
+local function perf_call(stats, key)
+  perf_add(stats, key, 1)
+  return perf_start(stats)
+end
+
 local GIT_STATUS_MAX_OUTPUT = 2 * 1024 * 1024
 local MONTH_NAMES = {
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -436,7 +458,21 @@ local function make_meta(item)
   return {
     original_abs = item.abs,
     original_type = item.type,
+    original_size = item.size,
+    original_modified = item.modified,
     expanded = false,
+  }
+end
+
+local function cached_info_from_meta(meta, abs, entry_type)
+  if type(meta) ~= "table" then return nil end
+  if not meta.original_abs or meta.original_type ~= entry_type then return nil end
+  if not common.path_equals(meta.original_abs, abs) then return nil end
+  if meta.original_modified == nil then return nil end
+  return {
+    type = entry_type,
+    size = meta.original_size,
+    modified = meta.original_modified,
   }
 end
 
@@ -764,6 +800,8 @@ local function recover_known_line_meta(view)
           view.line_meta[i] = {
             original_abs = known.abs,
             original_type = known.type,
+            original_size = known.size,
+            original_modified = known.modified,
             expanded = false,
           }
           meta = view.line_meta[i]
@@ -1222,7 +1260,12 @@ function FileTreeView:sync_meta()
 end
 
 function FileTreeView:remember_original(item)
-  self.known_originals[path_key(item.abs)] = { abs = item.abs, type = item.type }
+  self.known_originals[path_key(item.abs)] = {
+    abs = item.abs,
+    type = item.type,
+    size = item.size,
+    modified = item.modified,
+  }
 end
 
 function FileTreeView:capture_expanded_paths()
@@ -1673,15 +1716,23 @@ function FileTreeView:parse_line(line)
 end
 
 function FileTreeView:line_is_dir(line)
+  local stats = perf_stats()
+  local start = perf_call(stats, "filetree_line_is_dir_calls")
   local meta = self.line_meta[line]
   local parsed = self:parse_line(line)
-  return (parsed and parsed.wants_dir) or (type(meta) == "table" and meta.original_type == "dir")
+  local result = (parsed and parsed.wants_dir) or (type(meta) == "table" and meta.original_type == "dir")
+  perf_finish(stats, "filetree_line_is_dir_ms", start)
+  return result
 end
 
 function FileTreeView:get_line_hint_entry(line)
+  local stats = perf_stats()
+  local start = perf_call(stats, "filetree_line_hint_entry_calls")
   local change_id = self.doc:get_change_id()
   if self.__line_hint_entries_change_id ~= change_id
       or self.__line_hint_entries_dir ~= self.current_dir then
+    perf_add(stats, "filetree_line_hint_entry_rebuilds", 1)
+    local build_start = perf_start(stats)
     local entries, errors = self:build_entries(false)
     local by_line = {}
     for _, entry in ipairs(entries) do by_line[entry.line] = entry end
@@ -1689,9 +1740,14 @@ function FileTreeView:get_line_hint_entry(line)
     self.__line_hint_entries_dir = self.current_dir
     self.__line_hint_entries_by_line = by_line
     self.__line_hint_errors = errors
+    perf_finish(stats, "filetree_line_hint_entry_build_ms", build_start)
   end
-  if self.__line_hint_errors and self.__line_hint_errors[line] then return nil end
-  return self.__line_hint_entries_by_line and self.__line_hint_entries_by_line[line]
+  local entry
+  if not (self.__line_hint_errors and self.__line_hint_errors[line]) then
+    entry = self.__line_hint_entries_by_line and self.__line_hint_entries_by_line[line]
+  end
+  perf_finish(stats, "filetree_line_hint_entry_ms", start)
+  return entry
 end
 
 function FileTreeView:line_hint_count_key(abs, show_hidden)
@@ -1789,10 +1845,12 @@ function FileTreeView:get_folder_hint_counts(abs, modified, priority)
 end
 
 function FileTreeView:format_line_hint_for_path(abs, info)
-  if not info or not info.type then return nil end
+  local stats = perf_stats()
+  local start = perf_start(stats)
+  if not info or not info.type then perf_finish(stats, "filetree_line_hint_format_ms", start); return nil end
 
   local modified = format_modified_time(info.modified)
-  if not modified then return nil end
+  if not modified then perf_finish(stats, "filetree_line_hint_format_ms", start); return nil end
 
   if info.type == "file" then
     self.line_hint_cache = self.line_hint_cache or {}
@@ -1801,9 +1859,12 @@ function FileTreeView:format_line_hint_for_path(abs, info)
     if cached and cached.type == info.type
         and cached.size == info.size
         and cached.modified == info.modified then
+      perf_add(stats, "filetree_line_hint_cache_hits", 1)
+      perf_finish(stats, "filetree_line_hint_format_ms", start)
       return cached.text
     end
 
+    perf_add(stats, "filetree_line_hint_cache_misses", 1)
     local text = string.format("%s · %s", format_file_size(info.size), modified)
     self.line_hint_cache[key] = {
       type = info.type,
@@ -1811,33 +1872,48 @@ function FileTreeView:format_line_hint_for_path(abs, info)
       modified = info.modified,
       text = text,
     }
+    perf_finish(stats, "filetree_line_hint_format_ms", start)
     return text
   elseif info.type == "dir" then
     local counts = self:get_folder_hint_counts(abs, info.modified, true)
-    if counts and counts.error then return modified end
+    if counts and counts.error then perf_finish(stats, "filetree_line_hint_format_ms", start); return modified end
     if counts and counts.folders and counts.files then
+      perf_add(stats, "filetree_line_hint_folder_count_hits", 1)
+      perf_finish(stats, "filetree_line_hint_format_ms", start)
       return string.format("%4d   · %s", counts.folders + counts.files, modified)
     end
+    perf_add(stats, "filetree_line_hint_folder_count_pending", 1)
+    perf_finish(stats, "filetree_line_hint_format_ms", start)
     return string.format("%s   · %s", "   …", modified)
   end
+  perf_finish(stats, "filetree_line_hint_format_ms", start)
 end
 
 function FileTreeView:get_line_hint(line)
-  if not filetree_config.show_line_hints then return nil end
-  if self.has_possible_edits and self:get_line_status(line) == "invalid" then return nil end
+  local stats = perf_stats()
+  local start = perf_call(stats, "filetree_line_hint_calls")
+  local function finish(result)
+    perf_finish(stats, "filetree_line_hint_ms", start)
+    return result
+  end
+
+  if not filetree_config.show_line_hints then return finish(nil) end
+  if self.has_possible_edits and self:get_line_status(line) == "invalid" then return finish(nil) end
 
   local entry = self:get_line_hint_entry(line)
-  if not entry then return nil end
+  if not entry then return finish(nil) end
 
-  local info = system.get_file_info(entry.abs)
-  if not info or info.type ~= entry.type then return nil end
+  local info = entry.cached_info
+  if not info or info.type ~= entry.type then return finish(nil) end
 
   local text = self:format_line_hint_for_path(entry.abs, info)
-  if not text then return nil end
+  if not text then return finish(nil) end
 
   local font = self:get_font()
   local dim = style.dim
+  local git_start = perf_start(stats)
   local git = self:get_git_info_for_entry(entry)
+  perf_finish(stats, "filetree_line_hint_git_ms", git_start)
   local segments = {}
   if git and git.stat and ((git.stat.additions or 0) > 0 or (git.stat.deletions or 0) > 0) then
     segments[#segments + 1] = {
@@ -1854,20 +1930,31 @@ function FileTreeView:get_line_hint(line)
     segments[#segments + 1] = { text = "ignored   ", font = font, color = style.filetree_git_ignored }
   end
   if #segments == 0 then
-    return { text = text, font = font, color = dim }
+    perf_add(stats, "filetree_line_hint_segments", 1)
+    return finish({ text = text, font = font, color = dim })
   end
   segments[#segments + 1] = { text = text, font = font, color = dim }
-  return segments
+  perf_add(stats, "filetree_line_hint_segments", #segments)
+  return finish(segments)
 end
 
 function FileTreeView:draw_folder_row_background(line, x, y, width)
+  local stats = perf_stats()
+  local start = perf_call(stats, "filetree_folder_row_background_calls")
   local color = filetree_config.folder_row_background
-  if not color or not self:line_is_dir(line) then return false end
+  if not color or not self:line_is_dir(line) then
+    perf_finish(stats, "filetree_folder_row_background_ms", start)
+    return false
+  end
   renderer.draw_rect(x, y, width, self:get_line_height(), color)
+  perf_add(stats, "filetree_folder_row_background_rects", 1)
+  perf_finish(stats, "filetree_folder_row_background_ms", start)
   return true
 end
 
 function FileTreeView:draw_line_body(line, x, y)
+  local stats = perf_stats()
+  local start = perf_call(stats, "filetree_draw_line_body_calls")
   local gw = self:get_gutter_width()
   self:draw_folder_row_background(
     line,
@@ -1875,24 +1962,35 @@ function FileTreeView:draw_line_body(line, x, y)
     y,
     math.max(0, self.size.x - gw)
   )
-  return FileTreeView.super.draw_line_body(self, line, x, y)
+  local result = FileTreeView.super.draw_line_body(self, line, x, y)
+  perf_finish(stats, "filetree_draw_line_body_ms", start)
+  return result
 end
 
 function FileTreeView:draw_line_text(line, x, y)
+  local stats = perf_stats()
+  local start = perf_call(stats, "filetree_draw_line_text_calls")
+  local git_start = perf_start(stats)
   local git = self:get_git_info_for_line(line)
+  perf_finish(stats, "filetree_draw_line_text_git_ms", git_start)
   local color = git and self:git_text_color(git.kind)
   if not color and self:line_is_dir(line) then
     color = filetree_config.folder_color or style.filetree_folder
   end
   if not color then
-    return FileTreeView.super.draw_line_text(self, line, x, y)
+    perf_add(stats, "filetree_draw_line_text_plain_calls", 1)
+    local result = FileTreeView.super.draw_line_text(self, line, x, y)
+    perf_finish(stats, "filetree_draw_line_text_ms", start)
+    return result
   end
 
+  perf_add(stats, "filetree_draw_line_text_colored_calls", 1)
   local text = line_text(self.doc:get_utf8_line(line))
   renderer.draw_text(
     self:get_font(), text, x, y + self:get_line_text_y_offset(), color,
     { tab_offset = 0 }
   )
+  perf_finish(stats, "filetree_draw_line_text_ms", start)
   return self:get_line_height()
 end
 
@@ -1995,6 +2093,9 @@ function FileTreeView:build_entries(include_hidden)
       meta = meta,
       original_abs = meta and meta.original_abs,
       original_type = meta and meta.original_type,
+      original_size = meta and meta.original_size,
+      original_modified = meta and meta.original_modified,
+      cached_info = cached_info_from_meta(meta, abs, entry_type),
       draft = row.draft,
       draft_index = row.draft_index,
     }
