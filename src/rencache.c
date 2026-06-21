@@ -340,17 +340,7 @@ void rencache_draw_rect_grid(RenCache *ren_cache, float x, float y, float step_x
   }
 }
 
-double rencache_draw_text(RenCache *ren_cache, RenFont **fonts, const char *text, size_t len, double x, double y, RenColor color, RenTab tab)
-{
-  uint64_t draw_text_start = ren_cache && ren_cache->window ? SDL_GetPerformanceCounter() : 0;
-  int x_offset;
-  uint64_t width_start = draw_text_start ? SDL_GetPerformanceCounter() : 0;
-  double width = ren_font_group_get_width(fonts, text, len, tab, &x_offset);
-  if (width_start) {
-    uint64_t width_end = SDL_GetPerformanceCounter();
-    g_rencache_frame_stats.draw_text_width_ms += rencache_perf_ms(width_start, width_end);
-  }
-  RenRect rect = { x + x_offset, y, (int)(width - x_offset), ren_font_group_get_height(fonts) };
+static double rencache_push_text_command(RenCache *ren_cache, RenFont **fonts, const char *text, size_t len, double x, RenRect rect, RenColor color, RenTab tab, double end_x, uint64_t draw_text_start) {
   if (rects_overlap(ren_cache->last_clip_rect, rect)) {
     int sz = len + 1;
     DrawTextCommand *cmd = push_command(ren_cache, DRAW_TEXT, sizeof(DrawTextCommand) + sz);
@@ -370,7 +360,28 @@ double rencache_draw_text(RenCache *ren_cache, RenFont **fonts, const char *text
     uint64_t draw_text_end = SDL_GetPerformanceCounter();
     g_rencache_frame_stats.draw_text_ms += rencache_perf_ms(draw_text_start, draw_text_end);
   }
-  return x + width;
+  return end_x;
+}
+
+double rencache_draw_text(RenCache *ren_cache, RenFont **fonts, const char *text, size_t len, double x, double y, RenColor color, RenTab tab)
+{
+  uint64_t draw_text_start = ren_cache && ren_cache->window ? SDL_GetPerformanceCounter() : 0;
+  int x_offset;
+  uint64_t width_start = draw_text_start ? SDL_GetPerformanceCounter() : 0;
+  double width = ren_font_group_get_width(fonts, text, len, tab, &x_offset);
+  if (width_start) {
+    uint64_t width_end = SDL_GetPerformanceCounter();
+    g_rencache_frame_stats.draw_text_width_ms += rencache_perf_ms(width_start, width_end);
+  }
+  RenRect rect = { x + x_offset, y, (int)(width - x_offset), ren_font_group_get_height(fonts) };
+  return rencache_push_text_command(ren_cache, fonts, text, len, x, rect, color, tab, x + width, draw_text_start);
+}
+
+double rencache_draw_text_known_bounds(RenCache *ren_cache, RenFont **fonts, const char *text, size_t len, double x, double y, RenRect rect, RenColor color, RenTab tab)
+{
+  uint64_t draw_text_start = ren_cache && ren_cache->window ? SDL_GetPerformanceCounter() : 0;
+  (void)y;
+  return rencache_push_text_command(ren_cache, fonts, text, len, x, rect, color, tab, x + rect.width, draw_text_start);
 }
 
 RenRect rencache_draw_poly(RenCache *ren_cache, RenPoint *points, int npoints, RenColor color) {

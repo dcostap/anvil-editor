@@ -489,6 +489,45 @@ static int f_draw_text(lua_State *L) {
   return 1;
 }
 
+static int f_draw_text_known_bounds(lua_State *L) {
+  RenFont* fonts[FONT_FALLBACK_MAX];
+  font_retrieve(L, fonts, 1);
+
+#ifndef LUA_JITLIBNAME
+  lua_rawgeti(L, LUA_REGISTRYINDEX, RENDERER_FONT_REF);
+  if (lua_istable(L, -1))
+  {
+    lua_pushvalue(L, 1);
+    lua_pushboolean(L, 1);
+    lua_rawset(L, -3);
+  } else {
+    fprintf(stderr, "warning: failed to reference count fonts\n");
+  }
+  lua_pop(L, 1);
+#endif
+
+  size_t len;
+  const char *text = luaL_checklstring(L, 2, &len);
+  double x = luaL_checknumber(L, 3);
+  double y = luaL_checknumber(L, 4);
+  RenRect rect = {
+    luaL_checkinteger(L, 5),
+    luaL_checkinteger(L, 6),
+    luaL_checkinteger(L, 7),
+    luaL_checkinteger(L, 8)
+  };
+  RenColor color = luaXL_checkcolor(L, 9, 255);
+  RenTab tab = luaXL_checktab(L, 10);
+  RenWindow *window = ren_get_target_window();
+  if (!window) {
+    return luaL_error(L, "no target window found");
+  } else {
+    x = rencache_draw_text_known_bounds(&window->cache, fonts, text, len, x, y, rect, color, tab);
+  }
+  lua_pushnumber(L, x);
+  return 1;
+}
+
 static int f_draw_canvas(lua_State *L) {
   RenCache* canvas = luaL_checkudata(L, 1, API_TYPE_CANVAS);
   lua_Number x = luaL_checknumber(L, 2);
@@ -603,6 +642,7 @@ static const luaL_Reg lib[] = {
   { "set_clip_rect",      f_set_clip_rect      },
   { "draw_rect",          f_draw_rect          },
   { "draw_text",          f_draw_text          },
+  { "draw_text_known_bounds", f_draw_text_known_bounds },
   { "draw_poly",          f_draw_poly          },
   { "draw_canvas",        f_draw_canvas        },
   { "to_canvas",          f_to_canvas          },
