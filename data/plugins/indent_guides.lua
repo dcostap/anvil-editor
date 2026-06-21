@@ -1,4 +1,5 @@
 -- mod-version:3
+local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
 local style = require "core.style"
@@ -109,6 +110,16 @@ local function is_closing_block_line(text)
   return text and text:match("^%s*[%]%)}][,;]?%s*$") ~= nil
 end
 
+local function current_clip_x_range(dv)
+  local clip = core.clip_rect_stack and core.clip_rect_stack[#core.clip_rect_stack]
+  if clip then
+    return clip[1], clip[1] + clip[3]
+  end
+
+  local gw = dv:get_gutter_width()
+  return dv.position.x + gw, dv.position.x + dv.size.x
+end
+
 local function active_indent_depth(dv, indent_size)
   local line = dv.doc:get_selection()
   line = common.clamp(line or 1, 1, #dv.doc.lines)
@@ -157,10 +168,31 @@ function DocView:draw_line_body(line, x, y)
 
     -- Draw after the normal line body so blank-line backgrounds/highlights do
     -- not erase guide segments. Guides sit in indentation whitespace, so text
-    -- overlap is normally not an issue.
-    for depth = 1, indent_levels - 1 do
-      local gx = x + depth * indent_px
-      renderer.draw_rect(gx, y, lw, lh, depth == active_depth and active_color or normal_color)
+    -- overlap is normally not an issue. Pre-clip horizontally so huge indents
+    -- don't spend Lua/FFI calls on guides the renderer would discard anyway.
+    if indent_px > 0 then
+      local clip_left, clip_right = current_clip_x_range(self)
+      local first_depth = math.max(1, math.floor((clip_left - x - lw) / indent_px) + 1)
+      local last_depth = math.min(indent_levels - 1, math.ceil((clip_right - x) / indent_px))
+      local function draw_grid(from_depth, to_depth, color)
+        local count = to_depth - from_depth + 1
+        if count <= 0 then return end
+        if renderer.draw_rect_grid then
+          renderer.draw_rect_grid(x + from_depth * indent_px, y, indent_px, lw, lh, count, color)
+        else
+          for depth = from_depth, to_depth do
+            renderer.draw_rect(x + depth * indent_px, y, lw, lh, color)
+          end
+        end
+      end
+
+      if active_depth and active_depth >= first_depth and active_depth <= last_depth then
+        draw_grid(first_depth, active_depth - 1, normal_color)
+        renderer.draw_rect(x + active_depth * indent_px, y, lw, lh, active_color)
+        draw_grid(active_depth + 1, last_depth, normal_color)
+      else
+        draw_grid(first_depth, last_depth, normal_color)
+      end
     end
   end
 

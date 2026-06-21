@@ -155,6 +155,7 @@ local function get_line_runs(self, idx)
 end
 
 local marker_text_cache = {}
+local tab_marker_text_cache = {}
 local marker_font_cache = setmetatable({}, { __mode = "k" })
 local marker_width_cache = setmetatable({}, { __mode = "k" })
 local syntax_fonts_signature_state = { by_name = {}, signature = nil, count = 0 }
@@ -175,6 +176,26 @@ local function repeated_marker(marker, count)
   end
 
   return string.rep(marker, count)
+end
+
+local function repeated_tab_marker(marker, count)
+  if count <= 1 then return marker end
+
+  local by_marker = tab_marker_text_cache[marker]
+  if not by_marker then
+    by_marker = {}
+    tab_marker_text_cache[marker] = by_marker
+  end
+
+  if count <= 512 then
+    local cached = by_marker[count]
+    if cached then return cached end
+    cached = marker .. string.rep("\t" .. marker, count - 1)
+    by_marker[count] = cached
+    return cached
+  end
+
+  return marker .. string.rep("\t" .. marker, count - 1)
 end
 
 local function marker_font(font)
@@ -381,6 +402,46 @@ local function draw_space_rects(self, idx, x, font, ty, start_col, end_col, colo
   end
 end
 
+local function draw_tab_markers(self, idx, x, font, ty, substitution, start_col, end_col, color, x_cache)
+  local marker = substitution.sub or ""
+  if marker == "" then return end
+
+  local clip_left, clip_right = current_clip_x_range(self)
+  local marker_width = font:get_width(marker)
+  local _, indent_size = self.doc:get_indent_info()
+  indent_size = indent_size or 2
+  if font.set_tab_size then font:set_tab_size(indent_size) end
+  local tab_width = font:get_width(string.rep(" ", indent_size))
+  local batch_tabs = tab_width > 0 and marker_width < tab_width
+  local first_col, last_col, first_x, first_offset
+
+  for i = start_col, end_col - 1 do
+    local offset = cached_col_x_offset(self, idx, x_cache, i)
+    local marker_x = offset + x
+    if marker_x >= clip_right then break end
+    if marker_x + marker_width > clip_left then
+      if not first_col then
+        first_col, first_x, first_offset = i, marker_x, offset
+      end
+      last_col = i
+      if not batch_tabs then
+        renderer.draw_text(font, marker, marker_x, ty, color)
+      end
+    end
+  end
+
+  if batch_tabs and first_col then
+    renderer.draw_text(
+      font,
+      repeated_tab_marker(marker, last_col - first_col + 1),
+      first_x,
+      ty,
+      color,
+      { tab_offset = first_offset }
+    )
+  end
+end
+
 local function draw_whitespace_run(self, idx, x, y, font, ty, substitution, start_col, end_col, color, x_cache)
   if start_col >= end_col then return end
 
@@ -408,10 +469,11 @@ local function draw_whitespace_run(self, idx, x, y, font, ty, substitution, star
     return
   end
 
-  -- Tabs still need per-column positioning because tab stops are contextual.
-  for i = start_col, end_col - 1 do
-    renderer.draw_text(font, substitution.sub, cached_col_x_offset(self, idx, x_cache, i) + x, ty, color)
-  end
+  -- Tabs still need tab-stop-aware positioning, but clip and batch them in
+  -- Lua. Rencache clips too, but only after a Lua/FFI call and text-width
+  -- measurement for every marker; long tab-heavy lines can otherwise spend
+  -- most of a redraw submitting thousands of arrows.
+  draw_tab_markers(self, idx, x, font, ty, substitution, start_col, end_col, color, x_cache)
 end
 
 local draw_line_text = DocView.draw_line_text

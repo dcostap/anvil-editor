@@ -57,6 +57,31 @@ test.describe("draw-whitespace DocView drawing", function()
     doc:on_close()
   end)
 
+  test.it("clips tab marker draw calls before handing them to the renderer", function()
+    local tab_count = 1000
+    local doc, view = new_view(string.rep("\t", tab_count))
+    view.size.x = 80
+    view.get_visible_cols_range = function()
+      return 1, tab_count
+    end
+
+    local marker_calls = 0
+    local old_draw_text = renderer.draw_text
+    renderer.draw_text = function(_, text, x)
+      if tostring(text):find("→", 1, true) then marker_calls = marker_calls + 1 end
+      return x + #tostring(text)
+    end
+    local ok, err = pcall(function()
+      local x, y = view:get_line_screen_position(1)
+      view:draw_line_text(1, x, y)
+    end)
+    renderer.draw_text = old_draw_text
+    if not ok then error(err) end
+
+    test.ok(marker_calls <= 2, "expected visible tab markers to be batched before renderer.draw_text")
+    doc:on_close()
+  end)
+
   test.it("does not build x-cache when whitespace runs are outside the visible columns", function()
     local doc, view = new_view("abc   def")
     view.get_visible_cols_range = function()
