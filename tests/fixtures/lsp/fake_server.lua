@@ -89,13 +89,17 @@ local function serve_lifecycle(position_encoding, opts)
     and completion.completionItem.labelDetailsSupport == true
     and next(completion.completionItem, "labelDetailsSupport") == nil
     and next(completion, "completionItem") == nil
-  local bad_capability = workspace.configuration
-    or workspace.applyEdit
-    or window.workDoneProgress
-    or (text_document.semanticTokens ~= nil)
-    or (completion ~= nil and not allowed_completion)
-    or (text_document.diagnostic ~= nil)
-  write_stderr(bad_capability and "truthful-capabilities=bad\n" or "truthful-capabilities=ok\n")
+  local bad_capabilities = {}
+  if workspace.configuration then bad_capabilities[#bad_capabilities + 1] = "workspace.configuration" end
+  if workspace.applyEdit then bad_capabilities[#bad_capabilities + 1] = "workspace.applyEdit" end
+  if text_document.semanticTokens ~= nil then bad_capabilities[#bad_capabilities + 1] = "textDocument.semanticTokens" end
+  if completion ~= nil and not allowed_completion then bad_capabilities[#bad_capabilities + 1] = "textDocument.completion" end
+  if text_document.diagnostic ~= nil then bad_capabilities[#bad_capabilities + 1] = "textDocument.diagnostic" end
+  if #bad_capabilities > 0 then
+    write_stderr("truthful-capabilities=bad " .. table.concat(bad_capabilities, ",") .. "\n")
+  else
+    write_stderr("truthful-capabilities=ok\n")
+  end
   if opts.delay_initialize then sleep(opts.delay_initialize) end
   send(jsonrpc.response(initialize.id, initialize_result(position_encoding)))
   assert(read_until(function(message)
