@@ -95,7 +95,12 @@ end
 
 local function open_target_file()
   if probe.file == "" then return nil end
-  local doc = core.open_doc(probe.file)
+  local ok, doc = pcall(core.open_doc, probe.file)
+  if not ok then
+    core.log_quiet("Whitespace perf probe: refusing target file %q: %s", probe.file, tostring(doc))
+    probe.file = ""
+    return nil
+  end
   if not doc then return nil end
   return activate_view(core.root_panel:open_doc(doc))
 end

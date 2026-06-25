@@ -1401,15 +1401,27 @@ local function close_doc_view(doc)
   end)
 end
 
+local function filename_has_control_chars(filename)
+  return type(filename) == "string" and filename:find("[%z\1-\31]") ~= nil
+end
+
 function core.open_doc(filename)
   local new_file = true
   local abs_filename
   local close_docview = false
   if filename then
+    if filename_has_control_chars(filename) then
+      core.log_quiet("Refusing to open filename with control characters: %q", filename)
+      error(string.format("invalid filename: %q", filename))
+    end
     -- normalize filename and set absolute filename then
     -- try to find existing doc for filename
     filename = core.root_project():normalize_path(filename)
     abs_filename = core.root_project():absolute_path(filename)
+    if filename_has_control_chars(filename) or filename_has_control_chars(abs_filename) then
+      core.log_quiet("Refusing to open normalized filename with control characters: %q", abs_filename or filename)
+      error(string.format("invalid filename: %q", abs_filename or filename))
+    end
     local file_info = system.get_file_info(abs_filename)
     new_file = not file_info
     if file_info and file_info.size > config.file_size_limit * 1e6 then
