@@ -7,6 +7,8 @@ test.describe("LSP diagnostics command registration", function()
   test.test("diagnostics commands are available after default command startup load", function()
     local previous_active_view = core.active_view
     local doc = Doc()
+    doc:insert(1, 1, "symbol")
+    doc:set_selection(1, 1)
     local view = DocView(doc)
     core.active_view = view
 

@@ -51,7 +51,7 @@ local function symbol_text_at_doc_selection(doc)
       break
     end
   end
-  return best or "symbol"
+  return best
 end
 
 local function normalize_path(path)
@@ -211,6 +211,7 @@ function language.goto_declaration(view)
   local doc = view and view.doc
   if not doc then return false, "no active document" end
   local symbol = symbol_text_at_doc_selection(doc)
+  if not symbol then return false, "no symbol at caret" end
   local line, col = doc:get_selection()
   request_until_ready(function()
     return intelligence.declarations(doc, line, col)
@@ -250,6 +251,7 @@ function language.show_references(view)
   local doc = view and view.doc
   if not doc then return false, "no active document" end
   local symbol = symbol_text_at_doc_selection(doc)
+  if not symbol then return false, "no symbol at caret" end
   local picker = show_locations_picker("References: " .. symbol, "Loading references…", {})
   local line, col = doc:get_selection()
   request_until_ready(function()
@@ -288,7 +290,13 @@ function language.show_references(view)
   return true
 end
 
-command.add(doc_view_predicate, {
+local function symbol_doc_view_predicate(value)
+  local ok, view = doc_view_predicate(value)
+  if not ok or view.command_output_view then return false end
+  return symbol_text_at_doc_selection(view.doc) ~= nil, view
+end
+
+command.add(symbol_doc_view_predicate, {
   ["language:go-to-declaration"] = function(view)
     return language.goto_declaration(view)
   end,

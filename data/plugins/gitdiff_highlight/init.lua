@@ -7,7 +7,7 @@ local DocView = require "core.docview"
 local Doc = require "core.doc"
 local command = require "core.command"
 local style = require "core.style"
-local navigation_feedback = require "core.navigation_feedback"
+local file_context = require "core.file_context"
 local ranges = require "plugins.gitdiff_highlight.ranges"
 
 local unpack = table.unpack or unpack
@@ -565,74 +565,54 @@ core.add_thread(function()
 	end
 end)
 
-local function range_for_line_or_next(state, line)
-	for _, range in ipairs(state.ranges or {}) do
-		local start_line = math.max(1, range.current_start)
-		local end_line = math.max(start_line, range.current_end - 1)
-		if range.type == "deletion" then end_line = start_line end
-		if start_line > line then return range end
-	end
+local function gitdiff_unavailable_message(state)
+	if state.loading then return "Git changes are still loading" end
+	if state.too_large then return "Git changes unavailable: diff too large" end
+	if not state.is_in_repo then return "Git changes unavailable" end
 end
 
-local function range_for_line_or_prev(state, line)
-	local prev
-	for _, range in ipairs(state.ranges or {}) do
-		local start_line = math.max(1, range.current_start)
-		if start_line >= line then break end
-		prev = range
-	end
-	return prev
-end
-
-local function show_unavailable_gitdiff_feedback(state)
-	if state.loading then
-		navigation_feedback.warning("Git changes are still loading")
-		return true
-	end
-	if state.too_large then
-		navigation_feedback.warning("Git changes unavailable: diff too large")
-		return true
-	end
-	if not state.is_in_repo then
-		navigation_feedback.warning("Git changes unavailable")
-		return true
-	end
-	if not state.ranges or #state.ranges == 0 then
-		navigation_feedback.none("Git changes")
-		return true
-	end
-	return false
-end
-
-local function jump_to_next_change()
-	local doc = core.active_view.doc
-	local line, col = doc:get_selection()
+local function gitdiff_points_for_view(view)
+	if not file_context.is_editor_view(view) or not view.doc then return nil, "no-provider" end
+	local doc = view.doc
 	local state = get_state(doc)
-	if show_unavailable_gitdiff_feedback(state) then return end
-	local range = range_for_line_or_next(state, line)
-	if range then
-		doc:set_selection(math.min(#doc.lines, math.max(1, range.current_start)), col)
-	else
-		navigation_feedback.no_more(1, "Git change")
+	local unavailable = gitdiff_unavailable_message(state)
+	if unavailable then return nil, unavailable end
+	local points = {}
+	for _, range in ipairs(state.ranges or {}) do
+		local line = math.min(#doc.lines, math.max(1, range.current_start or 1))
+		points[#points + 1] = {
+			line = line,
+			col = 1,
+			preserve_col = true,
+			line_only_navigation = true,
+			kind = "git-change",
+			label = range.type,
+			range = range,
+		}
 	end
+	return points
 end
 
-local function jump_to_previous_change()
-	local doc = core.active_view.doc
-	local line, col = doc:get_selection()
-	local state = get_state(doc)
-	if show_unavailable_gitdiff_feedback(state) then return end
-	local range = range_for_line_or_prev(state, line)
-	if range then
-		doc:set_selection(math.min(#doc.lines, math.max(1, range.current_start)), col)
-	else
-		navigation_feedback.no_more(-1, "Git change")
-	end
+function DocView:get_points_of_interest(opts)
+	return gitdiff_points_for_view(self, opts)
 end
+
+local function active_editor_view()
+	local view = core.active_view
+	return file_context.is_editor_view(view), view
+end
+
+local function jump_to_gitdiff_change(view, direction)
+	local poi = require("core.poi")
+	return poi.navigate(view, direction)
+end
+
+command.add(active_editor_view, {
+	["gitdiff:previous-change"] = function(view) jump_to_gitdiff_change(view, -1) end,
+	["gitdiff:next-change"] = function(view) jump_to_gitdiff_change(view, 1) end,
+})
 
 command.add("core.docview", {
-	["gitdiff:previous-change"] = jump_to_previous_change,
-	["gitdiff:next-change"] = jump_to_next_change,
 	["gitdiff:refresh"] = function()
 		local view = core.active_view
 		if view and view.doc then schedule_base_reload(view.doc, "manual-refresh") end
@@ -644,5 +624,9 @@ command.add("core.docview", {
 		write_debug_dump(doc)
 	end,
 })
+
+function gitdiff_highlight._set_state_for_tests(doc, state)
+	states[doc] = state
+end
 
 return gitdiff_highlight

@@ -48,6 +48,201 @@ local function root_project_path()
   return project and project.path or system.getcwd()
 end
 
+local function is_uri_like_path(path)
+  path = tostring(path or "")
+  if path:match("^%a[%w+.-]*://") then return true end
+  if path:match("^%a[%w+.-]*:") and not path:match("^%a:[/\\]") then return true end
+  return false
+end
+
+local function clean_candidate_path(path)
+  path = tostring(path or ""):match("^%s*(.-)%s*$") or ""
+  path = path:gsub("^[\"']", ""):gsub("[\"']$", "")
+  path = path:gsub("^[%-%>:%s]+", "")
+  path = path:gsub("[%s,;]+$", "")
+  while #path > 1 and path:match("[%.%)]$") do
+    path = path:sub(1, -2)
+  end
+  return path
+end
+
+local function existing_file(path)
+  local info = path and system.get_file_info(path)
+  return info and info.type ~= "dir"
+end
+
+local function resolve_output_path(path, root)
+  path = clean_candidate_path(path)
+  if path == "" or is_uri_like_path(path) then return nil end
+  local candidate
+  if common.is_absolute_path(path) then
+    candidate = common.normalize_path(path)
+  else
+    candidate = common.normalize_path((root or root_project_path()) .. PATHSEP .. path)
+  end
+  if existing_file(candidate) then return candidate end
+end
+
+local function resolve_output_candidate(candidate, root)
+  local resolved = resolve_output_path(candidate and candidate.source_path, root)
+  if not resolved then return nil end
+  return {
+    line = candidate.line,
+    col = candidate.col,
+    line2 = candidate.line2,
+    col2 = candidate.col2,
+    kind = "command-output-location",
+    label = candidate.label or resolved,
+    path = resolved,
+    target_line = candidate.target_line,
+    target_col = candidate.target_col,
+    text_bounds = true,
+  }
+end
+
+local function add_output_poi(list, seen, root, line_no, col1, col2, path, target_line, target_col, label)
+  path = clean_candidate_path(path)
+  if path == "" or is_uri_like_path(path) then return end
+  target_line = math.max(1, math.floor(tonumber(target_line) or 1))
+  target_col = math.max(1, math.floor(tonumber(target_col) or 1))
+  col1 = math.max(1, math.floor(tonumber(col1) or 1))
+  col2 = math.max(col1 + 1, math.floor(tonumber(col2) or col1 + 1))
+  local key = table.concat({ line_no, col1, col2, path, target_line, target_col }, "\0")
+  if seen[key] then return end
+  seen[key] = true
+  list[#list + 1] = {
+    line = line_no,
+    col = col1,
+    line2 = line_no,
+    col2 = col2,
+    source_path = path,
+    label = label or path,
+    target_line = target_line,
+    target_col = target_col,
+  }
+end
+
+local function candidate_starts_in_uri(line, col1)
+  local prefix = line:sub(1, math.max(0, (col1 or 1) - 1))
+  local token_prefix = prefix:match("([^%s\"']*)$") or ""
+  token_prefix = token_prefix:gsub("^[%(%[%{%<]+", "")
+  return token_prefix:match("%a[%w+.-]*:") ~= nil
+end
+
+local function add_line_matches(pois, seen, root, line, line_no)
+  local function add(col1, col2, path, target_line, target_col, label)
+    if candidate_starts_in_uri(line, col1) then return end
+    return add_output_poi(pois, seen, root, line_no, col1, col2, path, target_line, target_col, label)
+  end
+
+  local init = 1
+  while true do
+    local s, e, path, target_line, target_col = line:find("File%s+\"([^\"]+)\"%,%s+line%s+(%d+)", init)
+    if not s then break end
+    if not line:sub(e + 1):match("^,%s*column") then
+      add(s, e + 1, path, target_line, 1, line:sub(s, e))
+    end
+    init = e + 1
+  end
+
+  init = 1
+  while true do
+    local s, e, path, target_line, target_col = line:find("\"([^\"]+)\"%,%s+line%s+(%d+)%,%s+column%s+(%d+)", init)
+    if not s then break end
+    if line:sub(math.max(1, s - 5), s - 1) ~= "File " then
+      add(s, e + 1, path, target_line, target_col, line:sub(s, e))
+    end
+    init = e + 1
+  end
+
+  init = 1
+  while true do
+    local s, e, path, target_line, target_col = line:find("File%s+\"([^\"]+)\"%,%s+line%s+(%d+)%,%s+column%s+(%d+)", init)
+    if not s then break end
+    add(s, e + 1, path, target_line, target_col, line:sub(s, e))
+    init = e + 1
+  end
+
+  init = 1
+  while true do
+    local s, e, path, target_line, target_col = line:find("%-%-%>%s*([^:%s][^:\r\n]-):(%d+):(%d+)", init)
+    if not s then break end
+    local path_offset = line:find(path, s, true) or s
+    add(path_offset, e + 1, path, target_line, target_col, line:sub(path_offset, e))
+    init = e + 1
+  end
+
+  for s, path, target_line, target_col, e in line:gmatch("()([A-Za-z]:[/\\][^:\r\n]-):(%d+):(%d+)()") do
+    add(s, e, path, target_line, target_col)
+  end
+  for s, path, target_line, e in line:gmatch("()([A-Za-z]:[/\\][^:\r\n]-):(%d+)()") do
+    if not line:sub(e):match("^:%d") then
+      add(s, e, path, target_line, 1)
+    end
+  end
+  for s, path, target_line, target_col, e in line:gmatch("()([^%s:\"'()<>|]+):(%d+):(%d+)()") do
+    add(s, e, path, target_line, target_col)
+  end
+  for s, path, target_line, e in line:gmatch("()([^%s:\"'()<>|]+):(%d+)()") do
+    if not line:sub(e):match("^:%d") then
+      add(s, e, path, target_line, 1)
+    end
+  end
+
+  for s, path, target_line, target_col, e in line:gmatch("()([A-Za-z]:[/\\][^%(%)\r\n]-)%((%d+)%,(%d+)%)()") do
+    add(s, e, path, target_line, target_col)
+  end
+  for s, path, target_line, e in line:gmatch("()([A-Za-z]:[/\\][^%(%)\r\n]-)%((%d+)%)()") do
+    if line:sub(e, e) ~= "," then
+      add(s, e, path, target_line, 1)
+    end
+  end
+  for s, path, target_line, target_col, e in line:gmatch("()([^%s:\"'<>|]+)%((%d+)%,(%d+)%)()") do
+    add(s, e, path, target_line, target_col)
+  end
+  for s, path, target_line, e in line:gmatch("()([^%s:\"'<>|]+)%((%d+)%)()") do
+    if line:sub(e, e) ~= "," then
+      add(s, e, path, target_line, 1)
+    end
+  end
+end
+
+local function sort_output_points(points)
+  table.sort(points, function(a, b)
+    if a.line ~= b.line then return a.line < b.line end
+    return a.col < b.col
+  end)
+  return points
+end
+
+local function extract_output_location_candidates(text)
+  local candidates, seen = {}, {}
+  local line_no = 1
+  text = tostring(text or "")
+  for line in (text .. "\n"):gmatch("(.-)\n") do
+    line = line:gsub("\r$", "")
+    add_line_matches(candidates, seen, nil, line, line_no)
+    line_no = line_no + 1
+  end
+  return sort_output_points(candidates)
+end
+
+local function resolve_output_candidates(candidates, root)
+  local points = {}
+  for _, candidate in ipairs(candidates or {}) do
+    local poi = resolve_output_candidate(candidate, root)
+    if poi then points[#points + 1] = poi end
+  end
+  return sort_output_points(points)
+end
+
+local function extract_output_location_pois(text, opts)
+  opts = opts or {}
+  return resolve_output_candidates(extract_output_location_candidates(text), opts.root or root_project_path())
+end
+
+M.extract_output_location_pois = extract_output_location_pois
+
 local function slot_for_index(index)
   return M.slots[index]
 end
@@ -365,6 +560,7 @@ function CommandOutputView:new(slot)
   CommandOutputView.super.new(self, CommandOutputDoc())
   self.slot = slot
   self.command_output_view = true
+  self.poi_cache = nil
   file_context.exclude_main_panel_view(self)
 end
 
@@ -405,6 +601,7 @@ function CommandOutputView:show_entry(entry, opts)
   end
 
   self.displayed_entry = entry
+  self.poi_cache = nil
   self.doc:set_text(entry and entry.text or "")
 
   if entry and entry.selection_state then
@@ -427,6 +624,7 @@ end
 function CommandOutputView:clear_for_run(command_text, cwd)
   local header = string.format("PS %s> %s\n\n", tostring(cwd or ""), tostring(command_text or ""))
   self.displayed_entry = nil
+  self.poi_cache = nil
   self.doc:set_text(header)
   self:scroll_to_make_visible(#self.doc.lines, math.huge, true)
 end
@@ -439,6 +637,7 @@ function CommandOutputView:append_text(text)
   local follow_output = line1 == old_last_line and line2 == old_last_line
 
   self.doc:append(text)
+  self.poi_cache = nil
 
   if follow_output then
     self:scroll_to_make_visible(#self.doc.lines, col1, false)
@@ -448,6 +647,106 @@ function CommandOutputView:append_text(text)
     self.scroll.y, self.scroll.to.y = old_scroll_y, old_scroll_to_y
   end
   core.redraw = true
+end
+
+function CommandOutputView:cache_key_for_pois()
+  local entry = self.displayed_entry
+  return entry or self.doc.output_text or ""
+end
+
+local function build_poi_line_index(points)
+  local by_line = {}
+  for _, poi in ipairs(points) do
+    local line_points = by_line[poi.line]
+    if not line_points then
+      line_points = {}
+      by_line[poi.line] = line_points
+    end
+    line_points[#line_points + 1] = poi
+  end
+  return by_line
+end
+
+function CommandOutputView:get_points_of_interest(opts)
+  local text = self.doc.output_text or ""
+  local key = self:cache_key_for_pois()
+  local root = root_project_path()
+  local cache = self.poi_cache
+  if not (cache and cache.key == key and cache.text == text and cache.root == root) then
+    cache = {
+      key = key,
+      text = text,
+      root = root,
+      candidates = extract_output_location_candidates(text),
+    }
+    self.poi_cache = cache
+  end
+
+  opts = opts or {}
+  local now = system.get_time()
+  local should_revalidate = opts.force_revalidate == true
+    or not cache.points
+    or now - (cache.validated_at or 0) >= 1
+  if should_revalidate then
+    cache.points = resolve_output_candidates(cache.candidates, root)
+    cache.by_line = build_poi_line_index(cache.points)
+    cache.validated_at = now
+  end
+  return cache.points
+end
+
+function CommandOutputView:get_point_of_interest_at(line, col, opts)
+  opts = opts or {}
+  opts.force_revalidate = true
+  local points = self:get_points_of_interest(opts)
+  for _, poi in ipairs(points) do
+    if poi.line == line and col >= poi.col and col < (poi.col2 or poi.col) then
+      return poi
+    end
+  end
+end
+
+function CommandOutputView:activate_point_of_interest(poi, opts)
+  if not poi or not poi.path or not existing_file(poi.path) then return false end
+  opts = opts or {}
+  local preserve_focus = opts.preserve_focus
+  if preserve_focus == nil then preserve_focus = true end
+  local open = opts.side and sidepanel.open_path_in_side or sidepanel.open_path_in_main
+  return open(poi.path, {
+    line = poi.target_line or poi.line,
+    col = poi.target_col or 1,
+    focus = opts.side and true or nil,
+    preserve_focus = preserve_focus,
+  })
+end
+
+function CommandOutputView:draw_poi_underlines(line, x, y)
+  self:get_points_of_interest({ silent = true })
+  local cache = self.poi_cache
+  local points = cache and cache.by_line and cache.by_line[line]
+  if not points or #points == 0 then return end
+  local lh = self:get_line_height()
+  local thickness = math.max(1, math.floor(SCALE))
+  local underline_y = y + lh - thickness * 2
+  local min_x = self.position.x
+  local max_x = self.position.x + self.size.x
+  for _, poi in ipairs(points) do
+    if poi.text_bounds and poi.line == line and (poi.line2 or poi.line) == line then
+      local x1 = x + self:get_col_x_offset(line, poi.col)
+      local x2 = x + self:get_col_x_offset(line, poi.col2 or poi.col)
+      if x2 > min_x and x1 < max_x and x2 > x1 then
+        x1 = math.max(x1, min_x)
+        x2 = math.min(x2, max_x)
+        renderer.draw_rect(x1, underline_y, x2 - x1, thickness, style.accent or style.text)
+      end
+    end
+  end
+end
+
+function CommandOutputView:draw_line_body(line, x, y)
+  local height = CommandOutputView.super.draw_line_body(self, line, x, y)
+  self:draw_poi_underlines(line, x, y)
+  return height
 end
 
 local CommandOutputPanel = View:extend()

@@ -641,6 +641,10 @@ function core.init()
   -- can register views into the shared side node during plugin loading.
   require "core.sidepanel"
 
+  -- Shared Point of Interest navigation commands/keymaps are loaded before
+  -- plugins so providers can attach themselves during plugin initialization.
+  require "core.poi"
+
   local project_dir_abs = system.absolute_path(project_dir)
   -- We prevent set_project below to effectively add and scan the directory because the
   -- project module and its ignore files is not yet loaded.

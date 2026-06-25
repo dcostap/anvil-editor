@@ -374,7 +374,7 @@ local function reveal_active_file_in_explorer(dv)
 end
 
 local function shell_quote(path)
-  return "'" .. tostring(path):gsub("'", "'\''") .. "'"
+  return "'" .. tostring(path):gsub("'", "'\\''") .. "'"
 end
 
 local function try_start_terminal_process(command_args, cwd)
@@ -1506,14 +1506,14 @@ keymap.add({
   ["ctrl+down"] = "user:move-caret-next-paragraph",
   ["alt+left"] = "user:navigate-back",
   ["alt+right"] = "user:navigate-forward",
-  ["ctrl+alt+up"] = "gitdiff:previous-change",
-  ["ctrl+alt+down"] = "gitdiff:next-change",
-  ["ctrl+alt+,"] = "gitdiff:previous-change",
-  ["ctrl+alt+."] = "gitdiff:next-change",
-  ["ctrl+pageup"] = "gitdiff:previous-change",
-  ["ctrl+pagedown"] = "gitdiff:next-change",
-  ["f6"] = "gitdiff:previous-change",
-  ["f7"] = "gitdiff:next-change",
+  ["ctrl+alt+up"] = "poi:previous",
+  ["ctrl+alt+down"] = "poi:next",
+  ["ctrl+alt+,"] = "poi:previous",
+  ["ctrl+alt+."] = "poi:next",
+  ["ctrl+pageup"] = "poi:previous",
+  ["ctrl+pagedown"] = "poi:next",
+  ["f6"] = "poi:previous",
+  ["f7"] = "poi:next",
 }, true)
 
 -- Keep Escape cooperative: plugin panels (GlobalPromptBar, project search,

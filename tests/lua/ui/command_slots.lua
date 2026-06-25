@@ -1,13 +1,25 @@
 local core = require "core"
 local command = require "core.command"
 local config = require "core.config"
+local common = require "core.common"
 local process = require "core.process"
 local sidepanel = require "core.sidepanel"
 local storage = require "core.storage"
 local test = require "core.test"
 local View = require "core.view"
+local Project = require "core.project"
 
 local command_slots = require "plugins.command_slots"
+
+local function join_path(...)
+  return table.concat({ ... }, PATHSEP)
+end
+
+local function write_file(path, content)
+  local fp = assert(io.open(path, "wb"))
+  fp:write(content or "")
+  fp:close()
+end
 
 local function clear_prompt()
   if core.active_view == core.global_prompt_bar then
@@ -18,6 +30,8 @@ end
 test.describe("Command Slots", function()
   test.before_each(function(context)
     context.previous_active_view = core.active_view
+    context.previous_projects = core.projects
+    context.previous_cwd = system.getcwd()
     context.previous_powershell_candidates = config.plugins.command_slots.powershell_candidates
     clear_prompt()
     storage.clear("command-slots")
@@ -29,6 +43,17 @@ test.describe("Command Slots", function()
     command_slots._reset_for_tests()
     storage.clear("command-slots")
     config.plugins.command_slots.powershell_candidates = context.previous_powershell_candidates
+    if context.cleanup_views and core.root_panel and core.root_panel.root_node then
+      for _, view in ipairs(context.cleanup_views) do
+        local node = core.root_panel.root_node:get_node_for_view(view)
+        if node then node:remove_view(core.root_panel.root_node, view) end
+      end
+    end
+    if context.previous_projects then core.projects = context.previous_projects end
+    if context.previous_cwd then system.chdir(context.previous_cwd) end
+    if context.temp_root and system.get_file_info(context.temp_root) then
+      common.rm(context.temp_root, true)
+    end
     if context.previous_active_view then
       core.set_active_view(context.previous_active_view)
     end
@@ -136,6 +161,228 @@ test.describe("Command Slots", function()
     test.equal(doc:get_text(1, 1, math.huge, math.huge), "first second\nthird\nfourth\n")
     test.same({ 1, 3, 1, 3 }, doc.selections)
     test.not_ok(doc:is_dirty())
+  end)
+
+  test.it("extracts common real file location Points of Interest from output", function(context)
+    context.temp_root = join_path(USERDIR, "command-output-poi")
+    test.ok(common.mkdirp(join_path(context.temp_root, "src")))
+    test.ok(common.mkdirp(join_path(context.temp_root, "nested")))
+    local main_c = join_path(context.temp_root, "src", "main.c")
+    local rust = join_path(context.temp_root, "src", "main.rs")
+    local cpp = join_path(context.temp_root, "nested", "file.cpp")
+    local py = join_path(context.temp_root, "src", "main.py")
+    write_file(main_c, "int main(void) { return 0; }\n")
+    write_file(rust, "fn main() {}\n")
+    write_file(cpp, "int x;\n")
+    write_file(py, "print('x')\n")
+    core.projects = { Project(context.temp_root) }
+
+    local output = table.concat({
+      "src/main.c:10:2: error: nope",
+      "--> src/main.rs:11:3",
+      "nested/file.cpp(12,4): error C1234: nope",
+      "File \"src/main.py\", line 13",
+      main_c .. ":14:5: error: absolute",
+      "src/main.c:15: error: missing column",
+      "File \"src/main.py\", line 16, column 7",
+      "both src/main.c:20:1 and src/main.rs:21:2",
+      "file:///" .. main_c .. ":22:2",
+      "file:src/main.c:23:2",
+      "(file:src/main.c:24:2)",
+      "x:src/main.c:25:2",
+      "jar:file:src/main.c:26:2",
+      "http://example.test/src/main.c:1:2",
+      "missing.c:99:1",
+    }, "\n")
+    local points = command_slots.extract_output_location_pois(output, { root = context.temp_root })
+
+    test.equal(#points, 9)
+    test.ok(common.path_equals(points[1].path, main_c))
+    test.equal(points[1].target_line, 10)
+    test.equal(points[1].target_col, 2)
+    test.ok(common.path_equals(points[2].path, rust))
+    test.ok(common.path_equals(points[3].path, cpp))
+    test.ok(common.path_equals(points[4].path, py))
+    test.equal(points[4].target_col, 1)
+    test.ok(common.path_equals(points[5].path, main_c))
+    test.equal(points[5].target_line, 14)
+    test.equal(points[5].target_col, 5)
+    test.ok(common.path_equals(points[6].path, main_c))
+    test.equal(points[6].target_line, 15)
+    test.equal(points[6].target_col, 1)
+    test.ok(common.path_equals(points[7].path, py))
+    test.equal(points[7].target_line, 16)
+    test.equal(points[7].target_col, 7)
+    test.ok(common.path_equals(points[8].path, main_c))
+    test.ok(common.path_equals(points[9].path, rust))
+  end)
+
+  test.it("navigates Command Output View POIs and activates them in the Main Panel", function(context)
+    context.temp_root = join_path(USERDIR, "command-output-activate-poi")
+    test.ok(common.mkdirp(join_path(context.temp_root, "src")))
+    local target = join_path(context.temp_root, "src", "main.c")
+    write_file(target, "one\ntwo\nthree\n")
+    core.projects = { Project(context.temp_root) }
+    system.chdir(context.temp_root)
+
+    local view = command_slots.CommandOutputView({ label = "T" })
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 500, 200
+    view.doc:set_text("header\nsrc/main.c:2:3: error: nope\n")
+    view.doc:set_selection(1, 1)
+    core.set_active_view(view)
+
+    test.ok(command.perform("poi:next"))
+    test.same(view.doc.selections, { 2, 1, 2, 1 })
+    test.ok(command.perform("poi:activate"))
+
+    local main_node = core.root_panel and core.root_panel:get_main_panel()
+    local main = main_node and main_node.active_view
+    context.cleanup_views = { main }
+    test.equal(core.active_view, main)
+    test.ok(main and main.doc and common.path_equals(main.doc.abs_filename, target))
+    test.same(main:get_selection_state().selections, { 2, 3, 2, 3 })
+  end)
+
+  test.it("activates Command Output View POIs into the Side Panel on the side activation command", function(context)
+    context.temp_root = join_path(USERDIR, "command-output-activate-side-poi")
+    test.ok(common.mkdirp(join_path(context.temp_root, "src")))
+    local target = join_path(context.temp_root, "src", "side.c")
+    write_file(target, "one\ntwo\n")
+    core.projects = { Project(context.temp_root) }
+    system.chdir(context.temp_root)
+
+    local view = command_slots.CommandOutputView({ label = "T" })
+    view.doc:set_text("src/side.c:2:1: error: nope\n")
+    view.doc:set_selection(1, 1)
+    core.set_active_view(view)
+
+    test.ok(command.perform("poi:activate-side"))
+
+    test.ok(core.active_view and core.active_view.doc and common.path_equals(core.active_view.doc.abs_filename, target))
+    test.ok(sidepanel.is_side_view(core.active_view))
+    context.cleanup_views = { core.active_view }
+  end)
+
+  test.it("does not expose language or legacy Git navigation commands in Command Output Views", function()
+    local view = command_slots.CommandOutputView({ label = "T" })
+    view.doc:set_text("anything\n")
+    core.set_active_view(view)
+
+    test.not_ok(command.is_valid("language:show-references"))
+    test.not_ok(command.is_valid("language:go-to-declaration"))
+    test.not_ok(command.is_valid("gitdiff:next-change"))
+    test.not_ok(command.is_valid("gitdiff:previous-change"))
+  end)
+
+  test.it("does not activate stale Command Output POIs whose files disappeared", function(context)
+    context.temp_root = join_path(USERDIR, "command-output-stale-poi")
+    test.ok(common.mkdirp(join_path(context.temp_root, "src")))
+    local target = join_path(context.temp_root, "src", "gone.c")
+    write_file(target, "gone\n")
+    core.projects = { Project(context.temp_root) }
+
+    local view = command_slots.CommandOutputView({ label = "T" })
+    view.doc:set_text("src/gone.c:1:1: error\n")
+    local poi = view:get_points_of_interest()[1]
+    test.ok(poi)
+    test.ok(common.rm(target))
+
+    test.equal(#view:get_points_of_interest({ force_revalidate = true }), 0)
+    test.not_ok(view:activate_point_of_interest(poi))
+
+    write_file(target, "back\n")
+    local refreshed = view:get_points_of_interest({ force_revalidate = true })
+    test.equal(#refreshed, 1)
+    test.ok(common.path_equals(refreshed[1].path, target))
+  end)
+
+  test.it("draws Command Output underlines only for detected Text POI bounds", function(context)
+    context.temp_root = join_path(USERDIR, "command-output-draw-poi")
+    test.ok(common.mkdirp(join_path(context.temp_root, "src")))
+    local target = join_path(context.temp_root, "src", "main.c")
+    write_file(target, "x\n")
+    core.projects = { Project(context.temp_root) }
+
+    local view = command_slots.CommandOutputView({ label = "T" })
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 500, 200
+    view.doc:set_text("src/main.c:1:1: ok\nmissing.c:1:1\n")
+
+    local rects = {}
+    local old_draw_rect = renderer.draw_rect
+    renderer.draw_rect = function(x, y, w, h, color)
+      rects[#rects + 1] = { x = x, y = y, w = w, h = h, color = color }
+    end
+    view:draw_poi_underlines(1, 0, 0)
+    view:draw_poi_underlines(2, 0, view:get_line_height())
+    renderer.draw_rect = old_draw_rect
+
+    test.equal(#rects, 1)
+    test.ok(rects[1].w > 0)
+  end)
+
+  test.it("keeps focus in the starting panel while stepping through Side Panel Command Output POIs", function(context)
+    context.temp_root = join_path(USERDIR, "command-output-side-poi")
+    test.ok(common.mkdirp(join_path(context.temp_root, "src")))
+    local first = join_path(context.temp_root, "src", "first.c")
+    local second = join_path(context.temp_root, "src", "second.c")
+    write_file(first, "one\n")
+    write_file(second, "one\ntwo\n")
+    core.projects = { Project(context.temp_root) }
+    system.chdir(context.temp_root)
+
+    config.plugins.command_slots.powershell_candidates = {}
+    test.ok(command_slots.run_command(1, "echo"))
+    local panel = command_slots.output_panel
+    local output = command_slots.slots[1].view
+    panel:select_slot(1, { focus = false })
+    output.poi_cache = nil
+    output.doc:set_text("header\nsrc/first.c:1:1\nsrc/second.c:2:1\n")
+    output.doc:set_selection(1, 1)
+
+    local main_before = sidepanel.focus_main(false)
+    test.ok(main_before)
+    core.set_active_view(main_before)
+    test.ok(command.perform("poi:side-next-activate"))
+    local main_node = core.root_panel and core.root_panel:get_main_panel()
+    test.equal(core.active_view, main_node and main_node.active_view)
+    test.ok(core.active_view and core.active_view.doc and common.path_equals(core.active_view.doc.abs_filename, first))
+    test.same(output.doc.selections, { 2, 1, 2, 1 })
+    context.cleanup_views = { main_node and main_node.active_view }
+
+    core.set_active_view(output)
+    test.ok(command.perform("poi:side-next-activate"))
+    test.equal(core.active_view, output)
+    test.same(output.doc.selections, { 3, 1, 3, 1 })
+    if main_node and main_node.active_view then
+      context.cleanup_views[#context.cleanup_views + 1] = main_node.active_view
+    end
+  end)
+
+  test.it("does not navigate hidden Side Panel Command Output POIs from the Main Panel", function(context)
+    context.temp_root = join_path(USERDIR, "command-output-hidden-side-poi")
+    test.ok(common.mkdirp(join_path(context.temp_root, "src")))
+    local target = join_path(context.temp_root, "src", "hidden.c")
+    write_file(target, "one\n")
+    core.projects = { Project(context.temp_root) }
+    system.chdir(context.temp_root)
+
+    config.plugins.command_slots.powershell_candidates = {}
+    test.ok(command_slots.run_command(1, "echo"))
+    local output = command_slots.slots[1].view
+    output.poi_cache = nil
+    output.doc:set_text("header\nsrc/hidden.c:1:1\n")
+    output.doc:set_selection(1, 1)
+    sidepanel.hide(false)
+    local main_before = sidepanel.focus_main(false)
+    test.ok(main_before)
+    core.set_active_view(main_before)
+
+    test.ok(command.perform("poi:side-next-activate"))
+
+    test.equal(core.active_view, main_before)
+    test.same(output.doc.selections, { 1, 1, 1, 1 })
   end)
 
   test.it("preserves command output horizontal scroll while following appended output", function()

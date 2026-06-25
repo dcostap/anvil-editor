@@ -149,6 +149,10 @@ function DiffView:new(a, b, compare_type, names)
   self.v_scrollbar.expanded_size = style.expanded_scrollbar_size * 2
 end
 
+function DiffView:get_focus_view()
+  return self.doc_view_a
+end
+
 function DiffView:get_name()
   if self.compare_type == DiffView.type.FILE_FILE then
     return "Files Comparison"
@@ -929,6 +933,33 @@ function DiffView:patch_views()
 
   ---@param doc_view core.docview
   ---@param is_a boolean
+  local function wrap_points_of_interest(doc_view, is_a)
+    doc_view.get_points_of_interest = function(self)
+      local changes = is_a and parent.a_changes or parent.b_changes
+      if not has_changes(changes) then return {} end
+      local points = {}
+      local last_tag
+      for line, change in ipairs(changes) do
+        local tag = change and change.tag or "equal"
+        if tag ~= "equal" and tag ~= last_tag then
+          points[#points + 1] = {
+            line = math.min(#self.doc.lines, math.max(1, line)),
+            col = 1,
+            line_only_navigation = true,
+            scroll_to_line = true,
+            kind = "diff-change",
+            label = tag,
+            change = change,
+          }
+        end
+        last_tag = tag
+      end
+      return points
+    end
+  end
+
+  ---@param doc_view core.docview
+  ---@param is_a boolean
   local function wrap_prev_change(doc_view, is_a)
     doc_view.prev_change = function(self)
       local changes = is_a and parent.a_changes or parent.b_changes
@@ -1038,6 +1069,7 @@ function DiffView:patch_views()
     wrap_get_scrollable_size(side.view, side.is_a)
     wrap_scroll_to_line(side.view, side.is_a)
     wrap_draw(side.view)
+    wrap_points_of_interest(side.view, side.is_a)
     wrap_doc_raw_insert(side.view)
     wrap_doc_raw_remove(side.view)
     wrap_doc_transaction(side.view)
@@ -1226,11 +1258,11 @@ command.add(
       core.active_view
   end, {
   ["diff-view:prev-change"] = function(dv)
-    dv:prev_change()
+    require("core.poi").navigate(dv, -1)
   end,
 
   ["diff-view:next-change"] = function(dv)
-    dv:next_change()
+    require("core.poi").navigate(dv, 1)
   end,
 
   ["diff-view:sync-change"] = function(dv)
@@ -1239,8 +1271,8 @@ command.add(
 })
 
 keymap.add({
-  ["ctrl+alt+,"] = "diff-view:prev-change",
-  ["ctrl+alt+."] = "diff-view:next-change",
+  ["ctrl+alt+,"] = "poi:previous",
+  ["ctrl+alt+."] = "poi:next",
   ["ctrl+return"] = "diff-view:sync-change",
 })
 
