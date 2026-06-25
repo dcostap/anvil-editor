@@ -650,12 +650,11 @@ end
 
 
 ---Get the bottom overscroll context used when scroll-past-end is enabled.
+---Keep this aligned with normal caret context so end-of-file scrolling moves
+---smoothly into the same visible band instead of pinning the caret near the top.
 ---@return integer count Context line count
 function DocView:get_scroll_past_end_context_lines()
-  local lh = self:get_line_height()
-  if lh <= 0 then return 0 end
-  local max_context = math.max(0, math.floor((self:get_vertical_viewport_height() - style.padding.y - lh) / lh))
-  return math.min(normalize_scroll_context_lines(), max_context)
+  return self:get_visible_scroll_context_lines()
 end
 
 
@@ -674,7 +673,7 @@ function DocView:get_scrollable_size_for_line_count(line_count)
     local max_scroll = math.max(0, last_line_y - self:get_vertical_viewport_height() + lh * (pad + 1))
     return math.max(self.size.y, max_scroll + self.size.y)
   end
-  if text_height <= self.size.y then
+  if content_height <= self.size.y then
     return self.size.y
   end
   return content_height

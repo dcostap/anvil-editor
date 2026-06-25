@@ -102,6 +102,36 @@ test.describe("DocView selection scrolling", function()
     test.equal(view.scroll.to.y, 0)
   end)
 
+  test.it("does not end-scroll short documents when existing blank space satisfies context", function(context)
+    config.scroll_past_end = true
+    config.scroll_context_lines = 28
+
+    local view = open_editor(context, numbered_lines(9))
+    local lh = view:get_line_height()
+    view.size.y = style.padding.y * 2 + lh * 30
+
+    view:scroll_to_make_visible(9, 1, true)
+
+    test.equal(view.scroll.to.y, 0)
+    test.equal(view.scroll.y, 0)
+  end)
+
+  test.it("allows fitting documents to end-scroll when the caret enters bottom context", function(context)
+    config.scroll_past_end = true
+    config.scroll_context_lines = 28
+
+    local view = open_editor(context, numbered_lines(29))
+    local lh = view:get_line_height()
+    view.size.y = style.padding.y * 2 + lh * 30
+
+    view:scroll_to_make_visible(29, 1, true)
+
+    local effective_context = view:get_visible_scroll_context_lines()
+    local _, cursor_y = view:get_line_screen_position(29)
+    test.ok(view.scroll.y > 0, "expected a fitting document near the bottom context to scroll")
+    test.equal(cursor_y + lh, view.position.y + view.size.y - effective_context * lh)
+  end)
+
   test.it("keeps mouse-originated clicks near the document end from forcing bottom context scrolling", function(context)
     config.scroll_past_end = true
     config.scroll_context_lines = 3
