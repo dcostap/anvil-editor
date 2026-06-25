@@ -113,6 +113,54 @@ local function save_existing(doc)
   end
 end
 
+local function save_as_prompt_text(dv)
+  local last_doc = core.last_active_view and core.last_active_view.doc
+  if dv.doc.filename then
+    return dv.doc.filename
+  elseif last_doc and last_doc.filename then
+    local dirname = core.last_active_view.doc.abs_filename:match("(.*)[/\\].+$")
+    local text = core.normalize_to_project_dir(dirname) .. PATHSEP
+    if common.path_equals(text, core.root_project().path) then text = "" end
+    return text
+  end
+end
+
+local function prompt_save_as(dv, text)
+  core.global_prompt_bar:enter("Save As", {
+    text = text,
+    submit = function(filename)
+      local prompt_filename = common.sanitize_prompt_path(filename)
+      local save_filename = common.home_expand(prompt_filename)
+      local normalized = core.normalize_to_project_dir(save_filename)
+      local abs_filename = core.project_absolute_path(normalized)
+      if not dv.doc.filename and system.get_file_info(abs_filename) then
+        core.nag_view:show(
+          "Overwrite Existing File",
+          string.format("%s already exists. Overwrite it?", normalized),
+          {
+            { text = "Overwrite", default_yes = false },
+            { text = "Cancel", default_no = true },
+          },
+          function(item)
+            if item.text == "Overwrite" then
+              save(save_filename)
+            else
+              core.add_thread(function()
+                prompt_save_as(dv, filename)
+              end)
+            end
+          end
+        )
+      else
+        save(save_filename)
+      end
+    end,
+    suggest = function (text)
+      return common.home_encode_list(common.path_suggest(common.home_expand(common.sanitize_prompt_path(text))))
+    end
+  })
+end
+
 local function cut_or_copy(delete)
   local full_text = ""
   local text = ""
@@ -1230,24 +1278,7 @@ local commands = {
   end,
 
   ["doc:save-as"] = function(dv)
-    local last_doc = core.last_active_view and core.last_active_view.doc
-    local text
-    if dv.doc.filename then
-      text = dv.doc.filename
-    elseif last_doc and last_doc.filename then
-      local dirname, filename = core.last_active_view.doc.abs_filename:match("(.*)[/\\](.+)$")
-      text = core.normalize_to_project_dir(dirname) .. PATHSEP
-      if common.path_equals(text, core.root_project().path) then text = "" end
-    end
-    core.global_prompt_bar:enter("Save As", {
-      text = text,
-      submit = function(filename)
-        save(common.home_expand(common.sanitize_prompt_path(filename)))
-      end,
-      suggest = function (text)
-        return common.home_encode_list(common.path_suggest(common.home_expand(common.sanitize_prompt_path(text))))
-      end
-    })
+    prompt_save_as(dv, save_as_prompt_text(dv))
   end,
 
   ["doc:save"] = function(dv)

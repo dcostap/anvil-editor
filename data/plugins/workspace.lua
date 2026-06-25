@@ -11,6 +11,32 @@ local function invalid_workspace_filename(filename)
   return type(filename) == "string" and filename:find("[%z\1-\31]") ~= nil
 end
 
+local function view_has_invalid_named_file(view)
+  local doc = view and view.doc
+  return doc
+     and not doc.intellij_untitled
+     and (invalid_workspace_filename(doc.filename) or invalid_workspace_filename(doc.abs_filename))
+end
+
+local function close_unattached_view_doc(view)
+  local doc = view and view.doc
+  if not doc then return end
+  for _, open_doc in ipairs(core.docs or {}) do
+    if open_doc == doc then
+      if #core.get_views_referencing_doc(doc) == 0 then
+        for i = #core.docs, 1, -1 do
+          if core.docs[i] == doc then
+            table.remove(core.docs, i)
+            doc:on_close()
+            break
+          end
+        end
+      end
+      return
+    end
+  end
+end
+
 local loaded_workspace_key
 local loaded_workspace_path
 local suppress_next_exit_workspace_save = false
@@ -170,6 +196,10 @@ local function save_view(view)
     if core.log_quiet then core.log_quiet("Workspace: skipped view with invalid filename %q", state.filename) end
     return nil
   end
+  if view_has_invalid_named_file(view) then
+    if core.log_quiet then core.log_quiet("Workspace: skipped view with invalid document filename %q", view.doc.filename or view.doc.abs_filename) end
+    return nil
+  end
   if state and state.filename and view.doc and view.doc.new_file and not view.doc.intellij_untitled then
     if core.log_quiet then core.log_quiet("Workspace: skipped missing named file view %q", state.filename) end
     return nil
@@ -203,8 +233,14 @@ local function load_view(t)
       return nil
     end
     local view = View and View.from_state(t.state)
+    if view_has_invalid_named_file(view) then
+      if core.log_quiet then core.log_quiet("Workspace: dropped invalid named file restored from saved state %q", view.doc.filename or view.doc.abs_filename) end
+      close_unattached_view_doc(view)
+      return nil
+    end
     if view and view.doc and view.doc.filename and view.doc.new_file and not view.doc.intellij_untitled then
       if core.log_quiet then core.log_quiet("Workspace: skipped missing named file from saved state %q", view.doc.filename) end
+      close_unattached_view_doc(view)
       return nil
     end
     return view
