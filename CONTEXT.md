@@ -127,3 +127,15 @@ _Avoid_: StatusView, bottom bar
 **Navigation Boundary Feedback**:
 A brief user-facing message shown when a directional target-navigation command cannot move because there is no target farther in that direction.
 _Avoid_: wraparound feedback, no-op warning
+
+**Point of Interest / POI**:
+A navigable target within a view, such as a Git change in an Editor or a file/line reference in a Command Output View. A Point of Interest may also be activatable.
+_Avoid_: diff region, link, target
+
+**Text Point of Interest / Text POI**:
+A Point of Interest tied to a concrete text range that can be presented as link-like text, such as an underlined file-location reference in a Command Output View.
+_Avoid_: link, text link
+
+**Point of Interest Activation**:
+The action taken for an activatable Point of Interest, such as opening the referenced file location.
+_Avoid_: trigger, click action
