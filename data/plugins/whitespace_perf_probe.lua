@@ -7,33 +7,44 @@ local common = require "core.common"
 local command = require "core.command"
 local DocView = require "core.docview"
 
-local function truthy(name)
-  local value = os.getenv(name)
+local function is_truthy_value(value)
   if not value or value == "" then return false end
-  value = value:lower():match("^%s*(.-)%s*$")
+  value = tostring(value):lower():match("^%s*(.-)%s*$")
   return value ~= "0" and value ~= "false" and value ~= "no" and value ~= "off"
 end
 
+local function truthy(name)
+  return is_truthy_value(os.getenv(name))
+end
+
 local control_file = USERDIR and (USERDIR .. PATHSEP .. "whitespace_perf_probe.cfg") or nil
+local function clean_control_value(value)
+  value = tostring(value or "")
+  return (value:gsub("[\r\n]+$", ""))
+end
+
 local control = {}
 if control_file then
   local fp = io.open(control_file, "rb")
   if fp then
     for line in fp:lines() do
       local key, value = line:match("^([^=]+)=(.*)$")
-      if key then control[key] = value end
+      if key then
+        key = key:match("^%s*(.-)%s*$")
+        control[key] = clean_control_value(value)
+      end
     end
     fp:close()
   end
 end
 
-if not truthy("ANVIL_WHITESPACE_PERF_TEST") and not control.enabled then return {} end
+if not truthy("ANVIL_WHITESPACE_PERF_TEST") and not is_truthy_value(control.enabled) then return {} end
 
 local function env_string(name, key, default)
   local value = os.getenv(name)
-  if value and value ~= "" then return value end
+  if value and value ~= "" then return clean_control_value(value) end
   value = control[key]
-  if value and value ~= "" then return value end
+  if value and value ~= "" then return clean_control_value(value) end
   return default or ""
 end
 
