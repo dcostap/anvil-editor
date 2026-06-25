@@ -24,6 +24,7 @@ local core_plugins = {
   intellij_find = true,
   linewrapping = true,
   scale_debug_log = true,
+  untitled_recovery = true,
   untitled_tabs = true,
 }
 core.first_party_core_plugins = core_plugins
@@ -55,6 +56,11 @@ plugin_defaults("autosave_fast", {
   enabled = true,
   timeout = 3,
   hide_dirty_markers = true,
+})
+plugin_defaults("untitled_recovery", {
+  delay = 0.25,
+  large_delay = 1.0,
+  large_doc_threshold = 1024 * 1024,
 })
 plugin_defaults("autocomplete", {
   min_len = 3,
@@ -169,6 +175,7 @@ require_core_plugin "intellij_actions"
 require_core_plugin "edit_location_history"
 reload_core_plugin "global_prompt_bar_sanitize"
 require_core_plugin "intellij_find"
+require_core_plugin "untitled_recovery"
 require_core_plugin "untitled_tabs"
 reload_core_plugin "scale_debug_log"
 -- require_core_plugin "editor_wallpaper"

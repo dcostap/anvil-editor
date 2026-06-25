@@ -45,10 +45,10 @@ local function workspace_keys_for_path(project_path)
   return matches
 end
 
-local function make_fake_root_panel(label)
-  local view = {}
+local function make_fake_root_panel(label, state, doc)
+  local view = { doc = doc }
   function view:get_state()
-    return { label = label }
+    return state or { label = label }
   end
   function view:get_module()
     return "core.view"
@@ -155,6 +155,47 @@ test.describe("Workspace persistence", function()
     test.type(saved, "table")
     test.equal(#saved.documents.views, 1)
     test.equal(saved.documents.views[1].state.label, "current")
+  end)
+
+  test.test("skips views with invalid control characters in filenames", function(context)
+    local project_path = join_path(context.temp_root, "source_project")
+    local other_path = join_path(context.temp_root, "other_project")
+    local panel, view = make_fake_root_panel("bad", { filename = "test.txt\n", scroll = { x = 0, y = 0 } })
+    core.projects = { Project(project_path) }
+    core.recent_projects = {}
+    core.docs = {}
+    core.visited_files = {}
+    core.root_panel = panel
+    core.active_view = view
+
+    core.set_project(other_path)
+
+    local keys = workspace_keys_for_path(project_path)
+    test.equal(#keys, 1)
+    local saved = storage.load("ws", keys[1])
+    test.type(saved, "table")
+    test.equal(#saved.documents.views, 0)
+  end)
+
+  test.test("skips named-file views that restored as missing new files", function(context)
+    local project_path = join_path(context.temp_root, "source_project")
+    local other_path = join_path(context.temp_root, "other_project")
+    local doc = { filename = "missing.txt", new_file = true }
+    local panel, view = make_fake_root_panel("missing", { filename = "missing.txt", scroll = { x = 0, y = 0 } }, doc)
+    core.projects = { Project(project_path) }
+    core.recent_projects = {}
+    core.docs = { doc }
+    core.visited_files = {}
+    core.root_panel = panel
+    core.active_view = view
+
+    core.set_project(other_path)
+
+    local keys = workspace_keys_for_path(project_path)
+    test.equal(#keys, 1)
+    local saved = storage.load("ws", keys[1])
+    test.type(saved, "table")
+    test.equal(#saved.documents.views, 0)
   end)
 
   test.test("same-window Project switch does not overwrite destination workspace with empty tabs", function(context)

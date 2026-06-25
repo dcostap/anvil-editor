@@ -9,12 +9,17 @@ local style = require "core.style"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
 local Tabs = require "core.tabs"
+local untitled_recovery = require "plugins.untitled_recovery"
 
 local M = {}
 local untitled_id_counter = 0
 
 local function is_untitled_doc(doc)
   return doc and doc.intellij_untitled and doc.new_file and not doc.filename
+end
+
+local function untitled_doc_has_promptable_content(doc)
+  return doc and doc:get_text(1, 1, math.huge, math.huge) ~= ""
 end
 
 local function untitled_index(name)
@@ -55,6 +60,7 @@ local function tag_doc(doc, name, id)
   doc.intellij_untitled = true
   doc.intellij_untitled_name = name or doc.intellij_untitled_name or next_untitled_name()
   ensure_untitled_id(doc, id)
+  untitled_recovery.ensure_doc_backing(doc, { no_manifest = true })
   return doc
 end
 
@@ -159,52 +165,127 @@ if not core.__untitled_tabs_patched then
   function DocView:get_state()
     local state = docview_get_state(self)
     if is_untitled_doc(self.doc) then
+      local recovery_state = untitled_recovery.state_for_doc(self.doc)
       state.intellij_untitled = true
       state.intellij_untitled_name = self.doc.intellij_untitled_name
       state.intellij_untitled_id = ensure_untitled_id(self.doc)
+      state.intellij_untitled_backing = recovery_state and recovery_state.intellij_untitled_backing
+      state.intellij_untitled_backing_current = recovery_state and recovery_state.intellij_untitled_backing_current or nil
+      state.intellij_untitled_change_id = recovery_state and recovery_state.intellij_untitled_change_id or nil
+      state.intellij_untitled_backing_saved_at = recovery_state and recovery_state.intellij_untitled_backing_saved_at or nil
+      state.intellij_untitled_workspace_saved_at = recovery_state and recovery_state.intellij_untitled_workspace_saved_at or nil
+      if recovery_state and recovery_state.intellij_untitled_backing_current then state.text = nil end
     end
     return state
   end
 
+  local function open_untitled_doc_by_id(id)
+    if not id then return nil end
+    for _, doc in ipairs(core.docs or {}) do
+      if is_untitled_doc(doc) and doc.intellij_untitled_id == id then return doc end
+    end
+  end
+
+  local function apply_view_state(view, state)
+    local file_context = require "core.file_context"
+    file_context.mark_editor_view(view)
+    if state.selection_state then
+      view:set_selection_state(state.selection_state)
+    elseif state.selection then
+      view:set_selection_state({ selections = state.selection, last_selection = 1 })
+    end
+    view.last_line1, view.last_col1, view.last_line2, view.last_col2 = table.unpack(view.selection_state.selections, 1, 4)
+    if state.scroll then
+      view.scroll.x, view.scroll.to.x = state.scroll.x, state.scroll.x
+      view.scroll.y, view.scroll.to.y = state.scroll.y, state.scroll.y
+      view.needs_initial_scroll_validation = true
+    end
+  end
+
   local docview_from_state = DocView.from_state
   function DocView.from_state(state)
+    if state and state.intellij_untitled then
+      local existing_doc = open_untitled_doc_by_id(state.intellij_untitled_id)
+      if existing_doc then
+        local view = DocView(existing_doc)
+        apply_view_state(view, state)
+        if core.log_quiet then core.log_quiet("Untitled recovery: reused open document for restored view %s", state.intellij_untitled_id) end
+        return view
+      end
+    end
+
     local view = docview_from_state(state)
     if view and view.doc and state and state.intellij_untitled then
       tag_doc(view.doc, state.intellij_untitled_name, state.intellij_untitled_id)
+      local loaded_backing = untitled_recovery.attach_from_workspace_state(view.doc, state)
+      if loaded_backing then apply_view_state(view, state) end
     end
     return view
   end
 
   local doc_save = Doc.save
   function Doc:save(...)
+    local old_untitled = is_untitled_doc(self) and {
+      id = self.intellij_untitled_id,
+      name = self.intellij_untitled_name,
+      backing_path = self.intellij_untitled_backing_path,
+      backing_rel = self.intellij_untitled_backing_rel,
+      project = self.intellij_untitled_project_path,
+    } or nil
+    if old_untitled then untitled_recovery.flush_doc(self, "save as", true) end
     local result = doc_save(self, ...)
-    if self.intellij_untitled and self.filename then
+    if old_untitled and self.filename then
+      untitled_recovery.handle_save_as_success(self, old_untitled)
       self.intellij_untitled = nil
       self.intellij_untitled_name = nil
       self.intellij_untitled_id = nil
+      self.intellij_untitled_backing_path = nil
+      self.intellij_untitled_backing_rel = nil
+      self.intellij_untitled_backing_dirty = nil
+      self.intellij_untitled_backing_saved_at = nil
+      self.intellij_untitled_force_dirty = nil
+      self.intellij_untitled_project_path = nil
     end
     return result
   end
 
   local core_confirm_close_docs = core.confirm_close_docs
   function core.confirm_close_docs(docs, close_fn, ...)
-    local filtered, dirty_untitled = {}, {}
+    local filtered, dirty_untitled, explicit_untitled = {}, {}, {}
+    local explicit_bulk_close = core.root_panel and close_fn == core.root_panel.close_all_views
     for _, doc in ipairs(docs or core.docs) do
       if is_untitled_doc(doc) then
-        if doc:is_dirty() then dirty_untitled[#dirty_untitled + 1] = doc end
+        if explicit_bulk_close then explicit_untitled[#explicit_untitled + 1] = doc end
+        if doc:is_dirty() and untitled_doc_has_promptable_content(doc) then dirty_untitled[#dirty_untitled + 1] = doc end
       else
         filtered[#filtered + 1] = doc
       end
     end
 
+    local function discard_explicit_untitled_then_close(...)
+      local result = table.pack(pcall(close_fn, ...))
+      if result[1] then
+        for _, doc in ipairs(explicit_untitled) do
+          if #core.get_views_referencing_doc(doc) == 0 then
+            untitled_recovery.handle_confirmed_discard(doc)
+          end
+        end
+        return table.unpack(result, 2, result.n)
+      end
+      error(result[2], 0)
+    end
+
     -- App quit/restart persists open untitled docs through the workspace plugin,
     -- so do not warn there.  Explicit tab-closing operations (close all/others)
     -- remove the tabs from the workspace, so warn before discarding them.
-    if #dirty_untitled > 0 and close_fn ~= core.exit then
+    if #dirty_untitled > 0 and explicit_bulk_close then
       local args = { ... }
       local text = #dirty_untitled == 1
         and string.format("Closing %s will permanently discard this untitled document. Close it anyway?", dirty_untitled[1].intellij_untitled_name or "Untitled")
         or string.format("Closing %d untitled documents will permanently discard them. Close them anyway?", #dirty_untitled)
+      for _, doc in ipairs(dirty_untitled) do
+        untitled_recovery.flush_doc(doc, "close untitled tabs prompt", true)
+      end
       core.nag_view:show(
         "Close Untitled Tabs",
         text,
@@ -214,22 +295,35 @@ if not core.__untitled_tabs_patched then
         },
         function(item)
           if item.text == "Close" then
-            core_confirm_close_docs(filtered, close_fn, table.unpack(args))
+            core_confirm_close_docs(filtered, discard_explicit_untitled_then_close, table.unpack(args))
           end
         end
       )
       return
     end
 
-    return core_confirm_close_docs(filtered, close_fn, ...)
+    return core_confirm_close_docs(filtered, discard_explicit_untitled_then_close, ...)
   end
 
   local docview_try_close = DocView.try_close
   function DocView:try_close(do_close)
+    if is_untitled_doc(self.doc) and not untitled_doc_has_promptable_content(self.doc) then
+      local doc = self.doc
+      local ok, err = pcall(do_close)
+      if ok then
+        if #core.get_views_referencing_doc(doc) == 0 then
+          untitled_recovery.handle_confirmed_discard(doc)
+        end
+        return
+      end
+      error(err, 0)
+    end
+
     if is_untitled_doc(self.doc)
        and self.doc:is_dirty()
        and #core.get_views_referencing_doc(self.doc) == 1 then
       local name = self.doc.intellij_untitled_name or "Untitled"
+      untitled_recovery.flush_doc(self.doc, "tab close prompt", true)
       core.nag_view:show(
         "Close Untitled Tab",
         string.format("Closing %s will permanently discard this untitled document. Close it anyway?", name),
@@ -238,10 +332,34 @@ if not core.__untitled_tabs_patched then
           { text = "Cancel", default_no = true },
         },
         function(item)
-          if item.text == "Close" then do_close() end
+          if item.text == "Close" then
+            local doc = self.doc
+            local ok, err = pcall(do_close)
+            if ok then
+              if #core.get_views_referencing_doc(doc) == 0 then
+                untitled_recovery.handle_confirmed_discard(doc)
+              end
+            else
+              error(err, 0)
+            end
+          end
         end
       )
       return
+    end
+    if is_untitled_doc(self.doc) and #core.get_views_referencing_doc(self.doc) == 1 then
+      local original_do_close = do_close
+      local doc = self.doc
+      do_close = function()
+        local result = table.pack(pcall(original_do_close))
+        if result[1] then
+          if #core.get_views_referencing_doc(doc) == 0 then
+            untitled_recovery.handle_confirmed_discard(doc)
+          end
+          return table.unpack(result, 2, result.n)
+        end
+        error(result[2], 0)
+      end
     end
     return docview_try_close(self, do_close)
   end

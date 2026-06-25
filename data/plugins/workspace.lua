@@ -3,8 +3,13 @@ local core = require "core"
 local command = require "core.command"
 local common = require "core.common"
 local storage = require "core.storage"
+local untitled_recovery = require "plugins.untitled_recovery"
 
 local STORAGE_MODULE = "ws"
+
+local function invalid_workspace_filename(filename)
+  return type(filename) == "string" and filename:find("[%z\1-\31]") ~= nil
+end
 
 local loaded_workspace_key
 local loaded_workspace_path
@@ -161,6 +166,14 @@ end
 local function save_view(view)
   local state = view:get_state()
   local module = view:get_module()
+  if state and invalid_workspace_filename(state.filename) then
+    if core.log_quiet then core.log_quiet("Workspace: skipped view with invalid filename %q", state.filename) end
+    return nil
+  end
+  if state and state.filename and view.doc and view.doc.new_file and not view.doc.intellij_untitled then
+    if core.log_quiet then core.log_quiet("Workspace: skipped missing named file view %q", state.filename) end
+    return nil
+  end
   if state and module then
     return {
       module = module,
@@ -185,7 +198,16 @@ local function load_view(t)
         text = t.text
       }
     end
-    return View and View.from_state(t.state)
+    if t.state and invalid_workspace_filename(t.state.filename) then
+      if core.log_quiet then core.log_quiet("Workspace: skipped invalid filename from saved state %q", t.state.filename) end
+      return nil
+    end
+    local view = View and View.from_state(t.state)
+    if view and view.doc and view.doc.filename and view.doc.new_file and not view.doc.intellij_untitled then
+      if core.log_quiet then core.log_quiet("Workspace: skipped missing named file from saved state %q", view.doc.filename) end
+      return nil
+    end
+    return view
   end
 end
 
@@ -263,6 +285,7 @@ local function save_workspace()
   end
   clear_duplicate_workspace_entries(entries, key)
 
+  untitled_recovery.flush_all("workspace save", true)
   local root = get_unlocked_root(core.root_panel.root_node)
   local documents = save_node(root)
   storage.save(STORAGE_MODULE, key, {
@@ -319,6 +342,7 @@ local function load_workspace()
         core.add_project(system.absolute_path(dir_name))
       end
     end
+    untitled_recovery.restore_project(core.root_project().path)
     maybe_show_empty_project_file_tree()
   end)
 end
@@ -340,6 +364,7 @@ function core.run(...)
 
     local open_project_in_same_window = core.open_project_in_same_window
     function core.open_project_in_same_window(project, ...)
+      untitled_recovery.flush_all("same-window project switch", true)
       suppress_next_exit_workspace_save = true
       local result = table.pack(pcall(open_project_in_same_window, project, ...))
       if not result[1] then

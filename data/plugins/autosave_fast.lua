@@ -2,10 +2,10 @@
 local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
-local storage = require "core.storage"
 local style = require "core.style"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
+local untitled_recovery = require "plugins.untitled_recovery"
 
 if config.plugins.autosave_fast == false then
   return { enabled = false, save_all_dirty = function() return 0 end }
@@ -21,17 +21,7 @@ local dirty_docs = setmetatable({}, { __mode = "k" })
 local disk_state = setmetatable({}, { __mode = "k" })
 local save_generation = 0
 local loop_running = false
-local recovery_restored = false
-local recovery_dirty = false
-local untitled_id_counter = 0
-
-local RECOVERY_MODULE = "untitled_recovery"
 local MAX_SNAPSHOT_CONTENT_SIZE = 5 * 1024 * 1024
-
-local function project_key()
-  local project = core.root_project and core.root_project()
-  return project and project.path or "default"
-end
 
 local function is_protected_doc(doc)
   if not doc or not doc.abs_filename then return false end
@@ -46,20 +36,12 @@ local function is_untitled_doc(doc)
   return doc and doc.intellij_untitled and doc.new_file and not doc.filename
 end
 
-local function new_untitled_id()
-  untitled_id_counter = untitled_id_counter + 1
-  return string.format(
-    "%s-%d-%d",
-    system.get_process_id and system.get_process_id() or 0,
-    math.floor(system.get_time() * 1000000),
-    untitled_id_counter
-  )
+local function has_control_chars(path)
+  return type(path) == "string" and path:find("[%z\1-\31]") ~= nil
 end
 
-local function ensure_untitled_id(doc, id)
-  if not doc then return nil end
-  doc.intellij_untitled_id = id or doc.intellij_untitled_id or new_untitled_id()
-  return doc.intellij_untitled_id
+local function has_invalid_save_path(doc)
+  return doc and (has_control_chars(doc.filename) or has_control_chars(doc.abs_filename))
 end
 
 local function read_file_contents(filename)
@@ -317,6 +299,7 @@ local function should_autosave_doc(doc)
   return autosave_fast.enabled
     and doc
     and doc.filename
+    and not has_invalid_save_path(doc)
     and not is_protected_doc(doc)
     and doc.is_dirty
     and doc:is_dirty()
@@ -327,6 +310,7 @@ local function should_hide_dirty_marker(doc)
     and autosave_fast.hide_dirty_markers ~= false
     and doc
     and doc.filename
+    and not has_invalid_save_path(doc)
     and not is_protected_doc(doc)
 end
 
@@ -334,92 +318,10 @@ function autosave_fast.should_hide_dirty_marker(doc)
   return should_hide_dirty_marker(doc)
 end
 
-local function collect_untitled_recovery()
-  local items = {}
-  for _, doc in ipairs(core.docs or {}) do
-    if is_untitled_doc(doc) then
-      items[#items + 1] = {
-        id = ensure_untitled_id(doc),
-        name = doc.intellij_untitled_name,
-        text = doc:get_text(1, 1, math.huge, math.huge),
-        crlf = doc.crlf,
-      }
-    end
-  end
-  return items
-end
-
-local function save_untitled_recovery(force)
-  if not force and not recovery_dirty then return end
-  recovery_dirty = false
-  local items = collect_untitled_recovery()
-  if #items > 0 then
-    storage.save(RECOVERY_MODULE, project_key(), {
-      project = project_key(),
-      saved_at = os.time(),
-      documents = items,
-    })
-  else
-    storage.clear(RECOVERY_MODULE, project_key())
-  end
-end
-
-local function same_untitled_exists(id, name, text)
-  for _, doc in ipairs(core.docs or {}) do
-    if is_untitled_doc(doc) then
-      if id and doc.intellij_untitled_id == id then return true end
-      if not id
-         and doc.intellij_untitled_name == name
-         and doc:get_text(1, 1, math.huge, math.huge) == text then
-        return true
-      end
-    end
-  end
-  return false
-end
-
-local function restore_untitled_recovery()
-  if recovery_restored then return end
-  recovery_restored = true
-  local data = storage.load(RECOVERY_MODULE, project_key())
-  if type(data) ~= "table" or type(data.documents) ~= "table" then return end
-
-  local restored = 0
-  for _, item in ipairs(data.documents) do
-    if type(item) == "table" and type(item.text) == "string"
-       and not same_untitled_exists(item.id, item.name, item.text) then
-      local doc = core.open_doc()
-      doc.intellij_untitled = true
-      doc.intellij_untitled_name = item.name
-      ensure_untitled_id(doc, item.id)
-      doc.crlf = item.crlf
-      doc.lines = {}
-      for line in (item.text .. "\n"):gmatch("(.-\n)") do
-        doc.lines[#doc.lines + 1] = line
-      end
-      if #doc.lines == 0 then doc.lines[1] = "\n" end
-      doc:reset_syntax()
-      doc:clear_undo_redo()
-      doc:clean()
-      core.root_panel:open_doc(doc)
-      restored = restored + 1
-    end
-  end
-  if restored > 0 then
-    core.log_quiet("Restored %d untitled autosave document(s)", restored)
-  end
-end
-
-local function note_untitled_snapshot(doc)
-  if is_untitled_doc(doc) then
-    dirty_docs[doc] = nil
-    recovery_dirty = true
-  end
-end
-
 local function save_doc(doc, reason)
   if is_untitled_doc(doc) then
-    note_untitled_snapshot(doc)
+    untitled_recovery.flush_doc(doc, reason or "autosave", true)
+    dirty_docs[doc] = nil
     return false
   end
   if not should_autosave_doc(doc) then
@@ -452,7 +354,7 @@ function autosave_fast.save_all_dirty(reason)
     if should_autosave_doc(doc) then dirty_docs[doc] = true end
   end
 
-  save_untitled_recovery(true)
+  untitled_recovery.flush_all(reason or "autosave all")
 
   local saved = 0
   for doc in pairs(dirty_docs) do
@@ -497,8 +399,7 @@ function Doc:on_text_change(type, transaction, ...)
   local result = on_text_change(self, type, transaction, ...)
   if autosave_fast.enabled then
     if is_untitled_doc(self) then
-      note_untitled_snapshot(self)
-      schedule_idle_save()
+      dirty_docs[self] = nil
     elseif self.filename and not is_protected_doc(self) then
       dirty_docs[self] = true
       schedule_idle_save()
@@ -537,8 +438,7 @@ function Doc:save(filename, abs_filename)
   local result = save(self, filename, abs_filename)
   update_disk_state(self)
   clear_dirty_if_clean(self)
-  if was_untitled then recovery_dirty = true end
-  save_untitled_recovery(was_untitled)
+  if was_untitled then untitled_recovery.flush_all("save as") end
   return result
 end
 
@@ -547,8 +447,6 @@ function Doc:on_close(...)
   dirty_docs[self] = nil
   disk_state[self] = nil
   local result = on_close(self, ...)
-  recovery_dirty = true
-  save_untitled_recovery(false)
   return result
 end
 
@@ -566,6 +464,11 @@ end
 
 local docview_try_close = DocView.try_close
 function DocView:try_close(do_close)
+  if has_invalid_save_path(self.doc) then
+    if core.log_quiet then core.log_quiet("Closing invalid saved-path tab without save prompt: %q", self.doc.filename or self.doc.abs_filename) end
+    do_close()
+    return
+  end
   if self.doc:is_dirty()
      and #core.get_views_referencing_doc(self.doc) == 1 then
     local saved, handled = autosave_fast.save_before_close(self.doc, "tab close")
@@ -621,12 +524,5 @@ end
 for _, doc in ipairs(core.docs or {}) do
   update_disk_state(doc)
 end
-
-core.add_thread(function()
-  -- Let workspace restoration run first, then add any autosaved
-  -- untitled documents not already restored by workspace state.
-  coroutine.yield(3)
-  restore_untitled_recovery()
-end)
 
 return autosave_fast
