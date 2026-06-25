@@ -373,6 +373,79 @@ local function reveal_active_file_in_explorer(dv)
   end
 end
 
+local function shell_quote(path)
+  return "'" .. tostring(path):gsub("'", "'\''") .. "'"
+end
+
+local function try_start_terminal_process(command_args, cwd)
+  local ok, process = pcall(require, "core.process")
+  if not ok or not process or not process.start then return false end
+
+  local proc = process.start(command_args, {
+    cwd = cwd,
+    detach = true,
+    stdin = process.REDIRECT_DISCARD,
+    stdout = process.REDIRECT_DISCARD,
+    stderr = process.REDIRECT_DISCARD,
+  })
+  return proc ~= nil
+end
+
+local function open_os_terminal_at_directory(dir)
+  if PLATFORM == "Windows" then
+    if try_start_terminal_process({ "wt.exe", "-d", dir }, dir) then
+      return true
+    end
+
+    core.log_quiet("Windows Terminal unavailable; falling back to cmd.exe")
+    local win_dir = dir:gsub("/", "\\"):gsub('"', '\\"')
+    system.exec(string.format('start /D "%s" cmd.exe', win_dir))
+    return true
+  end
+
+  if PLATFORM == "Mac OS X" then
+    system.exec("open -a Terminal " .. shell_quote(dir))
+    return true
+  end
+
+  for _, args in ipairs({
+    { "x-terminal-emulator" },
+    { "gnome-terminal" },
+    { "konsole" },
+    { "xfce4-terminal" },
+    { "xterm" },
+  }) do
+    if try_start_terminal_process(args, dir) then return true end
+  end
+
+  return false
+end
+
+local function open_terminal_at_active_file(dv)
+  local path = active_file_path(dv)
+  if not path or path == "" then
+    core.error("No active file for terminal")
+    return
+  end
+
+  local info = system.get_file_info(path)
+  if not info or info.type ~= "file" then
+    core.error("Active file does not exist on disk: %s", path)
+    return
+  end
+
+  local dir = common.dirname(path)
+  if not dir or dir == "" then
+    core.error("Could not determine active file directory: %s", path)
+    return
+  end
+
+  core.log_quiet("Opening OS terminal at active file directory: %s", dir)
+  if not open_os_terminal_at_directory(dir) then
+    core.error("Could not open OS terminal at: %s", dir)
+  end
+end
+
 local function current_navigation_place()
   local view = core.active_view
   local doc = view and view.doc
@@ -1392,6 +1465,7 @@ end, {
   ["user:open-file-as-raw-text"] = open_file_as_raw_text,
   ["user:open-file-in-associated-program"] = open_file_in_associated_program,
   ["user:reveal-active-file-in-explorer"] = reveal_active_file_in_explorer,
+  ["user:open-terminal-at-active-file"] = open_terminal_at_active_file,
 })
 
 -- GlobalPromptBar (the small bottom input used by Open File, Command Palette,
@@ -1427,6 +1501,7 @@ keymap.add({
   ["alt+x"] = "root:switch-to-next-tab",
   ["ctrl+l"] = "filetree:focus-current-file",
   ["ctrl+shift+l"] = "user:reveal-active-file-in-explorer",
+  ["ctrl+alt+t"] = "user:open-terminal-at-active-file",
   ["ctrl+up"] = "user:move-caret-previous-paragraph",
   ["ctrl+down"] = "user:move-caret-next-paragraph",
   ["alt+left"] = "user:navigate-back",
