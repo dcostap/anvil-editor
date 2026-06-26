@@ -8,6 +8,7 @@ local tool_window = require "core.tool_window"
 local RootPanel = require "core.rootpanel"
 local GitView = require "plugins.git.view"
 local backend = require "plugins.git.backend"
+local historical_document = require "plugins.git.historical_document"
 local model = require "plugins.git.model"
 
 local git_view = {
@@ -101,6 +102,33 @@ command.add(nil, {
     when_model_ready(view, function(v)
       local tab, err = v.model:open_working_tree_diff(function() core.redraw = true end)
       if not tab and err then core.log_quiet("Git View: open working tree diff skipped: %s", err.message or err.kind) end
+    end)
+  end,
+
+  ["git:open-selected-historical-document"] = function()
+    local project = current_project()
+    local tw = project and tool_window.get(project, "git")
+    local view = tw and tw.git_view
+    if not view then
+      core.log_quiet("Git View: historical document open skipped; Git View is not open")
+      return
+    end
+    local request, request_err = view.model:selected_historical_document()
+    if not request then
+      core.log_quiet("Git View: historical document open skipped: %s", request_err.message or request_err.kind)
+      return
+    end
+    if historical_document.activate_existing(request.repo, request.rev, request.relpath) then
+      core.redraw = true
+      return
+    end
+    view.model.backend.file_at(request.repo, request.rev, request.relpath, {}, function(text, err)
+      if err then
+        core.log_quiet("Git View: historical document load failed: %s", err.message or err.kind)
+        return
+      end
+      historical_document.open(request.repo, request.rev, request.relpath, text or "")
+      core.redraw = true
     end)
   end,
 

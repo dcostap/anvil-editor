@@ -328,6 +328,36 @@ function Model:select_diff_file(tab, index, callback)
   return tab.changed_files[tab.selected_file]
 end
 
+function Model:resolve_historical_rev(rev)
+  if rev == "HEAD" then
+    for _, row in ipairs(self:log_tab().commits) do
+      if row.kind ~= "working_tree" and row.hash and row.hash ~= "" then return row.hash end
+    end
+  end
+  return rev
+end
+
+function Model:selected_historical_document()
+  local tab = self:selected_tab()
+  if not tab or tab.kind ~= "commit_diff" then
+    return nil, { kind = "no_diff_tab", message = "No commit diff tab is active" }
+  end
+  local file = tab.changed_files and tab.changed_files[tab.selected_file]
+  if not file then return nil, { kind = "no_file", message = "No changed file is selected" } end
+
+  local rev, relpath
+  if tab.right ~= self.backend.WORKING_TREE and not missing_side_for_status(file, "right") then
+    rev, relpath = tab.right, path_for_file(file, "right")
+  elseif tab.left ~= self.backend.WORKING_TREE and tab.left ~= self.backend.EMPTY_TREE and not missing_side_for_status(file, "left") then
+    rev, relpath = tab.left, path_for_file(file, "left")
+  end
+  if not rev or not relpath then
+    return nil, { kind = "no_historical_revision", message = "Selected file has no Git revision to open" }
+  end
+  rev = self:resolve_historical_rev(rev)
+  return { repo = self.repo, rev = rev, relpath = relpath, tab = tab, file = file }
+end
+
 function Model:load_selected_diff_file(tab, callback)
   tab = tab or self:selected_tab()
   if not tab or tab.kind ~= "commit_diff" then return false end
