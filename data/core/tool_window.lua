@@ -9,6 +9,7 @@ local RootPanel = require "core.rootpanel"
 local tool_window = {
   windows = {},
   windows_by_id = {},
+  registered_kinds = {},
 }
 
 local function project_key(project)
@@ -228,7 +229,7 @@ function tool_window.open(project, kind, opts)
     window = window,
     window_id = id,
     root = root,
-    hidden = false,
+    hidden = opts.hidden and true or false,
     state = opts.state or {},
     bounds = opts.bounds,
     on_event = opts.on_event,
@@ -236,12 +237,50 @@ function tool_window.open(project, kind, opts)
   }, ToolWindow)
   tool_window.windows[key] = tw
   if id then tool_window.windows_by_id[id] = tw end
-  tw:show()
+  if tw.hidden then
+    if tw.window and system.set_window_visible then pcall(system.set_window_visible, tw.window, false) end
+  else
+    tw:show()
+  end
   return tw, true
 end
 
 function tool_window.get(project, kind)
   return tool_window.windows[key_for(project, kind)]
+end
+
+function tool_window.register_kind(kind, handler)
+  tool_window.registered_kinds[kind] = handler or {}
+end
+
+function tool_window.get_project_state(project)
+  local pkey = project_key(project)
+  local states = {}
+  for _, tw in pairs(tool_window.windows) do
+    if tw.project_key == pkey then
+      local handler = tool_window.registered_kinds[tw.kind]
+      local state = handler and handler.save and handler.save(tw) or tw:get_state()
+      if state then
+        state.kind = state.kind or tw.kind
+        state.hidden = tw.hidden and true or false
+        state.bounds = state.bounds or tw.bounds
+        states[#states + 1] = state
+      end
+    end
+  end
+  table.sort(states, function(a, b) return tostring(a.kind) < tostring(b.kind) end)
+  return states
+end
+
+function tool_window.restore_project_state(project, states, opts_by_kind)
+  for _, state in ipairs(states or {}) do
+    if type(state) == "table" and state.kind then
+      local handler = tool_window.registered_kinds[state.kind]
+      if handler and handler.restore then
+        handler.restore(project, state, opts_by_kind and opts_by_kind[state.kind])
+      end
+    end
+  end
 end
 
 function tool_window.hide(project, kind)

@@ -86,6 +86,8 @@ test.describe("plugins.git.model", function()
     test.equal(commits[2].hash, "abc123")
     test.equal(commits[2].subject, "Initial")
     test.equal(model:selected_commit().kind, "working_tree")
+    model:select_log_index(1)
+    test.equal(model:get_state().tabs[1].selected_commit_hash, nil)
     test.equal(model:select_log_index(2).hash, "abc123")
     test.equal(model:selected_commit().subject, "Initial")
   end)
@@ -127,6 +129,40 @@ test.describe("plugins.git.model", function()
     test.equal(tab.right_text, "abc123:src/app.lua")
   end)
 
+  test.test("apply_state invalidates in-flight file history callbacks", function()
+    local callbacks = {}
+    local backend = fake_backend("", log_output())
+    backend.file_history = function(repo, relpath, opts, callback)
+      callbacks[#callbacks + 1] = callback
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    model:refresh_log()
+    local tab = model:open_file_history("src/app.lua")
+    local queued = 0
+    model:load_file_history(tab, function() queued = queued + 1 end)
+    model:apply_state({ repo = { root = "C:/repo" }, active_tab = "log", tabs = { { id = "log", kind = "log" } } })
+    callbacks[1](real_backend.parse_log_page(log_output(), { limit = 500 }), nil)
+    test.equal(queued, 0)
+    test.equal(model:selected_tab().id, "log")
+  end)
+
+  test.test("queues callbacks for in-flight file history loads", function()
+    local callbacks = {}
+    local backend = fake_backend("", log_output())
+    backend.file_history = function(repo, relpath, opts, callback)
+      callbacks[#callbacks + 1] = callback
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    model:refresh_log()
+    local tab = model:open_file_history("src/app.lua")
+    local queued = 0
+    model:load_file_history(tab, function() queued = queued + 1 end)
+    callbacks[1](real_backend.parse_log_page(log_output(), { limit = 500 }), nil)
+    test.equal(queued, 1)
+  end)
+
   test.test("refresh invalidates in-flight file history loads without cancelled errors", function()
     local callbacks = {}
     local backend = fake_backend("", log_output())
@@ -145,6 +181,154 @@ test.describe("plugins.git.model", function()
     callbacks[2](real_backend.parse_log_page(log_output(), { limit = 500 }), nil)
     test.equal(tab.loading, false)
     test.equal(tab.commits[1].hash, "abc123")
+  end)
+
+  test.test("serializes and restores lightweight tab state", function()
+    local model = Model.new({ path = "C:/repo" }, { backend = fake_backend("", log_output()) })
+    model:refresh_log()
+    local diff_tab = model:open_selected_commit_diff()
+    model:open_file_history("src/app.lua")
+    local selection_tab = model:open_selection_history("src/app.lua", 3, 7)
+    selection_tab.selected_commit = 1
+    diff_tab.left_text = "large content must not persist"
+    diff_tab.right_text = "large content must not persist"
+    model.active_tab = selection_tab.id
+
+    local state = model:get_state()
+    local restored = Model.new({ path = "C:/repo" }, { backend = fake_backend("", log_output()), state = state })
+
+    test.equal(restored.active_tab, selection_tab.id)
+    test.equal(#restored.tabs, 4)
+    test.equal(restored:find_tab(diff_tab.id).left_text, nil)
+    test.equal(restored:find_tab(diff_tab.id).right_text, nil)
+    test.equal(restored:find_tab(selection_tab.id).history_context.type, "selection")
+    test.equal(restored:find_tab(selection_tab.id).history_context.start_line, 3)
+    test.equal(restored:get_state().tabs[4].selected_commit_hash, "sel789")
+  end)
+
+  test.test("restored file history keeps saved scroll through first refresh", function()
+    local model = Model.new({ path = "C:/repo" }, { backend = fake_backend("", log_output()) })
+    model:refresh_log()
+    local tab = model:open_file_history("src/app.lua")
+    tab.scroll = 77
+    local restored = Model.new({ path = "C:/repo" }, { backend = fake_backend("", log_output()), state = model:get_state() })
+    local restored_tab = restored:find_tab(tab.id)
+
+    restored:refresh_log()
+    test.equal(restored_tab.scroll, 77)
+  end)
+
+  test.test("restored log selection anchor survives until later page loads", function()
+    local old_page_size = config.plugins.git.log_page_size
+    config.plugins.git.log_page_size = 1
+    local backend = fake_backend("", "")
+    backend.run_git = function(repo, args, opts, callback)
+      if args[1] == "status" then
+        callback({ code = 0, stdout = "" }, nil)
+      elseif args[2] == "1" then
+        callback({ code = 0, stdout = log_output({ { "bbb222", "Second" } }) }, nil)
+      else
+        callback({ code = 0, stdout = log_output({ { "aaa111", "First" }, { "bbb222", "Second" } }) }, nil)
+      end
+      return { cancel = function() end }
+    end
+    local restored = Model.new({ path = "C:/repo" }, {
+      backend = backend,
+      state = {
+        repo = { root = "C:/repo" },
+        active_tab = "log",
+        tabs = { { id = "log", kind = "log", selected_commit = 1, selected_commit_hash = "bbb222" } },
+      },
+    })
+
+    restored:refresh_log()
+    test.equal(restored:log_tab().selected_commit_hash, "bbb222")
+    test.equal(restored:get_state().tabs[1].selected_commit_hash, "bbb222")
+    test.equal(restored:selected_commit(), nil)
+    restored:load_more_log()
+    test.equal(restored:selected_commit().hash, "bbb222")
+    test.equal(restored:log_tab().selected_commit_hash, "bbb222")
+    config.plugins.git.log_page_size = old_page_size
+  end)
+
+  test.test("resolved log selection anchor preserves selection when newer commits appear", function()
+    local backend = fake_backend("", log_output({ { "bbb222", "Second" } }))
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    model:refresh_log()
+    model:select_log_index(1)
+    backend.run_git = function(repo, args, opts, callback)
+      if args[1] == "status" then
+        callback({ code = 0, stdout = "" }, nil)
+      else
+        callback({ code = 0, stdout = log_output({ { "aaa111", "New" }, { "bbb222", "Second" } }) }, nil)
+      end
+      return { cancel = function() end }
+    end
+
+    model:refresh_log()
+    test.equal(model:selected_commit().hash, "bbb222")
+  end)
+
+  test.test("restored log selection anchor does not override later user selection", function()
+    local backend = fake_backend("", log_output({ { "aaa111", "First" }, { "bbb222", "Second" } }))
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    model:refresh_log()
+    model:select_log_index(1)
+    local restored = Model.new({ path = "C:/repo" }, { backend = backend, state = model:get_state() })
+
+    restored:refresh_log()
+    test.equal(restored:selected_commit().hash, "aaa111")
+    restored:select_log_index(2)
+    restored:refresh_log()
+    test.equal(restored:selected_commit().hash, "bbb222")
+  end)
+
+  test.test("restored diff tabs reselect files by path after lazy reload", function()
+    local backend = fake_backend("", log_output())
+    backend.changed_files = function(repo, left, right, opts, callback)
+      callback({
+        { status = "modified", old_path = "a.lua", new_path = "a.lua" },
+        { status = "modified", old_path = "b.lua", new_path = "b.lua" },
+      }, nil)
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    model:refresh_log()
+    local diff_tab = model:open_selected_commit_diff()
+    model:select_diff_file(diff_tab, 2)
+
+    backend.changed_files = function(repo, left, right, opts, callback)
+      callback({
+        { status = "modified", old_path = "b.lua", new_path = "b.lua" },
+        { status = "modified", old_path = "a.lua", new_path = "a.lua" },
+      }, nil)
+      return { cancel = function() end }
+    end
+    local restored = Model.new({ path = "C:/repo" }, { backend = backend, state = model:get_state() })
+    restored:select_tab(diff_tab.id)
+    local restored_tab = restored:find_tab(diff_tab.id)
+    test.equal(restored_tab.selected_file, 1)
+    test.equal(restored_tab.changed_files[1].new_path, "b.lua")
+  end)
+
+  test.test("selecting a restored diff tab lazily reloads changed files", function()
+    local changed_calls = 0
+    local backend = fake_backend("", log_output())
+    backend.changed_files = function(repo, left, right, opts, callback)
+      changed_calls = changed_calls + 1
+      callback({ { status = "modified", old_path = "src/app.lua", new_path = "src/app.lua" } }, nil)
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    model:refresh_log()
+    local diff_tab = model:open_selected_commit_diff()
+    local state = model:get_state()
+    local restored = Model.new({ path = "C:/repo" }, { backend = backend, state = state })
+
+    changed_calls = 0
+    restored:select_tab(diff_tab.id)
+    test.equal(changed_calls, 1)
+    test.equal(#restored:find_tab(diff_tab.id).changed_files, 1)
   end)
 
   test.test("opens and reuses selection history tabs distinct from file history", function()

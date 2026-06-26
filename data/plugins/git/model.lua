@@ -7,6 +7,8 @@ local backend_default = require "plugins.git.backend"
 local Model = {}
 Model.__index = Model
 
+local diff_tab_id, history_tab_id, history_tab_title, diff_tab_title
+
 local function new_log_tab()
   return {
     id = "log",
@@ -35,7 +37,168 @@ function Model.new(project, opts)
     error = nil,
     active_jobs = {},
   }, Model)
+  if opts.state then self:apply_state(opts.state) end
   return self
+end
+
+local function clone_table(t)
+  if type(t) ~= "table" then return nil end
+  local copy = {}
+  for key, value in pairs(t) do copy[key] = value end
+  return copy
+end
+
+local function lightweight_commit(commit)
+  if type(commit) ~= "table" then return nil end
+  return {
+    kind = commit.kind,
+    hash = commit.hash,
+    short_hash = commit.short_hash,
+    subject = commit.subject,
+    author_name = commit.author_name,
+    author_email = commit.author_email,
+    time = commit.time,
+    refs = commit.refs,
+    parents = clone_table(commit.parents),
+  }
+end
+
+local function selected_commit_hash(tab)
+  if tab and tab.selected_commit_hash then return tab.selected_commit_hash end
+  local commit = tab and tab.commits and tab.commits[tab.selected_commit]
+  if commit and commit.kind == "working_tree" then return nil end
+  return commit and commit.hash or nil
+end
+
+local function commit_index_by_hash(commits, hash)
+  if not hash then return nil end
+  for index, commit in ipairs(commits or {}) do
+    if commit.hash == hash then return index end
+  end
+end
+
+local function apply_commit_anchor(tab)
+  if not tab or not tab.selected_commit_hash then return end
+  local index = commit_index_by_hash(tab.commits, tab.selected_commit_hash)
+  if index then
+    tab.selected_commit = index
+  elseif not tab.has_more then
+    tab.selected_commit_hash = nil
+  end
+end
+
+local function changed_file_path(file)
+  return file and (file.new_path or file.path or file.old_path) or nil
+end
+
+local function changed_file_index_by_path(files, path)
+  if not path then return nil end
+  for index, file in ipairs(files or {}) do
+    if changed_file_path(file) == path then return index end
+  end
+end
+
+function Model:get_state()
+  local state = {
+    repo = self.repo and { root = self.repo.root },
+    active_tab = self.active_tab,
+    tabs = {},
+  }
+  for _, tab in ipairs(self.tabs or {}) do
+    if tab.kind == "log" then
+      state.tabs[#state.tabs + 1] = {
+        id = "log",
+        kind = "log",
+        selected_commit = tab.selected_commit,
+        selected_commit_hash = selected_commit_hash(tab),
+      }
+    elseif tab.kind == "commit_diff" then
+      local selected_file = tab.changed_files and tab.changed_files[tab.selected_file]
+      state.tabs[#state.tabs + 1] = {
+        id = tab.id,
+        kind = "commit_diff",
+        title = tab.title,
+        left = tab.left,
+        right = tab.right,
+        commit = lightweight_commit(tab.commit),
+        selected_file = tab.selected_file,
+        selected_file_path = tab.selected_file_path or selected_file and changed_file_path(selected_file),
+      }
+    elseif tab.kind == "file_history" then
+      state.tabs[#state.tabs + 1] = {
+        id = tab.id,
+        kind = "file_history",
+        title = tab.title,
+        relpath = tab.relpath,
+        history_context = clone_table(tab.history_context),
+        selected_commit = tab.selected_commit,
+        selected_commit_hash = selected_commit_hash(tab),
+        scroll = tab.scroll,
+        follow_renames = tab.follow_renames,
+      }
+    end
+  end
+  return state
+end
+
+function Model:apply_state(state)
+  if type(state) ~= "table" then return end
+  self.generation = (self.generation or 0) + 1
+  self:invalidate_history_loads()
+  self:invalidate_diff_loads()
+  for _, tab in ipairs(self.tabs or {}) do
+    tab.pending_history_callbacks = nil
+    tab.pending_load_callbacks = nil
+  end
+  self:cancel_jobs()
+  self.repo = type(state.repo) == "table" and state.repo.root and { root = state.repo.root } or nil
+  self.tabs = { new_log_tab() }
+  for _, saved in ipairs(state.tabs or {}) do
+    if type(saved) == "table" and saved.kind == "log" then
+      self.tabs[1].selected_commit = tonumber(saved.selected_commit) or 1
+      self.tabs[1].selected_commit_hash = saved.selected_commit_hash
+    elseif type(saved) == "table" and saved.kind == "commit_diff" and saved.left and saved.right then
+      self.tabs[#self.tabs + 1] = {
+        id = saved.id or diff_tab_id(self.repo, saved.left, saved.right),
+        kind = "commit_diff",
+        title = saved.title or diff_tab_title(saved.commit, saved.left, saved.right),
+        closable = true,
+        commit = lightweight_commit(saved.commit) or { kind = "commit", hash = saved.right },
+        left = saved.left,
+        right = saved.right,
+        changed_files = {},
+        selected_file = tonumber(saved.selected_file) or 1,
+        selected_file_path = saved.selected_file_path,
+        loading = false,
+        loading_file = false,
+        error = nil,
+        file_error = nil,
+        diff_generation = 0,
+      }
+    elseif type(saved) == "table" and saved.kind == "file_history" and saved.relpath then
+      local context = clone_table(saved.history_context)
+      local id = saved.id or history_tab_id(self.repo, saved.relpath, context)
+      self.tabs[#self.tabs + 1] = {
+        id = id,
+        kind = "file_history",
+        title = saved.title or history_tab_title(saved.relpath, context),
+        closable = true,
+        relpath = tostring(saved.relpath):gsub("\\", "/"),
+        history_context = context,
+        commits = {},
+        selected_commit = tonumber(saved.selected_commit) or 1,
+        selected_commit_hash = saved.selected_commit_hash,
+        scroll = tonumber(saved.scroll) or 0,
+        restored_scroll = tonumber(saved.scroll) or nil,
+        loading = false,
+        error = nil,
+        has_more = false,
+        next_offset = nil,
+        follow_renames = saved.follow_renames ~= false,
+      }
+    end
+  end
+  self.active_tab = self:find_tab(state.active_tab) and state.active_tab or "log"
 end
 
 function Model:log_tab()
@@ -53,9 +216,14 @@ function Model:select_tab(id, callback)
   local tab = self:find_tab(id)
   if tab then
     self.active_tab = id
-    if tab.kind == "commit_diff" and #(tab.changed_files or {}) > 0
-        and tab.left_text == nil and tab.right_text == nil and not tab.loading_file then
-      self:load_selected_diff_file(tab, callback)
+    if tab.kind == "commit_diff" then
+      if #(tab.changed_files or {}) == 0 and not tab.loading then
+        self:load_changed_files(tab, callback)
+      elseif tab.left_text == nil and tab.right_text == nil and not tab.loading_file then
+        self:load_selected_diff_file(tab, callback)
+      end
+    elseif tab.kind == "file_history" and #(tab.commits or {}) == 0 and not tab.loading then
+      self:load_file_history(tab, callback)
     end
     return tab
   end
@@ -63,9 +231,15 @@ end
 
 function Model:selected_commit()
   local tab = self:selected_tab()
-  if tab and tab.kind == "file_history" then return tab.commits[tab.selected_commit] end
+  if tab and tab.kind == "file_history" then
+    local commit = tab.commits[tab.selected_commit]
+    if tab.selected_commit_hash and (not commit or commit.hash ~= tab.selected_commit_hash) then return nil end
+    return commit
+  end
   tab = self:log_tab()
-  return tab.commits[tab.selected_commit]
+  local commit = tab.commits[tab.selected_commit]
+  if tab.selected_commit_hash and (not commit or commit.hash ~= tab.selected_commit_hash) then return nil end
+  return commit
 end
 
 function Model:select_log_index(index)
@@ -76,6 +250,8 @@ function Model:select_log_index(index)
   end
   index = math.max(1, math.min(#tab.commits, tonumber(index) or 1))
   tab.selected_commit = index
+  local commit = tab.commits[index]
+  tab.selected_commit_hash = commit and commit.kind ~= "working_tree" and commit.hash or nil
   return tab.commits[index]
 end
 
@@ -108,13 +284,13 @@ local function short_rev(rev)
   return tostring(rev or ""):sub(1, 8)
 end
 
-local function diff_tab_id(repo, left, right, scope)
+function diff_tab_id(repo, left, right, scope)
   return table.concat({
     "diff", repo and repo.root or "", tostring(left or ""), tostring(right or ""), scope or "",
   }, "\0")
 end
 
-local function history_tab_id(repo, relpath, context)
+function history_tab_id(repo, relpath, context)
   if context and context.type == "selection" then
     return table.concat({
       "history", "selection", repo and repo.root or "", tostring(relpath or ""),
@@ -124,14 +300,14 @@ local function history_tab_id(repo, relpath, context)
   return table.concat({ "history", "file", repo and repo.root or "", tostring(relpath or "") }, "\0")
 end
 
-local function history_tab_title(relpath, context)
+function history_tab_title(relpath, context)
   if context and context.type == "selection" then
     return string.format("History: %s:%d-%d", tostring(relpath or ""), context.start_line or 0, context.end_line or 0)
   end
   return "History: " .. tostring(relpath or "")
 end
 
-local function diff_tab_title(commit, left, right)
+function diff_tab_title(commit, left, right)
   if commit and commit.kind == "working_tree" then return "Diff Working Tree" end
   return "Diff " .. short_rev(right) .. " ← " .. short_rev(left)
 end
@@ -283,7 +459,14 @@ function Model:open_selection_history(relpath, start_line, end_line, callback)
 end
 
 function Model:load_file_history(tab, callback)
-  if not tab or tab.loading then return false end
+  if not tab then return false end
+  if tab.loading then
+    if callback then
+      tab.pending_history_callbacks = tab.pending_history_callbacks or {}
+      tab.pending_history_callbacks[#tab.pending_history_callbacks + 1] = callback
+    end
+    return false
+  end
   tab.history_generation = (tab.history_generation or 0) + 1
   local generation = tab.history_generation
   tab.loading = true
@@ -309,8 +492,13 @@ function Model:load_file_history(tab, callback)
       end
       tab.has_more = page.has_more
       tab.next_offset = page.next_offset
+      apply_commit_anchor(tab)
+      if tab.selected_commit > #tab.commits then tab.selected_commit = math.max(1, #tab.commits) end
     end
+    local callbacks = tab.pending_history_callbacks or {}
+    tab.pending_history_callbacks = nil
     if callback then callback(self, err) end
+    for _, cb in ipairs(callbacks) do cb(self, err) end
     if self.on_update then self.on_update(self) end
   end
   if tab.history_context and tab.history_context.type == "selection" then
@@ -353,7 +541,13 @@ function Model:load_changed_files(tab, callback)
     tab.error = err
     tab.changed_files = files or {}
     tab.file_scroll = 0
-    tab.selected_file = math.min(tab.selected_file or 1, math.max(1, #tab.changed_files))
+    if tab.selected_file_path then
+      local selected_file = changed_file_index_by_path(tab.changed_files, tab.selected_file_path)
+      tab.selected_file = selected_file or math.min(tab.selected_file or 1, math.max(1, #tab.changed_files))
+      if not selected_file then tab.selected_file_path = nil end
+    else
+      tab.selected_file = math.min(tab.selected_file or 1, math.max(1, #tab.changed_files))
+    end
     local callbacks = tab.pending_load_callbacks or {}
     tab.pending_load_callbacks = nil
     if err or #tab.changed_files == 0 then
@@ -430,6 +624,7 @@ function Model:select_diff_file(tab, index, callback)
   if not tab or tab.kind ~= "commit_diff" then return nil end
   if #tab.changed_files == 0 then return nil end
   tab.selected_file = math.max(1, math.min(#tab.changed_files, tonumber(index) or 1))
+  tab.selected_file_path = changed_file_path(tab.changed_files[tab.selected_file])
   self:load_selected_diff_file(tab, callback)
   return tab.changed_files[tab.selected_file]
 end
@@ -598,7 +793,12 @@ function Model:_finish_refresh(generation, status_records, log_page, err, callba
     self:mark_diff_tabs_error(err)
     self:mark_file_history_tabs_error(err)
   end
+  apply_commit_anchor(tab)
   if tab.selected_commit > #tab.commits then tab.selected_commit = math.max(1, #tab.commits) end
+  local active = self:selected_tab()
+  if self.repo and active and active.kind == "commit_diff" and #(active.changed_files or {}) == 0 and not active.loading then
+    self:load_changed_files(active)
+  end
   if callback then callback(self, err) end
 end
 
@@ -642,7 +842,8 @@ function Model:reload_file_history_tabs()
     if tab.kind == "file_history" then
       tab.commits = {}
       tab.selected_commit = 1
-      tab.scroll = 0
+      tab.scroll = tab.restored_scroll or 0
+      tab.restored_scroll = nil
       tab.has_more = false
       tab.next_offset = nil
       tab.error = nil
@@ -751,6 +952,7 @@ function Model:load_more_log(callback)
     tab.error = err
     if result then
       append_log_commits(tab, self.backend.parse_log_page(result.stdout, { limit = limit, offset = tab.next_offset }))
+      apply_commit_anchor(tab)
     end
     if callback then callback(self, err) end
   end)

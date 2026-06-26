@@ -16,7 +16,7 @@ function GitView:new(project, opts)
   self.model = (opts and opts.model) or GitModel.new(project, opts)
   self.model.on_update = function() core.redraw = true end
   self.scrollable = true
-  self:set_refresh_pending()
+  if not (opts and opts.defer_refresh) then self:set_refresh_pending() end
 end
 
 function GitView:__tostring()
@@ -28,10 +28,20 @@ function GitView:get_name()
   return "Git: " .. common.basename(path)
 end
 
-function GitView:set_refresh_pending()
-  if self.refresh_started then return end
+function GitView:set_refresh_pending(callback)
+  if callback then
+    self.refresh_callbacks = self.refresh_callbacks or {}
+    self.refresh_callbacks[#self.refresh_callbacks + 1] = callback
+  end
+  if self.refresh_inflight then return end
+  if self.refresh_started and not callback then return end
   self.refresh_started = true
-  self.model:refresh_log(function()
+  self.refresh_inflight = true
+  self.model:refresh_log(function(_, err)
+    self.refresh_inflight = false
+    local callbacks = self.refresh_callbacks or {}
+    self.refresh_callbacks = nil
+    for _, cb in ipairs(callbacks) do cb(self, err) end
     core.redraw = true
   end)
 end
@@ -75,8 +85,9 @@ function GitView:on_mouse_wheel(y, x)
   local tab = self.model:selected_tab()
   if tab and tab.kind == "file_history" then
     if y == 0 then return false end
-    local visible = self.size.y - (self:history_commits_y() - self.position.y) - style.padding.y
-    local max_scroll = math.max(0, (#(tab.commits or {}) + (tab.has_more and 1 or 0)) * self:row_height() - visible)
+    self:clamp_history_scroll(tab)
+    local visible = self:history_visible_height()
+    local max_scroll = math.max(0, (#(tab.commits or {}) + ((tab.has_more or tab.loading) and 1 or 0)) * self:row_height() - visible)
     tab.scroll = common.clamp((tab.scroll or 0) + (-y * config.mouse_wheel_scroll), 0, max_scroll)
     return true
   end
@@ -135,9 +146,11 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
     if button ~= "left" then return true end
     if x < self.position.x or x > self.position.x + list_width then return true end
     if y < self:history_commits_y() then return true end
+    self:clamp_history_scroll(selected_tab)
     local index = math.floor((y - self:history_commits_y() + (selected_tab.scroll or 0)) / self:row_height()) + 1
     if index >= 1 and index <= #(selected_tab.commits or {}) then
       selected_tab.selected_commit = index
+      selected_tab.selected_commit_hash = selected_tab.commits[index] and selected_tab.commits[index].hash or nil
       if clicks and clicks > 1 then
         self.model:open_commit_diff(selected_tab.commits[index], function() core.redraw = true end)
       end
@@ -291,7 +304,7 @@ function GitView:draw_log_tab(tab, x, y)
   y = self:commit_list_y() + (first - 1) * row_height - self.scroll.y
   for i = first, #tab.commits do
     local commit = tab.commits[i]
-    local color = i == tab.selected_commit and style.accent or style.text
+    local color = (i == tab.selected_commit and (not tab.selected_commit_hash or commit.hash == tab.selected_commit_hash)) and style.accent or style.text
     renderer.draw_text(style.font, commit_label(commit), x, y, color)
     y = y + row_height
     if y > self.position.y + self.size.y - style.font:get_height() then break end
@@ -321,6 +334,17 @@ function GitView:history_commits_y()
   return self:commit_list_y() + style.font:get_height() + style.padding.y
 end
 
+function GitView:history_visible_height()
+  return self.size.y - (self:history_commits_y() - self.position.y) - style.padding.y
+end
+
+function GitView:clamp_history_scroll(tab)
+  if not tab then return end
+  local rows = #(tab.commits or {}) + ((tab.has_more or tab.loading) and 1 or 0)
+  local max_scroll = math.max(0, rows * self:row_height() - self:history_visible_height())
+  tab.scroll = common.clamp(tab.scroll or 0, 0, max_scroll)
+end
+
 function GitView:draw_history_tab(tab, x, y)
   if tab.loading and #tab.commits == 0 then
     renderer.draw_text(style.font, "Loading file history...", x, y, style.dim)
@@ -336,12 +360,13 @@ function GitView:draw_history_tab(tab, x, y)
     renderer.draw_text(style.font, "No file history", x, y, style.dim)
     return
   end
+  self:clamp_history_scroll(tab)
   local row_height = self:row_height()
   local first = math.max(1, math.floor((tab.scroll or 0) / row_height) + 1)
   y = y + (first - 1) * row_height - (tab.scroll or 0)
   for i = first, #tab.commits do
     local commit = tab.commits[i]
-    local color = i == tab.selected_commit and style.accent or style.text
+    local color = (i == tab.selected_commit and (not tab.selected_commit_hash or commit.hash == tab.selected_commit_hash)) and style.accent or style.text
     renderer.draw_text(style.font, commit_label(commit), x, y, color)
     y = y + row_height
     if y > self.position.y + self.size.y - style.font:get_height() then break end

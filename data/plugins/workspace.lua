@@ -3,6 +3,7 @@ local core = require "core"
 local command = require "core.command"
 local common = require "core.common"
 local storage = require "core.storage"
+local tool_window = require "core.tool_window"
 local untitled_recovery = require "plugins.untitled_recovery"
 
 local STORAGE_MODULE = "ws"
@@ -328,7 +329,8 @@ local function save_workspace()
     path = project_dir,
     documents = documents,
     directories = save_directories(),
-    visited_files = core.visited_files
+    visited_files = core.visited_files,
+    tool_windows = tool_window.get_project_state(project),
   })
   loaded_workspace_key = key
   loaded_workspace_path = project_dir
@@ -377,6 +379,7 @@ local function load_workspace()
       for _, dir_name in ipairs(workspace.directories or {}) do
         core.add_project(system.absolute_path(dir_name))
       end
+      tool_window.restore_project_state(core.root_project(), workspace.tool_windows)
     end
     untitled_recovery.restore_project(core.root_project().path)
     maybe_show_empty_project_file_tree()

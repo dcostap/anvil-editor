@@ -13,6 +13,7 @@ local file_context = require "core.file_context"
 local sidepanel = require "core.sidepanel"
 local storage = require "core.storage"
 local DirWatch = require "core.dirwatch"
+local git_backend = require "plugins.git.backend"
 
 local FILETREE_SETTINGS_MODULE = "filetree"
 local FILETREE_SETTINGS_KEY = "settings"
@@ -907,8 +908,14 @@ function FileTreeView:refresh_git_status(reason)
   local stats, dir_stats = {}, {}
   local in_repo = false
 
+  local git_path = git_backend.git_path()
+  if not git_path then
+    self.git_status = { files = files, dirs = dirs, stats = stats, dir_stats = dir_stats, generation = (self.git_status and self.git_status.generation or 0) + 1 }
+    return
+  end
+
   local code, out, err = run_process_capture(
-    { "git", "rev-parse", "--show-toplevel" }, { cwd = root }, 64 * 1024
+    { git_path, "rev-parse", "--show-toplevel" }, { cwd = root }, 64 * 1024
   )
   if code == 0 and trim(out) ~= "" then
     root = common.normalize_path(trim(out))
@@ -920,7 +927,7 @@ function FileTreeView:refresh_git_status(reason)
   end
 
   code, out, err = run_process_capture(
-    { "git", "status", "--porcelain=v1", "--ignored", "-uall", "-z" },
+    { git_path, "status", "--porcelain=v1", "--ignored", "-uall", "-z" },
     { cwd = root }, GIT_STATUS_MAX_OUTPUT
   )
   if code ~= 0 then
@@ -928,13 +935,9 @@ function FileTreeView:refresh_git_status(reason)
     return
   end
 
-  local records = split_nul(out)
-  local i = 1
-  while i <= #records do
-    local record = records[i]
-    local xy = record:sub(1, 2)
-    local rel = normalize_git_rel(record:sub(4))
-    local kind = git_status_kind(xy)
+  for _, record in ipairs(git_backend.parse_status_z(out)) do
+    local rel = normalize_git_rel(record.new_path or record.path or record.old_path)
+    local kind = git_status_kind(record.xy) or record.kind
     if rel and kind then
       local abs = git_abs(root, rel)
       if abs then files[path_key(abs)] = stronger_git_kind(files[path_key(abs)], kind) end
@@ -942,13 +945,11 @@ function FileTreeView:refresh_git_status(reason)
         local pabs = git_abs(root, parent)
         if pabs then dirs[path_key(pabs)] = stronger_git_kind(dirs[path_key(pabs)], kind) end
       end
-      if xy:sub(1, 1) == "R" or xy:sub(1, 1) == "C" then i = i + 1 end
     end
-    i = i + 1
   end
 
   code, out, err = run_process_capture(
-    { "git", "diff", "--numstat", "--no-renames", "-z", "HEAD", "--" },
+    { git_path, "diff", "--numstat", "--no-renames", "-z", "HEAD", "--" },
     { cwd = root }, GIT_STATUS_MAX_OUTPUT
   )
   if code == 0 then

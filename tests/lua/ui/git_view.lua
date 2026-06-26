@@ -1,3 +1,4 @@
+local core = require "core"
 local command = require "core.command"
 local style = require "core.style"
 local test = require "core.test"
@@ -34,6 +35,22 @@ local fake_backend = {
   build_log_args = function() return { "log" } end,
   parse_status_z = function() return {} end,
   parse_log_page = function() return { commits = {} } end,
+  changed_files = function(repo, left, right, opts, callback)
+    callback({}, nil)
+    return { cancel = function() end }
+  end,
+  file_at = function(repo, rev, relpath, opts, callback)
+    callback("", nil)
+    return { cancel = function() end }
+  end,
+  file_history = function(repo, relpath, opts, callback)
+    callback({ commits = {}, has_more = false }, nil)
+    return { cancel = function() end }
+  end,
+  selection_history = function(repo, relpath, start_line, end_line, opts, callback)
+    callback({ commits = {}, has_more = false }, nil)
+    return { cancel = function() end }
+  end,
   run_git = function(repo, args, opts, callback)
     callback({ code = 0, stdout = "" }, nil)
     return { cancel = function() end }
@@ -51,11 +68,15 @@ end
 
 test.describe("Git View command", function()
   test.before_each(function(context)
+    context.original_projects = core.projects
+    context.original_active_view = core.active_view
     tool_window.reset_for_tests()
     context.project = { path = "C:/repo" }
   end)
 
-  test.after_each(function()
+  test.after_each(function(context)
+    core.projects = context.original_projects
+    core.active_view = context.original_active_view
     tool_window.reset_for_tests()
   end)
 
@@ -125,6 +146,10 @@ test.describe("Git View command", function()
     test.equal(tab.selected_commit, 1)
     view:on_mouse_pressed("left", 10, view:history_commits_y() + view:row_height() + 1, 1)
     test.equal(tab.selected_commit, 2)
+    tab.has_more = true
+    tab.scroll = 999999
+    view:clamp_history_scroll(tab)
+    test.ok(tab.scroll < 999999)
     test.equal(tw.hidden, false)
   end)
 
@@ -141,6 +166,110 @@ test.describe("Git View command", function()
     view:on_mouse_wheel(-1, 0)
     test.ok(view.scroll.to.y > 0)
     test.equal(tw.hidden, false)
+  end)
+
+  test.test("saves and restores hidden Git View tool-window state", function(context)
+    local tw, view = open_fake_git_view(context.project)
+    local history_tab = view.model:open_file_history("src/app.lua")
+    view.model.active_tab = history_tab.id
+    tw:hide()
+
+    local states = tool_window.get_project_state(context.project)
+    tool_window.reset_for_tests()
+    tool_window.restore_project_state(context.project, states, {
+      git = {
+        window = fake_window(2222),
+        window_id = 2222,
+        root = fake_root(),
+        git_view_opts = { backend = fake_backend },
+      },
+    })
+
+    local restored = tool_window.get(context.project, "git")
+    test.not_nil(restored)
+    test.equal(restored.hidden, true)
+    test.equal(restored.git_view.model.active_tab, history_tab.id)
+    test.not_nil(restored.git_view.model:find_tab(history_tab.id))
+  end)
+
+  test.test("restoring over an existing Git View applies saved hidden state", function(context)
+    local tw, view = open_fake_git_view(context.project)
+    view.model:open_file_history("old.lua")
+    tool_window.restore_project_state(context.project, {
+      {
+        kind = "git",
+        hidden = true,
+        model = {
+          repo = { root = "C:/repo" },
+          active_tab = "log",
+          tabs = { { id = "log", kind = "log", selected_commit = 1 } },
+        },
+      },
+    })
+    test.equal(tw.hidden, true)
+    test.equal(view.model.active_tab, "log")
+    test.equal(view.model:find_tab("history\0file\0C:/repo\0old.lua"), nil)
+  end)
+
+  test.test("commands refresh a hidden restored Git View before using it", function(context)
+    local log_calls = 0
+    local backend = {
+      repo_for_path = function(path) return { root = path } end,
+      build_log_args = function() return { "log" } end,
+      parse_status_z = function() return {} end,
+      parse_log_page = function() return {
+        commits = { { hash = "abc123", short_hash = "abc123", subject = "Initial", parents = {} } },
+        has_more = false,
+      } end,
+      diff_endpoint_for_commit = require("plugins.git.backend").diff_endpoint_for_commit,
+      WORKING_TREE = require("plugins.git.backend").WORKING_TREE,
+      EMPTY_TREE = require("plugins.git.backend").EMPTY_TREE,
+      changed_files = function(repo, left, right, opts, callback)
+        callback({ { status = "modified", old_path = "src/app.lua", new_path = "src/app.lua" } }, nil)
+        return { cancel = function() end }
+      end,
+      file_at = function(repo, rev, relpath, opts, callback)
+        callback("", nil)
+        return { cancel = function() end }
+      end,
+      run_git = function(repo, args, opts, callback)
+        if args[1] == "status" then
+          callback({ code = 0, stdout = "" }, nil)
+        else
+          log_calls = log_calls + 1
+          callback({ code = 0, stdout = "" }, nil)
+        end
+        return { cancel = function() end }
+      end,
+    }
+    tool_window.restore_project_state(context.project, {
+      {
+        kind = "git",
+        hidden = true,
+        model = {
+          repo = { root = "C:/repo" },
+          active_tab = "log",
+          tabs = { { id = "log", kind = "log", selected_commit = 1, selected_commit_hash = "abc123" } },
+        },
+      },
+    }, {
+      git = {
+        window = fake_window(3333),
+        window_id = 3333,
+        root = fake_root(),
+        git_view_opts = { backend = backend },
+      },
+    })
+    local restored = tool_window.get(context.project, "git")
+    test.equal(restored.git_view.refresh_started, nil)
+    test.equal(log_calls, 0)
+
+    core.projects = { context.project }
+    core.active_view = nil
+    command.perform("git:open-selected-commit-diff")
+
+    test.equal(log_calls, 1)
+    test.equal(restored.git_view.model:selected_tab().kind, "commit_diff")
   end)
 
   test.test("closing the Git View hides the owning tool window", function(context)

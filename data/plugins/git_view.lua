@@ -30,6 +30,12 @@ local function active_git_view()
   return tw and tw.git_view or nil
 end
 
+local function copy_options(options)
+  local result = {}
+  for key, value in pairs(options or {}) do result[key] = value end
+  return result
+end
+
 function git_view.open_view(project, opts)
   opts = opts or {}
   project = project or current_project()
@@ -48,9 +54,13 @@ function git_view.open_view(project, opts)
     create_window = opts.create_window,
     root = opts.root,
     create_root = opts.create_root or function() return RootPanel() end,
+    hidden = opts.state and opts.state.hidden,
   })
   if created then
-    view = GitView(project, opts.git_view_opts)
+    local git_view_opts = copy_options(opts.git_view_opts)
+    if opts.state and opts.state.model then git_view_opts.state = opts.state.model end
+    if opts.state and opts.state.hidden then git_view_opts.defer_refresh = true end
+    view = GitView(project, git_view_opts)
     view.tool_window = tw
     tw.git_view = view
     local previous_event_window = core.event_window
@@ -60,9 +70,10 @@ function git_view.open_view(project, opts)
     end)
     core.event_window = previous_event_window
     if not ok then error(err, 0) end
-    tw:activate_root()
+    if not tw.hidden then tw:activate_root() end
   elseif tw.git_view then
     view = tw.git_view
+    view:set_refresh_pending()
   end
   return tw, view
 end
@@ -115,15 +126,49 @@ local function when_model_ready(view, action)
   if not view then return end
   local model = view.model
   local log_tab = model:log_tab()
-  if model.repo and not log_tab.loading then
+  if view.refresh_started and model.repo and not log_tab.loading then
     action(view)
     return
   end
-  model:refresh_log(function()
-    action(view)
+  view:set_refresh_pending(function(v)
+    action(v)
     core.redraw = true
   end)
 end
+
+function git_view.save_state(tw)
+  if not tw or not tw.git_view or not tw.git_view.model then return nil end
+  return {
+    kind = "git",
+    hidden = tw.hidden and true or false,
+    model = tw.git_view.model:get_state(),
+  }
+end
+
+function git_view.restore_state(project, state, opts)
+  local existing = tool_window.get(project, "git")
+  if existing and existing.git_view then
+    if state and state.model then existing.git_view.model:apply_state(state.model) end
+    existing.git_view.refresh_started = false
+    existing.git_view.refresh_inflight = false
+    existing.git_view.refresh_callbacks = nil
+    if state and state.hidden then
+      existing:hide()
+    else
+      existing:show()
+      existing.git_view:set_refresh_pending()
+    end
+    return existing, existing.git_view
+  end
+  opts = copy_options(opts)
+  opts.state = state
+  return git_view.open_view(project, opts)
+end
+
+tool_window.register_kind("git", {
+  save = git_view.save_state,
+  restore = git_view.restore_state,
+})
 
 command.add(nil, {
   ["git:open-view"] = function()
@@ -137,10 +182,16 @@ command.add(nil, {
 
   ["git:open-selected-commit-diff"] = function()
     local tw, view = active_or_open_view()
-    when_model_ready(view, function(v)
+    local function open_diff(v)
+      local selected = v.model:selected_tab()
+      if selected and selected.kind == "file_history" and selected.loading then
+        v.model:load_file_history(selected, function() open_diff(v) end)
+        return
+      end
       local tab, err = v.model:open_selected_commit_diff(function() core.redraw = true end)
       if not tab and err then core.log_quiet("Git View: open selected commit diff skipped: %s", err.message or err.kind) end
-    end)
+    end
+    when_model_ready(view, open_diff)
   end,
 
   ["git:open-working-tree-diff"] = function()

@@ -9,6 +9,7 @@ local command = require "core.command"
 local style = require "core.style"
 local file_context = require "core.file_context"
 local ranges = require "plugins.gitdiff_highlight.ranges"
+local git_backend = require "plugins.git.backend"
 
 local unpack = table.unpack or unpack
 local function pack_results(...)
@@ -81,12 +82,17 @@ local function clear_state(doc, error_message)
 	return state
 end
 
+local function git_executable()
+	if not git_backend.is_enabled() then return nil end
+	return git_backend.git_path()
+end
+
 local function warn_git_missing(errmsg)
 	if git_missing_warned then return end
 	git_missing_warned = true
 	core.warn(
-		"Git executable not found or could not be started: %s. Install Git or set config.plugins.gitdiff_highlight.git_path.",
-		errmsg or plugin_config.git_path
+		"Git executable not found or could not be started: %s. Install Git or set config.plugins.git.git_path.",
+		errmsg or git_executable()
 	)
 end
 
@@ -153,7 +159,7 @@ local function write_debug_dump(doc)
 	w("doc.lines=%s", tostring(doc and doc.lines and #doc.lines))
 	w("doc.encoding=%s", tostring(doc and doc.encoding))
 	w("doc.binary=%s", tostring(doc and doc.binary))
-	w("git_path=%s", tostring(plugin_config.git_path))
+	w("git_path=%s", tostring(git_executable()))
 	w("")
 	w("state.is_in_repo=%s", tostring(state.is_in_repo))
 	w("state.operational=%s", tostring(state.operational))
@@ -216,7 +222,7 @@ local function run_process_capture(args, max_stdout)
 		stderr = process.REDIRECT_PIPE,
 	})
 	if not proc then
-		if args[1] == plugin_config.git_path then warn_git_missing(start_err) end
+		if args[1] == git_executable() then warn_git_missing(start_err) end
 		return nil, "", start_err or "process start failed"
 	end
 
@@ -239,7 +245,9 @@ local function run_process_capture(args, max_stdout)
 end
 
 local function git(args, max_stdout)
-	local full = { plugin_config.git_path }
+	local path = git_executable()
+	if not path then return nil, "", "Git integration is disabled" end
+	local full = { path }
 	for _, arg in ipairs(args) do full[#full + 1] = arg end
 	return run_process_capture(full, max_stdout)
 end

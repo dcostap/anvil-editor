@@ -116,7 +116,6 @@ plugin_defaults("git", {
   max_output = 16 * 1024 * 1024,
 })
 plugin_defaults("gitdiff_highlight", {
-  git_path = "git",
   local_diff_debounce_ms = 200,
   max_file_size = 2 * 1024 * 1024,
   max_diff_cells = 2 * 1000 * 1000,
