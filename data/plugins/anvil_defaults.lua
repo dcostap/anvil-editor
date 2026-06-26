@@ -110,6 +110,11 @@ plugin_defaults("findfile", {
   enable_cache = false,
   cache_expiration = 60,
 })
+plugin_defaults("git", {
+  git_path = "git",
+  log_page_size = 500,
+  max_output = 16 * 1024 * 1024,
+})
 plugin_defaults("gitdiff_highlight", {
   git_path = "git",
   local_diff_debounce_ms = 200,
