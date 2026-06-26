@@ -62,7 +62,9 @@ function Model:select_tab(id, callback)
 end
 
 function Model:selected_commit()
-  local tab = self:log_tab()
+  local tab = self:selected_tab()
+  if tab and tab.kind == "file_history" then return tab.commits[tab.selected_commit] end
+  tab = self:log_tab()
   return tab.commits[tab.selected_commit]
 end
 
@@ -96,6 +98,10 @@ function Model:find_tab(id)
   end
 end
 
+local function log_limit()
+  return config.plugins.git and config.plugins.git.log_page_size or nil
+end
+
 local function short_rev(rev)
   if rev == backend_default.WORKING_TREE then return "working" end
   if rev == backend_default.EMPTY_TREE then return "empty" end
@@ -106,6 +112,14 @@ local function diff_tab_id(repo, left, right, scope)
   return table.concat({
     "diff", repo and repo.root or "", tostring(left or ""), tostring(right or ""), scope or "",
   }, "\0")
+end
+
+local function history_tab_id(repo, relpath)
+  return table.concat({ "history", "file", repo and repo.root or "", tostring(relpath or "") }, "\0")
+end
+
+local function history_tab_title(relpath)
+  return "History: " .. tostring(relpath or "")
 end
 
 local function diff_tab_title(commit, left, right)
@@ -216,6 +230,68 @@ function Model:open_working_tree_diff(callback)
     if commit.kind == "working_tree" then return self:open_commit_diff(commit, callback) end
   end
   return self:open_commit_diff({ kind = "working_tree", changed_files = {} }, callback)
+end
+
+function Model:open_file_history(relpath, callback)
+  if not self.repo then return nil, { kind = "no_repo", message = "Git repository is not loaded" } end
+  if not relpath or relpath == "" then return nil, { kind = "no_path", message = "No file path selected" } end
+  relpath = tostring(relpath):gsub("\\", "/")
+  local id = history_tab_id(self.repo, relpath)
+  local tab = self:find_tab(id)
+  if not tab then
+    tab = {
+      id = id,
+      kind = "file_history",
+      title = history_tab_title(relpath),
+      closable = true,
+      relpath = relpath,
+      commits = {},
+      selected_commit = 1,
+      loading = false,
+      error = nil,
+      has_more = false,
+      next_offset = nil,
+      follow_renames = true,
+    }
+    self.tabs[#self.tabs + 1] = tab
+  end
+  self.active_tab = tab.id
+  if #tab.commits == 0 then self:load_file_history(tab, callback) end
+  return tab
+end
+
+function Model:load_file_history(tab, callback)
+  if not tab or tab.loading then return false end
+  tab.history_generation = (tab.history_generation or 0) + 1
+  local generation = tab.history_generation
+  tab.loading = true
+  tab.error = nil
+  local limit = log_limit()
+  local job, done
+  job = self.backend.file_history(self.repo, tab.relpath, {
+    limit = limit,
+    offset = tab.next_offset,
+    follow = tab.follow_renames,
+  }, function(page, err)
+    done = true
+    self:_untrack_job(job)
+    if generation ~= tab.history_generation then return end
+    tab.loading = false
+    tab.error = err
+    if page and page.commits then
+      for _, commit in ipairs(page.commits) do
+        commit.kind = commit.kind or "commit"
+        commit.short_hash = commit.hash and commit.hash:sub(1, 8) or ""
+        tab.commits[#tab.commits + 1] = commit
+      end
+      tab.has_more = page.has_more
+      tab.next_offset = page.next_offset
+    end
+    if callback then callback(self, err) end
+    if self.on_update then self.on_update(self) end
+  end)
+  if not done then self:_track_job(job) end
+  return true
 end
 
 function Model:clear_diff_content(tab)
@@ -433,10 +509,6 @@ local function project_path(project)
   return type(project) == "table" and project.path or project
 end
 
-local function log_limit()
-  return config.plugins.git and config.plugins.git.log_page_size or nil
-end
-
 local function empty_log_error(err)
   if not err or err.kind ~= "exit" then return false end
   local text = tostring(err.stderr or err.message or ""):lower()
@@ -489,7 +561,13 @@ function Model:_finish_refresh(generation, status_records, log_page, err, callba
     }
   end
   append_log_commits(tab, log_page)
-  self:sync_working_tree_diff_tabs()
+  if self.repo then
+    self:sync_working_tree_diff_tabs()
+    self:reload_file_history_tabs()
+  else
+    self:mark_diff_tabs_error(err)
+    self:mark_file_history_tabs_error(err)
+  end
   if tab.selected_commit > #tab.commits then tab.selected_commit = math.max(1, #tab.commits) end
   if callback then callback(self, err) end
 end
@@ -529,6 +607,48 @@ function Model:_start_refresh_jobs(repo, generation, callback)
   if not log_done then self:_track_job(log_job) end
 end
 
+function Model:reload_file_history_tabs()
+  for _, tab in ipairs(self.tabs) do
+    if tab.kind == "file_history" then
+      tab.commits = {}
+      tab.selected_commit = 1
+      tab.scroll = 0
+      tab.has_more = false
+      tab.next_offset = nil
+      tab.error = nil
+      self:load_file_history(tab)
+    end
+  end
+end
+
+function Model:mark_file_history_tabs_error(err)
+  for _, tab in ipairs(self.tabs) do
+    if tab.kind == "file_history" then
+      tab.loading = false
+      tab.error = err
+    end
+  end
+end
+
+function Model:mark_diff_tabs_error(err)
+  for _, tab in ipairs(self.tabs) do
+    if tab.kind == "commit_diff" then
+      tab.loading = false
+      tab.loading_file = false
+      tab.error = err
+    end
+  end
+end
+
+function Model:invalidate_history_loads()
+  for _, tab in ipairs(self.tabs) do
+    if tab.kind == "file_history" then
+      tab.history_generation = (tab.history_generation or 0) + 1
+      tab.loading = false
+    end
+  end
+end
+
 function Model:invalidate_diff_loads()
   for _, tab in ipairs(self.tabs) do
     if tab.kind == "commit_diff" then
@@ -543,6 +663,7 @@ function Model:invalidate_diff_loads()
 end
 
 function Model:refresh_log(callback)
+  self:invalidate_history_loads()
   self:invalidate_diff_loads()
   self:cancel_jobs()
   self.generation = self.generation + 1
@@ -557,6 +678,7 @@ function Model:refresh_log(callback)
   local function on_repo(repo, repo_err)
     if generation ~= self.generation then return end
     if not repo then
+      self.repo = nil
       self:_finish_refresh(generation, nil, nil, repo_err, callback)
       return
     end

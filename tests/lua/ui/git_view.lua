@@ -99,6 +99,35 @@ test.describe("Git View command", function()
     test.equal(tw.hidden, false)
   end)
 
+  test.test("file history click hit-testing matches rendered rows", function(context)
+    local tw, view = open_fake_git_view(context.project)
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 800, 600
+    local tab = {
+      id = "history-test",
+      kind = "file_history",
+      title = "History: src/app.lua",
+      closable = true,
+      relpath = "src/app.lua",
+      commits = {
+        { hash = "a", short_hash = "a", subject = "First" },
+        { hash = "b", short_hash = "b", subject = "Second" },
+      },
+      selected_commit = 1,
+    }
+    view.model.tabs[#view.model.tabs + 1] = tab
+    view.model.active_tab = tab.id
+    tab.scroll = view:row_height()
+    view:on_mouse_pressed("left", 10, view:history_commits_y() - 2, 1)
+    test.equal(tab.selected_commit, 1)
+    tab.scroll = 0
+    view:on_mouse_pressed("left", 10, view:history_commits_y() + 1, 1)
+    test.equal(tab.selected_commit, 1)
+    view:on_mouse_pressed("left", 10, view:history_commits_y() + view:row_height() + 1, 1)
+    test.equal(tab.selected_commit, 2)
+    test.equal(tw.hidden, false)
+  end)
+
   test.test("mouse wheel scrolls a long log", function(context)
     local tw, view = open_fake_git_view(context.project)
     view.position.x, view.position.y = 0, 0
@@ -127,6 +156,7 @@ test.describe("Git View command", function()
     test.not_nil(command.map["git:open-view"])
     test.not_nil(command.map["git:open-selected-commit-diff"])
     test.not_nil(command.map["git:open-working-tree-diff"])
+    test.not_nil(command.map["git:show-file-history"])
     test.not_nil(command.map["git:open-selected-historical-document"])
     test.not_nil(command.map["git:close-selected-tab"])
   end)

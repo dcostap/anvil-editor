@@ -22,6 +22,14 @@ local function fake_backend(status_output, log_output)
       callback(tostring(rev) .. ":" .. relpath, nil)
       return { cancel = function() end }
     end,
+    file_history = function(repo, relpath, opts, callback)
+      local stdout = table.concat({
+        table.concat({"def456", "", "Ada", "ada@example.test", "1710000000", "HEAD", "History", ""}, "\0"),
+        "",
+      }, "\30")
+      callback(real_backend.parse_log_page(stdout, { limit = opts and opts.limit or 500 }), nil)
+      return { cancel = function() end }
+    end,
     run_git = function(repo, args, opts, callback)
       if args[1] == "status" then
         callback({ code = 0, stdout = status_output or "" }, nil)
@@ -109,6 +117,107 @@ test.describe("plugins.git.model", function()
     test.equal(#tab.changed_files, 1)
     test.equal(tab.left_text, real_backend.EMPTY_TREE .. ":src/app.lua")
     test.equal(tab.right_text, "abc123:src/app.lua")
+  end)
+
+  test.test("refresh invalidates in-flight file history loads without cancelled errors", function()
+    local callbacks = {}
+    local backend = fake_backend("", log_output())
+    backend.file_history = function(repo, relpath, opts, callback)
+      callbacks[#callbacks + 1] = callback
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    model:refresh_log()
+    local tab = model:open_file_history("src/app.lua")
+    test.equal(tab.loading, true)
+    model:refresh_log()
+    callbacks[1](nil, { kind = "cancelled", message = "cancelled" })
+    test.equal(tab.loading, true)
+    test.equal(tab.error, nil)
+    callbacks[2](real_backend.parse_log_page(log_output(), { limit = 500 }), nil)
+    test.equal(tab.loading, false)
+    test.equal(tab.commits[1].hash, "abc123")
+  end)
+
+  test.test("selected commit follows active file history tab", function()
+    local model = Model.new({ path = "C:/repo" }, { backend = fake_backend("", log_output()) })
+    model:refresh_log()
+    model:open_file_history("src/app.lua")
+    test.equal(model:selected_commit().hash, "def456")
+    local tab = model:open_selected_commit_diff()
+    test.equal(tab.commit.hash, "def456")
+  end)
+
+  test.test("failed refresh marks Git tabs instead of reloading with nil repo", function()
+    local lookups = 0
+    local history_calls = 0
+    local changed_calls = 0
+    local backend = fake_backend(table.concat({ " M src/app.lua", "" }, "\0"), log_output())
+    backend.repo_for_path = function(path)
+      lookups = lookups + 1
+      if lookups == 1 then return { root = path } end
+      return nil, { kind = "not_in_repository", message = "not in repo" }
+    end
+    backend.changed_files = function(repo, left, right, opts, callback)
+      changed_calls = changed_calls + 1
+      callback({ { status = "modified", old_path = "src/app.lua", new_path = "src/app.lua" } }, nil)
+      return { cancel = function() end }
+    end
+    backend.file_history = function(repo, relpath, opts, callback)
+      history_calls = history_calls + 1
+      callback(real_backend.parse_log_page(log_output(), { limit = 500 }), nil)
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    model:refresh_log()
+    local history_tab = model:open_file_history("src/app.lua")
+    local diff_tab = model:open_working_tree_diff()
+    test.equal(history_calls, 1)
+    test.equal(changed_calls, 1)
+    model:refresh_log()
+    test.equal(model.repo, nil)
+    test.equal(history_calls, 1)
+    test.equal(changed_calls, 1)
+    test.equal(history_tab.error.kind, "not_in_repository")
+    test.equal(diff_tab.error.kind, "not_in_repository")
+  end)
+
+  test.test("refresh reloads existing file history tabs", function()
+    local history_calls = 0
+    local backend = fake_backend("", log_output())
+    backend.file_history = function(repo, relpath, opts, callback)
+      history_calls = history_calls + 1
+      local hash = history_calls == 1 and "old111" or "new222"
+      local stdout = table.concat({
+        table.concat({hash, "", "Ada", "ada@example.test", "1710000000", "HEAD", "History", ""}, "\0"),
+        "",
+      }, "\30")
+      callback(real_backend.parse_log_page(stdout, { limit = opts and opts.limit or 500 }), nil)
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    model:refresh_log()
+    local tab = model:open_file_history("src/app.lua")
+    tab.scroll = 999
+    test.equal(tab.commits[1].hash, "old111")
+    model:refresh_log()
+    test.equal(tab.commits[1].hash, "new222")
+    test.equal(tab.scroll, 0)
+  end)
+
+  test.test("opens and reuses file history tabs", function()
+    local model = Model.new({ path = "C:/repo" }, { backend = fake_backend("", log_output()) })
+    model:refresh_log()
+    local tab = model:open_file_history("src/app.lua")
+    local again = model:open_file_history("src/app.lua")
+
+    test.equal(tab, again)
+    test.equal(tab.kind, "file_history")
+    test.equal(tab.closable, true)
+    test.equal(tab.relpath, "src/app.lua")
+    test.equal(model:selected_tab(), tab)
+    test.equal(#tab.commits, 1)
+    test.equal(tab.commits[1].hash, "def456")
   end)
 
   test.test("builds selected historical document request from a commit diff tab", function()

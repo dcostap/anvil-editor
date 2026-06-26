@@ -258,15 +258,20 @@ local LOG_FORMAT_WITH_BODY = table.concat({
   "%H", "%P", "%an", "%ae", "%at", "%D", "%s", "%b"
 }, "%x00") .. "%x00%x1e"
 
-function backend.build_log_args(opts)
+local function build_base_log_args(opts)
   opts = opts or {}
   local limit = opts.limit or default_log_limit()
-  local args = {
+  return {
     "log",
     "--date-order",
     "--max-count=" .. tostring(limit + 1),
     "--format=" .. (opts.include_body and LOG_FORMAT_WITH_BODY or LOG_FORMAT),
-  }
+  }, limit
+end
+
+function backend.build_log_args(opts)
+  opts = opts or {}
+  local args = build_base_log_args(opts)
   if opts.offset and opts.offset > 0 then
     args[#args + 1] = "--skip=" .. tostring(opts.offset)
   end
@@ -278,6 +283,27 @@ function backend.build_log_args(opts)
     args[#args + 1] = normalize_relpath(opts.relpath)
   end
   return args
+end
+
+function backend.build_file_history_args(relpath, opts)
+  opts = opts or {}
+  local args = build_base_log_args(opts)
+  if opts.follow ~= false then args[#args + 1] = "--follow" end
+  if opts.offset and opts.offset > 0 then args[#args + 1] = "--skip=" .. tostring(opts.offset) end
+  args[#args + 1] = "--"
+  args[#args + 1] = normalize_relpath(relpath)
+  return args
+end
+
+function backend.file_history(repo, relpath, opts, callback)
+  opts = opts or {}
+  return backend.run_git(repo, backend.build_file_history_args(relpath, opts), opts, function(result, err)
+    if not result then
+      if callback then callback(nil, err) end
+      return
+    end
+    if callback then callback(backend.parse_log_page(result.stdout, opts), nil) end
+  end)
 end
 
 function backend.diff_endpoint_for_commit(commit)

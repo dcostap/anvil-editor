@@ -2,6 +2,7 @@
 -- First-party Git View commands.
 
 local core = require "core"
+local common = require "core.common"
 local command = require "core.command"
 local keymap = require "core.keymap"
 local tool_window = require "core.tool_window"
@@ -19,6 +20,14 @@ local git_view = {
 
 local function current_project()
   return core.root_project and core.root_project() or core.projects and core.projects[1]
+end
+
+local function active_git_view()
+  local view = core.active_view
+  if view and view.model and view.model.log_tab then return view end
+  local project = current_project()
+  local tw = project and tool_window.get(project, "git")
+  return tw and tw.git_view or nil
 end
 
 function git_view.open_view(project, opts)
@@ -58,6 +67,23 @@ function git_view.open_view(project, opts)
   return tw, view
 end
 
+local function active_file_path()
+  local view = core.active_view
+  if view and view.get_focus_view then view = view:get_focus_view() or view end
+  local doc = view and view.doc
+  if not doc or doc.new_file or not doc.abs_filename or not common.is_absolute_path(doc.abs_filename) then return nil end
+  return doc.abs_filename
+end
+
+local function active_or_open_view()
+  local view = active_git_view()
+  if view then
+    if view.tool_window then view.tool_window:show() end
+    return view.tool_window, view
+  end
+  return git_view.open_view(current_project())
+end
+
 local function when_model_ready(view, action)
   if not view then return end
   local model = view.model
@@ -78,18 +104,12 @@ command.add(nil, {
   end,
 
   ["git:refresh-view"] = function()
-    local project = current_project()
-    local tw = project and tool_window.get(project, "git")
-    if tw and tw.git_view then
-      tw.git_view.model:refresh_log(function() core.redraw = true end)
-    else
-      git_view.open_view(project)
-    end
+    local tw, view = active_or_open_view()
+    if view then view.model:refresh_log(function() core.redraw = true end) end
   end,
 
   ["git:open-selected-commit-diff"] = function()
-    local project = current_project()
-    local tw, view = git_view.open_view(project)
+    local tw, view = active_or_open_view()
     when_model_ready(view, function(v)
       local tab, err = v.model:open_selected_commit_diff(function() core.redraw = true end)
       if not tab and err then core.log_quiet("Git View: open selected commit diff skipped: %s", err.message or err.kind) end
@@ -97,18 +117,43 @@ command.add(nil, {
   end,
 
   ["git:open-working-tree-diff"] = function()
-    local project = current_project()
-    local tw, view = git_view.open_view(project)
+    local tw, view = active_or_open_view()
     when_model_ready(view, function(v)
       local tab, err = v.model:open_working_tree_diff(function() core.redraw = true end)
       if not tab and err then core.log_quiet("Git View: open working tree diff skipped: %s", err.message or err.kind) end
     end)
   end,
 
+  ["git:show-file-history"] = function()
+    local filename = active_file_path()
+    if not filename then
+      core.log_quiet("Git View: file history skipped; active view has no file-backed document")
+      return
+    end
+    backend.repo_for_path_async(filename, function(repo, err)
+      if not repo then
+        core.log_quiet("Git View: file history repo lookup failed: %s", err and (err.message or err.kind) or "unknown")
+        return
+      end
+      local project = current_project()
+      if not project or not project.path
+          or (not common.path_equals(project.path, repo.root) and not common.path_belongs_to(project.path, repo.root)) then
+        project = { path = repo.root }
+      end
+      local tw, view = git_view.open_view(project)
+      when_model_ready(view, function(v)
+        if v.model.repo and not common.path_equals(repo.root, v.model.repo.root) then
+          v.model.repo = repo
+        end
+        local tab, tab_err = v.model:open_file_history(repo.relpath, function() core.redraw = true end)
+        if not tab and tab_err then core.log_quiet("Git View: file history skipped: %s", tab_err.message or tab_err.kind) end
+        core.redraw = true
+      end)
+    end)
+  end,
+
   ["git:open-selected-historical-document"] = function()
-    local project = current_project()
-    local tw = project and tool_window.get(project, "git")
-    local view = tw and tw.git_view
+    local view = active_git_view()
     if not view then
       core.log_quiet("Git View: historical document open skipped; Git View is not open")
       return
@@ -133,9 +178,8 @@ command.add(nil, {
   end,
 
   ["git:close-selected-tab"] = function()
-    local project = current_project()
-    local tw = project and tool_window.get(project, "git")
-    if tw and tw.git_view and tw.git_view.model:close_selected_tab() then core.redraw = true end
+    local view = active_git_view()
+    if view and view.model:close_selected_tab() then core.redraw = true end
   end,
 })
 

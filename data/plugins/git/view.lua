@@ -65,7 +65,7 @@ end
 
 function GitView:get_scrollable_size()
   local active = self.model:selected_tab()
-  if active and active.kind == "commit_diff" then return self.size.y end
+  if active and (active.kind == "commit_diff" or active.kind == "file_history") then return self.size.y end
   local tab = self.model:log_tab()
   local rows = #tab.commits + ((tab.has_more or tab.loading_more) and 1 or 0)
   return self.size.y + math.max(0, rows * self:row_height() - (self.size.y - (self:commit_list_y() - self.position.y)))
@@ -73,6 +73,13 @@ end
 
 function GitView:on_mouse_wheel(y, x)
   local tab = self.model:selected_tab()
+  if tab and tab.kind == "file_history" then
+    if y == 0 then return false end
+    local visible = self.size.y - (self:history_commits_y() - self.position.y) - style.padding.y
+    local max_scroll = math.max(0, (#(tab.commits or {}) + (tab.has_more and 1 or 0)) * self:row_height() - visible)
+    tab.scroll = common.clamp((tab.scroll or 0) + (-y * config.mouse_wheel_scroll), 0, max_scroll)
+    return true
+  end
   if tab and tab.kind == "commit_diff" then
     if tab.file_list_hover then
       if y == 0 then return false end
@@ -123,6 +130,24 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
   end
 
   local list_width = math.floor(self.size.x * 0.45)
+  if selected_tab and selected_tab.kind == "file_history" then
+    local list_width = self.size.x
+    if button ~= "left" then return true end
+    if x < self.position.x or x > self.position.x + list_width then return true end
+    if y < self:history_commits_y() then return true end
+    local index = math.floor((y - self:history_commits_y() + (selected_tab.scroll or 0)) / self:row_height()) + 1
+    if index >= 1 and index <= #(selected_tab.commits or {}) then
+      selected_tab.selected_commit = index
+      if clicks and clicks > 1 then
+        self.model:open_commit_diff(selected_tab.commits[index], function() core.redraw = true end)
+      end
+      core.redraw = true
+    elseif index == #(selected_tab.commits or {}) + 1 and selected_tab.has_more then
+      self.model:load_file_history(selected_tab, function() core.redraw = true end)
+    end
+    return true
+  end
+
   if selected_tab and selected_tab.kind == "commit_diff" then
     list_width = math.floor(self.size.x * 0.28)
     if x > self.position.x + list_width then
@@ -292,6 +317,42 @@ function GitView:ensure_diff_view(tab)
   return view
 end
 
+function GitView:history_commits_y()
+  return self:commit_list_y() + style.font:get_height() + style.padding.y
+end
+
+function GitView:draw_history_tab(tab, x, y)
+  if tab.loading and #tab.commits == 0 then
+    renderer.draw_text(style.font, "Loading file history...", x, y, style.dim)
+    return
+  end
+  if tab.error then
+    renderer.draw_text(style.font, "Git error: " .. tostring(tab.error.message or tab.error.kind or tab.error), x, y, style.error)
+    return
+  end
+  renderer.draw_text(style.font, tab.relpath or "", x, y, style.text)
+  y = self:history_commits_y()
+  if #tab.commits == 0 then
+    renderer.draw_text(style.font, "No file history", x, y, style.dim)
+    return
+  end
+  local row_height = self:row_height()
+  local first = math.max(1, math.floor((tab.scroll or 0) / row_height) + 1)
+  y = y + (first - 1) * row_height - (tab.scroll or 0)
+  for i = first, #tab.commits do
+    local commit = tab.commits[i]
+    local color = i == tab.selected_commit and style.accent or style.text
+    renderer.draw_text(style.font, commit_label(commit), x, y, color)
+    y = y + row_height
+    if y > self.position.y + self.size.y - style.font:get_height() then break end
+  end
+  if tab.loading then
+    renderer.draw_text(style.font, "Loading more commits...", x, y, style.dim)
+  elseif tab.has_more then
+    renderer.draw_text(style.font, "Load more commits...", x, y, style.dim)
+  end
+end
+
 function GitView:draw_diff_tab(tab, x, y)
   local list_width = math.floor(self.size.x * 0.28)
   local diff_x = self.position.x + list_width + style.padding.x
@@ -349,6 +410,8 @@ function GitView:draw()
   local tab = self.model:selected_tab()
   if tab and tab.kind == "commit_diff" then
     self:draw_diff_tab(tab, x, y)
+  elseif tab and tab.kind == "file_history" then
+    self:draw_history_tab(tab, x, y)
   else
     self:draw_log_tab(self.model:log_tab(), x, y)
   end
