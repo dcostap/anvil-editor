@@ -139,3 +139,31 @@ _Avoid_: link, text link
 **Point of Interest Activation**:
 The action taken for an activatable Point of Interest, such as opening the referenced file location.
 _Avoid_: trigger, click action
+
+**Project Tool Window**:
+A separate project-owned window for a large singleton tool that should stay available without taking over the main editing layout.
+_Avoid_: popup, modal, detached panel
+
+**Git View**:
+The project-owned Git interface for browsing commits, file history, and Git-backed diffs.
+_Avoid_: Git popup, Git panel
+
+**Git Log**:
+The project commit list in the Git View.
+_Avoid_: commit browser
+
+**Commit Diff View**:
+A Git View tab that compares a commit or working-tree state against another Git state.
+_Avoid_: commit diff tab
+
+**File History View**:
+A Git View tab that shows revisions affecting a file or selection.
+_Avoid_: file log, selection log
+
+**Historical Document**:
+A read-only Document containing file text from a past Git revision.
+_Avoid_: historical buffer, snapshot buffer
+
+**Text Diff View**:
+A Diff View comparing arbitrary text selections or generated text, independent of whether the text came from Git.
+_Avoid_: string comparison
