@@ -38,6 +38,49 @@
 
 #define dialogfinished_event_name "dialogfinished"
 
+static Uint32 last_event_window_id = 0;
+
+static Uint32 event_window_id(const SDL_Event *e) {
+  switch (e->type) {
+    case SDL_EVENT_WINDOW_RESIZED:
+    case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
+    case SDL_EVENT_WINDOW_MOVED:
+    case SDL_EVENT_WINDOW_EXPOSED:
+    case SDL_EVENT_WINDOW_MINIMIZED:
+    case SDL_EVENT_WINDOW_MAXIMIZED:
+    case SDL_EVENT_WINDOW_RESTORED:
+    case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+    case SDL_EVENT_WINDOW_FOCUS_LOST:
+    case SDL_EVENT_WINDOW_FOCUS_GAINED:
+    case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+    case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
+    case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+      return e->window.windowID;
+    case SDL_EVENT_DROP_FILE:
+      return e->drop.windowID;
+    case SDL_EVENT_KEY_DOWN:
+    case SDL_EVENT_KEY_UP:
+      return e->key.windowID;
+    case SDL_EVENT_TEXT_INPUT:
+      return e->text.windowID;
+    case SDL_EVENT_TEXT_EDITING:
+      return e->edit.windowID;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+      return e->button.windowID;
+    case SDL_EVENT_MOUSE_MOTION:
+      return e->motion.windowID;
+    case SDL_EVENT_MOUSE_WHEEL:
+      return e->wheel.windowID;
+    case SDL_EVENT_FINGER_DOWN:
+    case SDL_EVENT_FINGER_UP:
+    case SDL_EVENT_FINGER_MOTION:
+      return e->tfinger.windowID;
+    default:
+      return 0;
+  }
+}
+
 typedef enum {
   DIALOG_OK,
   DIALOG_CANCEL,
@@ -179,9 +222,11 @@ static int f_poll_event(lua_State *L) {
   SDL_Event e;
 
 top:
+  last_event_window_id = 0;
   if ( !system_event_pop(&e) ) {
     return 0;
   }
+  last_event_window_id = event_window_id(&e);
 
   switch (e.type) {
     case SDL_EVENT_QUIT:
@@ -243,6 +288,10 @@ top:
       lua_pushstring(L, "focuslost");
       return 1;
 
+    case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+      lua_pushstring(L, "windowclose");
+      return 1;
+
     case SDL_EVENT_WINDOW_FOCUS_GAINED:
       /* on some systems, when alt-tabbing to the window SDL will queue up
       ** several KEYDOWN events for the `tab` key; we flush all keydown
@@ -272,7 +321,9 @@ top:
       ** keydown handler? In any case, flushing the quit event here too helped. */
       if ((e.key.key == SDLK_W) && (e.key.mod & SDL_KMOD_GUI)) {
         SDL_FlushEvent(SDL_EVENT_QUIT);
+        SDL_FlushEvent(SDL_EVENT_WINDOW_CLOSE_REQUESTED);
         system_flush_events(SDL_EVENT_QUIT);
+        system_flush_events(SDL_EVENT_WINDOW_CLOSE_REQUESTED);
       }
 #endif
       lua_pushstring(L, "keypressed");
@@ -287,7 +338,9 @@ top:
       ** Thanks to mathewmariani, taken from his lite-macos github repository. */
       if ((e.key.key == SDLK_W) && (e.key.mod & SDL_KMOD_GUI)) {
         SDL_FlushEvent(SDL_EVENT_QUIT);
+        SDL_FlushEvent(SDL_EVENT_WINDOW_CLOSE_REQUESTED);
         system_flush_events(SDL_EVENT_QUIT);
+        system_flush_events(SDL_EVENT_WINDOW_CLOSE_REQUESTED);
       }
 #endif
       lua_pushstring(L, "keyreleased");
@@ -642,6 +695,21 @@ static int f_get_window_frame_metrics(lua_State *L) {
 }
 
 
+static int f_get_window_id(lua_State *L) {
+  RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  lua_pushinteger(L, SDL_GetWindowID(window_renderer->cache.window));
+  return 1;
+}
+
+static int f_get_last_event_window_id(lua_State *L) {
+  if (last_event_window_id) {
+    lua_pushinteger(L, last_event_window_id);
+  } else {
+    lua_pushnil(L);
+  }
+  return 1;
+}
+
 static int f_get_window_size(lua_State *L) {
   RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
   int x, y, w, h;
@@ -672,6 +740,14 @@ static int f_get_window_size(lua_State *L) {
   return 4;
 }
 
+
+static int f_set_window_visible(lua_State *L) {
+  RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  bool visible = lua_toboolean(L, 2);
+  if (visible) SDL_ShowWindow(window_renderer->cache.window);
+  else SDL_HideWindow(window_renderer->cache.window);
+  return 0;
+}
 
 static int f_set_window_size(lua_State *L) {
   RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
@@ -1742,8 +1818,11 @@ static const luaL_Reg lib[] = {
   { "set_window_hit_test",   f_set_window_hit_test   },
   { "set_window_native_frame", f_set_window_native_frame },
   { "get_window_frame_metrics", f_get_window_frame_metrics },
+  { "get_window_id",         f_get_window_id         },
+  { "get_last_event_window_id", f_get_last_event_window_id },
   { "get_window_size",       f_get_window_size       },
   { "set_window_size",       f_set_window_size       },
+  { "set_window_visible",    f_set_window_visible    },
   { "set_text_input_rect",   f_set_text_input_rect   },
   { "clear_ime",             f_clear_ime             },
   { "window_has_focus",      f_window_has_focus      },

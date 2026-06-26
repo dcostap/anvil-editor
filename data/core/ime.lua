@@ -62,10 +62,14 @@ end
 
 ---Stop IME composition.
 ---Might not completely work on every platform.
+local function input_window()
+  return core.event_window or core.active_window or core.window
+end
+
 function ime.stop()
   if ime.editing then
     -- SDL_ClearComposition for now doesn't work everywhere
-    system.clear_ime(core.window)
+    system.clear_ime(input_window())
     ime.on_text_editing("", 0, 0)
   end
 end
@@ -84,7 +88,7 @@ function ime.set_location(x, y, w, h)
      ime.last_location.h ~= h
   then
     ime.last_location.x, ime.last_location.y, ime.last_location.w, ime.last_location.h = x, y, w, h
-    system.set_text_input_rect(core.window, x, y, w, h)
+    system.set_text_input_rect(input_window(), x, y, w, h)
   end
 end
 

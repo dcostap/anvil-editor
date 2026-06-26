@@ -13,6 +13,7 @@ local StatusBar
 local TitleBar
 local GlobalPromptBar
 local NagView
+local tool_window
 local DocView
 local ImageView
 local MarkdownView
@@ -493,6 +494,7 @@ function core.init()
   TitleBar = require "core.titlebar"
   GlobalPromptBar = require "core.global_prompt_bar"
   NagView = require "core.nagview"
+  tool_window = require "core.tool_window"
   Project = require "core.project"
   DocView = require "core.docview"
   ImageView = require "core.imageview"
@@ -691,6 +693,7 @@ function core.init()
 
   local restored_window = core.window or renwindow._restore()
   core.window = restored_window or renwindow.create("", table.unpack(app_state.window or {}))
+  core.active_window = core.window
 
   -- Refresh-rate detection before the window exists only sees the primary
   -- display. Re-query from the real window so high-refresh secondary displays
@@ -1305,10 +1308,25 @@ end
 
 function core.set_active_view(view)
   assert(view, "Tried to set active view to nil")
-  -- Reset the IME even if the focus didn't change
+  -- Reset the IME even if the focus didn't change. Clear composition on
+  -- the previous input window before moving focus to another native window.
+  local previous_window = core.active_window or core.window
+  local input_window = core.event_window or core.window
+  local previous_event_window = core.event_window
+  core.event_window = previous_window
   ime.stop()
+  core.event_window = previous_event_window
+  if previous_window and previous_window ~= input_window then
+    system.text_input(previous_window, false)
+  end
+  local input_window_changed = input_window and input_window ~= core.active_window
+  if input_window_changed then
+    core.active_window = input_window
+    system.text_input(input_window, view:supports_text_input())
+  end
   if view ~= core.active_view then
-    if core.window then system.text_input(core.window, view:supports_text_input()) end
+    core.active_window = input_window
+    if input_window and not input_window_changed then system.text_input(input_window, view:supports_text_input()) end
     if core.active_view and core.active_view.force_focus then
       core.next_active_view = view
       return
@@ -1731,6 +1749,17 @@ function core.on_event(type, ...)
       "Focus diagnostics: received focusgained event active=%s window_has_focus=%s",
       tostring(core.active_view), tostring(core.window and system.window_has_focus(core.window))
     )
+    if core.active_window ~= core.window then
+      local main_node = core.root_panel and core.root_panel.get_main_panel and core.root_panel:get_main_panel()
+      if main_node and main_node.active_view then
+        local previous_event_window = core.event_window
+        core.event_window = core.window
+        core.set_active_view(main_node.active_view)
+        core.event_window = previous_event_window
+      else
+        core.active_window = core.window
+      end
+    end
     core.request_window_reactivation_repaint("focusgained")
   elseif type == "focuslost" then
     core.log_quiet(
@@ -1738,6 +1767,8 @@ function core.on_event(type, ...)
       tostring(core.active_view), tostring(core.window and system.window_has_focus(core.window))
     )
     core.root_panel:on_focus_lost(...)
+  elseif type == "windowclose" then
+    core.quit()
   elseif type == "quit" then
     core.quit()
   end
@@ -2008,7 +2039,26 @@ function core.step(next_frame_time, options)
   for type, a,b,c,d in system.poll_event do
     local event_item_start = system.get_time()
     step_stats.event_count = step_stats.event_count + 1
-    if type == "textinput" and did_keymap then
+    local event_window_id = system.get_last_event_window_id and system.get_last_event_window_id()
+    local main_window_id = core.window and system.get_window_id and system.get_window_id(core.window)
+    if tool_window and event_window_id and event_window_id ~= main_window_id then
+      local ok, handled
+      if type == "textinput" and did_keymap then
+        ok, handled = true, true
+        did_keymap = false
+      else
+        ok, handled = core.try(tool_window.handle_event, event_window_id, type, a, b, c, d)
+      end
+      if ok and handled then
+        did_keymap = (tool_window.last_did_keymap or false) or did_keymap
+        event_received = type
+      elseif ok then
+        local _, res = core.try(core.on_event, type, a, b, c, d)
+        did_keymap = res or did_keymap
+      else
+        event_received = type
+      end
+    elseif type == "textinput" and did_keymap then
       did_keymap = false
     elseif type == "mousemoved" then
       core.try(core.on_event, type, a, b, c, d)
@@ -2052,6 +2102,7 @@ function core.step(next_frame_time, options)
   core.root_panel.size.x, core.root_panel.size.y = width, height
   if uncapped or resizing or priority_event or options.immediate or next_frame_time < system.get_time() then
     core.root_panel:update()
+    if tool_window then tool_window.update_all() end
   end
   step_stats.update_ms = (system.get_time() - update_start_time) * 1000
 
@@ -2107,6 +2158,7 @@ function core.step(next_frame_time, options)
   step_stats.draw_emit_ms = (system.get_time() - draw_emit_start_time) * 1000
   local renderer_end_start_time = system.get_time()
   renderer.end_frame()
+  if tool_window then tool_window.draw_all() end
   step_stats.renderer_end_ms = (system.get_time() - renderer_end_start_time) * 1000
 
   local frame_time = system.get_time() - start_time
