@@ -306,6 +306,42 @@ function backend.file_history(repo, relpath, opts, callback)
   end)
 end
 
+function backend.build_selection_history_args(relpath, start_line, end_line, opts)
+  opts = opts or {}
+  local args = build_base_log_args(opts)
+  args[#args + 1] = "--no-patch"
+  if opts.offset and opts.offset > 0 then args[#args + 1] = "--skip=" .. tostring(opts.offset) end
+  args[#args + 1] = "-L"
+  args[#args + 1] = string.format("%d,%d:%s", start_line, end_line, normalize_relpath(relpath))
+  return args
+end
+
+function backend.selection_history(repo, relpath, start_line, end_line, opts, callback)
+  opts = opts or {}
+  return backend.run_git(repo, backend.build_selection_history_args(relpath, start_line, end_line, opts), opts, function(result, err)
+    if not result then
+      if callback then callback(nil, err) end
+      return
+    end
+    if callback then callback(backend.parse_log_page(result.stdout, opts), nil) end
+  end)
+end
+
+function backend.path_status(repo, relpath, opts, callback)
+  opts = opts or {}
+  local args = { "status", "--porcelain=v1", "-z" }
+  if opts.ignored then args[#args + 1] = "--ignored" end
+  args[#args + 1] = "--"
+  args[#args + 1] = normalize_relpath(relpath)
+  return backend.run_git(repo, args, opts, function(result, err)
+    if not result then
+      if callback then callback(nil, err) end
+      return
+    end
+    if callback then callback(backend.parse_status_z(result.stdout), nil) end
+  end)
+end
+
 function backend.diff_endpoint_for_commit(commit)
   local parents = commit and commit.parents or nil
   return {

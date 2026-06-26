@@ -114,11 +114,20 @@ local function diff_tab_id(repo, left, right, scope)
   }, "\0")
 end
 
-local function history_tab_id(repo, relpath)
+local function history_tab_id(repo, relpath, context)
+  if context and context.type == "selection" then
+    return table.concat({
+      "history", "selection", repo and repo.root or "", tostring(relpath or ""),
+      tostring(context.start_line or ""), tostring(context.end_line or ""),
+    }, "\0")
+  end
   return table.concat({ "history", "file", repo and repo.root or "", tostring(relpath or "") }, "\0")
 end
 
-local function history_tab_title(relpath)
+local function history_tab_title(relpath, context)
+  if context and context.type == "selection" then
+    return string.format("History: %s:%d-%d", tostring(relpath or ""), context.start_line or 0, context.end_line or 0)
+  end
   return "History: " .. tostring(relpath or "")
 end
 
@@ -232,19 +241,20 @@ function Model:open_working_tree_diff(callback)
   return self:open_commit_diff({ kind = "working_tree", changed_files = {} }, callback)
 end
 
-function Model:open_file_history(relpath, callback)
+function Model:open_history_tab(relpath, context, callback)
   if not self.repo then return nil, { kind = "no_repo", message = "Git repository is not loaded" } end
   if not relpath or relpath == "" then return nil, { kind = "no_path", message = "No file path selected" } end
   relpath = tostring(relpath):gsub("\\", "/")
-  local id = history_tab_id(self.repo, relpath)
+  local id = history_tab_id(self.repo, relpath, context)
   local tab = self:find_tab(id)
   if not tab then
     tab = {
       id = id,
       kind = "file_history",
-      title = history_tab_title(relpath),
+      title = history_tab_title(relpath, context),
       closable = true,
       relpath = relpath,
+      history_context = context,
       commits = {},
       selected_commit = 1,
       loading = false,
@@ -260,6 +270,18 @@ function Model:open_file_history(relpath, callback)
   return tab
 end
 
+function Model:open_file_history(relpath, callback)
+  return self:open_history_tab(relpath, nil, callback)
+end
+
+function Model:open_selection_history(relpath, start_line, end_line, callback)
+  return self:open_history_tab(relpath, {
+    type = "selection",
+    start_line = start_line,
+    end_line = end_line,
+  }, callback)
+end
+
 function Model:load_file_history(tab, callback)
   if not tab or tab.loading then return false end
   tab.history_generation = (tab.history_generation or 0) + 1
@@ -268,11 +290,12 @@ function Model:load_file_history(tab, callback)
   tab.error = nil
   local limit = log_limit()
   local job, done
-  job = self.backend.file_history(self.repo, tab.relpath, {
+  local opts = {
     limit = limit,
     offset = tab.next_offset,
     follow = tab.follow_renames,
-  }, function(page, err)
+  }
+  local function on_page(page, err)
     done = true
     self:_untrack_job(job)
     if generation ~= tab.history_generation then return end
@@ -289,7 +312,14 @@ function Model:load_file_history(tab, callback)
     end
     if callback then callback(self, err) end
     if self.on_update then self.on_update(self) end
-  end)
+  end
+  if tab.history_context and tab.history_context.type == "selection" then
+    job = self.backend.selection_history(
+      self.repo, tab.relpath, tab.history_context.start_line, tab.history_context.end_line, opts, on_page
+    )
+  else
+    job = self.backend.file_history(self.repo, tab.relpath, opts, on_page)
+  end
   if not done then self:_track_job(job) end
   return true
 end

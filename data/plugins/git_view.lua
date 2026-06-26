@@ -67,12 +67,39 @@ function git_view.open_view(project, opts)
   return tw, view
 end
 
-local function active_file_path()
+local function active_file_view()
   local view = core.active_view
   if view and view.get_focus_view then view = view:get_focus_view() or view end
   local doc = view and view.doc
   if not doc or doc.new_file or not doc.abs_filename or not common.is_absolute_path(doc.abs_filename) then return nil end
-  return doc.abs_filename
+  return view, doc
+end
+
+local function active_file_path()
+  local view, doc = active_file_view()
+  return doc and doc.abs_filename
+end
+
+local function active_selection_line_range()
+  local view, doc = active_file_view()
+  if not doc or not doc.has_any_selection or not doc:has_any_selection() then return nil end
+  local function normalized_range(line1, col1, line2, col2)
+    if line1 == line2 and col1 == col2 then return nil end
+    if line2 < line1 or (line1 == line2 and col2 < col1) then
+      line1, col1, line2, col2 = line2, col2, line1, col1
+    end
+    if line2 > line1 and col2 == 1 then line2 = line2 - 1 end
+    if line2 >= line1 then return line1, line2 end
+  end
+
+  local line1, col1, line2, col2 = doc:get_selection(true)
+  local start_line, end_line = normalized_range(line1, col1, line2, col2)
+  if start_line then return doc.abs_filename, start_line, end_line end
+
+  for _, sline1, scol1, sline2, scol2 in doc:get_selections(true) do
+    start_line, end_line = normalized_range(sline1, scol1, sline2, scol2)
+    if start_line then return doc.abs_filename, start_line, end_line end
+  end
 end
 
 local function active_or_open_view()
@@ -148,6 +175,47 @@ command.add(nil, {
         local tab, tab_err = v.model:open_file_history(repo.relpath, function() core.redraw = true end)
         if not tab and tab_err then core.log_quiet("Git View: file history skipped: %s", tab_err.message or tab_err.kind) end
         core.redraw = true
+      end)
+    end)
+  end,
+
+  ["git:show-selection-history"] = function()
+    local filename, start_line, end_line = active_selection_line_range()
+    if not filename then
+      core.log_quiet("Git View: selection history skipped; active file has no selection")
+      return
+    end
+    local _, doc = active_file_view()
+    if doc and doc.is_dirty and doc:is_dirty() then
+      core.log_quiet("Git View: selection history skipped; document has unsaved edits")
+      return
+    end
+    backend.repo_for_path_async(filename, function(repo, err)
+      if not repo then
+        core.log_quiet("Git View: selection history repo lookup failed: %s", err and (err.message or err.kind) or "unknown")
+        return
+      end
+      backend.path_status(repo, repo.relpath, { ignored = true }, function(status, status_err)
+        if status_err then
+          core.log_quiet("Git View: selection history status failed: %s", status_err.message or status_err.kind)
+          return
+        end
+        if status and #status > 0 then
+          core.log_quiet("Git View: selection history skipped; file has Git changes")
+          return
+        end
+        local project = current_project()
+        if not project or not project.path
+            or (not common.path_equals(project.path, repo.root) and not common.path_belongs_to(project.path, repo.root)) then
+          project = { path = repo.root }
+        end
+        local tw, view = git_view.open_view(project)
+        when_model_ready(view, function(v)
+          if v.model.repo and not common.path_equals(repo.root, v.model.repo.root) then v.model.repo = repo end
+          local tab, tab_err = v.model:open_selection_history(repo.relpath, start_line, end_line, function() core.redraw = true end)
+          if not tab and tab_err then core.log_quiet("Git View: selection history skipped: %s", tab_err.message or tab_err.kind) end
+          core.redraw = true
+        end)
       end)
     end)
   end,

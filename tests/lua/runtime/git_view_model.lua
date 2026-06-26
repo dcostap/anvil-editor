@@ -30,6 +30,14 @@ local function fake_backend(status_output, log_output)
       callback(real_backend.parse_log_page(stdout, { limit = opts and opts.limit or 500 }), nil)
       return { cancel = function() end }
     end,
+    selection_history = function(repo, relpath, start_line, end_line, opts, callback)
+      local stdout = table.concat({
+        table.concat({"sel789", "", "Ada", "ada@example.test", "1710000000", "HEAD", "Selection", ""}, "\0"),
+        "",
+      }, "\30")
+      callback(real_backend.parse_log_page(stdout, { limit = opts and opts.limit or 500 }), nil)
+      return { cancel = function() end }
+    end,
     run_git = function(repo, args, opts, callback)
       if args[1] == "status" then
         callback({ code = 0, stdout = status_output or "" }, nil)
@@ -137,6 +145,21 @@ test.describe("plugins.git.model", function()
     callbacks[2](real_backend.parse_log_page(log_output(), { limit = 500 }), nil)
     test.equal(tab.loading, false)
     test.equal(tab.commits[1].hash, "abc123")
+  end)
+
+  test.test("opens and reuses selection history tabs distinct from file history", function()
+    local model = Model.new({ path = "C:/repo" }, { backend = fake_backend("", log_output()) })
+    model:refresh_log()
+    local file_tab = model:open_file_history("src/app.lua")
+    local sel_tab = model:open_selection_history("src/app.lua", 3, 7)
+    local again = model:open_selection_history("src/app.lua", 3, 7)
+
+    test.equal(sel_tab, again)
+    test.ok(sel_tab.id ~= file_tab.id)
+    test.equal(sel_tab.history_context.type, "selection")
+    test.equal(sel_tab.history_context.start_line, 3)
+    test.equal(sel_tab.history_context.end_line, 7)
+    test.equal(sel_tab.commits[1].hash, "sel789")
   end)
 
   test.test("selected commit follows active file history tab", function()
