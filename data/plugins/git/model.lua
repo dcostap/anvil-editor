@@ -49,6 +49,18 @@ function Model:selected_tab()
   return self.tabs[1]
 end
 
+function Model:select_tab(id, callback)
+  local tab = self:find_tab(id)
+  if tab then
+    self.active_tab = id
+    if tab.kind == "commit_diff" and #(tab.changed_files or {}) > 0
+        and tab.left_text == nil and tab.right_text == nil and not tab.loading_file then
+      self:load_selected_diff_file(tab, callback)
+    end
+    return tab
+  end
+end
+
 function Model:selected_commit()
   local tab = self:log_tab()
   return tab.commits[tab.selected_commit]
@@ -76,6 +88,291 @@ function Model:close_selected_tab()
     end
   end
   return false
+end
+
+function Model:find_tab(id)
+  for _, tab in ipairs(self.tabs) do
+    if tab.id == id then return tab end
+  end
+end
+
+local function short_rev(rev)
+  if rev == backend_default.WORKING_TREE then return "working" end
+  if rev == backend_default.EMPTY_TREE then return "empty" end
+  return tostring(rev or ""):sub(1, 8)
+end
+
+local function diff_tab_id(repo, left, right, scope)
+  return table.concat({
+    "diff", repo and repo.root or "", tostring(left or ""), tostring(right or ""), scope or "",
+  }, "\0")
+end
+
+local function diff_tab_title(commit, left, right)
+  if commit and commit.kind == "working_tree" then return "Diff Working Tree" end
+  return "Diff " .. short_rev(right) .. " ← " .. short_rev(left)
+end
+
+local function normalize_for_diff(text)
+  return tostring(text or ""):gsub("\r\n", "\n"):gsub("\r", "\n")
+end
+
+local function path_for_file(file, side)
+  if not file then return nil end
+  if side == "left" then return file.old_path or file.path end
+  return file.new_path or file.path
+end
+
+local function missing_side_for_status(file, side)
+  local status = file and (file.status or file.kind)
+  return (side == "left" and (status == "added" or status == "untracked"))
+      or (side == "right" and status == "deleted")
+end
+
+local function untracked_directory_summary(record)
+  if not record or record.kind ~= "untracked" then return false end
+  local path = record.path or record.new_path or record.old_path or ""
+  return path:sub(-1) == "/"
+end
+
+local function working_tree_diff_records(records)
+  local filtered = {}
+  for _, record in ipairs(records or {}) do
+    -- A path staged as added and then deleted from the worktree has no
+    -- HEAD-to-worktree file content to compare in this diff tab.
+    -- Default porcelain status reports untracked directories as summary
+    -- entries (`?? dir/`); do not auto-load those summaries as files.
+    if record.xy ~= "AD" and not untracked_directory_summary(record) then
+      filtered[#filtered + 1] = record
+    end
+  end
+  return filtered
+end
+
+function Model:_new_diff_tab(commit, endpoint)
+  local id = diff_tab_id(self.repo, endpoint.left, endpoint.right)
+  return {
+    id = id,
+    kind = "commit_diff",
+    title = diff_tab_title(commit, endpoint.left, endpoint.right),
+    closable = true,
+    commit = commit,
+    left = endpoint.left,
+    right = endpoint.right,
+    changed_files = {},
+    selected_file = 1,
+    loading = false,
+    loading_file = false,
+    error = nil,
+    file_error = nil,
+    diff_generation = 0,
+  }
+end
+
+function Model:working_tree_left_revision()
+  for _, row in ipairs(self:log_tab().commits) do
+    if row.kind ~= "working_tree" and row.hash and row.hash ~= "" then return "HEAD" end
+  end
+  return self.backend.EMPTY_TREE
+end
+
+function Model:open_commit_diff(commit, callback)
+  commit = commit or self:selected_commit()
+  if not commit then return nil, { kind = "no_commit", message = "No commit selected" } end
+  if not self.repo then return nil, { kind = "no_repo", message = "Git repository is not loaded" } end
+
+  local endpoint
+  if commit.kind == "working_tree" then
+    endpoint = { left = self:working_tree_left_revision(), right = self.backend.WORKING_TREE }
+  else
+    endpoint = self.backend.diff_endpoint_for_commit(commit)
+  end
+  local id = diff_tab_id(self.repo, endpoint.left, endpoint.right)
+  local tab = self:find_tab(id)
+  if not tab then
+    tab = self:_new_diff_tab(commit, endpoint)
+    self.tabs[#self.tabs + 1] = tab
+  elseif commit.kind == "working_tree" then
+    tab.commit = commit
+  end
+  self.active_tab = tab.id
+  if commit.kind == "working_tree" then
+    self:load_changed_files(tab, callback)
+  elseif tab.changed_files and #tab.changed_files > 0 then
+    self:load_selected_diff_file(tab, callback)
+  else
+    self:load_changed_files(tab, callback)
+  end
+  return tab
+end
+
+function Model:open_selected_commit_diff(callback)
+  return self:open_commit_diff(self:selected_commit(), callback)
+end
+
+function Model:open_working_tree_diff(callback)
+  local log_tab = self:log_tab()
+  for _, commit in ipairs(log_tab.commits) do
+    if commit.kind == "working_tree" then return self:open_commit_diff(commit, callback) end
+  end
+  return self:open_commit_diff({ kind = "working_tree", changed_files = {} }, callback)
+end
+
+function Model:clear_diff_content(tab)
+  tab.file_generation = (tab.file_generation or 0) + 1
+  tab.loading_file = false
+  tab.file_error = nil
+  tab.left_text, tab.right_text = nil, nil
+  tab.left_name, tab.right_name = nil, nil
+  tab.diff_view = nil
+  tab.diff_generation = (tab.diff_generation or 0) + 1
+end
+
+function Model:load_changed_files(tab, callback)
+  if not tab then return false end
+  if tab.loading then
+    if callback then
+      tab.pending_load_callbacks = tab.pending_load_callbacks or {}
+      tab.pending_load_callbacks[#tab.pending_load_callbacks + 1] = callback
+    end
+    return false
+  end
+  tab.list_generation = (tab.list_generation or 0) + 1
+  local generation = tab.list_generation
+  tab.loading = true
+  tab.error = nil
+  local function finish(files, err)
+    if generation ~= tab.list_generation then return end
+    tab.loading = false
+    tab.error = err
+    tab.changed_files = files or {}
+    tab.file_scroll = 0
+    tab.selected_file = math.min(tab.selected_file or 1, math.max(1, #tab.changed_files))
+    local callbacks = tab.pending_load_callbacks or {}
+    tab.pending_load_callbacks = nil
+    if err or #tab.changed_files == 0 then
+      self:clear_diff_content(tab)
+      if callback then callback(self, err) end
+      for _, cb in ipairs(callbacks) do cb(self, err) end
+      if self.on_update then self.on_update(self) end
+    else
+      local function chained_callback(model, file_err)
+        if callback then callback(model, file_err) end
+        for _, cb in ipairs(callbacks) do cb(model, file_err) end
+        if self.on_update then self.on_update(self) end
+      end
+      self:load_selected_diff_file(tab, chained_callback)
+    end
+  end
+  local job, done
+  if tab.right == self.backend.WORKING_TREE then
+    local pending, tracked_records, untracked_records, final_err = 2, nil, nil, nil
+    local function done_one()
+      pending = pending - 1
+      if pending ~= 0 then return end
+      local records, seen = {}, {}
+      for _, record in ipairs(tracked_records or {}) do
+        local path = record.new_path or record.path or record.old_path
+        if path then seen[path] = true end
+        records[#records + 1] = record
+      end
+      for _, record in ipairs(untracked_records or {}) do
+        local path = record.path or record.new_path or record.old_path
+        if path and not seen[path] then records[#records + 1] = record end
+      end
+      finish(records, (#records == 0) and final_err or nil)
+    end
+    local diff_job, diff_done
+    diff_job = self.backend.changed_files(self.repo, tab.left, tab.right, {}, function(files, err)
+      diff_done = true
+      self:_untrack_job(diff_job)
+      if err and not final_err then final_err = err end
+      tracked_records = files or {}
+      done_one()
+    end)
+    if not diff_done then self:_track_job(diff_job) end
+    local status_job, status_done
+    status_job = self.backend.run_git(self.repo, { "status", "--porcelain=v1", "-z", "--untracked-files=all" }, {}, function(result, err)
+      status_done = true
+      self:_untrack_job(status_job)
+      if err and not final_err then final_err = err end
+      untracked_records = {}
+      if result then
+        for _, record in ipairs(self.backend.parse_status_z(result.stdout)) do
+          if record.kind == "untracked" and not untracked_directory_summary(record) then
+            untracked_records[#untracked_records + 1] = record
+          end
+        end
+      end
+      done_one()
+    end)
+    if not status_done then self:_track_job(status_job) end
+    return true
+  else
+    job = self.backend.changed_files(self.repo, tab.left, tab.right, {}, function(files, err)
+      done = true
+      self:_untrack_job(job)
+      finish(files, err)
+    end)
+  end
+  if not done then self:_track_job(job) end
+  return true
+end
+
+function Model:select_diff_file(tab, index, callback)
+  tab = tab or self:selected_tab()
+  if not tab or tab.kind ~= "commit_diff" then return nil end
+  if #tab.changed_files == 0 then return nil end
+  tab.selected_file = math.max(1, math.min(#tab.changed_files, tonumber(index) or 1))
+  self:load_selected_diff_file(tab, callback)
+  return tab.changed_files[tab.selected_file]
+end
+
+function Model:load_selected_diff_file(tab, callback)
+  tab = tab or self:selected_tab()
+  if not tab or tab.kind ~= "commit_diff" then return false end
+  local file = tab.changed_files and tab.changed_files[tab.selected_file]
+  if not file then return false end
+  tab.file_generation = (tab.file_generation or 0) + 1
+  local generation = tab.file_generation
+  tab.loading_file = true
+  tab.file_error = nil
+  local pending = 2
+  local left_text, right_text, file_err
+  local function finish()
+    pending = pending - 1
+    if pending ~= 0 then return end
+    if generation ~= tab.file_generation then return end
+    tab.loading_file = false
+    tab.file_error = file_err
+    tab.left_text = normalize_for_diff(left_text)
+    tab.right_text = normalize_for_diff(right_text)
+    tab.left_name = path_for_file(file, "left") or "<empty>"
+    tab.right_name = path_for_file(file, "right") or "<empty>"
+    tab.diff_generation = (tab.diff_generation or 0) + 1
+    if callback then callback(self, file_err) end
+    if self.on_update then self.on_update(self) end
+  end
+  local function load(side, rev, relpath)
+    if missing_side_for_status(file, side) or not relpath then
+      if side == "left" then left_text = "" else right_text = "" end
+      finish()
+      return
+    end
+    local job, done
+    job = self.backend.file_at(self.repo, rev, relpath, {}, function(text, err)
+      done = true
+      self:_untrack_job(job)
+      if generation ~= tab.file_generation then return end
+      if err and not file_err then file_err = err end
+      if side == "left" then left_text = text or "" else right_text = text or "" end
+      finish()
+    end)
+    if not done then self:_track_job(job) end
+  end
+  load("left", tab.left, path_for_file(file, "left"))
+  load("right", tab.right, path_for_file(file, "right"))
+  return true
 end
 
 function Model:cancel_jobs()
@@ -129,6 +426,20 @@ local function append_log_commits(tab, log_page)
   tab.next_offset = log_page.next_offset
 end
 
+function Model:sync_working_tree_diff_tabs()
+  for _, tab in ipairs(self.tabs) do
+    if tab.kind == "commit_diff" and tab.right == self.backend.WORKING_TREE then
+      local old_id = tab.id
+      local new_left = self:working_tree_left_revision()
+      tab.left = new_left
+      tab.id = diff_tab_id(self.repo, tab.left, tab.right)
+      tab.title = diff_tab_title(tab.commit, tab.left, tab.right)
+      if self.active_tab == old_id then self.active_tab = tab.id end
+      self:load_changed_files(tab)
+    end
+  end
+end
+
 function Model:_finish_refresh(generation, status_records, log_page, err, callback)
   if generation ~= self.generation then return end
   local tab = self:log_tab()
@@ -148,6 +459,7 @@ function Model:_finish_refresh(generation, status_records, log_page, err, callba
     }
   end
   append_log_commits(tab, log_page)
+  self:sync_working_tree_diff_tabs()
   if tab.selected_commit > #tab.commits then tab.selected_commit = math.max(1, #tab.commits) end
   if callback then callback(self, err) end
 end
@@ -187,7 +499,21 @@ function Model:_start_refresh_jobs(repo, generation, callback)
   if not log_done then self:_track_job(log_job) end
 end
 
+function Model:invalidate_diff_loads()
+  for _, tab in ipairs(self.tabs) do
+    if tab.kind == "commit_diff" then
+      local was_loading = tab.loading or tab.loading_file
+      tab.file_generation = (tab.file_generation or 0) + 1
+      tab.list_generation = (tab.list_generation or 0) + 1
+      tab.loading = false
+      tab.loading_file = false
+      if was_loading then self:clear_diff_content(tab) end
+    end
+  end
+end
+
 function Model:refresh_log(callback)
+  self:invalidate_diff_loads()
   self:cancel_jobs()
   self.generation = self.generation + 1
   local generation = self.generation

@@ -57,6 +57,20 @@ function git_view.open_view(project, opts)
   return tw, view
 end
 
+local function when_model_ready(view, action)
+  if not view then return end
+  local model = view.model
+  local log_tab = model:log_tab()
+  if model.repo and not log_tab.loading then
+    action(view)
+    return
+  end
+  model:refresh_log(function()
+    action(view)
+    core.redraw = true
+  end)
+end
+
 command.add(nil, {
   ["git:open-view"] = function()
     git_view.open_view()
@@ -70,6 +84,30 @@ command.add(nil, {
     else
       git_view.open_view(project)
     end
+  end,
+
+  ["git:open-selected-commit-diff"] = function()
+    local project = current_project()
+    local tw, view = git_view.open_view(project)
+    when_model_ready(view, function(v)
+      local tab, err = v.model:open_selected_commit_diff(function() core.redraw = true end)
+      if not tab and err then core.log_quiet("Git View: open selected commit diff skipped: %s", err.message or err.kind) end
+    end)
+  end,
+
+  ["git:open-working-tree-diff"] = function()
+    local project = current_project()
+    local tw, view = git_view.open_view(project)
+    when_model_ready(view, function(v)
+      local tab, err = v.model:open_working_tree_diff(function() core.redraw = true end)
+      if not tab and err then core.log_quiet("Git View: open working tree diff skipped: %s", err.message or err.kind) end
+    end)
+  end,
+
+  ["git:close-selected-tab"] = function()
+    local project = current_project()
+    local tw = project and tool_window.get(project, "git")
+    if tw and tw.git_view and tw.git_view.model:close_selected_tab() then core.redraw = true end
   end,
 })
 

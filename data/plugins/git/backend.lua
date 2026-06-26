@@ -295,6 +295,70 @@ function backend.diff_endpoint_for_working_tree(repo_state)
   }
 end
 
+function backend.build_changed_files_args(left, right, opts)
+  opts = opts or {}
+  local args = { "diff", "--name-status", "-z" }
+  if opts.ignore_whitespace then args[#args + 1] = "--ignore-all-space" end
+  if right == backend.WORKING_TREE then
+    if left and left ~= "" then args[#args + 1] = left end
+  else
+    if left and left ~= "" then args[#args + 1] = left end
+    if right and right ~= "" then args[#args + 1] = right end
+  end
+  if opts.relpath then
+    args[#args + 1] = "--"
+    args[#args + 1] = normalize_relpath(opts.relpath)
+  end
+  return args
+end
+
+function backend.changed_files(repo, left, right, opts, callback)
+  opts = opts or {}
+  return backend.run_git(repo, backend.build_changed_files_args(left, right, opts), opts, function(result, err)
+    if not result then
+      if callback then callback(nil, err) end
+      return
+    end
+    if callback then callback(backend.parse_name_status_z(result.stdout), nil) end
+  end)
+end
+
+local function read_file_contents(filename, max_output)
+  local info = system.get_file_info(filename)
+  if info and max_output and info.size and info.size > max_output then
+    return nil, { kind = "output_too_large", message = "output too large" }
+  end
+  local fp, err = io.open(filename, "rb")
+  if not fp then return nil, { kind = "read_failed", message = err or "failed to read file" } end
+  local text = fp:read("*a") or ""
+  fp:close()
+  if max_output and #text > max_output then
+    return nil, { kind = "output_too_large", message = "output too large" }
+  end
+  return text, nil
+end
+
+function backend.file_at(repo, rev, relpath, opts, callback)
+  opts = opts or {}
+  if rev == nil or rev == "" then
+    if callback then callback("", nil) end
+    return nil
+  end
+  if rev == backend.WORKING_TREE then
+    local root = type(repo) == "table" and repo.root or repo
+    local text, err = read_file_contents(root .. PATHSEP .. relpath, opts.max_output or backend.DEFAULT_MAX_OUTPUT)
+    if callback then callback(text, err) end
+    return nil
+  end
+  return backend.run_git(repo, { "show", tostring(rev) .. ":" .. git_arg_path(relpath) }, opts, function(result, err)
+    if not result then
+      if callback then callback(nil, err) end
+      return
+    end
+    if callback then callback(result.stdout or "", nil) end
+  end)
+end
+
 local function append_args(dst, src)
   for _, value in ipairs(src or {}) do dst[#dst + 1] = value end
 end

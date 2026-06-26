@@ -81,6 +81,24 @@ test.describe("Git View command", function()
     test.equal(tw.hidden, false)
   end)
 
+  test.test("clicking rendered tab labels switches active tabs", function(context)
+    local tw, view = open_fake_git_view(context.project)
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 800, 600
+    view.model.tabs[#view.model.tabs + 1] = {
+      id = "diff-test",
+      kind = "commit_diff",
+      title = "Diff abc123",
+      closable = true,
+      changed_files = {},
+    }
+    local tab = view:tab_at_point(view:tab_rects(style.padding.x, style.padding.y + style.font:get_height() + style.padding.y)[2].x + 1, style.padding.y + style.font:get_height() + style.padding.y + 1)
+    test.equal(tab.id, "diff-test")
+    view:on_mouse_pressed("left", view:tab_rects(style.padding.x, style.padding.y + style.font:get_height() + style.padding.y)[2].x + 1, style.padding.y + style.font:get_height() + style.padding.y + 1, 1)
+    test.equal(view.model.active_tab, "diff-test")
+    test.equal(tw.hidden, false)
+  end)
+
   test.test("mouse wheel scrolls a long log", function(context)
     local tw, view = open_fake_git_view(context.project)
     view.position.x, view.position.y = 0, 0
@@ -107,5 +125,8 @@ test.describe("Git View command", function()
 
   test.test("command is registered", function()
     test.not_nil(command.map["git:open-view"])
+    test.not_nil(command.map["git:open-selected-commit-diff"])
+    test.not_nil(command.map["git:open-working-tree-diff"])
+    test.not_nil(command.map["git:close-selected-tab"])
   end)
 end)
