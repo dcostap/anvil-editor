@@ -172,7 +172,7 @@ Implementation guidance:
 
 Suggested modules:
 
-- `data/plugins/git/init.lua` registers commands, defaults, and first-party plugin metadata.
+- `data/plugins/git_view.lua` registers commands and opens the Git View shell. Keep this command plugin outside `plugins.git` so backend-level `config.plugins.git = false` remains usable even when the Git View command plugin is loaded.
 - `data/plugins/git/backend.lua` owns Git process calls and parsers.
 - `data/plugins/git/model.lua` owns Project-level Git View state and tab state.
 - `data/plugins/git/view.lua` renders the Git View and delegates tab bodies.

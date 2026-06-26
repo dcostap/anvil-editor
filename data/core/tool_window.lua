@@ -101,10 +101,13 @@ function ToolWindow:hide()
   if self.window and system.set_window_visible then pcall(system.set_window_visible, self.window, false) end
   if (self.window and core.active_window == self.window) or owns_active_view then
     local restore_last_active_view = core.last_active_view
-    local main_node = core.root_panel and core.root_panel.get_main_panel and core.root_panel:get_main_panel()
-    local fallback_view = main_node and main_node.active_view or core.last_active_view
+    local app_root_panel = core.tool_window_main_root_panel or core.root_panel
+    if app_root_panel == self.root then app_root_panel = nil end
+    local main_node = app_root_panel and app_root_panel.get_main_panel and app_root_panel:get_main_panel()
+    local fallback_view = main_node and main_node.active_view or nil
     if fallback_view then
       local previous_event_window = core.event_window
+      core.active_window = core.window
       core.event_window = core.window
       core.set_active_view(fallback_view)
       core.event_window = previous_event_window
@@ -157,6 +160,16 @@ function ToolWindow:handle_event(type, ...)
     if self.on_event then
       local handled = self:on_event(type, ...)
       if handled ~= nil then return handled end
+    end
+    if type == "keypressed" then
+      local previous_root_panel = core.root_panel
+      core.tool_window_main_root_panel = previous_root_panel
+      core.root_panel = self.root
+      local ok, handled = pcall(call_root_event, self.root, type, ...)
+      core.root_panel = previous_root_panel
+      core.tool_window_main_root_panel = nil
+      if not ok then error(handled, 0) end
+      return handled
     end
     return call_root_event(self.root, type, ...)
   end, ...)
@@ -273,8 +286,15 @@ function tool_window.draw_all()
 end
 
 function tool_window.reset_for_tests()
+  local core = require "core"
+  for _, tw in pairs(tool_window.windows) do
+    if tw.window and system.text_input then pcall(system.text_input, tw.window, false) end
+    if tw.window and system.set_window_visible then pcall(system.set_window_visible, tw.window, false) end
+  end
   tool_window.windows = {}
   tool_window.windows_by_id = {}
+  core.active_window = core.window
+  core.event_window = core.window
 end
 
 return tool_window

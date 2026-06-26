@@ -251,6 +251,10 @@ function backend._contains_arg(args, expected)
 end
 
 local LOG_FORMAT = table.concat({
+  "%H", "%P", "%an", "%ae", "%at", "%D", "%s"
+}, "%x00") .. "%x00%x1e"
+
+local LOG_FORMAT_WITH_BODY = table.concat({
   "%H", "%P", "%an", "%ae", "%at", "%D", "%s", "%b"
 }, "%x00") .. "%x00%x1e"
 
@@ -261,7 +265,7 @@ function backend.build_log_args(opts)
     "log",
     "--date-order",
     "--max-count=" .. tostring(limit + 1),
-    "--format=" .. LOG_FORMAT,
+    "--format=" .. (opts.include_body and LOG_FORMAT_WITH_BODY or LOG_FORMAT),
   }
   if opts.offset and opts.offset > 0 then
     args[#args + 1] = "--skip=" .. tostring(opts.offset)
@@ -482,17 +486,36 @@ local function run_git_sync(cwd, args, max_output)
   return stdout, nil
 end
 
-function backend.repo_for_path(path)
-  if not backend.is_enabled() then return nil, disabled_error() end
+local function repo_input_for_path(path)
   local abs = system.absolute_path(path)
   if not abs then return nil, { kind = "invalid_path", message = "invalid path" } end
   abs = common.normalize_path(abs)
-
   local info = system.get_file_info(abs)
   local cwd = info and info.type == "dir" and abs or common.dirname(abs)
   if not cwd or cwd == "" then cwd = system.getcwd() end
+  return { abs = abs, info = info, cwd = cwd }
+end
 
-  local out, err = run_git_sync(cwd, { "rev-parse", "--show-toplevel" }, 1024 * 1024)
+local function repo_from_rev_parse(input, out)
+  local root = common.normalize_path(from_git_output_path(trim(out)))
+  if root == PATHSEP or root == "\\" or not common.path_belongs_to(input.abs, root) then
+    root = find_git_marker_root(input.cwd) or root
+  end
+  local relpath
+  if input.info and input.info.type ~= "dir" then
+    relpath = common.relative_path(root, input.abs)
+  elseif common.path_belongs_to(input.abs, root) and not common.path_equals(input.abs, root) then
+    relpath = common.relative_path(root, input.abs)
+  end
+  return { root = root, relpath = relpath, input_path = input.abs }
+end
+
+function backend.repo_for_path(path)
+  if not backend.is_enabled() then return nil, disabled_error() end
+  local input, input_err = repo_input_for_path(path)
+  if not input then return nil, input_err end
+
+  local out, err = run_git_sync(input.cwd, { "rev-parse", "--show-toplevel" }, 1024 * 1024)
   if not out then
     if err and err.kind == "exit" then
       err.kind = "not_in_repository"
@@ -500,18 +523,27 @@ function backend.repo_for_path(path)
     return nil, err
   end
 
-  local root = common.normalize_path(from_git_output_path(trim(out)))
-  if root == PATHSEP or root == "\\" or not common.path_belongs_to(abs, root) then
-    root = find_git_marker_root(cwd) or root
-  end
-  local relpath
-  if info and info.type ~= "dir" then
-    relpath = common.relative_path(root, abs)
-  elseif common.path_belongs_to(abs, root) and not common.path_equals(abs, root) then
-    relpath = common.relative_path(root, abs)
-  end
+  return repo_from_rev_parse(input, out)
+end
 
-  return { root = root, relpath = relpath, input_path = abs }
+function backend.repo_for_path_async(path, callback)
+  if not backend.is_enabled() then
+    if callback then callback(nil, disabled_error()) end
+    return nil
+  end
+  local input, input_err = repo_input_for_path(path)
+  if not input then
+    if callback then callback(nil, input_err) end
+    return nil
+  end
+  return backend.run_git(input.cwd, { "rev-parse", "--show-toplevel" }, { max_output = 1024 * 1024 }, function(result, err)
+    if not result then
+      if err and err.kind == "exit" then err.kind = "not_in_repository" end
+      if callback then callback(nil, err) end
+      return
+    end
+    if callback then callback(repo_from_rev_parse(input, result.stdout), nil) end
+  end)
 end
 
 return backend

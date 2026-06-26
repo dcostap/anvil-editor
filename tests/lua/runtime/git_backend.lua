@@ -160,6 +160,11 @@ test.describe("plugins.git.backend", function()
       test.ok(backend._contains_arg(args, "--skip=25"), "missing page offset skip")
       test.ok(backend._contains_arg(args, "--"), "missing pathspec terminator")
       test.equal(args[#args], "src/app.lua")
+      for _, arg in ipairs(args) do
+        if arg:find("^%-%-format=") then
+          test.ok(not arg:find("%%b", 1, true), "shell log format should not request full commit bodies")
+        end
+      end
     end)
   end)
 
