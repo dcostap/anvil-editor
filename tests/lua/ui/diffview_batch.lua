@@ -29,6 +29,17 @@ test.describe("DiffView batch behavior", function()
     end
   end)
 
+  test.it("uses Text Diff View wording for arbitrary text comparisons", function(context)
+    local view = track(context, "diffviews", diffview.string_to_string(
+      "left",
+      "right",
+      "left",
+      "right",
+      true
+    ))
+    test.equal(view:get_name(), "Text Diff View")
+  end)
+
   test.it("syncing an inserted hunk into the other side emits one document change", function(context)
     local view = track(context, "diffviews", diffview.string_to_string(
       "aa\ninserted\nbb",

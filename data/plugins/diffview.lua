@@ -157,11 +157,11 @@ function DiffView:get_name()
   if self.compare_type == DiffView.type.FILE_FILE then
     return "Files Comparison"
   elseif self.compare_type == DiffView.type.STRING_STRING then
-    return "Strings Comparison"
+    return "Text Diff View"
   elseif self.compare_type == DiffView.type.FILE_STRING then
-    return "File->String Comparison"
+    return "File/Text Diff View"
   elseif self.compare_type == DiffView.type.STRING_FILE then
-    return "String->File Comparison"
+    return "Text/File Diff View"
   end
   return "Diff Viewer"
 end
