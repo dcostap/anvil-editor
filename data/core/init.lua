@@ -1754,16 +1754,31 @@ function core.on_event(type, ...)
       "Focus diagnostics: received focusgained event active=%s window_has_focus=%s",
       tostring(core.active_view), tostring(core.window and system.window_has_focus(core.window))
     )
+    local function restore_focus_child(view)
+      if not (view and view.get_focus_view) then return view end
+      return view:get_focus_view() or view
+    end
+    local function activate_for_main_window(view)
+      local focus = restore_focus_child(view)
+      if not focus then return false end
+      local previous_event_window = core.event_window
+      core.event_window = core.window
+      core.set_active_view(focus)
+      core.event_window = previous_event_window
+      if focus ~= view then
+        core.log_quiet("Focus diagnostics: restored nested focus active=%s focus=%s", tostring(view), tostring(focus))
+      end
+      return true
+    end
     if core.active_window ~= core.window then
       local main_node = core.root_panel and core.root_panel.get_main_panel and core.root_panel:get_main_panel()
       if main_node and main_node.active_view then
-        local previous_event_window = core.event_window
-        core.event_window = core.window
-        core.set_active_view(main_node.active_view)
-        core.event_window = previous_event_window
+        activate_for_main_window(main_node.active_view)
       else
         core.active_window = core.window
       end
+    else
+      activate_for_main_window(core.active_view)
     end
     core.request_window_reactivation_repaint("focusgained")
   elseif type == "focuslost" then

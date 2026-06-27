@@ -108,6 +108,17 @@ test.describe("Git View command", function()
     test.not_nil(first.git_view)
   end)
 
+  test.test("focus gained restores Git Log pane focus from the shell view", function(context)
+    local tw, view = open_fake_git_view(context.project)
+    core.active_view = view
+    core.active_window = core.window
+
+    core.on_event("focusgained")
+
+    test.equal(core.active_view.git_owner_view, view)
+    test.equal(core.active_view.git_pane, "log-list")
+  end)
+
   test.test("clicking a commit row updates selected commit details", function(context)
     local tw, view = open_fake_git_view(context.project)
     view.position.x, view.position.y = 0, 0
