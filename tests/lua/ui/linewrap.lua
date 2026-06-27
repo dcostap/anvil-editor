@@ -187,6 +187,37 @@ test.describe("line wrapping current line highlight", function()
     test.equal(highlights[1].y, expected_y)
   end)
 
+  test.it("keeps current-line highlight but hides caret when the DocView is inactive", function(context)
+    local view, doc = open_editor(context, "one\ntwo\n")
+    context.highlight_current_line = config.highlight_current_line
+    context.disable_blink = config.disable_blink
+    config.highlight_current_line = true
+    config.disable_blink = true
+    doc:set_selection(2, 1, 2, 1)
+
+    local original_active_view = core.active_view
+    local original_window_has_focus = system.window_has_focus
+    core.active_view = {}
+    system.window_has_focus = function() return true end
+
+    local carets = {}
+    local old_draw_caret = view.draw_caret
+    view.draw_caret = function(_, x, y, line, col)
+      carets[#carets + 1] = { x = x, y = y, line = line, col = col }
+    end
+
+    local highlights = collect_current_line_highlights(view, function()
+      view:draw()
+    end)
+
+    view.draw_caret = old_draw_caret
+    core.active_view = original_active_view
+    system.window_has_focus = original_window_has_focus
+
+    test.equal(#highlights, 1)
+    test.equal(#carets, 0)
+  end)
+
   test.it("refreshes visible caret cache during a full wrapped Document View draw", function(context)
     local view, doc = open_editor(context, string.rep("x", 40) .. "\n")
     configure_wrapping_for_test(context, view)

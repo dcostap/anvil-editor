@@ -1315,7 +1315,6 @@ function DocView:draw_content_left_edge()
 end
 
 function DocView:line_has_current_line_highlight(line)
-  if core.active_view ~= self then return false end
   local highlight_cache = self.__line_body_highlight_cache
   if highlight_cache then return highlight_cache[line] or false end
 
@@ -1334,7 +1333,7 @@ function DocView:line_has_current_line_highlight(line)
 end
 
 function DocView:draw_current_line_highlights(minline, maxline)
-  if core.active_view ~= self or config.highlight_current_line == false then return end
+  if config.highlight_current_line == false then return end
   local _, y = self:get_line_screen_position(minline)
   local lh = self:get_line_height()
   for line = minline, maxline do
@@ -2139,7 +2138,7 @@ function DocView:draw_overlay()
   local overlay_start = stats and system.get_time()
   local minline, maxline = self:get_visible_line_range()
   local is_active = core.active_view == self
-  if not self:active_window_has_focus() then return end
+  if not is_active or not self:active_window_has_focus() then return end
 
   -- draw caret if it overlaps this line
   local T = config.blink_period
