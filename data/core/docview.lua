@@ -1240,6 +1240,11 @@ function DocView:update_ime_location()
 end
 
 
+function DocView:active_window_has_focus()
+  local focused_window = core.active_window or core.window
+  return not system.window_has_focus or system.window_has_focus(focused_window)
+end
+
 ---Update the view state each frame.
 ---Handles cache invalidation, auto-scrolling to caret, and blink timing.
 function DocView:update()
@@ -1272,7 +1277,7 @@ function DocView:update()
   end
 
   -- update blink timer
-  if not config.disable_blink and system.window_has_focus(core.window) and self == core.active_view and not self.mouse_selecting then
+  if not config.disable_blink and self:active_window_has_focus() and self == core.active_view and not self.mouse_selecting then
     local T, t0 = config.blink_period, core.blink_start
     local ta, tb = core.blink_timer, system.get_time()
     if ((tb - t0) % T < T / 2) ~= ((ta - t0) % T < T / 2) then
@@ -2134,8 +2139,7 @@ function DocView:draw_overlay()
   local overlay_start = stats and system.get_time()
   local minline, maxline = self:get_visible_line_range()
   local is_active = core.active_view == self
-  local window_focused = system.window_has_focus(core.window)
-  if not window_focused then return end
+  if not self:active_window_has_focus() then return end
 
   -- draw caret if it overlaps this line
   local T = config.blink_period

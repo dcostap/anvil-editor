@@ -85,6 +85,7 @@ test.describe("Git View command", function()
   test.before_each(function(context)
     context.original_projects = core.projects
     context.original_active_view = core.active_view
+    context.original_active_window = core.active_window
     tool_window.reset_for_tests()
     context.project = { path = "C:/repo" }
   end)
@@ -92,6 +93,7 @@ test.describe("Git View command", function()
   test.after_each(function(context)
     core.projects = context.original_projects
     core.active_view = context.original_active_view
+    core.active_window = context.original_active_window
     tool_window.reset_for_tests()
   end)
 
@@ -245,6 +247,39 @@ test.describe("Git View command", function()
     test.equal(core.active_view.git_owner_view, tab_view)
     test.equal(command.perform("git:focus-list-pane"), true)
     test.equal(core.active_view, tab_view)
+  end)
+
+  test.it("focused Git diff DocView treats the tool window as its focused window", function(context)
+    local tw, view = open_fake_git_view(context.project)
+    local tab = {
+      id = "diff-caret",
+      kind = "commit_diff",
+      title = "Diff caret",
+      closable = true,
+      changed_files = { { status = "modified", old_path = "a.lua", new_path = "a.lua" } },
+      selected_file = 1,
+      left_text = "old\n",
+      right_text = "new\n",
+      left_name = "a.lua",
+      right_name = "a.lua",
+      diff_generation = 1,
+    }
+    view.model.tabs[#view.model.tabs + 1] = tab
+    local tab_view = git_view.ensure_tab_view(tw, tab, true)
+    tab_view.position.x, tab_view.position.y = 0, 0
+    tab_view.size.x, tab_view.size.y = 800, 600
+
+    test.equal(command.perform("sidepanel:toggle-focus"), true)
+    local diff = tab.diff_view
+    local doc_view = diff.doc_view_a
+    local original_window_has_focus = system.window_has_focus
+    system.window_has_focus = function(window) return window == tw.window end
+    core.active_window = tw.window
+    core.active_view = doc_view
+    test.equal(doc_view:active_window_has_focus(), true)
+    core.active_window = core.window
+    test.equal(doc_view:active_window_has_focus(), false)
+    system.window_has_focus = original_window_has_focus
   end)
 
   test.test("pane focus cycle is inactive on single-pane Git tabs", function(context)
