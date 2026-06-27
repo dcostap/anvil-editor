@@ -25,10 +25,19 @@ local function current_project()
   return core.projects and core.projects[1] or core.root_project and core.root_project()
 end
 
+local function live_git_view(view)
+  if not (view and view.model and view.model.log_tab) then return nil end
+  if view.tab_id and view.tab_id ~= "log" then
+    if not (view.model.find_tab and view.model:find_tab(view.tab_id)) then return nil end
+    local tw = view.tool_window
+    if tw and tw.git_tab_views and tw.git_tab_views[view.tab_id] ~= view then return nil end
+  end
+  return view
+end
+
 local function focused_git_view()
   local view = core.active_view
-  if view and view.model and view.model.log_tab then return view end
-  if view and view.git_owner_view then return view.git_owner_view end
+  return live_git_view(view) or live_git_view(view and view.git_owner_view)
 end
 
 local function active_git_view()
@@ -565,8 +574,15 @@ local function close_git_view_tab(view)
     end
   end
   if tw and tw.git_tab_views then tw.git_tab_views[view.tab_id] = nil end
+  local previous_active = core.active_view
   remove_node_view(tw, view)
   local active = node and node.active_view
+  if previous_active == view or previous_active and previous_active.git_owner_view == view then
+    local focus_target = active and active.model == view.model and active or tw and tw.git_view
+    if focus_target and focus_target ~= view and focus_target.focus_list_pane then
+      focus_target:focus_list_pane()
+    end
+  end
   if active and active.model == view.model and active.tab_id and view.model:find_tab(active.tab_id) then
     view.model.active_tab = active.tab_id
   elseif view.model:find_tab("log") then
@@ -586,13 +602,31 @@ end, {
   ["git:close-selected-tab"] = close_git_view_tab,
 })
 
+command.add(function()
+  local view = focused_git_view()
+  if view and view.can_focus_next_pane and view:can_focus_next_pane() then return true, view end
+  return false
+end, {
+  ["git:focus-next-pane"] = function(view)
+    if view and view.focus_next_pane then view:focus_next_pane() end
+  end,
+})
+
+local sidepanel = require "core.sidepanel"
+command.add(nil, {
+  ["sidepanel:toggle-focus"] = function()
+    local view = focused_git_view()
+    if view and view.focus_next_pane and view:focus_next_pane() then return end
+    sidepanel.toggle_focus()
+  end,
+})
+
 keymap.add({
   ["ctrl+k"] = "git:open-view",
   ["up"] = "git:select-previous-row",
   ["down"] = "git:select-next-row",
   ["return"] = "git:activate-selected-row",
   ["alt+r"] = "git:activate-selected-row",
-  ["alt+`"] = "git:focus-list-pane",
   ["alt+shift+`"] = "git:focus-diff-pane",
 })
 

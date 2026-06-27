@@ -473,12 +473,19 @@ local function with_tool_window_event_window(tw, fn)
   return result
 end
 
-function GitView:focus_diff_pane()
+function GitView:focus_diff_pane(side)
   local tab = self:activate_model_tab(function() core.redraw = true end) or self:model_tab()
   if not (tab and tab.kind == "commit_diff") then return false end
   if tab.loading_file or tab.file_error or (tab.left_text == nil and tab.right_text == nil) then return false end
   local view = self:ensure_diff_view(tab)
-  local focus = view and view.get_focus_view and view:get_focus_view()
+  local focus
+  if side == "right" or side == "b" or side == 2 then
+    focus = view and view.doc_view_b
+  elseif side == "left" or side == "a" or side == 1 then
+    focus = view and view.doc_view_a
+  else
+    focus = self.focused_diff_doc_view or view and view.get_focus_view and view:get_focus_view()
+  end
   if not focus then return false end
   self.focus_pane = "diff"
   self.focused_diff_doc_view = focus
@@ -488,6 +495,31 @@ function GitView:focus_diff_pane()
     if core.active_view then core.active_view.git_owner_view = self end
     return true
   end)
+end
+
+function GitView:can_focus_next_pane()
+  local tab = self:model_tab()
+  return tab and tab.kind == "commit_diff"
+    and not tab.loading_file
+    and not tab.file_error
+    and (tab.left_text ~= nil or tab.right_text ~= nil)
+end
+
+function GitView:focus_next_pane()
+  local tab = self:activate_model_tab(function() core.redraw = true end) or self:model_tab()
+  if not (tab and tab.kind == "commit_diff") then return false end
+  if tab.loading_file or tab.file_error or (tab.left_text == nil and tab.right_text == nil) then
+    return false
+  end
+  local diff = self:ensure_diff_view(tab)
+  local active = core.active_view
+  if active ~= self and not (active and active.git_owner_view == self) then active = nil end
+  if active == diff.doc_view_a then
+    return self:focus_diff_pane("right")
+  elseif active == diff.doc_view_b then
+    return self:focus_list_pane()
+  end
+  return self:focus_diff_pane("left")
 end
 
 function GitView:focus_list_pane()

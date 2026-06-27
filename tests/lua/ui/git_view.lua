@@ -5,6 +5,7 @@ local test = require "core.test"
 local tool_window = require "core.tool_window"
 local git_view = require "plugins.git_view"
 local real_backend = require "plugins.git.backend"
+require "core.poi"
 
 local function fake_window(id)
   return { get_size = function() return 640, 480 end, id = id }
@@ -244,6 +245,60 @@ test.describe("Git View command", function()
     test.equal(core.active_view.git_owner_view, tab_view)
     test.equal(command.perform("git:focus-list-pane"), true)
     test.equal(core.active_view, tab_view)
+  end)
+
+  test.test("pane focus cycle is inactive on single-pane Git tabs", function(context)
+    local tw, view = open_fake_git_view(context.project)
+    core.active_view = view
+
+    test.equal(command.perform("git:focus-next-pane"), false)
+  end)
+
+  test.it("pane focus cycles through Git diff list and both text panes", function(context)
+    local tw, view = open_fake_git_view(context.project)
+    local tab = {
+      id = "diff-panes",
+      kind = "commit_diff",
+      title = "Diff panes",
+      closable = true,
+      changed_files = { { status = "modified", old_path = "a.lua", new_path = "a.lua" } },
+      selected_file = 1,
+      left_text = "same\nold\nsame\n",
+      right_text = "same\nnew\nsame\n",
+      left_name = "a.lua",
+      right_name = "a.lua",
+      diff_generation = 1,
+    }
+    view.model.tabs[#view.model.tabs + 1] = tab
+    local tab_view = git_view.ensure_tab_view(tw, tab, true)
+    core.active_view = tab_view
+
+    test.equal(command.perform("sidepanel:toggle-focus"), true)
+    local diff = tab.diff_view
+    test.equal(core.active_view, diff.doc_view_a)
+    diff.doc_view_a.get_points_of_interest = function()
+      return { { line = 2, col = 1, line_only_navigation = true, scroll_to_line = true } }
+    end
+    diff.doc_view_a.doc:set_selection(1, 1)
+    test.equal(command.perform("poi:next"), true)
+    local line = diff.doc_view_a.doc:get_selection()
+    test.equal(line, 2)
+
+    test.equal(command.perform("sidepanel:toggle-focus"), true)
+    test.equal(core.active_view, diff.doc_view_b)
+    test.equal(command.perform("sidepanel:toggle-focus"), true)
+    test.equal(core.active_view, tab_view)
+
+    test.equal(command.perform("sidepanel:toggle-focus"), true)
+    test.equal(core.active_view, diff.doc_view_a)
+    test.equal(command.perform("git:close-selected-tab"), true)
+    test.ok(core.active_view ~= tab_view)
+    test.ok(core.active_view.git_owner_view ~= tab_view)
+    test.equal(command.perform("sidepanel:toggle-focus"), true)
+    test.ok(core.active_view ~= tab_view)
+
+    core.active_view = {}
+    test.equal(command.perform("git:focus-next-pane"), false)
   end)
 
   test.test("keyboard row commands navigate and activate Git rows", function(context)
