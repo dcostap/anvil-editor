@@ -99,6 +99,8 @@ end
 function RootPanel:new()
   RootPanel.super.new(self)
   self.root_node = Node()
+  self.root_node.is_main_panel_node = true
+  self.root_node.is_primary_node = true -- deprecated compatibility alias
   self.deferred_draws = {}
   self.mouse = { x = 0, y = 0 }
   self.drag_overlay = { x = 0, y = 0, w = 0, h = 0, visible = false, opacity = 0,
@@ -145,12 +147,24 @@ end
 ---@param node core.node Node to search from
 ---@return core.node node The Main Panel node
 local function get_main_panel(node)
+  if not node then return nil end
   if node.is_main_panel_node or node.is_primary_node then
     return node
   end
   if node.type ~= "leaf" then
     return get_main_panel(node.a) or get_main_panel(node.b)
   end
+end
+
+local function get_first_leaf(node, prefer_unlocked)
+  if not node then return nil end
+  if node.type == "leaf" then
+    if not prefer_unlocked then return node end
+    local lx, ly = node.get_locked_size and node:get_locked_size()
+    if not lx and not ly then return node end
+    return nil
+  end
+  return get_first_leaf(node.a, prefer_unlocked) or get_first_leaf(node.b, prefer_unlocked)
 end
 
 
@@ -165,8 +179,9 @@ function RootPanel:get_active_node_default()
     node = self.root_node:get_node_for_view(active.git_owner_view)
   end
   if not node then node = self:get_main_panel() end
-  if node.locked then
-    local default_view = self:get_main_panel().views[1]
+  if node and node.locked then
+    local main_panel = self:get_main_panel()
+    local default_view = main_panel and main_panel.views[1]
     assert(default_view, "internal error: cannot find Main Panel node.")
     core.set_active_view(default_view)
     node = self:get_active_node()
@@ -179,6 +194,8 @@ end
 ---@return core.node node The Main Panel node
 function RootPanel:get_main_panel()
   return get_main_panel(self.root_node)
+      or get_first_leaf(self.root_node, true)
+      or get_first_leaf(self.root_node, false)
 end
 
 ---@deprecated Use `RootPanel:get_main_panel()` instead.

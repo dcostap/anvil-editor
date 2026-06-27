@@ -3,6 +3,7 @@ local command = require "core.command"
 local style = require "core.style"
 local test = require "core.test"
 local tool_window = require "core.tool_window"
+local RootPanel = require "core.rootpanel"
 local git_view = require "plugins.git_view"
 local real_backend = require "plugins.git.backend"
 require "core.poi"
@@ -549,6 +550,24 @@ test.describe("Git View command", function()
     test.equal(closed, false)
     test.equal(tw.hidden, true)
     test.equal(tw.git_view, view)
+  end)
+
+  test.test("command predicates tolerate focus outside a legacy unmarked tool root", function(context)
+    local old_text_input = system.text_input
+    system.text_input = function() return true end
+    local tw = git_view.open_view(context.project, {
+      window = fake_window(1919),
+      window_id = 1919,
+      root = RootPanel(),
+      git_view_opts = { backend = fake_backend },
+    })
+    tw.root.root_node.is_main_panel_node = nil
+    tw.root.root_node.is_primary_node = nil
+    core.active_view = {}
+
+    local ok = pcall(command.is_valid, "git:focus-list-pane")
+    system.text_input = old_text_input
+    test.equal(ok, true)
   end)
 
   test.test("command is registered", function()
