@@ -138,6 +138,50 @@ test.describe("DiffView batch behavior", function()
     test.equal(view.doc_view_b.scroll.to.y, view.doc_view_a.scroll.to.y)
   end)
 
+  test.it("expands folded regions when clicking their widget line", function(context)
+    local old_context = config.plugins.diffview.fold_context_lines
+    local old_min = config.plugins.diffview.fold_min_lines
+    local old_default = config.plugins.diffview.fold_unchanged_by_default
+    config.plugins.diffview.fold_context_lines = 1
+    config.plugins.diffview.fold_min_lines = 3
+    config.plugins.diffview.fold_unchanged_by_default = true
+    context.restore_diff_folding_config = function()
+      config.plugins.diffview.fold_context_lines = old_context
+      config.plugins.diffview.fold_min_lines = old_min
+      config.plugins.diffview.fold_unchanged_by_default = old_default
+    end
+
+    local left, right = {}, {}
+    for i = 1, 14 do left[i], right[i] = "same " .. i, "same " .. i end
+    left[7], right[7] = "old", "new"
+    local view = track(context, "diffviews", diffview.string_to_string(
+      table.concat(left, "\n"),
+      table.concat(right, "\n"),
+      "left",
+      "right",
+      true
+    ))
+    wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
+
+    local fold = view.diff_folds_a[1]
+    test.not_nil(fold)
+    local fold_count = #view.diff_folds_a
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 800, 400
+    view:update()
+    local x, y = view.doc_view_a:get_line_screen_position(fold.hidden_start, 1)
+
+    test.equal(view:on_mouse_pressed("left", x + 1, y + 1, 1), true)
+    test.equal(#view.diff_folds_a, fold_count - 1)
+    test.equal(#view.diff_folds_b, fold_count - 1)
+    for _, remaining in ipairs(view.diff_folds_a) do
+      test.ok(remaining.index ~= fold.index)
+    end
+    for _, remaining in ipairs(view.diff_folds_b) do
+      test.ok(remaining.index ~= fold.index)
+    end
+  end)
+
   test.it("keeps folded panes synchronized around insert-only hunks", function(context)
     local old_context = config.plugins.diffview.fold_context_lines
     local old_min = config.plugins.diffview.fold_min_lines

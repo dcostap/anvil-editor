@@ -91,6 +91,8 @@ local function call_docview_method(view, method, ...)
   return with_docview_selection(view, method, view, ...)
 end
 
+local is_fold_widget_line
+
 ---@class plugins.diffview.view : core.view
 ---@field super core.view
 ---@field doc_view_a core.docview
@@ -711,7 +713,7 @@ local function fold_for_line(folds, line)
   end
 end
 
-local function is_fold_widget_line(folds, line)
+function is_fold_widget_line(folds, line)
   local fold = fold_for_line(folds, line)
   return fold and line == fold.hidden_start, fold
 end
