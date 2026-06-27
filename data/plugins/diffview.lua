@@ -1092,6 +1092,23 @@ function DiffView:patch_views()
       line1, col1, line2, col2 = parent:clamp_selection_out_of_folds(doc_view, is_a, line1, col1, line2, col2)
       return orig_set_selections(self, idx, line1, col1, line2, col2, swap, rm)
     end
+    local orig_set_selection_list = doc.set_selection_list
+    doc.set_selection_list = function(self, selections, last_selection, opts)
+      if selections and #selections > 0 then
+        local old_line = self:get_selection()
+        local folds = is_a and parent.diff_folds_a or parent.diff_folds_b
+        if folds and #folds > 0 then
+          local mapped = {}
+          for i = 1, #selections, 4 do
+            local line1, col1 = clamp_position_out_of_fold(doc_view, folds, old_line, selections[i], selections[i + 1])
+            local line2, col2 = clamp_position_out_of_fold(doc_view, folds, old_line, selections[i + 2], selections[i + 3])
+            mapped[i], mapped[i + 1], mapped[i + 2], mapped[i + 3] = line1, col1, line2, col2
+          end
+          selections = mapped
+        end
+      end
+      return orig_set_selection_list(self, selections, last_selection, opts)
+    end
   end
 
   ---@param doc_view core.docview

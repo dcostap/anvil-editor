@@ -119,6 +119,18 @@ test.describe("DiffView batch behavior", function()
     test.equal(line, fold.hidden_start)
     test.equal(col, 1)
 
+    core.active_view = view.doc_view_a
+    view.doc_view_a.doc:set_selection(fold.hidden_start, 1)
+    test.equal(command.perform("doc:move-to-next-line"), true)
+    line = view.doc_view_a.doc:get_selection()
+    test.equal(line, fold.hidden_end + 1)
+    local _, y1 = view.doc_view_a:get_line_screen_position(line, 1)
+    test.equal(command.perform("doc:move-to-next-line"), true)
+    line = view.doc_view_a.doc:get_selection()
+    test.equal(line, fold.hidden_end + 2)
+    local _, y2 = view.doc_view_a:get_line_screen_position(line, 1)
+    test.ok(y2 > y1)
+
     view.doc_view_a.position.y, view.doc_view_a.size.y = 0, 80
     view.doc_view_b.position.y, view.doc_view_b.size.y = 0, 80
     view.doc_view_a:scroll_to_make_visible(7, 1, true)
