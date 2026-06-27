@@ -127,6 +127,11 @@ function GitView:set_refresh_pending(callback)
 end
 
 function GitView:get_focus_view()
+  local active = core.active_view
+  if active and active.git_owner_view == self then return active end
+  if self.focused_pane_name and self.pane_views and self.pane_views[self.focused_pane_name] then
+    return self.pane_views[self.focused_pane_name]
+  end
   local tab = self.model and self:model_tab()
   if self.focus_pane == "diff" and tab and tab.kind == "commit_diff" then
     if tab.loading_file or tab.file_error or (tab.left_text == nil and tab.right_text == nil) then
@@ -284,6 +289,8 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
   self:update_pane_docs()
   local pane = self:pane_at_point(x, y)
   if pane then
+    self.focused_pane_name = pane.git_pane
+    self.focus_pane = "doc"
     core.set_active_view(pane)
     if button == "left" and pane.doc and pane.resolve_screen_position then
       local line, col = pane:resolve_screen_position(x, y)
@@ -694,6 +701,7 @@ function GitView:focus_diff_pane(side)
     focus = self.focused_diff_doc_view or view and view.get_focus_view and view:get_focus_view()
   end
   if not focus then return false end
+  self.focused_pane_name = nil
   self.focus_pane = "diff"
   self.focused_diff_doc_view = focus
   focus.git_owner_view = self
@@ -714,6 +722,8 @@ end
 function GitView:focus_pane_view(name)
   self:update_pane_docs()
   local view = self:pane_view(name)
+  self.focused_pane_name = name
+  self.focus_pane = "doc"
   view.git_owner_view = self
   return with_tool_window_event_window(self.tool_window, function()
     core.set_active_view(view)
