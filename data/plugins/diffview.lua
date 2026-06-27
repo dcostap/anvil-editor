@@ -17,6 +17,12 @@ local View = require "core.view"
 ---@field plain_text boolean
 ---The color used on changed lines when plain text is enabled.
 ---@field plain_text_color renderer.color
+---Collapse long unchanged regions by default.
+---@field fold_unchanged_by_default boolean
+---Unchanged context lines to keep around changes when folding.
+---@field fold_context_lines integer
+---Minimum hidden unchanged lines needed to create a fold.
+---@field fold_min_lines integer
 config.plugins.diffview.config_spec = {
     name = "Differences Viewer",
     {
@@ -39,6 +45,27 @@ config.plugins.diffview.config_spec = {
       path = "plain_text_color",
       type = "color",
       default = config.plugins.diffview.plain_text_color
+    },
+    {
+      label = "Fold Unchanged Regions",
+      description = "Collapse long unchanged diff regions by default.",
+      path = "fold_unchanged_by_default",
+      type = "toggle",
+      default = true
+    },
+    {
+      label = "Fold Context Lines",
+      description = "Unchanged context lines to keep around diff hunks.",
+      path = "fold_context_lines",
+      type = "number",
+      default = config.plugins.diffview.fold_context_lines
+    },
+    {
+      label = "Fold Minimum Lines",
+      description = "Minimum hidden unchanged lines needed to create a collapsed region.",
+      path = "fold_min_lines",
+      type = "number",
+      default = config.plugins.diffview.fold_min_lines
     }
   }
 
@@ -140,6 +167,10 @@ function DiffView:new(a, b, compare_type, names)
   self.b_gaps = {}
   self.a_changes = {}
   self.b_changes = {}
+  self.diff_folds_a = {}
+  self.diff_folds_b = {}
+  self.expanded_diff_folds = {}
+  self.folding_enabled = config.plugins.diffview.fold_unchanged_by_default ~= false
   self.views_patched = false
 
   self:patch_views()
@@ -200,6 +231,15 @@ function DiffView:update_diff()
     local b_gaps = #self.b_gaps == 0 and self.b_gaps or {}
     local a_changes = #self.a_changes == 0 and self.a_changes or {}
     local b_changes = #self.b_changes == 0 and self.b_changes or {}
+    local equal_blocks = {}
+    local equal_block, seen_change = nil, false
+    local function flush_equal_block(has_next_change)
+      if equal_block and equal_block.count > 0 then
+        equal_block.has_next_change = has_next_change == true
+        equal_blocks[#equal_blocks + 1] = equal_block
+      end
+      equal_block = nil
+    end
     for edit in diff.diff_iter(self.doc_view_a.doc.lines, self.doc_view_b.doc.lines) do
       if edit.tag == "equal" or edit.tag == "modify" then
         -- Assign gaps for this line
@@ -207,6 +247,13 @@ function DiffView:update_diff()
         b_gaps[bi] = { b_offset, b_offset_total }
 
         -- Insert inline diffs if present
+        if edit.a and edit.b and edit.tag == "equal" then
+          equal_block = equal_block or { a_start = ai, b_start = bi, count = 0, has_prev_change = seen_change }
+          equal_block.count = equal_block.count + 1
+        else
+          flush_equal_block(true)
+          seen_change = true
+        end
         if edit.a then
           table.insert(a_changes, {
             tag = edit.tag,
@@ -225,6 +272,8 @@ function DiffView:update_diff()
         end
 
       elseif edit.tag == "delete" then
+        flush_equal_block(true)
+        seen_change = true
         -- Lines only in A (deleted from B)
         if edit.a then
           a_gaps[ai] = { a_offset, a_offset_total }
@@ -236,6 +285,8 @@ function DiffView:update_diff()
         end
 
       elseif edit.tag == "insert" then
+        flush_equal_block(true)
+        seen_change = true
         -- Lines only in B (inserted in B)
         if edit.b then
           b_gaps[bi] = { b_offset, b_offset_total }
@@ -253,6 +304,8 @@ function DiffView:update_diff()
       end
     end
 
+    flush_equal_block(false)
+
     -- Fill trailing lines spaces after diff ends
     while ai <= a_len do
       a_gaps[ai] = a_gaps[ai] or { a_offset, a_offset_total }
@@ -267,6 +320,8 @@ function DiffView:update_diff()
     self.b_gaps = b_gaps
     self.a_changes = a_changes
     self.b_changes = b_changes
+    self.diff_equal_blocks = equal_blocks
+    self:rebuild_diff_folds()
 
     self.updater_idx = nil
 
@@ -397,6 +452,21 @@ function DiffView:sync_selected()
 end
 
 function DiffView:on_mouse_pressed(button, x, y, clicks)
+  if button == "left" then
+    for _, side in ipairs({
+      { view = self.doc_view_a, folds = self.diff_folds_a },
+      { view = self.doc_view_b, folds = self.diff_folds_b },
+    }) do
+      local view = side.view
+      if x >= view.position.x and x <= view.position.x + view.size.x
+        and y >= view.position.y and y <= view.position.y + view.size.y
+      then
+        local line = view:resolve_screen_position(x, y)
+        local is_widget, fold = is_fold_widget_line(side.folds, line)
+        if is_widget then return self:expand_fold(fold) end
+      end
+    end
+  end
   if button == "left" and self.hovered_sync then
     self:sync(
       self.hovered_sync.line,
@@ -618,9 +688,118 @@ local function diffview_visual_line_count(doc_view, gaps)
     + trailing_gap_rows(gaps, line_count)
 end
 
+local function fold_visual_rows(doc_view, first, last)
+  local rows = 0
+  for line = first, last do rows = rows + visual_line_count(doc_view, line) end
+  return rows
+end
+
+local function fold_saved_rows(doc_view, fold)
+  if not fold then return 0 end
+  return math.max(0, fold_visual_rows(doc_view, fold.hidden_start, fold.hidden_end) - 1)
+end
+
+local function folded_rows_total(doc_view, folds)
+  local total = 0
+  for _, fold in ipairs(folds or {}) do total = total + fold_saved_rows(doc_view, fold) end
+  return total
+end
+
+local function fold_for_line(folds, line)
+  for _, fold in ipairs(folds or {}) do
+    if line >= fold.hidden_start and line <= fold.hidden_end then return fold end
+  end
+end
+
+local function is_fold_widget_line(folds, line)
+  local fold = fold_for_line(folds, line)
+  return fold and line == fold.hidden_start, fold
+end
+
+local function is_fold_hidden_line(folds, line)
+  local fold = fold_for_line(folds, line)
+  return fold and line > fold.hidden_start, fold
+end
+
+local function folded_visual_line_count(doc_view, folds, line)
+  if is_fold_hidden_line(folds, line) then return 0 end
+  if is_fold_widget_line(folds, line) then return 1 end
+  return visual_line_count(doc_view, line)
+end
+
+local function folded_rows_before_line(doc_view, folds, line)
+  local rows = 0
+  for _, fold in ipairs(folds or {}) do
+    if line > fold.hidden_end then
+      rows = rows + fold_saved_rows(doc_view, fold)
+    elseif line > fold.hidden_start then
+      rows = rows + math.max(0, fold_visual_rows(doc_view, fold.hidden_start, line - 1) - 1)
+      break
+    end
+  end
+  return rows
+end
+
+local function effective_visual_line_count(doc_view, gaps, folds)
+  return math.max(0, diffview_visual_line_count(doc_view, gaps) - folded_rows_total(doc_view, folds))
+end
+
+local function build_diff_folds(blocks, side, opts, expanded)
+  if not opts.enabled then return {} end
+  local folds = {}
+  local context = math.max(0, tonumber(opts.context_lines) or 0)
+  local min_lines = math.max(1, tonumber(opts.min_lines) or 1)
+  for fold_index, block in ipairs(blocks or {}) do
+    local start = side == "a" and block.a_start or block.b_start
+    local count = block.count or 0
+    local keep_start = block.has_prev_change and context or 0
+    local keep_end = block.has_next_change and context or 0
+    local hidden_start = start + keep_start
+    local hidden_end = start + count - 1 - keep_end
+    local hidden_count = hidden_end - hidden_start + 1
+    if count >= keep_start + keep_end + min_lines and hidden_count >= min_lines and not expanded[fold_index] then
+      folds[#folds + 1] = {
+        index = fold_index,
+        hidden_start = hidden_start,
+        hidden_end = hidden_end,
+        hidden_count = hidden_count,
+      }
+    end
+  end
+  return folds
+end
+
+function DiffView:rebuild_diff_folds()
+  local opts = {
+    enabled = self.folding_enabled,
+    context_lines = config.plugins.diffview.fold_context_lines or 6,
+    min_lines = config.plugins.diffview.fold_min_lines or 16,
+  }
+  local expanded = self.expanded_diff_folds or {}
+  self.diff_folds_a = build_diff_folds(self.diff_equal_blocks or {}, "a", opts, expanded)
+  self.diff_folds_b = build_diff_folds(self.diff_equal_blocks or {}, "b", opts, expanded)
+end
+
+function DiffView:toggle_folding()
+  self.folding_enabled = not self.folding_enabled
+  if self.folding_enabled then self.expanded_diff_folds = {} end
+  self:rebuild_diff_folds()
+  core.redraw = true
+  return true
+end
+
+function DiffView:expand_fold(fold)
+  if not fold then return false end
+  self.expanded_diff_folds = self.expanded_diff_folds or {}
+  self.expanded_diff_folds[fold.index] = true
+  self:rebuild_diff_folds()
+  core.redraw = true
+  return true
+end
+
 function DiffView:get_scrollable_size()
-  local a_count = diffview_visual_line_count(self.doc_view_a, self.a_gaps)
-  local b_count = diffview_visual_line_count(self.doc_view_b, self.b_gaps)
+  local a_count = effective_visual_line_count(self.doc_view_a, self.a_gaps, self.diff_folds_a)
+  local b_count = effective_visual_line_count(self.doc_view_b, self.b_gaps, self.diff_folds_b)
   local lc = math.max(a_count, b_count)
   if not config.scroll_past_end then
     local _, _, _, h_scroll = self.h_scrollbar:get_track_rect()
@@ -635,6 +814,14 @@ end
 ---@param x number
 ---@param y number
 ---@param changes diff.changes[]
+local function draw_fold_widget(doc_view, fold, x, y)
+  local h = doc_view:get_line_height()
+  local gw = doc_view:get_gutter_width()
+  renderer.draw_rect(doc_view.position.x + gw, y, doc_view.size.x - gw, h, style.line_highlight)
+  local label = string.format("  ⋯ %d unchanged lines collapsed — click or Ctrl+R to expand ⋯", fold.hidden_count)
+  renderer.draw_text(doc_view:get_font(), label, x + style.padding.x, y + doc_view:get_line_text_y_offset(), style.dim)
+end
+
 local function draw_line_text_override(parent, self, line, x, y, changes)
   y = y + self:get_line_text_y_offset()
   local h = self:get_line_height()
@@ -755,9 +942,11 @@ function DiffView:patch_views()
       local x, y = self:get_content_offset()
       local lh = self:get_line_height()
       local gaps = is_a and parent.a_gaps or parent.b_gaps
+      local folds = is_a and parent.diff_folds_a or parent.diff_folds_b
       local visual_row = visual_rows_before_line(self, line) + visual_row_offset_for_col(self, line, col)
+      local folded_rows = folded_rows_before_line(self, folds, line)
       local gap_y = gap_rows_before_line(gaps, line) * lh
-      y = y + visual_row * lh + gap_y + style.padding.y
+      y = y + (visual_row - folded_rows) * lh + gap_y + style.padding.y
       if col then
         return x + self:get_gutter_width() + self:get_col_x_offset(line, col), y
       else
@@ -774,10 +963,11 @@ function DiffView:patch_views()
       local lines = self.doc.lines
       local lh = self:get_line_height()
       local gaps = is_a and parent.a_gaps or parent.b_gaps
+      local folds = is_a and parent.diff_folds_a or parent.diff_folds_b
 
       for i = 1, #lines do
         local line_x, line_y = self:get_line_screen_position(i)
-        local line_h = visual_line_count(self, i) * lh
+        local line_h = folded_visual_line_count(self, folds, i) * lh
         local line_end_y = line_y + line_h
         local next_y
         if i < #lines then
@@ -810,12 +1000,13 @@ function DiffView:patch_views()
       local lines = self.doc.lines
       local minline, maxline = 1, #lines
       local gaps = is_a and parent.a_gaps or parent.b_gaps
+      local folds = is_a and parent.diff_folds_a or parent.diff_folds_b
       local found_min = false
 
       for i = 1, #lines do
-        local row = visual_rows_before_line(self, i) + gap_rows_before_line(gaps, i)
+        local row = visual_rows_before_line(self, i) + gap_rows_before_line(gaps, i) - folded_rows_before_line(self, folds, i)
         local start_y = style.padding.y + row * lh
-        local end_y = start_y + visual_line_count(self, i) * lh
+        local end_y = start_y + folded_visual_line_count(self, folds, i) * lh
         if not found_min and end_y > oy then
           minline = i
           found_min = true
@@ -836,7 +1027,8 @@ function DiffView:patch_views()
   local function wrap_get_scrollable_size(doc_view, is_a)
     doc_view.get_scrollable_size = function(self)
       local gaps = is_a and parent.a_gaps or parent.b_gaps
-      local lc = diffview_visual_line_count(self, gaps)
+      local folds = is_a and parent.diff_folds_a or parent.diff_folds_b
+      local lc = effective_visual_line_count(self, gaps, folds)
       if not config.scroll_past_end then
         local _, _, _, h_scroll = self.h_scrollbar:get_track_rect()
         return self:get_line_height() * lc + style.padding.y * 2 + h_scroll
@@ -864,7 +1056,7 @@ function DiffView:patch_views()
   end
 
   ---@param doc_view core.docview
-  local function wrap_draw(doc_view)
+  local function wrap_draw(doc_view, is_a)
     doc_view.draw = function(self)
       self:draw_background(style.background)
       local _, indent_size = self.doc:get_indent_info()
@@ -874,9 +1066,12 @@ function DiffView:patch_views()
       local lh = self:get_line_height()
 
       local gw, gpad = self:get_gutter_width()
+      local folds = is_a and parent.diff_folds_a or parent.diff_folds_b
       for i = minline, maxline do
-        local _, y = self:get_line_screen_position(i)
-        self:draw_line_gutter(i, self.position.x, y, gpad and gw - gpad or gw)
+        if not is_fold_hidden_line(folds, i) then
+          local _, y = self:get_line_screen_position(i)
+          self:draw_line_gutter(i, self.position.x, y, gpad and gw - gpad or gw)
+        end
       end
 
       local pos = self.position
@@ -884,8 +1079,15 @@ function DiffView:patch_views()
       -- right side it is redundant with the Node's clip.
       core.push_clip_rect(pos.x + gw, pos.y, self.size.x - gw, self.size.y)
       for i = minline, maxline do
-        local x, y = self:get_line_screen_position(i)
-        y = y + (self:draw_line_body(i, x, y) or lh)
+        if not is_fold_hidden_line(folds, i) then
+          local x, y = self:get_line_screen_position(i)
+          local is_widget, fold = is_fold_widget_line(folds, i)
+          if is_widget then
+            draw_fold_widget(self, fold, x, y)
+          else
+            y = y + (self:draw_line_body(i, x, y) or lh)
+          end
+        end
       end
       self:draw_overlay()
       core.pop_clip_rect()
@@ -1068,7 +1270,7 @@ function DiffView:patch_views()
     wrap_get_visible_line_range(side.view, side.is_a)
     wrap_get_scrollable_size(side.view, side.is_a)
     wrap_scroll_to_line(side.view, side.is_a)
-    wrap_draw(side.view)
+    wrap_draw(side.view, side.is_a)
     wrap_points_of_interest(side.view, side.is_a)
     wrap_doc_raw_insert(side.view)
     wrap_doc_raw_remove(side.view)
@@ -1089,8 +1291,8 @@ function DiffView:draw_scrollbar()
   DiffView.super.draw_scrollbar(self)
 
   for _, side in ipairs {
-    {view = self.doc_view_a, changes = self.a_changes},
-    {view = self.doc_view_b, changes = self.b_changes},
+    {view = self.doc_view_a, changes = self.a_changes, gaps = self.a_gaps, folds = self.diff_folds_a},
+    {view = self.doc_view_b, changes = self.b_changes, gaps = self.b_gaps, folds = self.diff_folds_b},
   } do
     local view = side.view
     local changes = side.changes
@@ -1131,8 +1333,15 @@ function DiffView:draw_scrollbar()
         or tag == "modify" and style.diff_modify
 
       if color then
-        local scroll_y_start = (start_line - 1) * lh
-        local scroll_y_end = (end_line) * lh
+        local start_row = visual_rows_before_line(view, start_line)
+          + gap_rows_before_line(side.gaps, start_line)
+          - folded_rows_before_line(view, side.folds, start_line)
+        local end_row = visual_rows_before_line(view, end_line)
+          + folded_visual_line_count(view, side.folds, end_line)
+          + gap_rows_before_line(side.gaps, end_line)
+          - folded_rows_before_line(view, side.folds, end_line)
+        local scroll_y_start = start_row * lh
+        local scroll_y_end = end_row * lh
         local ratio_start = scroll_y_start / scroll_range
         local ratio_end = scroll_y_end / scroll_range
         local marker_y = y + ratio_start * h
@@ -1270,10 +1479,22 @@ command.add(
   end
 })
 
+command.add(function()
+  local view = core.active_view
+  if view and view.diff_view_parent then return true, view.diff_view_parent end
+  if view and view.is and view:is(DiffView) then return true, view end
+  return false
+end, {
+  ["diff-view:toggle-folding"] = function(view)
+    view:toggle_folding()
+  end
+})
+
 keymap.add({
   ["ctrl+alt+,"] = "poi:previous",
   ["ctrl+alt+."] = "poi:next",
   ["ctrl+return"] = "diff-view:sync-change",
+  ["ctrl+r"] = "diff-view:toggle-folding",
 })
 
 

@@ -95,6 +95,9 @@ plugin_defaults("diffview", {
   log_times = false,
   plain_text = false,
   plain_text_color = style.diffview_plain_text,
+  fold_unchanged_by_default = true,
+  fold_context_lines = 6,
+  fold_min_lines = 16,
 })
 plugin_defaults("filetree", {
   size = 650 * SCALE,
