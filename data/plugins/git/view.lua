@@ -2,6 +2,7 @@
 -- Project Git View shell with permanent Log tab.
 
 local core = require "core"
+local command = require "core.command"
 local common = require "core.common"
 local config = require "core.config"
 local style = require "core.style"
@@ -82,6 +83,7 @@ function GitView:pane_view(name)
     view.git_owner_view = self
     view.git_pane = name
     view.get_gutter_width = function() return 0 end
+    view.draw_line_gutter = function(v) return v:get_line_height() end
     self.pane_views[name] = view
   end
   view.git_owner_view = self
@@ -292,12 +294,13 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
     self.focused_pane_name = pane.git_pane
     self.focus_pane = "doc"
     core.set_active_view(pane)
+    local content_click = false
     if button == "left" and pane.doc and pane.resolve_screen_position then
-      local line, col = pane:resolve_screen_position(x, y)
-      pane.doc:set_selection(line, col, line, col)
+      local cmd = clicks == 2 and "doc:set-cursor-word" or clicks and clicks >= 3 and "doc:set-cursor-line" or "doc:set-cursor"
+      content_click = command.perform(cmd, x, y, clicks)
     end
     self.mouse_pane = pane
-    pane:on_mouse_pressed(button, x, y, clicks)
+    if not content_click then pane:on_mouse_pressed(button, x, y, clicks) end
     self:sync_selection_from_pane()
     if clicks and clicks > 1 and pane.git_pane ~= "details" and self.activate_selected then
       local active_tab = self.model:selected_tab()
@@ -336,9 +339,9 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
     if x > self.position.x + list_width then
       if not self:focus_diff_pane() then return true end
       if selected_tab.diff_view and selected_tab.diff_view.on_mouse_pressed then
-        local result = selected_tab.diff_view:on_mouse_pressed(button, x, y, clicks) ~= false
+        local result = selected_tab.diff_view:on_mouse_pressed(button, x, y, clicks)
         if core.active_view and core.active_view.git_owner_view == self then self.focused_diff_doc_view = core.active_view end
-        return result
+        return result == true
       end
       return true
     end
