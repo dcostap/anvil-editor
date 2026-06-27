@@ -285,6 +285,9 @@ local function short_rev(rev)
 end
 
 function diff_tab_id(repo, left, right, scope)
+  if right == backend_default.WORKING_TREE then
+    return table.concat({ "diff", repo and repo.root or "", "working_tree", scope or "" }, "\0")
+  end
   return table.concat({
     "diff", repo and repo.root or "", tostring(left or ""), tostring(right or ""), scope or "",
   }, "\0")

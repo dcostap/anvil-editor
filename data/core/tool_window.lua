@@ -122,11 +122,25 @@ end
 
 function ToolWindow:activate_root()
   local core = require "core"
-  local view = active_leaf_view(self.root and self.root.root_node)
+  local root = self.root and self.root.root_node
+  local active = core.active_view
+  local owner = active and (active.git_owner_view or active)
+  local node = root and owner and root.get_node_for_view and root:get_node_for_view(owner)
+  local view = node and node.active_view or active_leaf_view(root)
   if view then
+    local focus = view
+    if view.get_focus_view then focus = view:get_focus_view() or view end
     local previous_event_window = core.event_window
+    local previous_active_window = core.active_window
+    if type(focus) == "table" and not focus.is then focus.is = function() return false end end
+    if type(focus) == "table" and not focus.get_name then focus.get_name = function() return tostring(focus) end end
     core.event_window = self.window
-    core.set_active_view(view)
+    local ok = pcall(core.set_active_view, focus)
+    if not ok then
+      core.event_window = core.window
+      core.active_window = core.window
+      core.set_active_view(focus)
+    end
     core.event_window = previous_event_window
   elseif self.root and self.root.root_node then
     core.active_window = self.window
