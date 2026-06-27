@@ -182,6 +182,46 @@ test.describe("DiffView batch behavior", function()
     end
   end)
 
+  test.it("draws curved divider connectors and opposite-side gap markers", function(context)
+    local view = track(context, "diffviews", diffview.string_to_string(
+      "aa\nbb",
+      "aa\ninserted\nbb",
+      "left",
+      "right",
+      true
+    ))
+    wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 800, 400
+    view:update()
+
+    local old_draw_poly = renderer.draw_poly
+    local old_draw_rect = renderer.draw_rect
+    local old_push_clip_rect = core.push_clip_rect
+    local old_pop_clip_rect = core.pop_clip_rect
+    local polygons = {}
+    local markers = {}
+    renderer.draw_poly = function(points, color)
+      polygons[#polygons + 1] = { points = points, color = color }
+    end
+    renderer.draw_rect = function(x, y, w, h, color)
+      markers[#markers + 1] = { x = x, y = y, w = w, h = h, color = color }
+    end
+    core.push_clip_rect = function() end
+    core.pop_clip_rect = function() end
+    local ok, err = pcall(function() view:draw_divider_changes() end)
+    renderer.draw_poly = old_draw_poly
+    renderer.draw_rect = old_draw_rect
+    core.push_clip_rect = old_push_clip_rect
+    core.pop_clip_rect = old_pop_clip_rect
+    if not ok then error(err, 0) end
+
+    test.ok(#polygons >= 1, "expected an inserted hunk connector in the divider")
+    test.ok(#polygons[1].points > 4, "expected a curved connector, not a simple rectangle")
+    test.ok(#markers >= 1, "expected a thin gap marker on the side without inserted lines")
+    test.ok(markers[1].h <= math.max(1, SCALE) + 0.01, "expected a thin marker line")
+  end)
+
   test.it("keeps folded panes synchronized around insert-only hunks", function(context)
     local old_context = config.plugins.diffview.fold_context_lines
     local old_min = config.plugins.diffview.fold_min_lines

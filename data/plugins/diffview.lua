@@ -886,6 +886,100 @@ local function draw_fold_widget(doc_view, fold, x, y)
   renderer.draw_text(doc_view:get_font(), label, x + style.padding.x, y + doc_view:get_line_text_y_offset(), style.dim)
 end
 
+local function diff_color(tag, background)
+  if tag == "insert" then return background and style.diff_insert_background or style.diff_insert end
+  if tag == "delete" then return background and style.diff_delete_background or style.diff_delete end
+  if tag == "modify" then return background and style.diff_modify_background or style.diff_modify end
+end
+
+local function alpha_color(color, alpha)
+  if not color then return nil end
+  local c = { table.unpack(color) }
+  c[4] = math.min(c[4] or 255, alpha)
+  return c
+end
+
+local function normalize_marker_range(y1, y2)
+  if math.abs(y2 - y1) >= 2 * SCALE then return y1, y2 end
+  return y1 - SCALE, y1
+end
+
+local function curve_point(x1, x2, y1, y2, t)
+  local inv = 1 - t
+  local width = x2 - x1
+  local cx1 = x1 + width * 0.3
+  local cx2 = x1 + width * 0.7
+  local x = inv * inv * inv * x1
+    + 3 * inv * inv * t * cx1
+    + 3 * inv * t * t * cx2
+    + t * t * t * x2
+  local y = inv * inv * inv * y1
+    + 3 * inv * inv * t * y1
+    + 3 * inv * t * t * y2
+    + t * t * t * y2
+  return x, y
+end
+
+local function draw_curved_trapezium(x1, x2, start1, end1, start2, end2, color)
+  if not color or x2 <= x1 then return end
+  start1, end1 = normalize_marker_range(start1, end1)
+  start2, end2 = normalize_marker_range(start2, end2)
+
+  local points = {}
+  local steps = 12
+  for i = 0, steps do
+    local x, y = curve_point(x1, x2, start1, start2, i / steps)
+    points[#points + 1] = { x, y }
+  end
+  for i = steps, 0, -1 do
+    local x, y = curve_point(x1, x2, end1, end2, i / steps)
+    points[#points + 1] = { x, y }
+  end
+  renderer.draw_poly(points, color)
+end
+
+local function draw_gap_marker(doc_view, y, color)
+  color = alpha_color(color, 190)
+  if not color then return end
+  local gw = doc_view:get_gutter_width()
+  local h = math.max(1, SCALE)
+  renderer.draw_rect(
+    doc_view.position.x + gw,
+    y - h / 2,
+    math.max(0, doc_view.size.x - gw),
+    h,
+    color
+  )
+end
+
+local function change_blocks(changes, tags)
+  local blocks = {}
+  local i = 1
+  while i <= #changes do
+    local change = changes[i]
+    local tag = change and change.tag
+    if tag and tag ~= "equal" and (not tags or tags[tag]) then
+      local start_line = i
+      local end_line = i
+      while changes[end_line + 1] and changes[end_line + 1].tag == tag do
+        end_line = end_line + 1
+      end
+      blocks[#blocks + 1] = { tag = tag, start_line = start_line, end_line = end_line }
+      i = end_line + 1
+    else
+      i = i + 1
+    end
+  end
+  return blocks
+end
+
+local function line_range_y(doc_view, folds, start_line, end_line)
+  local _, start_y = doc_view:get_line_screen_position(start_line, 1)
+  local _, end_y = doc_view:get_line_screen_position(end_line, 1)
+  end_y = end_y + folded_visual_line_count(doc_view, folds, end_line) * doc_view:get_line_height()
+  return start_y, end_y
+end
+
 local function draw_line_text_override(parent, self, line, x, y, changes)
   y = y + self:get_line_text_y_offset()
   local h = self:get_line_height()
@@ -1390,6 +1484,49 @@ local function redraw_thumb(view_scrollbar)
   renderer.draw_rect(x, y, w, h, color)
 end
 
+function DiffView:draw_divider_changes()
+  local left = self.doc_view_a
+  local right = self.doc_view_b
+  local x1 = left.position.x + left.size.x
+  local x2 = right.position.x
+  if x2 <= x1 then return end
+
+  core.push_clip_rect(self.position.x, self.position.y, self.size.x, self.size.y)
+
+  local connector_alpha = 95
+  local function draw_connector(tag, left_start_y, left_end_y, right_start_y, right_end_y)
+    draw_curved_trapezium(
+      x1, x2,
+      left_start_y, left_end_y,
+      right_start_y, right_end_y,
+      alpha_color(diff_color(tag, true), connector_alpha)
+    )
+  end
+
+  for _, block in ipairs(change_blocks(self.a_changes, { delete = true, modify = true })) do
+    local a_start_y, a_end_y = line_range_y(left, self.diff_folds_a, block.start_line, block.end_line)
+    if block.tag == "delete" then
+      draw_connector(block.tag, a_start_y, a_end_y, a_start_y, a_start_y)
+      draw_gap_marker(right, a_start_y, diff_color(block.tag))
+    else
+      local start_row = effective_row_before_line(left, self.a_gaps, self.diff_folds_a, block.start_line)
+      local end_row = effective_row_before_line(left, self.a_gaps, self.diff_folds_a, block.end_line)
+      local b_start_line = line_for_effective_row(right, self.b_gaps, self.diff_folds_b, start_row)
+      local b_end_line = line_for_effective_row(right, self.b_gaps, self.diff_folds_b, end_row)
+      local b_start_y, b_end_y = line_range_y(right, self.diff_folds_b, b_start_line, b_end_line)
+      draw_connector(block.tag, a_start_y, a_end_y, b_start_y, b_end_y)
+    end
+  end
+
+  for _, block in ipairs(change_blocks(self.b_changes, { insert = true })) do
+    local b_start_y, b_end_y = line_range_y(right, self.diff_folds_b, block.start_line, block.end_line)
+    draw_connector(block.tag, b_start_y, b_start_y, b_start_y, b_end_y)
+    draw_gap_marker(left, b_start_y, diff_color(block.tag))
+  end
+
+  core.pop_clip_rect()
+end
+
 function DiffView:draw_scrollbar()
   DiffView.super.draw_scrollbar(self)
 
@@ -1488,6 +1625,7 @@ function DiffView:draw()
   self:draw_background(style.background)
   call_docview_method(self.doc_view_a, self.doc_view_a.draw)
   call_docview_method(self.doc_view_b, self.doc_view_b.draw)
+  self:draw_divider_changes()
   self:draw_scrollbar()
 end
 
