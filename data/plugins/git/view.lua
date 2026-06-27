@@ -200,7 +200,7 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
   local selected_tab = self.model:selected_tab()
   local list_width = math.floor(self.size.x * 0.45)
   if selected_tab and selected_tab.kind == "file_history" then
-    local list_width = self.size.x
+    local list_width = math.floor(self.size.x * 0.45)
     if button ~= "left" then return true end
     if x < self.position.x or x > self.position.x + list_width then return true end
     if y < self:history_commits_y() then return true end
@@ -209,6 +209,7 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
     if index >= 1 and index <= #(selected_tab.commits or {}) then
       selected_tab.selected_commit = index
       selected_tab.selected_commit_hash = selected_tab.commits[index] and selected_tab.commits[index].hash or nil
+      self.model:load_selected_commit_changed_files(function() core.redraw = true end)
       if clicks and clicks > 1 then
         local tab = self.model:open_commit_diff(selected_tab.commits[index], function() core.redraw = true end)
         if tab and self.on_model_tab_open then self:on_model_tab_open(tab) end
@@ -251,7 +252,7 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
   local row_height = self:row_height()
   local index = math.floor((y - self:commit_list_y() + self.scroll.y) / row_height) + 1
   if index >= 1 and index <= #tab.commits then
-    local commit = self.model:select_log_index(index)
+    local commit = self.model:select_log_index(index, function() core.redraw = true end)
     if clicks and clicks > 1 and commit then
       local tab = self.model:open_commit_diff(commit, function() core.redraw = true end)
       if tab and self.on_model_tab_open then self:on_model_tab_open(tab) end
@@ -287,7 +288,7 @@ function GitView:select_relative(delta)
   if tab.kind == "log" then
     if #tab.commits == 0 then return nil end
     local index = common.clamp((tab.selected_commit or 1) + delta, 1, #tab.commits)
-    local commit = self.model:select_log_index(index)
+    local commit = self.model:select_log_index(index, function() core.redraw = true end)
     local row_y = (index - 1) * self:row_height()
     local visible = self.size.y - (self:commit_list_y() - self.position.y) - style.padding.y
     self.scroll.to.y = common.clamp(self.scroll.to.y, math.max(0, row_y - visible + self:row_height()), row_y)
@@ -299,6 +300,7 @@ function GitView:select_relative(delta)
     local index = common.clamp((tab.selected_commit or 1) + delta, 1, #tab.commits)
     tab.selected_commit = index
     tab.selected_commit_hash = tab.commits[index] and tab.commits[index].hash or nil
+    self.model:load_selected_commit_changed_files(function() core.redraw = true end)
     local row_y = (index - 1) * self:row_height()
     local visible = self:history_visible_height()
     tab.scroll = common.clamp(tab.scroll or 0, math.max(0, row_y - visible + self:row_height()), row_y)
@@ -370,9 +372,17 @@ function GitView:draw_commit_details(commit, x, y, width)
   y = y + style.padding.y
   renderer.draw_text(style.font, "Changed files", x, y, style.text)
   y = y + style.font:get_height() + style.padding.y
+  if commit.changed_files_loading then
+    renderer.draw_text(style.font, "Loading changed files...", x, y, style.dim)
+    return
+  end
+  if commit.changed_files_error then
+    renderer.draw_text(style.font, "Git error: " .. tostring(commit.changed_files_error.message or commit.changed_files_error.kind or commit.changed_files_error), x, y, style.error)
+    return
+  end
   local files = commit.changed_files or {}
   if #files == 0 then
-    renderer.draw_text(style.font, "Changed files load in diff/history tabs", x, y, style.dim)
+    renderer.draw_text(style.font, commit.changed_files_loaded and "No changed files" or "Select a commit to load changed files", x, y, style.dim)
     return
   end
   for _, file in ipairs(files) do
@@ -417,7 +427,11 @@ function GitView:draw_log_tab(tab, x, y)
     end
   end
   renderer.draw_rect(list_right, self.position.y, 1 * SCALE, self.size.y, style.divider)
-  self:draw_commit_details(self.model:selected_commit(), detail_x + style.padding.x, self.position.y + style.padding.y, self.size.x - list_width)
+  local detail_commit = tab.commits and tab.commits[tab.selected_commit]
+  if tab.selected_commit_hash and (not detail_commit or detail_commit.hash ~= tab.selected_commit_hash) then
+    detail_commit = nil
+  end
+  self:draw_commit_details(detail_commit, detail_x + style.padding.x, self.position.y + style.padding.y, self.size.x - list_width)
   self:draw_scrollbar()
 end
 
@@ -500,36 +514,43 @@ function GitView:clamp_history_scroll(tab)
 end
 
 function GitView:draw_history_tab(tab, x, y)
+  local list_width = math.floor(self.size.x * 0.45)
+  local detail_x = self.position.x + list_width + style.padding.x
+  local list_right = detail_x - style.padding.x
   if tab.loading and #tab.commits == 0 then
     renderer.draw_text(style.font, "Loading file history...", x, y, style.dim)
-    return
-  end
-  if tab.error then
+  elseif tab.error then
     renderer.draw_text(style.font, "Git error: " .. tostring(tab.error.message or tab.error.kind or tab.error), x, y, style.error)
-    return
+  else
+    renderer.draw_text(style.font, tab.relpath or "", x, y, style.text)
+    y = self:history_commits_y()
+    if #tab.commits == 0 then
+      renderer.draw_text(style.font, "No file history", x, y, style.dim)
+    else
+      self:clamp_history_scroll(tab)
+      local row_height = self:row_height()
+      local first = math.max(1, math.floor((tab.scroll or 0) / row_height) + 1)
+      y = y + (first - 1) * row_height - (tab.scroll or 0)
+      for i = first, #tab.commits do
+        local commit = tab.commits[i]
+        local color = (i == tab.selected_commit and (not tab.selected_commit_hash or commit.hash == tab.selected_commit_hash)) and style.accent or style.text
+        renderer.draw_text(style.font, commit_label(commit), x, y, color)
+        y = y + row_height
+        if y > self.position.y + self.size.y - style.font:get_height() then break end
+      end
+      if tab.loading then
+        renderer.draw_text(style.font, "Loading more commits...", x, y, style.dim)
+      elseif tab.has_more then
+        renderer.draw_text(style.font, "Load more commits...", x, y, style.dim)
+      end
+    end
   end
-  renderer.draw_text(style.font, tab.relpath or "", x, y, style.text)
-  y = self:history_commits_y()
-  if #tab.commits == 0 then
-    renderer.draw_text(style.font, "No file history", x, y, style.dim)
-    return
+  renderer.draw_rect(list_right, self.position.y, 1 * SCALE, self.size.y, style.divider)
+  local detail_commit = tab.commits and tab.commits[tab.selected_commit]
+  if tab.selected_commit_hash and (not detail_commit or detail_commit.hash ~= tab.selected_commit_hash) then
+    detail_commit = nil
   end
-  self:clamp_history_scroll(tab)
-  local row_height = self:row_height()
-  local first = math.max(1, math.floor((tab.scroll or 0) / row_height) + 1)
-  y = y + (first - 1) * row_height - (tab.scroll or 0)
-  for i = first, #tab.commits do
-    local commit = tab.commits[i]
-    local color = (i == tab.selected_commit and (not tab.selected_commit_hash or commit.hash == tab.selected_commit_hash)) and style.accent or style.text
-    renderer.draw_text(style.font, commit_label(commit), x, y, color)
-    y = y + row_height
-    if y > self.position.y + self.size.y - style.font:get_height() then break end
-  end
-  if tab.loading then
-    renderer.draw_text(style.font, "Loading more commits...", x, y, style.dim)
-  elseif tab.has_more then
-    renderer.draw_text(style.font, "Load more commits...", x, y, style.dim)
-  end
+  self:draw_commit_details(detail_commit, detail_x + style.padding.x, self.position.y + style.padding.y, self.size.x - list_width)
 end
 
 function GitView:draw_diff_tab(tab, x, y)

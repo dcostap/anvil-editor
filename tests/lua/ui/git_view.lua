@@ -171,6 +171,52 @@ test.describe("Git View command", function()
     test.equal(tw.hidden, false)
   end)
 
+  test.test("selecting a history commit loads changed files for details", function(context)
+    local tw, view = open_fake_git_view(context.project)
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 800, 600
+    local changed_file_calls = 0
+    view.model.repo = { root = "C:/repo" }
+    view.model.backend = {
+      WORKING_TREE = real_backend.WORKING_TREE,
+      EMPTY_TREE = real_backend.EMPTY_TREE,
+      diff_endpoint_for_commit = real_backend.diff_endpoint_for_commit,
+      changed_files = function(repo, left, right, opts, callback)
+        changed_file_calls = changed_file_calls + 1
+        callback({ { status = "modified", old_path = "src/app.lua", new_path = "src/app.lua" } }, nil)
+        return { cancel = function() end }
+      end,
+    }
+    local tab = {
+      id = "history-selection-test",
+      kind = "file_history",
+      title = "History: src/app.lua:1-1",
+      closable = true,
+      relpath = "src/app.lua",
+      history_context = { type = "selection", start_line = 1, end_line = 1 },
+      commits = {
+        { hash = "a", short_hash = "a", subject = "First", parents = {} },
+        { hash = "b", short_hash = "b", subject = "Second", parents = {} },
+      },
+      selected_commit = 1,
+    }
+    view.model.tabs[#view.model.tabs + 1] = tab
+    local history_view = git_view.ensure_tab_view(tw, tab, true)
+    history_view.position.x, history_view.position.y = 0, 0
+    history_view.size.x, history_view.size.y = 800, 600
+    changed_file_calls = 0
+
+    history_view:on_mouse_pressed("left", 10, history_view:history_commits_y() + history_view:row_height() + 1, 1)
+
+    test.equal(tab.selected_commit, 2)
+    test.equal(changed_file_calls, 1)
+    test.equal(tab.commits[2].changed_files[1].new_path, "src/app.lua")
+
+    history_view:on_mouse_pressed("left", 700, history_view:history_commits_y() + 1, 1)
+    test.equal(tab.selected_commit, 2)
+    test.equal(changed_file_calls, 1)
+  end)
+
   test.test("commit diff tabs can focus diff content and return to the Git list", function(context)
     local tw, view = open_fake_git_view(context.project)
     local tab = {

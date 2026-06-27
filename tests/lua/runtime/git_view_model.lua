@@ -92,6 +92,22 @@ test.describe("plugins.git.model", function()
     test.equal(model:selected_commit().subject, "Initial")
   end)
 
+  test.test("refresh loads changed files for initially selected log commit details", function()
+    local backend = fake_backend("", log_output())
+    local changed_file_calls = 0
+    backend.changed_files = function(repo, left, right, opts, callback)
+      changed_file_calls = changed_file_calls + 1
+      callback({ { status = "modified", old_path = "src/app.lua", new_path = "src/app.lua" } }, nil)
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+
+    model:refresh_log()
+
+    test.equal(changed_file_calls, 1)
+    test.equal(model:selected_commit().changed_files[1].new_path, "src/app.lua")
+  end)
+
   test.test("ignores stale refresh results and cancels older jobs", function()
     local callbacks = {}
     local cancelled = 0
@@ -331,6 +347,24 @@ test.describe("plugins.git.model", function()
     test.equal(#restored:find_tab(diff_tab.id).changed_files, 1)
   end)
 
+  test.test("selection history loads changed files for initially selected commit details", function()
+    local backend = fake_backend("", log_output())
+    local changed_file_calls = 0
+    backend.changed_files = function(repo, left, right, opts, callback)
+      changed_file_calls = changed_file_calls + 1
+      callback({ { status = "modified", old_path = "src/app.lua", new_path = "src/app.lua" } }, nil)
+      return { cancel = function() end }
+    end
+    local model = Model.new({ path = "C:/repo" }, { backend = backend })
+    model:refresh_log()
+    changed_file_calls = 0
+
+    local tab = model:open_selection_history("src/app.lua", 1, 1)
+
+    test.equal(changed_file_calls, 1)
+    test.equal(tab.commits[1].changed_files[1].new_path, "src/app.lua")
+  end)
+
   test.test("opens and reuses selection history tabs distinct from file history", function()
     local model = Model.new({ path = "C:/repo" }, { backend = fake_backend("", log_output()) })
     model:refresh_log()
@@ -380,11 +414,11 @@ test.describe("plugins.git.model", function()
     local history_tab = model:open_file_history("src/app.lua")
     local diff_tab = model:open_working_tree_diff()
     test.equal(history_calls, 1)
-    test.equal(changed_calls, 1)
+    test.equal(changed_calls, 2)
     model:refresh_log()
     test.equal(model.repo, nil)
     test.equal(history_calls, 1)
-    test.equal(changed_calls, 1)
+    test.equal(changed_calls, 2)
     test.equal(history_tab.error.kind, "not_in_repository")
     test.equal(diff_tab.error.kind, "not_in_repository")
   end)

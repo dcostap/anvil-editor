@@ -222,8 +222,12 @@ function Model:select_tab(id, callback)
       elseif tab.left_text == nil and tab.right_text == nil and not tab.loading_file then
         self:load_selected_diff_file(tab, callback)
       end
-    elseif tab.kind == "file_history" and #(tab.commits or {}) == 0 and not tab.loading then
-      self:load_file_history(tab, callback)
+    elseif tab.kind == "file_history" then
+      if #(tab.commits or {}) == 0 and not tab.loading then
+        self:load_file_history(tab, callback)
+      else
+        self:load_commit_changed_files(tab.commits and tab.commits[tab.selected_commit], callback)
+      end
     end
     return tab
   end
@@ -242,7 +246,7 @@ function Model:selected_commit()
   return commit
 end
 
-function Model:select_log_index(index)
+function Model:select_log_index(index, callback)
   local tab = self:log_tab()
   if #tab.commits == 0 then
     tab.selected_commit = 1
@@ -252,6 +256,7 @@ function Model:select_log_index(index)
   tab.selected_commit = index
   local commit = tab.commits[index]
   tab.selected_commit_hash = commit and commit.kind ~= "working_tree" and commit.hash or nil
+  self:load_commit_changed_files(commit, callback)
   return tab.commits[index]
 end
 
@@ -461,6 +466,53 @@ function Model:open_selection_history(relpath, start_line, end_line, callback)
   }, callback)
 end
 
+function Model:load_commit_changed_files(commit, callback)
+  if not commit then return false end
+  if commit.kind == "working_tree" or commit.changed_files or commit.changed_files_loaded then
+    if callback then callback(self, commit.changed_files_error) end
+    return false
+  end
+  if commit.changed_files_loading then
+    if callback then
+      commit.pending_changed_file_callbacks = commit.pending_changed_file_callbacks or {}
+      commit.pending_changed_file_callbacks[#commit.pending_changed_file_callbacks + 1] = callback
+    end
+    return false
+  end
+  if not (self.repo and self.backend and self.backend.changed_files and self.backend.diff_endpoint_for_commit) then
+    return false
+  end
+  local endpoint = self.backend.diff_endpoint_for_commit(commit)
+  if not (endpoint and endpoint.right) then return false end
+  commit.changed_files_generation = (commit.changed_files_generation or 0) + 1
+  local generation = commit.changed_files_generation
+  commit.changed_files_loading = true
+  commit.changed_files_error = nil
+  local job, done
+  job = self.backend.changed_files(self.repo, endpoint.left, endpoint.right, {}, function(files, err)
+    done = true
+    self:_untrack_job(job)
+    if generation ~= commit.changed_files_generation then return end
+    commit.changed_files_loading = false
+    commit.changed_files_error = err
+    if not err then
+      commit.changed_files = files or {}
+      commit.changed_files_loaded = true
+    end
+    local callbacks = commit.pending_changed_file_callbacks or {}
+    commit.pending_changed_file_callbacks = nil
+    if callback then callback(self, err) end
+    for _, cb in ipairs(callbacks) do cb(self, err) end
+    if self.on_update then self.on_update(self) end
+  end)
+  if not done then self:_track_job(job) end
+  return true
+end
+
+function Model:load_selected_commit_changed_files(callback)
+  return self:load_commit_changed_files(self:selected_commit(), callback)
+end
+
 function Model:load_file_history(tab, callback)
   if not tab then return false end
   if tab.loading then
@@ -497,6 +549,7 @@ function Model:load_file_history(tab, callback)
       tab.next_offset = page.next_offset
       apply_commit_anchor(tab)
       if tab.selected_commit > #tab.commits then tab.selected_commit = math.max(1, #tab.commits) end
+      self:load_commit_changed_files(tab.commits[tab.selected_commit])
     end
     local callbacks = tab.pending_history_callbacks or {}
     tab.pending_history_callbacks = nil
@@ -798,6 +851,7 @@ function Model:_finish_refresh(generation, status_records, log_page, err, callba
   end
   apply_commit_anchor(tab)
   if tab.selected_commit > #tab.commits then tab.selected_commit = math.max(1, #tab.commits) end
+  self:load_commit_changed_files(tab.commits[tab.selected_commit])
   local active = self:selected_tab()
   if self.repo and active and active.kind == "commit_diff" and #(active.changed_files or {}) == 0 and not active.loading then
     self:load_changed_files(active)
@@ -956,6 +1010,7 @@ function Model:load_more_log(callback)
     if result then
       append_log_commits(tab, self.backend.parse_log_page(result.stdout, { limit = limit, offset = tab.next_offset }))
       apply_commit_anchor(tab)
+      self:load_commit_changed_files(tab.commits[tab.selected_commit])
     end
     if callback then callback(self, err) end
   end)
