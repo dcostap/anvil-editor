@@ -245,6 +245,8 @@ end
 ---@param root core.node The root node of the tree
 ---@param view core.view View to close
 function Node:close_view(root, view)
+  local main_tabs = core.main_tabs
+  if main_tabs and main_tabs.close_view and main_tabs.close_view(self, root, view) then return end
   local do_close = function()
     self:remove_view(root, view)
   end
@@ -406,6 +408,10 @@ end
 ---@return boolean show True if tabs should be displayed
 function Node:should_show_tabs()
   if self.locked then return false end
+  if config.integrated_titlebar_tabs and core.title_bar and core.title_bar.visible and core.root_panel
+     and (self.is_main_panel_node or self.is_primary_node) then
+    return false
+  end
   if config.integrated_titlebar_tabs and core.title_bar and core.title_bar.visible and core.root_panel then
     local active_node = core.root_panel:get_active_node()
     if active_node and active_node.locked and core.last_active_view then

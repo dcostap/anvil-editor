@@ -63,6 +63,8 @@ local t = {
 
 for i = 1, 9 do
   t["root:switch-to-tab-" .. i] = function(node)
+    local main_tabs = core.main_tabs or require "core.main_tabs"
+    if main_tabs.switch_to_index(i) then return end
     local view = node.views[i]
     if view then
       node:set_active_view(view)
@@ -123,6 +125,8 @@ command.add(function(node)
   end,
   {
     ["root:switch-to-previous-tab"] = function(node)
+      local main_tabs = core.main_tabs or require "core.main_tabs"
+      if main_tabs.switch(-1) then return end
       local idx = node:get_view_idx(node.active_view)
       idx = idx - 1
       if idx < 1 then idx = #node.views end
@@ -130,6 +134,8 @@ command.add(function(node)
     end,
 
     ["root:switch-to-next-tab"] = function(node)
+      local main_tabs = core.main_tabs or require "core.main_tabs"
+      if main_tabs.switch(1) then return end
       local idx = node:get_view_idx(node.active_view)
       idx = idx + 1
       if idx > #node.views then idx = 1 end

@@ -245,6 +245,10 @@ end
 function RootPanel:open_doc(doc, opts)
   opts = opts or {}
   local node = opts.node or self:get_active_node_default()
+  local main_tabs = core.main_tabs or require "core.main_tabs"
+  local main_tab_view = main_tabs.open_doc(doc, common.merge(opts, { node = node }))
+  if main_tab_view then return main_tab_view end
+
   for i, view in ipairs(node.views) do
     if view.doc == doc then
       file_context.mark_editor_view(view)

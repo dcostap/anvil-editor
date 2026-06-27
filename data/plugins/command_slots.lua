@@ -1425,6 +1425,16 @@ local function install_commands()
       panel:select_slot(slot.index, { focus = true, follow_end = true })
     end
   end
+  map["command-slots:switch-next"] = function()
+    local panel = ensure_output_panel()
+    sidepanel.show(panel, { focus = true })
+    return panel:switch_tab(1)
+  end
+  map["command-slots:switch-previous"] = function()
+    local panel = ensure_output_panel()
+    sidepanel.show(panel, { focus = true })
+    return panel:switch_tab(-1)
+  end
   command.add(nil, map)
 
   command.add(function()

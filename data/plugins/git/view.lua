@@ -195,9 +195,53 @@ end
 
 function GitView:try_close(callback)
   if self.tab_id == "log" then
-    if self.tool_window then
+    if self.tool_window and not self.tool_window.__main_tabs then
       self.tool_window:hide()
       return false
+    end
+    if self.tool_window and self.tool_window.__main_tabs then
+      local tw = self.tool_window
+      local active_before = core.active_view
+      local active_owner_before = active_before and (active_before.git_owner_view or active_before)
+      local active_was_session_view = false
+      for _, session_view in pairs(tw.git_tab_views or {}) do
+        if active_owner_before == session_view then active_was_session_view = true; break end
+      end
+      if callback then callback() end
+      local function remove_from_node(node, view)
+        if not (node and view) then return false end
+        if node.type == "leaf" then
+          for i = #(node.views or {}), 1, -1 do
+            if node.views[i] == view then
+              table.remove(node.views, i)
+              if node.active_view == view then node.active_view = node.views[i] or node.views[#node.views] end
+              return true
+            end
+          end
+          return false
+        end
+        return remove_from_node(node.a, view) or remove_from_node(node.b, view)
+      end
+      local root = tw.root and tw.root.root_node
+      for _, view in pairs(tw.git_tab_views or {}) do
+        if view ~= self then remove_from_node(root, view) end
+      end
+      tw.git_tab_views = {}
+      tw.git_view = nil
+      tw.git_model = nil
+      tw.hidden = true
+      if core.main_tabs and core.main_tabs.git_sessions then core.main_tabs.git_sessions[tw.project_key] = nil end
+      if active_was_session_view then
+        local main = core.root_panel and core.root_panel.get_main_panel and core.root_panel:get_main_panel()
+        if main and main.active_view and main.active_view ~= self then
+          core.set_active_view(main.active_view)
+        elseif core.main_tabs and tw.root == core.root_panel then
+          core.main_tabs.blank_main_editor(true)
+        else
+          core.active_view = nil
+        end
+      end
+      return true
     end
     if callback then callback() end
     return true

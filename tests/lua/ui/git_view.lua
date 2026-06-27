@@ -3,6 +3,8 @@ local command = require "core.command"
 local style = require "core.style"
 local test = require "core.test"
 local tool_window = require "core.tool_window"
+local sidepanel = require "core.sidepanel"
+local View = require "core.view"
 local RootPanel = require "core.rootpanel"
 local git_view = require "plugins.git_view"
 local real_backend = require "plugins.git.backend"
@@ -98,7 +100,7 @@ test.describe("Git View command", function()
     tool_window.reset_for_tests()
   end)
 
-  test.test("git:open-view reuses one project tool window", function(context)
+  test.test("git:open-view reuses one project Git Main Tab session", function(context)
     local first = open_fake_git_view(context.project)
     local second = open_fake_git_view(context.project)
     test.equal(first, second)
@@ -292,7 +294,7 @@ test.describe("Git View command", function()
     test.equal(core.active_view.git_pane, "file-list")
   end)
 
-  test.it("focused Git diff DocView treats the tool window as its focused window", function(context)
+  test.it("focused Git diff DocView treats the Git Main Tab window as its focused window", function(context)
     local tw, view = open_fake_git_view(context.project)
     local tab = {
       id = "diff-caret",
@@ -312,7 +314,7 @@ test.describe("Git View command", function()
     tab_view.position.x, tab_view.position.y = 0, 0
     tab_view.size.x, tab_view.size.y = 800, 600
 
-    test.equal(command.perform("sidepanel:toggle-focus"), true)
+    test.equal(command.perform("git:focus-diff-pane"), true)
     local diff = tab.diff_view
     local doc_view = diff.doc_view_a
     local original_window_has_focus = system.window_has_focus
@@ -343,6 +345,26 @@ test.describe("Git View command", function()
     test.equal(core.active_view.git_pane, "details")
   end)
 
+  test.it("surface focus command hides the Side Panel and cycles Git panes", function(context)
+    local tw, view = open_fake_git_view(context.project)
+    local main_node = core.root_panel:get_main_panel()
+    main_node:add_view(view)
+    core.active_view = view
+    local panel = View()
+    sidepanel.register_panel("git-test-panel", panel)
+    sidepanel.show("git-test-panel", { focus = true })
+    test.equal(sidepanel.visible, true)
+    test.equal(core.active_view, panel)
+
+    test.equal(command.perform("surface:focus-next-target-or-sidepanel"), true)
+
+    test.equal(sidepanel.visible, false)
+    test.equal(core.active_view.git_owner_view, view)
+    test.equal(core.active_view.git_pane, "log-list")
+    sidepanel.remove_view(panel, false)
+    main_node:remove_view(core.root_panel.root_node, view)
+  end)
+
   test.it("pane focus cycles through Git diff list and both text panes", function(context)
     local tw, view = open_fake_git_view(context.project)
     local tab = {
@@ -362,11 +384,11 @@ test.describe("Git View command", function()
     local tab_view = git_view.ensure_tab_view(tw, tab, true)
     core.active_view = tab_view
 
-    test.equal(command.perform("sidepanel:toggle-focus"), true)
+    test.equal(command.perform("git:focus-next-pane"), true)
     test.equal(core.active_view.git_pane, "file-list")
     tw:activate_root()
     test.equal(core.active_view.git_pane, "file-list")
-    test.equal(command.perform("sidepanel:toggle-focus"), true)
+    test.equal(command.perform("git:focus-next-pane"), true)
     local diff = tab.diff_view
     test.equal(core.active_view, diff.doc_view_a)
     diff.doc_view_a.get_points_of_interest = function()
@@ -377,17 +399,17 @@ test.describe("Git View command", function()
     local line = diff.doc_view_a.doc:get_selection()
     test.equal(line, 2)
 
-    test.equal(command.perform("sidepanel:toggle-focus"), true)
+    test.equal(command.perform("git:focus-next-pane"), true)
     test.equal(core.active_view, diff.doc_view_b)
-    test.equal(command.perform("sidepanel:toggle-focus"), true)
+    test.equal(command.perform("git:focus-next-pane"), true)
     test.equal(core.active_view.git_pane, "file-list")
 
-    test.equal(command.perform("sidepanel:toggle-focus"), true)
+    test.equal(command.perform("git:focus-next-pane"), true)
     test.equal(core.active_view, diff.doc_view_a)
     test.equal(command.perform("git:close-selected-tab"), true)
     test.ok(core.active_view ~= tab_view)
     test.ok(core.active_view.git_owner_view ~= tab_view)
-    test.equal(command.perform("sidepanel:toggle-focus"), true)
+    test.equal(command.perform("git:focus-next-pane"), true)
     test.ok(core.active_view ~= tab_view)
 
     core.active_view = {}
@@ -430,7 +452,7 @@ test.describe("Git View command", function()
     test.equal(tw.hidden, false)
   end)
 
-  test.test("saves and restores hidden Git View tool-window state", function(context)
+  test.test("saves and restores hidden Git View Main Tab state", function(context)
     local tw, view = open_fake_git_view(context.project)
     local history_tab = view.model:open_file_history("src/app.lua")
     view.model.active_tab = history_tab.id
@@ -584,13 +606,37 @@ test.describe("Git View command", function()
     test.equal(tw.hidden, false)
   end)
 
-  test.test("closing the Git View hides the owning tool window", function(context)
+  test.test("closing the Git Log Main Tab removes the owning Git session", function(context)
     local tw, view = open_fake_git_view(context.project)
     local closed = false
     view:try_close(function() closed = true end)
-    test.equal(closed, false)
+    test.equal(closed, true)
     test.equal(tw.hidden, true)
-    test.equal(tw.git_view, view)
+    test.equal(tw.git_view, nil)
+    test.equal(tool_window.get(context.project, "git"), nil)
+  end)
+
+  test.test("closing the Git Log Main Tab removes sibling Git tabs and repairs focus", function(context)
+    local tw, view = open_fake_git_view(context.project)
+    local tab = {
+      id = "diff-sibling",
+      kind = "commit_diff",
+      title = "Diff sibling",
+      closable = true,
+      changed_files = {},
+    }
+    view.model.tabs[#view.model.tabs + 1] = tab
+    local sibling = git_view.ensure_tab_view(tw, tab, true)
+    core.active_view = sibling
+    view:try_close(function()
+      local node = tw.root:get_active_node_default()
+      node:remove_view(tw.root.root_node, view)
+    end)
+    test.equal(tool_window.get(context.project, "git"), nil)
+    for _, candidate in ipairs(tw.root:get_active_node_default().views) do
+      test.ok(candidate ~= sibling)
+    end
+    test.ok(core.active_view ~= sibling)
   end)
 
   test.test("command predicates tolerate focus outside a legacy unmarked tool root", function(context)

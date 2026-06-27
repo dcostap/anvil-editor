@@ -643,6 +643,11 @@ function core.init()
   -- can register views into the shared side node during plugin loading.
   require "core.sidepanel"
 
+  -- Ensure an empty project starts with the singleton Main Editor Main Tab. This
+  -- runs after the Side Panel has created its locked node so the tab is added to
+  -- the real Main Panel leaf, not to the pre-sidepanel layout root.
+  require("core.main_tabs").ensure_main_editor()
+
   -- Shared Point of Interest navigation commands/keymaps are loaded before
   -- plugins so providers can attach themselves during plugin initialization.
   require "core.poi"

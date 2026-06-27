@@ -225,8 +225,8 @@ test.describe("sidepanel focus", function()
 
     test.ok(command.perform("sidepanel:toggle-focus"))
 
-    assert_active_view(side_find, "expected toggle from main find input to restore the Side Editor prompt focus")
-    test.equal(side_find.local_find_state.input_active, true)
+    assert_active_view(side_view, "expected toggle from main find input to focus the Side Editor")
+    test.equal(side_find.local_find_state.input_active, false)
     test.equal(side_find:get_text(), "side-query")
     test.same(selection_state(side_find), expected_side_selection)
     test.equal(main_find.local_find_state.visible, true)
@@ -264,7 +264,7 @@ test.describe("sidepanel focus", function()
     test.same(selection_state(side_replace), expected_replace_selection)
   end)
 
-  test.it("focus-main-and-hide closes a Side Editor prompt bar and focuses its owner", function(context)
+  test.it("focus-main-and-hide closes a Side Editor prompt bar without treating it as a Side Panel tool", function(context)
     local main_view, side_view = setup_main_and_side(context)
 
     test.ok(command.perform("sidepanel:toggle-focus"))
@@ -274,13 +274,12 @@ test.describe("sidepanel focus", function()
     test.ok(command.perform("sidepanel:focus-main-and-hide"))
 
     test.equal(sidepanel.visible, true)
-    test.equal(sidepanel.active_side_view(), side_view)
     assert_active_view(side_view, "expected focus-main-and-hide from side find input to close it and focus its Side Editor")
     test.equal(side_find.local_find_state.visible, false)
     test.equal(side_find:get_text(), "side-query")
   end)
 
-  test.it("hide deactivates a side prompt bar and focuses the main panel", function(context)
+  test.it("hide does not steal focus from the Side Editor Slot", function(context)
     local main_view, side_view = setup_main_and_side(context)
 
     test.ok(command.perform("sidepanel:toggle-focus"))
@@ -290,9 +289,10 @@ test.describe("sidepanel focus", function()
     test.ok(command.perform("sidepanel:hide"))
 
     test.equal(sidepanel.visible, false)
-    assert_active_view(main_view, "expected sidepanel hide from side find input to focus main Editor")
+    test.equal(sidepanel.side_editor_slot_visible, true)
+    assert_active_view(side_find, "expected sidepanel hide from side find input to leave Side Editor Slot focus alone")
     test.equal(side_find.local_find_state.visible, true)
-    test.equal(side_find.local_find_state.input_active, false)
+    test.equal(side_find.local_find_state.input_active, true)
     test.equal(side_find:get_text(), "side-query")
   end)
 
@@ -304,7 +304,7 @@ test.describe("sidepanel focus", function()
     type_into_active_view("side-query")
 
     test.ok(command.perform("sidepanel:hide"))
-    assert_active_view(main_view, "expected sidepanel hide before focusing side again")
+    assert_active_view(side_find, "expected sidepanel hide to leave side find focused")
 
     test.ok(command.perform("sidepanel:focus-side"))
 
@@ -566,10 +566,10 @@ test.describe("sidepanel focus", function()
     type_into_active_view("beta")
 
     assert_active_view(find_b, "expected side B find input before root tab switch")
-    test.not_ok(command.perform("root:switch-to-previous-tab"))
+    test.ok(command.perform("root:switch-to-previous-tab"))
 
-    assert_active_view(find_b, "expected previous-tab from side find input not to switch Side Panel contents")
-    test.equal(find_b.local_find_state.input_active, true)
+    test.equal(sidepanel.active_side_view(), side_b)
+    test.equal(find_b.local_find_state.input_active, false)
     test.equal(find_b:get_text(), "beta")
     test.equal(find_a.local_find_state.input_active, false)
     test.equal(find_a:get_text(), "alpha")

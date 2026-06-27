@@ -36,6 +36,7 @@ M.file_view = M.file_view
 M.file_view_path = M.file_view_path
 M.instant_size = M.instant_size
 M.width_ratio = M.width_ratio or 0.5
+M.side_editor_slot_visible = M.side_editor_slot_visible or false
 
 local function has_no_locked_children(node)
   if not node or node.locked then return false end
@@ -91,21 +92,23 @@ end
 
 local function attach_locked_side_node(container)
   local placeholder = side_placeholder()
+  M.attaching_side_node = true
   local main = Node()
   main:consume(container)
 
   container:consume(Node("hsplit"))
   container.a = main
   container.b = Node()
-  container.b:add_view(placeholder)
-  container.b.locked = { x = true }
-  container.b.resizable = false
   container.b.__sidepanel_side_node = true
   container.__sidepanel_container_node = true
 
   M.container_node = container
   M.main_node = main
   M.side_node = container.b
+  container.b:add_view(placeholder)
+  container.b.locked = { x = true }
+  container.b.resizable = false
+  M.attaching_side_node = false
   return M.side_node
 end
 
@@ -259,8 +262,40 @@ local function side_parent_width()
   return math.max(0, w)
 end
 
+local function active_main_surface_allows_side_editor()
+  local main_tabs = core.main_tabs
+  if not main_tabs then return false end
+  local active = core.active_view
+  local owner = side_focus_owner(active)
+  if owner and is_side_editor(owner) then return true end
+  local view = M.current_main_panel_view(active)
+  return main_tabs.is_editor_surface and main_tabs.is_editor_surface(view)
+end
+
+local function should_show_side_editor_slot()
+  return not M.visible and M.file_view and M.contains_view(M.file_view) and active_main_surface_allows_side_editor()
+end
+
+function M.update_side_editor_slot()
+  if M.attaching_side_node then return false end
+  local side = M.ensure_side_node()
+  local show = should_show_side_editor_slot()
+  M.side_editor_slot_visible = show and true or false
+  if show then
+    M.set_side_view(M.file_view, false)
+  elseif side and side.active_view == M.file_view then
+    M.file_view.visible = false
+    side.active_view = side.views[1] or side_placeholder()
+  elseif M.file_view then
+    M.file_view.visible = false
+  end
+  if M.file_view then M.update_side_view_size(M.file_view) end
+  if side and side.active_view then M.update_side_view_size(side.active_view) end
+  return M.side_editor_slot_visible
+end
+
 function M.target_width()
-  if not M.visible then return 0 end
+  if not M.visible and not M.side_editor_slot_visible then return 0 end
   local parent_width = side_parent_width()
   return math.floor(parent_width * (tonumber(M.width_ratio) or 0.5))
 end
@@ -437,7 +472,7 @@ function M.set_side_view(view, focus)
   end
 
   side.active_view = view
-  view.visible = M.visible
+  view.visible = M.visible or (view == M.file_view and M.side_editor_slot_visible)
   M.update_side_view_size(view)
 
   if focus then
@@ -460,21 +495,28 @@ function M.show(name, opts)
   local panel_name = type(name) == "string" and name or view.__sidepanel_panel_name
   if panel_name then M.current_panel = panel_name end
   M.visible = true
+  M.side_editor_slot_visible = false
+  if M.file_view then M.file_view.visible = false end
   M.ensure_side_node()
   M.set_side_view(view, opts.focus == true)
   return view
 end
 
 function M.hide(focus_main)
+  local active_side_owner = side_focus_owner(core.active_view)
   M.visible = false
   local view = M.active_side_view()
-  if view then
+  if view and view ~= M.file_view then
     view.visible = false
     M.update_side_view_size(view)
   end
   if focus_main ~= false and M.remember_side_focus_view(core.active_view) then
     M.focus_main(false)
+  elseif active_side_owner and active_side_owner ~= M.file_view then
+    M.remember_side_focus_view(core.active_view)
+    M.focus_main(false)
   end
+  M.update_side_editor_slot()
   return true
 end
 
@@ -687,7 +729,9 @@ local function set_side_file_doc(doc, opts)
   end
 
   copy_docview_position(source, view)
-  M.show("file", { focus = opts.focus == true })
+  M.visible = false
+  M.side_editor_slot_visible = should_show_side_editor_slot()
+  M.set_side_view(view, opts.focus == true)
 
   if opts.line then
     local col = opts.col or 1
@@ -739,7 +783,9 @@ function M.open_path_in_side(path, opts)
       M.attach_view("file", view)
       M.add_view(view)
     end
-    M.show("file", { focus = opts.focus == true })
+    M.visible = false
+    M.side_editor_slot_visible = should_show_side_editor_slot()
+    M.set_side_view(view, opts.focus == true)
     if opts.focus == false and opts.restore_focus and not M.is_side_view(opts.restore_focus) then
       core.set_active_view(opts.restore_focus)
     elseif opts.focus ~= true and source and not M.is_side_view(source) then
@@ -819,8 +865,33 @@ function core.set_active_view(view)
     core.sidepanel.remember_main_panel_view(view)
     core.sidepanel.remember_side_focus_view(view)
     core.sidepanel.remember_editor_focus_owner(view)
+    if core.sidepanel.update_side_editor_slot then core.sidepanel.update_side_editor_slot() end
   end
   return result
+end
+
+local function active_main_surface_focus_owner()
+  local main = core.root_panel and core.root_panel.get_main_panel and core.root_panel:get_main_panel()
+  local view = main and main.active_view
+  if core.active_view and core.active_view.git_owner_view == view then return view end
+  return view
+end
+
+local function main_surface_can_cycle_focus(view)
+  return view
+     and type(view.can_focus_next_pane) == "function"
+     and type(view.focus_next_pane) == "function"
+     and view:can_focus_next_pane()
+end
+
+function M.focus_next_surface_target_or_sidepanel()
+  local surface = active_main_surface_focus_owner()
+  if main_surface_can_cycle_focus(surface) then
+    if M.visible then M.hide(false) end
+    core.log_quiet("Main surface focus: cycling Surface Focus Target for %s", surface.get_name and surface:get_name() or tostring(surface))
+    return surface:focus_next_pane()
+  end
+  return M.toggle_focus()
 end
 
 command.add(nil, {
@@ -830,11 +901,14 @@ command.add(nil, {
   ["sidepanel:toggle-focus"] = function()
     M.toggle_focus()
   end,
+  ["surface:focus-next-target-or-sidepanel"] = function()
+    M.focus_next_surface_target_or_sidepanel()
+  end,
   ["sidepanel:focus-side"] = function()
     M.focus_side()
   end,
   ["sidepanel:hide"] = function()
-    M.hide(true)
+    M.hide(false)
   end,
   ["sidepanel:open-current-file"] = function()
     local active = core.active_view
@@ -912,18 +986,18 @@ local function wrap_root_tab_switch(name, delta)
   command.map[name].__sidepanel_wrapped = true
 end
 
-wrap_root_tab_switch("root:switch-to-next-tab", 1)
-wrap_root_tab_switch("root:switch-to-previous-tab", -1)
+-- Ctrl+Tab now cycles global Main Tabs. Side Panel internal tab cycling should
+-- use explicit sidepanel commands instead of wrapping root tab commands.
 
 local function install_keymaps()
   keymap.add({
     ["ctrl+w"] = "sidepanel:hide-active",
   })
   keymap.add_direct({
-    ["alt+1"] = "sidepanel:focus-main-and-hide",
-    ["alt+º"] = "sidepanel:toggle-focus",
-    ["alt+grave"] = "sidepanel:toggle-focus",
-    ["alt+`"] = "sidepanel:toggle-focus",
+    ["alt+1"] = "sidepanel:hide",
+    ["alt+º"] = "surface:focus-next-target-or-sidepanel",
+    ["alt+grave"] = "surface:focus-next-target-or-sidepanel",
+    ["alt+`"] = "surface:focus-next-target-or-sidepanel",
     ["ctrl+0"] = "sidepanel:open-current-file",
   })
 end

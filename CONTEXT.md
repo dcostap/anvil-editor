@@ -53,8 +53,20 @@ An Editor hosted in the Main Panel.
 _Avoid_: Main DocView, primary editor
 
 **Side Editor**:
-An Editor hosted in the Side Panel for the split-editor experience.
+An Editor hosted in the Side Editor Slot for the split-editor experience.
 _Avoid_: Side DocView, Side Panel DocView, Split DocView, side buffer
+
+**Side Editor Slot**:
+A secondary editor area that can show one Side Editor while the active Main Surface is an Editing Surface. It hides whenever the Side Panel is visible.
+_Avoid_: Side Panel file tab, side split panel
+
+**Editing Surface**:
+A Main Surface whose primary purpose is editing or navigating a Document.
+_Avoid_: Code context, editor context
+
+**Surface Focus Target**:
+A focusable sub-area inside the active Main Surface, such as a Git list pane or Git diff text pane.
+_Avoid_: listener, split
 
 **Selection State**:
 The caret and selection state owned by a Document View.
@@ -84,9 +96,17 @@ _Avoid_: App shell, main panel
 The main document-editing area where ordinary Document Views open by default.
 _Avoid_: Primary node, primary panel, main view
 
+**Main Tab**:
+A top-level titlebar tab that switches the Main Panel between major work surfaces, such as the Main Editor, an untitled document, or a Git-related view.
+_Avoid_: File tab, buffer tab, Node tab
+
+**Main Surface**:
+The work surface activated by a Main Tab.
+_Avoid_: Main tab content, workspace view
+
 **Side Panel**:
-The right-side UI panel that appears when needed, takes a substantial portion of the window width, and hosts auxiliary views such as the file tree.
-_Avoid_: Side node, secondary panel
+The right-side UI panel that appears when needed, takes a substantial portion of the window width, and hosts auxiliary tool views such as the file tree. The Side Panel is global and independent of Main Tabs.
+_Avoid_: Side node, secondary panel, Side Editor Slot
 
 **File Tree**:
 A Side Panel tool for viewing and editing Project files and directories.

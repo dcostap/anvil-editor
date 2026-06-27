@@ -311,7 +311,7 @@ keymap.add_direct {
   ["ctrl+shift+tab"] = "root:switch-to-previous-tab",
   ["ctrl+pageup"] = "root:move-tab-left",
   ["ctrl+pagedown"] = "root:move-tab-right",
-  ["alt+1"] = "root:switch-to-tab-1",
+  ["alt+1"] = "sidepanel:hide",
   ["alt+2"] = "root:switch-to-tab-2",
   ["alt+3"] = "root:switch-to-tab-3",
   ["alt+5"] = "root:switch-to-tab-5",

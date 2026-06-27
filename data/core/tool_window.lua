@@ -260,7 +260,12 @@ function tool_window.open(project, kind, opts)
 end
 
 function tool_window.get(project, kind)
-  return tool_window.windows[key_for(project, kind)]
+  local tw = tool_window.windows[key_for(project, kind)]
+  if tw then return tw end
+  local core = package.loaded.core
+  if kind == "git" and core and core.main_tabs and core.main_tabs.git_sessions then
+    return core.main_tabs.git_sessions[project_key(project)]
+  end
 end
 
 function tool_window.register_kind(kind, handler)
@@ -270,10 +275,10 @@ end
 function tool_window.get_project_state(project)
   local pkey = project_key(project)
   local states = {}
-  for _, tw in pairs(tool_window.windows) do
+  local function add_state(tw)
     if tw.project_key == pkey then
       local handler = tool_window.registered_kinds[tw.kind]
-      local state = handler and handler.save and handler.save(tw) or tw:get_state()
+      local state = handler and handler.save and handler.save(tw) or (tw.get_state and tw:get_state())
       if state then
         state.kind = state.kind or tw.kind
         state.hidden = tw.hidden and true or false
@@ -281,6 +286,11 @@ function tool_window.get_project_state(project)
         states[#states + 1] = state
       end
     end
+  end
+  for _, tw in pairs(tool_window.windows) do add_state(tw) end
+  local core = package.loaded.core
+  if core and core.main_tabs and core.main_tabs.git_sessions then
+    for _, tw in pairs(core.main_tabs.git_sessions) do add_state(tw) end
   end
   table.sort(states, function(a, b) return tostring(a.kind) < tostring(b.kind) end)
   return states
@@ -346,6 +356,7 @@ function tool_window.reset_for_tests()
   end
   tool_window.windows = {}
   tool_window.windows_by_id = {}
+  if core.main_tabs then core.main_tabs.git_sessions = {} end
   core.active_window = core.window
   core.event_window = core.window
 end

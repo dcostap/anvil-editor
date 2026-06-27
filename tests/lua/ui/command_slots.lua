@@ -508,7 +508,7 @@ test.describe("Command Slots", function()
     test.equal(slot.output_history_index, #slot.output_history)
   end)
 
-  test.it("root tab switching commands switch Command Output tabs internally", function()
+  test.it("explicit Command Output commands switch Command Output slots internally", function()
     config.plugins.command_slots.powershell_candidates = {}
 
     test.ok(command_slots.run_command(1, "Write-Output 'first'"))
@@ -516,7 +516,7 @@ test.describe("Command Slots", function()
     panel:select_slot(1, { focus = true })
     test.equal(core.active_view, command_slots.slots[1].view)
 
-    test.ok(command.perform("root:switch-to-next-tab"))
+    test.ok(command.perform("command-slots:switch-next"))
 
     test.equal(panel.active_slot_index, 2)
     test.equal(core.active_view, command_slots.slots[2].view)

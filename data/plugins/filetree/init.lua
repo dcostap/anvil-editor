@@ -3165,7 +3165,7 @@ command.add(function() return core.active_view:is(FileTreeView) end, {
 
 keymap.add {
   ["ctrl+\\"] = "filetree:toggle",
-  ["alt+1"] = "filetree:focus-editor-and-hide",
+  ["alt+1"] = "sidepanel:hide",
   ["alt+2"] = "filetree:focus-and-show",
   ["alt+r"] = "filetree:open",
   ["alt+shift+r"] = "filetree:open-side",
