@@ -349,7 +349,8 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
     if x < self.position.x then return true end
     self.focus_pane = "list"
     self.focused_diff_doc_view = nil
-    local index = math.floor((y - self:commit_list_y() + (selected_tab.file_scroll or 0)) / self:row_height()) + 1
+    local line = math.floor((y - self:commit_list_y() + (selected_tab.file_scroll or 0)) / self:row_height()) + 1
+    local index = selected_tab.file_line_to_index and selected_tab.file_line_to_index[line] or line
     if index >= 1 and index <= #(selected_tab.changed_files or {}) then
       self.model:select_diff_file(selected_tab, index, function() core.redraw = true end)
       core.redraw = true
@@ -388,10 +389,57 @@ local function tab_label(tab)
   return (tab.id == "log" and "Log" or tab.title or tab.kind or "Tab")
 end
 
-local function file_label(file)
+local function file_label(file, path)
   local status = file and (file.status or file.kind or file.raw_status or file.xy) or ""
-  local path = file and (file.path or file.new_path or file.old_path) or ""
+  path = path or (file and (file.path or file.new_path or file.old_path) or "")
   return string.format("%s  %s", status, path)
+end
+
+local function changed_file_path(file)
+  return file and (file.path or file.new_path or file.old_path) or ""
+end
+
+local function split_path(path)
+  local parts = {}
+  path = tostring(path or "")
+  for part in path:gmatch("[^/\\]+") do parts[#parts + 1] = part end
+  if #parts == 0 and path ~= "" then parts[1] = path end
+  return parts
+end
+
+local function changed_file_tree_lines(files)
+  local lines = {}
+  local line_to_index = {}
+  local index_to_line = {}
+  local open_folders = {}
+  for index, file in ipairs(files or {}) do
+    local path = changed_file_path(file)
+    local parts = split_path(path)
+    if #parts == 0 then
+      lines[#lines + 1] = file_label(file)
+      line_to_index[#lines] = index
+      index_to_line[index] = #lines
+    else
+      local prefix = ""
+      for depth = 1, #parts - 1 do
+        prefix = prefix == "" and parts[depth] or (prefix .. "/" .. parts[depth])
+        if not open_folders[depth] or open_folders[depth] ~= prefix then
+          for i = depth, #open_folders do open_folders[i] = nil end
+          lines[#lines + 1] = string.rep("\t", depth - 1) .. parts[depth]
+          open_folders[depth] = prefix
+        end
+      end
+      lines[#lines + 1] = string.rep("\t", math.max(0, #parts - 1)) .. file_label(file, parts[#parts])
+      line_to_index[#lines] = index
+      index_to_line[index] = #lines
+    end
+  end
+  return lines, line_to_index, index_to_line
+end
+
+local function append_changed_file_tree_lines(lines, files)
+  local tree = changed_file_tree_lines(files)
+  for _, line in ipairs(tree) do lines[#lines + 1] = line end
 end
 
 local function commit_details_lines(commit)
@@ -413,9 +461,7 @@ local function commit_details_lines(commit)
   elseif #(commit.changed_files or {}) == 0 then
     lines[#lines + 1] = commit.changed_files_loaded and "No changed files" or "Select a commit to load changed files"
   else
-    for _, file in ipairs(commit.changed_files or {}) do
-      lines[#lines + 1] = string.format("%s  %s", file.kind or file.status or file.xy or "", file.path or file.new_path or file.old_path or "")
-    end
+    append_changed_file_tree_lines(lines, commit.changed_files or {})
   end
   return lines
 end
@@ -459,8 +505,10 @@ function GitView:sync_selection_from_pane()
       self.model:load_selected_commit_changed_files(function() core.redraw = true end)
     end
   elseif active.git_pane == "file-list" and tab and tab.kind == "commit_diff" then
-    if line >= 1 and line <= #(tab.changed_files or {}) and line ~= tab.selected_file then
-      self.model:select_diff_file(tab, line, function() core.redraw = true end)
+    local index = active.git_file_line_to_index and active.git_file_line_to_index[line]
+    if not index and not active.git_file_line_to_index then index = line end
+    if index and index >= 1 and index <= #(tab.changed_files or {}) and index ~= tab.selected_file then
+      self.model:select_diff_file(tab, index, function() core.redraw = true end)
     end
   end
 end
@@ -470,6 +518,11 @@ function GitView:activate_selected(callback)
   self:activate_model_tab(function() core.redraw = true end)
   local tab = self.model:selected_tab()
   if tab.kind == "commit_diff" then
+    local active = core.active_view
+    if active and active.git_owner_view == self and active.git_pane == "file-list" then
+      local line = active.doc and active.doc:get_selection() or 1
+      if active.git_file_line_to_index and not active.git_file_line_to_index[line] then return nil end
+    end
     self.model:load_selected_diff_file(tab, callback or function() core.redraw = true end)
     return tab
   end
@@ -496,6 +549,8 @@ function GitView:update_pane_docs()
     self:set_pane_lines("details", commit_details_lines(self:detail_commit_for_tab(tab)))
   elseif tab.kind == "commit_diff" then
     local lines = {}
+    tab.file_line_to_index = nil
+    tab.file_index_to_line = nil
     if tab.loading then
       lines[1] = "Loading changed files..."
     elseif tab.error then
@@ -503,10 +558,15 @@ function GitView:update_pane_docs()
     elseif #(tab.changed_files or {}) == 0 then
       lines[1] = "No changed files"
     else
-      for _, file in ipairs(tab.changed_files or {}) do lines[#lines + 1] = file_label(file) end
+      local line_to_index, index_to_line
+      lines, line_to_index, index_to_line = changed_file_tree_lines(tab.changed_files or {})
+      tab.file_line_to_index = line_to_index
+      tab.file_index_to_line = index_to_line
     end
     local list_view = self:set_pane_lines("file-list", lines)
-    sync_inactive_pane_line(list_view, tab.selected_file)
+    list_view.git_file_line_to_index = tab.file_line_to_index or {}
+    list_view.git_file_index_to_line = tab.file_index_to_line or {}
+    sync_inactive_pane_line(list_view, list_view.git_file_index_to_line[tab.selected_file] or tab.selected_file)
   else
     local log_tab = self.model:log_tab()
     local lines = {}
@@ -561,7 +621,11 @@ function GitView:select_relative(delta)
   elseif tab.kind == "commit_diff" then
     if #(tab.changed_files or {}) == 0 then return nil end
     local file = self.model:select_diff_file(tab, (tab.selected_file or 1) + delta, function() core.redraw = true end)
-    local row_y = ((tab.selected_file or 1) - 1) * self:row_height()
+    self:update_pane_docs()
+    local list = self:pane_view("file-list")
+    local line = list.git_file_index_to_line and list.git_file_index_to_line[tab.selected_file] or tab.selected_file or 1
+    if core.active_view == list then list.doc:set_selection(line, 1, line, 1) end
+    local row_y = (line - 1) * self:row_height()
     local visible = self.size.y - (self:commit_list_y() - self.position.y) - style.padding.y
     tab.file_scroll = common.clamp(tab.file_scroll or 0, math.max(0, row_y - visible + self:row_height()), row_y)
     core.redraw = true

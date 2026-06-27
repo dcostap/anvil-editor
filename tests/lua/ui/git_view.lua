@@ -221,6 +221,44 @@ test.describe("Git View command", function()
     test.equal(changed_file_calls, 1)
   end)
 
+  test.it("commit diff file list renders changed files as a project-relative tree", function(context)
+    local tw, view = open_fake_git_view(context.project)
+    local tab = {
+      id = "diff-tree",
+      kind = "commit_diff",
+      title = "Diff tree",
+      closable = true,
+      changed_files = {
+        { status = "modified", old_path = "src/main/App.kt", new_path = "src/main/App.kt" },
+        { status = "added", old_path = "src/main/Util.kt", new_path = "src/main/Util.kt" },
+        { status = "deleted", old_path = "README.md", new_path = "README.md" },
+      },
+      selected_file = 2,
+    }
+    view.model.tabs[#view.model.tabs + 1] = tab
+    local tab_view = git_view.ensure_tab_view(tw, tab, true)
+
+    tab_view:update_pane_docs()
+    local list = tab_view:pane_view("file-list")
+    test.equal(list.doc.lines[1], "src\n")
+    test.equal(list.doc.lines[2], "\tmain\n")
+    test.equal(list.doc.lines[3], "\t\tmodified  App.kt\n")
+    test.equal(list.doc.lines[4], "\t\tadded  Util.kt\n")
+    test.equal(list.doc.lines[5], "deleted  README.md\n")
+    test.equal(list.git_file_line_to_index[3], 1)
+    test.equal(list.git_file_line_to_index[4], 2)
+    test.equal(list.git_file_index_to_line[2], 4)
+    test.equal(list.doc:get_selection(), 4)
+
+    core.active_view = list
+    list.doc:set_selection(1, 1)
+    tab_view:sync_selection_from_pane()
+    test.equal(tab.selected_file, 2)
+    list.doc:set_selection(3, 1)
+    tab_view:sync_selection_from_pane()
+    test.equal(tab.selected_file, 1)
+  end)
+
   test.test("commit diff tabs can focus diff content and return to the Git list", function(context)
     local tw, view = open_fake_git_view(context.project)
     local tab = {
