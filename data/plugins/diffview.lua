@@ -803,21 +803,22 @@ function DiffView:sync_scroll_from(doc_view, is_a)
   other.scroll.y, other.scroll.to.y = doc_view.scroll.y, doc_view.scroll.to.y
 end
 
-local function clamp_line_out_of_fold(doc_view, folds, old_line, line)
+local function clamp_position_out_of_fold(doc_view, folds, old_line, line, col)
+  if is_fold_widget_line(folds, line) then return line, 1 end
   local hidden, fold = is_fold_hidden_line(folds, line)
-  if not hidden then return line end
+  if not hidden then return line, col end
   if tonumber(line) and tonumber(old_line) and line >= old_line and fold.hidden_end < #doc_view.doc.lines then
-    return fold.hidden_end + 1
+    return fold.hidden_end + 1, 1
   end
-  return fold.hidden_start
+  return fold.hidden_start, 1
 end
 
 function DiffView:clamp_selection_out_of_folds(doc_view, is_a, line1, col1, line2, col2)
   local folds = is_a and self.diff_folds_a or self.diff_folds_b
   if not folds or #folds == 0 then return line1, col1, line2, col2 end
   local old_line = doc_view.doc:get_selection()
-  line1 = clamp_line_out_of_fold(doc_view, folds, old_line, line1)
-  line2 = line2 and clamp_line_out_of_fold(doc_view, folds, old_line, line2) or line2
+  line1, col1 = clamp_position_out_of_fold(doc_view, folds, old_line, line1, col1)
+  if line2 then line2, col2 = clamp_position_out_of_fold(doc_view, folds, old_line, line2, col2) end
   return line1, col1, line2, col2
 end
 

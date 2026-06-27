@@ -113,6 +113,11 @@ test.describe("DiffView batch behavior", function()
     view.doc_view_a.doc:set_selection(fold.hidden_start + 1, 1)
     local line = view.doc_view_a.doc:get_selection()
     test.ok(line == fold.hidden_start or line == fold.hidden_end + 1)
+    view.doc_view_a.doc:set_selection(fold.hidden_start, 20)
+    local col
+    line, col = view.doc_view_a.doc:get_selection()
+    test.equal(line, fold.hidden_start)
+    test.equal(col, 1)
 
     view.doc_view_a.position.y, view.doc_view_a.size.y = 0, 80
     view.doc_view_b.position.y, view.doc_view_b.size.y = 0, 80
