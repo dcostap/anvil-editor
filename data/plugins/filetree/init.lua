@@ -14,6 +14,7 @@ local sidepanel = require "core.sidepanel"
 local storage = require "core.storage"
 local DirWatch = require "core.dirwatch"
 local git_backend = require "plugins.git.backend"
+local filetree_render = require "plugins.filetree.render"
 
 local FILETREE_SETTINGS_MODULE = "filetree"
 local FILETREE_SETTINGS_KEY = "settings"
@@ -433,9 +434,7 @@ local function git_status_kind(xy)
 end
 
 local function stronger_git_kind(a, b)
-  local rank = { deleted = 5, added = 4, modified = 3, untracked = 2, ignored = 1 }
-  if not a or (rank[b] or 0) > (rank[a] or 0) then return b end
-  return a
+  return filetree_render.stronger_git_kind(a, b)
 end
 
 local function is_rename_op(op)
@@ -1003,11 +1002,7 @@ function FileTreeView:get_git_info_for_line(line)
 end
 
 function FileTreeView:git_text_color(kind)
-  if kind == "ignored" then return style.filetree_git_ignored end
-  if kind == "untracked" then return style.filetree_git_untracked end
-  if kind == "added" then return style.filetree_git_added end
-  if kind == "modified" then return style.filetree_git_modified end
-  if kind == "deleted" then return style.filetree_git_deleted end
+  return filetree_render.git_text_color(kind)
 end
 
 function FileTreeView:set_target_size(axis, value)
@@ -1915,19 +1910,9 @@ function FileTreeView:get_line_hint(line)
   local git_start = perf_start(stats)
   local git = self:get_git_info_for_entry(entry)
   perf_finish(stats, "filetree_line_hint_git_ms", git_start)
-  local segments = {}
-  if git and git.stat and ((git.stat.additions or 0) > 0 or (git.stat.deletions or 0) > 0) then
-    segments[#segments + 1] = {
-      text = string.format("+%d", git.stat.additions or 0),
-      font = font,
-      color = style.filetree_git_additions,
-    }
-    segments[#segments + 1] = {
-      text = string.format(" −%d   ", git.stat.deletions or 0),
-      font = font,
-      color = style.filetree_git_deletions,
-    }
-  elseif git and git.kind == "ignored" then
+  local segments = filetree_render.changed_stat_segments(git and git.stat, font) or {}
+  if #segments > 0 then segments[#segments + 1] = { text = "   ", font = font, color = dim } end
+  if #segments == 0 and git and git.kind == "ignored" then
     segments[#segments + 1] = { text = "ignored   ", font = font, color = style.filetree_git_ignored }
   end
   if #segments == 0 then
@@ -1974,11 +1959,8 @@ function FileTreeView:draw_line_text(line, x, y)
   local git_start = perf_start(stats)
   local git = self:get_git_info_for_line(line)
   perf_finish(stats, "filetree_draw_line_text_git_ms", git_start)
-  local color = git and self:git_text_color(git.kind)
-  if not color and self:line_is_dir(line) then
-    color = filetree_config.folder_color or style.filetree_folder
-  end
-  if not color then
+  local text = line_text(self.doc:get_utf8_line(line))
+  if not filetree_render.draw_row_text(self, text, x, y, git and git.kind, self:line_is_dir(line)) then
     perf_add(stats, "filetree_draw_line_text_plain_calls", 1)
     local result = FileTreeView.super.draw_line_text(self, line, x, y)
     perf_finish(stats, "filetree_draw_line_text_ms", start)
@@ -1986,11 +1968,6 @@ function FileTreeView:draw_line_text(line, x, y)
   end
 
   perf_add(stats, "filetree_draw_line_text_colored_calls", 1)
-  local text = line_text(self.doc:get_utf8_line(line))
-  renderer.draw_text(
-    self:get_font(), text, x, y + self:get_line_text_y_offset(), color,
-    { tab_offset = 0 }
-  )
   perf_finish(stats, "filetree_draw_line_text_ms", start)
   return self:get_line_height()
 end
@@ -2001,9 +1978,7 @@ function FileTreeView:draw_line_gutter(line, x, y, width)
   self:draw_folder_row_background(line, self.position.x, y, gw)
   local status = self:get_line_status(line)
   if status then
-    local color = status == "addition" and style.gitdiff_addition
-      or status == "modification" and style.gitdiff_modification
-      or style.gitdiff_deletion
+    local color = filetree_render.git_gutter_color(status) or style.gitdiff_deletion
     local w = style.gitdiff_width
     renderer.draw_rect(x + style.padding.x * 0.5, y, w, lh, color)
   end

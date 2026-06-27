@@ -229,9 +229,9 @@ test.describe("Git View command", function()
       title = "Diff tree",
       closable = true,
       changed_files = {
-        { status = "modified", old_path = "src/main/App.kt", new_path = "src/main/App.kt" },
-        { status = "added", old_path = "src/main/Util.kt", new_path = "src/main/Util.kt" },
-        { status = "deleted", old_path = "README.md", new_path = "README.md" },
+        { status = "modified", old_path = "src/main/App.kt", new_path = "src/main/App.kt", stat = { additions = 2, deletions = 44 } },
+        { status = "added", old_path = "src/main/Util.kt", new_path = "src/main/Util.kt", stat = { additions = 3, deletions = 0 } },
+        { status = "deleted", old_path = "README.md", new_path = "README.md", stat = { additions = 0, deletions = 5 } },
       },
       selected_file = 2,
     }
@@ -242,13 +242,16 @@ test.describe("Git View command", function()
     local list = tab_view:pane_view("file-list")
     test.equal(list.doc.lines[1], "src\n")
     test.equal(list.doc.lines[2], "\tmain\n")
-    test.equal(list.doc.lines[3], "\t\tmodified  App.kt\n")
-    test.equal(list.doc.lines[4], "\t\tadded  Util.kt\n")
-    test.equal(list.doc.lines[5], "deleted  README.md\n")
+    test.equal(list.doc.lines[3], "\t\tApp.kt\n")
+    test.equal(list.doc.lines[4], "\t\tUtil.kt\n")
+    test.equal(list.doc.lines[5], "README.md\n")
     test.equal(list.git_file_line_to_index[3], 1)
     test.equal(list.git_file_line_to_index[4], 2)
     test.equal(list.git_file_index_to_line[2], 4)
     test.equal(list.doc:get_selection(), 4)
+    local hint = list:get_line_hint(3)
+    test.equal(hint[1].text, "+2")
+    test.equal(hint[2].text, " −44")
 
     core.active_view = list
     list.doc:set_selection(1, 1)

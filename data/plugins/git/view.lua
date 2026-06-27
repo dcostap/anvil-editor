@@ -10,6 +10,7 @@ local Doc = require "core.doc"
 local DocView = require "core.docview"
 local View = require "core.view"
 local GitModel = require "plugins.git.model"
+local filetree_render = require "plugins.filetree.render"
 
 local GitView = View:extend()
 
@@ -84,6 +85,39 @@ function GitView:pane_view(name)
     view.git_pane = name
     view.get_gutter_width = function() return 0 end
     view.draw_line_gutter = function(v) return v:get_line_height() end
+    local draw_line_text = view.draw_line_text
+    view.draw_line_text = function(v, line, x, y)
+      if v.git_pane == "file-list" then
+        local meta = v.git_file_line_meta and v.git_file_line_meta[line]
+        if meta then
+          local text = (v.doc:get_utf8_line(line) or ""):gsub("\n$", "")
+          if filetree_render.draw_row_text(v, text, x, y, meta.kind, meta.type == "dir") then
+            return v:get_line_height()
+          end
+        end
+      end
+      return draw_line_text(v, line, x, y)
+    end
+    local draw_line_body = view.draw_line_body
+    view.draw_line_body = function(v, line, x, y)
+      if v.git_pane == "file-list" then
+        local meta = v.git_file_line_meta and v.git_file_line_meta[line]
+        local gw = v:get_gutter_width()
+        filetree_render.draw_folder_row_background(v, meta and meta.type == "dir", x + v.scroll.x, y, math.max(0, v.size.x - gw))
+      end
+      return draw_line_body(v, line, x, y)
+    end
+    view.get_line_hint = function(v, line)
+      if v.git_pane ~= "file-list" then return nil end
+      local meta = v.git_file_line_meta and v.git_file_line_meta[line]
+      if not meta then return nil end
+      if meta.type == "dir" and meta.stat then
+        return filetree_render.changed_stat_segments(meta.stat, v:get_font())
+      end
+      local index = v.git_file_line_to_index and v.git_file_line_to_index[line]
+      local file = index and v.git_file_records and v.git_file_records[index]
+      return filetree_render.changed_stat_segments(file and file.stat, v:get_font())
+    end
     self.pane_views[name] = view
   end
   view.git_owner_view = self
@@ -399,6 +433,10 @@ local function changed_file_path(file)
   return file and (file.path or file.new_path or file.old_path) or ""
 end
 
+local function changed_file_kind(file)
+  return file and (file.status or file.kind or file.raw_status or file.xy) or nil
+end
+
 local function split_path(path)
   local parts = {}
   path = tostring(path or "")
@@ -407,18 +445,35 @@ local function split_path(path)
   return parts
 end
 
+local function clone_stat(stat)
+  if not stat then return nil end
+  return { additions = stat.additions or 0, deletions = stat.deletions or 0 }
+end
+
+local function add_stat(total, stat)
+  if not stat then return total end
+  total = total or { additions = 0, deletions = 0 }
+  total.additions = total.additions + (stat.additions or 0)
+  total.deletions = total.deletions + (stat.deletions or 0)
+  return total
+end
+
 local function changed_file_tree_lines(files)
   local lines = {}
   local line_to_index = {}
   local index_to_line = {}
+  local line_meta = {}
   local open_folders = {}
+  local folder_lines = {}
   for index, file in ipairs(files or {}) do
     local path = changed_file_path(file)
     local parts = split_path(path)
+    local kind = changed_file_kind(file)
     if #parts == 0 then
       lines[#lines + 1] = file_label(file)
       line_to_index[#lines] = index
       index_to_line[index] = #lines
+      line_meta[#lines] = { type = "file", kind = kind }
     else
       local prefix = ""
       for depth = 1, #parts - 1 do
@@ -426,15 +481,24 @@ local function changed_file_tree_lines(files)
         if not open_folders[depth] or open_folders[depth] ~= prefix then
           for i = depth, #open_folders do open_folders[i] = nil end
           lines[#lines + 1] = string.rep("\t", depth - 1) .. parts[depth]
+          line_meta[#lines] = { type = "dir", kind = kind, stat = clone_stat(file and file.stat) }
+          folder_lines[prefix] = #lines
           open_folders[depth] = prefix
+        else
+          local line = folder_lines[prefix]
+          if line and line_meta[line] then
+            line_meta[line].stat = add_stat(line_meta[line].stat, file and file.stat)
+            line_meta[line].kind = filetree_render.stronger_git_kind(line_meta[line].kind, kind)
+          end
         end
       end
-      lines[#lines + 1] = string.rep("\t", math.max(0, #parts - 1)) .. file_label(file, parts[#parts])
+      lines[#lines + 1] = string.rep("\t", math.max(0, #parts - 1)) .. parts[#parts]
       line_to_index[#lines] = index
       index_to_line[index] = #lines
+      line_meta[#lines] = { type = "file", kind = kind }
     end
   end
-  return lines, line_to_index, index_to_line
+  return lines, line_to_index, index_to_line, line_meta
 end
 
 local function append_changed_file_tree_lines(lines, files)
@@ -551,6 +615,7 @@ function GitView:update_pane_docs()
     local lines = {}
     tab.file_line_to_index = nil
     tab.file_index_to_line = nil
+    tab.file_line_meta = nil
     if tab.loading then
       lines[1] = "Loading changed files..."
     elseif tab.error then
@@ -558,14 +623,17 @@ function GitView:update_pane_docs()
     elseif #(tab.changed_files or {}) == 0 then
       lines[1] = "No changed files"
     else
-      local line_to_index, index_to_line
-      lines, line_to_index, index_to_line = changed_file_tree_lines(tab.changed_files or {})
+      local line_to_index, index_to_line, line_meta
+      lines, line_to_index, index_to_line, line_meta = changed_file_tree_lines(tab.changed_files or {})
       tab.file_line_to_index = line_to_index
       tab.file_index_to_line = index_to_line
+      tab.file_line_meta = line_meta
     end
     local list_view = self:set_pane_lines("file-list", lines)
     list_view.git_file_line_to_index = tab.file_line_to_index or {}
     list_view.git_file_index_to_line = tab.file_index_to_line or {}
+    list_view.git_file_line_meta = tab.file_line_meta or {}
+    list_view.git_file_records = tab.changed_files or {}
     sync_inactive_pane_line(list_view, list_view.git_file_index_to_line[tab.selected_file] or tab.selected_file)
   else
     local log_tab = self.model:log_tab()

@@ -106,6 +106,10 @@ local function score_from_token(token)
   return value and tonumber(value) or nil
 end
 
+local function record_path(record)
+  return record and (record.path or record.new_path or record.old_path) or nil
+end
+
 ---Parse NUL-delimited `git diff/show --name-status -z` style records.
 ---@param output string
 ---@return table[] records
@@ -143,6 +147,44 @@ function backend.parse_name_status_z(output)
       end
       records[#records + 1] = record
     end
+  end
+  return records
+end
+
+---Parse NUL-delimited `git diff --numstat -z` style records.
+---@param output string
+---@return table<string,table> stats_by_path
+function backend.parse_numstat_z(output)
+  local fields = split_nul(output)
+  local stats = {}
+  local i = 1
+  while i <= #fields do
+    local field = fields[i]
+    i = i + 1
+    if field and field ~= "" then
+      local added_text, deleted_text, path = field:match("^([^\t]*)\t([^\t]*)\t(.*)$")
+      if added_text and deleted_text then
+        if path == "" and fields[i] and fields[i + 1] then
+          -- Rename/copy records are encoded as: "add\tdel\t\0old\0new\0".
+          path = fields[i + 1]
+          i = i + 2
+        end
+        path = normalize_relpath(path)
+        local additions = tonumber(added_text)
+        local deletions = tonumber(deleted_text)
+        if path and additions and deletions then
+          stats[path] = { additions = additions, deletions = deletions }
+        end
+      end
+    end
+  end
+  return stats
+end
+
+local function merge_changed_file_stats(records, stats)
+  for _, record in ipairs(records or {}) do
+    local stat = stats and stats[record_path(record)]
+    if stat then record.stat = stat end
   end
   return records
 end
@@ -357,9 +399,9 @@ function backend.diff_endpoint_for_working_tree(repo_state)
   }
 end
 
-function backend.build_changed_files_args(left, right, opts)
+local function build_diff_range_args(base, left, right, opts)
   opts = opts or {}
-  local args = { "diff", "--name-status", "-z" }
+  local args = base
   if opts.ignore_whitespace then args[#args + 1] = "--ignore-all-space" end
   if right == backend.WORKING_TREE then
     if left and left ~= "" then args[#args + 1] = left end
@@ -374,6 +416,14 @@ function backend.build_changed_files_args(left, right, opts)
   return args
 end
 
+function backend.build_changed_files_args(left, right, opts)
+  return build_diff_range_args({ "diff", "--name-status", "-z" }, left, right, opts)
+end
+
+function backend.build_changed_file_stats_args(left, right, opts)
+  return build_diff_range_args({ "diff", "--numstat", "-z" }, left, right, opts)
+end
+
 function backend.changed_files(repo, left, right, opts, callback)
   opts = opts or {}
   return backend.run_git(repo, backend.build_changed_files_args(left, right, opts), opts, function(result, err)
@@ -381,7 +431,13 @@ function backend.changed_files(repo, left, right, opts, callback)
       if callback then callback(nil, err) end
       return
     end
-    if callback then callback(backend.parse_name_status_z(result.stdout), nil) end
+    local records = backend.parse_name_status_z(result.stdout)
+    backend.run_git(repo, backend.build_changed_file_stats_args(left, right, opts), opts, function(stat_result)
+      if stat_result then
+        merge_changed_file_stats(records, backend.parse_numstat_z(stat_result.stdout))
+      end
+      if callback then callback(records, nil) end
+    end)
   end)
 end
 

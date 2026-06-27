@@ -71,6 +71,21 @@ test.describe("plugins.git.backend", function()
     end)
   end)
 
+  test.describe("parse_numstat_z", function()
+    test.it("parses simple and rename stats by displayed path", function()
+      local stats = backend.parse_numstat_z(table.concat({
+        "2\t44\tsrc/app.lua",
+        "1\t0\t", "old/name.lua", "new/name.lua",
+        "",
+      }, "\0"))
+
+      test.equal(stats["src/app.lua"].additions, 2)
+      test.equal(stats["src/app.lua"].deletions, 44)
+      test.equal(stats["new/name.lua"].additions, 1)
+      test.equal(stats["new/name.lua"].deletions, 0)
+    end)
+  end)
+
   test.describe("parse_status_z", function()
     test.test("parses porcelain status and rename source paths", function()
       local status = backend.parse_status_z(table.concat({
@@ -149,6 +164,11 @@ test.describe("plugins.git.backend", function()
       test.ok(backend._contains_arg(args, "parent"), "missing left revision")
       test.ok(backend._contains_arg(args, "child"), "missing right revision")
       test.equal(args[#args], "src/app.lua")
+
+      local stats = backend.build_changed_file_stats_args("parent", "child", { relpath = "src/app.lua" })
+      test.equal(stats[1], "diff")
+      test.ok(backend._contains_arg(stats, "--numstat"), "missing numstat")
+      test.equal(stats[#stats], "src/app.lua")
 
       local working = backend.build_changed_files_args("HEAD", backend.WORKING_TREE, {})
       test.ok(backend._contains_arg(working, "HEAD"), "missing working tree base")
