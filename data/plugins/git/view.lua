@@ -433,6 +433,15 @@ function GitView:detail_commit_for_tab(tab)
   return commit
 end
 
+local function sync_inactive_pane_line(view, line)
+  if core.active_view == view then return end
+  line = math.max(1, math.min(#view.doc.lines, tonumber(line) or 1))
+  local current_line, current_col = view.doc:get_selection()
+  if current_line ~= line then
+    view.doc:set_selection(line, math.max(1, math.min(current_col or 1, #view.doc.lines[line])))
+  end
+end
+
 function GitView:sync_selection_from_pane()
   local active = core.active_view
   if not (active and active.git_owner_view == self and active.git_pane) then return end
@@ -483,7 +492,7 @@ function GitView:update_pane_docs()
       if tab.loading then lines[#lines + 1] = "Loading more commits..." elseif tab.has_more then lines[#lines + 1] = "Load more commits..." end
     end
     local list_view = self:set_pane_lines("history-list", lines)
-    if core.active_view ~= list_view then list_view.doc:set_selection(math.max(1, math.min(#list_view.doc.lines, tab.selected_commit or 1)), 1) end
+    sync_inactive_pane_line(list_view, tab.selected_commit)
     self:set_pane_lines("details", commit_details_lines(self:detail_commit_for_tab(tab)))
   elseif tab.kind == "commit_diff" then
     local lines = {}
@@ -497,7 +506,7 @@ function GitView:update_pane_docs()
       for _, file in ipairs(tab.changed_files or {}) do lines[#lines + 1] = file_label(file) end
     end
     local list_view = self:set_pane_lines("file-list", lines)
-    if core.active_view ~= list_view then list_view.doc:set_selection(math.max(1, math.min(#list_view.doc.lines, tab.selected_file or 1)), 1) end
+    sync_inactive_pane_line(list_view, tab.selected_file)
   else
     local log_tab = self.model:log_tab()
     local lines = {}
@@ -512,7 +521,7 @@ function GitView:update_pane_docs()
       if log_tab.loading_more then lines[#lines + 1] = "Loading more commits..." elseif log_tab.has_more then lines[#lines + 1] = "Load more commits..." end
     end
     local list_view = self:set_pane_lines("log-list", lines)
-    if core.active_view ~= list_view then list_view.doc:set_selection(math.max(1, math.min(#list_view.doc.lines, log_tab.selected_commit or 1)), 1) end
+    sync_inactive_pane_line(list_view, log_tab.selected_commit)
     self:set_pane_lines("details", commit_details_lines(self:detail_commit_for_tab(log_tab)))
   end
 end

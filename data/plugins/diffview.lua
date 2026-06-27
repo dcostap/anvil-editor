@@ -740,8 +740,27 @@ local function folded_rows_before_line(doc_view, folds, line)
   return rows
 end
 
+local function effective_row_before_line(doc_view, gaps, folds, line)
+  return visual_rows_before_line(doc_view, line)
+    + gap_rows_before_line(gaps, line)
+    - folded_rows_before_line(doc_view, folds, line)
+end
+
 local function effective_visual_line_count(doc_view, gaps, folds)
   return math.max(0, diffview_visual_line_count(doc_view, gaps) - folded_rows_total(doc_view, folds))
+end
+
+local function line_for_effective_row(doc_view, gaps, folds, row)
+  local fallback = #doc_view.doc.lines
+  for line = 1, #doc_view.doc.lines do
+    local count = folded_visual_line_count(doc_view, folds, line)
+    if count > 0 then
+      local start_row = effective_row_before_line(doc_view, gaps, folds, line)
+      if row < start_row + count then return line end
+      fallback = line
+    end
+  end
+  return fallback
 end
 
 local function build_diff_folds(blocks, side, opts, expanded)
@@ -820,6 +839,24 @@ function DiffView:clamp_selection_out_of_folds(doc_view, is_a, line1, col1, line
   line1, col1 = clamp_position_out_of_fold(doc_view, folds, old_line, line1, col1)
   if line2 then line2, col2 = clamp_position_out_of_fold(doc_view, folds, old_line, line2, col2) end
   return line1, col1, line2, col2
+end
+
+function DiffView:sync_caret_from(doc_view, is_a)
+  if self.syncing_diff_caret then return end
+  local other = is_a and self.doc_view_b or self.doc_view_a
+  if not other then return end
+  local source_gaps = is_a and self.a_gaps or self.b_gaps
+  local target_gaps = is_a and self.b_gaps or self.a_gaps
+  local source_folds = is_a and self.diff_folds_a or self.diff_folds_b
+  local target_folds = is_a and self.diff_folds_b or self.diff_folds_a
+  local line, col = doc_view.doc:get_selection()
+  local row = effective_row_before_line(doc_view, source_gaps, source_folds, line)
+  local target_line = line_for_effective_row(other, target_gaps, target_folds, row)
+  local target_col = math.max(1, math.min(col or 1, #(other.doc.lines[target_line] or "")))
+  target_line, target_col = clamp_position_out_of_fold(other, target_folds, other.doc:get_selection(), target_line, target_col)
+  self.syncing_diff_caret = true
+  other.doc:set_selection(target_line, target_col, target_line, target_col)
+  self.syncing_diff_caret = false
 end
 
 function DiffView:get_scrollable_size()
@@ -1085,12 +1122,16 @@ function DiffView:patch_views()
     local orig_set_selection = doc.set_selection
     doc.set_selection = function(self, line1, col1, line2, col2, swap)
       line1, col1, line2, col2 = parent:clamp_selection_out_of_folds(doc_view, is_a, line1, col1, line2, col2)
-      return orig_set_selection(self, line1, col1, line2, col2, swap)
+      local result = orig_set_selection(self, line1, col1, line2, col2, swap)
+      if not parent.syncing_diff_caret then parent:sync_caret_from(doc_view, is_a) end
+      return result
     end
     local orig_set_selections = doc.set_selections
     doc.set_selections = function(self, idx, line1, col1, line2, col2, swap, rm)
       line1, col1, line2, col2 = parent:clamp_selection_out_of_folds(doc_view, is_a, line1, col1, line2, col2)
-      return orig_set_selections(self, idx, line1, col1, line2, col2, swap, rm)
+      local result = orig_set_selections(self, idx, line1, col1, line2, col2, swap, rm)
+      if not parent.syncing_diff_caret then parent:sync_caret_from(doc_view, is_a) end
+      return result
     end
     local orig_set_selection_list = doc.set_selection_list
     doc.set_selection_list = function(self, selections, last_selection, opts)
@@ -1107,7 +1148,9 @@ function DiffView:patch_views()
           selections = mapped
         end
       end
-      return orig_set_selection_list(self, selections, last_selection, opts)
+      local result = orig_set_selection_list(self, selections, last_selection, opts)
+      if not parent.syncing_diff_caret then parent:sync_caret_from(doc_view, is_a) end
+      return result
     end
   end
 
