@@ -797,6 +797,30 @@ function DiffView:expand_fold(fold)
   return true
 end
 
+function DiffView:sync_scroll_from(doc_view, is_a)
+  local other = is_a and self.doc_view_b or self.doc_view_a
+  self.scroll.y, self.scroll.to.y = doc_view.scroll.y, doc_view.scroll.to.y
+  other.scroll.y, other.scroll.to.y = doc_view.scroll.y, doc_view.scroll.to.y
+end
+
+local function clamp_line_out_of_fold(doc_view, folds, old_line, line)
+  local hidden, fold = is_fold_hidden_line(folds, line)
+  if not hidden then return line end
+  if tonumber(line) and tonumber(old_line) and line >= old_line and fold.hidden_end < #doc_view.doc.lines then
+    return fold.hidden_end + 1
+  end
+  return fold.hidden_start
+end
+
+function DiffView:clamp_selection_out_of_folds(doc_view, is_a, line1, col1, line2, col2)
+  local folds = is_a and self.diff_folds_a or self.diff_folds_b
+  if not folds or #folds == 0 then return line1, col1, line2, col2 end
+  local old_line = doc_view.doc:get_selection()
+  line1 = clamp_line_out_of_fold(doc_view, folds, old_line, line1)
+  line2 = line2 and clamp_line_out_of_fold(doc_view, folds, old_line, line2) or line2
+  return line1, col1, line2, col2
+end
+
 function DiffView:get_scrollable_size()
   local a_count = effective_visual_line_count(self.doc_view_a, self.a_gaps, self.diff_folds_a)
   local b_count = effective_visual_line_count(self.doc_view_b, self.b_gaps, self.diff_folds_b)
@@ -1043,15 +1067,29 @@ function DiffView:patch_views()
     local orig = doc_view.scroll_to_line
     doc_view.scroll_to_line = function(self, ...)
       orig(self, ...)
-      parent.scroll.y = self.scroll.y
-      parent.scroll.to.y = self.scroll.y
-      if is_a then
-        parent.doc_view_b.scroll.y = self.scroll.y
-        parent.doc_view_b.scroll.to.y = self.scroll.y
-      else
-        parent.doc_view_a.scroll.y = self.scroll.y
-        parent.doc_view_a.scroll.to.y = self.scroll.y
-      end
+      parent:sync_scroll_from(self, is_a)
+    end
+  end
+
+  local function wrap_scroll_to_make_visible(doc_view, is_a)
+    local orig = doc_view.scroll_to_make_visible
+    doc_view.scroll_to_make_visible = function(self, ...)
+      orig(self, ...)
+      parent:sync_scroll_from(self, is_a)
+    end
+  end
+
+  local function wrap_folded_selection(doc_view, is_a)
+    local doc = doc_view.doc
+    local orig_set_selection = doc.set_selection
+    doc.set_selection = function(self, line1, col1, line2, col2, swap)
+      line1, col1, line2, col2 = parent:clamp_selection_out_of_folds(doc_view, is_a, line1, col1, line2, col2)
+      return orig_set_selection(self, line1, col1, line2, col2, swap)
+    end
+    local orig_set_selections = doc.set_selections
+    doc.set_selections = function(self, idx, line1, col1, line2, col2, swap, rm)
+      line1, col1, line2, col2 = parent:clamp_selection_out_of_folds(doc_view, is_a, line1, col1, line2, col2)
+      return orig_set_selections(self, idx, line1, col1, line2, col2, swap, rm)
     end
   end
 
@@ -1270,6 +1308,8 @@ function DiffView:patch_views()
     wrap_get_visible_line_range(side.view, side.is_a)
     wrap_get_scrollable_size(side.view, side.is_a)
     wrap_scroll_to_line(side.view, side.is_a)
+    wrap_scroll_to_make_visible(side.view, side.is_a)
+    wrap_folded_selection(side.view, side.is_a)
     wrap_draw(side.view, side.is_a)
     wrap_points_of_interest(side.view, side.is_a)
     wrap_doc_raw_insert(side.view)

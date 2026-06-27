@@ -131,7 +131,11 @@ end
 ---Falls back to the Main Panel if active view not found.
 ---@return core.node node Node containing active view or the Main Panel node
 function RootPanel:get_active_node()
-  local node = self.root_node:get_node_for_view(core.active_view)
+  local active = core.active_view
+  local node = self.root_node:get_node_for_view(active)
+  if not node and active and active.git_owner_view then
+    node = self.root_node:get_node_for_view(active.git_owner_view)
+  end
   if not node then node = self:get_main_panel() end
   return node
 end
@@ -155,7 +159,11 @@ end
 ---Use this when adding new views to ensure they go to an editable node.
 ---@return core.node node Unlocked node suitable for adding views
 function RootPanel:get_active_node_default()
-  local node = self.root_node:get_node_for_view(core.active_view)
+  local active = core.active_view
+  local node = self.root_node:get_node_for_view(active)
+  if not node and active and active.git_owner_view then
+    node = self.root_node:get_node_for_view(active.git_owner_view)
+  end
   if not node then node = self:get_main_panel() end
   if node.locked then
     local default_view = self:get_main_panel().views[1]

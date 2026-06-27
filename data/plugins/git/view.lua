@@ -5,10 +5,51 @@ local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
 local style = require "core.style"
+local Doc = require "core.doc"
+local DocView = require "core.docview"
 local View = require "core.view"
 local GitModel = require "plugins.git.model"
 
 local GitView = View:extend()
+
+local function reject_read_only_edit()
+  return false
+end
+
+local function make_pane_doc(name)
+  local doc = Doc(nil, nil, true)
+  doc.git_view_pane_read_only = true
+  doc.git_view_pane_name = name
+  doc.apply_edits = reject_read_only_edit
+  doc.text_input = reject_read_only_edit
+  doc.ime_text_editing = reject_read_only_edit
+  doc.insert = reject_read_only_edit
+  doc.remove = reject_read_only_edit
+  doc.replace = reject_read_only_edit
+  doc.replace_cursor = reject_read_only_edit
+  doc.save = reject_read_only_edit
+  doc.is_dirty = function() return false end
+  doc.get_name = function(self) return self.git_view_pane_name or "Git Pane" end
+  return doc
+end
+
+local function set_doc_lines(doc, lines)
+  local text = table.concat(lines or {}, "\n")
+  if text ~= "" then text = text .. "\n" end
+  if doc.git_view_pane_text == text then return end
+  doc.git_view_pane_text = text
+  doc.lines = {}
+  if text == "" then
+    doc.lines[1] = "\n"
+  else
+    for line in text:gmatch("[^\n]*\n") do doc.lines[#doc.lines + 1] = line end
+  end
+  doc:clear_undo_redo()
+  doc:clean()
+  local current_line = doc:get_selection()
+  local line = math.max(1, math.min(#doc.lines, current_line or 1))
+  doc:set_selection(line, 1, line, 1)
+end
 
 function GitView:new(project, opts)
   GitView.super.new(self)
@@ -31,6 +72,26 @@ end
 
 function GitView:model_tab()
   return self.model:find_tab(self.tab_id) or (self.tab_id == "log" and self.model:log_tab() or nil)
+end
+
+function GitView:pane_view(name)
+  self.pane_views = self.pane_views or {}
+  local view = self.pane_views[name]
+  if not view then
+    view = DocView(make_pane_doc("Git " .. name))
+    view.git_owner_view = self
+    view.git_pane = name
+    view.get_gutter_width = function() return 0 end
+    self.pane_views[name] = view
+  end
+  view.git_owner_view = self
+  return view
+end
+
+function GitView:set_pane_lines(name, lines)
+  local view = self:pane_view(name)
+  set_doc_lines(view.doc, lines)
+  return view
 end
 
 function GitView:activate_model_tab(callback)
@@ -145,6 +206,10 @@ end
 
 function GitView:on_mouse_wheel(y, x)
   self:activate_model_tab(function() core.redraw = true end)
+  local active = core.active_view
+  if active and active.git_owner_view == self and active.git_pane and active.on_mouse_wheel then
+    return active:on_mouse_wheel(y, x) ~= false
+  end
   local tab = self.model:selected_tab()
   if tab and tab.kind == "file_history" then
     if y == 0 then return false end
@@ -174,6 +239,9 @@ end
 
 function GitView:on_mouse_moved(x, y, dx, dy)
   self:activate_model_tab(function() core.redraw = true end)
+  if self.mouse_pane and self.mouse_pane.on_mouse_moved then
+    return self.mouse_pane:on_mouse_moved(x, y, dx, dy)
+  end
   local tab = self.model:selected_tab()
   if tab and tab.kind == "commit_diff" then
     local list_width = math.floor(self.size.x * 0.28)
@@ -188,6 +256,12 @@ end
 
 function GitView:on_mouse_released(button, x, y)
   self:activate_model_tab(function() core.redraw = true end)
+  if self.mouse_pane then
+    local pane = self.mouse_pane
+    self.mouse_pane = nil
+    if pane.on_mouse_released then return pane:on_mouse_released(button, x, y) end
+    return true
+  end
   local tab = self.model:selected_tab()
   if tab and tab.kind == "commit_diff" and tab.diff_view and tab.diff_view.on_mouse_released then
     return tab.diff_view:on_mouse_released(button, x, y)
@@ -195,8 +269,37 @@ function GitView:on_mouse_released(button, x, y)
   return GitView.super.on_mouse_released(self, button, x, y)
 end
 
+function GitView:pane_at_point(x, y)
+  for _, view in pairs(self.pane_views or {}) do
+    if x >= view.position.x and x <= view.position.x + view.size.x
+      and y >= view.position.y and y <= view.position.y + view.size.y
+    then
+      return view
+    end
+  end
+end
+
 function GitView:on_mouse_pressed(button, x, y, clicks)
   self:activate_model_tab(function() core.redraw = true end)
+  self:update_pane_docs()
+  local pane = self:pane_at_point(x, y)
+  if pane then
+    core.set_active_view(pane)
+    if button == "left" and pane.doc and pane.resolve_screen_position then
+      local line, col = pane:resolve_screen_position(x, y)
+      pane.doc:set_selection(line, col, line, col)
+    end
+    self.mouse_pane = pane
+    pane:on_mouse_pressed(button, x, y, clicks)
+    self:sync_selection_from_pane()
+    if clicks and clicks > 1 and pane.git_pane ~= "details" and self.activate_selected then
+      local active_tab = self.model:selected_tab()
+      local diff_tab = self:activate_selected(function() core.redraw = true end)
+      if active_tab.kind ~= "commit_diff" and diff_tab and self.on_model_tab_open then self:on_model_tab_open(diff_tab) end
+    end
+    core.redraw = true
+    return true
+  end
   local selected_tab = self.model:selected_tab()
   local list_width = math.floor(self.size.x * 0.45)
   if selected_tab and selected_tab.kind == "file_history" then
@@ -279,6 +382,136 @@ local function file_label(file)
   local status = file and (file.status or file.kind or file.raw_status or file.xy) or ""
   local path = file and (file.path or file.new_path or file.old_path) or ""
   return string.format("%s  %s", status, path)
+end
+
+local function commit_details_lines(commit)
+  local lines = { "Details" }
+  if not commit then
+    lines[#lines + 1] = "Select a commit"
+    return lines
+  end
+  lines[#lines + 1] = commit.subject or ""
+  lines[#lines + 1] = "Hash: " .. tostring(commit.hash or "")
+  if commit.author_name and commit.author_name ~= "" then lines[#lines + 1] = "Author: " .. commit.author_name end
+  if commit.refs and commit.refs ~= "" then lines[#lines + 1] = "Refs: " .. commit.refs end
+  lines[#lines + 1] = ""
+  lines[#lines + 1] = "Changed files"
+  if commit.changed_files_loading then
+    lines[#lines + 1] = "Loading changed files..."
+  elseif commit.changed_files_error then
+    lines[#lines + 1] = "Git error: " .. tostring(commit.changed_files_error.message or commit.changed_files_error.kind or commit.changed_files_error)
+  elseif #(commit.changed_files or {}) == 0 then
+    lines[#lines + 1] = commit.changed_files_loaded and "No changed files" or "Select a commit to load changed files"
+  else
+    for _, file in ipairs(commit.changed_files or {}) do
+      lines[#lines + 1] = string.format("%s  %s", file.kind or file.status or file.xy or "", file.path or file.new_path or file.old_path or "")
+    end
+  end
+  return lines
+end
+
+function GitView:detail_commit_for_tab(tab)
+  if not tab then return nil end
+  if tab.kind == "file_history" then
+    local commit = tab.commits and tab.commits[tab.selected_commit]
+    if tab.selected_commit_hash and (not commit or commit.hash ~= tab.selected_commit_hash) then return nil end
+    return commit
+  end
+  local log_tab = self.model:log_tab()
+  local commit = log_tab.commits and log_tab.commits[log_tab.selected_commit]
+  if log_tab.selected_commit_hash and (not commit or commit.hash ~= log_tab.selected_commit_hash) then return nil end
+  return commit
+end
+
+function GitView:sync_selection_from_pane()
+  local active = core.active_view
+  if not (active and active.git_owner_view == self and active.git_pane) then return end
+  local line = active.doc and active.doc:get_selection() or 1
+  local tab = self:model_tab()
+  if active.git_pane == "log-list" then
+    local log_tab = self.model:log_tab()
+    if line >= 1 and line <= #(log_tab.commits or {}) and line ~= log_tab.selected_commit then
+      self.model:select_log_index(line, function() core.redraw = true end)
+    end
+  elseif active.git_pane == "history-list" and tab and tab.kind == "file_history" then
+    if line >= 1 and line <= #(tab.commits or {}) and line ~= tab.selected_commit then
+      tab.selected_commit = line
+      tab.selected_commit_hash = tab.commits[line] and tab.commits[line].hash or nil
+      self.model:load_selected_commit_changed_files(function() core.redraw = true end)
+    end
+  elseif active.git_pane == "file-list" and tab and tab.kind == "commit_diff" then
+    if line >= 1 and line <= #(tab.changed_files or {}) and line ~= tab.selected_file then
+      self.model:select_diff_file(tab, line, function() core.redraw = true end)
+    end
+  end
+end
+
+function GitView:activate_selected(callback)
+  self:sync_selection_from_pane()
+  self:activate_model_tab(function() core.redraw = true end)
+  local tab = self.model:selected_tab()
+  if tab.kind == "commit_diff" then
+    self.model:load_selected_diff_file(tab, callback or function() core.redraw = true end)
+    return tab
+  end
+  return self.model:open_selected_commit_diff(callback or function() core.redraw = true end)
+end
+
+function GitView:update_pane_docs()
+  local tab = self:model_tab()
+  if not tab then return end
+  if tab.kind == "file_history" then
+    local lines = {}
+    if tab.loading and #(tab.commits or {}) == 0 then
+      lines[1] = "Loading file history..."
+    elseif tab.error then
+      lines[1] = "Git error: " .. tostring(tab.error.message or tab.error.kind or tab.error)
+    elseif #(tab.commits or {}) == 0 then
+      lines[1] = "No file history"
+    else
+      for _, commit in ipairs(tab.commits or {}) do lines[#lines + 1] = commit_label(commit) end
+      if tab.loading then lines[#lines + 1] = "Loading more commits..." elseif tab.has_more then lines[#lines + 1] = "Load more commits..." end
+    end
+    local list_view = self:set_pane_lines("history-list", lines)
+    if core.active_view ~= list_view then list_view.doc:set_selection(math.max(1, math.min(#list_view.doc.lines, tab.selected_commit or 1)), 1) end
+    self:set_pane_lines("details", commit_details_lines(self:detail_commit_for_tab(tab)))
+  elseif tab.kind == "commit_diff" then
+    local lines = {}
+    if tab.loading then
+      lines[1] = "Loading changed files..."
+    elseif tab.error then
+      lines[1] = "Git error: " .. tostring(tab.error.message or tab.error.kind or tab.error)
+    elseif #(tab.changed_files or {}) == 0 then
+      lines[1] = "No changed files"
+    else
+      for _, file in ipairs(tab.changed_files or {}) do lines[#lines + 1] = file_label(file) end
+    end
+    local list_view = self:set_pane_lines("file-list", lines)
+    if core.active_view ~= list_view then list_view.doc:set_selection(math.max(1, math.min(#list_view.doc.lines, tab.selected_file or 1)), 1) end
+  else
+    local log_tab = self.model:log_tab()
+    local lines = {}
+    if log_tab.loading then
+      lines[1] = "Loading Git log..."
+    elseif log_tab.error then
+      lines[1] = "Git error: " .. tostring(log_tab.error.message or log_tab.error.kind or log_tab.error)
+    elseif #log_tab.commits == 0 then
+      lines[1] = "No commits"
+    else
+      for _, commit in ipairs(log_tab.commits) do lines[#lines + 1] = commit_label(commit) end
+      if log_tab.loading_more then lines[#lines + 1] = "Loading more commits..." elseif log_tab.has_more then lines[#lines + 1] = "Load more commits..." end
+    end
+    local list_view = self:set_pane_lines("log-list", lines)
+    if core.active_view ~= list_view then list_view.doc:set_selection(math.max(1, math.min(#list_view.doc.lines, log_tab.selected_commit or 1)), 1) end
+    self:set_pane_lines("details", commit_details_lines(self:detail_commit_for_tab(log_tab)))
+  end
+end
+
+function GitView:update()
+  self:update_pane_docs()
+  self:sync_selection_from_pane()
+  for _, view in pairs(self.pane_views or {}) do view:update() end
+  GitView.super.update(self)
 end
 
 function GitView:select_relative(delta)
@@ -394,45 +627,19 @@ function GitView:draw_commit_details(commit, x, y, width)
 end
 
 function GitView:draw_log_tab(tab, x, y)
-  if tab.loading then
-    renderer.draw_text(style.font, "Loading Git log...", x, y, style.dim)
-    return
-  end
-  if tab.error then
-    renderer.draw_text(style.font, "Git error: " .. tostring(tab.error.message or tab.error.kind or tab.error), x, y, style.error)
-    return
-  end
-  if #tab.commits == 0 then
-    renderer.draw_text(style.font, "No commits", x, y, style.dim)
-    return
-  end
   local list_width = math.floor(self.size.x * 0.45)
   local detail_x = self.position.x + list_width + style.padding.x
   local list_right = detail_x - style.padding.x
-  local row_height = self:row_height()
-  local first = math.max(1, math.floor(self.scroll.y / row_height) + 1)
-  y = self:commit_list_y() + (first - 1) * row_height - self.scroll.y
-  for i = first, #tab.commits do
-    local commit = tab.commits[i]
-    local color = (i == tab.selected_commit and (not tab.selected_commit_hash or commit.hash == tab.selected_commit_hash)) and style.accent or style.text
-    renderer.draw_text(style.font, commit_label(commit), x, y, color)
-    y = y + row_height
-    if y > self.position.y + self.size.y - style.font:get_height() then break end
-  end
-  if y <= self.position.y + self.size.y - style.font:get_height() then
-    if tab.loading_more then
-      renderer.draw_text(style.font, "Loading more commits...", x, y, style.dim)
-    elseif tab.has_more then
-      renderer.draw_text(style.font, "Load more commits...", x, y, style.dim)
-    end
-  end
+  local top = self:commit_list_y()
+  local list = self:pane_view("log-list")
+  local details = self:pane_view("details")
+  list.position.x, list.position.y = x, top
+  list.size.x, list.size.y = math.max(0, list_width - style.padding.x), self.position.y + self.size.y - top - style.padding.y
+  details.position.x, details.position.y = detail_x + style.padding.x, self.position.y + style.padding.y
+  details.size.x, details.size.y = self.position.x + self.size.x - details.position.x - style.padding.x, self.size.y - style.padding.y * 2
+  list:draw()
   renderer.draw_rect(list_right, self.position.y, 1 * SCALE, self.size.y, style.divider)
-  local detail_commit = tab.commits and tab.commits[tab.selected_commit]
-  if tab.selected_commit_hash and (not detail_commit or detail_commit.hash ~= tab.selected_commit_hash) then
-    detail_commit = nil
-  end
-  self:draw_commit_details(detail_commit, detail_x + style.padding.x, self.position.y + style.padding.y, self.size.x - list_width)
-  self:draw_scrollbar()
+  details:draw()
 end
 
 function GitView:ensure_diff_view(tab)
@@ -499,35 +706,57 @@ end
 
 function GitView:can_focus_next_pane()
   local tab = self:model_tab()
-  return tab and tab.kind == "commit_diff"
-    and not tab.loading_file
-    and not tab.file_error
-    and (tab.left_text ~= nil or tab.right_text ~= nil)
+  if not tab then return false end
+  if tab.kind == "commit_diff" then return true end
+  return tab.kind == "log" or tab.kind == "file_history"
+end
+
+function GitView:focus_pane_view(name)
+  self:update_pane_docs()
+  local view = self:pane_view(name)
+  view.git_owner_view = self
+  return with_tool_window_event_window(self.tool_window, function()
+    core.set_active_view(view)
+    return true
+  end)
 end
 
 function GitView:focus_next_pane()
   local tab = self:activate_model_tab(function() core.redraw = true end) or self:model_tab()
-  if not (tab and tab.kind == "commit_diff") then return false end
-  if tab.loading_file or tab.file_error or (tab.left_text == nil and tab.right_text == nil) then
-    return false
-  end
-  local diff = self:ensure_diff_view(tab)
+  if not tab then return false end
   local active = core.active_view
   if active ~= self and not (active and active.git_owner_view == self) then active = nil end
-  if active == diff.doc_view_a then
-    return self:focus_diff_pane("right")
-  elseif active == diff.doc_view_b then
-    return self:focus_list_pane()
+  if tab.kind == "commit_diff" then
+    local list = self:pane_view("file-list")
+    if tab.loading_file or tab.file_error or (tab.left_text == nil and tab.right_text == nil) then
+      return active == list and false or self:focus_pane_view("file-list")
+    end
+    local diff = self:ensure_diff_view(tab)
+    if active == self then
+      return self:focus_pane_view("file-list")
+    elseif active == list then
+      return self:focus_diff_pane("left")
+    elseif active == diff.doc_view_a then
+      return self:focus_diff_pane("right")
+    elseif active == diff.doc_view_b then
+      return self:focus_pane_view("file-list")
+    end
+    return self:focus_pane_view("file-list")
+  elseif tab.kind == "file_history" then
+    local list, details = self:pane_view("history-list"), self:pane_view("details")
+    return self:focus_pane_view(active == list and "details" or "history-list")
+  else
+    local list, details = self:pane_view("log-list"), self:pane_view("details")
+    return self:focus_pane_view(active == list and "details" or "log-list")
   end
-  return self:focus_diff_pane("left")
 end
 
 function GitView:focus_list_pane()
+  local tab = self:model_tab()
   self.focus_pane = "list"
-  return with_tool_window_event_window(self.tool_window, function()
-    core.set_active_view(self)
-    return true
-  end)
+  if tab and tab.kind == "file_history" then return self:focus_pane_view("history-list") end
+  if tab and tab.kind == "commit_diff" then return self:focus_pane_view("file-list") end
+  return self:focus_pane_view("log-list")
 end
 
 function GitView:history_commits_y()
@@ -549,67 +778,30 @@ function GitView:draw_history_tab(tab, x, y)
   local list_width = math.floor(self.size.x * 0.45)
   local detail_x = self.position.x + list_width + style.padding.x
   local list_right = detail_x - style.padding.x
-  if tab.loading and #tab.commits == 0 then
-    renderer.draw_text(style.font, "Loading file history...", x, y, style.dim)
-  elseif tab.error then
-    renderer.draw_text(style.font, "Git error: " .. tostring(tab.error.message or tab.error.kind or tab.error), x, y, style.error)
-  else
-    renderer.draw_text(style.font, tab.relpath or "", x, y, style.text)
-    y = self:history_commits_y()
-    if #tab.commits == 0 then
-      renderer.draw_text(style.font, "No file history", x, y, style.dim)
-    else
-      self:clamp_history_scroll(tab)
-      local row_height = self:row_height()
-      local first = math.max(1, math.floor((tab.scroll or 0) / row_height) + 1)
-      y = y + (first - 1) * row_height - (tab.scroll or 0)
-      for i = first, #tab.commits do
-        local commit = tab.commits[i]
-        local color = (i == tab.selected_commit and (not tab.selected_commit_hash or commit.hash == tab.selected_commit_hash)) and style.accent or style.text
-        renderer.draw_text(style.font, commit_label(commit), x, y, color)
-        y = y + row_height
-        if y > self.position.y + self.size.y - style.font:get_height() then break end
-      end
-      if tab.loading then
-        renderer.draw_text(style.font, "Loading more commits...", x, y, style.dim)
-      elseif tab.has_more then
-        renderer.draw_text(style.font, "Load more commits...", x, y, style.dim)
-      end
-    end
-  end
+  local top = self:history_commits_y()
+  renderer.draw_text(style.font, tab.relpath or "", x, y, style.text)
+  local list = self:pane_view("history-list")
+  local details = self:pane_view("details")
+  list.position.x, list.position.y = x, top
+  list.size.x, list.size.y = math.max(0, list_width - style.padding.x), self.position.y + self.size.y - top - style.padding.y
+  details.position.x, details.position.y = detail_x + style.padding.x, self.position.y + style.padding.y
+  details.size.x, details.size.y = self.position.x + self.size.x - details.position.x - style.padding.x, self.size.y - style.padding.y * 2
+  list:draw()
   renderer.draw_rect(list_right, self.position.y, 1 * SCALE, self.size.y, style.divider)
-  local detail_commit = tab.commits and tab.commits[tab.selected_commit]
-  if tab.selected_commit_hash and (not detail_commit or detail_commit.hash ~= tab.selected_commit_hash) then
-    detail_commit = nil
-  end
-  self:draw_commit_details(detail_commit, detail_x + style.padding.x, self.position.y + style.padding.y, self.size.x - list_width)
+  details:draw()
 end
 
 function GitView:draw_diff_tab(tab, x, y)
   local list_width = math.floor(self.size.x * 0.28)
   local diff_x = self.position.x + list_width + style.padding.x
   local list_right = diff_x - style.padding.x
-  if tab.loading then
-    renderer.draw_text(style.font, "Loading changed files...", x, y, style.dim)
-  elseif tab.error then
-    renderer.draw_text(style.font, "Git error: " .. tostring(tab.error.message or tab.error.kind or tab.error), x, y, style.error)
-  elseif #(tab.changed_files or {}) == 0 then
-    renderer.draw_text(style.font, "No changed files", x, y, style.dim)
-  else
-    local row_height = self:row_height()
-    local first = math.max(1, math.floor((tab.file_scroll or 0) / row_height) + 1)
-    y = y + (first - 1) * row_height - (tab.file_scroll or 0)
-    for i = first, #tab.changed_files do
-      local file = tab.changed_files[i]
-      local color = i == tab.selected_file and style.accent or style.text
-      renderer.draw_text(style.font, file_label(file), x, y, color)
-      y = y + row_height
-      if y > self.position.y + self.size.y - style.font:get_height() then break end
-    end
-  end
+  local diff_y = self:commit_list_y()
+  local list = self:pane_view("file-list")
+  list.position.x, list.position.y = x, diff_y
+  list.size.x, list.size.y = math.max(0, list_width - style.padding.x), self.position.y + self.size.y - diff_y - style.padding.y
+  list:draw()
   renderer.draw_rect(list_right, self.position.y, 1 * SCALE, self.size.y, style.divider)
 
-  local diff_y = self:commit_list_y()
   local diff_w = self.position.x + self.size.x - diff_x - style.padding.x
   local diff_h = self.position.y + self.size.y - diff_y - style.padding.y
   if tab.loading_file then

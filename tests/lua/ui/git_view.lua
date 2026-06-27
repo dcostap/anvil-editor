@@ -246,7 +246,8 @@ test.describe("Git View command", function()
     git_view.sync_tab_views(tw, false)
     test.equal(core.active_view.git_owner_view, tab_view)
     test.equal(command.perform("git:focus-list-pane"), true)
-    test.equal(core.active_view, tab_view)
+    test.equal(core.active_view.git_owner_view, tab_view)
+    test.equal(core.active_view.git_pane, "file-list")
   end)
 
   test.it("focused Git diff DocView treats the tool window as its focused window", function(context)
@@ -282,11 +283,15 @@ test.describe("Git View command", function()
     system.window_has_focus = original_window_has_focus
   end)
 
-  test.test("pane focus cycle is inactive on single-pane Git tabs", function(context)
+  test.test("pane focus cycle enters Log list and details DocViews", function(context)
     local tw, view = open_fake_git_view(context.project)
     core.active_view = view
 
-    test.equal(command.perform("git:focus-next-pane"), false)
+    test.equal(command.perform("git:focus-next-pane"), true)
+    test.equal(core.active_view.git_owner_view, view)
+    test.equal(core.active_view.git_pane, "log-list")
+    test.equal(command.perform("git:focus-next-pane"), true)
+    test.equal(core.active_view.git_pane, "details")
   end)
 
   test.it("pane focus cycles through Git diff list and both text panes", function(context)
@@ -309,6 +314,8 @@ test.describe("Git View command", function()
     core.active_view = tab_view
 
     test.equal(command.perform("sidepanel:toggle-focus"), true)
+    test.equal(core.active_view.git_pane, "file-list")
+    test.equal(command.perform("sidepanel:toggle-focus"), true)
     local diff = tab.diff_view
     test.equal(core.active_view, diff.doc_view_a)
     diff.doc_view_a.get_points_of_interest = function()
@@ -322,7 +329,7 @@ test.describe("Git View command", function()
     test.equal(command.perform("sidepanel:toggle-focus"), true)
     test.equal(core.active_view, diff.doc_view_b)
     test.equal(command.perform("sidepanel:toggle-focus"), true)
-    test.equal(core.active_view, tab_view)
+    test.equal(core.active_view.git_pane, "file-list")
 
     test.equal(command.perform("sidepanel:toggle-focus"), true)
     test.equal(core.active_view, diff.doc_view_a)

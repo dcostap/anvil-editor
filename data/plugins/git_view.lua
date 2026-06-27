@@ -525,19 +525,6 @@ end, {
     if view and view.select_relative then view:select_relative(-1) end
   end,
 
-  ["git:activate-selected-row"] = function(view)
-    if not view then return end
-    if view.activate_model_tab then view:activate_model_tab(function() core.redraw = true end) end
-    local tab = view.model:selected_tab()
-    if tab.kind == "commit_diff" then
-      view.model:load_selected_diff_file(tab, function() core.redraw = true end)
-    else
-      local diff_tab, err = view.model:open_selected_commit_diff(function() core.redraw = true end)
-      if diff_tab then git_view.ensure_tab_view(view.tool_window, diff_tab, true) end
-      if not diff_tab and err then core.log_quiet("Git View: activate selected row skipped: %s", err.message or err.kind) end
-    end
-  end,
-
   ["git:focus-diff-pane"] = function(view)
     if view and view.focus_diff_pane then view:focus_diff_pane() end
   end,
@@ -598,6 +585,13 @@ command.add(function()
 end, {
   ["git:focus-list-pane"] = function(view)
     if view and view.focus_list_pane then view:focus_list_pane() end
+  end,
+  ["git:activate-selected-row"] = function(view)
+    if not view then return end
+    local active_tab = view.model:selected_tab()
+    local diff_tab, err = view:activate_selected(function() core.redraw = true end)
+    if active_tab.kind ~= "commit_diff" and diff_tab then git_view.ensure_tab_view(view.tool_window, diff_tab, true) end
+    if not diff_tab and err then core.log_quiet("Git View: activate selected row skipped: %s", err.message or err.kind) end
   end,
   ["git:close-selected-tab"] = close_git_view_tab,
 })

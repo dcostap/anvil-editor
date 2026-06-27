@@ -86,6 +86,40 @@ test.describe("DiffView batch behavior", function()
     test.ok(#view.diff_folds_a > 0)
   end)
 
+  test.it("skips caret and scroll synchronization over collapsed regions", function(context)
+    local old_context = config.plugins.diffview.fold_context_lines
+    local old_min = config.plugins.diffview.fold_min_lines
+    config.plugins.diffview.fold_context_lines = 1
+    config.plugins.diffview.fold_min_lines = 3
+    context.restore_diff_folding_config = function()
+      config.plugins.diffview.fold_context_lines = old_context
+      config.plugins.diffview.fold_min_lines = old_min
+    end
+
+    local left, right = {}, {}
+    for i = 1, 14 do left[i], right[i] = "same " .. i, "same " .. i end
+    left[7], right[7] = "old", "new"
+    local view = track(context, "diffviews", diffview.string_to_string(
+      table.concat(left, "\n"),
+      table.concat(right, "\n"),
+      "left",
+      "right",
+      true
+    ))
+    wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
+
+    local fold = view.diff_folds_a[1]
+    test.not_nil(fold)
+    view.doc_view_a.doc:set_selection(fold.hidden_start + 1, 1)
+    local line = view.doc_view_a.doc:get_selection()
+    test.ok(line == fold.hidden_start or line == fold.hidden_end + 1)
+
+    view.doc_view_a.position.y, view.doc_view_a.size.y = 0, 80
+    view.doc_view_b.position.y, view.doc_view_b.size.y = 0, 80
+    view.doc_view_a:scroll_to_make_visible(7, 1, true)
+    test.equal(view.doc_view_b.scroll.to.y, view.doc_view_a.scroll.to.y)
+  end)
+
   test.it("keeps folded panes synchronized around insert-only hunks", function(context)
     local old_context = config.plugins.diffview.fold_context_lines
     local old_min = config.plugins.diffview.fold_min_lines
