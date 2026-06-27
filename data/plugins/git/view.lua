@@ -163,6 +163,7 @@ function GitView:set_refresh_pending(callback)
 end
 
 function GitView:get_focus_view()
+  self:update_pane_docs()
   local active = core.active_view
   if active and active.git_owner_view == self then return active end
   if self.focused_pane_name and self.pane_views and self.pane_views[self.focused_pane_name] then
@@ -172,7 +173,7 @@ function GitView:get_focus_view()
   if self.focus_pane == "diff" and tab and tab.kind == "commit_diff" then
     if tab.loading_file or tab.file_error or (tab.left_text == nil and tab.right_text == nil) then
       self.focused_diff_doc_view = nil
-      return self
+      return self:pane_view("file-list")
     end
     local diff = self:ensure_diff_view(tab)
     if core.active_view and (core.active_view == diff.doc_view_a or core.active_view == diff.doc_view_b) then
@@ -182,9 +183,11 @@ function GitView:get_focus_view()
       return self.focused_diff_doc_view
     end
     self.focused_diff_doc_view = nil
-    return diff and diff.get_focus_view and diff:get_focus_view() or self
+    return diff and diff.get_focus_view and diff:get_focus_view() or self:pane_view("file-list")
   end
-  return self
+  if tab and tab.kind == "file_history" then return self:pane_view("history-list") end
+  if tab and tab.kind == "commit_diff" then return self:pane_view("file-list") end
+  return self:pane_view("log-list")
 end
 
 local function active_leaf_view(node)
@@ -713,6 +716,9 @@ function GitView:select_relative(delta)
     if #tab.commits == 0 then return nil end
     local index = common.clamp((tab.selected_commit or 1) + delta, 1, #tab.commits)
     local commit = self.model:select_log_index(index, function() core.redraw = true end)
+    self:update_pane_docs()
+    local list = self:pane_view("log-list")
+    list.doc:set_selection(index, 1, index, 1)
     local row_y = (index - 1) * self:row_height()
     local visible = self.size.y - (self:commit_list_y() - self.position.y) - style.padding.y
     self.scroll.to.y = common.clamp(self.scroll.to.y, math.max(0, row_y - visible + self:row_height()), row_y)
@@ -725,6 +731,9 @@ function GitView:select_relative(delta)
     tab.selected_commit = index
     tab.selected_commit_hash = tab.commits[index] and tab.commits[index].hash or nil
     self.model:load_selected_commit_changed_files(function() core.redraw = true end)
+    self:update_pane_docs()
+    local list = self:pane_view("history-list")
+    list.doc:set_selection(index, 1, index, 1)
     local row_y = (index - 1) * self:row_height()
     local visible = self:history_visible_height()
     tab.scroll = common.clamp(tab.scroll or 0, math.max(0, row_y - visible + self:row_height()), row_y)
@@ -736,7 +745,7 @@ function GitView:select_relative(delta)
     self:update_pane_docs()
     local list = self:pane_view("file-list")
     local line = list.git_file_index_to_line and list.git_file_index_to_line[tab.selected_file] or tab.selected_file or 1
-    if core.active_view == list then list.doc:set_selection(line, 1, line, 1) end
+    list.doc:set_selection(line, 1, line, 1)
     local row_y = (line - 1) * self:row_height()
     local visible = self.size.y - (self:commit_list_y() - self.position.y) - style.padding.y
     tab.file_scroll = common.clamp(tab.file_scroll or 0, math.max(0, row_y - visible + self:row_height()), row_y)

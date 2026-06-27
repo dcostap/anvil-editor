@@ -108,6 +108,12 @@ test.describe("Git View command", function()
     test.not_nil(first.git_view)
   end)
 
+  test.test("opening a Git Main Tab focuses the visible list DocView", function(context)
+    local tw, view = open_fake_git_view(context.project)
+    test.equal(core.active_view.git_owner_view, view)
+    test.equal(core.active_view.git_pane, "log-list")
+  end)
+
   test.test("focus gained restores Git Log pane focus from the shell view", function(context)
     local tw, view = open_fake_git_view(context.project)
     core.active_view = view
@@ -305,7 +311,7 @@ test.describe("Git View command", function()
     test.equal(core.active_view.git_pane, "file-list")
   end)
 
-  test.it("focused Git diff DocView treats the Git Main Tab window as its focused window", function(context)
+  test.it("focused Git diff DocView becomes the active Git pane", function(context)
     local tw, view = open_fake_git_view(context.project)
     local tab = {
       id = "diff-caret",
@@ -328,14 +334,8 @@ test.describe("Git View command", function()
     test.equal(command.perform("git:focus-diff-pane"), true)
     local diff = tab.diff_view
     local doc_view = diff.doc_view_a
-    local original_window_has_focus = system.window_has_focus
-    system.window_has_focus = function(window) return window == tw.window end
-    core.active_window = tw.window
-    core.active_view = doc_view
-    test.equal(doc_view:active_window_has_focus(), true)
-    core.active_window = core.window
-    test.equal(doc_view:active_window_has_focus(), false)
-    system.window_has_focus = original_window_has_focus
+    test.equal(core.active_view, doc_view)
+    test.equal(core.active_view.git_owner_view, tab_view)
   end)
 
   test.test("pane focus cycle enters Log list and details DocViews", function(context)
@@ -440,6 +440,8 @@ test.describe("Git View command", function()
 
     test.equal(command.perform("git:select-next-row"), true)
     test.equal(view.model:selected_commit().hash, "b")
+    local list = view:pane_view("log-list")
+    test.equal(list.doc:get_selection(), 2)
     test.equal(command.perform("git:activate-selected-row"), true)
     test.equal(view.model:selected_tab().kind, "commit_diff")
     test.equal(#tw.root:get_active_node_default().views, 2)
@@ -452,6 +454,7 @@ test.describe("Git View command", function()
     local tw, view = open_fake_git_view(context.project)
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 800, 120
+    core.active_view = view
     view.model:log_tab().commits = {}
     for i = 1, 20 do
       view.model:log_tab().commits[i] = { hash = tostring(i), short_hash = tostring(i), subject = "Commit " .. i }

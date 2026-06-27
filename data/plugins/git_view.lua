@@ -568,8 +568,8 @@ command.add(nil, {
 })
 
 command.add(function()
-  local view = core.active_view
-  if view and view.model and view.model.log_tab then return true, view end
+  local view = focused_git_view()
+  if view then return true, view end
   return false
 end, {
   ["git:select-next-row"] = function(view)
@@ -665,8 +665,6 @@ end, {
 
 keymap.add({
   ["ctrl+k"] = "git:open-view",
-  ["up"] = "git:select-previous-row",
-  ["down"] = "git:select-next-row",
   ["return"] = "git:activate-selected-row",
   ["alt+r"] = "git:activate-selected-row",
   ["alt+shift+`"] = "git:focus-diff-pane",

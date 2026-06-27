@@ -887,10 +887,27 @@ end
 function M.focus_next_surface_target_or_sidepanel()
   local surface = active_main_surface_focus_owner()
   if main_surface_can_cycle_focus(surface) then
-    if M.visible then M.hide(false) end
+    if M.visible then
+      M.hide(false)
+      core.set_active_view(surface)
+    end
     core.log_quiet("Main surface focus: cycling Surface Focus Target for %s", surface.get_name and surface:get_name() or tostring(surface))
     return surface:focus_next_pane()
   end
+
+  if M.file_view and M.contains_view(M.file_view) and active_main_surface_allows_side_editor() then
+    if M.visible then M.hide(false) end
+    M.side_editor_slot_visible = true
+    M.set_side_view(M.file_view, false)
+    if side_focus_owner(core.active_view) == M.file_view then
+      M.focus_main(false)
+    else
+      core.set_active_view(M.restorable_side_focus_view(M.file_view) or M.file_view)
+    end
+    core.log_quiet("Main surface focus: cycled between Editing Surface and Side Editor Slot")
+    return true
+  end
+
   return M.toggle_focus()
 end
 

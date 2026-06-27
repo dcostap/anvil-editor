@@ -188,6 +188,29 @@ test.describe("sidepanel focus", function()
     assert_active_view(main_view, "expected main Editor after toggling from side Editor")
   end)
 
+  test.it("surface focus command alternates Editing Surface and Side Editor Slot without turning it into Side Panel", function(context)
+    local main_view, side_view = setup_main_and_side(context)
+    core.set_active_view(main_view)
+
+    test.ok(command.perform("surface:focus-next-target-or-sidepanel"))
+    test.equal(sidepanel.visible, false)
+    test.equal(sidepanel.side_editor_slot_visible, true)
+    test.equal(sidepanel.active_side_view(), side_view)
+    assert_active_view(side_view, "expected surface focus command to enter Side Editor Slot")
+
+    test.ok(command.perform("surface:focus-next-target-or-sidepanel"))
+    test.equal(sidepanel.visible, false)
+    test.equal(sidepanel.side_editor_slot_visible, true)
+    test.equal(sidepanel.active_side_view(), side_view)
+    assert_active_view(main_view, "expected surface focus command to return to main Editor")
+
+    test.ok(command.perform("surface:focus-next-target-or-sidepanel"))
+    test.equal(sidepanel.visible, false)
+    test.equal(sidepanel.side_editor_slot_visible, true)
+    test.equal(sidepanel.active_side_view(), side_view)
+    assert_active_view(side_view, "expected repeated surface focus command to keep Side Editor Slot drawable")
+  end)
+
   test.it("deactivates a side Editor prompt bar when toggling focus back to main", function(context)
     local main_view, side_view = setup_main_and_side(context)
 
