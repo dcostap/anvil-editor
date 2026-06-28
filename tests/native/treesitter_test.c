@@ -155,6 +155,10 @@ static const AnvilTSLanguage *checked_cpp_registry_language(void) {
   return checked_registry_language("cpp");
 }
 
+static const AnvilTSLanguage *checked_odin_registry_language(void) {
+  return checked_registry_language("odin");
+}
+
 static AnvilTSSnapshot *new_snapshot_from_single_line(const char *text) {
   const char *lines[] = { text };
   uint32_t lengths[] = { (uint32_t) strlen(text) };
@@ -185,7 +189,7 @@ static bool wait_poll_until_done(
 }
 
 static int test_grammar_load(void) {
-  CHECK(anvil_ts_language_count() >= 2);
+  CHECK(anvil_ts_language_count() >= 3);
   const AnvilTSLanguage *language = checked_c_registry_language();
   CHECK(language != NULL);
   CHECK_STREQ(language->id, "c");
@@ -215,6 +219,20 @@ static int test_grammar_load(void) {
   CHECK(ts_language_abi_version(ts_language) <= TREE_SITTER_LANGUAGE_VERSION);
   CHECK(ts_language_abi_version(ts_language) == 14);
   CHECK_STREQ(language->semantic_version, "0.23.4");
+  parser = ts_parser_new();
+  CHECK(parser != NULL);
+  CHECK(ts_parser_set_language(parser, ts_language));
+  ts_parser_delete(parser);
+
+  language = checked_odin_registry_language();
+  CHECK(language != NULL);
+  CHECK_STREQ(language->id, "odin");
+  CHECK_STREQ(language->semantic_version, "1.3.0");
+  ts_language = anvil_ts_language_ptr(language);
+  CHECK(ts_language != NULL);
+  CHECK(ts_language_abi_version(ts_language) >= TREE_SITTER_MIN_COMPATIBLE_LANGUAGE_VERSION);
+  CHECK(ts_language_abi_version(ts_language) <= TREE_SITTER_LANGUAGE_VERSION);
+  CHECK(ts_language_abi_version(ts_language) == 14);
   parser = ts_parser_new();
   CHECK(parser != NULL);
   CHECK(ts_parser_set_language(parser, ts_language));
@@ -251,6 +269,25 @@ static int test_simple_cpp_parse(void) {
   CHECK(tree != NULL);
   TSNode root = ts_tree_root_node(tree);
   CHECK_STREQ(ts_node_type(root), "translation_unit");
+  CHECK(!ts_node_has_error(root));
+  CHECK(ts_node_start_byte(root) == 0);
+  CHECK(ts_node_end_byte(root) == strlen(source));
+
+  ts_tree_delete(tree);
+  ts_parser_delete(parser);
+  return 0;
+}
+
+static int test_simple_odin_parse(void) {
+  const char *source = "package demo\n\nmain :: proc() {\n  value := 42\n  return\n}\n";
+  TSParser *parser = ts_parser_new();
+  CHECK(parser != NULL);
+  CHECK(ts_parser_set_language(parser, anvil_ts_language_ptr(checked_odin_registry_language())));
+
+  TSTree *tree = ts_parser_parse_string(parser, NULL, source, (uint32_t) strlen(source));
+  CHECK(tree != NULL);
+  TSNode root = ts_tree_root_node(tree);
+  CHECK_STREQ(ts_node_type(root), "source_file");
   CHECK(!ts_node_has_error(root));
   CHECK(ts_node_start_byte(root) == 0);
   CHECK(ts_node_end_byte(root) == strlen(source));
@@ -703,6 +740,7 @@ int main(void) {
   result |= test_grammar_load();
   result |= test_simple_c_parse();
   result |= test_simple_cpp_parse();
+  result |= test_simple_odin_parse();
   result |= test_simple_query();
   result |= test_cpp_query();
   result |= test_offset_conversion();

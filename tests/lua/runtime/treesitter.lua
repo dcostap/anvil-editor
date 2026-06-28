@@ -100,6 +100,13 @@ local function cpp_doc(text, filename)
   return doc
 end
 
+local function odin_doc(text, filename)
+  local doc = Doc()
+  set_text(doc, text or "package demo\n\nmain :: proc() {\n  value := 42\n}\n")
+  doc:set_filename(filename or "example.odin", filename or "example.odin")
+  return doc
+end
+
 local function write_cpp_repro_file(filename)
   local fp = assert(io.open(filename, "wb"))
   fp:write((cpp_repro_text:gsub("\n", "\r\n")))
@@ -125,6 +132,15 @@ test.describe("core.treesitter phase 3 document integration", function()
     test.ok(config.query_sources.outline)
     test.ok(config.query_sources.locals)
     test.ok(native.has_language("cpp"))
+
+    config = registry.get("example.odin", "")
+    test.ok(config)
+    test.equal(config.id, "odin")
+    test.equal(config.grammar, "odin")
+    test.ok(config.query_sources.highlights)
+    test.ok(config.query_sources.outline)
+    test.ok(config.query_sources.locals)
+    test.ok(native.has_language("odin"))
   end)
 
   test.it("Tree-sitter registers as a language intelligence provider", function()
@@ -167,6 +183,12 @@ test.describe("core.treesitter phase 3 document integration", function()
     test.equal(doc.treesitter.language_id, "cpp")
     test.ok(doc.treesitter.native)
     doc:on_close()
+
+    doc = odin_doc()
+    test.ok(doc.treesitter)
+    test.equal(doc.treesitter.language_id, "odin")
+    test.ok(doc.treesitter.native)
+    doc:on_close()
   end)
 
   test.it("unsupported file does not attach", function()
@@ -195,6 +217,31 @@ test.describe("core.treesitter phase 3 document integration", function()
     test.ok(wait_ready(doc))
     test.equal(doc.treesitter.status, "ready")
     test.equal(doc.treesitter.tree_generation, doc.treesitter.generation)
+    doc:on_close()
+  end)
+
+  test.it("Odin highlighting and outline use bundled Tree-sitter queries", function()
+    local doc = odin_doc([[package demo
+
+Point :: struct {
+  x: int,
+  y: int,
+}
+
+main :: proc() {
+  value := 42
+  return
+}
+]])
+    test.ok(wait_ready(doc))
+    local tokens = ts_highlight.line_tokens(doc, 8)
+    test.equal(token_type_for_text(tokens, "main"), "function")
+    test.equal(token_type_for_text(tokens, "proc"), "keyword.function")
+
+    local symbols = treesitter.get_document_outline(doc)
+    test.ok(find_symbol(symbols, "demo", "module"))
+    test.ok(find_symbol(symbols, "Point", "struct"))
+    test.ok(find_symbol(symbols, "main", "function"))
     doc:on_close()
   end)
 

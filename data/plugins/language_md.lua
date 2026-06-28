@@ -129,6 +129,7 @@ syntax.add {
     { pattern = { "```lobster", "```" },    type = "string", syntax = ".lobster" },
     { pattern = { "```liquid", "```" },     type = "string", syntax = ".liquid" },
     { pattern = { "```nix", "```" },        type = "string", syntax = ".nix" },
+    { pattern = { "```odin", "```" },       type = "string", syntax = ".odin" },
     { pattern = { "```", "```" },           type = "string" },
     { pattern = { "``", "``" },             type = "string" },
     { pattern = { "%f[\\`]%`[%S]", "`" },   type = "string" },

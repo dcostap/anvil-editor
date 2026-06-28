@@ -4,10 +4,12 @@
 
 const TSLanguage *tree_sitter_c(void);
 const TSLanguage *tree_sitter_cpp(void);
+const TSLanguage *tree_sitter_odin(void);
 
 static const AnvilTSLanguage anvil_ts_languages[] = {
   { "c", "0.24.2", tree_sitter_c },
   { "cpp", "0.23.4", tree_sitter_cpp },
+  { "odin", "1.3.0", tree_sitter_odin },
 };
 
 size_t anvil_ts_language_count(void) {

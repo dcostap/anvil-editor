@@ -1,0 +1,7 @@
+[wrap-git]
+url = https://github.com/tree-sitter-grammars/tree-sitter-odin.git
+revision = d2ca8efb4487e156a60d5bd6db2598b872629403
+patch_directory = tree-sitter-odin
+
+[provide]
+tree-sitter-odin = tree_sitter_odin_dep

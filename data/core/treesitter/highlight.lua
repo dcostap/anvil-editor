@@ -9,12 +9,25 @@ local DEFAULT_QUERY_TIMEOUT_MS = 8
 local MAX_FAILURES = 3
 
 local capture_aliases = {
+  attribute = "annotation",
+  boolean = "constant.builtin",
+  character = "string",
+  conditional = "keyword",
   delimiter = "punctuation.delimiter",
   escape = "string.escape",
+  field = "variable.field",
+  float = "number",
+  include = "keyword",
   label = "function.label",
   namespace = "type.namespace",
+  parameter = "variable.parameter",
+  preproc = "keyword",
   property = "variable.property",
+  ["repeat"] = "keyword",
+  spell = "comment",
+  storageclass = "keyword",
   ["punctuation.bracket"] = "punctuation.bracket",
+  ["punctuation.delimiter"] = "punctuation.delimiter",
 }
 
 local function log_quiet(...)
