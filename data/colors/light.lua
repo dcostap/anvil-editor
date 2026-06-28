@@ -120,7 +120,7 @@ style.fuzzy_searcher_match_background = c("fcd47e")
 style.selectionhighlight = c(C.identifier_under_caret_bg)
 style.indent_guide = c("ebecf0")
 style.indent_guide_active = c("aeb3c2")
-style.whitespace = { common.color "rgba(0, 0, 0, 0.32)" }
+style.whitespace = { common.color "rgba(0, 0, 0, 0.18)" }
 style.whitespace_trailing = { common.color "rgba(219, 59, 75, 0.55)" }
 style.transparent = { common.color "#00000000" }
 

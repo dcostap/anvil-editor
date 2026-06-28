@@ -15,10 +15,10 @@ local drawwhitespace = {
 
   show_middle_min = 1,
 
-  color = style.whitespace,
-  leading_color = style.whitespace,
+  color = nil,
+  leading_color = nil,
   middle_color = nil,
-  trailing_color = style.whitespace_trailing,
+  trailing_color = nil,
 
   substitutions = {
     {
@@ -39,10 +39,15 @@ local drawwhitespace = {
 
 
 local function get_option(substitution, option)
-  if substitution[option] == nil then
-    return drawwhitespace[option]
+  local value = substitution[option]
+  if value == nil then value = drawwhitespace[option] end
+  if value ~= nil then return value end
+  if option == "color" or option == "leading_color" then
+    return style.whitespace
   end
-  return substitution[option]
+  if option == "trailing_color" then
+    return style.whitespace_trailing
+  end
 end
 
 local update = DocView.update
