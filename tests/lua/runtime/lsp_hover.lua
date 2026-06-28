@@ -78,7 +78,18 @@ local function lsp_range(sl, sc, el, ec)
   }
 end
 
-local function saw_log_since(start_index, text)
+local function saw_log_since(anchor, text)
+  local start_index = 0
+  if type(anchor) == "number" then
+    start_index = anchor
+  elseif anchor then
+    for i = #core.log_items, 1, -1 do
+      if core.log_items[i] == anchor then
+        start_index = i
+        break
+      end
+    end
+  end
   for i = start_index + 1, #core.log_items do
     if core.log_items[i].text:find(text, 1, true) then return true end
   end
@@ -149,7 +160,7 @@ test.describe("core.lsp.hover", function()
     local view = DocView(doc)
     core.active_view = view
     doc:set_selection(1, 3)
-    local log_start = #core.log_items
+    local log_start = core.log_items[#core.log_items]
 
     test.ok(command.perform("lsp:hover-current-position", view))
     test.equal(#client.requests, 1)
