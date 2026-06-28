@@ -39,7 +39,7 @@ test.describe("Fuzzy Searcher recent files", function()
     return path
   end
 
-  test.it("skips the current file and keeps matching recents above general matches", function(context)
+  test.it("skips the current file only from recents and keeps matching recents above general matches", function(context)
     local current = make_file(context, "fuzzy-current-needle.lua")
     local recent_newer = make_file(context, "fuzzy-recent-newer-needle.lua")
     local recent_older = make_file(context, "fuzzy-recent-older-needle.lua")
@@ -64,11 +64,14 @@ test.describe("Fuzzy Searcher recent files", function()
     for _, row in ipairs(rows) do
       if row.file then
         local name = basename(row.file)
-        test.not_ok(name == basename(current), "current file should be skipped")
+        if name == basename(current) then
+          test.not_ok(row.recent, "current file should not be shown as a recent file")
+        end
         test.not_ok(seen[name], "duplicate file result: " .. row.file)
         seen[name] = true
       end
     end
+    test.ok(seen[basename(current)], "expected current file to remain in the general results")
     test.ok(seen[basename(general)], "expected general match below recents")
   end)
 end)

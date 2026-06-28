@@ -800,8 +800,6 @@ local line_exists
 
 local function collect_recent_file_matches(query, line, skip_path)
   local matches, skip_keys = {}, {}
-  local current_key = skip_path and common.path_compare_key(skip_path) or nil
-  if current_key then skip_keys[current_key] = true end
   local empty_query = trim_query(query) == ""
 
   for _, item in ipairs(get_recent_files(skip_path)) do
