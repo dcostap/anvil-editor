@@ -1349,6 +1349,13 @@ function core.set_active_view(view)
     end
     core.last_active_view = old_active_view
     core.active_view = view
+    if core.blink_reset then
+      core.blink_reset()
+    else
+      core.blink_start = system.get_time()
+      core.blink_timer = core.blink_start
+    end
+    core.log_quiet("Focus diagnostics: reset caret blink on active view change active=%s", tostring(view))
     if view.extends and view:extends(DocView) and view.doc and view.become_selection_mirror_owner then
       view:become_selection_mirror_owner()
     end
@@ -1780,6 +1787,8 @@ function core.on_event(type, ...)
     else
       activate_for_main_window(core.active_view)
     end
+    core.blink_reset()
+    core.log_quiet("Focus diagnostics: reset caret blink on focusgained")
     core.request_window_reactivation_repaint("focusgained")
   elseif type == "focuslost" then
     core.log_quiet(
@@ -3046,6 +3055,8 @@ end
 
 function core.blink_reset()
   core.blink_start = system.get_time()
+  core.blink_timer = core.blink_start
+  core.redraw = true
 end
 
 
