@@ -1296,18 +1296,47 @@ function core.reload_absolute_module(filename)
 end
 
 
-function core.set_visited(filename)
-  for i = 1, #core.visited_files do
-    if common.path_equals(core.visited_files[i], filename) then
-      table.remove(core.visited_files, i)
-      break
+local function normalize_visited_filename(filename)
+  if type(filename) ~= "string" or filename == "" then return nil end
+  local normalized = common.normalize_path(filename)
+  if not normalized or normalized == "" then return nil end
+  if not common.is_absolute_path(normalized) then
+    normalized = system.absolute_path(normalized)
+    if not normalized or normalized == "" then return nil end
+    normalized = common.normalize_path(normalized)
+  end
+  return normalized
+end
+
+function core.prune_visited_files()
+  local max_files = math.max(0, tonumber(config.max_visited_files) or 0)
+  local pruned, seen = {}, {}
+  for _, filename in ipairs(core.visited_files or {}) do
+    local normalized = normalize_visited_filename(filename)
+    local key = normalized and common.path_compare_key(normalized)
+    if key and not seen[key] then
+      pruned[#pruned + 1] = normalized
+      seen[key] = true
+      if #pruned >= max_files then break end
     end
   end
-  table.insert(core.visited_files, 1, filename)
-  if #core.visited_files > config.max_visited_files then
-    local remove = #core.visited_files - config.max_visited_files
-    common.splice(core.visited_files, config.max_visited_files, remove)
+  core.visited_files = pruned
+  return pruned
+end
+
+function core.set_visited(filename)
+  filename = normalize_visited_filename(filename)
+  if not filename then return end
+  local key = common.path_compare_key(filename)
+  local visited = core.visited_files or {}
+  for i = #visited, 1, -1 do
+    if common.path_compare_key(visited[i]) == key then
+      table.remove(visited, i)
+    end
   end
+  table.insert(visited, 1, filename)
+  core.visited_files = visited
+  core.prune_visited_files()
 end
 
 

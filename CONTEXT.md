@@ -24,6 +24,10 @@ _Avoid_: Primary project, main project
 The per-project editor state that restores open views, tabs, splits, scroll positions, selection state, extra project directories, and recently visited files.
 _Avoid_: Session, app state
 
+**Recent File**:
+A file in Anvil's navigation history, ordered by last visit for returning to previously viewed files.
+_Avoid_: recent tab, file tab history
+
 **Document / Doc**:
 The in-memory editable text for a file or untitled document.
 _Avoid_: Buffer

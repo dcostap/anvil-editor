@@ -310,10 +310,9 @@ end
 function common.fuzzy_match_with_recents(haystack, recents, needle)
   if needle == "" then
     local recents_ext = {}
-    for i = 2, #recents do
+    for i = 1, #recents do
       table.insert(recents_ext, recents[i])
     end
-    table.insert(recents_ext, recents[1])
     local others = common.fuzzy_match(haystack, "", true)
     for i = 1, #others do
       table.insert(recents_ext, others[i])

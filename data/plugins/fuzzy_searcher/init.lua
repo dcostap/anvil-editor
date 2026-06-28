@@ -285,6 +285,11 @@ local function fullpath(path)
   return project_dir() .. PATHSEP .. path:gsub("[/\\]", PATHSEP)
 end
 
+local function file_result_key(path)
+  local normalized = common.normalize_path(fullpath(path))
+  return normalized and common.path_compare_key(normalized)
+end
+
 local function compact_age(ts)
   ts = tonumber(ts)
   if not ts then return nil end
@@ -506,8 +511,9 @@ local function get_files()
   return files_cache or {}
 end
 
-local function get_recent_files()
+local function get_recent_files(skip_path)
   local root = project_dir()
+  local current_key = skip_path and common.path_compare_key(skip_path) or nil
   local out, seen = {}, {}
 
   for _, abs in ipairs(core.visited_files or {}) do
@@ -518,10 +524,11 @@ local function get_recent_files()
         abs = system.absolute_path(abs)
         abs = abs and common.normalize_path(abs)
       end
-      if abs and not seen[abs] then
+      local key = abs and common.path_compare_key(abs)
+      if key and key ~= current_key and not seen[key] then
         local info = system.get_file_info(abs)
         if info and info.type == "file" then
-          seen[abs] = true
+          seen[key] = true
           if common.path_belongs_to(abs, root) then
             out[#out+1] = common.relative_path(root, abs):gsub("\\", "/")
           else
@@ -789,6 +796,67 @@ local function fuzzy_match_file_fast(query, text)
   return total, spans
 end
 
+local line_exists
+
+local function collect_recent_file_matches(query, line, skip_path)
+  local matches, skip_keys = {}, {}
+  local current_key = skip_path and common.path_compare_key(skip_path) or nil
+  if current_key then skip_keys[current_key] = true end
+  local empty_query = trim_query(query) == ""
+
+  for _, item in ipairs(get_recent_files(skip_path)) do
+    local key = file_result_key(item)
+    if key then skip_keys[key] = true end
+    local score, spans = 0, {}
+    if not empty_query then
+      score, spans = fuzzy_match_file_fast(query, item)
+    end
+    if score and line_exists(item, line) then
+      matches[#matches+1] = { item = item, text = item, score = score, spans = spans or {} }
+    end
+  end
+
+  return matches, skip_keys
+end
+
+local function build_sectioned_file_results(recent_matches, general_matches, limit, query, line)
+  local out = {}
+  local shown_recent, shown_general = 0, 0
+  limit = math.max(0, limit or 0)
+
+  for _, match in ipairs(recent_matches or {}) do
+    if #out >= limit then break end
+    out[#out+1] = {
+      kind = "file", label = match.item, file = match.item,
+      line = line or 1, col = 1, query = query,
+      match_spans = match.spans or {}, recent = true
+    }
+    shown_recent = shown_recent + 1
+  end
+
+  local general_available = #(general_matches or {}) > 0
+  local separator_visible = shown_recent > 0 and general_available and #out + 1 < limit
+  if separator_visible then
+    out[#out+1] = { header = true, separator = true, label = "" }
+  end
+
+  if shown_recent == 0 or separator_visible then
+    for _, match in ipairs(general_matches or {}) do
+      if #out >= limit then break end
+      out[#out+1] = {
+        kind = "file", label = match.item, file = match.item,
+        line = line or 1, col = 1, query = query,
+        match_spans = match.spans or {}
+      }
+      shown_general = shown_general + 1
+    end
+  end
+
+  local hidden_recent = shown_recent < #(recent_matches or {})
+  local hidden_general = shown_general < #(general_matches or {})
+  return out, hidden_recent or hidden_general
+end
+
 local function fuzzy_result_better(a, b)
   if a.score == b.score then return tostring(a.text) < tostring(b.text) end
   return a.score > b.score
@@ -860,7 +928,7 @@ local function line_count(path)
   return n
 end
 
-local function line_exists(relpath, nr)
+line_exists = function(relpath, nr)
   if not nr then return true end
   return line_count(fullpath(relpath)) >= nr
 end
@@ -2395,6 +2463,7 @@ function FSView:start_file_search(query, line, reset_selection)
   local gen = file_search_generation
   local keep_limit = self:max_result_limit() + 1
   local root = project_dir()
+  local skip_path = self.source_file_path
 
   self.results = {}
   self.has_more = false
@@ -2408,41 +2477,53 @@ function FSView:start_file_search(query, line, reset_selection)
     or string.format("Searching %d files…", #(files_cache or {}))
   self:schedule_update(true)
 
+  local function apply_results(out, has_more)
+    self.results = out
+    self.has_more = has_more
+    if self.pending_select_index then
+      self.selected = common.clamp(self.pending_select_index, 1, math.max(1, #out))
+      self.pending_select_index = nil
+    else
+      self.selected = common.clamp(self.selected, 1, math.max(1, #out))
+    end
+    if self.results[self.selected] and self.results[self.selected].header then
+      self:select_delta(1)
+      if self.results[self.selected] and self.results[self.selected].header then self:select_delta(-1) end
+    end
+    self:ensure_selection_visible()
+  end
+
   core.add_thread(function()
+    local recent_matches, skip_keys = collect_recent_file_matches(query, line, skip_path)
+
     if not line and native_file_index_ready() then
       local ok, native_results = pcall(function()
-        return files_fuzzy_index:search(query, { limit = keep_limit, spans = true })
+        return files_fuzzy_index:search(query, { limit = keep_limit + #recent_matches + 32, spans = true })
       end)
       if ok and native_results and gen == file_search_generation and active_view == self then
-        local current_limit = self:result_limit()
-        local out = {}
-        for i = 1, math.min(current_limit, #native_results) do
-          local match = native_results[i]
-          out[#out+1] = {
-            kind = "file", label = match.text, file = match.text,
-            line = line or 1, col = 1, query = query,
-            match_spans = match.spans or {}
-          }
+        local general_matches = {}
+        for _, match in ipairs(native_results) do
+          local key = file_result_key(match.text)
+          if key and not skip_keys[key] then
+            general_matches[#general_matches+1] = {
+              item = match.text, text = match.text, score = match.score or 0,
+              spans = match.spans or {}
+            }
+            if #general_matches >= keep_limit then break end
+          end
         end
-        self.results = out
-        self.has_more = native_results.has_more or #native_results > current_limit
-        if self.pending_select_index then
-          self.selected = common.clamp(self.pending_select_index, 1, math.max(1, #out))
-          self.pending_select_index = nil
-        else
-          self.selected = common.clamp(self.selected, 1, math.max(1, #out))
-        end
-        self:ensure_selection_visible()
-        self.status = string.format("%d file matches shown%s — %d files indexed — %s",
-          #out, self.has_more and "+" or "", #(files_cache or {}), display_root(root))
+        local out, hidden = build_sectioned_file_results(recent_matches, general_matches, self:result_limit(), query, line)
+        apply_results(out, hidden or native_results.has_more)
+        self.status = string.format("%d recent + %d file matches shown%s — %d files indexed — %s",
+          #recent_matches, #general_matches, self.has_more and "+" or "", #(files_cache or {}), display_root(root))
         self:schedule_update(true)
         return
       end
     end
 
-    local items = get_file_search_items()
-    local scored = {}
-    local matched = 0
+    local items = get_files()
+    local general_matches = {}
+    local matched_general = 0
     local scanned = 0
     local empty_query = trim_query(query) == ""
     local slice_start = system.get_time()
@@ -2450,27 +2531,15 @@ function FSView:start_file_search(query, line, reset_selection)
 
     local function publish(final)
       if gen ~= file_search_generation or active_view ~= self then return false end
-      local current_limit = self:result_limit()
-      local out = {}
-      for i = 1, math.min(current_limit, #scored) do
-        local match = scored[i]
-        out[#out+1] = { kind = "file", label = match.item, file = match.item, line = line or 1, col = 1, query = query, match_spans = match.spans }
-      end
-      self.results = out
-      self.has_more = matched > current_limit
-      if self.pending_select_index then
-        self.selected = common.clamp(self.pending_select_index, 1, math.max(1, #out))
-        self.pending_select_index = nil
-      else
-        self.selected = common.clamp(self.selected, 1, math.max(1, #out))
-      end
-      self:ensure_selection_visible()
+      local out, hidden = build_sectioned_file_results(recent_matches, general_matches, self:result_limit(), query, line)
+      apply_results(out, hidden or matched_general > #general_matches)
       if final then
+        local total_matches = #recent_matches + matched_general
         self.status = files_indexing
-          and string.format("%d file matches — still indexing %d files — %s", matched, #(files_cache or {}), display_root(root))
-          or string.format("%d file matches — %d files indexed — %s", matched, #items, display_root(root))
+          and string.format("%d file matches — still indexing %d files — %s", total_matches, #(files_cache or {}), display_root(root))
+          or string.format("%d file matches — %d files indexed — %s", total_matches, #items, display_root(root))
       else
-        self.status = string.format("%d file matches — scanning %d/%d…", matched, scanned, #items)
+        self.status = string.format("%d file matches — scanning %d/%d…", #recent_matches + matched_general, scanned, #items)
       end
       self:schedule_update(true)
       last_publish = system.get_time()
@@ -2480,22 +2549,25 @@ function FSView:start_file_search(query, line, reset_selection)
     for _, item in ipairs(items) do
       if gen ~= file_search_generation or active_view ~= self then return end
       scanned = scanned + 1
-      local score, spans
-      if empty_query then
-        score, spans = 0, {}
-      else
-        score, spans = fuzzy_match_file_fast(query, item)
-      end
-      if score and ((not line) or line_exists(item, line)) then
-        matched = matched + 1
-        local candidate = { item = item, text = item, score = score, spans = spans or {} }
+      local key = file_result_key(item)
+      if key and not skip_keys[key] then
+        local score, spans
         if empty_query then
-          if #scored < keep_limit then scored[#scored+1] = candidate end
+          score, spans = 0, {}
         else
-          fuzzy_insert_top(scored, candidate, keep_limit)
+          score, spans = fuzzy_match_file_fast(query, item)
+        end
+        if score and line_exists(item, line) then
+          matched_general = matched_general + 1
+          local candidate = { item = item, text = item, score = score, spans = spans or {} }
+          if empty_query then
+            if #general_matches < keep_limit then general_matches[#general_matches+1] = candidate end
+          else
+            fuzzy_insert_top(general_matches, candidate, keep_limit)
+          end
         end
       end
-      if #scored > 0 and system.get_time() - last_publish > 0.05 then publish(false) end
+      if (#recent_matches > 0 or #general_matches > 0) and system.get_time() - last_publish > 0.05 then publish(false) end
       slice_start = yield_if_over_budget(slice_start)
     end
 
@@ -2576,12 +2648,18 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
     if max_items <= 0 then self.has_more = true; return end
 
     if trim_query(query) == "" and not line then
-      local added_recent = 0
-      for _, f in ipairs(get_recent_files()) do
-        if added_recent >= max_items then self.has_more = true; return end
-        out[#out+1] = { kind = "file", label = f, file = f, line = 1, col = 1, query = query, match_spans = {}, recent = true }
-        added_recent = added_recent + 1
+      local recent_matches, skip_keys = collect_recent_file_matches(query, line, self.source_file_path)
+      local general_matches = {}
+      for _, item in ipairs(get_files()) do
+        local key = file_result_key(item)
+        if key and not skip_keys[key] then
+          general_matches[#general_matches+1] = { item = item, text = item, score = 0, spans = {} }
+          if #general_matches > max_items then break end
+        end
       end
+      local rows, hidden = build_sectioned_file_results(recent_matches, general_matches, max_items, query, line)
+      out = rows
+      self.has_more = hidden or #general_matches > max_items
       return
     end
 
@@ -3313,7 +3391,11 @@ function FSView:draw()
       previous_rendered_grep_file = nil
       previous_rendered_grep_line_x = nil
       previous_rendered_was_grep = false
-      renderer.draw_text(font, truncate_text(font, r.label, row_text_w), x + pad, yy, style.accent)
+      if r.separator then
+        renderer.draw_rect(x + pad, yy + math.floor(lh / 2), math.max(0, row_text_w), style.divider_size, style.divider)
+      else
+        renderer.draw_text(font, truncate_text(font, r.label, row_text_w), x + pad, yy, style.accent)
+      end
     else
       if idx == self.selected then
         renderer.draw_rect(x, yy, list_w, lh, style.line_highlight)
@@ -3623,5 +3705,25 @@ return {
     everything_project_search_query = everything_project_search_query,
     everything_path_depth = everything_path_depth,
     sort_everything_project_results = sort_everything_project_results,
+    recent_files = get_recent_files,
+    file_search_rows = function(query, files, skip_path, limit)
+      local recent_matches, skip_keys = collect_recent_file_matches(query or "", nil, skip_path)
+      local general_matches = {}
+      local empty_query = trim_query(query or "") == ""
+      for _, item in ipairs(files or {}) do
+        local key = file_result_key(item)
+        if key and not skip_keys[key] then
+          local score, spans = 0, {}
+          if not empty_query then score, spans = fuzzy_match_file_fast(query, item) end
+          if score then
+            general_matches[#general_matches+1] = { item = item, text = item, score = score, spans = spans or {} }
+          end
+        end
+      end
+      if not empty_query then
+        table.sort(general_matches, function(a, b) return fuzzy_result_better(a, b) end)
+      end
+      return build_sectioned_file_results(recent_matches, general_matches, limit or 30, query or "", nil)
+    end,
   },
 }

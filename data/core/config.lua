@@ -165,9 +165,9 @@ config.max_visible_commands = 10
 
 ---The maximum amount of recent files to keep on history.
 ---
----The default is 5.
+---The default is 20.
 ---@type integer
-config.max_visited_files = 5
+config.max_visited_files = 20
 
 ---Always hide tabs even if multiple documents are open.
 ---

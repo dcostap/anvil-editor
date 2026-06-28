@@ -3,6 +3,7 @@ local core = require "core"
 local config = require "core.config"
 local common = require "core.common"
 local command = require "core.command"
+local file_context = require "core.file_context"
 local keymap = require "core.keymap"
 local style = require "core.style"
 local StatusBar = require "core.statusbar"
@@ -326,8 +327,12 @@ end
 
 local function get_visited_files()
   local files = {}
+  local current_key = common.path_compare_key(file_context.current_file_path())
+  local seen = {}
   for _, file in ipairs(core.visited_files) do
-    if is_file(file) then
+    local key = common.path_compare_key(file)
+    if key and key ~= current_key and not seen[key] and is_file(file) then
+      seen[key] = true
       local project, is_open, belongs = core.current_project(file)
       if project then
         local entry_name = ""

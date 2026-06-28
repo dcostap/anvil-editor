@@ -329,7 +329,7 @@ local function save_workspace()
     path = project_dir,
     documents = documents,
     directories = save_directories(),
-    visited_files = core.visited_files,
+    visited_files = core.prune_visited_files and core.prune_visited_files() or core.visited_files,
     tool_windows = tool_window.get_project_state(project),
   })
   loaded_workspace_key = key
@@ -370,6 +370,7 @@ local function load_workspace()
     if workspace then
       if workspace.visited_files then
         core.visited_files = workspace.visited_files
+        if core.prune_visited_files then core.prune_visited_files() end
       end
       local root = get_unlocked_root(core.root_panel.root_node)
       local active_view = load_node(root, workspace.documents)

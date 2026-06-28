@@ -1,5 +1,6 @@
 local core = require "core"
 local common = require "core.common"
+local config = require "core.config"
 local Project = require "core.project"
 local test = require "core.test"
 
@@ -13,6 +14,7 @@ test.describe("Project path identity", function()
     context.original_recent_projects = core.recent_projects
     context.original_docs = core.docs
     context.original_visited_files = core.visited_files
+    context.original_max_visited_files = config.max_visited_files
     context.temp_root = USERDIR
       .. PATHSEP .. "project-identity-tests-"
       .. system.get_process_id() .. "-"
@@ -26,6 +28,7 @@ test.describe("Project path identity", function()
     core.recent_projects = context.original_recent_projects
     core.docs = context.original_docs
     core.visited_files = context.original_visited_files
+    config.max_visited_files = context.original_max_visited_files
     if context.temp_root and system.get_file_info(context.temp_root) then
       local ok, err = common.rm(context.temp_root, true)
       test.ok(ok, err)
@@ -81,5 +84,32 @@ test.describe("Project path identity", function()
     core.set_visited(file_path:lower())
 
     test.equal(#core.visited_files, 1)
+  end)
+
+  test.test("keeps visited files in most-recent-first order when trimming", function(context)
+    config.max_visited_files = 5
+    core.visited_files = {}
+
+    for i = 1, 10 do
+      core.set_visited(join_path(context.temp_root, "recent-" .. i .. ".txt"))
+    end
+
+    test.equal(#core.visited_files, 5)
+    for i, expected in ipairs({ 10, 9, 8, 7, 6 }) do
+      test.ok(core.visited_files[i]:find("recent%-" .. expected .. "%.txt$"), "unexpected recent at " .. i .. ": " .. tostring(core.visited_files[i]))
+    end
+  end)
+
+  test.test("moving an existing visited file removes stale duplicates", function(context)
+    config.max_visited_files = 5
+    local first = join_path(context.temp_root, "first.txt")
+    local second = join_path(context.temp_root, "second.txt")
+    core.visited_files = { first, second, first }
+
+    core.set_visited(first)
+
+    test.equal(#core.visited_files, 2)
+    test.ok(common.path_equals(core.visited_files[1], first), "expected first path to move to front")
+    test.ok(common.path_equals(core.visited_files[2], second), "expected second path to remain once")
   end)
 end)
