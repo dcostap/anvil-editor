@@ -1,5 +1,6 @@
 local core = require "core"
 local command = require "core.command"
+local style = require "core.style"
 local test = require "core.test"
 local MessageBox = require "widget.messagebox"
 
@@ -96,6 +97,31 @@ test.describe("DocView Prompt Bar find", function()
     test.ok(command.perform("find-replace:find"))
 
     assert_selection(view, 1, 1, 1, 6)
+  end)
+
+  test.it("find navigation treats matches near the bottom edge as not already visible", function(context)
+    local lines = {}
+    for i = 1, 30 do lines[i] = "line " .. i end
+    lines[1] = "NEEDLE first"
+    lines[12] = "NEEDLE bottom edge"
+    local view, doc = open_editor(context, table.concat(lines, "\n"))
+    doc:set_selection(1, 1, 1, 1)
+
+    test.ok(command.perform("find-replace:find"))
+    type_into_active_view("NEEDLE")
+    assert_selection(view, 1, 1, 1, 7)
+
+    local lh = view:get_line_height()
+    local target_line = 12
+    local start_scroll = math.max(0, (target_line - 1) * lh + style.padding.y - view.size.y)
+    view.scroll.y, view.scroll.to.y = start_scroll, start_scroll
+    local _, maxline = view:get_visible_line_range()
+    test.equal(maxline, target_line)
+
+    test.ok(command.perform("find-replace:repeat-find"))
+
+    assert_selection(view, target_line, 1, target_line, 7)
+    test.ok(view.scroll.to.y > start_scroll, "expected bottom-edge match navigation to scroll with context")
   end)
 
   test.it("replace all batches local find matches into one text change", function(context)

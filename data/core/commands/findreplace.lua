@@ -11,6 +11,7 @@ local last_view, last_fn, last_text, last_sel
 local case_sensitive = config.find_case_sensitive or false
 local find_regex = config.find_regex or false
 local found_expression
+local FIND_NAV_VISIBLE_MARGIN_LINES = 2
 
 local function doc()
   local is_DocView = core.active_view:is(DocView) and not core.active_view:is(GlobalPromptBar)
@@ -41,7 +42,7 @@ local function update_preview(sel, search_fn, text)
       sel[1], sel[2], text, case_sensitive, find_regex)
     if ok and line1 and text ~= "" then
       last_view.doc:set_selection(line2, col2, line1, col1)
-      last_view:scroll_to_line(line2, true)
+      last_view:scroll_to_line(line2, true, false, { visible_margin_lines = FIND_NAV_VISIBLE_MARGIN_LINES })
       last_view:scroll_to_make_visible(line1, col1, false, {
         line2 = line2,
         col2 = col2,
@@ -303,7 +304,7 @@ command.add(valid_for_finding, {
       local line1, col1, line2, col2 = last_fn(dv.doc, sl2, sc2, last_text, case_sensitive, find_regex, false)
       if line1 then
         dv.doc:set_selection(line2, col2, line1, col1)
-        dv:scroll_to_line(line2, true)
+        dv:scroll_to_line(line2, true, false, { visible_margin_lines = FIND_NAV_VISIBLE_MARGIN_LINES })
         dv:scroll_to_make_visible(line1, col1, false, {
           line2 = line2,
           col2 = col2,
@@ -323,7 +324,7 @@ command.add(valid_for_finding, {
       local line1, col1, line2, col2 = last_fn(dv.doc, sl1, sc1, last_text, case_sensitive, find_regex, true)
       if line1 then
         dv.doc:set_selection(line2, col2, line1, col1)
-        dv:scroll_to_line(line2, true)
+        dv:scroll_to_line(line2, true, false, { visible_margin_lines = FIND_NAV_VISIBLE_MARGIN_LINES })
         dv:scroll_to_make_visible(line1, col1, false, {
           line2 = line2,
           col2 = col2,

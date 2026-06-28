@@ -25,6 +25,7 @@ local MessageBox = require "widget.messagebox"
 local find_state_by_view = setmetatable({}, { __mode = "k" })
 local last_global_query = ""
 local update_after_input
+local FIND_NAV_VISIBLE_MARGIN_LINES = 2
 
 local SingleLineHighlighter = Highlighter:extend()
 function SingleLineHighlighter:get_line(idx)
@@ -397,9 +398,10 @@ local function select_match(view, state, index, scroll)
   end)
   if scroll ~= false then
     -- Match navigation should behave like the built-in find command: only move
-    -- the vertical camera if the match is outside the visible range.  Horizontal
+    -- the vertical camera if the match is outside the padded visible range.  The
+    -- bottom padding keeps matches clear of the find bar overlay, and horizontal
     -- range reveal is handled separately so long-line matches stay visible.
-    view:scroll_to_line(match.line, true)
+    view:scroll_to_line(match.line, true, false, { visible_margin_lines = FIND_NAV_VISIBLE_MARGIN_LINES })
     view:scroll_to_make_visible(match.line, match.col1, false, {
       line2 = match.line,
       col2 = match.col2,
@@ -613,7 +615,7 @@ local function add_match_to_selection(view, state, reverse)
   end)
   state.current = index
   set_status(state)
-  view:scroll_to_line(match.line, true)
+  view:scroll_to_line(match.line, true, false, { visible_margin_lines = FIND_NAV_VISIBLE_MARGIN_LINES })
   core.redraw = true
 end
 

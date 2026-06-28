@@ -946,8 +946,14 @@ end
 ---@param line integer Line number to scroll to
 ---@param ignore_if_visible? boolean Don't scroll if line already visible
 ---@param instant? boolean Jump immediately without animation
-function DocView:scroll_to_line(line, ignore_if_visible, instant)
+---@param opts? table Optional scroll behavior options
+function DocView:scroll_to_line(line, ignore_if_visible, instant, opts)
   local min, max = self:get_visible_line_range()
+  local visible_margin_lines = opts and opts.visible_margin_lines or 0
+  if visible_margin_lines > 0 then
+    min = min + visible_margin_lines
+    max = max - visible_margin_lines
+  end
   if not (ignore_if_visible and line >= min and line <= max) then
     local x, y = self:get_line_screen_position(line)
     local ox, oy = self:get_content_offset()
