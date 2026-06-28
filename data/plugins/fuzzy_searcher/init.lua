@@ -1939,7 +1939,11 @@ function FSView:new(prefix, opts)
   self.source_file_line = source_doc and source_doc:get_selection(false) or 1
 
   self.input = TextBox(self, prefix or "", "")
-  self.input.textview.doc:set_selection(1, #(prefix or "") + 1, 1, #(prefix or "") + 1)
+  local cursor_col = #(prefix or "") + 1
+  -- When prefix is a grep mode quoted-exact query (e.g. #"text"),
+  -- place the cursor before the closing quote so the user can extend the query.
+  if (prefix or ""):match('^#".*"$') then cursor_col = cursor_col - 1 end
+  self.input.textview.doc:set_selection(1, cursor_col, 1, cursor_col)
   self.input.border.color = style.dim
   self.input.activate = function(input)
     TextBox.activate(input)
