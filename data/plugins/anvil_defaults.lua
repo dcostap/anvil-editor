@@ -23,6 +23,7 @@ local core_plugins = {
   intellij_actions = true,
   intellij_find = true,
   linewrapping = true,
+  navigation_history = true,
   scale_debug_log = true,
   untitled_recovery = true,
   untitled_tabs = true,
@@ -157,6 +158,10 @@ plugin_defaults("linewrapping", {
   enable_by_default = false,
   require_tokenization = false,
 })
+plugin_defaults("navigation_history", {
+  debug = false,
+  max_entries = 150,
+})
 plugin_defaults("projectsearch", {
   threading = {
     workers = math.ceil(thread.get_cpu_count() / 2) + 1,
@@ -177,7 +182,8 @@ plugin_defaults("trimwhitespace", {
   enabled = false,
   trim_empty_end_lines = false,
 })
--- IntelliJ-style custom actions/keybindings and local workflow plugins.
+-- IntelliJ-style navigation, custom actions/keybindings, and local workflow plugins.
+require_core_plugin "navigation_history"
 require_core_plugin "intellij_actions"
 require_core_plugin "edit_location_history"
 reload_core_plugin "global_prompt_bar_sanitize"

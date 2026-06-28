@@ -72,14 +72,22 @@ local function result_doc_range(view, result)
   end
 end
 
+local function navigation_history()
+  return core.navigation_history or package.loaded["plugins.navigation_history"]
+end
+
 local function open_location(result, opts)
   opts = opts or {}
   if not result then return false, "no result" end
+  local history = navigation_history()
+  local navigation_anchor = opts.navigation_anchor or (history and history.capture_current_place())
+
   if result.start_line then
     local view = opts.view or core.active_view
     local doc = view and view.doc
     if doc then
       doc:set_selection(result.start_line, result.start_col, result.end_line, result.end_col)
+      if history then history.record_place(navigation_anchor, { reason = "language-location" }) end
       return true
     end
   end
@@ -101,6 +109,7 @@ local function open_location(result, opts)
   elseif result.line and result.col then
     view.doc:set_selection(result.line, result.col)
   end
+  if history then history.record_place(navigation_anchor, { reason = "language-location" }) end
   return true
 end
 
@@ -212,12 +221,14 @@ function language.goto_declaration(view)
   if not doc then return false, "no active document" end
   local symbol = symbol_text_at_doc_selection(doc)
   if not symbol then return false, "no symbol at caret" end
+  local history = navigation_history()
+  local navigation_anchor = history and history.capture_current_place()
   local line, col = doc:get_selection()
   request_until_ready(function()
     return intelligence.declarations(doc, line, col)
   end, function(results)
     if #results == 1 then
-      open_location(results[1], { view = view })
+      open_location(results[1], { view = view, navigation_anchor = navigation_anchor })
     elseif #results > 1 then
       local items = {}
       for _, result in ipairs(results) do
@@ -228,7 +239,7 @@ function language.goto_declaration(view)
     else
       local fallback, reason = intelligence.local_declaration(doc, line, col)
       if fallback then
-        open_location(fallback, { view = view })
+        open_location(fallback, { view = view, navigation_anchor = navigation_anchor })
       else
         visible_log("No declaration found for %s", symbol)
         quiet_log("Language declaration unavailable for %s: %s", symbol, tostring(reason))
@@ -237,7 +248,7 @@ function language.goto_declaration(view)
   end, function(reason)
     local fallback = intelligence.local_declaration(doc, line, col)
     if fallback then
-      open_location(fallback, { view = view })
+      open_location(fallback, { view = view, navigation_anchor = navigation_anchor })
     else
       visible_log("No declaration found for %s", symbol)
       quiet_log("Language declaration unavailable for %s: %s", symbol, tostring(reason))

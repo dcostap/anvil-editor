@@ -10,6 +10,7 @@ local config = require "core.config"
 local Doc = require "core.doc"
 local Node = require "core.node"
 local file_context = require "core.file_context"
+local navigation_history = require "plugins.navigation_history"
 
 local core_doc_paste = core.intellij_actions_core_doc_paste or command.map["doc:paste"]
 core.intellij_actions_core_doc_paste = core_doc_paste
@@ -153,9 +154,6 @@ local selection_history = setmetatable({}, { __mode = "k" })
 local selection_origin = setmetatable({}, { __mode = "k" })
 local add_next_occurrence_state = setmetatable({}, { __mode = "k" })
 local closed_tabs = {}
-local navigation_back_stack = {}
-local navigation_forward_stack = {}
-local navigating_history = false
 local suppress_origin_clear = false
 
 local function selection_state_key(doc)
@@ -446,55 +444,8 @@ local function open_terminal_at_active_file(dv)
   end
 end
 
-local function current_navigation_place()
-  local view = core.active_view
-  local doc = view and view.doc
-  if not doc or not doc.abs_filename then return nil end
-  local line, col = doc:get_selection(false)
-  return {
-    filename = doc.abs_filename,
-    line = line,
-    col = col,
-    scroll_x = view.scroll and view.scroll.to.x or 0,
-    scroll_y = view.scroll and view.scroll.to.y or 0,
-  }
-end
-
-local function same_navigation_place(a, b)
-  return a and b
-     and common.path_equals(a.filename, b.filename)
-     and a.line == b.line
-     and math.abs(a.col - b.col) <= 2
-end
-
-local function push_navigation_place(stack, place)
-  if not place then return end
-  if same_navigation_place(stack[#stack], place) then return end
-  stack[#stack + 1] = place
-  if #stack > 100 then table.remove(stack, 1) end
-end
-
-local function record_navigation_place()
-  if navigating_history then return end
-  push_navigation_place(navigation_back_stack, current_navigation_place())
-  navigation_forward_stack = {}
-end
-
-local function restore_navigation_place(place)
-  if not place then return end
-  navigating_history = true
-  local ok, err = pcall(function()
-    local doc = core.open_doc(place.filename)
-    local view = core.root_panel:open_doc(doc)
-    with_origin_clear_suppressed(doc_set_selection, doc, place.line, place.col, place.line, place.col)
-    if view.scroll then
-      view.scroll.to.x, view.scroll.x = place.scroll_x or 0, place.scroll_x or 0
-      view.scroll.to.y, view.scroll.y = place.scroll_y or 0, place.scroll_y or 0
-    end
-    view:scroll_to_make_visible(place.line, place.col)
-  end)
-  navigating_history = false
-  if not ok then core.error("Failed to restore navigation place: %s", err) end
+local function record_navigation_place(reason)
+  navigation_history.record_current_place(reason or "intellij-action")
 end
 
 local node_close_view = Node.close_view
@@ -506,17 +457,6 @@ function Node:close_view(root, view)
   return node_close_view(self, root, view)
 end
 
-local node_set_active_view = Node.set_active_view
-function Node:set_active_view(view)
-  local before = current_navigation_place()
-  local result = node_set_active_view(self, view)
-  local after = current_navigation_place()
-  if before and after and not common.path_equals(before.filename, after.filename) then
-    push_navigation_place(navigation_back_stack, before)
-    navigation_forward_stack = {}
-  end
-  return result
-end
 local selection_debug_log = USERDIR .. PATHSEP .. "selection-expansion-debug.log"
 
 local function selection_debug_write(message)
@@ -936,7 +876,7 @@ local function move_caret_paragraph(dv, direction)
     end
   end
 
-  if target_line ~= line or target_col ~= col then record_navigation_place() end
+  if target_line ~= line or target_col ~= col then record_navigation_place("paragraph") end
   doc:set_selection(target_line, target_col, target_line, target_col)
   dv:scroll_to_make_visible(target_line, target_col)
 end
@@ -1232,22 +1172,7 @@ local function duplicate_current_line(dv)
   clear_selection_origin(doc)
 end
 
-local function navigate_back()
-  local target = table.remove(navigation_back_stack)
-  if not target then return end
-  push_navigation_place(navigation_forward_stack, current_navigation_place())
-  restore_navigation_place(target)
-end
-
-local function navigate_forward()
-  local target = table.remove(navigation_forward_stack)
-  if not target then return end
-  push_navigation_place(navigation_back_stack, current_navigation_place())
-  restore_navigation_place(target)
-end
-
 local function move_to_matching_bracket_with_history(dv)
-  record_navigation_place()
   command.perform("bracket-match:move-to-matching")
 end
 
@@ -1436,8 +1361,6 @@ end, {
   ["user:comment-with-line-comment-at-start"] = line_comment_at_start,
   ["user:restore-selection-origin-or-select-none"] = restore_selection_origin_or_select_none,
   ["user:duplicate-current-line"] = duplicate_current_line,
-  ["user:navigate-back"] = navigate_back,
-  ["user:navigate-forward"] = navigate_forward,
   ["user:move-to-matching-bracket-with-history"] = move_to_matching_bracket_with_history,
   ["user:move-caret-previous-paragraph"] = function(dv)
     move_caret_paragraph(dv, -1)
@@ -1504,8 +1427,6 @@ keymap.add({
   ["ctrl+alt+t"] = "user:open-terminal-at-active-file",
   ["ctrl+up"] = "user:move-caret-previous-paragraph",
   ["ctrl+down"] = "user:move-caret-next-paragraph",
-  ["alt+left"] = "user:navigate-back",
-  ["alt+right"] = "user:navigate-forward",
   ["ctrl+alt+up"] = "poi:previous",
   ["ctrl+alt+down"] = "poi:next",
   ["ctrl+alt+,"] = "poi:previous",

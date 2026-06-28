@@ -30,7 +30,7 @@ local Scrollbar = require "core.scrollbar"
 
 ---@alias core.view.cursor "'arrow'" | "'ibeam'" | "'sizeh'" | "'sizev'" | "'hand'"
 
----@alias core.view.mousebutton "'left'" | "'right'"
+---@alias core.view.mousebutton "'left'" | "'middle'" | "'right'" | "'x'" | "'y'"
 
 ---@alias core.view.context "'application'" | "'workspace'" | "'session'" Deprecated: `session` is treated as `workspace` for old plugins.
 
