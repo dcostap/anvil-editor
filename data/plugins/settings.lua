@@ -1192,6 +1192,33 @@ local function save_settings()
   end
 end
 
+local function apply_color_theme(name)
+  name = name or "default"
+  core.reload_module("colors." .. name)
+  settings.config.theme = name
+  save_settings()
+  core.log_quiet("Theme set to %s", name)
+end
+
+local function color_theme_exists(name)
+  for _, details in ipairs(get_installed_colors()) do
+    if details.name == name then return true end
+  end
+  return false
+end
+
+local function suggest_color_themes(text)
+  text = (text or ""):lower()
+  local suggestions = {}
+  for _, details in ipairs(get_installed_colors()) do
+    local name = details.name
+    if text == "" or name:lower():find(text, 1, true) then
+      suggestions[#suggestions + 1] = { text = name, name = name, info = "theme" }
+    end
+  end
+  return suggestions
+end
+
 ---Apply a keybinding and optionally save it.
 ---@param cmd string
 ---@param bindings table<integer, string>
@@ -1814,9 +1841,7 @@ function Settings:load_color_settings()
   end
 
   function listbox:on_row_click(idx, data)
-    core.reload_module("colors." .. data.name)
-    settings.config.theme = data.name
-    save_settings()
+    apply_color_theme(data.name)
   end
 
   ---@param self widget
@@ -2520,6 +2545,36 @@ end
 --------------------------------------------------------------------------------
 -- Add command and keymap to load settings view
 --------------------------------------------------------------------------------
+local theme_commands = {
+  ["theme:select"] = function()
+    core.command_view:enter("Theme", {
+      text = settings.config.theme or "default",
+      select_text = true,
+      suggest = suggest_color_themes,
+      validate = function(text, suggestion)
+        return (suggestion and suggestion.name) or color_theme_exists(text)
+      end,
+      submit = function(text, suggestion)
+        local name = (suggestion and suggestion.name) or text
+        if color_theme_exists(name) then
+          apply_color_theme(name)
+        else
+          core.warn("Theme not found: %s", tostring(name))
+        end
+      end,
+    })
+  end,
+}
+
+for _, details in ipairs(get_installed_colors()) do
+  local name = details.name
+  theme_commands["theme:" .. name] = function()
+    apply_color_theme(name)
+  end
+end
+
+command.add(nil, theme_commands)
+
 command.add(nil, {
   ["ui:settings"] = function()
     settings.ui:show()

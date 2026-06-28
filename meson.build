@@ -415,11 +415,6 @@ if not fs.exists('data/widget/init.lua')
     subproject('widget', default_options: ['data_dir='+anvil_datadir])
 endif
 
-# Pull extra colors
-if get_option('extra_colors')
-    subproject('colors', default_options: ['data_dir='+anvil_datadir])
-endif
-
 # Pull extra languages
 if get_option('extra_languages')
     subproject('plugins', default_options: ['data_dir='+anvil_datadir])
