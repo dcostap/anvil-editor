@@ -56,6 +56,10 @@ _Avoid_: Buffer, editor tab
 An Editor hosted in the Main Panel.
 _Avoid_: Main DocView, primary editor
 
+**Zoom**:
+The user-facing way to make Anvil's interface and document text larger or smaller without changing Document contents.
+_Avoid_: Scale in user-facing command names
+
 **Side Editor**:
 An Editor hosted in the Side Editor Slot for the split-editor experience.
 _Avoid_: Side DocView, Side Panel DocView, Split DocView, side buffer

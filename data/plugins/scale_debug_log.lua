@@ -112,7 +112,7 @@ if not command.__scale_debug_perform_logged then
   command.__scale_debug_perform_logged = true
   local command_perform = command.perform
   function command.perform(name, ...)
-    if type(name) == "string" and name:match("^scale:") then
+    if type(name) == "string" and name:match("^editor:zoom%-") then
       log_state("command " .. name, "stack=" .. stack_summary())
     end
     return command_perform(name, ...)

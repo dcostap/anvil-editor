@@ -81,9 +81,9 @@ local cmds = {
 
 if config.plugins.scale ~= false and require("plugins.scale") then
   table.move(cmds, 4, 6, 7)
-  cmds[4] = { text = "Font +",     command = "scale:increase" }
-  cmds[5] = { text = "Font -",     command = "scale:decrease" }
-  cmds[6] = { text = "Font Reset", command = "scale:reset"    }
+  cmds[4] = { text = "Font +",     command = "editor:zoom-in"    }
+  cmds[5] = { text = "Font -",     command = "editor:zoom-out"   }
+  cmds[6] = { text = "Font Reset", command = "editor:zoom-reset" }
 end
 
 menu:register("core.docview", cmds)
