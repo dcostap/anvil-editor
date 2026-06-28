@@ -129,7 +129,7 @@ test.describe("core.lsp.provider semantic tokens", function()
     test.equal(tokens[1].line1, 1)
     test.equal(tokens[1].col1, 5)
     test.equal(tokens[1].col2, 9)
-    test.equal(tokens[1].style, "function")
+    test.equal(tokens[1].style, "function.call")
   end)
 
   test.test("semantic token types preserve hierarchical customization keys", function()
@@ -140,7 +140,7 @@ test.describe("core.lsp.provider semantic tokens", function()
     test.equal(provider.semantic_style("typeParameter"), "type.parameter")
     test.equal(provider.semantic_style("enumMember"), "constant.enum_member")
     test.equal(provider.semantic_style("property"), "variable.property")
-    test.equal(provider.semantic_style("method"), "function.method")
+    test.equal(provider.semantic_style("method"), "function.method.call")
     test.equal(provider.semantic_style("macro"), "function.macro")
     test.equal(provider.semantic_style("regexp"), "string.regexp")
     test.equal(provider.semantic_style("decorator"), "annotation.decorator")
@@ -159,13 +159,35 @@ test.describe("core.lsp.provider semantic tokens", function()
       "keyword", "abc",
       "normal", " def\n",
     }, 0, {
-      { start_byte = 4, end_byte = 7, style = "function" },
+      { start_byte = 4, end_byte = 7, style = "function.call" },
     })
     test.same(tokens, {
       "keyword", "abc",
       "normal", " ",
-      "function", "def",
+      "function.call", "def",
       "normal", "\n",
+    })
+  end)
+
+  test.test("generic semantic function tokens do not erase base declarations", function()
+    local tokens = provider.overlay_semantic_tokens("int main() { main(); }\n", {
+      "type.builtin", "int",
+      "normal", " ",
+      "function.declaration", "main",
+      "normal", "() { ",
+      "function.call", "main",
+      "normal", "(); }\n",
+    }, 0, {
+      { start_byte = 4, end_byte = 8, style = "function.call" },
+      { start_byte = 13, end_byte = 17, style = "function.call" },
+    })
+    test.same(tokens, {
+      "type.builtin", "int",
+      "normal", " ",
+      "function.declaration", "main",
+      "normal", "() { ",
+      "function.call", "main",
+      "normal", "(); }\n",
     })
   end)
 
@@ -184,7 +206,7 @@ test.describe("core.lsp.provider semantic tokens", function()
 
     local line = doc.highlighter:get_render_line(1)
     test.equal(line.source, "lsp")
-    test.ok(has_token(line.tokens, "function", "main"))
+    test.ok(has_token(line.tokens, "function.call", "main"))
     doc.highlighter:get_render_line(1)
     test.equal(#client.requests, 1)
   end)

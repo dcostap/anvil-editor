@@ -488,7 +488,7 @@ int second(void) {
     local line = doc.highlighter:get_render_line(1)
     test.equal(line.source, "treesitter")
     test.equal(token_type_for_text(line.tokens, "int"), "type.builtin")
-    test.equal(token_type_for_text(line.tokens, "main"), "function")
+    test.equal(token_type_for_text(line.tokens, "main"), "function.declaration")
     test.equal(token_type_for_text(line.tokens, "return"), "keyword")
     test.equal(token_type_for_text(line.tokens, "VALUE"), "constant")
     doc:on_close()

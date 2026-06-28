@@ -12,12 +12,12 @@ end
 
 local C = {
   -- editor/UI colors
-  text_fg = "bfccdb",
+  text_fg = "bcc9d9",
   text_bg = "1c1e26",
   caret_row = "2D2D33",
   gutter_bg = "313338",
   ignored = "938B8C",
-  scrollbar_thumb = "565a5e",
+  scrollbar_thumb = "3C3F41",
   tearline = "4E5153",
   whitespace = "46494B",
 
@@ -33,7 +33,7 @@ local C = {
   doc_comment_tag_value = "8a9fa8",
   doc_markup = "52c77e",
   function_call = "e7d0c3",
-  function_declaration = "aae381",
+  function_declaration = "e9b379",
   identifier = "bccbd9",
   instance_field = "d7a7f1",
   interface_name = "75c37b",
@@ -76,13 +76,13 @@ local C = {
 }
 
 -- Core UI
-style.background = c("16181e")
+style.background = c(C.text_bg)
 style.background2 = c("26282b")
 style.tab_background = c("202126")
 style.titlebar = style.tab_background
 style.background3 = c(C.text_bg)
 style.text = c(C.text_fg)
-style.caret = c(C.ctrl_clickable)
+style.caret = c("ffffff")
 style.accent = c(C.ctrl_clickable)
 style.dim = c(C.ignored)
 style.divider = c(C.tearline)
@@ -181,11 +181,8 @@ style.filetree_folder = style.dim
 style.syntax["normal"] = c(C.text_fg)
 style.syntax["symbol"] = c(C.identifier)
 style.syntax["comment"] = c(C.block_comment)
--- Anvil's Kotlin lexer emits `private`, `fun`, etc. as generic
--- `keyword`; use the IntelliJ Java/Kotlin-looking blue keyword color rather
--- than DEFAULT_KEYWORD's orange.
 style.syntax["keyword"] = c(C.java_keyword)
-style.syntax["keyword2"] = c("d09bd0")
+style.syntax["keyword2"] = c(C.java_keyword)
 style.syntax["number"] = c(C.number)
 style.syntax["literal"] = c(C.java_keyword)
 style.syntax["string"] = c(C.string)
@@ -200,9 +197,47 @@ style.syntax["variable"] = c(C.identifier)
 style.syntax["constant"] = c(C.constant)
 style.syntax["annotation"] = c(C.kotlin_annotation)
 style.syntax["markup"] = c(C.doc_markup)
-style.syntax["punctuation"] = c(C.identifier)
+style.syntax["punctuation"] = c(C.semicolon)
 style.syntax["error"] = c(C.invalid_string_escape_effect)
 style.syntax["warning"] = c(C.warning_stripe)
+
+-- OneDark custom-specific semantic refinements.
+style.syntax["keyword.return"] = c(C.java_keyword)
+style.syntax["keyword.function"] = c(C.java_keyword)
+style.syntax["keyword.operator"] = c(C.java_keyword)
+style.syntax["keyword.modifier"] = c(C.java_keyword)
+style.syntax["function.declaration"] = c(C.function_declaration)
+style.syntax["function.definition"] = c(C.function_declaration)
+style.syntax["function.call"] = c(C.function_call)
+style.syntax["function.method"] = c(C.function_declaration)
+style.syntax["function.method.declaration"] = c(C.function_declaration)
+style.syntax["function.method.definition"] = c(C.function_declaration)
+style.syntax["function.method.call"] = c(C.function_call)
+style.syntax["function.constructor"] = c(C.kotlin_constructor)
+style.syntax["function.method.static"] = c(C.static_method)
+style.syntax["function.macro"] = c(C.static_method)
+style.syntax["type.class"] = c(C.class_name)
+style.syntax["type.struct"] = c(C.class_name)
+style.syntax["type.enum"] = c(C.class_name)
+style.syntax["type.interface"] = c(C.interface_name)
+style.syntax["type.parameter"] = c(C.kotlin_type_parameter)
+style.syntax["type.builtin"] = c(C.java_keyword)
+style.syntax["type.namespace"] = c(C.identifier)
+style.syntax["variable.property"] = c(C.kotlin_instance_property)
+style.syntax["variable.field"] = c(C.kotlin_instance_property)
+style.syntax["variable.property.static"] = c(C.static_field)
+style.syntax["variable.parameter"] = c(C.kotlin_parameter)
+style.syntax["variable.readonly"] = c(C.constant)
+style.syntax["constant.builtin"] = c(C.constant)
+style.syntax["constant.enum_member"] = c(C.constant)
+style.syntax["annotation.decorator"] = c(C.kotlin_annotation)
+style.syntax["metadata"] = c(C.metadata)
+style.syntax["doc_comment"] = c(C.doc_comment)
+style.syntax["doccomment"] = c(C.doc_comment)
+style.syntax["tag"] = c(C.doc_comment_tag)
+style.syntax["string.escape"] = c(C.invalid_string_escape)
+style.syntax["punctuation.delimiter"] = c(C.semicolon)
+style.syntax["punctuation.bracket"] = c(C.semicolon)
 
 style.log["INFO"] = { icon = "i", color = style.text }
 style.log["WARN"] = { icon = "!", color = style.warn }

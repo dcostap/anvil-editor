@@ -91,8 +91,8 @@
   function: (field_expression
     field: (field_identifier) @function.method.call))
 (function_declarator
-  declarator: (identifier) @function)
+  declarator: (identifier) @function.declaration)
 (preproc_function_def
-  name: (identifier) @function.special)
+  name: (identifier) @function.macro)
 
 (comment) @comment

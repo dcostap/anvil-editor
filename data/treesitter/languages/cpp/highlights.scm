@@ -135,13 +135,13 @@
 (template_method
   name: (field_identifier) @function.method.call)
 (function_declarator
-  declarator: (identifier) @function)
+  declarator: (identifier) @function.declaration)
 (function_declarator
   declarator: (qualified_identifier
-    name: (identifier) @function))
+    name: (identifier) @function.declaration))
 (function_declarator
-  declarator: (field_identifier) @function.method)
+  declarator: (field_identifier) @function.method.declaration)
 (preproc_function_def
-  name: (identifier) @function.special)
+  name: (identifier) @function.macro)
 
 (comment) @comment

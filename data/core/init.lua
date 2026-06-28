@@ -1143,6 +1143,8 @@ map_new_syntax_colors = function(clear_new)
     ["function.method.abstract"]   = { alt = "function.method" },
     ["function.method.async"]      = { alt = "function.method" },
     ["function.method.call"]       = { alt = "function.method" },
+    ["function.method.declaration"] = { alt = "function.method" },
+    ["function.method.definition"] = { alt = "function.method" },
     ["function.method.deprecated"] = { alt = "function.method" },
     ["function.method.static"]     = { alt = "function.method" },
     ["function.special"]           = { alt = "function" },

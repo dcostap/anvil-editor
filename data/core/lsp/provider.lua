@@ -464,8 +464,22 @@ local function semantic_modifiers(bitset, legend)
 end
 
 function provider.semantic_style(token_type, modifiers)
-  local base = SEMANTIC_TOKEN_TYPE_MAP[token_type] or token_type or "normal"
   modifiers = modifiers or {}
+  local has_modifier = false
+  for _ in pairs(modifiers) do
+    has_modifier = true
+    break
+  end
+
+  local base
+  if (token_type == "function" or token_type == "function_") and not has_modifier then
+    base = "function.call"
+  elseif token_type == "method" and not has_modifier then
+    base = "function.method.call"
+  else
+    base = SEMANTIC_TOKEN_TYPE_MAP[token_type] or token_type or "normal"
+  end
+
   for _, modifier in ipairs(SEMANTIC_TOKEN_MODIFIER_PRIORITY) do
     if modifiers[modifier] then
       return base .. "." .. SEMANTIC_TOKEN_MODIFIER_MAP[modifier]
@@ -582,6 +596,20 @@ local function base_winner(spans, start_byte, end_byte)
   end
 end
 
+local function overlay_style(semantic, base_span)
+  local semantic_style = semantic and semantic.style
+  local base_style = base_span and base_span.style
+  if semantic_style == "function.call"
+    and (base_style == "function.declaration" or base_style == "function.definition") then
+    return base_style
+  end
+  if semantic_style == "function.method.call"
+    and (base_style == "function.method.declaration" or base_style == "function.method.definition") then
+    return base_style
+  end
+  return semantic_style or base_style or "normal"
+end
+
 function provider.overlay_semantic_tokens(text, base_tokens, line_start, semantic_spans)
   line_start = line_start or 0
   local line_end = line_start + #(text or "")
@@ -607,7 +635,7 @@ function provider.overlay_semantic_tokens(text, base_tokens, line_start, semanti
       if last and boundary > last then
         local semantic = semantic_winner(semantic_spans, last, boundary)
         local base_span = base_winner(base, last, boundary)
-        local style = semantic and semantic.style or (base_span and base_span.style) or "normal"
+        local style = overlay_style(semantic, base_span)
         add_token(tokens, style, (text or ""):sub(last - line_start + 1, boundary - line_start))
       end
       last = boundary
