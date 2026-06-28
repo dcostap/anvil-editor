@@ -710,6 +710,26 @@ local function fuzzy_match(query, text)
   return match.score, match.spans or {}, match.selection_span, match.match_start
 end
 
+local function fuzzy_subsequence_too_weak(word_len, positions)
+  if word_len < 4 then return false end
+  if not positions or #positions == 0 then return false end
+  local longest_run, current_run, max_gap = 1, 1, 0
+  for i = 2, #positions do
+    local gap = positions[i] - positions[i - 1] - 1
+    if gap > max_gap then max_gap = gap end
+    if positions[i] == positions[i - 1] + 1 then
+      current_run = current_run + 1
+    else
+      current_run = 1
+    end
+    if current_run > longest_run then longest_run = current_run end
+  end
+  if longest_run >= math.ceil(word_len / 2) then return false end
+  local span = positions[#positions] - positions[1] + 1
+  if span > word_len * 2 + 4 then return true end
+  return max_gap > math.max(10, word_len * 2)
+end
+
 local function fuzzy_match_file_fast_word(word, text, lower, base_start)
   word = trim_query(word):lower()
   if word == "" then return 0, {} end
@@ -732,6 +752,8 @@ local function fuzzy_match_file_fast_word(word, text, lower, base_start)
     last = p
     scan = p + 1
   end
+
+  if fuzzy_subsequence_too_weak(#word, positions) then return nil end
 
   score = score - (positions[1] or 1)
   score = score - math.floor((positions[#positions] - positions[1]) / 3)

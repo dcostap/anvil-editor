@@ -148,6 +148,24 @@ static const char *find_substr(const char *haystack, uint32_t haystack_len, cons
   return NULL;
 }
 
+static bool fuzzy_subsequence_too_weak(uint32_t word_len, uint32_t span, uint32_t max_gap, uint32_t longest_run) {
+  if (word_len < 4) return false;
+
+  /* Loose two- and three-letter acronym matches are useful, but longer query
+     words should have either a compact span or a strong contiguous run.  This
+     rejects coincidence matches like "caret" -> "core:add-directory-picker"
+     while preserving split-prefix plus long-tail matches such as
+     "cinematic" -> "c_foo_inematic". */
+  uint32_t strong_run = (word_len + 1) / 2;
+  if (longest_run >= strong_run) return false;
+
+  if (span > word_len * 2 + 4) return true;
+  uint32_t max_reasonable_gap = word_len * 2;
+  if (max_reasonable_gap < 10) max_reasonable_gap = 10;
+  if (max_gap > max_reasonable_gap) return true;
+  return false;
+}
+
 static int score_word(FuzzyMode mode, const char *text, const char *lower, uint32_t len, uint32_t basename_start, const FuzzyWord *word) {
   if (word->len == 0) return 0;
   if (word->len > len) return FUZZY_SCORE_NO_MATCH;
@@ -201,6 +219,7 @@ static int score_word(FuzzyMode mode, const char *text, const char *lower, uint3
   uint32_t span = last - first + 1;
   uint32_t gaps = span - word->len;
   bool weak_long_match = false;
+  if (fuzzy_subsequence_too_weak(word->len, span, max_gap, longest_run)) weak_long_match = true;
   if (word->len >= 4 && (span > word->len * 3 + 4 || max_gap > 12)) weak_long_match = true;
   if (word->len >= 6 && longest_run < 3 && gaps > word->len) weak_long_match = true;
   if (word->len >= 8 && longest_run < 4 && span > word->len * 2 + 4) weak_long_match = true;

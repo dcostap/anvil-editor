@@ -157,6 +157,29 @@ static int test_rejects_long_scattered_coincidence_matches(void) {
   return 0;
 }
 
+static int test_rejects_medium_scattered_coincidence_matches(void) {
+  const char *items[] = {
+    "core:add-directory-picker",
+    "caret-type",
+    "core:toggle-caret-type"
+  };
+  FuzzyIndex idx;
+  CHECK(fuzzy_index_build(&idx, items, 3, FUZZY_MODE_GENERIC));
+
+  uint32_t count = 0;
+  bool has_more = false;
+  FuzzySearchResult *r = fuzzy_index_search(&idx, "caret", 10, &count, &has_more);
+  CHECK(r != NULL);
+  CHECK(count == 2);
+  CHECK(find_text(&idx, r, count, "core:add-directory-picker") < 0);
+  CHECK(find_text(&idx, r, count, "caret-type") >= 0);
+  CHECK(find_text(&idx, r, count, "core:toggle-caret-type") >= 0);
+  free(r);
+
+  fuzzy_index_free(&idx);
+  return 0;
+}
+
 static int test_keeps_short_acronym_matches(void) {
   const char *items[] = { "foo_bar.cpp", "document_view.lua", "alpha.lua" };
   FuzzyIndex idx;
@@ -261,6 +284,7 @@ int main(void) {
   rc |= test_contiguous_match_beats_split_subsequence();
   rc |= test_extending_exact_query_keeps_exact_match_on_top();
   rc |= test_rejects_long_scattered_coincidence_matches();
+  rc |= test_rejects_medium_scattered_coincidence_matches();
   rc |= test_keeps_short_acronym_matches();
   rc |= test_allows_reasonably_compact_long_subsequence();
   rc |= test_spans();

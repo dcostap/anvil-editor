@@ -44,4 +44,16 @@ test.describe("native fuzzy Lua API", function()
     test.ok(common.fuzzy_match("src/main.c", "main", true))
     test.is_nil(system.fuzzy_match)
   end)
+
+  test.it("rejects medium-length scattered coincidence matches", function()
+    test.is_nil(fuzzy.score("core:add-directory-picker", "caret"))
+    local results = fuzzy.filter({
+      "core:add-directory-picker",
+      "caret-type",
+      "core:toggle-caret-type",
+    }, "caret", { limit = 10 })
+    test.equal(#results, 2)
+    test.equal(results[1].text, "caret-type")
+    test.equal(results[2].text, "core:toggle-caret-type")
+  end)
 end)
