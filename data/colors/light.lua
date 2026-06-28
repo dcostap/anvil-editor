@@ -163,8 +163,8 @@ style.diffview_plain_text = c("080808")
 -- Git/diff plugin colors
 style.gitdiff_addition = c("067d17")
 style.gitdiff_modification = c("0033b3")
-style.gitdiff_deletion = c("6c707e")
-style.gitdiff_width = 3
+style.gitdiff_deletion = style.error
+style.gitdiff_width = 2 * SCALE
 style.gitdiff_overview_min_height = math.max(2, 2 * SCALE)
 
 -- File tree Git status colors

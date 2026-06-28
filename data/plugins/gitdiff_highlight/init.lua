@@ -477,7 +477,7 @@ function DocView:draw_line_gutter(line, x, y, width)
 		return lh
 	end
 
-	renderer.draw_rect(x - style.gitdiff_width * 2, y, style.gitdiff_width * 4, math.max(1, SCALE), color)
+	renderer.draw_rect(x - style.gitdiff_width * 3, y, style.gitdiff_width * 6, math.max(1, 2 * SCALE), color)
 	return lh
 end
 

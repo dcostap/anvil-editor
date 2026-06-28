@@ -892,6 +892,11 @@ local function diff_color(tag, background)
   if tag == "modify" then return background and style.diff_modify_background or style.diff_modify end
 end
 
+local function gap_marker_color(tag)
+  if tag == "delete" then return style.gitdiff_deletion or diff_color(tag) end
+  return diff_color(tag)
+end
+
 local function alpha_color(color, alpha)
   if not color then return nil end
   local c = { table.unpack(color) }
@@ -1507,7 +1512,7 @@ function DiffView:draw_divider_changes()
     local a_start_y, a_end_y = line_range_y(left, self.diff_folds_a, block.start_line, block.end_line)
     if block.tag == "delete" then
       draw_connector(block.tag, a_start_y, a_end_y, a_start_y, a_start_y)
-      draw_gap_marker(right, a_start_y, diff_color(block.tag))
+      draw_gap_marker(right, a_start_y, gap_marker_color(block.tag))
     else
       local start_row = effective_row_before_line(left, self.a_gaps, self.diff_folds_a, block.start_line)
       local end_row = effective_row_before_line(left, self.a_gaps, self.diff_folds_a, block.end_line)

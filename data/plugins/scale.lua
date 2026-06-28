@@ -77,6 +77,7 @@ function scale.set(scale)
   style.minimum_thumb_size          = style.minimum_thumb_size          * s
   style.scrollbar_resize_edge_guard = style.scrollbar_resize_edge_guard * s
   style.scrollbar_end_padding      = style.scrollbar_end_padding      * s
+  if style.gitdiff_width then style.gitdiff_width = style.gitdiff_width * s end
   if style.gitdiff_overview_min_height then style.gitdiff_overview_min_height = style.gitdiff_overview_min_height * s end
   style.contracted_scrollbar_margin = style.contracted_scrollbar_margin * s
   style.expanded_scrollbar_margin   = style.expanded_scrollbar_margin   * s
