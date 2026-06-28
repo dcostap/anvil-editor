@@ -194,7 +194,7 @@ style.syntax["function"] = c(C.function_declaration)
 
 -- Broad semantic roots. Detailed Tree-sitter/LSP child keys (for example
 -- `type.class`, `variable.property.readonly`, or `function.method`) are resolved
--- through the syntax hierarchy in core.style unless a theme overrides them.
+-- through the syntax hierarchy unless a theme overrides them.
 style.syntax["type"] = c(C.class_name)
 style.syntax["variable"] = c(C.identifier)
 style.syntax["constant"] = c(C.constant)

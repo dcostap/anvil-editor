@@ -1229,6 +1229,37 @@ for name, _ in pairs(style.syntax) do
   autocomplete.add_icon(name, "M", style.icon_font, name)
 end
 
+local completion_kind_icon_colors = {
+  class = "type.class",
+  color = "constant",
+  constructor = "function.constructor",
+  enum = "type.enum",
+  enum_member = "constant.enum_member",
+  event = "function.event",
+  field = "variable.field",
+  file = "string",
+  folder = "string",
+  interface = "type.interface",
+  method = "function.method",
+  module = "type.namespace",
+  namespace = "type.namespace",
+  package = "type.namespace",
+  property = "variable.property",
+  reference = "variable",
+  snippet = "markup",
+  struct = "type.struct",
+  text = "normal",
+  type_parameter = "type.parameter",
+  unit = "number",
+  value = "constant",
+}
+
+for icon_name, color in pairs(completion_kind_icon_colors) do
+  if style.syntax[color] then
+    autocomplete.add_icon(icon_name, "M", style.icon_font, color)
+  end
+end
+
 --
 -- Commands
 --

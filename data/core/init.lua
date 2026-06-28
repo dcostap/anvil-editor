@@ -1079,170 +1079,211 @@ end
 ---Map newly introduced syntax symbols when missing from current color scheme.
 ---@param clear_new? boolean Only perform removal of new syntax symbols
 map_new_syntax_colors = function(clear_new)
-  ---New syntax symbols that may not be defined by all color schemes
+  ---Syntax hierarchy for detailed semantic token names.
+  ---
+  ---Keys are intentionally canonical and dotted from broad to granular:
+  ---`type.class.default_library` falls back to `type.class`, then `type`.
+  ---Themes can therefore color a broad parent once or override any child.
   local symbols_map = {
-    -- symbols related to doc comments
-    ["annotation"]            = { alt = "keyword",  dec=30 },
-    ["annotation.string"]     = { alt = "string",   dec=30 },
-    ["annotation.param"]      = { alt = "symbol",   dec=30 },
-    ["annotation.type"]       = { alt = "keyword2", dec=30 },
-    ["annotation.operator"]   = { alt = "operator", dec=30 },
-    ["annotation.function"]   = { alt = "function", dec=30 },
-    ["annotation.number"]     = { alt = "number",   dec=30 },
-    ["annotation.keyword2"]   = { alt = "keyword2", dec=30 },
-    ["annotation.literal"]    = { alt = "literal",  dec=30 },
-    ["attribute"]             = { alt = "keyword",  dec=30 },
-    -- Keywords like: true or false
-    ["boolean"]               = { alt = "literal"   },
-    -- Single quote sequences like: 'a'
-    ["character"]             = { alt = "string"    },
-    -- can be escape sequences like: \t, \r, \n
-    ["character.special"]     = {                   },
-    -- Keywords like: if, else, elseif
-    ["conditional" ]          = { alt = "keyword"   },
-    -- conditional ternary as: condition ? value1 : value2
-    ["conditional.ternary"]   = { alt = "operator"  },
-    -- keywords like: nil, null
-    ["constant"]              = { alt = "number"    },
-    ["constant.builtin"]      = {                   },
-    -- a macro constant as in: #define MYVAL 1
-    ["constant.macro"]        = {                   },
-    -- constructor declarations as in: __constructor() or myclass::myclass()
-    ["constructor"]           = { alt = "function"  },
-    ["debug"]                 = { alt = "comment"   },
-    ["define"]                = { alt = "keyword"   },
-    ["error"]                 = { alt = "keyword"   },
-    -- keywords like: try, catch, finally
-    ["exception"]             = { alt = "keyword"   },
-    -- class or table fields
-    ["field"]                 = { alt = "normal"    },
-    -- a numerical constant that holds a float
-    ["float"]                 = { alt = "number"    },
-    -- function name in a call
-    ["function.call"]         = {                   },
-    -- method names represented by Tree-sitter capture vocabularies
-    ["function.method"]       = { alt = "function"  },
-    ["function.method.call"]  = { alt = "function"  },
-    -- a function call that was declared as a macro like in: #define myfunc()
-    ["function.macro"]        = {                   },
-    -- keywords like: include, import, require
-    ["include"]               = { alt = "keyword"   },
-    -- keywords like: return
-    ["keyword.return"]        = {                   },
-    -- keywords like: func, function
-    ["keyword.function"]      = {                   },
-    -- keywords like: and, or
-    ["keyword.operator"]      = {                   },
-    -- a goto label name like in: label: or ::label::
-    ["label"]                 = { alt = "function"  },
-    -- class method declaration
-    ["method"]                = { alt = "function"  },
-    -- class method call
-    ["method.call"]           = {                   },
-    -- namespace name like in namespace::subelement or namespace\subelement
-    ["namespace"]             = { alt = "literal"   },
-    -- parameters in a function declaration
-    ["parameter"]             = { alt = "operator"  },
-    -- keywords like: #if, #elif, #endif
-    ["preproc"]               = { alt = "keyword"   },
-    -- any type of punctuation
-    ["punctuation"]           = { alt = "normal"    },
-    -- punctuation like: (), {}, []
-    ["punctuation.brackets"]  = {                   },
-    -- punctuation like: , or :
-    ["punctuation.delimiter"] = { alt = "operator"  },
-    -- puctuation like: # or @
-    ["punctuation.special"]   = { alt = "operator"  },
-    -- keywords like: while, for
-    ["repeat"]                = { alt = "keyword"   },
-    -- keywords like: static, const, constexpr
-    ["storageclass"]          = { alt = "keyword"   },
-    ["storageclass.lifetime"] = {                   },
-    -- tags in HTML and JSX
-    ["tag"]                   = { alt = "function"  },
-    -- tag delimeters <>
-    ["tag.delimiter"]         = { alt = "operator"  },
-    -- tag attributes eg: id="id-attr"
-    ["tag.attribute"]         = { alt = "keyword"   },
-    -- additions on diff or patch
-    ["text.diff.add"]         = { alt = style.good  },
-    -- deletions on diff or patch
-    ["text.diff.delete"]      = { alt = style.error },
-    -- a language standard library support types
-    ["type"]                  = { alt = "keyword2"  },
-    -- a language builtin types like: char, double, int
-    ["type.builtin"]          = {                   },
-    -- a custom type defininition like ssize_t on typedef long int ssize_t
-    ["type.definition"]       = {                   },
-    -- keywords like: private, public
-    ["type.qualifier"]        = {                   },
-    -- any variable defined or accessed on the code
-    ["variable"]              = { alt = "normal"    },
-    -- keywords like: this, self, parent
-    ["variable.builtin"]      = { alt = "keyword2"  },
+    -- symbols related to doc comments and attributes
+    ["annotation"]                 = { alt = "keyword",  dec = 30 },
+    ["annotation.decorator"]       = { alt = "annotation" },
+    ["annotation.function"]        = { alt = "function", dec = 30 },
+    ["annotation.keyword2"]        = { alt = "keyword2", dec = 30 },
+    ["annotation.literal"]         = { alt = "literal",  dec = 30 },
+    ["annotation.number"]          = { alt = "number",   dec = 30 },
+    ["annotation.operator"]        = { alt = "operator", dec = 30 },
+    ["annotation.param"]           = { alt = "symbol",   dec = 30 },
+    ["annotation.string"]          = { alt = "string",   dec = 30 },
+    ["annotation.type"]            = { alt = "type",     dec = 30 },
+    ["attribute"]                  = { alt = "annotation" },
+
+    -- literals and constants
+    ["boolean"]                    = { alt = "literal" },
+    ["character"]                  = { alt = "string" },
+    ["character.special"]          = { alt = "character" },
+    ["constant"]                   = { alt = "number" },
+    ["constant.builtin"]           = { alt = "constant" },
+    ["constant.enum_member"]       = { alt = "constant" },
+    ["constant.macro"]             = { alt = "constant" },
+    ["float"]                      = { alt = "number" },
+
+    -- keyword subgroups
+    ["conditional"]                = { alt = "keyword" },
+    ["conditional.ternary"]        = { alt = "operator" },
+    ["debug"]                      = { alt = "comment" },
+    ["define"]                     = { alt = "keyword" },
+    ["error"]                      = { alt = style.error },
+    ["exception"]                  = { alt = "keyword" },
+    ["include"]                    = { alt = "keyword" },
+    ["keyword.function"]           = { alt = "keyword" },
+    ["keyword.modifier"]           = { alt = "keyword2" },
+    ["keyword.operator"]           = { alt = "keyword" },
+    ["keyword.return"]             = { alt = "keyword" },
+    ["preproc"]                    = { alt = "keyword" },
+    ["repeat"]                     = { alt = "keyword" },
+    ["storageclass"]               = { alt = "keyword" },
+    ["storageclass.lifetime"]      = { alt = "storageclass" },
+    ["warning"]                    = { alt = style.warn },
+
+    -- functions and callable things
+    ["constructor"]                = { alt = "function" },
+    ["function.abstract"]          = { alt = "function" },
+    ["function.async"]             = { alt = "function" },
+    ["function.call"]              = { alt = "function" },
+    ["function.constructor"]       = { alt = "function" },
+    ["function.declaration"]       = { alt = "function" },
+    ["function.definition"]        = { alt = "function" },
+    ["function.deprecated"]        = { alt = "function" },
+    ["function.documentation"]     = { alt = "function" },
+    ["function.event"]             = { alt = "function" },
+    ["function.label"]             = { alt = "function" },
+    ["function.macro"]             = { alt = "function" },
+    ["function.method"]            = { alt = "function" },
+    ["function.method.abstract"]   = { alt = "function.method" },
+    ["function.method.async"]      = { alt = "function.method" },
+    ["function.method.call"]       = { alt = "function.method" },
+    ["function.method.deprecated"] = { alt = "function.method" },
+    ["function.method.static"]     = { alt = "function.method" },
+    ["function.special"]           = { alt = "function" },
+    ["method"]                     = { alt = "function.method" },
+    ["method.call"]                = { alt = "function.method.call" },
+
+    -- markup and tags
+    ["doc_comment"]                = { alt = "comment" },
+    ["doccomment"]                 = { alt = "comment" },
+    ["markup"]                     = { alt = "keyword2" },
+    ["markup.heading"]             = { alt = "markup" },
+    ["metadata"]                   = { alt = "annotation" },
+    ["markup.link"]                = { alt = "function" },
+    ["markup.raw"]                 = { alt = "string" },
+    ["tag"]                        = { alt = "markup" },
+    ["tag.attribute"]              = { alt = "tag" },
+    ["tag.delimiter"]              = { alt = "punctuation.delimiter" },
+
+    -- punctuation
+    ["punctuation"]                = { alt = "normal" },
+    ["punctuation.bracket"]        = { alt = "punctuation" },
+    ["punctuation.brackets"]       = { alt = "punctuation.bracket" },
+    ["punctuation.delimiter"]      = { alt = "operator" },
+    ["punctuation.special"]        = { alt = "operator" },
+
+    -- strings
+    ["string.escape"]              = { alt = "string" },
+    ["string.regexp"]              = { alt = "string" },
+    ["escape"]                     = { alt = "string.escape" },
+
+    -- diff pseudo syntax
+    ["text.diff.add"]              = { alt = style.good },
+    ["text.diff.delete"]           = { alt = style.error },
+
+    -- types
+    ["type"]                       = { alt = "keyword2" },
+    ["type.abstract"]              = { alt = "type" },
+    ["type.builtin"]               = { alt = "type" },
+    ["type.class"]                 = { alt = "type" },
+    ["type.class.abstract"]        = { alt = "type.class" },
+    ["type.class.declaration"]     = { alt = "type.class" },
+    ["type.class.default_library"] = { alt = "type.class" },
+    ["type.class.deprecated"]      = { alt = "type.class" },
+    ["type.definition"]            = { alt = "type" },
+    ["type.enum"]                  = { alt = "type" },
+    ["type.enum.declaration"]      = { alt = "type.enum" },
+    ["type.enum.default_library"]  = { alt = "type.enum" },
+    ["type.enum.deprecated"]       = { alt = "type.enum" },
+    ["type.interface"]             = { alt = "type" },
+    ["type.interface.abstract"]    = { alt = "type.interface" },
+    ["type.interface.declaration"] = { alt = "type.interface" },
+    ["type.interface.deprecated"]  = { alt = "type.interface" },
+    ["type.namespace"]             = { alt = "type" },
+    ["type.parameter"]             = { alt = "type" },
+    ["type.qualifier"]             = { alt = "keyword.modifier" },
+    ["type.struct"]                = { alt = "type" },
+    ["type.struct.declaration"]    = { alt = "type.struct" },
+    ["type.struct.default_library"] = { alt = "type.struct" },
+    ["type.struct.deprecated"]     = { alt = "type.struct" },
+
+    -- variables and object members
+    ["field"]                      = { alt = "variable.field" },
+    ["parameter"]                  = { alt = "variable.parameter" },
+    ["property"]                   = { alt = "variable.property" },
+    ["variable"]                   = { alt = "normal" },
+    ["variable.builtin"]           = { alt = "variable" },
+    ["variable.declaration"]       = { alt = "variable" },
+    ["variable.definition"]        = { alt = "variable" },
+    ["variable.field"]             = { alt = "variable.property" },
+    ["variable.modification"]      = { alt = "variable" },
+    ["variable.parameter"]         = { alt = "variable" },
+    ["variable.property"]          = { alt = "variable" },
+    ["variable.property.declaration"] = { alt = "variable.property" },
+    ["variable.property.deprecated"] = { alt = "variable.property" },
+    ["variable.property.modification"] = { alt = "variable.property" },
+    ["variable.property.readonly"] = { alt = "variable.property" },
+    ["variable.property.static"]   = { alt = "variable.property" },
+    ["variable.readonly"]          = { alt = "variable" },
+    ["variable.static"]            = { alt = "variable" },
+  }
+
+  local clear_names = {
+    "class", "class_name", "interface", "label", "namespace",
   }
 
   if clear_new then
     for symbol_name in pairs(symbols_map) do
-      if style.syntax[symbol_name] then
-        style.syntax[symbol_name] = nil
-      end
+      style.syntax[symbol_name] = nil
+    end
+    for _, symbol_name in ipairs(clear_names) do
+      style.syntax[symbol_name] = nil
     end
     return
   end
 
-  --- map symbols not defined on syntax
-  for symbol_name in pairs(symbols_map) do
-    if not style.syntax[symbol_name] then
-      local sections = {};
-      for match in (symbol_name.."."):gmatch("(.-)%.") do
-        table.insert(sections, match);
-      end
-      for i=#sections, 1, -1 do
-        local section = table.concat(sections, ".", 1, i)
-        local parent = symbols_map[section]
-        if parent and parent.alt then
-          -- copy the color
-          local color = table.pack(
-            table.unpack(style.syntax[parent.alt] or parent.alt)
-          )
-          if parent.dec then
-            color = common.darken_color(color, parent.dec)
-          elseif parent.inc then
-            color = common.lighten_color(color, parent.inc)
-          end
-          style.syntax[symbol_name] = color
-          break
-        end
-      end
+  local function copy_color(color)
+    if type(color) ~= "table" then return nil end
+    local copy = {}
+    for i, value in ipairs(color) do copy[i] = value end
+    return copy
+  end
+
+  local function fallback_parent(type_name)
+    local entry = symbols_map[type_name]
+    if entry and entry.alt then return entry, entry.alt end
+    if type(type_name) == "string" then
+      local parent = type_name:match("^(.+)%.[^.]+$")
+      if parent then return nil, parent end
     end
   end
 
-  -- metatable to automatically map custom symbol types to the nearest parent
+  local function resolve_syntax_color(syntax, type_name, seen)
+    if type(type_name) ~= "string" then return rawget(syntax, type_name) end
+    local existing = rawget(syntax, type_name)
+    if existing then return existing end
+    seen = seen or {}
+    if seen[type_name] then return nil end
+    seen[type_name] = true
+
+    local entry, parent = fallback_parent(type_name)
+    if not parent then return nil end
+
+    local color
+    if type(parent) == "table" then
+      color = parent
+    elseif type(parent) == "string" then
+      color = resolve_syntax_color(syntax, parent, seen)
+    end
+    if not color then return nil end
+
+    if entry and entry.dec then
+      color = common.darken_color(copy_color(color), entry.dec)
+    elseif entry and entry.inc then
+      color = common.lighten_color(copy_color(color), entry.inc)
+    end
+    return color
+  end
+
   setmetatable(style.syntax, {
     __index = function(syntax, type_name)
-      if type(type_name) ~= "string" then
-        return rawget(syntax, type_name)
-      end
-      if not rawget(syntax, type_name) and type(type_name) == "string" then
-        local sections = {};
-        for match in (type_name.."."):gmatch("(.-)%.") do
-          table.insert(sections, match);
-        end
-        if #sections > 1 then
-          for i=#sections, 1, -1 do
-            local section = table.concat(sections, ".", 1, i)
-            local parent = rawget(syntax, section)
-            if parent then
-              -- copy the color
-              local color = table.pack(table.unpack(parent))
-              rawset(syntax, type_name, color)
-              return color
-            end
-          end
-        end
-      end
-      return rawget(syntax, type_name)
+      return resolve_syntax_color(syntax, type_name)
     end
   })
 end

@@ -108,6 +108,14 @@
 
 (field_identifier) @property
 (statement_identifier) @label
+(class_specifier
+  name: (type_identifier) @type.class)
+(struct_specifier
+  name: (type_identifier) @type.struct)
+(union_specifier
+  name: (type_identifier) @type.struct)
+(enum_specifier
+  name: (type_identifier) @type.enum)
 (type_identifier) @type
 (primitive_type) @type.builtin
 (sized_type_specifier) @type.builtin
