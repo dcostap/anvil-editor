@@ -70,7 +70,23 @@ function style.get_small_font(font)
   return style.get_scaled_font(font, math.max(8 * SCALE, font:get_size() - 1 * SCALE))
 end
 
-style.syntax = {}
+local syntax_fallback_mt = {}
+
+function syntax_fallback_mt:__index(key)
+  if type(key) ~= "string" then return nil end
+  local parent = key:match("^(.*)%.[^%.]+$")
+  while parent do
+    local value = rawget(self, parent)
+    if value ~= nil then return value end
+    parent = parent:match("^(.*)%.[^%.]+$")
+  end
+end
+
+function style.apply_syntax_fallbacks(syntax)
+  return setmetatable(syntax or {}, syntax_fallback_mt)
+end
+
+style.syntax = style.apply_syntax_fallbacks({})
 
 -- This can be used to override fonts per syntax group.
 -- The syntax highlighter will take existing values from this table and

@@ -191,27 +191,16 @@ style.syntax["literal"] = c(C.java_keyword)
 style.syntax["string"] = c(C.string)
 style.syntax["operator"] = c(C.semicolon)
 style.syntax["function"] = c(C.function_declaration)
-style.syntax["function.call"] = c(C.function_declaration)
-style.syntax["function.method"] = c(C.function_declaration)
-style.syntax["function.method.call"] = c(C.function_declaration)
 
--- Extra semantic-ish slots for languages/plugins that emit more specific types.
-style.syntax["class"] = c(C.class_name)
-style.syntax["class_name"] = c(C.class_name)
-style.syntax["type"] = c(C.interface_name)
-style.syntax["interface"] = c(C.interface_name)
-style.syntax["constant"] = c(C.constant)
-style.syntax["field"] = c(C.instance_field)
-style.syntax["property"] = c(C.instance_field)
+-- Broad semantic roots. Detailed Tree-sitter/LSP child keys (for example
+-- `type.class`, `variable.property.readonly`, or `function.method`) are resolved
+-- through the syntax hierarchy in core.style unless a theme overrides them.
+style.syntax["type"] = c(C.class_name)
 style.syntax["variable"] = c(C.identifier)
-style.syntax["parameter"] = c(C.kotlin_parameter)
+style.syntax["constant"] = c(C.constant)
 style.syntax["annotation"] = c(C.kotlin_annotation)
-style.syntax["metadata"] = c(C.metadata)
-style.syntax["doccomment"] = c(C.doc_comment)
-style.syntax["doc_comment"] = c(C.doc_comment)
-style.syntax["tag"] = c(C.doc_comment_tag)
 style.syntax["markup"] = c(C.doc_markup)
-style.syntax["escape"] = c(C.invalid_string_escape)
+style.syntax["punctuation"] = c(C.identifier)
 style.syntax["error"] = c(C.invalid_string_escape_effect)
 style.syntax["warning"] = c(C.warning_stripe)
 

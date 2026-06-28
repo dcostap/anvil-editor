@@ -132,6 +132,28 @@ test.describe("core.lsp.provider semantic tokens", function()
     test.equal(tokens[1].style, "function")
   end)
 
+  test.test("semantic token types preserve hierarchical customization keys", function()
+    test.equal(provider.semantic_style("class"), "type.class")
+    test.equal(provider.semantic_style("struct"), "type.struct")
+    test.equal(provider.semantic_style("enum"), "type.enum")
+    test.equal(provider.semantic_style("interface"), "type.interface")
+    test.equal(provider.semantic_style("typeParameter"), "type.parameter")
+    test.equal(provider.semantic_style("enumMember"), "constant.enum_member")
+    test.equal(provider.semantic_style("property"), "variable.property")
+    test.equal(provider.semantic_style("method"), "function.method")
+    test.equal(provider.semantic_style("macro"), "function.macro")
+    test.equal(provider.semantic_style("regexp"), "string.regexp")
+    test.equal(provider.semantic_style("decorator"), "annotation.decorator")
+  end)
+
+  test.test("semantic token modifiers append granular child keys", function()
+    test.equal(provider.semantic_style("variable", { readonly = true }), "variable.readonly")
+    test.equal(provider.semantic_style("property", { readonly = true }), "variable.property.readonly")
+    test.equal(provider.semantic_style("function", { deprecated = true }), "function.deprecated")
+    test.equal(provider.semantic_style("class", { defaultLibrary = true }), "type.class.default_library")
+    test.equal(provider.semantic_style("method", { static = true, deprecated = true }), "function.method.deprecated")
+  end)
+
   test.test("semantic tokens overlay base tokens conservatively", function()
     local tokens = provider.overlay_semantic_tokens("abc def\n", {
       "keyword", "abc",
@@ -229,7 +251,7 @@ test.describe("core.lsp.provider semantic tokens", function()
     test.equal(#client.requests, 2)
   end)
 
-  test.test("readonly variable sample maps through legend to existing Anvil style", function(context)
+  test.test("readonly variable sample maps through legend to hierarchical Anvil style", function(context)
     local doc = track_doc(context, new_doc(join_path(temp_root, "main.cpp"), "const value = 1"))
     local tokens = provider.decode_semantic_tokens(doc, { 0, 6, 5, 0, 1 }, {
       tokenTypes = { "variable" },
@@ -237,7 +259,7 @@ test.describe("core.lsp.provider semantic tokens", function()
     }, "utf-16")
     test.equal(tokens[1].token_type, "variable")
     test.ok(tokens[1].token_modifiers.readonly)
-    test.equal(tokens[1].style, "constant")
+    test.equal(tokens[1].style, "variable.readonly")
   end)
 
   test.test("unsupported semantic token capability stays unavailable", function(context)

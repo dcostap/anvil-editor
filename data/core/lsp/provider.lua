@@ -385,31 +385,57 @@ function provider.clear()
 end
 
 local SEMANTIC_TOKEN_TYPE_MAP = {
-  namespace = "type",
+  namespace = "type.namespace",
   type = "type",
-  class = "class",
-  enum = "type",
-  interface = "interface",
-  struct = "type",
-  typeParameter = "type",
-  parameter = "parameter",
+  class = "type.class",
+  enum = "type.enum",
+  interface = "type.interface",
+  struct = "type.struct",
+  typeParameter = "type.parameter",
+  parameter = "variable.parameter",
   variable = "variable",
-  property = "property",
-  enumMember = "constant",
-  event = "function",
+  property = "variable.property",
+  enumMember = "constant.enum_member",
+  event = "function.event",
   function_ = "function",
   method = "function.method",
-  macro = "function",
+  macro = "function.macro",
   keyword = "keyword",
-  modifier = "keyword2",
+  modifier = "keyword.modifier",
   comment = "comment",
   string = "string",
   number = "number",
-  regexp = "string",
+  regexp = "string.regexp",
   operator = "operator",
-  decorator = "annotation",
+  decorator = "annotation.decorator",
 }
 SEMANTIC_TOKEN_TYPE_MAP["function"] = "function"
+
+local SEMANTIC_TOKEN_MODIFIER_MAP = {
+  declaration = "declaration",
+  definition = "definition",
+  readonly = "readonly",
+  static = "static",
+  deprecated = "deprecated",
+  abstract = "abstract",
+  async = "async",
+  modification = "modification",
+  documentation = "documentation",
+  defaultLibrary = "default_library",
+}
+
+local SEMANTIC_TOKEN_MODIFIER_PRIORITY = {
+  "deprecated",
+  "readonly",
+  "static",
+  "abstract",
+  "async",
+  "modification",
+  "defaultLibrary",
+  "documentation",
+  "declaration",
+  "definition",
+}
 
 local function semantic_capability(client)
   local capabilities = client_capabilities(client)
@@ -438,11 +464,14 @@ local function semantic_modifiers(bitset, legend)
 end
 
 function provider.semantic_style(token_type, modifiers)
+  local base = SEMANTIC_TOKEN_TYPE_MAP[token_type] or token_type or "normal"
   modifiers = modifiers or {}
-  if modifiers.readonly and (token_type == "variable" or token_type == "property") then
-    return "constant"
+  for _, modifier in ipairs(SEMANTIC_TOKEN_MODIFIER_PRIORITY) do
+    if modifiers[modifier] then
+      return base .. "." .. SEMANTIC_TOKEN_MODIFIER_MAP[modifier]
+    end
   end
-  return SEMANTIC_TOKEN_TYPE_MAP[token_type] or token_type or "normal"
+  return base
 end
 
 local function line_start_offsets(doc)

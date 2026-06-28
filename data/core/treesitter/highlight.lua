@@ -10,8 +10,11 @@ local MAX_FAILURES = 3
 
 local capture_aliases = {
   delimiter = "punctuation.delimiter",
-  ["punctuation.bracket"] = "punctuation.brackets",
-  ["function.special"] = "function",
+  escape = "string.escape",
+  label = "function.label",
+  namespace = "type.namespace",
+  property = "variable.property",
+  ["punctuation.bracket"] = "punctuation.bracket",
 }
 
 local function log_quiet(...)
