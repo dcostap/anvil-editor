@@ -25,7 +25,7 @@ local MessageBox = require "widget.messagebox"
 local find_state_by_view = setmetatable({}, { __mode = "k" })
 local last_global_query = ""
 local update_after_input
-local FIND_NAV_VISIBLE_MARGIN_LINES = 2
+local FIND_NAV_VISIBLE_MARGIN_LINES = 4
 
 local SingleLineHighlighter = Highlighter:extend()
 function SingleLineHighlighter:get_line(idx)

@@ -11,7 +11,7 @@ local last_view, last_fn, last_text, last_sel
 local case_sensitive = config.find_case_sensitive or false
 local find_regex = config.find_regex or false
 local found_expression
-local FIND_NAV_VISIBLE_MARGIN_LINES = 2
+local FIND_NAV_VISIBLE_MARGIN_LINES = 4
 
 local function doc()
   local is_DocView = core.active_view:is(DocView) and not core.active_view:is(GlobalPromptBar)
