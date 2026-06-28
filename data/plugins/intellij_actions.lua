@@ -271,13 +271,26 @@ function Doc:remove(...)
 end
 
 local function active_file_path(view)
-  return file_context.view_file_path(view)
+  local path = file_context.view_file_path(view)
+  if path then return path end
+  -- FileTreeView: the view's doc is the filetree listing, not a file; extract
+  -- the path from the filetree entry at the cursor line instead.
+  if view and view.entry_for_line then
+    local line = view.doc and view.doc:get_selection(true)
+    if line then
+      local entry = view:entry_for_line(line)
+      if entry then return entry.abs end
+    end
+  end
 end
 
 local function is_file_bound_view(view)
   if not view then return false end
   local GlobalPromptBar = require "core.global_prompt_bar"
   if view:is(GlobalPromptBar) then return false end
+  -- FileTreeView: the view's doc is the filetree listing; treat it as file-bound
+  -- so commands like reveal-in-explorer work from the filetree cursor.
+  if view.entry_for_line then return true end
   return file_context.is_file_view(view)
 end
 
@@ -355,7 +368,7 @@ local function reveal_active_file_in_explorer(dv)
   end
 
   local info = system.get_file_info(path)
-  if not info or info.type ~= "file" then
+  if not info or (info.type ~= "file" and info.type ~= "dir") then
     core.error("Active file does not exist on disk: %s", path)
     return
   end
