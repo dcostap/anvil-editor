@@ -1,13 +1,20 @@
 @echo off
 setlocal EnableExtensions
 
-set "REPO=C:\Projects\c_projects\anvil-editor"
-set "DEST=C:\Projects\c_projects\anvil-portable"
 set "BASH=C:\msys64\usr\bin\bash.exe"
-set "APP=%DEST%\anvil.exe"
 set "MSYSTEM=MINGW64"
 set "CHERE_INVOKING=1"
 set "MSYS_ENV=export MSYSTEM=MINGW64 HOME=C:/Users/Darius USERPROFILE=C:/Users/Darius HOMEDRIVE=C: HOMEPATH=/Users/Darius; export PATH=/mingw64/bin:/usr/bin:/bin:$PATH;"
+
+call :UseLayout "D:\Projects\c_projects\anvil-editor" "D:\Projects\c_projects\anvil-portable" "/d/Projects/c_projects/anvil-editor" "/d/Projects/c_projects/anvil-portable"
+call :UseLayout "C:\Projects\c_projects\anvil-editor" "C:\Projects\c_projects\anvil-portable" "/c/Projects/c_projects/anvil-editor" "/c/Projects/c_projects/anvil-portable"
+if not defined REPO (
+  echo Could not find Anvil source checkout at either:
+  echo   D:\Projects\c_projects\anvil-editor
+  echo   C:\Projects\c_projects\anvil-editor
+  exit /b 1
+)
+set "APP=%DEST%\anvil.exe"
 
 if not exist "%BASH%" (
   echo MSYS2 bash not found: %BASH%
@@ -32,12 +39,12 @@ if errorlevel 1 exit /b 1
 
 echo.
 echo === Building Anvil incrementally ===
-"%BASH%" -lc "%MSYS_ENV% cd /c/Projects/c_projects/anvil-editor && if [ -f build-windows-x86_64/build.ninja ]; then meson configure build-windows-x86_64 -Drenderer=true && meson compile -C build-windows-x86_64; else ./scripts/build.sh -f -P; fi && ./scripts/ensure-luajit-cli.sh"
+"%BASH%" -lc "%MSYS_ENV% cd %REPO_BASH% && if [ -f build-windows-x86_64/build.ninja ]; then meson configure build-windows-x86_64 -Drenderer=true && meson compile -C build-windows-x86_64; else ./scripts/build.sh -f -P; fi && ./scripts/ensure-luajit-cli.sh"
 if errorlevel 1 exit /b 1
 
 echo.
 echo === Updating portable Anvil at %DEST% ===
-"%BASH%" -lc "%MSYS_ENV% cd /c/Projects/c_projects/anvil-editor && meson install -C build-windows-x86_64 --destdir /c/Projects/c_projects/anvil-portable"
+"%BASH%" -lc "%MSYS_ENV% cd %REPO_BASH% && meson install -C build-windows-x86_64 --destdir %DEST_BASH%"
 if errorlevel 1 exit /b 1
 
 echo.
@@ -57,6 +64,16 @@ echo   %APP%
 echo.
 echo === Restarting Anvil ===
 start "" "%APP%"
+exit /b 0
+
+:UseLayout
+if defined REPO exit /b 0
+if exist "%~1\src\api\api.h" (
+  set "REPO=%~1"
+  set "DEST=%~2"
+  set "REPO_BASH=%~3"
+  set "DEST_BASH=%~4"
+)
 exit /b 0
 
 :KillAnvil
