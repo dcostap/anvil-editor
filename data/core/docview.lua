@@ -1954,17 +1954,25 @@ function DocView:draw_caret(x, y, line, col, caret_idx, color)
       pos.y = y
     else
       local distance = math.abs(dx)
-      local distance_min = config.animated_caret_distance_min or 4
-      local distance_max = config.animated_caret_distance_max or 160
-      local distance_span = math.max(1, distance_max - distance_min)
-      local distance_t = math.max(0, math.min(1, (distance - distance_min) / distance_span))
-      local min_speed = config.animated_caret_min_speed or 35
-      local max_speed = config.animated_caret_max_speed or 100
-      local speed = min_speed + (max_speed - min_speed) * distance_t
-      local linear_t = 1 - math.exp(-speed * dt)
-      local t = 1 - math.pow(1 - linear_t, 3)
-      pos.x = pos.x + dx * t
-      pos.y = y
+      local char_width = self:get_font():get_width("n")
+      if distance <= char_width then
+        -- Per-character caret movement should feel immediate; animation here
+        -- reads as input lag rather than polish.
+        pos.x = x
+        pos.y = y
+      else
+        local distance_min = config.animated_caret_distance_min or 4
+        local distance_max = config.animated_caret_distance_max or 160
+        local distance_span = math.max(1, distance_max - distance_min)
+        local distance_t = math.max(0, math.min(1, (distance - distance_min) / distance_span))
+        local min_speed = config.animated_caret_min_speed or 35
+        local max_speed = config.animated_caret_max_speed or 100
+        local speed = min_speed + (max_speed - min_speed) * distance_t
+        local linear_t = 1 - math.exp(-speed * dt)
+        local t = 1 - math.pow(1 - linear_t, 3)
+        pos.x = pos.x + dx * t
+        pos.y = y
+      end
 
       if math.abs(x - pos.x) > 0.1 then
         core.redraw = true
