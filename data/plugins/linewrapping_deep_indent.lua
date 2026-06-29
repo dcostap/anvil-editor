@@ -42,15 +42,17 @@ end
 function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode)
   local xoffset, i, last_space, last_width, begin_width = 0, 1, nil, 0, 0
   local splits = { 1 }
+  local default_ascii_cell_width = default_font:get_width(" ")
   for idx, type, text in get_tokens(doc, line) do
     local font = style.syntax_fonts[type] or default_font
     if idx == 1 or idx == math.huge then
       begin_width = continuation_indent_width(font, text)
     end
-    local w = font:get_width(text)
+    local plain_ascii_default_font = font == default_font and not text:find("[\t\128-\255]")
+    local w = plain_ascii_default_font and (#text * default_ascii_cell_width) or font:get_width(text)
     if xoffset + w > width then
       for char in common.utf8_chars(text) do
-        w = font:get_width(char)
+        w = plain_ascii_default_font and default_ascii_cell_width or font:get_width(char)
         xoffset = xoffset + w
         if xoffset > width then
           if mode == "word" and last_space then
@@ -165,7 +167,6 @@ local function draw_wrapped_docview(self)
   self.__visible_caret_cache = nil
 
   self:draw_scrollbar()
-  LineWrapping.draw_guide(self)
 end
 
 if not DocView.__linewrapping_deep_indent_draw then

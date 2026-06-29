@@ -45,6 +45,7 @@ local function configure_wrapping_for_test(context, view)
       width_override = cfg.width_override,
       indent = cfg.indent,
       wrapping_indent = cfg.wrapping_indent,
+      guide = cfg.guide,
     }
   end
   if context.highlight_current_line == nil then
@@ -57,6 +58,7 @@ local function configure_wrapping_for_test(context, view)
   cfg.mode = "letter"
   cfg.indent = false
   cfg.wrapping_indent = 0
+  cfg.guide = true
   cfg.width_override = view:get_font():get_width("xxxxxxxx")
   config.highlight_current_line = true
   config.disable_blink = true
@@ -72,6 +74,7 @@ local function restore_config(context)
     cfg.width_override = context.linewrapping_config.width_override
     cfg.indent = context.linewrapping_config.indent
     cfg.wrapping_indent = context.linewrapping_config.wrapping_indent
+    cfg.guide = context.linewrapping_config.guide
   end
   if context.highlight_current_line ~= nil then
     config.highlight_current_line = context.highlight_current_line
@@ -90,12 +93,16 @@ end
 local function with_stubbed_renderer(fn)
   local old_draw_rect = renderer.draw_rect
   local old_draw_text = renderer.draw_text
+  local old_draw_text_known_bounds = renderer.draw_text_known_bounds
   local old_set_clip_rect = renderer.set_clip_rect
   local old_common_draw_text = common.draw_text
 
   renderer.draw_rect = function() end
   renderer.draw_text = function(font, text, x)
     return x + font:get_width(text)
+  end
+  renderer.draw_text_known_bounds = function(_, _, x, _, _, _, w)
+    return x + w
   end
   renderer.set_clip_rect = function() end
   common.draw_text = function() end
@@ -104,11 +111,23 @@ local function with_stubbed_renderer(fn)
 
   renderer.draw_rect = old_draw_rect
   renderer.draw_text = old_draw_text
+  renderer.draw_text_known_bounds = old_draw_text_known_bounds
   renderer.set_clip_rect = old_set_clip_rect
   common.draw_text = old_common_draw_text
 
   if not ok then error(a, 0) end
   return a, b, c, d
+end
+
+local function capture_drawn_caret(view)
+  local drawn_caret
+  local old_draw_caret = view.draw_caret
+  view.draw_caret = function(_, x, y, caret_line, caret_col)
+    drawn_caret = { x = x, y = y, line = caret_line, col = caret_col }
+  end
+  with_stubbed_renderer(function() view:draw_overlay() end)
+  view.draw_caret = old_draw_caret
+  return drawn_caret
 end
 
 local function collect_current_line_highlights(view, fn)
@@ -329,6 +348,177 @@ test.describe("line wrapping visual navigation", function()
     line, col = doc:get_selection()
     test.equal(line, 1)
     test.equal(col, #doc.lines[1])
+  end)
+
+  test.it("draws wrapped plain ASCII text with known bounds to avoid redundant shaping", function(context)
+    local view = open_editor(context, string.rep("x", 80))
+    configure_wrapping_for_test(context, view)
+
+    local draw_text_calls = 0
+    local known_bounds_calls = 0
+    local old_draw_text = renderer.draw_text
+    local old_draw_text_known_bounds = renderer.draw_text_known_bounds
+    renderer.draw_text = function(font, text, x)
+      draw_text_calls = draw_text_calls + 1
+      return x + font:get_width(text)
+    end
+    renderer.draw_text_known_bounds = function(_, _, x, _, _, _, w)
+      known_bounds_calls = known_bounds_calls + 1
+      return x + w
+    end
+
+    local ok, err = pcall(function()
+      view:draw_line_text(1, select(1, view:get_line_screen_position(1)), select(2, view:get_line_screen_position(1)))
+    end)
+
+    renderer.draw_text = old_draw_text
+    renderer.draw_text_known_bounds = old_draw_text_known_bounds
+    if not ok then error(err, 0) end
+
+    test.ok(known_bounds_calls > 0, "expected wrapped ASCII text to use known-bounds drawing")
+    test.equal(draw_text_calls, 0)
+  end)
+
+  test.it("keeps typed caret at visual end when insertion fills a wrapped row", function(context)
+    local view, doc = open_editor(context, string.rep("x", 15))
+    configure_wrapping_for_test(context, view)
+    local font = view:get_font()
+    local first_row_x, first_row_y = view:get_line_screen_position(1, 1)
+
+    doc:set_selection(1, 8, 1, 8)
+    view:on_text_input("x")
+    local line, col = doc:get_selection()
+    test.equal(line, 1)
+    test.equal(col, 9)
+
+    local drawn_caret
+    local old_draw_caret = view.draw_caret
+    view.draw_caret = function(_, x, y, caret_line, caret_col)
+      drawn_caret = { x = x, y = y, line = caret_line, col = caret_col }
+    end
+    with_stubbed_renderer(function() view:draw_overlay() end)
+    view.draw_caret = old_draw_caret
+
+    test.equal(drawn_caret.line, line)
+    test.equal(drawn_caret.col, col)
+    test.equal(drawn_caret.y, first_row_y)
+    test.equal(drawn_caret.x, first_row_x + font:get_width("xxxxxxxx"))
+  end)
+
+  test.it("keeps next-character movement caret at visual end when crossing a wrap boundary", function(context)
+    local view, doc = open_editor(context, string.rep("x", 16))
+    configure_wrapping_for_test(context, view)
+    local font = view:get_font()
+    local first_row_x, first_row_y = view:get_line_screen_position(1, 1)
+    local second_row_y = select(2, view:get_line_screen_position(1, 10))
+
+    doc:set_selection(1, 8, 1, 8)
+    command.perform("doc:move-to-next-char")
+    local line, col = doc:get_selection()
+    test.equal(line, 1)
+    test.equal(col, 9)
+
+    local drawn_caret = capture_drawn_caret(view)
+    test.equal(drawn_caret.line, line)
+    test.equal(drawn_caret.col, col)
+    test.equal(drawn_caret.y, first_row_y)
+    test.equal(drawn_caret.x, first_row_x + font:get_width("xxxxxxxx"))
+
+    command.perform("doc:move-to-next-char")
+    line, col = doc:get_selection()
+    test.equal(line, 1)
+    test.equal(col, 10)
+
+    drawn_caret = capture_drawn_caret(view)
+    test.equal(drawn_caret.y, second_row_y)
+    test.equal(drawn_caret.x, select(1, view:get_line_screen_position(1, 9)) + font:get_width("x"))
+  end)
+
+  test.it("keeps selection-extension caret at visual end when crossing a wrap boundary", function(context)
+    local view, doc = open_editor(context, string.rep("x", 16))
+    configure_wrapping_for_test(context, view)
+    local font = view:get_font()
+    local first_row_x, first_row_y = view:get_line_screen_position(1, 1)
+
+    doc:set_selection(1, 8, 1, 8)
+    command.perform("doc:select-to-next-char")
+    local line1, col1, line2, col2 = doc:get_selection()
+    test.equal(line1, 1)
+    test.equal(col1, 9)
+    test.equal(line2, 1)
+    test.equal(col2, 8)
+
+    local drawn_caret = capture_drawn_caret(view)
+    test.equal(drawn_caret.line, line1)
+    test.equal(drawn_caret.col, col1)
+    test.equal(drawn_caret.y, first_row_y)
+    test.equal(drawn_caret.x, first_row_x + font:get_width("xxxxxxxx"))
+  end)
+
+  test.it("keeps forward word endpoint caret at visual end when it lands on a wrap boundary", function(context)
+    local view, doc = open_editor(context, string.rep("x", 8) .. " y")
+    configure_wrapping_for_test(context, view)
+    local font = view:get_font()
+    local first_row_x, first_row_y = view:get_line_screen_position(1, 1)
+
+    doc:set_selection(1, 1, 1, 1)
+    command.perform("doc:move-to-next-word-end")
+    local line, col = doc:get_selection()
+    test.equal(line, 1)
+    test.equal(col, 9)
+
+    local drawn_caret = capture_drawn_caret(view)
+    test.equal(drawn_caret.line, line)
+    test.equal(drawn_caret.col, col)
+    test.equal(drawn_caret.y, first_row_y)
+    test.equal(drawn_caret.x, first_row_x + font:get_width("xxxxxxxx"))
+  end)
+
+  test.it("draws the wrap guide before the visual-end caret so the caret is not cropped", function(context)
+    local view, doc = open_editor(context, string.rep("x", 40))
+    configure_wrapping_for_test(context, view)
+    doc:set_selection(1, 12, 1, 12)
+    command.perform("doc:move-to-end-of-line")
+
+    local expected_x = select(1, view:get_line_screen_position(1, 17, true))
+    local events = {}
+    local old_draw_rect = renderer.draw_rect
+    local old_draw_text = renderer.draw_text
+    local old_draw_text_known_bounds = renderer.draw_text_known_bounds
+    local old_set_clip_rect = renderer.set_clip_rect
+    local old_common_draw_text = common.draw_text
+    local old_draw_caret = view.draw_caret
+
+    renderer.draw_rect = function(x, y, w, h, color)
+      if color == style.line_wrapping_guide and math.abs(x - expected_x) < 0.01 then
+        events[#events + 1] = "guide"
+      end
+    end
+    renderer.draw_text = function(font, text, x)
+      return x + font:get_width(text)
+    end
+    renderer.draw_text_known_bounds = function(_, _, x, _, _, _, w)
+      return x + w
+    end
+    renderer.set_clip_rect = function() end
+    common.draw_text = function() end
+    view.draw_caret = function(_, x, y, caret_line, caret_col)
+      if caret_line == 1 and caret_col == 17 and math.abs(x - expected_x) < 0.01 then
+        events[#events + 1] = "caret"
+      end
+    end
+
+    local ok, err = pcall(function() view:draw() end)
+
+    renderer.draw_rect = old_draw_rect
+    renderer.draw_text = old_draw_text
+    renderer.draw_text_known_bounds = old_draw_text_known_bounds
+    renderer.set_clip_rect = old_set_clip_rect
+    common.draw_text = old_common_draw_text
+    view.draw_caret = old_draw_caret
+    if not ok then error(err, 0) end
+
+    test.same(events, { "guide", "caret" })
   end)
 
   test.it("draws visual-end caret on the previous wrapped row before right moves to the next row", function(context)

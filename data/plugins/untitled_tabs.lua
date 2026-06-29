@@ -13,6 +13,7 @@ local untitled_recovery = require "plugins.untitled_recovery"
 
 local M = {}
 local untitled_id_counter = 0
+local TITLE_SNIPPET_MAX_BYTES = 160
 
 local function is_untitled_doc(doc)
   return doc and doc.intellij_untitled and doc.new_file and not doc.filename
@@ -64,28 +65,50 @@ local function tag_doc(doc, name, id)
   return doc
 end
 
+local function utf8_prefix(text, max_bytes)
+  text = tostring(text or "")
+  if #text <= max_bytes then return text, false end
+  local cut = max_bytes
+  while cut > 0 and common.is_utf8_cont(text, cut + 1) do
+    cut = cut - 1
+  end
+  if cut <= 0 then cut = max_bytes end
+  return text:sub(1, cut), true
+end
+
 local function first_text_snippet(doc)
   if not doc then return nil end
   for _, line in ipairs(doc.lines or {}) do
     local text = tostring(line or ""):gsub("\r", ""):gsub("\n$", "")
     text = text:match("^%s*(.-)%s*$")
-    if text and text ~= "" then return text end
+    if text and text ~= "" then
+      local prefix, truncated = utf8_prefix(text, TITLE_SNIPPET_MAX_BYTES)
+      return truncated and (prefix .. "…") or prefix
+    end
   end
 end
 
 local function truncate_to_width(font, text, max_w)
   text = tostring(text or "")
+  if max_w <= 0 then return "" end
   if font:get_width(text) <= max_w then return text end
   local dots = "…"
   local dots_w = font:get_width(dots)
+  if dots_w > max_w then return "" end
+
   local len = text:ulen()
-  for i = 1, len do
-    local candidate = text:usub(1, len - i)
+  local lo, hi, best = 0, len, 0
+  while lo <= hi do
+    local mid = math.floor((lo + hi) / 2)
+    local candidate = mid > 0 and text:usub(1, mid) or ""
     if font:get_width(candidate) + dots_w <= max_w then
-      return candidate .. dots
+      best = mid
+      lo = mid + 1
+    else
+      hi = mid - 1
     end
   end
-  return dots_w <= max_w and dots or ""
+  return best > 0 and (text:usub(1, best) .. dots) or dots
 end
 
 local function secondary_font()

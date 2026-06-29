@@ -104,6 +104,7 @@ end
 function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode)
   local xoffset, last_i, i, last_space, last_width, begin_width = 0, 1, 1, nil, 0, 0
   local splits = { 1 }
+  local default_ascii_cell_width = default_font:get_width(" ")
   for idx, type, text in get_tokens(doc, line) do
     local font = style.syntax_fonts[type] or default_font
     if idx == 1 or idx == math.huge and config.plugins.linewrapping.indent then
@@ -111,10 +112,11 @@ function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode)
       if indent_end then begin_width = font:get_width(text:sub(1, indent_end)) end
       begin_width = begin_width + get_extra_wrapping_indent_width(default_font)
     end
-    local w = font:get_width(text)
+    local plain_ascii_default_font = font == default_font and not text:find("[\t\128-\255]")
+    local w = plain_ascii_default_font and (#text * default_ascii_cell_width) or font:get_width(text)
     if xoffset + w > width then
       for char in common.utf8_chars(text) do
-        w = font:get_width(char)
+        w = plain_ascii_default_font and default_ascii_cell_width or font:get_width(char)
         xoffset = xoffset + w
         if xoffset > width then
           if mode == "word" and last_space then
@@ -422,6 +424,82 @@ function Doc:raw_remove(line1, col1, line2, col2, undo_stack, time)
   end
 end
 
+local function is_soft_wrap_row_start(docview, line, col)
+  if not docview.wrapped_settings or not line or not col then return false end
+  local first_idx = docview.wrapped_line_to_idx[line]
+  if not first_idx then return false end
+  local idx, _, _, row_start_col = get_line_idx_col_count(docview, line, col, false)
+  return idx > first_idx and row_start_col == col
+end
+
+local function collect_soft_wrap_row_start_affinity(docview)
+  local positions = {}
+  if not docview.wrapped_settings then return positions end
+  for _, line1, col1, line2, col2 in docview.doc:get_selections(false) do
+    if line1 == line2 and col1 == col2 and is_soft_wrap_row_start(docview, line1, col1) then
+      positions[position_key(line1, col1)] = true
+    end
+  end
+  return positions
+end
+
+local function copy_selection_list(selections)
+  local copy = {}
+  for i = 1, #selections do copy[i] = selections[i] end
+  return copy
+end
+
+local function position_before(line1, col1, line2, col2)
+  return line1 < line2 or (line1 == line2 and col1 < col2)
+end
+
+local function sort_position_pair(line1, col1, line2, col2)
+  if position_before(line2, col2, line1, col1) then
+    return line2, col2, line1, col1
+  end
+  return line1, col1, line2, col2
+end
+
+local function old_selection_advanced_to(old_selections, line, col)
+  for i = 1, #old_selections, 4 do
+    local line1, col1 = old_selections[i], old_selections[i + 1]
+    local line2, col2 = old_selections[i + 2], old_selections[i + 3]
+    if position_before(line1, col1, line, col) then
+      return true
+    end
+    local sline1, scol1, sline2, scol2 = sort_position_pair(line1, col1, line2, col2)
+    if sline2 == line and scol2 == col and position_before(sline1, scol1, sline2, scol2) then
+      return true
+    end
+  end
+  return false
+end
+
+local function collect_forward_endpoint_affinity(docview, old_selections)
+  local positions = {}
+  if not docview.wrapped_settings then return positions end
+  for _, line1, col1 in docview.doc:get_selections(false) do
+    if is_soft_wrap_row_start(docview, line1, col1)
+    and old_selection_advanced_to(old_selections, line1, col1) then
+      positions[position_key(line1, col1)] = true
+    end
+  end
+  return positions
+end
+
+local old_doc_text_input_by_selection = Doc.text_input_by_selection
+function Doc:text_input_by_selection(...)
+  local result = old_doc_text_input_by_selection(self, ...)
+  if result and result.changed and open_files[self] then
+    for _, docview in ipairs(open_files[self]) do
+      if docview.wrapped_settings then
+        set_wrapped_line_end_affinity(docview, collect_soft_wrap_row_start_affinity(docview))
+      end
+    end
+  end
+  return result
+end
+
 local old_doc_on_text_transaction = Doc.on_text_transaction
 function Doc:on_text_transaction(transaction)
   local result = old_doc_on_text_transaction(self, transaction)
@@ -621,13 +699,37 @@ local old_draw_line_text = DocView.draw_line_text
 function DocView:draw_line_text(line, x, y)
   if not self.wrapped_settings then return old_draw_line_text(self, line, x, y) end
   local default_font = self:get_font()
+  local default_font_height = default_font:get_height()
+  local default_ascii_cell_width = default_font:get_width(" ")
   local tx, ty, begin_width = x, y + self:get_line_text_y_offset(), self.wrapped_line_offsets[line]
   local lh = self:get_line_height()
   local idx, _, count = get_line_idx_col_count(self, line)
   local total_offset = 1
+  local can_use_known_bounds = renderer.draw_text_known_bounds ~= nil
+
+  local function draw_segment(font, text, sx, sy, color, uses_default_font)
+    if text == "" then return sx end
+    if can_use_known_bounds and uses_default_font and not text:find("[\t\128-\255]") then
+      local width = #text * default_ascii_cell_width
+      return renderer.draw_text_known_bounds(
+        font,
+        text,
+        sx,
+        sy,
+        math.floor(sx),
+        math.floor(sy),
+        math.max(1, math.ceil(width)),
+        math.max(1, math.ceil(default_font_height)),
+        color
+      )
+    end
+    return renderer.draw_text(font, text, sx, sy, color)
+  end
+
   for _, type, text in self.doc.highlighter:each_token(line) do
     local color = style.syntax[type] or style.syntax["normal"]
-    local font = style.syntax_fonts[type] or default_font
+    local syntax_font = style.syntax_fonts[type]
+    local font = syntax_font or default_font
     local token_offset = 1
     -- Split tokens if we're at the end of the document.
     while text ~= nil and token_offset <= #text do
@@ -637,7 +739,7 @@ function DocView:draw_line_text(line, x, y)
       end
       local max_length = next_line_start_col - total_offset
       local rendered_text = text:sub(token_offset, token_offset + max_length - 1)
-      tx = renderer.draw_text(font, rendered_text, tx, ty, color)
+      tx = draw_segment(font, rendered_text, tx, ty, color, syntax_font == nil)
       total_offset = total_offset + #rendered_text
       if total_offset ~= next_line_start_col or max_length == 0 then break end
       token_offset = token_offset + #rendered_text
@@ -778,15 +880,8 @@ end
 local old_draw_overlay = DocView.draw_overlay
 function DocView:draw_overlay(...)
   if not self.wrapped_settings then return old_draw_overlay(self, ...) end
+  LineWrapping.draw_guide(self)
   return with_wrapped_caret_affinity(self, old_draw_overlay, ...)
-end
-
-local old_draw = DocView.draw
-function DocView:draw()
-  old_draw(self)
-  if self.wrapped_settings then
-    LineWrapping.draw_guide(self)
-  end
 end
 
 local old_draw_line_gutter = DocView.draw_line_gutter
@@ -870,6 +965,16 @@ for _, name in ipairs({
   "doc:move-to-next-line",
   "doc:select-to-previous-line",
   "doc:select-to-next-line",
+  "doc:move-to-next-char",
+  "doc:select-to-next-char",
+  "doc:move-to-next-word-end",
+  "doc:select-to-next-word-end",
+  "doc:move-to-end-of-word",
+  "doc:select-to-end-of-word",
+  "doc:move-to-next-block-end",
+  "doc:select-to-next-block-end",
+  "doc:move-to-end-of-doc",
+  "doc:select-to-end-of-doc",
   "doc:move-to-start-of-indentation",
   "doc:select-to-start-of-indentation",
   "doc:move-to-end-of-line",
@@ -932,6 +1037,14 @@ local function wrapped_select_to(dv, name, move_fn, ...)
   set_primary_selection(doc)
 end
 
+local function wrapped_forward_endpoint_command(dv, name, ...)
+  if not dv.wrapped_settings then return perform_old_navigation(name, dv, ...) end
+  local old_selections = copy_selection_list(dv.doc.selections)
+  local result = perform_old_navigation(name, dv, ...)
+  set_wrapped_line_end_affinity(dv, collect_forward_endpoint_affinity(dv, old_selections))
+  return result
+end
+
 local function move_to_wrapped_end_of_line(doc, line, col, dv)
   return wrapped_end_of_line_position(dv, doc, line, col)
 end
@@ -956,6 +1069,36 @@ command.add("core.docview", {
   end,
   ["doc:select-to-next-line"] = function(dv)
     return wrapped_select_to(dv, "doc:select-to-next-line", move_to_wrapped_next_line, dv)
+  end,
+  ["doc:move-to-next-char"] = function(dv)
+    return wrapped_forward_endpoint_command(dv, "doc:move-to-next-char")
+  end,
+  ["doc:select-to-next-char"] = function(dv)
+    return wrapped_forward_endpoint_command(dv, "doc:select-to-next-char")
+  end,
+  ["doc:move-to-next-word-end"] = function(dv)
+    return wrapped_forward_endpoint_command(dv, "doc:move-to-next-word-end")
+  end,
+  ["doc:select-to-next-word-end"] = function(dv)
+    return wrapped_forward_endpoint_command(dv, "doc:select-to-next-word-end")
+  end,
+  ["doc:move-to-end-of-word"] = function(dv)
+    return wrapped_forward_endpoint_command(dv, "doc:move-to-end-of-word")
+  end,
+  ["doc:select-to-end-of-word"] = function(dv)
+    return wrapped_forward_endpoint_command(dv, "doc:select-to-end-of-word")
+  end,
+  ["doc:move-to-next-block-end"] = function(dv)
+    return wrapped_forward_endpoint_command(dv, "doc:move-to-next-block-end")
+  end,
+  ["doc:select-to-next-block-end"] = function(dv)
+    return wrapped_forward_endpoint_command(dv, "doc:select-to-next-block-end")
+  end,
+  ["doc:move-to-end-of-doc"] = function(dv)
+    return wrapped_forward_endpoint_command(dv, "doc:move-to-end-of-doc")
+  end,
+  ["doc:select-to-end-of-doc"] = function(dv)
+    return wrapped_forward_endpoint_command(dv, "doc:select-to-end-of-doc")
   end,
   ["doc:move-to-start-of-indentation"] = function(dv)
     return wrapped_move_to(dv, "doc:move-to-start-of-indentation", translate.start_of_indentation)
