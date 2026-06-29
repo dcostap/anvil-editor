@@ -25,6 +25,7 @@ local core_plugins = {
   linewrapping = true,
   navigation_history = true,
   scale_debug_log = true,
+  theme_editor = true,
   untitled_recovery = true,
   untitled_tabs = true,
 }
@@ -194,6 +195,7 @@ reload_core_plugin "scale_debug_log"
 -- require_core_plugin "editor_wallpaper"
 require_core_plugin "centered_editor"
 require_core_plugin "custom_welcome"
+require_core_plugin "theme_editor"
 if core.intellij_actions_disable_conflict_shortcuts then
   core.intellij_actions_disable_conflict_shortcuts()
 end

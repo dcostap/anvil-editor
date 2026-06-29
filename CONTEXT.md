@@ -172,6 +172,10 @@ _Avoid_: trigger, click action
 A separate project-owned window for a large singleton tool that should stay available without taking over the main editing layout.
 _Avoid_: popup, modal, detached panel
 
+**Runtime Theme Editor**:
+A floating in-window tool for inspecting and temporarily changing the current theme's colors during a running Anvil session.
+_Avoid_: Theme popup, color config
+
 **Git View**:
 The project-owned Git interface for browsing commits, file history, and Git-backed diffs.
 _Avoid_: Git popup, Git panel
