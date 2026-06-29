@@ -353,7 +353,11 @@ static double rencache_push_text_command(RenCache *ren_cache, RenFont **fonts, c
       cmd->len = len;
       cmd->tab_size = ren_font_group_get_tab_size(fonts);
       cmd->tab = tab;
-      if (ren_cache->window) g_rencache_frame_stats.text_bytes += len;
+      if (ren_cache->window) {
+        g_rencache_frame_stats.text_bytes += len;
+        if (len > g_rencache_frame_stats.max_text_bytes)
+          g_rencache_frame_stats.max_text_bytes = len;
+      }
     }
   }
   if (draw_text_start) {
@@ -434,6 +438,7 @@ void rencache_invalidate(RenCache *ren_cache) {
 void rencache_begin_frame(RenCache *ren_cache) {
   if (ren_cache && ren_cache->window) {
     memset(&g_rencache_frame_stats, 0, sizeof(g_rencache_frame_stats));
+    ren_text_stats_begin_frame();
   }
   /* reset all cells if the screen width/height has changed */
   int w, h;
@@ -599,6 +604,7 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
 #endif
     ren_cache->window_shown = true;
   }
+  ren_text_stats_end_frame();
   g_rencache_last_frame_stats = g_rencache_frame_stats;
   ren_cache->command_buf_idx = 0;
   return true;
@@ -717,7 +723,10 @@ void rencache_end_frame(RenCache *ren_cache) {
   unsigned *tmp = ren_cache->cells;
   ren_cache->cells = ren_cache->cells_prev;
   ren_cache->cells_prev = tmp;
-  if (ren_cache->window) g_rencache_last_frame_stats = g_rencache_frame_stats;
+  if (ren_cache->window) {
+    ren_text_stats_end_frame();
+    g_rencache_last_frame_stats = g_rencache_frame_stats;
+  }
   ren_cache->command_buf_idx = 0;
 }
 

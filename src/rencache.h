@@ -24,6 +24,7 @@ typedef struct {
   int poly_commands;
   size_t command_bytes;
   size_t text_bytes;
+  size_t max_text_bytes;
   double draw_text_ms;
   double draw_text_width_ms;
 } RenCacheFrameStats;

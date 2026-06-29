@@ -32,6 +32,31 @@ typedef struct { double offset; } RenTab;
 typedef struct { SDL_Surface *surface; float scale_x, scale_y; } RenSurface;
 typedef struct { EFontMetaTag tag; char *value; size_t len; } FontMetaData;
 
+typedef struct {
+  uint64_t width_calls;
+  uint64_t width_bytes;
+  uint64_t width_chars;
+  uint64_t width_shaped_runs;
+  uint64_t width_unshaped_runs;
+  uint64_t width_shape_probe_bytes;
+  uint64_t width_hb_shapes;
+  uint64_t width_shaped_cache_hits;
+  uint64_t width_shaped_cache_misses;
+  double width_hb_shape_ms;
+  uint64_t render_calls;
+  uint64_t render_bytes;
+  uint64_t render_chars;
+  uint64_t render_shaped_runs;
+  uint64_t render_unshaped_runs;
+  uint64_t render_shape_probe_bytes;
+  uint64_t render_hb_shapes;
+  uint64_t render_glyphs;
+  uint64_t render_whitespace_chars;
+  uint64_t render_chars_after_clip;
+  uint64_t render_top_clip_breaks;
+  double render_hb_shape_ms;
+} RenTextFrameStats;
+
 struct RenWindow;
 typedef struct RenWindow RenWindow;
 
@@ -51,6 +76,9 @@ void ren_font_group_set_tab_size(RenFont **font, int n);
 double ren_font_group_get_width(RenFont **font, const char *text, size_t len, RenTab tab, int *x_offset);
 double ren_draw_text(RenSurface *rs, RenFont **font, const char *text, size_t len, float x, float y, RenColor color, RenTab tab);
 bool ren_draw_text_d3d11(SDL_Window *window, RenRect clip, RenFont **font, const char *text, size_t len, float x, float y, RenColor color, RenTab tab);
+void ren_text_stats_begin_frame(void);
+void ren_text_stats_end_frame(void);
+const RenTextFrameStats *ren_text_get_last_frame_stats(void);
 
 void ren_draw_rect(RenSurface *rs, RenRect rect, RenColor color, bool replace);
 

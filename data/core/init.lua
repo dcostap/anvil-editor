@@ -2564,7 +2564,7 @@ local function frame_pacing_stats_log(fields)
       frame_pacing_stats_enabled = false
       return
     end
-    frame_pacing_stats_file:write("time,seq,rad_pacing,immediate,reason,target_fps,core_fps,present_paced,active_present_paced,did_redraw,pending_events,queue_depth,event_count,event_ms,update_ms,pre_draw_ms,draw_emit_ms,renderer_end_ms,frame_time_ms,run_threads_ms,core_step_ms,present_ms,sync_interval,renderer_path,draw_calls,quad_instances,texture_quads,texture_uploads,texture_upload_bytes,rencache_commands,rencache_text_commands,rencache_rect_commands,rencache_set_clip_commands,rencache_command_bytes,rencache_text_bytes,rencache_draw_text_ms,rencache_draw_text_width_ms,docview_draw_ms,docview_gutter_ms,docview_body_ms,docview_text_ms,docview_highlighter_get_line_ms,docview_token_loop_ms,docview_renderer_draw_text_ms,docview_visible_lines,docview_text_lines,docview_tokens,docview_draw_text_calls,sleep_requested_ms,sleep_actual_ms,skipped_post_present_sleep,total_ms,run_mode\n")
+    frame_pacing_stats_file:write("time,seq,rad_pacing,immediate,reason,target_fps,core_fps,present_paced,active_present_paced,did_redraw,pending_events,queue_depth,event_count,event_ms,update_ms,pre_draw_ms,draw_emit_ms,renderer_end_ms,frame_time_ms,run_threads_ms,core_step_ms,present_ms,sync_interval,renderer_path,draw_calls,quad_instances,texture_quads,texture_uploads,texture_upload_bytes,d3d11_glyph_push_ms,d3d11_flush_quads_ms,d3d11_dwm_flush_ms,d3d11_clear_state_ms,rencache_commands,rencache_text_commands,rencache_rect_commands,rencache_set_clip_commands,rencache_command_bytes,rencache_text_bytes,rencache_draw_text_ms,rencache_draw_text_width_ms,docview_draw_ms,docview_gutter_ms,docview_body_ms,docview_text_ms,docview_highlighter_get_line_ms,docview_token_loop_ms,docview_renderer_draw_text_ms,docview_visible_lines,docview_text_lines,docview_tokens,docview_draw_text_calls,sleep_requested_ms,sleep_actual_ms,skipped_post_present_sleep,total_ms,run_mode\n")
     frame_pacing_stats_file:flush()
   end
   frame_pacing_stats_seq = frame_pacing_stats_seq + 1
@@ -2598,6 +2598,10 @@ local function frame_pacing_stats_log(fields)
     tostring(fields.texture_quads or 0),
     tostring(fields.texture_uploads or 0),
     tostring(fields.texture_upload_bytes or 0),
+    string.format("%.3f", fields.d3d11_glyph_push_ms or 0),
+    string.format("%.3f", fields.d3d11_flush_quads_ms or 0),
+    string.format("%.3f", fields.d3d11_dwm_flush_ms or 0),
+    string.format("%.3f", fields.d3d11_clear_state_ms or 0),
     tostring(fields.rencache_commands or 0),
     tostring(fields.rencache_text_commands or 0),
     tostring(fields.rencache_rect_commands or 0),
@@ -2949,6 +2953,10 @@ function core.run_step(options)
     texture_quads = renderer_stats.texture_quads,
     texture_uploads = renderer_stats.texture_uploads,
     texture_upload_bytes = renderer_stats.texture_upload_bytes,
+    d3d11_glyph_push_ms = renderer_stats.d3d11_glyph_push_ms,
+    d3d11_flush_quads_ms = renderer_stats.d3d11_flush_quads_ms,
+    d3d11_dwm_flush_ms = renderer_stats.d3d11_dwm_flush_ms,
+    d3d11_clear_state_ms = renderer_stats.d3d11_clear_state_ms,
     docview_draw_ms = docview_stats.draw_ms,
     docview_prepare_ms = docview_stats.prepare_ms,
     docview_prepare_highlight_ms = docview_stats.prepare_highlight_ms,
@@ -3094,6 +3102,10 @@ function core.run_step(options)
     texture_quads = renderer_stats.texture_quads,
     texture_uploads = renderer_stats.texture_uploads,
     texture_upload_bytes = renderer_stats.texture_upload_bytes,
+    d3d11_glyph_push_ms = renderer_stats.d3d11_glyph_push_ms,
+    d3d11_flush_quads_ms = renderer_stats.d3d11_flush_quads_ms,
+    d3d11_dwm_flush_ms = renderer_stats.d3d11_dwm_flush_ms,
+    d3d11_clear_state_ms = renderer_stats.d3d11_clear_state_ms,
     rencache_commands = renderer_stats.rencache_commands,
     rencache_text_commands = renderer_stats.rencache_text_commands,
     rencache_rect_commands = renderer_stats.rencache_rect_commands,

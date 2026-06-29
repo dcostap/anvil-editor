@@ -1712,6 +1712,39 @@ function DocView:draw_line_text(line, x, y)
     if text ~= "" then
       local draw_text_start = stats and system.get_time()
       local width = cached_fast_ascii_monospace_width(self, line, text, default_font, indent_size)
+
+      -- Cull text that extends past the right edge of the view.
+      -- Without this, very long unwrapped lines feed their entire text
+      -- (potentially 100KB+) through the GPU command buffer and per-glyph
+      -- iteration, making every redraw frame take hundreds of milliseconds.
+      local right_edge = self.position.x + self.size.x
+      if tx + width > right_edge then
+        local available = right_edge - tx
+        if available <= 0 then
+          if stats then
+            stats.tokens = stats.tokens + 1
+            stats.token_loop_ms = stats.token_loop_ms + (system.get_time() - token_loop_start) * 1000
+            stats.text_ms = stats.text_ms + (system.get_time() - text_start) * 1000
+            stats.text_lines = stats.text_lines + 1
+          end
+          return self:get_line_height()
+        end
+        local char_width = default_font:get_width(" ")
+        local tab_width = char_width * indent_size
+        -- Include a small right-edge margin so the renderer can clip the
+        -- partially-visible final cell and any normal glyph overhang instead
+        -- of leaving a blank strip at the viewport edge.
+        local max_chars = math.ceil((available + char_width * 4) / char_width)
+        if has_tabs then
+          -- Tab expansion can push past the naive char-width estimate.
+          max_chars = max_chars + indent_size * 2
+        end
+        if max_chars < #text then
+          text = text:sub(1, max_chars)
+          width = fast_ascii_monospace_width(text, char_width, tab_width, 0)
+        end
+      end
+
       tx = renderer.draw_text_known_bounds(
         default_font,
         text,
@@ -1738,6 +1771,7 @@ function DocView:draw_line_text(line, x, y)
 
   local start_tx = tx
   local pending_font, pending_color, pending_chunks, pending_len
+  local max_pending_bytes = 512
   local function flush_pending_text()
     if not pending_font then return false end
     local draw_text_start = stats and system.get_time()
@@ -1754,6 +1788,51 @@ function DocView:draw_line_text(line, x, y)
     pending_font, pending_color, pending_chunks, pending_len = nil, nil, nil, nil
     return tx > self.position.x + self.size.x
   end
+  local function ascii_ligature_sensitive_byte(byte)
+    return byte == 45  -- -
+        or byte == 46  -- .
+        or byte == 47  -- /
+        or byte == 58  -- :
+        or byte == 60  -- <
+        or byte == 61  -- =
+        or byte == 62  -- >
+        or byte == 33  -- !
+        or byte == 38  -- &
+        or byte == 42  -- *
+        or byte == 102 -- f
+        or byte == 124 -- |
+  end
+  local function ascii_strong_boundary(text, j)
+    local byte = text:byte(j)
+    local next_byte = text:byte(j + 1)
+    return byte == 32 or byte == 9 or byte == 34 or byte == 39
+        or byte == 44 or byte == 59 or byte == 93 or byte == 125
+        or next_byte == 32 or next_byte == 9 or next_byte == 34 or next_byte == 39
+        or next_byte == 40 or next_byte == 91 or next_byte == 123
+  end
+  local function ascii_safe_boundary(text, j)
+    local byte = text:byte(j)
+    local next_byte = text:byte(j + 1)
+    return not ascii_ligature_sensitive_byte(byte) and not ascii_ligature_sensitive_byte(next_byte)
+  end
+  local function ascii_preferred_chunk_end(text, first, last)
+    if last >= #text then return #text end
+    for j = last, first, -1 do
+      if ascii_strong_boundary(text, j) then return j end
+    end
+    for j = last, first, -1 do
+      if ascii_safe_boundary(text, j) then return j end
+    end
+    local forward_limit = math.min(#text - 1, first + max_pending_bytes * 4)
+    for j = last + 1, forward_limit do
+      if ascii_strong_boundary(text, j) then return j end
+    end
+    for j = last + 1, forward_limit do
+      if ascii_safe_boundary(text, j) then return j end
+    end
+    return nil
+  end
+  local stop_drawing = false
   for tidx, type, text in tokenizer.each_token(tokens) do
     if stats then stats.tokens = stats.tokens + 1 end
     local color = syntax[type] or normal_color
@@ -1762,17 +1841,55 @@ function DocView:draw_line_text(line, x, y)
     -- do not render newline, fixes issue #1164
     if tidx == last_token then text = text:sub(1, -2) end
     if text ~= "" then
-      if pending_font ~= font or pending_color ~= color or (pending_len or 0) + #text > 512 then
-        if flush_pending_text() then break end
+      local ascii_chunkable = text:find("[\128-\255]") == nil
+      if not ascii_chunkable then
+        -- Avoid splitting complex/shaped scripts across draw calls; HarfBuzz
+        -- needs the full run to preserve joining and ligatures. Pathological
+        -- ASCII tokens are the common long-line case we chunk aggressively.
+        if pending_font ~= font or pending_color ~= color or (pending_len or 0) + #text > max_pending_bytes then
+          if flush_pending_text() then break end
+        end
+        if not pending_font then
+          pending_font, pending_color, pending_chunks, pending_len = font, color, {}, 0
+        end
+        pending_len = pending_len + #text
+        pending_chunks[#pending_chunks + 1] = text
+      else
+        if pending_font ~= font or pending_color ~= color then
+          if flush_pending_text() then break end
+        end
+        local i = 1
+        while i <= #text do
+          if not pending_font then
+            pending_font, pending_color, pending_chunks, pending_len = font, color, {}, 0
+          end
+          local available = max_pending_bytes - (pending_len or 0)
+          if available <= 0 then
+            if flush_pending_text() then stop_drawing = true; break end
+            pending_font, pending_color, pending_chunks, pending_len = font, color, {}, 0
+            available = max_pending_bytes
+          end
+          local j = ascii_preferred_chunk_end(text, i, math.min(#text, i + available - 1))
+          if not j then
+            -- A token made entirely of ligature-sensitive ASCII (for example
+            -- a long run of 'f' or '=') has no shaping-safe split nearby.
+            -- Preserve shaping correctness by drawing the remainder as one
+            -- batch instead of forcing an arbitrary boundary.
+            j = #text
+          end
+          local chunk = text:sub(i, j)
+          pending_len = pending_len + #chunk
+          pending_chunks[#pending_chunks + 1] = chunk
+          i = j + 1
+          if pending_len >= max_pending_bytes then
+            if flush_pending_text() then stop_drawing = true; break end
+          end
+        end
       end
-      if not pending_font then
-        pending_font, pending_color, pending_chunks, pending_len = font, color, {}, 0
-      end
-      pending_len = pending_len + #text
-      pending_chunks[#pending_chunks + 1] = text
+      if stop_drawing then break end
     end
   end
-  flush_pending_text()
+  if not stop_drawing then flush_pending_text() end
   if stats then
     stats.token_loop_ms = stats.token_loop_ms + (system.get_time() - token_loop_start) * 1000
     stats.text_ms = stats.text_ms + (system.get_time() - text_start) * 1000

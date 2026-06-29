@@ -568,7 +568,8 @@ static int f_is_present_paced(lua_State *L) {
 
 static int f_get_last_frame_stats(lua_State *L) {
   const RenCacheFrameStats *rc_stats = rencache_get_last_frame_stats();
-  lua_createtable(L, 0, 20);
+  const RenTextFrameStats *text_stats = ren_text_get_last_frame_stats();
+  lua_createtable(L, 0, 64);
   lua_pushstring(L, anvil_d3d11_last_frame_path());
   lua_setfield(L, -2, "path");
   lua_pushinteger(L, anvil_d3d11_last_sync_interval());
@@ -585,6 +586,14 @@ static int f_get_last_frame_stats(lua_State *L) {
   lua_setfield(L, -2, "texture_uploads");
   lua_pushinteger(L, (lua_Integer)anvil_d3d11_last_texture_upload_bytes());
   lua_setfield(L, -2, "texture_upload_bytes");
+  lua_pushnumber(L, anvil_d3d11_last_glyph_push_ms());
+  lua_setfield(L, -2, "d3d11_glyph_push_ms");
+  lua_pushnumber(L, anvil_d3d11_last_flush_quads_ms());
+  lua_setfield(L, -2, "d3d11_flush_quads_ms");
+  lua_pushnumber(L, anvil_d3d11_last_dwm_flush_ms());
+  lua_setfield(L, -2, "d3d11_dwm_flush_ms");
+  lua_pushnumber(L, anvil_d3d11_last_clear_state_ms());
+  lua_setfield(L, -2, "d3d11_clear_state_ms");
   lua_pushinteger(L, rc_stats ? rc_stats->commands : 0);
   lua_setfield(L, -2, "rencache_commands");
   lua_pushinteger(L, rc_stats ? rc_stats->text_commands : 0);
@@ -597,10 +606,42 @@ static int f_get_last_frame_stats(lua_State *L) {
   lua_setfield(L, -2, "rencache_command_bytes");
   lua_pushinteger(L, rc_stats ? (lua_Integer)rc_stats->text_bytes : 0);
   lua_setfield(L, -2, "rencache_text_bytes");
+  lua_pushinteger(L, rc_stats ? (lua_Integer)rc_stats->max_text_bytes : 0);
+  lua_setfield(L, -2, "rencache_max_text_bytes");
   lua_pushnumber(L, rc_stats ? rc_stats->draw_text_ms : 0.0);
   lua_setfield(L, -2, "rencache_draw_text_ms");
   lua_pushnumber(L, rc_stats ? rc_stats->draw_text_width_ms : 0.0);
   lua_setfield(L, -2, "rencache_draw_text_width_ms");
+#define PUSH_TEXT_STAT_INTEGER(name) \
+  lua_pushinteger(L, text_stats ? (lua_Integer)text_stats->name : 0); \
+  lua_setfield(L, -2, "text_" #name)
+#define PUSH_TEXT_STAT_NUMBER(name) \
+  lua_pushnumber(L, text_stats ? text_stats->name : 0.0); \
+  lua_setfield(L, -2, "text_" #name)
+  PUSH_TEXT_STAT_INTEGER(width_calls);
+  PUSH_TEXT_STAT_INTEGER(width_bytes);
+  PUSH_TEXT_STAT_INTEGER(width_chars);
+  PUSH_TEXT_STAT_INTEGER(width_shaped_runs);
+  PUSH_TEXT_STAT_INTEGER(width_unshaped_runs);
+  PUSH_TEXT_STAT_INTEGER(width_shape_probe_bytes);
+  PUSH_TEXT_STAT_INTEGER(width_hb_shapes);
+  PUSH_TEXT_STAT_INTEGER(width_shaped_cache_hits);
+  PUSH_TEXT_STAT_INTEGER(width_shaped_cache_misses);
+  PUSH_TEXT_STAT_NUMBER(width_hb_shape_ms);
+  PUSH_TEXT_STAT_INTEGER(render_calls);
+  PUSH_TEXT_STAT_INTEGER(render_bytes);
+  PUSH_TEXT_STAT_INTEGER(render_chars);
+  PUSH_TEXT_STAT_INTEGER(render_shaped_runs);
+  PUSH_TEXT_STAT_INTEGER(render_unshaped_runs);
+  PUSH_TEXT_STAT_INTEGER(render_shape_probe_bytes);
+  PUSH_TEXT_STAT_INTEGER(render_hb_shapes);
+  PUSH_TEXT_STAT_INTEGER(render_glyphs);
+  PUSH_TEXT_STAT_INTEGER(render_whitespace_chars);
+  PUSH_TEXT_STAT_INTEGER(render_chars_after_clip);
+  PUSH_TEXT_STAT_INTEGER(render_top_clip_breaks);
+  PUSH_TEXT_STAT_NUMBER(render_hb_shape_ms);
+#undef PUSH_TEXT_STAT_INTEGER
+#undef PUSH_TEXT_STAT_NUMBER
   return 1;
 }
 

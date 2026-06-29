@@ -113,6 +113,8 @@ typedef struct D3D11FrameStats {
   HRESULT resize_hr;
   const char *fail_reason;
   LARGE_INTEGER start_counter;
+  double glyph_push_ms;
+  double flush_quads_ms;
 } D3D11FrameStats;
 
 typedef struct D3D11Stats {
@@ -561,6 +563,22 @@ int anvil_d3d11_last_texture_uploads(void) {
 
 size_t anvil_d3d11_last_texture_upload_bytes(void) {
   return g_d3d11.stats.frame.texture_upload_bytes;
+}
+
+double anvil_d3d11_last_glyph_push_ms(void) {
+  return g_d3d11.stats.frame.glyph_push_ms;
+}
+
+double anvil_d3d11_last_flush_quads_ms(void) {
+  return g_d3d11.stats.frame.flush_quads_ms;
+}
+
+double anvil_d3d11_last_dwm_flush_ms(void) {
+  return g_d3d11.stats.frame.dwm_flush_ms;
+}
+
+double anvil_d3d11_last_clear_state_ms(void) {
+  return g_d3d11.stats.frame.clear_state_ms;
 }
 
 static HWND hwnd_from_sdl_window(SDL_Window *window) {
@@ -1407,6 +1425,9 @@ static bool d3d11_flush_quads(void) {
   if (g_d3d11.quad_batch_count <= 0) return false;
   if (!d3d11_ensure_quad_instance_buffer_capacity(g_d3d11.quad_instance_count)) return false;
 
+  LARGE_INTEGER t0, t1;
+  QueryPerformanceCounter(&t0);
+
   D3D11_MAPPED_SUBRESOURCE mapped;
   HRESULT hr = g_d3d11.context->lpVtbl->Map(g_d3d11.context,
                                             (ID3D11Resource *)g_d3d11.quad_vbuf,
@@ -1470,6 +1491,8 @@ static bool d3d11_flush_quads(void) {
   g_d3d11.context->lpVtbl->PSSetShaderResources(g_d3d11.context, 0, 1, &null_srv);
   g_d3d11.quad_instance_count = 0;
   g_d3d11.quad_batch_count = 0;
+  QueryPerformanceCounter(&t1);
+  g_d3d11.stats.frame.flush_quads_ms += d3d11_ms_between(t0, t1);
   return true;
 }
 
@@ -1510,14 +1533,17 @@ bool anvil_d3d11_push_texture(SDL_Window *window, SDL_Surface *surface,
   if (color.a == 0) return true;
   if (!d3d11_ensure_quad_pipeline()) return false;
 
+  LARGE_INTEGER t0, t1;
+  QueryPerformanceCounter(&t0);
+
   RenRect clipped = d3d11_intersect_renrect(dst_px, clip_px);
-  if (clipped.width <= 0 || clipped.height <= 0) return true;
+  if (clipped.width <= 0 || clipped.height <= 0) { QueryPerformanceCounter(&t1); g_d3d11.stats.frame.glyph_push_ms += d3d11_ms_between(t0, t1); return true; }
 
   float dx0 = (float)dst_px.x;
   float dy0 = (float)dst_px.y;
   float dx1 = (float)(dst_px.x + dst_px.width);
   float dy1 = (float)(dst_px.y + dst_px.height);
-  if (dx1 == dx0 || dy1 == dy0) return true;
+  if (dx1 == dx0 || dy1 == dy0) { QueryPerformanceCounter(&t1); g_d3d11.stats.frame.glyph_push_ms += d3d11_ms_between(t0, t1); return true; }
 
   float sx0 = (float)src_px.x;
   float sy0 = (float)src_px.y;
@@ -1535,7 +1561,7 @@ bool anvil_d3d11_push_texture(SDL_Window *window, SDL_Surface *surface,
   float v1 = (sy0 + (cy1 - dy0) * (sy1 - sy0) / (dy1 - dy0)) / (float)surface->h;
 
   D3D11CachedTexture *tex = d3d11_get_cached_texture(surface, mode);
-  if (!tex || !tex->srv) return false;
+  if (!tex || !tex->srv) { QueryPerformanceCounter(&t1); g_d3d11.stats.frame.glyph_push_ms += d3d11_ms_between(t0, t1); return false; }
   g_d3d11.stats.frame.texture_quads++;
 
   float cr = color.r / 255.0f;
@@ -1544,7 +1570,10 @@ bool anvil_d3d11_push_texture(SDL_Window *window, SDL_Surface *surface,
   float ca = color.a / 255.0f;
   D3D11QuadInstance inst = { cx0, cy0, cx1, cy1, u0, v0, u1, v1, cr, cg, cb, ca, (float)mode, 0, 0, 0 };
 
-  return d3d11_queue_quad(tex->srv, &inst, true);
+  bool result = d3d11_queue_quad(tex->srv, &inst, true);
+  QueryPerformanceCounter(&t1);
+  g_d3d11.stats.frame.glyph_push_ms += d3d11_ms_between(t0, t1);
+  return result;
 }
 
 bool anvil_d3d11_push_pixels(SDL_Window *window, const char *bytes, size_t len,

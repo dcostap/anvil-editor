@@ -125,7 +125,10 @@ local function write_frame_header(file)
     "event_count", "event_ms", "event_types", "slowest_event_type", "slowest_event_ms", "update_ms", "pre_draw_ms",
     "frame_ms", "draw_emit_ms", "renderer_end_ms",
     "present_ms", "run_threads_ms", "run_threads_runs", "run_threads_slowest_ms", "run_threads_slowest_loc", "core_step_ms", "gc_ms", "sleep_requested_ms", "sleep_actual_ms", "total_ms",
-    "draw_calls", "quad_instances", "texture_uploads", "texture_upload_bytes",
+    "draw_calls", "quad_instances", "texture_uploads", "texture_upload_bytes", "d3d11_glyph_push_ms", "d3d11_flush_quads_ms", "d3d11_dwm_flush_ms", "d3d11_clear_state_ms",
+    "rencache_text_commands", "rencache_text_bytes", "rencache_max_text_bytes", "rencache_draw_text_ms", "rencache_draw_text_width_ms",
+    "text_width_calls", "text_width_bytes", "text_width_chars", "text_width_shaped_runs", "text_width_unshaped_runs", "text_width_shape_probe_bytes", "text_width_hb_shapes", "text_width_shaped_cache_hits", "text_width_shaped_cache_misses", "text_width_hb_shape_ms",
+    "text_render_calls", "text_render_bytes", "text_render_chars", "text_render_shaped_runs", "text_render_unshaped_runs", "text_render_shape_probe_bytes", "text_render_hb_shapes", "text_render_glyphs", "text_render_whitespace_chars", "text_render_chars_after_clip", "text_render_top_clip_breaks", "text_render_hb_shape_ms",
     "docview_draw_ms", "docview_prepare_ms", "docview_prepare_highlight_ms", "docview_prepare_caret_ms", "docview_prepare_selection_ms", "docview_prepare_merge_ms", "docview_gutter_ms", "docview_body_ms", "docview_text_ms", "docview_overlay_ms",
     "docview_highlighter_get_line_ms", "docview_token_loop_ms", "docview_renderer_draw_text_ms",
     "lsp_render_tokens_calls", "lsp_render_tokens_ms", "lsp_render_tokens_matching_ms", "lsp_render_tokens_capability_ms", "lsp_render_tokens_latest_ms",
@@ -192,9 +195,48 @@ local aggregate_detail_keys = {
   "filetree_draw_line_text_plain_calls",
 }
 
+local renderer_detail_keys = {
+  "rencache_text_commands",
+  "rencache_text_bytes",
+  "rencache_max_text_bytes",
+  "rencache_draw_text_ms",
+  "rencache_draw_text_width_ms",
+  "text_width_calls",
+  "text_width_bytes",
+  "text_width_chars",
+  "text_width_shaped_runs",
+  "text_width_unshaped_runs",
+  "text_width_shape_probe_bytes",
+  "text_width_hb_shapes",
+  "text_width_shaped_cache_hits",
+  "text_width_shaped_cache_misses",
+  "text_width_hb_shape_ms",
+  "text_render_calls",
+  "text_render_bytes",
+  "text_render_chars",
+  "text_render_shaped_runs",
+  "text_render_unshaped_runs",
+  "text_render_shape_probe_bytes",
+  "text_render_hb_shapes",
+  "text_render_glyphs",
+  "text_render_whitespace_chars",
+  "text_render_chars_after_clip",
+  "text_render_top_clip_breaks",
+  "text_render_hb_shape_ms",
+}
+
 local function aggregate_snapshot_details(snapshot)
   for _, key in ipairs(aggregate_detail_keys) do
     local value = snapshot[key]
+    if type(value) == "number" and value ~= 0 then
+      add_count(record.detail_counts, key, value)
+    end
+  end
+end
+
+local function aggregate_renderer_details(renderer_stats)
+  for _, key in ipairs(renderer_detail_keys) do
+    local value = renderer_stats[key]
     if type(value) == "number" and value ~= 0 then
       add_count(record.detail_counts, key, value)
     end
@@ -239,6 +281,10 @@ function perf.on_frame(snapshot)
         renderer_end_ms = snapshot.renderer_end_ms or 0,
         present_ms = present_ms,
         draw_calls = renderer_stats.draw_calls or 0,
+        d3d11_glyph_push_ms = snapshot.d3d11_glyph_push_ms or 0,
+        d3d11_flush_quads_ms = snapshot.d3d11_flush_quads_ms or 0,
+        d3d11_dwm_flush_ms = snapshot.d3d11_dwm_flush_ms or 0,
+        d3d11_clear_state_ms = snapshot.d3d11_clear_state_ms or 0,
         docview_draw_ms = snapshot.docview_draw_ms or 0,
         docview_prepare_ms = snapshot.docview_prepare_ms or 0,
         docview_prepare_caret_ms = snapshot.docview_prepare_caret_ms or 0,
@@ -275,6 +321,7 @@ function perf.on_frame(snapshot)
     record.idle_iteration_count = record.idle_iteration_count + 1
   end
   aggregate_snapshot_details(snapshot)
+  if snapshot.did_redraw then aggregate_renderer_details(renderer_stats) end
   record.max_selection_count = math.max(record.max_selection_count, snapshot.selection_count or 0)
   record.max_search_selection_count = math.max(record.max_search_selection_count, snapshot.search_selection_count or 0)
   if (snapshot.sleep_actual_ms or 0) > 0 then
@@ -321,6 +368,37 @@ function perf.on_frame(snapshot)
     tostring(renderer_stats.quad_instances or 0),
     tostring(renderer_stats.texture_uploads or 0),
     tostring(renderer_stats.texture_upload_bytes or 0),
+    string.format("%.3f", renderer_stats.d3d11_glyph_push_ms or 0),
+    string.format("%.3f", renderer_stats.d3d11_flush_quads_ms or 0),
+    string.format("%.3f", renderer_stats.d3d11_dwm_flush_ms or 0),
+    string.format("%.3f", renderer_stats.d3d11_clear_state_ms or 0),
+    tostring(renderer_stats.rencache_text_commands or 0),
+    tostring(renderer_stats.rencache_text_bytes or 0),
+    tostring(renderer_stats.rencache_max_text_bytes or 0),
+    string.format("%.3f", renderer_stats.rencache_draw_text_ms or 0),
+    string.format("%.3f", renderer_stats.rencache_draw_text_width_ms or 0),
+    tostring(renderer_stats.text_width_calls or 0),
+    tostring(renderer_stats.text_width_bytes or 0),
+    tostring(renderer_stats.text_width_chars or 0),
+    tostring(renderer_stats.text_width_shaped_runs or 0),
+    tostring(renderer_stats.text_width_unshaped_runs or 0),
+    tostring(renderer_stats.text_width_shape_probe_bytes or 0),
+    tostring(renderer_stats.text_width_hb_shapes or 0),
+    tostring(renderer_stats.text_width_shaped_cache_hits or 0),
+    tostring(renderer_stats.text_width_shaped_cache_misses or 0),
+    string.format("%.3f", renderer_stats.text_width_hb_shape_ms or 0),
+    tostring(renderer_stats.text_render_calls or 0),
+    tostring(renderer_stats.text_render_bytes or 0),
+    tostring(renderer_stats.text_render_chars or 0),
+    tostring(renderer_stats.text_render_shaped_runs or 0),
+    tostring(renderer_stats.text_render_unshaped_runs or 0),
+    tostring(renderer_stats.text_render_shape_probe_bytes or 0),
+    tostring(renderer_stats.text_render_hb_shapes or 0),
+    tostring(renderer_stats.text_render_glyphs or 0),
+    tostring(renderer_stats.text_render_whitespace_chars or 0),
+    tostring(renderer_stats.text_render_chars_after_clip or 0),
+    tostring(renderer_stats.text_render_top_clip_breaks or 0),
+    string.format("%.3f", renderer_stats.text_render_hb_shape_ms or 0),
     string.format("%.3f", snapshot.docview_draw_ms or 0),
     string.format("%.3f", snapshot.docview_prepare_ms or 0),
     string.format("%.3f", snapshot.docview_prepare_highlight_ms or 0),
