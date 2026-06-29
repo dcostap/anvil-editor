@@ -39,6 +39,7 @@ if control_file then
 end
 
 if not truthy("ANVIL_PERF_CAPTURE") and not is_truthy_value(control.enabled) then return {} end
+core.perf_capture_active = true
 
 local function env_string(name, key, default)
   local value = os.getenv(name)
@@ -133,7 +134,7 @@ end
 local function wait_for_redraws_until(deadline)
   while system.get_time() < deadline do
     if capture.force_redraw then core.redraw = true end
-    coroutine.yield(capture.force_redraw and (1 / (config.fps or 60)) or 0.05)
+    coroutine.yield(capture.force_redraw and 0 or 0.05)
   end
 end
 
@@ -165,6 +166,7 @@ core.add_thread(function()
   if perf.is_recording() then
     write_result { done = 0, error = "performance recording was already active" }
     core.log_quiet("Perf capture: recording already active; aborting automated capture")
+    core.perf_capture_active = false
     return
   end
 
@@ -195,6 +197,7 @@ core.add_thread(function()
   }
 
   core.log_quiet("Perf capture finished: %s", tostring(summary_path or ""))
+  core.perf_capture_active = false
 end)
 
 return capture

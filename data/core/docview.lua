@@ -1687,7 +1687,6 @@ function DocView:draw_line_text(line, x, y)
   local render_line = self.doc.highlighter:get_render_line(line)
   local tokens = render_line.tokens
   if stats then stats.highlighter_get_line_ms = stats.highlighter_get_line_ms + (system.get_time() - get_line_start) * 1000 end
-  local has_tabs = render_line.text:find("\t", 1, true) ~= nil
   local syntax = style.syntax
   local syntax_fonts = style.syntax_fonts
   local normal_color = syntax.normal
@@ -1712,6 +1711,7 @@ function DocView:draw_line_text(line, x, y)
     if text ~= "" then
       local draw_text_start = stats and system.get_time()
       local width = cached_fast_ascii_monospace_width(self, line, text, default_font, indent_size)
+      local text_has_tabs = false
 
       -- Cull text that extends past the right edge of the view.
       -- Without this, very long unwrapped lines feed their entire text
@@ -1735,14 +1735,19 @@ function DocView:draw_line_text(line, x, y)
         -- partially-visible final cell and any normal glyph overhang instead
         -- of leaving a blank strip at the viewport edge.
         local max_chars = math.ceil((available + char_width * 4) / char_width)
-        if has_tabs then
+        local tab_scan_chars = math.min(#text, max_chars + indent_size * 2)
+        text_has_tabs = text:sub(1, tab_scan_chars):find("\t", 1, true) ~= nil
+        if text_has_tabs then
           -- Tab expansion can push past the naive char-width estimate.
           max_chars = max_chars + indent_size * 2
         end
         if max_chars < #text then
           text = text:sub(1, max_chars)
           width = fast_ascii_monospace_width(text, char_width, tab_width, 0)
+          text_has_tabs = text:find("\t", 1, true) ~= nil
         end
+      else
+        text_has_tabs = text:find("\t", 1, true) ~= nil
       end
 
       tx = renderer.draw_text_known_bounds(
@@ -1755,7 +1760,7 @@ function DocView:draw_line_text(line, x, y)
         math.max(1, math.ceil(width)),
         math.max(1, math.ceil(default_font:get_height())),
         normal_color,
-        has_tabs and { tab_offset = 0 } or nil
+        text_has_tabs and { tab_offset = 0 } or nil
       )
       if stats then
         stats.tokens = stats.tokens + 1
@@ -1770,13 +1775,13 @@ function DocView:draw_line_text(line, x, y)
   end
 
   local start_tx = tx
-  local pending_font, pending_color, pending_chunks, pending_len
-  local max_pending_bytes = 512
+  local pending_font, pending_color, pending_chunks, pending_len, pending_has_tabs
+  local max_pending_bytes = 192
   local function flush_pending_text()
     if not pending_font then return false end
     local draw_text_start = stats and system.get_time()
     local text = #pending_chunks == 1 and pending_chunks[1] or table.concat(pending_chunks)
-    if has_tabs then
+    if pending_has_tabs then
       tx = renderer.draw_text(pending_font, text, tx, ty, pending_color, {tab_offset = tx - start_tx})
     else
       tx = renderer.draw_text(pending_font, text, tx, ty, pending_color)
@@ -1785,7 +1790,7 @@ function DocView:draw_line_text(line, x, y)
       stats.draw_text_calls = stats.draw_text_calls + 1
       stats.renderer_draw_text_ms = stats.renderer_draw_text_ms + (system.get_time() - draw_text_start) * 1000
     end
-    pending_font, pending_color, pending_chunks, pending_len = nil, nil, nil, nil
+    pending_font, pending_color, pending_chunks, pending_len, pending_has_tabs = nil, nil, nil, nil, nil
     return tx > self.position.x + self.size.x
   end
   local function ascii_ligature_sensitive_byte(byte)
@@ -1841,7 +1846,8 @@ function DocView:draw_line_text(line, x, y)
     -- do not render newline, fixes issue #1164
     if tidx == last_token then text = text:sub(1, -2) end
     if text ~= "" then
-      local ascii_chunkable = text:find("[\128-\255]") == nil
+      local ascii_chunkable = (#text > max_pending_bytes * 4)
+        or text:find("[\128-\255]") == nil
       if not ascii_chunkable then
         -- Avoid splitting complex/shaped scripts across draw calls; HarfBuzz
         -- needs the full run to preserve joining and ligatures. Pathological
@@ -1853,6 +1859,7 @@ function DocView:draw_line_text(line, x, y)
           pending_font, pending_color, pending_chunks, pending_len = font, color, {}, 0
         end
         pending_len = pending_len + #text
+        if text:find("\t", 1, true) then pending_has_tabs = true end
         pending_chunks[#pending_chunks + 1] = text
       else
         if pending_font ~= font or pending_color ~= color then
@@ -1877,8 +1884,23 @@ function DocView:draw_line_text(line, x, y)
             -- batch instead of forcing an arbitrary boundary.
             j = #text
           end
-          local chunk = text:sub(i, j)
+          local next_byte = text:byte(j + 1)
+          if next_byte and next_byte >= 128 then
+            j = j - 1
+          end
+          local chunk = j >= i and text:sub(i, j) or ""
+          if chunk == "" or chunk:find("[\128-\255]") then
+            if flush_pending_text() then stop_drawing = true; break end
+            local remaining = text:sub(i)
+            pending_font, pending_color, pending_chunks, pending_len = font, color, {}, 0
+            pending_len = #remaining
+            if remaining:find("\t", 1, true) then pending_has_tabs = true end
+            pending_chunks[#pending_chunks + 1] = remaining
+            i = #text + 1
+            break
+          end
           pending_len = pending_len + #chunk
+          if chunk:find("\t", 1, true) then pending_has_tabs = true end
           pending_chunks[#pending_chunks + 1] = chunk
           i = j + 1
           if pending_len >= max_pending_bytes then

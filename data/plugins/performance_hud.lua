@@ -20,6 +20,7 @@ local function fmt_num(v)
 end
 
 local function draw_hud()
+  if core.perf_capture_active then return end
   if not hud.visible and not perf.is_recording() then return end
 
   local s = core.performance_snapshot or {}
