@@ -323,12 +323,82 @@ test.describe("line wrapping visual navigation", function()
     command.perform("doc:move-to-end-of-line")
     line, col = doc:get_selection()
     test.equal(line, 1)
-    test.equal(col, 16)
+    test.equal(col, 17)
 
     command.perform("doc:move-to-end-of-line")
     line, col = doc:get_selection()
     test.equal(line, 1)
     test.equal(col, #doc.lines[1])
+  end)
+
+  test.it("draws visual-end caret on the previous wrapped row before right moves to the next row", function(context)
+    local view, doc = open_editor(context, string.rep("x", 40))
+    configure_wrapping_for_test(context, view)
+    local font = view:get_font()
+    local _, second_row_y = view:get_line_screen_position(1, 12)
+    local _, third_row_y = view:get_line_screen_position(1, 20)
+
+    doc:set_selection(1, 12, 1, 12)
+    command.perform("doc:move-to-end-of-line")
+    local line, col = doc:get_selection()
+    test.equal(line, 1)
+    test.equal(col, 17)
+
+    local drawn_caret
+    local old_draw_caret = view.draw_caret
+    view.draw_caret = function(_, x, y, caret_line, caret_col)
+      drawn_caret = { x = x, y = y, line = caret_line, col = caret_col }
+    end
+    with_stubbed_renderer(function() view:draw_overlay() end)
+    view.draw_caret = old_draw_caret
+
+    test.equal(drawn_caret.line, line)
+    test.equal(drawn_caret.col, col)
+    test.equal(drawn_caret.y, second_row_y)
+    test.equal(drawn_caret.x, select(1, view:get_line_screen_position(1, 9)) + font:get_width("xxxxxxxx"))
+
+    command.perform("doc:move-to-next-char")
+    line, col = doc:get_selection()
+    test.equal(line, 1)
+    test.equal(col, 18)
+
+    local x, y = view:get_line_screen_position(line, col)
+    test.equal(y, third_row_y)
+    test.equal(x, select(1, view:get_line_screen_position(1, 17)) + font:get_width("x"))
+  end)
+
+  test.it("keeps wrapped End affinity separate from document selection bounds", function(context)
+    local view, doc = open_editor(context, string.rep("x", 40))
+    configure_wrapping_for_test(context, view)
+    local font = view:get_font()
+
+    doc:set_selection(1, 12, 1, 12)
+    command.perform("doc:select-to-end-of-line")
+    local line1, col1, line2, col2 = doc:get_selection()
+    test.equal(line1, 1)
+    test.equal(col1, 17)
+    test.equal(line2, 1)
+    test.equal(col2, 12)
+
+    test.equal(view:get_col_x_offset(1, 17), 0)
+    test.equal(view:get_col_x_offset(1, 17, true), font:get_width("xxxxxxxx"))
+  end)
+
+  test.it("moves vertically to the end of a shorter word-wrapped row", function(context)
+    local view, doc = open_editor(context, "a " .. string.rep("b", 18))
+    configure_wrapping_for_test(context, view)
+    config.plugins.linewrapping.mode = "word"
+    LineWrapping.reconstruct_breaks(view, view:get_font(), config.plugins.linewrapping.width_override)
+
+    doc:set_selection(1, 8, 1, 8)
+    command.perform("doc:move-to-previous-line")
+    local line, col = doc:get_selection()
+    test.equal(line, 1)
+    test.equal(col, 3)
+
+    local x, y = view:get_line_screen_position(line, col, true)
+    test.equal(y, select(2, view:get_line_screen_position(1, 1)))
+    test.equal(x, select(1, view:get_line_screen_position(1, 1)) + view:get_font():get_width("a "))
   end)
 end)
 

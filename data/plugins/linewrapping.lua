@@ -290,6 +290,45 @@ local function get_total_wrapped_lines(docview)
   return #docview.wrapped_lines / 2
 end
 
+local function selection_state_key(doc)
+  return table.concat(doc.selections, "\31") .. "\30" .. tostring(doc.last_selection)
+end
+
+local function position_key(line, col)
+  return tostring(line) .. ":" .. tostring(col)
+end
+
+local function clear_wrapped_line_end_affinity(docview)
+  docview.wrapped_line_end_affinity = nil
+end
+
+local function set_wrapped_line_end_affinity(docview, positions)
+  if positions and next(positions) then
+    docview.wrapped_line_end_affinity = {
+      selection_key = selection_state_key(docview.doc),
+      positions = positions,
+    }
+  else
+    clear_wrapped_line_end_affinity(docview)
+  end
+end
+
+local function has_wrapped_line_end_affinity(docview, line, col)
+  local state = docview and docview.wrapped_line_end_affinity
+  if not state or not line or not col or not docview.doc then return false end
+  if state.selection_key ~= selection_state_key(docview.doc) then
+    clear_wrapped_line_end_affinity(docview)
+    return false
+  end
+  return state.positions[position_key(line, col)] == true
+end
+
+local function get_idx_visual_end_col(docview, idx, line)
+  local nline, ncol = get_idx_line_col(docview, idx + 1)
+  if nline == line then return ncol, true end
+  return #docview.doc.lines[line], false
+end
+
 -- If line end, gives the end of an index line, rather than the first character of the next line.
 local function get_line_idx_col_count(docview, line, col, line_end, ndoc)
   local doc = docview.doc
@@ -318,25 +357,38 @@ end
 local function get_line_col_from_index_and_x(docview, idx, x)
   local doc = docview.doc
   local line, col = get_idx_line_col(docview, idx)
-  if idx < 1 then return 1, 1 end
-  local xoffset, last_i, i = (col ~= 1 and docview.wrapped_line_offsets[line] or 0), col, 1
-  if x < xoffset then return line, col end
+  if idx < 1 then return 1, 1, false end
+  local row_end_col, soft_end = get_idx_visual_end_col(docview, idx, line)
+  local xoffset, last_i, i, last_w = (col ~= 1 and docview.wrapped_line_offsets[line] or 0), col, 1, 0
+  if x < xoffset then return line, col, false end
   local default_font = docview:get_font()
   for _, type, text in doc.highlighter:each_token(line) do
-    local font, w = style.syntax_fonts[type] or default_font, 0
+    local font, w = style.syntax_fonts[type] or default_font, last_w
     for char in common.utf8_chars(text) do
+      if i >= row_end_col then
+        if xoffset >= x then
+          local target_col = xoffset - x > (w / 2) and last_i or row_end_col
+          return line, target_col, soft_end and target_col == row_end_col
+        end
+        return line, row_end_col, soft_end
+      end
       if i >= col then
         if xoffset >= x then
-          return line, (xoffset - x > (w / 2) and last_i or i)
+          return line, (xoffset - x > (w / 2) and last_i or i), false
         end
         w = font:get_width(char)
+        last_w = w
         xoffset = xoffset + w
       end
       last_i = i
       i = i + #char
     end
   end
-  return line, #doc.lines[line]
+  if i >= row_end_col and xoffset >= x and last_w > 0 then
+    local target_col = xoffset - x > (last_w / 2) and last_i or row_end_col
+    return line, target_col, soft_end and target_col == row_end_col
+  end
+  return line, row_end_col, soft_end
 end
 
 
@@ -432,6 +484,15 @@ function DocView:new(doc)
   end
 end
 
+local function with_wrapped_caret_affinity(docview, fn, ...)
+  local old = docview.__use_wrapped_caret_affinity
+  docview.__use_wrapped_caret_affinity = true
+  local results = { pcall(fn, docview, ...) }
+  docview.__use_wrapped_caret_affinity = old
+  if not results[1] then error(results[2], 0) end
+  return table.unpack(results, 2)
+end
+
 local old_scroll_to_line = DocView.scroll_to_line
 function DocView:scroll_to_line(...)
   if self.wrapping_enabled then LineWrapping.update_docview_breaks(self) end
@@ -441,8 +502,12 @@ end
 local old_scroll_to_make_visible = DocView.scroll_to_make_visible
 function DocView:scroll_to_make_visible(line, col, ...)
   if self.wrapping_enabled then LineWrapping.update_docview_breaks(self) end
-  old_scroll_to_make_visible(self, line, col, ...)
-  if self.wrapped_settings then self.scroll.to.x = 0 end
+  if self.wrapped_settings then
+    with_wrapped_caret_affinity(self, old_scroll_to_make_visible, line, col, ...)
+    self.scroll.to.x = 0
+  else
+    old_scroll_to_make_visible(self, line, col, ...)
+  end
 end
 
 local old_get_visible_line_range = DocView.get_visible_line_range
@@ -459,13 +524,17 @@ local old_get_x_offset_col = DocView.get_x_offset_col
 function DocView:get_x_offset_col(line, x)
   if not self.wrapped_settings then return old_get_x_offset_col(self, line, x) end
   local idx = get_line_idx_col_count(self, line)
-  return get_line_col_from_index_and_x(self, idx, x)
+  local target_line, target_col = get_line_col_from_index_and_x(self, idx, x)
+  return target_line, target_col
 end
 
 -- If line end is true, returns the end of the previous line, in a multi-line break.
 local old_get_col_x_offset = DocView.get_col_x_offset
 function DocView:get_col_x_offset(line, col, line_end)
   if not self.wrapped_settings then return old_get_col_x_offset(self, line, col) end
+  if line_end == nil and self.__use_wrapped_caret_affinity then
+    line_end = has_wrapped_line_end_affinity(self, line, col)
+  end
   local idx, ncol, count, scol = get_line_idx_col_count(self, line, col, line_end)
   local xoffset, i = (scol ~= 1 and self.wrapped_line_offsets[line] or 0), 1
   local default_font = self:get_font()
@@ -491,13 +560,16 @@ function DocView:get_col_x_offset(line, col, line_end)
 end
 
 local old_get_line_screen_position = DocView.get_line_screen_position
-function DocView:get_line_screen_position(line, col)
+function DocView:get_line_screen_position(line, col, line_end)
   if not self.wrapped_settings then return old_get_line_screen_position(self, line, col) end
-  local idx, ncol, count = get_line_idx_col_count(self, line, col)
+  if line_end == nil and self.__use_wrapped_caret_affinity then
+    line_end = has_wrapped_line_end_affinity(self, line, col)
+  end
+  local idx, ncol, count = get_line_idx_col_count(self, line, col, line_end)
   local x, y = self:get_content_offset()
   local lh = self:get_line_height()
   local gw = self:get_gutter_width()
-  return x + gw + (col and self:get_col_x_offset(line, col) or 0), y + (idx-1) * lh + style.padding.y
+  return x + gw + (col and self:get_col_x_offset(line, col, line_end) or 0), y + (idx-1) * lh + style.padding.y
 end
 
 local old_resolve_screen_position = DocView.resolve_screen_position
@@ -505,7 +577,44 @@ function DocView:resolve_screen_position(x, y)
   if not self.wrapped_settings then return old_resolve_screen_position(self, x, y) end
   local ox, oy = self:get_line_screen_position(1)
   local idx = common.clamp(math.floor((y - oy) / self:get_line_height()) + 1, 1, get_total_wrapped_lines(self))
-  return get_line_col_from_index_and_x(self, idx, x - ox)
+  local line, col, line_end = get_line_col_from_index_and_x(self, idx, x - ox)
+  self.wrapped_last_resolved_line_end = line_end and { line, col } or nil
+  return line, col
+end
+
+local function apply_resolved_line_end_affinity(docview)
+  local resolved = docview.wrapped_last_resolved_line_end
+  docview.wrapped_last_resolved_line_end = nil
+  if not resolved or not docview.wrapped_settings then
+    clear_wrapped_line_end_affinity(docview)
+    return
+  end
+  local positions = {}
+  for _, line1, col1 in docview.doc:get_selections(false) do
+    if line1 == resolved[1] and col1 == resolved[2] then
+      positions[position_key(line1, col1)] = true
+    end
+  end
+  set_wrapped_line_end_affinity(docview, positions)
+end
+
+local old_on_mouse_pressed = DocView.on_mouse_pressed
+function DocView:on_mouse_pressed(button, ...)
+  local result = old_on_mouse_pressed(self, button, ...)
+  if self.wrapped_settings and button == "left" then
+    apply_resolved_line_end_affinity(self)
+  end
+  return result
+end
+
+local old_on_mouse_moved = DocView.on_mouse_moved
+function DocView:on_mouse_moved(...)
+  local selecting = self.mouse_selecting ~= nil
+  local result = old_on_mouse_moved(self, ...)
+  if self.wrapped_settings and selecting then
+    apply_resolved_line_end_affinity(self)
+  end
+  return result
 end
 
 local old_draw_line_text = DocView.draw_line_text
@@ -558,8 +667,8 @@ local function get_wrapped_segment_bounds(view, line, col1, col2, idx1, idx2, id
   if row_line ~= line then return nil, nil end
   local next_line, next_start_col = get_idx_line_col(view, idx + 1)
   local row_end_col = next_line == line and next_start_col or (#view.doc.lines[line] + 1)
-  local x1 = idx == idx1 and view:get_col_x_offset(line, col1) or view:get_col_x_offset(line, row_start_col)
-  local x2 = idx == idx2 and view:get_col_x_offset(line, col2) or view:get_col_x_offset(line, row_end_col, true)
+  local x1 = idx == idx1 and view:get_col_x_offset(line, col1, false) or view:get_col_x_offset(line, row_start_col, false)
+  local x2 = idx == idx2 and view:get_col_x_offset(line, col2, false) or view:get_col_x_offset(line, row_end_col, true)
   return x1, x2
 end
 
@@ -583,7 +692,8 @@ function DocView:draw_current_line_highlights(minline, maxline)
   for _, line1, col1, line2, col2 in self.doc:get_selections(false) do
     if line1 > maxline then break end
     if line1 >= minline and (hcl ~= "no_selection" or (line1 == line2 and col1 == col2)) then
-      local idx = get_line_idx_col_count(self, line1, col1)
+      local line_end = has_wrapped_line_end_affinity(self, line1, col1)
+      local idx = get_line_idx_col_count(self, line1, col1, line_end)
       local _, y = self:get_line_screen_position(line1)
       local first_idx = get_line_idx_col_count(self, line1)
       self:draw_line_highlight(self.position.x, y + lh * (idx - first_idx))
@@ -606,7 +716,8 @@ function DocView:draw_line_body(line, x, y)
       -- contains the caret, not on every visual row belonging to the same
       -- Document line.
       if line1 == line and (hcl ~= "no_selection" or (line1 == line2 and col1 == col2)) then
-        local idx = get_line_idx_col_count(self, line, col1)
+        local line_end = has_wrapped_line_end_affinity(self, line, col1)
+        local idx = get_line_idx_col_count(self, line, col1, line_end)
         if idx >= idx0 and idx < idx0 + count then
           highlight_rows = highlight_rows or {}
           highlight_rows[idx] = true
@@ -664,6 +775,12 @@ function DocView:draw_line_body(line, x, y)
   return line_height
 end
 
+local old_draw_overlay = DocView.draw_overlay
+function DocView:draw_overlay(...)
+  if not self.wrapped_settings then return old_draw_overlay(self, ...) end
+  return with_wrapped_caret_affinity(self, old_draw_overlay, ...)
+end
+
 local old_draw = DocView.draw
 function DocView:draw()
   old_draw(self)
@@ -684,20 +801,35 @@ local function wrapping_active_for_doc(doc)
 end
 
 local old_translate_end_of_line = translate.end_of_line
+
+local function wrapped_end_of_line_position(docview, doc, line, col)
+  local line_end = has_wrapped_line_end_affinity(docview, line, col)
+  local idx = get_line_idx_col_count(docview, line, col, line_end)
+  local nline, ncol = get_idx_line_col(docview, idx + 1)
+  if nline ~= line then
+    local end_line, end_col = old_translate_end_of_line(doc, line, col)
+    end_line, end_col = doc:sanitize_position(end_line, end_col)
+    return end_line, end_col, false
+  end
+  if line_end and col == ncol then
+    local end_line, end_col = old_translate_end_of_line(doc, line, col)
+    end_line, end_col = doc:sanitize_position(end_line, end_col)
+    return end_line, end_col, false
+  end
+  return line, ncol, true
+end
+
 function translate.end_of_line(doc, line, col)
   if not wrapping_active_for_doc(doc) then return old_translate_end_of_line(doc, line, col) end
-  local idx, ncol = get_line_idx_col_count(core.active_view, line, col)
-  local nline, ncol2 = get_idx_line_col(core.active_view, idx + 1)
-  if nline ~= line then return old_translate_end_of_line(doc, line, col) end
-  local wrapped_end_col = ncol2 - 1
-  if col == wrapped_end_col then return old_translate_end_of_line(doc, line, col) end
-  return line, wrapped_end_col
+  local nline, ncol = wrapped_end_of_line_position(core.active_view, doc, line, col)
+  return nline, ncol
 end
 
 local old_translate_start_of_line = translate.start_of_line
 function translate.start_of_line(doc, line, col)
   if not wrapping_active_for_doc(doc) then return old_translate_start_of_line(doc, line, col) end
-  local _, _, _, scol = get_line_idx_col_count(core.active_view, line, col)
+  local line_end = has_wrapped_line_end_affinity(core.active_view, line, col)
+  local _, _, _, scol = get_line_idx_col_count(core.active_view, line, col, line_end)
   if col == scol then return old_translate_start_of_line(doc, line, col) end
   return line, scol
 end
@@ -705,24 +837,31 @@ end
 local old_translate_start_of_indentation = translate.start_of_indentation
 function translate.start_of_indentation(doc, line, col)
   if not wrapping_active_for_doc(doc) then return old_translate_start_of_indentation(doc, line, col) end
-  local _, _, _, scol = get_line_idx_col_count(core.active_view, line, col)
+  local line_end = has_wrapped_line_end_affinity(core.active_view, line, col)
+  local _, _, _, scol = get_line_idx_col_count(core.active_view, line, col, line_end)
   if col == scol then return old_translate_start_of_indentation(doc, line, col) end
   if scol ~= 1 then return line, scol end
   return old_translate_start_of_indentation(doc, line, col)
 end
 
+local function wrapped_visual_line_position(dv, line, col, idx_delta)
+  local line_end = has_wrapped_line_end_affinity(dv, line, col)
+  local idx = get_line_idx_col_count(dv, line, col, line_end)
+  return get_line_col_from_index_and_x(dv, idx + idx_delta, dv:get_col_x_offset(line, col, line_end))
+end
+
 local old_previous_line = DocView.translate.previous_line
 function DocView.translate.previous_line(doc, line, col, dv)
   if not dv.wrapped_settings then return old_previous_line(doc, line, col, dv) end
-  local idx, ncol = get_line_idx_col_count(dv, line, col)
-  return get_line_col_from_index_and_x(dv, idx - 1, dv:get_col_x_offset(line, col))
+  local nline, ncol = wrapped_visual_line_position(dv, line, col, -1)
+  return nline, ncol
 end
 
 local old_next_line = DocView.translate.next_line
 function DocView.translate.next_line(doc, line, col, dv)
   if not dv.wrapped_settings then return old_next_line(doc, line, col, dv) end
-  local idx, ncol = get_line_idx_col_count(dv, line, col)
-  return get_line_col_from_index_and_x(dv, idx + 1, dv:get_col_x_offset(line, col))
+  local nline, ncol = wrapped_visual_line_position(dv, line, col, 1)
+  return nline, ncol
 end
 
 local old_navigation_commands = {}
@@ -732,14 +871,19 @@ for _, name in ipairs({
   "doc:select-to-previous-line",
   "doc:select-to-next-line",
   "doc:move-to-start-of-indentation",
+  "doc:select-to-start-of-indentation",
   "doc:move-to-end-of-line",
+  "doc:select-to-end-of-line",
+  "doc:set-cursor",
+  "doc:set-cursor-word",
+  "doc:set-cursor-line",
 }) do
   old_navigation_commands[name] = command.map[name]
 end
 
-local function perform_old_navigation(name, dv)
+local function perform_old_navigation(name, dv, ...)
   local old = old_navigation_commands[name]
-  if old and old.perform then return old.perform(dv) end
+  if old and old.perform then return old.perform(dv, ...) end
 end
 
 local function set_primary_selection(doc)
@@ -749,35 +893,96 @@ local function set_primary_selection(doc)
   end
 end
 
+local function add_line_end_affinity(positions, line, col, line_end)
+  if line_end then positions[position_key(line, col)] = true end
+end
+
 local function wrapped_move_to(dv, name, move_fn, ...)
   if not dv.wrapped_settings then return perform_old_navigation(name, dv) end
-  dv.doc:move_to(move_fn, ...)
+  local doc = dv.doc
+  local selections = {}
+  local affinity_positions = {}
+  for _, line1, col1 in doc:get_selections(false) do
+    local line, col, line_end = move_fn(doc, line1, col1, ...)
+    selections[#selections + 1] = line
+    selections[#selections + 1] = col
+    selections[#selections + 1] = line
+    selections[#selections + 1] = col
+    add_line_end_affinity(affinity_positions, line, col, line_end)
+  end
+  doc:set_selection_list(selections, doc.last_selection, { merge_cursors = true })
+  set_wrapped_line_end_affinity(dv, affinity_positions)
 end
 
 local function wrapped_select_to(dv, name, move_fn, ...)
   if not dv.wrapped_settings then return perform_old_navigation(name, dv) end
-  dv.doc:select_to(move_fn, ...)
-  set_primary_selection(dv.doc)
+  local doc = dv.doc
+  local selections = {}
+  local affinity_positions = {}
+  for _, line1, col1, line2, col2 in doc:get_selections(false) do
+    local line, col, line_end = move_fn(doc, line1, col1, ...)
+    selections[#selections + 1] = line
+    selections[#selections + 1] = col
+    selections[#selections + 1] = line2
+    selections[#selections + 1] = col2
+    add_line_end_affinity(affinity_positions, line, col, line_end)
+  end
+  doc:set_selection_list(selections, doc.last_selection, { merge_cursors = true })
+  set_wrapped_line_end_affinity(dv, affinity_positions)
+  set_primary_selection(doc)
+end
+
+local function move_to_wrapped_end_of_line(doc, line, col, dv)
+  return wrapped_end_of_line_position(dv, doc, line, col)
+end
+
+local function move_to_wrapped_previous_line(doc, line, col, dv)
+  return wrapped_visual_line_position(dv, line, col, -1)
+end
+
+local function move_to_wrapped_next_line(doc, line, col, dv)
+  return wrapped_visual_line_position(dv, line, col, 1)
 end
 
 command.add("core.docview", {
   ["doc:move-to-previous-line"] = function(dv)
-    return wrapped_move_to(dv, "doc:move-to-previous-line", DocView.translate.previous_line, dv)
+    return wrapped_move_to(dv, "doc:move-to-previous-line", move_to_wrapped_previous_line, dv)
   end,
   ["doc:move-to-next-line"] = function(dv)
-    return wrapped_move_to(dv, "doc:move-to-next-line", DocView.translate.next_line, dv)
+    return wrapped_move_to(dv, "doc:move-to-next-line", move_to_wrapped_next_line, dv)
   end,
   ["doc:select-to-previous-line"] = function(dv)
-    return wrapped_select_to(dv, "doc:select-to-previous-line", DocView.translate.previous_line, dv)
+    return wrapped_select_to(dv, "doc:select-to-previous-line", move_to_wrapped_previous_line, dv)
   end,
   ["doc:select-to-next-line"] = function(dv)
-    return wrapped_select_to(dv, "doc:select-to-next-line", DocView.translate.next_line, dv)
+    return wrapped_select_to(dv, "doc:select-to-next-line", move_to_wrapped_next_line, dv)
   end,
   ["doc:move-to-start-of-indentation"] = function(dv)
     return wrapped_move_to(dv, "doc:move-to-start-of-indentation", translate.start_of_indentation)
   end,
+  ["doc:select-to-start-of-indentation"] = function(dv)
+    return wrapped_select_to(dv, "doc:select-to-start-of-indentation", translate.start_of_indentation)
+  end,
   ["doc:move-to-end-of-line"] = function(dv)
-    return wrapped_move_to(dv, "doc:move-to-end-of-line", translate.end_of_line)
+    return wrapped_move_to(dv, "doc:move-to-end-of-line", move_to_wrapped_end_of_line, dv)
+  end,
+  ["doc:select-to-end-of-line"] = function(dv)
+    return wrapped_select_to(dv, "doc:select-to-end-of-line", move_to_wrapped_end_of_line, dv)
+  end,
+  ["doc:set-cursor"] = function(dv, x, y)
+    local result = perform_old_navigation("doc:set-cursor", dv, x, y)
+    if dv.wrapped_settings then apply_resolved_line_end_affinity(dv) end
+    return result
+  end,
+  ["doc:set-cursor-word"] = function(dv, x, y)
+    local result = perform_old_navigation("doc:set-cursor-word", dv, x, y)
+    if dv.wrapped_settings then apply_resolved_line_end_affinity(dv) end
+    return result
+  end,
+  ["doc:set-cursor-line"] = function(dv, x, y, clicks)
+    local result = perform_old_navigation("doc:set-cursor-line", dv, x, y, clicks)
+    if dv.wrapped_settings then apply_resolved_line_end_affinity(dv) end
+    return result
   end,
 })
 
