@@ -39,6 +39,15 @@ local Tabs = require "core.tabs"
 ---@field move_towards function
 local Node = Object:extend()
 
+local function perf_frame_add(key, amount)
+  local perf = package.loaded["core.perf"]
+  if perf and perf.frame_add then perf.frame_add(key, amount or 1) end
+end
+
+local function perf_elapsed(key, start_time)
+  if start_time then perf_frame_add(key, (system.get_time() - start_time) * 1000) end
+end
+
 local function new_tab_bar(owner)
   return Tabs(owner, {
     should_show = function(node) return node:should_show_tabs() end,
@@ -605,7 +614,11 @@ end
 ---Recursively calculates layout for the entire subtree.
 ---Accounts for tabs, locked sizes, and divider positions.
 function Node:update_layout()
+  local perf_active = core.perf_frame_stats ~= nil
+  local perf_start = perf_active and system.get_time()
+  perf_frame_add("node_update_layout_calls", 1)
   if self.type == "leaf" then
+    perf_frame_add("node_update_layout_leaf_calls", 1)
     local av = self.active_view
     if self:should_show_tabs() then
       local _, _, _, th = self:get_tab_rect(1)
@@ -615,6 +628,7 @@ function Node:update_layout()
       Node.copy_position_and_size(av, self)
     end
   else
+    perf_frame_add("node_update_layout_split_calls", 1)
     local x1, y1 = self.a:get_locked_size()
     local x2, y2 = self.b:get_locked_size()
     if self.type == "hsplit" then
@@ -625,6 +639,7 @@ function Node:update_layout()
     self.a:update_layout()
     self.b:update_layout()
   end
+  perf_elapsed("node_update_layout_ms", perf_start)
 end
 
 
@@ -652,18 +667,34 @@ end
 ---For leaf nodes: updates active view, tab hover state, and tab animations.
 ---For split nodes: recursively updates both children.
 function Node:update()
+  local perf_active = core.perf_frame_stats ~= nil
+  local perf_start = perf_active and system.get_time()
+  perf_frame_add("node_update_calls", 1)
   if self.type == "leaf" then
+    perf_frame_add("node_update_leaf_calls", 1)
+    local phase_start = perf_active and system.get_time()
     self:scroll_tabs_to_visible()
+    perf_elapsed("node_scroll_tabs_to_visible_ms", phase_start)
     local view = self.active_view
+    phase_start = perf_active and system.get_time()
     call_view_method(view, view.update)
+    perf_elapsed("node_active_view_update_ms", phase_start)
     view._core_step_first_update = true
     local mouse = core.root_panel and core.root_panel.mouse
-    if mouse then self:tab_hovered_update(mouse.x, mouse.y) end
+    if mouse then
+      phase_start = perf_active and system.get_time()
+      self:tab_hovered_update(mouse.x, mouse.y)
+      perf_elapsed("node_tab_hover_update_ms", phase_start)
+    end
+    phase_start = perf_active and system.get_time()
     self:get_tab_bar():update_animation()
+    perf_elapsed("node_tab_animation_ms", phase_start)
   else
+    perf_frame_add("node_update_split_calls", 1)
     self.a:update()
     self.b:update()
   end
+  perf_elapsed("node_update_ms", perf_start)
 end
 
 

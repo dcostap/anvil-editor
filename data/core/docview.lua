@@ -68,6 +68,15 @@ local function pack(...)
   return { n = select("#", ...), ... }
 end
 
+local function perf_frame_add(key, amount)
+  local perf = package.loaded["core.perf"]
+  if perf and perf.frame_add then perf.frame_add(key, amount or 1) end
+end
+
+local function perf_elapsed(key, start_time)
+  if start_time then perf_frame_add(key, (system.get_time() - start_time) * 1000) end
+end
+
 local function new_selection_owner_id()
   next_selection_owner_id = next_selection_owner_id + 1
   return next_selection_owner_id
@@ -1254,7 +1263,11 @@ end
 ---Update the view state each frame.
 ---Handles cache invalidation, auto-scrolling to caret, and blink timing.
 function DocView:update()
+  local perf_active = core.perf_frame_stats ~= nil
+  local update_start = perf_active and system.get_time()
+
   -- clear cache if font or indent size changed
+  local phase_start = perf_active and system.get_time()
   local font = self:get_font()
   local _, indent_size = self.doc:get_indent_info()
   if
@@ -1267,23 +1280,35 @@ function DocView:update()
     self.cache_font_size = font:get_size()
     self.cache_indent_size = indent_size
   end
+  perf_elapsed("docview_update_cache_ms", phase_start)
 
   -- scroll to make caret visible and reset blink timer if it moved
+  phase_start = perf_active and system.get_time()
   local line1, col1, line2, col2 = self.doc:get_selection()
   local selection_moved = line1 ~= self.last_line1 or col1 ~= self.last_col1 or
       line2 ~= self.last_line2 or col2 ~= self.last_col2
   if (selection_moved or self.needs_initial_scroll_validation) and self.size.x > 0 then
     if core.active_view == self and not ime.editing then
+      local scroll_start = perf_active and system.get_time()
       self:scroll_to_make_visible(line1, col1, self.needs_initial_scroll_validation)
+      perf_elapsed("docview_scroll_to_make_visible_ms", scroll_start)
       self.needs_initial_scroll_validation = nil
     end
     core.blink_reset()
     self.last_line1, self.last_col1 = line1, col1
     self.last_line2, self.last_col2 = line2, col2
   end
+  perf_elapsed("docview_update_selection_ms", phase_start)
 
   -- update blink timer
-  if not config.disable_blink and self:active_window_has_focus() and self == core.active_view and not self.mouse_selecting then
+  phase_start = perf_active and system.get_time()
+  local active_window_has_focus = false
+  if not config.disable_blink then
+    local focus_start = perf_active and system.get_time()
+    active_window_has_focus = self:active_window_has_focus()
+    perf_elapsed("docview_update_active_focus_ms", focus_start)
+  end
+  if not config.disable_blink and active_window_has_focus and self == core.active_view and not self.mouse_selecting then
     local T, t0 = config.blink_period, core.blink_start
     local ta, tb = core.blink_timer, system.get_time()
     if ((tb - t0) % T < T / 2) ~= ((ta - t0) % T < T / 2) then
@@ -1291,10 +1316,16 @@ function DocView:update()
     end
     core.blink_timer = tb
   end
+  perf_elapsed("docview_update_blink_ms", phase_start)
 
+  phase_start = perf_active and system.get_time()
   self:update_ime_location()
+  perf_elapsed("docview_update_ime_ms", phase_start)
 
+  phase_start = perf_active and system.get_time()
   DocView.super.update(self)
+  perf_elapsed("docview_update_super_ms", phase_start)
+  perf_elapsed("docview_update_ms", update_start)
 end
 
 

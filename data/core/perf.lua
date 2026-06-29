@@ -119,6 +119,61 @@ local function unwrap_system_api()
   system_originals = {}
 end
 
+local diagnostic_frame_keys = {
+  "docview_update_ms",
+  "docview_update_cache_ms",
+  "docview_update_selection_ms",
+  "docview_scroll_to_make_visible_ms",
+  "docview_update_blink_ms",
+  "docview_update_active_focus_ms",
+  "docview_update_ime_ms",
+  "docview_update_super_ms",
+  "ime_set_location_calls",
+  "ime_set_location_ms",
+  "ime_set_location_changed",
+  "ime_set_location_system_ms",
+  "linewrapping_update_docview_breaks_calls",
+  "linewrapping_update_docview_breaks_ms",
+  "linewrapping_update_docview_breaks_width_changed",
+  "linewrapping_reconstruct_breaks_calls",
+  "linewrapping_reconstruct_breaks_ms",
+  "linewrapping_reconstruct_breaks_lines",
+  "linewrapping_update_breaks_calls",
+  "linewrapping_update_breaks_ms",
+  "linewrapping_update_breaks_lines",
+  "linewrapping_compute_line_breaks_calls",
+  "linewrapping_compute_line_breaks_ms",
+  "linewrapping_compute_line_breaks_bytes",
+  "linewrapping_compute_line_breaks_splits",
+  "linewrapping_draw_line_text_calls",
+  "linewrapping_draw_line_text_ms",
+  "linewrapping_draw_line_text_rows",
+  "linewrapping_draw_line_text_segments",
+  "linewrapping_draw_line_text_bytes",
+  "linewrapping_draw_line_text_known_bounds_segments",
+  "core_root_panel_update_ms",
+  "core_tool_window_update_ms",
+  "rootpanel_update_ms",
+  "rootpanel_copy_position_ms",
+  "rootpanel_initial_layout_ms",
+  "rootpanel_node_update_ms",
+  "rootpanel_final_layout_ms",
+  "rootpanel_drag_overlay_ms",
+  "rootpanel_defer_open_docs_ms",
+  "node_update_layout_calls",
+  "node_update_layout_leaf_calls",
+  "node_update_layout_split_calls",
+  "node_update_layout_ms",
+  "node_update_calls",
+  "node_update_leaf_calls",
+  "node_update_split_calls",
+  "node_update_ms",
+  "node_scroll_tabs_to_visible_ms",
+  "node_active_view_update_ms",
+  "node_tab_hover_update_ms",
+  "node_tab_animation_ms",
+}
+
 local function write_frame_header(file)
   file:write(table.concat({
     "time", "did_redraw", "fps", "target_fps", "active_present_paced",
@@ -143,7 +198,7 @@ local function write_frame_header(file)
     "statusbar_selection_ms", "statusbar_selection_cache_hits", "statusbar_selection_cache_misses",
     "docview_line_hint_calls", "docview_line_hint_drawn", "docview_line_hint_ms", "docview_line_hint_get_ms", "docview_line_hint_normalize_ms", "docview_line_hint_layout_ms", "docview_line_hint_measure_ms", "docview_line_hint_truncate_ms", "docview_line_hint_draw_ms", "docview_line_hint_draw_text_calls", "docview_line_hint_draw_text_ms", "docview_line_hint_skip_no_hint", "docview_line_hint_skip_no_space", "docview_line_hint_skip_truncated",
     "filetree_line_hint_calls", "filetree_line_hint_ms", "filetree_line_hint_get_file_info_calls", "filetree_line_hint_get_file_info_ms", "filetree_line_hint_format_ms", "filetree_line_hint_git_ms", "filetree_line_hint_segments", "filetree_line_hint_cache_hits", "filetree_line_hint_cache_misses", "filetree_line_hint_folder_count_hits", "filetree_line_hint_folder_count_pending", "filetree_line_hint_entry_calls", "filetree_line_hint_entry_ms", "filetree_line_hint_entry_rebuilds", "filetree_line_hint_entry_build_ms", "filetree_folder_row_background_calls", "filetree_folder_row_background_rects", "filetree_folder_row_background_ms", "filetree_line_is_dir_calls", "filetree_line_is_dir_ms", "filetree_draw_line_body_calls", "filetree_draw_line_body_ms", "filetree_draw_line_text_calls", "filetree_draw_line_text_ms", "filetree_draw_line_text_git_ms", "filetree_draw_line_text_colored_calls", "filetree_draw_line_text_plain_calls",
-    "over_budget"
+    "over_budget" .. (#diagnostic_frame_keys > 0 and "," .. table.concat(diagnostic_frame_keys, ",") or "")
   }, ",") .. "\n")
 end
 
@@ -151,6 +206,19 @@ local function snapshot_value(s, key)
   local value = s and s[key]
   if type(value) == "boolean" then return value and 1 or 0 end
   return value or 0
+end
+
+local function diagnostic_frame_csv(snapshot)
+  local values = {}
+  for i, key in ipairs(diagnostic_frame_keys) do
+    local value = snapshot_value(snapshot, key)
+    if key:find("_ms$") then
+      values[i] = string.format("%.3f", tonumber(value) or 0)
+    else
+      values[i] = tostring(value or 0)
+    end
+  end
+  return table.concat(values, ",")
 end
 
 local aggregate_detail_keys = {
@@ -330,7 +398,7 @@ function perf.on_frame(snapshot)
     record.sleep_count = record.sleep_count + 1
     record.sleep_actual_total_ms = record.sleep_actual_total_ms + snapshot.sleep_actual_ms
   end
-  record.file:write(table.concat({
+  local frame_row = table.concat({
     string.format("%.6f", now),
     snapshot.did_redraw and "1" or "0",
     string.format("%.3f", snapshot.fps or 0),
@@ -504,7 +572,10 @@ function perf.on_frame(snapshot)
     tostring(snapshot_value(snapshot, "filetree_draw_line_text_colored_calls")),
     tostring(snapshot_value(snapshot, "filetree_draw_line_text_plain_calls")),
     snapshot.over_budget and "1" or "0",
-  }, ",") .. "\n")
+  }, ",")
+  local diagnostic = diagnostic_frame_csv(snapshot)
+  if diagnostic ~= "" then frame_row = frame_row .. "," .. diagnostic end
+  record.file:write(frame_row .. "\n")
 end
 
 local function sorted_counts(tbl)
@@ -612,6 +683,58 @@ local function write_summary(path)
   drill_metric("docview line hint measure ms", "docview_line_hint_measure_ms")
   drill_metric("docview line hint truncate ms", "docview_line_hint_truncate_ms")
   drill_metric("docview line hint draw ms", "docview_line_hint_draw_ms")
+  drill_metric("docview update total ms", "docview_update_ms")
+  drill_metric("docview update cache ms", "docview_update_cache_ms")
+  drill_metric("docview update selection ms", "docview_update_selection_ms")
+  drill_metric("docview scroll-to-visible ms", "docview_scroll_to_make_visible_ms")
+  drill_metric("docview update blink ms", "docview_update_blink_ms")
+  drill_metric("docview active focus ms", "docview_update_active_focus_ms")
+  drill_metric("docview update IME ms", "docview_update_ime_ms")
+  drill_metric("docview super update ms", "docview_update_super_ms")
+  drill_metric("IME set_location calls", "ime_set_location_calls")
+  drill_metric("IME set_location ms", "ime_set_location_ms")
+  drill_metric("IME changed calls", "ime_set_location_changed")
+  drill_metric("IME system rect ms", "ime_set_location_system_ms")
+  drill_metric("linewrap update_docview calls", "linewrapping_update_docview_breaks_calls")
+  drill_metric("linewrap update_docview ms", "linewrapping_update_docview_breaks_ms")
+  drill_metric("linewrap width-changed calls", "linewrapping_update_docview_breaks_width_changed")
+  drill_metric("linewrap reconstruct calls", "linewrapping_reconstruct_breaks_calls")
+  drill_metric("linewrap reconstruct ms", "linewrapping_reconstruct_breaks_ms")
+  drill_metric("linewrap reconstruct lines", "linewrapping_reconstruct_breaks_lines")
+  drill_metric("linewrap update_breaks calls", "linewrapping_update_breaks_calls")
+  drill_metric("linewrap update_breaks ms", "linewrapping_update_breaks_ms")
+  drill_metric("linewrap update_breaks lines", "linewrapping_update_breaks_lines")
+  drill_metric("linewrap compute calls", "linewrapping_compute_line_breaks_calls")
+  drill_metric("linewrap compute ms", "linewrapping_compute_line_breaks_ms")
+  drill_metric("linewrap compute bytes", "linewrapping_compute_line_breaks_bytes")
+  drill_metric("linewrap compute splits", "linewrapping_compute_line_breaks_splits")
+  drill_metric("linewrap draw_text calls", "linewrapping_draw_line_text_calls")
+  drill_metric("linewrap draw_text ms", "linewrapping_draw_line_text_ms")
+  drill_metric("linewrap draw_text rows", "linewrapping_draw_line_text_rows")
+  drill_metric("linewrap draw_text segments", "linewrapping_draw_line_text_segments")
+  drill_metric("linewrap draw_text bytes", "linewrapping_draw_line_text_bytes")
+  drill_metric("linewrap known-bound segments", "linewrapping_draw_line_text_known_bounds_segments")
+  drill_metric("core root_panel update ms", "core_root_panel_update_ms")
+  drill_metric("core tool_window update ms", "core_tool_window_update_ms")
+  drill_metric("rootpanel update ms", "rootpanel_update_ms")
+  drill_metric("rootpanel copy position ms", "rootpanel_copy_position_ms")
+  drill_metric("rootpanel initial layout ms", "rootpanel_initial_layout_ms")
+  drill_metric("rootpanel node update ms", "rootpanel_node_update_ms")
+  drill_metric("rootpanel final layout ms", "rootpanel_final_layout_ms")
+  drill_metric("rootpanel drag overlay ms", "rootpanel_drag_overlay_ms")
+  drill_metric("rootpanel defer open docs ms", "rootpanel_defer_open_docs_ms")
+  drill_metric("node layout calls", "node_update_layout_calls")
+  drill_metric("node layout leaf calls", "node_update_layout_leaf_calls")
+  drill_metric("node layout split calls", "node_update_layout_split_calls")
+  drill_metric("node layout ms", "node_update_layout_ms")
+  drill_metric("node update calls", "node_update_calls")
+  drill_metric("node update leaf calls", "node_update_leaf_calls")
+  drill_metric("node update split calls", "node_update_split_calls")
+  drill_metric("node update ms", "node_update_ms")
+  drill_metric("node scroll tabs ms", "node_scroll_tabs_to_visible_ms")
+  drill_metric("node active view update ms", "node_active_view_update_ms")
+  drill_metric("node tab hover ms", "node_tab_hover_update_ms")
+  drill_metric("node tab animation ms", "node_tab_animation_ms")
   drill_metric("filetree line hint calls", "filetree_line_hint_calls")
   drill_metric("filetree line hint total ms", "filetree_line_hint_ms")
   drill_metric("filetree get_file_info calls", "filetree_line_hint_get_file_info_calls")
@@ -689,11 +812,14 @@ function perf.start_recording()
   }
   recording = true
   wrap_renderer_api("draw_text")
+  wrap_renderer_api("draw_text_known_bounds")
   wrap_renderer_api("draw_rect")
   wrap_renderer_api("draw_rect_grid")
   wrap_system_api("get_file_info")
   wrap_system_api("list_dir")
   wrap_system_api("absolute_path")
+  wrap_system_api("set_text_input_rect")
+  wrap_system_api("window_has_focus")
   debug.sethook(hook, "", sample_interval)
   return frames_path
 end

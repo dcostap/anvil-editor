@@ -1993,6 +1993,61 @@ local function perf_stats_enabled()
   return os.getenv("ANVIL_DOCVIEW_STATS") or (perf and perf.is_recording and perf.is_recording())
 end
 
+local perf_diagnostic_keys = {
+  "docview_update_ms",
+  "docview_update_cache_ms",
+  "docview_update_selection_ms",
+  "docview_scroll_to_make_visible_ms",
+  "docview_update_blink_ms",
+  "docview_update_active_focus_ms",
+  "docview_update_ime_ms",
+  "docview_update_super_ms",
+  "ime_set_location_calls",
+  "ime_set_location_ms",
+  "ime_set_location_changed",
+  "ime_set_location_system_ms",
+  "linewrapping_update_docview_breaks_calls",
+  "linewrapping_update_docview_breaks_ms",
+  "linewrapping_update_docview_breaks_width_changed",
+  "linewrapping_reconstruct_breaks_calls",
+  "linewrapping_reconstruct_breaks_ms",
+  "linewrapping_reconstruct_breaks_lines",
+  "linewrapping_update_breaks_calls",
+  "linewrapping_update_breaks_ms",
+  "linewrapping_update_breaks_lines",
+  "linewrapping_compute_line_breaks_calls",
+  "linewrapping_compute_line_breaks_ms",
+  "linewrapping_compute_line_breaks_bytes",
+  "linewrapping_compute_line_breaks_splits",
+  "linewrapping_draw_line_text_calls",
+  "linewrapping_draw_line_text_ms",
+  "linewrapping_draw_line_text_rows",
+  "linewrapping_draw_line_text_segments",
+  "linewrapping_draw_line_text_bytes",
+  "linewrapping_draw_line_text_known_bounds_segments",
+  "core_root_panel_update_ms",
+  "core_tool_window_update_ms",
+  "rootpanel_update_ms",
+  "rootpanel_copy_position_ms",
+  "rootpanel_initial_layout_ms",
+  "rootpanel_node_update_ms",
+  "rootpanel_final_layout_ms",
+  "rootpanel_drag_overlay_ms",
+  "rootpanel_defer_open_docs_ms",
+  "node_update_layout_calls",
+  "node_update_layout_leaf_calls",
+  "node_update_layout_split_calls",
+  "node_update_layout_ms",
+  "node_update_calls",
+  "node_update_leaf_calls",
+  "node_update_split_calls",
+  "node_update_ms",
+  "node_scroll_tabs_to_visible_ms",
+  "node_active_view_update_ms",
+  "node_tab_hover_update_ms",
+  "node_tab_animation_ms",
+}
+
 local function new_perf_frame_stats()
   return {
     draw_ms = 0,
@@ -2202,8 +2257,24 @@ function core.step(next_frame_time, options)
   local resizing = options.live_resize or (core.window_resizing_until and core.window_resizing_until > system.get_time())
   core.root_panel.size.x, core.root_panel.size.y = width, height
   if uncapped or resizing or priority_event or options.immediate or next_frame_time < system.get_time() then
+    local stats = core.perf_frame_stats
+    local perf = stats and package.loaded["core.perf"]
+    local phase_start = stats and system.get_time()
     core.root_panel:update()
-    if tool_window then tool_window.update_all() end
+    if stats then
+      local elapsed = (system.get_time() - phase_start) * 1000
+      if perf and perf.frame_add then perf.frame_add("core_root_panel_update_ms", elapsed)
+      else stats.core_root_panel_update_ms = (stats.core_root_panel_update_ms or 0) + elapsed end
+    end
+    if tool_window then
+      phase_start = stats and system.get_time()
+      tool_window.update_all()
+      if stats then
+        local elapsed = (system.get_time() - phase_start) * 1000
+        if perf and perf.frame_add then perf.frame_add("core_tool_window_update_ms", elapsed)
+        else stats.core_tool_window_update_ms = (stats.core_tool_window_update_ms or 0) + elapsed end
+      end
+    end
   end
   step_stats.update_ms = (system.get_time() - update_start_time) * 1000
 
@@ -3068,6 +3139,9 @@ function core.run_step(options)
     over_budget = did_redraw and (total_ms > (1000 / config.fps)),
     run_mode = run_threads_mode,
   }
+  for _, key in ipairs(perf_diagnostic_keys) do
+    core.performance_snapshot[key] = docview_stats[key]
+  end
   local perf = package.loaded["core.perf"]
   if perf and perf.on_frame then perf.on_frame(core.performance_snapshot) end
   frame_pacing_stats_log {

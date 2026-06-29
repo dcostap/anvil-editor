@@ -10,6 +10,15 @@ local keymap = require "core.keymap"
 local translate = require "core.doc.translate"
 local diagnostic_underlines = select(2, pcall(require, "core.lsp.diagnostic_underlines"))
 
+local function perf_frame_add(key, amount)
+  local perf = package.loaded["core.perf"]
+  if perf and perf.frame_add then perf.frame_add(key, amount or 1) end
+end
+
+local function perf_elapsed(key, start_time)
+  if start_time then perf_frame_add(key, (system.get_time() - start_time) * 1000) end
+end
+
 
 ---Configuration options for `linewrapping` plugin.
 ---@class config.plugins.linewrapping
@@ -102,10 +111,14 @@ end
 -- Computes the breaks for a given line, width and mode. Returns a list of columns
 -- at which the line should be broken.
 function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode)
+  local perf_active = core.perf_frame_stats ~= nil
+  local perf_start = perf_active and system.get_time()
+  local perf_bytes = 0
   local xoffset, last_i, i, last_space, last_width, begin_width = 0, 1, 1, nil, 0, 0
   local splits = { 1 }
   local default_ascii_cell_width = default_font:get_width(" ")
   for idx, type, text in get_tokens(doc, line) do
+    perf_bytes = perf_bytes + #text
     local font = style.syntax_fonts[type] or default_font
     if idx == 1 or idx == math.huge and config.plugins.linewrapping.indent then
       local _, indent_end = text:find("^%s+")
@@ -138,6 +151,10 @@ function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode)
       i = i + #text
     end
   end
+  perf_frame_add("linewrapping_compute_line_breaks_calls", 1)
+  perf_frame_add("linewrapping_compute_line_breaks_bytes", perf_bytes)
+  perf_frame_add("linewrapping_compute_line_breaks_splits", #splits)
+  perf_elapsed("linewrapping_compute_line_breaks_ms", perf_start)
   return splits, begin_width
 end
 
@@ -145,6 +162,9 @@ end
 -- each element represents line and column of the break. line_offset will check from the specified line
 -- if the first line has not changed breaks, it will stop there.
 function LineWrapping.reconstruct_breaks(docview, default_font, width, line_offset)
+  local perf_active = core.perf_frame_stats ~= nil
+  local perf_start = perf_active and system.get_time()
+  local reconstructed_lines = 0
   if width ~= math.huge then
     local doc = docview.doc
     -- two elements per wrapped line; first maps to original line number, second to column number.
@@ -155,6 +175,7 @@ function LineWrapping.reconstruct_breaks(docview, default_font, width, line_offs
     docview.wrapped_line_offsets = { }
     docview.wrapped_settings = { ["width"] = width, ["font"] = default_font }
     for i = line_offset or 1, #doc.lines do
+      reconstructed_lines = reconstructed_lines + 1
       local breaks, offset = LineWrapping.compute_line_breaks(doc, default_font, i, width, config.plugins.linewrapping.mode)
       table.insert(docview.wrapped_line_offsets, offset)
       for k, col in ipairs(breaks) do
@@ -177,6 +198,9 @@ function LineWrapping.reconstruct_breaks(docview, default_font, width, line_offs
     docview.wrapped_line_offsets = nil
     docview.wrapped_settings = nil
   end
+  perf_frame_add("linewrapping_reconstruct_breaks_calls", 1)
+  perf_frame_add("linewrapping_reconstruct_breaks_lines", reconstructed_lines)
+  perf_elapsed("linewrapping_reconstruct_breaks_ms", perf_start)
 end
 
 -- When we have an insertion or deletion, we have four sections of text.
@@ -185,6 +209,9 @@ end
 -- 3. The removed/pasted lines.
 -- 4. Every line after the modification, begins one line after the selection in the initial document.
 function LineWrapping.update_breaks(docview, old_line1, old_line2, net_lines)
+  local perf_active = core.perf_frame_stats ~= nil
+  local perf_start = perf_active and system.get_time()
+  local perf_lines = 0
   -- Step 1: Determine the index for the line for #2.
   local old_idx1 = docview.wrapped_line_to_idx[old_line1] or 1
   -- Step 2: Determine the index of the line for #4.
@@ -208,6 +235,7 @@ function LineWrapping.update_breaks(docview, old_line1, old_line2, net_lines)
   local new_line1 = old_line1
   local new_line2 = old_line2 + net_lines
   for line = new_line1, new_line2 do
+    perf_lines = perf_lines + 1
     local breaks, begin_width = LineWrapping.compute_line_breaks(docview.doc, docview.wrapped_settings.font, line, docview.wrapped_settings.width, config.plugins.linewrapping.mode)
     table.insert(docview.wrapped_line_offsets, line, begin_width)
     for i,b in ipairs(breaks) do
@@ -229,6 +257,9 @@ function LineWrapping.update_breaks(docview, old_line1, old_line2, net_lines)
   while line <= #docview.wrapped_line_to_idx do
     table.remove(docview.wrapped_line_to_idx)
   end
+  perf_frame_add("linewrapping_update_breaks_calls", 1)
+  perf_frame_add("linewrapping_update_breaks_lines", perf_lines)
+  perf_elapsed("linewrapping_update_breaks_ms", perf_start)
 end
 
 local function guide_color()
@@ -251,13 +282,18 @@ function LineWrapping.draw_guide(docview)
 end
 
 function LineWrapping.update_docview_breaks(docview)
+  local perf_active = core.perf_frame_stats ~= nil
+  local perf_start = perf_active and system.get_time()
   local scrollbar_width = docview.v_scrollbar.expanded_size or style.expanded_scrollbar_size
   local width = (type(config.plugins.linewrapping.width_override) == "function" and config.plugins.linewrapping.width_override(docview))
     or config.plugins.linewrapping.width_override or (docview.size.x - docview:get_gutter_width() - scrollbar_width)
   if (not docview.wrapped_settings or docview.wrapped_settings.width == nil or width ~= docview.wrapped_settings.width) then
+    perf_frame_add("linewrapping_update_docview_breaks_width_changed", 1)
     docview.scroll.to.x = 0
     LineWrapping.reconstruct_breaks(docview, docview:get_font(), width)
   end
+  perf_frame_add("linewrapping_update_docview_breaks_calls", 1)
+  perf_elapsed("linewrapping_update_docview_breaks_ms", perf_start)
 end
 
 local function get_idx_line_col(docview, idx)
@@ -698,6 +734,9 @@ end
 local old_draw_line_text = DocView.draw_line_text
 function DocView:draw_line_text(line, x, y)
   if not self.wrapped_settings then return old_draw_line_text(self, line, x, y) end
+  local perf_active = core.perf_frame_stats ~= nil
+  local perf_start = perf_active and system.get_time()
+  local perf_segments, perf_bytes, perf_known_bounds_segments = 0, 0, 0
   local default_font = self:get_font()
   local default_font_height = default_font:get_height()
   local default_ascii_cell_width = default_font:get_width(" ")
@@ -709,7 +748,10 @@ function DocView:draw_line_text(line, x, y)
 
   local function draw_segment(font, text, sx, sy, color, uses_default_font)
     if text == "" then return sx end
+    perf_segments = perf_segments + 1
+    perf_bytes = perf_bytes + #text
     if can_use_known_bounds and uses_default_font and not text:find("[\t\128-\255]") then
+      perf_known_bounds_segments = perf_known_bounds_segments + 1
       local width = #text * default_ascii_cell_width
       return renderer.draw_text_known_bounds(
         font,
@@ -747,6 +789,12 @@ function DocView:draw_line_text(line, x, y)
       tx, ty = x + begin_width, ty + lh
     end
   end
+  perf_frame_add("linewrapping_draw_line_text_calls", 1)
+  perf_frame_add("linewrapping_draw_line_text_rows", count)
+  perf_frame_add("linewrapping_draw_line_text_segments", perf_segments)
+  perf_frame_add("linewrapping_draw_line_text_bytes", perf_bytes)
+  perf_frame_add("linewrapping_draw_line_text_known_bounds_segments", perf_known_bounds_segments)
+  perf_elapsed("linewrapping_draw_line_text_ms", perf_start)
   return lh * count
 end
 

@@ -1,5 +1,14 @@
 local core = require "core"
 
+local function perf_frame_add(key, amount)
+  local perf = package.loaded["core.perf"]
+  if perf and perf.frame_add then perf.frame_add(key, amount or 1) end
+end
+
+local function perf_elapsed(key, start_time)
+  if start_time then perf_frame_add(key, (system.get_time() - start_time) * 1000) end
+end
+
 local ime = { }
 
 function ime.reset()
@@ -81,15 +90,22 @@ end
 ---@param w number
 ---@param h number
 function ime.set_location(x, y, w, h)
+  local perf_active = core.perf_frame_stats ~= nil
+  local start_time = perf_active and system.get_time()
+  perf_frame_add("ime_set_location_calls", 1)
   if not ime.last_location or
      ime.last_location.x ~= x or
      ime.last_location.y ~= y or
      ime.last_location.w ~= w or
      ime.last_location.h ~= h
   then
+    perf_frame_add("ime_set_location_changed", 1)
     ime.last_location.x, ime.last_location.y, ime.last_location.w, ime.last_location.h = x, y, w, h
+    local system_start = perf_active and system.get_time()
     system.set_text_input_rect(input_window(), x, y, w, h)
+    perf_elapsed("ime_set_location_system_ms", system_start)
   end
+  perf_elapsed("ime_set_location_ms", start_time)
 end
 
 ime.reset()

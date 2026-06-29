@@ -45,6 +45,15 @@ local file_context = require "core.file_context"
 ---@field first_update_done boolean
 local RootPanel = View:extend()
 
+local function perf_frame_add(key, amount)
+  local perf = package.loaded["core.perf"]
+  if perf and perf.frame_add then perf.frame_add(key, amount or 1) end
+end
+
+local function perf_elapsed(key, start_time)
+  if start_time then perf_frame_add(key, (system.get_time() - start_time) * 1000) end
+end
+
 function RootPanel:__tostring() return "RootPanel" end
 
 local function call_view_method(view, method, ...)
@@ -775,22 +784,37 @@ end
 ---Manages: node layout, drag overlays, deferred file drops.
 ---Called automatically by core every frame.
 function RootPanel:update()
+  local perf_active = core.perf_frame_stats ~= nil
+  local update_start = perf_active and system.get_time()
+  local phase_start = perf_active and system.get_time()
   Node.copy_position_and_size(self.root_node, self)
+  perf_elapsed("rootpanel_copy_position_ms", phase_start)
   -- Keep view geometry current before per-view update hooks run.  View:update()
   -- refreshes cached scrollbar rectangles from view position/size; after a tab
   -- close the newly active view may still carry geometry from the last time it
   -- was active, which can draw its scrollbar at a stale split/side-panel width
   -- for one frame.  Run layout first, then again after updates in case update
   -- hooks changed the tree or animated locked view sizes.
+  phase_start = perf_active and system.get_time()
   self.root_node:update_layout()
+  perf_elapsed("rootpanel_initial_layout_ms", phase_start)
+  phase_start = perf_active and system.get_time()
   self.root_node:update()
+  perf_elapsed("rootpanel_node_update_ms", phase_start)
+  phase_start = perf_active and system.get_time()
   self.root_node:update_layout()
+  perf_elapsed("rootpanel_final_layout_ms", phase_start)
 
+  phase_start = perf_active and system.get_time()
   self:update_drag_overlay()
   self:interpolate_drag_overlay(self.drag_overlay)
   self:interpolate_drag_overlay(self.drag_overlay_tab)
+  perf_elapsed("rootpanel_drag_overlay_ms", phase_start)
+  phase_start = perf_active and system.get_time()
   self:process_defer_open_docs()
+  perf_elapsed("rootpanel_defer_open_docs_ms", phase_start)
   self.first_update_done = true
+  perf_elapsed("rootpanel_update_ms", update_start)
 end
 
 
