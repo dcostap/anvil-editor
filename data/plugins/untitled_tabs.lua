@@ -388,16 +388,43 @@ if not core.__untitled_tabs_patched then
   end
 
   local tabs_get_tab_width = Tabs.get_tab_width
-  function Tabs:get_tab_width(idx)
-    local view = self:item(idx)
-    local font = self:get_tab_title_font()
-    local width = untitled_tab_title_width(view, font)
-    if width then
-      local min_w = math.max(1, style.tab_min_width)
-      local max_w = math.max(min_w, style.tab_max_width)
-      return common.clamp(width, min_w, max_w)
+  local tabs_get_tab_width_cache_token = Tabs.get_tab_width_cache_token
+  local function untitled_tab_width_cache_token(tabbar, idx, view)
+    local doc = view and view.doc
+    if is_untitled_doc(doc) then
+      return table.concat({
+        "untitled",
+        tostring(doc.intellij_untitled_name),
+        tostring(doc:is_dirty()),
+        tostring(first_text_snippet(doc)),
+        tostring(style.font),
+        tostring(style.font:get_size()),
+        tostring(style.padding.x),
+        tostring(style.divider_size),
+        tostring(style.tab_min_width),
+        tostring(style.tab_max_width),
+        tostring(SCALE),
+      }, "\31")
     end
-    return tabs_get_tab_width(self, idx)
+    return tabs_get_tab_width_cache_token(tabbar, idx, view)
+  end
+
+  function Tabs:get_tab_width(idx)
+    local function compute_width()
+      local view = self:item(idx)
+      local font = self:get_tab_title_font()
+      local width = untitled_tab_title_width(view, font)
+      if width then
+        local min_w = math.max(1, style.tab_min_width)
+        local max_w = math.max(min_w, style.tab_max_width)
+        return common.clamp(width, min_w, max_w)
+      end
+      return tabs_get_tab_width(self, idx)
+    end
+    if self.get_cached_tab_width then
+      return self:get_cached_tab_width(idx, compute_width, untitled_tab_width_cache_token)
+    end
+    return compute_width()
   end
 
   local tabs_draw_tab_title = Tabs.draw_tab_title

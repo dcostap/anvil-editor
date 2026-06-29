@@ -45,6 +45,73 @@ local function get_scroll_button_width()
   return w + 2 * pad, pad
 end
 
+local function new_layout_cache(key)
+  return {
+    key = key,
+    widths = {},
+    width_prefix = nil,
+    visible_counts = {},
+    scroll_button_width = nil,
+    scroll_button_pad = nil,
+  }
+end
+
+local function cache_frame_key()
+  return core.frame_start
+end
+
+function Tabs:get_layout_cache()
+  local key = cache_frame_key()
+  if not key then
+    return new_layout_cache(nil)
+  end
+  local cache = self.__layout_cache
+  if not cache or cache.key ~= key then
+    cache = new_layout_cache(key)
+    self.__layout_cache = cache
+  end
+  return cache
+end
+
+function Tabs:get_cached_scroll_button_width()
+  local cache = self:get_layout_cache()
+  if not cache.scroll_button_width then
+    cache.scroll_button_width, cache.scroll_button_pad = get_scroll_button_width()
+  end
+  return cache.scroll_button_width, cache.scroll_button_pad
+end
+
+function Tabs:get_tab_width_cache_token(idx, item)
+  return table.concat({
+    tostring(self:get_item_title(item)),
+    tostring(style.font),
+    tostring(style.font:get_size()),
+    tostring(style.padding.x),
+    tostring(style.divider_size),
+    tostring(style.tab_min_width),
+    tostring(style.tab_max_width),
+    tostring(SCALE),
+  }, "\31")
+end
+
+function Tabs:get_cached_tab_width(idx, compute, token_fn)
+  local cache = self:get_layout_cache()
+  local item = self:item(idx)
+  local token = token_fn and token_fn(self, idx, item) or self:get_tab_width_cache_token(idx, item)
+  local entry = cache.widths[idx]
+  if not entry or entry.item ~= item or entry.token ~= token then
+    entry = { item = item, token = token, width = compute() }
+    cache.widths[idx] = entry
+    cache.width_prefix = nil
+    cache.visible_counts = {}
+  end
+  return entry.width
+end
+
+function Tabs:invalidate_layout_cache()
+  self.__layout_cache = nil
+end
+
 local function default_items(owner)
   return owner.views or {}
 end
@@ -111,7 +178,7 @@ function Tabs:get_tab_title_width(item)
   return tab_title_font():get_width(text) + style.padding.x * 2 + style.divider_size * 2
 end
 
-function Tabs:get_tab_width(idx)
+function Tabs:compute_tab_width(idx)
   local custom = self.options.get_tab_width
   if custom then
     local width = custom(self.owner, idx, self:item(idx), tab_title_font(), self)
@@ -120,13 +187,60 @@ function Tabs:get_tab_width(idx)
   return common.clamp(self:get_tab_title_width(self:item(idx)), tab_min_width(), tab_max_width())
 end
 
+function Tabs:get_tab_width(idx)
+  local custom_token = self.options.get_tab_width_cache_token
+  if self.options.get_tab_width and not custom_token then
+    return self:compute_tab_width(idx)
+  end
+  local token_fn = custom_token and function(tabbar, tab_idx, item)
+    return custom_token(tabbar.owner, tab_idx, item, tabbar)
+  end
+  return self:get_cached_tab_width(idx, function()
+    return self:compute_tab_width(idx)
+  end, token_fn)
+end
+
+function Tabs:get_width_prefix()
+  local cache = self:get_layout_cache()
+  local count = self:item_count()
+  local prefix = cache.width_prefix
+  local valid = prefix and prefix.count == count
+  if valid then
+    for i = 1, count do
+      local item = self:item(i)
+      if prefix.items[i] ~= item then
+        valid = false
+        break
+      end
+      local before_prefix = cache.width_prefix
+      local width = self:get_tab_width(i)
+      if cache.width_prefix ~= before_prefix or prefix.widths[i] ~= width then
+        valid = false
+        break
+      end
+    end
+  end
+  if not valid then
+    prefix = { count = count, items = {}, widths = {}, [0] = 0 }
+    for i = 1, count do
+      local width = self:get_tab_width(i)
+      prefix.items[i] = self:item(i)
+      prefix.widths[i] = width
+      prefix[i] = prefix[i - 1] + width
+    end
+    cache.width_prefix = prefix
+    cache.visible_counts = {}
+  end
+  return prefix
+end
+
 function Tabs:get_tabs_width(first, last)
   if last < first then return 0 end
-  local width = 0
-  for i = first, last do
-    width = width + self:get_tab_width(i)
-  end
-  return width + tab_gap() * math.max(0, last - first)
+  local prefix = self:get_width_prefix()
+  first = math.max(1, first)
+  last = math.min(prefix.count or self:item_count(), last)
+  if last < first then return 0 end
+  return (prefix[last] - prefix[first - 1]) + tab_gap() * math.max(0, last - first)
 end
 
 function Tabs:should_show()
@@ -145,8 +259,15 @@ function Tabs:get_visible_tabs_number()
   if remaining <= 0 then return 0 end
 
   local available = self:get_size().x
+  self:get_width_prefix()
+  local cache = self:get_layout_cache()
+  local cache_key = string.format("%d:%d:%.3f", offset, count, available or 0)
+  local cached = cache.visible_counts[cache_key]
+  if cached then return cached end
+
   if offset > 1 or self:get_tabs_width(offset, count) > available then
-    available = math.max(1, available - get_scroll_button_width() * 2)
+    local scroll_button_width = self:get_cached_scroll_button_width()
+    available = math.max(1, available - scroll_button_width * 2)
   end
 
   local used = 0
@@ -158,7 +279,9 @@ function Tabs:get_visible_tabs_number()
     used = used + gap + width
     visible = visible + 1
   end
-  return math.max(1, visible)
+  visible = math.max(1, visible)
+  cache.visible_counts[cache_key] = visible
+  return visible
 end
 
 ---Get the index of the tab under a screen point.
@@ -169,7 +292,8 @@ function Tabs:get_tab_overlapping_point(px, py)
   if not self:should_show() then return nil end
   local tabs_number = self:get_visible_tabs_number()
   if self:item_count() > tabs_number then
-    local tabs_w = math.max(1, self:get_size().x - get_scroll_button_width() * 2)
+    local scroll_button_width = self:get_cached_scroll_button_width()
+    local tabs_w = math.max(1, self:get_size().x - scroll_button_width * 2)
     if px >= self:get_position().x + tabs_w then return nil end
   end
   local offset = self.owner.tab_offset or 1
@@ -240,7 +364,7 @@ end
 ---@return number h Height
 ---@return number pad Padding amount
 function Tabs:get_scroll_button_rect(index)
-  local w, pad = get_scroll_button_width()
+  local w, pad = self:get_cached_scroll_button_width()
   local h = self:get_tab_y_sizes()
   local position = self:get_position()
   local size = self:get_size()
@@ -256,8 +380,9 @@ end
 ---@return number h Height
 ---@return number margin_y Top margin
 function Tabs:get_tab_rect(idx)
+  local tab_shift = self.owner.tab_shift or 0
   local position = self:get_position()
-  local before = self:get_tabs_width(1, idx - 1) - (self.owner.tab_shift or 0)
+  local before = self:get_tabs_width(1, idx - 1) - tab_shift
   local x1 = position.x + before
   local x2 = x1 + self:get_tab_width(idx)
   local h, _, margin_y = self:get_tab_y_sizes()
@@ -267,7 +392,8 @@ end
 local function tab_available_width(tabbar, first)
   local available = tabbar:get_size().x
   if first > 1 or tabbar:get_tabs_width(first, tabbar:item_count()) > available then
-    available = math.max(1, available - get_scroll_button_width() * 2)
+    local scroll_button_width = tabbar:get_cached_scroll_button_width()
+    available = math.max(1, available - scroll_button_width * 2)
   end
   return available
 end

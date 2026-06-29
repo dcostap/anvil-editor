@@ -190,6 +190,7 @@ end
 ---@param root core.node The root node of the tree
 ---@param view core.view View to remove
 function Node:remove_view(root, view)
+  if self.tab_bar and self.tab_bar.invalidate_layout_cache then self.tab_bar:invalidate_layout_cache() end
   if #self.views > 1 then
     local idx = self:get_view_idx(view)
     if idx < self.tab_offset then
@@ -286,6 +287,7 @@ function Node:add_view(view, idx)
   end
   idx = common.clamp(idx or (#self.views + 1), 1, (#self.views + 1))
   table.insert(self.views, idx, view)
+  if self.tab_bar and self.tab_bar.invalidate_layout_cache then self.tab_bar:invalidate_layout_cache() end
   self:set_active_view(view)
 end
 
