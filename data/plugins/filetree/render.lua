@@ -23,28 +23,28 @@ function render.stronger_git_kind(a, b)
 end
 
 function render.git_text_color(kind)
-  if kind == "ignored" then return style.filetree_git_ignored end
-  if kind == "untracked" then return style.filetree_git_untracked end
-  if kind == "added" then return style.filetree_git_added end
+  if kind == "ignored" then return style.filetree_git_status_ignored end
+  if kind == "untracked" then return style.filetree_git_status_untracked end
+  if kind == "added" then return style.filetree_git_status_added end
   if kind == "modified" or kind == "renamed" or kind == "copied" or kind == "typechange" or kind == "unmerged" then
-    return style.filetree_git_modified
+    return style.filetree_git_status_modified
   end
-  if kind == "deleted" then return style.filetree_git_deleted end
+  if kind == "deleted" then return style.filetree_git_status_deleted end
 end
 
 function render.git_gutter_color(kind)
-  if kind == "addition" or kind == "added" or kind == "untracked" then return style.gitdiff_addition end
+  if kind == "addition" or kind == "added" or kind == "untracked" then return style.git_change_addition end
   if kind == "modification" or kind == "modified" or kind == "renamed" or kind == "copied" or kind == "typechange" or kind == "unmerged" then
-    return style.gitdiff_modification
+    return style.git_change_modification
   end
-  if kind == "deletion" or kind == "deleted" then return style.gitdiff_deletion end
+  if kind == "deletion" or kind == "deleted" then return style.git_change_deletion end
 end
 
 function render.changed_stat_segments(stat, font)
   if not (stat and ((stat.additions or 0) > 0 or (stat.deletions or 0) > 0)) then return nil end
   return {
-    { text = string.format("+%d", stat.additions or 0), font = font, color = style.filetree_git_additions },
-    { text = string.format(" −%d", stat.deletions or 0), font = font, color = style.filetree_git_deletions },
+    { text = string.format("+%d", stat.additions or 0), font = font, color = style.filetree_git_line_additions },
+    { text = string.format(" −%d", stat.deletions or 0), font = font, color = style.filetree_git_line_deletions },
   }
 end
 

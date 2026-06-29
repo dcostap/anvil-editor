@@ -22,11 +22,11 @@ local gitdiff_highlight = {}
 
 local function color_for_diff(diff)
 	if diff == "addition" then
-		return style.gitdiff_addition
+		return style.git_change_addition
 	elseif diff == "modification" then
-		return style.gitdiff_modification
+		return style.git_change_modification
 	else
-		return style.gitdiff_deletion
+		return style.git_change_deletion
 	end
 end
 

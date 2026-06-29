@@ -40,7 +40,7 @@ test.describe("runtime theme editor", function()
     for _, group in ipairs(groups) do
       local names = {}
       for _, entry in ipairs(group.entries) do names[entry.expr] = true end
-      if names["style.gitdiff_addition"] and names["style.filetree_git_additions"] then
+      if names["style.git_change_addition"] and names["style.filetree_git_line_additions"] then
         found = group
         break
       end

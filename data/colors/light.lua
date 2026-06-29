@@ -100,7 +100,7 @@ style.drag_overlay_tab = c("3574f0")
 style.good = c("067d17")
 style.warn = c(C.warning_stripe)
 style.error = c("db3b4b")
-style.modified = c("0033b3")
+style.modified = c("003dd7")
 
 -- Diff/search/selection-like colors
 style.diff_delete = c("ffe5e5")
@@ -160,21 +160,21 @@ style.filetree_operation_delete = { 219, 59, 75, 255 }
 style.filetree_folder_row_background = { common.color "rgba(0, 0, 0, 0.035)" }
 style.diffview_plain_text = c("080808")
 
--- Git/diff plugin colors
-style.gitdiff_addition = c("067d17")
-style.gitdiff_modification = c("0033b3")
-style.gitdiff_deletion = style.error
+-- Git changed-line colors
+style.git_change_addition = c("08a91f")
+style.git_change_modification = {47, 169, 255, 255}
+style.git_change_deletion = c("ff5065")
 style.gitdiff_width = 2 * SCALE
 style.gitdiff_overview_min_height = math.max(2, 2 * SCALE)
 
--- File tree Git status colors
-style.filetree_git_ignored = c("8c4f00")
-style.filetree_git_untracked = c("b23247")
-style.filetree_git_added = c("067d17")
-style.filetree_git_modified = c("0033b3")
-style.filetree_git_deleted = c("6c707e")
-style.filetree_git_additions = style.gitdiff_addition
-style.filetree_git_deletions = style.gitdiff_deletion
+-- File tree Git status and line-count colors
+style.filetree_git_status_ignored = c("bd6b00")
+style.filetree_git_status_untracked = c("f04460")
+style.filetree_git_status_added = c("08a91f")
+style.filetree_git_status_modified = c("0053ff")
+style.filetree_git_status_deleted = c("9297aa")
+style.filetree_git_line_additions = style.git_change_addition
+style.filetree_git_line_deletions = style.git_change_deletion
 style.filetree_folder = c("6c707e")
 
 -- Anvil's common syntax slots.

@@ -130,9 +130,16 @@ local FRIENDLY_NAMES = {
   ["style.good"] = { "Status / Diagnostics", "Good" },
   ["style.warn"] = { "Status / Diagnostics", "Warning" },
   ["style.error"] = { "Status / Diagnostics", "Error" },
-  ["style.gitdiff_addition"] = { "Git / File Tree", "Git addition" },
-  ["style.gitdiff_modification"] = { "Git / File Tree", "Git modification" },
-  ["style.gitdiff_deletion"] = { "Git / File Tree", "Git deletion" },
+  ["style.git_change_addition"] = { "Git / File Tree", "Git changed-line addition" },
+  ["style.git_change_modification"] = { "Git / File Tree", "Git changed-line modification" },
+  ["style.git_change_deletion"] = { "Git / File Tree", "Git changed-line deletion" },
+  ["style.filetree_git_status_ignored"] = { "Git / File Tree", "File tree ignored status" },
+  ["style.filetree_git_status_untracked"] = { "Git / File Tree", "File tree untracked status" },
+  ["style.filetree_git_status_added"] = { "Git / File Tree", "File tree added-file status" },
+  ["style.filetree_git_status_modified"] = { "Git / File Tree", "File tree modified-file status" },
+  ["style.filetree_git_status_deleted"] = { "Git / File Tree", "File tree deleted-file status" },
+  ["style.filetree_git_line_additions"] = { "Git / File Tree", "File tree added-line count" },
+  ["style.filetree_git_line_deletions"] = { "Git / File Tree", "File tree deleted-line count" },
 }
 
 local function prettify_key(key)
@@ -152,8 +159,9 @@ local function entry_presentation(entry)
 
   local key = expr:match("^style%.(.+)$") or expr
   if key:match("^diff_") then return "Diff View", prettify_key(key:gsub("^diff_", "")) end
-  if key:match("^gitdiff_") then return "Git / File Tree", prettify_key(key:gsub("^gitdiff_", "Git ")) end
-  if key:match("^filetree_git_") then return "Git / File Tree", prettify_key(key:gsub("^filetree_git_", "File tree git ")) end
+  if key:match("^git_change_") then return "Git / File Tree", prettify_key(key:gsub("^git_change_", "Git changed line ")) end
+  if key:match("^filetree_git_status_") then return "Git / File Tree", prettify_key(key:gsub("^filetree_git_status_", "File tree git status ")) end
+  if key:match("^filetree_git_line_") then return "Git / File Tree", prettify_key(key:gsub("^filetree_git_line_", "File tree git line ")) end
   if key:match("^filetree_operation_") then return "File Operations", prettify_key(key:gsub("^filetree_operation_", "")) end
   if key:match("^filetree_") then return "File Tree", prettify_key(key:gsub("^filetree_", "")) end
   if key:match("^diagnostic_") then return "Status / Diagnostics", prettify_key(key:gsub("^diagnostic_", "")) end

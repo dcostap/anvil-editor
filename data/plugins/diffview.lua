@@ -893,7 +893,7 @@ local function diff_color(tag, background)
 end
 
 local function gap_marker_color(tag)
-  if tag == "delete" then return style.gitdiff_deletion or diff_color(tag) end
+  if tag == "delete" then return style.git_change_deletion or diff_color(tag) end
   return diff_color(tag)
 end
 

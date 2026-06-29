@@ -1913,7 +1913,7 @@ function FileTreeView:get_line_hint(line)
   local segments = filetree_render.changed_stat_segments(git and git.stat, font) or {}
   if #segments > 0 then segments[#segments + 1] = { text = "   ", font = font, color = dim } end
   if #segments == 0 and git and git.kind == "ignored" then
-    segments[#segments + 1] = { text = "ignored   ", font = font, color = style.filetree_git_ignored }
+    segments[#segments + 1] = { text = "ignored   ", font = font, color = style.filetree_git_status_ignored }
   end
   if #segments == 0 then
     perf_add(stats, "filetree_line_hint_segments", 1)
@@ -1978,7 +1978,7 @@ function FileTreeView:draw_line_gutter(line, x, y, width)
   self:draw_folder_row_background(line, self.position.x, y, gw)
   local status = self:get_line_status(line)
   if status then
-    local color = filetree_render.git_gutter_color(status) or style.gitdiff_deletion
+    local color = filetree_render.git_gutter_color(status) or style.git_change_deletion
     local w = style.gitdiff_width
     renderer.draw_rect(x + style.padding.x * 0.5, y, w, lh, color)
   end
