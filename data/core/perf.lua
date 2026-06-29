@@ -16,7 +16,9 @@ local function csv_escape(value)
   return value
 end
 
-local function temp_dir()
+local function output_dir()
+  local dir = os.getenv("ANVIL_PERF_OUTPUT_DIR")
+  if dir and dir ~= "" then return dir end
   return os.getenv("TEMP") or os.getenv("TMP") or "."
 end
 
@@ -655,7 +657,7 @@ end
 
 function perf.start_recording()
   if recording then return record and record.dir end
-  local base = temp_dir() .. PATHSEP .. timestamp_name()
+  local base = output_dir() .. PATHSEP .. timestamp_name()
   local frames_path = base .. "_frames.csv"
   local file = assert(io.open(frames_path, "wb"))
   write_frame_header(file)

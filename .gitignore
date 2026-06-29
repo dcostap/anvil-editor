@@ -23,6 +23,7 @@ Pragtical*
 tools/perf-results/
 tools/baselines/whitespace_perf_*.png
 tools/baselines/whitespace_perf_best.json
+tools/baselines/perf_capture_*.png
 
 !resources/windows/*.diff
 !resources/windows/*.exe.manifest.in
