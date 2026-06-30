@@ -302,6 +302,50 @@ test.describe("smart indentation", function()
     test.same(view:get_selection_state().selections, { 2, 1, 2, 1 })
   end)
 
+  test.it("indents Odin brace blocks on Enter", function(context)
+    local doc, view = new_editor(context, "main :: proc() {\n}", "sample.odin")
+    core.set_active_view(view)
+    doc:set_selection(1, #"main :: proc() {" + 1, 1, #"main :: proc() {" + 1)
+
+    test.ok(command.perform("doc:newline"))
+
+    test.equal(text(doc), "main :: proc() {\n  \n}\n")
+    test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
+  end)
+
+  test.it("globally indents after open brackets without a language rule", function(context)
+    local doc, view = new_editor(context, "plain(", "notes.txt")
+    core.set_active_view(view)
+    doc:set_selection(1, #"plain(" + 1, 1, #"plain(" + 1)
+
+    test.ok(command.perform("doc:newline"))
+
+    test.equal(text(doc), "plain(\n  \n")
+    test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
+  end)
+
+  test.it("globally indents between bracket pairs without a language rule", function(context)
+    local doc, view = new_editor(context, "[]", "notes.txt")
+    core.set_active_view(view)
+    doc:set_selection(1, 2, 1, 2)
+
+    test.ok(command.perform("doc:newline"))
+
+    test.equal(text(doc), "[\n  \n]\n")
+    test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
+  end)
+
+  test.it("globally inserts an unmatched brace block without a language rule", function(context)
+    local doc, view = new_editor(context, "section {", "notes.txt")
+    core.set_active_view(view)
+    doc:set_selection(1, #"section {" + 1, 1, #"section {" + 1)
+
+    test.ok(command.perform("doc:newline"))
+
+    test.equal(text(doc), "section {\n  \n}\n")
+    test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
+  end)
+
   test.it("keeps existing bracket-pair smart newline behavior", function(context)
     local doc, view = new_editor(context, "call()", "sample.lua")
     core.set_active_view(view)

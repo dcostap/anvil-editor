@@ -167,6 +167,7 @@ local rules = {
   vue = { extensions = list("vue"), block_comment = { "<!--", "-->" }, indent_after = list("<[%w:_-][^>/]*>%s*$", "%{%s*$"), outdent_before = list("^%s*</", "^%s*%}") },
   svelte = { extensions = list("svelte"), block_comment = { "<!--", "-->" }, indent_after = list("<[%w:_-][^>/]*>%s*$", "%{%s*$"), outdent_before = list("^%s*</", "^%s*%}") },
   zig = { extensions = list("zig"), line_comment = "//", indent_after = brace_indent_after, outdent_before = brace_outdent_before },
+  odin = { extensions = list("odin"), line_comment = "//", block_comment = { "/*", "*/" }, indent_after = brace_indent_after, outdent_before = brace_outdent_before },
 }
 
 smart_indent.rules = rules

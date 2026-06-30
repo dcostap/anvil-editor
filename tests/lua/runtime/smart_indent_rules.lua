@@ -6,6 +6,7 @@ local required_rule_ids = {
   "dart", "r", "julia", "perl", "groovy", "haskell", "ocaml", "elixir", "erlang", "clojure",
   "fsharp", "sql", "html", "css", "scss", "less", "json", "jsonc", "yaml", "toml",
   "xml", "markdown", "dockerfile", "makefile", "cmake", "nix", "terraform", "vue", "svelte", "zig",
+  "odin",
 }
 
 test.describe("smart indent rules", function()
