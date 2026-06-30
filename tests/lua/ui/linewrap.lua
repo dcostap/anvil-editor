@@ -317,6 +317,19 @@ test.describe("line wrapping visual navigation", function()
     test.equal(view:get_x_offset_col(1, view:get_font():get_width("xx")), 3)
   end)
 
+  test.it("updates long plain ASCII line breaks after text input", function(context)
+    local view, doc = open_editor(context, string.rep("x", 80))
+    configure_wrapping_for_test(context, view)
+    test.equal(view:get_total_visual_lines(), 10)
+
+    doc:set_selection(1, 41, 1, 41)
+    doc:text_input("y")
+
+    test.equal(doc.lines[1], string.rep("x", 40) .. "y" .. string.rep("x", 40) .. "\n")
+    test.equal(view:get_total_visual_lines(), 11)
+    test.equal(view.wrapped_line_to_idx[1], 1)
+  end)
+
   test.it("rebuilds wrap cache when wrap settings change without width changes", function(context)
     local view = open_editor(context, "a " .. string.rep("b", 18))
     configure_wrapping_for_test(context, view)

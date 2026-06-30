@@ -209,6 +209,25 @@ local function get_tokens(doc, line)
   return spew_tokens, doc, line
 end
 
+local function append_plain_ascii_letter_splits(splits, start_col, byte_len, xoffset, cell_width, width, begin_width)
+  local token_end = start_col + byte_len - 1
+  local first_capacity = math.floor((width - xoffset) / cell_width)
+  local split_col = start_col + math.max(0, first_capacity)
+  if split_col > token_end then
+    return xoffset + byte_len * cell_width
+  end
+
+  local continuation_capacity = math.max(1, math.floor((width - begin_width) / cell_width))
+  local last_row_start = split_col
+  repeat
+    splits[#splits + 1] = split_col
+    last_row_start = split_col
+    split_col = split_col + continuation_capacity
+  until split_col > token_end
+
+  return begin_width + (token_end - last_row_start + 1) * cell_width
+end
+
 function LineWrapping.get_tokens(doc, line)
   return get_tokens(doc, line)
 end
@@ -261,23 +280,29 @@ function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode)
     local plain_ascii_default_font = font == default_font and not text:find("[\t\128-\255]")
     local w = plain_ascii_default_font and (#text * default_ascii_cell_width) or font:get_width(text)
     if xoffset + w > width then
-      for char in common.utf8_chars(text) do
-        w = plain_ascii_default_font and default_ascii_cell_width or font:get_width(char)
-        xoffset = xoffset + w
-        if xoffset > width then
-          if mode == "word" and last_space then
-            table.insert(splits, last_space + 1)
-            xoffset = w + begin_width + (xoffset - last_width)
-          else
-            table.insert(splits, i)
-            xoffset = w + begin_width
+      if plain_ascii_default_font and (mode ~= "word" or (not last_space and not text:find(" ", 1, true))) then
+        xoffset = append_plain_ascii_letter_splits(splits, i, #text, xoffset, default_ascii_cell_width, width, begin_width)
+        i = i + #text
+        last_space = nil
+      else
+        for char in common.utf8_chars(text) do
+          w = plain_ascii_default_font and default_ascii_cell_width or font:get_width(char)
+          xoffset = xoffset + w
+          if xoffset > width then
+            if mode == "word" and last_space then
+              table.insert(splits, last_space + 1)
+              xoffset = w + begin_width + (xoffset - last_width)
+            else
+              table.insert(splits, i)
+              xoffset = w + begin_width
+            end
+            last_space = nil
+          elseif char == " " then
+            last_space = i
+            last_width = xoffset
           end
-          last_space = nil
-        elseif char == " " then
-          last_space = i
-          last_width = xoffset
+          i = i + #char
         end
-        i = i + #char
       end
     else
       xoffset = xoffset + w
@@ -365,36 +390,37 @@ function LineWrapping.update_breaks(docview, old_line1, old_line2, net_lines)
   local old_idx1 = docview.wrapped_line_to_idx[old_line1] or 1
   local old_idx2 = (docview.wrapped_line_to_idx[old_line2 + 1] or ((#docview.wrapped_lines / 2) + 1)) - 1
   local offset = (old_idx1 - 1) * 2 + 1
-  for _ = old_idx1, old_idx2 do
-    table.remove(docview.wrapped_lines, offset)
-    table.remove(docview.wrapped_lines, offset)
-  end
-  for _ = old_line1, old_line2 do
-    table.remove(docview.wrapped_line_offsets, old_line1)
-  end
-  if net_lines ~= 0 then
-    for i = offset, #docview.wrapped_lines, 2 do
-      docview.wrapped_lines[i] = docview.wrapped_lines[i] + net_lines
-    end
-  end
+  local remove_count = math.max(0, old_idx2 - old_idx1 + 1) * 2
   local new_line1 = old_line1
   local new_line2 = old_line2 + net_lines
+  local new_pairs = {}
+  local new_offsets = {}
+
   for line = new_line1, new_line2 do
     perf_lines = perf_lines + 1
     local breaks, begin_width = LineWrapping.compute_line_breaks(docview.doc, docview.wrapped_settings.font, line, docview.wrapped_settings.width, config.plugins.linewrapping.mode)
-    table.insert(docview.wrapped_line_offsets, line, begin_width)
+    new_offsets[#new_offsets + 1] = begin_width
     for _, b in ipairs(breaks) do
-      table.insert(docview.wrapped_lines, offset, b)
-      table.insert(docview.wrapped_lines, offset, line)
-      offset = offset + 2
+      new_pairs[#new_pairs + 1] = line
+      new_pairs[#new_pairs + 1] = b
     end
   end
+
+  common.splice(docview.wrapped_lines, offset, remove_count, new_pairs)
+  common.splice(docview.wrapped_line_offsets, old_line1, old_line2 - old_line1 + 1, new_offsets)
+
+  if net_lines ~= 0 then
+    for i = offset + #new_pairs, #docview.wrapped_lines, 2 do
+      docview.wrapped_lines[i] = docview.wrapped_lines[i] + net_lines
+    end
+  end
+
   local line = old_line1
   offset = (old_idx1 - 1) * 2 + 1
   -- Every logical line contributes an initial visual-row entry at column 1.
   -- Use that invariant to rebuild the logical-line -> first visual-row map
   -- after the flat wrapped_lines array has been spliced.
-  while offset < #docview.wrapped_lines do
+  while offset <= #docview.wrapped_lines do
     if docview.wrapped_lines[offset + 1] == 1 then
       docview.wrapped_line_to_idx[line] = ((offset - 1) / 2) + 1
       line = line + 1
