@@ -318,6 +318,53 @@ function perf.on_frame(snapshot)
   local now = snapshot.time or system.get_time()
   local renderer_stats = snapshot.did_redraw and renderer.get_last_frame_stats and renderer.get_last_frame_stats() or {}
   record.iteration_count = record.iteration_count + 1
+  local ui_update_ms = math.max(
+    snapshot.core_root_panel_update_ms or 0,
+    snapshot.rootpanel_update_ms or 0,
+    snapshot.update_ms or 0
+  )
+  if ui_update_ms > 0 then
+    record.update_iteration_count = record.update_iteration_count + 1
+    if snapshot.did_redraw then
+      record.redraw_update_iteration_count = record.redraw_update_iteration_count + 1
+    else
+      record.idle_update_iteration_count = record.idle_update_iteration_count + 1
+    end
+    if ui_update_ms > 10 or (snapshot.update_ms or 0) > 10 then
+      local slow = record.slow_updates
+      slow[#slow + 1] = {
+        time = now,
+        did_redraw = snapshot.did_redraw,
+        total_ms = snapshot.total_ms or 0,
+        update_ms = snapshot.update_ms or 0,
+        core_root_panel_update_ms = snapshot.core_root_panel_update_ms or 0,
+        rootpanel_update_ms = snapshot.rootpanel_update_ms or 0,
+        rootpanel_initial_layout_ms = snapshot.rootpanel_initial_layout_ms or 0,
+        rootpanel_node_update_ms = snapshot.rootpanel_node_update_ms or 0,
+        rootpanel_final_layout_ms = snapshot.rootpanel_final_layout_ms or 0,
+        node_update_ms = snapshot.node_update_ms or 0,
+        node_update_calls = snapshot.node_update_calls or 0,
+        node_update_layout_ms = snapshot.node_update_layout_ms or 0,
+        node_update_layout_calls = snapshot.node_update_layout_calls or 0,
+        node_scroll_tabs_to_visible_ms = snapshot.node_scroll_tabs_to_visible_ms or 0,
+        node_active_view_update_ms = snapshot.node_active_view_update_ms or 0,
+        node_tab_hover_update_ms = snapshot.node_tab_hover_update_ms or 0,
+        docview_update_ms = snapshot.docview_update_ms or 0,
+        linewrapping_update_docview_breaks_ms = snapshot.linewrapping_update_docview_breaks_ms or 0,
+        linewrapping_update_docview_breaks_calls = snapshot.linewrapping_update_docview_breaks_calls or 0,
+        event_count = snapshot.event_count or 0,
+        event_types = snapshot.event_types or "",
+        pending_events = snapshot.pending_events,
+        queue_depth = snapshot.queue_depth or 0,
+      }
+      table.sort(slow, function(a, b)
+        local a_ms = math.max(a.core_root_panel_update_ms, a.rootpanel_update_ms, a.update_ms)
+        local b_ms = math.max(b.core_root_panel_update_ms, b.rootpanel_update_ms, b.update_ms)
+        return a_ms > b_ms
+      end)
+      while #slow > 30 do table.remove(slow) end
+    end
+  end
   if snapshot.did_redraw then
     record.frame_count = record.frame_count + 1
     if record.last_redraw_time then
@@ -611,6 +658,8 @@ local function write_summary(path)
   file:write(string.format("Elapsed: %.3fs\n", elapsed))
   file:write(string.format("Run-loop iterations: %d\n", record.iteration_count))
   file:write(string.format("Idle/non-redraw iterations: %d\n", record.idle_iteration_count))
+  file:write(string.format("UI update iterations: %d (%d with redraw, %d without redraw)\n",
+    record.update_iteration_count, record.redraw_update_iteration_count, record.idle_update_iteration_count))
   file:write(string.format("Redraw frames: %d\n", record.frame_count))
   if elapsed > 0 then
     file:write(string.format("Whole-record redraw FPS: %.1f\n", record.frame_count / elapsed))
@@ -626,7 +675,7 @@ local function write_summary(path)
       if ms > 50 then over_50 = over_50 + 1 end
     end
     file:write(string.format(
-      "Redraw interval ms: p50 %.3f p90 %.3f p95 %.3f p99 %.3f max %.3f\n",
+      "Redraw interval ms (includes idle gaps): p50 %.3f p90 %.3f p95 %.3f p99 %.3f max %.3f\n",
       percentile(intervals, 0.50), percentile(intervals, 0.90),
       percentile(intervals, 0.95), percentile(intervals, 0.99), intervals[#intervals]
     ))
@@ -637,7 +686,7 @@ local function write_summary(path)
     if active_elapsed > 0 then
       file:write(string.format("Active-cadence redraw FPS (intervals <=20ms): %.1f\n", active_like / active_elapsed))
     end
-    file:write(string.format("Redraw gaps >20ms: %d, >50ms: %d\n", over_20, over_50))
+    file:write(string.format("Redraw intervals >20ms: %d, >50ms: %d (often idle gaps if no slow frames are listed)\n", over_20, over_50))
   end
   file:write(string.format("Sleep calls: %d, sleep actual total: %.1fms\n", record.sleep_count, record.sleep_actual_total_ms))
   file:write(string.format("Max selections: %d, max search selections: %d\n", record.max_selection_count, record.max_search_selection_count))
@@ -669,85 +718,109 @@ local function write_summary(path)
   end
   file:write("\n")
 
-  local function drill_metric(label, key)
-    local total = record.detail_counts[key] or 0
-    local avg = record.frame_count > 0 and total / record.frame_count or 0
-    file:write(string.format("  %-42s total %10.3f  avg/redraw %8.3f\n", label, total, avg))
+  file:write("Slow UI update iterations (top by update/rootpanel time; thresholds ui_update>10ms/update>10ms):\n")
+  file:write("time,did_redraw,total,update,core_root_panel,rootpanel,initial_layout,node_update,final_layout,node_update_inclusive,node_update_calls,node_layout_inclusive,node_layout_calls,scroll_tabs,active_view_update,tab_hover,docview_update,linewrap_update,linewrap_update_calls,event_count,event_types,pending_events,queue_depth\n")
+  for _, row in ipairs(record.slow_updates or {}) do
+    file:write(string.format(
+      "%.6f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%.3f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%d,%s,%d,%d\n",
+      row.time, row.did_redraw and 1 or 0, row.total_ms, row.update_ms,
+      row.core_root_panel_update_ms, row.rootpanel_update_ms,
+      row.rootpanel_initial_layout_ms, row.rootpanel_node_update_ms, row.rootpanel_final_layout_ms,
+      row.node_update_ms, row.node_update_calls, row.node_update_layout_ms, row.node_update_layout_calls,
+      row.node_scroll_tabs_to_visible_ms, row.node_active_view_update_ms, row.node_tab_hover_update_ms,
+      row.docview_update_ms, row.linewrapping_update_docview_breaks_ms,
+      row.linewrapping_update_docview_breaks_calls, row.event_count, csv_escape(row.event_types),
+      row.pending_events and 1 or 0, row.queue_depth
+    ))
   end
-  file:write("DocView/FileTree drilldown totals (avg per redraw frame):\n")
-  drill_metric("docview line hint calls", "docview_line_hint_calls")
-  drill_metric("docview line hint drawn", "docview_line_hint_drawn")
-  drill_metric("docview line hint total ms", "docview_line_hint_ms")
-  drill_metric("docview line hint get ms", "docview_line_hint_get_ms")
-  drill_metric("docview line hint layout ms", "docview_line_hint_layout_ms")
-  drill_metric("docview line hint measure ms", "docview_line_hint_measure_ms")
-  drill_metric("docview line hint truncate ms", "docview_line_hint_truncate_ms")
-  drill_metric("docview line hint draw ms", "docview_line_hint_draw_ms")
-  drill_metric("docview update total ms", "docview_update_ms")
-  drill_metric("docview update cache ms", "docview_update_cache_ms")
-  drill_metric("docview update selection ms", "docview_update_selection_ms")
-  drill_metric("docview scroll-to-visible ms", "docview_scroll_to_make_visible_ms")
-  drill_metric("docview update blink ms", "docview_update_blink_ms")
-  drill_metric("docview active focus ms", "docview_update_active_focus_ms")
-  drill_metric("docview update IME ms", "docview_update_ime_ms")
-  drill_metric("docview super update ms", "docview_update_super_ms")
-  drill_metric("IME set_location calls", "ime_set_location_calls")
-  drill_metric("IME set_location ms", "ime_set_location_ms")
-  drill_metric("IME changed calls", "ime_set_location_changed")
-  drill_metric("IME system rect ms", "ime_set_location_system_ms")
-  drill_metric("linewrap update_docview calls", "linewrapping_update_docview_breaks_calls")
-  drill_metric("linewrap update_docview ms", "linewrapping_update_docview_breaks_ms")
-  drill_metric("linewrap width-changed calls", "linewrapping_update_docview_breaks_width_changed")
-  drill_metric("linewrap reconstruct calls", "linewrapping_reconstruct_breaks_calls")
-  drill_metric("linewrap reconstruct ms", "linewrapping_reconstruct_breaks_ms")
-  drill_metric("linewrap reconstruct lines", "linewrapping_reconstruct_breaks_lines")
-  drill_metric("linewrap update_breaks calls", "linewrapping_update_breaks_calls")
-  drill_metric("linewrap update_breaks ms", "linewrapping_update_breaks_ms")
-  drill_metric("linewrap update_breaks lines", "linewrapping_update_breaks_lines")
-  drill_metric("linewrap compute calls", "linewrapping_compute_line_breaks_calls")
-  drill_metric("linewrap compute ms", "linewrapping_compute_line_breaks_ms")
-  drill_metric("linewrap compute bytes", "linewrapping_compute_line_breaks_bytes")
-  drill_metric("linewrap compute splits", "linewrapping_compute_line_breaks_splits")
-  drill_metric("linewrap draw_text calls", "linewrapping_draw_line_text_calls")
-  drill_metric("linewrap draw_text ms", "linewrapping_draw_line_text_ms")
-  drill_metric("linewrap draw_text rows", "linewrapping_draw_line_text_rows")
-  drill_metric("linewrap draw_text segments", "linewrapping_draw_line_text_segments")
-  drill_metric("linewrap draw_text bytes", "linewrapping_draw_line_text_bytes")
-  drill_metric("linewrap known-bound segments", "linewrapping_draw_line_text_known_bounds_segments")
-  drill_metric("core root_panel update ms", "core_root_panel_update_ms")
-  drill_metric("core tool_window update ms", "core_tool_window_update_ms")
-  drill_metric("rootpanel update ms", "rootpanel_update_ms")
-  drill_metric("rootpanel copy position ms", "rootpanel_copy_position_ms")
-  drill_metric("rootpanel initial layout ms", "rootpanel_initial_layout_ms")
-  drill_metric("rootpanel node update ms", "rootpanel_node_update_ms")
-  drill_metric("rootpanel final layout ms", "rootpanel_final_layout_ms")
-  drill_metric("rootpanel drag overlay ms", "rootpanel_drag_overlay_ms")
-  drill_metric("rootpanel defer open docs ms", "rootpanel_defer_open_docs_ms")
-  drill_metric("node layout calls", "node_update_layout_calls")
-  drill_metric("node layout leaf calls", "node_update_layout_leaf_calls")
-  drill_metric("node layout split calls", "node_update_layout_split_calls")
-  drill_metric("node layout ms", "node_update_layout_ms")
-  drill_metric("node update calls", "node_update_calls")
-  drill_metric("node update leaf calls", "node_update_leaf_calls")
-  drill_metric("node update split calls", "node_update_split_calls")
-  drill_metric("node update ms", "node_update_ms")
-  drill_metric("node scroll tabs ms", "node_scroll_tabs_to_visible_ms")
-  drill_metric("node active view update ms", "node_active_view_update_ms")
-  drill_metric("node tab hover ms", "node_tab_hover_update_ms")
-  drill_metric("node tab animation ms", "node_tab_animation_ms")
-  drill_metric("filetree line hint calls", "filetree_line_hint_calls")
-  drill_metric("filetree line hint total ms", "filetree_line_hint_ms")
-  drill_metric("filetree get_file_info calls", "filetree_line_hint_get_file_info_calls")
-  drill_metric("filetree get_file_info ms", "filetree_line_hint_get_file_info_ms")
-  drill_metric("filetree line hint format ms", "filetree_line_hint_format_ms")
-  drill_metric("filetree line hint git ms", "filetree_line_hint_git_ms")
-  drill_metric("filetree line hint entry ms", "filetree_line_hint_entry_ms")
-  drill_metric("filetree folder row bg rects", "filetree_folder_row_background_rects")
-  drill_metric("filetree folder row bg ms", "filetree_folder_row_background_ms")
-  drill_metric("filetree line_is_dir calls", "filetree_line_is_dir_calls")
-  drill_metric("filetree line_is_dir ms", "filetree_line_is_dir_ms")
-  drill_metric("filetree draw_line_body ms", "filetree_draw_line_body_ms")
-  drill_metric("filetree draw_line_text ms", "filetree_draw_line_text_ms")
+  file:write("\n")
+
+  local function drill_metric(label, key, denom, denom_label)
+    local total = record.detail_counts[key] or 0
+    local avg = denom > 0 and total / denom or 0
+    file:write(string.format("  %-42s total %10.3f  avg/%-7s %8.3f\n", label, total, denom_label, avg))
+  end
+  local redraw_denom = math.max(0, record.frame_count or 0)
+  local update_denom = math.max(0, record.update_iteration_count or 0)
+  local run_denom = math.max(0, record.iteration_count or 0)
+  file:write("DocView/FileTree drilldown totals:\n")
+  file:write(string.format("  Denominators: redraw=%d, ui_update=%d, run_loop=%d\n", redraw_denom, update_denom, run_denom))
+  file:write("  Draw/redraw metrics:\n")
+  drill_metric("docview line hint calls", "docview_line_hint_calls", redraw_denom, "redraw")
+  drill_metric("docview line hint drawn", "docview_line_hint_drawn", redraw_denom, "redraw")
+  drill_metric("docview line hint total ms", "docview_line_hint_ms", redraw_denom, "redraw")
+  drill_metric("docview line hint get ms", "docview_line_hint_get_ms", redraw_denom, "redraw")
+  drill_metric("docview line hint layout ms", "docview_line_hint_layout_ms", redraw_denom, "redraw")
+  drill_metric("docview line hint measure ms", "docview_line_hint_measure_ms", redraw_denom, "redraw")
+  drill_metric("docview line hint truncate ms", "docview_line_hint_truncate_ms", redraw_denom, "redraw")
+  drill_metric("docview line hint draw ms", "docview_line_hint_draw_ms", redraw_denom, "redraw")
+  drill_metric("linewrap draw_text calls", "linewrapping_draw_line_text_calls", redraw_denom, "redraw")
+  drill_metric("linewrap draw_text ms", "linewrapping_draw_line_text_ms", redraw_denom, "redraw")
+  drill_metric("linewrap draw_text rows", "linewrapping_draw_line_text_rows", redraw_denom, "redraw")
+  drill_metric("linewrap draw_text segments", "linewrapping_draw_line_text_segments", redraw_denom, "redraw")
+  drill_metric("linewrap draw_text bytes", "linewrapping_draw_line_text_bytes", redraw_denom, "redraw")
+  drill_metric("linewrap known-bound segments", "linewrapping_draw_line_text_known_bounds_segments", redraw_denom, "redraw")
+  drill_metric("filetree line hint calls", "filetree_line_hint_calls", redraw_denom, "redraw")
+  drill_metric("filetree line hint total ms", "filetree_line_hint_ms", redraw_denom, "redraw")
+  drill_metric("filetree get_file_info calls", "filetree_line_hint_get_file_info_calls", redraw_denom, "redraw")
+  drill_metric("filetree get_file_info ms", "filetree_line_hint_get_file_info_ms", redraw_denom, "redraw")
+  drill_metric("filetree line hint format ms", "filetree_line_hint_format_ms", redraw_denom, "redraw")
+  drill_metric("filetree line hint git ms", "filetree_line_hint_git_ms", redraw_denom, "redraw")
+  drill_metric("filetree line hint entry ms", "filetree_line_hint_entry_ms", redraw_denom, "redraw")
+  drill_metric("filetree folder row bg rects", "filetree_folder_row_background_rects", redraw_denom, "redraw")
+  drill_metric("filetree folder row bg ms", "filetree_folder_row_background_ms", redraw_denom, "redraw")
+  drill_metric("filetree line_is_dir calls", "filetree_line_is_dir_calls", redraw_denom, "redraw")
+  drill_metric("filetree line_is_dir ms", "filetree_line_is_dir_ms", redraw_denom, "redraw")
+  drill_metric("filetree draw_line_body ms", "filetree_draw_line_body_ms", redraw_denom, "redraw")
+  drill_metric("filetree draw_line_text ms", "filetree_draw_line_text_ms", redraw_denom, "redraw")
+
+  file:write("  UI update metrics:\n")
+  drill_metric("docview update total ms", "docview_update_ms", update_denom, "update")
+  drill_metric("docview update cache ms", "docview_update_cache_ms", update_denom, "update")
+  drill_metric("docview update selection ms", "docview_update_selection_ms", update_denom, "update")
+  drill_metric("docview scroll-to-visible ms", "docview_scroll_to_make_visible_ms", update_denom, "update")
+  drill_metric("docview update blink ms", "docview_update_blink_ms", update_denom, "update")
+  drill_metric("docview active focus ms", "docview_update_active_focus_ms", update_denom, "update")
+  drill_metric("docview update IME ms", "docview_update_ime_ms", update_denom, "update")
+  drill_metric("docview super update ms", "docview_update_super_ms", update_denom, "update")
+  drill_metric("IME set_location calls", "ime_set_location_calls", update_denom, "update")
+  drill_metric("IME set_location ms", "ime_set_location_ms", update_denom, "update")
+  drill_metric("IME changed calls", "ime_set_location_changed", update_denom, "update")
+  drill_metric("IME system rect ms", "ime_set_location_system_ms", update_denom, "update")
+  drill_metric("linewrap update_docview calls", "linewrapping_update_docview_breaks_calls", update_denom, "update")
+  drill_metric("linewrap update_docview ms", "linewrapping_update_docview_breaks_ms", update_denom, "update")
+  drill_metric("linewrap width-changed calls", "linewrapping_update_docview_breaks_width_changed", update_denom, "update")
+  drill_metric("linewrap reconstruct calls", "linewrapping_reconstruct_breaks_calls", update_denom, "update")
+  drill_metric("linewrap reconstruct ms", "linewrapping_reconstruct_breaks_ms", update_denom, "update")
+  drill_metric("linewrap reconstruct lines", "linewrapping_reconstruct_breaks_lines", update_denom, "update")
+  drill_metric("linewrap update_breaks calls", "linewrapping_update_breaks_calls", update_denom, "update")
+  drill_metric("linewrap update_breaks ms", "linewrapping_update_breaks_ms", update_denom, "update")
+  drill_metric("linewrap update_breaks lines", "linewrapping_update_breaks_lines", update_denom, "update")
+  drill_metric("linewrap compute calls", "linewrapping_compute_line_breaks_calls", update_denom, "update")
+  drill_metric("linewrap compute ms", "linewrapping_compute_line_breaks_ms", update_denom, "update")
+  drill_metric("linewrap compute bytes", "linewrapping_compute_line_breaks_bytes", update_denom, "update")
+  drill_metric("linewrap compute splits", "linewrapping_compute_line_breaks_splits", update_denom, "update")
+  drill_metric("core root_panel update ms", "core_root_panel_update_ms", update_denom, "update")
+  drill_metric("core tool_window update ms", "core_tool_window_update_ms", update_denom, "update")
+  drill_metric("rootpanel update ms", "rootpanel_update_ms", update_denom, "update")
+  drill_metric("rootpanel copy position ms", "rootpanel_copy_position_ms", update_denom, "update")
+  drill_metric("rootpanel initial layout ms", "rootpanel_initial_layout_ms", update_denom, "update")
+  drill_metric("rootpanel node update ms", "rootpanel_node_update_ms", update_denom, "update")
+  drill_metric("rootpanel final layout ms", "rootpanel_final_layout_ms", update_denom, "update")
+  drill_metric("rootpanel drag overlay ms", "rootpanel_drag_overlay_ms", update_denom, "update")
+  drill_metric("rootpanel defer open docs ms", "rootpanel_defer_open_docs_ms", update_denom, "update")
+  drill_metric("node layout calls", "node_update_layout_calls", update_denom, "update")
+  drill_metric("node layout leaf calls", "node_update_layout_leaf_calls", update_denom, "update")
+  drill_metric("node layout split calls", "node_update_layout_split_calls", update_denom, "update")
+  drill_metric("node layout ms", "node_update_layout_ms", update_denom, "update")
+  drill_metric("node update calls", "node_update_calls", update_denom, "update")
+  drill_metric("node update leaf calls", "node_update_leaf_calls", update_denom, "update")
+  drill_metric("node update split calls", "node_update_split_calls", update_denom, "update")
+  drill_metric("node update ms", "node_update_ms", update_denom, "update")
+  drill_metric("node scroll tabs ms", "node_scroll_tabs_to_visible_ms", update_denom, "update")
+  drill_metric("node active view update ms", "node_active_view_update_ms", update_denom, "update")
+  drill_metric("node tab hover ms", "node_tab_hover_update_ms", update_denom, "update")
+  drill_metric("node tab animation ms", "node_tab_animation_ms", update_denom, "update")
   file:write("\n")
 
   file:write("Top Lua samples:\n")
@@ -796,6 +869,9 @@ function perf.start_recording()
     stop_time = nil,
     iteration_count = 0,
     idle_iteration_count = 0,
+    update_iteration_count = 0,
+    redraw_update_iteration_count = 0,
+    idle_update_iteration_count = 0,
     frame_count = 0,
     over_budget_count = 0,
     sleep_count = 0,
@@ -804,6 +880,7 @@ function perf.start_recording()
     max_search_selection_count = 0,
     last_redraw_time = nil,
     slow_frames = {},
+    slow_updates = {},
     redraw_intervals = {},
     lua_samples = {},
     sample_count = 0,
