@@ -229,9 +229,32 @@ local function append_plain_ascii_letter_splits(splits, start_col, byte_len, xof
 end
 
 local function append_plain_ascii_word_splits(splits, text, start_col, byte_len, xoffset, cell_width, width, begin_width, last_space, last_width)
+  local pos = 1
   local col = start_col
-  local token_end = start_col + byte_len - 1
-  for j = 1, byte_len do
+  while pos <= byte_len do
+    local space = text:find(" ", pos, true)
+    local word_end = space and (space - 1) or byte_len
+    local word_len = word_end - pos + 1
+
+    if word_len > 0 then
+      local word_width = word_len * cell_width
+      if xoffset + word_width > width then
+        if last_space then
+          splits[#splits + 1] = last_space + 1
+          xoffset = append_plain_ascii_letter_splits(splits, col, word_len, begin_width, cell_width, width, begin_width)
+        else
+          xoffset = append_plain_ascii_letter_splits(splits, col, word_len, xoffset, cell_width, width, begin_width)
+        end
+        last_space = nil
+        last_width = nil
+      else
+        xoffset = xoffset + word_width
+      end
+      col = col + word_len
+    end
+
+    if not space then break end
+
     xoffset = xoffset + cell_width
     if xoffset > width then
       if last_space then
@@ -243,15 +266,12 @@ local function append_plain_ascii_word_splits(splits, text, start_col, byte_len,
       end
       last_space = nil
       last_width = nil
-    elseif text:byte(j) == 32 then
+    else
       last_space = col
       last_width = xoffset
     end
     col = col + 1
-  end
-  if last_space and last_space > token_end then
-    last_space = nil
-    last_width = nil
+    pos = space + 1
   end
   return xoffset, last_space, last_width
 end
