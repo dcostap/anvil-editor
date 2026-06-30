@@ -359,6 +359,20 @@ test.describe("line wrapping visual navigation", function()
     test.equal(view.wrapped_line_to_idx[1], 1)
   end)
 
+  test.it("updates long no-space UTF-8 word-wrapped line breaks after text input", function(context)
+    local view, doc = open_editor(context, ("é"):rep(80))
+    configure_wrapping_for_test(context, view)
+    config.plugins.linewrapping.mode = "word"
+    LineWrapping.update_docview_breaks(view)
+    local old_visual_lines = view:get_total_visual_lines()
+
+    doc:set_selection(1, 41, 1, 41)
+    doc:text_input("é")
+
+    test.ok(view:get_total_visual_lines() >= old_visual_lines)
+    test.equal(view.wrapped_line_to_idx[1], 1)
+  end)
+
   test.it("does not send a huge ligature-sensitive unwrapped token to the renderer", function(context)
     local view = open_editor(context, string.rep("f", 5000))
     view.wrapping_enabled = false

@@ -357,14 +357,22 @@ function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode)
     local has_tab = text:find("\t", 1, true) ~= nil
     local has_non_ascii = text:find("[\128-\255]") ~= nil
     local ascii_font = not has_non_ascii
-    local ascii_cell_width = ascii_font and (font == default_font and default_ascii_cell_width or font:get_width(" ")) or nil
-    local ascii_tab_width = ascii_font and ascii_cell_width * (select(2, doc:get_indent_info()) or config.indent_size or 2) or nil
+    local cell_width = font == default_font and default_ascii_cell_width or font:get_width(" ")
+    local tab_width = cell_width * (select(2, doc:get_indent_info()) or config.indent_size or 2)
+    local ascii_cell_width = ascii_font and cell_width or nil
+    local ascii_tab_width = ascii_font and tab_width or nil
     local has_space = ascii_font and text:find(" ", 1, true) ~= nil
     perf_ascii = perf_ascii and ascii_font
     perf_has_space = perf_has_space or has_space
     perf_has_tab = perf_has_tab or has_tab
     perf_has_non_ascii = perf_has_non_ascii or has_non_ascii
-    local w = ascii_font and (has_tab and fast_ascii_width(text, ascii_cell_width, ascii_tab_width) or (#text * ascii_cell_width)) or font:get_width(text)
+    -- Avoid measuring enormous UTF-8 tokens as a whole only to discover they
+    -- overflow and then measure them again character-by-character below.
+    -- Long generated/minified lines can be hundreds of KB; whole-token shaping
+    -- dominates interactive typing latency in that case.
+    local force_incremental_width = (not ascii_font) and #text > 4096
+    local w = force_incremental_width and (width + 1)
+      or (ascii_font and (has_tab and fast_ascii_width(text, ascii_cell_width, ascii_tab_width) or (#text * ascii_cell_width)) or font:get_width(text))
     if xoffset + w > width then
       if ascii_font and mode ~= "word" then
         note_branch(font == default_font and (has_tab and "ascii_tabs_letter" or "plain_ascii_letter") or (has_tab and "ascii_tabs_syntax_letter" or "plain_ascii_syntax_letter"))
@@ -411,8 +419,21 @@ function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode)
         i = ascii_font and (i + #text) or i
       else
         note_branch(ascii_font and "plain_ascii_word_tokenized" or "slow_utf8")
+        local char_width_cache = not ascii_font and {} or nil
         for char in common.utf8_chars(text) do
-          w = ascii_font and ascii_cell_width or font:get_width(char)
+          if ascii_font then
+            w = ascii_cell_width
+          elseif char == "\t" then
+            w = tab_width
+          elseif #char == 1 then
+            w = cell_width
+          else
+            w = char_width_cache[char]
+            if not w then
+              w = font:get_width(char)
+              char_width_cache[char] = w
+            end
+          end
           xoffset = xoffset + w
           if xoffset > width then
             if mode == "word" and last_space then
