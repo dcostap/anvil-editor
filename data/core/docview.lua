@@ -152,6 +152,66 @@ local function perf_elapsed(key, start_time)
   if start_time then perf_frame_add(key, (system.get_time() - start_time) * 1000) end
 end
 
+local function with_wrapped_caret_affinity(docview, fn, ...)
+  local old = docview.__use_wrapped_caret_affinity
+  docview.__use_wrapped_caret_affinity = true
+  local results = { pcall(fn, docview, ...) }
+  docview.__use_wrapped_caret_affinity = old
+  if not results[1] then error(results[2], 0) end
+  return table.unpack(results, 2)
+end
+
+local function apply_resolved_line_end_affinity(docview)
+  local resolved = docview.wrapped_last_resolved_line_end
+  docview.wrapped_last_resolved_line_end = nil
+  if not resolved or not docview.wrapped_settings then
+    linewrapping.clear_wrapped_line_end_affinity(docview)
+    return
+  end
+  local positions = {}
+  for _, line1, col1 in docview.doc:get_selections(false) do
+    if line1 == resolved[1] and col1 == resolved[2] then
+      positions[linewrapping.position_key(line1, col1)] = true
+    end
+  end
+  linewrapping.set_wrapped_line_end_affinity(docview, positions)
+end
+
+local function draw_wrapped_search_match_segment(view, x1, y, x2, h, primary, outline)
+  if x2 <= x1 then return end
+  local bg, border = view:search_match_style(primary)
+  if not outline then
+    renderer.draw_rect(x1, y, x2 - x1, h, bg)
+    return
+  end
+  local t = math.max(1, SCALE)
+  renderer.draw_rect(x1, y, x2 - x1, t, border)
+  renderer.draw_rect(x1, y + h - t, x2 - x1, t, border)
+  renderer.draw_rect(x1, y, t, h, border)
+  renderer.draw_rect(x2 - t, y, t, h, border)
+end
+
+local function get_wrapped_segment_bounds(view, line, col1, col2, idx1, idx2, idx)
+  local row_line, row_start_col = linewrapping.get_idx_line_col(view, idx)
+  if row_line ~= line then return nil, nil end
+  local next_line, next_start_col = linewrapping.get_idx_line_col(view, idx + 1)
+  local row_end_col = next_line == line and next_start_col or (#view.doc.lines[line] + 1)
+  local x1 = idx == idx1 and view:get_col_x_offset(line, col1, false) or view:get_col_x_offset(line, row_start_col, false)
+  local x2 = idx == idx2 and view:get_col_x_offset(line, col2, false) or view:get_col_x_offset(line, row_end_col, true)
+  return x1, x2
+end
+
+local function draw_wrapped_search_match(view, line, col1, col2, x, y, idx0, lh, primary, outline)
+  local idx1 = linewrapping.get_line_idx_col_count(view, line, col1)
+  local idx2 = linewrapping.get_line_idx_col_count(view, line, col2)
+  for i = idx1, idx2 do
+    local x1, x2 = get_wrapped_segment_bounds(view, line, col1, col2, idx1, idx2, i)
+    if x1 and x2 then
+      draw_wrapped_search_match_segment(view, x + x1, y + (i - idx0) * lh, x + x2, lh, primary, outline)
+    end
+  end
+end
+
 local function new_selection_owner_id()
   next_selection_owner_id = next_selection_owner_id + 1
   return next_selection_owner_id
@@ -551,6 +611,11 @@ DocView.translate = {
   end,
 
   ["previous_line"] = function(doc, line, col, dv)
+    if dv and dv.wrapped_settings then
+      local line_end = linewrapping.has_wrapped_line_end_affinity(dv, line, col)
+      local idx = linewrapping.get_line_idx_col_count(dv, line, col, line_end)
+      return linewrapping.get_line_col_from_index_and_x(dv, idx - 1, dv:get_col_x_offset(line, col, line_end))
+    end
     if line == 1 then
       return 1, 1
     end
@@ -558,6 +623,11 @@ DocView.translate = {
   end,
 
   ["next_line"] = function(doc, line, col, dv)
+    if dv and dv.wrapped_settings then
+      local line_end = linewrapping.has_wrapped_line_end_affinity(dv, line, col)
+      local idx = linewrapping.get_line_idx_col_count(dv, line, col, line_end)
+      return linewrapping.get_line_col_from_index_and_x(dv, idx + 1, dv:get_col_x_offset(line, col, line_end))
+    end
     if line == #doc.lines then
       return #doc.lines, math.huge
     end
@@ -595,6 +665,8 @@ function DocView:new(doc)
   self.cache_font_size = self.cache_font:get_size()
   local _, indent_size = self.doc:get_indent_info()
   self.cache_indent_size = indent_size
+  linewrapping.register_docview(self)
+  self:set_wrapping_enabled(config.plugins.linewrapping.enable_by_default)
 end
 
 
@@ -714,6 +786,7 @@ end
 ---Get the number of visual rows in the document scroll model.
 ---@return integer count Visual row count
 function DocView:get_scrollable_line_count()
+  if self.wrapped_settings then return linewrapping.get_total_wrapped_lines(self) end
   return #self.doc.lines
 end
 
@@ -774,6 +847,7 @@ end
 ---Get the scrollable width (infinite for horizontal scrolling).
 ---@return number width Always returns math.huge
 function DocView:get_h_scrollable_size()
+  if self.wrapping_enabled then return 0 end
   return math.huge
 end
 
@@ -809,7 +883,17 @@ end
 ---@param col? integer Optional column number
 ---@return number x Screen x coordinate
 ---@return number y Screen y coordinate
-function DocView:get_line_screen_position(line, col)
+function DocView:get_line_screen_position(line, col, line_end)
+  if self.wrapped_settings then
+    if line_end == nil and self.__use_wrapped_caret_affinity then
+      line_end = linewrapping.has_wrapped_line_end_affinity(self, line, col)
+    end
+    local idx = linewrapping.get_line_idx_col_count(self, line, col, line_end)
+    local x, y = self:get_content_offset()
+    local lh = self:get_line_height()
+    local gw = self:get_gutter_width()
+    return x + gw + (col and self:get_col_x_offset(line, col, line_end) or 0), y + (idx - 1) * lh + style.padding.y
+  end
   local x, y = self:get_content_offset()
   local lh = self:get_line_height()
   local gw = self:get_gutter_width()
@@ -890,6 +974,11 @@ end
 function DocView:get_visible_line_range()
   local x, y, x2, y2 = self:get_content_bounds()
   local lh = self:get_line_height()
+  if self.wrapped_settings then
+    local minline = linewrapping.get_idx_line_col(self, math.max(1, math.floor(y / lh)))
+    local maxline = linewrapping.get_idx_line_col(self, math.min(linewrapping.get_total_wrapped_lines(self), math.floor(y2 / lh) + 1))
+    return minline, maxline
+  end
   local minline = math.max(1, math.floor((y - style.padding.y) / lh) + 1)
   local maxline = math.min(#self.doc.lines, math.floor((y2 - style.padding.y) / lh) + 1)
   return minline, maxline
@@ -901,7 +990,34 @@ end
 ---@param line integer Line number
 ---@param col integer Column number (byte offset)
 ---@return number offset Horizontal pixel offset
-function DocView:get_col_x_offset(line, col)
+function DocView:get_col_x_offset(line, col, line_end)
+  if self.wrapped_settings then
+    if line_end == nil and self.__use_wrapped_caret_affinity then
+      line_end = linewrapping.has_wrapped_line_end_affinity(self, line, col)
+    end
+    local _, _, _, scol = linewrapping.get_line_idx_col_count(self, line, col, line_end)
+    local xoffset, i = (scol ~= 1 and self.wrapped_line_offsets[line] or 0), 1
+    local default_font = self:get_font()
+    for _, type, text in self.doc.highlighter:each_token(line) do
+      if i + #text >= scol then
+        if i < scol then
+          text = text:sub(scol - i + 1)
+          i = scol
+        end
+        local font = style.syntax_fonts[type] or default_font
+        for char in common.utf8_chars(text) do
+          if i >= col then
+            return xoffset
+          end
+          xoffset = xoffset + font:get_width(char)
+          i = i + #char
+        end
+      else
+        i = i + #text
+      end
+    end
+    return xoffset
+  end
   local column = 1
   local xoffset = 0
   local cache = self.doc.cache.col_x
@@ -964,6 +1080,11 @@ end
 ---@param x number Horizontal pixel offset
 ---@return integer col Column number (byte offset)
 function DocView:get_x_offset_col(line, x)
+  if self.wrapped_settings then
+    local idx = linewrapping.get_line_idx_col_count(self, line)
+    local target_line, target_col = linewrapping.get_line_col_from_index_and_x(self, idx, x)
+    return target_line, target_col
+  end
   local line_text = self.doc.lines[line]
   local line_len = #line_text
 
@@ -1018,6 +1139,13 @@ end
 ---@return integer line Line number
 ---@return integer col Column number
 function DocView:resolve_screen_position(x, y)
+  if self.wrapped_settings then
+    local ox, oy = self:get_line_screen_position(1)
+    local idx = common.clamp(math.floor((y - oy) / self:get_line_height()) + 1, 1, linewrapping.get_total_wrapped_lines(self))
+    local line, col, line_end = linewrapping.get_line_col_from_index_and_x(self, idx, x - ox)
+    self.wrapped_last_resolved_line_end = line_end and { line, col } or nil
+    return line, col
+  end
   local ox, oy = self:get_line_screen_position(1)
   local line = math.floor((y - oy) / self:get_line_height()) + 1
   line = common.clamp(line, 1, #self.doc.lines)
@@ -1032,6 +1160,7 @@ end
 ---@param instant? boolean Jump immediately without animation
 ---@param opts? table Optional scroll behavior options
 function DocView:scroll_to_line(line, ignore_if_visible, instant, opts)
+  if self.wrapping_enabled then self:update_wrap_cache() end
   local min, max = self:get_visible_line_range()
   local visible_margin_lines = opts and opts.visible_margin_lines or 0
   if visible_margin_lines > 0 then
@@ -1067,6 +1196,17 @@ end
 ---@param instant? boolean Jump immediately without animation
 ---@param opts? table Optional range/scroll options
 function DocView:scroll_to_make_visible(line, col, instant, opts)
+  if self.wrapping_enabled then self:update_wrap_cache() end
+  if self.wrapped_settings then
+    with_wrapped_caret_affinity(self, DocView.scroll_to_make_visible_unwrapped, line, col, instant, opts)
+    self.scroll.to.x = 0
+    if instant then self.scroll.x = self.scroll.to.x end
+    return
+  end
+  return self:scroll_to_make_visible_unwrapped(line, col, instant, opts)
+end
+
+function DocView:scroll_to_make_visible_unwrapped(line, col, instant, opts)
   opts = opts or {}
   if opts.vertical ~= false then
     self.scroll.y = math.max(0, self.scroll.y or 0)
@@ -1153,6 +1293,7 @@ end
 ---@param x number Screen x coordinate
 ---@param y number Screen y coordinate
 function DocView:on_mouse_moved(x, y, ...)
+  local selecting = self.mouse_selecting ~= nil
   DocView.super.on_mouse_moved(self, x, y, ...)
 
   self.hovering_gutter = false
@@ -1182,6 +1323,9 @@ function DocView:on_mouse_moved(x, y, ...)
       end
       self.doc:set_selection(l1, c1, l2, c2)
     end
+  end
+  if self.wrapped_settings and selecting then
+    apply_resolved_line_end_affinity(self)
   end
 end
 
@@ -1225,7 +1369,11 @@ end
 function DocView:on_mouse_pressed(button, x, y, clicks)
   if button == "left" then self.doc:clear_search_selections() end
   if button ~= "left" or not self.hovering_gutter then
-    return DocView.super.on_mouse_pressed(self, button, x, y, clicks)
+    local result = DocView.super.on_mouse_pressed(self, button, x, y, clicks)
+    if self.wrapped_settings and button == "left" then
+      apply_resolved_line_end_affinity(self)
+    end
+    return result
   end
   local line = self:resolve_screen_position(x, y)
   if keymap.modkeys["shift"] then
@@ -1357,6 +1505,12 @@ function DocView:update()
   end
   perf_elapsed("docview_update_cache_ms", phase_start)
 
+  if self.wrapping_enabled and self.size.x > 0 then
+    local wrap_start = perf_active and system.get_time()
+    self:update_wrap_cache()
+    perf_elapsed("docview_update_wrap_cache_ms", wrap_start)
+  end
+
   -- scroll to make caret visible and reset blink timer if it moved
   phase_start = perf_active and system.get_time()
   local line1, col1, line2, col2 = self.doc:get_selection()
@@ -1445,6 +1599,23 @@ function DocView:line_has_current_line_highlight(line)
 end
 
 function DocView:draw_current_line_highlights(minline, maxline)
+  if self.wrapped_settings then
+    if core.active_view ~= self or config.highlight_current_line == false then return end
+    local lh = self:get_line_height()
+    local hcl = config.highlight_current_line
+    for _, line1, col1, line2, col2 in self.doc:get_selections(false) do
+      if line1 > maxline then break end
+      if line1 >= minline and (hcl ~= "no_selection" or (line1 == line2 and col1 == col2)) then
+        local line_end = linewrapping.has_wrapped_line_end_affinity(self, line1, col1)
+        local idx = linewrapping.get_line_idx_col_count(self, line1, col1, line_end)
+        local _, y = self:get_line_screen_position(line1)
+        local first_idx = linewrapping.get_line_idx_col_count(self, line1)
+        self:draw_line_highlight(self.position.x, y + lh * (idx - first_idx))
+      end
+    end
+    self:draw_content_left_edge()
+    return
+  end
   if config.highlight_current_line == false then return end
   local _, y = self:get_line_screen_position(minline)
   local lh = self:get_line_height()
@@ -1784,6 +1955,66 @@ end
 ---@param y number Screen y coordinate
 ---@return integer height Line height
 function DocView:draw_line_text(line, x, y)
+  if self.wrapped_settings then
+    local perf_active = core.perf_frame_stats ~= nil
+    local perf_start = perf_active and system.get_time()
+    local perf_segments, perf_bytes, perf_known_bounds_segments = 0, 0, 0
+    local default_font = self:get_font()
+    local default_font_height = default_font:get_height()
+    local default_ascii_cell_width = default_font:get_width(" ")
+    local tx, ty, begin_width = x, y + self:get_line_text_y_offset(), self.wrapped_line_offsets[line]
+    local lh = self:get_line_height()
+    local idx, _, count = linewrapping.get_line_idx_col_count(self, line)
+    local total_offset = 1
+    local can_use_known_bounds = renderer.draw_text_known_bounds ~= nil
+
+    local function draw_segment(font, text, sx, sy, color, uses_default_font)
+      if text == "" then return sx end
+      perf_segments = perf_segments + 1
+      perf_bytes = perf_bytes + #text
+      if can_use_known_bounds and uses_default_font and not text:find("[\t\128-\255]") then
+        perf_known_bounds_segments = perf_known_bounds_segments + 1
+        local width = #text * default_ascii_cell_width
+        return renderer.draw_text_known_bounds(
+          font, text, sx, sy,
+          math.floor(sx), math.floor(sy),
+          math.max(1, math.ceil(width)),
+          math.max(1, math.ceil(default_font_height)),
+          color
+        )
+      end
+      return renderer.draw_text(font, text, sx, sy, color)
+    end
+
+    for _, type, text in self.doc.highlighter:each_token(line) do
+      local color = style.syntax[type] or style.syntax["normal"]
+      local syntax_font = style.syntax_fonts[type]
+      local font = syntax_font or default_font
+      local token_offset = 1
+      while text ~= nil and token_offset <= #text do
+        local next_line, next_line_start_col = linewrapping.get_idx_line_col(self, idx + 1)
+        if next_line ~= line then
+          next_line_start_col = #self.doc.lines[line]
+        end
+        local max_length = next_line_start_col - total_offset
+        local rendered_text = text:sub(token_offset, token_offset + max_length - 1)
+        tx = draw_segment(font, rendered_text, tx, ty, color, syntax_font == nil)
+        total_offset = total_offset + #rendered_text
+        if total_offset ~= next_line_start_col or max_length == 0 then break end
+        token_offset = token_offset + #rendered_text
+        idx = idx + 1
+        tx, ty = x + begin_width, ty + lh
+      end
+    end
+    perf_frame_add("linewrapping_draw_line_text_calls", 1)
+    perf_frame_add("linewrapping_draw_line_text_rows", count)
+    perf_frame_add("linewrapping_draw_line_text_segments", perf_segments)
+    perf_frame_add("linewrapping_draw_line_text_bytes", perf_bytes)
+    perf_frame_add("linewrapping_draw_line_text_known_bounds_segments", perf_known_bounds_segments)
+    perf_elapsed("linewrapping_draw_line_text_ms", perf_start)
+    return lh * count
+  end
+
   local stats = core.docview_frame_stats
   local text_start = stats and system.get_time()
   local default_font = self:get_font()
@@ -2266,6 +2497,73 @@ end
 ---@param y number Screen y coordinate
 ---@return integer height Line height
 function DocView:draw_line_body(line, x, y)
+  if self.wrapped_settings then
+    local lh = self:get_line_height()
+    local idx0, _, count = linewrapping.get_line_idx_col_count(self, line)
+    local highlight_rows
+    local hcl = config.highlight_current_line
+    if not self.__current_line_highlights_drawn_before_content
+    and hcl ~= false and core.active_view == self then
+      for _, line1, col1, line2, col2 in self.doc:get_selections(false) do
+        if line1 == line and (hcl ~= "no_selection" or (line1 == line2 and col1 == col2)) then
+          local line_end = linewrapping.has_wrapped_line_end_affinity(self, line, col1)
+          local idx = linewrapping.get_line_idx_col_count(self, line, col1, line_end)
+          if idx >= idx0 and idx < idx0 + count then
+            highlight_rows = highlight_rows or {}
+            highlight_rows[idx] = true
+          end
+        end
+      end
+    end
+    if highlight_rows then
+      for i = idx0, idx0 + count - 1 do
+        if highlight_rows[i] then
+          self:draw_line_highlight(x + self.scroll.x, y + lh * (i - idx0))
+        end
+      end
+    end
+
+    local search_matches
+    for _, line1, col1, line2, col2 in self.doc:get_selections(true) do
+      if line >= line1 and line <= line2 then
+        if line1 ~= line then col1 = 1 end
+        if line2 ~= line then col2 = #self.doc.lines[line] + 1 end
+        if col1 ~= col2 then
+          if self.doc:is_search_selection(line1, col1, line, col2) then
+            search_matches = search_matches or {}
+            search_matches[#search_matches + 1] = { col1, col2, true }
+          else
+            local idx1 = linewrapping.get_line_idx_col_count(self, line, col1)
+            local idx2 = linewrapping.get_line_idx_col_count(self, line, col2)
+            for i = idx1, idx2 do
+              local x1, x2 = get_wrapped_segment_bounds(self, line, col1, col2, idx1, idx2, i)
+              if x1 and x2 and x2 > x1 then
+                renderer.draw_rect(x + x1, y + (i - idx0) * lh, x2 - x1, lh, style.selection)
+              end
+            end
+          end
+        end
+      end
+    end
+    for _, match in ipairs(search_matches or {}) do
+      draw_wrapped_search_match(self, line, match[1], match[2], x, y, idx0, lh, match[3], false)
+    end
+
+    local line_height = self:draw_line_text(line, x, y)
+
+    for _, match in ipairs(search_matches or {}) do
+      draw_wrapped_search_match(self, line, match[1], match[2], x, y, idx0, lh, match[3], true)
+    end
+
+    local underline_module = DocView.__lsp_diagnostic_underlines_module or package.loaded["core.lsp.diagnostic_underlines"]
+    if underline_module and underline_module.draw_line then
+      underline_module.draw_line(self, line, x, y)
+    end
+    self:draw_line_hint(line, x, y + lh * (count - 1))
+
+    return line_height
+  end
+
   if not self.__current_line_highlights_drawn_before_content
   and self:line_has_current_line_highlight(line) then
     self:draw_line_highlight(x + self.scroll.x, y)
@@ -2340,6 +2638,7 @@ end
 ---@return integer height Line height
 function DocView:draw_line_gutter(line, x, y, width)
   local lh = self:get_line_height()
+  local height = lh
   if config.show_line_numbers then
     local color = style.line_number
     local gutter_selection_cache = self.__line_gutter_selection_cache
@@ -2357,7 +2656,10 @@ function DocView:draw_line_gutter(line, x, y, width)
     x = x + style.padding.x
     common.draw_text(self:get_font(), color, line, "right", x, y, width, lh)
   end
-  return lh
+  if self.wrapped_settings then
+    height = math.max(height, lh * linewrapping.get_wrapped_line_count(self, line))
+  end
+  return height
 end
 
 
@@ -2393,6 +2695,14 @@ end
 ---Draw overlay elements (carets, IME decoration).
 ---Called after main text to draw on top.
 function DocView:draw_overlay()
+  if self.wrapped_settings then
+    linewrapping.draw_guide(self)
+    return with_wrapped_caret_affinity(self, DocView.draw_overlay_unwrapped)
+  end
+  return self:draw_overlay_unwrapped()
+end
+
+function DocView:draw_overlay_unwrapped()
   local stats = core.docview_frame_stats
   local overlay_start = stats and system.get_time()
   local minline, maxline = self:get_visible_line_range()
@@ -2434,9 +2744,74 @@ function DocView:draw_overlay()
 end
 
 
+function DocView:draw_wrapped()
+  self:draw_background(style.background)
+  local _, indent_size = self.doc:get_indent_info()
+  self:get_font():set_tab_size(indent_size)
+
+  local lh = self:get_line_height()
+  local _, y1, _, y2 = self:get_content_bounds()
+  local total = #self.wrapped_lines / 2
+  local minidx = math.max(1, math.floor((y1 - style.padding.y) / lh) + 1)
+  local maxidx = math.min(total, math.floor((y2 - style.padding.y) / lh) + 1)
+  if maxidx < minidx then
+    self:draw_scrollbar()
+    return
+  end
+
+  local x, base_y = self:get_content_offset()
+  local gw, gpad = self:get_gutter_width()
+  local gutter_w = gpad and gw - gpad or gw
+  local first_line = linewrapping.get_idx_line_col(self, minidx)
+  local last_line = linewrapping.get_idx_line_col(self, maxidx)
+
+  self:prepare_line_body_draw_cache(first_line, last_line)
+  self:draw_current_line_highlights(first_line, last_line)
+  self.__current_line_highlights_drawn_before_content = true
+
+  for line = first_line, last_line do
+    local first_idx = self.wrapped_line_to_idx[line]
+    if first_idx then
+      local y = base_y + (first_idx - 1) * lh + style.padding.y
+      self:draw_line_gutter(line, self.position.x, y, gutter_w)
+    end
+  end
+
+  core.push_clip_rect(self.position.x + gw, self.position.y, math.max(0, self.size.x - gw), self.size.y)
+  for line = first_line, last_line do
+    local first_idx = self.wrapped_line_to_idx[line]
+    if first_idx then
+      local y = base_y + (first_idx - 1) * lh + style.padding.y
+      self:draw_line_body(line, x + gw, y)
+    end
+  end
+  self:draw_overlay()
+  core.pop_clip_rect()
+
+  self.__current_line_highlights_drawn_before_content = nil
+  self.__line_body_highlight_cache = nil
+  self.__line_body_selection_cache = nil
+  self.__line_body_search_match_cache = nil
+  self.__line_gutter_selection_cache = nil
+  self.__visible_caret_cache = nil
+
+  self:draw_scrollbar()
+end
+
 ---Draw the entire document view.
 ---Renders background, gutters, text, selections, carets, and scrollbars.
 function DocView:draw()
+  if self.wrapped_settings then
+    local centered = core.centered_editor
+    if centered and centered.should_center and centered.should_center(self)
+    and not self.__centered_editor_in_lane_geometry then
+      self:draw_background(style.background)
+      return centered.with_lane_geometry(self, function()
+        return self:draw_wrapped()
+      end)
+    end
+    return self:draw_wrapped()
+  end
   self:draw_background(style.background)
   local _, indent_size = self.doc:get_indent_info()
   self:get_font():set_tab_size(indent_size)

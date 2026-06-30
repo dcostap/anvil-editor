@@ -5,6 +5,102 @@ local config = require "core.config"
 
 local LineWrapping = {}
 
+local views_by_doc = setmetatable({}, { __mode = "k" })
+
+local function compact_views(doc, views)
+  local compacted = setmetatable({}, { __mode = "v" })
+  for _, view in pairs(views) do
+    if view and view.doc == doc then
+      compacted[#compacted + 1] = view
+    end
+  end
+  if #compacted > 0 then
+    views_by_doc[doc] = compacted
+    return compacted
+  end
+  views_by_doc[doc] = nil
+end
+
+function LineWrapping.register_docview(docview)
+  local doc = docview and docview.doc
+  if not doc then return end
+  local views = views_by_doc[doc]
+  if views then
+    views = compact_views(doc, views)
+  end
+  if not views then
+    views = setmetatable({}, { __mode = "v" })
+    views_by_doc[doc] = views
+  end
+  for _, view in pairs(views) do
+    if view == docview then return end
+  end
+  views[#views + 1] = docview
+end
+
+function LineWrapping.unregister_docview(docview)
+  local doc = docview and docview.doc
+  local views = doc and views_by_doc[doc]
+  if not views then return end
+  local compacted = setmetatable({}, { __mode = "v" })
+  for _, view in pairs(views) do
+    if view and view ~= docview and view.doc == doc then
+      compacted[#compacted + 1] = view
+    end
+  end
+  views_by_doc[doc] = #compacted > 0 and compacted or nil
+end
+
+local function each_wrapped_docview(doc, fn)
+  local views = views_by_doc[doc]
+  if not views then return end
+  views = compact_views(doc, views)
+  if not views then return end
+  for _, docview in ipairs(views) do
+    if docview.wrapped_settings then
+      fn(docview)
+    end
+  end
+end
+
+function LineWrapping.notify_doc_raw_insert(doc, line, old_lines)
+  each_wrapped_docview(doc, function(docview)
+    local lines = #doc.lines - old_lines
+    LineWrapping.update_breaks(docview, line, line, lines)
+  end)
+end
+
+function LineWrapping.notify_doc_raw_remove(doc, line1, line2, old_lines)
+  each_wrapped_docview(doc, function(docview)
+    local lines = #doc.lines - old_lines
+    LineWrapping.update_breaks(docview, line1, line2, lines)
+  end)
+end
+
+function LineWrapping.notify_doc_text_input(doc, result)
+  if not result or not result.changed then return end
+  each_wrapped_docview(doc, function(docview)
+    LineWrapping.set_wrapped_line_end_affinity(docview, LineWrapping.collect_soft_wrap_row_start_affinity(docview))
+  end)
+end
+
+function LineWrapping.notify_doc_text_transaction(doc, transaction)
+  local ranges = transaction and transaction.changed_ranges
+  if not ranges then return end
+  each_wrapped_docview(doc, function(docview)
+    if #ranges == 1 then
+      local range = ranges[1]
+      LineWrapping.update_breaks(docview, range.old_line1, range.old_line2, range.line_delta or 0)
+    else
+      LineWrapping.reconstruct_breaks(docview, docview.wrapped_settings.font, docview.wrapped_settings.width)
+    end
+  end)
+end
+
+function LineWrapping.notify_doc_close(doc)
+  views_by_doc[doc] = nil
+end
+
 ---@class config.plugins.linewrapping
 ---@field mode "letter" | "word"
 ---@field width_override? number | function():number
@@ -486,6 +582,44 @@ function LineWrapping.collect_forward_endpoint_affinity(docview, old_selections)
     end
   end
   return positions
+end
+
+function LineWrapping.wrapped_visual_line_position(docview, line, col, idx_delta)
+  local line_end = LineWrapping.has_wrapped_line_end_affinity(docview, line, col)
+  local idx = LineWrapping.get_line_idx_col_count(docview, line, col, line_end)
+  return LineWrapping.get_line_col_from_index_and_x(docview, idx + idx_delta, docview:get_col_x_offset(line, col, line_end))
+end
+
+function LineWrapping.wrapped_end_of_line_position(docview, doc, line, col, logical_end_of_line)
+  local line_end = LineWrapping.has_wrapped_line_end_affinity(docview, line, col)
+  local idx = LineWrapping.get_line_idx_col_count(docview, line, col, line_end)
+  local nline, ncol = LineWrapping.get_idx_line_col(docview, idx + 1)
+  if nline ~= line then
+    local end_line, end_col = logical_end_of_line(doc, line, col)
+    end_line, end_col = doc:sanitize_position(end_line, end_col)
+    return end_line, end_col, false
+  end
+  if line_end and col == ncol then
+    local end_line, end_col = logical_end_of_line(doc, line, col)
+    end_line, end_col = doc:sanitize_position(end_line, end_col)
+    return end_line, end_col, false
+  end
+  return line, ncol, true
+end
+
+function LineWrapping.wrapped_start_of_line_position(docview, doc, line, col, logical_start_of_line)
+  local line_end = LineWrapping.has_wrapped_line_end_affinity(docview, line, col)
+  local _, _, _, scol = LineWrapping.get_line_idx_col_count(docview, line, col, line_end)
+  if col == scol then return logical_start_of_line(doc, line, col) end
+  return line, scol
+end
+
+function LineWrapping.wrapped_start_of_indentation_position(docview, doc, line, col, logical_start_of_indentation)
+  local line_end = LineWrapping.has_wrapped_line_end_affinity(docview, line, col)
+  local _, _, _, scol = LineWrapping.get_line_idx_col_count(docview, line, col, line_end)
+  if col == scol then return logical_start_of_indentation(doc, line, col) end
+  if scol ~= 1 then return line, scol end
+  return logical_start_of_indentation(doc, line, col)
 end
 
 return LineWrapping

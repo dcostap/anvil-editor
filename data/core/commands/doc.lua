@@ -2,6 +2,8 @@ local core = require "core"
 local command = require "core.command"
 local common = require "core.common"
 local config = require "core.config"
+local keymap = require "core.keymap"
+local linewrapping = require "core.linewrapping"
 local encodings = require "core.doc.encodings"
 local translate = require "core.doc.translate"
 local style = require "core.style"
@@ -1809,4 +1811,183 @@ commands["doc:select-to-next-line"] = function(dv)
   select_line_batch(dv, 1)
 end
 
+local unwrapped_navigation_commands = {}
+for _, name in ipairs({
+  "doc:move-to-previous-line",
+  "doc:move-to-next-line",
+  "doc:select-to-previous-line",
+  "doc:select-to-next-line",
+  "doc:move-to-next-char",
+  "doc:select-to-next-char",
+  "doc:move-to-next-word-end",
+  "doc:select-to-next-word-end",
+  "doc:move-to-end-of-word",
+  "doc:select-to-end-of-word",
+  "doc:move-to-next-block-end",
+  "doc:select-to-next-block-end",
+  "doc:move-to-end-of-doc",
+  "doc:select-to-end-of-doc",
+  "doc:move-to-start-of-line",
+  "doc:select-to-start-of-line",
+  "doc:delete-to-start-of-line",
+  "doc:move-to-start-of-indentation",
+  "doc:select-to-start-of-indentation",
+  "doc:delete-to-start-of-indentation",
+  "doc:move-to-end-of-line",
+  "doc:select-to-end-of-line",
+  "doc:delete-to-end-of-line",
+}) do
+  unwrapped_navigation_commands[name] = commands[name]
+end
+
+local function perform_unwrapped_navigation(name, dv, ...)
+  local old = unwrapped_navigation_commands[name]
+  if old then return old(dv, ...) end
+end
+
+local function add_line_end_affinity(positions, line, col, line_end)
+  if line_end then positions[linewrapping.position_key(line, col)] = true end
+end
+
+local function wrapped_move_to(dv, name, move_fn, ...)
+  if not dv.wrapped_settings then return perform_unwrapped_navigation(name, dv, ...) end
+  local selections = {}
+  local affinity_positions = {}
+  for _, line1, col1 in dv.doc:get_selections(false) do
+    local line, col, line_end = move_fn(dv.doc, line1, col1, ...)
+    selections[#selections + 1] = line
+    selections[#selections + 1] = col
+    selections[#selections + 1] = line
+    selections[#selections + 1] = col
+    add_line_end_affinity(affinity_positions, line, col, line_end)
+  end
+  dv.doc:set_selection_list(selections, dv.doc.last_selection, { merge_cursors = true })
+  linewrapping.set_wrapped_line_end_affinity(dv, affinity_positions)
+end
+
+local function wrapped_select_to(dv, name, move_fn, ...)
+  if not dv.wrapped_settings then return perform_unwrapped_navigation(name, dv, ...) end
+  local selections = {}
+  local affinity_positions = {}
+  for _, line1, col1, line2, col2 in dv.doc:get_selections(false) do
+    local line, col, line_end = move_fn(dv.doc, line1, col1, ...)
+    selections[#selections + 1] = line
+    selections[#selections + 1] = col
+    selections[#selections + 1] = line2
+    selections[#selections + 1] = col2
+    add_line_end_affinity(affinity_positions, line, col, line_end)
+  end
+  dv.doc:set_selection_list(selections, dv.doc.last_selection, { merge_cursors = true })
+  linewrapping.set_wrapped_line_end_affinity(dv, affinity_positions)
+  set_primary_selection(dv.doc)
+end
+
+local function wrapped_delete_to(dv, name, move_fn, ...)
+  if not dv.wrapped_settings then return perform_unwrapped_navigation(name, dv, ...) end
+  local args = { n = select("#", ...), ... }
+  return dv.doc:delete_to(function(target_doc, line, col)
+    return move_fn(target_doc, line, col, table.unpack(args, 1, args.n))
+  end, dv)
+end
+
+local function wrapped_forward_endpoint_command(dv, name, ...)
+  if not dv.wrapped_settings then return perform_unwrapped_navigation(name, dv, ...) end
+  local old_selections = linewrapping.copy_selection_list(dv.doc.selections)
+  local result = perform_unwrapped_navigation(name, dv, ...)
+  linewrapping.set_wrapped_line_end_affinity(dv, linewrapping.collect_forward_endpoint_affinity(dv, old_selections))
+  return result
+end
+
+local function move_to_wrapped_previous_line(doc, line, col, dv)
+  return linewrapping.wrapped_visual_line_position(dv, line, col, -1)
+end
+
+local function move_to_wrapped_next_line(doc, line, col, dv)
+  return linewrapping.wrapped_visual_line_position(dv, line, col, 1)
+end
+
+local function move_to_wrapped_end_of_line(doc, line, col, dv)
+  return linewrapping.wrapped_end_of_line_position(dv, doc, line, col, translate.end_of_line)
+end
+
+local function move_to_wrapped_start_of_line(doc, line, col, dv)
+  return linewrapping.wrapped_start_of_line_position(dv, doc, line, col, translate.start_of_line)
+end
+
+local function move_to_wrapped_start_of_indentation(doc, line, col, dv)
+  return linewrapping.wrapped_start_of_indentation_position(dv, doc, line, col, translate.start_of_indentation)
+end
+
+commands["doc:move-to-previous-line"] = function(dv)
+  return wrapped_move_to(dv, "doc:move-to-previous-line", move_to_wrapped_previous_line, dv)
+end
+commands["doc:move-to-next-line"] = function(dv)
+  return wrapped_move_to(dv, "doc:move-to-next-line", move_to_wrapped_next_line, dv)
+end
+commands["doc:select-to-previous-line"] = function(dv)
+  return wrapped_select_to(dv, "doc:select-to-previous-line", move_to_wrapped_previous_line, dv)
+end
+commands["doc:select-to-next-line"] = function(dv)
+  return wrapped_select_to(dv, "doc:select-to-next-line", move_to_wrapped_next_line, dv)
+end
+
+for _, name in ipairs({
+  "doc:move-to-next-char",
+  "doc:select-to-next-char",
+  "doc:move-to-next-word-end",
+  "doc:select-to-next-word-end",
+  "doc:move-to-end-of-word",
+  "doc:select-to-end-of-word",
+  "doc:move-to-next-block-end",
+  "doc:select-to-next-block-end",
+  "doc:move-to-end-of-doc",
+  "doc:select-to-end-of-doc",
+}) do
+  local command_name = name
+  commands[command_name] = function(dv, ...)
+    return wrapped_forward_endpoint_command(dv, command_name, ...)
+  end
+end
+
+commands["doc:move-to-start-of-line"] = function(dv)
+  return wrapped_move_to(dv, "doc:move-to-start-of-line", move_to_wrapped_start_of_line, dv)
+end
+commands["doc:select-to-start-of-line"] = function(dv)
+  return wrapped_select_to(dv, "doc:select-to-start-of-line", move_to_wrapped_start_of_line, dv)
+end
+commands["doc:delete-to-start-of-line"] = function(dv)
+  return wrapped_delete_to(dv, "doc:delete-to-start-of-line", move_to_wrapped_start_of_line, dv)
+end
+commands["doc:move-to-start-of-indentation"] = function(dv)
+  return wrapped_move_to(dv, "doc:move-to-start-of-indentation", move_to_wrapped_start_of_indentation, dv)
+end
+commands["doc:select-to-start-of-indentation"] = function(dv)
+  return wrapped_select_to(dv, "doc:select-to-start-of-indentation", move_to_wrapped_start_of_indentation, dv)
+end
+commands["doc:delete-to-start-of-indentation"] = function(dv)
+  return wrapped_delete_to(dv, "doc:delete-to-start-of-indentation", move_to_wrapped_start_of_indentation, dv)
+end
+commands["doc:move-to-end-of-line"] = function(dv)
+  return wrapped_move_to(dv, "doc:move-to-end-of-line", move_to_wrapped_end_of_line, dv)
+end
+commands["doc:select-to-end-of-line"] = function(dv)
+  return wrapped_select_to(dv, "doc:select-to-end-of-line", move_to_wrapped_end_of_line, dv)
+end
+commands["doc:delete-to-end-of-line"] = function(dv)
+  return wrapped_delete_to(dv, "doc:delete-to-end-of-line", move_to_wrapped_end_of_line, dv)
+end
+
 command.add("core.docview", commands)
+
+command.add(nil, {
+  ["line-wrapping:toggle"] = function()
+    local view = core.active_view
+    if view and view.doc and view.extends and view:extends(DocView) then
+      view:set_wrapping_enabled(not view.wrapped_settings)
+    end
+  end
+})
+
+keymap.add {
+  ["f10"] = "line-wrapping:toggle",
+}

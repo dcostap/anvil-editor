@@ -5,6 +5,7 @@ local core = require "core"
 local syntax = require "core.syntax"
 local config = require "core.config"
 local common = require "core.common"
+local linewrapping = require "core.linewrapping"
 
 -- Match IntelliJ-style default: keep a backup and restore it if writing fails.
 -- Set config.safe_write = false to use the old direct truncate/write path.
@@ -1450,6 +1451,7 @@ end
 
 
 function Doc:raw_insert(line, col, text, undo_stack, time)
+  local linewrapping_old_lines = #self.lines
   -- split text into lines and merge with line at insertion point
   local lines = split_lines(text)
   local len = #lines[#lines]
@@ -1484,10 +1486,12 @@ function Doc:raw_insert(line, col, text, undo_stack, time)
   self.highlighter:insert_notify(line, #lines - 1)
   self:clear_cache(line, #lines - 1)
   self:sanitize_selection()
+  linewrapping.notify_doc_raw_insert(self, line, linewrapping_old_lines)
 end
 
 
 function Doc:raw_remove(line1, col1, line2, col2, undo_stack, time)
+  local linewrapping_old_lines = #self.lines
   -- push undo
   local text = self:get_text(line1, col1, line2, col2)
   push_selection_undo(self, undo_stack, time)
@@ -1522,6 +1526,7 @@ function Doc:raw_remove(line1, col1, line2, col2, undo_stack, time)
   self.highlighter:remove_notify(line1, line_removal)
   self:clear_cache(line1, line_removal)
   self:sanitize_selection()
+  linewrapping.notify_doc_raw_remove(self, line1, line2, linewrapping_old_lines)
 end
 
 
@@ -1809,12 +1814,14 @@ function Doc:text_input_by_selection(text_by_idx, idx, opts)
     clipped_final_by_idx[edit.idx] = final_by_idx[edit.idx]
   end
   local new_selections, new_last_selection = self:selections_after_edits(normalized, clipped_final_by_idx, self.last_selection, { normalized = true })
-  return self:apply_edits(clipped_edits, {
+  local result = self:apply_edits(clipped_edits, {
     type = opts.type or "insert",
     selections = new_selections,
     last_selection = new_last_selection,
     merge_cursors = opts.merge_cursors or false,
   })
+  linewrapping.notify_doc_text_input(self, result)
+  return result
 end
 
 function Doc:text_input(text, idx)
@@ -2077,6 +2084,7 @@ end
 
 -- Internal transaction hook for batch-aware document change observers.
 function Doc:on_text_transaction(transaction)
+  linewrapping.notify_doc_text_transaction(self, transaction)
   for id, handler in pairs(text_transaction_handlers) do
     local ok, err = pcall(handler, self, transaction)
     if not ok and core and core.log_quiet then
@@ -2091,6 +2099,7 @@ end
 
 -- For plugins to get notified when a document is closed
 function Doc:on_close()
+  linewrapping.notify_doc_close(self)
   -- this shouldn't be needed but we do it to better hint the gc to collect
   self.highlighter.doc = nil
   self.highlighter.lines = nil
