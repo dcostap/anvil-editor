@@ -448,6 +448,32 @@ test.describe("line wrapping visual navigation", function()
     test.ok(calls < 80, "expected tabbed long line to skip far-left chunks")
   end)
 
+  test.it("does not send a huge non-ASCII unwrapped suffix to the renderer", function(context)
+    local view = open_editor(context, string.rep("é", 8000))
+    view.wrapping_enabled = false
+    view.wrapped_settings = nil
+    view.size.x = view:get_font():get_width("x") * 20
+    view.scroll.x = view:get_font():get_width("x") * 6000
+    view.scroll.to.x = view.scroll.x
+
+    local calls = 0
+    local max_len = 0
+    local old_draw_text = renderer.draw_text
+    renderer.draw_text = function(font, text, x)
+      calls = calls + 1
+      max_len = math.max(max_len, #text)
+      return x + font:get_width(text)
+    end
+    local ok, err = pcall(function()
+      view:draw_line_text(1, select(1, view:get_line_screen_position(1)), select(2, view:get_line_screen_position(1)))
+    end)
+    renderer.draw_text = old_draw_text
+
+    if not ok then error(err, 0) end
+    test.ok(calls > 0, "expected non-ASCII long line to draw visible text")
+    test.ok(max_len <= 1024, "expected non-ASCII long line drawing to stay chunked")
+  end)
+
   test.it("left-culls deeply scrolled unwrapped text in the known-bounds path", function(context)
     local view, doc = open_editor(context, string.rep("a\t", 3000))
     view.wrapping_enabled = false

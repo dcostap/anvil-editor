@@ -2267,6 +2267,22 @@ function DocView:draw_line_text(line, x, y)
     local next_byte = text:byte(j + 1)
     return not ascii_ligature_sensitive_byte(byte) and not ascii_ligature_sensitive_byte(next_byte)
   end
+  local function utf8_safe_chunk_end(text, first, last)
+    last = math.min(#text, last)
+    while last >= first do
+      local next_byte = text:byte(last + 1)
+      if not (next_byte and next_byte >= 128 and next_byte < 192) then return last end
+      last = last - 1
+    end
+    last = first
+    while last < #text do
+      local next_byte = text:byte(last + 1)
+      if not (next_byte and next_byte >= 128 and next_byte < 192) then break end
+      last = last + 1
+    end
+    return last
+  end
+
   local function ascii_preferred_chunk_end(text, first, last)
     if last >= #text then return #text end
     for j = last, first, -1 do
@@ -2341,13 +2357,14 @@ function DocView:draw_line_text(line, x, y)
           local chunk = j >= i and text:sub(i, j) or ""
           if chunk == "" or chunk:find("[\128-\255]") then
             if flush_pending_text() then stop_drawing = true; break end
-            local remaining = text:sub(i)
+            local utf8_end = utf8_safe_chunk_end(text, i, i + available - 1)
+            chunk = text:sub(i, utf8_end)
             pending_font, pending_color, pending_chunks, pending_len = font, color, {}, 0
-            pending_len = #remaining
-            if remaining:find("\t", 1, true) then pending_has_tabs = true end
-            pending_chunks[#pending_chunks + 1] = remaining
-            i = #text + 1
-            break
+            pending_len = #chunk
+            if chunk:find("\t", 1, true) then pending_has_tabs = true end
+            pending_chunks[#pending_chunks + 1] = chunk
+            i = utf8_end + 1
+            if flush_pending_text() then stop_drawing = true; break end
           end
           pending_len = pending_len + #chunk
           if chunk:find("\t", 1, true) then pending_has_tabs = true end
