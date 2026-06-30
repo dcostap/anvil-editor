@@ -1,7 +1,8 @@
 local style = require "core.style"
 local common = require "core.common"
 
--- Default Anvil theme.
+-- Anvil Dark theme.
+-- Exposed to users as "dark" while remaining the internal default style schema.
 -- Promoted from the personal OneDark defaults; this file is the complete
 -- first-party style schema. Other themes may override any of these keys, but
 -- first-party plugins should be able to rely on these values existing.

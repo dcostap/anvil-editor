@@ -45,6 +45,20 @@ settings.plugin_sections = {}
 settings.config = {}
 settings.default_keybindings = {}
 
+local DEFAULT_COLOR_THEME_NAME = "dark"
+local DEFAULT_COLOR_THEME_MODULE = "default"
+
+local function normalize_color_theme_name(name)
+  if name == nil or name == "" or name == DEFAULT_COLOR_THEME_MODULE then
+    return DEFAULT_COLOR_THEME_NAME
+  end
+  return name
+end
+
+local function color_theme_display_name(module_name)
+  return module_name == DEFAULT_COLOR_THEME_MODULE and DEFAULT_COLOR_THEME_NAME or module_name
+end
+
 local function first_party_core_plugins()
   return core.first_party_core_plugins or {}
 end
@@ -1136,10 +1150,11 @@ local function get_installed_colors()
         end
         -- insert color to ordered table if not duplicate
         filename = filename:gsub("%.lua$", "")
-        if not files[filename] then
-          table.insert(ordered, {name = filename, colors = colors})
+        local name = color_theme_display_name(filename)
+        if not files[name] then
+          table.insert(ordered, {name = name, module = filename, colors = colors})
         end
-        files[filename] = true
+        files[name] = true
       end
     end
   end
@@ -1192,19 +1207,31 @@ local function save_settings()
   end
 end
 
+local function find_color_theme(name)
+  name = normalize_color_theme_name(name)
+  for _, details in ipairs(get_installed_colors()) do
+    if details.name == name then return details end
+  end
+  return nil
+end
+
+local function color_theme_module_name(name)
+  local normalized = normalize_color_theme_name(name)
+  local details = find_color_theme(normalized)
+  if details then return details.module end
+  return normalized == DEFAULT_COLOR_THEME_NAME and DEFAULT_COLOR_THEME_MODULE or normalized
+end
+
 local function apply_color_theme(name)
-  name = name or "default"
-  core.reload_module("colors." .. name)
+  name = normalize_color_theme_name(name)
+  core.reload_module("colors." .. color_theme_module_name(name))
   settings.config.theme = name
   save_settings()
   core.log_quiet("Theme set to %s", name)
 end
 
 local function color_theme_exists(name)
-  for _, details in ipairs(get_installed_colors()) do
-    if details.name == name then return true end
-  end
-  return false
+  return find_color_theme(name) ~= nil
 end
 
 local function suggest_color_themes(text)
@@ -1822,7 +1849,7 @@ function Settings:load_color_settings()
   listbox:add_column("Theme")
   listbox:add_column("Colors")
 
-  local current_theme = settings.config.theme or "default"
+  local current_theme = normalize_color_theme_name(settings.config.theme)
 
   for idx, details in ipairs(colors) do
     local name = details.name
@@ -2502,10 +2529,17 @@ function core.run()
   settings.ui = Settings()
 
   -- apply user chosen color theme
-  if settings.config.theme and settings.config.theme ~= "default" then
-    core.try(function()
-      core.reload_module("colors." .. settings.config.theme)
-    end)
+  if settings.config.theme then
+    local normalized_theme = normalize_color_theme_name(settings.config.theme)
+    if settings.config.theme ~= normalized_theme then
+      settings.config.theme = normalized_theme
+      save_settings()
+    end
+    if normalized_theme ~= DEFAULT_COLOR_THEME_NAME then
+      core.try(function()
+        core.reload_module("colors." .. color_theme_module_name(normalized_theme))
+      end)
+    end
   end
 
   -- re-apply user settings
@@ -2548,7 +2582,7 @@ end
 local theme_commands = {
   ["theme:select"] = function()
     core.command_view:enter("Theme", {
-      text = settings.config.theme or "default",
+      text = normalize_color_theme_name(settings.config.theme),
       select_text = true,
       suggest = suggest_color_themes,
       validate = function(text, suggestion)
