@@ -291,12 +291,22 @@ function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode)
   local perf_active = core.perf_frame_stats ~= nil
   local perf_start = perf_active and system.get_time()
   local perf_bytes = 0
+  local perf_branch
+  local perf_ascii = true
+  local perf_has_space = false
   local xoffset, i, last_space, last_width, begin_width = 0, 1, nil, 0, 0
   local splits = { 1 }
   local line_text = doc:get_utf8_line(line)
   local visible_end_col = #line_text
   if line_text:sub(-1) == "\n" then visible_end_col = visible_end_col - 1 end
   local default_ascii_cell_width = default_font:get_width(" ")
+  local function note_branch(branch)
+    if not perf_branch then
+      perf_branch = branch
+    elseif perf_branch ~= branch then
+      perf_branch = "mixed"
+    end
+  end
   for idx, type, text in get_tokens(doc, line) do
     if i > visible_end_col then break end
     if i + #text - 1 > visible_end_col then
@@ -308,24 +318,31 @@ function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode)
       begin_width = LineWrapping.continuation_indent_width(font, text)
     end
     local plain_ascii_default_font = font == default_font and not text:find("[\t\128-\255]")
+    local has_space = plain_ascii_default_font and text:find(" ", 1, true) ~= nil
+    perf_ascii = perf_ascii and plain_ascii_default_font
+    perf_has_space = perf_has_space or has_space
     local w = plain_ascii_default_font and (#text * default_ascii_cell_width) or font:get_width(text)
     if xoffset + w > width then
       if plain_ascii_default_font and mode ~= "word" then
+        note_branch("plain-ascii-letter")
         xoffset = append_plain_ascii_letter_splits(splits, i, #text, xoffset, default_ascii_cell_width, width, begin_width)
         i = i + #text
         last_space = nil
       elseif plain_ascii_default_font and idx == math.huge then
-        if text:find(" ", 1, true) then
+        if has_space then
+          note_branch("plain-ascii-word-row")
           xoffset, last_space, last_width = append_plain_ascii_word_splits(
             splits, text, i, #text, xoffset, default_ascii_cell_width, width, begin_width
           )
         else
+          note_branch("plain-ascii-word-longword-letter")
           xoffset = append_plain_ascii_letter_splits(splits, i, #text, xoffset, default_ascii_cell_width, width, begin_width)
           last_space = nil
           last_width = nil
         end
         i = i + #text
       else
+        note_branch(plain_ascii_default_font and "plain-ascii-word-tokenized" or "slow-utf8-or-syntax")
         for char in common.utf8_chars(text) do
           w = plain_ascii_default_font and default_ascii_cell_width or font:get_width(char)
           xoffset = xoffset + w
@@ -346,14 +363,36 @@ function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode)
         end
       end
     else
+      note_branch(plain_ascii_default_font and "fits-plain-ascii" or "fits-non-ascii-or-syntax")
       xoffset = xoffset + w
       i = i + #text
     end
   end
+  local perf_elapsed_ms = perf_start and ((system.get_time() - perf_start) * 1000) or 0
+  local branch_key = tostring(perf_branch or "empty"):gsub("[^%w_]", "_")
   perf_frame_add("linewrapping_compute_line_breaks_calls", 1)
   perf_frame_add("linewrapping_compute_line_breaks_bytes", perf_bytes)
   perf_frame_add("linewrapping_compute_line_breaks_splits", #splits)
-  perf_elapsed("linewrapping_compute_line_breaks_ms", perf_start)
+  perf_frame_add("linewrapping_compute_branch_" .. branch_key .. "_calls", 1)
+  perf_frame_add("linewrapping_compute_branch_" .. branch_key .. "_bytes", perf_bytes)
+  perf_frame_add("linewrapping_compute_branch_" .. branch_key .. "_ms", perf_elapsed_ms)
+  local perf = package.loaded["core.perf"]
+  if perf and perf.record_linewrap_compute and (perf_elapsed_ms > 2 or perf_bytes > 50000) then
+    perf.record_linewrap_compute({
+      elapsed_ms = perf_elapsed_ms,
+      line = line,
+      bytes = #line_text,
+      visible_bytes = perf_bytes,
+      splits = #splits,
+      width = width,
+      mode = mode,
+      tokenized = config.plugins.linewrapping.require_tokenization,
+      ascii = perf_ascii,
+      has_space = perf_has_space,
+      branch = perf_branch or "empty",
+    })
+  end
+  perf_frame_add("linewrapping_compute_line_breaks_ms", perf_elapsed_ms)
   return splits, begin_width
 end
 

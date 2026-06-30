@@ -57,6 +57,26 @@ function perf.frame_add(key, amount)
   perf.add_detail(key, amount or 1)
 end
 
+function perf.record_linewrap_compute(row)
+  if not recording or not record or not row then return end
+  local rows = record.linewrap_compute_rows
+  rows[#rows + 1] = {
+    elapsed_ms = row.elapsed_ms or 0,
+    line = row.line or 0,
+    bytes = row.bytes or 0,
+    visible_bytes = row.visible_bytes or 0,
+    splits = row.splits or 0,
+    width = row.width or 0,
+    mode = row.mode or "",
+    tokenized = row.tokenized and true or false,
+    ascii = row.ascii and true or false,
+    has_space = row.has_space and true or false,
+    branch = row.branch or "",
+  }
+  table.sort(rows, function(a, b) return a.elapsed_ms > b.elapsed_ms end)
+  while #rows > 30 do table.remove(rows) end
+end
+
 local function hook()
   if not record then return end
   local level = 2
@@ -823,6 +843,18 @@ local function write_summary(path)
   drill_metric("node tab animation ms", "node_tab_animation_ms", update_denom, "update")
   file:write("\n")
 
+  file:write("Slow linewrap compute calls (top by elapsed_ms):\n")
+  file:write("elapsed_ms,line,bytes,visible_bytes,splits,width,mode,tokenized,ascii,has_space,branch\n")
+  for _, row in ipairs(record.linewrap_compute_rows or {}) do
+    file:write(string.format(
+      "%.3f,%d,%d,%d,%d,%.3f,%s,%d,%d,%d,%s\n",
+      row.elapsed_ms, row.line, row.bytes, row.visible_bytes, row.splits, row.width,
+      csv_escape(row.mode), row.tokenized and 1 or 0, row.ascii and 1 or 0,
+      row.has_space and 1 or 0, csv_escape(row.branch)
+    ))
+  end
+  file:write("\n")
+
   file:write("Top Lua samples:\n")
   for i, row in ipairs(sorted_counts(record.lua_samples)) do
     if i > 30 then break end
@@ -881,6 +913,7 @@ function perf.start_recording()
     last_redraw_time = nil,
     slow_frames = {},
     slow_updates = {},
+    linewrap_compute_rows = {},
     redraw_intervals = {},
     lua_samples = {},
     sample_count = 0,
