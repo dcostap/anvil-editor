@@ -376,6 +376,29 @@ test.describe("line wrapping visual navigation", function()
     test.equal(view.wrapped_line_to_idx[1], 1)
   end)
 
+  test.it("scrolls to the end of huge simple unwrapped lines without tokenizing for x offset", function(context)
+    local view, doc = open_editor(context, string.rep("a", 5000))
+    view.wrapping_enabled = false
+    view.wrapped_settings = nil
+    view.size.x = view:get_font():get_width("x") * 20
+
+    local old_syntax_fonts = style.syntax_fonts
+    local old_each_render_token = doc.highlighter.each_render_token
+    style.syntax_fonts = {}
+    doc.highlighter.each_render_token = function()
+      error("scroll-to-visible should use the simple ASCII width fast path", 2)
+    end
+
+    local ok, err = pcall(function()
+      view:scroll_to_make_visible(1, #doc.lines[1], true)
+    end)
+    style.syntax_fonts = old_syntax_fonts
+    doc.highlighter.each_render_token = old_each_render_token
+
+    if not ok then error(err, 0) end
+    test.ok(view.scroll.x > 0, "expected horizontal scroll to move near the end of the long line")
+  end)
+
   test.it("does not send a huge ligature-sensitive unwrapped token to the renderer", function(context)
     local view = open_editor(context, string.rep("f", 5000))
     view.wrapping_enabled = false

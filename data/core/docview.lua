@@ -152,6 +152,55 @@ local function perf_elapsed(key, start_time)
   if start_time then perf_frame_add(key, (system.get_time() - start_time) * 1000) end
 end
 
+local monospace_font_cache = setmetatable({}, { __mode = "k" })
+
+local function font_looks_monospace(font)
+  local size = font:get_size()
+  local cached = monospace_font_cache[font]
+  if cached and cached.size == size then return cached.value end
+  local w = font:get_width(" ")
+  local value = font:get_width("i") == w
+    and font:get_width("W") == w
+    and font:get_width("m") == w
+    and font:get_width(".") == w
+    and font:get_width("-") == w
+  monospace_font_cache[font] = { size = size, value = value }
+  return value
+end
+
+local function has_relevant_syntax_fonts(doc)
+  local syntax_name = tostring(doc.syntax and doc.syntax.name or ""):lower()
+  local is_markdown = syntax_name:find("markdown", 1, true) ~= nil
+  for name in pairs(style.syntax_fonts) do
+    if is_markdown or not tostring(name):match("^markdown_") then
+      return true
+    end
+  end
+  return false
+end
+
+local function get_fast_ascii_monospace_x_offset(self, line, col, line_text, font)
+  if col <= 1 then return 0 end
+  if has_relevant_syntax_fonts(self.doc) or not font_looks_monospace(font) then return nil end
+
+  local change_id = self.doc:get_change_id()
+  local cache = self.__fast_ascii_col_x_cache
+  if not cache or cache.change_id ~= change_id or cache.font ~= font or cache.font_size ~= font:get_size() then
+    cache = { change_id = change_id, font = font, font_size = font:get_size(), lines = {} }
+    self.__fast_ascii_col_x_cache = cache
+  end
+
+  local entry = cache.lines[line]
+  if not entry or entry.text ~= line_text then
+    entry = { text = line_text, fast = line_text:find("[\t\128-\255]") == nil }
+    cache.lines[line] = entry
+  end
+  if not entry.fast then return nil end
+
+  perf_frame_add("docview_get_col_x_offset_fast_ascii_calls", 1)
+  return (col - 1) * font:get_width(" ")
+end
+
 local function with_wrapped_caret_affinity(docview, fn, ...)
   local old = docview.__use_wrapped_caret_affinity
   docview.__use_wrapped_caret_affinity = true
@@ -1022,7 +1071,8 @@ function DocView:get_col_x_offset(line, col, line_end)
   local column = 1
   local xoffset = 0
   local cache = self.doc.cache.col_x
-  local line_len = #self.doc.lines[line]
+  local line_text = self.doc.lines[line]
+  local line_len = #line_text
   if line_len > CACHE_LINE_LEN then
     if cache[line] and cache[line][col] then
       return cache[line][col]
@@ -1041,6 +1091,13 @@ function DocView:get_col_x_offset(line, col, line_end)
   local default_font = self:get_font()
   local _, indent_size = self.doc:get_indent_info()
   default_font:set_tab_size(indent_size)
+  if line_len > CACHE_LINE_LEN and column == 1 then
+    local fast_x = get_fast_ascii_monospace_x_offset(self, line, col, line_text, default_font)
+    if fast_x then
+      if cache[line] then cache[line][col] = fast_x end
+      return fast_x
+    end
+  end
   local scol = column > 1 and column or nil
   for _, type, text in self.doc.highlighter:each_render_token(line, scol) do
     local font = style.syntax_fonts[type] or default_font
