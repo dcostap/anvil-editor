@@ -1,4 +1,5 @@
 local core = require "core"
+local config = require "core.config"
 local test = require "core.test"
 
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
@@ -58,7 +59,12 @@ local function range_x(view, line, col1, col2)
 end
 
 test.describe("Fuzzy Searcher preview", function()
+  test.before_each(function(context)
+    context.linewrapping_enable_by_default = config.plugins.linewrapping.enable_by_default
+  end)
+
   test.after_each(function(context)
+    config.plugins.linewrapping.enable_by_default = context.linewrapping_enable_by_default
     if core.fuzzy_searcher_active_view then
       core.fuzzy_searcher_active_view:close()
     end
@@ -150,6 +156,8 @@ test.describe("Fuzzy Searcher preview", function()
   end)
 
   test.it("horizontally reveals off-screen content matches in the DocView preview", function(context)
+    config.plugins.linewrapping.enable_by_default = false
+
     local prefix = string.rep("x", 120)
     local query = "NEEDLE"
     local path = temp_file_path("fuzzy-preview-long-line-test.txt")

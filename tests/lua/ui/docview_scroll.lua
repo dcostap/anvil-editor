@@ -52,6 +52,11 @@ local function numbered_lines(count)
   return table.concat(lines, "\n")
 end
 
+local function disable_wrapping(view)
+  view:set_wrapping_enabled(false)
+  view.scroll.x, view.scroll.to.x = 0, 0
+end
+
 test.describe("DocView selection scrolling", function()
   test.before_each(function(context)
     context.scroll_past_end = config.scroll_past_end
@@ -154,6 +159,7 @@ test.describe("DocView selection scrolling", function()
   test.it("scroll_to_make_visible reveals an off-screen same-line range horizontally", function(context)
     local prefix = string.rep("x", 120)
     local view = open_editor(context, prefix .. "NEEDLE\n")
+    disable_wrapping(view)
     local col1 = #prefix + 1
     local col2 = col1 + #"NEEDLE"
 
@@ -167,6 +173,7 @@ test.describe("DocView selection scrolling", function()
 
   test.it("scroll_to_make_visible resets horizontal scroll when a range fits from baseline", function(context)
     local view = open_editor(context, "start NEEDLE then more text\n")
+    disable_wrapping(view)
     view.scroll.x, view.scroll.to.x = 160, 160
     local col1 = 7
     local col2 = col1 + #"NEEDLE"
@@ -180,6 +187,7 @@ test.describe("DocView selection scrolling", function()
   test.it("DocView Prompt Bar find navigation horizontally reveals long-line matches", function(context)
     local prefix = string.rep("x", 120)
     local view = open_editor(context, prefix .. "NEEDLE\n")
+    disable_wrapping(view)
     local col1 = #prefix + 1
     local col2 = col1 + #"NEEDLE"
 
