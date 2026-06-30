@@ -78,14 +78,37 @@ end
 
 local function first_text_snippet(doc)
   if not doc then return nil end
+  local change_id = doc.get_change_id and doc:get_change_id() or nil
+  local line_count = #(doc.lines or {})
+  local cache = doc.intellij_untitled_snippet_cache
+  if cache and cache.change_id == change_id and cache.line_count == line_count then
+    return cache.value
+  end
+
+  local snippet
   for _, line in ipairs(doc.lines or {}) do
-    local text = tostring(line or ""):gsub("\r", ""):gsub("\n$", "")
-    text = text:match("^%s*(.-)%s*$")
-    if text and text ~= "" then
-      local prefix, truncated = utf8_prefix(text, TITLE_SNIPPET_MAX_BYTES)
-      return truncated and (prefix .. "…") or prefix
+    local text = tostring(line or "")
+    local first = text:find("%S")
+    if first then
+      -- Keep tab-title probing bounded.  A huge untitled line should not be
+      -- copied and trimmed in full on every tab layout/cache-token check.
+      local sample = text:sub(first, math.min(#text, first + TITLE_SNIPPET_MAX_BYTES + 8))
+      sample = sample:gsub("\r", ""):gsub("\n$", "")
+      sample = sample:match("^(.-)%s*$") or sample
+      if sample ~= "" then
+        local prefix, truncated = utf8_prefix(sample, TITLE_SNIPPET_MAX_BYTES)
+        snippet = (truncated or #text >= first + TITLE_SNIPPET_MAX_BYTES) and (prefix .. "…") or prefix
+        break
+      end
     end
   end
+
+  doc.intellij_untitled_snippet_cache = {
+    change_id = change_id,
+    line_count = line_count,
+    value = snippet,
+  }
+  return snippet
 end
 
 local function truncate_to_width(font, text, max_w)
@@ -396,7 +419,8 @@ if not core.__untitled_tabs_patched then
         "untitled",
         tostring(doc.intellij_untitled_name),
         tostring(doc:is_dirty()),
-        tostring(first_text_snippet(doc) or ""),
+        tostring(doc.get_change_id and doc:get_change_id() or 0),
+        tostring(#(doc.lines or {})),
         tostring(style.font),
         tostring(style.font:get_size()),
         tostring(style.padding.x),
