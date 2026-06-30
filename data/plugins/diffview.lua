@@ -4,6 +4,7 @@ local config = require "core.config"
 local command = require "core.command"
 local common = require "core.common"
 local keymap = require "core.keymap"
+local linewrapping = require "core.linewrapping"
 local style = require "core.style"
 local DocView = require "core.docview"
 local Doc = require "core.doc"
@@ -1108,6 +1109,9 @@ function DiffView:patch_views()
   ---@param is_a boolean
   local function wrap_get_line_screen_position(doc_view, is_a)
     doc_view.get_line_screen_position = function(self, line, col, line_end)
+      if line_end == nil and self.__use_wrapped_caret_affinity then
+        line_end = linewrapping.has_wrapped_line_end_affinity(self, line, col)
+      end
       local x, y = self:get_content_offset()
       local lh = self:get_line_height()
       local gaps = is_a and parent.a_gaps or parent.b_gaps

@@ -682,4 +682,39 @@ test.describe("line wrapping diff hunk gutter line numbers", function()
     test.equal(hunk_gap_height, lh)
     test.equal(line2_y, line1_y + line1_height + hunk_gap_height)
   end)
+
+  test.it("uses wrapped line-end affinity for DiffView caret screen rows", function(context)
+    local long = string.rep("x", 40)
+    local view = track(context, "diffviews", diffview.string_to_string(
+      long,
+      long,
+      "left",
+      "right",
+      true
+    ))
+
+    wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
+
+    local left = view.doc_view_a
+    left.position.x, left.position.y = 0, 0
+    left.size.x, left.size.y = 320, 240
+    left.scroll.x, left.scroll.to.x = 0, 0
+    left.scroll.y, left.scroll.to.y = 0, 0
+    configure_wrapping_for_test(context, left)
+
+    local row_start_col = 9
+    left.doc:set_selection(1, row_start_col, 1, row_start_col)
+    LineWrapping.set_wrapped_line_end_affinity(left, {
+      [LineWrapping.position_key(1, row_start_col)] = true,
+    })
+
+    local _, first_row_y = left:get_line_screen_position(1, 1)
+    local _, next_row_y = left:get_line_screen_position(1, row_start_col, false)
+    left.__use_wrapped_caret_affinity = true
+    local _, affinity_y = left:get_line_screen_position(1, row_start_col)
+    left.__use_wrapped_caret_affinity = nil
+
+    test.ok(next_row_y > first_row_y, "expected fixture column to begin the next wrapped row without affinity")
+    test.equal(affinity_y, first_row_y)
+  end)
 end)
