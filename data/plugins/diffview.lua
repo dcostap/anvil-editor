@@ -634,6 +634,7 @@ function DiffView:on_touch_moved(...)
 end
 
 local function wrapped_total_visual_lines(doc_view)
+  if doc_view.get_total_visual_lines then return doc_view:get_total_visual_lines() end
   if not doc_view.wrapped_settings or not doc_view.wrapped_lines then
     return doc_view.doc and #doc_view.doc.lines or 0
   end
@@ -650,6 +651,7 @@ local function visual_rows_before_line(doc_view, line)
 end
 
 local function visual_line_count(doc_view, line)
+  if doc_view.get_visual_row_count_for_line then return doc_view:get_visual_row_count_for_line(line) end
   if not doc_view.wrapped_settings or not doc_view.wrapped_line_to_idx then return 1 end
   local total = wrapped_total_visual_lines(doc_view)
   local idx = doc_view.wrapped_line_to_idx[line]
@@ -658,12 +660,16 @@ local function visual_line_count(doc_view, line)
   return math.max(1, next_idx - idx)
 end
 
-local function visual_row_offset_for_col(doc_view, line, col)
-  if not col or not doc_view.wrapped_settings or not doc_view.wrapped_lines then return 0 end
-  local idx = doc_view.wrapped_line_to_idx and doc_view.wrapped_line_to_idx[line]
-  if not idx then return 0 end
+local function visual_row_offset_for_col(doc_view, line, col, line_end)
+  if not col or not doc_view.wrapped_settings or not doc_view.wrapped_line_to_idx then return 0 end
+  local first_idx = doc_view.wrapped_line_to_idx[line]
+  if not first_idx then return 0 end
+  if doc_view.get_visual_row then
+    local idx = doc_view:get_visual_row(line, col, line_end)
+    return math.max(0, idx - first_idx)
+  end
   local offset = 0
-  local i = idx + 1
+  local i = first_idx + 1
   while doc_view.wrapped_lines[(i - 1) * 2 + 1] == line
     and col >= doc_view.wrapped_lines[(i - 1) * 2 + 2]
   do
@@ -1101,17 +1107,17 @@ function DiffView:patch_views()
   ---@param doc_view core.docview
   ---@param is_a boolean
   local function wrap_get_line_screen_position(doc_view, is_a)
-    doc_view.get_line_screen_position = function(self, line, col)
+    doc_view.get_line_screen_position = function(self, line, col, line_end)
       local x, y = self:get_content_offset()
       local lh = self:get_line_height()
       local gaps = is_a and parent.a_gaps or parent.b_gaps
       local folds = is_a and parent.diff_folds_a or parent.diff_folds_b
-      local visual_row = visual_rows_before_line(self, line) + visual_row_offset_for_col(self, line, col)
+      local visual_row = visual_rows_before_line(self, line) + visual_row_offset_for_col(self, line, col, line_end)
       local folded_rows = folded_rows_before_line(self, folds, line)
       local gap_y = gap_rows_before_line(gaps, line) * lh
       y = y + (visual_row - folded_rows) * lh + gap_y + style.padding.y
       if col then
-        return x + self:get_gutter_width() + self:get_col_x_offset(line, col), y
+        return x + self:get_gutter_width() + self:get_col_x_offset(line, col, line_end), y
       else
         return x + self:get_gutter_width(), y
       end
