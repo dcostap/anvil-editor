@@ -435,4 +435,67 @@ function LineWrapping.get_wrapped_line_count(docview, line)
   return math.max(1, next_first - first)
 end
 
+function LineWrapping.is_soft_wrap_row_start(docview, line, col)
+  if not docview.wrapped_settings or not line or not col then return false end
+  local first_idx = docview.wrapped_line_to_idx[line]
+  if not first_idx then return false end
+  local idx, _, _, row_start_col = LineWrapping.get_line_idx_col_count(docview, line, col, false)
+  return idx > first_idx and row_start_col == col
+end
+
+function LineWrapping.collect_soft_wrap_row_start_affinity(docview)
+  local positions = {}
+  if not docview.wrapped_settings then return positions end
+  for _, line1, col1, line2, col2 in docview.doc:get_selections(false) do
+    if line1 == line2 and col1 == col2 and LineWrapping.is_soft_wrap_row_start(docview, line1, col1) then
+      positions[LineWrapping.position_key(line1, col1)] = true
+    end
+  end
+  return positions
+end
+
+function LineWrapping.copy_selection_list(selections)
+  local copy = {}
+  for i = 1, #selections do copy[i] = selections[i] end
+  return copy
+end
+
+function LineWrapping.position_before(line1, col1, line2, col2)
+  return line1 < line2 or (line1 == line2 and col1 < col2)
+end
+
+function LineWrapping.sort_position_pair(line1, col1, line2, col2)
+  if LineWrapping.position_before(line2, col2, line1, col1) then
+    return line2, col2, line1, col1
+  end
+  return line1, col1, line2, col2
+end
+
+function LineWrapping.old_selection_advanced_to(old_selections, line, col)
+  for i = 1, #old_selections, 4 do
+    local line1, col1 = old_selections[i], old_selections[i + 1]
+    local line2, col2 = old_selections[i + 2], old_selections[i + 3]
+    if LineWrapping.position_before(line1, col1, line, col) then
+      return true
+    end
+    local sline1, scol1, sline2, scol2 = LineWrapping.sort_position_pair(line1, col1, line2, col2)
+    if sline2 == line and scol2 == col and LineWrapping.position_before(sline1, scol1, sline2, scol2) then
+      return true
+    end
+  end
+  return false
+end
+
+function LineWrapping.collect_forward_endpoint_affinity(docview, old_selections)
+  local positions = {}
+  if not docview.wrapped_settings then return positions end
+  for _, line1, col1 in docview.doc:get_selections(false) do
+    if LineWrapping.is_soft_wrap_row_start(docview, line1, col1)
+    and LineWrapping.old_selection_advanced_to(old_selections, line1, col1) then
+      positions[LineWrapping.position_key(line1, col1)] = true
+    end
+  end
+  return positions
+end
+
 return LineWrapping

@@ -70,68 +70,10 @@ function Doc:raw_remove(line1, col1, line2, col2, undo_stack, time)
   end
 end
 
-local function is_soft_wrap_row_start(docview, line, col)
-  if not docview.wrapped_settings or not line or not col then return false end
-  local first_idx = docview.wrapped_line_to_idx[line]
-  if not first_idx then return false end
-  local idx, _, _, row_start_col = get_line_idx_col_count(docview, line, col, false)
-  return idx > first_idx and row_start_col == col
-end
+local collect_soft_wrap_row_start_affinity = LineWrapping.collect_soft_wrap_row_start_affinity
+local copy_selection_list = LineWrapping.copy_selection_list
+local collect_forward_endpoint_affinity = LineWrapping.collect_forward_endpoint_affinity
 
-local function collect_soft_wrap_row_start_affinity(docview)
-  local positions = {}
-  if not docview.wrapped_settings then return positions end
-  for _, line1, col1, line2, col2 in docview.doc:get_selections(false) do
-    if line1 == line2 and col1 == col2 and is_soft_wrap_row_start(docview, line1, col1) then
-      positions[position_key(line1, col1)] = true
-    end
-  end
-  return positions
-end
-
-local function copy_selection_list(selections)
-  local copy = {}
-  for i = 1, #selections do copy[i] = selections[i] end
-  return copy
-end
-
-local function position_before(line1, col1, line2, col2)
-  return line1 < line2 or (line1 == line2 and col1 < col2)
-end
-
-local function sort_position_pair(line1, col1, line2, col2)
-  if position_before(line2, col2, line1, col1) then
-    return line2, col2, line1, col1
-  end
-  return line1, col1, line2, col2
-end
-
-local function old_selection_advanced_to(old_selections, line, col)
-  for i = 1, #old_selections, 4 do
-    local line1, col1 = old_selections[i], old_selections[i + 1]
-    local line2, col2 = old_selections[i + 2], old_selections[i + 3]
-    if position_before(line1, col1, line, col) then
-      return true
-    end
-    local sline1, scol1, sline2, scol2 = sort_position_pair(line1, col1, line2, col2)
-    if sline2 == line and scol2 == col and position_before(sline1, scol1, sline2, scol2) then
-      return true
-    end
-  end
-  return false
-end
-
-local function collect_forward_endpoint_affinity(docview, old_selections)
-  local positions = {}
-  if not docview.wrapped_settings then return positions end
-  for _, line1, col1 in docview.doc:get_selections(false) do
-    if is_soft_wrap_row_start(docview, line1, col1)
-    and old_selection_advanced_to(old_selections, line1, col1) then
-      positions[position_key(line1, col1)] = true
-    end
-  end
-  return positions
-end
 
 local old_doc_text_input_by_selection = Doc.text_input_by_selection
 function Doc:text_input_by_selection(...)
