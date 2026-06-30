@@ -228,52 +228,34 @@ local function append_plain_ascii_letter_splits(splits, start_col, byte_len, xof
   return begin_width + (token_end - last_row_start + 1) * cell_width
 end
 
-local function append_plain_ascii_word_splits(splits, text, start_col, byte_len, xoffset, cell_width, width, begin_width, last_space, last_width)
-  local pos = 1
-  local col = start_col
-  while pos <= byte_len do
-    local space = text:find(" ", pos, true)
-    local word_end = space and (space - 1) or byte_len
-    local word_len = word_end - pos + 1
-
-    if word_len > 0 then
-      local word_width = word_len * cell_width
-      if xoffset + word_width > width then
-        if last_space then
-          splits[#splits + 1] = last_space + 1
-          xoffset = append_plain_ascii_letter_splits(splits, col, word_len, begin_width, cell_width, width, begin_width)
-        else
-          xoffset = append_plain_ascii_letter_splits(splits, col, word_len, xoffset, cell_width, width, begin_width)
-        end
-        last_space = nil
-        last_width = nil
-      else
-        xoffset = xoffset + word_width
-      end
-      col = col + word_len
-    end
-
-    if not space then break end
-
-    xoffset = xoffset + cell_width
-    if xoffset > width then
-      if last_space then
-        splits[#splits + 1] = last_space + 1
-        xoffset = cell_width + begin_width + (xoffset - last_width)
-      else
-        splits[#splits + 1] = col
-        xoffset = cell_width + begin_width
-      end
-      last_space = nil
-      last_width = nil
-    else
-      last_space = col
-      last_width = xoffset
-    end
-    col = col + 1
-    pos = space + 1
+local function find_last_space(text, first, last)
+  for i = last, first, -1 do
+    if text:byte(i) == 32 then return i end
   end
-  return xoffset, last_space, last_width
+end
+
+local function append_plain_ascii_word_splits(splits, text, start_col, byte_len, xoffset, cell_width, width, begin_width)
+  local pos = 1
+  while pos <= byte_len do
+    local remaining = byte_len - pos + 1
+    local capacity = math.max(1, math.floor((width - xoffset) / cell_width))
+    if remaining <= capacity then
+      return xoffset + remaining * cell_width, nil, nil
+    else
+      local segment_end = pos + capacity - 1
+      local space = find_last_space(text, pos, segment_end)
+      if space and space >= pos then
+        splits[#splits + 1] = start_col + space
+        pos = space + 1
+        xoffset = begin_width
+      else
+        splits[#splits + 1] = start_col + segment_end
+        pos = segment_end + 1
+        xoffset = begin_width
+      end
+    end
+  end
+  return xoffset, nil, nil
 end
 
 function LineWrapping.get_tokens(doc, line)
@@ -332,9 +314,9 @@ function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode)
         xoffset = append_plain_ascii_letter_splits(splits, i, #text, xoffset, default_ascii_cell_width, width, begin_width)
         i = i + #text
         last_space = nil
-      elseif plain_ascii_default_font then
+      elseif plain_ascii_default_font and idx == math.huge then
         xoffset, last_space, last_width = append_plain_ascii_word_splits(
-          splits, text, i, #text, xoffset, default_ascii_cell_width, width, begin_width, last_space, last_width
+          splits, text, i, #text, xoffset, default_ascii_cell_width, width, begin_width
         )
         i = i + #text
       else
