@@ -533,15 +533,20 @@ function tokenizer.each_token(t, scol)
   local tcount, start, col = #t, 1, nil
   if scol then
     local ccol = 1
+    local found = false
     for i=1, tcount, 2 do
       local text = t[i+1]
       local len = #text
       if scol <= (ccol + len - 1) then
         start = i
         col = scol - ccol + 1
+        found = true
         break
       end
-      ccol = ccol + len + 1
+      ccol = ccol + len
+    end
+    if not found then
+      return function() end, {}, 0
     end
   end
   local state = {t = t, tcount = tcount, col = col}

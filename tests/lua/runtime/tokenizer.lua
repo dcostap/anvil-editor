@@ -319,5 +319,12 @@ test.describe("tokenizer", function()
       { "keyword", "c" },
       { "normal", " def" }
     })
+
+    items = collect_each_token({ "keyword", "abc", "normal", " def" }, 5)
+    test.same(items, {
+      { "normal", "def" }
+    })
+
+    test.same(collect_each_token({ "keyword", "abc", "normal", " def" }, 9), {})
   end)
 end)

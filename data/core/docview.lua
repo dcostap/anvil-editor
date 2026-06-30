@@ -2060,11 +2060,41 @@ function DocView:draw_line_text(line, x, y)
   end
   local _, indent_size = self.doc:get_indent_info()
   local token_loop_start = stats and system.get_time()
+  local line_start_tx = tx
+  local draw_start_col = 1
+  if #self.doc.lines[line] > CACHE_LINE_LEN and self.scroll.x > 0 then
+    local col1 = self:get_visible_cols_range(line, 512)
+    if col1 and col1 > 1 then
+      local visible_left = x + self.scroll.x
+      local target_x = visible_left - default_font:get_width("W") * 64
+      local candidate_tx = x + self:get_col_x_offset(line, col1)
+      if candidate_tx > target_x then
+        local lo, hi = 1, col1 - 1
+        col1 = 1
+        candidate_tx = x
+        while lo <= hi do
+          local mid = math.floor((lo + hi) / 2)
+          local mid_tx = x + self:get_col_x_offset(line, mid)
+          if mid_tx <= target_x then
+            col1 = mid
+            candidate_tx = mid_tx
+            lo = mid + 1
+          else
+            hi = mid - 1
+          end
+        end
+      end
+      if col1 > 1 then
+        draw_start_col = col1
+        tx = candidate_tx
+      end
+    end
+  end
 
   if
     renderer.draw_text_known_bounds
     and core.window
-    and not package.loaded["core.test"]
+    and (not package.loaded["core.test"] or self.__test_force_known_bounds)
     and tokens_count == 2
     and tokens[1] == "normal"
     and not style.syntax_fonts.normal
@@ -2072,9 +2102,12 @@ function DocView:draw_line_text(line, x, y)
   then
     local text = tokens[2]
     if text:sub(-1) == "\n" then text = text:sub(1, -2) end
+    if draw_start_col > 1 then text = text:sub(draw_start_col) end
     if text ~= "" then
       local draw_text_start = stats and system.get_time()
-      local width = cached_fast_ascii_monospace_width(self, line, text, default_font, indent_size)
+      local char_width = default_font:get_width(" ")
+      local tab_width = char_width * indent_size
+      local width = #text * char_width
       local text_has_tabs = false
 
       -- Cull text that extends past the right edge of the view.
@@ -2093,8 +2126,6 @@ function DocView:draw_line_text(line, x, y)
           end
           return self:get_line_height()
         end
-        local char_width = default_font:get_width(" ")
-        local tab_width = char_width * indent_size
         -- Include a small right-edge margin so the renderer can clip the
         -- partially-visible final cell and any normal glyph overhang instead
         -- of leaving a blank strip at the viewport edge.
@@ -2107,12 +2138,13 @@ function DocView:draw_line_text(line, x, y)
         end
         if max_chars < #text then
           text = text:sub(1, max_chars)
-          width = fast_ascii_monospace_width(text, char_width, tab_width, 0)
-          text_has_tabs = text:find("\t", 1, true) ~= nil
         end
       else
         text_has_tabs = text:find("\t", 1, true) ~= nil
       end
+      width = text_has_tabs
+        and fast_ascii_monospace_width(text, char_width, tab_width, tx - line_start_tx)
+        or (#text * char_width)
 
       tx = renderer.draw_text_known_bounds(
         default_font,
@@ -2124,7 +2156,7 @@ function DocView:draw_line_text(line, x, y)
         math.max(1, math.ceil(width)),
         math.max(1, math.ceil(default_font:get_height())),
         normal_color,
-        text_has_tabs and { tab_offset = 0 } or nil
+        text_has_tabs and { tab_offset = tx - line_start_tx } or nil
       )
       if stats then
         stats.tokens = stats.tokens + 1
@@ -2138,7 +2170,7 @@ function DocView:draw_line_text(line, x, y)
     end
   end
 
-  local start_tx = tx
+  local start_tx = line_start_tx
   local pending_font, pending_color, pending_chunks, pending_len, pending_has_tabs
   local max_pending_bytes = 192
   local function flush_pending_text()
@@ -2202,7 +2234,7 @@ function DocView:draw_line_text(line, x, y)
     return nil
   end
   local stop_drawing = false
-  for tidx, type, text in tokenizer.each_token(tokens) do
+  for tidx, type, text in tokenizer.each_token(tokens, draw_start_col > 1 and draw_start_col or nil) do
     if stats then stats.tokens = stats.tokens + 1 end
     local color = syntax[type] or normal_color
     local font = syntax_fonts[type] or default_font

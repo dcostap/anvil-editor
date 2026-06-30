@@ -400,6 +400,85 @@ test.describe("line wrapping visual navigation", function()
     test.ok(max_len <= 512, "expected long unwrapped text to be chunked before renderer draw")
   end)
 
+  test.it("skips far-left chunks of deeply scrolled unwrapped long lines", function(context)
+    local view = open_editor(context, string.rep("f", 8000))
+    view.wrapping_enabled = false
+    view.wrapped_settings = nil
+    view.size.x = view:get_font():get_width("x") * 20
+    view.scroll.x = view:get_font():get_width("x") * 6000
+    view.scroll.to.x = view.scroll.x
+
+    local calls = 0
+    local old_draw_text = renderer.draw_text
+    renderer.draw_text = function(font, text, x)
+      calls = calls + 1
+      return x + font:get_width(text)
+    end
+    local ok, err = pcall(function()
+      view:draw_line_text(1, select(1, view:get_line_screen_position(1)), select(2, view:get_line_screen_position(1)))
+    end)
+    renderer.draw_text = old_draw_text
+
+    if not ok then error(err, 0) end
+    test.ok(calls > 0, "expected deeply scrolled long line to still draw visible text")
+    test.ok(calls < 80, "expected deeply scrolled long line to draw only visible-adjacent chunks")
+  end)
+
+  test.it("does not over-cull deeply scrolled unwrapped tabbed long lines", function(context)
+    local view = open_editor(context, string.rep("\t", 3000))
+    view.wrapping_enabled = false
+    view.wrapped_settings = nil
+    view.size.x = view:get_font():get_width("x") * 20
+    view.scroll.x = view:get_font():get_width("x") * 6000
+    view.scroll.to.x = view.scroll.x
+
+    local calls = 0
+    local old_draw_text = renderer.draw_text
+    renderer.draw_text = function(font, text, x, y, color, opts)
+      calls = calls + 1
+      return x + font:get_width(text, opts)
+    end
+    local ok, err = pcall(function()
+      view:draw_line_text(1, select(1, view:get_line_screen_position(1)), select(2, view:get_line_screen_position(1)))
+    end)
+    renderer.draw_text = old_draw_text
+
+    if not ok then error(err, 0) end
+    test.ok(calls > 0, "expected tabbed long line to still draw visible text")
+    test.ok(calls < 80, "expected tabbed long line to skip far-left chunks")
+  end)
+
+  test.it("left-culls deeply scrolled unwrapped text in the known-bounds path", function(context)
+    local view, doc = open_editor(context, string.rep("a\t", 3000))
+    view.wrapping_enabled = false
+    view.wrapped_settings = nil
+    view.__test_force_known_bounds = true
+    view.size.x = view:get_font():get_width("x") * 20
+    view.scroll.x = view:get_font():get_width("x") * 6000
+    view.scroll.to.x = view.scroll.x
+
+    local calls = 0
+    local drawn_text, drawn_x, drawn_opts
+    local old_draw_text_known_bounds = renderer.draw_text_known_bounds
+    renderer.draw_text_known_bounds = function(_, text, sx, _, _, _, w, _, _, opts)
+      calls = calls + 1
+      drawn_text = text
+      drawn_x = sx
+      drawn_opts = opts
+      return sx + w
+    end
+    local ok, err = pcall(function()
+      view:draw_line_text(1, select(1, view:get_line_screen_position(1)), select(2, view:get_line_screen_position(1)))
+    end)
+    renderer.draw_text_known_bounds = old_draw_text_known_bounds
+
+    if not ok then error(err, 0) end
+    test.equal(calls, 1)
+    test.ok(drawn_text and #drawn_text < #doc.lines[1] / 2, "expected known-bounds path to skip the far-left prefix")
+    test.ok(drawn_x > view.position.x - view:get_font():get_width("W") * 80, "expected known-bounds text to start near the visible area")
+    test.ok(drawn_opts and drawn_opts.tab_offset and drawn_opts.tab_offset > 0, "expected tab offset relative to original line start")
+  end)
+
   test.it("rebuilds wrap cache when wrap settings change without width changes", function(context)
     local view = open_editor(context, "a " .. string.rep("b", 18))
     configure_wrapping_for_test(context, view)
