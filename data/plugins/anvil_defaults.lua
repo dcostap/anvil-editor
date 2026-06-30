@@ -156,7 +156,7 @@ plugin_defaults("linewrapping", {
   guide_color = nil,
   indent = true,
   wrapping_indent = 0,
-  enable_by_default = false,
+  enable_by_default = true,
   require_tokenization = false,
 })
 plugin_defaults("navigation_history", {
