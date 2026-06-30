@@ -195,7 +195,11 @@ save_docview_method("on_mouse_moved")
 function DocView:on_mouse_moved(x, y, ...)
   if M.should_center(self) and type(x) == "number" and type(y) == "number" then
     local in_vertical = y >= self.position.y and y < self.position.y + self.size.y
-    if in_vertical and not self.mouse_selecting and not self:scrollbar_dragging() and not editor_contains_x(self, x) then
+    if in_vertical
+    and not self.mouse_selecting
+    and not self:scrollbar_dragging()
+    and not self:scrollbar_overlaps_point(x, y)
+    and not editor_contains_x(self, x) then
       self.cursor = "arrow"
       self.hovering_gutter = false
       self.v_scrollbar:on_mouse_left()

@@ -19,8 +19,10 @@ local Object = require "core.object"
 ---@field scrollable number Total scrollable size
 
 ---@class core.scrollbar.hovering
----@field track boolean True if mouse is over track
----@field thumb boolean True if mouse is over thumb
+---@field track boolean True if mouse is over the scrollbar hit area
+---@field thumb boolean True if mouse is over the thumb hit area
+---@field visual_track boolean True if mouse is over the rendered track lane
+---@field visual_thumb boolean True if mouse is over the rendered thumb
 
 ---Configuration options for creating a scrollbar.
 ---@class core.scrollbar.options
@@ -77,7 +79,7 @@ function Scrollbar:new(options)
   self.percent = 0
   self.dragging = false
   self.drag_start_offset = 0
-  self.hovering = { track = false, thumb = false }
+  self.hovering = { track = false, thumb = false, visual_track = false, visual_thumb = false }
   self.direction = options.direction or "v"
   self.alignment = options.alignment or "e"
   self.expand_percent = 0
@@ -231,8 +233,9 @@ end
 ---Internal helper - use overlaps() for real coordinates.
 ---@param x number Normalized x coordinate
 ---@param y number Normalized y coordinate
+---@param visual_only boolean? Only consider the rendered scrollbar rect, not the extra hitbox padding
 ---@return "thumb"|"track"|nil part What was hit, or nil if nothing
-function Scrollbar:_overlaps_normal(x, y)
+function Scrollbar:_overlaps_normal(x, y, visual_only)
   local nr = self.normal_rect
   local sz = nr.scrollable
   if sz <= nr.along_size or sz == math.huge then return nil end
@@ -242,7 +245,7 @@ function Scrollbar:_overlaps_normal(x, y)
   -- amount on the leading/left side; using the fully-expanded width here made
   -- the contracted scrollbar claim too much editor space.
   local tx, _, tw = self:_get_track_rect_normal()
-  local leading_pad = style.scrollbar_hitbox_leading_padding
+  local leading_pad = visual_only and 0 or style.scrollbar_hitbox_leading_padding
     or math.floor((style.contracted_scrollbar_margin or 0) * 0.5)
   local sx = tx - leading_pad
   local sw = tw + leading_pad
@@ -250,8 +253,8 @@ function Scrollbar:_overlaps_normal(x, y)
     return nil
   end
 
-  local _, ty, _, th = self:_get_thumb_rect_normal()
-  if y >= ty and y <= ty + th then
+  local thumb_x, ty, thumb_w, th = self:_get_thumb_rect_normal()
+  if y >= ty and y <= ty + th and (not visual_only or (x >= thumb_x and x <= thumb_x + thumb_w)) then
     return "thumb"
   end
   return "track"
@@ -316,11 +319,45 @@ end
 ---@return boolean hovering True if hovering track or thumb
 function Scrollbar:_update_hover_status_normal(x, y)
   local old_thumb, old_track = self.hovering.thumb, self.hovering.track
+  local old_visual_thumb = self.hovering.visual_thumb
+  local old_visual_track = self.hovering.visual_track
   local overlaps = self:_overlaps_normal(x, y)
+  local visual_overlaps = self:_overlaps_normal(x, y, true)
   self.hovering.thumb = overlaps == "thumb"
   self.hovering.track = self.hovering.thumb or overlaps == "track"
-  if old_thumb ~= self.hovering.thumb or old_track ~= self.hovering.track then
+  self.hovering.visual_thumb = visual_overlaps == "thumb"
+  self.hovering.visual_track = self.hovering.visual_thumb or visual_overlaps == "track"
+  if old_thumb ~= self.hovering.thumb
+  or old_track ~= self.hovering.track
+  or old_visual_thumb ~= self.hovering.visual_thumb
+  or old_visual_track ~= self.hovering.visual_track then
     core.redraw = true
+    local tx, ty, tw, th = self:_get_track_rect_normal()
+    local ux, uy, uw, uh = self:_get_thumb_rect_normal()
+    core.log_quiet(
+      "Scrollbar hover changed: dir=%s align=%s forced=%s point=(%.1f,%.1f) hit=%s visual_hit=%s hit_hover=(track=%s thumb=%s) visual_hover=(track=%s thumb=%s) track=(%.1f,%.1f %.1fx%.1f) thumb=(%.1f,%.1f %.1fx%.1f) end_padding=%.1f resize_edge=%.1f",
+      tostring(self.direction),
+      tostring(self.alignment),
+      tostring(self.force_status),
+      x,
+      y,
+      tostring(overlaps),
+      tostring(visual_overlaps),
+      tostring(self.hovering.track),
+      tostring(self.hovering.thumb),
+      tostring(self.hovering.visual_track),
+      tostring(self.hovering.visual_thumb),
+      tx,
+      ty,
+      tw,
+      th,
+      ux,
+      uy,
+      uw,
+      uh,
+      self:get_end_padding(),
+      self:get_native_window_resize_edge_width()
+    )
   end
   return self.hovering.track or self.hovering.thumb
 end
@@ -377,9 +414,27 @@ end
 ---@param dy number Delta y since last move
 ---@return boolean|number? result True if hovering, 0-1 percent if dragging, falsy otherwise
 function Scrollbar:on_mouse_moved(x, y, dx, dy)
-  if not self.dragging and (self:_in_resize_edge_guard(x, y) or self:_in_native_window_resize_edge(x, y)) then
-    if self.hovering.track or self.hovering.thumb then core.redraw = true end
+  local in_resize_guard = self:_in_resize_edge_guard(x, y)
+  local in_native_resize_edge = self:_in_native_window_resize_edge(x, y)
+  if not self.dragging and (in_resize_guard or in_native_resize_edge) then
+    if self.hovering.track or self.hovering.thumb or self.hovering.visual_track or self.hovering.visual_thumb then core.redraw = true end
     self.hovering.track, self.hovering.thumb = false, false
+    self.hovering.visual_track, self.hovering.visual_thumb = false, false
+    core.log_quiet(
+      "Scrollbar hover suppressed by resize edge: dir=%s align=%s point=(%.1f,%.1f) resize_guard=%s native_resize_edge=%s end_padding=%.1f resize_edge=%.1f rect=(%.1f,%.1f %.1fx%.1f)",
+      tostring(self.direction),
+      tostring(self.alignment),
+      x,
+      y,
+      tostring(in_resize_guard),
+      tostring(in_native_resize_edge),
+      self:get_end_padding(),
+      self:get_native_window_resize_edge_width(),
+      self.rect.x,
+      self.rect.y,
+      self.rect.w,
+      self.rect.h
+    )
     return false
   end
   x, y = self:real_to_normal(x, y)
@@ -391,8 +446,22 @@ end
 ---Handle mouse leaving the scrollbar area.
 ---Clears all hover states.
 function Scrollbar:on_mouse_left()
-  if self.hovering.track or self.hovering.thumb then core.redraw = true end
+  local was_hovering = self.hovering.track or self.hovering.thumb or self.hovering.visual_track or self.hovering.visual_thumb
+  if was_hovering then
+    core.redraw = true
+    core.log_quiet(
+      "Scrollbar hover cleared by mouse-left: dir=%s align=%s hit_hover=(track=%s thumb=%s) visual_hover=(track=%s thumb=%s) caller=%s",
+      tostring(self.direction),
+      tostring(self.alignment),
+      tostring(self.hovering.track),
+      tostring(self.hovering.thumb),
+      tostring(self.hovering.visual_track),
+      tostring(self.hovering.visual_thumb),
+      tostring(debug.traceback("", 2):gsub("\n", " | "))
+    )
+  end
   self.hovering.track, self.hovering.thumb = false, false
+  self.hovering.visual_track, self.hovering.visual_thumb = false, false
 end
 
 
@@ -420,11 +489,37 @@ function Scrollbar:set_percent(percent)
 end
 
 
+---Return native window resize border width when this scrollbar reaches the
+---outer right edge.  The OS owns that strip for resize hit-tests, so the
+---visible scrollbar should be inset from it instead of sitting underneath it.
+---@return number border Resize border width in pixels, or 0 when not applicable
+function Scrollbar:get_native_window_resize_edge_width()
+  if self.direction ~= "v" or self.alignment ~= "e" then return 0 end
+  if not core.window or not core.root_panel or not system.get_window_frame_metrics then return 0 end
+  if core.window_mode == "maximized" or core.window_mode == "fullscreen" then return 0 end
+
+  local ok, _, _, resize_border = pcall(system.get_window_frame_metrics, core.window)
+  resize_border = ok and tonumber(resize_border) or 0
+  if resize_border <= 0 then return 0 end
+
+  local root = core.root_panel
+  local root_right = (root.position and root.position.x or 0) + (root.size and root.size.x or 0)
+  if root_right <= 0 then return 0 end
+
+  -- Only inset scrollbars whose owning view reaches the window edge.
+  -- Split/side-panel scrollbars away from the outer edge should stay flush.
+  local scrollbar_right = self.rect.x + self.rect.w
+  if math.abs(scrollbar_right - root_right) > 1 then return 0 end
+
+  return resize_border
+end
+
+
 ---Return visual padding between an end-aligned scrollbar and the owner edge.
 ---@return number padding Padding in pixels
 function Scrollbar:get_end_padding()
   if self.direction == "v" and self.alignment == "e" then
-    return style.scrollbar_end_padding or 0
+    return (style.scrollbar_end_padding or 0) + self:get_native_window_resize_edge_width()
   end
   return 0
 end
@@ -453,24 +548,11 @@ end
 ---@param y number Screen y coordinate
 ---@return boolean in_edge True when point is in the native resize edge
 function Scrollbar:_in_native_window_resize_edge(x, y)
-  if self.direction ~= "v" or self.alignment ~= "e" then return false end
-  if not core.window or not core.root_panel or not system.get_window_frame_metrics then return false end
-  if core.window_mode == "maximized" or core.window_mode == "fullscreen" then return false end
-
-  local ok, _, _, resize_border = pcall(system.get_window_frame_metrics, core.window)
-  resize_border = ok and tonumber(resize_border) or 0
+  local resize_border = self:get_native_window_resize_edge_width()
   if resize_border <= 0 then return false end
 
   local root = core.root_panel
   local root_right = (root.position and root.position.x or 0) + (root.size and root.size.x or 0)
-  if root_right <= 0 then return false end
-
-  -- Only treat it as a window resize edge when the owning view reaches the
-  -- window edge. Split/side-panel scrollbars away from the outer edge should
-  -- still hover normally.
-  local scrollbar_right = self.rect.x + self.rect.w
-  if math.abs(scrollbar_right - root_right) > 1 then return false end
-
   return x >= root_right - resize_border
      and x <= root_right
      and y >= self.rect.y
@@ -537,9 +619,16 @@ end
 ---Draw the scrollbar thumb (draggable indicator).
 ---Highlights when hovered or being dragged.
 function Scrollbar:draw_thumb()
-  local hovering = self.hovering.track or self.hovering.thumb or self.dragging
+  local hovering = self.hovering.visual_track or self.hovering.visual_thumb
+  local alpha = self.dragging and 0.6 or hovering and 0.5 or 0.5
+  local lift = self.dragging and 0.18 or hovering and 0.10 or 0
   local color = { table.unpack(style.scrollbar) }
-  color[4] = (color[4] or 255) * (hovering and 0.65 or 0.45)
+  if lift > 0 then
+    color[1] = common.lerp(color[1], 255, lift)
+    color[2] = common.lerp(color[2], 255, lift)
+    color[3] = common.lerp(color[3], 255, lift)
+  end
+  color[4] = (color[4] or 255) * alpha
   local x, y, w, h = self:get_thumb_rect()
   renderer.draw_rect(x, y, w, h, color)
 end
