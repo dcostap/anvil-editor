@@ -313,14 +313,25 @@ test.describe("smart indentation", function()
     test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
   end)
 
-  test.it("globally indents after open brackets without a language rule", function(context)
+  test.it("globally inserts an unmatched paren block without a language rule", function(context)
     local doc, view = new_editor(context, "plain(", "notes.txt")
     core.set_active_view(view)
     doc:set_selection(1, #"plain(" + 1, 1, #"plain(" + 1)
 
     test.ok(command.perform("doc:newline"))
 
-    test.equal(text(doc), "plain(\n  \n")
+    test.equal(text(doc), "plain(\n  \n)\n")
+    test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
+  end)
+
+  test.it("globally inserts an unmatched bracket block without a language rule", function(context)
+    local doc, view = new_editor(context, "items [", "notes.txt")
+    core.set_active_view(view)
+    doc:set_selection(1, #"items [" + 1, 1, #"items [" + 1)
+
+    test.ok(command.perform("doc:newline"))
+
+    test.equal(text(doc), "items [\n  \n]\n")
     test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
   end)
 

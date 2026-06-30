@@ -450,7 +450,7 @@ local function position_is_inside_range(line, col, line1, col1, line2, col2)
      and (line < line2 or line == line2 and col < col2)
 end
 
-local function opening_brace_is_unmatched(doc, line, col, skip_line1, skip_col1, skip_line2, skip_col2)
+local function opening_delimiter_is_unmatched(doc, line, col, opener, closer, skip_line1, skip_col1, skip_line2, skip_col2)
   local depth = 1
   for l = line, #doc.lines do
     local text = doc.lines[l]
@@ -458,9 +458,9 @@ local function opening_brace_is_unmatched(doc, line, col, skip_line1, skip_col1,
     for i = start_col, #text do
       local ch = text:sub(i, i)
       if not position_is_inside_range(l, i, skip_line1, skip_col1, skip_line2, skip_col2)
-      and (ch == "{" or ch == "}")
+      and (ch == opener or ch == closer)
       and position_is_code(doc, l, i) then
-        if ch == "{" then
+        if ch == opener then
           depth = depth + 1
         else
           depth = depth - 1
@@ -527,8 +527,8 @@ local function smart_newline_edit(doc, line1, col1, line2, col2)
 
   local edit_start = real_col(opener_col + 1, "start")
   local edit_end = real_col(line_end_col(virtual_text), "end")
-  if opener == "{" and opening_brace_is_unmatched(doc, line1, opener_real_col, line1, col1, line2, col2) then
-    local insert_text = "\n" .. inner_indent .. "\n" .. base_indent .. "}"
+  if opening_delimiter_is_unmatched(doc, line1, opener_real_col, opener, closer, line1, col1, line2, col2) then
+    local insert_text = "\n" .. inner_indent .. "\n" .. base_indent .. closer
     return {
       line1 = line1,
       col1 = edit_start,
@@ -536,7 +536,7 @@ local function smart_newline_edit(doc, line1, col1, line2, col2)
       col2 = edit_end,
       text = insert_text,
       caret_offset = #("\n" .. inner_indent),
-      reason = "after-unmatched-brace",
+      reason = "after-unmatched-delimiter",
     }
   end
 
