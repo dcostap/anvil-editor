@@ -216,8 +216,10 @@ function diagnostic_underlines.install()
 
   function DocView:draw_line_body(line, x, y)
     local height = base_draw_line_body(self, line, x, y)
-    local module = DocView.__lsp_diagnostic_underlines_module or diagnostic_underlines
-    module.draw_line(self, line, x, y)
+    if not self.wrapped_settings then
+      local module = DocView.__lsp_diagnostic_underlines_module or diagnostic_underlines
+      module.draw_line(self, line, x, y)
+    end
     return height
   end
 

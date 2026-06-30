@@ -1964,13 +1964,14 @@ function DocView:draw_line_text(line, x, y)
     local default_font = self:get_font()
     local default_font_height = default_font:get_height()
     local default_ascii_cell_width = default_font:get_width(" ")
-    local tx, ty, begin_width = x, y + self:get_line_text_y_offset(), self.wrapped_line_offsets[line]
+    local text_y_offset = self:get_line_text_y_offset()
+    local begin_width = self.wrapped_line_offsets[line]
     local lh = self:get_line_height()
-    local idx, _, count = linewrapping.get_line_idx_col_count(self, line)
-    local visible_idx1 = self.__wrapped_draw_first_idx or idx
-    local visible_idx2 = self.__wrapped_draw_last_idx or (idx + count - 1)
-    local drawn_rows = math.max(0, math.min(idx + count - 1, visible_idx2) - math.max(idx, visible_idx1) + 1)
-    local total_offset = 1
+    local first_idx, _, count = linewrapping.get_line_idx_col_count(self, line)
+    local last_idx = first_idx + count - 1
+    local visible_idx1 = math.max(first_idx, self.__wrapped_draw_first_idx or first_idx)
+    local visible_idx2 = math.min(last_idx, self.__wrapped_draw_last_idx or last_idx)
+    local drawn_rows = math.max(0, visible_idx2 - visible_idx1 + 1)
     local can_use_known_bounds = renderer.draw_text_known_bounds ~= nil
 
     local function draw_segment(font, text, sx, sy, color, uses_default_font)
@@ -1991,27 +1992,47 @@ function DocView:draw_line_text(line, x, y)
       return renderer.draw_text(font, text, sx, sy, color)
     end
 
+    local row_idx = visible_idx1
+    local _, row_start_col = linewrapping.get_idx_line_col(self, row_idx)
+    local row_next_line, row_end_col = linewrapping.get_idx_line_col(self, row_idx + 1)
+    if row_next_line ~= line then row_end_col = #self.doc.lines[line] end
+    local tx = x + (row_start_col ~= 1 and begin_width or 0)
+    local ty = y + text_y_offset + (row_idx - first_idx) * lh
+    local token_start_col = 1
+
+    local function advance_row()
+      row_idx = row_idx + 1
+      if row_idx > visible_idx2 then return false end
+      _, row_start_col = linewrapping.get_idx_line_col(self, row_idx)
+      row_next_line, row_end_col = linewrapping.get_idx_line_col(self, row_idx + 1)
+      if row_next_line ~= line then row_end_col = #self.doc.lines[line] end
+      tx = x + (row_start_col ~= 1 and begin_width or 0)
+      ty = y + text_y_offset + (row_idx - first_idx) * lh
+      return true
+    end
+
     for _, type, text in self.doc.highlighter:each_token(line) do
+      if row_idx > visible_idx2 then break end
+      local token_end_col = token_start_col + #text
       local color = style.syntax[type] or style.syntax["normal"]
       local syntax_font = style.syntax_fonts[type]
       local font = syntax_font or default_font
-      local token_offset = 1
-      while text ~= nil and token_offset <= #text do
-        local next_line, next_line_start_col = linewrapping.get_idx_line_col(self, idx + 1)
-        if next_line ~= line then
-          next_line_start_col = #self.doc.lines[line]
-        end
-        local max_length = next_line_start_col - total_offset
-        local rendered_text = text:sub(token_offset, token_offset + max_length - 1)
-        if idx >= visible_idx1 and idx <= visible_idx2 then
+      while row_idx <= visible_idx2 and token_end_col > row_start_col do
+        if token_start_col >= row_end_col then
+          if not advance_row() then break end
+        else
+          local draw_start_col = math.max(token_start_col, row_start_col)
+          local draw_end_col = math.min(token_end_col, row_end_col)
+          local rendered_text = text:sub(draw_start_col - token_start_col + 1, draw_end_col - token_start_col)
           tx = draw_segment(font, rendered_text, tx, ty, color, syntax_font == nil)
+          if token_end_col >= row_end_col then
+            if not advance_row() then break end
+          else
+            break
+          end
         end
-        total_offset = total_offset + #rendered_text
-        if total_offset ~= next_line_start_col or max_length == 0 then break end
-        token_offset = token_offset + #rendered_text
-        idx = idx + 1
-        tx, ty = x + begin_width, ty + lh
       end
+      token_start_col = token_end_col
     end
     perf_frame_add("linewrapping_draw_line_text_calls", 1)
     perf_frame_add("linewrapping_draw_line_text_rows", drawn_rows)

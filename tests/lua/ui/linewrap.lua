@@ -672,6 +672,8 @@ test.describe("line wrapping visual navigation", function()
     local old_draw_text = renderer.draw_text
     local old_draw_text_known_bounds = renderer.draw_text_known_bounds
     local old_draw_rect = renderer.draw_rect
+    local old_get_idx_line_col = LineWrapping.get_idx_line_col
+    local idx_lookup_calls = 0
     renderer.draw_text = function(font, text, sx, sy)
       calls = calls + 1
       draw_ys[#draw_ys + 1] = sy
@@ -683,6 +685,10 @@ test.describe("line wrapping visual navigation", function()
       return sx + w
     end
     renderer.draw_rect = function() end
+    LineWrapping.get_idx_line_col = function(...)
+      idx_lookup_calls = idx_lookup_calls + 1
+      return old_get_idx_line_col(...)
+    end
 
     local ok, err = pcall(function()
       local height = view:draw_line_body(1, x, y)
@@ -692,10 +698,12 @@ test.describe("line wrapping visual navigation", function()
     renderer.draw_text = old_draw_text
     renderer.draw_text_known_bounds = old_draw_text_known_bounds
     renderer.draw_rect = old_draw_rect
+    LineWrapping.get_idx_line_col = old_get_idx_line_col
     if not ok then error(err, 0) end
 
     test.ok(calls > 0, "expected visible wrapped rows to be submitted to renderer")
     test.ok(calls <= 6, "expected only visible wrapped rows to be submitted to renderer")
+    test.ok(idx_lookup_calls <= 12, "expected wrapped text drawing to avoid scanning all offscreen rows")
     for _, sy in ipairs(draw_ys) do
       local row_y = sy - view:get_line_text_y_offset()
       test.ok(row_y + lh > view.position.y, "expected drawn wrapped row to intersect the visible viewport")
