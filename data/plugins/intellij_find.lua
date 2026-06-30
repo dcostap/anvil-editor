@@ -870,10 +870,10 @@ end
 -- Draw per-view find highlights. These are intentionally keyed by DocView, not
 -- Doc, so the same Doc open in two splits can show independent search state.
 --
--- Other plugins (notably linewrapping) replace DocView draw/update methods
--- after this module is first required from anvil_defaults.  Install these as
--- re-wrappable shims and run the installer again after startup so local find is
--- still outermost and split-local even when later plugins patch DocView.  Each
+-- Some plugins replace DocView draw/update methods after this module is first
+-- required from anvil_defaults.  Install these as re-wrappable shims and run
+-- the installer again after startup so local find is still outermost and
+-- split-local even when later plugins patch DocView.  Each
 -- shim captures its base function in an upvalue; do not read the base through a
 -- mutable DocView field from inside the shim, because later wrappers may have
 -- captured an older shim and would recurse when we re-wrap them.
