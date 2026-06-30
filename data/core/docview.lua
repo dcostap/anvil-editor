@@ -6,6 +6,7 @@ local keymap = require "core.keymap"
 local translate = require "core.doc.translate"
 local tokenizer = require "core.tokenizer"
 local ime = require "core.ime"
+local linewrapping = require "core.linewrapping"
 local View = require "core.view"
 
 local CACHE_LINE_LEN = 500
@@ -48,6 +49,80 @@ local DocView = View:extend()
 function DocView:__tostring() return "DocView" end
 
 DocView.context = "workspace"
+
+function DocView:is_wrapping_enabled()
+  return not not self.wrapping_enabled
+end
+
+function DocView:has_wrapping()
+  return self.wrapped_settings ~= nil
+end
+
+DocView.is_wrapped = DocView.has_wrapping
+
+function DocView:clear_wrap_cache()
+  linewrapping.clear_wrap_cache(self)
+end
+
+function DocView:compute_wrap_width()
+  return linewrapping.compute_wrap_width(self)
+end
+
+function DocView:update_wrap_cache()
+  return linewrapping.update_docview_breaks(self)
+end
+
+function DocView:set_wrapping_enabled(enabled)
+  self.wrapping_enabled = not not enabled
+  if self.wrapping_enabled then
+    if self.size and self.size.x > 0 then self:update_wrap_cache() end
+  else
+    self:clear_wrap_cache()
+  end
+end
+
+function DocView:get_total_visual_lines()
+  return linewrapping.get_total_wrapped_lines(self)
+end
+
+function DocView:get_visual_row(line, col, line_end)
+  return linewrapping.get_line_idx_col_count(self, line, col, line_end)
+end
+
+function DocView:get_visual_row_line_col(idx)
+  return linewrapping.get_idx_line_col(self, idx)
+end
+
+function DocView:get_visual_row_count_for_line(line)
+  return linewrapping.get_wrapped_line_count(self, line)
+end
+
+function DocView:get_visual_row_bounds_for_line(line, row_idx)
+  if not self.wrapped_settings then return 1, #(self.doc.lines[line] or "") + 1 end
+  local first_idx = self.wrapped_line_to_idx[line]
+  if not first_idx then return nil, nil end
+  local idx = first_idx + math.max(0, (row_idx or 1) - 1)
+  local row_line, row_start_col = linewrapping.get_idx_line_col(self, idx)
+  if row_line ~= line then return nil, nil end
+  local next_line, next_col = linewrapping.get_idx_line_col(self, idx + 1)
+  local row_end_col = next_line == line and next_col or (#self.doc.lines[line] + 1)
+  return row_start_col, row_end_col
+end
+
+function DocView:iter_visible_wrap_rows_for_line(line, y)
+  local first_idx = self.wrapped_line_to_idx and self.wrapped_line_to_idx[line]
+  local total = first_idx and linewrapping.get_wrapped_line_count(self, line) or 1
+  local lh = self:get_line_height()
+  local _, content_y1, _, content_y2 = self:get_content_bounds()
+  local first = math.max(1, math.floor((content_y1 - y) / lh) + 1)
+  local last = math.min(total, math.floor((content_y2 - y) / lh) + 1)
+  local row = first - 1
+  return function()
+    row = row + 1
+    if row > last then return nil end
+    return row, y + (row - 1) * lh
+  end
+end
 
 local next_selection_owner_id = 0
 
