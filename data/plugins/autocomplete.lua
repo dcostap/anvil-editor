@@ -109,9 +109,9 @@ config.plugins.autocomplete.config_spec = {
       description = "Maximum length of document symbols to cache and render in autocomplete.",
       path = "max_symbol_length",
       type = "number",
-      default = 256,
-      min = 32,
-      max = 4096
+      default = 40,
+      min = 8,
+      max = 256
     },
     {
       label = "Suggestions Scope",
@@ -233,6 +233,17 @@ local function max_symbol_length()
   return math.max(1, tonumber(config.plugins.autocomplete.max_symbol_length) or 256)
 end
 
+local function suggestion_text(item)
+  if type(item) == "table" then
+    return tostring(item.insert_text or item.label or item.text or "")
+  end
+  return tostring(item or "")
+end
+
+local function suggestion_within_length(item)
+  return #suggestion_text(item) <= max_symbol_length()
+end
+
 local function display_text(text)
   text = tostring(text or "")
   local max_len = max_symbol_length()
@@ -282,7 +293,9 @@ core.add_thread(function()
         items = {}
       }
       for name, type in pairs(doc.syntax.symbols) do
-        symbols.items[name] = type
+        if #tostring(name or "") <= max_symbol_length() then
+          symbols.items[name] = type
+        end
       end
       autocomplete.add(symbols)
       return symbols.items
@@ -476,8 +489,7 @@ local function annotate_matches(items, needle)
 end
 
 local function completion_sort_text(item)
-  if type(item) ~= "table" then return tostring(item or "") end
-  return tostring(item.insert_text or item.label or item.text or ""):gsub("^%s+", "")
+  return suggestion_text(item):gsub("^%s+", "")
 end
 
 local function match_stats(text, needle)
@@ -572,8 +584,10 @@ function update_suggestions()
     for _, v in pairs(autocomplete.map) do
       if common.match_pattern(filename, v.files) then
         for _, item in pairs(v.items) do
-          table.insert(items, item)
-          assigned_sym[item.text] = true
+          if suggestion_within_length(item) then
+            table.insert(items, item)
+            assigned_sym[suggestion_text(item)] = true
+          end
         end
       end
     end
@@ -584,7 +598,9 @@ function update_suggestions()
     for _, v in pairs(autocomplete.map_manually) do
       if common.match_pattern(filename, v.files) then
         for _, item in pairs(v.items) do
-          table.insert(manual_items, item)
+          if suggestion_within_length(item) then
+            table.insert(manual_items, item)
+          end
         end
       end
     end
@@ -592,8 +608,8 @@ function update_suggestions()
   if lsp_available then
     local allow_private = partial:sub(1, 1) == "_"
     for _, item in ipairs(lsp_completion_items or {}) do
-      local label = tostring(item.insert_text or item.label or item.text or ""):gsub("^%s+", "")
-      if allow_private or label:sub(1, 1) ~= "_" then
+      local label = suggestion_text(item):gsub("^%s+", "")
+      if #label <= max_symbol_length() and (allow_private or label:sub(1, 1) ~= "_") then
         table.insert(manual_items, item)
       end
     end
@@ -614,7 +630,7 @@ function update_suggestions()
         if doc.syntax == d.syntax then
           if cache[d] and cache[d].symbols then
             for name in pairs(cache[d].symbols) do
-              if not assigned_sym[name] then
+              if #name <= max_symbol_length() and not assigned_sym[name] then
                 table.insert(items, setmetatable(
                   {text = name, info = "normal"}, mt
                 ))
@@ -627,7 +643,7 @@ function update_suggestions()
 
     if text_symbols then
       for name in pairs(text_symbols) do
-        if not assigned_sym[name] then
+        if #name <= max_symbol_length() and not assigned_sym[name] then
           table.insert(items, setmetatable({text = name, info = "normal"}, mt))
           assigned_sym[name] = true
         end

@@ -1,5 +1,6 @@
 local core = require "core"
 local command = require "core.command"
+local config = require "core.config"
 local test = require "core.test"
 local autocomplete = require "plugins.autocomplete"
 
@@ -47,6 +48,9 @@ end
 test.describe("autocomplete batch behavior", function()
   test.after_each(function(context)
     autocomplete.close()
+    if context.autocomplete_max_symbol_length then
+      config.plugins.autocomplete.max_symbol_length = context.autocomplete_max_symbol_length
+    end
     local root = core.root_panel.root_node
     for _, view in ipairs(context.views or {}) do
       local node = root:get_node_for_view(view)
@@ -82,6 +86,19 @@ test.describe("autocomplete batch behavior", function()
       table.concat(doc.lines) ~= line .. "\n" and not autocomplete.is_open(),
       "typing should modify the document instead of leaving the autocomplete popup open"
     )
+  end)
+
+  test.it("ignores oversized suggestions before matching", function(context)
+    context.autocomplete_max_symbol_length = config.plugins.autocomplete.max_symbol_length
+    config.plugins.autocomplete.max_symbol_length = 40
+    open_editor(context, "aaa")
+    autocomplete.complete({
+      name = "test-autocomplete-long-symbol-filter",
+      files = ".*",
+      items = { [string.rep("a", 41)] = "" },
+    })
+
+    test.ok(not autocomplete.is_open(), "expected oversized suggestion to be ignored")
   end)
 
   test.it("completes matching partials at multiple carets in one document change", function(context)
