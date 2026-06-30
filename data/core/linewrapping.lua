@@ -317,34 +317,35 @@ function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode)
     if idx == 1 or idx == math.huge then
       begin_width = LineWrapping.continuation_indent_width(font, text)
     end
-    local plain_ascii_default_font = font == default_font and not text:find("[\t\128-\255]")
-    local has_space = plain_ascii_default_font and text:find(" ", 1, true) ~= nil
-    perf_ascii = perf_ascii and plain_ascii_default_font
+    local plain_ascii_font = not text:find("[\t\128-\255]")
+    local ascii_cell_width = plain_ascii_font and (font == default_font and default_ascii_cell_width or font:get_width(" ")) or nil
+    local has_space = plain_ascii_font and text:find(" ", 1, true) ~= nil
+    perf_ascii = perf_ascii and plain_ascii_font
     perf_has_space = perf_has_space or has_space
-    local w = plain_ascii_default_font and (#text * default_ascii_cell_width) or font:get_width(text)
+    local w = plain_ascii_font and (#text * ascii_cell_width) or font:get_width(text)
     if xoffset + w > width then
-      if plain_ascii_default_font and mode ~= "word" then
-        note_branch("plain-ascii-letter")
-        xoffset = append_plain_ascii_letter_splits(splits, i, #text, xoffset, default_ascii_cell_width, width, begin_width)
+      if plain_ascii_font and mode ~= "word" then
+        note_branch(font == default_font and "plain-ascii-letter" or "plain-ascii-syntax-letter")
+        xoffset = append_plain_ascii_letter_splits(splits, i, #text, xoffset, ascii_cell_width, width, begin_width)
         i = i + #text
         last_space = nil
-      elseif plain_ascii_default_font and idx == math.huge then
+      elseif plain_ascii_font and idx == math.huge then
         if has_space then
-          note_branch("plain-ascii-word-row")
+          note_branch(font == default_font and "plain-ascii-word-row" or "plain-ascii-syntax-word-row")
           xoffset, last_space, last_width = append_plain_ascii_word_splits(
-            splits, text, i, #text, xoffset, default_ascii_cell_width, width, begin_width
+            splits, text, i, #text, xoffset, ascii_cell_width, width, begin_width
           )
         else
-          note_branch("plain-ascii-word-longword-letter")
-          xoffset = append_plain_ascii_letter_splits(splits, i, #text, xoffset, default_ascii_cell_width, width, begin_width)
+          note_branch(font == default_font and "plain-ascii-word-longword-letter" or "plain-ascii-syntax-word-longword-letter")
+          xoffset = append_plain_ascii_letter_splits(splits, i, #text, xoffset, ascii_cell_width, width, begin_width)
           last_space = nil
           last_width = nil
         end
         i = i + #text
       else
-        note_branch(plain_ascii_default_font and "plain-ascii-word-tokenized" or "slow-utf8-or-syntax")
+        note_branch(plain_ascii_font and "plain-ascii-word-tokenized" or "slow-utf8-or-tabs")
         for char in common.utf8_chars(text) do
-          w = plain_ascii_default_font and default_ascii_cell_width or font:get_width(char)
+          w = plain_ascii_font and ascii_cell_width or font:get_width(char)
           xoffset = xoffset + w
           if xoffset > width then
             if mode == "word" and last_space then
@@ -363,7 +364,7 @@ function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode)
         end
       end
     else
-      note_branch(plain_ascii_default_font and "fits-plain-ascii" or "fits-non-ascii-or-syntax")
+      note_branch(plain_ascii_font and (font == default_font and "fits-plain-ascii" or "fits-plain-ascii-syntax") or "fits-non-ascii-or-tabs")
       xoffset = xoffset + w
       i = i + #text
     end
