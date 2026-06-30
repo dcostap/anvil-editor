@@ -391,6 +391,9 @@ function LineWrapping.update_breaks(docview, old_line1, old_line2, net_lines)
   end
   local line = old_line1
   offset = (old_idx1 - 1) * 2 + 1
+  -- Every logical line contributes an initial visual-row entry at column 1.
+  -- Use that invariant to rebuild the logical-line -> first visual-row map
+  -- after the flat wrapped_lines array has been spliced.
   while offset < #docview.wrapped_lines do
     if docview.wrapped_lines[offset + 1] == 1 then
       docview.wrapped_line_to_idx[line] = ((offset - 1) / 2) + 1
@@ -494,6 +497,23 @@ function LineWrapping.has_wrapped_line_end_affinity(docview, line, col)
     return false
   end
   return state.positions[LineWrapping.position_key(line, col)] == true
+end
+
+function LineWrapping.apply_resolved_line_end_affinity(docview)
+  if not (docview and docview.wrapped_settings) then return end
+  local resolved = docview.wrapped_last_resolved_line_end
+  docview.wrapped_last_resolved_line_end = nil
+  if not resolved then
+    LineWrapping.clear_wrapped_line_end_affinity(docview)
+    return
+  end
+  local positions = {}
+  for _, line1, col1 in docview.doc:get_selections(false) do
+    if line1 == resolved[1] and col1 == resolved[2] then
+      positions[LineWrapping.position_key(line1, col1)] = true
+    end
+  end
+  LineWrapping.set_wrapped_line_end_affinity(docview, positions)
 end
 
 function LineWrapping.get_idx_visual_end_col(docview, idx, line)

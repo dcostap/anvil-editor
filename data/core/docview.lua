@@ -162,19 +162,7 @@ local function with_wrapped_caret_affinity(docview, fn, ...)
 end
 
 local function apply_resolved_line_end_affinity(docview)
-  local resolved = docview.wrapped_last_resolved_line_end
-  docview.wrapped_last_resolved_line_end = nil
-  if not resolved or not docview.wrapped_settings then
-    linewrapping.clear_wrapped_line_end_affinity(docview)
-    return
-  end
-  local positions = {}
-  for _, line1, col1 in docview.doc:get_selections(false) do
-    if line1 == resolved[1] and col1 == resolved[2] then
-      positions[linewrapping.position_key(line1, col1)] = true
-    end
-  end
-  linewrapping.set_wrapped_line_end_affinity(docview, positions)
+  linewrapping.apply_resolved_line_end_affinity(docview)
 end
 
 local function draw_wrapped_search_match_segment(view, x1, y, x2, h, primary, outline)
@@ -722,16 +710,20 @@ end
 ---Shows "Unsaved Changes" dialog if this is the last view of a dirty document.
 ---@param do_close function Callback to execute when close is confirmed
 function DocView:try_close(do_close)
+  local function unregister_and_close()
+    linewrapping.unregister_docview(self)
+    do_close()
+  end
   if self.doc:is_dirty()
   and #core.get_views_referencing_doc(self.doc) == 1 then
     core.global_prompt_bar:enter("Unsaved Changes; Confirm Close", {
       submit = function(_, item)
         if item.text:match("^[cC]") then
-          do_close()
+          unregister_and_close()
         elseif item.text:match("^[sS]") then
           local ok, err = pcall(self.doc.save, self.doc)
           if ok then
-            do_close()
+            unregister_and_close()
           elseif not tostring(err):find("file changed on disk", 1, true) then
             core.error("Couldn't save file \"%s\": %s", self.doc.filename, err)
           end
@@ -745,7 +737,7 @@ function DocView:try_close(do_close)
       end
     })
   else
-    do_close()
+    unregister_and_close()
   end
 end
 
@@ -2799,7 +2791,7 @@ function DocView:draw_wrapped()
 
   local lh = self:get_line_height()
   local _, y1, _, y2 = self:get_content_bounds()
-  local total = #self.wrapped_lines / 2
+  local total = linewrapping.get_total_wrapped_lines(self)
   local minidx = math.max(1, math.floor((y1 - style.padding.y) / lh) + 1)
   local maxidx = math.min(total, math.floor((y2 - style.padding.y) / lh) + 1)
   if maxidx < minidx then

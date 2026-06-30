@@ -458,6 +458,19 @@ test.describe("line wrapping visual navigation", function()
     test.same({ doc.selections[1], doc.selections[2], doc.selections[5], doc.selections[6] }, { 1, 1, 1, 9 })
   end)
 
+  test.it("toggle follows requested wrapping state even when no wrap cache exists", function(context)
+    local view = open_editor(context, string.rep("x", 40))
+    local old_override = config.plugins.linewrapping.width_override
+    config.plugins.linewrapping.width_override = math.huge
+    view:set_wrapping_enabled(true)
+    test.equal(view.wrapping_enabled, true)
+    test.equal(view.wrapped_settings, nil)
+
+    command.perform("line-wrapping:toggle")
+    test.equal(view.wrapping_enabled, false)
+    config.plugins.linewrapping.width_override = old_override
+  end)
+
   test.it("keeps wrapped cache current through undo and redo", function(context)
     local view, doc = open_editor(context, string.rep("x", 40))
     configure_wrapping_for_test(context, view)
@@ -817,6 +830,47 @@ test.describe("line wrapping diff hunk gutter line numbers", function()
     test.ok(line1_height > lh, "expected the first real line to wrap onto fake visual rows")
     test.equal(hunk_gap_height, lh)
     test.equal(line2_y, line1_y + line1_height + hunk_gap_height)
+  end)
+
+  test.it("draws diff backgrounds on wrapped continuation rows", function(context)
+    local long = string.rep("x", 40)
+    local changed = string.rep("y", 40)
+    local view = track(context, "diffviews", diffview.string_to_string(
+      long,
+      changed,
+      "left",
+      "right",
+      true
+    ))
+
+    wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
+
+    local left = view.doc_view_a
+    left.position.x, left.position.y = 0, 0
+    left.size.x, left.size.y = 320, 240
+    left.scroll.x, left.scroll.to.x = 0, 0
+    left.scroll.y, left.scroll.to.y = 0, 0
+    configure_wrapping_for_test(context, left)
+
+    local _, y = left:get_line_screen_position(1)
+    local count = 0
+    local old_draw_rect = renderer.draw_rect
+    local old_draw_text = renderer.draw_text
+    local old_draw_text_known_bounds = renderer.draw_text_known_bounds
+    renderer.draw_rect = function(_, _, _, _, color)
+      if color == style.diff_delete_background then count = count + 1 end
+    end
+    renderer.draw_text = function(font, text, sx) return sx + font:get_width(text) end
+    renderer.draw_text_known_bounds = function(_, _, sx, _, _, _, w) return sx + w end
+    local ok, err = pcall(function()
+      left:draw_line_text(1, select(1, left:get_line_screen_position(1)), y)
+    end)
+    renderer.draw_rect = old_draw_rect
+    renderer.draw_text = old_draw_text
+    renderer.draw_text_known_bounds = old_draw_text_known_bounds
+    if not ok then error(err, 0) end
+
+    test.ok(count > 1, "expected wrapped diff background on continuation rows")
   end)
 
   test.it("uses wrapped line-end affinity for DiffView caret screen rows", function(context)

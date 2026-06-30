@@ -993,7 +993,7 @@ local function line_range_y(doc_view, folds, start_line, end_line)
 end
 
 local function draw_line_text_override(parent, self, line, x, y, changes)
-  y = y + self:get_line_text_y_offset()
+  local text_y = y + self:get_line_text_y_offset()
   local h = self:get_line_height()
   local change = changes[line]
   if change and change.tag ~= "equal" then
@@ -1011,35 +1011,67 @@ local function draw_line_text_override(parent, self, line, x, y, changes)
       delete_inline = style.diff_delete
       insert_inline = style.diff_insert
     end
+
+    local first_idx, last_idx, logical_first_idx
+    if self.wrapped_settings and self.wrapped_line_to_idx then
+      logical_first_idx = self.wrapped_line_to_idx[line]
+      if logical_first_idx then
+        local total = self:get_total_visual_lines()
+        local logical_last_idx = (self.wrapped_line_to_idx[line + 1] or (total + 1)) - 1
+        first_idx = math.max(logical_first_idx, self.__wrapped_draw_first_idx or logical_first_idx)
+        last_idx = math.min(logical_last_idx, self.__wrapped_draw_last_idx or logical_last_idx)
+      end
+    end
+
+    local function draw_row_background(color)
+      if first_idx and last_idx then
+        for idx = first_idx, last_idx do
+          renderer.draw_rect(self.position.x, text_y + (idx - logical_first_idx) * h, self.size.x, h, color)
+        end
+      else
+        renderer.draw_rect(self.position.x, text_y, self.size.x, h, color)
+      end
+    end
+
+    local function draw_inline_segment(col1, col2, color, text)
+      if first_idx and last_idx then
+        for idx = first_idx, last_idx do
+          local row_start, row_end = self:get_visual_row_bounds_for_line(line, idx - logical_first_idx + 1)
+          if row_start and row_end and col2 > row_start and col1 < row_end then
+            local seg_col1 = math.max(col1, row_start)
+            local seg_col2 = math.min(col2, row_end)
+            local tx1 = self:get_col_x_offset(line, seg_col1, false)
+            local tx2 = self:get_col_x_offset(line, seg_col2, seg_col2 == row_end)
+            if tx2 > tx1 then
+              renderer.draw_rect(x + tx1, text_y + (idx - logical_first_idx) * h, tx2 - tx1, h, color)
+            end
+          end
+        end
+      else
+        local tx = self:get_col_x_offset(line, col1)
+        local w = self:get_font():get_width(text or self.doc.lines[line]:sub(col1, math.max(col1, col2 - 1)))
+        renderer.draw_rect(x + tx, text_y, w, h, color)
+      end
+    end
+
     if change.tag == "delete" then
-      renderer.draw_rect(
-        self.position.x, y, self.size.x, h, delete_bg
-      )
+      draw_row_background(delete_bg)
     elseif change.tag == "insert" then
-      renderer.draw_rect(
-        self.position.x, y, self.size.x, h, insert_bg
-      )
+      draw_row_background(insert_bg)
     else
       if change.changes then
-        if changes == parent.a_changes then
-          renderer.draw_rect(self.position.x, y, self.size.x, h, delete_bg)
-        else
-          renderer.draw_rect(self.position.x, y, self.size.x, h, insert_bg)
-        end
+        draw_row_background(changes == parent.a_changes and delete_bg or insert_bg)
         ---@type diff.changes[]
         local mods = change.changes
-        local text = ""
         local deletes = 0
         for i, edit in ipairs(mods) do
           if edit.tag == "insert" then
-            text = text .. edit.val
-            local tx = self:get_col_x_offset(line, i - deletes)
-            local w = self:get_font():get_width(edit.val);
-            renderer.draw_rect(
-              x + tx, y, w, h,
-              changes == parent.a_changes
-                and delete_inline
-                or insert_inline
+            local col1 = i - deletes
+            draw_inline_segment(
+              col1,
+              col1 + #edit.val,
+              changes == parent.a_changes and delete_inline or insert_inline,
+              edit.val
             )
           elseif edit.tag == "delete" then
             deletes = deletes + 1
@@ -1091,7 +1123,7 @@ function DiffView:patch_views()
           core.pop_clip_rect()
         end)
       end
-      if has_changes and config.plugins.diffview.plain_text then
+      if has_changes and config.plugins.diffview.plain_text and not self.wrapped_settings then
         renderer.draw_text(
           self:get_font(),
           self.doc.lines[line],

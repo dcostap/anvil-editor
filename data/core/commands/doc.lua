@@ -234,20 +234,7 @@ local function split_cursor(dv, direction)
 end
 
 local function apply_resolved_wrap_affinity(dv)
-  if not (dv and dv.wrapped_settings) then return end
-  local resolved = dv.wrapped_last_resolved_line_end
-  dv.wrapped_last_resolved_line_end = nil
-  if not resolved then
-    linewrapping.clear_wrapped_line_end_affinity(dv)
-    return
-  end
-  local positions = {}
-  for _, line1, col1 in dv.doc:get_selections(false) do
-    if line1 == resolved[1] and col1 == resolved[2] then
-      positions[linewrapping.position_key(line1, col1)] = true
-    end
-  end
-  linewrapping.set_wrapped_line_end_affinity(dv, positions)
+  linewrapping.apply_resolved_line_end_affinity(dv)
 end
 
 local function set_cursor(dv, x, y, snap_type)
@@ -2003,7 +1990,7 @@ command.add(nil, {
   ["line-wrapping:toggle"] = function()
     local view = core.active_view
     if view and view.doc and view.extends and view:extends(DocView) then
-      view:set_wrapping_enabled(not view.wrapped_settings)
+      view:set_wrapping_enabled(not view:is_wrapping_enabled())
     end
   end
 })
