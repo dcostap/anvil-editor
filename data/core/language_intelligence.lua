@@ -257,6 +257,14 @@ function intelligence.diagnostics(doc, opts)
   return first_value("diagnostics", {}, doc, opts)
 end
 
+function intelligence.indent_for_line(doc, line, context, opts)
+  return first_value("indent_for_line", nil, doc, line, context or {}, opts)
+end
+
+function intelligence.newline_continuation(doc, line, context, opts)
+  return first_value("newline_continuation", nil, doc, line, context or {}, opts)
+end
+
 function intelligence.goto_local_definition(doc)
   return first_bool("goto_local_definition", doc)
 end

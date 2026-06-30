@@ -46,15 +46,39 @@ end
 ---line where the caret is currently positioned.
 ---@param doc core.doc
 function trimwhitespace.trim(doc)
-  local cline, ccol = doc:get_selection()
+  local protected_cols_by_line = {}
+  local function protect_endpoint(line, col)
+    protected_cols_by_line[line] = math.max(protected_cols_by_line[line] or 0, col)
+  end
+  local function protect_selections(selections)
+    for i = 1, #(selections or {}), 4 do
+      local line1, col1, line2, col2 = selections[i], selections[i + 1], selections[i + 2], selections[i + 3]
+      if line1 and col1 then protect_endpoint(line1, col1) end
+      if line2 and col2 then protect_endpoint(line2, col2) end
+    end
+  end
+
+  protect_selections(doc.selections)
+
+  local ok, DocView = pcall(require, "core.docview")
+  local views = ok and DocView.registry and DocView.registry[doc]
+  if views then
+    for view in pairs(views) do
+      if view.doc == doc and view.selection_state then
+        protect_selections(view.selection_state.selections)
+      end
+    end
+  end
+
   local edits = {}
   for i = 1, #doc.lines do
     local old_text = doc:get_text(i, 1, i, math.huge)
     local new_text = old_text:gsub("%s*$", "")
 
-    -- don't remove whitespace which would cause the caret to reposition
-    if cline == i and ccol > #new_text then
-      new_text = old_text:sub(1, ccol - 1)
+    -- don't remove whitespace which would cause any caret/selection endpoint to reposition
+    local protected_col = protected_cols_by_line[i]
+    if protected_col and protected_col > #new_text then
+      new_text = old_text:sub(1, protected_col - 1)
     end
 
     if old_text ~= new_text then
@@ -68,6 +92,9 @@ function trimwhitespace.trim(doc)
     end
   end
   if #edits > 0 then
+    local snapshots = ok and DocView.snapshot_registered_selection_states
+      and DocView.snapshot_registered_selection_states(doc)
+      or nil
     local selections = {}
     for i = 1, #(doc.selections or {}) do selections[i] = doc.selections[i] end
     doc:apply_edits(edits, {
@@ -76,6 +103,9 @@ function trimwhitespace.trim(doc)
       last_selection = doc.last_selection,
       merge_cursors = false,
     })
+    if snapshots and DocView.restore_registered_selection_states then
+      DocView.restore_registered_selection_states(doc, snapshots)
+    end
   end
 end
 

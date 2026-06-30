@@ -4,6 +4,7 @@ local common = require "core.common"
 local config = require "core.config"
 local keymap = require "core.keymap"
 local linewrapping = require "core.linewrapping"
+local intelligence = require "core.language_intelligence"
 local encodings = require "core.doc.encodings"
 local translate = require "core.doc.translate"
 local style = require "core.style"
@@ -369,6 +370,42 @@ local function one_indent_string(doc)
   return text
 end
 
+local function syntax_newline_continuation(doc, line, col, line_text)
+  local continuation = intelligence.newline_continuation(doc, line + 1, {
+    event = "newline",
+    line = line,
+    col = col,
+    previous_line_text = line_text,
+    before_text = tostring(line_text or ""):sub(1, col - 1),
+  })
+  return type(continuation) == "string" and continuation or nil
+end
+
+local function syntax_newline_indent(doc, line, col, base_indent, full_indent, line_text)
+  local indent = intelligence.indent_for_line(doc, line + 1, {
+    event = "newline",
+    line = line,
+    col = col,
+    base_indent = base_indent,
+    full_indent = full_indent,
+    previous_line_text = line_text,
+    before_text = tostring(line_text or ""):sub(1, col - 1),
+  })
+  if type(indent) == "string" then return indent end
+  return base_indent
+end
+
+local function syntax_line_indent(doc, line, col, line_text)
+  local indent = intelligence.indent_for_line(doc, line, {
+    event = "line",
+    line = line,
+    col = col,
+    current_line_text = line_text,
+    previous_line_text = line > 1 and doc.lines[line - 1] or "",
+  })
+  return type(indent) == "string" and indent or nil
+end
+
 local function line_end_col(text)
   local nl = tostring(text or ""):find("\n", 1, true)
   return nl or (#tostring(text or "") + 1)
@@ -515,6 +552,72 @@ local function smart_newline_edit(doc, line1, col1, line2, col2)
   }
 end
 
+local function leading_whitespace(text)
+  return tostring(text or ""):match("^[\t ]*") or ""
+end
+
+local function common_leading_indent(lines)
+  local common_indent
+  for _, line in ipairs(lines) do
+    if line:find("%S") then
+      local indent = leading_whitespace(line)
+      if not common_indent then
+        common_indent = indent
+      else
+        local n = math.min(#common_indent, #indent)
+        local i = 1
+        while i <= n and common_indent:sub(i, i) == indent:sub(i, i) do i = i + 1 end
+        common_indent = common_indent:sub(1, i - 1)
+      end
+    end
+  end
+  return common_indent or ""
+end
+
+local function remove_indent_prefix(line, indent)
+  if indent ~= "" and line:sub(1, #indent) == indent then
+    return line:sub(#indent + 1)
+  end
+  return line
+end
+
+local function smart_paste_text(doc, line, col, text)
+  text = tostring(text or "")
+  if not text:find("\n", 1, true) then return text end
+  local line_text = doc.lines[line] or ""
+  local before = line_text:sub(1, col - 1)
+  local target_indent = before:match("^[\t ]*$") and before or leading_whitespace(line_text)
+  if target_indent == "" then return text end
+
+  local parts = {}
+  local start = 1
+  while true do
+    local nl = text:find("\n", start, true)
+    if not nl then
+      parts[#parts + 1] = text:sub(start)
+      break
+    end
+    parts[#parts + 1] = text:sub(start, nl - 1)
+    start = nl + 1
+  end
+  local common_indent = common_leading_indent(parts)
+  if common_indent == "" and parts[1] and parts[1]:find("%S") then
+    common_indent = leading_whitespace(parts[1])
+  end
+
+  for i, part in ipairs(parts) do
+    local stripped = remove_indent_prefix(part, common_indent)
+    if i == 1 then
+      parts[i] = stripped
+    elseif stripped == "" then
+      parts[i] = ""
+    else
+      parts[i] = target_indent .. stripped
+    end
+  end
+  return table.concat(parts, "\n")
+end
+
 local function paste_all_normal_clipboards(doc)
   local payloads = {}
   for cb_idx in ipairs(core.cursor_clipboard_whole_line) do
@@ -587,6 +690,90 @@ local function paste_matching_whole_lines(doc, text_by_idx)
   return paste_whole_lines_by_selection(doc, function(idx) return text_by_idx[idx] end)
 end
 
+local function previous_indent_stop_start_col(doc, line, col, indent_size)
+  if col <= 1 then return nil end
+  indent_size = math.max(1, tonumber(indent_size) or 1)
+  local text = doc.lines[line] or ""
+  local leading = text:match("^[\t ]*") or ""
+  if col > #leading + 1 then return nil end
+
+  local visual_col = 0
+  for i = 1, col - 1 do
+    local ch = text:sub(i, i)
+    if ch == "\t" then
+      visual_col = visual_col + (indent_size - (visual_col % indent_size))
+    elseif ch == " " then
+      visual_col = visual_col + 1
+    else
+      return nil
+    end
+  end
+  if visual_col <= 0 then return nil end
+
+  local target_col = math.floor((visual_col - 1) / indent_size) * indent_size
+  local scan_col = 0
+  for i = 1, col - 1 do
+    local ch = text:sub(i, i)
+    if ch == "\t" then
+      scan_col = scan_col + (indent_size - (scan_col % indent_size))
+    else
+      scan_col = scan_col + 1
+    end
+    if scan_col > target_col then return i end
+  end
+end
+
+local function coalesce_overlapping_same_line_removes(edits)
+  local sorted = { table.unpack(edits) }
+  table.sort(sorted, function(a, b)
+    if a.line1 ~= b.line1 then return a.line1 < b.line1 end
+    if a.col1 ~= b.col1 then return a.col1 < b.col1 end
+    if a.line2 ~= b.line2 then return a.line2 < b.line2 end
+    return a.col2 < b.col2
+  end)
+
+  local result = {}
+  for _, edit in ipairs(sorted) do
+    local last = result[#result]
+    if last
+    and edit.text == ""
+    and last.text == ""
+    and edit.line1 == edit.line2
+    and last.line1 == last.line2
+    and edit.line1 == last.line1
+    and edit.col1 <= last.col2 then
+      last.col2 = math.max(last.col2, edit.col2)
+    else
+      result[#result + 1] = {
+        line1 = edit.line1,
+        col1 = edit.col1,
+        line2 = edit.line2,
+        col2 = edit.col2,
+        text = edit.text,
+        idx = edit.idx,
+      }
+    end
+  end
+  return result
+end
+
+local function coalesce_duplicate_replacements(edits)
+  local seen = {}
+  local result = {}
+  local original_to_coalesced = {}
+  for _, edit in ipairs(edits) do
+    local key = table.concat({ edit.line1, edit.col1, edit.line2, edit.col2, edit.text }, "\0")
+    local coalesced_idx = seen[key]
+    if not coalesced_idx then
+      result[#result + 1] = edit
+      coalesced_idx = #result
+      seen[key] = coalesced_idx
+    end
+    original_to_coalesced[edit.idx] = coalesced_idx
+  end
+  return result, original_to_coalesced
+end
+
 local commands = {
   ["doc:select-none"] = function(dv)
     local l1, c1 = dv.doc:get_selection_idx(dv.doc.last_selection)
@@ -623,7 +810,9 @@ local commands = {
       core.cursor_clipboard = {}
       core.cursor_clipboard_whole_line = {}
       local text = clipboard:gsub("\r", "")
-      dv.doc:text_input_by_selection(function() return text end, nil, { type = "insert" })
+      dv.doc:text_input_by_selection(function(_, line1, col1)
+        return smart_paste_text(dv.doc, line1, col1, text)
+      end, nil, { type = "insert" })
       return
     end
     -- Use internal clipboard(s)
@@ -641,11 +830,9 @@ local commands = {
       if only_whole_lines then
         paste_matching_whole_lines(dv.doc, core.cursor_clipboard)
       else
-        local text_by_idx = {}
-        for idx in dv.doc:get_selections() do
-          text_by_idx[idx] = tostring(core.cursor_clipboard[idx] or ""):gsub("\r", "")
-        end
-        dv.doc:text_input_by_selection(text_by_idx, nil, { type = "insert" })
+        dv.doc:text_input_by_selection(function(idx, line1, col1)
+          return smart_paste_text(dv.doc, line1, col1, tostring(core.cursor_clipboard[idx] or ""):gsub("\r", ""))
+        end, nil, { type = "insert" })
       end
     else
       -- Paste every clipboard and add a selection at the end of each one
@@ -663,94 +850,160 @@ local commands = {
       -- Workaround to avoid that a middle mouse drag starts selecting
       dv.mouse_selecting = nil
     end
-    dv.doc:text_input(system.get_primary_selection() or "")
+    local text = tostring(system.get_primary_selection() or ""):gsub("\r", "")
+    dv.doc:text_input_by_selection(function(_, line1, col1)
+      return smart_paste_text(dv.doc, line1, col1, text)
+    end, nil, { type = "insert" })
   end,
 
   ["doc:newline"] = function(dv)
     local text_by_idx = {}
-    local normal_text_by_idx = {}
     local edits = {}
+    local normal_edits = {}
+    local original_normal_text_by_idx = {}
     local final_by_idx = {}
-    local fallback = false
+    local normal_final_by_idx = {}
+    local projected_selections = {}
+    local original_to_projected = {}
+    local whitespace_line_owner = {}
+    local has_whitespace_cleanup = false
     local has_smart_newline = false
+
+    local function project_selection(idx, line1, col1, line2, col2)
+      local projected_idx = #projected_selections / 4 + 1
+      projected_selections[#projected_selections + 1] = line1
+      projected_selections[#projected_selections + 1] = col1
+      projected_selections[#projected_selections + 1] = line2
+      projected_selections[#projected_selections + 1] = col2
+      original_to_projected[idx] = projected_idx
+      return projected_idx
+    end
+
+    local function projected_last_selection()
+      local last = dv.doc.last_selection or 1
+      return original_to_projected[last] or 1
+    end
+
+    local function projected_selections_after(normalized, finals)
+      local projection = {
+        lines = dv.doc.lines,
+        selections = projected_selections,
+        last_selection = projected_last_selection(),
+      }
+      return Doc.selections_after_edits(projection, normalized, finals, projection.last_selection, { normalized = true })
+    end
+
+    local selection_items = {}
     for idx, line1, col1, line2, col2 in dv.doc:get_selections(true, true) do
+      selection_items[#selection_items + 1] = {
+        idx = idx,
+        line1 = line1,
+        col1 = col1,
+        line2 = line2,
+        col2 = col2,
+      }
+    end
+    table.sort(selection_items, function(a, b) return a.idx < b.idx end)
+
+    for _, item in ipairs(selection_items) do
+      local idx, line1, col1, line2, col2 = item.idx, item.line1, item.col1, item.line2, item.col2
       local line = line1
       local col = col1
-      local indent = dv.doc.lines[line]:match("^[\t ]*")
+      local line_text = dv.doc.lines[line] or ""
+      local indent = line_text:match("^[\t ]*") or ""
+      local full_indent = indent
       if col <= #indent then
         indent = indent:sub(#indent + 2 - col)
       end
-      -- Remove current line if it contains only whitespace
-      if not config.keep_newline_whitespace and dv.doc.lines[line]:match("^%s+$") then
-        fallback = true
-        break
-      end
 
-      normal_text_by_idx[idx] = "\n" .. indent
-      local smart_edit = smart_newline_edit(dv.doc, line1, col1, line2, col2)
-      local text
-      if smart_edit then
-        has_smart_newline = true
-        text = smart_edit.text
-        final_by_idx[idx] = smart_edit.caret_offset
-        core.log_quiet("Smart newline %s in %s at %d:%d", smart_edit.reason, dv.doc:get_name(), line1, col1)
-        edits[#edits + 1] = {
-          line1 = smart_edit.line1,
-          col1 = smart_edit.col1,
-          line2 = smart_edit.line2,
-          col2 = smart_edit.col2,
-          text = text,
-          idx = idx,
-        }
+      local whitespace_only_line = line1 == line2
+        and col1 == col2
+        and not config.keep_newline_whitespace
+        and #full_indent > 0
+        and line_text:match("^[\t ]*\n?$")
+
+      original_normal_text_by_idx[idx] = "\n" .. indent
+
+      if whitespace_only_line and whitespace_line_owner[line] then
+        original_to_projected[idx] = whitespace_line_owner[line]
+        core.log_quiet("Newline coalesced duplicate whitespace-only caret in %s at line %d", dv.doc:get_name(), line)
       else
-        text = "\n" .. indent
-        final_by_idx[idx] = "end"
-        edits[#edits + 1] = {
-          line1 = line1,
-          col1 = col1,
-          line2 = line2,
-          col2 = col2,
-          text = text,
-          idx = idx,
-        }
+        local projected_idx = project_selection(idx, line1, col1, line2, col2)
+        local insert_indent = indent
+        if not whitespace_only_line then
+          insert_indent = syntax_newline_continuation(dv.doc, line, col, line_text)
+            or syntax_newline_indent(dv.doc, line, col, indent, full_indent, line_text)
+        end
+        local text = "\n" .. insert_indent
+        text_by_idx[projected_idx] = text
+        normal_final_by_idx[projected_idx] = "end"
+
+        if whitespace_only_line then
+          has_whitespace_cleanup = true
+          whitespace_line_owner[line] = projected_idx
+          final_by_idx[projected_idx] = "end"
+          local edit = {
+            line1 = line,
+            col1 = 1,
+            line2 = line,
+            col2 = math.huge,
+            text = text,
+            idx = projected_idx,
+          }
+          edits[#edits + 1] = edit
+          normal_edits[#normal_edits + 1] = edit
+        else
+          local smart_edit = smart_newline_edit(dv.doc, line1, col1, line2, col2)
+          if smart_edit then
+            has_smart_newline = true
+            final_by_idx[projected_idx] = smart_edit.caret_offset
+            core.log_quiet("Smart newline %s in %s at %d:%d", smart_edit.reason, dv.doc:get_name(), line1, col1)
+            edits[#edits + 1] = {
+              line1 = smart_edit.line1,
+              col1 = smart_edit.col1,
+              line2 = smart_edit.line2,
+              col2 = smart_edit.col2,
+              text = smart_edit.text,
+              idx = projected_idx,
+            }
+          else
+            final_by_idx[projected_idx] = "end"
+            edits[#edits + 1] = {
+              line1 = line1,
+              col1 = col1,
+              line2 = line2,
+              col2 = col2,
+              text = text,
+              idx = projected_idx,
+            }
+          end
+          normal_edits[#normal_edits + 1] = {
+            line1 = line1,
+            col1 = col1,
+            line2 = line2,
+            col2 = col2,
+            text = text,
+            idx = projected_idx,
+          }
+        end
       end
-      text_by_idx[idx] = text
     end
-    if fallback then
-      local temp = Doc()
-      temp.lines = {}
-      for i = 1, #dv.doc.lines do temp.lines[i] = dv.doc.lines[i] end
-      temp.selections = { table.unpack(dv.doc.selections) }
-      temp.last_selection = dv.doc.last_selection
-      function temp:on_text_change() end
-      for idx, line, col in temp:get_selections(false, true) do
-        local indent = temp.lines[line]:match("^[\t ]*")
-        if col <= #indent then
-          indent = indent:sub(#indent + 2 - col)
-        end
-        if not config.keep_newline_whitespace and temp.lines[line]:match("^%s+$") then
-          temp:remove(line, 1, line, math.huge)
-        end
-        temp:text_input("\n" .. indent, idx)
-      end
-      local text = table.concat(temp.lines):gsub("\n$", "")
-      dv.doc:apply_edits({
-        { line1 = 1, col1 = 1, line2 = #dv.doc.lines, col2 = math.huge, text = text },
-      }, {
-        type = "insert",
-        selections = temp.selections,
-        last_selection = temp.last_selection,
-        merge_cursors = false,
-      })
-      temp:on_close()
-    elseif has_smart_newline then
+
+    if has_whitespace_cleanup or has_smart_newline then
       local non_overlapping, normalized = edits_are_non_overlapping(dv.doc, edits)
       if not non_overlapping then
-        core.log_quiet("Smart newline skipped for %s because selections overlap", dv.doc:get_name())
-        dv.doc:text_input_by_selection(normal_text_by_idx, nil, { type = "insert" })
-        return
+        if has_smart_newline then
+          core.log_quiet("Smart newline skipped for %s because selections overlap", dv.doc:get_name())
+        end
+        edits = normal_edits
+        final_by_idx = normal_final_by_idx
+        non_overlapping, normalized = edits_are_non_overlapping(dv.doc, edits)
+        if not non_overlapping then
+          dv.doc:text_input_by_selection(original_normal_text_by_idx, nil, { type = "insert" })
+          return
+        end
       end
-      local selections, last_selection = dv.doc:selections_after_edits(normalized, final_by_idx, dv.doc.last_selection, { normalized = true })
+      local selections, last_selection = projected_selections_after(normalized, final_by_idx)
       dv.doc:apply_edits(edits, {
         type = "insert",
         selections = selections,
@@ -860,12 +1113,10 @@ local commands = {
     local _, indent_size = dv.doc:get_indent_info()
     local fallback = false
     for _, line1, col1, line2, col2 in dv.doc:get_selections(true, true) do
-      if line1 == line2 and col1 == col2 then
-        local text = dv.doc:get_text(line1, 1, line1, col1)
-        if #text >= indent_size and text:find("^ *$") then
-          fallback = true
-          break
-        end
+      if line1 == line2 and col1 == col2
+      and previous_indent_stop_start_col(dv.doc, line1, col1, indent_size) then
+        fallback = true
+        break
       end
     end
     if fallback then
@@ -873,21 +1124,31 @@ local commands = {
       for idx, line1, col1, line2, col2 in dv.doc:get_selections(true, true) do
         local start_line, start_col, end_line, end_col = line1, col1, line2, col2
         if line1 == line2 and col1 == col2 then
-          local text = dv.doc:get_text(line1, 1, line1, col1)
-          local l2, c2
-          if #text >= indent_size and text:find("^ *$") then
-            l2, c2 = dv.doc:position_offset(line1, col1, 0, -indent_size)
+          local stop_col = previous_indent_stop_start_col(dv.doc, line1, col1, indent_size)
+          if stop_col then
+            start_line, start_col, end_line, end_col = line1, stop_col, line1, col1
           else
-            l2, c2 = dv.doc:position_offset(line1, col1, translate.previous_char)
+            local l2, c2 = dv.doc:position_offset(line1, col1, translate.previous_char)
+            start_line, start_col, end_line, end_col = sort_positions(line1, col1, l2, c2)
           end
-          start_line, start_col, end_line, end_col = sort_positions(line1, col1, l2, c2)
         end
         edits[#edits + 1] = { line1 = start_line, col1 = start_col, line2 = end_line, col2 = end_col, text = "", idx = idx }
         final_by_idx[idx] = "start"
       end
+      local non_overlapping, normalized = edits_are_non_overlapping(dv.doc, edits)
+      if not non_overlapping then
+        edits = coalesce_overlapping_same_line_removes(edits)
+        final_by_idx = {}
+        for _, edit in ipairs(edits) do final_by_idx[edit.idx] = "start" end
+        non_overlapping, normalized = edits_are_non_overlapping(dv.doc, edits)
+        if not non_overlapping then
+          dv.doc:delete_to(translate.previous_char)
+          return
+        end
+      end
       dv.doc:apply_edits(edits, {
         type = "remove",
-        selections = dv.doc:selections_after_edits(edits, final_by_idx),
+        selections = dv.doc:selections_after_edits(normalized, final_by_idx, dv.doc.last_selection, { normalized = true }),
         last_selection = dv.doc.last_selection,
         merge_cursors = true,
       })
@@ -974,6 +1235,52 @@ local commands = {
   end,
 
   ["doc:indent"] = function(dv)
+    local repair_edits, final_by_idx = {}, {}
+    local selection_count, repairable_count = 0, 0
+    for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
+      selection_count = selection_count + 1
+      local line_text = dv.doc.lines[line1] or ""
+      local leading = line_text:match("^[\t ]*") or ""
+      local collapsed = line1 == line2 and col1 == col2
+      local in_leading = collapsed and col1 <= #leading + 1
+      local expected = in_leading and syntax_line_indent(dv.doc, line1, col1, line_text) or nil
+      if expected and expected ~= leading then
+        repairable_count = repairable_count + 1
+        repair_edits[#repair_edits + 1] = {
+          line1 = line1,
+          col1 = 1,
+          line2 = line1,
+          col2 = #leading + 1,
+          text = expected,
+          idx = idx,
+        }
+        final_by_idx[idx] = "end"
+      end
+    end
+    if #repair_edits > 0 and repairable_count == selection_count then
+      local original_to_coalesced
+      repair_edits, original_to_coalesced = coalesce_duplicate_replacements(repair_edits)
+      final_by_idx = {}
+      for _, edit in ipairs(repair_edits) do final_by_idx[edit.idx] = "end" end
+      local non_overlapping = edits_are_non_overlapping(dv.doc, repair_edits)
+      if non_overlapping then
+        local selections = {}
+        for _, edit in ipairs(repair_edits) do
+          selections[#selections + 1] = edit.line1
+          selections[#selections + 1] = #edit.text + 1
+          selections[#selections + 1] = edit.line1
+          selections[#selections + 1] = #edit.text + 1
+        end
+        dv.doc:apply_edits(repair_edits, {
+          type = "replace",
+          selections = selections,
+          last_selection = original_to_coalesced[dv.doc.last_selection or 1] or math.min(dv.doc.last_selection or 1, math.max(1, #selections / 4)),
+          merge_cursors = false,
+        })
+        return
+      end
+    end
+
     for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
       local l1, c1, l2, c2 = dv.doc:indent_text(false, line1, col1, line2, col2)
       if l1 then

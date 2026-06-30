@@ -54,6 +54,25 @@ test.describe("trimwhitespace", function()
     test.same(doc.selections, { 1, 5, 1, 5 })
   end)
 
+  test.it("preserves whitespace before every caret while trimming other lines", function()
+    local doc = Doc()
+    set_text(doc, "aa   \nbb   \ncc   ")
+    doc.selections = {
+      1, 5, 1, 5,
+      2, 4, 2, 4,
+    }
+    doc.last_selection = 2
+
+    trimwhitespace.trim(doc)
+
+    test.equal(text(doc), "aa  \nbb \ncc\n")
+    test.same(doc.selections, {
+      1, 5, 1, 5,
+      2, 4, 2, 4,
+    })
+    test.equal(doc.last_selection, 2)
+  end)
+
   test.it("removes trailing empty lines in one document edit", function()
     local doc = Doc()
     set_text(doc, "aa\n\n\n")

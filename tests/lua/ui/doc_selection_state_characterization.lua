@@ -348,6 +348,87 @@ test.describe("Document View Selection State edit characterization", function()
     })
   end)
 
+  test.it("newline cleans a whitespace-only line with a targeted edit", function(context)
+    local doc, main = new_shared_views(context, "aa\n  \nbb")
+    core.set_active_view(main)
+    config.keep_newline_whitespace = false
+    set_view_selection(main, 2, 2, 2, 2)
+    local transaction
+    function doc:on_text_change(_, tx)
+      transaction = tx
+    end
+
+    test.ok(command.perform("doc:newline"))
+
+    test.equal(text(doc), "aa\n\n \nbb\n")
+    test.ok(transaction)
+    test.equal(#transaction.edits, 1)
+    test.equal(transaction.edits[1].line1, 2)
+    test.equal(transaction.edits[1].line2, 2)
+    test.same(selection(main), { 3, 2, 3, 2 })
+  end)
+
+  test.it("newline coalesces multiple carets on the same whitespace-only line", function(context)
+    local doc, main = new_shared_views(context, "aa\n    \nbb")
+    core.set_active_view(main)
+    config.keep_newline_whitespace = false
+    set_view_selections(main, {
+      2, 2, 2, 2,
+      2, 4, 2, 4,
+    })
+    local transaction
+    function doc:on_text_change(_, tx)
+      transaction = tx
+    end
+
+    test.ok(command.perform("doc:newline"))
+
+    test.equal(text(doc), "aa\n\n \nbb\n")
+    test.ok(transaction)
+    test.equal(#transaction.edits, 1)
+    test.same(selection(main), { 3, 2, 3, 2 })
+  end)
+
+  test.it("newline maps active selection to the owner when coalescing whitespace-only carets", function(context)
+    local doc, main = new_shared_views(context, "aa\n    \nbb")
+    core.set_active_view(main)
+    config.keep_newline_whitespace = false
+    set_view_selections(main, {
+      1, 2, 1, 2,
+      2, 2, 2, 2,
+      2, 4, 2, 4,
+    }, 3)
+
+    test.ok(command.perform("doc:newline"))
+
+    test.equal(text(doc), "a\na\n\n \nbb\n")
+    test.same(selection(main), {
+      2, 1, 2, 1,
+      4, 2, 4, 2,
+    })
+    test.equal(main:get_selection_state().last_selection, 2)
+  end)
+
+  test.it("newline falls back to normal text input instead of no-oping overlapping selections", function(context)
+    local doc, main = new_shared_views(context, "aa\n    \nbb")
+    core.set_active_view(main)
+    config.keep_newline_whitespace = false
+    set_view_selections(main, {
+      2, 2, 2, 2,
+      2, 1, 2, 3,
+    })
+    local before = text(doc)
+    local transaction
+    function doc:on_text_change(_, tx)
+      transaction = tx
+    end
+
+    test.ok(command.perform("doc:newline"))
+
+    test.ok(transaction and transaction.changed)
+    test.ok(text(doc) ~= before)
+  end)
+
   test.it("newline between paired delimiters indents inside and moves the closer to its own line", function(context)
     local doc, main = new_shared_views(context, "fun test() {\n}")
     core.set_active_view(main)
@@ -466,8 +547,8 @@ test.describe("Document View Selection State edit characterization", function()
 
     test.ok(command.perform("doc:newline"))
 
-    test.equal(text(doc), "// {\n\n")
-    test.same(selection(main), { 2, 1, 2, 1 })
+    test.equal(text(doc), "// {\n// \n")
+    test.same(selection(main), { 2, 4, 2, 4 })
   end)
 
   test.it("unmatched brace detection ignores closing braces inside strings and comments", function(context)
@@ -525,6 +606,62 @@ test.describe("Document View Selection State edit characterization", function()
       1, 3, 1, 3,
       2, 1, 2, 1,
     })
+  end)
+
+  test.it("backspace in leading spaces deletes to the previous partial tab stop", function(context)
+    local doc, main = new_shared_views(context, "      aa")
+    core.set_active_view(main)
+    config.indent_size = 4
+    set_view_selection(main, 1, 7, 1, 7)
+
+    test.ok(command.perform("doc:backspace"))
+
+    test.equal(text(doc), "    aa\n")
+    test.same(selection(main), { 1, 5, 1, 5 })
+  end)
+
+  test.it("backspace in short leading spaces deletes all indentation to the previous stop", function(context)
+    local doc, main = new_shared_views(context, "   aa")
+    core.set_active_view(main)
+    config.indent_size = 4
+    set_view_selection(main, 1, 4, 1, 4)
+
+    test.ok(command.perform("doc:backspace"))
+
+    test.equal(text(doc), "aa\n")
+    test.same(selection(main), { 1, 1, 1, 1 })
+  end)
+
+  test.it("backspace in mixed leading indentation deletes to the previous visual tab stop", function(context)
+    local doc, main = new_shared_views(context, "\t  aa")
+    core.set_active_view(main)
+    config.indent_size = 4
+    set_view_selection(main, 1, 4, 1, 4)
+
+    test.ok(command.perform("doc:backspace"))
+
+    test.equal(text(doc), "\taa\n")
+    test.same(selection(main), { 1, 2, 1, 2 })
+  end)
+
+  test.it("backspace coalesces overlapping smart indentation deletions", function(context)
+    local doc, main = new_shared_views(context, "\t  aa")
+    core.set_active_view(main)
+    config.indent_size = 4
+    set_view_selections(main, {
+      1, 3, 1, 3,
+      1, 4, 1, 4,
+    })
+    local transaction
+    function doc:on_text_change(_, tx)
+      transaction = tx
+    end
+
+    test.ok(command.perform("doc:backspace"))
+
+    test.ok(transaction and transaction.changed)
+    test.equal(text(doc), "\taa\n")
+    test.same(selection(main), { 1, 2, 1, 2 })
   end)
 
   test.it("join-lines joins multiple collapsed carets", function(context)
