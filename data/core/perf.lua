@@ -71,6 +71,8 @@ function perf.record_linewrap_compute(row)
     tokenized = row.tokenized and true or false,
     ascii = row.ascii and true or false,
     has_space = row.has_space and true or false,
+    has_tab = row.has_tab and true or false,
+    has_non_ascii = row.has_non_ascii and true or false,
     branch = row.branch or "",
   }
   table.sort(rows, function(a, b) return a.elapsed_ms > b.elapsed_ms end)
@@ -844,13 +846,14 @@ local function write_summary(path)
   file:write("\n")
 
   file:write("Slow linewrap compute calls (top by elapsed_ms):\n")
-  file:write("elapsed_ms,line,bytes,visible_bytes,splits,width,mode,tokenized,ascii,has_space,branch\n")
+  file:write("elapsed_ms,line,bytes,visible_bytes,splits,width,mode,tokenized,ascii,has_space,has_tab,has_non_ascii,branch\n")
   for _, row in ipairs(record.linewrap_compute_rows or {}) do
     file:write(string.format(
-      "%.3f,%d,%d,%d,%d,%.3f,%s,%d,%d,%d,%s\n",
+      "%.3f,%d,%d,%d,%d,%.3f,%s,%d,%d,%d,%d,%d,%s\n",
       row.elapsed_ms, row.line, row.bytes, row.visible_bytes, row.splits, row.width,
       csv_escape(row.mode), row.tokenized and 1 or 0, row.ascii and 1 or 0,
-      row.has_space and 1 or 0, csv_escape(row.branch)
+      row.has_space and 1 or 0, row.has_tab and 1 or 0, row.has_non_ascii and 1 or 0,
+      csv_escape(row.branch)
     ))
   end
   file:write("\n")

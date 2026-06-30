@@ -228,6 +228,41 @@ local function append_plain_ascii_letter_splits(splits, start_col, byte_len, xof
   return begin_width + (token_end - last_row_start + 1) * cell_width
 end
 
+local function fast_ascii_width(text, cell_width, tab_width)
+  local width = 0
+  local pos = 1
+  while true do
+    local tab = text:find("\t", pos, true)
+    if not tab then return width + (#text - pos + 1) * cell_width end
+    width = width + (tab - pos) * cell_width + tab_width
+    pos = tab + 1
+  end
+end
+
+local function append_ascii_letter_splits_with_tabs(splits, text, start_col, xoffset, cell_width, tab_width, width, begin_width)
+  local pos = 1
+  local col = start_col
+  while pos <= #text do
+    local tab = text:find("\t", pos, true)
+    local segment_len = (tab and tab or (#text + 1)) - pos
+    if segment_len > 0 then
+      xoffset = append_plain_ascii_letter_splits(splits, col, segment_len, xoffset, cell_width, width, begin_width)
+      col = col + segment_len
+      pos = pos + segment_len
+    end
+    if tab and pos == tab then
+      xoffset = xoffset + tab_width
+      if xoffset > width then
+        splits[#splits + 1] = col
+        xoffset = begin_width + tab_width
+      end
+      col = col + 1
+      pos = pos + 1
+    end
+  end
+  return xoffset
+end
+
 local function find_last_space(text, first, last)
   for i = last, first, -1 do
     if text:byte(i) == 32 then return i end
@@ -294,6 +329,8 @@ function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode)
   local perf_branch
   local perf_ascii = true
   local perf_has_space = false
+  local perf_has_tab = false
+  local perf_has_non_ascii = false
   local xoffset, i, last_space, last_width, begin_width = 0, 1, nil, 0, 0
   local splits = { 1 }
   local line_text = doc:get_utf8_line(line)
@@ -317,35 +354,65 @@ function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode)
     if idx == 1 or idx == math.huge then
       begin_width = LineWrapping.continuation_indent_width(font, text)
     end
-    local plain_ascii_font = not text:find("[\t\128-\255]")
-    local ascii_cell_width = plain_ascii_font and (font == default_font and default_ascii_cell_width or font:get_width(" ")) or nil
-    local has_space = plain_ascii_font and text:find(" ", 1, true) ~= nil
-    perf_ascii = perf_ascii and plain_ascii_font
+    local has_tab = text:find("\t", 1, true) ~= nil
+    local has_non_ascii = text:find("[\128-\255]") ~= nil
+    local ascii_font = not has_non_ascii
+    local ascii_cell_width = ascii_font and (font == default_font and default_ascii_cell_width or font:get_width(" ")) or nil
+    local ascii_tab_width = ascii_font and ascii_cell_width * (select(2, doc:get_indent_info()) or config.indent_size or 2) or nil
+    local has_space = ascii_font and text:find(" ", 1, true) ~= nil
+    perf_ascii = perf_ascii and ascii_font
     perf_has_space = perf_has_space or has_space
-    local w = plain_ascii_font and (#text * ascii_cell_width) or font:get_width(text)
+    perf_has_tab = perf_has_tab or has_tab
+    perf_has_non_ascii = perf_has_non_ascii or has_non_ascii
+    local w = ascii_font and (has_tab and fast_ascii_width(text, ascii_cell_width, ascii_tab_width) or (#text * ascii_cell_width)) or font:get_width(text)
     if xoffset + w > width then
-      if plain_ascii_font and mode ~= "word" then
-        note_branch(font == default_font and "plain-ascii-letter" or "plain-ascii-syntax-letter")
-        xoffset = append_plain_ascii_letter_splits(splits, i, #text, xoffset, ascii_cell_width, width, begin_width)
+      if ascii_font and mode ~= "word" then
+        note_branch(font == default_font and (has_tab and "ascii_tabs_letter" or "plain_ascii_letter") or (has_tab and "ascii_tabs_syntax_letter" or "plain_ascii_syntax_letter"))
+        xoffset = has_tab
+          and append_ascii_letter_splits_with_tabs(splits, text, i, xoffset, ascii_cell_width, ascii_tab_width, width, begin_width)
+          or append_plain_ascii_letter_splits(splits, i, #text, xoffset, ascii_cell_width, width, begin_width)
         i = i + #text
         last_space = nil
-      elseif plain_ascii_font and idx == math.huge then
-        if has_space then
-          note_branch(font == default_font and "plain-ascii-word-row" or "plain-ascii-syntax-word-row")
+      elseif ascii_font and idx == math.huge then
+        if has_space and not has_tab then
+          note_branch(font == default_font and "plain_ascii_word_row" or "plain_ascii_syntax_word_row")
           xoffset, last_space, last_width = append_plain_ascii_word_splits(
             splits, text, i, #text, xoffset, ascii_cell_width, width, begin_width
           )
-        else
-          note_branch(font == default_font and "plain-ascii-word-longword-letter" or "plain-ascii-syntax-word-longword-letter")
-          xoffset = append_plain_ascii_letter_splits(splits, i, #text, xoffset, ascii_cell_width, width, begin_width)
+        elseif not has_space then
+          note_branch(font == default_font and (has_tab and "ascii_tabs_word_longword_letter" or "plain_ascii_word_longword_letter") or (has_tab and "ascii_tabs_syntax_word_longword_letter" or "plain_ascii_syntax_word_longword_letter"))
+          xoffset = has_tab
+            and append_ascii_letter_splits_with_tabs(splits, text, i, xoffset, ascii_cell_width, ascii_tab_width, width, begin_width)
+            or append_plain_ascii_letter_splits(splits, i, #text, xoffset, ascii_cell_width, width, begin_width)
           last_space = nil
           last_width = nil
+        else
+          note_branch("ascii_tabs_word_spaces_slow")
+          ascii_font = false
+          for char in common.utf8_chars(text) do
+            w = font:get_width(char)
+            xoffset = xoffset + w
+            if xoffset > width then
+              if last_space then
+                table.insert(splits, last_space + 1)
+                xoffset = w + begin_width + (xoffset - last_width)
+              else
+                table.insert(splits, i)
+                xoffset = w + begin_width
+              end
+              last_space = nil
+            elseif char == " " then
+              last_space = i
+              last_width = xoffset
+            end
+            i = i + #char
+          end
         end
-        i = i + #text
+        i = ascii_font and (i + #text) or i
       else
-        note_branch(plain_ascii_font and "plain-ascii-word-tokenized" or "slow-utf8-or-tabs")
+        note_branch(ascii_font and "plain_ascii_word_tokenized" or "slow_utf8")
         for char in common.utf8_chars(text) do
-          w = plain_ascii_font and ascii_cell_width or font:get_width(char)
+          w = ascii_font and ascii_cell_width or font:get_width(char)
           xoffset = xoffset + w
           if xoffset > width then
             if mode == "word" and last_space then
@@ -364,7 +431,7 @@ function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode)
         end
       end
     else
-      note_branch(plain_ascii_font and (font == default_font and "fits-plain-ascii" or "fits-plain-ascii-syntax") or "fits-non-ascii-or-tabs")
+      note_branch(ascii_font and (font == default_font and (has_tab and "fits_ascii_tabs" or "fits_plain_ascii") or (has_tab and "fits_ascii_tabs_syntax" or "fits_plain_ascii_syntax")) or "fits_utf8")
       xoffset = xoffset + w
       i = i + #text
     end
@@ -390,6 +457,8 @@ function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode)
       tokenized = config.plugins.linewrapping.require_tokenization,
       ascii = perf_ascii,
       has_space = perf_has_space,
+      has_tab = perf_has_tab,
+      has_non_ascii = perf_has_non_ascii,
       branch = perf_branch or "empty",
     })
   end
