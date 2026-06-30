@@ -117,7 +117,9 @@ function LineWrapping.notify_doc_text_transaction(doc, transaction)
   each_wrapped_docview(doc, function(docview)
     if #ranges == 1 then
       local range = ranges[1]
-      LineWrapping.update_breaks(docview, range.old_line1, range.old_line2, range.line_delta or 0)
+      if not LineWrapping.update_same_line_suffix_breaks(docview, range, transaction) then
+        LineWrapping.update_breaks(docview, range.old_line1, range.old_line2, range.line_delta or 0)
+      end
     else
       LineWrapping.reconstruct_breaks(docview, docview.wrapped_settings.font, docview.wrapped_settings.width)
     end
@@ -198,15 +200,18 @@ end
 
 -- Optimization iterator. The tokenizer is relatively slow, so if wrapping does
 -- not need syntax fonts, expose the whole line as a single normal token.
-local function spew_tokens(doc, line)
-  if line < math.huge then return math.huge, "normal", doc:get_utf8_line(line) end
+local function spew_tokens(state, emitted)
+  if emitted then return end
+  local text = state.doc:get_utf8_line(state.line)
+  if state.scol and state.scol > 1 then text = text:sub(state.scol) end
+  return math.huge, "normal", text
 end
 
-local function get_tokens(doc, line)
+local function get_tokens(doc, line, scol)
   if config.plugins.linewrapping.require_tokenization then
-    return doc.highlighter:each_token(line)
+    return doc.highlighter:each_token(line, scol)
   end
-  return spew_tokens, doc, line
+  return spew_tokens, { doc = doc, line = line, scol = scol }, nil
 end
 
 local function append_plain_ascii_letter_splits(splits, start_col, byte_len, xoffset, cell_width, width, begin_width)
@@ -322,7 +327,18 @@ end
 
 -- Computes the breaks for a given line, width and mode. Returns a list of byte
 -- columns where visual rows start, plus the continuation indent width.
-function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode)
+local function line_continuation_indent_width(doc, default_font, line)
+  for _, type, text in get_tokens(doc, line) do
+    local font = style.syntax_fonts[type] or default_font
+    return LineWrapping.continuation_indent_width(font, text)
+  end
+  return 0
+end
+
+-- Computes the breaks for a line suffix. `start_col` must be a valid byte
+-- column, normally an existing cached visual-row start. Returns row starts for
+-- the suffix, including `start_col`, plus the line continuation indent width.
+function LineWrapping.compute_line_breaks_from_col(doc, default_font, line, width, mode, start_col, initial_begin_width)
   local perf_active = core.perf_frame_stats ~= nil
   local perf_start = perf_active and system.get_time()
   local perf_bytes = 0
@@ -331,8 +347,14 @@ function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode)
   local perf_has_space = false
   local perf_has_tab = false
   local perf_has_non_ascii = false
-  local xoffset, i, last_space, last_width, begin_width = 0, 1, nil, 0, 0
-  local splits = { 1 }
+  start_col = math.max(1, start_col or 1)
+  local begin_width = initial_begin_width
+  if start_col > 1 and begin_width == nil then
+    begin_width = line_continuation_indent_width(doc, default_font, line)
+  end
+  begin_width = begin_width or 0
+  local xoffset, i, last_space, last_width = start_col > 1 and begin_width or 0, start_col, nil, 0
+  local splits = { start_col }
   local line_text = doc:get_utf8_line(line)
   local visible_end_col = #line_text
   if line_text:sub(-1) == "\n" then visible_end_col = visible_end_col - 1 end
@@ -344,14 +366,14 @@ function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode)
       perf_branch = "mixed"
     end
   end
-  for idx, type, text in get_tokens(doc, line) do
+  for idx, type, text in get_tokens(doc, line, start_col) do
     if i > visible_end_col then break end
     if i + #text - 1 > visible_end_col then
       text = text:sub(1, visible_end_col - i + 1)
     end
     perf_bytes = perf_bytes + #text
     local font = style.syntax_fonts[type] or default_font
-    if idx == 1 or idx == math.huge then
+    if start_col == 1 and (idx == 1 or idx == math.huge) then
       begin_width = LineWrapping.continuation_indent_width(font, text)
     end
     local has_tab = text:find("\t", 1, true) ~= nil
@@ -487,6 +509,10 @@ function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode)
   return splits, begin_width
 end
 
+function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode)
+  return LineWrapping.compute_line_breaks_from_col(doc, default_font, line, width, mode, 1, nil)
+end
+
 function LineWrapping.clear_wrap_cache(docview)
   docview.wrapped_lines = nil
   docview.wrapped_line_to_idx = nil
@@ -554,6 +580,100 @@ function LineWrapping.reconstruct_breaks(docview, default_font, width, line_offs
   perf_elapsed("linewrapping_reconstruct_breaks_ms", perf_start)
 end
 
+local function rebuild_line_to_idx_from(docview, line, offset)
+  -- Every logical line contributes an initial visual-row entry at column 1.
+  -- Use that invariant to rebuild the logical-line -> first visual-row map
+  -- after the flat wrapped_lines array has been spliced.
+  while offset <= #docview.wrapped_lines do
+    if docview.wrapped_lines[offset + 1] == 1 then
+      docview.wrapped_line_to_idx[line] = ((offset - 1) / 2) + 1
+      line = line + 1
+    end
+    offset = offset + 2
+  end
+  while line <= #docview.wrapped_line_to_idx do
+    table.remove(docview.wrapped_line_to_idx)
+  end
+end
+
+function LineWrapping.update_same_line_suffix_breaks(docview, range, transaction)
+  if not (docview.wrapped_settings and docview.wrapped_lines and docview.wrapped_line_to_idx) then return false end
+  -- Tokenized suffix iteration depends on tokenizer slicing by absolute byte
+  -- column. Keep that more complex mode on the conservative full-line path.
+  if config.plugins.linewrapping.require_tokenization then return false end
+  local edits = transaction and transaction.edits
+  local edit = edits and #edits == 1 and edits[1]
+  if not edit then return false end
+  if edit.line1 ~= edit.line2 or tostring(edit.text or ""):find("[\r\n]") then return false end
+  if not range
+  or (range.line_delta or 0) ~= 0
+  or range.old_line1 ~= range.old_line2
+  or range.new_line1 ~= range.new_line2
+  or range.old_line1 ~= range.new_line1 then
+    return false
+  end
+
+  local perf_active = core.perf_frame_stats ~= nil
+  local perf_start = perf_active and system.get_time()
+  local line = range.new_line1
+  local first_idx = docview.wrapped_line_to_idx[line]
+  if not first_idx then return false end
+  local total = LineWrapping.get_total_wrapped_lines(docview)
+  local next_first_idx = docview.wrapped_line_to_idx[line + 1] or (total + 1)
+  if next_first_idx <= first_idx then return false end
+
+  local affected_col = math.max(1, tonumber(edit.col1) or 1)
+  local wrapping_indent = config.plugins.linewrapping.wrapping_indent
+  if config.plugins.linewrapping.indent ~= false and wrapping_indent ~= "none" then
+    local _, indent_end = tostring(docview.doc.lines[line] or ""):find("^[ \t]*")
+    if affected_col <= (indent_end or 0) + 1 then return false end
+  end
+  local affected_idx = LineWrapping.get_line_idx_col_count(docview, line, affected_col, false)
+  -- Recompute from the previous cached visual row.  For word wrapping, the row
+  -- containing the edit can depend on scanning from the previous row start.
+  local restart_idx = math.max(first_idx, affected_idx - 1)
+  local restart_offset = (restart_idx - 1) * 2 + 1
+  local restart_col = docview.wrapped_lines[restart_offset + 1]
+  if not restart_col then return false end
+
+  local begin_width = restart_col == 1 and nil or docview.wrapped_line_offsets[line]
+  local splits, new_begin_width = LineWrapping.compute_line_breaks_from_col(
+    docview.doc,
+    docview.wrapped_settings.font,
+    line,
+    docview.wrapped_settings.width,
+    config.plugins.linewrapping.mode,
+    restart_col,
+    begin_width
+  )
+  if restart_col == 1 then
+    docview.wrapped_line_offsets[line] = new_begin_width
+  end
+
+  local new_pairs = {}
+  for _, col in ipairs(splits) do
+    new_pairs[#new_pairs + 1] = line
+    new_pairs[#new_pairs + 1] = col
+  end
+  local old_suffix_rows = next_first_idx - restart_idx
+  local new_suffix_rows = #new_pairs / 2
+  local remove_count = old_suffix_rows * 2
+  common.splice(docview.wrapped_lines, restart_offset, remove_count, new_pairs)
+  local row_delta = new_suffix_rows - old_suffix_rows
+  if row_delta ~= 0 then
+    for logical_line = line + 1, #docview.wrapped_line_to_idx do
+      docview.wrapped_line_to_idx[logical_line] = docview.wrapped_line_to_idx[logical_line] + row_delta
+    end
+  end
+
+  perf_frame_add("linewrapping_update_breaks_partial_calls", 1)
+  perf_frame_add("linewrapping_update_breaks_partial_preserved_rows", restart_idx - first_idx)
+  perf_frame_add("linewrapping_update_breaks_calls", 1)
+  perf_frame_add("linewrapping_update_breaks_lines", 1)
+  perf_elapsed("linewrapping_update_breaks_ms", perf_start)
+  return true
+end
+
 function LineWrapping.update_breaks(docview, old_line1, old_line2, net_lines)
   local perf_active = core.perf_frame_stats ~= nil
   local perf_start = perf_active and system.get_time()
@@ -586,21 +706,7 @@ function LineWrapping.update_breaks(docview, old_line1, old_line2, net_lines)
     end
   end
 
-  local line = old_line1
-  offset = (old_idx1 - 1) * 2 + 1
-  -- Every logical line contributes an initial visual-row entry at column 1.
-  -- Use that invariant to rebuild the logical-line -> first visual-row map
-  -- after the flat wrapped_lines array has been spliced.
-  while offset <= #docview.wrapped_lines do
-    if docview.wrapped_lines[offset + 1] == 1 then
-      docview.wrapped_line_to_idx[line] = ((offset - 1) / 2) + 1
-      line = line + 1
-    end
-    offset = offset + 2
-  end
-  while line <= #docview.wrapped_line_to_idx do
-    table.remove(docview.wrapped_line_to_idx)
-  end
+  rebuild_line_to_idx_from(docview, old_line1, (old_idx1 - 1) * 2 + 1)
   perf_frame_add("linewrapping_update_breaks_calls", 1)
   perf_frame_add("linewrapping_update_breaks_lines", perf_lines)
   perf_elapsed("linewrapping_update_breaks_ms", perf_start)

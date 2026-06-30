@@ -45,6 +45,7 @@ local function configure_wrapping_for_test(context, view)
       indent = cfg.indent,
       wrapping_indent = cfg.wrapping_indent,
       guide = cfg.guide,
+      require_tokenization = cfg.require_tokenization,
     }
   end
   if context.highlight_current_line == nil then
@@ -58,6 +59,7 @@ local function configure_wrapping_for_test(context, view)
   cfg.indent = false
   cfg.wrapping_indent = 0
   cfg.guide = true
+  cfg.require_tokenization = false
   cfg.width_override = view:get_font():get_width("xxxxxxxx")
   config.highlight_current_line = true
   config.disable_blink = true
@@ -74,6 +76,7 @@ local function restore_config(context)
     cfg.indent = context.linewrapping_config.indent
     cfg.wrapping_indent = context.linewrapping_config.wrapping_indent
     cfg.guide = context.linewrapping_config.guide
+    cfg.require_tokenization = context.linewrapping_config.require_tokenization
   end
   if context.highlight_current_line ~= nil then
     config.highlight_current_line = context.highlight_current_line
@@ -616,6 +619,69 @@ test.describe("line wrapping visual navigation", function()
 
     test.ok(known_bounds_calls > 0, "expected wrapped ASCII text to use known-bounds drawing")
     test.equal(draw_text_calls, 0)
+  end)
+
+  test.it("same-line edits keep incremental wrapped suffix cache equivalent to a full rebuild", function(context)
+    local view, doc = open_editor(context, string.rep("alpha\tbeta gamma δέλτα ", 80))
+    configure_wrapping_for_test(context, view)
+    config.plugins.linewrapping.mode = "word"
+    config.plugins.linewrapping.width_override = view:get_font():get_width("xxxxxxxxxxxxxxxx")
+    LineWrapping.update_docview_breaks(view)
+
+    local row_count = LineWrapping.get_total_wrapped_lines(view)
+    test.ok(row_count > 8, "expected fixture to wrap into many visual rows")
+    local edit_idx = math.max(2, row_count - 3)
+    local edit_line, edit_col = LineWrapping.get_idx_line_col(view, edit_idx)
+    doc:set_selection(edit_line, edit_col, edit_line, edit_col)
+    doc:text_input("Z")
+
+    local incremental_lines = { table.unpack(view.wrapped_lines) }
+    local incremental_offsets = { table.unpack(view.wrapped_line_offsets) }
+    LineWrapping.reconstruct_breaks(view, view:get_font(), config.plugins.linewrapping.width_override)
+
+    test.same(view.wrapped_lines, incremental_lines)
+    test.same(view.wrapped_line_offsets, incremental_offsets)
+  end)
+
+  test.it("keeps wrapped cache equivalent to a full rebuild when editing wrapped indentation", function(context)
+    local view, doc = open_editor(context, string.rep(" ", 40) .. "tail words tail words")
+    configure_wrapping_for_test(context, view)
+    config.plugins.linewrapping.mode = "word"
+    config.plugins.linewrapping.indent = true
+    config.plugins.linewrapping.wrapping_indent = "indent"
+    config.plugins.linewrapping.width_override = view:get_font():get_width("xxxxxxxx")
+    LineWrapping.update_docview_breaks(view)
+
+    local edit_line, edit_col = LineWrapping.get_idx_line_col(view, 3)
+    doc:set_selection(edit_line, edit_col, edit_line, edit_col)
+    doc:text_input(" ")
+
+    local incremental_lines = { table.unpack(view.wrapped_lines) }
+    local incremental_offsets = { table.unpack(view.wrapped_line_offsets) }
+    LineWrapping.reconstruct_breaks(view, view:get_font(), config.plugins.linewrapping.width_override)
+
+    test.same(view.wrapped_lines, incremental_lines)
+    test.same(view.wrapped_line_offsets, incremental_offsets)
+  end)
+
+  test.it("keeps wrapped cache equivalent to a full rebuild with tokenized wrapping enabled", function(context)
+    local view, doc = open_editor(context, string.rep("local value = alpha_beta_gamma + delta\n", 20))
+    configure_wrapping_for_test(context, view)
+    config.plugins.linewrapping.mode = "word"
+    config.plugins.linewrapping.require_tokenization = true
+    config.plugins.linewrapping.width_override = view:get_font():get_width("xxxxxxxxxxxx")
+    LineWrapping.update_docview_breaks(view)
+
+    local edit_line, edit_col = LineWrapping.get_idx_line_col(view, 8)
+    doc:set_selection(edit_line, edit_col, edit_line, edit_col)
+    doc:text_input("z")
+
+    local incremental_lines = { table.unpack(view.wrapped_lines) }
+    local incremental_offsets = { table.unpack(view.wrapped_line_offsets) }
+    LineWrapping.reconstruct_breaks(view, view:get_font(), config.plugins.linewrapping.width_override)
+
+    test.same(view.wrapped_lines, incremental_lines)
+    test.same(view.wrapped_line_offsets, incremental_offsets)
   end)
 
   test.it("keeps typed caret at visual end when insertion fills a wrapped row", function(context)
