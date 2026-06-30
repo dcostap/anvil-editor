@@ -63,6 +63,8 @@ local cache = setmetatable({}, { __mode = "k" })
 ---@field max_suggestions integer
 ---Maximum amount of symbols to cache per document
 ---@field max_symbols integer
+---Maximum length of document symbols to cache and render in autocomplete.
+---@field max_symbol_length integer
 ---Which symbols to show on the suggestions list: global, local, related, none
 ---@field suggestions_scope "global" | "local" | "related" | "none"
 ---Font size of the description box
@@ -101,6 +103,15 @@ config.plugins.autocomplete.config_spec = {
       default = 4000,
       min = 1000,
       max = 10000
+    },
+    {
+      label = "Maximum Symbol Length",
+      description = "Maximum length of document symbols to cache and render in autocomplete.",
+      path = "max_symbol_length",
+      type = "number",
+      default = 256,
+      min = 32,
+      max = 4096
     },
     {
       label = "Suggestions Scope",
@@ -218,6 +229,17 @@ end
 ---@param col integer
 ---@return integer line
 ---@return integer col
+local function max_symbol_length()
+  return math.max(1, tonumber(config.plugins.autocomplete.max_symbol_length) or 256)
+end
+
+local function display_text(text)
+  text = tostring(text or "")
+  local max_len = max_symbol_length()
+  if #text <= max_len then return text end
+  return text:sub(1, max_len) .. "…"
+end
+
 local function translate_start_of_word(doc, line, col)
   while true do
     local line2, col2 = doc:position_offset(line, col, -1)
@@ -288,7 +310,7 @@ core.add_thread(function()
           coroutine.yield()
           slice_start = system.get_time()
         end
-        if not s[sym] and not syntax_symbols[sym] then
+        if #sym <= max_symbol_length() and not s[sym] and not syntax_symbols[sym] then
           symbols_count = symbols_count + 1
           if symbols_count > max_symbols then
             s = nil
@@ -616,7 +638,7 @@ function update_suggestions()
     local symbols = locals and locals.get_document_symbols and locals.get_document_symbols(doc) or nil
     for _, symbol in ipairs(symbols or {}) do
       local name = symbol.name
-      if name and name ~= "" and not assigned_sym[name] then
+      if name and name ~= "" and #name <= max_symbol_length() and not assigned_sym[name] then
         table.insert(items, setmetatable({text = name, info = symbol.kind or "symbol", icon = symbol.kind}, mt))
         assigned_sym[name] = true
       end
@@ -709,7 +731,7 @@ local function get_suggestions_rect(av)
   local width_exceeds = false
   local win_width = system.get_window_size(core.window) - style.padding.x  * 2
   for i, s in ipairs(suggestions) do
-    local w = font:get_width(s.text)
+    local w = font:get_width(display_text(s.text))
     local info = display_info(s)
     if info and not hide_info then
       w = w + style.font:get_width(info) + style.padding.x
@@ -814,7 +836,7 @@ local function get_description_view(text)
 end
 
 local function draw_matched_text(font, base_color, match_color, item, x, y, w, h)
-  local text = tostring(item and item.text or "")
+  local text = display_text(item and item.text or "")
   local matches = item and item.autocomplete_matches
   local draw_x = x
   local run_text = ""
@@ -935,7 +957,7 @@ local function draw_suggestions_box(av)
     local text_padding = rx + icon_l_padding + style.padding.x
     core.push_clip_rect(text_padding, y, text_width, lh)
     draw_matched_text(font, color, style.accent, s, text_padding, y, text_width, lh)
-    local text_draw_width = font:get_width(s.text)
+    local text_draw_width = font:get_width(display_text(s.text))
     if text_draw_width > text_width then
       renderer.draw_rect(
         text_padding + text_width - dots_width, y,
