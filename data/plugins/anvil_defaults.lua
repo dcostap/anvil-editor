@@ -22,7 +22,6 @@ local core_plugins = {
   global_prompt_bar_sanitize = true,
   intellij_actions = true,
   intellij_find = true,
-  linewrapping = true,
   navigation_history = true,
   scale_debug_log = true,
   theme_editor = true,
@@ -286,7 +285,6 @@ keymap.add_direct({
   ["ctrl+shift+d"] = "doc:go-to-line",
   ["ctrl+shift+D"] = "doc:go-to-line",
 })
-require_core_plugin "linewrapping"
 -- Wrap long lines at word boundaries and visually indent continuations.
 config.plugins.linewrapping.mode = "word"
 config.plugins.linewrapping.indent = true
