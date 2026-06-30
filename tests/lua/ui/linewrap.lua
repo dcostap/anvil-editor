@@ -330,6 +330,30 @@ test.describe("line wrapping visual navigation", function()
     test.equal(view.wrapped_line_to_idx[1], 1)
   end)
 
+  test.it("does not send a huge ligature-sensitive unwrapped token to the renderer", function(context)
+    local view = open_editor(context, string.rep("f", 5000))
+    view.wrapping_enabled = false
+    view.wrapped_settings = nil
+    view.size.x = view:get_font():get_width("x") * 20
+
+    local calls = 0
+    local max_len = 0
+    local old_draw_text = renderer.draw_text
+    renderer.draw_text = function(font, text, x)
+      calls = calls + 1
+      max_len = math.max(max_len, #text)
+      return x + font:get_width(text)
+    end
+    local ok, err = pcall(function()
+      view:draw_line_text(1, select(1, view:get_line_screen_position(1)), select(2, view:get_line_screen_position(1)))
+    end)
+    renderer.draw_text = old_draw_text
+
+    if not ok then error(err, 0) end
+    test.ok(calls > 0, "expected unwrapped text to be drawn")
+    test.ok(max_len <= 512, "expected long unwrapped text to be chunked before renderer draw")
+  end)
+
   test.it("rebuilds wrap cache when wrap settings change without width changes", function(context)
     local view = open_editor(context, "a " .. string.rep("b", 18))
     configure_wrapping_for_test(context, view)

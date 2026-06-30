@@ -2239,9 +2239,12 @@ function DocView:draw_line_text(line, x, y)
           if not j then
             -- A token made entirely of ligature-sensitive ASCII (for example
             -- a long run of 'f' or '=') has no shaping-safe split nearby.
-            -- Preserve shaping correctness by drawing the remainder as one
-            -- batch instead of forcing an arbitrary boundary.
-            j = #text
+            -- Do not draw the whole remainder as one batch: on very long
+            -- unwrapped lines that can feed hundreds of KB through the
+            -- renderer before right-edge culling gets a chance to stop.  Split
+            -- at the pending chunk limit; preserving pathological ligatures is
+            -- less important than keeping input responsive.
+            j = math.min(#text, i + available - 1)
           end
           local next_byte = text:byte(j + 1)
           if next_byte and next_byte >= 128 then
