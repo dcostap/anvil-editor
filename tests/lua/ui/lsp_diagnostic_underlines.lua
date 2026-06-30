@@ -380,7 +380,7 @@ test.describe("LSP Diagnostic Underlines", function()
   end)
 
   test.it("splits wrapped underline ranges across visual rows", function(context)
-    require "plugins.linewrapping"
+    require "core.linewrapping"
     local doc = track_doc(context, new_doc(join_path(temp_root, "wrapped.cpp"), "abcdefghi"))
     local client = track_client(context, fake_client())
     documents.attach(client, doc, { language_id = "cpp" })

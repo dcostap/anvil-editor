@@ -6,8 +6,7 @@ local style = require "core.style"
 local test = require "core.test"
 
 local diffview = require "plugins.diffview"
-local LineWrapping = require "plugins.linewrapping"
-require "plugins.linewrapping_deep_indent"
+local LineWrapping = require "core.linewrapping"
 
 local function track(context, kind, value)
   context[kind] = context[kind] or {}

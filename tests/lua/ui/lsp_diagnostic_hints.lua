@@ -344,7 +344,7 @@ test.describe("LSP diagnostic Line Hints", function()
 
   test.it("draws wrapped line hints on the last wrapped visual row", function(context)
     diagnostic_hints.install()
-    require "plugins.linewrapping"
+    require "core.linewrapping"
 
     local doc = track_doc(context, new_doc(join_path(temp_root, "wrapped.cpp"), "abcdefghi"))
     local view = DocView(doc)
