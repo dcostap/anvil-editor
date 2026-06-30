@@ -1,81 +1,13 @@
 -- mod-version:3 priority:201
 -- VSCode-like deepIndent continuation indentation for Anvil's linewrapping plugin.
 local core = require "core"
-local common = require "core.common"
-local config = require "core.config"
 local style = require "core.style"
 local DocView = require "core.docview"
 local LineWrapping = require "plugins.linewrapping"
 
-local function get_tokens(doc, line)
-  if config.plugins.linewrapping.require_tokenization then
-    return doc.highlighter:each_token(line)
-  end
-  return function(d, l)
-    if l < math.huge then return math.huge, "normal", d:get_utf8_line(l) end
-  end, doc, line
-end
-
-local function continuation_indent_width(font, text)
-  local mode = config.plugins.linewrapping.wrapping_indent
-  if mode == "none" or config.plugins.linewrapping.indent == false then
-    return 0
-  end
-
-  local width = 0
-  local _, indent_end = text:find("^%s+")
-  if indent_end then
-    width = font:get_width(text:sub(1, indent_end))
-  end
-
-  local numeric_spaces = tonumber(mode)
-  if numeric_spaces and numeric_spaces > 0 then
-    width = width + font:get_width(string.rep(" ", numeric_spaces))
-  elseif mode == "indent" or mode == "deepIndent" then
-    local levels = mode == "deepIndent" and 2 or 1
-    width = width + font:get_width(string.rep(" ", (config.indent_size or 4) * levels))
-  end
-
-  return width
-end
-
-function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode)
-  local xoffset, i, last_space, last_width, begin_width = 0, 1, nil, 0, 0
-  local splits = { 1 }
-  local default_ascii_cell_width = default_font:get_width(" ")
-  for idx, type, text in get_tokens(doc, line) do
-    local font = style.syntax_fonts[type] or default_font
-    if idx == 1 or idx == math.huge then
-      begin_width = continuation_indent_width(font, text)
-    end
-    local plain_ascii_default_font = font == default_font and not text:find("[\t\128-\255]")
-    local w = plain_ascii_default_font and (#text * default_ascii_cell_width) or font:get_width(text)
-    if xoffset + w > width then
-      for char in common.utf8_chars(text) do
-        w = plain_ascii_default_font and default_ascii_cell_width or font:get_width(char)
-        xoffset = xoffset + w
-        if xoffset > width then
-          if mode == "word" and last_space then
-            table.insert(splits, last_space + 1)
-            xoffset = w + begin_width + (xoffset - last_width)
-          else
-            table.insert(splits, i)
-            xoffset = w + begin_width
-          end
-          last_space = nil
-        elseif char == " " then
-          last_space = i
-          last_width = xoffset
-        end
-        i = i + #char
-      end
-    else
-      xoffset = xoffset + w
-      i = i + #text
-    end
-  end
-  return splits, begin_width
-end
+-- Deep-indent continuation width is now implemented by core.linewrapping.
+-- This legacy plugin only keeps the wrapped gutter height / visible-logical-line
+-- draw wrappers until the full DocView soft-wrap cutover removes plugin patches.
 
 local function get_idx_line_col(docview, idx)
   local doc = docview.doc

@@ -116,7 +116,7 @@ end
 local old_doc_update = DocView.update
 function DocView:update()
   old_doc_update(self)
-  if self.wrapped_settings and self.size.x > 0 then
+  if self.wrapping_enabled and self.size.x > 0 then
     LineWrapping.update_docview_breaks(self)
   end
 end

@@ -43,20 +43,10 @@ config.plugins.linewrapping.config_spec = {
   },
   {
     label = "Wrapping Indent",
-    description = "Extra visual indentation before wrapped continuation lines.",
+    description = "Extra visual spaces added before wrapped continuation lines. Runtime also accepts 'none', 'indent', and 'deepIndent'.",
     path = "wrapping_indent",
-    type = "selection",
-    default = 0,
-    values = {
-      {"None", "none"},
-      {"Follow Indent", "indent"},
-      {"Deep Indent", "deepIndent"},
-      {"0 spaces", 0},
-      {"2 spaces", 2},
-      {"4 spaces", 4},
-      {"6 spaces", 6},
-      {"8 spaces", 8},
-    }
+    type = "number",
+    default = 0
   },
   {
     label = "Enable by Default",
