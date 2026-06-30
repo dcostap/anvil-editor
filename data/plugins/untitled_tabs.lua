@@ -396,7 +396,7 @@ if not core.__untitled_tabs_patched then
         "untitled",
         tostring(doc.intellij_untitled_name),
         tostring(doc:is_dirty()),
-        tostring(first_text_snippet(doc)),
+        tostring(first_text_snippet(doc) or ""),
         tostring(style.font),
         tostring(style.font:get_size()),
         tostring(style.padding.x),
