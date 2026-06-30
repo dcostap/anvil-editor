@@ -368,6 +368,24 @@ test.describe("line wrapping visual navigation", function()
     test.equal(col, 9)
   end)
 
+  test.it("applies wrapped line-end affinity from mouse cursor commands", function(context)
+    local view, doc = open_editor(context, string.rep("x", 40))
+    configure_wrapping_for_test(context, view)
+
+    local x, y = view:get_line_screen_position(1, 9, true)
+    command.perform("doc:set-cursor", x, y + view:get_line_height() / 2, 1)
+    local line, col = doc:get_selection()
+    test.equal(line, 1)
+    test.equal(col, 9)
+
+    local _, next_row_y = view:get_line_screen_position(1, 9, false)
+    view.__use_wrapped_caret_affinity = true
+    local _, affinity_y = view:get_line_screen_position(1, 9)
+    view.__use_wrapped_caret_affinity = nil
+    test.ok(next_row_y > y, "expected column to normally be on the next wrapped row")
+    test.equal(affinity_y, y)
+  end)
+
   test.it("splits cursors using wrapped visual row coordinates", function(context)
     local view, doc = open_editor(context, string.rep("x", 40))
     configure_wrapping_for_test(context, view)

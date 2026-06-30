@@ -233,12 +233,30 @@ local function split_cursor(dv, direction)
   core.blink_reset()
 end
 
+local function apply_resolved_wrap_affinity(dv)
+  if not (dv and dv.wrapped_settings) then return end
+  local resolved = dv.wrapped_last_resolved_line_end
+  dv.wrapped_last_resolved_line_end = nil
+  if not resolved then
+    linewrapping.clear_wrapped_line_end_affinity(dv)
+    return
+  end
+  local positions = {}
+  for _, line1, col1 in dv.doc:get_selections(false) do
+    if line1 == resolved[1] and col1 == resolved[2] then
+      positions[linewrapping.position_key(line1, col1)] = true
+    end
+  end
+  linewrapping.set_wrapped_line_end_affinity(dv, positions)
+end
+
 local function set_cursor(dv, x, y, snap_type)
   local line, col = dv:resolve_screen_position(x, y)
   dv.doc:set_selection(line, col, line, col)
   if snap_type == "word" or snap_type == "lines" then
     command.perform("doc:select-" .. snap_type)
   end
+  apply_resolved_wrap_affinity(dv)
   dv.mouse_selecting = { line, col, snap_type }
   core.blink_reset()
 end
@@ -1386,6 +1404,7 @@ end, {
     else
       dv.doc:add_selection(line, col, line, col)
     end
+    apply_resolved_wrap_affinity(dv)
     dv.mouse_selecting = { line, col, "set" }
   end
 })
