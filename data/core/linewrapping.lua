@@ -228,6 +228,34 @@ local function append_plain_ascii_letter_splits(splits, start_col, byte_len, xof
   return begin_width + (token_end - last_row_start + 1) * cell_width
 end
 
+local function append_plain_ascii_word_splits(splits, text, start_col, byte_len, xoffset, cell_width, width, begin_width, last_space, last_width)
+  local col = start_col
+  local token_end = start_col + byte_len - 1
+  for j = 1, byte_len do
+    xoffset = xoffset + cell_width
+    if xoffset > width then
+      if last_space then
+        splits[#splits + 1] = last_space + 1
+        xoffset = cell_width + begin_width + (xoffset - last_width)
+      else
+        splits[#splits + 1] = col
+        xoffset = cell_width + begin_width
+      end
+      last_space = nil
+      last_width = nil
+    elseif text:byte(j) == 32 then
+      last_space = col
+      last_width = xoffset
+    end
+    col = col + 1
+  end
+  if last_space and last_space > token_end then
+    last_space = nil
+    last_width = nil
+  end
+  return xoffset, last_space, last_width
+end
+
 function LineWrapping.get_tokens(doc, line)
   return get_tokens(doc, line)
 end
@@ -280,10 +308,15 @@ function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode)
     local plain_ascii_default_font = font == default_font and not text:find("[\t\128-\255]")
     local w = plain_ascii_default_font and (#text * default_ascii_cell_width) or font:get_width(text)
     if xoffset + w > width then
-      if plain_ascii_default_font and (mode ~= "word" or (not last_space and not text:find(" ", 1, true))) then
+      if plain_ascii_default_font and mode ~= "word" then
         xoffset = append_plain_ascii_letter_splits(splits, i, #text, xoffset, default_ascii_cell_width, width, begin_width)
         i = i + #text
         last_space = nil
+      elseif plain_ascii_default_font then
+        xoffset, last_space, last_width = append_plain_ascii_word_splits(
+          splits, text, i, #text, xoffset, default_ascii_cell_width, width, begin_width, last_space, last_width
+        )
+        i = i + #text
       else
         for char in common.utf8_chars(text) do
           w = plain_ascii_default_font and default_ascii_cell_width or font:get_width(char)
