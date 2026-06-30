@@ -4,6 +4,7 @@ local core = require "core"
 local command = require "core.command"
 local config = require "core.config"
 local style = require "core.style"
+local linewrapping = require "core.linewrapping"
 local DocView = require "core.docview"
 
 local centered_editor = config.plugins.centered_editor
@@ -28,9 +29,7 @@ if originals then
       command.map[name].perform = cmd.perform
     end
   end
-  if originals.linewrapping_width_override_marker then
-    config.plugins.linewrapping.width_override = originals.linewrapping_width_override
-  end
+  linewrapping.unregister_width_provider("centered_editor")
 else
   originals = { docview = {}, commands = {} }
   DocView.__centered_editor_originals = originals
@@ -281,20 +280,15 @@ for _, name in ipairs(mouse_commands) do
   patch_mouse_command(name)
 end
 
--- If the official linewrapping plugin is active and the user has not supplied
--- an override, wrap to the centered lane instead of the full tab width.
-if config.plugins.linewrapping.width_override == nil then
-  originals.linewrapping_width_override = config.plugins.linewrapping.width_override
-  originals.linewrapping_width_override_marker = true
-  config.plugins.linewrapping.width_override = function(docview)
-    local scrollbar_width = docview.v_scrollbar.expanded_size or style.expanded_scrollbar_size
-    if M.should_center(docview) then
-      local _, lane_width = M.get_lane_rect(docview)
-      return math.max(0, lane_width - docview:get_gutter_width() - scrollbar_width)
-    end
-    return docview.size.x - docview:get_gutter_width() - scrollbar_width
-  end
-end
+-- Wrap to the centered lane instead of the full tab width when no explicit
+-- user line-wrapping width override is configured.
+linewrapping.register_width_provider("centered_editor", function(docview)
+  if config.plugins.linewrapping.width_override ~= nil then return nil end
+  if not M.should_center(docview) then return nil end
+  local scrollbar_width = docview.v_scrollbar.expanded_size or style.expanded_scrollbar_size
+  local _, lane_width = M.get_lane_rect(docview)
+  return math.max(0, lane_width - docview:get_gutter_width() - scrollbar_width)
+end)
 
 core.centered_editor = M
 return M

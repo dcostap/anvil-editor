@@ -1,6 +1,7 @@
 local core = require "core"
 local command = require "core.command"
 local config = require "core.config"
+local linewrapping = require "core.linewrapping"
 local style = require "core.style"
 local test = require "core.test"
 
@@ -120,10 +121,8 @@ test.describe("centered editor", function()
     test.equal(editor_x, lane_x)
     test.equal(editor_width, lane_width)
 
-    local override = config.plugins.linewrapping.width_override
-    test.equal(type(override), "function")
     local scrollbar_width = view.v_scrollbar.expanded_size or style.expanded_scrollbar_size
-    test.equal(override(view), math.max(0, lane_width - view:get_gutter_width() - scrollbar_width))
+    test.equal(linewrapping.compute_wrap_width(view), math.max(0, lane_width - view:get_gutter_width() - scrollbar_width))
   end)
 
   test.it("allows unwrapped right-side drawn text to receive document mouse commands", function(context)

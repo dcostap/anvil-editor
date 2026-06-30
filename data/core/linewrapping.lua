@@ -6,6 +6,33 @@ local config = require "core.config"
 local LineWrapping = {}
 
 local views_by_doc = setmetatable({}, { __mode = "k" })
+local width_providers = {}
+
+function LineWrapping.register_width_provider(id, fn)
+  assert(type(id) == "string" and id ~= "", "line wrapping width provider id must be a non-empty string")
+  assert(fn == nil or type(fn) == "function", "line wrapping width provider must be a function or nil")
+  width_providers[id] = fn
+end
+
+function LineWrapping.unregister_width_provider(id)
+  width_providers[id] = nil
+end
+
+local function configured_width_override(docview)
+  local override = config.plugins.linewrapping.width_override
+  if type(override) == "function" then return override(docview) end
+  return override
+end
+
+local function provided_wrap_width(docview)
+  for id, provider in pairs(width_providers) do
+    local ok, width = pcall(provider, docview)
+    if ok and width ~= nil then return width end
+    if not ok and core and core.log_quiet then
+      core.log_quiet("Line wrapping width provider %s failed for %s: %s", tostring(id), tostring(docview), tostring(width))
+    end
+  end
+end
 
 local function compact_views(doc, views)
   local compacted = setmetatable({}, { __mode = "v" })
@@ -366,9 +393,9 @@ end
 
 function LineWrapping.compute_wrap_width(docview)
   local scrollbar_width = docview.v_scrollbar.expanded_size or style.expanded_scrollbar_size
-  local override = config.plugins.linewrapping.width_override
-  if type(override) == "function" then return override(docview) end
-  return override or (docview.size.x - docview:get_gutter_width() - scrollbar_width)
+  return configured_width_override(docview)
+    or provided_wrap_width(docview)
+    or (docview.size.x - docview:get_gutter_width() - scrollbar_width)
 end
 
 function LineWrapping.update_docview_breaks(docview)
