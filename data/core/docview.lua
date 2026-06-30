@@ -2507,11 +2507,12 @@ function DocView:draw_line_body(line, x, y)
   if self.wrapped_settings then
     local lh = self:get_line_height()
     local idx0, _, count = linewrapping.get_line_idx_col_count(self, line)
-    local _, content_y1, _, content_y2 = self:get_content_bounds()
     local first_row, last_row = 1, count
     if self.size and self.size.y > 0 then
-      first_row = math.max(1, math.floor((content_y1 - y) / lh) + 1)
-      last_row = math.min(count, math.floor((content_y2 - y) / lh) + 1)
+      local viewport_y1 = self.position.y
+      local viewport_y2 = self.position.y + self.size.y
+      first_row = math.max(1, math.floor((viewport_y1 - y) / lh) + 1)
+      last_row = math.min(count, math.floor((viewport_y2 - y) / lh) + 1)
     end
     if last_row < first_row then return lh * count end
     local visible_idx1 = idx0 + first_row - 1

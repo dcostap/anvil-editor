@@ -409,4 +409,35 @@ test.describe("LSP Diagnostic Underlines", function()
     test.equal(min_y2 - min_y1, lh)
     test.equal(max_y2 - max_y1, lh)
   end)
+
+  test.it("culls wrapped underline ranges to visible visual rows", function(context)
+    require "core.linewrapping"
+    local doc = track_doc(context, new_doc(join_path(temp_root, "wrapped-culled.cpp"), "abcdefghi"))
+    local client = track_client(context, fake_client())
+    documents.attach(client, doc, { language_id = "cpp" })
+    diagnostics.attach_client(client)
+    publish(client, {
+      textDocument = { uri = uri.path_to_uri(doc.filename), version = 0 },
+      diagnostics = {
+        { range = lsp_range(0, 0, 0, 9), severity = 1, message = "wrapped" },
+      },
+    })
+
+    local view = DocView(doc)
+    view.wrapped_settings = {}
+    view.wrapped_lines = { 1, 1, 1, 4, 1, 7 }
+    view.wrapped_line_to_idx = { [1] = 1, [2] = 4 }
+    view.wrapped_line_offsets = { 0 }
+    view.__wrapped_draw_first_idx = 2
+    view.__wrapped_draw_last_idx = 2
+
+    local lh = view:get_line_height()
+    local calls = with_fake_draw_poly(function()
+      diagnostic_underlines.draw_line(view, 1, 0, 100)
+    end)
+
+    test.equal(#calls, 1)
+    local _, min_y = point_bounds(calls[1].points)
+    test.ok(min_y >= 100 + lh, "expected only the visible wrapped row underline to be drawn")
+  end)
 end)

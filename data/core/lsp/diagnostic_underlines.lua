@@ -167,9 +167,12 @@ local function wrapped_line_bounds(view, line, idx)
 end
 
 local function draw_wrapped_line(view, line, x, y, ranges)
-  local first_idx = view.wrapped_line_to_idx and view.wrapped_line_to_idx[line]
-  if not first_idx then return draw_unwrapped_line(view, line, x, y, ranges) end
-  local last_idx = (view.wrapped_line_to_idx[line + 1] or (total_wrapped_lines(view) + 1)) - 1
+  local logical_first_idx = view.wrapped_line_to_idx and view.wrapped_line_to_idx[line]
+  if not logical_first_idx then return draw_unwrapped_line(view, line, x, y, ranges) end
+  local logical_last_idx = (view.wrapped_line_to_idx[line + 1] or (total_wrapped_lines(view) + 1)) - 1
+  local first_idx = math.max(logical_first_idx, view.__wrapped_draw_first_idx or logical_first_idx)
+  local last_idx = math.min(logical_last_idx, view.__wrapped_draw_last_idx or logical_last_idx)
+  if last_idx < first_idx then return end
   local lh = view:get_line_height()
   for _, range in ipairs(ranges) do
     for idx = first_idx, last_idx do
@@ -184,7 +187,7 @@ local function draw_wrapped_line(view, line, x, y, ranges)
       if intersects then
         local col1 = math.max(range.col1, row_start)
         local col2 = zero_width and col1 or math.min(range.col2, row_end)
-        local row_y = y + (idx - first_idx) * lh
+        local row_y = y + (idx - logical_first_idx) * lh
         local x1 = x + view:get_col_x_offset(line, col1)
         local x2 = x + view:get_col_x_offset(line, col2, col2 == row_end)
         draw_segment(view, x1, x2, row_y, range.severity)

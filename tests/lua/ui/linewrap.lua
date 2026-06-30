@@ -595,20 +595,23 @@ test.describe("line wrapping visual navigation", function()
     configure_wrapping_for_test(context, view)
     local lh = view:get_line_height()
     view.size.y = lh * 4 + style.padding.y * 2
-    view.scroll.y, view.scroll.to.y = 0, 0
+    view.scroll.y, view.scroll.to.y = lh * 10, lh * 10
     LineWrapping.update_docview_breaks(view)
 
     local x, y = view:get_line_screen_position(1)
     local calls = 0
+    local draw_ys = {}
     local old_draw_text = renderer.draw_text
     local old_draw_text_known_bounds = renderer.draw_text_known_bounds
     local old_draw_rect = renderer.draw_rect
-    renderer.draw_text = function(font, text, sx)
+    renderer.draw_text = function(font, text, sx, sy)
       calls = calls + 1
+      draw_ys[#draw_ys + 1] = sy
       return sx + font:get_width(text)
     end
-    renderer.draw_text_known_bounds = function(_, _, sx, _, _, _, w)
+    renderer.draw_text_known_bounds = function(_, _, sx, sy, _, _, w)
       calls = calls + 1
+      draw_ys[#draw_ys + 1] = sy
       return sx + w
     end
     renderer.draw_rect = function() end
@@ -623,7 +626,13 @@ test.describe("line wrapping visual navigation", function()
     renderer.draw_rect = old_draw_rect
     if not ok then error(err, 0) end
 
+    test.ok(calls > 0, "expected visible wrapped rows to be submitted to renderer")
     test.ok(calls <= 6, "expected only visible wrapped rows to be submitted to renderer")
+    for _, sy in ipairs(draw_ys) do
+      local row_y = sy - view:get_line_text_y_offset()
+      test.ok(row_y + lh > view.position.y, "expected drawn wrapped row to intersect the visible viewport")
+      test.ok(row_y < view.position.y + view.size.y, "expected drawn wrapped row to intersect the visible viewport")
+    end
   end)
 end)
 
