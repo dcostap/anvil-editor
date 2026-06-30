@@ -301,6 +301,15 @@ test.describe("line wrapping visual navigation", function()
     end
   end)
 
+  test.it("does not wrap a trailing stored newline into a phantom row", function(context)
+    local view = open_editor(context, "abc")
+    configure_wrapping_for_test(context, view)
+    config.plugins.linewrapping.width_override = view:get_font():get_width("abc")
+    LineWrapping.update_docview_breaks(view)
+
+    test.equal(view:get_total_visual_lines(), 1)
+  end)
+
   test.it("moves up and down by wrapped visual rows", function(context)
     local view, doc = open_editor(context, string.rep("x", 40))
     configure_wrapping_for_test(context, view)
@@ -377,6 +386,27 @@ test.describe("line wrapping visual navigation", function()
     local line, col = doc:get_selection()
     test.equal(line, 1)
     test.equal(col, 9)
+
+    local _, next_row_y = view:get_line_screen_position(1, 9, false)
+    view.__use_wrapped_caret_affinity = true
+    local _, affinity_y = view:get_line_screen_position(1, 9)
+    view.__use_wrapped_caret_affinity = nil
+    test.ok(next_row_y > y, "expected column to normally be on the next wrapped row")
+    test.equal(affinity_y, y)
+  end)
+
+  test.it("applies wrapped line-end affinity from mouse selection commands", function(context)
+    local view, doc = open_editor(context, string.rep("x", 40))
+    configure_wrapping_for_test(context, view)
+    doc:set_selection(1, 1, 1, 1)
+
+    local x, y = view:get_line_screen_position(1, 9, true)
+    command.perform("doc:select-to-cursor", x, y + view:get_line_height() / 2, 1)
+    local line1, col1, line2, col2 = doc:get_selection()
+    test.equal(line1, 1)
+    test.equal(col1, 9)
+    test.equal(line2, 1)
+    test.equal(col2, 1)
 
     local _, next_row_y = view:get_line_screen_position(1, 9, false)
     view.__use_wrapped_caret_affinity = true

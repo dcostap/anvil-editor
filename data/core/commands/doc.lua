@@ -1359,6 +1359,7 @@ local commands = {
     local line2, col2 = dv:resolve_screen_position(x, y)
     dv.mouse_selecting = { line1, col1, nil }
     dv.doc:set_selection(line2, col2, line1, col1)
+    apply_resolved_wrap_affinity(dv)
     set_primary_selection(dv.doc)
   end,
 

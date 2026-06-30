@@ -244,8 +244,15 @@ function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode)
   local perf_bytes = 0
   local xoffset, i, last_space, last_width, begin_width = 0, 1, nil, 0, 0
   local splits = { 1 }
+  local line_text = doc:get_utf8_line(line)
+  local visible_end_col = #line_text
+  if line_text:sub(-1) == "\n" then visible_end_col = visible_end_col - 1 end
   local default_ascii_cell_width = default_font:get_width(" ")
   for idx, type, text in get_tokens(doc, line) do
+    if i > visible_end_col then break end
+    if i + #text - 1 > visible_end_col then
+      text = text:sub(1, visible_end_col - i + 1)
+    end
     perf_bytes = perf_bytes + #text
     local font = style.syntax_fonts[type] or default_font
     if idx == 1 or idx == math.huge then
