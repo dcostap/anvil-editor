@@ -20,76 +20,11 @@ local function perf_elapsed(key, start_time)
 end
 
 
----Configuration options for `linewrapping` plugin.
----@class config.plugins.linewrapping
----The type of wrapping to perform. Can be "letter" or "word".
----@field mode "letter" | "word"
----If nil, uses the DocView's size, otherwise, uses this exact width. Can be a function.
----@field width_override? number | function():number
----Whether or not to draw a guide
----@field guide boolean
----Color used for the wrapping guide. Defaults to the whitespace indicator color.
----@field guide_color? renderer.color
----Whether or not we should indent ourselves like the first line of a wrapped block.
----@field indent boolean
----Extra visual spaces added before wrapped continuation lines.
----@field wrapping_indent integer
----Whether or not to enable wrapping by default when opening files.
----@field enable_by_default boolean
----Requires tokenization
----@field require_tokenization boolean
-config.plugins.linewrapping.config_spec = {
-    name = "Line Wrapping",
-    {
-      label = "Mode",
-      description = "The type of wrapping to perform.",
-      path = "mode",
-      type = "selection",
-      default = "letter",
-      values = {
-        {"Letters", "letter"},
-        {"Words", "word"}
-      }
-    },
-    {
-      label = "Guide",
-      description = "Whether or not to draw a guide.",
-      path = "guide",
-      type = "toggle",
-      default = true
-    },
-    {
-      label = "Indent",
-      description = "Whether or not to follow the indentation of wrapped line.",
-      path = "indent",
-      type = "toggle",
-      default = true
-    },
-    {
-      label = "Wrapping Indent",
-      description = "Extra visual spaces added before wrapped continuation lines.",
-      path = "wrapping_indent",
-      type = "number",
-      default = 0
-    },
-    {
-      label = "Enable by Default",
-      description = "Whether or not to enable wrapping by default when opening files.",
-      path = "enable_by_default",
-      type = "toggle",
-      default = false
-    },
-    {
-      label = "Require Tokenization",
-      description = "Use tokenization when applying wrapping.",
-      path = "require_tokenization",
-      type = "toggle",
-      default = false
-    }
-  }
+-- Core-owned wrapping model/config; this plugin still installs legacy wrappers
+-- during the migration to first-class DocView soft wrapping.
+local LineWrapping = require "core.linewrapping"
 
 ---@class plugins.linewrapping
-local LineWrapping = {}
 
 -- Optimzation function. The tokenizer is relatively slow (at present), and
 -- so if we don't need to run it, should be run sparingly.
