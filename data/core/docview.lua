@@ -2100,6 +2100,19 @@ function DocView:draw_line_text(line, x, y)
             hi = mid - 1
           end
         end
+      elseif candidate_tx < target_x - default_font:get_width("W") * 128 then
+        local lo, hi = col1 + 1, #self.doc.lines[line]
+        while lo <= hi do
+          local mid = math.floor((lo + hi) / 2)
+          local mid_tx = col_tx(mid)
+          if mid_tx <= target_x then
+            col1 = mid
+            candidate_tx = mid_tx
+            lo = mid + 1
+          else
+            hi = mid - 1
+          end
+        end
       end
       if col1 > 1 then
         draw_start_col = col1
