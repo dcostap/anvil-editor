@@ -349,6 +349,56 @@ test.describe("line wrapping visual navigation", function()
     test.equal(col, #doc.lines[1])
   end)
 
+  test.it("deletes to wrapped visual row boundaries", function(context)
+    local view, doc = open_editor(context, string.rep("x", 40))
+    configure_wrapping_for_test(context, view)
+
+    doc:set_selection(1, 12, 1, 12)
+    command.perform("doc:delete-to-end-of-line")
+    test.equal(doc.lines[1], string.rep("x", 35) .. "\n")
+    local line, col = doc:get_selection()
+    test.equal(line, 1)
+    test.equal(col, 12)
+
+    doc:set_selection(1, 10, 1, 10)
+    command.perform("doc:delete-to-start-of-line")
+    test.equal(doc.lines[1], string.rep("x", 34) .. "\n")
+    line, col = doc:get_selection()
+    test.equal(line, 1)
+    test.equal(col, 9)
+  end)
+
+  test.it("splits cursors using wrapped visual row coordinates", function(context)
+    local view, doc = open_editor(context, string.rep("x", 40))
+    configure_wrapping_for_test(context, view)
+    doc:set_selection(1, 1, 1, 1)
+
+    local x, y = view:get_line_screen_position(1, 9)
+    command.perform("doc:split-cursor", x, y + view:get_line_height() / 2, 1)
+
+    test.equal(#doc.selections, 8)
+    test.same({ doc.selections[1], doc.selections[2], doc.selections[5], doc.selections[6] }, { 1, 1, 1, 9 })
+  end)
+
+  test.it("keeps wrapped cache current through undo and redo", function(context)
+    local view, doc = open_editor(context, string.rep("x", 40))
+    configure_wrapping_for_test(context, view)
+    local initial_rows = view:get_total_visual_lines()
+    doc:clear_undo_redo()
+
+    doc:set_selection(1, 1, 1, 1)
+    doc:text_input(string.rep("y", 40))
+    test.ok(view:get_total_visual_lines() > initial_rows, "expected insert to update wrapped row cache")
+
+    command.perform("doc:undo")
+    test.equal(doc.lines[1], string.rep("x", 40) .. "\n")
+    test.equal(view:get_total_visual_lines(), initial_rows)
+
+    command.perform("doc:redo")
+    test.equal(doc.lines[1], string.rep("y", 40) .. string.rep("x", 40) .. "\n")
+    test.ok(view:get_total_visual_lines() > initial_rows, "expected redo to update wrapped row cache")
+  end)
+
   test.it("draws wrapped plain ASCII text with known bounds to avoid redundant shaping", function(context)
     local view = open_editor(context, string.rep("x", 80))
     configure_wrapping_for_test(context, view)
