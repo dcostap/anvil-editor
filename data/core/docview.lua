@@ -602,9 +602,7 @@ DocView.translate = {
 
   ["previous_line"] = function(doc, line, col, dv)
     if dv and dv.wrapped_settings then
-      local line_end = linewrapping.has_wrapped_line_end_affinity(dv, line, col)
-      local idx = linewrapping.get_line_idx_col_count(dv, line, col, line_end)
-      return linewrapping.get_line_col_from_index_and_x(dv, idx - 1, dv:get_col_x_offset(line, col, line_end))
+      return linewrapping.wrapped_visual_line_position(dv, line, col, -1)
     end
     if line == 1 then
       return 1, 1
@@ -614,9 +612,7 @@ DocView.translate = {
 
   ["next_line"] = function(doc, line, col, dv)
     if dv and dv.wrapped_settings then
-      local line_end = linewrapping.has_wrapped_line_end_affinity(dv, line, col)
-      local idx = linewrapping.get_line_idx_col_count(dv, line, col, line_end)
-      return linewrapping.get_line_col_from_index_and_x(dv, idx + 1, dv:get_col_x_offset(line, col, line_end))
+      return linewrapping.wrapped_visual_line_position(dv, line, col, 1)
     end
     if line == #doc.lines then
       return #doc.lines, math.huge
@@ -988,6 +984,8 @@ end
 ---@return number offset Horizontal pixel offset
 function DocView:get_col_x_offset(line, col, line_end)
   if self.wrapped_settings then
+    local perf_active = core.perf_frame_stats ~= nil
+    local perf_start = perf_active and system.get_time()
     if line_end == nil and self.__use_wrapped_caret_affinity then
       line_end = linewrapping.has_wrapped_line_end_affinity(self, line, col)
     end
@@ -1000,9 +998,14 @@ function DocView:get_col_x_offset(line, col, line_end)
           text = text:sub(scol - i + 1)
           i = scol
         end
+        if #text > col - i then
+          text = text:sub(1, math.max(0, col - i))
+        end
         local font = style.syntax_fonts[type] or default_font
         for char in common.utf8_chars(text) do
           if i >= col then
+            perf_frame_add("docview_get_col_x_offset_wrapped_calls", 1)
+            perf_elapsed("docview_get_col_x_offset_wrapped_ms", perf_start)
             return xoffset
           end
           xoffset = xoffset + font:get_width(char)
@@ -1012,6 +1015,8 @@ function DocView:get_col_x_offset(line, col, line_end)
         i = i + #text
       end
     end
+    perf_frame_add("docview_get_col_x_offset_wrapped_calls", 1)
+    perf_elapsed("docview_get_col_x_offset_wrapped_ms", perf_start)
     return xoffset
   end
   local column = 1

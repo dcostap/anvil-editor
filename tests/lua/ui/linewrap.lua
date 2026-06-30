@@ -441,6 +441,25 @@ test.describe("line wrapping visual navigation", function()
     test.equal(col, 9)
   end)
 
+  test.it("preserves desired horizontal x across short wrapped visual rows", function(context)
+    local view, doc = open_editor(context, "abcdefg hi abcdefg")
+    configure_wrapping_for_test(context, view)
+    config.plugins.linewrapping.mode = "word"
+    config.plugins.linewrapping.width_override = view:get_font():get_width("xxxxxxxx")
+    LineWrapping.update_docview_breaks(view)
+
+    doc:set_selection(1, 7, 1, 7)
+    command.perform("doc:move-to-next-line")
+    local line, col = doc:get_selection()
+    test.equal(line, 1)
+    test.equal(col, 12)
+
+    command.perform("doc:move-to-next-line")
+    line, col = doc:get_selection()
+    test.equal(line, 1)
+    test.equal(col, 18)
+  end)
+
   test.it("moves home/end to visual row boundaries before actual line boundaries", function(context)
     local view, doc = open_editor(context, string.rep("x", 40))
     configure_wrapping_for_test(context, view)

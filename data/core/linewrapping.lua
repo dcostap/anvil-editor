@@ -720,61 +720,108 @@ function LineWrapping.get_idx_visual_end_col(docview, idx, line)
 end
 
 function LineWrapping.get_line_idx_col_count(docview, line, col, line_end)
+  local perf_active = core.perf_frame_stats ~= nil
+  local perf_start = perf_active and system.get_time()
   local doc = docview.doc
-  if not docview.wrapped_settings then return common.clamp(line, 1, #doc.lines), col, 1, 1 end
+  if not docview.wrapped_settings then
+    perf_frame_add("linewrapping_get_line_idx_col_count_calls", 1)
+    perf_elapsed("linewrapping_get_line_idx_col_count_ms", perf_start)
+    return common.clamp(line, 1, #doc.lines), col, 1, 1
+  end
   if line > #doc.lines then return LineWrapping.get_line_idx_col_count(docview, #doc.lines, #doc.lines[#doc.lines] + 1) end
   line = math.max(line, 1)
-  local idx = docview.wrapped_line_to_idx[line] or 1
-  local ncol, scol = 1, 1
+  local first_idx = docview.wrapped_line_to_idx[line] or 1
+  local total = LineWrapping.get_total_wrapped_lines(docview)
+  local next_first_idx = docview.wrapped_line_to_idx[line + 1] or (total + 1)
+  local last_idx = math.max(first_idx, next_first_idx - 1)
+  local idx, ncol, scol = first_idx, 1, 1
   if col then
-    local i = idx + 1
-    while line == docview.wrapped_lines[(i - 1) * 2 + 1] and col >= docview.wrapped_lines[(i - 1) * 2 + 2] do
-      local nscol = docview.wrapped_lines[(i - 1) * 2 + 2]
-      if line_end and col == nscol then break end
-      scol = nscol
-      i = i + 1
-      idx = idx + 1
+    local lo, hi = first_idx, last_idx
+    while lo <= hi do
+      local mid = math.floor((lo + hi) / 2)
+      local start_col = docview.wrapped_lines[(mid - 1) * 2 + 2]
+      if start_col < col or (start_col == col and not line_end) then
+        idx = mid
+        scol = start_col
+        lo = mid + 1
+      else
+        hi = mid - 1
+      end
     end
     ncol = (col - scol) + 1
   end
-  local count = (docview.wrapped_line_to_idx[line + 1] or (LineWrapping.get_total_wrapped_lines(docview) + 1)) - (docview.wrapped_line_to_idx[line] or LineWrapping.get_total_wrapped_lines(docview))
+  local count = next_first_idx - first_idx
+  perf_frame_add("linewrapping_get_line_idx_col_count_calls", 1)
+  perf_elapsed("linewrapping_get_line_idx_col_count_ms", perf_start)
   return idx, ncol, count, scol
 end
 
 function LineWrapping.get_line_col_from_index_and_x(docview, idx, x)
+  local perf_active = core.perf_frame_stats ~= nil
+  local perf_start = perf_active and system.get_time()
   local doc = docview.doc
   local line, col = LineWrapping.get_idx_line_col(docview, idx)
-  if idx < 1 then return 1, 1, false end
+  if idx < 1 then
+    perf_frame_add("linewrapping_get_line_col_from_index_and_x_calls", 1)
+    perf_elapsed("linewrapping_get_line_col_from_index_and_x_ms", perf_start)
+    return 1, 1, false
+  end
   local row_end_col, soft_end = LineWrapping.get_idx_visual_end_col(docview, idx, line)
-  local xoffset, last_i, i, last_w = (col ~= 1 and docview.wrapped_line_offsets[line] or 0), col, 1, 0
-  if x < xoffset then return line, col, false end
+  local xoffset = col ~= 1 and docview.wrapped_line_offsets[line] or 0
+  if x < xoffset then
+    perf_frame_add("linewrapping_get_line_col_from_index_and_x_calls", 1)
+    perf_elapsed("linewrapping_get_line_col_from_index_and_x_ms", perf_start)
+    return line, col, false
+  end
   local default_font = docview:get_font()
+  local last_i, last_w = col, 0
+  local token_start_col = 1
   for _, type, text in doc.highlighter:each_token(line) do
-    local font, w = style.syntax_fonts[type] or default_font, last_w
-    for char in common.utf8_chars(text) do
-      if i >= row_end_col then
-        if xoffset >= x then
-          local target_col = xoffset - x > (w / 2) and last_i or row_end_col
-          return line, target_col, soft_end and target_col == row_end_col
-        end
-        return line, row_end_col, soft_end
+    local token_end_col = token_start_col + #text
+    if token_end_col > col and token_start_col < row_end_col then
+      local scan_start_col = math.max(token_start_col, col)
+      local scan_end_col = math.min(token_end_col, row_end_col)
+      local scan_text = text
+      if scan_start_col > token_start_col or scan_end_col < token_end_col then
+        scan_text = text:sub(scan_start_col - token_start_col + 1, scan_end_col - token_start_col)
       end
-      if i >= col then
+      local i = scan_start_col
+      local font, w = style.syntax_fonts[type] or default_font, last_w
+      for char in common.utf8_chars(scan_text) do
+        if i >= row_end_col then
+          if xoffset >= x then
+            local target_col = xoffset - x > (w / 2) and last_i or row_end_col
+            perf_frame_add("linewrapping_get_line_col_from_index_and_x_calls", 1)
+            perf_elapsed("linewrapping_get_line_col_from_index_and_x_ms", perf_start)
+            return line, target_col, soft_end and target_col == row_end_col
+          end
+          perf_frame_add("linewrapping_get_line_col_from_index_and_x_calls", 1)
+          perf_elapsed("linewrapping_get_line_col_from_index_and_x_ms", perf_start)
+          return line, row_end_col, soft_end
+        end
         if xoffset >= x then
+          perf_frame_add("linewrapping_get_line_col_from_index_and_x_calls", 1)
+          perf_elapsed("linewrapping_get_line_col_from_index_and_x_ms", perf_start)
           return line, (xoffset - x > (w / 2) and last_i or i), false
         end
         w = font:get_width(char)
         last_w = w
         xoffset = xoffset + w
+        last_i = i
+        i = i + #char
       end
-      last_i = i
-      i = i + #char
     end
+    if token_end_col >= row_end_col then break end
+    token_start_col = token_end_col
   end
-  if i >= row_end_col and xoffset >= x and last_w > 0 then
+  if xoffset >= x and last_w > 0 then
     local target_col = xoffset - x > (last_w / 2) and last_i or row_end_col
+    perf_frame_add("linewrapping_get_line_col_from_index_and_x_calls", 1)
+    perf_elapsed("linewrapping_get_line_col_from_index_and_x_ms", perf_start)
     return line, target_col, soft_end and target_col == row_end_col
   end
+  perf_frame_add("linewrapping_get_line_col_from_index_and_x_calls", 1)
+  perf_elapsed("linewrapping_get_line_col_from_index_and_x_ms", perf_start)
   return line, row_end_col, soft_end
 end
 
@@ -863,9 +910,26 @@ function LineWrapping.collect_forward_endpoint_affinity(docview, old_selections)
 end
 
 function LineWrapping.wrapped_visual_line_position(docview, line, col, idx_delta)
+  local perf_active = core.perf_frame_stats ~= nil
+  local perf_start = perf_active and system.get_time()
   local line_end = LineWrapping.has_wrapped_line_end_affinity(docview, line, col)
   local idx = LineWrapping.get_line_idx_col_count(docview, line, col, line_end)
-  return LineWrapping.get_line_col_from_index_and_x(docview, idx + idx_delta, docview:get_col_x_offset(line, col, line_end))
+  local last_x_offset = docview.last_x_offset or {}
+  docview.last_x_offset = last_x_offset
+  local x
+  if last_x_offset.line == line and last_x_offset.col == col and last_x_offset.line_end == line_end then
+    x = last_x_offset.offset
+  else
+    x = docview:get_col_x_offset(line, col, line_end)
+  end
+  local target_line, target_col, target_line_end = LineWrapping.get_line_col_from_index_and_x(docview, idx + idx_delta, x)
+  last_x_offset.offset = x
+  last_x_offset.line = target_line
+  last_x_offset.col = target_col
+  last_x_offset.line_end = target_line_end
+  perf_frame_add("linewrapping_wrapped_visual_line_position_calls", 1)
+  perf_elapsed("linewrapping_wrapped_visual_line_position_ms", perf_start)
+  return target_line, target_col, target_line_end
 end
 
 function LineWrapping.wrapped_end_of_line_position(docview, doc, line, col, logical_end_of_line)
