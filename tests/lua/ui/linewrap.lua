@@ -4,6 +4,7 @@ local config = require "core.config"
 local command = require "core.command"
 local style = require "core.style"
 local test = require "core.test"
+local tokenizer = require "core.tokenizer"
 
 local diffview = require "plugins.diffview"
 local LineWrapping = require "core.linewrapping"
@@ -495,6 +496,29 @@ test.describe("line wrapping visual navigation", function()
     if not ok then error(err, 0) end
     test.ok(calls > 0, "expected non-ASCII long line to draw visible text")
     test.ok(max_len <= 1024, "expected non-ASCII long line drawing to stay chunked")
+  end)
+
+  test.it("does not ask tokenizer to slice huge deeply scrolled unwrapped suffixes", function(context)
+    local view = open_editor(context, string.rep("a", 10000))
+    view.wrapping_enabled = false
+    view.wrapped_settings = nil
+    view.size.x = view:get_font():get_width("x") * 20
+    view.scroll.x = view:get_font():get_width("x") * 8000
+    view.scroll.to.x = view.scroll.x
+
+    local old_each_token = tokenizer.each_token
+    tokenizer.each_token = function(tokens, scol)
+      if scol then error("unexpected tokenizer suffix slice", 2) end
+      return old_each_token(tokens, scol)
+    end
+    local ok, err = pcall(function()
+      with_stubbed_renderer(function()
+        view:draw_line_text(1, select(1, view:get_line_screen_position(1)), select(2, view:get_line_screen_position(1)))
+      end)
+    end)
+    tokenizer.each_token = old_each_token
+
+    if not ok then error(err, 0) end
   end)
 
   test.it("left-culls deeply scrolled unwrapped text in the known-bounds path", function(context)

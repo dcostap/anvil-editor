@@ -2121,9 +2121,12 @@ function DocView:draw_line_text(line, x, y)
   local unwrapped_default_ascii_width = default_font:get_width(" ")
   local unwrapped_tab_width = unwrapped_default_ascii_width * indent_size
   local unwrapped_default_font_height = default_font:get_height()
+  local line_text = self.doc.lines[line]
+  local line_len = #line_text
   local draw_start_col = 1
-  if #self.doc.lines[line] > CACHE_LINE_LEN and self.scroll.x > 0 then
-    local col1 = self:get_visible_cols_range(line, 512)
+  local draw_end_col = line_len
+  if line_len > CACHE_LINE_LEN and self.scroll.x > 0 then
+    local col1, col2 = self:get_visible_cols_range(line, 512)
     if col1 and col1 > 1 then
       local visible_left = x + self.scroll.x
       local target_x = visible_left - default_font:get_width("W") * 64
@@ -2174,6 +2177,8 @@ function DocView:draw_line_text(line, x, y)
       if col1 > 1 then
         draw_start_col = col1
         tx = candidate_tx
+        local estimated_visible_cols = math.ceil((self.size.x + default_font:get_width("W") * 256) / math.max(1, unwrapped_default_ascii_width))
+        draw_end_col = math.min(line_len, math.max(col2 or 0, draw_start_col + estimated_visible_cols))
       end
     end
   end
@@ -2189,7 +2194,9 @@ function DocView:draw_line_text(line, x, y)
   then
     local text = tokens[2]
     if text:sub(-1) == "\n" then text = text:sub(1, -2) end
-    if draw_start_col > 1 then text = text:sub(draw_start_col) end
+    if draw_start_col > 1 or draw_end_col < #text then
+      text = text:sub(draw_start_col, draw_end_col)
+    end
     if text ~= "" then
       local draw_text_start = stats and system.get_time()
       local char_width = unwrapped_default_ascii_width
@@ -2358,17 +2365,27 @@ function DocView:draw_line_text(line, x, y)
     return nil
   end
   local stop_drawing = false
-  for tidx, type, text in tokenizer.each_token(tokens, draw_start_col > 1 and draw_start_col or nil) do
-    if stats then stats.tokens = stats.tokens + 1 end
-    local color = syntax[type] or normal_color
-    local font = syntax_fonts[type] or default_font
-    if font ~= default_font then font:set_tab_size(indent_size) end
-    -- do not render newline, fixes issue #1164
-    if tidx == last_token then text = text:sub(1, -2) end
-    if text ~= "" then
-      local ascii_chunkable = (#text > max_pending_bytes * 4)
-        or text:find("[\128-\255]") == nil
-      if not ascii_chunkable then
+  local token_start_col = 1
+  for tidx = 1, tokens_count, 2 do
+    local type = tokens[tidx]
+    local raw_text = tokens[tidx + 1] or ""
+    local raw_len = #raw_text
+    local token_end_col = token_start_col + raw_len
+    local token_draw_end_col = tidx == last_token and token_end_col - 1 or token_end_col
+    if token_draw_end_col > draw_start_col and token_start_col <= draw_end_col then
+      if stats then stats.tokens = stats.tokens + 1 end
+      local slice_start_col = math.max(token_start_col, draw_start_col)
+      local slice_end_col = math.min(token_draw_end_col - 1, draw_end_col)
+      local text = slice_start_col <= slice_end_col
+        and raw_text:sub(slice_start_col - token_start_col + 1, slice_end_col - token_start_col + 1)
+        or ""
+      local color = syntax[type] or normal_color
+      local font = syntax_fonts[type] or default_font
+      if font ~= default_font then font:set_tab_size(indent_size) end
+      if text ~= "" then
+        local ascii_chunkable = (#text > max_pending_bytes * 4)
+          or text:find("[\128-\255]") == nil
+        if not ascii_chunkable then
         -- Avoid splitting complex/shaped scripts across draw calls; HarfBuzz
         -- needs the full run to preserve joining and ligatures. Pathological
         -- ASCII tokens are the common long-line case we chunk aggressively.
@@ -2431,9 +2448,12 @@ function DocView:draw_line_text(line, x, y)
             if flush_pending_text() then stop_drawing = true; break end
           end
         end
+        end
       end
       if stop_drawing then break end
     end
+    token_start_col = token_end_col
+    if token_start_col > draw_end_col then break end
   end
   if not stop_drawing then flush_pending_text() end
   if stats then
