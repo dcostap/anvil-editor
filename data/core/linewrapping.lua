@@ -315,9 +315,15 @@ function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode)
         i = i + #text
         last_space = nil
       elseif plain_ascii_default_font and idx == math.huge then
-        xoffset, last_space, last_width = append_plain_ascii_word_splits(
-          splits, text, i, #text, xoffset, default_ascii_cell_width, width, begin_width
-        )
+        if text:find(" ", 1, true) then
+          xoffset, last_space, last_width = append_plain_ascii_word_splits(
+            splits, text, i, #text, xoffset, default_ascii_cell_width, width, begin_width
+          )
+        else
+          xoffset = append_plain_ascii_letter_splits(splits, i, #text, xoffset, default_ascii_cell_width, width, begin_width)
+          last_space = nil
+          last_width = nil
+        end
         i = i + #text
       else
         for char in common.utf8_chars(text) do

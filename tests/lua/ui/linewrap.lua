@@ -345,6 +345,20 @@ test.describe("line wrapping visual navigation", function()
     test.equal(view.wrapped_line_to_idx[1], 1)
   end)
 
+  test.it("uses letter fast path for long no-space ASCII in word mode", function(context)
+    local view, doc = open_editor(context, string.rep("f", 80))
+    configure_wrapping_for_test(context, view)
+    config.plugins.linewrapping.mode = "word"
+    LineWrapping.update_docview_breaks(view)
+    test.equal(view:get_total_visual_lines(), 10)
+
+    doc:set_selection(1, 41, 1, 41)
+    doc:text_input("f")
+
+    test.equal(view:get_total_visual_lines(), 11)
+    test.equal(view.wrapped_line_to_idx[1], 1)
+  end)
+
   test.it("does not send a huge ligature-sensitive unwrapped token to the renderer", function(context)
     local view = open_editor(context, string.rep("f", 5000))
     view.wrapping_enabled = false
