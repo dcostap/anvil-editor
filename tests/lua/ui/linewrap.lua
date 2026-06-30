@@ -310,6 +310,36 @@ test.describe("line wrapping visual navigation", function()
     test.equal(view:get_total_visual_lines(), 1)
   end)
 
+  test.it("keeps wrapped x-to-column API returning only a column", function(context)
+    local view = open_editor(context, string.rep("x", 40))
+    configure_wrapping_for_test(context, view)
+
+    test.equal(view:get_x_offset_col(1, view:get_font():get_width("xx")), 3)
+  end)
+
+  test.it("rebuilds wrap cache when wrap settings change without width changes", function(context)
+    local view = open_editor(context, "a " .. string.rep("b", 18))
+    configure_wrapping_for_test(context, view)
+    local letter_rows = view:get_total_visual_lines()
+
+    config.plugins.linewrapping.mode = "word"
+    LineWrapping.update_docview_breaks(view)
+
+    test.ok(view:get_total_visual_lines() ~= letter_rows, "expected mode change to rebuild wrap cache")
+  end)
+
+  test.it("uses padding-aware visible line range for wrapped views", function(context)
+    local view = open_editor(context, "abc\nsecond")
+    configure_wrapping_for_test(context, view)
+    config.plugins.linewrapping.width_override = view:get_font():get_width("xxxxxxxx")
+    LineWrapping.update_docview_breaks(view)
+    local lh = view:get_line_height()
+    view.scroll.y, view.scroll.to.y = style.padding.y + lh, style.padding.y + lh
+
+    local minline = view:get_visible_line_range()
+    test.equal(minline, 2)
+  end)
+
   test.it("moves up and down by wrapped visual rows", function(context)
     local view, doc = open_editor(context, string.rep("x", 40))
     configure_wrapping_for_test(context, view)

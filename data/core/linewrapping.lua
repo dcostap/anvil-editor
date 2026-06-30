@@ -298,6 +298,32 @@ function LineWrapping.clear_wrap_cache(docview)
   docview.wrapped_settings = nil
 end
 
+local function wrap_settings_signature(docview, default_font, width)
+  local _, indent_size = docview.doc:get_indent_info()
+  return {
+    width = width,
+    font = default_font,
+    font_size = default_font and default_font:get_size(),
+    mode = config.plugins.linewrapping.mode,
+    indent = config.plugins.linewrapping.indent,
+    wrapping_indent = config.plugins.linewrapping.wrapping_indent,
+    require_tokenization = config.plugins.linewrapping.require_tokenization,
+    indent_size = indent_size,
+  }
+end
+
+local function same_wrap_settings(a, b)
+  if not a or not b then return false end
+  return a.width == b.width
+    and a.font == b.font
+    and a.font_size == b.font_size
+    and a.mode == b.mode
+    and a.indent == b.indent
+    and a.wrapping_indent == b.wrapping_indent
+    and a.require_tokenization == b.require_tokenization
+    and a.indent_size == b.indent_size
+end
+
 function LineWrapping.reconstruct_breaks(docview, default_font, width, line_offset)
   local perf_active = core.perf_frame_stats ~= nil
   local perf_start = perf_active and system.get_time()
@@ -307,7 +333,7 @@ function LineWrapping.reconstruct_breaks(docview, default_font, width, line_offs
     docview.wrapped_lines = {}
     docview.wrapped_line_to_idx = {}
     docview.wrapped_line_offsets = {}
-    docview.wrapped_settings = { width = width, font = default_font }
+    docview.wrapped_settings = wrap_settings_signature(docview, default_font, width)
     for i = line_offset or 1, #doc.lines do
       reconstructed_lines = reconstructed_lines + 1
       local breaks, offset = LineWrapping.compute_line_breaks(doc, default_font, i, width, config.plugins.linewrapping.mode)
@@ -409,10 +435,11 @@ function LineWrapping.update_docview_breaks(docview)
   local perf_active = core.perf_frame_stats ~= nil
   local perf_start = perf_active and system.get_time()
   local width = LineWrapping.compute_wrap_width(docview)
-  if not docview.wrapped_settings or docview.wrapped_settings.width == nil or width ~= docview.wrapped_settings.width then
+  local settings = wrap_settings_signature(docview, docview:get_font(), width)
+  if not same_wrap_settings(docview.wrapped_settings, settings) then
     perf_frame_add("linewrapping_update_docview_breaks_width_changed", 1)
     docview.scroll.to.x = 0
-    LineWrapping.reconstruct_breaks(docview, docview:get_font(), width)
+    LineWrapping.reconstruct_breaks(docview, settings.font, width)
   end
   perf_frame_add("linewrapping_update_docview_breaks_calls", 1)
   perf_elapsed("linewrapping_update_docview_breaks_ms", perf_start)

@@ -977,8 +977,10 @@ function DocView:get_visible_line_range()
   local x, y, x2, y2 = self:get_content_bounds()
   local lh = self:get_line_height()
   if self.wrapped_settings then
-    local minline = linewrapping.get_idx_line_col(self, math.max(1, math.floor(y / lh)))
-    local maxline = linewrapping.get_idx_line_col(self, math.min(linewrapping.get_total_wrapped_lines(self), math.floor(y2 / lh) + 1))
+    local minidx = math.max(1, math.floor((y - style.padding.y) / lh) + 1)
+    local maxidx = math.min(linewrapping.get_total_wrapped_lines(self), math.floor((y2 - style.padding.y) / lh) + 1)
+    local minline = linewrapping.get_idx_line_col(self, minidx)
+    local maxline = linewrapping.get_idx_line_col(self, maxidx)
     return minline, maxline
   end
   local minline = math.max(1, math.floor((y - style.padding.y) / lh) + 1)
@@ -1084,8 +1086,8 @@ end
 function DocView:get_x_offset_col(line, x)
   if self.wrapped_settings then
     local idx = linewrapping.get_line_idx_col_count(self, line)
-    local target_line, target_col = linewrapping.get_line_col_from_index_and_x(self, idx, x)
-    return target_line, target_col
+    local _, target_col = linewrapping.get_line_col_from_index_and_x(self, idx, x)
+    return target_col
   end
   local line_text = self.doc.lines[line]
   local line_len = #line_text
