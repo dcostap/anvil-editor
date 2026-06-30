@@ -2061,20 +2061,37 @@ function DocView:draw_line_text(line, x, y)
   local _, indent_size = self.doc:get_indent_info()
   local token_loop_start = stats and system.get_time()
   local line_start_tx = tx
+  local unwrapped_default_ascii_width = default_font:get_width(" ")
+  local unwrapped_tab_width = unwrapped_default_ascii_width * indent_size
+  local unwrapped_default_font_height = default_font:get_height()
   local draw_start_col = 1
   if #self.doc.lines[line] > CACHE_LINE_LEN and self.scroll.x > 0 then
     local col1 = self:get_visible_cols_range(line, 512)
     if col1 and col1 > 1 then
       local visible_left = x + self.scroll.x
       local target_x = visible_left - default_font:get_width("W") * 64
-      local candidate_tx = x + self:get_col_x_offset(line, col1)
+      local has_syntax_font = false
+      for i = 1, tokens_count, 2 do
+        if syntax_fonts[tokens[i]] then
+          has_syntax_font = true
+          break
+        end
+      end
+      local can_fast_monospace_anchor = not has_syntax_font and not render_line.text:find("[\t\128-\255]")
+      local function col_tx(col)
+        if can_fast_monospace_anchor then
+          return x + (col - 1) * unwrapped_default_ascii_width
+        end
+        return x + self:get_col_x_offset(line, col)
+      end
+      local candidate_tx = col_tx(col1)
       if candidate_tx > target_x then
         local lo, hi = 1, col1 - 1
         col1 = 1
         candidate_tx = x
         while lo <= hi do
           local mid = math.floor((lo + hi) / 2)
-          local mid_tx = x + self:get_col_x_offset(line, mid)
+          local mid_tx = col_tx(mid)
           if mid_tx <= target_x then
             col1 = mid
             candidate_tx = mid_tx
@@ -2105,8 +2122,8 @@ function DocView:draw_line_text(line, x, y)
     if draw_start_col > 1 then text = text:sub(draw_start_col) end
     if text ~= "" then
       local draw_text_start = stats and system.get_time()
-      local char_width = default_font:get_width(" ")
-      local tab_width = char_width * indent_size
+      local char_width = unwrapped_default_ascii_width
+      local tab_width = unwrapped_tab_width
       local width = #text * char_width
       local text_has_tabs = false
 
@@ -2154,7 +2171,7 @@ function DocView:draw_line_text(line, x, y)
         math.floor(tx),
         math.floor(ty),
         math.max(1, math.ceil(width)),
-        math.max(1, math.ceil(default_font:get_height())),
+        math.max(1, math.ceil(unwrapped_default_font_height)),
         normal_color,
         text_has_tabs and { tab_offset = tx - line_start_tx } or nil
       )
@@ -2172,12 +2189,33 @@ function DocView:draw_line_text(line, x, y)
 
   local start_tx = line_start_tx
   local pending_font, pending_color, pending_chunks, pending_len, pending_has_tabs
-  local max_pending_bytes = 192
+  local max_pending_bytes = 512
   local function flush_pending_text()
     if not pending_font then return false end
     local draw_text_start = stats and system.get_time()
     local text = #pending_chunks == 1 and pending_chunks[1] or table.concat(pending_chunks)
-    if pending_has_tabs then
+    if renderer.draw_text_known_bounds
+    and (not package.loaded["core.test"] or self.__test_force_known_bounds)
+    and (core.window or self.__test_force_known_bounds)
+    and pending_font == default_font
+    and not text:find("[\128-\255]") then
+      local tab_offset = tx - start_tx
+      local width = pending_has_tabs
+        and fast_ascii_monospace_width(text, unwrapped_default_ascii_width, unwrapped_tab_width, tab_offset)
+        or (#text * unwrapped_default_ascii_width)
+      tx = renderer.draw_text_known_bounds(
+        pending_font,
+        text,
+        tx,
+        ty,
+        math.floor(tx),
+        math.floor(ty),
+        math.max(1, math.ceil(width)),
+        math.max(1, math.ceil(unwrapped_default_font_height)),
+        pending_color,
+        pending_has_tabs and { tab_offset = tab_offset } or nil
+      )
+    elseif pending_has_tabs then
       tx = renderer.draw_text(pending_font, text, tx, ty, pending_color, {tab_offset = tx - start_tx})
     else
       tx = renderer.draw_text(pending_font, text, tx, ty, pending_color)

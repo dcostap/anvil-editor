@@ -479,6 +479,48 @@ test.describe("line wrapping visual navigation", function()
     test.ok(drawn_opts and drawn_opts.tab_offset and drawn_opts.tab_offset > 0, "expected tab offset relative to original line start")
   end)
 
+  test.it("uses known-bounds drawing for culled multi-token ASCII chunks", function(context)
+    local text = string.rep("a", 4000) .. string.rep("b", 4000)
+    local view, doc = open_editor(context, text)
+    view.wrapping_enabled = false
+    view.wrapped_settings = nil
+    view.__test_force_known_bounds = true
+    view.size.x = view:get_font():get_width("x") * 20
+    view.scroll.x = view:get_font():get_width("x") * 6000
+    view.scroll.to.x = view.scroll.x
+
+    local old_get_render_line = doc.highlighter.get_render_line
+    doc.highlighter.get_render_line = function()
+      return {
+        text = text,
+        tokens = { "normal", text:sub(1, 4000), "normal", text:sub(4001) },
+        source = "test",
+      }
+    end
+    local known_calls = 0
+    local draw_calls = 0
+    local old_draw_text_known_bounds = renderer.draw_text_known_bounds
+    local old_draw_text = renderer.draw_text
+    renderer.draw_text_known_bounds = function(_, _, sx, _, _, _, w)
+      known_calls = known_calls + 1
+      return sx + w
+    end
+    renderer.draw_text = function(font, chunk, sx)
+      draw_calls = draw_calls + 1
+      return sx + font:get_width(chunk)
+    end
+    local ok, err = pcall(function()
+      view:draw_line_text(1, select(1, view:get_line_screen_position(1)), select(2, view:get_line_screen_position(1)))
+    end)
+    renderer.draw_text_known_bounds = old_draw_text_known_bounds
+    renderer.draw_text = old_draw_text
+    doc.highlighter.get_render_line = old_get_render_line
+
+    if not ok then error(err, 0) end
+    test.ok(known_calls > 0, "expected generic chunk path to use known-bounds drawing")
+    test.equal(draw_calls, 0)
+  end)
+
   test.it("rebuilds wrap cache when wrap settings change without width changes", function(context)
     local view = open_editor(context, "a " .. string.rep("b", 18))
     configure_wrapping_for_test(context, view)
