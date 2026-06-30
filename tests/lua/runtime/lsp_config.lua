@@ -181,4 +181,28 @@ test.describe("core.lsp.config", function()
     local selected = test.not_nil(lsp_config.select_for_path({ def }, doc, { trusted = true }))
     test.equal(#selected, 0)
   end)
+
+  test.test("bundles OLS for Odin files rooted by ols.json", function()
+    local ols = test.not_nil(lsp_config.DEFAULT_SERVER_DEFINITIONS.ols)
+    local def = test.not_nil(lsp_config.normalize_server_definition(ols))
+    test.equal(def.id, "ols")
+    test.equal(def.language_id, "odin")
+    test.equal(def.command[1], "ols")
+    test.equal(def.root_markers[1], "ols.json")
+
+    write_file(join_path(temp_root, PLATFORM == "Windows" and "ols.exe" or "ols"), "fake ols executable")
+    local project = mkdir(join_path(temp_root, "odin-project"))
+    local src = mkdir(join_path(project, "src"))
+    write_file(join_path(project, "ols.json"), "{}")
+    local doc = join_path(src, "main.odin")
+    write_file(doc, "package main\n")
+
+    local selected = test.not_nil(lsp_config.select_for_path(lsp_config.DEFAULT_SERVER_DEFINITIONS, doc, {
+      executable = { path_entries = { temp_root } },
+    }))
+    test.equal(#selected, 1)
+    test.equal(selected[1].definition.id, "ols")
+    test.equal(selected[1].root.root, common.normalize_path(project))
+    test.equal(selected[1].root.marker, "ols.json")
+  end)
 end)

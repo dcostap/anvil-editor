@@ -28,6 +28,19 @@ lsp_config.DEFAULT_SERVER_DEFINITIONS = {
     request_timeout = 10,
     source = "bundled",
   },
+  ols = {
+    id = "ols",
+    command = { "ols" },
+    language_id = "odin",
+    file_patterns = { "%.odin$" },
+    root_markers = { "ols.json", ".git" },
+    initialization_options = {},
+    settings = {},
+    env = {},
+    cwd_policy = "root",
+    request_timeout = 10,
+    source = "bundled",
+  },
 }
 
 local function quiet_log(...)
