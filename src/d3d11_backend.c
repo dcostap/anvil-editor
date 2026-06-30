@@ -501,7 +501,7 @@ static const char *quad_shader_source =
   "    return output;\n"
   "  }\n"
   "  float a = s.a * input.color.a;\n"
-  "  output.color = float4(s.rgb * input.color.rgb * a, a);\n"
+  "  output.color = float4(s.rgb * a, a);\n"
   "  output.coverage = float4(a, a, a, a);\n"
   "  return output;\n"
   "}\n";
