@@ -5,7 +5,11 @@ local transport = {}
 transport.__index = transport
 
 local DEFAULT_READ_BYTES = 8192
-local DEFAULT_WRITE_BYTES = 8192
+-- Keep individual stdin writes comfortably below common Windows anonymous
+-- pipe buffers. Larger LSP messages are still streamed in pieces; this avoids
+-- spurious pipe errors from nonblocking process IO when a server has not
+-- drained the previous frame yet.
+local DEFAULT_WRITE_BYTES = 2048
 local DEFAULT_WRITE_SCAN = 0.005
 local DEFAULT_WRITE_STALL_TIMEOUT = 5
 

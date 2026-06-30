@@ -177,7 +177,7 @@ test.describe("core.lsp.process stdio transport", function()
       read = function() return "" end,
       write = function(_, bytes)
         calls = calls + 1
-        test.ok(#bytes <= 8192, "write chunk was too large: " .. tostring(#bytes))
+        test.ok(#bytes <= 4096, "write chunk was too large for pipe-safe LSP writes: " .. tostring(#bytes))
         return #bytes
       end,
       close_stream = function() return true end,
