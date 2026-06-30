@@ -201,10 +201,12 @@ local function get_wrapped_segment_bounds(view, line, col1, col2, idx1, idx2, id
   return x1, x2
 end
 
-local function draw_wrapped_search_match(view, line, col1, col2, x, y, idx0, lh, primary, outline)
+local function draw_wrapped_search_match(view, line, col1, col2, x, y, idx0, lh, primary, outline, visible_idx1, visible_idx2)
   local idx1 = linewrapping.get_line_idx_col_count(view, line, col1)
   local idx2 = linewrapping.get_line_idx_col_count(view, line, col2)
-  for i = idx1, idx2 do
+  local from_idx = math.max(idx1, visible_idx1 or idx1)
+  local to_idx = math.min(idx2, visible_idx2 or idx2)
+  for i = from_idx, to_idx do
     local x1, x2 = get_wrapped_segment_bounds(view, line, col1, col2, idx1, idx2, i)
     if x1 and x2 then
       draw_wrapped_search_match_segment(view, x + x1, y + (i - idx0) * lh, x + x2, lh, primary, outline)
@@ -1965,6 +1967,9 @@ function DocView:draw_line_text(line, x, y)
     local tx, ty, begin_width = x, y + self:get_line_text_y_offset(), self.wrapped_line_offsets[line]
     local lh = self:get_line_height()
     local idx, _, count = linewrapping.get_line_idx_col_count(self, line)
+    local visible_idx1 = self.__wrapped_draw_first_idx or idx
+    local visible_idx2 = self.__wrapped_draw_last_idx or (idx + count - 1)
+    local drawn_rows = math.max(0, math.min(idx + count - 1, visible_idx2) - math.max(idx, visible_idx1) + 1)
     local total_offset = 1
     local can_use_known_bounds = renderer.draw_text_known_bounds ~= nil
 
@@ -1998,7 +2003,9 @@ function DocView:draw_line_text(line, x, y)
         end
         local max_length = next_line_start_col - total_offset
         local rendered_text = text:sub(token_offset, token_offset + max_length - 1)
-        tx = draw_segment(font, rendered_text, tx, ty, color, syntax_font == nil)
+        if idx >= visible_idx1 and idx <= visible_idx2 then
+          tx = draw_segment(font, rendered_text, tx, ty, color, syntax_font == nil)
+        end
         total_offset = total_offset + #rendered_text
         if total_offset ~= next_line_start_col or max_length == 0 then break end
         token_offset = token_offset + #rendered_text
@@ -2007,7 +2014,7 @@ function DocView:draw_line_text(line, x, y)
       end
     end
     perf_frame_add("linewrapping_draw_line_text_calls", 1)
-    perf_frame_add("linewrapping_draw_line_text_rows", count)
+    perf_frame_add("linewrapping_draw_line_text_rows", drawn_rows)
     perf_frame_add("linewrapping_draw_line_text_segments", perf_segments)
     perf_frame_add("linewrapping_draw_line_text_bytes", perf_bytes)
     perf_frame_add("linewrapping_draw_line_text_known_bounds_segments", perf_known_bounds_segments)
@@ -2500,6 +2507,19 @@ function DocView:draw_line_body(line, x, y)
   if self.wrapped_settings then
     local lh = self:get_line_height()
     local idx0, _, count = linewrapping.get_line_idx_col_count(self, line)
+    local _, content_y1, _, content_y2 = self:get_content_bounds()
+    local first_row, last_row = 1, count
+    if self.size and self.size.y > 0 then
+      first_row = math.max(1, math.floor((content_y1 - y) / lh) + 1)
+      last_row = math.min(count, math.floor((content_y2 - y) / lh) + 1)
+    end
+    if last_row < first_row then return lh * count end
+    local visible_idx1 = idx0 + first_row - 1
+    local visible_idx2 = idx0 + last_row - 1
+    local old_visible_idx1 = self.__wrapped_draw_first_idx
+    local old_visible_idx2 = self.__wrapped_draw_last_idx
+    self.__wrapped_draw_first_idx = visible_idx1
+    self.__wrapped_draw_last_idx = visible_idx2
     local highlight_rows
     local hcl = config.highlight_current_line
     if not self.__current_line_highlights_drawn_before_content
@@ -2516,7 +2536,7 @@ function DocView:draw_line_body(line, x, y)
       end
     end
     if highlight_rows then
-      for i = idx0, idx0 + count - 1 do
+      for i = visible_idx1, visible_idx2 do
         if highlight_rows[i] then
           self:draw_line_highlight(x + self.scroll.x, y + lh * (i - idx0))
         end
@@ -2535,7 +2555,7 @@ function DocView:draw_line_body(line, x, y)
           else
             local idx1 = linewrapping.get_line_idx_col_count(self, line, col1)
             local idx2 = linewrapping.get_line_idx_col_count(self, line, col2)
-            for i = idx1, idx2 do
+            for i = math.max(idx1, visible_idx1), math.min(idx2, visible_idx2) do
               local x1, x2 = get_wrapped_segment_bounds(self, line, col1, col2, idx1, idx2, i)
               if x1 and x2 and x2 > x1 then
                 renderer.draw_rect(x + x1, y + (i - idx0) * lh, x2 - x1, lh, style.selection)
@@ -2546,21 +2566,25 @@ function DocView:draw_line_body(line, x, y)
       end
     end
     for _, match in ipairs(search_matches or {}) do
-      draw_wrapped_search_match(self, line, match[1], match[2], x, y, idx0, lh, match[3], false)
+      draw_wrapped_search_match(self, line, match[1], match[2], x, y, idx0, lh, match[3], false, visible_idx1, visible_idx2)
     end
 
     local line_height = self:draw_line_text(line, x, y)
 
     for _, match in ipairs(search_matches or {}) do
-      draw_wrapped_search_match(self, line, match[1], match[2], x, y, idx0, lh, match[3], true)
+      draw_wrapped_search_match(self, line, match[1], match[2], x, y, idx0, lh, match[3], true, visible_idx1, visible_idx2)
     end
 
     local underline_module = DocView.__lsp_diagnostic_underlines_module or package.loaded["core.lsp.diagnostic_underlines"]
     if underline_module and underline_module.draw_line then
       underline_module.draw_line(self, line, x, y)
     end
-    self:draw_line_hint(line, x, y + lh * (count - 1))
+    if visible_idx2 == idx0 + count - 1 then
+      self:draw_line_hint(line, x, y + lh * (count - 1))
+    end
 
+    self.__wrapped_draw_first_idx = old_visible_idx1
+    self.__wrapped_draw_last_idx = old_visible_idx2
     return line_height
   end
 
