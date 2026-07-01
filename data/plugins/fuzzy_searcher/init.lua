@@ -1618,14 +1618,39 @@ local function draw_symbol_result_row(font, r, x, y, width)
   local preview_font = style.get_small_font(font)
   local preview_y = y + math.max(0, math.floor((font:get_height() - preview_font:get_height()) / 2))
   local text_x = x + path_w + gap
+  local declaration = tostring(r.declaration or "")
+  if declaration ~= "" and r.declaration_name_span then
+    local name_start = math.max(1, tonumber(r.declaration_name_span[1]) or 1)
+    local name_end = math.min(#declaration, tonumber(r.declaration_name_span[2]) or 0)
+    if name_start <= name_end then
+      local before = declaration:sub(1, name_start - 1)
+      local name = declaration:sub(name_start, name_end)
+      local after = declaration:sub(name_end + 1)
+      local right = text_x + text_w
+      local cx = text_x
+      local name_w = preview_font:get_width(name)
+      local before_w = math.min(preview_font:get_width(before), math.max(0, text_w - name_w))
+      if before_w > 0 then
+        cx = renderer.draw_text(preview_font, truncate_text(preview_font, before, before_w), cx, preview_y, style.dim)
+      end
+      if cx < right then
+        cx = draw_highlighted_text(preview_font, name, cx, preview_y, math.max(0, right - cx), style.text, r.match_spans or {})
+      end
+      if after ~= "" and cx < right then
+        renderer.draw_text(preview_font, truncate_text(preview_font, after, right - cx), cx, preview_y, style.dim)
+      end
+      return
+    end
+  end
+
   local label = tostring(r.label or r.name or "")
-  local kind = tostring(r.symbol_kind_label or r.symbol_kind or "symbol")
-  local kind_text = "  " .. kind
-  local kind_w = math.min(text_w * 0.35, preview_font:get_width(kind_text))
-  local label_w = math.max(0, text_w - kind_w)
+  local signature = tostring(r.signature or "")
+  local signature_text = signature ~= "" and (" " .. signature) or ""
+  local signature_w = math.min(text_w * 0.55, preview_font:get_width(signature_text))
+  local label_w = math.max(0, text_w - signature_w)
   local label_end = draw_highlighted_text(preview_font, label, text_x, preview_y, label_w, style.text, r.match_spans or {})
-  if kind_w > 0 and label_end < text_x + text_w then
-    renderer.draw_text(preview_font, truncate_text(preview_font, kind_text, text_x + text_w - label_end), label_end, preview_y, style.dim)
+  if signature_w > 0 and label_end < text_x + text_w then
+    renderer.draw_text(preview_font, truncate_text(preview_font, signature_text, text_x + text_w - label_end), label_end, preview_y, style.dim)
   end
 end
 
@@ -2264,7 +2289,10 @@ function FSView:update_preview_view()
   local target = r.line or 1
   if view.doc then
     target = common.clamp(target, 1, #view.doc.lines)
-    local highlight_key = table.concat({ r.kind or "", r.grep_query or "", r.fuzzy_query or "", tostring(target), r.text or "" }, "\0")
+    local highlight_key = table.concat({
+      r.kind or "", r.grep_query or "", r.fuzzy_query or "", tostring(target),
+      tostring(r.col or ""), tostring(r.line2 or ""), tostring(r.col2 or ""), r.text or "",
+    }, "\0")
     if self.preview_target_line ~= target or self.preview_highlight_key ~= highlight_key then
       local reveal_col1, reveal_col2
       view:with_selection_state(function()
@@ -2280,6 +2308,17 @@ function FSView:update_preview_view()
             table.insert(selections, target)
             table.insert(selections, col2)
           end
+        elseif r.kind == "symbol" and r.col then
+          local line1 = common.clamp(tonumber(r.line) or target, 1, #view.doc.lines)
+          local line2 = common.clamp(tonumber(r.line2) or line1, 1, #view.doc.lines)
+          local col1 = math.max(1, tonumber(r.col) or 1)
+          local col2 = math.max(col1 + 1, tonumber(r.col2) or (col1 + #(r.name or r.label or "")))
+          view.doc:add_search_selection(line1, col1, line2, col2)
+          reveal_col1, reveal_col2 = col1, col2
+          table.insert(selections, line1)
+          table.insert(selections, col1)
+          table.insert(selections, line2)
+          table.insert(selections, col2)
         end
         if #selections > 0 then
           view.doc:set_selection(selections[1], selections[2], selections[3], selections[4])
@@ -3127,6 +3166,9 @@ local function symbol_result_from_item(item, query, opts)
     symbol_kind = item.kind,
     symbol_kind_label = SYMBOL_KIND_LABELS[item.kind] or item.kind or "symbol",
     detail = item.detail,
+    signature = item.signature,
+    declaration = item.declaration,
+    declaration_name_span = item.declaration_name_span,
     file = file,
     path = path,
     doc = opts.doc,

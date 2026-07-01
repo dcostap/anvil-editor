@@ -4,12 +4,14 @@
 
 (function_definition
   declarator: (function_declarator
-    declarator: (identifier) @name)) @outline.function
+    declarator: (identifier) @name
+    parameters: (parameter_list) @signature.params)) @outline.function
 
 (function_definition
   declarator: (pointer_declarator
     declarator: (function_declarator
-      declarator: (identifier) @name))) @outline.function
+      declarator: (identifier) @name
+      parameters: (parameter_list) @signature.params))) @outline.function
 
 (preproc_function_def
   name: (identifier) @name) @outline.macro

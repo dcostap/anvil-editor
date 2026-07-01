@@ -3,7 +3,8 @@
 ; as @name. Lua groups captures by Tree-sitter match id.
 
 (procedure_declaration
-  (identifier) @name) @outline.function
+  (identifier) @name
+  (procedure) @signature) @outline.function
 
 (overloaded_procedure_declaration
   (identifier) @name) @outline.function

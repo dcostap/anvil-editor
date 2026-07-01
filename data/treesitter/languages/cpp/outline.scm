@@ -23,26 +23,31 @@
 
 (function_definition
   declarator: (function_declarator
-    declarator: (identifier) @name)) @outline.function
+    declarator: (identifier) @name
+    parameters: (parameter_list) @signature.params)) @outline.function
 
 (function_definition
   declarator: (function_declarator
-    declarator: (field_identifier) @name)) @outline.method
+    declarator: (field_identifier) @name
+    parameters: (parameter_list) @signature.params)) @outline.method
 
 (function_definition
   declarator: (function_declarator
     declarator: (qualified_identifier
-      name: (_) @name))) @outline.method
+      name: (_) @name)
+    parameters: (parameter_list) @signature.params)) @outline.method
 
 (function_definition
   declarator: (pointer_declarator
     declarator: (function_declarator
-      declarator: (identifier) @name))) @outline.function
+      declarator: (identifier) @name
+      parameters: (parameter_list) @signature.params))) @outline.function
 
 (function_definition
   declarator: (reference_declarator
     (function_declarator
-      declarator: (identifier) @name))) @outline.function
+      declarator: (identifier) @name
+      parameters: (parameter_list) @signature.params))) @outline.function
 
 (type_definition
   declarator: (type_identifier) @name) @outline.type

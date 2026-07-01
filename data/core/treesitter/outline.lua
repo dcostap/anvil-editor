@@ -78,14 +78,122 @@ local function range_from_capture(capture)
   }
 end
 
+local function collapse_signature_text(text)
+  text = tostring(text or "")
+  text = text:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+  if text == "" then return nil end
+  return text
+end
+
+local function strip_signature_body(text)
+  text = tostring(text or "")
+  local body_start = text:find("{", 1, true)
+  if body_start then text = text:sub(1, body_start - 1) end
+  return text
+end
+
+local function collapse_text_with_span(text, span_start, span_end)
+  text = tostring(text or "")
+  span_start = tonumber(span_start) or 1
+  span_end = tonumber(span_end) or 0
+  local out = {}
+  local source_to_out = {}
+  local out_len = 0
+  local pending_space = false
+  local seen_text = false
+  for i = 1, #text do
+    local ch = text:sub(i, i)
+    if ch:match("%s") then
+      if seen_text then pending_space = true end
+    else
+      if pending_space then
+        out_len = out_len + 1
+        out[out_len] = " "
+        pending_space = false
+      end
+      out_len = out_len + 1
+      out[out_len] = ch
+      source_to_out[i] = out_len
+      seen_text = true
+    end
+  end
+  local start_pos, end_pos
+  for i = span_start, span_end do
+    local pos = source_to_out[i]
+    if pos then
+      start_pos = start_pos or pos
+      end_pos = pos
+    end
+  end
+  local collapsed = table.concat(out)
+  if collapsed == "" then return nil end
+  return collapsed, start_pos and { start_pos, end_pos } or nil
+end
+
+local function declaration_preview(doc, item, name_capture)
+  if not doc or not item or not name_capture then return nil end
+  local raw = strip_signature_body(text_for_capture(doc, item))
+  if raw == "" then return nil end
+  local name_start = (name_capture.start_byte or 0) - (item.start_byte or 0) + 1
+  local name_end = (name_capture.end_byte or 0) - (item.start_byte or 0)
+  if name_start < 1 or name_end < name_start or name_start > #raw then return nil end
+  name_end = math.min(name_end, #raw)
+  return collapse_text_with_span(raw, name_start, name_end)
+end
+
+local function group_signature(doc, group, name)
+  local captures = group and group.signatures
+  if not captures or #captures == 0 then return nil end
+  table.sort(captures, function(a, b)
+    if a.start_byte ~= b.start_byte then return a.start_byte < b.start_byte end
+    if a.end_byte ~= b.end_byte then return a.end_byte < b.end_byte end
+    return tostring(a.capture) < tostring(b.capture)
+  end)
+
+  local params, returns, full = {}, {}, {}
+  for _, capture in ipairs(captures) do
+    local text = text_for_capture(doc, capture)
+    if capture.capture == "signature.params" then
+      params[#params + 1] = text
+    elseif capture.capture == "signature.return" then
+      returns[#returns + 1] = text
+    else
+      full[#full + 1] = text
+    end
+  end
+
+  local signature
+  if #params > 0 then
+    signature = table.concat(params, " ")
+    if #returns > 0 then signature = signature .. " -> " .. table.concat(returns, " ") end
+  elseif #full > 0 then
+    signature = strip_signature_body(table.concat(full, " "))
+    -- Odin's procedure node starts with `proc`; the symbol row already shows the
+    -- name, so keep only the call/return shape where possible.
+    signature = signature:gsub("^%s*proc%s*", "")
+  end
+
+  signature = collapse_signature_text(signature)
+  if not signature or signature == "" then return nil end
+  if name and name ~= "" then
+    signature = signature:gsub("^" .. name:gsub("([^%w])", "%%%1") .. "%s*", "")
+    signature = collapse_signature_text(signature)
+  end
+  return signature
+end
+
 local function symbol_from_group(doc, group)
   if not group or not group.item or not group.name then return nil end
   local name = trim_name(text_for_capture(doc, group.name))
   if name == "" then return nil end
   local item = group.item
+  local declaration, declaration_name_span = declaration_preview(doc, item, group.name)
   return {
     name = name,
     kind = group.kind,
+    signature = group_signature(doc, group, name),
+    declaration = declaration,
+    declaration_name_span = declaration_name_span,
     start_line = item.start_line,
     start_col = item.start_col,
     end_line = item.end_line,
@@ -173,6 +281,9 @@ function outline.get_document_outline(doc, opts)
       if not group.name or (capture.end_byte - capture.start_byte) < (group.name.end_byte - group.name.start_byte) then
         group.name = capture
       end
+    elseif tostring(capture.capture):match("^signature") then
+      group.signatures = group.signatures or {}
+      group.signatures[#group.signatures + 1] = capture
     end
   end
 
