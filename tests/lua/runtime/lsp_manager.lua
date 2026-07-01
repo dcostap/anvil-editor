@@ -164,6 +164,31 @@ test.describe("core.lsp.manager", function()
     end)
   end)
 
+  test.test("global disable prevents starts and stops active clients", function(context)
+    manager.set_server_definitions({ fake = fake_definition() })
+    local root = setup_project(context)
+    local doc = track_doc(context, new_doc(join_path(root, "main.fakecpp"), "abcd"))
+
+    test.not_nil(manager.ensure_doc(doc))
+    wait_for(3, function() return ready_entry_for_doc(doc) ~= nil end)
+    test.ok(provider.is_available(doc, "document_outline"))
+
+    test.ok(manager.disable({ persist = false, shutdown_timeout = 0.1 }))
+    test.equal(manager.is_enabled(), false)
+    test.equal(core_config.lsp.enabled, false)
+    test.is_nil(manager.client_for_doc(doc))
+    test.equal(provider.is_available(doc, "document_outline"), false)
+    test.contains(manager.status(), "LSP disabled")
+
+    local ok, err = manager.ensure_doc(doc)
+    test.is_nil(ok)
+    test.equal(err, "LSP disabled")
+
+    test.ok(manager.enable({ persist = false, attach_open_docs = false }))
+    test.equal(manager.is_enabled(), true)
+    test.equal(core_config.lsp.enabled, true)
+  end)
+
   test.test("uses containing Project root for LSP even when a nested marker exists", function(context)
     manager.set_server_definitions({ fake = fake_definition({ root_markers = { "compile_commands.json", ".git" } }) })
     local root = mkdir(join_path(context.temp_root, "project-root-for-lsp"))

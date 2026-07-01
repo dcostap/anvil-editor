@@ -1,6 +1,7 @@
 local core = require "core"
 local common = require "core.common"
 local core_config = require "core.config"
+local storage = require "core.storage"
 local client_mod = require "core.lsp.client"
 local config = require "core.lsp.config"
 local completion = require "core.lsp.completion"
@@ -13,13 +14,28 @@ local signature_help = require "core.lsp.signature_help"
 local manager = {}
 
 local clients_by_key = {}
+local STORAGE_MODULE = "lsp"
+local STORAGE_KEY = "settings"
+
 local function running_tests()
   for _, arg in ipairs(ARGS or {}) do
     if arg == "test" then return true end
   end
   return false
 end
-local auto_start = not running_tests()
+local function initial_enabled()
+  local enabled = not (type(core_config.lsp) == "table" and core_config.lsp.enabled == false)
+  local persisted = storage.load(STORAGE_MODULE, STORAGE_KEY)
+  if type(persisted) == "table" and type(persisted.enabled) == "boolean" then
+    enabled = persisted.enabled
+  end
+  core_config.lsp = core_config.lsp or {}
+  core_config.lsp.enabled = enabled
+  return enabled
+end
+
+local lsp_enabled = initial_enabled()
+local auto_start = not running_tests() and lsp_enabled
 local definitions = nil
 local sync_options = {}
 local pump_thread_started = false
@@ -390,8 +406,55 @@ function manager.client_for_doc(doc)
   end
 end
 
+function manager.is_enabled()
+  return lsp_enabled ~= false
+end
+
+function manager.set_enabled(enabled, opts)
+  opts = opts or {}
+  enabled = enabled ~= false
+  local changed = lsp_enabled ~= enabled
+  lsp_enabled = enabled
+  core_config.lsp = core_config.lsp or {}
+  core_config.lsp.enabled = enabled
+  if opts.persist ~= false then
+    storage.save(STORAGE_MODULE, STORAGE_KEY, { enabled = enabled })
+  end
+
+  if enabled then
+    auto_start = not running_tests()
+    if opts.attach_open_docs ~= false then
+      for _, doc in ipairs(core.docs or {}) do
+        if doc and not doc.disable_language_services then
+          manager.ensure_doc(doc, { auto = true })
+        end
+      end
+    end
+  else
+    auto_start = false
+    manager.shutdown_all({ timeout = opts.shutdown_timeout or 0.5 })
+  end
+
+  if core and core.log_quiet then
+    core.log_quiet("LSP %s%s", enabled and "enabled" or "disabled", opts.persist == false and " for this run" or " globally")
+  end
+  return true, changed and "changed" or "unchanged"
+end
+
+function manager.enable(opts)
+  return manager.set_enabled(true, opts)
+end
+
+function manager.disable(opts)
+  return manager.set_enabled(false, opts)
+end
+
 function manager.ensure_doc(doc, opts)
   opts = opts or {}
+  if not manager.is_enabled() then
+    quiet_log("LSP manager skipped document: LSP disabled")
+    return nil, "LSP disabled"
+  end
   if opts.auto and documents.is_content_ready and not documents.is_content_ready(doc) then
     quiet_log("LSP manager deferred auto-start for %s until document contents are loaded", tostring(doc_path(doc)))
     return nil, "document contents not loaded"
@@ -435,7 +498,7 @@ end
 
 function manager.on_doc_metadata_changed(doc)
   if doc and doc.disable_language_services then return end
-  if auto_start then manager.ensure_doc(doc, { auto = true }) end
+  if auto_start and manager.is_enabled() then manager.ensure_doc(doc, { auto = true }) end
 end
 
 function manager.update()
@@ -547,6 +610,9 @@ function manager.status()
     lines[#lines + 1] = string.format("%s for %s: %s%s",
       tostring(attempt.server_id), tostring(attempt.path), status, detail)
   end
+  if not manager.is_enabled() then
+    table.insert(lines, 1, "LSP disabled")
+  end
   if #lines == 0 then return "No LSP clients" end
   return table.concat(lines, "\n")
 end
@@ -558,6 +624,9 @@ function manager.reset_for_tests()
   recent_attempts = {}
   notified_failures = {}
   notified_root_warnings = {}
+  lsp_enabled = true
+  core_config.lsp = core_config.lsp or {}
+  core_config.lsp.enabled = true
   auto_start = false
 end
 

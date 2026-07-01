@@ -134,6 +134,7 @@ plugin_defaults("ipc", {
   dirs_instance = "new",
 })
 config.lsp = common.merge({
+  enabled = true,
   -- Navigation waits longer than the old eager fallback so busy language servers
   -- such as clangd can finish Project-index-backed answers before Anvil falls
   -- back to local Tree-sitter results.

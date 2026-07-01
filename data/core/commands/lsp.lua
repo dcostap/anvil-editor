@@ -43,6 +43,25 @@ local function doc_view_predicate(view)
   return docview ~= nil, docview
 end
 
+command.add(nil, {
+  ["lsp:enable"] = function()
+    manager.enable()
+    if core.log then core.log("LSP enabled globally") end
+  end,
+  ["lsp:disable"] = function()
+    manager.disable()
+    if core.log then core.log("LSP disabled globally") end
+  end,
+  ["lsp:toggle"] = function()
+    local enabled = not manager.is_enabled()
+    manager.set_enabled(enabled)
+    if core.log then core.log(enabled and "LSP enabled globally" or "LSP disabled globally") end
+  end,
+  ["lsp:show-status"] = function()
+    if core.log then core.log("%s", manager.status()) end
+  end,
+})
+
 command.add(doc_view_predicate, {
   ["lsp:start-current-document"] = function(view)
     local ok, err = manager.start_current_document(view)
@@ -55,9 +74,6 @@ command.add(doc_view_predicate, {
     if core.log then
       core.log(ok and "LSP restart scheduled" or "LSP restart skipped: %s", err or "unavailable")
     end
-  end,
-  ["lsp:show-status"] = function()
-    if core.log then core.log("%s", manager.status()) end
   end,
   ["lsp:hover-current-position"] = function(view)
     local _hover, reason, status = hover.start_current_position(view)
