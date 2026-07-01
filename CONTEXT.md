@@ -40,6 +40,18 @@ _Avoid_: Editor tab, buffer view
 Non-interactive text visually anchored to a Document View line that is not part of the Document.
 _Avoid_: Buffer hint, phantom text, inlay hint
 
+**Fold Region**:
+A range of Document text that a Document View can visually hide while keeping the text part of the Document.
+_Avoid_: collapsed block, hidden lines
+
+**Fold Widget Row**:
+The visible row in a Document View that represents a collapsed Fold Region and is not part of the Document text.
+_Avoid_: fake line, synthetic line, placeholder line
+
+**Fold Target**:
+The Document range chosen when the user asks Anvil to fold at the caret or selection.
+_Avoid_: block-info, fold candidate
+
 **Diagnostic Underline**:
 A non-interactive underline marking a diagnostic range in a Document View.
 _Avoid_: Squiggle, lint underline
