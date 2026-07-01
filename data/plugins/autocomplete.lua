@@ -229,6 +229,8 @@ end
 ---@param col integer
 ---@return integer line
 ---@return integer col
+local ROW_PREVIEW_MAX_CHARS = 90
+
 local function max_symbol_length()
   return math.max(1, tonumber(config.plugins.autocomplete.max_symbol_length) or 256)
 end
@@ -244,11 +246,12 @@ local function suggestion_within_length(item)
   return #suggestion_text(item) <= max_symbol_length()
 end
 
-local function display_text(text)
+local function display_text(text, max_len)
   text = tostring(text or "")
-  local max_len = max_symbol_length()
+  max_len = max_len or max_symbol_length()
   if #text <= max_len then return text end
-  return text:sub(1, max_len) .. "…"
+  if max_len <= 1 then return "…" end
+  return text:sub(1, max_len - 1) .. "…"
 end
 
 local function translate_start_of_word(doc, line, col)
@@ -417,6 +420,36 @@ end
 
 local function display_icon(suggestion)
   return suggestion and (suggestion.icon or display_info(suggestion))
+end
+
+local function row_text_parts(suggestion, hide_info, max_chars)
+  local label = tostring(suggestion and suggestion.text or "")
+  local info = not hide_info and display_info(suggestion) or nil
+  info = info and tostring(info) or nil
+  if max_chars then
+    if info and info ~= "" then
+      local sep_len = 1
+      local info_len = max_chars - #label - sep_len
+      if info_len > 0 then
+        info = display_text(info, info_len)
+      else
+        label = display_text(label, max_chars)
+        info = nil
+      end
+    else
+      label = display_text(label, max_chars)
+    end
+  end
+  return label, info
+end
+
+local function row_text_width(font, info_font, suggestion, hide_info, max_chars)
+  local label, info = row_text_parts(suggestion, hide_info, max_chars)
+  local width = font:get_width(label)
+  if info and info ~= "" then
+    width = width + style.padding.x + info_font:get_width(info)
+  end
+  return width
 end
 
 local update_suggestions
@@ -735,7 +768,7 @@ local function get_suggestions_rect(av)
   end
 
   local line, col = av.doc:get_selection()
-  local x, y = av:get_line_screen_position(line, col - #partial)
+  local _, y = av:get_line_screen_position(line, col - #partial)
   y = y + av:get_line_height() + style.padding.y
   local font = av:get_font()
   local th = font:get_height()
@@ -743,15 +776,12 @@ local function get_suggestions_rect(av)
   local hide_info = config.plugins.autocomplete.hide_info
   local hide_icons = config.plugins.autocomplete.hide_icons
 
-  local max_width = 0
-  local width_exceeds = false
-  local win_width = system.get_window_size(core.window) - style.padding.x  * 2
-  for i, s in ipairs(suggestions) do
-    local w = font:get_width(display_text(s.text))
-    local info = display_info(s)
-    if info and not hide_info then
-      w = w + style.font:get_width(info) + style.padding.x
-    end
+  local rect_x = av:get_line_screen_position(line)
+  local window_width = system.get_window_size(core.window)
+  local available_width = math.max(1, window_width - rect_x - style.padding.x)
+  local content_width = 0
+  for _, s in ipairs(suggestions) do
+    local w = row_text_width(font, style.font, s, hide_info, ROW_PREVIEW_MAX_CHARS)
     local icon = display_icon(s)
     if not hide_icons and icon and autocomplete.icons[icon] then
       w = w + autocomplete.icons[icon].font:get_width(
@@ -759,11 +789,7 @@ local function get_suggestions_rect(av)
       ) + (style.padding.x / 2)
       has_icons = true
     end
-    max_width = math.max(max_width, w)
-    if max_width > win_width then
-      width_exceeds = true
-      if i > 1 then break end
-    end
+    content_width = math.max(content_width, w)
   end
 
   local lh = th + style.padding.y
@@ -788,26 +814,13 @@ local function get_suggestions_rect(av)
     rect_y = above_bottom - (max_items * lh + style.padding.y)
   end
 
-  if max_width < 150 then
-    max_width = 150
-  end
-
-  if not width_exceeds then
-    -- if portion not visiable to right, reposition to DocView right margin
-    if max_width + style.padding.x * 2 >= av.size.x then
-      x = win_width / 2 - max_width / 2
-    elseif (x - av.position.x) + max_width > av.size.x then
-      x = (av.size.x + av.position.x) - max_width - (style.padding.x * 2)
-    end
-  else
-    max_width = win_width - style.padding.x * 2
-    x = style.padding.x * 2
-  end
+  local rect_width = math.max(150, content_width + style.padding.x * 2)
+  rect_width = math.min(rect_width, available_width)
 
   return
-    x - style.padding.x,
+    rect_x,
     rect_y,
-    max_width + style.padding.x * 2,
+    rect_width,
     max_items * lh + style.padding.y,
     has_icons,
     max_items
@@ -851,8 +864,8 @@ local function get_description_view(text)
   return desc_view
 end
 
-local function draw_matched_text(font, base_color, match_color, item, x, y, w, h)
-  local text = display_text(item and item.text or "")
+local function draw_matched_text(font, base_color, match_color, item, x, y, w, h, text)
+  text = text or display_text(item and item.text or "")
   local matches = item and item.autocomplete_matches
   local draw_x = x
   local run_text = ""
@@ -872,6 +885,7 @@ local function draw_matched_text(font, base_color, match_color, item, x, y, w, h
     run_text = run_text .. text:sub(i, i)
   end
   flush()
+  return draw_x
 end
 
 local function draw_description_box(text, sx, sy, sw, sh)
@@ -905,99 +919,112 @@ local function draw_description_box(text, sx, sy, sw, sh)
   desc_rect = { x = x, y = y, w = width, h = height }
 end
 
+local function draw_suggestion_row(font, suggestion, rx, y, rw, lh, has_icons, selected, max_chars)
+  local row_bg = selected and style.background2 or style.background3
+  if selected then renderer.draw_rect(rx, y, rw, lh, row_bg) end
+
+  local icon_l_padding, icon_r_padding = 0, 0
+  if has_icons then
+    local icon = display_icon(suggestion)
+    if icon and autocomplete.icons[icon] then
+      local ifont = autocomplete.icons[icon].font
+      local itext = autocomplete.icons[icon].char
+      local icolor = style.dim
+      if config.plugins.autocomplete.icon_position == "left" then
+        common.draw_text(
+          ifont, icolor, itext, "left", rx + style.padding.x, y, rw, lh
+        )
+        icon_l_padding = ifont:get_width(itext) + (style.padding.x / 2)
+      else
+        common.draw_text(
+          ifont, icolor, itext, "right", rx, y, rw - style.padding.x, lh
+        )
+        icon_r_padding = ifont:get_width(itext) + (style.padding.x / 2)
+      end
+    end
+  end
+
+  local hide_info = config.plugins.autocomplete.hide_info
+  local label, info = row_text_parts(suggestion, hide_info, max_chars)
+  local text_width = rw - icon_l_padding - icon_r_padding - style.padding.x * 2
+  local text_padding = rx + icon_l_padding + style.padding.x
+  local dots_width = font:get_width("...")
+  local content_width = row_text_width(font, style.font, suggestion, hide_info, max_chars)
+
+  if text_width <= 0 then return end
+  core.push_clip_rect(text_padding, y, text_width, lh)
+  local label_end = draw_matched_text(font, style.text, style.accent, suggestion, text_padding, y, text_width, lh, label)
+  if info and info ~= "" then
+    common.draw_text(
+      style.font, style.dim, info, "left",
+      label_end + style.padding.x, y,
+      math.max(0, text_width - (label_end - text_padding) - style.padding.x), lh
+    )
+  end
+  if content_width > text_width then
+    renderer.draw_rect(
+      text_padding + math.max(0, text_width - dots_width), y,
+      math.min(dots_width, text_width), lh,
+      row_bg
+    )
+    common.draw_text(
+      font, style.text, "...", "right",
+      text_padding, y, text_width, lh
+    )
+  end
+  core.pop_clip_rect()
+end
+
 local function draw_suggestions_box(av)
   if #suggestions <= 0 then
     return
   end
 
-  -- draw background rect
   local rx, ry, rw, rh, has_icons, visible_count = get_suggestions_rect(av)
   renderer.draw_rect(rx, ry, rw, rh, style.background3)
   desc_rect = nil
 
-  -- draw text
   local font = av:get_font()
   local lh = font:get_height() + style.padding.y
   local y = ry + style.padding.y / 2
   local show_count = math.min(#suggestions, visible_count)
   local start_index = suggestions_offset
-  local hide_info = config.plugins.autocomplete.hide_info
-  local dots_width = font:get_width("...")
+  local selected_item, selected_y, selected_desc
 
   for i=start_index, start_index+show_count-1, 1 do
-    if not suggestions[i] then
-      break
-    end
     local s = suggestions[i]
+    if not s then break end
     local selected = suggestions_idx == i
+    draw_suggestion_row(font, s, rx, y, rw, lh, has_icons, selected, ROW_PREVIEW_MAX_CHARS)
     if selected then
-      renderer.draw_rect(rx, y, rw, lh, style.background2)
-    end
-
-    local icon_l_padding, icon_r_padding = 0, 0
-
-    if has_icons then
-      local icon = display_icon(s)
-      if icon and autocomplete.icons[icon] then
-        local ifont = autocomplete.icons[icon].font
-        local itext = autocomplete.icons[icon].char
-        local icolor = style.dim
-        if config.plugins.autocomplete.icon_position == "left" then
-          common.draw_text(
-            ifont, icolor, itext, "left", rx + style.padding.x, y, rw, lh
-          )
-          icon_l_padding = ifont:get_width(itext) + (style.padding.x / 2)
-        else
-          common.draw_text(
-            ifont, icolor, itext, "right", rx, y, rw - style.padding.x, lh
-          )
-          icon_r_padding = ifont:get_width(itext) + (style.padding.x / 2)
-        end
-      end
-    end
-
-    local color = selected and style.text or style.dim
-
-    local iw = 0
-    local info = display_info(s)
-    if info and not hide_info then
-      local ix2, _, ix1, _ = common.draw_text(
-        style.font, color, info, "right",
-        rx, y, rw - icon_r_padding - style.padding.x, lh
-      )
-      iw = ix2 - ix1 + style.padding.x
-    end
-    color = style.text
-    local icon_padding = icon_l_padding > 0 and icon_l_padding or icon_r_padding
-    local text_width = rw - icon_padding - style.padding.x - iw
-    local text_padding = rx + icon_l_padding + style.padding.x
-    core.push_clip_rect(text_padding, y, text_width, lh)
-    draw_matched_text(font, color, style.accent, s, text_padding, y, text_width, lh)
-    local text_draw_width = font:get_width(display_text(s.text))
-    if text_draw_width > text_width then
-      renderer.draw_rect(
-        text_padding + text_width - dots_width, y,
-        dots_width, lh,
-        style.background3
-      )
-      common.draw_text(
-        font, color, "...", "right",
-        text_padding, y, text_width, lh
-      )
-    end
-    core.pop_clip_rect()
-    y = y + lh
-    if selected then
+      selected_item = s
+      selected_y = y
+      selected_desc = s.desc
       if s.onhover then
         s.onhover(suggestions_idx, s)
         s.onhover = nil
       end
-      if s.desc and #s.desc > 0 then
-        draw_description_box(s.desc, rx, ry, rw, rh)
-      end
     end
+    y = y + lh
   end
 
+  if selected_item then
+    local hide_info = config.plugins.autocomplete.hide_info
+    local full_width = row_text_width(font, style.font, selected_item, hide_info)
+    local icon = display_icon(selected_item)
+    if has_icons and icon and autocomplete.icons[icon] then
+      full_width = full_width + autocomplete.icons[icon].font:get_width(
+        autocomplete.icons[icon].char
+      ) + (style.padding.x / 2)
+    end
+    local ww = system.get_window_size(core.window)
+    local overlay_width = math.max(rw, full_width + style.padding.x * 2)
+    overlay_width = math.min(overlay_width, math.max(rw, ww - rx - style.padding.x))
+    draw_suggestion_row(font, selected_item, rx, selected_y, overlay_width, lh, has_icons, true)
+    if selected_desc and #selected_desc > 0 then
+      draw_description_box(selected_desc, rx, ry, rw, rh)
+    end
+  end
 end
 
 local function show_autocomplete(opts)
