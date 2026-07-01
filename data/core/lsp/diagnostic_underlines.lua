@@ -5,6 +5,8 @@ local diagnostic_markers = require "core.lsp.diagnostic_markers"
 
 local diagnostic_underlines = {}
 
+local SQUIGGLE_Y_OFFSET = 1
+
 local cache = setmetatable({}, { __mode = "k" })
 
 local function doc_change_id(doc)
@@ -99,7 +101,7 @@ local function squiggle_metrics(view, y)
   local wave_height = math.max(thickness * 2, math.ceil(font_height / 7))
   local step = math.max(wave_height, math.ceil(font_height / 4))
   local text_bottom = y + view:get_line_text_y_offset() + font_height
-  local bottom = text_bottom - math.ceil(thickness / 2)
+  local bottom = text_bottom - math.ceil(thickness / 2) + SQUIGGLE_Y_OFFSET
   local top = bottom - wave_height
   return top, bottom, thickness, step
 end
