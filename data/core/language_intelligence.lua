@@ -192,6 +192,10 @@ function intelligence.node_ranges(doc, line1, col1, line2, col2, opts)
   return first_value("node_ranges", {}, doc, line1, col1, line2, col2, opts)
 end
 
+function intelligence.fold_target(doc, line1, col1, line2, col2, opts)
+  return first_value("fold_target", nil, doc, line1, col1, line2, col2, opts)
+end
+
 function intelligence.current_node_ranges(opts)
   local view = core.active_view
   return intelligence.node_ranges(view and view.doc, nil, nil, nil, nil, opts)

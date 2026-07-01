@@ -7,6 +7,7 @@ local translate = require "core.doc.translate"
 local tokenizer = require "core.tokenizer"
 local ime = require "core.ime"
 local linewrapping = require "core.linewrapping"
+local language_intelligence = require "core.language_intelligence"
 local range_marker = require "core.range_marker"
 local Doc = require "core.doc"
 local View = require "core.view"
@@ -1533,6 +1534,12 @@ function DocView:get_fold_target(line1, col1, line2, col2, opts)
     if last > start then
       return { line1 = start, col1 = 1, line2 = last, col2 = #self.doc.lines[last] + 1, kind = kind or "indent" }
     end
+  end
+
+  local syntax_target, syntax_reason = language_intelligence.fold_target(self.doc, line1, col1, line2, col2)
+  if syntax_target then return syntax_target end
+  if syntax_reason and syntax_reason ~= "no-provider" and syntax_reason ~= "unsupported" and syntax_reason ~= "not-ready" then
+    core.log_quiet("Syntax Fold Target unavailable for %s: %s", self.doc:get_name(), tostring(syntax_reason))
   end
 
   local direct = indentation_target_at(line1, "indent")

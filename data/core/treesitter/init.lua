@@ -6,6 +6,7 @@ local registry = require "core.treesitter.registry"
 local ts_highlight = require "core.treesitter.highlight"
 local ts_outline = require "core.treesitter.outline"
 local ts_selection = require "core.treesitter.selection"
+local ts_folding = require "core.treesitter.folding"
 local ts_navigation = require "core.treesitter.navigation"
 local ts_locals = require "core.treesitter.locals"
 local Doc = require "core.doc"
@@ -16,6 +17,7 @@ local treesitter = {}
 treesitter.registry = registry
 treesitter.outline = ts_outline
 treesitter.selection = ts_selection
+treesitter.folding = ts_folding
 treesitter.navigation = ts_navigation
 treesitter.locals = ts_locals
 treesitter.language_intelligence = language_intelligence
@@ -356,6 +358,10 @@ function treesitter.get_current_node_ranges(opts)
   return language_intelligence.current_node_ranges(opts)
 end
 
+function treesitter.get_fold_target(doc, line1, col1, line2, col2, opts)
+  return language_intelligence.fold_target(doc, line1, col1, line2, col2, opts)
+end
+
 function treesitter.expand_selection(doc)
   return language_intelligence.expand_selection(doc)
 end
@@ -490,6 +496,7 @@ language_intelligence.register_provider({
     render_tokens = true,
     document_outline = true,
     node_ranges = true,
+    fold_target = true,
     expand_selection = true,
     shrink_selection = true,
     enclosing_symbol = true,
@@ -514,6 +521,10 @@ language_intelligence.register_provider({
 
   node_ranges = function(doc, line1, col1, line2, col2, opts)
     return ts_selection.get_node_ranges(doc, line1, col1, line2, col2, opts)
+  end,
+
+  fold_target = function(doc, line1, col1, line2, col2, opts)
+    return ts_folding.get_fold_target(doc, line1, col1, line2, col2, opts)
   end,
 
   expand_selection = function(doc)

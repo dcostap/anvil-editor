@@ -4,6 +4,7 @@ local DocView = require "core.docview"
 local config = require "core.config"
 local style = require "core.style"
 local test = require "core.test"
+local treesitter = require "core.treesitter"
 
 local function track(context, kind, value)
   context[kind] = context[kind] or {}
@@ -25,6 +26,16 @@ local function numbered_lines(count)
   local lines = {}
   for i = 1, count do lines[i] = "line " .. i end
   return table.concat(lines, "\n")
+end
+
+local function wait_treesitter_ready(doc, timeout)
+  local deadline = system.get_time() + (timeout or 3)
+  while system.get_time() < deadline do
+    treesitter.poll_doc(doc)
+    if doc.treesitter and doc.treesitter.status == "ready" then return true end
+    coroutine.yield(0.01)
+  end
+  return false
 end
 
 local function open_editor(context, text, opts)
@@ -303,6 +314,20 @@ test.describe("DocView folding", function()
     local fold = view:get_collapsed_fold_at_line(2)
     test.ok(fold ~= nil, "expected explicit multi-line selection to fold")
     test.equal(fold.line1, 2)
+    test.equal(fold.line2, 3)
+  end)
+
+  test.it("manual fold prefers a syntax-aware Fold Target when Tree-sitter is ready", function(context)
+    local view, doc = open_editor(context, "test :: proc() {\n    os.read_entire\n}", { wrapping = false })
+    doc:set_filename("fold_target.odin", "fold_target.odin")
+    test.ok(wait_treesitter_ready(doc), "expected Odin Tree-sitter parse to become ready")
+    doc:set_selection(1, 1)
+
+    command.perform "doc:fold-at-caret"
+
+    local fold = view:get_collapsed_fold_at_line(2)
+    test.ok(fold ~= nil, "expected syntax-aware Fold Target to fold the procedure")
+    test.equal(fold.line1, 1)
     test.equal(fold.line2, 3)
   end)
 
