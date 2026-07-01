@@ -840,6 +840,25 @@ local function point_over_rect(x, y, rect)
     and x <= rect.x + rect.w and y <= rect.y + rect.h
 end
 
+local function raw_description_markdown(text)
+  text = tostring(text or "")
+  local lines = {}
+  text = text:gsub("\r\n", "\n"):gsub("\r", "\n")
+  if text == "" then
+    lines[1] = ""
+  else
+    for line in (text .. "\n"):gmatch("(.-)\n") do
+      lines[#lines + 1] = line
+    end
+  end
+  for i, line in ipairs(lines) do
+    line = line:gsub("([\\`*_{}%[%]%(%)#+%-.!>|~])", "\\%1")
+    if i < #lines and line ~= "" then line = line .. "  " end
+    lines[i] = line
+  end
+  return table.concat(lines, "\n")
+end
+
 local function get_description_view(text)
   local font_size = config.plugins.autocomplete.desc_font_size
   if previous_scale ~= SCALE or desc_font_size ~= font_size then
@@ -854,7 +873,7 @@ local function get_description_view(text)
     or desc_view_font ~= desc_font
   then
     desc_view = MarkdownView({
-      text = text,
+      text = raw_description_markdown(text),
       title = "Completion Documentation",
       font = desc_font
     })
