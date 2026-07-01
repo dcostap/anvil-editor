@@ -840,23 +840,13 @@ local function point_over_rect(x, y, rect)
     and x <= rect.x + rect.w and y <= rect.y + rect.h
 end
 
-local function raw_description_markdown(text)
-  text = tostring(text or "")
-  local lines = {}
-  text = text:gsub("\r\n", "\n"):gsub("\r", "\n")
-  if text == "" then
-    lines[1] = ""
-  else
-    for line in (text .. "\n"):gmatch("(.-)\n") do
-      lines[#lines + 1] = line
-    end
-  end
-  for i, line in ipairs(lines) do
-    line = line:gsub("([\\`*_{}%[%]%(%)#+%-.!>|~])", "\\%1")
-    if i < #lines and line ~= "" then line = line .. "  " end
-    lines[i] = line
-  end
-  return table.concat(lines, "\n")
+local function draw_box_border(x, y, w, h)
+  local t = math.max(1, style.divider_size or 1)
+  local color = style.autocomplete_border
+  renderer.draw_rect(x, y, w, t, color)
+  renderer.draw_rect(x, y + h - t, w, t, color)
+  renderer.draw_rect(x, y, t, h, color)
+  renderer.draw_rect(x + w - t, y, t, h, color)
 end
 
 local function get_description_view(text)
@@ -873,7 +863,7 @@ local function get_description_view(text)
     or desc_view_font ~= desc_font
   then
     desc_view = MarkdownView({
-      text = raw_description_markdown(text),
+      text = text,
       title = "Completion Documentation",
       font = desc_font
     })
@@ -907,34 +897,52 @@ local function draw_matched_text(font, base_color, match_color, item, x, y, w, h
   return draw_x
 end
 
+local function preferred_description_width(text, max_width)
+  max_width = math.max(1, max_width or 1)
+  local min_width = math.min(max_width, 160 * SCALE)
+  local width = math.min(max_width, 360 * SCALE)
+  text = tostring(text or ""):gsub("\r\n", "\n"):gsub("\r", "\n")
+  for line in (text .. "\n"):gmatch("(.-)\n") do
+    local line_width = desc_font:get_width(line)
+    if line_width > 0 then
+      width = math.max(width, math.min(max_width, line_width + style.padding.x * 4))
+    end
+  end
+  return math.max(min_width, math.min(width, max_width))
+end
+
 local function draw_description_box(text, sx, sy, sw, sh)
   local ww, wh = system.get_window_size(core.window)
   local gap = style.padding.x / 4
-  local max_width = math.max(260 * SCALE, ww * 0.35)
+  local max_width = math.max(360 * SCALE, ww * 0.65)
+  local view = get_description_view(text)
   local x = sx + sw + gap
   local y = sy
   local width
+  local available_width
 
   if sw > (ww - style.padding.x * 2) * 0.5 then
     x = sx
     y = sy + sh + gap
-    width = math.min(sw, ww - x - style.padding.x * 2)
+    available_width = ww - x - style.padding.x * 2
   elseif sx < ww - sx - sw then
-    width = math.min(max_width, ww - x - style.padding.x * 2)
+    available_width = ww - x - style.padding.x * 2
   else
-    width = math.min(max_width, sx - gap - style.padding.x * 2)
+    available_width = sx - gap - style.padding.x * 2
+  end
+
+  width = preferred_description_width(text, math.min(max_width, available_width))
+  if not (sw > (ww - style.padding.x * 2) * 0.5) and sx >= ww - sx - sw then
     x = sx - gap - width
   end
 
-  width = math.max(width, 160 * SCALE)
-
-  local view = get_description_view(text)
   local _, content_height = view:get_rendered_size(width)
   local max_height = math.max(120 * SCALE, wh * 0.55)
   local available_height = wh - y - style.padding.y
   local height = math.min(content_height, max_height, math.max(available_height, 1))
 
   view:draw_at(x, y, width, height, style.background3, true)
+  draw_box_border(x, y, width, height)
   desc_rect = { x = x, y = y, w = width, h = height }
 end
 
@@ -1044,6 +1052,8 @@ local function draw_suggestions_box(av)
       draw_description_box(selected_desc, rx, ry, rw, rh)
     end
   end
+
+  draw_box_border(rx, ry, rw, rh)
 end
 
 local function show_autocomplete(opts)

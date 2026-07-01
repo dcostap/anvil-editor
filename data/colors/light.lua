@@ -81,6 +81,7 @@ style.background2 = c("f7f8fa")
 style.tab_background = c("ebecf0")
 style.titlebar = style.tab_background
 style.background3 = c("ffffff")
+style.autocomplete_border = { common.color "rgba(255, 255, 255, 0.25)" }
 style.text = c(C.text_fg)
 style.caret = c("000000")
 style.accent = c("3574f0")
