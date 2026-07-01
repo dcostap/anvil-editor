@@ -1578,7 +1578,8 @@ local function result_list_label_and_spans(r)
   end
   if r.kind == "symbol" then
     local text = r.label or r.name or ""
-    return "$ " .. text, offset_spans(r.match_spans or {}, 2)
+    local prefix = r.symbol_scope == "document" and "$$ " or "$ "
+    return prefix .. text, offset_spans(r.match_spans or {}, #prefix)
   end
   local text = r.label or r.file or ""
   return text, r.match_spans or {}
@@ -1935,6 +1936,7 @@ function FSView:new(prefix, opts)
   local source_view = core.active_view
   local source_doc = source_view and source_view.doc
   self.source_view = file_context.current_main_panel_view(source_view) or source_view
+  self.source_doc = source_doc
   self.source_file_path = file_context.view_file_path(source_view)
   self.source_file_line = source_doc and source_doc:get_selection(false) or 1
 
@@ -2641,7 +2643,12 @@ end
 function FSView:refresh_normal(base, line, reset_selection, force_refresh)
   local limit = self:result_limit()
   local mode = base:sub(1, 1)
-  if mode == ">" or mode == "@" or mode == "$" then base = base:sub(2):gsub("^%s+", "") end
+  if base:sub(1, 2) == "$$" then
+    mode = "$$"
+    base = base:sub(3):gsub("^%s+", "")
+  elseif mode == ">" or mode == "@" or mode == "$" then
+    base = base:sub(2):gsub("^%s+", "")
+  end
 
   local out = {}
   self.has_more = false
@@ -2727,6 +2734,10 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
   elseif mode == "$" then
     kill_file_search()
     self:start_symbol_search(base, reset_selection)
+    return
+  elseif mode == "$$" then
+    kill_file_search()
+    self:start_current_document_symbol_search(base, reset_selection)
     return
   elseif mode == "@" then
     kill_file_search()
@@ -3091,6 +3102,63 @@ local function symbol_display_file(path)
   return path
 end
 
+local function symbol_result_from_item(item, query, opts)
+  opts = opts or {}
+  local path = item.path or item.file
+  local file = symbol_display_file(path)
+  local label = item.name or item.label or ""
+  local line = item.line or (item.name_range and item.name_range.start and item.name_range.start.line) or item.start_line or 1
+  local col = item.col or (item.name_range and item.name_range.start and item.name_range.start.col) or item.start_col or 1
+  local line2 = item.line2 or (item.name_range and item.name_range["end"] and item.name_range["end"].line) or item.end_line
+  local col2 = item.col2 or (item.name_range and item.name_range["end"] and item.name_range["end"].col) or item.end_col
+  local _, name_spans = fuzzy_match(query, label)
+  local _, file_spans = fuzzy_match(query, file)
+  return {
+    kind = "symbol",
+    label = label,
+    name = label,
+    symbol_kind = item.kind,
+    symbol_kind_label = SYMBOL_KIND_LABELS[item.kind] or item.kind or "symbol",
+    detail = item.detail,
+    file = file,
+    path = path,
+    doc = opts.doc,
+    line = line,
+    col = col,
+    line2 = line2,
+    col2 = col2,
+    query = query,
+    match_spans = name_spans or {},
+    file_spans = file_spans or {},
+    symbol_scope = opts.scope,
+  }
+end
+
+local function set_symbol_results(view, query, results, source_label, status, reason, limit, opts)
+  opts = opts or {}
+  local out = {}
+  for i, item in ipairs(results or {}) do
+    if i > limit then view.has_more = true; break end
+    out[#out + 1] = symbol_result_from_item(item, query, opts)
+  end
+  view.results = out
+  view.selected = common.clamp(view.selected or 1, 1, math.max(1, #out))
+  view:ensure_selection_visible()
+  if status == "fresh" or status == "stale" then
+    local count = #(results or {})
+    local suffix = source_label and source_label ~= "" and (" — " .. source_label) or ""
+    view.status = string.format("%d symbol%s%s", count, count == 1 and "" or "s", suffix)
+  elseif reason then
+    view.status = tostring(reason)
+  end
+  view:schedule_update(true)
+end
+
+local function lsp_enabled()
+  local ok, manager = pcall(require, "core.lsp.manager")
+  return ok and manager and manager.is_enabled and manager.is_enabled() ~= false
+end
+
 function FSView:start_symbol_search(query, reset_selection)
   symbol_generation = symbol_generation + 1
   local gen = symbol_generation
@@ -3103,58 +3171,94 @@ function FSView:start_symbol_search(query, reset_selection)
     self.selected = 1
     self.viewport_offset = 1
   end
-  self.status = query == "" and "Type after $ to find Project symbols" or "Finding symbols…"
+  self.status = query == "" and "Type after $ to find Project symbols" or "Finding Project symbols…"
   self:schedule_update(true)
   if query == "" then return end
 
   core.add_thread(function()
-    local lsp_provider = require "core.lsp.provider"
-    local deadline = system.get_time() + ((config.lsp and config.lsp.navigation_timeout) or 10)
-    local results, reason, status = lsp_provider.workspace_symbols(query, { force = true })
-    while status ~= "fresh" and status ~= "stale" and status ~= "unavailable" and system.get_time() < deadline do
-      if gen ~= symbol_generation or active_view ~= self then return end
-      coroutine.yield(0.05)
-      results, reason, status = lsp_provider.workspace_symbols(query)
+    local results, reason, status, source_label
+    if lsp_enabled() then
+      local lsp_provider = require "core.lsp.provider"
+      local deadline = system.get_time() + ((config.lsp and config.lsp.navigation_timeout) or 10)
+      results, reason, status = lsp_provider.workspace_symbols(query, { force = true })
+      while status ~= "fresh" and status ~= "stale" and status ~= "unavailable" and system.get_time() < deadline do
+        if gen ~= symbol_generation or active_view ~= self then return end
+        coroutine.yield(0.05)
+        results, reason, status = lsp_provider.workspace_symbols(query)
+      end
+      if status == "fresh" or status == "stale" then source_label = "LSP" end
+    else
+      status = "unavailable"
+      reason = "LSP disabled"
+    end
+
+    if status ~= "fresh" and status ~= "stale" then
+      local ts_symbols = require "core.treesitter.symbol_index"
+      local deadline = system.get_time() + ((config.lsp and config.lsp.navigation_timeout) or 10)
+      results, reason, status = ts_symbols.workspace_symbols(query, { force = false, limit = limit + 1, allow_stale = true })
+      while status ~= "fresh" and status ~= "unavailable" and system.get_time() < deadline do
+        if gen ~= symbol_generation or active_view ~= self then return end
+        local index = ts_symbols.status()
+        if status == "stale" then
+          set_symbol_results(self, query, results, "Tree-sitter indexing", status, reason, limit, { scope = "project" })
+          if not index or index.status ~= "indexing" then break end
+        elseif index and index.status == "indexing" then
+          self.status = string.format("Indexing Project symbols… %d found", #(index.symbols or {}))
+          self:schedule_update(true)
+        end
+        coroutine.yield(0.05)
+        results, reason, status = ts_symbols.workspace_symbols(query, { limit = limit + 1, allow_stale = true })
+      end
+      source_label = "Tree-sitter"
     end
 
     if gen ~= symbol_generation or active_view ~= self then return end
-    local out = {}
     if status == "fresh" or status == "stale" then
-      for i, item in ipairs(results or {}) do
-        if i > limit then self.has_more = true; break end
-        local file = symbol_display_file(item.path)
-        local label = item.name or ""
-        local _, name_spans = fuzzy_match(query, label)
-        local _, file_spans = fuzzy_match(query, file)
-        out[#out + 1] = {
-          kind = "symbol",
-          label = label,
-          name = label,
-          symbol_kind = item.kind,
-          symbol_kind_label = SYMBOL_KIND_LABELS[item.kind] or item.kind or "symbol",
-          detail = item.detail,
-          file = file,
-          path = item.path,
-          line = item.line or 1,
-          col = item.col or 1,
-          line2 = item.line2,
-          col2 = item.col2,
-          query = query,
-          match_spans = name_spans or {},
-          file_spans = file_spans or {},
-        }
-      end
-      self.status = string.format("%d symbol%s", #(results or {}), #(results or {}) == 1 and "" or "s")
-    elseif status == "unavailable" then
-      self.status = "No LSP workspace-symbol provider available"
+      set_symbol_results(self, query, results, source_label, status, reason, limit, { scope = "project" })
     else
-      self.status = "Finding symbols timed out"
+      self.results = {}
+      self.status = "Finding Project symbols timed out"
+      self:schedule_update(true)
     end
-    self.results = out
-    self.selected = common.clamp(self.selected or 1, 1, math.max(1, #out))
-    self:ensure_selection_visible()
-    self:schedule_update(true)
-    if reason and status ~= "fresh" then core.log_quiet("Fuzzy symbols: %s", tostring(reason)) end
+    if reason and status ~= "fresh" then core.log_quiet("Fuzzy Project symbols: %s", tostring(reason)) end
+  end)
+end
+
+function FSView:start_current_document_symbol_search(query, reset_selection)
+  symbol_generation = symbol_generation + 1
+  local gen = symbol_generation
+  local limit = self:max_result_limit()
+  query = trim_query(query)
+  self.results = {}
+  self.has_more = false
+  self.hovered_result = nil
+  if reset_selection then
+    self.selected = 1
+    self.viewport_offset = 1
+  end
+  self.status = "Finding current Document symbols…"
+  self:schedule_update(true)
+
+  core.add_thread(function()
+    local doc = self.source_doc or (self.source_view and self.source_view.doc) or (core.active_view and core.active_view.doc)
+    local treesitter = require "core.treesitter"
+    if doc then treesitter.attach_or_update_doc(doc, "current-document-symbol-search") end
+    local deadline = system.get_time() + 3
+    while doc and doc.treesitter and doc.treesitter.status ~= "ready" and system.get_time() < deadline do
+      if gen ~= symbol_generation or active_view ~= self then return end
+      treesitter.poll_doc(doc)
+      coroutine.yield(0.03)
+    end
+    if gen ~= symbol_generation or active_view ~= self then return end
+    local ts_symbols = require "core.treesitter.symbol_index"
+    local results, reason, status = ts_symbols.current_document_symbols(doc, query, { limit = limit + 1 })
+    if status == "fresh" or status == "stale" then
+      set_symbol_results(self, query, results, "current Document", status, reason, limit, { scope = "document", doc = doc })
+      if #self.results == 0 and reason then self.status = "No current Document symbols: " .. tostring(reason) end
+    else
+      self.status = reason or "No current Document symbols"
+      self:schedule_update(true)
+    end
   end)
 end
 
@@ -3282,6 +3386,15 @@ function FSView:confirm(target_side)
       open_anvil_window(path)
     else
       core.open_project_in_same_window(path)
+    end
+    return
+  end
+  if r.doc and r.line then
+    local doc = r.doc
+    local source_view = self.source_view
+    self:close()
+    if source_view and source_view.doc == doc then
+      if r.line2 and r.col2 then doc:set_selection(r.line, r.col, r.line2, r.col2) else doc:set_selection(r.line, r.col) end
     end
     return
   end
@@ -3544,10 +3657,11 @@ local function quote_exact_query(text)
   return '"' .. text:gsub('"', '""') .. '"'
 end
 
-local fuzzy_mode_prefixes = { ["#"] = true, ["@"] = true, [">"] = true, ["$"] = true }
+local fuzzy_mode_prefixes = { ["#"] = true, ["@"] = true, [">"] = true, ["$"] = true, ["$$"] = true }
 
 local function split_mode_prefix(text)
   text = tostring(text or "")
+  if text:sub(1, 2) == "$$" then return "$$", text:sub(3) end
   local prefix = text:sub(1, 1)
   if fuzzy_mode_prefixes[prefix] then return prefix, text:sub(2) end
   return "", text
@@ -3614,6 +3728,7 @@ command.add(nil, {
   ["fuzzy-searcher:open-projects"] = function() open("@") end,
   ["fuzzy-searcher:open-grep"] = function() open("#") end,
   ["fuzzy-searcher:open-symbols"] = function() open("$") end,
+  ["fuzzy-searcher:open-current-document-symbols"] = function() open("$$") end,
   ["fuzzy-searcher:open-commands"] = function() open(">") end,
 })
 
@@ -3633,6 +3748,7 @@ core.fuzzy_searcher_install_global_keymaps = function()
     ["ctrl+shift+e"] = "fuzzy-searcher:open-projects",
     ["ctrl+e"] = "fuzzy-searcher:open-files",
     ["ctrl+shift+j"] = "fuzzy-searcher:open-symbols",
+    ["ctrl+j"] = "fuzzy-searcher:open-current-document-symbols",
     ["ctrl+shift+f"] = "fuzzy-searcher:open-grep",
     ["ctrl+shift+a"] = "fuzzy-searcher:open-commands",
   }, true)

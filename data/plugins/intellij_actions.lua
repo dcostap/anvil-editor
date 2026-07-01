@@ -1460,7 +1460,6 @@ keymap.add({
 core.intellij_actions_disable_conflict_shortcuts = function()
   keymap.add_direct({
     ["ctrl+g"] = "user:disabled-intellij-conflict",
-    ["ctrl+j"] = "user:disabled-intellij-conflict",
     ["ctrl+shift+k"] = "user:disabled-intellij-conflict",
     ["ctrl+return"] = "user:disabled-intellij-conflict",
     ["ctrl+alt+p"] = "user:select-all-occurrences",

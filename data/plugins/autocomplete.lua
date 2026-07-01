@@ -467,6 +467,11 @@ local function tree_sitter_locals_module()
   return ok and locals or nil
 end
 
+local function tree_sitter_symbol_index_module()
+  local ok, symbols = pcall(require, "core.treesitter.symbol_index")
+  return ok and symbols or nil
+end
+
 local function has_lsp_completion(doc)
   local completion = lsp_completion_module()
   return completion and completion.has_available_client and completion.has_available_client(doc) or false
@@ -690,6 +695,23 @@ function update_suggestions()
       if name and name ~= "" and #name <= max_symbol_length() and not assigned_sym[name] then
         table.insert(items, setmetatable({text = name, info = symbol.kind or "symbol", icon = symbol.kind}, mt))
         assigned_sym[name] = true
+      end
+    end
+
+    local symbol_index = tree_sitter_symbol_index_module()
+    if symbol_index and partial ~= "" then
+      local project_symbols, _reason, project_status = symbol_index.workspace_symbols(partial, {
+        limit = math.max(20, config.plugins.autocomplete.max_suggestions * 2),
+        allow_stale = true,
+      })
+      if project_status == "fresh" or project_status == "stale" then
+        for _, symbol in ipairs(project_symbols or {}) do
+          local name = symbol.name
+          if name and name ~= "" and #name <= max_symbol_length() and not assigned_sym[name] then
+            table.insert(items, setmetatable({text = name, info = symbol.kind or "project symbol", icon = symbol.kind}, mt))
+            assigned_sym[name] = true
+          end
+        end
       end
     end
   end

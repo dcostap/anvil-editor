@@ -1,3 +1,4 @@
+local common = require "core.common"
 local Doc = require "core.doc"
 local test = require "core.test"
 local treesitter = require "core.treesitter"
@@ -5,6 +6,7 @@ local intelligence = require "core.language_intelligence"
 local registry = require "core.treesitter.registry"
 local native = require "treesitter"
 local ts_highlight = require "core.treesitter.highlight"
+local symbol_index = require "core.treesitter.symbol_index"
 
 local function set_text(doc, text)
   doc.lines = {}
@@ -111,6 +113,37 @@ local function write_cpp_repro_file(filename)
   local fp = assert(io.open(filename, "wb"))
   fp:write((cpp_repro_text:gsub("\n", "\r\n")))
   fp:close()
+end
+
+local function mkdir(path)
+  local ok, err = common.mkdirp(path)
+  test.ok(ok, err)
+  return path
+end
+
+local function write_file(path, text)
+  local fp = test.not_nil(io.open(path, "wb"))
+  fp:write(text or "")
+  fp:close()
+  return path
+end
+
+local function wait_workspace_symbols(query, opts, timeout)
+  local deadline = system.get_time() + (timeout or 5)
+  local results, reason, status
+  opts = opts or {}
+  local first = true
+  repeat
+    local call_opts = opts
+    if opts.force and not first then
+      call_opts = common.merge(opts, { force = false })
+    end
+    first = false
+    results, reason, status = symbol_index.workspace_symbols(query, call_opts)
+    if status == "fresh" or status == "stale" then return results, reason, status end
+    coroutine.yield(0.03)
+  until system.get_time() >= deadline
+  return results, reason, status
 end
 
 test.describe("core.treesitter phase 3 document integration", function()
@@ -244,6 +277,59 @@ main :: proc() {
     test.ok(find_symbol(symbols, "Point", "struct"))
     test.ok(find_symbol(symbols, "main", "function"))
     doc:on_close()
+  end)
+
+  test.it("Tree-sitter symbol index returns Project and current Document symbols", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-symbol-index-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    write_file(root .. PATHSEP .. "main.odin", [[package demo
+
+main :: proc() {
+  value := 1
+}
+]])
+    write_file(root .. PATHSEP .. "player.odin", [[package demo
+
+Player :: struct {
+  x: int,
+}
+
+spawn_player :: proc() -> Player {
+  return {}
+}
+]])
+
+    local results, _reason, status = wait_workspace_symbols("player", { root = root, limit = 10 })
+    test.equal(status, "fresh")
+    test.ok(find_symbol(results, "Player", "struct"))
+    test.ok(find_symbol(results, "spawn_player", "function"))
+
+    write_file(root .. PATHSEP .. "late.odin", [[package demo
+
+late_symbol :: proc() {}
+]])
+    results, _reason, status = wait_workspace_symbols("late", { root = root, limit = 10, force = true })
+    test.equal(status, "fresh")
+    test.ok(find_symbol(results, "late_symbol", "function"))
+
+    os.remove(root .. PATHSEP .. "player.odin")
+    results, _reason, status = wait_workspace_symbols("Player", { root = root, limit = 10, force = true })
+    test.equal(status, "fresh")
+    test.equal(find_symbol(results, "Player", "struct"), nil)
+
+    local doc = odin_doc([[package demo
+
+helper :: proc() {}
+main :: proc() {}
+]], root .. PATHSEP .. "current.odin")
+    test.ok(wait_ready(doc))
+    results = symbol_index.current_document_symbols(doc, "help", { root = root, limit = 10 })
+    test.ok(find_symbol(results, "helper", "function"))
+    test.equal(find_symbol(results, "main", "function"), nil)
+    doc:on_close()
+    common.rm(root, true)
   end)
 
   test.it("stale result discarded after generation mismatch", function()

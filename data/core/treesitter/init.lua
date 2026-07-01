@@ -9,6 +9,7 @@ local ts_selection = require "core.treesitter.selection"
 local ts_folding = require "core.treesitter.folding"
 local ts_navigation = require "core.treesitter.navigation"
 local ts_locals = require "core.treesitter.locals"
+local ts_symbol_index = require "core.treesitter.symbol_index"
 local Doc = require "core.doc"
 
 local native_ok, native = nil, nil
@@ -20,6 +21,7 @@ treesitter.selection = ts_selection
 treesitter.folding = ts_folding
 treesitter.navigation = ts_navigation
 treesitter.locals = ts_locals
+treesitter.symbol_index = ts_symbol_index
 treesitter.language_intelligence = language_intelligence
 treesitter.enabled = true
 

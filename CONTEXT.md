@@ -24,6 +24,14 @@ _Avoid_: Primary project, main project
 The per-project editor state that restores open views, tabs, splits, scroll positions, selection state, extra project directories, and recently visited files.
 _Avoid_: Session, app state
 
+**Project Symbol Search**:
+A search over named code symbols across a loaded Project.
+_Avoid_: global symbol search
+
+**Current Document Symbol Search**:
+A search over named code symbols in the active Document only.
+_Avoid_: local symbol search, file symbol search
+
 **Recent File**:
 A file in Anvil's navigation history, ordered by last visit for returning to previously viewed files.
 _Avoid_: recent tab, file tab history
