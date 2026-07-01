@@ -26,6 +26,7 @@ lsp_config.DEFAULT_SERVER_DEFINITIONS = {
     env = {},
     cwd_policy = "root",
     request_timeout = 10,
+    did_save_after_open = false,
     source = "bundled",
   },
   ols = {
@@ -39,6 +40,10 @@ lsp_config.DEFAULT_SERVER_DEFINITIONS = {
     env = {},
     cwd_policy = "root",
     request_timeout = 10,
+    -- OLS only runs `odin check` diagnostics on didSave by default. Send one
+    -- after opening so saved files show checker errors without requiring a
+    -- no-op edit/save cycle.
+    did_save_after_open = true,
     source = "bundled",
   },
 }
@@ -235,6 +240,7 @@ function lsp_config.normalize_server_definition(definition)
     cwd_policy = cwd_policy,
     fixed_cwd = definition.fixed_cwd,
     request_timeout = request_timeout,
+    did_save_after_open = definition.did_save_after_open == true,
     source = source,
     trust_policy = definition.trust_policy or lsp_config.TRUST_POLICY,
     toolchain = definition.toolchain,
@@ -398,6 +404,7 @@ function lsp_config.config_fingerprint(definition)
     cwd_policy = normalized.cwd_policy,
     fixed_cwd = normalized.fixed_cwd,
     request_timeout = normalized.request_timeout,
+    did_save_after_open = normalized.did_save_after_open,
     source = normalized.source,
     toolchain = normalized.toolchain,
   }))

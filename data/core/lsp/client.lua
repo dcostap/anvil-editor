@@ -22,6 +22,29 @@ local function truncate_text(value, limit)
   return value
 end
 
+local function server_message_type(params)
+  local value = type(params) == "table" and tonumber(params.type) or nil
+  if value == 1 then return "error" end
+  if value == 2 then return "warning" end
+  if value == 3 then return "info" end
+  if value == 4 then return "log" end
+  return "log"
+end
+
+local function server_log_message_looks_actionable(message)
+  message = tostring(message or ""):lower()
+  return message:find("failed", 1, true)
+    or message:find("error", 1, true)
+    or message:find("not_exist", 1, true)
+    or message:find("not exist", 1, true)
+    or message:find("not found", 1, true)
+    or message:find("cannot", 1, true)
+    or message:find("unable", 1, true)
+    or message:find("denied", 1, true)
+    or message:find("timed out", 1, true)
+    or message:find("timeout", 1, true)
+end
+
 local function normalize_encoding(value)
   value = tostring(value or "utf-16"):lower():gsub("_", "-")
   if value == "utf8" then value = "utf-8" end
@@ -145,8 +168,11 @@ function client.new(driver, options)
     initialize_id = nil,
     shutdown_id = nil,
     log_count = 0,
+    server_warning_count = 0,
+    server_warning_seen = {},
     max_log_messages = options.max_log_messages or 50,
     max_log_message_bytes = options.max_log_message_bytes or 1000,
+    max_server_warnings = options.max_server_warnings or 10,
   }, client_mt)
   install_default_handlers(self)
   return self
@@ -186,10 +212,35 @@ function client_mt:_fail(err)
   return nil, err
 end
 
+function client_mt:_warn_server_message(kind, message, message_type)
+  if self.server_warning_count >= self.max_server_warnings then return end
+  local text = truncate_text(message, self.max_log_message_bytes)
+  local key = kind .. "\0" .. message_type .. "\0" .. text
+  if self.server_warning_seen[key] then return end
+  self.server_warning_seen[key] = true
+  self.server_warning_count = self.server_warning_count + 1
+  local server = self.server_id or "server"
+  if core and core.warn then
+    core.warn("LSP %s %s: %s", tostring(server), message_type, text)
+  else
+    quiet_log("LSP %s %s: %s", tostring(server), message_type, text)
+  end
+end
+
 function client_mt:_quiet_server_log(kind, params)
   self.log_count = self.log_count + 1
-  if self.log_count > self.max_log_messages then return end
   local message = type(params) == "table" and (params.message or params.token or params.value) or params
+  local message_type = server_message_type(params)
+
+  if kind == "window/showMessage" and (message_type == "error" or message_type == "warning") then
+    self:_warn_server_message(kind, message, message_type)
+  elseif kind == "window/logMessage"
+    and (message_type == "error" or message_type == "warning")
+    and server_log_message_looks_actionable(message) then
+    self:_warn_server_message(kind, message, message_type)
+  end
+
+  if self.log_count > self.max_log_messages then return end
   quiet_log("LSP server %s: %s", kind, truncate_text(message, self.max_log_message_bytes))
 end
 

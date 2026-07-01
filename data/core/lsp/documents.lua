@@ -90,6 +90,22 @@ local function send_notification(client, method, params)
   return nil, "client does not implement send_notification"
 end
 
+local function server_save_capability(client)
+  local sync = client and client.capabilities and client.capabilities.textDocumentSync
+  if type(sync) ~= "table" then return nil end
+  return sync.save
+end
+
+local function server_supports_save(client)
+  local save = server_save_capability(client)
+  return save == true or type(save) == "table"
+end
+
+local function server_includes_save_text(client)
+  local save = server_save_capability(client)
+  return type(save) == "table" and save.includeText == true
+end
+
 local function language_id(client, opts)
   return opts.language_id or client.language_id
 end
@@ -202,7 +218,12 @@ function documents.attach(client, doc, opts)
     disabled_reason = nil,
     max_file_bytes = max_file_bytes(client, opts),
     debounce_seconds = opts.debounce_seconds or client.debounce_seconds or DEFAULT_DEBOUNCE_SECONDS,
-    include_save_text = opts.include_save_text == true,
+    supports_save = opts.supports_save == true
+      or opts.include_save_text == true
+      or server_supports_save(client),
+    include_save_text = opts.include_save_text == true
+      or (opts.include_save_text == nil and server_includes_save_text(client)),
+    did_save_after_open = opts.did_save_after_open == true,
     options = opts,
   }
   add_doc_state(bucket, state)
@@ -221,6 +242,18 @@ function documents.attach(client, doc, opts)
   local ok, err = send_did_open(state, text)
   if not ok then
     disable_state(state, err or "didOpen failed")
+    return state
+  end
+  if state.did_save_after_open and state.supports_save then
+    local clean_saved_file = not doc.new_file and (not doc.is_dirty or not doc:is_dirty())
+    if clean_saved_file then
+      ok, err = documents.did_save(client, doc)
+      if not ok then
+        quiet_log("LSP didSave-after-open failed for %s: %s", tostring(state.uri), tostring(err))
+      end
+    else
+      quiet_log("LSP didSave-after-open skipped for dirty or new document %s", tostring(state.uri))
+    end
   end
   return state
 end
@@ -316,7 +349,7 @@ end
 
 function documents.did_save(client, doc_or_uri)
   local state = documents.state(client, doc_or_uri)
-  if not state or state.disabled_reason or not state.opened then return true end
+  if not state or state.disabled_reason or not state.opened or not state.supports_save then return true end
   local params = { textDocument = { uri = state.uri } }
   if state.include_save_text then params.text = doc_text(state.doc) end
   push_snapshot(state, "save", params.text)
@@ -440,6 +473,21 @@ local function patch_doc()
   function Doc:on_text_transaction(transaction)
     old_on_text_transaction(self, transaction)
     documents.on_text_transaction(self, transaction)
+  end
+
+  local old_save = Doc.save
+  function Doc:save(...)
+    local result = { old_save(self, ...) }
+    for _, state in ipairs(documents.states_for_doc(self)) do
+      local ok, err = documents.flush_state(state)
+      if ok then
+        ok, err = documents.did_save(state.client, self)
+      end
+      if not ok then
+        quiet_log("LSP didSave failed for %s: %s", tostring(state.uri), tostring(err))
+      end
+    end
+    return table.unpack(result)
   end
 
   local old_on_close = Doc.on_close

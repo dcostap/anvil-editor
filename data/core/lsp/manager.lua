@@ -136,6 +136,7 @@ local function attach_document(entry, doc)
     debounce_seconds = sync_options.debounce_seconds,
     max_file_bytes = sync_options.max_file_bytes,
     include_save_text = sync_options.include_save_text,
+    did_save_after_open = entry.definition.did_save_after_open,
   })
   if not state then
     quiet_log("LSP manager failed to attach %s to %s: %s", tostring(doc_path(doc)), entry.identity.key, tostring(err))

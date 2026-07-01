@@ -189,6 +189,7 @@ test.describe("core.lsp.config", function()
     test.equal(def.language_id, "odin")
     test.equal(def.command[1], "ols")
     test.equal(def.root_markers[1], "ols.json")
+    test.equal(def.did_save_after_open, true)
 
     write_file(join_path(temp_root, PLATFORM == "Windows" and "ols.exe" or "ols"), "fake ols executable")
     local project = mkdir(join_path(temp_root, "odin-project"))

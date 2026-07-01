@@ -1,3 +1,4 @@
+local core = require "core"
 local test = require "core.test"
 local lsp_json = require "core.lsp.json"
 local jsonrpc = require "core.lsp.jsonrpc"
@@ -83,6 +84,38 @@ test.describe("core.lsp.client Phase 8.1 dispatch", function()
     test.is_nil(ok)
     test.contains(err, "pipe error")
     test.ok(c.failed)
+  end)
+
+  test.test("promotes actionable server error logs to user warnings", function()
+    local old_warn = core.warn
+    local warned = {}
+    core.warn = function(format, ...)
+      warned[#warned + 1] = string.format(format, ...)
+    end
+
+    local ok, err = pcall(function()
+      local fake = fake_transport.new()
+      local c = client.new(fake, { max_log_messages = 1 })
+      c.server_id = "ols"
+      fake:push_message(jsonrpc.notification("window/logMessage", {
+        type = 1,
+        message = "Starting Odin Language Server",
+      }))
+      test.equal(c:read_once(), 1)
+      test.equal(c:process_all(), 1)
+      fake:push_message(jsonrpc.notification("window/logMessage", {
+        type = 1,
+        message = "failed to start process for `odin check`: Not_Exist",
+      }))
+      test.equal(c:read_once(), 1)
+      test.equal(c:process_all(), 1)
+    end)
+    core.warn = old_warn
+    if not ok then error(err) end
+
+    test.equal(#warned, 1)
+    test.contains(warned[1], "ols")
+    test.contains(warned[1], "failed to start process")
   end)
 
   test.test("tracks server work-done progress notifications", function()

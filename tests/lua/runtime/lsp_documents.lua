@@ -156,6 +156,72 @@ test.describe("core.lsp.documents", function()
     test.ok(doc.crlf)
   end)
 
+  test.test("uses server save includeText capability by default", function(context)
+    local doc = track_doc(context, new_doc(join_path(temp_root, "main.cpp"), "abc"))
+    local client = fake_client("cpp")
+    client.capabilities = { textDocumentSync = { save = { includeText = true } } }
+    documents.attach(client, doc, { language_id = "cpp" })
+
+    test.ok(documents.did_save(client, doc))
+    local saves = messages(client, "textDocument/didSave")
+    test.equal(#saves, 1)
+    test.equal(saves[1].params.text, "abc\n")
+  end)
+
+  test.test("does not send didSave when server did not advertise save support", function(context)
+    local doc = track_doc(context, new_doc(join_path(temp_root, "main.cpp"), "abc"))
+    local client = fake_client("cpp")
+    client.capabilities = { textDocumentSync = { change = 2 } }
+    documents.attach(client, doc, { language_id = "cpp", did_save_after_open = true })
+
+    test.ok(documents.did_save(client, doc))
+    test.equal(#messages(client, "textDocument/didOpen"), 1)
+    test.equal(#messages(client, "textDocument/didSave"), 0)
+  end)
+
+  test.test("can send didSave immediately after didOpen for save-triggered diagnostics", function(context)
+    local doc = track_doc(context, new_doc(join_path(temp_root, "main.cpp"), "abc"))
+    local client = fake_client("cpp")
+    client.capabilities = { textDocumentSync = { save = { includeText = true } } }
+    documents.attach(client, doc, { language_id = "cpp", did_save_after_open = true })
+
+    local opens = messages(client, "textDocument/didOpen")
+    local saves = messages(client, "textDocument/didSave")
+    test.equal(#opens, 1)
+    test.equal(#saves, 1)
+    test.equal(saves[1].params.text, "abc\n")
+  end)
+
+  test.test("skips didSave-after-open for dirty buffers", function(context)
+    local doc = track_doc(context, new_doc(join_path(temp_root, "main.cpp"), "abc"))
+    doc:apply_edits({ { line1 = 1, col1 = 4, line2 = 1, col2 = 4, text = "d" } })
+    local client = fake_client("cpp")
+    client.capabilities = { textDocumentSync = { save = { includeText = true } } }
+    documents.attach(client, doc, { language_id = "cpp", did_save_after_open = true })
+
+    test.equal(#messages(client, "textDocument/didOpen"), 1)
+    test.equal(#messages(client, "textDocument/didSave"), 0)
+  end)
+
+  test.test("Doc:save flushes pending changes and sends didSave", function(context)
+    local path = join_path(temp_root, "main.cpp")
+    local doc = track_doc(context, new_doc(path, "abc"))
+    local client = fake_client("cpp")
+    client.capabilities = { textDocumentSync = { save = { includeText = true } } }
+    documents.attach(client, doc, { language_id = "cpp", debounce_seconds = 10 })
+
+    doc:apply_edits({ { line1 = 1, col1 = 4, line2 = 1, col2 = 4, text = "d" } })
+    doc:save()
+
+    local changes = messages(client, "textDocument/didChange")
+    local saves = messages(client, "textDocument/didSave")
+    test.equal(#changes, 1)
+    test.equal(changes[1].params.contentChanges[1].text, "abcd\n")
+    test.equal(#saves, 1)
+    test.equal(saves[1].params.textDocument.uri, uri.path_to_uri(path))
+    test.equal(saves[1].params.text, "abcd\n")
+  end)
+
   test.test("sends didClose, removes state, and runs centralized close handlers", function(context)
     local doc = track_doc(context, new_doc(join_path(temp_root, "main.cpp"), "abc"))
     local client = fake_client("cpp")
