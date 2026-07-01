@@ -737,6 +737,7 @@ local function set_side_file_doc(doc, opts)
     local col = opts.col or 1
     local line2, col2 = opts.line2 or opts.line, opts.col2 or col
     view:with_selection_state(function()
+      if view.expand_folds_covering_range then view:expand_folds_covering_range(opts.line, col, line2, col2, "sidepanel") end
       doc:set_selection(opts.line, col, line2, col2)
     end)
     view:scroll_to_make_visible(opts.line, col)
@@ -816,12 +817,14 @@ function M.open_doc_in_main(doc, opts)
 
   if opts.line then
     local col = opts.col or 1
+    local line2, col2 = opts.line2 or opts.line, opts.col2 or col
     if view.with_selection_state then
       view:with_selection_state(function()
-        view.doc:set_selection(opts.line, col, opts.line, col)
+        if view.expand_folds_covering_range then view:expand_folds_covering_range(opts.line, col, line2, col2, "sidepanel") end
+        view.doc:set_selection(opts.line, col, line2, col2)
       end)
     else
-      view.doc:set_selection(opts.line, col, opts.line, col)
+      view.doc:set_selection(opts.line, col, line2, col2)
     end
     view:scroll_to_make_visible(opts.line, col)
   end

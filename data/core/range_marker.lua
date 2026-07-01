@@ -212,6 +212,14 @@ function Marker:update_for_transaction(transaction)
     local a = (edit.start_offset or 0) + delta
     local b = (edit.end_offset or edit.start_offset or 0) + delta
     local len = #(edit.text or "")
+    if self.invalidate_on_edit_overlap then
+      local insertion_inside = a == b and a > s and a < e
+      local replacement_overlaps = a < e and b > s
+      if insertion_inside or replacement_overlaps then
+        self:invalidate("touched-by-edit")
+        return true
+      end
+    end
     local ns, ne, reason
     if a == b then
       ns, ne = apply_insert(self, s, e, a, len, edit.text)
@@ -266,6 +274,7 @@ function range_marker.new(doc, opts)
     sticky_right = opts.sticky_right == true,
     sticky_right_on_newline = opts.sticky_right_on_newline == true,
     preserve_on_replace = opts.preserve_on_replace == true,
+    invalidate_on_edit_overlap = opts.invalidate_on_edit_overlap == true,
     kind = opts.kind,
     data = opts.data,
     on_change = opts.on_change,

@@ -59,8 +59,13 @@ end
 ---Generates a stroke sequence including currently pressed mod keys.
 ---@param key string
 ---@return string
+local function shortcut_key_alias(key)
+  if key == "+" or key == "keypad +" then return "plus" end
+  return key
+end
+
 local function key_to_stroke(key)
-  local keys = { key }
+  local keys = { shortcut_key_alias(key) }
   for _, mk in ipairs(modkeys) do
     if keymap.modkeys[mk] then
       table.insert(keys, mk)

@@ -86,6 +86,9 @@ local function open_location(result, opts)
     local view = opts.view or core.active_view
     local doc = view and view.doc
     if doc then
+      if view.expand_folds_covering_range then
+        view:expand_folds_covering_range(result.start_line, result.start_col, result.end_line, result.end_col, "language-location")
+      end
       doc:set_selection(result.start_line, result.start_col, result.end_line, result.end_col)
       if history then history.record_place(navigation_anchor, { reason = "language-location" }) end
       return true
@@ -105,8 +108,10 @@ local function open_location(result, opts)
   if not view or not view.doc then return false, "failed to open target" end
   local range = result_doc_range(view, result)
   if range then
+    if view.expand_folds_covering_range then view:expand_folds_covering_range(range.line1, range.col1, range.line2, range.col2, "language-location") end
     view.doc:set_selection(range.line1, range.col1, range.line2, range.col2)
   elseif result.line and result.col then
+    if view.expand_folds_at_line then view:expand_folds_at_line(result.line, "language-location") end
     view.doc:set_selection(result.line, result.col)
   end
   if history then history.record_place(navigation_anchor, { reason = "language-location" }) end

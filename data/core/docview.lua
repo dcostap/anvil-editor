@@ -7,6 +7,8 @@ local translate = require "core.doc.translate"
 local tokenizer = require "core.tokenizer"
 local ime = require "core.ime"
 local linewrapping = require "core.linewrapping"
+local range_marker = require "core.range_marker"
+local Doc = require "core.doc"
 local View = require "core.view"
 
 local CACHE_LINE_LEN = 500
@@ -82,22 +84,40 @@ function DocView:set_wrapping_enabled(enabled)
 end
 
 function DocView:get_total_visual_lines()
+  if self:has_collapsed_folds() then return self:get_folded_visual_row_count() end
   return linewrapping.get_total_wrapped_lines(self)
 end
 
 function DocView:get_visual_row(line, col, line_end)
+  if self:has_collapsed_folds() then return self:get_folded_visual_row_for_position(line, col, line_end) end
   return linewrapping.get_line_idx_col_count(self, line, col, line_end)
 end
 
 function DocView:get_visual_row_line_col(idx)
+  if self:has_collapsed_folds() then
+    local entry = self:get_visual_row_entry(idx)
+    if entry and entry.type == "fold" then return entry.fold.line1, 1 end
+    if entry and entry.wrapped_idx then return linewrapping.get_idx_line_col(self, entry.wrapped_idx) end
+    return entry and entry.line or 1, 1
+  end
   return linewrapping.get_idx_line_col(self, idx)
 end
 
 function DocView:get_visual_row_count_for_line(line)
+  if self:has_collapsed_folds() then
+    local hidden, fold = self:is_line_hidden_by_fold(line)
+    if hidden then return 0 end
+    if fold and fold.line1 == line then return 1 end
+  end
   return linewrapping.get_wrapped_line_count(self, line)
 end
 
 function DocView:get_visual_row_bounds_for_line(line, row_idx)
+  if self:has_collapsed_folds() then
+    local hidden, fold = self:is_line_hidden_by_fold(line)
+    if hidden then return nil, nil end
+    if fold and fold.line1 == line then return 1, 1 end
+  end
   if not self.wrapped_settings then return 1, #(self.doc.lines[line] or "") + 1 end
   local first_idx = self.wrapped_line_to_idx[line]
   if not first_idx then return nil, nil end
@@ -110,6 +130,18 @@ function DocView:get_visual_row_bounds_for_line(line, row_idx)
 end
 
 function DocView:iter_visible_wrap_rows_for_line(line, y)
+  if self:has_collapsed_folds() then
+    local hidden, fold = self:is_line_hidden_by_fold(line)
+    if hidden then return function() return nil end end
+    if fold and fold.line1 == line then
+      local yielded = false
+      return function()
+        if yielded then return nil end
+        yielded = true
+        return 1, y
+      end
+    end
+  end
   local first_idx = self.wrapped_line_to_idx and self.wrapped_line_to_idx[line]
   local total = first_idx and linewrapping.get_wrapped_line_count(self, line) or 1
   local lh = self:get_line_height()
@@ -127,9 +159,13 @@ end
 local next_selection_owner_id = 0
 
 DocView.registry = DocView.registry or setmetatable({}, { __mode = "k" })
+DocView.fold_views_by_doc = DocView.fold_views_by_doc or setmetatable({}, { __mode = "k" })
 DocView.mirror_owner = DocView.mirror_owner or setmetatable({}, { __mode = "k" })
 DocView.owner_views = DocView.owner_views or DocView.session_views or setmetatable({}, { __mode = "v" })
 DocView.session_views = DocView.owner_views -- deprecated compatibility alias
+
+local register_fold_view
+local unregister_fold_view
 
 local function copy_array(t)
   local res = {}
@@ -700,6 +736,10 @@ function DocView:new(doc)
   self.cache_font_size = self.cache_font:get_size()
   local _, indent_size = self.doc:get_indent_info()
   self.cache_indent_size = indent_size
+  self.fold_regions = {}
+  self.fold_generation = 0
+  self.__fold_next_id = 0
+  register_fold_view(self)
   linewrapping.register_docview(self)
   self:set_wrapping_enabled(config.plugins.linewrapping.enable_by_default)
 end
@@ -756,6 +796,8 @@ end
 ---@param do_close function Callback to execute when close is confirmed
 function DocView:try_close(do_close)
   local function unregister_and_close()
+    self:clear_fold_regions("view-close")
+    unregister_fold_view(self)
     linewrapping.unregister_docview(self)
     do_close()
   end
@@ -825,6 +867,7 @@ end
 ---Get the number of visual rows in the document scroll model.
 ---@return integer count Visual row count
 function DocView:get_scrollable_line_count()
+  if self:has_collapsed_folds() then return self:get_folded_visual_row_count() end
   if self.wrapped_settings then return linewrapping.get_total_wrapped_lines(self) end
   return #self.doc.lines
 end
@@ -925,6 +968,603 @@ function DocView:get_gutter_width()
   return style.padding.x, padding
 end
 
+local function compact_fold_views(doc)
+  local views = DocView.fold_views_by_doc[doc]
+  if not views then return nil end
+  local compacted = setmetatable({}, { __mode = "v" })
+  for _, view in pairs(views) do
+    if view and view.doc == doc then compacted[#compacted + 1] = view end
+  end
+  DocView.fold_views_by_doc[doc] = #compacted > 0 and compacted or nil
+  return DocView.fold_views_by_doc[doc]
+end
+
+register_fold_view = function(view)
+  local doc = view and view.doc
+  if not doc then return end
+  local views = compact_fold_views(doc)
+  if not views then
+    views = setmetatable({}, { __mode = "v" })
+    DocView.fold_views_by_doc[doc] = views
+  end
+  for _, existing in pairs(views) do
+    if existing == view then return end
+  end
+  views[#views + 1] = view
+end
+
+unregister_fold_view = function(view)
+  local doc = view and view.doc
+  local views = doc and DocView.fold_views_by_doc[doc]
+  if not views then return end
+  local compacted = setmetatable({}, { __mode = "v" })
+  for _, existing in pairs(views) do
+    if existing and existing ~= view and existing.doc == doc then compacted[#compacted + 1] = existing end
+  end
+  DocView.fold_views_by_doc[doc] = #compacted > 0 and compacted or nil
+end
+
+local function clear_fold_views_for_doc(doc, reason)
+  local views = compact_fold_views(doc)
+  if not views then return end
+  for _, view in ipairs(views) do
+    if view and view.clear_fold_regions then view:clear_fold_regions(reason or "doc-close") end
+    unregister_fold_view(view)
+  end
+end
+
+if Doc and not Doc.__docview_folding_close_patched then
+  Doc.__docview_folding_close_patched = true
+  local old_on_close = Doc.on_close
+  function Doc:on_close(...)
+    clear_fold_views_for_doc(self, "doc-close")
+    return old_on_close(self, ...)
+  end
+end
+
+local function normalize_fold_lines(doc, line1, line2)
+  line1 = common.clamp(math.floor(tonumber(line1) or 1), 1, #doc.lines)
+  line2 = common.clamp(math.floor(tonumber(line2) or line1), 1, #doc.lines)
+  if line2 < line1 then line1, line2 = line2, line1 end
+  return line1, line2
+end
+
+local function fold_hidden_count(fold)
+  return math.max(0, (fold.line2 or fold.line1 or 1) - (fold.line1 or 1) + 1)
+end
+
+local function fold_placeholder(fold)
+  if type(fold.placeholder) == "function" then
+    local ok, text = pcall(fold.placeholder, fold)
+    if ok and text then return tostring(text) end
+  elseif fold.placeholder then
+    return tostring(fold.placeholder)
+  end
+  local count = fold_hidden_count(fold)
+  return string.format("⋯ %d line%s folded ⋯", count, count == 1 and "" or "s")
+end
+
+function DocView:refresh_fold_region(fold)
+  if not fold or not fold.marker or not fold.marker:is_valid() then return false end
+  local range = fold.marker:range()
+  if not range then return false end
+  fold.line1, fold.col1, fold.line2, fold.col2 = range.line1, range.col1, range.line2, range.col2
+  fold.line1, fold.line2 = normalize_fold_lines(self.doc, fold.line1, fold.line2)
+  fold.hidden_count = fold_hidden_count(fold)
+  return true
+end
+
+function DocView:bump_fold_generation(reason)
+  self.fold_generation = (self.fold_generation or 0) + 1
+  self.__fold_layout_cache = nil
+  core.redraw = true
+  if reason and core.log_quiet then
+    core.log_quiet("DocView fold generation %d for %s: %s", self.fold_generation, self.doc:get_name(), tostring(reason))
+  end
+end
+
+function DocView:has_collapsed_folds()
+  for _, fold in ipairs(self.fold_regions or {}) do
+    if fold.collapsed and fold.marker and fold.marker:is_valid() then return true end
+  end
+  return false
+end
+
+function DocView:get_collapsed_folds()
+  local folds = {}
+  for _, fold in ipairs(self.fold_regions or {}) do
+    if fold.collapsed and self:refresh_fold_region(fold) then folds[#folds + 1] = fold end
+  end
+  table.sort(folds, function(a, b)
+    if a.line1 == b.line1 then return a.line2 < b.line2 end
+    return a.line1 < b.line1
+  end)
+  return folds
+end
+
+function DocView:get_collapsed_fold_at_line(line)
+  for _, fold in ipairs(self:get_collapsed_folds()) do
+    if line >= fold.line1 and line <= fold.line2 then return fold end
+  end
+end
+
+function DocView:is_line_hidden_by_fold(line)
+  local fold = self:get_collapsed_fold_at_line(line)
+  return fold and line > fold.line1, fold
+end
+
+function DocView:fold_aware_line_move(line, direction)
+  local target = common.clamp(line + direction, 1, #self.doc.lines)
+  local fold = self:get_collapsed_fold_at_line(target)
+  if fold and target > fold.line1 then
+    if direction > 0 then
+      target = fold.line2 < #self.doc.lines and fold.line2 + 1 or fold.line1
+    else
+      target = fold.line1
+    end
+  end
+  return target
+end
+
+function DocView:folded_visual_line_position(line, col, direction)
+  line = line or 1
+  col = col or 1
+  local line_end = self.wrapped_settings and linewrapping.has_wrapped_line_end_affinity(self, line, col) or false
+  local current_row = self:get_folded_visual_row_for_position(line, col, line_end)
+  local current_entry = self:get_visual_row_entry(current_row)
+  if direction < 0 then
+    local previous_line = math.max(1, line - 1)
+    local hidden, fold = self:is_line_hidden_by_fold(previous_line)
+    if hidden and (self:get_visual_row_count_for_line(line) <= 1 or not current_entry or (current_entry.row_in_line or 1) <= 1) then
+      return fold.line1, 1, false
+    end
+  elseif direction > 0 then
+    local current_fold = self:get_collapsed_fold_at_line(line)
+    if current_fold and current_fold.line1 == line then
+      return self:fold_aware_line_move(line, 1), 1, false
+    end
+  end
+  local target_row = common.clamp(current_row + direction, 1, self:get_folded_visual_row_count())
+  local entry = self:get_visual_row_entry(target_row)
+  if entry and entry.type == "fold" then return entry.fold.line1, 1, false end
+  if entry and entry.line then
+    if self.wrapped_settings and entry.wrapped_idx then
+      local last_x_offset = self.last_x_offset or {}
+      self.last_x_offset = last_x_offset
+      local x
+      if last_x_offset.line == line and last_x_offset.col == col and last_x_offset.line_end == line_end then
+        x = last_x_offset.offset
+      else
+        x = self:get_col_x_offset(line, col, line_end)
+      end
+      local target_line, target_col, target_line_end = linewrapping.get_line_col_from_index_and_x(self, entry.wrapped_idx, x)
+      target_col = common.clamp(target_col or col or 1, 1, #(self.doc.lines[target_line] or ""))
+      last_x_offset.offset = x
+      last_x_offset.line = target_line
+      last_x_offset.col = target_col
+      last_x_offset.line_end = target_line_end
+      return target_line, target_col, target_line_end
+    end
+    return entry.line, common.clamp(col, 1, #(self.doc.lines[entry.line] or "")), false
+  end
+  return line, col, false
+end
+
+function DocView:add_fold_region(opts)
+  opts = opts or {}
+  local line1, line2 = normalize_fold_lines(self.doc, opts.line1 or opts[1], opts.line2 or opts[2])
+  if line2 <= line1 then return nil, "fold region must span multiple lines" end
+  local contained_folds = {}
+  for _, fold in ipairs(self:get_collapsed_folds()) do
+    if line1 <= fold.line1 and line2 >= fold.line2 then
+      contained_folds[#contained_folds + 1] = fold
+    elseif not (line2 < fold.line1 or line1 > fold.line2) then
+      return nil, "fold region overlaps an existing collapsed fold"
+    end
+  end
+  for _, fold in ipairs(contained_folds) do
+    self:remove_fold_region(fold, "absorbed-by-parent-fold")
+  end
+  self.__fold_next_id = (self.__fold_next_id or 0) + 1
+  local id = opts.id or self.__fold_next_id
+  local fold
+  local marker = range_marker.new(self.doc, {
+    line1 = line1,
+    col1 = opts.col1 or 1,
+    line2 = line2,
+    col2 = opts.col2 or (#self.doc.lines[line2] + 1),
+    kind = "docview-fold",
+    data = { view = self, id = id },
+    invalidate_on_edit_overlap = true,
+    greedy_left = false,
+    greedy_right = false,
+    on_change = function(marker, reason)
+      if fold and reason ~= "new" then
+        if not marker:is_valid() then
+          fold.collapsed = false
+        else
+          self:refresh_fold_region(fold)
+        end
+        self:bump_fold_generation("marker-" .. tostring(reason))
+      end
+    end,
+  })
+  fold = {
+    id = id,
+    marker = marker,
+    line1 = line1,
+    col1 = opts.col1 or 1,
+    line2 = line2,
+    col2 = opts.col2 or (#self.doc.lines[line2] + 1),
+    collapsed = opts.collapsed ~= false,
+    placeholder = opts.placeholder,
+    kind = opts.kind,
+    metadata = opts.metadata,
+    hidden_count = line2 - line1 + 1,
+  }
+  self.fold_regions[#self.fold_regions + 1] = fold
+  table.sort(self.fold_regions, function(a, b)
+    if a.line1 == b.line1 then return a.line2 < b.line2 end
+    return a.line1 < b.line1
+  end)
+  self:bump_fold_generation("add")
+  return fold
+end
+
+function DocView:remove_fold_region(id_or_fold, reason)
+  for i = #(self.fold_regions or {}), 1, -1 do
+    local fold = self.fold_regions[i]
+    if fold == id_or_fold or fold.id == id_or_fold then
+      range_marker.remove(fold.marker)
+      table.remove(self.fold_regions, i)
+      self:bump_fold_generation(reason or "remove")
+      return true
+    end
+  end
+  return false
+end
+
+function DocView:clear_fold_regions(reason)
+  if not self.fold_regions or #self.fold_regions == 0 then return end
+  for _, fold in ipairs(self.fold_regions) do range_marker.remove(fold.marker) end
+  self.fold_regions = {}
+  self:bump_fold_generation(reason or "clear")
+end
+
+function DocView:expand_fold_region(id_or_fold, reason)
+  local fold = type(id_or_fold) == "table" and id_or_fold or nil
+  if not fold then
+    for _, candidate in ipairs(self.fold_regions or {}) do
+      if candidate.id == id_or_fold then fold = candidate; break end
+    end
+  end
+  if not fold or not fold.collapsed then return false end
+  fold.collapsed = false
+  self:bump_fold_generation(reason or "expand")
+  return true
+end
+
+function DocView:collapse_fold_region(id_or_fold, reason)
+  local fold = type(id_or_fold) == "table" and id_or_fold or nil
+  if not fold then
+    for _, candidate in ipairs(self.fold_regions or {}) do
+      if candidate.id == id_or_fold then fold = candidate; break end
+    end
+  end
+  if not fold or fold.collapsed then return false end
+  local line1, line2 = fold.line1, fold.line2
+  local contained_folds = {}
+  for _, other in ipairs(self:get_collapsed_folds()) do
+    if other ~= fold then
+      if line1 <= other.line1 and line2 >= other.line2 then
+        contained_folds[#contained_folds + 1] = other
+      elseif not (line2 < other.line1 or line1 > other.line2) then
+        return false, "fold region overlaps an existing collapsed fold"
+      end
+    end
+  end
+  for _, other in ipairs(contained_folds) do
+    self:remove_fold_region(other, "absorbed-by-parent-fold")
+  end
+  fold.collapsed = true
+  self:bump_fold_generation(reason or "collapse")
+  return true
+end
+
+function DocView:run_fold_transaction(fn)
+  local old_depth = self.__fold_transaction_depth or 0
+  self.__fold_transaction_depth = old_depth + 1
+  local ok, a, b, c = pcall(fn)
+  self.__fold_transaction_depth = old_depth
+  self:bump_fold_generation("transaction")
+  if not ok then error(a) end
+  return a, b, c
+end
+
+function DocView:get_line_visual_row_count(line)
+  if self.wrapped_settings then return linewrapping.get_wrapped_line_count(self, line) end
+  return 1
+end
+
+function DocView:get_folded_visual_row_count()
+  local count, line = 0, 1
+  local folds = self:get_collapsed_folds()
+  local fidx = 1
+  while line <= #self.doc.lines do
+    local fold = folds[fidx]
+    if fold and line == fold.line1 then
+      count = count + 1
+      line = fold.line2 + 1
+      fidx = fidx + 1
+    else
+      count = count + self:get_line_visual_row_count(line)
+      line = line + 1
+    end
+  end
+  return math.max(1, count)
+end
+
+function DocView:get_folded_visual_row_for_position(line, col, line_end)
+  line = common.clamp(line or 1, 1, #self.doc.lines)
+  local row, current = 1, 1
+  local folds = self:get_collapsed_folds()
+  local fidx = 1
+  while current <= #self.doc.lines do
+    local fold = folds[fidx]
+    if fold and current == fold.line1 then
+      if line >= fold.line1 and line <= fold.line2 then return row end
+      row = row + 1
+      current = fold.line2 + 1
+      fidx = fidx + 1
+    else
+      if current == line then
+        if self.wrapped_settings then
+          local idx, _, _, scol = linewrapping.get_line_idx_col_count(self, line, col, line_end)
+          local first_idx = self.wrapped_line_to_idx and self.wrapped_line_to_idx[line] or idx
+          return row + math.max(0, idx - first_idx)
+        end
+        return row
+      end
+      row = row + self:get_line_visual_row_count(current)
+      current = current + 1
+    end
+  end
+  return row
+end
+
+function DocView:get_visual_row_entry(target_row)
+  target_row = math.max(1, math.floor(target_row or 1))
+  local row, line = 1, 1
+  local folds = self:get_collapsed_folds()
+  local fidx = 1
+  while line <= #self.doc.lines do
+    local fold = folds[fidx]
+    if fold and line == fold.line1 then
+      if row == target_row then return { type = "fold", fold = fold, line = fold.line1 } end
+      row = row + 1
+      line = fold.line2 + 1
+      fidx = fidx + 1
+    else
+      local count = self:get_line_visual_row_count(line)
+      if target_row >= row and target_row < row + count then
+        local wrapped_idx
+        if self.wrapped_settings then
+          wrapped_idx = (self.wrapped_line_to_idx[line] or 1) + (target_row - row)
+        end
+        return { type = "line", line = line, row = row, row_in_line = target_row - row + 1, wrapped_idx = wrapped_idx }
+      end
+      row = row + count
+      line = line + 1
+    end
+  end
+  return { type = "line", line = #self.doc.lines, row = math.max(1, row - 1) }
+end
+
+function DocView:iter_visible_visual_rows()
+  local _, y1, _, y2 = self:get_content_bounds()
+  local lh = self:get_line_height()
+  local total = self:get_scrollable_line_count()
+  local row = math.max(1, math.floor((y1 - style.padding.y) / lh) + 1)
+  local last = math.min(total, math.floor((y2 - style.padding.y) / lh) + 1)
+  local x, base_y = self:get_content_offset()
+  return function()
+    if row > last then return nil end
+    local current = row
+    row = row + 1
+    local entry = self:get_visual_row_entry(current)
+    entry.visual_row = current
+    entry.y = base_y + (current - 1) * lh + style.padding.y
+    return entry
+  end
+end
+
+function DocView:expand_folds_covering_range(line1, col1, line2, col2, reason)
+  line1, line2 = normalize_fold_lines(self.doc, line1, line2 or line1)
+  local changed = false
+  for _, fold in ipairs(self:get_collapsed_folds()) do
+    if not (line2 < fold.line1 or line1 > fold.line2) then
+      fold.collapsed = false
+      changed = true
+    end
+  end
+  if changed then self:bump_fold_generation(reason or "expand-range") end
+  return changed
+end
+
+function DocView:expand_folds_at_line(line, reason)
+  return self:expand_folds_covering_range(line, 1, line, 1, reason or "expand-line")
+end
+
+function DocView:select_and_reveal(line1, col1, line2, col2, opts)
+  opts = opts or {}
+  if opts.fold_policy ~= "keep" then
+    self:expand_folds_covering_range(line1, col1, line2 or line1, col2 or col1, opts.reason or "select-and-reveal")
+  end
+  self.doc:set_selection(line1, col1, line2 or line1, col2 or col1)
+  self:scroll_to_make_visible(line1, col1, opts.instant, { line2 = line2, col2 = col2 })
+end
+
+function DocView:reveal_range(line1, col1, line2, col2, opts)
+  opts = opts or {}
+  if opts.fold_policy ~= "keep" then
+    self:expand_folds_covering_range(line1, col1, line2 or line1, col2 or col1, opts.reason or "reveal-range")
+  end
+  self:scroll_to_make_visible(line1, col1, opts.instant, { line2 = line2, col2 = col2 })
+end
+
+local function line_indent(text)
+  return #(tostring(text or ""):match("^[ \t]*") or "")
+end
+
+local function is_blank_line(text)
+  return tostring(text or ""):match("^%s*$") ~= nil
+end
+
+function DocView:get_fold_target(line1, col1, line2, col2, opts)
+  line1 = common.clamp(line1 or 1, 1, #self.doc.lines)
+  line2 = common.clamp(line2 or line1, 1, #self.doc.lines)
+  col1, col2 = col1 or 1, col2 or col1 or 1
+  if line2 < line1 or line2 == line1 and col2 < col1 then
+    line1, col1, line2, col2 = line2, col2, line1, col1
+  end
+
+  if line2 > line1 then
+    if col2 == 1 then line2 = math.max(line1, line2 - 1) end
+    if line2 > line1 then
+      return { line1 = line1, col1 = 1, line2 = line2, col2 = #self.doc.lines[line2] + 1, kind = "selection" }
+    end
+  end
+
+  local function indentation_target_at(start, kind)
+    while start <= #self.doc.lines and is_blank_line(self.doc.lines[start]) do start = start + 1 end
+    if start > #self.doc.lines then return nil end
+    local base_indent = line_indent(self.doc.lines[start])
+    local last = start
+    for line = start + 1, #self.doc.lines do
+      local text = self.doc.lines[line]
+      if is_blank_line(text) then
+        last = line
+      elseif line_indent(text) > base_indent then
+        last = line
+      else
+        break
+      end
+    end
+    while last > start and is_blank_line(self.doc.lines[last]) do last = last - 1 end
+    if last > start then
+      return { line1 = start, col1 = 1, line2 = last, col2 = #self.doc.lines[last] + 1, kind = kind or "indent" }
+    end
+  end
+
+  local direct = indentation_target_at(line1, "indent")
+  if direct then return direct end
+
+  for start = line1 - 1, 1, -1 do
+    if not is_blank_line(self.doc.lines[start]) then
+      local target = indentation_target_at(start, "enclosing-indent")
+      if target and target.line2 >= line1 then return target end
+    end
+  end
+end
+
+function DocView:fold_at_caret(opts)
+  opts = opts or {}
+  local line1, col1, line2, col2 = self.doc:get_selection(true)
+  local target = self:get_fold_target(line1, col1, line2, col2, opts)
+  if not target then return nil, "no foldable multi-line range at caret" end
+  for _, fold in ipairs(self.fold_regions or {}) do
+    if self:refresh_fold_region(fold) and fold.line1 == target.line1 and fold.line2 == target.line2 then
+      if not fold.collapsed then self:collapse_fold_region(fold, "fold-at-caret") end
+      return fold
+    end
+  end
+  return self:add_fold_region(target)
+end
+
+function DocView:unfold_at_caret(reason)
+  reason = reason or "unfold-at-caret"
+  local changed = false
+  for _, line1, col1, line2, col2 in self.doc:get_selections(true) do
+    if line1 ~= line2 or col1 ~= col2 then
+      if self:expand_folds_covering_range(line1, col1, line2, col2, reason) then
+        changed = true
+      end
+    end
+  end
+  if changed then return true end
+
+  local line = self.doc:get_selection()
+  local fold = self:get_collapsed_fold_at_line(line)
+  if fold then return self:expand_fold_region(fold, reason) end
+  return false
+end
+
+function DocView:unfold_all(reason)
+  local changed = false
+  for _, fold in ipairs(self.fold_regions or {}) do
+    if fold.collapsed then
+      fold.collapsed = false
+      changed = true
+    end
+  end
+  if changed then self:bump_fold_generation(reason or "unfold-all") end
+  return changed
+end
+
+local function selection_overlaps_fold(doc, fold)
+  for _, line1, col1, line2, col2 in doc:get_selections(true) do
+    if (line1 ~= line2 or col1 ~= col2) and line1 <= fold.line2 and line2 >= fold.line1 then return true end
+  end
+  return false
+end
+
+local function position_le(line1, col1, line2, col2)
+  return line1 < line2 or line1 == line2 and col1 <= col2
+end
+
+local function position_ge(line1, col1, line2, col2)
+  return line1 > line2 or line1 == line2 and col1 >= col2
+end
+
+local function selection_covers_fold(doc, fold)
+  local fold_col1 = fold.col1 or 1
+  local fold_col2 = fold.col2 or (#(doc.lines[fold.line2] or "") + 1)
+  for _, line1, col1, line2, col2 in doc:get_selections(true) do
+    if (line1 ~= line2 or col1 ~= col2)
+    and position_le(line1, col1, fold.line1, fold_col1)
+    and position_ge(line2, col2, fold.line2, fold_col2) then
+      return true
+    end
+  end
+  return false
+end
+
+function DocView:draw_fold_widget_gutter(fold, x, y, width)
+  local lh = self:get_line_height()
+  renderer.draw_rect(x, y, width, lh, style.gutter_bg or style.background2)
+  if config.show_line_numbers then
+    local color = selection_overlaps_fold(self.doc, fold) and style.line_number2 or style.line_number
+    common.draw_text(self:get_font(), color, tostring(fold.line1), "right", x + style.padding.x, y, width - style.padding.x, lh)
+  end
+  return lh
+end
+
+function DocView:draw_fold_widget_body(fold, x, y)
+  local lh = self:get_line_height()
+  local bx = x + self.scroll.x
+  local bw = math.max(0, self.position.x + self.size.x - bx)
+  local bg = selection_covers_fold(self.doc, fold) and style.selection or style.fold_widget_background
+  renderer.draw_rect(bx, y, bw, lh, bg)
+  local border = style.fold_widget_border or style.fold_widget_effect or style.accent
+  local t = math.max(1, SCALE)
+  renderer.draw_rect(bx, y, bw, t, border)
+  renderer.draw_rect(bx, y + lh - t, bw, t, border)
+  renderer.draw_rect(bx, y, t, lh, border)
+  renderer.draw_rect(bx + bw - t, y, t, lh, border)
+  common.draw_text(self:get_font(), style.fold_widget_text or style.dim, fold_placeholder(fold), "left", x + style.padding.x, y, self.size.x, lh)
+  return lh
+end
+
 
 ---Get the screen position of a line (and optionally column).
 ---@param line integer Line number
@@ -936,7 +1576,12 @@ function DocView:get_line_screen_position(line, col, line_end)
     if line_end == nil and self.__use_wrapped_caret_affinity then
       line_end = linewrapping.has_wrapped_line_end_affinity(self, line, col)
     end
-    local idx = linewrapping.get_line_idx_col_count(self, line, col, line_end)
+    local idx
+    if self:has_collapsed_folds() then
+      idx = self:get_folded_visual_row_for_position(line, col, line_end)
+    else
+      idx = linewrapping.get_line_idx_col_count(self, line, col, line_end)
+    end
     local x, y = self:get_content_offset()
     local lh = self:get_line_height()
     local gw = self:get_gutter_width()
@@ -945,7 +1590,8 @@ function DocView:get_line_screen_position(line, col, line_end)
   local x, y = self:get_content_offset()
   local lh = self:get_line_height()
   local gw = self:get_gutter_width()
-  y = y + (line-1) * lh + style.padding.y
+  local row = self:has_collapsed_folds() and self:get_folded_visual_row_for_position(line, col, line_end) or line
+  y = y + (row-1) * lh + style.padding.y
   if col then
     return x + gw + self:get_col_x_offset(line, col), y
   else
@@ -1022,6 +1668,14 @@ end
 function DocView:get_visible_line_range()
   local x, y, x2, y2 = self:get_content_bounds()
   local lh = self:get_line_height()
+  if self:has_collapsed_folds() then
+    local total = self:get_folded_visual_row_count()
+    local minidx = math.max(1, math.floor((y - style.padding.y) / lh) + 1)
+    local maxidx = math.min(total, math.floor((y2 - style.padding.y) / lh) + 1)
+    local first = self:get_visual_row_entry(minidx)
+    local last = self:get_visual_row_entry(maxidx)
+    return first and first.line or 1, last and (last.fold and last.fold.line2 or last.line) or #self.doc.lines
+  end
   if self.wrapped_settings then
     local minidx = math.max(1, math.floor((y - style.padding.y) / lh) + 1)
     local maxidx = math.min(linewrapping.get_total_wrapped_lines(self), math.floor((y2 - style.padding.y) / lh) + 1)
@@ -1206,16 +1860,39 @@ end
 ---@return integer line Line number
 ---@return integer col Column number
 function DocView:resolve_screen_position(x, y)
+  self.resolved_fold_widget = nil
   if self.wrapped_settings then
     local ox, oy = self:get_line_screen_position(1)
-    local idx = common.clamp(math.floor((y - oy) / self:get_line_height()) + 1, 1, linewrapping.get_total_wrapped_lines(self))
+    local total = self:has_collapsed_folds() and self:get_folded_visual_row_count() or linewrapping.get_total_wrapped_lines(self)
+    local idx = common.clamp(math.floor((y - oy) / self:get_line_height()) + 1, 1, total)
+    if self:has_collapsed_folds() then
+      local entry = self:get_visual_row_entry(idx)
+      if entry and entry.type == "fold" then
+        self.resolved_fold_widget = entry.fold
+        self.wrapped_last_resolved_line_end = nil
+        return entry.fold.line1, 1
+      elseif entry then
+        local line, col, line_end = linewrapping.get_line_col_from_index_and_x(self, entry.wrapped_idx, x - ox)
+        self.wrapped_last_resolved_line_end = line_end and { line, col } or nil
+        return line, col
+      end
+    end
     local line, col, line_end = linewrapping.get_line_col_from_index_and_x(self, idx, x - ox)
     self.wrapped_last_resolved_line_end = line_end and { line, col } or nil
     return line, col
   end
   local ox, oy = self:get_line_screen_position(1)
-  local line = math.floor((y - oy) / self:get_line_height()) + 1
-  line = common.clamp(line, 1, #self.doc.lines)
+  local row = math.floor((y - oy) / self:get_line_height()) + 1
+  local line = common.clamp(row, 1, #self.doc.lines)
+  if self:has_collapsed_folds() then
+    local entry = self:get_visual_row_entry(common.clamp(row, 1, self:get_folded_visual_row_count()))
+    if entry and entry.type == "fold" then
+      self.resolved_fold_widget = entry.fold
+      return entry.fold.line1, 1
+    elseif entry then
+      line = entry.line
+    end
+  end
   local col = self:get_x_offset_col(line, x - ox)
   return line, col
 end
@@ -1373,6 +2050,16 @@ function DocView:on_mouse_moved(x, y, ...)
     self.hovering_gutter = true
   else
     self.cursor = "ibeam"
+    self.hovered_fold_widget = nil
+    if self:has_collapsed_folds() then
+      local line = self:resolve_screen_position(x, y)
+      local fold = self.resolved_fold_widget or self:get_collapsed_fold_at_line(line)
+      self.resolved_fold_widget = nil
+      if fold then
+        self.cursor = "hand"
+        self.hovered_fold_widget = fold
+      end
+    end
   end
 
   if self.mouse_selecting then
@@ -1435,6 +2122,16 @@ end
 ---@return boolean? handled True if event was handled
 function DocView:on_mouse_pressed(button, x, y, clicks)
   if button == "left" then self.doc:clear_search_selections() end
+  if button == "left" and not self.hovering_gutter then
+    local line = self:resolve_screen_position(x, y)
+    local fold = self.resolved_fold_widget or self:get_collapsed_fold_at_line(line)
+    self.resolved_fold_widget = nil
+    if fold then
+      self:expand_fold_region(fold.id, "mouse")
+      self.doc:set_selection(fold.line1, 1, fold.line1, 1)
+      return true
+    end
+  end
   if button ~= "left" or not self.hovering_gutter then
     local result = DocView.super.on_mouse_pressed(self, button, x, y, clicks)
     if self.wrapped_settings and button == "left" then
@@ -2978,7 +3675,55 @@ function DocView:draw_overlay_unwrapped()
 end
 
 
+function DocView:draw_folded()
+  self:draw_background(style.background)
+  local _, indent_size = self.doc:get_indent_info()
+  self:get_font():set_tab_size(indent_size)
+
+  local minline, maxline = self:get_visible_line_range()
+  self:prepare_line_body_draw_cache(minline, maxline)
+  self.__current_line_highlights_drawn_before_content = false
+
+  local x = self.position.x - self.scroll.x
+  local gw, gpad = self:get_gutter_width()
+  local gutter_w = gpad and gw - gpad or gw
+  local drawn_gutters = {}
+  for entry in self:iter_visible_visual_rows() do
+    if entry.type == "fold" then
+      self:draw_fold_widget_gutter(entry.fold, self.position.x, entry.y, gutter_w)
+    elseif not drawn_gutters[entry.line] then
+      drawn_gutters[entry.line] = true
+      local line_y = entry.y - (entry.row_in_line - 1) * self:get_line_height()
+      self:draw_line_gutter(entry.line, self.position.x, line_y, gutter_w)
+    end
+  end
+
+  core.push_clip_rect(self.position.x + gw, self.position.y, math.max(0, self.size.x - gw), self.size.y)
+  local drawn_bodies = {}
+  for entry in self:iter_visible_visual_rows() do
+    if entry.type == "fold" then
+      self:draw_fold_widget_body(entry.fold, x + gw, entry.y)
+    elseif not drawn_bodies[entry.line] then
+      drawn_bodies[entry.line] = true
+      local line_y = entry.y - (entry.row_in_line - 1) * self:get_line_height()
+      self:draw_line_body(entry.line, x + gw, line_y)
+    end
+  end
+  self:draw_overlay()
+  core.pop_clip_rect()
+
+  self.__current_line_highlights_drawn_before_content = nil
+  self.__line_body_highlight_cache = nil
+  self.__line_body_selection_cache = nil
+  self.__line_body_search_match_cache = nil
+  self.__line_gutter_selection_cache = nil
+  self.__visible_caret_cache = nil
+
+  self:draw_scrollbar()
+end
+
 function DocView:draw_wrapped()
+  if self:has_collapsed_folds() then return self:draw_folded() end
   self:draw_background(style.background)
   local _, indent_size = self.doc:get_indent_info()
   self:get_font():set_tab_size(indent_size)
@@ -3035,6 +3780,19 @@ end
 ---Draw the entire document view.
 ---Renders background, gutters, text, selections, carets, and scrollbars.
 function DocView:draw()
+  if self:has_collapsed_folds() then
+    if self.wrapped_settings then
+      local centered = core.centered_editor
+      if centered and centered.should_center and centered.should_center(self)
+      and not self.__centered_editor_in_lane_geometry then
+        self:draw_background(style.background)
+        return centered.with_lane_geometry(self, function()
+          return self:draw_folded()
+        end)
+      end
+    end
+    return self:draw_folded()
+  end
   if self.wrapped_settings then
     local centered = core.centered_editor
     if centered and centered.should_center and centered.should_center(self)

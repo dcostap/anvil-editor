@@ -394,6 +394,9 @@ local function select_match(view, state, index, scroll)
   state.current = match and index or 0
   if not match then return false end
   view:with_selection_state(function()
+    if view.expand_folds_covering_range then
+      view:expand_folds_covering_range(match.line, match.col1, match.line, match.col2, "local-find")
+    end
     view.doc:set_selection(match.line, match.col2, match.line, match.col1)
   end)
   if scroll ~= false then

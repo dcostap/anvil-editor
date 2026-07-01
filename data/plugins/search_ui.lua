@@ -422,6 +422,9 @@ local function find(reverse, not_scroll, unselect_first, no_wrap)
         if opt.no_case and not opt.regex and not opt.pattern then
           text = text:ulower()
         end
+        if doc_view.expand_folds_covering_range then
+          doc_view:expand_folds_covering_range(line1, col1, line2, col2, "search-ui")
+        end
         if reverse or (current_text == text or current_text == "") then
           doc:set_selection(line1, col2, line2, col1)
         else

@@ -1539,8 +1539,12 @@ local commands = {
           core.error("Invalid line number or unmatched string")
           return
         end
-        dv.doc:set_selection(line, 1  )
-        dv:scroll_to_line(line, true)
+        if dv.select_and_reveal then
+          dv:select_and_reveal(line, 1, line, 1, { reason = "go-to-line" })
+        else
+          dv.doc:set_selection(line, 1)
+          dv:scroll_to_line(line, true)
+        end
       end,
       suggest = function(text)
         if not text:find("^%d*$") then
@@ -1879,7 +1883,7 @@ local function move_line_batch(dv, line_offset)
     elseif line_offset > 0 and line >= last_line then
       target_line, target_col = last_line, #doc.lines[last_line]
     else
-      target_line = line + line_offset
+      target_line = dv.fold_aware_line_move and dv:fold_aware_line_move(line, line_offset) or line + line_offset
       if is_simple_line(line) and is_simple_line(target_line) then
         local x = (col - 1) * dv:get_font():get_width(" ")
         target_col = common.clamp(col, 1, #doc.lines[target_line])
@@ -1899,6 +1903,8 @@ local function move_line_batch(dv, line_offset)
         last_x_offset.col = target_col
       end
     end
+    local target_fold = dv.get_collapsed_fold_at_line and dv:get_collapsed_fold_at_line(target_line)
+    if target_fold and target_fold.line1 == target_line then target_col = 1 end
     add_cursor(old_idx, target_line, target_col)
   end
 
@@ -2079,7 +2085,7 @@ local function select_line_batch(dv, line_offset)
     elseif line_offset > 0 and line >= last_line then
       target_line, target_col = last_line, #doc.lines[last_line]
     else
-      target_line = line + line_offset
+      target_line = dv.fold_aware_line_move and dv:fold_aware_line_move(line, line_offset) or line + line_offset
       if is_simple_line(line) and is_simple_line(target_line) then
         local x = (col - 1) * dv:get_font():get_width(" ")
         target_col = common.clamp(col, 1, #doc.lines[target_line])
@@ -2099,6 +2105,8 @@ local function select_line_batch(dv, line_offset)
         last_x_offset.col = target_col
       end
     end
+    local target_fold = dv.get_collapsed_fold_at_line and dv:get_collapsed_fold_at_line(target_line)
+    if target_fold and target_fold.line1 == target_line then target_col = 1 end
     mapped_last_selection = add_selection_endpoint(
       selections, seen, old_idx, last_selection, mapped_last_selection,
       target_line, target_col, old[i + 2], old[i + 3]
@@ -2213,11 +2221,45 @@ local function wrapped_forward_endpoint_command(dv, name, ...)
 end
 
 local function move_to_wrapped_previous_line(doc, line, col, dv)
-  return linewrapping.wrapped_visual_line_position(dv, line, col, -1)
+  if dv and dv.has_collapsed_folds and dv:has_collapsed_folds() then
+    local hidden, fold = dv:is_line_hidden_by_fold(math.max(1, (line or 1) - 1))
+    if hidden and dv:get_visual_row_count_for_line(line) <= 1 then return fold.line1, 1 end
+    return dv:folded_visual_line_position(line, col, -1)
+  end
+  local target_line, target_col, target_line_end = linewrapping.wrapped_visual_line_position(dv, line, col, -1)
+  if dv and dv.is_line_hidden_by_fold then
+    local current_fold = dv:get_collapsed_fold_at_line(line)
+    local target_fold = dv:get_collapsed_fold_at_line(target_line)
+    if dv:is_line_hidden_by_fold(target_line) or (current_fold and current_fold.line1 == line and target_line == line) then
+      target_line = dv:fold_aware_line_move(line, -1)
+      target_col = current_fold and current_fold.line1 == line and 1 or common.clamp(target_col, 1, #doc.lines[target_line])
+    elseif target_fold and target_fold.line1 == target_line then
+      target_col = 1
+    end
+  end
+  local landed_fold = dv and dv.get_collapsed_fold_at_line and dv:get_collapsed_fold_at_line(target_line)
+  if landed_fold and landed_fold.line1 == target_line then target_col = 1 end
+  return target_line, target_col, target_line_end
 end
 
 local function move_to_wrapped_next_line(doc, line, col, dv)
-  return linewrapping.wrapped_visual_line_position(dv, line, col, 1)
+  if dv and dv.has_collapsed_folds and dv:has_collapsed_folds() then
+    return dv:folded_visual_line_position(line, col, 1)
+  end
+  local target_line, target_col, target_line_end = linewrapping.wrapped_visual_line_position(dv, line, col, 1)
+  if dv and dv.is_line_hidden_by_fold then
+    local current_fold = dv:get_collapsed_fold_at_line(line)
+    local target_fold = dv:get_collapsed_fold_at_line(target_line)
+    if dv:is_line_hidden_by_fold(target_line) or (current_fold and current_fold.line1 == line and target_line == line) then
+      target_line = dv:fold_aware_line_move(line, 1)
+      target_col = current_fold and current_fold.line1 == line and 1 or common.clamp(target_col, 1, #doc.lines[target_line])
+    elseif target_fold and target_fold.line1 == target_line then
+      target_col = 1
+    end
+  end
+  local landed_fold = dv and dv.get_collapsed_fold_at_line and dv:get_collapsed_fold_at_line(target_line)
+  if landed_fold and landed_fold.line1 == target_line then target_col = 1 end
+  return target_line, target_col, target_line_end
 end
 
 local function move_to_wrapped_end_of_line(doc, line, col, dv)
@@ -2291,6 +2333,19 @@ commands["doc:delete-to-end-of-line"] = function(dv)
   return wrapped_delete_to(dv, "doc:delete-to-end-of-line", move_to_wrapped_end_of_line, dv)
 end
 
+commands["doc:fold-at-caret"] = function(dv)
+  local fold, err = dv:fold_at_caret()
+  if not fold and err then core.log_quiet("Fold at caret skipped: %s", tostring(err)) end
+end
+
+commands["doc:unfold-at-caret"] = function(dv)
+  dv:unfold_at_caret("command")
+end
+
+commands["doc:unfold-all"] = function(dv)
+  dv:unfold_all("command")
+end
+
 command.add("core.docview", commands)
 
 command.add(nil, {
@@ -2304,4 +2359,13 @@ command.add(nil, {
 
 keymap.add {
   ["f10"] = "line-wrapping:toggle",
+}
+
+keymap.add_direct {
+  ["ctrl+-"] = "doc:fold-at-caret",
+  ["ctrl+shift+-"] = "doc:fold-at-caret",
+  ["ctrl+="] = "doc:unfold-at-caret",
+  ["ctrl+shift+="] = "doc:unfold-at-caret",
+  ["ctrl+plus"] = "doc:unfold-at-caret",
+  ["ctrl+shift+plus"] = "doc:unfold-at-caret",
 }

@@ -41,6 +41,7 @@ local function update_preview(sel, search_fn, text)
     local ok, line1, col1, line2, col2 = pcall(search_fn, last_view.doc,
       sel[1], sel[2], text, case_sensitive, find_regex)
     if ok and line1 and text ~= "" then
+      if last_view.expand_folds_covering_range then last_view:expand_folds_covering_range(line1, col1, line2, col2, "core-find") end
       last_view.doc:set_selection(line2, col2, line1, col1)
       last_view:scroll_to_line(line2, true, false, { visible_margin_lines = FIND_NAV_VISIBLE_MARGIN_LINES })
       last_view:scroll_to_make_visible(line1, col1, false, {
@@ -197,6 +198,7 @@ local function select_add_next(all)
       )
       if l1 == il1 and c1 == ic1 then break end
       if l2 and not is_in_any_selection(l2, c2) then
+        if core.active_view and core.active_view.expand_folds_covering_range then core.active_view:expand_folds_covering_range(l1, c1, l2, c2, "select-add-next") end
         doc():add_selection(l2, c2, l1, c1)
         if not all then
           core.active_view:scroll_to_make_visible(l1, c1, nil, {
@@ -220,6 +222,7 @@ local function select_next(reverse)
     l1, c1, l2, c2 = search.find(doc(), l2, c2, text, { wrap = true })
   end
   if l2 then
+    if core.active_view and core.active_view.expand_folds_covering_range then core.active_view:expand_folds_covering_range(l1, c1, l2, c2, "select-next") end
     doc():set_selection(l2, c2, l1, c1)
     core.active_view:scroll_to_make_visible(l1, c1, nil, {
       line2 = l2,
@@ -303,6 +306,7 @@ command.add(valid_for_finding, {
       local sl1, sc1, sl2, sc2 = dv.doc:get_selection(true)
       local line1, col1, line2, col2 = last_fn(dv.doc, sl2, sc2, last_text, case_sensitive, find_regex, false)
       if line1 then
+        if dv.expand_folds_covering_range then dv:expand_folds_covering_range(line1, col1, line2, col2, "core-find") end
         dv.doc:set_selection(line2, col2, line1, col1)
         dv:scroll_to_line(line2, true, false, { visible_margin_lines = FIND_NAV_VISIBLE_MARGIN_LINES })
         dv:scroll_to_make_visible(line1, col1, false, {
@@ -323,6 +327,7 @@ command.add(valid_for_finding, {
       local sl1, sc1, sl2, sc2 = dv.doc:get_selection(true)
       local line1, col1, line2, col2 = last_fn(dv.doc, sl1, sc1, last_text, case_sensitive, find_regex, true)
       if line1 then
+        if dv.expand_folds_covering_range then dv:expand_folds_covering_range(line1, col1, line2, col2, "core-find") end
         dv.doc:set_selection(line2, col2, line1, col1)
         dv:scroll_to_line(line2, true, false, { visible_margin_lines = FIND_NAV_VISIBLE_MARGIN_LINES })
         dv:scroll_to_make_visible(line1, col1, false, {

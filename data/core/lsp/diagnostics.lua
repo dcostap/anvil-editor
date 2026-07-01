@@ -334,6 +334,9 @@ function diagnostics.navigate(view, direction)
   local line, col = doc:get_selection(true)
   local item, reason = diagnostics.next_in_doc(doc, line, col, direction)
   if not item then return nil, reason end
+  if view.expand_folds_covering_range then
+    view:expand_folds_covering_range(item.line1, item.col1, item.line2, item.col2, "diagnostics")
+  end
   doc:set_selection(item.line1, item.col1, item.line2, item.col2)
   if view.scroll_to_make_visible then
     view:scroll_to_make_visible(item.line1, item.col1, true, {

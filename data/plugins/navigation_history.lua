@@ -213,6 +213,9 @@ function M.is_forward_available()
 end
 
 local function apply_place_to_view(view, place)
+  if view.expand_folds_covering_range then
+    view:expand_folds_covering_range(place.line, place.col, place.line2 or place.line, place.col2 or place.col, "navigation-history")
+  end
   if place.selection_state and view.set_selection_state then
     view:set_selection_state(clone_selection_state(place.selection_state))
   end

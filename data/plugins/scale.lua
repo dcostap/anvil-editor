@@ -297,11 +297,7 @@ keymap.unbind("ctrl+shift+wheeldown", "scale:decrease-code")
 
 keymap.add {
   ["ctrl+0"] = "editor:zoom-reset",
-  ["ctrl+-"] = "editor:zoom-out",
-  ["ctrl+="] = "editor:zoom-in",
-  ["ctrl+shift+0"] = "editor:zoom-reset",
-  ["ctrl+shift+-"] = "editor:zoom-out",
-  ["ctrl+shift+="] = "editor:zoom-in"
+  ["ctrl+shift+0"] = "editor:zoom-reset"
 }
 
 if config.plugins.scale.use_mousewheel then

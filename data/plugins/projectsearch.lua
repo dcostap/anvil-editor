@@ -1065,6 +1065,7 @@ function ResultsView:open_selected_result(target)
     else
       dv = core.root_panel:open_doc(core.open_doc(item.parent.file.path))
       if dv then
+        if dv.expand_folds_covering_range then dv:expand_folds_covering_range(l, c1, l, c2, "project-search") end
         dv.doc:set_selection(l, c2, l, c1)
         dv.doc:add_search_selection(l, c2, l, c1)
         dv:scroll_to_make_visible(l, c1, true, {
