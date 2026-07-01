@@ -142,6 +142,7 @@ function diagnostics.handle_publish_diagnostics(client, params, opts)
   if type(document_uri) ~= "string" or document_uri == "" then
     return nil, "publishDiagnostics missing textDocument.uri"
   end
+  document_uri = uri.normalize_file_uri(document_uri)
 
   local version = text_document.version
   local received_at = now()
@@ -178,7 +179,7 @@ end
 function diagnostics.get(client, doc_or_uri)
   local store = stores[client]
   if not store then return {} end
-  local document_uri = type(doc_or_uri) == "string" and doc_or_uri or doc_uri(doc_or_uri)
+  local document_uri = type(doc_or_uri) == "string" and uri.normalize_file_uri(doc_or_uri) or doc_uri(doc_or_uri)
   if not document_uri then return {} end
   local entry = store.by_uri[document_uri]
   if not entry then return {} end

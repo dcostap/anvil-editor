@@ -2,6 +2,7 @@ local common = require "core.common"
 local Doc = require "core.doc"
 local test = require "core.test"
 local client_module = require "core.lsp.client"
+local diagnostic_markers = require "core.lsp.diagnostic_markers"
 local diagnostics = require "core.lsp.diagnostics"
 local documents = require "core.lsp.documents"
 local uri = require "core.lsp.uri"
@@ -168,6 +169,26 @@ test.describe("core.lsp.diagnostics", function()
     test.equal(doc_range.line2, 1)
     test.equal(doc_range.col2, 6)
     test.equal(item.doc_range, doc_range)
+  end)
+
+  test.test("normalizes encoded drive-letter publish URIs to the open document URI", function(context)
+    local path = join_path(temp_root, "main.cpp")
+    local doc = track_doc(context, new_doc(path, "int main() {}"))
+    local client = track_client(context, fake_client("fake-uri"))
+    documents.attach(client, doc, { language_id = "cpp" })
+    diagnostics.attach_client(client)
+
+    local document_uri = uri.path_to_uri(path)
+    local encoded_drive_uri = document_uri:gsub("^file:///(%a):", "file:///%1%%3A")
+    publish(client, {
+      textDocument = { uri = encoded_drive_uri },
+      diagnostics = { { range = range(0, 4, 0, 8), severity = 1, message = "encoded" } },
+    })
+
+    local items = diagnostics.current_for_doc(doc)
+    test.equal(#items, 1)
+    test.equal(items[1].uri, document_uri)
+    test.equal(#diagnostic_markers.visual_document_items(doc), 1)
   end)
 
   test.test("marks versioned diagnostics stale against synced document versions", function(context)

@@ -145,6 +145,14 @@ function uri.uri_to_path(value, options)
   return decoded_path
 end
 
+function uri.normalize_file_uri(value)
+  assert(type(value) == "string", "uri.normalize_file_uri expects a string")
+  if not uri.is_file_uri(value) then return value end
+  local path, err = uri.uri_to_path(value)
+  if not path then return value, err end
+  return uri.path_to_uri(path)
+end
+
 uri.from_path = uri.path_to_uri
 uri.to_path = uri.uri_to_path
 

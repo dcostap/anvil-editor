@@ -7,6 +7,11 @@ test.describe("core.lsp.uri", function()
     test.equal(file_uri, "file:///C:/foo%20bar/a.cpp")
   end)
 
+  test.test("normalizes equivalent Windows file URI spellings", function()
+    local normalized = uri.normalize_file_uri("file:///C%3A/foo%20bar/a.cpp")
+    test.equal(normalized, "file:///C:/foo%20bar/a.cpp")
+  end)
+
   test.test("round-trips Windows paths with drive letters and slash variants", function()
     local original = [[C:\foo bar\dir\a.cpp]]
     local file_uri = uri.path_to_uri(original)

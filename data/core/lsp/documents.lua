@@ -263,6 +263,7 @@ function documents.detach(client, doc_or_uri)
   if not bucket then return true end
   local states = {}
   if type(doc_or_uri) == "string" then
+    doc_or_uri = uri.normalize_file_uri(doc_or_uri)
     local state = bucket.by_uri[doc_or_uri]
     if state then states[1] = state end
   else
@@ -279,7 +280,7 @@ end
 function documents.state(client, doc_or_uri)
   local bucket = clients[client]
   if not bucket then return nil end
-  if type(doc_or_uri) == "string" then return bucket.by_uri[doc_or_uri] end
+  if type(doc_or_uri) == "string" then return bucket.by_uri[uri.normalize_file_uri(doc_or_uri)] end
   local list = bucket.by_doc[doc_or_uri]
   return list and list[1] or nil
 end
