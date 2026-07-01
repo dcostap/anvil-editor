@@ -1604,23 +1604,30 @@ local function draw_new_project_result_row(font, r, x, y, width)
   draw_highlighted_text(font, r.project or r.label or "", cx, y, math.max(0, x + width - cx), style.text, {})
 end
 
-local function draw_symbol_result_row(font, r, x, y, width)
-  local gap = style.padding.x
-  local kind = r.symbol_kind_label or r.symbol_kind or "symbol"
-  local kind_w = font:get_width(kind) + gap
-  local location = r.file or ""
-  if r.line then location = string.format("%s:%d", location, r.line) end
-  local loc_w = math.min(width * 0.45, font:get_width(location))
-  local name_w = math.max(0, width - kind_w - loc_w - gap)
-  local label = r.label or r.name or ""
-  draw_highlighted_text(font, label, x, y, name_w, style.text, r.match_spans or {})
-  local mx = x + name_w + gap
-  renderer.draw_text(font, kind, mx, y, style.dim)
-  mx = mx + kind_w
-  draw_highlighted_text(font, location, mx, y, loc_w, style.dim, r.file_spans or {})
-end
-
 local draw_file_result_row
+local grep_row_columns
+
+local function draw_symbol_result_row(font, r, x, y, width)
+  local path_w, gap, text_w = grep_row_columns(width)
+  local line = tonumber(r.line) or 1
+  local line_suffix = line <= 9999 and string.format(":%-4d", line) or ":" .. tostring(line)
+  local prefix = r.symbol_scope == "document" and "$$ " or "$ "
+  draw_file_result_row(font, r.file or "", r.file_spans, prefix, x, y, path_w, line_suffix)
+  if text_w <= 0 then return end
+
+  local preview_font = style.get_small_font(font)
+  local preview_y = y + math.max(0, math.floor((font:get_height() - preview_font:get_height()) / 2))
+  local text_x = x + path_w + gap
+  local label = tostring(r.label or r.name or "")
+  local kind = tostring(r.symbol_kind_label or r.symbol_kind or "symbol")
+  local kind_text = "  " .. kind
+  local kind_w = math.min(text_w * 0.35, preview_font:get_width(kind_text))
+  local label_w = math.max(0, text_w - kind_w)
+  local label_end = draw_highlighted_text(preview_font, label, text_x, preview_y, label_w, style.text, r.match_spans or {})
+  if kind_w > 0 and label_end < text_x + text_w then
+    renderer.draw_text(preview_font, truncate_text(preview_font, kind_text, text_x + text_w - label_end), label_end, preview_y, style.dim)
+  end
+end
 
 local function draw_everything_result_row(font, r, x, y, width)
   local gap = style.padding.x
@@ -1716,7 +1723,7 @@ draw_file_result_row = function(font, file, spans, prefix, x, y, width, suffix)
   return cx, suffix_x
 end
 
-local function grep_row_columns(width)
+grep_row_columns = function(width)
   local scale = SCALE or 1
   local gap = math.max(8 * scale, style.padding.x)
   local ratio = fuzzy_searcher.grep_path_column_width or 0.45
