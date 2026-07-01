@@ -905,13 +905,22 @@ function DocView:get_line_height()
 end
 
 
+local MIN_LINE_NUMBER_GUTTER_DIGITS = 2
+
+---Get the width reserved for line numbers in the gutter.
+---@return number width Line number label width
+function DocView:get_line_number_gutter_width()
+  local digits = math.max(MIN_LINE_NUMBER_GUTTER_DIGITS, #tostring(#self.doc.lines))
+  return self:get_font():get_width(string.rep("0", digits))
+end
+
 ---Get the gutter width (line numbers area).
 ---@return number width Total gutter width
 ---@return number padding Padding within gutter
 function DocView:get_gutter_width()
   local padding = style.padding.x * 2
   if config.show_line_numbers then
-    return self:get_font():get_width(#self.doc.lines) + padding, padding
+    return self:get_line_number_gutter_width() + padding, padding
   end
   return style.padding.x, padding
 end
