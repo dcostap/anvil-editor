@@ -84,17 +84,17 @@ function DocView:set_wrapping_enabled(enabled)
 end
 
 function DocView:get_total_visual_lines()
-  if self:has_collapsed_folds() then return self:get_folded_visual_row_count() end
+  if self:has_composed_visual_rows() then return self:get_composed_visual_row_count() end
   return linewrapping.get_total_wrapped_lines(self)
 end
 
 function DocView:get_visual_row(line, col, line_end)
-  if self:has_collapsed_folds() then return self:get_folded_visual_row_for_position(line, col, line_end) end
+  if self:has_composed_visual_rows() then return self:get_composed_visual_row_for_position(line, col, line_end) end
   return linewrapping.get_line_idx_col_count(self, line, col, line_end)
 end
 
 function DocView:get_visual_row_line_col(idx)
-  if self:has_collapsed_folds() then
+  if self:has_composed_visual_rows() then
     local entry = self:get_visual_row_entry(idx)
     if entry and entry.type == "fold" then return entry.fold.line1, 1 end
     if entry and entry.wrapped_idx then return linewrapping.get_idx_line_col(self, entry.wrapped_idx) end
@@ -739,6 +739,7 @@ function DocView:new(doc)
   self.fold_regions = {}
   self.fold_generation = 0
   self.__fold_next_id = 0
+  self.visual_row_extensions = {}
   register_fold_view(self)
   linewrapping.register_docview(self)
   self:set_wrapping_enabled(config.plugins.linewrapping.enable_by_default)
@@ -867,7 +868,7 @@ end
 ---Get the number of visual rows in the document scroll model.
 ---@return integer count Visual row count
 function DocView:get_scrollable_line_count()
-  if self:has_collapsed_folds() then return self:get_folded_visual_row_count() end
+  if self:has_composed_visual_rows() then return self:get_composed_visual_row_count() end
   if self.wrapped_settings then return linewrapping.get_total_wrapped_lines(self) end
   return #self.doc.lines
 end
@@ -1020,6 +1021,57 @@ if Doc and not Doc.__docview_folding_close_patched then
     clear_fold_views_for_doc(self, "doc-close")
     return old_on_close(self, ...)
   end
+end
+
+function DocView:set_visual_row_extension(id, extension)
+  assert(type(id) == "string" and id ~= "", "visual row extension id must be a non-empty string")
+  self.visual_row_extensions = self.visual_row_extensions or {}
+  self.visual_row_extensions[id] = extension
+  self:bump_fold_generation("visual-row-extension")
+end
+
+function DocView:clear_visual_row_extension(id)
+  if not self.visual_row_extensions or not self.visual_row_extensions[id] then return false end
+  self.visual_row_extensions[id] = nil
+  self:bump_fold_generation("visual-row-extension-clear")
+  return true
+end
+
+function DocView:has_extra_visual_rows()
+  for _, extension in pairs(self.visual_row_extensions or {}) do
+    if extension then return true end
+  end
+  return false
+end
+
+function DocView:has_composed_visual_rows()
+  return self:has_collapsed_folds() or self:has_extra_visual_rows()
+end
+
+function DocView:get_extra_visual_rows_before_line(line)
+  local total = 0
+  for _, extension in pairs(self.visual_row_extensions or {}) do
+    local before = extension.before
+    if type(before) == "function" then
+      total = total + math.max(0, math.floor(tonumber(before(line, self)) or 0))
+    elseif before then
+      total = total + math.max(0, math.floor(tonumber(before[line]) or 0))
+    end
+  end
+  return total
+end
+
+function DocView:get_extra_visual_rows_after_line(line)
+  local total = 0
+  for _, extension in pairs(self.visual_row_extensions or {}) do
+    local after = extension.after
+    if type(after) == "function" then
+      total = total + math.max(0, math.floor(tonumber(after(line, self)) or 0))
+    elseif after then
+      total = total + math.max(0, math.floor(tonumber(after[line]) or 0))
+    end
+  end
+  return total
 end
 
 local function normalize_fold_lines(doc, line1, line2)
@@ -1332,15 +1384,37 @@ function DocView:get_folded_visual_row_for_position(line, col, line_end)
   return row
 end
 
+function DocView:get_composed_visual_row_count()
+  local last_line = math.max(1, #self.doc.lines)
+  return self:get_folded_visual_row_count()
+    + self:get_extra_visual_rows_before_line(last_line)
+    + self:get_extra_visual_rows_after_line(last_line)
+end
+
+function DocView:get_composed_visual_row_for_position(line, col, line_end)
+  line = common.clamp(line or 1, 1, #self.doc.lines)
+  return self:get_folded_visual_row_for_position(line, col, line_end)
+    + self:get_extra_visual_rows_before_line(line)
+end
+
 function DocView:get_visual_row_entry(target_row)
   target_row = math.max(1, math.floor(target_row or 1))
   local row, line = 1, 1
   local folds = self:get_collapsed_folds()
   local fidx = 1
+  local previous_extra_before = 0
   while line <= #self.doc.lines do
+    local extra_before = self:get_extra_visual_rows_before_line(line)
+    local extra_delta = math.max(0, extra_before - previous_extra_before)
+    if target_row >= row and target_row < row + extra_delta then
+      return { type = "extra", line = line, placement = "before", row = row, row_in_extra = target_row - row + 1 }
+    end
+    row = row + extra_delta
+    previous_extra_before = extra_before
+
     local fold = folds[fidx]
     if fold and line == fold.line1 then
-      if row == target_row then return { type = "fold", fold = fold, line = fold.line1 } end
+      if row == target_row then return { type = "fold", fold = fold, line = fold.line1, row = row } end
       row = row + 1
       line = fold.line2 + 1
       fidx = fidx + 1
@@ -1356,6 +1430,11 @@ function DocView:get_visual_row_entry(target_row)
       row = row + count
       line = line + 1
     end
+  end
+
+  local trailing = self:get_extra_visual_rows_after_line(#self.doc.lines)
+  if target_row >= row and target_row < row + trailing then
+    return { type = "extra", line = #self.doc.lines, placement = "after", row = row, row_in_extra = target_row - row + 1 }
   end
   return { type = "line", line = #self.doc.lines, row = math.max(1, row - 1) }
 end
@@ -1577,8 +1656,8 @@ function DocView:get_line_screen_position(line, col, line_end)
       line_end = linewrapping.has_wrapped_line_end_affinity(self, line, col)
     end
     local idx
-    if self:has_collapsed_folds() then
-      idx = self:get_folded_visual_row_for_position(line, col, line_end)
+    if self:has_composed_visual_rows() then
+      idx = self:get_composed_visual_row_for_position(line, col, line_end)
     else
       idx = linewrapping.get_line_idx_col_count(self, line, col, line_end)
     end
@@ -1590,7 +1669,7 @@ function DocView:get_line_screen_position(line, col, line_end)
   local x, y = self:get_content_offset()
   local lh = self:get_line_height()
   local gw = self:get_gutter_width()
-  local row = self:has_collapsed_folds() and self:get_folded_visual_row_for_position(line, col, line_end) or line
+  local row = self:has_composed_visual_rows() and self:get_composed_visual_row_for_position(line, col, line_end) or line
   y = y + (row-1) * lh + style.padding.y
   if col then
     return x + gw + self:get_col_x_offset(line, col), y
@@ -1668,8 +1747,8 @@ end
 function DocView:get_visible_line_range()
   local x, y, x2, y2 = self:get_content_bounds()
   local lh = self:get_line_height()
-  if self:has_collapsed_folds() then
-    local total = self:get_folded_visual_row_count()
+  if self:has_composed_visual_rows() then
+    local total = self:get_composed_visual_row_count()
     local minidx = math.max(1, math.floor((y - style.padding.y) / lh) + 1)
     local maxidx = math.min(total, math.floor((y2 - style.padding.y) / lh) + 1)
     local first = self:get_visual_row_entry(minidx)
@@ -1862,15 +1941,19 @@ end
 function DocView:resolve_screen_position(x, y)
   self.resolved_fold_widget = nil
   if self.wrapped_settings then
-    local ox, oy = self:get_line_screen_position(1)
-    local total = self:has_collapsed_folds() and self:get_folded_visual_row_count() or linewrapping.get_total_wrapped_lines(self)
+    local content_x, content_y = self:get_content_offset()
+    local ox, oy = content_x + self:get_gutter_width(), content_y + style.padding.y
+    local total = self:has_composed_visual_rows() and self:get_composed_visual_row_count() or linewrapping.get_total_wrapped_lines(self)
     local idx = common.clamp(math.floor((y - oy) / self:get_line_height()) + 1, 1, total)
-    if self:has_collapsed_folds() then
+    if self:has_composed_visual_rows() then
       local entry = self:get_visual_row_entry(idx)
       if entry and entry.type == "fold" then
         self.resolved_fold_widget = entry.fold
         self.wrapped_last_resolved_line_end = nil
         return entry.fold.line1, 1
+      elseif entry and entry.type == "extra" then
+        self.wrapped_last_resolved_line_end = nil
+        return entry.line, 1
       elseif entry then
         local line, col, line_end = linewrapping.get_line_col_from_index_and_x(self, entry.wrapped_idx, x - ox)
         self.wrapped_last_resolved_line_end = line_end and { line, col } or nil
@@ -1881,11 +1964,12 @@ function DocView:resolve_screen_position(x, y)
     self.wrapped_last_resolved_line_end = line_end and { line, col } or nil
     return line, col
   end
-  local ox, oy = self:get_line_screen_position(1)
+  local content_x, content_y = self:get_content_offset()
+  local ox, oy = content_x + self:get_gutter_width(), content_y + style.padding.y
   local row = math.floor((y - oy) / self:get_line_height()) + 1
   local line = common.clamp(row, 1, #self.doc.lines)
-  if self:has_collapsed_folds() then
-    local entry = self:get_visual_row_entry(common.clamp(row, 1, self:get_folded_visual_row_count()))
+  if self:has_composed_visual_rows() then
+    local entry = self:get_visual_row_entry(common.clamp(row, 1, self:get_composed_visual_row_count()))
     if entry and entry.type == "fold" then
       self.resolved_fold_widget = entry.fold
       return entry.fold.line1, 1
@@ -3691,6 +3775,8 @@ function DocView:draw_folded()
   for entry in self:iter_visible_visual_rows() do
     if entry.type == "fold" then
       self:draw_fold_widget_gutter(entry.fold, self.position.x, entry.y, gutter_w)
+    elseif entry.type == "extra" then
+      -- provider-owned visual spacer row; no default gutter
     elseif not drawn_gutters[entry.line] then
       drawn_gutters[entry.line] = true
       local line_y = entry.y - (entry.row_in_line - 1) * self:get_line_height()
@@ -3703,6 +3789,8 @@ function DocView:draw_folded()
   for entry in self:iter_visible_visual_rows() do
     if entry.type == "fold" then
       self:draw_fold_widget_body(entry.fold, x + gw, entry.y)
+    elseif entry.type == "extra" then
+      -- provider-owned visual spacer row; no default body
     elseif not drawn_bodies[entry.line] then
       drawn_bodies[entry.line] = true
       local line_y = entry.y - (entry.row_in_line - 1) * self:get_line_height()
@@ -3723,7 +3811,7 @@ function DocView:draw_folded()
 end
 
 function DocView:draw_wrapped()
-  if self:has_collapsed_folds() then return self:draw_folded() end
+  if self:has_composed_visual_rows() then return self:draw_folded() end
   self:draw_background(style.background)
   local _, indent_size = self.doc:get_indent_info()
   self:get_font():set_tab_size(indent_size)
@@ -3780,7 +3868,7 @@ end
 ---Draw the entire document view.
 ---Renders background, gutters, text, selections, carets, and scrollbars.
 function DocView:draw()
-  if self:has_collapsed_folds() then
+  if self:has_composed_visual_rows() then
     if self.wrapped_settings then
       local centered = core.centered_editor
       if centered and centered.should_center and centered.should_center(self)

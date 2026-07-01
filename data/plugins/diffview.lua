@@ -4,7 +4,6 @@ local config = require "core.config"
 local command = require "core.command"
 local common = require "core.common"
 local keymap = require "core.keymap"
-local linewrapping = require "core.linewrapping"
 local style = require "core.style"
 local DocView = require "core.docview"
 local Doc = require "core.doc"
@@ -321,6 +320,7 @@ function DiffView:update_diff()
 
     self.a_gaps = a_gaps
     self.b_gaps = b_gaps
+    self:install_core_gap_rows()
     self.a_changes = a_changes
     self.b_changes = b_changes
     self.diff_equal_blocks = equal_blocks
@@ -643,8 +643,8 @@ local function wrapped_total_visual_lines(doc_view)
 end
 
 local function visual_rows_before_line(doc_view, line)
-  if doc_view.has_collapsed_folds and doc_view:has_collapsed_folds() then
-    return math.max(0, doc_view:get_folded_visual_row_for_position(line, 1) - 1)
+  if doc_view.has_composed_visual_rows and doc_view:has_composed_visual_rows() then
+    return math.max(0, doc_view:get_visual_row(line, 1) - 1)
   end
   if not doc_view.wrapped_settings or not doc_view.wrapped_line_to_idx then
     return math.max(0, line - 1)
@@ -662,46 +662,6 @@ local function visual_line_count(doc_view, line)
   if not idx then return 1 end
   local next_idx = doc_view.wrapped_line_to_idx[line + 1] or (total + 1)
   return math.max(1, next_idx - idx)
-end
-
-local function visual_row_offset_for_col(doc_view, line, col, line_end)
-  if not col then return 0 end
-  if doc_view.has_collapsed_folds and doc_view:has_collapsed_folds() then
-    return math.max(0, doc_view:get_folded_visual_row_for_position(line, col, line_end) - doc_view:get_folded_visual_row_for_position(line, 1))
-  end
-  if not doc_view.wrapped_settings or not doc_view.wrapped_line_to_idx then return 0 end
-  local first_idx = doc_view.wrapped_line_to_idx[line]
-  if not first_idx then return 0 end
-  if doc_view.get_visual_row then
-    local idx = doc_view:get_visual_row(line, col, line_end)
-    return math.max(0, idx - first_idx)
-  end
-  local offset = 0
-  local i = first_idx + 1
-  while doc_view.wrapped_lines[(i - 1) * 2 + 1] == line
-    and col >= doc_view.wrapped_lines[(i - 1) * 2 + 2]
-  do
-    offset = offset + 1
-    i = i + 1
-  end
-  return offset
-end
-
-local function gap_rows_before_line(gaps, line)
-  return gaps[line] and gaps[line][2] or 0
-end
-
-local function trailing_gap_rows(gaps, line)
-  return gaps[line] and gaps[line][1] or 0
-end
-
-local function diffview_visual_line_count(doc_view, gaps)
-  local line_count = #doc_view.doc.lines
-  if line_count == 0 then return 0 end
-  return visual_rows_before_line(doc_view, line_count)
-    + visual_line_count(doc_view, line_count)
-    + gap_rows_before_line(gaps, line_count)
-    + trailing_gap_rows(gaps, line_count)
 end
 
 local function fold_for_line(folds, line)
@@ -726,11 +686,10 @@ end
 
 local function effective_row_before_line(doc_view, gaps, folds, line)
   return visual_rows_before_line(doc_view, line)
-    + gap_rows_before_line(gaps, line)
 end
 
 local function effective_visual_line_count(doc_view, gaps, folds)
-  return math.max(0, diffview_visual_line_count(doc_view, gaps))
+  return doc_view:get_scrollable_line_count()
 end
 
 local function line_for_effective_row(doc_view, gaps, folds, row)
@@ -744,6 +703,25 @@ local function line_for_effective_row(doc_view, gaps, folds, row)
     end
   end
   return fallback
+end
+
+local function install_core_gap_rows_for_docview(doc_view, gaps)
+  if not doc_view or not doc_view.set_visual_row_extension then return end
+  local before, any = {}, false
+  for line, gap in pairs(gaps or {}) do
+    local cumulative = math.max(0, math.floor(tonumber(gap[2]) or 0))
+    if cumulative > 0 then before[line], any = cumulative, true end
+  end
+  if any then
+    doc_view:set_visual_row_extension("diff-gaps", { before = before })
+  else
+    doc_view:clear_visual_row_extension("diff-gaps")
+  end
+end
+
+function DiffView:install_core_gap_rows()
+  install_core_gap_rows_for_docview(self.doc_view_a, self.a_gaps)
+  install_core_gap_rows_for_docview(self.doc_view_b, self.b_gaps)
 end
 
 local function clear_core_diff_folds(doc_view)
@@ -882,20 +860,6 @@ function DiffView:get_scrollable_size()
     return self.doc_view_a:get_line_height() * lc + style.padding.y * 2 + h_scroll
   end
   return self.doc_view_a:get_line_height() * math.max(0, lc - 1) + self.size.y
-end
-
----@param parent core.diffview
----@param self core.docview
----@param line integer
----@param x number
----@param y number
----@param changes diff.changes[]
-local function draw_fold_widget(doc_view, fold, x, y)
-  local h = doc_view:get_line_height()
-  local gw = doc_view:get_gutter_width()
-  renderer.draw_rect(doc_view.position.x + gw, y, doc_view.size.x - gw, h, style.line_highlight)
-  local label = string.format("  ⋯ %d unchanged lines collapsed — click or Ctrl+R to expand ⋯", fold.hidden_count)
-  renderer.draw_text(doc_view:get_font(), label, x + style.padding.x, y + doc_view:get_line_text_y_offset(), style.dim)
 end
 
 local function diff_color(tag, background)
@@ -1144,110 +1108,6 @@ function DiffView:patch_views()
 
   ---@param doc_view core.docview
   ---@param is_a boolean
-  local function wrap_get_line_screen_position(doc_view, is_a)
-    doc_view.get_line_screen_position = function(self, line, col, line_end)
-      if line_end == nil and self.__use_wrapped_caret_affinity then
-        line_end = linewrapping.has_wrapped_line_end_affinity(self, line, col)
-      end
-      local x, y = self:get_content_offset()
-      local lh = self:get_line_height()
-      local gaps = is_a and parent.a_gaps or parent.b_gaps
-      local folds = is_a and parent.diff_folds_a or parent.diff_folds_b
-      local visual_row = visual_rows_before_line(self, line) + visual_row_offset_for_col(self, line, col, line_end)
-      local gap_y = gap_rows_before_line(gaps, line) * lh
-      y = y + visual_row * lh + gap_y + style.padding.y
-      if col then
-        return x + self:get_gutter_width() + self:get_col_x_offset(line, col, line_end), y
-      else
-        return x + self:get_gutter_width(), y
-      end
-    end
-  end
-
-  ---@param doc_view core.docview
-  ---@param is_a boolean
-  local function wrap_resolve_screen_position(doc_view, is_a)
-    local orig = doc_view.resolve_screen_position
-    doc_view.resolve_screen_position = function(self, x, y)
-      local lines = self.doc.lines
-      local lh = self:get_line_height()
-      local gaps = is_a and parent.a_gaps or parent.b_gaps
-      local folds = is_a and parent.diff_folds_a or parent.diff_folds_b
-
-      for i = 1, #lines do
-        local line_x, line_y = self:get_line_screen_position(i)
-        local line_h = folded_visual_line_count(self, folds, i) * lh
-        local line_end_y = line_y + line_h
-        local next_y
-        if i < #lines then
-          local _
-          _, next_y = self:get_line_screen_position(i + 1)
-        else
-          next_y = line_end_y + trailing_gap_rows(gaps, i) * lh
-        end
-
-        if y >= line_y and y < line_end_y then
-          return orig(self, x, y - gap_rows_before_line(gaps, i) * lh)
-        elseif (y >= line_y or i == 1) and y < next_y then
-          local col = self:get_x_offset_col(i, x - line_x)
-          return i, col
-        end
-      end
-
-      local last = #lines
-      local line_x, _ = self:get_line_screen_position(last)
-      return last, self:get_x_offset_col(last, x - line_x)
-    end
-  end
-
-  ---@param doc_view core.docview
-  ---@param is_a boolean
-  local function wrap_get_visible_line_range(doc_view, is_a)
-    doc_view.get_visible_line_range = function(self)
-      local _, oy, _, y2 = self:get_content_bounds()
-      local lh = self:get_line_height()
-      local lines = self.doc.lines
-      local minline, maxline = 1, #lines
-      local gaps = is_a and parent.a_gaps or parent.b_gaps
-      local folds = is_a and parent.diff_folds_a or parent.diff_folds_b
-      local found_min = false
-
-      for i = 1, #lines do
-        local row = visual_rows_before_line(self, i) + gap_rows_before_line(gaps, i)
-        local start_y = style.padding.y + row * lh
-        local end_y = start_y + folded_visual_line_count(self, folds, i) * lh
-        if not found_min and end_y > oy then
-          minline = i
-          found_min = true
-        end
-        if found_min and start_y < y2 then
-          maxline = i
-        elseif found_min then
-          break
-        end
-      end
-
-      return minline, maxline
-    end
-  end
-
-  ---@param doc_view core.docview
-  ---@param is_a boolean
-  local function wrap_get_scrollable_size(doc_view, is_a)
-    doc_view.get_scrollable_size = function(self)
-      local gaps = is_a and parent.a_gaps or parent.b_gaps
-      local folds = is_a and parent.diff_folds_a or parent.diff_folds_b
-      local lc = effective_visual_line_count(self, gaps, folds)
-      if not config.scroll_past_end then
-        local _, _, _, h_scroll = self.h_scrollbar:get_track_rect()
-        return self:get_line_height() * lc + style.padding.y * 2 + h_scroll
-      end
-      return self:get_line_height() * math.max(0, lc - 1) + self.size.y
-    end
-  end
-
-  ---@param doc_view core.docview
-  ---@param is_a boolean
   local function wrap_scroll_to_line(doc_view, is_a)
     local orig = doc_view.scroll_to_line
     doc_view.scroll_to_line = function(self, ...)
@@ -1264,90 +1124,25 @@ function DiffView:patch_views()
     end
   end
 
-  local function wrap_folded_selection(doc_view, is_a)
+  local function wrap_selection_sync(doc_view, is_a)
     local doc = doc_view.doc
     local orig_set_selection = doc.set_selection
-    doc.set_selection = function(self, line1, col1, line2, col2, swap)
-      line1, col1, line2, col2 = parent:clamp_selection_out_of_folds(doc_view, is_a, line1, col1, line2, col2)
-      local result = orig_set_selection(self, line1, col1, line2, col2, swap)
+    doc.set_selection = function(self, ...)
+      local result = orig_set_selection(self, ...)
       if not parent.syncing_diff_caret then parent:sync_caret_from(doc_view, is_a) end
       return result
     end
     local orig_set_selections = doc.set_selections
-    doc.set_selections = function(self, idx, line1, col1, line2, col2, swap, rm)
-      line1, col1, line2, col2 = parent:clamp_selection_out_of_folds(doc_view, is_a, line1, col1, line2, col2)
-      local result = orig_set_selections(self, idx, line1, col1, line2, col2, swap, rm)
+    doc.set_selections = function(self, ...)
+      local result = orig_set_selections(self, ...)
       if not parent.syncing_diff_caret then parent:sync_caret_from(doc_view, is_a) end
       return result
     end
     local orig_set_selection_list = doc.set_selection_list
-    doc.set_selection_list = function(self, selections, last_selection, opts)
-      if selections and #selections > 0 then
-        local old_line = self:get_selection()
-        local folds = is_a and parent.diff_folds_a or parent.diff_folds_b
-        if folds and #folds > 0 then
-          local mapped = {}
-          for i = 1, #selections, 4 do
-            local line1, col1 = clamp_position_out_of_fold(doc_view, folds, old_line, selections[i], selections[i + 1])
-            local line2, col2 = clamp_position_out_of_fold(doc_view, folds, old_line, selections[i + 2], selections[i + 3])
-            mapped[i], mapped[i + 1], mapped[i + 2], mapped[i + 3] = line1, col1, line2, col2
-          end
-          selections = mapped
-        end
-      end
-      local result = orig_set_selection_list(self, selections, last_selection, opts)
+    doc.set_selection_list = function(self, ...)
+      local result = orig_set_selection_list(self, ...)
       if not parent.syncing_diff_caret then parent:sync_caret_from(doc_view, is_a) end
       return result
-    end
-  end
-
-  ---@param doc_view core.docview
-  local function wrap_draw(doc_view, is_a)
-    doc_view.draw = function(self)
-      self:draw_background(style.background)
-      local _, indent_size = self.doc:get_indent_info()
-      self:get_font():set_tab_size(indent_size)
-
-      local minline, maxline = self:get_visible_line_range()
-      local lh = self:get_line_height()
-
-      local gw, gpad = self:get_gutter_width()
-      local folds = is_a and parent.diff_folds_a or parent.diff_folds_b
-      for i = minline, maxline do
-        if not is_fold_hidden_line(folds, i) then
-          local _, y = self:get_line_screen_position(i)
-          local is_widget, fold = is_fold_widget_line(folds, i)
-          if is_widget and fold.core_fold and self.draw_fold_widget_gutter then
-            self:draw_fold_widget_gutter(fold.core_fold, self.position.x, y, gpad and gw - gpad or gw)
-          else
-            self:draw_line_gutter(i, self.position.x, y, gpad and gw - gpad or gw)
-          end
-        end
-      end
-
-      local pos = self.position
-      -- the clip below ensure we don't write on the gutter region. On the
-      -- right side it is redundant with the Node's clip.
-      core.push_clip_rect(pos.x + gw, pos.y, self.size.x - gw, self.size.y)
-      for i = minline, maxline do
-        if not is_fold_hidden_line(folds, i) then
-          local x, y = self:get_line_screen_position(i)
-          local is_widget, fold = is_fold_widget_line(folds, i)
-          if is_widget then
-            if fold.core_fold and self.draw_fold_widget_body then
-              self:draw_fold_widget_body(fold.core_fold, x, y)
-            else
-              draw_fold_widget(self, fold, x, y)
-            end
-          else
-            y = y + (self:draw_line_body(i, x, y) or lh)
-          end
-        end
-      end
-      self:draw_overlay()
-      core.pop_clip_rect()
-
-      self:draw_scrollbar()
     end
   end
 
@@ -1520,14 +1315,9 @@ function DiffView:patch_views()
     {view = self.doc_view_b, is_a = false}
   } do
     wrap_draw_line_text(side.view, side.is_a)
-    wrap_get_line_screen_position(side.view, side.is_a)
-    wrap_resolve_screen_position(side.view, side.is_a)
-    wrap_get_visible_line_range(side.view, side.is_a)
-    wrap_get_scrollable_size(side.view, side.is_a)
     wrap_scroll_to_line(side.view, side.is_a)
     wrap_scroll_to_make_visible(side.view, side.is_a)
-    wrap_folded_selection(side.view, side.is_a)
-    wrap_draw(side.view, side.is_a)
+    wrap_selection_sync(side.view, side.is_a)
     wrap_points_of_interest(side.view, side.is_a)
     wrap_doc_raw_insert(side.view)
     wrap_doc_raw_remove(side.view)
@@ -1634,10 +1424,8 @@ function DiffView:draw_scrollbar()
 
       if color then
         local start_row = visual_rows_before_line(view, start_line)
-          + gap_rows_before_line(side.gaps, start_line)
         local end_row = visual_rows_before_line(view, end_line)
           + folded_visual_line_count(view, side.folds, end_line)
-          + gap_rows_before_line(side.gaps, end_line)
         local scroll_y_start = start_row * lh
         local scroll_y_end = end_row * lh
         local ratio_start = scroll_y_start / scroll_range

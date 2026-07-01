@@ -88,7 +88,7 @@ test.describe("DiffView batch behavior", function()
     test.ok(#view.diff_folds_a > 0)
   end)
 
-  test.it("skips caret and scroll synchronization over collapsed regions", function(context)
+  test.it("uses core folding for caret movement and scroll synchronization", function(context)
     local old_context = config.plugins.diffview.fold_context_lines
     local old_min = config.plugins.diffview.fold_min_lines
     config.plugins.diffview.fold_context_lines = 1
@@ -114,12 +114,7 @@ test.describe("DiffView batch behavior", function()
     test.not_nil(fold)
     view.doc_view_a.doc:set_selection(fold.hidden_start + 1, 1)
     local line = view.doc_view_a.doc:get_selection()
-    test.ok(line == fold.hidden_start or line == fold.hidden_end + 1)
-    view.doc_view_a.doc:set_selection(fold.hidden_start, 20)
-    local col
-    line, col = view.doc_view_a.doc:get_selection()
-    test.equal(line, fold.hidden_start)
-    test.equal(col, 1)
+    test.equal(line, fold.hidden_start + 1)
 
     core.active_view = view.doc_view_a
     view.doc_view_a.doc:set_selection(fold.hidden_start, 1)
@@ -196,6 +191,8 @@ test.describe("DiffView batch behavior", function()
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 800, 400
     view:update()
+    test.equal(view.doc_view_a:get_scrollable_line_count(), view.doc_view_b:get_scrollable_line_count())
+    test.equal(view.doc_view_a:get_scrollable_line_count(), 3)
 
     local old_draw_poly = renderer.draw_poly
     local old_draw_rect = renderer.draw_rect
