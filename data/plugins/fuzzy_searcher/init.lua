@@ -1504,12 +1504,23 @@ local function clip_highlighted_text(font, text, width, spans, anchor_to_match)
   return clipped, project_spans(spans, first, last, leading and #ellipsis or 0)
 end
 
+local function draw_match_highlight_rect(x, y, w, h)
+  if w <= 0 or h <= 0 then return end
+  renderer.draw_rect(x, y, w, h, style.selectionhighlight)
+  local outline = style.search_selection_secondary_outline
+  if not outline then return end
+  local t = math.max(1, SCALE or 1)
+  renderer.draw_rect(x, y, w, t, outline)
+  renderer.draw_rect(x, y + h - t, w, t, outline)
+  renderer.draw_rect(x, y, t, h, outline)
+  renderer.draw_rect(x + w - t, y, t, h, outline)
+end
+
 local function draw_highlighted_text(font, text, x, y, width, color, spans, match_color, anchor_to_match)
   local clipped
   clipped, spans = clip_highlighted_text(font, text, width, spans, anchor_to_match)
   spans = merge_spans(spans or {}, #clipped)
-  local highlight_bg = style.fuzzy_searcher_match_background
-  local highlight_fg = match_color or style.fuzzy_searcher_match
+  local highlight_fg = match_color or style.search_selection_text or color
   local pos = 1
   local cx = x
   local line_h = font:get_height()
@@ -1519,7 +1530,7 @@ local function draw_highlighted_text(font, text, x, y, width, color, spans, matc
     end
     local chunk = clipped:sub(span[1], span[2])
     local chunk_w = font:get_width(chunk)
-    renderer.draw_rect(cx, y, chunk_w, line_h, highlight_bg)
+    draw_match_highlight_rect(cx, y, chunk_w, line_h)
     cx = renderer.draw_text(font, chunk, cx, y, highlight_fg)
     pos = span[2] + 1
   end
