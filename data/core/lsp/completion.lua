@@ -109,19 +109,22 @@ end
 
 local function display_label(item)
   local label = tostring(item.label or ""):gsub("^%s+", "")
-  if not function_like_kind(item.kind) then return label end
-  local details = type(item.labelDetails) == "table" and item.labelDetails or nil
-  local detail = details and details.detail
-  if type(detail) == "string" and detail:match("^%s*%(") then
-    return label .. detail
-  end
-  detail = item.detail
-  if type(detail) == "string" then
-    local escaped = label:gsub("([^%w_])", "%%%1")
-    local params = detail:match(escaped .. "%s*(%b())")
-    if params then return label .. params end
+  if function_like_kind(item.kind) then
+    local base = label:match("^(.-)%s*%b()%s*.*$")
+    if base and base ~= "" then return base:gsub("%s+$", "") end
   end
   return label
+end
+
+local function display_info(item)
+  local details = type(item.labelDetails) == "table" and item.labelDetails or nil
+  if details then
+    local parts = {}
+    if type(details.detail) == "string" and details.detail ~= "" then parts[#parts + 1] = details.detail end
+    if type(details.description) == "string" and details.description ~= "" then parts[#parts + 1] = details.description end
+    if #parts > 0 then return table.concat(parts, " ") end
+  end
+  return item.detail
 end
 
 local function lsp_text_edit(item)
@@ -218,7 +221,7 @@ function completion.map_items(client, doc, result)
         display_label = rendered_label,
         insert_text = insert_text ~= "" and insert_text or label,
         text = rendered_label,
-        info = raw.detail or COMPLETION_KIND[raw.kind] or raw.kind,
+        info = display_info(raw) or COMPLETION_KIND[raw.kind] or raw.kind,
         desc = documentation_text(raw.documentation),
         icon = COMPLETION_KIND[raw.kind],
         sort_text = raw.sortText,

@@ -147,7 +147,7 @@ test.describe("core.lsp.completion", function()
     test.equal(items[1].info, "method")
   end)
 
-  test.test("function-like completions display parameter lists without changing insertion text", function(context)
+  test.test("function-like completions display base labels without changing insertion text", function(context)
     local doc, client = attach(context)
     local items = completion.map_items(client, doc, {
       {
@@ -157,15 +157,17 @@ test.describe("core.lsp.completion", function()
         insertText = "printf",
       },
       {
-        label = "push_back",
+        label = "push_back(const T &value)",
         kind = 2,
         labelDetails = { detail = "(const T &value)", description = "void" },
       },
     })
-    test.equal(items[1].display_label, "printf(const char *format, ...)")
-    test.equal(items[1].text, "printf(const char *format, ...)")
+    test.equal(items[1].display_label, "printf")
+    test.equal(items[1].text, "printf")
     test.equal(items[1].insert_text, "printf")
-    test.equal(items[2].display_label, "push_back(const T &value)")
+    test.equal(items[1].info, "int printf(const char *format, ...)")
+    test.equal(items[2].display_label, "push_back")
+    test.equal(items[2].info, "(const T &value) void")
   end)
 
   test.test("general autocomplete trigger schedules textDocument/completion and opens autocomplete on response", function(context)
