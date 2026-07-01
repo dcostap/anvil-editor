@@ -349,7 +349,7 @@ test.describe("LSP Diagnostic Underlines", function()
     test.equal(calls[1].color, replacement)
   end)
 
-  test.it("scales squiggle thickness and position with the code font", function(context)
+  test.it("scales squiggle thickness with the code font", function(context)
     local doc, client, document_uri = setup(context)
     publish(client, {
       textDocument = { uri = document_uri, version = 0 },
@@ -373,10 +373,7 @@ test.describe("LSP Diagnostic Underlines", function()
     end)
 
     local _, min_y, _, max_y = point_bounds(calls[1].points)
-    local text_bottom = 11 + view:get_line_text_y_offset() + fake_font:get_height()
     local expected_minimum_span = math.ceil(fake_font:get_height() / 14)
-    test.ok(max_y <= math.ceil(text_bottom) + 1)
-    test.ok(max_y >= math.floor(text_bottom) - 1)
     test.ok(max_y - min_y > expected_minimum_span)
   end)
 

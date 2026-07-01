@@ -5,7 +5,7 @@ local diagnostic_markers = require "core.lsp.diagnostic_markers"
 
 local diagnostic_underlines = {}
 
-local SQUIGGLE_Y_OFFSET = 1
+local SQUIGGLE_Y_OFFSET = 2
 
 local cache = setmetatable({}, { __mode = "k" })
 
