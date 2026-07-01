@@ -643,6 +643,9 @@ local function wrapped_total_visual_lines(doc_view)
 end
 
 local function visual_rows_before_line(doc_view, line)
+  if doc_view.has_collapsed_folds and doc_view:has_collapsed_folds() then
+    return math.max(0, doc_view:get_folded_visual_row_for_position(line, 1) - 1)
+  end
   if not doc_view.wrapped_settings or not doc_view.wrapped_line_to_idx then
     return math.max(0, line - 1)
   end
@@ -662,7 +665,11 @@ local function visual_line_count(doc_view, line)
 end
 
 local function visual_row_offset_for_col(doc_view, line, col, line_end)
-  if not col or not doc_view.wrapped_settings or not doc_view.wrapped_line_to_idx then return 0 end
+  if not col then return 0 end
+  if doc_view.has_collapsed_folds and doc_view:has_collapsed_folds() then
+    return math.max(0, doc_view:get_folded_visual_row_for_position(line, col, line_end) - doc_view:get_folded_visual_row_for_position(line, 1))
+  end
+  if not doc_view.wrapped_settings or not doc_view.wrapped_line_to_idx then return 0 end
   local first_idx = doc_view.wrapped_line_to_idx[line]
   if not first_idx then return 0 end
   if doc_view.get_visual_row then
@@ -697,23 +704,6 @@ local function diffview_visual_line_count(doc_view, gaps)
     + trailing_gap_rows(gaps, line_count)
 end
 
-local function fold_visual_rows(doc_view, first, last)
-  local rows = 0
-  for line = first, last do rows = rows + visual_line_count(doc_view, line) end
-  return rows
-end
-
-local function fold_saved_rows(doc_view, fold)
-  if not fold then return 0 end
-  return math.max(0, fold_visual_rows(doc_view, fold.hidden_start, fold.hidden_end) - 1)
-end
-
-local function folded_rows_total(doc_view, folds)
-  local total = 0
-  for _, fold in ipairs(folds or {}) do total = total + fold_saved_rows(doc_view, fold) end
-  return total
-end
-
 local function fold_for_line(folds, line)
   for _, fold in ipairs(folds or {}) do
     if line >= fold.hidden_start and line <= fold.hidden_end then return fold end
@@ -731,32 +721,16 @@ local function is_fold_hidden_line(folds, line)
 end
 
 local function folded_visual_line_count(doc_view, folds, line)
-  if is_fold_hidden_line(folds, line) then return 0 end
-  if is_fold_widget_line(folds, line) then return 1 end
   return visual_line_count(doc_view, line)
-end
-
-local function folded_rows_before_line(doc_view, folds, line)
-  local rows = 0
-  for _, fold in ipairs(folds or {}) do
-    if line > fold.hidden_end then
-      rows = rows + fold_saved_rows(doc_view, fold)
-    elseif line > fold.hidden_start then
-      rows = rows + math.max(0, fold_visual_rows(doc_view, fold.hidden_start, line - 1) - 1)
-      break
-    end
-  end
-  return rows
 end
 
 local function effective_row_before_line(doc_view, gaps, folds, line)
   return visual_rows_before_line(doc_view, line)
     + gap_rows_before_line(gaps, line)
-    - folded_rows_before_line(doc_view, folds, line)
 end
 
 local function effective_visual_line_count(doc_view, gaps, folds)
-  return math.max(0, diffview_visual_line_count(doc_view, gaps) - folded_rows_total(doc_view, folds))
+  return math.max(0, diffview_visual_line_count(doc_view, gaps))
 end
 
 local function line_for_effective_row(doc_view, gaps, folds, row)
@@ -770,6 +744,33 @@ local function line_for_effective_row(doc_view, gaps, folds, row)
     end
   end
   return fallback
+end
+
+local function clear_core_diff_folds(doc_view)
+  if not doc_view or not doc_view.fold_regions then return end
+  for i = #doc_view.fold_regions, 1, -1 do
+    local fold = doc_view.fold_regions[i]
+    if fold.kind == "diff-view" then
+      doc_view:remove_fold_region(fold, "diff-rebuild")
+    end
+  end
+end
+
+local function install_core_diff_folds(doc_view, folds, side)
+  if not doc_view or not doc_view.add_fold_region then return end
+  for _, fold in ipairs(folds or {}) do
+    local core_fold = doc_view:add_fold_region {
+      id = "diff-" .. side .. "-" .. tostring(fold.index),
+      line1 = fold.hidden_start,
+      col1 = 1,
+      line2 = fold.hidden_end,
+      col2 = #(doc_view.doc.lines[fold.hidden_end] or "") + 1,
+      kind = "diff-view",
+      metadata = { diff_fold = fold, side = side },
+      placeholder = string.format("⋯ %d unchanged lines folded ⋯", fold.hidden_count),
+    }
+    fold.core_fold = core_fold
+  end
 end
 
 local function build_diff_folds(blocks, side, opts, expanded)
@@ -804,8 +805,12 @@ function DiffView:rebuild_diff_folds()
     min_lines = config.plugins.diffview.fold_min_lines or 16,
   }
   local expanded = self.expanded_diff_folds or {}
+  clear_core_diff_folds(self.doc_view_a)
+  clear_core_diff_folds(self.doc_view_b)
   self.diff_folds_a = build_diff_folds(self.diff_equal_blocks or {}, "a", opts, expanded)
   self.diff_folds_b = build_diff_folds(self.diff_equal_blocks or {}, "b", opts, expanded)
+  install_core_diff_folds(self.doc_view_a, self.diff_folds_a, "a")
+  install_core_diff_folds(self.doc_view_b, self.diff_folds_b, "b")
 end
 
 function DiffView:toggle_folding()
@@ -1149,9 +1154,8 @@ function DiffView:patch_views()
       local gaps = is_a and parent.a_gaps or parent.b_gaps
       local folds = is_a and parent.diff_folds_a or parent.diff_folds_b
       local visual_row = visual_rows_before_line(self, line) + visual_row_offset_for_col(self, line, col, line_end)
-      local folded_rows = folded_rows_before_line(self, folds, line)
       local gap_y = gap_rows_before_line(gaps, line) * lh
-      y = y + (visual_row - folded_rows) * lh + gap_y + style.padding.y
+      y = y + visual_row * lh + gap_y + style.padding.y
       if col then
         return x + self:get_gutter_width() + self:get_col_x_offset(line, col, line_end), y
       else
@@ -1209,7 +1213,7 @@ function DiffView:patch_views()
       local found_min = false
 
       for i = 1, #lines do
-        local row = visual_rows_before_line(self, i) + gap_rows_before_line(gaps, i) - folded_rows_before_line(self, folds, i)
+        local row = visual_rows_before_line(self, i) + gap_rows_before_line(gaps, i)
         local start_y = style.padding.y + row * lh
         local end_y = start_y + folded_visual_line_count(self, folds, i) * lh
         if not found_min and end_y > oy then
@@ -1312,7 +1316,12 @@ function DiffView:patch_views()
       for i = minline, maxline do
         if not is_fold_hidden_line(folds, i) then
           local _, y = self:get_line_screen_position(i)
-          self:draw_line_gutter(i, self.position.x, y, gpad and gw - gpad or gw)
+          local is_widget, fold = is_fold_widget_line(folds, i)
+          if is_widget and fold.core_fold and self.draw_fold_widget_gutter then
+            self:draw_fold_widget_gutter(fold.core_fold, self.position.x, y, gpad and gw - gpad or gw)
+          else
+            self:draw_line_gutter(i, self.position.x, y, gpad and gw - gpad or gw)
+          end
         end
       end
 
@@ -1325,7 +1334,11 @@ function DiffView:patch_views()
           local x, y = self:get_line_screen_position(i)
           local is_widget, fold = is_fold_widget_line(folds, i)
           if is_widget then
-            draw_fold_widget(self, fold, x, y)
+            if fold.core_fold and self.draw_fold_widget_body then
+              self:draw_fold_widget_body(fold.core_fold, x, y)
+            else
+              draw_fold_widget(self, fold, x, y)
+            end
           else
             y = y + (self:draw_line_body(i, x, y) or lh)
           end
@@ -1622,11 +1635,9 @@ function DiffView:draw_scrollbar()
       if color then
         local start_row = visual_rows_before_line(view, start_line)
           + gap_rows_before_line(side.gaps, start_line)
-          - folded_rows_before_line(view, side.folds, start_line)
         local end_row = visual_rows_before_line(view, end_line)
           + folded_visual_line_count(view, side.folds, end_line)
           + gap_rows_before_line(side.gaps, end_line)
-          - folded_rows_before_line(view, side.folds, end_line)
         local scroll_y_start = start_row * lh
         local scroll_y_end = end_row * lh
         local ratio_start = scroll_y_start / scroll_range

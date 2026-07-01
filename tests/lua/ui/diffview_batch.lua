@@ -76,6 +76,8 @@ test.describe("DiffView batch behavior", function()
 
     test.ok(#view.diff_folds_a > 0)
     test.ok(#view.diff_folds_b > 0)
+    test.ok(view.diff_folds_a[1].core_fold ~= nil, "expected diff folds to be backed by core DocView folds")
+    test.equal(view.doc_view_a:get_collapsed_fold_at_line(view.diff_folds_a[1].hidden_start), view.diff_folds_a[1].core_fold)
     local folded_size = view.doc_view_a:get_scrollable_size()
     core.active_view = view.doc_view_a
     test.equal(command.perform("diff-view:toggle-folding"), true)
