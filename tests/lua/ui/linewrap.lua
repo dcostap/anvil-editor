@@ -177,6 +177,21 @@ test.describe("line wrapping current line highlight", function()
     end
   end)
 
+  test.it("rebuilds stale wrapped rows after document line count changes outside transactions", function(context)
+    local view, doc = open_editor(context, string.rep("x", 40) .. "\n" .. string.rep("y", 40) .. "\n")
+    configure_wrapping_for_test(context, view)
+    test.equal(view.wrapped_doc_line_count, #doc.lines)
+
+    doc.lines = { string.rep("z", 40) .. "\n" }
+    view:update_wrap_cache()
+
+    test.equal(view.wrapped_doc_line_count, 1)
+    for i = 1, #view.wrapped_lines, 2 do
+      test.ok(view.wrapped_lines[i] <= #doc.lines, "wrapped row points past document line count")
+    end
+    with_stubbed_renderer(function() view:draw_wrapped() end)
+  end)
+
   test.it("highlights only the wrapped visual line containing the caret", function(context)
     local view, doc = open_editor(context, string.rep("x", 40) .. "\n")
     configure_wrapping_for_test(context, view)

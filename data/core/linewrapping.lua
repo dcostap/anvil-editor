@@ -518,6 +518,7 @@ function LineWrapping.clear_wrap_cache(docview)
   docview.wrapped_line_to_idx = nil
   docview.wrapped_line_offsets = nil
   docview.wrapped_settings = nil
+  docview.wrapped_doc_line_count = nil
 end
 
 local function wrap_settings_signature(docview, default_font, width)
@@ -556,6 +557,7 @@ function LineWrapping.reconstruct_breaks(docview, default_font, width, line_offs
     docview.wrapped_line_to_idx = {}
     docview.wrapped_line_offsets = {}
     docview.wrapped_settings = wrap_settings_signature(docview, default_font, width)
+    docview.wrapped_doc_line_count = #doc.lines
     for i = line_offset or 1, #doc.lines do
       reconstructed_lines = reconstructed_lines + 1
       local breaks, offset = LineWrapping.compute_line_breaks(doc, default_font, i, width, config.plugins.linewrapping.mode)
@@ -707,6 +709,7 @@ function LineWrapping.update_breaks(docview, old_line1, old_line2, net_lines)
   end
 
   rebuild_line_to_idx_from(docview, old_line1, (old_idx1 - 1) * 2 + 1)
+  docview.wrapped_doc_line_count = #docview.doc.lines
   perf_frame_add("linewrapping_update_breaks_calls", 1)
   perf_frame_add("linewrapping_update_breaks_lines", perf_lines)
   perf_elapsed("linewrapping_update_breaks_ms", perf_start)
@@ -742,8 +745,13 @@ function LineWrapping.update_docview_breaks(docview)
   local perf_start = perf_active and system.get_time()
   local width = LineWrapping.compute_wrap_width(docview)
   local settings = wrap_settings_signature(docview, docview:get_font(), width)
-  if not same_wrap_settings(docview.wrapped_settings, settings) then
-    perf_frame_add("linewrapping_update_docview_breaks_width_changed", 1)
+  local stale_line_count = docview.wrapped_doc_line_count ~= #docview.doc.lines
+  if stale_line_count or not same_wrap_settings(docview.wrapped_settings, settings) then
+    if stale_line_count then
+      perf_frame_add("linewrapping_update_docview_breaks_line_count_changed", 1)
+    else
+      perf_frame_add("linewrapping_update_docview_breaks_width_changed", 1)
+    end
     docview.scroll.to.x = 0
     LineWrapping.reconstruct_breaks(docview, settings.font, width)
   end
