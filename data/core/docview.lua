@@ -1086,15 +1086,44 @@ local function fold_hidden_count(fold)
   return math.max(0, (fold.line2 or fold.line1 or 1) - (fold.line1 or 1) + 1)
 end
 
-local function fold_placeholder(fold)
+local FOLD_PREVIEW_MAX_CHARS = 50
+
+local function default_fold_placeholder(fold)
+  local count = fold_hidden_count(fold)
+  return string.format("⋯ %d line%s folded ⋯", count, count == 1 and "" or "s")
+end
+
+local function fold_preview_text(doc, fold)
+  if not doc or not fold then return nil end
+  local line1 = fold.line1 or 1
+  local line2 = fold.line2 or line1
+  local col1 = fold.col1 or 1
+  local col2 = fold.col2 or (#(doc.lines[line2] or "") + 1)
+  local ok, text = pcall(doc.get_text, doc, line1, col1, line2, col2)
+  if not ok or not text then return nil end
+  text = tostring(text):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+  if text == "" then return nil end
+  local len = string.ulen and string.ulen(text) or #text
+  if len > FOLD_PREVIEW_MAX_CHARS then
+    if string.usub then
+      text = string.usub(text, 1, FOLD_PREVIEW_MAX_CHARS) .. "…"
+    else
+      text = text:sub(1, FOLD_PREVIEW_MAX_CHARS) .. "…"
+    end
+  end
+  return text
+end
+
+local function fold_placeholder(doc, fold)
   if type(fold.placeholder) == "function" then
     local ok, text = pcall(fold.placeholder, fold)
     if ok and text then return tostring(text) end
   elseif fold.placeholder then
     return tostring(fold.placeholder)
   end
-  local count = fold_hidden_count(fold)
-  return string.format("⋯ %d line%s folded ⋯", count, count == 1 and "" or "s")
+  local base = default_fold_placeholder(fold)
+  local preview = fold_preview_text(doc, fold)
+  return preview and (preview .. "  " .. base) or base
 end
 
 function DocView:refresh_fold_region(fold)
@@ -1647,7 +1676,7 @@ function DocView:draw_fold_widget_body(fold, x, y)
   renderer.draw_rect(bx, y + lh - t, bw, t, border)
   renderer.draw_rect(bx, y, t, lh, border)
   renderer.draw_rect(bx + bw - t, y, t, lh, border)
-  common.draw_text(self:get_font(), style.fold_widget_text or style.dim, fold_placeholder(fold), "left", x + style.padding.x, y, self.size.x, lh)
+  common.draw_text(self:get_font(), style.fold_widget_text or style.dim, fold_placeholder(self.doc, fold), "left", x + style.padding.x, y, self.size.x, lh)
   return lh
 end
 

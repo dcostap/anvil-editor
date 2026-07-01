@@ -213,6 +213,50 @@ test.describe("DocView folding", function()
     test.equal(first_color, style.selection)
   end)
 
+  test.it("draws default fold widget text with a collapsed-content preview", function(context)
+    local view = open_editor(context, "alpha\n  beta\ngamma", { wrapping = false })
+    local fold = view:add_fold_region { line1 = 1, line2 = 3 }
+
+    local old_draw_rect = renderer.draw_rect
+    local old_draw_text = renderer.draw_text
+    local drawn_text
+    renderer.draw_rect = function() end
+    renderer.draw_text = function(font, text, x, y, color)
+      drawn_text = text
+      return x + #tostring(text)
+    end
+    local ok, err = pcall(function()
+      view:draw_fold_widget_body(fold, view.position.x + view:get_gutter_width(), 0)
+    end)
+    renderer.draw_rect = old_draw_rect
+    renderer.draw_text = old_draw_text
+    if not ok then error(err, 0) end
+
+    test.equal(drawn_text, "alpha beta gamma  ⋯ 3 lines folded ⋯")
+  end)
+
+  test.it("truncates long default fold widget previews", function(context)
+    local view = open_editor(context, string.rep("a", 60) .. "\nsecond", { wrapping = false })
+    local fold = view:add_fold_region { line1 = 1, line2 = 2 }
+
+    local old_draw_rect = renderer.draw_rect
+    local old_draw_text = renderer.draw_text
+    local drawn_text
+    renderer.draw_rect = function() end
+    renderer.draw_text = function(font, text, x, y, color)
+      drawn_text = text
+      return x + #tostring(text)
+    end
+    local ok, err = pcall(function()
+      view:draw_fold_widget_body(fold, view.position.x + view:get_gutter_width(), 0)
+    end)
+    renderer.draw_rect = old_draw_rect
+    renderer.draw_text = old_draw_text
+    if not ok then error(err, 0) end
+
+    test.equal(drawn_text, string.rep("a", 50) .. "…  ⋯ 2 lines folded ⋯")
+  end)
+
   test.it("typing over a selection crossing a fold replaces hidden text", function(context)
     local view, doc = open_editor(context, numbered_lines(8), { wrapping = false })
     view:add_fold_region { line1 = 3, line2 = 5 }
