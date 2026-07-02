@@ -18,6 +18,8 @@ local C = {
   gutter_bg = "ffffff",
   ignored = "5a5d6b",
   scrollbar_thumb = "c9ccd6",
+  scrollbar_thumb_hover = "aeb3c2",
+  scrollbar_thumb_active = "8f96a8",
   tearline = "d4d4d4",
   whitespace = "adadad",
 
@@ -92,6 +94,8 @@ style.line_number = c("aeb3c2")
 style.line_number2 = c("767a8a")
 style.line_highlight = c(C.caret_row)
 style.scrollbar = c(C.scrollbar_thumb)
+style.scrollbar_hover = c(C.scrollbar_thumb_hover)
+style.scrollbar_active = c(C.scrollbar_thumb_active)
 style.scrollbar_track = c(C.gutter_bg)
 style.nagbar = c("ffe8e8")
 style.nagbar_text = c("ad2b38")

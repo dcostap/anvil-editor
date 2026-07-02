@@ -574,11 +574,12 @@ function Scrollbar:update()
     return rate
   end
 
-  local tint_diff = math.abs((self.hover_tint_percent or 0) - hover_dest)
+  local hover_tint_dest = (self.hovering.visual_track or self.dragging) and 1 or 0
+  local tint_diff = math.abs((self.hover_tint_percent or 0) - hover_tint_dest)
   if not config.transitions or tint_diff < 0.05 or config.disabled_transitions["scroll"] then
-    self.hover_tint_percent = hover_dest
+    self.hover_tint_percent = hover_tint_dest
   else
-    self.hover_tint_percent = common.lerp(self.hover_tint_percent or 0, hover_dest, animation_rate())
+    self.hover_tint_percent = common.lerp(self.hover_tint_percent or 0, hover_tint_dest, animation_rate())
   end
   if tint_diff > 1e-8 then core.redraw = true end
 
@@ -620,15 +621,26 @@ end
 ---Highlights when hovered or being dragged.
 function Scrollbar:draw_thumb()
   local hovering = self.hovering.visual_track or self.hovering.visual_thumb
-  local alpha = self.dragging and 0.6 or hovering and 0.5 or 0.5
-  local lift = self.dragging and 0.18 or hovering and 0.10 or 0
-  local color = { table.unpack(style.scrollbar) }
-  if lift > 0 then
-    color[1] = common.lerp(color[1], 255, lift)
-    color[2] = common.lerp(color[2], 255, lift)
-    color[3] = common.lerp(color[3], 255, lift)
+  local tint = self.hover_tint_percent or 0
+  if self.dragging or hovering then
+    -- Make hover/click feedback visible on the first draw after the mouse event;
+    -- the stored tint still handles the animated fade-out after hover leaves.
+    tint = 1
   end
-  color[4] = (color[4] or 255) * alpha
+
+  local base = style.scrollbar
+  local target = self.dragging and style.scrollbar_active
+              or hovering and style.scrollbar_hover
+              or style.scrollbar_hover
+              or base
+  local base_alpha = (base[4] or 255) * 0.45
+  local target_alpha = (target[4] or 255) * (self.dragging and 0.80 or 0.68)
+  local color = {
+    common.lerp(base[1] or 0, target[1] or 0, tint),
+    common.lerp(base[2] or 0, target[2] or 0, tint),
+    common.lerp(base[3] or 0, target[3] or 0, tint),
+    common.lerp(base_alpha, target_alpha, tint),
+  }
   local x, y, w, h = self:get_thumb_rect()
   renderer.draw_rect(x, y, w, h, color)
 end

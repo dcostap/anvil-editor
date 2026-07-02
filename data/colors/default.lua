@@ -19,6 +19,8 @@ local C = {
   gutter_bg = "313338",
   ignored = "938B8C",
   scrollbar_thumb = "3C3F41",
+  scrollbar_thumb_hover = "5a5f63",
+  scrollbar_thumb_active = "74797d",
   tearline = "4E5153",
   whitespace = "46494B",
 
@@ -93,6 +95,8 @@ style.line_number = c("606366")
 style.line_number2 = c("b2b6bc")
 style.line_highlight = c(C.caret_row)
 style.scrollbar = c(C.scrollbar_thumb)
+style.scrollbar_hover = c(C.scrollbar_thumb_hover)
+style.scrollbar_active = c(C.scrollbar_thumb_active)
 style.scrollbar_track = c(C.gutter_bg)
 style.nagbar = c(C.deleted_bg)
 style.nagbar_text = c(C.deleted_fg)

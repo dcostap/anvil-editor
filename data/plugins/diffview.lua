@@ -1328,10 +1328,7 @@ function DiffView:patch_views()
 end
 
 local function redraw_thumb(view_scrollbar)
-  local color = { table.unpack(style.scrollbar) }
-  color[4] = 100
-  local x, y, w, h = view_scrollbar:get_thumb_rect()
-  renderer.draw_rect(x, y, w, h, color)
+  view_scrollbar:draw_thumb()
 end
 
 function DiffView:draw_divider_changes()

@@ -20,10 +20,23 @@ local function make_scrollbar()
   return scrollbar
 end
 
+local function with_style_snapshot(fn)
+  local snapshot = {}
+  for k, v in pairs(style) do snapshot[k] = v end
+  local ok, err = xpcall(fn, debug.traceback)
+  for k in pairs(style) do style[k] = nil end
+  for k, v in pairs(snapshot) do style[k] = v end
+  if not ok then error(err, 0) end
+end
+
 test.describe("Scrollbar hover rendering", function()
   test.it("shows thumb feedback when hovering the rendered scrollbar lane", function()
     local old_scrollbar_color = style.scrollbar
+    local old_scrollbar_hover = style.scrollbar_hover
+    local old_scrollbar_active = style.scrollbar_active
     style.scrollbar = { 10, 20, 30, 200 }
+    style.scrollbar_hover = { 50, 60, 70, 200 }
+    style.scrollbar_active = { 90, 100, 110, 200 }
 
     local scrollbar = make_scrollbar()
     local normal = capture_thumb_color(scrollbar)
@@ -40,10 +53,38 @@ test.describe("Scrollbar hover rendering", function()
     local dragging = capture_thumb_color(scrollbar)
 
     style.scrollbar = old_scrollbar_color
+    style.scrollbar_hover = old_scrollbar_hover
+    style.scrollbar_active = old_scrollbar_active
 
-    test.ok(track_hover[1] > normal[1], "expected visible feedback over the rendered scrollbar lane")
+    test.ok(track_hover[1] > normal[1], "expected visible color feedback over the rendered scrollbar lane")
+    test.ok(track_hover[4] > normal[4], "expected visible opacity feedback over the rendered scrollbar lane")
     test.same(track_hover, thumb_hover)
-    test.ok(dragging[4] > thumb_hover[4], "expected stronger feedback while clicking/dragging")
+    test.ok(dragging[1] > thumb_hover[1], "expected stronger color feedback while clicking/dragging")
+    test.ok(dragging[4] > thumb_hover[4], "expected stronger opacity feedback while clicking/dragging")
+  end)
+
+  test.it("keeps light theme hover and pressed states distinct", function()
+    with_style_snapshot(function()
+      package.loaded["colors.default"] = nil
+      package.loaded["colors.light"] = nil
+      require "colors.default"
+      require "colors.light"
+
+      local scrollbar = make_scrollbar()
+      local normal = capture_thumb_color(scrollbar)
+
+      local tx, ty, tw, th = scrollbar:get_track_rect()
+      scrollbar:on_mouse_moved(tx + tw / 2, ty + th - 1, 0, 0)
+      local hover = capture_thumb_color(scrollbar)
+
+      scrollbar.dragging = true
+      local dragging = capture_thumb_color(scrollbar)
+
+      test.ok(hover[1] < normal[1], "expected light-theme hover color to darken the thumb")
+      test.ok(hover[4] > normal[4], "expected light-theme hover opacity to increase")
+      test.ok(dragging[1] < hover[1], "expected light-theme pressed color to darken beyond hover")
+      test.ok(dragging[4] > hover[4], "expected light-theme pressed opacity to increase beyond hover")
+    end)
   end)
 
   test.it("does not keep hover feedback in the invisible leading hitbox padding", function()
@@ -57,6 +98,7 @@ test.describe("Scrollbar hover rendering", function()
 
     local tx, ty, _, th = scrollbar:get_track_rect()
     local result = scrollbar:on_mouse_moved(tx - 2, ty + th - 1, 0, 0)
+    scrollbar:update()
     local hitbox_only = capture_thumb_color(scrollbar)
 
     style.scrollbar = old_scrollbar_color
