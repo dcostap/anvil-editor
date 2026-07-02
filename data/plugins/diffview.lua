@@ -106,6 +106,8 @@ local is_fold_widget_line
 ---@field hovered_sync? plugins.diffview.view.hovered_sync
 ---@overload fun(a:string,b:string,ct?:plugins.diffview.view.type,names?:plugins.diffview.view.string_names):plugins.diffview.view
 local DiffView = View:extend()
+local MutableDiffRequestChain
+local DiffRequestController
 
 ---@enum plugins.diffview.view.type
 DiffView.type = {
@@ -128,22 +130,28 @@ DiffView.type = {
 
 local function content_text(text, opts)
   opts = opts or {}
-  return { kind = "text", text = text or "", name = opts.name, editable = opts.editable, owns_doc = true }
+  return { kind = "text", text = text or "", name = opts.name, editable = opts.editable, owns_doc = true, read_only_reason = opts.read_only_reason, syntax_hint = opts.syntax_hint }
 end
 
 local function content_file(path, opts)
   opts = opts or {}
-  return { kind = "file", filename = path, name = opts.name or common.basename(path), editable = opts.editable, owns_doc = false }
+  return { kind = "file", filename = path, name = opts.name or (path and common.basename(path) or nil), editable = opts.editable, owns_doc = false, read_only_reason = opts.read_only_reason, syntax_hint = opts.syntax_hint }
 end
 
 local function content_document(doc, opts)
   opts = opts or {}
-  return { kind = "document", doc = doc, name = opts.name, editable = opts.editable, owns_doc = opts.owns_doc == true }
+  return { kind = "document", doc = doc, name = opts.name, editable = opts.editable, owns_doc = opts.owns_doc == true, read_only_reason = opts.read_only_reason, syntax_hint = opts.syntax_hint }
+end
+
+local function content_blank(opts)
+  opts = opts or {}
+  return { kind = "blank", name = opts.name, editable = opts.editable ~= false, owns_doc = true, read_only_reason = opts.read_only_reason, syntax_hint = opts.syntax_hint }
 end
 
 local function content_empty(opts)
-  opts = opts or {}
-  return { kind = "empty", name = opts.name, editable = opts.editable ~= false, owns_doc = true }
+  local content = content_blank(opts)
+  content.kind = "empty"
+  return content
 end
 
 local function legacy_request(a, b, compare_type, names)
@@ -163,19 +171,189 @@ local function legacy_request(a, b, compare_type, names)
     title = compare_type == DiffView.type.STRING_STRING and "Text Diff View" or nil,
     kind = compare_type == DiffView.type.STRING_STRING and "text" or "file",
     compare_type = compare_type,
-    contents = { left = left, right = right },
-    content_titles = { left = names.a, right = names.b },
+    contents = { left, right },
+    content_titles = { names.a, names.b },
     editable_policy = "content",
   }
 end
 
-local function doc_for_content(content)
+local function normalize_side_table(value, field)
+  if type(value) ~= "table" then return value end
+  if value[1] or value[2] or value[3] then return value end
+  if value.left or value.right or value.base then
+    return { value.left, value.right, value.base }
+  end
+  return value
+end
+
+local function normalize_request(request)
+  if type(request) ~= "table" then
+    return nil, "diff request must be a table"
+  end
+  local normalized = common.merge({}, request)
+  normalized.contents = normalize_side_table(request.contents, "contents")
+  normalized.content_titles = normalize_side_table(request.content_titles, "content_titles")
+  normalized.user_data = normalized.user_data or normalized.metadata or {}
+  normalized.metadata = nil
+  normalized.editable_policy = normalized.editable_policy or "content"
+  if normalized.kind == nil then normalized.kind = "text" end
+  return normalized
+end
+
+local function validate_content(content, index)
+  if type(content) ~= "table" then
+    return nil, string.format("diff content %d must be a table", index)
+  end
+  if content.editable ~= nil and type(content.editable) ~= "boolean" then
+    return nil, string.format("diff content %d editable must be a boolean", index)
+  end
+  local kind = content.kind
+  if kind == "text" then
+    if content.text ~= nil and type(content.text) ~= "string" then
+      return nil, string.format("diff content %d text must be a string", index)
+    end
+  elseif kind == "blank" or kind == "empty" then
+    -- valid mutable blank-document content
+  elseif kind == "file" then
+    if type(content.filename) ~= "string" or content.filename == "" then
+      return nil, string.format("diff content %d file content requires a filename", index)
+    end
+  elseif kind == "document" then
+    if not content.doc then
+      return nil, string.format("diff content %d document content requires a doc", index)
+    end
+    if not (content.doc.is and content.doc:is(Doc)) then
+      return nil, string.format("diff content %d document content requires a Doc", index)
+    end
+  else
+    return nil, string.format("unknown diff content kind '%s'", tostring(kind))
+  end
+  return true
+end
+
+local function validate_request(request)
+  request = normalize_request(request)
+  if not request then return nil, "diff request must be a table" end
+  if type(request.contents) ~= "table" then
+    return nil, "diff request requires contents"
+  end
+  if request.content_titles ~= nil and type(request.content_titles) ~= "table" then
+    return nil, "diff request content_titles must be a table"
+  end
+  if request.content_titles then
+    for i = 1, 3 do
+      local title = request.content_titles[i]
+      if title ~= nil and type(title) ~= "string" then
+        return nil, string.format("diff request content title %d must be a string", i)
+      end
+    end
+  end
+  if request.editable_policy ~= "read-only" and request.editable_policy ~= "content" and request.editable_policy ~= "editable" then
+    return nil, "diff request editable_policy must be read-only, content, or editable"
+  end
+  local count = #request.contents
+  if count ~= 2 then
+    if count == 3 then return nil, "three-way diff viewer is not implemented" end
+    return nil, "diff request requires exactly two contents"
+  end
+  for i = 1, count do
+    local ok, err = validate_content(request.contents[i], i)
+    if not ok then return nil, err end
+  end
+  if request.contents[1].kind == "document" and request.contents[2].kind == "document"
+      and request.contents[1].doc == request.contents[2].doc then
+    return nil, "diff request cannot use the same document on both sides"
+  end
+  local function comparable_content_path(content)
+    local path
+    if content.kind == "file" then
+      path = content.filename
+    elseif content.kind == "document" then
+      path = content.doc.abs_filename
+    end
+    if path and not common.is_absolute_path(path) then
+      local ok, abs = pcall(core.project_absolute_path, path)
+      if ok and abs then path = abs end
+    end
+    return path
+  end
+  local function content_path(content)
+    return comparable_content_path(content)
+  end
+  local path1, path2 = content_path(request.contents[1]), content_path(request.contents[2])
+  if path1 and path2 and common.path_equals(path1, path2) then
+    return nil, "diff request cannot use the same file on both sides"
+  end
+  return request
+end
+
+local function call_assignment_hook(owner, method, ...)
+  local fn = owner and owner[method]
+  if not fn then return end
+  local ok, err = pcall(fn, owner, ...)
+  if not ok then core.log_quiet("Diff View %s hook failed: %s", method, tostring(err)) end
+end
+
+local function title_for_content(content, title)
+  if title and title ~= "" then return title end
+  if content.name and content.name ~= "" then return content.name end
+  if content.kind == "file" then return common.basename(content.filename) end
+  return nil
+end
+
+local function content_editable(request, content)
+  local policy = request.editable_policy or "content"
+  if policy == "read-only" then return false end
+  if policy == "editable" then return content.editable ~= false end
+  return content.editable ~= false
+end
+
+local function content_read_only_reason(content)
+  return content.read_only_reason or "This Diff View side is read-only"
+end
+
+local function prompt_dirty_docs(docs, callback)
+  local dirty = {}
+  for _, doc in ipairs(docs or {}) do
+    if doc and doc.is_dirty and doc:is_dirty() then dirty[#dirty + 1] = doc end
+  end
+  if #dirty == 0 then callback(true); return end
+  local names = {}
+  for _, doc in ipairs(dirty) do names[#names + 1] = doc:get_name() end
+  core.nag_view:show(
+    "Unsaved Diff Content",
+    string.format("Discard unsaved diff content in %s?", table.concat(names, ", ")),
+    {
+      { text = "Discard Changes" },
+      { text = "Cancel", default_no = true },
+    },
+    function(item)
+      callback(item and item.text == "Discard Changes")
+    end
+  )
+  core.log_quiet("Diff View close/replacement waiting for dirty owned docs: %s", table.concat(names, ", "))
+end
+
+local function doc_for_content(content, title)
+  local doc_name = title_for_content(content, title)
   if content.kind == "document" then return assert(content.doc), content.owns_doc == true end
-  if content.kind == "file" then return Doc(content.name or common.basename(content.filename), content.filename), false end
-  local doc = Doc(content.name, content.name, true)
-  local text = content.kind == "empty" and "" or (content.text or "")
-  if text ~= "" then doc:insert(1, 1, text) doc:clear_undo_redo() end
+  if content.kind == "file" then return Doc(doc_name, content.filename), false end
+  local doc = Doc(nil, nil, true)
+  doc.display_name = doc_name
+  local text = (content.kind == "empty" or content.kind == "blank") and "" or (content.text or "")
+  if text ~= "" then doc:insert(1, 1, text) end
+  doc:clear_undo_redo()
+  doc:clean()
+  doc.new_file = false
   return doc, true
+end
+
+function DiffView:assign_request()
+  if self.request_assigned then return end
+  self.request_assigned = true
+  call_assignment_hook(self.request, "on_assigned", true, { view = self })
+  call_assignment_hook(self.request.contents[1], "on_assigned", true, self.request, "left")
+  call_assignment_hook(self.request.contents[2], "on_assigned", true, self.request, "right")
 end
 
 ---Constructor
@@ -187,22 +365,33 @@ function DiffView:new(a, b, compare_type, names)
   DiffView.super.new(self)
 
   self.scrollable = true
-  self.request = type(a) == "table" and a.contents and a or legacy_request(a, b, compare_type, names)
+  local request, request_err = validate_request(type(a) == "table" and a.contents and a or legacy_request(a, b, compare_type, names))
+  if not request then error(request_err, 2) end
+  self.request = request
   self.compare_type = self.request.compare_type or compare_type or DiffView.type.STRING_STRING
   self.hovered_sync = nil
   self.skip_update_diff = false
   self.diff_generation = 0
   self.disposed = false
+  self.request_assigned = false
 
-  local doc_a, owns_a = doc_for_content(self.request.contents.left)
-  local doc_b, owns_b = doc_for_content(self.request.contents.right)
+  local doc_a, owns_a = doc_for_content(self.request.contents[1], self.request.content_titles and self.request.content_titles[1])
+  local doc_b, owns_b = doc_for_content(self.request.contents[2], self.request.content_titles and self.request.content_titles[2])
+  self.side_docs = { doc_a, doc_b }
+  self.side_owns = { owns_a, owns_b }
   self.owned_docs = { [doc_a] = owns_a, [doc_b] = owns_b }
 
   self.doc_view_a = DocView(doc_a)
   self.doc_view_b = DocView(doc_b)
+  self.side_editable = {
+    a = content_editable(self.request, self.request.contents[1]),
+    b = content_editable(self.request, self.request.contents[2]),
+  }
 
   self.doc_view_a.diff_view_parent = self
   self.doc_view_b.diff_view_parent = self
+
+  if not self.request._defer_assignment then self:assign_request() end
 
   self.a_gaps = {}
   self.b_gaps = {}
@@ -276,6 +465,8 @@ function DiffView:update_diff()
     })
     if self.disposed or generation ~= self.diff_generation then return end
 
+    if self.diff_equal_blocks and self.diff_fold_identity_counts then self:save_diff_fold_state() end
+    self.expanded_diff_folds = {}
     self.diff_model = model
     self.a_gaps = model.a_gaps
     self.b_gaps = model.b_gaps
@@ -312,6 +503,7 @@ function DiffView:sync(line, target_line, is_a)
   local from = is_a and self.doc_view_a or self.doc_view_b
   ---@type core.docview
   local to = is_a and self.doc_view_b or self.doc_view_a
+  if to.can_edit and not to:can_edit("diff sync", { warn = true }) then return false end
 
   local l = line
   local tag = changes[l].tag
@@ -695,25 +887,221 @@ local function install_core_diff_folds(doc_view, folds, side)
   end
 end
 
-local function build_diff_folds(blocks, side, opts, expanded)
-  if not opts.enabled then return {} end
-  local folds = {}
+local function normalize_fold_text(text)
+  return tostring(text or ""):gsub("\r", ""):gsub("\n$", ""):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function fold_side_range(block, side, opts)
   local context = math.max(0, tonumber(opts.context_lines) or 0)
+  local start = side == "a" and block.a_start or block.b_start
+  local count = block.count or 0
+  local keep_start = block.has_prev_change and context or 0
+  local keep_end = block.has_next_change and context or 0
+  local hidden_start = start + keep_start
+  local hidden_end = start + count - 1 - keep_end
+  return hidden_start, hidden_end, math.max(0, hidden_end - hidden_start + 1)
+end
+
+local function diff_fold_tail_sample(lines, start_line, end_line)
+  local sample = {}
+  for line = math.max(start_line, end_line - 2), end_line do
+    sample[#sample + 1] = normalize_fold_text(lines[line])
+  end
+  return table.concat(sample, "\31")
+end
+
+local function diff_fold_prefix_window(lines, start_line, end_line)
+  local sample = {}
+  for line = start_line, math.min(end_line, start_line + 2) do
+    sample[#sample + 1] = normalize_fold_text(lines[line])
+  end
+  return sample
+end
+
+local function sample_contains(sample, value)
+  if value == nil then return true end
+  for _, item in ipairs(sample or {}) do
+    if item == value then return true end
+  end
+  return false
+end
+
+local function diff_fold_count_bucket(count)
+  count = tonumber(count) or 0
+  if count <= 4 then return tostring(count) end
+  if count <= 8 then return "5-8" end
+  if count <= 16 then return "9-16" end
+  if count <= 32 then return "17-32" end
+  return "33+"
+end
+
+local function diff_fold_identity(view, block, opts)
+  local a_start, a_end, hidden_count = fold_side_range(block, "a", opts)
+  local b_start, b_end = fold_side_range(block, "b", opts)
+  local a_lines = view.doc_view_a and view.doc_view_a.doc and view.doc_view_a.doc.lines or {}
+  local b_lines = view.doc_view_b and view.doc_view_b.doc and view.doc_view_b.doc.lines or {}
+  local parts = {
+    "v2",
+    diff_fold_count_bucket(hidden_count),
+    diff_fold_tail_sample(a_lines, a_start, a_end),
+    diff_fold_tail_sample(b_lines, b_start, b_end),
+    block.has_prev_change and "p1" or "p0",
+    block.has_next_change and "n1" or "n0",
+  }
+  return table.concat(parts, "\30")
+end
+
+local function diff_fold_candidate(view, block, index, opts)
   local min_lines = math.max(1, tonumber(opts.min_lines) or 1)
-  for fold_index, block in ipairs(blocks or {}) do
-    local start = side == "a" and block.a_start or block.b_start
-    local count = block.count or 0
-    local keep_start = block.has_prev_change and context or 0
-    local keep_end = block.has_next_change and context or 0
-    local hidden_start = start + keep_start
-    local hidden_end = start + count - 1 - keep_end
-    local hidden_count = hidden_end - hidden_start + 1
-    if count >= keep_start + keep_end + min_lines and hidden_count >= min_lines and not expanded[fold_index] then
+  local a_start, a_end, a_count = fold_side_range(block, "a", opts)
+  local b_start, b_end, b_count = fold_side_range(block, "b", opts)
+  if a_count < min_lines or b_count < min_lines then return nil end
+  local context = math.max(0, tonumber(opts.context_lines) or 0)
+  local keep_start = block.has_prev_change and context or 0
+  local keep_end = block.has_next_change and context or 0
+  if (block.count or 0) < keep_start + keep_end + min_lines then return nil end
+  local a_lines = view.doc_view_a and view.doc_view_a.doc and view.doc_view_a.doc.lines or {}
+  local b_lines = view.doc_view_b and view.doc_view_b.doc and view.doc_view_b.doc.lines or {}
+  return {
+    index = index,
+    block = block,
+    identity = diff_fold_identity(view, block, opts),
+    prefix_a = normalize_fold_text(a_lines[a_start]),
+    prefix_b = normalize_fold_text(b_lines[b_start]),
+    prefix_window_a = diff_fold_prefix_window(a_lines, a_start, a_end),
+    prefix_window_b = diff_fold_prefix_window(b_lines, b_start, b_end),
+    a = { hidden_start = a_start, hidden_end = a_end, hidden_count = a_count },
+    b = { hidden_start = b_start, hidden_end = b_end, hidden_count = b_count },
+  }
+end
+
+local function diff_fold_candidates(view, blocks, opts)
+  local candidates = {}
+  local identity_counts = {}
+  for index, block in ipairs(blocks or {}) do
+    local candidate = diff_fold_candidate(view, block, index, opts)
+    if candidate then
+      candidates[#candidates + 1] = candidate
+      identity_counts[candidate.identity] = (identity_counts[candidate.identity] or 0) + 1
+    end
+  end
+  return candidates, identity_counts
+end
+
+function DiffView:fold_state_cache()
+  self.request.user_data = self.request.user_data or {}
+  local cache = self.request.user_data.diff_fold_state
+  if type(cache) ~= "table" then
+    cache = { default_expanded = not self.folding_enabled, states = {} }
+    self.request.user_data.diff_fold_state = cache
+  end
+  return cache
+end
+
+local function cache_state_map(cache, default_expanded)
+  if not cache or cache.default_expanded ~= default_expanded then return {} end
+  local map, ambiguous = {}, {}
+  for _, state in ipairs(cache.states or {}) do
+    local key = state.identity
+    if key then
+      if map[key] and map[key].state ~= state.state then ambiguous[key] = true end
+      map[key] = state
+    end
+  end
+  for key in pairs(ambiguous) do map[key] = nil end
+  return map
+end
+
+function DiffView:save_diff_fold_state()
+  if not self.request or not (self.diff_equal_blocks and self.diff_fold_identity_counts) then return end
+  local default_expanded = not self.folding_enabled
+  local opts = {
+    enabled = true,
+    context_lines = config.plugins.diffview.fold_context_lines or 6,
+    min_lines = config.plugins.diffview.fold_min_lines or 16,
+  }
+  local identity_counts = self.diff_fold_identity_counts or {}
+  local prior = self.request.user_data and self.request.user_data.diff_fold_state
+  local by_identity = {}
+  if prior and prior.default_expanded == default_expanded then
+    for _, state in ipairs(prior.states or {}) do
+      if state.identity and identity_counts[state.identity] == 1 then by_identity[state.identity] = common.merge({}, state) end
+    end
+  end
+
+  local collapsed = {}
+  for _, fold in ipairs(self.diff_folds_a or {}) do if fold.identity then collapsed[fold.identity] = (collapsed[fold.identity] or 0) + 1 end end
+  for _, fold in ipairs(self.diff_folds_b or {}) do if fold.identity then collapsed[fold.identity] = (collapsed[fold.identity] or 0) + 1 end end
+  for identity, count in pairs(collapsed) do
+    if identity_counts[identity] == 1 then
+      by_identity[identity] = by_identity[identity] or { identity = identity }
+      by_identity[identity].state = count == 2 and "collapsed" or "expanded"
+      for _, fold in ipairs(self.diff_folds_a or {}) do
+        if fold.identity == identity then by_identity[identity].prefix_a = fold.prefix_a; by_identity[identity].prefix_b = fold.prefix_b; break end
+      end
+    end
+  end
+
+  if not next(by_identity) then
+    local candidates, fresh_identity_counts = diff_fold_candidates(self, self.diff_equal_blocks or {}, opts)
+    for _, candidate in ipairs(candidates) do
+      if fresh_identity_counts[candidate.identity] == 1 then by_identity[candidate.identity] = {
+        identity = candidate.identity,
+        prefix_a = candidate.prefix_a,
+        prefix_b = candidate.prefix_b,
+        side_ranges = {
+          left = { start_line = candidate.a.hidden_start, end_line = candidate.a.hidden_end },
+          right = { start_line = candidate.b.hidden_start, end_line = candidate.b.hidden_end },
+        },
+        state = default_expanded and "expanded" or "collapsed",
+        index = candidate.index,
+        description = string.format("unchanged block %d", candidate.index),
+      } end
+    end
+  end
+
+  local states = {}
+  for _, state in pairs(by_identity) do states[#states + 1] = state end
+  table.sort(states, function(a, b) return tostring(a.identity) < tostring(b.identity) end)
+  self.request.user_data = self.request.user_data or {}
+  self.request.user_data.diff_fold_state = {
+    default_expanded = default_expanded,
+    states = states,
+  }
+end
+
+local function candidate_matches_cached_state(candidate, state)
+  if not state then return false end
+  return sample_contains(candidate.prefix_window_a, state.prefix_a)
+    and sample_contains(candidate.prefix_window_b, state.prefix_b)
+end
+
+local function build_diff_folds(view, candidates, identity_counts, side, opts, state_map)
+  if not opts.enabled and not state_map then return {} end
+  local default_expanded = not opts.enabled
+  local folds = {}
+  for _, candidate in ipairs(candidates or {}) do
+    local cached = identity_counts[candidate.identity] == 1 and state_map[candidate.identity] or nil
+    if cached and not candidate_matches_cached_state(candidate, cached) then cached = nil end
+    local state
+    if cached then
+      state = cached.state
+    elseif identity_counts[candidate.identity] ~= 1 and view.expanded_diff_folds and view.expanded_diff_folds[candidate.index] then
+      state = "expanded"
+    else
+      state = default_expanded and "expanded" or "collapsed"
+    end
+    if state == "collapsed" then
+      local range = side == "a" and candidate.a or candidate.b
       folds[#folds + 1] = {
-        index = fold_index,
-        hidden_start = hidden_start,
-        hidden_end = hidden_end,
-        hidden_count = hidden_count,
+        index = candidate.index,
+        identity = candidate.identity,
+        identity_count = identity_counts[candidate.identity] or 0,
+        prefix_a = candidate.prefix_a,
+        prefix_b = candidate.prefix_b,
+        hidden_start = range.hidden_start,
+        hidden_end = range.hidden_end,
+        hidden_count = range.hidden_count,
       }
     end
   end
@@ -726,20 +1114,29 @@ function DiffView:rebuild_diff_folds()
     context_lines = config.plugins.diffview.fold_context_lines or 6,
     min_lines = config.plugins.diffview.fold_min_lines or 16,
   }
-  local expanded = self.expanded_diff_folds or {}
+  local candidates, identity_counts = diff_fold_candidates(self, self.diff_equal_blocks or {}, opts)
+  self.diff_fold_identity_counts = identity_counts
+  local cache = self:fold_state_cache()
+  local state_map = cache_state_map(cache, not self.folding_enabled)
   self.rebuilding_diff_folds = true
   clear_core_diff_folds(self.doc_view_a)
   clear_core_diff_folds(self.doc_view_b)
-  self.diff_folds_a = build_diff_folds(self.diff_equal_blocks or {}, "a", opts, expanded)
-  self.diff_folds_b = build_diff_folds(self.diff_equal_blocks or {}, "b", opts, expanded)
+  self.diff_folds_a = build_diff_folds(self, candidates, identity_counts, "a", opts, state_map)
+  self.diff_folds_b = build_diff_folds(self, candidates, identity_counts, "b", opts, state_map)
   install_core_diff_folds(self.doc_view_a, self.diff_folds_a, "a")
   install_core_diff_folds(self.doc_view_b, self.diff_folds_b, "b")
   self.rebuilding_diff_folds = false
+  self:save_diff_fold_state()
 end
 
 function DiffView:toggle_folding()
+  self:save_diff_fold_state()
   self.folding_enabled = not self.folding_enabled
-  if self.folding_enabled then self.expanded_diff_folds = {} end
+  if self.request then
+    self.request.user_data = self.request.user_data or {}
+    self.request.user_data.diff_fold_state = { default_expanded = not self.folding_enabled, states = {} }
+  end
+  self.expanded_diff_folds = {}
   self:rebuild_diff_folds()
   core.redraw = true
   return true
@@ -747,6 +1144,29 @@ end
 
 function DiffView:expand_fold(fold)
   if not fold then return false end
+  local opts = {
+    enabled = true,
+    context_lines = config.plugins.diffview.fold_context_lines or 6,
+    min_lines = config.plugins.diffview.fold_min_lines or 16,
+  }
+  local _, identity_counts = diff_fold_candidates(self, self.diff_equal_blocks or {}, opts)
+  if (identity_counts[fold.identity] or 0) == 1 then
+    local cache = self:fold_state_cache()
+    cache.default_expanded = not self.folding_enabled
+    cache.states = cache.states or {}
+    local updated = false
+    for _, state in ipairs(cache.states) do
+      if state.identity == fold.identity then
+        state.state = "expanded"
+        state.prefix_a = fold.prefix_a
+        state.prefix_b = fold.prefix_b
+        updated = true
+      end
+    end
+    if not updated then
+      cache.states[#cache.states + 1] = { identity = fold.identity, state = "expanded", index = fold.index, prefix_a = fold.prefix_a, prefix_b = fold.prefix_b }
+    end
+  end
   self.expanded_diff_folds = self.expanded_diff_folds or {}
   self.expanded_diff_folds[fold.index] = true
   self:rebuild_diff_folds()
@@ -1019,6 +1439,13 @@ function DiffView:install_view_integrations()
     side.view:add_fold_listener(provider_id, function(view, event, fold, reason)
       self:on_core_fold_event(side.is_a, event, fold, reason)
     end)
+    side.view:add_edit_guard(provider_id, function(view, reason)
+      local content = self.request.contents[side.is_a and 1 or 2]
+      if not self.side_editable[side.id] then
+        return false, content_read_only_reason(content)
+      end
+      return true
+    end)
     side.view.doc:add_text_change_listener("diff-view-" .. side.id .. "-" .. tostring(self), {
       after_change = function()
         self:update_diff()
@@ -1039,15 +1466,52 @@ function DiffView:dispose_integrations()
     side.view:remove_selection_listener("diff-view")
     side.view:remove_scroll_listener("diff-view")
     side.view:remove_fold_listener("diff-view")
+    side.view:remove_edit_guard("diff-view")
     side.view:remove_visual_row_provider("diff-gaps")
     side.view.doc:remove_text_change_listener("diff-view-" .. side.id .. "-" .. tostring(self))
   end
   self.diff_generation = (self.diff_generation or 0) + 1
+  if self.request_assigned then
+    if self.request and self.request.contents then
+      call_assignment_hook(self.request.contents[1], "on_assigned", false, self.request, "left")
+      call_assignment_hook(self.request.contents[2], "on_assigned", false, self.request, "right")
+    end
+    if self.request then call_assignment_hook(self.request, "on_assigned", false, { view = self }) end
+    self.request_assigned = false
+  end
+end
+
+function DiffView:dirty_confirmation_side_docs(opts)
+  opts = opts or {}
+  local docs = {}
+  for i, doc in ipairs(self.side_docs or {}) do
+    local content = self.request and self.request.contents and self.request.contents[i]
+    local needs_confirmation = (self.side_owns and self.side_owns[i]) or (content and (content.kind == "file" or content.requires_dirty_confirmation))
+    if needs_confirmation and not (opts.keep and opts.keep[doc]) then
+      docs[#docs + 1] = doc
+    end
+  end
+  return docs
+end
+
+function DiffView:dispose_owned_docs(opts)
+  if self.owned_docs_disposed then return end
+  opts = opts or {}
+  self.owned_docs_disposed = true
+  for doc, owned in pairs(self.owned_docs or {}) do
+    if owned and not (opts.keep and opts.keep[doc]) and doc.on_close then doc:on_close() end
+  end
 end
 
 function DiffView:try_close(do_close)
-  self:dispose_integrations()
-  return DiffView.super.try_close(self, do_close)
+  prompt_dirty_docs(self:dirty_confirmation_side_docs(), function(confirmed)
+    if not confirmed then return end
+    return DiffView.super.try_close(self, function(...)
+      self:dispose_integrations()
+      self:dispose_owned_docs()
+      return do_close(...)
+    end)
+  end)
 end
 
 local function redraw_thumb(view_scrollbar)
@@ -1292,6 +1756,56 @@ command.add(nil, {
   end
 })
 
+local function open_blank_diff()
+  local chain = MutableDiffRequestChain({
+    title = "Blank Diff View",
+    kind = "blank",
+    contents = {
+      content_blank({ name = "Left" }),
+      content_blank({ name = "Right" }),
+    },
+    content_titles = { "Left", "Right" },
+    editable_policy = "editable",
+    preferred_focus_side = "left",
+    user_data = {
+      blank_diff = true,
+      suppress_equal_contents_notification = true,
+    },
+  }, { blank_diff = true })
+  return DiffRequestController(chain)
+end
+
+command.add(nil, {
+  ["diff-view:open-blank-diff"] = function()
+    return open_blank_diff()
+  end,
+})
+
+local function active_diff_controller()
+  local view = core.active_view
+  local parent = view and view.diff_view_parent or view
+  if parent and parent.request_controller then return parent.request_controller end
+end
+
+local function replace_diff_side_with_file(side)
+  local controller = active_diff_controller()
+  if not controller then return end
+  command.perform("core:open-file", side == "left" and "Select Left File" or "Select Right File", function(file)
+    if file then controller:replace_content(side, content_file(file), { title = common.basename(file) }) end
+  end)
+end
+
+command.add(function()
+  return active_diff_controller() ~= nil
+end, {
+  ["diff-view:replace-left-with-file"] = function()
+    replace_diff_side_with_file("left")
+  end,
+  ["diff-view:replace-right-with-file"] = function()
+    replace_diff_side_with_file("right")
+  end,
+})
+
 
 local function navigate_diff_change(dv, direction)
   local poi = require "core.poi"
@@ -1417,23 +1931,216 @@ end)
 
 
 local compare_add_to_root_node
+local diffview
+
+local side_names = { left = 1, right = 2, base = 3, a = 1, b = 2, [1] = 1, [2] = 2, [3] = 3 }
+
+local function side_index(side)
+  return side_names[side] or side
+end
+
+MutableDiffRequestChain = {}
+MutableDiffRequestChain.__index = MutableDiffRequestChain
+
+function MutableDiffRequestChain:new(request, opts)
+  opts = opts or {}
+  local normalized, err = validate_request(request)
+  if not normalized then error(err, 2) end
+  local chain = setmetatable({}, self)
+  chain.request = normalized
+  chain.contents = { normalized.contents[1], normalized.contents[2], normalized.contents[3] }
+  chain.content_titles = normalized.content_titles and { normalized.content_titles[1], normalized.content_titles[2], normalized.content_titles[3] } or nil
+  chain.user_data = common.merge({}, normalized.user_data or {})
+  chain.user_data.blank_diff = opts.blank_diff or chain.user_data.blank_diff
+  return chain
+end
+
+setmetatable(MutableDiffRequestChain, { __call = function(cls, ...) return cls:new(...) end })
+
+function MutableDiffRequestChain:set_content(side, content, opts)
+  opts = opts or {}
+  local idx = assert(side_index(side), "invalid diff side")
+  self.contents[idx] = content
+  if opts.title then
+    self.content_titles = self.content_titles or {}
+    self.content_titles[idx] = opts.title
+  end
+end
+
+function MutableDiffRequestChain:put_user_data(key, value)
+  self.user_data[key] = value
+end
+
+function MutableDiffRequestChain:get_user_data(key)
+  return self.user_data[key]
+end
+
+function MutableDiffRequestChain:build_request(opts)
+  opts = opts or {}
+  local request = common.merge({}, self.request)
+  request.contents = { self.contents[1], self.contents[2], self.contents[3] }
+  request.content_titles = self.content_titles and { self.content_titles[1], self.content_titles[2], self.content_titles[3] } or nil
+  request.user_data = common.merge(common.merge({}, self.user_data), opts.user_data or {})
+  request.metadata = nil
+  return request
+end
+
+DiffRequestController = {}
+DiffRequestController.__index = DiffRequestController
+
+local function request_owned_doc_keep_set(request)
+  local keep = {}
+  for _, content in ipairs(request.contents or {}) do
+    if content.kind == "document" and content.owns_doc then keep[content.doc] = true end
+  end
+  return keep
+end
+
+function DiffRequestController:new(chain, opts)
+  opts = opts or {}
+  local controller = setmetatable({}, self)
+  controller.chain = chain
+  controller.disposed = false
+  controller:reload(opts)
+  return controller
+end
+
+setmetatable(DiffRequestController, { __call = function(cls, ...) return cls:new(...) end })
+
+function DiffRequestController:get_view()
+  return self.view
+end
+
+function DiffRequestController:reload(opts)
+  opts = opts or {}
+  if self.disposed then return nil, "diff request controller is disposed" end
+  local old_view = self.view
+  if old_view then
+    old_view:save_diff_fold_state()
+    self.chain.user_data = common.merge(self.chain.user_data or {}, old_view.request and old_view.request.user_data or {})
+  end
+  local request = self.chain:build_request(opts)
+  request._defer_assignment = old_view ~= nil
+  local view, err = diffview.open(request, true)
+  if not view then return nil, err end
+  view.request_controller = self
+  self.view = view
+
+  local node, idx
+  if old_view then
+    node = core.root_panel.root_node:get_node_for_view(old_view)
+    idx = node and node:get_view_idx(old_view)
+  end
+  local attached = false
+  if node and idx then
+    node.views[idx] = view
+    if node.tab_bar and node.tab_bar.invalidate_layout_cache then node.tab_bar:invalidate_layout_cache() end
+    node:set_active_view(view)
+    attached = true
+  elseif not opts.noshow then
+    compare_add_to_root_node(view)
+    attached = true
+  end
+  if old_view then
+    old_view:dispose_integrations()
+    old_view:dispose_owned_docs({ keep = request_owned_doc_keep_set(request) })
+  end
+  view:assign_request()
+  if attached then
+    local focus_side = request.preferred_focus_side == "right" and view.doc_view_b or view.doc_view_a
+    core.set_active_view(focus_side or view)
+  end
+  return view
+end
+
+function DiffRequestController:adopt_current_side(side)
+  local idx = side_index(side)
+  local view = self.view
+  if not (idx and view) then return end
+  local doc = idx == 1 and view.doc_view_a.doc or view.doc_view_b.doc
+  local owns = view.side_owns and view.side_owns[idx]
+  local title = view.request.content_titles and view.request.content_titles[idx]
+  local old_content = view.request.contents and view.request.contents[idx]
+  local adopted = content_document(doc, {
+    name = title or doc:get_name(),
+    owns_doc = owns == true,
+    editable = old_content and old_content.editable,
+    read_only_reason = old_content and old_content.read_only_reason,
+    syntax_hint = old_content and old_content.syntax_hint,
+  })
+  if old_content and (old_content.kind == "file" or old_content.requires_dirty_confirmation) then
+    adopted.requires_dirty_confirmation = true
+  end
+  self.chain:set_content(idx, adopted)
+end
+
+function DiffRequestController:replace_content(side, content, opts)
+  opts = opts or {}
+  local idx = assert(side_index(side), "invalid diff side")
+  local other = idx == 1 and 2 or 1
+  local function finish()
+    self:adopt_current_side(other)
+    self.chain:set_content(idx, content, opts)
+    return self:reload(opts)
+  end
+  local view = self.view
+  local doc = view and view.side_docs and view.side_docs[idx]
+  local old_content = view and view.request and view.request.contents and view.request.contents[idx]
+  local owns = view and view.side_owns and view.side_owns[idx]
+  local needs_confirmation = owns or (old_content and (old_content.kind == "file" or old_content.requires_dirty_confirmation))
+  if needs_confirmation and doc and doc:is_dirty() then
+    prompt_dirty_docs({ doc }, function(confirmed)
+      if confirmed then finish() end
+    end)
+    return nil, "pending-confirmation"
+  end
+  return finish()
+end
+
+function DiffRequestController:try_close(callback)
+  local view = self.view
+  if not view then if callback then callback(true) end; return end
+  view:try_close(function()
+    self.disposed = true
+    self.view = nil
+    if callback then callback(true) end
+  end)
+end
+
+function DiffRequestController:dispose()
+  if self.disposed then return end
+  self.disposed = true
+  if self.view then
+    self.view:dispose_integrations()
+    self.view:dispose_owned_docs()
+    self.view = nil
+  end
+end
 
 ---Functionality to view the textual differences of two elements.
 ---@class plugins.diffview
-local diffview = {
+diffview = {
   ---The differences viewer exposed for extensiblity.
   ---@type plugins.diffview.view
   Viewer = DiffView,
+  MutableDiffRequestChain = MutableDiffRequestChain,
+  DiffRequestController = DiffRequestController,
   content = {},
 }
 
 diffview.content.text = content_text
 diffview.content.file = content_file
 diffview.content.document = content_document
+diffview.content.blank = content_blank
 diffview.content.empty = content_empty
 
+diffview.normalize_request = normalize_request
+diffview.validate_request = validate_request
+
 function diffview.open(request, noshow)
-  local view = DiffView(request)
+  local normalized, err = validate_request(request)
+  if not normalized then return nil, err end
+  local view = DiffView(normalized)
   if not noshow then
     compare_add_to_root_node(view)
   end

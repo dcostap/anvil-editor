@@ -862,12 +862,12 @@ function GitView:ensure_diff_view(tab)
     kind = "git",
     compare_type = diffview.Viewer.type.STRING_STRING,
     contents = {
-      left = diffview.content.text(tab.left_text or "", { name = tab.left_name, editable = false }),
-      right = diffview.content.text(tab.right_text or "", { name = tab.right_name, editable = false }),
+      left = diffview.content.text(tab.left_text or "", { name = tab.left_name, editable = false, read_only_reason = "Git commit diff is read-only" }),
+      right = diffview.content.text(tab.right_text or "", { name = tab.right_name, editable = false, read_only_reason = "Git commit diff is read-only" }),
     },
     content_titles = { left = tab.left_name, right = tab.right_name },
     editable_policy = "read-only",
-    metadata = {
+    user_data = {
       source = "git",
       tab = tab,
       selected_file = selected_file,
@@ -875,6 +875,7 @@ function GitView:ensure_diff_view(tab)
       selected_file_path = tab.selected_file_path or selected_file and changed_file_path(selected_file),
       left_revision = tab.left,
       right_revision = tab.right,
+      read_only_reason = "Git commit diff is read-only",
     },
   }, true)
   tab.diff_view = view

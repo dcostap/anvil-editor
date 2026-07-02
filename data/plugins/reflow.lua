@@ -25,6 +25,7 @@ end
 
 command.add("core.docview", {
   ["reflow:reflow"] = function(dv)
+    if dv.can_edit and not dv:can_edit("reflow", { warn = true }) then return end
     local doc = dv.doc
     doc:replace(function(text)
       local prefix_set = "[^%w\n%[%](){}`'\"]*"

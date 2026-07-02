@@ -770,6 +770,7 @@ function DocView:new(doc)
   self.selection_listeners = {}
   self.scroll_listeners = {}
   self.fold_listeners = {}
+  self.edit_guards = {}
   register_fold_view(self)
   linewrapping.register_docview(self)
   self:set_wrapping_enabled(config.plugins.linewrapping.enable_by_default)
@@ -1266,6 +1267,43 @@ function DocView:notify_fold_listeners(event, fold, reason)
   end
 end
 
+function DocView:add_edit_guard(id, guard)
+  assert(type(id) == "string" and id ~= "", "edit guard id must be a non-empty string")
+  assert(type(guard) == "function" or type(guard) == "table", "edit guard must be a function or table")
+  self.edit_guards = self.edit_guards or {}
+  self.edit_guards[id] = guard
+end
+
+function DocView:remove_edit_guard(id)
+  if not self.edit_guards or not self.edit_guards[id] then return false end
+  self.edit_guards[id] = nil
+  return true
+end
+
+function DocView:can_edit(reason, opts)
+  opts = opts or {}
+  for id, guard in pairs(self.edit_guards or {}) do
+    local is_table = type(guard) == "table"
+    local fn = is_table and guard.can_edit or guard
+    if fn then
+      local ok, allowed, why
+      if is_table then
+        ok, allowed, why = pcall(fn, guard, self, reason, opts)
+      else
+        ok, allowed, why = pcall(fn, self, reason, opts)
+      end
+      if not ok then
+        core.log_quiet("DocView edit guard %s failed for %s: %s", tostring(id), self.doc:get_name(), tostring(allowed))
+      elseif allowed == false then
+        why = why or "This view is read-only"
+        if opts.warn then core.warn(why) end
+        return false, why
+      end
+    end
+  end
+  return true
+end
+
 function DocView:add_visual_row_provider(id, provider, opts)
   assert(type(id) == "string" and id ~= "", "visual row provider id must be a non-empty string")
   assert(type(provider) == "table", "visual row provider must be a table")
@@ -1280,6 +1318,16 @@ function DocView:remove_visual_row_provider(id)
   self.visual_row_providers[id] = nil
   self:bump_fold_generation("visual-row-provider-clear")
   return true
+end
+
+function DocView:invalidate_visual_rows(provider_id)
+  self.__visual_row_invalidation_generation = (self.__visual_row_invalidation_generation or 0) + 1
+  if provider_id then
+    self.__visual_row_provider_invalidations = self.__visual_row_provider_invalidations or {}
+    self.__visual_row_provider_invalidations[provider_id] = (self.__visual_row_provider_invalidations[provider_id] or 0) + 1
+  end
+  self.__composed_visual_row_cache = nil
+  self:bump_fold_generation(provider_id and ("visual-row-invalidate:" .. tostring(provider_id)) or "visual-row-invalidate")
 end
 
 function DocView:visual_row_provider_entries()
@@ -1431,6 +1479,7 @@ end
 function DocView:bump_fold_generation(reason)
   self.fold_generation = (self.fold_generation or 0) + 1
   self.__fold_layout_cache = nil
+  self.__composed_visual_row_cache = nil
   core.redraw = true
   if reason and core.log_quiet then
     core.log_quiet("DocView fold generation %d for %s: %s", self.fold_generation, self.doc:get_name(), tostring(reason))
@@ -1484,7 +1533,8 @@ function DocView:folded_visual_line_position(line, col, direction)
   line = line or 1
   col = col or 1
   local line_end = self.wrapped_settings and linewrapping.has_wrapped_line_end_affinity(self, line, col) or false
-  local current_row = self:get_folded_visual_row_for_position(line, col, line_end)
+  local composed = self:has_composed_visual_rows()
+  local current_row = composed and self:get_composed_visual_row_for_position(line, col, line_end) or self:get_folded_visual_row_for_position(line, col, line_end)
   local current_entry = self:get_visual_row_entry(current_row)
   if direction < 0 then
     local previous_line = math.max(1, line - 1)
@@ -1498,8 +1548,14 @@ function DocView:folded_visual_line_position(line, col, direction)
       return self:fold_aware_line_move(line, 1), 1, false
     end
   end
-  local target_row = common.clamp(current_row + direction, 1, self:get_folded_visual_row_count())
+  local target_row = common.clamp(current_row + direction, 1, composed and self:get_composed_visual_row_count() or self:get_folded_visual_row_count())
   local entry = self:get_visual_row_entry(target_row)
+  while entry and (entry.type == "provider" or entry.type == "extra") do
+    local next_row = target_row + direction
+    if next_row < 1 or next_row > (composed and self:get_composed_visual_row_count() or self:get_folded_visual_row_count()) then break end
+    target_row = next_row
+    entry = self:get_visual_row_entry(target_row)
+  end
   if entry and entry.type == "fold" then return entry.fold.line1, 1, false end
   if entry and entry.line then
     if self.wrapped_settings and entry.wrapped_idx then
@@ -1715,59 +1771,224 @@ function DocView:get_folded_visual_row_for_position(line, col, line_end)
   return row
 end
 
-function DocView:get_composed_visual_row_count()
-  local last_line = math.max(1, #self.doc.lines)
-  return self:get_folded_visual_row_count()
-    + self:get_extra_visual_rows_before_line(last_line)
-    + self:get_extra_visual_rows_after_line(last_line)
+local function provider_generation_value(view, entry)
+  local provider = entry.provider
+  local fn = provider and provider.generation
+  if not fn then return nil end
+  local ok, gen = pcall(fn, provider, view)
+  if ok then return gen end
+  core.log_quiet("DocView visual row provider %s.generation failed for %s: %s", tostring(entry.id), view.doc:get_name(), tostring(gen))
 end
 
-function DocView:get_composed_visual_row_for_position(line, col, line_end)
-  line = common.clamp(line or 1, 1, #self.doc.lines)
-  return self:get_folded_visual_row_for_position(line, col, line_end)
-    + self:get_extra_visual_rows_before_line(line)
+function DocView:visual_row_cache_signature()
+  local parts = {
+    tostring(self.fold_generation or 0),
+    tostring(self.doc.text_revision or 0),
+    tostring(#self.doc.lines),
+    tostring(self.wrapped_settings and linewrapping.get_total_wrapped_lines(self) or 0),
+    tostring(self.__wrap_layout_generation or 0),
+    tostring(self.__visual_row_invalidation_generation or 0),
+  }
+  for _, entry in ipairs(self:visual_row_provider_entries()) do
+    parts[#parts + 1] = tostring(entry.id)
+    parts[#parts + 1] = tostring(provider_generation_value(self, entry))
+  end
+  return table.concat(parts, "|")
 end
 
-function DocView:get_visual_row_entry(target_row)
-  target_row = math.max(1, math.floor(target_row or 1))
-  local row, line = 1, 1
+local function append_composed_entry(entries, entry)
+  entry.absolute_row = #entries + 1
+  entry.row = entry.absolute_row
+  entries[#entries + 1] = entry
+  return entry
+end
+
+local function legacy_visual_row_count(view, entry, method, line, previous_total)
+  local count = visual_row_count_from_provider(view, entry, method, line)
+  if method == "rows_before" then
+    local delta = math.max(0, count - (previous_total or 0))
+    return delta, count
+  end
+  return count, count
+end
+
+local function provider_object_rows(view, entry, line, placement, previous_line_total)
+  local provider = entry.provider
+  if not (provider and provider.visual_rows) then return nil end
+  local ok, rows = pcall(provider.visual_rows, provider, view, line, placement, previous_line_total or 0)
+  if not ok then
+    core.log_quiet("DocView visual row provider %s.visual_rows failed for %s: %s", tostring(entry.id), view.doc:get_name(), tostring(rows))
+    return nil
+  end
+  if rows == nil then return nil end
+  if type(rows) ~= "table" then
+    core.log_quiet("DocView visual row provider %s returned non-table rows for %s", tostring(entry.id), view.doc:get_name())
+    return nil
+  end
+  return rows
+end
+
+function DocView:append_provider_rows(entries, provider_entry, line, placement, previous_line_total)
+  local rows = provider_object_rows(self, provider_entry, line, placement, previous_line_total)
+  if not rows then return 0 end
+  local seen = {}
+  local added = 0
+  for i, row in ipairs(rows) do
+    if type(row) ~= "table" then
+      core.log_quiet("DocView visual row provider %s row %d at %s:%d is not a table", tostring(provider_entry.id), i, placement, line)
+    else
+      local id = row.id or tostring(i)
+      if seen[id] then
+        core.log_quiet("DocView visual row provider %s duplicate row id %s at %s:%d", tostring(provider_entry.id), tostring(id), placement, line)
+        seen[id] = seen[id] + 1
+        id = tostring(id) .. "#" .. tostring(seen[id])
+      else
+        seen[id] = 1
+      end
+      if row.height_rows ~= nil and row.height_rows ~= 1 then
+        core.log_quiet("DocView visual row provider %s row %s requested unsupported height_rows=%s", tostring(provider_entry.id), tostring(id), tostring(row.height_rows))
+      end
+      added = added + 1
+      append_composed_entry(entries, {
+        type = "provider",
+        provider_id = provider_entry.id,
+        line = line,
+        placement = placement,
+        row_in_provider = added,
+        row_in_line = 1,
+        provider_row = row,
+        provider_row_id = id,
+      })
+    end
+  end
+  return added
+end
+
+function DocView:append_legacy_provider_rows(entries, provider_id, line, placement, count)
+  count = math.max(0, math.floor(tonumber(count) or 0))
+  for i = 1, count do
+    append_composed_entry(entries, {
+      type = "extra",
+      provider_id = provider_id,
+      line = line,
+      placement = placement,
+      row_in_provider = i,
+      row_in_extra = i,
+      row_in_line = 1,
+      provider_row = { id = tostring(i), kind = "legacy-count", height_rows = 1 },
+      provider_row_id = tostring(i),
+    })
+  end
+end
+
+function DocView:build_composed_visual_rows()
+  local entries = {}
   local folds = self:get_collapsed_folds()
   local fidx = 1
-  local previous_extra_before = 0
-  while line <= #self.doc.lines do
-    local extra_before = self:get_extra_visual_rows_before_line(line)
-    local extra_delta = math.max(0, extra_before - previous_extra_before)
-    if target_row >= row and target_row < row + extra_delta then
-      return { type = "extra", line = line, placement = "before", row = row, row_in_extra = target_row - row + 1 }
+  local provider_entries = self:visual_row_provider_entries()
+  local previous_before = {}
+
+  local function append_provider_placement(line, placement)
+    for _, provider_entry in ipairs(provider_entries) do
+      local previous_total = previous_before[provider_entry.id] or 0
+      self:append_provider_rows(entries, provider_entry, line, placement, previous_total)
+      local method = placement == "before" and "rows_before" or "rows_after"
+      local count, total = legacy_visual_row_count(self, provider_entry, method, line, previous_total)
+      if placement == "before" then previous_before[provider_entry.id] = total end
+      self:append_legacy_provider_rows(entries, provider_entry.id, line, placement, count)
     end
-    row = row + extra_delta
-    previous_extra_before = extra_before
+  end
+
+  local extension_previous_before = 0
+  local function extension_count(line, placement)
+    local total = 0
+    for _, extension in pairs(self.visual_row_extensions or {}) do
+      local source = placement == "before" and extension.before or extension.after
+      local count = 0
+      if type(source) == "function" then
+        count = math.max(0, math.floor(tonumber(source(line, self)) or 0))
+      elseif source then
+        count = math.max(0, math.floor(tonumber(source[line]) or 0))
+      end
+      total = total + count
+    end
+    if placement == "before" then
+      local delta = math.max(0, total - extension_previous_before)
+      extension_previous_before = total
+      return delta
+    end
+    return total
+  end
+
+  local line = 1
+  while line <= #self.doc.lines do
+    self:append_legacy_provider_rows(entries, "visual-row-extension", line, "before", extension_count(line, "before"))
+    append_provider_placement(line, "before")
 
     local fold = folds[fidx]
     if fold and line == fold.line1 then
-      if row == target_row then return { type = "fold", fold = fold, line = fold.line1, row = row } end
-      row = row + 1
+      append_composed_entry(entries, { type = "fold", fold = fold, line = fold.line1, row_in_line = 1 })
+      append_provider_placement(line, "after")
+      self:append_legacy_provider_rows(entries, "visual-row-extension", line, "after", extension_count(line, "after"))
       line = fold.line2 + 1
       fidx = fidx + 1
     else
       local count = self:get_line_visual_row_count(line)
-      if target_row >= row and target_row < row + count then
+      for row_in_line = 1, count do
         local wrapped_idx
         if self.wrapped_settings then
-          wrapped_idx = (self.wrapped_line_to_idx[line] or 1) + (target_row - row)
+          wrapped_idx = (self.wrapped_line_to_idx[line] or 1) + row_in_line - 1
         end
-        return { type = "line", line = line, row = row, row_in_line = target_row - row + 1, wrapped_idx = wrapped_idx }
+        append_composed_entry(entries, { type = "line", line = line, row_in_line = row_in_line, wrapped_idx = wrapped_idx })
       end
-      row = row + count
+      append_provider_placement(line, "after")
+      self:append_legacy_provider_rows(entries, "visual-row-extension", line, "after", extension_count(line, "after"))
       line = line + 1
     end
   end
 
-  local trailing = self:get_extra_visual_rows_after_line(#self.doc.lines)
-  if target_row >= row and target_row < row + trailing then
-    return { type = "extra", line = #self.doc.lines, placement = "after", row = row, row_in_extra = target_row - row + 1 }
+  if #entries == 0 then append_composed_entry(entries, { type = "line", line = 1, row_in_line = 1 }) end
+  return entries
+end
+
+function DocView:composed_visual_rows()
+  local signature = self:visual_row_cache_signature()
+  local cache = self.__composed_visual_row_cache
+  if not cache or cache.signature ~= signature then
+    cache = { signature = signature, entries = self:build_composed_visual_rows() }
+    self.__composed_visual_row_cache = cache
   end
-  return { type = "line", line = #self.doc.lines, row = math.max(1, row - 1) }
+  return cache.entries
+end
+
+function DocView:get_composed_visual_row_count()
+  return #self:composed_visual_rows()
+end
+
+function DocView:get_composed_visual_row_for_position(line, col, line_end)
+  line = common.clamp(line or 1, 1, #self.doc.lines)
+  local rows = self:composed_visual_rows()
+  local fallback = 1
+  for i, entry in ipairs(rows) do
+    if entry.type == "line" and entry.line == line then
+      if self.wrapped_settings then
+        local idx = linewrapping.get_line_idx_col_count(self, line, col, line_end)
+        local first_idx = self.wrapped_line_to_idx and self.wrapped_line_to_idx[line] or idx
+        return common.clamp(i + math.max(0, idx - first_idx), i, i + self:get_line_visual_row_count(line) - 1)
+      end
+      return i
+    elseif entry.type == "fold" and line >= entry.fold.line1 and line <= entry.fold.line2 then
+      return i
+    elseif entry.line and entry.line <= line then
+      fallback = i
+    end
+  end
+  return fallback
+end
+
+function DocView:get_visual_row_entry(target_row)
+  target_row = common.clamp(math.floor(target_row or 1), 1, self:get_composed_visual_row_count())
+  return self:composed_visual_rows()[target_row]
 end
 
 function DocView:iter_visible_visual_rows()
@@ -2288,8 +2509,15 @@ function DocView:resolve_screen_position(x, y)
         self.resolved_fold_widget = entry.fold
         self.wrapped_last_resolved_line_end = nil
         return entry.fold.line1, 1
-      elseif entry and entry.type == "extra" then
+      elseif entry and (entry.type == "extra" or entry.type == "provider") then
+        self.resolved_provider_row = entry
         self.wrapped_last_resolved_line_end = nil
+        local row = entry.provider_row
+        if row and row.hit_test then
+          local ok, line, col = pcall(row.hit_test, self, row, x - ox, y - (content_y + style.padding.y + (idx - 1) * self:get_line_height()))
+          if ok and line then return line, col or 1 end
+          if not ok then core.log_quiet("DocView provider row hit_test failed for %s: %s", self.doc:get_name(), tostring(line)) end
+        end
         return entry.line, 1
       elseif entry then
         local line, col, line_end = linewrapping.get_line_col_from_index_and_x(self, entry.wrapped_idx, x - ox)
@@ -2310,6 +2538,15 @@ function DocView:resolve_screen_position(x, y)
     if entry and entry.type == "fold" then
       self.resolved_fold_widget = entry.fold
       return entry.fold.line1, 1
+    elseif entry and (entry.type == "extra" or entry.type == "provider") then
+      self.resolved_provider_row = entry
+      local row_obj = entry.provider_row
+      if row_obj and row_obj.hit_test then
+        local ok, hit_line, hit_col = pcall(row_obj.hit_test, self, row_obj, x - ox, y - (content_y + style.padding.y + (entry.absolute_row - 1) * self:get_line_height()))
+        if ok and hit_line then return hit_line, hit_col or 1 end
+        if not ok then core.log_quiet("DocView provider row hit_test failed for %s: %s", self.doc:get_name(), tostring(hit_line)) end
+      end
+      line = entry.line
     elseif entry then
       line = entry.line
     end
@@ -2548,7 +2785,18 @@ end
 function DocView:on_mouse_pressed(button, x, y, clicks)
   if button == "left" then self.doc:clear_search_selections() end
   if button == "left" and not self.hovering_gutter then
+    self.resolved_provider_row = nil
     local line = self:resolve_screen_position(x, y)
+    local provider_entry = self.resolved_provider_row
+    self.resolved_provider_row = nil
+    if provider_entry then
+      local row = provider_entry.provider_row
+      if row and row.on_click then
+        local ok, handled = pcall(row.on_click, self, row, button, x, y, clicks)
+        if not ok then core.log_quiet("DocView provider row click failed for %s: %s", self.doc:get_name(), tostring(handled)) end
+      end
+      return true
+    end
     local fold = self.resolved_fold_widget or self:get_collapsed_fold_at_line(line)
     self.resolved_fold_widget = nil
     if fold then
@@ -2593,6 +2841,7 @@ end
 ---Handle text input from keyboard.
 ---@param text string Input text
 function DocView:on_text_input(text)
+  if not self:can_edit("text input", { warn = true, text = text }) then return false end
   self.doc:clear_search_selections()
   self.doc:text_input(text)
 end
@@ -2604,6 +2853,7 @@ end
 ---@param start integer Selection start within composition
 ---@param length integer Selection length within composition
 function DocView:on_ime_text_editing(text, start, length)
+  if not self:can_edit("IME text input", { warn = true, text = text }) then return false end
   self.doc:clear_search_selections()
   self.doc:ime_text_editing(text, start, length)
   self.ime_status = #text > 0
@@ -4218,8 +4468,8 @@ function DocView:draw_folded()
   for entry in self:iter_visible_visual_rows() do
     if entry.type == "fold" then
       self:draw_fold_widget_gutter(entry.fold, self.position.x, entry.y, gutter_w)
-    elseif entry.type == "extra" then
-      -- provider-owned visual spacer row; no default gutter
+    elseif entry.type == "extra" or entry.type == "provider" then
+      -- provider-owned visual row; no default gutter
     elseif not drawn_gutters[entry.line] then
       drawn_gutters[entry.line] = true
       local line_y = entry.y - (entry.row_in_line - 1) * self:get_line_height()
@@ -4232,8 +4482,12 @@ function DocView:draw_folded()
   for entry in self:iter_visible_visual_rows() do
     if entry.type == "fold" then
       self:draw_fold_widget_body(entry.fold, x + gw, entry.y)
-    elseif entry.type == "extra" then
-      -- provider-owned visual spacer row; no default body
+    elseif entry.type == "extra" or entry.type == "provider" then
+      local row = entry.provider_row
+      if entry.type == "provider" and row and row.draw then
+        local ok, err = pcall(row.draw, self, row, x + gw, entry.y, math.max(0, self.size.x - gw), self:get_line_height())
+        if not ok then core.log_quiet("DocView provider row draw failed for %s: %s", self.doc:get_name(), tostring(err)) end
+      end
     elseif not drawn_bodies[entry.line] then
       drawn_bodies[entry.line] = true
       local line_y = entry.y - (entry.row_in_line - 1) * self:get_line_height()

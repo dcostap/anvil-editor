@@ -145,10 +145,12 @@ end
 
 command.add("core.docview", {
   ["trim-whitespace:trim-trailing-whitespace"] = function(dv)
+    if dv.can_edit and not dv:can_edit("trim whitespace", { warn = true }) then return end
     trimwhitespace.trim(dv.doc)
   end,
 
   ["trim-whitespace:trim-empty-end-lines"] = function(dv)
+    if dv.can_edit and not dv:can_edit("trim whitespace", { warn = true }) then return end
     trimwhitespace.trim_empty_end_lines(dv.doc)
   end,
 })

@@ -42,8 +42,10 @@ end
 
 command.add("core.docview", {
   ["tabularize:tabularize"] = function(dv)
+    if dv.can_edit and not dv:can_edit("tabularize", { warn = true }) then return end
     core.global_prompt_bar:enter("Tabularize On Delimiter", {
       submit = function(delim)
+        if dv.can_edit and not dv:can_edit("tabularize", { warn = true }) then return end
         if delim == "" then delim = " " end
 
         local doc = dv.doc

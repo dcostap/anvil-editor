@@ -19,6 +19,7 @@ end
 
 command.add("core.docview", {
   ["quote:quote"] = function(dv)
+    if dv.can_edit and not dv:can_edit("quote", { warn = true }) then return end
     dv.doc:replace(function(text)
       return '"' .. text:gsub("[%z\001-\031\\\"]", replace) .. '"'
     end)

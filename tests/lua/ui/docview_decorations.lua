@@ -1,6 +1,15 @@
+local core = require "core"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
+local style = require "core.style"
 local test = require "core.test"
+
+local function write_file(path, content)
+  local file, err = io.open(path, "wb")
+  test.ok(file, err)
+  file:write(content or "")
+  file:close()
+end
 
 local function make_view(text)
   local doc = Doc(nil, nil, true)
@@ -73,6 +82,188 @@ test.describe("DocView decoration providers", function()
     test.equal(view:get_scrollable_line_count(), base + 2)
     test.equal(view:remove_visual_row_provider("test"), true)
     test.equal(view:get_scrollable_line_count(), base)
+  end)
+
+  test.it("draws and clicks provider-owned visual rows without selecting text", function()
+    local view, doc = make_view("one\ntwo\nthree")
+    local draws, clicks = 0, 0
+    view.draw_overlay = function() end
+    view:add_visual_row_provider("actions", {
+      visual_rows = function(_, _, line, placement)
+        if line == 2 and placement == "before" then
+          return {
+            {
+              id = "action",
+              kind = "action",
+              draw = function() draws = draws + 1 end,
+              on_click = function() clicks = clicks + 1 end,
+            }
+          }
+        end
+      end,
+    })
+
+    local entry = view:get_visual_row_entry(2)
+    test.equal("provider", entry.type)
+    test.equal("actions", entry.provider_id)
+    test.equal("action", entry.provider_row.id)
+
+    local old_text = renderer.draw_text
+    local old_rect = renderer.draw_rect
+    local old_push = core.push_clip_rect
+    local old_pop = core.pop_clip_rect
+    renderer.draw_text = function(font, text, x, y, color) return x + (font and font:get_width(text) or 0) end
+    renderer.draw_rect = function() end
+    core.push_clip_rect = function() end
+    core.pop_clip_rect = function() end
+    local ok, err = pcall(function() view:draw_folded() end)
+    renderer.draw_text = old_text
+    renderer.draw_rect = old_rect
+    core.push_clip_rect = old_push
+    core.pop_clip_rect = old_pop
+    if not ok then error(err, 0) end
+    test.equal(1, draws)
+
+    doc:set_selection(1, 1)
+    local x = view.position.x + view:get_gutter_width() + 5
+    local y = view.position.y + style.padding.y + view:get_line_height()
+    test.ok(view:on_mouse_pressed("left", x, y, 1))
+    test.equal(1, clicks)
+    local line, col = doc:get_selection()
+    test.equal(1, line)
+    test.equal(1, col)
+  end)
+
+  test.it("invalidates provider visual rows after same-line document edits", function()
+    local view, doc = make_view("TODO one\ntwo")
+    view:add_visual_row_provider("todo", {
+      visual_rows = function(_, v, line, placement)
+        if placement == "before" and (v.doc.lines[line] or ""):find("TODO", 1, true) then
+          return { { id = "todo" } }
+        end
+      end,
+    })
+    test.equal(3, view:get_scrollable_line_count())
+    local observed_in_text_change
+    function doc:on_text_change()
+      observed_in_text_change = view:get_scrollable_line_count()
+    end
+    doc:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 5, text = "done" } }, { type = "replace" })
+    test.equal(2, observed_in_text_change)
+    test.equal(2, view:get_scrollable_line_count())
+    doc:undo()
+    test.equal(3, view:get_scrollable_line_count())
+    doc:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 5, text = "xxxx" } }, { type = "replace" })
+    test.equal(2, view:get_scrollable_line_count())
+  end)
+
+  test.it("invalidates provider visual rows after same-line-count reload", function()
+    local path = core.project_absolute_path("tmp-visual-row-reload.txt")
+    pcall(os.remove, path)
+    write_file(path, "TODO one\ntwo\n")
+    local doc = Doc("tmp-visual-row-reload.txt", path)
+    local view = DocView(doc)
+    view:add_visual_row_provider("todo", {
+      visual_rows = function(_, v, line, placement)
+        if placement == "before" and (v.doc.lines[line] or ""):find("TODO", 1, true) then
+          return { { id = "todo" } }
+        end
+      end,
+    })
+    test.equal(3, view:get_scrollable_line_count())
+    write_file(path, "done one\ntwo\n")
+    doc:load(path)
+    test.ok(not doc.lines[1]:find("TODO", 1, true), doc.lines[1])
+    test.equal(2, view:get_scrollable_line_count())
+    pcall(os.remove, path)
+  end)
+
+  test.it("invalidates wrapped visual rows after same-line-count reload", function()
+    local path = core.project_absolute_path("tmp-visual-row-wrap-reload.txt")
+    pcall(os.remove, path)
+    write_file(path, string.rep("wide ", 40) .. "\nshort\n")
+    local doc = Doc("tmp-visual-row-wrap-reload.txt", path)
+    local view = DocView(doc)
+    view.size.x = 120
+    view:set_wrapping_enabled(true)
+    view:update_wrap_cache()
+    local before = view:get_scrollable_line_count()
+    write_file(path, "short\nshort\n")
+    doc:load(path)
+    view:update_wrap_cache()
+    local after = view:get_scrollable_line_count()
+    test.ok(after < before, string.format("expected reload to reduce wrapped rows from %d, got %d", before, after))
+    pcall(os.remove, path)
+  end)
+
+  test.it("invalidates provider visual rows by generation and explicit request", function()
+    local view = make_view("one\ntwo")
+    local generation = 1
+    local enabled = true
+    view:add_visual_row_provider("dynamic", {
+      generation = function() return generation end,
+      visual_rows = function(_, _, line, placement)
+        if enabled and line == 1 and placement == "after" then return { { id = "dynamic" } } end
+      end,
+    })
+    test.equal(3, view:get_scrollable_line_count())
+    enabled = false
+    generation = generation + 1
+    test.equal(2, view:get_scrollable_line_count())
+    enabled = true
+    view:invalidate_visual_rows("dynamic")
+    test.equal(3, view:get_scrollable_line_count())
+  end)
+
+  test.it("skips provider rows during folded vertical navigation", function()
+    local view = make_view("one\ntwo\nthree\nfour\nfive")
+    view:add_visual_row_provider("gap", {
+      visual_rows = function(_, _, line, placement)
+        if line == 1 and placement == "after" then return { { id = "gap" } } end
+      end,
+    })
+    local fold = assert(view:add_fold_region { line1 = 3, line2 = 4 })
+    local line, col = view:folded_visual_line_position(2, 1, 1)
+    test.equal(3, line)
+    test.equal(1, col)
+    view:remove_fold_region(fold)
+  end)
+
+  test.it("isolates provider row duplicate ids and callback errors", function()
+    local view = make_view("one\ntwo")
+    view.draw_overlay = function() end
+    view:add_visual_row_provider("bad", {
+      visual_rows = function(_, _, line, placement)
+        if line == 1 and placement == "before" then
+          return {
+            { id = "dup", height_rows = 2, draw = function() error("draw boom") end, on_click = function() error("click boom") end },
+            { id = "dup" },
+          }
+        end
+      end,
+    })
+    test.equal(4, view:get_scrollable_line_count())
+    test.equal("dup", view:get_visual_row_entry(1).provider_row_id)
+    test.equal("dup#2", view:get_visual_row_entry(2).provider_row_id)
+
+    local old_text = renderer.draw_text
+    local old_rect = renderer.draw_rect
+    local old_push = core.push_clip_rect
+    local old_pop = core.pop_clip_rect
+    renderer.draw_text = function(font, text, x, y, color) return x + (font and font:get_width(text) or 0) end
+    renderer.draw_rect = function() end
+    core.push_clip_rect = function() end
+    core.pop_clip_rect = function() end
+    local ok, err = pcall(function() view:draw_folded() end)
+    renderer.draw_text = old_text
+    renderer.draw_rect = old_rect
+    core.push_clip_rect = old_push
+    core.pop_clip_rect = old_pop
+    test.ok(ok, err)
+
+    local x = view.position.x + view:get_gutter_width() + 5
+    local y = view.position.y + style.padding.y
+    test.ok(view:on_mouse_pressed("left", x, y, 1))
   end)
 
   test.it("notifies fold listeners for expand and removal", function()

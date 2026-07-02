@@ -449,6 +449,7 @@ local function find_replace()
   if not view_is_open(doc_view) then return end
 
   return with_doc_view_selection(function()
+    if doc_view.can_edit and not doc_view:can_edit("replace", { warn = true }) then return end
     ---@type core.doc
     local doc = doc_view.doc
     local new = replacetext:get_text()

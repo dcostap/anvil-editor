@@ -58,6 +58,7 @@ function Doc:reset()
   self.undo_stack = { idx = 1 }
   self.redo_stack = { idx = 1 }
   self.clean_change_id = 1
+  self.text_revision = (self.text_revision or 0) + 1
   self.highlighter = Highlighter(self)
   self.overwrite = false
   self:reset_syntax()
@@ -410,7 +411,7 @@ end
 
 
 function Doc:get_name()
-  return self.filename or "unsaved"
+  return self.display_name or self.filename or "unsaved"
 end
 
 
@@ -1454,6 +1455,7 @@ function Doc:apply_edits(edits, opts)
       if self:get_change_id() < self.clean_change_id then self.clean_change_id = -1 end
       push_batch_undo(self.undo_stack, time, transaction, old_selections, old_last_selection, transaction.new_selections, transaction.new_last_selection)
     end
+    self.text_revision = (self.text_revision or 0) + 1
     self:on_text_transaction(transaction)
     if opts.notify ~= false then self:on_text_change(transaction.type, transaction) end
     self:notify_text_change_listeners("after", { type = transaction.type, kind = "apply_edits", transaction = transaction })
@@ -1505,6 +1507,7 @@ function Doc:raw_insert(line, col, text, undo_stack, time)
   self:clear_cache(line, #lines - 1)
   self:sanitize_selection()
   linewrapping.notify_doc_raw_insert(self, line, linewrapping_old_lines)
+  self.text_revision = (self.text_revision or 0) + 1
   self:notify_text_change_listeners("after", { type = "raw_insert", kind = "raw_insert", line = line, col = col, text = text })
 end
 
@@ -1547,6 +1550,7 @@ function Doc:raw_remove(line1, col1, line2, col2, undo_stack, time)
   self:clear_cache(line1, line_removal)
   self:sanitize_selection()
   linewrapping.notify_doc_raw_remove(self, line1, line2, linewrapping_old_lines)
+  self.text_revision = (self.text_revision or 0) + 1
   self:notify_text_change_listeners("after", { type = "raw_remove", kind = "raw_remove", line1 = line1, col1 = col1, line2 = line2, col2 = col2 })
 end
 

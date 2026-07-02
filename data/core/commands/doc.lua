@@ -17,6 +17,13 @@ local function doc()
   return core.active_view.doc
 end
 
+local function can_edit(dv, reason, opts)
+  if dv and dv.can_edit then
+    return dv:can_edit(reason, common.merge({ warn = true }, opts or {}))
+  end
+  return true
+end
+
 
 local function doc_multiline_selections(sort)
   local iter, state, idx, line1, col1, line2, col2 = doc():get_selections(sort)
@@ -39,8 +46,10 @@ end
 
 local function append_line_if_last_line(line)
   if line >= #doc().lines then
+    if not can_edit(core.active_view, "extend selection") then return false end
     doc():insert(line, math.huge, "\n")
   end
+  return true
 end
 
 local function append_line_if_last_line_for(target_doc, line)
@@ -81,27 +90,35 @@ local function run_legacy_doc_command_as_batch(dv, change_type, fn)
   return run_legacy_doc_edit_as_batch(dv.doc, change_type, fn)
 end
 
-local function save(filename)
+local prompt_save_as
+local save_as_prompt_text
+
+local function save(filename, target)
+  local target_doc = target and target.doc or target or doc()
   local abs_filename
   if filename then
     filename = core.normalize_to_project_dir(filename)
     abs_filename = core.project_absolute_path(filename)
   end
-  local ok, err = pcall(doc().save, doc(), filename, abs_filename)
+  local ok, err = pcall(target_doc.save, target_doc, filename, abs_filename)
   if ok then
-    local saved_filename = doc().filename
+    local saved_filename = target_doc.filename
     core.log("Saved \"%s\"", saved_filename)
   else
     core.error(err)
     if tostring(err):find("file changed on disk", 1, true) then return end
-    core.nag_view:show("Saving failed", string.format("Couldn't save file \"%s\". Do you want to save to another location?", doc().filename), {
+    core.nag_view:show("Saving failed", string.format("Couldn't save file \"%s\". Do you want to save to another location?", target_doc.filename), {
       { text = "Yes", default_yes = true },
       { text = "No", default_no = true }
     }, function(item)
       if item.text == "Yes" then
         core.add_thread(function()
           -- we need to run this in a thread because of the odd way the nagview is.
-          command.perform("doc:save-as")
+          if target and target.doc then
+            prompt_save_as(target, save_as_prompt_text(target))
+          else
+            command.perform("doc:save-as")
+          end
         end)
       end
     end)
@@ -116,7 +133,7 @@ local function save_existing(doc)
   end
 end
 
-local function save_as_prompt_text(dv)
+function save_as_prompt_text(dv)
   local last_doc = core.last_active_view and core.last_active_view.doc
   if dv.doc.filename then
     return dv.doc.filename
@@ -128,10 +145,12 @@ local function save_as_prompt_text(dv)
   end
 end
 
-local function prompt_save_as(dv, text)
+function prompt_save_as(dv, text)
+  if not can_edit(dv, "save as") then return end
   core.global_prompt_bar:enter("Save As", {
     text = text,
     submit = function(filename)
+      if not can_edit(dv, "save as") then return end
       local prompt_filename = common.sanitize_prompt_path(filename)
       local save_filename = common.home_expand(prompt_filename)
       local normalized = core.normalize_to_project_dir(save_filename)
@@ -146,7 +165,8 @@ local function prompt_save_as(dv, text)
           },
           function(item)
             if item.text == "Overwrite" then
-              save(save_filename)
+              if not can_edit(dv, "save as") then return end
+              save(save_filename, dv)
             else
               core.add_thread(function()
                 prompt_save_as(dv, filename)
@@ -155,7 +175,7 @@ local function prompt_save_as(dv, text)
           end
         )
       else
-        save(save_filename)
+        save(save_filename, dv)
       end
     end,
     suggest = function (text)
@@ -165,6 +185,7 @@ local function prompt_save_as(dv, text)
 end
 
 local function cut_or_copy(delete)
+  if delete and not can_edit(core.active_view, "cut") then return end
   local full_text = ""
   local text = ""
   core.cursor_clipboard = {}
@@ -793,14 +814,17 @@ local commands = {
   end,
 
   ["doc:undo"] = function(dv)
+    if not can_edit(dv, "undo") then return end
     dv.doc:undo()
   end,
 
   ["doc:redo"] = function(dv)
+    if not can_edit(dv, "redo") then return end
     dv.doc:redo()
   end,
 
   ["doc:paste"] = function(dv)
+    if not can_edit(dv, "paste") then return end
     local clipboard = system.get_clipboard()
     if not clipboard or clipboard == "" then
     	return
@@ -845,6 +869,7 @@ local commands = {
   end,
 
   ["doc:paste-primary-selection"] = function(dv, x, y)
+    if not can_edit(dv, "paste") then return end
     if type(x) == "number" and type(y) == "number" then
       set_cursor(dv, x, y, "set")
       -- Workaround to avoid that a middle mouse drag starts selecting
@@ -857,6 +882,7 @@ local commands = {
   end,
 
   ["doc:newline"] = function(dv)
+    if not can_edit(dv, "newline") then return end
     local text_by_idx = {}
     local edits = {}
     local normal_edits = {}
@@ -1016,6 +1042,7 @@ local commands = {
   end,
 
   ["doc:newline-below"] = function(dv)
+    if not can_edit(dv, "newline") then return end
     local edits = {}
     local entries = {}
     for idx, line in dv.doc:get_selections(false) do
@@ -1046,6 +1073,7 @@ local commands = {
   end,
 
   ["doc:newline-above"] = function(dv)
+    if not can_edit(dv, "newline") then return end
     local edits = {}
     local entries = {}
     for idx, line in dv.doc:get_selections(false) do
@@ -1076,6 +1104,7 @@ local commands = {
   end,
 
   ["doc:delete"] = function(dv)
+    if not can_edit(dv, "delete") then return end
     local fallback = false
     for _, line1, col1, line2, col2 in dv.doc:get_selections(true, true) do
       if line1 == line2 and col1 == col2 and dv.doc.lines[line1]:find("^%s*$", col1) then
@@ -1110,6 +1139,7 @@ local commands = {
   end,
 
   ["doc:backspace"] = function(dv)
+    if not can_edit(dv, "backspace") then return end
     local _, indent_size = dv.doc:get_indent_info()
     local fallback = false
     for _, line1, col1, line2, col2 in dv.doc:get_selections(true, true) do
@@ -1169,7 +1199,7 @@ local commands = {
 
   ["doc:select-lines"] = function(dv)
     for idx, line1, _, line2 in dv.doc:get_selections(true) do
-      append_line_if_last_line(line2)
+      if not append_line_if_last_line(line2) then return end
       dv.doc:set_selections(idx, line2 + 1, 1, line1, 1)
     end
     set_primary_selection(dv.doc)
@@ -1185,6 +1215,7 @@ local commands = {
   end,
 
   ["doc:join-lines"] = function(dv)
+    if not can_edit(dv, "join lines") then return end
     local actions, fallback = {}, false
     for idx, line1, col1, line2, col2 in dv.doc:get_selections(true) do
       if line1 == line2 then line2 = line2 + 1 end
@@ -1235,6 +1266,7 @@ local commands = {
   end,
 
   ["doc:indent"] = function(dv)
+    if not can_edit(dv, "indent") then return end
     local repair_edits, final_by_idx = {}, {}
     local selection_count, repairable_count = 0, 0
     for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
@@ -1290,6 +1322,7 @@ local commands = {
   end,
 
   ["doc:unindent"] = function(dv)
+    if not can_edit(dv, "unindent") then return end
     for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
       local l1, c1, l2, c2 = dv.doc:indent_text(true, line1, col1, line2, col2)
       if l1 then
@@ -1299,6 +1332,7 @@ local commands = {
   end,
 
   ["doc:duplicate-lines"] = function(dv)
+    if not can_edit(dv, "duplicate lines") then return end
     local actions, fallback = {}, false
     for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
       if line2 >= #dv.doc.lines then fallback = true; break end
@@ -1334,6 +1368,7 @@ local commands = {
   end,
 
   ["doc:delete-lines"] = function(dv)
+    if not can_edit(dv, "delete lines") then return end
     local actions, fallback = {}, false
     for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
       if line2 >= #dv.doc.lines then fallback = true; break end
@@ -1366,6 +1401,7 @@ local commands = {
   end,
 
   ["doc:move-lines-up"] = function(dv)
+    if not can_edit(dv, "move lines") then return end
     local actions, fallback = {}, false
     for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
       if line1 <= 1 or line2 >= #dv.doc.lines then fallback = true; break end
@@ -1410,6 +1446,7 @@ local commands = {
   end,
 
   ["doc:move-lines-down"] = function(dv)
+    if not can_edit(dv, "move lines") then return end
     local actions, fallback = {}, false
     for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
       if line2 >= #dv.doc.lines then fallback = true; break end
@@ -1454,6 +1491,7 @@ local commands = {
   end,
 
   ["doc:toggle-block-comments"] = function(dv)
+    if not can_edit(dv, "toggle comments") then return end
     for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
       local current_syntax = dv.doc.syntax
       if line1 > 1 then
@@ -1488,6 +1526,7 @@ local commands = {
   end,
 
   ["doc:toggle-line-comments"] = function(dv)
+    if not can_edit(dv, "toggle comments") then return end
     for idx, line1, col1, line2, col2 in doc_multiline_selections(true) do
       local current_syntax = dv.doc.syntax
       if line1 > 1 then
@@ -1513,10 +1552,12 @@ local commands = {
   end,
 
   ["doc:upper-case"] = function(dv)
+    if not can_edit(dv, "change case") then return end
     dv.doc:replace(string.uupper)
   end,
 
   ["doc:lower-case"] = function(dv)
+    if not can_edit(dv, "change case") then return end
     dv.doc:replace(string.ulower)
   end,
 
@@ -1573,18 +1614,23 @@ local commands = {
   end,
 
   ["doc:toggle-line-ending"] = function(dv)
+    if not can_edit(dv, "toggle line ending") then return end
     dv.doc.crlf = not dv.doc.crlf
   end,
 
   ["doc:change-encoding"] = function(dv)
+    if not can_edit(dv, "change encoding") then return end
     encodings.select_encoding("Select Output Encoding", function(charset)
+      if not can_edit(dv, "change encoding") then return end
       set_encoding(dv.doc, charset)
       save_existing(dv.doc)
     end)
   end,
 
   ["doc:reload-with-encoding"] = function(dv)
+    if not can_edit(dv, "reload") then return end
     encodings.select_encoding("Reload With Encoding", function(charset)
+      if not can_edit(dv, "reload") then return end
       set_encoding(dv.doc, charset)
       dv.doc:reload()
     end)
@@ -1596,22 +1642,26 @@ local commands = {
   end,
 
   ["doc:save-as"] = function(dv)
+    if not can_edit(dv, "save as") then return end
     prompt_save_as(dv, save_as_prompt_text(dv))
   end,
 
   ["doc:save"] = function(dv)
+    if not can_edit(dv, "save") then return end
     if dv.doc.filename then
-      save()
+      save(nil, dv)
     else
       command.perform("doc:save-as")
     end
   end,
 
   ["doc:reload"] = function(dv)
+    if not can_edit(dv, "reload") then return end
     dv.doc:reload()
   end,
 
   ["file:rename"] = function(dv)
+    if not can_edit(dv, "rename file") then return end
     local old_filename = dv.doc.filename
     local old_abs_filename = dv.doc.abs_filename
     if not old_filename then
@@ -1621,11 +1671,12 @@ local commands = {
     core.global_prompt_bar:enter("Rename", {
       text = old_filename,
       submit = function(filename)
+        if not can_edit(dv, "rename file") then return end
         filename = common.sanitize_prompt_path(filename)
         local expanded_filename = common.home_expand(filename)
         local new_filename = core.normalize_to_project_dir(expanded_filename)
         local new_abs_filename = core.project_absolute_path(new_filename)
-        save(expanded_filename)
+        save(expanded_filename, dv)
         if not common.path_equals(dv.doc.abs_filename, new_abs_filename) then return end
         core.log("Renamed \"%s\" to \"%s\"", old_filename, filename)
         if not common.path_equals(new_abs_filename, old_abs_filename) then
@@ -1639,6 +1690,7 @@ local commands = {
   end,
 
   ["file:delete"] = function(dv)
+    if not can_edit(dv, "delete file") then return end
     local filename = dv.doc.abs_filename
     if not filename then
       core.error("Cannot remove unsaved doc")
@@ -1726,6 +1778,8 @@ command.add_toggle("doc:toggle-bom", {
     return doc and doc.bom ~= nil
   end,
   set = function(enabled, view)
+    view = view or core.active_view
+    if not can_edit(view, "toggle BOM") then return end
     local doc, bom = active_bom_document(view)
     if not doc then return end
     doc.bom = enabled and bom or nil
@@ -1762,6 +1816,7 @@ for name, obj in pairs(translations) do
     set_primary_selection(dv.doc)
   end
   commands["doc:delete-to-" .. name] = function(dv)
+    if not can_edit(dv, "delete") then return end
     dv.doc:delete_to(obj[name:gsub("-", "_")], dv)
   end
 end
@@ -2208,6 +2263,7 @@ local function wrapped_select_to(dv, name, move_fn, ...)
 end
 
 local function wrapped_delete_to(dv, name, move_fn, ...)
+  if not can_edit(dv, "delete") then return end
   if not dv.wrapped_settings then return perform_unwrapped_navigation(name, dv, ...) end
   local args = { n = select("#", ...), ... }
   return dv.doc:delete_to(function(target_doc, line, col)

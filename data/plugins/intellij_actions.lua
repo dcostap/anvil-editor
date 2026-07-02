@@ -15,6 +15,10 @@ local navigation_history = require "plugins.navigation_history"
 local core_doc_paste = core.intellij_actions_core_doc_paste or command.map["doc:paste"]
 core.intellij_actions_core_doc_paste = core_doc_paste
 
+local function can_edit(dv, reason)
+  return not (dv and dv.can_edit) or dv:can_edit(reason, { warn = true })
+end
+
 local function clone_caret_intellij(dv, direction)
   local DocView = require "core.docview"
   local doc = dv.doc
@@ -1094,6 +1098,7 @@ local function patch_paste_undo_selection(doc, undo_start_idx, selections)
 end
 
 local function paste_preserving_multicursor_undo(dv)
+  if not can_edit(dv, "paste") then return end
   if not core_doc_paste then return end
   local doc = dv.doc
   local undo_start_idx = doc.undo_stack.idx
@@ -1105,6 +1110,7 @@ local function paste_preserving_multicursor_undo(dv)
 end
 
 local function duplicate_current_line(dv)
+  if not can_edit(dv, "duplicate line") then return end
   local doc = dv.doc
   local actions = {}
   local last_selection = doc.last_selection or 1
@@ -1204,6 +1210,7 @@ command.add(nil, {
 })
 
 local function line_comment_at_start(dv)
+  if not can_edit(dv, "toggle comments") then return end
   local doc = dv.doc
   local comment = (doc.syntax and doc.syntax.comment) or "//"
   if type(comment) == "table" then comment = comment[1] end
