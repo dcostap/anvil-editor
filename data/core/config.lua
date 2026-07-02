@@ -394,13 +394,6 @@ config.log_slow_threads = false
 ---Defaults to nil
 config.dirmonitor_backend = nil
 
----Use the system file picker instead of the command palette
----when opening files.
----
----Defaults to false if no sandbox is detected.
----@type boolean
-config.use_system_file_picker = system.get_sandbox() ~= "none"
-
 ---Controls how the caret column is displayed in the status bar.
 ---
 ---When set to `"char"`, the column is based on the number of characters

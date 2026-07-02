@@ -280,13 +280,6 @@ settings.add("General",
       min = 1,
       max = 10
     },
-    {
-      label = "Use System File Picker",
-      description = "Use the native file picker by default when opening files and directories.",
-      path = "use_system_file_picker",
-      type = settings.type.TOGGLE,
-      default = system.get_sandbox() ~= "none"
-    },
   }
 )
 
@@ -2180,10 +2173,10 @@ function Settings:setup_about()
   )
 
   ---@type widget.button
-  local button = Button(self.about, "Visit Website")
+  local button = Button(self.about, "Open GitHub")
   button:set_icon("G")
-  button:set_tooltip("Open Anvil Website", "core:view-website")
-  function button:on_click() command.perform "core:view-website" end
+  button:set_tooltip("Open the project GitHub page", "core:open-project-github-page")
+  function button:on_click() command.perform "core:open-project-github-page" end
 
   ---@type widget.listbox
   local contributors = ListBox(self.about)

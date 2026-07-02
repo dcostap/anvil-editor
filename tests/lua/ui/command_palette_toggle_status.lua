@@ -1,6 +1,5 @@
 local core = require "core"
 local test = require "core.test"
-local command = require "core.command"
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
 
 local function remove_doc(doc)
@@ -38,13 +37,10 @@ local function cleanup_editor_views(context)
 end
 
 test.describe("command palette toggle status", function()
-  local saved_command
   local saved_active_view
 
   test.before_each(function()
-    saved_command = command.map["zz-test:toggle"]
     saved_active_view = core.active_view
-    command.map["zz-test:toggle"] = nil
     if core.active_view == core.global_prompt_bar then
       core.global_prompt_bar:exit(false)
     end
@@ -58,48 +54,7 @@ test.describe("command palette toggle status", function()
       core.fuzzy_searcher_active_view:close()
     end
     cleanup_editor_views(context)
-    command.map["zz-test:toggle"] = saved_command
     if saved_active_view then core.set_active_view(saved_active_view) end
-  end)
-
-  test.it("shows current toggle state without changing completion text", function()
-    local enabled = true
-
-    command.add_toggle("zz-test:toggle", {
-      get = function() return enabled end,
-      set = function(value) enabled = value end,
-    })
-
-    command.perform("core:find-command")
-    test.equal(core.active_view, core.global_prompt_bar)
-
-    core.global_prompt_bar:set_text("zz-test")
-    core.global_prompt_bar:update_suggestions()
-
-    local item = core.global_prompt_bar.suggestions[1]
-    test.not_nil(item)
-    test.equal(item.command, "zz-test:toggle")
-    test.equal(item.text, "Zz Test: Toggle")
-    test.equal(item.display_text, "Zz Test: Toggle [Currently: ON]")
-  end)
-
-  test.it("captures status before the Global Prompt Bar takes focus", function()
-    command.add_toggle("zz-test:toggle", {
-      get = function()
-        return core.active_view ~= core.global_prompt_bar
-      end,
-      set = function() end,
-    })
-
-    command.perform("core:find-command")
-    test.equal(core.active_view, core.global_prompt_bar)
-
-    core.global_prompt_bar:set_text("zz-test")
-    core.global_prompt_bar:update_suggestions()
-
-    local item = core.global_prompt_bar.suggestions[1]
-    test.not_nil(item)
-    test.equal(item.display_text, "Zz Test: Toggle [Currently: ON]")
   end)
 
   test.it("shows status in the fuzzy command palette against the source view", function(context)

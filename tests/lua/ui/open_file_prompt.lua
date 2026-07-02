@@ -38,7 +38,7 @@ test.describe("open file prompt", function()
     test.ok(common.mkdirp(dir))
     write_file(path, "select 1\n")
 
-    command.perform("core:open-file-global-prompt-bar")
+    command.perform("core:open-file")
 
     test.ok(core.global_prompt_bar.state.validate(path), errors[1])
   end)
@@ -49,7 +49,7 @@ test.describe("open file prompt", function()
     test.ok(common.mkdirp(dir))
     write_file(path, "select 1\n")
 
-    command.perform("core:open-file-global-prompt-bar")
+    command.perform("core:open-file")
 
     test.ok(core.global_prompt_bar.state.validate(path .. "\r\n"), errors[1])
   end)

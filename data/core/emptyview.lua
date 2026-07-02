@@ -18,9 +18,6 @@ local logo_canvas
 local logo_canvas_size
 
 local buttons = {
-  { name = "new_file", icon = "f", cmd = "core:new-doc",
-    label = "New File", tooltip = "Create a new file"
-  },
   { name = "open_file", icon = "D", cmd = "core:open-file",
     label = "Open File", tooltip = "Open an existing project file"
   },
@@ -33,7 +30,7 @@ local buttons = {
   { name = "find_file", icon = "L", cmd = "core:find-file",
     label = "Find File", tooltip = "Search for a file from current project"
   },
-  { name = "run_command", icon = "B", cmd = "core:find-command",
+  { name = "run_command", icon = "B", cmd = "fuzzy-searcher:open-commands",
     label = "Run Command", tooltip = "Search for a command to run"
   },
   { name = "settings", icon = "P", cmd = "ui:settings",
@@ -79,18 +76,11 @@ function EmptyView:new()
 
   self.center_container = Container(self)
 
-  self.website = Button(self.center_container, "Website")
-  self.website:set_icon("G")
-  self.website:set_tooltip("Visit the editor website", "core:view-website")
-  self.website.on_click = function(_, pressed)
-    command.perform "core:view-website"
-  end
-
-  self.docs = Button(self.center_container, "Documentation")
-  self.docs:set_icon("?")
-  self.docs:set_tooltip("Visit the editor documentation", "core:view-documentation-help")
-  self.docs.on_click = function(_, pressed)
-    command.perform "core:view-documentation-help"
+  self.github = Button(self.center_container, "GitHub")
+  self.github:set_icon("G")
+  self.github:set_tooltip("Open the project GitHub page", "core:open-project-github-page")
+  self.github.on_click = function(_, pressed)
+    command.perform "core:open-project-github-page"
   end
 
   self.first_update = true

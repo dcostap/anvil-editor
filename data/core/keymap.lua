@@ -295,9 +295,8 @@ if macos then
 end
 
 keymap.add_direct {
-  ["ctrl+shift+p"] = "core:find-command",
+  ["ctrl+shift+p"] = "fuzzy-searcher:open-commands",
   ["ctrl+o"] = "core:open-file",
-  ["ctrl+n"] = "core:new-doc",
   ["ctrl+,"] = "core:open-user-module",
   ["ctrl+shift+c"] = "core:change-project-folder",
   ["ctrl+shift+o"] = "core:open-project-folder",
@@ -396,7 +395,7 @@ keymap.add_direct {
   ["shift+1lclick"] = "doc:select-to-cursor",
   ["ctrl+1lclick"] = "doc:split-cursor",
   ["1lclick"] = "doc:set-cursor",
-  ["2lclick"] = { "doc:set-cursor-word", "tabbar:new-doc" },
+  ["2lclick"] = "doc:set-cursor-word",
   ["3lclick"] = "doc:set-cursor-line",
   ["mclick"] = "doc:paste-primary-selection",
   ["shift+left"] = "doc:select-to-previous-char",

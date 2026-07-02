@@ -175,13 +175,3 @@ command.add(function()
     end
   }
 )
-
--- double clicking the tab bar should open a new doc
-command.add(function(x, y)
-  local node = x and y and core.root_panel.root_node:get_child_overlapping_point(x, y)
-  return node and node:is_in_tab_area(x, y)
-end, {
-  ["tabbar:new-doc"] = function()
-    command.perform("core:new-doc")
-  end
-})

@@ -1,8 +1,7 @@
 local function keymap_macos(keymap)
   keymap.add_direct {
-    ["cmd+shift+p"] = "core:find-command",
+    ["cmd+shift+p"] = "fuzzy-searcher:open-commands",
     ["cmd+o"] = "core:open-file",
-    ["cmd+n"] = "core:new-doc",
     ["cmd+,"] = "core:open-user-module",
     ["cmd+shift+c"] = "core:change-project-folder",
     ["cmd+shift+o"] = "core:open-project-folder",

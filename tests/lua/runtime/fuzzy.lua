@@ -46,9 +46,9 @@ test.describe("native fuzzy Lua API", function()
   end)
 
   test.it("rejects medium-length scattered coincidence matches", function()
-    test.is_nil(fuzzy.score("core:add-directory-picker", "caret"))
+    test.is_nil(fuzzy.score("core:add-directory-system-file-picker", "caret"))
     local results = fuzzy.filter({
-      "core:add-directory-picker",
+      "core:add-directory-system-file-picker",
       "caret-type",
       "core:toggle-caret-type",
     }, "caret", { limit = 10 })

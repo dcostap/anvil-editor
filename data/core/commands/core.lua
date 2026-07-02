@@ -2,7 +2,6 @@ local core = require "core"
 local config = require "core.config"
 local common = require "core.common"
 local command = require "core.command"
-local keymap = require "core.keymap"
 local LogView = require "core.logview"
 
 
@@ -26,9 +25,9 @@ local function check_directory_path(path)
     return abs_path
 end
 
-local function open_file(use_dialog, label, selection_callback, allow_directories)
+local function file_prompt_defaults()
   local view = core.active_view
-  local default_text, root_dir, filename = "", core.root_project().path, ""
+  local default_text, root_dir = "", core.root_project().path
   if view.doc and view.doc.abs_filename then
     local dirname = common.dirname(view.doc.abs_filename)
     if dirname and common.path_belongs_to(dirname, root_dir) then
@@ -38,26 +37,12 @@ local function open_file(use_dialog, label, selection_callback, allow_directorie
       root_dir = dirname
     end
   end
+  return default_text, root_dir
+end
 
-  if use_dialog and not allow_directories then
-    core.open_file_dialog(core.window, function(status, result)
-      if status == "accept" then
-      	for _, filename in ipairs(result --[[ @as string[] ]]) do
-          if not selection_callback then
-            core.open_file(filename)
-          else
-            selection_callback(filename)
-          end
-      	end
-      elseif status == "error" then
-        core.error("Error while opening dialog: %s", result or "")
-      end
-    end, {
-      default_location = default_text,
-      allow_many = true,
-    })
-  	return
-  end
+local function open_file(label, selection_callback, allow_directories)
+  local default_text, root_dir = file_prompt_defaults()
+  local filename = ""
 
   core.global_prompt_bar:enter(label or "Open File", {
     text = default_text,
@@ -107,30 +92,38 @@ local function open_file(use_dialog, label, selection_callback, allow_directorie
   })
 end
 
-local function open_directory(label, use_dialog, allow_many, callback, select_text)
-  local dirname = common.dirname(core.root_project().path)
-  local text
-  if dirname then
-    text = use_dialog and dirname or common.home_encode(dirname) .. PATHSEP
-  end
-
-  if use_dialog then
-    core.open_directory_dialog(core.window, function(status, result)
-      if status == "accept" then
-        callback(result)
-      elseif status == "error" then
-        core.error("Error while opening dialog: %s", result or "")
+local function open_file_with_system_file_picker(label, selection_callback)
+  local default_text = file_prompt_defaults()
+  core.open_file_dialog(core.window, function(status, result)
+    if status == "accept" then
+      for _, filename in ipairs(result --[[ @as string[] ]]) do
+        if not selection_callback then
+          core.open_file(filename)
+        else
+          selection_callback(filename)
+        end
       end
-    end, {
-      default_location = text,
-      allow_many = allow_many,
-      title = label,
-    })
-  	return
-  end
+    elseif status == "error" then
+      core.error("Error while opening dialog: %s", result or "")
+    end
+  end, {
+    default_location = default_text,
+    allow_many = true,
+  })
+end
 
+local function directory_prompt_default_text()
+  local dirname = common.dirname(core.root_project().path)
+  return dirname and common.home_encode(dirname) .. PATHSEP or nil
+end
+
+local function directory_system_picker_default_location()
+  return common.dirname(core.root_project().path)
+end
+
+local function open_directory(label, allow_many, callback, select_text)
   core.global_prompt_bar:enter(label, {
-    text = text,
+    text = directory_prompt_default_text(),
     submit = function(text)
       local path = common.home_expand(common.sanitize_prompt_path(text))
       local abs_path = check_directory_path(path)
@@ -147,8 +140,22 @@ local function open_directory(label, use_dialog, allow_many, callback, select_te
   })
 end
 
-local function change_project_directory(use_dialog)
-  open_directory("Change Project Folder", use_dialog, false, function(abs_path)
+local function open_directory_with_system_file_picker(label, allow_many, callback)
+  core.open_directory_dialog(core.window, function(status, result)
+    if status == "accept" then
+      callback(result)
+    elseif status == "error" then
+      core.error("Error while opening dialog: %s", result or "")
+    end
+  end, {
+    default_location = directory_system_picker_default_location(),
+    allow_many = allow_many,
+    title = label,
+  })
+end
+
+local function change_project_directory()
+  open_directory("Change Project Folder", false, function(abs_path)
     if common.path_equals(abs_path[1], core.root_project().path) then return end
     core.confirm_close_docs(core.docs, function(dirpath)
       core.open_project_in_same_window(dirpath)
@@ -156,8 +163,17 @@ local function change_project_directory(use_dialog)
   end)
 end
 
-local function open_project_directory(use_dialog)
-  open_directory("Open Project", use_dialog, false, function(abs_path)
+local function change_project_directory_with_system_file_picker()
+  open_directory_with_system_file_picker("Change Project Folder", false, function(abs_path)
+    if common.path_equals(abs_path[1], core.root_project().path) then return end
+    core.confirm_close_docs(core.docs, function(dirpath)
+      core.open_project_in_same_window(dirpath)
+    end, abs_path[1])
+  end)
+end
+
+local function open_project_directory()
+  open_directory("Open Project", false, function(abs_path)
     if common.path_equals(abs_path[1], core.root_project().path) then
       core.error("Directory %q is currently opened", abs_path[1])
       return
@@ -166,8 +182,26 @@ local function open_project_directory(use_dialog)
   end, true)
 end
 
-local function add_project_directory(use_dialog)
-  open_directory("Add Directory", use_dialog, true, function(abs_path)
+local function open_project_directory_with_system_file_picker()
+  open_directory_with_system_file_picker("Open Project", false, function(abs_path)
+    if common.path_equals(abs_path[1], core.root_project().path) then
+      core.error("Directory %q is currently opened", abs_path[1])
+      return
+    end
+    core.open_project_in_new_window(abs_path[1])
+  end)
+end
+
+local function add_project_directory()
+  open_directory("Add Directory", true, function(abs_path)
+    for _, dir in ipairs(abs_path) do
+      core.add_project(system.absolute_path(dir))
+    end
+  end)
+end
+
+local function add_project_directory_with_system_file_picker()
+  open_directory_with_system_file_picker("Add Directory", true, function(abs_path)
     for _, dir in ipairs(abs_path) do
       core.add_project(system.absolute_path(dir))
     end
@@ -224,58 +258,12 @@ command.add(nil, {
     })
   end,
 
-  ["core:find-command"] = function()
-    local commands = command.get_all_valid()
-    local status_labels = {}
-    for _, name in ipairs(commands) do
-      status_labels[name] = command.get_status_label(name)
-    end
-    core.global_prompt_bar:enter("Do Command", {
-      submit = function(text, item)
-        if item then
-          command.perform(item.command)
-        end
-      end,
-      suggest = function(text)
-        local res = {}
-        local matched = common.fuzzy_match(commands, text)
-        for i, name in ipairs(matched) do
-          local text = command.prettify_name(name)
-          local status = status_labels[name]
-          res[i] = {
-            text = text,
-            display_text = status and (text .. " " .. status) or text,
-            info = keymap.get_binding(name),
-            command = name,
-          }
-        end
-        return res
-      end
-    })
-  end,
-
-  ["core:new-doc"] = function()
-    core.root_panel:open_doc(core.open_doc())
-  end,
-
-  ["core:new-named-doc"] = function()
-    core.global_prompt_bar:enter("File name", {
-      submit = function(text)
-        core.root_panel:open_doc(core.open_doc(common.sanitize_prompt_path(text)))
-      end
-    })
-  end,
-
   ["core:open-file"] = function(label, selection_callback, allow_directories)
-    open_file(config.use_system_file_picker, label, selection_callback, allow_directories)
+    open_file(label, selection_callback, allow_directories)
   end,
 
-  ["core:open-file-picker"] = function()
-    open_file(true)
-  end,
-
-  ["core:open-file-global-prompt-bar"] = function()
-    open_file(false)
+  ["core:open-file-system-file-picker"] = function(label, selection_callback)
+    open_file_with_system_file_picker(label, selection_callback)
   end,
 
   ["core:open-log"] = function()
@@ -298,66 +286,30 @@ command.add(nil, {
   end,
 
   ["core:change-project-folder"] = function()
-    change_project_directory(config.use_system_file_picker)
+    change_project_directory()
   end,
 
-  ["core:change-project-folder-picker"] = function()
-    change_project_directory(true)
-  end,
-
-  ["core:change-project-folder-global-prompt-bar"] = function()
-    change_project_directory(false)
+  ["core:change-project-folder-system-file-picker"] = function()
+    change_project_directory_with_system_file_picker()
   end,
 
   ["core:open-project-folder"] = function()
-    open_project_directory(config.use_system_file_picker)
+    open_project_directory()
   end,
 
-  ["core:open-project-folder-picker"] = function()
-    open_project_directory(true)
-  end,
-
-  ["core:open-project-folder-global-prompt-bar"] = function()
-    open_project_directory(false)
+  ["core:open-project-folder-system-file-picker"] = function()
+    open_project_directory_with_system_file_picker()
   end,
 
   ["core:add-directory"] = function()
-    add_project_directory(config.use_system_file_picker)
+    add_project_directory()
   end,
 
-  ["core:add-directory-picker"] = function()
-    add_project_directory(true)
+  ["core:add-directory-system-file-picker"] = function()
+    add_project_directory_with_system_file_picker()
   end,
 
-  ["core:add-directory-global-prompt-bar"] = function()
-    add_project_directory(false)
-  end,
-
-  ["core:remove-directory"] = function()
-    local dir_list = {}
-    local n = #core.projects
-    for i = n, 2, -1 do
-      dir_list[n - i + 1] = core.projects[i].name
-    end
-    core.global_prompt_bar:enter("Remove Directory", {
-      submit = function(text, item)
-        text = common.home_expand(common.sanitize_prompt_path(item and item.text or text))
-        if not core.remove_project(text) then
-          core.error("No directory %q to be removed", text)
-        end
-      end,
-      suggest = function(text)
-        text = common.home_expand(common.sanitize_prompt_path(text))
-        return common.home_encode_list(common.dir_list_suggest(text, dir_list))
-      end
-    })
-  end,
-
-  ["core:view-documentation-help"] = function()
-    common.open_in_system("https://github.com/dcostap/anvil-editor")
-  end,
-
-  ["core:view-website"] = function()
+  ["core:open-project-github-page"] = function()
     common.open_in_system("https://github.com/dcostap/anvil-editor")
   end,
 })
@@ -379,12 +331,3 @@ command.add_toggle("core:toggle-line-numbers", {
     config.show_line_numbers = enabled
   end,
 })
-
-command.add_alias("core:open-file-commandview", "core:open-file-global-prompt-bar")
-command.add_alias("core:open-file-global_prompt_bar", "core:open-file-global-prompt-bar")
-command.add_alias("core:change-project-folder-commandview", "core:change-project-folder-global-prompt-bar")
-command.add_alias("core:change-project-folder-global_prompt_bar", "core:change-project-folder-global-prompt-bar")
-command.add_alias("core:open-project-folder-commandview", "core:open-project-folder-global-prompt-bar")
-command.add_alias("core:open-project-folder-global_prompt_bar", "core:open-project-folder-global-prompt-bar")
-command.add_alias("core:add-directory-commandview", "core:add-directory-global-prompt-bar")
-command.add_alias("core:add-directory-global_prompt_bar", "core:add-directory-global-prompt-bar")
