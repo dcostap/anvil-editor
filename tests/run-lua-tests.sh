@@ -41,13 +41,9 @@ fi
 
 cp "$anvil_exe" "$bindir/$exe_name"
 
-for module_name in core compat plugins colors fonts treesitter; do
+for module_name in core compat plugins colors fonts widget treesitter; do
   cp -R "$sourcedir/data/$module_name" "$datadir/"
 done
-
-if [ -d "$sourcedir/subprojects/widget" ]; then
-  cp -a "$sourcedir/subprojects/widget" "$datadir/"
-fi
 if [ -d "$sourcedir/subprojects/colors" ]; then
   cp -a "$sourcedir/subprojects/colors/colors" "$datadir/"
 fi

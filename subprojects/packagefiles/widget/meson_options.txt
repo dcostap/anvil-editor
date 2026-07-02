@@ -1,1 +1,0 @@
-option('data_dir', type : 'string', value : '/', description: 'Data directory of installation')

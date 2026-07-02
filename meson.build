@@ -413,11 +413,6 @@ foreach data_module : data_dirs
     endif
 endforeach
 
-# Pull in widgets if necessary
-if not fs.exists('data/widget/init.lua')
-    subproject('widget', default_options: ['data_dir='+anvil_datadir])
-endif
-
 # Pull extra languages
 if get_option('extra_languages')
     subproject('plugins', default_options: ['data_dir='+anvil_datadir])
