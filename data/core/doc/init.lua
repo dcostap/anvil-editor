@@ -1424,7 +1424,20 @@ function Doc:apply_edits(edits, opts)
 
   if changed then
     local first_line = transaction.changed_ranges[1] and transaction.changed_ranges[1].new_line1 or 1
-    update_clean_lines(self, first_line, #self.lines)
+    local clean_suffix = false
+    for _, range in ipairs(transaction.changed_ranges) do
+      if range.line_delta ~= 0 then
+        clean_suffix = true
+        break
+      end
+    end
+    if clean_suffix then
+      update_clean_lines(self, first_line, #self.lines)
+    else
+      for _, range in ipairs(transaction.changed_ranges) do
+        update_clean_lines(self, range.new_line1, range.new_line2)
+      end
+    end
     if self.highlighter.batch_notify then
       self.highlighter:batch_notify(transaction.changed_ranges)
     else

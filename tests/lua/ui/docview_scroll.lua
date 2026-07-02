@@ -170,6 +170,32 @@ test.describe("DocView selection scrolling", function()
     test.ok(thumb_w > 0 and thumb_h > 0, "expected overflowing unwrapped text to show a horizontal scrollbar thumb")
   end)
 
+  test.it("reuses unwrapped horizontal extent after ordinary same-line edits", function(context)
+    local lines = {}
+    for i = 1, 200 do
+      lines[i] = i == 150 and string.rep("m", 120) or ("line " .. i)
+    end
+    local view, doc = open_editor(context, table.concat(lines, "\n"))
+    disable_wrapping(view)
+
+    local original_get_col_x_offset = view.get_col_x_offset
+    local calls = 0
+    view.get_col_x_offset = function(self, ...)
+      calls = calls + 1
+      return original_get_col_x_offset(self, ...)
+    end
+
+    view:get_h_scrollable_size()
+    test.ok(calls >= #lines, "expected initial horizontal extent calculation to inspect the document")
+
+    calls = 0
+    doc:set_selection(1, 1, 1, 1)
+    doc:text_input("x")
+    view:get_h_scrollable_size()
+
+    test.ok(calls < 20, "expected horizontal extent cache to avoid a full document rescan after a small edit")
+  end)
+
   test.it("scroll_to_make_visible reveals an off-screen same-line range horizontally", function(context)
     local prefix = string.rep("x", 120)
     local view = open_editor(context, prefix .. "NEEDLE\n")

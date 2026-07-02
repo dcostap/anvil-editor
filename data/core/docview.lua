@@ -961,33 +961,60 @@ local function get_unwrapped_line_width(self, line)
   return width
 end
 
+local function cache_unwrapped_max_line(cache, doc, line, width)
+  cache.line = line
+  cache.line_text = doc.lines[line] or ""
+  cache.width = width
+  cache.line_count = #doc.lines
+end
+
+local function update_unwrapped_width_from_active_lines(self, cache)
+  local function consider(line)
+    if not line or line < 1 or line > #self.doc.lines then return end
+    local width = get_unwrapped_line_width(self, line)
+    if width > cache.width then
+      cache_unwrapped_max_line(cache, self.doc, line, width)
+    end
+  end
+
+  for _, line1, _, line2 in self.doc:get_selections() do
+    consider(line1)
+    consider(line2)
+  end
+end
+
 local function get_max_unwrapped_line_width(self)
   local font = self:get_font()
   local _, indent_size = self.doc:get_indent_info()
   local font_size = font:get_size()
-  local change_id = self.doc:get_change_id()
   local cache = self.__unwrapped_content_width_cache
   if cache
-    and cache.change_id == change_id
     and cache.font == font
     and cache.font_size == font_size
     and cache.indent_size == indent_size
+    and cache.line_count == #self.doc.lines
+    and cache.line
+    and self.doc.lines[cache.line] == cache.line_text
   then
+    update_unwrapped_width_from_active_lines(self, cache)
     return cache.width
   end
 
-  local max_width = 0
-  for line = 1, #self.doc.lines do
-    max_width = math.max(max_width, get_unwrapped_line_width(self, line))
-  end
-  self.__unwrapped_content_width_cache = {
-    change_id = change_id,
+  cache = {
     font = font,
     font_size = font_size,
     indent_size = indent_size,
-    width = max_width,
+    width = 0,
+    line_count = #self.doc.lines,
   }
-  return max_width
+  for line = 1, #self.doc.lines do
+    local width = get_unwrapped_line_width(self, line)
+    if width > cache.width then
+      cache_unwrapped_max_line(cache, self.doc, line, width)
+    end
+  end
+  self.__unwrapped_content_width_cache = cache
+  return cache.width
 end
 
 ---Get the scrollable width for unwrapped document text.
