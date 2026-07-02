@@ -111,8 +111,13 @@ local function open_location(result, opts)
     if view.expand_folds_covering_range then view:expand_folds_covering_range(range.line1, range.col1, range.line2, range.col2, "language-location") end
     view.doc:set_selection(range.line1, range.col1, range.line2, range.col2)
   elseif result.line and result.col then
-    if view.expand_folds_at_line then view:expand_folds_at_line(result.line, "language-location") end
-    view.doc:set_selection(result.line, result.col)
+    local line2, col2 = result.line2 or result.line, result.col2 or result.col
+    if view.expand_folds_covering_range then
+      view:expand_folds_covering_range(result.line, result.col, line2, col2, "language-location")
+    elseif view.expand_folds_at_line then
+      view:expand_folds_at_line(result.line, "language-location")
+    end
+    view.doc:set_selection(result.line, result.col, line2, col2)
   end
   if history then history.record_place(navigation_anchor, { reason = "language-location" }) end
   return true
@@ -132,6 +137,9 @@ local function lsp_result_to_picker_item(result, symbol)
     col = (lsp_range.start and lsp_range.start.character or 0) + 1
     line2 = (lsp_range["end"] and lsp_range["end"].line or (line - 1)) + 1
     col2 = (lsp_range["end"] and lsp_range["end"].character or (col - 1)) + 1
+  elseif result.line and result.col then
+    line, col = result.line, result.col
+    line2, col2 = result.line2, result.col2
   end
   local text = ""
   local fh = io.open(path, "rb")
@@ -195,6 +203,62 @@ local function show_locations_picker(title, status, items)
   return fuzzy.open_static_results(title, items or {}, { status = status or title })
 end
 
+local function doc_language_id(doc)
+  return doc and doc.treesitter and doc.treesitter.language_id
+end
+
+local function tree_sitter_symbol_location(symbol)
+  if type(symbol) ~= "table" then return nil end
+  local name_start = symbol.name_range and symbol.name_range.start
+  local name_end = symbol.name_range and symbol.name_range["end"]
+  local line = name_start and name_start.line or symbol.start_line
+  local col = name_start and name_start.col or symbol.start_col
+  if not line or not col then return nil end
+  local line2 = name_end and name_end.line or symbol.end_line or line
+  local col2 = name_end and name_end.col or symbol.end_col or col
+  return {
+    path = symbol.path or symbol.abs_filename,
+    line = line,
+    col = col,
+    line2 = line2,
+    col2 = col2,
+    selection_range = { line1 = line, col1 = col, line2 = line2, col2 = col2 },
+    name = symbol.name,
+    kind = symbol.kind,
+    language_id = symbol.language_id,
+  }
+end
+
+local function exact_workspace_symbol_locations(symbol_index, symbol, doc)
+  local results, reason, status = symbol_index.workspace_symbols(symbol, {
+    limit = 200,
+    allow_stale = true,
+  })
+  if status ~= "fresh" and status ~= "stale" then return nil, reason, nil, status end
+
+  local exact = {}
+  local current_language = doc_language_id(doc)
+  for _, candidate in ipairs(results or {}) do
+    if candidate.name == symbol then
+      local location = tree_sitter_symbol_location(candidate)
+      if location then exact[#exact + 1] = location end
+    end
+  end
+
+  if current_language then
+    local same_language = {}
+    for _, location in ipairs(exact) do
+      if location.language_id == current_language then same_language[#same_language + 1] = location end
+    end
+    if #same_language > 0 then exact = same_language end
+  end
+
+  if status == "stale" and reason == "indexing" then
+    return nil, reason, nil, "pending"
+  end
+  return exact, reason, nil, status
+end
+
 local function request_until_ready(request_fn, on_ready, on_unavailable, opts)
   opts = opts or {}
   local deadline = system.get_time() + navigation_timeout(opts)
@@ -229,9 +293,13 @@ function language.goto_declaration(view)
   local history = navigation_history()
   local navigation_anchor = history and history.capture_current_place()
   local line, col = doc:get_selection()
-  request_until_ready(function()
-    return intelligence.declarations(doc, line, col)
-  end, function(results)
+
+  local function show_no_declaration(reason)
+    visible_log("No declaration found for %s", symbol)
+    quiet_log("Language declaration unavailable for %s: %s", symbol, tostring(reason))
+  end
+
+  local function open_declaration_results(results)
     if #results == 1 then
       open_location(results[1], { view = view, navigation_anchor = navigation_anchor })
     elseif #results > 1 then
@@ -241,23 +309,47 @@ function language.goto_declaration(view)
         if item then items[#items + 1] = item end
       end
       show_locations_picker("Declarations: " .. symbol, string.format("%d declarations", #items), items)
-    else
-      local fallback, reason = intelligence.local_declaration(doc, line, col)
-      if fallback then
-        open_location(fallback, { view = view, navigation_anchor = navigation_anchor })
-      else
-        visible_log("No declaration found for %s", symbol)
-        quiet_log("Language declaration unavailable for %s: %s", symbol, tostring(reason))
-      end
     end
-  end, function(reason)
-    local fallback = intelligence.local_declaration(doc, line, col)
+  end
+
+  local function try_workspace_declaration(reason)
+    local ok, symbol_index = pcall(require, "core.treesitter.symbol_index")
+    if not ok or not symbol_index or not symbol_index.workspace_symbols then
+      show_no_declaration(reason)
+      return
+    end
+    request_until_ready(function()
+      return exact_workspace_symbol_locations(symbol_index, symbol, doc)
+    end, function(results)
+      if #results > 0 then
+        open_declaration_results(results)
+      else
+        show_no_declaration(reason)
+      end
+    end, function(workspace_reason)
+      show_no_declaration(workspace_reason or reason)
+    end)
+  end
+
+  local function try_local_declaration(reason)
+    local fallback, fallback_reason = intelligence.local_declaration(doc, line, col)
     if fallback then
       open_location(fallback, { view = view, navigation_anchor = navigation_anchor })
     else
-      visible_log("No declaration found for %s", symbol)
-      quiet_log("Language declaration unavailable for %s: %s", symbol, tostring(reason))
+      try_workspace_declaration(fallback_reason or reason)
     end
+  end
+
+  request_until_ready(function()
+    return intelligence.declarations(doc, line, col)
+  end, function(results)
+    if #results > 0 then
+      open_declaration_results(results)
+    else
+      try_local_declaration("no-declaration-results")
+    end
+  end, function(reason)
+    try_local_declaration(reason)
   end)
   return true
 end
