@@ -785,20 +785,48 @@ function update_suggestions()
   local doc = core.active_view.doc
   local filename = doc and doc.filename or ""
 
+  suggestions = {}
+  desc_rect = nil
+
   local assigned_sym = {}
 
   local lsp_available = has_lsp_completion(doc)
 
   -- get all relevant suggestions for given filename
   local items = {}
+
+  local function item_richness(item)
+    if type(item) ~= "table" then return 0 end
+    local score = 0
+    if item.preview_text and item.preview_text ~= "" then score = score + 8 end
+    if item.source_line and item.source_col then score = score + 4 end
+    if item.autocomplete_priority then score = score + 1 end
+    return score
+  end
+
+  local function add_candidate_item(item, replace_if_richer)
+    if not suggestion_within_length(item) then return false end
+    local key = suggestion_text(item)
+    if key == "" then return false end
+    local existing = assigned_sym[key]
+    if existing then
+      if replace_if_richer and item_richness(item) > item_richness(existing.item) then
+        items[existing.index] = item
+        assigned_sym[key] = { item = item, index = existing.index }
+        return true
+      end
+      return false
+    end
+    items[#items + 1] = item
+    assigned_sym[key] = { item = item, index = #items }
+    return true
+  end
+
   if not lsp_available and force_basic_suggestions then
     for _, v in pairs(autocomplete.map) do
       if common.match_pattern(filename, v.files) then
         for _, item in pairs(v.items) do
-          if suggestion_within_length(item) then
-            table.insert(items, item)
-            assigned_sym[suggestion_text(item)] = true
-          end
+          add_candidate_item(item, false)
         end
       end
     end
@@ -849,7 +877,7 @@ function update_suggestions()
     end
 
     local function add_text_symbol(name, info, icon, priority, preview_text, preview_name_span, no_icon, source)
-      if name and name ~= "" and #name <= max_symbol_length() and not assigned_sym[name] then
+      if name and name ~= "" and #name <= max_symbol_length() then
         local item = {
           text = name,
           info = info or "normal",
@@ -860,8 +888,7 @@ function update_suggestions()
           no_icon = no_icon,
         }
         for k, v in pairs(source or {}) do item[k] = v end
-        table.insert(items, setmetatable(item, mt))
-        assigned_sym[name] = true
+        add_candidate_item(setmetatable(item, mt), item_richness(item) > 0)
       end
     end
 
@@ -927,7 +954,7 @@ function update_suggestions()
         if project_status == "fresh" or project_status == "stale" then
           for _, symbol in ipairs(project_symbols or {}) do
             local name = symbol.name
-            if name and name ~= "" and #name <= max_symbol_length() and not assigned_sym[name] then
+            if name and name ~= "" and #name <= max_symbol_length() then
               local item = {
                 text = name,
                 info = symbol.kind or "project symbol",
@@ -936,8 +963,7 @@ function update_suggestions()
                 no_icon = true,
               }
               for k, v in pairs(source_location_fields(symbol) or {}) do item[k] = v end
-              table.insert(items, setmetatable(item, mt))
-              assigned_sym[name] = true
+              add_candidate_item(setmetatable(item, mt), item_richness(item) > 0)
             end
           end
         end
