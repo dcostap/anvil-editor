@@ -7,9 +7,14 @@ local command = require "core.command"
 
 local SS = {}
 
+local function get_doc_line_text(doc, line)
+  if doc.get_utf8_line then return doc:get_utf8_line(line) end
+  return doc.lines[line] or ""
+end
+
 -- Ignore lines with only the opening bracket
 function SS.get_level_ignore_open_bracket(doc, line)
-  if doc.lines[line]:match("^%s*{%s*$") then
+  if get_doc_line_text(doc, line):match("^%s*{%s*$") then
     return -1
   end
   return SS.get_level_default(doc, line)
@@ -18,7 +23,7 @@ end
 local filetype_overrides = {
   ["Markdown"] = function(doc, line)
     -- Use the markdown heading level only
-    local indent = string.match(doc.lines[line], "^#+() .+")
+    local indent = string.match(get_doc_line_text(doc, line), "^#+() .+")
     return indent or math.huge
   end,
   ["C"] = SS.get_level_ignore_open_bracket,
@@ -60,7 +65,7 @@ local regex_pattern = regex.compile([[(\s*)\S]])
 ---@param line integer
 ---@return integer #>0 for lines with indents and text, 0 for lines with no indent, -1 for lines without any non-whitespace characters
 function SS.get_level_from_indent(doc, line)
-  local text = doc.lines[line]
+  local text = get_doc_line_text(doc, line)
   local s, e = regex.find_offsets(regex_pattern --[[@as regex]], text)
   return s and e - s or -1
 end
