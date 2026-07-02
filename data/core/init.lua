@@ -2712,7 +2712,7 @@ local run_next_frame_time = 0
 local perf_last_redraw_time = nil
 local perf_smoothed_fps = 0
 local focus_diag_last_state = nil
-local focus_diag_last_anomaly_log = 0
+local focus_diag_last_anomaly_key = nil
 
 ---Set up the run-loop state.  Called once from C (SDL_AppInit → init_lua_state)
 ---via the init_code that also calls core.init().  SDL_AppIterate then drives the
@@ -2962,9 +2962,15 @@ function core.run_step(options)
     focus_diag_last_state = window_has_focus
   end
 
-  if active_view_is_docview and not window_has_focus then
-    local now = system.get_time()
-    if now - focus_diag_last_anomaly_log >= 2 then
+  if window_has_focus then
+    focus_diag_last_anomaly_key = nil
+  elseif active_view_is_docview then
+    local anomaly_key = string.format(
+      "%s:%s",
+      tostring(active_view),
+      tostring(active_doc and (active_doc.abs_filename or active_doc.filename) or "")
+    )
+    if focus_diag_last_anomaly_key ~= anomaly_key then
       local line1, col1, line2, col2
       if active_doc then
         line1, col1, line2, col2 = active_doc:get_selection()
@@ -2977,7 +2983,7 @@ function core.run_step(options)
         tostring(pending_events_at_start), queue_depth,
         system.window_focus_diagnostics and core.window and system.window_focus_diagnostics(core.window) or "unavailable"
       )
-      focus_diag_last_anomaly_log = now
+      focus_diag_last_anomaly_key = anomaly_key
     end
   end
 
