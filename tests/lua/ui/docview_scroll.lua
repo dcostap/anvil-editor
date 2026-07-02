@@ -156,6 +156,20 @@ test.describe("DocView selection scrolling", function()
     test.equal(view.scroll.to.y, start_scroll)
   end)
 
+  test.it("shows a horizontal scrollbar for unwrapped text that overflows right", function(context)
+    local view = open_editor(context, string.rep("x", 120))
+    disable_wrapping(view)
+    local line_width = view:get_gutter_width() + view:get_col_x_offset(1, #view.doc.lines[1] + 1)
+    test.ok(line_width > view.size.x, "expected test line to overflow horizontally")
+
+    view:update_scrollbar()
+
+    local _, _, track_w, track_h = view.h_scrollbar:get_track_rect()
+    local _, _, thumb_w, thumb_h = view.h_scrollbar:get_thumb_rect()
+    test.ok(track_w > 0 and track_h > 0, "expected overflowing unwrapped text to show a horizontal scrollbar track")
+    test.ok(thumb_w > 0 and thumb_h > 0, "expected overflowing unwrapped text to show a horizontal scrollbar thumb")
+  end)
+
   test.it("scroll_to_make_visible reveals an off-screen same-line range horizontally", function(context)
     local prefix = string.rep("x", 120)
     local view = open_editor(context, prefix .. "NEEDLE\n")

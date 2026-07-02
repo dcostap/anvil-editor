@@ -725,6 +725,7 @@ function DocView:new(doc)
   })
   register_view(self)
   self.doc.cache.col_x = {}
+  self.doc.cache.line_width = {}
   self.doc.cache.ulen = {}
   self.font = "code_font"
   self.last_x_offset = {}
@@ -928,11 +929,76 @@ function DocView:get_scrollable_size()
 end
 
 
----Get the scrollable width (infinite for horizontal scrolling).
----@return number width Always returns math.huge
+local function get_unwrapped_line_width(self, line)
+  local cache = self.doc.cache.line_width
+  if not cache then
+    cache = {}
+    self.doc.cache.line_width = cache
+  end
+
+  local text = self.doc.lines[line] or ""
+  local font = self:get_font()
+  local _, indent_size = self.doc:get_indent_info()
+  local font_size = font:get_size()
+  local entry = cache[line]
+  if entry
+    and entry.text == text
+    and entry.font == font
+    and entry.font_size == font_size
+    and entry.indent_size == indent_size
+  then
+    return entry.width
+  end
+
+  local width = self:get_col_x_offset(line, #text + 1)
+  cache[line] = {
+    text = text,
+    font = font,
+    font_size = font_size,
+    indent_size = indent_size,
+    width = width,
+  }
+  return width
+end
+
+local function get_max_unwrapped_line_width(self)
+  local font = self:get_font()
+  local _, indent_size = self.doc:get_indent_info()
+  local font_size = font:get_size()
+  local change_id = self.doc:get_change_id()
+  local cache = self.__unwrapped_content_width_cache
+  if cache
+    and cache.change_id == change_id
+    and cache.font == font
+    and cache.font_size == font_size
+    and cache.indent_size == indent_size
+  then
+    return cache.width
+  end
+
+  local max_width = 0
+  for line = 1, #self.doc.lines do
+    max_width = math.max(max_width, get_unwrapped_line_width(self, line))
+  end
+  self.__unwrapped_content_width_cache = {
+    change_id = change_id,
+    font = font,
+    font_size = font_size,
+    indent_size = indent_size,
+    width = max_width,
+  }
+  return max_width
+end
+
+---Get the scrollable width for unwrapped document text.
+---@return number width Total horizontal scrollable width in pixels
 function DocView:get_h_scrollable_size()
   if self.wrapping_enabled then return 0 end
-  return math.huge
+  local gutter_width = self:get_gutter_width()
+  local _, _, v_scroll_w = self.v_scrollbar:get_track_rect()
+  local right_padding = math.max(style.padding.x, v_scroll_w or 0)
+  local content_width = gutter_width + get_max_unwrapped_line_width(self) + right_padding
+  return math.max(self.size.x, content_width)
 end
 
 
@@ -2383,6 +2449,8 @@ function DocView:update()
     self.cache_font ~= font or self.cache_font_size ~= font:get_size()
   then
     self.doc.cache.col_x = {}
+    self.doc.cache.line_width = {}
+    self.__unwrapped_content_width_cache = nil
     self.cache_font = font
     self.cache_font_size = font:get_size()
     self.cache_indent_size = indent_size
