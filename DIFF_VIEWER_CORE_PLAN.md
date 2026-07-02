@@ -216,51 +216,78 @@ Completed:
 
 ### 1. Tighten request-scoped state compatibility on mutable side replacement
 
-Current concern:
+Chosen policy:
 
-- `DiffRequestController:reload()` preserves fold state across plain reloads.
-- Side replacement currently needs a stricter compatibility rule so state like `diff_fold_state` is not blindly carried from unrelated side content into the replacement request.
+- Plain controller reload with unchanged side content preserves safe viewer state such as fold state.
+- Any semantic side replacement clears fold state, because diff folds depend on both sides.
+- Side replacement focuses the replaced side and resets scroll/caret instead of attempting to preserve stale geometry.
+- Cancelled replacement leaves the existing view, focus, scroll, caret, and fold state untouched.
 
-Finish by deciding and implementing one of these policies:
+Content identity rule for this phase:
 
-- clear viewer state such as `diff_fold_state` whenever either side content changes semantically; or
-- attach a lightweight semantic content identity to each side and preserve fold/scroll/focus state only when both relevant sides are compatible.
+- file content identity: canonical absolute path.
+- document content identity: document instance, plus absolute filename when present.
+- text/blank content identity: generated chain-side identity that is reset when that side is replaced.
+- no content hash/text snapshot identity for now.
+
+Implementation work:
+
+- Add lightweight side content identity to mutable chain/request state.
+- Preserve `diff_fold_state` only on plain reload or when both side identities are compatible.
+- Clear `diff_fold_state` when either side identity changes.
+- Reset scroll/caret on side replacement and focus the replaced side.
 
 Tests to add:
 
 - replacing one side with an unrelated file clears old fold state.
 - plain controller reload with unchanged side content preserves fold state.
 - replacing a side while the other side is adopted does not leak stale fold state into unrelated content.
+- cancelled dirty replacement leaves focus, scroll/caret, and fold state untouched.
 
-### 2. Add remaining edge regression tests
+### 2. Add remaining high-value edge regression tests
 
-Most core behavior now has targeted coverage. Add the last high-value edge tests:
+Most core behavior now has targeted coverage. Add high-value regressions only; do not try to exhaust every theoretical fold/edit combination before finishing this phase.
+
+Tests to add:
 
 - changing default fold mode ignores incompatible cached fold state and uses the new default.
 - deleting/touching the folded unchanged block safely resets fold state.
 - identical repeated equal blocks reset instead of preserving incorrectly after edits.
 - manually collapsed and manually expanded fold exceptions both survive a compatible rediff, if both interactions are supported by the current UI/API.
-- closing a clean blank diff disposes owned untitled docs.
+- closing a clean blank diff silently disposes owned untitled docs.
 - direct external `Doc:apply_edits` on caller-owned content is observed and rediffs, not blocked globally.
 
 ### 3. Final edit-guard/read-only audit
 
-Audit remaining first-party direct document mutators and overlapping read-only systems before treating edit guards as complete:
+Chosen audit scope:
+
+- Guard first-party commands/plugins that mutate the active editor `DocView`.
+- Do not audit or refactor internal widget documents such as prompt/filetree documents unless they act on user editor documents.
+- Do not add a global per-`Doc` mutation gate for caller-owned documents.
+- Leave existing Git historical document and Command Output View read-only systems in place for now; document overlap rather than destabilizing unrelated systems.
+
+Audit targets:
 
 - older command/plugin paths that still mutate `core.active_view.doc` directly.
-- Git historical document read-only behavior.
-- Command Output View command guards.
-- any unusual first-party plugin mutators that should call `DocView:can_edit(...)` when acting on the active editor view.
+- unusual first-party active-editor plugin mutators that should call `DocView:can_edit(...)`.
+- overlapping read-only systems only enough to ensure Diff View behavior is not ambiguous.
 
-Do not add a global per-`Doc` mutation gate for caller-owned documents as part of this audit.
+### 4. Keep fold identity practical
 
-### 4. Refresh plan/tests after the final hardening pass
+Chosen policy:
+
+- Keep the current practical fold identity model.
+- Do not add a full hidden-block hash or hunk-signature identity unless a regression exposes a real issue.
+- Treat ambiguous or unsafe matches as reset-to-default rather than guessing.
+
+### 5. Refresh plan/tests after the final hardening pass
 
 After the remaining hardening is done:
 
 - update this plan again to move completed hardening items into the completed section.
+- keep this file as an active roadmap/status document, not an archive.
 - run the targeted validation checklist below.
-- run the broader Anvil suite if targeted tests are clean and no unrelated known failures block it.
+- run the broader Anvil suite best-effort at the end; report unrelated failures if any appear.
 
 ## Deferred / future work
 
@@ -322,7 +349,7 @@ meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/doc_save_as.lua -
 meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/intellij_actions.lua --print-errorlogs
 ```
 
-Use the full Anvil suite when unrelated known failures are cleared:
+Use the full Anvil suite as a best-effort final validation pass; report any unrelated failures instead of blocking indefinitely on them:
 
 ```sh
 meson test -C build-windows-x86_64 --suite anvil --print-errorlogs
