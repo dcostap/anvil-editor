@@ -856,7 +856,27 @@ function GitView:ensure_diff_view(tab)
     return tab.diff_view
   end
   local diffview = require "plugins.diffview"
-  local view = diffview.string_to_string(tab.left_text or "", tab.right_text or "", tab.left_name, tab.right_name, true)
+  local selected_file = tab.changed_files and tab.changed_files[tab.selected_file]
+  local view = diffview.open({
+    title = tab.title or "Commit Diff View",
+    kind = "git",
+    compare_type = diffview.Viewer.type.STRING_STRING,
+    contents = {
+      left = diffview.content.text(tab.left_text or "", { name = tab.left_name, editable = false }),
+      right = diffview.content.text(tab.right_text or "", { name = tab.right_name, editable = false }),
+    },
+    content_titles = { left = tab.left_name, right = tab.right_name },
+    editable_policy = "read-only",
+    metadata = {
+      source = "git",
+      tab = tab,
+      selected_file = selected_file,
+      selected_file_index = tab.selected_file,
+      selected_file_path = tab.selected_file_path or selected_file and changed_file_path(selected_file),
+      left_revision = tab.left,
+      right_revision = tab.right,
+    },
+  }, true)
   tab.diff_view = view
   tab.diff_view_seen_generation = tab.diff_generation
   if view.doc_view_a then view.doc_view_a.git_owner_view = self end

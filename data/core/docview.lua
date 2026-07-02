@@ -764,10 +764,12 @@ function DocView:new(doc)
   self.fold_generation = 0
   self.__fold_next_id = 0
   self.visual_row_extensions = {}
+  self.visual_row_providers = {}
   self.decoration_providers = {}
   self.poi_providers = {}
   self.selection_listeners = {}
   self.scroll_listeners = {}
+  self.fold_listeners = {}
   register_fold_view(self)
   linewrapping.register_docview(self)
   self:set_wrapping_enabled(config.plugins.linewrapping.enable_by_default)
@@ -1244,6 +1246,46 @@ function DocView:notify_scroll_listeners(reason)
   end
 end
 
+function DocView:add_fold_listener(id, fn)
+  assert(type(id) == "string" and id ~= "", "fold listener id must be a non-empty string")
+  assert(type(fn) == "function", "fold listener must be a function")
+  self.fold_listeners = self.fold_listeners or {}
+  self.fold_listeners[id] = fn
+end
+
+function DocView:remove_fold_listener(id)
+  if not self.fold_listeners or not self.fold_listeners[id] then return false end
+  self.fold_listeners[id] = nil
+  return true
+end
+
+function DocView:notify_fold_listeners(event, fold, reason)
+  for id, fn in pairs(self.fold_listeners or {}) do
+    local ok, err = pcall(fn, self, event, fold, reason)
+    if not ok then core.log_quiet("DocView fold listener %s failed for %s: %s", tostring(id), self.doc:get_name(), tostring(err)) end
+  end
+end
+
+function DocView:add_visual_row_provider(id, provider, opts)
+  assert(type(id) == "string" and id ~= "", "visual row provider id must be a non-empty string")
+  assert(type(provider) == "table", "visual row provider must be a table")
+  opts = opts or {}
+  self.visual_row_providers = self.visual_row_providers or {}
+  self.visual_row_providers[id] = { id = id, provider = provider, priority = opts.priority or provider.priority or 0 }
+  self:bump_fold_generation("visual-row-provider")
+end
+
+function DocView:remove_visual_row_provider(id)
+  if not self.visual_row_providers or not self.visual_row_providers[id] then return false end
+  self.visual_row_providers[id] = nil
+  self:bump_fold_generation("visual-row-provider-clear")
+  return true
+end
+
+function DocView:visual_row_provider_entries()
+  return sorted_provider_entries(self.visual_row_providers)
+end
+
 function DocView:set_visual_row_extension(id, extension)
   assert(type(id) == "string" and id ~= "", "visual row extension id must be a non-empty string")
   self.visual_row_extensions = self.visual_row_extensions or {}
@@ -1262,11 +1304,35 @@ function DocView:has_extra_visual_rows()
   for _, extension in pairs(self.visual_row_extensions or {}) do
     if extension then return true end
   end
+  for _, entry in pairs(self.visual_row_providers or {}) do
+    if entry then return true end
+  end
   return false
 end
 
 function DocView:has_composed_visual_rows()
   return self:has_collapsed_folds() or self:has_extra_visual_rows()
+end
+
+local function visual_row_count_from_provider(view, entry, method, line)
+  local provider = entry.provider
+  local fn = provider[method]
+  if fn then
+    local ok, count = pcall(fn, provider, view, line)
+    if ok then return math.max(0, math.floor(tonumber(count) or 0)) end
+    core.log_quiet("DocView visual row provider %s.%s failed for %s: %s", tostring(entry.id), method, view.doc:get_name(), tostring(count))
+    return 0
+  end
+  local table_name = method == "rows_before" and "before" or "after"
+  local rows = provider[table_name]
+  if type(rows) == "function" then
+    local ok, count = pcall(rows, line, view)
+    if ok then return math.max(0, math.floor(tonumber(count) or 0)) end
+    core.log_quiet("DocView visual row provider %s.%s failed for %s: %s", tostring(entry.id), table_name, view.doc:get_name(), tostring(count))
+  elseif rows then
+    return math.max(0, math.floor(tonumber(rows[line]) or 0))
+  end
+  return 0
 end
 
 function DocView:get_extra_visual_rows_before_line(line)
@@ -1278,6 +1344,9 @@ function DocView:get_extra_visual_rows_before_line(line)
     elseif before then
       total = total + math.max(0, math.floor(tonumber(before[line]) or 0))
     end
+  end
+  for _, entry in ipairs(self:visual_row_provider_entries()) do
+    total = total + visual_row_count_from_provider(self, entry, "rows_before", line)
   end
   return total
 end
@@ -1291,6 +1360,9 @@ function DocView:get_extra_visual_rows_after_line(line)
     elseif after then
       total = total + math.max(0, math.floor(tonumber(after[line]) or 0))
     end
+  end
+  for _, entry in ipairs(self:visual_row_provider_entries()) do
+    total = total + visual_row_count_from_provider(self, entry, "rows_after", line)
   end
   return total
 end
@@ -1484,8 +1556,10 @@ function DocView:add_fold_region(opts)
       if fold and reason ~= "new" then
         if not marker:is_valid() then
           fold.collapsed = false
+          if not fold.__removing then self:notify_fold_listeners("invalidate", fold, reason) end
         else
           self:refresh_fold_region(fold)
+          self:notify_fold_listeners("change", fold, reason)
         end
         self:bump_fold_generation("marker-" .. tostring(reason))
       end
@@ -1510,6 +1584,7 @@ function DocView:add_fold_region(opts)
     return a.line1 < b.line1
   end)
   self:bump_fold_generation("add")
+  self:notify_fold_listeners("add", fold, "add")
   return fold
 end
 
@@ -1517,9 +1592,11 @@ function DocView:remove_fold_region(id_or_fold, reason)
   for i = #(self.fold_regions or {}), 1, -1 do
     local fold = self.fold_regions[i]
     if fold == id_or_fold or fold.id == id_or_fold then
+      fold.__removing = true
       range_marker.remove(fold.marker)
       table.remove(self.fold_regions, i)
       self:bump_fold_generation(reason or "remove")
+      self:notify_fold_listeners("remove", fold, reason or "remove")
       return true
     end
   end
@@ -1528,9 +1605,11 @@ end
 
 function DocView:clear_fold_regions(reason)
   if not self.fold_regions or #self.fold_regions == 0 then return end
-  for _, fold in ipairs(self.fold_regions) do range_marker.remove(fold.marker) end
+  local old_folds = self.fold_regions
+  for _, fold in ipairs(old_folds) do fold.__removing = true; range_marker.remove(fold.marker) end
   self.fold_regions = {}
   self:bump_fold_generation(reason or "clear")
+  for _, fold in ipairs(old_folds) do self:notify_fold_listeners("remove", fold, reason or "clear") end
 end
 
 function DocView:expand_fold_region(id_or_fold, reason)
@@ -1543,6 +1622,7 @@ function DocView:expand_fold_region(id_or_fold, reason)
   if not fold or not fold.collapsed then return false end
   fold.collapsed = false
   self:bump_fold_generation(reason or "expand")
+  self:notify_fold_listeners("expand", fold, reason or "expand")
   return true
 end
 
@@ -1570,6 +1650,7 @@ function DocView:collapse_fold_region(id_or_fold, reason)
   end
   fold.collapsed = true
   self:bump_fold_generation(reason or "collapse")
+  self:notify_fold_listeners("collapse", fold, reason or "collapse")
   return true
 end
 

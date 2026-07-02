@@ -414,21 +414,6 @@ function DiffView:sync_selected()
 end
 
 function DiffView:on_mouse_pressed(button, x, y, clicks)
-  if button == "left" then
-    for _, side in ipairs({
-      { view = self.doc_view_a, folds = self.diff_folds_a },
-      { view = self.doc_view_b, folds = self.diff_folds_b },
-    }) do
-      local view = side.view
-      if x >= view.position.x and x <= view.position.x + view.size.x
-        and y >= view.position.y and y <= view.position.y + view.size.y
-      then
-        local line = view:resolve_screen_position(x, y)
-        local is_widget, fold = is_fold_widget_line(side.folds, line)
-        if is_widget then return self:expand_fold(fold) end
-      end
-    end
-  end
   if button == "left" and self.hovered_sync then
     self:sync(
       self.hovered_sync.line,
@@ -665,16 +650,16 @@ local function line_for_effective_row(doc_view, gaps, folds, row)
 end
 
 local function install_core_gap_rows_for_docview(doc_view, gaps)
-  if not doc_view or not doc_view.set_visual_row_extension then return end
+  if not doc_view or not doc_view.add_visual_row_provider then return end
   local before, any = {}, false
   for line, gap in pairs(gaps or {}) do
     local cumulative = math.max(0, math.floor(tonumber(gap[2]) or 0))
     if cumulative > 0 then before[line], any = cumulative, true end
   end
   if any then
-    doc_view:set_visual_row_extension("diff-gaps", { before = before })
+    doc_view:add_visual_row_provider("diff-gaps", { before = before }, { priority = 50 })
   else
-    doc_view:clear_visual_row_extension("diff-gaps")
+    doc_view:remove_visual_row_provider("diff-gaps")
   end
 end
 
@@ -742,12 +727,14 @@ function DiffView:rebuild_diff_folds()
     min_lines = config.plugins.diffview.fold_min_lines or 16,
   }
   local expanded = self.expanded_diff_folds or {}
+  self.rebuilding_diff_folds = true
   clear_core_diff_folds(self.doc_view_a)
   clear_core_diff_folds(self.doc_view_b)
   self.diff_folds_a = build_diff_folds(self.diff_equal_blocks or {}, "a", opts, expanded)
   self.diff_folds_b = build_diff_folds(self.diff_equal_blocks or {}, "b", opts, expanded)
   install_core_diff_folds(self.doc_view_a, self.diff_folds_a, "a")
   install_core_diff_folds(self.doc_view_b, self.diff_folds_b, "b")
+  self.rebuilding_diff_folds = false
 end
 
 function DiffView:toggle_folding()
@@ -765,6 +752,14 @@ function DiffView:expand_fold(fold)
   self:rebuild_diff_folds()
   core.redraw = true
   return true
+end
+
+function DiffView:on_core_fold_event(is_a, event, core_fold, reason)
+  if self.rebuilding_diff_folds or self.disposed then return end
+  if event ~= "expand" then return end
+  if not core_fold or core_fold.kind ~= "diff-view" then return end
+  local fold = core_fold.metadata and core_fold.metadata.diff_fold
+  if fold then self:expand_fold(fold) end
 end
 
 function DiffView:sync_scroll_from(doc_view, is_a)
@@ -1021,6 +1016,9 @@ function DiffView:install_view_integrations()
     side.view:add_scroll_listener(provider_id, function(view)
       self:sync_scroll_from(view, side.is_a)
     end)
+    side.view:add_fold_listener(provider_id, function(view, event, fold, reason)
+      self:on_core_fold_event(side.is_a, event, fold, reason)
+    end)
     side.view.doc:add_text_change_listener("diff-view-" .. side.id .. "-" .. tostring(self), {
       after_change = function()
         self:update_diff()
@@ -1040,6 +1038,8 @@ function DiffView:dispose_integrations()
     side.view:remove_poi_provider("diff-view")
     side.view:remove_selection_listener("diff-view")
     side.view:remove_scroll_listener("diff-view")
+    side.view:remove_fold_listener("diff-view")
+    side.view:remove_visual_row_provider("diff-gaps")
     side.view.doc:remove_text_change_listener("diff-view-" .. side.id .. "-" .. tostring(self))
   end
   self.diff_generation = (self.diff_generation or 0) + 1

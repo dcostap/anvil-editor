@@ -1,651 +1,465 @@
 # Diff View Core Integration Plan
 
-## Problem statement
+## Current status
 
-The current Diff View mostly behaves like two `DocView`s with diff behavior bolted on. It now uses some core `DocView` facilities, such as Fold Regions and virtual visual rows, but it still monkey-patches child `DocView` and `Doc` methods for drawing, scroll synchronization, selection synchronization, Point of Interest generation, and document change tracking.
+Diff View has been moved most of the way from a monkey-patched two-`DocView` plugin toward a first-class diff viewer built on core extension points.
 
-The target is a first-class, reusable Diff View architecture that feels like core Anvil functionality and can support:
+This plan now tracks only what is done and what still needs implementation. Historical exploration details have been removed.
 
-- Git-backed Commit Diff View content.
-- Text Diff View comparisons of arbitrary text.
-- future arbitrary Document-to-Document comparisons.
-- editable standalone diff views where either side can be edited freely.
-- side-by-side, and eventually unified or three-way diff modes.
+## Completed
 
-IntelliJ's architecture is the reference model: callers create diff requests from diffable contents; the diff framework chooses a viewer; viewers use normal editor instances plus clean editor decorations, listeners, folds, inlays/virtual rows, gutter actions, and explicit sync mappings.
+### Core listener/provider groundwork
 
-## Goals
+Completed:
 
-1. Remove `DiffView:patch_views()` style monkey-patching.
-2. Make Diff View a reusable request/content/viewer system instead of a string/file helper only.
-3. Move diff computation and line mapping into a reusable model.
-4. Add clean `DocView` extension hooks for diff decorations.
-5. Make paired scroll, paired Fold Regions, virtual rows, gutter actions, and POIs explicit core concepts or clean extension-provider concepts.
-6. Preserve existing Git View and Text Diff View user workflows while migrating internals.
+- `Doc` has per-document text change listeners:
+  - `add_text_change_listener(id, listener)`
+  - `remove_text_change_listener(id)`
+  - covers `apply_edits`, undo/redo transaction paths, and direct `raw_insert` / `raw_remove` mutations.
+- `DocView` has extension/listener APIs:
+  - decoration providers for line backgrounds, inline ranges, and provider text color.
+  - POI providers.
+  - selection listeners.
+  - scroll listeners.
+  - fold listeners.
+  - visual-row providers for line-height row counts.
+- Provider/listener registration is keyed by stable ids and supports deterministic priority ordering where ordering matters.
 
-## Non-goals for the first pass
+### Structural diff model
 
-- Reimplementing IntelliJ's whole diff feature set.
-- Three-way merge conflict resolution.
-- Pixel-perfect IntelliJ UI matching.
-- External diff tool integration.
-- Long-term compatibility shims for old internal `diffview` fields unless needed for in-repo migration.
-- Variable-height virtual rows in the first provider pass. Initial virtual rows should be one `DocView:get_line_height()` tall unless/until `DocView` scroll geometry is generalized.
+Completed:
 
-## Current code hotspots
+- `data/plugins/diff/model.lua` contains reusable structural diff state:
+  - per-side changes.
+  - inline changed ranges.
+  - equal blocks for fold candidates.
+  - side-to-side line mapping.
+  - hunk lookup/navigation helpers.
+- Diff computation is no longer embedded directly in `DiffView:update_diff()`.
+- `DiffView` still owns scheduling, generation IDs, stale-result rejection, listener/provider installation, layout, and disposal.
 
-- `data/plugins/diffview.lua`
-  - owns the current `DiffView` implementation.
-  - computes diff changes directly in the view.
-  - patches child `DocView` and `Doc` methods.
-  - draws diff line backgrounds by overriding `draw_line_text`.
-  - does paired scroll/caret sync manually.
-- `data/core/docview.lua`
-  - already has useful primitives:
-    - `set_visual_row_extension`
-    - Fold Regions
-    - composed visual row APIs
-    - Selection State support
-    - POI-compatible navigation surfaces
-- `data/core/doc/init.lua`
-  - has `Doc.register_text_transaction_handler`, but current raw undo/redo paths call `raw_insert` / `raw_remove` directly and are not fully covered by `on_text_transaction`.
-- `data/plugins/git/view.lua`
-  - currently creates Git diff panes via `diffview.string_to_string(...)`.
+Design decision:
 
-## Architectural decisions from plan review
+- `DiffModel` stays under `data/plugins/diff` for now. It can move to `data/core` later if another first-party feature needs it outside the diff plugin.
 
-### DiffView owns rediff initially
+### DiffView no longer monkey-patches child instances
 
-Do **not** introduce a vague separate `DiffSession` in the first implementation pass.
+Completed:
 
-Initial ownership should be:
+- Removed `DiffView:patch_views()` method replacement behavior.
+- Diff View no longer replaces child `DocView` or `Doc` methods for:
+  - drawing.
+  - scroll synchronization.
+  - selection/caret synchronization.
+  - text-change detection.
+  - POI generation.
+  - previous/next change navigation.
+- Diff rendering uses `DocView` decoration providers.
+- Diff POIs use `DocView` POI providers.
+- Diff rediff uses document text-change listeners.
+- Caret sync uses selection listeners.
+- Scroll sync uses scroll listeners.
+- Divider connectors and sync arrows remain owned by `DiffView`, because they are divider UI, not child gutter UI.
 
-- `DiffRequest`: immutable-ish description of what to compare.
-- `DiffContent`: source/resolution of side Documents.
-- `DiffView`: owns child `DocView`s, current `DiffModel`, rediff scheduling/cancellation, installed listeners/providers, focus, layout, divider drawing, and disposal.
-- `MutableDiffRequestHost` or `MutableDiffRequestChain`: later wrapper for blank diff/source-swapping workflows. It owns changing the active request and asks the active view to reload/recreate as needed.
+### Request/content normalization
 
-This mirrors IntelliJ more closely: the viewer owns model/editors/rediff; mutable request chains are a higher-level feature for swapping content sources.
+Completed:
 
-### Structural model vs visual helpers
+- Existing helper inputs are internally normalized into `DiffRequest` / `DiffContent` records.
+- Added public-ish construction helpers:
+  - `diffview.open(request, noshow)`
+  - `diffview.content.text(text, opts)`
+  - `diffview.content.file(path, opts)`
+  - `diffview.content.document(doc, opts)`
+  - `diffview.content.empty(opts)`
+- Legacy helpers still route through the new request path:
+  - `string_to_string`
+  - `file_to_file`
+  - `file_to_string`
+  - `string_to_file`
 
-`DiffModel` should own structural diff state only:
+Design decisions:
 
-- hunks.
-- line states.
-- inline ranges in document coordinates.
-- side-to-side line mapping.
-- fold candidates.
-- POIs expressed in document coordinates.
+- Text and empty contents create owned untitled documents.
+- Caller-provided document contents are caller-owned unless explicitly marked owned.
+- File contents create file-backed documents and are not owned by the Diff View.
 
-Visual geometry, such as screen ranges and row heights, belongs in `DiffView` or dedicated viewer helpers that can query the current `DocView`s, wrapping, folds, and virtual rows.
+### Initial Git View migration
 
-### Provider APIs must support multiple consumers
+Completed:
 
-All new `DocView` provider APIs need ordering/layering semantics. Diff will not be the only consumer forever. Providers should include a stable `id` plus a priority/layer where relevant.
+- Git View creates commit diff panes through `diffview.open(request, true)` instead of `string_to_string(...)`.
+- Git requests include metadata for:
+  - selected changed file.
+  - selected file path/index.
+  - left/right revision endpoints.
+  - read-only policy.
 
-### Core listener APIs are prerequisites, not cleanup details
+### Initial visual-row providers
 
-Before removing monkey patches, core must expose clean listeners for:
+Completed:
 
-- document text changes, including raw insert/remove and undo/redo paths.
-- Selection State changes for a specific `DocView`.
-- Fold Region expand/collapse/removal changes, if paired folds are implemented through callbacks.
+- Added `DocView:add_visual_row_provider(id, provider, opts)` and `remove_visual_row_provider(id)`.
+- Diff gap/alignment rows use the provider API instead of direct `set_visual_row_extension` calls.
 
-## Target architecture
+Current limitation:
 
-```text
-DiffContent
-  - Document content
-  - file content
-  - text content
-  - empty content
+- Providers currently expose line-height row counts only. They do not yet expose row objects, drawing callbacks, or hit-testing.
 
-DiffRequest
-  - title
-  - left/right/base contents
-  - content titles
-  - editable/read-only policy
-  - initial focus/scroll hints
-  - extension/user data
+### Initial paired fold listeners
 
-DiffView
-  - owns layout and child DocViews
-  - owns current DiffModel
-  - owns rediff lifecycle and cancellation
-  - owns installed Doc/DocView listeners and providers
-  - owns divider drawing and focus routing
+Completed:
 
-MutableDiffRequestHost / MutableDiffRequestChain
-  - optional later wrapper for blank/source-swapping workflows
-  - owns replacing request contents and reloading the DiffView
+- Added `DocView:add_fold_listener(id, fn)` and `remove_fold_listener(id)`.
+- Fold listeners fire for fold add/remove/expand/collapse/change/invalidate events.
+- Diff paired fold expansion now reacts through fold listeners instead of intercepting fold-widget clicks before `DocView` handles them.
 
-DiffModel
-  - computes hunks
-  - owns side line mappings
-  - owns inline ranges
-  - owns fold candidates
-  - owns POIs and overview markers in document coordinates
+Current limitation:
 
-DocView extension providers
-  - line backgrounds
-  - inline highlights
-  - gutter actions
-  - overview markers
-  - visual row providers
-  - Fold Region groups/callbacks
-  - POIs
-```
+- Fold state is still preserved by equal-block index, not by stable content identity.
 
-## Proposed new concepts
+## Remaining work
 
-### DiffContent
+### 1. Rich visual-row provider objects
 
-A diffable input. Initial variants:
+Current state:
 
-- `document`: wraps an existing `Doc`.
-- `text`: creates an untitled `Doc` from text.
-- `file`: opens a file-backed `Doc`.
-- `empty`: represents a missing side for additions/deletions.
+- Visual-row providers support only count-style line-height rows before/after document lines.
+- Current count semantics are cumulative for `before[line]`: a diff gap provider can say "there are N total extra rows before this document line" and `DocView` computes the per-line delta.
 
-Fields to support early:
+Finish by adding provider-owned row objects while preserving existing count providers.
 
-- `doc`
-- `text`
-- `filename`
-- `name`
-- `syntax_hint`
-- `editable`
-- `read_only_reason`
-- `line_number_base` or line number converter later
-
-### DiffRequest
-
-A display request independent of UI placement.
-
-Fields to support early:
-
-- `title`
-- `contents = { left, right }`
-- `content_titles = { left, right }`
-- `kind = "text" | "git" | "blank" | ...`
-- `preferred_focus_side`
-- `editable_policy`
-- `metadata`
-
-### MutableDiffRequestHost / MutableDiffRequestChain
-
-Needed for standalone blank diff behavior, but not part of the first extraction.
-
-Responsibilities:
-
-- replace left/right content from file, recent text, or empty editable Document.
-- reload/recreate the active DiffView without losing the surrounding tab/window/tool placement.
-- persist source-selection state for blank diff if desired.
-
-### DiffModel
-
-Owns computed diff state:
-
-- `hunks`
-- per-side line states: equal/insert/delete/modify
-- inline changed ranges
-- side-to-side line mapping
-- fold candidates for unchanged regions
-- POIs
-
-The model should answer structural questions like:
-
-- `line_state(side, line)`
-- `inline_ranges(side, line)`
-- `hunk_at(side, line)`
-- `next_hunk(side, line, direction)`
-- `map_line(source_side, line)`
-- `map_range(source_side, line)`
-
-The model should **not** answer screen geometry questions like `visual_range_for_hunk`; those belong to `DiffView`/`DocView` helpers.
-
-## DocView and Doc APIs to add or harden
-
-### Decoration providers
-
-Add a provider API instead of overriding draw methods.
-
-Candidate API shape:
+Provider API:
 
 ```lua
-doc_view:add_decoration_provider(id, provider, opts)
-doc_view:remove_decoration_provider(id)
+provider:visual_rows(view, line, placement, previous_line_total) -> {
+  {
+    id = "stable-row-id",
+    kind = "diff-gap" | "action" | string,
+    height_rows = 1,
+    draw = function(view, row, x, y, w, h) end,
+    hit_test = function(view, row, x, y) end,
+    on_click = function(view, row, button, x, y, clicks) end,
+    metadata = {},
+  }
+}
 ```
 
-Provider capabilities:
+Core composition contract:
 
-- `line_background(line, row)`
-- `inline_ranges(line)`
-- `gutter_markers(line)`
-- `overview_markers()`
-- `points_of_interest(opts)`
-- `line_hint(line)` if useful later
-
-Provider options should include at least:
-
-- `priority` or `layer` for deterministic ordering.
-- `owner` / `disposable` if a disposal convention is introduced.
-
-Diff View should provide diff decorations through this API.
-
-### Gutter/action providers
-
-Diff sync/apply arrows currently live inside the `draw_line_text` monkey patch. They need their own clean route.
-
-Candidate approaches:
-
-- include `gutter_markers(line)` in decoration providers; or
-- add a separate `add_gutter_action_provider(id, provider, opts)`.
-
-The provider must support:
-
-- icon/text drawing near a line or hunk.
-- hover state.
-- click hit-testing.
-- tooltip/action text later.
-- deterministic ordering with other gutter consumers.
-
-### Virtual visual row providers
-
-Current `set_visual_row_extension` supports counts and is already used for diff gap rows. The missing pieces are identity, draw callbacks, and hit-testing. Do not generalize to arbitrary pixel heights in the first pass.
-
-Candidate API shape:
+- Rows are still one `DocView:get_line_height()` tall. Arbitrary pixel-height rows are not part of this phase.
+- Count providers stay supported:
+  - `before[line]` keeps its existing cumulative meaning.
+  - `rows_before(view, line)` may return either a cumulative count or row objects; object-returning providers should be per-anchor objects.
+  - legacy anonymous count rows are synthesized as internal row entries with generated ids.
+- Object rows are anchored to a document line plus placement:
+  - `placement = "before"` rows appear before that line's fold/line rows.
+  - `placement = "after"` rows appear after that line's fold/line rows. Intermediate `after` rows must be included, not only trailing EOF rows.
+- Row ordering is deterministic:
+  - provider priority.
+  - provider id.
+  - row order returned by that provider.
+- `DocView:get_visual_row_entry(row)` must return provider row entries like:
 
 ```lua
-doc_view:add_visual_row_provider(id, provider, opts)
-doc_view:remove_visual_row_provider(id)
+{
+  type = "provider",
+  provider_id = id,
+  line = line,
+  placement = "before" | "after",
+  row = absolute_row,
+  row_in_provider = n,
+  provider_row = row_object,
+}
 ```
 
-Initial provider capabilities:
+- Drawing should dispatch provider row `draw(...)` for visible provider rows before ordinary line text drawing.
+- Mouse resolution should preserve provider row identity. A click on a provider row should call `row.hit_test` / `row.on_click` before falling back to ordinary document-line selection.
+- Diff gap rows can remain anonymous blank rows until a visible action row is needed.
 
-- line-height rows before/after a Document line.
-- row kind/id.
-- optional draw callback.
-- optional hit-test/click callback.
+Tests to add/update:
 
-Use this for empty-side alignment rows and, later, richer action rows.
+- provider row draw callback runs for visible extra rows.
+- click hit-testing resolves to the provider row and does not start normal text selection.
+- wrapped document lines plus before/after provider rows compose correctly.
+- count-style diff gap providers remain compatible.
+- provider removal restores ordinary `DocView` row counts and hit-testing.
 
-Variable-height rows require a separate `DocView` scroll geometry project because current composed rows assume every row is one line height.
+### 2. Stable diff fold identity
 
-### Fold Region groups and callbacks
+Current state:
 
-Diff folds must be paired. Expanding the left Fold Region should expand the matching right Fold Region.
+- Diff fold expansion state is keyed by equal-block index.
+- Edits can shift/reorder equal blocks, so expansion state can be lost or applied to the wrong block.
 
-Possible API:
+Finish by replacing index-only fold preservation with stable identity matching.
+
+Identity model:
+
+- Primary identity must be content/neighbor based, not position based.
+- Primary identity fields:
+  - previous hunk signature, if present.
+  - next hunk signature, if present.
+  - normalized first visible unchanged line in the candidate.
+  - normalized last visible unchanged line in the candidate.
+  - hidden-line count bucket/exact count, used only when it improves uniqueness.
+- Position fields such as side starts/counts are **tie-breakers only**. They must not be part of the strict identity key, because insertion before a fold shifts positions.
+- Hunk signatures should be small and stable:
+  - hunk tag.
+  - first changed line text hash/summary on both sides when available.
+  - last changed line text hash/summary on both sides when available.
+  - hunk changed-line counts.
+- Ambiguity handling:
+  - Build candidate identities for old expanded folds and new fold candidates.
+  - If exactly one new candidate matches an old identity, preserve expansion.
+  - If zero candidates match, reset to default fold behavior.
+  - If multiple candidates match, use position as a tie-breaker only if it chooses one clearly nearest candidate; otherwise reset to default fold behavior.
+- Keep numeric `index` only for diagnostics/display. Do not use it as persisted expansion state.
+
+Tests to add:
+
+- expanding a long unchanged region survives insertion before the region.
+- expanding a region does not expand a different equal block after repeated-content edits.
+- deleting/touching the folded unchanged block safely resets fold state.
+- identical repeated equal blocks become ambiguous and reset instead of preserving incorrectly.
+
+### 3. Public DiffRequest / DiffContent API hardening
+
+Current state:
+
+- Request/content helpers exist and legacy helpers route through them.
+- API is usable but not documented as stable.
+
+Finish by making the contract explicit and validating requests before opening a view.
+
+Request schema:
 
 ```lua
-doc_view:add_fold_region({ group = group_id, ... })
-doc_view:add_fold_listener(id, fn)
-doc_view:remove_fold_listener(id)
+{
+  title = string?,
+  kind = "text" | "git" | "blank" | "file" | string,
+  contents = { left = content, right = content },
+  content_titles = { left = string?, right = string? }?,
+  editable_policy = "read-only" | "content" | "editable"?,
+  preferred_focus_side = "left" | "right"?,
+  metadata = table?,
+}
 ```
 
-or keep group ownership in `DiffView`, but subscribe through a clean fold callback.
-
-Avoid intercepting mouse clicks before `DocView` has a chance to handle its own Fold Widget Row.
-
-### Document text change listeners
-
-Use core listeners instead of replacing `raw_insert`, `raw_remove`, or `on_text_transaction`.
-
-The listener must cover:
-
-- `Doc:apply_edits` transactions.
-- undo/redo paths that currently call `raw_insert` / `raw_remove`.
-- direct raw mutations used by existing code.
-
-Candidate API:
+`DiffContent` is a discriminated union. Common optional fields:
 
 ```lua
-doc:add_text_change_listener(id, listener)
-doc:remove_text_change_listener(id)
+{
+  kind = string,
+  name = string?,
+  editable = boolean?,
+  owns_doc = boolean?,
+  read_only_reason = string?,
+  syntax_hint = string?,
+}
 ```
 
-Listener callbacks:
-
-- `before_change(doc, change)`
-- `after_change(doc, change)`
-- batch/transaction metadata when available.
-
-Do not remove Diff View's raw method wrappers until this core API covers all current mutation paths.
-
-### Selection State listeners
-
-Stop overriding `doc.set_selection`, `doc.set_selections`, and `doc.set_selection_list` by exposing a per-`DocView` Selection State observer.
-
-Candidate API:
+Kind-specific fields:
 
 ```lua
-doc_view:add_selection_listener(id, fn)
-doc_view:remove_selection_listener(id)
+-- text: DiffView creates an owned untitled Doc from text.
+{ kind = "text", text = string, ... }
+
+-- empty: DiffView creates an owned empty untitled Doc.
+{ kind = "empty", ... }
+
+-- file: DiffView creates/opens a normal file-backed Doc.
+{ kind = "file", filename = string, ... }
+
+-- document: caller provides an existing Doc.
+{ kind = "document", doc = Doc, ... }
 ```
 
-This should fire when the view's own Selection State changes, not merely when the compatibility Selection Mirror changes.
+Validation/defaulting rules:
 
-### Paired scroll mapping
+- `request.contents.left` and `request.contents.right` are required for two-way side-by-side Diff View.
+- Unknown content kinds are invalid unless a future content resolver is explicitly registered.
+- `content_titles.side` overrides `content.name` for UI side labels when present.
+- `content.name` is used as the created document name when no side title is given.
+- Missing `editable_policy` defaults to `"content"`.
+- Invalid requests should return a clear error object/string; they should not fail later with a nil-field crash.
 
-Introduce explicit line mapping similar to IntelliJ's `SyncScrollable`:
+Ownership decisions:
 
-```lua
-mapping:transfer(source_side, line) -> target_line
-mapping:get_range(source_side, line) -> source_start, source_end, target_start, target_end
-```
+- `DiffView` owns docs only when `content.owns_doc == true` or when it creates a text/empty transient doc.
+- Caller-owned document content is never closed/disposed by closing one Diff View.
+- File-backed docs are ordinary documents with ordinary dirty/save behavior.
+- Git historical contents are text contents with read-only policy, not file-backed editable documents.
 
-Then `DiffView` scroll sync can use mapping boundaries rather than raw identical scroll offsets.
+Tests to add:
 
-## Migration phases
+- request helpers create equivalent views to legacy helpers.
+- invalid requests produce deterministic validation errors.
+- title precedence: `content_titles.side` over `content.name` over filename basename.
+- caller-owned document content is not closed/disposed by closing a Diff View.
+- owned transient text/empty docs are cleaned up when the Diff View is disposed.
 
-### Phase 0: Core listener prerequisites
+### 4. Editable policy and file-backed diff sides
 
-Before replacing any monkey patches, add or harden core listener APIs:
+Current state:
 
-- Document text change listener covering raw insert/remove, undo/redo, and apply-edits transactions.
-- DocView Selection State listener.
-- optional Fold Region listener if paired folds need callback-based synchronization.
+- Text Diff View and Git Diff View content can be represented by requests.
+- Detailed editability enforcement is not complete.
 
-Tests:
+Finish by enforcing editability consistently at a central mutation boundary and in DiffView-originated actions.
 
-- `Doc:apply_edits` fires listener once with transaction metadata.
-- undo/redo fires listener.
-- direct `raw_insert` / `raw_remove` fires listener or is migrated behind a transaction path.
-- Selection State listener fires for view-local selection changes.
+Effective editability:
 
-### Phase 1: Extract a structural DiffModel without changing UI behavior
+- false when request `editable_policy == "read-only"`.
+- true when request `editable_policy == "editable"`, unless content explicitly sets `editable = false`.
+- content-owned when request `editable_policy == "content"`:
+  - `content.editable == false` means read-only.
+  - `content.editable == true` means editable.
+  - missing `content.editable` defaults to editable for ordinary text/empty/file/document contents, except Git requests which set read-only explicitly.
 
-- Move diff computation from `DiffView:update_diff()` into a new module.
-- Keep existing `DiffView` fields temporarily populated from the model.
-- Keep visual geometry out of the model.
-- Decide model location together with diff engine ownership:
-  - if under `data/core`, the `diff` engine must be treated as core or injected.
-  - if under `data/plugins/diff`, keep a path for later promotion.
+Enforcement boundary:
 
-Expected files:
+- Add a side-aware edit guard owned by `DiffView` and installed on side docs/views.
+- The guard must cover all document mutation routes, not just keyboard input:
+  - typing.
+  - paste.
+  - delete/backspace/newline commands.
+  - `Doc:apply_edits` and helpers that call it.
+  - undo/redo if they would mutate read-only content.
+  - DiffView's own sync/apply actions (`DiffView:sync`, divider clicks, `diff-view:sync-change`).
+- Preferred implementation is a document-level mutation gate, e.g. extending `Doc:can_apply_edits(...)` or adding a per-doc edit-guard listener that `apply_edits`, `raw_insert`, and `raw_remove` consult before mutation.
+- DiffView-originated sync/apply actions must check target-side editability before calling `replace`/`apply_edits`, and should not show sync arrows/actions for read-only targets unless they are disabled with a clear reason.
+- Read-only rejection should surface `read_only_reason`:
+  - visible warning for direct user edit attempts.
+  - quiet log for background/programmatic attempts unless user initiated.
 
-- `data/core/diff_model.lua` or `data/plugins/diff/model.lua`
-- `tests/lua/runtime/diff_model.lua`
+File-backed side decisions:
 
-Tests:
+- Editable file-backed sides use normal document dirty/save behavior.
+- File-backed read-only sides reject edits but can still be viewed, folded, searched, and navigated.
+- Git commit/historical sides remain read-only.
+- Working-tree Git editing remains disabled until explicitly implemented and tested.
 
-- equal text.
-- insert-only hunk.
-- delete-only hunk.
-- modify hunk with inline ranges.
-- long unchanged fold candidates.
-- side line mapping around insert/delete hunks.
+Tests to add:
 
-### Phase 2: Add DocView decoration and gutter provider APIs
+- read-only diff side rejects typing, paste, delete/backspace, and direct `apply_edits`.
+- read-only target rejects `diff-view:sync-change` and divider sync click.
+- editable text side accepts edits and rediffs exactly once per user edit.
+- editable file-backed side becomes dirty and saves through normal document save.
+- Git commit diff sides are read-only and expose a useful read-only reason.
 
-- Add provider registration/removal to `DocView`.
-- Route line backgrounds and inline highlight drawing through providers.
-- Add deterministic layering/priority semantics.
-- Add gutter/action provider support for sync/apply arrows, or define it as a first-class provider capability before removing current arrow drawing.
+### 5. Mutable blank diff workflow
 
-Expected files:
+Current state:
 
-- `data/core/docview.lua`
-- `tests/lua/ui/docview_decorations.lua`
+- `DiffContent.empty` exists, but there is no standalone blank diff command/host workflow.
 
-Tests:
+Finish by adding a mutable request host for blank/source-swapping workflows.
 
-- line background drawing.
-- inline range drawing.
-- wrapped visual rows.
-- provider ordering/layering.
-- provider removal.
-- gutter marker rendering and hit-testing.
-
-### Phase 3: Move Diff View line/inline/gutter rendering to providers
-
-- Remove the `draw_line_text` override from `DiffView:patch_views()`.
-- Register a diff decoration provider on each side `DocView`.
-- Register a gutter/action provider for hunk arrows.
-- Keep divider connector drawing in `DiffView`, but source positions from the model and `DocView` geometry.
-- Validate existing line wrap diff tests still pass.
-
-Target removals:
-
-- `wrap_draw_line_text`
-- sync arrow drawing from inside `draw_line_text`.
-- manual plain-text diff text drawing if it can be expressed through provider options.
-
-### Phase 4: Replace document monkey-patching with listeners
-
-- Register document text-change listeners for both sides.
-- Schedule rediff through `DiffView`.
-- Use generation IDs/cancellation so stale rediff results cannot apply after disposal or newer edits.
-- Remove overrides of:
-  - `raw_insert`
-  - `raw_remove`
-  - `on_text_transaction`
-
-Tests:
-
-- editing either side schedules exactly one rediff.
-- undo/redo schedules rediff.
-- direct raw mutation is observed or disallowed through a migrated path.
-- syncing/applying a hunk emits expected document changes.
-- closing a Diff View unregisters listeners.
-- stale rediff results are ignored.
-
-### Phase 5: Replace selection/caret monkey-patching
-
-- Stop overriding `doc.set_selection`, `doc.set_selections`, and `doc.set_selection_list`.
-- Use the DocView Selection State observer to sync peer caret.
-- Use explicit diff line mapping.
-
-Tests:
-
-- caret move on left maps to right around insert-only hunks.
-- caret move on right maps to left around delete-only hunks.
-- folded regions do not land selection on hidden lines.
-- multi-cursor/multi-selection changes do not recurse or corrupt Selection State.
-
-### Phase 6: Rich line-height virtual visual rows / alignment rows
-
-- Extend current virtual row extension API to support provider-owned line-height visual row objects.
-- Migrate diff gap rows from count tables to provider-owned alignment rows.
-- Support optional row drawing and hit-testing.
-- Keep arbitrary pixel-height rows out of this phase.
-
-Tests:
-
-- inserted lines create empty alignment rows on the opposite side.
-- row hit-testing resolves to stable Document positions.
-- wrapped Document lines plus alignment rows compose correctly.
-- scroll size remains correct with folds and alignment rows.
-
-### Phase 7: Paired Fold Region support
-
-- Introduce a clean paired-fold mechanism.
-- DiffModel emits fold candidates.
-- DiffView installs paired Fold Regions through core APIs.
-- Expanding/collapsing one side updates its pair without click interception hacks.
-- Preserve fold state by stable hunk/equal-block identity where possible.
-
-Tests:
-
-- long unchanged regions fold on both sides.
-- expanding one side expands the pair.
-- fold state survives rediff when possible.
-- POI navigation can reveal folded hunks intentionally.
-
-### Phase 8: DiffRequest / DiffContent API
-
-- Introduce public construction helpers:
-
-```lua
-diff.open(request)
-diff.content.text(text, opts)
-diff.content.document(doc, opts)
-diff.content.file(path, opts)
-diff.content.empty(opts)
-```
-
-- Keep compatibility helpers initially:
-  - `diffview.string_to_string`
-  - `diffview.file_to_file`
-  - `diffview.file_to_string`
-  - `diffview.string_to_file`
-
-But internally route them through `DiffRequest`.
-
-Tests:
-
-- string-to-string helper creates equivalent request/view.
-- file-to-file helper creates equivalent request/view.
-- existing commands still open expected Text Diff View.
-
-### Phase 9: Mutable standalone blank diff
-
-- Add a blank Text Diff View command that opens two editable untitled Documents.
-- Treat blank contents as ordinary untitled Documents unless a concrete transient-document reason emerges.
-- Allow replacing either side from a file or recent text later.
-- Ensure both sides are normal editable Editors/DocViews where appropriate.
-
-Initial commands:
+Commands:
 
 - `diff-view:open-blank-diff`
 - `diff-view:replace-left-with-file`
 - `diff-view:replace-right-with-file`
 
-Tests:
+Host API:
 
-- blank diff opens with editable left/right sides.
-- editing either side rediffs.
-- replacing one side reloads without losing the surrounding tab/window placement.
-
-### Phase 10: Git View migration
-
-- Change `GitView:ensure_diff_view(tab)` to build a richer `DiffRequest` instead of calling `string_to_string` directly.
-- Preserve file-list layout initially.
-- Pass metadata:
-  - Git side names.
-  - selected changed file.
-  - read-only/editable policy.
-  - future apply/revert labels.
-
-Tests:
-
-- Commit Diff View opens through DiffRequest.
-- focus cycling remains stable.
-- selected changed file reloads the same viewer/session placement when possible.
-
-## Test strategy
-
-Use red-green regression workflow for behavior changes.
-
-Recommended layers:
-
-- Runtime tests for `DiffModel` and mapping.
-- Runtime/UI tests for document and selection listener APIs.
-- In-process UI tests for DocView providers, virtual rows, Fold Regions, focus, and POIs.
-- Existing Git View UI tests for integration.
-
-Commands:
-
-```sh
-meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/diff_model.lua
-meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/docview_decorations.lua
-meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/diffview_batch.lua
-meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/git_view.lua
+```lua
+local host = MutableDiffRequestHost(request, opts)
+host:get_view()
+host:replace_content(side, content, opts)
+host:reload(opts)
+host:try_close(callback)
+host:dispose()
 ```
 
-For Lua syntax after edits:
+Host responsibilities:
+
+- Own the active mutable request.
+- Own the current `DiffView` instance.
+- Preserve surrounding tab/node/tool placement when reloading or replacing content.
+- Dispose the old `DiffView` integrations before installing a replacement view.
+- Increment generation IDs so stale diff computations cannot apply after replacement.
+- Preserve focus side, scroll/caret state, and folding state where it is safe and side contents are semantically the same.
+- Keep commands from mutating `DiffView` internals directly.
+
+Dirty-content protection:
+
+- Blank diff starts with two normal owned untitled documents.
+- Owned editable docs must be protected on close and side replacement.
+- Closing the host should prompt or otherwise reuse the normal `DocView:try_close()` dirty-document confirmation behavior for each dirty owned side doc.
+- Replacing a dirty owned side must confirm before discarding it.
+- If the user cancels the dirty prompt, replacement/close is cancelled and the existing view remains active.
+- Non-owned caller docs are not closed by the host; their normal owners remain responsible for dirty state.
+
+Replacement decisions:
+
+- Replacement from file should use a normal file-backed `Doc` when the user intends to edit/save that file.
+- Replacement from snapshot/recent text should use owned text content.
+- Reload/replacement should keep the same outer tab placement; recreating the internal `DiffView` is acceptable.
+
+Tests to add:
+
+- blank diff opens with editable left/right documents.
+- editing either side schedules one rediff.
+- replacing left or right with a file keeps the same outer tab placement.
+- replacing a dirty blank side prompts and cancels correctly.
+- closing a dirty blank diff prompts and can cancel close.
+- closing a clean blank diff disposes owned untitled docs.
+
+### 6. Git View polish after request migration
+
+Current state:
+
+- Git View builds a `kind = "git"` request and passes useful metadata.
+
+Finish by using that metadata for richer Git diff behavior.
+
+Design decisions:
+
+- Commit diff requests are read-only by default.
+- Divider/apply/revert labels should be sourced from Git request metadata, not hardcoded in generic Diff View.
+- Reloading a selected changed file should reuse the same surrounding Git tab/session placement.
+- If working-tree editing is added later, it should be opt-in and only for the working-tree side.
+
+Tests to add:
+
+- Commit Diff View opens through `DiffRequest` with expected metadata.
+- selecting another changed file reloads the viewer without losing Git pane focus state.
+- Git request metadata is available to divider/action code.
+
+### 7. Unified and three-way modes
+
+Current state:
+
+- Structural pieces should support future viewers, but only side-by-side two-way diff is implemented.
+
+Design decisions:
+
+- Do not build unified or three-way UI until the two-way request/content/model contracts are stable.
+- Unified and three-way should be separate viewer implementations selected from request shape/kind.
+- `DiffModel.compute(...)` remains a pure worker body. Viewer/session code owns async lifecycle.
+
+Future tests:
+
+- viewer selection chooses side-by-side for two contents.
+- future unified viewer can consume the same `DiffModel` without depending on `DocView` side-by-side geometry.
+
+## Validation checklist for future phases
+
+Run targeted tests while developing:
 
 ```sh
-./build-windows-x86_64/subprojects/luajit/src/luajit.exe check-lua-syntax.lua data/plugins/diffview.lua data/core/docview.lua
+meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/diff_model.lua --print-errorlogs
+meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/doc_text_change_listener.lua --print-errorlogs
+meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/docview_decorations.lua --print-errorlogs
+meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/diffview_batch.lua --print-errorlogs
+meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/git_view.lua --print-errorlogs
+meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/linewrap.lua --print-errorlogs
 ```
 
-## Success criteria
+Use the full Anvil suite when unrelated known failures are cleared:
 
-- No method replacement of `DocView` or `Doc` instances by Diff View.
-- Diff rendering is expressed through `DocView` provider APIs.
-- Diff folding uses core Fold Regions with clean paired behavior.
-- Diff alignment uses core visual row/block-row APIs.
-- Diff scroll/caret sync uses explicit model mapping.
-- Diff rediff lifecycle has generation/cancellation/disposal protection.
-- Text Diff View and Commit Diff View continue to work.
-- Blank editable diff can be opened using normal editable Documents and request/viewer plumbing.
-- The structural diff model can be reused by future unified or three-way views.
-
-## Open design questions
-
-1. Should `DiffModel` live under `data/core` immediately, or start under `data/plugins/diff` until the API stabilizes?
-2. If `DiffModel` lives in core, where should the `diff` engine live, and should the engine be injectable for tests or future algorithms?
-3. Should DocView provider APIs be one combined provider interface or separate providers for decorations, POIs, virtual rows, and gutter actions?
-4. Should blank diff contents always be normal untitled Documents, or is there a concrete need for transient Documents owned only by the DiffView/host?
-5. How should editable file-backed diff sides handle saving and dirty state?
-6. Should Git working-tree diffs eventually allow direct editing of the working-tree side inside Commit Diff View?
-
-## Review round 2 amendments
-
-The second review pass found a few planning gaps that should be treated as accepted amendments before implementation starts.
-
-### Replace all `patch_views()` behaviors, not only drawing/document/selection
-
-The success criterion "no method replacement" includes every current `DiffView:patch_views()` override. Migration work must account for:
-
-- `draw_line_text`
-- `scroll_to_line`
-- `scroll_to_make_visible`
-- `doc.set_selection`
-- `doc.set_selections`
-- `doc.set_selection_list`
-- `doc.raw_insert`
-- `doc.raw_remove`
-- `doc.on_text_transaction`
-- `get_points_of_interest`
-- `prev_change`
-- `next_change`
-
-Add a dedicated scroll/POI cleanup step before declaring the migration complete:
-
-- use `DocView` scroll or visible-area listeners instead of wrapping scroll methods.
-- use POI/navigation providers instead of replacing `get_points_of_interest`, `prev_change`, or `next_change`.
-- add tests proving provider removal restores ordinary DocView behavior.
-
-### Divider hunk actions are not ordinary DocView gutter actions
-
-The current hunk arrows live in the central Diff View divider, not inside a child DocView gutter. Treat them as Diff View divider actions sourced from `DiffModel` plus `DocView` line geometry. Only use DocView gutter/action providers for markers that truly belong inside one Document View.
-
-### Introduce internal request/content normalization earlier
-
-Even if public `diff.open(...)` helpers come later, Phase 1 should normalize all existing string/file helper inputs into internal `DiffRequest` / `DiffContent` records. This avoids redesigning editability, document ownership, listener registration, and disposal twice.
-
-### Reconcile document listeners with existing transaction handlers
-
-`Doc.register_text_transaction_handler` already exists, but it is global and transaction-oriented. Diff View needs per-document registration and coverage for raw insert/remove and undo/redo paths. The new listener design must either supersede the global handler cleanly or implement per-document filtering on a hardened central notification path.
-
-### Respect Anvil's Doc-level legacy selection APIs
-
-Anvil differs from IntelliJ because legacy selection mutation APIs live on `Doc`, while the desired ownership is per-`DocView` Selection State. The selection-listener phase must audit diff-side command/event paths so they operate through active DocView selection binding or Selection State APIs. Otherwise `doc:set_selection(...)` calls can bypass view-local listeners.
-
-### Decide scroll sync behavior explicitly
-
-The mapping API should be backed by a clear scroll policy:
-
-- proportional mapping within unchanged/diff boundary ranges, closer to IntelliJ and smoother around large hunks; or
-- simpler line-anchored mapping as an initial implementation.
-
-The old identical-`scroll.y` behavior should not remain the long-term sync mechanism except as a temporary fallback.
-
-### Consider range markers/highlighters before inventing draw-only providers
-
-IntelliJ uses RangeHighlighters for diff decorations. Anvil already has `range_marker`. Before adding a broad decoration-provider API, decide whether `range_marker` should evolve into a styled highlighter/marker layer for line and inline decorations. A provider API may still be needed for hot-path line backgrounds or virtual rows, but avoid a diff-only rendering abstraction.
-
-### Make async diff computation ownership explicit
-
-Initial recommendation: `DiffView` owns coroutine scheduling, generation IDs, cancellation, stale-result rejection, and disposal. `DiffModel.compute(...)` should be a pure worker body returning structural diff data. If this changes, the model API must explicitly describe async lifecycle ownership.
-
-### Preserve fold state with stable identity, not only indexes
-
-Current diff folds are rebuilt from equal-block indexes. Edits can shift those indexes. Paired fold state preservation needs a best-effort stable identity, such as neighboring hunk identity plus normalized unchanged-range anchors/content. If identity is ambiguous, safely reset to default collapsed/expanded behavior.
-
-### DiffContent must define document ownership
-
-Each `DiffContent` must say whether the Diff View owns the resulting `Doc` and should close it. Existing file-backed or caller-owned Documents must not be closed merely because one Diff View closes; transient text Documents probably should be. This ownership also affects blank editable diff dirty/save behavior.
+```sh
+meson test -C build-windows-x86_64 --suite anvil --print-errorlogs
+```

@@ -401,6 +401,9 @@ test.describe("Git View command", function()
     test.equal(core.active_view.git_pane, "file-list")
     test.equal(command.perform("git:focus-next-pane"), true)
     local diff = tab.diff_view
+    test.equal(diff.request.kind, "git")
+    test.equal(diff.request.metadata.selected_file_path, "a.lua")
+    test.equal(diff.request.editable_policy, "read-only")
     test.equal(core.active_view, diff.doc_view_a)
     diff.doc_view_a.get_points_of_interest = function()
       return { { line = 2, col = 1, line_only_navigation = true, scroll_to_line = true } }
