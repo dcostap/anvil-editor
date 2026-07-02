@@ -4170,8 +4170,8 @@ core.fuzzy_searcher_install_picker_keymaps = function()
     ["ctrl+shift+l"] = "fuzzy-searcher:reveal-selected-in-explorer",
     ["up"] = "fuzzy-searcher:previous",
     ["down"] = "fuzzy-searcher:next",
-    ["ctrl+alt+left"] = "fuzzy-searcher:prompt-history-previous",
-    ["ctrl+alt+right"] = "fuzzy-searcher:prompt-history-next",
+    ["alt+left"] = "fuzzy-searcher:prompt-history-previous",
+    ["alt+right"] = "fuzzy-searcher:prompt-history-next",
   })
 end
 core.fuzzy_searcher_install_picker_keymaps()
