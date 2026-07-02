@@ -1322,6 +1322,9 @@ function Doc:apply_edits(edits, opts)
   end
 
   local changed = #normalized > 0
+  if changed then
+    self:notify_text_change_listeners("before", { type = transaction.type, kind = "apply_edits", transaction = transaction })
+  end
   local out = { "" }
   local cursor_line, cursor_col = 1, 1
   for _, edit in ipairs(normalized) do
@@ -1453,6 +1456,7 @@ function Doc:apply_edits(edits, opts)
     end
     self:on_text_transaction(transaction)
     if opts.notify ~= false then self:on_text_change(transaction.type, transaction) end
+    self:notify_text_change_listeners("after", { type = transaction.type, kind = "apply_edits", transaction = transaction })
     core.log_quiet("Applied batch edit to %s: edits=%d lines=%d", self:get_name(), #normalized, #self.lines)
   else
     sync_unbound_selection_mutation(self)
@@ -1464,6 +1468,7 @@ end
 
 
 function Doc:raw_insert(line, col, text, undo_stack, time)
+  self:notify_text_change_listeners("before", { type = "raw_insert", kind = "raw_insert", line = line, col = col, text = text })
   local linewrapping_old_lines = #self.lines
   -- split text into lines and merge with line at insertion point
   local lines = split_lines(text)
@@ -1500,10 +1505,12 @@ function Doc:raw_insert(line, col, text, undo_stack, time)
   self:clear_cache(line, #lines - 1)
   self:sanitize_selection()
   linewrapping.notify_doc_raw_insert(self, line, linewrapping_old_lines)
+  self:notify_text_change_listeners("after", { type = "raw_insert", kind = "raw_insert", line = line, col = col, text = text })
 end
 
 
 function Doc:raw_remove(line1, col1, line2, col2, undo_stack, time)
+  self:notify_text_change_listeners("before", { type = "raw_remove", kind = "raw_remove", line1 = line1, col1 = col1, line2 = line2, col2 = col2 })
   local linewrapping_old_lines = #self.lines
   -- push undo
   local text = self:get_text(line1, col1, line2, col2)
@@ -1540,6 +1547,7 @@ function Doc:raw_remove(line1, col1, line2, col2, undo_stack, time)
   self:clear_cache(line1, line_removal)
   self:sanitize_selection()
   linewrapping.notify_doc_raw_remove(self, line1, line2, linewrapping_old_lines)
+  self:notify_text_change_listeners("after", { type = "raw_remove", kind = "raw_remove", line1 = line1, col1 = col1, line2 = line2, col2 = col2 })
 end
 
 
@@ -2080,6 +2088,41 @@ function Doc:indent_text(unindent, line1, col1, line2, col2)
 end
 
 local text_transaction_handlers = {}
+
+local function text_change_listeners(doc)
+  doc.text_change_listeners = doc.text_change_listeners or {}
+  return doc.text_change_listeners
+end
+
+---Register a per-document text change observer.
+---Listeners may be functions, or tables with before_change/after_change callbacks.
+---@param id string
+---@param listener function|table
+function Doc:add_text_change_listener(id, listener)
+  assert(type(id) == "string" and id ~= "", "text change listener id must be a non-empty string")
+  assert(type(listener) == "function" or type(listener) == "table", "text change listener must be a function or table")
+  text_change_listeners(self)[id] = listener
+end
+
+function Doc:remove_text_change_listener(id)
+  if not self.text_change_listeners or not self.text_change_listeners[id] then return false end
+  self.text_change_listeners[id] = nil
+  return true
+end
+
+function Doc:notify_text_change_listeners(phase, change)
+  local listeners = self.text_change_listeners
+  if not listeners then return end
+  for id, listener in pairs(listeners) do
+    local fn = type(listener) == "function" and listener or listener[phase == "before" and "before_change" or "after_change"]
+    if fn then
+      local ok, err = pcall(fn, self, change or {})
+      if not ok and core and core.log_quiet then
+        core.log_quiet("Doc text change listener %s failed for %s: %s", tostring(id), self:get_name(), tostring(err))
+      end
+    end
+  end
+end
 
 ---Register a batch-aware document transaction observer.
 ---Handlers are called from Doc:on_text_transaction after text has been applied.

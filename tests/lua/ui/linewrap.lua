@@ -1249,7 +1249,7 @@ test.describe("line wrapping diff hunk gutter line numbers", function()
     renderer.draw_text = function(font, text, sx) return sx + font:get_width(text) end
     renderer.draw_text_known_bounds = function(_, _, sx, _, _, _, w) return sx + w end
     local ok, err = pcall(function()
-      left:draw_line_text(1, select(1, left:get_line_screen_position(1)), y)
+      left:draw_line_body(1, select(1, left:get_line_screen_position(1)), y)
     end)
     renderer.draw_rect = old_draw_rect
     renderer.draw_text = old_draw_text

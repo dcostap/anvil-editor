@@ -476,6 +476,7 @@ function DocView:scroll_to_make_visible(line, col, ...)
   end
   if ly < num_sticky_lines * lh then
     self.scroll.to.y = self.scroll.to.y - ((num_sticky_lines * lh) - ly)
+    if self.notify_scroll_listeners then self:notify_scroll_listeners("sticky_scroll_adjust") end
   end
 end
 

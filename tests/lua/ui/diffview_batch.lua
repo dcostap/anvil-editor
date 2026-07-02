@@ -3,6 +3,8 @@ local command = require "core.command"
 local config = require "core.config"
 local test = require "core.test"
 local diffview = require "plugins.diffview"
+local Doc = require "core.doc"
+local DocView = require "core.docview"
 
 local function track(context, kind, value)
   context[kind] = context[kind] or {}
@@ -198,13 +200,19 @@ test.describe("DiffView batch behavior", function()
     local old_draw_rect = renderer.draw_rect
     local old_push_clip_rect = core.push_clip_rect
     local old_pop_clip_rect = core.pop_clip_rect
+    local old_draw_text = renderer.draw_text
     local polygons = {}
     local markers = {}
+    local arrows = {}
     renderer.draw_poly = function(points, color)
       polygons[#polygons + 1] = { points = points, color = color }
     end
     renderer.draw_rect = function(x, y, w, h, color)
       markers[#markers + 1] = { x = x, y = y, w = w, h = h, color = color }
+    end
+    renderer.draw_text = function(font, text, x, y, color)
+      if text == ">" or text == "<" then arrows[#arrows + 1] = { text = text, x = x, y = y, color = color } end
+      return x
     end
     core.push_clip_rect = function() end
     core.pop_clip_rect = function() end
@@ -213,12 +221,14 @@ test.describe("DiffView batch behavior", function()
     renderer.draw_rect = old_draw_rect
     core.push_clip_rect = old_push_clip_rect
     core.pop_clip_rect = old_pop_clip_rect
+    renderer.draw_text = old_draw_text
     if not ok then error(err, 0) end
 
     test.ok(#polygons >= 1, "expected an inserted hunk connector in the divider")
     test.ok(#polygons[1].points > 4, "expected a curved connector, not a simple rectangle")
     test.ok(#markers >= 1, "expected a thin gap marker on the side without inserted lines")
     test.ok(markers[1].h <= math.max(1, SCALE) + 0.01, "expected a thin marker line")
+    test.ok(#arrows >= 1, "expected visible divider sync arrows")
   end)
 
   test.it("keeps folded panes synchronized around insert-only hunks", function(context)
@@ -248,6 +258,45 @@ test.describe("DiffView batch behavior", function()
     test.equal(#view.diff_folds_a, #view.diff_folds_b)
     test.equal(view.diff_folds_a[1].hidden_count, view.diff_folds_b[1].hidden_count)
     test.equal(view.doc_view_a:get_scrollable_size(), view.doc_view_b:get_scrollable_size())
+  end)
+
+  test.it("wraps diff change navigation across file boundaries", function(context)
+    local view = track(context, "diffviews", diffview.string_to_string(
+      "aa\nleft-one\nbb\nleft-two\ncc",
+      "aa\nbb\ncc",
+      "left",
+      "right",
+      true
+    ))
+    wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
+
+    local left = view.doc_view_a
+    core.set_active_view(left)
+    left.doc:set_selection(4, 1)
+    test.ok(command.perform("diff-view:next-change"))
+    test.equal(left.doc:get_selection(), 2)
+    test.ok(command.perform("diff-view:prev-change"))
+    test.equal(left.doc:get_selection(), 4)
+  end)
+
+  test.it("uses providers and listeners without replacing child DocView or Doc methods", function(context)
+    local view = track(context, "diffviews", diffview.string_to_string(
+      "aa\nleft\nbb",
+      "aa\nright\nbb",
+      "left",
+      "right",
+      true
+    ))
+    wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
+
+    test.equal(rawget(view.doc_view_a, "draw_line_text"), nil)
+    test.equal(rawget(view.doc_view_a, "scroll_to_line"), nil)
+    test.equal(rawget(view.doc_view_a, "scroll_to_make_visible"), nil)
+    test.equal(view.doc_view_a.doc.set_selection, Doc.set_selection)
+    test.equal(view.doc_view_a.doc.raw_insert, Doc.raw_insert)
+    test.equal(view.doc_view_a.doc.raw_remove, Doc.raw_remove)
+    test.ok(view.doc_view_a.decoration_providers["diff-view"] ~= nil)
+    test.ok(view.doc_view_a.poi_providers["diff-view"] ~= nil)
   end)
 
   test.it("syncing an inserted hunk into the other side emits one document change", function(context)

@@ -8,6 +8,7 @@ local style = require "core.style"
 local DocView = require "core.docview"
 local Doc = require "core.doc"
 local View = require "core.view"
+local diff_model = require "plugins.diff.model"
 
 ---Configuration options for `diffview` plugin.
 ---@class config.plugins.diffview
@@ -125,39 +126,77 @@ DiffView.type = {
 ---@field a? string
 ---@field b? string
 
+local function content_text(text, opts)
+  opts = opts or {}
+  return { kind = "text", text = text or "", name = opts.name, editable = opts.editable, owns_doc = true }
+end
+
+local function content_file(path, opts)
+  opts = opts or {}
+  return { kind = "file", filename = path, name = opts.name or common.basename(path), editable = opts.editable, owns_doc = false }
+end
+
+local function content_document(doc, opts)
+  opts = opts or {}
+  return { kind = "document", doc = doc, name = opts.name, editable = opts.editable, owns_doc = opts.owns_doc == true }
+end
+
+local function content_empty(opts)
+  opts = opts or {}
+  return { kind = "empty", name = opts.name, editable = opts.editable ~= false, owns_doc = true }
+end
+
+local function legacy_request(a, b, compare_type, names)
+  names = names or {}
+  compare_type = compare_type or DiffView.type.STRING_STRING
+  local left, right
+  if compare_type == DiffView.type.FILE_FILE then
+    left, right = content_file(a), content_file(b)
+  elseif compare_type == DiffView.type.STRING_STRING then
+    left, right = content_text(a, { name = names.a }), content_text(b, { name = names.b })
+  elseif compare_type == DiffView.type.STRING_FILE then
+    left, right = content_text(a, { name = names.a }), content_file(b)
+  elseif compare_type == DiffView.type.FILE_STRING then
+    left, right = content_file(a), content_text(b, { name = names.b })
+  end
+  return {
+    title = compare_type == DiffView.type.STRING_STRING and "Text Diff View" or nil,
+    kind = compare_type == DiffView.type.STRING_STRING and "text" or "file",
+    compare_type = compare_type,
+    contents = { left = left, right = right },
+    content_titles = { left = names.a, right = names.b },
+    editable_policy = "content",
+  }
+end
+
+local function doc_for_content(content)
+  if content.kind == "document" then return assert(content.doc), content.owns_doc == true end
+  if content.kind == "file" then return Doc(content.name or common.basename(content.filename), content.filename), false end
+  local doc = Doc(content.name, content.name, true)
+  local text = content.kind == "empty" and "" or (content.text or "")
+  if text ~= "" then doc:insert(1, 1, text) doc:clear_undo_redo() end
+  return doc, true
+end
+
 ---Constructor
----@param a string
----@param b string
+---@param a string|table
+---@param b string?
 ---@param compare_type? plugins.diffview.view.type
 ---@param names? plugins.diffview.view.string_names
 function DiffView:new(a, b, compare_type, names)
   DiffView.super.new(self)
 
   self.scrollable = true
-  self.compare_type = compare_type or DiffView.type.STRING_STRING
+  self.request = type(a) == "table" and a.contents and a or legacy_request(a, b, compare_type, names)
+  self.compare_type = self.request.compare_type or compare_type or DiffView.type.STRING_STRING
   self.hovered_sync = nil
   self.skip_update_diff = false
+  self.diff_generation = 0
+  self.disposed = false
 
-  names = names or {}
-
-  local doc_a, doc_b
-  if compare_type == DiffView.type.FILE_FILE then
-    doc_a = Doc(common.basename(a), a)
-    doc_b = Doc(common.basename(b), b)
-  elseif compare_type == DiffView.type.STRING_STRING then
-    doc_a = Doc(names.a, names.a, true)
-    if a ~= "" then doc_a:insert(1, 1, a) doc_a:clear_undo_redo() end
-    doc_b = Doc(names.b, names.b, true)
-    if b ~= "" then doc_b:insert(1, 1, b) doc_b:clear_undo_redo() end
-  elseif compare_type == DiffView.type.STRING_FILE then
-    doc_a = Doc(names.a, names.a, true)
-    if a ~= "" then doc_a:insert(1, 1, a) doc_a:clear_undo_redo() end
-    doc_b = Doc(common.basename(b), b)
-  elseif compare_type == DiffView.type.FILE_STRING then
-    doc_a = Doc(common.basename(a), a)
-    doc_b = Doc(names.b, names.b, true)
-    if b ~= "" then doc_b:insert(1, 1, b) doc_b:clear_undo_redo() end
-  end
+  local doc_a, owns_a = doc_for_content(self.request.contents.left)
+  local doc_b, owns_b = doc_for_content(self.request.contents.right)
+  self.owned_docs = { [doc_a] = owns_a, [doc_b] = owns_b }
 
   self.doc_view_a = DocView(doc_a)
   self.doc_view_b = DocView(doc_b)
@@ -175,7 +214,7 @@ function DiffView:new(a, b, compare_type, names)
   self.folding_enabled = config.plugins.diffview.fold_unchanged_by_default ~= false
   self.views_patched = false
 
-  self:patch_views()
+  self:install_view_integrations()
   self:update_diff()
 
   self.v_scrollbar.contracted_size = style.expanded_scrollbar_size * 2
@@ -187,6 +226,7 @@ function DiffView:get_focus_view()
 end
 
 function DiffView:get_name()
+  if self.request and self.request.title then return self.request.title end
   if self.compare_type == DiffView.type.FILE_FILE then
     return "Files Comparison"
   elseif self.compare_type == DiffView.type.STRING_STRING then
@@ -221,109 +261,28 @@ function DiffView:update_diff()
     )
   end
 
+  self.diff_generation = (self.diff_generation or 0) + 1
+  local generation = self.diff_generation
   local idx = core.add_thread(function()
-    local ai, bi = 1, 1
-    local a_offset, b_offset = 0, 0
-    local a_offset_total, b_offset_total = 0, 0
-    local a_len = #self.doc_view_a.doc.lines
-    local b_len = #self.doc_view_b.doc.lines
-
     local computing_start = system.get_time()
-    local a_gaps = #self.a_gaps == 0 and self.a_gaps or {}
-    local b_gaps = #self.b_gaps == 0 and self.b_gaps or {}
-    local a_changes = #self.a_changes == 0 and self.a_changes or {}
-    local b_changes = #self.b_changes == 0 and self.b_changes or {}
-    local equal_blocks = {}
-    local equal_block, seen_change = nil, false
-    local function flush_equal_block(has_next_change)
-      if equal_block and equal_block.count > 0 then
-        equal_block.has_next_change = has_next_change == true
-        equal_blocks[#equal_blocks + 1] = equal_block
-      end
-      equal_block = nil
-    end
-    for edit in diff.diff_iter(self.doc_view_a.doc.lines, self.doc_view_b.doc.lines) do
-      if edit.tag == "equal" or edit.tag == "modify" then
-        -- Assign gaps for this line
-        a_gaps[ai] = { a_offset, a_offset_total }
-        b_gaps[bi] = { b_offset, b_offset_total }
-
-        -- Insert inline diffs if present
-        if edit.a and edit.b and edit.tag == "equal" then
-          equal_block = equal_block or { a_start = ai, b_start = bi, count = 0, has_prev_change = seen_change }
-          equal_block.count = equal_block.count + 1
-        else
-          flush_equal_block(true)
-          seen_change = true
+    local model = diff_model.compute(self.doc_view_a.doc.lines, self.doc_view_b.doc.lines, {
+      should_yield = function()
+        if system.get_time() - computing_start >= 0.5 then
+          computing_start = system.get_time()
+          return true
         end
-        if edit.a then
-          table.insert(a_changes, {
-            tag = edit.tag,
-            changes = diff.inline_diff(edit.b or "", edit.a)
-          })
-          ai = ai + 1
-          a_offset = 0
-        end
-        if edit.b then
-          table.insert(b_changes, {
-            tag = edit.tag,
-            changes = diff.inline_diff(edit.a or "", edit.b)
-          })
-          bi = bi + 1
-          b_offset = 0
-        end
+        return false
+      end,
+    })
+    if self.disposed or generation ~= self.diff_generation then return end
 
-      elseif edit.tag == "delete" then
-        flush_equal_block(true)
-        seen_change = true
-        -- Lines only in A (deleted from B)
-        if edit.a then
-          a_gaps[ai] = { a_offset, a_offset_total }
-          table.insert(a_changes, { tag = "delete" })
-          ai = ai + 1
-          -- Increase gap on B side because these lines are missing in B
-          b_offset = b_offset + 1
-          b_offset_total = b_offset_total + 1
-        end
-
-      elseif edit.tag == "insert" then
-        flush_equal_block(true)
-        seen_change = true
-        -- Lines only in B (inserted in B)
-        if edit.b then
-          b_gaps[bi] = { b_offset, b_offset_total }
-          table.insert(b_changes, { tag = "insert" })
-          bi = bi + 1
-          -- Increase gap on A side because these lines are missing in A
-          a_offset = a_offset + 1
-          a_offset_total = a_offset_total + 1
-        end
-      end
-
-      if system.get_time() - computing_start >= 0.5 then
-        coroutine.yield()
-        computing_start = system.get_time()
-      end
-    end
-
-    flush_equal_block(false)
-
-    -- Fill trailing lines spaces after diff ends
-    while ai <= a_len do
-      a_gaps[ai] = a_gaps[ai] or { a_offset, a_offset_total }
-      ai = ai + 1
-    end
-    while bi <= b_len do
-      b_gaps[bi] = b_gaps[bi] or { b_offset, b_offset_total }
-      bi = bi + 1
-    end
-
-    self.a_gaps = a_gaps
-    self.b_gaps = b_gaps
+    self.diff_model = model
+    self.a_gaps = model.a_gaps
+    self.b_gaps = model.b_gaps
     self:install_core_gap_rows()
-    self.a_changes = a_changes
-    self.b_changes = b_changes
-    self.diff_equal_blocks = equal_blocks
+    self.a_changes = model.a_changes
+    self.b_changes = model.b_changes
+    self.diff_equal_blocks = model.equal_blocks
     self:rebuild_diff_folds()
 
     self.updater_idx = nil
@@ -961,374 +920,165 @@ local function line_range_y(doc_view, folds, start_line, end_line)
   return start_y, end_y
 end
 
-local function draw_line_text_override(parent, self, line, x, y, changes)
-  local text_y = y + self:get_line_text_y_offset()
-  local h = self:get_line_height()
-  local change = changes[line]
-  if change and change.tag ~= "equal" then
-    local delete_bg = style.diff_delete_background
-    local insert_bg = style.diff_insert_background
-    local delete_inline = style.diff_delete_inline
-    local insert_inline = style.diff_insert_inline
-    if config.plugins.diffview.plain_text then
-      -- increase opacity to half
-      delete_bg = { table.unpack(delete_bg) }
-      delete_bg[4] = 128
-      insert_bg = { table.unpack(insert_bg) }
-      insert_bg[4] = 128
-      -- make inline opaque
-      delete_inline = style.diff_delete
-      insert_inline = style.diff_insert
-    end
-
-    local first_idx, last_idx, logical_first_idx
-    if self.wrapped_settings and self.wrapped_line_to_idx then
-      logical_first_idx = self.wrapped_line_to_idx[line]
-      if logical_first_idx then
-        local total = self:get_total_visual_lines()
-        local logical_last_idx = (self.wrapped_line_to_idx[line + 1] or (total + 1)) - 1
-        first_idx = math.max(logical_first_idx, self.__wrapped_draw_first_idx or logical_first_idx)
-        last_idx = math.min(logical_last_idx, self.__wrapped_draw_last_idx or logical_last_idx)
-      end
-    end
-
-    local function draw_row_background(color)
-      if first_idx and last_idx then
-        for idx = first_idx, last_idx do
-          renderer.draw_rect(self.position.x, text_y + (idx - logical_first_idx) * h, self.size.x, h, color)
-        end
-      else
-        renderer.draw_rect(self.position.x, text_y, self.size.x, h, color)
-      end
-    end
-
-    local function draw_inline_segment(col1, col2, color, text)
-      if first_idx and last_idx then
-        for idx = first_idx, last_idx do
-          local row_start, row_end = self:get_visual_row_bounds_for_line(line, idx - logical_first_idx + 1)
-          if row_start and row_end and col2 > row_start and col1 < row_end then
-            local seg_col1 = math.max(col1, row_start)
-            local seg_col2 = math.min(col2, row_end)
-            local tx1 = self:get_col_x_offset(line, seg_col1, false)
-            local tx2 = self:get_col_x_offset(line, seg_col2, seg_col2 == row_end)
-            if tx2 > tx1 then
-              renderer.draw_rect(x + tx1, text_y + (idx - logical_first_idx) * h, tx2 - tx1, h, color)
-            end
-          end
-        end
-      else
-        local tx = self:get_col_x_offset(line, col1)
-        local w = self:get_font():get_width(text or self.doc.lines[line]:sub(col1, math.max(col1, col2 - 1)))
-        renderer.draw_rect(x + tx, text_y, w, h, color)
-      end
-    end
-
-    if change.tag == "delete" then
-      draw_row_background(delete_bg)
-    elseif change.tag == "insert" then
-      draw_row_background(insert_bg)
-    else
-      if change.changes then
-        draw_row_background(changes == parent.a_changes and delete_bg or insert_bg)
-        ---@type diff.changes[]
-        local mods = change.changes
-        local deletes = 0
-        for i, edit in ipairs(mods) do
-          if edit.tag == "insert" then
-            local col1 = i - deletes
-            draw_inline_segment(
-              col1,
-              col1 + #edit.val,
-              changes == parent.a_changes and delete_inline or insert_inline,
-              edit.val
-            )
-          elseif edit.tag == "delete" then
-            deletes = deletes + 1
-          end
-        end
-      end
-    end
+local function diff_has_changes(changes)
+  for _, change in ipairs(changes or {}) do
+    if change.tag ~= "equal" then return true end
   end
+  return false
 end
 
-function DiffView:patch_views()
+function DiffView:diff_points_of_interest(is_a)
+  local changes = is_a and self.a_changes or self.b_changes
+  if not diff_has_changes(changes) then return {} end
+  local points = {}
+  local last_tag
+  for line, change in ipairs(changes) do
+    local tag = change and change.tag or "equal"
+    if tag ~= "equal" and tag ~= last_tag then
+      points[#points + 1] = {
+        line = line,
+        col = 1,
+        line_only_navigation = true,
+        scroll_to_line = true,
+        kind = "diff-change",
+        label = tag,
+        change = change,
+      }
+    end
+    last_tag = tag
+  end
+  return points
+end
+
+local function diff_decoration_provider(parent, is_a)
+  return {
+    priority = 50,
+    line_background = function(_, view, line)
+      local changes = is_a and parent.a_changes or parent.b_changes
+      local change = changes[line]
+      if not change or change.tag == "equal" then return nil end
+      if change.tag == "delete" then
+        local color = style.diff_delete_background
+        if config.plugins.diffview.plain_text then color = alpha_color(color, 128) end
+        return color
+      elseif change.tag == "insert" then
+        local color = style.diff_insert_background
+        if config.plugins.diffview.plain_text then color = alpha_color(color, 128) end
+        return color
+      elseif change.tag == "modify" then
+        local color = is_a and style.diff_delete_background or style.diff_insert_background
+        if config.plugins.diffview.plain_text then color = alpha_color(color, 128) end
+        return color
+      end
+    end,
+    inline_ranges = function(_, view, line)
+      local changes = is_a and parent.a_changes or parent.b_changes
+      local change = changes[line]
+      if not change or change.tag ~= "modify" or not change.changes then return nil end
+      local ranges = {}
+      local deletes = 0
+      local color = is_a and style.diff_delete_inline or style.diff_insert_inline
+      if config.plugins.diffview.plain_text then color = is_a and style.diff_delete or style.diff_insert end
+      for i, edit in ipairs(change.changes) do
+        if edit.tag == "insert" then
+          local col1 = i - deletes
+          ranges[#ranges + 1] = { col1 = col1, col2 = col1 + #edit.val, color = color }
+        elseif edit.tag == "delete" then
+          deletes = deletes + 1
+        end
+      end
+      return ranges
+    end,
+    text_color = function(_, view, line)
+      local changes = is_a and parent.a_changes or parent.b_changes
+      local change = changes[line]
+      if change and change.tag ~= "equal" and config.plugins.diffview.plain_text then
+        return config.plugins.diffview.plain_text_color
+      end
+    end,
+  }
+end
+
+function DiffView:install_view_integrations()
   if self.views_patched then return end
   self.views_patched = true
 
-  local parent = self
-
-  ---@param doc_view core.docview
-  ---@param is_a boolean
-  local function wrap_draw_line_text(doc_view, is_a)
-    local orig = doc_view.draw_line_text
-    doc_view.draw_line_text = function(self, line, x, y)
-      local changes = is_a and parent.a_changes or parent.b_changes
-      draw_line_text_override(parent, self, line, x, y, changes)
-      local has_changes = changes[line] and changes[line].tag ~= "equal"
-      if
-        changes[line] and changes[line].tag ~= "equal"
-        and
-        (not changes[line-1] or changes[line].tag ~= changes[line-1].tag)
-      then
-        local ax, icon
-        local pad = style.padding.x / 2
-        if is_a then
-          icon = ">"
-          ax = self.position.x + self.size.x + pad
-        else
-          icon = "<"
-          ax = self.position.x - pad
-        end
-        local color = style.text
-        if parent.hovered_sync and parent.hovered_sync.is_a == is_a then
-          if parent.hovered_sync.line == line then
-            color = style.caret
-          end
-        end
-        core.root_panel:defer_draw(function()
-          core.push_clip_rect(parent.position.x, parent.position.y, parent.size.x, parent.size.y)
-          local ay = y + (self:get_line_height() / 2) - (style.icon_font:get_height() / 2)
-          renderer.draw_text(style.icon_font, icon, ax, ay, color)
-          core.pop_clip_rect()
-        end)
-      end
-      if has_changes and config.plugins.diffview.plain_text and not self.wrapped_settings then
-        renderer.draw_text(
-          self:get_font(),
-          self.doc.lines[line],
-          x, y + self:get_line_text_y_offset(),
-          config.plugins.diffview.plain_text_color
-        )
-        return self:get_line_height()
-      else
-        return orig(self, line, x, y)
-      end
-    end
-  end
-
-  ---@param doc_view core.docview
-  ---@param is_a boolean
-  local function wrap_scroll_to_line(doc_view, is_a)
-    local orig = doc_view.scroll_to_line
-    doc_view.scroll_to_line = function(self, ...)
-      orig(self, ...)
-      parent:sync_scroll_from(self, is_a)
-    end
-  end
-
-  local function wrap_scroll_to_make_visible(doc_view, is_a)
-    local orig = doc_view.scroll_to_make_visible
-    doc_view.scroll_to_make_visible = function(self, ...)
-      orig(self, ...)
-      parent:sync_scroll_from(self, is_a)
-    end
-  end
-
-  local function wrap_selection_sync(doc_view, is_a)
-    local doc = doc_view.doc
-    local orig_set_selection = doc.set_selection
-    doc.set_selection = function(self, ...)
-      local result = orig_set_selection(self, ...)
-      if not parent.syncing_diff_caret then parent:sync_caret_from(doc_view, is_a) end
-      return result
-    end
-    local orig_set_selections = doc.set_selections
-    doc.set_selections = function(self, ...)
-      local result = orig_set_selections(self, ...)
-      if not parent.syncing_diff_caret then parent:sync_caret_from(doc_view, is_a) end
-      return result
-    end
-    local orig_set_selection_list = doc.set_selection_list
-    doc.set_selection_list = function(self, ...)
-      local result = orig_set_selection_list(self, ...)
-      if not parent.syncing_diff_caret then parent:sync_caret_from(doc_view, is_a) end
-      return result
-    end
-  end
-
-  ---@param doc_view core.docview
-  local function wrap_doc_raw_insert(doc_view)
-    local orig = doc_view.doc.raw_insert
-    doc_view.doc.raw_insert = function(...)
-      parent:update_diff()
-      return orig(...)
-    end
-  end
-
-  ---@param doc_view core.docview
-  local function wrap_doc_raw_remove(doc_view)
-    local orig = doc_view.doc.raw_remove
-    doc_view.doc.raw_remove = function(...)
-      parent:update_diff()
-      return orig(...)
-    end
-  end
-
-  ---@param doc_view core.docview
-  local function wrap_doc_transaction(doc_view)
-    local orig = doc_view.doc.on_text_transaction
-    doc_view.doc.on_text_transaction = function(doc, transaction)
-      parent:update_diff()
-      return orig(doc, transaction)
-    end
-  end
-
-  ---@param changes diff.changes[]
-  local function has_changes(changes)
-    for _, change in ipairs(changes) do
-      if change.tag ~= "equal" then
-        return true
-      end
-    end
-    return false
-  end
-
-  ---@param doc_view core.docview
-  ---@param is_a boolean
-  local function wrap_points_of_interest(doc_view, is_a)
-    doc_view.get_points_of_interest = function(self)
-      local changes = is_a and parent.a_changes or parent.b_changes
-      if not has_changes(changes) then return {} end
-      local points = {}
-      local last_tag
-      for line, change in ipairs(changes) do
-        local tag = change and change.tag or "equal"
-        if tag ~= "equal" and tag ~= last_tag then
-          points[#points + 1] = {
-            line = math.min(#self.doc.lines, math.max(1, line)),
-            col = 1,
-            line_only_navigation = true,
-            scroll_to_line = true,
-            kind = "diff-change",
-            label = tag,
-            change = change,
-          }
-        end
-        last_tag = tag
-      end
-      return points
-    end
-  end
-
-  ---@param doc_view core.docview
-  ---@param is_a boolean
-  local function wrap_prev_change(doc_view, is_a)
-    doc_view.prev_change = function(self)
-      local changes = is_a and parent.a_changes or parent.b_changes
-      if not has_changes(changes) then return end
-
-      local line = self.doc:get_selection()
-      if not changes[line] then return end
-      local tag = changes[line].tag
-      if line == 1 then
-        line = #self.doc.lines
-      else
-        line = line - 1
-      end
-
-      local target = line
-      local in_first_block = tag ~= "equal" and true or false
-      local in_second_block = tag == "equal" and true or false
-
-      while true do
-        if not changes[target] then break end
-        if in_first_block then
-          if changes[target].tag ~= tag then
-            in_first_block = false
-            in_second_block = true
-          end
-        elseif in_second_block and changes[target].tag ~= "equal" then
-          if changes[target-1].tag ~= changes[target].tag then
-            break
-          end
-        end
-        target = target - 1
-        if target == 1 then
-          if changes[target].tag == "equal" then
-            target = #self.doc.lines
-          else
-            break
-          end
-        elseif target < 1 then
-          target = #self.doc.lines
-        end
-      end
-
-      self.doc:set_selection(target, 1, target, 1)
-      self:scroll_to_line(target, false, true)
-    end
-  end
-
-  ---@param doc_view core.docview
-  ---@param is_a boolean
-  local function wrap_next_change(doc_view, is_a)
-    doc_view.next_change = function(self)
-      local changes = is_a and parent.a_changes or parent.b_changes
-      if not has_changes(changes) then return end
-
-      local count_lines = #self.doc.lines
-      local line = self.doc:get_selection()
-      if not changes[line] then return end
-      local tag = changes[line].tag
-      if line == count_lines then
-        line = 1
-      else
-        line = line + 1
-      end
-
-      local target = line
-      local in_first_block = tag ~= "equal" and true or false
-      local in_second_block = tag == "equal" and true or false
-
-      while true do
-        if not changes[target] then break end
-        if in_first_block then
-          if changes[target].tag ~= tag then
-            in_first_block = false
-            in_second_block = true
-          end
-        elseif in_second_block and changes[target].tag ~= "equal" then
-          if not changes[target-1] or changes[target-1].tag ~= changes[target].tag then
-            break
-          end
-        end
-        target = target + 1
-        if target == count_lines then
-          if changes[target].tag == "equal" then
-            target = 1
-          else
-            break
-          end
-        elseif target > count_lines then
-          target = 1
-        end
-      end
-
-      self.doc:set_selection(target, 1, target, 1)
-      self:scroll_to_line(target, false, true)
-    end
-  end
-
-  -- Apply to both views with dynamic referencing
   for _, side in ipairs {
-    {view = self.doc_view_a, is_a = true},
-    {view = self.doc_view_b, is_a = false}
+    { view = self.doc_view_a, is_a = true, id = "a" },
+    { view = self.doc_view_b, is_a = false, id = "b" },
   } do
-    wrap_draw_line_text(side.view, side.is_a)
-    wrap_scroll_to_line(side.view, side.is_a)
-    wrap_scroll_to_make_visible(side.view, side.is_a)
-    wrap_selection_sync(side.view, side.is_a)
-    wrap_points_of_interest(side.view, side.is_a)
-    wrap_doc_raw_insert(side.view)
-    wrap_doc_raw_remove(side.view)
-    wrap_doc_transaction(side.view)
-    wrap_prev_change(side.view, side.is_a)
-    wrap_next_change(side.view, side.is_a)
+    local provider_id = "diff-view"
+    side.view:add_decoration_provider(provider_id, diff_decoration_provider(self, side.is_a), { priority = 50 })
+    side.view:add_poi_provider(provider_id, {
+      priority = 50,
+      points_of_interest = function()
+        return self:diff_points_of_interest(side.is_a)
+      end,
+    }, { priority = 50 })
+    side.view:add_selection_listener(provider_id, function(view)
+      if not self.syncing_diff_caret then self:sync_caret_from(view, side.is_a) end
+    end)
+    side.view:add_scroll_listener(provider_id, function(view)
+      self:sync_scroll_from(view, side.is_a)
+    end)
+    side.view.doc:add_text_change_listener("diff-view-" .. side.id .. "-" .. tostring(self), {
+      after_change = function()
+        self:update_diff()
+      end,
+    })
   end
+end
+
+function DiffView:dispose_integrations()
+  if self.disposed then return end
+  self.disposed = true
+  for _, side in ipairs {
+    { view = self.doc_view_a, id = "a" },
+    { view = self.doc_view_b, id = "b" },
+  } do
+    side.view:remove_decoration_provider("diff-view")
+    side.view:remove_poi_provider("diff-view")
+    side.view:remove_selection_listener("diff-view")
+    side.view:remove_scroll_listener("diff-view")
+    side.view.doc:remove_text_change_listener("diff-view-" .. side.id .. "-" .. tostring(self))
+  end
+  self.diff_generation = (self.diff_generation or 0) + 1
+end
+
+function DiffView:try_close(do_close)
+  self:dispose_integrations()
+  return DiffView.super.try_close(self, do_close)
 end
 
 local function redraw_thumb(view_scrollbar)
   view_scrollbar:draw_thumb()
+end
+
+function DiffView:draw_divider_sync_actions()
+  local left = self.doc_view_a
+  local right = self.doc_view_b
+  local x1 = left.position.x + left.size.x
+  local x2 = right.position.x
+  if x2 <= x1 then return end
+  local pad = style.padding.x / 2
+  local function draw_action(is_a, line, y)
+    local icon = is_a and ">" or "<"
+    local ax = is_a and (x1 + pad) or (x2 - pad)
+    local color = style.text
+    if self.hovered_sync and self.hovered_sync.is_a == is_a and self.hovered_sync.line == line then
+      color = style.caret
+    end
+    local ay = y + (left:get_line_height() / 2) - (style.icon_font:get_height() / 2)
+    renderer.draw_text(style.icon_font, icon, ax, ay, color)
+  end
+  for _, block in ipairs(change_blocks(self.a_changes)) do
+    local _, y = left:get_line_screen_position(block.start_line, 1)
+    draw_action(true, block.start_line, y)
+  end
+  for _, block in ipairs(change_blocks(self.b_changes)) do
+    local _, y = right:get_line_screen_position(block.start_line, 1)
+    draw_action(false, block.start_line, y)
+  end
 end
 
 function DiffView:draw_divider_changes()
@@ -1371,6 +1121,7 @@ function DiffView:draw_divider_changes()
     draw_gap_marker(left, b_start_y, diff_color(block.tag))
   end
 
+  self:draw_divider_sync_actions()
   core.pop_clip_rect()
 end
 
@@ -1542,6 +1293,35 @@ command.add(nil, {
 })
 
 
+local function navigate_diff_change(dv, direction)
+  local poi = require "core.poi"
+  local points = poi.points_for_view(dv, { source = "diff-view" }) or {}
+  if #points == 0 then return poi.navigate(dv, direction) end
+  direction = direction and direction < 0 and -1 or 1
+  return with_docview_selection(dv, function()
+    local line = dv.doc:get_selection()
+    local selected
+    if direction > 0 then
+      for _, point in ipairs(points) do
+        if point.line > line then selected = point; break end
+      end
+      selected = selected or points[1]
+    else
+      for i = #points, 1, -1 do
+        if points[i].line < line then selected = points[i]; break end
+      end
+      selected = selected or points[#points]
+    end
+    dv.doc:set_selection(selected.line, selected.col or 1, selected.line, selected.col or 1)
+    if selected.scroll_to_line and dv.scroll_to_line then
+      dv:scroll_to_line(selected.line, false, true)
+    elseif dv.scroll_to_make_visible then
+      dv:scroll_to_make_visible(selected.line, selected.col or 1)
+    end
+    return selected
+  end)
+end
+
 -- Register changes navigation and sync commands
 command.add(
   function()
@@ -1551,11 +1331,11 @@ command.add(
       core.active_view
   end, {
   ["diff-view:prev-change"] = function(dv)
-    require("core.poi").navigate(dv, -1)
+    return navigate_diff_change(dv, -1)
   end,
 
   ["diff-view:next-change"] = function(dv)
-    require("core.poi").navigate(dv, 1)
+    return navigate_diff_change(dv, 1)
   end,
 
   ["diff-view:sync-change"] = function(dv)
@@ -1636,17 +1416,33 @@ end)
 
 
 
+local compare_add_to_root_node
+
 ---Functionality to view the textual differences of two elements.
 ---@class plugins.diffview
 local diffview = {
   ---The differences viewer exposed for extensiblity.
   ---@type plugins.diffview.view
-  Viewer = DiffView
+  Viewer = DiffView,
+  content = {},
 }
+
+diffview.content.text = content_text
+diffview.content.file = content_file
+diffview.content.document = content_document
+diffview.content.empty = content_empty
+
+function diffview.open(request, noshow)
+  local view = DiffView(request)
+  if not noshow then
+    compare_add_to_root_node(view)
+  end
+  return view
+end
 
 ---Helper differences view to rootpanel add.
 ---@param view plugins.diffview.view
-local function compare_add_to_root_node(view)
+compare_add_to_root_node = function(view)
   core.root_panel:get_active_node_default():add_view(view)
   core.set_active_view(view)
 end
@@ -1659,7 +1455,7 @@ end
 ---@param noshow? boolean
 ---@return plugins.diffview.view
 local function compare_start(a, b, ct, names, noshow)
-  local view = DiffView(a, b, ct, names)
+  local view = DiffView(legacy_request(a, b, ct, names))
   if not noshow then
     compare_add_to_root_node(view)
   end

@@ -176,6 +176,17 @@ local function copy_array(t)
   return res
 end
 
+local function selection_states_equal(a, b)
+  if not a or not b then return a == b end
+  if (a.last_selection or 1) ~= (b.last_selection or 1) then return false end
+  local as, bs = a.selections or {}, b.selections or {}
+  if #as ~= #bs then return false end
+  for i = 1, #as do
+    if as[i] ~= bs[i] then return false end
+  end
+  return true
+end
+
 local function pack(...)
   return { n = select("#", ...), ... }
 end
@@ -413,6 +424,7 @@ function DocView:get_selection_state()
 end
 
 function DocView:set_selection_state(state)
+  local old_state = self:get_selection_state()
   local owner_id = self.selection_state and (self.selection_state.owner_id or self.selection_state.session_id) or new_selection_owner_id()
   self.selection_state = normalize_selection_state(self.doc, {
     selections = copy_array(state and state.selections or state),
@@ -428,9 +440,14 @@ function DocView:set_selection_state(state)
   elseif not self.doc.bound_selection_view and self:owns_doc_selection_mirror() then
     self:apply_selection_state()
   end
+  local new_state = self:get_selection_state()
+  if self.notify_selection_listeners and not selection_states_equal(old_state, new_state) then
+    self:notify_selection_listeners("set", old_state, new_state)
+  end
 end
 
-function DocView:capture_selection_state()
+function DocView:capture_selection_state(old_state)
+  old_state = old_state or self:get_selection_state()
   local owner_id = self.selection_state and (self.selection_state.owner_id or self.selection_state.session_id) or new_selection_owner_id()
   if self.selection_state and self.doc.selections == self.selection_state.selections then
     self.selection_state.last_selection = self.doc.last_selection
@@ -447,6 +464,10 @@ function DocView:capture_selection_state()
     self.selection_state.session_id = owner_id -- deprecated compatibility alias
   end
   DocView.owner_views[owner_id] = self
+  local new_state = self:get_selection_state()
+  if self.notify_selection_listeners and not selection_states_equal(old_state, new_state) then
+    self:notify_selection_listeners("capture", old_state, new_state)
+  end
 end
 
 function DocView:apply_selection_state()
@@ -580,6 +601,7 @@ function DocView:with_selection_state(fn, ...)
     return fn(...)
   end
 
+  local old_self_selection_state = self:get_selection_state()
   local old_selections = doc.selections
   local old_last_selection = doc.last_selection
   local old_bound_view = doc.bound_selection_view
@@ -624,7 +646,7 @@ function DocView:with_selection_state(fn, ...)
   end, debug.traceback)
 
   local capture_ok, capture_err = xpcall(function()
-    self:capture_selection_state()
+    self:capture_selection_state(old_self_selection_state)
   end, debug.traceback)
 
   stack[#stack] = nil
@@ -742,6 +764,10 @@ function DocView:new(doc)
   self.fold_generation = 0
   self.__fold_next_id = 0
   self.visual_row_extensions = {}
+  self.decoration_providers = {}
+  self.poi_providers = {}
+  self.selection_listeners = {}
+  self.scroll_listeners = {}
   register_fold_view(self)
   linewrapping.register_docview(self)
   self:set_wrapping_enabled(config.plugins.linewrapping.enable_by_default)
@@ -1114,6 +1140,107 @@ if Doc and not Doc.__docview_folding_close_patched then
   function Doc:on_close(...)
     clear_fold_views_for_doc(self, "doc-close")
     return old_on_close(self, ...)
+  end
+end
+
+local function sorted_provider_entries(entries)
+  local list = {}
+  for id, entry in pairs(entries or {}) do
+    list[#list + 1] = entry
+  end
+  table.sort(list, function(a, b)
+    if (a.priority or 0) == (b.priority or 0) then return tostring(a.id) < tostring(b.id) end
+    return (a.priority or 0) < (b.priority or 0)
+  end)
+  return list
+end
+
+function DocView:add_decoration_provider(id, provider, opts)
+  assert(type(id) == "string" and id ~= "", "decoration provider id must be a non-empty string")
+  assert(type(provider) == "table", "decoration provider must be a table")
+  opts = opts or {}
+  self.decoration_providers = self.decoration_providers or {}
+  self.decoration_providers[id] = { id = id, provider = provider, priority = opts.priority or provider.priority or 0 }
+end
+
+function DocView:remove_decoration_provider(id)
+  if not self.decoration_providers or not self.decoration_providers[id] then return false end
+  self.decoration_providers[id] = nil
+  return true
+end
+
+function DocView:decoration_provider_entries()
+  return sorted_provider_entries(self.decoration_providers)
+end
+
+function DocView:add_poi_provider(id, provider, opts)
+  assert(type(id) == "string" and id ~= "", "POI provider id must be a non-empty string")
+  assert(type(provider) == "table", "POI provider must be a table")
+  opts = opts or {}
+  self.poi_providers = self.poi_providers or {}
+  self.poi_providers[id] = { id = id, provider = provider, priority = opts.priority or provider.priority or 0 }
+end
+
+function DocView:remove_poi_provider(id)
+  if not self.poi_providers or not self.poi_providers[id] then return false end
+  self.poi_providers[id] = nil
+  return true
+end
+
+function DocView:get_points_of_interest(opts)
+  local points = {}
+  for _, entry in ipairs(sorted_provider_entries(self.poi_providers)) do
+    local provider = entry.provider
+    local fn = provider.points_of_interest or provider.get_points_of_interest
+    if fn then
+      local ok, res = pcall(fn, provider, self, opts or {})
+      if ok and res then
+        for _, point in ipairs(res) do points[#points + 1] = point end
+      elseif not ok then
+        core.log_quiet("DocView POI provider %s failed for %s: %s", tostring(entry.id), self.doc:get_name(), tostring(res))
+      end
+    end
+  end
+  return points
+end
+
+function DocView:add_selection_listener(id, fn)
+  assert(type(id) == "string" and id ~= "", "selection listener id must be a non-empty string")
+  assert(type(fn) == "function", "selection listener must be a function")
+  self.selection_listeners = self.selection_listeners or {}
+  self.selection_listeners[id] = fn
+end
+
+function DocView:remove_selection_listener(id)
+  if not self.selection_listeners or not self.selection_listeners[id] then return false end
+  self.selection_listeners[id] = nil
+  return true
+end
+
+function DocView:notify_selection_listeners(reason, old_state, new_state)
+  for id, fn in pairs(self.selection_listeners or {}) do
+    local ok, err = pcall(fn, self, new_state or self:get_selection_state(), old_state, reason)
+    if not ok then core.log_quiet("DocView selection listener %s failed for %s: %s", tostring(id), self.doc:get_name(), tostring(err)) end
+  end
+end
+
+function DocView:add_scroll_listener(id, fn)
+  assert(type(id) == "string" and id ~= "", "scroll listener id must be a non-empty string")
+  assert(type(fn) == "function", "scroll listener must be a function")
+  self.scroll_listeners = self.scroll_listeners or {}
+  self.scroll_listeners[id] = fn
+end
+
+function DocView:remove_scroll_listener(id)
+  if not self.scroll_listeners or not self.scroll_listeners[id] then return false end
+  self.scroll_listeners[id] = nil
+  return true
+end
+
+function DocView:notify_scroll_listeners(reason)
+  for id, fn in pairs(self.scroll_listeners or {}) do
+    local ok, err = pcall(fn, self, reason)
+    if not ok then core.log_quiet("DocView scroll listener %s failed for %s: %s", tostring(id), self.doc:get_name(), tostring(err)) end
   end
 end
 
@@ -2133,6 +2260,7 @@ function DocView:scroll_to_line(line, ignore_if_visible, instant, opts)
       self.scroll.y = self.scroll.to.y
     end
   end
+  self:notify_scroll_listeners("scroll_to_line")
 end
 
 
@@ -2158,9 +2286,12 @@ function DocView:scroll_to_make_visible(line, col, instant, opts)
     with_wrapped_caret_affinity(self, DocView.scroll_to_make_visible_unwrapped, line, col, instant, opts)
     self.scroll.to.x = 0
     if instant then self.scroll.x = self.scroll.to.x end
+    self:notify_scroll_listeners("scroll_to_make_visible")
     return
   end
-  return self:scroll_to_make_visible_unwrapped(line, col, instant, opts)
+  local result = self:scroll_to_make_visible_unwrapped(line, col, instant, opts)
+  self:notify_scroll_listeners("scroll_to_make_visible")
+  return result
 end
 
 function DocView:scroll_to_make_visible_unwrapped(line, col, instant, opts)
@@ -2934,6 +3065,28 @@ end
 ---@param y number Screen y coordinate
 ---@return integer height Line height
 function DocView:draw_line_text(line, x, y)
+  local provider_text_color = self:decoration_text_color(line)
+  if provider_text_color then
+    local text_y_offset = self:get_line_text_y_offset()
+    local lh = self:get_line_height()
+    if self.wrapped_settings then
+      local first_idx, _, count = linewrapping.get_line_idx_col_count(self, line)
+      local visible_idx1 = math.max(first_idx, self.__wrapped_draw_first_idx or first_idx)
+      local visible_idx2 = math.min(first_idx + count - 1, self.__wrapped_draw_last_idx or (first_idx + count - 1))
+      for idx = visible_idx1, visible_idx2 do
+        local row_line, row_start_col = linewrapping.get_idx_line_col(self, idx)
+        if row_line == line then
+          local next_line, row_end_col = linewrapping.get_idx_line_col(self, idx + 1)
+          if next_line ~= line then row_end_col = #self.doc.lines[line] end
+          local tx = x + (row_start_col ~= 1 and (self.wrapped_line_offsets[line] or 0) or 0)
+          renderer.draw_text(self:get_font(), self.doc.lines[line]:sub(row_start_col, math.max(row_start_col, row_end_col - 1)), tx, y + text_y_offset + (idx - first_idx) * lh, provider_text_color)
+        end
+      end
+      return lh * count
+    end
+    renderer.draw_text(self:get_font(), self.doc.lines[line], x, y + text_y_offset, provider_text_color)
+    return lh
+  end
   if self.wrapped_settings then
     local perf_active = core.perf_frame_stats ~= nil
     local perf_start = perf_active and system.get_time()
@@ -3619,6 +3772,78 @@ function DocView:prepare_line_body_draw_cache(minline, maxline)
   self.__visible_caret_cache = visible_caret_cache
 end
 
+local function provider_call(view, entry, method, ...)
+  local provider = entry.provider
+  local fn = provider and provider[method]
+  if not fn then return nil end
+  local ok, res = pcall(fn, provider, ...)
+  if not ok then
+    core.log_quiet("DocView decoration provider %s.%s failed for %s: %s", tostring(entry.id), method, view.doc:get_name(), tostring(res))
+    return nil
+  end
+  return res
+end
+
+local function draw_decoration_line_backgrounds(view, line, x, y)
+  local lh = view:get_line_height()
+  for _, entry in ipairs(view:decoration_provider_entries()) do
+    local color = provider_call(view, entry, "line_background", view, line)
+    if color then
+      if view.wrapped_settings and view.__wrapped_draw_first_idx then
+        local first_idx = view.wrapped_line_to_idx and view.wrapped_line_to_idx[line]
+        if first_idx then
+          for idx = view.__wrapped_draw_first_idx, view.__wrapped_draw_last_idx do
+            renderer.draw_rect(view.position.x, y + (idx - first_idx) * lh, view.size.x, lh, color)
+          end
+        end
+      else
+        renderer.draw_rect(view.position.x, y, view.size.x, lh, color)
+      end
+    end
+  end
+end
+
+local function draw_decoration_inline_ranges(view, line, x, y)
+  local lh = view:get_line_height()
+  for _, entry in ipairs(view:decoration_provider_entries()) do
+    local ranges = provider_call(view, entry, "inline_ranges", view, line)
+    for _, range in ipairs(ranges or {}) do
+      local col1 = math.max(1, math.floor(tonumber(range.col1 or range[1]) or 1))
+      local col2 = math.max(col1, math.floor(tonumber(range.col2 or range[2]) or col1))
+      local color = range.color or range[3]
+      if color then
+        if view.wrapped_settings and view.__wrapped_draw_first_idx then
+          local first_idx = view.wrapped_line_to_idx and view.wrapped_line_to_idx[line]
+          if first_idx then
+            for idx = view.__wrapped_draw_first_idx, view.__wrapped_draw_last_idx do
+              local row_start, row_end = view:get_visual_row_bounds_for_line(line, idx - first_idx + 1)
+              if row_start and row_end and col2 > row_start and col1 < row_end then
+                local seg_col1 = math.max(col1, row_start)
+                local seg_col2 = math.min(col2, row_end)
+                local tx1 = view:get_col_x_offset(line, seg_col1, false)
+                local tx2 = view:get_col_x_offset(line, seg_col2, seg_col2 == row_end)
+                if tx2 > tx1 then renderer.draw_rect(x + tx1, y + (idx - first_idx) * lh, tx2 - tx1, lh, color) end
+              end
+            end
+          end
+        else
+          local tx1 = view:get_col_x_offset(line, col1)
+          local text = view.doc.lines[line] or ""
+          local width = view:get_font():get_width(text:sub(col1, math.max(col1, col2 - 1)))
+          if width > 0 then renderer.draw_rect(x + tx1, y, width, lh, color) end
+        end
+      end
+    end
+  end
+end
+
+function DocView:decoration_text_color(line)
+  for _, entry in ipairs(self:decoration_provider_entries()) do
+    local color = provider_call(self, entry, "text_color", self, line)
+    if color then return color end
+  end
+end
+
 ---Draw a complete line including highlight and selections.
 ---@param line integer Line number
   ---@param x number Screen x coordinate
@@ -3642,6 +3867,7 @@ function DocView:draw_line_body(line, x, y)
     local old_visible_idx2 = self.__wrapped_draw_last_idx
     self.__wrapped_draw_first_idx = visible_idx1
     self.__wrapped_draw_last_idx = visible_idx2
+    draw_decoration_line_backgrounds(self, line, x, y)
     local highlight_rows
     local hcl = config.highlight_current_line
     if not self.__current_line_highlights_drawn_before_content
@@ -3690,6 +3916,7 @@ function DocView:draw_line_body(line, x, y)
     for _, match in ipairs(search_matches or {}) do
       draw_wrapped_search_match(self, line, match[1], match[2], x, y, idx0, lh, match[3], false, visible_idx1, visible_idx2)
     end
+    draw_decoration_inline_ranges(self, line, x, y)
 
     local line_height = self:draw_line_text(line, x, y)
 
@@ -3709,6 +3936,8 @@ function DocView:draw_line_body(line, x, y)
     self.__wrapped_draw_last_idx = old_visible_idx2
     return line_height
   end
+
+  draw_decoration_line_backgrounds(self, line, x, y)
 
   if not self.__current_line_highlights_drawn_before_content
   and self:line_has_current_line_highlight(line) then
@@ -3760,6 +3989,8 @@ function DocView:draw_line_body(line, x, y)
       self:draw_search_match_background(line, match[1], match[2], match[3])
     end
   end
+
+  draw_decoration_inline_ranges(self, line, x, y)
 
   -- draw line's text
   local line_height = self:draw_line_text(line, x, y)

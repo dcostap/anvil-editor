@@ -604,8 +604,20 @@ local function gitdiff_points_for_view(view)
 	return points
 end
 
+local docview_get_points_of_interest = DocView.get_points_of_interest
 function DocView:get_points_of_interest(opts)
-	return gitdiff_points_for_view(self, opts)
+	local git_points, unavailable = gitdiff_points_for_view(self, opts)
+	local provider_points, provider_unavailable
+	if docview_get_points_of_interest then
+		provider_points, provider_unavailable = docview_get_points_of_interest(self, opts)
+	end
+	if git_points and provider_points then
+		local combined = {}
+		for _, point in ipairs(git_points) do combined[#combined + 1] = point end
+		for _, point in ipairs(provider_points) do combined[#combined + 1] = point end
+		return combined
+	end
+	return git_points or provider_points, unavailable or provider_unavailable
 end
 
 local function active_editor_view()
