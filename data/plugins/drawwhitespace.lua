@@ -4,6 +4,7 @@ local core = require "core"
 local style = require "core.style"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
+local linewrapping = require "core.linewrapping"
 local command = require "core.command"
 
 local drawwhitespace = {
@@ -412,7 +413,7 @@ local function get_line_x_cache(self, idx, entry)
   return x_cache
 end
 
-local function cached_col_x_offset(self, idx, x_cache, col)
+local function cached_col_x_offset(self, idx, x_cache, col, line_end)
   if x_cache.fast_space_width then
     if not x_cache.fast_tab_width then
       return (col - 1) * x_cache.fast_space_width
@@ -448,10 +449,11 @@ local function cached_col_x_offset(self, idx, x_cache, col)
   end
 
   local offsets = x_cache.offsets
-  local offset = offsets[col]
+  local key = line_end and -col or col
+  local offset = offsets[key]
   if offset == nil then
-    offset = self:get_col_x_offset(idx, col)
-    offsets[col] = offset
+    offset = self:get_col_x_offset(idx, col, line_end)
+    offsets[key] = offset
   end
   return offset
 end
@@ -474,12 +476,12 @@ local function draw_text_known_bounds(font, text, x, y, color, rect_x, rect_y, r
   return renderer.draw_text(font, text, x, y, color, tab)
 end
 
-local function draw_space_rects(self, idx, x, font, ty, start_col, end_col, color, x_cache)
+local function draw_space_rects(self, idx, x, font, ty, start_col, end_col, color, x_cache, end_line_end)
   local count = end_col - start_col
   if count <= 0 then return end
 
   local start_x = cached_col_x_offset(self, idx, x_cache, start_col) + x
-  local end_x = cached_col_x_offset(self, idx, x_cache, end_col) + x
+  local end_x = cached_col_x_offset(self, idx, x_cache, end_col, end_line_end) + x
   if end_x <= start_x then return end
 
   local clip_left, clip_right = current_clip_x_range(self)
@@ -511,7 +513,7 @@ local function draw_space_rects(self, idx, x, font, ty, start_col, end_col, colo
   end
 end
 
-local function draw_tab_markers(self, idx, x, font, ty, substitution, start_col, end_col, color, x_cache)
+local function draw_tab_markers(self, idx, x, font, ty, substitution, start_col, end_col, color, x_cache, end_line_end)
   local marker = substitution.sub or ""
   if marker == "" then return end
 
@@ -538,7 +540,7 @@ local function draw_tab_markers(self, idx, x, font, ty, substitution, start_col,
   end
 
   if batch_tabs and first_col then
-    local end_x = cached_col_x_offset(self, idx, x_cache, last_col + 1) + x
+    local end_x = cached_col_x_offset(self, idx, x_cache, last_col + 1, end_line_end and last_col + 1 == end_col) + x
     draw_text_known_bounds(
       font,
       repeated_tab_marker(marker, last_col - first_col + 1),
@@ -554,7 +556,7 @@ local function draw_tab_markers(self, idx, x, font, ty, substitution, start_col,
   end
 end
 
-local function draw_whitespace_run(self, idx, x, y, font, ty, substitution, start_col, end_col, color, x_cache)
+local function draw_whitespace_run(self, idx, x, y, font, ty, substitution, start_col, end_col, color, x_cache, end_line_end)
   if start_col >= end_col then return end
 
   if substitution.char == " " then
@@ -569,7 +571,7 @@ local function draw_whitespace_run(self, idx, x, y, font, ty, substitution, star
     -- thousands of renderer calls per second into one call per whitespace run.
     if marker_matches_space_advance(font, marker) then
       local start_x = cached_col_x_offset(self, idx, x_cache, start_col) + x
-      local end_x = cached_col_x_offset(self, idx, x_cache, end_col) + x
+      local end_x = cached_col_x_offset(self, idx, x_cache, end_col, end_line_end) + x
       draw_text_known_bounds(
         font,
         repeated_marker(marker, count),
@@ -582,7 +584,7 @@ local function draw_whitespace_run(self, idx, x, y, font, ty, substitution, star
         cached_font_height(font)
       )
     else
-      draw_space_rects(self, idx, x, font, ty, start_col, end_col, color, x_cache)
+      draw_space_rects(self, idx, x, font, ty, start_col, end_col, color, x_cache, end_line_end)
     end
     return
   end
@@ -591,7 +593,73 @@ local function draw_whitespace_run(self, idx, x, y, font, ty, substitution, star
   -- Lua. Rencache clips too, but only after a Lua/FFI call and text-width
   -- measurement for every marker; long tab-heavy lines can otherwise spend
   -- most of a redraw submitting thousands of arrows.
-  draw_tab_markers(self, idx, x, font, ty, substitution, start_col, end_col, color, x_cache)
+  draw_tab_markers(self, idx, x, font, ty, substitution, start_col, end_col, color, x_cache, end_line_end)
+end
+
+local function whitespace_run_draw_options(substitution, run)
+  local draw = false
+  local color = get_option(substitution, "color")
+  if run.trailing then
+    draw = get_option(substitution, "show_trailing")
+    color = get_option(substitution, "trailing_color") or color
+  elseif run.leading then
+    draw = get_option(substitution, "show_leading")
+    color = get_option(substitution, "leading_color") or color
+  else
+    draw = get_option(substitution, "show_middle")
+      and (run.end_col - run.start_col >= get_option(substitution, "show_middle_min"))
+    color = get_option(substitution, "middle_color") or color
+  end
+  return draw, color
+end
+
+local function draw_wrapped_whitespace(self, idx, x, y, font, entry)
+  local first_idx = self.wrapped_line_to_idx and self.wrapped_line_to_idx[idx]
+  if not first_idx then return end
+  local total = linewrapping.get_total_wrapped_lines(self)
+  local next_first_idx = self.wrapped_line_to_idx[idx + 1] or (total + 1)
+  local last_idx = next_first_idx - 1
+  local visible_idx1 = math.max(first_idx, self.__wrapped_draw_first_idx or first_idx)
+  local visible_idx2 = math.min(last_idx, self.__wrapped_draw_last_idx or last_idx)
+  if visible_idx2 < visible_idx1 then return end
+
+  local lh = self:get_line_height()
+  local text_y_offset = self:get_line_text_y_offset()
+  local x_cache
+  for row_idx = visible_idx1, visible_idx2 do
+    local _, row_start_col = linewrapping.get_idx_line_col(self, row_idx)
+    local row_next_line, row_end_col = linewrapping.get_idx_line_col(self, row_idx + 1)
+    local row_continues_line = row_next_line == idx
+    if not row_continues_line then row_end_col = #self.doc.lines[idx] end
+    local row_y = y + (row_idx - first_idx) * lh
+    local row_ty = row_y + text_y_offset
+
+    for _, run in ipairs(entry.runs) do
+      local substitution = drawwhitespace.substitutions[run.substitution]
+      local start_col = math.max(run.start_col, row_start_col)
+      local end_col = math.min(run.end_col, row_end_col)
+      if start_col < end_col then
+        local draw, color = whitespace_run_draw_options(substitution, run)
+        if draw then
+          x_cache = x_cache or get_line_x_cache(self, idx, entry)
+          draw_whitespace_run(
+            self,
+            idx,
+            x,
+            row_y,
+            font,
+            row_ty,
+            substitution,
+            start_col,
+            end_col,
+            color,
+            x_cache,
+            row_continues_line and end_col == row_end_col
+          )
+        end
+      end
+    end
+  end
 end
 
 local draw_line_text = DocView.draw_line_text
@@ -616,39 +684,23 @@ function DocView:draw_line_text(idx, x, y)
   local font = (self:get_font() or style.syntax_fonts["whitespace"] or style.syntax_fonts["comment"])
   local ty = y + self:get_line_text_y_offset()
   local col1, col2, text
-  if
-    not drawwhitespace.show_selected_only
-    or
-    self.drawwhitespace_selections.all
-  then
+  local draw_all = not drawwhitespace.show_selected_only or self.drawwhitespace_selections.all
+  local entry
+
+  if draw_all and self.wrapped_settings then
+    entry = get_line_runs(self, idx)
+    draw_wrapped_whitespace(self, idx, x, y, font, entry)
+  elseif draw_all then
     col1, col2 = self:get_visible_cols_range(idx, 20)
     if col1 == 0 or col2 == 1 then goto not_selected end -- skip empty line
-  else
-    if not self.drawwhitespace_selections[idx] then goto not_selected end
-    col1, col2, text = table.unpack(self.drawwhitespace_selections[idx])
-  end
-
-  if not drawwhitespace.show_selected_only or self.drawwhitespace_selections.all then
-    local entry = get_line_runs(self, idx)
+    entry = get_line_runs(self, idx)
     local x_cache
     for _, run in ipairs(entry.runs) do
       local substitution = drawwhitespace.substitutions[run.substitution]
       local start_col = math.max(run.start_col, col1)
       local end_col = math.min(run.end_col, col2 + 1)
       if start_col < end_col then
-        local draw = false
-        local color = get_option(substitution, "color")
-        if run.trailing then
-          draw = get_option(substitution, "show_trailing")
-          color = get_option(substitution, "trailing_color") or color
-        elseif run.leading then
-          draw = get_option(substitution, "show_leading")
-          color = get_option(substitution, "leading_color") or color
-        else
-          draw = get_option(substitution, "show_middle")
-            and (run.end_col - run.start_col >= get_option(substitution, "show_middle_min"))
-          color = get_option(substitution, "middle_color") or color
-        end
+        local draw, color = whitespace_run_draw_options(substitution, run)
         if draw then
           x_cache = x_cache or get_line_x_cache(self, idx, entry)
           draw_whitespace_run(self, idx, x, y, font, ty, substitution, start_col, end_col, color, x_cache)
@@ -656,6 +708,8 @@ function DocView:draw_line_text(idx, x, y)
       end
     end
   else
+    if not self.drawwhitespace_selections[idx] then goto not_selected end
+    col1, col2, text = table.unpack(self.drawwhitespace_selections[idx])
     local line_len = #self.doc.lines[idx]
     -- TODO: Selected-only mode still builds full-line whitespace/x-offset
     -- caches before scanning the selected substring; consider a selection-local
