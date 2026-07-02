@@ -830,9 +830,27 @@ function update_suggestions()
   local scope = config.plugins.autocomplete.suggestions_scope
 
   if not lsp_available and force_basic_suggestions then
-    local function add_text_symbol(name, info, icon, priority, preview_text, preview_name_span, no_icon)
+    local function source_location_fields(symbol, source_doc)
+      if type(symbol) ~= "table" then return nil end
+      local name_start = symbol.name_range and symbol.name_range.start
+      local name_end = symbol.name_range and symbol.name_range["end"]
+      local path = symbol.path or symbol.abs_filename or (source_doc and (source_doc.abs_filename or source_doc.filename))
+      local line = name_start and name_start.line or symbol.start_line
+      local col = name_start and name_start.col or symbol.start_col
+      if not line or not col then return nil end
+      return {
+        source_doc = source_doc,
+        source_path = path,
+        source_line = line,
+        source_col = col,
+        source_end_line = name_end and name_end.line or symbol.end_line or line,
+        source_end_col = name_end and name_end.col or symbol.end_col or col,
+      }
+    end
+
+    local function add_text_symbol(name, info, icon, priority, preview_text, preview_name_span, no_icon, source)
       if name and name ~= "" and #name <= max_symbol_length() and not assigned_sym[name] then
-        table.insert(items, setmetatable({
+        local item = {
           text = name,
           info = info or "normal",
           icon = icon,
@@ -840,7 +858,9 @@ function update_suggestions()
           preview_text = preview_text,
           preview_name_span = preview_name_span,
           no_icon = no_icon,
-        }, mt))
+        }
+        for k, v in pairs(source or {}) do item[k] = v end
+        table.insert(items, setmetatable(item, mt))
         assigned_sym[name] = true
       end
     end
@@ -869,7 +889,8 @@ function update_suggestions()
         symbol.autocomplete_priority,
         symbol.completion_preview,
         symbol.completion_preview_name_span,
-        true
+        true,
+        source_location_fields(symbol, doc)
       )
     end
 
@@ -907,13 +928,15 @@ function update_suggestions()
           for _, symbol in ipairs(project_symbols or {}) do
             local name = symbol.name
             if name and name ~= "" and #name <= max_symbol_length() and not assigned_sym[name] then
-              table.insert(items, setmetatable({
+              local item = {
                 text = name,
                 info = symbol.kind or "project symbol",
                 preview_text = symbol.declaration,
                 preview_name_span = symbol.declaration_name_span,
                 no_icon = true,
-              }, mt))
+              }
+              for k, v in pairs(source_location_fields(symbol) or {}) do item[k] = v end
+              table.insert(items, setmetatable(item, mt))
               assigned_sym[name] = true
             end
           end
@@ -1742,6 +1765,45 @@ end
 --
 -- Commands
 --
+local function reveal_completion_source(show_references)
+  local item = suggestions[suggestions_idx]
+  if not item or not item.source_line or not item.source_col then
+    core.log("No source location for completion")
+    return true
+  end
+
+  local active_docview = get_active_view()
+  local path = item.source_path
+  local view = active_docview
+  reset_suggestions()
+
+  if path and path ~= "" then
+    view = core.open_file(path)
+  elseif item.source_doc and (not view or view.doc ~= item.source_doc) then
+    view = core.root_panel:open_doc(item.source_doc)
+  end
+
+  if not view or not view.doc then
+    core.log("Could not open completion source")
+    return true
+  end
+
+  local line1 = item.source_line
+  local col1 = item.source_col
+  local line2 = item.source_end_line or line1
+  local col2 = item.source_end_col or col1
+  if view.expand_folds_covering_range then
+    view:expand_folds_covering_range(line1, col1, line2, col2, "autocomplete-source")
+  end
+  view.doc:set_selection(line1, col1, line2, col2)
+
+  if show_references then
+    local ok, language = pcall(require, "core.commands.language")
+    if ok and language and language.show_references then language.show_references(view) end
+  end
+  return true
+end
+
 local function docview_predicate()
   local active_docview = get_active_view()
   return active_docview ~= nil, active_docview
@@ -1836,6 +1898,14 @@ command.add(predicate, {
     suggestions_idx = newidx > #suggestions and 1 or newidx
   end,
 
+  ["autocomplete:go-to-declaration"] = function()
+    return reveal_completion_source(false)
+  end,
+
+  ["autocomplete:show-references"] = function()
+    return reveal_completion_source(true)
+  end,
+
   ["autocomplete:cancel"] = function()
     reset_suggestions()
   end,
@@ -1845,11 +1915,13 @@ command.add(predicate, {
 -- Keymaps
 --
 keymap.add {
-  ["alt+space"] = "autocomplete:trigger",
-  ["tab"]       = "autocomplete:complete",
-  ["up"]        = "autocomplete:previous",
-  ["down"]      = "autocomplete:next",
-  ["escape"]    = "autocomplete:cancel",
+  ["alt+space"]    = "autocomplete:trigger",
+  ["tab"]          = "autocomplete:complete",
+  ["alt+r"]        = "autocomplete:go-to-declaration",
+  ["alt+shift+r"]  = "autocomplete:show-references",
+  ["up"]           = "autocomplete:previous",
+  ["down"]         = "autocomplete:next",
+  ["escape"]       = "autocomplete:cancel",
 }
 
 autocomplete._test = {
