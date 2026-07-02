@@ -852,6 +852,18 @@ test.describe("line wrapping visual navigation", function()
     test.same(view.wrapped_line_offsets, incremental_offsets)
   end)
 
+  test.it("clamps oversized continuation indent for right-aligned extracted text", function(context)
+    local view = open_editor(context, string.rep(" ", 128) .. "2 de 112")
+    configure_wrapping_for_test(context, view)
+    config.plugins.linewrapping.mode = "word"
+    config.plugins.linewrapping.indent = true
+    config.plugins.linewrapping.wrapping_indent = 6
+    config.plugins.linewrapping.width_override = view:get_font():get_width(string.rep("x", 100))
+    LineWrapping.update_docview_breaks(view)
+
+    test.ok(LineWrapping.get_wrapped_line_count(view, 1) <= 3, "expected oversized indentation to be clamped instead of producing many blank rows")
+  end)
+
   test.it("keeps wrapped cache equivalent to a full rebuild when editing wrapped indentation", function(context)
     local view, doc = open_editor(context, string.rep(" ", 40) .. "tail words tail words")
     configure_wrapping_for_test(context, view)

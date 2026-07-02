@@ -335,6 +335,11 @@ local function line_continuation_indent_width(doc, default_font, line)
   return 0
 end
 
+local function clamp_continuation_indent_width(indent_width, wrap_width)
+  if wrap_width == math.huge or wrap_width <= 0 then return indent_width end
+  return math.min(indent_width or 0, wrap_width * 0.5)
+end
+
 -- Computes the breaks for a line suffix. `start_col` must be a valid byte
 -- column, normally an existing cached visual-row start. Returns row starts for
 -- the suffix, including `start_col`, plus the line continuation indent width.
@@ -353,6 +358,7 @@ function LineWrapping.compute_line_breaks_from_col(doc, default_font, line, widt
     begin_width = line_continuation_indent_width(doc, default_font, line)
   end
   begin_width = begin_width or 0
+  begin_width = clamp_continuation_indent_width(begin_width, width)
   local xoffset, i, last_space, last_width = start_col > 1 and begin_width or 0, start_col, nil, 0
   local splits = { start_col }
   local line_text = doc:get_utf8_line(line)
@@ -374,7 +380,7 @@ function LineWrapping.compute_line_breaks_from_col(doc, default_font, line, widt
     perf_bytes = perf_bytes + #text
     local font = style.syntax_fonts[type] or default_font
     if start_col == 1 and (idx == 1 or idx == math.huge) then
-      begin_width = LineWrapping.continuation_indent_width(font, text)
+      begin_width = clamp_continuation_indent_width(LineWrapping.continuation_indent_width(font, text), width)
     end
     local has_tab = text:find("\t", 1, true) ~= nil
     local has_non_ascii = text:find("[\128-\255]") ~= nil
