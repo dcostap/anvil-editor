@@ -46,6 +46,16 @@ local function picker_text()
 end
 
 test.describe("Fuzzy Searcher mode switching", function()
+  test.it("recognizes command mode prefixes in prompt text", function()
+    local split = fuzzy_searcher._test.split_mode_prefix
+    test.same({ split(">commands") }, { ">", "commands" })
+    test.same({ split("@projects") }, { "@", "projects" })
+    test.same({ split("#grep") }, { "#", "grep" })
+    test.same({ split("$symbols") }, { "$", "symbols" })
+    test.same({ split("$$document symbols") }, { "$$", "document symbols" })
+    test.same({ split("files") }, { "", "files" })
+  end)
+
   test.after_each(function(context)
     if core.fuzzy_searcher_active_view then
       core.fuzzy_searcher_active_view:close()

@@ -644,6 +644,16 @@ local function trim_query(q)
   return tostring(q or ""):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
+local fuzzy_mode_prefixes = { ["#"] = true, ["@"] = true, [">"] = true, ["$"] = true, ["$$"] = true }
+
+local function split_mode_prefix(text)
+  text = tostring(text or "")
+  if text:sub(1, 2) == "$$" then return "$$", text:sub(3) end
+  local prefix = text:sub(1, 1)
+  if fuzzy_mode_prefixes[prefix] then return prefix, text:sub(2) end
+  return "", text
+end
+
 local function split_words(q)
   local t = {}
   for w in trim_query(q):lower():gmatch("%S+") do t[#t+1] = w end
@@ -1540,6 +1550,22 @@ local function draw_highlighted_text(font, text, x, y, width, color, spans, matc
   return cx
 end
 
+local function draw_prefixed_highlighted_text(font, prefix, text, x, y, width, color, spans, match_color, anchor_to_match)
+  prefix = prefix or ""
+  if prefix == "" then
+    return draw_highlighted_text(font, text, x, y, width, color, spans, match_color, anchor_to_match)
+  end
+  if width <= 0 then return x end
+
+  local prefix_w = font:get_width(prefix)
+  if prefix_w >= width then
+    return renderer.draw_text(font, truncate_text(font, prefix, width), x, y, style.dim)
+  end
+
+  local cx = renderer.draw_text(font, prefix, x, y, style.dim)
+  return draw_highlighted_text(font, text, cx, y, width - prefix_w, color, spans, match_color, anchor_to_match)
+end
+
 local function command_preview_parts(name)
   local binding = keymap.get_binding(name)
   local picker = current_picker()
@@ -1621,12 +1647,11 @@ end
 
 local function result_list_label_and_spans(r)
   if r.kind == "command" then
-    local text = r.label or r.command or ""
-    return "> " .. text, offset_spans(r.match_spans or {}, 2)
+    return r.label or r.command or "", r.match_spans or {}, "> "
   end
   if r.kind == "project" then
     local text = r.label or r.project or ""
-    return "@ " .. display_root(text), offset_spans(r.match_spans or {}, 2)
+    return display_root(text), r.match_spans or {}, "@ "
   end
   if r.kind == "symbol" then
     local text = r.label or r.name or ""
@@ -1638,7 +1663,7 @@ local function result_list_label_and_spans(r)
 end
 
 local function draw_project_result_row(font, r, x, y, width)
-  local label, spans = result_list_label_and_spans(r)
+  local label, spans, prefix = result_list_label_and_spans(r)
   local age = r.opened_at and compact_age(r.opened_at)
   local gap = style.padding.x
   local label_w = width
@@ -1647,7 +1672,7 @@ local function draw_project_result_row(font, r, x, y, width)
     renderer.draw_text(font, age, x + width - age_w, y, style.dim)
     label_w = math.max(0, width - age_w - gap)
   end
-  draw_highlighted_text(font, label, x, y, label_w, style.text, spans)
+  draw_prefixed_highlighted_text(font, prefix, label, x, y, label_w, style.text, spans)
 end
 
 local function draw_new_project_result_row(font, r, x, y, width)
@@ -1725,7 +1750,7 @@ local function draw_everything_result_row(font, r, x, y, width)
 end
 
 local function draw_command_result_row(font, r, x, y, width)
-  local label, spans = result_list_label_and_spans(r)
+  local label, spans, prefix = result_list_label_and_spans(r)
   local binding, preview = command_preview_parts(r.command)
   -- Keep command rows column-aligned even when a row has no shortcut or no
   -- preview text: empty cells still reserve their column width.
@@ -1747,7 +1772,7 @@ local function draw_command_result_row(font, r, x, y, width)
   else
     status_w = 0
   end
-  local label_end = draw_highlighted_text(font, label, x, y, command_label_w, style.text, spans)
+  local label_end = draw_prefixed_highlighted_text(font, prefix, label, x, y, command_label_w, style.text, spans)
   if status_w > 0 then
     draw_command_status(font, r.status, label_end, y, status_w)
   end
@@ -2035,6 +2060,20 @@ function FSView:new(prefix, opts)
   self.source_file_line = source_doc and source_doc:get_selection(false) or 1
 
   self.input = TextBox(self, prefix or "", "")
+  local default_input_draw_line_text = self.input.textview.draw_line_text
+  function self.input.textview:draw_line_text(line, x, y)
+    local text = self.doc.lines[line] or ""
+    local mode_prefix, query = split_mode_prefix(text)
+    if mode_prefix == "" or self.subparent.password then
+      return default_input_draw_line_text(self, line, x, y)
+    end
+
+    local font = self:get_font()
+    local ty = y + self:get_line_text_y_offset()
+    local cx = renderer.draw_text(font, mode_prefix, x, ty, style.dim)
+    renderer.draw_text(font, query, cx, ty, style.syntax["normal"] or style.text)
+    return self:get_line_height()
+  end
   local cursor_col = #(prefix or "") + 1
   -- When prefix is a grep mode quoted-exact query (e.g. #"text"),
   -- place the cursor before the closing quote so the user can extend the query.
@@ -3790,8 +3829,8 @@ function FSView:draw()
         previous_rendered_was_grep = false
         draw_new_project_result_row(font, r, x + pad, yy, row_text_w)
       else
-        local label, spans = result_list_label_and_spans(r)
-        draw_highlighted_text(font, label, x + pad, yy, row_text_w, style.text, spans)
+        local label, spans, prefix = result_list_label_and_spans(r)
+        draw_prefixed_highlighted_text(font, prefix, label, x + pad, yy, row_text_w, style.text, spans)
         previous_rendered_grep_file = nil
         previous_rendered_grep_line_x = nil
         previous_rendered_was_grep = false
@@ -3891,16 +3930,6 @@ end
 local function quote_exact_query(text)
   text = tostring(text or "")
   return '"' .. text:gsub('"', '""') .. '"'
-end
-
-local fuzzy_mode_prefixes = { ["#"] = true, ["@"] = true, [">"] = true, ["$"] = true, ["$$"] = true }
-
-local function split_mode_prefix(text)
-  text = tostring(text or "")
-  if text:sub(1, 2) == "$$" then return "$$", text:sub(3) end
-  local prefix = text:sub(1, 1)
-  if fuzzy_mode_prefixes[prefix] then return prefix, text:sub(2) end
-  return "", text
 end
 
 local function switch_picker_prefix(view, prefix)
@@ -4060,6 +4089,7 @@ return {
     everything_project_search_query = everything_project_search_query,
     everything_path_depth = everything_path_depth,
     sort_everything_project_results = sort_everything_project_results,
+    split_mode_prefix = split_mode_prefix,
     recent_files = get_recent_files,
     file_search_rows = function(query, files, skip_path, limit)
       local recent_matches, skip_keys = collect_recent_file_matches(query or "", nil, skip_path)
