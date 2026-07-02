@@ -2859,8 +2859,8 @@ end
 
 function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, gen, preserve_results)
   -- Grep results are streamed asynchronously. Do not page them by clearing and
-  -- restarting the search while the user scrolls; publish a growing prefix and
-  -- let selection stop naturally at the currently available end.
+  -- restarting the search while the user scrolls; publish a growing stable
+  -- prefix and let selection stop naturally at the currently available end.
   local limit = self:max_result_limit()
   local tokens = terms_to_legacy_tokens(terms)
   local job, preferred_job = ensure_fuzzy_grep_job(root, scope, tokens)
@@ -2869,6 +2869,68 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
   if preferred_job and preferred_job ~= job then jobs[#jobs+1] = preferred_job end
   local exact_results = #terms == 1 and not terms[1].exact and trim_query(grep):lower() == terms[1].text
   local fuzzy_query = terms_fuzzy_query(terms)
+  local initial_settle_seconds = 0.10
+  local initial_settle_visible_multiplier = 2
+  local same_file_group_scan = 8
+  local same_file_group_score_slack = 500
+  local same_file_group_max_burst = 3
+
+  local function grep_result_file_key(r)
+    local file = tostring(r and r.file or "")
+    if file == "" then return "" end
+    return common.path_compare_key(file)
+  end
+
+  local function grep_result_key(r)
+    local file_key = grep_result_file_key(r)
+    if file_key == "" then return nil end
+    return file_key .. "\0" .. tostring(r.line or "")
+  end
+
+  local function grep_result_better(a, b)
+    local as, bs = a.fuzzy_score or 0, b.fuzzy_score or 0
+    if as ~= bs then return as > bs end
+
+    local af, bf = grep_result_file_key(a), grep_result_file_key(b)
+    if af ~= bf then return af < bf end
+
+    local al, bl = tonumber(a.line) or 0, tonumber(b.line) or 0
+    if al ~= bl then return al < bl end
+
+    local ac, bc = tonumber(a.col) or 0, tonumber(b.col) or 0
+    if ac ~= bc then return ac < bc end
+
+    return tostring(a.text or "") < tostring(b.text or "")
+  end
+
+  local function regroup_nearby_same_file_grep_results(sorted)
+    local out, used = {}, {}
+    for i, anchor in ipairs(sorted) do
+      if not used[i] then
+        out[#out+1] = anchor
+        used[i] = true
+
+        local anchor_file = grep_result_file_key(anchor)
+        local anchor_score = anchor.fuzzy_score or 0
+        local pulled = 1
+        if anchor_file ~= "" then
+          local last = math.min(#sorted, i + same_file_group_scan)
+          for j = i + 1, last do
+            local candidate = sorted[j]
+            if not used[j]
+              and grep_result_file_key(candidate) == anchor_file
+              and anchor_score - (candidate.fuzzy_score or 0) <= same_file_group_score_slack then
+              out[#out+1] = candidate
+              used[j] = true
+              pulled = pulled + 1
+              if pulled >= same_file_group_max_burst then break end
+            end
+          end
+        end
+      end
+    end
+    return out
+  end
 
   local function jobs_label()
     if #jobs == 1 then return jobs[1].seed end
@@ -2895,7 +2957,39 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
     for _, s in ipairs(jobs) do processed[s.key] = 0 end
     local max_candidates = fuzzy_searcher.fuzzy_candidate_limit or 500
     local slice_start = system.get_time()
+    local stream_started = system.get_time()
     local last_publish = 0
+    local published_candidate_count = 0
+    local first_publish_done = false
+    local initial_candidate_target = math.max(
+      20,
+      self:list_metrics().result_rows * initial_settle_visible_multiplier
+    )
+    local committed_results, committed_keys = {}, {}
+
+    local function commit_visible_prefix()
+      local existing = self.results or {}
+      if #existing == 0 then return end
+      local metrics = self:list_metrics()
+      local visible_bottom = math.min(
+        #existing,
+        math.max(0, (self.viewport_offset or 1) + metrics.result_rows - 1)
+      )
+      for i = 1, visible_bottom do
+        local r = existing[i]
+        local key = grep_result_key(r)
+        if key and not committed_keys[key] then
+          committed_keys[key] = true
+          committed_results[#committed_results+1] = r
+        end
+      end
+    end
+
+    local function initial_publish_ready(final)
+      if final or first_publish_done then return true end
+      if #candidates >= initial_candidate_target then return true end
+      return #candidates > 0 and system.get_time() - stream_started >= initial_settle_seconds
+    end
 
     local function add_candidate(source)
       if line and not line_exists(source.file, line) then return end
@@ -2958,18 +3052,38 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
 
     local function publish(final)
       if gen ~= grep_generation or active_view ~= self then return false end
-      local running, truncated, scanned = job_stats()
-      table.sort(candidates, function(a, b)
-        if a.fuzzy_score == b.fuzzy_score then
-          local ak = tostring(a.file) .. tostring(a.line)
-          local bk = tostring(b.file) .. tostring(b.line)
-          return ak < bk
-        end
-        return a.fuzzy_score > b.fuzzy_score
-      end)
+      if not initial_publish_ready(final) then return true end
+      if first_publish_done then commit_visible_prefix() end
 
-      local out = {}
-      for i = 1, math.min(limit, #candidates) do out[#out+1] = candidates[i] end
+      local running, truncated, scanned = job_stats()
+      local tail = {}
+      for _, candidate in ipairs(candidates) do
+        local key = grep_result_key(candidate)
+        if key and not committed_keys[key] then tail[#tail+1] = candidate end
+      end
+      table.sort(tail, grep_result_better)
+      tail = regroup_nearby_same_file_grep_results(tail)
+
+      local out, emitted = {}, {}
+      for _, r in ipairs(committed_results) do
+        local key = grep_result_key(r)
+        if key and not emitted[key] then
+          out[#out+1] = r
+          emitted[key] = true
+          if #out >= limit then break end
+        end
+      end
+      if #out < limit then
+        for _, r in ipairs(tail) do
+          local key = grep_result_key(r)
+          if key and not emitted[key] then
+            out[#out+1] = r
+            emitted[key] = true
+            if #out >= limit then break end
+          end
+        end
+      end
+
       self.results = out
       self.has_more = #candidates > limit or running or truncated
       if self.pending_select_index then
@@ -2999,24 +3113,35 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
       end
       self:schedule_update(true)
       last_publish = system.get_time()
+      published_candidate_count = #candidates
+      first_publish_done = true
+      commit_visible_prefix()
       return true
     end
 
     while gen == grep_generation and active_view == self do
-      local did_work = false
       local all_done = true
       for _, s in ipairs(jobs) do
         while (processed[s.key] or 0) < #s.lines and #candidates < max_candidates do
           processed[s.key] = (processed[s.key] or 0) + 1
           add_candidate(s.lines[processed[s.key]])
-          did_work = true
-          if #candidates >= 20 and system.get_time() - last_publish > 0.04 then publish(false) end
+          if #candidates ~= published_candidate_count
+            and #candidates > 0
+            and system.get_time() - last_publish > 0.04
+            and initial_publish_ready(false) then
+            publish(false)
+          end
           slice_start = yield_if_over_budget(slice_start)
         end
         if not s.done or (processed[s.key] or 0) < #s.lines then all_done = false end
       end
 
-      if did_work and system.get_time() - last_publish > 0.08 then publish(false) end
+      if #candidates ~= published_candidate_count
+        and #candidates > 0
+        and system.get_time() - last_publish > 0.08
+        and initial_publish_ready(false) then
+        publish(false)
+      end
       if (#candidates >= max_candidates) or all_done then break end
       coroutine.yield(1 / config.fps)
       slice_start = system.get_time()
