@@ -75,6 +75,12 @@ test.describe("command palette toggle status", function()
     end
 
     test.not_nil(item)
-    test.equal(item.label, "line-wrapping:toggle [Currently: ON]")
+    test.equal(item.label, "line-wrapping:toggle")
+    test.same(item.status, {
+      prefix = " [Currently: ",
+      value = "ON",
+      suffix = "]",
+      state = true,
+    })
   end)
 end)

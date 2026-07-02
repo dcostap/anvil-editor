@@ -1578,10 +1578,45 @@ local function command_preview_info(name)
   return preview or binding
 end
 
-local function command_display_label(name)
+local function command_status_parts(name)
   local picker = current_picker()
-  local status = command.get_status_label(name, picker and picker.source_view)
-  return status and (name .. " " .. status) or name
+  local value = command.get_status(name, picker and picker.source_view)
+  if value == nil or value == "" then return nil end
+
+  local state
+  if type(value) == "boolean" then
+    state = value
+    value = value and "ON" or "OFF"
+  end
+  return {
+    prefix = " [Currently: ",
+    value = tostring(value),
+    suffix = "]",
+    state = state,
+  }
+end
+
+local function command_status_width(font, status)
+  if not status then return 0 end
+  return font:get_width(status.prefix .. status.value .. status.suffix)
+end
+
+local function draw_command_status(font, status, x, y, width)
+  if not status or width <= 0 then return x end
+  local prefix = status.prefix
+  local value = status.value
+  local suffix = status.suffix
+  local total = prefix .. value .. suffix
+  if font:get_width(total) > width then
+    return renderer.draw_text(font, truncate_text(font, total, width), x, y, style.dim)
+  end
+
+  local value_color = status.state == true and style.good
+    or status.state == false and style.error
+    or style.text
+  x = renderer.draw_text(font, prefix, x, y, style.dim)
+  x = renderer.draw_text(font, value, x, y, value_color)
+  return renderer.draw_text(font, suffix, x, y, style.dim)
 end
 
 local function result_list_label_and_spans(r)
@@ -1705,7 +1740,17 @@ local function draw_command_result_row(font, r, x, y, width)
   local binding_w = math.floor(width * 0.18 * side_column_factor)
   local label_w = math.max(0, width - preview_w - binding_w - gap * 2)
 
-  draw_highlighted_text(font, label, x, y, label_w, style.text, spans)
+  local status_w = command_status_width(font, r.status)
+  local command_label_w = label_w
+  if status_w > 0 and label_w > status_w + font:get_width("> …") then
+    command_label_w = label_w - status_w
+  else
+    status_w = 0
+  end
+  local label_end = draw_highlighted_text(font, label, x, y, command_label_w, style.text, spans)
+  if status_w > 0 then
+    draw_command_status(font, r.status, label_end, y, status_w)
+  end
 
   local preview_x = x + label_w + gap
   local binding_x = preview_x + preview_w + gap
@@ -2747,7 +2792,7 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
       for _, name in ipairs(recent_commands) do
         if command.map[name] then
           if added_recent >= max_items then self.has_more = true; return end
-          out[#out+1] = { kind = "command", label = command_display_label(name), command = name, query = query, match_spans = {}, recent = true, info = command_preview_info(name) }
+          out[#out+1] = { kind = "command", label = name, command = name, query = query, match_spans = {}, recent = true, info = command_preview_info(name), status = command_status_parts(name) }
           added_recent = added_recent + 1
         end
       end
@@ -2758,7 +2803,7 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
     for i, match in ipairs(matches) do
       if i > max_items then self.has_more = true; break end
       local name = match.item
-      out[#out+1] = { kind = "command", label = command_display_label(name), command = name, query = query, match_spans = match.spans, info = command_preview_info(name) }
+      out[#out+1] = { kind = "command", label = name, command = name, query = query, match_spans = match.spans, info = command_preview_info(name), status = command_status_parts(name) }
     end
   end
 
