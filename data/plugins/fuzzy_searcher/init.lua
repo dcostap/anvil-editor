@@ -8,6 +8,7 @@ local common = require "core.common"
 local config = require "core.config"
 local process = require "core.process"
 local http = require "core.http"
+local storage = require "core.storage"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
 local ImageView = require "core.imageview"
@@ -644,14 +645,77 @@ local function trim_query(q)
   return tostring(q or ""):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
-local fuzzy_mode_prefixes = { ["#"] = true, ["@"] = true, [">"] = true, ["$"] = true, ["$$"] = true }
+fuzzy_searcher.mode_prefixes = { ["#"] = true, ["@"] = true, [">"] = true, ["$"] = true, ["$$"] = true }
+fuzzy_searcher.prompt_history_loaded = false
+fuzzy_searcher.prompt_history = {}
 
 local function split_mode_prefix(text)
   text = tostring(text or "")
   if text:sub(1, 2) == "$$" then return "$$", text:sub(3) end
   local prefix = text:sub(1, 1)
-  if fuzzy_mode_prefixes[prefix] then return prefix, text:sub(2) end
+  if fuzzy_searcher.mode_prefixes[prefix] then return prefix, text:sub(2) end
   return "", text
+end
+
+function fuzzy_searcher.load_prompt_history()
+  if fuzzy_searcher.prompt_history_loaded then return end
+  local function normalize(data)
+    local normalized = {}
+    if type(data) ~= "table" then return normalized end
+    for mode, entries in pairs(data) do
+      mode = tostring(mode or "")
+      if type(entries) == "table" then
+        local out, seen = {}, {}
+        for _, entry in ipairs(entries) do
+          entry = type(entry) == "string" and entry or nil
+          if entry and trim_query(entry) ~= "" and not seen[entry] then
+            out[#out + 1] = entry
+            seen[entry] = true
+            if #out >= 50 then break end
+          end
+        end
+        if #out > 0 then normalized[mode] = out end
+      end
+    end
+    return normalized
+  end
+
+  fuzzy_searcher.prompt_history = normalize(storage.load("fuzzy_searcher", "prompt_history"))
+  fuzzy_searcher.prompt_history_loaded = true
+end
+
+function fuzzy_searcher.save_prompt_history()
+  fuzzy_searcher.load_prompt_history()
+  storage.save("fuzzy_searcher", "prompt_history", fuzzy_searcher.prompt_history)
+end
+
+function fuzzy_searcher.prompt_history_for_mode(mode)
+  fuzzy_searcher.load_prompt_history()
+  mode = tostring(mode or "")
+  fuzzy_searcher.prompt_history[mode] = fuzzy_searcher.prompt_history[mode] or {}
+  return fuzzy_searcher.prompt_history[mode]
+end
+
+function fuzzy_searcher.record_prompt_history_text(text)
+  local mode, query = split_mode_prefix(text)
+  query = tostring(query or "")
+  if trim_query(query) == "" then return end
+
+  local history = fuzzy_searcher.prompt_history_for_mode(mode)
+  for i = #history, 1, -1 do
+    if history[i] == query then table.remove(history, i) end
+  end
+  table.insert(history, 1, query)
+  while #history > 50 do table.remove(history) end
+  fuzzy_searcher.save_prompt_history()
+end
+
+function fuzzy_searcher.restored_prompt_text(text)
+  local mode, query = split_mode_prefix(text)
+  if query ~= "" then return text, false end
+  local latest = fuzzy_searcher.prompt_history_for_mode(mode)[1]
+  if latest and latest ~= "" then return mode .. latest, true end
+  return text, false
 end
 
 local function split_words(q)
@@ -2089,6 +2153,7 @@ function FSView:new(prefix, opts)
   file_context.exclude_main_panel_view(self.input.textview)
   self.input.on_change = function(_, text)
     if self.static_mode then return end
+    if not self._applying_prompt_history then self._prompt_history_session = nil end
     self.dirty = true
     self:refresh(text)
     self:schedule_update(true)
@@ -3604,8 +3669,59 @@ function FSView:on_text_input(text)
   return true
 end
 
+function fuzzy_searcher.apply_prompt_history_query(view, mode, query, select_query)
+  local text = tostring(mode or "") .. tostring(query or "")
+  view._applying_prompt_history = true
+  view.input:set_text(text)
+  view._applying_prompt_history = false
+
+  local doc = view.input and view.input.textview and view.input.textview.doc
+  if doc then
+    if select_query then
+      doc:set_selection(1, #(mode or "") + 1, 1, #text + 1)
+    else
+      doc:set_selection(1, #text + 1, 1, #text + 1)
+    end
+  end
+  view.dirty = true
+  view.force_refresh = true
+  view:refresh(text)
+  view:schedule_update(true)
+end
+
+function FSView:record_prompt_history()
+  if self.static_mode or self._prompt_history_recorded then return end
+  self._prompt_history_recorded = true
+  if self.input then fuzzy_searcher.record_prompt_history_text(self.input:get_text()) end
+end
+
+function FSView:prompt_history_session()
+  local mode, query = split_mode_prefix(self.input and self.input:get_text() or "")
+  local session = self._prompt_history_session
+  if session and session.mode == mode then return session end
+
+  local entries = { query }
+  for _, entry in ipairs(fuzzy_searcher.prompt_history_for_mode(mode)) do
+    if entry ~= query then entries[#entries + 1] = entry end
+  end
+  session = { mode = mode, entries = entries, index = 1 }
+  self._prompt_history_session = session
+  return session
+end
+
+function FSView:navigate_prompt_history(delta)
+  if self.static_mode or not self.input then return false end
+  local session = self:prompt_history_session()
+  local index = common.clamp(session.index + delta, 1, #session.entries)
+  if index == session.index then return false end
+  session.index = index
+  fuzzy_searcher.apply_prompt_history_query(self, session.mode, session.entries[index], false)
+  return true
+end
+
 function FSView:close()
   fuzzy_focus_log("close", self)
+  self:record_prompt_history()
   kill_file_search()
   kill_grep()
   kill_fuzzy_grep_jobs()
@@ -3936,25 +4052,30 @@ local function switch_picker_prefix(view, prefix)
   prefix = prefix or ""
   local old_text = view.input and view.input:get_text() or ""
   local old_prefix, query = split_mode_prefix(old_text)
-  local new_text = prefix .. query
+  fuzzy_searcher.record_prompt_history_text(old_text)
 
+  local new_text, select_query
+  if query == "" then
+    new_text, select_query = fuzzy_searcher.restored_prompt_text(prefix)
+  else
+    new_text = prefix .. query
+    select_query = false
+  end
+
+  local new_prefix, new_query = split_mode_prefix(new_text)
   local doc = view.input and view.input.textview and view.input.textview.doc
   local col = #new_text + 1
-  if doc then
+  if doc and not select_query then
     local _line
     _line, col = doc:get_selection(false)
     local old_prefix_len = old_prefix ~= "" and #old_prefix or 0
-    local new_prefix_len = prefix ~= "" and #prefix or 0
+    local new_prefix_len = new_prefix ~= "" and #new_prefix or 0
     col = (col or 1) - old_prefix_len + new_prefix_len
     col = common.clamp(col, new_prefix_len + 1, #new_text + 1)
   end
 
-  view.input:set_text(new_text)
-  if doc then doc:set_selection(1, col, 1, col) end
-  view.dirty = true
-  view.force_refresh = true
-  view:refresh(new_text)
-  view:schedule_update(true)
+  fuzzy_searcher.apply_prompt_history_query(view, new_prefix, new_query, select_query)
+  if doc and not select_query then doc:set_selection(1, col, 1, col) end
   ensure_input_focus(view, "switch-prefix")
 end
 
@@ -3969,8 +4090,13 @@ function open(prefix)
     local selection = selected_text_for_search()
     if selection ~= "" then prefix = "#" .. quote_exact_query(selection) end
   end
-  active_view = FSView(prefix)
+  local initial_text, select_restored_query = fuzzy_searcher.restored_prompt_text(prefix)
+  active_view = FSView(initial_text)
   core.fuzzy_searcher_active_view = active_view
+  if select_restored_query then
+    local mode = split_mode_prefix(initial_text)
+    fuzzy_searcher.apply_prompt_history_query(active_view, mode, initial_text:sub(#mode + 1), true)
+  end
 end
 
 function open_static_results(title, results, opts)
@@ -4005,6 +4131,14 @@ command.add(picker_active, {
   ["fuzzy-searcher:reveal-selected-in-explorer"] = picker_reveal_selected_in_explorer,
   ["fuzzy-searcher:next"] = picker_next,
   ["fuzzy-searcher:previous"] = picker_previous,
+  ["fuzzy-searcher:prompt-history-previous"] = function()
+    local view = current_picker()
+    if view then view:navigate_prompt_history(1) end
+  end,
+  ["fuzzy-searcher:prompt-history-next"] = function()
+    local view = current_picker()
+    if view then view:navigate_prompt_history(-1) end
+  end,
 })
 
 -- Global open shortcuts intentionally override conflicting defaults.
@@ -4036,6 +4170,8 @@ core.fuzzy_searcher_install_picker_keymaps = function()
     ["ctrl+shift+l"] = "fuzzy-searcher:reveal-selected-in-explorer",
     ["up"] = "fuzzy-searcher:previous",
     ["down"] = "fuzzy-searcher:next",
+    ["ctrl+alt+left"] = "fuzzy-searcher:prompt-history-previous",
+    ["ctrl+alt+right"] = "fuzzy-searcher:prompt-history-next",
   })
 end
 core.fuzzy_searcher_install_picker_keymaps()
@@ -4090,6 +4226,15 @@ return {
     everything_path_depth = everything_path_depth,
     sort_everything_project_results = sort_everything_project_results,
     split_mode_prefix = split_mode_prefix,
+    clear_prompt_history = function()
+      fuzzy_searcher.prompt_history_loaded = true
+      fuzzy_searcher.prompt_history = {}
+      storage.save("fuzzy_searcher", "prompt_history", fuzzy_searcher.prompt_history)
+    end,
+    prompt_history = function(mode)
+      local history = fuzzy_searcher.prompt_history_for_mode(mode)
+      return { table.unpack(history) }
+    end,
     recent_files = get_recent_files,
     file_search_rows = function(query, files, skip_path, limit)
       local recent_matches, skip_keys = collect_recent_file_matches(query or "", nil, skip_path)

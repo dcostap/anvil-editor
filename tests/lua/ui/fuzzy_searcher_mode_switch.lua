@@ -46,6 +46,10 @@ local function picker_text()
 end
 
 test.describe("Fuzzy Searcher mode switching", function()
+  test.before_each(function()
+    fuzzy_searcher._test.clear_prompt_history()
+  end)
+
   test.it("recognizes command mode prefixes in prompt text", function()
     local split = fuzzy_searcher._test.split_mode_prefix
     test.same({ split(">commands") }, { ">", "commands" })
@@ -109,5 +113,91 @@ test.describe("Fuzzy Searcher mode switching", function()
     command.perform("fuzzy-searcher:open-commands")
 
     test.equal(picker_text(), ">plain query")
+  end)
+
+  test.it("restores the last prompt for a reopened empty mode and selects the query", function()
+    fuzzy_searcher.open(">")
+    core.fuzzy_searcher_active_view.input:set_text(">line wrapping")
+    core.fuzzy_searcher_active_view:close()
+
+    fuzzy_searcher.open(">")
+    local picker = core.fuzzy_searcher_active_view
+
+    test.equal(picker.input:get_text(), ">line wrapping")
+    test.same({ picker.input.textview.doc:get_selection() }, { 1, 2, 1, #">line wrapping" + 1 })
+  end)
+
+  test.it("does not replace an auto-seeded grep prompt with saved history", function(context)
+    fuzzy_searcher.open("#")
+    core.fuzzy_searcher_active_view.input:set_text("#old grep")
+    core.fuzzy_searcher_active_view:close()
+
+    local view, doc = open_editor(context, "selected grep text\n")
+    doc:set_selection(1, 1, 1, #"selected grep text" + 1)
+    core.set_active_view(view)
+
+    fuzzy_searcher.open("#")
+
+    test.equal(picker_text(), '#"selected grep text"')
+  end)
+
+  test.it("cycles current mode prompt history without wrapping and keeps current text", function()
+    fuzzy_searcher.open(">")
+    core.fuzzy_searcher_active_view.input:set_text(">first")
+    core.fuzzy_searcher_active_view:close()
+
+    fuzzy_searcher.open(">")
+    core.fuzzy_searcher_active_view.input:set_text(">second")
+    core.fuzzy_searcher_active_view:close()
+
+    fuzzy_searcher.open(">")
+    local picker = core.fuzzy_searcher_active_view
+    picker.input:set_text(">draft")
+
+    command.perform("fuzzy-searcher:prompt-history-previous")
+    test.equal(picker.input:get_text(), ">second")
+
+    command.perform("fuzzy-searcher:prompt-history-previous")
+    test.equal(picker.input:get_text(), ">first")
+
+    command.perform("fuzzy-searcher:prompt-history-previous")
+    test.equal(picker.input:get_text(), ">first")
+
+    command.perform("fuzzy-searcher:prompt-history-next")
+    test.equal(picker.input:get_text(), ">second")
+
+    command.perform("fuzzy-searcher:prompt-history-next")
+    test.equal(picker.input:get_text(), ">draft")
+
+    command.perform("fuzzy-searcher:prompt-history-next")
+    test.equal(picker.input:get_text(), ">draft")
+  end)
+
+  test.it("records the previous mode prompt when switching modes before close", function()
+    fuzzy_searcher.open(">")
+    local picker = core.fuzzy_searcher_active_view
+    picker.input:set_text(">build")
+
+    command.perform("fuzzy-searcher:open-projects")
+    picker:close()
+
+    fuzzy_searcher.open(">")
+    picker = core.fuzzy_searcher_active_view
+
+    test.equal(picker.input:get_text(), ">build")
+    test.same(fuzzy_searcher._test.prompt_history(">"), { "build" })
+  end)
+
+  test.it("restores target mode history when switching from an empty query", function()
+    fuzzy_searcher.open(">")
+    core.fuzzy_searcher_active_view.input:set_text(">build")
+    core.fuzzy_searcher_active_view:close()
+
+    fuzzy_searcher.open("")
+    command.perform("fuzzy-searcher:open-commands")
+    local picker = core.fuzzy_searcher_active_view
+
+    test.equal(picker.input:get_text(), ">build")
+    test.same({ picker.input.textview.doc:get_selection() }, { 1, 2, 1, #">build" + 1 })
   end)
 end)
