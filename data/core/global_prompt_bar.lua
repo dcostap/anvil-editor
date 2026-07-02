@@ -490,7 +490,7 @@ local function draw_suggestions_box(self)
       end
       local w = self.size.x - x - style.padding.x
       if not draw_text then
-        common.draw_text(font, color, item.text, nil, x, y, 0, lh)
+        common.draw_text(font, color, item.display_text or item.text, nil, x, y, 0, lh)
       else
         draw_text(item, font, color, x, y, w, lh)
       end

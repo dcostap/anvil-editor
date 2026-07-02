@@ -1578,6 +1578,12 @@ local function command_preview_info(name)
   return preview or binding
 end
 
+local function command_display_label(name)
+  local picker = current_picker()
+  local status = command.get_status_label(name, picker and picker.source_view)
+  return status and (name .. " " .. status) or name
+end
+
 local function result_list_label_and_spans(r)
   if r.kind == "command" then
     local text = r.label or r.command or ""
@@ -2741,7 +2747,7 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
       for _, name in ipairs(recent_commands) do
         if command.map[name] then
           if added_recent >= max_items then self.has_more = true; return end
-          out[#out+1] = { kind = "command", label = name, command = name, query = query, match_spans = {}, recent = true, info = command_preview_info(name) }
+          out[#out+1] = { kind = "command", label = command_display_label(name), command = name, query = query, match_spans = {}, recent = true, info = command_preview_info(name) }
           added_recent = added_recent + 1
         end
       end
@@ -2752,7 +2758,7 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
     for i, match in ipairs(matches) do
       if i > max_items then self.has_more = true; break end
       local name = match.item
-      out[#out+1] = { kind = "command", label = name, command = name, query = query, match_spans = match.spans, info = command_preview_info(name) }
+      out[#out+1] = { kind = "command", label = command_display_label(name), command = name, query = query, match_spans = match.spans, info = command_preview_info(name) }
     end
   end
 

@@ -123,8 +123,11 @@ function DocView:draw_overlay(...)
   draw_overlay(self, ...)
 end
 
-command.add(nil, {
-  ["lineguide:toggle"] = function()
-    config.plugins.lineguide.enabled = not config.plugins.lineguide.enabled
-  end
+command.add_toggle("lineguide:toggle", {
+  get = function()
+    return config.plugins.lineguide.enabled
+  end,
+  set = function(enabled)
+    config.plugins.lineguide.enabled = enabled
+  end,
 })

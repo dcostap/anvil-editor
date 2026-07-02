@@ -240,10 +240,13 @@ function DocView:scroll_to_line(...)
   end, ...)
 end
 
-command.add(nil, {
-  ["centered-editor:toggle"] = function()
+command.add_toggle("centered-editor:toggle", {
+  get = function()
+    return settings().enabled
+  end,
+  set = function(enabled)
     local cfg = settings()
-    cfg.enabled = not cfg.enabled
+    cfg.enabled = enabled
     core.log("Centered editor %s", cfg.enabled and "enabled" or "disabled")
   end,
 })

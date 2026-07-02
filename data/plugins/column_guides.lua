@@ -98,8 +98,11 @@ function DocView:draw_current_line_highlights(...)
   draw_column_guides(self)
 end
 
-command.add(nil, {
-  ["column-guides:toggle"] = function()
-    config.plugins.column_guides.enabled = not config.plugins.column_guides.enabled
+command.add_toggle("column-guides:toggle", {
+  get = function()
+    return config.plugins.column_guides.enabled
+  end,
+  set = function(enabled)
+    config.plugins.column_guides.enabled = enabled
   end,
 })

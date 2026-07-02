@@ -40,7 +40,7 @@ end
 
 test.describe("draw-whitespace DocView drawing", function()
   test.before_each(function()
-    command.perform "draw-whitespace:enable"
+    command.perform("draw-whitespace:toggle", true)
   end)
 
   test.it("skips whitespace work for lines without visible marker characters", function()

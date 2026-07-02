@@ -38,6 +38,7 @@ local command = {}
 ---@class core.command.command
 ---@field predicate core.command.predicate_function
 ---@field perform fun(...: any)
+---@field status? fun(): any
 
 ---@type { [string]: core.command.command }
 command.map = {}
@@ -186,6 +187,83 @@ function command.add(predicate, map)
     end
     command.map[name] = { predicate = predicate, perform = fn }
   end
+end
+
+---Attach a dynamic status value to a command for command-palette display.
+---Boolean values are rendered as ON/OFF by `command.get_status_label()`.
+---@param name core.command.command_name
+---@param status fun(): any
+function command.set_status(name, status)
+  name = resolve_alias(name)
+  if command.map[name] then
+    command.map[name].status = status
+  end
+end
+
+---Returns a command's dynamic status value, if one is registered.
+---@param name core.command.command_name
+---@param ... any Optional context forwarded to the status callback.
+---@return any
+function command.get_status(name, ...)
+  name = resolve_alias(name)
+  local cmd = command.map[name]
+  if not (cmd and cmd.status) then return nil end
+  local ok, value = core.try(cmd.status, ...)
+  if not ok then return nil end
+  return value
+end
+
+---Returns the command-palette label fragment for a command's status.
+---@param name core.command.command_name
+---@param ... any Optional context forwarded to the status callback.
+---@return string|nil
+function command.get_status_label(name, ...)
+  local value = command.get_status(name, ...)
+  if value == nil or value == "" then return nil end
+  if type(value) == "boolean" then
+    value = value and "ON" or "OFF"
+  end
+  return string.format("[Currently: %s]", tostring(value))
+end
+
+---Register a boolean state command as a single toggle command.
+---Calling the command without a boolean flips the current state. Calling it
+---with a boolean forces that state, which gives programmatic callers an
+---explicit set operation without adding separate user-facing commands.
+---@class core.command.toggle_options
+---@field predicate? core.command.predicate
+---@field get fun(...: any): boolean
+---@field set fun(enabled: boolean, ...: any)
+
+---@param name core.command.command_name
+---@param options core.command.toggle_options
+function command.add_toggle(name, options)
+  local function unpack_without(args, omitted)
+    local values = { n = args.n - 1 }
+    for i = 1, args.n do
+      if i < omitted then
+        values[i] = args[i]
+      elseif i > omitted then
+        values[i - 1] = args[i]
+      end
+    end
+    return table.unpack(values, 1, values.n)
+  end
+
+  command.add(options.predicate, {
+    [name] = function(...)
+      local args = pack(...)
+      local explicit = type(args[1]) == "boolean" and 1
+        or type(args[args.n]) == "boolean" and args.n
+        or nil
+      if explicit then
+        options.set(args[explicit], unpack_without(args, explicit))
+      else
+        options.set(not options.get(table.unpack(args, 1, args.n)), table.unpack(args, 1, args.n))
+      end
+    end,
+  })
+  command.set_status(name, options.get)
 end
 
 

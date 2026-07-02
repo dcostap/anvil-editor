@@ -1708,24 +1708,27 @@ end, {
   end
 })
 
-command.add(function()
-  if not core.active_view:extends(DocView) then return false end
-  local doc = core.active_view.doc
+local function active_bom_document(view)
+  view = view or core.active_view
+  if not (view and view.extends and view:extends(DocView)) then return nil end
+  local doc = view.doc
   local bom = encoding.get_charset_bom(doc.encoding or "none")
-  return  bom ~= nil, doc, bom
-end, {
-  ["doc:disable-bom"] = function(doc)
-    doc.bom = nil
-    save_existing(doc)
-  end,
+  if not bom then return nil end
+  return doc, bom
+end
 
-  ["doc:enable-bom"] = function(doc, bom)
-    doc.bom = bom
-    save_existing(doc)
+command.add_toggle("doc:toggle-bom", {
+  predicate = function()
+    return active_bom_document() ~= nil
   end,
-
-  ["doc:toggle-bom"] = function(doc, bom)
-    if doc.bom then doc.bom = nil else doc.bom = bom end
+  get = function(view)
+    local doc = active_bom_document(view)
+    return doc and doc.bom ~= nil
+  end,
+  set = function(enabled, view)
+    local doc, bom = active_bom_document(view)
+    if not doc then return end
+    doc.bom = enabled and bom or nil
     save_existing(doc)
   end,
 })
@@ -2348,13 +2351,17 @@ end
 
 command.add("core.docview", commands)
 
-command.add(nil, {
-  ["line-wrapping:toggle"] = function()
-    local view = core.active_view
+command.add_toggle("line-wrapping:toggle", {
+  get = function(view)
+    view = view or core.active_view
+    return view and view.doc and view.extends and view:extends(DocView) and view:is_wrapping_enabled()
+  end,
+  set = function(enabled, view)
+    view = view or core.active_view
     if view and view.doc and view.extends and view:extends(DocView) then
-      view:set_wrapping_enabled(not view:is_wrapping_enabled())
+      view:set_wrapping_enabled(enabled)
     end
-  end
+  end,
 })
 
 keymap.add {

@@ -750,16 +750,11 @@ function DocView:draw_line_text(idx, x, y)
 end
 
 
-command.add(nil, {
-  ["draw-whitespace:toggle"]  = function()
-    drawwhitespace.enabled = not drawwhitespace.enabled
+command.add_toggle("draw-whitespace:toggle", {
+  get = function()
+    return drawwhitespace.enabled
   end,
-
-  ["draw-whitespace:disable"] = function()
-    drawwhitespace.enabled = false
-  end,
-
-  ["draw-whitespace:enable"]  = function()
-    drawwhitespace.enabled = true
+  set = function(enabled)
+    drawwhitespace.enabled = enabled
   end,
 })

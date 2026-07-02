@@ -187,14 +187,6 @@ command.add(nil, {
     core.quit(true)
   end,
 
-  ["core:toggle-tabs"] = function()
-    config.hide_tabs = not config.hide_tabs
-  end,
-
-  ["core:toggle-line-numbers"] = function()
-    config.show_line_numbers = not config.show_line_numbers
-  end,
-
   ["core:toggle-fullscreen"] = function()
     local current_mode = system.get_window_mode(core.window)
     local fullscreen = current_mode == "fullscreen"
@@ -234,6 +226,10 @@ command.add(nil, {
 
   ["core:find-command"] = function()
     local commands = command.get_all_valid()
+    local status_labels = {}
+    for _, name in ipairs(commands) do
+      status_labels[name] = command.get_status_label(name)
+    end
     core.global_prompt_bar:enter("Do Command", {
       submit = function(text, item)
         if item then
@@ -244,8 +240,11 @@ command.add(nil, {
         local res = {}
         local matched = common.fuzzy_match(commands, text)
         for i, name in ipairs(matched) do
+          local text = command.prettify_name(name)
+          local status = status_labels[name]
           res[i] = {
-            text = command.prettify_name(name),
+            text = text,
+            display_text = status and (text .. " " .. status) or text,
             info = keymap.get_binding(name),
             command = name,
           }
@@ -360,6 +359,24 @@ command.add(nil, {
 
   ["core:view-website"] = function()
     common.open_in_system("https://github.com/dcostap/anvil-editor")
+  end,
+})
+
+command.add_toggle("core:toggle-tabs", {
+  get = function()
+    return not config.hide_tabs
+  end,
+  set = function(enabled)
+    config.hide_tabs = not enabled
+  end,
+})
+
+command.add_toggle("core:toggle-line-numbers", {
+  get = function()
+    return config.show_line_numbers
+  end,
+  set = function(enabled)
+    config.show_line_numbers = enabled
   end,
 })
 

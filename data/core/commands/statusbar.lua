@@ -32,22 +32,25 @@ local function status_bar_get_items(text)
   return results
 end
 
+command.add_toggle("status-bar:toggle", {
+  get = function()
+    return core.status_bar.visible
+  end,
+  set = function(enabled)
+    if enabled then core.status_bar:show() else core.status_bar:hide() end
+  end,
+})
+
+command.add_toggle("status-bar:toggle-messages", {
+  get = function()
+    return not core.status_bar.hide_messages
+  end,
+  set = function(enabled)
+    core.status_bar:display_messages(enabled)
+  end,
+})
+
 command.add(nil, {
-  ["status-bar:toggle"] = function()
-    core.status_bar:toggle()
-  end,
-  ["status-bar:show"] = function()
-    core.status_bar:show()
-  end,
-  ["status-bar:hide"] = function()
-    core.status_bar:hide()
-  end,
-  ["status-bar:disable-messages"] = function()
-    core.status_bar:display_messages(false)
-  end,
-  ["status-bar:enable-messages"] = function()
-    core.status_bar:display_messages(true)
-  end,
   ["status-bar:hide-item"] = function()
     core.global_prompt_bar:enter("Status bar item to hide", {
       submit = function(text, item)

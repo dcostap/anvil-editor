@@ -480,40 +480,26 @@ function DocView:scroll_to_make_visible(line, col, ...)
 end
 
 -- Generic commands
-command.add(nil, {
-  ["sticky-lines:toggle"] = function()
-    sticky_scroll.enabled = not sticky_scroll.enabled
+command.add_toggle("sticky-lines:toggle", {
+  get = function()
+    return sticky_scroll.enabled
   end,
-  ["sticky-lines:enable"] = function()
-    sticky_scroll.enabled = true
-  end,
-  ["sticky-lines:disable"] = function()
-    sticky_scroll.enabled = false
+  set = function(enabled)
+    sticky_scroll.enabled = enabled
   end,
 })
 
 -- Per-docview commands
-command.add(SS.should_run, {
-  ["sticky-lines:toggle-doc"] = function()
-    local dv = core.active_view
-    SS.managed_docviews[dv].enabled = not SS.managed_docviews[dv].enabled
-  end
-})
-command.add(function()
-    local dv = core.active_view
-    return SS.should_run() and not SS.managed_docviews[dv].enabled, dv
-  end, {
-  ["sticky-lines:enable-doc"] = function(dv)
-    SS.managed_docviews[dv].enabled = true
-  end
-})
-command.add(function()
-    local dv = core.active_view
-    return SS.should_run() and SS.managed_docviews[dv].enabled, dv
-  end, {
-  ["sticky-lines:disable-doc"] = function(dv)
-    SS.managed_docviews[dv].enabled = false
-  end
+command.add_toggle("sticky-lines:toggle-doc", {
+  predicate = SS.should_run,
+  get = function(dv)
+    dv = dv or core.active_view
+    return dv and SS.managed_docviews[dv].enabled
+  end,
+  set = function(enabled, dv)
+    dv = dv or core.active_view
+    if dv then SS.managed_docviews[dv].enabled = enabled end
+  end,
 })
 
 return SS
