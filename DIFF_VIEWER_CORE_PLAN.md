@@ -89,7 +89,7 @@ Design decisions:
 Completed:
 
 - Git View creates commit diff panes through `diffview.open(request, true)` instead of `string_to_string(...)`.
-- Git requests include metadata for:
+- Git requests include request user data for:
   - selected changed file.
   - selected file path/index.
   - left/right revision endpoints.
@@ -148,10 +148,31 @@ provider:visual_rows(view, line, placement, previous_line_total) -> {
 Core composition contract:
 
 - Rows are still one `DocView:get_line_height()` tall. Arbitrary pixel-height rows are not part of this phase.
+- Build a normalized composed-row sequence/cache before drawing or hit-testing. Each entry must have stable identity and enough data to reverse-map from visual row to document/fold/provider content:
+
+```lua
+{
+  absolute_row = n,
+  type = "provider" | "line" | "fold",
+  provider_id = id?,
+  line = line,
+  placement = "before" | "after"?,
+  row_in_provider = n?,
+  row_in_line = n?,
+  provider_row = row_object?,
+}
+```
+
+- Invalidate the composed-row cache when any of these change:
+  - document line count/text that affects wrapping.
+  - line wrapping state.
+  - fold add/remove/expand/collapse/invalidate.
+  - provider registration/removal.
+  - provider data generation, when a provider exposes one.
 - Count providers stay supported:
   - `before[line]` keeps its existing cumulative meaning.
   - `rows_before(view, line)` may return either a cumulative count or row objects; object-returning providers should be per-anchor objects.
-  - legacy anonymous count rows are synthesized as internal row entries with generated ids.
+  - legacy anonymous count rows are synthesized as internal provider entries with generated ids.
 - Object rows are anchored to a document line plus placement:
   - `placement = "before"` rows appear before that line's fold/line rows.
   - `placement = "after"` rows appear after that line's fold/line rows. Intermediate `after` rows must be included, not only trailing EOF rows.
@@ -159,23 +180,11 @@ Core composition contract:
   - provider priority.
   - provider id.
   - row order returned by that provider.
-- `DocView:get_visual_row_entry(row)` must return provider row entries like:
-
-```lua
-{
-  type = "provider",
-  provider_id = id,
-  line = line,
-  placement = "before" | "after",
-  row = absolute_row,
-  row_in_provider = n,
-  provider_row = row_object,
-}
-```
-
+- `DocView:get_visual_row_entry(row)` must return the normalized entry for provider rows, preserving provider identity and provider row object.
 - Drawing should dispatch provider row `draw(...)` for visible provider rows before ordinary line text drawing.
 - Mouse resolution should preserve provider row identity. A click on a provider row should call `row.hit_test` / `row.on_click` before falling back to ordinary document-line selection.
 - Diff gap rows can remain anonymous blank rows until a visible action row is needed.
+- Keep diff sync/apply arrows owned by the Diff View divider/gutter path for now, matching IntelliJ's separation between diff change operations and editor row composition. Do not move apply actions into provider rows unless a later visible in-text action row explicitly needs it.
 
 Tests to add/update:
 
@@ -192,7 +201,19 @@ Current state:
 - Diff fold expansion state is keyed by equal-block index.
 - Edits can shift/reorder equal blocks, so expansion state can be lost or applied to the wrong block.
 
-Finish by replacing index-only fold preservation with stable identity matching.
+IntelliJ reference:
+
+- IntelliJ's `FoldingModelSupport` stores fold state in request user data as range-based expanded/collapsed cache entries.
+- It restores state by finding a cached range that covers the newly created fold range.
+- IntelliJ explicitly accepts that edits since cache creation can produce imperfect fold restoration.
+
+Anvil decision:
+
+- Use IntelliJ's request-scoped fold-state cache as the lifecycle model: fold state belongs to the active diff request/view context, not to global document state.
+- Intentionally improve on IntelliJ's range-only matching with content/neighbor identity so edits before a fold do not commonly lose or misapply expansion state.
+- Treat this as an intentional Anvil divergence from the golden reference, not an accidental API mismatch.
+
+Finish by replacing index-only fold preservation with request-scoped stable identity matching.
 
 Identity model:
 
@@ -222,6 +243,7 @@ Tests to add:
 - expanding a region does not expand a different equal block after repeated-content edits.
 - deleting/touching the folded unchanged block safely resets fold state.
 - identical repeated equal blocks become ambiguous and reset instead of preserving incorrectly.
+- fold state is request/view-scoped and does not leak to another Diff View over the same documents.
 
 ### 3. Public DiffRequest / DiffContent API hardening
 
@@ -238,13 +260,19 @@ Request schema:
 {
   title = string?,
   kind = "text" | "git" | "blank" | "file" | string,
-  contents = { left = content, right = content },
-  content_titles = { left = string?, right = string? }?,
+  contents = { content1, content2, content3? },
+  content_titles = { string?, string?, string? }?,
   editable_policy = "read-only" | "content" | "editable"?,
-  preferred_focus_side = "left" | "right"?,
-  metadata = table?,
+  preferred_focus_side = "left" | "right" | "base"?,
+  user_data = table?,
 }
 ```
+
+Compatibility sugar:
+
+- Public helpers may still accept `{ contents = { left = content, right = content } }` and `{ content_titles = { left = "...", right = "..." } }`.
+- `diffview.open(request)` must normalize that sugar immediately into list-based `contents` and `content_titles`, matching IntelliJ's `ContentDiffRequest` / `SimpleDiffRequest` model.
+- `metadata` should be normalized into `user_data` or request-kind-specific user-data keys. Generic Diff View code should read named user-data fields, not Git-specific ad-hoc metadata tables.
 
 `DiffContent` is a discriminated union. Common optional fields:
 
@@ -277,11 +305,12 @@ Kind-specific fields:
 
 Validation/defaulting rules:
 
-- `request.contents.left` and `request.contents.right` are required for two-way side-by-side Diff View.
+- Exactly two normalized contents are required for the current side-by-side Diff View. Three contents are reserved for the future three-way viewer.
 - Unknown content kinds are invalid unless a future content resolver is explicitly registered.
-- `content_titles.side` overrides `content.name` for UI side labels when present.
+- `content_titles[index]` overrides `content.name` for UI side labels when present.
 - `content.name` is used as the created document name when no side title is given.
 - Missing `editable_policy` defaults to `"content"`.
+- Requests that put the same `Doc` instance on more than one side are invalid for the current viewer, matching IntelliJ's warning that same-document diff requests have confusing listener and mutation behavior.
 - Invalid requests should return a clear error object/string; they should not fail later with a nil-field crash.
 
 Ownership decisions:
@@ -294,8 +323,10 @@ Ownership decisions:
 Tests to add:
 
 - request helpers create equivalent views to legacy helpers.
+- `{ left = ..., right = ... }` sugar normalizes to list-based contents/titles.
 - invalid requests produce deterministic validation errors.
-- title precedence: `content_titles.side` over `content.name` over filename basename.
+- same-`Doc` requests are rejected with a deterministic validation error.
+- title precedence: `content_titles[index]` over `content.name` over filename basename.
 - caller-owned document content is not closed/disposed by closing a Diff View.
 - owned transient text/empty docs are cleaned up when the Diff View is disposed.
 
@@ -306,7 +337,7 @@ Current state:
 - Text Diff View and Git Diff View content can be represented by requests.
 - Detailed editability enforcement is not complete.
 
-Finish by enforcing editability consistently at a central mutation boundary and in DiffView-originated actions.
+Finish by enforcing editability consistently at Diff View input/action boundaries without globally changing caller-owned documents.
 
 Effective editability:
 
@@ -319,19 +350,20 @@ Effective editability:
 
 Enforcement boundary:
 
-- Add a side-aware edit guard owned by `DiffView` and installed on side docs/views.
-- The guard must cover all document mutation routes, not just keyboard input:
+- Add a side-aware edit guard owned by `DiffView` and installed on side `DocView`s, not as a global lock on caller-owned `Doc`s.
+- The guard must cover user mutations routed through the Diff View:
   - typing.
   - paste.
   - delete/backspace/newline commands.
-  - `Doc:apply_edits` and helpers that call it.
-  - undo/redo if they would mutate read-only content.
+  - undo/redo commands when invoked from the read-only diff side.
   - DiffView's own sync/apply actions (`DiffView:sync`, divider clicks, `diff-view:sync-change`).
-- Preferred implementation is a document-level mutation gate, e.g. extending `Doc:can_apply_edits(...)` or adding a per-doc edit-guard listener that `apply_edits`, `raw_insert`, and `raw_remove` consult before mutation.
+- Do **not** install a global per-`Doc` mutation gate for caller-owned document or file contents. A read-only Diff View over a `Doc` must not make that same `Doc` read-only in a normal Editor.
+- Direct external `Doc:apply_edits`, `raw_insert`, or `raw_remove` calls on caller-owned docs remain the caller's responsibility; Diff View should observe the text-change listener and rediff afterward.
+- Owned transient read-only contents, such as Git historical snapshots, may be backed by an actually read-only/guarded `Doc` because no other owner should edit them.
 - DiffView-originated sync/apply actions must check target-side editability before calling `replace`/`apply_edits`, and should not show sync arrows/actions for read-only targets unless they are disabled with a clear reason.
 - Read-only rejection should surface `read_only_reason`:
-  - visible warning for direct user edit attempts.
-  - quiet log for background/programmatic attempts unless user initiated.
+  - visible warning for direct user edit attempts inside the Diff View.
+  - quiet log for background/programmatic DiffView-originated attempts unless user initiated.
 
 File-backed side decisions:
 
@@ -342,8 +374,11 @@ File-backed side decisions:
 
 Tests to add:
 
-- read-only diff side rejects typing, paste, delete/backspace, and direct `apply_edits`.
+- read-only diff side rejects typing, paste, delete/backspace, and undo/redo invoked from that side.
 - read-only target rejects `diff-view:sync-change` and divider sync click.
+- opening a caller-owned `Doc` in a read-only Diff View does not prevent editing the same `Doc` through a normal Editor; both views observe the resulting rediff/update behavior.
+- direct external `Doc:apply_edits` on caller-owned content is observed and rediffs, not blocked globally.
+- owned transient read-only snapshot docs reject direct mutation through their configured guard/read-only mechanism.
 - editable text side accepts edits and rediffs exactly once per user edit.
 - editable file-backed side becomes dirty and saves through normal document save.
 - Git commit diff sides are read-only and expose a useful read-only reason.
@@ -352,9 +387,9 @@ Tests to add:
 
 Current state:
 
-- `DiffContent.empty` exists, but there is no standalone blank diff command/host workflow.
+- `DiffContent.empty` exists, but there is no standalone blank diff command/mutable request workflow.
 
-Finish by adding a mutable request host for blank/source-swapping workflows.
+Finish by adding an Anvil equivalent of IntelliJ's `MutableDiffRequestChain` for blank/source-swapping workflows.
 
 Commands:
 
@@ -362,23 +397,24 @@ Commands:
 - `diff-view:replace-left-with-file`
 - `diff-view:replace-right-with-file`
 
-Host API:
+Mutable request chain API:
 
 ```lua
-local host = MutableDiffRequestHost(request, opts)
-host:get_view()
-host:replace_content(side, content, opts)
-host:reload(opts)
-host:try_close(callback)
-host:dispose()
+local chain = MutableDiffRequestChain(request, opts)
+chain:get_view()
+chain:set_content(side, content, opts)
+chain:reload(opts)
+chain:try_close(callback)
+chain:dispose()
 ```
 
-Host responsibilities:
+Chain responsibilities:
 
-- Own the active mutable request.
-- Own the current `DiffView` instance.
+- Own the active mutable request and request user data.
+- Produce/reload the current `DiffView` from the request, rather than exposing commands that mutate `DiffView` internals directly.
 - Preserve surrounding tab/node/tool placement when reloading or replacing content.
-- Dispose the old `DiffView` integrations before installing a replacement view.
+- On replacement, first finish dirty-content confirmation. Only dispose the old `DiffView` integrations after replacement/close is confirmed, so a cancelled dirty prompt leaves the existing view fully functional.
+- Dispose the old `DiffView` integrations before installing the confirmed replacement view.
 - Increment generation IDs so stale diff computations cannot apply after replacement.
 - Preserve focus side, scroll/caret state, and folding state where it is safe and side contents are semantically the same.
 - Keep commands from mutating `DiffView` internals directly.
@@ -387,10 +423,10 @@ Dirty-content protection:
 
 - Blank diff starts with two normal owned untitled documents.
 - Owned editable docs must be protected on close and side replacement.
-- Closing the host should prompt or otherwise reuse the normal `DocView:try_close()` dirty-document confirmation behavior for each dirty owned side doc.
+- Closing the chain/view should prompt or otherwise reuse the normal `DocView:try_close()` dirty-document confirmation behavior for each dirty owned side doc.
 - Replacing a dirty owned side must confirm before discarding it.
 - If the user cancels the dirty prompt, replacement/close is cancelled and the existing view remains active.
-- Non-owned caller docs are not closed by the host; their normal owners remain responsible for dirty state.
+- Non-owned caller docs are not closed by the chain/view; their normal owners remain responsible for dirty state.
 
 Replacement decisions:
 
@@ -411,22 +447,22 @@ Tests to add:
 
 Current state:
 
-- Git View builds a `kind = "git"` request and passes useful metadata.
+- Git View builds a `kind = "git"` request and passes useful request user data.
 
-Finish by using that metadata for richer Git diff behavior.
+Finish by using that user data for richer Git diff behavior.
 
 Design decisions:
 
 - Commit diff requests are read-only by default.
-- Divider/apply/revert labels should be sourced from Git request metadata, not hardcoded in generic Diff View.
-- Reloading a selected changed file should reuse the same surrounding Git tab/session placement.
+- Divider/apply/revert labels should be sourced from Git request user data, not hardcoded in generic Diff View.
+- Reloading a selected changed file should reuse the same surrounding Git View tab placement and Git View state.
 - If working-tree editing is added later, it should be opt-in and only for the working-tree side.
 
 Tests to add:
 
-- Commit Diff View opens through `DiffRequest` with expected metadata.
+- Commit Diff View opens through `DiffRequest` with expected Git user data.
 - selecting another changed file reloads the viewer without losing Git pane focus state.
-- Git request metadata is available to divider/action code.
+- Git request user data is available to divider/action code.
 
 ### 7. Unified and three-way modes
 
@@ -438,7 +474,7 @@ Design decisions:
 
 - Do not build unified or three-way UI until the two-way request/content/model contracts are stable.
 - Unified and three-way should be separate viewer implementations selected from request shape/kind.
-- `DiffModel.compute(...)` remains a pure worker body. Viewer/session code owns async lifecycle.
+- `DiffModel.compute(...)` remains a pure worker body. Viewer/request-chain code owns async lifecycle.
 
 Future tests:
 
