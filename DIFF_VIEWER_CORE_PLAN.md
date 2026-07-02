@@ -6,6 +6,17 @@ Diff View has been moved most of the way from a monkey-patched two-`DocView` plu
 
 This plan now tracks only what is done and what still needs implementation. Historical exploration details have been removed.
 
+## Reference stance
+
+Use the local IntelliJ source as a golden reference for architectural pressure points, lifecycles, and edge cases, not as a 1:1 API or complexity target. Prefer the smallest Anvil-native design that preserves the useful lessons:
+
+- request/content records own diff intent and request-scoped state.
+- viewer/controller code owns active UI lifecycle and reload/disposal ordering.
+- editor extension points should be view-scoped when global document mutation would leak outside the diff view.
+- fold, scroll, row-composition, and editability features should handle the bugs Anvil can realistically hit, without importing IntelliJ-only abstraction layers until they are useful here.
+
+Intentional divergences from IntelliJ should be called out in the relevant section so future work does not accidentally “fix” them back into IntelliJ parity.
+
 ## Completed
 
 ### Core listener/provider groundwork
@@ -80,7 +91,8 @@ Completed:
 
 Design decisions:
 
-- Text and empty contents create owned untitled documents.
+- Text contents create owned untitled documents.
+- `empty` currently means an Anvil-owned blank untitled document for the existing helper flow, not IntelliJ's non-document empty placeholder. During API hardening, introduce `blank` as the canonical public name for this mutable blank-document content and keep `empty` only as a compatibility alias/current helper name. If add/delete placeholder semantics are needed later, add a separate `placeholder`/`missing` content kind instead of overloading mutable blank documents.
 - Caller-provided document contents are caller-owned unless explicitly marked owned.
 - File contents create file-backed documents and are not owned by the Diff View.
 
@@ -143,7 +155,26 @@ provider:visual_rows(view, line, placement, previous_line_total) -> {
     metadata = {},
   }
 }
+
+provider:generation(view) -> number|string|nil
 ```
+
+Do not overload the legacy count-provider methods to return row objects. `rows_before`, `rows_after`, and table-based `before` / `after` providers remain count-only compatibility APIs. Object rows are exposed only through `visual_rows(...)`.
+
+Add an explicit invalidation path so providers do not rely only on passive generation polling:
+
+```lua
+docview:invalidate_visual_rows(provider_id?)
+```
+
+Providers with cheap immutable generations may still expose `generation(view)`; providers with event-driven state should call the invalidation API when their row set changes.
+
+Provider row validation contract:
+
+- Provider row identity is scoped as `{ provider_id, line, placement, row.id }`.
+- `row.id` should be stable within that anchor. Duplicate ids from one provider at the same line/placement should be quiet-logged and disambiguated internally rather than corrupting the cache.
+- `height_rows` is reserved for the future. In this phase, only `nil` or `1` is valid; other values should be quiet-logged and treated as `1` or skipped consistently.
+- Provider callbacks must be isolated with `pcall`; callback failures should quiet-log the provider id and skip the failed draw/hit/click action without breaking ordinary Document View input.
 
 Core composition contract:
 
@@ -168,10 +199,11 @@ Core composition contract:
   - line wrapping state.
   - fold add/remove/expand/collapse/invalidate.
   - provider registration/removal.
+  - explicit `invalidate_visual_rows(...)` calls.
   - provider data generation, when a provider exposes one.
 - Count providers stay supported:
   - `before[line]` keeps its existing cumulative meaning.
-  - `rows_before(view, line)` may return either a cumulative count or row objects; object-returning providers should be per-anchor objects.
+  - `rows_before(view, line)` and `rows_after(view, line)` return counts only.
   - legacy anonymous count rows are synthesized as internal provider entries with generated ids.
 - Object rows are anchored to a document line plus placement:
   - `placement = "before"` rows appear before that line's fold/line rows.
@@ -180,6 +212,7 @@ Core composition contract:
   - provider priority.
   - provider id.
   - row order returned by that provider.
+- The composed-row cache becomes the single source of truth for visual row count, line-to-row mapping, row-to-line mapping, drawing order, mouse hit-testing, and diff scroll/line-transfer calculations while composed rows are active.
 - `DocView:get_visual_row_entry(row)` must return the normalized entry for provider rows, preserving provider identity and provider row object.
 - Drawing should dispatch provider row `draw(...)` for visible provider rows before ordinary line text drawing.
 - Mouse resolution should preserve provider row identity. A click on a provider row should call `row.hit_test` / `row.on_click` before falling back to ordinary document-line selection.
@@ -193,6 +226,9 @@ Tests to add/update:
 - wrapped document lines plus before/after provider rows compose correctly.
 - count-style diff gap providers remain compatible.
 - provider removal restores ordinary `DocView` row counts and hit-testing.
+- provider generation changes invalidate and rebuild the composed-row cache.
+- duplicate provider row ids do not corrupt row lookup and produce a quiet diagnostic.
+- provider draw/hit/click callback errors are isolated and ordinary text hit-testing still works.
 
 ### 2. Stable diff fold identity
 
@@ -213,16 +249,44 @@ Anvil decision:
 - Intentionally improve on IntelliJ's range-only matching with content/neighbor identity so edits before a fold do not commonly lose or misapply expansion state.
 - Treat this as an intentional Anvil divergence from the golden reference, not an accidental API mismatch.
 
-Finish by replacing index-only fold preservation with request-scoped stable identity matching.
+Finish by replacing index-only fold preservation with request-scoped stable identity matching. Keep this simpler than IntelliJ unless tests prove more is needed: the goal is to avoid common wrong/lost restoration after edits, not to perfectly preserve fold state across arbitrary rewrites.
+
+Request-scoped cache model:
+
+```lua
+request.user_data.diff_fold_state = {
+  default_expanded = boolean,
+  states = {
+    {
+      identity = table,
+      side_ranges = {
+        left = { start_line = n, end_line = n }?,
+        right = { start_line = n, end_line = n }?,
+      },
+      state = "expanded" | "collapsed",
+      description = string?,
+    }
+  }
+}
+```
+
+Lifecycle contract:
+
+- Store fold state on the active request's `user_data`, not on the global documents.
+- Update the request cache from the currently installed fold regions before clearing/rebuilding them during rediff, matching IntelliJ's update-before-install lifecycle.
+- Preserve both expanded and collapsed exceptions relative to the current default fold mode; do not model only expanded folds.
+- If the request's default fold mode changes, ignore incompatible cached state and use the new default behavior. Cache compatibility is based on `default_expanded` matching the current default.
+- If a mutable request/controller rebuild changes side content identity, carry fold cache forward only for sides whose semantic content identity is compatible. Do not blindly reuse old fold state after replacing a side with an unrelated file/text document.
 
 Identity model:
 
 - Primary identity must be content/neighbor based, not position based.
-- Primary identity fields:
+- Primary identity fields, implemented in the smallest useful subset first:
   - previous hunk signature, if present.
   - next hunk signature, if present.
   - normalized first visible unchanged line in the candidate.
   - normalized last visible unchanged line in the candidate.
+  - a small normalized digest/sample of the folded unchanged block when boundary lines are not unique enough.
   - hidden-line count bucket/exact count, used only when it improves uniqueness.
 - Position fields such as side starts/counts are **tie-breakers only**. They must not be part of the strict identity key, because insertion before a fold shifts positions.
 - Hunk signatures should be small and stable:
@@ -231,10 +295,11 @@ Identity model:
   - last changed line text hash/summary on both sides when available.
   - hunk changed-line counts.
 - Ambiguity handling:
-  - Build candidate identities for old expanded folds and new fold candidates.
-  - If exactly one new candidate matches an old identity, preserve expansion.
+  - Build candidate identities for old cached fold states and new fold candidates.
+  - If exactly one new candidate matches an old identity, preserve the cached expanded/collapsed state.
   - If zero candidates match, reset to default fold behavior.
   - If multiple candidates match, use position as a tie-breaker only if it chooses one clearly nearest candidate; otherwise reset to default fold behavior.
+  - If sides disagree about the restored state or identity match, reset to default instead of guessing.
 - Keep numeric `index` only for diagnostics/display. Do not use it as persisted expansion state.
 
 Tests to add:
@@ -244,6 +309,8 @@ Tests to add:
 - deleting/touching the folded unchanged block safely resets fold state.
 - identical repeated equal blocks become ambiguous and reset instead of preserving incorrectly.
 - fold state is request/view-scoped and does not leak to another Diff View over the same documents.
+- changing the default fold mode ignores incompatible cached state and uses the new default.
+- manually collapsed and manually expanded fold exceptions both survive a compatible rediff.
 
 ### 3. Public DiffRequest / DiffContent API hardening
 
@@ -293,8 +360,15 @@ Kind-specific fields:
 -- text: DiffView creates an owned untitled Doc from text.
 { kind = "text", text = string, ... }
 
--- empty: DiffView creates an owned empty untitled Doc.
+-- blank: DiffView creates an owned mutable blank untitled Doc.
+-- This is intentionally different from IntelliJ's non-document EmptyContent placeholder.
+{ kind = "blank", ... }
+
+-- empty: compatibility alias for current Anvil helper behavior; new code should prefer blank.
 { kind = "empty", ... }
+
+-- future, only if add/delete placeholder UI needs IntelliJ-style EmptyContent semantics:
+-- { kind = "placeholder", ... }
 
 -- file: DiffView creates/opens a normal file-backed Doc.
 { kind = "file", filename = string, ... }
@@ -303,19 +377,32 @@ Kind-specific fields:
 { kind = "document", doc = Doc, ... }
 ```
 
+Request/content lifecycle contract:
+
+- Add lightweight assignment hooks before treating this as stable public API:
+  - `request:on_assigned(is_assigned, context)?`
+  - `content:on_assigned(is_assigned, request, side)?`
+  - `content:dispose?()` for owned resolver-created resources that are not ordinary docs.
+- A request may be shown/reloaded more than once. Assignment calls must be balanced so request/content listeners or temporary resources do not leak, matching IntelliJ's `DiffRequest.onAssigned(...)` / content assignment lifecycle.
+- Request user data has two scopes:
+  - chain/controller-persistent user data copied into each rebuilt request.
+  - per-built-request transient user data owned by the active view instance.
+- Fold, scroll, and focus state should be restored from persistent request/chain data only when side content identity is compatible with the previous request.
+
 Validation/defaulting rules:
 
-- Exactly two normalized contents are required for the current side-by-side Diff View. Three contents are reserved for the future three-way viewer.
+- Exactly two normalized contents are required for the current side-by-side Diff View. Three contents are recognized request shape but should return an explicit "three-way viewer not implemented" validation/open error until the future three-way viewer exists.
 - Unknown content kinds are invalid unless a future content resolver is explicitly registered.
 - `content_titles[index]` overrides `content.name` for UI side labels when present.
 - `content.name` is used as the created document name when no side title is given.
 - Missing `editable_policy` defaults to `"content"`.
-- Requests that put the same `Doc` instance on more than one side are invalid for the current viewer, matching IntelliJ's warning that same-document diff requests have confusing listener and mutation behavior.
+- Requests that resolve to the same `Doc` instance on more than one side are invalid for the current viewer. Validate this after content resolution/opening, not only on raw request tables. If file contents can resolve to the same already-open document or same canonical file path, reject those too. This is an intentional Anvil divergence from IntelliJ: IntelliJ logs a warning because same-document diff requests have confusing listener and mutation behavior; Anvil rejects them deterministically.
 - Invalid requests should return a clear error object/string; they should not fail later with a nil-field crash.
 
 Ownership decisions:
 
-- `DiffView` owns docs only when `content.owns_doc == true` or when it creates a text/empty transient doc.
+- `DiffView` owns docs only when `content.owns_doc == true` or when it creates a text/blank/empty-compat transient doc.
+- A future non-document placeholder/missing content kind would not create or own a `Doc`.
 - Caller-owned document content is never closed/disposed by closing one Diff View.
 - File-backed docs are ordinary documents with ordinary dirty/save behavior.
 - Git historical contents are text contents with read-only policy, not file-backed editable documents.
@@ -328,7 +415,8 @@ Tests to add:
 - same-`Doc` requests are rejected with a deterministic validation error.
 - title precedence: `content_titles[index]` over `content.name` over filename basename.
 - caller-owned document content is not closed/disposed by closing a Diff View.
-- owned transient text/empty docs are cleaned up when the Diff View is disposed.
+- owned transient text/blank/empty-compat docs are cleaned up when the Diff View is disposed.
+- request/content assignment hooks are balanced across open, reload, replacement, and disposal.
 
 ### 4. Editable policy and file-backed diff sides
 
@@ -337,7 +425,7 @@ Current state:
 - Text Diff View and Git Diff View content can be represented by requests.
 - Detailed editability enforcement is not complete.
 
-Finish by enforcing editability consistently at Diff View input/action boundaries without globally changing caller-owned documents.
+Finish by enforcing editability consistently at Diff View input/action boundaries without globally changing caller-owned documents. IntelliJ often uses editor viewer/read-only flags for this; Anvil should use a smaller view-scoped guard because the same `Doc` can be open normally elsewhere.
 
 Effective editability:
 
@@ -346,10 +434,21 @@ Effective editability:
 - content-owned when request `editable_policy == "content"`:
   - `content.editable == false` means read-only.
   - `content.editable == true` means editable.
-  - missing `content.editable` defaults to editable for ordinary text/empty/file/document contents, except Git requests which set read-only explicitly.
+  - missing `content.editable` defaults to editable for ordinary text/blank/file/document contents; `empty` compatibility content follows the blank default; Git requests set read-only explicitly.
 
 Enforcement boundary:
 
+- Add a core `DocView` edit-guard extension point so view-scoped editability is enforceable without mutating global `Doc` state:
+
+```lua
+docview:add_edit_guard(id, guard)
+docview:remove_edit_guard(id)
+docview:can_edit(reason, opts) -> boolean, reason?
+```
+
+- Core typing, paste, delete/backspace/newline, undo/redo, and command-routed editing paths must consult the active `DocView` edit guard before mutating the document.
+- Audit older command paths that mutate `core.active_view.doc` directly and route them through `DocView:can_edit(...)` or an equivalent command predicate before this feature is considered complete.
+- Decide whether existing read-only monkey-patch flows (`git/historical_document.lua`, Git View pane docs, Command Output View command guards) remain special cases or migrate onto the new guard API; do not leave overlapping guard systems ambiguous.
 - Add a side-aware edit guard owned by `DiffView` and installed on side `DocView`s, not as a global lock on caller-owned `Doc`s.
 - The guard must cover user mutations routed through the Diff View:
   - typing.
@@ -374,6 +473,7 @@ File-backed side decisions:
 
 Tests to add:
 
+- core `DocView` edit guards block command-routed edits only for the guarded view.
 - read-only diff side rejects typing, paste, delete/backspace, and undo/redo invoked from that side.
 - read-only target rejects `diff-view:sync-change` and divider sync click.
 - opening a caller-owned `Doc` in a read-only Diff View does not prevent editing the same `Doc` through a normal Editor; both views observe the resulting rediff/update behavior.
@@ -387,46 +487,75 @@ Tests to add:
 
 Current state:
 
-- `DiffContent.empty` exists, but there is no standalone blank diff command/mutable request workflow.
+- `DiffContent.empty` exists with the current Anvil meaning of an owned blank document, but there is no standalone blank diff command/mutable request workflow.
+- Add `DiffContent.blank` / `diffview.content.blank(...)` as the canonical public name for mutable blank documents; keep `empty` only as a compatibility alias unless/until IntelliJ-style placeholder content is introduced.
 
-Finish by adding an Anvil equivalent of IntelliJ's `MutableDiffRequestChain` for blank/source-swapping workflows.
+Finish by adding an Anvil equivalent of IntelliJ's mutable blank-diff flow. Match IntelliJ's useful separation of concerns, not every feature: `MutableDiffRequestChain` owns mutable request state, while a processor/controller owns active `DiffView` lifecycle and reloads.
 
-Commands:
+Phase-1 commands:
 
 - `diff-view:open-blank-diff`
 - `diff-view:replace-left-with-file`
 - `diff-view:replace-right-with-file`
 
+Deferred optional features inspired by IntelliJ:
+
+- switch side back to a blank editable document.
+- replace side from recent blank content.
+- remember recent non-empty blank diff text.
+- drag/drop file replacement.
+- swap sides.
+- optional three-side blank diff toggle.
+
 Mutable request chain API:
 
 ```lua
 local chain = MutableDiffRequestChain(request, opts)
-chain:get_view()
 chain:set_content(side, content, opts)
-chain:reload(opts)
-chain:try_close(callback)
-chain:dispose()
+chain:build_request(opts) -> request
+chain:put_user_data(key, value)
+chain:get_user_data(key)
+```
+
+Processor/controller API:
+
+```lua
+local controller = DiffRequestController(chain, opts)
+controller:get_view()
+controller:reload(opts)
+controller:try_close(callback)
+controller:dispose()
 ```
 
 Chain responsibilities:
 
-- Own the active mutable request and request user data.
-- Produce/reload the current `DiffView` from the request, rather than exposing commands that mutate `DiffView` internals directly.
+- Own the active mutable request and chain-persistent request user data.
+- Produce normalized `DiffRequest` records from current chain state and copy chain-persistent user data into each built request.
+- Keep per-built-request transient data separate from chain-persistent data so stale viewer state is not accidentally reused after side replacement.
+- Mark blank-diff requests in user data.
+- Set blank-flow defaults when building the initial request:
+  - preferred focus side = left.
+  - suppress equal-contents notifications for newly opened blank documents.
+- Keep commands from mutating `DiffView` internals directly.
+
+Processor/controller responsibilities:
+
+- Produce/reload the current `DiffView` from the chain's request.
 - Preserve surrounding tab/node/tool placement when reloading or replacing content.
 - On replacement, first finish dirty-content confirmation. Only dispose the old `DiffView` integrations after replacement/close is confirmed, so a cancelled dirty prompt leaves the existing view fully functional.
+- Treat this ordering as a blocker for blank-diff work: `DiffView:try_close()` must not dispose integrations before a close/replacement has been confirmed.
 - Dispose the old `DiffView` integrations before installing the confirmed replacement view.
 - Increment generation IDs so stale diff computations cannot apply after replacement.
-- Preserve focus side, scroll/caret state, and folding state where it is safe and side contents are semantically the same.
-- Keep commands from mutating `DiffView` internals directly.
+- Preserve focus side, scroll/caret state, and folding state where it is safe and side contents are semantically the same. Reset those states when side content identity changes or matching is ambiguous.
 
 Dirty-content protection:
 
 - Blank diff starts with two normal owned untitled documents.
 - Owned editable docs must be protected on close and side replacement.
-- Closing the chain/view should prompt or otherwise reuse the normal `DocView:try_close()` dirty-document confirmation behavior for each dirty owned side doc.
+- Closing through the controller/view should prompt or otherwise reuse the normal `DocView:try_close()` dirty-document confirmation behavior for each dirty owned side doc.
 - Replacing a dirty owned side must confirm before discarding it.
 - If the user cancels the dirty prompt, replacement/close is cancelled and the existing view remains active.
-- Non-owned caller docs are not closed by the chain/view; their normal owners remain responsible for dirty state.
+- Non-owned caller docs are not closed by the controller/view; their normal owners remain responsible for dirty state.
 
 Replacement decisions:
 
@@ -474,7 +603,7 @@ Design decisions:
 
 - Do not build unified or three-way UI until the two-way request/content/model contracts are stable.
 - Unified and three-way should be separate viewer implementations selected from request shape/kind.
-- `DiffModel.compute(...)` remains a pure worker body. Viewer/request-chain code owns async lifecycle.
+- `DiffModel.compute(...)` remains a pure worker body. Viewer/controller code owns async lifecycle.
 
 Future tests:
 
