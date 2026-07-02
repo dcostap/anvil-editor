@@ -1791,42 +1791,66 @@ end
 --
 -- Commands
 --
-local function reveal_completion_source(show_references)
-  local item = suggestions[suggestions_idx]
-  if not item or not item.source_line or not item.source_col then
-    core.log("No source location for completion")
+local function quiet_log(...)
+  if core.log_quiet then core.log_quiet(...) end
+end
+
+local function source_range(item)
+  if not item or not item.source_line or not item.source_col then return nil end
+  local line1 = item.source_line
+  local col1 = item.source_col
+  return line1, col1, item.source_end_line or line1, item.source_end_col or col1
+end
+
+local function select_source_range(view, line1, col1, line2, col2)
+  if not view or not view.doc then return false end
+  local function select_range()
+    if view.expand_folds_covering_range then
+      view:expand_folds_covering_range(line1, col1, line2, col2, "autocomplete-source")
+    end
+    view.doc:set_selection(line1, col1, line2, col2)
     return true
+  end
+  if view.with_selection_state then return view:with_selection_state(select_range) end
+  return select_range()
+end
+
+local function open_completion_source_view(item, target_side, line1, col1, line2, col2, restore_focus)
+  local path = item.source_path
+  if target_side then
+    local ok, sidepanel = pcall(require, "core.sidepanel")
+    if not ok or not sidepanel then return nil end
+    local opts = { line = line1, col = col1, line2 = line2, col2 = col2, focus = true, restore_focus = restore_focus }
+    if path and path ~= "" then return sidepanel.open_path_in_side(path, opts) end
+    if item.source_doc then return sidepanel.open_doc_in_side(item.source_doc, opts) end
+    return nil
   end
 
   local active_docview = get_active_view()
-  local path = item.source_path
-  local view = active_docview
-  reset_suggestions()
-
-  if path and path ~= "" then
-    view = core.open_file(path)
-  elseif item.source_doc and (not view or view.doc ~= item.source_doc) then
-    view = core.root_panel:open_doc(item.source_doc)
+  if path and path ~= "" then return core.open_file(path) end
+  if item.source_doc and (not active_docview or active_docview.doc ~= item.source_doc) then
+    return core.root_panel:open_doc(item.source_doc)
   end
+  return active_docview
+end
 
-  if not view or not view.doc then
-    core.log("Could not open completion source")
+local function reveal_completion_source(target_side)
+  local item = suggestions[suggestions_idx]
+  local line1, col1, line2, col2 = source_range(item)
+  if not line1 then
+    quiet_log("Autocomplete source navigation ignored item without source location")
     return true
   end
 
-  local line1 = item.source_line
-  local col1 = item.source_col
-  local line2 = item.source_end_line or line1
-  local col2 = item.source_end_col or col1
-  if view.expand_folds_covering_range then
-    view:expand_folds_covering_range(line1, col1, line2, col2, "autocomplete-source")
+  local restore_focus = get_active_view()
+  reset_suggestions()
+  local view = open_completion_source_view(item, target_side, line1, col1, line2, col2, restore_focus)
+  if not view or not view.doc then
+    quiet_log("Autocomplete source navigation could not open source for %s", tostring(item.text or item))
+    return true
   end
-  view.doc:set_selection(line1, col1, line2, col2)
 
-  if show_references then
-    local ok, language = pcall(require, "core.commands.language")
-    if ok and language and language.show_references then language.show_references(view) end
-  end
+  if not target_side then select_source_range(view, line1, col1, line2, col2) end
   return true
 end
 
@@ -1928,7 +1952,7 @@ command.add(predicate, {
     return reveal_completion_source(false)
   end,
 
-  ["autocomplete:show-references"] = function()
+  ["autocomplete:go-to-declaration-side"] = function()
     return reveal_completion_source(true)
   end,
 
@@ -1940,11 +1964,12 @@ command.add(predicate, {
 --
 -- Keymaps
 --
+pcall(require, "core.commands.language")
 keymap.add {
   ["alt+space"]    = "autocomplete:trigger",
   ["tab"]          = "autocomplete:complete",
-  ["alt+r"]        = "autocomplete:go-to-declaration",
-  ["alt+shift+r"]  = "autocomplete:show-references",
+  ["alt+r"]        = { "autocomplete:go-to-declaration", "language:go-to-declaration" },
+  ["alt+shift+r"]  = { "autocomplete:go-to-declaration-side", "language:show-references" },
   ["up"]           = "autocomplete:previous",
   ["down"]         = "autocomplete:next",
   ["escape"]       = "autocomplete:cancel",
