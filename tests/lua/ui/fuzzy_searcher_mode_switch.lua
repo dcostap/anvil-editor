@@ -54,6 +54,7 @@ test.describe("Fuzzy Searcher mode switching", function()
     local split = fuzzy_searcher._test.split_mode_prefix
     test.same({ split(">commands") }, { ">", "commands" })
     test.same({ split("@projects") }, { "@", "projects" })
+    test.same({ split("@@files") }, { "@@", "files" })
     test.same({ split("#grep") }, { "#", "grep" })
     test.same({ split("$symbols") }, { "$", "symbols" })
     test.same({ split("$$document symbols") }, { "$$", "document symbols" })

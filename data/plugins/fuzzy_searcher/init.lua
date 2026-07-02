@@ -344,6 +344,15 @@ local function get_recent_projects()
   return out
 end
 
+local function recent_project_key_set()
+  local set = {}
+  for _, path in ipairs(get_recent_projects()) do
+    local key = common.path_compare_key(path)
+    if key then set[key] = true end
+  end
+  return set
+end
+
 local function load_recent_project_times()
   local ok, t = pcall(dofile, RECENT_PROJECT_TIMES_FILE)
   if ok and type(t) == "table" then recent_project_times = t end
@@ -645,13 +654,14 @@ local function trim_query(q)
   return tostring(q or ""):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
-fuzzy_searcher.mode_prefixes = { ["#"] = true, ["@"] = true, [">"] = true, ["$"] = true, ["$$"] = true }
+fuzzy_searcher.mode_prefixes = { ["#"] = true, ["@"] = true, ["@@"] = true, [">"] = true, ["$"] = true, ["$$"] = true }
 fuzzy_searcher.prompt_history_loaded = false
 fuzzy_searcher.prompt_history = {}
 
 local function split_mode_prefix(text)
   text = tostring(text or "")
-  if text:sub(1, 2) == "$$" then return "$$", text:sub(3) end
+  local two = text:sub(1, 2)
+  if two == "$$" or two == "@@" then return two, text:sub(3) end
   local prefix = text:sub(1, 1)
   if fuzzy_searcher.mode_prefixes[prefix] then return prefix, text:sub(2) end
   return "", text
@@ -1988,7 +1998,7 @@ local function probe_everything(view)
       if gen ~= everything.probe_generation then return end
       everything.state = ok and "available" or "unavailable"
       core.log_quiet("Fuzzy Everything: probe %s%s", ok and "available" or "unavailable", err and (" — " .. tostring(err)) or "")
-      if ok and view and active_view == view and view:is_project_mode() then
+      if view and active_view == view and (view:is_project_mode() or view:is_everything_file_mode()) then
         view.dirty = true
         view:schedule_update(true)
       end
@@ -2007,9 +2017,6 @@ local function everything_full_path(item)
 end
 
 local function everything_project_search_query(query)
-  -- Project mode is looking for folders to open. Do not set Everything's
-  -- path=1 flag here: a query like "sm64" would match every descendant whose
-  -- parent path contains sm64 and bury the actual project folder.
   query = trim_query(query)
   if query == "" then return query end
   if query:lower():find("folder:", 1, true) then return query end
@@ -2022,6 +2029,29 @@ local function everything_project_search_params(query, count, offset)
     search = everything_project_search_query(query),
     count = tostring(count),
     offset = tostring(offset or 0),
+    path = "1",
+    path_column = "1",
+    size_column = "1",
+    date_modified_column = "1",
+    sort = "path",
+    ascending = "1",
+  }
+end
+
+local function everything_file_search_query(query)
+  query = trim_query(query)
+  if query == "" then return query end
+  if query:lower():find("file:", 1, true) then return query end
+  return "file: " .. query
+end
+
+local function everything_file_search_params(query, count, offset)
+  return {
+    json = "1",
+    search = everything_file_search_query(query),
+    count = tostring(count),
+    offset = tostring(offset or 0),
+    path = "1",
     path_column = "1",
     size_column = "1",
     date_modified_column = "1",
@@ -2074,6 +2104,11 @@ local function everything_result_from_item(item, query)
     size_label = is_folder and "" or format_size(item.size),
     modified_label = modified_time and compact_age(modified_time) or "",
   }
+end
+
+local function everything_project_result_is_recent_duplicate(result, recent_keys)
+  local key = result and result.path and common.path_compare_key(result.path)
+  return result and result.is_folder and key and recent_keys and recent_keys[key] or false
 end
 
 function FSView:new(prefix, opts)
@@ -2163,7 +2198,7 @@ function FSView:new(prefix, opts)
     self.input.textview.doc.readonly = true
   end
 
-  if not self.static_mode then ensure_file_index() end
+  if not self.static_mode and tostring(prefix or ""):sub(1, 2) ~= "@@" then ensure_file_index() end
   self:show()
   self:layout()
   ensure_input_focus(self)
@@ -2206,7 +2241,13 @@ end
 function FSView:is_project_mode()
   if self.static_mode then return false end
   local text = self.input and self.input:get_text() or ""
-  return text:sub(1, 1) == "@"
+  return text:sub(1, 1) == "@" and text:sub(1, 2) ~= "@@"
+end
+
+function FSView:is_everything_file_mode()
+  if self.static_mode then return false end
+  local text = self.input and self.input:get_text() or ""
+  return text:sub(1, 2) == "@@"
 end
 
 function FSView:is_full_width_mode()
@@ -2836,9 +2877,10 @@ function FSView:start_everything_project_search(query, offset, append)
       end
       local total = tonumber(data.totalResults) or 0
       local out = append and self.everything_results or {}
+      local recent_keys = recent_project_key_set()
       for _, item in ipairs(data.results or {}) do
         local r = everything_result_from_item(item, query)
-        if r then out[#out+1] = r end
+        if r and not everything_project_result_is_recent_duplicate(r, recent_keys) then out[#out+1] = r end
       end
       sort_everything_project_results(out)
       self.everything_results = out
@@ -2852,11 +2894,71 @@ function FSView:start_everything_project_search(query, offset, append)
   })
 end
 
+function FSView:start_everything_file_search(query, offset, append)
+  query = trim_query(query)
+  if query == "" then
+    self.everything_results = {}
+    self.everything_total = 0
+    self.everything_has_more = false
+    self.everything_loading = false
+    self.everything_status = "Type a file search to query Everything"
+    return
+  end
+  if everything.state ~= "available" then
+    core.log_quiet("Fuzzy Everything files: search deferred; state=%s query=%q", tostring(everything.state), query)
+    probe_everything(self)
+    return
+  end
+
+  everything.search_generation = everything.search_generation + 1
+  local gen = everything.search_generation
+  local count = fuzzy_searcher.everything_page_size or 80
+  offset = offset or 0
+  self.everything_loading = true
+  self.everything_status = offset > 0 and "Loading more Everything files…" or "Searching Everything files…"
+  local params = everything_file_search_params(query, count, offset)
+  core.log_quiet("Fuzzy Everything files: searching query=%q everything_search=%q offset=%d count=%d append=%s", query, params.search, offset, count, tostring(append))
+  self:schedule_update(true)
+
+  http.get(everything_endpoint(), params, {
+    timeout = 2,
+    on_done = function(ok, _err, data)
+      if gen ~= everything.search_generation or active_view ~= self then return end
+      self.everything_loading = false
+      self.loading_more = false
+      if not ok or type(data) ~= "table" then
+        core.log_quiet("Fuzzy Everything files: search failed query=%q err=%s data_type=%s", query, tostring(_err), type(data))
+        everything.state = "unavailable"
+        self.everything_results = {}
+        self.everything_total = 0
+        self.everything_has_more = false
+        self.everything_status = "Everything is not available. Enable Everything's HTTP server on localhost:54367."
+        self.dirty = true
+        self:schedule_update(true)
+        return
+      end
+      local total = tonumber(data.totalResults) or 0
+      local out = append and self.everything_results or {}
+      for _, item in ipairs(data.results or {}) do
+        local r = everything_result_from_item(item, query)
+        if r and not r.is_folder then out[#out+1] = r end
+      end
+      self.everything_results = out
+      self.everything_total = total
+      self.everything_has_more = #out < total
+      self.everything_status = string.format("%d Everything files%s", #out, self.everything_has_more and "+" or "")
+      core.log_quiet("Fuzzy Everything files: search ok query=%q shown=%d total=%d has_more=%s", query, #out, total, tostring(self.everything_has_more))
+      self.dirty = true
+      self:schedule_update(true)
+    end
+  })
+end
+
 function FSView:refresh_normal(base, line, reset_selection, force_refresh)
   local limit = self:result_limit()
   local mode = base:sub(1, 1)
-  if base:sub(1, 2) == "$$" then
-    mode = "$$"
+  if base:sub(1, 2) == "$$" or base:sub(1, 2) == "@@" then
+    mode = base:sub(1, 2)
     base = base:sub(3):gsub("^%s+", "")
   elseif mode == ">" or mode == "@" or mode == "$" then
     base = base:sub(2):gsub("^%s+", "")
@@ -2951,6 +3053,34 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
     kill_file_search()
     self:start_current_document_symbol_search(base, reset_selection)
     return
+  elseif mode == "@@" then
+    kill_file_search()
+    local file_query = base
+    if trim_query(file_query) == "" then
+      self.everything_results = {}
+      self.everything_total = 0
+      self.everything_has_more = false
+      self.everything_status = "Type a file search to query Everything"
+      self.everything_query_key = nil
+    else
+      if everything.state == "unknown" then probe_everything(self) end
+      if everything.state == "available" then
+        if self.everything_query_key ~= file_query then
+          self.everything_query_key = file_query
+          self:start_everything_file_search(file_query, 0, false)
+        elseif force_refresh and self.loading_more and self.everything_has_more and not self.everything_loading then
+          self:start_everything_file_search(file_query, #(self.everything_results or {}), true)
+        end
+      elseif everything.state == "probing" then
+        self.everything_status = "Checking Everything HTTP server…"
+      else
+        self.everything_status = "Everything is not available. Enable Everything's HTTP server on localhost:54367."
+      end
+    end
+    for i = 1, math.min(limit, #(self.everything_results or {})) do
+      out[#out+1] = self.everything_results[i]
+    end
+    self.has_more = self.everything_has_more
   elseif mode == "@" then
     kill_file_search()
     local project_limit = limit
@@ -2988,7 +3118,9 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
     kill_file_search()
   end
 
-  if mode == "@" then
+  if mode == "@@" then
+    self.status = self.everything_status or ""
+  elseif mode == "@" then
     local extra = self.everything_status and self.everything_status ~= "" and (" — " .. self.everything_status) or ""
     self.status = string.format("%d recent projects%s", #get_recent_projects(), extra)
   elseif files_indexing then
@@ -4117,6 +4249,7 @@ command.add(nil, {
   ["fuzzy-searcher:open"] = function() open("") end,
   ["fuzzy-searcher:open-files"] = function() open("") end,
   ["fuzzy-searcher:open-projects"] = function() open("@") end,
+  ["fuzzy-searcher:open-everything-files"] = function() open("@@") end,
   ["fuzzy-searcher:open-grep"] = function() open("#") end,
   ["fuzzy-searcher:open-symbols"] = function() open("$") end,
   ["fuzzy-searcher:open-current-document-symbols"] = function() open("$$") end,
@@ -4223,8 +4356,13 @@ return {
   _test = {
     everything_project_search_params = everything_project_search_params,
     everything_project_search_query = everything_project_search_query,
+    everything_file_search_params = everything_file_search_params,
+    everything_file_search_query = everything_file_search_query,
     everything_path_depth = everything_path_depth,
     sort_everything_project_results = sort_everything_project_results,
+    everything_result_from_item = everything_result_from_item,
+    everything_project_result_is_recent_duplicate = everything_project_result_is_recent_duplicate,
+    recent_project_key_set = recent_project_key_set,
     split_mode_prefix = split_mode_prefix,
     clear_prompt_history = function()
       fuzzy_searcher.prompt_history_loaded = true
