@@ -83,6 +83,10 @@ local function range_len(capture)
   return (capture.end_byte or 0) - (capture.start_byte or 0)
 end
 
+local function range_contains(outer, start_byte, end_byte)
+  return outer and (outer.start_byte or 0) <= start_byte and (outer.end_byte or 0) >= end_byte
+end
+
 local function tree_ready(ts)
   return ts and ts.native and ts.native.has_tree and ts.native:has_tree()
       and ts.status == "ready" and not ts.stale_unrenderable
@@ -95,7 +99,23 @@ local function range_from_capture(capture)
   }
 end
 
+local function completion_preview_for_capture(doc, capture)
+  local line = doc and doc.lines and doc.lines[capture.start_line]
+  if not line then return nil end
+  line = tostring(line):gsub("[\r\n]+$", "")
+  local leading = line:match("^%s*") or ""
+  local text = line:sub(#leading + 1):gsub("%s+$", "")
+  if text == "" then return nil end
+  local start_col = math.max(1, (capture.start_col or 1) - #leading)
+  local end_col = math.max(start_col, (capture.end_col or capture.start_col or 1) - #leading - 1)
+  start_col = math.min(start_col, #text)
+  end_col = math.min(end_col, #text)
+  if start_col > end_col then return text, nil end
+  return text, { start_col, end_col }
+end
+
 local function item_from_capture(doc, capture)
+  local preview, preview_name_span = completion_preview_for_capture(doc, capture)
   return {
     name = capture_text(doc, capture),
     kind = capture_kind(capture.capture) or "reference",
@@ -107,6 +127,8 @@ local function item_from_capture(doc, capture)
     start_byte = capture.start_byte,
     end_byte = capture.end_byte,
     range = range_from_capture(capture),
+    completion_preview = preview,
+    completion_preview_name_span = preview_name_span,
   }
 end
 
@@ -164,8 +186,7 @@ local function symbol_contains(symbol, start_byte, end_byte)
   return symbol and symbol.start_byte <= start_byte and symbol.end_byte >= end_byte
 end
 
-local function enclosing_outline_symbol(doc, start_byte, end_byte)
-  local symbols = outline.get_document_outline(doc)
+local function enclosing_outline_symbol_from_list(symbols, start_byte, end_byte)
   local best
   for _, symbol in ipairs(symbols or {}) do
     if symbol_contains(symbol, start_byte, end_byte) then
@@ -175,6 +196,10 @@ local function enclosing_outline_symbol(doc, start_byte, end_byte)
     end
   end
   return best
+end
+
+local function enclosing_outline_symbol(doc, start_byte, end_byte)
+  return enclosing_outline_symbol_from_list(outline.get_document_outline(doc), start_byte, end_byte)
 end
 
 local function in_scope(capture, scope)
@@ -226,6 +251,15 @@ local function target_context(doc, line1, col1, line2, col2, opts)
   return captures, item_from_capture(doc, target), scope, nil, name
 end
 
+local function sort_symbol_items(items)
+  table.sort(items, function(a, b)
+    if a.name ~= b.name then return a.name < b.name end
+    if a.kind ~= b.kind then return tostring(a.kind) < tostring(b.kind) end
+    return (a.start_byte or 0) < (b.start_byte or 0)
+  end)
+  return items
+end
+
 function locals.get_document_symbols(doc, opts)
   local captures, reason = query_captures(doc, opts)
   if #captures == 0 then return empty_list(reason) end
@@ -241,12 +275,79 @@ function locals.get_document_symbols(doc, opts)
       end
     end
   end
-  table.sort(items, function(a, b)
-    if a.name ~= b.name then return a.name < b.name end
-    if a.kind ~= b.kind then return tostring(a.kind) < tostring(b.kind) end
-    return (a.start_byte or 0) < (b.start_byte or 0)
-  end)
-  return items
+  return sort_symbol_items(items)
+end
+
+function locals.get_visible_document_symbols(doc, line1, col1, line2, col2, opts)
+  opts = opts or {}
+  if not doc or not doc.lines then return empty_list("no-document") end
+  local ts = doc.treesitter
+  if not ts then return empty_list("unsupported") end
+  if not ts.native then return empty_list(ts.reason or ts.status or "disabled") end
+  if not tree_ready(ts) then return empty_list("not-ready") end
+  if not ts.queries or not ts.queries.outline then return empty_list("missing-outline-query") end
+
+  if not line1 or not col1 then line1, col1, line2, col2 = doc:get_selection(true) end
+  if not line1 or not col1 then return empty_list("no-selection") end
+  line2, col2 = line2 or line1, col2 or col1
+  line1, col1, line2, col2 = sorted_selection(line1, col1, line2, col2)
+
+  local partial_start = byte_offset(doc, ts, line1, col1)
+  local cursor_byte = byte_offset(doc, ts, line2, col2)
+  local partial_end = cursor_byte
+  local captures, reason = query_captures(doc, opts)
+  if #captures == 0 then return empty_list(reason) end
+
+  local outline_symbols = outline.get_document_outline(doc)
+  local cursor_scope = enclosing_outline_symbol_from_list(outline_symbols, cursor_byte, cursor_byte)
+  local cursor_local_scopes = {}
+  for _, capture in ipairs(captures) do
+    if capture.capture == "scope" and range_contains(capture, cursor_byte, cursor_byte) then
+      cursor_local_scopes[#cursor_local_scopes + 1] = capture
+    end
+  end
+  table.sort(cursor_local_scopes, function(a, b) return range_len(a) > range_len(b) end)
+
+  local function local_scope_priority(capture)
+    local priority = 0
+    for i, scope in ipairs(cursor_local_scopes) do
+      if range_contains(scope, capture.start_byte or 0, capture.end_byte or 0) then priority = i end
+    end
+    return priority
+  end
+
+  local items_by_name = {}
+
+  for _, capture in ipairs(captures) do
+    if is_definition(capture) and capture.start_byte <= cursor_byte then
+      local overlaps_partial = capture.start_byte < partial_end and capture.end_byte > partial_start
+      if not overlaps_partial then
+        local definition_scope = enclosing_outline_symbol_from_list(outline_symbols, capture.start_byte, capture.end_byte)
+        local in_visible_scope = false
+        if cursor_scope then
+          in_visible_scope = definition_scope == cursor_scope
+        else
+          in_visible_scope = definition_scope == nil
+        end
+        if in_visible_scope then
+          local item = item_from_capture(doc, capture)
+          if item.name ~= "" then
+            local previous = items_by_name[item.name]
+            if not previous or (item.start_byte or 0) > (previous.start_byte or 0) then
+              item.scope = cursor_scope
+              item.visible_tree_sitter_fallback = true
+              item.autocomplete_priority = 100 + local_scope_priority(capture)
+              items_by_name[item.name] = item
+            end
+          end
+        end
+      end
+    end
+  end
+
+  local items = {}
+  for _, item in pairs(items_by_name) do items[#items + 1] = item end
+  return sort_symbol_items(items)
 end
 
 function locals.get_local_definition(doc, line1, col1, line2, col2, opts)

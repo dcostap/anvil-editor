@@ -562,6 +562,28 @@ int second(void) {
     doc:on_close()
   end)
 
+  test.it("visible Tree-sitter document symbols exclude other functions and later locals", function()
+    local doc = c_doc([[int first(void) {
+  int first_value = 1;
+  return first_value;
+}
+int second(void) {
+  int visible_value = 2;
+  visible_value;
+  int future_value = 3;
+}]])
+    test.ok(wait_ready(doc))
+    local cursor_col = #(doc.lines[7] or "")
+    local visible = treesitter.locals.get_visible_document_symbols(doc, 7, cursor_col)
+    local names = {}
+    for _, symbol in ipairs(visible or {}) do names[symbol.name] = symbol end
+    test.ok(names.visible_value)
+    test.equal(names.visible_value.kind, "var")
+    test.is_nil(names.first_value)
+    test.is_nil(names.future_value)
+    doc:on_close()
+  end)
+
   test.it("local Tree-sitter fallback gracefully returns empty without locals query", function()
     local doc = c_doc("int main(void) { return 0; }")
     test.ok(wait_ready(doc))

@@ -66,7 +66,7 @@ plugin_defaults("untitled_recovery", {
 })
 plugin_defaults("autocomplete", {
   min_len = 3,
-  max_suggestions = 100,
+  max_suggestions = 20,
   max_symbols = 10000,
   max_symbol_length = 40,
   suggestions_scope = "global",

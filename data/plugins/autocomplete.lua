@@ -91,7 +91,7 @@ config.plugins.autocomplete.config_spec = {
       description = "The maximum amount of scrollable items.",
       path = "max_suggestions",
       type = "number",
-      default = 100,
+      default = 20,
       min = 10,
       max = 10000
     },
@@ -419,7 +419,8 @@ local function display_info(suggestion)
 end
 
 local function display_icon(suggestion)
-  return suggestion and (suggestion.icon or display_info(suggestion))
+  if suggestion and suggestion.no_icon then return nil end
+  return suggestion and suggestion.icon
 end
 
 local function row_text_parts(suggestion, hide_info, max_chars)
@@ -444,6 +445,10 @@ local function row_text_parts(suggestion, hide_info, max_chars)
 end
 
 local function row_text_width(font, info_font, suggestion, hide_info, max_chars)
+  if suggestion and suggestion.preview_text then
+    return style.get_small_font(font):get_width(display_text(suggestion.preview_text, max_chars))
+  end
+
   local label, info = row_text_parts(suggestion, hide_info, max_chars)
   local width = font:get_width(label)
   if info and info ~= "" then
@@ -456,6 +461,7 @@ local update_suggestions
 local lsp_completion_items = nil
 local lsp_completion_context = nil
 local force_basic_suggestions = true
+local native_fuzzy_ok, native_fuzzy = nil, nil
 
 local function lsp_completion_module()
   local ok, completion = pcall(require, "core.lsp.completion")
@@ -470,6 +476,11 @@ end
 local function tree_sitter_symbol_index_module()
   local ok, symbols = pcall(require, "core.treesitter.symbol_index")
   return ok and symbols or nil
+end
+
+local function native_fuzzy_module()
+  if native_fuzzy_ok == nil then native_fuzzy_ok, native_fuzzy = pcall(require, "fuzzy") end
+  return native_fuzzy_ok and native_fuzzy or nil
 end
 
 local function has_lsp_completion(doc)
@@ -503,6 +514,23 @@ local function annotate_match(item, needle)
   needle = tostring(needle or "")
   if needle == "" then return item end
   local text = tostring(item.text or "")
+
+  local fuzzy = native_fuzzy_module()
+  local ok, match = false, nil
+  if fuzzy and fuzzy.match then
+    ok, match = pcall(function() return fuzzy.match(text, needle, { mode = "generic", spans = true }) end)
+  end
+  if ok and match and match.spans then
+    local matches = {}
+    for _, span in ipairs(match.spans or {}) do
+      local first = math.max(1, tonumber(span[1]) or 1)
+      local last = math.min(#text, tonumber(span[2]) or first)
+      for i = first, last do matches[i] = true end
+    end
+    item.autocomplete_matches = matches
+    return item
+  end
+
   local lower_text = text:lower()
   local lower_needle = needle:lower()
   local matches = {}
@@ -562,6 +590,8 @@ local function sort_display_matches(items, needle)
     local bm = match_stats(bt, needle)
     if am and bm then
       if am.exact ~= bm.exact then return am.exact end
+      local ap, bp = tonumber(a and a.autocomplete_priority) or 0, tonumber(b and b.autocomplete_priority) or 0
+      if ap ~= bp then return ap > bp end
       if am.width ~= bm.width then return am.width < bm.width end
       if am.first ~= bm.first then return am.first < bm.first end
       local al = completion_sort_text(a)
@@ -574,6 +604,149 @@ local function sort_display_matches(items, needle)
     return (original_index[a] or 0) < (original_index[b] or 0)
   end)
   return items
+end
+
+local function code_symbol_chunks(text)
+  text = tostring(text or "")
+  local chunks = {}
+  local buf = {}
+  local saw_separator = false
+  local function flush()
+    if #buf > 0 then
+      chunks[#chunks + 1] = table.concat(buf)
+      buf = {}
+    end
+  end
+
+  for i = 1, #text do
+    local ch = text:sub(i, i)
+    local prev = i > 1 and text:sub(i - 1, i - 1) or ""
+    local next_ch = i < #text and text:sub(i + 1, i + 1) or ""
+    if ch == "_" or ch == "-" or ch == "." then
+      saw_separator = true
+      flush()
+    else
+      local camel_boundary = #buf > 0
+        and ch:match("%u")
+        and ((prev:match("%l") or prev:match("%d")) or (prev:match("%u") and next_ch:match("%l")))
+      if camel_boundary then
+        saw_separator = true
+        flush()
+      end
+      buf[#buf + 1] = ch
+    end
+  end
+  flush()
+
+  local kept = {}
+  for _, chunk in ipairs(chunks) do
+    if chunk ~= "" then kept[#kept + 1] = chunk:lower() end
+  end
+  return kept, saw_separator
+end
+
+local function code_symbol_chunk_query(text)
+  local chunks, saw_separator = code_symbol_chunks(text)
+  if not saw_separator or #chunks < 2 then return nil end
+  for _, chunk in ipairs(chunks) do
+    if #chunk < 2 then return nil end
+  end
+  return table.concat(chunks, " "), chunks
+end
+
+local function score_code_chunk_match(query_chunk, candidate_chunk)
+  query_chunk = tostring(query_chunk or "")
+  candidate_chunk = tostring(candidate_chunk or "")
+  if query_chunk == "" or candidate_chunk == "" then return nil end
+
+  if query_chunk == candidate_chunk then return 1400 + #query_chunk * 60 end
+  if candidate_chunk:sub(1, #query_chunk) == query_chunk then
+    return 1150 + #query_chunk * 55 - math.max(0, #candidate_chunk - #query_chunk) * 8
+  end
+
+  local pos = #query_chunk >= 3 and candidate_chunk:find(query_chunk, 1, true) or nil
+  if pos then
+    return 850 + #query_chunk * 45 - (pos - 1) * 40 - math.max(0, #candidate_chunk - #query_chunk) * 4
+  end
+
+  if #query_chunk < 3 then return nil end
+  local positions = {}
+  local scan = 1
+  for i = 1, #query_chunk do
+    local p = candidate_chunk:find(query_chunk:sub(i, i), scan, true)
+    if not p then return nil end
+    positions[#positions + 1] = p
+    scan = p + 1
+  end
+
+  local longest_run, current_run, max_gap = 1, 1, 0
+  for i = 2, #positions do
+    local gap = positions[i] - positions[i - 1] - 1
+    max_gap = math.max(max_gap, gap)
+    if gap == 0 then current_run = current_run + 1 else current_run = 1 end
+    longest_run = math.max(longest_run, current_run)
+  end
+  local span = positions[#positions] - positions[1] + 1
+  if longest_run < math.ceil(#query_chunk / 2) and (span > #query_chunk * 2 + 2 or max_gap > math.max(4, #query_chunk)) then
+    return nil
+  end
+  return 450 + #query_chunk * 35 + longest_run * 60 - span * 10 - max_gap * 15
+end
+
+local function code_symbol_chunk_match_score(candidate, query_chunks)
+  if not query_chunks or #query_chunks < 2 then return nil end
+  local candidate_chunks = code_symbol_chunks(candidate)
+  if #candidate_chunks == 0 then return nil end
+
+  local used, indexes = {}, {}
+  local total = 0
+  for _, query_chunk in ipairs(query_chunks) do
+    local best_idx, best_score
+    for i, candidate_chunk in ipairs(candidate_chunks) do
+      if not used[i] then
+        local score = score_code_chunk_match(query_chunk, candidate_chunk)
+        if score and (not best_score or score > best_score or (score == best_score and #candidate_chunk < #candidate_chunks[best_idx])) then
+          best_idx, best_score = i, score
+        end
+      end
+    end
+    if not best_idx then return nil end
+    used[best_idx] = true
+    indexes[#indexes + 1] = best_idx
+    total = total + best_score
+  end
+
+  local inversions = 0
+  for i = 2, #indexes do
+    if indexes[i] < indexes[i - 1] then inversions = inversions + 1 end
+  end
+  total = total - inversions * 180
+  local average = total / #query_chunks
+  if average < 700 then return nil end
+  return total
+end
+
+local function fuzzy_match_with_scores(items, query)
+  local fuzzy = native_fuzzy_module()
+  if not fuzzy or not fuzzy.filter then
+    local out = {}
+    for _, item in ipairs(common.fuzzy_match(items, query, false) or {}) do out[#out + 1] = { item = item, score = 0 } end
+    return out
+  end
+
+  local texts = {}
+  for i, item in ipairs(items or {}) do texts[i] = suggestion_text(item) end
+  local ok, matches = pcall(function()
+    return fuzzy.filter(texts, query, { mode = "generic", limit = #texts, spans = false })
+  end)
+  if not ok or not matches then return {} end
+
+  local out = {}
+  for _, match in ipairs(matches) do
+    local item = items[match.index]
+    if item then out[#out + 1] = { item = item, score = match.score or 0 } end
+  end
+  return out
 end
 
 local desc_view
@@ -657,62 +830,98 @@ function update_suggestions()
   local scope = config.plugins.autocomplete.suggestions_scope
 
   if not lsp_available and force_basic_suggestions then
-    local text_symbols = nil
-
-    if scope == "global" then
-      text_symbols = global_symbols
-    elseif scope == "local" and cache[doc] and cache[doc].symbols then
-      text_symbols = cache[doc].symbols
-    elseif scope == "related" then
-      for _, d in ipairs(core.docs) do
-        if doc.syntax == d.syntax then
-          if cache[d] and cache[d].symbols then
-            for name in pairs(cache[d].symbols) do
-              if #name <= max_symbol_length() and not assigned_sym[name] then
-                table.insert(items, setmetatable(
-                  {text = name, info = "normal"}, mt
-                ))
-              end
-            end
-          end
-        end
-      end
-    end
-
-    if text_symbols then
-      for name in pairs(text_symbols) do
-        if #name <= max_symbol_length() and not assigned_sym[name] then
-          table.insert(items, setmetatable({text = name, info = "normal"}, mt))
-          assigned_sym[name] = true
-        end
-      end
-    end
-
-    local locals = tree_sitter_locals_module()
-    local symbols = locals and locals.get_document_symbols and locals.get_document_symbols(doc) or nil
-    for _, symbol in ipairs(symbols or {}) do
-      local name = symbol.name
+    local function add_text_symbol(name, info, icon, priority, preview_text, preview_name_span, no_icon)
       if name and name ~= "" and #name <= max_symbol_length() and not assigned_sym[name] then
-        table.insert(items, setmetatable({text = name, info = symbol.kind or "symbol", icon = symbol.kind}, mt))
+        table.insert(items, setmetatable({
+          text = name,
+          info = info or "normal",
+          icon = icon,
+          autocomplete_priority = priority,
+          preview_text = preview_text,
+          preview_name_span = preview_name_span,
+          no_icon = no_icon,
+        }, mt))
         assigned_sym[name] = true
       end
     end
 
+    local function add_cache_symbols(symbols)
+      for name in pairs(symbols or {}) do add_text_symbol(name, "normal") end
+    end
+
+    local locals = tree_sitter_locals_module()
+    local symbols, visible_symbols = nil, false
+    if locals and locals.get_visible_document_symbols then
+      local _, line1, col1, line2, col2 = autocomplete.get_partial_symbol()
+      local reason
+      symbols, reason = locals.get_visible_document_symbols(doc, line1, col1, line2, col2)
+      visible_symbols = symbols ~= nil and reason == nil
+    end
+    if not visible_symbols and locals and locals.get_document_symbols then
+      symbols = locals.get_document_symbols(doc)
+    end
+
+    for _, symbol in ipairs(symbols or {}) do
+      add_text_symbol(
+        symbol.name,
+        symbol.kind or "symbol",
+        nil,
+        symbol.autocomplete_priority,
+        symbol.completion_preview,
+        symbol.completion_preview_name_span,
+        true
+      )
+    end
+
+    local text_symbols = nil
+
+    if scope == "global" then
+      if visible_symbols then
+        for _, d in ipairs(core.docs) do
+          if d ~= doc and cache[d] and cache[d].symbols then add_cache_symbols(cache[d].symbols) end
+        end
+      else
+        text_symbols = global_symbols
+      end
+    elseif scope == "local" and not visible_symbols and cache[doc] and cache[doc].symbols then
+      text_symbols = cache[doc].symbols
+    elseif scope == "related" then
+      for _, d in ipairs(core.docs) do
+        if doc.syntax == d.syntax and (d ~= doc or not visible_symbols) then
+          if cache[d] and cache[d].symbols then add_cache_symbols(cache[d].symbols) end
+        end
+      end
+    end
+
+    add_cache_symbols(text_symbols)
+
     local symbol_index = tree_sitter_symbol_index_module()
     if symbol_index and partial ~= "" then
-      local project_symbols, _reason, project_status = symbol_index.workspace_symbols(partial, {
-        limit = math.max(20, config.plugins.autocomplete.max_suggestions * 2),
-        allow_stale = true,
-      })
-      if project_status == "fresh" or project_status == "stale" then
-        for _, symbol in ipairs(project_symbols or {}) do
-          local name = symbol.name
-          if name and name ~= "" and #name <= max_symbol_length() and not assigned_sym[name] then
-            table.insert(items, setmetatable({text = name, info = symbol.kind or "project symbol", icon = symbol.kind}, mt))
-            assigned_sym[name] = true
+      local function add_project_symbols(query)
+        if not query or query == "" then return end
+        local project_symbols, _reason, project_status = symbol_index.workspace_symbols(query, {
+          limit = math.max(20, config.plugins.autocomplete.max_suggestions * 2),
+          allow_stale = true,
+        })
+        if project_status == "fresh" or project_status == "stale" then
+          for _, symbol in ipairs(project_symbols or {}) do
+            local name = symbol.name
+            if name and name ~= "" and #name <= max_symbol_length() and not assigned_sym[name] then
+              table.insert(items, setmetatable({
+                text = name,
+                info = symbol.kind or "project symbol",
+                preview_text = symbol.declaration,
+                preview_name_span = symbol.declaration_name_span,
+                no_icon = true,
+              }, mt))
+              assigned_sym[name] = true
+            end
           end
         end
       end
+      add_project_symbols(partial)
+      local chunk_query = code_symbol_chunk_query(partial)
+      if chunk_query and chunk_query ~= partial then add_project_symbols(chunk_query) end
     end
   end
 
@@ -734,17 +943,50 @@ function update_suggestions()
     si = #suggestions
   end
 
-  -- fuzzy match, remove duplicates and store
+  -- fuzzy match, remove duplicates and store. If the current partial looks like
+  -- a code symbol with separators or camel-case chunks, append a lower-priority
+  -- pass that searches those chunks independently; for example, `text_draw`
+  -- also tries `text draw`, which can find `draw_text` after the direct matches.
   if max_items > 0 then
-    items = sort_display_matches(annotate_matches(common.fuzzy_match(items, partial, false), partial), partial)
-    local j = 1
-    for i = 1, max_items do
-      suggestions[si+i] = items[j]
-      j = j + 1
-      while items[j] and items[i].text == items[j].text do
-        items[i].info = items[i].info or items[j].info
-        j = j + 1
+    local ordered, seen = {}, {}
+    local function append_matches(matches, query)
+      for _, item in ipairs(matches or {}) do
+        local key = suggestion_text(item)
+        if key ~= "" and not seen[key] then
+          annotate_match(item, query)
+          seen[key] = item
+          ordered[#ordered + 1] = item
+        elseif key ~= "" and seen[key] and type(seen[key]) == "table" and type(item) == "table" then
+          seen[key].info = seen[key].info or item.info
+        end
       end
+    end
+
+    append_matches(sort_display_matches(common.fuzzy_match(items, partial, false), partial), partial)
+
+    local chunk_query, query_chunks = code_symbol_chunk_query(partial)
+    if chunk_query and chunk_query ~= partial then
+      local scored = {}
+      for _, match in ipairs(fuzzy_match_with_scores(items, chunk_query)) do
+        local chunk_score = code_symbol_chunk_match_score(suggestion_text(match.item), query_chunks)
+        if chunk_score then
+          scored[#scored + 1] = {
+            item = match.item,
+            score = (match.score or 0) + chunk_score - 900,
+          }
+        end
+      end
+      table.sort(scored, function(a, b)
+        if a.score ~= b.score then return a.score > b.score end
+        return completion_sort_text(a.item) < completion_sort_text(b.item)
+      end)
+      local chunk_matches = {}
+      for _, match in ipairs(scored) do chunk_matches[#chunk_matches + 1] = match.item end
+      append_matches(chunk_matches, chunk_query)
+    end
+
+    for i = 1, math.min(max_items, #ordered) do
+      suggestions[si+i] = ordered[i]
     end
   end
 
@@ -919,6 +1161,121 @@ local function draw_matched_text(font, base_color, match_color, item, x, y, w, h
   return draw_x
 end
 
+local function draw_matched_text_direct(font, base_color, match_color, item, x, y, text)
+  text = tostring(text or "")
+  local matches = item and item.autocomplete_matches
+  local cx = x
+  local run_text = ""
+  local run_color = nil
+  local function flush()
+    if run_text == "" then return end
+    cx = renderer.draw_text(font, run_text, cx, y, run_color or base_color)
+    run_text = ""
+  end
+  for i = 1, #text do
+    local color = matches and matches[i] and match_color or base_color
+    if run_color ~= color then
+      flush()
+      run_color = color
+    end
+    run_text = run_text .. text:sub(i, i)
+  end
+  flush()
+  return cx
+end
+
+local function fit_prefix(font, text, width)
+  if text == "" or width <= 0 then return "" end
+  if font:get_width(text) <= width then return text end
+  local lo, hi = 0, #text
+  while lo < hi do
+    local mid = math.ceil((lo + hi) / 2)
+    if font:get_width(text:sub(1, mid)) <= width then lo = mid else hi = mid - 1 end
+  end
+  return text:sub(1, lo)
+end
+
+local function fit_suffix(font, text, width)
+  if text == "" or width <= 0 then return "" end
+  if font:get_width(text) <= width then return text end
+  local lo, hi = 1, #text + 1
+  while lo < hi do
+    local mid = math.floor((lo + hi) / 2)
+    if font:get_width(text:sub(mid)) <= width then hi = mid else lo = mid + 1 end
+  end
+  return text:sub(lo)
+end
+
+local function clipped_preview_around_name(font, text, span, width)
+  text = tostring(text or "")
+  if text == "" or width <= 0 then return "", nil end
+  if font:get_width(text) <= width then return text, span end
+  span = span or { 1, math.min(#text, #(tostring(text):match("%S+") or text)) }
+  local name_start = common.clamp(tonumber(span[1]) or 1, 1, #text)
+  local name_end = common.clamp(tonumber(span[2]) or name_start, name_start, #text)
+  local before = text:sub(1, name_start - 1)
+  local name = text:sub(name_start, name_end)
+  local after = text:sub(name_end + 1)
+  local ellipsis = "..."
+  local ellipsis_w = font:get_width(ellipsis)
+  local name_w = font:get_width(name)
+  if name_w >= width then
+    local clipped_name = fit_prefix(font, name, math.max(0, width - ellipsis_w)) .. ellipsis
+    return clipped_name, { 1, math.max(1, #clipped_name - #ellipsis) }
+  end
+
+  local remaining = width - name_w
+  local before_budget = remaining / 2
+  local after_budget = remaining - before_budget
+  if before ~= "" then before_budget = math.max(0, before_budget - ellipsis_w) end
+  if after ~= "" then after_budget = math.max(0, after_budget - ellipsis_w) end
+
+  local clipped_before = fit_suffix(font, before, before_budget)
+  local clipped_after = fit_prefix(font, after, after_budget)
+  local before_used = font:get_width(clipped_before)
+  local after_used = font:get_width(clipped_after)
+  local spare = math.max(0, width - name_w - before_used - after_used
+    - (clipped_before ~= before and ellipsis_w or 0)
+    - (clipped_after ~= after and ellipsis_w or 0))
+  if spare > 0 then
+    if #clipped_before == #before and #clipped_after < #after then
+      clipped_after = fit_prefix(font, after, after_budget + spare)
+    elseif #clipped_after == #after and #clipped_before < #before then
+      clipped_before = fit_suffix(font, before, before_budget + spare)
+    end
+  end
+
+  local leading = clipped_before ~= before and ellipsis or ""
+  local trailing = clipped_after ~= after and ellipsis or ""
+  local clipped = leading .. clipped_before .. name .. clipped_after .. trailing
+  while #clipped > 0 and font:get_width(clipped) > width and clipped_after ~= "" do
+    clipped_after = clipped_after:sub(1, -2)
+    trailing = clipped_after ~= after and ellipsis or ""
+    clipped = leading .. clipped_before .. name .. clipped_after .. trailing
+  end
+  while #clipped > 0 and font:get_width(clipped) > width and clipped_before ~= "" do
+    clipped_before = clipped_before:sub(2)
+    leading = clipped_before ~= before and ellipsis or ""
+    clipped = leading .. clipped_before .. name .. clipped_after .. trailing
+  end
+  local clipped_name_start = #leading + #clipped_before + 1
+  return clipped, { clipped_name_start, clipped_name_start + #name - 1 }
+end
+
+local function draw_preview_text(font, item, x, y, w, h)
+  local text, span = clipped_preview_around_name(font, item.preview_text, item.preview_name_span, w)
+  if text == "" then return x end
+  span = span or { 1, 0 }
+  local before = text:sub(1, span[1] - 1)
+  local name = text:sub(span[1], span[2])
+  local after = text:sub(span[2] + 1)
+  local cx = x
+  if before ~= "" then cx = renderer.draw_text(font, before, cx, y, style.dim) end
+  if name ~= "" then cx = draw_matched_text_direct(font, style.text, style.accent, item, cx, y, name) end
+  if after ~= "" then cx = renderer.draw_text(font, after, cx, y, style.dim) end
+  return cx
+end
+
 local function preferred_description_width(text, max_width)
   max_width = math.max(1, max_width or 1)
   local min_width = math.min(max_width, 160 * SCALE)
@@ -1002,24 +1359,30 @@ local function draw_suggestion_row(font, suggestion, rx, y, rw, lh, has_icons, s
 
   if text_width <= 0 then return end
   core.push_clip_rect(text_padding, y, text_width, lh)
-  local label_end = draw_matched_text(font, style.text, style.accent, suggestion, text_padding, y, text_width, lh, label)
-  if info and info ~= "" then
-    common.draw_text(
-      style.font, style.dim, info, "left",
-      label_end + style.padding.x, y,
-      math.max(0, text_width - (label_end - text_padding) - style.padding.x), lh
-    )
-  end
-  if content_width > text_width then
-    renderer.draw_rect(
-      text_padding + math.max(0, text_width - dots_width), y,
-      math.min(dots_width, text_width), lh,
-      row_bg
-    )
-    common.draw_text(
-      font, style.text, "...", "right",
-      text_padding, y, text_width, lh
-    )
+  if suggestion.preview_text then
+    local preview_font = style.get_small_font(font)
+    local preview_y = y + math.max(0, math.floor((lh - preview_font:get_height()) / 2))
+    draw_preview_text(preview_font, suggestion, text_padding, preview_y, text_width, lh)
+  else
+    local label_end = draw_matched_text(font, style.text, style.accent, suggestion, text_padding, y, text_width, lh, label)
+    if info and info ~= "" then
+      common.draw_text(
+        style.font, style.dim, info, "left",
+        label_end + style.padding.x, y,
+        math.max(0, text_width - (label_end - text_padding) - style.padding.x), lh
+      )
+    end
+    if content_width > text_width then
+      renderer.draw_rect(
+        text_padding + math.max(0, text_width - dots_width), y,
+        math.min(dots_width, text_width), lh,
+        row_bg
+      )
+      common.draw_text(
+        font, style.text, "...", "right",
+        text_padding, y, text_width, lh
+      )
+    end
   end
   core.pop_clip_rect()
 end
@@ -1397,6 +1760,7 @@ command.add(docview_predicate, {
 
 command.add(predicate, {
   ["autocomplete:complete"] = function(dv)
+    if dv.can_edit and not dv:can_edit("autocomplete", { warn = true }) then return end
     local doc = dv.doc
     local item = suggestions[suggestions_idx]
     local inserted = false
@@ -1488,5 +1852,9 @@ keymap.add {
   ["escape"]    = "autocomplete:cancel",
 }
 
+autocomplete._test = {
+  code_symbol_chunk_query = code_symbol_chunk_query,
+  code_symbol_chunk_match_score = code_symbol_chunk_match_score,
+}
 
 return autocomplete
