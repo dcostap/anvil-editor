@@ -109,6 +109,13 @@ local function odin_doc(text, filename)
   return doc
 end
 
+local function kotlin_doc(text, filename)
+  local doc = Doc()
+  set_text(doc, text or "package demo\n\nclass Box(val value: Int) {\n  fun doubled(): Int = value * 2\n}\n")
+  doc:set_filename(filename or "example.kt", filename or "example.kt")
+  return doc
+end
+
 local function write_cpp_repro_file(filename)
   local fp = assert(io.open(filename, "wb"))
   fp:write((cpp_repro_text:gsub("\n", "\r\n")))
@@ -146,8 +153,26 @@ local function wait_workspace_symbols(query, opts, timeout)
   return results, reason, status
 end
 
+local function wait_workspace_references(name, opts, timeout)
+  local deadline = system.get_time() + (timeout or 5)
+  local results, reason, status
+  opts = opts or {}
+  local first = true
+  repeat
+    local call_opts = opts
+    if opts.force and not first then
+      call_opts = common.merge(opts, { force = false })
+    end
+    first = false
+    results, reason, status = symbol_index.workspace_references(name, call_opts)
+    if status == "fresh" or status == "stale" then return results, reason, status end
+    coroutine.yield(0.03)
+  until system.get_time() >= deadline
+  return results, reason, status
+end
+
 test.describe("core.treesitter phase 3 document integration", function()
-  test.it("registry loads C and C++ configs and highlight queries", function()
+  test.it("registry loads bundled language configs and highlight queries", function()
     registry.reload()
     local config = registry.get("example.c", "")
     test.ok(config)
@@ -174,6 +199,19 @@ test.describe("core.treesitter phase 3 document integration", function()
     test.ok(config.query_sources.outline)
     test.ok(config.query_sources.locals)
     test.ok(native.has_language("odin"))
+
+    config = registry.get("example.kt", "")
+    test.ok(config)
+    test.equal(config.id, "kotlin")
+    test.equal(config.grammar, "kotlin")
+    test.ok(config.query_sources.highlights)
+    test.ok(config.query_sources.outline)
+    test.ok(config.query_sources.locals)
+    test.ok(native.has_language("kotlin"))
+
+    config = registry.get("script.kts", "")
+    test.ok(config)
+    test.equal(config.id, "kotlin")
   end)
 
   test.it("Tree-sitter registers as a language intelligence provider", function()
@@ -205,7 +243,7 @@ test.describe("core.treesitter phase 3 document integration", function()
     doc:on_close()
   end)
 
-  test.it("C and C++ file/documents attach state", function()
+  test.it("bundled Tree-sitter file/documents attach state", function()
     local doc = c_doc()
     test.ok(doc.treesitter)
     test.equal(doc.treesitter.language_id, "c")
@@ -221,6 +259,12 @@ test.describe("core.treesitter phase 3 document integration", function()
     doc = odin_doc()
     test.ok(doc.treesitter)
     test.equal(doc.treesitter.language_id, "odin")
+    test.ok(doc.treesitter.native)
+    doc:on_close()
+
+    doc = kotlin_doc()
+    test.ok(doc.treesitter)
+    test.equal(doc.treesitter.language_id, "kotlin")
     test.ok(doc.treesitter.native)
     doc:on_close()
   end)
@@ -281,6 +325,77 @@ main :: proc() {
     test.equal(main_symbol.declaration, "main :: proc()")
     test.same(main_symbol.declaration_name_span, { 1, 4 })
     doc:on_close()
+  end)
+
+  test.it("Kotlin highlighting and outline use bundled Tree-sitter queries", function()
+    local doc = kotlin_doc([[package demo
+
+class Box(val value: Int) {
+  fun doubled(): Int = value * 2
+}
+
+val answer = Box(21).doubled()
+]])
+    test.ok(wait_ready(doc))
+    local tokens = ts_highlight.line_tokens(doc, 4)
+    test.equal(token_type_for_text(tokens, "fun"), "keyword.function")
+    test.equal(token_type_for_text(tokens, "doubled"), "function")
+
+    local symbols = treesitter.get_document_outline(doc)
+    test.ok(find_symbol(symbols, "Box", "class"))
+    local doubled_symbol = find_symbol(symbols, "doubled", "function")
+    test.ok(doubled_symbol)
+    test.equal(doubled_symbol.signature, "()")
+    test.ok(find_symbol(symbols, "answer", "variable"))
+    doc:on_close()
+  end)
+
+  test.it("Tree-sitter workspace references return global syntactic matches", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-reference-index-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    mkdir(root .. PATHSEP .. "src")
+    write_file(root .. PATHSEP .. "src" .. PATHSEP .. "Model.kt", [[package demo
+
+class TargetThing(val value: Int)
+
+fun create(): TargetThing = TargetThing(1)
+]])
+    write_file(root .. PATHSEP .. "src" .. PATHSEP .. "Use.kt", [[package demo
+
+fun use(item: TargetThing): Int {
+  val next = TargetThing(item.value)
+  return next.value
+}
+]])
+    write_file(root .. PATHSEP .. "src" .. PATHSEP .. "Notes.txt", [[TargetThing in text should not count]])
+
+    local refs, reason, status = wait_workspace_references("TargetThing", {
+      root = root,
+      force = true,
+      include_declaration = true,
+      limit = 20,
+    })
+    test.equal(status, "fresh", reason)
+    test.ok(refs)
+    test.equal(#refs, 5)
+    local files = {}
+    for _, ref in ipairs(refs) do
+      files[ref.relpath] = (files[ref.relpath] or 0) + 1
+      test.equal(ref.name, "TargetThing")
+      test.equal(ref.language_id, "kotlin")
+    end
+    test.equal(files["src/Model.kt"], 3)
+    test.equal(files["src/Use.kt"], 2)
+
+    refs, reason, status = wait_workspace_references("TargetThing", {
+      root = root,
+      include_declaration = false,
+      limit = 20,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 4)
   end)
 
   test.it("Tree-sitter symbol index returns Project and current Document symbols", function()

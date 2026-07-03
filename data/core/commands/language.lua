@@ -174,11 +174,11 @@ local function lsp_result_to_picker_item(result, symbol)
 end
 
 local function tree_sitter_refs_to_picker_item(doc, item, symbol)
-  local path = doc and doc.abs_filename or doc and doc.filename
-  if not path then return nil end
-  local text = (doc.lines and doc.lines[item.start_line] or "") or ""
+  local path = item and item.path or doc and doc.abs_filename or doc and doc.filename
+  if not path or not item then return nil end
+  local text = item.line_text or ((doc and doc.lines and doc.lines[item.start_line] or "") or "")
   local root = core.root_project and core.root_project()
-  local rel = path
+  local rel = item.relpath or path
   if root and root.path and common.path_belongs_to(path, root.path) then
     rel = common.relative_path(root.path, path):gsub("\\", "/")
   end
@@ -357,6 +357,96 @@ function language.goto_declaration(view)
   return true
 end
 
+local function set_reference_picker_results(picker, symbol, items, status)
+  if picker and picker.set_static_results then
+    picker:set_static_results(items, status)
+  else
+    show_locations_picker("References: " .. symbol, status, items)
+  end
+end
+
+local function local_reference_items(doc, line, col, symbol)
+  local items = {}
+  local refs = intelligence.local_references(doc, line, col)
+  for _, ref in ipairs(refs or {}) do
+    local item = tree_sitter_refs_to_picker_item(doc, ref, symbol)
+    if item then items[#items + 1] = item end
+  end
+  return items
+end
+
+local function show_local_reference_fallback(picker, doc, line, col, symbol, reason)
+  local items = local_reference_items(doc, line, col, symbol)
+  local status = #items > 0 and (#items == 1 and "1 local reference" or string.format("%d local references", #items))
+    or "No references found"
+  set_reference_picker_results(picker, symbol, items, status)
+  if reason then quiet_log("Language references unavailable for %s: %s", symbol, tostring(reason)) end
+end
+
+local TREE_SITTER_REFERENCE_TIMEOUT_SECONDS = 60
+
+local function tree_sitter_reference_items(results, symbol)
+  local items = {}
+  for _, ref in ipairs(results or {}) do
+    local item = tree_sitter_refs_to_picker_item(nil, ref, symbol)
+    if item then items[#items + 1] = item end
+  end
+  return items
+end
+
+local function show_tree_sitter_workspace_reference_fallback(picker, doc, line, col, symbol, reason)
+  local ok, symbol_index = pcall(require, "core.treesitter.symbol_index")
+  if not ok or not symbol_index or not symbol_index.workspace_references then
+    show_local_reference_fallback(picker, doc, line, col, symbol, reason)
+    return
+  end
+
+  core.add_thread(function()
+    local deadline = system.get_time() + TREE_SITTER_REFERENCE_TIMEOUT_SECONDS
+    local results, workspace_reason, status, meta = symbol_index.workspace_references(symbol, {
+      include_declaration = false,
+      allow_stale = true,
+      limit = 1000,
+    })
+    while status ~= "fresh" and system.get_time() < deadline do
+      if status == "stale" then
+        local items = tree_sitter_reference_items(results, symbol)
+        if #items > 0 then
+          local text = #items == 1 and "1 syntactic reference" or string.format("%d syntactic references", #items)
+          set_reference_picker_results(picker, symbol, items, "Tree-sitter: " .. text .. " (indexing)")
+        end
+      elseif meta and meta.index and picker and picker.set_static_results then
+        local index = meta.index
+        picker:set_static_results({}, string.format(
+          "Tree-sitter: indexing syntactic references… %d/%d files scanned",
+          tonumber(index.files_scanned) or 0,
+          tonumber(index.files_total) or 0
+        ))
+      end
+      coroutine.yield(0.05)
+      results, workspace_reason, status, meta = symbol_index.workspace_references(symbol, {
+        include_declaration = false,
+        allow_stale = true,
+        limit = 1000,
+      })
+    end
+
+    if status == "fresh" or status == "stale" then
+      local items = tree_sitter_reference_items(results, symbol)
+      if #items > 0 then
+        local suffix = status == "stale" and " (indexing)" or ""
+        local text = #items == 1 and "1 syntactic reference" or string.format("%d syntactic references", #items)
+        set_reference_picker_results(picker, symbol, items, "Tree-sitter: " .. text .. suffix)
+        return
+      end
+      show_local_reference_fallback(picker, doc, line, col, symbol, reason or workspace_reason or "no-workspace-references")
+      return
+    end
+
+    show_local_reference_fallback(picker, doc, line, col, symbol, workspace_reason or reason or "timeout")
+  end)
+end
+
 function language.show_references(view)
   view = view or core.active_view
   local doc = view and view.doc
@@ -374,29 +464,13 @@ function language.show_references(view)
       if item then items[#items + 1] = item end
     end
     if #items == 0 then
-      local refs = intelligence.local_references(doc, line, col)
-      for _, ref in ipairs(refs or {}) do
-        local item = tree_sitter_refs_to_picker_item(doc, ref, symbol)
-        if item then items[#items + 1] = item end
-      end
+      show_tree_sitter_workspace_reference_fallback(picker, doc, line, col, symbol, "no-lsp-reference-results")
+      return
     end
     local status = #items == 1 and "1 reference" or string.format("%d references", #items)
-    if picker and picker.set_static_results then
-      picker:set_static_results(items, status)
-    else
-      show_locations_picker("References: " .. symbol, status, items)
-    end
+    set_reference_picker_results(picker, symbol, items, status)
   end, function(reason)
-    local items = {}
-    local refs = intelligence.local_references(doc, line, col)
-    for _, ref in ipairs(refs or {}) do
-      local item = tree_sitter_refs_to_picker_item(doc, ref, symbol)
-      if item then items[#items + 1] = item end
-    end
-    local status = #items > 0 and (#items == 1 and "1 local reference" or string.format("%d local references", #items))
-      or "No references found"
-    if picker and picker.set_static_results then picker:set_static_results(items, status) end
-    quiet_log("Language references unavailable for %s: %s", symbol, tostring(reason))
+    show_tree_sitter_workspace_reference_fallback(picker, doc, line, col, symbol, reason)
   end)
   return true
 end
