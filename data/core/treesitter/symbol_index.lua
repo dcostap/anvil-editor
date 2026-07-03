@@ -13,12 +13,13 @@ local DEFAULT_REFRESH_AFTER_SECONDS = 5
 local DEFAULT_MATCH_LIMIT = 50000
 local DEFAULT_MAX_CAPTURES = 50000
 local DEFAULT_QUERY_TIMEOUT_MS = 20
+local DEFAULT_PROJECT_USAGE_CAP = 750000
 local MAX_FILE_BYTES = 2 * 1024 * 1024
 
 local native_ok, native = nil, nil
 local query_cache = {}
 local indexes = {}
-local reference_indexes = {}
+local open_documents = setmetatable({}, { __mode = "v" })
 
 local function log_quiet(...)
   if core and core.log_quiet then core.log_quiet(...) end
@@ -38,23 +39,34 @@ local function normalize_root(root)
   return common.normalize_path(root)
 end
 
+local function new_index(root)
+  return {
+    root = root,
+    generation = 0,
+    status = "idle",
+    symbol_status = "idle",
+    usage_status = "idle",
+    symbols = {},
+    usages_by_name = {},
+    usage_count = 0,
+    usage_truncated = false,
+    usage_truncated_reason = nil,
+    by_path = {},
+    open_docs = {},
+    files_total = 0,
+    files_scanned = 0,
+    files_indexed = 0,
+    reason = nil,
+    started_at = nil,
+    finished_at = nil,
+  }
+end
+
 local function index_for_root(root)
   root = normalize_root(root)
   local index = indexes[root]
   if not index then
-    index = {
-      root = root,
-      generation = 0,
-      status = "idle",
-      symbols = {},
-      by_path = {},
-      files_total = 0,
-      files_scanned = 0,
-      files_indexed = 0,
-      reason = nil,
-      started_at = nil,
-      finished_at = nil,
-    }
+    index = new_index(root)
     indexes[root] = index
   end
   return index
@@ -72,7 +84,7 @@ local function compile_language_query(language, kind)
   local query, err = n.compile_query(language.grammar, kind, source)
   if not query then
     query_cache[key] = false
-    log_quiet("Tree-sitter symbols: disabled %s query for %s: %s", tostring(kind), tostring(language.id), tostring(err))
+    log_quiet("Tree-sitter Project index: disabled %s query for %s: %s", tostring(kind), tostring(language.id), tostring(err))
     return nil, err or "compile-failed"
   end
   query_cache[key] = query
@@ -83,15 +95,47 @@ local function compile_outline_query(language)
   return compile_language_query(language, "outline")
 end
 
+local function usage_query_kind(language)
+  local sources = language and language.query_sources or {}
+  if sources.usages then return "usages" end
+  if sources.locals then return "locals" end
+end
+
+local function compile_usage_query(language)
+  local kind = usage_query_kind(language)
+  if not kind then return nil, "missing-query", nil end
+  local query, err = compile_language_query(language, kind)
+  return query, err, kind
+end
+
+local function effective_query_limit(language, prefix, name, default)
+  local value = language and language[prefix .. "_" .. name]
+  if value == nil and prefix == "usages" then value = language and language["locals_" .. name] end
+  return value or default
+end
+
 local function file_fingerprint(_path, info, language)
-  local outline_source = language and language.query_sources and language.query_sources.outline or ""
+  local sources = language and language.query_sources or {}
+  local usage_kind = usage_query_kind(language) or ""
+  local usage_source = usage_kind ~= "" and sources[usage_kind] or ""
+  local outline_source = sources.outline or ""
   return table.concat({
     tostring(info and info.size or ""),
     tostring(info and info.modified or ""),
     tostring(language and language.id or ""),
     tostring(language and language.grammar or ""),
+    tostring(language and language.parse_timeout_ms or DEFAULT_PARSE_TIMEOUT_MS),
+    tostring(effective_query_limit(language, "outline", "match_limit", DEFAULT_MATCH_LIMIT)),
+    tostring(effective_query_limit(language, "outline", "max_captures", DEFAULT_MAX_CAPTURES)),
+    tostring(effective_query_limit(language, "outline", "query_timeout_ms", DEFAULT_QUERY_TIMEOUT_MS)),
     tostring(#outline_source),
     outline_source,
+    tostring(usage_kind),
+    tostring(effective_query_limit(language, "usages", "match_limit", DEFAULT_MATCH_LIMIT)),
+    tostring(effective_query_limit(language, "usages", "max_captures", DEFAULT_MAX_CAPTURES)),
+    tostring(effective_query_limit(language, "usages", "query_timeout_ms", DEFAULT_QUERY_TIMEOUT_MS)),
+    tostring(#usage_source),
+    usage_source,
   }, "\0")
 end
 
@@ -124,12 +168,6 @@ local function lines_from_text(text)
   return lines
 end
 
-local function read_lines(path, info)
-  local text, err = read_file_text(path, info)
-  if not text then return nil, err end
-  return lines_from_text(text)
-end
-
 local function wait_parse(state, generation, timeout)
   local deadline = system.get_time() + (timeout or 3)
   local status, changed, discarded
@@ -140,63 +178,6 @@ local function wait_parse(state, generation, timeout)
   end
   if status ~= "ready" and not state:has_tree() then return nil, status or "timeout" end
   return true
-end
-
-local function parse_file_symbols(path, relpath, info, language)
-  local n = ensure_native()
-  if not n then return nil, "native-unavailable" end
-  if not n.has_language or not n.has_language(language.grammar) then return nil, "missing-grammar" end
-  local query, err = compile_outline_query(language)
-  if not query then return nil, err or "missing-query" end
-  local lines
-  lines, err = read_lines(path, info)
-  if not lines then return nil, err end
-
-  local state
-  state, err = n.new_document_state(language.grammar, {
-    parse_timeout_ms = language.parse_timeout_ms or DEFAULT_PARSE_TIMEOUT_MS,
-  })
-  if not state then return nil, err or "state-failed" end
-  local ok
-  ok, err = state:schedule_parse(lines, 1, nil)
-  if not ok then state:close(); return nil, err or "schedule-failed" end
-  ok, err = wait_parse(state, 1, 3)
-  if not ok then state:close(); return nil, err or "parse-failed" end
-
-  local fake_doc = {
-    lines = lines,
-    abs_filename = path,
-    filename = relpath or path,
-    treesitter = {
-      status = "ready",
-      native = state,
-      queries = { outline = query },
-      language = language,
-      language_id = language.id,
-      grammar = language.grammar,
-      stale_unrenderable = false,
-    },
-    get_name = function() return relpath or path end,
-    get_change_id = function() return 0 end,
-  }
-  local symbols = outline.get_document_outline(fake_doc) or {}
-  state:close()
-  for _, symbol in ipairs(symbols) do
-    symbol.path = path
-    symbol.file = relpath or path
-    symbol.relpath = relpath or path
-    symbol.language_id = language.id
-    symbol.text = symbol.name
-  end
-  return symbols
-end
-
-local function capture_kind(capture_name)
-  return tostring(capture_name or ""):match("^definition%.(.+)$")
-end
-
-local function is_reference_capture(capture)
-  return capture and (capture.capture == "reference" or capture_kind(capture.capture) ~= nil)
 end
 
 local function lines_byte_len(lines)
@@ -229,17 +210,34 @@ local function text_for_capture(lines, capture)
   return table.concat(parts)
 end
 
-local function reference_from_capture(path, relpath, lines, language, capture)
+local function capture_kind(capture_name)
+  return tostring(capture_name or ""):match("^definition%.(.+)$")
+end
+
+local function is_usage_capture(capture)
+  local name = capture and capture.capture
+  if not name then return false end
+  return name == "reference"
+      or name == "usage"
+      or tostring(name):match("^usage%.") ~= nil
+      or capture_kind(name) ~= nil
+end
+
+local function usage_from_capture(path, relpath, lines, language, capture)
+  local text = text_for_capture(lines, capture)
+  if text == "" then return nil end
+  local definition_kind = capture_kind(capture.capture)
   local line = lines[capture.start_line] or ""
   return {
-    name = text_for_capture(lines, capture),
-    kind = capture_kind(capture.capture) or "reference",
+    name = text,
+    kind = definition_kind or "usage",
     capture = capture.capture,
+    is_declaration = definition_kind ~= nil,
     path = path,
     file = relpath or path,
     relpath = relpath or path,
     language_id = language.id,
-    text = text_for_capture(lines, capture),
+    text = text,
     line_text = line:gsub("\n$", ""),
     start_line = capture.start_line,
     start_col = capture.start_col,
@@ -255,19 +253,87 @@ local function reference_from_capture(path, relpath, lines, language, capture)
   }
 end
 
-local function parse_file_references(path, relpath, info, language, name, opts)
+local function add_usage(usages_by_name, item)
+  if not item then return false end
+  local list = usages_by_name[item.name]
+  if not list then
+    list = {}
+    usages_by_name[item.name] = list
+  end
+  list[#list + 1] = item
+  return true
+end
+
+local function count_usages(usages_by_name)
+  local count = 0
+  for _, list in pairs(usages_by_name or {}) do count = count + #list end
+  return count
+end
+
+local function extract_symbols_from_doc(doc, path, relpath, language)
+  local symbols = outline.get_document_outline(doc) or {}
+  for _, symbol in ipairs(symbols) do
+    symbol.path = path
+    symbol.file = relpath or path
+    symbol.relpath = relpath or path
+    symbol.language_id = language.id
+    symbol.text = symbol.name
+  end
+  return symbols
+end
+
+local function query_usages_from_state(state, query, lines, language, opts)
   opts = opts or {}
-  name = tostring(name or "")
-  if name == "" then return {} end
+  local captures, err = state:query_captures(query, 0, lines_byte_len(lines), {
+    match_limit = opts.match_limit or effective_query_limit(language, "usages", "match_limit", DEFAULT_MATCH_LIMIT),
+    max_captures = opts.max_captures or effective_query_limit(language, "usages", "max_captures", DEFAULT_MAX_CAPTURES),
+    timeout_ms = opts.timeout_ms or effective_query_limit(language, "usages", "query_timeout_ms", DEFAULT_QUERY_TIMEOUT_MS),
+  })
+  if not captures then return nil, err or "query-failed" end
+  return captures
+end
+
+local function extract_usages_from_state(state, query, path, relpath, lines, language, opts)
+  if not query then return {}, 0 end
+  local captures, err = query_usages_from_state(state, query, lines, language, opts)
+  if not captures then return nil, err end
+
+  local by_range = {}
+  for _, capture in ipairs(captures) do
+    if is_usage_capture(capture) then
+      local item = usage_from_capture(path, relpath, lines, language, capture)
+      if item then
+        local key = table.concat({ item.name, tostring(item.start_byte or 0), tostring(item.end_byte or 0) }, "\0")
+        local existing = by_range[key]
+        if not existing or (item.is_declaration and not existing.is_declaration) then
+          by_range[key] = item
+        end
+      end
+    end
+  end
+
+  local usages_by_name = {}
+  local count = 0
+  for _, item in pairs(by_range) do
+    if add_usage(usages_by_name, item) then count = count + 1 end
+  end
+  return usages_by_name, count
+end
+
+local function parse_file_index(path, relpath, info, language, opts)
+  opts = opts or {}
   local n = ensure_native()
   if not n then return nil, "native-unavailable" end
   if not n.has_language or not n.has_language(language.grammar) then return nil, "missing-grammar" end
-  local query, err = compile_language_query(language, "locals")
-  if not query then return nil, err or "missing-query" end
+  local outline_query, err = compile_outline_query(language)
+  if not outline_query then return nil, err or "missing-query" end
+  local usage_query = nil
+  if opts.include_usages ~= false then
+    usage_query = compile_usage_query(language)
+  end
   local text
   text, err = read_file_text(path, info)
   if not text then return nil, err end
-  if not text:find(name, 1, true) then return {} end
   local lines = lines_from_text(text)
 
   local state
@@ -281,33 +347,40 @@ local function parse_file_references(path, relpath, info, language, name, opts)
   ok, err = wait_parse(state, 1, 3)
   if not ok then state:close(); return nil, err or "parse-failed" end
 
-  local captures
-  captures, err = state:query_captures(query, 0, lines_byte_len(lines), {
-    match_limit = opts.match_limit or language.locals_match_limit or DEFAULT_MATCH_LIMIT,
-    max_captures = opts.max_captures or language.locals_max_captures or DEFAULT_MAX_CAPTURES,
-    timeout_ms = opts.timeout_ms or language.locals_query_timeout_ms or DEFAULT_QUERY_TIMEOUT_MS,
-  })
-  state:close()
-  if not captures then return nil, err or "query-failed" end
-
-  local include_declaration = opts.include_declaration ~= false
-  local by_range = {}
-  for _, capture in ipairs(captures) do
-    if is_reference_capture(capture) and text_for_capture(lines, capture) == name then
-      local item = reference_from_capture(path, relpath, lines, language, capture)
-      local key = table.concat({ tostring(item.start_byte or 0), tostring(item.end_byte or 0) }, "\0")
-      local existing = by_range[key]
-      if not existing or (capture_kind(item.capture) and not capture_kind(existing.capture)) then
-        by_range[key] = item
-      end
+  local fake_doc = {
+    lines = lines,
+    abs_filename = path,
+    filename = relpath or path,
+    treesitter = {
+      status = "ready",
+      native = state,
+      queries = { outline = outline_query, usages = usage_query },
+      language = language,
+      language_id = language.id,
+      grammar = language.grammar,
+      stale_unrenderable = false,
+    },
+    get_name = function() return relpath or path end,
+    get_change_id = function() return 0 end,
+  }
+  local symbols = extract_symbols_from_doc(fake_doc, path, relpath, language)
+  local usages_by_name, usage_count = {}, 0
+  local usage_complete = opts.include_usages ~= false
+  if usage_query then
+    usages_by_name, usage_count = extract_usages_from_state(state, usage_query, path, relpath, lines, language, opts)
+    if not usages_by_name then
+      log_quiet("Tree-sitter Project usages: skipped usages for %s: %s", tostring(relpath), tostring(usage_count))
+      usages_by_name, usage_count = {}, 0
+      usage_complete = false
     end
   end
-  local refs = {}
-  for _, item in pairs(by_range) do
-    local is_definition = capture_kind(item.capture) ~= nil
-    if include_declaration or not is_definition then refs[#refs + 1] = item end
-  end
-  return refs
+  state:close()
+  return {
+    symbols = symbols,
+    usages_by_name = usages_by_name,
+    usage_count = usage_count,
+    usage_complete = usage_complete,
+  }
 end
 
 local function sort_symbols(symbols)
@@ -319,21 +392,70 @@ local function sort_symbols(symbols)
   end)
 end
 
-local function rebuild_symbols(index)
-  local symbols = {}
-  for _, entry in pairs(index.by_path or {}) do
-    for _, symbol in ipairs(entry.symbols or {}) do symbols[#symbols + 1] = symbol end
-  end
-  sort_symbols(symbols)
-  index.symbols = symbols
+local function sort_usages(usages)
+  table.sort(usages, function(a, b)
+    local af, bf = tostring(a.relpath or a.path or ""), tostring(b.relpath or b.path or "")
+    if af ~= bf then return af < bf end
+    if (a.start_line or 0) ~= (b.start_line or 0) then return (a.start_line or 0) < (b.start_line or 0) end
+    if (a.start_col or 0) ~= (b.start_col or 0) then return (a.start_col or 0) < (b.start_col or 0) end
+    return tostring(a.capture or "") < tostring(b.capture or "")
+  end)
 end
 
-local function replace_file_symbols(index, path, fingerprint, symbols)
-  index.by_path[path] = { fingerprint = fingerprint, symbols = symbols or {} }
+local function rebuild_disk_aggregates(index)
+  local symbols = {}
+  local usages_by_name = {}
+  local usage_count = 0
+  local cap = tonumber(index.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP) or DEFAULT_PROJECT_USAGE_CAP
+  index.usage_truncated = false
+  index.usage_truncated_reason = nil
+
+  for _, entry in pairs(index.by_path or {}) do
+    for _, symbol in ipairs(entry.symbols or {}) do symbols[#symbols + 1] = symbol end
+    if entry.usage_complete == false then
+      index.usage_truncated = true
+      index.usage_truncated_reason = "project-usage-cap"
+    end
+    for name, list in pairs(entry.usages_by_name or {}) do
+      local out = usages_by_name[name]
+      if not out then
+        out = {}
+        usages_by_name[name] = out
+      end
+      for _, usage in ipairs(list) do
+        if usage_count < cap then
+          out[#out + 1] = usage
+          usage_count = usage_count + 1
+        else
+          index.usage_truncated = true
+          index.usage_truncated_reason = "project-usage-cap"
+          break
+        end
+      end
+    end
+  end
+
+  sort_symbols(symbols)
+  for _, list in pairs(usages_by_name) do sort_usages(list) end
+  index.symbols = symbols
+  index.usages_by_name = usages_by_name
+  index.usage_count = usage_count
+end
+
+local function replace_file_entry(index, path, fingerprint, entry)
+  entry = entry or {}
+  entry.fingerprint = fingerprint
+  entry.symbols = entry.symbols or {}
+  entry.usages_by_name = entry.usages_by_name or {}
+  entry.usage_count = entry.usage_count or count_usages(entry.usages_by_name)
+  if entry.usage_complete == nil then entry.usage_complete = true end
+  index.by_path[path] = entry
 end
 
 local function scan_index(index, generation)
   index.status = "indexing"
+  index.symbol_status = "indexing"
+  index.usage_status = "indexing"
   index.reason = nil
   index.started_at = system.get_time()
   index.finished_at = nil
@@ -344,7 +466,10 @@ local function scan_index(index, generation)
   local project = Project(index.root)
   local yielded = 0
   local changed = false
+  local batch_changed = false
   local seen_supported_paths = {}
+  local usage_seen = 0
+  local usage_cap = tonumber(index.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP) or DEFAULT_PROJECT_USAGE_CAP
   for _, info in project:files() do
     if generation ~= index.generation then return end
     local path = common.normalize_path(info.filename)
@@ -355,17 +480,25 @@ local function scan_index(index, generation)
         index.files_total = index.files_total + 1
         local fingerprint = file_fingerprint(path, info, language)
         local cached = index.by_path[path]
-        if not cached or cached.fingerprint ~= fingerprint then
+        local cached_complete_enough = cached and cached.fingerprint == fingerprint
+          and (cached.usage_complete ~= false or usage_seen >= usage_cap)
+        if cached_complete_enough then
+          usage_seen = usage_seen + (cached.usage_count or count_usages(cached.usages_by_name))
+        else
           local relpath = common.relative_path(index.root, path):gsub("\\", "/")
-          local symbols, err = parse_file_symbols(path, relpath, info, language)
-          if symbols then
-            replace_file_symbols(index, path, fingerprint, symbols)
+          local include_usages = usage_seen < usage_cap
+          local entry, err = parse_file_index(path, relpath, info, language, { include_usages = include_usages })
+          if entry then
+            replace_file_entry(index, path, fingerprint, entry)
+            usage_seen = usage_seen + (entry.usage_count or 0)
             index.files_indexed = index.files_indexed + 1
             changed = true
+            batch_changed = true
           else
-            replace_file_symbols(index, path, fingerprint, {})
+            replace_file_entry(index, path, fingerprint, { symbols = {}, usages_by_name = {}, usage_count = 0 })
             changed = true
-            log_quiet("Tree-sitter symbols: skipped %s: %s", tostring(relpath), tostring(err))
+            batch_changed = true
+            log_quiet("Tree-sitter Project index: skipped %s: %s", tostring(relpath), tostring(err))
           end
         end
       end
@@ -373,6 +506,10 @@ local function scan_index(index, generation)
       yielded = yielded + 1
       if yielded >= DEFAULT_SCAN_YIELD_FILES then
         yielded = 0
+        if batch_changed then
+          rebuild_disk_aggregates(index)
+          batch_changed = false
+        end
         core.redraw = true
         coroutine.yield(0)
       end
@@ -387,13 +524,16 @@ local function scan_index(index, generation)
       pruned = true
     end
   end
-  if changed or pruned then rebuild_symbols(index) end
+  if changed or pruned or index.status ~= "ready" then rebuild_disk_aggregates(index) end
   index.status = "ready"
+  index.symbol_status = "ready"
+  index.usage_status = "ready"
   index.reason = nil
   index.finished_at = system.get_time()
   core.redraw = true
-  log_quiet("Tree-sitter symbols: indexed %d symbol(s) from %d supported file(s) under %s in %.1fms",
-    #index.symbols, index.files_total, index.root, ((index.finished_at or system.get_time()) - (index.started_at or system.get_time())) * 1000)
+  log_quiet("Tree-sitter Project index: indexed %d symbol(s), %d usage(s)%s from %d supported file(s) under %s in %.1fms",
+    #index.symbols, index.usage_count or 0, index.usage_truncated and " (truncated)" or "",
+    index.files_total, index.root, ((index.finished_at or system.get_time()) - (index.started_at or system.get_time())) * 1000)
 end
 
 function symbol_index.ensure_scan(root, opts)
@@ -401,6 +541,15 @@ function symbol_index.ensure_scan(root, opts)
   local index = index_for_root(root)
   if index.status == "indexing" and not opts.force then return index end
   if index.status == "ready" and not opts.force then
+    if symbol_index.update_open_document then
+      for _, doc in pairs(core.docs or {}) do
+        local path = doc and (doc.abs_filename or doc.filename)
+        path = path and common.normalize_path(path)
+        if path and common.path_belongs_to(path, index.root) then
+          symbol_index.update_open_document(doc, "ensure-ready")
+        end
+      end
+    end
     local refresh_after = tonumber(opts.refresh_after_seconds or DEFAULT_REFRESH_AFTER_SECONDS)
     if refresh_after <= 0 or (index.finished_at and system.get_time() - index.finished_at < refresh_after) then
       return index
@@ -408,6 +557,8 @@ function symbol_index.ensure_scan(root, opts)
   end
   index.generation = index.generation + 1
   index.status = "indexing"
+  index.symbol_status = "indexing"
+  index.usage_status = "indexing"
   local generation = index.generation
   core.add_thread(function()
     scan_index(index, generation)
@@ -415,75 +566,116 @@ function symbol_index.ensure_scan(root, opts)
   return index
 end
 
+function symbol_index.start_project_indexing(opts)
+  opts = opts or {}
+  local roots = {}
+  if opts.root or opts.project then
+    roots[1] = normalize_root(opts.root or opts.project)
+  else
+    for _, project in ipairs(core.projects or {}) do
+      if project and project.path then roots[#roots + 1] = normalize_root(project.path) end
+    end
+  end
+  for _, root in ipairs(roots) do
+    local index = symbol_index.ensure_scan(root, {
+      force = opts.force,
+      refresh_after_seconds = opts.refresh_after_seconds,
+    })
+    log_quiet("Tree-sitter Project index: scheduled %s indexing for %s status=%s", tostring(opts.reason or "project"), tostring(root), tostring(index.status))
+  end
+end
+
 function symbol_index.invalidate(root)
   if root then
     local normalized = normalize_root(root)
     local index = index_for_root(normalized)
     index.status = "idle"
+    index.symbol_status = "idle"
+    index.usage_status = "idle"
     index.generation = index.generation + 1
-    for _, ref_index in pairs(reference_indexes) do
-      if ref_index.root == normalized then
-        ref_index.status = "idle"
-        ref_index.generation = ref_index.generation + 1
-      end
-    end
   else
     for _, index in pairs(indexes) do
       index.status = "idle"
+      index.symbol_status = "idle"
+      index.usage_status = "idle"
       index.generation = index.generation + 1
-    end
-    for _, ref_index in pairs(reference_indexes) do
-      ref_index.status = "idle"
-      ref_index.generation = ref_index.generation + 1
     end
   end
 end
 
-local function open_document_symbols(root)
-  local out, paths = {}, {}
-  root = normalize_root(root)
-  for _, doc in ipairs(core.docs or {}) do
+local refresh_open_document_overlays
+local overlay_entry_current
+
+local function doc_should_suppress_disk(doc)
+  if not doc then return false end
+  if type(doc.is_dirty) == "function" then
+    local ok, dirty = pcall(doc.is_dirty, doc)
+    return ok and dirty or false
+  end
+  return false
+end
+
+local function overlay_paths(index)
+  local paths = {}
+  for path, entry in pairs(index.open_docs or {}) do
+    if overlay_entry_current and overlay_entry_current(entry) then paths[path] = true end
+  end
+  for path, doc in pairs(open_documents) do
+    if common.path_belongs_to(path, index.root) and doc_should_suppress_disk(doc) then paths[path] = true end
+  end
+  for _, doc in pairs(core.docs or {}) do
     local path = doc and (doc.abs_filename or doc.filename)
     path = path and common.normalize_path(path)
-    if path and common.path_belongs_to(path, root) and doc.treesitter and doc.treesitter.status == "ready" then
-      local relpath = common.relative_path(root, path):gsub("\\", "/")
-      local symbols = outline.get_document_outline(doc) or {}
-      if #symbols > 0 then paths[path] = true end
-      for _, symbol in ipairs(symbols) do
-        symbol.path = path
-        symbol.file = relpath
-        symbol.relpath = relpath
-        symbol.language_id = doc.treesitter.language_id
-        symbol.text = symbol.name
-        out[#out + 1] = symbol
-      end
-    end
+    if path and common.path_belongs_to(path, index.root) and doc_should_suppress_disk(doc) then paths[path] = true end
   end
-  return out, paths
+  return paths
+end
+
+overlay_entry_current = function(entry)
+  if not entry or not entry.doc then return false end
+  local doc = entry.doc
+  local ts = doc.treesitter
+  local change_id = doc.get_change_id and doc:get_change_id() or 0
+  return ts and ts.status == "ready" and entry.change_id == change_id
 end
 
 local function combined_symbols(index)
-  local open_symbols, open_paths = open_document_symbols(index.root)
-  if #open_symbols == 0 then return index.symbols end
+  if refresh_open_document_overlays then refresh_open_document_overlays(index) end
+  local overlay = index.open_docs or {}
+  local paths = overlay_paths(index)
   local out = {}
   for _, symbol in ipairs(index.symbols or {}) do
-    if not open_paths[symbol.path] then out[#out + 1] = symbol end
+    if not paths[symbol.path] then out[#out + 1] = symbol end
   end
-  for _, symbol in ipairs(open_symbols) do out[#out + 1] = symbol end
-  table.sort(out, function(a, b)
-    local af, bf = tostring(a.relpath or a.path or ""), tostring(b.relpath or b.path or "")
-    if af ~= bf then return af < bf end
-    if (a.start_line or 0) ~= (b.start_line or 0) then return (a.start_line or 0) < (b.start_line or 0) end
-    return tostring(a.name or "") < tostring(b.name or "")
-  end)
+  for _, entry in pairs(overlay) do
+    if overlay_entry_current(entry) then
+      for _, symbol in ipairs(entry.symbols or {}) do out[#out + 1] = symbol end
+    end
+  end
+  sort_symbols(out)
+  return out
+end
+
+local function combined_usages_for_name(index, name)
+  if refresh_open_document_overlays then refresh_open_document_overlays(index) end
+  local overlay = index.open_docs or {}
+  local paths = overlay_paths(index)
+  local out = {}
+  for _, usage in ipairs((index.usages_by_name or {})[name] or {}) do
+    if not paths[usage.path] then out[#out + 1] = usage end
+  end
+  for _, entry in pairs(overlay) do
+    if overlay_entry_current(entry) then
+      for _, usage in ipairs((entry.usages_by_name or {})[name] or {}) do out[#out + 1] = usage end
+    end
+  end
+  sort_usages(out)
   return out
 end
 
 local function filtered_symbols(symbols, query, limit)
   local items = {}
-  for _, symbol in ipairs(symbols or {}) do
-    items[#items + 1] = symbol
-  end
+  for _, symbol in ipairs(symbols or {}) do items[#items + 1] = symbol end
   query = tostring(query or "")
   if query ~= "" then items = common.fuzzy_match(items, query, false) end
   limit = tonumber(limit) or DEFAULT_QUERY_LIMIT
@@ -492,71 +684,45 @@ local function filtered_symbols(symbols, query, limit)
   return out, #items > #out
 end
 
+local function refresh_current_core_docs_for_index(index)
+  if not index or not symbol_index.update_open_document then return end
+  for _, doc in pairs(core.docs or {}) do
+    local path = doc and (doc.abs_filename or doc.filename)
+    path = path and common.normalize_path(path)
+    if path and common.path_belongs_to(path, index.root) then
+      symbol_index.update_open_document(doc, "query-refresh")
+    end
+  end
+end
+
 function symbol_index.workspace_symbols(query, opts)
   opts = opts or {}
   local index = symbol_index.ensure_scan(opts.root, {
     force = opts.force,
     refresh_after_seconds = opts.refresh_after_seconds,
   })
-  if index.status == "ready" then
+  if index.symbol_status == "ready" then
+    refresh_current_core_docs_for_index(index)
     local results, has_more = filtered_symbols(combined_symbols(index), query, opts.limit)
     return results, nil, "fresh", { has_more = has_more, index = index }
   end
-  if (#index.symbols > 0 or #(open_document_symbols(index.root)) > 0) and opts.allow_stale then
+  if (#(index.symbols or {}) > 0 or next(index.open_docs or {}) ~= nil) and opts.allow_stale then
     local results, has_more = filtered_symbols(combined_symbols(index), query, opts.limit)
     return results, "indexing", "stale", { has_more = has_more, index = index }
   end
   return nil, "indexing", "pending", { index = index }
 end
 
-local function reference_key(root, name)
-  return normalize_root(root) .. "\0" .. tostring(name or "")
-end
-
-local function reference_index_for(root, name)
-  root = normalize_root(root)
-  name = tostring(name or "")
-  local key = reference_key(root, name)
-  local index = reference_indexes[key]
-  if not index then
-    index = {
-      root = root,
-      name = name,
-      generation = 0,
-      status = "idle",
-      references = {},
-      files_total = 0,
-      files_scanned = 0,
-      files_indexed = 0,
-      reason = nil,
-      started_at = nil,
-      finished_at = nil,
-    }
-    reference_indexes[key] = index
-  end
-  return index
-end
-
-local function sort_references(references)
-  table.sort(references, function(a, b)
-    local af, bf = tostring(a.relpath or a.path or ""), tostring(b.relpath or b.path or "")
-    if af ~= bf then return af < bf end
-    if (a.start_line or 0) ~= (b.start_line or 0) then return (a.start_line or 0) < (b.start_line or 0) end
-    if (a.start_col or 0) ~= (b.start_col or 0) then return (a.start_col or 0) < (b.start_col or 0) end
-    return tostring(a.capture or "") < tostring(b.capture or "")
-  end)
-end
-
-local function filter_references(references, opts)
+local function filter_usages(usages, opts)
   opts = opts or {}
   local include_declaration = opts.include_declaration ~= false
   local out = {}
   local has_more = false
   local limit = tonumber(opts.limit) or DEFAULT_QUERY_LIMIT
-  for _, ref in ipairs(references or {}) do
-    if include_declaration or capture_kind(ref.capture) == nil then
+  for _, usage in ipairs(usages or {}) do
+    if include_declaration or not usage.is_declaration then
       if #out < limit then
-        out[#out + 1] = ref
+        out[#out + 1] = usage
       else
         has_more = true
         break
@@ -566,93 +732,190 @@ local function filter_references(references, opts)
   return out, has_more
 end
 
-local function scan_references(index, generation)
-  index.status = "indexing"
-  index.reason = nil
-  index.started_at = system.get_time()
-  index.finished_at = nil
-  index.files_total = 0
-  index.files_scanned = 0
-  index.files_indexed = 0
-
-  local references = {}
-  local project = Project(index.root)
-  local yielded = 0
-  for _, info in project:files() do
-    if generation ~= index.generation then return end
-    local path = common.normalize_path(info.filename)
-    if info.type == "file" then
-      local language = registry.get(path)
-      if language and language.query_sources and language.query_sources.locals then
-        index.files_total = index.files_total + 1
-        local relpath = common.relative_path(index.root, path):gsub("\\", "/")
-        local refs, err = parse_file_references(path, relpath, info, language, index.name, {
-          include_declaration = true,
-        })
-        if refs then
-          if #refs > 0 then index.files_indexed = index.files_indexed + 1 end
-          for _, ref in ipairs(refs) do references[#references + 1] = ref end
-        else
-          log_quiet("Tree-sitter references: skipped %s: %s", tostring(relpath), tostring(err))
-        end
-      end
-      index.files_scanned = index.files_scanned + 1
-      yielded = yielded + 1
-      if yielded >= DEFAULT_SCAN_YIELD_FILES then
-        yielded = 0
-        core.redraw = true
-        coroutine.yield(0)
-      end
-    end
-  end
-
-  if generation ~= index.generation then return end
-  sort_references(references)
-  index.references = references
-  index.status = "ready"
-  index.reason = nil
-  index.finished_at = system.get_time()
-  core.redraw = true
-  log_quiet("Tree-sitter references: indexed %d syntactic reference(s) for %s from %d supported file(s) under %s in %.1fms",
-    #index.references, tostring(index.name), index.files_total, index.root, ((index.finished_at or system.get_time()) - (index.started_at or system.get_time())) * 1000)
-end
-
-local function ensure_reference_scan(root, name, opts)
-  opts = opts or {}
-  local index = reference_index_for(root, name)
-  if index.status == "indexing" and not opts.force then return index end
-  if index.status == "ready" and not opts.force then
-    local refresh_after = tonumber(opts.refresh_after_seconds or DEFAULT_REFRESH_AFTER_SECONDS)
-    if refresh_after <= 0 or (index.finished_at and system.get_time() - index.finished_at < refresh_after) then
-      return index
-    end
-  end
-  index.generation = index.generation + 1
-  index.status = "indexing"
-  local generation = index.generation
-  core.add_thread(function()
-    scan_references(index, generation)
-  end)
-  return index
-end
-
-function symbol_index.workspace_references(name, opts)
+function symbol_index.workspace_usages(name, opts)
   opts = opts or {}
   name = tostring(name or "")
   if name == "" then return {}, "no-symbol", "fresh", { has_more = false } end
-  local index = ensure_reference_scan(opts.root, name, {
+  local index = symbol_index.ensure_scan(opts.root, {
     force = opts.force,
     refresh_after_seconds = opts.refresh_after_seconds,
   })
-  if index.status == "ready" then
-    local results, has_more = filter_references(index.references, opts)
-    return results, nil, "fresh", { has_more = has_more, index = index }
+  if index.usage_status == "ready" then
+    refresh_current_core_docs_for_index(index)
+    local results, has_more = filter_usages(combined_usages_for_name(index, name), opts)
+    has_more = has_more or index.usage_truncated or false
+    return results, nil, "fresh", {
+      has_more = has_more,
+      index = index,
+      usage_truncated = index.usage_truncated,
+      usage_truncated_reason = index.usage_truncated_reason,
+    }
   end
-  if #(index.references or {}) > 0 and opts.allow_stale then
-    local results, has_more = filter_references(index.references, opts)
+  if opts.allow_stale and ((index.usages_by_name or {})[name] or next(index.open_docs or {}) ~= nil) then
+    local results, has_more = filter_usages(combined_usages_for_name(index, name), opts)
     return results, "indexing", "stale", { has_more = has_more, index = index }
   end
   return nil, "indexing", "pending", { index = index }
+end
+
+function symbol_index.workspace_references(name, opts)
+  return symbol_index.workspace_usages(name, opts)
+end
+
+local function doc_path(doc)
+  local path = doc and (doc.abs_filename or doc.filename)
+  return path and common.normalize_path(path) or nil
+end
+
+local function doc_lines(doc)
+  return doc and doc.lines or nil
+end
+
+local function open_doc_entry_for(index, doc, path)
+  local ts = doc and doc.treesitter
+  if not ts or ts.status ~= "ready" or not ts.native then
+    return nil, "not-ready"
+  end
+  local language = ts.language
+  if not language then return nil, "missing-language" end
+  local lines = doc_lines(doc)
+  if not lines then return nil, "missing-lines" end
+  local relpath = common.relative_path(index.root, path):gsub("\\", "/")
+  local fake_doc = {
+    lines = lines,
+    abs_filename = path,
+    filename = relpath,
+    treesitter = ts,
+    get_name = function() return relpath end,
+    get_change_id = function() return doc.get_change_id and doc:get_change_id() or 0 end,
+  }
+  local symbols = extract_symbols_from_doc(fake_doc, path, relpath, language)
+  local usage_query = ts.queries and (ts.queries.usages or ts.queries.locals)
+  if not usage_query then usage_query = compile_usage_query(language) end
+  local usages_by_name, usage_count = {}, 0
+  if usage_query then
+    usages_by_name, usage_count = extract_usages_from_state(ts.native, usage_query, path, relpath, lines, language)
+    if not usages_by_name then usages_by_name, usage_count = {}, 0 end
+  end
+  return {
+    doc = doc,
+    change_id = doc.get_change_id and doc:get_change_id() or 0,
+    symbols = symbols,
+    usages_by_name = usages_by_name,
+    usage_count = usage_count,
+  }
+end
+
+refresh_open_document_overlays = function(index)
+  if not index then return false end
+  local changed = false
+  local seen = {}
+  local docs = {}
+  for path, doc in pairs(open_documents) do docs[path] = doc end
+  for _, doc in pairs(core.docs or {}) do
+    local path = doc_path(doc)
+    if path then docs[path] = doc end
+  end
+  for path, doc in pairs(docs) do
+    if path and common.path_belongs_to(path, index.root) then
+      seen[path] = true
+      local current = index.open_docs[path]
+      local change_id = doc.get_change_id and doc:get_change_id() or 0
+      if not current or current.doc ~= doc or current.change_id ~= change_id then
+        local entry = open_doc_entry_for(index, doc, path)
+        if entry then
+          index.open_docs[path] = entry
+          changed = true
+        end
+      end
+    end
+  end
+  for path, entry in pairs(index.open_docs or {}) do
+    if not seen[path] or not entry.doc then
+      index.open_docs[path] = nil
+      changed = true
+    end
+  end
+  return changed
+end
+
+function symbol_index.remember_open_document(doc)
+  local path = doc_path(doc)
+  if not path then return false, "no-path" end
+  open_documents[path] = doc
+  return true
+end
+
+function symbol_index.update_open_document(doc, reason)
+  local path = doc_path(doc)
+  if not path then return false, "no-path" end
+  open_documents[path] = doc
+  local updated = false
+  local change_id = doc.get_change_id and doc:get_change_id() or 0
+  for _, index in pairs(indexes) do
+    if common.path_belongs_to(path, index.root) then
+      local current = index.open_docs[path]
+      if current and current.doc == doc and current.change_id == change_id then
+        updated = true
+      else
+        local entry, err = open_doc_entry_for(index, doc, path)
+        if entry then
+          index.open_docs[path] = entry
+          updated = true
+        else
+          index.open_docs[path] = nil
+          log_quiet("Tree-sitter Project index: skipped open doc overlay for %s under %s: %s", tostring(path), tostring(index.root), tostring(err))
+        end
+      end
+    end
+  end
+  if updated then
+    core.redraw = true
+    log_quiet("Tree-sitter Project index: updated open document overlay for %s (%s)", tostring(path), tostring(reason or "change"))
+  end
+  return updated
+end
+
+function symbol_index.clear_open_document(doc, reason)
+  local path = doc_path(doc)
+  local cleared = false
+  for open_path, open_doc in pairs(open_documents) do
+    if (path and open_path == path) or open_doc == doc then
+      open_documents[open_path] = nil
+      cleared = true
+    end
+  end
+  for _, index in pairs(indexes) do
+    for overlay_path, entry in pairs(index.open_docs or {}) do
+      if (path and overlay_path == path) or entry.doc == doc then
+        index.open_docs[overlay_path] = nil
+        cleared = true
+      end
+    end
+  end
+  if cleared then
+    core.redraw = true
+    log_quiet("Tree-sitter Project index: cleared open document overlay for %s (%s)", tostring(path or doc), tostring(reason or "clear"))
+  end
+  return cleared
+end
+
+function symbol_index.mark_file_dirty(path, reason)
+  path = path and common.normalize_path(path)
+  if not path then return false end
+  local changed = false
+  for _, index in pairs(indexes) do
+    if common.path_belongs_to(path, index.root) then
+      if index.by_path[path] then
+        index.by_path[path] = nil
+        changed = true
+      end
+      index.open_docs[path] = nil
+      symbol_index.ensure_scan(index.root, { force = true })
+    end
+  end
+  if changed then log_quiet("Tree-sitter Project index: marked dirty %s (%s)", tostring(path), tostring(reason or "dirty")) end
+  return changed
 end
 
 function symbol_index.current_document_symbols(doc, query, opts)
@@ -680,7 +943,7 @@ end
 
 function symbol_index.reset_for_tests()
   indexes = {}
-  reference_indexes = {}
+  open_documents = setmetatable({}, { __mode = "v" })
   query_cache = {}
 end
 

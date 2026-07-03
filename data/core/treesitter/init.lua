@@ -121,6 +121,7 @@ end
 function treesitter.close_doc(doc)
   local ts = doc and doc.treesitter
   if not ts then return end
+  ts_symbol_index.clear_open_document(doc, "close")
   close_native(ts)
   attached_docs[doc] = nil
   doc.treesitter = nil
@@ -258,6 +259,7 @@ function treesitter.attach_or_update_doc(doc, reason)
   }
   doc.treesitter = ts
   attached_docs[doc] = true
+  if ts_symbol_index.remember_open_document then ts_symbol_index.remember_open_document(doc) end
   treesitter.schedule_parse(doc, nil)
   return ts
 end
@@ -304,10 +306,11 @@ function treesitter.poll_doc(doc)
   ts.last_poll_changed = changed or false
   ts.last_discarded_stale = discarded_stale or false
   ts.tree_generation = ts.native:tree_generation()
-  if status == "ready" then
+  if ts.status == "ready" then
     ts.reason = nil
     ts.stale_renderable = false
     ts.stale_unrenderable = false
+    if changed then ts_symbol_index.update_open_document(doc, "parse-ready") end
   else
     local native_status, reason = ts.native:status()
     ts.status = native_status or ts.status
@@ -444,6 +447,7 @@ local function patch_doc()
 
   local old_set_filename = Doc.set_filename
   function Doc:set_filename(...)
+    ts_symbol_index.clear_open_document(self, "filename")
     local result = old_set_filename(self, ...)
     treesitter.attach_or_update_doc(self, "filename")
     return result
@@ -451,6 +455,7 @@ local function patch_doc()
 
   local old_load = Doc.load
   function Doc:load(...)
+    ts_symbol_index.clear_open_document(self, "load")
     local result = old_load(self, ...)
     treesitter.attach_or_update_doc(self, "load")
     return result
@@ -460,6 +465,13 @@ local function patch_doc()
   function Doc:reset_syntax(...)
     local result = old_reset_syntax(self, ...)
     if self.lines then treesitter.attach_or_update_doc(self, "syntax") end
+    return result
+  end
+
+  local old_save = Doc.save
+  function Doc:save(...)
+    local result = old_save(self, ...)
+    treesitter.attach_or_update_doc(self, "save")
     return result
   end
 
@@ -477,6 +489,31 @@ local function patch_doc()
 end
 
 patch_doc()
+
+local function install_project_index_hooks()
+  if core.__treesitter_project_index_hooks_wrapped then return end
+  core.__treesitter_project_index_hooks_wrapped = true
+
+  local old_add_project = core.add_project
+  function core.add_project(project, ...)
+    local result = old_add_project(project, ...)
+    if result and result.path and ts_symbol_index.start_project_indexing then
+      ts_symbol_index.start_project_indexing({ root = result.path, reason = "project-added" })
+    end
+    return result
+  end
+
+  local old_set_project = core.set_project
+  function core.set_project(project, ...)
+    local result = old_set_project(project, ...)
+    if result and result.path and ts_symbol_index.start_project_indexing then
+      ts_symbol_index.start_project_indexing({ root = result.path, reason = "project-set" })
+    end
+    return result
+  end
+end
+
+install_project_index_hooks()
 
 local previous_on_event = core.on_event
 if type(previous_on_event) == "function" and not core.__treesitter_on_event_wrapped then

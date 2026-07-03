@@ -14,5 +14,6 @@ return {
     highlights = "highlights.scm",
     outline = "outline.scm",
     locals = "locals.scm",
+    usages = "usages.scm",
   },
 }

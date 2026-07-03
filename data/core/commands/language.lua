@@ -383,7 +383,7 @@ local function show_local_reference_fallback(picker, doc, line, col, symbol, rea
   if reason then quiet_log("Language references unavailable for %s: %s", symbol, tostring(reason)) end
 end
 
-local TREE_SITTER_REFERENCE_TIMEOUT_SECONDS = 60
+local tree_sitter_reference_request_generation = 0
 
 local function tree_sitter_reference_items(results, symbol)
   local items = {}
@@ -394,56 +394,70 @@ local function tree_sitter_reference_items(results, symbol)
   return items
 end
 
+local function reference_picker_alive(picker)
+  if not picker then return true end
+  if picker.is_visible and not picker:is_visible() then return false end
+  return true
+end
+
 local function show_tree_sitter_workspace_reference_fallback(picker, doc, line, col, symbol, reason)
   local ok, symbol_index = pcall(require, "core.treesitter.symbol_index")
-  if not ok or not symbol_index or not symbol_index.workspace_references then
+  local workspace_usages = ok and symbol_index and (symbol_index.workspace_usages or symbol_index.workspace_references)
+  if not workspace_usages then
     show_local_reference_fallback(picker, doc, line, col, symbol, reason)
     return
   end
 
+  tree_sitter_reference_request_generation = tree_sitter_reference_request_generation + 1
+  local request_generation = tree_sitter_reference_request_generation
+
   core.add_thread(function()
-    local deadline = system.get_time() + TREE_SITTER_REFERENCE_TIMEOUT_SECONDS
-    local results, workspace_reason, status, meta = symbol_index.workspace_references(symbol, {
+    local results, workspace_reason, status, meta = workspace_usages(symbol, {
       include_declaration = false,
       allow_stale = true,
       limit = 1000,
     })
-    while status ~= "fresh" and system.get_time() < deadline do
+    while status ~= "fresh" and request_generation == tree_sitter_reference_request_generation and reference_picker_alive(picker) do
       if status == "stale" then
         local items = tree_sitter_reference_items(results, symbol)
         if #items > 0 then
-          local text = #items == 1 and "1 syntactic reference" or string.format("%d syntactic references", #items)
+          local text = #items == 1 and "1 Project usage" or string.format("%d Project usages", #items)
           set_reference_picker_results(picker, symbol, items, "Tree-sitter: " .. text .. " (indexing)")
         end
       elseif meta and meta.index and picker and picker.set_static_results then
         local index = meta.index
         picker:set_static_results({}, string.format(
-          "Tree-sitter: indexing syntactic references… %d/%d files scanned",
+          "Tree-sitter: indexing Project usages… %d/%d files scanned",
           tonumber(index.files_scanned) or 0,
           tonumber(index.files_total) or 0
         ))
+      elseif status == "unavailable" then
+        show_local_reference_fallback(picker, doc, line, col, symbol, workspace_reason or reason or "workspace-usages-unavailable")
+        return
       end
       coroutine.yield(0.05)
-      results, workspace_reason, status, meta = symbol_index.workspace_references(symbol, {
+      results, workspace_reason, status, meta = workspace_usages(symbol, {
         include_declaration = false,
         allow_stale = true,
         limit = 1000,
       })
     end
 
-    if status == "fresh" or status == "stale" then
-      local items = tree_sitter_reference_items(results, symbol)
-      if #items > 0 then
-        local suffix = status == "stale" and " (indexing)" or ""
-        local text = #items == 1 and "1 syntactic reference" or string.format("%d syntactic references", #items)
-        set_reference_picker_results(picker, symbol, items, "Tree-sitter: " .. text .. suffix)
-        return
-      end
-      show_local_reference_fallback(picker, doc, line, col, symbol, reason or workspace_reason or "no-workspace-references")
+    if request_generation ~= tree_sitter_reference_request_generation or not reference_picker_alive(picker) then return end
+
+    local items = tree_sitter_reference_items(results, symbol)
+    local truncated = meta and meta.usage_truncated
+    if #items > 0 then
+      local text = #items == 1 and "1 Project usage" or string.format("%d Project usages", #items)
+      local suffix = truncated and " (index truncated)" or ""
+      set_reference_picker_results(picker, symbol, items, "Tree-sitter: " .. text .. suffix)
       return
     end
-
-    show_local_reference_fallback(picker, doc, line, col, symbol, workspace_reason or reason or "timeout")
+    if truncated then
+      set_reference_picker_results(picker, symbol, {}, "Tree-sitter: no Project usages in indexed subset (index truncated)")
+      return
+    end
+    show_local_reference_fallback(picker, doc, line, col, symbol, reason or workspace_reason or "no-workspace-usages")
   end)
 end
 

@@ -153,7 +153,7 @@ local function wait_workspace_symbols(query, opts, timeout)
   return results, reason, status
 end
 
-local function wait_workspace_references(name, opts, timeout)
+local function wait_workspace_usages(name, opts, timeout)
   local deadline = system.get_time() + (timeout or 5)
   local results, reason, status
   opts = opts or {}
@@ -164,11 +164,26 @@ local function wait_workspace_references(name, opts, timeout)
       call_opts = common.merge(opts, { force = false })
     end
     first = false
-    results, reason, status = symbol_index.workspace_references(name, call_opts)
+    results, reason, status = symbol_index.workspace_usages(name, call_opts)
     if status == "fresh" or status == "stale" then return results, reason, status end
     coroutine.yield(0.03)
   until system.get_time() >= deadline
   return results, reason, status
+end
+
+local function wait_workspace_references(name, opts, timeout)
+  return wait_workspace_usages(name, opts, timeout)
+end
+
+local function wait_index_ready(root, timeout)
+  local deadline = system.get_time() + (timeout or 5)
+  local status
+  repeat
+    status = symbol_index.status(root)
+    if status.status == "ready" then return status end
+    coroutine.yield(0.03)
+  until system.get_time() >= deadline
+  return status
 end
 
 test.describe("core.treesitter phase 3 document integration", function()
@@ -371,9 +386,16 @@ fun use(item: TargetThing): Int {
 ]])
     write_file(root .. PATHSEP .. "src" .. PATHSEP .. "Notes.txt", [[TargetThing in text should not count]])
 
-    local refs, reason, status = wait_workspace_references("TargetThing", {
+    local symbols, symbol_reason, symbol_status = wait_workspace_symbols("TargetThing", {
       root = root,
       force = true,
+      limit = 20,
+    })
+    test.equal(symbol_status, "fresh", symbol_reason)
+    test.ok(find_symbol(symbols, "TargetThing", "class"))
+
+    local refs, reason, status = wait_workspace_usages("TargetThing", {
+      root = root,
       include_declaration = true,
       limit = 20,
     })
@@ -389,13 +411,158 @@ fun use(item: TargetThing): Int {
     test.equal(files["src/Model.kt"], 3)
     test.equal(files["src/Use.kt"], 2)
 
-    refs, reason, status = wait_workspace_references("TargetThing", {
+    refs, reason, status = wait_workspace_usages("TargetThing", {
       root = root,
       include_declaration = false,
       limit = 20,
     })
     test.equal(status, "fresh", reason)
     test.equal(#refs, 4)
+    for _, ref in ipairs(refs) do
+      test.not_ok(ref.is_declaration)
+    end
+  end)
+
+  test.it("Tree-sitter Project indexing can start eagerly before symbol or usage queries", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-eager-usage-index-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    write_file(root .. PATHSEP .. "Model.kt", [[package demo
+
+class EagerThing
+
+fun make(): EagerThing = EagerThing()
+]])
+
+    symbol_index.start_project_indexing({ root = root, reason = "test", refresh_after_seconds = 0 })
+    local status = wait_index_ready(root)
+    test.equal(status.status, "ready")
+    test.equal(status.symbol_status, "ready")
+    test.equal(status.usage_status, "ready")
+    test.ok(find_symbol(status.symbols, "EagerThing", "class"))
+
+    local refs, reason, usage_status = wait_workspace_usages("EagerThing", {
+      root = root,
+      include_declaration = false,
+      limit = 20,
+      refresh_after_seconds = 0,
+    })
+    test.equal(usage_status, "fresh", reason)
+    test.equal(#refs, 2)
+    common.rm(root, true)
+  end)
+
+  test.it("Tree-sitter workspace usages reparse cap-skipped files when budget is available", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-usage-cap-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    write_file(root .. PATHSEP .. "A.kt", [[package demo
+
+class AThing
+
+fun makeA(): AThing = AThing()
+]])
+    write_file(root .. PATHSEP .. "B.kt", [[package demo
+
+class BThing
+
+fun makeB(): BThing = BThing()
+]])
+    local index = symbol_index.status(root)
+    index.project_usage_cap = 1
+
+    local refs, reason, status = wait_workspace_usages("BThing", {
+      root = root,
+      force = true,
+      include_declaration = false,
+      limit = 20,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 0)
+    test.ok(symbol_index.status(root).usage_truncated)
+
+    os.remove(root .. PATHSEP .. "A.kt")
+    index.project_usage_cap = 20
+    refs, reason, status = wait_workspace_usages("BThing", {
+      root = root,
+      force = true,
+      include_declaration = false,
+      limit = 20,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 2)
+    common.rm(root, true)
+  end)
+
+  test.it("Tree-sitter workspace usages use live Document overlays without poisoning disk index", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-live-usage-index-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    local path = root .. PATHSEP .. "Model.kt"
+    write_file(path, [[package demo
+
+class OldThing
+
+fun make(): OldThing = OldThing()
+]])
+
+    local refs, reason, status = wait_workspace_usages("OldThing", {
+      root = root,
+      force = true,
+      include_declaration = false,
+      limit = 20,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 2)
+
+    local doc = kotlin_doc([[package demo
+
+class NewThing
+
+fun make(): NewThing = NewThing()
+]], path)
+    test.ok(wait_ready(doc, 10))
+
+    refs, reason, status = wait_workspace_usages("OldThing", {
+      root = root,
+      include_declaration = false,
+      limit = 20,
+      refresh_after_seconds = 0,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 0)
+
+    refs, reason, status = wait_workspace_usages("NewThing", {
+      root = root,
+      include_declaration = false,
+      limit = 20,
+      refresh_after_seconds = 0,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 2)
+
+    doc:on_close()
+    refs, reason, status = wait_workspace_usages("OldThing", {
+      root = root,
+      include_declaration = false,
+      limit = 20,
+      refresh_after_seconds = 0,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 2)
+
+    refs, reason, status = wait_workspace_usages("NewThing", {
+      root = root,
+      include_declaration = false,
+      limit = 20,
+      refresh_after_seconds = 0,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 0)
+    common.rm(root, true)
   end)
 
   test.it("Tree-sitter symbol index returns Project and current Document symbols", function()

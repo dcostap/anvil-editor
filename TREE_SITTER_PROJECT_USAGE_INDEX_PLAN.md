@@ -523,3 +523,24 @@ On the Kotlin Project that motivated this plan:
 - No cross-language semantic resolution.
 - No blocking startup scan.
 - No large compatibility layer for old per-name reference scan behavior.
+
+## Implementation status
+
+Status as of the current uncommitted implementation pass:
+
+Implemented:
+
+- Eager Tree-sitter Project indexing hooks for Project add/set flow.
+- Integrated Project scan that extracts outline symbols and usage captures from the same parsed file.
+- Kotlin `usages.scm` and Kotlin config registration.
+- `symbol_index.workspace_usages(...)`, with `workspace_references(...)` kept as a compatibility wrapper.
+- `language:show-references` Tree-sitter fallback now uses Project usages and no longer has a user-facing wait timeout.
+- Live open-Document overlay support so dirty buffers can override disk-backed entries without poisoning the disk index.
+- Usage cap/truncation metadata and UI status handling for truncated usage indexes.
+- Regression tests for Project-wide Kotlin usages, declaration filtering, eager indexing, live overlays, and cap-skipped files.
+
+Not fully done / follow-up items:
+
+- Project Symbol Search readiness is not fully decoupled from usage indexing. Partial/stale symbol results are improved during scans, but `symbol_status = "ready"` is still reached at the end of the combined symbols+usages scan.
+- There is no complete targeted disk-backed `reindex_file(path)` implementation yet. Save-time behavior relies on live overlays plus normal Project refresh rather than a precise one-file disk reindex.
+- External file dirty/dirwatch integration remains minimal. Full Project refresh still handles eventual pruning/refresh for external edits/deletes.
