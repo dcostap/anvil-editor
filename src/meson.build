@@ -204,7 +204,7 @@ treesitter_test = executable('treesitter_test',
         'custom_events.c',
     ],
     include_directories: anvil_includes,
-    dependencies: [tree_sitter_dep, tree_sitter_c_dep, tree_sitter_cpp_dep, tree_sitter_odin_dep, sdl_dep, lua_dep, pcre2_dep],
+    dependencies: [tree_sitter_dep, tree_sitter_c_dep, tree_sitter_cpp_dep, tree_sitter_odin_dep, tree_sitter_kotlin_dep, sdl_dep, lua_dep, pcre2_dep],
     c_args: anvil_cargs,
 )
 test('treesitter', treesitter_test, env: anvil_test_env)

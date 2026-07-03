@@ -39,6 +39,13 @@ local function odin_doc(text)
   return doc
 end
 
+local function kotlin_doc(text)
+  local doc = Doc()
+  set_text(doc, text or "package demo\n\nclass Box(val value: Int) {\n  fun doubled(): Int = value * 2\n}\n")
+  doc:set_filename("ui_tree_sitter.kt", "ui_tree_sitter.kt")
+  return doc
+end
+
 local function wait_ready(doc, timeout)
   local deadline = system.get_time() + (timeout or 3)
   while system.get_time() < deadline do
@@ -111,6 +118,23 @@ test.describe("Tree-sitter DocView highlighting", function()
 
   test.it("DocView draw uses Tree-sitter Odin render tokens when ready", function()
     local doc = odin_doc("package demo\n\nmain :: proc() {\n  value := 42\n}")
+    test.ok(wait_ready(doc))
+    local view = DocView(doc)
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 1000, 1000
+    local render_line = doc.highlighter:get_render_line(3)
+    test.equal(render_line.source, "treesitter")
+    local calls = with_fake_draw_text(function()
+      view:draw_line_text(3, 0, 0)
+    end)
+    local drawn = {}
+    for _, call in ipairs(calls) do drawn[#drawn + 1] = call.text end
+    test.equal(table.concat(drawn), doc.lines[3]:sub(1, -2))
+    doc:on_close()
+  end)
+
+  test.it("DocView draw uses Tree-sitter Kotlin render tokens when ready", function()
+    local doc = kotlin_doc("package demo\n\nclass Box(val value: Int) {\n  fun doubled(): Int = value * 2\n}")
     test.ok(wait_ready(doc))
     local view = DocView(doc)
     view.position.x, view.position.y = 0, 0

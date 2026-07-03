@@ -1,0 +1,7 @@
+[wrap-git]
+url = https://github.com/fwcd/tree-sitter-kotlin.git
+revision = c8ac3d2627240160b999a2c100de3babbdb8f419
+patch_directory = tree-sitter-kotlin
+
+[provide]
+tree-sitter-kotlin = tree_sitter_kotlin_dep
