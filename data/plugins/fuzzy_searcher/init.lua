@@ -3939,16 +3939,14 @@ function FSView:confirm(target_side)
         restore_focus = source_view,
       })
     else
-      local v = core.open_file(path)
-      if v and v.doc then
-        if v.with_selection_state then
-          v:with_selection_state(function()
-            if line2 and col2 then v.doc:set_selection(line, col, line2, col2) else v.doc:set_selection(line, col) end
-          end)
-        else
-          if line2 and col2 then v.doc:set_selection(line, col, line2, col2) else v.doc:set_selection(line, col) end
-        end
-      end
+      sidepanel.open_path_in_main(path, {
+        line = line,
+        col = col,
+        line2 = line2,
+        col2 = col2,
+        source_view = source_view,
+        replace_dirty_singleton = true,
+      })
     end
   end
 end

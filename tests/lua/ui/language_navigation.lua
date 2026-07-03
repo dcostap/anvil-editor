@@ -1,6 +1,7 @@
 local common = require "core.common"
 local core = require "core"
 local command = require "core.command"
+local EmptyView = require "core.emptyview"
 local Project = require "core.project"
 local test = require "core.test"
 local treesitter = require "core.treesitter"
@@ -57,6 +58,14 @@ test.describe("language navigation", function()
     context.original_projects = core.projects
     context.original_active_view = core.active_view
     context.original_cwd = system.getcwd()
+    context.original_main_panel_views = nil
+    local node = core.root_panel and core.root_panel:get_main_panel()
+    if node then
+      context.original_main_panel_views = { views = node.views, active_view = node.active_view }
+      node.views = {}
+      node:add_view(EmptyView())
+      core.set_active_view(node.active_view)
+    end
     context.temp_root = USERDIR
       .. PATHSEP .. "language-navigation-tests-"
       .. system.get_process_id() .. "-"
@@ -82,6 +91,13 @@ test.describe("language navigation", function()
         test.ok(ok, err)
       end
     end
+    if context.original_main_panel_views then
+      local node = core.root_panel and core.root_panel:get_main_panel()
+      if node then
+        node.views = context.original_main_panel_views.views
+        node.active_view = context.original_main_panel_views.active_view
+      end
+    end
     core.projects = context.original_projects
     core.active_view = context.original_active_view
     if context.original_cwd then pcall(system.chdir, context.original_cwd) end
@@ -105,6 +121,8 @@ target :: proc() {}
     local view = core.open_file(main_path)
     core.set_active_view(view)
     test.ok(wait_ready(view.doc))
+    view.doc:insert(5, 1, "// local edit\n")
+    test.ok(view.doc:is_dirty())
     view:with_selection_state(function()
       view.doc:set_selection(4, 5)
     end)
@@ -115,6 +133,13 @@ target :: proc() {}
       return active and active.doc and common.path_equals(active.doc.abs_filename, defs_path)
     end))
 
+    local project_file_tabs = 0
+    for _, item in ipairs(core.root_panel:get_main_panel().views) do
+      if item.doc and item.doc.abs_filename and common.path_belongs_to(item.doc.abs_filename, context.temp_root) then
+        project_file_tabs = project_file_tabs + 1
+      end
+    end
+    test.equal(project_file_tabs, 1)
     local doc = core.active_view.doc
     local line1, col1, line2, col2 = doc:get_selection(true)
     test.equal(line1, 3)

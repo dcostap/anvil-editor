@@ -1826,9 +1826,24 @@ local function open_completion_source_view(item, target_side, line1, col1, line2
     return nil
   end
 
+  local ok, sidepanel = pcall(require, "core.sidepanel")
   local active_docview = get_active_view()
-  if path and path ~= "" then return core.open_file(path) end
-  if item.source_doc and (not active_docview or active_docview.doc ~= item.source_doc) then
+  if ok and sidepanel then
+    local opts = {
+      line = line1,
+      col = col1,
+      line2 = line2,
+      col2 = col2,
+      source_view = active_docview,
+      replace_dirty_singleton = true,
+    }
+    if path and path ~= "" then return sidepanel.open_path_in_main(path, opts) end
+    if item.source_doc and (not active_docview or active_docview.doc ~= item.source_doc) then
+      return sidepanel.open_doc_in_main(item.source_doc, opts)
+    end
+  elseif path and path ~= "" then
+    return core.open_file(path)
+  elseif item.source_doc and (not active_docview or active_docview.doc ~= item.source_doc) then
     return core.root_panel:open_doc(item.source_doc)
   end
   return active_docview

@@ -98,12 +98,15 @@ local function open_location(result, opts)
   local path = result_path(result)
   if not path then return false, "location has no path" end
   local target_side = opts.side == true
+  local sidepanel = require "core.sidepanel"
   local view
   if target_side then
-    local sidepanel = require "core.sidepanel"
     view = sidepanel.open_path_in_side(path, { focus = true, restore_focus = opts.view })
   else
-    view = core.open_file(path)
+    view = sidepanel.open_path_in_main(path, {
+      source_view = opts.view,
+      replace_dirty_singleton = true,
+    })
   end
   if not view or not view.doc then return false, "failed to open target" end
   local range = result_doc_range(view, result)

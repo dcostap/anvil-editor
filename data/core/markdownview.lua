@@ -3848,7 +3848,12 @@ function MarkdownView:open_link(url)
     if MarkdownView.is_supported(project_target) then
       core.open_markdown(project_target)
     else
-      core.open_file(project_target)
+      local ok, sidepanel = pcall(require, "core.sidepanel")
+      if ok and sidepanel then
+        sidepanel.open_path_in_main(project_target, { replace_dirty_singleton = true })
+      else
+        core.open_file(project_target)
+      end
     end
   else
     common.open_in_system(url)

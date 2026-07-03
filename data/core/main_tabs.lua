@@ -205,7 +205,7 @@ function M.open_doc(doc, opts)
   end
 
   local insert_idx = old_idx
-  if promote_dirty_singleton_if_needed(node, editor) then
+  if not opts.replace_dirty_singleton and promote_dirty_singleton_if_needed(node, editor) then
     insert_idx = old_idx + 1
   else
     remove_view_raw(node, editor)

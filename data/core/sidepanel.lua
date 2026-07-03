@@ -810,7 +810,11 @@ function M.open_doc_in_main(doc, opts)
   local main_panel = core.root_panel and core.root_panel:get_main_panel()
   if not main_panel then return nil end
 
-  local view = core.root_panel:open_doc(doc, { node = main_panel, source_view = opts.source_view })
+  local view = core.root_panel:open_doc(doc, {
+    node = main_panel,
+    source_view = opts.source_view,
+    replace_dirty_singleton = opts.replace_dirty_singleton == true,
+  })
   if opts.source_view then
     copy_docview_position(opts.source_view, view)
   end
@@ -848,7 +852,10 @@ function M.open_path_in_main(path, opts)
         source_view = opts.source_view,
         line = opts.line,
         col = opts.col,
+        line2 = opts.line2,
+        col2 = opts.col2,
         focus = opts.preserve_focus == true and false or true,
+        replace_dirty_singleton = opts.replace_dirty_singleton == true,
       })
     else
       view = core.open_file(path)

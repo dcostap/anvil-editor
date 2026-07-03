@@ -5,9 +5,9 @@ local common = require "core.common"
 local command = require "core.command"
 local file_context = require "core.file_context"
 local keymap = require "core.keymap"
+local sidepanel = require "core.sidepanel"
 local style = require "core.style"
 local StatusBar = require "core.statusbar"
-local DocView = require "core.docview"
 
 ---Configuration options for `findfile` plugin.
 ---@class config.plugins.findfile
@@ -313,15 +313,11 @@ end
 local function open_file_in_project(project, path, line)
   local filename = file_in_project(project, path)
   if filename then
-    local line_num = line or 1
-    local view = core.open_file(filename)
-
-    if view:is(DocView) then
-      local doc = view.doc
-      local line = math.min(line_num, math.max(1, #doc.lines))
-      doc:set_selection(line_num, 1, line_num, 1)
-      view:scroll_to_line(line_num, true, true)
-    end
+    sidepanel.open_path_in_main(filename, {
+      line = line or 1,
+      col = 1,
+      replace_dirty_singleton = true,
+    })
   end
 end
 
