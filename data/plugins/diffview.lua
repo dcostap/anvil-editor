@@ -1906,29 +1906,6 @@ command.add(text_compare_with_predicate, {
 })
 
 
--- Register context menu items
-core.add_thread(function()
-  if config.plugins.cotextmenu then
-    local contextmenu = require "plugins.contextmenu"
-
-    contextmenu:register(text_select_compare_predicate, {
-      contextmenu.DIVIDER,
-      {
-        text = "Select Text for Compare",
-        command = "diff-view:select-text-for-compare"
-      }
-    })
-
-    contextmenu:register(text_compare_with_predicate, {
-      {
-        text = "Compare Text with Selected",
-        command = "diff-view:compare-text-with-selected"
-      }
-    })
-  end
-end)
-
-
 
 local compare_add_to_root_node
 local diffview

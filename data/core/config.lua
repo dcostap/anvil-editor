@@ -260,8 +260,6 @@ config.disabled_transitions = {
   scroll = false,
   ---Disables transitions for GlobalPromptBar's suggestions list.
   global_prompt_bar = false,
-  ---Disables transitions for showing/hiding the context menu.
-  contextmenu = false,
   ---Disables transitions when clicking on log items in LogView.
   logview = false,
   ---Disables transitions for showing/hiding the Nagbar.

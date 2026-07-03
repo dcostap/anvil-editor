@@ -374,12 +374,6 @@ settings.add("Graphics",
       default = false
     },
     {
-      label = "Disable Context Menu Transitions",
-      path = "disabled_transitions.contextmenu",
-      type = settings.type.TOGGLE,
-      default = false
-    },
-    {
       label = "Disable Log View Transitions",
       path = "disabled_transitions.logview",
       type = settings.type.TOGGLE,
