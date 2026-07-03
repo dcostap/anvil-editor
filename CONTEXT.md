@@ -28,6 +28,10 @@ _Avoid_: Session, app state
 A search over named code symbols across a loaded Project.
 _Avoid_: global symbol search
 
+**Project Usage Search**:
+A search for syntactic usages of a named code symbol across a loaded Project.
+_Avoid_: semantic references, global references
+
 **Current Document Symbol Search**:
 A search over named code symbols in the active Document only.
 _Avoid_: local symbol search, file symbol search
