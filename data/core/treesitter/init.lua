@@ -472,6 +472,10 @@ local function patch_doc()
   function Doc:save(...)
     local result = old_save(self, ...)
     treesitter.attach_or_update_doc(self, "save")
+    local path = doc_path(self)
+    if path and ts_symbol_index.reindex_file then
+      ts_symbol_index.reindex_file(path, { force = true, reason = "save" })
+    end
     return result
   end
 

@@ -496,6 +496,67 @@ fun makeB(): BThing = BThing()
     common.rm(root, true)
   end)
 
+  test.it("Tree-sitter targeted file reindex updates disk-backed Project usages", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-targeted-reindex-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    local path = root .. PATHSEP .. "Model.kt"
+    write_file(path, [[package demo
+
+class OldDiskThing
+
+fun make(): OldDiskThing = OldDiskThing()
+]])
+
+    local refs, reason, status = wait_workspace_usages("OldDiskThing", {
+      root = root,
+      force = true,
+      include_declaration = false,
+      limit = 20,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 2)
+
+    write_file(path, [[package demo
+
+class NewDiskThing
+
+fun make(): NewDiskThing = NewDiskThing()
+]])
+    local changed
+    changed, reason = symbol_index.reindex_file(path, { force = true, sync = true, reason = "test" })
+    test.ok(changed, reason)
+
+    refs, reason, status = wait_workspace_usages("OldDiskThing", {
+      root = root,
+      include_declaration = false,
+      limit = 20,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 0)
+
+    refs, reason, status = wait_workspace_usages("NewDiskThing", {
+      root = root,
+      include_declaration = false,
+      limit = 20,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 2)
+
+    os.remove(path)
+    changed, reason = symbol_index.reindex_file(path, { force = true, sync = true, reason = "delete" })
+    test.ok(changed, reason)
+    refs, reason, status = wait_workspace_usages("NewDiskThing", {
+      root = root,
+      include_declaration = false,
+      limit = 20,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 0)
+    common.rm(root, true)
+  end)
+
   test.it("Tree-sitter workspace usages use live Document overlays without poisoning disk index", function()
     symbol_index.reset_for_tests()
     local root = USERDIR .. PATHSEP .. "treesitter-live-usage-index-"

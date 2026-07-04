@@ -53,6 +53,7 @@ local function new_index(root)
     usage_truncated_reason = nil,
     by_path = {},
     open_docs = {},
+    pending_reindex_paths = {},
     files_total = 0,
     files_scanned = 0,
     files_indexed = 0,
@@ -534,6 +535,16 @@ local function scan_index(index, generation)
   log_quiet("Tree-sitter Project index: indexed %d symbol(s), %d usage(s)%s from %d supported file(s) under %s in %.1fms",
     #index.symbols, index.usage_count or 0, index.usage_truncated and " (truncated)" or "",
     index.files_total, index.root, ((index.finished_at or system.get_time()) - (index.started_at or system.get_time())) * 1000)
+
+  local pending = index.pending_reindex_paths
+  if pending and next(pending) ~= nil then
+    index.pending_reindex_paths = {}
+    for path, reason in pairs(pending) do
+      if symbol_index.reindex_file then
+        symbol_index.reindex_file(path, { force = true, reason = reason or "queued-during-indexing" })
+      end
+    end
+  end
 end
 
 function symbol_index.ensure_scan(root, opts)
@@ -900,22 +911,119 @@ function symbol_index.clear_open_document(doc, reason)
   return cleared
 end
 
+local function reindex_file_for_index(index, path, opts)
+  opts = opts or {}
+  if not index or not path or not common.path_belongs_to(path, index.root) then return false, "outside-project" end
+  local info = system.get_file_info(path)
+  local changed = false
+
+  if not info or info.type ~= "file" then
+    if index.by_path[path] then
+      index.by_path[path] = nil
+      changed = true
+    end
+    if index.open_docs[path] then
+      index.open_docs[path] = nil
+      changed = true
+    end
+    if changed then rebuild_disk_aggregates(index) end
+    return changed, info and "not-file" or "missing"
+  end
+
+  local language = registry.get(path)
+  if not language or not language.query_sources or not language.query_sources.outline then
+    if index.by_path[path] then
+      index.by_path[path] = nil
+      changed = true
+      rebuild_disk_aggregates(index)
+    end
+    index.open_docs[path] = nil
+    return changed, "unsupported"
+  end
+
+  local fingerprint = file_fingerprint(path, info, language)
+  local cached = index.by_path[path]
+  if not opts.force and cached and cached.fingerprint == fingerprint then return false, "fresh" end
+
+  local relpath = common.relative_path(index.root, path):gsub("\\", "/")
+  local entry, err = parse_file_index(path, relpath, info, language, { include_usages = true })
+  if entry then
+    replace_file_entry(index, path, fingerprint, entry)
+    changed = true
+  else
+    replace_file_entry(index, path, fingerprint, { symbols = {}, usages_by_name = {}, usage_count = 0 })
+    changed = true
+    log_quiet("Tree-sitter Project index: skipped targeted reindex for %s: %s", tostring(relpath), tostring(err))
+  end
+
+  index.open_docs[path] = nil
+  rebuild_disk_aggregates(index)
+  return changed, err
+end
+
+local function run_reindex_file(path, opts)
+  opts = opts or {}
+  local changed = false
+  local matched = false
+  for _, index in pairs(indexes) do
+    if common.path_belongs_to(path, index.root) then
+      matched = true
+      local generation = index.generation
+      if index.status == "idle" then
+        symbol_index.ensure_scan(index.root, { force = true })
+      elseif index.status == "indexing" then
+        index.pending_reindex_paths = index.pending_reindex_paths or {}
+        index.pending_reindex_paths[path] = opts.reason or "queued-during-indexing"
+        log_quiet("Tree-sitter Project index: queued targeted reindex for %s under %s while indexing (%s)",
+          tostring(path), tostring(index.root), tostring(index.pending_reindex_paths[path]))
+        changed = true
+      else
+        index.generation = index.generation + 1
+        generation = index.generation
+        index.status = "indexing"
+        index.symbol_status = "indexing"
+        index.usage_status = "indexing"
+        index.reason = opts.reason or "file-dirty"
+        index.started_at = system.get_time()
+        index.finished_at = nil
+
+        local ok, result, detail = pcall(reindex_file_for_index, index, path, opts)
+        if generation == index.generation then
+          index.status = "ready"
+          index.symbol_status = "ready"
+          index.usage_status = "ready"
+          index.reason = nil
+          index.finished_at = system.get_time()
+          core.redraw = true
+        end
+        if ok then
+          changed = result or changed
+          log_quiet("Tree-sitter Project index: targeted reindex %s under %s changed=%s reason=%s detail=%s",
+            tostring(path), tostring(index.root), tostring(result), tostring(opts.reason or "file-dirty"), tostring(detail))
+        else
+          log_quiet("Tree-sitter Project index: targeted reindex failed for %s under %s: %s", tostring(path), tostring(index.root), tostring(result))
+        end
+      end
+    end
+  end
+  return matched and changed, matched and nil or "no-index"
+end
+
+function symbol_index.reindex_file(path, opts)
+  opts = opts or {}
+  path = path and common.normalize_path(path)
+  if not path then return false, "no-path" end
+  if opts.sync then return run_reindex_file(path, opts) end
+  core.add_thread(function()
+    run_reindex_file(path, opts)
+  end)
+  return true
+end
+
 function symbol_index.mark_file_dirty(path, reason)
   path = path and common.normalize_path(path)
   if not path then return false end
-  local changed = false
-  for _, index in pairs(indexes) do
-    if common.path_belongs_to(path, index.root) then
-      if index.by_path[path] then
-        index.by_path[path] = nil
-        changed = true
-      end
-      index.open_docs[path] = nil
-      symbol_index.ensure_scan(index.root, { force = true })
-    end
-  end
-  if changed then log_quiet("Tree-sitter Project index: marked dirty %s (%s)", tostring(path), tostring(reason or "dirty")) end
-  return changed
+  return symbol_index.reindex_file(path, { force = true, reason = reason or "dirty" })
 end
 
 function symbol_index.current_document_symbols(doc, query, opts)

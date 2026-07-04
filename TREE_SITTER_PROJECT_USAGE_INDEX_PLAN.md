@@ -536,11 +536,12 @@ Implemented:
 - `symbol_index.workspace_usages(...)`, with `workspace_references(...)` kept as a compatibility wrapper.
 - `language:show-references` Tree-sitter fallback now uses Project usages and no longer has a user-facing wait timeout.
 - Live open-Document overlay support so dirty buffers can override disk-backed entries without poisoning the disk index.
+- Targeted disk-backed `symbol_index.reindex_file(path, ...)` support for saved/dirty files, including deletion/unsupported-file cleanup.
+- Save-time Tree-sitter Project index refresh for the saved file.
 - Usage cap/truncation metadata and UI status handling for truncated usage indexes.
-- Regression tests for Project-wide Kotlin usages, declaration filtering, eager indexing, live overlays, and cap-skipped files.
+- Regression tests for Project-wide Kotlin usages, declaration filtering, eager indexing, live overlays, cap-skipped files, and targeted disk-backed reindexing.
 
 Not fully done / follow-up items:
 
 - Project Symbol Search readiness is not fully decoupled from usage indexing. Partial/stale symbol results are improved during scans, but `symbol_status = "ready"` is still reached at the end of the combined symbols+usages scan.
-- There is no complete targeted disk-backed `reindex_file(path)` implementation yet. Save-time behavior relies on live overlays plus normal Project refresh rather than a precise one-file disk reindex.
-- External file dirty/dirwatch integration remains minimal. Full Project refresh still handles eventual pruning/refresh for external edits/deletes.
+- External file dirty/dirwatch integration remains minimal. Full Project refresh still handles eventual pruning/refresh for external edits/deletes, and non-save external edits need a broader file-watch hook to become precise.
