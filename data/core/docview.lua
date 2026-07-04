@@ -765,6 +765,8 @@ function DocView:new(doc)
   self.__fold_next_id = 0
   self.visual_row_extensions = {}
   self.visual_row_providers = {}
+  self.visual_metric_providers = {}
+  self.__visual_metric_generation = 0
   self.decoration_providers = {}
   self.poi_providers = {}
   self.selection_listeners = {}
@@ -954,6 +956,20 @@ end
 ---Get the total scrollable height of the document.
 ---@return number height Total height in pixels
 function DocView:get_scrollable_size()
+  local cache = self:get_visual_row_metric_cache()
+  if cache then
+    local h_scroll = self:get_horizontal_scrollbar_height()
+    local text_height = cache.total_height + style.padding.y * 2
+    local content_height = text_height + h_scroll
+    if config.scroll_past_end then
+      local pad = self:get_scroll_past_end_context_lines()
+      local last_line_y = style.padding.y + self:get_visual_row_y_offset(cache.row_count)
+      local context_height = self:get_visual_row_height(cache.row_count) * (pad + 1)
+      local max_scroll = math.max(0, last_line_y - self:get_vertical_viewport_height() + context_height)
+      return math.max(self.size.y, max_scroll + self.size.y)
+    end
+    return content_height <= self.size.y and self.size.y or content_height
+  end
   return self:get_scrollable_size_for_line_count(self:get_scrollable_line_count())
 end
 
@@ -1069,6 +1085,43 @@ end
 ---@return integer height Line height including line spacing
 function DocView:get_line_height()
   return math.floor(self:get_font():get_height() * config.line_height)
+end
+
+function DocView:has_visual_metric_providers()
+  return next(self.visual_metric_providers or {}) ~= nil
+end
+
+function DocView:add_visual_metric_provider(id, provider, opts)
+  assert(type(id) == "string" and id ~= "", "visual metric provider id must be a non-empty string")
+  assert(type(provider) == "table", "visual metric provider must be a table")
+  opts = opts or {}
+  self.visual_metric_providers = self.visual_metric_providers or {}
+  self.visual_metric_providers[id] = { id = id, provider = provider, priority = opts.priority or provider.priority or 0 }
+  self:invalidate_visual_metrics(id)
+end
+
+function DocView:remove_visual_metric_provider(id)
+  if not self.visual_metric_providers or not self.visual_metric_providers[id] then return false end
+  self.visual_metric_providers[id] = nil
+  self:invalidate_visual_metrics(id)
+  return true
+end
+
+function DocView:invalidate_visual_metrics(_provider_id)
+  self.__visual_metric_generation = (self.__visual_metric_generation or 0) + 1
+  self.__visual_metric_cache = nil
+end
+
+function DocView:visual_metric_provider_entries()
+  local result = {}
+  for _, entry in pairs(self.visual_metric_providers or {}) do
+    result[#result + 1] = entry
+  end
+  table.sort(result, function(a, b)
+    if a.priority == b.priority then return a.id < b.id end
+    return a.priority < b.priority
+  end)
+  return result
 end
 
 
@@ -1991,12 +2044,116 @@ function DocView:get_visual_row_entry(target_row)
   return self:composed_visual_rows()[target_row]
 end
 
+function DocView:get_metric_row_entry(row)
+  if self:has_composed_visual_rows() then
+    return self:get_visual_row_entry(row)
+  elseif self.wrapped_settings then
+    local line = linewrapping.get_idx_line_col(self, row)
+    return { type = "line", line = line, row_in_line = math.max(1, row - (self.wrapped_line_to_idx[line] or row) + 1), absolute_row = row, row = row, wrapped_idx = row }
+  end
+  return { type = "line", line = row, row_in_line = 1, absolute_row = row, row = row }
+end
+
+function DocView:get_visual_metric_signature()
+  local parts = {
+    tostring(self:get_scrollable_line_count()),
+    tostring(self:get_line_height()),
+    tostring(self.doc.text_revision or 0),
+    tostring(self.fold_generation or 0),
+    tostring(self.__wrap_layout_generation or 0),
+    tostring(self.__visual_metric_generation or 0),
+  }
+  for _, entry in ipairs(self:visual_metric_provider_entries()) do
+    parts[#parts + 1] = tostring(entry.id)
+    parts[#parts + 1] = tostring(entry.priority)
+    local provider = entry.provider
+    if provider and provider.generation then
+      local ok, gen = pcall(provider.generation, provider, self)
+      parts[#parts + 1] = ok and tostring(gen) or "error"
+    end
+  end
+  return table.concat(parts, "|")
+end
+
+function DocView:get_visual_row_metric_cache()
+  if not self:has_visual_metric_providers() then return nil end
+  local signature = self:get_visual_metric_signature()
+  local cache = self.__visual_metric_cache
+  if cache and cache.signature == signature then return cache end
+
+  local row_count = self:get_scrollable_line_count()
+  local heights = {}
+  local offsets = { [1] = 0 }
+  local default_height = self:get_line_height()
+  local total = 0
+  local providers = self:visual_metric_provider_entries()
+  for row = 1, row_count do
+    local entry = self:get_metric_row_entry(row)
+    local height = default_height
+    for _, provider_entry in ipairs(providers) do
+      local provider = provider_entry.provider
+      if provider and provider.line_height then
+        local ok, value = pcall(provider.line_height, provider, self, entry.line, entry)
+        if ok and value then
+          height = math.max(1, tonumber(value) or height)
+        elseif not ok then
+          core.log_quiet("DocView visual metric provider %s.line_height failed for %s: %s", tostring(provider_entry.id), self.doc:get_name(), tostring(value))
+        end
+      end
+    end
+    heights[row] = height
+    total = total + height
+    offsets[row + 1] = total
+  end
+  cache = { signature = signature, heights = heights, offsets = offsets, total_height = total, row_count = row_count }
+  self.__visual_metric_cache = cache
+  return cache
+end
+
+function DocView:get_visual_row_height(row)
+  local cache = self:get_visual_row_metric_cache()
+  return cache and cache.heights[common.clamp(row, 1, cache.row_count)] or self:get_line_height()
+end
+
+function DocView:get_visual_row_y_offset(row)
+  local cache = self:get_visual_row_metric_cache()
+  if cache then return cache.offsets[common.clamp(row, 1, cache.row_count + 1)] or 0 end
+  return math.max(0, row - 1) * self:get_line_height()
+end
+
+function DocView:get_visual_row_at_y(y)
+  local cache = self:get_visual_row_metric_cache()
+  if not cache then
+    return common.clamp(math.floor(y / self:get_line_height()) + 1, 1, self:get_scrollable_line_count())
+  end
+  local lo, hi = 1, cache.row_count
+  while lo <= hi do
+    local mid = math.floor((lo + hi) / 2)
+    if y < cache.offsets[mid] then
+      hi = mid - 1
+    elseif y >= cache.offsets[mid + 1] then
+      lo = mid + 1
+    else
+      return mid
+    end
+  end
+  return common.clamp(lo, 1, cache.row_count)
+end
+
 function DocView:iter_visible_visual_rows()
   local _, y1, _, y2 = self:get_content_bounds()
-  local lh = self:get_line_height()
   local total = self:get_scrollable_line_count()
-  local row = math.max(1, math.floor((y1 - style.padding.y) / lh) + 1)
-  local last = math.min(total, math.floor((y2 - style.padding.y) / lh) + 1)
+  local cache = self:get_visual_row_metric_cache()
+  local row, last
+  if cache then
+    row = self:get_visual_row_at_y(math.max(0, y1 - style.padding.y))
+    last = self:get_visual_row_at_y(math.max(0, y2 - style.padding.y))
+  else
+    local lh = self:get_line_height()
+    row = math.max(1, math.floor((y1 - style.padding.y) / lh) + 1)
+    last = math.min(total, math.floor((y2 - style.padding.y) / lh) + 1)
+  end
+  last = math.min(total, last)
   local x, base_y = self:get_content_offset()
   return function()
     if row > last then return nil end
@@ -2004,7 +2161,8 @@ function DocView:iter_visible_visual_rows()
     row = row + 1
     local entry = self:get_visual_row_entry(current)
     entry.visual_row = current
-    entry.y = base_y + (current - 1) * lh + style.padding.y
+    entry.y = base_y + self:get_visual_row_y_offset(current) + style.padding.y
+    entry.height = self:get_visual_row_height(current)
     return entry
   end
 end
@@ -2220,15 +2378,13 @@ function DocView:get_line_screen_position(line, col, line_end)
       idx = linewrapping.get_line_idx_col_count(self, line, col, line_end)
     end
     local x, y = self:get_content_offset()
-    local lh = self:get_line_height()
     local gw = self:get_gutter_width()
-    return x + gw + (col and self:get_col_x_offset(line, col, line_end) or 0), y + (idx - 1) * lh + style.padding.y
+    return x + gw + (col and self:get_col_x_offset(line, col, line_end) or 0), y + self:get_visual_row_y_offset(idx) + style.padding.y
   end
   local x, y = self:get_content_offset()
-  local lh = self:get_line_height()
   local gw = self:get_gutter_width()
   local row = self:has_composed_visual_rows() and self:get_composed_visual_row_for_position(line, col, line_end) or line
-  y = y + (row-1) * lh + style.padding.y
+  y = y + self:get_visual_row_y_offset(row) + style.padding.y
   if col then
     return x + gw + self:get_col_x_offset(line, col), y
   else
@@ -2304,25 +2460,29 @@ end
 ---@return integer maxline Last visible line
 function DocView:get_visible_line_range()
   local x, y, x2, y2 = self:get_content_bounds()
+  local cache = self:get_visual_row_metric_cache()
   local lh = self:get_line_height()
   if self:has_composed_visual_rows() then
     local total = self:get_composed_visual_row_count()
-    local minidx = math.max(1, math.floor((y - style.padding.y) / lh) + 1)
-    local maxidx = math.min(total, math.floor((y2 - style.padding.y) / lh) + 1)
+    local minidx = cache and self:get_visual_row_at_y(math.max(0, y - style.padding.y)) or math.max(1, math.floor((y - style.padding.y) / lh) + 1)
+    local maxidx = cache and self:get_visual_row_at_y(math.max(0, y2 - style.padding.y)) or math.min(total, math.floor((y2 - style.padding.y) / lh) + 1)
+    minidx = common.clamp(minidx, 1, total)
+    maxidx = common.clamp(maxidx, 1, total)
     local first = self:get_visual_row_entry(minidx)
     local last = self:get_visual_row_entry(maxidx)
     return first and first.line or 1, last and (last.fold and last.fold.line2 or last.line) or #self.doc.lines
   end
   if self.wrapped_settings then
-    local minidx = math.max(1, math.floor((y - style.padding.y) / lh) + 1)
-    local maxidx = math.min(linewrapping.get_total_wrapped_lines(self), math.floor((y2 - style.padding.y) / lh) + 1)
-    local minline = linewrapping.get_idx_line_col(self, minidx)
-    local maxline = linewrapping.get_idx_line_col(self, maxidx)
+    local total = linewrapping.get_total_wrapped_lines(self)
+    local minidx = cache and self:get_visual_row_at_y(math.max(0, y - style.padding.y)) or math.max(1, math.floor((y - style.padding.y) / lh) + 1)
+    local maxidx = cache and self:get_visual_row_at_y(math.max(0, y2 - style.padding.y)) or math.min(total, math.floor((y2 - style.padding.y) / lh) + 1)
+    local minline = linewrapping.get_idx_line_col(self, common.clamp(minidx, 1, total))
+    local maxline = linewrapping.get_idx_line_col(self, common.clamp(maxidx, 1, total))
     return minline, maxline
   end
-  local minline = math.max(1, math.floor((y - style.padding.y) / lh) + 1)
-  local maxline = math.min(#self.doc.lines, math.floor((y2 - style.padding.y) / lh) + 1)
-  return minline, maxline
+  local minline = cache and self:get_visual_row_at_y(math.max(0, y - style.padding.y)) or math.max(1, math.floor((y - style.padding.y) / lh) + 1)
+  local maxline = cache and self:get_visual_row_at_y(math.max(0, y2 - style.padding.y)) or math.min(#self.doc.lines, math.floor((y2 - style.padding.y) / lh) + 1)
+  return common.clamp(minline, 1, #self.doc.lines), common.clamp(maxline, 1, #self.doc.lines)
 end
 
 
@@ -2502,7 +2662,7 @@ function DocView:resolve_screen_position(x, y)
     local content_x, content_y = self:get_content_offset()
     local ox, oy = content_x + self:get_gutter_width(), content_y + style.padding.y
     local total = self:has_composed_visual_rows() and self:get_composed_visual_row_count() or linewrapping.get_total_wrapped_lines(self)
-    local idx = common.clamp(math.floor((y - oy) / self:get_line_height()) + 1, 1, total)
+    local idx = common.clamp(self:get_visual_row_at_y(math.max(0, y - oy)), 1, total)
     if self:has_composed_visual_rows() then
       local entry = self:get_visual_row_entry(idx)
       if entry and entry.type == "fold" then
@@ -2514,7 +2674,7 @@ function DocView:resolve_screen_position(x, y)
         self.wrapped_last_resolved_line_end = nil
         local row = entry.provider_row
         if row and row.hit_test then
-          local ok, line, col = pcall(row.hit_test, self, row, x - ox, y - (content_y + style.padding.y + (idx - 1) * self:get_line_height()))
+          local ok, line, col = pcall(row.hit_test, self, row, x - ox, y - (content_y + style.padding.y + self:get_visual_row_y_offset(idx)))
           if ok and line then return line, col or 1 end
           if not ok then core.log_quiet("DocView provider row hit_test failed for %s: %s", self.doc:get_name(), tostring(line)) end
         end
@@ -2531,7 +2691,7 @@ function DocView:resolve_screen_position(x, y)
   end
   local content_x, content_y = self:get_content_offset()
   local ox, oy = content_x + self:get_gutter_width(), content_y + style.padding.y
-  local row = math.floor((y - oy) / self:get_line_height()) + 1
+  local row = self:get_visual_row_at_y(math.max(0, y - oy))
   local line = common.clamp(row, 1, #self.doc.lines)
   if self:has_composed_visual_rows() then
     local entry = self:get_visual_row_entry(common.clamp(row, 1, self:get_composed_visual_row_count()))
@@ -2542,7 +2702,7 @@ function DocView:resolve_screen_position(x, y)
       self.resolved_provider_row = entry
       local row_obj = entry.provider_row
       if row_obj and row_obj.hit_test then
-        local ok, hit_line, hit_col = pcall(row_obj.hit_test, self, row_obj, x - ox, y - (content_y + style.padding.y + (entry.absolute_row - 1) * self:get_line_height()))
+        local ok, hit_line, hit_col = pcall(row_obj.hit_test, self, row_obj, x - ox, y - (content_y + style.padding.y + self:get_visual_row_y_offset(entry.absolute_row)))
         if ok and hit_line then return hit_line, hit_col or 1 end
         if not ok then core.log_quiet("DocView provider row hit_test failed for %s: %s", self.doc:get_name(), tostring(hit_line)) end
       end
@@ -4516,8 +4676,11 @@ function DocView:draw_wrapped()
   local lh = self:get_line_height()
   local _, y1, _, y2 = self:get_content_bounds()
   local total = linewrapping.get_total_wrapped_lines(self)
-  local minidx = math.max(1, math.floor((y1 - style.padding.y) / lh) + 1)
-  local maxidx = math.min(total, math.floor((y2 - style.padding.y) / lh) + 1)
+  local cache = self:get_visual_row_metric_cache()
+  local minidx = cache and self:get_visual_row_at_y(math.max(0, y1 - style.padding.y)) or math.max(1, math.floor((y1 - style.padding.y) / lh) + 1)
+  local maxidx = cache and self:get_visual_row_at_y(math.max(0, y2 - style.padding.y)) or math.min(total, math.floor((y2 - style.padding.y) / lh) + 1)
+  minidx = common.clamp(minidx, 1, total)
+  maxidx = common.clamp(maxidx, 1, total)
   if maxidx < minidx then
     self:draw_scrollbar()
     return
@@ -4536,7 +4699,7 @@ function DocView:draw_wrapped()
   for line = first_line, last_line do
     local first_idx = self.wrapped_line_to_idx[line]
     if first_idx then
-      local y = base_y + (first_idx - 1) * lh + style.padding.y
+      local y = base_y + self:get_visual_row_y_offset(first_idx) + style.padding.y
       self:draw_line_gutter(line, self.position.x, y, gutter_w)
     end
   end
@@ -4545,7 +4708,7 @@ function DocView:draw_wrapped()
   for line = first_line, last_line do
     local first_idx = self.wrapped_line_to_idx[line]
     if first_idx then
-      local y = base_y + (first_idx - 1) * lh + style.padding.y
+      local y = base_y + self:get_visual_row_y_offset(first_idx) + style.padding.y
       self:draw_line_body(line, x + gw, y)
     end
   end
@@ -4607,7 +4770,8 @@ function DocView:draw()
   local gw, gpad = self:get_gutter_width()
   local gutter_start = stats and system.get_time()
   for i = minline, maxline do
-    y = y + (self:draw_line_gutter(i, self.position.x, y, gpad and gw - gpad or gw) or lh)
+    local _, line_y = self:get_line_screen_position(i)
+    self:draw_line_gutter(i, self.position.x, line_y, gpad and gw - gpad or gw)
   end
   if stats then stats.gutter_ms = stats.gutter_ms + (system.get_time() - gutter_start) * 1000 end
 
@@ -4618,7 +4782,8 @@ function DocView:draw()
   core.push_clip_rect(pos.x + gw, pos.y, self.size.x - gw, self.size.y)
   local body_start = stats and system.get_time()
   for i = minline, maxline do
-    y = y + (self:draw_line_body(i, x, y) or lh)
+    local line_x, line_y = self:get_line_screen_position(i)
+    self:draw_line_body(i, line_x, line_y)
   end
   if stats then stats.body_ms = stats.body_ms + (system.get_time() - body_start) * 1000 end
   self:draw_overlay()
