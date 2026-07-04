@@ -2,6 +2,7 @@ local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
 local ImageView = require "core.imageview"
+local markdown_images = require "core.markdown.images"
 local style = require "core.style"
 local syntax = require "core.syntax"
 local tokenizer = require "core.tokenizer"
@@ -778,23 +779,8 @@ local function normalize_list_nesting(items)
   end
 end
 
-local function hash_text(text)
-  local hash = 2166136261
-  for i = 1, #text do
-    hash = (hash * 16777619 + text:byte(i)) % 4294967296
-  end
-  return string.format("%08x", hash)
-end
-
 local function get_image_cache_path(url)
-  local normalized = url:match("^[^?#]+") or url
-  local ext = normalized:match("%.([%w]+)$")
-  if ext then
-    ext = ext:lower()
-  else
-    ext = "img"
-  end
-  return IMAGE_CACHE_DIR .. PATHSEP .. "markdown-image-" .. hash_text(url) .. "." .. ext
+  return markdown_images.get_image_cache_path(url, IMAGE_CACHE_DIR)
 end
 
 local function get_reference_definition(line)
@@ -3848,12 +3834,7 @@ function MarkdownView:open_link(url)
     if MarkdownView.is_supported(project_target) then
       core.open_markdown(project_target)
     else
-      local ok, sidepanel = pcall(require, "core.sidepanel")
-      if ok and sidepanel then
-        sidepanel.open_path_in_main(project_target, { replace_dirty_singleton = true })
-      else
-        core.open_file(project_target)
-      end
+      core.open_file(project_target)
     end
   else
     common.open_in_system(url)
