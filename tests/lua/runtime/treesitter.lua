@@ -781,6 +781,7 @@ late_symbol :: proc() {}
     results, _reason, status = wait_workspace_symbols("late", { root = root, limit = 10, force = true })
     test.equal(status, "fresh")
     test.ok(find_symbol(results, "late_symbol", "function"))
+    test.equal(wait_index_ready(root).status, "ready")
 
     os.remove(root .. PATHSEP .. "player.odin")
     results, _reason, status = wait_workspace_symbols("Player", { root = root, limit = 10, force = true })

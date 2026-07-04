@@ -1250,6 +1250,9 @@ function symbol_index.status(root)
 end
 
 function symbol_index.reset_for_tests()
+  for _, index in pairs(indexes) do
+    index.generation = (index.generation or 0) + 1
+  end
   indexes = {}
   open_documents = setmetatable({}, { __mode = "v" })
   query_cache = {}

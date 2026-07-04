@@ -86,6 +86,8 @@ test.describe("language navigation", function()
         end
       end
       if context.original_cwd then pcall(system.chdir, context.original_cwd) end
+      symbol_index.reset_for_tests()
+      coroutine.yield(0.05)
       if system.get_file_info(context.temp_root) then
         local ok, err = common.rm(context.temp_root, true)
         test.ok(ok, err)
