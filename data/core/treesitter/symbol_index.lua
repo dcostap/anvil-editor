@@ -1,6 +1,7 @@
 local core = require "core"
 local common = require "core.common"
 local Project = require "core.project"
+local DirWatch = require "core.dirwatch"
 local registry = require "core.treesitter.registry"
 local outline = require "core.treesitter.outline"
 
@@ -55,6 +56,10 @@ local function new_index(root)
     open_docs = {},
     pending_reindex_paths = {},
     pending_reindex_dirs = {},
+    watcher = nil,
+    watched_dirs = {},
+    watch_generation = 0,
+    watch_running = false,
     files_total = 0,
     files_scanned = 0,
     files_indexed = 0,
@@ -461,9 +466,13 @@ local function drain_pending_reindexes(index)
   if pending_dirs and next(pending_dirs) ~= nil then
     index.pending_reindex_dirs = {}
     drained = true
-    for dir, reason in pairs(pending_dirs) do
+    for dir, pending in pairs(pending_dirs) do
       if symbol_index.mark_directory_dirty then
-        symbol_index.mark_directory_dirty(dir, reason or "queued-during-indexing")
+        if type(pending) == "table" then
+          symbol_index.mark_directory_dirty(dir, pending.reason or "queued-during-indexing", { force = pending.force })
+        else
+          symbol_index.mark_directory_dirty(dir, pending or "queued-during-indexing")
+        end
       end
     end
   end
@@ -481,10 +490,117 @@ local function drain_pending_reindexes(index)
   return drained
 end
 
+local function watch_dir(index, dir)
+  if not index or not index.watcher or not dir then return false end
+  dir = common.normalize_path(dir)
+  if index.watched_dirs[dir] then return false end
+  local info = system.get_file_info(dir)
+  if not info or info.type ~= "dir" then return false end
+  index.watcher:watch(dir)
+  index.watched_dirs[dir] = true
+  return true
+end
+
+local function prune_missing_watches(index, scope)
+  if not index or not index.watcher then return false end
+  scope = scope and common.normalize_path(scope)
+  local changed = false
+  for dir in pairs(index.watched_dirs or {}) do
+    if not scope or common.path_equals(dir, scope) or common.path_belongs_to(dir, scope) then
+      local info = system.get_file_info(dir)
+      if not info or info.type ~= "dir" then
+        index.watcher:unwatch(dir)
+        index.watched_dirs[dir] = nil
+        changed = true
+      end
+    end
+  end
+  return changed
+end
+
+local function refresh_watches_for_dir(index, dir)
+  if not index or not index.watcher or not dir then return false end
+  dir = common.normalize_path(dir)
+  local info = system.get_file_info(dir)
+  if not info or info.type ~= "dir" then return false end
+
+  local project = Project(index.root)
+  prune_missing_watches(index, dir)
+  local changed = watch_dir(index, dir)
+  local stack = { dir }
+  local yielded = 0
+  while #stack > 0 do
+    local current = table.remove(stack)
+    local names = system.list_dir(current) or {}
+    for _, name in ipairs(names) do
+      local path = common.normalize_path(current .. PATHSEP .. name)
+      local child = project:get_file_info(path)
+      if child and child.type == "dir" then
+        if watch_dir(index, path) then changed = true end
+        stack[#stack + 1] = path
+      end
+    end
+    yielded = yielded + 1
+    if yielded >= DEFAULT_SCAN_YIELD_FILES * 16 then
+      yielded = 0
+      coroutine.yield(0)
+    end
+  end
+  return changed
+end
+
+local function start_project_watcher(index)
+  if not index or index.watch_running then return false end
+  index.watcher = index.watcher or DirWatch()
+  index.watched_dirs = index.watched_dirs or {}
+  index.watch_generation = (index.watch_generation or 0) + 1
+  local generation = index.watch_generation
+  index.watch_running = true
+  local root = index.root
+
+  core.add_thread(function()
+    log_quiet("Tree-sitter Project index: starting filesystem watcher for %s", tostring(root))
+    local ok, err = pcall(refresh_watches_for_dir, index, root)
+    if not ok then
+      log_quiet("Tree-sitter Project index: initial filesystem watch setup failed for %s: %s", tostring(root), tostring(err))
+    elseif index.status == "ready" and symbol_index.mark_directory_dirty then
+      symbol_index.mark_directory_dirty(root, "watch-startup", { force = false })
+    end
+
+    while index.watch_generation == generation do
+      local changed_dirs = {}
+      ok, err = pcall(function()
+        index.watcher:check(function(path)
+          path = path and common.normalize_path(path)
+          if path and (common.path_equals(path, root) or common.path_belongs_to(path, root)) then
+            changed_dirs[path] = true
+          end
+        end, 0.02, 0.01)
+      end)
+      if not ok then
+        log_quiet("Tree-sitter Project index: filesystem watcher failed for %s: %s", tostring(root), tostring(err))
+        coroutine.yield(5)
+      else
+        for dir in pairs(changed_dirs) do
+          if symbol_index.mark_directory_dirty then
+            symbol_index.mark_directory_dirty(dir, "project-watch")
+          end
+        end
+        coroutine.yield(0.25)
+      end
+    end
+    index.watch_running = false
+    log_quiet("Tree-sitter Project index: stopped filesystem watcher for %s", tostring(root))
+  end)
+  return true
+end
+
 local function scan_index(index, generation)
   index.status = "indexing"
   index.symbol_status = "indexing"
   index.usage_status = "indexing"
+  if index.watcher then refresh_watches_for_dir(index, index.root) end
+  if generation ~= index.generation then return end
   index.reason = nil
   index.started_at = system.get_time()
   index.finished_at = nil
@@ -628,6 +744,7 @@ end
 function symbol_index.ensure_scan(root, opts)
   opts = opts or {}
   local index = index_for_root(root)
+  start_project_watcher(index)
   if index.status == "indexing" and not opts.force then return index end
   if index.status == "ready" and not opts.force then
     if symbol_index.update_open_document then
@@ -1049,6 +1166,7 @@ local function reindex_directory_for_index(index, dir, opts)
   local changed = false
   local info = system.get_file_info(dir)
   if not info or info.type ~= "dir" then
+    prune_missing_watches(index, dir)
     for path in pairs(index.by_path or {}) do
       if common.path_equals(path, dir) or common.path_belongs_to(path, dir) then
         index.by_path[path] = nil
@@ -1065,22 +1183,37 @@ local function reindex_directory_for_index(index, dir, opts)
     return changed, info and "not-directory" or "missing"
   end
 
-  local names, err = system.list_dir(dir)
-  if not names then return false, err or "list-failed" end
+  if index.watcher then refresh_watches_for_dir(index, dir) end
 
-  local present_direct_files = {}
-  for _, name in ipairs(names) do
-    local path = common.normalize_path(dir .. PATHSEP .. name)
-    local child = system.get_file_info(path)
-    if child and child.type == "file" then
-      present_direct_files[path] = true
-      local child_changed = reindex_file_for_index(index, path, common.merge(opts, { force = true }))
-      changed = child_changed or changed
+  local project = Project(index.root)
+  local present_files = {}
+  local stack = { dir }
+  local yielded = 0
+  while #stack > 0 do
+    local current = table.remove(stack)
+    local names, err = system.list_dir(current)
+    if not names then return changed, err or "list-failed" end
+    for _, name in ipairs(names) do
+      local path = common.normalize_path(current .. PATHSEP .. name)
+      local child = project:get_file_info(path)
+      if child and child.type == "dir" then
+        stack[#stack + 1] = path
+      elseif child and child.type == "file" then
+        child.filename = path
+        present_files[path] = true
+        local child_changed = reindex_file_for_index(index, path, common.merge(opts, { force = opts.force ~= false }))
+        changed = child_changed or changed
+      end
+    end
+    yielded = yielded + 1
+    if yielded >= DEFAULT_SCAN_YIELD_FILES * 16 then
+      yielded = 0
+      coroutine.yield(0)
     end
   end
 
   for path in pairs(index.by_path or {}) do
-    if common.dirname(path) == dir and not present_direct_files[path] then
+    if (common.path_equals(path, dir) or common.path_belongs_to(path, dir)) and not present_files[path] then
       index.by_path[path] = nil
       index.open_docs[path] = nil
       changed = true
@@ -1165,11 +1298,14 @@ local function run_reindex_directory(dir, opts)
         symbol_index.ensure_scan(index.root, { force = true })
       elseif index.status == "indexing" then
         index.pending_reindex_dirs = index.pending_reindex_dirs or {}
-        index.pending_reindex_dirs[dir] = opts.reason or "directory-dirty"
+        index.pending_reindex_dirs[dir] = {
+          reason = opts.reason or "directory-dirty",
+          force = opts.force,
+        }
         index.symbol_status = "indexing"
         index.usage_status = "indexing"
         log_quiet("Tree-sitter Project index: queued directory reindex for %s under %s while indexing (%s)",
-          tostring(dir), tostring(index.root), tostring(index.pending_reindex_dirs[dir]))
+          tostring(dir), tostring(index.root), tostring(index.pending_reindex_dirs[dir].reason))
         changed = true
       else
         index.generation = index.generation + 1
@@ -1252,6 +1388,10 @@ end
 function symbol_index.reset_for_tests()
   for _, index in pairs(indexes) do
     index.generation = (index.generation or 0) + 1
+    index.watch_generation = (index.watch_generation or 0) + 1
+    index.watch_running = false
+    index.watcher = nil
+    index.watched_dirs = {}
   end
   indexes = {}
   open_documents = setmetatable({}, { __mode = "v" })

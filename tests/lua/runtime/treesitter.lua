@@ -678,6 +678,49 @@ fun make(): AddedWatchThing = AddedWatchThing()
     common.rm(root, true)
   end)
 
+  test.it("Tree-sitter Project watcher refreshes nested external file changes", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-project-watch-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    mkdir(root .. PATHSEP .. "src")
+    write_file(root .. PATHSEP .. "src" .. PATHSEP .. "Watched.kt", [[package demo
+
+class InitialWatchedThing
+
+fun make(): InitialWatchedThing = InitialWatchedThing()
+]])
+
+    symbol_index.start_project_indexing({ root = root, reason = "test-watch", refresh_after_seconds = 0 })
+    local status = wait_index_ready(root)
+    test.equal(status.status, "ready")
+
+    write_file(root .. PATHSEP .. "src" .. PATHSEP .. "Added.kt", [[package demo
+
+class AddedByWatcherThing
+
+fun make(): AddedByWatcherThing = AddedByWatcherThing()
+]])
+
+    local deadline = system.get_time() + 5
+    local refs, reason, usage_status
+    repeat
+      refs, reason, usage_status = symbol_index.workspace_usages("AddedByWatcherThing", {
+        root = root,
+        include_declaration = false,
+        limit = 20,
+        refresh_after_seconds = 1000,
+      })
+      if refs and #refs == 2 then break end
+      coroutine.yield(0.05)
+    until system.get_time() >= deadline
+    test.equal(usage_status, "fresh", reason)
+    test.equal(#(refs or {}), 2)
+
+    symbol_index.reset_for_tests()
+    common.rm(root, true)
+  end)
+
   test.it("Tree-sitter workspace usages use live Document overlays without poisoning disk index", function()
     symbol_index.reset_for_tests()
     local root = USERDIR .. PATHSEP .. "treesitter-live-usage-index-"
