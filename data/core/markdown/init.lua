@@ -3,4 +3,5 @@ return {
   links = require "core.markdown.links",
   anchors = require "core.markdown.anchors",
   images = require "core.markdown.images",
+  vault_index = require "core.markdown.vault_index",
 }
