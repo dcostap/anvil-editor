@@ -186,6 +186,18 @@ local function wait_index_ready(root, timeout)
   return status
 end
 
+local function wait_symbol_ready_before_usages(root, timeout)
+  local deadline = system.get_time() + (timeout or 5)
+  local status
+  repeat
+    status = symbol_index.status(root)
+    if status.symbol_status == "ready" and status.usage_status ~= "ready" then return status end
+    if status.status == "ready" then return status end
+    coroutine.yield(0)
+  until system.get_time() >= deadline
+  return status
+end
+
 test.describe("core.treesitter phase 3 document integration", function()
   test.it("registry loads bundled language configs and highlight queries", function()
     registry.reload()
@@ -450,6 +462,36 @@ fun make(): EagerThing = EagerThing()
     })
     test.equal(usage_status, "fresh", reason)
     test.equal(#refs, 2)
+    common.rm(root, true)
+  end)
+
+  test.it("Tree-sitter Project symbols become fresh before usage indexing finishes", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-decoupled-symbol-status-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    write_file(root .. PATHSEP .. "Model.kt", [[package demo
+
+class ReadyBeforeUsages
+
+fun make(): ReadyBeforeUsages = ReadyBeforeUsages()
+]])
+
+    symbol_index.start_project_indexing({ root = root, reason = "test", refresh_after_seconds = 0 })
+    local status = wait_symbol_ready_before_usages(root)
+    test.equal(status.symbol_status, "ready")
+    test.equal(status.usage_status, "indexing")
+
+    local symbols, reason, symbol_status = symbol_index.workspace_symbols("ReadyBeforeUsages", {
+      root = root,
+      limit = 20,
+    })
+    test.equal(symbol_status, "fresh", reason)
+    test.ok(find_symbol(symbols, "ReadyBeforeUsages", "class"))
+
+    status = wait_index_ready(root)
+    test.equal(status.status, "ready")
+    test.equal(status.usage_status, "ready")
     common.rm(root, true)
   end)
 

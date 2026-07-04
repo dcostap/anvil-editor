@@ -539,10 +539,11 @@ Implemented:
 - Targeted disk-backed `symbol_index.reindex_file(path, ...)` support for saved/dirty files, including deletion/unsupported-file cleanup.
 - Save-time Tree-sitter Project index refresh for the saved file.
 - Directory dirty refresh support for direct file changes, additions, and deletions, with File Tree filesystem watch integration.
+- Project Symbol Search readiness decoupled from usage readiness during full Project scans; symbols become fresh after the symbol pass while usage indexing continues.
 - Usage cap/truncation metadata and UI status handling for truncated usage indexes.
-- Regression tests for Project-wide Kotlin usages, declaration filtering, eager indexing, live overlays, cap-skipped files, targeted disk-backed reindexing, and directory dirty refresh.
+- Regression tests for Project-wide Kotlin usages, declaration filtering, eager indexing, symbol/usage readiness decoupling, live overlays, cap-skipped files, targeted disk-backed reindexing, and directory dirty refresh.
 
 Not fully done / follow-up items:
 
-- Project Symbol Search readiness is not fully decoupled from usage indexing. Partial/stale symbol results are improved during scans, but `symbol_status = "ready"` is still reached at the end of the combined symbols+usages scan.
 - External file dirty/dirwatch integration is direct-directory based. It handles watched directory file changes/additions/deletions, but there is not yet a global recursive Project file watcher independent of the File Tree's watched directories.
+- The decoupled full-scan implementation prioritizes Project Symbol Search readiness by using a symbol pass followed by a usage pass. Changed files can therefore be parsed once for symbols and again for usages during full refreshes.

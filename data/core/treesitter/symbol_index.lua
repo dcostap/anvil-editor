@@ -493,59 +493,40 @@ local function scan_index(index, generation)
   index.files_indexed = 0
 
   local project = Project(index.root)
-  local yielded = 0
-  local changed = false
-  local batch_changed = false
+  local supported_files = {}
   local seen_supported_paths = {}
-  local usage_seen = 0
-  local usage_cap = tonumber(index.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP) or DEFAULT_PROJECT_USAGE_CAP
+  local yielded = 0
   for _, info in project:files() do
     if generation ~= index.generation then return end
-    local path = common.normalize_path(info.filename)
     if info.type == "file" then
+      local path = common.normalize_path(info.filename)
       local language = registry.get(path)
       if language and language.query_sources and language.query_sources.outline then
-        seen_supported_paths[path] = true
-        index.files_total = index.files_total + 1
+        local relpath = common.relative_path(index.root, path):gsub("\\", "/")
         local fingerprint = file_fingerprint(path, info, language)
-        local cached = index.by_path[path]
-        local cached_complete_enough = cached and cached.fingerprint == fingerprint
-          and (cached.usage_complete ~= false or usage_seen >= usage_cap)
-        if cached_complete_enough then
-          usage_seen = usage_seen + (cached.usage_count or count_usages(cached.usages_by_name))
-        else
-          local relpath = common.relative_path(index.root, path):gsub("\\", "/")
-          local include_usages = usage_seen < usage_cap
-          local entry, err = parse_file_index(path, relpath, info, language, { include_usages = include_usages })
-          if entry then
-            replace_file_entry(index, path, fingerprint, entry)
-            usage_seen = usage_seen + (entry.usage_count or 0)
-            index.files_indexed = index.files_indexed + 1
-            changed = true
-            batch_changed = true
-          else
-            replace_file_entry(index, path, fingerprint, { symbols = {}, usages_by_name = {}, usage_count = 0 })
-            changed = true
-            batch_changed = true
-            log_quiet("Tree-sitter Project index: skipped %s: %s", tostring(relpath), tostring(err))
-          end
-        end
+        supported_files[#supported_files + 1] = {
+          path = path,
+          relpath = relpath,
+          info = info,
+          language = language,
+          fingerprint = fingerprint,
+        }
+        seen_supported_paths[path] = true
       end
       index.files_scanned = index.files_scanned + 1
       yielded = yielded + 1
-      if yielded >= DEFAULT_SCAN_YIELD_FILES then
+      if yielded >= DEFAULT_SCAN_YIELD_FILES * 8 then
         yielded = 0
-        if batch_changed then
-          rebuild_disk_aggregates(index)
-          batch_changed = false
-        end
         core.redraw = true
         coroutine.yield(0)
       end
     end
   end
+  index.files_total = #supported_files
 
   if generation ~= index.generation then return end
+  local changed = false
+  local batch_changed = false
   local pruned = false
   for path in pairs(index.by_path) do
     if not seen_supported_paths[path] then
@@ -553,9 +534,86 @@ local function scan_index(index, generation)
       pruned = true
     end
   end
+
+  yielded = 0
+  for _, file in ipairs(supported_files) do
+    if generation ~= index.generation then return end
+    local cached = index.by_path[file.path]
+    if not cached or cached.fingerprint ~= file.fingerprint then
+      local entry, err = parse_file_index(file.path, file.relpath, file.info, file.language, { include_usages = false })
+      if entry then
+        replace_file_entry(index, file.path, file.fingerprint, entry)
+        index.files_indexed = index.files_indexed + 1
+        changed = true
+        batch_changed = true
+      else
+        replace_file_entry(index, file.path, file.fingerprint, { symbols = {}, usages_by_name = {}, usage_count = 0, usage_complete = false })
+        changed = true
+        batch_changed = true
+        log_quiet("Tree-sitter Project symbols: skipped %s: %s", tostring(file.relpath), tostring(err))
+      end
+    end
+    yielded = yielded + 1
+    if yielded >= DEFAULT_SCAN_YIELD_FILES then
+      yielded = 0
+      if batch_changed then
+        rebuild_disk_aggregates(index)
+        batch_changed = false
+      end
+      core.redraw = true
+      coroutine.yield(0)
+    end
+  end
+
+  if generation ~= index.generation then return end
+  if changed or pruned or index.symbol_status ~= "ready" then rebuild_disk_aggregates(index) end
+  index.symbol_status = "ready"
+  core.redraw = true
+  log_quiet("Tree-sitter Project symbols: ready with %d symbol(s) from %d supported file(s) under %s",
+    #index.symbols, index.files_total, index.root)
+  coroutine.yield(0)
+
+  local usage_seen = 0
+  local usage_cap = tonumber(index.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP) or DEFAULT_PROJECT_USAGE_CAP
+  batch_changed = false
+  yielded = 0
+  for _, file in ipairs(supported_files) do
+    if generation ~= index.generation then return end
+    local cached = index.by_path[file.path]
+    local cached_complete_enough = cached and cached.fingerprint == file.fingerprint
+      and (cached.usage_complete ~= false or usage_seen >= usage_cap)
+    if cached_complete_enough then
+      usage_seen = usage_seen + (cached.usage_count or count_usages(cached.usages_by_name))
+    else
+      local include_usages = usage_seen < usage_cap
+      local entry, err = parse_file_index(file.path, file.relpath, file.info, file.language, { include_usages = include_usages })
+      if entry then
+        replace_file_entry(index, file.path, file.fingerprint, entry)
+        usage_seen = usage_seen + (entry.usage_count or 0)
+        changed = true
+        batch_changed = true
+      else
+        replace_file_entry(index, file.path, file.fingerprint, { symbols = cached and cached.symbols or {}, usages_by_name = {}, usage_count = 0, usage_complete = false })
+        changed = true
+        batch_changed = true
+        log_quiet("Tree-sitter Project usages: skipped %s: %s", tostring(file.relpath), tostring(err))
+      end
+    end
+    yielded = yielded + 1
+    if yielded >= DEFAULT_SCAN_YIELD_FILES then
+      yielded = 0
+      if batch_changed then
+        rebuild_disk_aggregates(index)
+        batch_changed = false
+      end
+      core.redraw = true
+      coroutine.yield(0)
+    end
+  end
+
+  if generation ~= index.generation then return end
   if changed or pruned or index.status ~= "ready" then rebuild_disk_aggregates(index) end
   index.status = "ready"
-  index.symbol_status = "ready"
   index.usage_status = "ready"
   index.reason = nil
   index.finished_at = system.get_time()
@@ -1046,6 +1104,8 @@ local function run_reindex_file(path, opts)
       elseif index.status == "indexing" then
         index.pending_reindex_paths = index.pending_reindex_paths or {}
         index.pending_reindex_paths[path] = opts.reason or "queued-during-indexing"
+        index.symbol_status = "indexing"
+        index.usage_status = "indexing"
         log_quiet("Tree-sitter Project index: queued targeted reindex for %s under %s while indexing (%s)",
           tostring(path), tostring(index.root), tostring(index.pending_reindex_paths[path]))
         changed = true
@@ -1106,6 +1166,8 @@ local function run_reindex_directory(dir, opts)
       elseif index.status == "indexing" then
         index.pending_reindex_dirs = index.pending_reindex_dirs or {}
         index.pending_reindex_dirs[dir] = opts.reason or "directory-dirty"
+        index.symbol_status = "indexing"
+        index.usage_status = "indexing"
         log_quiet("Tree-sitter Project index: queued directory reindex for %s under %s while indexing (%s)",
           tostring(dir), tostring(index.root), tostring(index.pending_reindex_dirs[dir]))
         changed = true
