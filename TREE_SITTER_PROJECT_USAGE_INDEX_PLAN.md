@@ -538,10 +538,11 @@ Implemented:
 - Live open-Document overlay support so dirty buffers can override disk-backed entries without poisoning the disk index.
 - Targeted disk-backed `symbol_index.reindex_file(path, ...)` support for saved/dirty files, including deletion/unsupported-file cleanup.
 - Save-time Tree-sitter Project index refresh for the saved file.
+- Directory dirty refresh support for direct file changes, additions, and deletions, with File Tree filesystem watch integration.
 - Usage cap/truncation metadata and UI status handling for truncated usage indexes.
-- Regression tests for Project-wide Kotlin usages, declaration filtering, eager indexing, live overlays, cap-skipped files, and targeted disk-backed reindexing.
+- Regression tests for Project-wide Kotlin usages, declaration filtering, eager indexing, live overlays, cap-skipped files, targeted disk-backed reindexing, and directory dirty refresh.
 
 Not fully done / follow-up items:
 
 - Project Symbol Search readiness is not fully decoupled from usage indexing. Partial/stale symbol results are improved during scans, but `symbol_status = "ready"` is still reached at the end of the combined symbols+usages scan.
-- External file dirty/dirwatch integration remains minimal. Full Project refresh still handles eventual pruning/refresh for external edits/deletes, and non-save external edits need a broader file-watch hook to become precise.
+- External file dirty/dirwatch integration is direct-directory based. It handles watched directory file changes/additions/deletions, but there is not yet a global recursive Project file watcher independent of the File Tree's watched directories.

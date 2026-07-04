@@ -557,6 +557,85 @@ fun make(): NewDiskThing = NewDiskThing()
     common.rm(root, true)
   end)
 
+  test.it("Tree-sitter directory dirty marking refreshes direct changed files", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-directory-dirty-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    write_file(root .. PATHSEP .. "Changed.kt", [[package demo
+
+class BeforeWatchThing
+
+fun make(): BeforeWatchThing = BeforeWatchThing()
+]])
+    write_file(root .. PATHSEP .. "Removed.kt", [[package demo
+
+class RemovedWatchThing
+
+fun make(): RemovedWatchThing = RemovedWatchThing()
+]])
+
+    local refs, reason, status = wait_workspace_usages("BeforeWatchThing", {
+      root = root,
+      force = true,
+      include_declaration = false,
+      limit = 20,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 2)
+
+    write_file(root .. PATHSEP .. "Changed.kt", [[package demo
+
+class AfterWatchThing
+
+fun make(): AfterWatchThing = AfterWatchThing()
+]])
+    write_file(root .. PATHSEP .. "Added.kt", [[package demo
+
+class AddedWatchThing
+
+fun make(): AddedWatchThing = AddedWatchThing()
+]])
+    os.remove(root .. PATHSEP .. "Removed.kt")
+
+    local changed
+    changed, reason = symbol_index.mark_directory_dirty(root, "test-watch", { sync = true })
+    test.ok(changed, reason)
+
+    refs, reason, status = wait_workspace_usages("BeforeWatchThing", {
+      root = root,
+      include_declaration = false,
+      limit = 20,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 0)
+
+    refs, reason, status = wait_workspace_usages("AfterWatchThing", {
+      root = root,
+      include_declaration = false,
+      limit = 20,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 2)
+
+    refs, reason, status = wait_workspace_usages("AddedWatchThing", {
+      root = root,
+      include_declaration = false,
+      limit = 20,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 2)
+
+    refs, reason, status = wait_workspace_usages("RemovedWatchThing", {
+      root = root,
+      include_declaration = false,
+      limit = 20,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 0)
+    common.rm(root, true)
+  end)
+
   test.it("Tree-sitter workspace usages use live Document overlays without poisoning disk index", function()
     symbol_index.reset_for_tests()
     local root = USERDIR .. PATHSEP .. "treesitter-live-usage-index-"

@@ -13,6 +13,8 @@ local file_context = require "core.file_context"
 local sidepanel = require "core.sidepanel"
 local storage = require "core.storage"
 local DirWatch = require "core.dirwatch"
+local ts_symbol_index_ok, ts_symbol_index = pcall(require, "core.treesitter.symbol_index")
+if not ts_symbol_index_ok then ts_symbol_index = nil end
 local git_backend = require "plugins.git.backend"
 local filetree_render = require "plugins.filetree.render"
 
@@ -1118,6 +1120,9 @@ function FileTreeView:handle_filesystem_watch_change(changed_dir)
   if old_signature == new_signature then return end
 
   self.filesystem_dir_signatures[changed_dir] = new_signature
+  if ts_symbol_index and ts_symbol_index.mark_directory_dirty then
+    ts_symbol_index.mark_directory_dirty(changed_dir, "filetree-watch")
+  end
   self:queue_filesystem_sync(changed_dir, "watch")
 end
 

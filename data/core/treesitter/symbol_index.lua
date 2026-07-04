@@ -54,6 +54,7 @@ local function new_index(root)
     by_path = {},
     open_docs = {},
     pending_reindex_paths = {},
+    pending_reindex_dirs = {},
     files_total = 0,
     files_scanned = 0,
     files_indexed = 0,
@@ -453,6 +454,33 @@ local function replace_file_entry(index, path, fingerprint, entry)
   index.by_path[path] = entry
 end
 
+local function drain_pending_reindexes(index)
+  if not index or index.status == "indexing" then return false end
+  local drained = false
+  local pending_dirs = index.pending_reindex_dirs
+  if pending_dirs and next(pending_dirs) ~= nil then
+    index.pending_reindex_dirs = {}
+    drained = true
+    for dir, reason in pairs(pending_dirs) do
+      if symbol_index.mark_directory_dirty then
+        symbol_index.mark_directory_dirty(dir, reason or "queued-during-indexing")
+      end
+    end
+  end
+
+  local pending = index.pending_reindex_paths
+  if pending and next(pending) ~= nil then
+    index.pending_reindex_paths = {}
+    drained = true
+    for path, reason in pairs(pending) do
+      if symbol_index.reindex_file then
+        symbol_index.reindex_file(path, { force = true, reason = reason or "queued-during-indexing" })
+      end
+    end
+  end
+  return drained
+end
+
 local function scan_index(index, generation)
   index.status = "indexing"
   index.symbol_status = "indexing"
@@ -536,15 +564,7 @@ local function scan_index(index, generation)
     #index.symbols, index.usage_count or 0, index.usage_truncated and " (truncated)" or "",
     index.files_total, index.root, ((index.finished_at or system.get_time()) - (index.started_at or system.get_time())) * 1000)
 
-  local pending = index.pending_reindex_paths
-  if pending and next(pending) ~= nil then
-    index.pending_reindex_paths = {}
-    for path, reason in pairs(pending) do
-      if symbol_index.reindex_file then
-        symbol_index.reindex_file(path, { force = true, reason = reason or "queued-during-indexing" })
-      end
-    end
-  end
+  drain_pending_reindexes(index)
 end
 
 function symbol_index.ensure_scan(root, opts)
@@ -961,6 +981,58 @@ local function reindex_file_for_index(index, path, opts)
   return changed, err
 end
 
+local function reindex_directory_for_index(index, dir, opts)
+  opts = opts or {}
+  if not index or not dir then return false, "no-directory" end
+  if not (common.path_equals(dir, index.root) or common.path_belongs_to(dir, index.root)) then
+    return false, "outside-project"
+  end
+
+  local changed = false
+  local info = system.get_file_info(dir)
+  if not info or info.type ~= "dir" then
+    for path in pairs(index.by_path or {}) do
+      if common.path_equals(path, dir) or common.path_belongs_to(path, dir) then
+        index.by_path[path] = nil
+        changed = true
+      end
+    end
+    for path in pairs(index.open_docs or {}) do
+      if common.path_equals(path, dir) or common.path_belongs_to(path, dir) then
+        index.open_docs[path] = nil
+        changed = true
+      end
+    end
+    if changed then rebuild_disk_aggregates(index) end
+    return changed, info and "not-directory" or "missing"
+  end
+
+  local names, err = system.list_dir(dir)
+  if not names then return false, err or "list-failed" end
+
+  local present_direct_files = {}
+  for _, name in ipairs(names) do
+    local path = common.normalize_path(dir .. PATHSEP .. name)
+    local child = system.get_file_info(path)
+    if child and child.type == "file" then
+      present_direct_files[path] = true
+      local child_changed = reindex_file_for_index(index, path, common.merge(opts, { force = true }))
+      changed = child_changed or changed
+    end
+  end
+
+  for path in pairs(index.by_path or {}) do
+    if common.dirname(path) == dir and not present_direct_files[path] then
+      index.by_path[path] = nil
+      index.open_docs[path] = nil
+      changed = true
+    end
+  end
+
+  if changed then rebuild_disk_aggregates(index) end
+  return changed
+end
+
 local function run_reindex_file(path, opts)
   opts = opts or {}
   local changed = false
@@ -995,6 +1067,7 @@ local function run_reindex_file(path, opts)
           index.reason = nil
           index.finished_at = system.get_time()
           core.redraw = true
+          drain_pending_reindexes(index)
         end
         if ok then
           changed = result or changed
@@ -1020,9 +1093,74 @@ function symbol_index.reindex_file(path, opts)
   return true
 end
 
+local function run_reindex_directory(dir, opts)
+  opts = opts or {}
+  local changed = false
+  local matched = false
+  for _, index in pairs(indexes) do
+    if common.path_equals(dir, index.root) or common.path_belongs_to(dir, index.root) then
+      matched = true
+      local generation = index.generation
+      if index.status == "idle" then
+        symbol_index.ensure_scan(index.root, { force = true })
+      elseif index.status == "indexing" then
+        index.pending_reindex_dirs = index.pending_reindex_dirs or {}
+        index.pending_reindex_dirs[dir] = opts.reason or "directory-dirty"
+        log_quiet("Tree-sitter Project index: queued directory reindex for %s under %s while indexing (%s)",
+          tostring(dir), tostring(index.root), tostring(index.pending_reindex_dirs[dir]))
+        changed = true
+      else
+        index.generation = index.generation + 1
+        generation = index.generation
+        index.status = "indexing"
+        index.symbol_status = "indexing"
+        index.usage_status = "indexing"
+        index.reason = opts.reason or "directory-dirty"
+        index.started_at = system.get_time()
+        index.finished_at = nil
+
+        local ok, result, detail = pcall(reindex_directory_for_index, index, dir, opts)
+        if generation == index.generation then
+          index.status = "ready"
+          index.symbol_status = "ready"
+          index.usage_status = "ready"
+          index.reason = nil
+          index.finished_at = system.get_time()
+          core.redraw = true
+          drain_pending_reindexes(index)
+        end
+        if ok then
+          changed = result or changed
+          log_quiet("Tree-sitter Project index: directory reindex %s under %s changed=%s reason=%s detail=%s",
+            tostring(dir), tostring(index.root), tostring(result), tostring(opts.reason or "directory-dirty"), tostring(detail))
+        else
+          log_quiet("Tree-sitter Project index: directory reindex failed for %s under %s: %s", tostring(dir), tostring(index.root), tostring(result))
+        end
+      end
+    end
+  end
+  return matched and changed, matched and nil or "no-index"
+end
+
+function symbol_index.mark_directory_dirty(dir, reason, opts)
+  opts = opts or {}
+  dir = dir and common.normalize_path(dir)
+  if not dir then return false, "no-directory" end
+  opts = common.merge(opts, { reason = reason or opts.reason or "directory-dirty" })
+  if opts.sync then return run_reindex_directory(dir, opts) end
+  core.add_thread(function()
+    run_reindex_directory(dir, opts)
+  end)
+  return true
+end
+
 function symbol_index.mark_file_dirty(path, reason)
   path = path and common.normalize_path(path)
   if not path then return false end
+  local info = system.get_file_info(path)
+  if info and info.type == "dir" then
+    return symbol_index.mark_directory_dirty(path, reason or "dirty")
+  end
   return symbol_index.reindex_file(path, { force = true, reason = reason or "dirty" })
 end
 
