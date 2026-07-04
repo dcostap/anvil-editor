@@ -767,6 +767,8 @@ function DocView:new(doc)
   self.visual_row_providers = {}
   self.visual_metric_providers = {}
   self.__visual_metric_generation = 0
+  self.line_render_providers = {}
+  self.__line_render_generation = 0
   self.decoration_providers = {}
   self.poi_providers = {}
   self.selection_listeners = {}
@@ -1122,6 +1124,45 @@ function DocView:visual_metric_provider_entries()
     return a.priority < b.priority
   end)
   return result
+end
+
+local function sorted_inline_provider_entries(entries)
+  local result = {}
+  for _, entry in pairs(entries or {}) do result[#result + 1] = entry end
+  table.sort(result, function(a, b)
+    if a.priority == b.priority then return a.id < b.id end
+    return a.priority < b.priority
+  end)
+  return result
+end
+
+function DocView:has_line_render_providers()
+  return next(self.line_render_providers or {}) ~= nil
+end
+
+function DocView:add_line_render_provider(id, provider, opts)
+  assert(type(id) == "string" and id ~= "", "line render provider id must be a non-empty string")
+  assert(type(provider) == "table", "line render provider must be a table")
+  opts = opts or {}
+  self.line_render_providers = self.line_render_providers or {}
+  self.line_render_providers[id] = { id = id, provider = provider, priority = opts.priority or provider.priority or 0 }
+  self:invalidate_line_render(id)
+end
+
+function DocView:remove_line_render_provider(id)
+  if not self.line_render_providers or not self.line_render_providers[id] then return false end
+  self.line_render_providers[id] = nil
+  self:invalidate_line_render(id)
+  return true
+end
+
+function DocView:invalidate_line_render(_provider_id)
+  self.__line_render_generation = (self.__line_render_generation or 0) + 1
+  self.__line_render_cache = nil
+end
+
+function DocView:line_render_provider_entries()
+  return sorted_inline_provider_entries(self.line_render_providers)
 end
 
 
@@ -2486,12 +2527,120 @@ function DocView:get_visible_line_range()
 end
 
 
+function DocView:get_line_render(line)
+  if self.wrapped_settings or not self:has_line_render_providers() then return nil end
+  local source_text = (self.doc.lines[line] or ""):gsub("\n$", "")
+  local context = { source_text = source_text, line = line }
+  for _, entry in ipairs(self:line_render_provider_entries()) do
+    local provider = entry.provider
+    if provider and provider.render_line then
+      local ok, render_line = pcall(provider.render_line, provider, self, line, context)
+      if ok and render_line and not render_line.raw_passthrough then
+        render_line.source_text = render_line.source_text or source_text
+        return render_line
+      elseif not ok then
+        core.log_quiet("DocView line render provider %s.render_line failed for %s: %s", tostring(entry.id), self.doc:get_name(), tostring(render_line))
+      end
+    end
+  end
+  return nil
+end
+
+local function render_fragment_font(view, fragment)
+  return fragment.font or view:get_font()
+end
+
+local function render_fragment_color(fragment)
+  return fragment.color or style.syntax.normal
+end
+
+function DocView:iter_line_render_fragments(render_line)
+  local source_text = render_line.source_text or ""
+  local fragments = {}
+  local cursor = 1
+  for _, fragment in ipairs(render_line.fragments or {}) do
+    local col1 = math.max(1, math.floor(fragment.source_col1 or cursor))
+    local default_col2 = fragment.text and (col1 + #fragment.text) or col1
+    local col2 = math.max(col1, math.floor(fragment.source_col2 or default_col2))
+    if col1 > cursor then
+      fragments[#fragments + 1] = { source_col1 = cursor, source_col2 = col1, text = source_text:sub(cursor, col1 - 1) }
+    end
+    local normalized = {}
+    for key, value in pairs(fragment) do normalized[key] = value end
+    normalized.source_col1 = col1
+    normalized.source_col2 = col2
+    fragments[#fragments + 1] = normalized
+    cursor = math.max(cursor, col2)
+  end
+  if cursor <= #source_text then
+    fragments[#fragments + 1] = { source_col1 = cursor, source_col2 = #source_text + 1, text = source_text:sub(cursor) }
+  end
+  return fragments
+end
+
+function DocView:get_line_render_col_x_offset(render_line, col)
+  col = math.max(1, col or 1)
+  local xoffset = 0
+  local _, indent_size = self.doc:get_indent_info()
+  for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
+    local col1 = fragment.source_col1 or 1
+    local col2 = fragment.source_col2 or col1
+    local font = render_fragment_font(self, fragment)
+    font:set_tab_size(indent_size)
+    if col <= col1 then return xoffset end
+    if fragment.hidden then
+      if col <= col2 then return xoffset end
+    else
+      local text = fragment.text or ""
+      if col < col2 then
+        return xoffset + font:get_width(text:sub(1, math.max(0, col - col1)), { tab_offset = xoffset })
+      end
+      xoffset = xoffset + (fragment.width or font:get_width(text, { tab_offset = xoffset }))
+    end
+  end
+  return xoffset
+end
+
+function DocView:get_line_render_x_offset_col(render_line, x)
+  local xoffset = 0
+  local _, indent_size = self.doc:get_indent_info()
+  for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
+    local col1 = fragment.source_col1 or 1
+    local col2 = fragment.source_col2 or col1
+    local font = render_fragment_font(self, fragment)
+    font:set_tab_size(indent_size)
+    if fragment.hidden then
+      if x <= xoffset then return col1 end
+    else
+      local text = fragment.text or ""
+      local width = fragment.width or font:get_width(text, { tab_offset = xoffset })
+      if xoffset + width >= x then
+        local col = col1
+        local local_x = xoffset
+        for char in common.utf8_chars(text) do
+          local w = font:get_width(char, { tab_offset = local_x })
+          if local_x + w >= x then
+            return (x <= local_x + w / 2) and col or math.min(col + #char, col2)
+          end
+          local_x = local_x + w
+          col = col + #char
+        end
+        return col2
+      end
+      xoffset = xoffset + width
+    end
+  end
+  return #(render_line.source_text or "") + 1
+end
+
 ---Get the horizontal pixel offset for a column position.
 ---Accounts for tabs, syntax highlighting fonts, and caches long lines.
 ---@param line integer Line number
 ---@param col integer Column number (byte offset)
 ---@return number offset Horizontal pixel offset
 function DocView:get_col_x_offset(line, col, line_end)
+  local render_line = self:get_line_render(line)
+  if render_line then return self:get_line_render_col_x_offset(render_line, col) end
   if self.wrapped_settings then
     local perf_active = core.perf_frame_stats ~= nil
     local perf_start = perf_active and system.get_time()
@@ -2598,6 +2747,8 @@ end
 ---@param x number Horizontal pixel offset
 ---@return integer col Column number (byte offset)
 function DocView:get_x_offset_col(line, x)
+  local render_line = self:get_line_render(line)
+  if render_line then return self:get_line_render_x_offset_col(render_line, x) end
   if self.wrapped_settings then
     local idx = linewrapping.get_line_idx_col_count(self, line)
     local _, target_col = linewrapping.get_line_col_from_index_and_x(self, idx, x)
@@ -3556,6 +3707,25 @@ end
 ---@param y number Screen y coordinate
 ---@return integer height Line height
 function DocView:draw_line_text(line, x, y)
+  local render_line = self:get_line_render(line)
+  if render_line then
+    local tx = x
+    local ty = y + self:get_line_text_y_offset()
+    local _, indent_size = self.doc:get_indent_info()
+    for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
+      if not fragment.hidden then
+        local font = render_fragment_font(self, fragment)
+        font:set_tab_size(indent_size)
+        local text = fragment.text or ""
+        if text ~= "" then
+          tx = renderer.draw_text(font, text, tx, ty, render_fragment_color(fragment), { tab_offset = tx - x })
+        elseif fragment.width then
+          tx = tx + fragment.width
+        end
+      end
+    end
+    return self:get_line_height()
+  end
   local provider_text_color = self:decoration_text_color(line)
   if provider_text_color then
     local text_y_offset = self:get_line_text_y_offset()
@@ -4319,8 +4489,8 @@ local function draw_decoration_inline_ranges(view, line, x, y)
           end
         else
           local tx1 = view:get_col_x_offset(line, col1)
-          local text = view.doc.lines[line] or ""
-          local width = view:get_font():get_width(text:sub(col1, math.max(col1, col2 - 1)))
+          local tx2 = view:get_col_x_offset(line, col2)
+          local width = tx2 - tx1
           if width > 0 then renderer.draw_rect(x + tx1, y, width, lh, color) end
         end
       end
