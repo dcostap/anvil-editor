@@ -289,6 +289,12 @@ keymap.add_direct({
   ["ctrl+shift+d"] = "doc:go-to-line",
   ["ctrl+shift+D"] = "doc:go-to-line",
 })
+-- Markdown Live Editor is still development-flagged while wrapping/rendering matures.
+config.markdown_live_editor = false
+config.markdown_live_reveal_mode = "active_line"
+config.markdown_live_render_images = true
+config.markdown_live_download_remote_images = false
+require "core.markdown"
 -- Wrap long lines at word boundaries and visually indent continuations.
 config.plugins.linewrapping.mode = "word"
 config.plugins.linewrapping.indent = true

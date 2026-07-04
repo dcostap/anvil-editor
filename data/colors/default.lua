@@ -107,6 +107,14 @@ style.good = c(C.string)
 style.warn = c(C.warning_stripe)
 style.error = c("c56a6a")
 style.modified = c(C.ctrl_clickable)
+style.markdown_live_heading_marker = style.dim
+style.markdown_live_link = c(C.ctrl_clickable)
+style.markdown_live_unresolved_link = style.warn
+style.markdown_live_inline_code_bg = style.background2
+style.markdown_live_quote_bar = style.accent
+style.markdown_live_image_background = style.background2
+style.markdown_live_attachment_bg = style.background2
+style.markdown_live_hidden_syntax = style.dim
 
 -- Diff/search/selection-like colors
 style.diff_delete = c(C.deleted_bg)
