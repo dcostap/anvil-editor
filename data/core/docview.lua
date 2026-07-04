@@ -2592,10 +2592,10 @@ function DocView:get_line_render_col_x_offset(render_line, col)
       if col <= col2 then return xoffset end
     else
       local text = fragment.text or ""
-      if col < col2 then
+      if col < col2 and not fragment.widget then
         return xoffset + font:get_width(text:sub(1, math.max(0, col - col1)), { tab_offset = xoffset })
       end
-      xoffset = xoffset + (fragment.width or font:get_width(text, { tab_offset = xoffset }))
+      xoffset = xoffset + (fragment.width or (fragment.widget and fragment.widget.width) or font:get_width(text, { tab_offset = xoffset }))
     end
   end
   return xoffset
@@ -2613,8 +2613,11 @@ function DocView:get_line_render_x_offset_col(render_line, x)
       if x <= xoffset then return col1 end
     else
       local text = fragment.text or ""
-      local width = fragment.width or font:get_width(text, { tab_offset = xoffset })
+      local width = fragment.width or (fragment.widget and fragment.widget.width) or font:get_width(text, { tab_offset = xoffset })
       if xoffset + width >= x then
+        if fragment.widget and text == "" then
+          return (x <= xoffset + width / 2) and col1 or col2
+        end
         local col = col1
         local local_x = xoffset
         for char in common.utf8_chars(text) do
@@ -3710,6 +3713,7 @@ function DocView:draw_line_text(line, x, y)
   local render_line = self:get_line_render(line)
   if render_line then
     local tx = x
+    local row_height = self:get_visual_row_height(line)
     local ty = y + self:get_line_text_y_offset()
     local _, indent_size = self.doc:get_indent_info()
     for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
@@ -3717,14 +3721,18 @@ function DocView:draw_line_text(line, x, y)
         local font = render_fragment_font(self, fragment)
         font:set_tab_size(indent_size)
         local text = fragment.text or ""
-        if text ~= "" then
+        if fragment.widget and fragment.widget.draw then
+          local ok, err = pcall(fragment.widget.draw, self, fragment, tx, y, row_height)
+          if not ok then core.log_quiet("DocView render widget draw failed for %s: %s", self.doc:get_name(), tostring(err)) end
+          tx = tx + (fragment.width or fragment.widget.width or 0)
+        elseif text ~= "" then
           tx = renderer.draw_text(font, text, tx, ty, render_fragment_color(fragment), { tab_offset = tx - x })
         elseif fragment.width then
           tx = tx + fragment.width
         end
       end
     end
-    return self:get_line_height()
+    return row_height
   end
   local provider_text_color = self:decoration_text_color(line)
   if provider_text_color then

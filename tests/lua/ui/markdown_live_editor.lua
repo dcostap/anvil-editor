@@ -1,3 +1,4 @@
+local common = require "core.common"
 local config = require "core.config"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
@@ -89,6 +90,53 @@ test.describe("Markdown Live Editor", function()
     doc:set_selection(1, 1)
     local raw_width = view:get_font():get_width("See [[Note|Alias]]")
     test.equal(view:get_col_x_offset(1, #"See [[Note|Alias]]" + 1), raw_width)
+  end)
+
+  test.it("renders project-local image fragments", function(context)
+    local image_path = USERDIR .. PATHSEP .. "markdown-live-image-" .. system.get_process_id() .. ".png"
+    local fp = io.open(image_path, "wb")
+    test.not_nil(fp)
+    fp:write("png")
+    fp:close()
+
+    local image_url = common.basename and common.basename(image_path) or image_path:match("[^" .. PATHSEP .. "]+$")
+    local view, doc = make_view("![Alt](" .. image_url .. ")\nother", USERDIR .. PATHSEP .. "note.md")
+    doc:set_selection(2, 1)
+    local old_load_image = canvas.load_image
+    local old_draw_canvas = renderer.draw_canvas
+    local old_draw_text = renderer.draw_text
+    local drawn = 0
+    canvas.load_image = function(path)
+      test.equal(path, image_path)
+      return {
+        get_size = function() return 64, 32 end,
+        scaled = function(self) return self end,
+      }
+    end
+    renderer.draw_canvas = function() drawn = drawn + 1 end
+    renderer.draw_text = function(font, text, x, y, color, opts) return x + font:get_width(text, opts) end
+
+    markdown.live_render.refresh_view(view)
+    test.equal(view:get_visual_row_height(1), 32)
+    test.equal(view:get_x_offset_col(1, 1), 1)
+    view:draw_line_text(1, 0, 0)
+
+    canvas.load_image = old_load_image
+    renderer.draw_canvas = old_draw_canvas
+    renderer.draw_text = old_draw_text
+    os.remove(image_path)
+    test.equal(drawn, 1)
+  end)
+
+  test.it("honors disabled live image rendering", function()
+    local old = config.markdown_live_render_images
+    config.markdown_live_render_images = false
+    local view, doc = make_view("![Alt](image.png)\nother", "note.md")
+    doc:set_selection(2, 1)
+    markdown.live_render.refresh_view(view)
+    local link_width = view:get_font():get_width("Alt")
+    test.equal(view:get_col_x_offset(1, #"![Alt](image.png)" + 1), link_width)
+    config.markdown_live_render_images = old
   end)
 
   test.it("detaches when a Markdown document is renamed to non-Markdown", function()

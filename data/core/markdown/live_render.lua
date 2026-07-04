@@ -2,6 +2,7 @@ local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
 local DocView = require "core.docview"
+local images = require "core.markdown.images"
 local parser = require "core.markdown.parser"
 local style = require "core.style"
 
@@ -9,6 +10,7 @@ local live = {}
 
 local PROVIDER_ID = "markdown-live"
 local MARKDOWN_EXTENSIONS = { md = true, markdown = true, mdown = true }
+local IMAGE_EXTENSIONS = { avif = true, bmp = true, gif = true, jpeg = true, jpg = true, png = true, svg = true, webp = true }
 
 local function extension(path)
   return (path or ""):match("%.([^.\\/]+)$") and (path or ""):match("%.([^.\\/]+)$"):lower() or nil
@@ -67,6 +69,11 @@ local function heading_font(view, level)
   return cache[key]
 end
 
+local function is_image_target(path)
+  local ext = ((path or ""):match("^[^#?]+") or (path or "")):match("%.([^%.?#/\\]+)$")
+  return ext and IMAGE_EXTENSIONS[ext:lower()] == true
+end
+
 local function add_fragment(fragments, occupied, fragment)
   local col1 = fragment.source_col1 or 1
   local col2 = fragment.source_col2 or col1
@@ -78,17 +85,86 @@ local function add_fragment(fragments, occupied, fragment)
   return true
 end
 
-local function inline_fragments(line_text, line)
+local function image_fragment(view, span)
+  if config.markdown_live_render_images ~= true then return nil end
+  local link = span.link
+  if not (link and (link.kind == "image" or link.kind == "embed") and is_image_target(link.path)) then return nil end
+  view.__markdown_live_image_cache = view.__markdown_live_image_cache or {}
+  local key = link.raw_target or link.path
+  local entry = view.__markdown_live_image_cache[key]
+  if not entry then
+    local project = core.current_project(view.doc.abs_filename)
+    entry = images.ensure_entry(link.path, {
+      alt = link.alias or link.alt,
+      source_path = view.doc.abs_filename,
+      project_root = project and project.path,
+      download_remote = config.markdown_live_download_remote_images == true,
+      on_done = function(ok, err, filename)
+        if ok and filename then
+          local loaded = images.load_from_path(filename)
+          for key, value in pairs(loaded) do entry[key] = value end
+        else
+          entry.status = "error"
+          entry.errmsg = err or "image download failed"
+        end
+        view:invalidate_line_render(PROVIDER_ID)
+        view:invalidate_visual_metrics(PROVIDER_ID)
+        core.redraw = true
+      end,
+    })
+    view.__markdown_live_image_cache[key] = entry
+  end
+
+  if entry.status == "ready" and entry.image then
+    local natural_w, natural_h = entry.image:get_size()
+    local width, height = images.scale_size(natural_w, natural_h, 320 * SCALE, link.resize, false)
+    return {
+      source_col1 = span.col1,
+      source_col2 = span.col2,
+      width = width,
+      widget = {
+        type = "image",
+        width = width,
+        height = height,
+        draw = function(_, _, x, y, row_height)
+          local image = entry.image
+          if width ~= natural_w or height ~= natural_h then
+            if not entry.scaled_image or entry.scaled_width ~= width or entry.scaled_height ~= height then
+              entry.scaled_image = image:scaled(width, height, "nearest")
+              entry.scaled_width, entry.scaled_height = width, height
+            end
+            image = entry.scaled_image
+          end
+          renderer.draw_canvas(image, x, y + math.max(0, (row_height - height) / 2))
+        end,
+      },
+    }
+  end
+
+  return {
+    source_col1 = span.col1,
+    source_col2 = span.col2,
+    text = "[image: " .. (link.path or link.raw_target or "") .. "]",
+    color = style.markdown_live_unresolved_link,
+  }
+end
+
+local function inline_fragments(line_text, line, view)
   local fragments, occupied = {}, {}
   for _, span in ipairs(parser.parse_inline(line_text, line)) do
     if span.link then
-      local link = span.link
-      add_fragment(fragments, occupied, {
-        source_col1 = span.col1,
-        source_col2 = span.col2,
-        text = link.display ~= "" and link.display or link.raw_target,
-        color = style.markdown_live_link,
-      })
+      local image = image_fragment(view, span)
+      if image then
+        add_fragment(fragments, occupied, image)
+      else
+        local link = span.link
+        add_fragment(fragments, occupied, {
+          source_col1 = span.col1,
+          source_col2 = span.col2,
+          text = link.display ~= "" and link.display or link.raw_target,
+          color = style.markdown_live_link,
+        })
+      end
     elseif span.type == "strong" or span.type == "emphasis" or span.type == "strong_emphasis" or span.type == "strikethrough" then
       add_fragment(fragments, occupied, {
         source_col1 = span.col1,
@@ -112,12 +188,19 @@ end
 local provider = {}
 
 function provider:line_height(view, line)
-  if view.wrapped_settings then return nil end
+  if view.wrapped_settings or view_active_line(view, line) then return nil end
   local text = (view.doc.lines[line] or ""):gsub("\n$", "")
   local heading = heading_for_line(text, line)
   if heading then
     return math.max(view:get_line_height(), math.floor(heading_font(view, heading.level):get_height() * config.line_height))
   end
+  local max_height
+  for _, fragment in ipairs(inline_fragments(text, line, view)) do
+    if fragment.widget and fragment.widget.height then
+      max_height = math.max(max_height or 0, fragment.widget.height)
+    end
+  end
+  return max_height
 end
 
 function provider:render_line(view, line)
@@ -137,7 +220,7 @@ function provider:render_line(view, line)
     }
   end
 
-  local fragments = inline_fragments(text, line)
+  local fragments = inline_fragments(text, line, view)
   if #fragments > 0 then return { source_text = text, fragments = fragments } end
 end
 
