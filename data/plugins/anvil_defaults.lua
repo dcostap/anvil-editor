@@ -19,6 +19,7 @@ local core_plugins = {
   custom_welcome = true,
   edit_location_history = true,
   filetree = true,
+  project_paths_view = true,
   global_prompt_bar_sanitize = true,
   intellij_actions = true,
   intellij_find = true,
@@ -261,6 +262,7 @@ style.code_font = load_text_font()
 -- First-party editable file tree.
 require_core_plugin "custom_nagview"
 require_core_plugin "filetree"
+require_core_plugin "project_paths_view"
 -- Use hard tabs for indentation, displayed at 4 columns.
 config.indent_size = 4
 config.tab_type = "hard"

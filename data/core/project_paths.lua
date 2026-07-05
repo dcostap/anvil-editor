@@ -463,8 +463,10 @@ function project_paths.add_external(entry, opts)
   if not normalized then return nil end
   local target = normalized.source == "project" and project_entries or workspace_entries
   local key = path_key(normalized.path)
-  for i = #target, 1, -1 do
-    if path_key(target[i].path) == key then table.remove(target, i) end
+  for _, list in ipairs({ project_entries, workspace_entries }) do
+    for i = #list, 1, -1 do
+      if path_key(list[i].path) == key then table.remove(list, i) end
+    end
   end
   target[#target + 1] = normalized
   invalidate("add " .. normalized.role)
@@ -504,6 +506,64 @@ function project_paths.set_label(id_or_path, label)
   entry.label = label
   invalidate("set label")
   return true
+end
+
+function project_paths.change_role(id_or_path, role)
+  if not ROLE_DEFAULTS[role] or role == "root" then return false end
+  local _, _, entry = find_mutable_entry(id_or_path)
+  if not entry then return false end
+  entry.role = role
+  local defaults = defaults_for_role(role)
+  for _, field in ipairs({ "browsable", "searchable", "grep", "symbols", "usages", "autocomplete", "rank_penalty", "filetree_style" }) do
+    entry[field] = defaults[field]
+  end
+  entry.id = make_id(entry.source, entry.role, entry.path)
+  invalidate("change role")
+  return true
+end
+
+function project_paths.change_storage(id_or_path, source)
+  if source ~= "project" and source ~= "workspace" then return false end
+  local list, index, entry = find_mutable_entry(id_or_path)
+  if not entry or entry.source == source then return entry ~= nil end
+  table.remove(list, index)
+  entry.source = source
+  entry.id = make_id(entry.source, entry.role, entry.path)
+  local target = source == "project" and project_entries or workspace_entries
+  local key = path_key(entry.path)
+  for i = #target, 1, -1 do
+    if path_key(target[i].path) == key then table.remove(target, i) end
+  end
+  target[#target + 1] = entry
+  invalidate("change storage")
+  return true
+end
+
+local function save_entries_state(source_entries)
+  local entries = {}
+  local root = root_path()
+  local seen = {}
+  local function save_entry(entry)
+    local key = path_key(entry.path)
+    if not key or seen[key] then return end
+    seen[key] = true
+    local saved = {
+      path = root and common.relative_path(root, entry.path) or entry.path,
+      label = entry.label,
+      role = entry.role,
+    }
+    local defaults = ROLE_DEFAULTS[entry.role] or {}
+    for _, field in ipairs({ "browsable", "searchable", "grep", "symbols", "usages", "autocomplete", "rank_penalty", "filetree_style" }) do
+      if entry[field] ~= defaults[field] then saved[field] = entry[field] end
+    end
+    entries[#entries + 1] = saved
+  end
+  for _, entry in ipairs(source_entries or {}) do save_entry(entry) end
+  return entries
+end
+
+function project_paths.save_project_state()
+  return { entries = save_entries_state(project_entries) }
 end
 
 function project_paths.load_workspace_state(state, legacy_directories)

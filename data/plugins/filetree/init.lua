@@ -2822,6 +2822,15 @@ function FileTreeView:open_item(target)
   end
 end
 
+function FileTreeView:on_file_dropped(filename)
+  if type(filename) ~= "string" or filename == "" then return false end
+  local path = common.normalize_path(system.absolute_path(common.home_expand(filename)) or common.home_expand(filename))
+  local info = system.get_file_info(path)
+  if not (info and info.type == "dir") then return false end
+  command.perform("project-paths:add-external-directory", path)
+  return true
+end
+
 function FileTreeView:up_dir()
   self.current_dir = parent_dir(self.current_dir)
   if not in_project(self.current_dir, core.root_project().path) then
