@@ -61,6 +61,18 @@ local function fit_scale()
   return math.min(1, available_w / iw, available_h / ih)
 end
 
+local function image_rect()
+  local vx, vy, vw, vh = viewport()
+  local ix = vx + (state.width < vw and (vw - state.width) / 2 or -state.scroll.x)
+  local iy = vy + (state.height < vh and (vh - state.height) / 2 or -state.scroll.y)
+  return ix, iy, state.width or 0, state.height or 0
+end
+
+local function point_in_image(x, y)
+  local ix, iy, iw, ih = image_rect()
+  return x >= ix and x <= ix + iw and y >= iy and y <= iy + ih
+end
+
 function overlay.visible()
   return state.visible == true
 end
@@ -137,7 +149,9 @@ function overlay.on_mouse_pressed(button, x, y, clicks)
   if not state.visible then return false end
   state.mouse.x, state.mouse.y = x, y
   if button == "left" then
-    if clicks and clicks >= 2 then
+    if not point_in_image(x, y) then
+      overlay.close()
+    elseif clicks and clicks >= 2 then
       overlay.reset_zoom()
     else
       state.dragging = true
@@ -195,8 +209,7 @@ function overlay.draw()
   local x, y, w, h = viewport()
   renderer.draw_rect(x, y, w, h, { 0, 0, 0, 225 })
   if state.scaled then
-    local ix = x + (state.width < w and (w - state.width) / 2 or -state.scroll.x)
-    local iy = y + (state.height < h and (h - state.height) / 2 or -state.scroll.y)
+    local ix, iy = image_rect()
     renderer.draw_canvas(state.scaled, ix, iy)
   end
   local label = state.path and common.basename(state.path) or "Image"

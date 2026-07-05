@@ -1,5 +1,6 @@
 local common = require "core.common"
 local config = require "core.config"
+local core = require "core"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
 local markdown = require "core.markdown"
@@ -284,6 +285,35 @@ test.describe("Markdown Live Editor", function()
     canvas.load_image = old_load_image
     os.remove(image_path)
     common.rm(root, true)
+  end)
+
+  test.it("closes the image overlay when clicking outside the image", function()
+    local overlay = require "core.markdown.image_overlay"
+    local old_root_panel = core.root_panel
+    local state = overlay.state
+    core.root_panel = {
+      position = { x = 0, y = 0 },
+      size = { x = 500, y = 400 },
+    }
+
+    state.visible = true
+    state.width = 100
+    state.height = 100
+    state.scroll.x = 0
+    state.scroll.y = 0
+    state.dragging = false
+    overlay.on_mouse_pressed("left", 250, 200, 1)
+    test.equal(state.visible, true)
+    test.equal(state.dragging, true)
+    overlay.on_mouse_released("left", 250, 200)
+
+    state.visible = true
+    state.dragging = false
+    overlay.on_mouse_pressed("left", 10, 10, 1)
+    test.equal(state.visible, false)
+    test.equal(state.dragging, false)
+
+    core.root_panel = old_root_panel
   end)
 
   test.it("opens the image overlay when clicking a rendered image", function()
