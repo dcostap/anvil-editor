@@ -1,9 +1,10 @@
 #include "snapshot.h"
 
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
-static uint64_t next_snapshot_id = 1;
+static atomic_uint_fast64_t next_snapshot_id = 1;
 
 static char *snapshot_strdup(const char *text) {
   if (!text) return NULL;
@@ -46,7 +47,7 @@ AnvilTSSnapshot *anvil_ts_snapshot_new_from_lines(
     return NULL;
   }
 
-  snapshot->id = next_snapshot_id++;
+  snapshot->id = atomic_fetch_add_explicit(&next_snapshot_id, 1, memory_order_relaxed);
   snapshot->refcount = 1;
   snapshot->byte_len = (uint32_t) total;
   snapshot->line_count = line_count;

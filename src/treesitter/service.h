@@ -89,6 +89,21 @@ bool anvil_ts_document_state_status_snapshot(
 uint64_t anvil_ts_document_state_generation(const AnvilTSDocumentState *state);
 uint64_t anvil_ts_document_state_tree_generation(const AnvilTSDocumentState *state);
 bool anvil_ts_document_state_has_tree(const AnvilTSDocumentState *state);
+bool anvil_ts_query_captures_in_tree(
+  TSTree *tree,
+  const AnvilTSSnapshot *snapshot,
+  const TSQuery *query,
+  uint32_t byte_start,
+  uint32_t byte_end,
+  uint32_t match_limit,
+  uint32_t max_captures,
+  uint32_t timeout_ms,
+  AnvilTSQueryCaptureCallback callback,
+  void *payload,
+  bool *exceeded_match_limit,
+  char **error
+);
+
 bool anvil_ts_document_state_query_captures(
   AnvilTSDocumentState *state,
   const TSQuery *query,

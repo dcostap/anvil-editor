@@ -3,6 +3,8 @@
 #include "../treesitter/service.h"
 #include "../treesitter/snapshot.h"
 
+#include <SDL3/SDL_timer.h>
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -501,6 +503,214 @@ static void push_capture_copy(lua_State *L, const LuaCaptureCopy *capture) {
   lua_setfield(L, -2, "order");
 }
 
+typedef struct LuaSyncParseRun {
+  uint64_t started_ticks;
+  uint32_t timeout_ms;
+  bool timed_out;
+} LuaSyncParseRun;
+
+static bool sync_parse_progress(TSParseState *parse_state) {
+  LuaSyncParseRun *run = (LuaSyncParseRun *) parse_state->payload;
+  if (run && run->timeout_ms > 0) {
+    uint64_t elapsed = SDL_GetTicks() - run->started_ticks;
+    if (elapsed >= run->timeout_ms) {
+      run->timed_out = true;
+      return true;
+    }
+  }
+  return false;
+}
+
+static TSQuery *compile_query_source(
+  lua_State *L,
+  const AnvilTSLanguage *language,
+  const char *kind,
+  const char *source,
+  size_t source_len
+) {
+  uint32_t error_offset = 0;
+  TSQueryError error_type = TSQueryErrorNone;
+  TSQuery *query = ts_query_new(
+    anvil_ts_language_ptr(language),
+    source,
+    (uint32_t) source_len,
+    &error_offset,
+    &error_type
+  );
+  if (!query) {
+    lua_pushnil(L);
+    lua_pushfstring(
+      L,
+      "Tree-sitter %s query error %d at byte %d",
+      kind,
+      (int) error_type,
+      (int) error_offset
+    );
+    return NULL;
+  }
+  return query;
+}
+
+static bool index_text_query(
+  lua_State *L,
+  int result_index,
+  const char *field,
+  const AnvilTSLanguage *language,
+  const char *source,
+  size_t source_len,
+  TSTree *tree,
+  const AnvilTSSnapshot *snapshot,
+  uint32_t match_limit,
+  uint32_t max_captures,
+  uint32_t timeout_ms
+) {
+  if (!source) return true;
+  TSQuery *query = compile_query_source(L, language, field, source, source_len);
+  if (!query) return false;
+
+  LuaCaptureCollectContext context;
+  memset(&context, 0, sizeof(context));
+  bool exceeded_match_limit = false;
+  char *error = NULL;
+  bool ok = anvil_ts_query_captures_in_tree(
+    tree,
+    snapshot,
+    query,
+    0,
+    snapshot->byte_len,
+    match_limit,
+    max_captures,
+    timeout_ms,
+    collect_query_capture,
+    &context,
+    &exceeded_match_limit,
+    &error
+  );
+  ts_query_delete(query);
+
+  if (!ok) {
+    lua_pushnil(L);
+    lua_pushstring(L, error ? error : (context.failed ? "out of memory collecting Tree-sitter captures" : "Tree-sitter query failed"));
+    free(error);
+    free_capture_copies(&context);
+    return false;
+  }
+
+  lua_newtable(L);
+  lua_newtable(L);
+  for (uint32_t i = 0; i < context.count; i++) {
+    push_capture_copy(L, &context.items[i]);
+    lua_rawseti(L, -2, (int) i + 1);
+  }
+  lua_setfield(L, -2, "captures");
+  lua_pushboolean(L, exceeded_match_limit);
+  lua_setfield(L, -2, "exceeded_match_limit");
+  lua_pushinteger(L, (lua_Integer) context.count);
+  lua_setfield(L, -2, "capture_count");
+  lua_setfield(L, result_index, field);
+  free_capture_copies(&context);
+  return true;
+}
+
+static int f_index_text(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  int opts = 1;
+
+  lua_getfield(L, opts, "language");
+  const char *language_id = luaL_checkstring(L, -1);
+  lua_pop(L, 1);
+  const AnvilTSLanguage *language = anvil_ts_language_by_id(language_id);
+  if (!language || !anvil_ts_language_is_compatible(language)) {
+    lua_pushnil(L);
+    lua_pushfstring(L, "unknown or incompatible Tree-sitter language '%s'", language_id);
+    return 2;
+  }
+
+  lua_getfield(L, opts, "lines");
+  if (!lua_istable(L, -1)) {
+    lua_pushnil(L);
+    lua_pushstring(L, "Tree-sitter index_text requires a lines table");
+    return 2;
+  }
+  char *error = NULL;
+  AnvilTSSnapshot *snapshot = snapshot_from_lua_lines(L, -1, &error);
+  lua_pop(L, 1);
+  if (!snapshot) {
+    lua_pushnil(L);
+    lua_pushstring(L, error ? error : "failed to create Tree-sitter snapshot");
+    free(error);
+    return 2;
+  }
+
+  uint32_t parse_timeout_ms = option_uint32(L, opts, "parse_timeout_ms", 750);
+  uint32_t query_timeout_ms = option_uint32(L, opts, "query_timeout_ms", 20);
+  uint32_t match_limit = option_uint32(L, opts, "match_limit", 50000);
+  uint32_t max_captures = option_uint32(L, opts, "max_captures", 50000);
+
+  TSParser *parser = ts_parser_new();
+  if (!parser) {
+    anvil_ts_snapshot_free(snapshot);
+    lua_pushnil(L);
+    lua_pushstring(L, "failed to allocate Tree-sitter parser");
+    return 2;
+  }
+  if (!ts_parser_set_language(parser, anvil_ts_language_ptr(language))) {
+    ts_parser_delete(parser);
+    anvil_ts_snapshot_free(snapshot);
+    lua_pushnil(L);
+    lua_pushstring(L, "failed to set Tree-sitter parser language");
+    return 2;
+  }
+
+  LuaSyncParseRun run;
+  memset(&run, 0, sizeof(run));
+  run.started_ticks = SDL_GetTicks();
+  run.timeout_ms = parse_timeout_ms;
+  TSParseOptions parse_options;
+  parse_options.payload = &run;
+  parse_options.progress_callback = sync_parse_progress;
+  TSInput input = anvil_ts_snapshot_input(snapshot);
+  TSTree *tree = ts_parser_parse_with_options(parser, NULL, input, parse_options);
+  ts_parser_delete(parser);
+  if (!tree) {
+    anvil_ts_snapshot_free(snapshot);
+    lua_pushnil(L);
+    lua_pushstring(L, run.timed_out ? "Tree-sitter parse timed out" : "Tree-sitter parse failed");
+    return 2;
+  }
+
+  lua_newtable(L);
+  int result_index = lua_gettop(L);
+  lua_pushstring(L, language->id);
+  lua_setfield(L, result_index, "language");
+  lua_pushinteger(L, (lua_Integer) snapshot->byte_len);
+  lua_setfield(L, result_index, "byte_len");
+
+  size_t outline_len = 0;
+  lua_getfield(L, opts, "outline_query");
+  const char *outline_source = lua_tolstring(L, -1, &outline_len);
+  if (outline_source && !index_text_query(L, result_index, "outline", language, outline_source, outline_len, tree, snapshot, match_limit, max_captures, query_timeout_ms)) {
+    ts_tree_delete(tree);
+    anvil_ts_snapshot_free(snapshot);
+    return 2;
+  }
+  lua_pop(L, 1);
+
+  size_t usage_len = 0;
+  lua_getfield(L, opts, "usage_query");
+  const char *usage_source = lua_tolstring(L, -1, &usage_len);
+  if (usage_source && !index_text_query(L, result_index, "usage", language, usage_source, usage_len, tree, snapshot, match_limit, max_captures, query_timeout_ms)) {
+    ts_tree_delete(tree);
+    anvil_ts_snapshot_free(snapshot);
+    return 2;
+  }
+  lua_pop(L, 1);
+
+  ts_tree_delete(tree);
+  anvil_ts_snapshot_free(snapshot);
+  return 1;
+}
+
 typedef struct LuaNodeRangeCopy {
   char *type;
   uint32_t type_len;
@@ -768,6 +978,7 @@ static const luaL_Reg lib[] = {
   { "has_language", f_has_language },
   { "language_version", f_language_version },
   { "compile_query", f_compile_query },
+  { "index_text", f_index_text },
   { "register_complete_event", f_register_complete_event },
   { "new_document_state", f_new_document_state },
   { NULL, NULL }

@@ -380,12 +380,17 @@ bool anvil_ts_document_state_has_tree(const AnvilTSDocumentState *state) {
 typedef struct AnvilTSQueryRun {
   uint64_t started_ticks;
   uint32_t timeout_ms;
+  bool timed_out;
 } AnvilTSQueryRun;
 
 static bool query_progress(TSQueryCursorState *cursor_state) {
   AnvilTSQueryRun *run = (AnvilTSQueryRun *) cursor_state->payload;
   if (!run || run->timeout_ms == 0) return false;
-  return SDL_GetTicks() - run->started_ticks >= run->timeout_ms;
+  if (SDL_GetTicks() - run->started_ticks >= run->timeout_ms) {
+    run->timed_out = true;
+    return true;
+  }
+  return false;
 }
 
 static const char *query_string_value(const TSQuery *query, uint32_t id, uint32_t *len) {
@@ -569,8 +574,9 @@ static bool query_match_predicates(
   return true;
 }
 
-bool anvil_ts_document_state_query_captures(
-  AnvilTSDocumentState *state,
+bool anvil_ts_query_captures_in_tree(
+  TSTree *tree,
+  const AnvilTSSnapshot *snapshot,
   const TSQuery *query,
   uint32_t byte_start,
   uint32_t byte_end,
@@ -584,34 +590,23 @@ bool anvil_ts_document_state_query_captures(
 ) {
   if (error) *error = NULL;
   if (exceeded_match_limit) *exceeded_match_limit = false;
-  if (!state || !query || !callback) {
+  if (!tree || !snapshot || !query || !callback) {
     service_set_error(error, "invalid Tree-sitter query request");
     return false;
   }
-  if (!service_ensure_initialized() || !service_lock()) {
-    service_set_error(error, "failed to lock Tree-sitter service");
-    return false;
-  }
-  if (!state->current_tree || !state->current_snapshot || state->closed) {
-    service_unlock();
-    service_set_error(error, "Tree-sitter tree is not ready");
-    return false;
-  }
 
-  TSTree *tree = state->current_tree;
-  AnvilTSSnapshot *snapshot = state->current_snapshot;
   if (byte_end > snapshot->byte_len) byte_end = snapshot->byte_len;
   if (byte_start > byte_end) byte_start = byte_end;
   TSNode root = ts_tree_root_node(tree);
   TSQueryCursor *cursor = ts_query_cursor_new();
   if (!cursor) {
-    service_unlock();
     service_set_error(error, "failed to allocate Tree-sitter query cursor");
     return false;
   }
   if (match_limit > 0) ts_query_cursor_set_match_limit(cursor, match_limit);
   ts_query_cursor_set_byte_range(cursor, byte_start, byte_end);
   AnvilTSQueryRun run;
+  memset(&run, 0, sizeof(run));
   run.started_ticks = SDL_GetTicks();
   run.timeout_ms = timeout_ms;
   TSQueryCursorOptions options;
@@ -668,12 +663,62 @@ done:
     service_set_error(error, predicate_error);
     free(predicate_error);
   }
+  if (run.timed_out && ok) {
+    service_set_error(error, "Tree-sitter query timed out");
+    ok = false;
+  }
   if (exceeded_match_limit) *exceeded_match_limit = ts_query_cursor_did_exceed_match_limit(cursor);
   if (exceeded_match_limit && *exceeded_match_limit && ok) {
     service_set_error(error, "Tree-sitter query match limit exceeded");
     ok = false;
   }
   ts_query_cursor_delete(cursor);
+  return ok;
+}
+
+bool anvil_ts_document_state_query_captures(
+  AnvilTSDocumentState *state,
+  const TSQuery *query,
+  uint32_t byte_start,
+  uint32_t byte_end,
+  uint32_t match_limit,
+  uint32_t max_captures,
+  uint32_t timeout_ms,
+  AnvilTSQueryCaptureCallback callback,
+  void *payload,
+  bool *exceeded_match_limit,
+  char **error
+) {
+  if (error) *error = NULL;
+  if (exceeded_match_limit) *exceeded_match_limit = false;
+  if (!state || !query || !callback) {
+    service_set_error(error, "invalid Tree-sitter query request");
+    return false;
+  }
+  if (!service_ensure_initialized() || !service_lock()) {
+    service_set_error(error, "failed to lock Tree-sitter service");
+    return false;
+  }
+  if (!state->current_tree || !state->current_snapshot || state->closed) {
+    service_unlock();
+    service_set_error(error, "Tree-sitter tree is not ready");
+    return false;
+  }
+
+  bool ok = anvil_ts_query_captures_in_tree(
+    state->current_tree,
+    state->current_snapshot,
+    query,
+    byte_start,
+    byte_end,
+    match_limit,
+    max_captures,
+    timeout_ms,
+    callback,
+    payload,
+    exceeded_match_limit,
+    error
+  );
   service_unlock();
   return ok;
 }

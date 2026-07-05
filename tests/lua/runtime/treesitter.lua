@@ -244,6 +244,30 @@ test.describe("core.treesitter phase 3 document integration", function()
     test.equal(config.id, "kotlin")
   end)
 
+  test.it("native index_text parses and queries without document state service", function()
+    local result, err = native.index_text({
+      language = "c",
+      lines = { "int main(void) { return 0; }\n" },
+      outline_query = "(identifier) @id",
+      parse_timeout_ms = 750,
+      query_timeout_ms = 20,
+      match_limit = 1000,
+      max_captures = 1000,
+    })
+    test.not_nil(result, err)
+    test.equal(result.language, "c")
+    test.ok(result.byte_len > 0)
+    test.ok(result.outline.capture_count > 0)
+    local saw_main = false
+    for _, capture in ipairs(result.outline.captures) do
+      if capture.capture == "id" and capture.start_line == 1 then
+        saw_main = true
+        break
+      end
+    end
+    test.ok(saw_main)
+  end)
+
   test.it("Tree-sitter registers as a language intelligence provider", function()
     local provider = intelligence.get_provider("treesitter")
     test.ok(provider)
