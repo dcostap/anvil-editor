@@ -179,13 +179,6 @@ local function inline_fragments(line_text, line, view)
         text = span.text,
         color = style.text,
       })
-    elseif span.type == "code" then
-      add_fragment(fragments, occupied, {
-        source_col1 = span.col1,
-        source_col2 = span.col2,
-        text = span.text,
-        color = style.text,
-      })
     end
   end
   table.sort(fragments, function(a, b) return (a.source_col1 or 1) < (b.source_col1 or 1) end)
