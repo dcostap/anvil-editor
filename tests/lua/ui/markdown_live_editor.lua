@@ -72,13 +72,14 @@ test.describe("Markdown Live Editor", function()
   end)
 
   test.it("does not live-render Markdown syntax inside code blocks", function()
-    local view, doc = make_view("```\n# Not Heading\n**not bold**\n```\n# Heading\n", "note.md")
-    doc:set_selection(5, 1)
+    local view, doc = make_view("```\n# Not Heading\n**not bold**\n``` not closing\n# Still Not Heading\n```\n# Heading\n", "note.md")
+    doc:set_selection(7, 1)
     markdown.live_render.refresh_view(view)
     test.equal(view:get_visual_row_height(2), view:get_line_height())
     test.equal(view:get_col_x_offset(2, 3), view:get_font():get_width("# "))
     test.equal(view:get_col_x_offset(3, #"**not bold**" + 1), view:get_font():get_width("**not bold**"))
-    test.ok(view:get_visual_row_height(5) > view:get_line_height())
+    test.equal(view:get_col_x_offset(5, 3), view:get_font():get_width("# "))
+    test.ok(view:get_visual_row_height(7) > view:get_line_height())
   end)
 
   test.it("renders emphasis inside heading content", function()
@@ -239,6 +240,32 @@ test.describe("Markdown Live Editor", function()
     renderer.draw_text = old_draw_text
     os.remove(image_path)
     test.equal(drawn, 1)
+  end)
+
+  test.it("keeps tiny image rows at least normal line height", function()
+    local image_path = USERDIR .. PATHSEP .. "markdown-live-tiny-image-" .. system.get_process_id() .. ".png"
+    local fp = io.open(image_path, "wb")
+    test.not_nil(fp)
+    fp:write("png")
+    fp:close()
+
+    local image_url = common.basename and common.basename(image_path) or image_path:match("[^" .. PATHSEP .. "]+$")
+    local view, doc = make_view("![Tiny](" .. image_url .. ")\nother", USERDIR .. PATHSEP .. "note.md")
+    doc:set_selection(2, 1)
+    local old_load_image = canvas.load_image
+    canvas.load_image = function(path)
+      test.equal(path, image_path)
+      return {
+        get_size = function() return 4, 4 end,
+        scaled = function(self) return self end,
+      }
+    end
+
+    markdown.live_render.refresh_view(view)
+    test.equal(view:get_visual_row_height(1), view:get_line_height())
+
+    canvas.load_image = old_load_image
+    os.remove(image_path)
   end)
 
   test.it("honors disabled live image rendering", function()

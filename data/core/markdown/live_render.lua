@@ -39,8 +39,8 @@ local function fence_marker(line)
 end
 
 local function closes_fence(line, marker, count)
-  local indent, run = line:match("^(%s*)(" .. (marker == "`" and "`+" or "~+") .. ")")
-  return run and #indent <= 3 and #run >= count
+  local indent, run, rest = line:match("^(%s*)(" .. (marker == "`" and "`+" or "~+") .. ")(%s*)$")
+  return run and #indent <= 3 and #run >= count and rest ~= nil
 end
 
 local function line_in_raw_block(view, line)
@@ -407,7 +407,7 @@ function provider:line_height(view, line)
       max_height = math.max(max_height or 0, fragment.widget.height)
     end
   end
-  return max_height
+  if max_height then return math.max(view:get_line_height(), max_height) end
 end
 
 function provider:render_line(view, line)

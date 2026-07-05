@@ -6,11 +6,9 @@ local parser = require "core.markdown.parser"
 
 local vault_index = {}
 
-local MARKDOWN_EXTENSIONS = {
-  md = true,
-  markdown = true,
-  mdown = true,
-}
+local MARKDOWN_EXTENSION_LIST = { "md", "markdown", "mdown" }
+local MARKDOWN_EXTENSIONS = {}
+for _, ext in ipairs(MARKDOWN_EXTENSION_LIST) do MARKDOWN_EXTENSIONS[ext] = true end
 
 local ATTACHMENT_EXTENSIONS = {
   avif = true,
@@ -87,6 +85,16 @@ end
 
 local function is_markdown(path)
   return MARKDOWN_EXTENSIONS[extension(path) or ""] == true
+end
+
+local function note_entry_for_explicit_path(index, abs)
+  local entry = index.notes_by_abs[path_key(abs)]
+  if entry then return entry end
+  if extension(abs) then return nil end
+  for _, ext in ipairs(MARKDOWN_EXTENSION_LIST) do
+    entry = index.notes_by_abs[path_key(abs .. "." .. ext)]
+    if entry then return entry end
+  end
 end
 
 local function is_attachment(path)
@@ -509,7 +517,7 @@ function Index:resolve(link_or_target, source_path)
   if explicit_path and source_dir then
     local abs = absolute_path(join_path(source_dir, target))
     if abs and common.path_belongs_to(abs, self.root) then
-      local entry = self.notes_by_abs[path_key(abs)] or self.notes_by_abs[path_key(abs .. ".md")] or self.attachments_by_abs[path_key(abs)]
+      local entry = note_entry_for_explicit_path(self, abs) or self.attachments_by_abs[path_key(abs)]
       if entry then
         return self:resolve_entry_result(entry, link, target)
       end

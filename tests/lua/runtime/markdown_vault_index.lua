@@ -72,6 +72,7 @@ test.describe("Markdown vault index", function()
     local root = temp_root("markdown-vault-paths")
     mkdirp(join_path(root, "folder"))
     write_file(join_path(root, "folder", "Note.md"), "# Folder Note\n")
+    write_file(join_path(root, "folder", "Other.markdown"), "# Other\n")
     write_file(join_path(root, "folder", "Source.md"), "source\n")
 
     with_projects({ Project(root) }, function()
@@ -83,6 +84,10 @@ test.describe("Markdown vault index", function()
       local source_relative = index:resolve(wiki("[[./Note]]"), join_path(root, "folder", "Source.md"))
       test.equal(source_relative.status, "resolved")
       test.equal(source_relative.path, normalized(join_path(root, "folder", "Note.md")))
+
+      local alternate_extension = index:resolve(wiki("[[folder/Other]]"), join_path(root, "folder", "Source.md"))
+      test.equal(alternate_extension.status, "resolved")
+      test.equal(alternate_extension.path, normalized(join_path(root, "folder", "Other.markdown")))
     end)
 
     common.rm(root, true)
