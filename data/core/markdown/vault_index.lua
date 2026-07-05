@@ -384,6 +384,7 @@ end
 
 function Index:update_doc(doc)
   if not (doc and doc.abs_filename and is_markdown(doc.abs_filename)) then return false end
+  if not common.path_belongs_to(common.normalize_path(doc.abs_filename), self.root) then return false end
   local text = doc:get_text(1, 1, math.huge, math.huge)
   self:add_note_entry(self:make_note_entry(doc.abs_filename, text))
   self.generation = self.generation + 1
@@ -393,6 +394,7 @@ end
 
 function Index:track_doc(doc)
   if not (doc and doc.add_text_change_listener) then return false end
+  if not (doc.abs_filename and common.path_belongs_to(common.normalize_path(doc.abs_filename), self.root)) then return false end
   if self.doc_listeners[doc] then
     self:update_doc(doc)
     return false
@@ -405,6 +407,14 @@ function Index:track_doc(doc)
   })
   self.doc_listeners[doc] = id
   self:update_doc(doc)
+  return true
+end
+
+function Index:untrack_doc(doc)
+  local id = self.doc_listeners[doc]
+  if not id then return false end
+  if doc and doc.remove_text_change_listener then doc:remove_text_change_listener(id) end
+  self.doc_listeners[doc] = nil
   return true
 end
 
@@ -554,7 +564,11 @@ end
 
 function vault_index.on_doc_filename_changed(doc, old_abs_filename)
   if old_abs_filename then
-    vault_index.index_for_path(old_abs_filename):remove_path(old_abs_filename)
+    local old_index = vault_index.index_for_path(old_abs_filename)
+    old_index:remove_path(old_abs_filename)
+    if not (doc and doc.abs_filename and common.path_belongs_to(common.normalize_path(doc.abs_filename), old_index.root)) then
+      old_index:untrack_doc(doc)
+    end
   end
   if doc and doc.abs_filename then
     vault_index.track_doc(doc)

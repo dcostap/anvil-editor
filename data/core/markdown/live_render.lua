@@ -30,6 +30,47 @@ local function line_is_wrapped(view, line)
   return ok and (count or 1) > 1
 end
 
+local function fence_marker(line)
+  local indent, ticks = line:match("^(%s*)(`+)")
+  if ticks and #indent <= 3 and #ticks >= 3 then return "`", #ticks end
+  local tildes
+  indent, tildes = line:match("^(%s*)(~+)")
+  if tildes and #indent <= 3 and #tildes >= 3 then return "~", #tildes end
+end
+
+local function closes_fence(line, marker, count)
+  local indent, run = line:match("^(%s*)(" .. (marker == "`" and "`+" or "~+") .. ")")
+  return run and #indent <= 3 and #run >= count
+end
+
+local function line_in_raw_block(view, line)
+  local doc = view.doc
+  local signature = tostring(doc.text_revision or 0) .. ":" .. tostring(#doc.lines)
+  local cache = view.__markdown_live_raw_block_cache
+  if not (cache and cache.signature == signature) then
+    local suppressed = {}
+    local marker, count
+    for i, raw in ipairs(doc.lines) do
+      local text = (raw or ""):gsub("\n$", "")
+      if marker then
+        suppressed[i] = true
+        if closes_fence(text, marker, count) then marker, count = nil, nil end
+      else
+        local m, c = fence_marker(text)
+        if m then
+          suppressed[i] = true
+          marker, count = m, c
+        elseif text:match("^    %S") or text:match("^\t%S") then
+          suppressed[i] = true
+        end
+      end
+    end
+    cache = { signature = signature, suppressed = suppressed }
+    view.__markdown_live_raw_block_cache = cache
+  end
+  return cache.suppressed[line] == true
+end
+
 local function current_selection_state(view)
   if view.get_line_render_selection_state then return view:get_line_render_selection_state() end
   return view.selection_state or { selections = view.doc.selections }
@@ -284,6 +325,11 @@ end
 
 local provider = {}
 
+function provider:generation(view)
+  local state = current_selection_state(view)
+  return table.concat(state and state.selections or {}, ",")
+end
+
 local function heading_content_fragments(view, text, heading, font, active)
   local fragments = {}
   local cursor = heading.content_col1
@@ -348,7 +394,7 @@ local function heading_render_line(view, text, heading, active)
 end
 
 function provider:line_height(view, line)
-  if line_is_wrapped(view, line) then return nil end
+  if line_is_wrapped(view, line) or line_in_raw_block(view, line) then return nil end
   local text = (view.doc.lines[line] or ""):gsub("\n$", "")
   local heading = heading_for_line(text, line)
   if heading then
@@ -365,7 +411,7 @@ function provider:line_height(view, line)
 end
 
 function provider:render_line(view, line)
-  if line_is_wrapped(view, line) then return { raw_passthrough = true } end
+  if line_is_wrapped(view, line) or line_in_raw_block(view, line) then return { raw_passthrough = true } end
 
   local text = (view.doc.lines[line] or ""):gsub("\n$", "")
   local heading = heading_for_line(text, line)
