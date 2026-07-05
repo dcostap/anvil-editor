@@ -30,11 +30,36 @@ local function line_is_wrapped(view, line)
   return ok and (count or 1) > 1
 end
 
+local function normalized_selection_range(l1, c1, l2, c2)
+  if l2 < l1 or (l1 == l2 and c2 < c1) then
+    return l2, c2, l1, c1
+  end
+  return l1, c1, l2, c2
+end
+
 local function view_active_line(view, line)
   local selections = view.selection_state and view.selection_state.selections or view.doc.selections or {}
   for i = 1, #selections, 4 do
     local l1, _, l2 = selections[i], selections[i + 1], selections[i + 2]
     if l1 and l2 and line >= math.min(l1, l2) and line <= math.max(l1, l2) then return true end
+  end
+  return false
+end
+
+local function source_range_active(view, line, col1, col2)
+  local selections = view.selection_state and view.selection_state.selections or view.doc.selections or {}
+  for i = 1, #selections, 4 do
+    local l1, c1, l2, c2 = selections[i], selections[i + 1], selections[i + 2], selections[i + 3]
+    if l1 and c1 and l2 and c2 then
+      l1, c1, l2, c2 = normalized_selection_range(l1, c1, l2, c2)
+      if l1 == l2 and c1 == c2 then
+        if line == l1 and c1 >= col1 and c1 <= col2 then return true end
+      elseif line >= l1 and line <= l2 then
+        local start_col = (line == l1) and c1 or 1
+        local end_col = (line == l2) and c2 or math.huge
+        if start_col < col2 and col1 < end_col then return true end
+      end
+    end
   end
   return false
 end
@@ -93,7 +118,11 @@ local function inline_style_font(view, span_type)
 end
 
 local function normal_text_color()
-  return style.syntax.normal or style.text
+  return style.text or style.syntax.normal
+end
+
+local function strong_overdraw(span_type)
+  return span_type == "strong" or span_type == "strong_emphasis" or nil
 end
 
 local function is_image_target(path)
@@ -185,6 +214,7 @@ local function emphasis_fragment(view, line_text, span, active)
       text = span.text,
       font = inline_style_font(view, span.type),
       color = normal_text_color(),
+      overdraw = strong_overdraw(span.type),
     }
   end
   if active then
@@ -201,6 +231,7 @@ local function emphasis_fragment(view, line_text, span, active)
         text = span.text,
         font = inline_style_font(view, span.type),
         color = normal_text_color(),
+        overdraw = strong_overdraw(span.type),
       },
       {
         source_col1 = content.col2,
@@ -222,6 +253,7 @@ local function emphasis_fragment(view, line_text, span, active)
       text = span.text,
       font = inline_style_font(view, span.type),
       color = normal_text_color(),
+      overdraw = strong_overdraw(span.type),
     },
     {
       source_col1 = content.col2,
@@ -261,7 +293,7 @@ local function inline_fragments(line_text, line, view, active)
         end
       end
     elseif span.type == "strong" or span.type == "emphasis" or span.type == "strong_emphasis" or span.type == "strikethrough" then
-      add_fragment_or_fragments(fragments, occupied, emphasis_fragment(view, line_text, span, active))
+      add_fragment_or_fragments(fragments, occupied, emphasis_fragment(view, line_text, span, active and source_range_active(view, line, span.col1, span.col2)))
     end
   end
   table.sort(fragments, function(a, b) return (a.source_col1 or 1) < (b.source_col1 or 1) end)

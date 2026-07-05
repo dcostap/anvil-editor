@@ -3735,7 +3735,12 @@ function DocView:draw_line_text(line, x, y)
           if not ok then core.log_quiet("DocView render widget draw failed for %s: %s", self.doc:get_name(), tostring(err)) end
           tx = tx + (fragment.width or fragment.widget.width or 0)
         elseif text ~= "" then
-          tx = renderer.draw_text(font, text, tx, ty, render_fragment_color(fragment), { tab_offset = tx - x })
+          local color = render_fragment_color(fragment)
+          local old_tx = tx
+          tx = renderer.draw_text(font, text, tx, ty, color, { tab_offset = tx - x })
+          if fragment.overdraw then
+            renderer.draw_text(font, text, old_tx + (fragment.overdraw_dx or math.max(1, SCALE)), ty, color, { tab_offset = old_tx - x })
+          end
         elseif fragment.width then
           tx = tx + fragment.width
         end

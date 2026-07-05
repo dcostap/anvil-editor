@@ -3,6 +3,7 @@ local config = require "core.config"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
 local markdown = require "core.markdown"
+local style = require "core.style"
 local test = require "core.test"
 
 local function make_view(text, filename)
@@ -85,17 +86,20 @@ test.describe("Markdown Live Editor", function()
     test.not_nil(seen.bold)
     test.not_nil(seen.italic)
     test.not_nil(seen.both)
-    test.equal(seen.bold.color, require("core.style").syntax.normal)
-    test.equal(seen.italic.color, require("core.style").syntax.normal)
-    test.equal(seen.both.color, require("core.style").syntax.normal)
+    test.equal(seen.bold.color, style.text)
+    test.equal(seen.italic.color, style.text)
+    test.equal(seen.both.color, style.text)
+    test.equal(seen.bold.overdraw, true)
+    test.equal(seen.italic.overdraw, nil)
+    test.equal(seen.both.overdraw, true)
     test.ok(seen.bold.font ~= view:get_font())
     test.ok(seen.italic.font ~= view:get_font())
     test.ok(seen.both.font ~= view:get_font())
     test.equal(view:get_x_offset_col(1, view:get_col_x_offset(1, #"This is **" + 1) + 1), #"This is **" + 1)
   end)
 
-  test.it("expands active emphasis syntax without dropping styled content", function()
-    local view, doc = make_view("This is **bold**\nnext", "note.md")
+  test.it("expands only the active emphasis syntax without dropping styled content", function()
+    local view, doc = make_view("This is **bold** and **more**\nnext", "note.md")
     doc:set_selection(1, 11)
     markdown.live_render.refresh_view(view)
     local render_line = view:get_line_render(1)
@@ -104,7 +108,7 @@ test.describe("Markdown Live Editor", function()
     for _, fragment in ipairs(view:iter_line_render_fragments(render_line)) do
       if not fragment.hidden then texts[#texts + 1] = fragment.text or "" end
     end
-    test.same({ "This is ", "**", "bold", "**" }, texts)
+    test.same({ "This is ", "**", "bold", "**", " and ", "more" }, texts)
   end)
 
   test.it("leaves inline code spans raw and does not render escaped syntax", function()
