@@ -115,7 +115,7 @@ test.describe("File Tree Project Path Roles", function()
     test.not_nil(external_root)
     test.not_nil(missing_root)
     test.ok(readme_line < vendored_section)
-    test.equal(line_text(filetree.doc.lines[vendored_section - 1]), "")
+    test.not_equal(line_text(filetree.doc.lines[vendored_section - 1]), "")
     test.equal(vendored_section, vendored_root)
     test.ok(vendored_root < external_section)
     test.equal(external_section, external_root)
@@ -154,7 +154,7 @@ test.describe("File Tree Project Path Roles", function()
     test.ok(common.path_equals(entry.abs, context.excluded))
   end)
 
-  test.it("draws Project Directory separators as metadata on the first section row", function(context)
+  test.it("draws Project Directory separators as visual rows before the first section row", function(context)
     local filetree = setup_project_paths(context)
     local vendored_section = find_section_start(filetree, "vendored")
     test.not_nil(vendored_section)
@@ -162,6 +162,18 @@ test.describe("File Tree Project Path Roles", function()
     local entry, err = filetree:entry_for_line(vendored_section)
     test.not_nil(entry)
     test.equal(err, nil)
+
+    local found_provider_row = false
+    for _, row in ipairs(filetree:composed_visual_rows()) do
+      if row.type == "provider"
+          and row.line == vendored_section
+          and row.placement == "before"
+          and row.provider_id == "filetree-project-path-separators" then
+        found_provider_row = type(row.provider_row.draw) == "function"
+        break
+      end
+    end
+    test.ok(found_provider_row, "expected separator to be a visual row, not a document row")
   end)
 
   test.it("rejects new rows typed under browse-only Project Directory sections", function(context)

@@ -834,9 +834,30 @@ FileTreeView.context = "application"
 
 function FileTreeView:__tostring() return "FileTreeView" end
 
+local PROJECT_PATH_SEPARATOR_PROVIDER = {
+  generation = function(_, view)
+    return view.project_path_separator_generation or 0
+  end,
+  visual_rows = function(_, view, line, placement)
+    if placement ~= "before" then return nil end
+    local meta = view.line_meta and view.line_meta[line]
+    if not (type(meta) == "table" and meta.project_path_separator_before) then return nil end
+    return {
+      {
+        id = "project-path-separator",
+        draw = function(v, _row, x, y, w, h)
+          local thickness = math.max(1, style.divider_size or 1)
+          renderer.draw_rect(x, y + math.floor((h - thickness) / 2), math.max(0, w), thickness, style.divider)
+        end,
+      },
+    }
+  end,
+}
+
 function FileTreeView:new()
   local doc = Doc()
   FileTreeView.super.new(self, doc)
+  self:add_visual_row_provider("filetree-project-path-separators", PROJECT_PATH_SEPARATOR_PROVIDER)
   self.target_size = filetree_config.size
   self.visible = filetree_config.visible
   self.current_dir = core.root_project().path
@@ -1469,15 +1490,9 @@ function FileTreeView:append_project_path_sections(out)
     end
   end
 
-  local added_project_path_region_padding = false
   for _, role in ipairs({ "vendored", "external" }) do
     local entries = entries_by_role[role]
     if #entries > 0 then
-      if not added_project_path_region_padding and #out > 0 then
-        out[#out + 1] = "\n"
-        self.line_meta[#out] = NO_META
-        added_project_path_region_padding = true
-      end
       table.sort(entries, function(a, b) return (a.label or "") < (b.label or "") end)
       for index, entry in ipairs(entries) do
         entry.project_path_separator_before = index == 1
@@ -1527,6 +1542,8 @@ function FileTreeView:refresh(keep_selection, preserve_expansion, reveal_paths)
   self:append_project_path_sections(out)
   set_doc_lines(self.doc, out)
   for i = #out + 1, #self.doc.lines do self.line_meta[i] = NO_META end
+  self.project_path_separator_generation = (self.project_path_separator_generation or 0) + 1
+  self:invalidate_visual_rows("filetree-project-path-separators")
   self.rendered_dir = self.current_dir
   self:snapshot_lines()
   self.status_cache = nil
@@ -2037,12 +2054,6 @@ function FileTreeView:draw_line_body(line, x, y)
     math.max(0, self.size.x - gw)
   )
   local result = FileTreeView.super.draw_line_body(self, line, x, y)
-  if type(meta) == "table" and meta.project_path_separator_before then
-    local thickness = math.max(1, style.divider_size or 1)
-    local left = x
-    local width = math.max(0, self.size.x - gw)
-    renderer.draw_rect(left, y, width, thickness, style.project_path_separator)
-  end
   perf_finish(stats, "filetree_draw_line_body_ms", start)
   return result
 end
