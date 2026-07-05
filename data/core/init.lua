@@ -2817,6 +2817,17 @@ function core.run_step(options)
   end
   local run_threads_ms = threads_end_time * 1000
 
+  local worker_pool_module = package.loaded["core.worker_pool"]
+  if worker_pool_module and worker_pool_module.current_system then
+    local pool = worker_pool_module.current_system()
+    if pool then
+      pool:drain({
+        max_ms = config.worker_pool_drain_budget_ms or 1.0,
+        max_messages = config.worker_pool_drain_max_messages or 64,
+      })
+    end
+  end
+
   -- respect coroutines redraw requests
   if run_has_focus or core.redraw then
     run_skip_no_focus = core.frame_start + 5
@@ -2869,6 +2880,10 @@ function core.run_step(options)
       run_next_step = nil
     end
     if core.restart_request or core.quit_request then
+      local worker_pool_module = package.loaded["core.worker_pool"]
+      if worker_pool_module and worker_pool_module.shutdown_system then
+        worker_pool_module.shutdown_system({ cancel_running = true, timeout_ms = 1000 })
+      end
       core.in_live_resize_frame = previous_live_resize_frame
       return false
     end

@@ -134,6 +134,8 @@ plugin_defaults("ipc", {
   single_instance = true,
   dirs_instance = "new",
 })
+config.worker_pool_drain_budget_ms = config.worker_pool_drain_budget_ms or 1.0
+config.worker_pool_drain_max_messages = config.worker_pool_drain_max_messages or 64
 config.lsp = common.merge({
   enabled = true,
   -- Navigation waits longer than the old eager fallback so busy language servers
