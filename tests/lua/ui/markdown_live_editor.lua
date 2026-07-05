@@ -276,6 +276,43 @@ test.describe("Markdown Live Editor", function()
     os.remove(image_path)
   end)
 
+  test.it("draws wrapped-mode image rows while only the rendered image is visible", function()
+    local image_path = USERDIR .. PATHSEP .. "markdown-live-wrapped-cull-image-" .. system.get_process_id() .. ".png"
+    local fp = io.open(image_path, "wb")
+    test.not_nil(fp)
+    fp:write("png")
+    fp:close()
+    local image_url = common.basename and common.basename(image_path) or image_path:match("[^" .. PATHSEP .. "]+$")
+    local view, doc = make_view("![[" .. image_url .. "]]\nnext", USERDIR .. PATHSEP .. "note.md")
+    view:set_wrapping_enabled(true)
+    doc:set_selection(2, 1)
+    local old_load_image = canvas.load_image
+    local old_draw_canvas = renderer.draw_canvas
+    local old_draw_rect = renderer.draw_rect
+    local drawn = 0
+    canvas.load_image = function()
+      return {
+        get_size = function() return 80, 80 end,
+        scaled = function(self) return self end,
+      }
+    end
+    renderer.draw_canvas = function() drawn = drawn + 1 end
+    renderer.draw_rect = function() end
+
+    markdown.live_render.refresh_view(view)
+    view.scroll.y = view:get_line_height() + style.padding.y + 1
+    view.scroll.to.y = view.scroll.y
+    local x, y = view:get_line_screen_position(1)
+    view:draw_line_body(1, x, y)
+    local final_drawn = drawn
+
+    renderer.draw_rect = old_draw_rect
+    renderer.draw_canvas = old_draw_canvas
+    canvas.load_image = old_load_image
+    os.remove(image_path)
+    test.equal(final_drawn, 1)
+  end)
+
   test.it("renders wikilink image embeds from Obsidian attachmentFolderPath", function()
     local root = USERDIR .. PATHSEP .. "markdown-live-attachments-" .. system.get_process_id()
     local obsidian = root .. PATHSEP .. ".obsidian"

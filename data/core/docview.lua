@@ -4578,13 +4578,37 @@ function DocView:draw_line_body(line, x, y)
     local lh = self:get_line_height()
     local idx0, _, count = linewrapping.get_line_idx_col_count(self, line)
     local first_row, last_row = 1, count
+    local metric_cache = self:get_visual_row_metric_cache()
     if self.size and self.size.y > 0 then
       local viewport_y1 = self.position.y
       local viewport_y2 = self.position.y + self.size.y
-      first_row = math.max(1, math.floor((viewport_y1 - y) / lh) + 1)
-      last_row = math.min(count, math.floor((viewport_y2 - y) / lh) + 1)
+      if metric_cache then
+        first_row, last_row = count + 1, 0
+        local row0_y_offset = self:get_visual_row_y_offset(idx0)
+        for row = 1, count do
+          local idx = idx0 + row - 1
+          local row_y = y + self:get_visual_row_y_offset(idx) - row0_y_offset
+          local row_height = self:get_visual_row_height(idx)
+          if row_y + row_height >= viewport_y1 and row_y <= viewport_y2 then
+            first_row = math.min(first_row, row)
+            last_row = math.max(last_row, row)
+          end
+        end
+      else
+        first_row = math.max(1, math.floor((viewport_y1 - y) / lh) + 1)
+        last_row = math.min(count, math.floor((viewport_y2 - y) / lh) + 1)
+      end
     end
-    if last_row < first_row then return lh * count end
+    if last_row < first_row then
+      if metric_cache then
+        local height = 0
+        for row = 1, count do
+          height = height + self:get_visual_row_height(idx0 + row - 1)
+        end
+        return height
+      end
+      return lh * count
+    end
     local visible_idx1 = idx0 + first_row - 1
     local visible_idx2 = idx0 + last_row - 1
     local old_visible_idx1 = self.__wrapped_draw_first_idx
