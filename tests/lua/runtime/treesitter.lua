@@ -1,4 +1,7 @@
+local core = require "core"
 local common = require "core.common"
+local Project = require "core.project"
+local project_paths = require "core.project_paths"
 local Doc = require "core.doc"
 local test = require "core.test"
 local treesitter = require "core.treesitter"
@@ -433,6 +436,82 @@ fun use(item: TargetThing): Int {
     for _, ref in ipairs(refs) do
       test.not_ok(ref.is_declaration)
     end
+  end)
+
+  test.it("Tree-sitter Project search includes External and Vendored Project Directories", function()
+    symbol_index.reset_for_tests()
+    local original_projects = core.projects
+    local root = USERDIR .. PATHSEP .. "treesitter-project-paths-root-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    local external = USERDIR .. PATHSEP .. "treesitter-project-paths-external-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    mkdir(external)
+    mkdir(root .. PATHSEP .. "src" .. PATHSEP .. "vendor" .. PATHSEP .. "library1")
+    mkdir(root .. PATHSEP .. "generated")
+    write_file(root .. PATHSEP .. "Root.kt", [[package demo
+
+class RootThing
+]])
+    write_file(external .. PATHSEP .. "External.kt", [[package demo
+
+class ExternalThing
+]])
+    write_file(root .. PATHSEP .. "src" .. PATHSEP .. "vendor" .. PATHSEP .. "library1" .. PATHSEP .. "Vendor.kt", [[package demo
+
+class VendorThing
+]])
+    write_file(root .. PATHSEP .. "generated" .. PATHSEP .. "Excluded.kt", [[package demo
+
+class ExcludedThing
+]])
+
+    core.projects = { Project(root) }
+    project_paths.load_workspace_state(nil)
+    project_paths.configure_project {
+      external = {
+        { path = external, label = "external-src" },
+      },
+      vendored = {
+        { path = "src/vendor/library1", label = "library1" },
+      },
+      excluded = {
+        { path = "generated", label = "generated" },
+      },
+    }
+
+    symbol_index.ensure_scan(root, { force = true, refresh_after_seconds = 0 })
+    symbol_index.ensure_scan(external, { force = true, refresh_after_seconds = 0 })
+    test.equal(wait_index_ready(root, 8).status, "ready")
+    test.equal(wait_index_ready(external, 8).status, "ready")
+    local symbols, reason, status = wait_workspace_symbols("Thing", { limit = 20, refresh_after_seconds = 0 }, 8)
+    local external_symbols, external_reason, external_status = wait_workspace_symbols("ExternalThing", {
+      root = external,
+      limit = 20,
+      refresh_after_seconds = 0,
+    }, 8)
+    test.equal(status, "fresh", reason)
+    test.ok(find_symbol(symbols, "RootThing", "class"))
+    local external_symbol = find_symbol(external_symbols, "ExternalThing", "class")
+    test.equal(external_status, "fresh", external_reason)
+    test.ok(external_symbol)
+    test.ok(
+      external_symbol.file == "external-src" .. PATHSEP .. "External.kt"
+      or external_symbol.file == "External.kt",
+      "unexpected external display path: " .. tostring(external_symbol.file)
+    )
+    local vendor_symbol = find_symbol(symbols, "VendorThing", "class")
+    test.ok(vendor_symbol)
+    test.ok(
+      vendor_symbol.file == "library1" .. PATHSEP .. "Vendor.kt"
+      or vendor_symbol.file == "src/vendor/library1/Vendor.kt"
+      or vendor_symbol.file == "src" .. PATHSEP .. "vendor" .. PATHSEP .. "library1" .. PATHSEP .. "Vendor.kt",
+      "unexpected vendored display path: " .. tostring(vendor_symbol.file)
+    )
+    project_paths.configure_project {}
+    core.projects = original_projects
+    common.rm(root, true)
+    common.rm(external, true)
   end)
 
   test.it("Tree-sitter Project indexing can start eagerly before symbol or usage queries", function()

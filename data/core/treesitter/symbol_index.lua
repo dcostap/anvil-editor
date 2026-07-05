@@ -1,6 +1,7 @@
 local core = require "core"
 local common = require "core.common"
 local Project = require "core.project"
+local project_paths = require "core.project_paths"
 local DirWatch = require "core.dirwatch"
 local registry = require "core.treesitter.registry"
 local outline = require "core.treesitter.outline"
@@ -230,12 +231,39 @@ local function is_usage_capture(capture)
       or capture_kind(name) ~= nil
 end
 
+local function apply_project_path_metadata(item, path, kind)
+  if not project_paths.resolve(path) then return item end
+  local display = project_paths.display_path(path, { kind = kind })
+  if display then
+    item.display_file = display.text
+    item.file = display.text
+    item.relpath = display.text
+    item.root_label = display.root_label
+    item.root_role = display.root_role
+    item.root_id = display.root_id
+    item.rank_penalty = display.rank_penalty
+  end
+  return item
+end
+
+local function refresh_project_path_metadata(index, item, kind)
+  if not (index and item and item.path) then return item end
+  item.file = common.relative_path(index.root, item.path):gsub("\\", "/")
+  item.relpath = item.file
+  item.display_file = nil
+  item.root_label = nil
+  item.root_role = nil
+  item.root_id = nil
+  item.rank_penalty = nil
+  return apply_project_path_metadata(item, item.path, kind)
+end
+
 local function usage_from_capture(path, relpath, lines, language, capture)
   local text = text_for_capture(lines, capture)
   if text == "" then return nil end
   local definition_kind = capture_kind(capture.capture)
   local line = lines[capture.start_line] or ""
-  return {
+  return apply_project_path_metadata({
     name = text,
     kind = definition_kind or "usage",
     capture = capture.capture,
@@ -257,7 +285,7 @@ local function usage_from_capture(path, relpath, lines, language, capture)
       ["end"] = { line = capture.end_line, col = capture.end_col },
     },
     workspace_tree_sitter_fallback = true,
-  }
+  }, path, "usages")
 end
 
 local function add_usage(usages_by_name, item)
@@ -285,6 +313,7 @@ local function extract_symbols_from_doc(doc, path, relpath, language)
     symbol.relpath = relpath or path
     symbol.language_id = language.id
     symbol.text = symbol.name
+    apply_project_path_metadata(symbol, path, "symbols")
   end
   return symbols
 end
@@ -617,7 +646,7 @@ local function scan_index(index, generation)
     if info.type == "file" then
       local path = common.normalize_path(info.filename)
       local language = registry.get(path)
-      if language and language.query_sources and language.query_sources.outline then
+      if not project_paths.is_excluded(path, "symbols") and language and language.query_sources and language.query_sources.outline then
         local relpath = common.relative_path(index.root, path):gsub("\\", "/")
         local fingerprint = file_fingerprint(path, info, language)
         supported_files[#supported_files + 1] = {
@@ -772,16 +801,22 @@ function symbol_index.ensure_scan(root, opts)
   return index
 end
 
-function symbol_index.start_project_indexing(opts)
+local function project_path_roots(kind, opts)
   opts = opts or {}
   local roots = {}
   if opts.root or opts.project then
     roots[1] = normalize_root(opts.root or opts.project)
   else
-    for _, project in ipairs(core.projects or {}) do
-      if project and project.path then roots[#roots + 1] = normalize_root(project.path) end
+    for _, entry in ipairs(project_paths.search_roots(kind)) do
+      if entry and entry.path then roots[#roots + 1] = normalize_root(entry.path) end
     end
   end
+  return roots
+end
+
+function symbol_index.start_project_indexing(opts)
+  opts = opts or {}
+  local roots = project_path_roots("symbols", opts)
   for _, root in ipairs(roots) do
     local index = symbol_index.ensure_scan(root, {
       force = opts.force,
@@ -851,11 +886,17 @@ local function combined_symbols(index)
   local paths = overlay_paths(index)
   local out = {}
   for _, symbol in ipairs(index.symbols or {}) do
-    if not paths[symbol.path] then out[#out + 1] = symbol end
+    if not paths[symbol.path] and not project_paths.is_excluded(symbol.path, "symbols") then
+      out[#out + 1] = refresh_project_path_metadata(index, symbol, "symbols")
+    end
   end
   for _, entry in pairs(overlay) do
     if overlay_entry_current(entry) then
-      for _, symbol in ipairs(entry.symbols or {}) do out[#out + 1] = symbol end
+      for _, symbol in ipairs(entry.symbols or {}) do
+        if not project_paths.is_excluded(symbol.path, "symbols") then
+          out[#out + 1] = refresh_project_path_metadata(index, symbol, "symbols")
+        end
+      end
     end
   end
   sort_symbols(out)
@@ -868,11 +909,17 @@ local function combined_usages_for_name(index, name)
   local paths = overlay_paths(index)
   local out = {}
   for _, usage in ipairs((index.usages_by_name or {})[name] or {}) do
-    if not paths[usage.path] then out[#out + 1] = usage end
+    if not paths[usage.path] and not project_paths.is_excluded(usage.path, "usages") then
+      out[#out + 1] = refresh_project_path_metadata(index, usage, "usages")
+    end
   end
   for _, entry in pairs(overlay) do
     if overlay_entry_current(entry) then
-      for _, usage in ipairs((entry.usages_by_name or {})[name] or {}) do out[#out + 1] = usage end
+      for _, usage in ipairs((entry.usages_by_name or {})[name] or {}) do
+        if not project_paths.is_excluded(usage.path, "usages") then
+          out[#out + 1] = refresh_project_path_metadata(index, usage, "usages")
+        end
+      end
     end
   end
   sort_usages(out)
@@ -901,22 +948,58 @@ local function refresh_current_core_docs_for_index(index)
   end
 end
 
+local function merge_status(current, next_status)
+  if current == "pending" or next_status == "pending" then return "pending" end
+  if current == "stale" or next_status == "stale" then return "stale" end
+  return "fresh"
+end
+
 function symbol_index.workspace_symbols(query, opts)
   opts = opts or {}
-  local index = symbol_index.ensure_scan(opts.root, {
-    force = opts.force,
-    refresh_after_seconds = opts.refresh_after_seconds,
-  })
-  if index.symbol_status == "ready" then
-    refresh_current_core_docs_for_index(index)
-    local results, has_more = filtered_symbols(combined_symbols(index), query, opts.limit)
-    return results, nil, "fresh", { has_more = has_more, index = index }
+  local roots = project_path_roots("symbols", opts)
+  local all_symbols, per_root = {}, {}
+  local status = "fresh"
+  local reason
+  local any_usable = false
+  local has_more = false
+
+  for _, root in ipairs(roots) do
+    local index = symbol_index.ensure_scan(root, {
+      force = opts.force,
+      refresh_after_seconds = opts.refresh_after_seconds,
+    })
+    local root_status = "pending"
+    if index.symbol_status == "ready" then
+      refresh_current_core_docs_for_index(index)
+      for _, symbol in ipairs(combined_symbols(index)) do all_symbols[#all_symbols + 1] = symbol end
+      root_status = "fresh"
+      any_usable = true
+    elseif (#(index.symbols or {}) > 0 or next(index.open_docs or {}) ~= nil) and opts.allow_stale then
+      for _, symbol in ipairs(combined_symbols(index)) do all_symbols[#all_symbols + 1] = symbol end
+      root_status = "stale"
+      reason = reason or "indexing"
+      any_usable = true
+    else
+      reason = reason or "indexing"
+    end
+    status = merge_status(status, root_status)
+    per_root[#per_root + 1] = { root = root, status = root_status, index = index }
   end
-  if (#(index.symbols or {}) > 0 or next(index.open_docs or {}) ~= nil) and opts.allow_stale then
-    local results, has_more = filtered_symbols(combined_symbols(index), query, opts.limit)
-    return results, "indexing", "stale", { has_more = has_more, index = index }
+
+  if any_usable and status ~= "fresh" and not opts.allow_stale then
+    return nil, reason or "indexing", "pending", { roots = per_root, index = #per_root == 1 and per_root[1].index or nil }
   end
-  return nil, "indexing", "pending", { index = index }
+  if any_usable then
+    sort_symbols(all_symbols)
+    local results
+    results, has_more = filtered_symbols(all_symbols, query, opts.limit)
+    return results, status == "fresh" and nil or (reason or "indexing"), status == "fresh" and "fresh" or "stale", {
+      has_more = has_more,
+      roots = per_root,
+      index = #per_root == 1 and per_root[1].index or nil,
+    }
+  end
+  return nil, reason or "indexing", "pending", { roots = per_root, index = #per_root == 1 and per_root[1].index or nil }
 end
 
 local function filter_usages(usages, opts)
@@ -942,26 +1025,57 @@ function symbol_index.workspace_usages(name, opts)
   opts = opts or {}
   name = tostring(name or "")
   if name == "" then return {}, "no-symbol", "fresh", { has_more = false } end
-  local index = symbol_index.ensure_scan(opts.root, {
-    force = opts.force,
-    refresh_after_seconds = opts.refresh_after_seconds,
-  })
-  if index.usage_status == "ready" then
-    refresh_current_core_docs_for_index(index)
-    local results, has_more = filter_usages(combined_usages_for_name(index, name), opts)
-    has_more = has_more or index.usage_truncated or false
-    return results, nil, "fresh", {
+  local roots = project_path_roots("usages", opts)
+  local all_usages, per_root = {}, {}
+  local status = "fresh"
+  local reason
+  local any_usable = false
+  local has_more = false
+  local usage_truncated = false
+  local usage_truncated_reason
+
+  for _, root in ipairs(roots) do
+    local index = symbol_index.ensure_scan(root, {
+      force = opts.force,
+      refresh_after_seconds = opts.refresh_after_seconds,
+    })
+    local root_status = "pending"
+    if index.usage_status == "ready" then
+      refresh_current_core_docs_for_index(index)
+      for _, usage in ipairs(combined_usages_for_name(index, name)) do all_usages[#all_usages + 1] = usage end
+      root_status = "fresh"
+      any_usable = true
+    elseif opts.allow_stale and ((index.usages_by_name or {})[name] or next(index.open_docs or {}) ~= nil) then
+      for _, usage in ipairs(combined_usages_for_name(index, name)) do all_usages[#all_usages + 1] = usage end
+      root_status = "stale"
+      reason = reason or "indexing"
+      any_usable = true
+    else
+      reason = reason or "indexing"
+    end
+    usage_truncated = usage_truncated or index.usage_truncated or false
+    usage_truncated_reason = usage_truncated_reason or index.usage_truncated_reason
+    status = merge_status(status, root_status)
+    per_root[#per_root + 1] = { root = root, status = root_status, index = index }
+  end
+
+  if any_usable and status ~= "fresh" and not opts.allow_stale then
+    return nil, reason or "indexing", "pending", { roots = per_root, index = #per_root == 1 and per_root[1].index or nil }
+  end
+  if any_usable then
+    sort_usages(all_usages)
+    local results
+    results, has_more = filter_usages(all_usages, opts)
+    has_more = has_more or usage_truncated
+    return results, status == "fresh" and nil or (reason or "indexing"), status == "fresh" and "fresh" or "stale", {
       has_more = has_more,
-      index = index,
-      usage_truncated = index.usage_truncated,
-      usage_truncated_reason = index.usage_truncated_reason,
+      roots = per_root,
+      index = #per_root == 1 and per_root[1].index or nil,
+      usage_truncated = usage_truncated,
+      usage_truncated_reason = usage_truncated_reason,
     }
   end
-  if opts.allow_stale and ((index.usages_by_name or {})[name] or next(index.open_docs or {}) ~= nil) then
-    local results, has_more = filter_usages(combined_usages_for_name(index, name), opts)
-    return results, "indexing", "stale", { has_more = has_more, index = index }
-  end
-  return nil, "indexing", "pending", { index = index }
+  return nil, reason or "indexing", "pending", { roots = per_root, index = #per_root == 1 and per_root[1].index or nil }
 end
 
 function symbol_index.workspace_references(name, opts)
