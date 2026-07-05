@@ -286,6 +286,42 @@ test.describe("Markdown Live Editor", function()
     common.rm(root, true)
   end)
 
+  test.it("opens the image overlay when clicking a rendered image", function()
+    local image_path = USERDIR .. PATHSEP .. "markdown-live-click-image-" .. system.get_process_id() .. ".png"
+    local fp = io.open(image_path, "wb")
+    test.not_nil(fp)
+    fp:write("png")
+    fp:close()
+    local image_url = common.basename and common.basename(image_path) or image_path:match("[^" .. PATHSEP .. "]+$")
+    local view, doc = make_view("![[" .. image_url .. "]]\nother", USERDIR .. PATHSEP .. "note.md")
+    doc:set_selection(2, 1)
+    local old_load_image = canvas.load_image
+    local overlay = require "core.markdown.image_overlay"
+    local old_open = overlay.open
+    local opened_path
+    canvas.load_image = function()
+      return {
+        get_size = function() return 80, 40 end,
+        scaled = function(self) return self end,
+      }
+    end
+    overlay.open = function(path)
+      opened_path = path
+      return true
+    end
+
+    markdown.live_render.refresh_view(view)
+    local x, y = view:get_line_screen_position(1)
+    test.ok(view:on_mouse_pressed("left", x + 10, y + 10, 1))
+    test.equal(opened_path, image_path)
+    local line = doc:get_selection()
+    test.equal(line, 1)
+
+    overlay.open = old_open
+    canvas.load_image = old_load_image
+    os.remove(image_path)
+  end)
+
   test.it("draws image widgets using the resolved visual row height", function()
     local image_path = USERDIR .. PATHSEP .. "markdown-live-small-" .. system.get_process_id() .. ".png"
     local fp = io.open(image_path, "wb")
