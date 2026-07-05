@@ -2528,7 +2528,7 @@ end
 
 
 function DocView:get_line_render(line)
-  if self.wrapped_settings or not self:has_line_render_providers() then return nil end
+  if not self:has_line_render_providers() then return nil end
   local source_text = (self.doc.lines[line] or ""):gsub("\n$", "")
   local context = { source_text = source_text, line = line }
   for _, entry in ipairs(self:line_render_provider_entries()) do

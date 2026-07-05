@@ -3,6 +3,7 @@ local common = require "core.common"
 local config = require "core.config"
 local DocView = require "core.docview"
 local images = require "core.markdown.images"
+local linewrapping = require "core.linewrapping"
 local parser = require "core.markdown.parser"
 local style = require "core.style"
 
@@ -21,6 +22,12 @@ function live.is_markdown_doc(doc)
   if MARKDOWN_EXTENSIONS[extension(doc.abs_filename or doc.filename or "") or ""] then return true end
   local syntax_name = doc.syntax and doc.syntax.name
   return type(syntax_name) == "string" and syntax_name:lower():find("markdown", 1, true) ~= nil
+end
+
+local function line_is_wrapped(view, line)
+  if not view.wrapped_settings then return false end
+  local ok, _, _, count = pcall(linewrapping.get_line_idx_col_count, view, line)
+  return ok and (count or 1) > 1
 end
 
 local function view_active_line(view, line)
@@ -187,8 +194,19 @@ end
 
 local provider = {}
 
+local function heading_render_line(view, text, heading)
+  return {
+    source_text = text,
+    fragments = {
+      { source_col1 = 1, source_col2 = heading.content_col1, hidden = true },
+      { source_col1 = heading.content_col1, source_col2 = heading.content_col2, text = heading.text, font = heading_font(view, heading.level), color = style.text },
+      { source_col1 = heading.content_col2, source_col2 = #text + 1, hidden = true },
+    },
+  }
+end
+
 function provider:line_height(view, line)
-  if view.wrapped_settings or view_active_line(view, line) then return nil end
+  if line_is_wrapped(view, line) then return nil end
   local text = (view.doc.lines[line] or ""):gsub("\n$", "")
   local heading = heading_for_line(text, line)
   if heading then
@@ -204,21 +222,12 @@ function provider:line_height(view, line)
 end
 
 function provider:render_line(view, line)
-  if view_active_line(view, line) then return { raw_passthrough = true } end
-  if view.wrapped_settings then return { raw_passthrough = true } end
+  if line_is_wrapped(view, line) then return { raw_passthrough = true } end
 
   local text = (view.doc.lines[line] or ""):gsub("\n$", "")
   local heading = heading_for_line(text, line)
-  if heading then
-    return {
-      source_text = text,
-      fragments = {
-        { source_col1 = 1, source_col2 = heading.content_col1, hidden = true },
-        { source_col1 = heading.content_col1, source_col2 = heading.content_col2, text = heading.text, font = heading_font(view, heading.level), color = style.text },
-        { source_col1 = heading.content_col2, source_col2 = #text + 1, hidden = true },
-      },
-    }
-  end
+  if heading then return heading_render_line(view, text, heading) end
+  if view_active_line(view, line) then return { raw_passthrough = true } end
 
   local fragments = inline_fragments(text, line, view)
   if #fragments > 0 then return { source_text = text, fragments = fragments } end
@@ -252,6 +261,14 @@ function live.refresh_view(view)
   end
 end
 
+local function refresh_open_views()
+  local root = core.root_panel and core.root_panel.root_node
+  if not (root and root.get_children) then return end
+  for _, view in ipairs(root:get_children()) do
+    live.refresh_view(view)
+  end
+end
+
 function live.install()
   if live.__installed then return end
   live.__installed = true
@@ -262,6 +279,15 @@ function live.install()
     live.refresh_view(view)
     return view
   end
+
+  local old_set_active_view = core.set_active_view
+  core.set_active_view = function(view)
+    local result = old_set_active_view(view)
+    live.refresh_view(view)
+    return result
+  end
+
+  refresh_open_views()
 end
 
 return live

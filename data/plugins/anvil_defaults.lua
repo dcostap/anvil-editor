@@ -290,7 +290,7 @@ keymap.add_direct({
   ["ctrl+shift+D"] = "doc:go-to-line",
 })
 -- Markdown Live Editor is still development-flagged while wrapping/rendering matures.
-config.markdown_live_editor = false
+config.markdown_live_editor = true
 config.markdown_live_reveal_mode = "active_line"
 config.markdown_live_render_images = true
 config.markdown_live_download_remote_images = false
