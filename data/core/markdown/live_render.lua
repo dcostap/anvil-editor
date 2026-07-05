@@ -211,11 +211,23 @@ local function emphasis_fragment(view, line_text, span, active)
     }
   end
   return {
-    source_col1 = span.col1,
-    source_col2 = span.col2,
-    text = span.text,
-    font = inline_style_font(view, span.type),
-    color = normal_text_color(),
+    {
+      source_col1 = span.col1,
+      source_col2 = content.col1,
+      hidden = true,
+    },
+    {
+      source_col1 = content.col1,
+      source_col2 = content.col2,
+      text = span.text,
+      font = inline_style_font(view, span.type),
+      color = normal_text_color(),
+    },
+    {
+      source_col1 = content.col2,
+      source_col2 = span.col2,
+      hidden = true,
+    },
   }
 end
 
@@ -280,7 +292,6 @@ local function heading_render_line(view, text, heading, active)
   return {
     source_text = text,
     fragments = active and active_fragments or inactive_heading_fragments(text, heading, font),
-    hit_test_fragments = active_fragments,
   }
 end
 
