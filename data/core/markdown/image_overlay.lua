@@ -5,6 +5,11 @@ local style = require "core.style"
 
 local overlay = {}
 
+local MAX_SCALED_IMAGE_WIDTH = 7680
+local MAX_SCALED_IMAGE_HEIGHT = 4320
+local MAX_ZOOM_SCALE = 16
+local MIN_ZOOM_SCALE = 0.05
+
 local state = {
   visible = false,
   path = nil,
@@ -38,7 +43,12 @@ end
 local function scale_image()
   if not state.image then return end
   local iw, ih = state.image:get_size()
-  state.scale = common.clamp(state.scale or 1, 0.05, 16)
+  local max_scale = math.min(MAX_ZOOM_SCALE, MAX_SCALED_IMAGE_WIDTH / iw, MAX_SCALED_IMAGE_HEIGHT / ih)
+  if max_scale < MIN_ZOOM_SCALE then
+    state.scale = max_scale
+  else
+    state.scale = common.clamp(state.scale or 1, MIN_ZOOM_SCALE, max_scale)
+  end
   local w = math.max(1, math.floor(iw * state.scale))
   local h = math.max(1, math.floor(ih * state.scale))
   if state.scaled and state.width == w and state.height == h then return end
@@ -84,6 +94,10 @@ function overlay.close()
   state.scaled = nil
   state.dragging = false
   core.redraw = true
+end
+
+function overlay.max_scaled_size()
+  return MAX_SCALED_IMAGE_WIDTH, MAX_SCALED_IMAGE_HEIGHT
 end
 
 function overlay.open(path)

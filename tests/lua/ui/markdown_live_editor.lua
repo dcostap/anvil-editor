@@ -287,6 +287,41 @@ test.describe("Markdown Live Editor", function()
     common.rm(root, true)
   end)
 
+  test.it("clamps image overlay zoom to renderer-safe scaled dimensions", function()
+    local overlay = require "core.markdown.image_overlay"
+    local old_root_panel = core.root_panel
+    local state = overlay.state
+    local max_w, max_h = overlay.max_scaled_size()
+    local scaled_w, scaled_h
+    core.root_panel = {
+      position = { x = 0, y = 0 },
+      size = { x = 1920, y = 1080 },
+    }
+    state.visible = true
+    state.image = {
+      get_size = function() return 20000, 10000 end,
+      scaled = function(self, w, h)
+        scaled_w, scaled_h = w, h
+        return self
+      end,
+    }
+    state.scaled = nil
+    state.scale = 100
+    state.width, state.height = 0, 0
+    state.scroll.x, state.scroll.y = 0, 0
+
+    overlay.actual_size()
+    local final_scale, final_w, final_h = state.scale, state.width, state.height
+    overlay.close()
+    core.root_panel = old_root_panel
+
+    test.ok(scaled_w and scaled_w <= max_w)
+    test.ok(scaled_h and scaled_h <= max_h)
+    test.ok(final_w <= max_w)
+    test.ok(final_h <= max_h)
+    test.ok(final_scale < 1)
+  end)
+
   test.it("closes the image overlay when clicking outside the image", function()
     local overlay = require "core.markdown.image_overlay"
     local old_root_panel = core.root_panel
