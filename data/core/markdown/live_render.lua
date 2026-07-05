@@ -194,12 +194,23 @@ end
 
 local provider = {}
 
-local function heading_render_line(view, text, heading)
+local function heading_render_line(view, text, heading, active)
+  local font = heading_font(view, heading.level)
+  if active then
+    return {
+      source_text = text,
+      fragments = {
+        { source_col1 = 1, source_col2 = heading.content_col1, text = text:sub(1, heading.content_col1 - 1), font = font, color = style.markdown_live_heading_marker },
+        { source_col1 = heading.content_col1, source_col2 = heading.content_col2, text = heading.text, font = font, color = style.text },
+        { source_col1 = heading.content_col2, source_col2 = #text + 1, text = text:sub(heading.content_col2), font = font, color = style.markdown_live_heading_marker },
+      },
+    }
+  end
   return {
     source_text = text,
     fragments = {
       { source_col1 = 1, source_col2 = heading.content_col1, hidden = true },
-      { source_col1 = heading.content_col1, source_col2 = heading.content_col2, text = heading.text, font = heading_font(view, heading.level), color = style.text },
+      { source_col1 = heading.content_col1, source_col2 = heading.content_col2, text = heading.text, font = font, color = style.text },
       { source_col1 = heading.content_col2, source_col2 = #text + 1, hidden = true },
     },
   }
@@ -212,6 +223,7 @@ function provider:line_height(view, line)
   if heading then
     return math.max(view:get_line_height(), math.floor(heading_font(view, heading.level):get_height() * config.line_height))
   end
+  if view_active_line(view, line) then return nil end
   local max_height
   for _, fragment in ipairs(inline_fragments(text, line, view)) do
     if fragment.widget and fragment.widget.height then
@@ -226,8 +238,9 @@ function provider:render_line(view, line)
 
   local text = (view.doc.lines[line] or ""):gsub("\n$", "")
   local heading = heading_for_line(text, line)
-  if heading then return heading_render_line(view, text, heading) end
-  if view_active_line(view, line) then return { raw_passthrough = true } end
+  local active = view_active_line(view, line)
+  if heading then return heading_render_line(view, text, heading, active) end
+  if active then return { raw_passthrough = true } end
 
   local fragments = inline_fragments(text, line, view)
   if #fragments > 0 then return { source_text = text, fragments = fragments } end
