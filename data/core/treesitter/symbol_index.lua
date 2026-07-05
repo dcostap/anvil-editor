@@ -29,6 +29,14 @@ local function log_quiet(...)
   if core and core.log_quiet then core.log_quiet(...) end
 end
 
+local function safe_yield(wait)
+  if coroutine.isyieldable and coroutine.isyieldable() then
+    coroutine.yield(wait)
+    return true
+  end
+  return false
+end
+
 local function ensure_native()
   if native_ok == nil then native_ok, native = pcall(require, "treesitter") end
   return native_ok and native or nil
@@ -187,7 +195,7 @@ local function wait_parse(state, generation, timeout)
   while system.get_time() < deadline do
     status, changed, discarded = state:poll(generation)
     if status == "ready" or status == "failed" or changed or discarded then break end
-    coroutine.yield(0.01)
+    if not safe_yield(0.01) and system.sleep then system.sleep(0.01) end
   end
   if status ~= "ready" and not state:has_tree() then return nil, status or "timeout" end
   return true
@@ -577,7 +585,7 @@ local function refresh_watches_for_dir(index, dir)
     yielded = yielded + 1
     if yielded >= DEFAULT_SCAN_YIELD_FILES * 16 then
       yielded = 0
-      coroutine.yield(0)
+      safe_yield(0)
     end
   end
   return changed
@@ -613,14 +621,14 @@ local function start_project_watcher(index)
       end)
       if not ok then
         log_quiet("Tree-sitter Project index: filesystem watcher failed for %s: %s", tostring(root), tostring(err))
-        coroutine.yield(5)
+        safe_yield(5)
       else
         for dir in pairs(changed_dirs) do
           if symbol_index.mark_directory_dirty then
             symbol_index.mark_directory_dirty(dir, "project-watch")
           end
         end
-        coroutine.yield(0.25)
+        safe_yield(0.25)
       end
     end
     index.watch_running = false
@@ -829,7 +837,7 @@ local function submit_worker_scan(index, generation, opts, phase)
         index.worker_seen_paths = nil
         core.redraw = true
         core.add_thread(function()
-          coroutine.yield(0)
+          safe_yield(0)
           if index.generation == generation and index.status == "indexing" and index.usage_status == "indexing" then
             submit_worker_scan(index, generation, common.merge(opts, { reason = "usages" }), "usages")
           end
@@ -1408,7 +1416,7 @@ local function reindex_directory_for_index(index, dir, opts)
     yielded = yielded + 1
     if yielded >= DEFAULT_SCAN_YIELD_FILES * 16 then
       yielded = 0
-      coroutine.yield(0)
+      safe_yield(0)
     end
   end
 
