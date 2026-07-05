@@ -298,8 +298,12 @@ function fuzzy_searcher.remember_file_metadata(meta)
   local text = meta.text
   local existing = fuzzy_searcher.files_metadata[text]
   if existing and not common.path_equals(existing.abs_path, meta.abs_path) then
-    text = string.format("%s  —  %s", text, display_root(meta.abs_path))
-    meta = common.merge(meta, { text = text, disambiguated = true })
+    if system.get_file_info(existing.abs_path) then
+      text = string.format("%s  —  %s", text, display_root(meta.abs_path))
+      meta = common.merge(meta, { text = text, disambiguated = true })
+    else
+      fuzzy_searcher.files_metadata[text] = nil
+    end
   end
   fuzzy_searcher.files_metadata[text] = meta
   return text
@@ -1258,6 +1262,40 @@ local function parse_vimgrep(line)
   }
 end
 
+local function decorate_grep_result(result, root)
+  if not result then return nil end
+  local filename = common.normalize_path(result.file)
+  local abs = filename and common.is_absolute_path(filename)
+    and filename
+    or common.normalize_path(root .. PATHSEP .. tostring(result.file or ""))
+  if not abs or project_paths.is_excluded(abs, "grep") then return nil end
+  local display = project_paths.display_path(abs, { kind = "grep" })
+  if display then
+    result.file = display.text
+    result.abs_path = display.abs_path
+    result.root_label = display.root_label
+    result.root_role = display.root_role
+    result.root_id = display.root_id
+    result.rank_penalty = display.rank_penalty
+  else
+    result.file = abs
+    result.abs_path = abs
+  end
+  return result
+end
+
+local function scope_for_root(scope, root)
+  if not scope then return nil end
+  local out = {}
+  for _, filename in ipairs(scope) do
+    local abs = fullpath(filename)
+    if abs and (common.path_equals(abs, root) or common.path_belongs_to(abs, root)) then
+      out[#out + 1] = abs
+    end
+  end
+  return out
+end
+
 local function scope_key(scope)
   if not scope then return "*" end
   return table.concat(scope, "\0")
@@ -1329,7 +1367,7 @@ local function ensure_fuzzy_grep_job(root, scope, tokens)
         local l = proc.stdout:read("line", { scan = 1 / config.fps })
         if l then
           job.scanned = job.scanned + 1
-          local r = parse_vimgrep(l)
+          local r = decorate_grep_result(parse_vimgrep(l), root)
           if r and #(r.text or "") <= max_line_chars then
             local key = r.file .. ":" .. tostring(r.line)
             if not job.seen[key] then
@@ -3224,10 +3262,23 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
   -- prefix and let selection stop naturally at the currently available end.
   local limit = self:max_result_limit()
   local tokens = terms_to_legacy_tokens(terms)
-  local job, preferred_job = ensure_fuzzy_grep_job(root, scope, tokens)
-  if not job then return end
-  local jobs = { job }
-  if preferred_job and preferred_job ~= job then jobs[#jobs+1] = preferred_job end
+  local roots = type(root) == "table" and root or { { path = root } }
+  local jobs, added_jobs = {}, {}
+  local function add_job(job)
+    if job and not added_jobs[job.key] then
+      jobs[#jobs + 1] = job
+      added_jobs[job.key] = true
+    end
+  end
+  for _, root_entry in ipairs(roots) do
+    local root_scope = scope_for_root(scope, root_entry.path)
+    if not scope or #root_scope > 0 then
+      local job, preferred_job = ensure_fuzzy_grep_job(root_entry.path, root_scope, tokens)
+      add_job(job)
+      add_job(preferred_job)
+    end
+  end
+  if #jobs == 0 then return end
   local exact_results = #terms == 1 and not terms[1].exact and trim_query(grep):lower() == terms[1].text
   local fuzzy_query = terms_fuzzy_query(terms)
   local initial_settle_seconds = 0.10
@@ -3237,7 +3288,7 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
   local same_file_group_max_burst = 3
 
   local function grep_result_file_key(r)
-    local file = tostring(r and r.file or "")
+    local file = tostring(r and (r.abs_path or r.file) or "")
     if file == "" then return "" end
     return common.path_compare_key(file)
   end
@@ -3354,7 +3405,7 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
 
     local function add_candidate(source)
       if line and not line_exists(source.file, line) then return end
-      local key = source.file .. ":" .. tostring(source.line)
+      local key = tostring(source.abs_path or source.file) .. ":" .. tostring(source.line)
       if candidate_seen[key] then return end
 
       local low = (source.text or ""):lower()
@@ -3380,6 +3431,11 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
       local r = {
         kind = "grep",
         file = source.file,
+        abs_path = source.abs_path,
+        root_label = source.root_label,
+        root_role = source.root_role,
+        root_id = source.root_id,
+        rank_penalty = source.rank_penalty,
         line = source.line,
         col = source.col,
         text = source.text,
@@ -3533,7 +3589,7 @@ function FSView:start_grep(base, line, grep)
   if grep == "" then return end
 
   local limit = self:max_result_limit()
-  local root = project_dir()
+  local roots = project_paths.search_roots("grep")
   local scope = nil
   if base ~= "" or line then
     scope = build_scope(base, line, 200)
@@ -3546,7 +3602,7 @@ function FSView:start_grep(base, line, grep)
   local terms = parse_code_search_terms(grep)
   local single_token_exact = #terms == 1 and not terms[1].exact and trim_query(grep):lower() == terms[1].text
   if not exact_query and (#terms > 1 or single_token_exact) then
-    self:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, gen, preserve_results)
+    self:start_grep_fuzzy_stream(base, line, grep, terms, scope, roots, gen, preserve_results)
     return
   end
 
@@ -3561,7 +3617,7 @@ function FSView:start_grep(base, line, grep)
     local function add_result(r, seen, exact)
       if gen ~= grep_generation or active_view ~= self then return false end
       if line and not line_exists(r.file, line) then return true end
-      local key = r.file .. ":" .. r.line .. ":" .. r.col
+      local key = tostring(r.abs_path or r.file) .. ":" .. r.line .. ":" .. r.col
       if seen[key] then return true end
       if #self.results >= limit then
         self.has_more = true
@@ -3592,22 +3648,28 @@ function FSView:start_grep(base, line, grep)
     end
 
     local seen = {}
-    local args = { fuzzy_searcher.rg, "--vimgrep", "--color", "never", "-i", "-F", "--hidden", "--glob", "!.git/**", "-e", grep }
-    if scope then args[#args+1] = "--"; for _, f in ipairs(scope) do args[#args+1] = f end end
-    local proc = process.start(args, { cwd = root, stdout = process.REDIRECT_PIPE, stderr = process.REDIRECT_DISCARD, stdin = process.REDIRECT_DISCARD })
-    grep_proc = proc
+    for _, root in ipairs(roots) do
+      if gen ~= grep_generation or active_view ~= self then return end
+      local root_scope = scope_for_root(scope, root.path)
+      if not scope or #root_scope > 0 then
+        local args = { fuzzy_searcher.rg, "--vimgrep", "--color", "never", "-i", "-F", "--hidden", "--glob", "!.git/**", "-e", grep }
+        if scope then args[#args+1] = "--"; for _, f in ipairs(root_scope) do args[#args+1] = f end end
+        local proc = process.start(args, { cwd = root.path, stdout = process.REDIRECT_PIPE, stderr = process.REDIRECT_DISCARD, stdin = process.REDIRECT_DISCARD })
+        grep_proc = proc
 
-    if proc then
-      while gen == grep_generation and active_view == self do
-        local l = proc.stdout:read("line", { scan = 1 / config.fps })
-        if l then
-          local r = parse_vimgrep(l)
-          if r and not add_result(r, seen, true) then break end
-        elseif not proc:running() then break else coroutine.yield(1 / config.fps) end
+        if proc then
+          while gen == grep_generation and active_view == self do
+            local l = proc.stdout:read("line", { scan = 1 / config.fps })
+            if l then
+              local r = decorate_grep_result(parse_vimgrep(l), root.path)
+              if r and not add_result(r, seen, true) then break end
+            elseif not proc:running() then break else coroutine.yield(1 / config.fps) end
+          end
+          if proc:running() then pcall(function() proc:kill() end) end
+          proc:wait(process.WAIT_DEADLINE)
+          if grep_proc == proc then grep_proc = nil end
+        end
       end
-      if proc:running() then pcall(function() proc:kill() end) end
-      proc:wait(process.WAIT_DEADLINE)
-      if grep_proc == proc then grep_proc = nil end
     end
 
     if gen ~= grep_generation or active_view ~= self then return end
@@ -4449,6 +4511,14 @@ return {
     file_display_item = fuzzy_searcher.file_display_item,
     fullpath = fullpath,
     file_result_key = file_result_key,
+    build_scope = build_scope,
+    decorate_grep_result = decorate_grep_result,
+    set_file_cache_for_test = function(files)
+      clear_native_file_index()
+      fuzzy_searcher.files_cache_root = fuzzy_searcher.file_roots_signature(project_paths.search_roots("files"))
+      fuzzy_searcher.files_cache = files or {}
+      fuzzy_searcher.files_indexing = false
+    end,
     file_search_rows = function(query, files, skip_path, limit)
       local recent_matches, skip_keys = collect_recent_file_matches(query or "", nil, skip_path)
       local general_matches = {}

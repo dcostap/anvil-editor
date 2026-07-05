@@ -115,6 +115,27 @@ test.describe("Fuzzy Searcher Project Path Roles", function()
     test.ok(common.path_equals(helpers.fullpath(rows[2]), external_file), "expected External Project Directory file to remain visible")
   end)
 
+  test.it("builds grep scope and display metadata from activation paths, not role labels", function(context)
+    local external_file = join_path(context.external, "java", "lang", "String.java")
+    local vendored_file = join_path(context.root, "src", "vendor", "library1", "foo", "Baz.java")
+    write_file(external_file, "NEEDLE\n")
+    write_file(vendored_file, "NEEDLE\n")
+    local external_item = helpers.file_display_item(external_file)
+    local vendored_item = helpers.file_display_item(vendored_file)
+    helpers.set_file_cache_for_test({ external_item, vendored_item })
+
+    local scope = helpers.build_scope("String", nil, 20)
+    test.ok(common.path_equals(scope[1], external_file), "expected grep scope to use external absolute path")
+
+    local result = helpers.decorate_grep_result({ file = "java/lang/String.java", line = 1, col = 1, text = "NEEDLE" }, context.external)
+    test.equal(result.file, external_item)
+    test.ok(common.path_equals(result.abs_path, external_file))
+
+    result = helpers.decorate_grep_result({ file = common.relative_path(context.root, vendored_file), line = 1, col = 1, text = "NEEDLE" }, context.root)
+    test.equal(result.file, vendored_item)
+    test.ok(common.path_equals(result.abs_path, vendored_file))
+  end)
+
   test.it("omits excluded Project Paths from recent file rows", function(context)
     local excluded_file = join_path(context.root, "generated", "Output.java")
     write_file(excluded_file)
