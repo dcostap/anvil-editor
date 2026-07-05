@@ -72,6 +72,14 @@ test.describe("core.lsp.config", function()
     test.same(def.initialization_options, {})
     test.same(def.settings, {})
     test.same(def.env, {})
+    test.equal(def.project_path_workspace_folders, false)
+  end)
+
+  test.test("normalizes opt-in Project Path workspace folders flag", function()
+    local def = test.not_nil(lsp_config.normalize_server_definition(fake_server_definition({
+      project_path_workspace_folders = true,
+    })))
+    test.equal(def.project_path_workspace_folders, true)
   end)
 
   test.test("rejects invalid server definitions", function()

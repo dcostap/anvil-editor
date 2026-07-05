@@ -10,6 +10,9 @@ local documents = require "core.lsp.documents"
 local hover = require "core.lsp.hover"
 local provider = require "core.lsp.provider"
 local signature_help = require "core.lsp.signature_help"
+local project_paths = require "core.project_paths"
+local lsp_json = require "core.lsp.json"
+local uri = require "core.lsp.uri"
 
 local manager = {}
 
@@ -127,6 +130,27 @@ local function cwd_for(selection, path)
   return selection.root and selection.root.root or doc_dir(path)
 end
 
+local function workspace_folders_for_selection(selection)
+  local definition = selection and selection.definition
+  if not (definition and definition.project_path_workspace_folders) then return nil end
+  local folders = {}
+  local seen = {}
+  for _, entry in ipairs(project_paths.search_roots("symbols")) do
+    if entry.exists and entry.role ~= "excluded" then
+      local key = common.path_compare_key(entry.path)
+      if key and not seen[key] then
+        seen[key] = true
+        folders[#folders + 1] = {
+          uri = uri.path_to_uri(entry.path),
+          name = entry.label or common.basename(entry.path),
+        }
+      end
+    end
+  end
+  if #folders == 0 then return nil end
+  return lsp_json.array(folders)
+end
+
 local function client_options(selection, path)
   local definition = selection.definition
   return {
@@ -137,6 +161,7 @@ local function client_options(selection, path)
     initialize_timeout = definition.request_timeout,
     env = merge_env(nil, definition.env),
     cwd = cwd_for(selection, path),
+    workspace_folders = workspace_folders_for_selection(selection),
   }
 end
 
@@ -362,7 +387,9 @@ local function select_options_for_doc(path, opts)
   opts = opts or {}
   local select_options = copy_table(opts.select_options or opts)
   local fallback_roots = copy_array(select_options.fallback_roots)
+  for _, entry in ipairs(project_paths.search_roots("symbols")) do add_unique_path(fallback_roots, entry.path) end
   for _, root in ipairs(project_fallback_roots(path)) do add_unique_path(fallback_roots, root) end
+  select_options.project_paths_generation = project_paths.generation()
   if #fallback_roots > 0 then
     select_options.fallback_roots = fallback_roots
     select_options.prefer_fallback_roots = select_options.prefer_fallback_roots ~= false

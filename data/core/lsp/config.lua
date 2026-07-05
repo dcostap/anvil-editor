@@ -241,6 +241,7 @@ function lsp_config.normalize_server_definition(definition)
     fixed_cwd = definition.fixed_cwd,
     request_timeout = request_timeout,
     did_save_after_open = definition.did_save_after_open == true,
+    project_path_workspace_folders = definition.project_path_workspace_folders == true,
     source = source,
     trust_policy = definition.trust_policy or lsp_config.TRUST_POLICY,
     toolchain = definition.toolchain,
@@ -405,6 +406,7 @@ function lsp_config.config_fingerprint(definition)
     fixed_cwd = normalized.fixed_cwd,
     request_timeout = normalized.request_timeout,
     did_save_after_open = normalized.did_save_after_open,
+    project_path_workspace_folders = normalized.project_path_workspace_folders,
     source = normalized.source,
     toolchain = normalized.toolchain,
   }))
@@ -461,7 +463,16 @@ function lsp_config.select_for_path(definitions, path, options)
       local available, reason, status = lsp_config.is_available(definition, options.executable or options)
       if available then
         local root = lsp_config.find_root(path, definition, options)
-        local identity = lsp_config.client_identity(definition, root, options)
+        local identity_options = options
+        if definition.project_path_workspace_folders then
+          identity_options = shallow_copy(options)
+          identity_options.settings_generation = table.concat({
+            tostring(options.settings_generation or 0),
+            "project-paths",
+            tostring(options.project_paths_generation or 0),
+          }, ":")
+        end
+        local identity = lsp_config.client_identity(definition, root, identity_options)
         selected[#selected + 1] = {
           definition = definition,
           executable = status.path,

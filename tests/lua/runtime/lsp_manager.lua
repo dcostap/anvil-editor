@@ -2,6 +2,8 @@ local common = require "core.common"
 local core = require "core"
 local core_config = require "core.config"
 local Doc = require "core.doc"
+local Project = require "core.project"
+local project_paths = require "core.project_paths"
 local diagnostics = require "core.lsp.diagnostics"
 local documents = require "core.lsp.documents"
 local manager = require "core.lsp.manager"
@@ -27,6 +29,7 @@ local function fake_definition(extra)
     env = extra.env or { ANVIL_LSP_FAKE_SERVER_MODE = "manager_integration" },
     cwd_policy = "root",
     request_timeout = 3,
+    project_path_workspace_folders = extra.project_path_workspace_folders == true,
     source = "bundled",
   }
   return def
@@ -92,13 +95,17 @@ test.describe("core.lsp.manager", function()
     mkdir(context.temp_root)
     manager.reset_for_tests()
     context.original_lsp_config = core_config.lsp
+    context.original_projects = core.projects
     manager.set_sync_options({ debounce_seconds = 0.01 })
   end)
 
   test.after_each(function(context)
     manager.reset_for_tests()
+    project_paths.configure_project {}
+    project_paths.load_workspace_state(nil)
     core_config.lsp = context.original_lsp_config
     if context.added_project then core.remove_project(context.added_project) end
+    core.projects = context.original_projects
     if context.docs then
       for _, doc in ipairs(context.docs) do pcall(function() doc:on_close() end) end
     end
@@ -204,6 +211,80 @@ test.describe("core.lsp.manager", function()
     test.not_nil(entry)
     test.equal(entry.root.root, common.normalize_path(root))
     test.equal(entry.root.source, "fallback_root")
+  end)
+
+  test.test("Project Path roots participate in LSP root fallback for external documents", function(context)
+    manager.set_server_definitions({ fake = fake_definition({ root_markers = { "compile_commands.json", ".git" } }) })
+    local root = mkdir(join_path(context.temp_root, "app"))
+    local external = mkdir(join_path(context.temp_root, "external-src"))
+    core.projects = { Project(root) }
+    project_paths.configure_project {
+      external = { { path = "../external-src", label = "external-src" } },
+    }
+    local doc = track_doc(context, new_doc(join_path(external, "main.fakecpp"), "abcd"))
+
+    test.not_nil(manager.ensure_doc(doc))
+    wait_for(3, function() return ready_entry_for_doc(doc) ~= nil end)
+
+    local _client, entry = manager.client_for_doc(doc)
+    test.not_nil(entry)
+    test.equal(entry.root.root, common.normalize_path(external))
+    test.equal(entry.root.source, "fallback_root")
+  end)
+
+  test.test("opt-in LSP workspace folders advertise Project Path roots", function(context)
+    manager.set_server_definitions({ fake = fake_definition({ project_path_workspace_folders = true }) })
+    local root = setup_project(context)
+    local external = mkdir(join_path(context.temp_root, "external-src"))
+    core.projects = { Project(root) }
+    project_paths.configure_project {
+      external = { { path = "../external-src", label = "external-src" } },
+    }
+    local doc = track_doc(context, new_doc(join_path(root, "main.fakecpp"), "abcd"))
+
+    test.not_nil(manager.ensure_doc(doc))
+    wait_for(3, function() return ready_entry_for_doc(doc) ~= nil end)
+
+    local client = manager.client_for_doc(doc)
+    test.not_nil(client)
+    local folders = client.workspace_folders
+    test.not_nil(folders)
+    local names = {}
+    for _, folder in ipairs(folders) do names[folder.name] = true end
+    test.ok(names[common.basename(root)])
+    test.ok(names["external-src"])
+  end)
+
+  test.test("opt-in LSP workspace folders refresh after Project Path changes", function(context)
+    manager.set_server_definitions({ fake = fake_definition({ project_path_workspace_folders = true }) })
+    local root = setup_project(context)
+    local external = mkdir(join_path(context.temp_root, "late-external-src"))
+    core.projects = { Project(root) }
+    local doc1 = track_doc(context, new_doc(join_path(root, "one.fakecpp"), "one"))
+
+    test.not_nil(manager.ensure_doc(doc1))
+    wait_for(3, function() return ready_entry_for_doc(doc1) ~= nil end)
+    local first_client = manager.client_for_doc(doc1)
+    test.not_nil(first_client)
+    local first_folders = first_client.workspace_folders
+    local first_names = {}
+    for _, folder in ipairs(first_folders or {}) do first_names[folder.name] = true end
+    test.not_ok(first_names["late-external-src"])
+
+    project_paths.configure_project {
+      external = { { path = "../late-external-src", label = "late-external-src" } },
+    }
+    local doc2 = track_doc(context, new_doc(join_path(root, "two.fakecpp"), "two"))
+    test.not_nil(manager.ensure_doc(doc2))
+    wait_for(3, function()
+      local client = manager.client_for_doc(doc2)
+      return client and client.state == "ready" and client ~= first_client
+    end)
+
+    local second_client = manager.client_for_doc(doc2)
+    local second_names = {}
+    for _, folder in ipairs(second_client.workspace_folders or {}) do second_names[folder.name] = true end
+    test.ok(second_names["late-external-src"])
   end)
 
   test.test("documents with same identity reuse one client", function(context)

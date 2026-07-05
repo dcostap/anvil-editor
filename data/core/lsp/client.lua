@@ -114,6 +114,9 @@ local function install_default_handlers(self)
   self:on_request("workspace/configuration", function()
     return lsp_json.array({})
   end)
+  self:on_request("workspace/workspaceFolders", function()
+    return self.workspace_folders or lsp_json.null
+  end)
   self:on_request("client/registerCapability", function()
     return lsp_json.null
   end)
@@ -173,6 +176,7 @@ function client.new(driver, options)
     max_log_messages = options.max_log_messages or 50,
     max_log_message_bytes = options.max_log_message_bytes or 1000,
     max_server_warnings = options.max_server_warnings or 10,
+    workspace_folders = options.workspace_folders,
   }, client_mt)
   install_default_handlers(self)
   return self
@@ -437,6 +441,10 @@ end
 
 function client_mt:initialize_params(options)
   options = options or {}
+  local workspace_capabilities = {}
+  if options.workspace_folders then
+    workspace_capabilities.workspaceFolders = true
+  end
   return {
     processId = system.get_process_id and system.get_process_id() or lsp_json.null,
     rootUri = options.root_uri or lsp_json.null,
@@ -445,11 +453,7 @@ function client_mt:initialize_params(options)
       general = {
         positionEncodings = lsp_json.array({ "utf-16", "utf-8" }),
       },
-      workspace = {
-        -- TODO(multi-Project Workspace): advertise workspaceFolders and answer
-        -- workspace/workspaceFolders once Anvil can load multiple Projects in
-        -- one Workspace and decide which roots belong to each LSP client.
-      },
+      workspace = workspace_capabilities,
       textDocument = {
         completion = {
           completionItem = {
@@ -463,6 +467,7 @@ function client_mt:initialize_params(options)
     },
     trace = "off",
     initializationOptions = options.initialization_options or nil,
+    workspaceFolders = options.workspace_folders,
   }
 end
 
@@ -486,6 +491,7 @@ end
 
 function client_mt:begin_initialize(options)
   options = options or {}
+  self.workspace_folders = options.workspace_folders
   self:_set_state("initializing")
   self.requests.generation = self.generation
   local id, err = self:send_request("initialize", self:initialize_params(options), function(result, err_obj, entry)
