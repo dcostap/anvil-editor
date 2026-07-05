@@ -593,6 +593,19 @@ function live.install()
     return result
   end
 
+  local old_docview_mouse_moved = DocView.on_mouse_moved
+  DocView.on_mouse_moved = function(view, x, y, dx, dy, ...)
+    local result = old_docview_mouse_moved(view, x, y, dx, dy, ...)
+    if view.__markdown_live_attached
+    and not view.mouse_selecting
+    and not view:scrollbar_hovering()
+    and not view:scrollbar_dragging()
+    and live.image_at_position(view, x, y) then
+      view.cursor = "hand"
+    end
+    return result
+  end
+
   local old_docview_mouse_pressed = DocView.on_mouse_pressed
   DocView.on_mouse_pressed = function(view, button, x, y, clicks, ...)
     if button == "left" and view.__markdown_live_attached then

@@ -186,7 +186,13 @@ function overlay.on_mouse_moved(x, y, dx, dy)
     clamp_scroll()
     core.redraw = true
   end
-  core.request_cursor(state.dragging and "hand" or "arrow")
+  if state.dragging then
+    core.request_cursor("hand")
+  elseif point_in_image(x, y) then
+    core.request_cursor("crosshair")
+  else
+    core.request_cursor("arrow")
+  end
   return true
 end
 

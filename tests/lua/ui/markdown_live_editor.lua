@@ -383,6 +383,67 @@ test.describe("Markdown Live Editor", function()
     test.ok(final_scale < 1)
   end)
 
+  test.it("uses a hand cursor over clickable rendered images", function()
+    local image_path = USERDIR .. PATHSEP .. "markdown-live-hover-image-" .. system.get_process_id() .. ".png"
+    local fp = io.open(image_path, "wb")
+    test.not_nil(fp)
+    fp:write("png")
+    fp:close()
+    local image_url = common.basename and common.basename(image_path) or image_path:match("[^" .. PATHSEP .. "]+$")
+    local view, doc = make_view("![[" .. image_url .. "]]\nother", USERDIR .. PATHSEP .. "note.md")
+    doc:set_selection(2, 1)
+    local old_load_image = canvas.load_image
+    canvas.load_image = function()
+      return {
+        get_size = function() return 80, 40 end,
+        scaled = function(self) return self end,
+      }
+    end
+
+    markdown.live_render.refresh_view(view)
+    local x, y = view:get_line_screen_position(1)
+    view:on_mouse_moved(x + 10, y + 10, 0, 0)
+    local cursor = view.cursor
+
+    canvas.load_image = old_load_image
+    os.remove(image_path)
+    test.equal(cursor, "hand")
+  end)
+
+  test.it("uses image overlay cursors for pan targets and outside areas", function()
+    local overlay = require "core.markdown.image_overlay"
+    local old_root_panel = core.root_panel
+    local old_request_cursor = core.request_cursor
+    local state = overlay.state
+    local cursor
+    core.root_panel = {
+      position = { x = 0, y = 0 },
+      size = { x = 500, y = 400 },
+    }
+    core.request_cursor = function(value) cursor = value end
+    state.visible = true
+    state.width = 100
+    state.height = 100
+    state.scroll.x = 0
+    state.scroll.y = 0
+    state.dragging = false
+
+    overlay.on_mouse_moved(250, 200, 0, 0)
+    local image_cursor = cursor
+    overlay.on_mouse_moved(10, 10, 0, 0)
+    local outside_cursor = cursor
+    state.dragging = true
+    overlay.on_mouse_moved(250, 200, 1, 1)
+    local dragging_cursor = cursor
+    overlay.close()
+
+    core.request_cursor = old_request_cursor
+    core.root_panel = old_root_panel
+    test.equal(image_cursor, "crosshair")
+    test.equal(outside_cursor, "arrow")
+    test.equal(dragging_cursor, "hand")
+  end)
+
   test.it("closes the image overlay when clicking outside the image", function()
     local overlay = require "core.markdown.image_overlay"
     local old_root_panel = core.root_panel

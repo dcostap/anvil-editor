@@ -555,6 +555,8 @@ static const char *cursor_opts[] = {
   "sizeh",
   "sizev",
   "hand",
+  "crosshair",
+  "move",
   NULL
 };
 
@@ -563,7 +565,9 @@ static const int cursor_enums[] = {
   SDL_SYSTEM_CURSOR_TEXT,
   SDL_SYSTEM_CURSOR_EW_RESIZE,
   SDL_SYSTEM_CURSOR_NS_RESIZE,
-  SDL_SYSTEM_CURSOR_POINTER
+  SDL_SYSTEM_CURSOR_POINTER,
+  SDL_SYSTEM_CURSOR_CROSSHAIR,
+  SDL_SYSTEM_CURSOR_MOVE
 };
 
 static int f_set_cursor(lua_State *L) {
