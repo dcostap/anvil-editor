@@ -36,6 +36,10 @@ test.describe("Project path roles", function()
   end)
 
   test.after_each(function(context)
+    if context.original_get_file_info then
+      system.get_file_info = context.original_get_file_info
+      context.original_get_file_info = nil
+    end
     if context.project_paths then
       context.project_paths.configure_project {}
       context.project_paths.load_workspace_state(nil)
@@ -57,6 +61,36 @@ test.describe("Project path roles", function()
     test.equal(entries[1].source, "implicit")
     test.ok(common.path_equals(entries[1].path, context.root))
     test.equal(entries[1].searchable, true)
+  end)
+
+  test.test("effective entries are cached until project paths change", function(context)
+    local root_stat_calls = 0
+    context.original_get_file_info = system.get_file_info
+    system.get_file_info = function(path)
+      if common.path_equals(path, context.root) then
+        root_stat_calls = root_stat_calls + 1
+      end
+      return context.original_get_file_info(path)
+    end
+
+    context.project_paths.configure_project {}
+    for _ = 1, 5 do
+      context.project_paths.entries()
+      context.project_paths.resolve(join_path(context.root, "src", "main.lua"))
+      context.project_paths.display_path(join_path(context.root, "src", "main.lua"))
+      context.project_paths.is_excluded(join_path(context.root, "src", "main.lua"), "files")
+      context.project_paths.search_roots("files")
+    end
+
+    test.equal(root_stat_calls, 1)
+
+    context.project_paths.configure_project {
+      external = {
+        { path = "../jdk-src", label = "jdk-src" },
+      },
+    }
+
+    test.equal(root_stat_calls, 2)
   end)
 
   test.test("project config entries normalize paths and resolve relative paths against the root project", function(context)

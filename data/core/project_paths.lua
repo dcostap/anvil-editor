@@ -7,6 +7,8 @@ local project_entries = {}
 local workspace_entries = {}
 local project_config_snapshot
 local generation = 0
+local merged_entries_cache
+local merged_entries_cache_root_key
 
 local ROLE_ORDER = {
   root = 0,
@@ -129,6 +131,8 @@ end
 
 local function invalidate(reason)
   generation = generation + 1
+  merged_entries_cache = nil
+  merged_entries_cache_root_key = nil
   if core.log_quiet then
     core.log_quiet("Project paths: invalidated generation=%d reason=%s", generation, tostring(reason or "updated"))
   end
@@ -220,7 +224,7 @@ local function entry_sort(a, b)
   return (a.path or "") < (b.path or "")
 end
 
-local function merged_entries()
+local function build_merged_entries()
   local root = root_entry()
   local ordered = { root }
   for _, entry in ipairs(project_entries) do ordered[#ordered + 1] = entry end
@@ -244,6 +248,19 @@ local function merged_entries()
     entry.label = label_with_suffix(label_for(entry.path, entry.label), seen_labels)
   end
   return deduped
+end
+
+local function cached_merged_entries()
+  local root_key = path_key(root_path() or "") or ""
+  if not merged_entries_cache or merged_entries_cache_root_key ~= root_key then
+    merged_entries_cache = build_merged_entries()
+    merged_entries_cache_root_key = root_key
+  end
+  return merged_entries_cache
+end
+
+local function merged_entries()
+  return copy_list(cached_merged_entries())
 end
 
 local function positive_entries(entries)
@@ -315,10 +332,12 @@ end
 
 function project_paths.search_roots(kind)
   local field = kind_field(kind or "files")
+  local entries = merged_entries()
   local roots = {}
   local enabled_roots = {}
-  for _, entry in ipairs(positive_entries()) do
-    if entry.exists and entry[field] ~= false and not project_paths.is_excluded(entry.path, kind) then
+  for _, entry in ipairs(positive_entries(entries)) do
+    local flags = flags_for(entry, entry.path, entries)
+    if entry.exists and entry[field] ~= false and flags[field] ~= false then
       local contained = false
       for _, prior in ipairs(enabled_roots) do
         if path_matches(entry.path, prior.path) and not common.path_equals(entry.path, prior.path) then
@@ -372,6 +391,9 @@ function project_paths.display_path(path, opts)
     text = rel ~= "" and (entry.label .. PATHSEP .. rel) or entry.label
     prefix_span = { 1, #entry.label }
   end
+  local field = kind_field(opts.kind)
+  local rank_penalty = tonumber(entry.rank_penalty) or 0
+  if field and resolved.flags[field] == false then rank_penalty = math.huge end
   return {
     text = text,
     root_label = entry.label,
@@ -380,7 +402,7 @@ function project_paths.display_path(path, opts)
     prefix_span = prefix_span,
     relpath = rel,
     abs_path = abs,
-    rank_penalty = project_paths.rank_penalty(abs, opts.kind),
+    rank_penalty = rank_penalty,
     flags = resolved.flags,
   }
 end
@@ -439,6 +461,8 @@ end
 function project_paths.begin_project_config_load()
   project_config_snapshot = copy_list(project_entries)
   project_entries = {}
+  merged_entries_cache = nil
+  merged_entries_cache_root_key = nil
 end
 
 function project_paths.commit_project_config_load()
