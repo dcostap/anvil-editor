@@ -1469,9 +1469,15 @@ function FileTreeView:append_project_path_sections(out)
     end
   end
 
+  local added_project_path_region_padding = false
   for _, role in ipairs({ "vendored", "external" }) do
     local entries = entries_by_role[role]
     if #entries > 0 then
+      if not added_project_path_region_padding and #out > 0 then
+        out[#out + 1] = "\n"
+        self.line_meta[#out] = NO_META
+        added_project_path_region_padding = true
+      end
       table.sort(entries, function(a, b) return (a.label or "") < (b.label or "") end)
       for index, entry in ipairs(entries) do
         entry.project_path_separator_before = index == 1
@@ -2033,8 +2039,8 @@ function FileTreeView:draw_line_body(line, x, y)
   local result = FileTreeView.super.draw_line_body(self, line, x, y)
   if type(meta) == "table" and meta.project_path_separator_before then
     local thickness = math.max(1, style.divider_size or 1)
-    local left = x + gw + style.padding.x
-    local width = math.max(0, self.size.x - gw - style.padding.x * 2)
+    local left = x
+    local width = math.max(0, self.size.x - gw)
     renderer.draw_rect(left, y, width, thickness, style.project_path_separator)
   end
   perf_finish(stats, "filetree_draw_line_body_ms", start)
