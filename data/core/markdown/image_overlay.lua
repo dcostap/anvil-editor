@@ -14,7 +14,7 @@ local state = {
   visible = false,
   path = nil,
   image = nil,
-  scaled = nil,
+  scaled = nil, -- deprecated: overlay draws the original texture scaled by the renderer
   scale = 1,
   width = 0,
   height = 0,
@@ -49,15 +49,9 @@ local function scale_image()
   else
     state.scale = common.clamp(state.scale or 1, MIN_ZOOM_SCALE, max_scale)
   end
-  local w = math.max(1, math.floor(iw * state.scale))
-  local h = math.max(1, math.floor(ih * state.scale))
-  if state.scaled and state.width == w and state.height == h then return end
-  state.width, state.height = w, h
-  if state.scale == 1 then
-    state.scaled = state.image
-  else
-    state.scaled = state.image:scaled(w, h, "nearest")
-  end
+  state.width = math.max(1, math.floor(iw * state.scale))
+  state.height = math.max(1, math.floor(ih * state.scale))
+  state.scaled = nil
   clamp_scroll()
 end
 
@@ -222,9 +216,13 @@ function overlay.draw()
   if not state.visible then return end
   local x, y, w, h = viewport()
   renderer.draw_rect(x, y, w, h, { 0, 0, 0, 225 })
-  if state.scaled then
-    local ix, iy = image_rect()
-    renderer.draw_canvas(state.scaled, ix, iy)
+  if state.image then
+    local ix, iy, iw, ih = image_rect()
+    if renderer.draw_canvas_scaled then
+      renderer.draw_canvas_scaled(state.image, ix, iy, iw, ih)
+    else
+      renderer.draw_canvas(state.image, ix, iy)
+    end
   end
   local label = state.path and common.basename(state.path) or "Image"
   local text = string.format("%s  %.0f%%  (wheel zoom, drag pan, Esc close)", label, (state.scale or 1) * 100)

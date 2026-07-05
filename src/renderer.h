@@ -83,6 +83,7 @@ const RenTextFrameStats *ren_text_get_last_frame_stats(void);
 void ren_draw_rect(RenSurface *rs, RenRect rect, RenColor color, bool replace);
 
 void ren_draw_canvas(RenSurface *rs, SDL_Surface *surface, int x, int y);
+void ren_draw_canvas_scaled(RenSurface *rs, SDL_Surface *surface, RenRect rect);
 
 void ren_draw_pixels(RenSurface *rs, RenRect rect, const char* bytes, size_t len);
 

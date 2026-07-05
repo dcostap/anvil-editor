@@ -2287,6 +2287,12 @@ void ren_draw_canvas(RenSurface *rs, SDL_Surface *surface, int x, int y) {
   SDL_BlitSurface(surface, NULL, rs->surface, &dst_pos);
 }
 
+void ren_draw_canvas_scaled(RenSurface *rs, SDL_Surface *surface, RenRect rect) {
+  if (!surface || rect.width <= 0 || rect.height <= 0) return;
+  SDL_Rect dst_pos = {.x = rect.x, .y = rect.y, .w = rect.width, .h = rect.height};
+  SDL_BlitSurfaceScaled(surface, NULL, rs->surface, &dst_pos, SDL_SCALEMODE_LINEAR);
+}
+
 /******************** Pixels ***********************/
 
 void ren_draw_pixels(RenSurface *rs, RenRect rect, const char* bytes, size_t len) {

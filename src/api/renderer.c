@@ -528,11 +528,7 @@ static int f_draw_text_known_bounds(lua_State *L) {
   return 1;
 }
 
-static int f_draw_canvas(lua_State *L) {
-  RenCache* canvas = luaL_checkudata(L, 1, API_TYPE_CANVAS);
-  lua_Number x = luaL_checknumber(L, 2);
-  lua_Number y = luaL_checknumber(L, 3);
-
+static void ref_canvas(lua_State *L) {
 #ifndef LUA_JITLIBNAME
   // stores a reference to this canvas to the reference table
   lua_rawgeti(L, LUA_REGISTRYINDEX, RENDERER_CANVAS_REF);
@@ -545,13 +541,42 @@ static int f_draw_canvas(lua_State *L) {
     fprintf(stderr, "warning: failed to reference count canvas\n");
   }
   lua_pop(L, 1);
+#else
+  (void)L;
 #endif
+}
+
+static int f_draw_canvas(lua_State *L) {
+  RenCache* canvas = luaL_checkudata(L, 1, API_TYPE_CANVAS);
+  lua_Number x = luaL_checknumber(L, 2);
+  lua_Number y = luaL_checknumber(L, 3);
+
+  ref_canvas(L);
 
   RenRect rect = {
     .x = x, .y = y,
     .width = canvas->rensurface.surface->w,
     .height = canvas->rensurface.surface->h
   };
+  RenWindow *window = ren_get_target_window();
+  if (!window) {
+    return luaL_error(L, "no target window found");
+  } else {
+    rencache_draw_canvas(&window->cache, rect, canvas);
+  }
+  return 0;
+}
+
+static int f_draw_canvas_scaled(lua_State *L) {
+  RenCache* canvas = luaL_checkudata(L, 1, API_TYPE_CANVAS);
+  lua_Number x = luaL_checknumber(L, 2);
+  lua_Number y = luaL_checknumber(L, 3);
+  lua_Number w = luaL_checknumber(L, 4);
+  lua_Number h = luaL_checknumber(L, 5);
+
+  ref_canvas(L);
+
+  RenRect rect = { .x = x, .y = y, .width = w, .height = h };
   RenWindow *window = ren_get_target_window();
   if (!window) {
     return luaL_error(L, "no target window found");
@@ -686,6 +711,7 @@ static const luaL_Reg lib[] = {
   { "draw_text_known_bounds", f_draw_text_known_bounds },
   { "draw_poly",          f_draw_poly          },
   { "draw_canvas",        f_draw_canvas        },
+  { "draw_canvas_scaled", f_draw_canvas_scaled },
   { "to_canvas",          f_to_canvas          },
   { NULL,                 NULL                 }
 };

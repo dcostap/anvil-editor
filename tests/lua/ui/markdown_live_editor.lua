@@ -318,7 +318,7 @@ test.describe("Markdown Live Editor", function()
     local old_root_panel = core.root_panel
     local state = overlay.state
     local max_w, max_h = overlay.max_scaled_size()
-    local scaled_w, scaled_h
+    local scaled_called = false
     core.root_panel = {
       position = { x = 0, y = 0 },
       size = { x = 1920, y = 1080 },
@@ -326,9 +326,8 @@ test.describe("Markdown Live Editor", function()
     state.visible = true
     state.image = {
       get_size = function() return 20000, 10000 end,
-      scaled = function(self, w, h)
-        scaled_w, scaled_h = w, h
-        return self
+      scaled = function()
+        scaled_called = true
       end,
     }
     state.scaled = nil
@@ -341,8 +340,7 @@ test.describe("Markdown Live Editor", function()
     overlay.close()
     core.root_panel = old_root_panel
 
-    test.ok(scaled_w and scaled_w <= max_w)
-    test.ok(scaled_h and scaled_h <= max_h)
+    test.equal(scaled_called, false)
     test.ok(final_w <= max_w)
     test.ok(final_h <= max_h)
     test.ok(final_scale < 1)

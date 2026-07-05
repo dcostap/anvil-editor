@@ -546,7 +546,7 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
         SDL_Surface *surface = cvcmd->canvas->rensurface.surface;
         if (surface) {
           RenRect src = { 0, 0, surface->w, surface->h };
-          RenRect dst = { cvcmd->rect.x, cvcmd->rect.y, surface->w, surface->h };
+          RenRect dst = cvcmd->rect;
           if (!anvil_d3d11_push_texture(ren_cache->window, surface, src, dst, clip,
                                         (RenColor){255, 255, 255, 255}, 2)) { fail_reason = "draw_canvas"; goto fail; }
         }
@@ -696,7 +696,7 @@ void rencache_end_frame(RenCache *ren_cache) {
           break;
         case DRAW_CANVAS:
           rencache_end_frame(cvcmd->canvas);
-          ren_draw_canvas(&rs, cvcmd->canvas->rensurface.surface, cvcmd->rect.x, cvcmd->rect.y);
+          ren_draw_canvas_scaled(&rs, cvcmd->canvas->rensurface.surface, cvcmd->rect);
           break;
         case DRAW_PIXELS:
           ren_draw_pixels(&rs, pcmd->rect, pcmd->bytes, pcmd->len);
