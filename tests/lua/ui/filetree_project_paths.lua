@@ -31,9 +31,9 @@ local function find_line(view, wanted)
   end
 end
 
-local function find_separator(view, role)
+local function find_section_start(view, role)
   for i, meta in ipairs(view.line_meta or {}) do
-    if type(meta) == "table" and meta.project_path_separator and meta.project_path_role == role then
+    if type(meta) == "table" and meta.project_path_separator_before and meta.project_path_role == role then
       return i
     end
   end
@@ -102,8 +102,8 @@ test.describe("File Tree Project Path Roles", function()
   test.it("shows vendored and external Project Directory sections after Root Project rows", function(context)
     local filetree = setup_project_paths(context)
     local readme_line = find_line(filetree, "README.md")
-    local vendored_section = find_separator(filetree, "vendored")
-    local external_section = find_separator(filetree, "external")
+    local vendored_section = find_section_start(filetree, "vendored")
+    local external_section = find_section_start(filetree, "external")
     local vendored_root = find_line(filetree, "library1/")
     local external_root = find_line(filetree, "jdk-src/")
     local missing_root = find_line(filetree, "missing-src/")
@@ -115,11 +115,11 @@ test.describe("File Tree Project Path Roles", function()
     test.not_nil(external_root)
     test.not_nil(missing_root)
     test.ok(readme_line < vendored_section)
-    test.ok(vendored_section < vendored_root)
+    test.equal(vendored_section, vendored_root)
     test.ok(vendored_root < external_section)
-    test.ok(external_section < external_root)
+    test.equal(external_section, external_root)
 
-    test.ok(filetree.line_meta[vendored_section].project_path_separator)
+    test.ok(filetree.line_meta[vendored_section].project_path_separator_before)
     test.equal(filetree.line_meta[vendored_root].project_path_role, "vendored")
     test.equal(filetree.line_meta[external_root].project_path_role, "external")
     test.ok(filetree.line_meta[missing_root].project_path_missing)
@@ -153,13 +153,13 @@ test.describe("File Tree Project Path Roles", function()
     test.ok(common.path_equals(entry.abs, context.excluded))
   end)
 
-  test.it("treats Project Directory separator rows as non-filesystem rows", function(context)
+  test.it("draws Project Directory separators as metadata on the first section row", function(context)
     local filetree = setup_project_paths(context)
-    local vendored_section = find_separator(filetree, "vendored")
+    local vendored_section = find_section_start(filetree, "vendored")
     test.not_nil(vendored_section)
-    test.equal(line_text(filetree.doc.lines[vendored_section]), "")
+    test.equal(line_text(filetree.doc.lines[vendored_section]), "library1/")
     local entry, err = filetree:entry_for_line(vendored_section)
-    test.equal(entry, nil)
+    test.not_nil(entry)
     test.equal(err, nil)
   end)
 

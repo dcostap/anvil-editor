@@ -466,6 +466,7 @@ local function make_meta(item)
     project_path_label = item.project_path_label,
     project_path_id = item.project_path_id,
     project_path_separator = item.project_path_separator,
+    project_path_separator_before = item.project_path_separator_before,
     project_path_root = item.project_path_root,
     project_path_missing = item.project_path_missing,
     project_path_readonly = item.project_path_readonly,
@@ -1438,19 +1439,6 @@ local function project_path_role_for_abs(abs)
   return display and display.root_role, display
 end
 
-local function project_path_section_item(role)
-  return {
-    name = "",
-    sort_name = "",
-    abs = "",
-    type = "section",
-    display = "\n",
-    project_path_role = role,
-    project_path_separator = true,
-    project_path_readonly = true,
-  }
-end
-
 local function project_path_root_item(entry)
   local info = system.get_file_info(entry.path)
   local missing = not (info and info.type == "dir")
@@ -1469,6 +1457,7 @@ local function project_path_root_item(entry)
     project_path_missing = missing,
     project_path_readonly = true,
     project_path_display = entry.label .. "/",
+    project_path_separator_before = entry.project_path_separator_before,
   }
 end
 
@@ -1483,11 +1472,9 @@ function FileTreeView:append_project_path_sections(out)
   for _, role in ipairs({ "vendored", "external" }) do
     local entries = entries_by_role[role]
     if #entries > 0 then
-      local section = project_path_section_item(role)
-      out[#out + 1] = section.display
-      self.line_meta[#out] = make_meta(section)
       table.sort(entries, function(a, b) return (a.label or "") < (b.label or "") end)
-      for _, entry in ipairs(entries) do
+      for index, entry in ipairs(entries) do
+        entry.project_path_separator_before = index == 1
         local item = project_path_root_item(entry)
         out[#out + 1] = item.display
         self.line_meta[#out] = make_meta(item)
@@ -2037,16 +2024,6 @@ function FileTreeView:draw_line_body(line, x, y)
   local start = perf_call(stats, "filetree_draw_line_body_calls")
   local gw = self:get_gutter_width()
   local meta = self.line_meta[line]
-  if type(meta) == "table" and meta.project_path_separator then
-    local result = FileTreeView.super.draw_line_body(self, line, x, y)
-    local lh = self:get_line_height()
-    local thickness = math.max(1, style.divider_size or 1)
-    local left = x + gw + style.padding.x
-    local width = math.max(0, self.size.x - gw - style.padding.x * 2)
-    renderer.draw_rect(left, y + math.floor((lh - thickness) / 2), width, thickness, style.project_path_separator)
-    perf_finish(stats, "filetree_draw_line_body_ms", start)
-    return result
-  end
   self:draw_folder_row_background(
     line,
     x + self.scroll.x,
@@ -2054,6 +2031,12 @@ function FileTreeView:draw_line_body(line, x, y)
     math.max(0, self.size.x - gw)
   )
   local result = FileTreeView.super.draw_line_body(self, line, x, y)
+  if type(meta) == "table" and meta.project_path_separator_before then
+    local thickness = math.max(1, style.divider_size or 1)
+    local left = x + gw + style.padding.x
+    local width = math.max(0, self.size.x - gw - style.padding.x * 2)
+    renderer.draw_rect(left, y, width, thickness, style.project_path_separator)
+  end
   perf_finish(stats, "filetree_draw_line_body_ms", start)
   return result
 end
