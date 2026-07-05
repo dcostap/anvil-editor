@@ -2601,7 +2601,16 @@ function DocView:get_line_render_col_x_offset(render_line, col)
   return xoffset
 end
 
+local function render_line_for_hit_test(render_line)
+  if not render_line.hit_test_fragments then return render_line end
+  local hit_line = {}
+  for key, value in pairs(render_line) do hit_line[key] = value end
+  hit_line.fragments = render_line.hit_test_fragments
+  return hit_line
+end
+
 function DocView:get_line_render_x_offset_col(render_line, x)
+  render_line = render_line_for_hit_test(render_line)
   local xoffset = 0
   local _, indent_size = self.doc:get_indent_info()
   for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do

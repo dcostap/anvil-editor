@@ -187,25 +187,29 @@ end
 
 local provider = {}
 
+local function active_heading_fragments(text, heading, font)
+  return {
+    { source_col1 = 1, source_col2 = heading.content_col1, text = text:sub(1, heading.content_col1 - 1), font = font, color = style.markdown_live_heading_marker },
+    { source_col1 = heading.content_col1, source_col2 = heading.content_col2, text = heading.text, font = font, color = style.text },
+    { source_col1 = heading.content_col2, source_col2 = #text + 1, text = text:sub(heading.content_col2), font = font, color = style.markdown_live_heading_marker },
+  }
+end
+
+local function inactive_heading_fragments(text, heading, font)
+  return {
+    { source_col1 = 1, source_col2 = heading.content_col1, hidden = true },
+    { source_col1 = heading.content_col1, source_col2 = heading.content_col2, text = heading.text, font = font, color = style.text },
+    { source_col1 = heading.content_col2, source_col2 = #text + 1, hidden = true },
+  }
+end
+
 local function heading_render_line(view, text, heading, active)
   local font = heading_font(view, heading.level)
-  if active then
-    return {
-      source_text = text,
-      fragments = {
-        { source_col1 = 1, source_col2 = heading.content_col1, text = text:sub(1, heading.content_col1 - 1), font = font, color = style.markdown_live_heading_marker },
-        { source_col1 = heading.content_col1, source_col2 = heading.content_col2, text = heading.text, font = font, color = style.text },
-        { source_col1 = heading.content_col2, source_col2 = #text + 1, text = text:sub(heading.content_col2), font = font, color = style.markdown_live_heading_marker },
-      },
-    }
-  end
+  local active_fragments = active_heading_fragments(text, heading, font)
   return {
     source_text = text,
-    fragments = {
-      { source_col1 = 1, source_col2 = heading.content_col1, hidden = true },
-      { source_col1 = heading.content_col1, source_col2 = heading.content_col2, text = heading.text, font = font, color = style.text },
-      { source_col1 = heading.content_col2, source_col2 = #text + 1, hidden = true },
-    },
+    fragments = active and active_fragments or inactive_heading_fragments(text, heading, font),
+    hit_test_fragments = active_fragments,
   }
 end
 

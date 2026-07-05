@@ -57,6 +57,13 @@ test.describe("Markdown Live Editor", function()
     test.ok(view:get_col_x_offset(1, #"## Title ##" + 1) > view:get_font():get_width("## Title ##") * 1.2)
   end)
 
+  test.it("hit-tests inactive headings against their expanded editable rendering", function()
+    local view, doc = make_view("## Title ##\nbody", "note.md")
+    doc:set_selection(2, 1)
+    markdown.live_render.refresh_view(view)
+    test.ok(view:get_x_offset_col(1, 1) < 4)
+  end)
+
   test.it("reveals raw inline Markdown on the active line", function()
     local view, doc = make_view("See [[Note|Alias]]", "note.md")
     markdown.live_render.refresh_view(view)
