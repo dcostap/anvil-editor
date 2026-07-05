@@ -1321,6 +1321,28 @@ function DocView:notify_selection_listeners(reason, old_state, new_state)
   end
 end
 
+function DocView:begin_line_render_interaction(reason)
+  self.__line_render_interaction_state = {
+    reason = reason,
+    selection_state = self:get_selection_state(),
+  }
+  self:invalidate_line_render("interaction")
+  self:invalidate_visual_metrics("interaction")
+end
+
+function DocView:end_line_render_interaction(reason)
+  if not self.__line_render_interaction_state then return false end
+  self.__line_render_interaction_state = nil
+  self:invalidate_line_render(reason or "interaction")
+  self:invalidate_visual_metrics(reason or "interaction")
+  return true
+end
+
+function DocView:get_line_render_selection_state()
+  local state = self.__line_render_interaction_state and self.__line_render_interaction_state.selection_state
+  return state or self:get_selection_state()
+end
+
 function DocView:add_scroll_listener(id, fn)
   assert(type(id) == "string" and id ~= "", "scroll listener id must be a non-empty string")
   assert(type(fn) == "function", "scroll listener must be a function")
@@ -3158,6 +3180,7 @@ end
 function DocView:on_mouse_released(...)
   DocView.super.on_mouse_released(self, ...)
   self.mouse_selecting = nil
+  self:end_line_render_interaction("mouse-release")
 end
 
 

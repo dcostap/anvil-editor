@@ -37,8 +37,14 @@ local function normalized_selection_range(l1, c1, l2, c2)
   return l1, c1, l2, c2
 end
 
+local function current_selection_state(view)
+  if view.get_line_render_selection_state then return view:get_line_render_selection_state() end
+  return view.selection_state or { selections = view.doc.selections }
+end
+
 local function view_active_line(view, line)
-  local selections = view.selection_state and view.selection_state.selections or view.doc.selections or {}
+  local state = current_selection_state(view)
+  local selections = state and state.selections or view.doc.selections or {}
   for i = 1, #selections, 4 do
     local l1, _, l2 = selections[i], selections[i + 1], selections[i + 2]
     if l1 and l2 and line >= math.min(l1, l2) and line <= math.max(l1, l2) then return true end
@@ -47,7 +53,8 @@ local function view_active_line(view, line)
 end
 
 local function source_range_active(view, line, col1, col2)
-  local selections = view.selection_state and view.selection_state.selections or view.doc.selections or {}
+  local state = current_selection_state(view)
+  local selections = state and state.selections or view.doc.selections or {}
   for i = 1, #selections, 4 do
     local l1, c1, l2, c2 = selections[i], selections[i + 1], selections[i + 2], selections[i + 3]
     if l1 and c1 and l2 and c2 then

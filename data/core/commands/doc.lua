@@ -260,6 +260,7 @@ local function apply_resolved_wrap_affinity(dv)
 end
 
 local function set_cursor(dv, x, y, snap_type)
+  if dv.begin_line_render_interaction then dv:begin_line_render_interaction("mouse-selection") end
   local line, col = dv:resolve_screen_position(x, y)
   dv.doc:set_selection(line, col, line, col)
   if snap_type == "word" or snap_type == "lines" then
@@ -1743,6 +1744,7 @@ end, {
   end,
 
   ["doc:split-cursor"] = function(dv, x, y, clicks)
+    if dv.begin_line_render_interaction then dv:begin_line_render_interaction("mouse-selection") end
     local line, col = dv:resolve_screen_position(x, y)
     local removal_target = nil
     for idx, line1, col1 in dv.doc:get_selections(true) do
