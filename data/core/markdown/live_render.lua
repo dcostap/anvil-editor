@@ -101,10 +101,10 @@ local function heading_font(view, level)
   return cache[key]
 end
 
-local function inline_style_font(view, span_type)
+local function inline_style_font(view, span_type, base_font)
   view.__markdown_live_inline_fonts = view.__markdown_live_inline_fonts or {}
   local cache = view.__markdown_live_inline_fonts
-  local font = view:get_font()
+  local font = base_font or view:get_font()
   local size = font:get_size()
   local key = tostring(font) .. ":" .. tostring(size) .. ":" .. tostring(span_type)
   if not cache[key] then
@@ -205,15 +205,16 @@ local function image_fragment(view, span)
   }
 end
 
-local function emphasis_fragment(view, line_text, span, active)
+local function emphasis_fragment(view, line_text, span, active, opts)
+  opts = opts or {}
   local content = span.content_ranges and span.content_ranges[1]
   if not content then
     return {
       source_col1 = span.col1,
       source_col2 = span.col2,
       text = span.text,
-      font = inline_style_font(view, span.type),
-      color = normal_text_color(),
+      font = inline_style_font(view, span.type, opts.base_font),
+      color = opts.color or normal_text_color(),
       overdraw = strong_overdraw(span.type),
     }
   end
@@ -229,8 +230,8 @@ local function emphasis_fragment(view, line_text, span, active)
         source_col1 = content.col1,
         source_col2 = content.col2,
         text = span.text,
-        font = inline_style_font(view, span.type),
-        color = normal_text_color(),
+        font = inline_style_font(view, span.type, opts.base_font),
+        color = opts.color or normal_text_color(),
         overdraw = strong_overdraw(span.type),
       },
       {
@@ -251,8 +252,8 @@ local function emphasis_fragment(view, line_text, span, active)
       source_col1 = content.col1,
       source_col2 = content.col2,
       text = span.text,
-      font = inline_style_font(view, span.type),
-      color = normal_text_color(),
+      font = inline_style_font(view, span.type, opts.base_font),
+      color = opts.color or normal_text_color(),
       overdraw = strong_overdraw(span.type),
     },
     {
@@ -302,28 +303,67 @@ end
 
 local provider = {}
 
-local function active_heading_fragments(text, heading, font)
-  return {
-    { source_col1 = 1, source_col2 = heading.content_col1, text = text:sub(1, heading.content_col1 - 1), font = font, color = style.markdown_live_heading_marker },
-    { source_col1 = heading.content_col1, source_col2 = heading.content_col2, text = heading.text, font = font, color = style.text },
-    { source_col1 = heading.content_col2, source_col2 = #text + 1, text = text:sub(heading.content_col2), font = font, color = style.markdown_live_heading_marker },
-  }
+local function heading_content_fragments(view, text, heading, font, active)
+  local fragments = {}
+  local cursor = heading.content_col1
+  for _, span in ipairs(parser.parse_inline(text, heading.line)) do
+    local emphasis = span.type == "strong" or span.type == "emphasis" or span.type == "strong_emphasis" or span.type == "strikethrough"
+    if emphasis and span.col1 >= heading.content_col1 and span.col2 <= heading.content_col2 and span.col1 >= cursor then
+      if cursor < span.col1 then
+        fragments[#fragments + 1] = {
+          source_col1 = cursor,
+          source_col2 = span.col1,
+          text = text:sub(cursor, span.col1 - 1),
+          font = font,
+          color = style.text,
+        }
+      end
+      local active_span = active and source_range_active(view, heading.line, span.col1, span.col2)
+      local item = emphasis_fragment(view, text, span, active_span, { base_font = font, color = style.text })
+      if item[1] then
+        for _, fragment in ipairs(item) do fragments[#fragments + 1] = fragment end
+      else
+        fragments[#fragments + 1] = item
+      end
+      cursor = span.col2
+    end
+  end
+  if cursor < heading.content_col2 then
+    fragments[#fragments + 1] = {
+      source_col1 = cursor,
+      source_col2 = heading.content_col2,
+      text = text:sub(cursor, heading.content_col2 - 1),
+      font = font,
+      color = style.text,
+    }
+  end
+  return fragments
 end
 
-local function inactive_heading_fragments(text, heading, font)
-  return {
-    { source_col1 = 1, source_col2 = heading.content_col1, hidden = true },
-    { source_col1 = heading.content_col1, source_col2 = heading.content_col2, text = heading.text, font = font, color = style.text },
-    { source_col1 = heading.content_col2, source_col2 = #text + 1, hidden = true },
+local function active_heading_fragments(view, text, heading, font)
+  local fragments = {
+    { source_col1 = 1, source_col2 = heading.content_col1, text = text:sub(1, heading.content_col1 - 1), font = font, color = style.markdown_live_heading_marker },
   }
+  for _, fragment in ipairs(heading_content_fragments(view, text, heading, font, true)) do fragments[#fragments + 1] = fragment end
+  fragments[#fragments + 1] = { source_col1 = heading.content_col2, source_col2 = #text + 1, text = text:sub(heading.content_col2), font = font, color = style.markdown_live_heading_marker }
+  return fragments
+end
+
+local function inactive_heading_fragments(view, text, heading, font)
+  local fragments = {
+    { source_col1 = 1, source_col2 = heading.content_col1, hidden = true },
+  }
+  for _, fragment in ipairs(heading_content_fragments(view, text, heading, font, false)) do fragments[#fragments + 1] = fragment end
+  fragments[#fragments + 1] = { source_col1 = heading.content_col2, source_col2 = #text + 1, hidden = true }
+  return fragments
 end
 
 local function heading_render_line(view, text, heading, active)
   local font = heading_font(view, heading.level)
-  local active_fragments = active_heading_fragments(text, heading, font)
+  local active_fragments = active_heading_fragments(view, text, heading, font)
   return {
     source_text = text,
-    fragments = active and active_fragments or inactive_heading_fragments(text, heading, font),
+    fragments = active and active_fragments or inactive_heading_fragments(view, text, heading, font),
   }
 end
 

@@ -228,8 +228,8 @@ core.add_thread(function()
   end
 
   local function set_color(attr)
-    custom_fonts[attr].color = style.syntax["keyword2"]
-    style.syntax["markdown_"..attr] = style.syntax["keyword2"]
+    custom_fonts[attr].color = style.text or style.syntax["normal"]
+    style.syntax["markdown_"..attr] = custom_fonts[attr].color
   end
 
   -- Add 3 type of font styles for use on markdown files
@@ -256,8 +256,8 @@ core.add_thread(function()
       end
     end
 
-    if initial_color ~= style.syntax["keyword2"] then
-      initial_color = style.syntax["keyword2"]
+    if initial_color ~= (style.text or style.syntax["normal"]) then
+      initial_color = style.text or style.syntax["normal"]
       for attr, _ in pairs(custom_fonts) do
         -- Only set it if the color wasn't manually customized
         if style.syntax["markdown_"..attr] == custom_fonts[attr].color then
