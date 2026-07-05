@@ -1,10 +1,12 @@
 local core = require "core"
 local common = require "core.common"
+local config = require "core.config"
 local Project = require "core.project"
 local project_paths = require "core.project_paths"
 local DirWatch = require "core.dirwatch"
 local registry = require "core.treesitter.registry"
 local outline = require "core.treesitter.outline"
+local worker_pool = require "core.worker_pool"
 
 local symbol_index = {}
 
@@ -67,6 +69,9 @@ local function new_index(root)
     reason = nil,
     started_at = nil,
     finished_at = nil,
+    worker_handle = nil,
+    worker_seen_paths = nil,
+    project_paths_generation = nil,
   }
 end
 
@@ -770,6 +775,230 @@ local function scan_index(index, generation)
   drain_pending_reindexes(index)
 end
 
+local function project_index_languages_payload()
+  local out = {}
+  for _, language in ipairs(registry.get_languages() or {}) do
+    if language.query_sources and language.query_sources.outline then
+      out[#out + 1] = {
+        id = language.id,
+        grammar = language.grammar,
+        files = language.files,
+        headers = language.headers,
+        query_sources = language.query_sources,
+        parse_timeout_ms = language.parse_timeout_ms,
+        outline_match_limit = language.outline_match_limit,
+        outline_max_captures = language.outline_max_captures,
+        outline_query_timeout_ms = language.outline_query_timeout_ms,
+        usages_match_limit = language.usages_match_limit,
+        usages_max_captures = language.usages_max_captures,
+        usages_query_timeout_ms = language.usages_query_timeout_ms,
+        locals_match_limit = language.locals_match_limit,
+        locals_max_captures = language.locals_max_captures,
+        locals_query_timeout_ms = language.locals_query_timeout_ms,
+      }
+    end
+  end
+  return out
+end
+
+local function project_index_exclusions_payload()
+  local excluded = {}
+  for _, entry in ipairs(project_paths.entries()) do
+    if entry.path and entry.symbols == false then
+      excluded[#excluded + 1] = { path = entry.path }
+    end
+  end
+  return excluded
+end
+
+local function apply_entry_metadata(index, entry)
+  for _, symbol in ipairs(entry.symbols or {}) do
+    refresh_project_path_metadata(index, symbol, "symbols")
+  end
+  for _, list in pairs(entry.usages_by_name or {}) do
+    for _, usage in ipairs(list) do
+      refresh_project_path_metadata(index, usage, "usages")
+    end
+  end
+end
+
+local function current_worker_message(index, message)
+  return index
+     and message
+     and message.generation == index.generation
+     and message.project_paths_generation == index.project_paths_generation
+end
+
+local function apply_worker_chunk(index, message)
+  if not current_worker_message(index, message) then return end
+  local payload = message.payload or {}
+  local changed = false
+  for _, file in ipairs(payload.files or {}) do
+    local path = file.path and common.normalize_path(file.path)
+    if path then
+      file.path = path
+      apply_entry_metadata(index, file)
+      replace_file_entry(index, path, file.fingerprint, file)
+      index.worker_seen_paths = index.worker_seen_paths or {}
+      index.worker_seen_paths[path] = true
+      changed = true
+    end
+  end
+  if changed then
+    rebuild_disk_aggregates(index)
+    core.redraw = true
+  end
+end
+
+local function prune_worker_unseen(index)
+  local seen = index.worker_seen_paths or {}
+  local pruned = false
+  for path in pairs(index.by_path or {}) do
+    if not seen[path] then
+      index.by_path[path] = nil
+      pruned = true
+    end
+  end
+  if pruned then rebuild_disk_aggregates(index) end
+  return pruned
+end
+
+local function finish_worker_scan(index, message, status)
+  if not current_worker_message(index, message) then return end
+  if status == "ready" then
+    local pruned = prune_worker_unseen(index)
+    if pruned or index.status ~= "ready" then rebuild_disk_aggregates(index) end
+    index.status = "ready"
+    index.symbol_status = "ready"
+    index.usage_status = "ready"
+    index.reason = nil
+  else
+    index.status = status
+    if message.phase == "usages" and index.symbol_status == "ready" then
+      index.usage_status = status
+    else
+      index.symbol_status = status
+      index.usage_status = status
+    end
+    index.reason = message.error or (message.payload and message.payload.reason) or status
+  end
+  index.worker_handle = nil
+  index.worker_seen_paths = nil
+  index.finished_at = system.get_time()
+  core.redraw = true
+  if status == "ready" then
+    log_quiet("Tree-sitter Project index: worker indexed %d symbol(s), %d usage(s)%s under %s in %.1fms",
+      #index.symbols, index.usage_count or 0, index.usage_truncated and " (truncated)" or "",
+      index.root, ((index.finished_at or system.get_time()) - (index.started_at or system.get_time())) * 1000)
+    drain_pending_reindexes(index)
+  else
+    log_quiet("Tree-sitter Project index: worker finished status=%s root=%s reason=%s", tostring(status), tostring(index.root), tostring(index.reason))
+  end
+end
+
+local function submit_worker_scan(index, generation, opts, phase)
+  opts = opts or {}
+  phase = phase or "symbols"
+  if index.worker_handle then
+    worker_pool.system():cancel(index.worker_handle)
+    index.worker_handle = nil
+  end
+  index.status = "indexing"
+  if phase == "symbols" then
+    index.symbol_status = "indexing"
+    index.usage_status = "indexing"
+    index.started_at = system.get_time()
+    index.project_paths_generation = project_paths.generation()
+  else
+    index.symbol_status = "ready"
+    index.usage_status = "indexing"
+  end
+  index.reason = opts.reason
+  index.finished_at = nil
+  index.files_total = 0
+  index.files_scanned = 0
+  index.files_indexed = 0
+  index.worker_seen_paths = {}
+  if index.watcher then refresh_watches_for_dir(index, index.root) end
+
+  local handle, err = worker_pool.system():submit({
+    kind = "treesitter_project_index",
+    priority = "background",
+    generation = generation,
+    project_paths_generation = index.project_paths_generation,
+    phase = phase,
+    payload = {
+      roots = { { path = index.root } },
+      excluded = project_index_exclusions_payload(),
+      ignore_files = config.ignore_files,
+      languages = project_index_languages_payload(),
+      include_usages = phase ~= "symbols",
+      project_usage_cap = index.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP,
+      max_file_bytes = MAX_FILE_BYTES,
+      chunk_files = opts.chunk_files or 8,
+      chunk_records = opts.chunk_records or 3000,
+      max_usage_captures_per_file = opts.max_usage_captures_per_file or DEFAULT_MAX_CAPTURES,
+    },
+    is_stale = function(message)
+      return not current_worker_message(index, message)
+    end,
+    on_progress = function(message)
+      if not current_worker_message(index, message) then return end
+      local p = message.payload or {}
+      index.files_scanned = p.files_scanned or index.files_scanned
+      index.files_indexed = p.files_indexed or index.files_indexed
+      core.redraw = true
+    end,
+    on_result = function(message)
+      if message.type == "chunk" then
+        apply_worker_chunk(index, message)
+      elseif message.type == "final" and current_worker_message(index, message) then
+        local p = message.payload or {}
+        index.files_scanned = p.files_scanned or index.files_scanned
+        index.files_indexed = p.files_indexed or index.files_indexed
+        index.files_total = p.files_indexed or index.files_total
+      end
+    end,
+    on_error = function(message)
+      finish_worker_scan(index, message, "failed")
+    end,
+    on_cancelled = function(message)
+      finish_worker_scan(index, message, "cancelled")
+    end,
+    on_complete = function(message)
+      if not current_worker_message(index, message) then return end
+      if message.phase == "symbols" then
+        prune_worker_unseen(index)
+        index.symbol_status = "ready"
+        index.usage_status = "indexing"
+        index.worker_handle = nil
+        index.worker_seen_paths = nil
+        core.redraw = true
+        core.add_thread(function()
+          coroutine.yield(0)
+          if index.generation == generation and index.status == "indexing" and index.usage_status == "indexing" then
+            submit_worker_scan(index, generation, common.merge(opts, { reason = "usages" }), "usages")
+          end
+        end)
+      else
+        finish_worker_scan(index, message, "ready")
+      end
+    end,
+  })
+  if not handle then
+    index.status = "failed"
+    index.symbol_status = "failed"
+    index.usage_status = "failed"
+    index.reason = err or "worker-submit-failed"
+    index.finished_at = system.get_time()
+    log_quiet("Tree-sitter Project index: failed to submit worker for %s: %s", tostring(index.root), tostring(err))
+  else
+    index.worker_handle = handle
+    log_quiet("Tree-sitter Project index: submitted worker phase=%s generation=%d project_paths_generation=%d root=%s",
+      tostring(phase), generation, index.project_paths_generation, tostring(index.root))
+  end
+end
+
 function symbol_index.ensure_scan(root, opts)
   opts = opts or {}
   local index = index_for_root(root)
@@ -791,13 +1020,8 @@ function symbol_index.ensure_scan(root, opts)
     end
   end
   index.generation = index.generation + 1
-  index.status = "indexing"
-  index.symbol_status = "indexing"
-  index.usage_status = "indexing"
   local generation = index.generation
-  core.add_thread(function()
-    scan_index(index, generation)
-  end)
+  submit_worker_scan(index, generation, opts)
   return index
 end
 
@@ -830,12 +1054,20 @@ function symbol_index.invalidate(root)
   if root then
     local normalized = normalize_root(root)
     local index = index_for_root(normalized)
+    if index.worker_handle then
+      worker_pool.system():cancel(index.worker_handle)
+      index.worker_handle = nil
+    end
     index.status = "idle"
     index.symbol_status = "idle"
     index.usage_status = "idle"
     index.generation = index.generation + 1
   else
     for _, index in pairs(indexes) do
+      if index.worker_handle then
+        worker_pool.system():cancel(index.worker_handle)
+        index.worker_handle = nil
+      end
       index.status = "idle"
       index.symbol_status = "idle"
       index.usage_status = "idle"
@@ -1501,6 +1733,10 @@ end
 
 function symbol_index.reset_for_tests()
   for _, index in pairs(indexes) do
+    if index.worker_handle then
+      worker_pool.system():cancel(index.worker_handle)
+      index.worker_handle = nil
+    end
     index.generation = (index.generation or 0) + 1
     index.watch_generation = (index.watch_generation or 0) + 1
     index.watch_running = false

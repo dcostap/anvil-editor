@@ -199,7 +199,7 @@ local function index_file(path, root_path, language, payload, info, usage_remain
   local usage_complete = payload.include_usages ~= false
   if usage_kind then
     local language_usage_cap = option(language, "usages", "max_captures", DEFAULT_MAX_CAPTURES)
-    local per_file_cap = payload.max_usage_captures_per_file or payload.chunk_records or DEFAULT_CHUNK_RECORDS
+    local per_file_cap = payload.max_usage_captures_per_file or language_usage_cap
     local effective_cap = math.max(0, math.min(language_usage_cap, per_file_cap, usage_remaining or language_usage_cap))
     if effective_cap > 0 then
       local usage_result, usage_err = native.index_text({
@@ -213,7 +213,7 @@ local function index_file(path, root_path, language, payload, info, usage_remain
       })
       if usage_result and usage_result.usage then
         usages_by_name, usage_count = records.usages_from_captures(usage_result.usage.captures, path, relpath, lines, language)
-        if effective_cap < language_usage_cap or usage_count >= effective_cap then usage_complete = false end
+        if usage_count >= effective_cap then usage_complete = false end
       else
         usage_complete = false
         if payload.log_skips then err = usage_err end
