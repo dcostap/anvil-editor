@@ -646,6 +646,9 @@ static int f_index_text(lua_State *L) {
   uint32_t query_timeout_ms = option_uint32(L, opts, "query_timeout_ms", 20);
   uint32_t match_limit = option_uint32(L, opts, "match_limit", 50000);
   uint32_t max_captures = option_uint32(L, opts, "max_captures", 50000);
+  uint32_t usage_query_timeout_ms = option_uint32(L, opts, "usage_query_timeout_ms", query_timeout_ms);
+  uint32_t usage_match_limit = option_uint32(L, opts, "usage_match_limit", match_limit);
+  uint32_t usage_max_captures = option_uint32(L, opts, "usage_max_captures", max_captures);
 
   TSParser *parser = ts_parser_new();
   if (!parser) {
@@ -699,7 +702,7 @@ static int f_index_text(lua_State *L) {
   size_t usage_len = 0;
   lua_getfield(L, opts, "usage_query");
   const char *usage_source = lua_tolstring(L, -1, &usage_len);
-  if (usage_source && !index_text_query(L, result_index, "usage", language, usage_source, usage_len, tree, snapshot, match_limit, max_captures, query_timeout_ms)) {
+  if (usage_source && !index_text_query(L, result_index, "usage", language, usage_source, usage_len, tree, snapshot, usage_match_limit, usage_max_captures, usage_query_timeout_ms)) {
     ts_tree_delete(tree);
     anvil_ts_snapshot_free(snapshot);
     return 2;
