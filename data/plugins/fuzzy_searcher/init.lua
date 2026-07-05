@@ -83,6 +83,8 @@ local fuzzy_searcher = {
   grep_path_column_width = 0.45,
   preview_debug = false,
   preview_text_max_bytes = 2 * 1024 * 1024,
+  copy_flash_duration = 0.20,
+  copy_flash_max_alpha = 115,
 }
 
 local FSView = Widget:extend()
@@ -1847,6 +1849,29 @@ local function result_list_label_and_spans(r)
   return text, r.match_spans or {}
 end
 
+function fuzzy_searcher.result_main_text(r)
+  if not r then return nil end
+  local text
+  if r.kind == "grep" then
+    text = r.text or r.label or r.file
+  elseif r.kind == "command" then
+    text = r.label or r.command
+  elseif r.kind == "symbol" then
+    text = r.label or r.name
+  elseif r.kind == "project" or r.kind == "new_project" then
+    text = r.project or r.label
+  elseif r.kind == "everything" then
+    text = r.path or r.project or r.file or r.label
+  elseif r.kind == "file" then
+    text = r.file or r.label
+  else
+    text = r.label or r.text or r.file or r.path or r.project or r.name or r.command
+  end
+  text = text and tostring(text) or nil
+  if text == "" then return nil end
+  return text
+end
+
 local function draw_project_result_row(font, r, x, y, width)
   local label, spans, prefix = result_list_label_and_spans(r)
   local age = r.opened_at and compact_age(r.opened_at)
@@ -2448,6 +2473,71 @@ end
 function FSView:selected_result()
   local r = self.results[self.selected]
   if r and not r.header then return r end
+end
+
+function FSView:copy_selected()
+  local r = self:selected_result()
+  local text = fuzzy_searcher.result_main_text(r)
+  if not text then return false end
+
+  system.set_clipboard(text)
+  core.cursor_clipboard = {}
+  core.cursor_clipboard_whole_line = {}
+  self.copy_flash = {
+    result = r,
+    index = self.selected,
+    text = text,
+    started_at = system.get_time(),
+    duration = fuzzy_searcher.copy_flash_duration,
+  }
+  core.log_quiet("Fuzzy Searcher: copied selected %s result text (%d bytes)", tostring(r.kind or "unknown"), #text)
+  self:schedule_update(true)
+  core.redraw = true
+  return true
+end
+
+function FSView:copy_flash_alpha(idx)
+  local flash = self.copy_flash
+  if not flash then return nil end
+  local duration = flash.duration or fuzzy_searcher.copy_flash_duration
+  local elapsed = system.get_time() - (flash.started_at or 0)
+  if elapsed >= duration then
+    self.copy_flash = nil
+    return nil
+  end
+  if flash.index ~= idx or flash.result ~= self.results[idx] then return nil end
+  core.redraw = true
+  return math.floor((fuzzy_searcher.copy_flash_max_alpha or 115) * (1 - elapsed / duration))
+end
+
+function FSView:copy_flash_bounds(font, r, row_x, row_text_w)
+  local flash = self.copy_flash
+  local text = flash and flash.text or ""
+  local x = row_x
+  local width = row_text_w
+
+  if r.kind == "grep" or r.kind == "symbol" then
+    local path_w, gap = grep_row_columns(row_text_w)
+    x = row_x + path_w + gap
+    width = math.max(0, row_text_w - path_w - gap)
+  elseif r.kind == "command" then
+    x = row_x + font:get_width("> ")
+    width = math.max(0, row_text_w - font:get_width("> "))
+  elseif r.kind == "project" then
+    x = row_x + font:get_width("@ ")
+    width = math.max(0, row_text_w - font:get_width("@ "))
+  elseif r.kind == "new_project" then
+    local prefix = "Open this new folder as project: "
+    x = row_x + font:get_width(prefix)
+    width = math.max(0, row_text_w - font:get_width(prefix))
+  elseif r.kind == "everything" and r.is_folder then
+    x = row_x + font:get_width("@ ")
+    width = math.max(0, row_text_w - font:get_width("@ "))
+  end
+
+  local text_w = font:get_width(text)
+  if text_w > 0 then width = math.min(width, text_w) end
+  return x, math.max(0, width)
 end
 
 function FSView:preview_bounds()
@@ -4174,6 +4264,13 @@ function FSView:draw()
       elseif idx == self.hovered_result then
         renderer.draw_rect(x, yy, list_w, lh, style.background3 or color_with_alpha(style.text, 24))
       end
+      local flash_alpha = self:copy_flash_alpha(idx)
+      if flash_alpha then
+        local flash_x, flash_w = self:copy_flash_bounds(font, r, x + pad, row_text_w)
+        if flash_w > 0 then
+          renderer.draw_rect(flash_x, yy + 1, flash_w, math.max(1, lh - 2), color_with_alpha(style.accent, flash_alpha))
+        end
+      end
       if r.kind == "grep" then
         local file = tostring(r.file or "")
         local collapse_file = file ~= "" and previous_rendered_was_grep and file == previous_rendered_grep_file
@@ -4396,6 +4493,10 @@ command.add(picker_active, {
   ["fuzzy-searcher:confirm-side"] = picker_confirm_side,
   ["fuzzy-searcher:focus-selected-in-tree"] = picker_focus_selected_in_tree,
   ["fuzzy-searcher:reveal-selected-in-explorer"] = picker_reveal_selected_in_explorer,
+  ["fuzzy-searcher:copy-selected"] = function()
+    local view = current_picker()
+    if view then view:copy_selected() end
+  end,
   ["fuzzy-searcher:next"] = picker_next,
   ["fuzzy-searcher:previous"] = picker_previous,
   ["fuzzy-searcher:prompt-history-previous"] = function()
@@ -4435,6 +4536,7 @@ core.fuzzy_searcher_install_picker_keymaps = function()
     ["alt+shift+r"] = "fuzzy-searcher:confirm-side",
     ["ctrl+l"] = "fuzzy-searcher:focus-selected-in-tree",
     ["ctrl+shift+l"] = "fuzzy-searcher:reveal-selected-in-explorer",
+    ["ctrl+c"] = "fuzzy-searcher:copy-selected",
     ["up"] = "fuzzy-searcher:previous",
     ["down"] = "fuzzy-searcher:next",
     ["alt+left"] = "fuzzy-searcher:prompt-history-previous",
@@ -4513,6 +4615,7 @@ return {
     file_result_key = file_result_key,
     build_scope = build_scope,
     decorate_grep_result = decorate_grep_result,
+    result_main_text = fuzzy_searcher.result_main_text,
     set_file_cache_for_test = function(files)
       clear_native_file_index()
       fuzzy_searcher.files_cache_root = fuzzy_searcher.file_roots_signature(project_paths.search_roots("files"))

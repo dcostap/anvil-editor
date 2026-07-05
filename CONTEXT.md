@@ -172,6 +172,10 @@ _Avoid_: filetree sorting
 The bottom-anchored, full-width prompt used for app-wide actions such as opening files, opening projects, renaming, and command entry.
 _Avoid_: Command prompt, command bar
 
+**Fuzzy Searcher**:
+The floating picker used for fuzzy navigation and search modes, such as files, projects, grep, symbols, and commands.
+_Avoid_: fuzzy searcher popup
+
 **Command Slot**:
 A project-scoped shortcut slot that stores one shell command for quick reruns.
 _Avoid_: Command preset, command macro
