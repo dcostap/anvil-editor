@@ -139,12 +139,19 @@ end
 
 local function copy_native_metrics(metrics, result, prefix)
   local native_metrics = result and result.metrics or {}
-  if native_metrics.parse_ms then add_metric(metrics, "parse_ms", native_metrics.parse_ms) end
-  if native_metrics.outline_query_ms then add_metric(metrics, "outline_query_ms", native_metrics.outline_query_ms) end
-  if native_metrics.usage_query_ms then add_metric(metrics, "usage_query_ms", native_metrics.usage_query_ms) end
-  if native_metrics.parse_count then inc_metric(metrics, "parse_calls", native_metrics.parse_count) end
+  if prefix == "outline" then
+    if native_metrics.parse_ms then add_metric(metrics, "parse_ms", native_metrics.parse_ms) end
+    if native_metrics.outline_query_ms then add_metric(metrics, "outline_query_ms", native_metrics.outline_query_ms) end
+    if native_metrics.usage_query_ms then add_metric(metrics, "usage_query_ms", native_metrics.usage_query_ms) end
+    if native_metrics.parse_count then inc_metric(metrics, "parse_calls", native_metrics.parse_count) end
+  end
   local captures = result and result[prefix] and result[prefix].capture_count
   if captures then inc_metric(metrics, prefix .. "_captures", captures) end
+end
+
+local function query_status_ok(query_result)
+  local status = query_result and query_result.status or "ready"
+  return status == "ready" or status == "limit"
 end
 
 local function file_record_count(file)
@@ -225,9 +232,14 @@ local function index_file(path, root_path, language, payload, info, usage_remain
   local lines_started = now()
   local lines = records.lines_from_text(text)
   add_metric(metrics, "line_split_ms", elapsed_ms(lines_started))
-  local result
-  local native_started = now()
-  result, err = native.index_text({
+  local usage_effective_cap = 0
+  if usage_kind then
+    local language_usage_cap = option(language, "usages", "max_captures", DEFAULT_MAX_CAPTURES)
+    local per_file_cap = payload.max_usage_captures_per_file or language_usage_cap
+    usage_effective_cap = math.max(0, math.min(language_usage_cap, per_file_cap, usage_remaining or language_usage_cap))
+  end
+
+  local native_opts = {
     language = language.grammar,
     lines = lines,
     outline_query = sources.outline,
@@ -235,10 +247,24 @@ local function index_file(path, root_path, language, payload, info, usage_remain
     query_timeout_ms = option(language, "outline", "query_timeout_ms", DEFAULT_QUERY_TIMEOUT_MS),
     match_limit = option(language, "outline", "match_limit", DEFAULT_MATCH_LIMIT),
     max_captures = option(language, "outline", "max_captures", DEFAULT_MAX_CAPTURES),
-  })
+  }
+  if usage_kind and usage_effective_cap > 0 then
+    native_opts.usage_query = sources[usage_kind]
+    native_opts.usage_query_timeout_ms = option(language, "usages", "query_timeout_ms", DEFAULT_QUERY_TIMEOUT_MS)
+    native_opts.usage_match_limit = option(language, "usages", "match_limit", DEFAULT_MATCH_LIMIT)
+    native_opts.usage_max_captures = usage_effective_cap
+  end
+
+  local result
+  local native_started = now()
+  result, err = native.index_text(native_opts)
   add_metric(metrics, "native_index_text_ms", elapsed_ms(native_started))
   if not result then return nil, err or "index-text-failed", info end
   copy_native_metrics(metrics, result, "outline")
+  if result.usage then copy_native_metrics(metrics, result, "usage") end
+  if not query_status_ok(result.outline) then
+    return nil, (result.outline and result.outline.error) or "outline-query-failed", info
+  end
 
   local relpath = common.relative_path(root_path, path):gsub("\\", "/")
   local symbol_record_started = now()
@@ -255,33 +281,14 @@ local function index_file(path, root_path, language, payload, info, usage_remain
   local usages_by_name, usage_count = {}, 0
   local usage_complete = payload.include_usages ~= false
   if usage_kind then
-    local language_usage_cap = option(language, "usages", "max_captures", DEFAULT_MAX_CAPTURES)
-    local per_file_cap = payload.max_usage_captures_per_file or language_usage_cap
-    local effective_cap = math.max(0, math.min(language_usage_cap, per_file_cap, usage_remaining or language_usage_cap))
-    if effective_cap > 0 then
-      local usage_native_started = now()
-      local usage_result, usage_err = native.index_text({
-        language = language.grammar,
-        lines = lines,
-        usage_query = sources[usage_kind],
-        parse_timeout_ms = language.parse_timeout_ms or DEFAULT_PARSE_TIMEOUT_MS,
-        query_timeout_ms = option(language, "usages", "query_timeout_ms", DEFAULT_QUERY_TIMEOUT_MS),
-        match_limit = option(language, "usages", "match_limit", DEFAULT_MATCH_LIMIT),
-        max_captures = effective_cap,
-      })
-      add_metric(metrics, "native_index_text_ms", elapsed_ms(usage_native_started))
-      if usage_result and usage_result.usage then
-        copy_native_metrics(metrics, usage_result, "usage")
-        local usage_record_started = now()
-        usages_by_name, usage_count = records.usages_from_captures(usage_result.usage.captures, path, relpath, lines, language)
-        add_metric(metrics, "usage_record_ms", elapsed_ms(usage_record_started))
-        if usage_count >= effective_cap then usage_complete = false end
-      else
-        usage_complete = false
-        if payload.log_skips then err = usage_err end
-      end
+    if usage_effective_cap > 0 and result.usage and query_status_ok(result.usage) then
+      local usage_record_started = now()
+      usages_by_name, usage_count = records.usages_from_captures(result.usage.captures, path, relpath, lines, language)
+      add_metric(metrics, "usage_record_ms", elapsed_ms(usage_record_started))
+      if usage_count >= usage_effective_cap or result.usage.status == "limit" then usage_complete = false end
     else
       usage_complete = false
+      if payload.log_skips and result.usage then err = result.usage.error end
     end
   end
 

@@ -556,6 +556,44 @@ static void set_metric_number(lua_State *L, int metrics_index, const char *field
   lua_setfield(L, metrics_index, field);
 }
 
+static const char *query_status_from_error(const char *error, bool exceeded_match_limit) {
+  if (exceeded_match_limit) return "limit";
+  if (!error) return "failed";
+  if (strstr(error, "timed out")) return "timeout";
+  if (strstr(error, "limit exceeded")) return "limit";
+  return "failed";
+}
+
+static void push_query_result_table(
+  lua_State *L,
+  int result_index,
+  const char *field,
+  const LuaCaptureCollectContext *context,
+  bool exceeded_match_limit,
+  const char *status,
+  const char *error
+) {
+  uint32_t count = context ? context->count : 0;
+  lua_newtable(L);
+  lua_newtable(L);
+  for (uint32_t i = 0; context && i < context->count; i++) {
+    push_capture_copy(L, &context->items[i]);
+    lua_rawseti(L, -2, (int) i + 1);
+  }
+  lua_setfield(L, -2, "captures");
+  lua_pushboolean(L, exceeded_match_limit);
+  lua_setfield(L, -2, "exceeded_match_limit");
+  lua_pushinteger(L, (lua_Integer) count);
+  lua_setfield(L, -2, "capture_count");
+  lua_pushstring(L, status ? status : "ready");
+  lua_setfield(L, -2, "status");
+  if (error && error[0]) {
+    lua_pushstring(L, error);
+    lua_setfield(L, -2, "error");
+  }
+  lua_setfield(L, result_index, field);
+}
+
 static bool index_text_query(
   lua_State *L,
   int result_index,
@@ -573,7 +611,19 @@ static bool index_text_query(
   if (!source) return true;
   uint64_t query_started_ticks = SDL_GetTicks();
   TSQuery *query = compile_query_source(L, language, field, source, source_len);
-  if (!query) return false;
+  if (!query) {
+    const char *compile_error = lua_tostring(L, -1);
+    char error_copy[256];
+    snprintf(error_copy, sizeof(error_copy), "%s", compile_error ? compile_error : "Tree-sitter query compile failed");
+    lua_pop(L, 2);
+    push_query_result_table(L, result_index, field, NULL, false, "failed", error_copy);
+    if (metrics_index > 0) {
+      char metric_field[64];
+      snprintf(metric_field, sizeof(metric_field), "%s_query_ms", field);
+      set_metric_number(L, metrics_index, metric_field, (lua_Number) (SDL_GetTicks() - query_started_ticks));
+    }
+    return true;
+  }
 
   LuaCaptureCollectContext context;
   memset(&context, 0, sizeof(context));
@@ -596,31 +646,15 @@ static bool index_text_query(
   ts_query_delete(query);
   uint64_t query_elapsed_ms = SDL_GetTicks() - query_started_ticks;
 
-  if (!ok) {
-    lua_pushnil(L);
-    lua_pushstring(L, error ? error : (context.failed ? "out of memory collecting Tree-sitter captures" : "Tree-sitter query failed"));
-    free(error);
-    free_capture_copies(&context);
-    return false;
-  }
-
-  lua_newtable(L);
-  lua_newtable(L);
-  for (uint32_t i = 0; i < context.count; i++) {
-    push_capture_copy(L, &context.items[i]);
-    lua_rawseti(L, -2, (int) i + 1);
-  }
-  lua_setfield(L, -2, "captures");
-  lua_pushboolean(L, exceeded_match_limit);
-  lua_setfield(L, -2, "exceeded_match_limit");
-  lua_pushinteger(L, (lua_Integer) context.count);
-  lua_setfield(L, -2, "capture_count");
-  lua_setfield(L, result_index, field);
+  const char *status = ok ? (exceeded_match_limit ? "limit" : "ready") : query_status_from_error(error, exceeded_match_limit);
+  const char *message = error ? error : (context.failed ? "out of memory collecting Tree-sitter captures" : NULL);
+  push_query_result_table(L, result_index, field, &context, exceeded_match_limit, status, message);
   if (metrics_index > 0) {
     char metric_field[64];
     snprintf(metric_field, sizeof(metric_field), "%s_query_ms", field);
     set_metric_number(L, metrics_index, metric_field, (lua_Number) query_elapsed_ms);
   }
+  free(error);
   free_capture_copies(&context);
   return true;
 }

@@ -272,6 +272,27 @@ test.describe("core.treesitter phase 3 document integration", function()
     test.ok(saw_main)
   end)
 
+  test.it("native index_text keeps outline results when usage query fails", function()
+    local result, err = native.index_text({
+      language = "c",
+      lines = { "int main(void) { return 0; }\n" },
+      outline_query = "(identifier) @id",
+      usage_query = "((invalid",
+      parse_timeout_ms = 750,
+      query_timeout_ms = 20,
+      usage_query_timeout_ms = 20,
+      match_limit = 1000,
+      max_captures = 1000,
+      usage_max_captures = 1000,
+    })
+    test.not_nil(result, err)
+    test.equal(result.metrics.parse_count, 1)
+    test.equal(result.outline.status, "ready")
+    test.ok(result.outline.capture_count > 0)
+    test.equal(result.usage.status, "failed")
+    test.ok(result.usage.error ~= nil)
+  end)
+
   test.it("Tree-sitter registers as a language intelligence provider", function()
     local provider = intelligence.get_provider("treesitter")
     test.ok(provider)
