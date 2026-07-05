@@ -76,6 +76,26 @@ local function heading_font(view, level)
   return cache[key]
 end
 
+local function inline_style_font(view, span_type)
+  view.__markdown_live_inline_fonts = view.__markdown_live_inline_fonts or {}
+  local cache = view.__markdown_live_inline_fonts
+  local font = view:get_font()
+  local size = font:get_size()
+  local key = tostring(font) .. ":" .. tostring(size) .. ":" .. tostring(span_type)
+  if not cache[key] then
+    local attrs = {}
+    if span_type == "strong" or span_type == "strong_emphasis" then attrs.bold = true end
+    if span_type == "emphasis" or span_type == "strong_emphasis" then attrs.italic = true end
+    if span_type == "strikethrough" then attrs.strikethrough = true end
+    cache[key] = font:copy(size, attrs)
+  end
+  return cache[key]
+end
+
+local function normal_text_color()
+  return style.syntax.normal or style.text
+end
+
 local function is_image_target(path)
   local ext = ((path or ""):match("^[^#?]+") or (path or "")):match("%.([^%.?#/\\]+)$")
   return ext and IMAGE_EXTENSIONS[ext:lower()] == true
@@ -156,29 +176,80 @@ local function image_fragment(view, span)
   }
 end
 
-local function inline_fragments(line_text, line, view)
+local function emphasis_fragment(view, line_text, span, active)
+  local content = span.content_ranges and span.content_ranges[1]
+  if not content then
+    return {
+      source_col1 = span.col1,
+      source_col2 = span.col2,
+      text = span.text,
+      font = inline_style_font(view, span.type),
+      color = normal_text_color(),
+    }
+  end
+  if active then
+    return {
+      {
+        source_col1 = span.col1,
+        source_col2 = content.col1,
+        text = line_text:sub(span.col1, content.col1 - 1),
+        color = style.markdown_live_hidden_syntax,
+      },
+      {
+        source_col1 = content.col1,
+        source_col2 = content.col2,
+        text = span.text,
+        font = inline_style_font(view, span.type),
+        color = normal_text_color(),
+      },
+      {
+        source_col1 = content.col2,
+        source_col2 = span.col2,
+        text = line_text:sub(content.col2, span.col2 - 1),
+        color = style.markdown_live_hidden_syntax,
+      },
+    }
+  end
+  return {
+    source_col1 = span.col1,
+    source_col2 = span.col2,
+    text = span.text,
+    font = inline_style_font(view, span.type),
+    color = normal_text_color(),
+  }
+end
+
+local function add_fragment_or_fragments(fragments, occupied, fragment)
+  if fragment[1] then
+    local ok = true
+    for _, item in ipairs(fragment) do
+      ok = add_fragment(fragments, occupied, item) and ok
+    end
+    return ok
+  end
+  return add_fragment(fragments, occupied, fragment)
+end
+
+local function inline_fragments(line_text, line, view, active)
   local fragments, occupied = {}, {}
   for _, span in ipairs(parser.parse_inline(line_text, line)) do
     if span.link then
-      local image = image_fragment(view, span)
-      if image then
-        add_fragment(fragments, occupied, image)
-      else
-        local link = span.link
-        add_fragment(fragments, occupied, {
-          source_col1 = span.col1,
-          source_col2 = span.col2,
-          text = link.display ~= "" and link.display or link.raw_target,
-          color = style.markdown_live_link,
-        })
+      if not active then
+        local image = image_fragment(view, span)
+        if image then
+          add_fragment(fragments, occupied, image)
+        else
+          local link = span.link
+          add_fragment(fragments, occupied, {
+            source_col1 = span.col1,
+            source_col2 = span.col2,
+            text = link.display ~= "" and link.display or link.raw_target,
+            color = style.markdown_live_link,
+          })
+        end
       end
     elseif span.type == "strong" or span.type == "emphasis" or span.type == "strong_emphasis" or span.type == "strikethrough" then
-      add_fragment(fragments, occupied, {
-        source_col1 = span.col1,
-        source_col2 = span.col2,
-        text = span.text,
-        color = style.text,
-      })
+      add_fragment_or_fragments(fragments, occupied, emphasis_fragment(view, line_text, span, active))
     end
   end
   table.sort(fragments, function(a, b) return (a.source_col1 or 1) < (b.source_col1 or 1) end)
@@ -222,7 +293,7 @@ function provider:line_height(view, line)
   end
   if view_active_line(view, line) then return nil end
   local max_height
-  for _, fragment in ipairs(inline_fragments(text, line, view)) do
+  for _, fragment in ipairs(inline_fragments(text, line, view, false)) do
     if fragment.widget and fragment.widget.height then
       max_height = math.max(max_height or 0, fragment.widget.height)
     end
@@ -237,10 +308,10 @@ function provider:render_line(view, line)
   local heading = heading_for_line(text, line)
   local active = view_active_line(view, line)
   if heading then return heading_render_line(view, text, heading, active) end
-  if active then return { raw_passthrough = true } end
 
-  local fragments = inline_fragments(text, line, view)
+  local fragments = inline_fragments(text, line, view, active)
   if #fragments > 0 then return { source_text = text, fragments = fragments } end
+  if active then return { raw_passthrough = true } end
 end
 
 function live.attach(view)

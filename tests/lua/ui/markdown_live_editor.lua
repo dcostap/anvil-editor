@@ -72,6 +72,40 @@ test.describe("Markdown Live Editor", function()
     test.equal(view:get_col_x_offset(1, #"See [[Note|Alias]]" + 1), raw_width)
   end)
 
+  test.it("renders emphasis text with styled fonts and normal text color", function()
+    local view, doc = make_view("This is **bold**, *italic*, and ***both***\nnext", "note.md")
+    doc:set_selection(2, 1)
+    markdown.live_render.refresh_view(view)
+    local render_line = view:get_line_render(1)
+    test.not_nil(render_line)
+    local seen = {}
+    for _, fragment in ipairs(view:iter_line_render_fragments(render_line)) do
+      seen[fragment.text or ""] = fragment
+    end
+    test.not_nil(seen.bold)
+    test.not_nil(seen.italic)
+    test.not_nil(seen.both)
+    test.equal(seen.bold.color, require("core.style").syntax.normal)
+    test.equal(seen.italic.color, require("core.style").syntax.normal)
+    test.equal(seen.both.color, require("core.style").syntax.normal)
+    test.ok(seen.bold.font ~= view:get_font())
+    test.ok(seen.italic.font ~= view:get_font())
+    test.ok(seen.both.font ~= view:get_font())
+  end)
+
+  test.it("expands active emphasis syntax without dropping styled content", function()
+    local view, doc = make_view("This is **bold**\nnext", "note.md")
+    doc:set_selection(1, 11)
+    markdown.live_render.refresh_view(view)
+    local render_line = view:get_line_render(1)
+    test.not_nil(render_line)
+    local texts = {}
+    for _, fragment in ipairs(view:iter_line_render_fragments(render_line)) do
+      if not fragment.hidden then texts[#texts + 1] = fragment.text or "" end
+    end
+    test.same({ "This is ", "**", "bold", "**" }, texts)
+  end)
+
   test.it("leaves inline code spans raw and does not render escaped syntax", function()
     local view, doc = make_view("`[[Note]]` and \\[[Escaped]]\nother", "note.md")
     doc:set_selection(2, 1)
