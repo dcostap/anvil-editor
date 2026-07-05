@@ -351,6 +351,10 @@ local function save_workspace()
 end
 
 
+function core.save_workspace()
+  return save_workspace()
+end
+
 local function main_panel_workspace_is_empty()
   local main_panel = core.root_panel and core.root_panel:get_main_panel()
   return main_panel and main_panel:is_empty() and #core.docs == 0

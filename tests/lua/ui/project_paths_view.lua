@@ -67,6 +67,7 @@ test.describe("Project Paths View", function()
   test.after_each(function(context)
     project_paths.configure_project {}
     project_paths.load_workspace_state(nil)
+    if context.save_workspace_was_stubbed then core.save_workspace = context.original_save_workspace end
     core.projects = context.original_projects
     if context.original_cwd then pcall(system.chdir, context.original_cwd) end
     if context.temp_root and system.get_file_info(context.temp_root) then
@@ -175,5 +176,20 @@ test.describe("Project Paths View", function()
     test.equal(entry.source, "project")
     local text = read_file(join_path(context.root, ".anvil_project.lua"))
     test.ok(text:find("shared%-src") or text:find("shared-src", 1, true))
+  end)
+
+  test.it("saves local-only Project Path changes immediately", function(context)
+    setup_project(context)
+    context.original_save_workspace = core.save_workspace
+    context.save_workspace_was_stubbed = true
+    local save_count = 0
+    core.save_workspace = function() save_count = save_count + 1 end
+    local local_dir = join_path(context.temp_root, "instant-local-lib")
+    mkdirp(local_dir)
+
+    local entry = project_paths_view.add_entry(local_dir, "external", "workspace", "instant-local-lib")
+    test.not_nil(entry)
+    test.equal(entry.source, "workspace")
+    test.equal(save_count, 1)
   end)
 end)

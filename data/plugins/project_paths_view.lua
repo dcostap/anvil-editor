@@ -160,11 +160,34 @@ local function refresh_surfaces()
   end
 end
 
-local function persist_project_if_needed(source)
-  if source ~= "project" then return true end
-  local ok, err = write_project_config()
-  if not ok then core.error("Project Paths: could not update .anvil_project.lua: %s", tostring(err)); return false end
+local function persist_workspace_if_needed(source)
+  if source ~= "workspace" then return true end
+  if core.save_workspace then
+    core.save_workspace()
+  else
+    core.log_quiet("Project Paths: workspace save hook is unavailable; local Project Path will persist on normal exit")
+  end
   return true
+end
+
+local function persist_sources(...)
+  local needs_project = false
+  local needs_workspace = false
+  for i = 1, select("#", ...) do
+    local source = select(i, ...)
+    needs_project = needs_project or source == "project"
+    needs_workspace = needs_workspace or source == "workspace"
+  end
+  if needs_project then
+    local ok, err = write_project_config()
+    if not ok then core.error("Project Paths: could not update .anvil_project.lua: %s", tostring(err)); return false end
+  end
+  if needs_workspace then persist_workspace_if_needed("workspace") end
+  return true
+end
+
+local function persist_project_if_needed(source)
+  return persist_sources(source)
 end
 
 local function normalize_role_text(text)
@@ -184,7 +207,7 @@ local function remove_entry(id_or_path)
   if not entry then return false end
   local source = entry.source
   if not project_paths.remove_entry(entry.id) then return false end
-  if source == "project" then persist_project_if_needed("project") end
+  persist_sources(source)
   refresh_surfaces()
   return true
 end
@@ -197,8 +220,10 @@ local function add_entry(path, role, source, label)
   role = role or "external"
   source = source or "workspace"
   label = label and label ~= "" and label or common.basename(path)
+  local existing = find_effective_entry(path)
+  local old_source = existing and existing.source
   local entry = project_paths.add_external({ path = path, label = label, role = role }, { source = source })
-  if entry and persist_project_if_needed(source) then
+  if entry and persist_sources(old_source, source) then
     core.log("Project Paths: marked %s as %s", common.home_encode(path), role_label(role))
     refresh_surfaces()
     return entry
@@ -228,21 +253,28 @@ local function prompt_label(path, callback)
   })
 end
 
+local function suggest_choices(choices, default_text)
+  local default_lower = tostring(default_text or ""):lower()
+  return function(text)
+    local lower = tostring(text or ""):lower()
+    if lower == "" or lower == default_lower then return choices end
+    local result = {}
+    for _, item in ipairs(choices) do
+      if item.text:lower():find(lower, 1, true) then result[#result + 1] = item end
+    end
+    return result
+  end
+end
+
 local function prompt_storage(callback)
   local choices = {
     { text = "Local only", source = "workspace" },
     { text = "Project config", source = "project" },
   }
+  local default_text = choices[1].text
   prompt("Project Path Storage", {
-    text = choices[1].text,
-    suggest = function(text)
-      local lower = tostring(text or ""):lower()
-      local result = {}
-      for _, item in ipairs(choices) do
-        if item.text:lower():find(lower, 1, true) then result[#result + 1] = item end
-      end
-      return result
-    end,
+    text = default_text,
+    suggest = suggest_choices(choices, default_text),
     submit = function(text, item) callback((item and item.source) or normalize_storage_text(text) or "workspace") end,
   })
 end
@@ -252,16 +284,10 @@ local function prompt_role(path, roles, callback)
   for _, role in ipairs(roles or { "external", "vendored", "excluded" }) do
     choices[#choices + 1] = { text = role_label(role), role = role }
   end
+  local default_text = choices[1] and choices[1].text or "External"
   prompt("Project Path Role", {
-    text = choices[1] and choices[1].text or "External",
-    suggest = function(text)
-      local lower = tostring(text or ""):lower()
-      local result = {}
-      for _, item in ipairs(choices) do
-        if item.text:lower():find(lower, 1, true) then result[#result + 1] = item end
-      end
-      return result
-    end,
+    text = default_text,
+    suggest = suggest_choices(choices, default_text),
     submit = function(text, item)
       local role = (item and item.role) or normalize_role_text(text)
       if not role or role == "root" then core.error("Project Paths: unknown role: %s", tostring(text)); return end
@@ -344,7 +370,7 @@ function ProjectPathsView:change_selected_storage(source)
   if not entry or entry.role == "root" then return false end
   local old_source = entry.source
   if not project_paths.change_storage(entry.id, source) then return false end
-  if old_source == "project" or source == "project" then persist_project_if_needed("project") end
+  persist_sources(old_source, source)
   refresh_surfaces()
   return true
 end
