@@ -81,6 +81,7 @@ test.describe("Workspace persistence", function()
     context.original_restart = core.restart
     context.original_restart_request = core.restart_request
     context.original_quit_request = core.quit_request
+    context.original_filetree_module = package.loaded["plugins.filetree"]
     context.original_cwd = system.getcwd()
     context.temp_root = USERDIR
       .. PATHSEP .. "workspace-tests-"
@@ -108,6 +109,7 @@ test.describe("Workspace persistence", function()
     core.restart = context.original_restart
     core.restart_request = context.original_restart_request
     core.quit_request = context.original_quit_request
+    package.loaded["plugins.filetree"] = context.original_filetree_module
     if context.original_cwd then
       pcall(system.chdir, context.original_cwd)
     end
@@ -199,6 +201,20 @@ test.describe("Workspace persistence", function()
     local saved = storage.load("ws", keys[1])
     test.type(saved, "table")
     test.equal(#saved.documents.views, 0)
+  end)
+
+  test.test("refreshes File Tree after Workspace Project Paths are loaded", function(context)
+    local calls = 0
+    package.loaded["plugins.filetree"] = {
+      refresh_preserving_selection_paths = function(_, preserve_expansion)
+        calls = calls + 1
+        test.equal(preserve_expansion, true)
+      end,
+    }
+
+    test.not_nil(core.refresh_project_path_consumers)
+    core.refresh_project_path_consumers("test")
+    test.equal(calls, 1)
   end)
 
   test.test("same-window Project switch does not overwrite destination workspace with empty tabs", function(context)

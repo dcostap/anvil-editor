@@ -301,6 +301,20 @@ local function load_node(node, t)
 end
 
 
+local function refresh_project_path_consumers(reason)
+  local ok, filetree = pcall(require, "plugins.filetree")
+  if ok and filetree and filetree.refresh_preserving_selection_paths then
+    filetree:refresh_preserving_selection_paths(true)
+    if core.log_quiet then
+      core.log_quiet("Workspace: refreshed File Tree after Project Path state change (%s)", tostring(reason or "workspace"))
+    end
+  end
+end
+
+function core.refresh_project_path_consumers(reason)
+  return refresh_project_path_consumers(reason)
+end
+
 local function sync_workspace_project_paths_to_core_projects()
   local root_project = core.root_project()
   local root_path = root_project and root_project.path
@@ -381,6 +395,7 @@ local function load_workspace()
       workspace and workspace.project_paths,
       workspace and workspace.directories
     )
+    refresh_project_path_consumers("workspace load")
     if workspace then
       if workspace.visited_files then
         core.visited_files = workspace.visited_files
