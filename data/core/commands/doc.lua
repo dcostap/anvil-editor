@@ -266,6 +266,7 @@ local function set_cursor(dv, x, y, snap_type)
   if snap_type == "word" or snap_type == "lines" then
     command.perform("doc:select-" .. snap_type)
   end
+  if dv.update_line_render_interaction then dv:update_line_render_interaction("mouse-selection-active") end
   apply_resolved_wrap_affinity(dv)
   dv.mouse_selecting = { line, col, snap_type }
   core.blink_reset()
@@ -1757,6 +1758,7 @@ end, {
     else
       dv.doc:add_selection(line, col, line, col)
     end
+    if dv.update_line_render_interaction then dv:update_line_render_interaction("mouse-selection-active") end
     apply_resolved_wrap_affinity(dv)
     dv.mouse_selecting = { line, col, "set" }
   end

@@ -1330,6 +1330,15 @@ function DocView:begin_line_render_interaction(reason)
   self:invalidate_visual_metrics("interaction")
 end
 
+function DocView:update_line_render_interaction(reason)
+  if not self.__line_render_interaction_state then return false end
+  self.__line_render_interaction_state.selection_state = self:get_selection_state()
+  self.__line_render_interaction_state.reason = reason or self.__line_render_interaction_state.reason
+  self:invalidate_line_render(reason or "interaction")
+  self:invalidate_visual_metrics(reason or "interaction")
+  return true
+end
+
 function DocView:end_line_render_interaction(reason)
   if not self.__line_render_interaction_state then return false end
   self.__line_render_interaction_state = nil
@@ -3084,6 +3093,7 @@ function DocView:on_mouse_moved(x, y, ...)
       end
       self.doc:set_selection(l1, c1, l2, c2)
     end
+    self:update_line_render_interaction("mouse-selection-drag")
   end
   if self.wrapped_settings and selecting then
     apply_resolved_line_end_affinity(self)
