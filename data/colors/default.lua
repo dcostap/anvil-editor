@@ -176,6 +176,13 @@ style.filetree_operation_move = { 130, 175, 255, 255 }
 style.filetree_operation_rename = { 205, 170, 255, 255 }
 style.filetree_operation_delete = { 255, 120, 120, 255 }
 style.filetree_folder_row_background = { common.color "rgba(220, 220, 220, 0.05)" }
+style.project_path_external = c("68b0e6")
+style.project_path_external_dim = c("6f8aa3")
+style.project_path_vendored = c("bbb529")
+style.project_path_vendored_dim = c("8f8a48")
+style.project_path_excluded = c("c56a6a")
+style.project_path_missing = style.warn
+style.project_path_separator = style.dim
 style.diffview_plain_text = c("ffffff")
 
 -- Git changed-line colors

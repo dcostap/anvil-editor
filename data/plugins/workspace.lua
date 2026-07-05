@@ -3,6 +3,7 @@ local core = require "core"
 local command = require "core.command"
 local common = require "core.common"
 local storage = require "core.storage"
+local project_paths = require "core.project_paths"
 local tool_window = require "core.tool_window"
 local untitled_recovery = require "plugins.untitled_recovery"
 
@@ -300,13 +301,18 @@ local function load_node(node, t)
 end
 
 
-local function save_directories()
-  local project_dir = core.root_project().path
-  local dir_list = {}
-  for i = 2, #core.projects do
-    dir_list[#dir_list + 1] = common.relative_path(project_dir, core.projects[i].path)
+local function sync_workspace_project_paths_to_core_projects()
+  local root_project = core.root_project()
+  local root_path = root_project and root_project.path
+  for _, entry in ipairs(project_paths.entries({ include_root = false })) do
+    if entry.source == "workspace"
+    and entry.role ~= "excluded"
+    and root_path
+    and not common.path_equals(entry.path, root_path)
+    and not common.path_belongs_to(entry.path, root_path) then
+      core.add_project(entry.path)
+    end
   end
-  return dir_list
 end
 
 
@@ -328,7 +334,7 @@ local function save_workspace()
   storage.save(STORAGE_MODULE, key, {
     path = project_dir,
     documents = documents,
-    directories = save_directories(),
+    project_paths = project_paths.save_workspace_state(),
     visited_files = core.prune_visited_files and core.prune_visited_files() or core.visited_files,
     tool_windows = tool_window.get_project_state(project),
   })
@@ -367,6 +373,10 @@ end
 local function load_workspace()
   core.add_thread(function()
     local workspace = consume_workspace(core.root_project().path)
+    project_paths.load_workspace_state(
+      workspace and workspace.project_paths,
+      workspace and workspace.directories
+    )
     if workspace then
       if workspace.visited_files then
         core.visited_files = workspace.visited_files
@@ -377,9 +387,7 @@ local function load_workspace()
       if active_view then
         core.set_active_view(active_view)
       end
-      for _, dir_name in ipairs(workspace.directories or {}) do
-        core.add_project(system.absolute_path(dir_name))
-      end
+      sync_workspace_project_paths_to_core_projects()
       tool_window.restore_project_state(core.root_project(), workspace.tool_windows)
     end
     untitled_recovery.restore_project(core.root_project().path)

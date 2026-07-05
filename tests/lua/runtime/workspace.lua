@@ -1,6 +1,7 @@
 local core = require "core"
 local common = require "core.common"
 local Project = require "core.project"
+local project_paths = require "core.project_paths"
 local storage = require "core.storage"
 local test = require "core.test"
 
@@ -110,6 +111,8 @@ test.describe("Workspace persistence", function()
     if context.original_cwd then
       pcall(system.chdir, context.original_cwd)
     end
+    project_paths.load_workspace_state(nil)
+    project_paths.configure_project {}
     storage.clear("ws")
     if context.temp_root and system.get_file_info(context.temp_root) then
       local ok, err = common.rm(context.temp_root, true)
