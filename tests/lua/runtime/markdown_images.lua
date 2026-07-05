@@ -43,6 +43,27 @@ test.describe("Markdown image helpers", function()
     common.rm(root, true)
   end)
 
+  test.it("resolves Obsidian attachmentFolderPath from app.json", function()
+    local root = USERDIR .. PATHSEP .. "markdown-image-attachments-" .. system.get_process_id()
+    local obsidian = root .. PATHSEP .. ".obsidian"
+    local media = root .. PATHSEP .. "configured-media"
+    local ok, err = common.mkdirp(obsidian)
+    test.ok(ok, err)
+    ok, err = common.mkdirp(media)
+    test.ok(ok, err)
+    write_file(obsidian .. PATHSEP .. "app.json", [[{"attachmentFolderPath":"./configured-media"}]])
+    local image_path = media .. PATHSEP .. "diagram.png"
+    write_file(image_path, "not-a-real-png")
+
+    test.equal(
+      images.resolve_local_path("diagram.png", { source_path = root .. PATHSEP .. "Planificación Fabricación.md" }),
+      image_path
+    )
+
+    os.remove(image_path)
+    common.rm(root, true)
+  end)
+
   test.it("parses and applies resize constraints without upscaling by default", function()
     local resize = images.parse_resize("100x145")
     test.equal(resize.width, 100)

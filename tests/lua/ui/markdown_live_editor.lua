@@ -216,6 +216,7 @@ test.describe("Markdown Live Editor", function()
     local old_draw_canvas = renderer.draw_canvas
     local old_draw_text = renderer.draw_text
     local drawn = 0
+    local drawn_text = {}
     canvas.load_image = function(path)
       test.equal(path, image_path)
       return {
@@ -224,14 +225,20 @@ test.describe("Markdown Live Editor", function()
       }
     end
     renderer.draw_canvas = function() drawn = drawn + 1 end
-    renderer.draw_text = function(font, text, x, y, color, opts) return x + font:get_width(text, opts) end
+    renderer.draw_text = function(font, text, x, y, color, opts)
+      drawn_text[#drawn_text + 1] = text
+      return x + font:get_width(text, opts)
+    end
 
     markdown.live_render.refresh_view(view)
-    test.equal(view:get_visual_row_height(1), 32)
+    local inactive_height = view:get_visual_row_height(1)
+    test.ok(inactive_height > 32)
     doc:set_selection(1, 1)
-    test.equal(view:get_visual_row_height(1), view:get_line_height())
+    test.ok(view:get_visual_row_height(1) > inactive_height)
+    view:draw_line_text(1, 0, 0)
+    test.equal(drawn_text[1], "![Alt](" .. image_url .. ")")
     doc:set_selection(2, 1)
-    test.equal(view:get_visual_row_height(1), 32)
+    test.equal(view:get_visual_row_height(1), inactive_height)
     test.equal(view:get_x_offset_col(1, 1), 1)
     view:draw_line_text(1, 0, 0)
 
@@ -239,7 +246,86 @@ test.describe("Markdown Live Editor", function()
     renderer.draw_canvas = old_draw_canvas
     renderer.draw_text = old_draw_text
     os.remove(image_path)
-    test.equal(drawn, 1)
+    test.equal(drawn, 2)
+  end)
+
+  test.it("renders wikilink image embeds from Obsidian attachmentFolderPath", function()
+    local root = USERDIR .. PATHSEP .. "markdown-live-attachments-" .. system.get_process_id()
+    local obsidian = root .. PATHSEP .. ".obsidian"
+    local media = root .. PATHSEP .. "configured-media"
+    local ok, err = common.mkdirp(obsidian)
+    test.ok(ok, err)
+    ok, err = common.mkdirp(media)
+    test.ok(ok, err)
+    local app = io.open(obsidian .. PATHSEP .. "app.json", "wb")
+    test.not_nil(app)
+    app:write([[{"attachmentFolderPath":"./configured-media"}]])
+    app:close()
+    local image_path = media .. PATHSEP .. "diagram.png"
+    local fp = io.open(image_path, "wb")
+    test.not_nil(fp)
+    fp:write("png")
+    fp:close()
+
+    local view, doc = make_view("![[diagram.png]]\nother", root .. PATHSEP .. "Planificación Fabricación.md")
+    doc:set_selection(2, 1)
+    local old_load_image = canvas.load_image
+    canvas.load_image = function(path)
+      test.equal(path, image_path)
+      return {
+        get_size = function() return 80, 40 end,
+        scaled = function(self) return self end,
+      }
+    end
+
+    markdown.live_render.refresh_view(view)
+    test.ok(view:get_visual_row_height(1) > 40)
+
+    canvas.load_image = old_load_image
+    os.remove(image_path)
+    common.rm(root, true)
+  end)
+
+  test.it("draws image widgets using the resolved visual row height", function()
+    local image_path = USERDIR .. PATHSEP .. "markdown-live-small-" .. system.get_process_id() .. ".png"
+    local fp = io.open(image_path, "wb")
+    test.not_nil(fp)
+    fp:write("png")
+    fp:close()
+    local image_url = common.basename and common.basename(image_path) or image_path:match("[^" .. PATHSEP .. "]+$")
+    local view, doc = make_view("![Small](" .. image_url .. ")\nother", USERDIR .. PATHSEP .. "note.md")
+    doc:set_selection(2, 1)
+    local old_load_image = canvas.load_image
+    local old_draw_canvas = renderer.draw_canvas
+    local old_get_visual_row = view.get_visual_row
+    local old_get_visual_row_height = view.get_visual_row_height
+    local drawn_y
+    canvas.load_image = function()
+      return {
+        get_size = function() return 80, 40 end,
+        scaled = function(self) return self end,
+      }
+    end
+    renderer.draw_canvas = function(_, _, y) drawn_y = y end
+    view.get_visual_row = function(self, line, col, line_end)
+      if line == 1 then return 6 end
+      return old_get_visual_row(self, line, col, line_end)
+    end
+    view.get_visual_row_height = function(self, row)
+      if row == 1 then return 100 end
+      if row == 6 then return 40 end
+      return old_get_visual_row_height(self, row)
+    end
+
+    markdown.live_render.refresh_view(view)
+    view:draw_line_text(1, 0, 10)
+    test.equal(drawn_y, 10)
+
+    canvas.load_image = old_load_image
+    renderer.draw_canvas = old_draw_canvas
+    view.get_visual_row = old_get_visual_row
+    view.get_visual_row_height = old_get_visual_row_height
+    os.remove(image_path)
   end)
 
   test.it("keeps tiny image rows at least normal line height", function()

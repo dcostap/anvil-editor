@@ -1,4 +1,5 @@
 local common = require "core.common"
+local json = require "core.json"
 
 local images = {}
 
@@ -42,25 +43,103 @@ local function join_path(a, b)
   return a .. PATHSEP .. b
 end
 
+local function percent_decode(text)
+  return (text or ""):gsub("%%(%x%x)", function(hex)
+    return string.char(tonumber(hex, 16))
+  end)
+end
+
+local function filesystem_path_from_url(url)
+  local path = percent_decode((url or ""):match("^[^#?]+") or (url or ""))
+  if path:match("^file://") then
+    local body = path:gsub("^file://", "")
+    if body:match("^/%a:[/\\]") then
+      return body:sub(2)
+    elseif body:match("^%a:[/\\]") then
+      return body
+    elseif body:sub(1, 1) ~= "/" and body ~= "" then
+      return "\\\\" .. body:gsub("/", "\\")
+    end
+    return body
+  end
+  return path
+end
+
+local function is_absolute_path(path)
+  return path:match("^%a:[/\\]") or path:sub(1, 1) == "/" or path:sub(1, 1) == "\\"
+end
+
+local function file_exists(path)
+  local info = path and system.get_file_info(path)
+  return info and info.type == "file"
+end
+
+local function try_relative_file(root, rel)
+  if not root then return nil end
+  local path = join_path(root, rel)
+  return file_exists(path) and path or nil
+end
+
+local function read_file(path)
+  local fp = io.open(path, "rb")
+  if not fp then return nil end
+  local text = fp:read("*a")
+  fp:close()
+  return text
+end
+
+local function find_obsidian_vault_root(source_dir, project_root)
+  local seen = {}
+  local function scan_up(dir)
+    while dir and dir ~= "" and not seen[dir] do
+      seen[dir] = true
+      local app_json = join_path(join_path(dir, ".obsidian"), "app.json")
+      if file_exists(app_json) then return dir end
+      local parent = dirname(dir)
+      if parent == dir then return nil end
+      dir = parent
+    end
+  end
+  return scan_up(source_dir) or scan_up(project_root)
+end
+
+local function obsidian_attachment_folder(root)
+  if not root then return nil end
+  local app_json = join_path(join_path(root, ".obsidian"), "app.json")
+  local settings = read_file(app_json)
+  if not settings then return nil end
+  local decoded = json.decode(settings)
+  local folder = type(decoded) == "table" and decoded.attachmentFolderPath or nil
+  if type(folder) ~= "string" or folder == "" then return nil end
+  folder = folder:gsub("^%./", ""):gsub("^%.\\", "")
+  if folder == "." then return root end
+  if is_absolute_path(folder) then return folder end
+  return join_path(root, folder)
+end
+
+local function resolve_in_obsidian_attachment_folder(rel, source_dir, project_root)
+  local root = find_obsidian_vault_root(source_dir, project_root)
+  local folder = obsidian_attachment_folder(root)
+  return try_relative_file(folder, rel)
+end
+
 function images.resolve_local_path(url, opts)
   opts = opts or {}
   if type(url) ~= "string" or url == "" or images.is_remote(url) then return nil end
-  local filesystem_url = url:match("^[^#?]+") or url
+  local filesystem_url = filesystem_path_from_url(url)
   if filesystem_url == "" then return nil end
-  if filesystem_url:match("^%a:[/\\]") or filesystem_url:sub(1, 1) == "/" or filesystem_url:sub(1, 1) == "\\" then
-    return system.get_file_info(filesystem_url) and filesystem_url or nil
+  if is_absolute_path(filesystem_url) then
+    return file_exists(filesystem_url) and filesystem_url or nil
   end
 
   local source_dir = dirname(opts.source_path)
-  if source_dir then
-    local path = join_path(source_dir, filesystem_url)
-    if system.get_file_info(path) then return path end
-  end
+  local path = try_relative_file(source_dir, filesystem_url)
+  if path then return path end
 
-  if opts.project_root then
-    local path = join_path(opts.project_root, filesystem_url)
-    if system.get_file_info(path) then return path end
-  end
+  path = try_relative_file(opts.project_root, filesystem_url)
+  if path then return path end
+
+  return resolve_in_obsidian_attachment_folder(filesystem_url, source_dir, opts.project_root)
 end
 
 function images.load_from_path(path, opts)

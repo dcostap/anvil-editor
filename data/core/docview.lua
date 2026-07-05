@@ -3745,7 +3745,8 @@ function DocView:draw_line_text(line, x, y)
   local render_line = self:get_line_render(line)
   if render_line then
     local tx = x
-    local row_height = self:get_visual_row_height(line)
+    local row = self:get_visual_row(line, 1)
+    local row_height = self:get_visual_row_height(row)
     local ty = y + self:get_line_text_y_offset()
     local _, indent_size = self.doc:get_indent_info()
     for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do

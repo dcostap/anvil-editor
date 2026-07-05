@@ -152,6 +152,10 @@ local function is_image_target(path)
   return ext and IMAGE_EXTENSIONS[ext:lower()] == true
 end
 
+local function image_vertical_padding()
+  return math.max(1, math.floor(6 * SCALE))
+end
+
 local function add_fragment(fragments, occupied, fragment)
   local col1 = fragment.source_col1 or 1
   local col2 = fragment.source_col2 or col1
@@ -163,7 +167,8 @@ local function add_fragment(fragments, occupied, fragment)
   return true
 end
 
-local function image_fragment(view, span)
+local function image_fragment(view, span, opts)
+  opts = opts or {}
   if config.markdown_live_render_images ~= true then return nil end
   local link = span.link
   if not (link and (link.kind == "image" or link.kind == "embed") and is_image_target(link.path)) then return nil end
@@ -196,15 +201,16 @@ local function image_fragment(view, span)
   if entry.status == "ready" and entry.image then
     local natural_w, natural_h = entry.image:get_size()
     local width, height = images.scale_size(natural_w, natural_h, 320 * SCALE, link.resize, false)
+    local padding = image_vertical_padding()
     return {
       source_col1 = span.col1,
       source_col2 = span.col2,
-      width = width,
+      width = opts.width or width,
       widget = {
         type = "image",
         width = width,
-        height = height,
-        draw = function(_, _, x, y, row_height)
+        height = height + padding * 2,
+        draw = function(_, fragment, x, y, row_height)
           local image = entry.image
           if width ~= natural_w or height ~= natural_h then
             if not entry.scaled_image or entry.scaled_width ~= width or entry.scaled_height ~= height then
@@ -213,7 +219,14 @@ local function image_fragment(view, span)
             end
             image = entry.scaled_image
           end
-          renderer.draw_canvas(image, x, y + math.max(0, (row_height - height) / 2))
+          local image_x = x + (fragment.draw_x_offset or 0)
+          local image_y
+          if fragment.draw_y_offset then
+            image_y = y + fragment.draw_y_offset
+          else
+            image_y = y + math.max(0, (row_height - height) / 2)
+          end
+          renderer.draw_canvas(image, image_x, image_y)
         end,
       },
     }
@@ -224,6 +237,47 @@ local function image_fragment(view, span)
     source_col2 = span.col2,
     text = "[image: " .. (link.path or link.raw_target or "") .. "]",
     color = style.markdown_live_unresolved_link,
+  }
+end
+
+local function image_only_span(line_text, line)
+  local trimmed_start = line_text:find("%S")
+  if not trimmed_start then return nil end
+  local trimmed_end = line_text:match("^.*%S()")
+  for _, span in ipairs(parser.parse_inline(line_text, line)) do
+    local link = span.link
+    if link and (link.kind == "image" or link.kind == "embed") and is_image_target(link.path)
+    and span.col1 == trimmed_start and span.col2 == trimmed_end then
+      return span
+    end
+  end
+end
+
+local function image_only_render_line(view, text, line, span, active)
+  local image = image_fragment(view, span, active and { width = 0 } or nil)
+  if not image then return nil end
+  if active and image.widget then
+    local leading_width = span.col1 > 1 and view:get_font():get_width(text:sub(1, span.col1 - 1)) or 0
+    image.source_col1 = #text + 1
+    image.source_col2 = #text + 1
+    image.draw_x_offset = leading_width - view:get_font():get_width(text)
+    image.draw_y_offset = view:get_line_height() + image_vertical_padding()
+    image.widget.height = image.widget.height + view:get_line_height()
+    return {
+      source_text = text,
+      fragments = { image },
+    }
+  end
+  if image.widget and span.col1 > 1 then
+    image.draw_x_offset = view:get_font():get_width(text:sub(1, span.col1 - 1))
+  end
+  return {
+    source_text = text,
+    fragments = {
+      { source_col1 = 1, source_col2 = span.col1, hidden = true },
+      image,
+      { source_col1 = span.col2, source_col2 = #text + 1, hidden = true },
+    },
   }
 end
 
@@ -400,7 +454,21 @@ function provider:line_height(view, line)
   if heading then
     return math.max(view:get_line_height(), math.floor(heading_font(view, heading.level):get_height() * config.line_height))
   end
-  if view_active_line(view, line) then return nil end
+  local active = view_active_line(view, line)
+  local image_span = image_only_span(text, line)
+  if image_span then
+    local render_line = image_only_render_line(view, text, line, image_span, active)
+    local max_height
+    if render_line then
+      for _, fragment in ipairs(render_line.fragments or {}) do
+        if fragment.widget and fragment.widget.height then
+          max_height = math.max(max_height or 0, fragment.widget.height)
+        end
+      end
+    end
+    if max_height then return math.max(view:get_line_height(), max_height) end
+  end
+  if active then return nil end
   local max_height
   for _, fragment in ipairs(inline_fragments(text, line, view, false)) do
     if fragment.widget and fragment.widget.height then
@@ -417,6 +485,12 @@ function provider:render_line(view, line)
   local heading = heading_for_line(text, line)
   local active = view_active_line(view, line)
   if heading then return heading_render_line(view, text, heading, active) end
+
+  local image_span = image_only_span(text, line)
+  if image_span then
+    local render_line = image_only_render_line(view, text, line, image_span, active)
+    if render_line then return render_line end
+  end
 
   local fragments = inline_fragments(text, line, view, active)
   if #fragments > 0 then return { source_text = text, fragments = fragments } end
