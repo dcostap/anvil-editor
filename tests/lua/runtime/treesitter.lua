@@ -599,6 +599,37 @@ fun make(): EagerThing = EagerThing()
     common.rm(root, true)
   end)
 
+  test.it("Tree-sitter Project chunk adoption debounces aggregate rebuilds", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-aggregate-debounce-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    for i = 1, 5 do
+      write_file(root .. PATHSEP .. string.format("Model%d.kt", i), string.format([[package demo
+
+class DebouncedThing%d
+
+fun make%d(): DebouncedThing%d = DebouncedThing%d()
+]], i, i, i, i))
+    end
+
+    symbol_index.ensure_scan(root, { force = true, refresh_after_seconds = 0, chunk_files = 1 })
+    local status = wait_index_ready(root)
+    local ui = status.diagnostics and status.diagnostics.ui or {}
+    test.ok((ui.chunks_adopted or 0) >= 2, common.serialize(ui))
+    test.ok((ui.aggregate_rebuilds or 0) < (ui.chunks_adopted or 0), common.serialize(ui))
+    test.ok(find_symbol(status.symbols, "DebouncedThing1", "class"))
+    status.aggregate_dirty = true
+    local dirty_symbols, dirty_reason, dirty_status = symbol_index.workspace_symbols("DebouncedThing1", {
+      root = root,
+      refresh_after_seconds = 0,
+    })
+    test.equal(dirty_status, "fresh", dirty_reason)
+    test.ok(find_symbol(dirty_symbols, "DebouncedThing1", "class"))
+    test.equal(status.aggregate_dirty, false)
+    common.rm(root, true)
+  end)
+
   test.it("Tree-sitter Project symbols become fresh before usage indexing finishes", function()
     symbol_index.reset_for_tests()
     local root = USERDIR .. PATHSEP .. "treesitter-decoupled-symbol-status-"

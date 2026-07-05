@@ -18,6 +18,7 @@ local DEFAULT_MATCH_LIMIT = 50000
 local DEFAULT_MAX_CAPTURES = 50000
 local DEFAULT_QUERY_TIMEOUT_MS = 20
 local DEFAULT_PROJECT_USAGE_CAP = 750000
+local DEFAULT_AGGREGATE_REBUILD_DELAY = 0.075
 local MAX_FILE_BYTES = 2 * 1024 * 1024
 
 local native_ok, native = nil, nil
@@ -111,6 +112,9 @@ local function new_index(root)
     worker_seen_paths = nil,
     project_paths_generation = nil,
     diagnostics = { ui = {} },
+    aggregate_dirty = false,
+    aggregate_rebuild_pending = false,
+    next_aggregate_rebuild_at = nil,
   }
 end
 
@@ -527,6 +531,25 @@ local function rebuild_disk_aggregates(index)
   max_ui_metric(index, "aggregate_rebuild_max_ms", duration)
   inc_ui_metric(index, "aggregate_symbols_sorted", #symbols)
   inc_ui_metric(index, "aggregate_usages_sorted", usage_count)
+  index.aggregate_dirty = false
+  index.aggregate_rebuild_pending = false
+  index.next_aggregate_rebuild_at = nil
+end
+
+local function mark_aggregate_dirty(index)
+  if not index then return end
+  index.aggregate_dirty = true
+  index.aggregate_rebuild_pending = true
+  index.next_aggregate_rebuild_at = index.next_aggregate_rebuild_at or (now() + DEFAULT_AGGREGATE_REBUILD_DELAY)
+end
+
+local function maybe_rebuild_dirty_aggregates(index, force)
+  if not (index and index.aggregate_dirty) then return false end
+  if force or now() >= (index.next_aggregate_rebuild_at or 0) then
+    rebuild_disk_aggregates(index)
+    return true
+  end
+  return false
 end
 
 local function replace_file_entry(index, path, fingerprint, entry)
@@ -755,7 +778,8 @@ local function apply_worker_chunk(index, message)
     local replace_elapsed = elapsed_ms(adoption_started)
     add_ui_metric(index, "chunk_replace_ms", replace_elapsed)
     max_ui_metric(index, "chunk_replace_max_ms", replace_elapsed)
-    rebuild_disk_aggregates(index)
+    mark_aggregate_dirty(index)
+    maybe_rebuild_dirty_aggregates(index, false)
     core.redraw = true
   end
   local duration = elapsed_ms(adoption_started)
@@ -780,12 +804,13 @@ local function finish_worker_scan(index, message, status)
   if not current_worker_message(index, message) then return end
   if status == "ready" then
     local pruned = prune_worker_unseen(index)
-    if pruned or index.status ~= "ready" then rebuild_disk_aggregates(index) end
+    if pruned or index.status ~= "ready" or index.aggregate_dirty then rebuild_disk_aggregates(index) end
     index.status = "ready"
     index.symbol_status = "ready"
     index.usage_status = "ready"
     index.reason = nil
   else
+    maybe_rebuild_dirty_aggregates(index, true)
     index.status = status
     if message.phase == "usages" and index.symbol_status == "ready" then
       index.usage_status = status
@@ -944,6 +969,7 @@ local function submit_worker_scan(index, generation, opts, phase)
       if not current_worker_message(index, message) then return end
       if message.phase == "symbols" then
         prune_worker_unseen(index)
+        maybe_rebuild_dirty_aggregates(index, true)
         index.symbol_status = "ready"
         index.usage_status = "indexing"
         index.worker_handle = nil
@@ -1176,7 +1202,10 @@ function symbol_index.workspace_symbols(query, opts)
       refresh_after_seconds = opts.refresh_after_seconds,
     })
     local root_status = "pending"
-    if index.symbol_status == "ready" then
+    if index.symbol_status == "ready" and index.aggregate_dirty then
+      maybe_rebuild_dirty_aggregates(index, true)
+    end
+    if index.symbol_status == "ready" and not index.aggregate_dirty then
       refresh_current_core_docs_for_index(index)
       for _, symbol in ipairs(combined_symbols(index)) do all_symbols[#all_symbols + 1] = symbol end
       root_status = "fresh"
@@ -1184,10 +1213,10 @@ function symbol_index.workspace_symbols(query, opts)
     elseif (#(index.symbols or {}) > 0 or next(index.open_docs or {}) ~= nil) and opts.allow_stale then
       for _, symbol in ipairs(combined_symbols(index)) do all_symbols[#all_symbols + 1] = symbol end
       root_status = "stale"
-      reason = reason or "indexing"
+      reason = reason or (index.aggregate_dirty and "aggregate-dirty" or "indexing")
       any_usable = true
     else
-      reason = reason or "indexing"
+      reason = reason or (index.aggregate_dirty and "aggregate-dirty" or "indexing")
     end
     status = merge_status(status, root_status)
     per_root[#per_root + 1] = { root = root, status = root_status, index = index }
@@ -1247,7 +1276,10 @@ function symbol_index.workspace_usages(name, opts)
       refresh_after_seconds = opts.refresh_after_seconds,
     })
     local root_status = "pending"
-    if index.usage_status == "ready" then
+    if index.usage_status == "ready" and index.aggregate_dirty then
+      maybe_rebuild_dirty_aggregates(index, true)
+    end
+    if index.usage_status == "ready" and not index.aggregate_dirty then
       refresh_current_core_docs_for_index(index)
       for _, usage in ipairs(combined_usages_for_name(index, name)) do all_usages[#all_usages + 1] = usage end
       root_status = "fresh"
@@ -1255,10 +1287,10 @@ function symbol_index.workspace_usages(name, opts)
     elseif opts.allow_stale and ((index.usages_by_name or {})[name] or next(index.open_docs or {}) ~= nil) then
       for _, usage in ipairs(combined_usages_for_name(index, name)) do all_usages[#all_usages + 1] = usage end
       root_status = "stale"
-      reason = reason or "indexing"
+      reason = reason or (index.aggregate_dirty and "aggregate-dirty" or "indexing")
       any_usable = true
     else
-      reason = reason or "indexing"
+      reason = reason or (index.aggregate_dirty and "aggregate-dirty" or "indexing")
     end
     usage_truncated = usage_truncated or index.usage_truncated or false
     usage_truncated_reason = usage_truncated_reason or index.usage_truncated_reason
