@@ -1626,10 +1626,26 @@ function symbol_index.reindex_file(path, opts)
   path = path and common.normalize_path(path)
   if not path then return false, "no-path" end
   if opts.sync then return run_reindex_file(path, opts) end
-  core.add_thread(function()
-    run_reindex_file(path, opts)
-  end)
-  return true
+  local matched = false
+  for _, index in pairs(indexes) do
+    if common.path_belongs_to(path, index.root) then
+      matched = true
+      if index.status == "indexing" then
+        index.pending_reindex_paths = index.pending_reindex_paths or {}
+        index.pending_reindex_paths[path] = opts.reason or "file-dirty"
+        log_quiet("Tree-sitter Project index: coalesced targeted file refresh for %s under %s while worker indexing (%s)",
+          tostring(path), tostring(index.root), tostring(index.pending_reindex_paths[path]))
+      else
+        symbol_index.ensure_scan(index.root, {
+          force = true,
+          reason = opts.reason or "file-dirty",
+        })
+        log_quiet("Tree-sitter Project index: scheduled worker-backed full refresh for targeted file %s under %s (%s)",
+          tostring(path), tostring(index.root), tostring(opts.reason or "file-dirty"))
+      end
+    end
+  end
+  return matched, matched and nil or "no-index"
 end
 
 local function run_reindex_directory(dir, opts)
@@ -1692,10 +1708,29 @@ function symbol_index.mark_directory_dirty(dir, reason, opts)
   if not dir then return false, "no-directory" end
   opts = common.merge(opts, { reason = reason or opts.reason or "directory-dirty" })
   if opts.sync then return run_reindex_directory(dir, opts) end
-  core.add_thread(function()
-    run_reindex_directory(dir, opts)
-  end)
-  return true
+  local matched = false
+  for _, index in pairs(indexes) do
+    if common.path_equals(dir, index.root) or common.path_belongs_to(dir, index.root) then
+      matched = true
+      if index.status == "indexing" then
+        index.pending_reindex_dirs = index.pending_reindex_dirs or {}
+        index.pending_reindex_dirs[dir] = {
+          reason = opts.reason or "directory-dirty",
+          force = opts.force,
+        }
+        log_quiet("Tree-sitter Project index: coalesced dirty directory refresh for %s under %s while worker indexing (%s)",
+          tostring(dir), tostring(index.root), tostring(index.pending_reindex_dirs[dir].reason))
+      else
+        symbol_index.ensure_scan(index.root, {
+          force = true,
+          reason = opts.reason or "directory-dirty",
+        })
+        log_quiet("Tree-sitter Project index: scheduled worker-backed full refresh for dirty directory %s under %s (%s)",
+          tostring(dir), tostring(index.root), tostring(opts.reason or "directory-dirty"))
+      end
+    end
+  end
+  return matched, matched and nil or "no-index"
 end
 
 function symbol_index.mark_file_dirty(path, reason)
