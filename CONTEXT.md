@@ -20,6 +20,22 @@ _Avoid_: Workspace, session, folder
 The first project loaded into Anvil, used as the default base for relative paths and project-level behavior.
 _Avoid_: Primary project, main project
 
+**External Project Directory**:
+An additional directory made available to a Project for browsing and project-wide navigation while remaining distinct from the Root Project.
+_Avoid_: external folder, linked folder, library folder
+
+**Vendored Project Directory**:
+A directory in or attached to a Project that contains third-party or dependency source code and is presented as a distinct named source area.
+_Avoid_: vendor marker, special folder, library folder
+
+**Excluded Project Path**:
+A Project path that remains visible as part of the Project context but is intentionally left out of project-wide search and navigation.
+_Avoid_: ignored folder, hidden folder
+
+**Project Path Role**:
+The user-facing classification assigned to a Project path, such as Root Project content, External Project Directory content, or Excluded Project Path content.
+_Avoid_: path marker, folder marker, special folder
+
 **Workspace**:
 The per-project editor state that restores open views, tabs, splits, scroll positions, selection state, extra project directories, and recently visited files.
 _Avoid_: Session, app state
@@ -143,6 +159,10 @@ _Avoid_: Side node, secondary panel, Side Editor Slot
 **File Tree**:
 A Side Panel tool for viewing and editing Project files and directories.
 _Avoid_: old file tree
+
+**Project Paths View**:
+A Project tool for reviewing and changing Project Path Roles, labels, locations, and storage scope.
+_Avoid_: external folder manager, path rules dialog
 
 **File Tree Sort Mode**:
 The user-facing ordering applied to File Tree entries. Folder entries remain grouped before file entries.
