@@ -1431,11 +1431,6 @@ function FileTreeView:remap_selection_paths(snapshot, path_map)
   return remapped
 end
 
-local PROJECT_PATH_SECTION_LABELS = {
-  vendored = "──────────────── Vendored Project Directories",
-  external = "──────────────── External Project Directories",
-}
-
 local function project_path_role_for_abs(abs)
   local display = project_paths.display_path(abs, { kind = "filetree" })
   local flags = display and display.flags
@@ -1445,11 +1440,11 @@ end
 
 local function project_path_section_item(role)
   return {
-    name = PROJECT_PATH_SECTION_LABELS[role] or ("──────────────── " .. tostring(role)),
+    name = "",
     sort_name = "",
     abs = "",
     type = "section",
-    display = (PROJECT_PATH_SECTION_LABELS[role] or tostring(role)) .. "\n",
+    display = "\n",
     project_path_role = role,
     project_path_separator = true,
     project_path_readonly = true,
@@ -1488,10 +1483,6 @@ function FileTreeView:append_project_path_sections(out)
   for _, role in ipairs({ "vendored", "external" }) do
     local entries = entries_by_role[role]
     if #entries > 0 then
-      if #out > 0 then
-        out[#out + 1] = "\n"
-        self.line_meta[#out] = NO_META
-      end
       local section = project_path_section_item(role)
       out[#out + 1] = section.display
       self.line_meta[#out] = make_meta(section)
@@ -2045,6 +2036,17 @@ function FileTreeView:draw_line_body(line, x, y)
   local stats = perf_stats()
   local start = perf_call(stats, "filetree_draw_line_body_calls")
   local gw = self:get_gutter_width()
+  local meta = self.line_meta[line]
+  if type(meta) == "table" and meta.project_path_separator then
+    local result = FileTreeView.super.draw_line_body(self, line, x, y)
+    local lh = self:get_line_height()
+    local thickness = math.max(1, style.divider_size or 1)
+    local left = x + gw + style.padding.x
+    local width = math.max(0, self.size.x - gw - style.padding.x * 2)
+    renderer.draw_rect(left, y + math.floor((lh - thickness) / 2), width, thickness, style.project_path_separator)
+    perf_finish(stats, "filetree_draw_line_body_ms", start)
+    return result
+  end
   self:draw_folder_row_background(
     line,
     x + self.scroll.x,
@@ -2060,7 +2062,7 @@ function FileTreeView:project_path_line_color(line)
   local meta = self.line_meta[line]
   if type(meta) ~= "table" then return nil end
   if meta.project_path_missing then return style.project_path_missing end
-  if meta.project_path_separator then return style.project_path_separator end
+  if meta.project_path_separator then return nil end
   if meta.project_path_role == "external" then return style.project_path_external end
   if meta.project_path_role == "vendored" then return style.project_path_vendored end
   if meta.project_path_role == "excluded" then return style.project_path_excluded end

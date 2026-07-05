@@ -31,6 +31,14 @@ local function find_line(view, wanted)
   end
 end
 
+local function find_separator(view, role)
+  for i, meta in ipairs(view.line_meta or {}) do
+    if type(meta) == "table" and meta.project_path_separator and meta.project_path_role == role then
+      return i
+    end
+  end
+end
+
 local function setup_project_paths(context)
   context.original_projects = core.projects
   context.original_cwd = system.getcwd()
@@ -94,8 +102,8 @@ test.describe("File Tree Project Path Roles", function()
   test.it("shows vendored and external Project Directory sections after Root Project rows", function(context)
     local filetree = setup_project_paths(context)
     local readme_line = find_line(filetree, "README.md")
-    local vendored_section = find_line(filetree, "──────────────── Vendored Project Directories")
-    local external_section = find_line(filetree, "──────────────── External Project Directories")
+    local vendored_section = find_separator(filetree, "vendored")
+    local external_section = find_separator(filetree, "external")
     local vendored_root = find_line(filetree, "library1/")
     local external_root = find_line(filetree, "jdk-src/")
     local missing_root = find_line(filetree, "missing-src/")
@@ -145,10 +153,11 @@ test.describe("File Tree Project Path Roles", function()
     test.ok(common.path_equals(entry.abs, context.excluded))
   end)
 
-  test.it("treats Project Directory section rows as non-filesystem rows", function(context)
+  test.it("treats Project Directory separator rows as non-filesystem rows", function(context)
     local filetree = setup_project_paths(context)
-    local vendored_section = find_line(filetree, "──────────────── Vendored Project Directories")
+    local vendored_section = find_separator(filetree, "vendored")
     test.not_nil(vendored_section)
+    test.equal(line_text(filetree.doc.lines[vendored_section]), "")
     local entry, err = filetree:entry_for_line(vendored_section)
     test.equal(entry, nil)
     test.equal(err, nil)
