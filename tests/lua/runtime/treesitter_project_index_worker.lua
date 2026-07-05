@@ -90,6 +90,12 @@ int main(void) { return helper(); }
 
     test.ok(drain_until(pool, function() return final ~= nil end))
     test.ok(final.files_indexed == 1, common.serialize({ final = final, logs = logs }))
+    test.not_nil(final.diagnostics)
+    test.equal(final.diagnostics.files_indexed, 1)
+    test.ok(final.diagnostics.parse_calls >= 1)
+    test.ok(final.diagnostics.file_read_ms >= 0)
+    test.ok(final.diagnostics.chunk_send_wait_ms >= 0)
+    test.ok(final.diagnostics.chunk_files_max >= 1)
     test.equal(#chunks, 1)
     test.equal(chunks[1].relpath, "main.c")
     local found_main = false

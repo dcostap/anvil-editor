@@ -551,9 +551,15 @@ static TSQuery *compile_query_source(
   return query;
 }
 
+static void set_metric_number(lua_State *L, int metrics_index, const char *field, lua_Number value) {
+  lua_pushnumber(L, value);
+  lua_setfield(L, metrics_index, field);
+}
+
 static bool index_text_query(
   lua_State *L,
   int result_index,
+  int metrics_index,
   const char *field,
   const AnvilTSLanguage *language,
   const char *source,
@@ -565,6 +571,7 @@ static bool index_text_query(
   uint32_t timeout_ms
 ) {
   if (!source) return true;
+  uint64_t query_started_ticks = SDL_GetTicks();
   TSQuery *query = compile_query_source(L, language, field, source, source_len);
   if (!query) return false;
 
@@ -587,6 +594,7 @@ static bool index_text_query(
     &error
   );
   ts_query_delete(query);
+  uint64_t query_elapsed_ms = SDL_GetTicks() - query_started_ticks;
 
   if (!ok) {
     lua_pushnil(L);
@@ -608,6 +616,11 @@ static bool index_text_query(
   lua_pushinteger(L, (lua_Integer) context.count);
   lua_setfield(L, -2, "capture_count");
   lua_setfield(L, result_index, field);
+  if (metrics_index > 0) {
+    char metric_field[64];
+    snprintf(metric_field, sizeof(metric_field), "%s_query_ms", field);
+    set_metric_number(L, metrics_index, metric_field, (lua_Number) query_elapsed_ms);
+  }
   free_capture_copies(&context);
   return true;
 }
@@ -674,6 +687,7 @@ static int f_index_text(lua_State *L) {
   parse_options.progress_callback = sync_parse_progress;
   TSInput input = anvil_ts_snapshot_input(snapshot);
   TSTree *tree = ts_parser_parse_with_options(parser, NULL, input, parse_options);
+  uint64_t parse_elapsed_ms = SDL_GetTicks() - run.started_ticks;
   ts_parser_delete(parser);
   if (!tree) {
     anvil_ts_snapshot_free(snapshot);
@@ -689,10 +703,16 @@ static int f_index_text(lua_State *L) {
   lua_pushinteger(L, (lua_Integer) snapshot->byte_len);
   lua_setfield(L, result_index, "byte_len");
 
+  lua_newtable(L);
+  int metrics_index = lua_gettop(L);
+  set_metric_number(L, metrics_index, "parse_ms", (lua_Number) parse_elapsed_ms);
+  lua_pushinteger(L, 1);
+  lua_setfield(L, metrics_index, "parse_count");
+
   size_t outline_len = 0;
   lua_getfield(L, opts, "outline_query");
   const char *outline_source = lua_tolstring(L, -1, &outline_len);
-  if (outline_source && !index_text_query(L, result_index, "outline", language, outline_source, outline_len, tree, snapshot, match_limit, max_captures, query_timeout_ms)) {
+  if (outline_source && !index_text_query(L, result_index, metrics_index, "outline", language, outline_source, outline_len, tree, snapshot, match_limit, max_captures, query_timeout_ms)) {
     ts_tree_delete(tree);
     anvil_ts_snapshot_free(snapshot);
     return 2;
@@ -702,13 +722,14 @@ static int f_index_text(lua_State *L) {
   size_t usage_len = 0;
   lua_getfield(L, opts, "usage_query");
   const char *usage_source = lua_tolstring(L, -1, &usage_len);
-  if (usage_source && !index_text_query(L, result_index, "usage", language, usage_source, usage_len, tree, snapshot, usage_match_limit, usage_max_captures, usage_query_timeout_ms)) {
+  if (usage_source && !index_text_query(L, result_index, metrics_index, "usage", language, usage_source, usage_len, tree, snapshot, usage_match_limit, usage_max_captures, usage_query_timeout_ms)) {
     ts_tree_delete(tree);
     anvil_ts_snapshot_free(snapshot);
     return 2;
   }
   lua_pop(L, 1);
 
+  lua_setfield(L, result_index, "metrics");
   ts_tree_delete(tree);
   anvil_ts_snapshot_free(snapshot);
   return 1;

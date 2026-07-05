@@ -257,6 +257,10 @@ test.describe("core.treesitter phase 3 document integration", function()
     test.not_nil(result, err)
     test.equal(result.language, "c")
     test.ok(result.byte_len > 0)
+    test.not_nil(result.metrics)
+    test.equal(result.metrics.parse_count, 1)
+    test.ok(result.metrics.parse_ms >= 0)
+    test.ok(result.metrics.outline_query_ms >= 0)
     test.ok(result.outline.capture_count > 0)
     local saw_main = false
     for _, capture in ipairs(result.outline.captures) do
@@ -556,6 +560,12 @@ fun make(): EagerThing = EagerThing()
     test.equal(status.symbol_status, "ready")
     test.equal(status.usage_status, "ready")
     test.ok(find_symbol(status.symbols, "EagerThing", "class"))
+    test.not_nil(status.diagnostics)
+    test.not_nil(status.diagnostics.phases)
+    test.not_nil(status.diagnostics.phases.symbols)
+    test.not_nil(status.diagnostics.phases.usages)
+    test.ok((status.diagnostics.phases.symbols.worker.parse_calls or 0) >= 1)
+    test.ok((status.diagnostics.phases.usages.worker.parse_calls or 0) >= 1)
 
     local refs, reason, usage_status = wait_workspace_usages("EagerThing", {
       root = root,

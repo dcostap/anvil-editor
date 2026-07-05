@@ -29,6 +29,36 @@ local function log_quiet(...)
   if core and core.log_quiet then core.log_quiet(...) end
 end
 
+local function now()
+  return system and system.get_time and system.get_time() or os.clock()
+end
+
+local function elapsed_ms(started)
+  return (now() - started) * 1000
+end
+
+local function diagnostics_ui(index)
+  index.diagnostics = index.diagnostics or {}
+  index.diagnostics.ui = index.diagnostics.ui or {}
+  return index.diagnostics.ui
+end
+
+local function add_ui_metric(index, key, value)
+  local ui = diagnostics_ui(index)
+  ui[key] = (ui[key] or 0) + (tonumber(value) or 0)
+end
+
+local function inc_ui_metric(index, key, amount)
+  local ui = diagnostics_ui(index)
+  ui[key] = (ui[key] or 0) + (amount or 1)
+end
+
+local function max_ui_metric(index, key, value)
+  local ui = diagnostics_ui(index)
+  value = tonumber(value) or 0
+  if value > (ui[key] or 0) then ui[key] = value end
+end
+
 local function safe_yield(wait)
   if coroutine.isyieldable and coroutine.isyieldable() then
     coroutine.yield(wait)
@@ -80,6 +110,7 @@ local function new_index(root)
     worker_handle = nil,
     worker_seen_paths = nil,
     project_paths_generation = nil,
+    diagnostics = { ui = {} },
   }
 end
 
@@ -452,6 +483,7 @@ local function sort_usages(usages)
 end
 
 local function rebuild_disk_aggregates(index)
+  local rebuild_started = now()
   local symbols = {}
   local usages_by_name = {}
   local usage_count = 0
@@ -489,6 +521,12 @@ local function rebuild_disk_aggregates(index)
   index.symbols = symbols
   index.usages_by_name = usages_by_name
   index.usage_count = usage_count
+  local duration = elapsed_ms(rebuild_started)
+  inc_ui_metric(index, "aggregate_rebuilds", 1)
+  add_ui_metric(index, "aggregate_rebuild_ms", duration)
+  max_ui_metric(index, "aggregate_rebuild_max_ms", duration)
+  inc_ui_metric(index, "aggregate_symbols_sorted", #symbols)
+  inc_ui_metric(index, "aggregate_usages_sorted", usage_count)
 end
 
 local function replace_file_entry(index, path, fingerprint, entry)
@@ -693,7 +731,14 @@ end
 
 local function apply_worker_chunk(index, message)
   if not current_worker_message(index, message) then return end
+  local adoption_started = now()
   local payload = message.payload or {}
+  local chunk_diag = payload.diagnostics or {}
+  inc_ui_metric(index, "chunks_adopted", 1)
+  inc_ui_metric(index, "chunk_files_adopted", chunk_diag.files or #(payload.files or {}))
+  inc_ui_metric(index, "chunk_records_adopted", chunk_diag.records or 0)
+  max_ui_metric(index, "chunk_files_adopted_max", chunk_diag.files or #(payload.files or {}))
+  max_ui_metric(index, "chunk_records_adopted_max", chunk_diag.records or 0)
   local changed = false
   for _, file in ipairs(payload.files or {}) do
     local path = file.path and common.normalize_path(file.path)
@@ -707,9 +752,15 @@ local function apply_worker_chunk(index, message)
     end
   end
   if changed then
+    local replace_elapsed = elapsed_ms(adoption_started)
+    add_ui_metric(index, "chunk_replace_ms", replace_elapsed)
+    max_ui_metric(index, "chunk_replace_max_ms", replace_elapsed)
     rebuild_disk_aggregates(index)
     core.redraw = true
   end
+  local duration = elapsed_ms(adoption_started)
+  add_ui_metric(index, "chunk_adoption_ms", duration)
+  max_ui_metric(index, "chunk_adoption_max_ms", duration)
 end
 
 local function prune_worker_unseen(index)
@@ -749,9 +800,53 @@ local function finish_worker_scan(index, message, status)
   index.finished_at = system.get_time()
   core.redraw = true
   if status == "ready" then
+    local diagnostics = index.diagnostics or {}
+    local worker = diagnostics.worker or {}
+    local ui = diagnostics.ui or {}
     log_quiet("Tree-sitter Project index: worker indexed %d symbol(s), %d usage(s)%s under %s in %.1fms",
       #index.symbols, index.usage_count or 0, index.usage_truncated and " (truncated)" or "",
       index.root, ((index.finished_at or system.get_time()) - (index.started_at or system.get_time())) * 1000)
+    log_quiet("Tree-sitter indexing baseline: root=%s phase=%s worker=%s job=%s files scanned=%d indexed=%d skipped=%d parse_calls=%d chunks=%d worker_ms=%.1f read_ms=%.1f parse_ms=%.1f outline_query_ms=%.1f usage_query_ms=%.1f symbol_record_ms=%.1f usage_record_ms=%.1f send_wait_ms=%.1f ui_adopt_ms=%.1f aggregate_rebuild_ms=%.1f aggregate_rebuilds=%d max_chunk_adopt_ms=%.1f",
+      tostring(index.root), tostring(worker.phase or message.phase), tostring(worker.worker_id), tostring(worker.job_id),
+      tonumber(worker.files_scanned or index.files_scanned or 0) or 0,
+      tonumber(worker.files_indexed or index.files_indexed or 0) or 0,
+      tonumber(worker.files_skipped or 0) or 0,
+      tonumber(worker.parse_calls or 0) or 0,
+      tonumber(worker.chunks_sent or ui.chunks_adopted or 0) or 0,
+      tonumber(worker.total_ms or 0) or 0,
+      tonumber(worker.file_read_ms or 0) or 0,
+      tonumber(worker.parse_ms or 0) or 0,
+      tonumber(worker.outline_query_ms or 0) or 0,
+      tonumber(worker.usage_query_ms or 0) or 0,
+      tonumber(worker.symbol_record_ms or 0) or 0,
+      tonumber(worker.usage_record_ms or 0) or 0,
+      tonumber(worker.chunk_send_wait_ms or 0) or 0,
+      tonumber(ui.chunk_adoption_ms or 0) or 0,
+      tonumber(ui.aggregate_rebuild_ms or 0) or 0,
+      tonumber(ui.aggregate_rebuilds or 0) or 0,
+      tonumber(ui.chunk_adoption_max_ms or 0) or 0)
+    local phases = diagnostics.phases or {}
+    local symbols_worker = phases.symbols and phases.symbols.worker or {}
+    local usages_worker = phases.usages and phases.usages.worker or {}
+    if phases.symbols or phases.usages then
+      local total_parse_calls = (tonumber(symbols_worker.parse_calls or 0) or 0) + (tonumber(usages_worker.parse_calls or 0) or 0)
+      local total_query_ms = (tonumber(symbols_worker.outline_query_ms or 0) or 0) + (tonumber(symbols_worker.usage_query_ms or 0) or 0)
+        + (tonumber(usages_worker.outline_query_ms or 0) or 0) + (tonumber(usages_worker.usage_query_ms or 0) or 0)
+      log_quiet("Tree-sitter indexing baseline phases: root=%s symbols_worker_ms=%.1f usages_worker_ms=%.1f symbols_parse_calls=%d usages_parse_calls=%d total_parse_calls=%d total_read_ms=%.1f total_parse_ms=%.1f total_query_ms=%.1f total_send_wait_ms=%.1f ui_adopt_ms=%.1f aggregate_rebuild_ms=%.1f aggregate_rebuilds=%d",
+        tostring(index.root),
+        tonumber(symbols_worker.total_ms or 0) or 0,
+        tonumber(usages_worker.total_ms or 0) or 0,
+        tonumber(symbols_worker.parse_calls or 0) or 0,
+        tonumber(usages_worker.parse_calls or 0) or 0,
+        total_parse_calls,
+        (tonumber(symbols_worker.file_read_ms or 0) or 0) + (tonumber(usages_worker.file_read_ms or 0) or 0),
+        (tonumber(symbols_worker.parse_ms or 0) or 0) + (tonumber(usages_worker.parse_ms or 0) or 0),
+        total_query_ms,
+        (tonumber(symbols_worker.chunk_send_wait_ms or 0) or 0) + (tonumber(usages_worker.chunk_send_wait_ms or 0) or 0),
+        tonumber(ui.chunk_adoption_ms or 0) or 0,
+        tonumber(ui.aggregate_rebuild_ms or 0) or 0,
+        tonumber(ui.aggregate_rebuilds or 0) or 0)
+    end
     drain_pending_reindexes(index)
   else
     log_quiet("Tree-sitter Project index: worker finished status=%s root=%s reason=%s", tostring(status), tostring(index.root), tostring(index.reason))
@@ -781,6 +876,15 @@ local function submit_worker_scan(index, generation, opts, phase)
   index.files_scanned = 0
   index.files_indexed = 0
   index.worker_seen_paths = {}
+  local previous_phases = phase == "symbols" and {} or ((index.diagnostics and index.diagnostics.phases) or {})
+  index.diagnostics = {
+    ui = {},
+    phases = previous_phases,
+    phase = phase,
+    generation = generation,
+    project_paths_generation = index.project_paths_generation,
+    root = index.root,
+  }
   if index.watcher then refresh_watches_for_dir(index, index.root) end
 
   local handle, err = worker_pool.system():submit({
@@ -819,6 +923,15 @@ local function submit_worker_scan(index, generation, opts, phase)
         index.files_scanned = p.files_scanned or index.files_scanned
         index.files_indexed = p.files_indexed or index.files_indexed
         index.files_total = p.files_indexed or index.files_total
+        if p.diagnostics then
+          index.diagnostics = index.diagnostics or { ui = {}, phases = {} }
+          index.diagnostics.phases = index.diagnostics.phases or {}
+          index.diagnostics.worker = p.diagnostics
+          index.diagnostics.phases[message.phase or phase] = {
+            worker = p.diagnostics,
+            ui = common.merge({}, index.diagnostics.ui or {}),
+          }
+        end
       end
     end,
     on_error = function(message)

@@ -117,6 +117,36 @@ local function should_descend(path, info, payload)
   return true
 end
 
+local function elapsed_ms(started)
+  return (now() - started) * 1000
+end
+
+local function add_metric(metrics, key, value)
+  if not metrics then return end
+  metrics[key] = (metrics[key] or 0) + (tonumber(value) or 0)
+end
+
+local function inc_metric(metrics, key, amount)
+  if not metrics then return end
+  metrics[key] = (metrics[key] or 0) + (amount or 1)
+end
+
+local function max_metric(metrics, key, value)
+  if not metrics then return end
+  value = tonumber(value) or 0
+  if value > (metrics[key] or 0) then metrics[key] = value end
+end
+
+local function copy_native_metrics(metrics, result, prefix)
+  local native_metrics = result and result.metrics or {}
+  if native_metrics.parse_ms then add_metric(metrics, "parse_ms", native_metrics.parse_ms) end
+  if native_metrics.outline_query_ms then add_metric(metrics, "outline_query_ms", native_metrics.outline_query_ms) end
+  if native_metrics.usage_query_ms then add_metric(metrics, "usage_query_ms", native_metrics.usage_query_ms) end
+  if native_metrics.parse_count then inc_metric(metrics, "parse_calls", native_metrics.parse_count) end
+  local captures = result and result[prefix] and result[prefix].capture_count
+  if captures then inc_metric(metrics, prefix .. "_captures", captures) end
+end
+
 local function file_record_count(file)
   return #(file.symbols or {}) + (file.usage_count or 0)
 end
@@ -126,7 +156,7 @@ local function push_file(chunk, file)
   chunk.record_count = (chunk.record_count or 0) + file_record_count(file)
 end
 
-local function flush_chunk(ctx, payload, root, chunk, force)
+local function flush_chunk(ctx, payload, root, state, chunk, force)
   if #chunk == 0 then return true end
   if not force
     and #chunk < (payload.chunk_files or DEFAULT_CHUNK_FILES)
@@ -135,16 +165,33 @@ local function flush_chunk(ctx, payload, root, chunk, force)
     return true
   end
   local files = {}
+  local file_count = #chunk
+  local record_count = chunk.record_count or 0
   for i = 1, #chunk do
     files[i] = chunk[i]
     chunk[i] = nil
   end
   chunk.record_count = 0
-  return ctx.send({
+  local metrics = state and state.metrics
+  inc_metric(metrics, "chunks_sent", 1)
+  max_metric(metrics, "chunk_files_max", file_count)
+  max_metric(metrics, "chunk_records_max", record_count)
+  add_metric(metrics, "chunk_files_total", file_count)
+  add_metric(metrics, "chunk_records_total", record_count)
+  local send_started = now()
+  local ok, err = ctx.send({
     type = "chunk",
     root = root.path or root,
-    payload = { files = files },
+    payload = {
+      files = files,
+      diagnostics = {
+        files = file_count,
+        records = record_count,
+      },
+    },
   })
+  add_metric(metrics, "chunk_send_wait_ms", elapsed_ms(send_started))
+  return ok, err
 end
 
 local function send_progress(ctx, state, payload, current, force)
@@ -163,17 +210,23 @@ local function send_progress(ctx, state, payload, current, force)
   })
 end
 
-local function index_file(path, root_path, language, payload, info, usage_remaining)
+local function index_file(path, root_path, language, payload, info, usage_remaining, metrics)
   local max_bytes = payload.max_file_bytes or DEFAULT_MAX_FILE_BYTES
+  local read_started = now()
   local text, err, file_info = read_file_text(path, max_bytes)
+  add_metric(metrics, "file_read_ms", elapsed_ms(read_started))
   info = file_info or info
   if not text then return nil, err or "read-failed", info end
+  inc_metric(metrics, "bytes_read", #text)
   if not native.has_language(language.grammar) then return nil, "missing-grammar", info end
   local sources = language.query_sources or {}
   if not sources.outline then return nil, "missing-outline-query", info end
   local usage_kind = payload.include_usages ~= false and query_kind(language) or nil
+  local lines_started = now()
   local lines = records.lines_from_text(text)
+  add_metric(metrics, "line_split_ms", elapsed_ms(lines_started))
   local result
+  local native_started = now()
   result, err = native.index_text({
     language = language.grammar,
     lines = lines,
@@ -183,10 +236,14 @@ local function index_file(path, root_path, language, payload, info, usage_remain
     match_limit = option(language, "outline", "match_limit", DEFAULT_MATCH_LIMIT),
     max_captures = option(language, "outline", "max_captures", DEFAULT_MAX_CAPTURES),
   })
+  add_metric(metrics, "native_index_text_ms", elapsed_ms(native_started))
   if not result then return nil, err or "index-text-failed", info end
+  copy_native_metrics(metrics, result, "outline")
 
   local relpath = common.relative_path(root_path, path):gsub("\\", "/")
+  local symbol_record_started = now()
   local symbols = records.symbols_from_captures(result.outline and result.outline.captures or {}, lines)
+  add_metric(metrics, "symbol_record_ms", elapsed_ms(symbol_record_started))
   for _, symbol in ipairs(symbols) do
     symbol.path = path
     symbol.file = relpath
@@ -202,6 +259,7 @@ local function index_file(path, root_path, language, payload, info, usage_remain
     local per_file_cap = payload.max_usage_captures_per_file or language_usage_cap
     local effective_cap = math.max(0, math.min(language_usage_cap, per_file_cap, usage_remaining or language_usage_cap))
     if effective_cap > 0 then
+      local usage_native_started = now()
       local usage_result, usage_err = native.index_text({
         language = language.grammar,
         lines = lines,
@@ -211,8 +269,12 @@ local function index_file(path, root_path, language, payload, info, usage_remain
         match_limit = option(language, "usages", "match_limit", DEFAULT_MATCH_LIMIT),
         max_captures = effective_cap,
       })
+      add_metric(metrics, "native_index_text_ms", elapsed_ms(usage_native_started))
       if usage_result and usage_result.usage then
+        copy_native_metrics(metrics, usage_result, "usage")
+        local usage_record_started = now()
         usages_by_name, usage_count = records.usages_from_captures(usage_result.usage.captures, path, relpath, lines, language)
+        add_metric(metrics, "usage_record_ms", elapsed_ms(usage_record_started))
         if usage_count >= effective_cap then usage_complete = false end
       else
         usage_complete = false
@@ -241,32 +303,42 @@ local function walk(root, payload, ctx, state, chunk)
   while #stack > 0 do
     if ctx.cancelled() then return false, "cancelled" end
     local dir = table.remove(stack)
+    inc_metric(state.metrics, "directories_walked", 1)
+    local list_started = now()
     local entries = system.list_dir(dir) or {}
+    add_metric(state.metrics, "directory_walk_ms", elapsed_ms(list_started))
     for _, name in ipairs(entries) do
       if ctx.cancelled() then return false, "cancelled" end
       local path = normalize(join_path(dir, name))
+      local info_started = now()
       local info = system.get_file_info(path)
+      add_metric(state.metrics, "directory_walk_ms", elapsed_ms(info_started))
       if info and info.type == "dir" then
         if should_descend(path, info, payload) then stack[#stack + 1] = path end
       elseif info and info.type == "file" and not excluded(path, payload.excluded) and not ignored_name(common.basename(path), payload.ignore_files) then
         state.files_scanned = state.files_scanned + 1
+        inc_metric(state.metrics, "files_scanned", 1)
         local language = match_language(path, payload.languages)
         if language then
           local usage_cap = payload.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP
           local usage_remaining = math.max(0, usage_cap - state.usage_count)
-          local file_result, err = index_file(path, root_path, language, payload, info, usage_remaining)
+          local file_result, err = index_file(path, root_path, language, payload, info, usage_remaining, state.metrics)
           if file_result then
             state.files_indexed = state.files_indexed + 1
+            inc_metric(state.metrics, "files_indexed", 1)
             state.symbols_total = state.symbols_total + #(file_result.symbols or {})
+            inc_metric(state.metrics, "symbols_emitted", #(file_result.symbols or {}))
             state.usage_count = state.usage_count + (file_result.usage_count or 0)
+            inc_metric(state.metrics, "usages_emitted", file_result.usage_count or 0)
             if file_result.usage_complete == false then state.usage_truncated = true end
             if #chunk > 0 and (chunk.record_count or 0) + file_record_count(file_result) > (payload.chunk_records or DEFAULT_CHUNK_RECORDS) then
-              flush_chunk(ctx, payload, root, chunk, true)
+              flush_chunk(ctx, payload, root, state, chunk, true)
             end
             push_file(chunk, file_result)
-            flush_chunk(ctx, payload, root, chunk, false)
+            flush_chunk(ctx, payload, root, state, chunk, false)
           else
             state.files_skipped = state.files_skipped + 1
+            inc_metric(state.metrics, "files_skipped", 1)
             if payload.log_skips then
               ctx.send({ type = "log", payload = { path = path, reason = err or "failed" } })
             end
@@ -288,16 +360,36 @@ function worker.run(payload, ctx)
     symbols_total = 0,
     usage_count = 0,
     usage_truncated = false,
+    metrics = {
+      worker_id = ctx.worker_id,
+      job_id = ctx.job_id,
+      phase = ctx.phase,
+      roots = {},
+    },
   }
   local chunk = {}
   for _, root in ipairs(payload.roots or {}) do
+    local root_started = now()
+    local before_scanned = state.files_scanned
+    local before_indexed = state.files_indexed
+    local before_skipped = state.files_skipped
     local ok, reason = walk(root, payload, ctx, state, chunk)
+    local root_metrics = {
+      root = root.path or root,
+      duration_ms = elapsed_ms(root_started),
+      files_scanned = state.files_scanned - before_scanned,
+      files_indexed = state.files_indexed - before_indexed,
+      files_skipped = state.files_skipped - before_skipped,
+    }
+    state.metrics.roots[#state.metrics.roots + 1] = root_metrics
+    add_metric(state.metrics, "root_scan_ms", root_metrics.duration_ms)
     if not ok then
-      ctx.send({ type = "cancelled", payload = { reason = reason, files_scanned = state.files_scanned } })
+      ctx.send({ type = "cancelled", payload = { reason = reason, files_scanned = state.files_scanned, diagnostics = state.metrics } })
       return
     end
-    flush_chunk(ctx, payload, root, chunk, true)
+    flush_chunk(ctx, payload, root, state, chunk, true)
   end
+  state.metrics.total_ms = elapsed_ms(started)
   send_progress(ctx, state, payload, nil, true)
   ctx.send({
     type = "final",
@@ -309,6 +401,7 @@ function worker.run(payload, ctx)
       usage_count = state.usage_count,
       usage_truncated = state.usage_truncated,
       duration_ms = math.floor((now() - started) * 1000),
+      diagnostics = state.metrics,
     },
   })
 end
