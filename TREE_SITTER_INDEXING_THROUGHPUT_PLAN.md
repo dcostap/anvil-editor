@@ -13,6 +13,32 @@ In simple terms:
 
 This is a throughput plan, not just a responsiveness plan.
 
+## Implementation status
+
+As of the first implementation pass, Milestones 1-3 are complete and committed:
+
+- **Milestone 1 complete:** indexing now records quiet throughput diagnostics for worker scanning, file reads, native parse/query timing, record construction, chunk send/backpressure time, UI chunk adoption, and aggregate rebuilds. Baseline-style quiet logs are emitted per completed run/phase.
+- **Milestone 2 complete:** `treesitter.index_text` now supports per-query result status/error metadata, and worker jobs that collect both symbols and usages parse each file once and run both queries from that parse. Outline results are preserved if usage extraction fails.
+- **Milestone 3 complete:** UI chunk adoption no longer rebuilds aggregates on every chunk. Aggregate rebuilds are debounced during chunk arrival and forced at phase/fresh-query boundaries. A Lua-side `core.treesitter.index_scheduler` now exists to cap outstanding/running indexing jobs and reserve worker-pool capacity.
+
+The current state is considered a solid foundation and a useful incremental improvement, but the throughput plan is **not complete**. The main remaining speedup is Milestone 4: actually sharding project indexing across multiple worker jobs. Later milestones are larger transport/query/pool infrastructure work and should be implemented only after measurements show they are the next bottleneck.
+
+Current committed milestones:
+
+```text
+58e454dd TREE_SITTER_INDEXING_THROUGHPUT_PLAN.md: Milestone 1 (Instrument current indexing throughput)
+8ecf4424 TREE_SITTER_INDEXING_THROUGHPUT_PLAN.md: Milestone 2 (Avoid duplicate parse work per file)
+f5f19bc7 TREE_SITTER_INDEXING_THROUGHPUT_PLAN.md: Milestone 3 (Bound UI adoption and add indexing scheduler)
+```
+
+Validation performed after Milestone 3:
+
+```sh
+meson test -C build-windows-x86_64 --suite anvil --print-errorlogs
+```
+
+passed.
+
 ## Current state after async indexing work
 
 Relevant files:
@@ -94,11 +120,23 @@ Anvil should move toward that model in stages.
 9. Preserve separate symbol and usage readiness semantics.
 10. Prefer measured changes over speculative tuning.
 
-## Milestone 1: Instrument current indexing throughput
+## Milestone 1: Instrument current indexing throughput — Complete
 
 ### Goal
 
 Before optimizing, measure where time goes now.
+
+### Status
+
+Complete. Instrumentation was added in:
+
+```text
+data/core/workers/treesitter_project_index.lua
+data/core/treesitter/symbol_index.lua
+src/api/treesitter.c
+```
+
+The implementation records worker-side scan/read/parse/query/record/chunk metrics, native `index_text` parse/query metrics, and UI-side chunk adoption/aggregate rebuild metrics. `symbol_index.lua` preserves per-phase diagnostics so symbol-phase and usage-phase costs are not lost between phases.
 
 ### Work
 
@@ -134,6 +172,8 @@ src/api/treesitter.c
 
 ### Output
 
+Implemented as quiet baseline-style logs, including per-phase summary fields. A formal saved large-project capture artifact is still pending under Milestone 9.
+
 A short documented baseline:
 
 ```text
@@ -146,11 +186,17 @@ Tree-sitter indexing baseline:
   top costs: parse/query/read/adopt/etc.
 ```
 
-## Milestone 2: Avoid duplicate parse work per file
+## Milestone 2: Avoid duplicate parse work per file — Complete
 
 ### Goal
 
 Do outline and usage extraction from one parse when both are requested.
+
+### Status
+
+Complete for worker jobs that request both symbols and usages. `treesitter.index_text` now returns per-query metadata, including query status and error fields. `core.workers.treesitter_project_index` now uses one native `index_text` call with both `outline_query` and `usage_query` when usages are included, so each such file is parsed once instead of once for outline and once for usages.
+
+Important note: the editor still preserves early symbol availability via the existing two-phase project indexing flow. That means a normal full project index can still parse files in the symbol phase and again in the usage phase. Within a job that collects both symbols and usages, duplicate parse work is removed. Future Milestone 4 sharding/strategy work should decide when to run combined phases versus separate early-symbol phases at project scale.
 
 ### Current issue
 
@@ -215,6 +261,8 @@ Recommended first approach: add per-query statuses first, then explicitly choose
 
 Do not call this milestone complete merely because the native API can return per-query statuses. It must either reduce parse count in at least one real indexing mode, or document why early-symbol latency is worth the duplicate parse for that mode.
 
+Implemented evidence: worker runtime tests assert that jobs collecting symbols and usages report one parse call for a file, including the usage-query-failure case where symbols are retained.
+
 ### Testing
 
 Add tests for:
@@ -224,11 +272,25 @@ Add tests for:
 - combined query path returns same symbols as previous outline-only path;
 - no regressions in `runtime/treesitter.lua`.
 
-## Milestone 3: Bound UI adoption and add a Lua-side indexing scheduler
+## Milestone 3: Bound UI adoption and add a Lua-side indexing scheduler — Complete
 
 ### Goal
 
 Prepare the current Lua worker facade for parallel indexing without causing UI adoption spikes or starving other work.
+
+### Status
+
+Complete as a prerequisite/foundation for sharding.
+
+Implemented:
+
+- chunk adoption applies per-file replacements and marks aggregates dirty instead of rebuilding on every chunk;
+- aggregate rebuilds are debounced during chunk storms and forced on phase final / fresh-query boundaries;
+- workspace symbol/usage queries do not return fresh results from dirty aggregates without first forcing a rebuild;
+- `core.treesitter.index_scheduler` limits queued/running indexing jobs before they enter the shared Lua worker pool;
+- scheduler cancellation handles queued/running jobs;
+- stale terminal worker messages release scheduler slots;
+- tests cover debounce behavior, worker reservation, queued cancellation, and stale terminal completion.
 
 This milestone is a prerequisite for sharding. Multi-worker indexing increases chunk arrival rate; if every chunk rebuilds/sorts the whole index, parallelism can make responsiveness worse.
 
@@ -301,11 +363,15 @@ Do not proceed to sharding until:
 - scheduler never has more than the configured number of running shard jobs;
 - cancelling a run cancels queued and running shard work.
 
-## Milestone 4: Shard project indexing across multiple worker jobs
+## Milestone 4: Shard project indexing across multiple worker jobs — Pending / Next major payoff
 
 ### Goal
 
 Use multiple real worker threads for large projects, now that UI adoption and shard scheduling are bounded.
+
+### Status
+
+Pending. This is the main remaining near-term throughput payoff. The scheduler and debounced UI adoption from Milestone 3 were added specifically so this milestone can be implemented without flooding the worker pool or creating UI-frame adoption spikes.
 
 ### Current issue
 
@@ -488,11 +554,15 @@ Add runtime tests with synthetic projects:
 - symbols become available before all usage shards finish if that semantic is preserved;
 - a failed shard does not prune or delete previous-generation entries for files it did not successfully process.
 
-## Milestone 5: Native result handles or file-backed artifacts
+## Milestone 5: Native result handles or file-backed artifacts — Pending / Larger transport work
 
 ### Goal
 
 Avoid deep-copying huge result tables through Lua channels.
+
+### Status
+
+Pending. Current code still sends bounded Lua chunks through channels. Implement this after Milestone 4 measurements if channel copying becomes the next bottleneck.
 
 ### Current issue
 
@@ -568,11 +638,15 @@ Recommended path:
 - ensure cancellation removes abandoned artifacts;
 - ensure UI drains under budget.
 
-## Milestone 6: Worker-backed workspace symbol/reference filtering
+## Milestone 6: Worker-backed workspace symbol/reference filtering — Pending / Depends on compact transport
 
 ### Goal
 
 Commands should not perform unbounded fuzzy/filter work on huge ready indexes in one UI frame.
+
+### Status
+
+Pending. Should not be implemented by copying the whole Lua symbol/reference table into a worker per query. Prefer waiting for Milestone 5's compact transport/artifact path.
 
 ### Current issue
 
@@ -615,11 +689,15 @@ UI behavior:
 - large synthetic symbol list does not block UI;
 - result ordering matches sync path for small fixtures.
 
-## Milestone 7: Native shared worker pool
+## Milestone 7: Native shared worker pool — Pending / Large infrastructure project
 
 ### Goal
 
 Move from Lua-thread/channel facade to a Fred-style native pool for high-throughput jobs.
+
+### Status
+
+Pending. This is a large standalone infrastructure project. The Milestone 3 Lua scheduler is the current substitute for native lanes/background caps.
 
 ### Current issue
 
@@ -666,11 +744,15 @@ The existing `core.worker_pool` Lua module should become a facade over the nativ
 - verify result drain budgets;
 - stress with many background indexing jobs while UI tests run.
 
-## Milestone 8: Parallel file walking and metadata indexing
+## Milestone 8: Parallel file walking and metadata indexing — Pending
 
 ### Goal
 
 Speed up filesystem discovery and make it reusable.
+
+### Status
+
+Pending. Milestone 4 may introduce a project-index-specific worker walk/coordinator first; this milestone generalizes file walking for reuse by search/filetree/git/etc.
 
 ### Current issue
 
@@ -714,11 +796,15 @@ Use this for:
 - large directory walk can be cancelled;
 - filetree/project search can reuse results in later milestones.
 
-## Milestone 9: Performance validation
+## Milestone 9: Performance validation — Pending
 
 ### Goal
 
 Prove the speedup and responsiveness improvements.
+
+### Status
+
+Pending. Milestone 1 added instrumentation, but a formal saved real/synthetic large-project capture has not yet been produced. This should be done after Milestone 4 at minimum, and repeated after later transport/query changes.
 
 ### Tests/captures
 
