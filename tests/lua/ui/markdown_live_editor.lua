@@ -130,7 +130,7 @@ test.describe("Markdown Live Editor", function()
     test.equal(view:get_x_offset_col(1, view:get_col_x_offset(1, #"This is **" + 1) + 1), #"This is **" + 1)
   end)
 
-  test.it("expands only the active emphasis syntax without dropping styled content", function()
+  test.it("expands active-line emphasis syntax before caret movement crosses spans", function()
     local view, doc = make_view("This is **bold** and **more**\nnext", "note.md")
     doc:set_selection(1, 11)
     markdown.live_render.refresh_view(view)
@@ -140,7 +140,7 @@ test.describe("Markdown Live Editor", function()
     for _, fragment in ipairs(view:iter_line_render_fragments(render_line)) do
       if not fragment.hidden then texts[#texts + 1] = fragment.text or "" end
     end
-    test.same({ "This is ", "**", "bold", "**", " and ", "more" }, texts)
+    test.same({ "This is ", "**", "bold", "**", " and ", "**", "more", "**" }, texts)
   end)
 
   test.it("leaves inline code spans raw and does not render escaped syntax", function()
