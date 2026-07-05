@@ -10,6 +10,7 @@ local style = require "core.style"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
 local file_context = require "core.file_context"
+local project_paths = require "core.project_paths"
 local sidepanel = require "core.sidepanel"
 local storage = require "core.storage"
 local DirWatch = require "core.dirwatch"
@@ -461,6 +462,14 @@ local function make_meta(item)
     original_size = item.size,
     original_modified = item.modified,
     expanded = false,
+    project_path_role = item.project_path_role,
+    project_path_label = item.project_path_label,
+    project_path_id = item.project_path_id,
+    project_path_separator = item.project_path_separator,
+    project_path_root = item.project_path_root,
+    project_path_missing = item.project_path_missing,
+    project_path_readonly = item.project_path_readonly,
+    project_path_display = item.project_path_display,
   }
 end
 
@@ -1044,10 +1053,8 @@ function FileTreeView:sync_path(path, reason)
   if type(path) ~= "string" or path == "" then return false end
   local expanded = common.home_expand(path)
   path = common.normalize_path(system.absolute_path(expanded) or expanded)
-  local root = core.root_project and core.root_project()
-  if not root or not in_project(path, root.path) or not in_project(path, self.current_dir) then
-    return false
-  end
+  local resolved = project_paths.resolve(path)
+  if not resolved or resolved.flags.browsable == false then return false end
   return self:queue_filesystem_sync(path, reason or "notification")
 end
 
@@ -1256,6 +1263,7 @@ function FileTreeView:sync_meta()
 end
 
 function FileTreeView:remember_original(item)
+  if item.project_path_separator or item.project_path_readonly then return end
   self.known_originals[path_key(item.abs)] = {
     abs = item.abs,
     type = item.type,
@@ -1284,6 +1292,17 @@ function FileTreeView:add_reveal_paths(expanded, paths)
       while dir and not common.path_equals(dir, self.current_dir) and in_project(dir, self.current_dir) do
         expanded[dir] = true
         dir = parent_dir(dir)
+      end
+    elseif target then
+      local resolved = project_paths.resolve(target)
+      local entry = resolved and resolved.entry
+      if entry and entry.role ~= "root" and resolved.flags.browsable ~= false then
+        expanded[entry.path] = true
+        local dir = parent_dir(target)
+        while dir and not common.path_equals(dir, entry.path) and in_project(dir, entry.path) do
+          expanded[dir] = true
+          dir = parent_dir(dir)
+        end
       end
     end
   end
@@ -1412,6 +1431,80 @@ function FileTreeView:remap_selection_paths(snapshot, path_map)
   return remapped
 end
 
+local PROJECT_PATH_SECTION_LABELS = {
+  vendored = "──────────────── Vendored Project Directories",
+  external = "──────────────── External Project Directories",
+}
+
+local function project_path_role_for_abs(abs)
+  local display = project_paths.display_path(abs, { kind = "filetree" })
+  local flags = display and display.flags
+  if flags and flags.excluded_entry then return "excluded", display end
+  return display and display.root_role, display
+end
+
+local function project_path_section_item(role)
+  return {
+    name = PROJECT_PATH_SECTION_LABELS[role] or ("──────────────── " .. tostring(role)),
+    sort_name = "",
+    abs = "",
+    type = "section",
+    display = (PROJECT_PATH_SECTION_LABELS[role] or tostring(role)) .. "\n",
+    project_path_role = role,
+    project_path_separator = true,
+    project_path_readonly = true,
+  }
+end
+
+local function project_path_root_item(entry)
+  local info = system.get_file_info(entry.path)
+  local missing = not (info and info.type == "dir")
+  return {
+    name = entry.label,
+    sort_name = (entry.label or ""):lower(),
+    abs = entry.path,
+    type = "dir",
+    size = info and info.size,
+    modified = info and info.modified,
+    display = entry.label .. "/" .. "\n",
+    project_path_role = entry.role,
+    project_path_label = entry.label,
+    project_path_id = entry.id,
+    project_path_root = true,
+    project_path_missing = missing,
+    project_path_readonly = true,
+    project_path_display = entry.label .. "/",
+  }
+end
+
+function FileTreeView:append_project_path_sections(out)
+  local entries_by_role = { vendored = {}, external = {} }
+  for _, entry in ipairs(project_paths.entries({ include_root = false })) do
+    if entries_by_role[entry.role] then
+      entries_by_role[entry.role][#entries_by_role[entry.role] + 1] = entry
+    end
+  end
+
+  for _, role in ipairs({ "vendored", "external" }) do
+    local entries = entries_by_role[role]
+    if #entries > 0 then
+      if #out > 0 then
+        out[#out + 1] = "\n"
+        self.line_meta[#out] = NO_META
+      end
+      local section = project_path_section_item(role)
+      out[#out + 1] = section.display
+      self.line_meta[#out] = make_meta(section)
+      table.sort(entries, function(a, b) return (a.label or "") < (b.label or "") end)
+      for _, entry in ipairs(entries) do
+        local item = project_path_root_item(entry)
+        out[#out + 1] = item.display
+        self.line_meta[#out] = make_meta(item)
+      end
+    end
+  end
+end
+
 function FileTreeView:refresh_preserving_selection_paths(preserve_expansion, reveal_paths, path_map, selection_paths)
   selection_paths = selection_paths or self:capture_selection_paths()
   self:refresh(false, preserve_expansion, reveal_paths)
@@ -1437,11 +1530,17 @@ function FileTreeView:refresh(keep_selection, preserve_expansion, reveal_paths)
 
   local out = {}
   for i, item in ipairs(self.original_entries) do
+    local role, display = project_path_role_for_abs(item.abs)
+    item.project_path_role = role
+    item.project_path_label = display and display.root_label
+    item.project_path_id = display and display.root_id
+    item.project_path_readonly = false
     self.original_by_name[item.name] = i
     self:remember_original(item)
     out[#out + 1] = item.display .. "\n"
     self.line_meta[i] = make_meta(item)
   end
+  self:append_project_path_sections(out)
   set_doc_lines(self.doc, out)
   for i = #out + 1, #self.doc.lines do self.line_meta[i] = NO_META end
   self.rendered_dir = self.current_dir
@@ -1715,6 +1814,10 @@ function FileTreeView:line_is_dir(line)
   local stats = perf_stats()
   local start = perf_call(stats, "filetree_line_is_dir_calls")
   local meta = self.line_meta[line]
+  if type(meta) == "table" and meta.project_path_separator then
+    perf_finish(stats, "filetree_line_is_dir_ms", start)
+    return false
+  end
   local parsed = self:parse_line(line)
   local result = (parsed and parsed.wants_dir) or (type(meta) == "table" and meta.original_type == "dir")
   perf_finish(stats, "filetree_line_is_dir_ms", start)
@@ -1953,6 +2056,17 @@ function FileTreeView:draw_line_body(line, x, y)
   return result
 end
 
+function FileTreeView:project_path_line_color(line)
+  local meta = self.line_meta[line]
+  if type(meta) ~= "table" then return nil end
+  if meta.project_path_missing then return style.project_path_missing end
+  if meta.project_path_separator then return style.project_path_separator end
+  if meta.project_path_role == "external" then return style.project_path_external end
+  if meta.project_path_role == "vendored" then return style.project_path_vendored end
+  if meta.project_path_role == "excluded" then return style.project_path_excluded end
+  return nil
+end
+
 function FileTreeView:draw_line_text(line, x, y)
   local stats = perf_stats()
   local start = perf_call(stats, "filetree_draw_line_text_calls")
@@ -1960,6 +2074,16 @@ function FileTreeView:draw_line_text(line, x, y)
   local git = self:get_git_info_for_line(line)
   perf_finish(stats, "filetree_draw_line_text_git_ms", git_start)
   local text = line_text(self.doc:get_utf8_line(line))
+  local project_path_color = self:project_path_line_color(line)
+  if project_path_color then
+    renderer.draw_text(
+      self:get_font(), text, x, y + self:get_line_text_y_offset(), project_path_color,
+      { tab_offset = 0 }
+    )
+    perf_add(stats, "filetree_draw_line_text_colored_calls", 1)
+    perf_finish(stats, "filetree_draw_line_text_ms", start)
+    return self:get_line_height()
+  end
   if not filetree_render.draw_row_text(self, text, x, y, git and git.kind, self:line_is_dir(line)) then
     perf_add(stats, "filetree_draw_line_text_plain_calls", 1)
     local result = FileTreeView.super.draw_line_text(self, line, x, y)
@@ -2032,6 +2156,9 @@ function FileTreeView:build_entries(include_hidden)
   local stack = {}
 
   for _, row in ipairs(rows) do
+    local meta = type(row.meta) == "table" and row.meta or nil
+    if meta and meta.project_path_separator then goto continue end
+
     local parsed, err = parse_text(row.text)
     if err then
       errors[row.line] = err
@@ -2045,14 +2172,19 @@ function FileTreeView:build_entries(include_hidden)
       goto continue
     end
 
-    local abs = system.absolute_path(path_join(parent.abs, parsed.name))
-      or common.normalize_path(path_join(parent.abs, parsed.name))
-    if not in_project(abs, core.root_project().path) then
-      errors[row.line] = "path escapes project root"
+    local abs
+    if meta and meta.project_path_root and meta.original_abs then
+      abs = meta.original_abs
+    else
+      abs = system.absolute_path(path_join(parent.abs, parsed.name))
+        or common.normalize_path(path_join(parent.abs, parsed.name))
+    end
+    local resolved = project_paths.resolve(abs)
+    if not (resolved and resolved.flags.browsable ~= false) then
+      errors[row.line] = "path escapes Project Paths"
       goto continue
     end
 
-    local meta = type(row.meta) == "table" and row.meta or nil
     local entry_type = parsed.wants_dir and "dir" or "file"
     if meta and meta.original_type and meta.original_type ~= entry_type then
       errors[row.line] = "changing file/folder type is not supported"
@@ -2074,6 +2206,10 @@ function FileTreeView:build_entries(include_hidden)
       cached_info = cached_info_from_meta(meta, abs, entry_type),
       draft = row.draft,
       draft_index = row.draft_index,
+      readonly = (meta and meta.project_path_readonly) or parent.readonly or false,
+      project_path_role = meta and meta.project_path_role or parent.project_path_role,
+      project_path_root = meta and meta.project_path_root or false,
+      project_path_missing = meta and meta.project_path_missing or false,
     }
     entries[#entries + 1] = entry
 
@@ -2111,6 +2247,20 @@ function FileTreeView:plan_changes(status_only)
   end
 
   for line, err in pairs(errors) do mark_invalid(line, err) end
+
+  local mutable_entries = {}
+  for _, e in ipairs(entries) do
+    if e.readonly then
+      if not e.original_abs
+          or not common.path_equals(e.abs, e.original_abs)
+          or e.original_type ~= e.type then
+        mark_invalid(e, "Project Path Role sections are browse/open-only")
+      end
+    else
+      mutable_entries[#mutable_entries + 1] = e
+    end
+  end
+  entries = mutable_entries
 
   local by_abs = {}
   for _, e in ipairs(entries) do
@@ -2493,9 +2643,14 @@ function FileTreeView:entry_for_line(line)
   return nil
 end
 
-function FileTreeView:read_folder_lines(abs, indent)
+function FileTreeView:read_folder_lines(abs, indent, parent_entry)
   local lines, metas = {}, {}
   for _, item in ipairs(sorted_dir(abs, filetree_config.show_hidden)) do
+    local role, display = project_path_role_for_abs(item.abs)
+    item.project_path_role = role or (parent_entry and parent_entry.project_path_role)
+    item.project_path_label = display and display.root_label
+    item.project_path_id = display and display.root_id
+    item.project_path_readonly = parent_entry and parent_entry.readonly or false
     self:remember_original(item)
     lines[#lines + 1] = indent_prefix(indent) .. item.display .. "\n"
     metas[#metas + 1] = make_meta(item)
@@ -2593,7 +2748,7 @@ function FileTreeView:expand_folder(line, entry, auto_single, seen)
     end
     meta.draft = nil
   else
-    lines, metas = self:read_folder_lines(entry.abs, child_indent)
+    lines, metas = self:read_folder_lines(entry.abs, child_indent, entry)
   end
   meta.expanded = true
   self:doc_splice(line + 1, 0, lines, metas)
@@ -3082,11 +3237,12 @@ end
 local function focus_file(filename)
   filename = filename and common.normalize_path(filename)
   local root = core.root_project and core.root_project()
-  if not filename or not root or not in_project(filename, root.path) then return end
+  local resolved = filename and project_paths.resolve(filename)
+  if not filename or not root or not resolved or resolved.flags.browsable == false then return end
 
   sidepanel.show("filetree", { focus = false })
   local refreshed = false
-  if not in_project(filename, view.current_dir) then
+  if resolved.entry.role == "root" and not in_project(filename, view.current_dir) then
     view.current_dir = root.path
   end
   if view.rendered_dir ~= view.current_dir and not common.path_equals(view.rendered_dir, view.current_dir) then
