@@ -2203,6 +2203,14 @@ function DocView:get_visual_row_at_y(y)
   return common.clamp(lo, 1, cache.row_count)
 end
 
+local function overscan_metric_rows(cache, first, last, total)
+  if cache then
+    first = math.max(1, first - 1)
+    last = math.min(total, last + 1)
+  end
+  return first, last
+end
+
 function DocView:iter_visible_visual_rows()
   local _, y1, _, y2 = self:get_content_bounds()
   local total = self:get_scrollable_line_count()
@@ -2216,7 +2224,9 @@ function DocView:iter_visible_visual_rows()
     row = math.max(1, math.floor((y1 - style.padding.y) / lh) + 1)
     last = math.min(total, math.floor((y2 - style.padding.y) / lh) + 1)
   end
-  last = math.min(total, last)
+  row = common.clamp(row, 1, total)
+  last = common.clamp(last, 1, total)
+  row, last = overscan_metric_rows(cache, row, last, total)
   local x, base_y = self:get_content_offset()
   return function()
     if row > last then return nil end
@@ -2531,6 +2541,7 @@ function DocView:get_visible_line_range()
     local maxidx = cache and self:get_visual_row_at_y(math.max(0, y2 - style.padding.y)) or math.min(total, math.floor((y2 - style.padding.y) / lh) + 1)
     minidx = common.clamp(minidx, 1, total)
     maxidx = common.clamp(maxidx, 1, total)
+    minidx, maxidx = overscan_metric_rows(cache, minidx, maxidx, total)
     local first = self:get_visual_row_entry(minidx)
     local last = self:get_visual_row_entry(maxidx)
     return first and first.line or 1, last and (last.fold and last.fold.line2 or last.line) or #self.doc.lines
@@ -2539,13 +2550,19 @@ function DocView:get_visible_line_range()
     local total = linewrapping.get_total_wrapped_lines(self)
     local minidx = cache and self:get_visual_row_at_y(math.max(0, y - style.padding.y)) or math.max(1, math.floor((y - style.padding.y) / lh) + 1)
     local maxidx = cache and self:get_visual_row_at_y(math.max(0, y2 - style.padding.y)) or math.min(total, math.floor((y2 - style.padding.y) / lh) + 1)
-    local minline = linewrapping.get_idx_line_col(self, common.clamp(minidx, 1, total))
-    local maxline = linewrapping.get_idx_line_col(self, common.clamp(maxidx, 1, total))
+    minidx = common.clamp(minidx, 1, total)
+    maxidx = common.clamp(maxidx, 1, total)
+    minidx, maxidx = overscan_metric_rows(cache, minidx, maxidx, total)
+    local minline = linewrapping.get_idx_line_col(self, minidx)
+    local maxline = linewrapping.get_idx_line_col(self, maxidx)
     return minline, maxline
   end
   local minline = cache and self:get_visual_row_at_y(math.max(0, y - style.padding.y)) or math.max(1, math.floor((y - style.padding.y) / lh) + 1)
   local maxline = cache and self:get_visual_row_at_y(math.max(0, y2 - style.padding.y)) or math.min(#self.doc.lines, math.floor((y2 - style.padding.y) / lh) + 1)
-  return common.clamp(minline, 1, #self.doc.lines), common.clamp(maxline, 1, #self.doc.lines)
+  minline = common.clamp(minline, 1, #self.doc.lines)
+  maxline = common.clamp(maxline, 1, #self.doc.lines)
+  minline, maxline = overscan_metric_rows(cache, minline, maxline, #self.doc.lines)
+  return minline, maxline
 end
 
 
@@ -4897,6 +4914,7 @@ function DocView:draw_wrapped()
   local maxidx = cache and self:get_visual_row_at_y(math.max(0, y2 - style.padding.y)) or math.min(total, math.floor((y2 - style.padding.y) / lh) + 1)
   minidx = common.clamp(minidx, 1, total)
   maxidx = common.clamp(maxidx, 1, total)
+  minidx, maxidx = overscan_metric_rows(cache, minidx, maxidx, total)
   if maxidx < minidx then
     self:draw_scrollbar()
     return

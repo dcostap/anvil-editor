@@ -250,6 +250,32 @@ test.describe("Markdown Live Editor", function()
     test.equal(drawn, 2)
   end)
 
+  test.it("keeps image rows in the draw range when the source text is just off-screen", function()
+    local image_path = USERDIR .. PATHSEP .. "markdown-live-cull-image-" .. system.get_process_id() .. ".png"
+    local fp = io.open(image_path, "wb")
+    test.not_nil(fp)
+    fp:write("png")
+    fp:close()
+    local image_url = common.basename and common.basename(image_path) or image_path:match("[^" .. PATHSEP .. "]+$")
+    local view, doc = make_view("![[" .. image_url .. "]]\nnext", USERDIR .. PATHSEP .. "note.md")
+    doc:set_selection(2, 1)
+    local old_load_image = canvas.load_image
+    canvas.load_image = function()
+      return {
+        get_size = function() return 80, 80 end,
+        scaled = function(self) return self end,
+      }
+    end
+
+    markdown.live_render.refresh_view(view)
+    view.scroll.y = view:get_visual_row_height(1) + style.padding.y + 1
+    local minline = view:get_visible_line_range()
+    test.equal(minline, 1)
+
+    canvas.load_image = old_load_image
+    os.remove(image_path)
+  end)
+
   test.it("renders wikilink image embeds from Obsidian attachmentFolderPath", function()
     local root = USERDIR .. PATHSEP .. "markdown-live-attachments-" .. system.get_process_id()
     local obsidian = root .. PATHSEP .. ".obsidian"
