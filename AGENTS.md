@@ -152,6 +152,31 @@ Anvil has a first-party Lua runtime test framework in `data/core/test.lua`. Test
 
 Never test exact keyboard shortcuts or keymap bindings. Shortcuts are user-configurable workflow choices and may change freely. Test commands and behavior instead, usually by invoking `command.perform(...)` or direct view/model methods.
 
+#### Test quality bar
+
+Tests should verify observable behavior through stable public seams, not implementation details. Prefer seams such as commands, public Document/View/model methods, UI event handlers, parser/indexer APIs, fixture-backed integration boundaries, and Meson test targets. A test should keep passing across an internal refactor when the user-visible or caller-visible behavior is unchanged.
+
+Before adding a non-trivial test, identify the seam being tested. If the right seam is unclear, clarify it instead of defaulting to private state or helper-level assertions.
+
+Good Anvil tests usually:
+
+- describe the behavior in the test name, not the implementation mechanism
+- drive behavior through public APIs such as `command.perform(...)`, `core.on_event(...)`, public view/model methods, or widget/event handlers
+- assert observable results such as document text, selections, focus, command status, layout/render model state, persisted data, diagnostics, emitted results, or return values
+- use independent expected values: literals, worked examples, fixtures, or documented behavior
+- cover one meaningful behavior per test, with enough assertions to prove that behavior without checking unrelated details
+
+Avoid tests that:
+
+- assert internal helper calls, call counts, or incidental ordering
+- mock internal collaborators when a real Document/View/model can be used
+- duplicate the implementation algorithm to compute the expected value
+- inspect private fields when a public behavior/state assertion is available
+- lock in cosmetic constants or tweakable preferences without testing a durable rule
+- add broad speculative coverage for behavior that is not part of the current change
+
+Use fakes/mocks mainly at true external or nondeterministic boundaries: filesystem temp roots, LSP transports/servers, processes, network/http, timers/threads, renderer/window boundaries, and platform integrations.
+
 #### What to test and what not to test
 
 Prefer tests for stable user-facing behavior and bug-prone logic:
@@ -177,11 +202,11 @@ A test should generally fail when there is a bug, not merely because a preferenc
 
 #### Bugfix regression tests
 
-For user-reported bugs and behavior discrepancies, use a red-green regression workflow by default:
+For user-reported bugs, behavior discrepancies, and non-trivial feature changes, use a red-green regression workflow by default. Work in vertical slices: one chosen seam, one targeted failing test, the smallest implementation needed to pass it, then repeat if more behavior is needed. Do not write a broad speculative suite up front for imagined behavior.
 
-1. Add or identify a targeted test/repro that demonstrates the bug.
+1. Add or identify a targeted test/repro that demonstrates the missing or broken behavior.
 2. Run it before changing the implementation and confirm it fails for the expected reason.
-3. Apply the smallest appropriate fix.
+3. Apply the smallest appropriate fix or feature slice.
 4. Re-run the same targeted test and confirm it passes.
 5. Run the relevant broader suite when appropriate.
 
