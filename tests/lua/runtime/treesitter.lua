@@ -790,6 +790,93 @@ fun make%d(): DebouncedThing%d = DebouncedThing%d()
     common.rm(root, true)
   end)
 
+  test.it("Tree-sitter Project indexing shards file batches across scheduler jobs", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-sharded-index-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    for i = 1, 6 do
+      write_file(root .. PATHSEP .. string.format("Model%d.kt", i), string.format([[package demo
+
+class ShardedThing%d
+
+fun make%d(): ShardedThing%d = ShardedThing%d()
+]], i, i, i, i))
+    end
+
+    local index = symbol_index.status(root)
+    index.project_usage_cap = 4
+    symbol_index.ensure_scan(root, {
+      force = true,
+      refresh_after_seconds = 0,
+      batch_files = 1,
+      max_running_index_shards = 2,
+      shard_usage_budget = 2,
+    })
+    local status = wait_index_ready(root)
+    test.equal(status.status, "ready")
+    test.equal(status.symbol_status, "ready")
+    test.equal(status.usage_status, "ready")
+
+    local symbols, reason, symbol_status = symbol_index.workspace_symbols("ShardedThing", {
+      root = root,
+      limit = 20,
+      refresh_after_seconds = 0,
+    })
+    test.equal(symbol_status, "fresh", reason)
+    for i = 1, 6 do
+      test.ok(find_symbol(symbols, "ShardedThing" .. i, "class"), "missing ShardedThing" .. tostring(i))
+    end
+
+    local phases = status.diagnostics and status.diagnostics.phases or {}
+    test.ok(((phases.symbols and phases.symbols.worker and phases.symbols.worker.coordinator_jobs) or 0) >= 1, common.serialize(phases.symbols))
+    test.ok(((phases.symbols and phases.symbols.worker and phases.symbols.worker.shard_jobs) or 0) >= 6, common.serialize(phases.symbols))
+    test.equal(phases.symbols.worker.files_scanned, 6)
+    test.ok(((phases.usages and phases.usages.worker and phases.usages.worker.shard_jobs) or 0) >= 6, common.serialize(phases.usages))
+    test.equal(phases.usages.worker.files_scanned, 6)
+    test.ok((status.usage_count or 0) <= 4, "usage cap exceeded: " .. tostring(status.usage_count))
+    test.ok(status.usage_truncated)
+    common.rm(root, true)
+  end)
+
+  test.it("Tree-sitter Project sharded usage budgets return unused reservations to later batches", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-shard-budget-return-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    for i = 1, 4 do
+      write_file(root .. PATHSEP .. string.format("Model%d.kt", i), string.format([[package demo
+
+class BudgetReturnThing%d
+
+fun make%d(): BudgetReturnThing%d = BudgetReturnThing%d()
+]], i, i, i, i))
+    end
+
+    local index = symbol_index.status(root)
+    index.project_usage_cap = 200
+    symbol_index.ensure_scan(root, {
+      force = true,
+      refresh_after_seconds = 0,
+      batch_files = 1,
+      max_running_index_shards = 1,
+      shard_usage_budget = 80,
+    })
+    local status = wait_index_ready(root)
+    test.equal(status.status, "ready")
+
+    local refs, reason, usage_status = symbol_index.workspace_usages("BudgetReturnThing4", {
+      root = root,
+      include_declaration = false,
+      limit = 20,
+      refresh_after_seconds = 0,
+    })
+    test.equal(usage_status, "fresh", reason)
+    test.equal(#refs, 2)
+    test.not_ok(symbol_index.status(root).usage_truncated)
+    common.rm(root, true)
+  end)
+
   test.it("Tree-sitter Project chunk adoption caches per-file Project path metadata", function()
     symbol_index.reset_for_tests()
     local root = USERDIR .. PATHSEP .. "treesitter-metadata-cache-"

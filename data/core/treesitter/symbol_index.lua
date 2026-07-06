@@ -7,6 +7,7 @@ local DirWatch = require "core.dirwatch"
 local registry = require "core.treesitter.registry"
 local outline = require "core.treesitter.outline"
 local worker_pool = require "core.worker_pool"
+local IndexScheduler = require "core.treesitter.index_scheduler"
 
 local symbol_index = {}
 
@@ -24,6 +25,9 @@ local DEFAULT_QUERY_TIMEOUT_MS = 20
 local DEFAULT_PROJECT_USAGE_CAP = 750000
 local DEFAULT_AGGREGATE_REBUILD_DELAY = 0.075
 local DEFAULT_WORKER_CHUNK_RECORDS = 100
+local DEFAULT_INDEX_BATCH_FILES = 64
+local DEFAULT_INDEX_BATCH_BYTES = 4 * 1024 * 1024
+local DEFAULT_SHARD_USAGE_BUDGET = 8192
 local MAX_FILE_BYTES = 2 * 1024 * 1024
 
 local native_ok, native = nil, nil
@@ -137,6 +141,7 @@ local function new_index(root)
     started_at = nil,
     finished_at = nil,
     worker_handle = nil,
+    worker_run = nil,
     worker_seen_paths = nil,
     project_paths_generation = nil,
     overlay_generation = 0,
@@ -1087,13 +1092,365 @@ local function finish_worker_scan(index, message, status)
   end
 end
 
-local function submit_worker_scan(index, generation, opts, phase)
-  opts = opts or {}
-  phase = phase or "symbols"
+local submit_worker_scan
+
+local function cancel_index_work(index)
+  if not index then return false end
+  local cancelled = false
   if index.worker_handle then
-    worker_pool.system():cancel(index.worker_handle)
+    cancelled = worker_pool.system():cancel(index.worker_handle) or cancelled
     index.worker_handle = nil
   end
+  if index.worker_run and index.worker_run.scheduler then
+    cancelled = (index.worker_run.scheduler:cancel_all() > 0) or cancelled
+  end
+  index.worker_run = nil
+  return cancelled
+end
+
+local function add_worker_diagnostics(index, phase, diagnostics, role)
+  if not diagnostics then return end
+  index.diagnostics = index.diagnostics or { ui = {}, phases = {} }
+  index.diagnostics.phases = index.diagnostics.phases or {}
+  local phase_entry = index.diagnostics.phases[phase] or { worker = {}, ui = {} }
+  local worker = phase_entry.worker or {}
+  worker.worker_jobs = (worker.worker_jobs or 0) + 1
+  if role == "coordinator" then
+    worker.coordinator_jobs = (worker.coordinator_jobs or 0) + 1
+  elseif role == "sharded" then
+    worker.shard_jobs = (worker.shard_jobs or 0) + 1
+  end
+
+  for key, value in pairs(diagnostics) do
+    if type(value) == "number" then
+      if tostring(key):match("_max$") or key == "files_scanned" then
+        worker[key] = math.max(worker[key] or 0, value)
+      elseif key ~= "worker_id" and key ~= "job_id" then
+        worker[key] = (worker[key] or 0) + value
+      end
+    elseif key == "roots" and type(value) == "table" then
+      worker.roots = worker.roots or {}
+      for _, root in ipairs(value) do worker.roots[#worker.roots + 1] = root end
+    elseif worker[key] == nil and key ~= "worker_id" and key ~= "job_id" then
+      worker[key] = value
+    end
+  end
+
+  worker.phase = phase
+  worker.worker_id = role or worker.worker_id or "sharded"
+  worker.job_id = role or worker.job_id or "sharded"
+  phase_entry.worker = worker
+  phase_entry.ui = common.merge({}, index.diagnostics.ui or {})
+  index.diagnostics.phases[phase] = phase_entry
+  index.diagnostics.worker = worker
+end
+
+local function current_run_message(index, run, message)
+  return run
+     and index.worker_run == run
+     and current_worker_message(index, message)
+     and message.phase == run.phase
+end
+
+local function complete_symbol_phase(index, generation, opts, message)
+  if not current_worker_message(index, message) then return end
+  local prune_started = now()
+  prune_worker_unseen(index)
+  local prune_ms = elapsed_ms(prune_started)
+  add_ui_metric(index, "symbols_final_prune_ms", prune_ms)
+  max_ui_metric(index, "symbols_final_prune_max_ms", prune_ms)
+  add_worker_pool_frame_metric("treesitter_project_symbols_final_prune_ms", prune_ms)
+  if index.aggregate_dirty then
+    inc_ui_metric(index, "symbols_final_aggregate_rebuilds_deferred", 1)
+    inc_worker_pool_frame_metric("treesitter_project_symbols_final_aggregate_deferred", 1)
+  end
+  index.symbol_status = "ready"
+  index.usage_status = "indexing"
+  index.worker_handle = nil
+  index.worker_run = nil
+  index.worker_seen_paths = nil
+  core.redraw = true
+  core.add_thread(function()
+    safe_yield(0)
+    if index.generation == generation and index.status == "indexing" and index.usage_status == "indexing" then
+      submit_worker_scan(index, generation, common.merge(opts, { reason = "usages" }), "usages")
+    end
+  end)
+end
+
+local function finish_sharded_phase(index, run, status, message)
+  if not current_run_message(index, run, message) then return end
+  run.terminal = true
+  index.worker_run = nil
+  if status == "ready" and run.phase == "symbols" then
+    complete_symbol_phase(index, run.generation, run.opts or {}, message)
+  else
+    finish_worker_scan(index, message, status)
+  end
+end
+
+local function maybe_finish_sharded_phase(index, run, message)
+  if not current_run_message(index, run, message) or run.terminal then return end
+  if not run.coordinator_done then return end
+  if run.pending_batches and #run.pending_batches > 0 then return end
+  if run.completed_shards + run.failed_shards + run.cancelled_shards < run.total_shards then return end
+  if run.failed_shards > 0 then
+    finish_sharded_phase(index, run, "failed", message)
+  elseif run.cancelled_shards > 0 or run.cancelled then
+    finish_sharded_phase(index, run, "cancelled", message)
+  else
+    finish_sharded_phase(index, run, "ready", message)
+  end
+end
+
+local function make_index_payload(index, opts, phase)
+  opts = opts or {}
+  return {
+    roots = { { path = index.root } },
+    excluded = project_index_exclusions_payload(),
+    ignore_files = config.ignore_files,
+    languages = project_index_languages_payload(),
+    include_usages = phase ~= "symbols",
+    project_usage_cap = index.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP,
+    max_file_bytes = MAX_FILE_BYTES,
+    chunk_files = opts.chunk_files or 8,
+    chunk_records = opts.chunk_records or DEFAULT_WORKER_CHUNK_RECORDS,
+    max_usage_captures_per_file = opts.max_usage_captures_per_file or DEFAULT_MAX_CAPTURES,
+  }
+end
+
+local function submit_sharded_scan(index, generation, opts, phase)
+  opts = opts or {}
+  phase = phase or "symbols"
+  cancel_index_work(index)
+  index.status = "indexing"
+  if phase == "symbols" then
+    index.symbol_status = "indexing"
+    index.usage_status = "indexing"
+    index.started_at = system.get_time()
+    index.project_paths_generation = project_paths_module().generation()
+  else
+    index.symbol_status = "ready"
+    index.usage_status = "indexing"
+  end
+  index.reason = opts.reason
+  index.finished_at = nil
+  index.files_total = 0
+  index.files_scanned = 0
+  index.files_indexed = 0
+  index.worker_seen_paths = {}
+  local previous_phases = phase == "symbols" and {} or ((index.diagnostics and index.diagnostics.phases) or {})
+  index.diagnostics = {
+    ui = {},
+    phases = previous_phases,
+    phase = phase,
+    generation = generation,
+    project_paths_generation = index.project_paths_generation,
+    root = index.root,
+  }
+  if index.watcher then refresh_watches_for_dir(index, index.root) end
+
+  local scheduler = IndexScheduler.new({
+    pool = worker_pool.system(),
+    max_running = opts.max_running_index_shards,
+  })
+  local run = {
+    generation = generation,
+    project_paths_generation = index.project_paths_generation,
+    phase = phase,
+    opts = opts,
+    scheduler = scheduler,
+    total_shards = 0,
+    completed_shards = 0,
+    failed_shards = 0,
+    cancelled_shards = 0,
+    coordinator_done = false,
+    pending_batches = {},
+    shard_budgets = {},
+    usage_budget_remaining = index.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP,
+    usage_truncated = false,
+  }
+  index.worker_run = run
+  index.worker_handle = nil
+
+  local base_payload = make_index_payload(index, opts, phase)
+  local pump_shards
+  local function defer_pump(message)
+    core.add_thread(function()
+      safe_yield(0)
+      if current_run_message(index, run, message) and not run.terminal then
+        pump_shards()
+        maybe_finish_sharded_phase(index, run, message)
+      end
+    end)
+  end
+
+  local function submit_shard(batch)
+    if run.terminal or run.cancelled then return end
+    run.total_shards = run.total_shards + 1
+    local shard_id = run.total_shards
+    local include_usages = phase ~= "symbols"
+    local shard_budget = 0
+    if include_usages then
+      local default_shard_budget = math.max(DEFAULT_SHARD_USAGE_BUDGET, (tonumber(opts.batch_files or DEFAULT_INDEX_BATCH_FILES) or DEFAULT_INDEX_BATCH_FILES) * 256)
+      local per_shard_cap = tonumber(opts.shard_usage_budget or default_shard_budget) or default_shard_budget
+      shard_budget = math.max(0, math.min(run.usage_budget_remaining or 0, per_shard_cap))
+      run.usage_budget_remaining = math.max(0, (run.usage_budget_remaining or 0) - shard_budget)
+      run.shard_budgets[shard_id] = shard_budget
+    end
+    local payload = common.merge(base_payload, {
+      root = batch.root or index.root,
+      files = batch.files or {},
+      include_usages = include_usages,
+      project_usage_cap = include_usages and shard_budget or 0,
+      shard_id = shard_id,
+    })
+    local handle
+    handle = scheduler:submit({
+      kind = "treesitter_project_index",
+      priority = "background",
+      generation = generation,
+      project_paths_generation = index.project_paths_generation,
+      phase = phase,
+      payload = payload,
+      is_stale = function(message)
+        return not current_run_message(index, run, message)
+      end,
+      on_progress = function(message)
+        if not current_run_message(index, run, message) then return end
+        local p = message.payload or {}
+        index.files_scanned = math.max(index.files_scanned or 0, (run.coordinator_files_scanned or 0))
+        index.files_indexed = (run.accepted_files_indexed or 0) + (p.files_indexed or 0)
+        core.redraw = true
+      end,
+      on_result = function(message)
+        if not current_run_message(index, run, message) then return end
+        if message.type == "chunk" then
+          apply_worker_chunk(index, message)
+        elseif message.type == "final" then
+          local p = message.payload or {}
+          run.accepted_files_indexed = (run.accepted_files_indexed or 0) + (p.files_indexed or 0)
+          run.accepted_files_scanned = (run.accepted_files_scanned or 0) + (p.files_scanned or 0)
+          index.files_indexed = run.accepted_files_indexed
+          index.files_total = run.accepted_files_indexed
+          if phase ~= "symbols" then
+            local reserved = run.shard_budgets[shard_id] or 0
+            local used = math.max(0, tonumber(p.usage_budget_used or p.usage_count or 0) or 0)
+            if used < reserved then
+              run.usage_budget_remaining = (run.usage_budget_remaining or 0) + (reserved - used)
+              run.shard_budgets[shard_id] = used
+            end
+            run.usage_truncated = run.usage_truncated or (p.usage_truncated and true or false)
+            index.usage_truncated = run.usage_truncated
+            index.usage_truncated_reason = run.usage_truncated and "project-usage-cap" or nil
+          end
+          add_worker_diagnostics(index, phase, p.diagnostics, "sharded")
+        end
+      end,
+      on_error = function(message)
+        if not current_run_message(index, run, message) then return end
+        run.failed_shards = run.failed_shards + 1
+        scheduler:cancel_all()
+        finish_sharded_phase(index, run, "failed", message)
+      end,
+      on_cancelled = function(message)
+        if not current_run_message(index, run, message) then return end
+        run.cancelled_shards = run.cancelled_shards + 1
+        if phase ~= "symbols" and message.payload and message.payload.before_start then
+          local reserved = run.shard_budgets[shard_id] or 0
+          run.usage_budget_remaining = (run.usage_budget_remaining or 0) + reserved
+          run.shard_budgets[shard_id] = 0
+        end
+        defer_pump(message)
+        maybe_finish_sharded_phase(index, run, message)
+      end,
+      on_complete = function(message)
+        if not current_run_message(index, run, message) then return end
+        run.completed_shards = run.completed_shards + 1
+        defer_pump(message)
+        maybe_finish_sharded_phase(index, run, message)
+      end,
+    })
+    return handle
+  end
+
+  pump_shards = function()
+    while not run.terminal
+      and #run.pending_batches > 0
+      and scheduler:outstanding_count() < scheduler.max_running
+    do
+      submit_shard(table.remove(run.pending_batches, 1))
+    end
+  end
+
+  scheduler:submit({
+    kind = "treesitter_project_index",
+    priority = "background",
+    generation = generation,
+    project_paths_generation = index.project_paths_generation,
+    phase = phase,
+    payload = common.merge(base_payload, {
+      mode = "walk",
+      batch_files = opts.batch_files or DEFAULT_INDEX_BATCH_FILES,
+      batch_bytes = opts.batch_bytes or DEFAULT_INDEX_BATCH_BYTES,
+      include_usages = false,
+    }),
+    is_stale = function(message)
+      return not current_run_message(index, run, message)
+    end,
+    on_progress = function(message)
+      if not current_run_message(index, run, message) then return end
+      local p = message.payload or {}
+      run.coordinator_files_scanned = p.files_scanned or run.coordinator_files_scanned or 0
+      index.files_scanned = p.files_scanned or index.files_scanned
+      core.redraw = true
+    end,
+    on_result = function(message)
+      if not current_run_message(index, run, message) then return end
+      if message.type == "chunk" then
+        local p = message.payload or {}
+        for _, batch in ipairs(p.batches or {}) do run.pending_batches[#run.pending_batches + 1] = batch end
+        pump_shards()
+      elseif message.type == "final" then
+        local p = message.payload or {}
+        run.coordinator_files_scanned = p.files_scanned or run.coordinator_files_scanned or 0
+        index.files_scanned = p.files_scanned or index.files_scanned
+        add_worker_diagnostics(index, phase, p.diagnostics, "coordinator")
+      end
+    end,
+    on_error = function(message)
+      if not current_run_message(index, run, message) then return end
+      run.failed_shards = run.failed_shards + 1
+      scheduler:cancel_all()
+      finish_sharded_phase(index, run, "failed", message)
+    end,
+    on_cancelled = function(message)
+      if not current_run_message(index, run, message) then return end
+      run.coordinator_done = true
+      run.cancelled_shards = run.cancelled_shards + 1
+      defer_pump(message)
+      maybe_finish_sharded_phase(index, run, message)
+    end,
+    on_complete = function(message)
+      if not current_run_message(index, run, message) then return end
+      run.coordinator_done = true
+      defer_pump(message)
+      maybe_finish_sharded_phase(index, run, message)
+    end,
+  })
+
+  log_quiet("Tree-sitter Project index: submitted sharded worker phase=%s generation=%d project_paths_generation=%d root=%s max_running=%d",
+    tostring(phase), generation, index.project_paths_generation, tostring(index.root), scheduler.max_running or 0)
+end
+
+submit_worker_scan = function(index, generation, opts, phase)
+  opts = opts or {}
+  phase = phase or "symbols"
+  if opts.sharded ~= false then
+    submit_sharded_scan(index, generation, opts, phase)
+    return
+  end
+  cancel_index_work(index)
   index.status = "indexing"
   if phase == "symbols" then
     index.symbol_status = "indexing"
@@ -1261,14 +1618,27 @@ local function project_path_roots(kind, opts)
   return roots
 end
 
+local function scan_options_from_query(opts)
+  opts = opts or {}
+  return {
+    force = opts.force,
+    refresh_after_seconds = opts.refresh_after_seconds,
+    sharded = opts.sharded,
+    batch_files = opts.batch_files,
+    batch_bytes = opts.batch_bytes,
+    max_running_index_shards = opts.max_running_index_shards,
+    shard_usage_budget = opts.shard_usage_budget,
+    chunk_files = opts.chunk_files,
+    chunk_records = opts.chunk_records,
+    max_usage_captures_per_file = opts.max_usage_captures_per_file,
+  }
+end
+
 function symbol_index.start_project_indexing(opts)
   opts = opts or {}
   local roots = project_path_roots("symbols", opts)
   for _, root in ipairs(roots) do
-    local index = symbol_index.ensure_scan(root, {
-      force = opts.force,
-      refresh_after_seconds = opts.refresh_after_seconds,
-    })
+    local index = symbol_index.ensure_scan(root, scan_options_from_query(opts))
     log_quiet("Tree-sitter Project index: scheduled %s indexing for %s status=%s", tostring(opts.reason or "project"), tostring(root), tostring(index.status))
   end
 end
@@ -1277,20 +1647,14 @@ function symbol_index.invalidate(root)
   if root then
     local normalized = normalize_root(root)
     local index = index_for_root(normalized)
-    if index.worker_handle then
-      worker_pool.system():cancel(index.worker_handle)
-      index.worker_handle = nil
-    end
+    cancel_index_work(index)
     index.status = "idle"
     index.symbol_status = "idle"
     index.usage_status = "idle"
     index.generation = index.generation + 1
   else
     for _, index in pairs(indexes) do
-      if index.worker_handle then
-        worker_pool.system():cancel(index.worker_handle)
-        index.worker_handle = nil
-      end
+      cancel_index_work(index)
       index.status = "idle"
       index.symbol_status = "idle"
       index.usage_status = "idle"
@@ -1501,10 +1865,7 @@ function symbol_index.workspace_symbols(query, opts)
   local has_more = false
 
   for _, root in ipairs(roots) do
-    local index = symbol_index.ensure_scan(root, {
-      force = opts.force,
-      refresh_after_seconds = opts.refresh_after_seconds,
-    })
+    local index = symbol_index.ensure_scan(root, scan_options_from_query(opts))
     local root_status = "pending"
     if index.symbol_status == "ready" then
       refresh_current_core_docs_for_index(index)
@@ -1575,10 +1936,7 @@ function symbol_index.workspace_usages(name, opts)
   local usage_truncated_reason
 
   for _, root in ipairs(roots) do
-    local index = symbol_index.ensure_scan(root, {
-      force = opts.force,
-      refresh_after_seconds = opts.refresh_after_seconds,
-    })
+    local index = symbol_index.ensure_scan(root, scan_options_from_query(opts))
     local root_status = "pending"
     if index.usage_status == "ready" then
       refresh_current_core_docs_for_index(index)
@@ -2085,10 +2443,7 @@ end
 
 function symbol_index.reset_for_tests()
   for _, index in pairs(indexes) do
-    if index.worker_handle then
-      worker_pool.system():cancel(index.worker_handle)
-      index.worker_handle = nil
-    end
+    cancel_index_work(index)
     index.generation = (index.generation or 0) + 1
     index.watch_generation = (index.watch_generation or 0) + 1
     index.watch_running = false

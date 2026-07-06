@@ -19,6 +19,8 @@ local DEFAULT_PROGRESS_INTERVAL = 0.25
 local DEFAULT_CHUNK_FILES = 16
 local DEFAULT_CHUNK_RECORDS = 5000
 local DEFAULT_PROJECT_USAGE_CAP = 750000
+local DEFAULT_BATCH_FILES = 64
+local DEFAULT_BATCH_BYTES = 4 * 1024 * 1024
 
 local function now()
   return system and system.get_time and system.get_time() or os.clock()
@@ -321,6 +323,49 @@ local function send_progress(ctx, state, payload, current, force)
   })
 end
 
+local function serializable_info(info)
+  if not info then return nil end
+  return {
+    type = info.type,
+    size = info.size,
+    modified = info.modified,
+  }
+end
+
+local function send_batch(ctx, payload, state, batch, force)
+  if not batch or #batch.files == 0 then return true end
+  local max_files = tonumber(payload.batch_files or DEFAULT_BATCH_FILES) or DEFAULT_BATCH_FILES
+  local max_bytes = tonumber(payload.batch_bytes or DEFAULT_BATCH_BYTES) or DEFAULT_BATCH_BYTES
+  if not force and #batch.files < max_files and batch.bytes < max_bytes then return true end
+
+  local out = {
+    root = batch.root,
+    files = batch.files,
+    diagnostics = {
+      files = #batch.files,
+      bytes = batch.bytes,
+    },
+  }
+  inc_metric(state.metrics, "batches_sent", 1)
+  max_metric(state.metrics, "batch_files_max", #batch.files)
+  max_metric(state.metrics, "batch_bytes_max", batch.bytes)
+  add_metric(state.metrics, "batch_files_total", #batch.files)
+  add_metric(state.metrics, "batch_bytes_total", batch.bytes)
+  batch.files = {}
+  batch.bytes = 0
+  return ctx.send({
+    type = "chunk",
+    payload = {
+      batches = { out },
+      diagnostics = {
+        batches = 1,
+        files = out.diagnostics.files,
+        bytes = out.diagnostics.bytes,
+      },
+    },
+  })
+end
+
 local function index_file(path, root_path, language, payload, info, usage_remaining, metrics)
   local max_bytes = payload.max_file_bytes or DEFAULT_MAX_FILE_BYTES
   local read_started = now()
@@ -459,6 +504,113 @@ local function walk(root, payload, ctx, state, chunk)
   return true
 end
 
+local function walk_batches(root, payload, ctx, state)
+  local root_path = normalize(root.path or root)
+  local stack = { root_path }
+  local batch = { root = root_path, files = {}, bytes = 0 }
+  local max_files = tonumber(payload.batch_files or DEFAULT_BATCH_FILES) or DEFAULT_BATCH_FILES
+  local max_bytes = tonumber(payload.batch_bytes or DEFAULT_BATCH_BYTES) or DEFAULT_BATCH_BYTES
+
+  local function add_to_batch(path, info, language)
+    local size = tonumber(info and info.size) or 0
+    if #batch.files > 0 and (#batch.files >= max_files or batch.bytes + size > max_bytes) then
+      local ok, err = send_batch(ctx, payload, state, batch, true)
+      if not ok then return nil, err end
+    end
+    batch.files[#batch.files + 1] = {
+      path = path,
+      root = root_path,
+      info = serializable_info(info),
+      language_id = language.id,
+    }
+    batch.bytes = batch.bytes + size
+    if size >= max_bytes then
+      local ok, err = send_batch(ctx, payload, state, batch, true)
+      if not ok then return nil, err end
+    else
+      local ok, err = send_batch(ctx, payload, state, batch, false)
+      if not ok then return nil, err end
+    end
+    return true
+  end
+
+  while #stack > 0 do
+    if ctx.cancelled() then return false, "cancelled" end
+    local dir = table.remove(stack)
+    inc_metric(state.metrics, "directories_walked", 1)
+    local list_started = now()
+    local entries = system.list_dir(dir) or {}
+    add_metric(state.metrics, "directory_walk_ms", elapsed_ms(list_started))
+    for _, name in ipairs(entries) do
+      if ctx.cancelled() then return false, "cancelled" end
+      local path = normalize(join_path(dir, name))
+      local info_started = now()
+      local info = system.get_file_info(path)
+      add_metric(state.metrics, "directory_walk_ms", elapsed_ms(info_started))
+      if info and info.type == "dir" then
+        if should_descend(path, info, payload) then stack[#stack + 1] = path end
+      elseif info and info.type == "file" and not excluded(path, payload.excluded) and not ignored_name(common.basename(path), payload.ignore_files) then
+        state.files_scanned = state.files_scanned + 1
+        inc_metric(state.metrics, "files_scanned", 1)
+        local language = match_language(path, payload.languages)
+        if language then
+          local ok, err = add_to_batch(path, info, language)
+          if not ok then return false, err end
+        else
+          state.files_skipped = state.files_skipped + 1
+          inc_metric(state.metrics, "files_skipped", 1)
+        end
+        send_progress(ctx, state, payload, path, false)
+      end
+    end
+  end
+  return send_batch(ctx, payload, state, batch, true)
+end
+
+local function language_for_file(file, path, languages)
+  if file.language then return file.language end
+  if file.language_id then
+    for _, language in ipairs(languages or {}) do
+      if language.id == file.language_id then return language end
+    end
+  end
+  return path and match_language(path, languages)
+end
+
+local function index_files(payload, ctx, state, chunk)
+  local root_path = normalize(payload.root or payload.root_path or ((payload.roots or {})[1] and ((payload.roots or {})[1].path or (payload.roots or {})[1])) or ".")
+  for _, file in ipairs(payload.files or {}) do
+    if ctx.cancelled() then return false, "cancelled" end
+    local path = file.path and normalize(file.path)
+    local language = language_for_file(file, path, payload.languages)
+    local file_root = normalize(file.root or root_path)
+    if path and language and not excluded(path, payload.excluded) and not ignored_name(common.basename(path), payload.ignore_files) then
+      state.files_scanned = state.files_scanned + 1
+      inc_metric(state.metrics, "files_scanned", 1)
+      local usage_cap = payload.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP
+      local usage_remaining = math.max(0, usage_cap - state.usage_count)
+      local file_result, err = index_file(path, file_root, language, payload, file.info, usage_remaining, state.metrics)
+      if file_result then
+        state.files_indexed = state.files_indexed + 1
+        inc_metric(state.metrics, "files_indexed", 1)
+        state.symbols_total = state.symbols_total + #(file_result.symbols or {})
+        inc_metric(state.metrics, "symbols_emitted", #(file_result.symbols or {}))
+        state.usage_count = state.usage_count + (file_result.usage_count or 0)
+        inc_metric(state.metrics, "usages_emitted", file_result.usage_count or 0)
+        if file_result.usage_complete == false then state.usage_truncated = true end
+        local ok, flush_err = push_file_bounded(ctx, payload, { path = file_root }, state, chunk, file_result)
+        if not ok then return false, flush_err end
+      else
+        state.files_skipped = state.files_skipped + 1
+        inc_metric(state.metrics, "files_skipped", 1)
+        if payload.log_skips then ctx.send({ type = "log", payload = { path = path, reason = err or "failed" } }) end
+      end
+      send_progress(ctx, state, payload, path, false)
+    end
+  end
+  return true
+end
+
 function worker.run(payload, ctx)
   local started = now()
   local state = {
@@ -476,26 +628,40 @@ function worker.run(payload, ctx)
     },
   }
   local chunk = {}
-  for _, root in ipairs(payload.roots or {}) do
-    local root_started = now()
-    local before_scanned = state.files_scanned
-    local before_indexed = state.files_indexed
-    local before_skipped = state.files_skipped
-    local ok, reason = walk(root, payload, ctx, state, chunk)
-    local root_metrics = {
-      root = root.path or root,
-      duration_ms = elapsed_ms(root_started),
-      files_scanned = state.files_scanned - before_scanned,
-      files_indexed = state.files_indexed - before_indexed,
-      files_skipped = state.files_skipped - before_skipped,
-    }
-    state.metrics.roots[#state.metrics.roots + 1] = root_metrics
-    add_metric(state.metrics, "root_scan_ms", root_metrics.duration_ms)
+  if payload.files then
+    local ok, reason = index_files(payload, ctx, state, chunk)
     if not ok then
       ctx.send({ type = "cancelled", payload = { reason = reason, files_scanned = state.files_scanned, diagnostics = state.metrics } })
       return
     end
-    flush_chunk(ctx, payload, root, state, chunk, true)
+    flush_chunk(ctx, payload, { path = payload.root or payload.root_path or "." }, state, chunk, true)
+  else
+    for _, root in ipairs(payload.roots or {}) do
+      local root_started = now()
+      local before_scanned = state.files_scanned
+      local before_indexed = state.files_indexed
+      local before_skipped = state.files_skipped
+      local ok, reason
+      if payload.mode == "walk" then
+        ok, reason = walk_batches(root, payload, ctx, state)
+      else
+        ok, reason = walk(root, payload, ctx, state, chunk)
+      end
+      local root_metrics = {
+        root = root.path or root,
+        duration_ms = elapsed_ms(root_started),
+        files_scanned = state.files_scanned - before_scanned,
+        files_indexed = state.files_indexed - before_indexed,
+        files_skipped = state.files_skipped - before_skipped,
+      }
+      state.metrics.roots[#state.metrics.roots + 1] = root_metrics
+      add_metric(state.metrics, "root_scan_ms", root_metrics.duration_ms)
+      if not ok then
+        ctx.send({ type = "cancelled", payload = { reason = reason, files_scanned = state.files_scanned, diagnostics = state.metrics } })
+        return
+      end
+      if payload.mode ~= "walk" then flush_chunk(ctx, payload, root, state, chunk, true) end
+    end
   end
   state.metrics.total_ms = elapsed_ms(started)
   send_progress(ctx, state, payload, nil, true)
@@ -508,6 +674,7 @@ function worker.run(payload, ctx)
       symbols_total = state.symbols_total,
       usage_count = state.usage_count,
       usage_truncated = state.usage_truncated,
+      usage_budget_used = state.usage_count,
       duration_ms = math.floor((now() - started) * 1000),
       diagnostics = state.metrics,
     },

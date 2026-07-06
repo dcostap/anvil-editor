@@ -105,6 +105,61 @@ int main(void) { return helper(); }
     test.ok(found_main)
   end)
 
+  test.test("walk mode emits bounded file batches without indexing", function()
+    test.ok(native.has_language("c"))
+    registry.reload()
+    local language = registry.get("main.c", "")
+    test.not_nil(language)
+
+    local root = mkdir(USERDIR .. PATHSEP .. "worker-project-index-walk-batches-fixture")
+    for i = 1, 5 do
+      write_file(root .. PATHSEP .. string.format("file_%02d.c", i), string.format("int value_%02d(void) { return %d; }\n", i, i))
+    end
+
+    local pool = worker_pool.new({ name = "treesitter-project-index-walk-batches-test", worker_count = 1 })
+    pools[#pools + 1] = pool
+    local batches = {}
+    local final
+    pool:submit({
+      kind = "treesitter_project_index",
+      generation = 1,
+      project_paths_generation = 1,
+      payload = {
+        mode = "walk",
+        roots = { { path = root } },
+        languages = { language },
+        include_usages = false,
+        batch_files = 2,
+        batch_bytes = 1024 * 1024,
+        max_file_bytes = 1024 * 1024,
+      },
+      on_result = function(message)
+        if message.type == "chunk" then
+          for _, batch in ipairs(message.payload.batches or {}) do batches[#batches + 1] = batch end
+        elseif message.type == "final" then
+          final = message.payload
+        end
+      end,
+      on_complete = function(message) final = final or message.payload or {} end,
+    })
+
+    test.ok(drain_until(pool, function() return final ~= nil end))
+    test.equal(final.files_scanned, 5)
+    test.equal(final.files_indexed, 0)
+    test.equal(final.diagnostics.files_scanned, 5)
+    test.equal(final.diagnostics.files_indexed or 0, 0)
+    test.equal(final.diagnostics.parse_calls or 0, 0)
+    test.ok(#batches >= 3, "expected at least 3 batches, got " .. tostring(#batches))
+    for _, batch in ipairs(batches) do
+      test.ok(#(batch.files or {}) <= 2, common.serialize(batch))
+      for _, file in ipairs(batch.files or {}) do
+        test.not_nil(file.path)
+        test.not_nil(file.info)
+        test.equal(file.language_id, language.id)
+      end
+    end
+  end)
+
   test.test("splits one large file result into bounded output chunks", function()
     test.ok(native.has_language("c"))
     registry.reload()

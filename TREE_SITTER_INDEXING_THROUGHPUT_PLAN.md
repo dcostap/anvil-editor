@@ -15,15 +15,16 @@ This is a throughput plan, not just a responsiveness plan.
 
 ## Implementation status
 
-As of the first implementation pass, Milestones 1-3 are complete and committed:
+As of the current implementation pass, Milestones 1-4 are complete:
 
 - **Milestone 1 complete:** indexing now records quiet throughput diagnostics for worker scanning, file reads, native parse/query timing, record construction, chunk send/backpressure time, UI chunk adoption, and aggregate rebuilds. Baseline-style quiet logs are emitted per completed run/phase.
 - **Milestone 2 complete:** `treesitter.index_text` now supports per-query result status/error metadata, and worker jobs that collect both symbols and usages parse each file once and run both queries from that parse. Outline results are preserved if usage extraction fails.
 - **Milestone 3 complete:** UI chunk adoption no longer rebuilds aggregates on every chunk. Aggregate rebuilds are debounced during chunk arrival and forced at phase/fresh-query boundaries. A Lua-side `core.treesitter.index_scheduler` now exists to cap outstanding/running indexing jobs and reserve worker-pool capacity.
+- **Milestone 4 complete:** project indexing now uses a worker-side coordinator walk that emits bounded file batches, and the UI submits those batches as bounded shard jobs through `core.treesitter.index_scheduler`. Shard chunks are adopted through the existing bounded path, stale generation/project-path messages are rejected, and usage indexing uses deterministic per-shard reservations so accepted shard budgets never exceed the project usage cap.
 
-The current state is considered a solid foundation and a useful incremental improvement, but the throughput plan is **not complete**. The main remaining indexing speedup is Milestone 4: actually sharding project indexing across multiple worker jobs. Before that, complete the Milestone 3.6 responsiveness audit gate below so sharding is not built on top of hidden UI-thread stalls. Later milestones are larger transport/query/pool infrastructure work and should be implemented only after measurements show they are the next bottleneck.
+The throughput plan is **not fully complete**. The main near-term indexing speedup is now in place, but later milestones are larger transport/query/pool infrastructure work and should be implemented only after measurements show they are the next bottleneck.
 
-Post-Milestone-3 responsiveness repair: real performance captures showed that chunk adoption was still doing per-record Project path resolution, occasional aggregate rebuild/sort work, huge single-file result transfers, synchronous pending-refresh drain work inside worker-pool callbacks, and forced aggregate rebuilds from workspace symbol/reference queries. Chunk adoption now caches Project path metadata per file/kind/project-path generation, defers aggregate rebuilds while indexing chunks are arriving, splits oversized single-file worker results into bounded partial chunks, uses a smaller default worker result chunk size, defers phase-completion aggregate/pending-refresh work out of the worker callback, and lets workspace queries read directly from per-file entries while aggregates are dirty instead of rebuilding the whole symbol/usage aggregate on demand. Re-measure before starting Milestone 4.
+Post-Milestone-3 responsiveness repair: real performance captures showed that chunk adoption was still doing per-record Project path resolution, occasional aggregate rebuild/sort work, huge single-file result transfers, synchronous pending-refresh drain work inside worker-pool callbacks, and forced aggregate rebuilds from workspace symbol/reference queries. Chunk adoption now caches Project path metadata per file/kind/project-path generation, defers aggregate rebuilds while indexing chunks are arriving, splits oversized single-file worker results into bounded partial chunks, uses a smaller default worker result chunk size, defers phase-completion aggregate/pending-refresh work out of the worker callback, and lets workspace queries read directly from per-file entries while aggregates are dirty instead of rebuilding the whole symbol/usage aggregate on demand. Milestone 4 was implemented on top of those containment fixes; re-measure before choosing Milestone 5/6/7 follow-up work.
 
 Current committed milestones:
 
@@ -33,7 +34,7 @@ Current committed milestones:
 f5f19bc7 TREE_SITTER_INDEXING_THROUGHPUT_PLAN.md: Milestone 3 (Bound UI adoption and add indexing scheduler)
 ```
 
-Validation performed after Milestone 3:
+Validation performed after Milestone 4:
 
 ```sh
 meson test -C build-windows-x86_64 --suite anvil --print-errorlogs
@@ -66,7 +67,7 @@ Current behavior:
 
 Important limitations:
 
-- A single root/phase is still mostly one worker job, so a huge project does not fully use all CPU cores.
+- A single root/phase is now split into a coordinator walk plus bounded shard jobs, so large projects can use multiple Lua worker threads subject to the indexing scheduler cap.
 - Symbol and usage phases can parse the same file separately.
 - Worker output still uses Lua channels, which deep-copy Lua tables.
 - Result chunks are bounded, but large result ownership is not Fred-style native handle/pointer ownership.
@@ -365,7 +366,7 @@ Do not proceed to sharding until:
 - scheduler never has more than the configured number of running shard jobs;
 - cancelling a run cancels queued and running shard work.
 
-## Milestone 3.6: Coroutine async responsiveness audit — Pending / Gate before sharding
+## Milestone 3.6: Coroutine async responsiveness audit — Complete as sharding gate / Follow-ups classified
 
 ### Goal
 
@@ -375,7 +376,7 @@ This is a gate, not a full rewrite milestone. The purpose is to avoid mistaking 
 
 ### Status
 
-Pending. Recent performance captures after the Milestone 3 repairs showed that Tree-sitter worker callbacks became small, while large `run_threads_ms` stalls moved to adjacent coroutine paths such as fuzzy Project symbol/search UI work and some filetree/git refresh work.
+Complete as a gate for Milestone 4. Recent captures and the static hot-path audit showed that Tree-sitter worker callbacks/chunk adoption were no longer the dominant stalls after the post-Milestone-3 repairs. Remaining large `run_threads_ms` stalls are classified as adjacent coroutine work, primarily fuzzy Project symbol/search UI work and filetree/git refresh work. Those are not prerequisites for sharding because workspace symbol/usage queries can read directly from per-file entries while aggregates are dirty, and sharded chunk adoption stays on the same bounded adoption path.
 
 ### Current issue
 
@@ -415,7 +416,7 @@ Initial hot spots from captures and static scan:
   - explicitly assigned to Milestone 6, Milestone 8, or another follow-up.
 - The plan has a current note explaining why Milestone 4 can proceed despite any remaining non-indexing coroutine stalls.
 
-## Milestone 4: Shard project indexing across multiple worker jobs — Pending / Next major payoff
+## Milestone 4: Shard project indexing across multiple worker jobs — Complete
 
 ### Goal
 
@@ -423,11 +424,22 @@ Use multiple real worker threads for large projects, now that UI adoption and sh
 
 ### Status
 
-Pending. This is the main remaining near-term throughput payoff. The scheduler and debounced UI adoption from Milestone 3 were added specifically so this milestone can be implemented without flooding the worker pool or creating UI-frame adoption spikes.
+Complete. The implementation uses Variant B: a worker-side walk/coordinator job emits bounded file batches, while the UI side owns shard submission and run state through `core.treesitter.index_scheduler`. The same sharded coordinator is used for the symbol phase and the usage phase, preserving early symbol readiness before usage indexing completes.
 
-### Current issue
+Implemented details:
 
-A single root/phase job walks and indexes files mostly serially.
+- coordinator walk jobs run off the UI thread with `payload.mode = "walk"` and emit bounded compact batch descriptors using per-file language ids rather than copying full language/query tables per file;
+- shard jobs consume explicit file batches through the existing `treesitter_project_index` worker;
+- the run keeps its own pending batch queue and only submits shards when scheduler capacity is available, so outstanding shard jobs stay bounded instead of queueing the entire project at once;
+- per-shard chunk adoption uses the existing bounded `apply_worker_chunk` path;
+- phase completion waits for the coordinator and all required shards before pruning old entries or marking a phase ready;
+- failed/cancelled shards do not prune old entries through the ready path;
+- usage shards reserve deterministic budgets from the run-level project usage cap before submission and return unused reservation capacity for later pending batches;
+- diagnostics aggregate coordinator/shard worker metrics and record coordinator/shard job counts.
+
+### Resolved issue
+
+A single root/phase job used to walk and index files mostly serially. It is now split into a coordinator walk and bounded shard jobs.
 
 ### Architecture
 
