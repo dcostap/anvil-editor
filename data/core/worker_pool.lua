@@ -62,11 +62,15 @@ end
 local function call_callback(job, name, ...)
   local callback = job.spec and job.spec[name]
   if callback then
+    local started = now()
     local ok, err = pcall(callback, ...)
+    local elapsed_ms = (now() - started) * 1000
     if not ok then
       log_quiet("worker_pool callback %s for job %s failed: %s", tostring(name), tostring(job.id), tostring(err))
     end
+    return elapsed_ms, true
   end
+  return 0, false
 end
 
 local function is_terminal_type(message_type)
@@ -264,23 +268,56 @@ function worker_pool:is_stale(job, message)
 end
 
 function worker_pool:dispatch_message(message)
-  if type(message) ~= "table" then return false end
+  local dispatch_started = now()
+  local stats = {
+    message_type = type(message) == "table" and message.type or "invalid",
+    callback_ms = 0,
+    callbacks = 0,
+    slowest_callback_ms = 0,
+    slowest_callback_name = "",
+  }
+
+  local function finish(result)
+    stats.dispatch_ms = (now() - dispatch_started) * 1000
+    return result, stats
+  end
+
+  local function invoke(job, name, ...)
+    local elapsed, ran = call_callback(job, name, ...)
+    if ran then
+      stats.callback_ms = stats.callback_ms + elapsed
+      stats.callbacks = stats.callbacks + 1
+      local label = string.format(
+        "%s:%s:%s:%s",
+        tostring(job.handle.kind or ""),
+        tostring(job.handle.phase or ""),
+        tostring(message and message.type or ""),
+        tostring(name)
+      )
+      if elapsed > stats.slowest_callback_ms then
+        stats.slowest_callback_ms = elapsed
+        stats.slowest_callback_name = label
+      end
+    end
+  end
+
+  if type(message) ~= "table" then return finish(false) end
   self.diagnostics.messages = self.diagnostics.messages + 1
 
   if message.type == "worker_ready" then
     local worker = self.workers[message.worker_id]
     if worker then worker.ready = true end
-    return true
+    return finish(true)
   end
 
   if message.type == "worker_shutdown" then
     local worker = self.workers[message.worker_id]
     if worker then worker.shutdown = true end
-    return true
+    return finish(true)
   end
 
   local job = message.job_id and self.jobs[message.job_id]
-  if not job then return false end
+  if not job then return finish(false) end
 
   job.messages = job.messages + 1
   if job.status == "queued" or job.status == "cancelling" then
@@ -290,49 +327,82 @@ function worker_pool:dispatch_message(message)
 
   if self:is_stale(job, message) then
     self.diagnostics.stale = self.diagnostics.stale + 1
-    call_callback(job, "on_stale", message, job.handle)
+    invoke(job, "on_stale", message, job.handle)
     if is_terminal_type(message.type) then
       mark_terminal(job, "stale")
       release_terminal_job(job)
     end
-    return true
+    return finish(true)
   end
 
   if message.type == "progress" then
-    call_callback(job, "on_progress", message, job.handle)
+    invoke(job, "on_progress", message, job.handle)
   elseif message.type == "result" or message.type == "chunk" then
-    call_callback(job, "on_result", message, job.handle)
+    invoke(job, "on_result", message, job.handle)
   elseif message.type == "log" then
-    call_callback(job, "on_log", message, job.handle)
+    invoke(job, "on_log", message, job.handle)
   elseif message.type == "error" then
     self.diagnostics.failed = self.diagnostics.failed + 1
     mark_terminal(job, "failed")
-    call_callback(job, "on_error", message, job.handle)
+    invoke(job, "on_error", message, job.handle)
     release_terminal_job(job)
   elseif message.type == "cancelled" then
     self.diagnostics.cancelled = self.diagnostics.cancelled + 1
     mark_terminal(job, "cancelled")
-    call_callback(job, "on_cancelled", message, job.handle)
+    invoke(job, "on_cancelled", message, job.handle)
     release_terminal_job(job)
   elseif message.type == "final" or message.type == "complete" then
     self.diagnostics.completed = self.diagnostics.completed + 1
     mark_terminal(job, "complete")
     if message.type == "final" then
-      call_callback(job, "on_result", message, job.handle)
+      invoke(job, "on_result", message, job.handle)
     end
-    call_callback(job, "on_complete", message, job.handle)
+    invoke(job, "on_complete", message, job.handle)
     release_terminal_job(job)
   end
 
-  return true
+  return finish(true)
 end
 
 function worker_pool:drain(options)
   options = options or {}
   local max_messages = options.max_messages or DEFAULT_DRAIN_MAX_MESSAGES
   local max_ms = options.max_ms or DEFAULT_DRAIN_BUDGET_MS
-  local deadline = now() + (math.max(0, max_ms) / 1000)
+  local started = now()
+  local deadline = started + (math.max(0, max_ms) / 1000)
   local count = 0
+  local stats = {
+    messages = 0,
+    dispatch_ms = 0,
+    callback_ms = 0,
+    callbacks = 0,
+    slowest_dispatch_ms = 0,
+    slowest_message_type = "",
+    slowest_callback_ms = 0,
+    slowest_callback_name = "",
+  }
+
+  local function note_dispatch(message_stats)
+    if not message_stats then return end
+    stats.dispatch_ms = stats.dispatch_ms + (message_stats.dispatch_ms or 0)
+    stats.callback_ms = stats.callback_ms + (message_stats.callback_ms or 0)
+    stats.callbacks = stats.callbacks + (message_stats.callbacks or 0)
+    if (message_stats.dispatch_ms or 0) > stats.slowest_dispatch_ms then
+      stats.slowest_dispatch_ms = message_stats.dispatch_ms or 0
+      stats.slowest_message_type = message_stats.message_type or ""
+    end
+    if (message_stats.slowest_callback_ms or 0) > stats.slowest_callback_ms then
+      stats.slowest_callback_ms = message_stats.slowest_callback_ms or 0
+      stats.slowest_callback_name = message_stats.slowest_callback_name or ""
+    end
+  end
+
+  local function finish()
+    stats.messages = count
+    stats.elapsed_ms = (now() - started) * 1000
+    self.last_drain_stats = stats
+    return count, stats
+  end
 
   while count < max_messages do
     local did_work = false
@@ -340,17 +410,18 @@ function worker_pool:drain(options)
       local message = worker.output:first()
       if message ~= nil then
         worker.output:pop()
-        self:dispatch_message(message)
+        local _, message_stats = self:dispatch_message(message)
+        note_dispatch(message_stats)
         count = count + 1
         did_work = true
-        if count >= max_messages then return count end
-        if max_ms >= 0 and now() >= deadline then return count end
+        if count >= max_messages then return finish() end
+        if max_ms >= 0 and now() >= deadline then return finish() end
       end
     end
     if not did_work then break end
   end
 
-  return count
+  return finish()
 end
 
 function worker_pool:shutdown(options)

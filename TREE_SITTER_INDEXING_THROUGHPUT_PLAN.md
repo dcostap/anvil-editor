@@ -21,7 +21,9 @@ As of the first implementation pass, Milestones 1-3 are complete and committed:
 - **Milestone 2 complete:** `treesitter.index_text` now supports per-query result status/error metadata, and worker jobs that collect both symbols and usages parse each file once and run both queries from that parse. Outline results are preserved if usage extraction fails.
 - **Milestone 3 complete:** UI chunk adoption no longer rebuilds aggregates on every chunk. Aggregate rebuilds are debounced during chunk arrival and forced at phase/fresh-query boundaries. A Lua-side `core.treesitter.index_scheduler` now exists to cap outstanding/running indexing jobs and reserve worker-pool capacity.
 
-The current state is considered a solid foundation and a useful incremental improvement, but the throughput plan is **not complete**. The main remaining speedup is Milestone 4: actually sharding project indexing across multiple worker jobs. Later milestones are larger transport/query/pool infrastructure work and should be implemented only after measurements show they are the next bottleneck.
+The current state is considered a solid foundation and a useful incremental improvement, but the throughput plan is **not complete**. The main remaining indexing speedup is Milestone 4: actually sharding project indexing across multiple worker jobs. Before that, complete the Milestone 3.6 responsiveness audit gate below so sharding is not built on top of hidden UI-thread stalls. Later milestones are larger transport/query/pool infrastructure work and should be implemented only after measurements show they are the next bottleneck.
+
+Post-Milestone-3 responsiveness repair: real performance captures showed that chunk adoption was still doing per-record Project path resolution, occasional aggregate rebuild/sort work, huge single-file result transfers, synchronous pending-refresh drain work inside worker-pool callbacks, and forced aggregate rebuilds from workspace symbol/reference queries. Chunk adoption now caches Project path metadata per file/kind/project-path generation, defers aggregate rebuilds while indexing chunks are arriving, splits oversized single-file worker results into bounded partial chunks, uses a smaller default worker result chunk size, defers phase-completion aggregate/pending-refresh work out of the worker callback, and lets workspace queries read directly from per-file entries while aggregates are dirty instead of rebuilding the whole symbol/usage aggregate on demand. Re-measure before starting Milestone 4.
 
 Current committed milestones:
 
@@ -68,8 +70,8 @@ Important limitations:
 - Symbol and usage phases can parse the same file separately.
 - Worker output still uses Lua channels, which deep-copy Lua tables.
 - Result chunks are bounded, but large result ownership is not Fred-style native handle/pointer ownership.
-- UI-side adoption still rebuilds aggregates from `index.by_path` after chunks.
-- Workspace symbol/reference commands still do some UI-thread combining/filtering work over ready indexes.
+- UI-side adoption caches per-file Project path metadata and defers aggregate rebuilds while chunks are arriving; worker output can split one large file across partial chunks to keep Lua channel transfers bounded. Workspace queries can read directly from per-file entries while aggregates are dirty, so dirty aggregates should not force full rebuilds on the picker/query path.
+- Workspace symbol/reference commands still do some UI-thread combining/filtering work over ready indexes, and adjacent picker/filetree/search code still has coroutine-based async work that can monopolize the UI thread.
 
 ## Fred-style target model
 
@@ -362,6 +364,56 @@ Do not proceed to sharding until:
 - a synthetic chunk storm does not produce large UI-frame adoption spikes;
 - scheduler never has more than the configured number of running shard jobs;
 - cancelling a run cancels queued and running shard work.
+
+## Milestone 3.6: Coroutine async responsiveness audit — Pending / Gate before sharding
+
+### Goal
+
+Find and classify remaining UI-thread coroutine work that can mask Tree-sitter indexing responsiveness or become worse once indexing is sharded.
+
+This is a gate, not a full rewrite milestone. The purpose is to avoid mistaking `core.add_thread` for real off-thread work in hot paths.
+
+### Status
+
+Pending. Recent performance captures after the Milestone 3 repairs showed that Tree-sitter worker callbacks became small, while large `run_threads_ms` stalls moved to adjacent coroutine paths such as fuzzy Project symbol/search UI work and some filetree/git refresh work.
+
+### Current issue
+
+Several features are asynchronous only in the cooperative-coroutine sense: they yield between operations, but expensive filtering, sorting, result formatting, process-output adoption, and redraw preparation still run on the UI Lua state. This can produce long frames even when worker-pool adoption is bounded.
+
+Initial hot spots from captures and static scan:
+
+- `data/plugins/fuzzy_searcher/init.lua`
+  - Project symbol picker polling/formatting Tree-sitter or LSP results;
+  - fuzzy grep stream candidate scoring/sorting/publishing;
+  - this maps primarily to Milestone 6 if it needs a real worker-backed query path.
+- `data/plugins/filetree/init.lua`
+  - git status process-output parsing and aggregation;
+  - filetree open/refresh paths that may still do synchronous sorting/metadata work;
+  - this maps primarily to Milestone 8 if it needs reusable file walking / metadata jobs.
+- `data/plugins/gitdiff_highlight/init.lua`
+  - process-backed diff/highlight refresh work that can still run expensive adoption on the UI coroutine.
+- Older file search paths such as `data/plugins/findfile.lua` and `data/plugins/projectsearch.lua`, which predate the worker-pool indexing model.
+
+### Work
+
+1. Use performance captures to separate:
+   - Tree-sitter indexing/adoption/query stalls that must be fixed before Milestone 4;
+   - fuzzy workspace symbol/reference/filtering stalls that belong to Milestone 6;
+   - filetree/git/file-walking/search stalls that belong to Milestone 8;
+   - renderer/layout/input stalls that are outside this throughput plan.
+2. Add or keep attribution for `run_threads_ms` slow locations so large coroutine stalls are not misattributed to worker-pool indexing.
+3. Apply only small containment fixes before Milestone 4 when they directly protect the indexing path, such as bounded chunk/adoption size, avoiding forced full-index rebuilds, or avoiding synchronous pending-refresh drains.
+4. Do **not** migrate all coroutine-based fuzzy/filetree/search work before sharding unless a fresh capture shows it blocks normal editing or hides indexing regressions.
+
+### Acceptance gates before Milestone 4
+
+- Tree-sitter worker callbacks and chunk adoption stay below visible-stutter range in a real capture.
+- Dirty aggregate/query paths do not force whole-index rebuilds during picker interaction.
+- Remaining >50-100ms stalls are classified by subsystem and either:
+  - fixed if they are Tree-sitter indexing prerequisites; or
+  - explicitly assigned to Milestone 6, Milestone 8, or another follow-up.
+- The plan has a current note explaining why Milestone 4 can proceed despite any remaining non-indexing coroutine stalls.
 
 ## Milestone 4: Shard project indexing across multiple worker jobs — Pending / Next major payoff
 
@@ -893,11 +945,12 @@ Mitigation:
 1. Instrument and baseline.
 2. Add per-query native result statuses and reduce duplicate parses in at least one measured indexing mode.
 3. Bound UI chunk adoption and add a Lua-side indexing scheduler/concurrency cap.
-4. Add coordinator/shard model for multi-worker indexing, including global usage-budget coordination and shard-handle cancellation.
-5. Add file-backed or native handle result delivery / compact index snapshots.
-6. Add async query/filter path for huge symbol/reference sets using the compact transport from step 5.
-7. Build native worker pool/lanes when the Lua facade becomes the bottleneck or when stricter priority scheduling is needed.
-8. Reuse the machinery for file walking/search/filetree/git.
+4. Run the Milestone 3.6 coroutine responsiveness audit gate; fix Tree-sitter-indexing prerequisites and classify remaining coroutine stalls.
+5. Add coordinator/shard model for multi-worker indexing, including global usage-budget coordination and shard-handle cancellation.
+6. Add file-backed or native handle result delivery / compact index snapshots.
+7. Add async query/filter path for huge symbol/reference sets using the compact transport from step 6.
+8. Build native worker pool/lanes when the Lua facade becomes the bottleneck or when stricter priority scheduling is needed.
+9. Reuse the machinery for file walking/search/filetree/git.
 
 ## Definition of done
 

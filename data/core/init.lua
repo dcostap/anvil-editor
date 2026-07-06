@@ -2770,6 +2770,18 @@ function core.run_step(options)
   local run_step_start = system.get_time()
   local sleep_requested_ms = 0
   local sleep_actual_ms = 0
+  local worker_pool_frame_stats = {}
+  core.worker_pool_frame_stats = worker_pool_frame_stats
+  local worker_pool_drain_wall_ms = 0
+  local worker_pool_drain_ms = 0
+  local worker_pool_drain_messages = 0
+  local worker_pool_dispatch_ms = 0
+  local worker_pool_callback_ms = 0
+  local worker_pool_callbacks = 0
+  local worker_pool_slowest_dispatch_ms = 0
+  local worker_pool_slowest_message_type = ""
+  local worker_pool_slowest_callback_ms = 0
+  local worker_pool_slowest_callback_name = ""
   local pending_events_at_start = system.has_pending_events()
   local now     = run_step_start
   local uncapped = config.draw_stats == "uncapped"
@@ -2821,10 +2833,34 @@ function core.run_step(options)
   if worker_pool_module and worker_pool_module.current_system then
     local pool = worker_pool_module.current_system()
     if pool then
-      pool:drain({
+      local drain_started = system.get_time()
+      local _, drain_stats = pool:drain({
         max_ms = config.worker_pool_drain_budget_ms or 1.0,
         max_messages = config.worker_pool_drain_max_messages or 64,
       })
+      worker_pool_drain_wall_ms = (system.get_time() - drain_started) * 1000
+      drain_stats = drain_stats or pool.last_drain_stats or {}
+      worker_pool_drain_ms = drain_stats.elapsed_ms or worker_pool_drain_wall_ms
+      worker_pool_drain_messages = drain_stats.messages or 0
+      worker_pool_dispatch_ms = drain_stats.dispatch_ms or 0
+      worker_pool_callback_ms = drain_stats.callback_ms or 0
+      worker_pool_callbacks = drain_stats.callbacks or 0
+      worker_pool_slowest_dispatch_ms = drain_stats.slowest_dispatch_ms or 0
+      worker_pool_slowest_message_type = drain_stats.slowest_message_type or ""
+      worker_pool_slowest_callback_ms = drain_stats.slowest_callback_ms or 0
+      worker_pool_slowest_callback_name = drain_stats.slowest_callback_name or ""
+      if worker_pool_drain_wall_ms > 20 then
+        core.log_quiet(
+          "Worker pool drain slow: wall=%.1fms drain=%.1fms messages=%d dispatch=%.1fms callback=%.1fms slow_dispatch=%.1fms/%s slow_callback=%.1fms/%s ts_chunk=%.1fms ts_metadata=%.1fms ts_aggregate=%.1fms",
+          worker_pool_drain_wall_ms, worker_pool_drain_ms, worker_pool_drain_messages,
+          worker_pool_dispatch_ms, worker_pool_callback_ms,
+          worker_pool_slowest_dispatch_ms, tostring(worker_pool_slowest_message_type),
+          worker_pool_slowest_callback_ms, tostring(worker_pool_slowest_callback_name),
+          worker_pool_frame_stats.treesitter_project_chunk_adoption_ms or 0,
+          worker_pool_frame_stats.treesitter_project_chunk_metadata_ms or 0,
+          worker_pool_frame_stats.treesitter_project_aggregate_rebuild_ms or 0
+        )
+      end
     end
   end
 
@@ -2884,6 +2920,7 @@ function core.run_step(options)
       if worker_pool_module and worker_pool_module.shutdown_system then
         worker_pool_module.shutdown_system({ cancel_running = true, timeout_ms = 1000 })
       end
+      core.worker_pool_frame_stats = nil
       core.in_live_resize_frame = previous_live_resize_frame
       return false
     end
@@ -3065,6 +3102,16 @@ function core.run_step(options)
     run_threads_runs = last_run_threads_runs,
     run_threads_slowest_ms = last_run_threads_slowest_ms,
     run_threads_slowest_loc = last_run_threads_slowest_loc,
+    worker_pool_drain_wall_ms = worker_pool_drain_wall_ms,
+    worker_pool_drain_ms = worker_pool_drain_ms,
+    worker_pool_drain_messages = worker_pool_drain_messages,
+    worker_pool_dispatch_ms = worker_pool_dispatch_ms,
+    worker_pool_callback_ms = worker_pool_callback_ms,
+    worker_pool_callbacks = worker_pool_callbacks,
+    worker_pool_slowest_dispatch_ms = worker_pool_slowest_dispatch_ms,
+    worker_pool_slowest_message_type = worker_pool_slowest_message_type,
+    worker_pool_slowest_callback_ms = worker_pool_slowest_callback_ms,
+    worker_pool_slowest_callback_name = worker_pool_slowest_callback_name,
     core_step_ms = core_step_ms,
     gc_ms = gc_ms,
     present_ms = renderer_stats.present_ms,
@@ -3190,6 +3237,9 @@ function core.run_step(options)
     over_budget = did_redraw and (total_ms > (1000 / config.fps)),
     run_mode = run_threads_mode,
   }
+  for key, value in pairs(worker_pool_frame_stats) do
+    core.performance_snapshot[key] = value
+  end
   for _, key in ipairs(perf_diagnostic_keys) do
     core.performance_snapshot[key] = docview_stats[key]
   end
@@ -3257,6 +3307,7 @@ function core.run_step(options)
     run_mode = run_threads_mode,
   }
 
+  core.worker_pool_frame_stats = nil
   core.in_live_resize_frame = previous_live_resize_frame
   return true
 end

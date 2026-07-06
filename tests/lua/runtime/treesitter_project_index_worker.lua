@@ -105,6 +105,53 @@ int main(void) { return helper(); }
     test.ok(found_main)
   end)
 
+  test.test("splits one large file result into bounded output chunks", function()
+    test.ok(native.has_language("c"))
+    registry.reload()
+    local language = registry.get("main.c", "")
+    test.not_nil(language)
+
+    local root = mkdir(USERDIR .. PATHSEP .. "worker-project-index-large-file-chunk-fixture")
+    local lines = { "int target(void) { return 1; }", "int main(void) {" }
+    for i = 1, 80 do
+      lines[#lines + 1] = string.format("  int value_%02d = target();", i)
+    end
+    lines[#lines + 1] = "  return target();"
+    lines[#lines + 1] = "}"
+    write_file(root .. PATHSEP .. "main.c", table.concat(lines, "\n") .. "\n")
+
+    local pool = worker_pool.new({ name = "treesitter-project-index-large-file-chunk-test", worker_count = 1 })
+    pools[#pools + 1] = pool
+    local chunks = {}
+    local final
+    pool:submit({
+      kind = "treesitter_project_index",
+      generation = 1,
+      project_paths_generation = 1,
+      payload = {
+        roots = { { path = root } },
+        languages = { language },
+        include_usages = true,
+        chunk_files = 16,
+        chunk_records = 10,
+        max_file_bytes = 1024 * 1024,
+        max_usage_captures_per_file = 200,
+      },
+      on_result = function(message)
+        if message.type == "chunk" then
+          chunks[#chunks + 1] = message.payload
+        elseif message.type == "final" then
+          final = message.payload
+        end
+      end,
+      on_complete = function(message) final = final or message.payload or {} end,
+    })
+
+    test.ok(drain_until(pool, function() return final ~= nil end))
+    test.ok(#chunks > 1, "expected large single-file result to be split, got " .. tostring(#chunks))
+    test.ok((final.diagnostics.chunk_records_max or 0) <= 10, common.serialize(final.diagnostics))
+  end)
+
   test.test("keeps symbols when usage extraction fails", function()
     test.ok(native.has_language("c"))
     registry.reload()

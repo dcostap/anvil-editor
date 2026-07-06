@@ -158,12 +158,116 @@ local function file_record_count(file)
   return #(file.symbols or {}) + (file.usage_count or 0)
 end
 
+local function usage_list_count(usages_by_name)
+  local count = 0
+  for _, list in pairs(usages_by_name or {}) do count = count + #list end
+  return count
+end
+
+local function shallow_file_copy(file)
+  local copy = {}
+  for key, value in pairs(file or {}) do
+    if key ~= "symbols" and key ~= "usages_by_name" and key ~= "usage_count" then
+      copy[key] = value
+    end
+  end
+  return copy
+end
+
 local function push_file(chunk, file)
   chunk[#chunk + 1] = file
   chunk.record_count = (chunk.record_count or 0) + file_record_count(file)
 end
 
-local function flush_chunk(ctx, payload, root, state, chunk, force)
+local function split_large_file(file, max_records)
+  max_records = tonumber(max_records) or DEFAULT_CHUNK_RECORDS
+  if max_records <= 0 or file_record_count(file) <= max_records then return { file } end
+
+  local symbols = file.symbols or {}
+  local usages_by_name = file.usages_by_name or {}
+  local total_usages = usage_list_count(usages_by_name)
+  if total_usages == 0 then
+    local parts = {}
+    for i = 1, #symbols, max_records do
+      local part = shallow_file_copy(file)
+      part.partial = true
+      part.file_done = i + max_records > #symbols
+      part.symbols = {}
+      part.usages_by_name = {}
+      part.usage_count = 0
+      part.usage_complete = part.file_done and file.usage_complete or nil
+      for j = i, math.min(#symbols, i + max_records - 1) do
+        part.symbols[#part.symbols + 1] = symbols[j]
+      end
+      parts[#parts + 1] = part
+    end
+    return #parts > 0 and parts or { file }
+  end
+
+  local parts = {}
+  local first = true
+  local current
+  local current_count
+
+  local function new_part()
+    local part = shallow_file_copy(file)
+    part.partial = true
+    part.file_done = false
+    part.symbols = first and symbols or {}
+    part.usages_by_name = {}
+    part.usage_count = 0
+    current = part
+    current_count = #(part.symbols or {})
+    first = false
+  end
+
+  local function flush(done)
+    if not current then return end
+    current.file_done = done and true or false
+    current.usage_complete = done and file.usage_complete or nil
+    parts[#parts + 1] = current
+    current = nil
+    current_count = 0
+  end
+
+  new_part()
+  for name, list in pairs(usages_by_name) do
+    for _, usage in ipairs(list) do
+      if current_count >= max_records and current.usage_count > 0 then
+        flush(false)
+        new_part()
+      end
+      local out = current.usages_by_name[name]
+      if not out then
+        out = {}
+        current.usages_by_name[name] = out
+      end
+      out[#out + 1] = usage
+      current.usage_count = current.usage_count + 1
+      current_count = current_count + 1
+    end
+  end
+  flush(true)
+  return parts
+end
+
+local flush_chunk
+
+local function push_file_bounded(ctx, payload, root, state, chunk, file)
+  local parts = split_large_file(file, payload.chunk_records or DEFAULT_CHUNK_RECORDS)
+  for _, part in ipairs(parts) do
+    if #chunk > 0 and (chunk.record_count or 0) + file_record_count(part) > (payload.chunk_records or DEFAULT_CHUNK_RECORDS) then
+      local ok, err = flush_chunk(ctx, payload, root, state, chunk, true)
+      if not ok then return nil, err end
+    end
+    push_file(chunk, part)
+    local ok, err = flush_chunk(ctx, payload, root, state, chunk, false)
+    if not ok then return nil, err end
+  end
+  return true
+end
+
+flush_chunk = function(ctx, payload, root, state, chunk, force)
   if #chunk == 0 then return true end
   if not force
     and #chunk < (payload.chunk_files or DEFAULT_CHUNK_FILES)
@@ -338,11 +442,8 @@ local function walk(root, payload, ctx, state, chunk)
             state.usage_count = state.usage_count + (file_result.usage_count or 0)
             inc_metric(state.metrics, "usages_emitted", file_result.usage_count or 0)
             if file_result.usage_complete == false then state.usage_truncated = true end
-            if #chunk > 0 and (chunk.record_count or 0) + file_record_count(file_result) > (payload.chunk_records or DEFAULT_CHUNK_RECORDS) then
-              flush_chunk(ctx, payload, root, state, chunk, true)
-            end
-            push_file(chunk, file_result)
-            flush_chunk(ctx, payload, root, state, chunk, false)
+            local ok, flush_err = push_file_bounded(ctx, payload, root, state, chunk, file_result)
+            if not ok then return false, flush_err end
           else
             state.files_skipped = state.files_skipped + 1
             inc_metric(state.metrics, "files_skipped", 1)

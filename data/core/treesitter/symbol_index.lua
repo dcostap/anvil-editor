@@ -23,6 +23,7 @@ local DEFAULT_MAX_CAPTURES = 50000
 local DEFAULT_QUERY_TIMEOUT_MS = 20
 local DEFAULT_PROJECT_USAGE_CAP = 750000
 local DEFAULT_AGGREGATE_REBUILD_DELAY = 0.075
+local DEFAULT_WORKER_CHUNK_RECORDS = 100
 local MAX_FILE_BYTES = 2 * 1024 * 1024
 
 local native_ok, native = nil, nil
@@ -62,6 +63,29 @@ local function max_ui_metric(index, key, value)
   local ui = diagnostics_ui(index)
   value = tonumber(value) or 0
   if value > (ui[key] or 0) then ui[key] = value end
+end
+
+local function worker_pool_frame_stats()
+  local c = package.loaded.core or core
+  local stats = c and c.worker_pool_frame_stats
+  return type(stats) == "table" and stats or nil
+end
+
+local function add_worker_pool_frame_metric(key, value)
+  local stats = worker_pool_frame_stats()
+  if not stats then return end
+  stats[key] = (stats[key] or 0) + (tonumber(value) or 0)
+end
+
+local function inc_worker_pool_frame_metric(key, amount)
+  add_worker_pool_frame_metric(key, amount or 1)
+end
+
+local function max_worker_pool_frame_metric(key, value)
+  local stats = worker_pool_frame_stats()
+  if not stats then return end
+  value = tonumber(value) or 0
+  if value > (stats[key] or 0) then stats[key] = value end
 end
 
 local function safe_yield(wait)
@@ -121,6 +145,8 @@ local function new_index(root)
     aggregate_dirty = false,
     aggregate_rebuild_pending = false,
     next_aggregate_rebuild_at = nil,
+    project_path_metadata_cache = {},
+    project_path_metadata_cache_generation = nil,
   }
 end
 
@@ -320,16 +346,59 @@ local function project_path_allows(path, kind)
   return project_paths_module().rank_penalty(path, kind) ~= math.huge
 end
 
+local function cached_project_path_metadata(index, path, kind)
+  if not (index and path) then return nil end
+  local generation = project_paths_module().generation()
+  if index.project_path_metadata_cache_generation ~= generation then
+    index.project_path_metadata_cache = {}
+    index.project_path_metadata_cache_generation = generation
+  end
+  local cache = index.project_path_metadata_cache
+  local key = tostring(kind or "") .. "\0" .. path
+  local metadata = cache[key]
+  if metadata then
+    inc_ui_metric(index, "project_path_metadata_cache_hits", 1)
+    inc_worker_pool_frame_metric("treesitter_project_metadata_cache_hits", 1)
+    return metadata
+  end
+
+  metadata = {
+    file = common.relative_path(index.root, path):gsub("\\", "/"),
+  }
+  metadata.relpath = metadata.file
+
+  local paths = project_paths_module()
+  if paths.resolve(path) then
+    local display = paths.display_path(path, { kind = kind })
+    if display then
+      metadata.display_file = display.text
+      metadata.file = display.text
+      metadata.relpath = display.text
+      metadata.root_label = display.root_label
+      metadata.root_role = display.root_role
+      metadata.root_id = display.root_id
+      metadata.rank_penalty = display.rank_penalty
+    end
+  end
+
+  cache[key] = metadata
+  inc_ui_metric(index, "project_path_metadata_cache_misses", 1)
+  inc_worker_pool_frame_metric("treesitter_project_metadata_cache_misses", 1)
+  return metadata
+end
+
 local function refresh_project_path_metadata(index, item, kind)
   if not (index and item and item.path) then return item end
-  item.file = common.relative_path(index.root, item.path):gsub("\\", "/")
-  item.relpath = item.file
-  item.display_file = nil
-  item.root_label = nil
-  item.root_role = nil
-  item.root_id = nil
-  item.rank_penalty = nil
-  return apply_project_path_metadata(item, item.path, kind)
+  local metadata = cached_project_path_metadata(index, item.path, kind)
+  if not metadata then return item end
+  item.file = metadata.file
+  item.relpath = metadata.relpath
+  item.display_file = metadata.display_file
+  item.root_label = metadata.root_label
+  item.root_role = metadata.root_role
+  item.root_id = metadata.root_id
+  item.rank_penalty = metadata.rank_penalty
+  return item
 end
 
 local function usage_from_capture(path, relpath, lines, language, capture)
@@ -558,6 +627,11 @@ local function rebuild_disk_aggregates(index)
   max_ui_metric(index, "aggregate_rebuild_max_ms", duration)
   inc_ui_metric(index, "aggregate_symbols_sorted", #symbols)
   inc_ui_metric(index, "aggregate_usages_sorted", usage_count)
+  inc_worker_pool_frame_metric("treesitter_project_aggregate_rebuilds", 1)
+  add_worker_pool_frame_metric("treesitter_project_aggregate_rebuild_ms", duration)
+  max_worker_pool_frame_metric("treesitter_project_aggregate_rebuild_max_ms", duration)
+  add_worker_pool_frame_metric("treesitter_project_aggregate_symbols_sorted", #symbols)
+  add_worker_pool_frame_metric("treesitter_project_aggregate_usages_sorted", usage_count)
   index.aggregate_dirty = false
   index.aggregate_rebuild_pending = false
   index.next_aggregate_rebuild_at = nil
@@ -588,6 +662,52 @@ local function replace_file_entry(index, path, fingerprint, entry)
   entry.usage_count = entry.usage_count or count_usages(entry.usages_by_name)
   if entry.usage_complete == nil then entry.usage_complete = true end
   index.by_path[path] = entry
+end
+
+local function append_usages_by_name(target, source)
+  for name, list in pairs(source or {}) do
+    local out = target[name]
+    if not out then
+      out = {}
+      target[name] = out
+    end
+    for _, usage in ipairs(list) do out[#out + 1] = usage end
+  end
+end
+
+local function merge_partial_file_entry(index, path, fingerprint, entry)
+  local existing = index.by_path[path]
+  if not existing or not existing.partial_adopting or existing.fingerprint ~= fingerprint then
+    existing = {}
+    for key, value in pairs(entry or {}) do
+      if key ~= "symbols" and key ~= "usages_by_name" and key ~= "usage_count"
+      and key ~= "partial" and key ~= "file_done" then
+        existing[key] = value
+      end
+    end
+    existing.fingerprint = fingerprint
+    existing.symbols = entry.symbols or {}
+    existing.usages_by_name = {}
+    existing.usage_count = 0
+    existing.usage_complete = false
+    existing.partial_adopting = true
+    index.by_path[path] = existing
+  elseif #(entry.symbols or {}) > 0 then
+    if entry.partial then
+      for _, symbol in ipairs(entry.symbols or {}) do existing.symbols[#existing.symbols + 1] = symbol end
+    else
+      existing.symbols = entry.symbols
+    end
+  end
+
+  append_usages_by_name(existing.usages_by_name, entry.usages_by_name)
+  existing.usage_count = (existing.usage_count or 0) + (entry.usage_count or count_usages(entry.usages_by_name))
+  if entry.file_done then
+    existing.usage_complete = entry.usage_complete
+    if existing.usage_complete == nil then existing.usage_complete = true end
+    existing.partial_adopting = nil
+  end
+  return existing
 end
 
 local function drain_pending_reindexes(index)
@@ -790,29 +910,65 @@ local function apply_worker_chunk(index, message)
   inc_ui_metric(index, "chunk_records_adopted", chunk_diag.records or 0)
   max_ui_metric(index, "chunk_files_adopted_max", chunk_diag.files or #(payload.files or {}))
   max_ui_metric(index, "chunk_records_adopted_max", chunk_diag.records or 0)
+  inc_worker_pool_frame_metric("treesitter_project_chunk_adoption_chunks", 1)
+  add_worker_pool_frame_metric("treesitter_project_chunk_adoption_files", chunk_diag.files or #(payload.files or {}))
+  add_worker_pool_frame_metric("treesitter_project_chunk_adoption_records", chunk_diag.records or 0)
+  max_worker_pool_frame_metric("treesitter_project_chunk_adoption_max_files", chunk_diag.files or #(payload.files or {}))
+  max_worker_pool_frame_metric("treesitter_project_chunk_adoption_max_records", chunk_diag.records or 0)
   local changed = false
+  local metadata_ms = 0
+  local replace_ms = 0
   for _, file in ipairs(payload.files or {}) do
     local path = file.path and common.normalize_path(file.path)
     if path then
       file.path = path
+      local metadata_started = now()
       apply_entry_metadata(index, file)
-      replace_file_entry(index, path, file.fingerprint, file)
+      metadata_ms = metadata_ms + elapsed_ms(metadata_started)
+      local replace_started = now()
+      if file.partial then
+        merge_partial_file_entry(index, path, file.fingerprint, file)
+      else
+        replace_file_entry(index, path, file.fingerprint, file)
+      end
+      replace_ms = replace_ms + elapsed_ms(replace_started)
       index.worker_seen_paths = index.worker_seen_paths or {}
       index.worker_seen_paths[path] = true
       changed = true
     end
   end
+  add_ui_metric(index, "chunk_metadata_ms", metadata_ms)
+  max_ui_metric(index, "chunk_metadata_max_ms", metadata_ms)
+  add_ui_metric(index, "chunk_replace_ms", replace_ms)
+  max_ui_metric(index, "chunk_replace_max_ms", replace_ms)
+  add_worker_pool_frame_metric("treesitter_project_chunk_metadata_ms", metadata_ms)
+  add_worker_pool_frame_metric("treesitter_project_chunk_replace_ms", replace_ms)
+  max_worker_pool_frame_metric("treesitter_project_chunk_metadata_max_ms", metadata_ms)
+  max_worker_pool_frame_metric("treesitter_project_chunk_replace_max_ms", replace_ms)
   if changed then
-    local replace_elapsed = elapsed_ms(adoption_started)
-    add_ui_metric(index, "chunk_replace_ms", replace_elapsed)
-    max_ui_metric(index, "chunk_replace_max_ms", replace_elapsed)
+    local aggregate_started = now()
     mark_aggregate_dirty(index)
-    maybe_rebuild_dirty_aggregates(index, false)
+    local rebuilt = false
+    if index.status ~= "indexing" then
+      rebuilt = maybe_rebuild_dirty_aggregates(index, false)
+    else
+      inc_ui_metric(index, "chunk_aggregate_rebuilds_deferred", 1)
+      inc_worker_pool_frame_metric("treesitter_project_chunk_aggregate_deferred", 1)
+    end
+    local aggregate_check_ms = elapsed_ms(aggregate_started)
+    add_ui_metric(index, "chunk_aggregate_check_ms", aggregate_check_ms)
+    max_ui_metric(index, "chunk_aggregate_check_max_ms", aggregate_check_ms)
+    add_worker_pool_frame_metric("treesitter_project_chunk_aggregate_check_ms", aggregate_check_ms)
+    max_worker_pool_frame_metric("treesitter_project_chunk_aggregate_check_max_ms", aggregate_check_ms)
+    if rebuilt then inc_worker_pool_frame_metric("treesitter_project_chunk_aggregate_rebuilt", 1) end
     core.redraw = true
+    inc_worker_pool_frame_metric("treesitter_project_chunk_redraws", 1)
   end
   local duration = elapsed_ms(adoption_started)
   add_ui_metric(index, "chunk_adoption_ms", duration)
   max_ui_metric(index, "chunk_adoption_max_ms", duration)
+  add_worker_pool_frame_metric("treesitter_project_chunk_adoption_ms", duration)
+  max_worker_pool_frame_metric("treesitter_project_chunk_adoption_max_ms", duration)
 end
 
 local function prune_worker_unseen(index)
@@ -824,15 +980,24 @@ local function prune_worker_unseen(index)
       pruned = true
     end
   end
-  if pruned then rebuild_disk_aggregates(index) end
+  if pruned then mark_aggregate_dirty(index) end
   return pruned
 end
 
 local function finish_worker_scan(index, message, status)
   if not current_worker_message(index, message) then return end
   if status == "ready" then
-    local pruned = prune_worker_unseen(index)
-    if pruned or index.status ~= "ready" or index.aggregate_dirty then rebuild_disk_aggregates(index) end
+    local prune_started = now()
+    prune_worker_unseen(index)
+    local prune_ms = elapsed_ms(prune_started)
+    add_ui_metric(index, "final_prune_ms", prune_ms)
+    max_ui_metric(index, "final_prune_max_ms", prune_ms)
+    add_worker_pool_frame_metric("treesitter_project_final_prune_ms", prune_ms)
+    max_worker_pool_frame_metric("treesitter_project_final_prune_max_ms", prune_ms)
+    if index.aggregate_dirty then
+      inc_ui_metric(index, "final_aggregate_rebuilds_deferred", 1)
+      inc_worker_pool_frame_metric("treesitter_project_final_aggregate_deferred", 1)
+    end
     index.status = "ready"
     index.symbol_status = "ready"
     index.usage_status = "ready"
@@ -859,7 +1024,7 @@ local function finish_worker_scan(index, message, status)
     log_quiet("Tree-sitter Project index: worker indexed %d symbol(s), %d usage(s)%s under %s in %.1fms",
       #index.symbols, index.usage_count or 0, index.usage_truncated and " (truncated)" or "",
       index.root, ((index.finished_at or system.get_time()) - (index.started_at or system.get_time())) * 1000)
-    log_quiet("Tree-sitter indexing baseline: root=%s phase=%s worker=%s job=%s files scanned=%d indexed=%d skipped=%d parse_calls=%d chunks=%d worker_ms=%.1f read_ms=%.1f parse_ms=%.1f outline_query_ms=%.1f usage_query_ms=%.1f symbol_record_ms=%.1f usage_record_ms=%.1f send_wait_ms=%.1f ui_adopt_ms=%.1f aggregate_rebuild_ms=%.1f aggregate_rebuilds=%d max_chunk_adopt_ms=%.1f",
+    log_quiet("Tree-sitter indexing baseline: root=%s phase=%s worker=%s job=%s files scanned=%d indexed=%d skipped=%d parse_calls=%d chunks=%d worker_ms=%.1f read_ms=%.1f parse_ms=%.1f outline_query_ms=%.1f usage_query_ms=%.1f symbol_record_ms=%.1f usage_record_ms=%.1f send_wait_ms=%.1f ui_adopt_ms=%.1f aggregate_rebuild_ms=%.1f aggregate_rebuilds=%d max_chunk_adopt_ms=%.1f metadata_cache_hits=%d metadata_cache_misses=%d aggregate_deferred=%d",
       tostring(index.root), tostring(worker.phase or message.phase), tostring(worker.worker_id), tostring(worker.job_id),
       tonumber(worker.files_scanned or index.files_scanned or 0) or 0,
       tonumber(worker.files_indexed or index.files_indexed or 0) or 0,
@@ -877,7 +1042,10 @@ local function finish_worker_scan(index, message, status)
       tonumber(ui.chunk_adoption_ms or 0) or 0,
       tonumber(ui.aggregate_rebuild_ms or 0) or 0,
       tonumber(ui.aggregate_rebuilds or 0) or 0,
-      tonumber(ui.chunk_adoption_max_ms or 0) or 0)
+      tonumber(ui.chunk_adoption_max_ms or 0) or 0,
+      tonumber(ui.project_path_metadata_cache_hits or 0) or 0,
+      tonumber(ui.project_path_metadata_cache_misses or 0) or 0,
+      tonumber(ui.chunk_aggregate_rebuilds_deferred or 0) or 0)
     local phases = diagnostics.phases or {}
     local symbols_worker = phases.symbols and phases.symbols.worker or {}
     local usages_worker = phases.usages and phases.usages.worker or {}
@@ -885,7 +1053,7 @@ local function finish_worker_scan(index, message, status)
       local total_parse_calls = (tonumber(symbols_worker.parse_calls or 0) or 0) + (tonumber(usages_worker.parse_calls or 0) or 0)
       local total_query_ms = (tonumber(symbols_worker.outline_query_ms or 0) or 0) + (tonumber(symbols_worker.usage_query_ms or 0) or 0)
         + (tonumber(usages_worker.outline_query_ms or 0) or 0) + (tonumber(usages_worker.usage_query_ms or 0) or 0)
-      log_quiet("Tree-sitter indexing baseline phases: root=%s symbols_worker_ms=%.1f usages_worker_ms=%.1f symbols_parse_calls=%d usages_parse_calls=%d total_parse_calls=%d total_read_ms=%.1f total_parse_ms=%.1f total_query_ms=%.1f total_send_wait_ms=%.1f ui_adopt_ms=%.1f aggregate_rebuild_ms=%.1f aggregate_rebuilds=%d",
+      log_quiet("Tree-sitter indexing baseline phases: root=%s symbols_worker_ms=%.1f usages_worker_ms=%.1f symbols_parse_calls=%d usages_parse_calls=%d total_parse_calls=%d total_read_ms=%.1f total_parse_ms=%.1f total_query_ms=%.1f total_send_wait_ms=%.1f ui_adopt_ms=%.1f aggregate_rebuild_ms=%.1f aggregate_rebuilds=%d metadata_cache_hits=%d metadata_cache_misses=%d aggregate_deferred=%d",
         tostring(index.root),
         tonumber(symbols_worker.total_ms or 0) or 0,
         tonumber(usages_worker.total_ms or 0) or 0,
@@ -898,9 +1066,22 @@ local function finish_worker_scan(index, message, status)
         (tonumber(symbols_worker.chunk_send_wait_ms or 0) or 0) + (tonumber(usages_worker.chunk_send_wait_ms or 0) or 0),
         tonumber(ui.chunk_adoption_ms or 0) or 0,
         tonumber(ui.aggregate_rebuild_ms or 0) or 0,
-        tonumber(ui.aggregate_rebuilds or 0) or 0)
+        tonumber(ui.aggregate_rebuilds or 0) or 0,
+        tonumber(ui.project_path_metadata_cache_hits or 0) or 0,
+        tonumber(ui.project_path_metadata_cache_misses or 0) or 0,
+        tonumber(ui.chunk_aggregate_rebuilds_deferred or 0) or 0)
     end
-    drain_pending_reindexes(index)
+    core.add_thread(function()
+      safe_yield(0)
+      local pending_started = now()
+      local drained = drain_pending_reindexes(index)
+      local pending_ms = elapsed_ms(pending_started)
+      add_ui_metric(index, "pending_reindexes_drain_ms", pending_ms)
+      max_ui_metric(index, "pending_reindexes_drain_max_ms", pending_ms)
+      if drained then
+        log_quiet("Tree-sitter Project index: drained pending reindexes for %s in %.1fms", tostring(index.root), pending_ms)
+      end
+    end)
   else
     log_quiet("Tree-sitter Project index: worker finished status=%s root=%s reason=%s", tostring(status), tostring(index.root), tostring(index.reason))
   end
@@ -955,7 +1136,7 @@ local function submit_worker_scan(index, generation, opts, phase)
       project_usage_cap = index.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP,
       max_file_bytes = MAX_FILE_BYTES,
       chunk_files = opts.chunk_files or 8,
-      chunk_records = opts.chunk_records or 3000,
+      chunk_records = opts.chunk_records or DEFAULT_WORKER_CHUNK_RECORDS,
       max_usage_captures_per_file = opts.max_usage_captures_per_file or DEFAULT_MAX_CAPTURES,
     },
     is_stale = function(message)
@@ -976,6 +1157,10 @@ local function submit_worker_scan(index, generation, opts, phase)
         index.files_scanned = p.files_scanned or index.files_scanned
         index.files_indexed = p.files_indexed or index.files_indexed
         index.files_total = p.files_indexed or index.files_total
+        if message.phase ~= "symbols" and p.usage_truncated ~= nil then
+          index.usage_truncated = p.usage_truncated and true or false
+          index.usage_truncated_reason = p.usage_truncated and "project-usage-cap" or nil
+        end
         if p.diagnostics then
           index.diagnostics = index.diagnostics or { ui = {}, phases = {} }
           index.diagnostics.phases = index.diagnostics.phases or {}
@@ -996,8 +1181,16 @@ local function submit_worker_scan(index, generation, opts, phase)
     on_complete = function(message)
       if not current_worker_message(index, message) then return end
       if message.phase == "symbols" then
+        local prune_started = now()
         prune_worker_unseen(index)
-        maybe_rebuild_dirty_aggregates(index, true)
+        local prune_ms = elapsed_ms(prune_started)
+        add_ui_metric(index, "symbols_final_prune_ms", prune_ms)
+        max_ui_metric(index, "symbols_final_prune_max_ms", prune_ms)
+        add_worker_pool_frame_metric("treesitter_project_symbols_final_prune_ms", prune_ms)
+        if index.aggregate_dirty then
+          inc_ui_metric(index, "symbols_final_aggregate_rebuilds_deferred", 1)
+          inc_worker_pool_frame_metric("treesitter_project_symbols_final_aggregate_deferred", 1)
+        end
         index.symbol_status = "ready"
         index.usage_status = "indexing"
         index.worker_handle = nil
@@ -1215,6 +1408,61 @@ local function combined_usages_for_name(index, name)
   return out
 end
 
+local function combined_symbols_from_entries(index, kind)
+  kind = kind or "symbols"
+  if refresh_open_document_overlays then refresh_open_document_overlays(index) end
+  local overlay = index.open_docs or {}
+  local paths = overlay_paths(index)
+  local out = {}
+  for _, entry in pairs(index.by_path or {}) do
+    for _, symbol in ipairs(entry.symbols or {}) do
+      if not paths[symbol.path] and project_path_allows(symbol.path, kind) then
+        out[#out + 1] = refresh_project_path_metadata(index, copy_item(symbol), kind)
+      end
+    end
+  end
+  for _, entry in pairs(overlay) do
+    if overlay_entry_current(entry) then
+      for _, symbol in ipairs(entry.symbols or {}) do
+        if project_path_allows(symbol.path, kind) then
+          out[#out + 1] = refresh_project_path_metadata(index, copy_item(symbol), kind)
+        end
+      end
+    end
+  end
+  sort_symbols(out)
+  inc_ui_metric(index, "direct_symbol_queries", 1)
+  add_ui_metric(index, "direct_symbol_query_items", #out)
+  return out
+end
+
+local function combined_usages_for_name_from_entries(index, name)
+  if refresh_open_document_overlays then refresh_open_document_overlays(index) end
+  local overlay = index.open_docs or {}
+  local paths = overlay_paths(index)
+  local out = {}
+  for _, entry in pairs(index.by_path or {}) do
+    for _, usage in ipairs((entry.usages_by_name or {})[name] or {}) do
+      if not paths[usage.path] and not project_paths_module().is_excluded(usage.path, "usages") then
+        out[#out + 1] = refresh_project_path_metadata(index, usage, "usages")
+      end
+    end
+  end
+  for _, entry in pairs(overlay) do
+    if overlay_entry_current(entry) then
+      for _, usage in ipairs((entry.usages_by_name or {})[name] or {}) do
+        if not project_paths_module().is_excluded(usage.path, "usages") then
+          out[#out + 1] = refresh_project_path_metadata(index, usage, "usages")
+        end
+      end
+    end
+  end
+  sort_usages(out)
+  inc_ui_metric(index, "direct_usage_queries", 1)
+  add_ui_metric(index, "direct_usage_query_items", #out)
+  return out
+end
+
 local function filtered_symbols(symbols, query, limit)
   local items = {}
   for _, symbol in ipairs(symbols or {}) do items[#items + 1] = symbol end
@@ -1258,12 +1506,12 @@ function symbol_index.workspace_symbols(query, opts)
       refresh_after_seconds = opts.refresh_after_seconds,
     })
     local root_status = "pending"
-    if index.symbol_status == "ready" and index.aggregate_dirty then
-      maybe_rebuild_dirty_aggregates(index, true)
-    end
-    if index.symbol_status == "ready" and not index.aggregate_dirty then
+    if index.symbol_status == "ready" then
       refresh_current_core_docs_for_index(index)
-      for _, symbol in ipairs(combined_symbols(index, opts.kind or "symbols")) do all_symbols[#all_symbols + 1] = symbol end
+      local source = index.aggregate_dirty
+        and combined_symbols_from_entries(index, opts.kind or "symbols")
+        or combined_symbols(index, opts.kind or "symbols")
+      for _, symbol in ipairs(source) do all_symbols[#all_symbols + 1] = symbol end
       root_status = "fresh"
       any_usable = true
     elseif (#(index.symbols or {}) > 0 or next(index.open_docs or {}) ~= nil) and opts.allow_stale then
@@ -1332,12 +1580,12 @@ function symbol_index.workspace_usages(name, opts)
       refresh_after_seconds = opts.refresh_after_seconds,
     })
     local root_status = "pending"
-    if index.usage_status == "ready" and index.aggregate_dirty then
-      maybe_rebuild_dirty_aggregates(index, true)
-    end
-    if index.usage_status == "ready" and not index.aggregate_dirty then
+    if index.usage_status == "ready" then
       refresh_current_core_docs_for_index(index)
-      for _, usage in ipairs(combined_usages_for_name(index, name)) do all_usages[#all_usages + 1] = usage end
+      local source = index.aggregate_dirty
+        and combined_usages_for_name_from_entries(index, name)
+        or combined_usages_for_name(index, name)
+      for _, usage in ipairs(source) do all_usages[#all_usages + 1] = usage end
       root_status = "fresh"
       any_usable = true
     elseif opts.allow_stale and ((index.usages_by_name or {})[name] or next(index.open_docs or {}) ~= nil) then

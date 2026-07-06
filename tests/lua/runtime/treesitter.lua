@@ -734,7 +734,13 @@ fun make(): EagerThing = EagerThing()
     test.equal(status.status, "ready")
     test.equal(status.symbol_status, "ready")
     test.equal(status.usage_status, "ready")
-    test.ok(find_symbol(status.symbols, "EagerThing", "class"))
+    local symbols, symbol_reason, symbol_status = symbol_index.workspace_symbols("EagerThing", {
+      root = root,
+      limit = 20,
+      refresh_after_seconds = 0,
+    })
+    test.equal(symbol_status, "fresh", symbol_reason)
+    test.ok(find_symbol(symbols, "EagerThing", "class"))
     test.not_nil(status.diagnostics)
     test.not_nil(status.diagnostics.phases)
     test.not_nil(status.diagnostics.phases.symbols)
@@ -772,7 +778,6 @@ fun make%d(): DebouncedThing%d = DebouncedThing%d()
     local ui = status.diagnostics and status.diagnostics.ui or {}
     test.ok((ui.chunks_adopted or 0) >= 2, common.serialize(ui))
     test.ok((ui.aggregate_rebuilds or 0) < (ui.chunks_adopted or 0), common.serialize(ui))
-    test.ok(find_symbol(status.symbols, "DebouncedThing1", "class"))
     status.aggregate_dirty = true
     local dirty_symbols, dirty_reason, dirty_status = symbol_index.workspace_symbols("DebouncedThing1", {
       root = root,
@@ -780,7 +785,46 @@ fun make%d(): DebouncedThing%d = DebouncedThing%d()
     })
     test.equal(dirty_status, "fresh", dirty_reason)
     test.ok(find_symbol(dirty_symbols, "DebouncedThing1", "class"))
-    test.equal(status.aggregate_dirty, false)
+    test.equal(status.aggregate_dirty, true)
+    test.ok(((status.diagnostics and status.diagnostics.ui and status.diagnostics.ui.direct_symbol_queries) or 0) >= 1)
+    common.rm(root, true)
+  end)
+
+  test.it("Tree-sitter Project chunk adoption caches per-file Project path metadata", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-metadata-cache-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    local lines = { "package demo", "", "class CachedMetaThing", "" }
+    for i = 1, 60 do
+      lines[#lines + 1] = string.format("fun make%d(): CachedMetaThing = CachedMetaThing()", i)
+    end
+    write_file(root .. PATHSEP .. "Model.kt", table.concat(lines, "\n"))
+
+    local original_resolve = project_paths.resolve
+    local original_display_path = project_paths.display_path
+    local resolve_calls = 0
+    local display_calls = 0
+    project_paths.resolve = function(...)
+      resolve_calls = resolve_calls + 1
+      return original_resolve(...)
+    end
+    project_paths.display_path = function(...)
+      display_calls = display_calls + 1
+      return original_display_path(...)
+    end
+
+    local ok, err = pcall(function()
+      symbol_index.ensure_scan(root, { force = true, refresh_after_seconds = 0, chunk_files = 1 })
+      local status = wait_index_ready(root)
+      test.equal(status.status, "ready")
+    end)
+    project_paths.resolve = original_resolve
+    project_paths.display_path = original_display_path
+    if not ok then error(err) end
+
+    test.ok(resolve_calls <= 12, "expected per-file metadata cache, got resolve_calls=" .. tostring(resolve_calls))
+    test.ok(display_calls <= 4, "expected per-file metadata cache, got display_calls=" .. tostring(display_calls))
     common.rm(root, true)
   end)
 
