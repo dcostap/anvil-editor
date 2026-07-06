@@ -15,15 +15,16 @@ This is a throughput plan, not just a responsiveness plan.
 
 ## Implementation status
 
-As of the current implementation pass, Milestones 1-5 are complete:
+As of the current implementation pass, Milestones 1-6 are complete:
 
 - **Milestone 1 complete:** indexing now records quiet throughput diagnostics for worker scanning, file reads, native parse/query timing, record construction, chunk send/backpressure time, UI chunk adoption, and aggregate rebuilds. Baseline-style quiet logs are emitted per completed run/phase.
 - **Milestone 2 complete:** `treesitter.index_text` now supports per-query result status/error metadata, and worker jobs that collect both symbols and usages parse each file once and run both queries from that parse. Outline results are preserved if usage extraction fails.
 - **Milestone 3 complete:** UI chunk adoption no longer rebuilds aggregates on every chunk. Aggregate rebuilds are debounced during chunk arrival and forced at phase/fresh-query boundaries. A Lua-side `core.treesitter.index_scheduler` now exists to cap outstanding/running indexing jobs and reserve worker-pool capacity.
 - **Milestone 4 complete:** project indexing now uses a worker-side coordinator walk that emits bounded file batches, and the UI submits those batches as bounded shard jobs through `core.treesitter.index_scheduler`. Shard chunks are adopted through the existing bounded path, stale generation/project-path messages are rejected, and usage indexing uses deterministic per-shard reservations so accepted shard budgets never exceed the project usage cap.
 - **Milestone 5 complete for Tree-sitter chunks:** project-index result chunks are delivered through file-backed artifacts by default, reducing large Lua channel table copies. Artifact load/write metrics are recorded and adopted/stale artifacts are removed.
+- **Milestone 6 complete:** workspace symbol and usage/reference filtering has worker-backed async paths. Small sets use per-request query snapshot artifacts; large ready indexes use persistent file-backed query artifacts plus small overlay/suppressed-path payloads so repeated queries avoid per-query full-index snapshots on the UI thread.
 
-The throughput plan is **not fully complete**. The main near-term indexing speedup and chunk transport improvement are now in place, but later query/pool infrastructure work should be implemented only after measurements show they are the next bottleneck.
+The throughput plan is **not fully complete**. The main near-term indexing speedup, chunk transport improvement, and worker-backed query path are now in place, but native pool/file-walking infrastructure work should be implemented only after measurements show they are the next bottleneck.
 
 Post-Milestone-3 responsiveness repair: real performance captures showed that chunk adoption was still doing per-record Project path resolution, occasional aggregate rebuild/sort work, huge single-file result transfers, synchronous pending-refresh drain work inside worker-pool callbacks, and forced aggregate rebuilds from workspace symbol/reference queries. Chunk adoption now caches Project path metadata per file/kind/project-path generation, defers aggregate rebuilds while indexing chunks are arriving, splits oversized single-file worker results into bounded partial chunks, uses a smaller default worker result chunk size, defers phase-completion aggregate/pending-refresh work out of the worker callback, and lets workspace queries read directly from per-file entries while aggregates are dirty instead of rebuilding the whole symbol/usage aggregate on demand. Milestones 4-5 were implemented on top of those containment fixes; re-measure before choosing Milestone 6/7 follow-up work.
 
@@ -74,7 +75,7 @@ Important limitations:
 - Worker output still uses Lua channels, which deep-copy Lua tables.
 - Result chunks are bounded, but large result ownership is not Fred-style native handle/pointer ownership.
 - UI-side adoption caches per-file Project path metadata and defers aggregate rebuilds while chunks are arriving; worker output can split one large file across partial chunks to keep Lua channel transfers bounded. Workspace queries can read directly from per-file entries while aggregates are dirty, so dirty aggregates should not force full rebuilds on the picker/query path.
-- Workspace symbol/reference commands still do some UI-thread combining/filtering work over ready indexes, and adjacent picker/filetree/search code still has coroutine-based async work that can monopolize the UI thread.
+- Workspace symbol/reference commands now have worker-backed async filtering paths for ready indexes, including persistent large-index query artifacts. Some fallback/small-result paths still use UI-thread combining, and adjacent picker/filetree/search code still has coroutine-based async work that can monopolize the UI thread.
 
 ## Fred-style target model
 
@@ -704,7 +705,7 @@ Implemented path:
 - ensure cancellation removes abandoned artifacts;
 - ensure UI drains under budget.
 
-## Milestone 6: Worker-backed workspace symbol/reference filtering — Pending / Depends on compact transport
+## Milestone 6: Worker-backed workspace symbol/reference filtering — Complete
 
 ### Goal
 
@@ -712,7 +713,7 @@ Commands should not perform unbounded fuzzy/filter work on huge ready indexes in
 
 ### Status
 
-Pending. Should not be implemented by copying the whole Lua symbol/reference table into a worker per query. Prefer waiting for Milestone 5's compact transport/artifact path.
+Complete for the current Lua worker-pool architecture. `symbol_index.workspace_symbols_async` / `query_symbols_async` and `symbol_index.workspace_usages_async` / `query_usages_async` now use worker-backed filtering. Small Project symbol and usage sets use compact per-request query snapshot artifacts. Oversized snapshots fall back to persistent per-index query artifacts: symbol artifacts are cached per root/kind/generation/project-path generation, and usage artifacts are cached per root/name/generation/project-path generation. Query jobs receive only artifact descriptors plus small overlay/suppressed-path payloads, so repeated Project-symbol typing and repeated reference filtering avoid rebuilding/copying the whole Project table on the UI thread. Query artifacts are removed after worker load, terminal callbacks, or request cancellation; persistent index artifacts are invalidated on aggregate rebuild, project invalidation, and test reset. Default query artifacts live in per-process session directories, and stale default query artifact sessions are swept before new default artifacts are written. The Project symbol picker uses the async symbol path when available and falls back to the existing synchronous query path when the async path is pending/unavailable/timed out. The language references Tree-sitter fallback can use the async usage path before falling back to the existing polling path. Native result handles may still be a future optimization, but Milestone 6 no longer depends on per-query full-index snapshots for large ready indexes.
 
 ### Current issue
 
@@ -723,6 +724,8 @@ Even if indexing is async, commands can still be slow if they scan/filter/format
 Add an async query path for large indexes:
 
 ```lua
+symbol_index.workspace_symbols_async(query, opts)
+symbol_index.workspace_usages_async(name, opts)
 symbol_index.query_symbols_async(query, opts)
 symbol_index.query_usages_async(name, opts)
 ```
@@ -739,6 +742,8 @@ Worker query job input must be compact:
 - either native/file-backed index handle;
 - or a compact snapshot/artifact;
 - avoid copying the entire symbol table per query.
+
+Implemented transport uses compact file-backed query snapshots for small sets and persistent file-backed index artifacts for large sets. The persistent artifacts keep the full ready Project symbol/usage list out of Lua channel payloads and avoid rebuilding the same large snapshot on every query update.
 
 This milestone depends on Milestone 5. Do not implement large-index async query jobs by sending the full Lua symbol/reference table through `thread` channels per keystroke. If compact transport is not ready, scope this milestone to small/snapshot-safe experiments only.
 

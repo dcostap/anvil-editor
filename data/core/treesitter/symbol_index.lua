@@ -25,6 +25,9 @@ local DEFAULT_QUERY_TIMEOUT_MS = 20
 local DEFAULT_PROJECT_USAGE_CAP = 750000
 local DEFAULT_AGGREGATE_REBUILD_DELAY = 0.075
 local DEFAULT_WORKER_CHUNK_RECORDS = 100
+local DEFAULT_ASYNC_SYMBOL_SNAPSHOT_LIMIT = 5000
+local DEFAULT_ASYNC_USAGE_SNAPSHOT_LIMIT = 5000
+local DEFAULT_ASYNC_OVERLAY_SNAPSHOT_LIMIT = 1000
 local DEFAULT_INDEX_BATCH_FILES = 64
 local DEFAULT_INDEX_BATCH_BYTES = 4 * 1024 * 1024
 local DEFAULT_SHARD_USAGE_BUDGET = 8192
@@ -152,6 +155,7 @@ local function new_index(root)
     next_aggregate_rebuild_at = nil,
     project_path_metadata_cache = {},
     project_path_metadata_cache_generation = nil,
+    query_artifacts = {},
   }
 end
 
@@ -586,6 +590,9 @@ local function sort_usages(usages)
   end)
 end
 
+local invalidate_index_query_artifacts
+local cleanup_index_query_artifacts
+
 local function rebuild_disk_aggregates(index)
   local rebuild_started = now()
   local symbols = {}
@@ -626,6 +633,7 @@ local function rebuild_disk_aggregates(index)
   index.usages_by_name = usages_by_name
   index.usage_count = usage_count
   invalidate_combined_symbols_cache(index)
+  invalidate_index_query_artifacts(index)
   local duration = elapsed_ms(rebuild_started)
   inc_ui_metric(index, "aggregate_rebuilds", 1)
   add_ui_metric(index, "aggregate_rebuild_ms", duration)
@@ -1242,6 +1250,82 @@ local function default_index_artifact_dir()
   return common.normalize_path(base .. PATHSEP .. "treesitter-index-artifacts")
 end
 
+local query_artifact_sequence = 0
+local query_artifact_stale_cleanup_done = false
+
+local function default_query_artifact_base_dir()
+  local base = USERDIR or (system and system.absolute_path and system.absolute_path(".") or ".")
+  return common.normalize_path(base .. PATHSEP .. "treesitter-query-artifacts")
+end
+
+local function default_query_artifact_dir()
+  local pid = tostring(system and system.get_process_id and system.get_process_id() or 0)
+  return common.normalize_path(default_query_artifact_base_dir() .. PATHSEP .. "session-" .. pid)
+end
+
+local function cleanup_stale_default_query_artifacts(current_dir)
+  if query_artifact_stale_cleanup_done then return end
+  query_artifact_stale_cleanup_done = true
+  local base = default_query_artifact_base_dir()
+  local names = system.list_dir(base) or {}
+  for _, name in ipairs(names) do
+    local path = common.normalize_path(base .. PATHSEP .. name)
+    if not current_dir or not common.path_equals(path, current_dir) then
+      local info = system.get_file_info(path)
+      if info and info.type == "dir" then
+        common.rm(path, true)
+      elseif info and info.type == "file" and tostring(name):match("^treesitter%-.+%-query%-.+%.lua$") then
+        pcall(os.remove, path)
+      end
+    end
+  end
+end
+
+local function write_query_artifact(kind, payload, opts)
+  opts = opts or {}
+  local dir = opts.query_artifact_dir or default_query_artifact_dir()
+  if not opts.query_artifact_dir then cleanup_stale_default_query_artifacts(dir) end
+  local ok, err = common.mkdirp(dir)
+  if not ok and err ~= "path exists" then return nil, err or "mkdir-failed" end
+  query_artifact_sequence = query_artifact_sequence + 1
+  local path = common.normalize_path(dir .. PATHSEP .. string.format(
+    "treesitter-%s-query-%s-%06d.lua",
+    tostring(kind or "query"),
+    tostring(system and system.get_process_id and system.get_process_id() or 0),
+    query_artifact_sequence
+  ))
+  local fp, open_err = io.open(path, "wb")
+  if not fp then return nil, open_err or "open-failed" end
+  local content = "return " .. common.serialize(payload)
+  local wrote, write_err = fp:write(content)
+  local closed, close_err = fp:close()
+  if not wrote or not closed then
+    os.remove(path)
+    return nil, write_err or close_err or "write-failed"
+  end
+  return { path = path, bytes = #content }
+end
+
+local function cleanup_query_artifact(artifact)
+  if artifact and artifact.path then pcall(os.remove, artifact.path) end
+end
+
+cleanup_index_query_artifacts = function(index)
+  if not index then return end
+  for _, artifact in pairs(index.query_artifacts or {}) do
+    if type(artifact) == "table" and artifact.path then pcall(os.remove, artifact.path) end
+  end
+  index.query_artifacts = {}
+end
+
+invalidate_index_query_artifacts = function(index)
+  cleanup_index_query_artifacts(index)
+end
+
+local function persistent_query_artifact_path_exists(artifact)
+  return artifact and artifact.path and system.get_file_info(artifact.path) ~= nil
+end
+
 local function make_index_payload(index, opts, phase)
   opts = opts or {}
   return {
@@ -1698,6 +1782,7 @@ function symbol_index.invalidate(root)
     index.symbol_status = "idle"
     index.usage_status = "idle"
     index.generation = index.generation + 1
+    invalidate_index_query_artifacts(index)
   else
     for _, index in pairs(indexes) do
       cancel_index_work(index)
@@ -1705,6 +1790,7 @@ function symbol_index.invalidate(root)
       index.symbol_status = "idle"
       index.usage_status = "idle"
       index.generation = index.generation + 1
+      invalidate_index_query_artifacts(index)
     end
   end
 end
@@ -1968,6 +2054,581 @@ local function filter_usages(usages, opts)
   return out, has_more
 end
 
+local function workspace_symbol_snapshot(query, opts)
+  opts = opts or {}
+  local roots = project_path_roots("symbols", opts)
+  local query_project_paths_generation = project_paths_module().generation()
+  local max_snapshot_symbols = tonumber(opts.max_snapshot_symbols or DEFAULT_ASYNC_SYMBOL_SNAPSHOT_LIMIT) or DEFAULT_ASYNC_SYMBOL_SNAPSHOT_LIMIT
+  local all_symbols, per_root = {}, {}
+  local status = "fresh"
+  local reason
+  local any_usable = false
+
+  for _, root in ipairs(roots) do
+    local index = symbol_index.ensure_scan(root, scan_options_from_query(opts))
+    local root_status = "pending"
+    if index.symbol_status == "ready" then
+      refresh_current_core_docs_for_index(index)
+      local source = index.aggregate_dirty
+        and combined_symbols_from_entries(index, opts.kind or "symbols")
+        or combined_symbols(index, opts.kind or "symbols")
+      for _, symbol in ipairs(source) do
+        if #all_symbols >= max_snapshot_symbols then
+          return nil, "snapshot-too-large", "unavailable", { roots = per_root, index = index }
+        end
+        all_symbols[#all_symbols + 1] = symbol
+      end
+      root_status = "fresh"
+      any_usable = true
+    elseif (#(index.symbols or {}) > 0 or next(index.open_docs or {}) ~= nil) and opts.allow_stale then
+      for _, symbol in ipairs(combined_symbols(index, opts.kind or "symbols")) do
+        if #all_symbols >= max_snapshot_symbols then
+          return nil, "snapshot-too-large", "unavailable", { roots = per_root, index = index }
+        end
+        all_symbols[#all_symbols + 1] = symbol
+      end
+      root_status = "stale"
+      reason = reason or (index.aggregate_dirty and "aggregate-dirty" or "indexing")
+      any_usable = true
+    else
+      reason = reason or (index.aggregate_dirty and "aggregate-dirty" or "indexing")
+    end
+    status = merge_status(status, root_status)
+    per_root[#per_root + 1] = {
+      root = root,
+      status = root_status,
+      index = index,
+      generation = index.generation,
+      project_paths_generation = index.project_paths_generation,
+      query_project_paths_generation = query_project_paths_generation,
+    }
+  end
+
+  if not any_usable then
+    return nil, reason or "indexing", "pending", { roots = per_root, index = #per_root == 1 and per_root[1].index or nil }
+  end
+  if status ~= "fresh" and not opts.allow_stale then
+    return nil, reason or "indexing", "pending", { roots = per_root, index = #per_root == 1 and per_root[1].index or nil }
+  end
+  sort_symbols(all_symbols)
+  return all_symbols, status == "fresh" and nil or (reason or "indexing"), status == "fresh" and "fresh" or "stale", {
+    roots = per_root,
+    index = #per_root == 1 and per_root[1].index or nil,
+  }
+end
+
+local function persistent_symbol_query_artifact(index, kind, opts)
+  opts = opts or {}
+  if opts.disable_persistent_query_artifacts then return nil, "disabled" end
+  if not index or index.aggregate_dirty then return nil, "aggregate-dirty" end
+  kind = kind or "symbols"
+  local project_paths_generation = project_paths_module().generation()
+  local key = table.concat({ "symbols", kind, tostring(index.generation), tostring(project_paths_generation) }, "\0")
+  index.query_artifacts = index.query_artifacts or {}
+  local cached = index.query_artifacts[key]
+  if cached
+  and cached.generation == index.generation
+  and cached.project_paths_generation == project_paths_generation
+  and cached.kind == kind
+  and persistent_query_artifact_path_exists(cached)
+  then
+    inc_ui_metric(index, "persistent_symbol_query_artifact_hits", 1)
+    return cached
+  end
+
+  local symbols = {}
+  for _, symbol in ipairs(index.symbols or {}) do
+    if project_path_allows(symbol.path, kind) then
+      local item = refresh_project_path_metadata(index, copy_item(symbol), kind)
+      item.search_text = tostring(item.text or item.name or "")
+      symbols[#symbols + 1] = item
+    end
+  end
+  local artifact, err = write_query_artifact("symbols-index", { symbols = symbols }, opts)
+  if not artifact then return nil, err or "artifact-write-failed" end
+  artifact.generation = index.generation
+  artifact.project_paths_generation = project_paths_generation
+  artifact.kind = kind
+  artifact.count = #symbols
+  index.query_artifacts[key] = artifact
+  inc_ui_metric(index, "persistent_symbol_query_artifact_builds", 1)
+  add_ui_metric(index, "persistent_symbol_query_artifact_items", #symbols)
+  return artifact
+end
+
+local function persistent_usage_query_artifact(index, name, opts)
+  opts = opts or {}
+  if opts.disable_persistent_query_artifacts then return nil, "disabled" end
+  if not index or index.aggregate_dirty then return nil, "aggregate-dirty" end
+  name = tostring(name or "")
+  local project_paths_generation = project_paths_module().generation()
+  local key = table.concat({ "usages", name, tostring(index.generation), tostring(project_paths_generation) }, "\0")
+  index.query_artifacts = index.query_artifacts or {}
+  local cached = index.query_artifacts[key]
+  if cached
+  and cached.generation == index.generation
+  and cached.project_paths_generation == project_paths_generation
+  and cached.name == name
+  and persistent_query_artifact_path_exists(cached)
+  then
+    inc_ui_metric(index, "persistent_usage_query_artifact_hits", 1)
+    return cached
+  end
+
+  local usages = {}
+  for _, usage in ipairs((index.usages_by_name or {})[name] or {}) do
+    if not project_paths_module().is_excluded(usage.path, "usages") then
+      usages[#usages + 1] = refresh_project_path_metadata(index, copy_item(usage), "usages")
+    end
+  end
+  sort_usages(usages)
+  local artifact, err = write_query_artifact("usages-index", { usages = usages }, opts)
+  if not artifact then return nil, err or "artifact-write-failed" end
+  artifact.generation = index.generation
+  artifact.project_paths_generation = project_paths_generation
+  artifact.name = name
+  artifact.count = #usages
+  index.query_artifacts[key] = artifact
+  inc_ui_metric(index, "persistent_usage_query_artifact_builds", 1)
+  add_ui_metric(index, "persistent_usage_query_artifact_items", #usages)
+  return artifact
+end
+
+local function append_overlay_symbols(index, kind, out, max_count)
+  local count = #(out or {})
+  for _, entry in pairs(index.open_docs or {}) do
+    if overlay_entry_current(entry) then
+      for _, symbol in ipairs(entry.symbols or {}) do
+        if project_path_allows(symbol.path, kind) then
+          count = count + 1
+          if count > max_count then return nil, "overlay-too-large" end
+          local item = refresh_project_path_metadata(index, copy_item(symbol), kind)
+          item.search_text = tostring(item.text or item.name or "")
+          out[#out + 1] = item
+        end
+      end
+    end
+  end
+  return true
+end
+
+local function append_overlay_usages(index, name, out, max_count)
+  local count = #(out or {})
+  for _, entry in pairs(index.open_docs or {}) do
+    if overlay_entry_current(entry) then
+      for _, usage in ipairs((entry.usages_by_name or {})[name] or {}) do
+        if not project_paths_module().is_excluded(usage.path, "usages") then
+          count = count + 1
+          if count > max_count then return nil, "overlay-too-large" end
+          out[#out + 1] = refresh_project_path_metadata(index, copy_item(usage), "usages")
+        end
+      end
+    end
+  end
+  return true
+end
+
+local function workspace_symbol_artifact_payload(query, opts)
+  opts = opts or {}
+  local roots = project_path_roots("symbols", opts)
+  local query_project_paths_generation = project_paths_module().generation()
+  local artifact_payload = {
+    query = query,
+    limit = opts.limit or DEFAULT_QUERY_LIMIT,
+    index_artifacts = {},
+    extra_symbols = {},
+    suppressed_paths = {},
+  }
+  local per_root = {}
+  local status = "fresh"
+  local reason
+  local any_usable = false
+  local max_overlay = tonumber(opts.max_overlay_symbols or DEFAULT_ASYNC_OVERLAY_SNAPSHOT_LIMIT) or DEFAULT_ASYNC_OVERLAY_SNAPSHOT_LIMIT
+
+  for _, root in ipairs(roots) do
+    local index = symbol_index.ensure_scan(root, scan_options_from_query(opts))
+    local root_status = "pending"
+    if index.symbol_status == "ready" and not index.aggregate_dirty then
+      refresh_current_core_docs_for_index(index)
+      local suppressed = overlay_paths(index)
+      for path in pairs(suppressed) do artifact_payload.suppressed_paths[#artifact_payload.suppressed_paths + 1] = path end
+      local ok, overlay_err = append_overlay_symbols(index, opts.kind or "symbols", artifact_payload.extra_symbols, max_overlay)
+      if not ok then return nil, overlay_err, "unavailable", { roots = per_root, index = index } end
+      local artifact, artifact_err = persistent_symbol_query_artifact(index, opts.kind or "symbols", opts)
+      if not artifact then return nil, artifact_err or "artifact-unavailable", "unavailable", { roots = per_root, index = index } end
+      artifact_payload.index_artifacts[#artifact_payload.index_artifacts + 1] = artifact
+      root_status = "fresh"
+      any_usable = true
+    elseif opts.allow_stale and #(index.symbols or {}) > 0 and not index.aggregate_dirty then
+      local artifact, artifact_err = persistent_symbol_query_artifact(index, opts.kind or "symbols", opts)
+      if artifact then
+        artifact_payload.index_artifacts[#artifact_payload.index_artifacts + 1] = artifact
+        root_status = "stale"
+        reason = reason or "indexing"
+        any_usable = true
+      else
+        reason = reason or artifact_err or "indexing"
+      end
+    else
+      reason = reason or (index.aggregate_dirty and "aggregate-dirty" or "indexing")
+    end
+    status = merge_status(status, root_status)
+    per_root[#per_root + 1] = {
+      root = root,
+      status = root_status,
+      index = index,
+      generation = index.generation,
+      project_paths_generation = index.project_paths_generation,
+      query_project_paths_generation = query_project_paths_generation,
+    }
+  end
+
+  local meta = { roots = per_root, index = #per_root == 1 and per_root[1].index or nil }
+  if not any_usable then return nil, reason or "indexing", "pending", meta end
+  if status ~= "fresh" and not opts.allow_stale then return nil, reason or "indexing", "pending", meta end
+  return artifact_payload, status == "fresh" and nil or (reason or "indexing"), status == "fresh" and "fresh" or "stale", meta
+end
+
+local function workspace_usage_artifact_payload(name, opts)
+  opts = opts or {}
+  name = tostring(name or "")
+  if name == "" then return { usages = {}, limit = opts.limit or DEFAULT_QUERY_LIMIT }, "no-symbol", "fresh", { has_more = false } end
+  local roots = project_path_roots("usages", opts)
+  local query_project_paths_generation = project_paths_module().generation()
+  local artifact_payload = {
+    include_declaration = opts.include_declaration,
+    limit = opts.limit or DEFAULT_QUERY_LIMIT,
+    index_artifacts = {},
+    extra_usages = {},
+    suppressed_paths = {},
+  }
+  local per_root = {}
+  local status = "fresh"
+  local reason
+  local any_usable = false
+  local usage_truncated = false
+  local usage_truncated_reason
+  local max_overlay = tonumber(opts.max_overlay_usages or DEFAULT_ASYNC_OVERLAY_SNAPSHOT_LIMIT) or DEFAULT_ASYNC_OVERLAY_SNAPSHOT_LIMIT
+
+  for _, root in ipairs(roots) do
+    local index = symbol_index.ensure_scan(root, scan_options_from_query(opts))
+    local root_status = "pending"
+    if index.usage_status == "ready" and not index.aggregate_dirty then
+      refresh_current_core_docs_for_index(index)
+      local suppressed = overlay_paths(index)
+      for path in pairs(suppressed) do artifact_payload.suppressed_paths[#artifact_payload.suppressed_paths + 1] = path end
+      local ok, overlay_err = append_overlay_usages(index, name, artifact_payload.extra_usages, max_overlay)
+      if not ok then return nil, overlay_err, "unavailable", { roots = per_root, index = index } end
+      local artifact, artifact_err = persistent_usage_query_artifact(index, name, opts)
+      if not artifact then return nil, artifact_err or "artifact-unavailable", "unavailable", { roots = per_root, index = index } end
+      artifact_payload.index_artifacts[#artifact_payload.index_artifacts + 1] = artifact
+      root_status = "fresh"
+      any_usable = true
+    elseif opts.allow_stale and ((index.usages_by_name or {})[name]) and not index.aggregate_dirty then
+      local artifact, artifact_err = persistent_usage_query_artifact(index, name, opts)
+      if artifact then
+        artifact_payload.index_artifacts[#artifact_payload.index_artifacts + 1] = artifact
+        root_status = "stale"
+        reason = reason or "indexing"
+        any_usable = true
+      else
+        reason = reason or artifact_err or "indexing"
+      end
+    else
+      reason = reason or (index.aggregate_dirty and "aggregate-dirty" or "indexing")
+    end
+    usage_truncated = usage_truncated or index.usage_truncated or false
+    usage_truncated_reason = usage_truncated_reason or index.usage_truncated_reason
+    status = merge_status(status, root_status)
+    per_root[#per_root + 1] = {
+      root = root,
+      status = root_status,
+      index = index,
+      generation = index.generation,
+      project_paths_generation = index.project_paths_generation,
+      query_project_paths_generation = query_project_paths_generation,
+    }
+  end
+
+  local meta = {
+    roots = per_root,
+    index = #per_root == 1 and per_root[1].index or nil,
+    usage_truncated = usage_truncated,
+    usage_truncated_reason = usage_truncated_reason,
+  }
+  if not any_usable then return nil, reason or "indexing", "pending", meta end
+  if status ~= "fresh" and not opts.allow_stale then return nil, reason or "indexing", "pending", meta end
+  return artifact_payload, status == "fresh" and nil or (reason or "indexing"), status == "fresh" and "fresh" or "stale", meta
+end
+
+local function async_snapshot_stale_reason(meta)
+  for _, root_meta in ipairs((meta and meta.roots) or {}) do
+    local index = root_meta.index
+    if not index then return "missing-index" end
+    if root_meta.generation ~= nil and index.generation ~= root_meta.generation then
+      return string.format("generation-changed:%s:%s", tostring(root_meta.generation), tostring(index.generation))
+    end
+    if root_meta.query_project_paths_generation ~= nil
+      and project_paths_module().generation() ~= root_meta.query_project_paths_generation
+    then
+      return string.format("project-paths-generation-changed:%s:%s", tostring(root_meta.query_project_paths_generation), tostring(project_paths_module().generation()))
+    end
+    if root_meta.project_paths_generation ~= nil
+      and index.project_paths_generation ~= root_meta.project_paths_generation
+      and index.status ~= "indexing"
+    then
+      return string.format("index-project-paths-generation-changed:%s:%s", tostring(root_meta.project_paths_generation), tostring(index.project_paths_generation))
+    end
+  end
+  return nil
+end
+
+function symbol_index.workspace_symbols_async(query, opts)
+  opts = opts or {}
+  local symbols, reason, status, meta = workspace_symbol_snapshot(query, opts)
+  local query_payload
+  local artifact
+  local artifact_err
+  if status == "fresh" or status == "stale" then
+    local compact_symbols = {}
+    for _, symbol in ipairs(symbols or {}) do
+      local item = copy_item(symbol)
+      item.search_text = tostring(symbol.text or symbol.name or "")
+      compact_symbols[#compact_symbols + 1] = item
+    end
+    query_payload = {
+      query = query,
+      symbols = compact_symbols,
+      limit = opts.limit or DEFAULT_QUERY_LIMIT,
+    }
+    artifact, artifact_err = write_query_artifact("symbols", query_payload, opts)
+  elseif reason == "snapshot-too-large" and not opts.disable_persistent_query_artifacts then
+    query_payload, reason, status, meta = workspace_symbol_artifact_payload(query, opts)
+  end
+  if status ~= "fresh" and status ~= "stale" then return nil, reason, status, meta end
+
+  local request = {
+    status = "pending",
+    reason = reason,
+    source_status = status,
+    results = nil,
+    meta = meta,
+  }
+  local handle
+  if artifact then
+    request.query_artifact = artifact
+  elseif artifact_err then
+    log_quiet("Tree-sitter Project symbol query: using channel payload after artifact write failed: %s", tostring(artifact_err))
+  end
+  handle = worker_pool.system():submit({
+    kind = "treesitter_symbol_query",
+    priority = "background",
+    payload = artifact and { artifact = artifact } or query_payload,
+    on_result = function(message)
+      if message.type ~= "result" then return end
+      local p = message.payload or {}
+      request.results = p.symbols or {}
+      request.has_more = p.has_more and true or false
+      request.diagnostics = p.diagnostics
+    end,
+    on_complete = function()
+      cleanup_query_artifact(request.query_artifact)
+      request.query_artifact = nil
+      local stale_reason = async_snapshot_stale_reason(meta)
+      if not stale_reason then
+        request.status = request.source_status or "fresh"
+      else
+        request.status = "stale-cancelled"
+        request.reason = stale_reason
+        request.results = nil
+      end
+      request.done = true
+    end,
+    on_error = function(message)
+      cleanup_query_artifact(request.query_artifact)
+      request.query_artifact = nil
+      request.status = "unavailable"
+      request.reason = message and (message.error or (message.payload and message.payload.reason)) or "query-failed"
+      request.done = true
+    end,
+    on_cancelled = function()
+      cleanup_query_artifact(request.query_artifact)
+      request.query_artifact = nil
+      request.status = "cancelled"
+      request.reason = "cancelled"
+      request.done = true
+    end,
+  })
+  if not handle then
+    cleanup_query_artifact(artifact)
+    return nil, "submit-failed", "unavailable", meta
+  end
+  request.handle = handle
+  function request:cancel()
+    cleanup_query_artifact(self.query_artifact)
+    self.query_artifact = nil
+    if self.handle then return worker_pool.system():cancel(self.handle) end
+    return false
+  end
+  return request, nil, "pending", meta
+end
+
+function symbol_index.query_symbols_async(query, opts)
+  return symbol_index.workspace_symbols_async(query, opts)
+end
+
+local function workspace_usage_snapshot(name, opts)
+  opts = opts or {}
+  name = tostring(name or "")
+  if name == "" then return {}, "no-symbol", "fresh", { has_more = false } end
+  local roots = project_path_roots("usages", opts)
+  local query_project_paths_generation = project_paths_module().generation()
+  local max_snapshot_usages = tonumber(opts.max_snapshot_usages or DEFAULT_ASYNC_USAGE_SNAPSHOT_LIMIT) or DEFAULT_ASYNC_USAGE_SNAPSHOT_LIMIT
+  local all_usages, per_root = {}, {}
+  local status = "fresh"
+  local reason
+  local any_usable = false
+  local usage_truncated = false
+  local usage_truncated_reason
+
+  for _, root in ipairs(roots) do
+    local index = symbol_index.ensure_scan(root, scan_options_from_query(opts))
+    local root_status = "pending"
+    if index.usage_status == "ready" then
+      refresh_current_core_docs_for_index(index)
+      local source = index.aggregate_dirty
+        and combined_usages_for_name_from_entries(index, name)
+        or combined_usages_for_name(index, name)
+      for _, usage in ipairs(source) do
+        if #all_usages >= max_snapshot_usages then
+          return nil, "snapshot-too-large", "unavailable", { roots = per_root, index = index }
+        end
+        all_usages[#all_usages + 1] = usage
+      end
+      root_status = "fresh"
+      any_usable = true
+    elseif opts.allow_stale and ((index.usages_by_name or {})[name] or next(index.open_docs or {}) ~= nil) then
+      for _, usage in ipairs(combined_usages_for_name(index, name)) do
+        if #all_usages >= max_snapshot_usages then
+          return nil, "snapshot-too-large", "unavailable", { roots = per_root, index = index }
+        end
+        all_usages[#all_usages + 1] = usage
+      end
+      root_status = "stale"
+      reason = reason or (index.aggregate_dirty and "aggregate-dirty" or "indexing")
+      any_usable = true
+    else
+      reason = reason or (index.aggregate_dirty and "aggregate-dirty" or "indexing")
+    end
+    usage_truncated = usage_truncated or index.usage_truncated or false
+    usage_truncated_reason = usage_truncated_reason or index.usage_truncated_reason
+    status = merge_status(status, root_status)
+    per_root[#per_root + 1] = {
+      root = root,
+      status = root_status,
+      index = index,
+      generation = index.generation,
+      project_paths_generation = index.project_paths_generation,
+      query_project_paths_generation = query_project_paths_generation,
+    }
+  end
+
+  local meta = {
+    roots = per_root,
+    index = #per_root == 1 and per_root[1].index or nil,
+    usage_truncated = usage_truncated,
+    usage_truncated_reason = usage_truncated_reason,
+  }
+  if not any_usable then return nil, reason or "indexing", "pending", meta end
+  if status ~= "fresh" and not opts.allow_stale then return nil, reason or "indexing", "pending", meta end
+  return all_usages, status == "fresh" and nil or (reason or "indexing"), status == "fresh" and "fresh" or "stale", meta
+end
+
+function symbol_index.workspace_usages_async(name, opts)
+  opts = opts or {}
+  local usages, reason, status, meta = workspace_usage_snapshot(name, opts)
+  local query_payload
+  local artifact
+  local artifact_err
+  if status == "fresh" or status == "stale" then
+    local compact_usages = {}
+    for _, usage in ipairs(usages or {}) do compact_usages[#compact_usages + 1] = copy_item(usage) end
+    query_payload = {
+      usages = compact_usages,
+      include_declaration = opts.include_declaration,
+      limit = opts.limit or DEFAULT_QUERY_LIMIT,
+    }
+    artifact, artifact_err = write_query_artifact("usages", query_payload, opts)
+  elseif reason == "snapshot-too-large" and not opts.disable_persistent_query_artifacts then
+    query_payload, reason, status, meta = workspace_usage_artifact_payload(name, opts)
+  end
+  if status ~= "fresh" and status ~= "stale" then return nil, reason, status, meta end
+
+  local request = {
+    status = "pending",
+    reason = reason,
+    source_status = status,
+    results = nil,
+    meta = meta,
+  }
+  if artifact then
+    request.query_artifact = artifact
+  elseif artifact_err then
+    log_quiet("Tree-sitter Project usage query: using channel payload after artifact write failed: %s", tostring(artifact_err))
+  end
+  local handle = worker_pool.system():submit({
+    kind = "treesitter_usage_query",
+    priority = "background",
+    payload = artifact and { artifact = artifact } or query_payload,
+    on_result = function(message)
+      if message.type ~= "result" then return end
+      local p = message.payload or {}
+      request.results = p.usages or {}
+      request.has_more = p.has_more and true or false
+      request.diagnostics = p.diagnostics
+    end,
+    on_complete = function()
+      cleanup_query_artifact(request.query_artifact)
+      request.query_artifact = nil
+      local stale_reason = async_snapshot_stale_reason(meta)
+      if not stale_reason then
+        request.status = request.source_status or "fresh"
+      else
+        request.status = "stale-cancelled"
+        request.reason = stale_reason
+        request.results = nil
+      end
+      request.done = true
+    end,
+    on_error = function(message)
+      cleanup_query_artifact(request.query_artifact)
+      request.query_artifact = nil
+      request.status = "unavailable"
+      request.reason = message and (message.error or (message.payload and message.payload.reason)) or "query-failed"
+      request.done = true
+    end,
+    on_cancelled = function()
+      cleanup_query_artifact(request.query_artifact)
+      request.query_artifact = nil
+      request.status = "cancelled"
+      request.reason = "cancelled"
+      request.done = true
+    end,
+  })
+  if not handle then
+    cleanup_query_artifact(artifact)
+    return nil, "submit-failed", "unavailable", meta
+  end
+  request.handle = handle
+  function request:cancel()
+    cleanup_query_artifact(self.query_artifact)
+    self.query_artifact = nil
+    if self.handle then return worker_pool.system():cancel(self.handle) end
+    return false
+  end
+  return request, nil, "pending", meta
+end
+
 function symbol_index.workspace_usages(name, opts)
   opts = opts or {}
   name = tostring(name or "")
@@ -2027,6 +2688,14 @@ end
 
 function symbol_index.workspace_references(name, opts)
   return symbol_index.workspace_usages(name, opts)
+end
+
+function symbol_index.workspace_references_async(name, opts)
+  return symbol_index.workspace_usages_async(name, opts)
+end
+
+function symbol_index.query_usages_async(name, opts)
+  return symbol_index.workspace_usages_async(name, opts)
 end
 
 local function doc_path(doc)
@@ -2490,6 +3159,7 @@ end
 function symbol_index.reset_for_tests()
   for _, index in pairs(indexes) do
     cancel_index_work(index)
+    cleanup_index_query_artifacts(index)
     index.generation = (index.generation or 0) + 1
     index.watch_generation = (index.watch_generation or 0) + 1
     index.watch_running = false

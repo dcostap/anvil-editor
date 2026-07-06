@@ -10,6 +10,7 @@ local registry = require "core.treesitter.registry"
 local native = require "treesitter"
 local ts_highlight = require "core.treesitter.highlight"
 local symbol_index = require "core.treesitter.symbol_index"
+local worker_pool = require "core.worker_pool"
 
 local function set_text(doc, text)
   doc.lines = {}
@@ -63,6 +64,28 @@ local function seed_ready_symbol_index(root, names)
       start_col = 1,
     }
   end
+  return index
+end
+
+local function seed_ready_usage_index(root, name, usages)
+  local index = seed_ready_symbol_index(root, {})
+  index.usages_by_name = { [name] = {} }
+  for i, usage in ipairs(usages or {}) do
+    local path = common.normalize_path(root .. PATHSEP .. (usage.file or ("Usage" .. tostring(i) .. ".kt")))
+    index.usages_by_name[name][#index.usages_by_name[name] + 1] = common.merge({
+      name = name,
+      text = name,
+      kind = "usage",
+      path = path,
+      file = usage.file or ("Usage" .. tostring(i) .. ".kt"),
+      relpath = usage.file or ("Usage" .. tostring(i) .. ".kt"),
+      start_line = usage.start_line or i,
+      start_col = usage.start_col or 1,
+      capture = usage.capture or "usage",
+      is_declaration = usage.is_declaration or false,
+    }, usage)
+  end
+  index.usage_count = #index.usages_by_name[name]
   return index
 end
 
@@ -199,6 +222,17 @@ end
 
 local function wait_workspace_references(name, opts, timeout)
   return wait_workspace_usages(name, opts, timeout)
+end
+
+local function wait_async_request(request, timeout)
+  local deadline = system.get_time() + (timeout or 5)
+  repeat
+    worker_pool.system():drain({ max_ms = 5, max_messages = 64 })
+    if request.done then return request end
+    coroutine.yield(0.01)
+  until system.get_time() >= deadline
+  worker_pool.system():drain({ max_ms = 5, max_messages = 64 })
+  return request
 end
 
 local function wait_index_ready(root, timeout)
@@ -611,6 +645,205 @@ class ExcludedThing
     test.ok(find_symbol(symbols, "CachedOther", "class"))
     test.equal((index.diagnostics.ui or {}).combined_symbols_cache_hits, 1)
     common.rm(root, true)
+  end)
+
+  test.it("Tree-sitter workspace symbol async query matches small snapshot results", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-symbol-async-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    local index = seed_ready_symbol_index(root, { "AsyncThing", "AsyncOther", "Different" })
+    index.watch_running = true
+    local query_artifact_dir = root .. "-query-artifacts"
+
+    local sync_symbols, sync_reason, sync_status = symbol_index.workspace_symbols("Async", {
+      root = root,
+      limit = 10,
+      refresh_after_seconds = 0,
+    })
+    test.equal(sync_status, "fresh", sync_reason)
+
+    local request, reason, status = symbol_index.workspace_symbols_async("Async", {
+      root = root,
+      limit = 10,
+      refresh_after_seconds = 0,
+      query_artifact_dir = query_artifact_dir,
+    })
+    test.equal(status, "pending", reason)
+    test.not_nil(request)
+    wait_async_request(request)
+    test.equal(request.status, "fresh", request.reason)
+    test.equal(#(request.results or {}), #(sync_symbols or {}), common.serialize({ async = request.results, sync = sync_symbols }))
+    for i, symbol in ipairs(sync_symbols or {}) do
+      test.equal(request.results[i] and request.results[i].name, symbol.name)
+    end
+    test.ok(find_symbol(request.results, "AsyncThing", "class"), common.serialize({ results = request.results, diagnostics = request.diagnostics, reason = request.reason }))
+    test.ok(find_symbol(request.results, "AsyncOther", "class"))
+    test.not_ok(find_symbol(request.results, "Different", "class"))
+    for _, name in ipairs(system.list_dir(query_artifact_dir) or {}) do
+      test.ok(not name:match("%.lua$"), "query artifact was not cleaned up: " .. tostring(name))
+    end
+    common.rm(root, true)
+    common.rm(query_artifact_dir, true)
+  end)
+
+  test.it("Tree-sitter workspace symbol async query rejects stale snapshots", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-symbol-async-stale-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    seed_ready_symbol_index(root, { "StaleAsyncThing" })
+
+    local request, reason, status = symbol_index.workspace_symbols_async("StaleAsync", {
+      root = root,
+      limit = 10,
+      refresh_after_seconds = 0,
+    })
+    test.equal(status, "pending", reason)
+    test.not_nil(request)
+    symbol_index.invalidate(root)
+    wait_async_request(request)
+    test.equal(request.status, "stale-cancelled", request.reason)
+    test.is_nil(request.results)
+    common.rm(root, true)
+  end)
+
+  test.it("Tree-sitter workspace symbol async query rejects generation changes while index remains active", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-symbol-async-active-stale-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    local index = seed_ready_symbol_index(root, { "ActiveStaleAsyncThing" })
+    index.watch_running = true
+
+    local request, reason, status = symbol_index.workspace_symbols_async("ActiveStaleAsync", {
+      root = root,
+      limit = 10,
+      refresh_after_seconds = 0,
+    })
+    test.equal(status, "pending", reason)
+    test.not_nil(request)
+    index.generation = index.generation + 1
+    index.status = "indexing"
+    wait_async_request(request)
+    test.equal(request.status, "stale-cancelled", request.reason)
+    test.is_nil(request.results)
+    common.rm(root, true)
+  end)
+
+  test.it("Tree-sitter workspace usage async query filters declarations from small snapshots", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-usage-async-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    local index = seed_ready_usage_index(root, "AsyncUsageThing", {
+      { file = "Decl.kt", is_declaration = true, capture = "definition.class" },
+      { file = "UseA.kt", start_line = 3 },
+      { file = "UseB.kt", start_line = 5 },
+    })
+    index.watch_running = true
+    local query_artifact_dir = root .. "-usage-query-artifacts"
+
+    local request, reason, status = symbol_index.workspace_usages_async("AsyncUsageThing", {
+      root = root,
+      include_declaration = false,
+      limit = 10,
+      refresh_after_seconds = 0,
+      query_artifact_dir = query_artifact_dir,
+    })
+    test.equal(status, "pending", reason)
+    test.not_nil(request)
+    wait_async_request(request)
+    test.equal(request.status, "fresh", request.reason)
+    test.equal(#(request.results or {}), 2, common.serialize(request.results))
+    for _, usage in ipairs(request.results or {}) do test.not_ok(usage.is_declaration) end
+    for _, name in ipairs(system.list_dir(query_artifact_dir) or {}) do
+      test.ok(not name:match("%.lua$"), "query artifact was not cleaned up: " .. tostring(name))
+    end
+    common.rm(root, true)
+    common.rm(query_artifact_dir, true)
+  end)
+
+  test.it("Tree-sitter workspace usage async query uses persistent artifacts for oversized snapshots", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-usage-async-large-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    local index = seed_ready_usage_index(root, "LargeUsageThing", {
+      { file = "UseA.kt" },
+      { file = "UseB.kt" },
+      { file = "UseC.kt" },
+    })
+    index.watch_running = true
+    local query_artifact_dir = root .. "-persistent-usage-query-artifacts"
+
+    local request, reason, status = symbol_index.workspace_usages_async("LargeUsageThing", {
+      root = root,
+      max_snapshot_usages = 2,
+      refresh_after_seconds = 0,
+      query_artifact_dir = query_artifact_dir,
+    })
+    test.equal(status, "pending", reason)
+    test.not_nil(request)
+    wait_async_request(request)
+    test.equal(request.status, "fresh", request.reason)
+    test.equal(#(request.results or {}), 3, common.serialize(request.results))
+    local request_index = request.meta and request.meta.index or index
+    test.equal((request_index.diagnostics.ui or {}).persistent_usage_query_artifact_builds, 1)
+
+    request, reason, status = symbol_index.workspace_usages_async("LargeUsageThing", {
+      root = root,
+      max_snapshot_usages = 2,
+      include_declaration = false,
+      refresh_after_seconds = 0,
+      query_artifact_dir = query_artifact_dir,
+    })
+    test.equal(status, "pending", reason)
+    wait_async_request(request)
+    test.equal(request.status, "fresh", request.reason)
+    test.equal((request_index.diagnostics.ui or {}).persistent_usage_query_artifact_hits, 1)
+    common.rm(root, true)
+    common.rm(query_artifact_dir, true)
+  end)
+
+  test.it("Tree-sitter workspace symbol async query uses persistent artifacts for oversized snapshots", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-symbol-async-large-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    local index = seed_ready_symbol_index(root, { "LargeOne", "LargeTwo", "LargeThree" })
+    index.watch_running = true
+    local query_artifact_dir = root .. "-persistent-symbol-query-artifacts"
+
+    local request, reason, status = symbol_index.workspace_symbols_async("Large", {
+      root = root,
+      limit = 10,
+      max_snapshot_symbols = 2,
+      refresh_after_seconds = 0,
+      query_artifact_dir = query_artifact_dir,
+    })
+    test.equal(status, "pending", reason)
+    test.not_nil(request)
+    wait_async_request(request)
+    test.equal(request.status, "fresh", request.reason)
+    test.equal(#(request.results or {}), 3, common.serialize(request.results))
+    local request_index = request.meta and request.meta.index or index
+    test.equal((request_index.diagnostics.ui or {}).persistent_symbol_query_artifact_builds, 1)
+
+    request, reason, status = symbol_index.workspace_symbols_async("Two", {
+      root = root,
+      limit = 10,
+      max_snapshot_symbols = 2,
+      refresh_after_seconds = 0,
+      query_artifact_dir = query_artifact_dir,
+    })
+    test.equal(status, "pending", reason)
+    wait_async_request(request)
+    test.equal(request.status, "fresh", request.reason)
+    test.ok(find_symbol(request.results, "LargeTwo", "class"))
+    test.equal((request_index.diagnostics.ui or {}).persistent_symbol_query_artifact_hits, 1)
+    common.rm(root, true)
+    common.rm(query_artifact_dir, true)
   end)
 
   test.it("Tree-sitter workspace symbol cache invalidates when dirty open docs suppress disk symbols", function()

@@ -412,11 +412,42 @@ local function show_tree_sitter_workspace_reference_fallback(picker, doc, line, 
   local request_generation = tree_sitter_reference_request_generation
 
   core.add_thread(function()
-    local results, workspace_reason, status, meta = workspace_usages(symbol, {
-      include_declaration = false,
-      allow_stale = true,
-      limit = 1000,
-    })
+    local results, workspace_reason, status, meta
+    local async_request
+    if symbol_index.workspace_usages_async then
+      async_request, workspace_reason, status, meta = symbol_index.workspace_usages_async(symbol, {
+        include_declaration = false,
+        allow_stale = true,
+        limit = 1000,
+      })
+      if async_request then
+        while not async_request.done and request_generation == tree_sitter_reference_request_generation and reference_picker_alive(picker) do
+          coroutine.yield(0.03)
+        end
+        if request_generation ~= tree_sitter_reference_request_generation or not reference_picker_alive(picker) then
+          async_request:cancel()
+          return
+        end
+        if async_request.done and (async_request.status == "fresh" or async_request.status == "stale") then
+          results = async_request.results
+          workspace_reason = async_request.reason
+          status = async_request.status
+          meta = async_request.meta or meta
+        else
+          if async_request.cancel then async_request:cancel() end
+          workspace_reason = async_request.reason or workspace_reason
+          status = async_request.status or status
+        end
+      end
+    end
+
+    if status ~= "fresh" and status ~= "stale" then
+      results, workspace_reason, status, meta = workspace_usages(symbol, {
+        include_declaration = false,
+        allow_stale = true,
+        limit = 1000,
+      })
+    end
     while status ~= "fresh" and request_generation == tree_sitter_reference_request_generation and reference_picker_alive(picker) do
       if status == "stale" then
         local items = tree_sitter_reference_items(results, symbol)
