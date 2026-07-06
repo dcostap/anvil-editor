@@ -948,6 +948,7 @@ function update_suggestions()
       local function add_project_symbols(query)
         if not query or query == "" then return end
         local project_symbols, _reason, project_status = symbol_index.workspace_symbols(query, {
+          kind = "autocomplete",
           limit = math.max(20, config.plugins.autocomplete.max_suggestions * 2),
           allow_stale = true,
         })

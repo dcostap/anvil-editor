@@ -10,6 +10,10 @@ local worker_pool = require "core.worker_pool"
 
 local symbol_index = {}
 
+local function project_paths_module()
+  return package.loaded["core.project_paths"] or project_paths
+end
+
 local DEFAULT_PARSE_TIMEOUT_MS = 1000
 local DEFAULT_SCAN_YIELD_FILES = 4
 local DEFAULT_QUERY_LIMIT = 200
@@ -111,6 +115,8 @@ local function new_index(root)
     worker_handle = nil,
     worker_seen_paths = nil,
     project_paths_generation = nil,
+    overlay_generation = 0,
+    combined_symbols_cache = {},
     diagnostics = { ui = {} },
     aggregate_dirty = false,
     aggregate_rebuild_pending = false,
@@ -126,6 +132,16 @@ local function index_for_root(root)
     indexes[root] = index
   end
   return index
+end
+
+local function invalidate_combined_symbols_cache(index)
+  if index then index.combined_symbols_cache = {} end
+end
+
+local function bump_overlay_generation(index)
+  if not index then return end
+  index.overlay_generation = (index.overlay_generation or 0) + 1
+  invalidate_combined_symbols_cache(index)
 end
 
 local function compile_language_query(language, kind)
@@ -280,8 +296,8 @@ local function is_usage_capture(capture)
 end
 
 local function apply_project_path_metadata(item, path, kind)
-  if not project_paths.resolve(path) then return item end
-  local display = project_paths.display_path(path, { kind = kind })
+  if not project_paths_module().resolve(path) then return item end
+  local display = project_paths_module().display_path(path, { kind = kind })
   if display then
     item.display_file = display.text
     item.file = display.text
@@ -292,6 +308,16 @@ local function apply_project_path_metadata(item, path, kind)
     item.rank_penalty = display.rank_penalty
   end
   return item
+end
+
+local function copy_item(item)
+  local copy = {}
+  for key, value in pairs(item or {}) do copy[key] = value end
+  return copy
+end
+
+local function project_path_allows(path, kind)
+  return project_paths_module().rank_penalty(path, kind) ~= math.huge
 end
 
 local function refresh_project_path_metadata(index, item, kind)
@@ -525,6 +551,7 @@ local function rebuild_disk_aggregates(index)
   index.symbols = symbols
   index.usages_by_name = usages_by_name
   index.usage_count = usage_count
+  invalidate_combined_symbols_cache(index)
   local duration = elapsed_ms(rebuild_started)
   inc_ui_metric(index, "aggregate_rebuilds", 1)
   add_ui_metric(index, "aggregate_rebuild_ms", duration)
@@ -539,6 +566,7 @@ end
 local function mark_aggregate_dirty(index)
   if not index then return end
   index.aggregate_dirty = true
+  invalidate_combined_symbols_cache(index)
   index.aggregate_rebuild_pending = true
   index.next_aggregate_rebuild_at = index.next_aggregate_rebuild_at or (now() + DEFAULT_AGGREGATE_REBUILD_DELAY)
 end
@@ -726,7 +754,7 @@ end
 
 local function project_index_exclusions_payload()
   local excluded = {}
-  for _, entry in ipairs(project_paths.entries()) do
+  for _, entry in ipairs(project_paths_module().entries()) do
     if entry.path and entry.symbols == false then
       excluded[#excluded + 1] = { path = entry.path }
     end
@@ -890,7 +918,7 @@ local function submit_worker_scan(index, generation, opts, phase)
     index.symbol_status = "indexing"
     index.usage_status = "indexing"
     index.started_at = system.get_time()
-    index.project_paths_generation = project_paths.generation()
+    index.project_paths_generation = project_paths_module().generation()
   else
     index.symbol_status = "ready"
     index.usage_status = "indexing"
@@ -1029,10 +1057,11 @@ end
 local function project_path_roots(kind, opts)
   opts = opts or {}
   local roots = {}
+  local root_kind = opts.kind or kind
   if opts.root or opts.project then
     roots[1] = normalize_root(opts.root or opts.project)
   else
-    for _, entry in ipairs(project_paths.search_roots(kind)) do
+    for _, entry in ipairs(project_paths_module().search_roots(root_kind)) do
       if entry and entry.path then roots[#roots + 1] = normalize_root(entry.path) end
     end
   end
@@ -1102,7 +1131,11 @@ local function overlay_paths(index)
     path = path and common.normalize_path(path)
     if path and common.path_belongs_to(path, index.root) and doc_should_suppress_disk(doc) then paths[path] = true end
   end
-  return paths
+
+  local ordered = {}
+  for path in pairs(paths) do ordered[#ordered + 1] = path end
+  table.sort(ordered)
+  return paths, table.concat(ordered, "\0")
 end
 
 overlay_entry_current = function(entry)
@@ -1113,26 +1146,49 @@ overlay_entry_current = function(entry)
   return ts and ts.status == "ready" and entry.change_id == change_id
 end
 
-local function combined_symbols(index)
+local function combined_symbols(index, kind)
+  kind = kind or "symbols"
   if refresh_open_document_overlays then refresh_open_document_overlays(index) end
+  index.combined_symbols_cache = index.combined_symbols_cache or {}
+  local project_paths_generation = project_paths_module().generation()
+  local paths, paths_signature = overlay_paths(index)
+  local cache = index.combined_symbols_cache[kind]
+  if cache
+  and cache.index_generation == index.generation
+  and cache.project_paths_generation == project_paths_generation
+  and cache.overlay_generation == (index.overlay_generation or 0)
+  and cache.overlay_paths_signature == paths_signature
+  and cache.symbols_table == index.symbols then
+    inc_ui_metric(index, "combined_symbols_cache_hits", 1)
+    return cache.symbols
+  end
+
+  inc_ui_metric(index, "combined_symbols_cache_misses", 1)
   local overlay = index.open_docs or {}
-  local paths = overlay_paths(index)
   local out = {}
   for _, symbol in ipairs(index.symbols or {}) do
-    if not paths[symbol.path] and not project_paths.is_excluded(symbol.path, "symbols") then
-      out[#out + 1] = refresh_project_path_metadata(index, symbol, "symbols")
+    if not paths[symbol.path] and project_path_allows(symbol.path, kind) then
+      out[#out + 1] = refresh_project_path_metadata(index, copy_item(symbol), kind)
     end
   end
   for _, entry in pairs(overlay) do
     if overlay_entry_current(entry) then
       for _, symbol in ipairs(entry.symbols or {}) do
-        if not project_paths.is_excluded(symbol.path, "symbols") then
-          out[#out + 1] = refresh_project_path_metadata(index, symbol, "symbols")
+        if project_path_allows(symbol.path, kind) then
+          out[#out + 1] = refresh_project_path_metadata(index, copy_item(symbol), kind)
         end
       end
     end
   end
   sort_symbols(out)
+  index.combined_symbols_cache[kind] = {
+    index_generation = index.generation,
+    project_paths_generation = project_paths_generation,
+    overlay_generation = index.overlay_generation or 0,
+    overlay_paths_signature = paths_signature,
+    symbols_table = index.symbols,
+    symbols = out,
+  }
   return out
 end
 
@@ -1142,14 +1198,14 @@ local function combined_usages_for_name(index, name)
   local paths = overlay_paths(index)
   local out = {}
   for _, usage in ipairs((index.usages_by_name or {})[name] or {}) do
-    if not paths[usage.path] and not project_paths.is_excluded(usage.path, "usages") then
+    if not paths[usage.path] and not project_paths_module().is_excluded(usage.path, "usages") then
       out[#out + 1] = refresh_project_path_metadata(index, usage, "usages")
     end
   end
   for _, entry in pairs(overlay) do
     if overlay_entry_current(entry) then
       for _, usage in ipairs((entry.usages_by_name or {})[name] or {}) do
-        if not project_paths.is_excluded(usage.path, "usages") then
+        if not project_paths_module().is_excluded(usage.path, "usages") then
           out[#out + 1] = refresh_project_path_metadata(index, usage, "usages")
         end
       end
@@ -1207,11 +1263,11 @@ function symbol_index.workspace_symbols(query, opts)
     end
     if index.symbol_status == "ready" and not index.aggregate_dirty then
       refresh_current_core_docs_for_index(index)
-      for _, symbol in ipairs(combined_symbols(index)) do all_symbols[#all_symbols + 1] = symbol end
+      for _, symbol in ipairs(combined_symbols(index, opts.kind or "symbols")) do all_symbols[#all_symbols + 1] = symbol end
       root_status = "fresh"
       any_usable = true
     elseif (#(index.symbols or {}) > 0 or next(index.open_docs or {}) ~= nil) and opts.allow_stale then
-      for _, symbol in ipairs(combined_symbols(index)) do all_symbols[#all_symbols + 1] = symbol end
+      for _, symbol in ipairs(combined_symbols(index, opts.kind or "symbols")) do all_symbols[#all_symbols + 1] = symbol end
       root_status = "stale"
       reason = reason or (index.aggregate_dirty and "aggregate-dirty" or "indexing")
       any_usable = true
@@ -1395,6 +1451,7 @@ refresh_open_document_overlays = function(index)
       changed = true
     end
   end
+  if changed then bump_overlay_generation(index) end
   return changed
 end
 
@@ -1421,7 +1478,9 @@ function symbol_index.update_open_document(doc, reason)
         if entry then
           index.open_docs[path] = entry
           updated = true
+          bump_overlay_generation(index)
         else
+          if index.open_docs[path] then bump_overlay_generation(index) end
           index.open_docs[path] = nil
           log_quiet("Tree-sitter Project index: skipped open doc overlay for %s under %s: %s", tostring(path), tostring(index.root), tostring(err))
         end
@@ -1445,12 +1504,15 @@ function symbol_index.clear_open_document(doc, reason)
     end
   end
   for _, index in pairs(indexes) do
+    local index_cleared = false
     for overlay_path, entry in pairs(index.open_docs or {}) do
       if (path and overlay_path == path) or entry.doc == doc then
         index.open_docs[overlay_path] = nil
         cleared = true
+        index_cleared = true
       end
     end
+    if index_cleared then bump_overlay_generation(index) end
   end
   if cleared then
     core.redraw = true

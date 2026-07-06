@@ -43,6 +43,29 @@ local function find_symbol(symbols, name, kind)
   end
 end
 
+local function seed_ready_symbol_index(root, names)
+  local index = symbol_index.status(root)
+  index.status = "ready"
+  index.symbol_status = "ready"
+  index.usage_status = "ready"
+  index.finished_at = system.get_time()
+  index.aggregate_dirty = false
+  index.symbols = {}
+  for i, name in ipairs(names or {}) do
+    index.symbols[#index.symbols + 1] = {
+      name = name,
+      text = name,
+      kind = "class",
+      path = common.normalize_path(root .. PATHSEP .. name .. ".kt"),
+      file = name .. ".kt",
+      relpath = name .. ".kt",
+      start_line = i,
+      start_col = 1,
+    }
+  end
+  return index
+end
+
 local function wait_ready(doc, timeout)
   local deadline = system.get_time() + (timeout or 3)
   while system.get_time() < deadline do
@@ -557,6 +580,137 @@ class ExcludedThing
       or vendor_symbol.file == "src" .. PATHSEP .. "vendor" .. PATHSEP .. "library1" .. PATHSEP .. "Vendor.kt",
       "unexpected vendored display path: " .. tostring(vendor_symbol.file)
     )
+    project_paths.configure_project {}
+    core.projects = original_projects
+    common.rm(root, true)
+    common.rm(external, true)
+  end)
+
+  test.it("Tree-sitter workspace symbol queries cache combined Project symbol metadata", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-symbol-cache-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    local index = seed_ready_symbol_index(root, { "CachedThing", "CachedOther" })
+
+    local symbols, reason, status = symbol_index.workspace_symbols("CachedThing", {
+      root = root,
+      limit = 10,
+      refresh_after_seconds = 0,
+    })
+    test.equal(status, "fresh", reason)
+    test.ok(find_symbol(symbols, "CachedThing", "class"))
+    test.equal((index.diagnostics.ui or {}).combined_symbols_cache_misses, 1)
+
+    symbols, reason, status = symbol_index.workspace_symbols("Cached", {
+      root = root,
+      limit = 10,
+      refresh_after_seconds = 0,
+    })
+    test.equal(status, "fresh", reason)
+    test.ok(find_symbol(symbols, "CachedOther", "class"))
+    test.equal((index.diagnostics.ui or {}).combined_symbols_cache_hits, 1)
+    common.rm(root, true)
+  end)
+
+  test.it("Tree-sitter workspace symbol cache invalidates when dirty open docs suppress disk symbols", function()
+    symbol_index.reset_for_tests()
+    local original_docs = core.docs
+    local root = USERDIR .. PATHSEP .. "treesitter-symbol-dirty-cache-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    local index = seed_ready_symbol_index(root, { "DirtyThing" })
+    local symbol_path = common.normalize_path(root .. PATHSEP .. "DirtyThing.kt")
+
+    local symbols, reason, status = symbol_index.workspace_symbols("DirtyThing", {
+      root = root,
+      limit = 10,
+      refresh_after_seconds = 0,
+    })
+    test.equal(status, "fresh", reason)
+    test.ok(find_symbol(symbols, "DirtyThing", "class"))
+    test.equal((index.diagnostics.ui or {}).combined_symbols_cache_misses, 1)
+
+    core.docs = {
+      {
+        abs_filename = symbol_path,
+        filename = symbol_path,
+        lines = { "class DirtyThing\n" },
+        is_dirty = function() return true end,
+        on_close = function() end,
+      },
+    }
+    symbols, reason, status = symbol_index.workspace_symbols("DirtyThing", {
+      root = root,
+      limit = 10,
+      refresh_after_seconds = 0,
+    })
+    test.equal(status, "fresh", reason)
+    test.not_ok(find_symbol(symbols, "DirtyThing", "class"))
+    test.equal((index.diagnostics.ui or {}).combined_symbols_cache_misses, 2)
+
+    core.docs = original_docs
+    common.rm(root, true)
+  end)
+
+  test.it("Tree-sitter workspace symbols can use autocomplete Project Path roots", function()
+    symbol_index.reset_for_tests()
+    local original_projects = core.projects
+    local root = USERDIR .. PATHSEP .. "treesitter-autocomplete-roots-root-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    local external = USERDIR .. PATHSEP .. "treesitter-autocomplete-roots-external-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    mkdir(external)
+    mkdir(root .. PATHSEP .. "vendor")
+    core.projects = { Project(root) }
+    project_paths.load_workspace_state(nil)
+    project_paths.configure_project {
+      external = {
+        { path = external, label = "external-src", autocomplete = false },
+      },
+      vendored = {
+        { path = "vendor", label = "vendor", symbols = true, autocomplete = false },
+      },
+    }
+    local root_index = seed_ready_symbol_index(root, { "RootThing" })
+    root_index.symbols[#root_index.symbols + 1] = {
+      name = "VendorThing",
+      text = "VendorThing",
+      kind = "class",
+      path = common.normalize_path(root .. PATHSEP .. "vendor" .. PATHSEP .. "VendorThing.kt"),
+      file = "vendor" .. PATHSEP .. "VendorThing.kt",
+      relpath = "vendor" .. PATHSEP .. "VendorThing.kt",
+      start_line = 10,
+      start_col = 1,
+    }
+    seed_ready_symbol_index(external, { "ExternalThing" })
+
+    local symbols, reason, status = symbol_index.workspace_symbols("ExternalThing", {
+      kind = "autocomplete",
+      limit = 20,
+      refresh_after_seconds = 0,
+    })
+    test.equal(status, "fresh", reason)
+    test.not_ok(find_symbol(symbols, "ExternalThing", "class"))
+
+    symbols, reason, status = symbol_index.workspace_symbols("VendorThing", {
+      kind = "autocomplete",
+      limit = 20,
+      refresh_after_seconds = 0,
+    })
+    test.equal(status, "fresh", reason)
+    test.not_ok(find_symbol(symbols, "VendorThing", "class"))
+
+    symbols, reason, status = symbol_index.workspace_symbols("VendorThing", {
+      kind = "symbols",
+      root = root,
+      limit = 20,
+      refresh_after_seconds = 0,
+    })
+    test.equal(status, "fresh", reason)
+    test.ok(find_symbol(symbols, "VendorThing", "class"))
+
     project_paths.configure_project {}
     core.projects = original_projects
     common.rm(root, true)
