@@ -380,13 +380,20 @@ bool anvil_ts_document_state_has_tree(const AnvilTSDocumentState *state) {
 typedef struct AnvilTSQueryRun {
   uint64_t started_ticks;
   uint32_t timeout_ms;
+  AnvilTSCancelCallback cancel_callback;
+  void *cancel_payload;
   bool timed_out;
+  bool cancelled;
 } AnvilTSQueryRun;
 
 static bool query_progress(TSQueryCursorState *cursor_state) {
   AnvilTSQueryRun *run = (AnvilTSQueryRun *) cursor_state->payload;
-  if (!run || run->timeout_ms == 0) return false;
-  if (SDL_GetTicks() - run->started_ticks >= run->timeout_ms) {
+  if (!run) return false;
+  if (run->cancel_callback && run->cancel_callback(run->cancel_payload)) {
+    run->cancelled = true;
+    return true;
+  }
+  if (run->timeout_ms > 0 && SDL_GetTicks() - run->started_ticks >= run->timeout_ms) {
     run->timed_out = true;
     return true;
   }
@@ -585,6 +592,8 @@ bool anvil_ts_query_captures_in_tree(
   uint32_t timeout_ms,
   AnvilTSQueryCaptureCallback callback,
   void *payload,
+  AnvilTSCancelCallback cancel_callback,
+  void *cancel_payload,
   bool *exceeded_match_limit,
   char **error
 ) {
@@ -609,6 +618,8 @@ bool anvil_ts_query_captures_in_tree(
   memset(&run, 0, sizeof(run));
   run.started_ticks = SDL_GetTicks();
   run.timeout_ms = timeout_ms;
+  run.cancel_callback = cancel_callback;
+  run.cancel_payload = cancel_payload;
   TSQueryCursorOptions options;
   options.payload = &run;
   options.progress_callback = query_progress;
@@ -663,7 +674,10 @@ done:
     service_set_error(error, predicate_error);
     free(predicate_error);
   }
-  if (run.timed_out && ok) {
+  if (run.cancelled && ok) {
+    service_set_error(error, "Tree-sitter query cancelled");
+    ok = false;
+  } else if (run.timed_out && ok) {
     service_set_error(error, "Tree-sitter query timed out");
     ok = false;
   }
@@ -716,6 +730,8 @@ bool anvil_ts_document_state_query_captures(
     timeout_ms,
     callback,
     payload,
+    NULL,
+    NULL,
     exceeded_match_limit,
     error
   );

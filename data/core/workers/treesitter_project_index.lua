@@ -426,7 +426,7 @@ local function send_batch(ctx, payload, state, batch, force)
   })
 end
 
-local function index_file(path, root_path, language, payload, info, usage_remaining, metrics)
+local function index_file(path, root_path, language, payload, ctx, info, usage_remaining, metrics)
   local max_bytes = payload.max_file_bytes or DEFAULT_MAX_FILE_BYTES
   local read_started = now()
   local text, err, file_info = read_file_text(path, max_bytes)
@@ -456,6 +456,7 @@ local function index_file(path, root_path, language, payload, info, usage_remain
     query_timeout_ms = option(language, "outline", "query_timeout_ms", DEFAULT_QUERY_TIMEOUT_MS),
     match_limit = option(language, "outline", "match_limit", DEFAULT_MATCH_LIMIT),
     max_captures = option(language, "outline", "max_captures", DEFAULT_MAX_CAPTURES),
+    cancel_token = ctx and ctx.cancel_token_name or nil,
   }
   if usage_kind and usage_effective_cap > 0 then
     native_opts.usage_query = sources[usage_kind]
@@ -538,7 +539,7 @@ local function walk(root, payload, ctx, state, chunk)
         if language then
           local usage_cap = payload.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP
           local usage_remaining = math.max(0, usage_cap - state.usage_count)
-          local file_result, err = index_file(path, root_path, language, payload, info, usage_remaining, state.metrics)
+          local file_result, err = index_file(path, root_path, language, payload, ctx, info, usage_remaining, state.metrics)
           if file_result then
             state.files_indexed = state.files_indexed + 1
             inc_metric(state.metrics, "files_indexed", 1)
@@ -649,7 +650,7 @@ local function index_files(payload, ctx, state, chunk)
       inc_metric(state.metrics, "files_scanned", 1)
       local usage_cap = payload.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP
       local usage_remaining = math.max(0, usage_cap - state.usage_count)
-      local file_result, err = index_file(path, file_root, language, payload, file.info, usage_remaining, state.metrics)
+      local file_result, err = index_file(path, file_root, language, payload, ctx, file.info, usage_remaining, state.metrics)
       if file_result then
         state.files_indexed = state.files_indexed + 1
         inc_metric(state.metrics, "files_indexed", 1)

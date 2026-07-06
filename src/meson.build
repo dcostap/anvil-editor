@@ -14,7 +14,9 @@ anvil_sources = [
     'api/tokenizer.c',
     'api/treesitter.c',
     'api/fuzzy.c',
+    'api/worker_pool.c',
     'fuzzy.c',
+    'worker_pool.c',
     'treesitter/languages.c',
     'treesitter/service.c',
     'treesitter/snapshot.c',
@@ -194,6 +196,17 @@ fuzzy_test = executable('fuzzy_test',
     c_args: anvil_cargs,
 )
 test('fuzzy', fuzzy_test, env: anvil_test_env)
+
+worker_pool_test = executable('worker_pool_test',
+    [
+        '../tests/native/worker_pool_test.c',
+        'worker_pool.c',
+    ],
+    include_directories: anvil_includes,
+    dependencies: [sdl_dep],
+    c_args: anvil_cargs,
+)
+test('worker_pool', worker_pool_test, env: anvil_test_env)
 
 treesitter_test = executable('treesitter_test',
     [

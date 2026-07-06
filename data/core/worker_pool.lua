@@ -1,5 +1,8 @@
 local common = require "core.common"
 
+local native_ok, native_pool = pcall(require, "worker_pool_native")
+if not native_ok then native_pool = nil end
+
 local worker_pool = {}
 worker_pool.__index = worker_pool
 
@@ -56,6 +59,12 @@ local function release_terminal_job(job)
   job.spec = nil
   job.cancel_channel = nil
   job.cancel_channel_name = nil
+  if job.native_id and job.pool then job.pool.native_jobs[job.native_id] = nil end
+  job.native_handle = nil
+  job.native_id = nil
+  job.native_cancel_token = nil
+  job.native_cancel_token_name = nil
+  job.pool = nil
   job.released = true
 end
 
@@ -90,6 +99,8 @@ function worker_pool.new(options)
   self.next_worker = 0
   self.workers = {}
   self.jobs = {}
+  self.native_jobs = {}
+  self.native = nil
   self.closed = false
   self.diagnostics = {
     submitted = 0,
@@ -155,6 +166,19 @@ function worker_pool:choose_worker(_spec)
   return self.workers[self.next_worker]
 end
 
+function worker_pool:native_pool()
+  if not native_pool then return nil, "native-unavailable" end
+  if not self.native then
+    local ok, pool_or_err = pcall(native_pool.new, {
+      name = tostring(self.name) .. "-native",
+      worker_count = self.worker_count,
+    })
+    if not ok or not pool_or_err then return nil, pool_or_err or "native-create-failed" end
+    self.native = pool_or_err
+  end
+  return self.native
+end
+
 function worker_pool:submit(spec)
   assert(type(spec) == "table", "worker_pool submit expects a job spec table")
   if self.closed then return nil, "closed" end
@@ -162,10 +186,60 @@ function worker_pool:submit(spec)
 
   self.next_job_id = self.next_job_id + 1
   local job_id = self.next_job_id
+  if spec.native then
+    local native, native_err = self:native_pool()
+    if not native then return nil, native_err or "native-unavailable" end
+    local native_spec = common.merge({}, spec.native_payload or spec.payload or {})
+    native_spec.kind = spec.native_kind or native_spec.kind or spec.kind
+    local native_handle, err = native:submit(native_spec)
+    if not native_handle then return nil, err or "native-submit-failed" end
+    local native_status = native:status(native_handle) or {}
+    local native_id = native_status.id
+    local handle = {
+      id = job_id,
+      pool_id = self.id,
+      worker_id = "native",
+      kind = spec.kind,
+      generation = spec.generation,
+      project_paths_generation = spec.project_paths_generation,
+      phase = spec.phase,
+    }
+    self.jobs[job_id] = {
+      pool = self,
+      id = job_id,
+      handle = handle,
+      spec = spec,
+      backend = "native",
+      native_handle = native_handle,
+      native_id = native_id,
+      worker_id = "native",
+      status = "queued",
+      submitted_at = now(),
+      started_at = nil,
+      finished_at = nil,
+      messages = 0,
+    }
+    if native_id then self.native_jobs[native_id] = job_id end
+    self.diagnostics.submitted = self.diagnostics.submitted + 1
+    log_quiet("worker_pool %s submitted native job %d kind=%s native_id=%s", tostring(self.name), job_id, spec.kind, tostring(native_id))
+    return copy_handle(handle)
+  end
+
   local worker = self:choose_worker(spec)
   local cancel_channel_name = unique_name(self.name .. "-cancel-" .. job_id)
   local cancel_channel = thread.get_channel(cancel_channel_name)
   cancel_channel:clear()
+  local native_cancel_token
+  local native_cancel_token_name
+  if native_pool and native_pool.new_cancel_token then
+    local ok, token_or_err = pcall(native_pool.new_cancel_token)
+    if ok and token_or_err then
+      native_cancel_token = token_or_err
+      native_cancel_token_name = native_cancel_token:name()
+    else
+      log_quiet("worker_pool %s failed to create native cancel token for job %d: %s", tostring(self.name), job_id, tostring(token_or_err))
+    end
+  end
 
   local handle = {
     id = job_id,
@@ -178,12 +252,15 @@ function worker_pool:submit(spec)
   }
 
   self.jobs[job_id] = {
+    pool = self,
     id = job_id,
     handle = handle,
     spec = spec,
     worker_id = worker.id,
     cancel_channel = cancel_channel,
     cancel_channel_name = cancel_channel_name,
+    native_cancel_token = native_cancel_token,
+    native_cancel_token_name = native_cancel_token_name,
     status = "queued",
     submitted_at = now(),
     started_at = nil,
@@ -200,6 +277,7 @@ function worker_pool:submit(spec)
     phase = spec.phase,
     payload = spec.payload or {},
     cancel_channel_name = cancel_channel_name,
+    cancel_token_name = native_cancel_token_name,
   })
 
   self.diagnostics.submitted = self.diagnostics.submitted + 1
@@ -214,6 +292,18 @@ function worker_pool:cancel(handle)
   end
   job.cancel_requested = true
   if job.status == "queued" then job.status = "cancelling" end
+  if job.backend == "native" and self.native and job.native_handle then
+    local ok, result = pcall(function() return self.native:cancel(job.native_handle) end)
+    if not ok then
+      log_quiet("worker_pool native cancel for job %s failed: %s", tostring(job.id), tostring(result))
+    end
+    log_quiet("worker_pool %s cancelled native job %d kind=%s", tostring(self.name), job.id, tostring(job.handle.kind))
+    return ok and result or false
+  end
+  if job.native_cancel_token then
+    local ok, err = pcall(function() job.native_cancel_token:cancel() end)
+    if not ok then log_quiet("worker_pool native cancel token for job %s failed: %s", tostring(job.id), tostring(err)) end
+  end
   if job.cancel_channel then
     job.cancel_channel:push({ type = "cancel", job_id = job.id, time = now() })
   end
@@ -228,6 +318,10 @@ end
 function worker_pool:status(handle)
   local job = handle and self.jobs[handle.id]
   if not job then return nil end
+  if job.backend == "native" and self.native and job.native_handle and not job.finished_at then
+    local ok, native_status = pcall(function() return self.native:status(job.native_handle) end)
+    if ok and native_status and native_status.status then job.status = native_status.status end
+  end
   return {
     id = job.id,
     kind = job.handle.kind,
@@ -406,6 +500,26 @@ function worker_pool:drain(options)
 
   while count < max_messages do
     local did_work = false
+    if self.native then
+      local ok, messages = pcall(function() return self.native:drain({ max_messages = 1 }) end)
+      local message = ok and messages and messages[1]
+      if message ~= nil then
+        local native_job_id = message.job_id
+        local job_id = self.native_jobs[native_job_id]
+        if job_id then
+          message.native_job_id = native_job_id
+          message.job_id = job_id
+          message.worker_id = "native"
+          local _, message_stats = self:dispatch_message(message)
+          note_dispatch(message_stats)
+          if is_terminal_type(message.type) then self.native_jobs[native_job_id] = nil end
+        end
+        count = count + 1
+        did_work = true
+        if count >= max_messages then return finish() end
+        if max_ms >= 0 and now() >= deadline then return finish() end
+      end
+    end
     for _, worker in ipairs(self.workers) do
       local message = worker.output:first()
       if message ~= nil then
@@ -471,8 +585,17 @@ function worker_pool:shutdown(options)
     worker.output:clear()
   end
 
+  if self.native then
+    local ok, err = pcall(function() self.native:shutdown({ cancel_running = options.cancel_running ~= false }) end)
+    if not ok then log_quiet("worker_pool %s native shutdown failed: %s", tostring(self.name), tostring(err)) end
+    self.native = nil
+    self.native_jobs = {}
+  end
+
   for _, job in pairs(self.jobs) do
     if job.cancel_channel then job.cancel_channel:clear() end
+    job.native_cancel_token = nil
+    job.native_cancel_token_name = nil
   end
   log_quiet("worker_pool %s shut down", tostring(self.name))
   return true

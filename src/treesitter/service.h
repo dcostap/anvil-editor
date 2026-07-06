@@ -71,6 +71,8 @@ typedef bool (*AnvilTSNodeRangeCallback)(
   void *payload
 );
 
+typedef bool (*AnvilTSCancelCallback)(void *payload);
+
 AnvilTSDocumentState *anvil_ts_document_state_new(
   const AnvilTSLanguage *language,
   uint32_t parse_timeout_ms
@@ -100,6 +102,8 @@ bool anvil_ts_query_captures_in_tree(
   uint32_t timeout_ms,
   AnvilTSQueryCaptureCallback callback,
   void *payload,
+  AnvilTSCancelCallback cancel_callback,
+  void *cancel_payload,
   bool *exceeded_match_limit,
   char **error
 );

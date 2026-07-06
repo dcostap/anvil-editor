@@ -68,6 +68,42 @@ test.describe("worker_pool", function()
     for i = 1, 6 do test.ok(results[i]) end
   end)
 
+  test.test("native jobs can run through the core worker_pool facade", function()
+    local pool = new_pool("test-native-facade", 1)
+    local seen
+    local completed = false
+    local handle = pool:submit({
+      native = true,
+      kind = "test_echo",
+      payload = { value = "native hello" },
+      on_result = function(message)
+        if message.type == "result" then seen = message.payload.value end
+      end,
+      on_complete = function() completed = true end,
+    })
+    test.not_nil(handle)
+    test.ok(drain_until(pool, function() return completed end))
+    test.equal(seen, "native hello")
+    test.equal(pool:status(handle).status, "complete")
+  end)
+
+  test.test("native jobs can be cancelled through the core worker_pool facade", function()
+    local pool = new_pool("test-native-facade-cancel", 1)
+    local progress = 0
+    local cancelled = false
+    local handle = pool:submit({
+      native = true,
+      kind = "test_count",
+      payload = { count = 1000, sleep_ms = 1 },
+      on_progress = function(message) progress = message.payload.index end,
+      on_cancelled = function() cancelled = true end,
+    })
+    test.ok(drain_until(pool, function() return progress >= 2 end))
+    test.ok(pool:cancel(handle))
+    test.ok(drain_until(pool, function() return cancelled end))
+    test.equal(pool:status(handle).status, "cancelled")
+  end)
+
   test.test("errors are delivered", function()
     local pool = new_pool("test-error", 1)
     local error_message

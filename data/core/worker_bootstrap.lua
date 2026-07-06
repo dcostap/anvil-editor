@@ -4,6 +4,9 @@
 -- separate Lua state created by thread.create and communicates through channels
 -- using small, envelope-shaped messages.
 
+local native_ok, native_pool = pcall(require, "worker_pool_native")
+if not native_ok then native_pool = nil end
+
 local worker_bootstrap = {}
 
 local function now()
@@ -15,7 +18,8 @@ local function channel_first(channel)
   return channel:first()
 end
 
-local function cancelled(cancel_channel)
+local function cancelled(cancel_channel, cancel_token)
+  if cancel_token and cancel_token:cancelled() then return true end
   return channel_first(cancel_channel) ~= nil
 end
 
@@ -63,6 +67,11 @@ function worker_bootstrap.run(options)
       local cancel_channel = message.cancel_channel_name
         and thread.get_channel(message.cancel_channel_name)
         or nil
+      local cancel_token
+      if native_pool and message.cancel_token_name then
+        local ok, token = pcall(native_pool.open_cancel_token, message.cancel_token_name)
+        if ok then cancel_token = token end
+      end
       local terminal_sent = false
 
       local function envelope(out)
@@ -80,7 +89,7 @@ function worker_bootstrap.run(options)
         return out
       end
 
-      if cancelled(cancel_channel) then
+      if cancelled(cancel_channel, cancel_token) then
         send(output, envelope({ type = "cancelled", payload = { before_start = true } }))
       else
         local ok, err = pcall(function()
@@ -99,9 +108,10 @@ function worker_bootstrap.run(options)
             project_paths_generation = message.project_paths_generation,
             phase = message.phase,
             worker_id = worker_id,
-            cancelled = function() return cancelled(cancel_channel) end,
+            cancel_token_name = message.cancel_token_name,
+            cancelled = function() return cancelled(cancel_channel, cancel_token) end,
             send = function(out)
-              if cancelled(cancel_channel) and out and out.type ~= "cancelled" then
+              if cancelled(cancel_channel, cancel_token) and out and out.type ~= "cancelled" then
                 return false, "cancelled"
               end
               send(output, envelope(out))
@@ -113,12 +123,13 @@ function worker_bootstrap.run(options)
         if not ok then
           send(output, envelope({ type = "error", error = tostring(err) }))
         elseif not terminal_sent then
-          if cancelled(cancel_channel) then
+          if cancelled(cancel_channel, cancel_token) then
             send(output, envelope({ type = "cancelled" }))
           else
             send(output, envelope({ type = "complete" }))
           end
         end
+        cancel_token = nil
       end
     end
   end

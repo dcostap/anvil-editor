@@ -2,6 +2,7 @@
 #include "../treesitter/languages.h"
 #include "../treesitter/service.h"
 #include "../treesitter/snapshot.h"
+#include "../worker_pool.h"
 
 #include <SDL3/SDL_timer.h>
 
@@ -506,12 +507,23 @@ static void push_capture_copy(lua_State *L, const LuaCaptureCopy *capture) {
 typedef struct LuaSyncParseRun {
   uint64_t started_ticks;
   uint32_t timeout_ms;
+  AnvilWorkerCancelToken *cancel_token;
   bool timed_out;
+  bool cancelled;
 } LuaSyncParseRun;
+
+static bool worker_cancel_token_cancelled_callback(void *payload) {
+  return anvil_worker_cancel_token_cancelled((AnvilWorkerCancelToken *) payload);
+}
 
 static bool sync_parse_progress(TSParseState *parse_state) {
   LuaSyncParseRun *run = (LuaSyncParseRun *) parse_state->payload;
-  if (run && run->timeout_ms > 0) {
+  if (!run) return false;
+  if (anvil_worker_cancel_token_cancelled(run->cancel_token)) {
+    run->cancelled = true;
+    return true;
+  }
+  if (run->timeout_ms > 0) {
     uint64_t elapsed = SDL_GetTicks() - run->started_ticks;
     if (elapsed >= run->timeout_ms) {
       run->timed_out = true;
@@ -559,6 +571,7 @@ static void set_metric_number(lua_State *L, int metrics_index, const char *field
 static const char *query_status_from_error(const char *error, bool exceeded_match_limit) {
   if (exceeded_match_limit) return "limit";
   if (!error) return "failed";
+  if (strstr(error, "cancelled")) return "cancelled";
   if (strstr(error, "timed out")) return "timeout";
   if (strstr(error, "limit exceeded")) return "limit";
   return "failed";
@@ -606,7 +619,8 @@ static bool index_text_query(
   const AnvilTSSnapshot *snapshot,
   uint32_t match_limit,
   uint32_t max_captures,
-  uint32_t timeout_ms
+  uint32_t timeout_ms,
+  AnvilWorkerCancelToken *cancel_token
 ) {
   if (!source) return true;
   uint64_t query_started_ticks = SDL_GetTicks();
@@ -640,6 +654,8 @@ static bool index_text_query(
     timeout_ms,
     collect_query_capture,
     &context,
+    cancel_token ? worker_cancel_token_cancelled_callback : NULL,
+    cancel_token,
     &exceeded_match_limit,
     &error
   );
@@ -696,10 +712,15 @@ static int f_index_text(lua_State *L) {
   uint32_t usage_query_timeout_ms = option_uint32(L, opts, "usage_query_timeout_ms", query_timeout_ms);
   uint32_t usage_match_limit = option_uint32(L, opts, "usage_match_limit", match_limit);
   uint32_t usage_max_captures = option_uint32(L, opts, "usage_max_captures", max_captures);
+  lua_getfield(L, opts, "cancel_token");
+  const char *cancel_token_name = lua_tostring(L, -1);
+  AnvilWorkerCancelToken *cancel_token = cancel_token_name ? anvil_worker_cancel_token_open(cancel_token_name) : NULL;
+  lua_pop(L, 1);
 
   TSParser *parser = ts_parser_new();
   if (!parser) {
     anvil_ts_snapshot_free(snapshot);
+    anvil_worker_cancel_token_release(cancel_token);
     lua_pushnil(L);
     lua_pushstring(L, "failed to allocate Tree-sitter parser");
     return 2;
@@ -707,6 +728,7 @@ static int f_index_text(lua_State *L) {
   if (!ts_parser_set_language(parser, anvil_ts_language_ptr(language))) {
     ts_parser_delete(parser);
     anvil_ts_snapshot_free(snapshot);
+    anvil_worker_cancel_token_release(cancel_token);
     lua_pushnil(L);
     lua_pushstring(L, "failed to set Tree-sitter parser language");
     return 2;
@@ -716,6 +738,7 @@ static int f_index_text(lua_State *L) {
   memset(&run, 0, sizeof(run));
   run.started_ticks = SDL_GetTicks();
   run.timeout_ms = parse_timeout_ms;
+  run.cancel_token = cancel_token;
   TSParseOptions parse_options;
   parse_options.payload = &run;
   parse_options.progress_callback = sync_parse_progress;
@@ -726,7 +749,8 @@ static int f_index_text(lua_State *L) {
   if (!tree) {
     anvil_ts_snapshot_free(snapshot);
     lua_pushnil(L);
-    lua_pushstring(L, run.timed_out ? "Tree-sitter parse timed out" : "Tree-sitter parse failed");
+    lua_pushstring(L, run.cancelled ? "Tree-sitter parse cancelled" : (run.timed_out ? "Tree-sitter parse timed out" : "Tree-sitter parse failed"));
+    anvil_worker_cancel_token_release(cancel_token);
     return 2;
   }
 
@@ -746,9 +770,10 @@ static int f_index_text(lua_State *L) {
   size_t outline_len = 0;
   lua_getfield(L, opts, "outline_query");
   const char *outline_source = lua_tolstring(L, -1, &outline_len);
-  if (outline_source && !index_text_query(L, result_index, metrics_index, "outline", language, outline_source, outline_len, tree, snapshot, match_limit, max_captures, query_timeout_ms)) {
+  if (outline_source && !index_text_query(L, result_index, metrics_index, "outline", language, outline_source, outline_len, tree, snapshot, match_limit, max_captures, query_timeout_ms, cancel_token)) {
     ts_tree_delete(tree);
     anvil_ts_snapshot_free(snapshot);
+    anvil_worker_cancel_token_release(cancel_token);
     return 2;
   }
   lua_pop(L, 1);
@@ -756,9 +781,10 @@ static int f_index_text(lua_State *L) {
   size_t usage_len = 0;
   lua_getfield(L, opts, "usage_query");
   const char *usage_source = lua_tolstring(L, -1, &usage_len);
-  if (usage_source && !index_text_query(L, result_index, metrics_index, "usage", language, usage_source, usage_len, tree, snapshot, usage_match_limit, usage_max_captures, usage_query_timeout_ms)) {
+  if (usage_source && !index_text_query(L, result_index, metrics_index, "usage", language, usage_source, usage_len, tree, snapshot, usage_match_limit, usage_max_captures, usage_query_timeout_ms, cancel_token)) {
     ts_tree_delete(tree);
     anvil_ts_snapshot_free(snapshot);
+    anvil_worker_cancel_token_release(cancel_token);
     return 2;
   }
   lua_pop(L, 1);
@@ -766,6 +792,7 @@ static int f_index_text(lua_State *L) {
   lua_setfield(L, result_index, "metrics");
   ts_tree_delete(tree);
   anvil_ts_snapshot_free(snapshot);
+  anvil_worker_cancel_token_release(cancel_token);
   return 1;
 }
 
