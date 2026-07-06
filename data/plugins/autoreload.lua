@@ -6,6 +6,16 @@ local style = require "core.style"
 local Doc = require "core.doc"
 local DirWatch = require "core.dirwatch"
 
+local reload_diff_flash
+if config.plugins.reload_diff_flash ~= false then
+  local ok, module = pcall(require, "plugins.reload_diff_flash")
+  if ok then
+    reload_diff_flash = module
+  else
+    core.log_quiet("Autoreload diff flash unavailable: %s", tostring(module))
+  end
+end
+
 ---Configuration options for `autoreload` plugin.
 ---@class config.plugins.autoreload
 ---Always ask before auto-reloading a file that changed.
@@ -34,8 +44,15 @@ local function update_time(doc)
 end
 
 local function reload_doc(doc)
+  local old_lines
+  if reload_diff_flash and reload_diff_flash.clone_lines then
+    old_lines = reload_diff_flash.clone_lines(doc.lines)
+  end
   doc:reload()
   update_time(doc)
+  if old_lines and reload_diff_flash and reload_diff_flash.flash then
+    reload_diff_flash.flash(doc, old_lines, doc.lines, { reason = "autoreload" })
+  end
   core.redraw = true
   core.log_quiet("Auto-reloaded doc \"%s\"", doc.filename)
 end

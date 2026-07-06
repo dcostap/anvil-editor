@@ -52,6 +52,12 @@ end
 plugin_defaults("autoreload", {
   always_show_nagview = false,
 })
+plugin_defaults("reload_diff_flash", {
+  enabled = true,
+  duration = 1.0,
+  max_diff_cells = 2 * 1000 * 1000,
+  max_diff_lines = 50000,
+})
 plugin_defaults("autorestart", {
   reload_type = "ask",
 })
