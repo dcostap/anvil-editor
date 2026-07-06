@@ -255,6 +255,47 @@ end
 
 local flush_chunk
 
+local function write_chunk_artifact(ctx, payload, state, files, diagnostics)
+  local dir = payload.artifact_dir
+  if not (payload.artifact_chunks and dir and dir ~= "") then return nil end
+  local mkdir_started = now()
+  local ok, err = common.mkdirp(dir)
+  add_metric(state.metrics, "artifact_mkdir_ms", elapsed_ms(mkdir_started))
+  if not ok and err ~= "path exists" then return nil, err or "mkdir-failed" end
+
+  state.artifact_sequence = (state.artifact_sequence or 0) + 1
+  local path = normalize(join_path(dir, string.format(
+    "treesitter-index-%s-%s-%06d.lua",
+    tostring(ctx.job_id or 0),
+    tostring(ctx.worker_id or 0),
+    state.artifact_sequence
+  )))
+  local artifact_payload = {
+    files = files,
+    diagnostics = diagnostics,
+  }
+  local write_started = now()
+  local fp, open_err = io.open(path, "wb")
+  if not fp then return nil, open_err or "open-failed" end
+  local content = "return " .. common.serialize(artifact_payload)
+  local wrote, write_err = fp:write(content)
+  local closed, close_err = fp:close()
+  add_metric(state.metrics, "artifact_write_ms", elapsed_ms(write_started))
+  if not wrote or not closed then
+    os.remove(path)
+    return nil, write_err or close_err or "write-failed"
+  end
+  inc_metric(state.metrics, "artifacts_sent", 1)
+  add_metric(state.metrics, "artifact_bytes", #content)
+  max_metric(state.metrics, "artifact_bytes_max", #content)
+  return {
+    path = path,
+    bytes = #content,
+    files = diagnostics.files,
+    records = diagnostics.records,
+  }
+end
+
 local function push_file_bounded(ctx, payload, root, state, chunk, file)
   local parts = split_large_file(file, payload.chunk_records or DEFAULT_CHUNK_RECORDS)
   for _, part in ipairs(parts) do
@@ -291,18 +332,37 @@ flush_chunk = function(ctx, payload, root, state, chunk, force)
   max_metric(metrics, "chunk_records_max", record_count)
   add_metric(metrics, "chunk_files_total", file_count)
   add_metric(metrics, "chunk_records_total", record_count)
+  local diagnostics = {
+    files = file_count,
+    records = record_count,
+  }
+  local chunk_payload = {
+    files = files,
+    diagnostics = diagnostics,
+  }
+  local artifact, artifact_err = write_chunk_artifact(ctx, payload, state, files, diagnostics)
+  if artifact then
+    chunk_payload = {
+      artifact = artifact,
+      diagnostics = diagnostics,
+    }
+  elseif payload.artifact_chunks then
+    inc_metric(metrics, "artifact_write_failures", 1)
+    if payload.log_skips then
+      ctx.send({ type = "log", payload = { reason = artifact_err or "artifact-write-failed" } })
+    end
+  end
+
   local send_started = now()
   local ok, err = ctx.send({
     type = "chunk",
     root = root.path or root,
-    payload = {
-      files = files,
-      diagnostics = {
-        files = file_count,
-        records = record_count,
-      },
-    },
+    payload = chunk_payload,
   })
+  if not ok and chunk_payload.artifact and chunk_payload.artifact.path then
+    os.remove(chunk_payload.artifact.path)
+    inc_metric(metrics, "artifacts_removed_after_send_failure", 1)
+  end
   add_metric(metrics, "chunk_send_wait_ms", elapsed_ms(send_started))
   return ok, err
 end

@@ -15,16 +15,17 @@ This is a throughput plan, not just a responsiveness plan.
 
 ## Implementation status
 
-As of the current implementation pass, Milestones 1-4 are complete:
+As of the current implementation pass, Milestones 1-5 are complete:
 
 - **Milestone 1 complete:** indexing now records quiet throughput diagnostics for worker scanning, file reads, native parse/query timing, record construction, chunk send/backpressure time, UI chunk adoption, and aggregate rebuilds. Baseline-style quiet logs are emitted per completed run/phase.
 - **Milestone 2 complete:** `treesitter.index_text` now supports per-query result status/error metadata, and worker jobs that collect both symbols and usages parse each file once and run both queries from that parse. Outline results are preserved if usage extraction fails.
 - **Milestone 3 complete:** UI chunk adoption no longer rebuilds aggregates on every chunk. Aggregate rebuilds are debounced during chunk arrival and forced at phase/fresh-query boundaries. A Lua-side `core.treesitter.index_scheduler` now exists to cap outstanding/running indexing jobs and reserve worker-pool capacity.
 - **Milestone 4 complete:** project indexing now uses a worker-side coordinator walk that emits bounded file batches, and the UI submits those batches as bounded shard jobs through `core.treesitter.index_scheduler`. Shard chunks are adopted through the existing bounded path, stale generation/project-path messages are rejected, and usage indexing uses deterministic per-shard reservations so accepted shard budgets never exceed the project usage cap.
+- **Milestone 5 complete for Tree-sitter chunks:** project-index result chunks are delivered through file-backed artifacts by default, reducing large Lua channel table copies. Artifact load/write metrics are recorded and adopted/stale artifacts are removed.
 
-The throughput plan is **not fully complete**. The main near-term indexing speedup is now in place, but later milestones are larger transport/query/pool infrastructure work and should be implemented only after measurements show they are the next bottleneck.
+The throughput plan is **not fully complete**. The main near-term indexing speedup and chunk transport improvement are now in place, but later query/pool infrastructure work should be implemented only after measurements show they are the next bottleneck.
 
-Post-Milestone-3 responsiveness repair: real performance captures showed that chunk adoption was still doing per-record Project path resolution, occasional aggregate rebuild/sort work, huge single-file result transfers, synchronous pending-refresh drain work inside worker-pool callbacks, and forced aggregate rebuilds from workspace symbol/reference queries. Chunk adoption now caches Project path metadata per file/kind/project-path generation, defers aggregate rebuilds while indexing chunks are arriving, splits oversized single-file worker results into bounded partial chunks, uses a smaller default worker result chunk size, defers phase-completion aggregate/pending-refresh work out of the worker callback, and lets workspace queries read directly from per-file entries while aggregates are dirty instead of rebuilding the whole symbol/usage aggregate on demand. Milestone 4 was implemented on top of those containment fixes; re-measure before choosing Milestone 5/6/7 follow-up work.
+Post-Milestone-3 responsiveness repair: real performance captures showed that chunk adoption was still doing per-record Project path resolution, occasional aggregate rebuild/sort work, huge single-file result transfers, synchronous pending-refresh drain work inside worker-pool callbacks, and forced aggregate rebuilds from workspace symbol/reference queries. Chunk adoption now caches Project path metadata per file/kind/project-path generation, defers aggregate rebuilds while indexing chunks are arriving, splits oversized single-file worker results into bounded partial chunks, uses a smaller default worker result chunk size, defers phase-completion aggregate/pending-refresh work out of the worker callback, and lets workspace queries read directly from per-file entries while aggregates are dirty instead of rebuilding the whole symbol/usage aggregate on demand. Milestones 4-5 were implemented on top of those containment fixes; re-measure before choosing Milestone 6/7 follow-up work.
 
 Current committed milestones:
 
@@ -32,9 +33,10 @@ Current committed milestones:
 58e454dd TREE_SITTER_INDEXING_THROUGHPUT_PLAN.md: Milestone 1 (Instrument current indexing throughput)
 8ecf4424 TREE_SITTER_INDEXING_THROUGHPUT_PLAN.md: Milestone 2 (Avoid duplicate parse work per file)
 f5f19bc7 TREE_SITTER_INDEXING_THROUGHPUT_PLAN.md: Milestone 3 (Bound UI adoption and add indexing scheduler)
+2158ae5b TREE_SITTER_INDEXING_THROUGHPUT_PLAN.md: Milestone 4 (Shard Tree-sitter project indexing)
 ```
 
-Validation performed after Milestone 4:
+Validation performed after Milestone 5:
 
 ```sh
 meson test -C build-windows-x86_64 --suite anvil --print-errorlogs
@@ -618,7 +620,7 @@ Add runtime tests with synthetic projects:
 - symbols become available before all usage shards finish if that semantic is preserved;
 - a failed shard does not prune or delete previous-generation entries for files it did not successfully process.
 
-## Milestone 5: Native result handles or file-backed artifacts — Pending / Larger transport work
+## Milestone 5: Native result handles or file-backed artifacts — Complete for Tree-sitter chunk delivery via file-backed artifacts
 
 ### Goal
 
@@ -626,11 +628,11 @@ Avoid deep-copying huge result tables through Lua channels.
 
 ### Status
 
-Pending. Current code still sends bounded Lua chunks through channels. Implement this after Milestone 4 measurements if channel copying becomes the next bottleneck.
+Complete for Tree-sitter project-index result chunks using file-backed artifacts. Worker shard jobs now write chunk payloads to temporary Lua artifact files and send only small artifact descriptors through Lua channels. The UI loads each artifact under the normal chunk-adoption budget, records artifact load diagnostics, and removes adopted or stale artifact files. Coordinator file-batch descriptors still travel through channels because they are intentionally compact.
 
-### Current issue
+### Resolved issue / remaining scope
 
-Lua channels deep-copy values. Even with chunk caps, large projects can spend time and memory copying result tables.
+Lua channels deep-copy values. Even with chunk caps, large projects can spend time and memory copying result tables. Tree-sitter project result chunks now avoid that large table channel copy by default through file-backed artifacts. This does not replace the broader long-term native result-handle design, and other worker jobs may still send ordinary Lua tables through channels.
 
 ### Options
 
@@ -690,10 +692,10 @@ Pros:
 Cons:
 - not enough for huge projects long-term.
 
-Recommended path:
+Implemented path:
 
-1. Add file-backed artifacts first if native result handles are too large.
-2. Move to native handles when building a native worker pool.
+1. Added file-backed artifacts first for Tree-sitter project result chunks.
+2. Keep native result handles as a future optimization if/when building a native worker pool.
 
 ### Testing
 

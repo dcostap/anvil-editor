@@ -804,6 +804,7 @@ fun make%d(): ShardedThing%d = ShardedThing%d()
 ]], i, i, i, i))
     end
 
+    local artifact_dir = root .. "-artifacts"
     local index = symbol_index.status(root)
     index.project_usage_cap = 4
     symbol_index.ensure_scan(root, {
@@ -812,6 +813,7 @@ fun make%d(): ShardedThing%d = ShardedThing%d()
       batch_files = 1,
       max_running_index_shards = 2,
       shard_usage_budget = 2,
+      artifact_dir = artifact_dir,
     })
     local status = wait_index_ready(root)
     test.equal(status.status, "ready")
@@ -834,9 +836,15 @@ fun make%d(): ShardedThing%d = ShardedThing%d()
     test.equal(phases.symbols.worker.files_scanned, 6)
     test.ok(((phases.usages and phases.usages.worker and phases.usages.worker.shard_jobs) or 0) >= 6, common.serialize(phases.usages))
     test.equal(phases.usages.worker.files_scanned, 6)
+    test.ok(((phases.usages.worker.artifacts_sent or 0) > 0), common.serialize(phases.usages.worker))
+    test.ok(((status.diagnostics and status.diagnostics.ui and status.diagnostics.ui.artifacts_loaded) or 0) > 0, common.serialize(status.diagnostics and status.diagnostics.ui))
+    for _, name in ipairs(system.list_dir(artifact_dir) or {}) do
+      test.ok(not name:match("%.lua$"), "artifact was not cleaned up: " .. tostring(name))
+    end
     test.ok((status.usage_count or 0) <= 4, "usage cap exceeded: " .. tostring(status.usage_count))
     test.ok(status.usage_truncated)
     common.rm(root, true)
+    common.rm(artifact_dir, true)
   end)
 
   test.it("Tree-sitter Project sharded usage budgets return unused reservations to later batches", function()

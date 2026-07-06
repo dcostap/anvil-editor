@@ -905,10 +905,44 @@ local function current_worker_message(index, message)
      and message.project_paths_generation == index.project_paths_generation
 end
 
-local function apply_worker_chunk(index, message)
-  if not current_worker_message(index, message) then return end
-  local adoption_started = now()
+local function cleanup_worker_artifact(message)
+  local artifact = message and message.payload and message.payload.artifact
+  local path = artifact and artifact.path
+  if path then pcall(os.remove, path) end
+end
+
+local function load_worker_chunk_payload(index, message)
   local payload = message.payload or {}
+  local artifact = payload.artifact
+  if not (artifact and artifact.path) then return payload end
+  local load_started = now()
+  local loader, err = loadfile(artifact.path)
+  if not loader then
+    cleanup_worker_artifact(message)
+    log_quiet("Tree-sitter Project index: failed to load chunk artifact %s: %s", tostring(artifact.path), tostring(err))
+    return { files = {}, diagnostics = payload.diagnostics or {} }
+  end
+  local ok, artifact_payload = pcall(loader)
+  cleanup_worker_artifact(message)
+  local load_ms = elapsed_ms(load_started)
+  add_ui_metric(index, "artifact_load_ms", load_ms)
+  max_ui_metric(index, "artifact_load_max_ms", load_ms)
+  inc_ui_metric(index, "artifacts_loaded", 1)
+  add_worker_pool_frame_metric("treesitter_project_artifact_load_ms", load_ms)
+  max_worker_pool_frame_metric("treesitter_project_artifact_load_max_ms", load_ms)
+  inc_worker_pool_frame_metric("treesitter_project_artifacts_loaded", 1)
+  if not ok or type(artifact_payload) ~= "table" then
+    log_quiet("Tree-sitter Project index: invalid chunk artifact %s: %s", tostring(artifact.path), tostring(artifact_payload))
+    return { files = {}, diagnostics = payload.diagnostics or {} }
+  end
+  artifact_payload.diagnostics = artifact_payload.diagnostics or payload.diagnostics or {}
+  return artifact_payload
+end
+
+local function apply_worker_chunk(index, message)
+  if not current_worker_message(index, message) then cleanup_worker_artifact(message); return end
+  local adoption_started = now()
+  local payload = load_worker_chunk_payload(index, message)
   local chunk_diag = payload.diagnostics or {}
   inc_ui_metric(index, "chunks_adopted", 1)
   inc_ui_metric(index, "chunk_files_adopted", chunk_diag.files or #(payload.files or {}))
@@ -1203,6 +1237,11 @@ local function maybe_finish_sharded_phase(index, run, message)
   end
 end
 
+local function default_index_artifact_dir()
+  local base = USERDIR or (system and system.absolute_path and system.absolute_path(".") or ".")
+  return common.normalize_path(base .. PATHSEP .. "treesitter-index-artifacts")
+end
+
 local function make_index_payload(index, opts, phase)
   opts = opts or {}
   return {
@@ -1216,6 +1255,8 @@ local function make_index_payload(index, opts, phase)
     chunk_files = opts.chunk_files or 8,
     chunk_records = opts.chunk_records or DEFAULT_WORKER_CHUNK_RECORDS,
     max_usage_captures_per_file = opts.max_usage_captures_per_file or DEFAULT_MAX_CAPTURES,
+    artifact_chunks = opts.artifact_chunks ~= false,
+    artifact_dir = opts.artifact_dir or default_index_artifact_dir(),
   }
 end
 
@@ -1316,6 +1357,7 @@ local function submit_sharded_scan(index, generation, opts, phase)
       is_stale = function(message)
         return not current_run_message(index, run, message)
       end,
+      on_stale = cleanup_worker_artifact,
       on_progress = function(message)
         if not current_run_message(index, run, message) then return end
         local p = message.payload or {}
@@ -1398,6 +1440,7 @@ local function submit_sharded_scan(index, generation, opts, phase)
     is_stale = function(message)
       return not current_run_message(index, run, message)
     end,
+    on_stale = cleanup_worker_artifact,
     on_progress = function(message)
       if not current_run_message(index, run, message) then return end
       local p = message.payload or {}
@@ -1499,6 +1542,7 @@ submit_worker_scan = function(index, generation, opts, phase)
     is_stale = function(message)
       return not current_worker_message(index, message)
     end,
+    on_stale = cleanup_worker_artifact,
     on_progress = function(message)
       if not current_worker_message(index, message) then return end
       local p = message.payload or {}
@@ -1631,6 +1675,8 @@ local function scan_options_from_query(opts)
     chunk_files = opts.chunk_files,
     chunk_records = opts.chunk_records,
     max_usage_captures_per_file = opts.max_usage_captures_per_file,
+    artifact_chunks = opts.artifact_chunks,
+    artifact_dir = opts.artifact_dir,
   }
 end
 

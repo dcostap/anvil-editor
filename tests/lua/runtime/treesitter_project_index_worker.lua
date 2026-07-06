@@ -160,6 +160,57 @@ int main(void) { return helper(); }
     end
   end)
 
+  test.test("writes result chunks to file-backed artifacts when requested", function()
+    test.ok(native.has_language("c"))
+    registry.reload()
+    local language = registry.get("main.c", "")
+    test.not_nil(language)
+
+    local root = mkdir(USERDIR .. PATHSEP .. "worker-project-index-artifact-fixture")
+    local artifact_dir = USERDIR .. PATHSEP .. "worker-project-index-artifact-fixture-artifacts"
+    common.rm(artifact_dir, true)
+    write_file(root .. PATHSEP .. "main.c", "int artifact_symbol(void) { return 1; }\n")
+
+    local pool = worker_pool.new({ name = "treesitter-project-index-artifact-test", worker_count = 1 })
+    pools[#pools + 1] = pool
+    local artifact_payload
+    local artifact_path
+    local final
+    pool:submit({
+      kind = "treesitter_project_index",
+      generation = 1,
+      project_paths_generation = 1,
+      payload = {
+        roots = { { path = root } },
+        languages = { language },
+        include_usages = false,
+        chunk_files = 1,
+        artifact_chunks = true,
+        artifact_dir = artifact_dir,
+      },
+      on_result = function(message)
+        if message.type == "chunk" then
+          test.is_nil(message.payload.files)
+          artifact_path = message.payload.artifact and message.payload.artifact.path
+          test.not_nil(artifact_path)
+          local loader = test.not_nil(loadfile(artifact_path))
+          artifact_payload = loader()
+          os.remove(artifact_path)
+        elseif message.type == "final" then
+          final = message.payload
+        end
+      end,
+      on_complete = function(message) final = final or message.payload or {} end,
+    })
+
+    test.ok(drain_until(pool, function() return final ~= nil end))
+    test.not_nil(artifact_payload)
+    test.equal(#(artifact_payload.files or {}), 1)
+    test.ok((final.diagnostics.artifacts_sent or 0) >= 1, common.serialize(final.diagnostics))
+    test.equal(system.get_file_info(artifact_path), nil)
+    common.rm(artifact_dir, true)
+  end)
+
   test.test("splits one large file result into bounded output chunks", function()
     test.ok(native.has_language("c"))
     registry.reload()
