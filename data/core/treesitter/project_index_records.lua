@@ -230,31 +230,30 @@ local function assign_parents(symbols)
   end
 end
 
-function records.symbols_from_captures(captures, lines)
-  local groups = {}
-  for _, capture in ipairs(captures or {}) do
-    local match_id = capture.match_id or capture.order or 0
-    local group = groups[match_id]
-    if not group then
-      group = {}
-      groups[match_id] = group
-    end
-    local kind = outline_kind(capture.capture)
-    if kind then
-      if not group.item or (capture.end_byte - capture.start_byte) > (group.item.end_byte - group.item.start_byte) then
-        group.item = capture
-        group.kind = kind
-      end
-    elseif capture.capture == "name" then
-      if not group.name or (capture.end_byte - capture.start_byte) < (group.name.end_byte - group.name.start_byte) then
-        group.name = capture
-      end
-    elseif tostring(capture.capture):match("^signature") then
-      group.signatures = group.signatures or {}
-      group.signatures[#group.signatures + 1] = capture
-    end
+local function add_symbol_capture_group(groups, capture)
+  local match_id = capture.match_id or capture.order or 0
+  local group = groups[match_id]
+  if not group then
+    group = {}
+    groups[match_id] = group
   end
+  local kind = outline_kind(capture.capture)
+  if kind then
+    if not group.item or (capture.end_byte - capture.start_byte) > (group.item.end_byte - group.item.start_byte) then
+      group.item = capture
+      group.kind = kind
+    end
+  elseif capture.capture == "name" then
+    if not group.name or (capture.end_byte - capture.start_byte) < (group.name.end_byte - group.name.start_byte) then
+      group.name = capture
+    end
+  elseif tostring(capture.capture):match("^signature") then
+    group.signatures = group.signatures or {}
+    group.signatures[#group.signatures + 1] = capture
+  end
+end
 
+local function symbols_from_groups(groups, lines)
   local symbols = {}
   for _, group in pairs(groups) do
     local symbol = symbol_from_group(lines, group)
@@ -263,6 +262,22 @@ function records.symbols_from_captures(captures, lines)
   table.sort(symbols, compare_symbols)
   assign_parents(symbols)
   return symbols
+end
+
+function records.symbols_from_capture_iter(iter, lines)
+  local groups = {}
+  for capture in iter do
+    add_symbol_capture_group(groups, capture)
+  end
+  return symbols_from_groups(groups, lines)
+end
+
+function records.symbols_from_captures(captures, lines)
+  local groups = {}
+  for _, capture in ipairs(captures or {}) do
+    add_symbol_capture_group(groups, capture)
+  end
+  return symbols_from_groups(groups, lines)
 end
 
 function records.is_usage_capture(capture)
@@ -315,27 +330,42 @@ function records.add_usage(usages_by_name, item)
   return true
 end
 
-function records.usages_from_captures(captures, path, relpath, lines, language)
-  local by_range = {}
-  for _, capture in ipairs(captures or {}) do
-    if records.is_usage_capture(capture) then
-      local item = records.usage_from_capture(path, relpath, lines, language, capture)
-      if item then
-        local key = table.concat({ item.name, tostring(item.start_byte or 0), tostring(item.end_byte or 0) }, "\0")
-        local existing = by_range[key]
-        if not existing or (item.is_declaration and not existing.is_declaration) then
-          by_range[key] = item
-        end
+local function add_usage_capture(by_range, path, relpath, lines, language, capture)
+  if records.is_usage_capture(capture) then
+    local item = records.usage_from_capture(path, relpath, lines, language, capture)
+    if item then
+      local key = table.concat({ item.name, tostring(item.start_byte or 0), tostring(item.end_byte or 0) }, "\0")
+      local existing = by_range[key]
+      if not existing or (item.is_declaration and not existing.is_declaration) then
+        by_range[key] = item
       end
     end
   end
+end
 
+local function usages_from_range_map(by_range)
   local usages_by_name = {}
   local count = 0
   for _, item in pairs(by_range) do
     if records.add_usage(usages_by_name, item) then count = count + 1 end
   end
   return usages_by_name, count
+end
+
+function records.usages_from_capture_iter(iter, path, relpath, lines, language)
+  local by_range = {}
+  for capture in iter do
+    add_usage_capture(by_range, path, relpath, lines, language, capture)
+  end
+  return usages_from_range_map(by_range)
+end
+
+function records.usages_from_captures(captures, path, relpath, lines, language)
+  local by_range = {}
+  for _, capture in ipairs(captures or {}) do
+    add_usage_capture(by_range, path, relpath, lines, language, capture)
+  end
+  return usages_from_range_map(by_range)
 end
 
 return records

@@ -93,6 +93,8 @@ int main(void) { return helper(); }
     test.not_nil(final.diagnostics)
     test.equal(final.diagnostics.files_indexed, 1)
     test.equal(final.diagnostics.parse_calls, 1)
+    test.equal(final.diagnostics.native_index_jobs, 1)
+    test.equal(final.diagnostics.native_index_lazy_outline_records, 1)
     test.ok(final.diagnostics.file_read_ms >= 0)
     test.ok(final.diagnostics.chunk_send_wait_ms >= 0)
     test.ok(final.diagnostics.chunk_files_max >= 1)
@@ -296,6 +298,8 @@ int main(void) { return helper(); }
     test.equal(file.usage_complete, false)
     test.equal(final.files_indexed, 1)
     test.equal(final.diagnostics.parse_calls, 1)
+    test.equal(final.diagnostics.native_index_jobs, 1)
+    test.equal(final.diagnostics.native_index_lazy_outline_records, 1)
     test.equal(final.usage_truncated, true)
   end)
 

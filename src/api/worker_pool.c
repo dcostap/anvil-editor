@@ -6,10 +6,12 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define API_TYPE_WORKER_POOL "NativeWorkerPool"
 #define API_TYPE_WORKER_JOB "NativeWorkerJob"
 #define API_TYPE_WORKER_CANCEL_TOKEN "NativeWorkerCancelToken"
+#define API_TYPE_TREESITTER_INDEX_RESULT "NativeTreeSitterIndexResult"
 
 typedef struct {
   AnvilWorkerPool *pool;
@@ -22,6 +24,10 @@ typedef struct {
 typedef struct {
   AnvilWorkerCancelToken *token;
 } LuaWorkerCancelToken;
+
+typedef struct {
+  AnvilWorkerTreeSitterIndexResult *result;
+} LuaTreeSitterIndexResult;
 
 static LuaWorkerPool *check_pool(lua_State *L, int idx) {
   LuaWorkerPool *pool = (LuaWorkerPool *)luaL_checkudata(L, idx, API_TYPE_WORKER_POOL);
@@ -41,10 +47,28 @@ static LuaWorkerCancelToken *check_cancel_token(lua_State *L, int idx) {
   return token;
 }
 
+static LuaTreeSitterIndexResult *check_treesitter_index_result(lua_State *L, int idx) {
+  LuaTreeSitterIndexResult *result = (LuaTreeSitterIndexResult *)luaL_checkudata(L, idx, API_TYPE_TREESITTER_INDEX_RESULT);
+  luaL_argcheck(L, result && result->result, idx, "released native Tree-sitter index result");
+  return result;
+}
+
 static int opt_int_field(lua_State *L, int table, const char *key, int def) {
   int out = def;
   lua_getfield(L, table, key);
   if (!lua_isnil(L, -1)) out = (int)luaL_checkinteger(L, -1);
+  lua_pop(L, 1);
+  return out;
+}
+
+static uint32_t opt_uint32_field(lua_State *L, int table, const char *key, uint32_t def) {
+  uint32_t out = def;
+  lua_getfield(L, table, key);
+  if (!lua_isnil(L, -1)) {
+    lua_Integer raw = luaL_checkinteger(L, -1);
+    luaL_argcheck(L, raw >= 0 && raw <= UINT32_MAX, table, "integer field out of uint32 range");
+    out = (uint32_t)raw;
+  }
   lua_pop(L, 1);
   return out;
 }
@@ -84,6 +108,15 @@ static int cancel_token_gc(lua_State *L) {
   return 0;
 }
 
+static int treesitter_index_result_gc(lua_State *L) {
+  LuaTreeSitterIndexResult *result = (LuaTreeSitterIndexResult *)luaL_checkudata(L, 1, API_TYPE_TREESITTER_INDEX_RESULT);
+  if (result && result->result) {
+    anvil_worker_treesitter_index_result_free(result->result);
+    result->result = NULL;
+  }
+  return 0;
+}
+
 static void push_job_handle(lua_State *L, AnvilWorkerJob *job) {
   LuaWorkerJob *lua_job = (LuaWorkerJob *)lua_newuserdata(L, sizeof(*lua_job));
   lua_job->job = job;
@@ -95,12 +128,26 @@ static int pool_submit(lua_State *L) {
   LuaWorkerPool *pool = check_pool(L, 1);
   luaL_checktype(L, 2, LUA_TTABLE);
   AnvilWorkerJobSpec spec;
+  memset(&spec, 0, sizeof(spec));
   spec.kind = opt_string_field(L, 2, "kind", NULL);
   spec.value = opt_string_field(L, 2, "value", NULL);
   spec.count = opt_int_field(L, 2, "count", 0);
   int sleep_ms = opt_int_field(L, 2, "sleep_ms", 0);
   if (sleep_ms < 0) sleep_ms = 0;
   spec.sleep_ms = (uint32_t)sleep_ms;
+  spec.path = opt_string_field(L, 2, "path", NULL);
+  spec.language = opt_string_field(L, 2, "language", NULL);
+  spec.text = opt_string_field(L, 2, "text", NULL);
+  spec.outline_query = opt_string_field(L, 2, "outline_query", NULL);
+  spec.usage_query = opt_string_field(L, 2, "usage_query", NULL);
+  spec.cancel_token = opt_string_field(L, 2, "cancel_token", NULL);
+  spec.parse_timeout_ms = opt_uint32_field(L, 2, "parse_timeout_ms", 0);
+  spec.query_timeout_ms = opt_uint32_field(L, 2, "query_timeout_ms", 0);
+  spec.match_limit = opt_uint32_field(L, 2, "match_limit", 0);
+  spec.max_captures = opt_uint32_field(L, 2, "max_captures", 0);
+  spec.usage_query_timeout_ms = opt_uint32_field(L, 2, "usage_query_timeout_ms", 0);
+  spec.usage_match_limit = opt_uint32_field(L, 2, "usage_match_limit", 0);
+  spec.usage_max_captures = opt_uint32_field(L, 2, "usage_max_captures", 0);
   char *error = NULL;
   AnvilWorkerJob *job = anvil_worker_pool_submit(pool->pool, &spec, &error);
   if (!job) {
@@ -139,6 +186,115 @@ static int pool_status(lua_State *L) {
   return 1;
 }
 
+static void push_treesitter_index_result_handle(lua_State *L, AnvilWorkerTreeSitterIndexResult *result) {
+  LuaTreeSitterIndexResult *lua_result = (LuaTreeSitterIndexResult *)lua_newuserdata(L, sizeof(*lua_result));
+  lua_result->result = result;
+  luaL_getmetatable(L, API_TYPE_TREESITTER_INDEX_RESULT);
+  lua_setmetatable(L, -2);
+}
+
+static void push_treesitter_capture(lua_State *L, AnvilWorkerTreeSitterIndexResult *result, const char *kind, uint32_t index) {
+  const char *name = NULL;
+  uint32_t name_len = 0, start_byte = 0, end_byte = 0, start_line = 0, start_col = 0, end_line = 0, end_col = 0;
+  int32_t priority = 0;
+  uint32_t match_id = 0, pattern_index = 0, capture_index = 0, order = 0;
+  if (!anvil_worker_treesitter_index_result_capture_at(result, kind, index, &name, &name_len, &start_byte, &end_byte, &start_line, &start_col, &end_line, &end_col, &priority, &match_id, &pattern_index, &capture_index, &order)) {
+    lua_pushnil(L);
+    return;
+  }
+  lua_createtable(L, 0, 12);
+  lua_pushlstring(L, name ? name : "", name_len);
+  lua_setfield(L, -2, "capture");
+  lua_pushinteger(L, (lua_Integer)start_byte);
+  lua_setfield(L, -2, "start_byte");
+  lua_pushinteger(L, (lua_Integer)end_byte);
+  lua_setfield(L, -2, "end_byte");
+  lua_pushinteger(L, (lua_Integer)start_line);
+  lua_setfield(L, -2, "start_line");
+  lua_pushinteger(L, (lua_Integer)start_col);
+  lua_setfield(L, -2, "start_col");
+  lua_pushinteger(L, (lua_Integer)end_line);
+  lua_setfield(L, -2, "end_line");
+  lua_pushinteger(L, (lua_Integer)end_col);
+  lua_setfield(L, -2, "end_col");
+  lua_pushinteger(L, (lua_Integer)priority);
+  lua_setfield(L, -2, "priority");
+  lua_pushinteger(L, (lua_Integer)match_id);
+  lua_setfield(L, -2, "match_id");
+  lua_pushinteger(L, (lua_Integer)pattern_index);
+  lua_setfield(L, -2, "pattern_index");
+  lua_pushinteger(L, (lua_Integer)capture_index);
+  lua_setfield(L, -2, "capture_index");
+  lua_pushinteger(L, (lua_Integer)order);
+  lua_setfield(L, -2, "order");
+}
+
+static int treesitter_index_result_summary(lua_State *L) {
+  LuaTreeSitterIndexResult *result = check_treesitter_index_result(L, 1);
+  lua_createtable(L, 0, 6);
+  lua_pushstring(L, anvil_worker_treesitter_index_result_language(result->result));
+  lua_setfield(L, -2, "language");
+  lua_pushinteger(L, (lua_Integer)anvil_worker_treesitter_index_result_byte_len(result->result));
+  lua_setfield(L, -2, "byte_len");
+  lua_createtable(L, 0, 5);
+  lua_pushinteger(L, (lua_Integer)anvil_worker_treesitter_index_result_parse_ms(result->result));
+  lua_setfield(L, -2, "parse_ms");
+  lua_pushinteger(L, (lua_Integer)anvil_worker_treesitter_index_result_query_ms(result->result, "outline"));
+  lua_setfield(L, -2, "outline_query_ms");
+  lua_pushinteger(L, (lua_Integer)anvil_worker_treesitter_index_result_query_ms(result->result, "usage"));
+  lua_setfield(L, -2, "usage_query_ms");
+  lua_setfield(L, -2, "metrics");
+  const char *kinds[] = { "outline", "usage" };
+  for (int i = 0; i < 2; ++i) {
+    const char *kind = kinds[i];
+    lua_createtable(L, 0, 4);
+    lua_pushstring(L, anvil_worker_treesitter_index_result_status(result->result, kind));
+    lua_setfield(L, -2, "status");
+    lua_pushinteger(L, (lua_Integer)anvil_worker_treesitter_index_result_capture_count(result->result, kind));
+    lua_setfield(L, -2, "capture_count");
+    lua_pushboolean(L, anvil_worker_treesitter_index_result_exceeded_match_limit(result->result, kind));
+    lua_setfield(L, -2, "exceeded_match_limit");
+    const char *error = anvil_worker_treesitter_index_result_error(result->result, kind);
+    if (error) {
+      lua_pushstring(L, error);
+      lua_setfield(L, -2, "error");
+    }
+    lua_setfield(L, -2, kind);
+  }
+  return 1;
+}
+
+static int treesitter_index_result_captures(lua_State *L) {
+  LuaTreeSitterIndexResult *result = check_treesitter_index_result(L, 1);
+  const char *kind = luaL_optstring(L, 2, "outline");
+  uint32_t offset = 1;
+  uint32_t limit = 256;
+  if (lua_istable(L, 3)) {
+    offset = opt_uint32_field(L, 3, "offset", 1);
+    limit = opt_uint32_field(L, 3, "limit", 256);
+  } else if (!lua_isnoneornil(L, 3)) {
+    lua_Integer raw = luaL_checkinteger(L, 3);
+    luaL_argcheck(L, raw >= 0 && raw <= UINT32_MAX, 3, "limit out of range");
+    limit = (uint32_t)raw;
+  }
+  if (offset == 0) offset = 1;
+  uint32_t count = anvil_worker_treesitter_index_result_capture_count(result->result, kind);
+  uint32_t start = offset - 1;
+  if (start > count) start = count;
+  uint32_t remaining = count - start;
+  uint32_t out_count = limit < remaining ? limit : remaining;
+  lua_createtable(L, (int)out_count, 0);
+  for (uint32_t i = 0; i < out_count; ++i) {
+    push_treesitter_capture(L, result->result, kind, start + i);
+    lua_rawseti(L, -2, (int)i + 1);
+  }
+  lua_pushinteger(L, (lua_Integer)(start + out_count + 1));
+  lua_setfield(L, -2, "next_offset");
+  lua_pushinteger(L, (lua_Integer)count);
+  lua_setfield(L, -2, "total");
+  return 1;
+}
+
 static void push_result(lua_State *L, AnvilWorkerResult *result) {
   lua_createtable(L, 0, 8);
   lua_pushinteger(L, (lua_Integer)anvil_worker_result_job_id(result));
@@ -154,6 +310,19 @@ static void push_result(lua_State *L, AnvilWorkerResult *result) {
     lua_createtable(L, 0, 1);
     lua_pushstring(L, value);
     lua_setfield(L, -2, "value");
+    lua_setfield(L, -2, "payload");
+  }
+  AnvilWorkerTreeSitterIndexResult *treesitter_result = anvil_worker_result_steal_treesitter_index_result(result);
+  if (treesitter_result) {
+    push_treesitter_index_result_handle(L, treesitter_result);
+    lua_setfield(L, -2, "result");
+    lua_getfield(L, -1, "payload");
+    if (!lua_istable(L, -1)) {
+      lua_pop(L, 1);
+      lua_createtable(L, 0, 1);
+    }
+    lua_getfield(L, -2, "result");
+    lua_setfield(L, -2, "result");
     lua_setfield(L, -2, "payload");
   }
   const char *error = anvil_worker_result_error(result);
@@ -340,6 +509,13 @@ static const luaL_Reg cancel_token_methods[] = {
   { NULL, NULL }
 };
 
+static const luaL_Reg treesitter_index_result_methods[] = {
+  { "summary", treesitter_index_result_summary },
+  { "captures", treesitter_index_result_captures },
+  { "__gc", treesitter_index_result_gc },
+  { NULL, NULL }
+};
+
 static const luaL_Reg lib[] = {
   { "new", f_new },
   { "new_cancel_token", f_new_cancel_token },
@@ -364,6 +540,12 @@ int luaopen_worker_pool_native(lua_State *L) {
   lua_pushvalue(L, -1);
   lua_setfield(L, -2, "__index");
   luaL_setfuncs(L, cancel_token_methods, 0);
+  lua_pop(L, 1);
+
+  luaL_newmetatable(L, API_TYPE_TREESITTER_INDEX_RESULT);
+  lua_pushvalue(L, -1);
+  lua_setfield(L, -2, "__index");
+  luaL_setfuncs(L, treesitter_index_result_methods, 0);
   lua_pop(L, 1);
 
   luaL_newlib(L, lib);

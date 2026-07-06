@@ -70,4 +70,33 @@ test.describe("worker_pool_native", function()
     local messages = pool:drain({ max_messages = 2 })
     test.ok(#messages <= 2)
   end)
+
+  test.test("Tree-sitter index job returns bounded result handle", function()
+    local pool = new_pool("lua-native-treesitter-index", 1)
+    local handle = pool:submit({
+      kind = "treesitter_index_text",
+      language = "c",
+      text = "int add(int a, int b) { return a + b; }\n",
+      outline_query = "(function_definition) @definition.function",
+      parse_timeout_ms = 1000,
+      query_timeout_ms = 100,
+      max_captures = 100,
+    })
+    test.not_nil(handle)
+    local result
+    test.ok(drain_until(pool, function(message)
+      if message.type == "result" then result = message.result end
+      return message.type == "final"
+    end))
+    test.not_nil(result)
+    local summary = result:summary()
+    test.equal(summary.language, "c")
+    test.equal(summary.outline.status, "ready")
+    test.ok(summary.outline.capture_count >= 1)
+    local captures = result:captures("outline", { offset = 1, limit = 1 })
+    test.equal(#captures, 1)
+    test.equal(captures[1].capture, "definition.function")
+    test.equal(captures.total, summary.outline.capture_count)
+    test.ok(captures.next_offset >= 2)
+  end)
 end)

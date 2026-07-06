@@ -6,7 +6,11 @@
 
 local common = require "core.common"
 local records = require "core.treesitter.project_index_records"
+local native_result_adapter = require "core.treesitter.native_index_adapter"
 local native = require "treesitter"
+
+local native_worker_pool_ok, native_worker_pool = pcall(require, "worker_pool_native")
+if not native_worker_pool_ok then native_worker_pool = nil end
 
 local worker = {}
 
@@ -149,6 +153,71 @@ local function copy_native_metrics(metrics, result, prefix)
   end
   local captures = result and result[prefix] and result[prefix].capture_count
   if captures then inc_metric(metrics, prefix .. "_captures", captures) end
+end
+
+local native_index_pool
+
+local function native_index_pool_for(payload)
+  if payload.native_index_jobs == false or not native_worker_pool then return nil end
+  if native_index_pool then return native_index_pool end
+  local worker_count = math.max(1, math.floor(tonumber(payload.native_index_worker_count) or 1))
+  local ok, pool = pcall(native_worker_pool.new, {
+    name = "treesitter-project-index-native",
+    worker_count = worker_count,
+  })
+  if not ok or not pool then return nil, pool or "native-pool-create-failed" end
+  native_index_pool = pool
+  return native_index_pool
+end
+
+local function native_index_text_job(native_opts, text, payload, ctx, metrics)
+  local pool = native_index_pool_for(payload)
+  if not pool then return nil, "native-pool-unavailable" end
+  local spec = common.merge({}, native_opts or {})
+  spec.kind = "treesitter_index_text"
+  spec.lines = nil
+  spec.text = text
+  local submit_started = now()
+  local handle, err = pool:submit(spec)
+  add_metric(metrics, "native_index_submit_ms", elapsed_ms(submit_started))
+  if not handle then return nil, err or "native-submit-failed" end
+
+  local result_handle
+  local terminal
+  local terminal_error
+  while not terminal do
+    if ctx.cancelled() then pool:cancel(handle) end
+    local drain_started = now()
+    local messages = pool:drain({ max_messages = 16 })
+    add_metric(metrics, "native_index_drain_ms", elapsed_ms(drain_started))
+    for _, message in ipairs(messages or {}) do
+      if message.type == "result" then
+        result_handle = message.result or (message.payload and message.payload.result)
+      elseif message.type == "error" then
+        terminal = "error"
+        terminal_error = message.error or (message.payload and message.payload.error)
+      elseif message.type == "cancelled" then
+        terminal = "cancelled"
+      elseif message.type == "final" or message.type == "complete" then
+        terminal = message.type
+      end
+    end
+    if not terminal then
+      if system and system.sleep then system.sleep(0.001) else coroutine.yield(0.001) end
+    end
+  end
+
+  if terminal == "cancelled" then return nil, "cancelled" end
+  if terminal == "error" then return nil, terminal_error or "native-index-failed" end
+  if not result_handle then return nil, "missing-native-index-result" end
+  local adapt_started = now()
+  local result, adapt_err = native_result_adapter.to_index_text_result(result_handle, {
+    lazy = true,
+    capture_chunk = payload.native_result_capture_chunk or payload.chunk_records or DEFAULT_CHUNK_RECORDS,
+  })
+  add_metric(metrics, "native_index_result_adapt_ms", elapsed_ms(adapt_started))
+  if result then inc_metric(metrics, "native_index_jobs", 1) end
+  return result, adapt_err
 end
 
 local function query_status_ok(query_result)
@@ -467,7 +536,15 @@ local function index_file(path, root_path, language, payload, ctx, info, usage_r
 
   local result
   local native_started = now()
-  result, err = native.index_text(native_opts)
+  if payload.native_index_jobs ~= false then
+    result, err = native_index_text_job(native_opts, text, payload, ctx, metrics)
+    if not result and err ~= "cancelled" then
+      inc_metric(metrics, "native_index_job_fallbacks", 1)
+      result, err = native.index_text(native_opts)
+    end
+  else
+    result, err = native.index_text(native_opts)
+  end
   add_metric(metrics, "native_index_text_ms", elapsed_ms(native_started))
   if not result then return nil, err or "index-text-failed", info end
   copy_native_metrics(metrics, result, "outline")
@@ -478,7 +555,13 @@ local function index_file(path, root_path, language, payload, ctx, info, usage_r
 
   local relpath = common.relative_path(root_path, path):gsub("\\", "/")
   local symbol_record_started = now()
-  local symbols = records.symbols_from_captures(result.outline and result.outline.captures or {}, lines)
+  local symbols
+  if result.outline and result.outline.capture_iter then
+    symbols = records.symbols_from_capture_iter(result.outline.capture_iter(), lines)
+    inc_metric(metrics, "native_index_lazy_outline_records", 1)
+  else
+    symbols = records.symbols_from_captures(result.outline and result.outline.captures or {}, lines)
+  end
   add_metric(metrics, "symbol_record_ms", elapsed_ms(symbol_record_started))
   for _, symbol in ipairs(symbols) do
     symbol.path = path
@@ -493,7 +576,12 @@ local function index_file(path, root_path, language, payload, ctx, info, usage_r
   if usage_kind then
     if usage_effective_cap > 0 and result.usage and query_status_ok(result.usage) then
       local usage_record_started = now()
-      usages_by_name, usage_count = records.usages_from_captures(result.usage.captures, path, relpath, lines, language)
+      if result.usage.capture_iter then
+        usages_by_name, usage_count = records.usages_from_capture_iter(result.usage.capture_iter(), path, relpath, lines, language)
+        inc_metric(metrics, "native_index_lazy_usage_records", 1)
+      else
+        usages_by_name, usage_count = records.usages_from_captures(result.usage.captures, path, relpath, lines, language)
+      end
       add_metric(metrics, "usage_record_ms", elapsed_ms(usage_record_started))
       if usage_count >= usage_effective_cap or result.usage.status == "limit" then usage_complete = false end
     else
@@ -515,8 +603,9 @@ local function index_file(path, root_path, language, payload, ctx, info, usage_r
 end
 
 local function walk(root, payload, ctx, state, chunk)
-  local root_path = normalize(root.path or root)
-  local stack = { root_path }
+  local scan_root = normalize(root.path or root)
+  local root_path = normalize(root.root_path or payload.root_path or payload.root or scan_root)
+  local stack = { scan_root }
   while #stack > 0 do
     if ctx.cancelled() then return false, "cancelled" end
     local dir = table.remove(stack)
@@ -566,8 +655,9 @@ local function walk(root, payload, ctx, state, chunk)
 end
 
 local function walk_batches(root, payload, ctx, state)
-  local root_path = normalize(root.path or root)
-  local stack = { root_path }
+  local scan_root = normalize(root.path or root)
+  local root_path = normalize(root.root_path or payload.root_path or payload.root or scan_root)
+  local stack = { scan_root }
   local batch = { root = root_path, files = {}, bytes = 0 }
   local max_files = tonumber(payload.batch_files or DEFAULT_BATCH_FILES) or DEFAULT_BATCH_FILES
   local max_bytes = tonumber(payload.batch_bytes or DEFAULT_BATCH_BYTES) or DEFAULT_BATCH_BYTES

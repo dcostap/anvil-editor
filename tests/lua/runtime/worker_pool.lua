@@ -104,6 +104,35 @@ test.describe("worker_pool", function()
     test.equal(pool:status(handle).status, "cancelled")
   end)
 
+  test.test("native Tree-sitter result handles pass through the core worker_pool facade", function()
+    local pool = new_pool("test-native-facade-treesitter", 1)
+    local result
+    local completed = false
+    local handle = pool:submit({
+      native = true,
+      kind = "treesitter_index_text",
+      payload = {
+        language = "c",
+        text = "int add(int a, int b) { return a + b; }\n",
+        outline_query = "(function_definition) @definition.function",
+        parse_timeout_ms = 1000,
+        query_timeout_ms = 100,
+        max_captures = 100,
+      },
+      on_result = function(message)
+        if message.type == "result" then result = message.payload.result end
+      end,
+      on_complete = function() completed = true end,
+    })
+    test.not_nil(handle)
+    test.ok(drain_until(pool, function() return completed end))
+    test.not_nil(result)
+    local summary = result:summary()
+    test.equal(summary.outline.status, "ready")
+    test.ok(summary.outline.capture_count >= 1)
+    test.equal(result:captures("outline", { limit = 1 })[1].capture, "definition.function")
+  end)
+
   test.test("errors are delivered", function()
     local pool = new_pool("test-error", 1)
     local error_message

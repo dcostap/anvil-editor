@@ -1290,6 +1290,60 @@ fun make(): NewDiskThing = NewDiskThing()
     common.rm(root, true)
   end)
 
+  test.it("Tree-sitter async targeted file reindex uses worker-backed single-file refresh", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-async-targeted-reindex-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    local path = root .. PATHSEP .. "Model.kt"
+    write_file(path, [[package demo
+
+class AsyncOldThing
+
+fun make(): AsyncOldThing = AsyncOldThing()
+]])
+
+    local refs, reason, status = wait_workspace_usages("AsyncOldThing", {
+      root = root,
+      force = true,
+      include_declaration = false,
+      limit = 20,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 2)
+
+    write_file(path, [[package demo
+
+class AsyncNewThing
+
+fun make(): AsyncNewThing = AsyncNewThing()
+]])
+    local matched
+    matched, reason = symbol_index.reindex_file(path, { force = true, reason = "async-test" })
+    test.ok(matched, reason)
+
+    refs, reason, status = wait_workspace_usages("AsyncNewThing", {
+      root = root,
+      include_declaration = false,
+      limit = 20,
+    }, 8)
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 2)
+
+    refs, reason, status = wait_workspace_usages("AsyncOldThing", {
+      root = root,
+      include_declaration = false,
+      limit = 20,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 0)
+    local index = symbol_index.status(root)
+    test.not_nil(index and index.diagnostics and index.diagnostics.phases and index.diagnostics.phases.targeted)
+    test.equal(index.diagnostics.phases.targeted.worker.native_index_jobs, 1)
+
+    common.rm(root, true)
+  end)
+
   test.it("Tree-sitter directory dirty marking refreshes direct changed files", function()
     symbol_index.reset_for_tests()
     local root = USERDIR .. PATHSEP .. "treesitter-directory-dirty-"
@@ -1366,6 +1420,90 @@ fun make(): AddedWatchThing = AddedWatchThing()
     })
     test.equal(status, "fresh", reason)
     test.equal(#refs, 0)
+    common.rm(root, true)
+  end)
+
+  test.it("Tree-sitter async directory dirty marking uses targeted worker refresh", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-async-directory-dirty-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    local src = mkdir(root .. PATHSEP .. "src")
+    write_file(src .. PATHSEP .. "Changed.kt", [[package demo
+
+class AsyncBeforeDirThing
+
+fun make(): AsyncBeforeDirThing = AsyncBeforeDirThing()
+]])
+    write_file(src .. PATHSEP .. "Removed.kt", [[package demo
+
+class AsyncRemovedDirThing
+
+fun make(): AsyncRemovedDirThing = AsyncRemovedDirThing()
+]])
+
+    local refs, reason, status = wait_workspace_usages("AsyncBeforeDirThing", {
+      root = root,
+      force = true,
+      include_declaration = false,
+      limit = 20,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 2)
+
+    write_file(src .. PATHSEP .. "Changed.kt", [[package demo
+
+class AsyncAfterDirThing
+
+fun make(): AsyncAfterDirThing = AsyncAfterDirThing()
+]])
+    write_file(src .. PATHSEP .. "Added.kt", [[package demo
+
+class AsyncAddedDirThing
+
+fun make(): AsyncAddedDirThing = AsyncAddedDirThing()
+]])
+    os.remove(src .. PATHSEP .. "Removed.kt")
+
+    local changed
+    changed, reason = symbol_index.mark_directory_dirty(src, "async-dir-test")
+    test.ok(changed, reason)
+
+    refs, reason, status = wait_workspace_usages("AsyncAfterDirThing", {
+      root = root,
+      include_declaration = false,
+      limit = 20,
+    }, 8)
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 2)
+
+    refs, reason, status = wait_workspace_usages("AsyncAddedDirThing", {
+      root = root,
+      include_declaration = false,
+      limit = 20,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 2)
+
+    refs, reason, status = wait_workspace_usages("AsyncBeforeDirThing", {
+      root = root,
+      include_declaration = false,
+      limit = 20,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 0)
+
+    refs, reason, status = wait_workspace_usages("AsyncRemovedDirThing", {
+      root = root,
+      include_declaration = false,
+      limit = 20,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 0)
+    local index = symbol_index.status(root)
+    test.not_nil(index and index.diagnostics and index.diagnostics.phases and index.diagnostics.phases["targeted-directory"])
+    test.ok((index.diagnostics.phases["targeted-directory"].worker.native_index_jobs or 0) >= 2)
+
     common.rm(root, true)
   end)
 

@@ -69,7 +69,46 @@ int main(int argc, char **argv) {
   CHECK(strcmp(anvil_worker_job_status_string(fail_job), "failed") == 0);
   anvil_worker_job_release(fail_job);
 
-  CHECK(anvil_worker_pool_submitted_count(pool) == 3);
+  AnvilWorkerJobSpec ts = { 0 };
+  ts.kind = "treesitter_index_text";
+  ts.language = "c";
+  ts.text = "int add(int a, int b) { return a + b; }\n";
+  ts.outline_query = "(function_definition) @definition.function";
+  ts.parse_timeout_ms = 1000;
+  ts.query_timeout_ms = 100;
+  ts.max_captures = 100;
+  AnvilWorkerJob *ts_job = anvil_worker_pool_submit(pool, &ts, &error);
+  CHECK(ts_job != NULL);
+  uint64_t ts_id = anvil_worker_job_id(ts_job);
+  int saw_ts_result = 0;
+  start = SDL_GetTicks();
+  while ((int)(SDL_GetTicks() - start) < 1000 && !saw_ts_result) {
+    AnvilWorkerResult *result = anvil_worker_pool_pop_result(pool);
+    if (result) {
+      if (anvil_worker_result_job_id(result) == ts_id && strcmp(anvil_worker_result_type(result), "result") == 0) {
+        AnvilWorkerTreeSitterIndexResult *index_result = anvil_worker_result_steal_treesitter_index_result(result);
+        CHECK(index_result != NULL);
+        CHECK(strcmp(anvil_worker_treesitter_index_result_language(index_result), "c") == 0);
+        CHECK(strcmp(anvil_worker_treesitter_index_result_status(index_result, "outline"), "ready") == 0);
+        CHECK(anvil_worker_treesitter_index_result_capture_count(index_result, "outline") >= 1);
+        const char *name = NULL;
+        uint32_t name_len = 0;
+        CHECK(anvil_worker_treesitter_index_result_capture_at(index_result, "outline", 0, &name, &name_len, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL));
+        CHECK(name != NULL && name_len == strlen("definition.function") && strncmp(name, "definition.function", name_len) == 0);
+        anvil_worker_treesitter_index_result_free(index_result);
+        saw_ts_result = 1;
+      }
+      anvil_worker_result_free(result);
+    } else {
+      SDL_Delay(1);
+    }
+  }
+  CHECK(saw_ts_result);
+  CHECK(drain_until_type(pool, ts_id, "final", 1000));
+  CHECK(strcmp(anvil_worker_job_status_string(ts_job), "complete") == 0);
+  anvil_worker_job_release(ts_job);
+
+  CHECK(anvil_worker_pool_submitted_count(pool) == 4);
   CHECK(anvil_worker_pool_completed_count(pool) >= 1);
   CHECK(anvil_worker_pool_cancelled_count(pool) >= 1);
   CHECK(anvil_worker_pool_failed_count(pool) >= 1);

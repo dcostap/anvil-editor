@@ -201,9 +201,13 @@ worker_pool_test = executable('worker_pool_test',
     [
         '../tests/native/worker_pool_test.c',
         'worker_pool.c',
+        'treesitter/languages.c',
+        'treesitter/service.c',
+        'treesitter/snapshot.c',
+        'custom_events.c',
     ],
     include_directories: anvil_includes,
-    dependencies: [sdl_dep],
+    dependencies: [tree_sitter_dep, tree_sitter_c_dep, tree_sitter_cpp_dep, tree_sitter_odin_dep, tree_sitter_kotlin_dep, sdl_dep, lua_dep, pcre2_dep],
     c_args: anvil_cargs,
 )
 test('worker_pool', worker_pool_test, env: anvil_test_env)

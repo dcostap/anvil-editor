@@ -8,6 +8,34 @@ The editor may take minutes to index a huge project if necessary, but indexing m
 
 This plan introduces reusable async worker machinery first, then uses Tree-sitter project indexing as the first serious customer. The machinery should later be reusable for project search, fuzzy file indexing, recursive filetree metadata, git scans, and other expensive background work.
 
+## Current implementation status — 2026-07-06
+
+Implemented and committed foundation:
+
+- `core.worker_pool` facade with Lua worker jobs, budgeted drain, cancellation, lifecycle, stale-result handling, and diagnostics.
+- Native worker pool in `src/worker_pool.c` / `src/api/worker_pool.c`, exposed as `worker_pool_native`.
+- Native cancel tokens shared across Lua states and observed by Tree-sitter parse/query work.
+- Native job path through the `core.worker_pool` facade via `spec.native = true`.
+
+Implemented in the current working tree:
+
+- Native Tree-sitter worker job kind `treesitter_index_text`.
+- Native Tree-sitter result handles with `summary()` and bounded `captures(kind, { offset, limit })` access.
+- `data/core/treesitter/native_index_adapter.lua` for lazy/bounded capture iteration over native result handles.
+- `data/core/workers/treesitter_project_index.lua` now uses native Tree-sitter jobs by default for project parse/query work, falling back to `treesitter.index_text` only if native submit fails.
+- Project-index record construction consumes native captures lazily with iterator APIs in `project_index_records.lua`.
+- Async targeted file reindex and async dirty-directory refresh now submit targeted worker jobs instead of defaulting to full project refresh when the index is ready.
+
+Still not done:
+
+- Aggregate construction/sorting still happens on the UI side in `rebuild_disk_aggregates()`.
+- Workspace symbol/reference query paths still can scan/copy/sort/fuzzy-match large ready indexes on the UI thread.
+- Watcher/listing setup still has cooperative/UI-side recursive work.
+- Dirty/open-document overlay extraction still has synchronous query paths that need bounding or worker-backed cleanup.
+- Large-project perf validation has not yet proven that indexing and adoption are invisible under realistic load.
+
+Historical sections below describe the original failure mode and intended architecture. Treat them as context; the migration plan section tracks the current remaining work.
+
 ## Evidence from the performance capture
 
 The motivating perf capture was:
@@ -30,7 +58,7 @@ Key observations:
 
 The current project-path cache fix reduces one amplification source, but it does not solve the core architectural problem: project indexing still does too much work on the UI thread.
 
-## Current Anvil architecture and failure mode
+## Original Anvil architecture and failure mode
 
 ### Existing async-looking Tree-sitter project index code
 
@@ -57,7 +85,7 @@ end)
 
 That coroutine is still main-thread work. `core.add_thread()` is cooperative, not a real OS worker.
 
-### Current expensive main-thread steps
+### Original expensive main-thread steps
 
 In `symbol_index.lua`, these can all block the editor:
 
@@ -886,7 +914,7 @@ The system pool should hook into editor shutdown. Test pools should be independe
 
 ## Tree-sitter project indexing implementation plan
 
-### Current module to replace/refactor
+### Module being refactored
 
 Primary file:
 
@@ -900,21 +928,22 @@ Current state should be split into:
 - worker-side index builder
 - native Tree-sitter indexing helper, if needed
 
-### New worker entrypoint
+### Worker entrypoint
 
-Add a worker module, likely:
+Implemented worker module:
 
 ```text
 data/core/workers/treesitter_project_index.lua
 ```
 
-or:
+Supporting worker-safe record/adapter modules:
 
 ```text
-data/core/treesitter/project_index_worker.lua
+data/core/treesitter/project_index_records.lua
+data/core/treesitter/native_index_adapter.lua
 ```
 
-This file runs in a worker Lua state.
+The worker module runs in a worker Lua state. File walking, file reads, record construction, chunking, and targeted file/directory indexing now happen there. Tree-sitter parse/query is delegated to native `treesitter_index_text` worker-pool jobs where available.
 
 Input payload should contain only serializable data:
 
@@ -965,36 +994,36 @@ Important: worker should not require live `core` state or UI objects. It should 
 
 ### Worker responsibilities
 
-The worker should:
+Current worker responsibilities:
 
-1. Walk roots recursively.
-2. Apply ignore and exclusion rules.
-3. Identify language by filename/first bytes as needed.
-4. Read files from disk.
-5. Parse with Tree-sitter off the UI thread.
-6. Query outline/usages off the UI thread.
-7. Construct symbol/usage records.
-8. Aggregate and sort off the UI thread.
-9. Emit progress and bounded chunks.
-10. Emit final snapshot metadata.
-11. Stop quickly when cancelled.
+1. Walk roots recursively. **Implemented** for full scans, coordinator batch walks, and targeted directory scans.
+2. Apply ignore and exclusion rules. **Implemented**.
+3. Identify language by filename patterns. **Implemented**.
+4. Read files from disk. **Implemented** in Lua worker.
+5. Parse with Tree-sitter off the UI thread. **Implemented** through native `treesitter_index_text` jobs.
+6. Query outline/usages off the UI thread. **Implemented** through native `treesitter_index_text` jobs.
+7. Construct symbol/usage records. **Implemented** in Lua worker, using lazy native capture iteration when available.
+8. Aggregate and sort off the UI thread. **Not implemented**; this remains a major gap.
+9. Emit progress and bounded chunks. **Implemented** with optional file-backed artifacts.
+10. Emit final snapshot metadata. **Implemented**.
+11. Stop quickly when cancelled. **Partially implemented**; Lua worker loops, native jobs, parse, and query all observe cancellation, but broader shutdown/backpressure behavior still needs stress validation.
 
 ### UI-side responsibilities
 
-`symbol_index.lua` should become mostly state management:
+`symbol_index.lua` is now mostly state management for the async paths, but still owns some expensive UI-side work:
 
-- keep current index per root/generation/project-paths-generation
-- submit/cancel worker jobs
-- receive progress/chunks/final
-- apply chunks under budget
-- expose query APIs to commands/menus
+- keep current index per root/generation/project-paths-generation — **implemented**
+- submit/cancel worker jobs — **implemented**
+- receive progress/chunks/final — **implemented**
+- apply chunks under budget — **partially implemented** through pool drain budgets and bounded chunks; adoption work itself still needs more budgeting/perf validation
+- expose query APIs to commands/menus — **existing**
 - preserve separate symbol and usage readiness:
   - `symbol_status`: idle/indexing/ready/stale/failed/cancelled
   - `usage_status`: idle/indexing/ready/stale/failed/cancelled/truncated
-- allow symbols to become ready before slower usage/reference indexing completes
-- discard stale job messages by job id, symbol-index generation, and project-paths generation
+- allow symbols to become ready before slower usage/reference indexing completes — **implemented** for sharded symbol/usages phases
+- discard stale job messages by job id, symbol-index generation, and project-paths generation — **implemented**
 
-UI should never do expensive parse/query/aggregate work.
+UI should never do expensive parse/query/aggregate work. Parse/query has moved off the UI path for project indexing, but aggregate rebuilds and some query/overlay paths still violate this goal.
 
 ### Dirty open-document overlay semantics
 
@@ -1049,9 +1078,37 @@ Therefore: do not make Phase 2 depend on this option for the actual fix. If used
 
 #### Option B: Add native worker-safe project indexing helper
 
-Add a native API for parsing/querying a single file or content buffer synchronously within the calling worker thread, without touching the active-document parse service.
+Status: **implemented as a native worker-pool job**, not as a standalone `treesitter.index_file` Lua API.
 
-Possible API:
+Current API shape:
+
+```lua
+local native_pool = require "worker_pool_native"
+local pool = native_pool.new({ name = "...", worker_count = 1 })
+local handle = pool:submit({
+  kind = "treesitter_index_text",
+  language = "c",
+  text = source_text, -- or path = file_path
+  outline_query = "...",
+  usage_query = "...",
+  parse_timeout_ms = 1000,
+  query_timeout_ms = 20,
+  max_captures = 50000,
+})
+```
+
+Results are returned as native handles through `pool:drain(...)`:
+
+```lua
+local summary = result:summary()
+local captures = result:captures("outline", { offset = 1, limit = 512 })
+```
+
+The `core.worker_pool` facade can also submit native jobs with `native = true` and receive the result handle through normal callbacks.
+
+This gives the desired independent parse/query lane: project files are parsed and queried in native worker threads without using the active-document Tree-sitter service.
+
+Earlier possible API:
 
 ```lua
 local ts = require "treesitter"
@@ -1082,24 +1139,27 @@ local result, err = ts.index_file(path, language_spec, { cancel = cancel })
 Or, for the strongest ownership model, make the whole project-index operation a native worker-pool job so parse/query callbacks directly read the job's atomic cancel flag.
 
 
-This function can:
+Current native job capabilities:
 
-- read file in C or accept text
-- create parser locally
-- parse locally
-- compile/query locally
-- preserve existing usage query fallback (`usages.scm` first, then `locals.scm`) and usage limits/fingerprint inputs
-- check cancellation during parse/query
-- return captures or already-normalized compact records
+- read file in C or accept text — **implemented**
+- create parser locally — **implemented**
+- parse locally — **implemented**
+- compile/query locally — **implemented**
+- preserve existing usage query fallback (`usages.scm` first, then `locals.scm`) and usage limits/fingerprint inputs — **implemented in the Lua project-index worker payload/fingerprint logic**
+- check cancellation during parse/query — **implemented**
+- return captures through a bounded native result handle — **implemented**
+- return already-normalized compact records — **not implemented**; records are still constructed in the Lua worker
 
 This avoids the active-document service lane and is closer to Fred's model.
 
-Recommended approach:
+Recommended approach status:
 
-- Build the `core.worker_pool` facade first, but do not treat a raw Lua/channel prototype as sufficient for Tree-sitter indexing.
-- Add native-visible cancellation, completion wakeups, and bounded/handle-based result delivery early.
-- For Tree-sitter indexing, implement native `treesitter.index_file`/`index_text` or a dedicated project-index C service before replacing the current indexer for real projects.
-- Keep project indexing independent from the active-document Tree-sitter parse service so background scans cannot starve current-file parsing.
+- Build the `core.worker_pool` facade first — **done**.
+- Add native-visible cancellation — **done**.
+- Add bounded/handle-based result delivery — **partially done** for native Tree-sitter capture results.
+- Add completion wakeups — **not done**; draining still happens from the normal update/drain loop.
+- Replace the current indexer for real project parse/query — **mostly done** for full scans and targeted file/directory refreshes.
+- Keep project indexing independent from the active-document Tree-sitter parse service — **done for the worker-backed project indexing paths**.
 
 ### Chunking and finalization
 
@@ -1377,52 +1437,53 @@ The key pass condition is not "index fast"; it is "index invisible".
 
 The recent `project_paths` caching fix should stay. It removes repeated effective-entry stat/rebuild overhead and helps both old and new indexing.
 
-### Phase 1: introduce worker_pool facade and minimal protocol
+### Phase 1: introduce worker_pool facade and minimal protocol — done
 
-- Add `data/core/worker_pool.lua`.
-- Add worker bootstrap module for small generic prototype jobs.
-- Back the prototype with existing `thread.create` and channels.
-- Define stable public concepts: job id, handle, generation, project-paths-generation, phase, status, progress, result, error, cancel, shutdown.
-- Add tests for small jobs, error delivery, stale generation discard, budgeted drain, and pool shutdown.
-- Add quiet logs and perf counters.
-- Explicitly mark this prototype as insufficient for large Tree-sitter indexing until native cancel/backpressure/result delivery exists.
+- Add `data/core/worker_pool.lua`. **Done**.
+- Add worker bootstrap module for small generic prototype jobs. **Done**.
+- Back the prototype with existing `thread.create` and channels. **Done**.
+- Define stable public concepts: job id, handle, generation, project-paths-generation, phase, status, progress, result, error, cancel, shutdown. **Done**.
+- Add tests for small jobs, error delivery, stale generation discard, budgeted drain, and pool shutdown. **Done**.
+- Add quiet logs and perf counters. **Done/ongoing**.
+- Explicitly mark this prototype as insufficient for large Tree-sitter indexing until native cancel/backpressure/result delivery exists. **Superseded by native pool work in Phase 2**.
 
-### Phase 2: add native job primitives needed by real background infrastructure
+### Phase 2: add native job primitives needed by real background infrastructure — mostly done
 
-- Add native-visible per-job cancellation, preferably SDL atomic-backed handles.
-- Add native timed join/detach or native pool lifecycle if bounded shutdown is required beyond cooperative Lua jobs.
-- Add a completion wakeup path (`worker_pool_complete`) or document that drain is update-loop-only until the native event binding exists.
-- Add bounded/handle-based result delivery, or file-backed artifacts, so workers cannot grow unbounded channel queues.
-- Decide whether this is a generic native worker pool (`src/api/worker_pool.c`, `src/worker_pool.c`) or native support behind the Lua facade while workers remain Lua-based.
-- Add stress tests for cancellation of a running long job and for output backpressure/high-water behavior.
+- Add native-visible per-job cancellation, preferably SDL atomic-backed handles. **Done**.
+- Add native cancel tokens that can be shared across Lua worker states. **Done**.
+- Add native timed join/detach or native pool lifecycle if bounded shutdown is required beyond cooperative Lua jobs. **Native lifecycle exists; timed detach semantics still need stress review**.
+- Add a completion wakeup path (`worker_pool_complete`) or document that drain is update-loop-only until the native event binding exists. **Not done; drain is update-loop/manual**.
+- Add bounded/handle-based result delivery, or file-backed artifacts, so workers cannot grow unbounded channel queues. **Partially done**: native Tree-sitter result handles and file-backed project-index artifacts exist; generic high-water/backpressure policy still needs work.
+- Decide whether this is a generic native worker pool (`src/api/worker_pool.c`, `src/worker_pool.c`) or native support behind the Lua facade while workers remain Lua-based. **Done: generic native worker pool plus Lua facade bridge**.
+- Add stress tests for cancellation of a running long job and for output backpressure/high-water behavior. **Cancellation tests exist; backpressure/high-water stress tests remain**.
 
-### Phase 3: make Tree-sitter project parse/query worker-safe and independent
+### Phase 3: make Tree-sitter project parse/query worker-safe and independent — done for project worker paths
 
-- Add native `treesitter.index_file` / `treesitter.index_text`, or a dedicated project-index native service.
-- Do not route project files through the active-document Tree-sitter document-state service.
-- Ensure project indexing cannot starve active-document Tree-sitter parsing.
-- Ensure query execution is off UI thread.
-- Add cancellation checks/timeouts for parse and query.
-- Preserve current usage query semantics, including `usages.scm` -> `locals.scm` fallback, usage limits, and fingerprint inputs.
-- Ensure query compilation/cache strategy is per worker/service and does not pass TSQuery userdata across Lua states.
+- Add native `treesitter.index_file` / `treesitter.index_text`, or a dedicated project-index native service. **Done as native job kind `treesitter_index_text`**.
+- Do not route project files through the active-document Tree-sitter document-state service. **Done for worker-backed project indexing**.
+- Ensure project indexing cannot starve active-document Tree-sitter parsing. **Architecturally improved by separate native pool; still needs perf validation under load**.
+- Ensure query execution is off UI thread. **Done for project indexing worker paths**.
+- Add cancellation checks/timeouts for parse and query. **Done**.
+- Preserve current usage query semantics, including `usages.scm` -> `locals.scm` fallback, usage limits, and fingerprint inputs. **Done in worker payload/fingerprint logic**.
+- Ensure query compilation/cache strategy is per worker/service and does not pass TSQuery userdata across Lua states. **Done; query source strings are passed, native jobs compile locally**.
 
-### Phase 4: add Tree-sitter project indexing worker
+### Phase 4: add Tree-sitter project indexing worker — mostly done
 
-- Add `core.workers.treesitter_project_index` or native equivalent.
-- Move file walking and file reading into worker.
-- Use the independent project-index parse/query helper.
-- Emit coalesced progress and bounded result chunks/handles.
-- UI `symbol_index.lua` submits/cancels jobs and adopts only current symbol-index generation plus current project-paths generation results.
-- Preserve separate symbol and usage statuses/progress/adoption, or split symbols/usages into separate worker jobs/streams.
-- Migrate full scan, targeted file reindex, dirty-directory reindex, and watcher-triggered refresh paths.
-- Add bounded/cached query-time filtering so commands do not scan/sort/fuzzy-match the entire index per invocation.
+- Add `core.workers.treesitter_project_index` or native equivalent. **Done**.
+- Move file walking and file reading into worker. **Done**.
+- Use the independent project-index parse/query helper. **Done through native `treesitter_index_text` jobs**.
+- Emit coalesced progress and bounded result chunks/handles. **Done for chunks; native capture handles are used internally by the worker**.
+- UI `symbol_index.lua` submits/cancels jobs and adopts only current symbol-index generation plus current project-paths generation results. **Done**.
+- Preserve separate symbol and usage statuses/progress/adoption, or split symbols/usages into separate worker jobs/streams. **Done for sharded symbol/usages phases**.
+- Migrate full scan, targeted file reindex, dirty-directory reindex, and watcher-triggered refresh paths. **Full scan done; targeted file done; dirty-directory done; watcher-triggered refresh benefits from dirty-directory path but watcher setup/listing still needs work**.
+- Add bounded/cached query-time filtering so commands do not scan/sort/fuzzy-match the entire index per invocation. **Not done**.
 
-### Phase 5: remove old synchronous/cooperative indexer path
+### Phase 5: remove old synchronous/cooperative indexer path — partially done
 
-- Delete or disable `core.add_thread(function() scan_index(...) end)` project indexing path.
-- Remove/replace cooperative heavy paths in `reindex_file`, `mark_directory_dirty`, and watcher-triggered scan/rebuild code.
-- Keep only UI-side status/query/adoption in `symbol_index.lua`.
-- Preserve public symbol index APIs used by commands.
+- Delete or disable `core.add_thread(function() scan_index(...) end)` project indexing path. **Effectively superseded for normal full scans by worker-backed paths; verify/remove dead legacy scan code if any remains**.
+- Remove/replace cooperative heavy paths in `reindex_file`, `mark_directory_dirty`, and watcher-triggered scan/rebuild code. **Async file and directory dirty paths are replaced; sync test/debug paths remain; watcher setup/listing still needs work**.
+- Keep only UI-side status/query/adoption in `symbol_index.lua`. **Not yet; aggregate rebuilds, query filtering, and overlay extraction still do UI work**.
+- Preserve public symbol index APIs used by commands. **Ongoing; tests cover current behavior**.
 
 ### Phase 6: apply machinery elsewhere
 
@@ -1434,6 +1495,30 @@ Good follow-up customers:
 - git status scanning
 - markdown vault indexing
 - large document metadata/line guide computation
+
+## Remaining prioritized path from current state
+
+1. **Move aggregate construction off the UI path**
+   - `rebuild_disk_aggregates()` still scans `index.by_path`, copies all symbols/usages, sorts, and invalidates caches on the UI thread.
+   - Next likely step: worker-produced pre-sorted aggregate snapshots or incremental aggregate adoption with bounded UI swaps.
+
+2. **Bound workspace query paths**
+   - `workspace_symbols()` and usage/reference APIs can still scan/copy/sort/fuzzy-match large ready indexes.
+   - Add cached/native/worker-backed query indexes, or budgeted/incremental query execution.
+
+3. **Finish dirty/watch refresh migration**
+   - Async file and directory dirty refreshes are targeted worker jobs now.
+   - Watcher-triggered refreshes use those paths, but recursive watch/listing setup still has cooperative/UI-side work.
+
+4. **Clean up open-document overlay extraction**
+   - Preserve stale disk-entry suppression, but avoid synchronous heavy overlay queries.
+   - Prefer active-document ready Tree-sitter state or bounded worker-backed overlay extraction.
+
+5. **Stress/perf validation**
+   - Large synthetic project.
+   - Start indexing and drive cursor/filetree movement.
+   - Confirm no large `run_threads_ms`, adoption, aggregate, or query spikes.
+   - Validate cancellation/restart behavior under repeated dirty events.
 
 ## Risks and mitigations
 

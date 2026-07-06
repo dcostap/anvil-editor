@@ -981,6 +981,7 @@ local function apply_worker_chunk(index, message)
       replace_ms = replace_ms + elapsed_ms(replace_started)
       index.worker_seen_paths = index.worker_seen_paths or {}
       index.worker_seen_paths[path] = true
+      if index.worker_adopted_paths then index.worker_adopted_paths[path] = true end
       changed = true
     end
   end
@@ -2960,6 +2961,319 @@ local function reindex_directory_for_index(index, dir, opts)
   return changed
 end
 
+local function finish_targeted_worker_reindex(index, message, status)
+  if not current_worker_message(index, message) then return end
+  if status == "ready" and index.worker_targeted_paths then
+    for path in pairs(index.worker_targeted_paths) do
+      if not (index.worker_adopted_paths and index.worker_adopted_paths[path]) then
+        replace_file_entry(index, path, nil, { symbols = {}, usages_by_name = {}, usage_count = 0 })
+        mark_aggregate_dirty(index)
+      end
+    end
+  end
+  if status == "ready" and index.worker_targeted_dir then
+    local dir = index.worker_targeted_dir
+    for path in pairs(index.by_path or {}) do
+      if (common.path_equals(path, dir) or common.path_belongs_to(path, dir))
+      and not (index.worker_adopted_paths and index.worker_adopted_paths[path]) then
+        index.by_path[path] = nil
+        index.open_docs[path] = nil
+        mark_aggregate_dirty(index)
+      end
+    end
+  end
+  maybe_rebuild_dirty_aggregates(index, true)
+  index.status = status
+  if status == "ready" then
+    index.symbol_status = "ready"
+    index.usage_status = "ready"
+    index.reason = nil
+  else
+    index.symbol_status = status
+    index.usage_status = status
+    index.reason = message.error or (message.payload and message.payload.reason) or status
+  end
+  index.worker_handle = nil
+  index.worker_seen_paths = nil
+  index.worker_adopted_paths = nil
+  index.worker_targeted_paths = nil
+  index.worker_targeted_dir = nil
+  index.finished_at = system.get_time()
+  core.redraw = true
+  if status == "ready" then drain_pending_reindexes(index) end
+end
+
+local function serializable_file_info(info)
+  if not info then return nil end
+  return {
+    type = info.type,
+    size = info.size,
+    modified = info.modified,
+  }
+end
+
+local function submit_targeted_file_reindex(index, path, opts)
+  opts = opts or {}
+  if not index or not path then return false, "no-index" end
+  if not common.path_belongs_to(path, index.root) then return false, "outside-project" end
+
+  local info = system.get_file_info(path)
+  if not info or info.type ~= "file" then
+    local changed = false
+    if index.by_path[path] then
+      index.by_path[path] = nil
+      changed = true
+    end
+    if index.open_docs[path] then
+      index.open_docs[path] = nil
+      changed = true
+    end
+    if changed then rebuild_disk_aggregates(index) end
+    return true, info and "not-file" or "missing"
+  end
+
+  local language = registry.get(path)
+  if not language or not language.query_sources or not language.query_sources.outline then
+    local changed = false
+    if index.by_path[path] then
+      index.by_path[path] = nil
+      changed = true
+    end
+    if index.open_docs[path] then
+      index.open_docs[path] = nil
+      changed = true
+    end
+    if changed then rebuild_disk_aggregates(index) end
+    return true, "unsupported"
+  end
+
+  local fingerprint = file_fingerprint(path, info, language)
+  local cached = index.by_path[path]
+  if not opts.force and cached and cached.fingerprint == fingerprint then return true, "fresh" end
+
+  cancel_index_work(index)
+  index.generation = (index.generation or 0) + 1
+  index.project_paths_generation = project_paths_module().generation()
+  local generation = index.generation
+  local project_paths_generation = index.project_paths_generation
+  index.status = "indexing"
+  index.symbol_status = "indexing"
+  index.usage_status = "indexing"
+  index.reason = opts.reason or "file-dirty"
+  index.started_at = system.get_time()
+  index.finished_at = nil
+  index.worker_seen_paths = { [path] = true }
+  index.worker_adopted_paths = {}
+  index.worker_targeted_paths = { [path] = true }
+  index.worker_targeted_dir = nil
+  index.diagnostics = {
+    ui = {},
+    phases = {},
+    phase = "targeted",
+    generation = generation,
+    project_paths_generation = project_paths_generation,
+    root = index.root,
+  }
+
+  local handle, err = worker_pool.system():submit({
+    kind = "treesitter_project_index",
+    priority = "background",
+    generation = generation,
+    project_paths_generation = project_paths_generation,
+    phase = "targeted",
+    payload = {
+      root = index.root,
+      root_path = index.root,
+      files = {
+        {
+          path = path,
+          root = index.root,
+          info = serializable_file_info(info),
+          language_id = language.id,
+        },
+      },
+      excluded = project_index_exclusions_payload(),
+      ignore_files = config.ignore_files,
+      languages = project_index_languages_payload(),
+      include_usages = true,
+      project_usage_cap = index.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP,
+      max_file_bytes = MAX_FILE_BYTES,
+      chunk_files = 1,
+      chunk_records = opts.chunk_records or DEFAULT_WORKER_CHUNK_RECORDS,
+      max_usage_captures_per_file = opts.max_usage_captures_per_file or DEFAULT_MAX_CAPTURES,
+      artifact_chunks = false,
+      native_index_jobs = opts.native_index_jobs,
+      native_result_capture_chunk = opts.native_result_capture_chunk,
+    },
+    is_stale = function(message)
+      return not current_worker_message(index, message)
+    end,
+    on_result = function(message)
+      if message.type == "chunk" then
+        apply_worker_chunk(index, message)
+      elseif message.type == "final" and current_worker_message(index, message) then
+        local p = message.payload or {}
+        index.files_scanned = p.files_scanned or index.files_scanned
+        index.files_indexed = p.files_indexed or index.files_indexed
+        if p.diagnostics then
+          index.diagnostics = index.diagnostics or { ui = {}, phases = {} }
+          index.diagnostics.worker = p.diagnostics
+          index.diagnostics.phases = index.diagnostics.phases or {}
+          index.diagnostics.phases.targeted = {
+            worker = p.diagnostics,
+            ui = common.merge({}, index.diagnostics.ui or {}),
+          }
+        end
+      end
+    end,
+    on_error = function(message)
+      finish_targeted_worker_reindex(index, message, "failed")
+    end,
+    on_cancelled = function(message)
+      finish_targeted_worker_reindex(index, message, "cancelled")
+    end,
+    on_complete = function(message)
+      finish_targeted_worker_reindex(index, message, "ready")
+    end,
+  })
+
+  if not handle then
+    index.status = "failed"
+    index.symbol_status = "failed"
+    index.usage_status = "failed"
+    index.reason = err or "worker-submit-failed"
+    index.worker_handle = nil
+    return false, err or "worker-submit-failed"
+  end
+  index.worker_handle = handle
+  log_quiet("Tree-sitter Project index: submitted targeted worker reindex for %s under %s (%s)",
+    tostring(path), tostring(index.root), tostring(opts.reason or "file-dirty"))
+  return true, "scheduled"
+end
+
+local function submit_targeted_directory_reindex(index, dir, opts)
+  opts = opts or {}
+  if not index or not dir then return false, "no-index" end
+  if not (common.path_equals(dir, index.root) or common.path_belongs_to(dir, index.root)) then
+    return false, "outside-project"
+  end
+
+  local info = system.get_file_info(dir)
+  if not info or info.type ~= "dir" then
+    prune_missing_watches(index, dir)
+    local changed = false
+    for path in pairs(index.by_path or {}) do
+      if common.path_equals(path, dir) or common.path_belongs_to(path, dir) then
+        index.by_path[path] = nil
+        changed = true
+      end
+    end
+    for path in pairs(index.open_docs or {}) do
+      if common.path_equals(path, dir) or common.path_belongs_to(path, dir) then
+        index.open_docs[path] = nil
+        changed = true
+      end
+    end
+    if changed then rebuild_disk_aggregates(index) end
+    return true, info and "not-directory" or "missing"
+  end
+
+  if index.watcher then refresh_watches_for_dir(index, dir) end
+  cancel_index_work(index)
+  index.generation = (index.generation or 0) + 1
+  index.project_paths_generation = project_paths_module().generation()
+  local generation = index.generation
+  local project_paths_generation = index.project_paths_generation
+  index.status = "indexing"
+  index.symbol_status = "indexing"
+  index.usage_status = "indexing"
+  index.reason = opts.reason or "directory-dirty"
+  index.started_at = system.get_time()
+  index.finished_at = nil
+  index.worker_seen_paths = {}
+  index.worker_adopted_paths = {}
+  index.worker_targeted_paths = nil
+  index.worker_targeted_dir = dir
+  index.diagnostics = {
+    ui = {},
+    phases = {},
+    phase = "targeted-directory",
+    generation = generation,
+    project_paths_generation = project_paths_generation,
+    root = index.root,
+  }
+
+  local handle, err = worker_pool.system():submit({
+    kind = "treesitter_project_index",
+    priority = "background",
+    generation = generation,
+    project_paths_generation = project_paths_generation,
+    phase = "targeted-directory",
+    payload = {
+      roots = { { path = dir, root_path = index.root } },
+      root = index.root,
+      root_path = index.root,
+      excluded = project_index_exclusions_payload(),
+      ignore_files = config.ignore_files,
+      languages = project_index_languages_payload(),
+      include_usages = true,
+      project_usage_cap = index.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP,
+      max_file_bytes = MAX_FILE_BYTES,
+      chunk_files = opts.chunk_files or 8,
+      chunk_records = opts.chunk_records or DEFAULT_WORKER_CHUNK_RECORDS,
+      max_usage_captures_per_file = opts.max_usage_captures_per_file or DEFAULT_MAX_CAPTURES,
+      artifact_chunks = opts.artifact_chunks == true,
+      artifact_dir = opts.artifact_dir or default_index_artifact_dir(),
+      native_index_jobs = opts.native_index_jobs,
+      native_result_capture_chunk = opts.native_result_capture_chunk,
+    },
+    is_stale = function(message)
+      return not current_worker_message(index, message)
+    end,
+    on_stale = cleanup_worker_artifact,
+    on_result = function(message)
+      if message.type == "chunk" then
+        apply_worker_chunk(index, message)
+      elseif message.type == "final" and current_worker_message(index, message) then
+        local p = message.payload or {}
+        index.files_scanned = p.files_scanned or index.files_scanned
+        index.files_indexed = p.files_indexed or index.files_indexed
+        if p.diagnostics then
+          index.diagnostics = index.diagnostics or { ui = {}, phases = {} }
+          index.diagnostics.worker = p.diagnostics
+          index.diagnostics.phases = index.diagnostics.phases or {}
+          index.diagnostics.phases["targeted-directory"] = {
+            worker = p.diagnostics,
+            ui = common.merge({}, index.diagnostics.ui or {}),
+          }
+        end
+      end
+    end,
+    on_error = function(message)
+      finish_targeted_worker_reindex(index, message, "failed")
+    end,
+    on_cancelled = function(message)
+      finish_targeted_worker_reindex(index, message, "cancelled")
+    end,
+    on_complete = function(message)
+      finish_targeted_worker_reindex(index, message, "ready")
+    end,
+  })
+
+  if not handle then
+    index.status = "failed"
+    index.symbol_status = "failed"
+    index.usage_status = "failed"
+    index.reason = err or "worker-submit-failed"
+    index.worker_handle = nil
+    return false, err or "worker-submit-failed"
+  end
+  index.worker_handle = handle
+  log_quiet("Tree-sitter Project index: submitted targeted directory worker reindex for %s under %s (%s)",
+    tostring(dir), tostring(index.root), tostring(opts.reason or "directory-dirty"))
+  return true, "scheduled"
+end
+
 local function run_reindex_file(path, opts)
   opts = opts or {}
   local changed = false
@@ -3026,12 +3340,18 @@ function symbol_index.reindex_file(path, opts)
         log_quiet("Tree-sitter Project index: coalesced targeted file refresh for %s under %s while worker indexing (%s)",
           tostring(path), tostring(index.root), tostring(index.pending_reindex_paths[path]))
       else
-        symbol_index.ensure_scan(index.root, {
-          force = true,
-          reason = opts.reason or "file-dirty",
-        })
-        log_quiet("Tree-sitter Project index: scheduled worker-backed full refresh for targeted file %s under %s (%s)",
-          tostring(path), tostring(index.root), tostring(opts.reason or "file-dirty"))
+        local submitted, submit_reason = submit_targeted_file_reindex(index, path, opts)
+        if not submitted and submit_reason ~= "fresh" then
+          symbol_index.ensure_scan(index.root, {
+            force = true,
+            reason = opts.reason or "file-dirty",
+          })
+          log_quiet("Tree-sitter Project index: targeted worker reindex for %s under %s fell back to full refresh: %s",
+            tostring(path), tostring(index.root), tostring(submit_reason))
+        else
+          log_quiet("Tree-sitter Project index: scheduled targeted worker reindex for %s under %s (%s)",
+            tostring(path), tostring(index.root), tostring(submit_reason or opts.reason or "file-dirty"))
+        end
       end
     end
   end
@@ -3111,12 +3431,18 @@ function symbol_index.mark_directory_dirty(dir, reason, opts)
         log_quiet("Tree-sitter Project index: coalesced dirty directory refresh for %s under %s while worker indexing (%s)",
           tostring(dir), tostring(index.root), tostring(index.pending_reindex_dirs[dir].reason))
       else
-        symbol_index.ensure_scan(index.root, {
-          force = true,
-          reason = opts.reason or "directory-dirty",
-        })
-        log_quiet("Tree-sitter Project index: scheduled worker-backed full refresh for dirty directory %s under %s (%s)",
-          tostring(dir), tostring(index.root), tostring(opts.reason or "directory-dirty"))
+        local submitted, submit_reason = submit_targeted_directory_reindex(index, dir, opts)
+        if not submitted then
+          symbol_index.ensure_scan(index.root, {
+            force = true,
+            reason = opts.reason or "directory-dirty",
+          })
+          log_quiet("Tree-sitter Project index: targeted directory worker reindex for %s under %s fell back to full refresh: %s",
+            tostring(dir), tostring(index.root), tostring(submit_reason))
+        else
+          log_quiet("Tree-sitter Project index: scheduled targeted directory worker reindex for dirty directory %s under %s (%s)",
+            tostring(dir), tostring(index.root), tostring(submit_reason or opts.reason or "directory-dirty"))
+        end
       end
     end
   end
