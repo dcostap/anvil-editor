@@ -31,11 +31,12 @@ local function load_payload_artifact(payload)
   return artifact_payload
 end
 
-local function append_index_artifact_usages(out, artifact)
+local function append_index_artifact_usages(out, artifact, name)
   local path = artifact and artifact.path
   if not path then return end
   local artifact_payload = load_lua_payload(path, false)
   for _, usage in ipairs((artifact_payload and artifact_payload.usages) or {}) do out[#out + 1] = usage end
+  for _, usage in ipairs(((artifact_payload and artifact_payload.usages_by_name) or {})[name] or {}) do out[#out + 1] = usage end
 end
 
 local function now()
@@ -58,7 +59,8 @@ function worker.run(payload, ctx)
   local usages = {}
   local suppressed = {}
   for _, path in ipairs(payload.suppressed_paths or {}) do suppressed[path] = true end
-  for _, artifact in ipairs(payload.index_artifacts or {}) do append_index_artifact_usages(usages, artifact) end
+  local name = tostring(payload.name or "")
+  for _, artifact in ipairs(payload.index_artifacts or {}) do append_index_artifact_usages(usages, artifact, name) end
   for _, usage in ipairs(payload.usages or {}) do usages[#usages + 1] = usage end
   for _, usage in ipairs(payload.extra_usages or {}) do usages[#usages + 1] = usage end
   if next(suppressed) ~= nil then

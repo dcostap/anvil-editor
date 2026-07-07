@@ -303,6 +303,83 @@ int main(void) { return helper(); }
     test.equal(final.usage_truncated, true)
   end)
 
+  test.test("builds sorted aggregates from file-backed project chunks", function()
+    local artifact_dir = mkdir(USERDIR .. PATHSEP .. "worker-project-aggregate-artifacts")
+    local artifact_path = artifact_dir .. PATHSEP .. "chunk.lua"
+    write_file(artifact_path, "return " .. common.serialize({
+      files = {
+        {
+          path = "b.c",
+          relpath = "b.c",
+          symbols = {
+            { name = "Beta", path = "b.c", relpath = "b.c", start_line = 3 },
+          },
+          usages_by_name = {
+            Beta = {
+              { name = "Beta", path = "b.c", relpath = "b.c", start_line = 5, start_col = 1 },
+            },
+          },
+          usage_count = 1,
+          usage_complete = true,
+        },
+        {
+          path = "a.c",
+          relpath = "a.c",
+          symbols = {
+            { name = "Alpha", path = "a.c", relpath = "a.c", start_line = 1 },
+          },
+          usages_by_name = {
+            Alpha = {
+              { name = "Alpha", path = "a.c", relpath = "a.c", start_line = 2, start_col = 1 },
+            },
+          },
+          usage_count = 1,
+          usage_complete = true,
+        },
+      },
+    }))
+
+    local pool = worker_pool.new({ name = "treesitter-project-aggregate-test", worker_count = 1 })
+    pools[#pools + 1] = pool
+    local symbols = {}
+    local usages_by_name = {}
+    local final
+    pool:submit({
+      kind = "treesitter_project_aggregate",
+      generation = 1,
+      project_paths_generation = 1,
+      payload = {
+        artifacts = { { path = artifact_path } },
+        chunk_records = 1,
+        remove_artifacts = true,
+      },
+      on_result = function(message)
+        if message.type == "chunk" then
+          local p = message.payload or {}
+          for _, symbol in ipairs(p.symbols or {}) do symbols[#symbols + 1] = symbol end
+          for name, list in pairs(p.usages_by_name or {}) do
+            usages_by_name[name] = usages_by_name[name] or {}
+            for _, usage in ipairs(list) do usages_by_name[name][#usages_by_name[name] + 1] = usage end
+          end
+        elseif message.type == "final" then
+          final = message.payload
+        end
+      end,
+      on_complete = function(message) final = final or message.payload or {} end,
+    })
+
+    test.ok(drain_until(pool, function() return final ~= nil end))
+    test.equal(#symbols, 2)
+    test.equal(symbols[1].name, "Alpha")
+    test.equal(symbols[2].name, "Beta")
+    test.equal(final.symbols_total, 2)
+    test.equal(final.usage_count, 2)
+    test.equal(#(usages_by_name.Alpha or {}), 1)
+    test.equal(#(usages_by_name.Beta or {}), 1)
+    test.equal(system.get_file_info(artifact_path), nil)
+    common.rm(artifact_dir, true)
+  end)
+
   test.test("cancels a project index job before adoption", function()
     test.ok(native.has_language("c"))
     registry.reload()

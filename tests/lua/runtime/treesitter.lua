@@ -634,7 +634,7 @@ class ExcludedThing
     })
     test.equal(status, "fresh", reason)
     test.ok(find_symbol(symbols, "CachedThing", "class"))
-    test.equal((index.diagnostics.ui or {}).combined_symbols_cache_misses, 1)
+    test.equal((index.diagnostics.ui or {}).combined_symbols_cache_misses or 0, 0)
 
     symbols, reason, status = symbol_index.workspace_symbols("Cached", {
       root = root,
@@ -643,7 +643,7 @@ class ExcludedThing
     })
     test.equal(status, "fresh", reason)
     test.ok(find_symbol(symbols, "CachedOther", "class"))
-    test.equal((index.diagnostics.ui or {}).combined_symbols_cache_hits, 1)
+    test.equal((index.diagnostics.ui or {}).combined_symbols_cache_hits or 0, 0)
     common.rm(root, true)
   end)
 
@@ -806,6 +806,25 @@ class ExcludedThing
     common.rm(query_artifact_dir, true)
   end)
 
+  test.it("Tree-sitter workspace symbol sync query refuses oversized UI scans", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-symbol-sync-large-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    seed_ready_symbol_index(root, { "LargeOne", "LargeTwo", "LargeThree" })
+
+    local symbols, reason, status = symbol_index.workspace_symbols("Large", {
+      root = root,
+      limit = 10,
+      max_sync_query_items = 2,
+      refresh_after_seconds = 0,
+    })
+    test.is_nil(symbols)
+    test.equal(reason, "query-too-large")
+    test.equal(status, "pending")
+    common.rm(root, true)
+  end)
+
   test.it("Tree-sitter workspace symbol async query uses persistent artifacts for oversized snapshots", function()
     symbol_index.reset_for_tests()
     local root = USERDIR .. PATHSEP .. "treesitter-symbol-async-large-"
@@ -862,7 +881,7 @@ class ExcludedThing
     })
     test.equal(status, "fresh", reason)
     test.ok(find_symbol(symbols, "DirtyThing", "class"))
-    test.equal((index.diagnostics.ui or {}).combined_symbols_cache_misses, 1)
+    test.equal((index.diagnostics.ui or {}).combined_symbols_cache_misses or 0, 0)
 
     core.docs = {
       {
@@ -880,7 +899,7 @@ class ExcludedThing
     })
     test.equal(status, "fresh", reason)
     test.not_ok(find_symbol(symbols, "DirtyThing", "class"))
-    test.equal((index.diagnostics.ui or {}).combined_symbols_cache_misses, 2)
+    test.equal((index.diagnostics.ui or {}).combined_symbols_cache_misses, 1)
 
     core.docs = original_docs
     common.rm(root, true)
@@ -1016,10 +1035,11 @@ fun make%d(): DebouncedThing%d = DebouncedThing%d()
       root = root,
       refresh_after_seconds = 0,
     })
-    test.equal(dirty_status, "fresh", dirty_reason)
-    test.ok(find_symbol(dirty_symbols, "DebouncedThing1", "class"))
+    test.is_nil(dirty_symbols)
+    test.equal(dirty_status, "pending", dirty_reason)
+    test.equal(dirty_reason, "aggregate-dirty")
     test.equal(status.aggregate_dirty, true)
-    test.ok(((status.diagnostics and status.diagnostics.ui and status.diagnostics.ui.direct_symbol_queries) or 0) >= 1)
+    test.equal(((status.diagnostics and status.diagnostics.ui and status.diagnostics.ui.direct_symbol_queries) or 0), 0)
     common.rm(root, true)
   end)
 
@@ -1070,6 +1090,9 @@ fun make%d(): ShardedThing%d = ShardedThing%d()
     test.ok(((phases.usages and phases.usages.worker and phases.usages.worker.shard_jobs) or 0) >= 6, common.serialize(phases.usages))
     test.equal(phases.usages.worker.files_scanned, 6)
     test.ok(((phases.usages.worker.artifacts_sent or 0) > 0), common.serialize(phases.usages.worker))
+    test.ok(((phases.symbols.worker.aggregate_jobs or 0) > 0), common.serialize(phases.symbols.worker))
+    test.ok(((phases.usages.worker.aggregate_jobs or 0) > 0), common.serialize(phases.usages.worker))
+    test.equal(((status.diagnostics and status.diagnostics.ui and status.diagnostics.ui.aggregate_rebuilds) or 0), 0)
     test.ok(((status.diagnostics and status.diagnostics.ui and status.diagnostics.ui.artifacts_loaded) or 0) > 0, common.serialize(status.diagnostics and status.diagnostics.ui))
     for _, name in ipairs(system.list_dir(artifact_dir) or {}) do
       test.ok(not name:match("%.lua$"), "artifact was not cleaned up: " .. tostring(name))
@@ -1258,7 +1281,7 @@ class NewDiskThing
 fun make(): NewDiskThing = NewDiskThing()
 ]])
     local changed
-    changed, reason = symbol_index.reindex_file(path, { force = true, sync = true, reason = "test" })
+    changed, reason = symbol_index.reindex_file(path, { force = true, reason = "test" })
     test.ok(changed, reason)
 
     refs, reason, status = wait_workspace_usages("OldDiskThing", {
@@ -1278,7 +1301,7 @@ fun make(): NewDiskThing = NewDiskThing()
     test.equal(#refs, 2)
 
     os.remove(path)
-    changed, reason = symbol_index.reindex_file(path, { force = true, sync = true, reason = "delete" })
+    changed, reason = symbol_index.reindex_file(path, { force = true, reason = "delete" })
     test.ok(changed, reason)
     refs, reason, status = wait_workspace_usages("NewDiskThing", {
       root = root,
@@ -1340,6 +1363,8 @@ fun make(): AsyncNewThing = AsyncNewThing()
     local index = symbol_index.status(root)
     test.not_nil(index and index.diagnostics and index.diagnostics.phases and index.diagnostics.phases.targeted)
     test.equal(index.diagnostics.phases.targeted.worker.native_index_jobs, 1)
+    test.ok(((index.diagnostics and index.diagnostics.ui and index.diagnostics.ui.incremental_aggregate_updates) or 0) >= 1)
+    test.equal(((index.diagnostics and index.diagnostics.ui and index.diagnostics.ui.aggregate_rebuilds) or 0), 0)
 
     common.rm(root, true)
   end)
@@ -1386,7 +1411,7 @@ fun make(): AddedWatchThing = AddedWatchThing()
     os.remove(root .. PATHSEP .. "Removed.kt")
 
     local changed
-    changed, reason = symbol_index.mark_directory_dirty(root, "test-watch", { sync = true })
+    changed, reason = symbol_index.mark_directory_dirty(root, "test-watch")
     test.ok(changed, reason)
 
     refs, reason, status = wait_workspace_usages("BeforeWatchThing", {
@@ -1503,6 +1528,8 @@ fun make(): AsyncAddedDirThing = AsyncAddedDirThing()
     local index = symbol_index.status(root)
     test.not_nil(index and index.diagnostics and index.diagnostics.phases and index.diagnostics.phases["targeted-directory"])
     test.ok((index.diagnostics.phases["targeted-directory"].worker.native_index_jobs or 0) >= 2)
+    test.ok((index.diagnostics.phases["targeted-directory"].worker.aggregate_jobs or 0) >= 1)
+    test.equal(((index.diagnostics and index.diagnostics.ui and index.diagnostics.ui.aggregate_rebuilds) or 0), 0)
 
     common.rm(root, true)
   end)

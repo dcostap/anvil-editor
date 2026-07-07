@@ -25,13 +25,14 @@ Implemented in the current working tree:
 - `data/core/workers/treesitter_project_index.lua` now uses native Tree-sitter jobs by default for project parse/query work, falling back to `treesitter.index_text` only if native submit fails.
 - Project-index record construction consumes native captures lazily with iterator APIs in `project_index_records.lua`.
 - Async targeted file reindex and async dirty-directory refresh now submit targeted worker jobs instead of defaulting to full project refresh when the index is ready.
+- Sharded project scans can hand file-backed chunk artifacts to `core.workers.treesitter_project_aggregate`, which builds sorted disk aggregates off the UI thread and returns bounded aggregate chunks for adoption.
 
 Still not done:
 
-- Aggregate construction/sorting still happens on the UI side in `rebuild_disk_aggregates()`.
-- Workspace symbol/reference query paths still can scan/copy/sort/fuzzy-match large ready indexes on the UI thread.
-- Watcher/listing setup still has cooperative/UI-side recursive work.
-- Dirty/open-document overlay extraction still has synchronous query paths that need bounding or worker-backed cleanup.
+- Aggregate construction/sorting no longer has UI-thread fallback rebuild paths: full scans are always sharded/worker-aggregated, async targeted directory refresh uses the aggregate worker, and async single-file targeted refresh uses incremental aggregate updates.
+- Workspace symbol/reference query paths are now bounded for synchronous calls: dirty aggregate direct-scan fallbacks were removed, large sync symbol/usage queries return `query-too-large`/pending instead of scanning the UI thread, async oversized symbol queries use persistent worker-produced query artifacts, and sync single-root symbol/usage queries avoid redundant aggregate copies/sorts.
+- Watcher/listing setup still has cooperative/UI-side recursive work on non-single-watch backends; single-watch native backends now skip recursive watch registration.
+- Dirty/open-document overlay extraction is worker-backed: query/ensure paths only remember open docs for suppression, and parse-ready overlay refreshes submit snapshot text to the project-index worker instead of querying synchronously.
 - Large-project perf validation has not yet proven that indexing and adoption are invisible under realistic load.
 
 Historical sections below describe the original failure mode and intended architecture. Treat them as context; the migration plan section tracks the current remaining work.
@@ -1023,7 +1024,7 @@ Current worker responsibilities:
 - allow symbols to become ready before slower usage/reference indexing completes — **implemented** for sharded symbol/usages phases
 - discard stale job messages by job id, symbol-index generation, and project-paths generation — **implemented**
 
-UI should never do expensive parse/query/aggregate work. Parse/query has moved off the UI path for project indexing, but aggregate rebuilds and some query/overlay paths still violate this goal.
+UI should never do expensive parse/query/aggregate work. Parse/query and aggregate construction have moved off the UI path for project indexing, workspace query paths now refuse oversized synchronous scans, and open-document overlays are refreshed by worker-backed snapshot indexing instead of synchronous query extraction.
 
 ### Dirty open-document overlay semantics
 
@@ -1478,11 +1479,11 @@ The recent `project_paths` caching fix should stay. It removes repeated effectiv
 - Migrate full scan, targeted file reindex, dirty-directory reindex, and watcher-triggered refresh paths. **Full scan done; targeted file done; dirty-directory done; watcher-triggered refresh benefits from dirty-directory path but watcher setup/listing still needs work**.
 - Add bounded/cached query-time filtering so commands do not scan/sort/fuzzy-match the entire index per invocation. **Not done**.
 
-### Phase 5: remove old synchronous/cooperative indexer path — partially done
+### Phase 5: remove old synchronous/cooperative indexer path — mostly done
 
-- Delete or disable `core.add_thread(function() scan_index(...) end)` project indexing path. **Effectively superseded for normal full scans by worker-backed paths; verify/remove dead legacy scan code if any remains**.
-- Remove/replace cooperative heavy paths in `reindex_file`, `mark_directory_dirty`, and watcher-triggered scan/rebuild code. **Async file and directory dirty paths are replaced; sync test/debug paths remain; watcher setup/listing still needs work**.
-- Keep only UI-side status/query/adoption in `symbol_index.lua`. **Not yet; aggregate rebuilds, query filtering, and overlay extraction still do UI work**.
+- Delete or disable `core.add_thread(function() scan_index(...) end)` project indexing path. **Done for project indexing; full scans are always sharded worker jobs with worker aggregate adoption**.
+- Remove/replace cooperative heavy paths in `reindex_file`, `mark_directory_dirty`, and watcher-triggered scan/rebuild code. **Async file and directory dirty paths are worker-backed; sync/fallback reindex paths were removed rather than retained as safety adapters**.
+- Keep only UI-side status/query/adoption in `symbol_index.lua`. **Mostly done; open-document overlays now submit worker-backed snapshot jobs and query paths no longer extract them synchronously**.
 - Preserve public symbol index APIs used by commands. **Ongoing; tests cover current behavior**.
 
 ### Phase 6: apply machinery elsewhere
@@ -1498,21 +1499,27 @@ Good follow-up customers:
 
 ## Remaining prioritized path from current state
 
-1. **Move aggregate construction off the UI path**
-   - `rebuild_disk_aggregates()` still scans `index.by_path`, copies all symbols/usages, sorts, and invalidates caches on the UI thread.
-   - Next likely step: worker-produced pre-sorted aggregate snapshots or incremental aggregate adoption with bounded UI swaps.
+1. **Aggregate construction off the UI path — done for project indexing paths**
+   - Normal full scans are always sharded worker jobs; the non-sharded fallback path was removed.
+   - Full scans and async targeted directory refresh use `core.workers.treesitter_project_aggregate` to load chunk artifacts, build/sort disk aggregates off-thread, and deliver bounded aggregate chunks.
+   - Async single-file targeted refresh uses incremental aggregate updates for the changed path instead of full aggregate rebuilds.
+   - The old synchronous file/directory reindex helpers and UI `rebuild_disk_aggregates()` fallback were removed from active code paths.
 
-2. **Bound workspace query paths**
-   - `workspace_symbols()` and usage/reference APIs can still scan/copy/sort/fuzzy-match large ready indexes.
-   - Add cached/native/worker-backed query indexes, or budgeted/incremental query execution.
+2. **Finish workspace query path hardening**
+   - Synchronous workspace symbol/usage calls are bounded now: large ready indexes return pending/`query-too-large` instead of scanning/fuzzy-matching on the UI thread.
+   - Oversized async symbol queries use persistent query artifacts produced by the aggregate worker for normal indexed projects; small bounded snapshots remain channel/file-artifact based.
+   - The aggregate worker also produces an all-usages query artifact so oversized async usage/reference queries can be served by the usage query worker instead of building artifacts on the UI thread.
+   - Remaining query work: migrate direct callers to async where they want large-project results instead of pending.
 
 3. **Finish dirty/watch refresh migration**
    - Async file and directory dirty refreshes are targeted worker jobs now.
-   - Watcher-triggered refreshes use those paths, but recursive watch/listing setup still has cooperative/UI-side work.
+   - Watcher-triggered refreshes use those paths.
+   - Single-watch native backends now skip recursive watch registration, but multiple-watch/scanning backends still have cooperative/UI-side recursive setup work.
 
-4. **Clean up open-document overlay extraction**
-   - Preserve stale disk-entry suppression, but avoid synchronous heavy overlay queries.
-   - Prefer active-document ready Tree-sitter state or bounded worker-backed overlay extraction.
+4. **Open-document overlay extraction — mostly done**
+   - Query paths no longer synchronously extract open-document overlays; they only remember open docs for dirty disk-entry suppression.
+   - Parse-ready overlay refresh now sends a text snapshot to the worker-backed project-index path, adopts the resulting bounded file entry, and reports `overlay-indexing` while pending.
+   - Remaining work is perf/stress validation and tuning caps for very large open documents.
 
 5. **Stress/perf validation**
    - Large synthetic project.

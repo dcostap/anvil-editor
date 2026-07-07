@@ -495,12 +495,18 @@ local function send_batch(ctx, payload, state, batch, force)
   })
 end
 
-local function index_file(path, root_path, language, payload, ctx, info, usage_remaining, metrics)
+local function index_file(path, root_path, language, payload, ctx, info, usage_remaining, metrics, text_override)
   local max_bytes = payload.max_file_bytes or DEFAULT_MAX_FILE_BYTES
-  local read_started = now()
-  local text, err, file_info = read_file_text(path, max_bytes)
-  add_metric(metrics, "file_read_ms", elapsed_ms(read_started))
-  info = file_info or info
+  local text, err, file_info
+  if text_override ~= nil then
+    text = tostring(text_override or "")
+    if #text > max_bytes then return nil, "too-large", info end
+  else
+    local read_started = now()
+    text, err, file_info = read_file_text(path, max_bytes)
+    add_metric(metrics, "file_read_ms", elapsed_ms(read_started))
+    info = file_info or info
+  end
   if not text then return nil, err or "read-failed", info end
   inc_metric(metrics, "bytes_read", #text)
   if not native.has_language(language.grammar) then return nil, "missing-grammar", info end
@@ -740,7 +746,7 @@ local function index_files(payload, ctx, state, chunk)
       inc_metric(state.metrics, "files_scanned", 1)
       local usage_cap = payload.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP
       local usage_remaining = math.max(0, usage_cap - state.usage_count)
-      local file_result, err = index_file(path, file_root, language, payload, ctx, file.info, usage_remaining, state.metrics)
+      local file_result, err = index_file(path, file_root, language, payload, ctx, file.info, usage_remaining, state.metrics, file.text)
       if file_result then
         state.files_indexed = state.files_indexed + 1
         inc_metric(state.metrics, "files_indexed", 1)
