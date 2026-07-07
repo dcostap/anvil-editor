@@ -905,6 +905,42 @@ class ExcludedThing
     common.rm(root, true)
   end)
 
+  test.it("Tree-sitter workspace symbol queries do not refresh stale ready external roots by default", function()
+    symbol_index.reset_for_tests()
+    local original_projects = core.projects
+    local root = USERDIR .. PATHSEP .. "treesitter-query-no-refresh-root-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    local external = USERDIR .. PATHSEP .. "treesitter-query-no-refresh-external-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    mkdir(external)
+    core.projects = { Project(root) }
+    project_paths.load_workspace_state(nil)
+    project_paths.configure_project {
+      external = {
+        { path = external, label = "external-src" },
+      },
+    }
+    seed_ready_symbol_index(root, { "RootThing" })
+    local external_index = seed_ready_symbol_index(external, { "ExternalThing" })
+    external_index.finished_at = system.get_time() - 100000
+    local external_generation = external_index.generation
+
+    local symbols, reason, status = symbol_index.workspace_symbols("ExternalThing", {
+      limit = 20,
+      allow_stale = true,
+    })
+    test.equal(status, "fresh", reason)
+    test.ok(find_symbol(symbols, "ExternalThing", "class"))
+    test.equal(external_index.status, "ready")
+    test.equal(external_index.generation, external_generation)
+
+    project_paths.configure_project {}
+    core.projects = original_projects
+    common.rm(root, true)
+    common.rm(external, true)
+  end)
+
   test.it("Tree-sitter workspace symbols can use autocomplete Project Path roots", function()
     symbol_index.reset_for_tests()
     local original_projects = core.projects

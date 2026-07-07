@@ -1866,7 +1866,11 @@ local function scan_options_from_query(opts)
   opts = opts or {}
   return {
     force = opts.force,
-    refresh_after_seconds = opts.refresh_after_seconds,
+    -- Query APIs must not kick off freshness rescans by default. Large external
+    -- roots can take minutes to reindex; treating a query as a refresh trigger
+    -- invalidates the usable ready aggregate and makes fuzzy/reference pickers
+    -- show "indexing"/"aggregate-dirty" instead of searching the existing index.
+    refresh_after_seconds = opts.refresh_after_seconds ~= nil and opts.refresh_after_seconds or 0,
     batch_files = opts.batch_files,
     batch_bytes = opts.batch_bytes,
     max_running_index_shards = opts.max_running_index_shards,
