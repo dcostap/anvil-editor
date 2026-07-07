@@ -152,11 +152,11 @@ local function consume_workspace(project_dir)
   end
 
   local chosen = entries[1]
-  -- Preserve the original consume semantics: once state is restored, remove it
-  -- from disk so repeated load hooks in the same run cannot duplicate tabs.
-  for _, entry in ipairs(entries) do
-    storage.clear(STORAGE_MODULE, entry.key)
-  end
+  -- Keep the chosen workspace file durable. Local Project Paths are stored in
+  -- workspace state; deleting the restored file makes them depend on a later
+  -- clean exit/save and loses them after restart/crash. Only remove duplicate
+  -- workspace slots for the same project.
+  clear_duplicate_workspace_entries(entries, chosen.key)
   loaded_workspace_key = chosen.key
   loaded_workspace_path = chosen.workspace.path or project_dir
   if core.log_quiet then

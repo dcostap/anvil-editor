@@ -46,6 +46,16 @@ local function workspace_keys_for_path(project_path)
   return matches
 end
 
+local function run_last_captured_thread(context)
+  local thread = table.remove(context.captured_threads or {})
+  test.not_nil(thread)
+  local co = coroutine.create(function() thread.fn(table.unpack(thread.args or {})) end)
+  while coroutine.status(co) ~= "dead" do
+    local ok, err = coroutine.resume(co)
+    test.ok(ok, err)
+  end
+end
+
 local function make_fake_root_panel(label, state, doc)
   local view = { doc = doc }
   function view:get_state()
@@ -65,6 +75,9 @@ local function make_fake_root_panel(label, state, doc)
   function panel:close_all_docviews()
     self.root_node.views = {}
     self.root_node.active_view = nil
+  end
+  function panel:get_main_panel()
+    return { is_empty = function() return false end }
   end
   return panel, view
 end
@@ -201,6 +214,40 @@ test.describe("Workspace persistence", function()
     local saved = storage.load("ws", keys[1])
     test.type(saved, "table")
     test.equal(#saved.documents.views, 0)
+  end)
+
+  test.test("restoring a workspace preserves local Project Paths on disk", function(context)
+    local project_path = join_path(context.temp_root, "test_project")
+    local source_path = join_path(context.temp_root, "source_project")
+    local external_path = join_path(context.temp_root, "external_project")
+    test.ok(common.mkdirp(external_path))
+    storage.save("ws", "test_project-10", {
+      path = project_path,
+      documents = empty_leaf_state(),
+      project_paths = {
+        entries = {
+          { path = external_path, label = "external-project", role = "external" },
+        },
+      },
+      visited_files = {},
+    })
+
+    local panel, view = make_fake_root_panel("source")
+    core.projects = { Project(source_path) }
+    core.recent_projects = {}
+    core.docs = {}
+    core.visited_files = {}
+    core.root_panel = panel
+    core.active_view = view
+
+    core.set_project(project_path)
+    run_last_captured_thread(context)
+
+    local saved = storage.load("ws", "test_project-10")
+    test.type(saved, "table")
+    test.type(saved.project_paths, "table")
+    test.equal(saved.project_paths.entries[1].label, "external-project")
+    test.equal(project_paths.resolve(join_path(external_path, "file.odin")).entry.label, "external-project")
   end)
 
   test.test("refreshes File Tree after Workspace Project Paths are loaded", function(context)
