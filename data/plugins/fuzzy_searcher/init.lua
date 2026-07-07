@@ -3857,6 +3857,14 @@ local function lsp_enabled()
   return ok and manager and manager.is_enabled and manager.is_enabled() ~= false
 end
 
+local function project_symbol_pending_status(reason)
+  if reason == "aggregate-dirty" or reason == "query-artifact-not-ready" then
+    return "Finishing Project symbol index…"
+  end
+  if reason == "indexing" then return "Indexing Project symbols…" end
+  return tostring(reason or "Indexing Project symbols…")
+end
+
 function FSView:start_symbol_search(query, reset_selection)
   symbol_generation = symbol_generation + 1
   local gen = symbol_generation
@@ -3933,9 +3941,7 @@ function FSView:start_symbol_search(query, reset_selection)
         elseif status == "unavailable" then
           break
         end
-        self.status = reason == "aggregate-dirty" and "Finishing Project symbol index…"
-          or reason == "indexing" and "Indexing Project symbols…"
-          or tostring(reason or "Indexing Project symbols…")
+        self.status = project_symbol_pending_status(reason)
         self:schedule_update(true)
         coroutine.yield(0.05)
       end
