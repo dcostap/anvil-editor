@@ -1388,8 +1388,6 @@ local function submit_worker_aggregate(index, run, message, on_done)
         apply_worker_aggregate_chunk(index, aggregate_message)
       elseif aggregate_message.type == "final" then
         local p = aggregate_message.payload or {}
-        store_symbol_query_artifact(index, "symbols", p.symbol_query_artifact)
-        store_usage_query_artifact(index, p.usage_query_artifact)
         if p.diagnostics then add_worker_diagnostics(index, run.phase, p.diagnostics, "aggregate") end
       end
     end,
@@ -1406,6 +1404,9 @@ local function submit_worker_aggregate(index, run, message, on_done)
     on_complete = function(aggregate_message)
       if not current_run_message(index, run, aggregate_message) then return end
       finish_pending_aggregate(index, aggregate_message)
+      local p = aggregate_message.payload or {}
+      store_symbol_query_artifact(index, "symbols", p.symbol_query_artifact)
+      store_usage_query_artifact(index, p.usage_query_artifact)
       run.aggregate_artifacts = {}
       if on_done then on_done(true, aggregate_message) end
     end,
@@ -2410,7 +2411,10 @@ local function workspace_symbol_artifact_payload(query, opts)
       local ok, overlay_err = append_overlay_symbols(index, opts.kind or "symbols", artifact_payload.extra_symbols, max_overlay)
       if not ok then return nil, overlay_err, "unavailable", { roots = per_root, index = index } end
       local artifact, artifact_err = persistent_symbol_query_artifact(index, opts.kind or "symbols", opts)
-      if not artifact then return nil, artifact_err or "artifact-unavailable", "unavailable", { roots = per_root, index = index } end
+      if not artifact then
+        local artifact_status = artifact_err == "query-artifact-not-ready" and "pending" or "unavailable"
+        return nil, artifact_err or "artifact-unavailable", artifact_status, { roots = per_root, index = index }
+      end
       artifact_payload.index_artifacts[#artifact_payload.index_artifacts + 1] = artifact
       root_status = "fresh"
       any_usable = true
@@ -2476,7 +2480,10 @@ local function workspace_usage_artifact_payload(name, opts)
       local ok, overlay_err = append_overlay_usages(index, name, artifact_payload.extra_usages, max_overlay)
       if not ok then return nil, overlay_err, "unavailable", { roots = per_root, index = index } end
       local artifact, artifact_err = persistent_usage_query_artifact(index, name, opts)
-      if not artifact then return nil, artifact_err or "artifact-unavailable", "unavailable", { roots = per_root, index = index } end
+      if not artifact then
+        local artifact_status = artifact_err == "query-artifact-not-ready" and "pending" or "unavailable"
+        return nil, artifact_err or "artifact-unavailable", artifact_status, { roots = per_root, index = index }
+      end
       artifact_payload.index_artifacts[#artifact_payload.index_artifacts + 1] = artifact
       root_status = "fresh"
       any_usable = true
