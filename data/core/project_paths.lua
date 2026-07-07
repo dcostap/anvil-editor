@@ -9,6 +9,7 @@ local project_config_snapshot
 local generation = 0
 local merged_entries_cache
 local merged_entries_cache_root_key
+local merged_entries_cache_projects_key
 
 local ROLE_ORDER = {
   root = 0,
@@ -133,6 +134,7 @@ local function invalidate(reason)
   generation = generation + 1
   merged_entries_cache = nil
   merged_entries_cache_root_key = nil
+  merged_entries_cache_projects_key = nil
   if core.log_quiet then
     core.log_quiet("Project paths: invalidated generation=%d reason=%s", generation, tostring(reason or "updated"))
   end
@@ -227,8 +229,36 @@ end
 local function build_merged_entries()
   local root = root_entry()
   local ordered = { root }
-  for _, entry in ipairs(project_entries) do ordered[#ordered + 1] = entry end
-  for _, entry in ipairs(workspace_entries) do ordered[#ordered + 1] = entry end
+  local explicit_keys = {}
+  local function append_explicit(entry)
+    ordered[#ordered + 1] = entry
+    local key = entry and path_key(entry.path)
+    if key then explicit_keys[key] = true end
+  end
+  explicit_keys[path_key(root.path)] = true
+  for _, entry in ipairs(project_entries) do append_explicit(entry) end
+  for _, entry in ipairs(workspace_entries) do append_explicit(entry) end
+
+  -- Extra open projects are first-class search roots even before/without an
+  -- explicit Project Paths entry. Workspace save already persists them as local
+  -- external entries; reflecting them here makes symbols/usages/file display use
+  -- the same roots immediately in the current session.
+  for i = 2, #(core.projects or {}) do
+    local project = core.projects[i]
+    local key = project and project.path and path_key(project.path)
+    if key and not explicit_keys[key] then
+      local entry = normalize_entry({
+        path = project.path,
+        label = common.basename(project.path),
+        role = "external",
+        source = "workspace",
+      }, { role = "external", source = "workspace" })
+      if entry then
+        ordered[#ordered + 1] = entry
+        explicit_keys[key] = true
+      end
+    end
+  end
   table.sort(ordered, entry_sort)
 
   local by_path = {}
@@ -250,11 +280,26 @@ local function build_merged_entries()
   return deduped
 end
 
+local function core_projects_signature()
+  local parts = {}
+  for i = 2, #(core.projects or {}) do
+    local project = core.projects[i]
+    parts[#parts + 1] = path_key(project and project.path or "") or ""
+  end
+  table.sort(parts)
+  return table.concat(parts, "\0")
+end
+
 local function cached_merged_entries()
   local root_key = path_key(root_path() or "") or ""
-  if not merged_entries_cache or merged_entries_cache_root_key ~= root_key then
+  local projects_key = core_projects_signature()
+  if not merged_entries_cache
+  or merged_entries_cache_root_key ~= root_key
+  or merged_entries_cache_projects_key ~= projects_key
+  then
     merged_entries_cache = build_merged_entries()
     merged_entries_cache_root_key = root_key
+    merged_entries_cache_projects_key = projects_key
   end
   return merged_entries_cache
 end
@@ -463,6 +508,7 @@ function project_paths.begin_project_config_load()
   project_entries = {}
   merged_entries_cache = nil
   merged_entries_cache_root_key = nil
+  merged_entries_cache_projects_key = nil
 end
 
 function project_paths.commit_project_config_load()

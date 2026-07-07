@@ -941,6 +941,38 @@ class ExcludedThing
     common.rm(external, true)
   end)
 
+  test.it("Tree-sitter workspace symbols include extra open Project roots", function()
+    symbol_index.reset_for_tests()
+    local original_projects = core.projects
+    local root = USERDIR .. PATHSEP .. "treesitter-open-project-root-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    local external = USERDIR .. PATHSEP .. "treesitter-open-project-external-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    mkdir(external)
+    core.projects = { Project(root), Project(external) }
+    project_paths.load_workspace_state(nil)
+    project_paths.configure_project {}
+    seed_ready_symbol_index(root, { "RootThing" })
+    seed_ready_symbol_index(external, { "ExternalOpenProjectThing" })
+
+    local symbols, reason, status = symbol_index.workspace_symbols("ExternalOpenProjectThing", {
+      limit = 20,
+      allow_stale = true,
+    })
+    test.equal(status, "fresh", reason)
+    test.ok(find_symbol(symbols, "ExternalOpenProjectThing", "class"))
+    local resolved = project_paths.resolve(external .. PATHSEP .. "ExternalOpenProjectThing.kt")
+    test.not_nil(resolved)
+    test.equal(resolved.entry.path, common.normalize_path(external))
+
+    project_paths.configure_project {}
+    project_paths.load_workspace_state(nil)
+    core.projects = original_projects
+    common.rm(root, true)
+    common.rm(external, true)
+  end)
+
   test.it("Tree-sitter workspace symbols can use autocomplete Project Path roots", function()
     symbol_index.reset_for_tests()
     local original_projects = core.projects
