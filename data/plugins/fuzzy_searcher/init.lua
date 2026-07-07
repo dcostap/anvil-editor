@@ -3865,6 +3865,16 @@ local function project_symbol_pending_status(reason)
   return tostring(reason or "Indexing Project symbols…")
 end
 
+local function project_symbol_roots_indexing(meta)
+  for _, root in ipairs((meta and meta.roots) or {}) do
+    local index = root.index
+    if index and index.status == "indexing" then return true end
+    if root.status == "pending" then return true end
+  end
+  local index = meta and meta.index
+  return index and index.status == "indexing" or false
+end
+
 function FSView:start_symbol_search(query, reset_selection)
   symbol_generation = symbol_generation + 1
   local gen = symbol_generation
@@ -3903,15 +3913,15 @@ function FSView:start_symbol_search(query, reset_selection)
       local deadline = math.huge
       while system.get_time() < deadline do
         if gen ~= symbol_generation or active_view ~= self then return end
-        local async_request
+        local async_request, meta
         if ts_symbols.workspace_symbols_async then
-          async_request, reason, status = ts_symbols.workspace_symbols_async(query, {
+          async_request, reason, status, meta = ts_symbols.workspace_symbols_async(query, {
             force = false,
             limit = limit + 1,
             allow_stale = false,
           })
         else
-          results, reason, status = ts_symbols.workspace_symbols(query, { force = false, limit = limit + 1, allow_stale = false })
+          results, reason, status, meta = ts_symbols.workspace_symbols(query, { force = false, limit = limit + 1, allow_stale = false })
         end
         if async_request then
           self.status = "Searching Project symbols…"
@@ -3931,13 +3941,22 @@ function FSView:start_symbol_search(query, reset_selection)
             results = async_request.results
             reason = async_request.reason
             status = async_request.status
-            break
+            if #(results or {}) > 0 or not project_symbol_roots_indexing(async_request.meta) then
+              break
+            end
+            reason = "indexing"
+            status = "pending"
+          else
+            reason = async_request.reason or reason
+            status = async_request.status or status
           end
           if async_request.cancel then async_request:cancel() end
-          reason = async_request.reason or reason
-          status = async_request.status or status
         elseif status == "fresh" then
-          break
+          if #(results or {}) > 0 or not project_symbol_roots_indexing(meta) then
+            break
+          end
+          reason = "indexing"
+          status = "pending"
         elseif status == "unavailable" then
           break
         end
