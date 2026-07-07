@@ -3865,14 +3865,29 @@ local function project_symbol_pending_status(reason)
   return tostring(reason or "Indexing Project symbols…")
 end
 
-local function project_symbol_roots_indexing(meta)
+local function project_symbol_roots_indexing(ts_symbols, meta)
   for _, root in ipairs((meta and meta.roots) or {}) do
     local index = root.index
     if index and index.status == "indexing" then return true end
     if root.status == "pending" then return true end
   end
   local index = meta and meta.index
-  return index and index.status == "indexing" or false
+  if index and index.status == "indexing" then return true end
+
+  -- A successful empty async query can be produced from the currently-ready
+  -- subset while a newly-added/restored Project Path root is still indexing.
+  -- Treat the picker as pending until every Project Symbol root is settled so
+  -- the UI never presents "0 symbols" as a final answer mid-index.
+  local ok, project_paths = pcall(require, "core.project_paths")
+  if not ok or not project_paths or not project_paths.search_roots or not (ts_symbols and ts_symbols.status) then return false end
+  for _, root in ipairs(project_paths.search_roots("symbols") or {}) do
+    local path = root and root.path
+    if path then
+      local root_index = ts_symbols.status(path)
+      if root_index and root_index.status == "indexing" then return true end
+    end
+  end
+  return false
 end
 
 function FSView:start_symbol_search(query, reset_selection)
@@ -3941,7 +3956,7 @@ function FSView:start_symbol_search(query, reset_selection)
             results = async_request.results
             reason = async_request.reason
             status = async_request.status
-            if #(results or {}) > 0 or not project_symbol_roots_indexing(async_request.meta) then
+            if #(results or {}) > 0 or not project_symbol_roots_indexing(ts_symbols, async_request.meta) then
               break
             end
             reason = "indexing"
@@ -3952,7 +3967,7 @@ function FSView:start_symbol_search(query, reset_selection)
           end
           if async_request.cancel then async_request:cancel() end
         elseif status == "fresh" then
-          if #(results or {}) > 0 or not project_symbol_roots_indexing(meta) then
+          if #(results or {}) > 0 or not project_symbol_roots_indexing(ts_symbols, meta) then
             break
           end
           reason = "indexing"
