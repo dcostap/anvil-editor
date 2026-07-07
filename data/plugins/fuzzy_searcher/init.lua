@@ -3892,14 +3892,19 @@ function FSView:start_symbol_search(query, reset_selection)
 
     if status ~= "fresh" and status ~= "stale" then
       local ts_symbols = require "core.treesitter.symbol_index"
-      local deadline = system.get_time() + ((config.lsp and config.lsp.navigation_timeout) or 10)
-      local async_request
-      if ts_symbols.workspace_symbols_async then
-        async_request, reason, status = ts_symbols.workspace_symbols_async(query, {
-          force = false,
-          limit = limit + 1,
-          allow_stale = true,
-        })
+      local deadline = math.huge
+      while system.get_time() < deadline do
+        if gen ~= symbol_generation or active_view ~= self then return end
+        local async_request
+        if ts_symbols.workspace_symbols_async then
+          async_request, reason, status = ts_symbols.workspace_symbols_async(query, {
+            force = false,
+            limit = limit + 1,
+            allow_stale = false,
+          })
+        else
+          results, reason, status = ts_symbols.workspace_symbols(query, { force = false, limit = limit + 1, allow_stale = false })
+        end
         if async_request then
           self.status = "Searching Project symbols…"
           self:schedule_update(true)
@@ -3914,33 +3919,25 @@ function FSView:start_symbol_search(query, reset_selection)
             async_request:cancel()
             return
           end
-          if async_request.done and (async_request.status == "fresh" or async_request.status == "stale") then
+          if async_request.done and async_request.status == "fresh" then
             results = async_request.results
             reason = async_request.reason
             status = async_request.status
-          else
-            if async_request.cancel then async_request:cancel() end
-            reason = async_request.reason or reason
-            status = async_request.status or status
+            break
           end
+          if async_request.cancel then async_request:cancel() end
+          reason = async_request.reason or reason
+          status = async_request.status or status
+        elseif status == "fresh" then
+          break
+        elseif status == "unavailable" then
+          break
         end
-      end
-
-      if status ~= "fresh" and status ~= "stale" then
-        results, reason, status = ts_symbols.workspace_symbols(query, { force = false, limit = limit + 1, allow_stale = true })
-        while status ~= "fresh" and status ~= "unavailable" and system.get_time() < deadline do
-          if gen ~= symbol_generation or active_view ~= self then return end
-          local index = ts_symbols.status()
-          if status == "stale" then
-            set_symbol_results(self, query, results, "Tree-sitter indexing", status, reason, limit, { scope = "project" })
-            if not index or index.status ~= "indexing" then break end
-          elseif index and index.status == "indexing" then
-            self.status = string.format("Indexing Project symbols… %d found", #(index.symbols or {}))
-            self:schedule_update(true)
-          end
-          coroutine.yield(0.05)
-          results, reason, status = ts_symbols.workspace_symbols(query, { limit = limit + 1, allow_stale = true })
-        end
+        self.status = reason == "aggregate-dirty" and "Finishing Project symbol index…"
+          or reason == "indexing" and "Indexing Project symbols…"
+          or tostring(reason or "Indexing Project symbols…")
+        self:schedule_update(true)
+        coroutine.yield(0.05)
       end
       source_label = "Tree-sitter"
     end
@@ -3950,7 +3947,7 @@ function FSView:start_symbol_search(query, reset_selection)
       set_symbol_results(self, query, results, source_label, status, reason, limit, { scope = "project" })
     else
       self.results = {}
-      self.status = "Finding Project symbols timed out"
+      self.status = reason and ("Project symbols unavailable: " .. tostring(reason)) or "Project symbols unavailable"
       self:schedule_update(true)
     end
     if reason and status ~= "fresh" then core.log_quiet("Fuzzy Project symbols: %s", tostring(reason)) end
