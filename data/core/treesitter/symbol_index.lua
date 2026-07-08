@@ -2314,12 +2314,14 @@ local function workspace_symbol_snapshot(query, opts)
     local index = symbol_index.ensure_scan(root, scan_options_from_query(opts))
     local root_status = "pending"
     if index.symbol_status == "ready" then
+      refresh_current_core_docs_for_index(index)
       if index.aggregate_dirty then
         reason = reason or "aggregate-dirty"
+      elseif has_pending_open_doc_overlay(index) then
+        reason = reason or "overlay-indexing"
       elseif #(index.symbols or {}) >= max_snapshot_symbols then
         return nil, "snapshot-too-large", "unavailable", { roots = per_root, index = index }
       else
-        refresh_current_core_docs_for_index(index)
         local source = combined_symbols(index, opts.kind or "symbols")
         for _, symbol in ipairs(source) do
         if #all_symbols >= max_snapshot_symbols then
@@ -2547,18 +2549,22 @@ local function workspace_symbol_artifact_payload(query, opts)
     local root_status = "pending"
     if index.symbol_status == "ready" and not index.aggregate_dirty then
       refresh_current_core_docs_for_index(index)
-      local suppressed = overlay_paths(index)
-      for path in pairs(suppressed) do artifact_payload.suppressed_paths[#artifact_payload.suppressed_paths + 1] = path end
-      local ok, overlay_err = append_overlay_symbols(index, opts.kind or "symbols", artifact_payload.extra_symbols, max_overlay)
-      if not ok then return nil, overlay_err, "unavailable", { roots = per_root, index = index } end
-      local artifact, artifact_err = persistent_symbol_query_artifact(index, opts.kind or "symbols", opts)
-      if not artifact then
-        local artifact_status = artifact_err == "query-artifact-not-ready" and "pending" or "unavailable"
-        return nil, artifact_err or "artifact-unavailable", artifact_status, { roots = per_root, index = index }
+      if has_pending_open_doc_overlay(index) then
+        reason = reason or "overlay-indexing"
+      else
+        local suppressed = overlay_paths(index)
+        for path in pairs(suppressed) do artifact_payload.suppressed_paths[#artifact_payload.suppressed_paths + 1] = path end
+        local ok, overlay_err = append_overlay_symbols(index, opts.kind or "symbols", artifact_payload.extra_symbols, max_overlay)
+        if not ok then return nil, overlay_err, "unavailable", { roots = per_root, index = index } end
+        local artifact, artifact_err = persistent_symbol_query_artifact(index, opts.kind or "symbols", opts)
+        if not artifact then
+          local artifact_status = artifact_err == "query-artifact-not-ready" and "pending" or "unavailable"
+          return nil, artifact_err or "artifact-unavailable", artifact_status, { roots = per_root, index = index }
+        end
+        artifact_payload.index_artifacts[#artifact_payload.index_artifacts + 1] = artifact
+        root_status = "fresh"
+        any_usable = true
       end
-      artifact_payload.index_artifacts[#artifact_payload.index_artifacts + 1] = artifact
-      root_status = "fresh"
-      any_usable = true
     elseif opts.allow_stale and #(index.symbols or {}) > 0 and not index.aggregate_dirty then
       local artifact, artifact_err = persistent_symbol_query_artifact(index, opts.kind or "symbols", opts)
       if artifact then
@@ -2616,18 +2622,22 @@ local function workspace_usage_artifact_payload(name, opts)
     local root_status = "pending"
     if index.usage_status == "ready" and not index.aggregate_dirty then
       refresh_current_core_docs_for_index(index)
-      local suppressed = overlay_paths(index)
-      for path in pairs(suppressed) do artifact_payload.suppressed_paths[#artifact_payload.suppressed_paths + 1] = path end
-      local ok, overlay_err = append_overlay_usages(index, name, artifact_payload.extra_usages, max_overlay)
-      if not ok then return nil, overlay_err, "unavailable", { roots = per_root, index = index } end
-      local artifact, artifact_err = persistent_usage_query_artifact(index, name, opts)
-      if not artifact then
-        local artifact_status = artifact_err == "query-artifact-not-ready" and "pending" or "unavailable"
-        return nil, artifact_err or "artifact-unavailable", artifact_status, { roots = per_root, index = index }
+      if has_pending_open_doc_overlay(index) then
+        reason = reason or "overlay-indexing"
+      else
+        local suppressed = overlay_paths(index)
+        for path in pairs(suppressed) do artifact_payload.suppressed_paths[#artifact_payload.suppressed_paths + 1] = path end
+        local ok, overlay_err = append_overlay_usages(index, name, artifact_payload.extra_usages, max_overlay)
+        if not ok then return nil, overlay_err, "unavailable", { roots = per_root, index = index } end
+        local artifact, artifact_err = persistent_usage_query_artifact(index, name, opts)
+        if not artifact then
+          local artifact_status = artifact_err == "query-artifact-not-ready" and "pending" or "unavailable"
+          return nil, artifact_err or "artifact-unavailable", artifact_status, { roots = per_root, index = index }
+        end
+        artifact_payload.index_artifacts[#artifact_payload.index_artifacts + 1] = artifact
+        root_status = "fresh"
+        any_usable = true
       end
-      artifact_payload.index_artifacts[#artifact_payload.index_artifacts + 1] = artifact
-      root_status = "fresh"
-      any_usable = true
     elseif opts.allow_stale and ((index.usages_by_name or {})[name]) and not index.aggregate_dirty then
       local artifact, artifact_err = persistent_usage_query_artifact(index, name, opts)
       if artifact then
@@ -2804,12 +2814,14 @@ local function workspace_usage_snapshot(name, opts)
     local index = symbol_index.ensure_scan(root, scan_options_from_query(opts))
     local root_status = "pending"
     if index.usage_status == "ready" then
+      refresh_current_core_docs_for_index(index)
       if index.aggregate_dirty then
         reason = reason or "aggregate-dirty"
+      elseif has_pending_open_doc_overlay(index) then
+        reason = reason or "overlay-indexing"
       elseif #((index.usages_by_name or {})[name] or {}) >= max_snapshot_usages then
         return nil, "snapshot-too-large", "unavailable", { roots = per_root, index = index }
       else
-        refresh_current_core_docs_for_index(index)
         local source = combined_usages_for_name(index, name)
         for _, usage in ipairs(source) do
           if #all_usages >= max_snapshot_usages then

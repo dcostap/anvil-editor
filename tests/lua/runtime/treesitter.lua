@@ -89,6 +89,26 @@ local function seed_ready_usage_index(root, name, usages)
   return index
 end
 
+local function seed_open_doc_overlay(index, path, entry)
+  entry = entry or {}
+  local change_id = entry.change_id or 1
+  local doc = entry.doc or {
+    abs_filename = path,
+    filename = path,
+    treesitter = { status = "ready" },
+    get_change_id = function() return change_id end,
+    is_dirty = function() return false end,
+    on_close = function() end,
+  }
+  index.open_docs[path] = common.merge({
+    doc = doc,
+    change_id = change_id,
+    symbols = {},
+    usages_by_name = {},
+  }, entry)
+  return doc, index.open_docs[path]
+end
+
 local function wait_ready(doc, timeout)
   local deadline = system.get_time() + (timeout or 3)
   while system.get_time() < deadline do
@@ -861,6 +881,114 @@ class ExcludedThing
     test.equal(request.status, "fresh", request.reason)
     test.ok(find_symbol(request.results, "LargeTwo", "class"))
     test.equal((request_index.diagnostics.ui or {}).persistent_symbol_query_artifact_hits, 1)
+    common.rm(root, true)
+    common.rm(query_artifact_dir, true)
+  end)
+
+  test.it("Tree-sitter workspace symbol async artifact keeps open Document overlays for suppressed paths", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-symbol-async-overlay-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    local index = seed_ready_symbol_index(root, { "OverlayThing" })
+    index.watch_running = true
+    local path = common.normalize_path(root .. PATHSEP .. "OverlayThing.kt")
+    seed_open_doc_overlay(index, path, {
+      symbols = {
+        {
+          name = "OverlayThing",
+          text = "OverlayThing",
+          kind = "class",
+          path = path,
+          file = "OverlayThing.kt",
+          relpath = "OverlayThing.kt",
+          start_line = 7,
+          start_col = 3,
+        },
+      },
+    })
+    local query_artifact_dir = root .. "-persistent-symbol-query-artifacts"
+
+    local request, reason, status = symbol_index.workspace_symbols_async("OverlayThing", {
+      root = root,
+      limit = 10,
+      max_snapshot_symbols = 1,
+      refresh_after_seconds = 0,
+      query_artifact_dir = query_artifact_dir,
+    })
+    test.equal(status, "pending", reason)
+    test.not_nil(request, reason)
+    wait_async_request(request)
+    test.equal(request.status, "fresh", request.reason)
+    test.equal(#(request.results or {}), 1, common.serialize(request.results))
+    test.equal(request.results[1].start_line, 7)
+    common.rm(root, true)
+    common.rm(query_artifact_dir, true)
+  end)
+
+  test.it("Tree-sitter workspace symbol async query waits while an open Document overlay is pending", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-symbol-async-pending-overlay-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    local index = seed_ready_symbol_index(root, { "PendingOverlayThing" })
+    index.watch_running = true
+    local path = common.normalize_path(root .. PATHSEP .. "PendingOverlayThing.kt")
+    index.open_doc_jobs[path] = { path = path }
+
+    local request, reason, status = symbol_index.workspace_symbols_async("PendingOverlayThing", {
+      root = root,
+      limit = 10,
+      refresh_after_seconds = 0,
+    })
+    test.is_nil(request)
+    test.equal(reason, "overlay-indexing")
+    test.equal(status, "pending")
+    common.rm(root, true)
+  end)
+
+  test.it("Tree-sitter workspace usage async artifact keeps open Document overlays for suppressed paths", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-usage-async-overlay-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    local index = seed_ready_usage_index(root, "OverlayUsageThing", {
+      { file = "OverlayUsageThing.kt", start_line = 2 },
+    })
+    index.watch_running = true
+    local path = common.normalize_path(root .. PATHSEP .. "OverlayUsageThing.kt")
+    seed_open_doc_overlay(index, path, {
+      usages_by_name = {
+        OverlayUsageThing = {
+          {
+            name = "OverlayUsageThing",
+            text = "OverlayUsageThing",
+            kind = "usage",
+            path = path,
+            file = "OverlayUsageThing.kt",
+            relpath = "OverlayUsageThing.kt",
+            start_line = 9,
+            start_col = 5,
+            capture = "usage",
+          },
+        },
+      },
+    })
+    local query_artifact_dir = root .. "-persistent-usage-query-artifacts"
+
+    local request, reason, status = symbol_index.workspace_usages_async("OverlayUsageThing", {
+      root = root,
+      limit = 10,
+      max_snapshot_usages = 1,
+      refresh_after_seconds = 0,
+      query_artifact_dir = query_artifact_dir,
+    })
+    test.equal(status, "pending", reason)
+    test.not_nil(request, reason)
+    wait_async_request(request)
+    test.equal(request.status, "fresh", request.reason)
+    test.equal(#(request.results or {}), 1, common.serialize(request.results))
+    test.equal(request.results[1].start_line, 9)
     common.rm(root, true)
     common.rm(query_artifact_dir, true)
   end)

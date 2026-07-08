@@ -127,7 +127,6 @@ function worker.run(payload, ctx)
   local matched = {}
   for _, artifact in ipairs(payload.index_artifacts or {}) do append_index_artifact_symbols(matched, artifact, diagnostics) end
   for _, symbol in ipairs(symbols) do matched[#matched + 1] = symbol end
-  for _, symbol in ipairs(payload.extra_symbols or {}) do matched[#matched + 1] = symbol end
   if next(suppressed) ~= nil then
     local filtered = {}
     for _, symbol in ipairs(matched) do
@@ -135,6 +134,10 @@ function worker.run(payload, ctx)
     end
     matched = filtered
   end
+  -- Open Document overlays are the replacement for suppressed disk entries;
+  -- never run them through the same suppression pass or a clean Side Editor can
+  -- erase both the stale disk symbol and its live replacement.
+  for _, symbol in ipairs(payload.extra_symbols or {}) do matched[#matched + 1] = symbol end
   sort_symbols(matched)
   local input_count = #matched
   if query ~= "" then

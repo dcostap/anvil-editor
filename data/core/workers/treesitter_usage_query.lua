@@ -126,7 +126,6 @@ function worker.run(payload, ctx)
   local name = tostring(payload.name or "")
   for _, artifact in ipairs(payload.index_artifacts or {}) do append_index_artifact_usages(usages, artifact, name, diagnostics) end
   for _, usage in ipairs(payload.usages or {}) do usages[#usages + 1] = usage end
-  for _, usage in ipairs(payload.extra_usages or {}) do usages[#usages + 1] = usage end
   if next(suppressed) ~= nil then
     local filtered = {}
     for _, usage in ipairs(usages) do
@@ -134,6 +133,10 @@ function worker.run(payload, ctx)
     end
     usages = filtered
   end
+  -- Open Document overlays are the replacement for suppressed disk entries;
+  -- never run them through the same suppression pass or a clean Side Editor can
+  -- erase both the stale disk usage and its live replacement.
+  for _, usage in ipairs(payload.extra_usages or {}) do usages[#usages + 1] = usage end
   local include_declaration = payload.include_declaration ~= false
   local limit = tonumber(payload.limit) or DEFAULT_QUERY_LIMIT
   sort_usages(usages)
