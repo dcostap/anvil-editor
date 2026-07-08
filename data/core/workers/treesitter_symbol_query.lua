@@ -10,6 +10,14 @@ local native_fuzzy = require "fuzzy"
 local worker = {}
 
 local DEFAULT_QUERY_LIMIT = 200
+local ARTIFACT_CACHE_MAX_BYTES = 256 * 1024 * 1024
+
+local artifact_cache = {}
+local artifact_cache_bytes = 0
+
+local function now()
+  return system and system.get_time and system.get_time() or os.clock()
+end
 
 local function load_lua_payload(path, remove_after_load)
   local loader, err = loadfile(path)
@@ -34,6 +42,43 @@ local function load_payload_artifact(payload)
   return artifact_payload
 end
 
+local function cache_weight(artifact, payload)
+  return tonumber(artifact and artifact.bytes) or tonumber(payload and payload.bytes) or 0
+end
+
+local function trim_artifact_cache()
+  if artifact_cache_bytes <= ARTIFACT_CACHE_MAX_BYTES then return end
+  local oldest_key, oldest_at
+  for key, entry in pairs(artifact_cache) do
+    if not oldest_at or (entry.last_used or 0) < oldest_at then
+      oldest_key, oldest_at = key, entry.last_used or 0
+    end
+  end
+  if oldest_key then
+    artifact_cache_bytes = math.max(0, artifact_cache_bytes - (artifact_cache[oldest_key].bytes or 0))
+    artifact_cache[oldest_key] = nil
+  end
+end
+
+local function load_cached_index_artifact(artifact, diagnostics)
+  local path = artifact and artifact.path
+  if not path then return nil end
+  local entry = artifact_cache[path]
+  if entry then
+    entry.last_used = now()
+    diagnostics.artifact_cache_hits = (diagnostics.artifact_cache_hits or 0) + 1
+    return entry.payload
+  end
+  local artifact_payload, err = load_lua_payload(path, false)
+  if not artifact_payload then return nil, err end
+  local bytes = cache_weight(artifact, artifact_payload)
+  artifact_cache[path] = { payload = artifact_payload, bytes = bytes, last_used = now() }
+  artifact_cache_bytes = artifact_cache_bytes + bytes
+  diagnostics.artifact_cache_misses = (diagnostics.artifact_cache_misses or 0) + 1
+  trim_artifact_cache()
+  return artifact_payload
+end
+
 local function append_index_artifact_symbols(out, artifact, diagnostics)
   if artifact and artifact.chunks then
     for _, chunk in ipairs(artifact.chunks) do append_index_artifact_symbols(out, chunk, diagnostics) end
@@ -41,7 +86,7 @@ local function append_index_artifact_symbols(out, artifact, diagnostics)
   end
   local path = artifact and artifact.path
   if not path then return end
-  local artifact_payload, err = load_lua_payload(path, false)
+  local artifact_payload, err = load_cached_index_artifact(artifact, diagnostics)
   if not artifact_payload then
     diagnostics.artifact_load_errors = (diagnostics.artifact_load_errors or 0) + 1
     diagnostics.last_artifact_load_error = err or "artifact-load-failed"
@@ -50,10 +95,6 @@ local function append_index_artifact_symbols(out, artifact, diagnostics)
   end
   diagnostics.artifacts_loaded = (diagnostics.artifacts_loaded or 0) + 1
   for _, symbol in ipairs((artifact_payload and artifact_payload.symbols) or {}) do out[#out + 1] = symbol end
-end
-
-local function now()
-  return system and system.get_time and system.get_time() or os.clock()
 end
 
 local function sort_symbols(symbols)
@@ -76,6 +117,8 @@ function worker.run(payload, ctx)
   local diagnostics = {
     artifacts_loaded = 0,
     artifact_load_errors = 0,
+    artifact_cache_hits = 0,
+    artifact_cache_misses = 0,
   }
   local matched = {}
   for _, artifact in ipairs(payload.index_artifacts or {}) do append_index_artifact_symbols(matched, artifact, diagnostics) end
