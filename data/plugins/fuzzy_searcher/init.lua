@@ -74,6 +74,7 @@ local fuzzy_searcher = {
   min_side_padding = nil,
   min_height = 650 * SCALE,
   preview_width = 0.50,
+  deep_code_results_height = 0.42,
   fd = bundled_tool("fd.exe"),
   rg = bundled_tool("rg.exe"),
   fuzzy_candidate_limit = 500,
@@ -2420,6 +2421,15 @@ function FSView:is_everything_file_mode()
   return text:sub(1, 2) == "@@"
 end
 
+function FSView:is_deep_code_mode()
+  if self.static_mode then
+    local r = self:selected_result()
+    return r and (r.kind == "grep" or r.kind == "symbol")
+  end
+  local prefix = split_mode_prefix(self.input and self.input:get_text() or "")
+  return prefix == "#" or prefix == "$" or prefix == "$$"
+end
+
 function FSView:is_full_width_mode()
   return self:is_command_mode() or self:is_project_mode()
 end
@@ -2431,11 +2441,18 @@ function FSView:list_metrics(font)
   local x, y = self.position.x, self.position.y
   local w, h = self.size.x, self.size.y
   local top = y + self.input.size.y + pad * 3 + lh
-  local list_w = self:is_full_width_mode() and w or w * (1 - fuzzy_searcher.preview_width)
-  local total_rows = math.max(0, math.floor((h - (top - y)) / lh))
+  local vertical_preview = self:is_deep_code_mode()
+  local list_w = (self:is_full_width_mode() or vertical_preview) and w or w * (1 - fuzzy_searcher.preview_width)
+  local available_h = math.max(0, h - (top - y))
+  local list_h = available_h
+  if vertical_preview then
+    list_h = math.max(lh * 5, math.floor(available_h * (fuzzy_searcher.deep_code_results_height or 0.42)))
+  end
+  local total_rows = math.max(0, math.floor(list_h / lh))
   local result_rows = math.max(1, total_rows - 2) -- first/last rows are scroll indicators
   return {
-    x = x, y = y, w = w, h = h, top = top, list_w = list_w,
+    x = x, y = y, w = w, h = h, top = top, list_w = list_w, list_h = list_h,
+    vertical_preview = vertical_preview,
     lh = lh, total_rows = total_rows, result_rows = result_rows,
     results_top = top + lh,
     bottom_indicator_y = top + math.max(0, total_rows - 1) * lh,
@@ -2656,6 +2673,10 @@ end
 function FSView:preview_bounds()
   local pad = style.padding.x
   local m = self:list_metrics(style.code_font)
+  if m.vertical_preview then
+    local py = m.top + m.list_h + pad
+    return m.x + pad, py, math.max(0, m.w - pad * 2), math.max(0, m.y + m.h - py - pad)
+  end
   local px = m.x + m.list_w + pad
   local py = m.top
   local pw = m.w - m.list_w - pad * 2
@@ -4493,13 +4514,16 @@ function FSView:draw()
 
   renderer.draw_text(font, self.status or "", x + pad, y + self.input.size.y + pad * 1.5, style.dim)
   local full_width_mode = self:is_full_width_mode()
+  local vertical_preview = m.vertical_preview
   local command_mode = self:is_command_mode()
-  local divider_w = full_width_mode and 0 or style.divider_size
-  if not full_width_mode then
+  local divider_w = (full_width_mode or vertical_preview) and 0 or style.divider_size
+  if vertical_preview then
+    renderer.draw_rect(x, top + m.list_h, w, style.divider_size, style.divider)
+  elseif not full_width_mode then
     renderer.draw_rect(x + list_w, top, style.divider_size, h - (top - y), style.divider)
   end
 
-  core.push_clip_rect(x, top, list_w - divider_w, h - (top - y))
+  core.push_clip_rect(x, top, list_w - divider_w, m.list_h)
   local row_text_w = list_w - (pad * 2) - divider_w
   local arrow_color = style.dim
   local up_arrow, down_arrow = "▲", "▼"
@@ -4598,7 +4622,7 @@ function FSView:draw()
 
   local r = self:selected_result()
   local px, py, preview_w, preview_h = self:preview_bounds()
-  if full_width_mode then
+  if full_width_mode and not vertical_preview then
     self:clear_preview_view()
   elseif r and r.kind == "command" then
     self:clear_preview_view()

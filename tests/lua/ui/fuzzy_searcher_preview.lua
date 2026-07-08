@@ -1,5 +1,6 @@
 local core = require "core"
 local config = require "core.config"
+local style = require "core.style"
 local test = require "core.test"
 
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
@@ -101,6 +102,20 @@ test.describe("Fuzzy Searcher preview", function()
     local view = core.active_view
     test.ok(view and view.doc and view.doc.abs_filename == path, "expected accepted grep result to open its file")
     test.same(selection_state(view), { 1, 7, 1, 13 })
+  end)
+
+  test.it("uses a vertical full-width preview layout for deep code search modes", function(context)
+    fuzzy_searcher.open("#")
+    local picker = core.fuzzy_searcher_active_view
+    local metrics = picker:list_metrics()
+    local px, py, pw, ph = picker:preview_bounds()
+
+    test.ok(metrics.vertical_preview, "expected grep search to use vertical preview layout")
+    test.equal(metrics.list_w, metrics.w)
+    test.ok(py > metrics.top + metrics.lh, "expected preview below results list")
+    test.equal(px, metrics.x + style.padding.x)
+    test.ok(pw > metrics.w * 0.8, "expected full-width preview pane")
+    test.ok(ph > 0)
   end)
 
   test.it("focuses the Side Editor when accepting a file for the Side Panel", function(context)
