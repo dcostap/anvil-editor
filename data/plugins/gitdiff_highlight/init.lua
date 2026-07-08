@@ -68,6 +68,10 @@ local function ensure_state(doc)
 	return state
 end
 
+local function doc_gitdiff_disabled(doc)
+	return doc and doc.disable_gitdiff_highlight
+end
+
 local function clear_state(doc, error_message)
 	local state = ensure_state(doc)
 	state.is_in_repo = false
@@ -300,7 +304,7 @@ local function finish_base_worker(doc, state)
 end
 
 schedule_local_diff = function(doc, reason)
-	if not doc or not doc.abs_filename then return end
+	if not doc or not doc.abs_filename or doc_gitdiff_disabled(doc) then return end
 	local state = ensure_state(doc)
 	if not state.base_lines then return end
 
@@ -351,7 +355,7 @@ schedule_local_diff = function(doc, reason)
 end
 
 schedule_base_reload = function(doc, reason)
-	if not doc or not doc.abs_filename then return end
+	if not doc or not doc.abs_filename or doc_gitdiff_disabled(doc) then return end
 	local state = ensure_state(doc)
 	if state.base_worker_running then
 		state.base_reload_requested = true
@@ -529,21 +533,21 @@ end
 local old_text_change = Doc.on_text_change
 function Doc:on_text_change(change_type, transaction, ...)
 	local result = old_text_change(self, change_type, transaction, ...)
-	if get_state(self).is_in_repo then schedule_local_diff(self, "text-change") end
+	if not doc_gitdiff_disabled(self) and get_state(self).is_in_repo then schedule_local_diff(self, "text-change") end
 	return result
 end
 
 local old_doc_save = Doc.save
 function Doc:save(...)
 	local results = pack_results(old_doc_save(self, ...))
-	schedule_base_reload(self, "save")
+	if not doc_gitdiff_disabled(self) then schedule_base_reload(self, "save") end
 	return unpack(results, 1, results.n)
 end
 
 local old_doc_load = Doc.load
 function Doc:load(...)
 	local results = pack_results(old_doc_load(self, ...))
-	schedule_base_reload(self, "load")
+	if not doc_gitdiff_disabled(self) then schedule_base_reload(self, "load") end
 	return unpack(results, 1, results.n)
 end
 
@@ -554,7 +558,7 @@ function Doc:set_filename(...)
 	state.local_generation = state.local_generation + 1
 	local results = pack_results(old_set_filename(self, ...))
 	clear_state(self, "path changed")
-	if self.abs_filename then schedule_base_reload(self, "path-change") end
+	if self.abs_filename and not doc_gitdiff_disabled(self) then schedule_base_reload(self, "path-change") end
 	return unpack(results, 1, results.n)
 end
 

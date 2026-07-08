@@ -2673,6 +2673,7 @@ function FSView:update_preview_view()
       if ok and doc then
         doc.disable_language_services = true
         doc.disable_treesitter = true
+        doc.disable_gitdiff_highlight = true
         local filename = core.normalize_to_project_dir(path)
         ok = pcall(function()
           doc:set_filename(filename, path)
