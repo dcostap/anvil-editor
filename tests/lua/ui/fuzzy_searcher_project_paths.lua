@@ -140,6 +140,31 @@ test.describe("Fuzzy Searcher Project Path Roles", function()
     test.ok(common.path_equals(result.abs_path, vendored_file))
   end)
 
+  test.it("uses Project Path labels in symbol results", function(context)
+    local external_file = join_path(context.external, "java", "lang", "String.java")
+    write_file(external_file)
+    local display = project_paths.display_path(external_file, { kind = "symbols" })
+
+    local row = helpers.symbol_result_from_item({
+      name = "String",
+      path = external_file,
+      file = display.text,
+      display_file = display.text,
+      root_label = display.root_label,
+      root_role = display.root_role,
+      root_id = display.root_id,
+      prefix_span = display.prefix_span,
+      line = 1,
+      col = 1,
+    }, "String", { scope = "project" })
+
+    test.equal(row.file, "Java Sources" .. PATHSEP .. "java" .. PATHSEP .. "lang" .. PATHSEP .. "String.java")
+    test.equal(row.root_label, "Java Sources")
+    test.equal(row.root_role, "external")
+    test.same(row.prefix_span, { 1, #"Java Sources" })
+    test.ok(common.path_equals(row.path, external_file))
+  end)
+
   test.it("omits excluded Project Paths from recent file rows", function(context)
     local excluded_file = join_path(context.root, "generated", "Output.java")
     write_file(excluded_file)

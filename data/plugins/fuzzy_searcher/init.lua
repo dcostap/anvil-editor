@@ -3974,8 +3974,15 @@ end
 
 local function symbol_result_from_item(item, query, opts)
   opts = opts or {}
-  local path = item.path or item.file
-  local file = symbol_display_file(path)
+  local path = item.path or item.abs_path or item.file
+  local file = item.display_file or item.relpath
+  if not file or file == "" then
+    if item.path and item.file and item.file ~= item.path then
+      file = item.file
+    else
+      file = symbol_display_file(path)
+    end
+  end
   local label = item.name or item.label or ""
   local line = item.line or (item.name_range and item.name_range.start and item.name_range.start.line) or item.start_line or 1
   local col = item.col or (item.name_range and item.name_range.start and item.name_range.start.col) or item.start_col or 1
@@ -4881,6 +4888,7 @@ return {
     file_result_key = file_result_key,
     build_scope = build_scope,
     decorate_grep_result = decorate_grep_result,
+    symbol_result_from_item = symbol_result_from_item,
     result_main_text = fuzzy_searcher.result_main_text,
     set_file_cache_for_test = function(files)
       clear_native_file_index()
