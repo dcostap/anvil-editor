@@ -1067,8 +1067,8 @@ local function get_suggestions_rect(av)
     return 0, 0, 0, 0
   end
 
-  local line, col = av.doc:get_selection()
-  local _, y = av:get_line_screen_position(line, col - #partial)
+  local _, partial_line, partial_col = autocomplete.get_partial_symbol()
+  local rect_x, y = av:get_line_screen_position(partial_line, partial_col)
   y = y + av:get_line_height() + style.padding.y
   local font = av:get_font()
   local th = font:get_height()
@@ -1076,7 +1076,6 @@ local function get_suggestions_rect(av)
   local hide_info = config.plugins.autocomplete.hide_info
   local hide_icons = config.plugins.autocomplete.hide_icons
 
-  local rect_x = av:get_line_screen_position(line)
   local window_width = system.get_window_size(core.window)
   local available_width = math.max(1, window_width - rect_x - style.padding.x)
   local content_width = 0
