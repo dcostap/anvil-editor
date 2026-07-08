@@ -2359,7 +2359,8 @@ function FSView:new(prefix, opts)
   file_context.exclude_main_panel_view(self.input.textview)
   self.input.on_change = function(_, text)
     if self.static_mode then return end
-    if not self._applying_prompt_history then self._prompt_history_session = nil end
+    if self._applying_prompt_history then return end
+    self._prompt_history_session = nil
     self.dirty = true
     self:refresh(text)
     self:schedule_update(true)
