@@ -3,6 +3,7 @@ local common = require "core.common"
 local Project = require "core.project"
 local project_paths = require "core.project_paths"
 local storage = require "core.storage"
+local sidepanel = require "core.sidepanel"
 local test = require "core.test"
 
 local function join_path(...)
@@ -95,6 +96,8 @@ test.describe("Workspace persistence", function()
     context.original_restart_request = core.restart_request
     context.original_quit_request = core.quit_request
     context.original_filetree_module = package.loaded["plugins.filetree"]
+    context.original_sidepanel_save_workspace_state = sidepanel.save_workspace_state
+    context.original_sidepanel_restore_workspace_state = sidepanel.restore_workspace_state
     context.original_cwd = system.getcwd()
     context.temp_root = USERDIR
       .. PATHSEP .. "workspace-tests-"
@@ -104,6 +107,8 @@ test.describe("Workspace persistence", function()
     test.ok(common.mkdirp(join_path(context.temp_root, "test_project")))
     test.ok(common.mkdirp(join_path(context.temp_root, "other_project")))
     storage.clear("ws")
+    project_paths.load_workspace_state(nil)
+    project_paths.configure_project {}
     core.add_thread = function(fn, ...)
       context.captured_threads = context.captured_threads or {}
       context.captured_threads[#context.captured_threads + 1] = { fn = fn, args = { ... } }
@@ -123,6 +128,8 @@ test.describe("Workspace persistence", function()
     core.restart_request = context.original_restart_request
     core.quit_request = context.original_quit_request
     package.loaded["plugins.filetree"] = context.original_filetree_module
+    sidepanel.save_workspace_state = context.original_sidepanel_save_workspace_state
+    sidepanel.restore_workspace_state = context.original_sidepanel_restore_workspace_state
     if context.original_cwd then
       pcall(system.chdir, context.original_cwd)
     end
@@ -262,6 +269,58 @@ test.describe("Workspace persistence", function()
     test.not_nil(core.refresh_project_path_consumers)
     core.refresh_project_path_consumers("test")
     test.equal(calls, 1)
+  end)
+
+  test.test("saves Side Panel Workspace state with the main layout", function(context)
+    local project_path = join_path(context.temp_root, "source_project")
+    local other_path = join_path(context.temp_root, "other_project")
+    local panel, view = make_fake_root_panel("main")
+    core.projects = { Project(project_path) }
+    core.recent_projects = {}
+    core.docs = {}
+    core.visited_files = {}
+    core.root_panel = panel
+    core.active_view = view
+    sidepanel.save_workspace_state = function(save_view)
+      test.type(save_view, "function")
+      return { marker = "side-file" }
+    end
+
+    core.set_project(other_path)
+
+    local keys = workspace_keys_for_path(project_path)
+    test.equal(#keys, 1)
+    local saved = storage.load("ws", keys[1])
+    test.type(saved, "table")
+    test.same(saved.side_panel, { marker = "side-file" })
+  end)
+
+  test.test("restores Side Panel Workspace state after the main layout", function(context)
+    local project_path = join_path(context.temp_root, "test_project")
+    local source_path = join_path(context.temp_root, "source_project")
+    storage.save("ws", "test_project-10", {
+      path = project_path,
+      documents = empty_leaf_state(),
+      side_panel = { marker = "restored-side-file" },
+      visited_files = {},
+    })
+
+    local panel, view = make_fake_root_panel("source")
+    core.projects = { Project(source_path) }
+    core.recent_projects = {}
+    core.docs = {}
+    core.visited_files = {}
+    core.root_panel = panel
+    core.active_view = view
+    sidepanel.restore_workspace_state = function(state, load_view)
+      test.type(load_view, "function")
+      context.restored_side_panel_state = state
+    end
+
+    core.set_project(project_path)
+    run_last_captured_thread(context)
+
+    test.same(context.restored_side_panel_state, { marker = "restored-side-file" })
   end)
 
   test.test("same-window Project switch does not overwrite destination workspace with empty tabs", function(context)

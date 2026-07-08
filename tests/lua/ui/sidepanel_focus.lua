@@ -104,6 +104,24 @@ local function assert_active_view(expected, message)
   )
 end
 
+local function save_restorable_view(view)
+  local state = view and view.get_state and view:get_state()
+  local module = view and view.get_module and view:get_module()
+  if state and module then
+    return {
+      module = module,
+      active = core.active_view == view,
+      state = state,
+    }
+  end
+end
+
+local function load_restorable_view(t)
+  if not (t and t.module) then return nil end
+  local ViewClass = require(t.module)
+  return ViewClass and ViewClass.from_state and ViewClass.from_state(t.state)
+end
+
 local function remove_doc(doc)
   for i = #core.docs, 1, -1 do
     if core.docs[i] == doc then
@@ -167,6 +185,46 @@ test.describe("sidepanel focus", function()
     else
       sidepanel.last_main_panel_view = nil
     end
+  end)
+
+  test.it("saves and restores the Side Editor file view", function(context)
+    local main_view = open_main_editor(context, "main alpha beta\n")
+    main_view.__test_name = "main Editor"
+    core.set_active_view(main_view)
+    local side_view, side_doc = open_side_editor(context, "side alpha beta\n", main_view)
+    side_view.__test_name = "side Editor"
+    set_selection(side_view, 1, 6, 1, 10)
+    side_view.scroll.x, side_view.scroll.to.x = 3, 3
+    side_view.scroll.y, side_view.scroll.to.y = 7, 7
+
+    local state = sidepanel.save_workspace_state(save_restorable_view)
+    test.type(state, "table")
+    test.type(state.file_view, "table")
+    test.equal(state.visible, false)
+    test.equal(state.side_editor_slot_visible, true)
+
+    side_doc:clean()
+    sidepanel.remove_view(side_view, false)
+    sidepanel.file_view = nil
+    sidepanel.file_view_path = nil
+    remove_doc(side_doc)
+
+    local restored = sidepanel.restore_workspace_state(state, load_restorable_view)
+    local restored_view = sidepanel.file_view
+    track(context, "side_views", restored_view)
+    track(context, "views", restored_view)
+    track(context, "docs", restored_view.doc)
+    restored_view.__test_name = "restored side Editor"
+
+    test.ok(restored, "expected Side Panel Workspace state to restore")
+    test.ok(sidepanel.contains_view(restored_view), "expected restored Side Editor in Side Panel")
+    test.ok(sidepanel.is_side_editor(restored_view), "expected restored view to be a Side Editor")
+    test.equal(restored_view.doc:get_text(1, 1, math.huge, math.huge), "side alpha beta\n")
+    test.same(selection_state(restored_view), { 1, 6, 1, 10 })
+    test.equal(restored_view.scroll.to.x, 3)
+    test.equal(restored_view.scroll.to.y, 7)
+    test.equal(sidepanel.visible, false)
+    test.equal(sidepanel.side_editor_slot_visible, true)
   end)
 
   test.it("focuses the existing side Editor from the main panel", function(context)

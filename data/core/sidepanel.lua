@@ -487,6 +487,159 @@ function M.set_side_view(view, focus)
   return view
 end
 
+local function default_save_workspace_view(view)
+  local state = view and view.get_state and view:get_state()
+  local module = view and view.get_module and view:get_module()
+  if state and module then
+    return {
+      module = module,
+      active = core.active_view == view,
+      state = state,
+    }
+  end
+end
+
+local function load_workspace_view(saved, load_view)
+  if type(saved) ~= "table" then return nil end
+  local loader = load_view or function(t)
+    if not t.module then return nil end
+    local ViewClass = require(t.module)
+    return ViewClass and ViewClass.from_state and ViewClass.from_state(t.state)
+  end
+  local ok, view = pcall(loader, saved)
+  if ok then return view end
+  if core.log_quiet then
+    core.log_quiet("Side Panel Workspace: failed to restore view: %s", tostring(view))
+  end
+end
+
+local function save_workspace_view(view, save_view)
+  local saver = save_view or default_save_workspace_view
+  local ok, saved = pcall(saver, view)
+  if ok then return saved end
+  if core.log_quiet then
+    core.log_quiet("Side Panel Workspace: failed to save view: %s", tostring(saved))
+  end
+end
+
+local function sidepanel_owner_panel_name(owner)
+  if not owner then return nil end
+  if owner == M.file_view then return "file" end
+  return owner.__sidepanel_panel_name
+end
+
+function M.save_workspace_state(save_view)
+  local side = M.side_node
+  if not (side and side.views) then return nil end
+
+  local state = {
+    visible = M.visible == true,
+    side_editor_slot_visible = M.side_editor_slot_visible == true,
+    current_panel = M.current_panel,
+    width_ratio = M.width_ratio,
+  }
+
+  local active = side.active_view
+  if active and not active.__sidepanel_placeholder then
+    state.active_panel = sidepanel_owner_panel_name(active)
+  end
+
+  local focus_owner = side_focus_owner(core.active_view)
+  if focus_owner then
+    state.focus_panel = sidepanel_owner_panel_name(focus_owner)
+  end
+
+  if M.file_view and view_index(side, M.file_view) then
+    local saved = save_workspace_view(M.file_view, save_view)
+    if saved then
+      state.file_view = saved
+      state.file_view_path = M.file_view_path
+    end
+  end
+
+  if not state.file_view then
+    if state.current_panel == "file" then state.current_panel = nil end
+    if state.active_panel == "file" then state.active_panel = nil end
+    if state.focus_panel == "file" then state.focus_panel = nil end
+  end
+
+  if not state.file_view
+  and not state.visible
+  and not state.current_panel
+  and not state.active_panel
+  and not state.focus_panel then
+    return nil
+  end
+
+  if core.log_quiet then
+    core.log_quiet(
+      "Side Panel Workspace: saved visible=%s current=%s active=%s file=%s",
+      tostring(state.visible),
+      tostring(state.current_panel),
+      tostring(state.active_panel),
+      state.file_view and "yes" or "no"
+    )
+  end
+  return state
+end
+
+function M.restore_workspace_state(state, load_view)
+  if type(state) ~= "table" then return false end
+
+  if type(state.width_ratio) == "number" and state.width_ratio > 0 then
+    M.width_ratio = state.width_ratio
+  end
+
+  local restored_file
+  if type(state.file_view) == "table" then
+    restored_file = load_workspace_view(state.file_view, load_view)
+    if restored_file then
+      if M.file_view and M.file_view ~= restored_file and M.contains_view(M.file_view) then
+        M.remove_view(M.file_view, false)
+      end
+      M.file_view = restored_file
+      M.file_view_path = state.file_view_path
+        or (state.file_view.state and (state.file_view.state.filename or state.file_view.state.path))
+        or (restored_file.doc and (restored_file.doc.abs_filename or restored_file.doc.filename))
+        or restored_file.path
+      if restored_file.doc then file_context.mark_editor_view(restored_file) end
+      M.register_panel("file", restored_file)
+    elseif core.log_quiet then
+      core.log_quiet("Side Panel Workspace: skipped missing Side Editor file view")
+    end
+  end
+
+  local target_panel = state.active_panel or state.current_panel or (restored_file and "file")
+  if target_panel == "file" and not restored_file then target_panel = nil end
+  local target = target_panel and M.panels[target_panel]
+  local restored = restored_file ~= nil
+
+  if target then
+    local focus = state.focus_panel == target_panel
+      or (target == restored_file and state.file_view and state.file_view.active == true)
+    if state.visible then
+      M.side_editor_slot_visible = false
+      M.show(target_panel, { focus = focus })
+    else
+      M.visible = false
+      M.side_editor_slot_visible = state.side_editor_slot_visible == true
+      M.set_side_view(target, focus)
+      M.update_side_editor_slot()
+    end
+    restored = true
+  elseif state.current_panel and core.log_quiet then
+    core.log_quiet("Side Panel Workspace: saved panel %s is not registered", tostring(state.current_panel))
+  end
+
+  if core.root_panel and core.root_panel.root_node then
+    core.root_panel.root_node:update_layout()
+  end
+  if core.log_quiet then
+    core.log_quiet("Side Panel Workspace: restore %s", restored and "completed" or "had no restorable views")
+  end
+  return restored
+end
+
 function M.show(name, opts)
   opts = opts or {}
   M.prune_stale_views()

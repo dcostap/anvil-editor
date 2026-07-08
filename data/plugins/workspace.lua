@@ -4,6 +4,7 @@ local command = require "core.command"
 local common = require "core.common"
 local storage = require "core.storage"
 local project_paths = require "core.project_paths"
+local sidepanel = require "core.sidepanel"
 local tool_window = require "core.tool_window"
 local untitled_recovery = require "plugins.untitled_recovery"
 
@@ -348,6 +349,7 @@ local function save_workspace()
   storage.save(STORAGE_MODULE, key, {
     path = project_dir,
     documents = documents,
+    side_panel = sidepanel.save_workspace_state(save_view),
     project_paths = project_paths.save_workspace_state(),
     visited_files = core.prune_visited_files and core.prune_visited_files() or core.visited_files,
     tool_windows = tool_window.get_project_state(project),
@@ -406,6 +408,7 @@ local function load_workspace()
       if active_view then
         core.set_active_view(active_view)
       end
+      sidepanel.restore_workspace_state(workspace.side_panel, load_view)
       sync_workspace_project_paths_to_core_projects()
       tool_window.restore_project_state(core.root_project(), workspace.tool_windows)
     end
