@@ -515,6 +515,26 @@ int main(void) { return helper(); }
     common.rm(artifact_dir, true)
   end)
 
+  test.test("symbol and usage query workers report missing top-level payload artifacts", function()
+    local missing_symbol_path = USERDIR .. PATHSEP .. "missing-symbol-query-payload.lua"
+    local symbol_messages = {}
+    symbol_query_worker.run({
+      artifact = { path = missing_symbol_path },
+    }, { send = function(message) symbol_messages[#symbol_messages + 1] = message; return true end })
+    local symbol_result = symbol_messages[1] and symbol_messages[1].payload
+    test.equal(symbol_result.diagnostics.artifact_load_errors, 1)
+    test.equal(symbol_result.diagnostics.last_artifact_load_path, missing_symbol_path)
+
+    local missing_usage_path = USERDIR .. PATHSEP .. "missing-usage-query-payload.lua"
+    local usage_messages = {}
+    usage_query_worker.run({
+      artifact = { path = missing_usage_path },
+    }, { send = function(message) usage_messages[#usage_messages + 1] = message; return true end })
+    local usage_result = usage_messages[1] and usage_messages[1].payload
+    test.equal(usage_result.diagnostics.artifact_load_errors, 1)
+    test.equal(usage_result.diagnostics.last_artifact_load_path, missing_usage_path)
+  end)
+
   test.test("cancels a project index job before adoption", function()
     test.ok(native.has_language("c"))
     registry.reload()

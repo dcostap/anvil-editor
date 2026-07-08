@@ -1590,6 +1590,111 @@ local function persistent_query_artifact_path_exists(artifact)
   return artifact.path and system.get_file_info(artifact.path) ~= nil
 end
 
+local function combined_chunk_artifact(chunks, count, bytes)
+  if #chunks == 1 then
+    chunks[1].count = count
+    return chunks[1]
+  end
+  return { chunks = chunks, count = count, bytes = bytes, chunked = true }
+end
+
+local function write_chunked_query_artifact(kind, field, items, map_item, opts)
+  opts = opts or {}
+  local chunk_records = math.max(1, math.floor(tonumber(opts.query_artifact_chunk_records or DEFAULT_AGGREGATE_CHUNK_RECORDS) or DEFAULT_AGGREGATE_CHUNK_RECORDS))
+  local chunks = {}
+  local chunk = {}
+  local count = 0
+  local bytes = 0
+
+  local function cleanup_chunks()
+    for _, artifact in ipairs(chunks) do cleanup_query_artifact(artifact) end
+  end
+
+  local function flush(force)
+    if #chunk == 0 and not force then return true end
+    local artifact, err = write_query_artifact(kind, { [field] = chunk }, opts)
+    if not artifact then
+      cleanup_chunks()
+      return nil, err
+    end
+    chunks[#chunks + 1] = artifact
+    bytes = bytes + (tonumber(artifact.bytes or 0) or 0)
+    chunk = {}
+    return true
+  end
+
+  for _, item in ipairs(items or {}) do
+    local mapped = map_item and map_item(item) or item
+    if mapped then
+      chunk[#chunk + 1] = mapped
+      count = count + 1
+      if #chunk >= chunk_records then
+        local ok, err = flush(false)
+        if not ok then return nil, err end
+      end
+    end
+  end
+
+  local ok, err = flush(count == 0)
+  if not ok then return nil, err end
+  return combined_chunk_artifact(chunks, count, bytes)
+end
+
+local function write_chunked_usages_by_name_query_artifact(kind, usages_by_name, map_usage, opts)
+  opts = opts or {}
+  local chunk_records = math.max(1, math.floor(tonumber(opts.query_artifact_chunk_records or DEFAULT_AGGREGATE_CHUNK_RECORDS) or DEFAULT_AGGREGATE_CHUNK_RECORDS))
+  local chunks = {}
+  local current = {}
+  local records = 0
+  local count = 0
+  local bytes = 0
+
+  local function cleanup_chunks()
+    for _, artifact in ipairs(chunks) do cleanup_query_artifact(artifact) end
+  end
+
+  local function flush(force)
+    if records == 0 and not force then return true end
+    local artifact, err = write_query_artifact(kind, { usages_by_name = current }, opts)
+    if not artifact then
+      cleanup_chunks()
+      return nil, err
+    end
+    chunks[#chunks + 1] = artifact
+    bytes = bytes + (tonumber(artifact.bytes or 0) or 0)
+    current = {}
+    records = 0
+    return true
+  end
+
+  local names = {}
+  for name in pairs(usages_by_name or {}) do names[#names + 1] = name end
+  table.sort(names)
+  for _, name in ipairs(names) do
+    for _, usage in ipairs(usages_by_name[name] or {}) do
+      local mapped = map_usage and map_usage(name, usage) or usage
+      if mapped then
+        local out = current[name]
+        if not out then
+          out = {}
+          current[name] = out
+        end
+        out[#out + 1] = mapped
+        records = records + 1
+        count = count + 1
+        if records >= chunk_records then
+          local ok, err = flush(false)
+          if not ok then return nil, err end
+        end
+      end
+    end
+  end
+
+  local ok, err = flush(count == 0)
+  if not ok then return nil, err end
+  return combined_chunk_artifact(chunks, count, bytes)
+end
+
 local function make_index_payload(index, opts, phase)
   opts = opts or {}
   return {
@@ -2283,27 +2388,29 @@ local function persistent_symbol_query_artifact(index, kind, opts)
     return cached
   end
 
-  if #(index.symbols or {}) > DEFAULT_ASYNC_SYMBOL_SNAPSHOT_LIMIT then
-    return nil, "query-artifact-not-ready"
-  end
-
-  local symbols = {}
-  for _, symbol in ipairs(index.symbols or {}) do
-    if project_path_allows(symbol.path, kind) then
-      local item = refresh_project_path_metadata(index, copy_item(symbol), kind)
-      item.search_text = tostring(item.text or item.name or "")
-      symbols[#symbols + 1] = item
-    end
-  end
-  local artifact, err = write_query_artifact("symbols-index", { symbols = symbols }, opts)
+  local started = now()
+  local artifact, err = write_chunked_query_artifact("symbols-index", "symbols", index.symbols or {}, function(symbol)
+    if not project_path_allows(symbol.path, kind) then return nil end
+    local item = refresh_project_path_metadata(index, copy_item(symbol), kind)
+    item.search_text = tostring(item.text or item.name or "")
+    return item
+  end, opts)
   if not artifact then return nil, err or "artifact-write-failed" end
   artifact.generation = index.generation
   artifact.project_paths_generation = project_paths_generation
   artifact.kind = kind
-  artifact.count = #symbols
+  artifact.count = artifact.count or 0
   index.query_artifacts[key] = artifact
+  local count = tonumber(artifact.count or 0) or 0
+  local duration = elapsed_ms(started)
   inc_ui_metric(index, "persistent_symbol_query_artifact_builds", 1)
-  add_ui_metric(index, "persistent_symbol_query_artifact_items", #symbols)
+  add_ui_metric(index, "persistent_symbol_query_artifact_items", count)
+  add_ui_metric(index, "persistent_symbol_query_artifact_ms", duration)
+  max_ui_metric(index, "persistent_symbol_query_artifact_max_ms", duration)
+  if #(index.symbols or {}) > DEFAULT_ASYNC_SYMBOL_SNAPSHOT_LIMIT then
+    local chunk_count = artifact.chunks and #artifact.chunks or 1
+    log_quiet("Tree-sitter Project symbol query: built missing large symbol query artifact for %s items=%d chunks=%d in %.1fms", tostring(index.root), count, chunk_count, duration)
+  end
   return artifact
 end
 
@@ -2339,25 +2446,45 @@ local function persistent_usage_query_artifact(index, name, opts)
       inc_ui_metric(index, "persistent_usage_query_artifact_hits", 1)
       return all_cached
     end
-    return nil, "query-artifact-not-ready"
+
+    local started = now()
+    local all_artifact, all_err = write_chunked_usages_by_name_query_artifact("usages-index", index.usages_by_name or {}, function(_, usage)
+      if project_paths_module().is_excluded(usage.path, "usages") then return nil end
+      return refresh_project_path_metadata(index, copy_item(usage), "usages")
+    end, opts)
+    if not all_artifact then return nil, all_err or "artifact-write-failed" end
+    all_artifact.generation = index.generation
+    all_artifact.project_paths_generation = all_project_paths_generation
+    all_artifact.all_usages = true
+    index.query_artifacts[all_key] = all_artifact
+    local count = tonumber(all_artifact.count or 0) or 0
+    local duration = elapsed_ms(started)
+    inc_ui_metric(index, "persistent_usage_query_artifact_builds", 1)
+    add_ui_metric(index, "persistent_usage_query_artifact_items", count)
+    add_ui_metric(index, "persistent_usage_query_artifact_ms", duration)
+    max_ui_metric(index, "persistent_usage_query_artifact_max_ms", duration)
+    local chunk_count = all_artifact.chunks and #all_artifact.chunks or 1
+    log_quiet("Tree-sitter Project usage query: built missing large usage query artifact for %s items=%d chunks=%d in %.1fms", tostring(index.root), count, chunk_count, duration)
+    return all_artifact
   end
 
-  local usages = {}
-  for _, usage in ipairs(source) do
-    if not project_paths_module().is_excluded(usage.path, "usages") then
-      usages[#usages + 1] = refresh_project_path_metadata(index, copy_item(usage), "usages")
-    end
-  end
-  sort_usages(usages)
-  local artifact, err = write_query_artifact("usages-index", { usages = usages }, opts)
+  local started = now()
+  local artifact, err = write_chunked_query_artifact("usages-index", "usages", source, function(usage)
+    if project_paths_module().is_excluded(usage.path, "usages") then return nil end
+    return refresh_project_path_metadata(index, copy_item(usage), "usages")
+  end, opts)
   if not artifact then return nil, err or "artifact-write-failed" end
   artifact.generation = index.generation
   artifact.project_paths_generation = project_paths_generation
   artifact.name = name
-  artifact.count = #usages
+  artifact.count = artifact.count or 0
   index.query_artifacts[key] = artifact
+  local count = tonumber(artifact.count or 0) or 0
+  local duration = elapsed_ms(started)
   inc_ui_metric(index, "persistent_usage_query_artifact_builds", 1)
-  add_ui_metric(index, "persistent_usage_query_artifact_items", #usages)
+  add_ui_metric(index, "persistent_usage_query_artifact_items", count)
+  add_ui_metric(index, "persistent_usage_query_artifact_ms", duration)
+  max_ui_metric(index, "persistent_usage_query_artifact_max_ms", duration)
   return artifact
 end
 

@@ -107,7 +107,9 @@ local function sort_symbols(symbols)
 end
 
 function worker.run(payload, ctx)
-  payload = load_payload_artifact(payload)
+  local payload_artifact_path = payload and payload.artifact and payload.artifact.path
+  local payload_artifact_err
+  payload, payload_artifact_err = load_payload_artifact(payload)
   local started = now()
   local query = tostring(payload.query or "")
   local limit = tonumber(payload.limit) or DEFAULT_QUERY_LIMIT
@@ -116,9 +118,11 @@ function worker.run(payload, ctx)
   for _, path in ipairs(payload.suppressed_paths or {}) do suppressed[path] = true end
   local diagnostics = {
     artifacts_loaded = 0,
-    artifact_load_errors = 0,
+    artifact_load_errors = payload_artifact_err and 1 or 0,
     artifact_cache_hits = 0,
     artifact_cache_misses = 0,
+    last_artifact_load_error = payload_artifact_err,
+    last_artifact_load_path = payload_artifact_err and payload_artifact_path or nil,
   }
   local matched = {}
   for _, artifact in ipairs(payload.index_artifacts or {}) do append_index_artifact_symbols(matched, artifact, diagnostics) end

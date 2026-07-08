@@ -865,6 +865,71 @@ class ExcludedThing
     common.rm(query_artifact_dir, true)
   end)
 
+  test.it("Tree-sitter workspace symbol async query builds a missing persistent artifact for already-ready large indexes", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-symbol-async-huge-ready-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    local names = {}
+    for i = 1, 5001 do names[i] = string.format("HugeSymbol%04d", i) end
+    local index = seed_ready_symbol_index(root, names)
+    index.watch_running = true
+    local query_artifact_dir = root .. "-persistent-symbol-query-artifacts"
+
+    local request, reason, status = symbol_index.workspace_symbols_async("HugeSymbol5001", {
+      root = root,
+      limit = 10,
+      refresh_after_seconds = 0,
+      query_artifact_dir = query_artifact_dir,
+      query_artifact_chunk_records = 1000,
+    })
+    test.equal(status, "pending", reason)
+    test.not_nil(request, reason)
+    wait_async_request(request, 10)
+    test.equal(request.status, "fresh", request.reason)
+    test.ok(find_symbol(request.results, "HugeSymbol5001", "class"), common.serialize({ results = request.results, reason = request.reason, diagnostics = request.diagnostics }))
+    local request_index = request.meta and request.meta.index or index
+    test.equal((request_index.diagnostics.ui or {}).persistent_symbol_query_artifact_builds, 1)
+    local _, artifact = next(request_index.query_artifacts or {})
+    test.not_nil(artifact)
+    test.ok(artifact.chunked)
+    common.rm(root, true)
+    common.rm(query_artifact_dir, true)
+  end)
+
+  test.it("Tree-sitter workspace usage async query builds a missing all-usages artifact for already-ready large usage lists", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-usage-async-huge-ready-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    local usages = {}
+    for i = 1, 5001 do usages[i] = { file = string.format("Use%04d.kt", i), start_line = i } end
+    local index = seed_ready_usage_index(root, "HugeUsageThing", usages)
+    index.watch_running = true
+    local query_artifact_dir = root .. "-persistent-usage-query-artifacts"
+
+    local request, reason, status = symbol_index.workspace_usages_async("HugeUsageThing", {
+      root = root,
+      limit = 20,
+      refresh_after_seconds = 0,
+      query_artifact_dir = query_artifact_dir,
+      query_artifact_chunk_records = 1000,
+    })
+    test.equal(status, "pending", reason)
+    test.not_nil(request, reason)
+    wait_async_request(request, 10)
+    test.equal(request.status, "fresh", request.reason)
+    test.equal(#(request.results or {}), 20, common.serialize({ reason = request.reason, diagnostics = request.diagnostics }))
+    local request_index = request.meta and request.meta.index or index
+    test.equal((request_index.diagnostics.ui or {}).persistent_usage_query_artifact_builds, 1)
+    local _, artifact = next(request_index.query_artifacts or {})
+    test.not_nil(artifact)
+    test.ok(artifact.all_usages)
+    test.ok(artifact.chunked)
+    common.rm(root, true)
+    common.rm(query_artifact_dir, true)
+  end)
+
   test.it("Tree-sitter workspace symbol cache invalidates when dirty open docs suppress disk symbols", function()
     symbol_index.reset_for_tests()
     local original_docs = core.docs

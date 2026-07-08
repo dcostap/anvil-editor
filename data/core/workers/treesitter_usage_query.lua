@@ -108,13 +108,17 @@ local function sort_usages(usages)
 end
 
 function worker.run(payload, ctx)
-  payload = load_payload_artifact(payload)
+  local payload_artifact_path = payload and payload.artifact and payload.artifact.path
+  local payload_artifact_err
+  payload, payload_artifact_err = load_payload_artifact(payload)
   local started = now()
   local diagnostics = {
     artifacts_loaded = 0,
-    artifact_load_errors = 0,
+    artifact_load_errors = payload_artifact_err and 1 or 0,
     artifact_cache_hits = 0,
     artifact_cache_misses = 0,
+    last_artifact_load_error = payload_artifact_err,
+    last_artifact_load_path = payload_artifact_err and payload_artifact_path or nil,
   }
   local usages = {}
   local suppressed = {}
