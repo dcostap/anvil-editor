@@ -1,6 +1,7 @@
 local core = require "core"
 local common = require "core.common"
 local Project = require "core.project"
+local project_paths = require "core.project_paths"
 local test = require "core.test"
 
 local function join_path(...)
@@ -29,8 +30,7 @@ test.describe("Project path roles", function()
     core.projects = { Project(context.root) }
     system.chdir(context.root)
 
-    package.loaded["core.project_paths"] = nil
-    context.project_paths = require "core.project_paths"
+    context.project_paths = project_paths
     context.project_paths.configure_project {}
     context.project_paths.load_workspace_state(nil)
   end)
@@ -233,6 +233,21 @@ test.describe("Project path roles", function()
     test.equal(resolved.entry.role, "external")
     test.equal(resolved.entry.source, "workspace")
     test.equal(resolved.entry.label, "jdk-src")
+  end)
+
+  test.test("explicit workspace labels win over matching open Project entries", function(context)
+    context.project_paths.load_workspace_state {
+      entries = {
+        { path = context.external, label = "Java Sources", role = "external" },
+      },
+    }
+    core.projects[#core.projects + 1] = Project(context.external)
+
+    local resolved = context.project_paths.resolve(join_path(context.external, "java", "lang", "String.java"))
+
+    test.equal(resolved.entry.role, "external")
+    test.equal(resolved.entry.source, "workspace")
+    test.equal(resolved.entry.label, "Java Sources")
   end)
 
   test.test("workspace state round-trips local project path entries", function(context)

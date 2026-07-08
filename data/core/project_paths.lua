@@ -118,7 +118,9 @@ end
 
 local function copy_entry(entry)
   local copy = {}
-  for key, value in pairs(entry) do copy[key] = value end
+  for key, value in pairs(entry) do
+    if key ~= "implicit_project" then copy[key] = value end
+  end
   return copy
 end
 
@@ -252,6 +254,7 @@ local function build_merged_entries()
         label = common.basename(project.path),
         role = "external",
         source = "workspace",
+        implicit_project = true,
       }, { role = "external", source = "workspace" })
       if entry then
         ordered[#ordered + 1] = entry
@@ -265,10 +268,17 @@ local function build_merged_entries()
   local deduped = {}
   for _, entry in ipairs(ordered) do
     local key = path_key(entry.path)
-    if key and not by_path[key] then
-      local copy = copy_entry(entry)
-      by_path[key] = copy
-      deduped[#deduped + 1] = copy
+    if key then
+      local existing = by_path[key]
+      if not existing then
+        local copy = copy_entry(entry)
+        copy.implicit_project = entry.implicit_project
+        by_path[key] = copy
+        deduped[#deduped + 1] = copy
+      elseif existing.implicit_project and not entry.implicit_project then
+        for field in pairs(existing) do existing[field] = nil end
+        for field, value in pairs(copy_entry(entry)) do existing[field] = value end
+      end
     end
   end
 
