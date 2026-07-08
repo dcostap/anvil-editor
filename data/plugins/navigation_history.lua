@@ -6,7 +6,6 @@ local command = require "core.command"
 local keymap = require "core.keymap"
 local common = require "core.common"
 local config = require "core.config"
-local DocView = require "core.docview"
 local Node = require "core.node"
 
 local M = {}
@@ -59,24 +58,44 @@ local function doc_in_core_docs(doc)
   return false
 end
 
-local function is_docview(view)
-  return type(view) == "table"
-    and type(view.extends) == "function"
-    and view:extends(DocView)
-    and view.doc ~= nil
+local function view_is_open(view)
+  local root = core.root_panel and core.root_panel.root_node
+  return root and view and root:get_node_for_view(view) ~= nil
 end
 
-local function is_editor_place_view(view)
-  if not is_docview(view) then return false end
-  if view == core.global_prompt_bar or view == core.nag_view then return false end
-  if view.command_output_view then return false end
-  return doc_in_core_docs(view.doc)
+local function fuzzy_searcher_owns_view(view)
+  local picker = core.fuzzy_searcher_active_view
+  if not (picker and picker.is_visible and picker:is_visible()) then return false end
+  if view == picker or view == picker.input or view == picker.child_active then return true end
+  if picker.input and view == picker.input.textview then return true end
+  if view and (view.parent == picker or view.subparent == picker or view.__fuzzy_searcher_owner == picker) then return true end
+  if picker.input and view and (view.parent == picker.input or view.subparent == picker.input) then return true end
+  return false
+end
+
+local function is_transient_place_view(view)
+  if not view then return true end
+  if view == core.global_prompt_bar or view == core.nag_view or view == core.status_bar or view == core.title_bar then return true end
+  if view.__sidepanel_placeholder then return true end
+  if view.local_find_input then return true end
+  if view.command_output_view or view.command_output_panel then return true end
+  local owner = view.__sidepanel_focus_owner
+  if owner and owner.command_output_panel then return true end
+  if fuzzy_searcher_owns_view(view) then return true end
+  return false
+end
+
+local function is_navigation_place_view(view)
+  if type(view) ~= "table" or is_transient_place_view(view) then return false end
+  return view_is_open(view)
 end
 
 local function place_identity_matches(a, b)
   if not a or not b then return false end
+  if a.view and b.view then return a.view == b.view end
   if a.filename and b.filename then return common.path_equals(a.filename, b.filename) end
-  return a.doc ~= nil and a.doc == b.doc
+  if a.doc ~= nil and b.doc ~= nil then return a.doc == b.doc end
+  return false
 end
 
 local function exact_place_matches(a, b)
@@ -106,22 +125,22 @@ local function place_label(place)
 end
 
 function M.capture_place(view)
-  if not is_editor_place_view(view) then return nil end
+  if not is_navigation_place_view(view) then return nil end
   local doc = view.doc
   local selection_state = view.get_selection_state and view:get_selection_state() or nil
-  local selections = selection_state and selection_state.selections or doc.selections or {}
-  local last = selection_state and selection_state.last_selection or doc.last_selection or 1
+  local selections = selection_state and selection_state.selections or (doc and doc.selections) or {}
+  local last = selection_state and selection_state.last_selection or (doc and doc.last_selection) or 1
   local offset = ((last - 1) * 4) + 1
   local line = selections[offset] or selections[1]
   local col = selections[offset + 1] or selections[2]
   local line2 = selections[offset + 2] or line
   local col2 = selections[offset + 3] or col
-  if not line or not col then return nil end
+  local path = doc and doc.abs_filename or view.path
 
   return {
     view = view,
     doc = doc,
-    filename = doc.abs_filename and common.normalize_path(doc.abs_filename) or nil,
+    filename = path and common.normalize_path(path) or nil,
     selection_state = clone_selection_state(selection_state),
     line = line,
     col = col,
@@ -137,13 +156,9 @@ function M.capture_current_place()
   return M.capture_place(core.active_view)
 end
 
-local function view_is_open(view)
-  local root = core.root_panel and core.root_panel.root_node
-  return root and view and root:get_node_for_view(view) ~= nil
-end
-
 local function place_valid(place)
   if not place then return false end
+  if place.view and view_is_open(place.view) then return place.doc == nil or place.view.doc == place.doc end
   if place.doc and doc_in_core_docs(place.doc) then return true end
   return place.filename and system.get_file_info(place.filename) ~= nil
 end
@@ -213,32 +228,36 @@ function M.is_forward_available()
 end
 
 local function apply_place_to_view(view, place)
-  if view.expand_folds_covering_range then
-    view:expand_folds_covering_range(place.line, place.col, place.line2 or place.line, place.col2 or place.col, "navigation-history")
-  end
-  if place.selection_state and view.set_selection_state then
-    view:set_selection_state(clone_selection_state(place.selection_state))
-  end
-  if view.with_selection_state then
-    view:with_selection_state(function()
-      if place.selection_state and view.doc.set_selection_list then
-        view.doc:set_selection_list(copy_array(place.selection_state.selections), place.selection_state.last_selection or 1,
-          { sanitized = true, take_ownership = true })
-      else
-        view.doc:set_selection(place.line, place.col, place.line2 or place.line, place.col2 or place.col)
-      end
-    end)
-  else
-    view.doc:set_selection(place.line, place.col, place.line2 or place.line, place.col2 or place.col)
+  if view.doc and place.line and place.col then
+    if view.expand_folds_covering_range then
+      view:expand_folds_covering_range(place.line, place.col, place.line2 or place.line, place.col2 or place.col, "navigation-history")
+    end
+    if place.selection_state and view.set_selection_state then
+      view:set_selection_state(clone_selection_state(place.selection_state))
+    end
+    if view.with_selection_state then
+      view:with_selection_state(function()
+        if place.selection_state and view.doc.set_selection_list then
+          view.doc:set_selection_list(copy_array(place.selection_state.selections), place.selection_state.last_selection or 1,
+            { sanitized = true, take_ownership = true })
+        else
+          view.doc:set_selection(place.line, place.col, place.line2 or place.line, place.col2 or place.col)
+        end
+      end)
+    else
+      view.doc:set_selection(place.line, place.col, place.line2 or place.line, place.col2 or place.col)
+    end
   end
   if view.scroll then
     view.scroll.to.x, view.scroll.x = place.scroll_x or 0, place.scroll_x or 0
     view.scroll.to.y, view.scroll.y = place.scroll_y or 0, place.scroll_y or 0
   end
-  if view.scroll_to_make_visible then
-    view:scroll_to_make_visible(place.line, place.col)
-  elseif view.scroll_to_line then
-    view:scroll_to_line(place.line, true, true)
+  if place.line and place.col then
+    if view.scroll_to_make_visible then
+      view:scroll_to_make_visible(place.line, place.col)
+    elseif view.scroll_to_line then
+      view:scroll_to_line(place.line, true, true)
+    end
   end
 end
 
@@ -257,7 +276,7 @@ function M.restore_place(place)
       local node = core.root_panel.root_node:get_node_for_view(view)
       if node then node:set_active_view(view) end
     end
-    if not view or not view.doc then error("could not open navigation target") end
+    if not view then error("could not open navigation target") end
     apply_place_to_view(view, place)
     core.set_active_view(view)
   end, debug.traceback)
@@ -312,6 +331,33 @@ function M.track_command(name, enabled)
   tracked_commands[name] = enabled ~= false or nil
 end
 
+local function record_transition(before, after, reason)
+  if suppress_count > 0 or restoring then return end
+  if before and after and significant_place_change(before, after) then
+    local history = core.navigation_history or M
+    history.record_place(before, { reason = reason })
+  end
+end
+
+local function install_focus_tracking()
+  local wrapped = core.set_active_view
+  if wrapped == core.navigation_history_set_active_view_wrapper then
+    wrapped = core.navigation_history_wrapped_set_active_view or wrapped
+  end
+  core.navigation_history_wrapped_set_active_view = wrapped
+
+  local wrapper = function(view)
+    local history = core.navigation_history or M
+    local before = history.capture_current_place()
+    local result = wrapped(view)
+    local after = history.capture_current_place()
+    record_transition(before, after, "focus")
+    return result
+  end
+  core.navigation_history_set_active_view_wrapper = wrapper
+  core.set_active_view = wrapper
+end
+
 local function install_node_tracking()
   local wrapped = Node.set_active_view
   if wrapped == core.navigation_history_node_set_active_view_wrapper then
@@ -324,9 +370,7 @@ local function install_node_tracking()
     local before = history.capture_current_place()
     local result = wrapped(self, view)
     local after = history.capture_current_place()
-    if before and after and significant_place_change(before, after) then
-      history.record_place(before, { reason = "view-selection" })
-    end
+    record_transition(before, after, "view-selection")
     return result
   end
   core.navigation_history_node_set_active_view_wrapper = wrapper
@@ -346,9 +390,7 @@ local function install_command_tracking()
       local before = history.capture_current_place()
       local result = wrapped(name, ...)
       local after = history.capture_current_place()
-      if result and before and after and significant_place_change(before, after) then
-        history.record_place(before, { reason = "command:" .. tostring(name) })
-      end
+      if result then record_transition(before, after, "command:" .. tostring(name)) end
       return result
     end
     return wrapped(name, ...)
@@ -378,6 +420,7 @@ keymap.add({
 
 core.navigation_history = M
 
+install_focus_tracking()
 install_node_tracking()
 install_command_tracking()
 

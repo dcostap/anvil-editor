@@ -56,6 +56,14 @@ _Avoid_: local symbol search, file symbol search
 A file in Anvil's navigation history, ordered by last visit for returning to previously viewed files.
 _Avoid_: recent tab, file tab history
 
+**Navigation Place**:
+A focusable place the user can return to through Navigation History, including editor locations and tool views with their own cursor or selection.
+_Avoid_: editor-only location, browser page
+
+**Navigation History**:
+The app-level back/forward sequence of Navigation Places used to return through recent focus and location changes.
+_Avoid_: file history, tab history
+
 **Document / Doc**:
 The in-memory editable text for a file or untitled document.
 _Avoid_: Buffer

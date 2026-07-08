@@ -96,38 +96,30 @@ test.describe("IntelliJ-style navigation history", function()
   end)
 
   test.it("uses global back shortcut while file tree is focused", function(context)
-    local first = open_editor(context, "one")
-    local second = open_editor(context, "two")
-    local node = core.root_panel.root_node:get_node_for_view(first)
-
-    node:set_active_view(first)
+    local editor = open_editor(context, "one")
     navigation_history.clear_history()
-    node:set_active_view(second)
-    test.ok(navigation_history.is_back_available())
 
     local filetree = require "plugins.filetree"
     core.set_active_view(filetree)
     test.equal(core.active_view, filetree)
+    test.ok(navigation_history.is_back_available())
 
     test.ok(press_alt_key("left"))
-    test.equal(core.active_view, first)
+    test.equal(core.active_view, editor)
   end)
 
   test.it("uses global forward shortcut while file tree is focused", function(context)
     local first = open_editor(context, "one")
     local second = open_editor(context, "two")
-    local node = core.root_panel.root_node:get_node_for_view(first)
-
-    node:set_active_view(first)
-    navigation_history.clear_history()
-    node:set_active_view(second)
-    test.ok(command.perform("navigation:back"))
-    test.equal(core.active_view, first)
-    test.ok(navigation_history.is_forward_available())
-
     local filetree = require "plugins.filetree"
+
+    core.set_active_view(first)
+    navigation_history.clear_history()
     core.set_active_view(filetree)
+    core.set_active_view(second)
+    test.ok(command.perform("navigation:back"))
     test.equal(core.active_view, filetree)
+    test.ok(navigation_history.is_forward_available())
 
     test.ok(press_alt_key("right"))
     test.equal(core.active_view, second)
