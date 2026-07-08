@@ -85,6 +85,7 @@ local fuzzy_searcher = {
   preview_text_max_bytes = 2 * 1024 * 1024,
   copy_flash_duration = 0.20,
   copy_flash_max_alpha = 115,
+  loading_feedback_delay = 0.20,
 }
 
 local FSView = Widget:extend()
@@ -2286,6 +2287,12 @@ function FSView:new(prefix, opts)
   self.static_mode = opts.static == true
   self.static_results = opts.results or {}
   self.static_status = opts.status or ""
+  self.loading_feedback_generation = 0
+  self.loading_feedback_pending = false
+  self.loading_feedback_status = nil
+  self.everything_loading_feedback_generation = 0
+  self.everything_loading_pending = false
+  self.everything_loading_status = nil
 
   local source_view = core.active_view
   local source_doc = source_view and source_view.doc
@@ -2413,6 +2420,85 @@ function FSView:reset_pagination()
   self.selected = 1
   self.viewport_offset = 1
   self.pending_select_index = nil
+end
+
+function FSView:cancel_deferred_loading_feedback()
+  self.loading_feedback_generation = (self.loading_feedback_generation or 0) + 1
+  self.loading_feedback_pending = false
+  self.loading_feedback_status = nil
+end
+
+function FSView:defer_loading_feedback(status, opts)
+  opts = opts or {}
+  self.loading_feedback_generation = (self.loading_feedback_generation or 0) + 1
+  local gen = self.loading_feedback_generation
+  self.loading_feedback_pending = true
+  self.loading_feedback_status = status
+
+  core.add_thread(function()
+    local delay = fuzzy_searcher.loading_feedback_delay or 0.20
+    local deadline = system.get_time() + math.max(0, delay)
+    while system.get_time() < deadline do
+      if gen ~= self.loading_feedback_generation or active_view ~= self then return end
+      coroutine.yield(math.min(0.02, math.max(0, deadline - system.get_time())))
+    end
+    if gen ~= self.loading_feedback_generation or active_view ~= self then return end
+
+    self.loading_feedback_pending = false
+    if opts.clear_results ~= false then
+      self.results = {}
+      self.hovered_result = nil
+      if opts.reset_selection then
+        self.selected = 1
+        self.viewport_offset = 1
+      else
+        self.selected = common.clamp(self.selected or 1, 1, math.max(1, #(self.results or {})))
+        self.viewport_offset = common.clamp(self.viewport_offset or 1, 1, math.max(1, #(self.results or {})))
+      end
+    end
+    if opts.has_more ~= nil then self.has_more = opts.has_more end
+    self.status = self.loading_feedback_status or status or self.status
+    self.loading_feedback_status = nil
+    self:schedule_update(true)
+  end)
+end
+
+function FSView:set_pending_status(status)
+  if self.loading_feedback_pending then
+    self.loading_feedback_status = status
+  else
+    self.status = status
+    self:schedule_update(true)
+  end
+end
+
+function FSView:cancel_deferred_everything_loading()
+  self.everything_loading_feedback_generation = (self.everything_loading_feedback_generation or 0) + 1
+  self.everything_loading_pending = false
+  self.everything_loading_status = nil
+end
+
+function FSView:defer_everything_loading(status)
+  self.everything_loading_feedback_generation = (self.everything_loading_feedback_generation or 0) + 1
+  local gen = self.everything_loading_feedback_generation
+  self.everything_loading_pending = true
+  self.everything_loading_status = status
+
+  core.add_thread(function()
+    local delay = fuzzy_searcher.loading_feedback_delay or 0.20
+    local deadline = system.get_time() + math.max(0, delay)
+    while system.get_time() < deadline do
+      if gen ~= self.everything_loading_feedback_generation or active_view ~= self then return end
+      coroutine.yield(math.min(0.02, math.max(0, deadline - system.get_time())))
+    end
+    if gen ~= self.everything_loading_feedback_generation or active_view ~= self then return end
+    self.everything_loading_pending = false
+    self.everything_loading = true
+    self.everything_status = self.everything_loading_status or status or self.everything_status
+    self.everything_loading_status = nil
+    self.dirty = true
+    self:schedule_update(true)
+  end)
 end
 
 function FSView:max_result_limit()
@@ -2924,19 +3010,17 @@ function FSView:start_file_search(query, line, reset_selection)
   local roots_label = fuzzy_searcher.project_roots_label()
   local skip_path = self.source_file_path
 
-  self.results = {}
-  self.has_more = false
-  self.hovered_result = nil
-  if reset_selection then
-    self.selected = 1
-    self.viewport_offset = 1
-  end
-  self.status = fuzzy_searcher.files_indexing
+  local loading_status = fuzzy_searcher.files_indexing
     and string.format("Indexing files… %d found — %s", #(fuzzy_searcher.files_cache or {}), roots_label)
     or string.format("Searching %d files…", #(fuzzy_searcher.files_cache or {}))
-  self:schedule_update(true)
+  self:defer_loading_feedback(loading_status, {
+    clear_results = not self.loading_more,
+    reset_selection = reset_selection,
+    has_more = false,
+  })
 
   local function apply_results(out, has_more)
+    self:cancel_deferred_loading_feedback()
     self.results = out
     self.has_more = has_more
     if self.pending_select_index then
@@ -2973,9 +3057,15 @@ function FSView:start_file_search(query, line, reset_selection)
         end
         table.sort(general_matches, function(a, b) return fuzzy_result_better(a, b) end)
         local out, hidden = build_sectioned_file_results(recent_matches, general_matches, self:result_limit(), query, line)
-        apply_results(out, hidden or native_results.has_more)
-        self.status = string.format("%d recent + %d file matches shown%s — %d files indexed — %s",
-          #recent_matches, #general_matches, self.has_more and "+" or "", #(fuzzy_searcher.files_cache or {}), roots_label)
+        local has_more = hidden or native_results.has_more
+        local status = string.format("%d recent + %d file matches shown%s — %d files indexed — %s",
+          #recent_matches, #general_matches, has_more and "+" or "", #(fuzzy_searcher.files_cache or {}), roots_label)
+        if self.loading_feedback_pending and #out == 0 and not has_more then
+          self.loading_feedback_status = status
+          return
+        end
+        apply_results(out, has_more)
+        self.status = status
         self:schedule_update(true)
         return
       end
@@ -2992,15 +3082,23 @@ function FSView:start_file_search(query, line, reset_selection)
     local function publish(final)
       if gen ~= file_search_generation or active_view ~= self then return false end
       local out, hidden = build_sectioned_file_results(recent_matches, general_matches, self:result_limit(), query, line)
-      apply_results(out, hidden or matched_general > #general_matches)
+      local has_more = hidden or matched_general > #general_matches
+      local status
       if final then
         local total_matches = #recent_matches + matched_general
-        self.status = fuzzy_searcher.files_indexing
+        status = fuzzy_searcher.files_indexing
           and string.format("%d file matches — still indexing %d files — %s", total_matches, #(fuzzy_searcher.files_cache or {}), roots_label)
           or string.format("%d file matches — %d files indexed — %s", total_matches, #items, roots_label)
       else
-        self.status = string.format("%d file matches — scanning %d/%d…", #recent_matches + matched_general, scanned, #items)
+        status = string.format("%d file matches — scanning %d/%d…", #recent_matches + matched_general, scanned, #items)
       end
+      if final and self.loading_feedback_pending and #out == 0 and not has_more then
+        self.loading_feedback_status = status
+        last_publish = system.get_time()
+        return true
+      end
+      apply_results(out, has_more)
+      self.status = status
       self:schedule_update(true)
       last_publish = system.get_time()
       return true
@@ -3038,6 +3136,7 @@ end
 function FSView:start_everything_project_search(query, offset, append)
   query = trim_query(query)
   if query == "" then
+    self:cancel_deferred_everything_loading()
     self.everything_results = {}
     self.everything_total = 0
     self.everything_has_more = false
@@ -3055,16 +3154,16 @@ function FSView:start_everything_project_search(query, offset, append)
   local gen = everything.search_generation
   local count = fuzzy_searcher.everything_page_size or 80
   offset = offset or 0
-  self.everything_loading = true
-  self.everything_status = offset > 0 and "Loading more Everything results…" or "Searching Everything…"
+  self.everything_loading = false
+  self:defer_everything_loading(offset > 0 and "Loading more Everything results…" or "Searching Everything…")
   local params = everything_project_search_params(query, count, offset)
   core.log_quiet("Fuzzy Everything: searching query=%q everything_search=%q offset=%d count=%d append=%s", query, params.search, offset, count, tostring(append))
-  self:schedule_update(true)
 
   http.get(everything_endpoint(), params, {
     timeout = 2,
     on_done = function(ok, _err, data)
       if gen ~= everything.search_generation or active_view ~= self then return end
+      self:cancel_deferred_everything_loading()
       self.everything_loading = false
       self.loading_more = false
       if not ok or type(data) ~= "table" then
@@ -3100,6 +3199,7 @@ end
 function FSView:start_everything_file_search(query, offset, append)
   query = trim_query(query)
   if query == "" then
+    self:cancel_deferred_everything_loading()
     self.everything_results = {}
     self.everything_total = 0
     self.everything_has_more = false
@@ -3117,16 +3217,16 @@ function FSView:start_everything_file_search(query, offset, append)
   local gen = everything.search_generation
   local count = fuzzy_searcher.everything_page_size or 80
   offset = offset or 0
-  self.everything_loading = true
-  self.everything_status = offset > 0 and "Loading more Everything files…" or "Searching Everything files…"
+  self.everything_loading = false
+  self:defer_everything_loading(offset > 0 and "Loading more Everything files…" or "Searching Everything files…")
   local params = everything_file_search_params(query, count, offset)
   core.log_quiet("Fuzzy Everything files: searching query=%q everything_search=%q offset=%d count=%d append=%s", query, params.search, offset, count, tostring(append))
-  self:schedule_update(true)
 
   http.get(everything_endpoint(), params, {
     timeout = 2,
     on_done = function(ok, _err, data)
       if gen ~= everything.search_generation or active_view ~= self then return end
+      self:cancel_deferred_everything_loading()
       self.everything_loading = false
       self.loading_more = false
       if not ok or type(data) ~= "table" then
@@ -3260,9 +3360,11 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
     kill_file_search()
     local file_query = base
     if trim_query(file_query) == "" then
+      self:cancel_deferred_everything_loading()
       self.everything_results = {}
       self.everything_total = 0
       self.everything_has_more = false
+      self.everything_loading = false
       self.everything_status = "Type a file search to query Everything"
       self.everything_query_key = nil
     else
@@ -3275,8 +3377,12 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
           self:start_everything_file_search(file_query, #(self.everything_results or {}), true)
         end
       elseif everything.state == "probing" then
+        self:cancel_deferred_everything_loading()
+        self.everything_loading = false
         self.everything_status = "Checking Everything HTTP server…"
       else
+        self:cancel_deferred_everything_loading()
+        self.everything_loading = false
         self.everything_status = "Everything is not available. Enable Everything's HTTP server on localhost:54367."
       end
     end
@@ -3298,11 +3404,16 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
         elseif force_refresh and self.loading_more and self.everything_has_more and not self.everything_loading then
           self:start_everything_project_search(project_query, #(self.everything_results or {}), true)
         end
+      else
+        self:cancel_deferred_everything_loading()
+        self.everything_loading = false
       end
     else
+      self:cancel_deferred_everything_loading()
       self.everything_results = {}
       self.everything_total = 0
       self.everything_has_more = false
+      self.everything_loading = false
       self.everything_status = ""
       self.everything_query_key = nil
     end
@@ -3320,6 +3431,8 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
     if async then return end
     kill_file_search()
   end
+
+  self:cancel_deferred_loading_feedback()
 
   if mode == "@@" then
     self.status = self.everything_status or ""
@@ -3442,16 +3555,13 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
     return table.concat(names, "/")
   end
 
-  if not preserve_results then
-    self.results = {}
-    self.selected = 1
-    self.viewport_offset = 1
-    self.hovered_result = nil
-  end
-  self.has_more = true
-  self.status = exact_results and string.format("Searching '%s'…", jobs_label())
+  local loading_status = exact_results and string.format("Searching '%s'…", jobs_label())
     or string.format("Expanding fuzzy text search from '%s'…", jobs_label())
-  self:schedule_update(true)
+  self:defer_loading_feedback(loading_status, {
+    clear_results = not preserve_results,
+    reset_selection = not preserve_results,
+    has_more = true,
+  })
 
   core.add_thread(function()
     local base_query = base:sub(1, 1) == ">" and "" or base
@@ -3592,8 +3702,32 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
         end
       end
 
+      local has_more = #candidates > limit or running or truncated
+      local fuzzy_count = #candidates
+      local status
+      if exact_results then
+        if final then
+          status = truncated
+            and string.format("%d exact matches — limited scan from '%s'", fuzzy_count, jobs_label())
+            or string.format("%d exact matches", fuzzy_count)
+        else
+          status = string.format("%d exact matches — scanning '%s'… %d lines", fuzzy_count, jobs_label(), scanned)
+        end
+      elseif final then
+        status = truncated
+          and string.format("%d fuzzy matches — limited scan from '%s'", fuzzy_count, jobs_label())
+          or string.format("%d fuzzy matches", fuzzy_count)
+      else
+        status = string.format("%d fuzzy matches — scanning '%s'… %d lines", fuzzy_count, jobs_label(), scanned)
+      end
+      if final and self.loading_feedback_pending and #out == 0 and not has_more then
+        self.loading_feedback_status = status
+        return true
+      end
+
+      self:cancel_deferred_loading_feedback()
       self.results = out
-      self.has_more = #candidates > limit or running or truncated
+      self.has_more = has_more
       if self.pending_select_index then
         self.selected = common.clamp(self.pending_select_index, 1, math.max(1, #out))
         self.pending_select_index = nil
@@ -3602,23 +3736,7 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
       end
       self.viewport_offset = common.clamp(self.viewport_offset, 1, math.max(1, #out))
       self:ensure_selection_visible()
-
-      local fuzzy_count = #candidates
-      if exact_results then
-        if final then
-          self.status = truncated
-            and string.format("%d exact matches — limited scan from '%s'", fuzzy_count, jobs_label())
-            or string.format("%d exact matches", fuzzy_count)
-        else
-          self.status = string.format("%d exact matches — scanning '%s'… %d lines", fuzzy_count, jobs_label(), scanned)
-        end
-      elseif final then
-        self.status = truncated
-          and string.format("%d fuzzy matches — limited scan from '%s'", fuzzy_count, jobs_label())
-          or string.format("%d fuzzy matches", fuzzy_count)
-      else
-        self.status = string.format("%d fuzzy matches — scanning '%s'… %d lines", fuzzy_count, jobs_label(), scanned)
-      end
+      self.status = status
       self:schedule_update(true)
       last_publish = system.get_time()
       published_candidate_count = #candidates
@@ -3669,22 +3787,39 @@ function FSView:start_grep(base, line, grep)
   local preserve_results = self.loading_more
   self.loading_more = false
   self.loaded_limit = self:max_result_limit()
-  if not preserve_results then
+  if grep == "" then
+    self:cancel_deferred_loading_feedback()
     self.results = {}
     self.selected = 1
     self.viewport_offset = 1
     self.hovered_result = nil
+    self.has_more = false
+    self.status = "Type text after # to search inside files"
+    self:schedule_update(true)
+    return
   end
-  self.has_more = false
-  self.status = grep == "" and "Type text after # to search inside files" or "Searching exact text matches…"
-  if grep == "" then return end
+  self:defer_loading_feedback("Searching exact text matches…", {
+    clear_results = not preserve_results,
+    reset_selection = not preserve_results,
+    has_more = false,
+  })
 
   local limit = self:max_result_limit()
   local roots = project_paths.search_roots("grep")
   local scope = nil
   if base ~= "" or line then
     scope = build_scope(base, line, 200)
-    if #scope == 0 then self.status = "No files in scope"; return end
+    if #scope == 0 then
+      self:cancel_deferred_loading_feedback()
+      self.results = {}
+      self.selected = 1
+      self.viewport_offset = 1
+      self.hovered_result = nil
+      self.has_more = false
+      self.status = "No files in scope"
+      self:schedule_update(true)
+      return
+    end
   end
 
   local exact_query = quoted_exact_query(grep)
@@ -3697,19 +3832,25 @@ function FSView:start_grep(base, line, grep)
     return
   end
 
-  if preserve_results then
-    self.results = {}
-    self.selected = 1
-    self.viewport_offset = 1
-    self.hovered_result = nil
-  end
-
   core.add_thread(function()
+    local results_started = false
+    local function begin_results()
+      if results_started then return end
+      results_started = true
+      self:cancel_deferred_loading_feedback()
+      self.results = {}
+      self.selected = 1
+      self.viewport_offset = 1
+      self.hovered_result = nil
+      self.has_more = false
+    end
+
     local function add_result(r, seen, exact)
       if gen ~= grep_generation or active_view ~= self then return false end
       if line and not line_exists(r.file, line) then return true end
       local key = tostring(r.abs_path or r.file) .. ":" .. r.line .. ":" .. r.col
       if seen[key] then return true end
+      begin_results()
       if #self.results >= limit then
         self.has_more = true
         self:schedule_update(true)
@@ -3764,6 +3905,11 @@ function FSView:start_grep(base, line, grep)
     end
 
     if gen ~= grep_generation or active_view ~= self then return end
+    if not results_started and self.loading_feedback_pending then
+      self.loading_feedback_status = "0 exact matches"
+      return
+    end
+    if not results_started then begin_results() end
     self.status = string.format("%d exact matches", #self.results)
     self:schedule_update(true)
   end)
@@ -3835,6 +3981,8 @@ end
 
 local function set_symbol_results(view, query, results, source_label, status, reason, limit, opts)
   opts = opts or {}
+  view:cancel_deferred_loading_feedback()
+  view.has_more = false
   local out = {}
   for i, item in ipairs(results or {}) do
     if i > limit then view.has_more = true; break end
@@ -3896,16 +4044,24 @@ function FSView:start_symbol_search(query, reset_selection)
   local gen = symbol_generation
   local limit = self:max_result_limit()
   query = trim_query(query)
-  self.results = {}
-  self.has_more = false
-  self.hovered_result = nil
-  if reset_selection then
-    self.selected = 1
-    self.viewport_offset = 1
+  if query == "" then
+    self:cancel_deferred_loading_feedback()
+    self.results = {}
+    self.has_more = false
+    self.hovered_result = nil
+    if reset_selection then
+      self.selected = 1
+      self.viewport_offset = 1
+    end
+    self.status = "Type after $ to find Project symbols"
+    self:schedule_update(true)
+    return
   end
-  self.status = query == "" and "Type after $ to find Project symbols" or "Finding Project symbols…"
-  self:schedule_update(true)
-  if query == "" then return end
+  self:defer_loading_feedback("Finding Project symbols…", {
+    clear_results = true,
+    reset_selection = reset_selection,
+    has_more = false,
+  })
 
   core.add_thread(function()
     local results, reason, status, source_label
@@ -3931,8 +4087,7 @@ function FSView:start_symbol_search(query, reset_selection)
           results, reason, status, meta = ts_symbols.workspace_symbols(query, { force = false, limit = limit + 1, allow_stale = false })
         end
         if async_request then
-          self.status = "Searching Project symbols…"
-          self:schedule_update(true)
+          self:set_pending_status("Searching Project symbols…")
           while not async_request.done and system.get_time() < deadline do
             if gen ~= symbol_generation or active_view ~= self then
               async_request:cancel()
@@ -3967,8 +4122,7 @@ function FSView:start_symbol_search(query, reset_selection)
         elseif status == "unavailable" then
           break
         end
-        self.status = project_symbol_pending_status(reason)
-        self:schedule_update(true)
+        self:set_pending_status(project_symbol_pending_status(reason))
         coroutine.yield(0.05)
       end
       source_label = "Tree-sitter"
@@ -3976,8 +4130,7 @@ function FSView:start_symbol_search(query, reset_selection)
 
     if status ~= "fresh" and status ~= "stale" and lsp_enabled() then
       core.log_quiet("Fuzzy Project symbols: Tree-sitter unavailable for %q (%s); trying LSP", tostring(query), tostring(reason))
-      self.status = "Searching LSP Project symbols…"
-      self:schedule_update(true)
+      self:set_pending_status("Searching LSP Project symbols…")
       local lsp_provider = require "core.lsp.provider"
       local deadline = system.get_time() + ((config.lsp and config.lsp.navigation_timeout) or 10)
       results, reason, status = lsp_provider.workspace_symbols(query, { force = true })
@@ -3993,6 +4146,7 @@ function FSView:start_symbol_search(query, reset_selection)
     if status == "fresh" or status == "stale" then
       set_symbol_results(self, query, results, source_label, status, reason, limit, { scope = "project" })
     else
+      self:cancel_deferred_loading_feedback()
       self.results = {}
       self.status = reason and ("Project symbols unavailable: " .. tostring(reason)) or "Project symbols unavailable"
       self:schedule_update(true)
@@ -4006,15 +4160,11 @@ function FSView:start_current_document_symbol_search(query, reset_selection)
   local gen = symbol_generation
   local limit = self:max_result_limit()
   query = trim_query(query)
-  self.results = {}
-  self.has_more = false
-  self.hovered_result = nil
-  if reset_selection then
-    self.selected = 1
-    self.viewport_offset = 1
-  end
-  self.status = "Finding current Document symbols…"
-  self:schedule_update(true)
+  self:defer_loading_feedback("Finding current Document symbols…", {
+    clear_results = true,
+    reset_selection = reset_selection,
+    has_more = false,
+  })
 
   core.add_thread(function()
     local doc = self.source_doc or (self.source_view and self.source_view.doc) or (core.active_view and core.active_view.doc)
@@ -4033,6 +4183,8 @@ function FSView:start_current_document_symbol_search(query, reset_selection)
       set_symbol_results(self, query, results, "current Document", status, reason, limit, { scope = "document", doc = doc })
       if #self.results == 0 and reason then self.status = "No current Document symbols: " .. tostring(reason) end
     else
+      self:cancel_deferred_loading_feedback()
+      self.results = {}
       self.status = reason or "No current Document symbols"
       self:schedule_update(true)
     end
@@ -4040,6 +4192,7 @@ function FSView:start_current_document_symbol_search(query, reset_selection)
 end
 
 function FSView:refresh_static()
+  self:cancel_deferred_loading_feedback()
   self.results = self.static_results or {}
   self.has_more = false
   self.hovered_result = nil
@@ -4159,6 +4312,8 @@ end
 function FSView:close()
   fuzzy_focus_log("close", self)
   self:record_prompt_history()
+  self:cancel_deferred_loading_feedback()
+  self:cancel_deferred_everything_loading()
   kill_file_search()
   kill_grep()
   kill_fuzzy_grep_jobs()
