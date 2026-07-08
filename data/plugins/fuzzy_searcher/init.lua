@@ -3917,7 +3917,16 @@ function FSView:start_symbol_search(query, reset_selection)
         coroutine.yield(0.05)
         results, reason, status = lsp_provider.workspace_symbols(query)
       end
-      if status == "fresh" or status == "stale" then source_label = "LSP" end
+      if status == "fresh" or status == "stale" then
+        if #(results or {}) > 0 then
+          source_label = "LSP"
+        else
+          core.log_quiet("Fuzzy Project symbols: LSP returned no symbols for %q; falling back to Tree-sitter", tostring(query))
+          status = "unavailable"
+          reason = "lsp-empty"
+          source_label = nil
+        end
+      end
     else
       status = "unavailable"
       reason = "LSP disabled"
