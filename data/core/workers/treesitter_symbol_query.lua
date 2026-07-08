@@ -34,10 +34,21 @@ local function load_payload_artifact(payload)
   return artifact_payload
 end
 
-local function append_index_artifact_symbols(out, artifact)
+local function append_index_artifact_symbols(out, artifact, diagnostics)
+  if artifact and artifact.chunks then
+    for _, chunk in ipairs(artifact.chunks) do append_index_artifact_symbols(out, chunk, diagnostics) end
+    return
+  end
   local path = artifact and artifact.path
   if not path then return end
-  local artifact_payload = load_lua_payload(path, false)
+  local artifact_payload, err = load_lua_payload(path, false)
+  if not artifact_payload then
+    diagnostics.artifact_load_errors = (diagnostics.artifact_load_errors or 0) + 1
+    diagnostics.last_artifact_load_error = err or "artifact-load-failed"
+    diagnostics.last_artifact_load_path = path
+    return
+  end
+  diagnostics.artifacts_loaded = (diagnostics.artifacts_loaded or 0) + 1
   for _, symbol in ipairs((artifact_payload and artifact_payload.symbols) or {}) do out[#out + 1] = symbol end
 end
 
@@ -62,8 +73,12 @@ function worker.run(payload, ctx)
   local symbols = payload.symbols or {}
   local suppressed = {}
   for _, path in ipairs(payload.suppressed_paths or {}) do suppressed[path] = true end
+  local diagnostics = {
+    artifacts_loaded = 0,
+    artifact_load_errors = 0,
+  }
   local matched = {}
-  for _, artifact in ipairs(payload.index_artifacts or {}) do append_index_artifact_symbols(matched, artifact) end
+  for _, artifact in ipairs(payload.index_artifacts or {}) do append_index_artifact_symbols(matched, artifact, diagnostics) end
   for _, symbol in ipairs(symbols) do matched[#matched + 1] = symbol end
   for _, symbol in ipairs(payload.extra_symbols or {}) do matched[#matched + 1] = symbol end
   if next(suppressed) ~= nil then
@@ -95,21 +110,21 @@ function worker.run(payload, ctx)
     payload = {
       symbols = out,
       has_more = #matched > #out,
-      diagnostics = {
+      diagnostics = common.merge(diagnostics, {
         input_symbols = input_count,
         matched_symbols = #matched,
         returned_symbols = #out,
         query_ms = (now() - started) * 1000,
-      },
+      }),
     },
   })
   ctx.send({
     type = "final",
     payload = {
-      diagnostics = {
+      diagnostics = common.merge(diagnostics, {
         input_symbols = input_count,
         duration_ms = (now() - started) * 1000,
-      },
+      }),
     },
   })
 end

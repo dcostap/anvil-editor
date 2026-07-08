@@ -2,6 +2,8 @@ local common = require "core.common"
 local test = require "core.test"
 local registry = require "core.treesitter.registry"
 local worker_pool = require "core.worker_pool"
+local symbol_query_worker = require "core.workers.treesitter_symbol_query"
+local usage_query_worker = require "core.workers.treesitter_usage_query"
 local native = require "treesitter"
 
 local function mkdir(path)
@@ -377,6 +379,139 @@ int main(void) { return helper(); }
     test.equal(#(usages_by_name.Alpha or {}), 1)
     test.equal(#(usages_by_name.Beta or {}), 1)
     test.equal(system.get_file_info(artifact_path), nil)
+    common.rm(artifact_dir, true)
+  end)
+
+  test.test("writes distinct persistent query artifacts for concurrent aggregate jobs", function()
+    local artifact_dir = mkdir(USERDIR .. PATHSEP .. "worker-project-query-artifact-collisions")
+    local pool = worker_pool.new({ name = "treesitter-project-query-artifact-collision-test", worker_count = 2 })
+    pools[#pools + 1] = pool
+    local finals = {}
+
+    local function submit(name)
+      pool:submit({
+        kind = "treesitter_project_aggregate",
+        generation = 1,
+        project_paths_generation = 1,
+        payload = {
+          files = {
+            {
+              path = name .. ".c",
+              relpath = name .. ".c",
+              symbols = {
+                { name = name, path = name .. ".c", relpath = name .. ".c", start_line = 1 },
+              },
+              usages_by_name = {},
+              usage_count = 0,
+              usage_complete = true,
+            },
+          },
+          chunk_records = 16,
+          query_artifact_dir = artifact_dir,
+        },
+        on_result = function(message)
+          if message.type == "final" then finals[name] = message.payload end
+        end,
+        on_complete = function(message) finals[name] = finals[name] or message.payload or {} end,
+      })
+    end
+
+    submit("AlphaArtifact")
+    submit("BetaArtifact")
+
+    test.ok(drain_until(pool, function() return finals.AlphaArtifact and finals.BetaArtifact end))
+    local alpha_path = finals.AlphaArtifact.symbol_query_artifact and finals.AlphaArtifact.symbol_query_artifact.path
+    local beta_path = finals.BetaArtifact.symbol_query_artifact and finals.BetaArtifact.symbol_query_artifact.path
+    test.ok(alpha_path, "missing Alpha artifact")
+    test.ok(beta_path, "missing Beta artifact")
+    test.not_equal(alpha_path, beta_path)
+
+    local alpha_payload = assert(loadfile(alpha_path))()
+    local beta_payload = assert(loadfile(beta_path))()
+    test.equal(alpha_payload.symbols[1].name, "AlphaArtifact")
+    test.equal(beta_payload.symbols[1].name, "BetaArtifact")
+    common.rm(artifact_dir, true)
+  end)
+
+  test.test("writes chunked persistent query artifacts that query workers can read", function()
+    local artifact_dir = mkdir(USERDIR .. PATHSEP .. "worker-project-query-artifact-chunks")
+    local pool = worker_pool.new({ name = "treesitter-project-query-artifact-chunk-test", worker_count = 1 })
+    pools[#pools + 1] = pool
+    local final
+
+    pool:submit({
+      kind = "treesitter_project_aggregate",
+      generation = 1,
+      project_paths_generation = 1,
+      payload = {
+        files = {
+          {
+            path = "one.c",
+            relpath = "one.c",
+            symbols = {
+              { name = "alpha", text = "alpha", search_text = "alpha", path = "one.c", relpath = "one.c", start_line = 1 },
+              { name = "parse", text = "parse", search_text = "parse", path = "one.c", relpath = "one.c", start_line = 2 },
+            },
+            usages_by_name = {
+              parse = {
+                { name = "parse", path = "one.c", relpath = "one.c", start_line = 3, start_col = 4 },
+              },
+            },
+            usage_complete = true,
+          },
+          {
+            path = "two.c",
+            relpath = "two.c",
+            symbols = {
+              { name = "parse_more", text = "parse_more", search_text = "parse_more", path = "two.c", relpath = "two.c", start_line = 1 },
+            },
+            usages_by_name = {
+              parse = {
+                { name = "parse", path = "two.c", relpath = "two.c", start_line = 4, start_col = 5 },
+              },
+            },
+            usage_complete = true,
+          },
+        },
+        chunk_records = 16,
+        query_artifact_chunk_records = 1,
+        query_artifact_dir = artifact_dir,
+      },
+      on_result = function(message)
+        if message.type == "final" then final = message.payload end
+      end,
+      on_complete = function(message) final = final or message.payload or {} end,
+    })
+
+    test.ok(drain_until(pool, function() return final ~= nil end))
+    test.ok(final.symbol_query_artifact and final.symbol_query_artifact.chunks, "expected chunked symbol artifact")
+    test.equal(#final.symbol_query_artifact.chunks, 3)
+    test.ok(final.usage_query_artifact and final.usage_query_artifact.chunks, "expected chunked usage artifact")
+    test.equal(#final.usage_query_artifact.chunks, 2)
+
+    local symbol_messages = {}
+    symbol_query_worker.run({
+      query = "parse",
+      limit = 10,
+      index_artifacts = { final.symbol_query_artifact },
+    }, { send = function(message) symbol_messages[#symbol_messages + 1] = message; return true end })
+    local symbol_result = symbol_messages[1] and symbol_messages[1].payload
+    test.equal(symbol_result.diagnostics.artifact_load_errors, 0)
+    test.equal(symbol_result.diagnostics.artifacts_loaded, 3)
+    test.equal(symbol_result.diagnostics.matched_symbols, 2)
+    test.equal(symbol_result.symbols[1].name, "parse")
+
+    local usage_messages = {}
+    usage_query_worker.run({
+      name = "parse",
+      limit = 10,
+      index_artifacts = { final.usage_query_artifact },
+    }, { send = function(message) usage_messages[#usage_messages + 1] = message; return true end })
+    local usage_result = usage_messages[1] and usage_messages[1].payload
+    test.equal(usage_result.diagnostics.artifact_load_errors, 0)
+    test.equal(usage_result.diagnostics.artifacts_loaded, 2)
+    test.equal(usage_result.diagnostics.matched_usages, 2)
+
     common.rm(artifact_dir, true)
   end)
 

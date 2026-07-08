@@ -22,15 +22,17 @@ end
 
 local artifact_sequence = 0
 
-local function write_lua_payload(dir, prefix, payload)
+local function write_lua_payload(dir, prefix, payload, ctx)
   if not dir or dir == "" then return nil, "missing-dir" end
   local ok, err = common.mkdirp(dir)
   if not ok and err ~= "path exists" then return nil, err or "mkdir-failed" end
   artifact_sequence = artifact_sequence + 1
   local path = common.normalize_path(dir .. PATHSEP .. string.format(
-    "%s-%s-%06d.lua",
+    "%s-%s-w%s-j%s-%06d.lua",
     tostring(prefix or "treesitter-query"),
     tostring(system and system.get_process_id and system.get_process_id() or 0),
+    tostring(ctx and ctx.worker_id or 0),
+    tostring(ctx and ctx.job_id or 0),
     artifact_sequence
   ))
   local fp, open_err = io.open(path, "wb")
@@ -43,6 +45,84 @@ local function write_lua_payload(dir, prefix, payload)
     return nil, write_err or close_err or "write-failed"
   end
   return { path = path, bytes = #content }
+end
+
+local function combined_chunk_artifact(chunks, count, bytes)
+  if #chunks == 1 then
+    chunks[1].count = count
+    return chunks[1]
+  end
+  return {
+    chunks = chunks,
+    count = count,
+    bytes = bytes,
+    chunked = true,
+  }
+end
+
+local function write_lua_array_chunks(dir, prefix, field, items, chunk_records, ctx)
+  chunk_records = math.max(1, math.floor(tonumber(chunk_records) or DEFAULT_CHUNK_RECORDS))
+  local chunks = {}
+  local total_bytes = 0
+  for i = 1, math.max(1, #items), chunk_records do
+    local chunk = {}
+    if #items > 0 then
+      for j = i, math.min(#items, i + chunk_records - 1) do chunk[#chunk + 1] = items[j] end
+    end
+    local payload = { [field] = chunk }
+    local artifact, err = write_lua_payload(dir, prefix, payload, ctx)
+    if not artifact then return nil, err end
+    chunks[#chunks + 1] = artifact
+    total_bytes = total_bytes + (artifact.bytes or 0)
+    if #items == 0 then break end
+  end
+  return combined_chunk_artifact(chunks, #items, total_bytes)
+end
+
+local function write_lua_usages_by_name_chunks(dir, prefix, usages_by_name, usage_count, chunk_records, ctx)
+  chunk_records = math.max(1, math.floor(tonumber(chunk_records) or DEFAULT_CHUNK_RECORDS))
+  local chunks = {}
+  local total_bytes = 0
+  local current = {}
+  local records = 0
+
+  local function flush(force)
+    if records == 0 and not force then return true end
+    local artifact, err = write_lua_payload(dir, prefix, { usages_by_name = current }, ctx)
+    if not artifact then return nil, err end
+    chunks[#chunks + 1] = artifact
+    total_bytes = total_bytes + (artifact.bytes or 0)
+    current = {}
+    records = 0
+    return true
+  end
+
+  local names = {}
+  for name in pairs(usages_by_name or {}) do names[#names + 1] = name end
+  table.sort(names)
+  if #names == 0 then
+    local ok, err = flush(true)
+    if not ok then return nil, err end
+  else
+    for _, name in ipairs(names) do
+      for _, usage in ipairs(usages_by_name[name] or {}) do
+        local out = current[name]
+        if not out then
+          out = {}
+          current[name] = out
+        end
+        out[#out + 1] = usage
+        records = records + 1
+        if records >= chunk_records then
+          local ok, err = flush(false)
+          if not ok then return nil, err end
+        end
+      end
+    end
+    local ok, err = flush(false)
+    if not ok then return nil, err end
+  end
+  return combined_chunk_artifact(chunks, usage_count or 0, total_bytes)
 end
 
 local function load_lua_payload(path)
@@ -163,6 +243,7 @@ function worker.run(payload, ctx)
   local include_usages = payload.include_usages ~= false
   local usage_cap = tonumber(payload.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP) or DEFAULT_PROJECT_USAGE_CAP
   local chunk_records = math.max(1, math.floor(tonumber(payload.chunk_records or DEFAULT_CHUNK_RECORDS) or DEFAULT_CHUNK_RECORDS))
+  local query_artifact_chunk_records = math.max(1, math.floor(tonumber(payload.query_artifact_chunk_records or chunk_records) or chunk_records))
   local aggregate = {
     symbols = {},
     usages_by_name = {},
@@ -220,9 +301,14 @@ function worker.run(payload, ctx)
       compact_symbols[i] = symbol
       symbol.search_text = tostring(symbol.search_text or symbol.text or symbol.name or "")
     end
-    local artifact, artifact_err = write_lua_payload(payload.query_artifact_dir, "treesitter-symbols-index", {
-      symbols = compact_symbols,
-    })
+    local artifact, artifact_err = write_lua_array_chunks(
+      payload.query_artifact_dir,
+      "treesitter-symbols-index",
+      "symbols",
+      compact_symbols,
+      query_artifact_chunk_records,
+      ctx
+    )
     diagnostics.symbol_query_artifact_ms = elapsed_ms(artifact_started)
     if artifact then
       symbol_query_artifact = artifact
@@ -232,9 +318,14 @@ function worker.run(payload, ctx)
     end
 
     local usage_artifact_started = now()
-    local usage_artifact, usage_artifact_err = write_lua_payload(payload.query_artifact_dir, "treesitter-usages-index", {
-      usages_by_name = aggregate.usages_by_name,
-    })
+    local usage_artifact, usage_artifact_err = write_lua_usages_by_name_chunks(
+      payload.query_artifact_dir,
+      "treesitter-usages-index",
+      aggregate.usages_by_name,
+      aggregate.usage_count,
+      query_artifact_chunk_records,
+      ctx
+    )
     diagnostics.usage_query_artifact_ms = elapsed_ms(usage_artifact_started)
     if usage_artifact then
       usage_query_artifact = usage_artifact

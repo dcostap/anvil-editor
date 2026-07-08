@@ -1333,7 +1333,7 @@ local function symbol_query_artifact_key(index, kind)
 end
 
 local function store_symbol_query_artifact(index, kind, artifact)
-  if not (index and artifact and artifact.path) then return end
+  if not (index and artifact and (artifact.path or artifact.chunks)) then return end
   local key, project_paths_generation = symbol_query_artifact_key(index, kind or "symbols")
   index.query_artifacts = index.query_artifacts or {}
   artifact.generation = index.generation
@@ -1348,7 +1348,7 @@ local function usage_query_artifact_key(index)
 end
 
 local function store_usage_query_artifact(index, artifact)
-  if not (index and artifact and artifact.path) then return end
+  if not (index and artifact and (artifact.path or artifact.chunks)) then return end
   local key, project_paths_generation = usage_query_artifact_key(index)
   index.query_artifacts = index.query_artifacts or {}
   artifact.generation = index.generation
@@ -1373,6 +1373,7 @@ local function submit_worker_aggregate(index, run, message, on_done)
       include_usages = run.phase ~= "symbols",
       project_usage_cap = index.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP,
       chunk_records = (run.opts and run.opts.aggregate_chunk_records) or DEFAULT_AGGREGATE_CHUNK_RECORDS,
+      query_artifact_chunk_records = (run.opts and run.opts.query_artifact_chunk_records) or DEFAULT_AGGREGATE_CHUNK_RECORDS,
       remove_artifacts = true,
       query_artifact_dir = default_query_artifact_dir(),
     },
@@ -1560,13 +1561,15 @@ local function write_query_artifact(kind, payload, opts)
 end
 
 local function cleanup_query_artifact(artifact)
-  if artifact and artifact.path then pcall(os.remove, artifact.path) end
+  if not artifact then return end
+  if artifact.path then pcall(os.remove, artifact.path) end
+  for _, chunk in ipairs(artifact.chunks or {}) do cleanup_query_artifact(chunk) end
 end
 
 cleanup_index_query_artifacts = function(index)
   if not index then return end
   for _, artifact in pairs(index.query_artifacts or {}) do
-    if type(artifact) == "table" and artifact.path then pcall(os.remove, artifact.path) end
+    if type(artifact) == "table" then cleanup_query_artifact(artifact) end
   end
   index.query_artifacts = {}
 end
@@ -1576,7 +1579,15 @@ invalidate_index_query_artifacts = function(index)
 end
 
 local function persistent_query_artifact_path_exists(artifact)
-  return artifact and artifact.path and system.get_file_info(artifact.path) ~= nil
+  if not artifact then return false end
+  if artifact.chunks then
+    if #artifact.chunks == 0 then return false end
+    for _, chunk in ipairs(artifact.chunks) do
+      if not persistent_query_artifact_path_exists(chunk) then return false end
+    end
+    return true
+  end
+  return artifact.path and system.get_file_info(artifact.path) ~= nil
 end
 
 local function make_index_payload(index, opts, phase)
@@ -2598,7 +2609,12 @@ function symbol_index.workspace_symbols_async(query, opts)
       cleanup_query_artifact(request.query_artifact)
       request.query_artifact = nil
       local stale_reason = async_snapshot_stale_reason(meta)
-      if not stale_reason then
+      local load_errors = request.diagnostics and tonumber(request.diagnostics.artifact_load_errors or 0) or 0
+      if load_errors > 0 then
+        request.status = "unavailable"
+        request.reason = request.diagnostics.last_artifact_load_error or "artifact-load-failed"
+        request.results = nil
+      elseif not stale_reason then
         request.status = request.source_status or "fresh"
       else
         request.status = "stale-cancelled"
@@ -2764,7 +2780,12 @@ function symbol_index.workspace_usages_async(name, opts)
       cleanup_query_artifact(request.query_artifact)
       request.query_artifact = nil
       local stale_reason = async_snapshot_stale_reason(meta)
-      if not stale_reason then
+      local load_errors = request.diagnostics and tonumber(request.diagnostics.artifact_load_errors or 0) or 0
+      if load_errors > 0 then
+        request.status = "unavailable"
+        request.reason = request.diagnostics.last_artifact_load_error or "artifact-load-failed"
+        request.results = nil
+      elseif not stale_reason then
         request.status = request.source_status or "fresh"
       else
         request.status = "stale-cancelled"
