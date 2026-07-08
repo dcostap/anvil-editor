@@ -1976,6 +1976,10 @@ keymap.add {
   ["escape"]       = "autocomplete:cancel",
 }
 
+keymap.add_direct {
+  ["ctrl+space"] = "autocomplete:trigger",
+}
+
 autocomplete._test = {
   code_symbol_chunk_query = code_symbol_chunk_query,
   code_symbol_chunk_match_score = code_symbol_chunk_match_score,
