@@ -1,7 +1,6 @@
 #include "api.h"
 #include "../fuzzy.h"
 
-#include <ctype.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -221,7 +220,7 @@ static int match_text(lua_State *L, bool as_table) {
 
   char *lower = (char *)malloc(text_len + 1);
   if (!lower) luaL_error(L, "out of memory");
-  for (size_t i = 0; i < text_len; ++i) lower[i] = (char)tolower((unsigned char)text[i]);
+  for (size_t i = 0; i < text_len; ++i) lower[i] = fuzzy_normalize_match_char(mode, text[i]);
   lower[text_len] = '\0';
 
   uint32_t basename_start = 0;
@@ -249,7 +248,7 @@ static int match_text(lua_State *L, bool as_table) {
   lua_setfield(L, -2, "text");
   if (include_spans) {
     FuzzySpan spans[FUZZY_MAX_RETURN_SPANS];
-    uint32_t count = fuzzy_match_text_spans(lower, (uint32_t)text_len, query, spans, FUZZY_MAX_RETURN_SPANS);
+    uint32_t count = fuzzy_match_text_spans(mode, lower, (uint32_t)text_len, query, spans, FUZZY_MAX_RETURN_SPANS);
     lua_createtable(L, count, 0);
     for (uint32_t i = 0; i < count; ++i) {
       push_span_table(L, &spans[i]);

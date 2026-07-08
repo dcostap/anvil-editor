@@ -39,6 +39,15 @@ test.describe("Fuzzy Searcher recent files", function()
     return path
   end
 
+  test.it("matches path separators interchangeably in file search fallback rows", function(context)
+    local path = make_file(context, "fuzzy-separator-main.lua")
+    local slash_path = path:gsub("\\", "/")
+
+    local rows = fuzzy_searcher._test.file_search_rows("\\fuzzy-separator-main", { slash_path }, nil, 10)
+
+    test.equal(rows[1].file, slash_path)
+  end)
+
   test.it("skips the current file only from recents and keeps matching recents above general matches", function(context)
     local current = make_file(context, "fuzzy-current-needle.lua")
     local recent_newer = make_file(context, "fuzzy-recent-newer-needle.lua")

@@ -83,6 +83,55 @@ static int test_path_basename_preference(void) {
   return 0;
 }
 
+static int test_path_mode_treats_slash_and_backslash_as_same_separator(void) {
+  const char *items[] = {
+    "src\\core/main.lua",
+    "src/core\\test.lua",
+    "src/core-other/main.lua"
+  };
+  FuzzyIndex idx;
+  CHECK(fuzzy_index_build(&idx, items, 3, FUZZY_MODE_PATH));
+
+  uint32_t count = 0;
+  bool has_more = false;
+  FuzzySearchResult *r = fuzzy_index_search(&idx, "core\\main", 10, &count, &has_more);
+  CHECK(r != NULL);
+  CHECK(count >= 1);
+  CHECK(strcmp(fuzzy_index_text(&idx, r[0].entry_index), "src\\core/main.lua") == 0);
+  free(r);
+
+  r = fuzzy_index_search(&idx, "core/test", 10, &count, &has_more);
+  CHECK(r != NULL);
+  CHECK(find_text(&idx, r, count, "src/core\\test.lua") >= 0);
+  free(r);
+
+  FuzzySpan spans[8];
+  uint32_t n = fuzzy_match_spans(&idx, 0, "core\\main", spans, 8);
+  CHECK(n == 1);
+  CHECK(spans[0].start == 5);
+  CHECK(spans[0].end == 13);
+
+  fuzzy_index_free(&idx);
+  return 0;
+}
+
+static int test_generic_mode_keeps_slash_and_backslash_distinct(void) {
+  const char *items[] = { "src/core/main.lua", "src\\core\\main.lua" };
+  FuzzyIndex idx;
+  CHECK(fuzzy_index_build(&idx, items, 2, FUZZY_MODE_GENERIC));
+
+  uint32_t count = 0;
+  bool has_more = false;
+  FuzzySearchResult *r = fuzzy_index_search(&idx, "src/core/main", 10, &count, &has_more);
+  CHECK(r != NULL);
+  CHECK(find_text(&idx, r, count, "src/core/main.lua") >= 0);
+  CHECK(find_text(&idx, r, count, "src\\core\\main.lua") < 0);
+  free(r);
+
+  fuzzy_index_free(&idx);
+  return 0;
+}
+
 static int test_contiguous_match_beats_split_subsequence(void) {
   const char *items[] = {
     "game/c_foo_inematic.cpp",
@@ -233,7 +282,7 @@ static int test_spans(void) {
   CHECK(spans[0].start == 1);
 
   const FuzzyEntry *e = &idx.entries[0];
-  n = fuzzy_match_text_spans(idx.lower_arena + e->lower_offset, e->len, "main", spans, 8);
+  n = fuzzy_match_text_spans(idx.mode, idx.lower_arena + e->lower_offset, e->len, "main", spans, 8);
   CHECK(n == 1);
   CHECK(spans[0].start == 5);
   CHECK(spans[0].end == 8);
@@ -281,6 +330,8 @@ int main(void) {
   rc |= test_generic_basic();
   rc |= test_case_insensitive_and_limit();
   rc |= test_path_basename_preference();
+  rc |= test_path_mode_treats_slash_and_backslash_as_same_separator();
+  rc |= test_generic_mode_keeps_slash_and_backslash_distinct();
   rc |= test_contiguous_match_beats_split_subsequence();
   rc |= test_extending_exact_query_keeps_exact_match_on_top();
   rc |= test_rejects_long_scattered_coincidence_matches();

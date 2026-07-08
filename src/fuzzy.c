@@ -19,6 +19,12 @@ static char lower_ascii_char(char c) {
   return (char)tolower(uc);
 }
 
+char fuzzy_normalize_match_char(FuzzyMode mode, char c) {
+  char lower = lower_ascii_char(c);
+  if (mode == FUZZY_MODE_PATH && (lower == '/' || lower == '\\')) return '/';
+  return lower;
+}
+
 static bool is_boundary_char(char c) {
   return c == '/' || c == '\\' || c == '_' || c == '-' || c == '.' || c == ' ' || c == ':';
 }
@@ -55,7 +61,7 @@ const char *fuzzy_mode_name(FuzzyMode mode) {
   return mode == FUZZY_MODE_PATH ? "path" : "generic";
 }
 
-static uint32_t parse_query_words(const char *query, FuzzyWord words[FUZZY_MAX_QUERY_WORDS]) {
+static uint32_t parse_query_words(FuzzyMode mode, const char *query, FuzzyWord words[FUZZY_MAX_QUERY_WORDS]) {
   uint32_t count = 0;
   const char *p = query ? query : "";
   while (*p && count < FUZZY_MAX_QUERY_WORDS) {
@@ -63,7 +69,7 @@ static uint32_t parse_query_words(const char *query, FuzzyWord words[FUZZY_MAX_Q
     if (!*p) break;
     uint32_t len = 0;
     while (*p && !isspace((unsigned char)*p)) {
-      if (len + 1 < FUZZY_MAX_WORD_LEN) words[count].text[len++] = lower_ascii_char(*p);
+      if (len + 1 < FUZZY_MAX_WORD_LEN) words[count].text[len++] = fuzzy_normalize_match_char(mode, *p);
       p++;
     }
     if (len > 0) {
@@ -103,7 +109,7 @@ bool fuzzy_index_build(FuzzyIndex *idx, const char **items, uint32_t count, Fuzz
     uint32_t len = (uint32_t)len_sz;
 
     memcpy(idx->text_arena + offset, s, len + 1);
-    for (uint32_t j = 0; j < len; ++j) idx->lower_arena[offset + j] = lower_ascii_char(s[j]);
+    for (uint32_t j = 0; j < len; ++j) idx->lower_arena[offset + j] = fuzzy_normalize_match_char(mode, s[j]);
     idx->lower_arena[offset + len] = '\0';
 
     FuzzyEntry *e = &idx->entries[i];
@@ -233,7 +239,7 @@ static int score_word(FuzzyMode mode, const char *text, const char *lower, uint3
 
 int fuzzy_match_score(FuzzyMode mode, const char *text, const char *lower, uint32_t len, uint32_t basename_start, const char *query) {
   FuzzyWord words[FUZZY_MAX_QUERY_WORDS];
-  uint32_t word_count = parse_query_words(query, words);
+  uint32_t word_count = parse_query_words(mode, query, words);
   if (word_count == 0) return 0 - (int)(len / 8);
 
   int total = 0;
@@ -307,10 +313,10 @@ static void append_span(FuzzySpan *spans, uint32_t max_spans, uint32_t *count, u
   }
 }
 
-uint32_t fuzzy_match_text_spans(const char *lower, uint32_t len, const char *query, FuzzySpan *spans, uint32_t max_spans) {
+uint32_t fuzzy_match_text_spans(FuzzyMode mode, const char *lower, uint32_t len, const char *query, FuzzySpan *spans, uint32_t max_spans) {
   if (!lower || !spans || max_spans == 0) return 0;
   FuzzyWord words[FUZZY_MAX_QUERY_WORDS];
-  uint32_t word_count = parse_query_words(query, words);
+  uint32_t word_count = parse_query_words(mode, query, words);
   uint32_t count = 0;
 
   for (uint32_t w = 0; w < word_count; ++w) {
@@ -338,5 +344,5 @@ uint32_t fuzzy_match_spans(const FuzzyIndex *idx, uint32_t entry_index, const ch
   if (!idx || entry_index >= idx->count) return 0;
   const FuzzyEntry *e = &idx->entries[entry_index];
   const char *lower = idx->lower_arena + e->lower_offset;
-  return fuzzy_match_text_spans(lower, e->len, query, spans, max_spans);
+  return fuzzy_match_text_spans(idx->mode, lower, e->len, query, spans, max_spans);
 }

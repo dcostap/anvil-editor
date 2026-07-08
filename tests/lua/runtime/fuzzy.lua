@@ -31,6 +31,27 @@ test.describe("native fuzzy Lua API", function()
     test.equal(match.match_start, 5)
   end)
 
+  test.it("treats slash and backslash as the same separator in path mode", function()
+    local idx = fuzzy.index({ "src\\core/main.lua", "src/core\\test.lua" }, { mode = "path" })
+    local results = idx:search("core\\main", { limit = 10, spans = true })
+    test.equal(results[1].text, "src\\core/main.lua")
+    test.same(results[1].spans[1], { 5, 13 })
+
+    results = idx:search("core/test", { limit = 10 })
+    test.equal(results[1].text, "src/core\\test.lua")
+    idx:free()
+
+    local match = fuzzy.match("src\\core/main.lua", "core/main", { mode = "path", spans = true })
+    test.ok(match)
+    test.same(match.spans[1], { 5, 13 })
+  end)
+
+  test.it("keeps slash and backslash distinct in generic mode", function()
+    local results = fuzzy.filter({ "src/core/main.lua", "src\\core\\main.lua" }, "src/core/main", { limit = 10 })
+    test.equal(#results, 1)
+    test.equal(results[1].text, "src/core/main.lua")
+  end)
+
   test.it("reports cursor position but no selection for separated fuzzy chunks", function()
     local match = fuzzy.match("alpha beta", "ab", { spans = true })
     test.same(match.spans, { { 1, 1 }, { 7, 7 } })

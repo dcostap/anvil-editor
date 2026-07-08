@@ -43,6 +43,7 @@ typedef struct {
 
 FuzzyMode fuzzy_mode_from_string(const char *mode);
 const char *fuzzy_mode_name(FuzzyMode mode);
+char fuzzy_normalize_match_char(FuzzyMode mode, char c);
 
 bool fuzzy_index_build(FuzzyIndex *idx, const char **items, uint32_t count, FuzzyMode mode);
 void fuzzy_index_free(FuzzyIndex *idx);
@@ -51,7 +52,7 @@ FuzzySearchResult *fuzzy_index_search(const FuzzyIndex *idx, const char *query, 
 const char *fuzzy_index_text(const FuzzyIndex *idx, uint32_t entry_index);
 
 int fuzzy_match_score(FuzzyMode mode, const char *text, const char *lower, uint32_t len, uint32_t basename_start, const char *query);
-uint32_t fuzzy_match_text_spans(const char *lower, uint32_t len, const char *query, FuzzySpan *spans, uint32_t max_spans);
+uint32_t fuzzy_match_text_spans(FuzzyMode mode, const char *lower, uint32_t len, const char *query, FuzzySpan *spans, uint32_t max_spans);
 uint32_t fuzzy_match_spans(const FuzzyIndex *idx, uint32_t entry_index, const char *query, FuzzySpan *spans, uint32_t max_spans);
 
 #endif

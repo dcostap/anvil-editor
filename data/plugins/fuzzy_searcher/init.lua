@@ -884,7 +884,7 @@ local function fuzzy_subsequence_too_weak(word_len, positions)
 end
 
 local function fuzzy_match_file_fast_word(word, text, lower, base_start)
-  word = trim_query(word):lower()
+  word = tostring(trim_query(word) or ""):lower():gsub("[/\\]", "/")
   if word == "" then return 0, {} end
 
   local positions = {}
@@ -918,16 +918,17 @@ local function fuzzy_match_file_fast(query, text)
   text = tostring(text or "")
   if query == "" then return 0, {} end
 
-  local lower = text:lower()
+  local lower = text:lower():gsub("[/\\]", "/")
   local base = text:match("[^/\\]+$") or text
   local base_start = #text - #base + 1
   local total, spans = 0, {}
 
   for _, word in ipairs(split_words(query)) do
-    local exact_s, exact_e = lower:find(word:lower(), 1, true)
+    local normalized_word = tostring(word or ""):lower():gsub("[/\\]", "/")
+    local exact_s, exact_e = lower:find(normalized_word, 1, true)
     local score, word_spans
     if exact_s then
-      score = SCORE_MATCH * #word + 120 - exact_s - math.floor((exact_e - exact_s) / 2)
+      score = SCORE_MATCH * #normalized_word + 120 - exact_s - math.floor((exact_e - exact_s) / 2)
       if exact_s >= base_start then score = score + 120 end
       word_spans = { { exact_s, exact_e } }
     else
