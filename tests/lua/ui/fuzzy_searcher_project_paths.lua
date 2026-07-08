@@ -41,7 +41,7 @@ test.describe("Fuzzy Searcher Project Path Roles", function()
     system.chdir(context.root)
     project_paths.configure_project {
       external = {
-        { path = "../jdk-src", label = "jdk-src" },
+        { path = "../jdk-src", label = "Java Sources" },
       },
       vendored = {
         { path = "src/vendor/library1", label = "library1" },
@@ -75,14 +75,17 @@ test.describe("Fuzzy Searcher Project Path Roles", function()
     local rows = helpers.file_search_rows("String", { external_item, vendored_item }, nil, 20)
     local external_row = rows[1]
 
-    test.equal(external_row.file, "jdk-src" .. PATHSEP .. "java" .. PATHSEP .. "lang" .. PATHSEP .. "String.java")
+    test.equal(external_row.file, "Java Sources" .. PATHSEP .. "java" .. PATHSEP .. "lang" .. PATHSEP .. "String.java")
+    test.equal(external_row.root_label, "Java Sources")
     test.equal(external_row.root_role, "external")
+    test.same(external_row.prefix_span, { 1, #"Java Sources" })
     test.ok(common.path_equals(helpers.fullpath(external_row), external_file))
 
     rows = helpers.file_search_rows("Baz", { external_item, vendored_item }, nil, 20)
     local vendored_row = rows[1]
     test.equal(vendored_row.file, "library1" .. PATHSEP .. "foo" .. PATHSEP .. "Baz.java")
     test.equal(vendored_row.root_role, "vendored")
+    test.same(vendored_row.prefix_span, { 1, #"library1" })
     test.ok(common.path_equals(helpers.fullpath(vendored_row), vendored_file))
   end)
 
@@ -129,6 +132,7 @@ test.describe("Fuzzy Searcher Project Path Roles", function()
 
     local result = helpers.decorate_grep_result({ file = "java/lang/String.java", line = 1, col = 1, text = "NEEDLE" }, context.external)
     test.equal(result.file, external_item)
+    test.same(result.prefix_span, { 1, #"Java Sources" })
     test.ok(common.path_equals(result.abs_path, external_file))
 
     result = helpers.decorate_grep_result({ file = common.relative_path(context.root, vendored_file), line = 1, col = 1, text = "NEEDLE" }, context.root)

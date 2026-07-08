@@ -342,6 +342,7 @@ local function apply_project_path_metadata(item, path, kind)
     item.root_label = display.root_label
     item.root_role = display.root_role
     item.root_id = display.root_id
+    item.prefix_span = display.prefix_span
     item.rank_penalty = display.rank_penalty
   end
   return item
@@ -388,6 +389,7 @@ local function cached_project_path_metadata(index, path, kind)
       metadata.root_label = display.root_label
       metadata.root_role = display.root_role
       metadata.root_id = display.root_id
+      metadata.prefix_span = display.prefix_span
       metadata.rank_penalty = display.rank_penalty
     end
   end
@@ -408,6 +410,7 @@ local function refresh_project_path_metadata(index, item, kind)
   item.root_label = metadata.root_label
   item.root_role = metadata.root_role
   item.root_id = metadata.root_id
+  item.prefix_span = metadata.prefix_span
   item.rank_penalty = metadata.rank_penalty
   return item
 end

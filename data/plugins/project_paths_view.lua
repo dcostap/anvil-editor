@@ -212,6 +212,15 @@ local function remove_entry(id_or_path)
   return true
 end
 
+local function set_label(id_or_path, label)
+  local entry = find_effective_entry(id_or_path)
+  if not entry or entry.role == "root" then return false end
+  if not project_paths.set_label(entry.id, label) then return false end
+  persist_project_if_needed(entry.source)
+  refresh_surfaces()
+  return true
+end
+
 local function add_entry(path, role, source, label)
   if type(path) ~= "string" or path == "" then core.error("Project Paths: missing path"); return nil end
   path = common.normalize_path(system.absolute_path(common.home_expand(path)) or common.home_expand(path))
@@ -344,10 +353,7 @@ end
 function ProjectPathsView:rename_selected(label)
   local entry = self:selected_entry()
   if not entry or entry.role == "root" then return false end
-  if not project_paths.set_label(entry.id, label) then return false end
-  persist_project_if_needed(entry.source)
-  refresh_surfaces()
-  return true
+  return set_label(entry.id, label)
 end
 
 function ProjectPathsView:change_selected_role(role)
@@ -427,10 +433,6 @@ command.add(nil, {
     if path then return add_entry(path, "excluded", "workspace") end
     prompt_add_directory(nil, "excluded")
   end,
-  ["project-paths:remove-excluded-project-path"] = function(path)
-    if path then return remove_entry(path) end
-    if view then return view:remove_selected() end
-  end,
   ["project-paths:mark-selected-folder"] = function()
     local path, err = selected_filetree_directory()
     if not path then core.error("Project Paths: %s", tostring(err)); return end
@@ -449,28 +451,14 @@ command.add(nil, {
 
 command.add(function() return core.active_view == view end, {
   ["project-paths:open"] = function() view:open_selected() end,
-  ["project-paths:remove-entry"] = function() view:remove_selected() end,
-  ["project-paths:rename-label"] = function()
-    local entry = view:selected_entry()
-    if not entry or entry.role == "root" then return end
-    prompt_label(entry.path, function(label) view:rename_selected(label) end)
-  end,
-  ["project-paths:change-role"] = function()
-    local entry = view:selected_entry()
-    if not entry or entry.role == "root" then return end
-    prompt_role(entry.path, { "external", "vendored", "excluded" }, function(role)
-      view:change_selected_role(role)
-    end)
-  end,
-  ["project-paths:change-storage"] = function()
-    prompt_storage(function(source) view:change_selected_storage(source) end)
-  end,
 })
 
 local M = {
   view_class = ProjectPathsView,
   open_view = open_view,
   add_entry = add_entry,
+  remove_entry = remove_entry,
+  set_label = set_label,
   write_project_config = write_project_config,
   _test = {
     serialize_project_config_block = serialize_project_config_block,

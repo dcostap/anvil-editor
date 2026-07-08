@@ -1279,6 +1279,7 @@ local function decorate_grep_result(result, root)
     result.root_label = display.root_label
     result.root_role = display.root_role
     result.root_id = display.root_id
+    result.prefix_span = display.prefix_span
     result.rank_penalty = display.rank_penalty
   else
     result.file = abs
@@ -1900,7 +1901,7 @@ local function draw_symbol_result_row(font, r, x, y, width)
   local line = tonumber(r.line) or 1
   local line_suffix = line <= 9999 and string.format(":%-4d", line) or ":" .. tostring(line)
   local prefix = r.symbol_scope == "document" and "$$ " or "$ "
-  draw_file_result_row(font, r.file or "", r.file_spans, prefix, x, y, path_w, line_suffix)
+  draw_file_result_row(font, r.file or "", r.file_spans, prefix, x, y, path_w, line_suffix, r.prefix_span, r.root_role)
   if text_w <= 0 then return end
 
   local preview_font = style.get_small_font(font)
@@ -1998,7 +1999,14 @@ local function draw_command_result_row(font, r, x, y, width)
   end
 end
 
-draw_file_result_row = function(font, file, spans, prefix, x, y, width, suffix)
+local function project_path_prefix_color(role)
+  if role == "external" then return style.project_path_external end
+  if role == "vendored" then return style.project_path_vendored end
+  if role == "excluded" then return style.project_path_excluded end
+  return style.project_path_external
+end
+
+draw_file_result_row = function(font, file, spans, prefix, x, y, width, suffix, prefix_span, root_role)
   file = tostring(file or "")
   spans = spans or {}
   prefix = prefix or ""
@@ -2021,6 +2029,12 @@ draw_file_result_row = function(font, file, spans, prefix, x, y, width, suffix)
   local dir = file:sub(1, math.max(0, #file - #name))
   local name_start = #dir + 1
   local name_spans = project_spans(spans, name_start, #file, 0)
+  local project_prefix = nil
+  local project_rest = dir
+  if type(prefix_span) == "table" and prefix_span[1] == 1 and prefix_span[2] and prefix_span[2] <= #dir then
+    project_prefix = dir:sub(prefix_span[1], prefix_span[2])
+    project_rest = dir:sub(prefix_span[2] + 1)
+  end
   local suffix_width = suffix ~= "" and font:get_width(suffix) or 0
 
   local name_width = font:get_width(name)
@@ -2031,8 +2045,21 @@ draw_file_result_row = function(font, file, spans, prefix, x, y, width, suffix)
       and available - name_width - suffix_width
       or math.max(0, available - min_name_width - suffix_width)
     if dir_width > path_font:get_width("...") then
-      local dir_spans = project_spans(spans, 1, #dir, 0)
-      cx = draw_highlighted_text(path_font, dir, cx, path_y, dir_width, dir_color, dir_spans)
+      if project_prefix then
+        local prefix_w = path_font:get_width(project_prefix)
+        if prefix_w < dir_width then
+          local prefix_spans = project_spans(spans, 1, #project_prefix, 0)
+          cx = draw_highlighted_text(path_font, project_prefix, cx, path_y, prefix_w, project_path_prefix_color(root_role), prefix_spans)
+          local rest_spans = project_spans(spans, #project_prefix + 1, #dir, 0)
+          cx = draw_highlighted_text(path_font, project_rest, cx, path_y, math.max(0, dir_width - prefix_w), dir_color, rest_spans)
+        else
+          local dir_spans = project_spans(spans, 1, #dir, 0)
+          cx = draw_highlighted_text(path_font, dir, cx, path_y, dir_width, dir_color, dir_spans)
+        end
+      else
+        local dir_spans = project_spans(spans, 1, #dir, 0)
+        cx = draw_highlighted_text(path_font, dir, cx, path_y, dir_width, dir_color, dir_spans)
+      end
       available = math.max(0, right - cx)
     end
   end
@@ -2070,7 +2097,7 @@ local function draw_grep_result_row(font, result, x, y, width, collapse_file, co
   else
     local prefix = result.exact and "# " or "~# "
     local _end_x
-    _end_x, line_x = draw_file_result_row(font, result.file or "", result.file_spans, prefix, x, y, path_w, line_suffix)
+    _end_x, line_x = draw_file_result_row(font, result.file or "", result.file_spans, prefix, x, y, path_w, line_suffix, result.prefix_span, result.root_role)
   end
   if text_w <= 0 then return line_x end
   local preview_font = style.get_small_font(font)
@@ -3636,6 +3663,7 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
         root_label = source.root_label,
         root_role = source.root_role,
         root_id = source.root_id,
+        prefix_span = source.prefix_span,
         rank_penalty = source.rank_penalty,
         line = source.line,
         col = source.col,
@@ -3967,6 +3995,10 @@ local function symbol_result_from_item(item, query, opts)
     declaration_name_span = item.declaration_name_span,
     file = file,
     path = path,
+    root_label = item.root_label,
+    root_role = item.root_role,
+    root_id = item.root_id,
+    prefix_span = item.prefix_span,
     doc = opts.doc,
     line = line,
     col = col,
@@ -4515,7 +4547,7 @@ function FSView:draw()
         previous_rendered_grep_file = nil
         previous_rendered_grep_line_x = nil
         previous_rendered_was_grep = false
-        draw_file_result_row(font, r.file or r.label, r.match_spans, "", x + pad, yy, row_text_w)
+        draw_file_result_row(font, r.file or r.label, r.match_spans, "", x + pad, yy, row_text_w, nil, r.prefix_span, r.root_role)
       elseif r.kind == "symbol" then
         previous_rendered_grep_file = nil
         previous_rendered_grep_line_x = nil

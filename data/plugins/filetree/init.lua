@@ -2251,8 +2251,23 @@ function FileTreeView:plan_changes(status_only)
   for line, err in pairs(errors) do mark_invalid(line, err) end
 
   local mutable_entries = {}
+  local seen_project_path_roots = {}
+  local project_path_label_updates = {}
   for _, e in ipairs(entries) do
-    if e.readonly then
+    if e.project_path_root then
+      local id = e.meta and e.meta.project_path_id
+      if id then seen_project_path_roots[id] = true end
+      if id and e.original_type == e.type and common.path_equals(e.abs, e.original_abs) then
+        local old_label = e.meta and e.meta.project_path_label
+        local new_label = e.text:gsub("/+$", "")
+        if new_label ~= "" and new_label ~= old_label then
+          project_path_label_updates[#project_path_label_updates + 1] = { id = id, label = new_label, line = draw_line(e) }
+          status[draw_line(e)] = status[draw_line(e)] or "modification"
+        end
+      else
+        mark_invalid(e, "Project Path roots can only be renamed or deleted")
+      end
+    elseif e.readonly then
       if not e.original_abs
           or not common.path_equals(e.abs, e.original_abs)
           or e.original_type ~= e.type then
@@ -2263,6 +2278,13 @@ function FileTreeView:plan_changes(status_only)
     end
   end
   entries = mutable_entries
+
+  local project_path_removals = {}
+  for _, entry in ipairs(project_paths.entries({ include_root = false })) do
+    if (entry.role == "external" or entry.role == "vendored") and not seen_project_path_roots[entry.id] then
+      project_path_removals[#project_path_removals + 1] = { id = entry.id, label = entry.label, path = entry.path }
+    end
+  end
 
   local by_abs = {}
   for _, e in ipairs(entries) do
@@ -2623,7 +2645,15 @@ function FileTreeView:plan_changes(status_only)
 
   if status_only then return { status = status, invalid = invalid } end
   if invalid then return nil, "fix invalid red-marked lines before applying", status, invalid_reasons, ambiguities end
-  return { creates = creates, copies = copies, moves = moves, trashes = trashes, status = status }
+  return {
+    creates = creates,
+    copies = copies,
+    moves = moves,
+    trashes = trashes,
+    project_path_label_updates = project_path_label_updates,
+    project_path_removals = project_path_removals,
+    status = status,
+  }
 end
 
 function FileTreeView:get_line_status(line)
@@ -2844,8 +2874,36 @@ end
 
 function FileTreeView:apply_plan(plan)
   local changed = false
+  local project_paths_changed = false
   local selection_path_map = { __moves = {} }
   local selection_paths = self:capture_selection_paths()
+
+  local ok_project_paths_view, project_paths_view = pcall(require, "plugins.project_paths_view")
+  if ok_project_paths_view and project_paths_view then
+    for _, op in ipairs(plan.project_path_label_updates or {}) do
+      if project_paths_view.set_label(op.id, op.label) then
+        core.log("File Tree: renamed Project Path label to %s", op.label)
+        changed = true
+        project_paths_changed = true
+      else
+        core.error("File Tree: failed to rename Project Path label: %s", tostring(op.label))
+        return false
+      end
+    end
+    for _, op in ipairs(plan.project_path_removals or {}) do
+      if project_paths_view.remove_entry(op.id) then
+        core.log("File Tree: removed Project Path %s", op.label or op.path or op.id)
+        changed = true
+        project_paths_changed = true
+      else
+        core.error("File Tree: failed to remove Project Path: %s", tostring(op.label or op.path or op.id))
+        return false
+      end
+    end
+  elseif #(plan.project_path_label_updates or {}) > 0 or #(plan.project_path_removals or {}) > 0 then
+    core.error("File Tree: Project Path editing is unavailable")
+    return false
+  end
 
   table.sort(plan.creates, function(a, b)
     if a.type ~= b.type then return a.type == "dir" end
@@ -2987,6 +3045,12 @@ function FileTreeView:operation_lines(plan)
   for _, op in ipairs(plan.trashes) do
     add_row("DELETE", op.type, op_path(op.abs))
   end
+  for _, op in ipairs(plan.project_path_label_updates or {}) do
+    add_row("RENAME", "project", tostring(op.label))
+  end
+  for _, op in ipairs(plan.project_path_removals or {}) do
+    add_row("REMOVE", "project", tostring(op.label or op.path or op.id))
+  end
 
   local verb_w, type_w, from_w = 0, 0, 0
   for _, row in ipairs(rows) do
@@ -3014,6 +3078,7 @@ end
 
 function FileTreeView:operation_count(plan)
   return #plan.creates + #plan.copies + #plan.moves + #plan.trashes
+    + #(plan.project_path_label_updates or {}) + #(plan.project_path_removals or {})
 end
 
 function FileTreeView:operation_summary(plan)
