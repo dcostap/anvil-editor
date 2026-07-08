@@ -162,8 +162,29 @@ function worker_pool.shutdown_system(options)
 end
 
 function worker_pool:choose_worker(_spec)
-  self.next_worker = (self.next_worker % #self.workers) + 1
-  return self.workers[self.next_worker]
+  local loads = {}
+  for _, worker in ipairs(self.workers) do loads[worker.id] = 0 end
+  for _, job in pairs(self.jobs) do
+    if not job.finished_at and job.worker_id and loads[job.worker_id] ~= nil then
+      loads[job.worker_id] = loads[job.worker_id] + 1
+    end
+  end
+
+  local best
+  local best_load
+  local worker_count = #self.workers
+  for offset = 1, worker_count do
+    local idx = ((self.next_worker + offset - 1) % worker_count) + 1
+    local worker = self.workers[idx]
+    local load = loads[worker.id] or 0
+    if not best or load < best_load then
+      best = worker
+      best_load = load
+      if load == 0 then break end
+    end
+  end
+  self.next_worker = best and best.id or ((self.next_worker % worker_count) + 1)
+  return best or self.workers[self.next_worker]
 end
 
 function worker_pool:native_pool()

@@ -68,6 +68,32 @@ test.describe("worker_pool", function()
     for i = 1, 6 do test.ok(results[i]) end
   end)
 
+  test.test("submits new work to an idle worker instead of queueing behind a busy one", function()
+    local pool = new_pool("test-idle-worker-selection", 2)
+    local slow_progress = 0
+    local slow_handle = pool:submit({
+      kind = "worker_pool_test",
+      payload = { op = "count_until_cancel", count = 1000, sleep = 0.002 },
+      on_progress = function(message) slow_progress = message.payload.index end,
+    })
+    local warmup_done = false
+    pool:submit({
+      kind = "worker_pool_test",
+      payload = { op = "echo", value = "warmup" },
+      on_complete = function() warmup_done = true end,
+    })
+    test.ok(drain_until(pool, function() return slow_progress >= 2 and warmup_done end, 500))
+
+    local interactive_done = false
+    pool:submit({
+      kind = "worker_pool_test",
+      payload = { op = "echo", value = "interactive" },
+      on_complete = function() interactive_done = true end,
+    })
+    test.ok(drain_until(pool, function() return interactive_done end, 40))
+    pool:cancel(slow_handle)
+  end)
+
   test.test("native jobs can run through the core worker_pool facade", function()
     local pool = new_pool("test-native-facade", 1)
     local seen
