@@ -3404,7 +3404,6 @@ keymap.add {
   ["ctrl+return"] = "filetree:open-side",
   ["ctrl+s"] = "filetree:apply",
   ["f5"] = "filetree:refresh",
-  ["alt+left"] = "filetree:up-dir",
   ["alt+home"] = "filetree:project-root",
 }
 

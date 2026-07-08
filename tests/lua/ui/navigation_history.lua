@@ -1,5 +1,6 @@
 local core = require "core"
 local command = require "core.command"
+local keymap = require "core.keymap"
 local test = require "core.test"
 
 local navigation_history = require "plugins.navigation_history"
@@ -39,6 +40,17 @@ local function caret(view)
     local line, col = view.doc:get_selection()
     return line, col
   end)
+end
+
+local function press_alt_key(key)
+  local previous_alt = keymap.modkeys.alt
+  keymap.modkeys.alt = true
+  local ok, result = xpcall(function()
+    return keymap.on_key_pressed(key)
+  end, debug.traceback)
+  keymap.modkeys.alt = previous_alt
+  if not ok then error(result, 0) end
+  return result
 end
 
 test.describe("IntelliJ-style navigation history", function()
@@ -81,6 +93,44 @@ test.describe("IntelliJ-style navigation history", function()
     line, col = caret(second)
     test.equal(line, 3)
     test.equal(col, 1)
+  end)
+
+  test.it("uses global back shortcut while file tree is focused", function(context)
+    local first = open_editor(context, "one")
+    local second = open_editor(context, "two")
+    local node = core.root_panel.root_node:get_node_for_view(first)
+
+    node:set_active_view(first)
+    navigation_history.clear_history()
+    node:set_active_view(second)
+    test.ok(navigation_history.is_back_available())
+
+    local filetree = require "plugins.filetree"
+    core.set_active_view(filetree)
+    test.equal(core.active_view, filetree)
+
+    test.ok(press_alt_key("left"))
+    test.equal(core.active_view, first)
+  end)
+
+  test.it("uses global forward shortcut while file tree is focused", function(context)
+    local first = open_editor(context, "one")
+    local second = open_editor(context, "two")
+    local node = core.root_panel.root_node:get_node_for_view(first)
+
+    node:set_active_view(first)
+    navigation_history.clear_history()
+    node:set_active_view(second)
+    test.ok(command.perform("navigation:back"))
+    test.equal(core.active_view, first)
+    test.ok(navigation_history.is_forward_available())
+
+    local filetree = require "plugins.filetree"
+    core.set_active_view(filetree)
+    test.equal(core.active_view, filetree)
+
+    test.ok(press_alt_key("right"))
+    test.equal(core.active_view, second)
   end)
 
   test.it("records editor mouse-style cursor jumps through document commands", function(context)
