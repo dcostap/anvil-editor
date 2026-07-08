@@ -3996,7 +3996,8 @@ end
 local function symbol_result_from_item(item, query, opts)
   opts = opts or {}
   local path = item.path or item.abs_path or item.file
-  local file = item.display_file or item.relpath
+  local display = path and project_paths.display_path(path, { kind = "symbols" }) or nil
+  local file = display and display.text or item.display_file or item.relpath
   if not file or file == "" then
     if item.path and item.file and item.file ~= item.path then
       file = item.file
@@ -4023,10 +4024,11 @@ local function symbol_result_from_item(item, query, opts)
     declaration_name_span = item.declaration_name_span,
     file = file,
     path = path,
-    root_label = item.root_label,
-    root_role = item.root_role,
-    root_id = item.root_id,
-    prefix_span = item.prefix_span,
+    abs_path = display and display.abs_path or item.abs_path,
+    root_label = display and display.root_label or item.root_label,
+    root_role = display and display.root_role or item.root_role,
+    root_id = display and display.root_id or item.root_id,
+    prefix_span = display and display.prefix_span or item.prefix_span,
     doc = opts.doc,
     line = line,
     col = col,
@@ -4719,23 +4721,11 @@ local function switch_picker_prefix(view, prefix)
     new_text, select_query = fuzzy_searcher.restored_prompt_text(prefix)
   else
     new_text = prefix .. query
-    select_query = false
+    select_query = true
   end
 
   local new_prefix, new_query = split_mode_prefix(new_text)
-  local doc = view.input and view.input.textview and view.input.textview.doc
-  local col = #new_text + 1
-  if doc and not select_query then
-    local _line
-    _line, col = doc:get_selection(false)
-    local old_prefix_len = old_prefix ~= "" and #old_prefix or 0
-    local new_prefix_len = new_prefix ~= "" and #new_prefix or 0
-    col = (col or 1) - old_prefix_len + new_prefix_len
-    col = common.clamp(col, new_prefix_len + 1, #new_text + 1)
-  end
-
   fuzzy_searcher.apply_prompt_history_query(view, new_prefix, new_query, select_query)
-  if doc and not select_query then doc:set_selection(1, col, 1, col) end
   ensure_input_focus(view, "switch-prefix")
 end
 
