@@ -289,20 +289,6 @@ core.add_thread(function()
   ---@param doc core.doc
   ---@return table<string,string>
   local function load_syntax_symbols(doc)
-    if doc.syntax and not autocomplete.map["language_"..doc.syntax.name] then
-      local symbols = {
-        name = "language_"..doc.syntax.name,
-        files = doc.syntax.files,
-        items = {}
-      }
-      for name, type in pairs(doc.syntax.symbols) do
-        if #tostring(name or "") <= max_symbol_length() then
-          symbols.items[name] = type
-        end
-      end
-      autocomplete.add(symbols)
-      return symbols.items
-    end
     return {}
   end
 
