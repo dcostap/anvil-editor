@@ -3869,11 +3869,11 @@ end
 local function project_symbol_roots_indexing(ts_symbols, meta)
   for _, root in ipairs((meta and meta.roots) or {}) do
     local index = root.index
-    if index and index.status == "indexing" then return true end
+    if index and index.symbol_status == "indexing" then return true end
     if root.status == "pending" then return true end
   end
   local index = meta and meta.index
-  if index and index.status == "indexing" then return true end
+  if index and index.symbol_status == "indexing" then return true end
 
   -- A successful empty async query can be produced from the currently-ready
   -- subset while a newly-added/restored Project Path root is still indexing.
@@ -3885,7 +3885,7 @@ local function project_symbol_roots_indexing(ts_symbols, meta)
     local path = root and root.path
     if path then
       local root_index = ts_symbols.status(path)
-      if root_index and root_index.status == "indexing" then return true end
+      if root_index and root_index.symbol_status == "indexing" then return true end
     end
   end
   return false
@@ -3909,31 +3909,13 @@ function FSView:start_symbol_search(query, reset_selection)
 
   core.add_thread(function()
     local results, reason, status, source_label
-    if lsp_enabled() then
-      local lsp_provider = require "core.lsp.provider"
-      local deadline = system.get_time() + ((config.lsp and config.lsp.navigation_timeout) or 10)
-      results, reason, status = lsp_provider.workspace_symbols(query, { force = true })
-      while status ~= "fresh" and status ~= "stale" and status ~= "unavailable" and system.get_time() < deadline do
-        if gen ~= symbol_generation or active_view ~= self then return end
-        coroutine.yield(0.05)
-        results, reason, status = lsp_provider.workspace_symbols(query)
-      end
-      if status == "fresh" or status == "stale" then
-        if #(results or {}) > 0 then
-          source_label = "LSP"
-        else
-          core.log_quiet("Fuzzy Project symbols: LSP returned no symbols for %q; falling back to Tree-sitter", tostring(query))
-          status = "unavailable"
-          reason = "lsp-empty"
-          source_label = nil
-        end
-      end
-    else
-      status = "unavailable"
-      reason = "LSP disabled"
-    end
 
-    if status ~= "fresh" and status ~= "stale" then
+    -- Project-symbol search should be local and predictable.  Tree-sitter is
+    -- the first-party project index, while LSP workspace/symbol providers can
+    -- stay pending for seconds or return an authoritative empty result.  Use
+    -- Tree-sitter first so an already-indexed project produces results without
+    -- waiting on LSP.
+    do
       local ts_symbols = require "core.treesitter.symbol_index"
       local deadline = math.huge
       while system.get_time() < deadline do
@@ -3990,6 +3972,21 @@ function FSView:start_symbol_search(query, reset_selection)
         coroutine.yield(0.05)
       end
       source_label = "Tree-sitter"
+    end
+
+    if status ~= "fresh" and status ~= "stale" and lsp_enabled() then
+      core.log_quiet("Fuzzy Project symbols: Tree-sitter unavailable for %q (%s); trying LSP", tostring(query), tostring(reason))
+      self.status = "Searching LSP Project symbols…"
+      self:schedule_update(true)
+      local lsp_provider = require "core.lsp.provider"
+      local deadline = system.get_time() + ((config.lsp and config.lsp.navigation_timeout) or 10)
+      results, reason, status = lsp_provider.workspace_symbols(query, { force = true })
+      while status ~= "fresh" and status ~= "stale" and status ~= "unavailable" and system.get_time() < deadline do
+        if gen ~= symbol_generation or active_view ~= self then return end
+        coroutine.yield(0.05)
+        results, reason, status = lsp_provider.workspace_symbols(query)
+      end
+      source_label = (status == "fresh" or status == "stale") and "LSP" or source_label
     end
 
     if gen ~= symbol_generation or active_view ~= self then return end
