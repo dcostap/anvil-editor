@@ -1361,7 +1361,7 @@ local function draw_description_box(text, sx, sy, sw, sh)
 end
 
 local function draw_suggestion_row(font, suggestion, rx, y, rw, lh, has_icons, selected, max_chars)
-  local row_bg = selected and style.background2 or style.background3
+  local row_bg = selected and style.autocomplete_selection or style.background3
   if selected then renderer.draw_rect(rx, y, rw, lh, row_bg) end
 
   local icon_l_padding, icon_r_padding = 0, 0

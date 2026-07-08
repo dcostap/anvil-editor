@@ -85,6 +85,7 @@ style.tab_background = c("202126")
 style.titlebar = style.tab_background
 style.background3 = c(C.text_bg)
 style.autocomplete_border = { common.color "rgba(255, 255, 255, 0.25)" }
+style.autocomplete_selection = c("30343a")
 style.text = c(C.text_fg)
 style.caret = c("ffffff")
 style.accent = c(C.ctrl_clickable)
