@@ -3,6 +3,7 @@ local common = require "core.common"
 local command = require "core.command"
 local config = require "core.config"
 local style = require "core.style"
+local project_paths = require "core.project_paths"
 local DocView = require "core.docview"
 local GlobalPromptBar = require "core.global_prompt_bar"
 local LogView = require "core.logview"
@@ -337,17 +338,16 @@ function StatusBar:register_docview_items()
     get_item = function()
       local dv = core.active_view
       local filename
-      if #core.projects > 1 and dv.doc.abs_filename then
-        local project, is_open, belongs = core.current_project(
-          dv.doc.abs_filename
-        )
-        if project and is_open and belongs then
-          filename = {
-            style.accent,
-            common.basename(project.path),
-            style.text,
-            PATHSEP .. common.relative_path(project.path, dv.doc.abs_filename)
-          }
+      if dv.doc.abs_filename then
+        local display = project_paths.display_path(dv.doc.abs_filename, { kind = "file" })
+        if display and display.text then
+          if display.prefix_span then
+            local label = display.text:sub(display.prefix_span[1], display.prefix_span[2])
+            local rest = display.text:sub(display.prefix_span[2] + 1)
+            filename = { style.accent, label, style.text, rest }
+          else
+            filename = { style.text, display.text }
+          end
         end
       end
       if not filename then
