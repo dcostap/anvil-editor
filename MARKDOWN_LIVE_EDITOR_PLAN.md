@@ -11,7 +11,7 @@ This document replaces the original greenfield plan with a plan based on:
 - observed Obsidian Live Preview behavior where the official documentation is intentionally high-level
 - open-source implementations of the same editing model
 
-The working product name in this plan is **Markdown Live Preview**. The final user-facing name is an owner decision at the end of this document.
+The canonical user-facing name is **Markdown Live Preview**, as recorded in `CONTEXT.md`.
 
 This is a rebuild and completion plan, not a promise to preserve every current Markdown Live Preview internal API. Keep sound generic core primitives, replace brittle or incomplete feature code, and update all in-repo callers and tests in the same change when concepts are renamed.
 
@@ -36,9 +36,9 @@ The target is not a separate preview surface and not a rich-text document model.
 - **Reveal Unit**: the smallest parsed construct whose hidden syntax becomes visible for editing, such as one emphasis span, one link, or one block marker region.
 - **Markdown Render Model**: the immutable, source-ranged description of what an Editor should draw for a Document revision.
 - **Markdown Link Index**: Anvil's Project-scoped index of notes, aliases, headings, block IDs, and attachments. This avoids treating the entire Anvil Workspace as one Obsidian vault.
-- **Obsidian vault**: an external Obsidian concept. By default, an Anvil Project is the link-resolution boundary unless an owner decision below selects nearest nested `.obsidian` roots.
+- **Obsidian vault**: an external Obsidian concept. An Anvil Project is the default link-resolution boundary; a Project may explicitly opt into using the nearest ancestor containing `.obsidian`, and External Project Directories participate only when explicitly included.
 
-These names do not yet alter `CONTEXT.md`; the user-facing canonical feature name and Project/vault boundary need owner confirmation first.
+The canonical feature name is recorded in `CONTEXT.md`, and the Project/vault boundary is resolved in the owner decisions below.
 
 ## Executive diagnosis of the current implementation
 
@@ -120,7 +120,7 @@ The history shows a broad, very fast scaffolding pass followed by reactive stabi
 - Headings have durable H1–H6 hierarchy.
 - Body text remains comfortable and consistent.
 - Emphasis, highlight, strikethrough, inline code, links, tags, lists, quotes, and code blocks look rendered even though the source remains editable.
-- Hidden source syntax reappears only around the construct being edited, subject to the owner-selected reveal policy.
+- Hidden source syntax reappears only around the construct being edited, with containing-line or block raw fallback where precise reveal is unsafe.
 - Moving the caret must not cause vertical scroll jumps. Horizontal movement caused by revealing source must not corrupt pointer placement or selection.
 - Invalid or half-typed constructs remain readable source until they parse confidently.
 
@@ -215,7 +215,7 @@ Obsidian states that it supports CommonMark, GitHub Flavored Markdown, and LaTeX
 - callouts
 - tables
 
-Obsidian intentionally does not render Markdown nested inside raw HTML elements. Anvil should adopt the same conservative rule unless an owner decision explicitly asks for HTML rendering.
+Obsidian intentionally does not render Markdown nested inside raw HTML elements. Anvil adopts the same conservative rule: raw HTML remains source-only, and Markdown nested inside it is not rendered.
 
 ### Formatting behavior relevant to Live Preview
 
@@ -314,7 +314,7 @@ Accepted Obsidian formats currently include:
 - video: `.mkv`, `.mov`, `.mp4`, `.ogv`, `.webm`
 - PDF: `.pdf`
 
-Official Obsidian Help currently shows two external Markdown-image sizing forms on different pages: numeric label as width (`![250](url)`) and alt text with a pipe suffix (`![alt|100x145](url)`). Anvil should fixture and support both forms deliberately. Numeric-label sizing has no separate descriptive alt text; the pipe form preserves the text before `|` as alt text. Width-only keeps aspect ratio; width×height follows the owner-selected fit/force rule.
+Official Obsidian Help currently shows two external Markdown-image sizing forms on different pages: numeric label as width (`![250](url)`) and alt text with a pipe suffix (`![alt|100x145](url)`). Anvil should fixture and support both forms deliberately. Numeric-label sizing has no separate descriptive alt text; the pipe form preserves the text before `|` as alt text. Width-only keeps aspect ratio; width×height defines a bounding box and preserves aspect ratio.
 
 Anvil does not need native playback/viewers for every type to support the syntax correctly. Unsupported inline media can initially render an attachment chip with an open action.
 
@@ -464,7 +464,7 @@ No formatting feature may ship default-on if Tier 0 is unreliable.
 - attachment chips
 - paste/drop attachment import
 - properties presentation
-- math rendering
+- styled-source math presentation; rendered math is deferred until a safe native renderer is selected
 
 ### Tier 3: optional media and advanced integrations
 
@@ -473,9 +473,9 @@ No formatting feature may ship default-on if Tier 0 is unreliable.
 - Mermaid rendering
 - Canvas/Base previews
 - hover page previews
-- link autocomplete and cross-Project knowledge tools beyond the core open-link flow
+- advanced cross-Project knowledge tools beyond the core link autocomplete/open flow
 
-The owner decisions at the end determine which Tier 2 items are required before calling the feature complete.
+The resolved owner decisions at the end require note/heading/block embeds and generic attachment chips in Tier 2 before the selected core scope is complete. Rich property rows, rendered math, and native media viewers remain deferred.
 
 ## Target architecture
 
@@ -658,7 +658,7 @@ Add first-class core lifecycle seams instead of stacking global wrappers:
 - `Doc` metadata listener for filename and syntax changes
 - Document close listener
 - Editor feature attach/detach registry or explicit Markdown feature hook in the Editor creation path
-- view-local mode state persisted with Editor state if selected
+- view-local Live Preview/Source Mode override persisted with the Editor in Workspace state
 - commands registered through ordinary command predicates
 - widget/POI activation through generic `DocView` seams
 
@@ -704,7 +704,7 @@ Migration rules:
 - Remove `vault_index.lua` after callers/tests move to `link_index.lua`; do not leave a deprecated internal alias.
 - Remove parser duplication only after `MarkdownView` tests pass through the shared semantic layer or `MarkdownView` is deliberately retained with an isolated parser.
 - Remove Markdown method wrappers once lifecycle/widget seams exist.
-- Preserve the image overlay if it remains the selected image-open UX, but move its input interception behind a root overlay/modal contract rather than ad hoc method wrapping.
+- Preserve the full-window image viewer, including smooth zoom, pan, and click-outside close behavior, but move its input interception behind a root overlay/modal contract rather than ad hoc method wrapping.
 
 ## Reveal behavior design
 
@@ -738,7 +738,7 @@ Where construct reveal is unsafe or confusing, use a containing-line/block raw f
 
 ### Source Mode
 
-Source Mode should remove Markdown replacement/hiding fragments while retaining normal Markdown syntax highlighting and Editor behavior. It should not create a new view or Document. Whether it is global, per Editor, or persisted is an owner decision.
+Source Mode removes Markdown replacement/hiding fragments while retaining normal Markdown syntax highlighting and Editor behavior. It does not create a new view or Document. Live Preview is the global default after its release gates pass; a temporary per-Editor Source Mode override is persisted in Workspace state.
 
 ## Wrapping and layout plan
 
@@ -836,21 +836,21 @@ For each parsed image:
 - distinguish image-only block, inline image, and image inside table/callout
 - clamp to available content width
 - preserve aspect ratio for width-only syntax
-- honor explicit width×height according to the owner-selected fit/force policy
+- treat explicit width×height as a bounding box and preserve aspect ratio
 - do not upscale by default
 - use high-quality scaling for ordinary images; nearest-neighbor only when explicitly appropriate
 - retain alt/path text for accessibility/status/failure display
 
 ### Active editing
 
-The source must remain reachable without opening Source Mode. Candidate behavior:
+The source remains visible and reachable without opening Source Mode:
 
-- inactive image-only source line becomes a block image with a small source affordance
-- entering the image's Reveal Unit shows source while retaining a stable image row below or a same-height placeholder
-- inline images remain inline only below a configurable/sensible size; large images become block rows
-- clicking the image opens the overlay only through the selected image action, while ordinary text-area clicks still place the caret
-
-The exact presentation is an owner decision.
+- render images inline while retaining their actual Markdown link/source line as visible, editable text
+- present inactive image source intentionally rather than as undifferentiated raw text
+- entering the image link's Reveal Unit exposes the exact Markdown needed for editing without removing the rendered image
+- inline images remain inline only below a sensible size; large images become block rows without hiding their source line
+- clicking the rendered image opens the full-window viewer; ordinary source-text clicks place the caret
+- the viewer supports smooth zoom and pan, and clicking outside the image closes it
 
 ### Failure/retry behavior
 
@@ -866,8 +866,8 @@ The exact presentation is an owner decision.
 
 After core rendering is stable:
 
-- paste image/file into Editor
-- drag external file into Editor
+- paste an image file into the Editor
+- drag an external image file into the Editor
 - choose destination from configured policy
 - sanitize and deconflict filename deterministically
 - copy/write atomically
@@ -981,10 +981,10 @@ Use existing performance capture infrastructure and add a Markdown stress fixtur
 
 Each phase is a vertical slice with a red-green acceptance test. A module existing is not completion.
 
-### Phase 0: owner decisions, quarantine, and baseline characterization
+### Phase 0: decision recording, quarantine, and baseline characterization
 
-- Resolve the owner questions at the end of this plan.
-- Record the canonical feature name in `CONTEXT.md` after confirmation.
+- Record the resolved owner decisions at the end of this plan.
+- Record the canonical feature name in `CONTEXT.md`.
 - Keep current Live Preview available for comparison, but set the development default honestly until release gates pass.
 - Add focused repro tests for every known gap before replacing code:
   - direct filename/syntax lifecycle
@@ -1038,7 +1038,7 @@ Implement through the new semantic/render model:
 - Markdown and external link presentation
 - comments
 - Source Mode
-- selected Reveal Unit policy
+- construct-sensitive Reveal Unit policy with safe line/block fallback
 
 Delete corresponding ad hoc parsing from `live_render.lua` as each slice lands.
 
@@ -1050,10 +1050,10 @@ Exit gate: a representative prose note can be edited entirely in Live Preview wi
 - Add watcher reconciliation and open-Document overlay.
 - Resolve notes, aliases, headings, nested heading paths, blocks, attachments, URLs, pending, missing, and ambiguity.
 - Add status, command, mouse gesture, context actions, and Navigation History integration.
-- Add missing-note flow if selected.
-- Add autocomplete/search states for `[[`, `[[#`, `[[##`, `[[^`, and `[[^^` if selected for this release.
-- Add generated-link serialization policy.
-- Implement rename-link maintenance only if selected.
+- Add an explicit create-note action for missing links and a picker for ambiguous links.
+- Add autocomplete/search states for `[[`, `[[#`, `[[##`, `[[^`, and `[[^^`.
+- Add the per-Project generated-link serialization policy, defaulting to shortest unique Wikilinks.
+- Implement rename-link maintenance with an affected-file preview and confirmation; automatic updates remain a later opt-in per-Project setting.
 
 Exit gate: links work after cold startup, unsaved edits, create/delete/rename, multiple Projects, ambiguity, and Project moves without manual rebuild or random target selection.
 
@@ -1062,12 +1062,12 @@ Exit gate: links work after cold startup, unsaved edits, create/delete/rename, m
 - Replace image cache with context-aware retryable asset service.
 - Render local/remote-policy Markdown images and Wikilink image embeds.
 - Support both officially documented external sizing forms (`![250](url)` and `![alt|100x145](url)`) plus Wikilink width and width×height syntax, with explicit alt-text semantics.
-- Integrate images with wrapping/composed rows and selected active-edit presentation.
+- Integrate images with wrapping/composed rows while keeping intentionally styled source visible and revealing exact Markdown inside the active image link.
 - Preserve or refactor image overlay through generic overlay/input contracts.
 - Add remote-disabled/load-once policy.
-- Implement paste/drop attachment import if selected for core completion.
+- Implement image paste/drop attachment import for core completion, including supported `.obsidian` attachment-folder policies.
 
-Exit gate: image references and both documented external sizing forms remain correct across note rename/move, file appearance/change, Project change, policy toggles, two sizes of one image, wrapping, and async completion.
+Exit gate: image references and both documented external sizing forms remain correct across note rename/move, file appearance/change, Project change, policy toggles, two sizes of one image, wrapping, and async completion; paste/drag import copies images to the selected attachment location and inserts source-preserving links in one undoable transaction.
 
 ### Phase 6: block-level core experience
 
@@ -1084,17 +1084,18 @@ Exit gate: image references and both documented external sizing forms remain cor
 
 Exit gate: normal note-taking no longer drops to raw presentation for common block constructs, and all widget edits are source-preserving and undoable.
 
-### Phase 7: advanced blocks selected by owner
+### Phase 7: selected advanced blocks and embeds
 
-Separate vertical slices for:
+Implement separate vertical slices for the required selected scope:
 
-- tables
-- properties UI
-- math
-- note/heading/block embeds
-- PDF/audio/video attachment chips or viewers
+- styled editable tables with reliable row/column commands
+- styled-source math presentation
+- note, heading, and block embeds
+- generic clickable attachment chips, including PDF/audio/video files
 
-Each slice needs its own public behavior tests, mapping tests, focus/keyboard tests, wrapping tests, malformed-source fallback, and performance check.
+Keep rich table grids, editable property-row UI, rendered math, native PDF previews, media players, and Canvas/Base previews as deferred follow-up slices.
+
+Each implemented slice needs its own public behavior tests, mapping tests, focus/keyboard tests, wrapping tests, malformed-source fallback, and performance check.
 
 ### Phase 8: promotion and cleanup
 
@@ -1103,7 +1104,7 @@ Each slice needs its own public behavior tests, mapping tests, focus/keyboard te
 - Run large-note and large-Project benchmarks.
 - Remove superseded parser/render/index code and obsolete config keys.
 - Update `MarkdownView` to shared services or explicitly document it as independent Reading view.
-- Make Live Preview default only after all selected completion gates pass.
+- Make Live Preview default only after the Tier 0 correctness and Tier 1 experience gates pass; do not declare the selected core scope complete until required Tier 2 embeds/chips and image attachment import also pass.
 - Update user-facing docs and command names.
 - Update this plan with final status instead of leaving milestone names as the only record.
 
@@ -1219,10 +1220,11 @@ Visible warnings are reserved for actionable operations such as failed attachmen
 
 - During Phases 0–2, default to Source Mode/current raw behavior unless explicitly enabled for development.
 - During Phases 3–6, allow Live Preview opt-in and preserve a one-command Source Mode escape hatch.
-- Promote to default only when selected Tier 1 completion criteria and all Tier 0 gates pass.
-- Keep remote downloads disabled unless the owner chooses otherwise.
+- Promote Live Preview to the global default only when Tier 1 completion criteria and all Tier 0 gates pass.
+- Treat default-on promotion and completion of the broader selected core scope as separate gates: image attachment import, note/heading/block embeds, and generic attachment chips must also pass before the selected core scope is declared complete.
+- Keep remote downloads disabled by default, with one-shot loading and an optional trusted-Project policy.
 - Do not preserve deprecated internal Markdown aliases after all in-repo callers migrate.
-- Keep separate Reading view only according to the owner decision below.
+- Retain the separate `MarkdownView` as optional Reading view during the rebuild; reconsider retirement only after parity and shared parser migration.
 
 ## Definition of “it just works”
 
@@ -1235,6 +1237,8 @@ The feature is complete for the selected scope when all of these are true:
 - Link state is useful from cold start and remains current after unsaved edits and filesystem changes.
 - Link opening, heading/block navigation, ambiguity, and missing targets have deterministic behavior.
 - Images resolve, retry, resize, and update without stale context or implicit network access.
+- Image paste/drag import follows the selected attachment policy and inserts a source-preserving link transactionally.
+- Note, heading, and block embeds resolve through the owning link boundary; unsupported non-image media remains available through generic attachment chips.
 - Normal note-taking constructs do not unexpectedly drop to raw source.
 - Unsupported/malformed constructs remain safely editable raw source.
 - Ordinary caret motion and draw do not perform Document-wide Markdown work.
@@ -1272,162 +1276,78 @@ Observed/inspiration sources:
 
 Official Help is the syntax/behavior authority. Forum reports and open-source editors are implementation inspiration and must not be presented as exact Obsidian guarantees.
 
-## Decisions required from the owner
+## Owner decisions
 
-Please answer these before Phase 0 is considered complete. Recommendations are included to make the tradeoffs explicit, but no answer is assumed.
+Resolved by the owner on July 10, 2026. These decisions define the target product scope; later changes require an explicit owner decision and a corresponding plan update.
 
 ### 1. Reveal behavior
 
-Which should Anvil target?
-
-- **A. Obsidian-like construct reveal (recommended):** reveal only the formatted construct entered by the caret, with line/block fallback where necessary.
-- **B. Whole active line:** simpler and more source-visible, but less like Obsidian and visually noisier.
-- **C. Whole active block:** useful for tables/callouts, but causes larger transitions.
+Use Obsidian-like construct reveal: reveal only the formatted construct entered by the caret, with a containing-line or block raw fallback where precise reveal is unsafe.
 
 ### 2. Default mode and persistence
 
-Should Live Preview become the default for Markdown after the release gates pass? Should a Source Mode choice be:
-
-- per Editor only
-- shared by all Editors for the same Document
-- persisted per file in Workspace state
-- a global default with temporary per-Editor override
-
-Recommendation: Live Preview global default, temporary per-Editor override persisted in Workspace state.
+After the release gates pass, Markdown Live Preview is the global default. Each Editor can temporarily switch to Source Mode, and that per-Editor override is persisted in Workspace state.
 
 ### 3. Reading view / existing `MarkdownView`
 
-Should the separate rendered `MarkdownView` remain as an explicit Obsidian-like Reading view, or should the project eventually retire it once Live Preview is mature?
-
-Recommendation: retain it as optional Reading view during the rebuild; decide on retirement only after feature parity and shared parser migration.
+Retain the existing `MarkdownView` as an optional Reading view during the rebuild. Reconsider retirement only after Live Preview reaches feature parity and shared parser migration is complete.
 
 ### 4. Typography
 
-Should Markdown Live Preview body text use:
-
-- the normal code font
-- the proportional UI/text font like a reading surface
-- a dedicated configurable Markdown font
-
-Recommendation: proportional body/heading font with monospace inline/fenced code, while Source Mode uses the code font.
+Use the proportional UI/text font for body text and headings, monospace for inline and fenced code, and the normal code font in Source Mode.
 
 ### 5. Link activation
 
-In Editing view, what should open a link?
-
-- Ctrl+click on Windows/Linux and Cmd+click on macOS (closest to code-editor safety)
-- ordinary click when the link is inactive, with a second click/caret gesture to edit
-- a small open-link icon/hit region plus keyboard command
-
-Recommendation: modifier-click plus keyboard command; ordinary click edits.
+Use Ctrl+click on Windows/Linux and Cmd+click on macOS, plus a keyboard command, to open links. An ordinary click places the caret for editing.
 
 ### 6. Missing and ambiguous links
 
-For a missing `[[Note]]`, should open-link:
-
-- create the note immediately
-- ask for confirmation/location
-- show a picker/action menu
-- remain unresolved with no creation behavior
-
-For an ambiguous basename, should Anvil always show a picker?
-
-Recommendation: show a create action for missing links and a picker for ambiguity; never create/open silently when target identity is uncertain.
+Offer an explicit create-note action for a missing link. Show a picker for an ambiguous link. Never create or choose a target silently when its identity is uncertain.
 
 ### 7. Link root boundary
 
-Should internal links resolve against:
-
-- the owning Anvil Project root
-- the nearest ancestor containing `.obsidian`
-- an explicitly configured per-Project Markdown root
-- Project root by default, but nearest `.obsidian` when present
-
-Also: should External Project Directories participate in the same Markdown link index?
-
-Recommendation: owning Project by default, nearest `.obsidian` as a deliberate per-Project option; keep External Project Directories out unless explicitly included.
+Resolve links against the owning Anvil Project by default. Allow an explicit per-Project option to use the nearest ancestor containing `.obsidian`. Exclude External Project Directories unless the Project explicitly includes them in its Markdown link index.
 
 ### 8. Generated link format
 
-Which default should autocomplete, drag/drop, and rename updates generate?
-
-- shortest unique Wikilink
-- Project-root-relative Wikilink
-- source-relative Markdown link
-- configurable per Project
-
-Recommendation: configurable per Project, defaulting to shortest unique Wikilink for Obsidian-like use.
+Make generated-link format configurable per Project and default to the shortest unique Wikilink.
 
 ### 9. Automatic link updates on rename
 
-Should Anvil automatically rewrite links when a note/attachment is renamed, prompt with a preview, or never rewrite them?
-
-Recommendation: prompt with affected-file preview initially; allow an automatic per-Project setting after the operation is proven safe.
+Initially show an affected-file preview and ask before rewriting links. After the operation is proven safe, allow automatic updates as an optional per-Project setting.
 
 ### 10. Remote images
 
-Should remote images:
-
-- remain disabled until an explicit one-shot load
-- be enabled per trusted Project
-- always load automatically
-
-Recommendation: disabled by default, with one-shot load and optional trusted-Project policy.
+Keep remote images disabled by default. Offer a one-shot load action and an optional trusted-Project policy.
 
 ### 11. Image editing presentation
 
-When an image source becomes active, should Anvil:
+Render images inline while keeping their actual Markdown link/source line visible and editable. When inactive, present that source intentionally rather than as undifferentiated raw text; when the caret enters the image-link contents, reveal the exact Markdown needed for editing. The source remains authoritative and reachable without switching the entire Editor to Source Mode.
 
-- keep the image row visible below revealed source (recommended for stability)
-- replace the image with source while active, like a stricter source reveal
-- show source in a small overlay/editor affordance without changing the row
+Clicking the rendered image opens a full-window image viewer with smooth zooming and panning. Clicking outside the image closes the viewer. Preserve the existing overlay behavior where sound, and move it behind the generic overlay/input contract during the rebuild.
 
-For `|640x480`, should dimensions force exact size or fit within that box while preserving aspect ratio?
+Treat explicit width×height dimensions such as `|640x480` as a bounding box and preserve aspect ratio rather than distorting the image.
 
 ### 12. Attachments workflow
 
-Is Obsidian-like paste/drag attachment import required for the first “complete” release, including reading `.obsidian` attachment-folder settings, or can it follow image rendering/link support?
-
-Recommendation: include image paste/drop in the core release; defer non-image media import if necessary.
+Include image paste and drag/drop import in the core release, including the supported `.obsidian` attachment-folder policies. Non-image media import may follow later.
 
 ### 13. Note and non-image embeds
 
-Which are required before calling the feature complete?
-
-- note embeds
-- heading/block embeds
-- PDF chips or preview
-- audio/video chips or players
-- Canvas/Base embeds
-
-Recommendation: note/heading/block embeds plus generic attachment chips in Tier 2; defer native PDF/audio/video/Canvas/Base viewers.
+Include note, heading, and block embeds plus generic clickable attachment chips in Tier 2. Defer native PDF previews, audio/video players, and Canvas/Base previews.
 
 ### 14. Tables
 
-Do you want:
-
-- styled editable source tables first
-- a full interactive WYSIWYG table grid like Obsidian Live Preview
-- styled source for the initial release, rich grid later
-
-Recommendation: styled source plus reliable row/column commands first; rich grid as a dedicated later slice.
+Ship styled editable table source with reliable row/column commands first. Treat a full interactive visual grid as a later dedicated feature slice.
 
 ### 15. Properties/frontmatter
 
-Do you want Obsidian-like editable property rows, raw-but-styled YAML, or hidden frontmatter by default?
-
-Recommendation: raw-but-styled YAML for the core release, with aliases/tags indexed; property-row UI later.
+Show raw but styled YAML in the core release and index aliases and tags from it. Add editable property-row UI later.
 
 ### 16. Math and HTML
 
-Is rendered LaTeX math required for the first complete release? Should raw HTML remain source-only, matching Obsidian's rule that Markdown inside HTML is not rendered?
-
-Recommendation: source-styled math until a native renderer is selected; raw HTML source-only and no Markdown parsing inside it.
+Show math as styled source until a safe native renderer is selected. Keep raw HTML source-only and do not parse Markdown nested inside HTML.
 
 ### 17. Canonical user-facing name
 
-Choose the term to record in `CONTEXT.md` and commands/settings:
-
-- **Markdown Live Preview** (closest to Obsidian and used in this plan)
-- **Live Markdown Editor**
-- another name
+Use **Markdown Live Preview** in commands, settings, documentation, and the project glossary.
