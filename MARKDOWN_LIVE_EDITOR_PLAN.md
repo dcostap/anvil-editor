@@ -803,7 +803,7 @@ Absolute paths outside the link root are external file links, not internal notes
 
 Interaction seams:
 
-- command to open link at primary caret
+- canonical `markdown-live-preview:open-link` command to open the link at the primary caret
 - selected modifier-click behavior
 - optional click-specific icon/region for touch-like use
 - status-bar text with destination/reason
@@ -982,6 +982,8 @@ Use existing performance capture infrastructure and add a Markdown stress fixtur
 Each phase is a vertical slice with a red-green acceptance test. A module existing is not completion.
 
 ### Phase 0: decision recording, quarantine, and baseline characterization
+
+**Completed July 10, 2026.** The reproducible baseline and known full-suite issue are recorded in `MARKDOWN_LIVE_PREVIEW_BASELINE.md`.
 
 - Record the resolved owner decisions at the end of this plan.
 - Record the canonical feature name in `CONTEXT.md`.

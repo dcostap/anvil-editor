@@ -299,9 +299,10 @@ keymap.add_direct({
   ["ctrl+shift+d"] = "doc:go-to-line",
   ["ctrl+shift+D"] = "doc:go-to-line",
 })
--- Markdown Live Editor is still development-flagged while wrapping/rendering matures.
-config.markdown_live_editor = true
-config.markdown_live_reveal_mode = "active_line"
+-- Markdown Live Preview remains opt-in while Tier 0 correctness and Tier 1 rendering mature.
+-- Preserve an explicit USERDIR/project-module opt-in loaded before first-party defaults.
+if config.markdown_live_editor == nil then config.markdown_live_editor = false end
+if config.markdown_live_reveal_mode == nil then config.markdown_live_reveal_mode = "construct" end
 config.markdown_live_render_images = true
 config.markdown_live_download_remote_images = false
 require "core.markdown"
