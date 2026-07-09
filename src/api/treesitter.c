@@ -2,6 +2,7 @@
 #include "../treesitter/languages.h"
 #include "../treesitter/service.h"
 #include "../treesitter/snapshot.h"
+#include "../markdown_parser.h"
 #include "../worker_pool.h"
 
 #include <SDL3/SDL_timer.h>
@@ -18,6 +19,7 @@
 
 #define API_TYPE_TREESITTER_QUERY "TreeSitterQuery"
 #define API_TYPE_TREESITTER_STATE "TreeSitterDocumentState"
+#define API_TYPE_MARKDOWN_TREE "MarkdownTree"
 
 typedef struct {
   TSQuery *query;
@@ -28,12 +30,20 @@ typedef struct {
   AnvilTSDocumentState *state;
 } AnvilTSStateUserdata;
 
+typedef struct {
+  AnvilMarkdownTree *tree;
+} AnvilMarkdownTreeUserdata;
+
 static AnvilTSQueryUserdata *check_query(lua_State *L, int idx) {
   return (AnvilTSQueryUserdata *) luaL_checkudata(L, idx, API_TYPE_TREESITTER_QUERY);
 }
 
 static AnvilTSStateUserdata *check_state(lua_State *L, int idx) {
   return (AnvilTSStateUserdata *) luaL_checkudata(L, idx, API_TYPE_TREESITTER_STATE);
+}
+
+static AnvilMarkdownTreeUserdata *check_markdown_tree(lua_State *L, int idx) {
+  return (AnvilMarkdownTreeUserdata *) luaL_checkudata(L, idx, API_TYPE_MARKDOWN_TREE);
 }
 
 static char *treesitter_strdup(const char *text) {
@@ -452,12 +462,14 @@ typedef struct LuaCaptureCopy {
   uint32_t pattern_index;
   uint32_t capture_index;
   uint32_t order;
+  uint32_t region_index;
 } LuaCaptureCopy;
 
 typedef struct LuaCaptureCollectContext {
   LuaCaptureCopy *items;
   uint32_t count;
   uint32_t capacity;
+  uint32_t region_index;
   bool failed;
 } LuaCaptureCollectContext;
 
@@ -501,6 +513,7 @@ static bool collect_query_capture(const AnvilTSQueryCapture *capture, void *payl
   copy->pattern_index = capture->pattern_index;
   copy->capture_index = capture->capture_index;
   copy->order = capture->order;
+  copy->region_index = context->region_index;
   context->count++;
   return true;
 }
@@ -531,6 +544,10 @@ static void push_capture_copy(lua_State *L, const LuaCaptureCopy *capture) {
   lua_setfield(L, -2, "capture_index");
   lua_pushinteger(L, (lua_Integer) capture->order);
   lua_setfield(L, -2, "order");
+  if (capture->region_index > 0) {
+    lua_pushinteger(L, (lua_Integer) capture->region_index);
+    lua_setfield(L, -2, "region_index");
+  }
 }
 
 typedef struct LuaSyncParseRun {
@@ -993,6 +1010,158 @@ static int state_query_captures(lua_State *L) {
   return 1;
 }
 
+static int f_parse_markdown(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  uint32_t timeout_ms = option_uint32(L, 2, "timeout_ms", 750);
+  char *error = NULL;
+  AnvilTSSnapshot *snapshot = snapshot_from_lua_lines(L, 1, &error);
+  if (!snapshot) {
+    lua_pushnil(L);
+    lua_pushstring(L, error ? error : "failed to create Markdown source snapshot");
+    free(error);
+    return 2;
+  }
+  AnvilMarkdownTree *tree = anvil_markdown_tree_parse(snapshot, timeout_ms, &error);
+  anvil_ts_snapshot_free(snapshot);
+  if (!tree) {
+    lua_pushnil(L);
+    lua_pushstring(L, error ? error : "Markdown parse failed");
+    free(error);
+    return 2;
+  }
+  AnvilMarkdownTreeUserdata *userdata = (AnvilMarkdownTreeUserdata *) lua_newuserdata(L, sizeof(*userdata));
+  userdata->tree = tree;
+  luaL_setmetatable(L, API_TYPE_MARKDOWN_TREE);
+  return 1;
+}
+
+static int markdown_tree_inline_regions(lua_State *L) {
+  AnvilMarkdownTreeUserdata *userdata = check_markdown_tree(L, 1);
+  luaL_argcheck(L, userdata->tree != NULL, 1, "closed Markdown tree");
+  uint32_t count = anvil_markdown_tree_inline_count(userdata->tree);
+  lua_createtable(L, (int) count, 0);
+  for (uint32_t i = 0; i < count; i++) {
+    TSRange range = anvil_markdown_tree_inline_source_range(userdata->tree, i);
+    lua_newtable(L);
+    lua_pushinteger(L, (lua_Integer) range.start_byte);
+    lua_setfield(L, -2, "start_byte");
+    lua_pushinteger(L, (lua_Integer) range.end_byte);
+    lua_setfield(L, -2, "end_byte");
+    lua_pushinteger(L, (lua_Integer) range.start_point.row + 1);
+    lua_setfield(L, -2, "start_line");
+    lua_pushinteger(L, (lua_Integer) range.start_point.column + 1);
+    lua_setfield(L, -2, "start_col");
+    lua_pushinteger(L, (lua_Integer) range.end_point.row + 1);
+    lua_setfield(L, -2, "end_line");
+    lua_pushinteger(L, (lua_Integer) range.end_point.column + 1);
+    lua_setfield(L, -2, "end_col");
+    lua_rawseti(L, -2, (int) i + 1);
+  }
+  return 1;
+}
+
+static int markdown_tree_query(lua_State *L, bool inline_trees) {
+  AnvilMarkdownTreeUserdata *tree_userdata = check_markdown_tree(L, 1);
+  AnvilTSQueryUserdata *query_userdata = check_query(L, 2);
+  luaL_argcheck(L, tree_userdata->tree != NULL, 1, "closed Markdown tree");
+  luaL_argcheck(L, query_userdata->query != NULL, 2, "closed Tree-sitter query");
+  const char *expected_id = inline_trees ? "markdown_inline" : "markdown";
+  luaL_argcheck(L, query_userdata->language && strcmp(query_userdata->language->id, expected_id) == 0,
+    2, inline_trees ? "inline query must use markdown_inline" : "block query must use markdown");
+  uint32_t match_limit = option_uint32(L, 3, "match_limit", 50000);
+  uint32_t max_captures = option_uint32(L, 3, "max_captures", 50000);
+  uint32_t timeout_ms = option_uint32(L, 3, "timeout_ms", 20);
+  const AnvilTSSnapshot *snapshot = anvil_markdown_tree_snapshot(tree_userdata->tree);
+
+  LuaCaptureCollectContext context;
+  memset(&context, 0, sizeof(context));
+  bool exceeded_any = false;
+  char *error = NULL;
+  uint64_t query_started_ticks = SDL_GetTicks();
+  uint32_t tree_count = inline_trees ? anvil_markdown_tree_inline_count(tree_userdata->tree) : 1;
+  for (uint32_t i = 0; i < tree_count; i++) {
+    TSTree *tree = inline_trees
+      ? anvil_markdown_tree_inline_tree(tree_userdata->tree, i)
+      : anvil_markdown_tree_block_tree(tree_userdata->tree);
+    TSRange range = inline_trees
+      ? anvil_markdown_tree_inline_source_range(tree_userdata->tree, i)
+      : (TSRange) { .start_byte = 0, .end_byte = snapshot->byte_len };
+    bool exceeded = false;
+    context.region_index = inline_trees ? i + 1 : 0;
+    uint32_t remaining = max_captures > context.count ? max_captures - context.count : 0;
+    if (remaining == 0) {
+      exceeded_any = true;
+      break;
+    }
+    uint64_t elapsed_ms = SDL_GetTicks() - query_started_ticks;
+    if (timeout_ms > 0 && elapsed_ms >= timeout_ms) {
+      lua_pushnil(L);
+      lua_pushstring(L, "Markdown query timed out");
+      free_capture_copies(&context);
+      return 2;
+    }
+    uint32_t remaining_timeout_ms = timeout_ms > 0 ? timeout_ms - (uint32_t) elapsed_ms : 0;
+    bool ok = anvil_ts_query_captures_in_tree(
+      tree,
+      snapshot,
+      query_userdata->query,
+      range.start_byte,
+      range.end_byte,
+      match_limit,
+      remaining,
+      remaining_timeout_ms,
+      collect_query_capture,
+      &context,
+      NULL,
+      NULL,
+      &exceeded,
+      &error
+    );
+    exceeded_any = exceeded_any || exceeded;
+    if (!ok) {
+      lua_pushnil(L);
+      lua_pushstring(L, error ? error : (context.failed
+        ? "out of memory collecting Markdown captures"
+        : "Markdown query failed"));
+      free(error);
+      free_capture_copies(&context);
+      return 2;
+    }
+  }
+
+  free(error);
+  lua_createtable(L, (int) context.count, 1);
+  for (uint32_t i = 0; i < context.count; i++) {
+    push_capture_copy(L, &context.items[i]);
+    lua_rawseti(L, -2, (int) i + 1);
+  }
+  free_capture_copies(&context);
+  lua_pushboolean(L, exceeded_any);
+  lua_setfield(L, -2, "exceeded_match_limit");
+  return 1;
+}
+
+static int markdown_tree_query_blocks(lua_State *L) {
+  return markdown_tree_query(L, false);
+}
+
+static int markdown_tree_query_inlines(lua_State *L) {
+  return markdown_tree_query(L, true);
+}
+
+static int markdown_tree_close(lua_State *L) {
+  AnvilMarkdownTreeUserdata *userdata = check_markdown_tree(L, 1);
+  if (userdata->tree) {
+    anvil_markdown_tree_free(userdata->tree);
+    userdata->tree = NULL;
+  }
+  return 0;
+}
+
+static int markdown_tree_gc(lua_State *L) {
+  return markdown_tree_close(L);
+}
+
 static int state_cancel(lua_State *L) {
   AnvilTSStateUserdata *userdata = check_state(L, 1);
   if (userdata->state) anvil_ts_document_state_cancel(userdata->state);
@@ -1085,6 +1254,19 @@ static const luaL_Reg state_meta[] = {
   { NULL, NULL }
 };
 
+static const luaL_Reg markdown_tree_methods[] = {
+  { "inline_regions", markdown_tree_inline_regions },
+  { "query_blocks", markdown_tree_query_blocks },
+  { "query_inlines", markdown_tree_query_inlines },
+  { "close", markdown_tree_close },
+  { NULL, NULL }
+};
+
+static const luaL_Reg markdown_tree_meta[] = {
+  { "__gc", markdown_tree_gc },
+  { NULL, NULL }
+};
+
 static const luaL_Reg lib[] = {
   { "runtime_version", f_runtime_version },
   { "runtime_abi_version", f_runtime_abi_version },
@@ -1093,6 +1275,7 @@ static const luaL_Reg lib[] = {
   { "language_version", f_language_version },
   { "compile_query", f_compile_query },
   { "index_text", f_index_text },
+  { "parse_markdown", f_parse_markdown },
   { "register_complete_event", f_register_complete_event },
   { "ack_complete_event", f_ack_complete_event },
   { "new_document_state", f_new_document_state },
@@ -1111,6 +1294,13 @@ int luaopen_treesitter(lua_State *L) {
   luaL_setfuncs(L, state_meta, 0);
   lua_newtable(L);
   luaL_setfuncs(L, state_methods, 0);
+  lua_setfield(L, -2, "__index");
+  lua_pop(L, 1);
+
+  luaL_newmetatable(L, API_TYPE_MARKDOWN_TREE);
+  luaL_setfuncs(L, markdown_tree_meta, 0);
+  lua_newtable(L);
+  luaL_setfuncs(L, markdown_tree_methods, 0);
   lua_setfield(L, -2, "__index");
   lua_pop(L, 1);
 

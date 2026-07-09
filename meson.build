@@ -341,7 +341,12 @@ if not get_option('source-only')
     tree_sitter_kotlin_dep = subproject('tree-sitter-kotlin',
         default_options: default_fallback_options + ['default_library=static']
     ).get_variable('tree_sitter_kotlin_dep')
-    anvil_deps = [lua_dep, sdl_dep, sdl_image, freetype_dep, harfbuzz_anvil_dep, pcre2_dep, uchardet_dep, tree_sitter_dep, tree_sitter_c_dep, tree_sitter_cpp_dep, tree_sitter_odin_dep, tree_sitter_kotlin_dep, libm, libdl, librt]
+    tree_sitter_markdown_subproject = subproject('tree-sitter-markdown',
+        default_options: default_fallback_options + ['default_library=static']
+    )
+    tree_sitter_markdown_dep = tree_sitter_markdown_subproject.get_variable('tree_sitter_markdown_dep')
+    tree_sitter_markdown_inline_dep = tree_sitter_markdown_subproject.get_variable('tree_sitter_markdown_inline_dep')
+    anvil_deps = [lua_dep, sdl_dep, sdl_image, freetype_dep, harfbuzz_anvil_dep, pcre2_dep, uchardet_dep, tree_sitter_dep, tree_sitter_c_dep, tree_sitter_cpp_dep, tree_sitter_odin_dep, tree_sitter_kotlin_dep, tree_sitter_markdown_dep, tree_sitter_markdown_inline_dep, libm, libdl, librt]
 endif
 
 lua_compat_needed = lua_dep.version() < '5.3.0'

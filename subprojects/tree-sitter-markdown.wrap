@@ -1,0 +1,9 @@
+[wrap-git]
+url = https://github.com/tree-sitter-grammars/tree-sitter-markdown.git
+revision = c3570720f7f7bbad22fe96603f106276618e0cf5
+depth = 1
+patch_directory = tree-sitter-markdown
+
+[provide]
+tree-sitter-markdown = tree_sitter_markdown_dep
+tree-sitter-markdown-inline = tree_sitter_markdown_inline_dep

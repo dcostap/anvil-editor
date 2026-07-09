@@ -7,6 +7,7 @@
 - Tree-sitter C++ grammar: `tree-sitter/tree-sitter-cpp` commit `f41e1a044c8a84ea9fa8577fdd2eab92ec96de02`, version `0.23.4`.
 - Tree-sitter Odin grammar: `tree-sitter-grammars/tree-sitter-odin` commit `d2ca8efb4487e156a60d5bd6db2598b872629403`, version `1.3.0`.
 - Tree-sitter Kotlin grammar: `fwcd/tree-sitter-kotlin` commit `c8ac3d2627240160b999a2c100de3babbdb8f419`, version `0.4.0`.
+- Tree-sitter Markdown block and inline grammars: `tree-sitter-grammars/tree-sitter-markdown` commit `c3570720f7f7bbad22fe96603f106276618e0cf5`, version `0.5.3`.
 
 The build uses tracked Meson wraps plus tracked packagefile Meson build definitions:
 
@@ -15,11 +16,13 @@ The build uses tracked Meson wraps plus tracked packagefile Meson build definiti
 - `subprojects/tree-sitter-cpp.wrap`
 - `subprojects/tree-sitter-odin.wrap`
 - `subprojects/tree-sitter-kotlin.wrap`
+- `subprojects/tree-sitter-markdown.wrap`
 - `subprojects/packagefiles/tree-sitter/meson.build`
 - `subprojects/packagefiles/tree-sitter-c/meson.build`
 - `subprojects/packagefiles/tree-sitter-cpp/meson.build`
 - `subprojects/packagefiles/tree-sitter-odin/meson.build`
 - `subprojects/packagefiles/tree-sitter-kotlin/meson.build`
+- `subprojects/packagefiles/tree-sitter-markdown/meson.build`
 
 ## API notes
 
@@ -35,6 +38,7 @@ Tree-sitter C grammar ABI version: `15`.
 Tree-sitter C++ grammar ABI version: `14`.
 Tree-sitter Odin grammar ABI version: `14`.
 Tree-sitter Kotlin grammar ABI version: `14`.
+Tree-sitter Markdown block and inline grammar ABI version: `15`.
 
 ## Licenses
 
@@ -114,6 +118,28 @@ Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights to
 use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+### Tree-sitter Markdown block and inline grammars
+
+Copyright (c) 2021 Matthias Deiml
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
 of the Software, and to permit persons to whom the Software is furnished to do
 so, subject to the following conditions:
 

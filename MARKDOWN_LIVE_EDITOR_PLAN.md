@@ -1004,6 +1004,8 @@ Exit gate: known gaps reproduce deterministically and the current prototype can 
 
 ### Phase 1: parser and semantic-model spike
 
+**Backend spike completed July 10, 2026.** Tree-sitter Markdown 0.5.3 was selected and the evidence is recorded in `MARKDOWN_PARSER_BACKEND.md`. The semantic model, full compatibility corpus, and publication gates remain in progress.
+
 - Build an independent compatibility fixture corpus from CommonMark/GFM/official Obsidian syntax examples without copying large documentation bodies.
 - Pin/vendor and compile the smallest viable MD4C integration through Meson; publish one exact source-ranged fixture through an Anvil native API and native test.
 - Prototype tree-sitter-markdown only far enough to compile both grammars in Anvil and compare exact ranges, malformed input, split-parser/included-range integration, and update cost through the same kind of publication boundary.

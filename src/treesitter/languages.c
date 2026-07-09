@@ -6,12 +6,16 @@ const TSLanguage *tree_sitter_c(void);
 const TSLanguage *tree_sitter_cpp(void);
 const TSLanguage *tree_sitter_odin(void);
 const TSLanguage *tree_sitter_kotlin(void);
+const TSLanguage *tree_sitter_markdown(void);
+const TSLanguage *tree_sitter_markdown_inline(void);
 
 static const AnvilTSLanguage anvil_ts_languages[] = {
   { "c", "0.24.2", tree_sitter_c },
   { "cpp", "0.23.4", tree_sitter_cpp },
   { "odin", "1.3.0", tree_sitter_odin },
   { "kotlin", "0.4.0", tree_sitter_kotlin },
+  { "markdown", "0.5.3", tree_sitter_markdown },
+  { "markdown_inline", "0.5.3", tree_sitter_markdown_inline },
 };
 
 size_t anvil_ts_language_count(void) {
