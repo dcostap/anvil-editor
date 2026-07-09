@@ -1,829 +1,1433 @@
-# Markdown Live Editor Plan
+# Markdown Live Preview Rebuild Plan
+
+## Status
+
+This document replaces the original greenfield plan with a plan based on:
+
+- the Markdown Live Preview code that is already in the repository
+- the implementation and follow-up commit history from July 4–5, 2026
+- current Anvil `DocView`, wrapping, selection, rendering, Project, and directory-watching architecture
+- current official Obsidian Help documentation
+- observed Obsidian Live Preview behavior where the official documentation is intentionally high-level
+- open-source implementations of the same editing model
+
+The working product name in this plan is **Markdown Live Preview**. The final user-facing name is an owner decision at the end of this document.
+
+This is a rebuild and completion plan, not a promise to preserve every current Markdown Live Preview internal API. Keep sound generic core primitives, replace brittle or incomplete feature code, and update all in-repo callers and tests in the same change when concepts are renamed.
 
 ## Purpose
 
-Build an Obsidian-style Markdown editing experience inside Anvil's normal `DocView` editing surface.
+Make a Markdown file opened in an ordinary Anvil Editor feel like Obsidian's **Live Preview** mode:
 
-The goal is **not** a separate rendered preview. A Markdown file should open as an ordinary editable Document View, but Markdown-specific lines, spans, links, embeds, and images should be rendered with a polished reading appearance while the underlying file remains plain Markdown text.
+- the Document remains plain editable Markdown
+- formatted content is presented inline in the Editor
+- Markdown syntax is hidden when it is not being edited and revealed when the caret enters the relevant construct
+- headings, emphasis, code, links, lists, images, callouts, tables, and other supported constructs look intentional rather than like lightly recolored source
+- Obsidian-style internal links and embeds work naturally inside an Anvil Project
+- all ordinary editing behavior—undo, redo, selections, multi-cursor, copy, find, replace, IME, wrapping, folding, save, external edits, and navigation history—continues to work
+- malformed, incomplete, or unsupported Markdown always falls back safely to editable source
 
-This plan uses the working name **Markdown Live Editor** for the feature.
+The target is not a separate preview surface and not a rich-text document model. The target is a robust text Editor whose visual projection can differ from its source without ever losing control of the source.
 
-## Product goals
+## Terminology
 
-- Markdown files remain normal editable text documents.
-- The raw Markdown document is the only source of truth for save, undo, redo, selections, copy, search, find/replace, and external-tool round trips.
-- The view renders Markdown nicely in-place:
-  - headings use heading-sized fonts
-  - emphasis/code/link styling reads naturally
-  - image syntax can render the image inline in the editor
-  - blockquotes, rules, lists, task items, tables, footnotes, and code fences can be progressively upgraded
-- Obsidian-style links are parsed and resolved:
-  - `[[Note]]`
-  - `[[Note|Alias]]`
-  - `[[Note#Heading]]`
-  - `[[Note#^block-id]]`
-  - `[[#Heading in current note]]`
-  - `[[^block in current note]]` / cross-vault block search where feasible
-  - `![[Note]]` note embeds
-  - `![[image.png]]` attachment embeds
-  - `![[image.png|640x480]]` and `![[image.png|100]]` resize syntax
-  - standard Markdown links/images, including local project files and remote URLs
-- Markdown-specific rendering is opt-in for Markdown documents and should not alter normal `DocView` behavior for code or plain text.
-- The implementation should be a clean extension of existing `DocView` rendering/editing primitives, not a preview-view hack.
+- **Markdown Live Preview**: the formatted-in-place editing mode described by this plan.
+- **Source Mode**: an Editor mode in which all Markdown source syntax is shown normally.
+- **Reveal Unit**: the smallest parsed construct whose hidden syntax becomes visible for editing, such as one emphasis span, one link, or one block marker region.
+- **Markdown Render Model**: the immutable, source-ranged description of what an Editor should draw for a Document revision.
+- **Markdown Link Index**: Anvil's Project-scoped index of notes, aliases, headings, block IDs, and attachments. This avoids treating the entire Anvil Workspace as one Obsidian vault.
+- **Obsidian vault**: an external Obsidian concept. By default, an Anvil Project is the link-resolution boundary unless an owner decision below selects nearest nested `.obsidian` roots.
 
-## Non-goals for the first implementation pass
+These names do not yet alter `CONTEXT.md`; the user-facing canonical feature name and Project/vault boundary need owner confirmation first.
 
-- Full Obsidian application parity: graph view, backlinks pane, sync, plugin ecosystem, Canvas, or properties UI are out of scope.
-- A ProseMirror-style rich document model is out of scope. The document remains plain text.
-- A separate mandatory Markdown preview is not the primary user experience. Existing `MarkdownView` may remain as a rendered preview/tool during migration, but the target path is live editing in `DocView`.
-- Audio/video/PDF inline players are not required for the first image-focused milestone. Their link/embed syntax should be parsed and represented, then opened externally or as attachment chips until renderers exist.
+## Executive diagnosis of the current implementation
 
-## Research summary
+The existing implementation is a useful prototype with substantial generic `DocView` work, but it is not an end-to-end Live Preview feature.
 
-### Obsidian behavior
+### What exists and is worth preserving
 
-Sources reviewed:
+- Generic `DocView` visual metric providers.
+- Generic line render providers and source-column/x-coordinate mapping.
+- Text fragments with custom fonts, colors, hidden ranges, backgrounds, and widgets.
+- A raw-render fallback for actually wrapped Markdown lines.
+- Interaction freezing during drag selection.
+- Heading sizing and inactive heading-marker hiding.
+- Bold, italic, combined emphasis, and strikethrough rendering.
+- Wikilink/Markdown-link parsing sufficient for the current prototype.
+- Local image rendering, Obsidian attachment-folder lookup, resize syntax, and a full-window image overlay.
+- Remote image downloads disabled by default in the live editor.
+- A standalone Project-scoped note/attachment index with tests for aliases, headings, block IDs, ambiguity, and multiple Projects.
+- Focused runtime and in-process UI tests around the above behavior.
 
-- `https://obsidian.md/help/edit-and-read`
-- `https://obsidian.md/help/syntax`
-- `https://obsidian.md/help/links`
-- `https://obsidian.md/help/How+to/Embed+files`
-- `https://obsidian.md/help/file-formats`
-- `https://obsidian.md/help/attachments`
+### What is incomplete or incorrect
 
-Relevant observations:
+1. **The link index is not part of the product path.**
+   `data/core/markdown/vault_index.lua` is exported, but the live renderer does not use it. Internal links do not resolve, distinguish missing/ambiguous targets, navigate, or show useful hover state.
 
-- Obsidian has Reading view and Editing view.
-- Editing view has two modes:
-  - **Live Preview**: formatted text appears inline and most Markdown syntax is hidden; raw syntax is revealed when the cursor is in the formatted area.
-  - **Source mode**: raw Markdown syntax is visible at all times.
-- Internal links support both wikilink and Markdown syntax:
-  - `[[Three laws of motion]]`
-  - `[Three laws of motion](Three%20laws%20of%20motion.md)`
-- Wikilink aliases use `|`, for example `[[Three laws of motion|laws]]`.
-- Heading links use `#`, for example `[[About Obsidian#Links are first-class citizens]]`.
-- Block links use `#^`, for example `[[Note#^quote-of-the-day]]`.
-- Obsidian-specific block IDs use letters, numbers, and dashes.
-- Embeds are internal links prefixed with `!`, for example `![[Document.pdf]]` or `![[Engelbart.jpg]]`.
-- Image resize syntax is accepted in both wikilink embeds and Markdown images:
-  - `![[Engelbart.jpg|640x480]]`
-  - `![[Engelbart.jpg|100]]`
-  - `![Engelbart|100x145](https://...)`
-- PDF embeds can include fragment options such as `#page=3` or `#height=400`.
-- Accepted Obsidian file formats include Markdown, Canvas/Base files, images (`avif`, `bmp`, `gif`, `jpeg`, `jpg`, `png`, `svg`, `webp`), audio, video, and PDF.
-- Attachments are ordinary files in the vault. Obsidian can store them at the vault root, in a configured folder, beside the current note, or in a subfolder under the current note.
+2. **The index does not initialize or stay current automatically.**
+   It does not perform an initial rebuild on demand, has no active Project directory watcher, and tracks open Documents only when explicitly asked.
 
-### Open-source / adjacent implementations
+3. **Attach/detach lifecycle is incomplete.**
+   Live Preview is refreshed when an Editor is marked or activated. Direct filename changes, save-as, rename, syntax changes, and reload paths do not have one first-class lifecycle notification. The existing rename test manually calls `refresh_view()` and therefore does not prove automatic behavior.
 
-Sources reviewed:
+4. **Rendering and metrics are too expensive.**
+   Selection state participates in the visual metric generation. A caret move can rebuild metrics across the entire Document. Rendering reparses inline Markdown from draw and coordinate-mapping paths, and the nominal line-render cache is not actually used.
 
-- Atomic Editor (`https://github.com/kenforthewin/atomic-editor` and cached `docs/architecture.md`)
-- `codemirror-markdown-hybrid` (`https://github.com/markdowneditors/codemirror-markdown-hybrid`)
-- CodeMirror forum discussion: `Hybrid markdown editing (preview for unfocused lines, raw for active line)`
-- VS Code `Clean Markdown Live Preview` extension listing
+5. **Wrapping is only protected, not integrated.**
+   Long wrapped Markdown lines fall back to raw source. That avoids corrupt coordinates, but it is not finished Live Preview behavior.
 
-Important lessons:
+6. **The parser is a prototype parser.**
+   It is line-oriented, incomplete relative to CommonMark/GFM/Obsidian Flavored Markdown, inconsistent with `MarkdownView` in places, and unsuitable as the semantic foundation for tables, nested blocks, references, comments, Unicode edge cases, or robust incremental invalidation.
 
-- Keep raw Markdown as the source of truth. Rendered appearance should be view-only decorations/widgets.
-- Prefer active-line or active-block raw reveal. It makes the inactive document pleasant to read while preserving precise text editing when the caret is on a construct.
-- Avoid layout shifts. If a line becomes active and raw syntax appears, the line's height and major geometry should not change.
-- Rebuild rendering narrowly around changed lines/blocks instead of reparsing the whole document on every keystroke.
-- Use a freeze/deferral guard around mouse clicks if decoration rebuilds could move text under the pointer between pointer-down and pointer-up.
-- Inline images and tables are the hardest cases because they are not just colored text; they need widgets with stable document-position mapping.
-- CodeMirror-style solutions rely on incremental syntax trees/decorations. Anvil will need equivalent `DocView` primitives because its renderer is not DOM/CodeMirror-based.
+7. **The old `MarkdownView` parser remains mostly separate.**
+   `MarkdownView` still owns a much broader parser and renderer. The new shared parser did not become a common semantic layer.
 
-## Current Anvil state
+8. **Image cache identity and invalidation are incomplete.**
+   Missing, failed, and remote-disabled entries can stay cached forever. Relative image identity does not include the source note/Project context. Moving a note or changing remote-image policy can leave stale results.
 
-Relevant files:
+9. **Configuration is contradictory.**
+   The defaults comment calls the feature development-flagged, while `config.markdown_live_editor` is `true`. `config.markdown_live_reveal_mode` exists but is unused.
+
+10. **Integration relies on global monkey patches.**
+    Markdown wraps `file_context.mark_editor_view`, `core.set_active_view`, `DocView` mouse methods, `RootPanel` draw/input methods, and key handling. The render providers are a sound extension model; the lifecycle and interaction wrapping is order-sensitive and lacks ownership/uninstall semantics.
+
+11. **Most of the intended experience is absent.**
+    There is no complete inline-code treatment, task widget, list presentation, blockquote/callout rendering, rules, tables, properties UI, math, note embeds, attachment chips, link autocomplete, missing-note creation, or rename-link maintenance.
+
+### What the Git history says
+
+- The plan was committed on July 4, 2026 at 22:07.
+- Six implementation milestone commits landed between 22:24 and 23:21.
+- Twenty-two follow-up commits landed by July 5, mostly stabilizing heading editing, emphasis, hit testing, drag selection, images, and the image overlay.
+- The feature added roughly 5,100 lines across 27 files.
+- No dedicated Markdown Live Preview implementation commit landed after July 5.
+- The original plan was never updated to record actual completion or remaining acceptance failures.
+
+The history shows a broad, very fast scaffolding pass followed by reactive stabilization. The rebuild must use narrow vertical slices with explicit acceptance gates instead of declaring whole phases complete after modules exist.
+
+## Target user experience
+
+### Opening a Markdown file
+
+- A file recognized as Markdown opens in the normal Main Editor.
+- Live Preview is the default editing mode once the release gates in this plan pass.
+- There is no duplicate Document and no hidden rendered copy.
+- A Source Mode command can reveal ordinary Markdown source without replacing the Editor or losing selection/scroll state.
+- Non-Markdown Editors do not pay Markdown parsing, metric, or rendering costs.
+
+### Reading while editing
+
+- Headings have durable H1–H6 hierarchy.
+- Body text remains comfortable and consistent.
+- Emphasis, highlight, strikethrough, inline code, links, tags, lists, quotes, and code blocks look rendered even though the source remains editable.
+- Hidden source syntax reappears only around the construct being edited, subject to the owner-selected reveal policy.
+- Moving the caret must not cause vertical scroll jumps. Horizontal movement caused by revealing source must not corrupt pointer placement or selection.
+- Invalid or half-typed constructs remain readable source until they parse confidently.
+
+### Internal links
+
+- `[[Note]]`, aliases, heading links, block links, and standard Markdown note links resolve within the owning link boundary.
+- Existing links are visually distinct from missing and ambiguous links.
+- The status bar explains the resolved destination or failure reason.
+- The open-link command and the selected mouse gesture open notes as Editors, jump to headings/blocks, open attachments, or launch external URLs.
+- Editing text normally is never blocked by link hit regions.
+
+### Images and attachments
+
+- Local images render without leaving the Editor.
+- Image dimensions follow Obsidian syntax and clamp to available content width.
+- Missing, disabled-remote, loading, and failed images have explicit, useful states.
+- Clicking an image can open the existing image overlay without making source editing impossible.
+- Paste and drag/drop can eventually copy an attachment to the configured location and insert the selected link format.
+
+### Large and difficult Documents
+
+- Caret movement does not scan every line.
+- Draw and hit-test paths consume cached render models and never parse Markdown.
+- A one-megabyte note remains editable while parsing/indexing catches up.
+- Broken Markdown, deep nesting, pathological delimiter input, very long lines, Unicode, CRLF, tabs, multi-cursor editing, IME, and external reloads degrade to source rather than crashing or misplacing edits.
+
+## Product invariants
+
+1. **Raw Markdown is authoritative.**
+   Decorations and widgets never become a second document model. Save, copy, undo, redo, search, replace, diff, LSP-like consumers, and external tools see source text.
+
+2. **Source ranges are exact byte ranges.**
+   Every rendered construct maps to the same UTF-8 byte-column convention used by `Doc`. No normalized display text may stand in for editing coordinates.
+
+3. **No parse work in drawing or hit testing.**
+   Drawing, selection geometry, caret positioning, IME positioning, and x/column mapping consume a cached render model for a known Document revision.
+
+4. **No whole-Document work on ordinary caret movement.**
+   Selection changes invalidate old and new Reveal Units/lines only. They do not regenerate metrics for every visual row.
+
+5. **Conservative fallback is always valid.**
+   Parser errors, stale async results, unsupported constructs, unsafe wrapping, missing assets, and provider failures produce raw source or an explicit chip—not incorrect hidden syntax.
+
+6. **Vertical geometry is anchored.**
+   Entering/leaving a construct preserves its semantic row style. If wrapping or a widget changes row count, keep the caret/viewport anchor stable and defer pointer-sensitive changes until interaction ends.
+
+7. **No implicit network access.**
+   Opening a note never downloads remote images or embeds unless the user has explicitly selected that policy.
+
+8. **Project isolation is deterministic.**
+   A note resolves against its own Project/link root, not whichever Project or view happens to be active.
+
+9. **Normal Editors retain their fast path.**
+   Generic `DocView` hooks remain no-op and allocation-light without providers.
+
+10. **Feature state is view-local; semantic state is Document-local.**
+    Two Editors for one Document may use different editing modes without duplicating parse/index state.
+
+11. **All async publication is revision-checked.**
+    Parse, image, and index results calculated for an old Document revision or old filename/root are discarded.
+
+12. **First-party defaults are centralized.**
+    Behavior defaults live in `data/plugins/anvil_defaults.lua`; required style schema lives in `data/colors/default.lua`.
+
+## Obsidian research findings
+
+### Authoritative Live Preview behavior
+
+Official Obsidian Help defines three related states:
+
+- Reading view: rendered, non-editing presentation.
+- Editing view / Live Preview: formatted text inline, with most Markdown syntax hidden; source syntax becomes visible when the cursor enters formatted content.
+- Editing view / Source mode: all Markdown syntax is visible exactly as written.
+
+Obsidian defaults Editing view to Live Preview and offers a command to toggle Live Preview/Source mode. The official language is **formatted content**, not necessarily an entire active line.
+
+Community observation of current Obsidian behavior shows construct-sensitive reveal in important cases—for example, inline-code delimiters appear when the caret enters that inline-code span and remain hidden when the caret is elsewhere on the same line. This observation is useful inspiration, but official Help remains the compatibility authority.
+
+Implementation implication: model reveal at construct granularity, with line/block fallback for constructs that cannot safely reveal independently. Do not hard-code the current prototype's whole-active-line policy into core APIs.
+
+### Obsidian Flavored Markdown baseline
+
+Obsidian states that it supports CommonMark, GitHub Flavored Markdown, and LaTeX, plus extensions including:
+
+- wikilinks and embeds
+- heading and block references
+- footnotes
+- `%%` comments
+- `==highlight==`
+- strikethrough
+- task lists
+- callouts
+- tables
+
+Obsidian intentionally does not render Markdown nested inside raw HTML elements. Anvil should adopt the same conservative rule unless an owner decision explicitly asks for HTML rendering.
+
+### Formatting behavior relevant to Live Preview
+
+The official syntax set includes:
+
+- paragraphs and soft/hard line breaks
+- ATX H1–H6 headings
+- bold, italic, bold+italic, highlight, and strikethrough
+- escaped Markdown syntax
+- internal and external links
+- local and external images
+- blockquotes
+- ordered, unordered, nested, and task lists
+- horizontal rules
+- inline code and fenced/indented code blocks
+- reference and inline footnotes
+- inline and block comments
+- GFM tables
+- inline and display MathJax/LaTeX
+- Mermaid code blocks
+
+Known Obsidian caveats worth matching rather than accidentally exceeding:
+
+- inline footnotes render only in Reading view, not Live Preview
+- PrismJS is not used in Editing views; editing-mode code highlighting may differ
+- Markdown inside HTML is not rendered
+- comments remain an Editing-view concept
+
+### Internal-link details
+
+Supported persisted link forms include:
 
 ```text
-data/core/docview.lua
-data/core/linewrapping.lua
-data/core/markdownview.lua
-data/core/imageview.lua
-data/core/commands/markdown.lua
-data/plugins/language_md.lua
-data/colors/default.lua
-tests/lua/ui/markdownview.lua
-tests/lua/ui/docview_decorations.lua
+[[Note]]
+[[Note.md]]
+[[Note|Display text]]
+[[Note#Heading]]
+[[Note#Heading|Display text]]
+[[Note#Parent heading#Subheading]]
+[[Note#^block-id]]
+[[#Heading in this note]]
+[Display text](Note%20name.md)
+[Display text](Note%20name.md#Heading)
 ```
 
-### `DocView`
+Important details:
 
-`DocView` already owns the normal editable text surface:
+- Non-Markdown attachments require an extension.
+- Markdown destinations require percent-encoding unless wrapped in angle brackets where applicable.
+- Heading search input `[[## query]]` and block search input `[[^^query]]` are suggestion workflows, not ordinary persisted target semantics. The editor should recognize them as an in-progress autocomplete state.
+- Block IDs may contain Latin letters, numbers, and dashes.
+- A simple paragraph block ID can be at line end after a space.
+- Structured blocks such as lists, quotes, callouts, and tables use a separate block-ID line with blank-line boundaries.
+- Obsidian does not support links to arbitrary subparts of quotes, callouts, and tables.
+- Aliases come from the `aliases` YAML list. Obsidian treats them as reusable names in link workflows, and selecting one generates `[[Canonical note|Alias]]` rather than serializing the alias as the destination. For predictable imported-vault behavior, Anvil will also resolve a manually persisted `[[Alias]]` when the alias uniquely identifies one note; serialization/autocomplete should still prefer the canonical target plus alias.
+- Alias resolution must report ambiguity when an alias collides with another alias, note basename, or explicit path candidate; it must not silently outrank an exact path/name match.
+- Obsidian can automatically update internal links after file rename, or prompt when automatic update is disabled.
 
-- file-backed `Document` editing
-- selections/carets/IME
-- syntax highlighting through `doc.highlighter`
-- line wrapping through `core.linewrapping`
-- folding and composed visual rows
-- decoration providers for line backgrounds, inline range backgrounds, and text-color overrides
-- visual row providers for extra provider-owned rows
-- Point of Interest providers for navigation targets
+Obsidian's generated-link path policies are:
 
-However, the current rendering model assumes:
+- shortest unique path
+- path relative to the current file
+- absolute path from the vault root
 
-- one global line height from `DocView:get_line_height()`
-- text width/position mapping is primarily `doc.highlighter` token text + `style.syntax_fonts`
-- syntax tokens are drawn as raw text, not hidden/replaced by rendered widgets
-- inline decorations cannot currently replace source spans with zero-width hidden syntax or image widgets while preserving source-position hit testing
+These are serialization policies for newly inserted/updated links. Resolution must still understand all supported forms.
 
-### `MarkdownView`
+### Embeds and accepted files
 
-`MarkdownView` is a separate rendered preview view. It already contains useful code that should be reused or extracted:
+Obsidian embeds any supported file by prefixing an internal link with `!`.
 
-- Markdown block parser
-- inline parser for emphasis, links, footnotes, images, reference links
-- table parsing/render layout
-- local/remote image loading and cache
-- Markdown link opening for project-local files and anchors
-- heading-sized font sets
-- rendered command-list layout
-
-But `MarkdownView` is not the final UX because it is not a `DocView` editor. It has its own selection/copy/render model and commands such as `markdown-view:preview` / `markdown-view:view-raw`.
-
-### `language_md.lua`
-
-The Markdown syntax plugin provides raw syntax highlighting and Markdown-specific font overrides for bold/italic tokens. This can remain useful as a fallback/source-mode layer, but it is not enough for live preview because it cannot hide syntax or render images/widgets.
-
-## Core design principles
-
-1. **Raw text is authoritative.**
-   All rendering objects are projections of `Doc` text. Editing operations mutate only the `Doc`.
-
-2. **Markdown rendering is view-local.**
-   A Markdown Live Editor attaches providers/renderers to Markdown `DocView` instances only.
-
-3. **Active-line raw reveal.**
-   Inactive lines can hide Markdown syntax and show rendered content. Lines intersecting any caret/selection show raw syntax or a hybrid raw form so editing stays precise.
-
-4. **No major layout shifts on activation.**
-   A heading line keeps the same line height whether its `#` marker is hidden or visible. Image/widget rows should not appear/disappear merely because the caret enters the source line unless the row is deliberately replaced by an equivalently sized placeholder.
-
-5. **Reusable core primitives, Markdown-owned policy.**
-   `DocView` should gain generic render-extension hooks. Markdown-specific parsing, styling, and link resolution live in a Markdown module/plugin.
-
-6. **Incremental by default.**
-   Cache parsed Markdown blocks/spans by document change id and dirty line range. Recompute changed neighborhoods, not the whole file, once the basic implementation is stable.
-
-## Proposed architecture
-
-### New module layout
+Documented forms include:
 
 ```text
-data/core/markdown/
-  init.lua                 -- Markdown Live Editor attach/detach entry point
-  parser.lua               -- extracted/reworked parser from MarkdownView
-  live_render.lua          -- DocView render providers and active-line reveal logic
-  links.lua                -- Obsidian/wiki/Markdown link parser and resolver
-  vault_index.lua          -- project/vault note + attachment index
-  images.lua               -- image loading/cache/reuse from MarkdownView
-  anchors.lua              -- heading slugs, block IDs, footnotes
-  embeds.lua               -- embed classification/render plans
-```
-
-`data/core/markdownview.lua` should eventually use `core.markdown.parser`, `core.markdown.links`, and `core.markdown.images` instead of owning duplicate parsing/image logic.
-
-### Activation
-
-Markdown Live Editor should attach automatically when a `DocView` represents a Markdown file.
-
-Possible detection:
-
-- filename extension `.md`, `.markdown`, `.mdown`
-- or syntax name contains `markdown`
-
-Attach point options:
-
-- in `core.root_panel:open_doc(...)` / `file_context.mark_editor_view(...)` after `DocView` creation
-- or a small first-party plugin/thread that observes new `DocView` instances and attaches once
-
-Preferred: explicit attach in the editor creation path so tests can instantiate and opt in deterministically, plus an idempotent lifecycle check that can attach/detach after an existing `DocView` changes filename or syntax.
-
-Lifecycle requirements:
-
-- Add a first-class `Doc` metadata/syntax change notification, or patch/wrap `Doc:set_filename(...)` and `Doc:reset_syntax(...)` in one well-owned core location, so existing views can re-run Markdown eligibility checks.
-- Saving an untitled/plain document as `*.md` should attach Markdown Live Editor without recreating the view.
-- Direct `doc:set_filename(...)`, save-as flows, project/file-tree rename flows, and syntax-only reset paths should all hit the same lifecycle check.
-- Renaming/saving a Markdown document as a non-Markdown file should detach Markdown providers and clear Markdown caches.
-- Attach/detach must be safe to call repeatedly and should log quietly when state changes.
-
-### New `DocView` core primitives
-
-The feature needs several generic `DocView` extensions. These should be implemented as normal no-op-by-default hooks so non-Markdown editing remains unchanged.
-
-#### 1. Variable visual row metrics
-
-Current `DocView` assumes a constant `lh = self:get_line_height()` in scrolling, drawing, hit testing, selections, and overlay positioning.
-
-Markdown headings and widgets need per-row heights.
-
-Add a generic visual row metric layer:
-
-```lua
-view:add_visual_metric_provider(id, provider, opts)
-```
-
-Provider methods:
-
-```lua
-provider:line_height(view, line, row_entry) -> height?
-provider:baseline_offset(view, line, row_entry) -> offset?
-provider:font_for_line(view, line, row_entry) -> font?
-```
-
-Core changes:
-
-- Add a visual row layout cache with prefix y offsets.
-- Update `get_scrollable_size()`, `get_visible_line_range()`, `iter_visible_visual_rows()`, `get_line_screen_position()`, and `resolve_screen_position()` to use row metrics when providers exist.
-- Preserve the old constant-height fast path when there are no metric providers.
-- Ensure folded rows and existing visual row providers default to normal line height.
-
-This is the foundational change for heading-sized fonts.
-
-#### 2. Render fragments / source-to-screen mapping
-
-Current text rendering iterates `doc.highlighter` tokens and uses raw text widths.
-
-Markdown Live Editor needs a render model that can say:
-
-- source columns 1-3 (`## `) are hidden on inactive lines
-- source columns 4-20 are drawn with heading font
-- source columns 10-12 (`**`) are hidden while inner text is bold
-- source columns 25-45 (`![[image.png]]`) are replaced with an image widget or attachment chip
-- active lines fall back to raw source rendering
-
-Add a generic line render provider:
-
-```lua
-view:add_line_render_provider(id, provider, opts)
-```
-
-Provider method:
-
-```lua
-provider:render_line(view, line, context) -> render_line?
-```
-
-Possible `render_line` shape:
-
-```lua
-{
-  source_text = view.doc.lines[line],
-  active = boolean,
-  height = number?,
-  fragments = {
-    {
-      source_col1 = 1,
-      source_col2 = 4,
-      text = "",
-      hidden = true,
-      width = 0,
-    },
-    {
-      source_col1 = 4,
-      source_col2 = 20,
-      text = "Heading",
-      font = heading_font,
-      color = style.text,
-    },
-    {
-      source_col1 = 21,
-      source_col2 = 36,
-      widget = { type = "image", image = canvas, width = 320, height = 180 },
-    },
-  }
-}
-```
-
-Core changes:
-
-- Route `draw_line_text()`, `get_col_x_offset()`, `get_x_offset_col()`, wrapped drawing, caret placement, selection rectangles, IME location, and hit testing through the render fragments when a provider supplies them.
-- Preserve the existing highlighter path when no provider supplies a render line.
-- Add fragment caches keyed by doc change id, line text, active-line state, style/font generation, image load generation, and wrap width.
-- Support `raw_passthrough = true` for active lines to use the old rendering path.
-
-Important mapping rules:
-
-- Every source byte column must map to a stable x position.
-- Hidden syntax maps to either the previous visible x or a small editable reveal gutter; clicking hidden syntax on an inactive line should place the caret near the related source span and reveal the raw line.
-- Selection rectangles must cover the raw source span even if some syntax is hidden. Hidden spans can draw a minimal caret/selection affordance when selected.
-
-#### 3. Inline widget fragments
-
-Add a draw/hit-test contract for non-text fragments:
-
-```lua
-fragment.widget = {
-  type = "image" | "checkbox" | "attachment" | "embed" | ...,
-  width = number,
-  height = number,
-  draw = function(view, fragment, x, y, row_height) end,
-  hit_test = function(view, fragment, x, y) end,
-  on_click = function(view, fragment, button, x, y, clicks) end,
-}
-```
-
-Initial widgets:
-
-- rendered image canvas
-- missing-image/error chip
-- attachment/link chip for unsupported embedded file types
-- checkbox widget for task list items later
-
-#### 4. Provider-aware wrapping
-
-`core.linewrapping` currently measures raw highlighter tokens. If Markdown render fragments hide or replace syntax, wrapping should use the rendered widths for inactive lines and raw widths for active lines.
-
-Add a wrap measurement hook:
-
-```lua
-provider:measure_fragments_for_wrap(view, line, context) -> fragments?
-```
-
-Implementation steps:
-
-1. First milestone: add a safety gate. If a Markdown line is wrapped and fragment-aware wrapping is not available, render that wrapped line with the raw `DocView` path instead of hidden/replaced fragments.
-2. Second milestone: teach `linewrapping.compute_line_breaks_from_col(...)` to consume render fragments and maintain source column row starts.
-3. Third milestone: include active-line/reveal state in wrap cache invalidation. Moving the caret into or out of a line can change rendered width and row count without changing document text, so the old and new active/revealed lines must invalidate or recompute their wrap rows on selection/focus changes.
-4. Fourth milestone: support image/widget fragments as unbreakable units.
-
-This must be in place before enabling hidden syntax for normal Markdown editing because line wrapping is enabled by default in the dev Anvil defaults. Raw wrapping plus rendered aliases/hidden syntax would otherwise make caret movement, selections, clicks, and IME coordinates wrong on wrapped lines.
-
-Until active-line wrap invalidation exists, all wrapped Markdown lines whose rendered fragments can differ from raw source must stay on the raw fallback path.
-
-Do not silently break normal code wrapping; keep the old path unless a render provider is active.
-
-#### 5. Click freeze / reveal deferral
-
-Add a small `DocView` interaction state that can defer render-state changes during mouse down/up. This avoids moving hidden/revealed syntax under the pointer mid-click.
-
-Markdown can use it to:
-
-- freeze active-line reveal until after pointer-up
-- still place the caret correctly
-- avoid accidental drag selections caused by text shifting under the cursor
-
-## Markdown parser and render model
-
-### Parser strategy
-
-Start by extracting the current `MarkdownView` parser into `data/core/markdown/parser.lua`, then evolve it for editor use.
-
-The live editor needs both block-level and inline source ranges:
-
-```lua
-block = {
-  type = "heading",
-  line1 = 10,
-  col1 = 1,
-  line2 = 10,
-  col2 = 24,
-  level = 2,
-  content_col1 = 4,
-  content_col2 = 24,
-  inline = {...}
-}
-
-span = {
-  type = "strong",
-  line = 12,
-  col1 = 5,
-  col2 = 14,
-  marker_ranges = {{5, 7}, {12, 14}},
-  content_ranges = {{7, 12}}
-}
-```
-
-The current preview parser often stores normalized text rather than exact source ranges. For live editing, source ranges are mandatory.
-
-### Incremental parsing plan
-
-Milestone 1 can parse the whole document after each edit for correctness.
-
-Milestone 2 should add dirty-neighborhood parsing:
-
-- line-level dirty range from `Doc:apply_edits(...)` transaction data
-- expand to nearest block boundary before/after the changed range
-- reparse only that region
-- preserve stable block IDs/cache entries outside the region
-- invalidate link/image/layout cache only for affected lines
-
-Use `core.log_quiet(...)` for parse timing, dirty range size, cache hit/miss counts, and fallback-to-full-parse decisions.
-
-## Obsidian link support
-
-### Syntax to support
-
-#### Wikilinks
-
-```text
-[[target]]
-[[target|alias]]
-[[target#heading]]
-[[target#heading|alias]]
-[[target#^block-id]]
-[[#heading]]
-[[^block-id]]
-```
-
-#### Embeds
-
-```text
-![[target]]
-![[target#heading]]
-![[target#^block-id]]
+![[Note]]
+![[Note#Heading]]
+![[Note#^block-id]]
 ![[image.png]]
-![[image.png|640x480]]
 ![[image.png|100]]
+![[image.png|640x480]]
+![250](https://example/image.png)
+![alt|100x145](https://example/image.png)
+![[audio.ogg]]
+![[Document.pdf]]
 ![[Document.pdf#page=3]]
 ![[Document.pdf#height=400]]
+![[My canvas.canvas]]
 ```
 
-#### Markdown links/images
+Accepted Obsidian formats currently include:
 
-```text
-[alias](target.md)
-[alias](target.md#heading)
-![alt](image.png)
-![alt|100x145](image.png)
-![alt](https://example.com/image.png)
-```
+- Markdown: `.md`
+- Bases: `.base`
+- Canvas: `.canvas`
+- images: `.avif`, `.bmp`, `.gif`, `.jpeg`, `.jpg`, `.png`, `.svg`, `.webp`
+- audio: `.flac`, `.m4a`, `.mp3`, `.ogg`, `.wav`, `.webm`, `.3gp`
+- video: `.mkv`, `.mov`, `.mp4`, `.ogv`, `.webm`
+- PDF: `.pdf`
 
-### Link parse model
+Official Obsidian Help currently shows two external Markdown-image sizing forms on different pages: numeric label as width (`![250](url)`) and alt text with a pipe suffix (`![alt|100x145](url)`). Anvil should fixture and support both forms deliberately. Numeric-label sizing has no separate descriptive alt text; the pipe form preserves the text before `|` as alt text. Width-only keeps aspect ratio; width×height follows the owner-selected fit/force rule.
+
+Anvil does not need native playback/viewers for every type to support the syntax correctly. Unsupported inline media can initially render an attachment chip with an open action.
+
+### Attachments and drag/drop
+
+Obsidian attachment location policies are:
+
+- Project/vault root
+- one configured folder
+- same folder as the current note
+- a named subfolder under the current note's folder
+
+Pasting an attachment creates a file in that location and inserts an embed. Dragging an external file copies it into the attachment location and inserts a link/embed; a modifier can choose an absolute `file:///` link instead. Dragging an existing vault file into an editor inserts a link according to path and Wikilink/Markdown-link preferences.
+
+The current Anvil implementation only reads one `.obsidian/app.json` attachment-folder form. A robust implementation needs fixtures for every supported policy and must not infer policy from nonexistent or malformed settings.
+
+### Properties, callouts, tables, and math
+
+Obsidian Live Preview presents YAML properties as editable rows. Supported property types include text, list, number, checkbox, date, date-time, and tags. `aliases`, `tags`, and `cssclasses` are special list properties. Nested properties and Markdown rendering inside properties are intentionally unsupported.
+
+Callouts use a blockquote beginning with `> [!type]`, support custom titles, fold defaults with `+`/`-`, nesting, Markdown, links, and embeds. Unknown types fall back to the `note` appearance.
+
+Tables support inline formatting, links, escaped pipes, alignment, and Live Preview context actions for rows/columns/sorting/moving.
+
+Math uses `$...$` and `$$...$$` with MathJax/LaTeX semantics.
+
+These are materially larger UI projects than basic inline syntax and must be staged rather than hidden inside a generic “polish” milestone.
+
+## Open-source implementation lessons
+
+### Atomic Editor / CodeMirror 6
+
+Atomic Editor is inspiration, not an Obsidian compatibility authority. Its architecture validates several decisions relevant to Anvil:
+
+- raw Markdown remains the only document
+- syntax decorations are view-only
+- heading/block line style is independent of reveal state
+- pointer-down freezes decoration changes until after pointer-up
+- image decorations invalidate only when changes overlap images or add image syntax
+- large Documents depend on narrow invalidation and viewport rendering
+- interactive tables need stable widget identity across edits
+- wide tables need contained horizontal scrolling rather than forcing the Editor width
+- wiki-link resolution is debounced/cached and draft links stay editable
+- the regression suite explicitly probes cumulative layout shift, click freeze, late-document rendering, source-copy fidelity, and each widget type
+
+The current Anvil prototype adopted some of these ideas, but not the narrow invalidation or cached render-model architecture.
+
+### Parser candidates
+
+The rebuild must not continue extending the current ad hoc parser without first selecting a tested semantic foundation.
+
+**MD4C** is the leading native candidate for a spike:
+
+- MIT licensed, current, compact C implementation
+- CommonMark 0.31 compliant
+- designed for near-linear performance on pathological input
+- supports tables, tasks, footnotes, strikethrough, highlight, math, wikilinks, and admonitions via flags
+- push callbacks avoid requiring a full DOM
+- not incremental, but full native parsing may be fast enough if source-range extraction and Lua publication are bounded
+
+Risk: editor-quality exact delimiter/source ranges are not its primary public API. Anvil may need a small maintained patch or adapter that exposes exact byte offsets for block/span enter/leave events.
+
+**tree-sitter-markdown** is an alternate candidate:
+
+- MIT licensed and actively maintained
+- block and inline grammars produce source-ranged syntax trees
+- supports GFM, YAML metadata, optional tags, and optional wikilinks
+- incremental parsing aligns with Anvil's Tree-sitter infrastructure
+
+Risks: upstream explicitly says it has known inaccuracies and is not recommended where correctness is critical; it requires coordinated block and inline parses with included ranges; Anvil's current Tree-sitter service is not built around this split-parser model.
+
+**cmark-gfm** is accurate and robust but builds a full AST, lacks Obsidian extensions, and does not solve exact inline editing ranges or incremental publication by itself.
+
+**Current `MarkdownView` parser** remains a migration reference and fallback source of rendering behavior, not the target semantic authority. It covers more constructs than `data/core/markdown/parser.lua` but normalizes source and was designed for a separate preview.
+
+The parser spike must decide by evidence, not preference.
+
+### Parser execution and publication path
+
+The spike must prove a real Anvil integration, not compare upstream libraries in isolation. Neither candidate is currently a drop-in Lua module:
+
+- MD4C would need a pinned Meson subproject/package, an Anvil-owned native API, exact source-range extraction, and native tests.
+- `tree-sitter-markdown` would need pinned block and inline grammars, registry/build integration, included-range coordination, and changes to the current one-grammar Document service.
+
+Before backend selection, each viable candidate must compile in the normal Windows build and publish one tiny source-ranged fixture through the proposed Anvil API.
+
+The selected execution path must define:
+
+- ownership and lifetime of source snapshots and native parse results
+- compact result representation so a full native tree is not copied into large Lua tables after every edit
+- request coalescing by Document, cancellation or supersession, and backpressure
+- worker/native-job protocol when parsing or publication can exceed the synchronous frame budget
+- revision, filename, syntax, and link-root checks before publication
+- stale-result disposal without touching closed Documents/Editors
+- behavior while a fresh parse is pending: retain unaffected old ranges, show changed/uncertain ranges raw, and never hide syntax from a stale snapshot
+- shutdown and test isolation
+
+`core.add_thread()` is cooperative and cannot preempt a long native parser call. A synchronous native path is acceptable only if end-to-end parse **and publication** stay within the measured hard budget for the selected maximum synchronous input. Larger/slow inputs must use a worker/native job or immediately remain raw while background reconciliation completes.
+
+## Supported-feature tiers
+
+### Tier 0: release-blocking Editor correctness
+
+- source/caret/x mapping
+- wrapping
+- selection and drag selection
+- multi-cursor
+- IME
+- undo/redo
+- find/replace
+- folding/composed rows
+- reload and filename/syntax lifecycle
+- viewport anchoring
+- large-document performance
+- no-network default
+- raw fallback
+
+No formatting feature may ship default-on if Tier 0 is unreliable.
+
+### Tier 1: core Live Preview experience
+
+- H1–H6
+- bold, italic, bold+italic
+- strikethrough and highlight
+- inline code
+- escapes
+- external links
+- Markdown links
+- wikilinks, aliases, heading links, and block links
+- local images and explicit image states
+- paragraphs and line-break presentation
+- ordered/unordered/nested lists
+- task checkboxes
+- blockquotes
+- fenced/indented code blocks
+- horizontal rules
+- `%%` comments
+- YAML frontmatter shown safely, at least as styled source
+
+### Tier 2: rich block editing
+
+- callouts
+- GFM tables
+- reference links and footnotes
+- tags
+- note/heading/block embeds
+- attachment chips
+- paste/drop attachment import
+- properties presentation
+- math rendering
+
+### Tier 3: optional media and advanced integrations
+
+- PDF preview
+- audio/video players
+- Mermaid rendering
+- Canvas/Base previews
+- hover page previews
+- link autocomplete and cross-Project knowledge tools beyond the core open-link flow
+
+The owner decisions at the end determine which Tier 2 items are required before calling the feature complete.
+
+## Target architecture
+
+### Layer 1: parser service
+
+Produce source-ranged Markdown events/nodes for a specific Document revision. The parser must not know about fonts, colors, Editors, Projects, or link destinations.
+
+Required node contract:
 
 ```lua
 {
-  kind = "wiki" | "markdown" | "image" | "embed",
-  source_line = line,
-  source_col1 = col1,
-  source_col2 = col2,
-  raw_target = "Note#Heading",
-  path = "Note",
-  subtarget = { type = "heading", text = "Heading" },
-  alias = "display text",
-  resize = { width = 640, height = 480 },
-  is_embed = true,
+  id = stable_id,
+  type = "heading" | "strong" | "wiki_link" | ...,
+  source = { line1, col1, line2, col2 },
+  marker_ranges = { ... },
+  content_ranges = { ... },
+  attributes = { ... },
+  parent_id = optional,
+  children = optional_compact_ids,
+  confidence = "complete" | "incomplete" | "error",
 }
 ```
 
-### Vault/project resolution
+Rules:
 
-Create `data/core/markdown/vault_index.lua`.
+- ranges use `Doc` UTF-8 byte columns
+- delimiters and content have separate ranges
+- incomplete constructs remain represented only when doing so helps editing; they never hide source
+- raw HTML suppresses nested Markdown parsing, matching Obsidian
+- parser output is immutable for its revision
+- publication rejects stale revisions
+
+### Layer 2: Document semantic model
+
+One model per Markdown Document, shared by every Editor showing that Document.
 
 Responsibilities:
 
-- choose vault root from `core.current_project(current_note_path)` by default, not from whichever project is currently active globally
-- maintain indexes per project/vault root so multi-project workspaces do not cross-resolve unrelated notes
-- index Markdown files by:
-  - absolute path only as internal metadata, with opening still bounded by the owning vault/project unless explicit config later allows outside-vault links
-  - project-relative path with and without `.md`
-  - basename without extension
-  - normalized display name
-  - aliases from YAML frontmatter (`aliases`, `alias`) when implemented
-- index attachments by project-relative path and basename with extension
-- index headings per note using Obsidian-compatible anchors
-- index block IDs matching `^id`
-- maintain generation counters for cache invalidation
-- bump or update generations from concrete events:
-  - open-document text transactions for heading/block ID/frontmatter alias edits
-  - `Doc:set_filename(...)` / save-as / project rename flows
-  - file create/delete/rename events from project directory watching when available
-  - explicit fallback full rebuild when event coverage is uncertain or a cache invariant fails
+- own parser snapshot/revision
+- map source lines to containing blocks/spans
+- track dirty line/block neighborhoods from `Doc` text-change transactions
+- provide heading, block ID, alias, outgoing-link, image, and attachment facts to the link index
+- expose query methods for visible/revealed lines without constructing a full Lua object graph every frame
+- publish parse generation and changed source ranges
 
-Resolution order proposal:
+Do not put caret state in this layer.
 
-1. Explicit relative path from current note directory.
-2. Absolute path only if it belongs to the owning project/vault; otherwise treat it as an external file/link unless a future config explicitly permits outside-vault internal links.
-3. Exact project-relative path.
-4. Exact basename/note name match.
-5. Case-insensitive match if there is a single unambiguous candidate.
-6. Alias match if there is a single unambiguous candidate.
-7. Missing-link result with a styled unresolved link.
+### Layer 3: view-local reveal and render model
 
-When ambiguous, render a warning style and log quietly with candidates.
+One state object per Markdown Editor.
 
-### Opening links
+Responsibilities:
 
-Add commands / behavior:
+- Live Preview versus Source Mode
+- caret/selection-driven Reveal Units
+- pointer freeze state
+- line render cache
+- visual metric cache entries for affected rows
+- widget instances and hover state
+- wrap measurement fragments
+- generation dependencies: Document parse generation, style/font generation, content width, link-index generation, image generation, reveal generation
 
-- `markdown-live:open-link-at-caret`
-- ctrl/cmd-click link opens target
-- normal click in text still edits unless modifier/click area is link-specific
-- status bar tooltip shows resolved target or missing-link reason
+A cached line render result must be reusable by drawing, hit testing, selection geometry, caret/IME geometry, and wrapping.
 
-Opening behavior:
+### Layer 4: generic `DocView` contracts
 
-- note target: open as `DocView`, not separate preview
-- heading target: open note and scroll to heading line
-- block target: open note and scroll/select block ID line or block content
-- image/attachment target: use `core.open_file` / `core.open_image` / sidepanel as appropriate
-- external URL: `common.open_in_system(url)`
+Keep and harden the existing generic providers rather than adding Markdown branches throughout `DocView`.
 
-## Image rendering plan
+Required improvements:
 
-### Reuse/extract current image code
+1. **Line render cache ownership**
+   - cache provider results by line and provider generation
+   - allow targeted line/range invalidation
+   - never call a provider parser repeatedly from one frame's draw/mapping paths
 
-Extract from `MarkdownView`:
+2. **Targeted visual metric invalidation**
+   - invalidate old/new affected visual rows, not the whole prefix table on every selection move
+   - update prefix offsets from the earliest changed row
+   - keep the no-provider constant-height path unchanged
 
-- `get_image_cache_path(...)`
-- local project link resolution
-- remote image download to `USERDIR/cache`
-- canvas loading/scaling
-- SVG resizing path
+3. **Provider-aware wrapping**
+   - wrapping consumes the same visible fragments used to draw
+   - wrap rows retain source-column boundaries
+   - widgets are unbreakable units or explicit block rows
+   - reveal changes invalidate only affected line wrap entries
+   - old/new caret lines preserve viewport anchor when row count changes
 
-Move into `data/core/markdown/images.lua` so both `MarkdownView` and Markdown Live Editor share it.
+4. **Widget interaction contract**
+   - standard draw, hit test, hover cursor, click, context action, and accessibility text hooks
+   - no feature-specific wrapping of `DocView:on_mouse_*`
 
-Remote image policy must be part of this extraction, not a later afterthought. The shared module should accept a policy option and the live editor should default remote downloads off. When disabled, `http(s)` images render as a disabled/remote-image chip with an explicit open/download action rather than calling `http.download(...)` during document rendering. Existing preview behavior can either keep its current eager download policy behind an explicit preview option or migrate to the same safer policy deliberately.
+5. **Interaction transaction/freeze**
+   - generic begin/end pointer interaction state
+   - freeze render-state changes through click/drag completion
+   - exclude scrollbar interactions
 
-### Image placement policy
+6. **Source mapping contract**
+   - every source column maps deterministically to x
+   - hidden ranges map to a documented affinity
+   - replacement widgets map left/right halves to source boundaries
+   - grapheme/UTF-8 and tabs are covered
 
-Support two rendered forms:
+7. **Provider failure isolation**
+   - quiet log once per failure signature
+   - raw fallback for that line/frame
 
-1. **Inline image fragment** for small images or images embedded inside paragraph/table text.
-2. **Block image row** for image-only lines or large images.
+### Layer 5: Markdown Link Index
 
-Initial milestone can render all image embeds as a block row immediately below the source line if inline mapping is not ready. The long-term target is true inline/widget fragments.
+Replace the disconnected vault-index prototype with a product-owned service.
 
-### Obsidian resize rules
+Responsibilities:
 
-- `|100` means width 100, keep aspect ratio.
-- `|640x480` means fit or force rendered width/height according to configured behavior.
-- Clamp to available editor content width.
-- Do not upscale above natural size unless a config option later asks for it.
+- index notes, aliases, headings, block IDs, and supported attachments per link root
+- start an initial cooperative/background scan on first use
+- expose readiness (`cold`, `scanning`, `ready`, `stale`, `error`)
+- resolve immediately from available data without choosing arbitrary ambiguous targets
+- overlay unsaved open-Document facts over disk facts
+- consume filename changes and Document close events
+- watch directories for create/delete/rename/change and reconcile dirty directories
+- enforce a watcher budget: recursively register only while within capacity, coalesce to root/subtree watches where the backend supports it, and stop adding watches after a deterministic limit or registration failure
+- fall back to bounded periodic/coalesced directory reconciliation when watcher events are imprecise **or native watch capacity is unavailable/exhausted**
+- expose degraded watcher mode in quiet diagnostics and readiness state without treating the index as permanently correct
+- exclude `.git`, Anvil test/runtime state, ignored paths as appropriate, and optionally Obsidian excluded files later
+- retain deterministic behavior across multiple Projects
 
-### Failure states
-
-- missing file: render unresolved attachment chip
-- unsupported file: render attachment chip with open action
-- remote pending: render loading chip and invalidate line when ready
-- load error: render error chip with alt text/path
-
-Use quiet logs for load attempts, cache paths, failures, and async completion.
-
-## Styling/defaults
-
-Add first-party defaults to `data/colors/default.lua` and behavior defaults to `data/plugins/anvil_defaults.lua` or a dedicated first-party defaults module.
-
-Candidate style keys:
+Resolution result:
 
 ```lua
-style.markdown_live_heading = { ... }
-style.markdown_live_heading_marker = style.dim
-style.markdown_live_link = style.syntax.function
-style.markdown_live_unresolved_link = style.warn
-style.markdown_live_inline_code_bg = style.background2
-style.markdown_live_quote_bar = style.accent
-style.markdown_live_image_background = style.background2
-style.markdown_live_attachment_bg = style.background2
-style.markdown_live_hidden_syntax = style.dim
+{
+  status = "resolved" | "missing" | "ambiguous" | "external" | "pending" | "invalid",
+  kind = "note" | "heading" | "block" | "attachment" | "url",
+  path = optional_absolute_path,
+  line = optional_line,
+  candidates = optional_candidates,
+  reason = optional_reason,
+  index_generation = generation,
+}
 ```
 
-Do not hardcode fallback defaults in first-party Markdown modules for style/config keys they require. Keep base theme schema complete.
+The renderer styles this result. The interaction layer decides what opening/creation action is allowed.
 
-## User-facing configuration
+### Layer 6: assets and embeds
 
-Candidate config keys:
+`images.lua` should become a context-aware asset service rather than a permanent table keyed only by target text.
 
-```lua
-config.markdown_live_editor = false -- development default until wrapping/mapping gates are complete; target default is true when promoted
-config.markdown_live_reveal_mode = "active_line" -- future: active_block/source
-config.markdown_live_render_images = true
-config.markdown_live_download_remote_images = false -- safer default if desired
-config.markdown_live_open_links_with_modifier = true
-config.markdown_live_vault_root = "owning_project" -- future explicit path
-config.markdown_live_attachment_search = { "same_folder", "project" }
+Cache identity includes:
+
+- source note path or resolved absolute target
+- owning link root
+- normalized URL/path
+- remote policy
+- requested decode characteristics where relevant
+
+States:
+
+- unresolved
+- remote-disabled
+- queued
+- loading
+- ready
+- missing
+- decode-error
+- stale/retryable
+
+Invalidation triggers:
+
+- source filename/root change
+- file watcher event
+- remote policy change
+- explicit retry
+- cache-file completion
+- renderer scale/theme changes only when they affect derived resources
+
+Never repeatedly resample one shared image between two requested dimensions every frame. Cache source canvas separately from bounded derived canvases, or use renderer scaling where quality/performance permits.
+
+### Layer 7: lifecycle and commands
+
+Add first-class core lifecycle seams instead of stacking global wrappers:
+
+- `Doc` metadata listener for filename and syntax changes
+- Document close listener
+- Editor feature attach/detach registry or explicit Markdown feature hook in the Editor creation path
+- view-local mode state persisted with Editor state if selected
+- commands registered through ordinary command predicates
+- widget/POI activation through generic `DocView` seams
+
+Lifecycle scenarios that must converge on the same code path:
+
+- open existing `.md`
+- restore Workspace
+- save untitled Document as `.md`
+- save/rename `.md` to non-Markdown
+- move note within one Project
+- move note across Projects/link roots
+- direct `Doc:set_filename(...)`
+- `Doc:reset_syntax()` without filename change
+- external file replacement/reload
+- close one of several Editors sharing a Document
+- toggle feature/config while Editors are open
+
+## Proposed module layout
+
+The final names may change during the parser spike, but responsibilities should be separated as follows:
+
+```text
+data/core/markdown/
+  init.lua                 lifecycle registration and public facade
+  model.lua                per-Document semantic snapshot/cache
+  parser.lua               Lua adapter to selected native/parser backend
+  obsidian_syntax.lua      Obsidian-only syntax and serialization rules
+  render.lua               source-ranged line/block render plans
+  reveal.lua               view-local Reveal Unit policy
+  interactions.lua         links/widgets/status/commands
+  link_index.lua           Project/link-root note and attachment index
+  links.lua                link parse/normalize/serialize helpers
+  anchors.lua              heading paths/slugs and block IDs
+  assets.lua               shared local/remote asset resolution/cache
+  images.lua               image decode/size/render plans
+  embeds.lua               note/attachment/embed classification
+  attachments.lua          attachment location/import/link insertion
+  diagnostics.lua          counters and quiet diagnostics
 ```
 
-Only promote settings that are clearly user-facing. Avoid over-parameterizing visual constants until there is a reason.
+Migration rules:
+
+- Remove `vault_index.lua` after callers/tests move to `link_index.lua`; do not leave a deprecated internal alias.
+- Remove parser duplication only after `MarkdownView` tests pass through the shared semantic layer or `MarkdownView` is deliberately retained with an isolated parser.
+- Remove Markdown method wrappers once lifecycle/widget seams exist.
+- Preserve the image overlay if it remains the selected image-open UX, but move its input interception behind a root overlay/modal contract rather than ad hoc method wrapping.
+
+## Reveal behavior design
+
+### Recommended model
+
+Use construct-sensitive reveal as the target because it most closely matches Obsidian's documented “cursor enters formatted content” behavior.
+
+Examples:
+
+- caret inside `**bold**` reveals that emphasis construct, not unrelated links on the line
+- caret inside a wikilink reveals the whole wikilink source
+- caret in heading content reveals heading markers and inline construct markers needed for editing
+- caret in list text may keep the rendered bullet/checkbox while revealing the source marker when the caret approaches it or the line is edited
+- caret inside a code fence keeps the code body source-like; fence markers reveal at their own lines
+- a selection intersecting hidden syntax reveals every intersected construct or uses raw fallback for the containing block
+- multi-cursor reveals the union of relevant constructs
+
+Where construct reveal is unsafe or confusing, use a containing-line/block raw fallback. The policy must be represented in `reveal.lua`, not spread through parser and drawing code.
+
+### Pointer and keyboard stability
+
+- Freeze the pre-click render layout from pointer-down through pointer-up plus one deferred update.
+- Record the Document identity and `text_revision` in the frozen snapshot.
+- Resolve the source position against the frozen layout only while that revision is still current.
+- If text changes, reloads, filename/syntax detach occurs, or the Editor closes while frozen, cancel the interaction or fall back immediately to current raw mapping; never apply an old source position to a new revision.
+- Apply the selection only after the revision check.
+- Recompute reveal state after the click completes.
+- During drag selection, keep one same-revision render layout until release.
+- Keyboard movement can update reveal immediately, but preserve the caret's visual/viewport anchor if wrapping changes.
+- IME composition locks the affected Reveal Unit raw until composition ends.
+
+### Source Mode
+
+Source Mode should remove Markdown replacement/hiding fragments while retaining normal Markdown syntax highlighting and Editor behavior. It should not create a new view or Document. Whether it is global, per Editor, or persisted is an owner decision.
+
+## Wrapping and layout plan
+
+The current raw fallback is an acceptable safety mechanism during development, not the target.
+
+Required algorithm:
+
+1. Build one cached render plan for the line.
+2. Expose measurement fragments from that same plan.
+3. Compute wrap boundaries in source-column space using visible widths.
+4. Treat hidden markers as zero-width with deterministic source affinity.
+5. Treat inline widgets as unbreakable measured fragments.
+6. Treat block images/tables/embeds as composed visual rows rather than pretending they are text height.
+7. Draw, hit-test, select, and place IME from the same wrap result.
+8. On reveal change, recompute only old/new affected lines.
+9. Preserve a stable viewport anchor: preferably the primary caret row when visible, otherwise the first visible source position.
+10. Keep raw fallback for a line whenever its render and wrap generations disagree.
+
+Tests must include an alias whose raw target is much longer than its display text, nested emphasis near a wrap boundary, tabs, Unicode, an image in text, and entering/leaving a construct that changes row count.
+
+## Link behavior plan
+
+### Parse and normalize
+
+Support persisted Wikilink and Markdown-link forms, current-note headings/blocks, nested heading paths, percent encoding, angle-bracket destinations, aliases, and embeds.
+
+Keep these distinct:
+
+- parsed raw target
+- decoded filesystem/link target
+- display text
+- canonical resolved identity
+- serialized form chosen for insertion/update
+
+Never rewrite a link merely because it was displayed.
+
+### Resolve
+
+Recommended precedence, subject to fixtures against actual Obsidian behavior:
+
+1. Current-note heading/block target when path is empty.
+2. Explicit relative path from the source note.
+3. Explicit root-relative path within the owning link root.
+4. Exact indexed Project-relative path, with Markdown extension omission.
+5. Exact unique note basename.
+6. Exact unique alias, provided it does not conflict with a higher-precedence path/name candidate. This supports manually persisted/imported `[[Alias]]` links, while insertion still serializes `[[Canonical note|Alias]]`.
+7. Case-insensitive unique match where the filesystem/platform policy permits.
+8. Ambiguous/missing result; never choose an arbitrary candidate.
+
+Add explicit fixtures for unique persisted aliases, unsaved alias edits, alias-versus-basename collisions, two notes sharing one alias, and canonical serialization after alias autocomplete.
+
+Absolute paths outside the link root are external file links, not internal notes.
+
+### Present and interact
+
+- resolved internal link: normal link style
+- missing link: unresolved style and creation affordance if enabled
+- ambiguous link: warning style and candidate picker action
+- pending index: neutral/pending style, not falsely missing
+- invalid syntax: raw source
+- external URL: external-link style
+
+Interaction seams:
+
+- command to open link at primary caret
+- selected modifier-click behavior
+- optional click-specific icon/region for touch-like use
+- status-bar text with destination/reason
+- context actions: open, open beside, copy target, copy resolved path, reveal in File Tree, create missing note, choose ambiguous target
+- heading/block open uses normal Editor navigation and records Navigation History
+
+### Rename and serialization
+
+If automatic link maintenance is enabled:
+
+- gather affected files from the index
+- parse links semantically rather than text-replacing names
+- calculate new target text using the selected path policy
+- preserve alias/display text and Wikilink versus Markdown syntax where possible
+- preview or log the operation
+- write through safe-write paths
+- update open Documents through normal transactions
+- avoid rewriting links that happen to contain the same text but resolve elsewhere
+- define recovery behavior if only part of a multi-file update succeeds
+
+This is a separate feature slice, not an incidental file-tree rename hook.
+
+## Image and attachment plan
+
+### Rendering policy
+
+For each parsed image:
+
+- resolve against source note directory, owning link root, and configured Obsidian attachment policy
+- distinguish image-only block, inline image, and image inside table/callout
+- clamp to available content width
+- preserve aspect ratio for width-only syntax
+- honor explicit width×height according to the owner-selected fit/force policy
+- do not upscale by default
+- use high-quality scaling for ordinary images; nearest-neighbor only when explicitly appropriate
+- retain alt/path text for accessibility/status/failure display
+
+### Active editing
+
+The source must remain reachable without opening Source Mode. Candidate behavior:
+
+- inactive image-only source line becomes a block image with a small source affordance
+- entering the image's Reveal Unit shows source while retaining a stable image row below or a same-height placeholder
+- inline images remain inline only below a configurable/sensible size; large images become block rows
+- clicking the image opens the overlay only through the selected image action, while ordinary text-area clicks still place the caret
+
+The exact presentation is an owner decision.
+
+### Failure/retry behavior
+
+- missing local file: missing-image chip with retry/open-folder actions
+- remote disabled: remote-image chip with one-shot load/open actions
+- loading: bounded placeholder, no layout collapse
+- decode failure: error chip with path and retry
+- file appears or changes: watcher invalidates the entry
+- policy/source-root changes: re-resolve rather than reuse stale entries
+- async completion checks Editor/Document lifetime and generation
+
+### Attachment insertion
+
+After core rendering is stable:
+
+- paste image/file into Editor
+- drag external file into Editor
+- choose destination from configured policy
+- sanitize and deconflict filename deterministically
+- copy/write atomically
+- insert selected Wikilink/Markdown embed syntax in one undoable text transaction
+- if file copy succeeds but insertion fails, report and offer cleanup
+- if insertion succeeds only after copy, never leave a link to a nonexistent destination silently
+
+## Block feature plans
+
+### Lists and tasks
+
+- render bullet glyphs without losing marker source mapping
+- preserve ordered-list number source
+- support nesting and continuation lines
+- render task marker as a checkbox widget
+- clicking checkbox changes only the marker character in one undoable command
+- support Obsidian's non-space completion markers without assuming only `x`
+- add list continuation/dedent editing behavior only through separately tested commands; do not mix it into rendering
+
+### Blockquotes and callouts
+
+- use block-level ranges, nesting depth, and composed backgrounds/rails
+- callout header parses type, optional fold sign, and title
+- unknown type uses default note styling
+- folding uses the existing Fold Region model where possible
+- links/images inside callouts use ordinary nested render plans
+- raw fallback applies to the whole callout if nested mapping becomes inconsistent
+
+### Code
+
+- inline code gets a monospace font/background and construct reveal
+- fenced/indented blocks remain source-oriented editing surfaces with block background/padding
+- fence/info markers can dim/hide only when safe
+- reuse existing syntax/subsyntax highlighting rather than introducing Prism
+- never parse Markdown constructs inside code
+
+### Tables
+
+Tables require a dedicated decision and vertical slice.
+
+Minimum robust mode:
+
+- preserve source rows
+- style delimiters/header/alignment
+- keep horizontal overflow contained
+- provide row/column commands operating on parsed source ranges
+
+Optional rich mode:
+
+- replace the table block with an interactive grid when inactive
+- give each cell a source range and stable widget identity
+- edit a focused cell without serializing unrelated text incorrectly
+- Tab/Shift-Tab navigation
+- insert/delete/move rows/columns through commands
+- reveal/fallback the source block whenever mapping is uncertain
+
+Do not attempt rich tables until generic block-widget focus, selection, wrapping, and undo semantics are tested.
+
+### Properties
+
+Baseline mode styles frontmatter as structured source and indexes `aliases`, `tags`, and related metadata.
+
+Optional Obsidian-like mode replaces valid top-of-file frontmatter with property rows while inactive. This requires:
+
+- YAML parser with source preservation
+- stable key/value ranges
+- duplicate/unsupported/nested-property fallback
+- typed controls
+- keyboard navigation into/out of the property widget
+- undoable source edits
+- Source Mode escape hatch
+
+This is a separate product feature, not a parser side effect.
+
+### Math and diagrams
+
+- Math rendering requires a native or bundled TeX layout strategy; do not fetch a web renderer at runtime.
+- Mermaid requires a renderer/runtime and security policy and belongs in Tier 3 unless explicitly prioritized.
+- Until supported, both remain well-styled source/code blocks.
+
+## Performance design and budgets
+
+### Required counters
+
+Add quiet/performance counters for:
+
+- parser time, publication time, and bytes/lines parsed
+- full versus dirty-block parse reason
+- render-model cache hits/misses
+- lines whose metrics/wraps were invalidated
+- lines parsed/rendered during one caret move
+- link-index scan/update counts and durations
+- image resolve/decode/scale durations and cache state
+- stale async results discarded
+- raw-fallback reasons
+
+### Initial budgets to validate during the parser spike
+
+These are engineering gates, not permanent user configuration:
+
+- ordinary caret move in a parsed note: no Document-wide iteration
+- ordinary draw frame: no parser call
+- 100 KB note single-line edit: parser/model publication should normally fit within one 16 ms frame, preferably below 4 ms on the dev machine
+- 1 MB note: Editor remains responsive; expensive reconciliation may yield, but changed/visible content updates promptly
+- link-index startup: never block the UI for a full Project scan
+- image decode/scale: off the critical typing path; layout placeholder is stable
+
+Use existing performance capture infrastructure and add a Markdown stress fixture/tool if necessary. Do not encode exact timing as a flaky Meson unit test; encode counters/invariants and maintain a repeatable benchmark command.
 
 ## Implementation phases
 
-### Phase 1: Shared Markdown parser/link/image modules
+Each phase is a vertical slice with a red-green acceptance test. A module existing is not completion.
 
-- Extract parser pieces from `MarkdownView` into `data/core/markdown/parser.lua`.
-- Add source ranges to parsed blocks/spans.
-- Extract local/remote image loading into `data/core/markdown/images.lua` with an explicit remote-download policy parameter; live editing defaults to no automatic network access.
-- Implement `data/core/markdown/links.lua` for Obsidian wikilinks/embed syntax.
-- Implement `data/core/markdown/anchors.lua` for heading anchors and block IDs.
-- Keep `MarkdownView` passing current tests by routing it through the new shared modules gradually.
+### Phase 0: owner decisions, quarantine, and baseline characterization
 
-Tests:
+- Resolve the owner questions at the end of this plan.
+- Record the canonical feature name in `CONTEXT.md` after confirmation.
+- Keep current Live Preview available for comparison, but set the development default honestly until release gates pass.
+- Add focused repro tests for every known gap before replacing code:
+  - direct filename/syntax lifecycle
+  - no initial link-index build
+  - link cannot open
+  - missing/ambiguous link style
+  - whole-Document metric rebuild on caret move
+  - repeated parser calls from draw/mapping
+  - stale missing/remote-disabled image cache
+  - wrapped alias behavior
+- Capture current Markdown UI/performance baseline.
+- Document which full-suite failures are unrelated before feature work proceeds.
 
-- parser recognizes headings, emphasis, Markdown images, and wikilinks with exact ranges
-- link parser covers all Obsidian syntaxes listed above
-- image size syntax parses correctly
-- remote images disabled in live-editor policy does not invoke `http.download(...)`
-- existing `tests/lua/ui/markdownview.lua` remains green
+Exit gate: known gaps reproduce deterministically and the current prototype can be compared without relying on memory.
 
-### Phase 2: Markdown link resolver and vault index
+### Phase 1: parser and semantic-model spike
 
-- Add `data/core/markdown/vault_index.lua`.
-- Index project Markdown files, attachments, headings, and block IDs.
-- Wire index invalidation/update triggers from document text transactions, filename changes, save-as/rename/delete flows, and project file watcher events where available.
-- Resolve note links with extension omission.
-- Resolve attachment links requiring extension.
-- Resolve heading/block subtargets.
-- Render missing/ambiguous result metadata.
+- Build an independent compatibility fixture corpus from CommonMark/GFM/official Obsidian syntax examples without copying large documentation bodies.
+- Pin/vendor and compile the smallest viable MD4C integration through Meson; publish one exact source-ranged fixture through an Anvil native API and native test.
+- Prototype tree-sitter-markdown only far enough to compile both grammars in Anvil and compare exact ranges, malformed input, split-parser/included-range integration, and update cost through the same kind of publication boundary.
+- Define native result memory ownership, compact snapshot serialization/querying, worker job protocol, request coalescing, cancellation/supersession, and stale-result disposal.
+- Measure native parse plus publication, not parser time alone, synchronously and through the worker path.
+- Select one backend and document why; remove the losing experimental integration rather than retaining two parser stacks.
+- Implement Document semantic model with revision checking, pending-state raw fallback, and bounded adoption work.
+- Cover CommonMark delimiter edge cases, nesting, escapes, code suppression, tables, frontmatter, Unicode, CRLF, and incomplete typing.
 
-Tests:
+Exit gate: the selected parser is reproducibly built by Meson, passes native plus Lua-facing compatibility tests, exposes exact source ranges, survives pathological fixtures, coalesces/cancels stale work, publishes a compact revision-checked snapshot without unbounded UI adoption, and meets the measured synchronous/background budgets.
 
-- `[[Note]]` resolves to `Note.md`
-- `[[folder/Note]]` resolves project-relative/relative paths
-- links resolve against the source note's owning project in a multi-project workspace
-- absolute/outside-project internal links are rejected or externalized according to policy instead of treated as vault links
-- `[[Note#Heading]]` resolves heading line
-- `[[Note#^block-id]]` resolves block line
-- ambiguous note names are reported as ambiguous instead of opening arbitrary files
-- attachment links require/handle explicit extensions
-- editing a heading or block ID updates the resolver without a manual full restart
-- saving a new note, renaming a note, and deleting a note update or invalidate the index predictably
+### Phase 2: core lifecycle, render caching, and wrapping
 
-### Phase 3: Core `DocView` row metrics
+- Add first-class `Doc` metadata/syntax listeners.
+- Add owned Editor feature attach/detach lifecycle.
+- Make line render provider output cached and target-invalidatable.
+- Make metric invalidation range-based.
+- Integrate render fragments into wrapping.
+- Complete pointer freeze, multi-cursor reveal, IME, and viewport anchoring.
+- Replace Markdown mouse/global wrappers with generic widget/POI contracts.
+- Keep Markdown rendering minimal during this phase: one synthetic provider plus headings/one inline span are enough to prove core behavior.
 
-- Add visual metric provider API.
-- Add visual row y-offset cache and default fast path.
-- Update scroll size, visible row iteration, line screen position, mouse position resolution, gutter/body drawing, overlay/caret, and selection geometry for provider metrics.
-- Add tests around variable-height rows independent of Markdown.
+Exit gate: direct save-as/rename/syntax changes work automatically; wrapped source mapping is correct; caret movement touches only old/new affected lines; all generic `DocView` tests and non-Markdown fast-path tests pass.
 
-Tests:
+### Phase 3: robust core Live Preview vertical slice
 
-- a metric provider can make one line taller without corrupting click hit testing
-- caret y position and selection rectangles align on variable-height rows
-- scrolling to a variable-height line lands correctly
-- normal `DocView` behavior is unchanged without providers
+Implement through the new semantic/render model:
 
-### Phase 4: Core `DocView` render fragments
+- headings
+- bold/italic/bold+italic
+- strikethrough/highlight
+- inline code
+- escapes
+- Markdown and external link presentation
+- comments
+- Source Mode
+- selected Reveal Unit policy
 
-- Add line render provider API.
-- Implement text fragment drawing with fonts/colors/backgrounds.
-- Implement source column to x mapping and inverse x to source column mapping.
-- Wire fragment mapping into selections, carets, IME, `get_col_x_offset`, `get_x_offset_col`, and mouse hit testing.
-- Preserve existing raw highlighter path when no provider supplies fragments.
+Delete corresponding ad hoc parsing from `live_render.lua` as each slice lands.
 
-Tests:
+Exit gate: a representative prose note can be edited entirely in Live Preview with wrapping, selections, multi-cursor, IME, find/replace, undo/redo, and no raw-fallback surprises for supported inline syntax.
 
-- hidden source markers map to stable caret positions
-- visible content maps back to correct source columns
-- selections over hidden and visible fragments draw predictably
-- active line can switch to raw passthrough without changing row height
-- normal non-Markdown long-line rendering still uses existing fast path
+### Phase 4: internal links end to end
 
-### Phase 4.5: Provider-aware wrapping safety gate
+- Build asynchronous/cooperative Markdown Link Index.
+- Add watcher reconciliation and open-Document overlay.
+- Resolve notes, aliases, headings, nested heading paths, blocks, attachments, URLs, pending, missing, and ambiguity.
+- Add status, command, mouse gesture, context actions, and Navigation History integration.
+- Add missing-note flow if selected.
+- Add autocomplete/search states for `[[`, `[[#`, `[[##`, `[[^`, and `[[^^` if selected for this release.
+- Add generated-link serialization policy.
+- Implement rename-link maintenance only if selected.
 
-- Add the raw-render fallback for wrapped Markdown lines before any default hidden-syntax rendering is enabled.
-- Add fragment-aware wrap measurement for text fragments as soon as possible after the fallback.
-- Add selection/focus-driven wrap invalidation for old/new active lines before active-line raw reveal can affect wrapped row counts.
-- Keep image/widget fragments raw or row-based until unbreakable widget wrapping is implemented.
-- Add tests that demonstrate a long `[[Very Long Note Name|short alias]]` line is not mis-hit-tested when wrapping is enabled.
+Exit gate: links work after cold startup, unsaved edits, create/delete/rename, multiple Projects, ambiguity, and Project moves without manual rebuild or random target selection.
 
-Tests:
+### Phase 5: images and attachment workflow
 
-- wrapped lines with hidden syntax either render raw or use fragment-aware mapping; they never mix raw wrap breaks with shortened rendered text
-- click, caret, selection, and IME x positions remain source-correct on wrapped Markdown lines
-- moving the caret into a long inactive alias line that becomes wider in raw mode invalidates/recomputes wrap rows and preserves hit testing
-- non-Markdown wrapped files still use the old wrapping path
+- Replace image cache with context-aware retryable asset service.
+- Render local/remote-policy Markdown images and Wikilink image embeds.
+- Support both officially documented external sizing forms (`![250](url)` and `![alt|100x145](url)`) plus Wikilink width and width×height syntax, with explicit alt-text semantics.
+- Integrate images with wrapping/composed rows and selected active-edit presentation.
+- Preserve or refactor image overlay through generic overlay/input contracts.
+- Add remote-disabled/load-once policy.
+- Implement paste/drop attachment import if selected for core completion.
 
-### Phase 5: First live Markdown rendering milestone
+Exit gate: image references and both documented external sizing forms remain correct across note rename/move, file appearance/change, Project change, policy toggles, two sizes of one image, wrapping, and async completion.
 
-Attach Markdown Live Editor to Markdown `DocView` instances, subject to the development feature flag and wrapping safety gate.
+### Phase 6: block-level core experience
 
-Initial features:
+- paragraphs/line breaks
+- ordered/unordered/nested lists
+- task widgets
+- blockquotes
+- callouts
+- fenced/indented code
+- horizontal rules
+- frontmatter baseline
+- tags
+- reference links and footnotes to the selected support level
 
-- heading font sizes for H1-H6
-- inactive-line hiding of heading markers
-- bold/italic/strikethrough/code styling
-- link styling for Markdown links and wikilinks
-- unresolved link styling
-- active-line raw reveal
-- status bar tooltip for links under mouse
-- command/click to open resolved links
+Exit gate: normal note-taking no longer drops to raw presentation for common block constructs, and all widget edits are source-preserving and undoable.
 
-Tests:
+### Phase 7: advanced blocks selected by owner
 
-- Markdown file opens as `DocView`
-- untitled/plain `DocView` saved as `*.md` attaches live Markdown providers
-- direct `doc:set_filename(...)`, save-as, rename, and syntax reset paths all re-run attach/detach eligibility
-- Markdown `DocView` saved/renamed to a non-Markdown filename detaches live Markdown providers
-- heading line uses heading metric/font while remaining editable raw text
-- moving caret into a rendered heading reveals raw marker
-- `[[Note|Alias]]` displays alias inactive and raw syntax active
-- link open command opens target note as `DocView`
+Separate vertical slices for:
 
-### Phase 6: Image embeds in the editor
+- tables
+- properties UI
+- math
+- note/heading/block embeds
+- PDF/audio/video attachment chips or viewers
 
-- Render `![[image.png]]` and `![alt](image.png)` in the editor.
-- Support Obsidian resize syntax.
-- Cache/scaling via shared image module.
-- Use provider rows first if inline widgets are not ready; migrate to inline widget fragments for images embedded inside paragraph text.
-- Add missing/error/loading states.
+Each slice needs its own public behavior tests, mapping tests, focus/keyboard tests, wrapping tests, malformed-source fallback, and performance check.
 
-Tests:
+### Phase 8: promotion and cleanup
 
-- project-local image link loads expected path
-- image row/widget has expected dimensions after resize syntax
-- missing image renders error chip and remains editable
-- remote image download updates the rendered line when finished if remote images are enabled
-- active source line remains raw/editable
-
-### Phase 7: Embeds beyond images
-
-- `![[Note]]`: render an embedded-note block/card with a bounded preview of the target note.
-- `![[Note#Heading]]`: render only the target heading section when feasible.
-- `![[Note#^block-id]]`: render target block when feasible.
-- PDFs/audio/video/unknown files: render attachment chips with open action unless native viewers are added.
-- Avoid recursive embed explosions with max depth and cycle detection.
-
-Tests:
-
-- note embed resolves and renders bounded target preview
-- recursive embeds stop with a cycle chip/log
-- PDF/audio/video attachment chips open the file rather than failing silently
-
-### Phase 8: Polish beyond the wrapping safety gate
-
-- Complete fragment-aware wrapping for remaining widget/image/table cases.
-- Keep active-line reveal layout stable.
-- Add task checkbox widget rendering/toggling.
-- Add blockquotes/rules/list marker polish.
-- Add table rendering strategy, potentially borrowing from `MarkdownView` table layout.
-- Add keyboard/navigation affordances for link creation and note creation if desired.
-
-Tests:
-
-- rendered heading/link/image lines wrap predictably
-- switching active line does not cause scroll jumps
-- table/image/list cases preserve source text after edits
-- broad `meson test -C build-windows-x86_64 --suite anvil --print-errorlogs` passes
-
-## Compatibility / migration plan
-
-- Keep `markdown-view:preview` initially.
-- During core primitive work, keep Markdown Live Editor behind `config.markdown_live_editor = false` so raw Markdown editing remains the safe default.
-- Promote Markdown Live Editor to the default Markdown file editing experience only after row metrics, render fragments, and wrapped-line safety are implemented and tested.
-- `core.open_file("note.md")` should continue returning a `DocView`; when the feature is enabled and the view passes the attach lifecycle check, it should have Markdown live providers attached.
-- `core.open_markdown(...)` can remain for explicit preview use until the old preview is no longer needed.
-- Once live editing is mature, consider renaming commands from `markdown-view:*` to `markdown-live:*` or adding new live-editor commands and retiring preview-centric defaults.
-- Update all in-repo callers/tests rather than preserving deprecated internal aliases unless an external boundary needs them.
-
-## Risk areas
-
-- **Source-to-screen mapping:** hiding syntax while keeping byte-accurate editing is the core hard problem.
-- **Variable-height rows:** current `DocView` code has many constant-line-height assumptions.
-- **Wrapping:** rendered fragments and widgets can invalidate current raw-token wrap caches. Because wrapping is enabled by default in Anvil's current dev defaults, hidden syntax must be gated behind raw fallback or fragment-aware wrapping. Active-line reveal can also change wrap row count without a text edit, so selection/focus changes must participate in wrap invalidation.
-- **Mouse interaction:** revealing syntax during click can move text under the pointer unless frozen/deferred.
-- **Async images:** image load completion changes layout; must invalidate predictably without jank.
-- **Remote image privacy:** live editing must not fetch tracking URLs just because a Markdown file was opened; automatic remote downloads stay disabled unless explicitly enabled.
-- **Ambiguous/stale Obsidian links:** basename links can map to multiple project files; must not open random targets, and the vault index must update after heading/block/file changes.
-- **Performance:** full-document parsing on every keystroke is acceptable only as an early milestone.
-
-## Diagnostics and logging
-
-Add quiet logs for:
-
-- live editor attach/detach and filename/syntax lifecycle decisions
-- parser full/incremental timing
-- dirty range and fallback-to-full-parse reasons
-- vault index rebuilds, incremental updates, invalidation reasons, and file counts
-- ambiguous/missing link resolution
-- image load/download decisions, remote-download policy skips, start/done/error
-- render fragment provider failures
-- slow line render/layout cases
-
-Use visible `core.warn`/`core.error` only when the user needs to act.
+- Run targeted and full Anvil suites.
+- Run GUI smoke and manual scenario matrix under D3D11 and software rendering where relevant.
+- Run large-note and large-Project benchmarks.
+- Remove superseded parser/render/index code and obsolete config keys.
+- Update `MarkdownView` to shared services or explicitly document it as independent Reading view.
+- Make Live Preview default only after all selected completion gates pass.
+- Update user-facing docs and command names.
+- Update this plan with final status instead of leaving milestone names as the only record.
 
 ## Test strategy
 
-Follow red-green regression workflow for each behavior-changing bugfix.
+### Parser/model tests
 
-Preferred test locations:
+Use table-driven fixtures for:
 
-```text
-tests/lua/runtime/markdown_parser.lua
-tests/lua/runtime/markdown_links.lua
-tests/lua/ui/docview_render_fragments.lua
-tests/lua/ui/docview_variable_rows.lua
-tests/lua/ui/markdown_live_editor.lua
-```
+- all CommonMark/GFM constructs Anvil claims
+- all selected Obsidian extensions
+- exact marker/content/source ranges
+- nested and adjacent spans
+- escapes and entities
+- Unicode and combining characters
+- tabs and CRLF
+- malformed and half-typed constructs
+- raw HTML suppression
+- code suppression
+- pathological delimiters/nesting
+- frontmatter and property edge cases
 
-Run targeted tests through Meson, for example:
+Expected values must be independent literals/fixtures, not output recomputed with the parser's own algorithm.
 
-```sh
-PATH=/c/msys64/mingw64/bin:$PATH /c/msys64/mingw64/bin/meson.exe test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/markdown_links.lua --print-errorlogs
-PATH=/c/msys64/mingw64/bin:$PATH /c/msys64/mingw64/bin/meson.exe test -C build-windows-x86_64 anvil:lua-ui --test-args ui/markdown_live_editor.lua --print-errorlogs
-```
+### Runtime link/index tests
 
-Run the Anvil suite before finalizing broad changes:
+- cold initial scan and readiness
+- owning Project/link root
+- multiple Projects with duplicate names
+- exact/relative/root-relative/basename resolution
+- nested heading paths
+- block-ID placement rules
+- aliases and canonical serialization
+- missing/ambiguous/pending states
+- open unsaved Document overlay
+- heading/block/alias edits
+- file create/delete/rename/move
+- watcher coarse-directory event reconciliation
+- forced watcher-budget/capacity failure enters degraded reconciliation mode and still discovers later changes
+- ignored/outside-root files
+- generated link path policies
+- safe rename updates if enabled
+
+### In-process UI tests
+
+Drive public seams:
+
+- attach/detach through real filename/syntax events
+- command-performed Source Mode toggle
+- caret and selection entering/leaving Reveal Units
+- pointer-down/up freeze and drag selection
+- text transaction, reload, detach, and Editor close while pointer freeze is active never reuse stale source mapping
+- multi-cursor and IME state
+- wrap-boundary caret/hit testing
+- viewport anchor after reveal row-count change
+- headings, inline spans, code, lists, tasks, links, images, callouts, and selected widgets
+- link open through command/widget activation
+- status tooltip state
+- Source Mode preserves selection/scroll
+- non-Markdown Editor unaffected
+
+Avoid exact keyboard shortcuts and cosmetic pixel constants. Assert durable mapping, state, source text, focus, navigation, and bounded layout behavior.
+
+### Property/fuzz testing
+
+Generate source fragments and assert invariants:
+
+- every source column maps to a finite x and inverse mapping stays within a valid affinity range
+- edits never change unrelated source bytes
+- render fragments are ordered, non-overlapping, and within source bounds
+- parser/model never hangs or throws on arbitrary bytes accepted by `Doc`
+- toggling mode cannot change Document text
+- stale async generations cannot publish
+
+### Performance tests and tools
+
+- counter assertion: caret movement invalidates bounded lines
+- counter assertion: draw performs zero parses
+- counter assertion: plain non-Markdown Editor uses no Markdown model
+- repeatable 10 KB, 100 KB, 1 MB note benchmark
+- Project index benchmark with duplicate basenames and many attachments
+- image stress note with mixed local/missing/remote/two-size images
+
+### Full validation
+
+Targeted commands remain Meson-based. Before promotion:
 
 ```sh
 PATH=/c/msys64/mingw64/bin:$PATH /c/msys64/mingw64/bin/meson.exe test -C build-windows-x86_64 --suite anvil --print-errorlogs
 ```
 
-## Open questions
+The full suite must complete—not merely print Markdown passes before a later timeout. If unrelated failures exist, isolate and resolve or obtain explicit owner approval before calling promotion complete.
 
-- After the feature is promoted from development-flagged to default-on, should Source mode remain a per-file/session command toggle or only a global config option?
-- Should remote image downloads be enabled by default, prompted, or disabled until explicitly opted in?
-- What should the user-facing canonical name be: **Markdown Live Editor**, **Live Markdown Editor**, or another term?
-- How closely should Anvil emulate Obsidian's exact heading-anchor normalization and alias/frontmatter rules?
-- Should ambiguous wikilinks offer a picker, create a missing note, or remain unresolved until explicit?
-- Should image embeds render on the same source line, below it, or choose based on image-only vs paragraph context?
+## Diagnostics
+
+Use `core.log_quiet(...)` for:
+
+- attach/detach and mode transitions
+- filename/syntax/root lifecycle decisions
+- parser backend/version and fallback reason
+- parse/index/image timing summaries
+- stale generation rejection
+- link pending/missing/ambiguous resolution
+- watcher loss and bounded-rescan reason
+- remote policy decisions
+- image retry/decode failure
+- raw-render fallback reason
+- provider exception signature
+
+Visible warnings are reserved for actionable operations such as failed attachment import, failed multi-file rename update, or an explicit user-requested remote load failure.
+
+## Rollout policy
+
+- During Phases 0–2, default to Source Mode/current raw behavior unless explicitly enabled for development.
+- During Phases 3–6, allow Live Preview opt-in and preserve a one-command Source Mode escape hatch.
+- Promote to default only when selected Tier 1 completion criteria and all Tier 0 gates pass.
+- Keep remote downloads disabled unless the owner chooses otherwise.
+- Do not preserve deprecated internal Markdown aliases after all in-repo callers migrate.
+- Keep separate Reading view only according to the owner decision below.
+
+## Definition of “it just works”
+
+The feature is complete for the selected scope when all of these are true:
+
+- Markdown files automatically enter the selected default mode through every open/restore/save-as/rename path.
+- Source Mode is always available without replacing the Editor.
+- Supported syntax renders consistently and reveals predictably.
+- Wrapping, pointer selection, keyboard selection, multi-cursor, IME, find/replace, folding, undo/redo, reload, and copy all operate on correct source positions.
+- Link state is useful from cold start and remains current after unsaved edits and filesystem changes.
+- Link opening, heading/block navigation, ambiguity, and missing targets have deterministic behavior.
+- Images resolve, retry, resize, and update without stale context or implicit network access.
+- Normal note-taking constructs do not unexpectedly drop to raw source.
+- Unsupported/malformed constructs remain safely editable raw source.
+- Ordinary caret motion and draw do not perform Document-wide Markdown work.
+- Large notes and Projects remain responsive.
+- Non-Markdown Editors retain normal behavior/performance.
+- The selected targeted, full, GUI, and benchmark validation passes.
+- This plan and user documentation accurately state what is supported.
+
+## Research sources
+
+Official/current sources consulted:
+
+- Obsidian Help, Views and editing mode: `https://help.obsidian.md/edit-and-read`
+- Obsidian Help, Basic formatting syntax: `https://help.obsidian.md/syntax`
+- Obsidian Help, Advanced formatting syntax: `https://help.obsidian.md/advanced-syntax`
+- Obsidian Help, Obsidian Flavored Markdown: `https://help.obsidian.md/obsidian-flavored-markdown`
+- Obsidian Help, Internal links: `https://help.obsidian.md/links`
+- Obsidian Help, Embed files: `https://help.obsidian.md/embeds`
+- Obsidian Help, Attachments: `https://help.obsidian.md/attachments`
+- Obsidian Help, Properties: `https://help.obsidian.md/properties`
+- Obsidian Help, Aliases: `https://help.obsidian.md/aliases`
+- Obsidian Help, Callouts: `https://help.obsidian.md/callouts`
+- Obsidian Help, Tags: `https://help.obsidian.md/tags`
+- Obsidian Help, Accepted file formats: `https://help.obsidian.md/file-formats`
+- Official help source repository: `https://github.com/obsidianmd/obsidian-help`
+
+Observed/inspiration sources:
+
+- Obsidian Forum, Markdown formatting characters in Live Preview: `https://forum.obsidian.md/t/markdown-formatting-characters-in-live-preview/50439`
+- Atomic Editor: `https://github.com/kenforthewin/atomic-editor`
+- CodeMirror hybrid Markdown discussion: `https://discuss.codemirror.net/t/hybrid-markdown-editing-preview-for-unfocused-lines-raw-for-active-line/9660`
+- MD4C: `https://github.com/mity/md4c`
+- tree-sitter-markdown: `https://github.com/tree-sitter-grammars/tree-sitter-markdown`
+- cmark-gfm: `https://github.com/github/cmark-gfm`
+
+Official Help is the syntax/behavior authority. Forum reports and open-source editors are implementation inspiration and must not be presented as exact Obsidian guarantees.
+
+## Decisions required from the owner
+
+Please answer these before Phase 0 is considered complete. Recommendations are included to make the tradeoffs explicit, but no answer is assumed.
+
+### 1. Reveal behavior
+
+Which should Anvil target?
+
+- **A. Obsidian-like construct reveal (recommended):** reveal only the formatted construct entered by the caret, with line/block fallback where necessary.
+- **B. Whole active line:** simpler and more source-visible, but less like Obsidian and visually noisier.
+- **C. Whole active block:** useful for tables/callouts, but causes larger transitions.
+
+### 2. Default mode and persistence
+
+Should Live Preview become the default for Markdown after the release gates pass? Should a Source Mode choice be:
+
+- per Editor only
+- shared by all Editors for the same Document
+- persisted per file in Workspace state
+- a global default with temporary per-Editor override
+
+Recommendation: Live Preview global default, temporary per-Editor override persisted in Workspace state.
+
+### 3. Reading view / existing `MarkdownView`
+
+Should the separate rendered `MarkdownView` remain as an explicit Obsidian-like Reading view, or should the project eventually retire it once Live Preview is mature?
+
+Recommendation: retain it as optional Reading view during the rebuild; decide on retirement only after feature parity and shared parser migration.
+
+### 4. Typography
+
+Should Markdown Live Preview body text use:
+
+- the normal code font
+- the proportional UI/text font like a reading surface
+- a dedicated configurable Markdown font
+
+Recommendation: proportional body/heading font with monospace inline/fenced code, while Source Mode uses the code font.
+
+### 5. Link activation
+
+In Editing view, what should open a link?
+
+- Ctrl+click on Windows/Linux and Cmd+click on macOS (closest to code-editor safety)
+- ordinary click when the link is inactive, with a second click/caret gesture to edit
+- a small open-link icon/hit region plus keyboard command
+
+Recommendation: modifier-click plus keyboard command; ordinary click edits.
+
+### 6. Missing and ambiguous links
+
+For a missing `[[Note]]`, should open-link:
+
+- create the note immediately
+- ask for confirmation/location
+- show a picker/action menu
+- remain unresolved with no creation behavior
+
+For an ambiguous basename, should Anvil always show a picker?
+
+Recommendation: show a create action for missing links and a picker for ambiguity; never create/open silently when target identity is uncertain.
+
+### 7. Link root boundary
+
+Should internal links resolve against:
+
+- the owning Anvil Project root
+- the nearest ancestor containing `.obsidian`
+- an explicitly configured per-Project Markdown root
+- Project root by default, but nearest `.obsidian` when present
+
+Also: should External Project Directories participate in the same Markdown link index?
+
+Recommendation: owning Project by default, nearest `.obsidian` as a deliberate per-Project option; keep External Project Directories out unless explicitly included.
+
+### 8. Generated link format
+
+Which default should autocomplete, drag/drop, and rename updates generate?
+
+- shortest unique Wikilink
+- Project-root-relative Wikilink
+- source-relative Markdown link
+- configurable per Project
+
+Recommendation: configurable per Project, defaulting to shortest unique Wikilink for Obsidian-like use.
+
+### 9. Automatic link updates on rename
+
+Should Anvil automatically rewrite links when a note/attachment is renamed, prompt with a preview, or never rewrite them?
+
+Recommendation: prompt with affected-file preview initially; allow an automatic per-Project setting after the operation is proven safe.
+
+### 10. Remote images
+
+Should remote images:
+
+- remain disabled until an explicit one-shot load
+- be enabled per trusted Project
+- always load automatically
+
+Recommendation: disabled by default, with one-shot load and optional trusted-Project policy.
+
+### 11. Image editing presentation
+
+When an image source becomes active, should Anvil:
+
+- keep the image row visible below revealed source (recommended for stability)
+- replace the image with source while active, like a stricter source reveal
+- show source in a small overlay/editor affordance without changing the row
+
+For `|640x480`, should dimensions force exact size or fit within that box while preserving aspect ratio?
+
+### 12. Attachments workflow
+
+Is Obsidian-like paste/drag attachment import required for the first “complete” release, including reading `.obsidian` attachment-folder settings, or can it follow image rendering/link support?
+
+Recommendation: include image paste/drop in the core release; defer non-image media import if necessary.
+
+### 13. Note and non-image embeds
+
+Which are required before calling the feature complete?
+
+- note embeds
+- heading/block embeds
+- PDF chips or preview
+- audio/video chips or players
+- Canvas/Base embeds
+
+Recommendation: note/heading/block embeds plus generic attachment chips in Tier 2; defer native PDF/audio/video/Canvas/Base viewers.
+
+### 14. Tables
+
+Do you want:
+
+- styled editable source tables first
+- a full interactive WYSIWYG table grid like Obsidian Live Preview
+- styled source for the initial release, rich grid later
+
+Recommendation: styled source plus reliable row/column commands first; rich grid as a dedicated later slice.
+
+### 15. Properties/frontmatter
+
+Do you want Obsidian-like editable property rows, raw-but-styled YAML, or hidden frontmatter by default?
+
+Recommendation: raw-but-styled YAML for the core release, with aliases/tags indexed; property-row UI later.
+
+### 16. Math and HTML
+
+Is rendered LaTeX math required for the first complete release? Should raw HTML remain source-only, matching Obsidian's rule that Markdown inside HTML is not rendered?
+
+Recommendation: source-styled math until a native renderer is selected; raw HTML source-only and no Markdown parsing inside it.
+
+### 17. Canonical user-facing name
+
+Choose the term to record in `CONTEXT.md` and commands/settings:
+
+- **Markdown Live Preview** (closest to Obsidian and used in this plan)
+- **Live Markdown Editor**
+- another name
