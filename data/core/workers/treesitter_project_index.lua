@@ -5,6 +5,7 @@
 -- and compact record construction off the UI thread.
 
 local common = require "core.common"
+local artifact_codec = require "core.treesitter.artifact_codec"
 local records = require "core.treesitter.project_index_records"
 local native_result_adapter = require "core.treesitter.native_index_adapter"
 local native = require "treesitter"
@@ -21,7 +22,8 @@ local DEFAULT_QUERY_TIMEOUT_MS = 20
 local DEFAULT_MAX_FILE_BYTES = 2 * 1024 * 1024
 local DEFAULT_PROGRESS_INTERVAL = 0.25
 local DEFAULT_CHUNK_FILES = 16
-local DEFAULT_CHUNK_RECORDS = 5000
+local DEFAULT_CHUNK_RECORDS = 512
+local DEFAULT_CHUNK_BYTES = 256 * 1024
 local DEFAULT_PROJECT_USAGE_CAP = 750000
 local DEFAULT_BATCH_FILES = 64
 local DEFAULT_BATCH_BYTES = 4 * 1024 * 1024
@@ -229,12 +231,6 @@ local function file_record_count(file)
   return #(file.symbols or {}) + (file.usage_count or 0)
 end
 
-local function usage_list_count(usages_by_name)
-  local count = 0
-  for _, list in pairs(usages_by_name or {}) do count = count + #list end
-  return count
-end
-
 local function shallow_file_copy(file)
   local copy = {}
   for key, value in pairs(file or {}) do
@@ -245,84 +241,104 @@ local function shallow_file_copy(file)
   return copy
 end
 
+local function serialized_size(value)
+  return #common.serialize(value)
+end
+
 local function push_file(chunk, file)
   chunk[#chunk + 1] = file
   chunk.record_count = (chunk.record_count or 0) + file_record_count(file)
+  chunk.byte_count = (chunk.byte_count or 0) + serialized_size(file) + 64
 end
 
-local function split_large_file(file, max_records)
-  max_records = tonumber(max_records) or DEFAULT_CHUNK_RECORDS
-  if max_records <= 0 or file_record_count(file) <= max_records then return { file } end
-
-  local symbols = file.symbols or {}
-  local usages_by_name = file.usages_by_name or {}
-  local total_usages = usage_list_count(usages_by_name)
-  if total_usages == 0 then
-    local parts = {}
-    for i = 1, #symbols, max_records do
-      local part = shallow_file_copy(file)
-      part.partial = true
-      part.file_done = i + max_records > #symbols
-      part.symbols = {}
-      part.usages_by_name = {}
-      part.usage_count = 0
-      part.usage_complete = part.file_done and file.usage_complete or nil
-      for j = i, math.min(#symbols, i + max_records - 1) do
-        part.symbols[#part.symbols + 1] = symbols[j]
-      end
-      parts[#parts + 1] = part
-    end
-    return #parts > 0 and parts or { file }
+local function bounded_record(record, max_bytes)
+  local bytes = serialized_size(record)
+  if bytes <= max_bytes then return record, bytes end
+  local copy = {}
+  for key, value in pairs(record or {}) do copy[key] = value end
+  for _, key in ipairs({ "line_text", "declaration", "signature", "search_text", "text" }) do
+    local value = copy[key]
+    if type(value) == "string" and #value > 1024 then copy[key] = value:sub(1, 1000) .. "…[truncated]" end
   end
+  copy.transport_truncated = true
+  bytes = serialized_size(copy)
+  return bytes <= max_bytes and copy or nil, bytes
+end
+
+local function split_large_file(file, max_records, max_bytes)
+  max_records = math.max(1, tonumber(max_records) or DEFAULT_CHUNK_RECORDS)
+  max_bytes = math.max(4096, tonumber(max_bytes) or DEFAULT_CHUNK_BYTES)
+  local payload_budget = max_bytes - 4096
+  if file_record_count(file) <= max_records and serialized_size(file) <= payload_budget then return { file } end
 
   local parts = {}
-  local first = true
   local current
-  local current_count
-
+  local current_count = 0
+  local current_bytes = 1024
   local function new_part()
-    local part = shallow_file_copy(file)
-    part.partial = true
-    part.file_done = false
-    part.symbols = first and symbols or {}
-    part.usages_by_name = {}
-    part.usage_count = 0
-    current = part
-    current_count = #(part.symbols or {})
-    first = false
-  end
-
-  local function flush(done)
-    if not current then return end
-    current.file_done = done and true or false
-    current.usage_complete = done and file.usage_complete or nil
-    parts[#parts + 1] = current
-    current = nil
+    current = shallow_file_copy(file)
+    current.partial = true
+    current.file_done = false
+    current.symbols = {}
+    current.usages_by_name = {}
+    current.usage_count = 0
+    current.usage_complete = nil
     current_count = 0
+    current_bytes = serialized_size(current) + 512
+  end
+  local function flush()
+    if current and current_count > 0 then parts[#parts + 1] = current end
+    new_part()
+  end
+  local function ensure_room(bytes)
+    if current_count > 0 and (current_count >= max_records or current_bytes + bytes + 256 > payload_budget) then flush() end
   end
 
   new_part()
-  for name, list in pairs(usages_by_name) do
-    for _, usage in ipairs(list) do
-      if current_count >= max_records and current.usage_count > 0 then
-        flush(false)
-        new_part()
-      end
+  for _, original in ipairs(file.symbols or {}) do
+    local symbol, bytes = bounded_record(original, payload_budget - 2048)
+    if not symbol then error("Tree-sitter Project symbol record exceeds chunk byte ceiling") end
+    ensure_room(bytes)
+    current.symbols[#current.symbols + 1] = symbol
+    current_count = current_count + 1
+    current_bytes = current_bytes + bytes + 128
+  end
+  for name, list in pairs(file.usages_by_name or {}) do
+    for _, original in ipairs(list) do
+      local usage, bytes = bounded_record(original, payload_budget - 2048)
+      if not usage then error("Tree-sitter Project usage record exceeds chunk byte ceiling") end
+      ensure_room(bytes + #name)
       local out = current.usages_by_name[name]
-      if not out then
-        out = {}
-        current.usages_by_name[name] = out
-      end
+      if not out then out = {}; current.usages_by_name[name] = out; current_bytes = current_bytes + #name + 64 end
       out[#out + 1] = usage
       current.usage_count = current.usage_count + 1
       current_count = current_count + 1
+      current_bytes = current_bytes + bytes + 128
     end
   end
-  flush(true)
+  if current_count > 0 or #parts == 0 then parts[#parts + 1] = current end
+  for i, part in ipairs(parts) do
+    part.file_done = i == #parts
+    part.usage_complete = part.file_done and file.usage_complete or nil
+  end
   return parts
 end
 
 local flush_chunk
+
+local function file_manifest(files)
+  local manifest = {}
+  for _, file in ipairs(files or {}) do
+    manifest[#manifest + 1] = {
+      path = file.path,
+      fingerprint = file.fingerprint,
+      usage_complete = file.usage_complete,
+      partial = file.partial and true or nil,
+      file_done = file.file_done and true or nil,
+    }
+  end
+  return manifest
+end
 
 local function write_chunk_artifact(ctx, payload, state, files, diagnostics)
   local dir = payload.artifact_dir
@@ -334,7 +350,7 @@ local function write_chunk_artifact(ctx, payload, state, files, diagnostics)
 
   state.artifact_sequence = (state.artifact_sequence or 0) + 1
   local path = normalize(join_path(dir, string.format(
-    "treesitter-index-%s-%s-%06d.lua",
+    "treesitter-index-%s-%s-%06d.bin",
     tostring(ctx.job_id or 0),
     tostring(ctx.worker_id or 0),
     state.artifact_sequence
@@ -344,9 +360,12 @@ local function write_chunk_artifact(ctx, payload, state, files, diagnostics)
     diagnostics = diagnostics,
   }
   local write_started = now()
+  local content = artifact_codec.encode(artifact_payload)
+  if #content > (payload.chunk_bytes or DEFAULT_CHUNK_BYTES) then
+    return nil, "artifact-byte-limit-exceeded"
+  end
   local fp, open_err = io.open(path, "wb")
   if not fp then return nil, open_err or "open-failed" end
-  local content = "return " .. common.serialize(artifact_payload)
   local wrote, write_err = fp:write(content)
   local closed, close_err = fp:close()
   add_metric(state.metrics, "artifact_write_ms", elapsed_ms(write_started))
@@ -366,9 +385,13 @@ local function write_chunk_artifact(ctx, payload, state, files, diagnostics)
 end
 
 local function push_file_bounded(ctx, payload, root, state, chunk, file)
-  local parts = split_large_file(file, payload.chunk_records or DEFAULT_CHUNK_RECORDS)
+  local max_bytes = payload.chunk_bytes or DEFAULT_CHUNK_BYTES
+  local parts = split_large_file(file, payload.chunk_records or DEFAULT_CHUNK_RECORDS, max_bytes)
   for _, part in ipairs(parts) do
-    if #chunk > 0 and (chunk.record_count or 0) + file_record_count(part) > (payload.chunk_records or DEFAULT_CHUNK_RECORDS) then
+    local part_bytes = serialized_size(part) + 64
+    if #chunk > 0 and ((chunk.record_count or 0) + file_record_count(part) > (payload.chunk_records or DEFAULT_CHUNK_RECORDS)
+      or (chunk.byte_count or 0) + part_bytes + 2048 > max_bytes)
+    then
       local ok, err = flush_chunk(ctx, payload, root, state, chunk, true)
       if not ok then return nil, err end
     end
@@ -384,17 +407,20 @@ flush_chunk = function(ctx, payload, root, state, chunk, force)
   if not force
     and #chunk < (payload.chunk_files or DEFAULT_CHUNK_FILES)
     and (chunk.record_count or 0) < (payload.chunk_records or DEFAULT_CHUNK_RECORDS)
+    and (chunk.byte_count or 0) + 2048 < (payload.chunk_bytes or DEFAULT_CHUNK_BYTES)
   then
     return true
   end
   local files = {}
   local file_count = #chunk
   local record_count = chunk.record_count or 0
+  local byte_count = chunk.byte_count or 0
   for i = 1, #chunk do
     files[i] = chunk[i]
     chunk[i] = nil
   end
   chunk.record_count = 0
+  chunk.byte_count = 0
   local metrics = state and state.metrics
   inc_metric(metrics, "chunks_sent", 1)
   max_metric(metrics, "chunk_files_max", file_count)
@@ -404,6 +430,7 @@ flush_chunk = function(ctx, payload, root, state, chunk, force)
   local diagnostics = {
     files = file_count,
     records = record_count,
+    estimated_bytes = byte_count,
   }
   local chunk_payload = {
     files = files,
@@ -413,10 +440,12 @@ flush_chunk = function(ctx, payload, root, state, chunk, force)
   if artifact then
     chunk_payload = {
       artifact = artifact,
+      manifest = file_manifest(files),
       diagnostics = diagnostics,
     }
   elseif payload.artifact_chunks then
     inc_metric(metrics, "artifact_write_failures", 1)
+    if artifact_err == "artifact-byte-limit-exceeded" then return false, artifact_err end
     if payload.log_skips then
       ctx.send({ type = "log", payload = { reason = artifact_err or "artifact-write-failed" } })
     end

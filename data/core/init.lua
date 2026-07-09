@@ -2920,6 +2920,10 @@ function core.run_step(options)
       if worker_pool_module and worker_pool_module.shutdown_system then
         worker_pool_module.shutdown_system({ cancel_running = true, timeout_ms = 1000 })
       end
+      local treesitter_symbol_index = package.loaded["core.treesitter.symbol_index"]
+      if treesitter_symbol_index and treesitter_symbol_index.cleanup_artifacts then
+        treesitter_symbol_index.cleanup_artifacts()
+      end
       core.worker_pool_frame_stats = nil
       core.in_live_resize_frame = previous_live_resize_frame
       return false

@@ -126,16 +126,51 @@ function highlight.resolve_line_tokens(text, line_start, line_end, captures)
     end
   end
 
+  table.sort(spans, function(a, b)
+    if a.start_byte ~= b.start_byte then return a.start_byte < b.start_byte end
+    return compare_capture(a, b)
+  end)
+
+  local heap = {}
+  local function heap_better(a, b) return compare_capture(a, b) end
+  local function heap_push(item)
+    local i = #heap + 1
+    heap[i] = item
+    while i > 1 do
+      local parent = math.floor(i / 2)
+      if not heap_better(heap[i], heap[parent]) then break end
+      heap[i], heap[parent] = heap[parent], heap[i]
+      i = parent
+    end
+  end
+  local function heap_pop()
+    local last_item = heap[#heap]
+    heap[#heap] = nil
+    if #heap == 0 then return end
+    heap[1] = last_item
+    local i = 1
+    while true do
+      local left, right = i * 2, i * 2 + 1
+      if left > #heap then break end
+      local best = left
+      if right <= #heap and heap_better(heap[right], heap[left]) then best = right end
+      if not heap_better(heap[best], heap[i]) then break end
+      heap[i], heap[best] = heap[best], heap[i]
+      i = best
+    end
+  end
+
   local tokens = {}
+  local span_idx = 1
   for i = 1, #unique - 1 do
     local s, e = unique[i], unique[i + 1]
+    while span_idx <= #spans and spans[span_idx].start_byte <= s do
+      heap_push(spans[span_idx])
+      span_idx = span_idx + 1
+    end
+    while heap[1] and heap[1].end_byte <= s do heap_pop() end
     if e > s then
-      local winner
-      for _, span in ipairs(spans) do
-        if span.start_byte <= s and span.end_byte >= e and compare_capture(span, winner) then
-          winner = span
-        end
-      end
+      local winner = heap[1]
       local rel_s = s - line_start + 1
       local rel_e = e - line_start
       add_token(tokens, winner and winner.type or "normal", text:sub(rel_s, rel_e))
@@ -148,31 +183,25 @@ function highlight.resolve_line_tokens(text, line_start, line_end, captures)
   return tokens
 end
 
-function highlight.line_tokens(doc, idx)
+function highlight.populate_range(doc, first_line, last_line)
   local ts = doc and doc.treesitter
   if not tree_is_renderable(ts) then return nil, "not-renderable" end
-  local line = doc.lines[idx]
-  if not line then return nil, "no-line" end
-
-  local cache = ts.highlight_cache or {}
-  ts.highlight_cache = cache
-  local tree_generation = ts.native:tree_generation()
-  local key = table.concat({ tostring(tree_generation), tostring(idx), line }, "\0")
-  local cached = cache[idx]
-  if cached and cached.key == key then return cached.tokens, nil, "treesitter" end
-
+  first_line = math.max(1, math.floor(tonumber(first_line) or 1))
+  last_line = math.min(#doc.lines, math.max(first_line, math.floor(tonumber(last_line) or first_line)))
   local starts = ensure_line_starts(doc, ts)
-  local line_start = starts[idx]
-  if not line_start then return nil, "no-line-start" end
-  local line_end = line_start + #line
-  local captures, err = ts.native:query_captures(ts.queries.highlights, line_start, line_end, {
+  local byte_start = starts[first_line]
+  local byte_end = starts[last_line] + #(doc.lines[last_line] or "")
+  if not byte_start then return nil, "no-line-start" end
+  local captures, err = ts.native:query_captures(ts.queries.highlights, byte_start, byte_end, {
     match_limit = ts.language and ts.language.query_match_limit or DEFAULT_MATCH_LIMIT,
     max_captures = ts.language and ts.language.max_query_captures or DEFAULT_MAX_CAPTURES,
     timeout_ms = ts.language and ts.language.query_timeout_ms or DEFAULT_QUERY_TIMEOUT_MS,
   })
+  ts.highlight_query_calls = (ts.highlight_query_calls or 0) + 1
   if not captures then
     ts.highlight_failures = (ts.highlight_failures or 0) + 1
-    log_quiet("Tree-sitter: highlight query failed for %s line=%d: %s", tostring(doc:get_name()), idx, tostring(err))
+    log_quiet("Tree-sitter: highlight range query failed for %s lines=%d-%d: %s",
+      tostring(doc:get_name()), first_line, last_line, tostring(err))
     if ts.highlight_failures >= MAX_FAILURES then
       ts.highlight_disabled_reason = err or "highlight query failed repeatedly"
       log_quiet("Tree-sitter: disabled highlighting for %s: %s", tostring(doc:get_name()), tostring(ts.highlight_disabled_reason))
@@ -181,9 +210,49 @@ function highlight.line_tokens(doc, idx)
   end
   ts.highlight_failures = 0
 
-  local tokens = highlight.resolve_line_tokens(line, line_start, line_end, captures)
-  cache[idx] = { key = key, tokens = tokens }
-  return tokens, nil, "treesitter"
+  local by_line = {}
+  for _, capture in ipairs(captures) do
+    local from = math.max(first_line, tonumber(capture.start_line) or first_line)
+    local to = math.min(last_line, tonumber(capture.end_line) or from)
+    for line_idx = from, to do
+      local list = by_line[line_idx]
+      if not list then list = {}; by_line[line_idx] = list end
+      list[#list + 1] = capture
+    end
+  end
+  local cache = ts.highlight_cache or {}
+  ts.highlight_cache = cache
+  for line_idx = first_line, last_line do
+    local line = doc.lines[line_idx] or ""
+    local key = table.concat({ tostring(line_idx), line }, "\0")
+    local cached = cache[line_idx]
+    if not (cached and cached.key == key) then
+      local line_start = starts[line_idx]
+      cache[line_idx] = {
+        key = key,
+        tokens = highlight.resolve_line_tokens(line, line_start, line_start + #line, by_line[line_idx] or {}),
+      }
+    end
+  end
+  return true
+end
+
+function highlight.line_tokens(doc, idx)
+  local ts = doc and doc.treesitter
+  if not tree_is_renderable(ts) then return nil, "not-renderable" end
+  local line = doc.lines[idx]
+  if not line then return nil, "no-line" end
+
+  local cache = ts.highlight_cache or {}
+  ts.highlight_cache = cache
+  local key = table.concat({ tostring(idx), line }, "\0")
+  local cached = cache[idx]
+  if cached and cached.key == key then return cached.tokens, nil, "treesitter" end
+
+  local ok, err = highlight.populate_range(doc, idx, math.min(#doc.lines, idx + 63))
+  if not ok then return nil, err end
+  cached = ts.highlight_cache and ts.highlight_cache[idx]
+  return cached and cached.tokens or { "normal", line }, nil, "treesitter"
 end
 
 function highlight.invalidate_doc(doc, first_line, last_line)

@@ -605,6 +605,44 @@ static int test_stale_generation_discard(void) {
   return 0;
 }
 
+static int test_incremental_poll_reports_changed_ranges(void) {
+  AnvilTSDocumentState *state = anvil_ts_document_state_new(checked_c_registry_language(), 5000);
+  CHECK(state != NULL);
+  CHECK(anvil_ts_document_state_schedule_parse(
+    state,
+    new_snapshot_from_single_line("int value = 1;\n"),
+    12,
+    NULL
+  ));
+  AnvilTSPollResult initial;
+  CHECK(wait_poll_until_done(state, 12, &initial, 3000));
+  CHECK(initial.status == ANVIL_TS_STATE_READY);
+
+  AnvilTSEdit edit = {0};
+  edit.input_edit.start_byte = 12;
+  edit.input_edit.old_end_byte = 13;
+  edit.input_edit.new_end_byte = 17;
+  edit.input_edit.start_point = (TSPoint) { .row = 0, .column = 12 };
+  edit.input_edit.old_end_point = (TSPoint) { .row = 0, .column = 13 };
+  edit.input_edit.new_end_point = (TSPoint) { .row = 0, .column = 17 };
+  CHECK(anvil_ts_document_state_schedule_parse_with_edit(
+    state,
+    new_snapshot_from_single_line("int value = foo();\n"),
+    13,
+    &edit,
+    NULL
+  ));
+  AnvilTSPollResult result;
+  CHECK(wait_poll_until_done(state, 13, &result, 3000));
+  CHECK(result.status == ANVIL_TS_STATE_READY);
+  CHECK(result.changed_ranges_available);
+  CHECK(result.changed_range_count > 0);
+  free(result.changed_ranges);
+  anvil_ts_document_state_close(state);
+  anvil_ts_document_state_release(state);
+  return 0;
+}
+
 static int test_close_while_queued_or_running(void) {
   AnvilTSDocumentState *state = anvil_ts_document_state_new(checked_c_registry_language(), 5000);
   CHECK(state != NULL);
@@ -787,6 +825,7 @@ int main(void) {
   result |= test_async_parse_reaches_ready();
   result |= test_async_cancel();
   result |= test_stale_generation_discard();
+  result |= test_incremental_poll_reports_changed_ranges();
   result |= test_close_while_queued_or_running();
   result |= test_service_shutdown_cleanup();
   result |= test_service_query_predicates_and_directives();

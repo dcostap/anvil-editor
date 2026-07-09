@@ -50,6 +50,22 @@ test.describe("worker_pool", function()
     test.equal(pool:status(handle).status, "complete")
   end)
 
+  test.test("reserves an interactive lane from background jobs", function()
+    local pool = new_pool("test-priority-lanes", 3)
+    local background = pool:submit({
+      kind = "worker_pool_test",
+      priority = "background",
+      payload = { op = "echo", value = "background" },
+    })
+    local interactive = pool:submit({
+      kind = "worker_pool_test",
+      priority = "interactive",
+      payload = { op = "echo", value = "interactive" },
+    })
+    test.ok(background.worker_id >= 2)
+    test.equal(interactive.worker_id, 1)
+  end)
+
   test.test("multiple jobs complete", function()
     local pool = new_pool("test-many", 2)
     local results = {}

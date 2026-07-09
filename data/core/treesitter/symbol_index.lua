@@ -8,6 +8,9 @@ local registry = require "core.treesitter.registry"
 local outline = require "core.treesitter.outline"
 local worker_pool = require "core.worker_pool"
 local IndexScheduler = require "core.treesitter.index_scheduler"
+local AdoptionQueue = require "core.treesitter.adoption_queue"
+local ArtifactSession = require "core.treesitter.artifact_session"
+local artifact_codec = require "core.treesitter.artifact_codec"
 local fuzzy_ok, native_fuzzy = pcall(require, "fuzzy")
 if not fuzzy_ok then native_fuzzy = nil end
 
@@ -25,8 +28,12 @@ local DEFAULT_MATCH_LIMIT = 50000
 local DEFAULT_MAX_CAPTURES = 50000
 local DEFAULT_QUERY_TIMEOUT_MS = 20
 local DEFAULT_PROJECT_USAGE_CAP = 750000
-local DEFAULT_WORKER_CHUNK_RECORDS = 2048
-local DEFAULT_AGGREGATE_CHUNK_RECORDS = 2048
+local DEFAULT_WORKER_CHUNK_RECORDS = 512
+local DEFAULT_WORKER_CHUNK_BYTES = 256 * 1024
+local DEFAULT_AGGREGATE_CHUNK_RECORDS = 512
+local DEFAULT_AGGREGATE_CHUNK_BYTES = 256 * 1024
+local DEFAULT_ADOPTION_SLICE_RECORDS = 512
+local DEFAULT_ADOPTION_SLICE_BYTES = 256 * 1024
 local DEFAULT_ASYNC_SYMBOL_SNAPSHOT_LIMIT = 5000
 local DEFAULT_ASYNC_USAGE_SNAPSHOT_LIMIT = 5000
 local DEFAULT_SYNC_QUERY_ITEM_LIMIT = 5000
@@ -104,6 +111,66 @@ local function safe_yield(wait)
     return true
   end
   return false
+end
+
+local function enqueue_adoption(index, item)
+  if not index then return false, "no-index" end
+  index.adoption_queue = index.adoption_queue or AdoptionQueue.new({
+    max_item_bytes = DEFAULT_AGGREGATE_CHUNK_BYTES,
+    max_item_records = DEFAULT_AGGREGATE_CHUNK_RECORDS,
+  })
+  local ok, err = index.adoption_queue:enqueue(item)
+  if not ok then
+    inc_ui_metric(index, "adoption_items_rejected", 1)
+    log_quiet("Tree-sitter Project adoption: rejected item under %s: %s", tostring(index.root), tostring(err))
+    return false, err
+  end
+  inc_ui_metric(index, "adoption_items_enqueued", 1)
+  add_ui_metric(index, "adoption_bytes_enqueued", item.bytes or 0)
+  add_ui_metric(index, "adoption_records_enqueued", item.records or 0)
+  max_ui_metric(index, "adoption_queue_depth_max", index.adoption_queue:count())
+  if not index.adoption_pump_running then
+    index.adoption_pump_running = true
+    core.add_thread(function()
+      while index.adoption_queue and index.adoption_queue:count() > 0 do
+        local started = now()
+        max_ui_metric(index, "adoption_queue_oldest_age_max_ms", index.adoption_queue:oldest_age() * 1000)
+        local result = index.adoption_queue:step({
+          max_bytes = DEFAULT_ADOPTION_SLICE_BYTES,
+          max_records = DEFAULT_ADOPTION_SLICE_RECORDS,
+        })
+        local duration = elapsed_ms(started)
+        inc_ui_metric(index, "adoption_pump_slices", 1)
+        add_ui_metric(index, "adoption_pump_ms", duration)
+        max_ui_metric(index, "adoption_pump_max_ms", duration)
+        add_ui_metric(index, "adoption_pump_bytes", result.bytes or 0)
+        add_ui_metric(index, "adoption_pump_records", result.records or 0)
+        add_ui_metric(index, "adoption_items_discarded", result.discarded or 0)
+        inc_worker_pool_frame_metric("treesitter_project_adoption_pump_slices", 1)
+        add_worker_pool_frame_metric("treesitter_project_adoption_pump_ms", duration)
+        max_worker_pool_frame_metric("treesitter_project_adoption_pump_max_ms", duration)
+        add_worker_pool_frame_metric("treesitter_project_adoption_pump_bytes", result.bytes or 0)
+        add_worker_pool_frame_metric("treesitter_project_adoption_pump_records", result.records or 0)
+        max_worker_pool_frame_metric("treesitter_project_adoption_queue_depth", result.remaining or 0)
+        if result.adopted == 0 and result.discarded == 0 then
+          log_quiet("Tree-sitter Project adoption: queue stalled under %s", tostring(index.root))
+          break
+        end
+        core.redraw = true
+        safe_yield(0)
+      end
+      index.adoption_pump_running = false
+    end)
+  end
+  return true
+end
+
+local function reset_adoption_queue(index)
+  if not index then return end
+  index.adoption_queue = AdoptionQueue.new({
+    max_item_bytes = DEFAULT_AGGREGATE_CHUNK_BYTES,
+    max_item_records = DEFAULT_AGGREGATE_CHUNK_RECORDS,
+  })
 end
 
 local function ensure_native()
@@ -960,33 +1027,14 @@ local function cleanup_worker_artifacts(artifacts)
   end
 end
 
-local function load_worker_chunk_payload(index, message, opts)
-  opts = opts or {}
+local function inline_worker_chunk_payload(message)
   local payload = message.payload or {}
-  local artifact = payload.artifact
-  if not (artifact and artifact.path) then return payload end
-  local load_started = now()
-  local loader, err = loadfile(artifact.path)
-  if not loader then
-    cleanup_worker_artifact(message)
-    log_quiet("Tree-sitter Project index: failed to load chunk artifact %s: %s", tostring(artifact.path), tostring(err))
+  if payload.artifact then
+    log_quiet("Tree-sitter Project index: rejected artifact chunk without a compact manifest: %s",
+      tostring(payload.artifact.path))
     return { files = {}, diagnostics = payload.diagnostics or {} }
   end
-  local ok, artifact_payload = pcall(loader)
-  if not opts.preserve_artifact then cleanup_worker_artifact(message) end
-  local load_ms = elapsed_ms(load_started)
-  add_ui_metric(index, "artifact_load_ms", load_ms)
-  max_ui_metric(index, "artifact_load_max_ms", load_ms)
-  inc_ui_metric(index, "artifacts_loaded", 1)
-  add_worker_pool_frame_metric("treesitter_project_artifact_load_ms", load_ms)
-  max_worker_pool_frame_metric("treesitter_project_artifact_load_max_ms", load_ms)
-  inc_worker_pool_frame_metric("treesitter_project_artifacts_loaded", 1)
-  if not ok or type(artifact_payload) ~= "table" then
-    log_quiet("Tree-sitter Project index: invalid chunk artifact %s: %s", tostring(artifact.path), tostring(artifact_payload))
-    return { files = {}, diagnostics = payload.diagnostics or {} }
-  end
-  artifact_payload.diagnostics = artifact_payload.diagnostics or payload.diagnostics or {}
-  return artifact_payload
+  return payload
 end
 
 local function reset_pending_aggregate(index, message)
@@ -1066,11 +1114,55 @@ local function finish_pending_aggregate(index, message)
   return true
 end
 
-local function apply_worker_chunk(index, message, opts)
-  opts = opts or {}
+local function apply_worker_manifest_chunk(index, message)
   if not current_worker_message(index, message) then cleanup_worker_artifact(message); return end
   local adoption_started = now()
-  local payload = load_worker_chunk_payload(index, message, opts)
+  local payload = message.payload or {}
+  local chunk_diag = payload.diagnostics or {}
+  local changed = false
+  for _, item in ipairs(payload.manifest or {}) do
+    local path = item.path and common.normalize_path(item.path)
+    if path then
+      local existing = index.by_path and index.by_path[path]
+      local entry = { fingerprint = item.fingerprint }
+      if item.usage_complete ~= nil then
+        entry.usage_complete = item.usage_complete and true or false
+      elseif existing and existing.fingerprint == item.fingerprint then
+        entry.usage_complete = existing.usage_complete
+      end
+      index.by_path[path] = entry
+      index.worker_seen_paths = index.worker_seen_paths or {}
+      index.worker_seen_paths[path] = true
+      if index.worker_adopted_paths then index.worker_adopted_paths[path] = true end
+      changed = true
+    end
+  end
+  inc_ui_metric(index, "chunks_adopted", 1)
+  inc_ui_metric(index, "manifest_chunks_adopted", 1)
+  inc_ui_metric(index, "manifest_files_adopted", #(payload.manifest or {}))
+  add_ui_metric(index, "chunk_records_deferred", chunk_diag.records or 0)
+  inc_worker_pool_frame_metric("treesitter_project_manifest_chunks_adopted", 1)
+  add_worker_pool_frame_metric("treesitter_project_manifest_files_adopted", #(payload.manifest or {}))
+  if changed then
+    mark_aggregate_dirty(index)
+    core.redraw = true
+  end
+  local duration = elapsed_ms(adoption_started)
+  add_ui_metric(index, "manifest_adoption_ms", duration)
+  max_ui_metric(index, "manifest_adoption_max_ms", duration)
+  add_worker_pool_frame_metric("treesitter_project_manifest_adoption_ms", duration)
+  max_worker_pool_frame_metric("treesitter_project_manifest_adoption_max_ms", duration)
+end
+
+local function apply_worker_chunk(index, message)
+  if not current_worker_message(index, message) then cleanup_worker_artifact(message); return end
+  local raw_payload = message.payload or {}
+  if raw_payload.artifact and raw_payload.manifest then
+    apply_worker_manifest_chunk(index, message)
+    return
+  end
+  local adoption_started = now()
+  local payload = inline_worker_chunk_payload(message)
   local chunk_diag = payload.diagnostics or {}
   inc_ui_metric(index, "chunks_adopted", 1)
   inc_ui_metric(index, "chunk_files_adopted", chunk_diag.files or #(payload.files or {}))
@@ -1215,31 +1307,6 @@ local function finish_worker_scan(index, message, status)
       tonumber(ui.project_path_metadata_cache_hits or 0) or 0,
       tonumber(ui.project_path_metadata_cache_misses or 0) or 0,
       tonumber(ui.chunk_aggregate_rebuilds_deferred or 0) or 0)
-    local phases = diagnostics.phases or {}
-    local symbols_worker = phases.symbols and phases.symbols.worker or {}
-    local usages_worker = phases.usages and phases.usages.worker or {}
-    if phases.symbols or phases.usages then
-      local total_parse_calls = (tonumber(symbols_worker.parse_calls or 0) or 0) + (tonumber(usages_worker.parse_calls or 0) or 0)
-      local total_query_ms = (tonumber(symbols_worker.outline_query_ms or 0) or 0) + (tonumber(symbols_worker.usage_query_ms or 0) or 0)
-        + (tonumber(usages_worker.outline_query_ms or 0) or 0) + (tonumber(usages_worker.usage_query_ms or 0) or 0)
-      log_quiet("Tree-sitter indexing baseline phases: root=%s symbols_worker_ms=%.1f usages_worker_ms=%.1f symbols_parse_calls=%d usages_parse_calls=%d total_parse_calls=%d total_read_ms=%.1f total_parse_ms=%.1f total_query_ms=%.1f total_send_wait_ms=%.1f ui_adopt_ms=%.1f aggregate_rebuild_ms=%.1f aggregate_rebuilds=%d metadata_cache_hits=%d metadata_cache_misses=%d aggregate_deferred=%d",
-        tostring(index.root),
-        tonumber(symbols_worker.total_ms or 0) or 0,
-        tonumber(usages_worker.total_ms or 0) or 0,
-        tonumber(symbols_worker.parse_calls or 0) or 0,
-        tonumber(usages_worker.parse_calls or 0) or 0,
-        total_parse_calls,
-        (tonumber(symbols_worker.file_read_ms or 0) or 0) + (tonumber(usages_worker.file_read_ms or 0) or 0),
-        (tonumber(symbols_worker.parse_ms or 0) or 0) + (tonumber(usages_worker.parse_ms or 0) or 0),
-        total_query_ms,
-        (tonumber(symbols_worker.chunk_send_wait_ms or 0) or 0) + (tonumber(usages_worker.chunk_send_wait_ms or 0) or 0),
-        tonumber(ui.chunk_adoption_ms or 0) or 0,
-        tonumber(ui.aggregate_rebuild_ms or 0) or 0,
-        tonumber(ui.aggregate_rebuilds or 0) or 0,
-        tonumber(ui.project_path_metadata_cache_hits or 0) or 0,
-        tonumber(ui.project_path_metadata_cache_misses or 0) or 0,
-        tonumber(ui.chunk_aggregate_rebuilds_deferred or 0) or 0)
-    end
     core.add_thread(function()
       safe_yield(0)
       local pending_started = now()
@@ -1280,6 +1347,8 @@ local function cancel_index_work(index)
     index.worker_aggregate_artifacts = nil
   end
   index.pending_aggregate = nil
+  reset_adoption_queue(index)
+  index.worker_base_aggregate = nil
   index.worker_run = nil
   return cancelled
 end
@@ -1376,9 +1445,16 @@ local function submit_worker_aggregate(index, run, message, on_done)
       include_usages = run.phase ~= "symbols",
       project_usage_cap = index.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP,
       chunk_records = (run.opts and run.opts.aggregate_chunk_records) or DEFAULT_AGGREGATE_CHUNK_RECORDS,
+      chunk_bytes = (run.opts and run.opts.aggregate_chunk_bytes) or DEFAULT_AGGREGATE_CHUNK_BYTES,
       query_artifact_chunk_records = (run.opts and run.opts.query_artifact_chunk_records) or DEFAULT_AGGREGATE_CHUNK_RECORDS,
+      query_artifact_chunk_bytes = (run.opts and run.opts.query_artifact_chunk_bytes) or DEFAULT_AGGREGATE_CHUNK_BYTES,
       remove_artifacts = true,
       query_artifact_dir = default_query_artifact_dir(),
+      replacement_dir = run.replacement_dir,
+      base_symbol_artifact = run.base_symbol_artifact,
+      base_usage_artifact = run.base_usage_artifact,
+      base_usage_truncated = run.base_usage_truncated,
+      base_usage_truncated_reason = run.base_usage_truncated_reason,
     },
     is_stale = function(aggregate_message)
       return not current_run_message(index, run, aggregate_message)
@@ -1389,7 +1465,16 @@ local function submit_worker_aggregate(index, run, message, on_done)
     on_result = function(aggregate_message)
       if not current_run_message(index, run, aggregate_message) then return end
       if aggregate_message.type == "chunk" and (aggregate_message.payload or {}).kind == "aggregate" then
-        apply_worker_aggregate_chunk(index, aggregate_message)
+        local p = aggregate_message.payload or {}
+        local queued, queue_err = enqueue_adoption(index, {
+          bytes = p.serialized_bytes or 0,
+          records = p.records or 0,
+          stale = function() return not current_run_message(index, run, aggregate_message) end,
+          adopt = function() apply_worker_aggregate_chunk(index, aggregate_message) end,
+        })
+        if not queued then
+          index.reason = queue_err or "aggregate-adoption-rejected"
+        end
       elseif aggregate_message.type == "final" then
         local p = aggregate_message.payload or {}
         if p.diagnostics then add_worker_diagnostics(index, run.phase, p.diagnostics, "aggregate") end
@@ -1397,22 +1482,36 @@ local function submit_worker_aggregate(index, run, message, on_done)
     end,
     on_error = function(aggregate_message)
       cleanup_worker_artifacts(artifacts)
+      reset_adoption_queue(index)
       index.pending_aggregate = nil
       if on_done then on_done(false, aggregate_message) end
     end,
     on_cancelled = function(aggregate_message)
       cleanup_worker_artifacts(artifacts)
+      reset_adoption_queue(index)
       index.pending_aggregate = nil
       if on_done then on_done(false, aggregate_message) end
     end,
     on_complete = function(aggregate_message)
       if not current_run_message(index, run, aggregate_message) then return end
-      finish_pending_aggregate(index, aggregate_message)
-      local p = aggregate_message.payload or {}
-      store_symbol_query_artifact(index, "symbols", p.symbol_query_artifact)
-      store_usage_query_artifact(index, p.usage_query_artifact)
-      run.aggregate_artifacts = {}
-      if on_done then on_done(true, aggregate_message) end
+      local queued, queue_err = enqueue_adoption(index, {
+        bytes = 0,
+        records = 0,
+        stale = function() return not current_run_message(index, run, aggregate_message) end,
+        adopt = function()
+          finish_pending_aggregate(index, aggregate_message)
+          local p = aggregate_message.payload or {}
+          store_symbol_query_artifact(index, "symbols", p.symbol_query_artifact)
+          store_usage_query_artifact(index, p.usage_query_artifact)
+          run.aggregate_artifacts = {}
+          if on_done then on_done(true, aggregate_message) end
+        end,
+      })
+      if not queued then
+        cleanup_worker_artifacts(artifacts)
+        index.pending_aggregate = nil
+        if on_done then on_done(false, { error = queue_err or "aggregate-adoption-rejected" }) end
+      end
     end,
   })
   if not handle then
@@ -1424,57 +1523,10 @@ local function submit_worker_aggregate(index, run, message, on_done)
   return true
 end
 
-local function complete_symbol_phase(index, run, generation, opts, message)
-  if not current_worker_message(index, message) then return end
-  local prune_started = now()
-  prune_worker_unseen(index)
-  local prune_ms = elapsed_ms(prune_started)
-  add_ui_metric(index, "symbols_final_prune_ms", prune_ms)
-  max_ui_metric(index, "symbols_final_prune_max_ms", prune_ms)
-  add_worker_pool_frame_metric("treesitter_project_symbols_final_prune_ms", prune_ms)
-  if index.aggregate_dirty then
-    inc_ui_metric(index, "symbols_final_aggregate_rebuilds_deferred", 1)
-    inc_worker_pool_frame_metric("treesitter_project_symbols_final_aggregate_deferred", 1)
-  end
-
-  local function finish()
-    index.symbol_status = "ready"
-    index.usage_status = "indexing"
-    index.worker_handle = nil
-    index.worker_run = nil
-    index.worker_seen_paths = nil
-    core.redraw = true
-    core.add_thread(function()
-      safe_yield(0)
-      if index.generation == generation and index.status == "indexing" and index.usage_status == "indexing" then
-        submit_worker_scan(index, generation, common.merge(opts, { reason = "usages" }), "usages")
-      end
-    end)
-  end
-
-  if run and run.aggregate_artifacts and #run.aggregate_artifacts > 0 then
-    local submitted = submit_worker_aggregate(index, run, message, function(ok, aggregate_message)
-      if ok then
-        finish()
-      else
-        index.worker_run = nil
-        finish_worker_scan(index, aggregate_message or message, "failed")
-      end
-    end)
-    if submitted then return end
-    index.worker_run = nil
-    finish_worker_scan(index, message, "failed")
-    return
-  end
-  finish()
-end
-
 local function finish_sharded_phase(index, run, status, message)
   if not current_run_message(index, run, message) then return end
   run.terminal = true
-  if status == "ready" and run.phase == "symbols" then
-    complete_symbol_phase(index, run, run.generation, run.opts or {}, message)
-  elseif status == "ready" and run.aggregate_artifacts and #run.aggregate_artifacts > 0 then
+  if status == "ready" and run.aggregate_artifacts and #run.aggregate_artifacts > 0 then
     local submitted = submit_worker_aggregate(index, run, message, function(ok, aggregate_message)
       index.worker_run = nil
       finish_worker_scan(index, aggregate_message or message, ok and "ready" or "failed")
@@ -1502,58 +1554,50 @@ local function maybe_finish_sharded_phase(index, run, message)
   end
 end
 
-local function default_index_artifact_dir()
+local artifact_session
+
+local function current_artifact_session()
+  if artifact_session then return artifact_session end
   local base = USERDIR or (system and system.absolute_path and system.absolute_path(".") or ".")
-  return common.normalize_path(base .. PATHSEP .. "treesitter-index-artifacts")
+  artifact_session = ArtifactSession.new({
+    base_dir = common.normalize_path(base .. PATHSEP .. "treesitter-artifacts"),
+    legacy_dirs = {
+      common.normalize_path(base .. PATHSEP .. "treesitter-index-artifacts"),
+      common.normalize_path(base .. PATHSEP .. "treesitter-query-artifacts"),
+    },
+  })
+  local result = artifact_session:initialize()
+  log_quiet("Tree-sitter artifacts: initialized %s removed_sessions=%d removed_legacy=%d failures=%d",
+    tostring(artifact_session.root), tonumber(result.removed_sessions or 0),
+    tonumber(result.removed_legacy or 0), tonumber(result.failures or 0))
+  return artifact_session
+end
+
+local function default_index_artifact_dir()
+  return current_artifact_session():index_dir()
 end
 
 local query_artifact_sequence = 0
-local query_artifact_stale_cleanup_done = false
-
-local function default_query_artifact_base_dir()
-  local base = USERDIR or (system and system.absolute_path and system.absolute_path(".") or ".")
-  return common.normalize_path(base .. PATHSEP .. "treesitter-query-artifacts")
-end
 
 default_query_artifact_dir = function()
-  local pid = tostring(system and system.get_process_id and system.get_process_id() or 0)
-  return common.normalize_path(default_query_artifact_base_dir() .. PATHSEP .. "session-" .. pid)
-end
-
-local function cleanup_stale_default_query_artifacts(current_dir)
-  if query_artifact_stale_cleanup_done then return end
-  query_artifact_stale_cleanup_done = true
-  local base = default_query_artifact_base_dir()
-  local names = system.list_dir(base) or {}
-  for _, name in ipairs(names) do
-    local path = common.normalize_path(base .. PATHSEP .. name)
-    if not current_dir or not common.path_equals(path, current_dir) then
-      local info = system.get_file_info(path)
-      if info and info.type == "dir" then
-        common.rm(path, true)
-      elseif info and info.type == "file" and tostring(name):match("^treesitter%-.+%-query%-.+%.lua$") then
-        pcall(os.remove, path)
-      end
-    end
-  end
+  return current_artifact_session():query_dir()
 end
 
 local function write_query_artifact(kind, payload, opts)
   opts = opts or {}
   local dir = opts.query_artifact_dir or default_query_artifact_dir()
-  if not opts.query_artifact_dir then cleanup_stale_default_query_artifacts(dir) end
   local ok, err = common.mkdirp(dir)
   if not ok and err ~= "path exists" then return nil, err or "mkdir-failed" end
   query_artifact_sequence = query_artifact_sequence + 1
   local path = common.normalize_path(dir .. PATHSEP .. string.format(
-    "treesitter-%s-query-%s-%06d.lua",
+    "treesitter-%s-query-%s-%06d.bin",
     tostring(kind or "query"),
     tostring(system and system.get_process_id and system.get_process_id() or 0),
     query_artifact_sequence
   ))
   local fp, open_err = io.open(path, "wb")
   if not fp then return nil, open_err or "open-failed" end
-  local content = "return " .. common.serialize(payload)
+  local content = artifact_codec.encode(payload)
   local wrote, write_err = fp:write(content)
   local closed, close_err = fp:close()
   if not wrote or not closed then
@@ -1710,6 +1754,7 @@ local function make_index_payload(index, opts, phase)
     max_file_bytes = MAX_FILE_BYTES,
     chunk_files = opts.chunk_files or 8,
     chunk_records = opts.chunk_records or DEFAULT_WORKER_CHUNK_RECORDS,
+    chunk_bytes = opts.chunk_bytes or DEFAULT_WORKER_CHUNK_BYTES,
     max_usage_captures_per_file = opts.max_usage_captures_per_file or DEFAULT_MAX_CAPTURES,
     artifact_chunks = opts.artifact_chunks ~= false,
     artifact_dir = opts.artifact_dir or default_index_artifact_dir(),
@@ -1718,10 +1763,10 @@ end
 
 local function submit_sharded_scan(index, generation, opts, phase)
   opts = opts or {}
-  phase = phase or "symbols"
+  phase = phase or "combined"
   cancel_index_work(index)
   index.status = "indexing"
-  if phase == "symbols" then
+  if phase ~= "usages" then
     index.symbol_status = "indexing"
     index.usage_status = "indexing"
     index.started_at = system.get_time()
@@ -1736,7 +1781,7 @@ local function submit_sharded_scan(index, generation, opts, phase)
   index.files_scanned = 0
   index.files_indexed = 0
   index.worker_seen_paths = {}
-  local previous_phases = phase == "symbols" and {} or ((index.diagnostics and index.diagnostics.phases) or {})
+  local previous_phases = phase ~= "usages" and {} or ((index.diagnostics and index.diagnostics.phases) or {})
   index.diagnostics = {
     ui = {},
     phases = previous_phases,
@@ -1827,7 +1872,7 @@ local function submit_sharded_scan(index, generation, opts, phase)
         if message.type == "chunk" then
           local artifact = message.payload and message.payload.artifact
           if artifact and artifact.path then run.aggregate_artifacts[#run.aggregate_artifacts + 1] = artifact end
-          apply_worker_chunk(index, message, { preserve_artifact = artifact and artifact.path })
+          apply_worker_chunk(index, message)
         elseif message.type == "final" then
           local p = message.payload or {}
           run.accepted_files_indexed = (run.accepted_files_indexed or 0) + (p.files_indexed or 0)
@@ -1947,7 +1992,7 @@ end
 
 submit_worker_scan = function(index, generation, opts, phase)
   opts = opts or {}
-  phase = phase or "symbols"
+  phase = phase or "combined"
   submit_sharded_scan(index, generation, opts, phase)
 end
 
@@ -1997,6 +2042,7 @@ local function scan_options_from_query(opts)
     shard_usage_budget = opts.shard_usage_budget,
     chunk_files = opts.chunk_files,
     chunk_records = opts.chunk_records,
+    chunk_bytes = opts.chunk_bytes,
     max_usage_captures_per_file = opts.max_usage_captures_per_file,
     artifact_chunks = opts.artifact_chunks,
     artifact_dir = opts.artifact_dir,
@@ -2153,6 +2199,19 @@ local function symbol_fuzzy_text(symbol)
   return tostring(symbol and (symbol.search_text or symbol.text or symbol.name) or "")
 end
 
+local function public_symbol(symbol)
+  if not symbol then return nil end
+  local item = copy_item(symbol)
+  item.text = item.text or item.name
+  item.file = item.file or item.relpath or item.path
+  item.relpath = item.relpath or item.file
+  item.range = item.range or {
+    start = { line = item.start_line, col = item.start_col },
+    ["end"] = { line = item.end_line, col = item.end_col },
+  }
+  return item
+end
+
 local function filtered_symbols(symbols, query, limit)
   symbols = symbols or {}
   query = tostring(query or "")
@@ -2272,6 +2331,7 @@ function symbol_index.workspace_symbols(query, opts)
     if #per_root > 1 then sort_symbols(all_symbols) end
     local results
     results, has_more = filtered_symbols(all_symbols, query, opts.limit)
+    for i, symbol in ipairs(results) do results[i] = public_symbol(symbol) end
     return results, status == "fresh" and nil or (reason or "indexing"), status == "fresh" and "fresh" or "stale", {
       has_more = has_more,
       roots = per_root,
@@ -2281,7 +2341,21 @@ function symbol_index.workspace_symbols(query, opts)
   return nil, reason or "indexing", "pending", { roots = per_root, index = #per_root == 1 and per_root[1].index or nil }
 end
 
-local function filter_usages(usages, opts)
+local function public_usage(name, usage)
+  if not usage then return nil end
+  local item = copy_item(usage)
+  item.name = item.name or name
+  item.text = item.text or item.name
+  item.file = item.file or item.relpath or item.path
+  item.relpath = item.relpath or item.file
+  item.range = item.range or {
+    start = { line = item.start_line, col = item.start_col },
+    ["end"] = { line = item.end_line, col = item.end_col },
+  }
+  return item
+end
+
+local function filter_usages(usages, opts, name)
   opts = opts or {}
   local include_declaration = opts.include_declaration ~= false
   local out = {}
@@ -2290,7 +2364,7 @@ local function filter_usages(usages, opts)
   for _, usage in ipairs(usages or {}) do
     if include_declaration or not usage.is_declaration then
       if #out < limit then
-        out[#out + 1] = usage
+        out[#out + 1] = public_usage(name, usage)
       else
         has_more = true
         break
@@ -2675,6 +2749,18 @@ local function workspace_usage_artifact_payload(name, opts)
   return artifact_payload, status == "fresh" and nil or (reason or "indexing"), status == "fresh" and "fresh" or "stale", meta
 end
 
+local function refresh_async_result_metadata(meta, item, kind)
+  if not (meta and item and item.path) then return item end
+  for _, root_meta in ipairs(meta.roots or {}) do
+    local index = root_meta.index
+    if index and common.path_belongs_to(item.path, index.root) then
+      return refresh_project_path_metadata(index, item, kind)
+    end
+  end
+  if meta.index then return refresh_project_path_metadata(meta.index, item, kind) end
+  return item
+end
+
 local function async_snapshot_stale_reason(meta)
   for _, root_meta in ipairs((meta and meta.roots) or {}) do
     local index = root_meta.index
@@ -2736,12 +2822,15 @@ function symbol_index.workspace_symbols_async(query, opts)
   end
   handle = worker_pool.system():submit({
     kind = "treesitter_symbol_query",
-    priority = "background",
+    priority = "interactive",
     payload = artifact and { artifact = artifact } or query_payload,
     on_result = function(message)
       if message.type ~= "result" then return end
       local p = message.payload or {}
       request.results = p.symbols or {}
+      for i, symbol in ipairs(request.results) do
+        request.results[i] = public_symbol(refresh_async_result_metadata(meta, symbol, opts.kind or "symbols"))
+      end
       request.has_more = p.has_more and true or false
       request.diagnostics = p.diagnostics
     end,
@@ -2827,7 +2916,7 @@ local function workspace_usage_snapshot(name, opts)
           if #all_usages >= max_snapshot_usages then
             return nil, "snapshot-too-large", "unavailable", { roots = per_root, index = index }
           end
-          all_usages[#all_usages + 1] = usage
+          all_usages[#all_usages + 1] = public_usage(name, usage)
         end
         root_status = "fresh"
         any_usable = true
@@ -2842,7 +2931,7 @@ local function workspace_usage_snapshot(name, opts)
           if #all_usages >= max_snapshot_usages then
             return nil, "snapshot-too-large", "unavailable", { roots = per_root, index = index }
           end
-          all_usages[#all_usages + 1] = usage
+          all_usages[#all_usages + 1] = public_usage(name, usage)
         end
         root_status = "stale"
         reason = reason or "indexing"
@@ -2909,12 +2998,15 @@ function symbol_index.workspace_usages_async(name, opts)
   end
   local handle = worker_pool.system():submit({
     kind = "treesitter_usage_query",
-    priority = "background",
+    priority = "interactive",
     payload = artifact and { artifact = artifact } or query_payload,
     on_result = function(message)
       if message.type ~= "result" then return end
       local p = message.payload or {}
       request.results = p.usages or {}
+      for i, usage in ipairs(request.results) do
+        request.results[i] = public_usage(name, refresh_async_result_metadata(meta, usage, "usages"))
+      end
       request.has_more = p.has_more and true or false
       request.diagnostics = p.diagnostics
     end,
@@ -3033,7 +3125,7 @@ function symbol_index.workspace_usages(name, opts)
   if any_usable then
     if #per_root > 1 then sort_usages(all_usages) end
     local results
-    results, has_more = filter_usages(all_usages, opts)
+    results, has_more = filter_usages(all_usages, opts, name)
     has_more = has_more or usage_truncated
     return results, status == "fresh" and nil or (reason or "indexing"), status == "fresh" and "fresh" or "stale", {
       has_more = has_more,
@@ -3111,7 +3203,7 @@ local function submit_open_doc_overlay(index, doc, path, reason)
 
   local handle, err = worker_pool.system():submit({
     kind = "treesitter_project_index",
-    priority = "background",
+    priority = "interactive",
     generation = index.generation,
     project_paths_generation = project_paths_generation,
     phase = "open-doc-overlay",
@@ -3332,6 +3424,7 @@ local function finish_targeted_worker_reindex(index, message, status)
     index.worker_adopted_paths = nil
     index.worker_targeted_paths = nil
     index.worker_targeted_dir = nil
+    index.worker_base_aggregate = nil
     index.worker_aggregate_artifacts = nil
     index.worker_run = nil
     index.finished_at = system.get_time()
@@ -3341,12 +3434,18 @@ local function finish_targeted_worker_reindex(index, message, status)
 
   local artifacts = index.worker_aggregate_artifacts or {}
   if status == "ready" and #artifacts > 0 then
+    local base = index.worker_base_aggregate or {}
     local run = {
       generation = message.generation,
       project_paths_generation = message.project_paths_generation,
       phase = message.phase,
       opts = {},
       aggregate_artifacts = artifacts,
+      replacement_dir = index.worker_targeted_dir,
+      base_symbol_artifact = base.symbol_artifact,
+      base_usage_artifact = base.usage_artifact,
+      base_usage_truncated = base.usage_truncated,
+      base_usage_truncated_reason = base.usage_truncated_reason,
     }
     index.worker_run = run
     local submitted = submit_worker_aggregate(index, run, message, function(ok, aggregate_message)
@@ -3467,6 +3566,7 @@ local function submit_targeted_file_reindex(index, path, opts)
       max_file_bytes = MAX_FILE_BYTES,
       chunk_files = 1,
       chunk_records = opts.chunk_records or DEFAULT_WORKER_CHUNK_RECORDS,
+      chunk_bytes = opts.chunk_bytes or DEFAULT_WORKER_CHUNK_BYTES,
       max_usage_captures_per_file = opts.max_usage_captures_per_file or DEFAULT_MAX_CAPTURES,
       artifact_chunks = false,
       native_index_jobs = opts.native_index_jobs,
@@ -3518,6 +3618,26 @@ local function submit_targeted_file_reindex(index, path, opts)
   return true, "scheduled"
 end
 
+local function current_aggregate_query_artifacts(index)
+  if not index then return nil, "no-index" end
+  local symbol_key = symbol_query_artifact_key(index, "symbols")
+  local usage_key = usage_query_artifact_key(index)
+  local symbol_artifact = index.query_artifacts and index.query_artifacts[symbol_key]
+  local usage_artifact = index.query_artifacts and index.query_artifacts[usage_key]
+  if not (symbol_artifact and persistent_query_artifact_path_exists(symbol_artifact)) then
+    return nil, "missing-symbol-base-artifact"
+  end
+  if not (usage_artifact and usage_artifact.all_usages and persistent_query_artifact_path_exists(usage_artifact)) then
+    return nil, "missing-usage-base-artifact"
+  end
+  return {
+    symbol_artifact = symbol_artifact,
+    usage_artifact = usage_artifact,
+    usage_truncated = index.usage_truncated and true or false,
+    usage_truncated_reason = index.usage_truncated_reason,
+  }
+end
+
 local function submit_targeted_directory_reindex(index, dir, opts)
   opts = opts or {}
   if not index or not dir then return false, "no-index" end
@@ -3551,6 +3671,13 @@ local function submit_targeted_directory_reindex(index, dir, opts)
     return true, info and "not-directory" or "missing"
   end
 
+  local base_aggregate, base_reason = current_aggregate_query_artifacts(index)
+  if not base_aggregate then
+    log_quiet("Tree-sitter Project index: cannot merge targeted directory %s under %s: %s",
+      tostring(dir), tostring(index.root), tostring(base_reason))
+    return false, base_reason
+  end
+
   if index.watcher then refresh_watches_for_dir(index, dir) end
   cancel_index_work(index)
   index.generation = (index.generation or 0) + 1
@@ -3567,6 +3694,7 @@ local function submit_targeted_directory_reindex(index, dir, opts)
   index.worker_adopted_paths = {}
   index.worker_targeted_paths = nil
   index.worker_targeted_dir = dir
+  index.worker_base_aggregate = base_aggregate
   index.worker_aggregate_artifacts = {}
   index.diagnostics = {
     ui = {},
@@ -3595,6 +3723,7 @@ local function submit_targeted_directory_reindex(index, dir, opts)
       max_file_bytes = MAX_FILE_BYTES,
       chunk_files = opts.chunk_files or 8,
       chunk_records = opts.chunk_records or DEFAULT_WORKER_CHUNK_RECORDS,
+      chunk_bytes = opts.chunk_bytes or DEFAULT_WORKER_CHUNK_BYTES,
       max_usage_captures_per_file = opts.max_usage_captures_per_file or DEFAULT_MAX_CAPTURES,
       artifact_chunks = opts.artifact_chunks ~= false,
       artifact_dir = opts.artifact_dir or default_index_artifact_dir(),
@@ -3609,7 +3738,7 @@ local function submit_targeted_directory_reindex(index, dir, opts)
       if message.type == "chunk" then
         local artifact = message.payload and message.payload.artifact
         if artifact and artifact.path then index.worker_aggregate_artifacts[#index.worker_aggregate_artifacts + 1] = artifact end
-        apply_worker_chunk(index, message, { preserve_artifact = artifact and artifact.path })
+        apply_worker_chunk(index, message)
       elseif message.type == "final" and current_worker_message(index, message) then
         local p = message.payload or {}
         index.files_scanned = p.files_scanned or index.files_scanned
@@ -3751,6 +3880,13 @@ end
 
 function symbol_index.status(root)
   return index_for_root(root)
+end
+
+function symbol_index.cleanup_artifacts()
+  if not artifact_session then return true end
+  local ok = artifact_session:cleanup()
+  log_quiet("Tree-sitter artifacts: shutdown cleanup root=%s ok=%s", tostring(artifact_session.root), tostring(ok))
+  return ok
 end
 
 function symbol_index.reset_for_tests()

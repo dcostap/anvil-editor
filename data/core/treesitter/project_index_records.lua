@@ -6,6 +6,14 @@
 
 local records = {}
 
+local function bounded_preview(text, limit)
+  if text == nil then return nil end
+  text = tostring(text)
+  limit = limit or 1024
+  if #text <= limit then return text end
+  return text:sub(1, math.max(0, limit - 16)) .. "…[truncated]"
+end
+
 function records.lines_from_text(text)
   local lines = {}
   local pos = 1
@@ -182,8 +190,8 @@ local function symbol_from_group(lines, group)
   return {
     name = name,
     kind = group.kind,
-    signature = group_signature(lines, group, name),
-    declaration = declaration,
+    signature = bounded_preview(group_signature(lines, group, name), 1024),
+    declaration = bounded_preview(declaration, 1024),
     declaration_name_span = declaration_name_span,
     start_line = item.start_line,
     start_col = item.start_col,
@@ -304,7 +312,7 @@ function records.usage_from_capture(path, relpath, lines, language, capture)
     relpath = relpath or path,
     language_id = language.id,
     text = text,
-    line_text = line:gsub("\n$", ""),
+    line_text = bounded_preview(line:gsub("\n$", ""), 512),
     start_line = capture.start_line,
     start_col = capture.start_col,
     end_line = capture.end_line,

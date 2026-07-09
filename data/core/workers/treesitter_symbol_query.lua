@@ -5,6 +5,7 @@
 -- copying the whole index into a worker for every query.
 
 local common = require "core.common"
+local artifact_codec = require "core.treesitter.artifact_codec"
 local native_fuzzy = require "fuzzy"
 
 local worker = {}
@@ -19,17 +20,10 @@ local function now()
   return system and system.get_time and system.get_time() or os.clock()
 end
 
-local function load_lua_payload(path, remove_after_load)
-  local loader, err = loadfile(path)
-  if not loader then
-    if remove_after_load then os.remove(path) end
-    return nil, err or "artifact-load-failed"
-  end
-  local ok, artifact_payload = pcall(loader)
+local function load_artifact_payload(path, remove_after_load)
+  local artifact_payload, err = artifact_codec.read(path)
   if remove_after_load then os.remove(path) end
-  if not ok or type(artifact_payload) ~= "table" then
-    return nil, artifact_payload or "artifact-invalid"
-  end
+  if type(artifact_payload) ~= "table" then return nil, err or "artifact-invalid" end
   return artifact_payload
 end
 
@@ -37,7 +31,7 @@ local function load_payload_artifact(payload)
   local artifact = payload and payload.artifact
   local path = artifact and artifact.path
   if not path then return payload or {} end
-  local artifact_payload, err = load_lua_payload(path, true)
+  local artifact_payload, err = load_artifact_payload(path, true)
   if not artifact_payload then return payload or {}, err end
   return artifact_payload
 end
@@ -69,7 +63,7 @@ local function load_cached_index_artifact(artifact, diagnostics)
     diagnostics.artifact_cache_hits = (diagnostics.artifact_cache_hits or 0) + 1
     return entry.payload
   end
-  local artifact_payload, err = load_lua_payload(path, false)
+  local artifact_payload, err = load_artifact_payload(path, false)
   if not artifact_payload then return nil, err end
   local bytes = cache_weight(artifact, artifact_payload)
   artifact_cache[path] = { payload = artifact_payload, bytes = bytes, last_used = now() }

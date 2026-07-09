@@ -161,7 +161,7 @@ function worker_pool.shutdown_system(options)
   end
 end
 
-function worker_pool:choose_worker(_spec)
+function worker_pool:choose_worker(spec)
   local loads = {}
   for _, worker in ipairs(self.workers) do loads[worker.id] = 0 end
   for _, job in pairs(self.jobs) do
@@ -173,8 +173,15 @@ function worker_pool:choose_worker(_spec)
   local best
   local best_load
   local worker_count = #self.workers
-  for offset = 1, worker_count do
-    local idx = ((self.next_worker + offset - 1) % worker_count) + 1
+  local first_worker, last_worker = 1, worker_count
+  if worker_count > 1 and spec and spec.priority == "background" then
+    first_worker = 2
+  elseif worker_count > 1 and spec and spec.priority == "interactive" then
+    last_worker = 1
+  end
+  local lane_count = last_worker - first_worker + 1
+  for offset = 1, lane_count do
+    local idx = first_worker + ((self.next_worker + offset - first_worker) % lane_count)
     local worker = self.workers[idx]
     local load = loads[worker.id] or 0
     if not best or load < best_load then

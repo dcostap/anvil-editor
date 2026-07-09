@@ -266,18 +266,6 @@ local function wait_index_ready(root, timeout)
   return status
 end
 
-local function wait_symbol_ready_before_usages(root, timeout)
-  local deadline = system.get_time() + (timeout or 5)
-  local status
-  repeat
-    status = symbol_index.status(root)
-    if status.symbol_status == "ready" and status.usage_status ~= "ready" then return status end
-    if status.status == "ready" then return status end
-    coroutine.yield(0)
-  until system.get_time() >= deadline
-  return status
-end
-
 test.describe("core.treesitter phase 3 document integration", function()
   test.it("registry loads bundled language configs and highlight queries", function()
     registry.reload()
@@ -423,6 +411,15 @@ test.describe("core.treesitter phase 3 document integration", function()
     test.equal(doc.treesitter.language_id, "kotlin")
     test.ok(doc.treesitter.native)
     doc:on_close()
+  end)
+
+  test.it("shares compiled Tree-sitter queries across Documents", function()
+    local first = c_doc("int first(void) { return 1; }")
+    local second = c_doc("int second(void) { return 2; }")
+    test.not_nil(first.treesitter.queries.highlights)
+    test.equal(first.treesitter.queries.highlights, second.treesitter.queries.highlights)
+    first:on_close()
+    second:on_close()
   end)
 
   test.it("unsupported file does not attach", function()
@@ -700,9 +697,7 @@ class ExcludedThing
     test.ok(find_symbol(request.results, "AsyncThing", "class"), common.serialize({ results = request.results, diagnostics = request.diagnostics, reason = request.reason }))
     test.ok(find_symbol(request.results, "AsyncOther", "class"))
     test.not_ok(find_symbol(request.results, "Different", "class"))
-    for _, name in ipairs(system.list_dir(query_artifact_dir) or {}) do
-      test.ok(not name:match("%.lua$"), "query artifact was not cleaned up: " .. tostring(name))
-    end
+    test.equal(#(system.list_dir(query_artifact_dir) or {}), 0, "query artifacts were not cleaned up")
     common.rm(root, true)
     common.rm(query_artifact_dir, true)
   end)
@@ -777,9 +772,7 @@ class ExcludedThing
     test.equal(request.status, "fresh", request.reason)
     test.equal(#(request.results or {}), 2, common.serialize(request.results))
     for _, usage in ipairs(request.results or {}) do test.not_ok(usage.is_declaration) end
-    for _, name in ipairs(system.list_dir(query_artifact_dir) or {}) do
-      test.ok(not name:match("%.lua$"), "query artifact was not cleaned up: " .. tostring(name))
-    end
+    test.equal(#(system.list_dir(query_artifact_dir) or {}), 0, "query artifacts were not cleaned up")
     common.rm(root, true)
     common.rm(query_artifact_dir, true)
   end)
@@ -1253,13 +1246,16 @@ fun make(): EagerThing = EagerThing()
       refresh_after_seconds = 0,
     })
     test.equal(symbol_status, "fresh", symbol_reason)
-    test.ok(find_symbol(symbols, "EagerThing", "class"))
+    local public_eager = test.not_nil(find_symbol(symbols, "EagerThing", "class"))
+    test.equal(public_eager.text, "EagerThing")
+    test.not_nil(public_eager.range)
+    local internal_symbol = test.not_nil(find_symbol(status.symbols, "EagerThing", "class"))
+    test.is_nil(internal_symbol.text)
+    test.is_nil(internal_symbol.range)
     test.not_nil(status.diagnostics)
     test.not_nil(status.diagnostics.phases)
-    test.not_nil(status.diagnostics.phases.symbols)
-    test.not_nil(status.diagnostics.phases.usages)
-    test.ok((status.diagnostics.phases.symbols.worker.parse_calls or 0) >= 1)
-    test.ok((status.diagnostics.phases.usages.worker.parse_calls or 0) >= 1)
+    test.not_nil(status.diagnostics.phases.combined)
+    test.equal(status.diagnostics.phases.combined.worker.parse_calls, 1)
 
     local refs, reason, usage_status = wait_workspace_usages("EagerThing", {
       root = root,
@@ -1269,6 +1265,13 @@ fun make(): EagerThing = EagerThing()
     })
     test.equal(usage_status, "fresh", reason)
     test.equal(#refs, 2)
+    test.equal(refs[1].name, "EagerThing")
+    test.equal(refs[1].text, "EagerThing")
+    test.not_nil(refs[1].range)
+    local internal = test.not_nil((status.usages_by_name.EagerThing or {})[1])
+    test.is_nil(internal.name)
+    test.is_nil(internal.text)
+    test.is_nil(internal.range)
     common.rm(root, true)
   end)
 
@@ -1345,19 +1348,26 @@ fun make%d(): ShardedThing%d = ShardedThing%d()
     end
 
     local phases = status.diagnostics and status.diagnostics.phases or {}
-    test.ok(((phases.symbols and phases.symbols.worker and phases.symbols.worker.coordinator_jobs) or 0) >= 1, common.serialize(phases.symbols))
-    test.ok(((phases.symbols and phases.symbols.worker and phases.symbols.worker.shard_jobs) or 0) >= 6, common.serialize(phases.symbols))
-    test.equal(phases.symbols.worker.files_scanned, 6)
-    test.ok(((phases.usages and phases.usages.worker and phases.usages.worker.shard_jobs) or 0) >= 6, common.serialize(phases.usages))
-    test.equal(phases.usages.worker.files_scanned, 6)
-    test.ok(((phases.usages.worker.artifacts_sent or 0) > 0), common.serialize(phases.usages.worker))
-    test.ok(((phases.symbols.worker.aggregate_jobs or 0) > 0), common.serialize(phases.symbols.worker))
-    test.ok(((phases.usages.worker.aggregate_jobs or 0) > 0), common.serialize(phases.usages.worker))
+    local combined = phases.combined and phases.combined.worker or {}
+    test.ok((combined.coordinator_jobs or 0) >= 1, common.serialize(phases.combined))
+    test.ok((combined.shard_jobs or 0) >= 6, common.serialize(phases.combined))
+    test.equal(combined.files_scanned, 6)
+    test.equal(combined.parse_calls, 6)
+    test.ok((combined.artifacts_sent or 0) > 0, common.serialize(combined))
+    test.ok((combined.aggregate_jobs or 0) > 0, common.serialize(combined))
     test.equal(((status.diagnostics and status.diagnostics.ui and status.diagnostics.ui.aggregate_rebuilds) or 0), 0)
-    test.ok(((status.diagnostics and status.diagnostics.ui and status.diagnostics.ui.artifacts_loaded) or 0) > 0, common.serialize(status.diagnostics and status.diagnostics.ui))
-    for _, name in ipairs(system.list_dir(artifact_dir) or {}) do
-      test.ok(not name:match("%.lua$"), "artifact was not cleaned up: " .. tostring(name))
+    test.equal(((status.diagnostics and status.diagnostics.ui and status.diagnostics.ui.artifacts_loaded) or 0), 0,
+      common.serialize(status.diagnostics and status.diagnostics.ui))
+    test.ok(((status.diagnostics and status.diagnostics.ui and status.diagnostics.ui.manifest_chunks_adopted) or 0) > 0,
+      common.serialize(status.diagnostics and status.diagnostics.ui))
+    test.ok(((status.diagnostics and status.diagnostics.ui and status.diagnostics.ui.adoption_items_enqueued) or 0) > 0)
+    test.ok(((status.diagnostics and status.diagnostics.ui and status.diagnostics.ui.adoption_pump_slices) or 0) > 0)
+    for path, entry in pairs(status.by_path or {}) do
+      test.not_nil(entry.fingerprint, path)
+      test.is_nil(entry.symbols, path)
+      test.is_nil(entry.usages_by_name, path)
     end
+    test.equal(#(system.list_dir(artifact_dir) or {}), 0, "index artifacts were not cleaned up")
     test.ok((status.usage_count or 0) <= 4, "usage cap exceeded: " .. tostring(status.usage_count))
     test.ok(status.usage_truncated)
     common.rm(root, true)
@@ -1440,7 +1450,7 @@ fun make%d(): BudgetReturnThing%d = BudgetReturnThing%d()
     common.rm(root, true)
   end)
 
-  test.it("Tree-sitter Project symbols become fresh before usage indexing finishes", function()
+  test.it("Tree-sitter combined Project indexing makes symbols and usages ready together", function()
     symbol_index.reset_for_tests()
     local root = USERDIR .. PATHSEP .. "treesitter-decoupled-symbol-status-"
       .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
@@ -1453,9 +1463,10 @@ fun make(): ReadyBeforeUsages = ReadyBeforeUsages()
 ]])
 
     symbol_index.start_project_indexing({ root = root, reason = "test", refresh_after_seconds = 0 })
-    local status = wait_symbol_ready_before_usages(root)
+    local status = wait_index_ready(root)
     test.equal(status.symbol_status, "ready")
-    test.equal(status.usage_status, "indexing")
+    test.equal(status.usage_status, "ready")
+    test.equal(status.diagnostics.phases.combined.worker.parse_calls, 1)
 
     local symbols, reason, symbol_status = symbol_index.workspace_symbols("ReadyBeforeUsages", {
       root = root,
@@ -1464,9 +1475,6 @@ fun make(): ReadyBeforeUsages = ReadyBeforeUsages()
     test.equal(symbol_status, "fresh", reason)
     test.ok(find_symbol(symbols, "ReadyBeforeUsages", "class"))
 
-    status = wait_index_ready(root)
-    test.equal(status.status, "ready")
-    test.equal(status.usage_status, "ready")
     common.rm(root, true)
   end)
 
@@ -1795,6 +1803,81 @@ fun make(): AsyncAddedDirThing = AsyncAddedDirThing()
     common.rm(root, true)
   end)
 
+  test.it("Tree-sitter targeted directory refresh preserves unaffected sibling Project usages", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-directory-sibling-preservation-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    local src = mkdir(root .. PATHSEP .. "src")
+    local sibling = mkdir(root .. PATHSEP .. "sibling")
+    local changed_path = src .. PATHSEP .. "Changed.kt"
+    write_file(changed_path, [[package demo
+
+class BeforeScopedRefreshThing
+
+fun make(): BeforeScopedRefreshThing = BeforeScopedRefreshThing()
+]])
+    write_file(sibling .. PATHSEP .. "Unaffected.kt", [[package demo
+
+class UnaffectedSiblingThing
+
+fun make(): UnaffectedSiblingThing = UnaffectedSiblingThing()
+]])
+
+    local refs, reason, status = wait_workspace_usages("BeforeScopedRefreshThing", {
+      root = root,
+      force = true,
+      include_declaration = false,
+      limit = 20,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 2)
+
+    refs, reason, status = wait_workspace_usages("UnaffectedSiblingThing", {
+      root = root,
+      include_declaration = false,
+      limit = 20,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 2)
+
+    write_file(changed_path, [[package demo
+
+class AfterScopedRefreshThing
+
+fun make(): AfterScopedRefreshThing = AfterScopedRefreshThing()
+]])
+    local changed
+    changed, reason = symbol_index.mark_directory_dirty(src, "sibling-preservation-test")
+    test.ok(changed, reason)
+
+    refs, reason, status = wait_workspace_usages("AfterScopedRefreshThing", {
+      root = root,
+      include_declaration = false,
+      limit = 20,
+    }, 8)
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 2)
+
+    refs, reason, status = wait_workspace_usages("BeforeScopedRefreshThing", {
+      root = root,
+      include_declaration = false,
+      limit = 20,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 0)
+
+    refs, reason, status = wait_workspace_usages("UnaffectedSiblingThing", {
+      root = root,
+      include_declaration = false,
+      limit = 20,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 2)
+
+    common.rm(root, true)
+  end)
+
   test.it("Tree-sitter Project watcher refreshes nested external file changes", function()
     symbol_index.reset_for_tests()
     local root = USERDIR .. PATHSEP .. "treesitter-project-watch-"
@@ -1984,6 +2067,23 @@ main :: proc() {}
     test.ok(wait_ready(doc))
     test.equal(doc.treesitter.stale_renderable, false)
     test.equal(doc.treesitter.tree_generation, doc.treesitter.generation)
+    doc:on_close()
+  end)
+
+  test.it("rapid edits coalesce obsolete full snapshots", function()
+    local doc = c_doc("int value(void) { return 1; }")
+    test.ok(wait_ready(doc))
+    local before_snapshots = doc.treesitter.snapshots_constructed or 0
+    local before_requests = doc.treesitter.snapshot_requests or 0
+    for i = 1, 5 do
+      doc:apply_edits({
+        { line1 = 1, col1 = 26, line2 = 1, col2 = 27, text = tostring((i % 9) + 1) },
+      }, { type = "replace" })
+    end
+    test.ok(wait_ready(doc))
+    test.equal((doc.treesitter.snapshot_requests or 0) - before_requests, 5)
+    test.ok((doc.treesitter.snapshots_constructed or 0) - before_snapshots < 5)
+    test.ok((doc.treesitter.snapshot_requests_coalesced or 0) >= 1)
     doc:on_close()
   end)
 
@@ -2297,6 +2397,38 @@ int second(void) {
     local doc = c_doc("int main(void) { return VALUE; }")
     local line = doc.highlighter:get_render_line(1)
     test.equal(line.source, "tokenizer")
+    doc:on_close()
+  end)
+
+  test.it("incremental parse preserves unaffected highlight cache lines", function()
+    local doc = c_doc([[int first(void) { return 1; }
+int second(void) { return 2; }
+int third(void) { return 3; }
+int fourth(void) { return 4; }]])
+    test.ok(wait_ready(doc))
+    test.ok(ts_highlight.populate_range(doc, 1, 4))
+    local unaffected = test.not_nil(doc.treesitter.highlight_cache[4])
+    doc:apply_edits({
+      { line1 = 1, col1 = 26, line2 = 1, col2 = 27, text = "9" },
+    }, { type = "replace" })
+    test.ok(wait_ready(doc))
+    test.equal(doc.treesitter.highlight_cache[4], unaffected, common.serialize(doc.treesitter.last_changed_ranges))
+    test.ok(type(doc.treesitter.last_changed_ranges) == "table")
+    doc:on_close()
+  end)
+
+  test.it("batches highlight cache misses into one range query", function()
+    local doc = c_doc([[int first(void) { return 1; }
+int second(void) { return 2; }
+int third(void) { return 3; }]])
+    test.ok(wait_ready(doc))
+    doc.treesitter.highlight_cache = {}
+    doc.treesitter.highlight_query_calls = 0
+    local first = ts_highlight.line_tokens(doc, 1)
+    local second = ts_highlight.line_tokens(doc, 2)
+    test.not_nil(first)
+    test.not_nil(second)
+    test.equal(doc.treesitter.highlight_query_calls, 1)
     doc:on_close()
   end)
 

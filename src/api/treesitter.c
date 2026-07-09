@@ -248,6 +248,12 @@ static int f_register_complete_event(lua_State *L) {
   return 1;
 }
 
+static int f_ack_complete_event(lua_State *L) {
+  (void) L;
+  anvil_ts_service_ack_complete_event();
+  return 0;
+}
+
 static int f_new_document_state(lua_State *L) {
   const char *language_id = luaL_checkstring(L, 1);
   const AnvilTSLanguage *language = anvil_ts_language_by_id(language_id);
@@ -408,7 +414,30 @@ static int state_poll(lua_State *L) {
   lua_pushstring(L, anvil_ts_document_state_status_string(result.status));
   lua_pushboolean(L, result.changed);
   lua_pushboolean(L, result.discarded_stale);
-  return 3;
+  if (result.changed_ranges_available) {
+    lua_createtable(L, (int) result.changed_range_count, 0);
+    for (uint32_t i = 0; i < result.changed_range_count; i++) {
+      const TSRange *range = &result.changed_ranges[i];
+      lua_createtable(L, 0, 6);
+      lua_pushinteger(L, (lua_Integer) range->start_byte);
+      lua_setfield(L, -2, "start_byte");
+      lua_pushinteger(L, (lua_Integer) range->end_byte);
+      lua_setfield(L, -2, "end_byte");
+      lua_pushinteger(L, (lua_Integer) range->start_point.row + 1);
+      lua_setfield(L, -2, "start_line");
+      lua_pushinteger(L, (lua_Integer) range->start_point.column + 1);
+      lua_setfield(L, -2, "start_col");
+      lua_pushinteger(L, (lua_Integer) range->end_point.row + 1);
+      lua_setfield(L, -2, "end_line");
+      lua_pushinteger(L, (lua_Integer) range->end_point.column + 1);
+      lua_setfield(L, -2, "end_col");
+      lua_rawseti(L, -2, (lua_Integer) i + 1);
+    }
+  } else {
+    lua_pushnil(L);
+  }
+  free(result.changed_ranges);
+  return 4;
 }
 
 typedef struct LuaCaptureCopy {
@@ -1065,6 +1094,7 @@ static const luaL_Reg lib[] = {
   { "compile_query", f_compile_query },
   { "index_text", f_index_text },
   { "register_complete_event", f_register_complete_event },
+  { "ack_complete_event", f_ack_complete_event },
   { "new_document_state", f_new_document_state },
   { NULL, NULL }
 };

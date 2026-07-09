@@ -1,6 +1,7 @@
 local common = require "core.common"
 local test = require "core.test"
 local registry = require "core.treesitter.registry"
+local artifact_codec = require "core.treesitter.artifact_codec"
 local worker_pool = require "core.worker_pool"
 local symbol_query_worker = require "core.workers.treesitter_symbol_query"
 local usage_query_worker = require "core.workers.treesitter_usage_query"
@@ -195,10 +196,14 @@ int main(void) { return helper(); }
       on_result = function(message)
         if message.type == "chunk" then
           test.is_nil(message.payload.files)
+          test.equal(#(message.payload.manifest or {}), 1)
+          test.not_nil(message.payload.manifest[1].path)
+          test.not_nil(message.payload.manifest[1].fingerprint)
+          test.is_nil(message.payload.manifest[1].symbols)
+          test.is_nil(message.payload.manifest[1].usages_by_name)
           artifact_path = message.payload.artifact and message.payload.artifact.path
           test.not_nil(artifact_path)
-          local loader = test.not_nil(loadfile(artifact_path))
-          artifact_payload = loader()
+          artifact_payload = test.not_nil(artifact_codec.read(artifact_path))
           os.remove(artifact_path)
         elseif message.type == "final" then
           final = message.payload
@@ -230,6 +235,8 @@ int main(void) { return helper(); }
     lines[#lines + 1] = "}"
     write_file(root .. PATHSEP .. "main.c", table.concat(lines, "\n") .. "\n")
 
+    local artifact_dir = USERDIR .. PATHSEP .. "worker-project-index-large-file-chunk-artifacts"
+    common.rm(artifact_dir, true)
     local pool = worker_pool.new({ name = "treesitter-project-index-large-file-chunk-test", worker_count = 1 })
     pools[#pools + 1] = pool
     local chunks = {}
@@ -244,12 +251,16 @@ int main(void) { return helper(); }
         include_usages = true,
         chunk_files = 16,
         chunk_records = 10,
+        chunk_bytes = 8192,
+        artifact_chunks = true,
+        artifact_dir = artifact_dir,
         max_file_bytes = 1024 * 1024,
         max_usage_captures_per_file = 200,
       },
       on_result = function(message)
         if message.type == "chunk" then
           chunks[#chunks + 1] = message.payload
+          test.ok((message.payload.artifact and message.payload.artifact.bytes or math.huge) <= 8192)
         elseif message.type == "final" then
           final = message.payload
         end
@@ -260,6 +271,7 @@ int main(void) { return helper(); }
     test.ok(drain_until(pool, function() return final ~= nil end))
     test.ok(#chunks > 1, "expected large single-file result to be split, got " .. tostring(#chunks))
     test.ok((final.diagnostics.chunk_records_max or 0) <= 10, common.serialize(final.diagnostics))
+    common.rm(artifact_dir, true)
   end)
 
   test.test("keeps symbols when usage extraction fails", function()
@@ -307,8 +319,8 @@ int main(void) { return helper(); }
 
   test.test("builds sorted aggregates from file-backed project chunks", function()
     local artifact_dir = mkdir(USERDIR .. PATHSEP .. "worker-project-aggregate-artifacts")
-    local artifact_path = artifact_dir .. PATHSEP .. "chunk.lua"
-    write_file(artifact_path, "return " .. common.serialize({
+    local artifact_path = artifact_dir .. PATHSEP .. "chunk.bin"
+    local artifact_payload = {
       files = {
         {
           path = "b.c",
@@ -339,7 +351,8 @@ int main(void) { return helper(); }
           usage_complete = true,
         },
       },
-    }))
+    }
+    test.not_nil(artifact_codec.write(artifact_path, artifact_payload))
 
     local pool = worker_pool.new({ name = "treesitter-project-aggregate-test", worker_count = 1 })
     pools[#pools + 1] = pool
@@ -426,8 +439,8 @@ int main(void) { return helper(); }
     test.ok(beta_path, "missing Beta artifact")
     test.not_equal(alpha_path, beta_path)
 
-    local alpha_payload = assert(loadfile(alpha_path))()
-    local beta_payload = assert(loadfile(beta_path))()
+    local alpha_payload = test.not_nil(artifact_codec.read(alpha_path))
+    local beta_payload = test.not_nil(artifact_codec.read(beta_path))
     test.equal(alpha_payload.symbols[1].name, "AlphaArtifact")
     test.equal(beta_payload.symbols[1].name, "BetaArtifact")
     common.rm(artifact_dir, true)

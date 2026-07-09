@@ -16,6 +16,18 @@ Make Anvil's Tree-sitter integration slick, fast, and unobtrusive while preservi
 
 This is a targeted steering plan, not a rewrite. The main objective is to remove unbounded UI-thread result adoption and unnecessary data expansion while retaining the current public behavior.
 
+## Implementation status
+
+Implemented on 2026-07-10. The completed path now uses compact manifests, framed binary artifacts, metadata-only full-scan `by_path` entries, off-thread targeted-directory merges, byte/record-bounded chunks, a deterministic adoption pump, compact internal records, one-pass Project indexing, session-owned artifact cleanup, coalesced Document snapshots, changed-range cache invalidation, batched highlighting, shared queries, two interactive parser workers, and reserved worker priority lanes.
+
+Validation capture:
+
+```text
+C:\Users\Darius\AppData\Local\Temp\anvil_perf_20260710_000419_summary.txt
+```
+
+The capture's maximum worker callback was 0.066 ms. Legacy artifact roots were removed, and a subsequent process startup retained only its current `treesitter-artifacts/session-*` directory.
+
 ## Terminology
 
 This plan follows Anvil's glossary:

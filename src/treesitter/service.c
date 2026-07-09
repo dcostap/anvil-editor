@@ -13,6 +13,7 @@
 #include <string.h>
 
 #define ANVIL_TS_COMPLETE_EVENT "treesitter_complete"
+#define ANVIL_TS_DOCUMENT_WORKER_COUNT 2
 
 typedef struct AnvilTSParseJob AnvilTSParseJob;
 
@@ -53,16 +54,17 @@ struct AnvilTSParseJob {
 typedef struct AnvilTSService {
   SDL_Mutex *mutex;
   SDL_Condition *cond;
-  SDL_Thread *worker;
+  SDL_Thread *workers[ANVIL_TS_DOCUMENT_WORKER_COUNT];
   bool initialized;
   bool shutdown;
   bool event_registered;
+  bool complete_event_pending;
   bool atexit_registered;
   uint64_t next_state_id;
   uint64_t next_job_id;
   AnvilTSParseJob *queue_head;
   AnvilTSParseJob *queue_tail;
-  AnvilTSParseJob *running_job;
+  AnvilTSParseJob *running_jobs[ANVIL_TS_DOCUMENT_WORKER_COUNT];
   AnvilTSParseJob *completed_head;
   AnvilTSParseJob *completed_tail;
 } AnvilTSService;
@@ -131,10 +133,15 @@ static bool service_ensure_initialized(void) {
 }
 
 static bool service_ensure_worker_locked(void) {
-  if (service.worker) return true;
+  if (service.workers[0]) return true;
   service.shutdown = false;
-  service.worker = SDL_CreateThread(service_worker_main, "anvil-ts-parser", NULL);
-  return service.worker != NULL;
+  for (int i = 0; i < ANVIL_TS_DOCUMENT_WORKER_COUNT; i++) {
+    char name[32];
+    SDL_snprintf(name, sizeof(name), "anvil-ts-parser-%d", i + 1);
+    service.workers[i] = SDL_CreateThread(service_worker_main, name, (void *) (intptr_t) i);
+    if (!service.workers[i]) return i > 0;
+  }
+  return true;
 }
 
 static void enqueue_job_locked(AnvilTSParseJob *job) {
@@ -181,25 +188,26 @@ static bool parse_progress(TSParseState *parse_state) {
 }
 
 static void push_complete_event_if_registered(void) {
-  if (!service.event_registered) return;
+  if (!service.event_registered || service.complete_event_pending) return;
   CustomEvent event;
   SDL_zero(event);
-  push_custom_event(ANVIL_TS_COMPLETE_EVENT, &event);
+  service.complete_event_pending = true;
+  if (!push_custom_event(ANVIL_TS_COMPLETE_EVENT, &event)) service.complete_event_pending = false;
 }
 
 static int service_worker_main(void *userdata) {
-  (void) userdata;
+  int worker_index = (int) (intptr_t) userdata;
   for (;;) {
     if (!service_lock()) return 1;
     while (!service.shutdown && service.queue_head == NULL) {
       SDL_WaitCondition(service.cond, service.mutex);
     }
-    if (service.shutdown && service.queue_head == NULL) {
+    if (service.shutdown) {
       service_unlock();
       break;
     }
     AnvilTSParseJob *job = dequeue_job_locked();
-    service.running_job = job;
+    service.running_jobs[worker_index] = job;
     if (job && job->state->active_job == job && !job->state->closed && !SDL_GetAtomicInt(&job->cancel)) {
       job->state->status = ANVIL_TS_STATE_PARSING;
       state_set_reason_locked(job->state, NULL);
@@ -254,7 +262,7 @@ static int service_worker_main(void *userdata) {
       job_free(job);
       return 1;
     }
-    service.running_job = NULL;
+    service.running_jobs[worker_index] = NULL;
     if (job->state->closed) {
       if (job->state->active_job == job) job->state->active_job = NULL;
       free_without_poll = true;
@@ -910,6 +918,9 @@ AnvilTSPollResult anvil_ts_document_state_poll(
   result.status = ANVIL_TS_STATE_FAILED;
   result.changed = false;
   result.discarded_stale = false;
+  result.changed_ranges = NULL;
+  result.changed_range_count = 0;
+  result.changed_ranges_available = false;
   if (!state || !service_ensure_initialized() || !service_lock()) return result;
 
   AnvilTSParseJob *to_free = NULL;
@@ -938,7 +949,15 @@ AnvilTSPollResult anvil_ts_document_state_poll(
 
     state->active_job = NULL;
     if (job->result_tree && !job->canceled && !job->failed) {
-      if (state->current_tree) ts_tree_delete(state->current_tree);
+      if (state->current_tree) {
+        result.changed_ranges_available = true;
+        result.changed_ranges = ts_tree_get_changed_ranges(
+          state->current_tree,
+          job->result_tree,
+          &result.changed_range_count
+        );
+        ts_tree_delete(state->current_tree);
+      }
       anvil_ts_snapshot_free(state->current_snapshot);
       state->current_tree = job->result_tree;
       state->current_snapshot = job->snapshot;
@@ -1021,6 +1040,12 @@ bool anvil_ts_service_register_complete_event(void) {
   return true;
 }
 
+void anvil_ts_service_ack_complete_event(void) {
+  if (!service.initialized || !service_lock()) return;
+  service.complete_event_pending = false;
+  service_unlock();
+}
+
 int anvil_ts_service_complete_event_callback(lua_State *L, SDL_Event *event) {
   (void) event;
   lua_pushstring(L, ANVIL_TS_COMPLETE_EVENT);
@@ -1037,13 +1062,20 @@ void anvil_ts_service_shutdown(void) {
   for (AnvilTSParseJob *job = service.completed_head; job; job = job->completed_next) {
     SDL_SetAtomicInt(&job->cancel, 1);
   }
-  if (service.running_job) SDL_SetAtomicInt(&service.running_job->cancel, 1);
+  for (int i = 0; i < ANVIL_TS_DOCUMENT_WORKER_COUNT; i++) {
+    if (service.running_jobs[i]) SDL_SetAtomicInt(&service.running_jobs[i]->cancel, 1);
+  }
   SDL_BroadcastCondition(service.cond);
-  SDL_Thread *worker = service.worker;
-  service.worker = NULL;
+  SDL_Thread *workers[ANVIL_TS_DOCUMENT_WORKER_COUNT];
+  for (int i = 0; i < ANVIL_TS_DOCUMENT_WORKER_COUNT; i++) {
+    workers[i] = service.workers[i];
+    service.workers[i] = NULL;
+  }
   service_unlock();
 
-  if (worker) SDL_WaitThread(worker, NULL);
+  for (int i = 0; i < ANVIL_TS_DOCUMENT_WORKER_COUNT; i++) {
+    if (workers[i]) SDL_WaitThread(workers[i], NULL);
+  }
 
   if (!service_lock()) return;
   AnvilTSParseJob *queued = service.queue_head;

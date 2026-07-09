@@ -31,6 +31,9 @@ typedef struct AnvilTSPollResult {
   AnvilTSStateStatus status;
   bool changed;
   bool discarded_stale;
+  TSRange *changed_ranges;
+  uint32_t changed_range_count;
+  bool changed_ranges_available;
 } AnvilTSPollResult;
 
 typedef struct AnvilTSEdit {
@@ -153,6 +156,7 @@ void anvil_ts_document_state_cancel(AnvilTSDocumentState *state);
 void anvil_ts_document_state_close(AnvilTSDocumentState *state);
 
 bool anvil_ts_service_register_complete_event(void);
+void anvil_ts_service_ack_complete_event(void);
 int anvil_ts_service_complete_event_callback(lua_State *L, SDL_Event *event);
 void anvil_ts_service_shutdown(void);
 

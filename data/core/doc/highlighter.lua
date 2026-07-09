@@ -139,6 +139,7 @@ end
 
 function Highlighter:batch_notify(changed_ranges)
   local first_line
+  local last_line
   local line_delta = 0
   local applied = 0
   for _, range in ipairs(changed_ranges or {}) do
@@ -148,6 +149,7 @@ function Highlighter:batch_notify(changed_ranges)
       first_line = math.min(first_line or new_line1, new_line1)
       local remove_count = math.max(0, range.old_line_count or ((range.old_line2 or old_line1) - old_line1 + 1))
       local insert_count = math.max(0, range.new_line_count or ((range.new_line2 or new_line1) - new_line1 + 1))
+      last_line = math.max(last_line or new_line1, new_line1 + math.max(1, insert_count) - 1)
       local blanks = {}
       for i = 1, insert_count do blanks[i] = false end
       common.splice(self.lines, old_line1 + line_delta, remove_count, blanks)
@@ -156,7 +158,7 @@ function Highlighter:batch_notify(changed_ranges)
     end
   end
   if not first_line then return end
-  self:invalidate_render_cache(first_line, #self.doc.lines)
+  self:invalidate_render_cache(first_line, math.min(#self.doc.lines, last_line or first_line))
   self:invalidate(first_line)
   if core and core.log_quiet and applied > 1 then
     core.log_quiet("Highlighter batch update shifted %d changed range(s) from line %d", applied, first_line)

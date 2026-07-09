@@ -26,6 +26,7 @@ treesitter.language_intelligence = language_intelligence
 treesitter.enabled = true
 
 local attached_docs = setmetatable({}, { __mode = "k" })
+local compiled_query_cache = {}
 local patched = false
 
 local DEFAULT_PARSE_TIMEOUT_MS = 750
@@ -105,7 +106,16 @@ local function compile_queries(language)
   native = ensure_native()
   if not native then return queries end
   for kind, source in pairs(language.query_sources or {}) do
-    local query, err = native.compile_query(language.grammar, kind, source)
+    local key = table.concat({ tostring(language.grammar), tostring(kind), tostring(source) }, "\0")
+    local cached = compiled_query_cache[key]
+    local query, err
+    if cached ~= nil then
+      query = cached or nil
+      err = cached == false and "compile-failed" or nil
+    else
+      query, err = native.compile_query(language.grammar, kind, source)
+      compiled_query_cache[key] = query or false
+    end
     if query then
       queries[kind] = query
     else
@@ -162,6 +172,7 @@ end
 function treesitter.schedule_parse(doc, edit)
   local ts = doc and doc.treesitter
   if not ts or not ts.native or not doc.lines then return false end
+  ts.snapshots_constructed = (ts.snapshots_constructed or 0) + 1
   ts.generation = (ts.generation or 0) + 1
   ts.parse_generation = ts.generation
   ts.status = "snapshotting"
@@ -178,12 +189,21 @@ function treesitter.schedule_parse(doc, edit)
   ts.locals_line_starts = nil
   if doc.highlighter and doc.highlighter.invalidate_render_cache then
     if remapped_stale_cache then
-      doc.highlighter:invalidate_render_cache(edit.line1 or 1, #doc.lines)
+      local changed_lines = math.max(1, count_newlines(edit.text) + 1)
+      local last_line = math.min(#doc.lines, (edit.line1 or 1) + changed_lines)
+      doc.highlighter:invalidate_render_cache(edit.line1 or 1, last_line)
     else
       doc.highlighter:invalidate_render_cache()
     end
   end
+  local snapshot_bytes = 0
+  for _, line in ipairs(doc.lines) do snapshot_bytes = snapshot_bytes + #line end
+  local snapshot_started = system.get_time()
   local ok, err = ts.native:schedule_parse(doc.lines, ts.generation, edit)
+  local snapshot_ms = (system.get_time() - snapshot_started) * 1000
+  ts.snapshot_bytes = (ts.snapshot_bytes or 0) + snapshot_bytes
+  ts.snapshot_ms = (ts.snapshot_ms or 0) + snapshot_ms
+  ts.snapshot_max_ms = math.max(ts.snapshot_max_ms or 0, snapshot_ms)
   if not ok then
     ts.status = "failed"
     ts.reason = err or "schedule failed"
@@ -192,7 +212,28 @@ function treesitter.schedule_parse(doc, edit)
   end
   local status = ts.native:status()
   ts.status = status or "queued"
-  log_quiet("Tree-sitter: scheduled %s language=%s generation=%d edit=%s", doc_name(doc), tostring(ts.language_id), ts.generation, edit and "single" or "full")
+  log_quiet("Tree-sitter: scheduled %s language=%s generation=%d edit=%s snapshot_bytes=%d snapshot_ms=%.3f constructed=%d coalesced=%d",
+    doc_name(doc), tostring(ts.language_id), ts.generation, edit and "single" or "full", snapshot_bytes, snapshot_ms,
+    ts.snapshots_constructed or 0, ts.snapshot_requests_coalesced or 0)
+  return true
+end
+
+local function schedule_coalesced_parse(doc)
+  local ts = doc and doc.treesitter
+  if not ts or not ts.native then return false end
+  ts.pending_parse_serial = (ts.pending_parse_serial or 0) + 1
+  if ts.pending_parse_thread then
+    ts.snapshot_requests_coalesced = (ts.snapshot_requests_coalesced or 0) + 1
+    return true
+  end
+  ts.pending_parse_thread = true
+  core.add_thread(function()
+    coroutine.yield(0.015)
+    local current = doc.treesitter
+    if current ~= ts or not ts.native then return end
+    ts.pending_parse_thread = false
+    treesitter.schedule_parse(doc, nil)
+  end)
   return true
 end
 
@@ -283,6 +324,7 @@ function treesitter.on_text_transaction(doc, transaction)
   local ts = doc and doc.treesitter
   if not ts or not ts.native or not transaction or not transaction.changed then return end
 
+  ts.snapshot_requests = (ts.snapshot_requests or 0) + 1
   local edit = edit_for_transaction(doc, ts, transaction)
   if edit then
     ts.stale_renderable = true
@@ -294,14 +336,14 @@ function treesitter.on_text_transaction(doc, transaction)
     ts.stale_unrenderable = true
     ts.status = "stale"
     if ts.native.cancel then ts.native:cancel() end
-    treesitter.schedule_parse(doc, nil)
+    schedule_coalesced_parse(doc)
   end
 end
 
 function treesitter.poll_doc(doc)
   local ts = doc and doc.treesitter
   if not ts or not ts.native then return nil end
-  local status, changed, discarded_stale = ts.native:poll(ts.generation or 0)
+  local status, changed, discarded_stale, changed_ranges = ts.native:poll(ts.generation or 0)
   ts.status = status or ts.status
   ts.last_poll_changed = changed or false
   ts.last_discarded_stale = discarded_stale or false
@@ -316,19 +358,37 @@ function treesitter.poll_doc(doc)
     ts.status = native_status or ts.status
     ts.reason = reason
   end
-  if changed or discarded_stale then
-    ts.highlight_cache = {}
+  if changed then
+    local partial = ts.status == "ready" and type(changed_ranges) == "table"
+    if partial then
+      ts.highlight_cache = ts.highlight_cache or {}
+      for _, range in ipairs(changed_ranges) do
+        local first_line = math.max(1, (range.start_line or 1) - 1)
+        local last_line = math.min(#doc.lines, math.max(first_line, (range.end_line or first_line) + 1))
+        for line = first_line, last_line do ts.highlight_cache[line] = nil end
+        if doc.highlighter and doc.highlighter.invalidate_render_cache then
+          doc.highlighter:invalidate_render_cache(first_line, last_line)
+        end
+      end
+    else
+      ts.highlight_cache = {}
+      if doc.highlighter and doc.highlighter.invalidate_render_cache then
+        doc.highlighter:invalidate_render_cache()
+      end
+    end
     ts.selection_history = {}
     ts.line_starts = nil
     ts.outline_line_starts = nil
     ts.selection_line_starts = nil
     ts.navigation_line_starts = nil
     ts.locals_line_starts = nil
-    if doc.highlighter and doc.highlighter.invalidate_render_cache then
-      doc.highlighter:invalidate_render_cache()
-    end
+    ts.last_changed_ranges = changed_ranges
     core.redraw = true
-    log_quiet("Tree-sitter: polled %s status=%s changed=%s stale=%s generation=%d tree_generation=%d", doc_name(doc), tostring(ts.status), tostring(changed), tostring(discarded_stale), ts.generation or 0, ts.tree_generation or 0)
+    log_quiet("Tree-sitter: polled %s status=%s changed=%s stale=%s ranges=%d generation=%d tree_generation=%d",
+      doc_name(doc), tostring(ts.status), tostring(changed), tostring(discarded_stale),
+      type(changed_ranges) == "table" and #changed_ranges or 0, ts.generation or 0, ts.tree_generation or 0)
+  elseif discarded_stale then
+    log_quiet("Tree-sitter: discarded stale parse for %s generation=%d", doc_name(doc), ts.generation or 0)
   end
   return ts.status, changed, discarded_stale
 end
@@ -524,6 +584,7 @@ if type(previous_on_event) == "function" and not core.__treesitter_on_event_wrap
   core.__treesitter_on_event_wrapped = true
   function core.on_event(type, ...)
     if type == "treesitter_complete" then
+      if native and native.ack_complete_event then native.ack_complete_event() end
       treesitter.poll_all()
     end
     return previous_on_event(type, ...)
