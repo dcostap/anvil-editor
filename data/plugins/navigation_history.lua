@@ -7,6 +7,7 @@ local keymap = require "core.keymap"
 local common = require "core.common"
 local config = require "core.config"
 local Node = require "core.node"
+local sidepanel = require "core.sidepanel"
 
 local M = {}
 
@@ -136,11 +137,15 @@ function M.capture_place(view)
   local line2 = selections[offset + 2] or line
   local col2 = selections[offset + 3] or col
   local path = doc and doc.abs_filename or view.path
+  local is_side_view = sidepanel.is_side_view(view)
 
   return {
     view = view,
     doc = doc,
     filename = path and common.normalize_path(path) or nil,
+    side_view = is_side_view,
+    side_file = is_side_view and view == sidepanel.file_view,
+    side_editor = is_side_view and sidepanel.is_side_editor(view),
     selection_state = clone_selection_state(selection_state),
     line = line,
     col = col,
@@ -159,6 +164,10 @@ end
 local function place_valid(place)
   if not place then return false end
   if place.view and view_is_open(place.view) then return place.doc == nil or place.view.doc == place.doc end
+  -- A removed side tool cannot be recreated as its original view type. Side
+  -- Editors and the replaceable side file view can be rebuilt from a Document
+  -- or path while preserving their side location.
+  if place.side_view and not (place.side_file or place.side_editor) then return false end
   if place.doc and doc_in_core_docs(place.doc) then return true end
   return place.filename and system.get_file_info(place.filename) ~= nil
 end
@@ -261,6 +270,38 @@ local function apply_place_to_view(view, place)
   end
 end
 
+local function restore_missing_view(place, doc)
+  if place.side_view and (place.side_file or place.side_editor) then
+    local side_panel_was_visible = sidepanel.visible
+    local view
+
+    if place.filename and not (doc and doc_in_core_docs(doc)) then
+      if place.doc then
+        doc = core.open_doc(place.filename)
+      else
+        view = sidepanel.open_path_in_side(place.filename, { focus = false })
+      end
+    end
+    if not view and doc then
+      view = sidepanel.open_doc_in_side(doc, { focus = false })
+    end
+
+    if view then
+      if side_panel_was_visible then
+        sidepanel.show(view, { focus = false })
+      else
+        sidepanel.make_view_visible(view)
+      end
+      debug_log("rebuilt side navigation target %s", place_label(place))
+    end
+    return view, doc
+  end
+
+  if place.filename then doc = core.open_doc(place.filename) end
+  if doc then return core.root_panel:open_doc(doc), doc end
+  return nil, doc
+end
+
 function M.restore_place(place)
   if not place_valid(place) then return false end
 
@@ -270,8 +311,12 @@ function M.restore_place(place)
     local view = place.view
     if view and (not view_is_open(view) or view.doc ~= doc) then view = nil end
     if not view then
-      if place.filename then doc = core.open_doc(place.filename) end
-      if doc then view = core.root_panel:open_doc(doc) end
+      view, doc = restore_missing_view(place, doc)
+    elseif sidepanel.is_side_view(view) then
+      -- Restoring a side target selects it, but presentation remains current:
+      -- an existing Side Editor Slot stays a slot, while tools that have no
+      -- slot presentation show the Side Panel.
+      sidepanel.make_view_visible(view)
     else
       local node = core.root_panel.root_node:get_node_for_view(view)
       if node then node:set_active_view(view) end

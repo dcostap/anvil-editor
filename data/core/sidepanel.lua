@@ -279,6 +279,22 @@ end
 function M.update_side_editor_slot()
   if M.attaching_side_node then return false end
   local side = M.ensure_side_node()
+
+  -- The Side Editor Slot is the hidden-side-panel presentation of M.file_view.
+  -- When the full Side Panel is visible, focus/navigation updates must not
+  -- replace its active view with the placeholder just because the slot itself
+  -- should be disabled.  Side Panel visibility is controlled by explicit
+  -- sidepanel commands and by restoring side-panel history targets, not by
+  -- ordinary main-editor focus changes.
+  if M.visible then
+    M.side_editor_slot_visible = false
+    if side and side.active_view then
+      side.active_view.visible = true
+      M.update_side_view_size(side.active_view)
+    end
+    return false
+  end
+
   local show = should_show_side_editor_slot()
   M.side_editor_slot_visible = show and true or false
   if show then
@@ -652,6 +668,22 @@ function M.show(name, opts)
   if M.file_view then M.file_view.visible = false end
   M.ensure_side_node()
   M.set_side_view(view, opts.focus == true)
+  return view
+end
+
+-- Make an existing side view drawable without changing presentation when the
+-- Side Editor Slot can already host it. Other side views require the full Side
+-- Panel because they have no slot presentation.
+function M.make_view_visible(view)
+  M.prune_stale_views()
+  if not (view and M.contains_view(view)) then return nil end
+
+  if view == M.file_view and not M.visible then
+    M.side_editor_slot_visible = true
+    M.set_side_view(view, false)
+  else
+    M.show(view, { focus = false })
+  end
   return view
 end
 
