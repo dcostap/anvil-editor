@@ -3,6 +3,7 @@ local common = require "core.common"
 local config = require "core.config"
 local DocView = require "core.docview"
 local images = require "core.markdown.images"
+local link_completion = require "core.markdown.completion"
 local keymap = require "core.keymap"
 local linewrapping = require "core.linewrapping"
 local markdown_links = require "core.markdown.links"
@@ -1198,6 +1199,7 @@ function live.attach(view)
   view.__markdown_live_attached = true
   bind_semantic_model(view)
   bind_link_index(view)
+  link_completion.ensure_provider()
   core.log_quiet("Markdown live editor attached to %s", view.doc and view.doc:get_name() or tostring(view))
   return true
 end

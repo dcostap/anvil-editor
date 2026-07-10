@@ -303,6 +303,9 @@ keymap.add_direct({
 -- Preserve an explicit USERDIR/project-module opt-in loaded before first-party defaults.
 if config.markdown_live_editor == nil then config.markdown_live_editor = false end
 if config.markdown_live_reveal_mode == nil then config.markdown_live_reveal_mode = "construct" end
+if config.markdown_live_link_path_policy == nil then
+  config.markdown_live_link_path_policy = "shortest_unique"
+end
 config.markdown_live_render_images = true
 config.markdown_live_download_remote_images = false
 require "core.markdown"

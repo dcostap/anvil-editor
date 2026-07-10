@@ -1,5 +1,6 @@
 local core = require "core"
 local common = require "core.common"
+local config = require "core.config"
 local DirWatch = require "core.dirwatch"
 local anchors = require "core.markdown.anchors"
 local links = require "core.markdown.links"
@@ -33,6 +34,7 @@ local ATTACHMENT_EXTENSIONS = {
 }
 
 local indexes_by_root = {}
+local link_path_policies = {}
 local doc_hooks_installed = false
 
 local function trim(text)
@@ -194,6 +196,8 @@ Index.__index = Index
 function Index:new(root)
   return setmetatable({
     root = common.normalize_path(root),
+    link_path_policy = link_path_policies[path_key(root)] or config.markdown_live_link_path_policy
+      or "shortest_unique",
     generation = 0,
     status = "cold",
     reason = "not indexed",
@@ -681,6 +685,109 @@ function Index:attachment_count()
   return count
 end
 
+local LINK_PATH_POLICIES = {
+  shortest_unique = true,
+  relative = true,
+  root = true,
+}
+
+function Index:set_link_path_policy(policy)
+  assert(LINK_PATH_POLICIES[policy], "invalid Markdown link path policy: " .. tostring(policy))
+  if self.link_path_policy == policy then return false end
+  self.link_path_policy = policy
+  link_path_policies[path_key(self.root)] = policy
+  self.generation = self.generation + 1
+  self:notify("link-path-policy", policy)
+  return true
+end
+
+local function canonical_note_target(index, entry, source_path)
+  local rel_no_ext = strip_markdown_extension(entry.rel_path)
+  if index.link_path_policy == "root" then return rel_no_ext end
+  if index.link_path_policy == "relative" and source_path then
+    local relative = strip_markdown_extension(display_path(
+      common.relative_path(common.dirname(source_path), entry.abs_path)
+    ))
+    if not relative:find("/", 1, true) then relative = "./" .. relative end
+    return relative
+  end
+  local base = display_basename(rel_no_ext)
+  for _, target in ipairs({ base, rel_no_ext, entry.rel_path }) do
+    local unique = unique_item(index.note_keys[target])
+    if unique == entry then return target end
+  end
+  return entry.rel_path
+end
+
+function Index:completion_candidates(mode, query, source_path, limit)
+  source_path = source_path and absolute_path(source_path) or nil
+  query = tostring(query or ""):lower()
+  limit = math.max(1, tonumber(limit) or 200)
+  local candidates, seen = {}, {}
+  local function add(text, target, kind, entry, line, info)
+    local key = kind .. "\0" .. target .. "\0" .. tostring(entry and entry.abs_path or "")
+    if seen[key] then return end
+    local haystack = (text .. " " .. target .. " " .. tostring(info or "")):lower()
+    if query ~= "" and not haystack:find(query, 1, true) then return end
+    seen[key] = true
+    candidates[#candidates + 1] = {
+      text = text,
+      target = target,
+      kind = kind,
+      path = entry and entry.abs_path,
+      rel_path = entry and entry.rel_path,
+      line = line,
+      info = info,
+    }
+  end
+
+  local source_entry = source_path and self.notes_by_abs[path_key(source_path)] or nil
+  if mode == "note" then
+    for _, entry in pairs(self.notes_by_abs) do
+      local target = canonical_note_target(self, entry, source_path)
+      add(entry.display_name, target, "note", entry, 1, entry.rel_path)
+      for _, alias in ipairs(entry.aliases or {}) do
+        add(alias, target .. "|" .. alias, "alias", entry, 1, entry.rel_path)
+      end
+    end
+    for _, entry in pairs(self.attachments_by_abs) do
+      add(entry.display_name, entry.rel_path, "attachment", entry, 1, entry.rel_path)
+    end
+  elseif mode == "current_heading" and source_entry then
+    for _, heading in ipairs(source_entry.headings or {}) do
+      add(heading.text, "#" .. heading.text, "heading", source_entry, heading.line, source_entry.rel_path)
+    end
+  elseif mode == "global_heading" then
+    for _, entry in pairs(self.notes_by_abs) do
+      local note_target = canonical_note_target(self, entry, source_path)
+      for _, heading in ipairs(entry.headings or {}) do
+        add(heading.text .. " — " .. entry.display_name, note_target .. "#" .. heading.text,
+          "heading", entry, heading.line, entry.rel_path)
+      end
+    end
+  elseif mode == "current_block" and source_entry then
+    for _, block in ipairs(source_entry.blocks or {}) do
+      add(block.id, "^" .. block.id, "block", source_entry, block.line, source_entry.rel_path)
+    end
+  elseif mode == "global_block" then
+    for _, entry in pairs(self.notes_by_abs) do
+      local note_target = canonical_note_target(self, entry, source_path)
+      for _, block in ipairs(entry.blocks or {}) do
+        add(block.id .. " — " .. entry.display_name, note_target .. "#^" .. block.id,
+          "block", entry, block.line, entry.rel_path)
+      end
+    end
+  end
+
+  table.sort(candidates, function(a, b)
+    local at, bt = a.text:lower(), b.text:lower()
+    if at ~= bt then return at < bt end
+    return (a.rel_path or "") < (b.rel_path or "")
+  end)
+  while #candidates > limit do candidates[#candidates] = nil end
+  return candidates
+end
+
 function Index:update_path(path, opts)
   opts = opts or {}
   path = absolute_path(path)
@@ -867,6 +974,10 @@ function Index:resolve(link_or_target, source_path)
     end
   end
 
+  local root_abs = absolute_path(join_path(self.root, target))
+  local root_entry = root_abs and note_entry_for_explicit_path(self, root_abs)
+  if root_entry then return self:resolve_entry_result(root_entry, link, target) end
+
   local target_ext = extension(target)
   local entry, candidates
   if target_ext and not MARKDOWN_EXTENSIONS[target_ext] then
@@ -902,6 +1013,16 @@ end
 
 function vault_index.rebuild_for_path(path, reason)
   return vault_index.index_for_path(path):rebuild(reason)
+end
+
+function vault_index.set_link_path_policy(root, policy)
+  local normalized = common.normalize_path(root)
+  assert(normalized, "Markdown link policy root is required")
+  assert(LINK_PATH_POLICIES[policy], "invalid Markdown link path policy: " .. tostring(policy))
+  link_path_policies[path_key(normalized)] = policy
+  local index = indexes_by_root[path_key(normalized)]
+  if index then return index:set_link_path_policy(policy) end
+  return true
 end
 
 function vault_index.resolve(link_or_target, source_path)

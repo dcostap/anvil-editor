@@ -5,6 +5,7 @@ local file_context = require "core.file_context"
 local config = require "core.config"
 local DocView = require "core.docview"
 local MarkdownView = require "core.markdownview"
+local markdown_completion = require "core.markdown.completion"
 local markdown_live = require "core.markdown.live_render"
 
 command.add(function()
@@ -28,6 +29,9 @@ end, {
   end,
   ["markdown-live-preview:create-link-target"] = function(view)
     markdown_live.create_link_target(view)
+  end,
+  ["markdown-live-preview:complete-link"] = function(view)
+    markdown_completion.open(view)
   end,
 })
 

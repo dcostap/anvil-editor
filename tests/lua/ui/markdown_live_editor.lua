@@ -707,6 +707,64 @@ test.describe("Markdown Live Editor", function()
     if not ok then error(err, 0) end
   end)
 
+  test.it("completes note, current/global heading, and current/global block Wikilink states", function()
+    local root = USERDIR .. PATHSEP .. "markdown-live-link-completion-" .. system.get_process_id()
+    test.ok(common.mkdirp(root))
+    local note_path = root .. PATHSEP .. "Note.md"
+    local source_path = root .. PATHSEP .. "Source.md"
+    local fp = test.not_nil(io.open(note_path, "wb"))
+    fp:write("# Global Heading\n\ntext ^global-block\n")
+    fp:close()
+    local old_projects = core.projects
+    core.projects = { Project(root) }
+    markdown.vault_index.get_index(root):rebuild("ui-completion")
+    local autocomplete = require "plugins.autocomplete"
+    local old_complete, old_active = autocomplete.complete, core.active_view
+    local offered
+    autocomplete.complete = function(symbols) offered = symbols end
+    local ok, err = pcall(function()
+      local function offer(text, line)
+        local view, doc = make_view(text, source_path)
+        local content = (doc.lines[line] or ""):gsub("\n$", "")
+        doc:set_selection(line, #content + 1)
+        refresh(view)
+        core.active_view = view
+        offered = nil
+        test.equal(command.perform("markdown-live-preview:complete-link"), true)
+        return view, doc, test.not_nil(offered)
+      end
+      local function item_for(symbols, target)
+        for _, item in pairs(symbols.items) do
+          if item.data and item.data.target == target then return item end
+        end
+      end
+
+      local note_view, note_doc, symbols = offer("[[No", 1)
+      local provider = test.not_nil(autocomplete.providers["markdown-live-links"])
+      local automatic_symbols, automatic_opts = provider(note_view, { text = "o" })
+      test.not_nil(item_for(test.not_nil(automatic_symbols), "Note"))
+      test.equal(automatic_opts.force_open, true)
+      local note = test.not_nil(item_for(symbols, "Note"))
+      test.equal(note.onselect(1, { data = note.data }), true)
+      test.equal(note_doc.lines[1], "[[Note]]\n")
+
+      local ignored_view, ignored_doc
+      ignored_view, ignored_doc, symbols = offer("# Local Heading\n[[#Lo", 2)
+      test.not_nil(item_for(symbols, "#Local Heading"))
+      ignored_view, ignored_doc, symbols = offer("[[##Gl", 1)
+      test.not_nil(item_for(symbols, "Note#Global Heading"))
+      ignored_view, ignored_doc, symbols = offer("text ^local-block\n[[^loc", 2)
+      test.not_nil(item_for(symbols, "^local-block"))
+      ignored_view, ignored_doc, symbols = offer("[[^^glob", 1)
+      test.not_nil(item_for(symbols, "Note#^global-block"))
+    end)
+    autocomplete.complete = old_complete
+    core.active_view = old_active
+    core.projects = old_projects
+    common.rm(root, true)
+    if not ok then error(err, 0) end
+  end)
+
   test.it("offers explicit create and ambiguity-picker link actions", function()
     local root = USERDIR .. PATHSEP .. "markdown-live-link-actions-" .. system.get_process_id()
     test.ok(common.mkdirp(root .. PATHSEP .. "a"))

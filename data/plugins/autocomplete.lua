@@ -179,6 +179,9 @@ autocomplete.map_manually = {}
 autocomplete.on_close = nil
 ---@type table<string,plugins.autocomplete.icon>
 autocomplete.icons = {}
+---@type table<string,fun(view:core.docview,opts:table):plugins.autocomplete.symbols?,table? >
+autocomplete.providers = {}
+local provider_maps = {}
 
 -- Flag that indicates if the autocomplete box was manually triggered
 -- with the autocomplete.complete() function to prevent the suggestions
@@ -191,6 +194,18 @@ local mt = { __tostring = function(t) return t.text end }
 ---Register a symbols table used for autocompletion.
 ---@param t plugins.autocomplete.symbols
 ---@param manually_triggered? boolean
+function autocomplete.add_provider(id, fn)
+  assert(type(id) == "string" and id ~= "", "autocomplete provider id is required")
+  assert(type(fn) == "function", "autocomplete provider must be a function")
+  autocomplete.providers[id] = fn
+end
+
+function autocomplete.remove_provider(id)
+  if not autocomplete.providers[id] then return false end
+  autocomplete.providers[id] = nil
+  return true
+end
+
 function autocomplete.add(t, manually_triggered)
   local items = {}
   for text, info in pairs(t.items) do
@@ -1476,10 +1491,28 @@ local function draw_suggestions_box(av)
   draw_box_border(rx, ry, rw, rh)
 end
 
+local function refresh_providers(view, opts)
+  for name in pairs(provider_maps) do autocomplete.map[name] = nil end
+  provider_maps = {}
+  local force_open = false
+  for id, provider in pairs(autocomplete.providers) do
+    local ok, symbols, provider_opts = pcall(provider, view, opts)
+    if not ok then
+      quiet_log("Autocomplete provider %s failed: %s", id, tostring(symbols))
+    elseif symbols then
+      autocomplete.add(symbols, false)
+      provider_maps[symbols.name] = true
+      force_open = force_open or (provider_opts and provider_opts.force_open) or false
+    end
+  end
+  return force_open
+end
+
 local function show_autocomplete(opts)
   opts = opts or {}
   local av = get_active_view()
   if av then
+    local provider_force_open = refresh_providers(av, opts)
     -- update partial symbol and suggestions
     partial = autocomplete.get_partial_symbol()
 
@@ -1491,6 +1524,7 @@ local function show_autocomplete(opts)
       trigger_character = opts.text:sub(-1)
     end
     local should_open = triggered_manually
+      or provider_force_open
       or #partial >= config.plugins.autocomplete.min_len
       or trigger_character ~= nil
 

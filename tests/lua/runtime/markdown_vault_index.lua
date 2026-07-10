@@ -195,6 +195,45 @@ test.describe("Markdown vault index", function()
     common.rm(root, true)
   end)
 
+  test.it("provides deterministic note, alias, heading, block, and attachment completion states", function()
+    local root = temp_root("markdown-vault-completion")
+    mkdirp(join_path(root, "folder"))
+    write_file(join_path(root, "Source.md"), "# Local Heading\n\ntext ^local-block\n")
+    write_file(join_path(root, "Note.md"), "---\naliases: [Alias Name]\n---\n# Global Heading\n\ntext ^global-block\n")
+    write_file(join_path(root, "folder", "Note.md"), "# Other\n")
+    write_file(join_path(root, "image.png"), "png")
+    local index = vault_index.get_index(root):rebuild("completion-test")
+    local source = join_path(root, "Source.md")
+    local function find(items, kind, target)
+      for _, item in ipairs(items) do
+        if item.kind == kind and item.target == target then return item end
+      end
+    end
+
+    test.not_nil(find(index:completion_candidates("note", "alias", source), "alias", "Note.md|Alias Name"))
+    test.not_nil(find(index:completion_candidates("note", "image", source), "attachment", "image.png"))
+    test.not_nil(find(index:completion_candidates("current_heading", "local", source), "heading", "#Local Heading"))
+    test.not_nil(find(index:completion_candidates("global_heading", "global", source), "heading", "Note.md#Global Heading"))
+    test.not_nil(find(index:completion_candidates("current_block", "local", source), "block", "^local-block"))
+    test.not_nil(find(index:completion_candidates("global_block", "global", source), "block", "Note.md#^global-block"))
+    local notes = index:completion_candidates("note", "note", source)
+    test.not_nil(find(notes, "note", "Note.md"))
+    test.not_nil(find(notes, "note", "folder/Note"))
+
+    test.equal(index:set_link_path_policy("root"), true)
+    notes = index:completion_candidates("note", "note", source)
+    test.not_nil(find(notes, "note", "Note"))
+    test.not_nil(find(notes, "note", "folder/Note"))
+    test.equal(index:resolve(wiki("[[Note]]"), source).path, normalized(join_path(root, "Note.md")))
+
+    test.equal(index:set_link_path_policy("relative"), true)
+    notes = index:completion_candidates("note", "note", join_path(root, "folder", "Source.md"))
+    test.not_nil(find(notes, "note", "../Note"))
+    test.not_nil(find(notes, "note", "./Note"))
+    test.equal(index:set_link_path_policy("shortest_unique"), true)
+    common.rm(root, true)
+  end)
+
   test.it("resolves explicit project-relative and source-relative paths", function()
     local root = temp_root("markdown-vault-paths")
     mkdirp(join_path(root, "folder"))
