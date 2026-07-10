@@ -5,6 +5,7 @@ local Doc = require "core.doc"
 local DocView = require "core.docview"
 local markdown = require "core.markdown"
 local markdown_model = require "core.markdown.model"
+local markdown_parser = require "core.markdown.parser"
 local linewrapping = require "core.linewrapping"
 local style = require "core.style"
 local worker_pool = require "core.worker_pool"
@@ -15,7 +16,8 @@ local function wait_status(instance, wanted, timeout)
   repeat
     local pool = worker_pool.current_system()
     if pool then pool:drain({ max_ms = 5, max_messages = 64 }) end
-    if instance.status == wanted then return true end
+    if instance.status == wanted then core.redraw = true return true end
+    core.redraw = false
     coroutine.yield(0.01)
   until system.get_time() >= deadline
   return instance.status == wanted
@@ -32,6 +34,21 @@ local function make_view(text, filename)
   return view, doc
 end
 
+local function refresh(view)
+  local result = markdown.live_render.refresh_view(view)
+  local instance = markdown_model.peek(view.doc)
+  if instance then
+    local deadline = system.get_time() + 5
+    while instance.status ~= "ready" and system.get_time() < deadline do
+      local pool = worker_pool.current_system()
+      if pool then pool:drain({ max_ms = 5, max_messages = 64 }) end
+      if instance.status ~= "ready" then system.sleep(0.001) end
+    end
+    test.equal(instance.status, "ready", instance.reason)
+  end
+  return result
+end
+
 test.describe("Markdown Live Editor", function()
   test.before_each(function(context)
     context.old_markdown_live_editor = config.markdown_live_editor
@@ -45,16 +62,28 @@ test.describe("Markdown Live Editor", function()
   test.it("attaches only to Markdown DocViews", function()
     local md = make_view("# Title", "note.md")
     local txt = make_view("# Title", "note.txt")
-    test.equal(markdown.live_render.refresh_view(md), true)
+    test.equal(refresh(md), true)
     test.equal(md.__markdown_live_attached, true)
-    markdown.live_render.refresh_view(txt)
+    refresh(txt)
     test.equal(txt.__markdown_live_attached, nil)
+  end)
+
+  test.it("falls back to raw source while the first semantic snapshot is pending", function()
+    local view = make_view("# Title\n**bold**", "note.md")
+    markdown.live_render.refresh_view(view)
+    local instance = test.not_nil(markdown_model.peek(view.doc))
+    test.equal(instance.status, "pending")
+    test.equal(view:get_line_render(1), nil)
+    test.equal(view:get_line_render(2), nil)
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    test.not_nil(view:get_line_render(1))
+    test.not_nil(view:get_line_render(2))
   end)
 
   test.it("renders inactive headings with larger row metrics and hidden markers", function()
     local view, doc = make_view("# Title\nbody", "note.md")
     doc:set_selection(2, 1)
-    markdown.live_render.refresh_view(view)
+    refresh(view)
 
     local base_lh = view:get_line_height()
     test.ok(view:get_visual_row_height(1) > base_lh)
@@ -66,7 +95,7 @@ test.describe("Markdown Live Editor", function()
   test.it("adopts published heading and inline semantic identities", function()
     local view, doc = make_view("# **Title**\nText with ***bold***.\nplain", "note.md")
     doc:set_selection(3, 1)
-    markdown.live_render.refresh_view(view)
+    refresh(view)
     local instance = test.not_nil(markdown_model.peek(doc))
     test.ok(wait_status(instance, "ready"), instance.reason)
 
@@ -99,20 +128,19 @@ test.describe("Markdown Live Editor", function()
   test.it("re-adopts suffix semantics after structural edits rendered while pending", function()
     local view, doc = make_view("# A\nbody\n# B\nplain", "note.md")
     doc:set_selection(4, 1)
-    markdown.live_render.refresh_view(view)
+    refresh(view)
     local instance = test.not_nil(markdown_model.peek(doc))
     test.ok(wait_status(instance, "ready"), instance.reason)
     test.not_nil(view:get_line_render(3).semantic_id)
 
     local previous_generation = instance.generation
     doc:insert(1, 1, "inserted\n")
-    local pending = test.not_nil(view:get_line_render(4))
-    test.equal(pending.semantic_id, nil)
+    test.equal(view:get_line_render(4), nil)
     local split = DocView(doc)
     split.size.x, split.size.y = 500, 200
     split:set_wrapping_enabled(false)
     markdown.live_render.refresh_view(split)
-    test.equal(split:get_line_render(4).semantic_id, nil)
+    test.equal(split:get_line_render(4), nil)
     test.ok(wait_status(instance, "ready"), instance.reason)
     test.ok(instance.generation > previous_generation)
     local published = test.not_nil(view:get_line_render(4))
@@ -130,7 +158,7 @@ test.describe("Markdown Live Editor", function()
     view.size.x = 500
     view:set_wrapping_enabled(true)
     doc:set_selection(4, 1)
-    markdown.live_render.refresh_view(view)
+    refresh(view)
     test.equal(view:get_line_render(2), nil)
     local function break_signature()
       local first, _, count = linewrapping.get_line_idx_col_count(view, 2)
@@ -143,6 +171,8 @@ test.describe("Markdown Live Editor", function()
     end
     local raw_breaks = break_signature()
     doc:remove(1, 1, 1, 4)
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_status(instance, "ready"), instance.reason)
     local heading = test.not_nil(view:get_line_render(2))
     test.equal(heading.raw_passthrough, nil)
     test.ok(#(heading.fragments or {}) > 0)
@@ -153,9 +183,102 @@ test.describe("Markdown Live Editor", function()
     test.equal(break_signature(), raw_breaks)
   end)
 
+  test.it("renders core emphasis families directly from semantic nodes", function()
+    local view, doc = make_view("**bold** *italic* ***both*** ~~strike~~\nplain", "note.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+    local old_parse_inline = markdown_parser.parse_inline
+    markdown_parser.parse_inline = function() error("ad hoc inline parser must not run") end
+    view:invalidate_line_render("markdown-live", 1, 1)
+    local render_line = view:get_line_render(1)
+    markdown_parser.parse_inline = old_parse_inline
+    render_line = test.not_nil(render_line)
+    local identities = {}
+    for _, fragment in ipairs(render_line.fragments or {}) do
+      if fragment.semantic_id then identities[fragment.semantic_id] = true end
+    end
+    local count = 0
+    for _ in pairs(identities) do count = count + 1 end
+    test.equal(count, 4)
+  end)
+
+  test.it("composes nested semantic formatting instead of suppressing inner styles", function()
+    local source = "==mark **bold** and *italic*== plus **outer *inner***\nplain"
+    local view, doc = make_view(source, "note.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+    local seen = {}
+    for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
+      if fragment.text and fragment.text ~= "" then seen[fragment.text] = fragment end
+    end
+    test.equal(seen.bold.background, style.markdown_live_highlight_bg)
+    test.equal(seen.bold.overdraw, true)
+    test.equal(seen.italic.background, style.markdown_live_highlight_bg)
+    test.equal(seen.inner.overdraw, true)
+    test.ok(seen.inner.font ~= view:get_font())
+  end)
+
+  test.it("preserves enclosing formatting across escapes and comments", function()
+    local source = "**bold \\* literal** and **before %%hide%% after**\nplain"
+    local view, doc = make_view(source, "note.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+    local seen = {}
+    for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
+      if fragment.text and fragment.text ~= "" then seen[fragment.text] = fragment end
+    end
+    test.equal(seen["*"].overdraw, true)
+    local before, after
+    for text, fragment in pairs(seen) do
+      if text:find("before", 1, true) then before = fragment end
+      if text:find("after", 1, true) then after = fragment end
+    end
+    test.equal(test.not_nil(before).overdraw, true)
+    test.equal(test.not_nil(after).overdraw, true)
+    test.equal(seen.hide, nil)
+  end)
+
+  test.it("refreshes every cached line of a multiline comment when delimiters change", function()
+    local view, doc = make_view("%%hide\nstill hidden%%\nplain", "note.md")
+    doc:set_selection(3, 1)
+    refresh(view)
+    test.equal(view:get_col_x_offset(2, #"still hidden%%" + 1), 0)
+    doc:remove(1, 1, 1, 2)
+    test.equal(view:get_line_render(2), nil)
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    test.equal(
+      view:get_col_x_offset(2, #"still hidden%%" + 1),
+      view:get_font():get_width("still hidden%%")
+    )
+  end)
+
+  test.it("refreshes multiline comments when ordinary edits form delimiters", function()
+    local view, doc = make_view("before %x%\nsecret\n%%\nplain", "note.md")
+    doc:set_selection(4, 1)
+    refresh(view)
+    test.equal(view:get_col_x_offset(2, #"secret" + 1), view:get_font():get_width("secret"))
+    doc:remove(1, 9, 1, 10)
+    test.equal(view:get_line_render(2), nil)
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    test.equal(view:get_col_x_offset(2, #"secret" + 1), 0)
+  end)
+
+  test.it("applies semantic comments and escapes inside headings", function()
+    local view, doc = make_view("# visible %%hidden%% \\*literal*\nplain", "note.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+    local visible = {}
+    for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
+      if not fragment.hidden then visible[#visible + 1] = fragment.text or "" end
+    end
+    test.equal(table.concat(visible), "visible  *literal*")
+  end)
+
   test.it("expands active headings to editable rendered Markdown syntax", function()
     local view, doc = make_view("## Title ##", "note.md")
-    markdown.live_render.refresh_view(view)
+    refresh(view)
     doc:set_selection(1, 5)
     test.ok(view:get_visual_row_height(1) > view:get_line_height())
     test.ok(view:get_col_x_offset(1, 2) > 0)
@@ -166,7 +289,7 @@ test.describe("Markdown Live Editor", function()
   test.it("keeps drag-selection heading layout stable until release", function()
     local view, doc = make_view("## Title ##\nbody", "note.md")
     doc:set_selection(2, 1)
-    markdown.live_render.refresh_view(view)
+    refresh(view)
     test.equal(view:get_x_offset_col(1, 1), 4)
     view:begin_line_render_interaction("test")
     doc:set_selection(1, 4)
@@ -178,7 +301,7 @@ test.describe("Markdown Live Editor", function()
 
   test.it("reveals every multi-cursor line without expanding lines between them", function()
     local view, doc = make_view("## One\n## Two\n## Three", "note.md")
-    markdown.live_render.refresh_view(view)
+    refresh(view)
     doc:set_selections(1, 1, 4, 1, 4)
     doc:set_selections(2, 3, 4, 3, 4, nil, 0)
 
@@ -189,7 +312,7 @@ test.describe("Markdown Live Editor", function()
 
   test.it("freezes rendered layout for the lifetime of IME composition", function()
     local view, doc = make_view("## Title\nbody", "note.md")
-    markdown.live_render.refresh_view(view)
+    refresh(view)
     doc:set_selection(1, 4)
     view:on_ime_text_editing("x", 0, 0)
     test.not_nil(view.__line_render_interaction_state)
@@ -201,7 +324,7 @@ test.describe("Markdown Live Editor", function()
   test.it("does not live-render Markdown syntax inside code blocks", function()
     local view, doc = make_view("```\n# Not Heading\n**not bold**\n``` not closing\n# Still Not Heading\n```\n# Heading\n", "note.md")
     doc:set_selection(7, 1)
-    markdown.live_render.refresh_view(view)
+    refresh(view)
     test.equal(view:get_visual_row_height(2), view:get_line_height())
     test.equal(view:get_col_x_offset(2, 3), view:get_font():get_width("# "))
     test.equal(view:get_col_x_offset(3, #"**not bold**" + 1), view:get_font():get_width("**not bold**"))
@@ -212,7 +335,7 @@ test.describe("Markdown Live Editor", function()
   test.it("renders emphasis inside heading content", function()
     local view, doc = make_view("## A **bold** and *italic* Heading\nbody", "note.md")
     doc:set_selection(2, 1)
-    markdown.live_render.refresh_view(view)
+    refresh(view)
     local render_line = view:get_line_render(1)
     test.not_nil(render_line)
     local seen = {}
@@ -231,7 +354,7 @@ test.describe("Markdown Live Editor", function()
 
   test.it("reveals raw inline Markdown on the active line", function()
     local view, doc = make_view("See [[Note|Alias]]", "note.md")
-    markdown.live_render.refresh_view(view)
+    refresh(view)
     doc:set_selection(1, 1)
     local raw_width = view:get_font():get_width("See [[Note|Alias]]")
     test.equal(view:get_col_x_offset(1, #"See [[Note|Alias]]" + 1), raw_width)
@@ -240,7 +363,7 @@ test.describe("Markdown Live Editor", function()
   test.it("renders emphasis text with styled fonts and normal text color", function()
     local view, doc = make_view("This is **bold**, *italic*, and ***both*** plus pre**mid**post and x__under__y\nnext", "note.md")
     doc:set_selection(2, 1)
-    markdown.live_render.refresh_view(view)
+    refresh(view)
     local render_line = view:get_line_render(1)
     test.not_nil(render_line)
     local seen = {}
@@ -251,12 +374,11 @@ test.describe("Markdown Live Editor", function()
     test.not_nil(seen.italic)
     test.not_nil(seen.both)
     test.not_nil(seen.mid)
-    test.not_nil(seen.under)
+    test.equal(seen.under, nil)
     test.equal(seen.bold.color, style.text)
     test.equal(seen.italic.color, style.text)
     test.equal(seen.both.color, style.text)
     test.equal(seen.mid.color, style.text)
-    test.equal(seen.under.color, style.text)
     test.equal(seen.bold.overdraw, true)
     test.equal(seen.italic.overdraw, nil)
     test.equal(seen.both.overdraw, true)
@@ -264,14 +386,13 @@ test.describe("Markdown Live Editor", function()
     test.ok(seen.italic.font ~= view:get_font())
     test.ok(seen.both.font ~= view:get_font())
     test.ok(seen.mid.font ~= view:get_font())
-    test.ok(seen.under.font ~= view:get_font())
     test.equal(view:get_x_offset_col(1, view:get_col_x_offset(1, #"This is **" + 1) + 1), #"This is **" + 1)
   end)
 
   test.it("expands active-line emphasis syntax before caret movement crosses spans", function()
     local view, doc = make_view("This is **bold** and **more**\nnext", "note.md")
     doc:set_selection(1, 11)
-    markdown.live_render.refresh_view(view)
+    refresh(view)
     local render_line = view:get_line_render(1)
     test.not_nil(render_line)
     local texts = {}
@@ -281,19 +402,74 @@ test.describe("Markdown Live Editor", function()
     test.same({ "This is ", "**", "bold", "**", " and ", "**", "more", "**" }, texts)
   end)
 
-  test.it("leaves inline code spans raw and does not render escaped syntax", function()
-    local view, doc = make_view("`[[Note]]` and \\[[Escaped]]\nother", "note.md")
+  test.it("renders semantic code, highlight, strikethrough, and escapes", function()
+    local source = "`code` ==mark== ~~gone~~ and \\*literal*\nother"
+    local view, doc = make_view(source, "note.md")
     doc:set_selection(2, 1)
-    markdown.live_render.refresh_view(view)
-    local raw_width = view:get_font():get_width("`[[Note]]` and \\[[Escaped]]")
-    test.equal(view:get_col_x_offset(1, #"`[[Note]]` and \\[[Escaped]]" + 1), raw_width)
+    refresh(view)
+    local render_line = test.not_nil(view:get_line_render(1))
+    local seen = {}
+    for _, fragment in ipairs(render_line.fragments or {}) do
+      seen[fragment.text or ""] = fragment
+    end
+    test.equal(seen.code.background, style.markdown_live_inline_code_bg)
+    test.ok(seen.code.font ~= view:get_font())
+    test.equal(seen.mark.background, style.markdown_live_highlight_bg)
+    test.equal(seen.gone.strikethrough, true)
+    test.not_nil(seen["*"])
+    local rendered_width = view:get_font():get_width("code mark gone and *literal*")
+    test.equal(view:get_col_x_offset(1, #(source:match("[^\n]+")) + 1), rendered_width)
+  end)
+
+  test.it("keeps fenced and heading-looking lines hidden inside comments", function()
+    local source = "%%\n```\n# hidden heading\n```\n%%\nplain"
+    local view, doc = make_view(source, "note.md")
+    doc:set_selection(6, 1)
+    refresh(view)
+    test.equal(view:get_col_x_offset(2, #"```" + 1), 0)
+    test.equal(view:get_col_x_offset(3, #"# hidden heading" + 1), 0)
+    test.equal(view:get_visual_row_height(3), view:get_line_height())
+    test.equal(view:get_col_x_offset(4, #"```" + 1), 0)
+  end)
+
+  test.it("composes active comment markers with enclosing formatting", function()
+    local source = "**before %%hide%% after**\nplain"
+    local view, doc = make_view(source, "note.md")
+    doc:set_selection(1, 13)
+    refresh(view)
+    local marker, content
+    for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
+      if fragment.text and fragment.text:find("%", 1, true) then marker = fragment end
+      if fragment.text == "hide" then content = fragment end
+    end
+    test.equal(test.not_nil(marker).color, style.markdown_live_hidden_syntax)
+    test.equal(marker.overdraw, true)
+    test.equal(test.not_nil(content).overdraw, true)
+  end)
+
+  test.it("hides multiline comments until a touched line reveals source", function()
+    local source = "before %%hidden\nstill hidden%% after\nother"
+    local view, doc = make_view(source, "note.md")
+    doc:set_selection(3, 1)
+    refresh(view)
+    local function visible_text(line)
+      local out = {}
+      for _, fragment in ipairs(view:iter_line_render_fragments(view:get_line_render(line))) do
+        if not fragment.hidden then out[#out + 1] = fragment.text or "" end
+      end
+      return table.concat(out)
+    end
+    test.equal(visible_text(1), "before ")
+    test.equal(visible_text(2), " after")
+    doc:set_selection(1, 10)
+    test.equal(view:get_col_x_offset(1, #"before %%hidden" + 1), view:get_font():get_width("before %%hidden"))
   end)
 
   test.it("renders short Markdown lines even when line wrapping is enabled", function()
     local view, doc = make_view("# Title\nbody", "note.md")
     view:set_wrapping_enabled(true)
     doc:set_selection(2, 1)
-    markdown.live_render.refresh_view(view)
+    refresh(view)
     test.ok(view:get_visual_row_height(1) > view:get_line_height())
     test.equal(view:get_col_x_offset(1, 3), 0)
   end)
@@ -303,22 +479,43 @@ test.describe("Markdown Live Editor", function()
     view.size.x = 90
     view:set_wrapping_enabled(true)
     doc:set_selection(2, 1)
-    markdown.live_render.refresh_view(view)
+    refresh(view)
     test.equal(view:get_visual_row_height(1), view:get_line_height())
   end)
 
   test.it("hides closing ATX heading markers", function()
     local view, doc = make_view("# Title #\nbody", "note.md")
     doc:set_selection(2, 1)
-    markdown.live_render.refresh_view(view)
+    refresh(view)
     test.equal(view:get_col_x_offset(1, #"# Title #" + 1), view:get_col_x_offset(1, #"# Title" + 1))
     test.ok(view:get_col_x_offset(1, #"# Title #" + 1) < view:get_font():get_width("# Title #"))
+  end)
+
+  test.it("composes enclosing formatting with decoded links", function()
+    local view, doc = make_view("**[Label](target.md)**\nplain", "note.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+    local link
+    for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
+      if fragment.text == "Label" then link = fragment end
+    end
+    link = test.not_nil(link)
+    test.equal(link.color, style.markdown_live_link)
+    test.equal(link.overdraw, true)
+    test.equal(view:get_col_x_offset(1, #"**[Label](target.md)**" + 1), view:get_font():get_width("Label"))
+  end)
+
+  test.it("keeps heading metrics when only part of the line is commented", function()
+    local view, doc = make_view("# Heading %%hidden%%\nplain", "note.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+    test.ok(view:get_visual_row_height(1) > view:get_line_height())
   end)
 
   test.it("renders wikilink aliases when inactive and raw syntax when active", function()
     local view, doc = make_view("See [[Note|Alias]]\nother", "note.md")
     doc:set_selection(1, 1)
-    markdown.live_render.refresh_view(view)
+    refresh(view)
     doc:set_selection(2, 1)
 
     local alias_width = view:get_font():get_width("See Alias")
@@ -357,7 +554,8 @@ test.describe("Markdown Live Editor", function()
       return x + font:get_width(text, opts)
     end
 
-    markdown.live_render.refresh_view(view)
+    refresh(view)
+    drawn, drawn_text = 0, {}
     local inactive_height = view:get_visual_row_height(1)
     test.ok(inactive_height > 32)
     doc:set_selection(1, 1)
@@ -388,7 +586,7 @@ test.describe("Markdown Live Editor", function()
         "![A](shared.png)\n![B](shared.png)\nother", "note.md"
       )
       doc:set_selection(3, 1)
-      markdown.live_render.refresh_view(view)
+      refresh(view)
       view:get_line_render(1)
       view:get_line_render(2)
       local before = view:get_render_cache_diagnostics().line_invalidations
@@ -418,7 +616,7 @@ test.describe("Markdown Live Editor", function()
       }
     end
 
-    markdown.live_render.refresh_view(view)
+    refresh(view)
     view.scroll.y = view:get_visual_row_height(1) + style.padding.y + 1
     local minline = view:get_visible_line_range()
     test.equal(minline, 1)
@@ -450,7 +648,8 @@ test.describe("Markdown Live Editor", function()
     renderer.draw_canvas = function() drawn = drawn + 1 end
     renderer.draw_rect = function() end
 
-    markdown.live_render.refresh_view(view)
+    refresh(view)
+    drawn = 0
     view.scroll.y = view:get_line_height() + style.padding.y + 1
     view.scroll.to.y = view.scroll.y
     local x, y = view:get_line_screen_position(1)
@@ -493,7 +692,7 @@ test.describe("Markdown Live Editor", function()
       }
     end
 
-    markdown.live_render.refresh_view(view)
+    refresh(view)
     test.ok(view:get_visual_row_height(1) > 40)
 
     canvas.load_image = old_load_image
@@ -551,7 +750,7 @@ test.describe("Markdown Live Editor", function()
       }
     end
 
-    markdown.live_render.refresh_view(view)
+    refresh(view)
     local x, y = view:get_line_screen_position(1)
     view:on_mouse_moved(x + 10, y + 10, 0, 0)
     local cursor = view.cursor
@@ -648,7 +847,7 @@ test.describe("Markdown Live Editor", function()
       return true
     end
 
-    markdown.live_render.refresh_view(view)
+    refresh(view)
     local x, y = view:get_line_screen_position(1)
     test.ok(view:on_mouse_pressed("left", x + 10, y + 10, 1))
     test.equal(opened_path, image_path)
@@ -691,7 +890,7 @@ test.describe("Markdown Live Editor", function()
       return old_get_visual_row_height(self, row)
     end
 
-    markdown.live_render.refresh_view(view)
+    refresh(view)
     view:draw_line_text(1, 0, 10)
     test.equal(drawn_y, 10)
 
@@ -721,7 +920,7 @@ test.describe("Markdown Live Editor", function()
       }
     end
 
-    markdown.live_render.refresh_view(view)
+    refresh(view)
     test.equal(view:get_visual_row_height(1), view:get_line_height())
 
     canvas.load_image = old_load_image
@@ -733,7 +932,7 @@ test.describe("Markdown Live Editor", function()
     config.markdown_live_render_images = false
     local view, doc = make_view("![Alt](image.png)\nother", "note.md")
     doc:set_selection(2, 1)
-    markdown.live_render.refresh_view(view)
+    refresh(view)
     local link_width = view:get_font():get_width("Alt")
     test.equal(view:get_col_x_offset(1, #"![Alt](image.png)" + 1), link_width)
     config.markdown_live_render_images = old
@@ -744,8 +943,8 @@ test.describe("Markdown Live Editor", function()
     local second = DocView(doc)
     second.position.x, second.position.y = 0, 0
     second.size.x, second.size.y = 500, 200
-    markdown.live_render.refresh_view(first)
-    markdown.live_render.refresh_view(second)
+    refresh(first)
+    refresh(second)
     test.equal(first.__markdown_live_attached, true)
     test.equal(second.__markdown_live_attached, true)
 
@@ -763,7 +962,7 @@ test.describe("Markdown Live Editor", function()
 
   test.it("releases owned lifecycle state when its Document closes", function()
     local view, doc = make_view("# Title", "note.md")
-    markdown.live_render.refresh_view(view)
+    refresh(view)
     test.not_nil(view.__markdown_live_owner)
     doc:on_close()
     test.equal(view.__markdown_live_owner, nil)
@@ -772,7 +971,7 @@ test.describe("Markdown Live Editor", function()
 
   test.it("automatically follows direct Document filename and syntax changes", function()
     local view, doc = make_view("# Title", "note.md")
-    markdown.live_render.refresh_view(view)
+    refresh(view)
     test.equal(view.__markdown_live_attached, true)
 
     doc:set_filename("note.txt", "note.txt")

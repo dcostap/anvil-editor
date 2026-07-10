@@ -4034,6 +4034,30 @@ local function cached_fast_ascii_monospace_width(self, line, text, font, indent_
   return width
 end
 
+local function draw_render_fragment_text(fragment, font, text, x, y, color, opts)
+  local width = font:get_width(text, opts)
+  if fragment.background then
+    renderer.draw_rect(x, y, width, math.max(1, font:get_height()), fragment.background)
+  end
+  local next_x = renderer.draw_text(font, text, x, y, color, opts)
+  if fragment.overdraw then
+    renderer.draw_text(
+      font, text, x + (fragment.overdraw_dx or math.max(1, SCALE)), y, color, opts
+    )
+  end
+  if fragment.strikethrough then
+    renderer.draw_rect(
+      x, y + math.floor(font:get_height() / 2), width, math.max(1, SCALE), color
+    )
+  end
+  if fragment.underline then
+    renderer.draw_rect(
+      x, y + font:get_height() - math.max(1, SCALE), width, math.max(1, SCALE), color
+    )
+  end
+  return next_x
+end
+
 ---Draw the text content of a line with syntax highlighting.
 ---@param line integer Line number
 ---@param x number Screen x coordinate
@@ -4077,14 +4101,9 @@ function DocView:draw_line_text(line, x, y)
             local segment = text_to >= text_from and text:sub(text_from, text_to) or ""
             if segment ~= "" then
               local color = render_fragment_color(fragment)
-              local old_tx = tx
-              tx = renderer.draw_text(font, segment, tx, ty, color, { tab_offset = tx - x })
-              if fragment.overdraw then
-                renderer.draw_text(
-                  font, segment, old_tx + (fragment.overdraw_dx or math.max(1, SCALE)),
-                  ty, color, { tab_offset = old_tx - x }
-                )
-              end
+              tx = draw_render_fragment_text(
+                fragment, font, segment, tx, ty, color, { tab_offset = tx - x }
+              )
             elseif fragment.width and from == col1 and to == col2 then
               tx = tx + fragment.width
             end
@@ -4111,11 +4130,9 @@ function DocView:draw_line_text(line, x, y)
           tx = tx + (fragment.width or fragment.widget.width or 0)
         elseif text ~= "" then
           local color = render_fragment_color(fragment)
-          local old_tx = tx
-          tx = renderer.draw_text(font, text, tx, ty, color, { tab_offset = tx - x })
-          if fragment.overdraw then
-            renderer.draw_text(font, text, old_tx + (fragment.overdraw_dx or math.max(1, SCALE)), ty, color, { tab_offset = old_tx - x })
-          end
+          tx = draw_render_fragment_text(
+            fragment, font, text, tx, ty, color, { tab_offset = tx - x }
+          )
         elseif fragment.width then
           tx = tx + fragment.width
         end

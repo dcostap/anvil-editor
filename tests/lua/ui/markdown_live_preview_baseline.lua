@@ -5,10 +5,12 @@ local core = require "core"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
 local markdown = require "core.markdown"
+local markdown_model = require "core.markdown.model"
 local linewrapping = require "core.linewrapping"
 local Project = require "core.project"
 local style = require "core.style"
 local test = require "core.test"
+local worker_pool = require "core.worker_pool"
 
 local function make_view(text, filename)
   filename = filename or "note.md"
@@ -20,6 +22,22 @@ local function make_view(text, filename)
   view.size.x, view.size.y = 500, 200
   view:set_wrapping_enabled(false)
   return view, doc
+end
+
+local function refresh(view)
+  local result = markdown.live_render.refresh_view(view)
+  local instance = markdown_model.peek(view.doc)
+  if instance then
+    local deadline = system.get_time() + 5
+    repeat
+      local pool = worker_pool.current_system()
+      if pool then pool:drain({ max_ms = 5, max_messages = 64 }) end
+      if instance.status == "ready" then return result end
+      system.sleep(0.001)
+    until system.get_time() >= deadline
+    test.equal(instance.status, "ready", instance.reason)
+  end
+  return result
 end
 
 local function write_file(path, content)
@@ -44,7 +62,7 @@ test.describe("Markdown Live Preview prototype baseline", function()
     with_live_preview(function()
       local view, doc = make_view("# Title", "note.md")
       local markdown_syntax = doc.syntax
-      markdown.live_render.refresh_view(view)
+      refresh(view)
       test.equal(view.__markdown_live_attached, true)
 
       doc:set_filename("note.txt", "note.txt")
@@ -53,7 +71,7 @@ test.describe("Markdown Live Preview prototype baseline", function()
       test.equal(view.__markdown_live_attached, true)
 
       local syntax_view, syntax_doc = make_view("# Title", "note.txt")
-      markdown.live_render.refresh_view(syntax_view)
+      refresh(syntax_view)
       test.equal(syntax_view.__markdown_live_attached, nil)
       syntax_doc:set_syntax(markdown_syntax, "baseline-test")
       test.equal(syntax_view.__markdown_live_attached, true)
@@ -90,7 +108,7 @@ test.describe("Markdown Live Preview prototype baseline", function()
 
         local view, doc = make_view(source .. "\nother", source_path)
         doc:set_selection(2, 1)
-        markdown.live_render.refresh_view(view)
+        refresh(view)
         local render_line = view:get_line_render(1)
         local link_colors = {}
         for _, fragment in ipairs(view:iter_line_render_fragments(render_line)) do
@@ -115,7 +133,7 @@ test.describe("Markdown Live Preview prototype baseline", function()
       local lines = {}
       for i = 1, 80 do lines[i] = i == 1 and "# Heading" or ("line " .. i) end
       local view, doc = make_view(table.concat(lines, "\n"))
-      markdown.live_render.refresh_view(view)
+      refresh(view)
 
       local calls = 0
       view:add_visual_metric_provider("markdown-baseline-observer", {
@@ -139,7 +157,7 @@ test.describe("Markdown Live Preview prototype baseline", function()
     with_live_preview(function()
       local view, doc = make_view("See [[Target|Alias]] and **bold**\nother")
       doc:set_selection(2, 1)
-      markdown.live_render.refresh_view(view)
+      refresh(view)
 
       local provider = view.line_render_providers["markdown-live"].provider
       local old_render_line = provider.render_line
@@ -184,7 +202,7 @@ test.describe("Markdown Live Preview prototype baseline", function()
       end
 
       local passed, failure = pcall(function()
-        markdown.live_render.refresh_view(view)
+        refresh(view)
         view:get_line_render(1)
         write_file(image_path, "png")
         view:invalidate_line_render("baseline-file-appeared")
@@ -210,7 +228,7 @@ test.describe("Markdown Live Preview prototype baseline", function()
       config.markdown_live_download_remote_images = false
       local view, doc = make_view("![Remote](https://example.com/image.png)\nother")
       doc:set_selection(2, 1)
-      markdown.live_render.refresh_view(view)
+      refresh(view)
       view:get_line_render(1)
 
       local old_ensure_entry = markdown.images.ensure_entry
@@ -239,7 +257,7 @@ test.describe("Markdown Live Preview prototype baseline", function()
       local view, doc = make_view(source .. "\nother")
       view.size.x = 160
       doc:set_selection(2, 1)
-      markdown.live_render.refresh_view(view)
+      refresh(view)
       view:set_wrapping_enabled(true)
 
       local render_line = test.not_nil(view:get_line_render(1))

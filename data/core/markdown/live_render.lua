@@ -111,13 +111,18 @@ local function heading_for_line(line_text, line)
   }
 end
 
-local function semantic_line(view, line)
+local function current_semantic_model(view)
   local instance = markdown_model.peek(view.doc)
-  if not instance or instance.status ~= "ready"
-    or instance.published_revision ~= view.doc.text_revision
+  if instance and instance.status == "ready"
+    and instance.published_revision == view.doc.text_revision
   then
-    return nil
+    return instance
   end
+end
+
+local function semantic_line(view, line)
+  local instance = current_semantic_model(view)
+  if not instance then return nil end
   local cache = view.__markdown_live_semantic_line_cache
   if not cache or cache.generation ~= instance.generation then
     cache = { generation = instance.generation, lines = {} }
@@ -135,10 +140,29 @@ local function semantic_line(view, line)
   return nodes ~= false and nodes or nil, instance.generation
 end
 
+local function line_in_semantic_comment(view, line)
+  local nodes = semantic_line(view, line)
+  for _, node in ipairs(nodes or {}) do
+    if node.type == "comment" and line >= node.source.line1 and line <= node.source.line2 then
+      return true
+    end
+  end
+  return false
+end
+
 local function semantic_heading_for_line(view, line_text, line)
   local nodes, generation = semantic_line(view, line)
   for _, node in ipairs(nodes or {}) do
     if node.type == "heading" and node.source.line1 == line then
+      local suppressed = false
+      for _, comment in ipairs(nodes or {}) do
+        if comment.type == "comment" and line >= comment.source.line1 and line <= comment.source.line2 then
+          local col1 = line == comment.source.line1 and comment.source.col1 or 1
+          local col2 = line == comment.source.line2 and comment.source.col2 or #line_text + 1
+          if col1 <= node.source.col1 and col2 > node.source.col1 then suppressed = true break end
+        end
+      end
+      if suppressed then return nil end
       local heading = heading_for_line(line_text, line)
       if heading then
         heading.semantic_id = node.id
@@ -149,34 +173,52 @@ local function semantic_heading_for_line(view, line_text, line)
   end
 end
 
-local function semantic_inline_spans(view, line, spans)
+local FORMATTING_TYPES = {
+  strong = true,
+  emphasis = true,
+  strikethrough = true,
+  highlight = true,
+  code = true,
+}
+
+local function semantic_formatting_spans(view, line_text, line)
   local nodes, generation = semantic_line(view, line)
-  if not nodes then return spans end
-  for _, span in ipairs(spans) do
-    local best, best_score
-    for _, node in ipairs(nodes) do
-      local compatible = node.type == span.type
-        or span.type == "strong_emphasis" and (node.type == "strong" or node.type == "emphasis")
-      if compatible and node.source.line1 == line and node.source.line2 == line then
-        local exact = node.source.col1 == span.col1 and node.source.col2 == span.col2
-        local nested = span.type == "strong_emphasis"
-          and node.source.col1 >= span.col1 and node.source.col2 <= span.col2
-        if exact or nested then
-          local score = math.abs(node.source.col1 - span.col1) + math.abs(node.source.col2 - span.col2)
-          if not best_score or score < best_score then best, best_score = node, score end
+  if not nodes then return nil end
+  local spans = {}
+  for _, node in ipairs(nodes) do
+    if FORMATTING_TYPES[node.type] and node.source.line1 == line and node.source.line2 == line then
+      local markers = {}
+      for _, marker in ipairs(node.marker_ranges or {}) do markers[#markers + 1] = marker end
+      table.sort(markers, function(a, b) return a.col1 < b.col1 end)
+      local content_col1, content_col2 = node.source.col1, node.source.col2
+      local advanced = true
+      while advanced do
+        advanced = false
+        for _, marker in ipairs(markers) do
+          if marker.col1 == content_col1 then content_col1, advanced = marker.col2, true end
         end
       end
-    end
-    if best then
-      span.semantic_id = best.id
-      span.semantic_generation = generation
+      advanced = true
+      while advanced do
+        advanced = false
+        for _, marker in ipairs(markers) do
+          if marker.col2 == content_col2 then content_col2, advanced = marker.col1, true end
+        end
+      end
+      spans[#spans + 1] = {
+        type = node.type,
+        line = line,
+        col1 = node.source.col1,
+        col2 = node.source.col2,
+        markers = markers,
+        text = line_text:sub(content_col1, content_col2 - 1),
+        content_ranges = { { line = line, col1 = content_col1, col2 = content_col2 } },
+        semantic_id = node.id,
+        semantic_generation = generation,
+      }
     end
   end
   return spans
-end
-
-local function parsed_inline_spans(view, line_text, line)
-  return semantic_inline_spans(view, line, parser.parse_inline(line_text, line))
 end
 
 local function heading_font(view, level)
@@ -195,8 +237,8 @@ end
 local function inline_style_font(view, span_type, base_font)
   view.__markdown_live_inline_fonts = view.__markdown_live_inline_fonts or {}
   local cache = view.__markdown_live_inline_fonts
-  local font = base_font or view:get_font()
-  local size = font:get_size()
+  local font = span_type == "code" and style.code_font or base_font or view:get_font()
+  local size = base_font and base_font:get_size() or font:get_size()
   local key = tostring(font) .. ":" .. tostring(size) .. ":" .. tostring(span_type)
   if not cache[key] then
     local attrs = {}
@@ -212,8 +254,162 @@ local function normal_text_color()
   return style.text or style.syntax.normal
 end
 
-local function strong_overdraw(span_type)
-  return span_type == "strong" or span_type == "strong_emphasis" or nil
+local function semantic_formatting_fragments(view, line_text, line, active, opts)
+  opts = opts or {}
+  local spans = semantic_formatting_spans(view, line_text, line) or {}
+  local nodes = semantic_line(view, line) or {}
+  local specials = {}
+  for _, node in ipairs(nodes) do
+    if node.type == "escape" and node.source.line1 == line and node.source.line2 == line then
+      specials[#specials + 1] = {
+        type = "escape", id = node.id,
+        col1 = node.source.col1, col2 = node.source.col2,
+      }
+    elseif node.type == "comment" and line >= node.source.line1 and line <= node.source.line2 then
+      local markers = {}
+      for _, marker in ipairs(node.marker_ranges or {}) do
+        if marker.line1 == line then markers[#markers + 1] = marker end
+      end
+      local comment_col1 = line == node.source.line1 and node.source.col1 or 1
+      local comment_col2 = line == node.source.line2 and node.source.col2 or #line_text + 1
+      if line == node.source.line1 and line_text:sub(comment_col1, comment_col1 + 1) == "%%" then
+        markers[#markers + 1] = { col1 = comment_col1, col2 = comment_col1 + 2 }
+      end
+      if line == node.source.line2 and line_text:sub(comment_col2 - 2, comment_col2 - 1) == "%%" then
+        markers[#markers + 1] = { col1 = comment_col2 - 2, col2 = comment_col2 }
+      end
+      specials[#specials + 1] = {
+        type = "comment", id = node.id, markers = markers,
+        col1 = comment_col1, col2 = comment_col2,
+      }
+    end
+  end
+  if #spans == 0 and #specials == 0 then return {} end
+  local range_col1 = opts.col1 or 1
+  local range_col2 = opts.col2 or #line_text + 1
+  local boundaries = { [range_col1] = true, [range_col2] = true }
+  for _, special in ipairs(specials) do
+    boundaries[math.max(range_col1, special.col1)] = true
+    boundaries[math.min(range_col2, special.col2)] = true
+    for _, marker in ipairs(special.markers or {}) do
+      boundaries[math.max(range_col1, marker.col1)] = true
+      boundaries[math.min(range_col2, marker.col2)] = true
+    end
+    if special.type == "escape" then
+      boundaries[math.max(range_col1, math.min(special.col2, special.col1 + 1))] = true
+    end
+  end
+  for _, span in ipairs(spans) do
+    local content = span.content_ranges[1]
+    boundaries[math.max(range_col1, span.col1)] = true
+    boundaries[math.min(range_col2, span.col2)] = true
+    boundaries[math.max(range_col1, content.col1)] = true
+    boundaries[math.min(range_col2, content.col2)] = true
+    for _, marker in ipairs(span.markers or {}) do
+      boundaries[math.max(range_col1, marker.col1)] = true
+      boundaries[math.min(range_col2, marker.col2)] = true
+    end
+  end
+  local cols = {}
+  for col in pairs(boundaries) do
+    if col >= range_col1 and col <= range_col2 then cols[#cols + 1] = col end
+  end
+  table.sort(cols)
+  local fragments = {}
+  for i = 1, #cols - 1 do
+    local col1, col2 = cols[i], cols[i + 1]
+    if col1 < col2 then
+      local marker, active_spans = false, {}
+      local comment, comment_marker, escape_marker, escape_content
+      for _, special in ipairs(specials) do
+        if special.col1 <= col1 and special.col2 >= col2 then
+          if special.type == "comment" then
+            comment = special
+            for _, range in ipairs(special.markers or {}) do
+              if range.col1 <= col1 and range.col2 >= col2 then comment_marker = true break end
+            end
+          end
+          if special.type == "escape" then
+            if col2 <= special.col1 + 1 then escape_marker = special else escape_content = special end
+          end
+        end
+      end
+      for _, span in ipairs(spans) do
+        for _, range in ipairs(span.markers or {}) do
+          if range.col1 <= col1 and range.col2 >= col2 then marker = true break end
+        end
+        local content = span.content_ranges[1]
+        if content.col1 <= col1 and content.col2 >= col2 then active_spans[#active_spans + 1] = span end
+      end
+      local function composed_fragment(extra_id)
+        local bold, italic, strike, highlight, code = false, false, false, false, false
+        local ids = {}
+        for _, span in ipairs(active_spans) do
+          bold = bold or span.type == "strong"
+          italic = italic or span.type == "emphasis"
+          strike = strike or span.type == "strikethrough"
+          highlight = highlight or span.type == "highlight"
+          code = code or span.type == "code"
+          ids[#ids + 1] = span.semantic_id
+        end
+        if extra_id then ids[#ids + 1] = extra_id end
+        local font_type = bold and italic and "strong_emphasis"
+          or bold and "strong" or italic and "emphasis" or "normal"
+        return {
+          source_col1 = col1, source_col2 = col2,
+          text = line_text:sub(col1, col2 - 1),
+          font = code and inline_style_font(view, "code", opts.base_font)
+            or font_type ~= "normal" and inline_style_font(view, font_type, opts.base_font)
+            or opts.base_font,
+          color = opts.color or normal_text_color(),
+          overdraw = bold or nil,
+          strikethrough = strike or nil,
+          background = code and style.markdown_live_inline_code_bg
+            or highlight and style.markdown_live_highlight_bg or nil,
+          semantic_id = table.concat(ids, "+"),
+        }
+      end
+      if comment then
+        if active then
+          local fragment = composed_fragment(comment.id)
+          if comment_marker then fragment.color = style.markdown_live_hidden_syntax end
+          fragments[#fragments + 1] = fragment
+        else
+          fragments[#fragments + 1] = {
+            source_col1 = col1, source_col2 = col2,
+            hidden = true, semantic_id = comment.id,
+          }
+        end
+      elseif marker or escape_marker then
+        fragments[#fragments + 1] = {
+          source_col1 = col1, source_col2 = col2,
+          text = active and line_text:sub(col1, col2 - 1) or nil,
+          hidden = not active,
+          font = opts.base_font,
+          color = style.markdown_live_hidden_syntax,
+          semantic_id = escape_marker and escape_marker.id or nil,
+        }
+      elseif #active_spans > 0 or escape_content then
+        fragments[#fragments + 1] = composed_fragment(escape_content and escape_content.id)
+      end
+    end
+  end
+  local merged = {}
+  for _, fragment in ipairs(fragments) do
+    local previous = merged[#merged]
+    if previous and previous.source_col2 == fragment.source_col1
+      and previous.hidden == fragment.hidden and previous.font == fragment.font
+      and previous.color == fragment.color and previous.background == fragment.background
+      and previous.strikethrough == fragment.strikethrough
+      and previous.overdraw == fragment.overdraw and previous.semantic_id == fragment.semantic_id
+    then
+      previous.source_col2 = fragment.source_col2
+      previous.text = (previous.text or "") .. (fragment.text or "")
+    else
+      merged[#merged + 1] = fragment
+    end
+  end
+  return merged
 end
 
 local function is_image_target(path)
@@ -325,6 +521,7 @@ local function image_fragment(view, span, opts)
 end
 
 local function image_only_span(line_text, line)
+  if not line_text:find("![", 1, true) and not line_text:find("[[", 1, true) then return nil end
   local trimmed_start = line_text:find("%S")
   if not trimmed_start then return nil end
   local trimmed_end = line_text:match("^.*%S()")
@@ -365,110 +562,61 @@ local function image_only_render_line(view, text, line, span, active)
   }
 end
 
-local function emphasis_fragment(view, line_text, span, active, opts)
-  opts = opts or {}
-  local content = span.content_ranges and span.content_ranges[1]
-  if not content then
-    return {
-      source_col1 = span.col1,
-      source_col2 = span.col2,
-      text = span.text,
-      font = inline_style_font(view, span.type, opts.base_font),
-      color = opts.color or normal_text_color(),
-      overdraw = strong_overdraw(span.type),
-    }
-  end
-  if active then
-    return {
-      {
-        source_col1 = span.col1,
-        source_col2 = content.col1,
-        text = line_text:sub(span.col1, content.col1 - 1),
-        color = style.markdown_live_hidden_syntax,
-      },
-      {
-        source_col1 = content.col1,
-        source_col2 = content.col2,
-        text = span.text,
-        font = inline_style_font(view, span.type, opts.base_font),
-        color = opts.color or normal_text_color(),
-        overdraw = strong_overdraw(span.type),
-      },
-      {
-        source_col1 = content.col2,
-        source_col2 = span.col2,
-        text = line_text:sub(content.col2, span.col2 - 1),
-        color = style.markdown_live_hidden_syntax,
-      },
-    }
-  end
-  return {
-    {
-      source_col1 = span.col1,
-      source_col2 = content.col1,
-      hidden = true,
-    },
-    {
-      source_col1 = content.col1,
-      source_col2 = content.col2,
-      text = span.text,
-      font = inline_style_font(view, span.type, opts.base_font),
-      color = opts.color or normal_text_color(),
-      overdraw = strong_overdraw(span.type),
-    },
-    {
-      source_col1 = content.col2,
-      source_col2 = span.col2,
-      hidden = true,
-    },
-  }
-end
-
-local function decorate_fragment_semantic(fragment, span)
-  if not span.semantic_id then return fragment end
-  if fragment[1] then
-    for _, item in ipairs(fragment) do item.semantic_id = span.semantic_id end
-  else
-    fragment.semantic_id = span.semantic_id
-  end
-  return fragment
-end
-
-local function add_fragment_or_fragments(fragments, occupied, fragment)
-  if fragment[1] then
-    local ok = true
-    for _, item in ipairs(fragment) do
-      ok = add_fragment(fragments, occupied, item) and ok
+local function decorate_link_fragment(view, line, span, fragment)
+  local nodes = semantic_line(view, line)
+  for _, node in ipairs(nodes or {}) do
+    if node.type == "comment" and line >= node.source.line1 and line <= node.source.line2 then
+      local col1 = line == node.source.line1 and node.source.col1 or 1
+      local col2 = line == node.source.line2 and node.source.col2 or math.huge
+      if col1 < span.col2 and col2 > span.col1 then return nil end
     end
-    return ok
   end
-  return add_fragment(fragments, occupied, fragment)
+  local bold, italic, strike, highlight, code = false, false, false, false, false
+  local ids = {}
+  for _, formatting in ipairs(semantic_formatting_spans(view, "", line) or {}) do
+    local content = formatting.content_ranges[1]
+    if content.col1 <= span.col1 and content.col2 >= span.col2 then
+      bold = bold or formatting.type == "strong"
+      italic = italic or formatting.type == "emphasis"
+      strike = strike or formatting.type == "strikethrough"
+      highlight = highlight or formatting.type == "highlight"
+      code = code or formatting.type == "code"
+      ids[#ids + 1] = formatting.semantic_id
+    end
+  end
+  local font_type = bold and italic and "strong_emphasis"
+    or bold and "strong" or italic and "emphasis" or "normal"
+  fragment.font = code and inline_style_font(view, "code")
+    or font_type ~= "normal" and inline_style_font(view, font_type) or fragment.font
+  fragment.overdraw = bold or nil
+  fragment.strikethrough = strike or nil
+  fragment.background = code and style.markdown_live_inline_code_bg
+    or highlight and style.markdown_live_highlight_bg or nil
+  fragment.semantic_id = #ids > 0 and table.concat(ids, "+") or fragment.semantic_id
+  return fragment
 end
 
 local function inline_fragments(line_text, line, view, active)
   local fragments, occupied = {}, {}
-  for _, span in ipairs(parsed_inline_spans(view, line_text, line)) do
-    if span.link then
-      if not active then
-        local image = image_fragment(view, span)
-        if image then
-          add_fragment(fragments, occupied, image)
-        else
-          local link = span.link
-          add_fragment(fragments, occupied, {
-            source_col1 = span.col1,
-            source_col2 = span.col2,
-            text = link.display ~= "" and link.display or link.raw_target,
-            color = style.markdown_live_link,
-          })
-        end
+  local link_spans = line_text:find("[", 1, true) and parser.parse_inline(line_text, line) or {}
+  for _, span in ipairs(link_spans) do
+    if span.link and not active then
+      local fragment = image_fragment(view, span)
+      if not fragment then
+        local link = span.link
+        fragment = {
+          source_col1 = span.col1,
+          source_col2 = span.col2,
+          text = link.display ~= "" and link.display or link.raw_target,
+          color = style.markdown_live_link,
+        }
       end
-    elseif span.type == "strong" or span.type == "emphasis" or span.type == "strong_emphasis" or span.type == "strikethrough" then
-      add_fragment_or_fragments(
-        fragments, occupied,
-        decorate_fragment_semantic(emphasis_fragment(view, line_text, span, active), span)
-      )
+      fragment = decorate_link_fragment(view, line, span, fragment)
+      if fragment then add_fragment(fragments, occupied, fragment) end
     end
+  end
+  for _, fragment in ipairs(semantic_formatting_fragments(view, line_text, line, active)) do
+    add_fragment(fragments, occupied, fragment)
   end
   table.sort(fragments, function(a, b) return (a.source_col1 or 1) < (b.source_col1 or 1) end)
   return fragments
@@ -488,7 +636,7 @@ function provider:on_text_transaction(view, transaction, line1)
   end
   if not suffix_changed then
     for _, edit in ipairs(transaction and transaction.edits or {}) do
-      if (edit.text or ""):find("[`~]") or (edit.old_text or ""):find("[`~]") then
+      if (edit.text or ""):find("[`~%%]") or (edit.old_text or ""):find("[`~%%]") then
         suffix_changed = true
         break
       end
@@ -497,7 +645,8 @@ function provider:on_text_transaction(view, transaction, line1)
   if not suffix_changed then
     for _, range in ipairs(transaction and transaction.changed_ranges or {}) do
       for line = range.new_line1 or line1, range.new_line2 or range.new_line1 or line1 do
-        if (view.doc.lines[line] or ""):match("^%s*[`~]") then
+        local changed_line = view.doc.lines[line] or ""
+        if changed_line:match("^%s*[`~]") or changed_line:find("%", 1, true) then
           suffix_changed = true
           break
         end
@@ -514,42 +663,34 @@ function provider:on_text_transaction(view, transaction, line1)
 end
 
 local function heading_content_fragments(view, text, heading, font, active)
-  local fragments = {}
-  local cursor = heading.content_col1
-  for _, span in ipairs(parsed_inline_spans(view, text, heading.line)) do
-    local emphasis = span.type == "strong" or span.type == "emphasis" or span.type == "strong_emphasis" or span.type == "strikethrough"
-    if emphasis and span.col1 >= heading.content_col1 and span.col2 <= heading.content_col2 and span.col1 >= cursor then
-      if cursor < span.col1 then
-        fragments[#fragments + 1] = {
-          source_col1 = cursor,
-          source_col2 = span.col1,
-          text = text:sub(cursor, span.col1 - 1),
-          font = font,
-          color = style.text,
-        }
-      end
-      local item = decorate_fragment_semantic(
-        emphasis_fragment(view, text, span, active, { base_font = font, color = style.text }),
-        span
-      )
-      if item[1] then
-        for _, fragment in ipairs(item) do fragments[#fragments + 1] = fragment end
-      else
-        fragments[#fragments + 1] = item
-      end
-      cursor = span.col2
+  local fragments, occupied = {}, {}
+  for _, fragment in ipairs(semantic_formatting_fragments(view, text, heading.line, active, {
+    col1 = heading.content_col1,
+    col2 = heading.content_col2,
+    base_font = font,
+    color = style.text,
+  })) do
+    add_fragment(fragments, occupied, fragment)
+  end
+  table.sort(fragments, function(a, b) return a.source_col1 < b.source_col1 end)
+  local normalized, cursor = {}, heading.content_col1
+  for _, fragment in ipairs(fragments) do
+    if cursor < fragment.source_col1 then
+      normalized[#normalized + 1] = {
+        source_col1 = cursor, source_col2 = fragment.source_col1,
+        text = text:sub(cursor, fragment.source_col1 - 1), font = font, color = style.text,
+      }
     end
+    normalized[#normalized + 1] = fragment
+    cursor = math.max(cursor, fragment.source_col2)
   end
   if cursor < heading.content_col2 then
-    fragments[#fragments + 1] = {
-      source_col1 = cursor,
-      source_col2 = heading.content_col2,
-      text = text:sub(cursor, heading.content_col2 - 1),
-      font = font,
-      color = style.text,
+    normalized[#normalized + 1] = {
+      source_col1 = cursor, source_col2 = heading.content_col2,
+      text = text:sub(cursor, heading.content_col2 - 1), font = font, color = style.text,
     }
   end
-  return fragments
+  return normalized
 end
 
 local function active_heading_fragments(view, text, heading, font)
@@ -582,12 +723,15 @@ local function heading_render_line(view, text, heading, active)
 end
 
 function provider:line_height(view, line)
-  if line_is_wrapped(view, line) or line_in_raw_block(view, line) then return nil end
+  if not current_semantic_model(view) then return nil end
+  local in_comment = line_in_semantic_comment(view, line)
+  if line_is_wrapped(view, line) then return nil end
   local text = (view.doc.lines[line] or ""):gsub("\n$", "")
-  local heading = semantic_heading_for_line(view, text, line) or heading_for_line(text, line)
+  local heading = semantic_heading_for_line(view, text, line)
   if heading then
     return math.max(view:get_line_height(), math.floor(heading_font(view, heading.level):get_height() * config.line_height))
   end
+  if not in_comment and line_in_raw_block(view, line) then return nil end
   local active = view_active_line(view, line)
   local image_span = image_only_span(text, line)
   if image_span then
@@ -613,10 +757,12 @@ function provider:line_height(view, line)
 end
 
 function provider:render_line(view, line)
-  if line_in_raw_block(view, line) then return { raw_passthrough = true } end
+  if not current_semantic_model(view) then return { raw_passthrough = true } end
+  local in_comment = line_in_semantic_comment(view, line)
+  if not in_comment and line_in_raw_block(view, line) then return { raw_passthrough = true } end
 
   local text = (view.doc.lines[line] or ""):gsub("\n$", "")
-  local heading = semantic_heading_for_line(view, text, line) or heading_for_line(text, line)
+  local heading = semantic_heading_for_line(view, text, line)
   local active = view_active_line(view, line)
   if heading then return heading_render_line(view, text, heading, active) end
 

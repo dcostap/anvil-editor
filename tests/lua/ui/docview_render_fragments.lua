@@ -186,6 +186,37 @@ test.describe("DocView render fragments", function()
     test.equal(calls, 2)
   end)
 
+  test.it("draws generic fragment backgrounds and strikethrough decorations", function()
+    local view = make_view("styled")
+    local background = { 1, 2, 3, 4 }
+    view:add_line_render_provider("decorated", {
+      render_line = function()
+        return {
+          fragments = {
+            {
+              source_col1 = 1, source_col2 = 7, text = "styled",
+              background = background, strikethrough = true,
+            },
+          },
+        }
+      end,
+    })
+    local old_draw_rect = renderer.draw_rect
+    local old_draw_text = renderer.draw_text
+    local rectangles = {}
+    renderer.draw_rect = function(x, y, w, h, color)
+      rectangles[#rectangles + 1] = { x = x, y = y, w = w, h = h, color = color }
+    end
+    renderer.draw_text = function(font, text, x, _, _, opts)
+      return x + font:get_width(text, opts)
+    end
+    view:draw_line_text(1, 0, 0)
+    renderer.draw_text = old_draw_text
+    renderer.draw_rect = old_draw_rect
+    test.equal(#rectangles, 2)
+    test.equal(rectangles[1].color, background)
+  end)
+
   test.it("routes pointer cursor and clicks through rendered widgets", function()
     local view = make_view("widget")
     local clicked = false
