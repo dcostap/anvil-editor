@@ -485,7 +485,7 @@ function provider:line_height(view, line)
 end
 
 function provider:render_line(view, line)
-  if line_is_wrapped(view, line) or line_in_raw_block(view, line) then return { raw_passthrough = true } end
+  if line_in_raw_block(view, line) then return { raw_passthrough = true } end
 
   local text = (view.doc.lines[line] or ""):gsub("\n$", "")
   local heading = heading_for_line(text, line)
@@ -494,6 +494,7 @@ function provider:render_line(view, line)
 
   local image_span = image_only_span(text, line)
   if image_span then
+    if line_is_wrapped(view, line) then return { raw_passthrough = true } end
     local render_line = image_only_render_line(view, text, line, image_span, active)
     if render_line then return render_line end
   end

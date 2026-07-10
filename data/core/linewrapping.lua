@@ -340,10 +340,51 @@ local function clamp_continuation_indent_width(indent_width, wrap_width)
   return math.min(indent_width or 0, wrap_width * 0.5)
 end
 
+local function compute_rendered_line_breaks(
+  docview, render_line, default_font, line, width, mode, start_col, initial_begin_width
+)
+  local text = docview.doc:get_utf8_line(line)
+  local visible_end = #text - (text:sub(-1) == "\n" and 1 or 0)
+  local begin_width = initial_begin_width
+  if start_col > 1 and begin_width == nil then
+    begin_width = LineWrapping.continuation_indent_width(default_font, text)
+  end
+  begin_width = clamp_continuation_indent_width(begin_width or 0, width)
+  local splits = { start_col }
+  local row_start = start_col
+  local last_space
+  local function rendered_x(col)
+    return docview:get_line_render_col_x_offset(render_line, col)
+  end
+  local col = start_col
+  for char in common.utf8_chars(text:sub(start_col, visible_end)) do
+    local next_col = col + #char
+    if char == " " then last_space = col end
+    local leading = row_start > 1 and begin_width or 0
+    local row_width = leading + rendered_x(next_col) - rendered_x(row_start)
+    if row_width > width and col > row_start then
+      local split = col
+      if mode == "word" and last_space and last_space >= row_start then split = last_space + 1 end
+      if split <= row_start then split = col end
+      if split > splits[#splits] then splits[#splits + 1] = split end
+      row_start = split
+      if last_space and last_space < row_start then last_space = nil end
+      leading = row_start > 1 and begin_width or 0
+      row_width = leading + rendered_x(next_col) - rendered_x(row_start)
+      if row_width > width and col > row_start then
+        splits[#splits + 1] = col
+        row_start = col
+      end
+    end
+    col = next_col
+  end
+  return splits, begin_width
+end
+
 -- Computes the breaks for a line suffix. `start_col` must be a valid byte
 -- column, normally an existing cached visual-row start. Returns row starts for
 -- the suffix, including `start_col`, plus the line continuation indent width.
-function LineWrapping.compute_line_breaks_from_col(doc, default_font, line, width, mode, start_col, initial_begin_width)
+function LineWrapping.compute_line_breaks_from_col(doc, default_font, line, width, mode, start_col, initial_begin_width, docview)
   local perf_active = core.perf_frame_stats ~= nil
   local perf_start = perf_active and system.get_time()
   local perf_bytes = 0
@@ -364,6 +405,19 @@ function LineWrapping.compute_line_breaks_from_col(doc, default_font, line, widt
   local line_text = doc:get_utf8_line(line)
   local visible_end_col = #line_text
   if line_text:sub(-1) == "\n" then visible_end_col = visible_end_col - 1 end
+  if docview and docview.get_line_render then
+    local render_line = docview:get_line_render(line)
+    local has_widget = false
+    for _, fragment in ipairs(render_line and render_line.fragments or {}) do
+      if fragment.widget then has_widget = true break end
+    end
+    if render_line and not has_widget then
+      return compute_rendered_line_breaks(
+        docview, render_line, default_font, line, width, mode,
+        start_col, begin_width
+      )
+    end
+  end
   local default_ascii_cell_width = default_font:get_width(" ")
   local function note_branch(branch)
     if not perf_branch then
@@ -515,8 +569,10 @@ function LineWrapping.compute_line_breaks_from_col(doc, default_font, line, widt
   return splits, begin_width
 end
 
-function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode)
-  return LineWrapping.compute_line_breaks_from_col(doc, default_font, line, width, mode, 1, nil)
+function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode, docview)
+  return LineWrapping.compute_line_breaks_from_col(
+    doc, default_font, line, width, mode, 1, nil, docview
+  )
 end
 
 function LineWrapping.clear_wrap_cache(docview)
@@ -572,7 +628,9 @@ function LineWrapping.reconstruct_breaks(docview, default_font, width, line_offs
     docview.wrapped_text_revision = doc.text_revision or 0
     for i = line_offset or 1, #doc.lines do
       reconstructed_lines = reconstructed_lines + 1
-      local breaks, offset = LineWrapping.compute_line_breaks(doc, default_font, i, width, config.plugins.linewrapping.mode)
+      local breaks, offset = LineWrapping.compute_line_breaks(
+        doc, default_font, i, width, config.plugins.linewrapping.mode, docview
+      )
       table.insert(docview.wrapped_line_offsets, offset)
       for _, col in ipairs(breaks) do
         table.insert(docview.wrapped_lines, i)
@@ -658,7 +716,8 @@ function LineWrapping.update_same_line_suffix_breaks(docview, range, transaction
     docview.wrapped_settings.width,
     config.plugins.linewrapping.mode,
     restart_col,
-    begin_width
+    begin_width,
+    docview
   )
   if restart_col == 1 then
     docview.wrapped_line_offsets[line] = new_begin_width
@@ -703,7 +762,10 @@ function LineWrapping.update_breaks(docview, old_line1, old_line2, net_lines)
 
   for line = new_line1, new_line2 do
     perf_lines = perf_lines + 1
-    local breaks, begin_width = LineWrapping.compute_line_breaks(docview.doc, docview.wrapped_settings.font, line, docview.wrapped_settings.width, config.plugins.linewrapping.mode)
+    local breaks, begin_width = LineWrapping.compute_line_breaks(
+      docview.doc, docview.wrapped_settings.font, line,
+      docview.wrapped_settings.width, config.plugins.linewrapping.mode, docview
+    )
     new_offsets[#new_offsets + 1] = begin_width
     for _, b in ipairs(breaks) do
       new_pairs[#new_pairs + 1] = line
@@ -904,6 +966,16 @@ function LineWrapping.get_line_col_from_index_and_x(docview, idx, x)
     perf_frame_add("linewrapping_get_line_col_from_index_and_x_calls", 1)
     perf_elapsed("linewrapping_get_line_col_from_index_and_x_ms", perf_start)
     return line, col, false
+  end
+  local render_line = docview.get_line_render and docview:get_line_render(line)
+  if render_line then
+    local row_render_x = docview:get_line_render_col_x_offset(render_line, col)
+    local target_x = row_render_x + math.max(0, x - xoffset)
+    local target_col = docview:get_line_render_x_offset_col(render_line, target_x)
+    target_col = common.clamp(target_col, col, row_end_col)
+    perf_frame_add("linewrapping_get_line_col_from_index_and_x_calls", 1)
+    perf_elapsed("linewrapping_get_line_col_from_index_and_x_ms", perf_start)
+    return line, target_col, soft_end and target_col == row_end_col
   end
   local default_font = docview:get_font()
   local last_i, last_w = col, 0

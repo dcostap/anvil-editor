@@ -5,6 +5,7 @@ local core = require "core"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
 local markdown = require "core.markdown"
+local linewrapping = require "core.linewrapping"
 local Project = require "core.project"
 local style = require "core.style"
 local test = require "core.test"
@@ -232,17 +233,46 @@ test.describe("Markdown Live Preview prototype baseline", function()
     end)
   end)
 
-  test.it("keeps actually wrapped aliases on the raw source path", function()
+  test.it("wraps aliases by rendered fragments while preserving source columns", function()
     with_live_preview(function()
-      local source = "See [[folder/with/a/very/long/target/name|Alias]] after"
+      local source = "See [[folder/with/a/very/long/target/name|Álias]] after"
       local view, doc = make_view(source .. "\nother")
-      view.size.x = 90
-      view:set_wrapping_enabled(true)
+      view.size.x = 160
       doc:set_selection(2, 1)
       markdown.live_render.refresh_view(view)
+      view:set_wrapping_enabled(true)
 
-      test.equal(view:get_line_render(1), nil)
-      test.ok(view:get_col_x_offset(1, #source + 1) < view:get_font():get_width(source))
+      local render_line = test.not_nil(view:get_line_render(1))
+      local found_alias = false
+      for _, fragment in ipairs(view:iter_line_render_fragments(render_line)) do
+        if fragment.text == "Álias" then found_alias = true end
+      end
+      test.equal(found_alias, true)
+      local rendered_rows = view:get_line_visual_row_count(1)
+      local first_idx = linewrapping.get_line_idx_col_count(view, 1)
+      for idx = first_idx, first_idx + rendered_rows - 1 do
+        local _, start_col = linewrapping.get_idx_line_col(view, idx)
+        local x = view:get_col_x_offset(1, start_col)
+        local hit_line, hit_col = linewrapping.get_line_col_from_index_and_x(view, idx, x)
+        test.equal(hit_line, 1)
+        test.equal(hit_col, start_col)
+      end
+
+      local old_draw_text = renderer.draw_text
+      local drawn = {}
+      renderer.draw_text = function(font, text, x, y, color, opts)
+        drawn[#drawn + 1] = text
+        return x + font:get_width(text, opts)
+      end
+      local ok, err = pcall(view.draw_line_text, view, 1, 0, 0)
+      renderer.draw_text = old_draw_text
+      if not ok then error(err, 0) end
+      test.equal(table.concat(drawn), "See Álias after")
+
+      markdown.live_render.detach(view)
+      view:update_wrap_cache()
+      local raw_rows = view:get_line_visual_row_count(1)
+      test.ok(rendered_rows < raw_rows)
     end)
   end)
 end)

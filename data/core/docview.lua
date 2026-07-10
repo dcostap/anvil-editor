@@ -1229,6 +1229,11 @@ function DocView:invalidate_line_render(_provider_id, line1, line2)
     cache.invalidated_lines = (cache.invalidated_lines or 0) + line2 - line1 + 1
     self.render_cache_diagnostics.line_invalidations =
       self.render_cache_diagnostics.line_invalidations + line2 - line1 + 1
+    if self.wrapped_settings and not self.__line_render_wrap_invalidating then
+      self.__line_render_wrap_invalidating = true
+      linewrapping.update_breaks(self, line1, line2, 0)
+      self.__line_render_wrap_invalidating = nil
+    end
     return
   end
   if cache then
@@ -1237,6 +1242,13 @@ function DocView:invalidate_line_render(_provider_id, line1, line2)
   end
   self.__line_render_generation = (self.__line_render_generation or 0) + 1
   self.__line_render_cache = nil
+  if self.wrapped_settings and not self.__line_render_wrap_invalidating then
+    self.__line_render_wrap_invalidating = true
+    linewrapping.reconstruct_breaks(
+      self, self.wrapped_settings.font, self.wrapped_settings.width
+    )
+    self.__line_render_wrap_invalidating = nil
+  end
 end
 
 function DocView:line_render_provider_entries()
@@ -2863,7 +2875,19 @@ end
 ---@return number offset Horizontal pixel offset
 function DocView:get_col_x_offset(line, col, line_end)
   local render_line = self:get_line_render(line)
-  if render_line then return self:get_line_render_col_x_offset(render_line, col) end
+  if render_line then
+    local rendered_offset = self:get_line_render_col_x_offset(render_line, col)
+    if self.wrapped_settings then
+      if line_end == nil and self.__use_wrapped_caret_affinity then
+        line_end = linewrapping.has_wrapped_line_end_affinity(self, line, col)
+      end
+      local _, _, _, row_start = linewrapping.get_line_idx_col_count(self, line, col, line_end)
+      local row_offset = self:get_line_render_col_x_offset(render_line, row_start)
+      return (row_start ~= 1 and (self.wrapped_line_offsets[line] or 0) or 0)
+        + rendered_offset - row_offset
+    end
+    return rendered_offset
+  end
   if self.wrapped_settings then
     local perf_active = core.perf_frame_stats ~= nil
     local perf_start = perf_active and system.get_time()
@@ -3932,6 +3956,59 @@ end
 ---@return integer height Line height
 function DocView:draw_line_text(line, x, y)
   local render_line = self:get_line_render(line)
+  if render_line and self.wrapped_settings then
+    local first_idx, _, count = linewrapping.get_line_idx_col_count(self, line)
+    local visible_idx1 = math.max(first_idx, self.__wrapped_draw_first_idx or first_idx)
+    local visible_idx2 = math.min(first_idx + count - 1, self.__wrapped_draw_last_idx or (first_idx + count - 1))
+    local lh = self:get_line_height()
+    local text_y_offset = self:get_line_text_y_offset()
+    local begin_width = self.wrapped_line_offsets[line] or 0
+    local _, indent_size = self.doc:get_indent_info()
+    local fragments = self:iter_line_render_fragments(render_line)
+    for idx = visible_idx1, visible_idx2 do
+      local _, row_start = linewrapping.get_idx_line_col(self, idx)
+      local next_line, row_end = linewrapping.get_idx_line_col(self, idx + 1)
+      if next_line ~= line then row_end = #(self.doc.lines[line] or "") end
+      local tx = x + (row_start ~= 1 and begin_width or 0)
+      local ty = y + text_y_offset + (idx - first_idx) * lh
+      for _, fragment in ipairs(fragments) do
+        local col1 = fragment.source_col1 or 1
+        local col2 = fragment.source_col2 or col1
+        local from = math.max(col1, row_start)
+        local to = math.min(col2, row_end)
+        if from < to and not fragment.hidden then
+          local font = render_fragment_font(self, fragment)
+          font:set_tab_size(indent_size)
+          if fragment.widget and fragment.widget.draw and from == col1 and to == col2 then
+            local ok, err = pcall(fragment.widget.draw, self, fragment, tx, ty, lh)
+            if not ok then
+              core.log_quiet("DocView wrapped render widget draw failed for %s: %s", self.doc:get_name(), tostring(err))
+            end
+            tx = tx + (fragment.width or fragment.widget.width or 0)
+          else
+            local text = fragment.text or ""
+            local text_from = math.min(#text + 1, from - col1 + 1)
+            local text_to = math.min(#text, to - col1)
+            local segment = text_to >= text_from and text:sub(text_from, text_to) or ""
+            if segment ~= "" then
+              local color = render_fragment_color(fragment)
+              local old_tx = tx
+              tx = renderer.draw_text(font, segment, tx, ty, color, { tab_offset = tx - x })
+              if fragment.overdraw then
+                renderer.draw_text(
+                  font, segment, old_tx + (fragment.overdraw_dx or math.max(1, SCALE)),
+                  ty, color, { tab_offset = old_tx - x }
+                )
+              end
+            elseif fragment.width and from == col1 and to == col2 then
+              tx = tx + fragment.width
+            end
+          end
+        end
+      end
+    end
+    return lh * count
+  end
   if render_line then
     local tx = x
     local row = self:get_visual_row(line, 1)
@@ -5238,7 +5315,11 @@ Doc.register_text_transaction_handler("docview-render-caches", function(doc, tra
   if not (transaction and transaction.changed) then return end
   for view in pairs(DocView.registry[doc] or {}) do
     if view and view.doc == doc then
-      if view:has_line_render_providers() then view:invalidate_line_render("text-change") end
+      if view:has_line_render_providers() then
+        view.__line_render_wrap_invalidating = true
+        view:invalidate_line_render("text-change")
+        view.__line_render_wrap_invalidating = nil
+      end
       if view:has_visual_metric_providers() then view:invalidate_visual_metrics("text-change") end
     end
   end
