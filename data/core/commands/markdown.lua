@@ -5,6 +5,25 @@ local file_context = require "core.file_context"
 local config = require "core.config"
 local DocView = require "core.docview"
 local MarkdownView = require "core.markdownview"
+local markdown_live = require "core.markdown.live_render"
+
+command.add(function()
+  local view = core.active_view
+  if view and view:extends(DocView) and markdown_live.is_markdown_doc(view.doc) then
+    return true, view
+  end
+  return false
+end, {
+  ["markdown-live-preview:toggle-source-mode"] = function(view)
+    markdown_live.toggle_source_mode(view, "command-toggle")
+  end,
+  ["markdown-live-preview:source-mode"] = function(view)
+    markdown_live.set_source_mode(view, true, "command-source")
+  end,
+  ["markdown-live-preview:live-mode"] = function(view)
+    markdown_live.set_source_mode(view, false, "command-live")
+  end,
+})
 
 local markdown_preview_split_directions = {
   bottom = "down",

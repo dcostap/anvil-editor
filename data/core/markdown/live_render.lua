@@ -670,7 +670,13 @@ end
 
 local provider = {}
 
+local function view_in_source_mode(view)
+  local owner = view.__markdown_live_owner
+  return owner and owner.source_mode == true
+end
+
 function provider:line_generation(view, line)
+  if view_in_source_mode(view) then return "source" end
   return view_active_line(view, line) and "active" or "inactive"
 end
 
@@ -776,7 +782,7 @@ local function heading_render_line(view, text, heading, active)
 end
 
 function provider:line_height(view, line)
-  if not current_semantic_model(view) then return nil end
+  if view_in_source_mode(view) or not current_semantic_model(view) then return nil end
   local in_comment = line_in_semantic_comment(view, line)
   if line_is_wrapped(view, line) then return nil end
   local text = (view.doc.lines[line] or ""):gsub("\n$", "")
@@ -818,7 +824,9 @@ function provider:line_height(view, line)
 end
 
 function provider:render_line(view, line)
-  if not current_semantic_model(view) then return { raw_passthrough = true } end
+  if view_in_source_mode(view) or not current_semantic_model(view) then
+    return { raw_passthrough = true }
+  end
   local in_comment = line_in_semantic_comment(view, line)
   if not in_comment and line_in_raw_block(view, line) then return { raw_passthrough = true } end
 
@@ -856,6 +864,23 @@ end
 
 local owner_serial = 0
 
+local function apply_source_mode(view, enabled, reason)
+  local owner = view and view.__markdown_live_owner
+  if not owner then return false end
+  enabled = enabled == true
+  if owner.source_mode == enabled then return false end
+  owner.source_mode = enabled
+  view:invalidate_line_render(PROVIDER_ID)
+  view:invalidate_visual_metrics(PROVIDER_ID)
+  core.redraw = true
+  core.log_quiet(
+    "Markdown Live Preview switched %s for %s: %s",
+    enabled and "to Source Mode" or "to Live Preview",
+    view.doc:get_name(), tostring(reason or "request")
+  )
+  return true
+end
+
 local function invalidate_metadata_caches(view, event)
   if not view then return end
   view.__markdown_live_raw_block_cache = nil
@@ -876,6 +901,12 @@ local function ensure_owner(view)
   owner = {
     doc = view.doc,
     listener_id = "markdown-live-render:" .. tostring(owner_serial),
+    get_state = function(self)
+      return self.source_mode and { source_mode = true } or nil
+    end,
+    set_state = function(_, owner_view, state)
+      apply_source_mode(owner_view, state and state.source_mode == true, "workspace-restore")
+    end,
     on_release = function(self, owner_view, reason)
       if self.doc and self.doc.remove_metadata_listener then
         self.doc:remove_metadata_listener(self.listener_id)
@@ -1005,6 +1036,21 @@ end
 function live.release(view, reason)
   if not (view and view.__markdown_live_owner) then return false end
   return view:remove_owned_feature(PROVIDER_ID, reason or "release")
+end
+
+function live.is_source_mode(view)
+  return view_in_source_mode(view)
+end
+
+function live.set_source_mode(view, enabled, reason)
+  if not (view and view.doc and live.is_markdown_doc(view.doc)) then return false end
+  ensure_owner(view)
+  live.refresh_view(view)
+  return apply_source_mode(view, enabled, reason or "command")
+end
+
+function live.toggle_source_mode(view, reason)
+  return live.set_source_mode(view, not view_in_source_mode(view), reason or "toggle")
 end
 
 function live.refresh_view(view)

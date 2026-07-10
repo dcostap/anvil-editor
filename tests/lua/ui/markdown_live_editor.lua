@@ -1,3 +1,4 @@
+local command = require "core.command"
 local common = require "core.common"
 local config = require "core.config"
 local core = require "core"
@@ -65,6 +66,44 @@ test.describe("Markdown Live Editor", function()
     test.equal(md.__markdown_live_attached, true)
     refresh(txt)
     test.equal(txt.__markdown_live_attached, nil)
+  end)
+
+  test.it("toggles and persists view-local Source Mode without moving editor state", function()
+    local view, doc = make_view(
+      "# Title\n[[folder/with/a/very/long/target/name/that/keeps/going/for/horizontal/scrolling/example|A]]\nplain", "note.md"
+    )
+    doc:set_selection(3, 1)
+    refresh(view)
+    view.scroll.x, view.scroll.to.x = 7, 7
+    view.scroll.y, view.scroll.to.y = 11, 11
+    local selection = view:get_selection_state()
+    local live_width = view:get_h_scrollable_size()
+    local old_active = core.active_view
+    core.active_view = view
+
+    test.equal(command.perform("markdown-live-preview:source-mode"), true)
+    test.equal(markdown.live_render.is_source_mode(view), true)
+    test.equal(view:get_line_render(1), nil)
+    test.equal(view:get_line_render(2), nil)
+    test.same(view:get_selection_state().selections, selection.selections)
+    test.equal(view.scroll.y, 11)
+    test.ok(view:get_h_scrollable_size() > live_width)
+    local feature_state = test.not_nil(view:get_state().owned_features)
+
+    local split = DocView(doc)
+    split.size.x, split.size.y = 500, 200
+    split:set_wrapping_enabled(false)
+    refresh(split)
+    test.equal(markdown.live_render.is_source_mode(split), false)
+    test.equal(split:get_h_scrollable_size(), live_width)
+    split:restore_owned_feature_state(feature_state)
+    test.equal(markdown.live_render.is_source_mode(split), true)
+    test.equal(split:get_line_render(1), nil)
+
+    test.equal(command.perform("markdown-live-preview:live-mode"), true)
+    test.equal(markdown.live_render.is_source_mode(view), false)
+    test.not_nil(view:get_line_render(1))
+    core.active_view = old_active
   end)
 
   test.it("falls back to raw source while the first semantic snapshot is pending", function()

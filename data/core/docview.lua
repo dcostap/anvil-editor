@@ -748,6 +748,7 @@ function DocView:new(doc)
   register_view(self)
   self.doc.cache.col_x = {}
   self.doc.cache.line_width = {}
+  self.__line_width_cache = {}
   self.doc.cache.ulen = {}
   self.font = "code_font"
   self.last_x_offset = {}
@@ -789,6 +790,38 @@ function DocView:new(doc)
 end
 
 
+function DocView:get_owned_feature_state()
+  local state = {}
+  for id, value in pairs(self.__pending_owned_feature_state or {}) do state[id] = value end
+  for id, feature in pairs(self.owned_features or {}) do
+    if feature.get_state then
+      local ok, value = pcall(feature.get_state, feature, self)
+      if ok and value ~= nil and state[id] == nil then state[id] = value
+      elseif not ok then
+        core.log_quiet("DocView owned feature %s state save failed for %s: %s", id, self.doc:get_name(), tostring(value))
+      end
+    end
+  end
+  return next(state) and state or nil
+end
+
+function DocView:restore_owned_feature_state(state)
+  for id, value in pairs(state or {}) do
+    local feature = self.owned_features and self.owned_features[id]
+    if feature and feature.set_state then
+      local ok, err = pcall(feature.set_state, feature, self, value)
+      if not ok then
+        core.log_quiet("DocView owned feature %s state restore failed for %s: %s", id, self.doc:get_name(), tostring(err))
+        self.__pending_owned_feature_state = self.__pending_owned_feature_state or {}
+        self.__pending_owned_feature_state[id] = value
+      end
+    else
+      self.__pending_owned_feature_state = self.__pending_owned_feature_state or {}
+      self.__pending_owned_feature_state[id] = value
+    end
+  end
+end
+
 function DocView:get_state()
   local selection_state = self:get_selection_state()
   return {
@@ -797,7 +830,8 @@ function DocView:get_state()
     selection_state = selection_state,
     scroll = { x = self.scroll.to.x, y = self.scroll.to.y },
     crlf = self.doc.crlf,
-    text = self.doc.new_file and self.doc:get_text(1, 1, math.huge, math.huge)
+    text = self.doc.new_file and self.doc:get_text(1, 1, math.huge, math.huge),
+    owned_features = self:get_owned_feature_state(),
   }
 end
 
@@ -830,6 +864,7 @@ function DocView.from_state(state)
     dv.scroll.x, dv.scroll.to.x = state.scroll.x, state.scroll.x
     dv.scroll.y, dv.scroll.to.y = state.scroll.y, state.scroll.y
     dv.needs_initial_scroll_validation = true
+    dv:restore_owned_feature_state(state.owned_features)
   end
   return dv
 end
@@ -845,6 +880,19 @@ function DocView:add_owned_feature(id, feature)
   if previous == feature then return false end
   if previous then self:remove_owned_feature(id, "replaced") end
   self.owned_features[id] = feature
+  local pending = self.__pending_owned_feature_state
+  if pending and pending[id] ~= nil and feature.set_state then
+    local ok, err = pcall(feature.set_state, feature, self, pending[id])
+    if ok then
+      pending[id] = nil
+      if not next(pending) then self.__pending_owned_feature_state = nil end
+    else
+      core.log_quiet(
+        "DocView owned feature %s deferred state restore failed for %s: %s",
+        id, self.doc:get_name(), tostring(err)
+      )
+    end
+  end
   return true
 end
 
@@ -1024,10 +1072,10 @@ end
 
 
 local function get_unwrapped_line_width(self, line)
-  local cache = self.doc.cache.line_width
+  local cache = self.__line_width_cache
   if not cache then
     cache = {}
-    self.doc.cache.line_width = cache
+    self.__line_width_cache = cache
   end
 
   local text = self.doc.lines[line] or ""
@@ -1087,6 +1135,7 @@ local function get_max_unwrapped_line_width(self)
     and cache.font_size == font_size
     and cache.indent_size == indent_size
     and cache.line_count == #self.doc.lines
+    and cache.text_revision == self.doc.text_revision
     and cache.line
     and self.doc.lines[cache.line] == cache.line_text
   then
@@ -1100,6 +1149,7 @@ local function get_max_unwrapped_line_width(self)
     indent_size = indent_size,
     width = 0,
     line_count = #self.doc.lines,
+    text_revision = self.doc.text_revision,
   }
   for line = 1, #self.doc.lines do
     local width = get_unwrapped_line_width(self, line)
@@ -1228,6 +1278,10 @@ function DocView:invalidate_line_render(_provider_id, line1, line2)
     for line in pairs(cache.lines) do
       if line >= requested_line1 and line <= requested_line2 then cache.lines[line] = nil end
     end
+    for line in pairs(self.__line_width_cache or {}) do
+      if line >= requested_line1 and line <= requested_line2 then self.__line_width_cache[line] = nil end
+    end
+    self.__unwrapped_content_width_cache = nil
     cache.invalidated_lines = (cache.invalidated_lines or 0) + requested_line2 - requested_line1 + 1
     self.render_cache_diagnostics.line_invalidations =
       self.render_cache_diagnostics.line_invalidations + requested_line2 - requested_line1 + 1
@@ -1246,6 +1300,8 @@ function DocView:invalidate_line_render(_provider_id, line1, line2)
   end
   self.__line_render_generation = (self.__line_render_generation or 0) + 1
   self.__line_render_cache = nil
+  self.__line_width_cache = {}
+  self.__unwrapped_content_width_cache = nil
   if self.wrapped_settings and not self.__line_render_wrap_invalidating then
     self.__line_render_wrap_invalidating = true
     linewrapping.reconstruct_breaks(
@@ -3583,6 +3639,7 @@ function DocView:update()
   then
     self.doc.cache.col_x = {}
     self.doc.cache.line_width = {}
+    self.__line_width_cache = {}
     self.__unwrapped_content_width_cache = nil
     self.cache_font = font
     self.cache_font_size = font:get_size()
