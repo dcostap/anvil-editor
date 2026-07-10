@@ -769,6 +769,13 @@ function DocView:new(doc)
   self.__visual_metric_generation = 0
   self.line_render_providers = {}
   self.__line_render_generation = 0
+  self.render_cache_diagnostics = {
+    line_hits = 0,
+    line_misses = 0,
+    line_invalidations = 0,
+    metric_recomputations = 0,
+    metric_invalidations = 0,
+  }
   self.decoration_providers = {}
   self.poi_providers = {}
   self.selection_listeners = {}
@@ -1149,7 +1156,24 @@ function DocView:remove_visual_metric_provider(id)
   return true
 end
 
-function DocView:invalidate_visual_metrics(_provider_id)
+function DocView:invalidate_visual_metrics(_provider_id, line1, line2)
+  local cache = self.__visual_metric_cache
+  if line1 and not self.wrapped_settings and not self:has_composed_visual_rows() then
+    if cache then
+      line1 = common.clamp(math.floor(line1), 1, cache.row_count)
+      line2 = common.clamp(math.floor(line2 or line1), line1, cache.row_count)
+      cache.dirty_rows = cache.dirty_rows or {}
+      for row = line1, line2 do cache.dirty_rows[row] = true end
+      cache.invalidated_rows = (cache.invalidated_rows or 0) + line2 - line1 + 1
+      self.render_cache_diagnostics.metric_invalidations =
+        self.render_cache_diagnostics.metric_invalidations + line2 - line1 + 1
+    end
+    return
+  end
+  if cache then
+    self.render_cache_diagnostics.metric_invalidations =
+      self.render_cache_diagnostics.metric_invalidations + cache.row_count
+  end
   self.__visual_metric_generation = (self.__visual_metric_generation or 0) + 1
   self.__visual_metric_cache = nil
 end
@@ -1196,13 +1220,33 @@ function DocView:remove_line_render_provider(id)
   return true
 end
 
-function DocView:invalidate_line_render(_provider_id)
+function DocView:invalidate_line_render(_provider_id, line1, line2)
+  local cache = self.__line_render_cache
+  if line1 and cache and cache.generation == (self.__line_render_generation or 0) then
+    line1 = common.clamp(math.floor(line1), 1, #self.doc.lines)
+    line2 = common.clamp(math.floor(line2 or line1), line1, #self.doc.lines)
+    for line = line1, line2 do cache.lines[line] = nil end
+    cache.invalidated_lines = (cache.invalidated_lines or 0) + line2 - line1 + 1
+    self.render_cache_diagnostics.line_invalidations =
+      self.render_cache_diagnostics.line_invalidations + line2 - line1 + 1
+    return
+  end
+  if cache then
+    self.render_cache_diagnostics.line_invalidations =
+      self.render_cache_diagnostics.line_invalidations + #self.doc.lines
+  end
   self.__line_render_generation = (self.__line_render_generation or 0) + 1
   self.__line_render_cache = nil
 end
 
 function DocView:line_render_provider_entries()
   return sorted_inline_provider_entries(self.line_render_providers)
+end
+
+function DocView:get_render_cache_diagnostics()
+  local result = {}
+  for key, value in pairs(self.render_cache_diagnostics or {}) do result[key] = value end
+  return result
 end
 
 
@@ -2178,37 +2222,84 @@ function DocView:get_visual_metric_signature()
   return table.concat(parts, "|")
 end
 
+local function metric_tree_add(tree, row_count, row, delta)
+  while row <= row_count do
+    tree[row] = (tree[row] or 0) + delta
+    row = row + bit.band(row, -row)
+  end
+end
+
+local function metric_tree_sum(tree, row)
+  local total = 0
+  while row > 0 do
+    total = total + (tree[row] or 0)
+    row = row - bit.band(row, -row)
+  end
+  return total
+end
+
+local function compute_visual_row_height(view, row, providers, default_height)
+  view.render_cache_diagnostics.metric_recomputations =
+    view.render_cache_diagnostics.metric_recomputations + 1
+  local entry = view:get_metric_row_entry(row)
+  local height = default_height
+  for _, provider_entry in ipairs(providers) do
+    local provider = provider_entry.provider
+    if provider and provider.line_height then
+      local ok, value = pcall(provider.line_height, provider, view, entry.line, entry)
+      if ok and value then
+        height = math.max(1, tonumber(value) or height)
+      elseif not ok then
+        core.log_quiet(
+          "DocView visual metric provider %s.line_height failed for %s: %s",
+          tostring(provider_entry.id), view.doc:get_name(), tostring(value)
+        )
+      end
+    end
+  end
+  return height
+end
+
 function DocView:get_visual_row_metric_cache()
   if not self:has_visual_metric_providers() then return nil end
   local signature = self:get_visual_metric_signature()
   local cache = self.__visual_metric_cache
-  if cache and cache.signature == signature then return cache end
+  local providers = self:visual_metric_provider_entries()
+  local default_height = self:get_line_height()
+  if cache and cache.signature == signature then
+    if cache.dirty_rows then
+      for row in pairs(cache.dirty_rows) do
+        local height = compute_visual_row_height(self, row, providers, default_height)
+        local delta = height - cache.heights[row]
+        if delta ~= 0 then
+          cache.heights[row] = height
+          cache.total_height = cache.total_height + delta
+          metric_tree_add(cache.height_tree, cache.row_count, row, delta)
+        end
+      end
+      cache.dirty_rows = nil
+    end
+    return cache
+  end
 
   local row_count = self:get_scrollable_line_count()
   local heights = {}
-  local offsets = { [1] = 0 }
-  local default_height = self:get_line_height()
+  local height_tree = {}
   local total = 0
-  local providers = self:visual_metric_provider_entries()
   for row = 1, row_count do
-    local entry = self:get_metric_row_entry(row)
-    local height = default_height
-    for _, provider_entry in ipairs(providers) do
-      local provider = provider_entry.provider
-      if provider and provider.line_height then
-        local ok, value = pcall(provider.line_height, provider, self, entry.line, entry)
-        if ok and value then
-          height = math.max(1, tonumber(value) or height)
-        elseif not ok then
-          core.log_quiet("DocView visual metric provider %s.line_height failed for %s: %s", tostring(provider_entry.id), self.doc:get_name(), tostring(value))
-        end
-      end
-    end
+    local height = compute_visual_row_height(self, row, providers, default_height)
     heights[row] = height
     total = total + height
-    offsets[row + 1] = total
+    metric_tree_add(height_tree, row_count, row, height)
   end
-  cache = { signature = signature, heights = heights, offsets = offsets, total_height = total, row_count = row_count }
+  cache = {
+    signature = signature,
+    heights = heights,
+    height_tree = height_tree,
+    total_height = total,
+    row_count = row_count,
+    invalidated_rows = 0,
+  }
   self.__visual_metric_cache = cache
   return cache
 end
@@ -2220,7 +2311,10 @@ end
 
 function DocView:get_visual_row_y_offset(row)
   local cache = self:get_visual_row_metric_cache()
-  if cache then return cache.offsets[common.clamp(row, 1, cache.row_count + 1)] or 0 end
+  if cache then
+    row = common.clamp(row, 1, cache.row_count + 1)
+    return metric_tree_sum(cache.height_tree, row - 1)
+  end
   return math.max(0, row - 1) * self:get_line_height()
 end
 
@@ -2229,18 +2323,19 @@ function DocView:get_visual_row_at_y(y)
   if not cache then
     return common.clamp(math.floor(y / self:get_line_height()) + 1, 1, self:get_scrollable_line_count())
   end
-  local lo, hi = 1, cache.row_count
-  while lo <= hi do
-    local mid = math.floor((lo + hi) / 2)
-    if y < cache.offsets[mid] then
-      hi = mid - 1
-    elseif y >= cache.offsets[mid + 1] then
-      lo = mid + 1
-    else
-      return mid
+  local index, accumulated = 0, 0
+  local step = 1
+  while step * 2 <= cache.row_count do step = step * 2 end
+  while step > 0 do
+    local next_index = index + step
+    local next_total = accumulated + (cache.height_tree[next_index] or 0)
+    if next_index <= cache.row_count and next_total <= y then
+      index = next_index
+      accumulated = next_total
     end
+    step = math.floor(step / 2)
   end
-  return common.clamp(lo, 1, cache.row_count)
+  return common.clamp(index + 1, 1, cache.row_count)
 end
 
 local function overscan_metric_rows(cache, first, last, total)
@@ -2606,23 +2701,60 @@ function DocView:get_visible_line_range()
 end
 
 
+local function line_render_signature(view, line, source_text)
+  local parts = {
+    source_text,
+    tostring(view.doc.text_revision or 0),
+    tostring(view.__line_render_generation or 0),
+  }
+  for _, entry in ipairs(view:line_render_provider_entries()) do
+    parts[#parts + 1] = tostring(entry.id)
+    parts[#parts + 1] = tostring(entry.priority)
+    local provider = entry.provider
+    local generation_fn = provider and (provider.line_generation or provider.generation)
+    if generation_fn then
+      local ok, generation = pcall(generation_fn, provider, view, line)
+      parts[#parts + 1] = ok and tostring(generation) or "error"
+    end
+  end
+  return table.concat(parts, "\0")
+end
+
 function DocView:get_line_render(line)
   if not self:has_line_render_providers() then return nil end
   local source_text = (self.doc.lines[line] or ""):gsub("\n$", "")
+  local generation = self.__line_render_generation or 0
+  local cache = self.__line_render_cache
+  if not cache or cache.generation ~= generation then
+    cache = { generation = generation, lines = {}, hits = 0, misses = 0, invalidated_lines = 0 }
+    self.__line_render_cache = cache
+  end
+  local signature = line_render_signature(self, line, source_text)
+  local cached = cache.lines[line]
+  if cached and cached.signature == signature then
+    cache.hits = cache.hits + 1
+    self.render_cache_diagnostics.line_hits = self.render_cache_diagnostics.line_hits + 1
+    return cached.render_line or nil
+  end
+  cache.misses = cache.misses + 1
+  self.render_cache_diagnostics.line_misses = self.render_cache_diagnostics.line_misses + 1
   local context = { source_text = source_text, line = line }
+  local resolved
   for _, entry in ipairs(self:line_render_provider_entries()) do
     local provider = entry.provider
     if provider and provider.render_line then
       local ok, render_line = pcall(provider.render_line, provider, self, line, context)
       if ok and render_line and not render_line.raw_passthrough then
         render_line.source_text = render_line.source_text or source_text
-        return render_line
+        resolved = render_line
+        break
       elseif not ok then
         core.log_quiet("DocView line render provider %s.render_line failed for %s: %s", tostring(entry.id), self.doc:get_name(), tostring(render_line))
       end
     end
   end
-  return nil
+  cache.lines[line] = { signature = signature, render_line = resolved or false }
+  return resolved
 end
 
 local function render_fragment_font(view, fragment)
@@ -5101,6 +5233,16 @@ local function bind_selection_method(name)
     return self:with_selection_state(fn, self, ...)
   end
 end
+
+Doc.register_text_transaction_handler("docview-render-caches", function(doc, transaction)
+  if not (transaction and transaction.changed) then return end
+  for view in pairs(DocView.registry[doc] or {}) do
+    if view and view.doc == doc then
+      if view:has_line_render_providers() then view:invalidate_line_render("text-change") end
+      if view:has_visual_metric_providers() then view:invalidate_visual_metrics("text-change") end
+    end
+  end
+end)
 
 for _, name in ipairs {
   "on_mouse_moved",

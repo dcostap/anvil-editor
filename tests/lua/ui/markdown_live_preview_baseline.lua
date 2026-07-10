@@ -5,7 +5,6 @@ local core = require "core"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
 local markdown = require "core.markdown"
-local parser = require "core.markdown.parser"
 local Project = require "core.project"
 local style = require "core.style"
 local test = require "core.test"
@@ -110,7 +109,7 @@ test.describe("Markdown Live Preview prototype baseline", function()
     end)
   end)
 
-  test.it("recomputes visual metrics for every Document line after a caret move", function()
+  test.it("recomputes visual metrics only for old and new caret lines", function()
     with_live_preview(function()
       local lines = {}
       for i = 1, 80 do lines[i] = i == 1 and "# Heading" or ("line " .. i) end
@@ -131,21 +130,22 @@ test.describe("Markdown Live Preview prototype baseline", function()
       local second_pass = calls - first_pass
 
       test.equal(first_pass, #doc.lines)
-      test.equal(second_pass, #doc.lines)
+      test.equal(second_pass, 2)
     end)
   end)
 
-  test.it("reparses one line independently in mapping and draw paths", function()
+  test.it("reuses one rendered line across mapping and draw paths", function()
     with_live_preview(function()
       local view, doc = make_view("See [[Target|Alias]] and **bold**\nother")
       doc:set_selection(2, 1)
       markdown.live_render.refresh_view(view)
 
-      local old_parse_inline = parser.parse_inline
+      local provider = view.line_render_providers["markdown-live"].provider
+      local old_render_line = provider.render_line
       local calls = 0
-      parser.parse_inline = function(...)
+      provider.render_line = function(...)
         calls = calls + 1
-        return old_parse_inline(...)
+        return old_render_line(...)
       end
       local old_draw_text = renderer.draw_text
       renderer.draw_text = function(font, text, x, _, _, opts)
@@ -157,10 +157,10 @@ test.describe("Markdown Live Preview prototype baseline", function()
         view:draw_line_text(1, 0, 0)
       end)
       renderer.draw_text = old_draw_text
-      parser.parse_inline = old_parse_inline
+      provider.render_line = old_render_line
       if not ok then error(err, 0) end
 
-      test.ok(calls >= 3, "expected mapping and draw to parse the line separately")
+      test.equal(calls, 1)
     end)
   end)
 

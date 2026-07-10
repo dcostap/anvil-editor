@@ -250,6 +250,31 @@ test.describe("Markdown Live Editor", function()
     test.equal(drawn, 2)
   end)
 
+  test.it("invalidates every cached line sharing a completed image entry", function()
+    local old_ensure_entry = markdown.images.ensure_entry
+    local completion
+    markdown.images.ensure_entry = function(_, opts)
+      completion = opts.on_done
+      return { status = "loading" }
+    end
+    local ok, err = pcall(function()
+      local view, doc = make_view(
+        "![A](shared.png)\n![B](shared.png)\nother", "note.md"
+      )
+      doc:set_selection(3, 1)
+      markdown.live_render.refresh_view(view)
+      view:get_line_render(1)
+      view:get_line_render(2)
+      local before = view:get_render_cache_diagnostics().line_invalidations
+      test.not_nil(completion)
+      completion(false, "not found")
+      local after = view:get_render_cache_diagnostics().line_invalidations
+      test.equal(after - before, 2)
+    end)
+    markdown.images.ensure_entry = old_ensure_entry
+    if not ok then error(err, 0) end
+  end)
+
   test.it("keeps image rows in the draw range when the source text is just off-screen", function()
     local image_path = USERDIR .. PATHSEP .. "markdown-live-cull-image-" .. system.get_process_id() .. ".png"
     local fp = io.open(image_path, "wb")

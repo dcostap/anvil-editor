@@ -1019,7 +1019,7 @@ Exit gate: the selected parser is reproducibly built by Meson, passes native plu
 
 ### Phase 2: core lifecycle, render caching, and wrapping
 
-**Lifecycle slice completed July 10, 2026.** `Doc` now publishes batched filename/syntax/close events; the shared semantic model follows eligibility and closes automatically; and each split `DocView` owns independent automatic Live Preview attach/detach lifecycle. The contract and red-green evidence are recorded in `MARKDOWN_LIFECYCLE.md`. Render caching, range-based metrics, wrapping, reveal/IME, and generic widget/POI work remain.
+**Lifecycle and render-cache slices completed July 10, 2026.** `Doc` now publishes batched filename/syntax/close events; the shared semantic model follows eligibility and closes automatically; and each split `DocView` owns independent automatic Live Preview attach/detach lifecycle. `DocView` also caches line-provider output, supports targeted line invalidation, and maintains unwrapped variable heights through a range-updatable Fenwick index, so ordinary caret movement recomputes only old/new lines. Contracts and red-green evidence are recorded in `MARKDOWN_LIFECYCLE.md` and `MARKDOWN_RENDER_CACHE.md`. Wrapping, reveal/IME, semantic-provider migration, and generic widget/POI work remain.
 
 - Add first-class `Doc` metadata/syntax listeners.
 - Add owned Editor feature attach/detach lifecycle.

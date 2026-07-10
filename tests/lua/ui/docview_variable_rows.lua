@@ -73,6 +73,32 @@ test.describe("DocView variable visual row metrics", function()
     test.equal(view:get_visual_row_height(1), lh * 2)
   end)
 
+  test.it("observes visual metric provider generation changes", function()
+    local view = make_view("one\ntwo")
+    local generation = 1
+    local lh = view:get_line_height()
+    view:add_visual_metric_provider("external", {
+      generation = function() return generation end,
+      line_height = function() return generation == 1 and lh or lh * 2 end,
+    })
+    test.equal(view:get_visual_row_height(1), lh)
+    generation = 2
+    test.equal(view:get_visual_row_height(1), lh * 2)
+  end)
+
+  test.it("invalidates metrics after legacy raw text edits", function()
+    local view, doc = make_view("plain")
+    local lh = view:get_line_height()
+    view:add_visual_metric_provider("headings", {
+      line_height = function(_, v, line)
+        if v.doc.lines[line]:match("^#") then return lh * 2 end
+      end,
+    })
+    test.equal(view:get_visual_row_height(1), lh)
+    doc:raw_insert(1, 1, "# ", doc.undo_stack, system.get_time())
+    test.equal(view:get_visual_row_height(1), lh * 2)
+  end)
+
   test.it("draws non-composed lines at metric y positions", function()
     local view = make_view("one\ntwo\nthree")
     view.size.y = 200

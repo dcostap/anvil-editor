@@ -190,13 +190,17 @@ local function image_fragment(view, span, opts)
           entry.status = "error"
           entry.errmsg = err or "image download failed"
         end
-        view:invalidate_line_render(PROVIDER_ID)
-        view:invalidate_visual_metrics(PROVIDER_ID)
+        for line in pairs(entry.consumer_lines or {}) do
+          view:invalidate_line_render(PROVIDER_ID, line, line)
+          view:invalidate_visual_metrics(PROVIDER_ID, line, line)
+        end
         core.redraw = true
       end,
     })
     view.__markdown_live_image_cache[key] = entry
   end
+  entry.consumer_lines = entry.consumer_lines or {}
+  entry.consumer_lines[span.line] = true
 
   if entry.status == "ready" and entry.image then
     local natural_w, natural_h = entry.image:get_size()
@@ -382,9 +386,8 @@ end
 
 local provider = {}
 
-function provider:generation(view)
-  local state = current_selection_state(view)
-  return table.concat(state and state.selections or {}, ",")
+function provider:line_generation(view, line)
+  return view_active_line(view, line) and "active" or "inactive"
 end
 
 local function heading_content_fragments(view, text, heading, font, active)
@@ -589,11 +592,31 @@ local function ensure_owner(view)
   return true
 end
 
+local function invalidate_selection_lines(view, new_state, old_state)
+  local lines = {}
+  for _, state in ipairs({ old_state, new_state }) do
+    for i = 1, #(state and state.selections or {}), 4 do
+      local line1 = state.selections[i]
+      local line2 = state.selections[i + 2] or line1
+      if line1 then
+        for line = math.min(line1, line2), math.max(line1, line2) do lines[line] = true end
+      end
+    end
+  end
+  for line in pairs(lines) do
+    view:invalidate_line_render(PROVIDER_ID, line, line)
+    view:invalidate_visual_metrics(PROVIDER_ID, line, line)
+  end
+end
+
 function live.attach(view)
   if not (view and view.extends and view:extends(DocView)) then return false end
   if view.__markdown_live_attached then return false end
   view:add_visual_metric_provider(PROVIDER_ID, provider)
   view:add_line_render_provider(PROVIDER_ID, provider)
+  view:add_selection_listener(PROVIDER_ID, function(owner, new_state, old_state)
+    invalidate_selection_lines(owner, new_state, old_state)
+  end)
   view.__markdown_live_attached = true
   core.log_quiet("Markdown live editor attached to %s", view.doc and view.doc:get_name() or tostring(view))
   return true
@@ -603,6 +626,7 @@ function live.detach(view)
   if not (view and view.__markdown_live_attached) then return false end
   view:remove_visual_metric_provider(PROVIDER_ID)
   view:remove_line_render_provider(PROVIDER_ID)
+  view:remove_selection_listener(PROVIDER_ID)
   view.__markdown_live_attached = nil
   core.log_quiet("Markdown live editor detached from %s", view.doc and view.doc:get_name() or tostring(view))
   return true
