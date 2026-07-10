@@ -41,7 +41,7 @@ static const AnvilMarkdownExtensionCapture *find_capture(const CaptureList *list
 
 int main(void) {
   const char *lines[] = {
-    "[[Note#Heading|Alias]] ![[image.png|640x480]] ==marked== `==raw==`\n",
+    "[[Note#Heading|Alias]] ![[image.png|640x480]] ==marked== `==raw==` #project/anvil #123 C#code \\#escaped\n",
     "%%comment\n",
     "continues%% \\[[escaped]] [[incomplete\n",
   };
@@ -66,10 +66,14 @@ int main(void) {
   const AnvilMarkdownExtensionCapture *embed = find_capture(&list, "span.embed");
   const AnvilMarkdownExtensionCapture *highlight = find_capture(&list, "span.highlight");
   const AnvilMarkdownExtensionCapture *comment = find_capture(&list, "span.comment");
+  const AnvilMarkdownExtensionCapture *tag = find_capture(&list, "span.tag");
   CHECK(wiki != NULL && wiki->start_byte == 0 && wiki->end_byte == 22);
   CHECK(embed != NULL && embed->start_byte == 23);
   CHECK(highlight != NULL);
   CHECK(comment != NULL);
+  CHECK(tag != NULL);
+  CHECK(tag->end_byte - tag->start_byte == strlen("#project/anvil"));
+  CHECK(find_capture(&list, "content.tag")->match_id == tag->match_id);
   CHECK(wiki->match_id != embed->match_id);
   CHECK(wiki->match_id != highlight->match_id);
   CHECK(wiki->match_id != comment->match_id);
@@ -80,13 +84,15 @@ int main(void) {
   CHECK(find_capture(&list, "content.target")->match_id == wiki->match_id);
   CHECK(memchr(snapshot->bytes + comment->start_byte, '\n', comment->end_byte - comment->start_byte) != NULL);
 
-  uint32_t wiki_count = 0, highlight_count = 0;
+  uint32_t wiki_count = 0, highlight_count = 0, tag_count = 0;
   for (uint32_t i = 0; i < list.count; i++) {
     if (strcmp(list.captures[i].name, "span.wiki_link") == 0) wiki_count++;
     if (strcmp(list.captures[i].name, "span.highlight") == 0) highlight_count++;
+    if (strcmp(list.captures[i].name, "span.tag") == 0) tag_count++;
   }
   CHECK(wiki_count == 1);
   CHECK(highlight_count == 1);
+  CHECK(tag_count == 1);
 
   anvil_ts_snapshot_free(snapshot);
 

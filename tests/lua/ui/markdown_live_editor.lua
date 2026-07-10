@@ -915,6 +915,26 @@ test.describe("Markdown Live Editor", function()
     test.equal(has_bullet, false)
   end)
 
+  test.it("styles semantic Obsidian tags without treating numeric or word-bound hashes as tags", function()
+    local view, doc = make_view("text #project/anvil #123 C#code \\#escaped\nplain", "tags.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+    local rendered = test.not_nil(view:get_line_render(1))
+    local tags = {}
+    for _, fragment in ipairs(rendered.fragments) do
+      if fragment.tag then tags[#tags + 1] = fragment end
+    end
+    test.equal(#tags, 1)
+    test.equal(tags[1].text, "#project/anvil")
+    test.equal(tags[1].tag, "project/anvil")
+    test.equal(tags[1].color, style.markdown_live_tag)
+    doc:set_selection(1, 8)
+    local active = view:get_line_render(1)
+    for _, fragment in ipairs(active and active.fragments or {}) do
+      test.equal(fragment.tag, nil)
+    end
+  end)
+
   test.it("styles semantic frontmatter as source-preserving structured content", function()
     local view, doc = make_view("---\naliases: [Example]\ntags:\n  - project/anvil\n---\n# Body", "properties.md")
     doc:set_selection(6, 2)

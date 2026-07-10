@@ -423,14 +423,16 @@ end
 
 local function extension_parent_kind(name)
   return name == "span.wiki_link" or name == "span.embed" or name == "span.comment"
+    or name == "span.tag"
 end
 
 local function extension_capture(name)
   return name == "span.wiki_link" or name == "span.embed" or name == "span.highlight"
-    or name == "span.comment" or name:match("^marker%.wiki_")
+    or name == "span.comment" or name == "span.tag" or name:match("^marker%.wiki_")
     or name:match("^marker%.embed_") or name:match("^marker%.highlight_")
     or name:match("^marker%.comment_") or name == "content.target"
     or name == "content.alias" or name == "content.highlight" or name == "content.comment"
+    or name == "content.tag"
 end
 
 function Model:captures_for_lines(kind, line1, line2, opts)

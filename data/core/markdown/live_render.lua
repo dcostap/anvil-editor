@@ -157,6 +157,7 @@ local REVEAL_TYPES = {
   image = true,
   wiki_link = true,
   embed = true,
+  tag = true,
 }
 
 local function node_line_range(node, line, line_text)
@@ -862,6 +863,26 @@ local function frontmatter_for_line(view, line)
   end
 end
 
+local function semantic_tag_fragments(view, line_text, line, reveal_units)
+  local fragments = {}
+  for _, node in ipairs(semantic_line(view, line) or {}) do
+    if node.type == "tag" and node.source.line1 == line and node.source.line2 == line
+      and not reveal_unit_matches(reveal_units, node.id, node.source.col1, node.source.col2)
+    then
+      local content = node.attributes and node.attributes.tag
+      fragments[#fragments + 1] = {
+        source_col1 = node.source.col1, source_col2 = node.source.col2,
+        text = line_text:sub(node.source.col1, node.source.col2 - 1),
+        color = style.markdown_live_tag,
+        semantic_id = node.id,
+        tag = content and line_text:sub(content.col1, content.col2 - 1)
+          or line_text:sub(node.source.col1 + 1, node.source.col2 - 1),
+      }
+    end
+  end
+  return fragments
+end
+
 local function semantic_block_fragments(view, line_text, line, reveal_units)
   for _, unit in ipairs(reveal_units or {}) do
     if unit.whole_line then return {} end
@@ -976,6 +997,9 @@ local function inline_fragments(line_text, line, view, reveal_units)
     add_fragment(fragments, occupied, fragment)
   end
   for _, fragment in ipairs(semantic_link_fragments(view, line_text, line, reveal_units)) do
+    add_fragment(fragments, occupied, fragment)
+  end
+  for _, fragment in ipairs(semantic_tag_fragments(view, line_text, line, reveal_units)) do
     add_fragment(fragments, occupied, fragment)
   end
   for _, fragment in ipairs(semantic_formatting_fragments(view, line_text, line, reveal_units)) do

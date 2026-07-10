@@ -45,6 +45,22 @@ static bool whitespace(char byte) {
   return byte == ' ' || byte == '\t' || byte == '\r' || byte == '\n';
 }
 
+static bool ascii_alnum(char byte) {
+  return (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
+    (byte >= '0' && byte <= '9');
+}
+
+static bool tag_byte(char byte) {
+  return ascii_alnum(byte) || byte == '_' || byte == '-' || byte == '/' ||
+    (unsigned char)byte >= 0x80;
+}
+
+static bool tag_boundary_before(const ExtensionScan *scan, uint32_t position) {
+  if (position == 0) return true;
+  char previous = scan->source[position - 1];
+  return !ascii_alnum(previous) && previous != '_';
+}
+
 static uint32_t find_delimiter(
   ExtensionScan *scan,
   uint32_t start,
@@ -149,6 +165,26 @@ static bool scan_extensions(ExtensionScan *scan) {
         continue;
       }
       scan->comments_exhausted = true;
+    }
+
+    if (scan->source[cursor] == '#' && cursor + 1 < scan->length &&
+        tag_boundary_before(scan, cursor) && tag_byte(scan->source[cursor + 1]) &&
+        scan->source[cursor + 1] != '-' && scan->source[cursor + 1] != '/') {
+      uint32_t end = cursor + 1;
+      bool has_non_digit = false;
+      while (end < scan->length && tag_byte(scan->source[end])) {
+        char byte = scan->source[end];
+        if ((byte < '0' || byte > '9') && byte != '-' && byte != '/') has_non_digit = true;
+        end++;
+      }
+      while (end > cursor + 1 && scan->source[end - 1] == '/') end--;
+      if (has_non_digit && end > cursor + 1) {
+        scan->active_match_id = scan->next_match_id++;
+        if (!emit(scan, "span.tag", cursor, end) ||
+            !emit(scan, "content.tag", cursor + 1, end)) return false;
+        cursor = end;
+        continue;
+      }
     }
 
     if (cursor >= scan->wikilink_disabled_until && cursor + 2 < scan->length &&

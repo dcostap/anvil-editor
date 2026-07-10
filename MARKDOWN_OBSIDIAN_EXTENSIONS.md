@@ -8,8 +8,9 @@ The worker-backed semantic snapshot adds exact source-ranged captures for:
 
 - `[[target|alias]]` as `wiki_link`;
 - `![[target|alias]]` as `embed`;
-- `==content==` as `highlight`; and
-- `%%content%%` as `comment`, including multiline comments.
+- `==content==` as `highlight`;
+- `%%content%%` as `comment`, including multiline comments; and
+- boundary-valid `#nested/tag` forms as `tag`, with separate content ranges.
 
 Each complete construct publishes a parent range, separate opening/closing marker ranges, and content ranges. Wikilinks and embeds publish separate `target` and optional `alias` attributes. Image dimensions remain serialized in the alias portion at this layer; the image/embed layer interprets width and width×height forms later.
 
@@ -29,7 +30,7 @@ Comments suppress CommonMark inline captures inside their range. Wikilink/embed 
 
 ## Conservative fallback
 
-The scanner publishes only complete delimiter pairs. Escaped openers, incomplete Wikilinks, incomplete highlights, and empty content remain source. Wikilinks/highlights do not cross source lines; comments may cross lines. Delimiter and escape processing are bounded linearly even for large unmatched-delimiter or backslash-heavy input. The scan checks both cancellation and its worker deadline during preprocessing and delimiter/content searches.
+The scanner publishes only complete delimiter pairs. Escaped openers, incomplete Wikilinks, incomplete highlights, and empty content remain source. Tag scanning rejects escaped hashes, word-bound hashes such as `C#code`, numeric-only tags, leading/trailing path separators, and excluded code/frontmatter/HTML/math ranges. Valid tag source remains textually unchanged and receives semantic tag styling; touching it returns to the ordinary raw Editor path. Wikilinks/highlights do not cross source lines; comments may cross lines. Delimiter and escape processing are bounded linearly even for large unmatched-delimiter or backslash-heavy input. The scan checks both cancellation and its worker deadline during preprocessing and delimiter/content searches.
 
 ## Publication and performance
 
