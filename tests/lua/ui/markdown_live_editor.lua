@@ -915,6 +915,32 @@ test.describe("Markdown Live Editor", function()
     test.equal(has_bullet, false)
   end)
 
+  test.it("styles semantic frontmatter as source-preserving structured content", function()
+    local view, doc = make_view("---\naliases: [Example]\ntags:\n  - project/anvil\n---\n# Body", "properties.md")
+    doc:set_selection(6, 2)
+    refresh(view)
+    local opening = test.not_nil(view:get_line_render(1))
+    test.equal(opening.fragments[1].text, "---")
+    test.equal(opening.fragments[1].color, style.markdown_live_frontmatter_delimiter)
+    local property = test.not_nil(view:get_line_render(2))
+    test.equal(property.fragments[1].text, "aliases")
+    test.equal(property.fragments[1].color, style.markdown_live_frontmatter_key)
+    test.equal(property.fragments[2].text, ": ")
+    local list_value = test.not_nil(view:get_line_render(4))
+    test.equal(list_value.fragments[1].text, "  - project/anvil")
+
+    local markdown_decoration
+    for _, entry in ipairs(view:decoration_provider_entries()) do
+      if entry.id == "markdown-live" then markdown_decoration = entry.provider break end
+    end
+    markdown_decoration = test.not_nil(markdown_decoration)
+    test.equal(markdown_decoration:line_background(view, 3), style.markdown_live_frontmatter_background)
+    test.equal(markdown_decoration:line_background(view, 6), nil)
+
+    doc:set_selection(2, 3)
+    test.equal(view:get_line_render(2), nil)
+  end)
+
   test.it("presents semantic callout headers, bodies, and unknown-type fallbacks", function()
     local view, doc = make_view("> [!note]+ Custom title\n> body [[Target]]\n\n> [!mystery]\n> fallback\n\nplain", "callouts.md")
     doc:set_selection(7, 1)

@@ -1083,7 +1083,7 @@ Exit gate: image references and both documented external sizing forms remain cor
 
 ### Phase 6: block-level core experience
 
-**Semantic marker slice completed July 10, 2026.** Unordered list, task, and blockquote markers now compose with semantic inline rendering; checked/unchecked tasks toggle exact source ranges through generic fragment input; Obsidian callouts receive semantic header/card presentation with safe unknown-type fallback and nested inline rendering; fenced code receives language/closing chrome and generic block backgrounds while content stays raw; thematic breaks render as semantic rules; and active block lines retain safe raw reveal. The contract and regression evidence are recorded in `MARKDOWN_BLOCK_PRESENTATION.md`.
+**Semantic marker slice completed July 10, 2026.** Unordered list, task, and blockquote markers now compose with semantic inline rendering; checked/unchecked tasks toggle exact source ranges through generic fragment input; Obsidian callouts receive semantic header/card presentation with safe unknown-type fallback and nested inline rendering; fenced code receives language/closing chrome and generic block backgrounds while content stays raw; thematic breaks render as semantic rules; parser-confirmed frontmatter receives source-preserving structured styling and conservative alias/tag metadata indexing; and active block lines retain safe raw reveal. The contract and regression evidence are recorded in `MARKDOWN_BLOCK_PRESENTATION.md`.
 
 - paragraphs/line breaks
 - ordered/unordered/nested lists

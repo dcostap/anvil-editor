@@ -156,38 +156,75 @@ local function unique_item(item)
   return item
 end
 
-local function parse_frontmatter_aliases(text)
-  local aliases = {}
-  if not text:match("^%-%-%-\n") and not text:match("^%-%-%-%r\n") then
-    return aliases
+local function unquote_scalar(value)
+  value = trim(value)
+  local first, last = value:sub(1, 1), value:sub(-1)
+  if #value >= 2 and ((first == "\"" and last == "\"") or (first == "'" and last == "'")) then
+    value = value:sub(2, -2)
   end
+  return trim(value)
+end
 
-  local body = text:gsub("\r\n", "\n")
-  local finish = body:find("\n%-%-%-\n", 5)
-  if not finish then return aliases end
-  local frontmatter = body:sub(5, finish - 1)
-  local current_alias_list = false
+local function parse_inline_list(value)
+  local values = {}
+  if value:sub(1, 1) ~= "[" or value:sub(-1) ~= "]" then return nil end
+  for item in value:sub(2, -2):gmatch("[^,]+") do
+    item = unquote_scalar(item)
+    if item ~= "" then values[#values + 1] = item end
+  end
+  return values
+end
+
+local function parse_frontmatter_metadata(text)
+  local result = { aliases = {}, tags = {}, values = {} }
+  local body = (text or ""):gsub("\r\n", "\n")
+  local delimiter = body:match("^(%-%-%-)\n") or body:match("^(%+%+%+)\n")
+  if not delimiter then return result end
+  local finish = body:find("\n" .. delimiter:gsub("(%W)", "%%%1") .. "\n", #delimiter + 2)
+  if not finish then return result end
+
+  local current_key
+  local frontmatter = body:sub(#delimiter + 2, finish - 1)
   for line in (frontmatter .. "\n"):gmatch("(.-)\n") do
     local key, value = line:match("^([%w_%-]+):%s*(.-)%s*$")
     if key then
-      current_alias_list = (key == "aliases" or key == "alias") and value == ""
-      if key == "aliases" or key == "alias" then
-        if value:sub(1, 1) == "[" and value:sub(-1) == "]" then
-          for alias in value:sub(2, -2):gmatch("[^,]+") do
-            aliases[#aliases + 1] = trim(alias:gsub("^[\"']", ""):gsub("[\"']$", ""))
-          end
-        elseif value ~= "" then
-          aliases[#aliases + 1] = trim(value:gsub("^[\"']", ""):gsub("[\"']$", ""))
-        end
+      current_key = key:lower()
+      local list = parse_inline_list(value)
+      if list then
+        result.values[current_key] = list
+      elseif value ~= "" then
+        result.values[current_key] = unquote_scalar(value)
+      else
+        result.values[current_key] = {}
       end
-    elseif current_alias_list then
-      local alias = line:match("^%s*%-%s*(.-)%s*$")
-      if alias and alias ~= "" then
-        aliases[#aliases + 1] = trim(alias:gsub("^[\"']", ""):gsub("[\"']$", ""))
+    elseif current_key then
+      local item = line:match("^%s+%-%s*(.-)%s*$")
+      if item then
+        local values = result.values[current_key]
+        if type(values) ~= "table" then values = {}; result.values[current_key] = values end
+        item = unquote_scalar(item)
+        if item ~= "" then values[#values + 1] = item end
+      elseif line:match("^%S") then
+        current_key = nil
       end
     end
   end
-  return aliases
+
+  local function collect(keys, destination, normalize)
+    for _, key in ipairs(keys) do
+      local values = result.values[key]
+      if values ~= nil then
+        if type(values) ~= "table" then values = { values } end
+        for _, value in ipairs(values) do
+          value = normalize and normalize(value) or value
+          if value ~= "" then destination[#destination + 1] = value end
+        end
+      end
+    end
+  end
+  collect({ "aliases", "alias" }, result.aliases)
+  collect({ "tags", "tag" }, result.tags, function(value) return value:gsub("^#", "") end)
+  return result
 end
 
 local Index = {}
@@ -366,12 +403,15 @@ function Index:make_note_entry(path, text, opts)
 
   local rel = self:relative_path(path)
   local display_name = display_basename(strip_markdown_extension(rel))
+  local metadata = parse_frontmatter_metadata(text)
   return {
     kind = "note",
     abs_path = common.normalize_path(path),
     rel_path = rel,
     display_name = display_name,
-    aliases = parse_frontmatter_aliases(text),
+    aliases = metadata.aliases,
+    tags = metadata.tags,
+    frontmatter = metadata.values,
     headings = anchor_index.headings,
     headings_by_slug = headings_by_slug,
     headings_by_text = headings_by_text,

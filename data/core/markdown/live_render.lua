@@ -852,12 +852,56 @@ local function callout_for_line(view, line)
   end
 end
 
+local function frontmatter_for_line(view, line)
+  for _, node in ipairs(semantic_line(view, line) or {}) do
+    if node.type == "frontmatter" then
+      local line2 = node.source.line2
+      if node.source.col2 == 1 and line2 > node.source.line1 then line2 = line2 - 1 end
+      if line >= node.source.line1 and line <= line2 then return node, line2 end
+    end
+  end
+end
+
 local function semantic_block_fragments(view, line_text, line, reveal_units)
   for _, unit in ipairs(reveal_units or {}) do
     if unit.whole_line then return {} end
   end
   local fragments, seen = {}, {}
   local callout = callout_for_line(view, line)
+  local frontmatter, frontmatter_line2 = frontmatter_for_line(view, line)
+  if frontmatter then
+    if line == frontmatter.source.line1 or line == frontmatter_line2 then
+      return {
+        {
+          source_col1 = 1, source_col2 = #line_text + 1, text = line_text,
+          color = style.markdown_live_frontmatter_delimiter,
+          semantic_id = frontmatter.id .. ":delimiter:" .. line,
+        },
+      }
+    end
+    local key, separator = line_text:match("^([%w_-]+)(:%s*)")
+    if key then
+      local separator_col2 = #key + #separator + 1
+      return {
+        {
+          source_col1 = 1, source_col2 = #key + 1, text = key,
+          color = style.markdown_live_frontmatter_key,
+          semantic_id = frontmatter.id .. ":key:" .. line,
+        },
+        {
+          source_col1 = #key + 1, source_col2 = separator_col2, text = separator,
+          color = style.markdown_live_frontmatter_delimiter,
+          semantic_id = frontmatter.id .. ":separator:" .. line,
+        },
+      }
+    end
+    return {
+      {
+        source_col1 = 1, source_col2 = #line_text + 1, text = line_text,
+        color = style.text, semantic_id = frontmatter.id .. ":value:" .. line,
+      },
+    }
+  end
   for _, node in ipairs(semantic_line(view, line) or {}) do
     local attributes = node.attributes or {}
     if node.type == "thematic_break" and node.source.line1 == line then
@@ -1023,7 +1067,8 @@ end
 function decoration_provider:line_background(view, line)
   if view_in_source_mode(view) or line_in_semantic_comment(view, line) then return nil end
   if fenced_code_for_line(view, line) then return style.markdown_live_code_background end
-  return callout_for_line(view, line) and style.markdown_live_callout_background or nil
+  if callout_for_line(view, line) then return style.markdown_live_callout_background end
+  return frontmatter_for_line(view, line) and style.markdown_live_frontmatter_background or nil
 end
 
 function provider:line_generation(view, line)
