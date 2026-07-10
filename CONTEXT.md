@@ -213,7 +213,7 @@ The bottom information bar that shows state, messages, tooltips, and context for
 _Avoid_: StatusView, bottom bar
 
 **Navigation Boundary Feedback**:
-A brief user-facing message shown when a directional target-navigation command cannot move because there is no target farther in that direction.
+A brief user-facing message shown when directional navigation reaches the boundary of its current scope. In a multi-file Diff View, it can announce that repeating the command will continue into the adjacent file.
 _Avoid_: wraparound feedback, no-op warning
 
 **Point of Interest / POI**:
@@ -237,25 +237,57 @@ A floating in-window tool for inspecting and temporarily changing the current th
 _Avoid_: Theme popup, color config
 
 **Git View**:
-The project-owned Git interface for browsing commits, file history, and Git-backed diffs.
-_Avoid_: Git popup, Git panel
+The family of top-level Git-related Main Surfaces for a Project, including the Git Log, Commit Diff Views, File History Views, Directory History Views, and Combined Path History Views. It is not a visible container with nested tabs.
+_Avoid_: Git popup, Git panel, Git tab container
 
 **Git Log**:
-The project commit list in the Git View.
-_Avoid_: commit browser
+The singleton Main Tab for browsing commits from one selected Git repository in a Project and opening commit-focused views. Closing its visible tab hides it so the same Git Log can be restored later.
+_Avoid_: commit browser, main Git View
+
+**Selected Git Repository**:
+The repository whose commits the Project's singleton Git Log currently displays.
+_Avoid_: active repository, current repo
 
 **Commit Diff View**:
-A Git View tab that compares a commit or working-tree state against another Git state.
+A closable Main Tab for browsing all files changed by a commit or working-tree state and comparing them against another Git state.
 _Avoid_: commit diff tab
 
 **File History View**:
-A Git View tab that shows revisions affecting a file or selection.
+A closable Main Tab showing revisions affecting one project file or a selection within that file.
 _Avoid_: file log, selection log
+
+**Directory History View**:
+A closable Main Tab showing revisions that affected paths beneath one project directory.
+_Avoid_: folder log, directory log
+
+**Combined Path History View**:
+A closable Main Tab showing revisions that affected any path in a selected set of project files or directories.
+_Avoid_: multi-file log, combined log
+
+**Local Changes Revision**:
+The newest revision in a File History View, representing the current Document including unsaved and uncommitted changes.
+_Avoid_: dirty revision, working copy snapshot
 
 **Historical Document**:
 A read-only Document containing file text from a past Git revision.
 _Avoid_: historical buffer, snapshot buffer
 
+**Diff View**:
+A visual comparison of two text sources, presented through two Diff Sides.
+_Avoid_: diffviewer
+
+**Diff Side**:
+One document surface in a Diff View, representing one of the compared text sources. A file-backed Diff Side presents the same Document as that file's Editors so edits remain synchronized.
+_Avoid_: diff pane, side view
+
 **Text Diff View**:
-A Diff View comparing arbitrary text selections or generated text, independent of whether the text came from Git.
+A top-level Main Tab comparing arbitrary text selections or generated text, independent of whether the text came from Git.
 _Avoid_: string comparison
+
+**Blank Diff View**:
+A Text Diff View with two initially blank, editable untitled Documents for live arbitrary comparison.
+_Avoid_: empty diff popup
+
+**Clipboard Comparison**:
+A Text Diff View with editable clipboard text on the left and the current file or selected file fragment on the right. A project-file side remains connected to that file's Document.
+_Avoid_: clipboard snapshot diff
