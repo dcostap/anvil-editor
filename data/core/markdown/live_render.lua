@@ -524,34 +524,48 @@ local function image_fragment(view, span, opts)
   local link = span.link
   if not (link and (link.kind == "image" or link.kind == "embed") and is_image_target(link.path)) then return nil end
   view.__markdown_live_image_cache = view.__markdown_live_image_cache or {}
-  local key = link.raw_target or link.path
-  local entry = view.__markdown_live_image_cache[key]
-  if not entry then
-    local project = core.current_project(view.doc.abs_filename)
-    entry = images.ensure_entry(link.path, {
-      alt = link.alias or link.alt,
-      source_path = view.doc.abs_filename,
-      project_root = project and project.path,
-      download_remote = config.markdown_live_download_remote_images == true,
-      on_done = function(ok, err, filename)
-        if ok and filename then
-          local loaded = images.load_from_path(filename)
-          for key, value in pairs(loaded) do entry[key] = value end
-        else
-          entry.status = "error"
-          entry.errmsg = err or "image download failed"
-        end
-        for line in pairs(entry.consumer_lines or {}) do
-          view:invalidate_line_render(PROVIDER_ID, line, line)
-          view:invalidate_visual_metrics(PROVIDER_ID, line, line)
-        end
-        core.redraw = true
-      end,
-    })
-    view.__markdown_live_image_cache[key] = entry
+  view.__markdown_live_image_references = view.__markdown_live_image_references or {}
+  local project = core.current_project(view.doc.abs_filename)
+  local owner = view.__markdown_live_owner
+  local asset_opts = {
+    alt = link.alias or link.alt,
+    source_path = view.doc.abs_filename,
+    project_root = project and project.path,
+    download_remote = config.markdown_live_download_remote_images == true,
+    retry_generation = owner and owner.link_index and owner.link_index.generation or 0,
+  }
+  local key = images.asset_key(link.path, asset_opts)
+  local reference_id = link.semantic_id or table.concat({ span.line, span.col1, span.col2 }, ":")
+  local old_key = view.__markdown_live_image_references[reference_id]
+  if old_key and old_key ~= key then
+    local old_record = view.__markdown_live_image_cache[old_key]
+    if old_record then
+      old_record.consumers[reference_id] = nil
+      if not next(old_record.consumers) then
+        images.unsubscribe(old_record.entry, view)
+        view.__markdown_live_image_cache[old_key] = nil
+      end
+    end
   end
-  entry.consumer_lines = entry.consumer_lines or {}
-  entry.consumer_lines[span.line] = true
+  view.__markdown_live_image_references[reference_id] = key
+
+  local entry = images.get_asset(link.path, asset_opts)
+  local record = view.__markdown_live_image_cache[key]
+  if not record or record.entry ~= entry then
+    if record then images.unsubscribe(record.entry, view) end
+    record = { entry = entry, consumers = {} }
+    view.__markdown_live_image_cache[key] = record
+    images.subscribe(entry, view, function()
+      local lines = {}
+      for _, line in pairs(record.consumers) do lines[line] = true end
+      for line in pairs(lines) do
+        view:invalidate_line_render(PROVIDER_ID, line, line)
+        view:invalidate_visual_metrics(PROVIDER_ID, line, line)
+      end
+      core.redraw = true
+    end)
+  end
+  record.consumers[reference_id] = span.line
 
   if entry.status == "ready" and entry.image then
     local natural_w, natural_h = entry.image:get_size()
@@ -1064,11 +1078,38 @@ local function apply_source_mode(view, enabled, reason)
   return true
 end
 
+local function prune_image_references(view, line1, line2)
+  for key, record in pairs(view and view.__markdown_live_image_cache or {}) do
+    for reference_id, line in pairs(record.consumers or {}) do
+      if not line1 or (line >= line1 and line <= line2) then
+        record.consumers[reference_id] = nil
+        if view.__markdown_live_image_references then
+          view.__markdown_live_image_references[reference_id] = nil
+        end
+      end
+    end
+    if not next(record.consumers or {}) then
+      images.unsubscribe(record.entry, view)
+      view.__markdown_live_image_cache[key] = nil
+    end
+  end
+end
+
+local function clear_image_cache(view)
+  for _, record in pairs(view and view.__markdown_live_image_cache or {}) do
+    if record.entry then images.unsubscribe(record.entry, view) end
+  end
+  if view then
+    view.__markdown_live_image_cache = nil
+    view.__markdown_live_image_references = nil
+  end
+end
+
 local function invalidate_metadata_caches(view, event)
   if not view then return end
   view.__markdown_live_raw_block_cache = nil
   if not event or event.filename_changed or event.syntax_changed then
-    view.__markdown_live_image_cache = nil
+    clear_image_cache(view)
   end
   if view.invalidate_line_render then view:invalidate_line_render(PROVIDER_ID) end
   if view.invalidate_visual_metrics then view:invalidate_visual_metrics(PROVIDER_ID) end
@@ -1133,10 +1174,12 @@ local function invalidate_semantic_publication(view, instance, reason)
     for _, range in ipairs(ranges) do
       local line1 = common.clamp(range.line1 or 1, 1, #view.doc.lines)
       local line2 = common.clamp(range.line2 or line1, line1, #view.doc.lines)
+      prune_image_references(view, line1, line2)
       view:invalidate_line_render(PROVIDER_ID, line1, line2)
       view:invalidate_visual_metrics(PROVIDER_ID, line1, line2)
     end
   else
+    prune_image_references(view)
     view:invalidate_line_render(PROVIDER_ID)
     view:invalidate_visual_metrics(PROVIDER_ID)
   end
@@ -1252,6 +1295,7 @@ function live.detach(view)
   if not (view and view.__markdown_live_attached) then return false end
   unbind_link_index(view)
   unbind_semantic_model(view)
+  clear_image_cache(view)
   view:remove_visual_metric_provider(PROVIDER_ID)
   view:remove_line_render_provider(PROVIDER_ID)
   view:remove_poi_provider(PROVIDER_ID)

@@ -152,18 +152,88 @@ function images.load_from_path(path, opts)
   return { status = "ready", path = path, image = image }
 end
 
-function images.ensure_entry(url, opts)
+local assets = {}
+local asset_clock = 0
+local MAX_ASSETS = 256
+
+local function touch(entry)
+  asset_clock = asset_clock + 1
+  entry.last_used = asset_clock
+end
+
+local function prune_assets()
+  local count = 0
+  for _ in pairs(assets) do count = count + 1 end
+  while count > MAX_ASSETS do
+    local oldest_key, oldest
+    for key, entry in pairs(assets) do
+      if entry.status ~= "loading" and not next(entry.subscribers or {})
+        and (not oldest or (entry.last_used or 0) < (oldest.last_used or 0))
+      then
+        oldest_key, oldest = key, entry
+      end
+    end
+    if not oldest_key then return end
+    assets[oldest_key] = nil
+    count = count - 1
+  end
+end
+
+local function normalize_context_path(path)
+  return path and common.path_compare_key(common.normalize_path(path)) or ""
+end
+
+function images.asset_key(url, opts)
   opts = opts or {}
-  local entry = {
-    alt = opts.alt,
-    url = url,
-    status = "idle",
-  }
+  local local_path = images.resolve_local_path(url, opts)
+  if local_path then return "local\0" .. normalize_context_path(local_path) end
+  if images.is_remote(url) then
+    return table.concat({
+      "remote", tostring(url or ""),
+      normalize_context_path(opts.cache_dir or images.default_cache_dir),
+      opts.download_remote and "on" or "off",
+    }, "\0")
+  end
+  return table.concat({
+    "missing", tostring(url or ""),
+    normalize_context_path(opts.source_path),
+    normalize_context_path(opts.project_root),
+  }, "\0")
+end
+
+local function notify(entry)
+  for owner, callback in pairs(entry.subscribers or {}) do
+    local ok, err = pcall(callback, entry)
+    if not ok then
+      local core = require "core"
+      core.log_quiet("Markdown image asset subscriber failed: %s", tostring(err))
+      entry.subscribers[owner] = nil
+    end
+  end
+end
+
+local function apply_loaded(entry, loaded)
+  entry.image = nil
+  entry.errmsg = nil
+  for key, value in pairs(loaded) do entry[key] = value end
+  local info = entry.path and system.get_file_info(entry.path)
+  entry.modified = info and info.modified
+  entry.size = info and info.size
+end
+
+local function refresh_asset(entry, url, opts)
+  entry.alt = opts.alt
+  entry.url = url
+  entry.retry_generation = opts.retry_generation
+  entry.status = "idle"
+  entry.image = nil
+  entry.errmsg = nil
 
   local local_path = images.resolve_local_path(url, opts)
   if local_path then
-    local loaded = images.load_from_path(local_path, opts)
-    for key, value in pairs(loaded) do entry[key] = value end
+    entry.path = local_path
+    apply_loaded(entry, images.load_from_path(local_path, opts))
+    notify(entry)
     return entry
   end
 
@@ -171,14 +241,14 @@ function images.ensure_entry(url, opts)
     local cache_path = images.get_image_cache_path(url, opts.cache_dir)
     entry.path = cache_path
     if system.get_file_info(cache_path) then
-      local loaded = images.load_from_path(cache_path, opts)
-      for key, value in pairs(loaded) do entry[key] = value end
+      apply_loaded(entry, images.load_from_path(cache_path, opts))
+      notify(entry)
       return entry
     end
-
     if not opts.download_remote then
       entry.status = "remote-disabled"
       entry.errmsg = "remote image downloads are disabled"
+      notify(entry)
       return entry
     end
 
@@ -187,19 +257,76 @@ function images.ensure_entry(url, opts)
       local http = require "core.http"
       downloader = http.download
     end
-
     entry.status = "loading"
     downloader(url, {
       directory = opts.cache_dir or images.default_cache_dir,
       filename = common.basename(cache_path),
-      on_done = opts.on_done,
+      on_done = function(ok, err, filename)
+        if ok and filename then
+          entry.path = filename
+          apply_loaded(entry, images.load_from_path(filename, opts))
+        else
+          entry.status = "error"
+          entry.errmsg = err or "image download failed"
+        end
+        notify(entry)
+      end,
     })
     return entry
   end
 
   entry.status = "error"
   entry.errmsg = "unsupported image source"
+  notify(entry)
   return entry
+end
+
+function images.get_asset(url, opts)
+  opts = opts or {}
+  local key = images.asset_key(url, opts)
+  local entry = assets[key]
+  if not entry then
+    entry = {
+      key = key,
+      status = "idle",
+      subscribers = setmetatable({}, { __mode = "k" }),
+    }
+    assets[key] = entry
+    touch(entry)
+    prune_assets()
+    return refresh_asset(entry, url, opts)
+  end
+
+  touch(entry)
+  local retry = entry.retry_generation ~= opts.retry_generation
+  if retry and entry.status ~= "loading" then
+    local info = entry.path and system.get_file_info(entry.path)
+    local changed = info and (info.modified ~= entry.modified or info.size ~= entry.size)
+    if entry.status == "error" or entry.status == "remote-disabled" or changed then
+      refresh_asset(entry, url, opts)
+    else
+      entry.retry_generation = opts.retry_generation
+    end
+  end
+  return entry
+end
+
+function images.subscribe(entry, owner, callback)
+  assert(entry and entry.subscribers, "Markdown image asset entry is required")
+  assert(owner ~= nil, "Markdown image asset subscriber owner is required")
+  assert(type(callback) == "function", "Markdown image asset subscriber must be a function")
+  entry.subscribers[owner] = callback
+end
+
+function images.unsubscribe(entry, owner)
+  if not (entry and entry.subscribers and entry.subscribers[owner]) then return false end
+  entry.subscribers[owner] = nil
+  return true
+end
+
+function images.clear_assets()
+  assets = {}
+  asset_clock = 0
 end
 
 function images.scale_size(width, height, max_width, resize, allow_upscale)
@@ -209,8 +336,10 @@ function images.scale_size(width, height, max_width, resize, allow_upscale)
 
   if resize then
     if resize.width and resize.height then
-      target_width = resize.width
-      target_height = resize.height
+      local scale = math.min(resize.width / width, resize.height / height)
+      if not allow_upscale then scale = math.min(scale, 1) end
+      target_width = math.max(math.floor(width * scale), 1)
+      target_height = math.max(math.floor(height * scale), 1)
     elseif resize.width then
       target_width = resize.width
       target_height = math.max(math.floor(height * (target_width / width)), 1)

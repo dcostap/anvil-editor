@@ -185,7 +185,7 @@ test.describe("Markdown Live Preview prototype baseline", function()
     end)
   end)
 
-  test.it("keeps a missing image result stale after the file appears", function()
+  test.it("adopts a missing image when the file appears", function()
     with_live_preview(function()
       local root = USERDIR .. PATHSEP .. "markdown-live-baseline-image-" .. system.get_process_id()
       local ok, err = common.mkdirp(root)
@@ -214,8 +214,8 @@ test.describe("Markdown Live Preview prototype baseline", function()
         for _, fragment in ipairs(view:iter_line_render_fragments(render_line)) do
           has_widget = has_widget or fragment.widget ~= nil
         end
-        test.equal(loads, 0)
-        test.equal(has_widget, false)
+        test.equal(loads, 1)
+        test.equal(has_widget, true)
       end)
 
       canvas.load_image = old_load_image
@@ -224,7 +224,7 @@ test.describe("Markdown Live Preview prototype baseline", function()
     end)
   end)
 
-  test.it("keeps a remote-disabled image stale after policy changes", function()
+  test.it("rekeys a remote image asset after policy changes", function()
     with_live_preview(function()
       local old_download_remote = config.markdown_live_download_remote_images
       config.markdown_live_download_remote_images = false
@@ -233,11 +233,11 @@ test.describe("Markdown Live Preview prototype baseline", function()
       refresh(view)
       view:get_line_render(1)
 
-      local old_ensure_entry = markdown.images.ensure_entry
+      local old_get_asset = markdown.images.get_asset
       local resolutions = 0
-      markdown.images.ensure_entry = function(...)
+      markdown.images.get_asset = function()
         resolutions = resolutions + 1
-        return old_ensure_entry(...)
+        return { status = "loading", subscribers = setmetatable({}, { __mode = "k" }) }
       end
       config.markdown_live_download_remote_images = true
       local ok, err = pcall(function()
@@ -245,11 +245,11 @@ test.describe("Markdown Live Preview prototype baseline", function()
         view:invalidate_visual_metrics("baseline-policy-change")
         view:get_line_render(1)
       end)
-      markdown.images.ensure_entry = old_ensure_entry
+      markdown.images.get_asset = old_get_asset
       config.markdown_live_download_remote_images = old_download_remote
       if not ok then error(err, 0) end
 
-      test.equal(resolutions, 0)
+      test.equal(resolutions, 1)
     end)
   end)
 

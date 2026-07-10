@@ -10,6 +10,8 @@ local function write_file(path, content)
 end
 
 test.describe("Markdown image helpers", function()
+  test.before_each(function() images.clear_assets() end)
+
   test.it("uses stable cache paths for remote images", function()
     local one = images.get_image_cache_path("https://example.com/a/diagram.png?rev=1", USERDIR .. PATHSEP .. "cache")
     local two = images.get_image_cache_path("https://example.com/a/diagram.png?rev=1", USERDIR .. PATHSEP .. "cache")
@@ -19,7 +21,7 @@ test.describe("Markdown image helpers", function()
 
   test.it("does not download remote images when policy is disabled", function()
     local called = false
-    local entry = images.ensure_entry("https://example.com/track.png", {
+    local entry = images.get_asset("https://example.com/track.png", {
       download_remote = false,
       downloader = function()
         called = true
@@ -64,6 +66,78 @@ test.describe("Markdown image helpers", function()
     common.rm(root, true)
   end)
 
+  test.it("keys local assets by resolution context and retries missing files by generation", function()
+    local root = USERDIR .. PATHSEP .. "markdown-image-assets-" .. system.get_process_id()
+    local one = root .. PATHSEP .. "one"
+    local two = root .. PATHSEP .. "two"
+    test.ok(common.mkdirp(one))
+    test.ok(common.mkdirp(two))
+    write_file(one .. PATHSEP .. "shared.png", "one")
+    write_file(two .. PATHSEP .. "shared.png", "two")
+    local loads = 0
+    local function loader(path)
+      loads = loads + 1
+      return { path = path, get_size = function() return 1, 1 end }
+    end
+    local first = images.get_asset("shared.png", {
+      source_path = one .. PATHSEP .. "Note.md", loader = loader, retry_generation = 1,
+    })
+    local shared = images.get_asset("shared.png", {
+      source_path = one .. PATHSEP .. "Note.md", loader = loader, retry_generation = 1,
+    })
+    local other = images.get_asset("shared.png", {
+      source_path = two .. PATHSEP .. "Note.md", loader = loader, retry_generation = 1,
+    })
+    test.equal(first, shared)
+    test.ok(first ~= other)
+    test.equal(loads, 2)
+    test.equal(first.path, one .. PATHSEP .. "shared.png")
+    test.equal(other.path, two .. PATHSEP .. "shared.png")
+
+    write_file(root .. PATHSEP .. "shared.png", "shared")
+    local shared_from_one = images.get_asset("../shared.png", {
+      source_path = one .. PATHSEP .. "Note.md", loader = loader, retry_generation = 1,
+    })
+    local shared_from_two = images.get_asset("../shared.png", {
+      source_path = two .. PATHSEP .. "Note.md", loader = loader, retry_generation = 1,
+    })
+    test.equal(shared_from_one, shared_from_two)
+    test.equal(loads, 3)
+
+    local missing_path = one .. PATHSEP .. "later.png"
+    local missing = images.get_asset("later.png", {
+      source_path = one .. PATHSEP .. "Note.md", loader = loader, retry_generation = 1,
+    })
+    test.equal(missing.status, "error")
+    write_file(missing_path, "later")
+    local retried = images.get_asset("later.png", {
+      source_path = one .. PATHSEP .. "Note.md", loader = loader, retry_generation = 2,
+    })
+    test.ok(retried ~= missing)
+    test.equal(retried.status, "ready")
+    test.equal(retried.path, missing_path)
+    common.rm(root, true)
+  end)
+
+  test.it("shares one remote request and notifies every subscriber", function()
+    local downloads, done = 0
+    local opts = {
+      download_remote = true,
+      cache_dir = USERDIR .. PATHSEP .. "markdown-image-remote-cache",
+      retry_generation = 1,
+      downloader = function(_, request) downloads, done = downloads + 1, request.on_done end,
+    }
+    local entry = images.get_asset("https://example.com/shared.png", opts)
+    test.equal(images.get_asset("https://example.com/shared.png", opts), entry)
+    test.equal(downloads, 1)
+    local owner1, owner2, notifications = {}, {}, 0
+    images.subscribe(entry, owner1, function() notifications = notifications + 1 end)
+    images.subscribe(entry, owner2, function() notifications = notifications + 1 end)
+    done(false, "network disabled in test")
+    test.equal(entry.status, "error")
+    test.equal(notifications, 2)
+  end)
+
   test.it("parses and applies resize constraints without upscaling by default", function()
     local resize = images.parse_resize("100x145")
     test.equal(resize.width, 100)
@@ -76,5 +150,12 @@ test.describe("Markdown image helpers", function()
     width, height = images.scale_size(200, 100, 80, { width = 160 }, true)
     test.equal(width, 80)
     test.equal(height, 40)
+
+    width, height = images.scale_size(1000, 500, 1000, { width = 640, height = 480 }, false)
+    test.equal(width, 640)
+    test.equal(height, 320)
+    width, height = images.scale_size(500, 1000, 1000, { width = 640, height = 480 }, false)
+    test.equal(width, 240)
+    test.equal(height, 480)
   end)
 end)
