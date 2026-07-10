@@ -308,6 +308,9 @@ if config.markdown_live_link_path_policy == nil then
 end
 config.markdown_live_render_images = true
 config.markdown_live_download_remote_images = false
+if config.markdown_live_trusted_remote_image_projects == nil then
+  config.markdown_live_trusted_remote_image_projects = {}
+end
 require "core.markdown"
 -- Wrap long lines at word boundaries and visually indent continuations.
 config.plugins.linewrapping.mode = "word"

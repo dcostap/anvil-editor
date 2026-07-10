@@ -18,7 +18,7 @@ Entries carry a link-index retry generation and local file metadata. Missing/err
 
 Editors subscribe weakly to shared entries. Async completion notifies every attached consumer, and each Editor invalidates every source line using that asset. Metadata changes and detach/release unsubscribe deterministically.
 
-Remote loading remains disabled by default. This slice preserves the existing explicit global opt-in; one-shot and trusted-Project policy UI remains a later Phase 5 slice.
+Remote loading remains disabled by default. `markdown-live-preview:load-remote-image` grants the current Editor a one-asset permission for the remote image at its caret. `markdown-live-preview:trust-project-remote-images` and `markdown-live-preview:untrust-project-remote-images` manage an optional normalized-Project-root trust policy and invalidate every attached Project view through the shared index generation. The global first-party switch remains available for users who deliberately want all remote images. One-shot permissions are view-local and do not silently promote Project trust.
 
 ## Dimensions
 
@@ -26,4 +26,4 @@ Decoded image identity is independent from reference dimensions. Each fragment c
 
 ## Regression evidence
 
-Runtime tests cover source-context isolation, sharing one decoded local source across different notes, missing-file retry, shared remote requests, multi-consumer completion, remote-disabled behavior, and aspect-preserving bounding boxes. UI tests cover policy rekeying, multi-line completion invalidation, local/Obsidian resolution, per-reference rendering, wrapping, and deterministic subscription cleanup through lifecycle tests.
+Runtime tests cover source-context isolation, sharing one decoded local source across different notes, missing-file retry, shared remote requests, multi-consumer completion, remote-disabled behavior, and aspect-preserving bounding boxes. UI tests cover policy rekeying, view-local one-shot permission, shared Project trust/revocation, multi-line completion invalidation, local/Obsidian resolution, per-reference rendering, wrapping, and deterministic subscription cleanup through lifecycle tests.

@@ -883,6 +883,40 @@ test.describe("Markdown Live Editor", function()
     if not ok then error(err, 0) end
   end)
 
+  test.it("keeps one-shot remote image permission view-local and Project trust shared", function()
+    local root = USERDIR .. PATHSEP .. "markdown-live-remote-policy-" .. system.get_process_id()
+    test.ok(common.mkdirp(root))
+    local source_path = root .. PATHSEP .. "Source.md"
+    local old_projects = core.projects
+    local old_trust = config.markdown_live_trusted_remote_image_projects
+    core.projects = { Project(root) }
+    config.markdown_live_trusted_remote_image_projects = {}
+    local view, doc = make_view("![Remote](https://example.com/image.png)\nplain", source_path)
+    local split = DocView(doc)
+    markdown.live_render.refresh_view(split)
+    doc:set_selection(1, 15)
+    refresh(view)
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      test.equal(markdown.live_render.remote_image_allowed(view, "https://example.com/image.png"), false)
+      test.equal(command.perform("markdown-live-preview:load-remote-image"), true)
+      test.equal(markdown.live_render.remote_image_allowed(view, "https://example.com/image.png"), true)
+      test.equal(markdown.live_render.remote_image_allowed(split, "https://example.com/image.png"), false)
+
+      test.equal(command.perform("markdown-live-preview:trust-project-remote-images"), true)
+      test.equal(markdown.live_render.remote_image_allowed(split, "https://example.com/image.png"), true)
+      test.equal(command.perform("markdown-live-preview:untrust-project-remote-images"), true)
+      test.equal(markdown.live_render.remote_image_allowed(split, "https://example.com/image.png"), false)
+    end)
+    markdown.live_render.release(split, "test-cleanup")
+    core.active_view = old_active
+    config.markdown_live_trusted_remote_image_projects = old_trust
+    core.projects = old_projects
+    common.rm(root, true)
+    if not ok then error(err, 0) end
+  end)
+
   test.it("renders project-local image fragments", function(context)
     local image_path = USERDIR .. PATHSEP .. "markdown-live-image-" .. system.get_process_id() .. ".png"
     local fp = io.open(image_path, "wb")

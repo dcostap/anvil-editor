@@ -518,6 +518,17 @@ local function add_fragment(fragments, occupied, fragment)
   return true
 end
 
+local function remote_image_allowed(view, url, project)
+  if not images.is_remote(url) then return false end
+  if config.markdown_live_download_remote_images == true then return true end
+  local owner = view.__markdown_live_owner
+  if owner and owner.one_shot_remote_images and owner.one_shot_remote_images[url] then return true end
+  local root = project and project.path
+  local key = root and common.path_compare_key(common.normalize_path(root))
+  return key and config.markdown_live_trusted_remote_image_projects
+    and config.markdown_live_trusted_remote_image_projects[key] == true or false
+end
+
 local function image_fragment(view, span, opts)
   opts = opts or {}
   if config.markdown_live_render_images ~= true then return nil end
@@ -531,7 +542,7 @@ local function image_fragment(view, span, opts)
     alt = link.alias or link.alt,
     source_path = view.doc.abs_filename,
     project_root = project and project.path,
-    download_remote = config.markdown_live_download_remote_images == true,
+    download_remote = remote_image_allowed(view, link.path, project),
     retry_generation = owner and owner.link_index and owner.link_index.generation or 0,
   }
   local key = images.asset_key(link.path, asset_opts)
@@ -1407,6 +1418,53 @@ function live.open_link(view, opts)
     return false, resolution.status
   end
   return open_link_resolution(resolution), resolution.status
+end
+
+function live.allow_remote_image_once(view)
+  local target = live.link_at_caret(view)
+  local link = target and target.link
+  if not (link and (link.kind == "image" or link.kind == "embed")
+    and images.is_remote(link.path))
+  then
+    return false, "no remote image at caret"
+  end
+  local owner = view.__markdown_live_owner
+  if not owner then return false, "Live Preview unavailable" end
+  owner.one_shot_remote_images = owner.one_shot_remote_images or {}
+  owner.one_shot_remote_images[link.path] = true
+  clear_image_cache(view)
+  view:invalidate_line_render(PROVIDER_ID, target.line, target.line)
+  view:invalidate_visual_metrics(PROVIDER_ID, target.line, target.line)
+  core.redraw = true
+  core.log_quiet("Markdown remote image allowed once: %s", link.path)
+  return true
+end
+
+function live.set_project_remote_image_trust(view, trusted)
+  local project = view and view.doc and core.current_project(view.doc.abs_filename)
+  if not project then return false, "Project unavailable" end
+  local key = common.path_compare_key(common.normalize_path(project.path))
+  config.markdown_live_trusted_remote_image_projects =
+    config.markdown_live_trusted_remote_image_projects or {}
+  config.markdown_live_trusted_remote_image_projects[key] = trusted and true or nil
+  clear_image_cache(view)
+  local owner = view.__markdown_live_owner
+  local index = owner and owner.link_index
+  if index then
+    index.generation = index.generation + 1
+    index:notify("remote-image-policy", trusted)
+  else
+    view:invalidate_line_render(PROVIDER_ID)
+    view:invalidate_visual_metrics(PROVIDER_ID)
+  end
+  core.redraw = true
+  core.log_quiet("Markdown remote image Project trust %s: %s", trusted and "enabled" or "disabled", project.path)
+  return true
+end
+
+function live.remote_image_allowed(view, url)
+  local project = view and view.doc and core.current_project(view.doc.abs_filename)
+  return remote_image_allowed(view, url, project)
 end
 
 function live.create_link_target(view)

@@ -33,6 +33,15 @@ end, {
   ["markdown-live-preview:complete-link"] = function(view)
     markdown_completion.open(view)
   end,
+  ["markdown-live-preview:load-remote-image"] = function(view)
+    markdown_live.allow_remote_image_once(view)
+  end,
+  ["markdown-live-preview:trust-project-remote-images"] = function(view)
+    markdown_live.set_project_remote_image_trust(view, true)
+  end,
+  ["markdown-live-preview:untrust-project-remote-images"] = function(view)
+    markdown_live.set_project_remote_image_trust(view, false)
+  end,
 })
 
 local markdown_preview_split_directions = {
