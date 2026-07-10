@@ -707,6 +707,44 @@ test.describe("Markdown Live Editor", function()
     if not ok then error(err, 0) end
   end)
 
+  test.it("publishes semantic link POIs for generic navigation and activation", function()
+    local root = USERDIR .. PATHSEP .. "markdown-live-link-poi-" .. system.get_process_id()
+    test.ok(common.mkdirp(root))
+    local target_path = root .. PATHSEP .. "Target.md"
+    local source_path = root .. PATHSEP .. "Source.md"
+    local fp = test.not_nil(io.open(target_path, "wb"))
+    fp:write("# Heading\n")
+    fp:close()
+    local old_projects = core.projects
+    core.projects = { Project(root) }
+    markdown.vault_index.get_index(root):rebuild("ui-link-poi")
+    local view, doc = make_view("prefix [[Target#Heading]] and `[[Target]]`\n", source_path)
+    doc:set_selection(1, 1)
+    refresh(view)
+    local points = view:get_points_of_interest()
+    test.equal(#points, 1)
+    test.equal(points[1].kind, "markdown-link")
+    test.equal(points[1].text_bounds, true)
+    local old_active, old_open_file = core.active_view, core.open_file
+    local opened
+    core.active_view = view
+    core.open_file = function(path) opened = path return {
+      set_selection_state = function() end,
+      scroll_to_line = function() end,
+    } end
+    local ok, err = pcall(function()
+      test.equal(command.perform("poi:next"), true)
+      test.equal(command.perform("poi:activate"), true)
+      test.equal(opened, common.normalize_path(target_path))
+      test.equal(markdown.live_render.detach(view), true)
+      test.equal(#view:get_points_of_interest(), 0)
+    end)
+    core.open_file, core.active_view = old_open_file, old_active
+    core.projects = old_projects
+    common.rm(root, true)
+    if not ok then error(err, 0) end
+  end)
+
   test.it("completes note, current/global heading, and current/global block Wikilink states", function()
     local root = USERDIR .. PATHSEP .. "markdown-live-link-completion-" .. system.get_process_id()
     test.ok(common.mkdirp(root))

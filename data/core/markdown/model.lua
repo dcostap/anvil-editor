@@ -467,6 +467,12 @@ function Model:captures_for_lines(kind, line1, line2, opts)
   return captures, captures.truncated and "limit" or nil
 end
 
+function Model:inline_nodes_for_lines(line1, line2, opts)
+  local inlines, reason = self:captures_for_lines("inline", line1, line2, opts)
+  if not inlines then return nil, reason end
+  return build_nodes(inlines), reason
+end
+
 function Model:nodes_for_lines(line1, line2, opts)
   local blocks, block_reason = self:captures_for_lines("block", line1, line2, opts)
   if not blocks then return nil, block_reason end

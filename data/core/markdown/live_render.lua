@@ -785,6 +785,49 @@ local function inline_fragments(line_text, line, view, reveal_units)
 end
 
 local provider = {}
+local poi_provider = {}
+
+function poi_provider:points_of_interest(view)
+  local instance = current_semantic_model(view)
+  if not instance then return {} end
+  local nodes, reason = instance:inline_nodes_for_lines(1, #view.doc.lines, { limit = 32768 })
+  if reason == "limit" then
+    core.log_quiet("Markdown link POIs exceeded the 32768-capture bound for %s", view.doc:get_name())
+    return {}
+  end
+  local points, seen = {}, {}
+  for _, node in ipairs(nodes or {}) do
+    if (node.type == "link" or node.type == "image"
+      or node.type == "wiki_link" or node.type == "embed")
+      and node.source.line1 == node.source.line2 and not seen[node.id]
+    then
+      local line = node.source.line1
+      local text = (view.doc.lines[line] or ""):gsub("\n$", "")
+      local link = markdown_links.from_semantic_node(text, line, node)
+      if link then
+        seen[node.id] = true
+        points[#points + 1] = {
+          line = line,
+          col = node.source.col1,
+          line2 = line,
+          col2 = node.source.col2,
+          text_bounds = true,
+          kind = "markdown-link",
+          label = link.display,
+          semantic_id = node.id,
+          link = link,
+          activate = function(owner, point)
+            return live.open_link(owner, {
+              link = point.link,
+              resolution = resolve_live_link(owner, point.link),
+            })
+          end,
+        }
+      end
+    end
+  end
+  return points
+end
 
 local function view_in_source_mode(view)
   local owner = view.__markdown_live_owner
@@ -1193,6 +1236,7 @@ function live.attach(view)
   if view.__markdown_live_attached then return false end
   view:add_visual_metric_provider(PROVIDER_ID, provider)
   view:add_line_render_provider(PROVIDER_ID, provider)
+  view:add_poi_provider(PROVIDER_ID, poi_provider)
   view:add_selection_listener(PROVIDER_ID, function(owner, new_state, old_state)
     invalidate_selection_lines(owner, new_state, old_state)
   end)
@@ -1210,6 +1254,7 @@ function live.detach(view)
   unbind_semantic_model(view)
   view:remove_visual_metric_provider(PROVIDER_ID)
   view:remove_line_render_provider(PROVIDER_ID)
+  view:remove_poi_provider(PROVIDER_ID)
   view:remove_selection_listener(PROVIDER_ID)
   view.__markdown_live_attached = nil
   core.log_quiet("Markdown live editor detached from %s", view.doc and view.doc:get_name() or tostring(view))

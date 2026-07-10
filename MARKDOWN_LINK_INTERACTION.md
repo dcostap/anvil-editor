@@ -8,6 +8,12 @@ Implemented July 10, 2026 as the second Phase 4 slice in `MARKDOWN_LIVE_EDITOR_P
 
 Semantic Markdown link fragments use the hand cursor. Left click remains normal source selection. **Ctrl+left-click** activates the link on Windows/Linux; **Command+left-click** does so on macOS. This preserves the owner decision that rendered text must not steal ordinary editing input.
 
+## Generic Points of Interest
+
+Attached Markdown Editors publish current semantic link/image nodes through `DocView`'s generic POI provider contract. POIs carry exact source bounds, stable semantic IDs, and activation callbacks using the same normalized resolver as mouse/command activation. Tree-sitter suppression prevents code/comment lookalikes from becoming POIs.
+
+Generic `poi:next` / `poi:previous` navigation therefore steps through links without Markdown-specific key handling, and `poi:activate` opens the target through the ordinary link path. Whole-Document adoption is explicitly bounded at 32,768 inline captures; oversized/truncated snapshots quietly decline POI publication rather than presenting incomplete random navigation.
+
 ## Commands
 
 - `markdown-live-preview:open-link` opens the semantic link at the primary caret.
@@ -29,4 +35,4 @@ Before navigation, the optional first-party Navigation History integration recor
 
 ## Regression evidence
 
-Focused tests cover generic fragment hover/click routing, command opening to heading locations, Ctrl/Command modifier-click, source-relative and root-relative missing-note creation, existing parent directories, query stripping, traversal rejection, stale deleted/replaced targets, typed ambiguity filtering, command registration, wrapped whitespace hit rejection through source mapping, and all existing semantic link/image behavior.
+Focused tests cover generic fragment hover/click routing, command opening to heading locations, Ctrl/Command modifier-click, generic semantic POI navigation/activation with code suppression, source-relative and root-relative missing-note creation, existing parent directories, query stripping, traversal rejection, stale deleted/replaced targets, typed ambiguity filtering, command registration, wrapped whitespace hit rejection through source mapping, and all existing semantic link/image behavior.
