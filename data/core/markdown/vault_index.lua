@@ -351,10 +351,14 @@ function Index:make_note_entry(path, text, opts)
   end
   local headings_by_slug = {}
   local headings_by_text = {}
+  local headings_by_path = {}
   local blocks_by_id = {}
   for _, heading in ipairs(anchor_index.headings) do
     headings_by_slug[heading.slug] = heading
     headings_by_text[anchors.normalize_heading(heading.text or "")] = heading
+    if heading.path_slug and heading.path_slug ~= "" then
+      headings_by_path[heading.path_slug] = heading
+    end
   end
   for _, block in ipairs(anchor_index.blocks) do
     blocks_by_id[block.id] = block
@@ -371,6 +375,7 @@ function Index:make_note_entry(path, text, opts)
     headings = anchor_index.headings,
     headings_by_slug = headings_by_slug,
     headings_by_text = headings_by_text,
+    headings_by_path = headings_by_path,
     blocks = anchor_index.blocks,
     blocks_by_id = blocks_by_id,
     modified = file_info and file_info.modified,
@@ -755,13 +760,15 @@ function Index:completion_candidates(mode, query, source_path, limit)
     end
   elseif mode == "current_heading" and source_entry then
     for _, heading in ipairs(source_entry.headings or {}) do
-      add(heading.text, "#" .. heading.text, "heading", source_entry, heading.line, source_entry.rel_path)
+      local heading_target = heading.path_text or heading.text
+      add(heading_target, "#" .. heading_target, "heading", source_entry, heading.line, source_entry.rel_path)
     end
   elseif mode == "global_heading" then
     for _, entry in pairs(self.notes_by_abs) do
       local note_target = canonical_note_target(self, entry, source_path)
       for _, heading in ipairs(entry.headings or {}) do
-        add(heading.text .. " — " .. entry.display_name, note_target .. "#" .. heading.text,
+        local heading_target = heading.path_text or heading.text
+        add(heading_target .. " — " .. entry.display_name, note_target .. "#" .. heading_target,
           "heading", entry, heading.line, entry.rel_path)
       end
     end
@@ -891,8 +898,15 @@ end
 function Index:resolve_subtarget(entry, subtarget)
   if not subtarget then return {} end
   if subtarget.type == "heading" then
-    local slug = anchors.normalize_heading(subtarget.text or "")
-    local heading = entry.headings_by_slug[slug] or entry.headings_by_text[slug]
+    local text = subtarget.text or ""
+    local path_slugs = {}
+    for part in (text .. "#"):gmatch("(.-)#") do
+      if part ~= "" then path_slugs[#path_slugs + 1] = anchors.normalize_heading(part) end
+    end
+    local path_slug = table.concat(path_slugs, "#")
+    local slug = anchors.normalize_heading(text)
+    local heading = entry.headings_by_path[path_slug]
+      or entry.headings_by_slug[slug] or entry.headings_by_text[slug]
     if heading then return { line = heading.line, heading = heading } end
     return nil, "heading not found"
   elseif subtarget.type == "block" then

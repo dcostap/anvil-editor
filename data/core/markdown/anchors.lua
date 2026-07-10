@@ -19,6 +19,7 @@ end
 function anchors.collect_headings(blocks)
   local result = {}
   local seen = {}
+  local hierarchy = {}
   for _, block in ipairs(blocks or {}) do
     if block.type == "heading" then
       local base = anchors.normalize_heading(block.text or "")
@@ -29,12 +30,24 @@ function anchors.collect_headings(blocks)
       else
         seen[base] = 0
       end
+      local level = block.level or 1
+      for i = level, #hierarchy do hierarchy[i] = nil end
+      hierarchy[level] = block.text or ""
+      local path = {}
+      for i = 1, level do
+        if hierarchy[i] and hierarchy[i] ~= "" then path[#path + 1] = hierarchy[i] end
+      end
+      local path_slugs = {}
+      for _, part in ipairs(path) do path_slugs[#path_slugs + 1] = anchors.normalize_heading(part) end
       result[#result + 1] = {
         type = "heading",
         text = block.text,
         slug = slug,
+        path = path,
+        path_text = table.concat(path, "#"),
+        path_slug = table.concat(path_slugs, "#"),
         line = block.line1,
-        level = block.level,
+        level = level,
         block = block,
       }
     end

@@ -9,8 +9,8 @@ The first-party Autocomplete plugin now exposes generic dynamic-provider registr
 Markdown Live Preview registers one provider while attached. It recognizes an unclosed Wikilink at the primary caret and publishes bounded, deterministic candidates for:
 
 - `[[` — notes, canonical alias forms, and supported attachments;
-- `[[#` — headings in the current note;
-- `[[##` — headings across the owning Project/link root;
+- `[[#` — headings in the current note, serialized with structural ancestor paths when nested;
+- `[[##` — headings across the owning Project/link root, likewise preserving nested paths;
 - `[[^` — block IDs in the current note; and
 - `[[^^` — block IDs across the owning Project/link root.
 
@@ -36,4 +36,4 @@ The policy is retained for that normalized link root and updates any live index 
 
 ## Regression evidence
 
-Runtime tests cover notes with colliding basenames, canonical aliases, attachments, local/global headings, local/global blocks, all three path policies, and root-path resolution. UI tests cover provider registration/automatic force-open, all five prefix states, explicit command invocation, and source-preserving selection replacement.
+Runtime tests cover notes with colliding basenames, canonical aliases, attachments, local/global and structurally nested headings, local/global blocks, all three path policies, and root-path resolution. UI tests cover provider registration/automatic force-open, all five prefix states, explicit command invocation, and source-preserving selection replacement.
