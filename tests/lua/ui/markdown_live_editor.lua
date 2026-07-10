@@ -883,6 +883,63 @@ test.describe("Markdown Live Editor", function()
     if not ok then error(err, 0) end
   end)
 
+  test.it("copies dropped attachments and inserts configured source-preserving links", function()
+    local root = USERDIR .. PATHSEP .. "markdown-live-attachment-project-" .. system.get_process_id()
+    local outside = USERDIR .. PATHSEP .. "markdown-live-attachment-source-" .. system.get_process_id()
+    test.ok(common.mkdirp(root .. PATHSEP .. "notes"))
+    test.ok(common.mkdirp(outside))
+    local image_source = outside .. PATHSEP .. "photo.png"
+    local pdf_path = root .. PATHSEP .. "file.pdf"
+    local function write(path, text)
+      local fp = test.not_nil(io.open(path, "wb")); fp:write(text); fp:close()
+    end
+    write(image_source, "png")
+    write(pdf_path, "pdf")
+    local old_projects = core.projects
+    local old_folder = config.markdown_live_attachment_folder
+    local old_format = config.markdown_live_attachment_link_format
+    core.projects = { Project(root) }
+    config.markdown_live_attachment_folder = "media"
+    config.markdown_live_attachment_link_format = "wikilink"
+    local view, doc = make_view("start ", root .. PATHSEP .. "notes" .. PATHSEP .. "Source.md")
+    doc:set_selection(1, 7)
+    refresh(view)
+    local ok, err = pcall(function()
+      local inserted, result = markdown.attachments.import_file(view, image_source)
+      test.equal(inserted, true)
+      test.equal(result.copied, true)
+      test.equal(doc.lines[1], "start ![[media/photo.png]]\n")
+      test.equal(system.get_file_info(root .. PATHSEP .. "media" .. PATHSEP .. "photo.png").type, "file")
+
+      doc:set_selection(1, #doc.lines[1])
+      inserted, result = markdown.attachments.import_file(view, image_source)
+      test.equal(inserted, true)
+      test.ok(result.path:match("photo%-1%.png$"))
+
+      local x, y = view:get_line_screen_position(1)
+      test.equal(view:on_file_dropped(image_source, x + 2, y + 2), true)
+      test.ok(doc.lines[1]:find("![[media/photo-2.png]]", 1, true) ~= nil)
+
+      config.markdown_live_attachment_link_format = "markdown"
+      doc:set_selection(1, #doc.lines[1])
+      inserted, result = markdown.attachments.import_file(view, pdf_path)
+      test.equal(inserted, true)
+      test.equal(result.copied, false)
+      test.equal(result.text, "[file](../file.pdf)")
+      test.ok(doc.lines[1]:find(result.text, 1, true) ~= nil)
+      doc:undo()
+      test.equal(doc.lines[1]:find("[file](../file.pdf)", 1, true), nil)
+      doc:redo()
+      test.ok(doc.lines[1]:find("[file](../file.pdf)", 1, true) ~= nil)
+    end)
+    config.markdown_live_attachment_folder = old_folder
+    config.markdown_live_attachment_link_format = old_format
+    core.projects = old_projects
+    common.rm(root, true)
+    common.rm(outside, true)
+    if not ok then error(err, 0) end
+  end)
+
   test.it("keeps one-shot remote image permission view-local and Project trust shared", function()
     local root = USERDIR .. PATHSEP .. "markdown-live-remote-policy-" .. system.get_process_id()
     test.ok(common.mkdirp(root))

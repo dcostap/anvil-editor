@@ -2,6 +2,7 @@ local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
 local DocView = require "core.docview"
+local attachments = require "core.markdown.attachments"
 local images = require "core.markdown.images"
 local link_completion = require "core.markdown.completion"
 local keymap = require "core.keymap"
@@ -822,6 +823,7 @@ end
 
 local provider = {}
 local poi_provider = {}
+local file_drop_provider = attachments.drop_provider()
 
 function poi_provider:points_of_interest(view)
   local instance = current_semantic_model(view)
@@ -1301,6 +1303,7 @@ function live.attach(view)
   if view.__markdown_live_attached then return false end
   view:add_visual_metric_provider(PROVIDER_ID, provider)
   view:add_line_render_provider(PROVIDER_ID, provider)
+  view:add_file_drop_provider(PROVIDER_ID, file_drop_provider)
   view:add_poi_provider(PROVIDER_ID, poi_provider)
   view:add_selection_listener(PROVIDER_ID, function(owner, new_state, old_state)
     invalidate_selection_lines(owner, new_state, old_state)
@@ -1320,6 +1323,7 @@ function live.detach(view)
   clear_image_cache(view)
   view:remove_visual_metric_provider(PROVIDER_ID)
   view:remove_line_render_provider(PROVIDER_ID)
+  view:remove_file_drop_provider(PROVIDER_ID)
   view:remove_poi_provider(PROVIDER_ID)
   view:remove_selection_listener(PROVIDER_ID)
   view.__markdown_live_attached = nil

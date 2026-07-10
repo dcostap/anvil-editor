@@ -123,6 +123,18 @@ local function resolve_in_obsidian_attachment_folder(rel, source_dir, project_ro
   return try_relative_file(folder, rel)
 end
 
+function images.attachment_directory(opts)
+  opts = opts or {}
+  local source_dir = dirname(opts.source_path)
+  local root = find_obsidian_vault_root(source_dir, opts.project_root)
+  local obsidian_folder = obsidian_attachment_folder(root)
+  if obsidian_folder then return common.normalize_path(obsidian_folder) end
+  local configured = opts.configured_folder or "attachments"
+  if configured == "." then return common.normalize_path(source_dir or opts.project_root) end
+  if is_absolute_path(configured) then return common.normalize_path(configured) end
+  return opts.project_root and common.normalize_path(join_path(opts.project_root, configured)) or nil
+end
+
 function images.resolve_local_path(url, opts)
   opts = opts or {}
   if type(url) ~= "string" or url == "" or images.is_remote(url) then return nil end

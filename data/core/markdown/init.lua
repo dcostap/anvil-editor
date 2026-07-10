@@ -9,6 +9,7 @@ return {
   links = require "core.markdown.links",
   anchors = require "core.markdown.anchors",
   images = require "core.markdown.images",
+  attachments = require "core.markdown.attachments",
   image_overlay = image_overlay,
   live_render = live_render,
   vault_index = require "core.markdown.vault_index",

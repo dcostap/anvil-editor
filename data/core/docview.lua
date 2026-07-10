@@ -1430,6 +1430,38 @@ function DocView:decoration_provider_entries()
   return sorted_provider_entries(self.decoration_providers)
 end
 
+function DocView:add_file_drop_provider(id, provider, opts)
+  assert(type(id) == "string" and id ~= "", "file-drop provider id must be a non-empty string")
+  assert(type(provider) == "table", "file-drop provider must be a table")
+  opts = opts or {}
+  self.file_drop_providers = self.file_drop_providers or {}
+  self.file_drop_providers[id] = {
+    id = id, provider = provider, priority = opts.priority or provider.priority or 0,
+  }
+end
+
+function DocView:remove_file_drop_provider(id)
+  if not self.file_drop_providers or not self.file_drop_providers[id] then return false end
+  self.file_drop_providers[id] = nil
+  return true
+end
+
+function DocView:on_file_dropped(filename, x, y)
+  for _, entry in ipairs(sorted_provider_entries(self.file_drop_providers)) do
+    local fn = entry.provider.on_file_dropped
+    if fn then
+      local ok, handled = pcall(fn, entry.provider, self, filename, x, y)
+      if not ok then
+        core.log_quiet("DocView file-drop provider %s failed for %s: %s",
+          tostring(entry.id), self.doc:get_name(), tostring(handled))
+      elseif handled then
+        return true
+      end
+    end
+  end
+  return DocView.super.on_file_dropped(self, filename, x, y)
+end
+
 function DocView:add_poi_provider(id, provider, opts)
   assert(type(id) == "string" and id ~= "", "POI provider id must be a non-empty string")
   assert(type(provider) == "table", "POI provider must be a table")

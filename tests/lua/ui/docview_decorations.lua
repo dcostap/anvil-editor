@@ -66,6 +66,21 @@ test.describe("DocView decoration providers", function()
     test.equal(#points, 0)
   end)
 
+  test.it("routes and removes generic file-drop providers", function()
+    local view = make_view("alpha")
+    local dropped
+    view:add_file_drop_provider("test", {
+      on_file_dropped = function(_, owner, filename, x, y)
+        test.equal(owner, view)
+        dropped = { filename, x, y }
+        return true
+      end,
+    })
+    test.equal(view:on_file_dropped("asset.png", 10, 20), true)
+    test.same(dropped, { "asset.png", 10, 20 })
+    test.equal(view:remove_file_drop_provider("test"), true)
+  end)
+
   test.it("notifies selection listeners for view-local selection changes", function()
     local view = make_view("alpha")
     local count = 0

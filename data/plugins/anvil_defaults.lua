@@ -311,6 +311,12 @@ config.markdown_live_download_remote_images = false
 if config.markdown_live_trusted_remote_image_projects == nil then
   config.markdown_live_trusted_remote_image_projects = {}
 end
+if config.markdown_live_attachment_folder == nil then
+  config.markdown_live_attachment_folder = "attachments"
+end
+if config.markdown_live_attachment_link_format == nil then
+  config.markdown_live_attachment_link_format = "wikilink"
+end
 require "core.markdown"
 -- Wrap long lines at word boundaries and visually indent continuations.
 config.plugins.linewrapping.mode = "word"
