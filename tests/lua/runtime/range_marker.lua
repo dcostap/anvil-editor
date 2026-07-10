@@ -138,6 +138,22 @@ test.describe("core.range_marker", function()
     assert_range(marker, 2, 1, 3, 6)
   end)
 
+  test.it("invalidates markers on changed reloads and preserves them on identical reloads", function()
+    local path = USERDIR .. PATHSEP .. "range-marker-reload-" .. system.get_process_id() .. ".txt"
+    local fp = test.not_nil(io.open(path, "wb"))
+    fp:write("replacement\n")
+    fp:close()
+    local doc = new_doc("original")
+    local changed = range_marker.new(doc, { line1 = 1, col1 = 1, line2 = 1, col2 = 5 })
+    doc:load(path)
+    test.not_ok(changed:is_valid())
+
+    local identical = range_marker.new(doc, { line1 = 1, col1 = 1, line2 = 1, col2 = 5 })
+    doc:load(path)
+    test.ok(identical:is_valid())
+    os.remove(path)
+  end)
+
   test.it("applies batch edits in normalized order", function()
     local doc = new_doc("abcdef")
     local marker = range_marker.new(doc, { line1 = 1, col1 = 3, line2 = 1, col2 = 5 })

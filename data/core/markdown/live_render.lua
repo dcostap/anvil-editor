@@ -4,6 +4,7 @@ local config = require "core.config"
 local DocView = require "core.docview"
 local images = require "core.markdown.images"
 local linewrapping = require "core.linewrapping"
+local markdown_model = require "core.markdown.model"
 local parser = require "core.markdown.parser"
 local style = require "core.style"
 
@@ -108,6 +109,74 @@ local function heading_for_line(line_text, line)
     content_col2 = content_col2,
     text = line_text:sub(content_col1, content_col2 - 1),
   }
+end
+
+local function semantic_line(view, line)
+  local instance = markdown_model.peek(view.doc)
+  if not instance or instance.status ~= "ready"
+    or instance.published_revision ~= view.doc.text_revision
+  then
+    return nil
+  end
+  local cache = view.__markdown_live_semantic_line_cache
+  if not cache or cache.generation ~= instance.generation then
+    cache = { generation = instance.generation, lines = {} }
+    view.__markdown_live_semantic_line_cache = cache
+  end
+  if cache.lines[line] == nil then
+    local nodes, reason = instance:nodes_for_lines(line, line, { limit = 512 })
+    if reason == "limit" then
+      core.log_quiet("Markdown semantic render query was truncated on line %d; using fallback", line)
+      nodes = nil
+    end
+    cache.lines[line] = nodes or false
+  end
+  local nodes = cache.lines[line]
+  return nodes ~= false and nodes or nil, instance.generation
+end
+
+local function semantic_heading_for_line(view, line_text, line)
+  local nodes, generation = semantic_line(view, line)
+  for _, node in ipairs(nodes or {}) do
+    if node.type == "heading" and node.source.line1 == line then
+      local heading = heading_for_line(line_text, line)
+      if heading then
+        heading.semantic_id = node.id
+        heading.semantic_generation = generation
+        return heading
+      end
+    end
+  end
+end
+
+local function semantic_inline_spans(view, line, spans)
+  local nodes, generation = semantic_line(view, line)
+  if not nodes then return spans end
+  for _, span in ipairs(spans) do
+    local best, best_score
+    for _, node in ipairs(nodes) do
+      local compatible = node.type == span.type
+        or span.type == "strong_emphasis" and (node.type == "strong" or node.type == "emphasis")
+      if compatible and node.source.line1 == line and node.source.line2 == line then
+        local exact = node.source.col1 == span.col1 and node.source.col2 == span.col2
+        local nested = span.type == "strong_emphasis"
+          and node.source.col1 >= span.col1 and node.source.col2 <= span.col2
+        if exact or nested then
+          local score = math.abs(node.source.col1 - span.col1) + math.abs(node.source.col2 - span.col2)
+          if not best_score or score < best_score then best, best_score = node, score end
+        end
+      end
+    end
+    if best then
+      span.semantic_id = best.id
+      span.semantic_generation = generation
+    end
+  end
+  return spans
+end
+
+local function parsed_inline_spans(view, line_text, line)
+  return semantic_inline_spans(view, line, parser.parse_inline(line_text, line))
 end
 
 local function heading_font(view, level)
@@ -355,6 +424,16 @@ local function emphasis_fragment(view, line_text, span, active, opts)
   }
 end
 
+local function decorate_fragment_semantic(fragment, span)
+  if not span.semantic_id then return fragment end
+  if fragment[1] then
+    for _, item in ipairs(fragment) do item.semantic_id = span.semantic_id end
+  else
+    fragment.semantic_id = span.semantic_id
+  end
+  return fragment
+end
+
 local function add_fragment_or_fragments(fragments, occupied, fragment)
   if fragment[1] then
     local ok = true
@@ -368,7 +447,7 @@ end
 
 local function inline_fragments(line_text, line, view, active)
   local fragments, occupied = {}, {}
-  for _, span in ipairs(parser.parse_inline(line_text, line)) do
+  for _, span in ipairs(parsed_inline_spans(view, line_text, line)) do
     if span.link then
       if not active then
         local image = image_fragment(view, span)
@@ -385,7 +464,10 @@ local function inline_fragments(line_text, line, view, active)
         end
       end
     elseif span.type == "strong" or span.type == "emphasis" or span.type == "strong_emphasis" or span.type == "strikethrough" then
-      add_fragment_or_fragments(fragments, occupied, emphasis_fragment(view, line_text, span, active))
+      add_fragment_or_fragments(
+        fragments, occupied,
+        decorate_fragment_semantic(emphasis_fragment(view, line_text, span, active), span)
+      )
     end
   end
   table.sort(fragments, function(a, b) return (a.source_col1 or 1) < (b.source_col1 or 1) end)
@@ -398,10 +480,43 @@ function provider:line_generation(view, line)
   return view_active_line(view, line) and "active" or "inactive"
 end
 
+function provider:on_text_transaction(view, transaction, line1)
+  if not line1 then return nil end
+  local suffix_changed = transaction and transaction.type == "load"
+  for _, range in ipairs(transaction and transaction.changed_ranges or {}) do
+    if (range.line_delta or 0) ~= 0 then suffix_changed = true break end
+  end
+  if not suffix_changed then
+    for _, edit in ipairs(transaction and transaction.edits or {}) do
+      if (edit.text or ""):find("[`~]") or (edit.old_text or ""):find("[`~]") then
+        suffix_changed = true
+        break
+      end
+    end
+  end
+  if not suffix_changed then
+    for _, range in ipairs(transaction and transaction.changed_ranges or {}) do
+      for line = range.new_line1 or line1, range.new_line2 or range.new_line1 or line1 do
+        if (view.doc.lines[line] or ""):match("^%s*[`~]") then
+          suffix_changed = true
+          break
+        end
+      end
+      if suffix_changed then break end
+    end
+  end
+  if not suffix_changed then return nil end
+  local owner = view.__markdown_live_owner
+  if owner then
+    owner.semantic_pending_line = math.min(owner.semantic_pending_line or line1, line1)
+  end
+  return line1, #view.doc.lines
+end
+
 local function heading_content_fragments(view, text, heading, font, active)
   local fragments = {}
   local cursor = heading.content_col1
-  for _, span in ipairs(parser.parse_inline(text, heading.line)) do
+  for _, span in ipairs(parsed_inline_spans(view, text, heading.line)) do
     local emphasis = span.type == "strong" or span.type == "emphasis" or span.type == "strong_emphasis" or span.type == "strikethrough"
     if emphasis and span.col1 >= heading.content_col1 and span.col2 <= heading.content_col2 and span.col1 >= cursor then
       if cursor < span.col1 then
@@ -413,7 +528,10 @@ local function heading_content_fragments(view, text, heading, font, active)
           color = style.text,
         }
       end
-      local item = emphasis_fragment(view, text, span, active, { base_font = font, color = style.text })
+      local item = decorate_fragment_semantic(
+        emphasis_fragment(view, text, span, active, { base_font = font, color = style.text }),
+        span
+      )
       if item[1] then
         for _, fragment in ipairs(item) do fragments[#fragments + 1] = fragment end
       else
@@ -457,6 +575,8 @@ local function heading_render_line(view, text, heading, active)
   local active_fragments = active_heading_fragments(view, text, heading, font)
   return {
     source_text = text,
+    semantic_id = heading.semantic_id,
+    semantic_generation = heading.semantic_generation,
     fragments = active and active_fragments or inactive_heading_fragments(view, text, heading, font),
   }
 end
@@ -464,7 +584,7 @@ end
 function provider:line_height(view, line)
   if line_is_wrapped(view, line) or line_in_raw_block(view, line) then return nil end
   local text = (view.doc.lines[line] or ""):gsub("\n$", "")
-  local heading = heading_for_line(text, line)
+  local heading = semantic_heading_for_line(view, text, line) or heading_for_line(text, line)
   if heading then
     return math.max(view:get_line_height(), math.floor(heading_font(view, heading.level):get_height() * config.line_height))
   end
@@ -496,7 +616,7 @@ function provider:render_line(view, line)
   if line_in_raw_block(view, line) then return { raw_passthrough = true } end
 
   local text = (view.doc.lines[line] or ""):gsub("\n$", "")
-  local heading = heading_for_line(text, line)
+  local heading = semantic_heading_for_line(view, text, line) or heading_for_line(text, line)
   local active = view_active_line(view, line)
   if heading then return heading_render_line(view, text, heading, active) end
 
@@ -508,7 +628,14 @@ function provider:render_line(view, line)
   end
 
   local fragments = inline_fragments(text, line, view, active)
-  if #fragments > 0 then return { source_text = text, fragments = fragments } end
+  if #fragments > 0 then
+    local _, semantic_generation = semantic_line(view, line)
+    return {
+      source_text = text,
+      semantic_generation = semantic_generation,
+      fragments = fragments,
+    }
+  end
   if active then return { raw_passthrough = true } end
 end
 
@@ -546,8 +673,8 @@ local function ensure_owner(view)
       if self.doc and self.doc.remove_metadata_listener then
         self.doc:remove_metadata_listener(self.listener_id)
       end
-      if owner_view.__markdown_live_owner == self then owner_view.__markdown_live_owner = nil end
       live.detach(owner_view)
+      if owner_view.__markdown_live_owner == self then owner_view.__markdown_live_owner = nil end
       core.log_quiet(
         "Markdown live editor released lifecycle ownership: %s", reason or "release"
       )
@@ -568,6 +695,62 @@ local function ensure_owner(view)
   end
   core.log_quiet("Markdown live editor now owns lifecycle for %s", owner.doc:get_name())
   return true
+end
+
+local function invalidate_semantic_publication(view, instance, reason)
+  view.__markdown_live_semantic_line_cache = nil
+  local owner = view.__markdown_live_owner
+  local pending_line = owner and owner.semantic_pending_line
+  if owner and reason ~= "pending" then owner.semantic_pending_line = nil end
+  local ranges
+  if reason == "published" and pending_line then
+    ranges = { { line1 = pending_line, line2 = #view.doc.lines } }
+  elseif reason == "published" then
+    ranges = instance.changed_ranges
+  end
+  if ranges and #ranges > 0 then
+    for _, range in ipairs(ranges) do
+      local line1 = common.clamp(range.line1 or 1, 1, #view.doc.lines)
+      local line2 = common.clamp(range.line2 or line1, line1, #view.doc.lines)
+      view:invalidate_line_render(PROVIDER_ID, line1, line2)
+      view:invalidate_visual_metrics(PROVIDER_ID, line1, line2)
+    end
+  else
+    view:invalidate_line_render(PROVIDER_ID)
+    view:invalidate_visual_metrics(PROVIDER_ID)
+  end
+  core.redraw = true
+end
+
+local function bind_semantic_model(view)
+  local owner = view.__markdown_live_owner
+  if not owner then return end
+  local instance = markdown_model.get(view.doc)
+  if not instance then return end
+  local listener_id = owner.listener_id .. ":semantic"
+  if owner.semantic_model and owner.semantic_model ~= instance then
+    owner.semantic_model:remove_listener(listener_id)
+  end
+  owner.semantic_model = instance
+  owner.semantic_listener_id = listener_id
+  if instance.status == "pending" then
+    -- This view did not necessarily observe the edit that made the shared model pending.
+    owner.semantic_pending_line = 1
+  end
+  instance:add_listener(listener_id, function(published, reason)
+    if view.__markdown_live_owner ~= owner or not view.__markdown_live_attached then return end
+    if reason == "pending" then return end
+    invalidate_semantic_publication(view, published, reason)
+  end)
+end
+
+local function unbind_semantic_model(view)
+  local owner = view.__markdown_live_owner
+  if not (owner and owner.semantic_model) then return end
+  owner.semantic_model:remove_listener(owner.semantic_listener_id)
+  owner.semantic_model = nil
+  owner.semantic_listener_id = nil
+  view.__markdown_live_semantic_line_cache = nil
 end
 
 local function invalidate_selection_lines(view, new_state, old_state)
@@ -596,12 +779,14 @@ function live.attach(view)
     invalidate_selection_lines(owner, new_state, old_state)
   end)
   view.__markdown_live_attached = true
+  bind_semantic_model(view)
   core.log_quiet("Markdown live editor attached to %s", view.doc and view.doc:get_name() or tostring(view))
   return true
 end
 
 function live.detach(view)
   if not (view and view.__markdown_live_attached) then return false end
+  unbind_semantic_model(view)
   view:remove_visual_metric_provider(PROVIDER_ID)
   view:remove_line_render_provider(PROVIDER_ID)
   view:remove_selection_listener(PROVIDER_ID)

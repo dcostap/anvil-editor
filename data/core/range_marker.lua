@@ -203,6 +203,11 @@ end
 
 function Marker:update_for_transaction(transaction)
   if not self.valid then return false end
+  if transaction and transaction.full_snapshot then
+    if not transaction.content_changed then return false end
+    self:invalidate("document-reloaded")
+    return true
+  end
   local edits = transaction and transaction.edits or {}
   if #edits == 0 then return false end
   local old_start, old_end = self.start_offset, self.end_offset

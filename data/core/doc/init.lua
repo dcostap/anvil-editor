@@ -155,6 +155,8 @@ local copy_file, prompt_stale_backup
 
 function Doc:load(filename)
   if prompt_stale_backup then prompt_stale_backup(filename) end
+  local old_text = table.concat(self.lines or {})
+  local old_line_count = #(self.lines or {})
   local selection_snapshots = snapshot_registered_selection_states(self)
   if not self.encoding then
     local errmsg
@@ -210,6 +212,23 @@ function Doc:load(filename)
   fp:close()
   self:reset_syntax()
   restore_registered_selection_states(self, selection_snapshots)
+  local content_changed = old_text ~= table.concat(self.lines)
+  self:on_text_transaction({
+    applied = true,
+    changed = true,
+    type = "load",
+    full_snapshot = true,
+    content_changed = content_changed,
+    edits = {}, -- A load replaces the snapshot and requires a full parser refresh.
+    changed_ranges = {
+      {
+        old_line1 = 1, old_line2 = math.max(1, old_line_count),
+        new_line1 = 1, new_line2 = #self.lines,
+        old_line_count = math.max(1, old_line_count), new_line_count = #self.lines,
+        line_delta = #self.lines - math.max(1, old_line_count),
+      },
+    },
+  })
 end
 
 
@@ -1509,6 +1528,8 @@ end
 function Doc:raw_insert(line, col, text, undo_stack, time)
   self:notify_text_change_listeners("before", { type = "raw_insert", kind = "raw_insert", line = line, col = col, text = text })
   local linewrapping_old_lines = #self.lines
+  local old_starts = line_starts_for(self.lines)
+  local start_offset = position_to_offset(old_starts, line, col)
   -- split text into lines and merge with line at insertion point
   local lines = split_lines(text)
   local len = #lines[#lines]
@@ -1545,6 +1566,27 @@ function Doc:raw_insert(line, col, text, undo_stack, time)
   self:sanitize_selection()
   linewrapping.notify_doc_raw_insert(self, line, linewrapping_old_lines)
   self.text_revision = (self.text_revision or 0) + 1
+  self:on_text_transaction({
+    applied = true,
+    changed = true,
+    type = "raw_insert",
+    linewrapping_already_notified = true,
+    edits = {
+      {
+        line1 = line, col1 = col, line2 = line, col2 = col,
+        start_offset = start_offset, end_offset = start_offset,
+        text = text, old_text = "",
+      },
+    },
+    changed_ranges = {
+      {
+        old_line1 = line, old_line2 = line,
+        new_line1 = line, new_line2 = line2,
+        old_line_count = 1, new_line_count = line2 - line + 1,
+        line_delta = line2 - line,
+      },
+    },
+  })
   self:notify_text_change_listeners("after", { type = "raw_insert", kind = "raw_insert", line = line, col = col, text = text })
 end
 
@@ -1554,6 +1596,9 @@ function Doc:raw_remove(line1, col1, line2, col2, undo_stack, time)
   local linewrapping_old_lines = #self.lines
   -- push undo
   local text = self:get_text(line1, col1, line2, col2)
+  local old_starts = line_starts_for(self.lines)
+  local start_offset = position_to_offset(old_starts, line1, col1)
+  local end_offset = position_to_offset(old_starts, line2, col2)
   push_selection_undo(self, undo_stack, time)
   push_undo(undo_stack, time, "insert", line1, col1, text)
 
@@ -1588,6 +1633,27 @@ function Doc:raw_remove(line1, col1, line2, col2, undo_stack, time)
   self:sanitize_selection()
   linewrapping.notify_doc_raw_remove(self, line1, line2, linewrapping_old_lines)
   self.text_revision = (self.text_revision or 0) + 1
+  self:on_text_transaction({
+    applied = true,
+    changed = true,
+    type = "raw_remove",
+    linewrapping_already_notified = true,
+    edits = {
+      {
+        line1 = line1, col1 = col1, line2 = line2, col2 = col2,
+        start_offset = start_offset, end_offset = end_offset,
+        text = "", old_text = text,
+      },
+    },
+    changed_ranges = {
+      {
+        old_line1 = line1, old_line2 = line2,
+        new_line1 = line1, new_line2 = line1,
+        old_line_count = line2 - line1 + 1, new_line_count = 1,
+        line_delta = line1 - line2,
+      },
+    },
+  })
   self:notify_text_change_listeners("after", { type = "raw_remove", kind = "raw_remove", line1 = line1, col1 = col1, line2 = line2, col2 = col2 })
 end
 
@@ -2215,7 +2281,9 @@ end
 
 -- Internal transaction hook for batch-aware document change observers.
 function Doc:on_text_transaction(transaction)
-  linewrapping.notify_doc_text_transaction(self, transaction)
+  if not (transaction and transaction.linewrapping_already_notified) then
+    linewrapping.notify_doc_text_transaction(self, transaction)
+  end
   for id, handler in pairs(text_transaction_handlers) do
     local ok, err = pcall(handler, self, transaction)
     if not ok and core and core.log_quiet then

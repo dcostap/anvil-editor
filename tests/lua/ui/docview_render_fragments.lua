@@ -222,6 +222,23 @@ test.describe("DocView render fragments", function()
     test.equal(clicked, true)
   end)
 
+  test.it("releases cached entries beyond EOF after tail deletion", function()
+    local view = make_view("one\ntwo\nthree\nfour\nfive")
+    view:add_line_render_provider("tail", {
+      render_line = function(_, owner, line)
+        return {
+          fragments = {
+            { source_col1 = 1, source_col2 = #(owner.doc.lines[line] or ""), text = "cached" },
+          },
+        }
+      end,
+    })
+    view:get_line_render(5)
+    test.equal(view:get_render_cache_diagnostics().resident_line_entries, 1)
+    view.doc:remove(3, #view.doc.lines[3], 5, #view.doc.lines[5])
+    test.equal(view:get_render_cache_diagnostics().resident_line_entries, 0)
+  end)
+
   test.it("invalidates cached output after legacy raw text edits", function()
     local view, doc = make_view("one")
     local calls = 0

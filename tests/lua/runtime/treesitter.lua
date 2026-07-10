@@ -451,6 +451,28 @@ test.describe("core.treesitter phase 3 document integration", function()
     doc:on_close()
   end)
 
+  test.it("fully reparses changed and identical document reloads", function()
+    local path = USERDIR .. PATHSEP .. "treesitter-reload-" .. system.get_process_id() .. ".c"
+    local fp = test.not_nil(io.open(path, "wb"))
+    fp:write("int reloaded(void) { return 7; }\n")
+    fp:close()
+    local doc = c_doc("int original(void) { return 1; }", path)
+    test.ok(wait_ready(doc))
+
+    local generation = doc.treesitter.generation
+    doc:load(path)
+    test.ok(wait_ready(doc))
+    test.ok(doc.treesitter.generation > generation)
+    test.equal(token_type_for_text(ts_highlight.line_tokens(doc, 1), "reloaded"), "function.declaration")
+
+    generation = doc.treesitter.generation
+    doc:load(path)
+    test.ok(wait_ready(doc))
+    test.ok(doc.treesitter.generation > generation)
+    os.remove(path)
+    doc:on_close()
+  end)
+
   test.it("Odin highlighting and outline use bundled Tree-sitter queries", function()
     local doc = odin_doc([[package demo
 

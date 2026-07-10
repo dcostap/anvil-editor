@@ -4,8 +4,22 @@ local core = require "core"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
 local markdown = require "core.markdown"
+local markdown_model = require "core.markdown.model"
+local linewrapping = require "core.linewrapping"
 local style = require "core.style"
+local worker_pool = require "core.worker_pool"
 local test = require "core.test"
+
+local function wait_status(instance, wanted, timeout)
+  local deadline = system.get_time() + (timeout or 5)
+  repeat
+    local pool = worker_pool.current_system()
+    if pool then pool:drain({ max_ms = 5, max_messages = 64 }) end
+    if instance.status == wanted then return true end
+    coroutine.yield(0.01)
+  until system.get_time() >= deadline
+  return instance.status == wanted
+end
 
 local function make_view(text, filename)
   local doc = Doc(filename or "note.md", filename or "note.md", true)
@@ -47,6 +61,96 @@ test.describe("Markdown Live Editor", function()
     test.equal(view:get_col_x_offset(1, 1), 0)
     test.equal(view:get_col_x_offset(1, 3), 0)
     test.ok(view:get_col_x_offset(1, 8) > 0)
+  end)
+
+  test.it("adopts published heading and inline semantic identities", function()
+    local view, doc = make_view("# **Title**\nText with ***bold***.\nplain", "note.md")
+    doc:set_selection(3, 1)
+    markdown.live_render.refresh_view(view)
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_status(instance, "ready"), instance.reason)
+
+    local heading = test.not_nil(view:get_line_render(1))
+    test.equal(heading.semantic_generation, instance.generation)
+    test.not_nil(heading.semantic_id)
+    local heading_semantic_fragment
+    for _, fragment in ipairs(heading.fragments or {}) do
+      if fragment.semantic_id then heading_semantic_fragment = fragment break end
+    end
+    test.not_nil(heading_semantic_fragment)
+    local inline = test.not_nil(view:get_line_render(2))
+    test.equal(inline.semantic_generation, instance.generation)
+    local semantic_fragment
+    for _, fragment in ipairs(inline.fragments or {}) do
+      if fragment.semantic_id then semantic_fragment = fragment break end
+    end
+    test.not_nil(semantic_fragment)
+
+    local heading_before = heading
+    local generation_before = instance.generation
+    doc:insert(2, #doc.lines[2], "!")
+    test.equal(view:get_line_render(1), heading_before)
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    test.ok(instance.generation > generation_before)
+    test.equal(view:get_line_render(1), heading_before)
+    test.equal(view:get_line_render(2).semantic_generation, instance.generation)
+  end)
+
+  test.it("re-adopts suffix semantics after structural edits rendered while pending", function()
+    local view, doc = make_view("# A\nbody\n# B\nplain", "note.md")
+    doc:set_selection(4, 1)
+    markdown.live_render.refresh_view(view)
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    test.not_nil(view:get_line_render(3).semantic_id)
+
+    local previous_generation = instance.generation
+    doc:insert(1, 1, "inserted\n")
+    local pending = test.not_nil(view:get_line_render(4))
+    test.equal(pending.semantic_id, nil)
+    local split = DocView(doc)
+    split.size.x, split.size.y = 500, 200
+    split:set_wrapping_enabled(false)
+    markdown.live_render.refresh_view(split)
+    test.equal(split:get_line_render(4).semantic_id, nil)
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    test.ok(instance.generation > previous_generation)
+    local published = test.not_nil(view:get_line_render(4))
+    test.equal(published.semantic_generation, instance.generation)
+    test.not_nil(published.semantic_id)
+    local split_published = test.not_nil(split:get_line_render(4))
+    test.equal(split_published.semantic_generation, instance.generation)
+    test.not_nil(split_published.semantic_id)
+  end)
+
+  test.it("invalidates raw-block-dependent suffix rendering and wrapping", function()
+    local target = string.rep("folder/", 24) .. "name"
+    local source = "```\n# [[" .. target .. "|Alias]] after\n```\nplain"
+    local view, doc = make_view(source, "note.md")
+    view.size.x = 500
+    view:set_wrapping_enabled(true)
+    doc:set_selection(4, 1)
+    markdown.live_render.refresh_view(view)
+    test.equal(view:get_line_render(2), nil)
+    local function break_signature()
+      local first, _, count = linewrapping.get_line_idx_col_count(view, 2)
+      local cols = {}
+      for idx = first, first + count - 1 do
+        local _, col = linewrapping.get_idx_line_col(view, idx)
+        cols[#cols + 1] = col
+      end
+      return table.concat(cols, ",")
+    end
+    local raw_breaks = break_signature()
+    doc:remove(1, 1, 1, 4)
+    local heading = test.not_nil(view:get_line_render(2))
+    test.equal(heading.raw_passthrough, nil)
+    test.ok(#(heading.fragments or {}) > 0)
+    local rendered_breaks = break_signature()
+    test.ok(rendered_breaks ~= raw_breaks, raw_breaks .. " -> " .. rendered_breaks)
+    doc:raw_insert(1, 1, "```", doc.undo_stack, system.get_time())
+    test.equal(view:get_line_render(2), nil)
+    test.equal(break_signature(), raw_breaks)
   end)
 
   test.it("expands active headings to editable rendered Markdown syntax", function()

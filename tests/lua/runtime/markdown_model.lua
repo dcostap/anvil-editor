@@ -185,6 +185,38 @@ test.describe("Markdown semantic model", function()
     markdown_model.close(doc, "test")
   end)
 
+  test.it("republishes after legacy raw edits and reload", function()
+    local doc = make_doc("# Original\n")
+    local instance = markdown_model.get(doc)
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    local generation = instance.generation
+
+    doc:raw_insert(1, 1, "prefix\n", doc.undo_stack, system.get_time())
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    test.ok(instance.generation > generation)
+    local heading = test.not_nil(find_node(instance:nodes_for_lines(2, 2), "heading"))
+    test.equal(heading.source.line1, 2)
+
+    local path = USERDIR .. PATHSEP .. "markdown-model-reload-" .. system.get_process_id() .. ".md"
+    local fp = test.not_nil(io.open(path, "wb"))
+    fp:write("# Reloaded\n")
+    fp:close()
+    generation = instance.generation
+    doc:load(path)
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    test.ok(instance.generation > generation)
+    heading = test.not_nil(find_node(instance:nodes_for_lines(1, 1), "heading"))
+    test.equal(heading.source.line1, 1)
+
+    generation = instance.generation
+    doc:load(path)
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    test.ok(instance.generation > generation)
+    test.equal(instance.published_revision, doc.text_revision)
+    os.remove(path)
+    markdown_model.close(doc, "test")
+  end)
+
   test.it("invalidates queued debounce work when the model closes", function()
     local doc = make_doc("# Before\n")
     local instance = markdown_model.get(doc)

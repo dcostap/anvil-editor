@@ -1223,15 +1223,19 @@ end
 function DocView:invalidate_line_render(_provider_id, line1, line2)
   local cache = self.__line_render_cache
   if line1 and cache and cache.generation == (self.__line_render_generation or 0) then
-    line1 = common.clamp(math.floor(line1), 1, #self.doc.lines)
-    line2 = common.clamp(math.floor(line2 or line1), line1, #self.doc.lines)
-    for line = line1, line2 do cache.lines[line] = nil end
-    cache.invalidated_lines = (cache.invalidated_lines or 0) + line2 - line1 + 1
+    local requested_line1 = math.max(1, math.floor(line1))
+    local requested_line2 = math.max(requested_line1, math.floor(line2 or requested_line1))
+    for line in pairs(cache.lines) do
+      if line >= requested_line1 and line <= requested_line2 then cache.lines[line] = nil end
+    end
+    cache.invalidated_lines = (cache.invalidated_lines or 0) + requested_line2 - requested_line1 + 1
     self.render_cache_diagnostics.line_invalidations =
-      self.render_cache_diagnostics.line_invalidations + line2 - line1 + 1
+      self.render_cache_diagnostics.line_invalidations + requested_line2 - requested_line1 + 1
+    local layout_line1 = common.clamp(requested_line1, 1, #self.doc.lines)
+    local layout_line2 = common.clamp(requested_line2, layout_line1, #self.doc.lines)
     if self.wrapped_settings and not self.__line_render_wrap_invalidating then
       self.__line_render_wrap_invalidating = true
-      linewrapping.update_breaks(self, line1, line2, 0)
+      linewrapping.update_breaks(self, layout_line1, layout_line2, 0)
       self.__line_render_wrap_invalidating = nil
     end
     return
@@ -1258,6 +1262,10 @@ end
 function DocView:get_render_cache_diagnostics()
   local result = {}
   for key, value in pairs(self.render_cache_diagnostics or {}) do result[key] = value end
+  result.resident_line_entries = 0
+  for _ in pairs(self.__line_render_cache and self.__line_render_cache.lines or {}) do
+    result.resident_line_entries = result.resident_line_entries + 1
+  end
   return result
 end
 
@@ -2729,7 +2737,6 @@ end
 local function line_render_signature(view, line, source_text)
   local parts = {
     source_text,
-    tostring(view.doc.text_revision or 0),
     tostring(view.__line_render_generation or 0),
   }
   for _, entry in ipairs(view:line_render_provider_entries()) do
@@ -5391,14 +5398,47 @@ end
 
 Doc.register_text_transaction_handler("docview-render-caches", function(doc, transaction)
   if not (transaction and transaction.changed) then return end
+  local line1, line2
+  local line_structure_changed = false
+  for _, range in ipairs(transaction.changed_ranges or {}) do
+    local old_line1 = range.old_line1 or range.new_line1 or 1
+    local old_line2 = range.old_line2 or old_line1
+    local new_line1 = range.new_line1 or old_line1
+    local new_line2 = range.new_line2 or new_line1
+    line1 = math.min(line1 or old_line1, old_line1, new_line1)
+    line2 = math.max(line2 or old_line2, old_line2, new_line2)
+    if old_line2 - old_line1 ~= new_line2 - new_line1 then line_structure_changed = true end
+  end
+  if line_structure_changed and line1 then line2 = math.max(line2 or line1, #doc.lines) end
   for view in pairs(DocView.registry[doc] or {}) do
     if view and view.doc == doc then
-      if view:has_line_render_providers() then
-        view.__line_render_wrap_invalidating = true
-        view:invalidate_line_render("text-change")
-        view.__line_render_wrap_invalidating = nil
+      local invalid_line1, invalid_line2 = line1, line2
+      for _, entry in ipairs(view:line_render_provider_entries()) do
+        local fn = entry.provider and entry.provider.on_text_transaction
+        if fn then
+          local ok, provider_line1, provider_line2 = pcall(
+            fn, entry.provider, view, transaction, line1, line2
+          )
+          if ok and provider_line1 then
+            invalid_line1 = math.min(invalid_line1 or provider_line1, provider_line1)
+            invalid_line2 = math.max(invalid_line2 or provider_line2 or provider_line1, provider_line2 or provider_line1)
+          elseif not ok then
+            core.log_quiet(
+              "DocView line render provider %s transaction hook failed for %s: %s",
+              tostring(entry.id), doc:get_name(), tostring(provider_line1)
+            )
+          end
+        end
       end
-      if view:has_visual_metric_providers() then view:invalidate_visual_metrics("text-change") end
+      if view:has_line_render_providers() then
+        local wrapping_already_updated = invalid_line1 == line1 and invalid_line2 == line2
+        if wrapping_already_updated then view.__line_render_wrap_invalidating = true end
+        view:invalidate_line_render("text-change", invalid_line1, invalid_line2)
+        if wrapping_already_updated then view.__line_render_wrap_invalidating = nil end
+      end
+      if view:has_visual_metric_providers() then
+        view:invalidate_visual_metrics("text-change", invalid_line1, invalid_line2)
+      end
     end
   end
 end)
