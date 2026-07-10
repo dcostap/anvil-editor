@@ -1139,9 +1139,11 @@ local function bind_link_index(view)
   if owner.link_index == index and owner.link_listener_id == listener_id then return end
   if owner.link_index and owner.link_index ~= index then
     owner.link_index:remove_listener(listener_id)
+    owner.link_index:release(listener_id)
   end
   owner.link_index = index
   owner.link_listener_id = listener_id
+  index:acquire(listener_id)
   index:add_listener(listener_id, function()
     if view.__markdown_live_owner ~= owner or not view.__markdown_live_attached then return end
     view:invalidate_line_render(PROVIDER_ID)
@@ -1156,6 +1158,7 @@ local function unbind_link_index(view)
   local owner = view.__markdown_live_owner
   if not (owner and owner.link_index) then return end
   owner.link_index:remove_listener(owner.link_listener_id)
+  owner.link_index:release(owner.link_listener_id)
   owner.link_index = nil
   owner.link_listener_id = nil
 end

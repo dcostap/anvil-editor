@@ -1,5 +1,6 @@
 local core = require "core"
 local common = require "core.common"
+local DirWatch = require "core.dirwatch"
 local anchors = require "core.markdown.anchors"
 local links = require "core.markdown.links"
 local parser = require "core.markdown.parser"
@@ -205,6 +206,13 @@ function Index:new(root)
     attachment_keys = {},
     attachment_keys_ci = {},
     doc_listeners = setmetatable({}, { __mode = "k" }),
+    consumers = {},
+    watcher = nil,
+    watcher_serial = 0,
+    watched_dirs = {},
+    pending_watch_dirs = {},
+    pending_scan_dirs = {},
+    subtree_scan_running = false,
   }, self)
 end
 
@@ -329,6 +337,7 @@ end
 
 function Index:make_note_entry(path, text, opts)
   opts = opts or {}
+  local file_info = system.get_file_info(path)
   text = text or (not opts.shallow and read_file(path)) or ""
   local anchor_index
   if opts.shallow then
@@ -360,19 +369,34 @@ function Index:make_note_entry(path, text, opts)
     headings_by_text = headings_by_text,
     blocks = anchor_index.blocks,
     blocks_by_id = blocks_by_id,
+    modified = file_info and file_info.modified,
+    size = file_info and file_info.size,
   }
 end
 
 function Index:make_attachment_entry(path)
+  local file_info = system.get_file_info(path)
   return {
     kind = "attachment",
     abs_path = common.normalize_path(path),
     rel_path = self:relative_path(path),
     display_name = display_basename(path),
+    modified = file_info and file_info.modified,
+    size = file_info and file_info.size,
   }
 end
 
+function Index:watch_dir(dir)
+  if not self.watcher or self.watched_dirs[dir] then return false end
+  local info = system.get_file_info(dir)
+  if not (info and info.type == "dir") then return false end
+  self.watcher:watch(dir)
+  self.watched_dirs[dir] = true
+  return true
+end
+
 function Index:scan_dir(dir, skip_key)
+  self:watch_dir(dir)
   for _, name in ipairs(system.list_dir(dir) or {}) do
     if name ~= ".git" and name ~= ".run-meson-tests" then
       local path = join_path(dir, name)
@@ -398,6 +422,195 @@ function Index:rebuild(reason, opts)
   self:notify("ready")
   core.log_quiet("Markdown vault index rebuilt %s: %d notes, %d attachments", reason or "manual", self:note_count(), self:attachment_count())
   return self
+end
+
+local function entry_is_current(entry, info)
+  return entry and entry.modified == info.modified and entry.size == info.size
+end
+
+function Index:queue_subtree_scan(dirs, reason)
+  for _, dir in ipairs(dirs or {}) do self.pending_scan_dirs[dir] = true end
+  if self.subtree_scan_running then return false end
+  self.subtree_scan_running = true
+  local watcher_serial = self.watcher_serial
+  core.add_thread(function()
+    local changed = false
+    while next(self.pending_scan_dirs) do
+      if not self.watcher or self.watcher_serial ~= watcher_serial then
+        self.subtree_scan_running = false
+        return
+      end
+      local roots = self.pending_scan_dirs
+      self.pending_scan_dirs = {}
+      local stack, processed = {}, 0
+      for dir in pairs(roots) do stack[#stack + 1] = dir end
+      while #stack > 0 do
+        if not self.watcher or self.watcher_serial ~= watcher_serial then
+          self.subtree_scan_running = false
+          return
+        end
+        local dir = table.remove(stack)
+        self:watch_dir(dir)
+        for _, name in ipairs(system.list_dir(dir) or {}) do
+          if name ~= ".git" and name ~= ".run-meson-tests" then
+            local path = join_path(dir, name)
+            local info = system.get_file_info(path)
+            if info and info.type == "dir" then
+              stack[#stack + 1] = path
+            elseif info and info.type == "file" then
+              local key = path_key(path)
+              local entry = self.notes_by_abs[key] or self.attachments_by_abs[key]
+              if not (entry and entry.doc) and (is_markdown(path) or is_attachment(path)) then
+                self:update_path(path, { rebuilding = true, cooperative = true })
+                changed = true
+              end
+            end
+            processed = processed + 1
+            if processed % 32 == 0 then coroutine.yield(0) end
+          end
+        end
+      end
+    end
+    for doc in pairs(self.doc_listeners) do self:update_doc(doc, { rebuilding = true }) end
+    self.subtree_scan_running = false
+    if changed then
+      self.generation = self.generation + 1
+      self:notify("filesystem-reconciled", { reason = reason or "watch-subtree" })
+      core.redraw = true
+      core.log_quiet("Markdown index cooperatively adopted new filesystem subtree in %s", self.root)
+    end
+  end)
+  return true
+end
+
+function Index:reconcile_dir(dir, reason, opts)
+  opts = opts or {}
+  local ok, normalized = pcall(common.normalize_path, dir)
+  if not ok or not normalized or (
+    path_key(normalized) ~= path_key(self.root)
+    and not common.path_belongs_to(normalized, self.root)
+  ) then return false end
+  local info = system.get_file_info(normalized)
+  if not (info and info.type == "dir") then normalized = common.dirname(normalized) end
+  info = system.get_file_info(normalized)
+  if not (info and info.type == "dir") then return false end
+
+  self:watch_dir(normalized)
+  local seen, changed, discovered_dirs = {}, false, {}
+  for _, name in ipairs(system.list_dir(normalized) or {}) do
+    if name ~= ".git" and name ~= ".run-meson-tests" then
+      local path = join_path(normalized, name)
+      local child_info = system.get_file_info(path)
+      if child_info and child_info.type == "dir" then
+        if not self.watched_dirs[path] then discovered_dirs[#discovered_dirs + 1] = path end
+        self:watch_dir(path)
+      elseif child_info and child_info.type == "file" and (is_markdown(path) or is_attachment(path)) then
+        local key = path_key(path)
+        seen[key] = true
+        local entry = self.notes_by_abs[key] or self.attachments_by_abs[key]
+        if not (entry and entry.doc) and not entry_is_current(entry, child_info) then
+          self:update_path(path, { rebuilding = true, cooperative = true })
+          changed = true
+        end
+      end
+    end
+  end
+
+  for _, map in ipairs({ self.notes_by_abs, self.attachments_by_abs }) do
+    local remove = {}
+    for key, entry in pairs(map) do
+      if not entry.doc and (
+        (common.dirname(entry.abs_path) == normalized and not seen[key])
+        or (common.path_belongs_to(entry.abs_path, normalized) and not file_exists(entry.abs_path))
+      ) then
+        remove[#remove + 1] = entry.abs_path
+      end
+    end
+    for _, path in ipairs(remove) do self:remove_path_entry(path); changed = true end
+  end
+
+  if #discovered_dirs > 0 then
+    if opts.cooperative then
+      self:queue_subtree_scan(discovered_dirs, reason)
+    else
+      for _, path in ipairs(discovered_dirs) do self:scan_dir(path) end
+      for doc in pairs(self.doc_listeners) do self:update_doc(doc, { rebuilding = true }) end
+      changed = true
+    end
+  end
+  if changed then
+    self.generation = self.generation + 1
+    self:notify("filesystem-reconciled", { path = normalized, reason = reason or "watch" })
+    core.redraw = true
+    core.log_quiet("Markdown index reconciled filesystem directory %s", normalized)
+  end
+  return changed
+end
+
+function Index:start_watcher()
+  if self.watcher then return false end
+  local ok, watcher = pcall(DirWatch)
+  if not ok then
+    core.log_quiet("Markdown index filesystem watcher unavailable for %s: %s", self.root, tostring(watcher))
+    return false
+  end
+  self.watcher = watcher
+  self.watcher_serial = self.watcher_serial + 1
+  local serial = self.watcher_serial
+  self:watch_dir(self.root)
+  core.add_thread(function()
+    while self.watcher == watcher and self.watcher_serial == serial do
+      local checked, err = pcall(watcher.check, watcher, function(path)
+        self.pending_watch_dirs[path] = true
+      end)
+      if not checked then
+        core.log_quiet("Markdown index filesystem watcher failed for %s: %s", self.root, tostring(err))
+      end
+      local pending = self.pending_watch_dirs
+      self.pending_watch_dirs = {}
+      for path in pairs(pending) do
+        if self.watcher ~= watcher or self.watcher_serial ~= serial then return end
+        local reconciled, reconcile_err = pcall(
+          self.reconcile_dir, self, path, "watch", { cooperative = true }
+        )
+        if not reconciled then
+          core.log_quiet("Markdown index filesystem reconciliation failed for %s: %s", tostring(path), tostring(reconcile_err))
+        end
+        coroutine.yield(0)
+      end
+      coroutine.yield(0.2)
+    end
+  end)
+  core.log_quiet("Markdown index started filesystem watcher for %s", self.root)
+  return true
+end
+
+function Index:stop_watcher()
+  local watcher = self.watcher
+  if not watcher then return false end
+  self.watcher = nil
+  self.watcher_serial = self.watcher_serial + 1
+  for dir in pairs(self.watched_dirs) do pcall(watcher.unwatch, watcher, dir) end
+  self.watched_dirs = {}
+  self.pending_watch_dirs = {}
+  self.pending_scan_dirs = {}
+  self.subtree_scan_running = false
+  core.log_quiet("Markdown index stopped filesystem watcher for %s", self.root)
+  return true
+end
+
+function Index:acquire(id)
+  if self.consumers[id] then return false end
+  self.consumers[id] = true
+  self:start_watcher()
+  return true
+end
+
+function Index:release(id)
+  if not self.consumers[id] then return false end
+  self.consumers[id] = nil
+  if not next(self.consumers) then self:stop_watcher() end
+  return true
 end
 
 function Index:ensure(reason)
