@@ -263,6 +263,10 @@ static int treesitter_index_result_summary(lua_State *L) {
   lua_createtable(L, 0, 5);
   lua_pushinteger(L, (lua_Integer)anvil_worker_treesitter_index_result_parse_ms(result->result));
   lua_setfield(L, -2, "parse_ms");
+  lua_pushinteger(L, (lua_Integer)anvil_worker_treesitter_index_result_block_parse_ms(result->result));
+  lua_setfield(L, -2, "block_parse_ms");
+  lua_pushinteger(L, (lua_Integer)anvil_worker_treesitter_index_result_inline_parse_ms(result->result));
+  lua_setfield(L, -2, "inline_parse_ms");
   lua_pushinteger(L, (lua_Integer)anvil_worker_treesitter_index_result_total_ms(result->result));
   lua_setfield(L, -2, "total_ms");
   lua_pushinteger(L, (lua_Integer)anvil_worker_treesitter_index_result_query_ms(result->result, "outline"));
@@ -271,6 +275,8 @@ static int treesitter_index_result_summary(lua_State *L) {
   lua_setfield(L, -2, "usage_query_ms");
   lua_pushboolean(L, anvil_worker_treesitter_index_result_incremental(result->result));
   lua_setfield(L, -2, "incremental");
+  lua_pushinteger(L, (lua_Integer)anvil_worker_treesitter_index_result_reused_block_capture_count(result->result));
+  lua_setfield(L, -2, "reused_block_captures");
   lua_pushinteger(L, (lua_Integer)anvil_worker_treesitter_index_result_reused_inline_count(result->result));
   lua_setfield(L, -2, "reused_inline_regions");
   lua_setfield(L, -2, "metrics");

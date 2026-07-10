@@ -16,6 +16,8 @@ typedef struct ExtensionScan {
   void *cancel_payload;
   uint32_t wikilink_disabled_until;
   uint32_t highlight_disabled_until;
+  uint32_t active_match_id;
+  uint32_t next_match_id;
   bool comments_exhausted;
 } ExtensionScan;
 
@@ -84,6 +86,7 @@ static bool emit(ExtensionScan *scan, const char *name, uint32_t start, uint32_t
     .name = name,
     .start_byte = start,
     .end_byte = end,
+    .match_id = scan->active_match_id,
   };
   return scan->capture_callback && scan->capture_callback(&capture, scan->capture_payload);
 }
@@ -106,6 +109,7 @@ static bool emit_wikilink(
 ) {
   uint32_t content_start = start + open_length;
   if (content_start >= close) return true;
+  scan->active_match_id = scan->next_match_id++;
   const char *parent = embed ? "span.embed" : "span.wiki_link";
   if (!emit(scan, parent, start, close + 2) ||
       !emit(scan, embed ? "marker.embed_open" : "marker.wiki_open", start, content_start) ||
@@ -135,6 +139,7 @@ static bool scan_extensions(ExtensionScan *scan) {
         scan->source[cursor + 1] == '%') {
       uint32_t close = find_delimiter(scan, cursor + 2, '%', '%', true, false);
       if (close != UINT32_MAX) {
+        if (close > cursor + 2) scan->active_match_id = scan->next_match_id++;
         if (close > cursor + 2 &&
             (!emit(scan, "span.comment", cursor, close + 2) ||
               !emit(scan, "marker.comment_open", cursor, cursor + 2) ||
@@ -185,6 +190,7 @@ static bool scan_extensions(ExtensionScan *scan) {
       uint32_t close = find_delimiter(scan, cursor + 2, '=', '=', false, true);
       if (close != UINT32_MAX && close > cursor + 2 &&
           (close + 2 >= scan->length || scan->source[close + 2] != '=')) {
+        scan->active_match_id = scan->next_match_id++;
         if (!emit(scan, "span.highlight", cursor, close + 2) ||
             !emit(scan, "marker.highlight_open", cursor, cursor + 2) ||
             !emit(scan, "content.highlight", cursor + 2, close) ||
@@ -219,7 +225,7 @@ bool anvil_markdown_extensions_scan(
     .cancel_callback = cancel_callback,
     .cancel_payload = cancel_payload,
   };
-  if (scan.length > 0) {
+  if (scan.length > 0 && memchr(scan.source, '\\', scan.length)) {
     scan.escaped = (uint8_t *)malloc(scan.length);
     if (!scan.escaped) return false;
     bool odd_backslashes = false;

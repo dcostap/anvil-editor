@@ -147,6 +147,7 @@ function Model:new(doc)
       last_total_ms = 0,
       full_publications = 0,
       incremental_publications = 0,
+      reused_block_captures = 0,
       reused_inline_regions = 0,
     },
   }, self)
@@ -232,6 +233,8 @@ function Model:publish(result, revision, signature, generation, changed_range)
   self.diagnostics.last_total_ms = summary.metrics and summary.metrics.total_ms or 0
   if summary.metrics and summary.metrics.incremental then
     self.diagnostics.incremental_publications = self.diagnostics.incremental_publications + 1
+    self.diagnostics.reused_block_captures = self.diagnostics.reused_block_captures
+      + (summary.metrics.reused_block_captures or 0)
     self.diagnostics.reused_inline_regions = self.diagnostics.reused_inline_regions
       + (summary.metrics.reused_inline_regions or 0)
   else
@@ -239,11 +242,13 @@ function Model:publish(result, revision, signature, generation, changed_range)
   end
   self.changed_ranges = changed_range and { common.merge({}, changed_range) } or {}
   core.log_quiet(
-    "Markdown model published generation=%d revision=%d bytes=%d parse_ms=%.3f",
+    "Markdown model published generation=%d revision=%d bytes=%d lines=%d parse_ms=%.3f total_ms=%.3f",
     self.generation,
     revision,
     summary.byte_len or 0,
-    self.diagnostics.last_parse_ms
+    summary.line_count or 0,
+    self.diagnostics.last_parse_ms,
+    self.diagnostics.last_total_ms
   )
   self:notify("published")
   core.redraw = true

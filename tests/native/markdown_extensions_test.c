@@ -70,6 +70,14 @@ int main(void) {
   CHECK(embed != NULL && embed->start_byte == 23);
   CHECK(highlight != NULL);
   CHECK(comment != NULL);
+  CHECK(wiki->match_id != embed->match_id);
+  CHECK(wiki->match_id != highlight->match_id);
+  CHECK(wiki->match_id != comment->match_id);
+  CHECK(embed->match_id != highlight->match_id);
+  CHECK(embed->match_id != comment->match_id);
+  CHECK(highlight->match_id != comment->match_id);
+  CHECK(find_capture(&list, "marker.wiki_open")->match_id == wiki->match_id);
+  CHECK(find_capture(&list, "content.target")->match_id == wiki->match_id);
   CHECK(memchr(snapshot->bytes + comment->start_byte, '\n', comment->end_byte - comment->start_byte) != NULL);
 
   uint32_t wiki_count = 0, highlight_count = 0;

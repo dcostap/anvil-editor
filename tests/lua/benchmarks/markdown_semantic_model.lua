@@ -57,9 +57,10 @@ local function run_case(target_bytes)
   test.ok(instance.diagnostics.reused_inline_regions > 0)
 
   print(string.format(
-    "markdown-semantic-benchmark bytes=%d lines=%d full_e2e_ms=%.3f full_native_ms=%.3f incremental_e2e_ms=%.3f incremental_native_ms=%.3f incremental_total_ms=%.3f block_query_ms=%.3f inline_query_ms=%.3f visible_query_ms=%.3f visible_nodes=%d",
+    "markdown-semantic-benchmark bytes=%d lines=%d full_e2e_ms=%.3f full_native_ms=%.3f incremental_e2e_ms=%.3f incremental_native_ms=%.3f block_parse_ms=%.3f inline_parse_ms=%.3f incremental_total_ms=%.3f block_query_ms=%.3f inline_query_ms=%.3f visible_query_ms=%.3f visible_nodes=%d",
     #source, line_count, full_ms, full_native_ms, incremental_ms,
-    incremental_native_ms, summary.metrics.total_ms, summary.metrics.outline_query_ms,
+    incremental_native_ms, summary.metrics.block_parse_ms,
+    summary.metrics.inline_parse_ms, summary.metrics.total_ms, summary.metrics.outline_query_ms,
     summary.metrics.usage_query_ms, query_ms, #nodes
   ))
   io.stdout:flush()

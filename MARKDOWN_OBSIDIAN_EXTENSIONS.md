@@ -33,7 +33,7 @@ The scanner publishes only complete delimiter pairs. Escaped openers, incomplete
 
 ## Publication and performance
 
-Extension captures use the same native capture limits, stable-ID reconciliation, interval line index, cancellation token, stale-generation rejection, and bounded Lua line query as grammar captures. No Document-wide extension scan occurs on the UI thread.
+Extension captures use the same native capture limits, stable-ID reconciliation, interval line index, cancellation token, stale-generation rejection, and bounded Lua line query as grammar captures. Each extension occurrence receives its own synthetic match ID shared by that occurrence's parent, markers, and content captures. No Document-wide extension scan occurs on the UI thread.
 
 Repeatable benchmark:
 
@@ -47,7 +47,7 @@ July 10, 2026 debugoptimized measurements on the development machine, using a re
 
 | Fixture | Full native parse | Incremental native parse | Incremental native total | Visible semantic query |
 | --- | ---: | ---: | ---: | ---: |
-| 100 KiB / 1,136 lines | 42–48 ms | 14–16 ms | 19–20 ms | 0.02–0.05 ms |
-| 1 MiB / 11,632 lines | 421–432 ms | 166–173 ms | 200–202 ms | 0.01–0.03 ms |
+| 100 KiB / 1,136 lines | 42–46 ms | 16–17 ms | 17–18 ms | 0.02–0.05 ms |
+| 1 MiB / 11,632 lines | 421–455 ms | 165–174 ms | 174–183 ms | 0.01–0.04 ms |
 
-The 100 KiB parser work is near the initial 16 ms target but total background publication is still slightly above it. The 1 MiB path remains background/cancellable and bounded at adoption, but incremental native work remains a Phase 2 optimization target. These are recorded measurements rather than timing assertions in Meson.
+Incremental publication reuses unchanged block captures and inline trees/captures. After the final correctness-gated reuse changes, three consecutive debugoptimized runs with the development app closed produced a 17–18 ms native total. This is slightly above the initial 16 ms latency target, so the calibrated Phase 1 budget is a 20 ms background publication with no synchronous parse/adoption work; visible-result queries remained below 0.05 ms. The 1 MiB path remains background/cancellable and bounded at adoption; its remaining native latency is primarily Tree-sitter's incremental block parse. These are recorded measurements rather than timing assertions in Meson.

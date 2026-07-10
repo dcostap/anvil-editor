@@ -23,6 +23,10 @@ struct AnvilMarkdownTree {
   uint32_t inline_capacity;
   bool incremental;
   uint32_t reused_inline_count;
+  TSRange *changed_ranges;
+  uint32_t changed_range_count;
+  uint64_t block_parse_ms;
+  uint64_t inline_parse_ms;
   TSInputEdit input_edit;
 };
 
@@ -374,7 +378,14 @@ static AnvilMarkdownTree *markdown_tree_parse_internal(
     if (old_block_tree) ts_tree_edit(old_block_tree, &edit);
     else result->incremental = false;
   }
+  uint64_t block_started = SDL_GetTicks();
   result->block_tree = parse_with_ranges(block_parser, snapshot, NULL, 0, old_block_tree, &run);
+  result->block_parse_ms = SDL_GetTicks() - block_started;
+  if (result->block_tree && old_block_tree) {
+    result->changed_ranges = ts_tree_get_changed_ranges(
+      old_block_tree, result->block_tree, &result->changed_range_count
+    );
+  }
   if (old_block_tree) ts_tree_delete(old_block_tree);
   if (!result->block_tree) {
     if (error) *error = parser_strdup(run.cancelled
@@ -383,6 +394,7 @@ static AnvilMarkdownTree *markdown_tree_parse_internal(
     goto fail;
   }
   uint32_t previous_cursor = 0;
+  uint64_t inline_started = SDL_GetTicks();
   if (!parse_inline_regions(
     result,
     inline_parser,
@@ -393,6 +405,7 @@ static AnvilMarkdownTree *markdown_tree_parse_internal(
     &run,
     error
   )) goto fail;
+  result->inline_parse_ms = SDL_GetTicks() - inline_started;
 
   ts_parser_delete(inline_parser);
   ts_parser_delete(block_parser);
@@ -436,6 +449,7 @@ void anvil_markdown_tree_free(AnvilMarkdownTree *tree) {
     if (tree->inline_trees[i].tree) ts_tree_delete(tree->inline_trees[i].tree);
   }
   free(tree->inline_trees);
+  free(tree->changed_ranges);
   if (tree->block_tree) ts_tree_delete(tree->block_tree);
   if (tree->snapshot) anvil_ts_snapshot_free(tree->snapshot);
   free(tree);
@@ -467,12 +481,29 @@ bool anvil_markdown_tree_inline_was_reused(const AnvilMarkdownTree *tree, uint32
   return tree && index < tree->inline_count && tree->inline_trees[index].reused;
 }
 
+uint32_t anvil_markdown_tree_changed_range_count(const AnvilMarkdownTree *tree) {
+  return tree ? tree->changed_range_count : 0;
+}
+
+TSRange anvil_markdown_tree_changed_range(const AnvilMarkdownTree *tree, uint32_t index) {
+  if (!tree || index >= tree->changed_range_count) return (TSRange) {0};
+  return tree->changed_ranges[index];
+}
+
 bool anvil_markdown_tree_was_incremental(const AnvilMarkdownTree *tree) {
   return tree && tree->incremental;
 }
 
 uint32_t anvil_markdown_tree_reused_inline_count(const AnvilMarkdownTree *tree) {
   return tree ? tree->reused_inline_count : 0;
+}
+
+uint64_t anvil_markdown_tree_block_parse_ms(const AnvilMarkdownTree *tree) {
+  return tree ? tree->block_parse_ms : 0;
+}
+
+uint64_t anvil_markdown_tree_inline_parse_ms(const AnvilMarkdownTree *tree) {
+  return tree ? tree->inline_parse_ms : 0;
 }
 
 bool anvil_markdown_tree_input_edit(const AnvilMarkdownTree *tree, TSInputEdit *edit) {

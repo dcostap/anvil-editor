@@ -24,6 +24,16 @@ test.describe("worker_pool_native", function()
     return pool
   end
 
+  local function submit_result(pool, spec)
+    local handle = test.not_nil(pool:submit(spec))
+    local result
+    test.ok(drain_until(pool, function(message)
+      if message.type == "result" then result = message.result end
+      return message.type == "final"
+    end))
+    return test.not_nil(result), handle
+  end
+
   test.after_each(function()
     for i = #pools, 1, -1 do
       pools[i]:shutdown({ cancel_running = true })
@@ -118,6 +128,99 @@ test.describe("worker_pool_native", function()
     test.ok(captures.next_offset >= 2)
   end)
 
+  test.test("Markdown block reuse requires an identical complete structural query", function()
+    local pool = new_pool("lua-native-markdown-query-reuse", 1)
+    local spec = {
+      kind = "markdown_parse",
+      text = "# A\n\nText.\n\n# B\n",
+      outline_query = "(atx_heading) @heading",
+      parse_timeout_ms = 1000,
+      query_timeout_ms = 100,
+      max_captures = 1,
+    }
+    local limited = submit_result(pool, spec)
+    test.equal(limited:summary().outline.status, "limit")
+
+    spec.text = "# C\n\nText.\n\n# B\n"
+    spec.previous_result = limited
+    local limited_again = submit_result(pool, spec)
+    local limited_summary = limited_again:summary()
+    test.equal(limited_summary.outline.status, "limit")
+    test.equal(limited_summary.metrics.reused_block_captures, 0)
+
+    spec.max_captures = 100
+    spec.previous_result = nil
+    local complete = submit_result(pool, spec)
+    test.equal(complete:summary().outline.status, "ready")
+
+    spec.max_captures = 1
+    spec.text = "# D\n\nText.\n\n# B\n"
+    spec.previous_result = complete
+    local lowered_limit = submit_result(pool, spec)
+    test.equal(lowered_limit:summary().outline.status, "limit")
+    test.equal(lowered_limit:captures("outline")[1].start_byte, 0)
+
+    spec.max_captures = 100
+    spec.text = "# Earlier\n\n# C\n\nText.\n\n# B\n"
+    spec.previous_result = complete
+    local inserted = submit_result(pool, spec)
+    local ordered = inserted:captures("outline")
+    test.equal(#ordered, 3)
+    test.equal(ordered[1].start_byte, 0)
+    for i = 2, #ordered do test.ok(ordered[i - 1].start_byte <= ordered[i].start_byte) end
+
+    spec.outline_query = "(paragraph) @paragraph"
+    spec.previous_result = inserted
+    local changed_query = submit_result(pool, spec)
+    local changed_summary = changed_query:summary()
+    test.equal(changed_summary.metrics.reused_block_captures, 0)
+    test.equal(changed_summary.outline.capture_count, 1)
+    test.equal(changed_query:captures("outline")[1].capture, "paragraph")
+
+    spec.text = "# A\n"
+    spec.outline_query = "((atx_heading) @heading (#match? @heading \"A\"))"
+    spec.previous_result = nil
+    local predicate_before = submit_result(pool, spec)
+    test.equal(predicate_before:summary().outline.capture_count, 1)
+    spec.text = "# B\n"
+    spec.previous_result = predicate_before
+    local predicate_after = submit_result(pool, spec)
+    test.equal(predicate_after:summary().metrics.reused_block_captures, 0)
+    test.equal(predicate_after:summary().outline.capture_count, 0)
+  end)
+
+  test.test("Markdown block reuse replaces containers extended at a changed boundary", function()
+    local pool = new_pool("lua-native-markdown-container-reuse", 1)
+    local spec = {
+      kind = "markdown_parse",
+      text = "- one\n",
+      outline_query = "(list) @list\n(list_item) @item",
+      parse_timeout_ms = 1000,
+      query_timeout_ms = 100,
+      max_captures = 100,
+    }
+    local before = submit_result(pool, spec)
+    spec.text = "- one\n- two\n"
+    spec.previous_result = before
+    local after = submit_result(pool, spec)
+    local captures = after:captures("outline")
+    local lists, items = 0, 0
+    local match_ids = {}
+    for _, capture in ipairs(captures) do
+      test.equal(match_ids[capture.match_id], nil)
+      match_ids[capture.match_id] = true
+      if capture.capture == "list" then
+        lists = lists + 1
+        test.equal(capture.start_byte, 0)
+        test.equal(capture.end_byte, #spec.text)
+      elseif capture.capture == "item" then
+        items = items + 1
+      end
+    end
+    test.equal(lists, 1)
+    test.equal(items, 2)
+  end)
+
   test.test("Markdown job publishes block and inline captures from one composite parse", function()
     local pool = new_pool("lua-native-markdown-parse", 1)
     local spec = {
@@ -168,6 +271,7 @@ test.describe("worker_pool_native", function()
     end))
     local incremental_summary = incremental_result:summary()
     test.equal(incremental_summary.metrics.incremental, true)
+    test.ok(incremental_summary.metrics.reused_block_captures > 0)
     test.ok(incremental_summary.metrics.reused_inline_regions > 0)
     local incremental_heading = incremental_result:captures_for_lines("outline", 1, 1)[1]
     test.equal(incremental_heading.node_id, heading.node_id)

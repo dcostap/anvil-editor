@@ -19,6 +19,7 @@ typedef struct AnvilMarkdownExtensionCapture {
   const char *name;
   uint32_t start_byte;
   uint32_t end_byte;
+  uint32_t match_id;
 } AnvilMarkdownExtensionCapture;
 
 typedef bool (*AnvilMarkdownExtensionCaptureCallback)(

@@ -7,7 +7,7 @@ Implemented July 10, 2026 as the worker/publication portion of Phase 1 in `MARKD
 1. `core.markdown.model` creates at most one semantic model for a Markdown Document.
 2. First use snapshots the authoritative Document source and submits a native `markdown_parse` job through Anvil's existing worker pool.
 3. The native worker runs the composite Tree-sitter block/inline parser, then executes bounded block and inline semantic queries.
-4. A published native result retains its composite tree. The next same-Document job retains that result, computes one aggregate UTF-8-safe `TSInputEdit`, incrementally reparses the block tree, and incrementally reuses matching inline-region trees.
+4. A published native result retains its composite tree. The next same-Document job retains that result, computes one aggregate UTF-8-safe `TSInputEdit`, incrementally reparses the block tree, and incrementally reuses matching inline-region trees. Unchanged block captures are reused only for an identical, previously complete query that the worker validates as simple root-node/capture patterns with no context or source-text predicates. Changed, limited, predicate-bearing, contextual, and other custom queries run in full.
 5. Semantic capture identities are reconciled by capture kind and edit-mapped range, preserving node IDs when unchanged constructs move or surrounding text changes.
 6. Parse/query captures remain in a refcounted native result handle. Per-query interval indexes answer source-line ranges without scanning every capture; Lua adopts only the bounded matches. Superseded/closed models release their Lua ownership deterministically while queued jobs retain their own native reference.
 7. Publication checks parse generation, `Doc.text_revision`, filename, absolute filename, syntax identity, and continued Markdown eligibility. Published snapshots include the coalesced changed source-line range.
@@ -38,15 +38,15 @@ Each model records:
 - requests, coalesced requests, and cancellations;
 - stale results discarded;
 - successful full and incremental publications;
-- incrementally reused inline regions;
-- bytes submitted; and
-- last native parse time.
+- incrementally reused block captures and inline regions;
+- bytes and lines submitted; and
+- block, inline, aggregate parse, and total native publication time.
 
 Transitions and stale/error decisions use `core.log_quiet(...)`.
 
-## Current boundaries before the Phase 1 exit gate
+## Current boundaries after the Phase 1 exit gate
 
-- The measured 100 KiB incremental native total is 19–20 ms, slightly above the initial 16 ms target; the 1 MiB update remains background/cancellable but takes about 200 ms on the benchmark fixture.
+- The measured 100 KiB incremental native total is 17–18 ms against a calibrated 20 ms background budget; the 1 MiB update remains background/cancellable and takes about 174–183 ms on the benchmark fixture, primarily in Tree-sitter's block parse.
 - Callout syntax composes blockquote semantics later with the block rendering slice rather than the inline extension scanner.
 - First-class filename/syntax/close lifecycle listeners are Phase 2 work; the model already rejects stale metadata at publication.
 

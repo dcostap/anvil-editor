@@ -68,6 +68,7 @@ test.describe("Markdown semantic model", function()
     test.equal(test.not_nil(find_node(after, "heading")).id, heading_id)
     test.equal(test.not_nil(find_node(after, "strong")).id, strong_id)
     test.equal(instance.diagnostics.incremental_publications, 1)
+    test.ok(instance.diagnostics.reused_block_captures > 0)
     test.ok(instance.diagnostics.reused_inline_regions > 0)
     test.equal(#instance.changed_ranges, 1)
     test.equal(instance.changed_ranges[1].line1, 4)
@@ -85,7 +86,9 @@ test.describe("Markdown semantic model", function()
 
     doc:remove(1, 11, 1, 13)
     test.ok(wait_status(instance, "ready"), instance.reason)
-    test.equal(find_node(test.not_nil(instance:nodes_for_lines(1, 1)), "strong"), nil)
+    local after = test.not_nil(instance:nodes_for_lines(1, 1))
+    test.equal(find_node(after, "strong"), nil)
+    test.not_nil(find_node(after, "paragraph"))
     test.equal(instance.diagnostics.incremental_publications, 1)
     markdown_model.close(doc, "test")
   end)
@@ -136,6 +139,17 @@ test.describe("Markdown semantic model", function()
     test.not_nil(embed.attributes.target)
     test.not_nil(embed.attributes.alias)
     test.equal(find_node(nodes, "link_reference"), nil)
+    local captures = test.not_nil(instance:captures_for_lines("inline", 1, 1))
+    local wiki_match, embed_match, wiki_marker_match
+    for _, capture in ipairs(captures) do
+      if capture.capture == "span.wiki_link" then wiki_match = capture.match_id end
+      if capture.capture == "span.embed" then embed_match = capture.match_id end
+      if capture.capture == "marker.wiki_open" then wiki_marker_match = capture.match_id end
+    end
+    test.not_nil(wiki_match)
+    test.not_nil(embed_match)
+    test.ok(wiki_match ~= embed_match)
+    test.equal(wiki_marker_match, wiki_match)
     markdown_model.close(doc, "test")
   end)
 

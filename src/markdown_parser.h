@@ -38,8 +38,12 @@ uint32_t anvil_markdown_tree_inline_count(const AnvilMarkdownTree *tree);
 TSTree *anvil_markdown_tree_inline_tree(const AnvilMarkdownTree *tree, uint32_t index);
 TSRange anvil_markdown_tree_inline_source_range(const AnvilMarkdownTree *tree, uint32_t index);
 bool anvil_markdown_tree_inline_was_reused(const AnvilMarkdownTree *tree, uint32_t index);
+uint32_t anvil_markdown_tree_changed_range_count(const AnvilMarkdownTree *tree);
+TSRange anvil_markdown_tree_changed_range(const AnvilMarkdownTree *tree, uint32_t index);
 bool anvil_markdown_tree_was_incremental(const AnvilMarkdownTree *tree);
 uint32_t anvil_markdown_tree_reused_inline_count(const AnvilMarkdownTree *tree);
+uint64_t anvil_markdown_tree_block_parse_ms(const AnvilMarkdownTree *tree);
+uint64_t anvil_markdown_tree_inline_parse_ms(const AnvilMarkdownTree *tree);
 bool anvil_markdown_tree_input_edit(const AnvilMarkdownTree *tree, TSInputEdit *edit);
 
 #ifdef __cplusplus
