@@ -1083,6 +1083,8 @@ Exit gate: image references and both documented external sizing forms remain cor
 
 ### Phase 6: block-level core experience
 
+**Semantic marker slice completed July 10, 2026.** Unordered list, task, and blockquote markers now compose with semantic inline rendering; checked/unchecked tasks toggle exact source ranges through generic fragment input; and active block lines retain safe raw reveal. The contract and regression evidence are recorded in `MARKDOWN_BLOCK_PRESENTATION.md`.
+
 - paragraphs/line breaks
 - ordered/unordered/nested lists
 - task widgets

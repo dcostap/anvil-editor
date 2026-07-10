@@ -883,6 +883,38 @@ test.describe("Markdown Live Editor", function()
     if not ok then error(err, 0) end
   end)
 
+  test.it("renders semantic list, task, and quote markers with task toggles", function()
+    local view, doc = make_view("- item\n- [ ] todo\n- [x] done\n> quote\nplain", "blocks.md")
+    doc:set_selection(5, 1)
+    refresh(view)
+    local function fragments(line)
+      local render_line = view:get_line_render(line)
+      return render_line and render_line.fragments or {}
+    end
+    local function find_text(line, text)
+      for _, fragment in ipairs(fragments(line)) do
+        if fragment.text == text then return fragment end
+      end
+    end
+    test.not_nil(find_text(1, "•"))
+    local unchecked = test.not_nil(find_text(2, "☐"))
+    test.not_nil(find_text(3, "☑"))
+    test.not_nil(find_text(4, "│ "))
+
+    local line_x, line_y = view:get_line_screen_position(2)
+    local checkbox_x = line_x + view:get_line_render_col_x_offset(view:get_line_render(2), unchecked.source_col1) + 2
+    test.equal(view:on_mouse_pressed("left", checkbox_x, line_y + 2, 1), true)
+    test.equal(doc.lines[2], "- [x] todo\n")
+
+    doc:set_selection(1, 2)
+    local active = view:get_line_render(1)
+    local has_bullet = false
+    for _, fragment in ipairs(active and active.fragments or {}) do
+      if fragment.text == "•" then has_bullet = true end
+    end
+    test.equal(has_bullet, false)
+  end)
+
   test.it("copies dropped attachments and inserts configured source-preserving links", function()
     local root = USERDIR .. PATHSEP .. "markdown-live-attachment-project-" .. system.get_process_id()
     local outside = USERDIR .. PATHSEP .. "markdown-live-attachment-source-" .. system.get_process_id()

@@ -809,8 +809,66 @@ local function semantic_link_fragments(view, line_text, line, reveal_units, opts
   return fragments
 end
 
+local function semantic_block_fragments(view, line_text, line, reveal_units)
+  for _, unit in ipairs(reveal_units or {}) do
+    if unit.whole_line then return {} end
+  end
+  local fragments, seen = {}, {}
+  for _, node in ipairs(semantic_line(view, line) or {}) do
+    local attributes = node.attributes or {}
+    if node.type == "quote" and not seen.quote then
+      local col1, col2 = line_text:find("^%s*>%s*")
+      if col1 then
+        seen.quote = true
+        fragments[#fragments + 1] = {
+          source_col1 = col1, source_col2 = col2 + 1,
+          text = "│ ", color = style.markdown_live_quote_bar,
+          semantic_id = node.id,
+        }
+      end
+    elseif node.type == "list_item" then
+      local marker = attributes.list
+      if marker and marker.line1 == line then
+        local raw = line_text:sub(marker.col1, marker.col2 - 1)
+        if not raw:match("%d") then
+          fragments[#fragments + 1] = {
+            source_col1 = marker.col1, source_col2 = marker.col2,
+            text = "•", color = style.markdown_live_list_marker,
+            semantic_id = node.id .. ":marker",
+          }
+        end
+      end
+      local task = attributes.task_checked or attributes.task_unchecked
+      if task and task.line1 == line then
+        local checked = attributes.task_checked ~= nil
+        fragments[#fragments + 1] = {
+          source_col1 = task.col1, source_col2 = task.col2,
+          text = checked and "☑" or "☐",
+          color = checked and style.markdown_live_task_checked or style.markdown_live_task_unchecked,
+          cursor = "hand",
+          semantic_id = node.id .. ":task",
+          on_mouse_pressed = function(_, owner, _, button)
+            if button ~= "left" then return false end
+            owner:set_selection_state({
+              selections = { line, task.col1, line, task.col2 }, last_selection = 1,
+            })
+            owner:with_selection_state(function()
+              owner.doc:text_input(checked and "[ ]" or "[x]")
+            end)
+            return true
+          end,
+        }
+      end
+    end
+  end
+  return fragments
+end
+
 local function inline_fragments(line_text, line, view, reveal_units)
   local fragments, occupied = {}, {}
+  for _, fragment in ipairs(semantic_block_fragments(view, line_text, line, reveal_units)) do
+    add_fragment(fragments, occupied, fragment)
+  end
   for _, fragment in ipairs(semantic_link_fragments(view, line_text, line, reveal_units)) do
     add_fragment(fragments, occupied, fragment)
   end
