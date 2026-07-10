@@ -93,7 +93,7 @@ int main(int argc, char **argv) {
         CHECK(anvil_worker_treesitter_index_result_capture_count(index_result, "outline") >= 1);
         const char *name = NULL;
         uint32_t name_len = 0;
-        CHECK(anvil_worker_treesitter_index_result_capture_at(index_result, "outline", 0, &name, &name_len, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL));
+        CHECK(anvil_worker_treesitter_index_result_capture_at(index_result, "outline", 0, &name, &name_len, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL));
         CHECK(name != NULL && name_len == strlen("definition.function") && strncmp(name, "definition.function", name_len) == 0);
         anvil_worker_treesitter_index_result_free(index_result);
         saw_ts_result = 1;
@@ -134,6 +134,15 @@ int main(int argc, char **argv) {
         CHECK(strcmp(anvil_worker_treesitter_index_result_status(parse_result, "usage"), "ready") == 0);
         CHECK(anvil_worker_treesitter_index_result_capture_count(parse_result, "outline") == 1);
         CHECK(anvil_worker_treesitter_index_result_capture_count(parse_result, "usage") == 2);
+        CHECK(anvil_worker_treesitter_index_result_line_indexed(parse_result, "outline"));
+        CHECK(anvil_worker_treesitter_index_result_line_indexed(parse_result, "usage"));
+        uint32_t line_indices[4];
+        CHECK(anvil_worker_treesitter_index_result_captures_for_lines(
+          parse_result, "outline", 1, 1, line_indices, 4
+        ) == 1);
+        CHECK(anvil_worker_treesitter_index_result_captures_for_lines(
+          parse_result, "outline", 2, 2, line_indices, 4
+        ) == 0);
         anvil_worker_treesitter_index_result_free(parse_result);
         saw_markdown_result = 1;
       }

@@ -72,7 +72,7 @@ local function build_nodes(captures)
     if parent_capture_name(name) then
       local range = capture_range(capture)
       nodes[#nodes + 1] = {
-        id = table.concat({ name, range.start_byte, range.end_byte }, ":"),
+        id = table.concat({ name, capture.node_id or range.start_byte .. ":" .. range.end_byte }, ":"),
         type = canonical_type(name),
         source = range,
         marker_ranges = {},
@@ -121,6 +121,8 @@ function Model:new(doc)
     result = nil,
     request = nil,
     debounce_serial = 0,
+    pending_changed_range = nil,
+    changed_ranges = {},
     listeners = {},
     diagnostics = {
       requests = 0,
@@ -131,6 +133,9 @@ function Model:new(doc)
       failed = 0,
       bytes_submitted = 0,
       last_parse_ms = 0,
+      full_publications = 0,
+      incremental_publications = 0,
+      reused_inline_regions = 0,
     },
   }, self)
 end
@@ -180,7 +185,7 @@ function Model:cancel_request(reason)
   return true
 end
 
-function Model:publish(result, revision, signature, generation)
+function Model:publish(result, revision, signature, generation, changed_range)
   if not self:is_current(revision, signature, generation) then
     self.diagnostics.stale = self.diagnostics.stale + 1
     core.log_quiet("Markdown model discarded stale generation %d", generation)
@@ -201,7 +206,9 @@ function Model:publish(result, revision, signature, generation)
     return false
   end
 
+  local previous_result = self.result
   self.result = result
+  if previous_result and previous_result ~= result then previous_result:close() end
   self.request = nil
   self.status = "ready"
   self.reason = nil
@@ -210,6 +217,14 @@ function Model:publish(result, revision, signature, generation)
   self.published_metadata = signature
   self.diagnostics.published = self.diagnostics.published + 1
   self.diagnostics.last_parse_ms = summary.metrics and summary.metrics.parse_ms or 0
+  if summary.metrics and summary.metrics.incremental then
+    self.diagnostics.incremental_publications = self.diagnostics.incremental_publications + 1
+    self.diagnostics.reused_inline_regions = self.diagnostics.reused_inline_regions
+      + (summary.metrics.reused_inline_regions or 0)
+  else
+    self.diagnostics.full_publications = self.diagnostics.full_publications + 1
+  end
+  self.changed_ranges = changed_range and { common.merge({}, changed_range) } or {}
   core.log_quiet(
     "Markdown model published generation=%d revision=%d bytes=%d parse_ms=%.3f",
     self.generation,
@@ -227,6 +242,8 @@ function Model:submit(reason)
   local doc = self:doc()
   if not doc or not model.is_markdown_doc(doc) then
     self:cancel_request("not-markdown")
+    if self.result then self.result:close() end
+    self.result = nil
     self.status = "detached"
     self.reason = "Document is not Markdown"
     self:notify("detached")
@@ -239,6 +256,8 @@ function Model:submit(reason)
   local revision = doc.text_revision
   local signature = metadata_signature(doc)
   local text = source_text(doc)
+  local changed_range = self.pending_changed_range
+  self.pending_changed_range = nil
   self.status = "pending"
   self.reason = reason or "parse requested"
   self.diagnostics.requests = self.diagnostics.requests + 1
@@ -261,12 +280,15 @@ function Model:submit(reason)
       max_captures = 200000,
       usage_match_limit = 200000,
       usage_max_captures = 200000,
+      previous_result = self.result,
     },
     is_stale = function()
       return not self:is_current(revision, signature, generation)
     end,
     on_result = function(message)
-      if message.result then self:publish(message.result, revision, signature, generation) end
+      if message.result then
+        self:publish(message.result, revision, signature, generation, changed_range)
+      end
     end,
     on_error = function(message)
       if not self:is_current(revision, signature, generation) then return end
@@ -300,8 +322,18 @@ function Model:submit(reason)
   return true
 end
 
-function Model:schedule(reason)
+function Model:schedule(reason, transaction)
   if self.status == "closed" or self.status == "detached" then return false end
+  for _, range in ipairs(transaction and transaction.changed_ranges or {}) do
+    local line1 = math.min(range.old_line1 or range.new_line1, range.new_line1 or range.old_line1)
+    local line2 = math.max(range.old_line2 or range.new_line2, range.new_line2 or range.old_line2)
+    if not self.pending_changed_range then
+      self.pending_changed_range = { line1 = line1, line2 = line2 }
+    else
+      self.pending_changed_range.line1 = math.min(self.pending_changed_range.line1, line1)
+      self.pending_changed_range.line2 = math.max(self.pending_changed_range.line2, line2)
+    end
+  end
   self.debounce_serial = self.debounce_serial + 1
   local serial = self.debounce_serial
   if serial > 1 then self.diagnostics.coalesced = self.diagnostics.coalesced + 1 end
@@ -337,6 +369,7 @@ function Model:status_snapshot()
     generation = self.generation,
     parse_generation = self.parse_generation,
     published_revision = self.published_revision,
+    changed_ranges = self.changed_ranges,
     diagnostics = common.merge({}, self.diagnostics),
   }
 end
@@ -405,6 +438,7 @@ function Model:close(reason)
   self:cancel_request(reason or "close")
   self.debounce_serial = self.debounce_serial + 1
   self.parse_generation = self.parse_generation + 1
+  if self.result then self.result:close() end
   self.result = nil
   self.listeners = {}
   self.status = "closed"
@@ -437,7 +471,9 @@ end
 
 Doc.register_text_transaction_handler("markdown-semantic-model", function(doc, transaction)
   local current = models_by_doc[doc]
-  if current and transaction and transaction.changed then current:schedule("text-change") end
+  if current and transaction and transaction.changed then
+    current:schedule("text-change", transaction)
+  end
 end)
 
 model.Model = Model

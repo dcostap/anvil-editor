@@ -1004,7 +1004,7 @@ Exit gate: known gaps reproduce deterministically and the current prototype can 
 
 ### Phase 1: parser and semantic-model spike
 
-**Backend spike completed July 10, 2026.** Tree-sitter Markdown 0.5.3 was selected and the evidence is recorded in `MARKDOWN_PARSER_BACKEND.md`. The worker-backed composite parser, revision-checked per-Document semantic model foundation, exact-range compatibility fixtures, request coalescing/cancellation, and pending raw fallback are implemented. Persistent incremental block/inline reuse, stable IDs across edits, the complete Obsidian extension layer, and final publication budgets remain before the Phase 1 exit gate.
+**Backend and incremental-model spikes completed July 10, 2026.** Tree-sitter Markdown 0.5.3 was selected and the evidence is recorded in `MARKDOWN_PARSER_BACKEND.md`. The worker-backed composite parser, revision-checked per-Document semantic model, exact-range compatibility fixtures, request coalescing/cancellation, pending raw fallback, persistent incremental block/inline reuse, edit-mapped stable semantic IDs, coalesced changed-line publication, and indexed bounded line queries are implemented. The complete Obsidian extension layer and final end-to-end publication budgets remain before the Phase 1 exit gate.
 
 - Build an independent compatibility fixture corpus from CommonMark/GFM/official Obsidian syntax examples without copying large documentation bodies.
 - Pin/vendor and compile the smallest viable MD4C integration through Meson; publish one exact source-ranged fixture through an Anvil native API and native test.

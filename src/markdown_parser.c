@@ -20,6 +20,9 @@ struct AnvilMarkdownTree {
   AnvilMarkdownInlineTree *inline_trees;
   uint32_t inline_count;
   uint32_t inline_capacity;
+  bool incremental;
+  uint32_t reused_inline_count;
+  TSInputEdit input_edit;
 };
 
 typedef struct ParseRun {
@@ -56,6 +59,7 @@ static TSTree *parse_with_ranges(
   AnvilTSSnapshot *snapshot,
   const TSRange *ranges,
   uint32_t range_count,
+  TSTree *old_tree,
   ParseRun *run
 ) {
   if (!ts_parser_set_included_ranges(parser, ranges, range_count)) return NULL;
@@ -63,7 +67,77 @@ static TSTree *parse_with_ranges(
     .payload = run,
     .progress_callback = parse_progress,
   };
-  return ts_parser_parse_with_options(parser, NULL, anvil_ts_snapshot_input(snapshot), options);
+  return ts_parser_parse_with_options(parser, old_tree, anvil_ts_snapshot_input(snapshot), options);
+}
+
+static TSPoint snapshot_point_for_byte(const AnvilTSSnapshot *snapshot, uint32_t byte) {
+  if (!snapshot || snapshot->line_count == 0) return (TSPoint) {0};
+  if (byte > snapshot->byte_len) byte = snapshot->byte_len;
+  uint32_t low = 0;
+  uint32_t high = snapshot->line_count;
+  while (low + 1 < high) {
+    uint32_t mid = low + (high - low) / 2;
+    if (snapshot->line_starts[mid] <= byte) low = mid;
+    else high = mid;
+  }
+  return (TSPoint) { .row = low, .column = byte - snapshot->line_starts[low] };
+}
+
+static bool utf8_continuation(unsigned char byte) {
+  return (byte & 0xc0) == 0x80;
+}
+
+static TSInputEdit snapshot_aggregate_edit(
+  const AnvilTSSnapshot *old_snapshot,
+  const AnvilTSSnapshot *new_snapshot
+) {
+  uint32_t prefix = 0;
+  uint32_t shared = old_snapshot->byte_len < new_snapshot->byte_len
+    ? old_snapshot->byte_len : new_snapshot->byte_len;
+  while (prefix < shared && old_snapshot->bytes[prefix] == new_snapshot->bytes[prefix]) prefix++;
+  while (prefix > 0 && prefix < old_snapshot->byte_len &&
+    utf8_continuation((unsigned char)old_snapshot->bytes[prefix])) prefix--;
+
+  uint32_t old_end = old_snapshot->byte_len;
+  uint32_t new_end = new_snapshot->byte_len;
+  while (old_end > prefix && new_end > prefix &&
+    old_snapshot->bytes[old_end - 1] == new_snapshot->bytes[new_end - 1]) {
+    old_end--;
+    new_end--;
+  }
+  while (old_end < old_snapshot->byte_len && new_end < new_snapshot->byte_len &&
+    (utf8_continuation((unsigned char)old_snapshot->bytes[old_end]) ||
+      utf8_continuation((unsigned char)new_snapshot->bytes[new_end]))) {
+    old_end++;
+    new_end++;
+  }
+
+  return (TSInputEdit) {
+    .start_byte = prefix,
+    .old_end_byte = old_end,
+    .new_end_byte = new_end,
+    .start_point = snapshot_point_for_byte(old_snapshot, prefix),
+    .old_end_point = snapshot_point_for_byte(old_snapshot, old_end),
+    .new_end_point = snapshot_point_for_byte(new_snapshot, new_end),
+  };
+}
+
+static uint32_t map_old_start_byte(uint32_t byte, const TSInputEdit *edit) {
+  if (byte < edit->start_byte ||
+    (byte == edit->start_byte && edit->old_end_byte > edit->start_byte)) return byte;
+  if (byte >= edit->old_end_byte) return edit->new_end_byte + (byte - edit->old_end_byte);
+  return edit->new_end_byte;
+}
+
+static uint32_t map_old_end_byte(uint32_t byte, const TSInputEdit *edit) {
+  if (byte <= edit->start_byte) return byte;
+  if (byte >= edit->old_end_byte) return edit->new_end_byte + (byte - edit->old_end_byte);
+  return edit->new_end_byte;
+}
+
+static bool mapped_range_matches(TSRange old_range, TSRange new_range, const TSInputEdit *edit) {
+  return map_old_start_byte(old_range.start_byte, edit) == new_range.start_byte &&
+    map_old_end_byte(old_range.end_byte, edit) == new_range.end_byte;
 }
 
 static bool is_inline_region(TSNode node) {
@@ -150,6 +224,9 @@ static bool parse_inline_regions(
   AnvilMarkdownTree *result,
   TSParser *inline_parser,
   TSNode node,
+  const AnvilMarkdownTree *previous,
+  const TSInputEdit *edit,
+  uint32_t *previous_cursor,
   ParseRun *run,
   char **error
 ) {
@@ -165,13 +242,38 @@ static bool parse_inline_regions(
       free(ranges);
       return true;
     }
-    TSTree *tree = parse_with_ranges(inline_parser, result->snapshot, ranges, range_count, run);
     TSRange source_range = {
       .start_point = ts_node_start_point(node),
       .end_point = ts_node_end_point(node),
       .start_byte = ts_node_start_byte(node),
       .end_byte = ts_node_end_byte(node),
     };
+    TSTree *old_tree = NULL;
+    if (previous && edit) {
+      uint32_t old_index = *previous_cursor;
+      while (old_index < previous->inline_count) {
+        TSRange old_range = previous->inline_trees[old_index].source_range;
+        uint32_t mapped_start = map_old_start_byte(old_range.start_byte, edit);
+        uint32_t mapped_end = map_old_end_byte(old_range.end_byte, edit);
+        if (mapped_range_matches(old_range, source_range, edit)) {
+          old_tree = ts_tree_copy(previous->inline_trees[old_index].tree);
+          if (old_tree) ts_tree_edit(old_tree, edit);
+          *previous_cursor = old_index + 1;
+          break;
+        }
+        if (mapped_end <= source_range.start_byte) {
+          old_index++;
+          *previous_cursor = old_index;
+          continue;
+        }
+        if (mapped_start >= source_range.end_byte) break;
+        old_index++;
+        *previous_cursor = old_index;
+      }
+    }
+    TSTree *tree = parse_with_ranges(inline_parser, result->snapshot, ranges, range_count, old_tree, run);
+    if (tree && old_tree) result->reused_inline_count++;
+    if (old_tree) ts_tree_delete(old_tree);
     free(ranges);
     if (!tree) {
       if (error) *error = parser_strdup(run->cancelled
@@ -189,13 +291,16 @@ static bool parse_inline_regions(
 
   uint32_t child_count = ts_node_child_count(node);
   for (uint32_t i = 0; i < child_count; i++) {
-    if (!parse_inline_regions(result, inline_parser, ts_node_child(node, i), run, error)) return false;
+    if (!parse_inline_regions(
+      result, inline_parser, ts_node_child(node, i), previous, edit, previous_cursor, run, error
+    )) return false;
   }
   return true;
 }
 
-AnvilMarkdownTree *anvil_markdown_tree_parse(
+static AnvilMarkdownTree *markdown_tree_parse_internal(
   AnvilTSSnapshot *snapshot,
+  const AnvilMarkdownTree *previous,
   uint32_t timeout_ms,
   AnvilMarkdownCancelCallback cancel_callback,
   void *cancel_payload,
@@ -226,6 +331,7 @@ AnvilMarkdownTree *anvil_markdown_tree_parse(
     return NULL;
   }
   result->snapshot = snapshot;
+  result->incremental = previous && previous->snapshot && previous->block_tree;
   anvil_ts_snapshot_retain(snapshot);
 
   bool languages_ok = ts_parser_set_language(block_parser, anvil_ts_language_ptr(block_language)) &&
@@ -243,14 +349,34 @@ AnvilMarkdownTree *anvil_markdown_tree_parse(
     .timed_out = false,
     .cancelled = false,
   };
-  result->block_tree = parse_with_ranges(block_parser, snapshot, NULL, 0, &run);
+  TSInputEdit edit = {0};
+  TSTree *old_block_tree = NULL;
+  if (result->incremental) {
+    edit = snapshot_aggregate_edit(previous->snapshot, snapshot);
+    result->input_edit = edit;
+    old_block_tree = ts_tree_copy(previous->block_tree);
+    if (old_block_tree) ts_tree_edit(old_block_tree, &edit);
+    else result->incremental = false;
+  }
+  result->block_tree = parse_with_ranges(block_parser, snapshot, NULL, 0, old_block_tree, &run);
+  if (old_block_tree) ts_tree_delete(old_block_tree);
   if (!result->block_tree) {
     if (error) *error = parser_strdup(run.cancelled
       ? "Markdown parse cancelled"
       : (run.timed_out ? "Markdown block parse timed out" : "Markdown block parse failed"));
     goto fail;
   }
-  if (!parse_inline_regions(result, inline_parser, ts_tree_root_node(result->block_tree), &run, error)) goto fail;
+  uint32_t previous_cursor = 0;
+  if (!parse_inline_regions(
+    result,
+    inline_parser,
+    ts_tree_root_node(result->block_tree),
+    result->incremental ? previous : NULL,
+    result->incremental ? &edit : NULL,
+    &previous_cursor,
+    &run,
+    error
+  )) goto fail;
 
   ts_parser_delete(inline_parser);
   ts_parser_delete(block_parser);
@@ -261,6 +387,31 @@ fail:
   ts_parser_delete(block_parser);
   anvil_markdown_tree_free(result);
   return NULL;
+}
+
+AnvilMarkdownTree *anvil_markdown_tree_parse(
+  AnvilTSSnapshot *snapshot,
+  uint32_t timeout_ms,
+  AnvilMarkdownCancelCallback cancel_callback,
+  void *cancel_payload,
+  char **error
+) {
+  return markdown_tree_parse_internal(
+    snapshot, NULL, timeout_ms, cancel_callback, cancel_payload, error
+  );
+}
+
+AnvilMarkdownTree *anvil_markdown_tree_parse_incremental(
+  AnvilTSSnapshot *snapshot,
+  const AnvilMarkdownTree *previous,
+  uint32_t timeout_ms,
+  AnvilMarkdownCancelCallback cancel_callback,
+  void *cancel_payload,
+  char **error
+) {
+  return markdown_tree_parse_internal(
+    snapshot, previous, timeout_ms, cancel_callback, cancel_payload, error
+  );
 }
 
 void anvil_markdown_tree_free(AnvilMarkdownTree *tree) {
@@ -294,4 +445,18 @@ TSTree *anvil_markdown_tree_inline_tree(const AnvilMarkdownTree *tree, uint32_t 
 TSRange anvil_markdown_tree_inline_source_range(const AnvilMarkdownTree *tree, uint32_t index) {
   if (!tree || index >= tree->inline_count) return (TSRange) {0};
   return tree->inline_trees[index].source_range;
+}
+
+bool anvil_markdown_tree_was_incremental(const AnvilMarkdownTree *tree) {
+  return tree && tree->incremental;
+}
+
+uint32_t anvil_markdown_tree_reused_inline_count(const AnvilMarkdownTree *tree) {
+  return tree ? tree->reused_inline_count : 0;
+}
+
+bool anvil_markdown_tree_input_edit(const AnvilMarkdownTree *tree, TSInputEdit *edit) {
+  if (!tree || !tree->incremental || !edit) return false;
+  *edit = tree->input_edit;
+  return true;
 }

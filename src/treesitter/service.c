@@ -670,6 +670,7 @@ bool anvil_ts_query_captures_in_tree(
       out.pattern_index = match.pattern_index;
       out.capture_index = capture->index;
       out.order = order++;
+      out.node_id = (uint64_t)(uintptr_t)capture->node.id;
       if (!callback(&out, payload)) {
         ok = false;
         goto done;

@@ -31,6 +31,7 @@ typedef struct AnvilWorkerJobSpec {
   uint32_t usage_query_timeout_ms;
   uint32_t usage_match_limit;
   uint32_t usage_max_captures;
+  AnvilWorkerTreeSitterIndexResult *previous_result;
 } AnvilWorkerJobSpec;
 
 AnvilWorkerPool *anvil_worker_pool_create(const char *name, int worker_count);
@@ -58,6 +59,7 @@ int anvil_worker_result_index(const AnvilWorkerResult *result);
 bool anvil_worker_result_cancelled(const AnvilWorkerResult *result);
 AnvilWorkerTreeSitterIndexResult *anvil_worker_result_steal_treesitter_index_result(AnvilWorkerResult *result);
 
+void anvil_worker_treesitter_index_result_retain(AnvilWorkerTreeSitterIndexResult *result);
 void anvil_worker_treesitter_index_result_free(AnvilWorkerTreeSitterIndexResult *result);
 const char *anvil_worker_treesitter_index_result_language(const AnvilWorkerTreeSitterIndexResult *result);
 uint32_t anvil_worker_treesitter_index_result_byte_len(const AnvilWorkerTreeSitterIndexResult *result);
@@ -65,8 +67,19 @@ uint32_t anvil_worker_treesitter_index_result_capture_count(const AnvilWorkerTre
 const char *anvil_worker_treesitter_index_result_status(const AnvilWorkerTreeSitterIndexResult *result, const char *kind);
 const char *anvil_worker_treesitter_index_result_error(const AnvilWorkerTreeSitterIndexResult *result, const char *kind);
 bool anvil_worker_treesitter_index_result_exceeded_match_limit(const AnvilWorkerTreeSitterIndexResult *result, const char *kind);
+bool anvil_worker_treesitter_index_result_line_indexed(const AnvilWorkerTreeSitterIndexResult *result, const char *kind);
 uint64_t anvil_worker_treesitter_index_result_parse_ms(const AnvilWorkerTreeSitterIndexResult *result);
+bool anvil_worker_treesitter_index_result_incremental(const AnvilWorkerTreeSitterIndexResult *result);
+uint32_t anvil_worker_treesitter_index_result_reused_inline_count(const AnvilWorkerTreeSitterIndexResult *result);
 uint64_t anvil_worker_treesitter_index_result_query_ms(const AnvilWorkerTreeSitterIndexResult *result, const char *kind);
+uint32_t anvil_worker_treesitter_index_result_captures_for_lines(
+  const AnvilWorkerTreeSitterIndexResult *result,
+  const char *kind,
+  uint32_t line1,
+  uint32_t line2,
+  uint32_t *indices,
+  uint32_t capacity
+);
 bool anvil_worker_treesitter_index_result_capture_at(
   const AnvilWorkerTreeSitterIndexResult *result,
   const char *kind,
@@ -83,7 +96,8 @@ bool anvil_worker_treesitter_index_result_capture_at(
   uint32_t *match_id,
   uint32_t *pattern_index,
   uint32_t *capture_index,
-  uint32_t *order
+  uint32_t *order,
+  uint64_t *node_id
 );
 
 uint64_t anvil_worker_pool_submitted_count(const AnvilWorkerPool *pool);

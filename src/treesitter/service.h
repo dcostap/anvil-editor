@@ -52,6 +52,7 @@ typedef struct AnvilTSQueryCapture {
   uint32_t pattern_index;
   uint32_t capture_index;
   uint32_t order;
+  uint64_t node_id;
 } AnvilTSQueryCapture;
 
 typedef struct AnvilTSNodeRange {

@@ -107,6 +107,7 @@ test.describe("worker_pool_native", function()
     local summary = result:summary()
     test.equal(summary.language, "c")
     test.equal(summary.outline.status, "ready")
+    test.equal(summary.outline.line_indexed, true)
     test.ok(summary.outline.capture_count >= 1)
     local captures = result:captures("outline", { offset = 1, limit = 1 })
     test.equal(#captures, 1)
@@ -117,17 +118,18 @@ test.describe("worker_pool_native", function()
 
   test.test("Markdown job publishes block and inline captures from one composite parse", function()
     local pool = new_pool("lua-native-markdown-parse", 1)
-    local handle = pool:submit({
+    local spec = {
       kind = "markdown_parse",
       text = "# Heading\n\nFirst *span*.\nSecond **span**.\n",
       outline_query = "(atx_heading) @heading",
-      usage_query = "[(emphasis) (strong_emphasis)] @span",
+      usage_query = "(emphasis) @span\n(emphasis) @span\n(strong_emphasis) @span",
       parse_timeout_ms = 1000,
       query_timeout_ms = 100,
       usage_query_timeout_ms = 100,
       max_captures = 100,
       usage_max_captures = 100,
-    })
+    }
+    local handle = pool:submit(spec)
     test.not_nil(handle)
     local result
     test.ok(drain_until(pool, function(message)
@@ -139,13 +141,52 @@ test.describe("worker_pool_native", function()
     test.equal(summary.language, "markdown")
     test.equal(summary.outline.status, "ready")
     test.equal(summary.usage.status, "ready")
+    test.equal(summary.outline.line_indexed, true)
+    test.equal(summary.usage.line_indexed, true)
     test.equal(summary.outline.capture_count, 1)
-    test.equal(summary.usage.capture_count, 2)
+    test.equal(summary.usage.capture_count, 3)
+    local heading = result:captures_for_lines("outline", 1, 1)[1]
+    test.not_nil(heading.node_id)
     local following_line = result:captures_for_lines("outline", 2, 2)
     test.equal(#following_line, 0)
     local first_line = result:captures_for_lines("usage", 3, 3)
-    test.equal(#first_line, 1)
+    test.equal(#first_line, 2)
     test.equal(first_line[1].capture, "span")
+    test.ok(first_line[1].node_id ~= first_line[2].node_id)
     test.equal(first_line.truncated, false)
+
+    spec.text = spec.text .. "Another paragraph.\n"
+    spec.previous_result = result
+    local incremental_handle = pool:submit(spec)
+    test.not_nil(incremental_handle)
+    local incremental_result
+    test.ok(drain_until(pool, function(message)
+      if message.type == "result" then incremental_result = message.result end
+      return message.type == "final"
+    end))
+    local incremental_summary = incremental_result:summary()
+    test.equal(incremental_summary.metrics.incremental, true)
+    test.ok(incremental_summary.metrics.reused_inline_regions > 0)
+    local incremental_heading = incremental_result:captures_for_lines("outline", 1, 1)[1]
+    test.equal(incremental_heading.node_id, heading.node_id)
+
+    spec.text = "Preface paragraph.\n" .. spec.text
+    spec.previous_result = incremental_result
+    local shifted_handle = pool:submit(spec)
+    test.not_nil(shifted_handle)
+    local shifted_result
+    test.ok(drain_until(pool, function(message)
+      if message.type == "result" then shifted_result = message.result end
+      return message.type == "final"
+    end))
+    local shifted_summary = shifted_result:summary()
+    test.equal(shifted_summary.metrics.incremental, true)
+    test.ok(shifted_summary.metrics.reused_inline_regions > 0)
+    local shifted_heading = shifted_result:captures_for_lines("outline", 2, 2)[1]
+    test.equal(shifted_heading.node_id, heading.node_id)
+    test.equal(result:close(), true)
+    test.equal(result:close(), false)
+    test.equal(incremental_result:close(), true)
+    test.equal(shifted_result:close(), true)
   end)
 end)

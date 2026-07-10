@@ -206,6 +206,77 @@ static int test_composite_parser(void) {
   return 0;
 }
 
+static int test_incremental_composite_parser(void) {
+  const char *old_lines[] = {
+    "# Stable *heading*.\n",
+    "First **stable** paragraph.\n",
+    "Tail.\n",
+  };
+  const char *new_lines[] = {
+    "# Stable *heading*.\n",
+    "First **stable** paragraph.\n",
+    "Tail changed.\n",
+  };
+  uint32_t old_lengths[3], new_lengths[3];
+  for (uint32_t i = 0; i < 3; i++) {
+    old_lengths[i] = (uint32_t)strlen(old_lines[i]);
+    new_lengths[i] = (uint32_t)strlen(new_lines[i]);
+  }
+  char *error = NULL;
+  AnvilTSSnapshot *old_snapshot = anvil_ts_snapshot_new_from_lines(old_lines, old_lengths, 3, &error);
+  CHECK(old_snapshot != NULL);
+  AnvilMarkdownTree *old_tree = anvil_markdown_tree_parse(old_snapshot, 750, NULL, NULL, &error);
+  CHECK(old_tree != NULL);
+  AnvilTSSnapshot *new_snapshot = anvil_ts_snapshot_new_from_lines(new_lines, new_lengths, 3, &error);
+  CHECK(new_snapshot != NULL);
+  AnvilMarkdownTree *new_tree = anvil_markdown_tree_parse_incremental(
+    new_snapshot, old_tree, 750, NULL, NULL, &error
+  );
+  CHECK(new_tree != NULL);
+  CHECK(anvil_markdown_tree_was_incremental(new_tree));
+  CHECK(anvil_markdown_tree_reused_inline_count(new_tree) >= 2);
+  CHECK(!ts_node_has_error(ts_tree_root_node(anvil_markdown_tree_block_tree(new_tree))));
+  TSInputEdit edit;
+  CHECK(anvil_markdown_tree_input_edit(new_tree, &edit));
+  CHECK(edit.start_byte > 0);
+
+  anvil_markdown_tree_free(new_tree);
+  anvil_markdown_tree_free(old_tree);
+  anvil_ts_snapshot_free(new_snapshot);
+  anvil_ts_snapshot_free(old_snapshot);
+  return 0;
+}
+
+static int test_incremental_utf8_width_change(void) {
+  const char *old_lines[] = { "# \xc3\xa9 *stable*.\n" };
+  const char *new_lines[] = { "# \xe2\x82\xa9 *stable*.\n" };
+  uint32_t old_lengths[] = { (uint32_t)strlen(old_lines[0]) };
+  uint32_t new_lengths[] = { (uint32_t)strlen(new_lines[0]) };
+  char *error = NULL;
+  AnvilTSSnapshot *old_snapshot = anvil_ts_snapshot_new_from_lines(old_lines, old_lengths, 1, &error);
+  AnvilTSSnapshot *new_snapshot = anvil_ts_snapshot_new_from_lines(new_lines, new_lengths, 1, &error);
+  CHECK(old_snapshot != NULL);
+  CHECK(new_snapshot != NULL);
+  AnvilMarkdownTree *old_tree = anvil_markdown_tree_parse(old_snapshot, 750, NULL, NULL, &error);
+  CHECK(old_tree != NULL);
+  AnvilMarkdownTree *new_tree = anvil_markdown_tree_parse_incremental(
+    new_snapshot, old_tree, 750, NULL, NULL, &error
+  );
+  CHECK(new_tree != NULL);
+  CHECK(!ts_node_has_error(ts_tree_root_node(anvil_markdown_tree_block_tree(new_tree))));
+  TSInputEdit edit;
+  CHECK(anvil_markdown_tree_input_edit(new_tree, &edit));
+  CHECK(edit.start_byte == 2);
+  CHECK(edit.old_end_byte == 4);
+  CHECK(edit.new_end_byte == 5);
+
+  anvil_markdown_tree_free(new_tree);
+  anvil_markdown_tree_free(old_tree);
+  anvil_ts_snapshot_free(new_snapshot);
+  anvil_ts_snapshot_free(old_snapshot);
+  return 0;
+}
+
 static double elapsed_ms(clock_t start) {
   return (double) (clock() - start) * 1000.0 / (double) CLOCKS_PER_SEC;
 }
@@ -258,6 +329,8 @@ int main(void) {
   if (test_exact_split_ranges() != 0) return 1;
   if (test_block_fixture_ranges() != 0) return 1;
   if (test_composite_parser() != 0) return 1;
+  if (test_incremental_composite_parser() != 0) return 1;
+  if (test_incremental_utf8_width_change() != 0) return 1;
   if (test_bounded_large_parse() != 0) return 1;
   return 0;
 }

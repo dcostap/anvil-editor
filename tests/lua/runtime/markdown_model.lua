@@ -53,6 +53,30 @@ test.describe("Markdown semantic model", function()
     markdown_model.close(doc, "test")
   end)
 
+  test.it("preserves semantic identities through incremental publications", function()
+    local doc = make_doc("# Heading\n\nText with **bold**.\n")
+    local instance = markdown_model.get(doc)
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    local before = test.not_nil(instance:nodes_for_lines(1, 3))
+    local heading_id = test.not_nil(find_node(before, "heading")).id
+    local strong_id = test.not_nil(find_node(before, "strong")).id
+
+    doc:insert(#doc.lines, 1, "Tail paragraph.\n")
+    test.equal(instance.status, "pending")
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    local after = test.not_nil(instance:nodes_for_lines(1, 3))
+    test.equal(test.not_nil(find_node(after, "heading")).id, heading_id)
+    test.equal(test.not_nil(find_node(after, "strong")).id, strong_id)
+    test.equal(instance.diagnostics.incremental_publications, 1)
+    test.ok(instance.diagnostics.reused_inline_regions > 0)
+    test.equal(#instance.changed_ranges, 1)
+    test.equal(instance.changed_ranges[1].line1, 4)
+    test.equal(instance.changed_ranges[1].line2, 5)
+    local published_result = instance.result
+    markdown_model.close(doc, "test")
+    test.equal(pcall(function() published_result:summary() end), false)
+  end)
+
   test.it("keeps pending and incomplete syntax on the raw-fallback path", function()
     local doc = make_doc("Incomplete **bold\n")
     local instance = markdown_model.get(doc)

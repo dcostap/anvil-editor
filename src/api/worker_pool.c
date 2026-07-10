@@ -117,6 +117,19 @@ static int treesitter_index_result_gc(lua_State *L) {
   return 0;
 }
 
+static int treesitter_index_result_close(lua_State *L) {
+  LuaTreeSitterIndexResult *result = (LuaTreeSitterIndexResult *)luaL_checkudata(
+    L, 1, API_TYPE_TREESITTER_INDEX_RESULT
+  );
+  bool released = result && result->result;
+  if (released) {
+    anvil_worker_treesitter_index_result_free(result->result);
+    result->result = NULL;
+  }
+  lua_pushboolean(L, released);
+  return 1;
+}
+
 static void push_job_handle(lua_State *L, AnvilWorkerJob *job) {
   LuaWorkerJob *lua_job = (LuaWorkerJob *)lua_newuserdata(L, sizeof(*lua_job));
   lua_job->job = job;
@@ -148,6 +161,12 @@ static int pool_submit(lua_State *L) {
   spec.usage_query_timeout_ms = opt_uint32_field(L, 2, "usage_query_timeout_ms", 0);
   spec.usage_match_limit = opt_uint32_field(L, 2, "usage_match_limit", 0);
   spec.usage_max_captures = opt_uint32_field(L, 2, "usage_max_captures", 0);
+  lua_getfield(L, 2, "previous_result");
+  if (!lua_isnil(L, -1)) {
+    LuaTreeSitterIndexResult *previous = check_treesitter_index_result(L, -1);
+    spec.previous_result = previous->result;
+  }
+  lua_pop(L, 1);
   char *error = NULL;
   AnvilWorkerJob *job = anvil_worker_pool_submit(pool->pool, &spec, &error);
   if (!job) {
@@ -198,7 +217,8 @@ static void push_treesitter_capture(lua_State *L, AnvilWorkerTreeSitterIndexResu
   uint32_t name_len = 0, start_byte = 0, end_byte = 0, start_line = 0, start_col = 0, end_line = 0, end_col = 0;
   int32_t priority = 0;
   uint32_t match_id = 0, pattern_index = 0, capture_index = 0, order = 0;
-  if (!anvil_worker_treesitter_index_result_capture_at(result, kind, index, &name, &name_len, &start_byte, &end_byte, &start_line, &start_col, &end_line, &end_col, &priority, &match_id, &pattern_index, &capture_index, &order)) {
+  uint64_t node_id = 0;
+  if (!anvil_worker_treesitter_index_result_capture_at(result, kind, index, &name, &name_len, &start_byte, &end_byte, &start_line, &start_col, &end_line, &end_col, &priority, &match_id, &pattern_index, &capture_index, &order, &node_id)) {
     lua_pushnil(L);
     return;
   }
@@ -227,6 +247,8 @@ static void push_treesitter_capture(lua_State *L, AnvilWorkerTreeSitterIndexResu
   lua_setfield(L, -2, "capture_index");
   lua_pushinteger(L, (lua_Integer)order);
   lua_setfield(L, -2, "order");
+  lua_pushinteger(L, (lua_Integer)node_id);
+  lua_setfield(L, -2, "node_id");
 }
 
 static int treesitter_index_result_summary(lua_State *L) {
@@ -243,6 +265,10 @@ static int treesitter_index_result_summary(lua_State *L) {
   lua_setfield(L, -2, "outline_query_ms");
   lua_pushinteger(L, (lua_Integer)anvil_worker_treesitter_index_result_query_ms(result->result, "usage"));
   lua_setfield(L, -2, "usage_query_ms");
+  lua_pushboolean(L, anvil_worker_treesitter_index_result_incremental(result->result));
+  lua_setfield(L, -2, "incremental");
+  lua_pushinteger(L, (lua_Integer)anvil_worker_treesitter_index_result_reused_inline_count(result->result));
+  lua_setfield(L, -2, "reused_inline_regions");
   lua_setfield(L, -2, "metrics");
   const char *kinds[] = { "outline", "usage" };
   for (int i = 0; i < 2; ++i) {
@@ -254,6 +280,8 @@ static int treesitter_index_result_summary(lua_State *L) {
     lua_setfield(L, -2, "capture_count");
     lua_pushboolean(L, anvil_worker_treesitter_index_result_exceeded_match_limit(result->result, kind));
     lua_setfield(L, -2, "exceeded_match_limit");
+    lua_pushboolean(L, anvil_worker_treesitter_index_result_line_indexed(result->result, kind));
+    lua_setfield(L, -2, "line_indexed");
     const char *error = anvil_worker_treesitter_index_result_error(result->result, kind);
     if (error) {
       lua_pushstring(L, error);
@@ -298,30 +326,25 @@ static int treesitter_index_result_captures(lua_State *L) {
 static int treesitter_index_result_captures_for_lines(lua_State *L) {
   LuaTreeSitterIndexResult *result = check_treesitter_index_result(L, 1);
   const char *kind = luaL_optstring(L, 2, "outline");
-  uint32_t line1 = (uint32_t)luaL_checkinteger(L, 3);
-  uint32_t line2 = (uint32_t)luaL_checkinteger(L, 4);
-  luaL_argcheck(L, line1 > 0 && line2 >= line1, 3, "invalid line range");
+  lua_Integer raw_line1 = luaL_checkinteger(L, 3);
+  lua_Integer raw_line2 = luaL_checkinteger(L, 4);
+  luaL_argcheck(L, raw_line1 > 0 && raw_line1 <= UINT32_MAX, 3, "invalid start line");
+  luaL_argcheck(L, raw_line2 >= raw_line1 && raw_line2 <= UINT32_MAX, 4, "invalid end line");
+  uint32_t line1 = (uint32_t)raw_line1;
+  uint32_t line2 = (uint32_t)raw_line2;
   uint32_t limit = lua_istable(L, 5) ? opt_uint32_field(L, 5, "limit", 4096) : 4096;
-  uint32_t count = anvil_worker_treesitter_index_result_capture_count(result->result, kind);
-  lua_createtable(L, (int)(limit < count ? limit : count), 2);
-  uint32_t emitted = 0;
-  uint32_t matches = 0;
-  for (uint32_t i = 0; i < count; i++) {
-    uint32_t start_line = 0, end_line = 0;
-    uint32_t end_col = 0;
-    if (!anvil_worker_treesitter_index_result_capture_at(
-      result->result, kind, i, NULL, NULL, NULL, NULL,
-      &start_line, NULL, &end_line, &end_col, NULL, NULL, NULL, NULL, NULL
-    )) continue;
-    uint32_t effective_end_line = end_line;
-    if (end_col == 1 && effective_end_line > start_line) effective_end_line--;
-    if (effective_end_line < line1 || start_line > line2) continue;
-    matches++;
-    if (emitted < limit) {
-      push_treesitter_capture(L, result->result, kind, i);
-      lua_rawseti(L, -2, (int)++emitted);
-    }
+  uint32_t *indices = limit > 0 ? (uint32_t *)SDL_malloc(sizeof(*indices) * limit) : NULL;
+  if (limit > 0 && !indices) return luaL_error(L, "out of memory querying Tree-sitter line captures");
+  uint32_t matches = anvil_worker_treesitter_index_result_captures_for_lines(
+    result->result, kind, line1, line2, indices, limit
+  );
+  uint32_t emitted = matches < limit ? matches : limit;
+  lua_createtable(L, (int)emitted, 2);
+  for (uint32_t i = 0; i < emitted; i++) {
+    push_treesitter_capture(L, result->result, kind, indices[i]);
+    lua_rawseti(L, -2, (int)i + 1);
   }
+  SDL_free(indices);
   lua_pushinteger(L, (lua_Integer)matches);
   lua_setfield(L, -2, "total");
   lua_pushboolean(L, matches > emitted);
@@ -547,6 +570,7 @@ static const luaL_Reg treesitter_index_result_methods[] = {
   { "summary", treesitter_index_result_summary },
   { "captures", treesitter_index_result_captures },
   { "captures_for_lines", treesitter_index_result_captures_for_lines },
+  { "close", treesitter_index_result_close },
   { "__gc", treesitter_index_result_gc },
   { NULL, NULL }
 };
