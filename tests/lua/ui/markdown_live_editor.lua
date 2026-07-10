@@ -432,7 +432,31 @@ test.describe("Markdown Live Editor", function()
     for _, fragment in ipairs(view:iter_line_render_fragments(render_line)) do
       if not fragment.hidden then texts[#texts + 1] = fragment.text or "" end
     end
-    test.same({ "This is ", "**", "bold", "**", " and ", "**", "more", "**" }, texts)
+    test.same({ "This is ", "**", "bold", "**", " and ", "more" }, texts)
+  end)
+
+  test.it("reveals only the caret's link construct on a mixed line", function()
+    local source = "See [[One|First]] and [[Two|Second]]\nplain"
+    local view, doc = make_view(source, "note.md")
+    doc:set_selection(1, 9)
+    refresh(view)
+    local visible = {}
+    for _, fragment in ipairs(view:iter_line_render_fragments(view:get_line_render(1))) do
+      if not fragment.hidden then visible[#visible + 1] = fragment.text or "" end
+    end
+    test.equal(table.concat(visible), "See [[One|First]] and Second")
+  end)
+
+  test.it("keeps heading markers hidden when revealing a nested inline construct", function()
+    local source = "# Head **bold** tail\nplain"
+    local view, doc = make_view(source, "note.md")
+    doc:set_selection(1, 11)
+    refresh(view)
+    local visible = {}
+    for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
+      if not fragment.hidden then visible[#visible + 1] = fragment.text or "" end
+    end
+    test.equal(table.concat(visible), "Head **bold** tail")
   end)
 
   test.it("renders semantic code, highlight, strikethrough, and escapes", function()
@@ -478,6 +502,16 @@ test.describe("Markdown Live Editor", function()
     test.equal(test.not_nil(marker).color, style.markdown_live_hidden_syntax)
     test.equal(marker.overdraw, true)
     test.equal(test.not_nil(content).overdraw, true)
+  end)
+
+  test.it("reveals and re-hides every line of a multiline comment construct", function()
+    local source = "%%one\nmiddle\nend%%\nplain"
+    local view, doc = make_view(source, "note.md")
+    doc:set_selection(1, 3)
+    refresh(view)
+    test.equal(view:get_col_x_offset(2, #"middle" + 1), view:get_font():get_width("middle"))
+    doc:set_selection(4, 1)
+    test.equal(view:get_col_x_offset(2, #"middle" + 1), 0)
   end)
 
   test.it("hides multiline comments until a touched line reveals source", function()

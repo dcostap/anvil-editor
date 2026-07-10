@@ -77,16 +77,6 @@ local function current_selection_state(view)
   return view.selection_state or { selections = view.doc.selections }
 end
 
-local function view_active_line(view, line)
-  local state = current_selection_state(view)
-  local selections = state and state.selections or view.doc.selections or {}
-  for i = 1, #selections, 4 do
-    local l1, _, l2 = selections[i], selections[i + 1], selections[i + 2]
-    if l1 and l2 and line >= math.min(l1, l2) and line <= math.max(l1, l2) then return true end
-  end
-  return false
-end
-
 local function heading_for_line(line_text, line)
   local indent, marks = line_text:match("^(%s*)(#+)%s+")
   if not marks or #marks > 6 then return nil end
@@ -150,6 +140,84 @@ local function line_in_semantic_comment(view, line)
   return false
 end
 
+local REVEAL_TYPES = {
+  heading = true,
+  strong = true,
+  emphasis = true,
+  strikethrough = true,
+  highlight = true,
+  code = true,
+  escape = true,
+  comment = true,
+  link = true,
+  image = true,
+  wiki_link = true,
+  embed = true,
+}
+
+local function node_line_range(node, line, line_text)
+  if line < node.source.line1 or line > node.source.line2 then return nil end
+  return line == node.source.line1 and node.source.col1 or 1,
+    line == node.source.line2 and node.source.col2 or #line_text + 1
+end
+
+local function reveal_units_for_line(view, line, state)
+  state = state or current_selection_state(view)
+  local selections = state and state.selections or view.doc.selections or {}
+  local line_text = (view.doc.lines[line] or ""):gsub("\n$", "")
+  local units = {}
+  for i = 1, #selections, 4 do
+    local line1, col1 = selections[i], selections[i + 1]
+    local line2, col2 = selections[i + 2], selections[i + 3]
+    if line1 and line2 then
+      local collapsed = line1 == line2 and col1 == col2
+      if not collapsed then
+        if line >= math.min(line1, line2) and line <= math.max(line1, line2) then
+          units[#units + 1] = { type = "line", col1 = 1, col2 = #line_text + 1, whole_line = true }
+        end
+      elseif config.markdown_live_reveal_mode == "line" then
+        if line == line1 then
+          units[#units + 1] = { type = "line", col1 = 1, col2 = #line_text + 1, whole_line = true }
+        end
+      else
+        local cursor_text = (view.doc.lines[line1] or ""):gsub("\n$", "")
+        local best, best_size
+        for _, node in ipairs(semantic_line(view, line1) or {}) do
+          if REVEAL_TYPES[node.type] then
+            local node_col1, node_col2 = node_line_range(node, line1, cursor_text)
+            if node_col1 and col1 >= node_col1 and col1 < node_col2 then
+              local size = (node.source.end_byte or 0) - (node.source.start_byte or 0)
+              if not best_size or size < best_size then best, best_size = node, size end
+            end
+          end
+        end
+        if best and line >= best.source.line1 and line <= best.source.line2 then
+          local unit_col1, unit_col2 = node_line_range(best, line, line_text)
+          units[#units + 1] = {
+            type = best.type, id = best.id, col1 = unit_col1, col2 = unit_col2,
+            line1 = best.source.line1, line2 = best.source.line2,
+          }
+        elseif not best and line == line1 then
+          units[#units + 1] = { type = "line", col1 = 1, col2 = #line_text + 1, whole_line = true }
+        end
+      end
+    end
+  end
+  return units
+end
+
+local function reveal_unit_matches(units, semantic_id, col1, col2)
+  for _, unit in ipairs(units or {}) do
+    if unit.whole_line or unit.id == semantic_id
+      or unit.col1 == col1 and unit.col2 == col2
+      or unit.type == "heading" and unit.col1 <= col1 and unit.col2 >= col2
+    then
+      return true
+    end
+  end
+  return false
+end
+
 local function semantic_heading_for_line(view, line_text, line)
   local nodes, generation = semantic_line(view, line)
   for _, node in ipairs(nodes or {}) do
@@ -167,6 +235,8 @@ local function semantic_heading_for_line(view, line_text, line)
       if heading then
         heading.semantic_id = node.id
         heading.semantic_generation = generation
+        heading.source_col1 = node.source.col1
+        heading.source_col2 = #line_text + 1
         return heading
       end
     end
@@ -254,7 +324,7 @@ local function normal_text_color()
   return style.text or style.syntax.normal
 end
 
-local function semantic_formatting_fragments(view, line_text, line, active, opts)
+local function semantic_formatting_fragments(view, line_text, line, reveal_units, opts)
   opts = opts or {}
   local spans = semantic_formatting_spans(view, line_text, line) or {}
   local nodes = semantic_line(view, line) or {}
@@ -319,7 +389,7 @@ local function semantic_formatting_fragments(view, line_text, line, active, opts
   for i = 1, #cols - 1 do
     local col1, col2 = cols[i], cols[i + 1]
     if col1 < col2 then
-      local marker, active_spans = false, {}
+      local marker, marker_revealed, active_spans = false, false, {}
       local comment, comment_marker, escape_marker, escape_content
       for _, special in ipairs(specials) do
         if special.col1 <= col1 and special.col2 >= col2 then
@@ -336,7 +406,12 @@ local function semantic_formatting_fragments(view, line_text, line, active, opts
       end
       for _, span in ipairs(spans) do
         for _, range in ipairs(span.markers or {}) do
-          if range.col1 <= col1 and range.col2 >= col2 then marker = true break end
+          if range.col1 <= col1 and range.col2 >= col2 then
+            marker = true
+            marker_revealed = marker_revealed
+              or reveal_unit_matches(reveal_units, span.semantic_id, span.col1, span.col2)
+            break
+          end
         end
         local content = span.content_ranges[1]
         if content.col1 <= col1 and content.col2 >= col2 then active_spans[#active_spans + 1] = span end
@@ -369,8 +444,15 @@ local function semantic_formatting_fragments(view, line_text, line, active, opts
           semantic_id = table.concat(ids, "+"),
         }
       end
+      local comment_revealed = comment
+        and reveal_unit_matches(reveal_units, comment.id, comment.col1, comment.col2)
+      local escape_revealed = (escape_marker or escape_content)
+        and reveal_unit_matches(
+          reveal_units, (escape_marker or escape_content).id,
+          (escape_marker or escape_content).col1, (escape_marker or escape_content).col2
+        )
       if comment then
-        if active then
+        if comment_revealed then
           local fragment = composed_fragment(comment.id)
           if comment_marker then fragment.color = style.markdown_live_hidden_syntax end
           fragments[#fragments + 1] = fragment
@@ -381,10 +463,11 @@ local function semantic_formatting_fragments(view, line_text, line, active, opts
           }
         end
       elseif marker or escape_marker then
+        local revealed = marker_revealed or escape_revealed
         fragments[#fragments + 1] = {
           source_col1 = col1, source_col2 = col2,
-          text = active and line_text:sub(col1, col2 - 1) or nil,
-          hidden = not active,
+          text = revealed and line_text:sub(col1, col2 - 1) or nil,
+          hidden = not revealed,
           font = opts.base_font,
           color = style.markdown_live_hidden_syntax,
           semantic_id = escape_marker and escape_marker.id or nil,
@@ -635,10 +718,11 @@ local function decorate_link_fragment(view, line, span, fragment, opts)
   return fragment
 end
 
-local function semantic_link_fragments(view, line_text, line, active, opts)
+local function semantic_link_fragments(view, line_text, line, reveal_units, opts)
   local fragments = {}
   for _, span in ipairs(semantic_link_spans(view, line_text, line)) do
-    if span.link and not active then
+    local revealed = reveal_unit_matches(reveal_units, span.semantic_id, span.col1, span.col2)
+    if span.link and not revealed then
       local fragment = image_fragment(view, span)
       if not fragment then
         local link = span.link
@@ -656,12 +740,12 @@ local function semantic_link_fragments(view, line_text, line, active, opts)
   return fragments
 end
 
-local function inline_fragments(line_text, line, view, active)
+local function inline_fragments(line_text, line, view, reveal_units)
   local fragments, occupied = {}, {}
-  for _, fragment in ipairs(semantic_link_fragments(view, line_text, line, active)) do
+  for _, fragment in ipairs(semantic_link_fragments(view, line_text, line, reveal_units)) do
     add_fragment(fragments, occupied, fragment)
   end
-  for _, fragment in ipairs(semantic_formatting_fragments(view, line_text, line, active)) do
+  for _, fragment in ipairs(semantic_formatting_fragments(view, line_text, line, reveal_units)) do
     add_fragment(fragments, occupied, fragment)
   end
   table.sort(fragments, function(a, b) return (a.source_col1 or 1) < (b.source_col1 or 1) end)
@@ -677,7 +761,13 @@ end
 
 function provider:line_generation(view, line)
   if view_in_source_mode(view) then return "source" end
-  return view_active_line(view, line) and "active" or "inactive"
+  local parts = {}
+  for _, unit in ipairs(reveal_units_for_line(view, line)) do
+    parts[#parts + 1] = table.concat({
+      unit.type or "", unit.id or "", unit.col1 or 0, unit.col2 or 0,
+    }, ":")
+  end
+  return #parts > 0 and table.concat(parts, "|") or "inactive"
 end
 
 function provider:on_text_transaction(view, transaction, line1)
@@ -714,16 +804,16 @@ function provider:on_text_transaction(view, transaction, line1)
   return line1, #view.doc.lines
 end
 
-local function heading_content_fragments(view, text, heading, font, active)
+local function heading_content_fragments(view, text, heading, font, reveal_units)
   local fragments, occupied = {}, {}
-  for _, fragment in ipairs(semantic_link_fragments(view, text, heading.line, active, {
+  for _, fragment in ipairs(semantic_link_fragments(view, text, heading.line, reveal_units, {
     base_font = font,
   })) do
     if fragment.source_col1 >= heading.content_col1 and fragment.source_col2 <= heading.content_col2 then
       add_fragment(fragments, occupied, fragment)
     end
   end
-  for _, fragment in ipairs(semantic_formatting_fragments(view, text, heading.line, active, {
+  for _, fragment in ipairs(semantic_formatting_fragments(view, text, heading.line, reveal_units, {
     col1 = heading.content_col1,
     col2 = heading.content_col2,
     base_font = font,
@@ -752,32 +842,36 @@ local function heading_content_fragments(view, text, heading, font, active)
   return normalized
 end
 
-local function active_heading_fragments(view, text, heading, font)
+local function active_heading_fragments(view, text, heading, font, reveal_units)
   local fragments = {
     { source_col1 = 1, source_col2 = heading.content_col1, text = text:sub(1, heading.content_col1 - 1), font = font, color = style.markdown_live_heading_marker },
   }
-  for _, fragment in ipairs(heading_content_fragments(view, text, heading, font, true)) do fragments[#fragments + 1] = fragment end
+  for _, fragment in ipairs(heading_content_fragments(view, text, heading, font, reveal_units)) do fragments[#fragments + 1] = fragment end
   fragments[#fragments + 1] = { source_col1 = heading.content_col2, source_col2 = #text + 1, text = text:sub(heading.content_col2), font = font, color = style.markdown_live_heading_marker }
   return fragments
 end
 
-local function inactive_heading_fragments(view, text, heading, font)
+local function inactive_heading_fragments(view, text, heading, font, reveal_units)
   local fragments = {
     { source_col1 = 1, source_col2 = heading.content_col1, hidden = true },
   }
-  for _, fragment in ipairs(heading_content_fragments(view, text, heading, font, false)) do fragments[#fragments + 1] = fragment end
+  for _, fragment in ipairs(heading_content_fragments(view, text, heading, font, reveal_units)) do fragments[#fragments + 1] = fragment end
   fragments[#fragments + 1] = { source_col1 = heading.content_col2, source_col2 = #text + 1, hidden = true }
   return fragments
 end
 
-local function heading_render_line(view, text, heading, active)
+local function heading_render_line(view, text, heading, reveal_units)
   local font = heading_font(view, heading.level)
-  local active_fragments = active_heading_fragments(view, text, heading, font)
+  local heading_revealed = reveal_unit_matches(
+    reveal_units, heading.semantic_id, heading.source_col1, heading.source_col2
+  )
   return {
     source_text = text,
     semantic_id = heading.semantic_id,
     semantic_generation = heading.semantic_generation,
-    fragments = active and active_fragments or inactive_heading_fragments(view, text, heading, font),
+    fragments = heading_revealed
+      and active_heading_fragments(view, text, heading, font, reveal_units)
+      or inactive_heading_fragments(view, text, heading, font, reveal_units),
   }
 end
 
@@ -792,17 +886,20 @@ function provider:line_height(view, line)
       view:get_line_height(),
       math.floor(heading_font(view, heading.level):get_height() * config.line_height)
     )
-    local render_line = heading_render_line(view, text, heading, view_active_line(view, line))
+    local render_line = heading_render_line(view, text, heading, reveal_units_for_line(view, line))
     for _, fragment in ipairs(render_line.fragments or {}) do
       if fragment.widget and fragment.widget.height then height = math.max(height, fragment.widget.height) end
     end
     return height
   end
   if not in_comment and line_in_raw_block(view, line) then return nil end
-  local active = view_active_line(view, line)
+  local reveal_units = reveal_units_for_line(view, line)
   local image_span = image_only_span(view, text, line)
   if image_span then
-    local render_line = image_only_render_line(view, text, line, image_span, active)
+    local image_revealed = reveal_unit_matches(
+      reveal_units, image_span.semantic_id, image_span.col1, image_span.col2
+    )
+    local render_line = image_only_render_line(view, text, line, image_span, image_revealed)
     local max_height
     if render_line then
       for _, fragment in ipairs(render_line.fragments or {}) do
@@ -813,9 +910,8 @@ function provider:line_height(view, line)
     end
     if max_height then return math.max(view:get_line_height(), max_height) end
   end
-  if active then return nil end
   local max_height
-  for _, fragment in ipairs(inline_fragments(text, line, view, false)) do
+  for _, fragment in ipairs(inline_fragments(text, line, view, reveal_units)) do
     if fragment.widget and fragment.widget.height then
       max_height = math.max(max_height or 0, fragment.widget.height)
     end
@@ -832,17 +928,20 @@ function provider:render_line(view, line)
 
   local text = (view.doc.lines[line] or ""):gsub("\n$", "")
   local heading = semantic_heading_for_line(view, text, line)
-  local active = view_active_line(view, line)
-  if heading then return heading_render_line(view, text, heading, active) end
+  local reveal_units = reveal_units_for_line(view, line)
+  if heading then return heading_render_line(view, text, heading, reveal_units) end
 
   local image_span = image_only_span(view, text, line)
   if image_span then
     if line_is_wrapped(view, line) then return { raw_passthrough = true } end
-    local render_line = image_only_render_line(view, text, line, image_span, active)
+    local image_revealed = reveal_unit_matches(
+      reveal_units, image_span.semantic_id, image_span.col1, image_span.col2
+    )
+    local render_line = image_only_render_line(view, text, line, image_span, image_revealed)
     if render_line then return render_line end
   end
 
-  local fragments = inline_fragments(text, line, view, active)
+  local fragments = inline_fragments(text, line, view, reveal_units)
   if #fragments > 0 then
     local _, semantic_generation = semantic_line(view, line)
     return {
@@ -851,7 +950,7 @@ function provider:render_line(view, line)
       fragments = fragments,
     }
   end
-  if active then return { raw_passthrough = true } end
+  if #reveal_units > 0 then return { raw_passthrough = true } end
 end
 
 function live.image_at_position(view, x, y)
@@ -999,6 +1098,13 @@ local function invalidate_selection_lines(view, new_state, old_state)
       local line2 = state.selections[i + 2] or line1
       if line1 then
         for line = math.min(line1, line2), math.max(line1, line2) do lines[line] = true end
+        if line1 == line2 and state.selections[i + 1] == state.selections[i + 3] then
+          for _, unit in ipairs(reveal_units_for_line(view, line1, state)) do
+            if unit.line1 and unit.line2 then
+              for line = unit.line1, unit.line2 do lines[line] = true end
+            end
+          end
+        end
       end
     end
   end
