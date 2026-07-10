@@ -2782,6 +2782,42 @@ function DocView:get_line_render(line)
   return resolved
 end
 
+function DocView:get_render_widget_at_position(x, y)
+  if not self:has_line_render_providers() then return nil end
+  local line = self:resolve_screen_position(x, y)
+  local render_line = self:get_line_render(line)
+  if not render_line then return nil end
+  local line_x, line_y = self:get_line_screen_position(line)
+  local xrel, yrel = x - line_x, y - line_y
+  local row = self:get_visual_row(line, 1)
+  local row_height = self:get_visual_row_height(row)
+  local tx = 0
+  local _, indent_size = self.doc:get_indent_info()
+  for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
+    if not fragment.hidden then
+      local font = fragment.font or self:get_font()
+      font:set_tab_size(indent_size)
+      local widget = fragment.widget
+      local text = fragment.text or ""
+      local width = fragment.width or (widget and widget.width)
+        or font:get_width(text, { tab_offset = tx })
+      if widget then
+        local padding = widget.padding or 0
+        local height = widget.image_height or widget.height or row_height
+        local left = tx + (fragment.draw_x_offset or 0)
+        local top = fragment.draw_y_offset and (fragment.draw_y_offset - padding)
+          or (math.max(0, (row_height - height) / 2) - padding)
+        if xrel >= left and xrel <= left + width and
+          yrel >= top and yrel <= top + height + padding * 2
+        then
+          return { line = line, fragment = fragment, widget = widget }
+        end
+      end
+      tx = tx + width
+    end
+  end
+end
+
 local function render_fragment_font(view, fragment)
   return fragment.font or view:get_font()
 end
@@ -3295,6 +3331,13 @@ function DocView:on_mouse_moved(x, y, ...)
     end
   end
 
+  if not selecting and not self.hovering_gutter and
+    not self:scrollbar_hovering() and not self:scrollbar_dragging()
+  then
+    local hit = self:get_render_widget_at_position(x, y)
+    if hit and hit.widget.cursor then self.cursor = hit.widget.cursor end
+  end
+
   if self.mouse_selecting then
     local l1, c1 = self:resolve_screen_position(x, y)
     local l2, c2, snap_type = table.unpack(self.mouse_selecting)
@@ -3356,6 +3399,20 @@ end
 function DocView:on_mouse_pressed(button, x, y, clicks)
   if button == "left" then self.doc:clear_search_selections() end
   if button == "left" and not self.hovering_gutter then
+    local widget_hit = self:get_render_widget_at_position(x, y)
+    if widget_hit and widget_hit.widget.on_mouse_pressed then
+      local ok, handled = pcall(
+        widget_hit.widget.on_mouse_pressed,
+        widget_hit.widget, self, widget_hit, button, x, y, clicks
+      )
+      if not ok then
+        core.log_quiet(
+          "DocView render widget click failed for %s: %s",
+          self.doc:get_name(), tostring(handled)
+        )
+      end
+      if ok and handled ~= false then return true end
+    end
     self.resolved_provider_row = nil
     local line = self:resolve_screen_position(x, y)
     local provider_entry = self.resolved_provider_row

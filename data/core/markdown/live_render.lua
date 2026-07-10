@@ -217,6 +217,14 @@ local function image_fragment(view, span, opts)
         height = height + padding * 2,
         image_height = height,
         padding = padding,
+        cursor = "hand",
+        on_mouse_pressed = function(_, owner, hit, button)
+          if button ~= "left" then return false end
+          owner.doc:set_selection(hit.line, 1)
+          local image_overlay = require "core.markdown.image_overlay"
+          image_overlay.open(hit.fragment.image_path)
+          return true
+        end,
         draw = function(_, fragment, x, y, row_height)
           local image = entry.image
           if width ~= natural_w or height ~= natural_h then
@@ -505,42 +513,11 @@ function provider:render_line(view, line)
 end
 
 function live.image_at_position(view, x, y)
-  if not (view and view.__markdown_live_attached and view.get_line_render) then return nil end
-  local line = view:resolve_screen_position(x, y)
-  local render_line = view:get_line_render(line)
-  if not render_line then return nil end
-  local line_x, line_y = view:get_line_screen_position(line)
-  local xrel, yrel = x - line_x, y - line_y
-  local row = view:get_visual_row(line, 1)
-  local row_height = view:get_visual_row_height(row)
-  local tx = 0
-  local _, indent_size = view.doc:get_indent_info()
-  for _, fragment in ipairs(view:iter_line_render_fragments(render_line)) do
-    if not fragment.hidden then
-      local font = fragment.font or view:get_font()
-      font:set_tab_size(indent_size)
-      local widget = fragment.widget
-      local text = fragment.text or ""
-      local width = fragment.width or (widget and widget.width) or font:get_width(text, { tab_offset = tx })
-      if widget and fragment.image_path then
-        local padding = widget.padding or 0
-        local image_height = widget.image_height or widget.height or row_height
-        local left = tx + (fragment.draw_x_offset or 0)
-        local top
-        if fragment.draw_y_offset then
-          top = fragment.draw_y_offset - padding
-        else
-          top = math.max(0, (row_height - image_height) / 2) - padding
-        end
-        local hit_height = image_height + padding * 2
-        if xrel >= left and xrel <= left + (widget.width or width or 0)
-        and yrel >= top and yrel <= top + hit_height then
-          return { line = line, path = fragment.image_path, fragment = fragment }
-        end
-      end
-      tx = tx + width
-    end
-  end
+  if not (view and view.__markdown_live_attached and view.get_render_widget_at_position) then return nil end
+  local hit = view:get_render_widget_at_position(x, y)
+  if not (hit and hit.fragment and hit.fragment.image_path) then return nil end
+  hit.path = hit.fragment.image_path
+  return hit
 end
 
 local owner_serial = 0
@@ -674,32 +651,6 @@ function live.install()
     return result
   end
 
-  local old_docview_mouse_moved = DocView.on_mouse_moved
-  DocView.on_mouse_moved = function(view, x, y, dx, dy, ...)
-    local result = old_docview_mouse_moved(view, x, y, dx, dy, ...)
-    if view.__markdown_live_attached
-    and not view.mouse_selecting
-    and not view:scrollbar_hovering()
-    and not view:scrollbar_dragging()
-    and live.image_at_position(view, x, y) then
-      view.cursor = "hand"
-    end
-    return result
-  end
-
-  local old_docview_mouse_pressed = DocView.on_mouse_pressed
-  DocView.on_mouse_pressed = function(view, button, x, y, clicks, ...)
-    if button == "left" and view.__markdown_live_attached then
-      local hit = live.image_at_position(view, x, y)
-      if hit and hit.path then
-        view.doc:set_selection(hit.line, 1)
-        local image_overlay = require "core.markdown.image_overlay"
-        image_overlay.open(hit.path)
-        return true
-      end
-    end
-    return old_docview_mouse_pressed(view, button, x, y, clicks, ...)
-  end
 
   refresh_open_views()
 end

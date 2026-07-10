@@ -186,6 +186,42 @@ test.describe("DocView render fragments", function()
     test.equal(calls, 2)
   end)
 
+  test.it("routes pointer cursor and clicks through rendered widgets", function()
+    local view = make_view("widget")
+    local clicked = false
+    view:add_line_render_provider("widget", {
+      render_line = function()
+        return {
+          fragments = {
+            {
+              source_col1 = 1,
+              source_col2 = 7,
+              width = 40,
+              widget = {
+                width = 40,
+                height = view:get_line_height(),
+                cursor = "hand",
+                on_mouse_pressed = function(_, owner, hit, button)
+                  test.equal(owner, view)
+                  test.equal(hit.line, 1)
+                  test.equal(button, "left")
+                  clicked = true
+                  return true
+                end,
+              },
+            },
+          },
+        }
+      end,
+    })
+    local x, y = view:get_line_screen_position(1)
+    x, y = x + 5, y + 5
+    view:on_mouse_moved(x, y)
+    test.equal(view.cursor, "hand")
+    test.equal(view:on_mouse_pressed("left", x, y, 1), true)
+    test.equal(clicked, true)
+  end)
+
   test.it("invalidates cached output after legacy raw text edits", function()
     local view, doc = make_view("one")
     local calls = 0
