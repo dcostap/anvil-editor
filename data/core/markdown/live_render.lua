@@ -6,6 +6,7 @@ local images = require "core.markdown.images"
 local linewrapping = require "core.linewrapping"
 local markdown_links = require "core.markdown.links"
 local markdown_model = require "core.markdown.model"
+local vault_index = require "core.markdown.vault_index"
 local style = require "core.style"
 
 local live = {}
@@ -692,6 +693,27 @@ end
 local function decorate_link_fragment(view, line, span, fragment, opts)
   opts = opts or {}
   if semantic_comment_overlaps(view, line, span.col1, span.col2) then return nil end
+  local owner = view.__markdown_live_owner
+  local index = owner and owner.link_index
+  local target = span.link.raw_target or span.link.path or ""
+  local resolution
+  if not common.is_absolute_path(target) and target:match("^[%a][%w+.-]*:") then
+    resolution = { status = "external", target = target, path = target }
+  elseif index and index.status == "ready" then
+    resolution = index:resolve(span.link, view.doc.abs_filename)
+  else
+    resolution = { status = "pending", target = target, reason = "indexing" }
+  end
+  local resolution_colors = {
+    resolved = style.markdown_live_link,
+    external = style.markdown_live_external_link,
+    missing = style.markdown_live_missing_link,
+    ambiguous = style.markdown_live_ambiguous_link,
+    pending = style.markdown_live_pending_link,
+  }
+  fragment.link = span.link
+  fragment.link_resolution = resolution
+  fragment.color = resolution_colors[resolution.status] or fragment.color
   local bold, italic, strike, highlight, code = false, false, false, false, false
   local ids = { span.semantic_id }
   for _, formatting in ipairs(semantic_formatting_spans(view, "", line) or {}) do
@@ -767,7 +789,11 @@ function provider:line_generation(view, line)
       unit.type or "", unit.id or "", unit.col1 or 0, unit.col2 or 0,
     }, ":")
   end
-  return #parts > 0 and table.concat(parts, "|") or "inactive"
+  local owner = view.__markdown_live_owner
+  local index = owner and owner.link_index
+  parts[#parts + 1] = "index:" .. tostring(index and index.status or "none")
+    .. ":" .. tostring(index and index.generation or 0)
+  return table.concat(parts, "|")
 end
 
 function provider:on_text_transaction(view, transaction, line1)
@@ -938,7 +964,12 @@ function provider:render_line(view, line)
       reveal_units, image_span.semantic_id, image_span.col1, image_span.col2
     )
     local render_line = image_only_render_line(view, text, line, image_span, image_revealed)
-    if render_line then return render_line end
+    if render_line then
+      for _, fragment in ipairs(render_line.fragments or {}) do
+        if fragment.semantic_id then decorate_link_fragment(view, line, image_span, fragment) end
+      end
+      return render_line
+    end
   end
 
   local fragments = inline_fragments(text, line, view, reveal_units)
@@ -1090,6 +1121,36 @@ local function unbind_semantic_model(view)
   view.__markdown_live_semantic_line_cache = nil
 end
 
+local function bind_link_index(view)
+  local owner = view.__markdown_live_owner
+  local path = view.doc.abs_filename or view.doc.filename
+  if not (owner and path) then return end
+  local index = vault_index.index_for_path(path)
+  local listener_id = owner.listener_id .. ":links"
+  if owner.link_index == index and owner.link_listener_id == listener_id then return end
+  if owner.link_index and owner.link_index ~= index then
+    owner.link_index:remove_listener(listener_id)
+  end
+  owner.link_index = index
+  owner.link_listener_id = listener_id
+  index:add_listener(listener_id, function()
+    if view.__markdown_live_owner ~= owner or not view.__markdown_live_attached then return end
+    view:invalidate_line_render(PROVIDER_ID)
+    view:invalidate_visual_metrics(PROVIDER_ID)
+    core.redraw = true
+  end)
+  index:track_doc(view.doc)
+  index:ensure("live-preview")
+end
+
+local function unbind_link_index(view)
+  local owner = view.__markdown_live_owner
+  if not (owner and owner.link_index) then return end
+  owner.link_index:remove_listener(owner.link_listener_id)
+  owner.link_index = nil
+  owner.link_listener_id = nil
+end
+
 local function invalidate_selection_lines(view, new_state, old_state)
   local lines = {}
   for _, state in ipairs({ old_state, new_state }) do
@@ -1124,12 +1185,14 @@ function live.attach(view)
   end)
   view.__markdown_live_attached = true
   bind_semantic_model(view)
+  bind_link_index(view)
   core.log_quiet("Markdown live editor attached to %s", view.doc and view.doc:get_name() or tostring(view))
   return true
 end
 
 function live.detach(view)
   if not (view and view.__markdown_live_attached) then return false end
+  unbind_link_index(view)
   unbind_semantic_model(view)
   view:remove_visual_metric_provider(PROVIDER_ID)
   view:remove_line_render_provider(PROVIDER_ID)
@@ -1163,6 +1226,10 @@ function live.refresh_view(view)
   if not (view and view.doc) then return false end
   ensure_owner(view)
   if config.markdown_live_editor and live.is_markdown_doc(view.doc) then
+    if view.__markdown_live_attached then
+      bind_link_index(view)
+      return false
+    end
     return live.attach(view)
   else
     return live.detach(view)

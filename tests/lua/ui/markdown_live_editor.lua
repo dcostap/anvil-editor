@@ -7,6 +7,7 @@ local DocView = require "core.docview"
 local markdown = require "core.markdown"
 local markdown_model = require "core.markdown.model"
 local linewrapping = require "core.linewrapping"
+local Project = require "core.project"
 local style = require "core.style"
 local worker_pool = require "core.worker_pool"
 local test = require "core.test"
@@ -567,7 +568,7 @@ test.describe("Markdown Live Editor", function()
       if fragment.text == "Label" then link = fragment end
     end
     link = test.not_nil(link)
-    test.equal(link.color, style.markdown_live_link)
+    test.not_nil(link.link_resolution)
     test.equal(link.overdraw, true)
     test.not_nil(link.semantic_id)
     test.equal(view:get_col_x_offset(1, #"**[Label](target.md)**" + 1), view:get_font():get_width("Label"))
@@ -1086,6 +1087,29 @@ test.describe("Markdown Live Editor", function()
     doc:on_close()
     test.equal(view.__markdown_live_owner, nil)
     test.equal(view.__markdown_live_attached, nil)
+  end)
+
+  test.it("rebinds link resolution when a Document moves between Projects", function()
+    local root1 = USERDIR .. PATHSEP .. "markdown-live-index-one-" .. system.get_process_id()
+    local root2 = USERDIR .. PATHSEP .. "markdown-live-index-two-" .. system.get_process_id()
+    test.ok(common.mkdirp(root1))
+    test.ok(common.mkdirp(root2))
+    local old_projects = core.projects
+    core.projects = { Project(root1), Project(root2) }
+    local ok, err = pcall(function()
+      local path1 = root1 .. PATHSEP .. "Source.md"
+      local path2 = root2 .. PATHSEP .. "Source.md"
+      local view, doc = make_view("[[Target]]\nplain", path1)
+      doc:set_selection(2, 1)
+      refresh(view)
+      test.equal(view.__markdown_live_owner.link_index.root, common.normalize_path(root1))
+      doc:set_filename(path2, path2)
+      test.equal(view.__markdown_live_owner.link_index.root, common.normalize_path(root2))
+    end)
+    core.projects = old_projects
+    common.rm(root1, true)
+    common.rm(root2, true)
+    if not ok then error(err, 0) end
   end)
 
   test.it("automatically follows direct Document filename and syntax changes", function()

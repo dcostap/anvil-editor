@@ -84,7 +84,7 @@ test.describe("Markdown Live Preview prototype baseline", function()
     test.equal(command.map["markdown-live-preview:open-link"], nil)
   end)
 
-  test.it("styles resolved, missing, and ambiguous wikilinks identically", function()
+  test.it("styles resolved, missing, and ambiguous wikilinks by status", function()
     with_live_preview(function()
       local root = USERDIR .. PATHSEP .. "markdown-live-baseline-links-" .. system.get_process_id()
       local ok, err = common.mkdirp(root .. PATHSEP .. "a")
@@ -118,8 +118,8 @@ test.describe("Markdown Live Preview prototype baseline", function()
         end
         test.equal(#link_colors, 3)
         test.same(link_colors[1], style.markdown_live_link)
-        test.same(link_colors[2], style.markdown_live_link)
-        test.same(link_colors[3], style.markdown_live_link)
+        test.same(link_colors[2], style.markdown_live_missing_link)
+        test.same(link_colors[3], style.markdown_live_ambiguous_link)
       end)
 
       core.projects = old_projects

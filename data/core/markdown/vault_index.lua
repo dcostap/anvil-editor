@@ -10,6 +10,8 @@ local MARKDOWN_EXTENSION_LIST = { "md", "markdown", "mdown" }
 local MARKDOWN_EXTENSIONS = {}
 for _, ext in ipairs(MARKDOWN_EXTENSION_LIST) do MARKDOWN_EXTENSIONS[ext] = true end
 
+local MAX_COOPERATIVE_NOTE_BYTES = 512 * 1024
+
 local ATTACHMENT_EXTENSIONS = {
   avif = true,
   bmp = true,
@@ -192,6 +194,10 @@ function Index:new(root)
   return setmetatable({
     root = common.normalize_path(root),
     generation = 0,
+    status = "cold",
+    reason = "not indexed",
+    rebuild_serial = 0,
+    listeners = {},
     notes_by_abs = {},
     attachments_by_abs = {},
     note_keys = {},
@@ -200,6 +206,25 @@ function Index:new(root)
     attachment_keys_ci = {},
     doc_listeners = setmetatable({}, { __mode = "k" }),
   }, self)
+end
+
+function Index:add_listener(id, fn)
+  assert(type(id) == "string" and id ~= "", "Markdown index listener id is required")
+  assert(type(fn) == "function", "Markdown index listener must be a function")
+  self.listeners[id] = fn
+end
+
+function Index:remove_listener(id)
+  if not self.listeners[id] then return false end
+  self.listeners[id] = nil
+  return true
+end
+
+function Index:notify(reason, detail)
+  for id, fn in pairs(self.listeners) do
+    local ok, err = pcall(fn, self, reason, detail)
+    if not ok then core.log_quiet("Markdown index listener %s failed: %s", id, tostring(err)) end
+  end
 end
 
 function Index:relative_path(path)
@@ -296,15 +321,21 @@ function Index:remove_path(path)
   local removed = self:remove_path_entry(path)
   if removed then
     self.generation = self.generation + 1
+    self:notify("path-removed", path)
     return true
   end
   return false
 end
 
-function Index:make_note_entry(path, text)
-  text = text or read_file(path) or ""
-  local parsed = parser.parse(text)
-  local anchor_index = anchors.index_document(parsed)
+function Index:make_note_entry(path, text, opts)
+  opts = opts or {}
+  text = text or (not opts.shallow and read_file(path)) or ""
+  local anchor_index
+  if opts.shallow then
+    anchor_index = { headings = {}, blocks = {} }
+  else
+    anchor_index = anchors.index_document(parser.parse(text))
+  end
   local headings_by_slug = {}
   local headings_by_text = {}
   local blocks_by_id = {}
@@ -357,10 +388,72 @@ end
 
 function Index:rebuild(reason, opts)
   opts = opts or {}
+  self.rebuild_serial = self.rebuild_serial + 1
+  self.status, self.reason = "indexing", reason or "manual"
   self:clear()
   self:scan_dir(self.root, opts.skip_path and path_key(opts.skip_path) or nil)
+  for doc in pairs(self.doc_listeners) do self:update_doc(doc, { rebuilding = true }) end
+  self.status, self.reason = "ready", nil
+  self.generation = self.generation + 1
+  self:notify("ready")
   core.log_quiet("Markdown vault index rebuilt %s: %d notes, %d attachments", reason or "manual", self:note_count(), self:attachment_count())
   return self
+end
+
+function Index:ensure(reason)
+  if self.status == "ready" then return true end
+  if self.status == "indexing" then return false end
+  return self:rebuild_async(reason or "first-use")
+end
+
+function Index:rebuild_async(reason)
+  self.rebuild_serial = self.rebuild_serial + 1
+  local serial = self.rebuild_serial
+  self.status, self.reason = "indexing", reason or "async-rebuild"
+  self:clear()
+  self:notify("indexing")
+  core.log_quiet("Markdown vault index scheduled cooperative rebuild: %s", tostring(self.reason))
+  core.add_thread(function()
+    local dirs, processed = { self.root }, 0
+    while #dirs > 0 do
+      if serial ~= self.rebuild_serial then return end
+      local dir = table.remove(dirs)
+      for _, name in ipairs(system.list_dir(dir) or {}) do
+        if name ~= ".git" and name ~= ".run-meson-tests" then
+          local path = join_path(dir, name)
+          local info = system.get_file_info(path)
+          if info and info.type == "dir" then
+            dirs[#dirs + 1] = path
+          elseif info and info.type == "file" then
+            local tracked = false
+            for doc in pairs(self.doc_listeners) do
+              if doc.abs_filename and path_key(doc.abs_filename) == path_key(path) then tracked = true break end
+            end
+            if not tracked then
+              local ok, err = pcall(self.update_path, self, path, {
+                rebuilding = true,
+                cooperative = true,
+              })
+              if not ok then core.log_quiet("Markdown index skipped %s: %s", path, tostring(err)) end
+            end
+          end
+          processed = processed + 1
+          if processed % 32 == 0 then coroutine.yield(0) end
+        end
+      end
+    end
+    if serial ~= self.rebuild_serial then return end
+    for doc in pairs(self.doc_listeners) do self:update_doc(doc, { rebuilding = true }) end
+    self.status, self.reason = "ready", nil
+    self.generation = self.generation + 1
+    self:notify("ready")
+    core.redraw = true
+    core.log_quiet(
+      "Markdown vault index cooperative rebuild ready: notes=%d attachments=%d",
+      self:note_count(), self:attachment_count()
+    )
+  end)
+  return false
 end
 
 function Index:note_count()
@@ -380,22 +473,34 @@ function Index:update_path(path, opts)
   path = absolute_path(path)
   if not path then return false end
   if is_markdown(path) and file_exists(path) then
-    self:add_note_entry(self:make_note_entry(path, opts.text))
+    local info = system.get_file_info(path)
+    local shallow = opts.cooperative and info and (info.size or 0) > MAX_COOPERATIVE_NOTE_BYTES
+    self:add_note_entry(self:make_note_entry(path, opts.text, { shallow = shallow }))
+    if shallow then
+      core.log_quiet("Markdown index shallow-indexed oversized note %s (%d bytes)", path, info.size)
+    end
   elseif is_attachment(path) and file_exists(path) then
     self:add_attachment_entry(self:make_attachment_entry(path))
   else
     return false
   end
-  if not opts.rebuilding then self.generation = self.generation + 1 end
+  if not opts.rebuilding then
+    self.generation = self.generation + 1
+    self:notify("path-updated", path)
+  end
   return true
 end
 
-function Index:update_doc(doc)
+function Index:update_doc(doc, opts)
+  opts = opts or {}
   if not (doc and doc.abs_filename and is_markdown(doc.abs_filename)) then return false end
   if not common.path_belongs_to(common.normalize_path(doc.abs_filename), self.root) then return false end
   local text = doc:get_text(1, 1, math.huge, math.huge)
   self:add_note_entry(self:make_note_entry(doc.abs_filename, text))
-  self.generation = self.generation + 1
+  if not opts.rebuilding then
+    self.generation = self.generation + 1
+    self:notify("document-updated", doc)
+  end
   core.log_quiet("Markdown vault index updated doc %s", doc.abs_filename)
   return true
 end
@@ -413,6 +518,11 @@ function Index:track_doc(doc)
       self:update_doc(doc)
     end,
   })
+  if doc.add_metadata_listener then
+    doc:add_metadata_listener(id, function(_, event)
+      if event and event.kind == "close" then self:on_doc_closed(doc) end
+    end)
+  end
   self.doc_listeners[doc] = id
   self:update_doc(doc)
   return true
@@ -422,7 +532,23 @@ function Index:untrack_doc(doc)
   local id = self.doc_listeners[doc]
   if not id then return false end
   if doc and doc.remove_text_change_listener then doc:remove_text_change_listener(id) end
+  if doc and doc.remove_metadata_listener then doc:remove_metadata_listener(id) end
   self.doc_listeners[doc] = nil
+  return true
+end
+
+function Index:on_doc_closed(doc)
+  local path = doc and doc.abs_filename
+  if not self:untrack_doc(doc) then return false end
+  if path then
+    self:remove_path_entry(path)
+    if file_exists(path) then
+      self:update_path(path, { rebuilding = true, cooperative = true })
+    end
+  end
+  self.generation = self.generation + 1
+  self:notify("document-closed", doc)
+  core.log_quiet("Markdown vault index released closed Document overlay %s", tostring(path))
   return true
 end
 
@@ -490,7 +616,9 @@ end
 
 function Index:resolve(link_or_target, source_path)
   local link = type(link_or_target) == "table" and link_or_target or links.find_links("[[" .. tostring(link_or_target or "") .. "]]", 1)[1]
-  local target = strip_target_fragment(link.raw_target or link.path or "")
+  local target = strip_target_fragment(
+    link.path ~= nil and link.path or link.raw_target or ""
+  )
   local source_dir = source_path and common.dirname(source_path)
 
   if target == "" and link.subtarget then
@@ -571,11 +699,23 @@ function vault_index.track_doc(doc)
 end
 
 function vault_index.on_doc_filename_changed(doc, old_abs_filename)
+  if old_abs_filename and doc and doc.abs_filename
+    and common.path_equals(old_abs_filename, doc.abs_filename)
+  then
+    vault_index.track_doc(doc)
+    return
+  end
   if old_abs_filename then
     local old_index = vault_index.index_for_path(old_abs_filename)
     old_index:remove_path(old_abs_filename)
+    if file_exists(old_abs_filename) then
+      old_index:update_path(old_abs_filename, { cooperative = true })
+    end
     if not (doc and doc.abs_filename and common.path_belongs_to(common.normalize_path(doc.abs_filename), old_index.root)) then
       old_index:untrack_doc(doc)
+    end
+    if old_index.status == "indexing" then
+      old_index:rebuild_async("tracked-document-moved")
     end
   end
   if doc and doc.abs_filename then
