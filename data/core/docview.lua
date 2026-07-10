@@ -2250,6 +2250,22 @@ local function metric_tree_sum(tree, row)
   return total
 end
 
+local function metric_tree_row_at_y(tree, row_count, y)
+  local index, accumulated = 0, 0
+  local step = 1
+  while step * 2 <= row_count do step = step * 2 end
+  while step > 0 do
+    local next_index = index + step
+    local next_total = accumulated + (tree[next_index] or 0)
+    if next_index <= row_count and next_total <= y then
+      index = next_index
+      accumulated = next_total
+    end
+    step = math.floor(step / 2)
+  end
+  return common.clamp(index + 1, 1, row_count)
+end
+
 local function compute_visual_row_height(view, row, providers, default_height)
   view.render_cache_diagnostics.metric_recomputations =
     view.render_cache_diagnostics.metric_recomputations + 1
@@ -2280,6 +2296,10 @@ function DocView:get_visual_row_metric_cache()
   local default_height = self:get_line_height()
   if cache and cache.signature == signature then
     if cache.dirty_rows then
+      local anchor_row = metric_tree_row_at_y(
+        cache.height_tree, cache.row_count, math.max(0, self.scroll and self.scroll.y or 0)
+      )
+      local anchor_delta = 0
       for row in pairs(cache.dirty_rows) do
         local height = compute_visual_row_height(self, row, providers, default_height)
         local delta = height - cache.heights[row]
@@ -2287,9 +2307,14 @@ function DocView:get_visual_row_metric_cache()
           cache.heights[row] = height
           cache.total_height = cache.total_height + delta
           metric_tree_add(cache.height_tree, cache.row_count, row, delta)
+          if row < anchor_row then anchor_delta = anchor_delta + delta end
         end
       end
       cache.dirty_rows = nil
+      if anchor_delta ~= 0 and self.scroll then
+        self.scroll.y = self.scroll.y + anchor_delta
+        self.scroll.to.y = self.scroll.to.y + anchor_delta
+      end
     end
     return cache
   end
@@ -2335,19 +2360,7 @@ function DocView:get_visual_row_at_y(y)
   if not cache then
     return common.clamp(math.floor(y / self:get_line_height()) + 1, 1, self:get_scrollable_line_count())
   end
-  local index, accumulated = 0, 0
-  local step = 1
-  while step * 2 <= cache.row_count do step = step * 2 end
-  while step > 0 do
-    local next_index = index + step
-    local next_total = accumulated + (cache.height_tree[next_index] or 0)
-    if next_index <= cache.row_count and next_total <= y then
-      index = next_index
-      accumulated = next_total
-    end
-    step = math.floor(step / 2)
-  end
-  return common.clamp(index + 1, 1, cache.row_count)
+  return metric_tree_row_at_y(cache.height_tree, cache.row_count, y)
 end
 
 local function overscan_metric_rows(cache, first, last, total)
@@ -3413,11 +3426,19 @@ end
 ---@param length integer Selection length within composition
 function DocView:on_ime_text_editing(text, start, length)
   if not self:can_edit("IME text input", { warn = true, text = text }) then return false end
+  local was_composing = self.ime_status
+  local composing = #text > 0
+  if composing and not was_composing then
+    self:begin_line_render_interaction("ime-composition")
+  end
   self.doc:clear_search_selections()
   self.doc:ime_text_editing(text, start, length)
-  self.ime_status = #text > 0
+  self.ime_status = composing
   self.ime_selection.from = start
   self.ime_selection.size = length
+  if not composing and was_composing then
+    self:end_line_render_interaction("ime-composition-end")
+  end
 
   -- Set the composition bounding box that the system IME
   -- will consider when drawing its interface

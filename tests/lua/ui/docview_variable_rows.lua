@@ -99,6 +99,29 @@ test.describe("DocView variable visual row metrics", function()
     test.equal(view:get_visual_row_height(1), lh * 2)
   end)
 
+  test.it("anchors the viewport when targeted rows above it change height", function()
+    local view = make_view("one\ntwo\nthree\nfour")
+    view.size.y = 40
+    local lh = view:get_line_height()
+    local expanded = false
+    view:add_visual_metric_provider("anchor", {
+      line_height = function(_, _, line)
+        if line == 1 then return expanded and lh * 3 or lh * 2 end
+      end,
+    })
+    view:get_visual_row_height(1)
+    view.scroll.y = view:get_visual_row_y_offset(3)
+    view.scroll.to.y = view.scroll.y
+    local _, before_y = view:get_line_screen_position(3)
+
+    expanded = true
+    view:invalidate_visual_metrics("anchor", 1, 1)
+    view:get_visual_row_height(1)
+    local _, after_y = view:get_line_screen_position(3)
+    test.equal(after_y, before_y)
+    test.equal(view.scroll.y, view.scroll.to.y)
+  end)
+
   test.it("draws non-composed lines at metric y positions", function()
     local view = make_view("one\ntwo\nthree")
     view.size.y = 200
