@@ -25,7 +25,10 @@ struct AnvilMarkdownTree {
 typedef struct ParseRun {
   uint64_t started_ticks;
   uint32_t timeout_ms;
+  AnvilMarkdownCancelCallback cancel_callback;
+  void *cancel_payload;
   bool timed_out;
+  bool cancelled;
 } ParseRun;
 
 static char *parser_strdup(const char *text) {
@@ -38,8 +41,12 @@ static char *parser_strdup(const char *text) {
 
 static bool parse_progress(TSParseState *state) {
   ParseRun *run = (ParseRun *) state->payload;
-  if (!run || run->timeout_ms == 0) return false;
-  if (SDL_GetTicks() - run->started_ticks < run->timeout_ms) return false;
+  if (!run) return false;
+  if (run->cancel_callback && run->cancel_callback(run->cancel_payload)) {
+    run->cancelled = true;
+    return true;
+  }
+  if (run->timeout_ms == 0 || SDL_GetTicks() - run->started_ticks < run->timeout_ms) return false;
   run->timed_out = true;
   return true;
 }
@@ -167,9 +174,9 @@ static bool parse_inline_regions(
     };
     free(ranges);
     if (!tree) {
-      if (error) *error = parser_strdup(run->timed_out
-        ? "Markdown inline parse timed out"
-        : "Markdown inline parse failed");
+      if (error) *error = parser_strdup(run->cancelled
+        ? "Markdown parse cancelled"
+        : (run->timed_out ? "Markdown inline parse timed out" : "Markdown inline parse failed"));
       return false;
     }
     if (!append_inline_tree(result, tree, source_range)) {
@@ -190,6 +197,8 @@ static bool parse_inline_regions(
 AnvilMarkdownTree *anvil_markdown_tree_parse(
   AnvilTSSnapshot *snapshot,
   uint32_t timeout_ms,
+  AnvilMarkdownCancelCallback cancel_callback,
+  void *cancel_payload,
   char **error
 ) {
   if (error) *error = NULL;
@@ -229,13 +238,16 @@ AnvilMarkdownTree *anvil_markdown_tree_parse(
   ParseRun run = {
     .started_ticks = SDL_GetTicks(),
     .timeout_ms = timeout_ms,
+    .cancel_callback = cancel_callback,
+    .cancel_payload = cancel_payload,
     .timed_out = false,
+    .cancelled = false,
   };
   result->block_tree = parse_with_ranges(block_parser, snapshot, NULL, 0, &run);
   if (!result->block_tree) {
-    if (error) *error = parser_strdup(run.timed_out
-      ? "Markdown block parse timed out"
-      : "Markdown block parse failed");
+    if (error) *error = parser_strdup(run.cancelled
+      ? "Markdown parse cancelled"
+      : (run.timed_out ? "Markdown block parse timed out" : "Markdown block parse failed"));
     goto fail;
   }
   if (!parse_inline_regions(result, inline_parser, ts_tree_root_node(result->block_tree), &run, error)) goto fail;

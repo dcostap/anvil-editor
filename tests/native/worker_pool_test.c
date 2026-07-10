@@ -108,7 +108,46 @@ int main(int argc, char **argv) {
   CHECK(strcmp(anvil_worker_job_status_string(ts_job), "complete") == 0);
   anvil_worker_job_release(ts_job);
 
-  CHECK(anvil_worker_pool_submitted_count(pool) == 4);
+  AnvilWorkerJobSpec markdown = { 0 };
+  markdown.kind = "markdown_parse";
+  markdown.text = "# Hello *world*.\n\nParagraph with **bold**.\n";
+  markdown.outline_query = "(atx_heading) @heading";
+  markdown.usage_query = "[(emphasis) (strong_emphasis)] @span";
+  markdown.parse_timeout_ms = 1000;
+  markdown.query_timeout_ms = 100;
+  markdown.usage_query_timeout_ms = 100;
+  markdown.max_captures = 100;
+  markdown.usage_max_captures = 100;
+  AnvilWorkerJob *markdown_job = anvil_worker_pool_submit(pool, &markdown, &error);
+  CHECK(markdown_job != NULL);
+  uint64_t markdown_id = anvil_worker_job_id(markdown_job);
+  int saw_markdown_result = 0;
+  start = SDL_GetTicks();
+  while ((int)(SDL_GetTicks() - start) < 1000 && !saw_markdown_result) {
+    AnvilWorkerResult *result = anvil_worker_pool_pop_result(pool);
+    if (result) {
+      if (anvil_worker_result_job_id(result) == markdown_id && strcmp(anvil_worker_result_type(result), "result") == 0) {
+        AnvilWorkerTreeSitterIndexResult *parse_result = anvil_worker_result_steal_treesitter_index_result(result);
+        CHECK(parse_result != NULL);
+        CHECK(strcmp(anvil_worker_treesitter_index_result_language(parse_result), "markdown") == 0);
+        CHECK(strcmp(anvil_worker_treesitter_index_result_status(parse_result, "outline"), "ready") == 0);
+        CHECK(strcmp(anvil_worker_treesitter_index_result_status(parse_result, "usage"), "ready") == 0);
+        CHECK(anvil_worker_treesitter_index_result_capture_count(parse_result, "outline") == 1);
+        CHECK(anvil_worker_treesitter_index_result_capture_count(parse_result, "usage") == 2);
+        anvil_worker_treesitter_index_result_free(parse_result);
+        saw_markdown_result = 1;
+      }
+      anvil_worker_result_free(result);
+    } else {
+      SDL_Delay(1);
+    }
+  }
+  CHECK(saw_markdown_result);
+  CHECK(drain_until_type(pool, markdown_id, "final", 1000));
+  CHECK(strcmp(anvil_worker_job_status_string(markdown_job), "complete") == 0);
+  anvil_worker_job_release(markdown_job);
+
+  CHECK(anvil_worker_pool_submitted_count(pool) == 5);
   CHECK(anvil_worker_pool_completed_count(pool) >= 1);
   CHECK(anvil_worker_pool_cancelled_count(pool) >= 1);
   CHECK(anvil_worker_pool_failed_count(pool) >= 1);

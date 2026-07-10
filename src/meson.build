@@ -202,6 +202,7 @@ worker_pool_test = executable('worker_pool_test',
     [
         '../tests/native/worker_pool_test.c',
         'worker_pool.c',
+        'markdown_parser.c',
         'treesitter/languages.c',
         'treesitter/service.c',
         'treesitter/snapshot.c',

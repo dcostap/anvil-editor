@@ -295,6 +295,40 @@ static int treesitter_index_result_captures(lua_State *L) {
   return 1;
 }
 
+static int treesitter_index_result_captures_for_lines(lua_State *L) {
+  LuaTreeSitterIndexResult *result = check_treesitter_index_result(L, 1);
+  const char *kind = luaL_optstring(L, 2, "outline");
+  uint32_t line1 = (uint32_t)luaL_checkinteger(L, 3);
+  uint32_t line2 = (uint32_t)luaL_checkinteger(L, 4);
+  luaL_argcheck(L, line1 > 0 && line2 >= line1, 3, "invalid line range");
+  uint32_t limit = lua_istable(L, 5) ? opt_uint32_field(L, 5, "limit", 4096) : 4096;
+  uint32_t count = anvil_worker_treesitter_index_result_capture_count(result->result, kind);
+  lua_createtable(L, (int)(limit < count ? limit : count), 2);
+  uint32_t emitted = 0;
+  uint32_t matches = 0;
+  for (uint32_t i = 0; i < count; i++) {
+    uint32_t start_line = 0, end_line = 0;
+    uint32_t end_col = 0;
+    if (!anvil_worker_treesitter_index_result_capture_at(
+      result->result, kind, i, NULL, NULL, NULL, NULL,
+      &start_line, NULL, &end_line, &end_col, NULL, NULL, NULL, NULL, NULL
+    )) continue;
+    uint32_t effective_end_line = end_line;
+    if (end_col == 1 && effective_end_line > start_line) effective_end_line--;
+    if (effective_end_line < line1 || start_line > line2) continue;
+    matches++;
+    if (emitted < limit) {
+      push_treesitter_capture(L, result->result, kind, i);
+      lua_rawseti(L, -2, (int)++emitted);
+    }
+  }
+  lua_pushinteger(L, (lua_Integer)matches);
+  lua_setfield(L, -2, "total");
+  lua_pushboolean(L, matches > emitted);
+  lua_setfield(L, -2, "truncated");
+  return 1;
+}
+
 static void push_result(lua_State *L, AnvilWorkerResult *result) {
   lua_createtable(L, 0, 8);
   lua_pushinteger(L, (lua_Integer)anvil_worker_result_job_id(result));
@@ -512,6 +546,7 @@ static const luaL_Reg cancel_token_methods[] = {
 static const luaL_Reg treesitter_index_result_methods[] = {
   { "summary", treesitter_index_result_summary },
   { "captures", treesitter_index_result_captures },
+  { "captures_for_lines", treesitter_index_result_captures_for_lines },
   { "__gc", treesitter_index_result_gc },
   { NULL, NULL }
 };

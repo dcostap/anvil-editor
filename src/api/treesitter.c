@@ -1021,7 +1021,7 @@ static int f_parse_markdown(lua_State *L) {
     free(error);
     return 2;
   }
-  AnvilMarkdownTree *tree = anvil_markdown_tree_parse(snapshot, timeout_ms, &error);
+  AnvilMarkdownTree *tree = anvil_markdown_tree_parse(snapshot, timeout_ms, NULL, NULL, &error);
   anvil_ts_snapshot_free(snapshot);
   if (!tree) {
     lua_pushnil(L);

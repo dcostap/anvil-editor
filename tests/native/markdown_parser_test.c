@@ -176,7 +176,7 @@ static int test_composite_parser(void) {
     &error
   );
   CHECK(snapshot != NULL);
-  AnvilMarkdownTree *tree = anvil_markdown_tree_parse(snapshot, 750, &error);
+  AnvilMarkdownTree *tree = anvil_markdown_tree_parse(snapshot, 750, NULL, NULL, &error);
   anvil_ts_snapshot_free(snapshot);
   if (!tree) {
     fprintf(stderr, "composite Markdown parse failed: %s\n", error ? error : "unknown");

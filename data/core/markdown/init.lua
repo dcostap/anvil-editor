@@ -5,6 +5,7 @@ live_render.install()
 
 return {
   parser = require "core.markdown.parser",
+  model = require "core.markdown.model",
   links = require "core.markdown.links",
   anchors = require "core.markdown.anchors",
   images = require "core.markdown.images",

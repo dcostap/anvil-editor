@@ -53,6 +53,21 @@ test.describe("worker_pool_native", function()
     test.equal(pool:status(handle).status, "cancelled")
   end)
 
+  test.test("Markdown jobs honor shared cancel tokens without semantic queries", function()
+    local pool = new_pool("lua-native-markdown-cancel", 1)
+    local token = native_pool.new_cancel_token()
+    local handle = pool:submit({
+      kind = "markdown_parse",
+      text = string.rep("# Heading with **bold** text\n", 30000),
+      cancel_token = token:name(),
+      parse_timeout_ms = 5000,
+    })
+    test.not_nil(handle)
+    token:cancel()
+    test.ok(drain_until(pool, function(message) return message.type == "cancelled" end, 5000))
+    test.equal(pool:status(handle).status, "cancelled")
+  end)
+
   test.test("cancel tokens can be opened by name across Lua states", function()
     local token = native_pool.new_cancel_token()
     local name = token:name()
@@ -98,5 +113,39 @@ test.describe("worker_pool_native", function()
     test.equal(captures[1].capture, "definition.function")
     test.equal(captures.total, summary.outline.capture_count)
     test.ok(captures.next_offset >= 2)
+  end)
+
+  test.test("Markdown job publishes block and inline captures from one composite parse", function()
+    local pool = new_pool("lua-native-markdown-parse", 1)
+    local handle = pool:submit({
+      kind = "markdown_parse",
+      text = "# Heading\n\nFirst *span*.\nSecond **span**.\n",
+      outline_query = "(atx_heading) @heading",
+      usage_query = "[(emphasis) (strong_emphasis)] @span",
+      parse_timeout_ms = 1000,
+      query_timeout_ms = 100,
+      usage_query_timeout_ms = 100,
+      max_captures = 100,
+      usage_max_captures = 100,
+    })
+    test.not_nil(handle)
+    local result
+    test.ok(drain_until(pool, function(message)
+      if message.type == "result" then result = message.result end
+      return message.type == "final"
+    end))
+    test.not_nil(result)
+    local summary = result:summary()
+    test.equal(summary.language, "markdown")
+    test.equal(summary.outline.status, "ready")
+    test.equal(summary.usage.status, "ready")
+    test.equal(summary.outline.capture_count, 1)
+    test.equal(summary.usage.capture_count, 2)
+    local following_line = result:captures_for_lines("outline", 2, 2)
+    test.equal(#following_line, 0)
+    local first_line = result:captures_for_lines("usage", 3, 3)
+    test.equal(#first_line, 1)
+    test.equal(first_line[1].capture, "span")
+    test.equal(first_line.truncated, false)
   end)
 end)

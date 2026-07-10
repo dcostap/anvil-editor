@@ -13,10 +13,13 @@ extern "C" {
 #endif
 
 typedef struct AnvilMarkdownTree AnvilMarkdownTree;
+typedef bool (*AnvilMarkdownCancelCallback)(void *payload);
 
 AnvilMarkdownTree *anvil_markdown_tree_parse(
   AnvilTSSnapshot *snapshot,
   uint32_t timeout_ms,
+  AnvilMarkdownCancelCallback cancel_callback,
+  void *cancel_payload,
   char **error
 );
 void anvil_markdown_tree_free(AnvilMarkdownTree *tree);
