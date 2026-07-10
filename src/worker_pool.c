@@ -1,6 +1,7 @@
 #include "worker_pool.h"
 
 #include "markdown_parser.h"
+#include "markdown_extensions.h"
 #include "treesitter/languages.h"
 #include "treesitter/service.h"
 #include "treesitter/snapshot.h"
@@ -90,7 +91,9 @@ struct AnvilWorkerTreeSitterIndexResult {
   SDL_AtomicInt refcount;
   char *language;
   uint32_t byte_len;
+  uint32_t line_count;
   uint64_t parse_ms;
+  uint64_t total_ms;
   bool incremental;
   uint32_t reused_inline_count;
   AnvilMarkdownTree *markdown_tree;
@@ -318,6 +321,10 @@ uint32_t anvil_worker_treesitter_index_result_byte_len(const AnvilWorkerTreeSitt
   return result ? result->byte_len : 0;
 }
 
+uint32_t anvil_worker_treesitter_index_result_line_count(const AnvilWorkerTreeSitterIndexResult *result) {
+  return result ? result->line_count : 0;
+}
+
 uint32_t anvil_worker_treesitter_index_result_capture_count(const AnvilWorkerTreeSitterIndexResult *result, const char *kind) {
   const AnvilWorkerTreeSitterQueryResult *query = treesitter_query_result_for_kind(result, kind);
   return query ? query->count : 0;
@@ -345,6 +352,10 @@ bool anvil_worker_treesitter_index_result_line_indexed(const AnvilWorkerTreeSitt
 
 uint64_t anvil_worker_treesitter_index_result_parse_ms(const AnvilWorkerTreeSitterIndexResult *result) {
   return result ? result->parse_ms : 0;
+}
+
+uint64_t anvil_worker_treesitter_index_result_total_ms(const AnvilWorkerTreeSitterIndexResult *result) {
+  return result ? result->total_ms : 0;
 }
 
 bool anvil_worker_treesitter_index_result_incremental(const AnvilWorkerTreeSitterIndexResult *result) {
@@ -723,6 +734,20 @@ static bool treesitter_cancel_callback(void *payload) {
   return run && worker_job_or_token_cancelled(run->job, run->cancel_token);
 }
 
+static bool treesitter_deadline_callback(void *payload) {
+  AnvilWorkerTSParseRun *run = (AnvilWorkerTSParseRun *)payload;
+  if (!run) return false;
+  if (worker_job_or_token_cancelled(run->job, run->cancel_token)) {
+    run->cancelled = true;
+    return true;
+  }
+  if (run->timeout_ms > 0 && SDL_GetTicks() - run->started_ticks >= run->timeout_ms) {
+    run->timed_out = true;
+    return true;
+  }
+  return false;
+}
+
 static bool treesitter_parse_progress(TSParseState *parse_state) {
   AnvilWorkerTSParseRun *run = (AnvilWorkerTSParseRun *) parse_state->payload;
   if (!run) return false;
@@ -886,6 +911,116 @@ static bool collect_treesitter_index_capture(const AnvilTSQueryCapture *capture,
   return true;
 }
 
+static bool markdown_exclusion_name(const AnvilWorkerTreeSitterCapture *capture) {
+  if (!capture || !capture->name) return false;
+  return strcmp(capture->name, "block.code.fenced") == 0 ||
+    strcmp(capture->name, "block.code.indented") == 0 ||
+    strcmp(capture->name, "block.frontmatter") == 0 ||
+    strcmp(capture->name, "block.html") == 0 ||
+    strcmp(capture->name, "span.code") == 0 ||
+    strcmp(capture->name, "span.html") == 0 ||
+    strcmp(capture->name, "span.math") == 0;
+}
+
+static int markdown_exclusion_compare(const void *left, const void *right) {
+  const AnvilMarkdownExclusion *a = (const AnvilMarkdownExclusion *)left;
+  const AnvilMarkdownExclusion *b = (const AnvilMarkdownExclusion *)right;
+  if (a->start_byte < b->start_byte) return -1;
+  if (a->start_byte > b->start_byte) return 1;
+  if (a->end_byte < b->end_byte) return -1;
+  if (a->end_byte > b->end_byte) return 1;
+  return 0;
+}
+
+static AnvilMarkdownExclusion *markdown_exclusions_build(
+  const AnvilWorkerTreeSitterIndexResult *result,
+  uint32_t *out_count
+) {
+  *out_count = 0;
+  uint32_t capacity = result->outline.count + result->usage.count;
+  if (capacity == 0) return NULL;
+  AnvilMarkdownExclusion *ranges = (AnvilMarkdownExclusion *)SDL_malloc(sizeof(*ranges) * capacity);
+  if (!ranges) {
+    *out_count = UINT32_MAX;
+    return NULL;
+  }
+  const AnvilWorkerTreeSitterQueryResult *queries[] = { &result->outline, &result->usage };
+  for (uint32_t q = 0; q < 2; q++) {
+    for (uint32_t i = 0; i < queries[q]->count; i++) {
+      const AnvilWorkerTreeSitterCapture *capture = &queries[q]->captures[i];
+      if (!markdown_exclusion_name(capture)) continue;
+      ranges[(*out_count)++] = (AnvilMarkdownExclusion) {
+        .start_byte = capture->start_byte,
+        .end_byte = capture->end_byte,
+      };
+    }
+  }
+  if (*out_count == 0) {
+    SDL_free(ranges);
+    return NULL;
+  }
+  qsort(ranges, *out_count, sizeof(*ranges), markdown_exclusion_compare);
+  uint32_t merged = 0;
+  for (uint32_t i = 0; i < *out_count; i++) {
+    if (merged > 0 && ranges[i].start_byte <= ranges[merged - 1].end_byte) {
+      if (ranges[i].end_byte > ranges[merged - 1].end_byte) {
+        ranges[merged - 1].end_byte = ranges[i].end_byte;
+      }
+    } else {
+      ranges[merged++] = ranges[i];
+    }
+  }
+  *out_count = merged;
+  return ranges;
+}
+
+static TSPoint markdown_snapshot_point(const AnvilTSSnapshot *snapshot, uint32_t byte) {
+  if (byte > snapshot->byte_len) byte = snapshot->byte_len;
+  uint32_t low = 0, high = snapshot->line_count;
+  while (low + 1 < high) {
+    uint32_t mid = low + (high - low) / 2;
+    if (snapshot->line_starts[mid] <= byte) low = mid;
+    else high = mid;
+  }
+  return (TSPoint) { .row = low, .column = byte - snapshot->line_starts[low] };
+}
+
+typedef struct MarkdownExtensionCollector {
+  AnvilWorkerTreeSitterQueryResult *query;
+  const AnvilTSSnapshot *snapshot;
+  uint32_t max_captures;
+  bool limit_reached;
+  bool out_of_memory;
+} MarkdownExtensionCollector;
+
+static bool collect_markdown_extension_capture(
+  const AnvilMarkdownExtensionCapture *capture,
+  void *payload
+) {
+  MarkdownExtensionCollector *collector = (MarkdownExtensionCollector *)payload;
+  if (collector->max_captures > 0 && collector->query->count >= collector->max_captures) {
+    collector->limit_reached = true;
+    return false;
+  }
+  AnvilTSQueryCapture synthetic = {
+    .name = capture->name,
+    .name_len = (uint32_t)strlen(capture->name),
+    .start_byte = capture->start_byte,
+    .end_byte = capture->end_byte,
+    .start_point = markdown_snapshot_point(collector->snapshot, capture->start_byte),
+    .end_point = markdown_snapshot_point(collector->snapshot, capture->end_byte),
+    .match_id = UINT32_MAX,
+    .pattern_index = UINT32_MAX,
+    .capture_index = UINT32_MAX,
+    .order = collector->query->count,
+  };
+  if (!collect_treesitter_index_capture(&synthetic, collector->query)) {
+    collector->out_of_memory = true;
+    return false;
+  }
+  return true;
+}
+
 static bool run_treesitter_index_query(
   AnvilWorkerTreeSitterIndexResult *index_result,
   const AnvilTSLanguage *language,
@@ -940,6 +1075,7 @@ static bool run_treesitter_index_query(
 }
 
 static void run_treesitter_index_text(AnvilWorkerPool *pool, AnvilWorkerJob *job) {
+  uint64_t job_started = SDL_GetTicks();
   if (!job->language || !job->language[0]) {
     SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
     AnvilWorkerResult *result = result_new(job, "error");
@@ -1049,6 +1185,7 @@ static void run_treesitter_index_text(AnvilWorkerPool *pool, AnvilWorkerJob *job
   SDL_SetAtomicInt(&index_result->refcount, 1);
   index_result->language = pool_strdup(language->id);
   index_result->byte_len = snapshot->byte_len;
+  index_result->line_count = snapshot->line_count;
   index_result->parse_ms = parse_ms;
   if (!index_result->language) {
     anvil_worker_treesitter_index_result_free(index_result);
@@ -1074,6 +1211,7 @@ static void run_treesitter_index_text(AnvilWorkerPool *pool, AnvilWorkerJob *job
   }
   build_query_line_index(&index_result->outline);
   build_query_line_index(&index_result->usage);
+  index_result->total_ms = SDL_GetTicks() - job_started;
   ts_tree_delete(tree);
   anvil_worker_cancel_token_release(cancel_token);
   anvil_ts_snapshot_free(snapshot);
@@ -1107,10 +1245,77 @@ static void run_treesitter_index_text(AnvilWorkerPool *pool, AnvilWorkerJob *job
   enqueue_simple_result(pool, job, "final");
 }
 
+static bool markdown_extension_capture_name(const char *name) {
+  return name && (strcmp(name, "span.wiki_link") == 0 || strcmp(name, "span.embed") == 0 ||
+    strcmp(name, "span.highlight") == 0 || strcmp(name, "span.comment") == 0 ||
+    strncmp(name, "marker.wiki_", 12) == 0 || strncmp(name, "marker.embed_", 13) == 0 ||
+    strncmp(name, "marker.highlight_", 17) == 0 || strncmp(name, "marker.comment_", 15) == 0 ||
+    strcmp(name, "content.target") == 0 || strcmp(name, "content.alias") == 0 ||
+    strcmp(name, "content.highlight") == 0 || strcmp(name, "content.comment") == 0);
+}
+
+static bool capture_in_reused_inline_tree(
+  const AnvilMarkdownTree *tree,
+  uint32_t start_byte,
+  uint32_t end_byte
+) {
+  uint32_t low = 0;
+  uint32_t high = anvil_markdown_tree_inline_count(tree);
+  while (low < high) {
+    uint32_t mid = low + (high - low) / 2;
+    TSRange range = anvil_markdown_tree_inline_source_range(tree, mid);
+    if (range.start_byte <= start_byte) low = mid + 1;
+    else high = mid;
+  }
+  if (low == 0) return false;
+  uint32_t index = low - 1;
+  TSRange range = anvil_markdown_tree_inline_source_range(tree, index);
+  return anvil_markdown_tree_inline_was_reused(tree, index) &&
+    range.start_byte <= start_byte && range.end_byte >= end_byte;
+}
+
+static bool copy_reused_inline_captures(
+  AnvilWorkerTreeSitterQueryResult *query_result,
+  const AnvilWorkerTreeSitterQueryResult *previous,
+  const AnvilMarkdownTree *tree,
+  const AnvilTSSnapshot *snapshot,
+  const TSInputEdit *edit,
+  uint32_t max_captures
+) {
+  if (!previous || !edit) return true;
+  for (uint32_t i = 0; i < previous->count; i++) {
+    const AnvilWorkerTreeSitterCapture *capture = &previous->captures[i];
+    if (markdown_extension_capture_name(capture->name)) continue;
+    uint32_t start = markdown_map_old_start_byte(capture->start_byte, edit);
+    uint32_t end = markdown_map_old_end_byte(capture->end_byte, edit);
+    if (!capture_in_reused_inline_tree(tree, start, end)) continue;
+    if (max_captures > 0 && query_result->count >= max_captures) return true;
+    AnvilTSQueryCapture mapped = {
+      .name = capture->name,
+      .name_len = capture->name_len,
+      .start_byte = start,
+      .end_byte = end,
+      .start_point = markdown_snapshot_point(snapshot, start),
+      .end_point = markdown_snapshot_point(snapshot, end),
+      .priority = capture->priority,
+      .match_id = capture->match_id,
+      .pattern_index = capture->pattern_index,
+      .capture_index = capture->capture_index,
+      .order = query_result->count,
+      .node_id = capture->node_id,
+    };
+    if (!collect_treesitter_index_capture(&mapped, query_result)) return false;
+  }
+  return true;
+}
+
 static bool run_markdown_inline_query(
   AnvilWorkerTreeSitterIndexResult *index_result,
+  const AnvilWorkerTreeSitterIndexResult *previous_result,
   const char *source,
   AnvilMarkdownTree *tree,
+  const AnvilTSSnapshot *snapshot,
+  const TSInputEdit *edit,
   AnvilWorkerTSParseRun *run,
   uint32_t match_limit,
   uint32_t max_captures,
@@ -1128,10 +1333,19 @@ static bool run_markdown_inline_query(
   }
 
   uint64_t started = SDL_GetTicks();
-  bool ok = true;
+  bool ok = copy_reused_inline_captures(
+    query_result,
+    previous_result ? &previous_result->usage : NULL,
+    tree,
+    snapshot,
+    edit,
+    max_captures
+  );
   bool exceeded_any = false;
+  if (!ok) query_result->error = pool_strdup("out of memory reusing Markdown inline captures");
   uint32_t inline_count = anvil_markdown_tree_inline_count(tree);
-  for (uint32_t i = 0; i < inline_count; i++) {
+  for (uint32_t i = 0; ok && i < inline_count; i++) {
+    if (anvil_markdown_tree_inline_was_reused(tree, i)) continue;
     if (treesitter_cancel_callback(run)) {
       ok = false;
       query_result->error = pool_strdup("Tree-sitter query cancelled");
@@ -1184,6 +1398,7 @@ static bool run_markdown_inline_query(
 }
 
 static void run_markdown_parse(AnvilWorkerPool *pool, AnvilWorkerJob *job) {
+  uint64_t job_started = SDL_GetTicks();
   char *error = NULL;
   char *owned_text = job->text ? pool_strdup(job->text) : read_file_text(job->path, &error);
   if (!owned_text) {
@@ -1263,6 +1478,7 @@ static void run_markdown_parse(AnvilWorkerPool *pool, AnvilWorkerJob *job) {
   SDL_SetAtomicInt(&index_result->refcount, 1);
   index_result->language = pool_strdup("markdown");
   index_result->byte_len = snapshot->byte_len;
+  index_result->line_count = snapshot->line_count;
   index_result->parse_ms = parse_ms;
   index_result->incremental = anvil_markdown_tree_was_incremental(tree);
   index_result->reused_inline_count = anvil_markdown_tree_reused_inline_count(tree);
@@ -1279,6 +1495,8 @@ static void run_markdown_parse(AnvilWorkerPool *pool, AnvilWorkerJob *job) {
   }
   const AnvilTSLanguage *block_language = anvil_ts_language_by_id("markdown");
   char *fatal_error = NULL;
+  TSInputEdit identity_edit = {0};
+  bool have_identity_edit = anvil_markdown_tree_input_edit(tree, &identity_edit);
   if (job->outline_query) {
     run_treesitter_index_query(
       index_result,
@@ -1297,8 +1515,11 @@ static void run_markdown_parse(AnvilWorkerPool *pool, AnvilWorkerJob *job) {
   if (!fatal_error && job->usage_query) {
     run_markdown_inline_query(
       index_result,
+      job->previous_result,
       job->usage_query,
       tree,
+      snapshot,
+      have_identity_edit ? &identity_edit : NULL,
       &run,
       job->usage_match_limit ? job->usage_match_limit : (job->match_limit ? job->match_limit : 50000),
       job->usage_max_captures ? job->usage_max_captures : (job->max_captures ? job->max_captures : 50000),
@@ -1306,8 +1527,60 @@ static void run_markdown_parse(AnvilWorkerPool *pool, AnvilWorkerJob *job) {
     );
   }
 
-  TSInputEdit identity_edit = {0};
-  bool have_identity_edit = anvil_markdown_tree_input_edit(tree, &identity_edit);
+  uint32_t exclusion_count = 0;
+  AnvilMarkdownExclusion *exclusions = markdown_exclusions_build(index_result, &exclusion_count);
+  MarkdownExtensionCollector extension_collector = {
+    .query = &index_result->usage,
+    .snapshot = snapshot,
+    .max_captures = job->usage_max_captures
+      ? job->usage_max_captures
+      : (job->max_captures ? job->max_captures : 50000),
+  };
+  bool extensions_ok = false;
+  AnvilWorkerTSParseRun extension_run = run;
+  extension_run.started_ticks = SDL_GetTicks();
+  extension_run.timeout_ms = job->usage_query_timeout_ms
+    ? job->usage_query_timeout_ms
+    : (job->query_timeout_ms ? job->query_timeout_ms : 20);
+  extension_run.timed_out = false;
+  extension_run.cancelled = false;
+  bool scan_extensions = job->usage_query &&
+    strcmp(anvil_worker_treesitter_index_result_status(index_result, "usage"), "ready") == 0;
+  if (exclusion_count == UINT32_MAX) {
+    fatal_error = pool_strdup("out of memory storing Markdown extension exclusions");
+  } else if (scan_extensions) {
+    extensions_ok = anvil_markdown_extensions_scan(
+      snapshot,
+      exclusions,
+      exclusion_count,
+      collect_markdown_extension_capture,
+      &extension_collector,
+      treesitter_deadline_callback,
+      &extension_run
+    );
+  } else {
+    extensions_ok = true;
+  }
+  SDL_free(exclusions);
+  if (extension_collector.limit_reached) {
+    SDL_free(index_result->usage.status);
+    index_result->usage.status = pool_strdup("limit");
+    index_result->usage.exceeded_match_limit = true;
+  } else if (extension_collector.out_of_memory) {
+    fatal_error = pool_strdup("out of memory storing Markdown extension captures");
+  } else if (!extensions_ok && extension_run.timed_out) {
+    SDL_free(index_result->usage.status);
+    SDL_free(index_result->usage.error);
+    index_result->usage.status = pool_strdup("timeout");
+    index_result->usage.error = pool_strdup("Markdown extension scan timed out");
+  } else if (!extensions_ok && (extension_run.cancelled ||
+      worker_job_or_token_cancelled(job, cancel_token))) {
+    SDL_free(index_result->usage.status);
+    index_result->usage.status = pool_strdup("cancelled");
+  } else if (!extensions_ok && !fatal_error) {
+    fatal_error = pool_strdup("Markdown extension scan failed");
+  }
+
   reconcile_markdown_query_identities(
     &index_result->outline,
     have_identity_edit && job->previous_result ? &job->previous_result->outline : NULL,
@@ -1320,6 +1593,7 @@ static void run_markdown_parse(AnvilWorkerPool *pool, AnvilWorkerJob *job) {
   );
   build_query_line_index(&index_result->outline);
   build_query_line_index(&index_result->usage);
+  index_result->total_ms = SDL_GetTicks() - job_started;
 
   bool token_cancelled = anvil_worker_cancel_token_cancelled(cancel_token);
   anvil_worker_cancel_token_release(cancel_token);

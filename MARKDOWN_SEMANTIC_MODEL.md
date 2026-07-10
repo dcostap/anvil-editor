@@ -27,9 +27,9 @@ The model exposes capture and node queries; it is not connected to drawing yet. 
 
 ## Conservative behavior
 
-The pinned upstream grammar currently interprets the inner `[Note|Alias]` portion of `[[Note|Alias]]` as a CommonMark shortcut reference. The semantic model detects that exact outer-bracket shape and suppresses the false reference-link node and its link-content captures. Wikilinks therefore remain raw until the dedicated Obsidian syntax layer publishes an exact, confident node.
+The pinned upstream grammar interprets the inner `[Note|Alias]` portion of `[[Note|Alias]]` as a CommonMark shortcut reference. The native Obsidian extension scanner now publishes the exact outer Wikilink/embed node, and the Lua adapter suppresses that conflicting inner reference capture. Complete highlights and comments are also published; escaped/incomplete forms remain raw.
 
-The compatibility corpus similarly verifies raw fallback for incomplete emphasis, unsupported highlight/comment syntax, raw HTML contents, and delimiter-heavy malformed input.
+The compatibility corpus verifies raw fallback for incomplete emphasis and extension delimiters, raw HTML/code suppression, and delimiter-heavy malformed input. Details are recorded in `MARKDOWN_OBSIDIAN_EXTENSIONS.md`.
 
 ## Diagnostics
 
@@ -46,8 +46,8 @@ Transitions and stale/error decisions use `core.log_quiet(...)`.
 
 ## Current boundaries before the Phase 1 exit gate
 
-- The complete Obsidian extension layer (Wikilinks, embeds, highlights, comments, and later callouts) remains pending.
-- Final 100 KiB/1 MiB end-to-end parse plus publication budgets still need a repeatable benchmark covering the composite worker path.
+- The measured 100 KiB incremental native total is 19–20 ms, slightly above the initial 16 ms target; the 1 MiB update remains background/cancellable but takes about 200 ms on the benchmark fixture.
+- Callout syntax composes blockquote semantics later with the block rendering slice rather than the inline extension scanner.
 - First-class filename/syntax/close lifecycle listeners are Phase 2 work; the model already rejects stale metadata at publication.
 
 These are explicit raw-fallback boundaries, not compatibility aliases or hidden use of the old line parser.

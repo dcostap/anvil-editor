@@ -258,9 +258,13 @@ static int treesitter_index_result_summary(lua_State *L) {
   lua_setfield(L, -2, "language");
   lua_pushinteger(L, (lua_Integer)anvil_worker_treesitter_index_result_byte_len(result->result));
   lua_setfield(L, -2, "byte_len");
+  lua_pushinteger(L, (lua_Integer)anvil_worker_treesitter_index_result_line_count(result->result));
+  lua_setfield(L, -2, "line_count");
   lua_createtable(L, 0, 5);
   lua_pushinteger(L, (lua_Integer)anvil_worker_treesitter_index_result_parse_ms(result->result));
   lua_setfield(L, -2, "parse_ms");
+  lua_pushinteger(L, (lua_Integer)anvil_worker_treesitter_index_result_total_ms(result->result));
+  lua_setfield(L, -2, "total_ms");
   lua_pushinteger(L, (lua_Integer)anvil_worker_treesitter_index_result_query_ms(result->result, "outline"));
   lua_setfield(L, -2, "outline_query_ms");
   lua_pushinteger(L, (lua_Integer)anvil_worker_treesitter_index_result_query_ms(result->result, "usage"));

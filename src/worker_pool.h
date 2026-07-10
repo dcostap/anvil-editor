@@ -63,12 +63,14 @@ void anvil_worker_treesitter_index_result_retain(AnvilWorkerTreeSitterIndexResul
 void anvil_worker_treesitter_index_result_free(AnvilWorkerTreeSitterIndexResult *result);
 const char *anvil_worker_treesitter_index_result_language(const AnvilWorkerTreeSitterIndexResult *result);
 uint32_t anvil_worker_treesitter_index_result_byte_len(const AnvilWorkerTreeSitterIndexResult *result);
+uint32_t anvil_worker_treesitter_index_result_line_count(const AnvilWorkerTreeSitterIndexResult *result);
 uint32_t anvil_worker_treesitter_index_result_capture_count(const AnvilWorkerTreeSitterIndexResult *result, const char *kind);
 const char *anvil_worker_treesitter_index_result_status(const AnvilWorkerTreeSitterIndexResult *result, const char *kind);
 const char *anvil_worker_treesitter_index_result_error(const AnvilWorkerTreeSitterIndexResult *result, const char *kind);
 bool anvil_worker_treesitter_index_result_exceeded_match_limit(const AnvilWorkerTreeSitterIndexResult *result, const char *kind);
 bool anvil_worker_treesitter_index_result_line_indexed(const AnvilWorkerTreeSitterIndexResult *result, const char *kind);
 uint64_t anvil_worker_treesitter_index_result_parse_ms(const AnvilWorkerTreeSitterIndexResult *result);
+uint64_t anvil_worker_treesitter_index_result_total_ms(const AnvilWorkerTreeSitterIndexResult *result);
 bool anvil_worker_treesitter_index_result_incremental(const AnvilWorkerTreeSitterIndexResult *result);
 uint32_t anvil_worker_treesitter_index_result_reused_inline_count(const AnvilWorkerTreeSitterIndexResult *result);
 uint64_t anvil_worker_treesitter_index_result_query_ms(const AnvilWorkerTreeSitterIndexResult *result, const char *kind);

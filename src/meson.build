@@ -18,6 +18,7 @@ anvil_sources = [
     'fuzzy.c',
     'worker_pool.c',
     'markdown_parser.c',
+    'markdown_extensions.c',
     'treesitter/languages.c',
     'treesitter/service.c',
     'treesitter/snapshot.c',
@@ -203,6 +204,7 @@ worker_pool_test = executable('worker_pool_test',
         '../tests/native/worker_pool_test.c',
         'worker_pool.c',
         'markdown_parser.c',
+        'markdown_extensions.c',
         'treesitter/languages.c',
         'treesitter/service.c',
         'treesitter/snapshot.c',
@@ -240,6 +242,18 @@ markdown_parser_test = executable('markdown_parser_test',
     c_args: anvil_cargs,
 )
 test('markdown_parser', markdown_parser_test, env: anvil_test_env)
+
+markdown_extensions_test = executable('markdown_extensions_test',
+    [
+        '../tests/native/markdown_extensions_test.c',
+        'markdown_extensions.c',
+        'treesitter/snapshot.c',
+    ],
+    include_directories: anvil_includes,
+    dependencies: [tree_sitter_dep],
+    c_args: anvil_cargs,
+)
+test('markdown_extensions', markdown_extensions_test, env: anvil_test_env)
 
 # load and configure linenoise
 if get_option('repl_history')

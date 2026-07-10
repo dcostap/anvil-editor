@@ -91,9 +91,19 @@ local function build_nodes(captures)
   end)
   for _, capture in ipairs(decorations) do
     local range = capture_range(capture)
+    local family = capture.capture:match("^[^.]+%.(wiki)_")
+      or capture.capture:match("^[^.]+%.(embed)_")
+      or capture.capture:match("^[^.]+%.(highlight)")
+      or capture.capture:match("^[^.]+%.(comment)")
+    if family == "wiki" then family = "wiki_link" end
+    local extension_link_content = capture.capture == "content.target"
+      or capture.capture == "content.alias"
     local best
     for _, node in ipairs(nodes) do
-      if contains(node.source, range) and (not best or
+      local family_match = not family or node.type == family
+      local link_match = not extension_link_content
+        or node.type == "wiki_link" or node.type == "embed"
+      if contains(node.source, range) and family_match and link_match and (not best or
         node.source.end_byte - node.source.start_byte < best.source.end_byte - best.source.start_byte)
       then
         best = node
@@ -132,7 +142,9 @@ function Model:new(doc)
       stale = 0,
       failed = 0,
       bytes_submitted = 0,
+      lines_submitted = 0,
       last_parse_ms = 0,
+      last_total_ms = 0,
       full_publications = 0,
       incremental_publications = 0,
       reused_inline_regions = 0,
@@ -217,6 +229,7 @@ function Model:publish(result, revision, signature, generation, changed_range)
   self.published_metadata = signature
   self.diagnostics.published = self.diagnostics.published + 1
   self.diagnostics.last_parse_ms = summary.metrics and summary.metrics.parse_ms or 0
+  self.diagnostics.last_total_ms = summary.metrics and summary.metrics.total_ms or 0
   if summary.metrics and summary.metrics.incremental then
     self.diagnostics.incremental_publications = self.diagnostics.incremental_publications + 1
     self.diagnostics.reused_inline_regions = self.diagnostics.reused_inline_regions
@@ -262,6 +275,7 @@ function Model:submit(reason)
   self.reason = reason or "parse requested"
   self.diagnostics.requests = self.diagnostics.requests + 1
   self.diagnostics.bytes_submitted = self.diagnostics.bytes_submitted + #text
+  self.diagnostics.lines_submitted = self.diagnostics.lines_submitted + #doc.lines
 
   local pool = worker_pool.system()
   local handle, err = pool:submit({
@@ -273,9 +287,9 @@ function Model:submit(reason)
       text = text,
       outline_query = queries.block,
       usage_query = queries.inline,
-      parse_timeout_ms = 2000,
-      query_timeout_ms = 100,
-      usage_query_timeout_ms = 250,
+      parse_timeout_ms = 5000,
+      query_timeout_ms = 1000,
+      usage_query_timeout_ms = 5000,
       match_limit = 200000,
       max_captures = 200000,
       usage_match_limit = 200000,
@@ -374,11 +388,16 @@ function Model:status_snapshot()
   }
 end
 
-local function is_wikilink_misparsed_as_reference(source, capture)
-  if capture.capture ~= "span.link_reference" or capture.start_byte <= 0 then return false end
-  local before = source:sub(capture.start_byte, capture.start_byte)
-  local after = source:sub(capture.end_byte + 1, capture.end_byte + 1)
-  return before == "[" and after == "]"
+local function extension_parent_kind(name)
+  return name == "span.wiki_link" or name == "span.embed" or name == "span.comment"
+end
+
+local function extension_capture(name)
+  return name == "span.wiki_link" or name == "span.embed" or name == "span.highlight"
+    or name == "span.comment" or name:match("^marker%.wiki_")
+    or name:match("^marker%.embed_") or name:match("^marker%.highlight_")
+    or name:match("^marker%.comment_") or name == "content.target"
+    or name == "content.alias" or name == "content.highlight" or name == "content.comment"
 end
 
 function Model:captures_for_lines(kind, line1, line2, opts)
@@ -386,32 +405,24 @@ function Model:captures_for_lines(kind, line1, line2, opts)
   local result_kind = kind == "inline" and "usage" or "outline"
   local captures = self.result:captures_for_lines(result_kind, line1, line2, opts or {})
   if kind == "inline" then
-    local has_reference = false
+    local parents = {}
     for _, capture in ipairs(captures) do
-      if capture.capture == "span.link_reference" then
-        has_reference = true
-        break
-      end
-    end
-    local false_references = {}
-    if has_reference then
-      local doc = self:doc()
-      local source = doc and source_text(doc) or ""
-      for _, capture in ipairs(captures) do
-        if is_wikilink_misparsed_as_reference(source, capture) then
-          false_references[#false_references + 1] = capture
-        end
-      end
+      if extension_parent_kind(capture.capture) then parents[#parents + 1] = capture end
     end
     local filtered = {}
     for _, capture in ipairs(captures) do
       local suppress = false
-      for _, reference in ipairs(false_references) do
-        if capture.start_byte >= reference.start_byte and capture.end_byte <= reference.end_byte
-          and (capture.capture == "span.link_reference" or capture.capture:match("^content%.link"))
-        then
-          suppress = true
-          break
+      if not extension_capture(capture.capture) then
+        for _, parent in ipairs(parents) do
+          if capture.start_byte >= parent.start_byte and capture.end_byte <= parent.end_byte then
+            if parent.capture == "span.comment"
+              or capture.capture == "span.link_reference"
+              or capture.capture:match("^content%.link")
+            then
+              suppress = true
+              break
+            end
+          end
         end
       end
       if not suppress then filtered[#filtered + 1] = capture end
