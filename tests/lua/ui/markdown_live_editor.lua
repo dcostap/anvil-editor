@@ -5,7 +5,6 @@ local Doc = require "core.doc"
 local DocView = require "core.docview"
 local markdown = require "core.markdown"
 local markdown_model = require "core.markdown.model"
-local markdown_parser = require "core.markdown.parser"
 local linewrapping = require "core.linewrapping"
 local style = require "core.style"
 local worker_pool = require "core.worker_pool"
@@ -187,12 +186,7 @@ test.describe("Markdown Live Editor", function()
     local view, doc = make_view("**bold** *italic* ***both*** ~~strike~~\nplain", "note.md")
     doc:set_selection(2, 1)
     refresh(view)
-    local old_parse_inline = markdown_parser.parse_inline
-    markdown_parser.parse_inline = function() error("ad hoc inline parser must not run") end
-    view:invalidate_line_render("markdown-live", 1, 1)
-    local render_line = view:get_line_render(1)
-    markdown_parser.parse_inline = old_parse_inline
-    render_line = test.not_nil(render_line)
+    local render_line = test.not_nil(view:get_line_render(1))
     local identities = {}
     for _, fragment in ipairs(render_line.fragments or {}) do
       if fragment.semantic_id then identities[fragment.semantic_id] = true end
@@ -502,7 +496,54 @@ test.describe("Markdown Live Editor", function()
     link = test.not_nil(link)
     test.equal(link.color, style.markdown_live_link)
     test.equal(link.overdraw, true)
+    test.not_nil(link.semantic_id)
     test.equal(view:get_col_x_offset(1, #"**[Label](target.md)**" + 1), view:get_font():get_width("Label"))
+  end)
+
+  test.it("renders decoded semantic links inside headings", function()
+    local view, doc = make_view("# [Label](target.md)\nplain", "note.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+    local visible = {}
+    for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
+      if not fragment.hidden then visible[#visible + 1] = fragment.text or "" end
+    end
+    test.equal(table.concat(visible), "Label")
+  end)
+
+  test.it("keeps visible raw source around links overlapping comments", function()
+    local source = "[visible %%hidden%% tail](target.md)\nplain"
+    local view, doc = make_view(source, "note.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+    local visible = {}
+    for _, fragment in ipairs(view:iter_line_render_fragments(view:get_line_render(1))) do
+      if not fragment.hidden then visible[#visible + 1] = fragment.text or "" end
+    end
+    test.equal(table.concat(visible), "[visible  tail](target.md)")
+  end)
+
+  test.it("preserves empty semantic Markdown labels as full targets", function()
+    local source = "[](folder/target.md)\nplain"
+    local view, doc = make_view(source, "note.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+    test.equal(
+      view:get_col_x_offset(1, #"[](folder/target.md)" + 1),
+      view:get_font():get_width("folder/target.md")
+    )
+  end)
+
+  test.it("does not take the image-only path through comments", function()
+    local source = "![Alt %%hidden%% tail](foo.png)\nplain"
+    local view, doc = make_view(source, "note.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+    local visible = {}
+    for _, fragment in ipairs(view:iter_line_render_fragments(view:get_line_render(1))) do
+      if not fragment.hidden then visible[#visible + 1] = fragment.text or "" end
+    end
+    test.equal(table.concat(visible), "![Alt  tail](foo.png)")
   end)
 
   test.it("keeps heading metrics when only part of the line is commented", function()
@@ -556,6 +597,11 @@ test.describe("Markdown Live Editor", function()
 
     refresh(view)
     drawn, drawn_text = 0, {}
+    local image_fragment_result
+    for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
+      if fragment.widget then image_fragment_result = fragment break end
+    end
+    test.not_nil(test.not_nil(image_fragment_result).semantic_id)
     local inactive_height = view:get_visual_row_height(1)
     test.ok(inactive_height > 32)
     doc:set_selection(1, 1)

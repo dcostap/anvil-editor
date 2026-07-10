@@ -40,6 +40,65 @@ test.describe("Markdown link parsing", function()
     test.equal(image[2].resize.height, nil)
   end)
 
+  test.it("adopts exact semantic Wikilink and image ranges", function()
+    local text = "[[Note#Head|Alias]] ![Alt|100x145](image.png)"
+    local wiki = test.not_nil(links.from_semantic_node(text, 1, {
+      id = "wiki:1", type = "wiki_link",
+      source = { line1 = 1, line2 = 1, col1 = 1, col2 = 20 },
+      attributes = {
+        target = { col1 = 3, col2 = 12 },
+        alias = { col1 = 13, col2 = 18 },
+      },
+    }))
+    test.equal(wiki.path, "Note")
+    test.equal(wiki.subtarget.text, "Head")
+    test.equal(wiki.display, "Alias")
+    test.equal(wiki.semantic_id, "wiki:1")
+
+    local image = test.not_nil(links.from_semantic_node(text, 1, {
+      id = "image:1", type = "image",
+      source = { line1 = 1, line2 = 1, col1 = 21, col2 = #text + 1 },
+      attributes = {
+        image_alt = { col1 = 23, col2 = 34 },
+        link_destination = { col1 = 36, col2 = 45 },
+      },
+    }))
+    test.equal(image.path, "image.png")
+    test.equal(image.alt, "Alt")
+    test.equal(image.resize.width, 100)
+    test.equal(image.resize.height, 145)
+  end)
+
+  test.it("distinguishes empty and omitted semantic Wikilink aliases", function()
+    local empty = test.not_nil(links.from_semantic_node("[[Note|]]", 1, {
+      id = "wiki:empty", type = "wiki_link",
+      source = { line1 = 1, line2 = 1, col1 = 1, col2 = 10 },
+      attributes = { target = { col1 = 3, col2 = 7 } },
+    }))
+    local omitted = test.not_nil(links.from_semantic_node("[[Note]]", 1, {
+      id = "wiki:omitted", type = "wiki_link",
+      source = { line1 = 1, line2 = 1, col1 = 1, col2 = 9 },
+      attributes = { target = { col1 = 3, col2 = 7 } },
+    }))
+    test.equal(empty.alias, "")
+    test.equal(omitted.alias, nil)
+  end)
+
+  test.it("preserves an explicitly empty semantic Markdown label", function()
+    local text = "[](folder/target.md)"
+    local target_col = test.not_nil(text:find("folder", 1, true))
+    local link = test.not_nil(links.from_semantic_node(text, 1, {
+      id = "empty:1", type = "link",
+      source = { line1 = 1, line2 = 1, col1 = 1, col2 = #text + 1 },
+      attributes = {
+        link_destination = { col1 = target_col, col2 = #text },
+      },
+    }))
+    test.equal(link.alias, "")
+    test.equal(link.display, "")
+    test.equal(link.path, "folder/target.md")
+  end)
+
   test.it("parses Markdown links and image resize syntax", function()
     local found = links.find_links("[Alias](target.md#Heading) ![Alt|100x145](image.png)", 7)
     test.equal(#found, 2)

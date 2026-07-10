@@ -4,8 +4,8 @@ local config = require "core.config"
 local DocView = require "core.docview"
 local images = require "core.markdown.images"
 local linewrapping = require "core.linewrapping"
+local markdown_links = require "core.markdown.links"
 local markdown_model = require "core.markdown.model"
-local parser = require "core.markdown.parser"
 local style = require "core.style"
 
 local live = {}
@@ -520,15 +520,58 @@ local function image_fragment(view, span, opts)
   }
 end
 
-local function image_only_span(line_text, line)
-  if not line_text:find("![", 1, true) and not line_text:find("[[", 1, true) then return nil end
+local function semantic_link_spans(view, line_text, line)
+  local nodes = semantic_line(view, line)
+  local by_range = {}
+  for _, node in ipairs(nodes or {}) do
+    if node.type == "link" or node.type == "image"
+      or node.type == "wiki_link" or node.type == "embed"
+    then
+      local link = markdown_links.from_semantic_node(line_text, line, node)
+      if link then
+        local key = node.source.col1 .. ":" .. node.source.col2
+        local current = by_range[key]
+        if not current or node.type == "embed" or current.type == "image" then
+          by_range[key] = {
+            type = node.type,
+            line = line,
+            col1 = node.source.col1,
+            col2 = node.source.col2,
+            link = link,
+            text = link.display,
+            semantic_id = node.id,
+          }
+        end
+      end
+    end
+  end
+  local spans = {}
+  for _, span in pairs(by_range) do spans[#spans + 1] = span end
+  table.sort(spans, function(a, b) return a.col1 < b.col1 end)
+  return spans
+end
+
+local function semantic_comment_overlaps(view, line, col1, col2)
+  local nodes = semantic_line(view, line)
+  for _, node in ipairs(nodes or {}) do
+    if node.type == "comment" and line >= node.source.line1 and line <= node.source.line2 then
+      local comment_col1 = line == node.source.line1 and node.source.col1 or 1
+      local comment_col2 = line == node.source.line2 and node.source.col2 or math.huge
+      if comment_col1 < col2 and comment_col2 > col1 then return true end
+    end
+  end
+  return false
+end
+
+local function image_only_span(view, line_text, line)
   local trimmed_start = line_text:find("%S")
   if not trimmed_start then return nil end
   local trimmed_end = line_text:match("^.*%S()")
-  for _, span in ipairs(parser.parse_inline(line_text, line)) do
+  for _, span in ipairs(semantic_link_spans(view, line_text, line)) do
     local link = span.link
     if link and (link.kind == "image" or link.kind == "embed") and is_image_target(link.path)
-    and span.col1 == trimmed_start and span.col2 == trimmed_end then
+    and span.col1 == trimmed_start and span.col2 == trimmed_end
+    and not semantic_comment_overlaps(view, line, span.col1, span.col2) then
       return span
     end
   end
@@ -537,6 +580,7 @@ end
 local function image_only_render_line(view, text, line, span, active)
   local image = image_fragment(view, span, active and { width = 0 } or nil)
   if not image then return nil end
+  image.semantic_id = span.semantic_id
   if active and image.widget then
     local leading_width = span.col1 > 1 and view:get_font():get_width(text:sub(1, span.col1 - 1)) or 0
     image.source_col1 = #text + 1
@@ -562,17 +606,11 @@ local function image_only_render_line(view, text, line, span, active)
   }
 end
 
-local function decorate_link_fragment(view, line, span, fragment)
-  local nodes = semantic_line(view, line)
-  for _, node in ipairs(nodes or {}) do
-    if node.type == "comment" and line >= node.source.line1 and line <= node.source.line2 then
-      local col1 = line == node.source.line1 and node.source.col1 or 1
-      local col2 = line == node.source.line2 and node.source.col2 or math.huge
-      if col1 < span.col2 and col2 > span.col1 then return nil end
-    end
-  end
+local function decorate_link_fragment(view, line, span, fragment, opts)
+  opts = opts or {}
+  if semantic_comment_overlaps(view, line, span.col1, span.col2) then return nil end
   local bold, italic, strike, highlight, code = false, false, false, false, false
-  local ids = {}
+  local ids = { span.semantic_id }
   for _, formatting in ipairs(semantic_formatting_spans(view, "", line) or {}) do
     local content = formatting.content_ranges[1]
     if content.col1 <= span.col1 and content.col2 >= span.col2 then
@@ -586,8 +624,9 @@ local function decorate_link_fragment(view, line, span, fragment)
   end
   local font_type = bold and italic and "strong_emphasis"
     or bold and "strong" or italic and "emphasis" or "normal"
-  fragment.font = code and inline_style_font(view, "code")
-    or font_type ~= "normal" and inline_style_font(view, font_type) or fragment.font
+  fragment.font = code and inline_style_font(view, "code", opts.base_font)
+    or font_type ~= "normal" and inline_style_font(view, font_type, opts.base_font)
+    or opts.base_font or fragment.font
   fragment.overdraw = bold or nil
   fragment.strikethrough = strike or nil
   fragment.background = code and style.markdown_live_inline_code_bg
@@ -596,10 +635,9 @@ local function decorate_link_fragment(view, line, span, fragment)
   return fragment
 end
 
-local function inline_fragments(line_text, line, view, active)
-  local fragments, occupied = {}, {}
-  local link_spans = line_text:find("[", 1, true) and parser.parse_inline(line_text, line) or {}
-  for _, span in ipairs(link_spans) do
+local function semantic_link_fragments(view, line_text, line, active, opts)
+  local fragments = {}
+  for _, span in ipairs(semantic_link_spans(view, line_text, line)) do
     if span.link and not active then
       local fragment = image_fragment(view, span)
       if not fragment then
@@ -611,9 +649,17 @@ local function inline_fragments(line_text, line, view, active)
           color = style.markdown_live_link,
         }
       end
-      fragment = decorate_link_fragment(view, line, span, fragment)
-      if fragment then add_fragment(fragments, occupied, fragment) end
+      fragment = decorate_link_fragment(view, line, span, fragment, opts)
+      if fragment then fragments[#fragments + 1] = fragment end
     end
+  end
+  return fragments
+end
+
+local function inline_fragments(line_text, line, view, active)
+  local fragments, occupied = {}, {}
+  for _, fragment in ipairs(semantic_link_fragments(view, line_text, line, active)) do
+    add_fragment(fragments, occupied, fragment)
   end
   for _, fragment in ipairs(semantic_formatting_fragments(view, line_text, line, active)) do
     add_fragment(fragments, occupied, fragment)
@@ -664,6 +710,13 @@ end
 
 local function heading_content_fragments(view, text, heading, font, active)
   local fragments, occupied = {}, {}
+  for _, fragment in ipairs(semantic_link_fragments(view, text, heading.line, active, {
+    base_font = font,
+  })) do
+    if fragment.source_col1 >= heading.content_col1 and fragment.source_col2 <= heading.content_col2 then
+      add_fragment(fragments, occupied, fragment)
+    end
+  end
   for _, fragment in ipairs(semantic_formatting_fragments(view, text, heading.line, active, {
     col1 = heading.content_col1,
     col2 = heading.content_col2,
@@ -729,11 +782,19 @@ function provider:line_height(view, line)
   local text = (view.doc.lines[line] or ""):gsub("\n$", "")
   local heading = semantic_heading_for_line(view, text, line)
   if heading then
-    return math.max(view:get_line_height(), math.floor(heading_font(view, heading.level):get_height() * config.line_height))
+    local height = math.max(
+      view:get_line_height(),
+      math.floor(heading_font(view, heading.level):get_height() * config.line_height)
+    )
+    local render_line = heading_render_line(view, text, heading, view_active_line(view, line))
+    for _, fragment in ipairs(render_line.fragments or {}) do
+      if fragment.widget and fragment.widget.height then height = math.max(height, fragment.widget.height) end
+    end
+    return height
   end
   if not in_comment and line_in_raw_block(view, line) then return nil end
   local active = view_active_line(view, line)
-  local image_span = image_only_span(text, line)
+  local image_span = image_only_span(view, text, line)
   if image_span then
     local render_line = image_only_render_line(view, text, line, image_span, active)
     local max_height
@@ -766,7 +827,7 @@ function provider:render_line(view, line)
   local active = view_active_line(view, line)
   if heading then return heading_render_line(view, text, heading, active) end
 
-  local image_span = image_only_span(text, line)
+  local image_span = image_only_span(view, text, line)
   if image_span then
     if line_is_wrapped(view, line) then return { raw_passthrough = true } end
     local render_line = image_only_render_line(view, text, line, image_span, active)

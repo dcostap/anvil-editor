@@ -1034,7 +1034,7 @@ Exit gate: direct save-as/rename/syntax changes work automatically; wrapped sour
 
 ### Phase 3: robust core Live Preview vertical slice
 
-**Semantic inline slice completed July 10, 2026.** Pending snapshots now use raw fallback, and emphasis/strong/bold+italic, strikethrough, highlight, inline code, escapes, and multiline comments render directly from composable semantic ranges in ordinary lines and headings. Generic fragments support background/strike/underline decoration. Multiline comment/fence dependencies widen incremental invalidation safely. Details and red-green evidence are recorded in `MARKDOWN_SEMANTIC_INLINE_RENDERING.md`. Link/image target decoding, Source Mode, and construct-sensitive reveal remain.
+**Semantic inline and link slices completed July 10, 2026.** Pending snapshots now use raw fallback, and emphasis/strong/bold+italic, strikethrough, highlight, inline code, escapes, multiline comments, Markdown links/images, Wikilinks, and embeds render directly from composable semantic ranges in ordinary lines and headings. Generic fragments support background/strike/underline decoration. Multiline comment/fence dependencies widen incremental invalidation safely. `live_render.lua` no longer depends on the ad hoc Markdown parser; exact semantic target/alias/dimension ranges feed the normalized link model and compose with enclosing styles. Details and red-green evidence are recorded in `MARKDOWN_SEMANTIC_INLINE_RENDERING.md` and `MARKDOWN_SEMANTIC_LINK_RENDERING.md`. Source Mode, construct-sensitive reveal, and full link presentation/navigation remain.
 
 Implement through the new semantic/render model:
 
