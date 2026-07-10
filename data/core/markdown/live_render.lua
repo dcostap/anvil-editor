@@ -816,7 +816,13 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
   local fragments, seen = {}, {}
   for _, node in ipairs(semantic_line(view, line) or {}) do
     local attributes = node.attributes or {}
-    if node.type == "quote" and not seen.quote then
+    if node.type == "thematic_break" and node.source.line1 == line then
+      fragments[#fragments + 1] = {
+        source_col1 = node.source.col1, source_col2 = node.source.col2,
+        text = "────────────────", color = style.markdown_live_rule,
+        semantic_id = node.id,
+      }
+    elseif node.type == "quote" and not seen.quote then
       local col1, col2 = line_text:find("^%s*>%s*")
       if col1 then
         seen.quote = true

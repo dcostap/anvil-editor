@@ -9,7 +9,8 @@ Live Preview now composes block-level marker fragments with the existing semanti
 - unordered list markers render as `•` while preserving their exact source columns;
 - ordered list markers retain their source numbering;
 - unchecked/checked task markers render as `☐` / `☑` with distinct first-party styles; and
-- blockquote source prefixes render as a compact `│ ` quote marker.
+- blockquote source prefixes render as a compact `│ ` quote marker; and
+- semantic thematic breaks render as a styled horizontal rule glyph run.
 
 Markers are sourced from current Tree-sitter block nodes and attributes, not line-shape heuristics, except that the exact visible quote-prefix extent is measured from the semantically confirmed quote line.
 
@@ -23,4 +24,4 @@ Task fragments use generic rendered-fragment input. Clicking a checkbox selects 
 
 ## Regression evidence
 
-Focused UI tests cover unordered markers, checked/unchecked tasks, quote markers, task pointer activation, resulting source text, active-line raw reveal, fenced language/closing chrome, raw code content, code backgrounds, and fenced-looking text inside comments alongside all existing inline/link/image and generic fragment-routing tests. Thematic rules, callout cards, tables, and properties remain later Phase 6 slices.
+Focused UI tests cover unordered markers, checked/unchecked tasks, quote markers, task pointer activation, resulting source text, active-line raw reveal, fenced language/closing chrome, raw code content, code backgrounds, and fenced-looking text inside comments alongside all existing inline/link/image and generic fragment-routing tests. Callout cards, tables, and properties remain later Phase 6 slices.

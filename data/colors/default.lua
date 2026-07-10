@@ -123,6 +123,7 @@ style.markdown_live_quote_bar = style.accent
 style.markdown_live_list_marker = style.accent
 style.markdown_live_task_checked = style.dim
 style.markdown_live_task_unchecked = style.accent
+style.markdown_live_rule = style.dim
 style.markdown_live_image_background = style.background2
 style.markdown_live_image_loading = style.dim
 style.markdown_live_image_blocked = c(C.warning_stripe)
