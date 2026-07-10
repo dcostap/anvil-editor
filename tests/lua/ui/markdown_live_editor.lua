@@ -894,8 +894,16 @@ test.describe("Markdown Live Editor", function()
     local view, doc = make_view("![Remote](https://example.com/image.png)\nplain", source_path)
     local split = DocView(doc)
     markdown.live_render.refresh_view(split)
-    doc:set_selection(1, 15)
+    doc:set_selection(2, 1)
     refresh(view)
+    local blocked
+    for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
+      if fragment.image_status then blocked = fragment break end
+    end
+    blocked = test.not_nil(blocked)
+    test.equal(blocked.text, "[remote image blocked: Remote]")
+    test.equal(blocked.color, style.markdown_live_image_blocked)
+    doc:set_selection(1, 15)
     local old_active = core.active_view
     core.active_view = view
     local ok, err = pcall(function()
@@ -980,14 +988,24 @@ test.describe("Markdown Live Editor", function()
       )
       doc:set_selection(3, 1)
       refresh(view)
-      view:get_line_render(1)
+      local loading_line = view:get_line_render(1)
       view:get_line_render(2)
+      local loading_fragment
+      for _, fragment in ipairs(loading_line.fragments or {}) do
+        if fragment.image_status then loading_fragment = fragment break end
+      end
+      test.equal(test.not_nil(loading_fragment).text, "[loading image: A]")
       local before = view:get_render_cache_diagnostics().line_invalidations
       local completion = test.not_nil(entry.subscribers[view])
       entry.status, entry.errmsg = "error", "not found"
       completion(entry)
       local after = view:get_render_cache_diagnostics().line_invalidations
       test.equal(after - before, 2)
+      local error_fragment
+      for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
+        if fragment.image_status then error_fragment = fragment break end
+      end
+      test.equal(test.not_nil(error_fragment).text, "[image unavailable: A]")
     end)
     markdown.images.get_asset = old_get_asset
     if not ok then error(err, 0) end

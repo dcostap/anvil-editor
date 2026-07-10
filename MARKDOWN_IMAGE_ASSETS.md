@@ -16,7 +16,7 @@ The service bounds retained assets to 256 least-recently-used entries when they 
 
 Entries carry a link-index retry generation and local file metadata. Missing/error assets retry after relevant Project index generations; newly appearing files naturally move from a context-missing key to their resolved absolute-file key. Changed local files are decoded again. Concurrent remote requests for the same context share one download.
 
-Editors subscribe weakly to shared entries. Async completion notifies every attached consumer, and each Editor invalidates every source line using that asset. Metadata changes and detach/release unsubscribe deterministically.
+Editors subscribe weakly to shared entries. Async completion notifies every attached consumer, and each Editor invalidates every source line using that asset. Metadata changes and detach/release unsubscribe deterministically. Non-ready references render explicit, alt-aware `loading image`, `remote image blocked`, or `image unavailable` states with distinct first-party style keys instead of a single ambiguous placeholder.
 
 Remote loading remains disabled by default. `markdown-live-preview:load-remote-image` grants the current Editor a one-asset permission for the remote image at its caret. `markdown-live-preview:trust-project-remote-images` and `markdown-live-preview:untrust-project-remote-images` manage an optional normalized-Project-root trust policy and invalidate every attached Project view through the shared index generation. The global first-party switch remains available for users who deliberately want all remote images. One-shot permissions are view-local and do not silently promote Project trust.
 

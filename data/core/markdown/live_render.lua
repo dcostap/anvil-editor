@@ -623,11 +623,20 @@ local function image_fragment(view, span, opts)
     }
   end
 
+  local label = link.alias or link.alt
+  if not label or label == "" then label = link.path or link.raw_target or "" end
+  local status_text, color = "image unavailable", style.markdown_live_image_error
+  if entry.status == "loading" then
+    status_text, color = "loading image", style.markdown_live_image_loading
+  elseif entry.status == "remote-disabled" then
+    status_text, color = "remote image blocked", style.markdown_live_image_blocked
+  end
   return {
     source_col1 = span.col1,
     source_col2 = span.col2,
-    text = "[image: " .. (link.path or link.raw_target or "") .. "]",
-    color = style.markdown_live_unresolved_link,
+    text = "[" .. status_text .. ": " .. label .. "]",
+    color = color,
+    image_status = entry.status,
   }
 end
 
@@ -748,7 +757,9 @@ local function decorate_link_fragment(view, line, span, fragment, opts)
     if button ~= "left" or not keymap.modkeys[modifier] then return false end
     return live.open_link(owner, { link = self.link, resolution = self.link_resolution })
   end
-  fragment.color = resolution_colors[resolution.status] or fragment.color
+  if not fragment.image_status then
+    fragment.color = resolution_colors[resolution.status] or fragment.color
+  end
   local bold, italic, strike, highlight, code = false, false, false, false, false
   local ids = { span.semantic_id }
   for _, formatting in ipairs(semantic_formatting_spans(view, "", line) or {}) do
