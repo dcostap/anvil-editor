@@ -99,6 +99,24 @@ test.describe("Markdown link parsing", function()
     test.equal(link.path, "folder/target.md")
   end)
 
+  test.it("treats a numeric external image label as width rather than alt text", function()
+    local found = test.not_nil(links.find_links("![250](image.png)", 1)[1])
+    test.equal(found.kind, "image")
+    test.equal(found.alt, nil)
+    test.equal(found.resize.width, 250)
+
+    local semantic = test.not_nil(links.from_semantic_node("![250](image.png)", 1, {
+      id = "image-width", type = "image",
+      source = { line1 = 1, col1 = 1, line2 = 1, col2 = 18 },
+      attributes = {
+        image_alt = { col1 = 3, col2 = 6 },
+        link_destination = { col1 = 8, col2 = 17 },
+      },
+    }))
+    test.equal(semantic.alt, nil)
+    test.equal(semantic.resize.width, 250)
+  end)
+
   test.it("parses Markdown links and image resize syntax", function()
     local found = links.find_links("[Alias](target.md#Heading) ![Alt|100x145](image.png)", 7)
     test.equal(#found, 2)

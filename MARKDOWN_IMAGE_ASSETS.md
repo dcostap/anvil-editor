@@ -22,7 +22,7 @@ Remote loading remains disabled by default. `markdown-live-preview:load-remote-i
 
 ## Dimensions
 
-Decoded image identity is independent from reference dimensions. Each fragment computes its own display size. Width-only sizing preserves aspect ratio, and `WIDTHxHEIGHT` is now an aspect-preserving bounding box rather than a distortion request, matching the owner decision.
+Decoded image identity is independent from reference dimensions. Each fragment computes its own display size. Wikilink `|WIDTH` / `|WIDTHxHEIGHT`, external `![WIDTH](url)`, and external `![alt|WIDTHxHEIGHT](url)` forms are normalized semantically. A wholly numeric external label is size syntax and does not become alt text; the `alt|size` form preserves explicit alt text. Width-only sizing preserves aspect ratio, and `WIDTHxHEIGHT` is an aspect-preserving bounding box rather than a distortion request, matching the owner decision.
 
 ## Regression evidence
 

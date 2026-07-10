@@ -1069,7 +1069,7 @@ Exit gate: links work after cold startup, unsaved edits, create/delete/rename, m
 
 ### Phase 5: images and attachment workflow
 
-**Context-aware asset-service and remote-policy slices completed July 10, 2026.** Local images now share bounded decoded assets by resolved path while missing references retain source/Project context; remote request identity includes policy/cache context; subscribers receive deterministic async invalidation; failures retry on index generations; and width×height dimensions are aspect-preserving bounding boxes. Remote images remain disabled by default, with explicit view-local one-shot loading and optional shared Project trust/revocation commands. The contract and regression evidence are recorded in `MARKDOWN_IMAGE_ASSETS.md`.
+**Context-aware asset-service and remote-policy slices completed July 10, 2026.** Local images now share bounded decoded assets by resolved path while missing references retain source/Project context; remote request identity includes policy/cache context; subscribers receive deterministic async invalidation; failures retry on index generations; external numeric-label and alt-plus-size forms are normalized with explicit alt semantics; and width×height dimensions are aspect-preserving bounding boxes. Remote images remain disabled by default, with explicit view-local one-shot loading and optional shared Project trust/revocation commands. The contract and regression evidence are recorded in `MARKDOWN_IMAGE_ASSETS.md`.
 
 - Replace image cache with context-aware retryable asset service.
 - Render local/remote-policy Markdown images and Wikilink image embeds.

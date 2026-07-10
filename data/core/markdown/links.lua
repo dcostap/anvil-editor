@@ -163,12 +163,17 @@ function links.parse_markdown_link_at(text, start_col, source_line)
   local alias = label
   local resize
   if is_image then
-    local plain_alt, suffix = split_once(label, "|")
-    if suffix then
-      local parsed_resize = links.parse_resize(trim(suffix))
-      if parsed_resize then
-        alias = plain_alt
-        resize = parsed_resize
+    resize = links.parse_resize(trim(label))
+    if resize then
+      alias = nil
+    else
+      local plain_alt, suffix = split_once(label, "|")
+      if suffix then
+        local parsed_resize = links.parse_resize(trim(suffix))
+        if parsed_resize then
+          alias = plain_alt
+          resize = parsed_resize
+        end
       end
     end
   end
@@ -223,10 +228,15 @@ function links.from_semantic_node(text, source_line, node)
       raw_target = raw_target:sub(2, -2)
     end
     if kind == "image" and alias then
-      local plain_alt, suffix = split_once(alias, "|")
-      if suffix then
-        resize = links.parse_resize(trim(suffix))
-        if resize then alias = plain_alt end
+      resize = links.parse_resize(trim(alias))
+      if resize then
+        alias = nil
+      else
+        local plain_alt, suffix = split_once(alias, "|")
+        if suffix then
+          resize = links.parse_resize(trim(suffix))
+          if resize then alias = plain_alt end
+        end
       end
     end
   else
