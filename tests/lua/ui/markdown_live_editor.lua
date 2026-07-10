@@ -915,6 +915,50 @@ test.describe("Markdown Live Editor", function()
     test.equal(has_bullet, false)
   end)
 
+  test.it("presents semantic callout headers, bodies, and unknown-type fallbacks", function()
+    local view, doc = make_view("> [!note]+ Custom title\n> body [[Target]]\n\n> [!mystery]\n> fallback\n\nplain", "callouts.md")
+    doc:set_selection(7, 1)
+    refresh(view)
+    local header = test.not_nil(view:get_line_render(1))
+    local callout_fragment
+    for _, fragment in ipairs(header.fragments) do
+      if fragment.callout_type then callout_fragment = fragment break end
+    end
+    callout_fragment = test.not_nil(callout_fragment)
+    test.equal(callout_fragment.text, "◆ ▾ ")
+    test.equal(callout_fragment.callout_type, "note")
+    test.equal(callout_fragment.callout_known_type, true)
+
+    local body = test.not_nil(view:get_line_render(2))
+    local has_bar, has_link = false, false
+    for _, fragment in ipairs(body.fragments) do
+      has_bar = has_bar or fragment.text == "│ "
+      has_link = has_link or fragment.link ~= nil
+    end
+    test.equal(has_bar, true)
+    test.equal(has_link, true)
+
+    local unknown = test.not_nil(view:get_line_render(4))
+    local unknown_fragment
+    for _, fragment in ipairs(unknown.fragments) do
+      if fragment.callout_type then unknown_fragment = fragment break end
+    end
+    unknown_fragment = test.not_nil(unknown_fragment)
+    test.equal(unknown_fragment.text, "◆ Mystery")
+    test.equal(unknown_fragment.callout_known_type, false)
+
+    local markdown_decoration
+    for _, entry in ipairs(view:decoration_provider_entries()) do
+      if entry.id == "markdown-live" then markdown_decoration = entry.provider break end
+    end
+    markdown_decoration = test.not_nil(markdown_decoration)
+    test.equal(markdown_decoration:line_background(view, 2), style.markdown_live_callout_background)
+    test.equal(markdown_decoration:line_background(view, 7), nil)
+
+    doc:set_selection(1, 5)
+    test.equal(view:get_line_render(1), nil)
+  end)
+
   test.it("presents semantic thematic breaks and reveals their source when active", function()
     local view, doc = make_view("before\n\n---\n\nafter", "rule.md")
     doc:set_selection(5, 1)

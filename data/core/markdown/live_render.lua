@@ -809,11 +809,55 @@ local function semantic_link_fragments(view, line_text, line, reveal_units, opts
   return fragments
 end
 
+local CALLOUT_TYPES = {
+  abstract = true, attention = true, bug = true, caution = true, check = true,
+  danger = true, done = true, error = true, example = true, fail = true,
+  failure = true, faq = true, help = true, hint = true, info = true,
+  missing = true, note = true, question = true, quote = true, success = true,
+  summary = true, tip = true, todo = true, tldr = true, warning = true,
+}
+
+local function parse_callout_header(text)
+  local col1, col2, kind, fold, spacing = text:find("^%s*>%s*%[!([%w_-]+)%]([+-]?)(%s*)")
+  if not col1 then return nil end
+  kind = kind:lower()
+  local title = text:sub(col2 + 1)
+  local display_type = kind:gsub("[_-]+", " "):gsub("^%l", string.upper)
+  return {
+    col1 = col1,
+    col2 = col2 + 1,
+    type = kind,
+    known_type = CALLOUT_TYPES[kind] == true,
+    fold = fold ~= "" and fold or nil,
+    title = title,
+    display_type = display_type,
+    spacing = spacing,
+  }
+end
+
+local function callout_for_line(view, line)
+  for _, node in ipairs(semantic_line(view, line) or {}) do
+    if node.type == "quote" then
+      local line2 = node.source.line2
+      if node.source.col2 == 1 and line2 > node.source.line1 then line2 = line2 - 1 end
+      if line >= node.source.line1 and line <= line2 then
+        local text = (view.doc.lines[node.source.line1] or ""):gsub("\n$", "")
+        local header = parse_callout_header(text)
+        if header then
+          header.line1, header.line2, header.semantic_id = node.source.line1, line2, node.id
+          return header
+        end
+      end
+    end
+  end
+end
+
 local function semantic_block_fragments(view, line_text, line, reveal_units)
   for _, unit in ipairs(reveal_units or {}) do
     if unit.whole_line then return {} end
   end
   local fragments, seen = {}, {}
+  local callout = callout_for_line(view, line)
   for _, node in ipairs(semantic_line(view, line) or {}) do
     local attributes = node.attributes or {}
     if node.type == "thematic_break" and node.source.line1 == line then
@@ -826,11 +870,23 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
       local col1, col2 = line_text:find("^%s*>%s*")
       if col1 then
         seen.quote = true
-        fragments[#fragments + 1] = {
-          source_col1 = col1, source_col2 = col2 + 1,
-          text = "│ ", color = style.markdown_live_quote_bar,
-          semantic_id = node.id,
-        }
+        if callout and line == callout.line1 then
+          local fold = callout.fold == "+" and "▾ " or callout.fold == "-" and "▸ " or ""
+          fragments[#fragments + 1] = {
+            source_col1 = callout.col1, source_col2 = callout.col2,
+            text = "◆ " .. fold .. (callout.title == "" and callout.display_type or ""),
+            color = style.markdown_live_callout_icon,
+            semantic_id = node.id .. ":callout-header",
+            callout_type = callout.type,
+            callout_known_type = callout.known_type,
+          }
+        else
+          fragments[#fragments + 1] = {
+            source_col1 = col1, source_col2 = col2 + 1,
+            text = "│ ", color = style.markdown_live_quote_bar,
+            semantic_id = node.id,
+          }
+        end
       end
     elseif node.type == "list_item" then
       local marker = attributes.list
@@ -966,7 +1022,8 @@ end
 
 function decoration_provider:line_background(view, line)
   if view_in_source_mode(view) or line_in_semantic_comment(view, line) then return nil end
-  return fenced_code_for_line(view, line) and style.markdown_live_code_background or nil
+  if fenced_code_for_line(view, line) then return style.markdown_live_code_background end
+  return callout_for_line(view, line) and style.markdown_live_callout_background or nil
 end
 
 function provider:line_generation(view, line)
