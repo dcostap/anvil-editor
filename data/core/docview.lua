@@ -775,6 +775,7 @@ function DocView:new(doc)
   self.scroll_listeners = {}
   self.fold_listeners = {}
   self.edit_guards = {}
+  self.owned_features = {}
   register_fold_view(self)
   linewrapping.register_docview(self)
   self:set_wrapping_enabled(config.plugins.linewrapping.enable_by_default)
@@ -827,6 +828,44 @@ function DocView.from_state(state)
 end
 
 
+---Register lifecycle state owned by this Editor view.
+---The feature's on_release(feature, view, reason) callback runs exactly once.
+function DocView:add_owned_feature(id, feature)
+  assert(type(id) == "string" and id ~= "", "owned feature id must be a non-empty string")
+  assert(type(feature) == "table", "owned feature must be a table")
+  self.owned_features = self.owned_features or {}
+  local previous = self.owned_features[id]
+  if previous == feature then return false end
+  if previous then self:remove_owned_feature(id, "replaced") end
+  self.owned_features[id] = feature
+  return true
+end
+
+function DocView:remove_owned_feature(id, reason)
+  local features = self.owned_features
+  local feature = features and features[id]
+  if not feature then return false end
+  features[id] = nil
+  if feature.on_release then
+    local ok, err = pcall(feature.on_release, feature, self, reason or "removed")
+    if not ok then
+      core.log_quiet(
+        "DocView owned feature %s release failed for %s: %s",
+        tostring(id), self.doc:get_name(), tostring(err)
+      )
+    end
+  end
+  return true
+end
+
+function DocView:release_owned_features(reason)
+  local ids = {}
+  for id in pairs(self.owned_features or {}) do ids[#ids + 1] = id end
+  table.sort(ids)
+  for _, id in ipairs(ids) do self:remove_owned_feature(id, reason or "released") end
+  return #ids
+end
+
 ---Attempt to close the view, prompting to save if document is dirty.
 ---Shows "Unsaved Changes" dialog if this is the last view of a dirty document.
 ---@param do_close function Callback to execute when close is confirmed
@@ -835,6 +874,7 @@ function DocView:try_close(do_close)
     self:clear_fold_regions("view-close")
     unregister_fold_view(self)
     linewrapping.unregister_docview(self)
+    self:release_owned_features("view-close")
     do_close()
   end
   if self.doc:is_dirty()

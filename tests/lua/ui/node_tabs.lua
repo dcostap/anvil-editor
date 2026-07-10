@@ -128,6 +128,21 @@ test.describe("node tabs", function()
     test.equal(views[1], keep)
   end)
 
+  test.it("close_all_views releases features owned by removed tabs", function()
+    local root = make_leaf(1200, { "keep" })
+    local keep = root.views[1]
+    local removed = named_view("removed")
+    local released = false
+    function removed:release_owned_features(reason)
+      test.equal(reason, "close-all-views")
+      released = true
+    end
+    root:add_view(removed)
+
+    root:close_all_views(keep)
+    test.equal(released, true)
+  end)
+
   test.it("close_all_views does not filter utility or non-file tabs", function()
     local root = make_leaf(1200, { "file" })
     local keep = root.views[1]

@@ -40,29 +40,24 @@ end
 -- These characterization tests intentionally describe prototype limitations.
 -- Later milestones replace each assertion with the required public behavior.
 test.describe("Markdown Live Preview prototype baseline", function()
-  test.it("requires manual refresh after direct filename and syntax lifecycle changes", function()
+  test.it("automatically follows direct filename and syntax lifecycle changes", function()
     with_live_preview(function()
       local view, doc = make_view("# Title", "note.md")
+      local markdown_syntax = doc.syntax
       markdown.live_render.refresh_view(view)
       test.equal(view.__markdown_live_attached, true)
 
       doc:set_filename("note.txt", "note.txt")
-      test.equal(view.__markdown_live_attached, true)
-      markdown.live_render.refresh_view(view)
       test.equal(view.__markdown_live_attached, nil)
-
       doc:set_filename("note.md", "note.md")
-      test.equal(view.__markdown_live_attached, nil)
-      markdown.live_render.refresh_view(view)
       test.equal(view.__markdown_live_attached, true)
 
       local syntax_view, syntax_doc = make_view("# Title", "note.txt")
-      syntax_doc.syntax = { name = "Markdown" }
       markdown.live_render.refresh_view(syntax_view)
+      test.equal(syntax_view.__markdown_live_attached, nil)
+      syntax_doc:set_syntax(markdown_syntax, "baseline-test")
       test.equal(syntax_view.__markdown_live_attached, true)
       syntax_doc:reset_syntax()
-      test.equal(syntax_view.__markdown_live_attached, true)
-      markdown.live_render.refresh_view(syntax_view)
       test.equal(syntax_view.__markdown_live_attached, nil)
     end)
   end)

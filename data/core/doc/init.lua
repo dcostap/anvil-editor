@@ -84,7 +84,35 @@ function Doc:get_utf8_line(idx)
 end
 
 
-function Doc:reset_syntax()
+local function metadata_snapshot(doc)
+  return {
+    filename = doc.filename,
+    abs_filename = doc.abs_filename,
+    syntax = doc.syntax,
+  }
+end
+
+function Doc:set_syntax(syn, reason, opts)
+  opts = opts or {}
+  if self.syntax == syn then return false end
+  local old = metadata_snapshot(self)
+  self.syntax = syn
+  self.highlighter:soft_reset()
+  if opts.notify ~= false then
+    self:notify_metadata_listeners({
+      kind = "metadata",
+      reason = reason or "set-syntax",
+      filename_changed = false,
+      syntax_changed = true,
+      old = old,
+      new = metadata_snapshot(self),
+    })
+  end
+  return true
+end
+
+function Doc:reset_syntax(opts)
+  opts = opts or {}
   local header = self:get_text(1, 1, self:position_offset(1, 1, 128))
   local path = self.abs_filename
   if not path and self.filename then
@@ -92,17 +120,26 @@ function Doc:reset_syntax()
   end
   if path then path = common.normalize_path(path) end
   local syn = syntax.get(path, header)
-  if self.syntax ~= syn then
-    self.syntax = syn
-    self.highlighter:soft_reset()
-  end
+  return self:set_syntax(syn, opts.reason or "reset-syntax", opts)
 end
 
 
 function Doc:set_filename(filename, abs_filename)
+  local old = metadata_snapshot(self)
   self.filename = filename
   self.abs_filename = abs_filename
-  self:reset_syntax()
+  local syntax_changed = self:reset_syntax({ notify = false })
+  local filename_changed = old.filename ~= self.filename or old.abs_filename ~= self.abs_filename
+  if filename_changed or syntax_changed then
+    self:notify_metadata_listeners({
+      kind = "metadata",
+      reason = "set-filename",
+      filename_changed = filename_changed,
+      syntax_changed = syntax_changed,
+      old = old,
+      new = metadata_snapshot(self),
+    })
+  end
 end
 
 
@@ -2093,6 +2130,40 @@ end
 
 local text_transaction_handlers = {}
 
+local function metadata_listeners(doc)
+  doc.metadata_listeners = doc.metadata_listeners or {}
+  return doc.metadata_listeners
+end
+
+---Register a per-document filename/syntax/lifecycle observer.
+---@param id string
+---@param listener function
+function Doc:add_metadata_listener(id, listener)
+  assert(type(id) == "string" and id ~= "", "metadata listener id must be a non-empty string")
+  assert(type(listener) == "function", "metadata listener must be a function")
+  metadata_listeners(self)[id] = listener
+end
+
+function Doc:remove_metadata_listener(id)
+  if not self.metadata_listeners or not self.metadata_listeners[id] then return false end
+  self.metadata_listeners[id] = nil
+  return true
+end
+
+function Doc:notify_metadata_listeners(event)
+  local listeners = self.metadata_listeners
+  if not listeners then return end
+  for id, listener in pairs(listeners) do
+    local ok, err = pcall(listener, self, event or {})
+    if not ok and core and core.log_quiet then
+      core.log_quiet(
+        "Doc metadata listener %s failed for %s: %s",
+        tostring(id), self:get_name(), tostring(err)
+      )
+    end
+  end
+end
+
 local function text_change_listeners(doc)
   doc.text_change_listeners = doc.text_change_listeners or {}
   return doc.text_change_listeners
@@ -2159,6 +2230,12 @@ end
 
 -- For plugins to get notified when a document is closed
 function Doc:on_close()
+  self:notify_metadata_listeners({
+    kind = "close",
+    reason = "doc-close",
+    old = metadata_snapshot(self),
+  })
+  self.metadata_listeners = nil
   linewrapping.notify_doc_close(self)
   -- this shouldn't be needed but we do it to better hint the gc to collect
   self.highlighter.doc = nil

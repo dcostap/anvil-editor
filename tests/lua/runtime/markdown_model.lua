@@ -213,6 +213,38 @@ test.describe("Markdown semantic model", function()
     markdown_model.close(doc, "test")
   end)
 
+  test.it("automatically detaches and republishes across metadata eligibility changes", function()
+    local doc = make_doc("# Heading\n", "note.md")
+    local instance = markdown_model.get(doc)
+    test.ok(wait_status(instance, "ready"), instance.reason)
+
+    doc:set_filename("note.txt", "note.txt")
+    test.equal(instance.status, "detached")
+    test.equal(instance.result, nil)
+
+    doc:set_filename("note.md", "note.md")
+    test.equal(instance.status, "pending")
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    test.equal(instance.published_revision, doc.text_revision)
+    markdown_model.close(doc, "test")
+  end)
+
+  test.it("coalesces a queued text parse into an immediate metadata parse", function()
+    local doc = make_doc("# Heading\n", "note.md")
+    local instance = markdown_model.get(doc)
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    local requests = instance.diagnostics.requests
+
+    doc:insert(1, #doc.lines[1], " changed")
+    doc:set_filename("moved.md", "moved.md")
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    coroutine.yield(0.03)
+    local pool = worker_pool.current_system()
+    if pool then pool:drain({ max_ms = 5, max_messages = 64 }) end
+    test.equal(instance.diagnostics.requests, requests + 1)
+    markdown_model.close(doc, "test")
+  end)
+
   test.it("does not allocate models for non-Markdown Documents", function()
     local doc = make_doc("# Plain text", "note.txt")
     test.equal(markdown_model.get(doc), nil)

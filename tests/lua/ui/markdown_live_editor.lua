@@ -588,12 +588,51 @@ test.describe("Markdown Live Editor", function()
     config.markdown_live_render_images = old
   end)
 
-  test.it("detaches when a Markdown document is renamed to non-Markdown", function()
+  test.it("owns lifecycle independently for split views of one Document", function()
+    local first, doc = make_view("# Title", "note.md")
+    local second = DocView(doc)
+    second.position.x, second.position.y = 0, 0
+    second.size.x, second.size.y = 500, 200
+    markdown.live_render.refresh_view(first)
+    markdown.live_render.refresh_view(second)
+    test.equal(first.__markdown_live_attached, true)
+    test.equal(second.__markdown_live_attached, true)
+
+    local closed = false
+    first:try_close(function() closed = true end)
+    test.equal(closed, true)
+    test.equal(first.__markdown_live_owner, nil)
+    test.equal(first.__markdown_live_attached, nil)
+    test.not_nil(second.__markdown_live_owner)
+
+    doc:set_filename("note.txt", "note.txt")
+    test.equal(first.__markdown_live_attached, nil)
+    test.equal(second.__markdown_live_attached, nil)
+  end)
+
+  test.it("releases owned lifecycle state when its Document closes", function()
+    local view, doc = make_view("# Title", "note.md")
+    markdown.live_render.refresh_view(view)
+    test.not_nil(view.__markdown_live_owner)
+    doc:on_close()
+    test.equal(view.__markdown_live_owner, nil)
+    test.equal(view.__markdown_live_attached, nil)
+  end)
+
+  test.it("automatically follows direct Document filename and syntax changes", function()
     local view, doc = make_view("# Title", "note.md")
     markdown.live_render.refresh_view(view)
     test.equal(view.__markdown_live_attached, true)
+
     doc:set_filename("note.txt", "note.txt")
-    markdown.live_render.refresh_view(view)
     test.equal(view.__markdown_live_attached, nil)
+
+    doc:set_filename("note.md", "note.md")
+    test.equal(view.__markdown_live_attached, true)
+
+    view.__markdown_live_image_cache = { ["image.png"] = { path = "old/image.png" } }
+    doc:set_filename("moved/note.md", "moved/note.md")
+    test.equal(view.__markdown_live_attached, true)
+    test.equal(view.__markdown_live_image_cache, nil)
   end)
 end)

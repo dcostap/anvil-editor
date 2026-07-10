@@ -149,7 +149,10 @@ function M.blank_main_editor(focus)
   local node = main_panel()
   if not node then return nil end
   local old = M.ensure_main_editor()
-  if old then capture_editor_state(old) end
+  if old then
+    capture_editor_state(old)
+    if old.release_owned_features then old:release_owned_features("main-editor-replace") end
+  end
   local idx = view_index(node, old) or 1
   local blank = make_blank_editor_view()
   node.views[idx] = blank
@@ -208,6 +211,9 @@ function M.open_doc(doc, opts)
   if not opts.replace_dirty_singleton and promote_dirty_singleton_if_needed(node, editor) then
     insert_idx = old_idx + 1
   else
+    if editor and editor.release_owned_features then
+      editor:release_owned_features("main-editor-replace")
+    end
     remove_view_raw(node, editor)
   end
 

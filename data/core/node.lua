@@ -190,6 +190,7 @@ end
 ---@param root core.node The root node of the tree
 ---@param view core.view View to remove
 function Node:remove_view(root, view)
+  if view and view.release_owned_features then view:release_owned_features("view-remove") end
   if self.tab_bar and self.tab_bar.invalidate_layout_cache then self.tab_bar:invalidate_layout_cache() end
   if #self.views > 1 then
     local idx = self:get_view_idx(view)
@@ -816,6 +817,7 @@ function Node:close_all_views(keep_view)
     while i <= #self.views do
       local view = self.views[i]
       if view ~= keep_view then
+        if view.release_owned_features then view:release_owned_features("close-all-views") end
         table.remove(self.views, i)
         if view == node_active_view then
           lost_active_view = true
@@ -852,6 +854,7 @@ function Node:close_all_docviews(keep_active)
     while i <= #self.views do
       local view = self.views[i]
       if (view.context == "workspace" or view.context == "session") and (not keep_active or view ~= self.active_view) then
+        if view.release_owned_features then view:release_owned_features("close-all-docviews") end
         table.remove(self.views, i)
         if view == node_active_view then
           lost_active_view = true

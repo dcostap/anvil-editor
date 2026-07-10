@@ -399,6 +399,7 @@ function M.remove_view(view, focus_main)
   local side = M.ensure_side_node()
   if not side or not view then return false end
 
+  if view.release_owned_features then view:release_owned_features("side-view-remove") end
   view.visible = false
   if view.on_mouse_left then view:on_mouse_left() end
 

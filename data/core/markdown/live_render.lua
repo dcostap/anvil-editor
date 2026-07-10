@@ -539,6 +539,56 @@ function live.image_at_position(view, x, y)
   end
 end
 
+local owner_serial = 0
+
+local function invalidate_metadata_caches(view, event)
+  if not view then return end
+  view.__markdown_live_raw_block_cache = nil
+  if not event or event.filename_changed or event.syntax_changed then
+    view.__markdown_live_image_cache = nil
+  end
+  if view.invalidate_line_render then view:invalidate_line_render(PROVIDER_ID) end
+  if view.invalidate_visual_metrics then view:invalidate_visual_metrics(PROVIDER_ID) end
+  core.redraw = true
+end
+
+local function ensure_owner(view)
+  if not (view and view.extends and view:extends(DocView) and view.doc) then return false end
+  local owner = view.__markdown_live_owner
+  if owner and owner.doc == view.doc then return true end
+  if owner then view:remove_owned_feature(PROVIDER_ID, "document-replaced") end
+  owner_serial = owner_serial + 1
+  owner = {
+    doc = view.doc,
+    listener_id = "markdown-live-render:" .. tostring(owner_serial),
+    on_release = function(self, owner_view, reason)
+      if self.doc and self.doc.remove_metadata_listener then
+        self.doc:remove_metadata_listener(self.listener_id)
+      end
+      if owner_view.__markdown_live_owner == self then owner_view.__markdown_live_owner = nil end
+      live.detach(owner_view)
+      core.log_quiet(
+        "Markdown live editor released lifecycle ownership: %s", reason or "release"
+      )
+    end,
+  }
+  view.__markdown_live_owner = owner
+  view:add_owned_feature(PROVIDER_ID, owner)
+  if owner.doc.add_metadata_listener then
+    owner.doc:add_metadata_listener(owner.listener_id, function(_, event)
+      if view.__markdown_live_owner ~= owner then return end
+      if event and event.kind == "close" then
+        live.release(view, "doc-close")
+      else
+        invalidate_metadata_caches(view, event)
+        live.refresh_view(view)
+      end
+    end)
+  end
+  core.log_quiet("Markdown live editor now owns lifecycle for %s", owner.doc:get_name())
+  return true
+end
+
 function live.attach(view)
   if not (view and view.extends and view:extends(DocView)) then return false end
   if view.__markdown_live_attached then return false end
@@ -558,8 +608,14 @@ function live.detach(view)
   return true
 end
 
+function live.release(view, reason)
+  if not (view and view.__markdown_live_owner) then return false end
+  return view:remove_owned_feature(PROVIDER_ID, reason or "release")
+end
+
 function live.refresh_view(view)
   if not (view and view.doc) then return false end
+  ensure_owner(view)
   if config.markdown_live_editor and live.is_markdown_doc(view.doc) then
     return live.attach(view)
   else

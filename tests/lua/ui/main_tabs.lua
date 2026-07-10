@@ -61,6 +61,22 @@ test.describe("Main Tabs", function()
     test.equal(#core.root_panel:get_main_panel().views, 1)
   end)
 
+  test.it("releases owned features when replacing the singleton Main Editor", function(context)
+    write_file("owned-a.txt", "a\n")
+    write_file("owned-b.txt", "b\n")
+    local doc_a = track(context, "docs", core.open_doc("owned-a.txt"))
+    local view_a = core.root_panel:open_doc(doc_a)
+    local released = false
+    view_a:add_owned_feature("test", {
+      on_release = function() released = true end,
+    })
+
+    local doc_b = track(context, "docs", core.open_doc("owned-b.txt"))
+    core.root_panel:open_doc(doc_b)
+    test.equal(released, true)
+    test.equal(view_a:remove_owned_feature("test"), false)
+  end)
+
   test.it("dirty file-backed Main Editor documents are promoted before replacement", function(context)
     write_file("dirty-a.txt", "a\n")
     write_file("dirty-b.txt", "b\n")

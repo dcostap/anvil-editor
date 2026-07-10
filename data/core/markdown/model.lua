@@ -11,6 +11,7 @@ Model.__index = Model
 local models_by_doc = setmetatable({}, { __mode = "k" })
 local MARKDOWN_EXTENSIONS = { md = true, markdown = true, mdown = true }
 local DEBOUNCE_SECONDS = 0.015
+local METADATA_LISTENER_ID = "markdown-semantic-model"
 
 local function extension(path)
   local value = (path or ""):match("%.([^.\\/]+)$")
@@ -186,6 +187,33 @@ function Model:is_current(revision, signature, generation)
     and doc.text_revision == revision
     and metadata_signature(doc) == signature
     and self.parse_generation == generation
+end
+
+function Model:on_metadata(event)
+  local doc = self:doc()
+  if not doc then return end
+  if event and event.kind == "close" then
+    self:close("doc-close")
+    models_by_doc[doc] = nil
+    return
+  end
+  self.debounce_serial = self.debounce_serial + 1
+  if not model.is_markdown_doc(doc) then
+    self:cancel_request("metadata-detach")
+    if self.result then self.result:close() end
+    self.result = nil
+    self.status = "detached"
+    self.reason = "Document is not Markdown"
+    self.published_metadata = nil
+    self:notify("detached")
+    core.log_quiet("Markdown model detached after Document metadata change")
+    return
+  end
+  if self.status == "detached" then
+    self.status = "cold"
+    self.reason = "Markdown eligibility restored"
+  end
+  self:submit("metadata-change")
 end
 
 function Model:cancel_request(reason)
@@ -451,6 +479,8 @@ function Model:nodes_for_lines(line1, line2, opts)
 end
 
 function Model:close(reason)
+  local doc = self:doc()
+  if doc and doc.remove_metadata_listener then doc:remove_metadata_listener(METADATA_LISTENER_ID) end
   self:cancel_request(reason or "close")
   self.debounce_serial = self.debounce_serial + 1
   self.parse_generation = self.parse_generation + 1
@@ -468,6 +498,11 @@ function model.get(doc, opts)
   if not current then
     current = Model:new(doc)
     models_by_doc[doc] = current
+    if doc.add_metadata_listener then
+      doc:add_metadata_listener(METADATA_LISTENER_ID, function(_, event)
+        if models_by_doc[doc] == current then current:on_metadata(event) end
+      end)
+    end
   end
   if opts.ensure ~= false then current:ensure() end
   return current
