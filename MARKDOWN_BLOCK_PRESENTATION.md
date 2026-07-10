@@ -11,7 +11,9 @@ Live Preview now composes block-level marker fragments with the existing semanti
 - unchecked/checked task markers render as `☐` / `☑` with distinct first-party styles; and
 - blockquote source prefixes render as a compact `│ ` quote marker.
 
-Markers are sourced from current Tree-sitter block nodes and attributes, not line-shape heuristics, except that the exact visible quote-prefix extent is measured from the semantically confirmed quote line. Existing code/comment raw fallback continues to take precedence.
+Markers are sourced from current Tree-sitter block nodes and attributes, not line-shape heuristics, except that the exact visible quote-prefix extent is measured from the semantically confirmed quote line.
+
+Fenced code blocks use bounded whole-Document semantic ranges: inactive opening fences become a language header, closing fences are visually suppressed, and every block line receives the first-party code background through the generic decoration-provider contract. Code content remains raw, syntax-highlightable Editor text. Active opening/closing lines reveal exact fence source. Comment suppression takes precedence over fenced-looking text, and capture-bound overflow falls back wholly to raw presentation.
 
 ## Editing and reveal
 
@@ -21,4 +23,4 @@ Task fragments use generic rendered-fragment input. Clicking a checkbox selects 
 
 ## Regression evidence
 
-Focused UI tests cover unordered markers, checked/unchecked tasks, quote markers, task pointer activation, resulting source text, and active-line raw reveal alongside all existing inline/link/image and generic fragment-routing tests. Thematic rules, callout cards, fenced-code chrome, tables, and properties remain later Phase 6 slices.
+Focused UI tests cover unordered markers, checked/unchecked tasks, quote markers, task pointer activation, resulting source text, active-line raw reveal, fenced language/closing chrome, raw code content, code backgrounds, and fenced-looking text inside comments alongside all existing inline/link/image and generic fragment-routing tests. Thematic rules, callout cards, tables, and properties remain later Phase 6 slices.

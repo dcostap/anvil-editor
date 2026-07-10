@@ -915,6 +915,29 @@ test.describe("Markdown Live Editor", function()
     test.equal(has_bullet, false)
   end)
 
+  test.it("presents fenced code chrome while preserving raw editable code content", function()
+    local view, doc = make_view("```lua\nprint('ok')\n```\nplain", "fence.md")
+    doc:set_selection(4, 1)
+    refresh(view)
+    view:invalidate_line_render("fence-ready")
+    local opening = test.not_nil(view:get_line_render(1))
+    test.equal(opening.fragments[1].text, "lua")
+    test.equal(view:get_line_render(2), nil)
+    local closing = test.not_nil(view:get_line_render(3))
+    test.equal(closing.fragments[1].text, "")
+
+    local markdown_decoration
+    for _, entry in ipairs(view:decoration_provider_entries()) do
+      if entry.id == "markdown-live" then markdown_decoration = entry.provider break end
+    end
+    markdown_decoration = test.not_nil(markdown_decoration)
+    test.equal(markdown_decoration:line_background(view, 2), style.markdown_live_code_background)
+    test.equal(markdown_decoration:line_background(view, 4), nil)
+
+    doc:set_selection(1, 2)
+    test.equal(view:get_line_render(1), nil)
+  end)
+
   test.it("copies dropped attachments and inserts configured source-preserving links", function()
     local root = USERDIR .. PATHSEP .. "markdown-live-attachment-project-" .. system.get_process_id()
     local outside = USERDIR .. PATHSEP .. "markdown-live-attachment-source-" .. system.get_process_id()

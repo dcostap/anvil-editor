@@ -881,6 +881,7 @@ end
 
 local provider = {}
 local poi_provider = {}
+local decoration_provider = {}
 local file_drop_provider = attachments.drop_provider()
 
 function poi_provider:points_of_interest(view)
@@ -928,6 +929,38 @@ end
 local function view_in_source_mode(view)
   local owner = view.__markdown_live_owner
   return owner and owner.source_mode == true
+end
+
+local function fenced_code_for_line(view, line)
+  local instance = current_semantic_model(view)
+  if not instance then return nil end
+  local cache = view.__markdown_live_fenced_code_cache
+  if not cache or cache.generation ~= instance.generation then
+    local nodes, reason = instance:nodes_for_lines(1, #view.doc.lines, { limit = 4096 })
+    local ranges = {}
+    if reason ~= "limit" then
+      for _, node in ipairs(nodes or {}) do
+        if node.type == "code_fenced" then ranges[#ranges + 1] = node end
+      end
+    else
+      core.log_quiet("Markdown fenced-code presentation exceeded capture bound for %s", view.doc:get_name())
+    end
+    cache = { generation = instance.generation, ranges = ranges }
+    view.__markdown_live_fenced_code_cache = cache
+  end
+  for _, node in ipairs(cache.ranges) do
+    local line2 = node.source.line2
+    if node.source.col2 == 1 and line2 > node.source.line1 then line2 = line2 - 1 end
+    if line >= node.source.line1 and line <= line2 then
+      node.effective_line2 = line2
+      return node
+    end
+  end
+end
+
+function decoration_provider:line_background(view, line)
+  if view_in_source_mode(view) or line_in_semantic_comment(view, line) then return nil end
+  return fenced_code_for_line(view, line) and style.markdown_live_code_background or nil
 end
 
 function provider:line_generation(view, line)
@@ -1099,6 +1132,29 @@ function provider:render_line(view, line)
     return { raw_passthrough = true }
   end
   local in_comment = line_in_semantic_comment(view, line)
+  local fenced = not in_comment and fenced_code_for_line(view, line)
+  if fenced then
+    local text = (view.doc.lines[line] or ""):gsub("\n$", "")
+    local reveal_units = reveal_units_for_line(view, line)
+    if (line == fenced.source.line1 or line == fenced.effective_line2) and #reveal_units == 0 then
+      local label = ""
+      if line == fenced.source.line1 then
+        label = text:match("^%s*[`~]+%s*(.-)%s*$") or ""
+      end
+      return {
+        source_text = text,
+        semantic_generation = select(2, semantic_line(view, line)),
+        fragments = {
+          {
+            source_col1 = 1, source_col2 = #text + 1,
+            text = label, color = style.markdown_live_code_header,
+            semantic_id = fenced.id .. (line == fenced.source.line1 and ":open" or ":close"),
+          },
+        },
+      }
+    end
+    return { raw_passthrough = true }
+  end
   if not in_comment and line_in_raw_block(view, line) then return { raw_passthrough = true } end
 
   local text = (view.doc.lines[line] or ""):gsub("\n$", "")
@@ -1361,6 +1417,7 @@ function live.attach(view)
   if view.__markdown_live_attached then return false end
   view:add_visual_metric_provider(PROVIDER_ID, provider)
   view:add_line_render_provider(PROVIDER_ID, provider)
+  view:add_decoration_provider(PROVIDER_ID, decoration_provider)
   view:add_file_drop_provider(PROVIDER_ID, file_drop_provider)
   view:add_poi_provider(PROVIDER_ID, poi_provider)
   view:add_selection_listener(PROVIDER_ID, function(owner, new_state, old_state)
@@ -1381,6 +1438,7 @@ function live.detach(view)
   clear_image_cache(view)
   view:remove_visual_metric_provider(PROVIDER_ID)
   view:remove_line_render_provider(PROVIDER_ID)
+  view:remove_decoration_provider(PROVIDER_ID)
   view:remove_file_drop_provider(PROVIDER_ID)
   view:remove_poi_provider(PROVIDER_ID)
   view:remove_selection_listener(PROVIDER_ID)
