@@ -496,7 +496,9 @@ function Index:update_doc(doc, opts)
   if not (doc and doc.abs_filename and is_markdown(doc.abs_filename)) then return false end
   if not common.path_belongs_to(common.normalize_path(doc.abs_filename), self.root) then return false end
   local text = doc:get_text(1, 1, math.huge, math.huge)
-  self:add_note_entry(self:make_note_entry(doc.abs_filename, text))
+  local entry = self:make_note_entry(doc.abs_filename, text)
+  entry.doc = doc
+  self:add_note_entry(entry)
   if not opts.rebuilding then
     self.generation = self.generation + 1
     self:notify("document-updated", doc)

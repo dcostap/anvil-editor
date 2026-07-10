@@ -2845,6 +2845,55 @@ function DocView:get_line_render(line)
   return resolved
 end
 
+function DocView:get_render_fragment_at_position(x, y)
+  if not self:has_line_render_providers() then return nil end
+  local line, col = self:resolve_screen_position(x, y)
+  local render_line = self:get_line_render(line)
+  if not render_line then return nil end
+  if self.wrapped_settings then
+    local idx, _, _, row_start = linewrapping.get_line_idx_col_count(self, line, col)
+    local next_line, row_end = linewrapping.get_idx_line_col(self, idx + 1)
+    if next_line ~= line then row_end = #(self.doc.lines[line] or "") end
+    local line_x = self:get_line_screen_position(line)
+    local begin_width = row_start ~= 1 and (self.wrapped_line_offsets[line] or 0) or 0
+    local row_render_x = self:get_line_render_col_x_offset(render_line, row_start)
+    for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
+      local col1 = fragment.source_col1 or 1
+      local col2 = fragment.source_col2 or col1
+      local from, to = math.max(col1, row_start), math.min(col2, row_end)
+      if not fragment.hidden and from < to and col >= from and col <= to then
+        local left = line_x + begin_width
+          + self:get_line_render_col_x_offset(render_line, from) - row_render_x
+        local right = line_x + begin_width
+          + self:get_line_render_col_x_offset(render_line, to) - row_render_x
+        if x >= math.min(left, right) and x <= math.max(left, right) then
+          return { line = line, fragment = fragment }
+        end
+      end
+    end
+    return nil
+  end
+  local line_x, line_y = self:get_line_screen_position(line)
+  local xrel, yrel = x - line_x, y - line_y
+  local row = self:get_visual_row(line, 1)
+  local row_height = self:get_visual_row_height(row)
+  local tx = 0
+  local _, indent_size = self.doc:get_indent_info()
+  for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
+    if not fragment.hidden then
+      local font = fragment.font or self:get_font()
+      font:set_tab_size(indent_size)
+      local text = fragment.text or ""
+      local width = fragment.width or (fragment.widget and fragment.widget.width)
+        or font:get_width(text, { tab_offset = tx })
+      if xrel >= tx and xrel <= tx + width and yrel >= 0 and yrel <= row_height then
+        return { line = line, fragment = fragment }
+      end
+      tx = tx + width
+    end
+  end
+end
+
 function DocView:get_render_widget_at_position(x, y)
   if not self:has_line_render_providers() then return nil end
   local line = self:resolve_screen_position(x, y)
@@ -3398,7 +3447,12 @@ function DocView:on_mouse_moved(x, y, ...)
     not self:scrollbar_hovering() and not self:scrollbar_dragging()
   then
     local hit = self:get_render_widget_at_position(x, y)
-    if hit and hit.widget.cursor then self.cursor = hit.widget.cursor end
+    if hit and hit.widget.cursor then
+      self.cursor = hit.widget.cursor
+    else
+      hit = self:get_render_fragment_at_position(x, y)
+      if hit and hit.fragment.cursor then self.cursor = hit.fragment.cursor end
+    end
   end
 
   if self.mouse_selecting then
@@ -3471,6 +3525,20 @@ function DocView:on_mouse_pressed(button, x, y, clicks)
       if not ok then
         core.log_quiet(
           "DocView render widget click failed for %s: %s",
+          self.doc:get_name(), tostring(handled)
+        )
+      end
+      if ok and handled ~= false then return true end
+    end
+    local fragment_hit = self:get_render_fragment_at_position(x, y)
+    if fragment_hit and fragment_hit.fragment.on_mouse_pressed then
+      local ok, handled = pcall(
+        fragment_hit.fragment.on_mouse_pressed,
+        fragment_hit.fragment, self, fragment_hit, button, x, y, clicks
+      )
+      if not ok then
+        core.log_quiet(
+          "DocView render fragment click failed for %s: %s",
           self.doc:get_name(), tostring(handled)
         )
       end

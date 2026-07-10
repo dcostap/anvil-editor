@@ -80,8 +80,9 @@ test.describe("Markdown Live Preview prototype baseline", function()
     end)
   end)
 
-  test.it("has no Live Preview open-link command", function()
-    test.equal(command.map["markdown-live-preview:open-link"], nil)
+  test.it("registers Live Preview link commands", function()
+    test.not_nil(command.map["markdown-live-preview:open-link"])
+    test.not_nil(command.map["markdown-live-preview:create-link-target"])
   end)
 
   test.it("styles resolved, missing, and ambiguous wikilinks by status", function()

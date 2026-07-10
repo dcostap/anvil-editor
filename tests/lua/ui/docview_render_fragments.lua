@@ -217,6 +217,42 @@ test.describe("DocView render fragments", function()
     test.equal(rectangles[1].color, background)
   end)
 
+  test.it("routes pointer cursor and clicks through rendered text fragments", function()
+    local view = make_view("link")
+    local clicked = false
+    view:add_line_render_provider("interactive", {
+      render_line = function()
+        return {
+          fragments = {
+            {
+              source_col1 = 1, source_col2 = 5, text = "link", cursor = "hand",
+              on_mouse_pressed = function(_, owner, hit, button)
+                test.equal(owner, view)
+                test.equal(hit.line, 1)
+                test.equal(button, "left")
+                clicked = true
+                return true
+              end,
+            },
+          },
+        }
+      end,
+    })
+    local x, y = view:get_line_screen_position(1)
+    view:on_mouse_moved(x + 2, y + 2)
+    test.equal(view.cursor, "hand")
+    test.equal(view:on_mouse_pressed("left", x + 2, y + 2, 1), true)
+    test.equal(clicked, true)
+
+    view:set_wrapping_enabled(true)
+    clicked = false
+    x, y = view:get_line_screen_position(1)
+    view:on_mouse_moved(x + view:get_font():get_width("link") + 30, y + 2)
+    test.equal(view.cursor, "ibeam")
+    view:on_mouse_pressed("left", x + view:get_font():get_width("link") + 30, y + 2, 1)
+    test.equal(clicked, false)
+  end)
+
   test.it("routes pointer cursor and clicks through rendered widgets", function()
     local view = make_view("widget")
     local clicked = false

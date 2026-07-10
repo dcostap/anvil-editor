@@ -6,6 +6,7 @@ local Doc = require "core.doc"
 local DocView = require "core.docview"
 local markdown = require "core.markdown"
 local markdown_model = require "core.markdown.model"
+local keymap = require "core.keymap"
 local linewrapping = require "core.linewrapping"
 local Project = require "core.project"
 local style = require "core.style"
@@ -639,6 +640,151 @@ test.describe("Markdown Live Editor", function()
     doc:set_selection(1, 1)
     local raw_width = view:get_font():get_width("See [[Note|Alias]]")
     test.equal(view:get_col_x_offset(1, #"See [[Note|Alias]]" + 1), raw_width)
+  end)
+
+  test.it("opens resolved links by command and modifier-click with navigation targets", function()
+    local root = USERDIR .. PATHSEP .. "markdown-live-open-link-" .. system.get_process_id()
+    test.ok(common.mkdirp(root))
+    local target_path = root .. PATHSEP .. "Target.md"
+    local source_path = root .. PATHSEP .. "Source.md"
+    local fp = test.not_nil(io.open(target_path, "wb"))
+    fp:write("# Heading\n")
+    fp:close()
+    local old_projects = core.projects
+    core.projects = { Project(root) }
+    local index = markdown.vault_index.get_index(root):rebuild("ui-open-link")
+    local view, doc = make_view("[[Target#Heading]]\nplain", source_path)
+    doc:set_selection(1, 5)
+    refresh(view)
+    test.equal(index.status, "ready")
+    local old_active, old_open_file = core.active_view, core.open_file
+    local opened, selected, scrolled
+    core.active_view = view
+    core.open_file = function(path)
+      opened = path
+      return {
+        set_selection_state = function(_, state) selected = state.selections end,
+        scroll_to_line = function(_, line) scrolled = line end,
+      }
+    end
+    local ok, err = pcall(function()
+      test.equal(command.perform("markdown-live-preview:open-link"), true)
+      test.equal(opened, common.normalize_path(target_path))
+      test.same(selected, { 1, 1, 1, 1 })
+      test.equal(scrolled, 1)
+
+      opened = nil
+      doc:set_selection(2, 1)
+      local x, y = view:get_line_screen_position(1)
+      keymap.modkeys["ctrl"] = true
+      view:on_mouse_pressed("left", x + 2, y + 2, 1)
+      keymap.modkeys["ctrl"] = false
+      test.equal(opened, common.normalize_path(target_path))
+
+      opened = nil
+      local old_platform = PLATFORM
+      PLATFORM = "Mac OS X"
+      keymap.modkeys["cmd"] = true
+      view:on_mouse_pressed("left", x + 2, y + 2, 1)
+      keymap.modkeys["cmd"] = false
+      PLATFORM = old_platform
+      test.equal(opened, common.normalize_path(target_path))
+
+      os.remove(target_path)
+      opened = nil
+      doc:set_selection(1, 5)
+      test.equal(command.perform("markdown-live-preview:open-link"), true)
+      test.equal(opened, nil)
+      test.ok(common.mkdirp(target_path))
+      test.equal(command.perform("markdown-live-preview:open-link"), true)
+      test.equal(opened, nil)
+    end)
+    keymap.modkeys["ctrl"] = false
+    keymap.modkeys["cmd"] = false
+    core.open_file, core.active_view = old_open_file, old_active
+    core.projects = old_projects
+    common.rm(root, true)
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("offers explicit create and ambiguity-picker link actions", function()
+    local root = USERDIR .. PATHSEP .. "markdown-live-link-actions-" .. system.get_process_id()
+    test.ok(common.mkdirp(root .. PATHSEP .. "a"))
+    test.ok(common.mkdirp(root .. PATHSEP .. "b"))
+    test.ok(common.mkdirp(root .. PATHSEP .. "notes"))
+    local function write(path, text)
+      local fp = test.not_nil(io.open(path, "wb")); fp:write(text); fp:close()
+    end
+    write(root .. PATHSEP .. "a" .. PATHSEP .. "Note.md", "# A\n")
+    write(root .. PATHSEP .. "b" .. PATHSEP .. "Note.md", "# B\n")
+    local old_projects = core.projects
+    core.projects = { Project(root) }
+    markdown.vault_index.get_index(root):rebuild("ui-link-actions")
+    local old_active, old_open_file = core.active_view, core.open_file
+    local old_enter = core.command_view.enter
+    local opened, picker
+    core.open_file = function(path) opened = path return {} end
+    core.command_view.enter = function(_, label, opts) picker = { label = label, opts = opts } end
+    local ok, err = pcall(function()
+      local missing_view, missing_doc = make_view(
+        "[[folder/New]]\nplain", root .. PATHSEP .. "notes" .. PATHSEP .. "MissingSource.md"
+      )
+      missing_doc:set_selection(1, 5)
+      refresh(missing_view)
+      core.active_view = missing_view
+      test.equal(command.perform("markdown-live-preview:create-link-target"), true)
+      test.equal(opened, common.normalize_path(
+        root .. PATHSEP .. "notes" .. PATHSEP .. "folder" .. PATHSEP .. "New.md"
+      ))
+
+      opened = nil
+      local root_view, root_doc = make_view("[[NewRoot]]\nplain", root .. PATHSEP .. "notes" .. PATHSEP .. "RootSource.md")
+      root_doc:set_selection(1, 4)
+      refresh(root_view)
+      core.active_view = root_view
+      test.equal(command.perform("markdown-live-preview:create-link-target"), true)
+      test.equal(opened, common.normalize_path(root .. PATHSEP .. "NewRoot.md"))
+
+      opened = nil
+      local query_view, query_doc = make_view(
+        "[[folder/Query.md?download]]\nplain",
+        root .. PATHSEP .. "notes" .. PATHSEP .. "QuerySource.md"
+      )
+      query_doc:set_selection(1, 5)
+      refresh(query_view)
+      core.active_view = query_view
+      test.equal(command.perform("markdown-live-preview:create-link-target"), true)
+      test.equal(opened, common.normalize_path(
+        root .. PATHSEP .. "notes" .. PATHSEP .. "folder" .. PATHSEP .. "Query.md"
+      ))
+
+      opened = nil
+      local outside_view, outside_doc = make_view(
+        "[[../../../../../../Outside]]\nplain",
+        root .. PATHSEP .. "notes" .. PATHSEP .. "OutsideSource.md"
+      )
+      outside_doc:set_selection(1, 5)
+      refresh(outside_view)
+      core.active_view = outside_view
+      test.equal(command.perform("markdown-live-preview:create-link-target"), true)
+      test.equal(opened, nil)
+
+      local ambiguous_view, ambiguous_doc = make_view("[[Note]]\nplain", root .. PATHSEP .. "AmbiguousSource.md")
+      ambiguous_doc:set_selection(1, 4)
+      refresh(ambiguous_view)
+      core.active_view = ambiguous_view
+      test.equal(command.perform("markdown-live-preview:open-link"), true)
+      test.equal(picker.label, "Open Markdown Link")
+      test.equal(#picker.opts.suggest(""), 2)
+      local filtered = picker.opts.suggest("b/Note")
+      test.equal(#filtered, 1)
+      test.equal(filtered[1].text, "b/Note.md")
+    end)
+    core.command_view.enter = old_enter
+    core.open_file, core.active_view = old_open_file, old_active
+    core.projects = old_projects
+    common.rm(root, true)
+    if not ok then error(err, 0) end
   end)
 
   test.it("renders project-local image fragments", function(context)

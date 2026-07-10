@@ -3,6 +3,7 @@ local common = require "core.common"
 local config = require "core.config"
 local DocView = require "core.docview"
 local images = require "core.markdown.images"
+local keymap = require "core.keymap"
 local linewrapping = require "core.linewrapping"
 local markdown_links = require "core.markdown.links"
 local markdown_model = require "core.markdown.model"
@@ -690,20 +691,22 @@ local function image_only_render_line(view, text, line, span, active)
   }
 end
 
+local function resolve_live_link(view, link)
+  local owner = view.__markdown_live_owner
+  local index = owner and owner.link_index
+  local target = link.raw_target or link.path or ""
+  if not common.is_absolute_path(target) and target:match("^[%a][%w+.-]*:") then
+    return { status = "external", target = target, path = target }
+  elseif index and index.status == "ready" then
+    return index:resolve(link, view.doc.abs_filename)
+  end
+  return { status = "pending", target = target, reason = "indexing" }
+end
+
 local function decorate_link_fragment(view, line, span, fragment, opts)
   opts = opts or {}
   if semantic_comment_overlaps(view, line, span.col1, span.col2) then return nil end
-  local owner = view.__markdown_live_owner
-  local index = owner and owner.link_index
-  local target = span.link.raw_target or span.link.path or ""
-  local resolution
-  if not common.is_absolute_path(target) and target:match("^[%a][%w+.-]*:") then
-    resolution = { status = "external", target = target, path = target }
-  elseif index and index.status == "ready" then
-    resolution = index:resolve(span.link, view.doc.abs_filename)
-  else
-    resolution = { status = "pending", target = target, reason = "indexing" }
-  end
+  local resolution = resolve_live_link(view, span.link)
   local resolution_colors = {
     resolved = style.markdown_live_link,
     external = style.markdown_live_external_link,
@@ -713,6 +716,12 @@ local function decorate_link_fragment(view, line, span, fragment, opts)
   }
   fragment.link = span.link
   fragment.link_resolution = resolution
+  fragment.cursor = "hand"
+  fragment.on_mouse_pressed = function(self, owner, _, button)
+    local modifier = PLATFORM == "Mac OS X" and "cmd" or "ctrl"
+    if button ~= "left" or not keymap.modkeys[modifier] then return false end
+    return live.open_link(owner, { link = self.link, resolution = self.link_resolution })
+  end
   fragment.color = resolution_colors[resolution.status] or fragment.color
   local bold, italic, strike, highlight, code = false, false, false, false, false
   local ids = { span.semantic_id }
@@ -1205,6 +1214,141 @@ end
 function live.release(view, reason)
   if not (view and view.__markdown_live_owner) then return false end
   return view:remove_owned_feature(PROVIDER_ID, reason or "release")
+end
+
+function live.link_at_caret(view)
+  if not (view and view.doc and current_semantic_model(view)) then return nil end
+  local state = current_selection_state(view)
+  local line = state and state.selections and state.selections[1]
+  local col = state and state.selections and state.selections[2]
+  if not (line and col) then return nil end
+  local text = (view.doc.lines[line] or ""):gsub("\n$", "")
+  local best, best_size
+  for _, span in ipairs(semantic_link_spans(view, text, line)) do
+    if col >= span.col1 and col < span.col2 then
+      local size = span.col2 - span.col1
+      if not best_size or size < best_size then best, best_size = span, size end
+    end
+  end
+  if not best then return nil end
+  return { line = line, col1 = best.col1, col2 = best.col2, link = best.link,
+    resolution = resolve_live_link(view, best.link) }
+end
+
+local function record_navigation_origin()
+  local ok, history = pcall(require, "plugins.navigation_history")
+  if ok and history.record_current_place then history.record_current_place("markdown-live-link") end
+end
+
+local function open_link_resolution(resolution)
+  if resolution.status == "external" then
+    record_navigation_origin()
+    return common.open_in_system(resolution.path)
+  end
+  if resolution.status ~= "resolved" then return false end
+  local info = resolution.path and system.get_file_info(resolution.path)
+  if (not info or info.type ~= "file") and not (resolution.entry and resolution.entry.doc) then
+    core.log_quiet("Markdown link target disappeared before activation: %s", tostring(resolution.path))
+    return false
+  end
+  record_navigation_origin()
+  local target_view = core.open_file(resolution.path)
+  if target_view and resolution.line and target_view.set_selection_state then
+    target_view:set_selection_state({
+      selections = { resolution.line, 1, resolution.line, 1 },
+      last_selection = 1,
+    })
+    target_view:scroll_to_line(resolution.line, true, true)
+  end
+  return target_view ~= nil
+end
+
+local function open_ambiguous_picker(view, link, resolution)
+  local index = view.__markdown_live_owner and view.__markdown_live_owner.link_index
+  if not (index and core.command_view) then return false end
+  local suggestions = {}
+  for _, entry in ipairs(resolution.candidates or {}) do
+    suggestions[#suggestions + 1] = { text = entry.rel_path, entry = entry }
+  end
+  table.sort(suggestions, function(a, b) return a.text < b.text end)
+  local function exact_suggestion(text)
+    for _, suggestion in ipairs(suggestions) do
+      if suggestion.text == text then return suggestion end
+    end
+  end
+  core.command_view:enter("Open Markdown Link", {
+    text = "",
+    suggest = function(text)
+      local needle = tostring(text or ""):lower()
+      if needle == "" then return suggestions end
+      local filtered = {}
+      for _, suggestion in ipairs(suggestions) do
+        if suggestion.text:lower():find(needle, 1, true) then filtered[#filtered + 1] = suggestion end
+      end
+      return filtered
+    end,
+    validate = function(text, suggestion)
+      return (suggestion and suggestion.entry ~= nil) or exact_suggestion(text) ~= nil
+    end,
+    submit = function(text, suggestion)
+      suggestion = suggestion and suggestion.entry and suggestion or exact_suggestion(text)
+      if not suggestion then return end
+      local selected = index:resolve_entry_result(suggestion.entry, link, link.raw_target or link.path)
+      open_link_resolution(selected)
+    end,
+  })
+  return true
+end
+
+function live.open_link(view, opts)
+  opts = opts or live.link_at_caret(view)
+  if not opts then return false, "no link at caret" end
+  local link = opts.link
+  local resolution = opts.resolution or resolve_live_link(view, link)
+  if resolution.status == "ambiguous" then
+    return open_ambiguous_picker(view, link, resolution), resolution.status
+  end
+  if resolution.status ~= "resolved" and resolution.status ~= "external" then
+    core.log_quiet("Markdown link not opened: status=%s target=%s", resolution.status, tostring(resolution.target))
+    return false, resolution.status
+  end
+  return open_link_resolution(resolution), resolution.status
+end
+
+function live.create_link_target(view)
+  local target = live.link_at_caret(view)
+  if not target then return false, "no link at caret" end
+  local resolution = target.resolution
+  if resolution.status ~= "missing" then return false, resolution.status end
+  local link_path = (target.link.path or ""):match("^[^#?]*") or ""
+  if link_path == "" or common.is_absolute_path(link_path)
+    or link_path:match("^[%a][%w+.-]*:")
+  then
+    return false, "unsupported target"
+  end
+  local owner = view.__markdown_live_owner
+  local index = owner and owner.link_index
+  if not index then return false, "index unavailable" end
+  local source_relative = link_path:find("/", 1, true) ~= nil
+    or link_path:find("\\", 1, true) ~= nil
+    or link_path:sub(1, 1) == "."
+  local path = link_path:gsub("[/\\]", PATHSEP)
+  if not extension(path) then path = path .. ".md" end
+  local base = source_relative and view.doc.abs_filename
+    and common.dirname(view.doc.abs_filename) or index.root
+  local normalized, abs = pcall(common.normalize_path, base .. PATHSEP .. path)
+  if not normalized or not abs or not common.path_belongs_to(abs, index.root) then
+    return false, "outside Project"
+  end
+  local parent = common.dirname(abs)
+  local parent_info = system.get_file_info(parent)
+  if not (parent_info and parent_info.type == "dir") then
+    local ok, err = common.mkdirp(parent)
+    if not ok then return false, err end
+  end
+  record_navigation_origin()
+  core.open_file(abs)
+  return true, abs
 end
 
 function live.is_source_mode(view)

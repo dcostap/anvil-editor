@@ -1054,7 +1054,7 @@ Exit gate: a representative prose note can be edited entirely in Live Preview wi
 
 ### Phase 4: internal links end to end
 
-**Cooperative index and status-presentation slice completed July 10, 2026.** Project indexes now publish cold/indexing/ready generations, build in bounded cooperative batches, preserve tracked open-Document overlays, and drive distinct pending/resolved/missing/ambiguous/external semantic link presentation. The contract and regression evidence are recorded in `MARKDOWN_LINK_INDEX.md`.
+**Cooperative index, status-presentation, and interaction slices completed July 10, 2026.** Project indexes now publish cold/indexing/ready generations, build in bounded cooperative batches, preserve tracked open-Document overlays, and drive distinct pending/resolved/missing/ambiguous/external semantic link presentation. Generic rendered-fragment input supports Ctrl+click without stealing normal selection; the keyboard command opens resolved/external links with Navigation History, ambiguous links use a deterministic picker, and missing links require an explicit create command. Contracts and regression evidence are recorded in `MARKDOWN_LINK_INDEX.md` and `MARKDOWN_LINK_INTERACTION.md`.
 
 - Build asynchronous/cooperative Markdown Link Index.
 - Add watcher reconciliation and open-Document overlay.

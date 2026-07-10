@@ -23,6 +23,12 @@ end, {
   ["markdown-live-preview:live-mode"] = function(view)
     markdown_live.set_source_mode(view, false, "command-live")
   end,
+  ["markdown-live-preview:open-link"] = function(view)
+    markdown_live.open_link(view)
+  end,
+  ["markdown-live-preview:create-link-target"] = function(view)
+    markdown_live.create_link_target(view)
+  end,
 })
 
 local markdown_preview_split_directions = {
