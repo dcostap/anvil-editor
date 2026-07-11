@@ -1104,6 +1104,42 @@ test.describe("Markdown Live Editor", function()
     test.equal(view:get_line_render(1), nil)
   end)
 
+  test.it("presents resolved note, heading, and block embeds as bounded visual rows", function()
+    local root = USERDIR .. PATHSEP .. "markdown-live-note-embeds-" .. system.get_process_id()
+    test.ok(common.mkdirp(root))
+    local function write(path, text)
+      local fp = test.not_nil(io.open(path, "wb")); fp:write(text); fp:close()
+    end
+    local target = root .. PATHSEP .. "Target.md"
+    write(target, "# Target\nfirst\nsecond\n\n## Child\nchild text\n\nblock content ^block-id\n")
+    local source = root .. PATHSEP .. "Source.md"
+    write(source, "![[Target]]\n![[Target#Child]]\n![[Target#^block-id]]\nplain\n")
+    local old_projects = core.projects
+    core.projects = { Project(root) }
+    local index = markdown.vault_index.get_index(root):rebuild("embed-ui-test")
+    local view, doc = make_view("![[Target]]\n![[Target#Child]]\n![[Target#^block-id]]\nplain", source)
+    doc:set_selection(4, 1)
+    refresh(view)
+    local ok, err = pcall(function()
+      local markdown_rows
+      for _, entry in ipairs(view:visual_row_provider_entries()) do
+        if entry.id == "markdown-live" then markdown_rows = entry.provider break end
+      end
+      markdown_rows = test.not_nil(markdown_rows)
+      local note_rows = test.not_nil(markdown_rows:visual_rows(view, 1, "after"))
+      test.same({ note_rows[1].text, note_rows[2].text, note_rows[3].text }, { "Target", "first", "second" })
+      local heading_rows = test.not_nil(markdown_rows:visual_rows(view, 2, "after"))
+      test.same({ heading_rows[1].text, heading_rows[2].text }, { "child text", "block content" })
+      local block_rows = test.not_nil(markdown_rows:visual_rows(view, 3, "after"))
+      test.same({ block_rows[1].text }, { "block content" })
+      test.equal(markdown_rows:visual_rows(view, 4, "after"), nil)
+      test.equal(index.status, "ready")
+    end)
+    core.projects = old_projects
+    common.rm(root, true)
+    if not ok then error(err, 0) end
+  end)
+
   test.it("presents inline and display math as styled editable source", function()
     local view, doc = make_view("Inline $x^2 + y^2$ text\n\n$$\na + b\n$$\nplain", "math.md")
     doc:set_selection(6, 1)

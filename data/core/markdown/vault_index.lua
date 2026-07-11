@@ -376,6 +376,60 @@ function Index:remove_path(path)
   return false
 end
 
+local function embed_source_lines(text)
+  local lines = {}
+  local normalized = (text or ""):gsub("\r\n", "\n")
+  for line in (normalized .. "\n"):gmatch("(.-)\n") do lines[#lines + 1] = line end
+  return lines
+end
+
+local function clean_embed_line(line)
+  line = trim(line)
+  line = line:gsub("^#+%s*", ""):gsub("%s*#+%s*$", "")
+  line = line:gsub("%s+%^[%w%-]+%s*$", "")
+  if #line > 240 then line = line:sub(1, 237) .. "..." end
+  return line
+end
+
+local function collect_embed_preview(lines, line1, line2, limit)
+  local preview = {}
+  for line = math.max(1, line1 or 1), math.min(#lines, line2 or #lines) do
+    local value = clean_embed_line(lines[line] or "")
+    if value ~= "" and value ~= "---" and value ~= "+++" then
+      preview[#preview + 1] = value
+      if #preview >= limit then break end
+    end
+  end
+  return preview
+end
+
+local function attach_embed_previews(text, anchor_index)
+  local lines = embed_source_lines(text)
+  local note_line1 = 1
+  local delimiter = lines[1]
+  if delimiter == "---" or delimiter == "+++" then
+    for i = 2, #lines do
+      if lines[i] == delimiter then note_line1 = i + 1 break end
+    end
+  end
+  local note_preview = collect_embed_preview(lines, note_line1, #lines, 3)
+  local headings = anchor_index.headings or {}
+  for i, heading in ipairs(headings) do
+    local line2 = #lines
+    for j = i + 1, #headings do
+      if (headings[j].level or 1) <= (heading.level or 1) then
+        line2 = headings[j].line - 1
+        break
+      end
+    end
+    heading.embed_preview = collect_embed_preview(lines, heading.line + 1, line2, 2)
+  end
+  for _, block in ipairs(anchor_index.blocks or {}) do
+    block.embed_preview = collect_embed_preview(lines, block.line, block.line, 1)
+  end
+  return note_preview
+end
+
 function Index:make_note_entry(path, text, opts)
   opts = opts or {}
   local file_info = system.get_file_info(path)
@@ -404,6 +458,7 @@ function Index:make_note_entry(path, text, opts)
   local rel = self:relative_path(path)
   local display_name = display_basename(strip_markdown_extension(rel))
   local metadata = parse_frontmatter_metadata(text)
+  local embed_preview = attach_embed_previews(text, anchor_index)
   return {
     kind = "note",
     abs_path = common.normalize_path(path),
@@ -412,6 +467,7 @@ function Index:make_note_entry(path, text, opts)
     aliases = metadata.aliases,
     tags = metadata.tags,
     frontmatter = metadata.values,
+    embed_preview = embed_preview,
     headings = anchor_index.headings,
     headings_by_slug = headings_by_slug,
     headings_by_text = headings_by_text,

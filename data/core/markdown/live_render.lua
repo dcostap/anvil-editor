@@ -1199,11 +1199,65 @@ local function inline_fragments(line_text, line, view, reveal_units)
   return fragments
 end
 
+local view_in_source_mode
 local provider = {}
 local poi_provider = {}
 local decoration_provider = {}
+local visual_row_provider = {}
 local file_drop_provider = attachments.drop_provider()
 local clipboard_paste_provider = attachments.paste_provider()
+
+function visual_row_provider:generation(view)
+  if view_in_source_mode and view_in_source_mode(view) then return "source" end
+  local instance = current_semantic_model(view)
+  local owner = view.__markdown_live_owner
+  local index = owner and owner.link_index
+  return table.concat({
+    instance and instance.generation or 0,
+    index and index.status or "none",
+    index and index.generation or 0,
+  }, ":")
+end
+
+local function embed_preview_for_resolution(resolution)
+  if not (resolution and resolution.status == "resolved" and resolution.kind == "note") then return nil end
+  if resolution.block then return resolution.block.embed_preview end
+  if resolution.heading then return resolution.heading.embed_preview end
+  return resolution.entry and resolution.entry.embed_preview
+end
+
+function visual_row_provider:visual_rows(view, line, placement)
+  if placement ~= "after" or view_in_source_mode(view) or not current_semantic_model(view) then return nil end
+  local text = (view.doc.lines[line] or ""):gsub("\n$", "")
+  local rows = {}
+  for _, span in ipairs(semantic_link_spans(view, text, line)) do
+    local link = span.link
+    if link and link.kind == "embed" and not is_image_target(link.path)
+      and not attachment_kind(link.path) and not semantic_comment_overlaps(view, line, span.col1, span.col2)
+    then
+      local resolution = resolve_live_link(view, link)
+      local preview = embed_preview_for_resolution(resolution)
+      for i, preview_text in ipairs(preview or {}) do
+        rows[#rows + 1] = {
+          id = span.semantic_id .. ":preview:" .. i,
+          text = preview_text,
+          embed_preview = true,
+          link = link,
+          resolution = resolution,
+          draw = function(v, row, x, y, w, h)
+            renderer.draw_rect(x, y, w, h, style.markdown_live_embed_background)
+            renderer.draw_text(v:get_font(), row.text, x + style.padding.x, y, style.markdown_live_embed_text)
+          end,
+          on_click = function(v, row, button)
+            if button ~= "left" then return false end
+            return live.open_link(v, { link = row.link, resolution = row.resolution })
+          end,
+        }
+      end
+    end
+  end
+  return #rows > 0 and rows or nil
+end
 
 function poi_provider:points_of_interest(view)
   local instance = current_semantic_model(view)
@@ -1249,7 +1303,7 @@ function poi_provider:points_of_interest(view)
   return points
 end
 
-local function view_in_source_mode(view)
+view_in_source_mode = function(view)
   local owner = view.__markdown_live_owner
   return owner and owner.source_mode == true
 end
@@ -1759,6 +1813,7 @@ function live.attach(view)
   if not (view and view.extends and view:extends(DocView)) then return false end
   if view.__markdown_live_attached then return false end
   view:add_visual_metric_provider(PROVIDER_ID, provider)
+  view:add_visual_row_provider(PROVIDER_ID, visual_row_provider)
   view:add_line_render_provider(PROVIDER_ID, provider)
   view:add_decoration_provider(PROVIDER_ID, decoration_provider)
   view:add_clipboard_paste_provider(PROVIDER_ID, clipboard_paste_provider)
@@ -1781,6 +1836,7 @@ function live.detach(view)
   unbind_semantic_model(view)
   clear_image_cache(view)
   view:remove_visual_metric_provider(PROVIDER_ID)
+  view:remove_visual_row_provider(PROVIDER_ID)
   view:remove_line_render_provider(PROVIDER_ID)
   view:remove_decoration_provider(PROVIDER_ID)
   view:remove_clipboard_paste_provider(PROVIDER_ID)

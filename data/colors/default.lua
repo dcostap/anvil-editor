@@ -139,6 +139,8 @@ style.markdown_live_image_loading = style.dim
 style.markdown_live_image_blocked = c(C.warning_stripe)
 style.markdown_live_image_error = style.error
 style.markdown_live_attachment_bg = style.background2
+style.markdown_live_embed_background = style.background2
+style.markdown_live_embed_text = style.text
 style.markdown_live_hidden_syntax = style.dim
 
 -- Diff/search/selection-like colors
