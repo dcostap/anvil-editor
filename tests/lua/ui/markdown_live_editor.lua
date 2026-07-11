@@ -8,6 +8,7 @@ local markdown = require "core.markdown"
 local markdown_model = require "core.markdown.model"
 local keymap = require "core.keymap"
 local linewrapping = require "core.linewrapping"
+local markdown_rename_links = require "core.markdown.rename_links"
 local Project = require "core.project"
 local style = require "core.style"
 local worker_pool = require "core.worker_pool"
@@ -879,6 +880,42 @@ test.describe("Markdown Live Editor", function()
     core.command_view.enter = old_enter
     core.open_file, core.active_view = old_open_file, old_active
     core.projects = old_projects
+    common.rm(root, true)
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("previews affected rename files and confirms before rewriting", function()
+    local root = USERDIR .. PATHSEP .. "markdown-live-rename-preview-" .. system.get_process_id()
+    test.ok(common.mkdirp(root))
+    local old_path, ref_path = root .. PATHSEP .. "Old.md", root .. PATHSEP .. "Ref.md"
+    local function write(path, text)
+      local fp = test.not_nil(io.open(path, "wb")); fp:write(text); fp:close()
+    end
+    write(old_path, "# Old\n")
+    write(ref_path, "[[Old]]\n")
+    local index = markdown.vault_index.get_index(root):rebuild("rename-preview-ui")
+    local plan = test.not_nil(index:plan_note_rename(old_path, root .. PATHSEP .. "New.md"))
+    local old_enter, old_show = core.command_view.enter, core.nag_view.show
+    local picker, confirmation
+    core.command_view.enter = function(_, label, opts) picker = { label = label, opts = opts } end
+    core.nag_view.show = function(_, title, text, options, callback)
+      confirmation = { title = title, text = text, options = options, callback = callback }
+    end
+    local ok, err = pcall(function()
+      test.equal(markdown_rename_links.present(plan), true)
+      test.equal(picker.label, "Markdown links affected by rename")
+      local suggestions = picker.opts.suggest("")
+      test.equal(#suggestions, 2)
+      test.equal(suggestions[2].text, "Ref.md")
+      picker.opts.submit("", suggestions[1])
+      test.equal(confirmation.title, "Update Markdown Links")
+      local before = test.not_nil(io.open(ref_path, "rb")); local before_text = before:read("*a"); before:close()
+      test.equal(before_text, "[[Old]]\n")
+      confirmation.callback({ text = "Update Links" })
+      local after = test.not_nil(io.open(ref_path, "rb")); local after_text = after:read("*a"); after:close()
+      test.equal(after_text, "[[New]]\n")
+    end)
+    core.command_view.enter, core.nag_view.show = old_enter, old_show
     common.rm(root, true)
     if not ok then error(err, 0) end
   end)

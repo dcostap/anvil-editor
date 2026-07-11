@@ -420,6 +420,13 @@ local function write_file_safely(filename, writer)
   end
 end
 
+function Doc.write_text_safely(filename, text)
+  assert(type(filename) == "string" and filename ~= "", "safe-write filename is required")
+  assert(type(text) == "string", "safe-write text is required")
+  write_file_safely(filename, function(fp) check_io(fp:write(text)) end)
+  return true
+end
+
 
 function Doc:save(filename, abs_filename)
   if not filename then

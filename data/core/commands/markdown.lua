@@ -8,6 +8,8 @@ local MarkdownView = require "core.markdownview"
 local markdown_completion = require "core.markdown.completion"
 local markdown_live = require "core.markdown.live_render"
 local markdown_tables = require "core.markdown.tables"
+local markdown_rename_links = require "core.markdown.rename_links"
+local markdown_vault_index = require "core.markdown.vault_index"
 
 command.add(function()
   local view = core.active_view
@@ -66,6 +68,9 @@ end, {
   end,
   ["markdown-live-preview:table-move-column-right"] = function(view)
     markdown_tables.move_column(view, 1)
+  end,
+  ["markdown-live-preview:review-rename-link-updates"] = function(view)
+    markdown_rename_links.present(markdown_vault_index.pending_rename(view.doc.abs_filename))
   end,
 })
 

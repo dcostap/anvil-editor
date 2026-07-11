@@ -5,6 +5,7 @@ local links = require "core.markdown.links"
 local Project = require "core.project"
 local test = require "core.test"
 local vault_index = require "core.markdown.vault_index"
+local rename_links = require "core.markdown.rename_links"
 
 local function join_path(...)
   return table.concat({...}, PATHSEP)
@@ -377,6 +378,30 @@ test.describe("Markdown vault index", function()
       doc:on_close()
       test.equal(index:resolve(wiki("[[Ghost]]"), source_path).status, "missing")
     end)
+    common.rm(root, true)
+  end)
+
+  test.it("plans semantic target-only link edits for a note rename", function()
+    local root = temp_root("markdown-vault-rename-plan")
+    mkdirp(root)
+    local old_path = join_path(root, "Old.md")
+    local new_path = join_path(root, "Renamed.md")
+    local ref_path = join_path(root, "Ref.md")
+    write_file(old_path, "# Heading\n")
+    write_file(ref_path, "[[Old#Heading|Alias]] ![[Old]] [old](Old.md#Heading) [[Old?mode#Heading]] `[[Old]]`\n")
+    local index = vault_index.get_index(root):rebuild("rename-plan-test")
+    local plan = test.not_nil(index:plan_note_rename(old_path, new_path))
+    test.equal(#plan.files, 1)
+    test.equal(plan.files[1].path, normalized(ref_path))
+    test.equal(#plan.files[1].edits, 4)
+    test.same({ plan.files[1].edits[1].text, plan.files[1].edits[2].text, plan.files[1].edits[3].text, plan.files[1].edits[4].text },
+      { "Renamed#Heading", "Renamed", "Renamed.md#Heading", "Renamed?mode#Heading" })
+    local applied, result = rename_links.apply(plan)
+    test.equal(applied, true)
+    test.same(result.applied, { normalized(ref_path) })
+    local updated = test.not_nil(io.open(ref_path, "rb")); local updated_text = updated:read("*a"); updated:close()
+    test.equal(updated_text,
+      "[[Renamed#Heading|Alias]] ![[Renamed]] [old](Renamed.md#Heading) [[Renamed?mode#Heading]] `[[Old]]`\n")
     common.rm(root, true)
   end)
 

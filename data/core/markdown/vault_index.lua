@@ -35,6 +35,7 @@ local ATTACHMENT_EXTENSIONS = {
 
 local indexes_by_root = {}
 local link_path_policies = {}
+local pending_renames = {}
 local doc_hooks_installed = false
 
 local function trim(text)
@@ -434,11 +435,13 @@ function Index:make_note_entry(path, text, opts)
   opts = opts or {}
   local file_info = system.get_file_info(path)
   text = text or (not opts.shallow and read_file(path)) or ""
-  local anchor_index
+  local anchor_index, parsed
   if opts.shallow then
     anchor_index = { headings = {}, blocks = {} }
+    parsed = { links = {} }
   else
-    anchor_index = anchors.index_document(parser.parse(text))
+    parsed = parser.parse(text)
+    anchor_index = anchors.index_document(parsed)
   end
   local headings_by_slug = {}
   local headings_by_text = {}
@@ -468,6 +471,7 @@ function Index:make_note_entry(path, text, opts)
     tags = metadata.tags,
     frontmatter = metadata.values,
     embed_preview = embed_preview,
+    outbound_links = parsed.links or {},
     headings = anchor_index.headings,
     headings_by_slug = headings_by_slug,
     headings_by_text = headings_by_text,
@@ -820,6 +824,115 @@ local function canonical_note_target(index, entry, source_path)
   return entry.rel_path
 end
 
+local function rename_note_target(index, old_entry, new_path, source_path)
+  local rel = index:relative_path(new_path)
+  local replacement = {
+    abs_path = common.normalize_path(new_path),
+    rel_path = rel,
+    display_name = display_basename(strip_markdown_extension(rel)),
+  }
+  if index.link_path_policy == "root" then return strip_markdown_extension(rel) end
+  if index.link_path_policy == "relative" then
+    local relative = strip_markdown_extension(display_path(
+      common.relative_path(common.dirname(source_path), replacement.abs_path)
+    ))
+    return relative:find("/", 1, true) and relative or "./" .. relative
+  end
+  local base = replacement.display_name
+  local existing = index.note_keys[base]
+  local unique = unique_item(existing)
+  if not existing or unique == old_entry then return base end
+  return strip_markdown_extension(rel)
+end
+
+local function subtarget_suffix(link)
+  local raw_target = link and link.raw_target or ""
+  local query = raw_target:match("(%?[^#]*)") or ""
+  local subtarget = link and link.subtarget
+  if not subtarget then return query end
+  if subtarget.type == "block" then return query .. "#^" .. (subtarget.id or "") end
+  return query .. "#" .. (subtarget.text or "")
+end
+
+local function target_edit_for_link(line_text, link, target)
+  local col1, col2 = link.source_col1, link.source_col2
+  local source = line_text:sub(col1, col2 - 1)
+  if link.kind == "wiki" or link.kind == "embed" then
+    local opener = link.kind == "embed" and 3 or 2
+    local close = source:find("]]", opener + 1, true)
+    if not close then return nil end
+    local pipe = source:find("|", opener + 1, true)
+    local finish = pipe and pipe - 1 or close - 1
+    local raw = source:sub(opener + 1, finish)
+    local leading = #(raw:match("^%s*") or "")
+    local trailing = #(raw:match("%s*$") or "")
+    return {
+      line1 = link.source_line, line2 = link.source_line,
+      col1 = col1 + opener + leading,
+      col2 = col1 + opener + #raw - trailing,
+      text = target,
+    }
+  elseif link.kind == "markdown" or link.kind == "image" then
+    local destination_open = source:find("](", 1, true)
+    if not destination_open then return nil end
+    local search_start = col1 + destination_open + 1
+    local raw_target = link.raw_target or ""
+    local found = line_text:find(raw_target, search_start, true)
+    if not found or found >= col2 then return nil end
+    if target:find("%s") and line_text:sub(found - 1, found - 1) ~= "<" then
+      target = "<" .. target .. ">"
+    end
+    return {
+      line1 = link.source_line, line2 = link.source_line,
+      col1 = found, col2 = found + #raw_target, text = target,
+    }
+  end
+end
+
+function Index:plan_note_rename(old_path, new_path)
+  old_path, new_path = absolute_path(old_path), absolute_path(new_path)
+  if not (old_path and new_path and is_markdown(old_path) and is_markdown(new_path)) then return nil end
+  local old_entry = self.notes_by_abs[path_key(old_path)]
+  if not old_entry then return nil end
+  local files = {}
+  for _, entry in pairs(self.notes_by_abs) do
+    local source_path = common.path_equals(entry.abs_path, old_path) and new_path or entry.abs_path
+    local text = entry.doc and entry.doc:get_text(1, 1, math.huge, math.huge) or read_file(entry.abs_path)
+    if text then
+      local lines = parser.split_lines(text)
+      local edits = {}
+      for _, link in ipairs(entry.outbound_links or {}) do
+        local resolution = self:resolve(link, entry.abs_path)
+        if resolution.status == "resolved" and common.path_equals(resolution.path, old_path) then
+          local base
+          if link.kind == "wiki" or link.kind == "embed" then
+            base = rename_note_target(self, old_entry, new_path, source_path)
+          else
+            base = display_path(common.relative_path(common.dirname(source_path), new_path))
+          end
+          local edit = target_edit_for_link(lines[link.source_line] or "", link,
+            base .. subtarget_suffix(link))
+          if edit then edits[#edits + 1] = edit end
+        end
+      end
+      if #edits > 0 then
+        table.sort(edits, function(a, b)
+          if a.line1 ~= b.line1 then return a.line1 < b.line1 end
+          return a.col1 < b.col1
+        end)
+        files[#files + 1] = {
+          path = common.normalize_path(source_path),
+          old_source_path = entry.abs_path,
+          doc = entry.doc,
+          edits = edits,
+        }
+      end
+    end
+  end
+  table.sort(files, function(a, b) return path_key(a.path) < path_key(b.path) end)
+  return { old_path = old_path, new_path = new_path, index = self, files = files }
+end
+
 function Index:completion_candidates(mode, query, source_path, limit)
   source_path = source_path and absolute_path(source_path) or nil
   query = tostring(query or ""):lower()
@@ -1153,6 +1266,21 @@ function vault_index.on_doc_filename_changed(doc, old_abs_filename)
   end
   if old_abs_filename then
     local old_index = vault_index.index_for_path(old_abs_filename)
+    if doc and doc.abs_filename and is_markdown(old_abs_filename) and is_markdown(doc.abs_filename)
+      and common.path_belongs_to(common.normalize_path(doc.abs_filename), old_index.root)
+    then
+      local plan = old_index:plan_note_rename(old_abs_filename, doc.abs_filename)
+      if plan and #plan.files > 0 then
+        pending_renames[path_key(doc.abs_filename)] = plan
+        core.log_quiet("Markdown rename found %d affected files for %s -> %s",
+          #plan.files, old_abs_filename, doc.abs_filename)
+        core.add_thread(function()
+          coroutine.yield(0)
+          local ok, maintenance = pcall(require, "core.markdown.rename_links")
+          if ok then maintenance.present(plan) end
+        end)
+      end
+    end
     old_index:remove_path(old_abs_filename)
     if file_exists(old_abs_filename) then
       old_index:update_path(old_abs_filename, { cooperative = true })
@@ -1167,6 +1295,13 @@ function vault_index.on_doc_filename_changed(doc, old_abs_filename)
   if doc and doc.abs_filename then
     vault_index.track_doc(doc)
   end
+end
+
+function vault_index.pending_rename(path, consume)
+  local key = path and path_key(path)
+  local plan = key and pending_renames[key] or nil
+  if consume and key then pending_renames[key] = nil end
+  return plan
 end
 
 function vault_index.install_doc_hooks()
