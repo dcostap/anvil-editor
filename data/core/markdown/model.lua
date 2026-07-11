@@ -68,19 +68,24 @@ end
 local function build_nodes(captures)
   local nodes = {}
   local decorations = {}
+  local seen_nodes = {}
   for _, capture in ipairs(captures) do
     local name = capture.capture or ""
     if parent_capture_name(name) then
       local range = capture_range(capture)
-      nodes[#nodes + 1] = {
-        id = table.concat({ name, capture.node_id or range.start_byte .. ":" .. range.end_byte }, ":"),
-        type = canonical_type(name),
-        source = range,
-        marker_ranges = {},
-        content_ranges = {},
-        attributes = {},
-        confidence = "complete",
-      }
+      local key = table.concat({ name, range.start_byte, range.end_byte }, ":")
+      if not seen_nodes[key] then
+        seen_nodes[key] = true
+        nodes[#nodes + 1] = {
+          id = table.concat({ name, capture.node_id or range.start_byte .. ":" .. range.end_byte }, ":"),
+          type = canonical_type(name),
+          source = range,
+          marker_ranges = {},
+          content_ranges = {},
+          attributes = {},
+          confidence = "complete",
+        }
+      end
     elseif name:match("^marker%.") or name:match("^content%.") then
       decorations[#decorations + 1] = capture
     end
@@ -134,6 +139,10 @@ function Model:new(doc)
     debounce_serial = 0,
     pending_changed_range = nil,
     changed_ranges = {},
+    semantic_id_by_source = {},
+    semantic_id_by_native = {},
+    previous_semantic_id_by_source = {},
+    previous_semantic_id_by_native = {},
     listeners = {},
     diagnostics = {
       requests = 0,
@@ -248,6 +257,10 @@ function Model:publish(result, revision, signature, generation, changed_range)
   end
 
   local previous_result = self.result
+  self.previous_semantic_id_by_source = self.semantic_id_by_source
+  self.previous_semantic_id_by_native = self.semantic_id_by_native
+  self.semantic_id_by_source = {}
+  self.semantic_id_by_native = {}
   self.result = result
   if previous_result and previous_result ~= result then previous_result:close() end
   self.request = nil
@@ -469,10 +482,28 @@ function Model:captures_for_lines(kind, line1, line2, opts)
   return captures, captures.truncated and "limit" or nil
 end
 
+function Model:stabilize_node_ids(nodes)
+  for _, node in ipairs(nodes or {}) do
+    local native_id = node.id
+    local source_key = table.concat({
+      node.type, node.source.start_byte or 0, node.source.end_byte or 0,
+    }, ":")
+    local stable_id = self.semantic_id_by_source[source_key]
+      or self.semantic_id_by_native[native_id]
+      or self.previous_semantic_id_by_source[source_key]
+      or self.previous_semantic_id_by_native[native_id]
+      or native_id
+    node.id = stable_id
+    self.semantic_id_by_source[source_key] = stable_id
+    self.semantic_id_by_native[native_id] = stable_id
+  end
+  return nodes
+end
+
 function Model:inline_nodes_for_lines(line1, line2, opts)
   local inlines, reason = self:captures_for_lines("inline", line1, line2, opts)
   if not inlines then return nil, reason end
-  return build_nodes(inlines), reason
+  return self:stabilize_node_ids(build_nodes(inlines)), reason
 end
 
 function Model:nodes_for_lines(line1, line2, opts)
@@ -483,7 +514,7 @@ function Model:nodes_for_lines(line1, line2, opts)
   local captures = {}
   for _, capture in ipairs(blocks) do captures[#captures + 1] = capture end
   for _, capture in ipairs(inlines) do captures[#captures + 1] = capture end
-  return build_nodes(captures), block_reason or inline_reason
+  return self:stabilize_node_ids(build_nodes(captures)), block_reason or inline_reason
 end
 
 function Model:close(reason)

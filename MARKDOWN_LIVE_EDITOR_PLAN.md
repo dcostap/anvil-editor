@@ -1115,6 +1115,8 @@ Each implemented slice needs its own public behavior tests, mapping tests, focus
 
 ### Phase 8: promotion and cleanup
 
+**Release stabilization started July 10, 2026.** Semantic identities are now reconciled across adjacent publications by native identity and exact semantic source range, and duplicate equivalent captures are suppressed during bounded adoption. The focused semantic-model and Markdown Live Editor suites pass, as does the complete 633-test Lua runtime suite. Global default promotion remains intentionally withheld: the complete Lua UI target still encounters the previously documented SDL event-queue saturation/timeout outside the focused Markdown Live Preview suite.
+
 - Run targeted and full Anvil suites.
 - Run GUI smoke and manual scenario matrix under D3D11 and software rendering where relevant.
 - Run large-note and large-Project benchmarks.
