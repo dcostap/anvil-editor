@@ -169,6 +169,7 @@ static int pool_submit(lua_State *L) {
   if (sleep_ms < 0) sleep_ms = 0;
   spec.sleep_ms = (uint32_t)sleep_ms;
   spec.path = opt_string_field(L, 2, "path", NULL);
+  spec.relpath = opt_string_field(L, 2, "relpath", NULL);
   spec.language = opt_string_field(L, 2, "language", NULL);
   spec.text = opt_lstring_field(L, 2, "text", &spec.text_len);
   spec.outline_query = opt_lstring_field(L, 2, "outline_query", &spec.outline_query_len);
@@ -279,6 +280,87 @@ static void push_treesitter_capture(lua_State *L, AnvilWorkerTreeSitterIndexResu
   lua_setfield(L, -2, "node_id");
 }
 
+static void push_project_range(lua_State *L, const AnvilTSProjectRange *range) {
+  lua_createtable(L, 0, 2);
+  lua_createtable(L, 0, 2);
+  lua_pushinteger(L, (lua_Integer)range->start_point.row + 1); lua_setfield(L, -2, "line");
+  lua_pushinteger(L, (lua_Integer)range->start_point.column + 1); lua_setfield(L, -2, "col");
+  lua_setfield(L, -2, "start");
+  lua_createtable(L, 0, 2);
+  lua_pushinteger(L, (lua_Integer)range->end_point.row + 1); lua_setfield(L, -2, "line");
+  lua_pushinteger(L, (lua_Integer)range->end_point.column + 1); lua_setfield(L, -2, "col");
+  lua_setfield(L, -2, "end");
+}
+
+static void set_project_location_fields(lua_State *L, const AnvilTSProjectRange *range) {
+  lua_pushinteger(L, (lua_Integer)range->start_point.row + 1); lua_setfield(L, -2, "start_line");
+  lua_pushinteger(L, (lua_Integer)range->start_point.column + 1); lua_setfield(L, -2, "start_col");
+  lua_pushinteger(L, (lua_Integer)range->end_point.row + 1); lua_setfield(L, -2, "end_line");
+  lua_pushinteger(L, (lua_Integer)range->end_point.column + 1); lua_setfield(L, -2, "end_col");
+  lua_pushinteger(L, (lua_Integer)range->start_byte); lua_setfield(L, -2, "start_byte");
+  lua_pushinteger(L, (lua_Integer)range->end_byte); lua_setfield(L, -2, "end_byte");
+  push_project_range(L, range); lua_setfield(L, -2, "range");
+}
+
+static void set_project_path_fields(lua_State *L, AnvilWorkerTreeSitterIndexResult *result) {
+  const char *path = anvil_worker_treesitter_index_result_project_path(result);
+  const char *relpath = anvil_worker_treesitter_index_result_project_relpath(result);
+  const char *language = anvil_worker_treesitter_index_result_language(result);
+  lua_pushstring(L, path ? path : ""); lua_setfield(L, -2, "path");
+  lua_pushstring(L, relpath ? relpath : (path ? path : "")); lua_setfield(L, -2, "file");
+  lua_pushstring(L, relpath ? relpath : (path ? path : "")); lua_setfield(L, -2, "relpath");
+  lua_pushstring(L, language ? language : ""); lua_setfield(L, -2, "language_id");
+}
+
+static void push_project_symbol(lua_State *L, AnvilWorkerTreeSitterIndexResult *result, uint32_t index) {
+  AnvilTSProjectSymbolView symbol;
+  if (!anvil_worker_treesitter_index_result_project_symbol_at(result, index, &symbol)) { lua_pushnil(L); return; }
+  lua_createtable(L, 0, 22);
+  lua_pushlstring(L, symbol.name, symbol.name_len); lua_setfield(L, -2, "name");
+  lua_pushlstring(L, symbol.name, symbol.name_len); lua_setfield(L, -2, "text");
+  lua_pushlstring(L, symbol.kind, symbol.kind_len); lua_setfield(L, -2, "kind");
+  if (symbol.signature) { lua_pushlstring(L, symbol.signature, symbol.signature_len); lua_setfield(L, -2, "signature"); }
+  if (symbol.declaration) { lua_pushlstring(L, symbol.declaration, symbol.declaration_len); lua_setfield(L, -2, "declaration"); }
+  if (symbol.has_declaration_name_span) {
+    lua_createtable(L, 2, 0);
+    lua_pushinteger(L, symbol.declaration_name_start); lua_rawseti(L, -2, 1);
+    lua_pushinteger(L, symbol.declaration_name_end); lua_rawseti(L, -2, 2);
+    lua_setfield(L, -2, "declaration_name_span");
+  }
+  set_project_location_fields(L, &symbol.range);
+  push_project_range(L, &symbol.name_range); lua_setfield(L, -2, "name_range");
+  lua_pushinteger(L, symbol.index); lua_setfield(L, -2, "index");
+  lua_pushinteger(L, symbol.depth); lua_setfield(L, -2, "depth");
+  if (symbol.parent != UINT32_MAX) {
+    lua_pushinteger(L, symbol.parent); lua_setfield(L, -2, "parent");
+    AnvilTSProjectSymbolView parent;
+    if (anvil_worker_treesitter_index_result_project_symbol_at(result, symbol.parent - 1, &parent)) {
+      lua_pushlstring(L, parent.name, parent.name_len); lua_setfield(L, -2, "parent_name");
+    }
+  }
+  lua_createtable(L, (int)symbol.child_count, 0);
+  for (uint32_t i = 0; i < symbol.child_count; i++) {
+    lua_pushinteger(L, symbol.children[i]); lua_rawseti(L, -2, (int)i + 1);
+  }
+  lua_setfield(L, -2, "children");
+  set_project_path_fields(L, result);
+}
+
+static void push_project_usage(lua_State *L, AnvilWorkerTreeSitterIndexResult *result, uint32_t index) {
+  AnvilTSProjectUsageView usage;
+  if (!anvil_worker_treesitter_index_result_project_usage_at(result, index, &usage)) { lua_pushnil(L); return; }
+  lua_createtable(L, 0, 20);
+  lua_pushlstring(L, usage.name, usage.name_len); lua_setfield(L, -2, "name");
+  lua_pushlstring(L, usage.name, usage.name_len); lua_setfield(L, -2, "text");
+  lua_pushlstring(L, usage.capture, usage.capture_len); lua_setfield(L, -2, "capture");
+  lua_pushlstring(L, usage.kind, usage.kind_len); lua_setfield(L, -2, "kind");
+  lua_pushlstring(L, usage.line_text, usage.line_text_len); lua_setfield(L, -2, "line_text");
+  lua_pushboolean(L, usage.is_declaration); lua_setfield(L, -2, "is_declaration");
+  lua_pushboolean(L, true); lua_setfield(L, -2, "workspace_tree_sitter_fallback");
+  set_project_location_fields(L, &usage.range);
+  set_project_path_fields(L, result);
+}
+
 static int treesitter_index_result_summary(lua_State *L) {
   LuaTreeSitterIndexResult *result = check_treesitter_index_result(L, 1);
   lua_createtable(L, 0, 6);
@@ -301,6 +383,8 @@ static int treesitter_index_result_summary(lua_State *L) {
   lua_setfield(L, -2, "prepare_input_ms");
   lua_pushnumber(L, anvil_worker_treesitter_index_result_parser_setup_ms(result->result));
   lua_setfield(L, -2, "parser_setup_ms");
+  lua_pushnumber(L, anvil_worker_treesitter_index_result_project_record_ms(result->result));
+  lua_setfield(L, -2, "project_record_ms");
   lua_pushnumber(L, anvil_worker_treesitter_index_result_precise_query_ms(result->result, "outline"));
   lua_setfield(L, -2, "outline_query_ms");
   lua_pushnumber(L, anvil_worker_treesitter_index_result_query_compile_ms(result->result, "outline"));
@@ -349,6 +433,16 @@ static int treesitter_index_result_summary(lua_State *L) {
   lua_pushboolean(L, (capabilities & ANVIL_WORKER_TS_COMPACT_PROJECT_RECORDS) != 0);
   lua_setfield(L, -2, "compact_project_records");
   lua_setfield(L, -2, "capabilities");
+  if ((capabilities & ANVIL_WORKER_TS_COMPACT_PROJECT_RECORDS) != 0) {
+    lua_createtable(L, 0, 4);
+    const char *path = anvil_worker_treesitter_index_result_project_path(result->result);
+    const char *relpath = anvil_worker_treesitter_index_result_project_relpath(result->result);
+    lua_pushstring(L, path ? path : ""); lua_setfield(L, -2, "path");
+    lua_pushstring(L, relpath ? relpath : ""); lua_setfield(L, -2, "relpath");
+    lua_pushinteger(L, anvil_worker_treesitter_index_result_project_symbol_count(result->result)); lua_setfield(L, -2, "symbol_count");
+    lua_pushinteger(L, anvil_worker_treesitter_index_result_project_usage_count(result->result)); lua_setfield(L, -2, "usage_count");
+    lua_setfield(L, -2, "project");
+  }
   const char *kinds[] = { "outline", "usage" };
   for (int i = 0; i < 2; ++i) {
     const char *kind = kinds[i];
@@ -372,6 +466,55 @@ static int treesitter_index_result_summary(lua_State *L) {
     }
     lua_setfield(L, -2, kind);
   }
+  return 1;
+}
+
+#define PROJECT_RECORD_PAGE_LIMIT 4096u
+
+static void project_page_options(lua_State *L, int table, uint32_t *offset, uint32_t *limit) {
+  *offset = 1;
+  *limit = 256;
+  if (lua_istable(L, table)) {
+    *offset = opt_uint32_field(L, table, "offset", 1);
+    *limit = opt_uint32_field(L, table, "limit", 256);
+    luaL_argcheck(L, *limit <= PROJECT_RECORD_PAGE_LIMIT, table, "Project record page limit exceeds 4096");
+  }
+  if (*offset == 0) *offset = 1;
+}
+
+static int treesitter_index_result_symbols(lua_State *L) {
+  LuaTreeSitterIndexResult *result = check_treesitter_index_result(L, 1);
+  uint32_t offset, limit;
+  project_page_options(L, 2, &offset, &limit);
+  uint32_t count = anvil_worker_treesitter_index_result_project_symbol_count(result->result);
+  uint32_t start = offset - 1;
+  if (start > count) start = count;
+  uint32_t out_count = limit < count - start ? limit : count - start;
+  lua_createtable(L, (int)out_count, 0);
+  for (uint32_t i = 0; i < out_count; i++) {
+    push_project_symbol(L, result->result, start + i);
+    lua_rawseti(L, -2, (int)i + 1);
+  }
+  lua_pushinteger(L, start + out_count + 1); lua_setfield(L, -2, "next_offset");
+  lua_pushinteger(L, count); lua_setfield(L, -2, "total");
+  return 1;
+}
+
+static int treesitter_index_result_usages(lua_State *L) {
+  LuaTreeSitterIndexResult *result = check_treesitter_index_result(L, 1);
+  uint32_t offset, limit;
+  project_page_options(L, 2, &offset, &limit);
+  uint32_t count = anvil_worker_treesitter_index_result_project_usage_count(result->result);
+  uint32_t start = offset - 1;
+  if (start > count) start = count;
+  uint32_t out_count = limit < count - start ? limit : count - start;
+  lua_createtable(L, (int)out_count, 0);
+  for (uint32_t i = 0; i < out_count; i++) {
+    push_project_usage(L, result->result, start + i);
+    lua_rawseti(L, -2, (int)i + 1);
+  }
+  lua_pushinteger(L, start + out_count + 1); lua_setfield(L, -2, "next_offset");
+  lua_pushinteger(L, count); lua_setfield(L, -2, "total");
   return 1;
 }
 
@@ -651,6 +794,8 @@ static const luaL_Reg cancel_token_methods[] = {
 
 static const luaL_Reg treesitter_index_result_methods[] = {
   { "summary", treesitter_index_result_summary },
+  { "symbols", treesitter_index_result_symbols },
+  { "usages", treesitter_index_result_usages },
   { "captures", treesitter_index_result_captures },
   { "captures_for_lines", treesitter_index_result_captures_for_lines },
   { "close", treesitter_index_result_close },

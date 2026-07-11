@@ -250,6 +250,46 @@ test.describe("worker_pool_native", function()
     test.equal(pool:status(handle).status, "failed")
   end)
 
+  test.test("native Project records bound previews and prefer duplicate declarations", function()
+    local pool = new_pool("lua-native-project-record-edges", 1)
+    local long_name = string.rep("n", 1200)
+    local result = submit_result(pool, {
+      kind = "treesitter_index_text",
+      language = "c",
+      path = "long.c",
+      relpath = "long.c",
+      text = "int " .. long_name .. "(void) { return 0; }\n",
+      outline_query = [[
+        (function_definition
+          declarator: (function_declarator
+            declarator: (identifier) @name
+            parameters: (parameter_list) @signature.params)) @outline.function
+      ]],
+      usage_query = [[
+        (function_declarator
+          declarator: (identifier) @reference @definition.function)
+      ]],
+      capture_paging = false,
+      line_range_lookup = false,
+      compact_project_records = true,
+      parse_timeout_ms = 1000,
+      query_timeout_ms = 100,
+      usage_query_timeout_ms = 100,
+      max_captures = 100,
+      usage_max_captures = 100,
+    })
+    test.error(function() result:symbols({ limit = 4097 }) end)
+    test.error(function() result:usages({ limit = 4097 }) end)
+    local symbols = result:symbols({ limit = 10 })
+    local usages = result:usages({ limit = 10 })
+    test.equal(#symbols, 1)
+    test.ok(#symbols[1].declaration <= 1024)
+    test.equal(#usages, 1)
+    test.equal(usages[1].capture, "definition.function")
+    test.equal(usages[1].is_declaration, true)
+    test.ok(#usages[1].line_text <= 512)
+  end)
+
   test.test("Markdown block reuse requires an identical complete structural query", function()
     local pool = new_pool("lua-native-markdown-query-reuse", 1)
     local spec = {

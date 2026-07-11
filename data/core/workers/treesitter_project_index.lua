@@ -161,6 +161,7 @@ local function copy_native_metrics(metrics, result, prefix)
     if native_metrics.query_cache_hits then add_metric(metrics, "query_cache_hits", native_metrics.query_cache_hits) end
     if native_metrics.query_cache_misses then add_metric(metrics, "query_cache_misses", native_metrics.query_cache_misses) end
     if native_metrics.line_indexes_skipped then add_metric(metrics, "line_indexes_skipped", native_metrics.line_indexes_skipped) end
+    if native_metrics.project_record_ms then add_metric(metrics, "native_project_record_ms", native_metrics.project_record_ms) end
     if native_metrics.parser_reused then inc_metric(metrics, "parser_reuses", 1) end
     if native_metrics.total_ms then
       local accounted = (native_metrics.prepare_input_ms or 0)
@@ -172,6 +173,7 @@ local function copy_native_metrics(metrics, result, prefix)
         + (native_metrics.usage_query_compile_ms or 0)
         + (native_metrics.usage_query_ms or 0)
         + (native_metrics.usage_line_index_ms or 0)
+        + (native_metrics.project_record_ms or 0)
       add_metric(metrics, "native_other_ms", math.max(0, native_metrics.total_ms - accounted))
     end
     if native_metrics.parse_count then inc_metric(metrics, "parse_calls", native_metrics.parse_count) end
@@ -195,20 +197,22 @@ local function native_index_pool_for(payload)
   return native_index_pool
 end
 
-local function native_index_text_job(native_opts, text, payload, ctx, metrics)
-  local pool = native_index_pool_for(payload)
-  if not pool then return nil, "native-pool-unavailable" end
+local function native_index_text_job(native_opts, text, path, relpath, payload, ctx, metrics)
+  local pool, pool_err = native_index_pool_for(payload)
+  if not pool then return nil, pool_err or "native-pool-unavailable", true end
   local spec = common.merge({}, native_opts or {})
   spec.kind = "treesitter_index_text"
   spec.lines = nil
   spec.text = text
-  spec.capture_paging = true
+  spec.path = path
+  spec.relpath = relpath
+  spec.capture_paging = false
   spec.line_range_lookup = false
-  spec.compact_project_records = false
+  spec.compact_project_records = true
   local submit_started = now()
   local handle, err = pool:submit(spec)
   add_metric(metrics, "native_index_submit_ms", elapsed_ms(submit_started))
-  if not handle then return nil, err or "native-submit-failed" end
+  if not handle then return nil, err or "native-submit-failed", true end
 
   local result_handle
   local terminal
@@ -235,17 +239,18 @@ local function native_index_text_job(native_opts, text, payload, ctx, metrics)
     end
   end
 
-  if terminal == "cancelled" then return nil, "cancelled" end
-  if terminal == "error" then return nil, terminal_error or "native-index-failed" end
-  if not result_handle then return nil, "missing-native-index-result" end
+  if terminal == "cancelled" then return nil, "cancelled", false end
+  if terminal == "error" then return nil, terminal_error or "native-index-failed", true end
+  if not result_handle then return nil, "missing-native-index-result", true end
   local adapt_started = now()
   local result, adapt_err = native_result_adapter.to_index_text_result(result_handle, {
     lazy = true,
     capture_chunk = payload.native_result_capture_chunk or payload.chunk_records or DEFAULT_CHUNK_RECORDS,
+    record_chunk = payload.native_result_record_chunk or payload.chunk_records or DEFAULT_CHUNK_RECORDS,
   })
   add_metric(metrics, "native_index_result_adapt_ms", elapsed_ms(adapt_started))
   if result then inc_metric(metrics, "native_index_jobs", 1) end
-  return result, adapt_err
+  return result, adapt_err, not result
 end
 
 local function query_status_ok(query_result)
@@ -568,9 +573,8 @@ local function index_file(path, root_path, language, payload, ctx, info, usage_r
   local sources = language.query_sources or {}
   if not sources.outline then return nil, "missing-outline-query", info end
   local usage_kind = payload.include_usages ~= false and query_kind(language) or nil
-  local lines_started = now()
-  local lines = records.lines_from_text(text)
-  add_metric(metrics, "line_split_ms", elapsed_ms(lines_started))
+  local relpath = common.relative_path(root_path, path):gsub("\\", "/")
+  local lines
   local usage_effective_cap = 0
   if usage_kind then
     local language_usage_cap = option(language, "usages", "max_captures", DEFAULT_MAX_CAPTURES)
@@ -580,7 +584,6 @@ local function index_file(path, root_path, language, payload, ctx, info, usage_r
 
   local native_opts = {
     language = language.grammar,
-    lines = lines,
     outline_query = sources.outline,
     parse_timeout_ms = language.parse_timeout_ms or DEFAULT_PARSE_TIMEOUT_MS,
     query_timeout_ms = option(language, "outline", "query_timeout_ms", DEFAULT_QUERY_TIMEOUT_MS),
@@ -595,29 +598,31 @@ local function index_file(path, root_path, language, payload, ctx, info, usage_r
     native_opts.usage_max_captures = usage_effective_cap
   end
 
-  local result
+  local result, fatal
   local native_started = now()
   if payload.native_index_jobs ~= false then
-    result, err = native_index_text_job(native_opts, text, payload, ctx, metrics)
-    if not result and err ~= "cancelled" then
-      inc_metric(metrics, "native_index_job_fallbacks", 1)
-      result, err = native.index_text(native_opts)
-    end
+    result, err, fatal = native_index_text_job(native_opts, text, path, relpath, payload, ctx, metrics)
   else
+    local lines_started = now()
+    lines = records.lines_from_text(text)
+    add_metric(metrics, "line_split_ms", elapsed_ms(lines_started))
+    native_opts.lines = lines
     result, err = native.index_text(native_opts)
   end
   add_metric(metrics, "native_index_text_ms", elapsed_ms(native_started))
-  if not result then return nil, err or "index-text-failed", info end
+  if not result then return nil, err or "index-text-failed", info, fatal end
   copy_native_metrics(metrics, result, "outline")
   if result.usage then copy_native_metrics(metrics, result, "usage") end
   if not query_status_ok(result.outline) then
     return nil, (result.outline and result.outline.error) or "outline-query-failed", info
   end
 
-  local relpath = common.relative_path(root_path, path):gsub("\\", "/")
   local symbol_record_started = now()
-  local symbols
-  if result.outline and result.outline.capture_iter then
+  local symbols = {}
+  if result.project then
+    for symbol in result.project.symbol_iter() do symbols[#symbols + 1] = symbol end
+    inc_metric(metrics, "native_project_symbol_records", #symbols)
+  elseif result.outline and result.outline.capture_iter then
     symbols = records.symbols_from_capture_iter(result.outline.capture_iter(), lines)
     inc_metric(metrics, "native_index_lazy_outline_records", 1)
   else
@@ -637,7 +642,12 @@ local function index_file(path, root_path, language, payload, ctx, info, usage_r
   if usage_kind then
     if usage_effective_cap > 0 and result.usage and query_status_ok(result.usage) then
       local usage_record_started = now()
-      if result.usage.capture_iter then
+      if result.project then
+        for usage in result.project.usage_iter() do
+          if records.add_usage(usages_by_name, usage) then usage_count = usage_count + 1 end
+        end
+        inc_metric(metrics, "native_project_usage_records", usage_count)
+      elseif result.usage.capture_iter then
         usages_by_name, usage_count = records.usages_from_capture_iter(result.usage.capture_iter(), path, relpath, lines, language)
         inc_metric(metrics, "native_index_lazy_usage_records", 1)
       else
@@ -689,7 +699,8 @@ local function walk(root, payload, ctx, state, chunk)
         if language then
           local usage_cap = payload.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP
           local usage_remaining = math.max(0, usage_cap - state.usage_count)
-          local file_result, err = index_file(path, root_path, language, payload, ctx, info, usage_remaining, state.metrics)
+          local file_result, err, _, fatal = index_file(path, root_path, language, payload, ctx, info, usage_remaining, state.metrics)
+          if fatal then error("native Project indexing failed: " .. tostring(err or "unknown error")) end
           if file_result then
             state.files_indexed = state.files_indexed + 1
             inc_metric(state.metrics, "files_indexed", 1)
@@ -801,7 +812,8 @@ local function index_files(payload, ctx, state, chunk)
       inc_metric(state.metrics, "files_scanned", 1)
       local usage_cap = payload.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP
       local usage_remaining = math.max(0, usage_cap - state.usage_count)
-      local file_result, err = index_file(path, file_root, language, payload, ctx, file.info, usage_remaining, state.metrics, file.text)
+      local file_result, err, _, fatal = index_file(path, file_root, language, payload, ctx, file.info, usage_remaining, state.metrics, file.text)
+      if fatal then error("native Project indexing failed: " .. tostring(err or "unknown error")) end
       if file_result then
         state.files_indexed = state.files_indexed + 1
         inc_metric(state.metrics, "files_indexed", 1)

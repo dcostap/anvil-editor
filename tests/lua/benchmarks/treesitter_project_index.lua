@@ -166,6 +166,7 @@ local function run_case(name, root, remove_after, expected_files)
       read = worker.file_read_ms,
       native = worker.native_total_ms,
       parse = worker.parse_ms,
+      native_project_records = worker.native_project_record_ms,
       outline_query = worker.outline_query_ms,
       usage_query = worker.usage_query_ms,
       symbol_records = worker.symbol_record_ms,
@@ -179,6 +180,8 @@ local function run_case(name, root, remove_after, expected_files)
       query_cache_misses = worker.query_cache_misses,
       parser_reuses = worker.parser_reuses,
       line_indexes_skipped = worker.line_indexes_skipped,
+      native_project_symbol_records = worker.native_project_symbol_records,
+      native_project_usage_records = worker.native_project_usage_records,
     },
     temporary_io = {
       index_artifacts = worker.artifacts_sent,

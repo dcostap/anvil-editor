@@ -37,6 +37,30 @@ function adapter.capture_iterator(result_handle, kind, opts)
   end
 end
 
+local function project_record_iterator(result_handle, method, opts)
+  opts = opts or {}
+  local limit = math.max(1, math.floor(tonumber(opts.record_chunk or opts.capture_chunk) or DEFAULT_CAPTURE_CHUNK))
+  local offset = math.max(1, math.floor(tonumber(opts.offset) or 1))
+  local chunk, chunk_index, exhausted
+  return function()
+    while not exhausted do
+      if chunk and chunk_index <= #chunk then
+        local record = chunk[chunk_index]
+        chunk_index = chunk_index + 1
+        return record
+      end
+      chunk = result_handle[method](result_handle, { offset = offset, limit = limit })
+      chunk_index = 1
+      local next_offset = tonumber(chunk and chunk.next_offset) or (offset + #(chunk or {}))
+      if not chunk or #chunk == 0 or next_offset <= offset then
+        exhausted = true
+        return nil
+      end
+      offset = next_offset
+    end
+  end
+end
+
 local function query_from_summary(summary_query, result_handle, kind, opts)
   if not summary_query or summary_query.status == "absent" then return nil end
   opts = opts or {}
@@ -73,6 +97,20 @@ function adapter.to_index_text_result(result_handle, opts)
   }
   result.outline = query_from_summary(summary.outline, result_handle, "outline", opts)
   result.usage = query_from_summary(summary.usage, result_handle, "usage", opts)
+  if summary.project then
+    result.project = {
+      path = summary.project.path,
+      relpath = summary.project.relpath,
+      symbol_count = tonumber(summary.project.symbol_count) or 0,
+      usage_count = tonumber(summary.project.usage_count) or 0,
+      symbol_iter = function(iter_opts)
+        return project_record_iterator(result_handle, "symbols", common.merge(opts, iter_opts or {}))
+      end,
+      usage_iter = function(iter_opts)
+        return project_record_iterator(result_handle, "usages", common.merge(opts, iter_opts or {}))
+      end,
+    }
+  end
   return result
 end
 

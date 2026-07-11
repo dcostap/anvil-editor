@@ -1,7 +1,7 @@
 local common = require "core.common"
 local registry = require "core.treesitter.registry"
 local records = require "core.treesitter.project_index_records"
-local native = require "treesitter"
+local native_pool = require "worker_pool_native"
 local test = require "core.test"
 
 local cases = {
@@ -106,13 +106,18 @@ end
 
 local function extract(case)
   local language = test.not_nil(registry.get(case.filename, ""))
-  local source = case.source:gsub("\r\n", "\n"):gsub("\r", "\n")
-  local lines = records.lines_from_text(source)
-  local result, err = native.index_text({
+  local pool = native_pool.new({ name = "project-contract-" .. case.language, worker_count = 1 })
+  local handle, submit_err = pool:submit({
+    kind = "treesitter_index_text",
     language = language.grammar or language.id,
-    lines = lines,
+    path = case.filename,
+    relpath = case.filename,
+    text = case.source,
     outline_query = language.query_sources.outline,
     usage_query = language.query_sources.usages or language.query_sources.locals,
+    capture_paging = false,
+    line_range_lookup = false,
+    compact_project_records = true,
     parse_timeout_ms = 1000,
     query_timeout_ms = 100,
     usage_query_timeout_ms = 100,
@@ -121,11 +126,41 @@ local function extract(case)
     usage_match_limit = 50000,
     usage_max_captures = 50000,
   })
-  test.not_nil(result, err)
-  local symbols = records.symbols_from_captures(result.outline and result.outline.captures, lines)
-  local usages_by_name, usage_count = records.usages_from_captures(
-    result.usage and result.usage.captures, case.filename, case.filename, lines, language
-  )
+  test.not_nil(handle, submit_err)
+  local result, terminal_error
+  for _ = 1, 5000 do
+    for _, message in ipairs(pool:drain({ max_messages = 64 })) do
+      if message.type == "result" then result = message.result end
+      if message.type == "error" then terminal_error = message.error end
+    end
+    if result or terminal_error then break end
+    coroutine.yield(0.001)
+  end
+  test.not_nil(result, terminal_error)
+  local summary = result:summary()
+  test.equal(summary.capabilities.compact_project_records, true)
+  local function collect_pages(method)
+    local out, offset, total = {}, 1
+    repeat
+      local page = result[method](result, { offset = offset, limit = 2 })
+      total = page.total
+      for _, record in ipairs(page) do out[#out + 1] = record end
+      offset = page.next_offset
+    until #out >= total
+    test.equal(#out, total)
+    return out
+  end
+  local symbols = collect_pages("symbols")
+  local usages = collect_pages("usages")
+  for _, symbol in ipairs(symbols) do
+    if symbol.depth == 0 then
+      test.equal(symbol.parent, nil)
+    else
+      test.ok(type(symbol.parent) == "number" and symbol.parent >= 1 and symbol.parent <= #symbols)
+    end
+  end
+  local usage_count = #usages
+  pool:shutdown({ cancel_running = true })
   local actual_symbols = {}
   for _, symbol in ipairs(symbols) do
     actual_symbols[#actual_symbols + 1] = {
@@ -135,12 +170,10 @@ local function extract(case)
     }
   end
   local actual_usages = {}
-  for name, usages in pairs(usages_by_name) do
-    for _, usage in ipairs(usages) do
-      actual_usages[#actual_usages + 1] = {
-        name, usage.capture, usage.is_declaration, flat_range(usage.range), usage.line_text,
-      }
-    end
+  for _, usage in ipairs(usages) do
+    actual_usages[#actual_usages + 1] = {
+      usage.name, usage.capture, usage.is_declaration, flat_range(usage.range), usage.line_text,
+    }
   end
   table.sort(actual_usages, function(a, b)
     if a[4][1] ~= b[4][1] then return a[4][1] < b[4][1] end
