@@ -1,5 +1,6 @@
 local core = require "core"
 local command = require "core.command"
+local style = require "core.style"
 local test = require "core.test"
 
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
@@ -68,6 +69,39 @@ test.describe("Fuzzy Searcher mode switching", function()
     cleanup_editor_views(context)
   end)
 
+  test.it("migrates legacy inline grep history into exact grep restore points", function()
+    local history, migrated = fuzzy_searcher._test.normalize_prompt_history({
+      [""] = { "odin/parser #parse_package" },
+    })
+
+    test.ok(migrated)
+    test.same(history["#"], { "odin/parser #parse_package" })
+    test.is_nil(history[""])
+  end)
+
+  test.it("renders an inline path/content separator as a mode marker", function()
+    fuzzy_searcher.open("")
+    local picker = core.fuzzy_searcher_active_view
+    picker.input:set_text("odin\\parser #parse_package")
+
+    local draws = {}
+    local old_draw_text = renderer.draw_text
+    renderer.draw_text = function(font, text, x, _, color)
+      draws[#draws + 1] = { text = text, color = color }
+      return x + font:get_width(text)
+    end
+    local ok, err = pcall(function()
+      picker.input.textview:draw_line_text(1, 0, 0)
+    end)
+    renderer.draw_text = old_draw_text
+    if not ok then error(err, 0) end
+
+    test.equal(draws[1].text, "odin\\parser ")
+    test.equal(draws[2].text, "#")
+    test.equal(draws[2].color, style.dim)
+    test.equal(draws[3].text, "parse_package\n")
+  end)
+
   test.it("places the caret after the initial mode prefix when opened", function()
     fuzzy_searcher.open("#")
 
@@ -128,6 +162,51 @@ test.describe("Fuzzy Searcher mode switching", function()
     test.same({ picker.input.textview.doc:get_selection() }, { 1, 2, 1, #">line wrapping" + 1 })
   end)
 
+  test.it("restores an inline path/content grep prompt without moving its mode marker", function()
+    fuzzy_searcher.open("")
+    core.fuzzy_searcher_active_view.input:set_text("odin/parser #parse_package")
+    core.fuzzy_searcher_active_view:close()
+
+    fuzzy_searcher.open("#")
+
+    test.equal(picker_text(), "odin/parser #parse_package")
+  end)
+
+  test.it("navigates inline path/content grep history as exact prompt restore points", function()
+    fuzzy_searcher.open("#")
+    core.fuzzy_searcher_active_view.input:set_text("#first grep")
+    core.fuzzy_searcher_active_view:close()
+
+    fuzzy_searcher.open("")
+    core.fuzzy_searcher_active_view.input:set_text("odin/parser #parse_package")
+    core.fuzzy_searcher_active_view:close()
+
+    fuzzy_searcher.open("#")
+    local picker = core.fuzzy_searcher_active_view
+    test.equal(picker_text(), "odin/parser #parse_package")
+    picker.input:set_text("#draft")
+
+    command.perform("fuzzy-searcher:prompt-history-previous")
+    test.equal(picker_text(), "odin/parser #parse_package")
+    command.perform("fuzzy-searcher:prompt-history-previous")
+    test.equal(picker_text(), "#first grep")
+    command.perform("fuzzy-searcher:prompt-history-next")
+    test.equal(picker_text(), "odin/parser #parse_package")
+    command.perform("fuzzy-searcher:prompt-history-next")
+    test.equal(picker_text(), "#draft")
+  end)
+
+  test.it("keeps an inline grep prompt unchanged when grep mode is requested again", function()
+    fuzzy_searcher.open("")
+    local picker = core.fuzzy_searcher_active_view
+    picker.input:set_text("odin/parser #parse_package")
+
+    command.perform("fuzzy-searcher:open-grep")
+
+    test.equal(core.fuzzy_searcher_active_view, picker)
+    test.equal(picker_text(), "odin/parser #parse_package")
+  end)
+
   test.it("does not replace an auto-seeded grep prompt with saved history", function(context)
     fuzzy_searcher.open("#")
     core.fuzzy_searcher_active_view.input:set_text("#old grep")
@@ -186,7 +265,7 @@ test.describe("Fuzzy Searcher mode switching", function()
     picker = core.fuzzy_searcher_active_view
 
     test.equal(picker.input:get_text(), ">build")
-    test.same(fuzzy_searcher._test.prompt_history(">"), { "build" })
+    test.same(fuzzy_searcher._test.prompt_history(">"), { ">build" })
   end)
 
   test.it("restores target mode history when switching from an empty query", function()

@@ -729,36 +729,72 @@ local function split_mode_prefix(text)
   return "", text
 end
 
-function fuzzy_searcher.load_prompt_history()
-  if fuzzy_searcher.prompt_history_loaded then return end
-  local function normalize(data)
-    local normalized = {}
-    if type(data) ~= "table" then return normalized end
-    for mode, entries in pairs(data) do
-      mode = tostring(mode or "")
-      if type(entries) == "table" then
-        local out, seen = {}, {}
-        for _, entry in ipairs(entries) do
-          entry = type(entry) == "string" and entry or nil
-          if entry and trim_query(entry) ~= "" and not seen[entry] then
-            out[#out + 1] = entry
-            seen[entry] = true
-            if #out >= 50 then break end
+function fuzzy_searcher.split_prompt_mode_marker(text)
+  text = tostring(text or "")
+  local prefix, after = split_mode_prefix(text)
+  if prefix ~= "" then return "", prefix, after end
+
+  local marker_pos = text:find("#", 1, true)
+  if marker_pos then
+    return text:sub(1, marker_pos - 1), "#", text:sub(marker_pos + 1)
+  end
+  return text, "", ""
+end
+
+function fuzzy_searcher.prompt_mode(text)
+  local _, marker = fuzzy_searcher.split_prompt_mode_marker(text)
+  return marker
+end
+
+function fuzzy_searcher.prompt_query_start(text)
+  local before, marker = fuzzy_searcher.split_prompt_mode_marker(text)
+  return marker ~= "" and (#before + #marker + 1) or 1
+end
+
+function fuzzy_searcher.normalize_prompt_history(data)
+  local normalized, seen = {}, {}
+  if type(data) ~= "table" then return normalized, false end
+  local version2 = data.version == 2 and type(data.modes) == "table"
+  local modes = version2 and data.modes or data
+
+  for stored_mode, entries in pairs(modes) do
+    stored_mode = tostring(stored_mode or "")
+    if type(entries) == "table" then
+      for _, entry in ipairs(entries) do
+        if type(entry) == "string" then
+          local text = version2 and entry or (stored_mode .. entry)
+          local mode = fuzzy_searcher.prompt_mode(text)
+          seen[mode] = seen[mode] or {}
+          normalized[mode] = normalized[mode] or {}
+          if trim_query(text) ~= "" and not seen[mode][text] and #normalized[mode] < 50 then
+            normalized[mode][#normalized[mode] + 1] = text
+            seen[mode][text] = true
           end
         end
-        if #out > 0 then normalized[mode] = out end
       end
     end
-    return normalized
   end
+  return normalized, not version2
+end
 
-  fuzzy_searcher.prompt_history = normalize(storage.load("fuzzy_searcher", "prompt_history"))
+function fuzzy_searcher.load_prompt_history()
+  if fuzzy_searcher.prompt_history_loaded then return end
+  local stored = storage.load("fuzzy_searcher", "prompt_history")
+  local history, migrated = fuzzy_searcher.normalize_prompt_history(stored)
+  fuzzy_searcher.prompt_history = history
   fuzzy_searcher.prompt_history_loaded = true
+  if migrated and type(stored) == "table" then
+    core.log_quiet("Fuzzy Searcher: migrated prompt history to exact prompt restore points")
+    storage.save("fuzzy_searcher", "prompt_history", { version = 2, modes = history })
+  end
 end
 
 function fuzzy_searcher.save_prompt_history()
   fuzzy_searcher.load_prompt_history()
-  storage.save("fuzzy_searcher", "prompt_history", fuzzy_searcher.prompt_history)
+  storage.save("fuzzy_searcher", "prompt_history", {
+    version = 2,
+    modes = fuzzy_searcher.prompt_history,
+  })
 end
 
 function fuzzy_searcher.prompt_history_for_mode(mode)
@@ -769,24 +805,26 @@ function fuzzy_searcher.prompt_history_for_mode(mode)
 end
 
 function fuzzy_searcher.record_prompt_history_text(text)
-  local mode, query = split_mode_prefix(text)
-  query = tostring(query or "")
-  if trim_query(query) == "" then return end
+  text = tostring(text or "")
+  local leading_mode, query = split_mode_prefix(text)
+  if trim_query(text) == "" or (leading_mode ~= "" and trim_query(query) == "") then return end
 
+  local mode = fuzzy_searcher.prompt_mode(text)
   local history = fuzzy_searcher.prompt_history_for_mode(mode)
   for i = #history, 1, -1 do
-    if history[i] == query then table.remove(history, i) end
+    if history[i] == text then table.remove(history, i) end
   end
-  table.insert(history, 1, query)
+  table.insert(history, 1, text)
   while #history > 50 do table.remove(history) end
   fuzzy_searcher.save_prompt_history()
 end
 
 function fuzzy_searcher.restored_prompt_text(text)
-  local mode, query = split_mode_prefix(text)
+  local leading_mode, query = split_mode_prefix(text)
   if query ~= "" then return text, false end
+  local mode = leading_mode ~= "" and leading_mode or fuzzy_searcher.prompt_mode(text)
   local latest = fuzzy_searcher.prompt_history_for_mode(mode)[1]
-  if latest and latest ~= "" then return mode .. latest, true end
+  if latest and latest ~= "" then return latest, true end
   return text, false
 end
 
@@ -2334,15 +2372,18 @@ function FSView:new(prefix, opts)
   local default_input_draw_line_text = self.input.textview.draw_line_text
   function self.input.textview:draw_line_text(line, x, y)
     local text = self.doc.lines[line] or ""
-    local mode_prefix, query = split_mode_prefix(text)
-    if mode_prefix == "" or self.subparent.password then
+    local before, mode_marker, after = fuzzy_searcher.split_prompt_mode_marker(text)
+    if mode_marker == "" or self.subparent.password then
       return default_input_draw_line_text(self, line, x, y)
     end
 
     local font = self:get_font()
     local ty = y + self:get_line_text_y_offset()
-    local cx = renderer.draw_text(font, mode_prefix, x, ty, style.dim)
-    renderer.draw_text(font, query, cx, ty, style.syntax["normal"] or style.text)
+    local normal_color = style.syntax["normal"] or style.text
+    local cx = x
+    if before ~= "" then cx = renderer.draw_text(font, before, cx, ty, normal_color) end
+    cx = renderer.draw_text(font, mode_marker, cx, ty, style.dim)
+    renderer.draw_text(font, after, cx, ty, normal_color)
     return self:get_line_height()
   end
   local cursor_col = #(prefix or "") + 1
@@ -4323,19 +4364,16 @@ function FSView:on_text_input(text)
   return true
 end
 
-function fuzzy_searcher.apply_prompt_history_query(view, mode, query, select_query)
-  local text = tostring(mode or "") .. tostring(query or "")
+function fuzzy_searcher.apply_prompt_history_text(view, text, select_query)
+  text = tostring(text or "")
   view._applying_prompt_history = true
   view.input:set_text(text)
   view._applying_prompt_history = false
 
   local doc = view.input and view.input.textview and view.input.textview.doc
   if doc then
-    if select_query then
-      doc:set_selection(1, #(mode or "") + 1, 1, #text + 1)
-    else
-      doc:set_selection(1, #text + 1, 1, #text + 1)
-    end
+    local col = select_query and fuzzy_searcher.prompt_query_start(text) or (#text + 1)
+    doc:set_selection(1, col, 1, #text + 1)
   end
   view.dirty = true
   view.force_refresh = true
@@ -4350,13 +4388,14 @@ function FSView:record_prompt_history()
 end
 
 function FSView:prompt_history_session()
-  local mode, query = split_mode_prefix(self.input and self.input:get_text() or "")
+  local text = self.input and self.input:get_text() or ""
+  local mode = fuzzy_searcher.prompt_mode(text)
   local session = self._prompt_history_session
   if session and session.mode == mode then return session end
 
-  local entries = { query }
+  local entries = { text }
   for _, entry in ipairs(fuzzy_searcher.prompt_history_for_mode(mode)) do
-    if entry ~= query then entries[#entries + 1] = entry end
+    if entry ~= text then entries[#entries + 1] = entry end
   end
   session = { mode = mode, entries = entries, index = 1 }
   self._prompt_history_session = session
@@ -4369,7 +4408,7 @@ function FSView:navigate_prompt_history(delta)
   local index = common.clamp(session.index + delta, 1, #session.entries)
   if index == session.index then return false end
   session.index = index
-  fuzzy_searcher.apply_prompt_history_query(self, session.mode, session.entries[index], false)
+  fuzzy_searcher.apply_prompt_history_text(self, session.entries[index], false)
   return true
 end
 
@@ -4728,7 +4767,11 @@ end
 local function switch_picker_prefix(view, prefix)
   prefix = prefix or ""
   local old_text = view.input and view.input:get_text() or ""
-  local old_prefix, query = split_mode_prefix(old_text)
+  local _, query = split_mode_prefix(old_text)
+  if fuzzy_searcher.prompt_mode(old_text) == prefix then
+    ensure_input_focus(view, "switch-prefix-same-mode")
+    return
+  end
   fuzzy_searcher.record_prompt_history_text(old_text)
 
   local new_text, select_query
@@ -4739,8 +4782,7 @@ local function switch_picker_prefix(view, prefix)
     select_query = true
   end
 
-  local new_prefix, new_query = split_mode_prefix(new_text)
-  fuzzy_searcher.apply_prompt_history_query(view, new_prefix, new_query, select_query)
+  fuzzy_searcher.apply_prompt_history_text(view, new_text, select_query)
   ensure_input_focus(view, "switch-prefix")
 end
 
@@ -4759,8 +4801,7 @@ function open(prefix)
   active_view = FSView(initial_text)
   core.fuzzy_searcher_active_view = active_view
   if select_restored_query then
-    local mode = split_mode_prefix(initial_text)
-    fuzzy_searcher.apply_prompt_history_query(active_view, mode, initial_text:sub(#mode + 1), true)
+    fuzzy_searcher.apply_prompt_history_text(active_view, initial_text, true)
   end
 end
 
@@ -4902,10 +4943,14 @@ return {
     everything_project_result_is_recent_duplicate = everything_project_result_is_recent_duplicate,
     recent_project_key_set = recent_project_key_set,
     split_mode_prefix = split_mode_prefix,
+    normalize_prompt_history = fuzzy_searcher.normalize_prompt_history,
     clear_prompt_history = function()
       fuzzy_searcher.prompt_history_loaded = true
       fuzzy_searcher.prompt_history = {}
-      storage.save("fuzzy_searcher", "prompt_history", fuzzy_searcher.prompt_history)
+      storage.save("fuzzy_searcher", "prompt_history", {
+        version = 2,
+        modes = fuzzy_searcher.prompt_history,
+      })
     end,
     prompt_history = function(mode)
       local history = fuzzy_searcher.prompt_history_for_mode(mode)
