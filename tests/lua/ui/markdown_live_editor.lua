@@ -1104,6 +1104,30 @@ test.describe("Markdown Live Editor", function()
     test.equal(view:get_line_render(1), nil)
   end)
 
+  test.it("presents inline and display math as styled editable source", function()
+    local view, doc = make_view("Inline $x^2 + y^2$ text\n\n$$\na + b\n$$\nplain", "math.md")
+    doc:set_selection(6, 1)
+    refresh(view)
+    local inline = test.not_nil(view:get_line_render(1))
+    local inline_math
+    for _, fragment in ipairs(inline.fragments) do
+      if fragment.math_source then inline_math = fragment break end
+    end
+    inline_math = test.not_nil(inline_math)
+    test.equal(inline_math.text, "$x^2 + y^2$")
+    test.equal(inline_math.background, style.markdown_live_math_background)
+    for line = 3, 5 do
+      local rendered = test.not_nil(view:get_line_render(line))
+      local found = false
+      for _, fragment in ipairs(rendered.fragments) do
+        if fragment.math_source then found = true end
+      end
+      test.equal(found, true)
+    end
+    doc:set_selection(1, 10)
+    test.equal(view:get_line_render(1), nil)
+  end)
+
   test.it("presents non-image attachment links and embeds as source-preserving chips", function()
     local view, doc = make_view("![[manual.pdf]] [[song.mp3|Audio]] [clip](movie.mp4)\nplain", "attachments.md")
     doc:set_selection(2, 1)

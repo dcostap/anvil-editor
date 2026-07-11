@@ -161,6 +161,7 @@ local REVEAL_TYPES = {
   embed = true,
   tag = true,
   hard_break = true,
+  math = true,
 }
 
 local function node_line_range(node, line, line_text)
@@ -956,6 +957,27 @@ local function frontmatter_for_line(view, line)
   end
 end
 
+local function semantic_math_fragments(view, line_text, line, reveal_units)
+  local fragments = {}
+  for _, node in ipairs(semantic_line(view, line) or {}) do
+    if node.type == "math" and line >= node.source.line1 and line <= node.source.line2 then
+      local col1 = line == node.source.line1 and node.source.col1 or 1
+      local col2 = line == node.source.line2 and node.source.col2 or #line_text + 1
+      if col2 > col1 and not reveal_unit_matches(reveal_units, node.id, col1, col2) then
+        fragments[#fragments + 1] = {
+          source_col1 = col1, source_col2 = col2,
+          text = line_text:sub(col1, col2 - 1),
+          font = inline_style_font(view, "code"),
+          color = style.markdown_live_math,
+          background = style.markdown_live_math_background,
+          semantic_id = node.id, math_source = true,
+        }
+      end
+    end
+  end
+  return fragments
+end
+
 local function semantic_break_fragments(view, line_text, line, reveal_units)
   local fragments = {}
   for _, node in ipairs(semantic_line(view, line) or {}) do
@@ -1156,6 +1178,9 @@ local function inline_fragments(line_text, line, view, reveal_units)
     add_fragment(fragments, occupied, fragment)
   end
   for _, fragment in ipairs(semantic_link_fragments(view, line_text, line, reveal_units)) do
+    add_fragment(fragments, occupied, fragment)
+  end
+  for _, fragment in ipairs(semantic_math_fragments(view, line_text, line, reveal_units)) do
     add_fragment(fragments, occupied, fragment)
   end
   for _, fragment in ipairs(semantic_break_fragments(view, line_text, line, reveal_units)) do
