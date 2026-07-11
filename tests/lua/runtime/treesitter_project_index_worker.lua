@@ -172,6 +172,49 @@ int main(void) { return helper(); }
     end
   end)
 
+  test.test("skips a discovered file that disappears before extraction", function()
+    test.ok(native.has_language("c"))
+    registry.reload()
+    local language = registry.get("vanished.c", "")
+    test.not_nil(language)
+
+    local root = mkdir(USERDIR .. PATHSEP .. "worker-project-index-disappearing-file-fixture")
+    local path = write_file(root .. PATHSEP .. "vanished.c", "int vanished(void) { return 1; }\n")
+    local info = test.not_nil(system.get_file_info(path))
+    test.ok(os.remove(path))
+
+    local pool = worker_pool.new({ name = "treesitter-project-index-disappearing-file-test", worker_count = 1 })
+    pools[#pools + 1] = pool
+    local logs = {}
+    local final
+    pool:submit({
+      kind = "treesitter_project_index",
+      generation = 1,
+      project_paths_generation = 1,
+      payload = {
+        root = root,
+        files = { { path = path, root = root, info = info, language_id = language.id } },
+        languages = { language },
+        include_usages = true,
+        log_skips = true,
+      },
+      on_log = function(message) logs[#logs + 1] = message.payload end,
+      on_result = function(message)
+        if message.type == "final" then final = message.payload end
+      end,
+      on_complete = function(message) final = final or message.payload or {} end,
+    })
+
+    test.ok(drain_until(pool, function() return final ~= nil end))
+    test.equal(final.files_scanned, 1)
+    test.equal(final.files_indexed, 0)
+    test.equal(final.files_skipped, 1)
+    test.equal(#logs, 1)
+    test.equal(logs[1].path, common.normalize_path(path))
+    test.equal(logs[1].reason, "not-file")
+    common.rm(root, true)
+  end)
+
   test.test("writes result chunks to file-backed artifacts when requested", function()
     test.ok(native.has_language("c"))
     registry.reload()
