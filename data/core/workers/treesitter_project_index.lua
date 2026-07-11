@@ -158,6 +158,10 @@ local function copy_native_metrics(metrics, result, prefix)
     if native_metrics.usage_query_ms then add_metric(metrics, "usage_query_ms", native_metrics.usage_query_ms) end
     if native_metrics.usage_query_compile_ms then add_metric(metrics, "usage_query_compile_ms", native_metrics.usage_query_compile_ms) end
     if native_metrics.usage_line_index_ms then add_metric(metrics, "usage_line_index_ms", native_metrics.usage_line_index_ms) end
+    if native_metrics.query_cache_hits then add_metric(metrics, "query_cache_hits", native_metrics.query_cache_hits) end
+    if native_metrics.query_cache_misses then add_metric(metrics, "query_cache_misses", native_metrics.query_cache_misses) end
+    if native_metrics.line_indexes_skipped then add_metric(metrics, "line_indexes_skipped", native_metrics.line_indexes_skipped) end
+    if native_metrics.parser_reused then inc_metric(metrics, "parser_reuses", 1) end
     if native_metrics.total_ms then
       local accounted = (native_metrics.prepare_input_ms or 0)
         + (native_metrics.parser_setup_ms or 0)
@@ -198,6 +202,9 @@ local function native_index_text_job(native_opts, text, payload, ctx, metrics)
   spec.kind = "treesitter_index_text"
   spec.lines = nil
   spec.text = text
+  spec.capture_paging = true
+  spec.line_range_lookup = false
+  spec.compact_project_records = false
   local submit_started = now()
   local handle, err = pool:submit(spec)
   add_metric(metrics, "native_index_submit_ms", elapsed_ms(submit_started))

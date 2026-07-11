@@ -32,6 +32,12 @@ AnvilTSSnapshot *anvil_ts_snapshot_new_from_lines(
   uint32_t line_count,
   char **error
 );
+/* Takes ownership of a malloc-allocated, NUL-terminated byte buffer on every path. */
+AnvilTSSnapshot *anvil_ts_snapshot_new_take_text(
+  char *bytes,
+  uint32_t byte_len,
+  char **error
+);
 void anvil_ts_snapshot_retain(AnvilTSSnapshot *snapshot);
 void anvil_ts_snapshot_free(AnvilTSSnapshot *snapshot);
 

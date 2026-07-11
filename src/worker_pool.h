@@ -4,6 +4,7 @@
 #include <SDL3/SDL.h>
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 typedef struct AnvilWorkerPool AnvilWorkerPool;
@@ -11,6 +12,12 @@ typedef struct AnvilWorkerJob AnvilWorkerJob;
 typedef struct AnvilWorkerResult AnvilWorkerResult;
 typedef struct AnvilWorkerCancelToken AnvilWorkerCancelToken;
 typedef struct AnvilWorkerTreeSitterIndexResult AnvilWorkerTreeSitterIndexResult;
+
+typedef enum AnvilWorkerTreeSitterResultCapability {
+  ANVIL_WORKER_TS_CAPTURE_PAGING = 1u << 0,
+  ANVIL_WORKER_TS_LINE_RANGE_LOOKUP = 1u << 1,
+  ANVIL_WORKER_TS_COMPACT_PROJECT_RECORDS = 1u << 2,
+} AnvilWorkerTreeSitterResultCapability;
 
 typedef struct AnvilWorkerJobSpec {
   const char *kind;
@@ -21,8 +28,11 @@ typedef struct AnvilWorkerJobSpec {
   const char *path;
   const char *language;
   const char *text;
+  size_t text_len;
   const char *outline_query;
+  size_t outline_query_len;
   const char *usage_query;
+  size_t usage_query_len;
   const char *cancel_token;
   uint32_t parse_timeout_ms;
   uint32_t query_timeout_ms;
@@ -31,6 +41,8 @@ typedef struct AnvilWorkerJobSpec {
   uint32_t usage_query_timeout_ms;
   uint32_t usage_match_limit;
   uint32_t usage_max_captures;
+  uint32_t result_capabilities;
+  bool result_capabilities_set;
   AnvilWorkerTreeSitterIndexResult *previous_result;
 } AnvilWorkerJobSpec;
 
@@ -84,6 +96,10 @@ uint64_t anvil_worker_treesitter_index_result_query_ms(const AnvilWorkerTreeSitt
 double anvil_worker_treesitter_index_result_precise_query_ms(const AnvilWorkerTreeSitterIndexResult *result, const char *kind);
 double anvil_worker_treesitter_index_result_query_compile_ms(const AnvilWorkerTreeSitterIndexResult *result, const char *kind);
 double anvil_worker_treesitter_index_result_line_index_ms(const AnvilWorkerTreeSitterIndexResult *result, const char *kind);
+bool anvil_worker_treesitter_index_result_query_cache_hit(const AnvilWorkerTreeSitterIndexResult *result, const char *kind);
+bool anvil_worker_treesitter_index_result_query_cache_miss(const AnvilWorkerTreeSitterIndexResult *result, const char *kind);
+bool anvil_worker_treesitter_index_result_parser_reused(const AnvilWorkerTreeSitterIndexResult *result);
+uint32_t anvil_worker_treesitter_index_result_capabilities(const AnvilWorkerTreeSitterIndexResult *result);
 uint32_t anvil_worker_treesitter_index_result_captures_for_lines(
   const AnvilWorkerTreeSitterIndexResult *result,
   const char *kind,

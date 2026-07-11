@@ -589,10 +589,11 @@ static bool query_match_predicates(
   return true;
 }
 
-bool anvil_ts_query_captures_in_tree(
+bool anvil_ts_query_captures_in_tree_with_cursor(
   TSTree *tree,
   const AnvilTSSnapshot *snapshot,
   const TSQuery *query,
+  TSQueryCursor *cursor,
   uint32_t byte_start,
   uint32_t byte_end,
   uint32_t match_limit,
@@ -607,7 +608,7 @@ bool anvil_ts_query_captures_in_tree(
 ) {
   if (error) *error = NULL;
   if (exceeded_match_limit) *exceeded_match_limit = false;
-  if (!tree || !snapshot || !query || !callback) {
+  if (!tree || !snapshot || !query || !cursor || !callback) {
     service_set_error(error, "invalid Tree-sitter query request");
     return false;
   }
@@ -615,12 +616,7 @@ bool anvil_ts_query_captures_in_tree(
   if (byte_end > snapshot->byte_len) byte_end = snapshot->byte_len;
   if (byte_start > byte_end) byte_start = byte_end;
   TSNode root = ts_tree_root_node(tree);
-  TSQueryCursor *cursor = ts_query_cursor_new();
-  if (!cursor) {
-    service_set_error(error, "failed to allocate Tree-sitter query cursor");
-    return false;
-  }
-  if (match_limit > 0) ts_query_cursor_set_match_limit(cursor, match_limit);
+  ts_query_cursor_set_match_limit(cursor, match_limit > 0 ? match_limit : UINT32_MAX);
   ts_query_cursor_set_byte_range(cursor, byte_start, byte_end);
   AnvilTSQueryRun run;
   memset(&run, 0, sizeof(run));
@@ -695,6 +691,35 @@ done:
     service_set_error(error, "Tree-sitter query match limit exceeded");
     ok = false;
   }
+  return ok;
+}
+
+bool anvil_ts_query_captures_in_tree(
+  TSTree *tree,
+  const AnvilTSSnapshot *snapshot,
+  const TSQuery *query,
+  uint32_t byte_start,
+  uint32_t byte_end,
+  uint32_t match_limit,
+  uint32_t max_captures,
+  uint32_t timeout_ms,
+  AnvilTSQueryCaptureCallback callback,
+  void *payload,
+  AnvilTSCancelCallback cancel_callback,
+  void *cancel_payload,
+  bool *exceeded_match_limit,
+  char **error
+) {
+  TSQueryCursor *cursor = ts_query_cursor_new();
+  if (!cursor) {
+    service_set_error(error, "failed to allocate Tree-sitter query cursor");
+    return false;
+  }
+  bool ok = anvil_ts_query_captures_in_tree_with_cursor(
+    tree, snapshot, query, cursor, byte_start, byte_end, match_limit, max_captures,
+    timeout_ms, callback, payload, cancel_callback, cancel_payload,
+    exceeded_match_limit, error
+  );
   ts_query_cursor_delete(cursor);
   return ok;
 }

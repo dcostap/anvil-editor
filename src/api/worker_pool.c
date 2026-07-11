@@ -81,6 +81,26 @@ static const char *opt_string_field(lua_State *L, int table, const char *key, co
   return out;
 }
 
+static const char *opt_lstring_field(lua_State *L, int table, const char *key, size_t *len) {
+  const char *out = NULL;
+  if (len) *len = 0;
+  lua_getfield(L, table, key);
+  if (!lua_isnil(L, -1)) out = luaL_checklstring(L, -1, len);
+  lua_pop(L, 1);
+  return out;
+}
+
+static bool opt_bool_field(lua_State *L, int table, const char *key, bool *present) {
+  bool out = false;
+  lua_getfield(L, table, key);
+  if (!lua_isnil(L, -1)) {
+    if (present) *present = true;
+    out = lua_toboolean(L, -1) != 0;
+  }
+  lua_pop(L, 1);
+  return out;
+}
+
 static int pool_gc(lua_State *L) {
   LuaWorkerPool *pool = (LuaWorkerPool *)luaL_checkudata(L, 1, API_TYPE_WORKER_POOL);
   if (pool && pool->pool) {
@@ -150,9 +170,9 @@ static int pool_submit(lua_State *L) {
   spec.sleep_ms = (uint32_t)sleep_ms;
   spec.path = opt_string_field(L, 2, "path", NULL);
   spec.language = opt_string_field(L, 2, "language", NULL);
-  spec.text = opt_string_field(L, 2, "text", NULL);
-  spec.outline_query = opt_string_field(L, 2, "outline_query", NULL);
-  spec.usage_query = opt_string_field(L, 2, "usage_query", NULL);
+  spec.text = opt_lstring_field(L, 2, "text", &spec.text_len);
+  spec.outline_query = opt_lstring_field(L, 2, "outline_query", &spec.outline_query_len);
+  spec.usage_query = opt_lstring_field(L, 2, "usage_query", &spec.usage_query_len);
   spec.cancel_token = opt_string_field(L, 2, "cancel_token", NULL);
   spec.parse_timeout_ms = opt_uint32_field(L, 2, "parse_timeout_ms", 0);
   spec.query_timeout_ms = opt_uint32_field(L, 2, "query_timeout_ms", 0);
@@ -161,6 +181,14 @@ static int pool_submit(lua_State *L) {
   spec.usage_query_timeout_ms = opt_uint32_field(L, 2, "usage_query_timeout_ms", 0);
   spec.usage_match_limit = opt_uint32_field(L, 2, "usage_match_limit", 0);
   spec.usage_max_captures = opt_uint32_field(L, 2, "usage_max_captures", 0);
+  bool capture_present = false, line_present = false, compact_present = false;
+  bool capture_paging = opt_bool_field(L, 2, "capture_paging", &capture_present);
+  bool line_range_lookup = opt_bool_field(L, 2, "line_range_lookup", &line_present);
+  bool compact_project_records = opt_bool_field(L, 2, "compact_project_records", &compact_present);
+  if (!capture_present || capture_paging) spec.result_capabilities |= ANVIL_WORKER_TS_CAPTURE_PAGING;
+  if (!line_present || line_range_lookup) spec.result_capabilities |= ANVIL_WORKER_TS_LINE_RANGE_LOOKUP;
+  if (compact_project_records) spec.result_capabilities |= ANVIL_WORKER_TS_COMPACT_PROJECT_RECORDS;
+  spec.result_capabilities_set = capture_present || line_present || compact_present;
   lua_getfield(L, 2, "previous_result");
   if (!lua_isnil(L, -1)) {
     LuaTreeSitterIndexResult *previous = check_treesitter_index_result(L, -1);
@@ -260,7 +288,7 @@ static int treesitter_index_result_summary(lua_State *L) {
   lua_setfield(L, -2, "byte_len");
   lua_pushinteger(L, (lua_Integer)anvil_worker_treesitter_index_result_line_count(result->result));
   lua_setfield(L, -2, "line_count");
-  lua_createtable(L, 0, 16);
+  lua_createtable(L, 0, 22);
   lua_pushnumber(L, anvil_worker_treesitter_index_result_precise_parse_ms(result->result));
   lua_setfield(L, -2, "parse_ms");
   lua_pushinteger(L, (lua_Integer)anvil_worker_treesitter_index_result_block_parse_ms(result->result));
@@ -291,7 +319,36 @@ static int treesitter_index_result_summary(lua_State *L) {
   lua_setfield(L, -2, "reused_block_captures");
   lua_pushinteger(L, (lua_Integer)anvil_worker_treesitter_index_result_reused_inline_count(result->result));
   lua_setfield(L, -2, "reused_inline_regions");
+  lua_pushboolean(L, anvil_worker_treesitter_index_result_parser_reused(result->result));
+  lua_setfield(L, -2, "parser_reused");
+  int query_cache_hits = 0;
+  int query_cache_misses = 0;
+  const char *metric_kinds[] = { "outline", "usage" };
+  for (int i = 0; i < 2; i++) {
+    if (anvil_worker_treesitter_index_result_query_cache_hit(result->result, metric_kinds[i])) query_cache_hits++;
+    if (anvil_worker_treesitter_index_result_query_cache_miss(result->result, metric_kinds[i])) query_cache_misses++;
+  }
+  lua_pushinteger(L, query_cache_hits);
+  lua_setfield(L, -2, "query_cache_hits");
+  lua_pushinteger(L, query_cache_misses);
+  lua_setfield(L, -2, "query_cache_misses");
+  uint32_t capabilities = anvil_worker_treesitter_index_result_capabilities(result->result);
+  int skipped_line_indexes = 0;
+  if ((capabilities & ANVIL_WORKER_TS_LINE_RANGE_LOOKUP) == 0) {
+    if (anvil_worker_treesitter_index_result_capture_count(result->result, "outline") > 0) skipped_line_indexes++;
+    if (anvil_worker_treesitter_index_result_capture_count(result->result, "usage") > 0) skipped_line_indexes++;
+  }
+  lua_pushinteger(L, skipped_line_indexes);
+  lua_setfield(L, -2, "line_indexes_skipped");
   lua_setfield(L, -2, "metrics");
+  lua_createtable(L, 0, 3);
+  lua_pushboolean(L, (capabilities & ANVIL_WORKER_TS_CAPTURE_PAGING) != 0);
+  lua_setfield(L, -2, "capture_paging");
+  lua_pushboolean(L, (capabilities & ANVIL_WORKER_TS_LINE_RANGE_LOOKUP) != 0);
+  lua_setfield(L, -2, "line_range_lookup");
+  lua_pushboolean(L, (capabilities & ANVIL_WORKER_TS_COMPACT_PROJECT_RECORDS) != 0);
+  lua_setfield(L, -2, "compact_project_records");
+  lua_setfield(L, -2, "capabilities");
   const char *kinds[] = { "outline", "usage" };
   for (int i = 0; i < 2; ++i) {
     const char *kind = kinds[i];
@@ -304,6 +361,10 @@ static int treesitter_index_result_summary(lua_State *L) {
     lua_setfield(L, -2, "exceeded_match_limit");
     lua_pushboolean(L, anvil_worker_treesitter_index_result_line_indexed(result->result, kind));
     lua_setfield(L, -2, "line_indexed");
+    lua_pushboolean(L, anvil_worker_treesitter_index_result_query_cache_hit(result->result, kind));
+    lua_setfield(L, -2, "query_cache_hit");
+    lua_pushboolean(L, anvil_worker_treesitter_index_result_query_cache_miss(result->result, kind));
+    lua_setfield(L, -2, "query_cache_miss");
     const char *error = anvil_worker_treesitter_index_result_error(result->result, kind);
     if (error) {
       lua_pushstring(L, error);

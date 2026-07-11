@@ -128,6 +128,128 @@ test.describe("worker_pool_native", function()
     test.ok(captures.next_offset >= 2)
   end)
 
+  test.test("Tree-sitter Project capabilities skip line indexes and normalize length-aware input", function()
+    local pool = new_pool("lua-native-treesitter-project-capabilities", 1)
+    local source = "int first(void) { return 1; }\r\nint second(void) { return first(); }\r\n"
+    local result = submit_result(pool, {
+      kind = "treesitter_index_text",
+      language = "c",
+      text = source,
+      outline_query = "(function_definition) @definition.function",
+      capture_paging = true,
+      line_range_lookup = false,
+      compact_project_records = false,
+      parse_timeout_ms = 1000,
+      query_timeout_ms = 100,
+      max_captures = 100,
+    })
+    local summary = result:summary()
+    test.equal(summary.byte_len, #(source:gsub("\r\n", "\n")))
+    test.equal(summary.capabilities.capture_paging, true)
+    test.equal(summary.capabilities.line_range_lookup, false)
+    test.equal(summary.outline.line_indexed, false)
+    test.equal(summary.metrics.line_indexes_skipped, 1)
+    test.equal(#result:captures_for_lines("outline", 2, 2), 1)
+  end)
+
+  test.test("Tree-sitter native jobs can own and normalize file input directly", function()
+    local path = USERDIR .. PATHSEP .. "native-worker-owned-input.c"
+    local fp = test.not_nil(io.open(path, "wb"))
+    local source = "int from_path(void) { return 1; }\r\n"
+    fp:write(source)
+    fp:close()
+    local pool = new_pool("lua-native-treesitter-owned-path", 1)
+    local result = submit_result(pool, {
+      kind = "treesitter_index_text",
+      language = "c",
+      path = path,
+      outline_query = "(function_definition) @definition.function",
+      capture_paging = true,
+      line_range_lookup = false,
+      parse_timeout_ms = 1000,
+      query_timeout_ms = 100,
+      max_captures = 100,
+    })
+    os.remove(path)
+    local summary = result:summary()
+    test.equal(summary.byte_len, #(source:gsub("\r\n", "\n")))
+    test.equal(summary.outline.capture_count, 1)
+    test.equal(summary.outline.line_indexed, false)
+  end)
+
+  test.test("Tree-sitter workers reuse parsers and compiled query fingerprints", function()
+    local pool = new_pool("lua-native-treesitter-cache-reuse", 1)
+    local spec = {
+      kind = "treesitter_index_text",
+      language = "c",
+      text = "int cache_target(void) { return 1; }\n",
+      outline_query = "(identifier) @milestone_two_cache_target",
+      parse_timeout_ms = 1000,
+      query_timeout_ms = 100,
+      max_captures = 100,
+    }
+    local first = submit_result(pool, spec):summary()
+    local second = submit_result(pool, spec):summary()
+    test.equal(first.outline.query_cache_miss, true)
+    test.equal(second.outline.query_cache_hit, true)
+    test.equal(first.metrics.parser_reused, false)
+    test.equal(second.metrics.parser_reused, true)
+  end)
+
+  test.test("Tree-sitter query cache retains failed compilation metadata", function()
+    local pool = new_pool("lua-native-treesitter-failed-query-cache", 1)
+    local spec = {
+      kind = "treesitter_index_text",
+      language = "c",
+      text = "int failed_cache_target(void) { return 1; }\n",
+      outline_query = "((identifier) @milestone_two_bad_cache",
+      parse_timeout_ms = 1000,
+      query_timeout_ms = 100,
+      max_captures = 100,
+    }
+    local first = submit_result(pool, spec):summary()
+    local second = submit_result(pool, spec):summary()
+    test.equal(first.outline.status, "failed")
+    test.equal(first.outline.query_cache_miss, true)
+    test.equal(second.outline.status, "failed")
+    test.equal(second.outline.query_cache_hit, true)
+    test.equal(second.outline.error, first.outline.error)
+  end)
+
+  test.test("Markdown native jobs reject embedded NUL queries without truncation", function()
+    local pool = new_pool("lua-native-markdown-query-nul", 1)
+    local handle, err = pool:submit({
+      kind = "markdown_parse",
+      text = "# Heading\n",
+      outline_query = "(atx_heading) @heading\0(paragraph) @paragraph",
+      parse_timeout_ms = 1000,
+      query_timeout_ms = 100,
+      max_captures = 100,
+    })
+    test.is_nil(handle)
+    test.equal(err, "Tree-sitter query contains embedded NUL")
+  end)
+
+  test.test("Tree-sitter native jobs reject embedded NUL input without truncation", function()
+    local pool = new_pool("lua-native-treesitter-nul", 1)
+    local error_message
+    local handle = test.not_nil(pool:submit({
+      kind = "treesitter_index_text",
+      language = "c",
+      text = "int before(void) { return 1; }\0int after(void) { return 2; }\n",
+      outline_query = "(function_definition) @definition.function",
+      parse_timeout_ms = 1000,
+      query_timeout_ms = 100,
+      max_captures = 100,
+    }))
+    test.ok(drain_until(pool, function(message)
+      if message.type == "error" then error_message = message.error end
+      return message.type == "error"
+    end))
+    test.equal(error_message, "Tree-sitter input contains embedded NUL")
+    test.equal(pool:status(handle).status, "failed")
+  end)
+
   test.test("Markdown block reuse requires an identical complete structural query", function()
     local pool = new_pool("lua-native-markdown-query-reuse", 1)
     local spec = {

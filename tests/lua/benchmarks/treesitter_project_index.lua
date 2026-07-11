@@ -174,6 +174,12 @@ local function run_case(name, root, remove_after, expected_files)
     },
     captures = { outline = worker.outline_captures, usage = worker.usage_captures },
     records = { symbols = worker.symbols_emitted, usages = worker.usages_emitted },
+    native_hot_path = {
+      query_cache_hits = worker.query_cache_hits,
+      query_cache_misses = worker.query_cache_misses,
+      parser_reuses = worker.parser_reuses,
+      line_indexes_skipped = worker.line_indexes_skipped,
+    },
     temporary_io = {
       index_artifacts = worker.artifacts_sent,
       index_bytes = worker.artifact_bytes,

@@ -1309,7 +1309,7 @@ local function finish_worker_scan(index, message, status)
       tonumber(ui.chunk_aggregate_rebuilds_deferred or 0) or 0)
     local native_wrapper_ms = math.max(0,
       (tonumber(worker.native_index_text_ms) or 0) - (tonumber(worker.native_total_ms) or 0))
-    log_quiet("Tree-sitter indexing profile: root=%s cumulative_worker_ms=%.1f native_wrapper_ms=%.1f native_total_ms=%.1f native_prepare_input_ms=%.1f native_parser_setup_ms=%.1f native_parse_ms=%.1f outline_compile_ms=%.1f outline_query_ms=%.1f outline_line_index_ms=%.1f usage_compile_ms=%.1f usage_query_ms=%.1f usage_line_index_ms=%.1f native_other_ms=%.1f native_submit_ms=%.1f native_drain_ms=%.1f native_adapt_ms=%.1f line_split_ms=%.1f directory_walk_ms=%.1f artifact_mkdir_ms=%.1f artifact_write_ms=%.1f symbol_record_ms=%.1f usage_record_ms=%.1f chunk_send_wait_ms=%.1f bytes_read=%d outline_captures=%d usage_captures=%d",
+    log_quiet("Tree-sitter indexing profile: root=%s cumulative_worker_ms=%.1f native_wrapper_ms=%.1f native_total_ms=%.1f native_prepare_input_ms=%.1f native_parser_setup_ms=%.1f native_parse_ms=%.1f outline_compile_ms=%.1f outline_query_ms=%.1f outline_line_index_ms=%.1f usage_compile_ms=%.1f usage_query_ms=%.1f usage_line_index_ms=%.1f query_cache_hits=%d query_cache_misses=%d parser_reuses=%d line_indexes_skipped=%d native_other_ms=%.1f native_submit_ms=%.1f native_drain_ms=%.1f native_adapt_ms=%.1f line_split_ms=%.1f directory_walk_ms=%.1f artifact_mkdir_ms=%.1f artifact_write_ms=%.1f symbol_record_ms=%.1f usage_record_ms=%.1f chunk_send_wait_ms=%.1f bytes_read=%d outline_captures=%d usage_captures=%d",
       tostring(index.root),
       tonumber(worker.total_ms or 0) or 0,
       native_wrapper_ms,
@@ -1323,6 +1323,10 @@ local function finish_worker_scan(index, message, status)
       tonumber(worker.usage_query_compile_ms or 0) or 0,
       tonumber(worker.usage_query_ms or 0) or 0,
       tonumber(worker.usage_line_index_ms or 0) or 0,
+      tonumber(worker.query_cache_hits or 0) or 0,
+      tonumber(worker.query_cache_misses or 0) or 0,
+      tonumber(worker.parser_reuses or 0) or 0,
+      tonumber(worker.line_indexes_skipped or 0) or 0,
       tonumber(worker.native_other_ms or 0) or 0,
       tonumber(worker.native_index_submit_ms or 0) or 0,
       tonumber(worker.native_index_drain_ms or 0) or 0,

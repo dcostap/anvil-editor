@@ -71,6 +71,77 @@ AnvilTSSnapshot *anvil_ts_snapshot_new_from_lines(
   return snapshot;
 }
 
+AnvilTSSnapshot *anvil_ts_snapshot_new_take_text(
+  char *bytes,
+  uint32_t byte_len,
+  char **error
+) {
+  if (error) *error = NULL;
+  if (!bytes) {
+    snapshot_set_error(error, "invalid Tree-sitter text buffer");
+    return NULL;
+  }
+
+  if (byte_len == 0) {
+    char *empty_line = (char *) realloc(bytes, 2);
+    if (!empty_line) {
+      free(bytes);
+      snapshot_set_error(error, "out of memory normalizing empty Tree-sitter snapshot");
+      return NULL;
+    }
+    bytes = empty_line;
+    bytes[0] = '\n';
+    bytes[1] = '\0';
+    byte_len = 1;
+  }
+
+  uint32_t line_count = 1;
+  for (uint32_t i = 0; i < byte_len - 1; i++) {
+    if (bytes[i] == '\n') line_count++;
+  }
+  if ((size_t)line_count > SIZE_MAX / sizeof(uint32_t)) {
+    free(bytes);
+    snapshot_set_error(error, "Tree-sitter snapshot line table is too large");
+    return NULL;
+  }
+
+  AnvilTSSnapshot *snapshot = (AnvilTSSnapshot *) calloc(1, sizeof(*snapshot));
+  uint32_t *line_starts = (uint32_t *) malloc(sizeof(*line_starts) * line_count);
+  uint32_t *line_lengths = (uint32_t *) malloc(sizeof(*line_lengths) * line_count);
+  if (!snapshot || !line_starts || !line_lengths) {
+    free(snapshot);
+    free(line_starts);
+    free(line_lengths);
+    free(bytes);
+    snapshot_set_error(error, "out of memory indexing Tree-sitter snapshot lines");
+    return NULL;
+  }
+
+  uint32_t line = 0;
+  uint32_t start = 0;
+  for (uint32_t i = 0; i < byte_len; i++) {
+    if (bytes[i] != '\n') continue;
+    line_starts[line] = start;
+    line_lengths[line] = i - start + 1;
+    line++;
+    start = i + 1;
+  }
+  if (start < byte_len) {
+    line_starts[line] = start;
+    line_lengths[line] = byte_len - start;
+    line++;
+  }
+
+  snapshot->id = atomic_fetch_add_explicit(&next_snapshot_id, 1, memory_order_relaxed);
+  snapshot->refcount = 1;
+  snapshot->bytes = bytes;
+  snapshot->byte_len = byte_len;
+  snapshot->line_count = line;
+  snapshot->line_starts = line_starts;
+  snapshot->line_lengths = line_lengths;
+  return snapshot;
+}
+
 void anvil_ts_snapshot_retain(AnvilTSSnapshot *snapshot) {
   if (!snapshot) return;
   snapshot->refcount++;

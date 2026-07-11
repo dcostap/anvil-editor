@@ -3,6 +3,7 @@
 #include "markdown_parser.h"
 #include "markdown_extensions.h"
 #include "treesitter/languages.h"
+#include "treesitter/query_cache.h"
 #include "treesitter/service.h"
 #include "treesitter/snapshot.h"
 
@@ -31,8 +32,11 @@ struct AnvilWorkerJob {
   char *path;
   char *language;
   char *text;
+  size_t text_len;
   char *outline_query;
+  size_t outline_query_len;
   char *usage_query;
+  size_t usage_query_len;
   char *cancel_token;
   uint32_t parse_timeout_ms;
   uint32_t query_timeout_ms;
@@ -41,6 +45,7 @@ struct AnvilWorkerJob {
   uint32_t usage_query_timeout_ms;
   uint32_t usage_match_limit;
   uint32_t usage_max_captures;
+  uint32_t result_capabilities;
   AnvilWorkerTreeSitterIndexResult *previous_result;
 
   struct AnvilWorkerJob *next;
@@ -82,9 +87,12 @@ typedef struct AnvilWorkerTreeSitterQueryResult {
   uint64_t query_ns;
   uint64_t query_compile_ns;
   uint64_t line_index_ns;
+  uint64_t query_fingerprint;
   char *status;
   char *error;
   bool exceeded_match_limit;
+  bool query_cache_hit;
+  bool query_cache_miss;
   uint32_t *line_order;
   uint32_t *line_tree_max_end;
   bool line_index_ready;
@@ -105,6 +113,9 @@ struct AnvilWorkerTreeSitterIndexResult {
   uint64_t prepare_input_ns;
   uint64_t parser_setup_ns;
   uint64_t parse_ns;
+  uint32_t result_capabilities;
+  uint32_t line_indexes_skipped;
+  bool parser_reused;
   bool incremental;
   bool outline_query_reusable;
   uint32_t reused_block_capture_count;
@@ -127,10 +138,17 @@ static AnvilWorkerCancelToken *cancel_tokens = NULL;
 static SDL_AtomicInt cancel_token_sequence;
 static SDL_AtomicInt markdown_semantic_id_sequence;
 
+typedef struct AnvilWorkerContext {
+  struct AnvilWorkerPool *pool;
+  TSParser *parser;
+  TSQueryCursor *query_cursor;
+} AnvilWorkerContext;
+
 struct AnvilWorkerPool {
   char *name;
   int worker_count;
   SDL_Thread **workers;
+  AnvilWorkerContext *contexts;
   SDL_Mutex *queue_mutex;
   SDL_Condition *queue_cond;
   SDL_Mutex *result_mutex;
@@ -148,12 +166,25 @@ struct AnvilWorkerPool {
   uint64_t result_count;
 };
 
-static char *pool_strdup(const char *s) {
-  if (!s) return NULL;
-  size_t len = strlen(s);
+static char *pool_memdup0(const char *source, size_t len) {
+  if (!source || len == SIZE_MAX) return NULL;
   char *copy = (char *)SDL_malloc(len + 1);
   if (!copy) return NULL;
-  memcpy(copy, s, len + 1);
+  if (len) memcpy(copy, source, len);
+  copy[len] = '\0';
+  return copy;
+}
+
+static char *pool_strdup(const char *s) {
+  return s ? pool_memdup0(s, strlen(s)) : NULL;
+}
+
+static char *pool_textdup(const char *source, size_t len) {
+  if (!source || len == SIZE_MAX) return NULL;
+  char *copy = (char *)malloc(len + 1);
+  if (!copy) return NULL;
+  if (len) memcpy(copy, source, len);
+  copy[len] = '\0';
   return copy;
 }
 
@@ -259,7 +290,7 @@ static void job_free(AnvilWorkerJob *job) {
   SDL_free(job->value);
   SDL_free(job->path);
   SDL_free(job->language);
-  SDL_free(job->text);
+  free(job->text);
   SDL_free(job->outline_query);
   SDL_free(job->usage_query);
   SDL_free(job->cancel_token);
@@ -434,6 +465,24 @@ double anvil_worker_treesitter_index_result_query_compile_ms(const AnvilWorkerTr
 double anvil_worker_treesitter_index_result_line_index_ms(const AnvilWorkerTreeSitterIndexResult *result, const char *kind) {
   const AnvilWorkerTreeSitterQueryResult *query = treesitter_query_result_for_kind(result, kind);
   return query ? ticks_ns_to_ms(query->line_index_ns) : 0.0;
+}
+
+bool anvil_worker_treesitter_index_result_query_cache_hit(const AnvilWorkerTreeSitterIndexResult *result, const char *kind) {
+  const AnvilWorkerTreeSitterQueryResult *query = treesitter_query_result_for_kind(result, kind);
+  return query && query->query_cache_hit;
+}
+
+bool anvil_worker_treesitter_index_result_query_cache_miss(const AnvilWorkerTreeSitterIndexResult *result, const char *kind) {
+  const AnvilWorkerTreeSitterQueryResult *query = treesitter_query_result_for_kind(result, kind);
+  return query && query->query_cache_miss;
+}
+
+bool anvil_worker_treesitter_index_result_parser_reused(const AnvilWorkerTreeSitterIndexResult *result) {
+  return result && result->parser_reused;
+}
+
+uint32_t anvil_worker_treesitter_index_result_capabilities(const AnvilWorkerTreeSitterIndexResult *result) {
+  return result ? result->result_capabilities : 0;
 }
 
 bool anvil_worker_treesitter_index_result_capture_at(
@@ -821,12 +870,6 @@ static void run_test_fail(AnvilWorkerPool *pool, AnvilWorkerJob *job) {
   enqueue_result(pool, result);
 }
 
-typedef struct AnvilWorkerTextLines {
-  const char **lines;
-  uint32_t *lengths;
-  uint32_t count;
-} AnvilWorkerTextLines;
-
 typedef struct AnvilWorkerTSParseRun {
   uint64_t started_ticks;
   uint32_t timeout_ms;
@@ -873,60 +916,40 @@ static bool treesitter_parse_progress(TSParseState *parse_state) {
   return false;
 }
 
-static bool text_lines_from_text(const char *text, AnvilWorkerTextLines *out, char **error) {
-  if (!out) return false;
-  memset(out, 0, sizeof(*out));
-  const char *source = text ? text : "";
-  size_t len = strlen(source);
-  uint32_t count = 0;
-  if (len == 0) {
-    count = 1;
-  } else {
-    count = 1;
-    for (size_t i = 0; i < len; ++i) {
-      if (source[i] == '\n' && i + 1 < len) count++;
-    }
-  }
-  out->lines = (const char **)SDL_calloc(count, sizeof(char *));
-  out->lengths = (uint32_t *)SDL_calloc(count, sizeof(uint32_t));
-  if (!out->lines || !out->lengths) {
-    SDL_free(out->lines);
-    SDL_free(out->lengths);
-    pool_set_error(error, "out of memory splitting Tree-sitter input lines");
-    memset(out, 0, sizeof(*out));
+static bool validate_text_buffer(char *text, size_t input_len, uint32_t *output_len, char **error) {
+  if (!text || !output_len) return false;
+  if (input_len > UINT32_MAX) {
+    pool_set_error(error, "Tree-sitter input exceeds 4GB byte limit");
     return false;
   }
-  out->count = count;
-  if (len == 0) {
-    out->lines[0] = "\n";
-    out->lengths[0] = 1;
-    return true;
+  if (memchr(text, '\0', input_len) != NULL) {
+    pool_set_error(error, "Tree-sitter input contains embedded NUL");
+    return false;
   }
-  size_t start = 0;
-  uint32_t line = 0;
-  for (size_t i = 0; i < len; ++i) {
-    if (source[i] == '\n') {
-      out->lines[line] = source + start;
-      out->lengths[line] = (uint32_t)(i - start + 1);
-      line++;
-      start = i + 1;
-    }
-  }
-  if (start < len) {
-    out->lines[line] = source + start;
-    out->lengths[line] = (uint32_t)(len - start);
-  }
+  *output_len = (uint32_t)input_len;
   return true;
 }
 
-static void text_lines_free(AnvilWorkerTextLines *lines) {
-  if (!lines) return;
-  SDL_free(lines->lines);
-  SDL_free(lines->lengths);
-  memset(lines, 0, sizeof(*lines));
+static bool normalize_text_in_place(char *text, size_t input_len, uint32_t *output_len, char **error) {
+  if (!validate_text_buffer(text, input_len, output_len, error)) return false;
+  size_t read = 0;
+  size_t write = 0;
+  while (read < input_len) {
+    if (text[read] == '\r') {
+      if (read + 1 < input_len && text[read + 1] == '\n') read++;
+      text[write++] = '\n';
+      read++;
+    } else {
+      text[write++] = text[read++];
+    }
+  }
+  text[write] = '\0';
+  *output_len = (uint32_t)write;
+  return true;
 }
 
-static char *read_file_text(const char *path, char **error) {
+static char *read_file_text(const char *path, size_t *text_len, char **error) {
+  if (text_len) *text_len = 0;
   if (!path || !path[0]) {
     pool_set_error(error, "Tree-sitter native index job requires text or path");
     return NULL;
@@ -942,9 +965,9 @@ static char *read_file_text(const char *path, char **error) {
     return NULL;
   }
   long raw_size = ftell(fp);
-  if (raw_size < 0) {
+  if (raw_size < 0 || (uint64_t)raw_size > UINT32_MAX) {
     fclose(fp);
-    pool_set_error(error, "failed to size Tree-sitter index file");
+    pool_set_error(error, raw_size < 0 ? "failed to size Tree-sitter index file" : "Tree-sitter input exceeds 4GB byte limit");
     return NULL;
   }
   if (fseek(fp, 0, SEEK_SET) != 0) {
@@ -952,7 +975,7 @@ static char *read_file_text(const char *path, char **error) {
     pool_set_error(error, "failed to rewind Tree-sitter index file");
     return NULL;
   }
-  char *text = (char *)SDL_malloc((size_t)raw_size + 1);
+  char *text = (char *)malloc((size_t)raw_size + 1);
   if (!text) {
     fclose(fp);
     pool_set_error(error, "out of memory reading Tree-sitter index file");
@@ -961,25 +984,38 @@ static char *read_file_text(const char *path, char **error) {
   size_t read = fread(text, 1, (size_t)raw_size, fp);
   fclose(fp);
   if (read != (size_t)raw_size) {
-    SDL_free(text);
+    free(text);
     pool_set_error(error, "failed to read Tree-sitter index file");
     return NULL;
   }
   text[read] = '\0';
+  if (text_len) *text_len = read;
   return text;
 }
 
-static TSQuery *compile_treesitter_query(const AnvilTSLanguage *language, const char *kind, const char *source, char **error) {
-  if (!source || !source[0]) return NULL;
-  uint32_t error_offset = 0;
-  TSQueryError error_type = TSQueryErrorNone;
-  TSQuery *query = ts_query_new(anvil_ts_language_ptr(language), source, (uint32_t)strlen(source), &error_offset, &error_type);
-  if (!query) {
-    char buffer[256];
-    snprintf(buffer, sizeof(buffer), "Tree-sitter %s query error %d at byte %u", kind ? kind : "", (int)error_type, (unsigned)error_offset);
-    pool_set_error(error, buffer);
+static const TSQuery *cached_treesitter_query(
+  const AnvilTSLanguage *language,
+  const char *kind,
+  const char *source,
+  uint32_t source_len,
+  AnvilWorkerTreeSitterQueryResult *query_result,
+  char **error
+) {
+  if (!language || !source || source_len == 0) return NULL;
+  AnvilTSQueryCacheResult cached;
+  if (!anvil_ts_query_cache_get(
+      anvil_ts_language_ptr(language), kind ? kind : "", source, source_len, &cached
+    )) {
+    pool_set_error(error, "failed to allocate Tree-sitter query cache entry");
+    return NULL;
   }
-  return query;
+  if (query_result) {
+    query_result->query_fingerprint = cached.fingerprint;
+    query_result->query_cache_hit = cached.cache_hit;
+    query_result->query_cache_miss = !cached.cache_hit;
+  }
+  if (!cached.query) pool_set_error(error, cached.error ? cached.error : "Tree-sitter query compilation failed");
+  return cached.query;
 }
 
 static void skip_simple_query_space(
@@ -1196,35 +1232,50 @@ static bool run_treesitter_index_query(
   const AnvilTSLanguage *language,
   const char *field,
   const char *source,
+  uint32_t source_len,
   TSTree *tree,
   const AnvilTSSnapshot *snapshot,
   uint32_t byte_start,
   uint32_t byte_end,
   AnvilWorkerTSParseRun *run,
+  TSQueryCursor *cursor,
   uint32_t match_limit,
   uint32_t max_captures,
   uint32_t timeout_ms,
   char **fatal_error
 ) {
   AnvilWorkerTreeSitterQueryResult *query_result = treesitter_query_result_for_kind_mut(index_result, field);
-  if (!query_result || !source || !source[0]) return true;
+  if (!query_result || !source || source_len == 0) return true;
+  bool delete_cursor = false;
+  if (!cursor) {
+    cursor = ts_query_cursor_new();
+    delete_cursor = true;
+    if (!cursor) {
+      pool_set_error(fatal_error, "failed to allocate Tree-sitter query cursor");
+      return false;
+    }
+  }
   char *compile_error = NULL;
   uint64_t compile_started_ns = SDL_GetTicksNS();
-  TSQuery *query = compile_treesitter_query(language, field, source, &compile_error);
+  const TSQuery *query = cached_treesitter_query(
+    language, field, source, source_len, query_result, &compile_error
+  );
   query_result->query_compile_ns = SDL_GetTicksNS() - compile_started_ns;
   if (!query) {
     query_result->status = pool_strdup("failed");
     query_result->error = compile_error;
+    if (delete_cursor) ts_query_cursor_delete(cursor);
     return true;
   }
   uint64_t started = SDL_GetTicks();
   uint64_t started_ns = SDL_GetTicksNS();
   bool exceeded = false;
   char *query_error = NULL;
-  bool ok = anvil_ts_query_captures_in_tree(
+  bool ok = anvil_ts_query_captures_in_tree_with_cursor(
     tree,
     snapshot,
     query,
+    cursor,
     byte_start,
     byte_end,
     match_limit,
@@ -1246,11 +1297,12 @@ static bool run_treesitter_index_query(
     query_result->error = pool_strdup(query_error);
     free(query_error);
   }
-  ts_query_delete(query);
+  if (delete_cursor) ts_query_cursor_delete(cursor);
   return true;
 }
 
-static void run_treesitter_index_text(AnvilWorkerPool *pool, AnvilWorkerJob *job) {
+static void run_treesitter_index_text(AnvilWorkerContext *context, AnvilWorkerJob *job) {
+  AnvilWorkerPool *pool = context->pool;
   uint64_t job_started = SDL_GetTicks();
   uint64_t job_started_ns = SDL_GetTicksNS();
   uint64_t prepare_input_started_ns = job_started_ns;
@@ -1275,7 +1327,16 @@ static void run_treesitter_index_text(AnvilWorkerPool *pool, AnvilWorkerJob *job
   }
 
   char *error = NULL;
-  char *owned_text = job->text ? pool_strdup(job->text) : read_file_text(job->path, &error);
+  size_t owned_text_len = 0;
+  char *owned_text;
+  if (job->text) {
+    owned_text = job->text;
+    owned_text_len = job->text_len;
+    job->text = NULL;
+    job->text_len = 0;
+  } else {
+    owned_text = read_file_text(job->path, &owned_text_len, &error);
+  }
   if (!owned_text) {
     SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
     AnvilWorkerResult *result = result_new(job, "error");
@@ -1284,19 +1345,17 @@ static void run_treesitter_index_text(AnvilWorkerPool *pool, AnvilWorkerJob *job
     return;
   }
 
-  AnvilWorkerTextLines lines;
-  if (!text_lines_from_text(owned_text, &lines, &error)) {
-    SDL_free(owned_text);
+  uint32_t normalized_text_len = 0;
+  if (!normalize_text_in_place(owned_text, owned_text_len, &normalized_text_len, &error)) {
+    free(owned_text);
     SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
     AnvilWorkerResult *result = result_new(job, "error");
-    if (result) result->error = error ? error : pool_strdup("failed to split Tree-sitter input");
+    if (result) result->error = error ? error : pool_strdup("failed to normalize Tree-sitter input");
     enqueue_result(pool, result);
     return;
   }
 
-  AnvilTSSnapshot *snapshot = anvil_ts_snapshot_new_from_lines(lines.lines, lines.lengths, lines.count, &error);
-  text_lines_free(&lines);
-  SDL_free(owned_text);
+  AnvilTSSnapshot *snapshot = anvil_ts_snapshot_new_take_text(owned_text, normalized_text_len, &error);
   if (!snapshot) {
     SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
     AnvilWorkerResult *result = result_new(job, "error");
@@ -1311,9 +1370,10 @@ static void run_treesitter_index_text(AnvilWorkerPool *pool, AnvilWorkerJob *job
   uint64_t prepare_input_ns = SDL_GetTicksNS() - prepare_input_started_ns;
   uint64_t parser_setup_started_ns = SDL_GetTicksNS();
   AnvilWorkerCancelToken *cancel_token = job->cancel_token ? anvil_worker_cancel_token_open(job->cancel_token) : NULL;
-  TSParser *parser = ts_parser_new();
+  bool parser_reused = context->parser != NULL;
+  if (!context->parser) context->parser = ts_parser_new();
+  TSParser *parser = context->parser;
   if (!parser || !ts_parser_set_language(parser, anvil_ts_language_ptr(language))) {
-    if (parser) ts_parser_delete(parser);
     anvil_worker_cancel_token_release(cancel_token);
     anvil_ts_snapshot_free(snapshot);
     SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
@@ -1323,6 +1383,17 @@ static void run_treesitter_index_text(AnvilWorkerPool *pool, AnvilWorkerJob *job
     return;
   }
 
+  ts_parser_reset(parser);
+  if (!context->query_cursor) context->query_cursor = ts_query_cursor_new();
+  if (!context->query_cursor) {
+    anvil_worker_cancel_token_release(cancel_token);
+    anvil_ts_snapshot_free(snapshot);
+    SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
+    AnvilWorkerResult *result = result_new(job, "error");
+    if (result) result->error = pool_strdup("failed to initialize Tree-sitter query cursor");
+    enqueue_result(pool, result);
+    return;
+  }
   uint64_t parser_setup_ns = SDL_GetTicksNS() - parser_setup_started_ns;
   AnvilWorkerTSParseRun run;
   memset(&run, 0, sizeof(run));
@@ -1338,7 +1409,6 @@ static void run_treesitter_index_text(AnvilWorkerPool *pool, AnvilWorkerJob *job
   TSTree *tree = ts_parser_parse_with_options(parser, NULL, input, parse_options);
   uint64_t parse_ns = SDL_GetTicksNS() - parse_started_ns;
   uint64_t parse_ms = SDL_GetTicks() - run.started_ticks;
-  ts_parser_delete(parser);
   if (!tree) {
     anvil_worker_cancel_token_release(cancel_token);
     anvil_ts_snapshot_free(snapshot);
@@ -1373,6 +1443,8 @@ static void run_treesitter_index_text(AnvilWorkerPool *pool, AnvilWorkerJob *job
   index_result->prepare_input_ns = prepare_input_ns;
   index_result->parser_setup_ns = parser_setup_ns;
   index_result->parse_ns = parse_ns;
+  index_result->result_capabilities = job->result_capabilities;
+  index_result->parser_reused = parser_reused;
   if (!index_result->language) {
     anvil_worker_treesitter_index_result_free(index_result);
     ts_tree_delete(tree);
@@ -1388,19 +1460,34 @@ static void run_treesitter_index_text(AnvilWorkerPool *pool, AnvilWorkerJob *job
   bool have_fatal_error = false;
   char *fatal_error = NULL;
   if (job->outline_query) {
-    run_treesitter_index_query(index_result, language, "outline", job->outline_query, tree, snapshot, 0, snapshot->byte_len, &run, job->match_limit ? job->match_limit : 50000, job->max_captures ? job->max_captures : 50000, job->query_timeout_ms ? job->query_timeout_ms : 20, &fatal_error);
+    run_treesitter_index_query(index_result, language, "outline", job->outline_query,
+      (uint32_t)job->outline_query_len, tree, snapshot, 0, snapshot->byte_len, &run,
+      context->query_cursor, job->match_limit ? job->match_limit : 50000,
+      job->max_captures ? job->max_captures : 50000,
+      job->query_timeout_ms ? job->query_timeout_ms : 20, &fatal_error);
     have_fatal_error = fatal_error != NULL;
   }
   if (!have_fatal_error && job->usage_query) {
-    run_treesitter_index_query(index_result, language, "usage", job->usage_query, tree, snapshot, 0, snapshot->byte_len, &run, job->usage_match_limit ? job->usage_match_limit : (job->match_limit ? job->match_limit : 50000), job->usage_max_captures ? job->usage_max_captures : (job->max_captures ? job->max_captures : 50000), job->usage_query_timeout_ms ? job->usage_query_timeout_ms : (job->query_timeout_ms ? job->query_timeout_ms : 20), &fatal_error);
+    run_treesitter_index_query(index_result, language, "usage", job->usage_query,
+      (uint32_t)job->usage_query_len, tree, snapshot, 0, snapshot->byte_len, &run,
+      context->query_cursor,
+      job->usage_match_limit ? job->usage_match_limit : (job->match_limit ? job->match_limit : 50000),
+      job->usage_max_captures ? job->usage_max_captures : (job->max_captures ? job->max_captures : 50000),
+      job->usage_query_timeout_ms ? job->usage_query_timeout_ms : (job->query_timeout_ms ? job->query_timeout_ms : 20),
+      &fatal_error);
     have_fatal_error = fatal_error != NULL;
   }
-  uint64_t line_index_started_ns = SDL_GetTicksNS();
-  build_query_line_index(&index_result->outline);
-  index_result->outline.line_index_ns = SDL_GetTicksNS() - line_index_started_ns;
-  line_index_started_ns = SDL_GetTicksNS();
-  build_query_line_index(&index_result->usage);
-  index_result->usage.line_index_ns = SDL_GetTicksNS() - line_index_started_ns;
+  if ((job->result_capabilities & ANVIL_WORKER_TS_LINE_RANGE_LOOKUP) != 0) {
+    uint64_t line_index_started_ns = SDL_GetTicksNS();
+    build_query_line_index(&index_result->outline);
+    index_result->outline.line_index_ns = SDL_GetTicksNS() - line_index_started_ns;
+    line_index_started_ns = SDL_GetTicksNS();
+    build_query_line_index(&index_result->usage);
+    index_result->usage.line_index_ns = SDL_GetTicksNS() - line_index_started_ns;
+  } else {
+    if (index_result->outline.count > 0) index_result->line_indexes_skipped++;
+    if (index_result->usage.count > 0) index_result->line_indexes_skipped++;
+  }
   index_result->total_ms = SDL_GetTicks() - job_started;
   index_result->total_ns = SDL_GetTicksNS() - job_started_ns;
   ts_tree_delete(tree);
@@ -1553,10 +1640,12 @@ static bool run_markdown_block_query(
   const AnvilWorkerTreeSitterIndexResult *previous_result,
   const AnvilTSLanguage *language,
   const char *source,
+  uint32_t source_len,
   AnvilMarkdownTree *tree,
   const AnvilTSSnapshot *snapshot,
   const TSInputEdit *edit,
   AnvilWorkerTSParseRun *run,
+  TSQueryCursor *cursor,
   uint32_t match_limit,
   uint32_t max_captures,
   uint32_t timeout_ms,
@@ -1565,8 +1654,9 @@ static bool run_markdown_block_query(
   uint32_t changed_count = edit ? anvil_markdown_tree_changed_range_count(tree) : 0;
   if (!previous_result || !edit) {
     return run_treesitter_index_query(
-      index_result, language, "outline", source, anvil_markdown_tree_block_tree(tree),
-      snapshot, 0, snapshot->byte_len, run, match_limit, max_captures, timeout_ms, fatal_error
+      index_result, language, "outline", source, source_len,
+      anvil_markdown_tree_block_tree(tree), snapshot, 0, snapshot->byte_len, run, cursor,
+      match_limit, max_captures, timeout_ms, fatal_error
     );
   }
 
@@ -1600,9 +1690,9 @@ static bool run_markdown_block_query(
     return true;
   }
   return run_treesitter_index_query(
-    index_result, language, "outline", source, anvil_markdown_tree_block_tree(tree),
-    snapshot, changed_start, changed_end, run, match_limit, max_captures,
-    timeout_ms, fatal_error
+    index_result, language, "outline", source, source_len,
+    anvil_markdown_tree_block_tree(tree), snapshot, changed_start, changed_end, run,
+    cursor, match_limit, max_captures, timeout_ms, fatal_error
   );
 }
 
@@ -1610,10 +1700,12 @@ static bool run_markdown_inline_query(
   AnvilWorkerTreeSitterIndexResult *index_result,
   const AnvilWorkerTreeSitterIndexResult *previous_result,
   const char *source,
+  uint32_t source_len,
   AnvilMarkdownTree *tree,
   const AnvilTSSnapshot *snapshot,
   const TSInputEdit *edit,
   AnvilWorkerTSParseRun *run,
+  TSQueryCursor *cursor,
   uint32_t match_limit,
   uint32_t max_captures,
   uint32_t timeout_ms
@@ -1622,7 +1714,11 @@ static bool run_markdown_inline_query(
   if (!source || !source[0]) return true;
   const AnvilTSLanguage *language = anvil_ts_language_by_id("markdown_inline");
   char *compile_error = NULL;
-  TSQuery *query = compile_treesitter_query(language, "inline", source, &compile_error);
+  uint64_t compile_started_ns = SDL_GetTicksNS();
+  const TSQuery *query = cached_treesitter_query(
+    language, "inline", source, source_len, query_result, &compile_error
+  );
+  query_result->query_compile_ns = SDL_GetTicksNS() - compile_started_ns;
   if (!query) {
     query_result->status = pool_strdup("failed");
     query_result->error = compile_error;
@@ -1663,10 +1759,11 @@ static bool run_markdown_inline_query(
     bool exceeded = false;
     char *query_error = NULL;
     uint32_t remaining_timeout = timeout_ms > 0 ? timeout_ms - (uint32_t) elapsed : 0;
-    ok = anvil_ts_query_captures_in_tree(
+    ok = anvil_ts_query_captures_in_tree_with_cursor(
       anvil_markdown_tree_inline_tree(tree, i),
       anvil_markdown_tree_snapshot(tree),
       query,
+      cursor,
       range.start_byte,
       range.end_byte,
       match_limit,
@@ -1690,14 +1787,23 @@ static bool run_markdown_inline_query(
   query_result->exceeded_match_limit = exceeded_any;
   query_result->status = pool_strdup(ok ? (exceeded_any ? "limit" : "ready")
     : treesitter_query_status_from_error(query_result->error, exceeded_any));
-  ts_query_delete(query);
   return true;
 }
 
-static void run_markdown_parse(AnvilWorkerPool *pool, AnvilWorkerJob *job) {
+static void run_markdown_parse(AnvilWorkerContext *context, AnvilWorkerJob *job) {
+  AnvilWorkerPool *pool = context->pool;
   uint64_t job_started = SDL_GetTicks();
   char *error = NULL;
-  char *owned_text = job->text ? pool_strdup(job->text) : read_file_text(job->path, &error);
+  size_t owned_text_len = 0;
+  char *owned_text;
+  if (job->text) {
+    owned_text = job->text;
+    owned_text_len = job->text_len;
+    job->text = NULL;
+    job->text_len = 0;
+  } else {
+    owned_text = read_file_text(job->path, &owned_text_len, &error);
+  }
   if (!owned_text) {
     SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
     AnvilWorkerResult *result = result_new(job, "error");
@@ -1705,19 +1811,16 @@ static void run_markdown_parse(AnvilWorkerPool *pool, AnvilWorkerJob *job) {
     enqueue_result(pool, result);
     return;
   }
-
-  AnvilWorkerTextLines lines;
-  if (!text_lines_from_text(owned_text, &lines, &error)) {
-    SDL_free(owned_text);
+  uint32_t normalized_text_len = 0;
+  if (!validate_text_buffer(owned_text, owned_text_len, &normalized_text_len, &error)) {
+    free(owned_text);
     SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
     AnvilWorkerResult *result = result_new(job, "error");
-    if (result) result->error = error ? error : pool_strdup("failed to split Markdown input");
+    if (result) result->error = error ? error : pool_strdup("failed to validate Markdown input");
     enqueue_result(pool, result);
     return;
   }
-  AnvilTSSnapshot *snapshot = anvil_ts_snapshot_new_from_lines(lines.lines, lines.lengths, lines.count, &error);
-  text_lines_free(&lines);
-  SDL_free(owned_text);
+  AnvilTSSnapshot *snapshot = anvil_ts_snapshot_new_take_text(owned_text, normalized_text_len, &error);
   if (!snapshot) {
     SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
     AnvilWorkerResult *result = result_new(job, "error");
@@ -1727,6 +1830,17 @@ static void run_markdown_parse(AnvilWorkerPool *pool, AnvilWorkerJob *job) {
     return;
   }
 
+  if ((job->outline_query || job->usage_query) && !context->query_cursor) {
+    context->query_cursor = ts_query_cursor_new();
+    if (!context->query_cursor) {
+      anvil_ts_snapshot_free(snapshot);
+      SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
+      AnvilWorkerResult *result = result_new(job, "error");
+      if (result) result->error = pool_strdup("failed to initialize Markdown query cursor");
+      enqueue_result(pool, result);
+      return;
+    }
+  }
   AnvilWorkerCancelToken *cancel_token = job->cancel_token ? anvil_worker_cancel_token_open(job->cancel_token) : NULL;
   AnvilWorkerTSParseRun run;
   memset(&run, 0, sizeof(run));
@@ -1778,6 +1892,7 @@ static void run_markdown_parse(AnvilWorkerPool *pool, AnvilWorkerJob *job) {
   index_result->usage_query_source = pool_strdup(job->usage_query);
   index_result->byte_len = snapshot->byte_len;
   index_result->line_count = snapshot->line_count;
+  index_result->result_capabilities = job->result_capabilities;
   index_result->parse_ms = parse_ms;
   index_result->block_parse_ms = anvil_markdown_tree_block_parse_ms(tree);
   index_result->inline_parse_ms = anvil_markdown_tree_inline_parse_ms(tree);
@@ -1818,10 +1933,12 @@ static void run_markdown_parse(AnvilWorkerPool *pool, AnvilWorkerJob *job) {
       block_previous,
       block_language,
       job->outline_query,
+      (uint32_t)job->outline_query_len,
       tree,
       snapshot,
       have_identity_edit ? &identity_edit : NULL,
       &run,
+      context->query_cursor,
       job->match_limit ? job->match_limit : 50000,
       job->max_captures ? job->max_captures : 50000,
       job->query_timeout_ms ? job->query_timeout_ms : 20,
@@ -1833,10 +1950,12 @@ static void run_markdown_parse(AnvilWorkerPool *pool, AnvilWorkerJob *job) {
       index_result,
       inline_previous,
       job->usage_query,
+      (uint32_t)job->usage_query_len,
       tree,
       snapshot,
       have_identity_edit ? &identity_edit : NULL,
       &run,
+      context->query_cursor,
       job->usage_match_limit ? job->usage_match_limit : (job->match_limit ? job->match_limit : 50000),
       job->usage_max_captures ? job->usage_max_captures : (job->max_captures ? job->max_captures : 50000),
       job->usage_query_timeout_ms ? job->usage_query_timeout_ms : (job->query_timeout_ms ? job->query_timeout_ms : 20)
@@ -1916,8 +2035,13 @@ static void run_markdown_parse(AnvilWorkerPool *pool, AnvilWorkerJob *job) {
     have_identity_edit && inline_previous ? &inline_previous->usage : NULL,
     have_identity_edit ? &identity_edit : NULL
   );
-  build_query_line_index(&index_result->outline);
-  build_query_line_index(&index_result->usage);
+  if ((job->result_capabilities & ANVIL_WORKER_TS_LINE_RANGE_LOOKUP) != 0) {
+    build_query_line_index(&index_result->outline);
+    build_query_line_index(&index_result->usage);
+  } else {
+    if (index_result->outline.count > 0) index_result->line_indexes_skipped++;
+    if (index_result->usage.count > 0) index_result->line_indexes_skipped++;
+  }
   index_result->total_ms = SDL_GetTicks() - job_started;
 
   bool token_cancelled = anvil_worker_cancel_token_cancelled(cancel_token);
@@ -1958,7 +2082,8 @@ static void run_markdown_parse(AnvilWorkerPool *pool, AnvilWorkerJob *job) {
   enqueue_simple_result(pool, job, "final");
 }
 
-static void run_job(AnvilWorkerPool *pool, AnvilWorkerJob *job) {
+static void run_job(AnvilWorkerContext *context, AnvilWorkerJob *job) {
+  AnvilWorkerPool *pool = context->pool;
   SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_RUNNING);
   if (job_cancelled(job)) {
     SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_CANCELLED);
@@ -1974,9 +2099,9 @@ static void run_job(AnvilWorkerPool *pool, AnvilWorkerJob *job) {
   } else if (strcmp(kind, "test_fail") == 0) {
     run_test_fail(pool, job);
   } else if (strcmp(kind, "treesitter_index_text") == 0) {
-    run_treesitter_index_text(pool, job);
+    run_treesitter_index_text(context, job);
   } else if (strcmp(kind, "markdown_parse") == 0) {
-    run_markdown_parse(pool, job);
+    run_markdown_parse(context, job);
   } else {
     SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
     AnvilWorkerResult *result = result_new(job, "error");
@@ -1990,7 +2115,8 @@ static void run_job(AnvilWorkerPool *pool, AnvilWorkerJob *job) {
 }
 
 static int worker_main(void *userdata) {
-  AnvilWorkerPool *pool = (AnvilWorkerPool *)userdata;
+  AnvilWorkerContext *context = (AnvilWorkerContext *)userdata;
+  AnvilWorkerPool *pool = context->pool;
   while (true) {
     SDL_LockMutex(pool->queue_mutex);
     while (!pool->terminate && pool->input_first == NULL) {
@@ -1998,6 +2124,10 @@ static int worker_main(void *userdata) {
     }
     if (pool->terminate && pool->input_first == NULL) {
       SDL_UnlockMutex(pool->queue_mutex);
+      if (context->query_cursor) ts_query_cursor_delete(context->query_cursor);
+      if (context->parser) ts_parser_delete(context->parser);
+      context->query_cursor = NULL;
+      context->parser = NULL;
       return 0;
     }
     AnvilWorkerJob *job = pool->input_first;
@@ -2007,7 +2137,7 @@ static int worker_main(void *userdata) {
     running_add_locked(pool, job);
     SDL_UnlockMutex(pool->queue_mutex);
 
-    run_job(pool, job);
+    run_job(context, job);
     int status = SDL_GetAtomicInt(&job->status);
     SDL_LockMutex(pool->result_mutex);
     if (status == ANVIL_WORKER_STATUS_COMPLETE) pool->completed++;
@@ -2034,14 +2164,16 @@ AnvilWorkerPool *anvil_worker_pool_create(const char *name, int worker_count) {
   pool->queue_cond = SDL_CreateCondition();
   pool->result_mutex = SDL_CreateMutex();
   pool->workers = (SDL_Thread **)SDL_calloc((size_t)worker_count, sizeof(SDL_Thread *));
-  if (!pool->name || !pool->queue_mutex || !pool->queue_cond || !pool->result_mutex || !pool->workers) {
+  pool->contexts = (AnvilWorkerContext *)SDL_calloc((size_t)worker_count, sizeof(*pool->contexts));
+  if (!pool->name || !pool->queue_mutex || !pool->queue_cond || !pool->result_mutex || !pool->workers || !pool->contexts) {
     anvil_worker_pool_destroy(pool, true);
     return NULL;
   }
   for (int i = 0; i < worker_count; ++i) {
     char thread_name[64];
     snprintf(thread_name, sizeof(thread_name), "anvil-worker-%d", i + 1);
-    pool->workers[i] = SDL_CreateThread(worker_main, thread_name, pool);
+    pool->contexts[i].pool = pool;
+    pool->workers[i] = SDL_CreateThread(worker_main, thread_name, &pool->contexts[i]);
     if (!pool->workers[i]) {
       anvil_worker_pool_destroy(pool, true);
       return NULL;
@@ -2107,6 +2239,7 @@ void anvil_worker_pool_destroy(AnvilWorkerPool *pool, bool cancel_running) {
   if (pool->queue_mutex) SDL_DestroyMutex(pool->queue_mutex);
   if (pool->result_mutex) SDL_DestroyMutex(pool->result_mutex);
   SDL_free(pool->workers);
+  SDL_free(pool->contexts);
   SDL_free(pool->name);
   SDL_free(pool);
 }
@@ -2115,6 +2248,19 @@ AnvilWorkerJob *anvil_worker_pool_submit(AnvilWorkerPool *pool, const AnvilWorke
   if (error) *error = NULL;
   if (!pool || !spec || !spec->kind || !spec->kind[0]) {
     pool_set_error(error, "invalid worker job spec");
+    return NULL;
+  }
+  if (spec->text_len > UINT32_MAX || spec->outline_query_len > UINT32_MAX || spec->usage_query_len > UINT32_MAX) {
+    pool_set_error(error, "Tree-sitter worker input exceeds 4GB byte limit");
+    return NULL;
+  }
+  size_t outline_query_len = spec->outline_query
+    ? (spec->outline_query_len ? spec->outline_query_len : strlen(spec->outline_query)) : 0;
+  size_t usage_query_len = spec->usage_query
+    ? (spec->usage_query_len ? spec->usage_query_len : strlen(spec->usage_query)) : 0;
+  if ((spec->outline_query && memchr(spec->outline_query, '\0', outline_query_len) != NULL) ||
+      (spec->usage_query && memchr(spec->usage_query, '\0', usage_query_len) != NULL)) {
+    pool_set_error(error, "Tree-sitter query contains embedded NUL");
     return NULL;
   }
   AnvilWorkerJob *job = (AnvilWorkerJob *)SDL_calloc(1, sizeof(*job));
@@ -2130,9 +2276,12 @@ AnvilWorkerJob *anvil_worker_pool_submit(AnvilWorkerPool *pool, const AnvilWorke
   job->sleep_ms = spec->sleep_ms;
   job->path = pool_strdup(spec->path);
   job->language = pool_strdup(spec->language);
-  job->text = pool_strdup(spec->text);
-  job->outline_query = pool_strdup(spec->outline_query);
-  job->usage_query = pool_strdup(spec->usage_query);
+  job->text_len = spec->text ? (spec->text_len ? spec->text_len : strlen(spec->text)) : 0;
+  job->outline_query_len = outline_query_len;
+  job->usage_query_len = usage_query_len;
+  job->text = spec->text ? pool_textdup(spec->text, job->text_len) : NULL;
+  job->outline_query = spec->outline_query ? pool_memdup0(spec->outline_query, job->outline_query_len) : NULL;
+  job->usage_query = spec->usage_query ? pool_memdup0(spec->usage_query, job->usage_query_len) : NULL;
   job->cancel_token = pool_strdup(spec->cancel_token);
   job->parse_timeout_ms = spec->parse_timeout_ms;
   job->query_timeout_ms = spec->query_timeout_ms;
@@ -2141,9 +2290,15 @@ AnvilWorkerJob *anvil_worker_pool_submit(AnvilWorkerPool *pool, const AnvilWorke
   job->usage_query_timeout_ms = spec->usage_query_timeout_ms;
   job->usage_match_limit = spec->usage_match_limit;
   job->usage_max_captures = spec->usage_max_captures;
+  job->result_capabilities = spec->result_capabilities_set
+    ? spec->result_capabilities
+    : (ANVIL_WORKER_TS_CAPTURE_PAGING | ANVIL_WORKER_TS_LINE_RANGE_LOOKUP);
   job->previous_result = spec->previous_result;
   anvil_worker_treesitter_index_result_retain(job->previous_result);
-  if (!job->kind || (spec->value && !job->value) || (spec->path && !job->path) || (spec->language && !job->language) || (spec->text && !job->text) || (spec->outline_query && !job->outline_query) || (spec->usage_query && !job->usage_query) || (spec->cancel_token && !job->cancel_token)) {
+  if (!job->kind || (spec->value && !job->value) || (spec->path && !job->path) ||
+      (spec->language && !job->language) || (spec->text && !job->text) ||
+      (spec->outline_query && !job->outline_query) || (spec->usage_query && !job->usage_query) ||
+      (spec->cancel_token && !job->cancel_token)) {
     anvil_worker_job_release(job);
     anvil_worker_job_release(job);
     pool_set_error(error, "out of memory copying worker job spec");
