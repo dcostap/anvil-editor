@@ -203,6 +203,19 @@ test.describe("line wrapping current line highlight", function()
     test.equal(view.wrapped_doc_line_count, #doc.lines)
   end)
 
+  test.it("revalidates wrapped rows that point past the document despite current line-count metadata", function(context)
+    local view, doc = open_editor(context, string.rep("x", 40) .. "\n" .. string.rep("y", 40) .. "\n")
+    configure_wrapping_for_test(context, view)
+    test.ok(view.wrapped_doc_line_count > 1)
+
+    doc.lines = { string.rep("z", 40) .. "\n" }
+    view.wrapped_doc_line_count = #doc.lines
+
+    with_stubbed_renderer(function() view:draw() end)
+    test.equal(view.wrapped_doc_line_count, #doc.lines)
+    test.ok(view.wrapped_lines[#view.wrapped_lines - 1] <= #doc.lines)
+  end)
+
   test.it("highlights only the wrapped visual line containing the caret", function(context)
     local view, doc = open_editor(context, string.rep("x", 40) .. "\n")
     configure_wrapping_for_test(context, view)

@@ -4253,6 +4253,15 @@ end
 ---@param y number Screen y coordinate
 ---@return integer height Line height
 function DocView:draw_line_text(line, x, y)
+  if not self.doc.lines[line] then
+    core.log_quiet(
+      "DocView draw_line_text: skipped stale line for %s (line=%s document_lines=%d)",
+      self.doc:get_name(), tostring(line), #self.doc.lines
+    )
+    if self.wrapped_settings then self.wrapped_doc_line_count = nil end
+    return self:get_line_height()
+  end
+
   local render_line = self:get_line_render(line)
   if render_line and self.wrapped_settings then
     local first_idx, _, count = linewrapping.get_line_idx_col_count(self, line)
@@ -5114,6 +5123,15 @@ end
 ---@param y number Screen y coordinate
 ---@return integer height Line height
 function DocView:draw_line_body(line, x, y)
+  if not self.doc.lines[line] then
+    core.log_quiet(
+      "DocView draw_line_body: skipped stale line for %s (line=%s document_lines=%d)",
+      self.doc:get_name(), tostring(line), #self.doc.lines
+    )
+    if self.wrapped_settings then self.wrapped_doc_line_count = nil end
+    return self:get_line_height()
+  end
+
   if self.wrapped_settings then
     local lh = self:get_line_height()
     local idx0, _, count = linewrapping.get_line_idx_col_count(self, line)
@@ -5526,12 +5544,27 @@ end
 ---Draw the entire document view.
 ---Renders background, gutters, text, selections, carets, and scrollbars.
 function DocView:draw()
-  if self.wrapped_settings and self.wrapped_doc_line_count ~= #self.doc.lines then
-    core.log_quiet(
-      "DocView draw: rebuilding stale wrapped rows for %s (cached_lines=%s document_lines=%d)",
-      self.doc:get_name(), tostring(self.wrapped_doc_line_count), #self.doc.lines
-    )
-    self:update_wrap_cache()
+  if self.wrapped_settings then
+    local document_lines = #self.doc.lines
+    local wrapped_last_line = self.wrapped_lines
+      and #self.wrapped_lines >= 2
+      and self.wrapped_lines[#self.wrapped_lines - 1]
+      or nil
+    local stale_line_count = self.wrapped_doc_line_count ~= document_lines
+    local stale_text = self.wrapped_text_revision ~= (self.doc.text_revision or 0)
+    local stale_mapping = type(wrapped_last_line) == "number" and wrapped_last_line > document_lines
+    if stale_line_count or stale_text or stale_mapping then
+      core.log_quiet(
+        "DocView draw: rebuilding stale wrapped rows for %s (cached_lines=%s document_lines=%d cached_last_line=%s stale_text=%s)",
+        self.doc:get_name(), tostring(self.wrapped_doc_line_count), document_lines,
+        tostring(wrapped_last_line), tostring(stale_text)
+      )
+      -- A stale mapping can survive when external document replacement also
+      -- overwrote the line-count metadata. Force update_wrap_cache() to perform
+      -- a full reconstruction instead of accepting that metadata as current.
+      if stale_mapping then self.wrapped_doc_line_count = nil end
+      self:update_wrap_cache()
+    end
   end
 
   if self:has_composed_visual_rows() then
