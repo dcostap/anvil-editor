@@ -129,6 +129,59 @@ function attachments.import_file(view, source, opts)
   return true, { path = target, text = text, copied = copied }
 end
 
+local CLIPBOARD_IMAGE_FORMATS = {
+  { mime = "image/png", extension = "png" },
+  { mime = "image/jpeg", extension = "jpg" },
+  { mime = "image/bmp", extension = "bmp" },
+}
+
+function attachments.paste_provider()
+  return {
+    on_clipboard_paste = function(_, view)
+      if type(system.get_clipboard_data) ~= "function" then return false end
+      local text = system.get_clipboard and system.get_clipboard()
+      if text and text ~= "" then return false end
+      local data, format
+      for _, candidate in ipairs(CLIPBOARD_IMAGE_FORMATS) do
+        data = system.get_clipboard_data(candidate.mime)
+        if data and #data > 0 then format = candidate break end
+      end
+      if not format then return false end
+
+      local temp_dir = USERDIR .. PATHSEP .. ".markdown-clipboard-"
+        .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+      local ok, err = common.mkdirp(temp_dir)
+      if not ok then
+        core.log_quiet("Markdown clipboard attachment temp directory failed: %s", tostring(err))
+        return false
+      end
+      local temp_path = temp_dir .. PATHSEP .. "pasted-image." .. format.extension
+      local file
+      file, err = io.open(temp_path, "wb")
+      if file then
+        local wrote
+        wrote, err = file:write(data)
+        file:close()
+        if not wrote then file = nil end
+      end
+      if not file then
+        common.rm(temp_dir, true)
+        core.log_quiet("Markdown clipboard attachment temp write failed: %s", tostring(err))
+        return false
+      end
+
+      local imported, result = attachments.import_file(view, temp_path)
+      common.rm(temp_dir, true)
+      if not imported then
+        core.error("Could not import clipboard image: %s", tostring(result))
+        return false
+      end
+      core.log_quiet("Markdown clipboard image imported from %s", format.mime)
+      return true
+    end,
+  }
+end
+
 function attachments.drop_provider()
   return {
     on_file_dropped = function(_, view, filename, x, y)

@@ -826,6 +826,7 @@ local commands = {
 
   ["doc:paste"] = function(dv)
     if not can_edit(dv, "paste") then return end
+    if dv.paste_from_provider and dv:paste_from_provider() then return end
     local clipboard = system.get_clipboard()
     if not clipboard or clipboard == "" then
     	return

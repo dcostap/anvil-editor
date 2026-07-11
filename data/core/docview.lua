@@ -1430,6 +1430,38 @@ function DocView:decoration_provider_entries()
   return sorted_provider_entries(self.decoration_providers)
 end
 
+function DocView:add_clipboard_paste_provider(id, provider, opts)
+  assert(type(id) == "string" and id ~= "", "clipboard-paste provider id must be a non-empty string")
+  assert(type(provider) == "table", "clipboard-paste provider must be a table")
+  opts = opts or {}
+  self.clipboard_paste_providers = self.clipboard_paste_providers or {}
+  self.clipboard_paste_providers[id] = {
+    id = id, provider = provider, priority = opts.priority or provider.priority or 0,
+  }
+end
+
+function DocView:remove_clipboard_paste_provider(id)
+  if not self.clipboard_paste_providers or not self.clipboard_paste_providers[id] then return false end
+  self.clipboard_paste_providers[id] = nil
+  return true
+end
+
+function DocView:paste_from_provider()
+  for _, entry in ipairs(sorted_provider_entries(self.clipboard_paste_providers)) do
+    local fn = entry.provider.on_clipboard_paste
+    if fn then
+      local ok, handled = pcall(fn, entry.provider, self)
+      if not ok then
+        core.log_quiet("DocView clipboard-paste provider %s failed for %s: %s",
+          tostring(entry.id), self.doc:get_name(), tostring(handled))
+      elseif handled then
+        return true
+      end
+    end
+  end
+  return false
+end
+
 function DocView:add_file_drop_provider(id, provider, opts)
   assert(type(id) == "string" and id ~= "", "file-drop provider id must be a non-empty string")
   assert(type(provider) == "table", "file-drop provider must be a table")

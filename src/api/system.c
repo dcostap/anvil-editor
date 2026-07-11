@@ -1196,6 +1196,20 @@ static int f_set_clipboard(lua_State *L) {
 }
 
 
+static int f_get_clipboard_data(lua_State *L) {
+  const char *mime_type = luaL_checkstring(L, 1);
+  size_t size = 0;
+  void *data = SDL_GetClipboardData(mime_type, &size);
+  if (!data || size == 0 || size > 64u * 1024u * 1024u) {
+    SDL_free(data);
+    return 0;
+  }
+  lua_pushlstring(L, (const char *)data, size);
+  SDL_free(data);
+  return 1;
+}
+
+
 static int f_get_primary_selection(lua_State *L) {
   char *text = SDL_GetPrimarySelectionText();
   if (!text) { return 0; }
@@ -1842,6 +1856,7 @@ static const luaL_Reg lib[] = {
   { "get_file_info",         f_get_file_info         },
   { "get_clipboard",         f_get_clipboard         },
   { "set_clipboard",         f_set_clipboard         },
+  { "get_clipboard_data",    f_get_clipboard_data    },
   { "get_primary_selection", f_get_primary_selection },
   { "set_primary_selection", f_set_primary_selection },
   { "get_process_id",        f_get_process_id        },

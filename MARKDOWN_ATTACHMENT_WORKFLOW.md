@@ -6,6 +6,12 @@ Implemented July 10, 2026 as a Phase 5 slice in `MARKDOWN_LIVE_EDITOR_PLAN.md`.
 
 `DocView` now owns a generic ordered file-drop provider contract. Providers receive the target Editor, file, and screen position; failures are isolated through quiet diagnostics; returning true consumes the drop. Markdown Live Preview attaches/detaches its provider with the rest of its owned lifecycle and moves the view-local caret to the drop position before insertion.
 
+## Generic clipboard routing
+
+`DocView` also owns an ordered clipboard-paste provider contract. The ordinary `doc:paste` command offers providers the paste before text handling; isolated provider failures are quietly diagnosed and fall through to normal text paste. Markdown consumes only supported binary image data when the text clipboard is empty, so copied text and Anvil's multicursor clipboard semantics retain precedence.
+
+The native `system.get_clipboard_data(mime)` boundary exposes bounded binary MIME payloads (64 MiB maximum). Markdown checks PNG, JPEG, then BMP, writes a uniquely scoped temporary source, routes it through the same attachment import transaction as file drops, and always removes the temporary source. The resulting copied artifact intentionally follows the same undo policy as dropped files.
+
 ## Import and insertion
 
 Dropping an existing Project file inserts a link without copying it. Dropping an external file:
@@ -28,4 +34,4 @@ Supported groups are PDF, audio (`flac`, `mp3`, `ogg`, `wav`), and video (`mov`,
 
 ## Regression evidence
 
-Focused tests cover the generic provider contract/removal, external image copying, collision naming, Project-local no-copy links, Wikilink versus Markdown serialization, nested-note relative paths, undo/redo of insertion, real drop routing, PDF/audio/video chip presentation and reveal, and existing Markdown image/link rendering suites.
+Focused tests cover the generic drop and clipboard routing, clipboard MIME import, external image copying, collision naming, Project-local no-copy links, Wikilink versus Markdown serialization, nested-note relative paths, undo/redo of insertion, real drop routing, PDF/audio/video chip presentation and reveal, and existing Markdown image/link rendering suites.

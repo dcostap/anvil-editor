@@ -1178,6 +1178,7 @@ local provider = {}
 local poi_provider = {}
 local decoration_provider = {}
 local file_drop_provider = attachments.drop_provider()
+local clipboard_paste_provider = attachments.paste_provider()
 
 function poi_provider:points_of_interest(view)
   local instance = current_semantic_model(view)
@@ -1735,6 +1736,7 @@ function live.attach(view)
   view:add_visual_metric_provider(PROVIDER_ID, provider)
   view:add_line_render_provider(PROVIDER_ID, provider)
   view:add_decoration_provider(PROVIDER_ID, decoration_provider)
+  view:add_clipboard_paste_provider(PROVIDER_ID, clipboard_paste_provider)
   view:add_file_drop_provider(PROVIDER_ID, file_drop_provider)
   view:add_poi_provider(PROVIDER_ID, poi_provider)
   view:add_selection_listener(PROVIDER_ID, function(owner, new_state, old_state)
@@ -1756,6 +1758,7 @@ function live.detach(view)
   view:remove_visual_metric_provider(PROVIDER_ID)
   view:remove_line_render_provider(PROVIDER_ID)
   view:remove_decoration_provider(PROVIDER_ID)
+  view:remove_clipboard_paste_provider(PROVIDER_ID)
   view:remove_file_drop_provider(PROVIDER_ID)
   view:remove_poi_provider(PROVIDER_ID)
   view:remove_selection_listener(PROVIDER_ID)

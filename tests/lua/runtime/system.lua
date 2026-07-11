@@ -95,6 +95,11 @@ test.describe("system", function()
       or sandbox == "macos")
   end)
 
+  test.test("exposes bounded binary clipboard MIME lookup", function()
+    test.type(system.get_clipboard_data, "function")
+    test.equal(system.get_clipboard_data("application/x-anvil-missing-clipboard-test"), nil)
+  end)
+
   test.test("supports basic window helpers on a temporary window", function()
     local window = renwindow.create("system-test-window", 96, 72)
     test.not_nil(window)

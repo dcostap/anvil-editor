@@ -1137,6 +1137,34 @@ test.describe("Markdown Live Editor", function()
     test.equal(remaining_chips, 2)
   end)
 
+  test.it("imports clipboard image data through generic paste routing", function()
+    local root = USERDIR .. PATHSEP .. "markdown-live-clipboard-project-" .. system.get_process_id()
+    test.ok(common.mkdirp(root))
+    local old_projects, old_active = core.projects, core.active_view
+    local old_get_clipboard = system.get_clipboard
+    local old_get_clipboard_data = system.get_clipboard_data
+    core.projects = { Project(root) }
+    local view, doc = make_view("start ", root .. PATHSEP .. "Source.md")
+    doc:set_selection(1, 7)
+    refresh(view)
+    core.active_view = view
+    system.get_clipboard = function() return "" end
+    system.get_clipboard_data = function(mime)
+      if mime == "image/png" then return "png clipboard bytes" end
+    end
+    local ok, err = pcall(function()
+      test.equal(command.perform("doc:paste"), true)
+      test.ok(doc.lines[1]:match("^start !%[%[attachments/pasted%-image[^]]*%.png%]%]\n$"))
+      local relative = doc.lines[1]:match("!%[%[(.-)%]%]")
+      test.equal(system.get_file_info(root .. PATHSEP .. relative).type, "file")
+    end)
+    system.get_clipboard = old_get_clipboard
+    system.get_clipboard_data = old_get_clipboard_data
+    core.projects, core.active_view = old_projects, old_active
+    common.rm(root, true)
+    if not ok then error(err, 0) end
+  end)
+
   test.it("copies dropped attachments and inserts configured source-preserving links", function()
     local root = USERDIR .. PATHSEP .. "markdown-live-attachment-project-" .. system.get_process_id()
     local outside = USERDIR .. PATHSEP .. "markdown-live-attachment-source-" .. system.get_process_id()
