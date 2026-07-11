@@ -1104,6 +1104,37 @@ test.describe("Markdown Live Editor", function()
     test.equal(view:get_line_render(1), nil)
   end)
 
+  test.it("presents semantic GFM table cells as styled editable source", function()
+    local view, doc = make_view("| Name | Value |\n| :--- | ---: |\n| one | two |\n\nplain", "table.md")
+    doc:set_selection(5, 1)
+    refresh(view)
+    local header = test.not_nil(view:get_line_render(1))
+    local header_cells = 0
+    for _, fragment in ipairs(header.fragments) do
+      if fragment.table_cell then
+        header_cells = header_cells + 1
+        test.equal(fragment.color, style.markdown_live_table_header)
+      end
+    end
+    test.equal(header_cells, 2)
+    local row = test.not_nil(view:get_line_render(3))
+    local row_cells = 0
+    for _, fragment in ipairs(row.fragments) do
+      if fragment.table_cell then row_cells = row_cells + 1 end
+    end
+    test.equal(row_cells, 2)
+
+    local markdown_decoration
+    for _, entry in ipairs(view:decoration_provider_entries()) do
+      if entry.id == "markdown-live" then markdown_decoration = entry.provider break end
+    end
+    markdown_decoration = test.not_nil(markdown_decoration)
+    test.equal(markdown_decoration:line_background(view, 2), style.markdown_live_table_background)
+    test.equal(markdown_decoration:line_background(view, 5), nil)
+    doc:set_selection(3, 4)
+    test.equal(view:get_line_render(3), nil)
+  end)
+
   test.it("presents resolved note, heading, and block embeds as bounded visual rows", function()
     local root = USERDIR .. PATHSEP .. "markdown-live-note-embeds-" .. system.get_process_id()
     test.ok(common.mkdirp(root))

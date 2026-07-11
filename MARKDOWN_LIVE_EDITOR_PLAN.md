@@ -1100,7 +1100,7 @@ Exit gate: normal note-taking no longer drops to raw presentation for common blo
 
 ### Phase 7: selected advanced blocks and embeds
 
-**Internal-note embeds, generic attachment chips, and styled-source math slices completed July 10, 2026.** Resolved note/heading/block embeds now retain editable source and add bounded generation-keyed visual preview rows sourced cooperatively from the authoritative Project index. Parser-confirmed PDF/audio/video links and embeds use source-preserving chips while retaining shared resolution, POI, activation, alias, and reveal behavior. Parser-confirmed inline/display LaTeX receives bounded source-preserving code-style presentation and construct reveal without adding a runtime web renderer.
+**Internal-note embeds, generic attachment chips, styled-source math, and semantic table-presentation slices completed July 10, 2026.** Resolved note/heading/block embeds now retain editable source and add bounded generation-keyed visual preview rows sourced cooperatively from the authoritative Project index. Parser-confirmed PDF/audio/video links and embeds use source-preserving chips while retaining shared resolution, POI, activation, alias, and reveal behavior. Parser-confirmed inline/display LaTeX receives bounded source-preserving code-style presentation and construct reveal without adding a runtime web renderer. Parser-confirmed GFM tables now receive stable cell identities and source-preserving header/body/delimiter styling; reliable row/column editing commands remain the next table slice.
 
 Implement separate vertical slices for the required selected scope:
 

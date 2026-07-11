@@ -947,6 +947,16 @@ local function callout_for_line(view, line)
   end
 end
 
+local function table_for_line(view, line)
+  for _, node in ipairs(semantic_line(view, line) or {}) do
+    if node.type == "table" then
+      local line2 = node.source.line2
+      if node.source.col2 == 1 and line2 > node.source.line1 then line2 = line2 - 1 end
+      if line >= node.source.line1 and line <= line2 then return node end
+    end
+  end
+end
+
 local function frontmatter_for_line(view, line)
   for _, node in ipairs(semantic_line(view, line) or {}) do
     if node.type == "frontmatter" then
@@ -1045,6 +1055,37 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
   local fragments, seen = {}, {}
   local callout = callout_for_line(view, line)
   local frontmatter, frontmatter_line2 = frontmatter_for_line(view, line)
+  local table_node = table_for_line(view, line)
+  if table_node then
+    local header = false
+    local cells = {}
+    for _, node in ipairs(semantic_line(view, line) or {}) do
+      if node.type == "table_header" and node.source.line1 == line then header = true end
+      if node.type == "table_cell" and node.source.line1 == line and node.source.line2 == line then
+        cells[#cells + 1] = node
+      end
+    end
+    table.sort(cells, function(a, b) return a.source.col1 < b.source.col1 end)
+    if #cells == 0 then
+      return {
+        {
+          source_col1 = 1, source_col2 = #line_text + 1, text = line_text,
+          color = style.markdown_live_table_separator,
+          semantic_id = table_node.id .. ":separator:" .. line,
+          table_separator = true,
+        },
+      }
+    end
+    for _, cell in ipairs(cells) do
+      fragments[#fragments + 1] = {
+        source_col1 = cell.source.col1, source_col2 = cell.source.col2,
+        text = line_text:sub(cell.source.col1, cell.source.col2 - 1),
+        color = header and style.markdown_live_table_header or style.markdown_live_table_cell,
+        semantic_id = cell.id, table_cell = true, table_header = header,
+      }
+    end
+    return fragments
+  end
   if frontmatter then
     if line == frontmatter.source.line1 or line == frontmatter_line2 then
       return {
@@ -1357,7 +1398,8 @@ function decoration_provider:line_background(view, line)
     return style.markdown_live_code_background
   end
   if callout_for_line(view, line) then return style.markdown_live_callout_background end
-  return frontmatter_for_line(view, line) and style.markdown_live_frontmatter_background or nil
+  if frontmatter_for_line(view, line) then return style.markdown_live_frontmatter_background end
+  return table_for_line(view, line) and style.markdown_live_table_background or nil
 end
 
 function provider:line_generation(view, line)
