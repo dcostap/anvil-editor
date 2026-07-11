@@ -1,8 +1,11 @@
 local core = require "core"
+local command = require "core.command"
 local common = require "core.common"
 local Project = require "core.project"
 local project_paths = require "core.project_paths"
 local test = require "core.test"
+
+local fuzzy_searcher = require "plugins.fuzzy_searcher"
 
 local function join_path(...)
   return table.concat({...}, PATHSEP)
@@ -85,6 +88,7 @@ end
 
 test.describe("File Tree Project Path Roles", function()
   test.after_each(function(context)
+    if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
     project_paths.configure_project {}
     project_paths.load_workspace_state(nil)
     if context.filetree then
@@ -142,6 +146,22 @@ test.describe("File Tree Project Path Roles", function()
     local java_entry = filetree:entry_for_line(java_line)
     test.ok(common.path_equals(java_entry.abs, join_path(context.external, "java")))
     test.ok(java_entry.readonly)
+  end)
+
+  test.it("focuses a Fuzzy Searcher result from an External Project Directory", function(context)
+    local filetree = setup_project_paths(context)
+    local path = join_path(context.external, "java", "lang", "String.java")
+    fuzzy_searcher.open_static_results("External results", {
+      { kind = "file", label = path, file = path },
+    })
+
+    test.ok(command.perform("fuzzy-searcher:focus-selected-in-tree"), "expected focus command to run")
+
+    local line = filetree.doc:get_selection()
+    local entry = filetree:entry_for_line(line)
+    test.is_nil(core.fuzzy_searcher_active_view)
+    test.equal(core.active_view, filetree)
+    test.ok(entry and common.path_equals(entry.abs, path), "expected File Tree selection on the external result")
   end)
 
   test.it("flags Excluded Project Path rows while keeping them visible", function(context)

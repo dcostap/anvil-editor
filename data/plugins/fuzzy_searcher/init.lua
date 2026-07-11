@@ -4391,20 +4391,33 @@ end
 
 function FSView:selected_file_path()
   local r = self:selected_result()
-  if not r or not r.file then return end
-  return common.normalize_path(fullpath(r))
+  if not r then return end
+
+  if r.file or r.abs_path then
+    return common.normalize_path(fullpath(r))
+  end
+
+  local path = r.doc and r.doc.abs_filename
+  if path and path ~= "" then return common.normalize_path(path) end
 end
 
 function FSView:focus_selected_in_tree()
   local path = self:selected_file_path()
-  if not path then return end
+  if not path then
+    core.log_quiet("Fuzzy Searcher: selected result has no relevant file for File Tree focus")
+    return
+  end
 
-  local root = core.root_project and core.root_project()
-  if not root or not common.path_belongs_to(path, root.path) then return end
+  local resolved = project_paths.resolve(path)
+  if not resolved or resolved.flags.browsable == false then
+    core.log_quiet("Fuzzy Searcher: selected file is not browsable in the File Tree: %s", path)
+    return
+  end
 
   -- Close first so filetree remains the active view; otherwise its update() sees
   -- the fuzzy input as active and collapses itself again.
   self:close()
+  core.log_quiet("Fuzzy Searcher: focusing selected file in the File Tree: %s", path)
   command.perform("filetree:focus-file", path)
 end
 

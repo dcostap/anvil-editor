@@ -1,9 +1,12 @@
 local core = require "core"
+local command = require "core.command"
+local common = require "core.common"
 local config = require "core.config"
 local style = require "core.style"
 local test = require "core.test"
 
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
+local Doc = require "core.doc"
 local DocView = require "core.docview"
 local sidepanel = require "core.sidepanel"
 
@@ -69,6 +72,7 @@ test.describe("Fuzzy Searcher preview", function()
     if core.fuzzy_searcher_active_view then
       core.fuzzy_searcher_active_view:close()
     end
+    for _, doc in ipairs(context.docs or {}) do doc:on_close() end
     for _, path in ipairs(context.files or {}) do
       close_file_views_and_docs(path)
       remove_file(path)
@@ -116,6 +120,34 @@ test.describe("Fuzzy Searcher preview", function()
     test.equal(px, metrics.x + style.padding.x)
     test.ok(pw > metrics.w * 0.8, "expected full-width preview pane")
     test.ok(ph > 0)
+  end)
+
+  test.it("focuses a selected document-backed result's file in the File Tree", function(context)
+    local path = assert(core.root_project()).path .. PATHSEP .. "fuzzy-focus-document-result-test.txt"
+    context.files = { path }
+    write_file(path, "document target\n")
+
+    local doc = Doc()
+    doc:set_filename(path, path)
+    context.docs = { doc }
+    fuzzy_searcher.open_static_results("Document results", {
+      {
+        kind = "symbol",
+        label = "document target",
+        doc = doc,
+        line = 1,
+        col = 1,
+      }
+    })
+
+    test.ok(command.perform("fuzzy-searcher:focus-selected-in-tree"), "expected focus command to run")
+
+    local filetree = require "plugins.filetree"
+    local line = filetree.doc:get_selection()
+    local entry = filetree:entry_for_line(line)
+    test.is_nil(core.fuzzy_searcher_active_view, "expected picker to close after focusing its relevant file")
+    test.equal(core.active_view, filetree)
+    test.ok(entry and common.path_equals(entry.abs, path), "expected File Tree selection on the result's Document file")
   end)
 
   test.it("focuses the Side Editor when accepting a file for the Side Panel", function(context)
