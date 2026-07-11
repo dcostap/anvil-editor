@@ -184,27 +184,31 @@ function prompt_save_as(dv, text)
   })
 end
 
-local function cut_or_copy(delete)
-  if delete and not can_edit(core.active_view, "cut") then return end
+local function cut_or_copy(dv, delete)
+  if delete and not can_edit(dv, "cut") then return end
+  local target_doc = dv.doc
   local full_text = ""
   local text = ""
+  local copied_ranges = {}
   core.cursor_clipboard = {}
   core.cursor_clipboard_whole_line = {}
-  for idx, line1, col1, line2, col2 in doc():get_selections(true, true) do
+  for idx, line1, col1, line2, col2 in target_doc:get_selections(true, true) do
     if line1 ~= line2 or col1 ~= col2 then
-      text = doc():get_text(line1, col1, line2, col2)
+      text = target_doc:get_text(line1, col1, line2, col2)
       full_text = full_text == "" and text or (text .. " " .. full_text)
       core.cursor_clipboard_whole_line[idx] = false
+      copied_ranges[#copied_ranges + 1] = { line1, col1, line2, col2 }
     else -- Cut/copy whole line
       -- Remove newline from the text. It will be added as needed on paste.
-      text = string.sub(doc().lines[line1], 1, -2)
+      text = string.sub(target_doc.lines[line1], 1, -2)
       full_text = full_text == "" and text .. "\n" or (text .. "\n" .. full_text)
       core.cursor_clipboard_whole_line[idx] = true
+      copied_ranges[#copied_ranges + 1] = { line1, 1, line1, #target_doc.lines[line1] }
     end
     core.cursor_clipboard[idx] = text
   end
   if delete then
-    run_legacy_doc_edit_as_batch(doc(), "remove", function(target_doc)
+    run_legacy_doc_edit_as_batch(target_doc, "remove", function(target_doc)
       for idx, line1, col1, line2, col2 in target_doc:get_selections(true, true) do
         if line1 ~= line2 or col1 ~= col2 then
           target_doc:delete_to_cursor(idx, 0)
@@ -224,6 +228,9 @@ local function cut_or_copy(delete)
   end
   core.cursor_clipboard["full"] = full_text
   system.set_clipboard(full_text)
+  if not delete and dv.show_copy_feedback then
+    dv:show_copy_feedback(copied_ranges)
+  end
 end
 
 local function set_primary_selection(doc)
@@ -806,12 +813,12 @@ local commands = {
     dv.doc:clear_search_selections()
   end,
 
-  ["doc:cut"] = function()
-    cut_or_copy(true)
+  ["doc:cut"] = function(dv)
+    cut_or_copy(dv, true)
   end,
 
-  ["doc:copy"] = function()
-    cut_or_copy(false)
+  ["doc:copy"] = function(dv)
+    cut_or_copy(dv, false)
   end,
 
   ["doc:undo"] = function(dv)

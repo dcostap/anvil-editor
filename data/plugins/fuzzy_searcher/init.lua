@@ -65,6 +65,7 @@ local function bundled_tool(name)
 end
 
 local fuzzy_searcher = {
+  copy_feedback = require "core.copy_feedback",
   result_limit = 30,
   max_result_limit = 500,
   width = 0.90,
@@ -84,8 +85,6 @@ local fuzzy_searcher = {
   grep_path_column_width = 0.45,
   preview_debug = false,
   preview_text_max_bytes = 2 * 1024 * 1024,
-  copy_flash_duration = 0.20,
-  copy_flash_max_alpha = 115,
   loading_feedback_delay = 0.20,
 }
 
@@ -224,12 +223,23 @@ local function modal_command(stroke, predicate)
   end
 end
 
-local function modal_fuzzy_command(stroke)
+local function modal_fuzzy_command(stroke, picker)
   -- Ctrl+Enter is also claimed by local IntelliJ conflict disabling. Keep the
   -- picker modal command authoritative even when the global keymap was later
   -- overwritten.
   if stroke == "ctrl+return" then return "fuzzy-searcher:confirm-side" end
-  return modal_command(stroke, modal_fuzzy_command_allowed)
+  local cmd = modal_command(stroke, modal_fuzzy_command_allowed)
+  if cmd == "fuzzy-searcher:copy-selected" then
+    local textview = picker and picker.input and picker.input.textview
+    local state = textview and textview:get_selection_state()
+    for i = 1, #(state and state.selections or {}), 4 do
+      if state.selections[i] ~= state.selections[i + 2]
+      or state.selections[i + 1] ~= state.selections[i + 3] then
+        return nil
+      end
+    end
+  end
+  return cmd
 end
 
 local function modal_textbox_command(stroke)
@@ -2668,12 +2678,10 @@ function FSView:copy_selected()
   system.set_clipboard(text)
   core.cursor_clipboard = {}
   core.cursor_clipboard_whole_line = {}
-  self.copy_flash = {
+  self.copy_flash = fuzzy_searcher.copy_feedback.start {
     result = r,
     index = self.selected,
     text = text,
-    started_at = system.get_time(),
-    duration = fuzzy_searcher.copy_flash_duration,
   }
   core.log_quiet("Fuzzy Searcher: copied selected %s result text (%d bytes)", tostring(r.kind or "unknown"), #text)
   self:schedule_update(true)
@@ -2681,18 +2689,17 @@ function FSView:copy_selected()
   return true
 end
 
-function FSView:copy_flash_alpha(idx)
+function FSView:copy_flash_color(idx)
   local flash = self.copy_flash
   if not flash then return nil end
-  local duration = flash.duration or fuzzy_searcher.copy_flash_duration
-  local elapsed = system.get_time() - (flash.started_at or 0)
-  if elapsed >= duration then
+  local color = fuzzy_searcher.copy_feedback.color(flash)
+  if not color then
     self.copy_flash = nil
     return nil
   end
   if flash.index ~= idx or flash.result ~= self.results[idx] then return nil end
   core.redraw = true
-  return math.floor((fuzzy_searcher.copy_flash_max_alpha or 115) * (1 - elapsed / duration))
+  return color
 end
 
 function FSView:copy_flash_bounds(font, r, row_x, row_text_w)
@@ -4654,11 +4661,11 @@ function FSView:draw()
       elseif idx == self.hovered_result then
         renderer.draw_rect(x, yy, list_w, lh, style.background3 or color_with_alpha(style.text, 24))
       end
-      local flash_alpha = self:copy_flash_alpha(idx)
-      if flash_alpha then
+      local flash_color = self:copy_flash_color(idx)
+      if flash_color then
         local flash_x, flash_w = self:copy_flash_bounds(font, r, x + pad, row_text_w)
         if flash_w > 0 then
-          renderer.draw_rect(flash_x, yy + 1, flash_w, math.max(1, lh - 2), color_with_alpha(style.accent, flash_alpha))
+          renderer.draw_rect(flash_x, yy + 1, flash_w, math.max(1, lh - 2), flash_color)
         end
       end
       if r.kind == "grep" then
@@ -4936,13 +4943,13 @@ keymap.on_key_pressed = function(key, ...)
   if key:match("^wheel") and scale_mouse_wheel_modkeys_pressed() then
     return keymap.__fuzzy_searcher_original_on_key_pressed(key, ...)
   end
-  local fuzzy_cmd = modal_fuzzy_command(stroke)
+  local fuzzy_cmd = modal_fuzzy_command(stroke, picker)
   local textbox_cmd = not fuzzy_cmd and modal_textbox_command(stroke)
   if fuzzy_cmd then
     ensure_input_focus(picker)
     fuzzy_focus_log("key-fuzzy-command", picker, "key=" .. tostring(key) .. " stroke=" .. tostring(stroke) .. " cmd=" .. tostring(fuzzy_cmd))
     command.perform(fuzzy_cmd, ...)
-  elseif textbox_cmd and not picker.static_mode then
+  elseif textbox_cmd and (not picker.static_mode or textbox_cmd == "doc:copy") then
     ensure_input_focus(picker)
     fuzzy_focus_log("key-textbox-command", picker, "key=" .. tostring(key) .. " stroke=" .. tostring(stroke) .. " cmd=" .. tostring(textbox_cmd))
     command.perform(textbox_cmd, ...)

@@ -188,6 +188,10 @@ _Avoid_: Command prompt, command bar
 The floating picker used for fuzzy navigation and search modes, such as files, projects, grep, symbols, and commands.
 _Avoid_: fuzzy searcher popup
 
+**Copy Feedback Highlight**:
+A brief visual highlight marking the text most recently copied by the user.
+_Avoid_: Copy flash, copy animation
+
 **Command Slot**:
 A project-scoped shortcut slot that stores one shell command for quick reruns.
 _Avoid_: Command preset, command macro

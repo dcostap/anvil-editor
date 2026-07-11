@@ -9,6 +9,7 @@ local ime = require "core.ime"
 local linewrapping = require "core.linewrapping"
 local language_intelligence = require "core.language_intelligence"
 local range_marker = require "core.range_marker"
+local copy_feedback = require "core.copy_feedback"
 local Doc = require "core.doc"
 local View = require "core.view"
 
@@ -1428,6 +1429,58 @@ end
 
 function DocView:decoration_provider_entries()
   return sorted_provider_entries(self.decoration_providers)
+end
+
+local copy_feedback_decoration_provider = {
+  inline_ranges = function(_, view, line)
+    return view:get_copy_feedback_ranges(line)
+  end,
+}
+
+function DocView:show_copy_feedback(ranges)
+  local copied_ranges = {}
+  for _, range in ipairs(ranges or {}) do
+    local line1, col1 = range.line1 or range[1], range.col1 or range[2]
+    local line2, col2 = range.line2 or range[3], range.col2 or range[4]
+    if line1 and col1 and line2 and col2 then
+      copied_ranges[#copied_ranges + 1] = {
+        line1 = line1, col1 = col1, line2 = line2, col2 = col2,
+      }
+    end
+  end
+  if #copied_ranges == 0 then return false end
+  self.copy_feedback = copy_feedback.start { ranges = copied_ranges }
+  if not self.decoration_providers["core.copy-feedback"] then
+    self:add_decoration_provider("core.copy-feedback", copy_feedback_decoration_provider, { priority = 100000 })
+  end
+  core.log_quiet("DocView copy feedback: %s (%d range%s)", self.doc:get_name(), #copied_ranges, #copied_ranges == 1 and "" or "s")
+  core.redraw = true
+  return true
+end
+
+function DocView:get_copy_feedback_ranges(line)
+  local feedback = self.copy_feedback
+  local color = copy_feedback.color(feedback)
+  if not color then
+    self.copy_feedback = nil
+    self:remove_decoration_provider("core.copy-feedback")
+    return nil
+  end
+
+  local ranges = {}
+  local text = self.doc.lines[line]
+  if not text then return ranges end
+  for _, range in ipairs(feedback.ranges or {}) do
+    if line >= range.line1 and line <= range.line2 then
+      local col1 = line == range.line1 and range.col1 or 1
+      local col2 = line == range.line2 and range.col2 or #text + 1
+      if col2 > col1 then
+        ranges[#ranges + 1] = { col1 = col1, col2 = col2, color = color }
+      end
+    end
+  end
+  core.redraw = true
+  return ranges
 end
 
 function DocView:add_clipboard_paste_provider(id, provider, opts)
