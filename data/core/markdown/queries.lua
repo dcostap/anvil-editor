@@ -35,6 +35,9 @@ queries.block = [[
   (pipe_table_row) @block.table_row
   (pipe_table_cell) @block.table_cell
   (link_reference_definition) @block.link_reference
+  (link_reference_definition (link_label) @content.reference_label)
+  (link_reference_definition (link_destination) @content.reference_destination)
+  (link_reference_definition (link_title) @content.reference_title)
   (html_block) @block.html
 ]]
 
@@ -49,6 +52,7 @@ queries.inline = [[
   (full_reference_link) @span.link_reference
   (collapsed_reference_link) @span.link_reference
   (shortcut_link) @span.link_reference
+  (full_reference_link (link_label) @content.reference_label)
   (image) @span.image
   (link_destination) @content.link_destination
   (link_text) @content.link_text

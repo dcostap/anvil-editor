@@ -63,6 +63,12 @@ local function apply_target_model(result, raw_target, alias)
   return result
 end
 
+function links.from_target(kind, raw_target, alias, fields)
+  local result = fields or {}
+  result.kind = kind
+  return apply_target_model(result, trim(raw_target), alias)
+end
+
 function links.parse_wikilink_at(text, start_col, source_line)
   source_line = source_line or 1
   local is_embed = text:sub(start_col, start_col) == "!"

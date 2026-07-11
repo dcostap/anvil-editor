@@ -915,6 +915,40 @@ test.describe("Markdown Live Editor", function()
     test.equal(has_bullet, false)
   end)
 
+  test.it("resolves and presents full, collapsed, and shortcut reference links", function()
+    local view, doc = make_view("[Anvil docs][docs]\n[docs][]\n[docs]\n\n[docs]: Guide.md \"Guide\"\nText[^note]\n[^note]: Footnote body\nplain", "references.md")
+    doc:set_selection(8, 1)
+    refresh(view)
+    local expected = { "Anvil docs", "docs", "docs" }
+    for line = 1, 3 do
+      local rendered = test.not_nil(view:get_line_render(line))
+      local reference
+      for _, fragment in ipairs(rendered.fragments) do
+        if fragment.link and fragment.link.kind == "reference" then reference = fragment break end
+      end
+      reference = test.not_nil(reference)
+      test.equal(reference.text, expected[line])
+      test.equal(reference.link.raw_target, "Guide.md")
+      test.equal(reference.link.reference_label, "docs")
+    end
+    local definition = test.not_nil(view:get_line_render(5))
+    test.equal(definition.fragments[1].reference_definition, "docs")
+    local footnote_reference = test.not_nil(view:get_line_render(6))
+    local footnote
+    for _, fragment in ipairs(footnote_reference.fragments) do
+      if fragment.footnote then footnote = fragment break end
+    end
+    test.equal(test.not_nil(footnote).footnote, "note")
+    local footnote_definition = test.not_nil(view:get_line_render(7))
+    local definition_fragment
+    for _, fragment in ipairs(footnote_definition.fragments) do
+      if fragment.footnote_definition then definition_fragment = fragment break end
+    end
+    test.equal(test.not_nil(definition_fragment).footnote_definition, "note")
+    doc:set_selection(1, 4)
+    test.equal(view:get_line_render(1), nil)
+  end)
+
   test.it("styles semantic Obsidian tags without treating numeric or word-bound hashes as tags", function()
     local view, doc = make_view("text #project/anvil #123 C#code \\#escaped\nplain", "tags.md")
     doc:set_selection(2, 1)

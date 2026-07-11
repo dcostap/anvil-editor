@@ -642,14 +642,79 @@ local function image_fragment(view, span, opts)
   }
 end
 
+local function semantic_range_text_from_doc(view, range)
+  if not range or range.line1 ~= range.line2 then return nil end
+  local text = (view.doc.lines[range.line1] or ""):gsub("\n$", "")
+  return text:sub(range.col1, range.col2 - 1)
+end
+
+local function normalize_reference_label(value)
+  value = (value or ""):gsub("^%[", ""):gsub("%]$", "")
+  return value:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", ""):lower()
+end
+
+local function reference_definitions(view)
+  local instance = current_semantic_model(view)
+  if not instance then return {} end
+  local cache = view.__markdown_live_reference_cache
+  if cache and cache.generation == instance.generation then return cache.definitions end
+  local nodes, reason = instance:nodes_for_lines(1, #view.doc.lines, { limit = 8192 })
+  local definitions = {}
+  if reason ~= "limit" then
+    for _, node in ipairs(nodes or {}) do
+      if node.type == "link_reference" then
+        local attributes = node.attributes or {}
+        local label = semantic_range_text_from_doc(view, attributes.reference_label)
+        local destination = semantic_range_text_from_doc(view, attributes.reference_destination)
+        local key = normalize_reference_label(label)
+        if key ~= "" and destination and destination ~= "" and not definitions[key] then
+          if destination:sub(1, 1) == "<" and destination:sub(-1) == ">" then
+            destination = destination:sub(2, -2)
+          end
+          definitions[key] = {
+            label = (label or ""):gsub("^%[", ""):gsub("%]$", ""),
+            destination = destination,
+            node = node,
+          }
+        end
+      end
+    end
+  else
+    core.log_quiet("Markdown reference definitions exceeded capture bound for %s", view.doc:get_name())
+  end
+  cache = { generation = instance.generation, definitions = definitions }
+  view.__markdown_live_reference_cache = cache
+  return definitions
+end
+
+local function reference_link_from_node(view, line_text, line, node)
+  local attributes = node.attributes or {}
+  local label_source = semantic_range_text_from_doc(view, attributes.reference_label)
+  local text_source = semantic_range_text_from_doc(view, attributes.link_text)
+  local display = (text_source or label_source or ""):gsub("^%[", ""):gsub("%]$", "")
+  local key = normalize_reference_label(label_source or text_source)
+  if key:sub(1, 1) == "^" then return nil end
+  local definition = reference_definitions(view)[key]
+  if not definition then return nil end
+  return markdown_links.from_target("reference", definition.destination, display, {
+    source_line = line,
+    source_col1 = node.source.col1,
+    source_col2 = node.source.col2,
+    semantic_id = node.id,
+    reference_label = key,
+  })
+end
+
 local function semantic_link_spans(view, line_text, line)
   local nodes = semantic_line(view, line)
   local by_range = {}
   for _, node in ipairs(nodes or {}) do
-    if node.type == "link" or node.type == "image"
+    if node.type == "link" or node.type == "image" or node.type == "link_reference"
       or node.type == "wiki_link" or node.type == "embed"
     then
-      local link = markdown_links.from_semantic_node(line_text, line, node)
+      local link = node.type == "link_reference"
+        and reference_link_from_node(view, line_text, line, node)
+        or markdown_links.from_semantic_node(line_text, line, node)
       if link then
         local key = node.source.col1 .. ":" .. node.source.col2
         local current = by_range[key]
@@ -863,6 +928,30 @@ local function frontmatter_for_line(view, line)
   end
 end
 
+local function semantic_footnote_fragments(view, line_text, line, reveal_units)
+  local fragments = {}
+  for _, node in ipairs(semantic_line(view, line) or {}) do
+    if node.type == "link_reference" and node.source.line1 == line and node.source.line2 == line then
+      local attributes = node.attributes or {}
+      local label = semantic_range_text_from_doc(view, attributes.reference_label or attributes.link_text)
+      local key = normalize_reference_label(label)
+      if key:sub(1, 1) == "^" then
+        local definition = line_text:sub(node.source.col2, node.source.col2) == ":"
+          and line_text:sub(1, node.source.col1 - 1):match("^%s*$") ~= nil
+        fragments[#fragments + 1] = {
+          source_col1 = node.source.col1, source_col2 = node.source.col2,
+          text = line_text:sub(node.source.col1, node.source.col2 - 1),
+          color = style.markdown_live_footnote,
+          semantic_id = node.id,
+          footnote = not definition and key:sub(2) or nil,
+          footnote_definition = definition and key:sub(2) or nil,
+        }
+      end
+    end
+  end
+  return fragments
+end
+
 local function semantic_tag_fragments(view, line_text, line, reveal_units)
   local fragments = {}
   for _, node in ipairs(semantic_line(view, line) or {}) do
@@ -925,7 +1014,32 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
   end
   for _, node in ipairs(semantic_line(view, line) or {}) do
     local attributes = node.attributes or {}
-    if node.type == "thematic_break" and node.source.line1 == line then
+    if node.type == "link_reference" and attributes.reference_label
+      and attributes.reference_destination and node.source.line1 == line
+    then
+      local label = semantic_range_text_from_doc(view, attributes.reference_label) or ""
+      local normalized_label = normalize_reference_label(label)
+      local footnote = normalized_label:sub(1, 1) == "^"
+      fragments[#fragments + 1] = {
+        source_col1 = attributes.reference_label.col1,
+        source_col2 = attributes.reference_label.col2,
+        text = label,
+        color = footnote and style.markdown_live_footnote
+          or style.markdown_live_reference_definition,
+        semantic_id = node.id .. ":definition-label",
+        reference_definition = not footnote and normalized_label or nil,
+        footnote_definition = footnote and normalized_label:sub(2) or nil,
+      }
+      if not footnote then
+        fragments[#fragments + 1] = {
+          source_col1 = attributes.reference_destination.col1,
+          source_col2 = attributes.reference_destination.col2,
+          text = semantic_range_text_from_doc(view, attributes.reference_destination),
+          color = style.markdown_live_external_link,
+          semantic_id = node.id .. ":definition-destination",
+        }
+      end
+    elseif node.type == "thematic_break" and node.source.line1 == line then
       fragments[#fragments + 1] = {
         source_col1 = node.source.col1, source_col2 = node.source.col2,
         text = "────────────────", color = style.markdown_live_rule,
@@ -999,6 +1113,9 @@ local function inline_fragments(line_text, line, view, reveal_units)
   for _, fragment in ipairs(semantic_link_fragments(view, line_text, line, reveal_units)) do
     add_fragment(fragments, occupied, fragment)
   end
+  for _, fragment in ipairs(semantic_footnote_fragments(view, line_text, line, reveal_units)) do
+    add_fragment(fragments, occupied, fragment)
+  end
   for _, fragment in ipairs(semantic_tag_fragments(view, line_text, line, reveal_units)) do
     add_fragment(fragments, occupied, fragment)
   end
@@ -1024,13 +1141,15 @@ function poi_provider:points_of_interest(view)
   end
   local points, seen = {}, {}
   for _, node in ipairs(nodes or {}) do
-    if (node.type == "link" or node.type == "image"
+    if (node.type == "link" or node.type == "image" or node.type == "link_reference"
       or node.type == "wiki_link" or node.type == "embed")
       and node.source.line1 == node.source.line2 and not seen[node.id]
     then
       local line = node.source.line1
       local text = (view.doc.lines[line] or ""):gsub("\n$", "")
-      local link = markdown_links.from_semantic_node(text, line, node)
+      local link = node.type == "link_reference"
+        and reference_link_from_node(view, text, line, node)
+        or markdown_links.from_semantic_node(text, line, node)
       if link then
         seen[node.id] = true
         points[#points + 1] = {
