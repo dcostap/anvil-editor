@@ -149,8 +149,27 @@ local function copy_native_metrics(metrics, result, prefix)
   local native_metrics = result and result.metrics or {}
   if prefix == "outline" then
     if native_metrics.parse_ms then add_metric(metrics, "parse_ms", native_metrics.parse_ms) end
+    if native_metrics.total_ms then add_metric(metrics, "native_total_ms", native_metrics.total_ms) end
+    if native_metrics.prepare_input_ms then add_metric(metrics, "native_prepare_input_ms", native_metrics.prepare_input_ms) end
+    if native_metrics.parser_setup_ms then add_metric(metrics, "native_parser_setup_ms", native_metrics.parser_setup_ms) end
     if native_metrics.outline_query_ms then add_metric(metrics, "outline_query_ms", native_metrics.outline_query_ms) end
+    if native_metrics.outline_query_compile_ms then add_metric(metrics, "outline_query_compile_ms", native_metrics.outline_query_compile_ms) end
+    if native_metrics.outline_line_index_ms then add_metric(metrics, "outline_line_index_ms", native_metrics.outline_line_index_ms) end
     if native_metrics.usage_query_ms then add_metric(metrics, "usage_query_ms", native_metrics.usage_query_ms) end
+    if native_metrics.usage_query_compile_ms then add_metric(metrics, "usage_query_compile_ms", native_metrics.usage_query_compile_ms) end
+    if native_metrics.usage_line_index_ms then add_metric(metrics, "usage_line_index_ms", native_metrics.usage_line_index_ms) end
+    if native_metrics.total_ms then
+      local accounted = (native_metrics.prepare_input_ms or 0)
+        + (native_metrics.parser_setup_ms or 0)
+        + (native_metrics.parse_ms or 0)
+        + (native_metrics.outline_query_compile_ms or 0)
+        + (native_metrics.outline_query_ms or 0)
+        + (native_metrics.outline_line_index_ms or 0)
+        + (native_metrics.usage_query_compile_ms or 0)
+        + (native_metrics.usage_query_ms or 0)
+        + (native_metrics.usage_line_index_ms or 0)
+      add_metric(metrics, "native_other_ms", math.max(0, native_metrics.total_ms - accounted))
+    end
     if native_metrics.parse_count then inc_metric(metrics, "parse_calls", native_metrics.parse_count) end
   end
   local captures = result and result[prefix] and result[prefix].capture_count

@@ -79,6 +79,9 @@ typedef struct AnvilWorkerTreeSitterQueryResult {
   uint32_t count;
   uint32_t capacity;
   uint64_t query_ms;
+  uint64_t query_ns;
+  uint64_t query_compile_ns;
+  uint64_t line_index_ns;
   char *status;
   char *error;
   bool exceeded_match_limit;
@@ -98,6 +101,10 @@ struct AnvilWorkerTreeSitterIndexResult {
   uint64_t block_parse_ms;
   uint64_t inline_parse_ms;
   uint64_t total_ms;
+  uint64_t total_ns;
+  uint64_t prepare_input_ns;
+  uint64_t parser_setup_ns;
+  uint64_t parse_ns;
   bool incremental;
   bool outline_query_reusable;
   uint32_t reused_block_capture_count;
@@ -374,6 +381,28 @@ uint64_t anvil_worker_treesitter_index_result_total_ms(const AnvilWorkerTreeSitt
   return result ? result->total_ms : 0;
 }
 
+static double ticks_ns_to_ms(uint64_t ticks_ns) {
+  return (double)ticks_ns / 1000000.0;
+}
+
+double anvil_worker_treesitter_index_result_precise_total_ms(const AnvilWorkerTreeSitterIndexResult *result) {
+  if (!result) return 0.0;
+  return result->total_ns ? ticks_ns_to_ms(result->total_ns) : (double)result->total_ms;
+}
+
+double anvil_worker_treesitter_index_result_prepare_input_ms(const AnvilWorkerTreeSitterIndexResult *result) {
+  return result ? ticks_ns_to_ms(result->prepare_input_ns) : 0.0;
+}
+
+double anvil_worker_treesitter_index_result_parser_setup_ms(const AnvilWorkerTreeSitterIndexResult *result) {
+  return result ? ticks_ns_to_ms(result->parser_setup_ns) : 0.0;
+}
+
+double anvil_worker_treesitter_index_result_precise_parse_ms(const AnvilWorkerTreeSitterIndexResult *result) {
+  if (!result) return 0.0;
+  return result->parse_ns ? ticks_ns_to_ms(result->parse_ns) : (double)result->parse_ms;
+}
+
 bool anvil_worker_treesitter_index_result_incremental(const AnvilWorkerTreeSitterIndexResult *result) {
   return result && result->incremental;
 }
@@ -389,6 +418,22 @@ uint32_t anvil_worker_treesitter_index_result_reused_inline_count(const AnvilWor
 uint64_t anvil_worker_treesitter_index_result_query_ms(const AnvilWorkerTreeSitterIndexResult *result, const char *kind) {
   const AnvilWorkerTreeSitterQueryResult *query = treesitter_query_result_for_kind(result, kind);
   return query ? query->query_ms : 0;
+}
+
+double anvil_worker_treesitter_index_result_precise_query_ms(const AnvilWorkerTreeSitterIndexResult *result, const char *kind) {
+  const AnvilWorkerTreeSitterQueryResult *query = treesitter_query_result_for_kind(result, kind);
+  if (!query) return 0.0;
+  return query->query_ns ? ticks_ns_to_ms(query->query_ns) : (double)query->query_ms;
+}
+
+double anvil_worker_treesitter_index_result_query_compile_ms(const AnvilWorkerTreeSitterIndexResult *result, const char *kind) {
+  const AnvilWorkerTreeSitterQueryResult *query = treesitter_query_result_for_kind(result, kind);
+  return query ? ticks_ns_to_ms(query->query_compile_ns) : 0.0;
+}
+
+double anvil_worker_treesitter_index_result_line_index_ms(const AnvilWorkerTreeSitterIndexResult *result, const char *kind) {
+  const AnvilWorkerTreeSitterQueryResult *query = treesitter_query_result_for_kind(result, kind);
+  return query ? ticks_ns_to_ms(query->line_index_ns) : 0.0;
 }
 
 bool anvil_worker_treesitter_index_result_capture_at(
@@ -1164,13 +1209,16 @@ static bool run_treesitter_index_query(
   AnvilWorkerTreeSitterQueryResult *query_result = treesitter_query_result_for_kind_mut(index_result, field);
   if (!query_result || !source || !source[0]) return true;
   char *compile_error = NULL;
+  uint64_t compile_started_ns = SDL_GetTicksNS();
   TSQuery *query = compile_treesitter_query(language, field, source, &compile_error);
+  query_result->query_compile_ns = SDL_GetTicksNS() - compile_started_ns;
   if (!query) {
     query_result->status = pool_strdup("failed");
     query_result->error = compile_error;
     return true;
   }
   uint64_t started = SDL_GetTicks();
+  uint64_t started_ns = SDL_GetTicksNS();
   bool exceeded = false;
   char *query_error = NULL;
   bool ok = anvil_ts_query_captures_in_tree(
@@ -1190,6 +1238,7 @@ static bool run_treesitter_index_query(
     &query_error
   );
   query_result->query_ms = SDL_GetTicks() - started;
+  query_result->query_ns = SDL_GetTicksNS() - started_ns;
   query_result->exceeded_match_limit = exceeded;
   query_result->status = pool_strdup(ok ? (exceeded ? "limit" : "ready") : treesitter_query_status_from_error(query_error, exceeded));
   if (!ok && !query_error && !query_result->status) pool_set_error(fatal_error, "out of memory storing Tree-sitter query status");
@@ -1203,6 +1252,8 @@ static bool run_treesitter_index_query(
 
 static void run_treesitter_index_text(AnvilWorkerPool *pool, AnvilWorkerJob *job) {
   uint64_t job_started = SDL_GetTicks();
+  uint64_t job_started_ns = SDL_GetTicksNS();
+  uint64_t prepare_input_started_ns = job_started_ns;
   if (!job->language || !job->language[0]) {
     SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
     AnvilWorkerResult *result = result_new(job, "error");
@@ -1257,6 +1308,8 @@ static void run_treesitter_index_text(AnvilWorkerPool *pool, AnvilWorkerJob *job
     return;
   }
 
+  uint64_t prepare_input_ns = SDL_GetTicksNS() - prepare_input_started_ns;
+  uint64_t parser_setup_started_ns = SDL_GetTicksNS();
   AnvilWorkerCancelToken *cancel_token = job->cancel_token ? anvil_worker_cancel_token_open(job->cancel_token) : NULL;
   TSParser *parser = ts_parser_new();
   if (!parser || !ts_parser_set_language(parser, anvil_ts_language_ptr(language))) {
@@ -1270,6 +1323,7 @@ static void run_treesitter_index_text(AnvilWorkerPool *pool, AnvilWorkerJob *job
     return;
   }
 
+  uint64_t parser_setup_ns = SDL_GetTicksNS() - parser_setup_started_ns;
   AnvilWorkerTSParseRun run;
   memset(&run, 0, sizeof(run));
   run.started_ticks = SDL_GetTicks();
@@ -1280,7 +1334,9 @@ static void run_treesitter_index_text(AnvilWorkerPool *pool, AnvilWorkerJob *job
   parse_options.payload = &run;
   parse_options.progress_callback = treesitter_parse_progress;
   TSInput input = anvil_ts_snapshot_input(snapshot);
+  uint64_t parse_started_ns = SDL_GetTicksNS();
   TSTree *tree = ts_parser_parse_with_options(parser, NULL, input, parse_options);
+  uint64_t parse_ns = SDL_GetTicksNS() - parse_started_ns;
   uint64_t parse_ms = SDL_GetTicks() - run.started_ticks;
   ts_parser_delete(parser);
   if (!tree) {
@@ -1314,6 +1370,9 @@ static void run_treesitter_index_text(AnvilWorkerPool *pool, AnvilWorkerJob *job
   index_result->byte_len = snapshot->byte_len;
   index_result->line_count = snapshot->line_count;
   index_result->parse_ms = parse_ms;
+  index_result->prepare_input_ns = prepare_input_ns;
+  index_result->parser_setup_ns = parser_setup_ns;
+  index_result->parse_ns = parse_ns;
   if (!index_result->language) {
     anvil_worker_treesitter_index_result_free(index_result);
     ts_tree_delete(tree);
@@ -1336,9 +1395,14 @@ static void run_treesitter_index_text(AnvilWorkerPool *pool, AnvilWorkerJob *job
     run_treesitter_index_query(index_result, language, "usage", job->usage_query, tree, snapshot, 0, snapshot->byte_len, &run, job->usage_match_limit ? job->usage_match_limit : (job->match_limit ? job->match_limit : 50000), job->usage_max_captures ? job->usage_max_captures : (job->max_captures ? job->max_captures : 50000), job->usage_query_timeout_ms ? job->usage_query_timeout_ms : (job->query_timeout_ms ? job->query_timeout_ms : 20), &fatal_error);
     have_fatal_error = fatal_error != NULL;
   }
+  uint64_t line_index_started_ns = SDL_GetTicksNS();
   build_query_line_index(&index_result->outline);
+  index_result->outline.line_index_ns = SDL_GetTicksNS() - line_index_started_ns;
+  line_index_started_ns = SDL_GetTicksNS();
   build_query_line_index(&index_result->usage);
+  index_result->usage.line_index_ns = SDL_GetTicksNS() - line_index_started_ns;
   index_result->total_ms = SDL_GetTicks() - job_started;
+  index_result->total_ns = SDL_GetTicksNS() - job_started_ns;
   ts_tree_delete(tree);
   anvil_worker_cancel_token_release(cancel_token);
   anvil_ts_snapshot_free(snapshot);

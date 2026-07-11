@@ -1307,6 +1307,62 @@ local function finish_worker_scan(index, message, status)
       tonumber(ui.project_path_metadata_cache_hits or 0) or 0,
       tonumber(ui.project_path_metadata_cache_misses or 0) or 0,
       tonumber(ui.chunk_aggregate_rebuilds_deferred or 0) or 0)
+    local native_wrapper_ms = math.max(0,
+      (tonumber(worker.native_index_text_ms) or 0) - (tonumber(worker.native_total_ms) or 0))
+    log_quiet("Tree-sitter indexing profile: root=%s cumulative_worker_ms=%.1f native_wrapper_ms=%.1f native_total_ms=%.1f native_prepare_input_ms=%.1f native_parser_setup_ms=%.1f native_parse_ms=%.1f outline_compile_ms=%.1f outline_query_ms=%.1f outline_line_index_ms=%.1f usage_compile_ms=%.1f usage_query_ms=%.1f usage_line_index_ms=%.1f native_other_ms=%.1f native_submit_ms=%.1f native_drain_ms=%.1f native_adapt_ms=%.1f line_split_ms=%.1f directory_walk_ms=%.1f artifact_mkdir_ms=%.1f artifact_write_ms=%.1f symbol_record_ms=%.1f usage_record_ms=%.1f chunk_send_wait_ms=%.1f bytes_read=%d outline_captures=%d usage_captures=%d",
+      tostring(index.root),
+      tonumber(worker.total_ms or 0) or 0,
+      native_wrapper_ms,
+      tonumber(worker.native_total_ms or 0) or 0,
+      tonumber(worker.native_prepare_input_ms or 0) or 0,
+      tonumber(worker.native_parser_setup_ms or 0) or 0,
+      tonumber(worker.parse_ms or 0) or 0,
+      tonumber(worker.outline_query_compile_ms or 0) or 0,
+      tonumber(worker.outline_query_ms or 0) or 0,
+      tonumber(worker.outline_line_index_ms or 0) or 0,
+      tonumber(worker.usage_query_compile_ms or 0) or 0,
+      tonumber(worker.usage_query_ms or 0) or 0,
+      tonumber(worker.usage_line_index_ms or 0) or 0,
+      tonumber(worker.native_other_ms or 0) or 0,
+      tonumber(worker.native_index_submit_ms or 0) or 0,
+      tonumber(worker.native_index_drain_ms or 0) or 0,
+      tonumber(worker.native_index_result_adapt_ms or 0) or 0,
+      tonumber(worker.line_split_ms or 0) or 0,
+      tonumber(worker.directory_walk_ms or 0) or 0,
+      tonumber(worker.artifact_mkdir_ms or 0) or 0,
+      tonumber(worker.artifact_write_ms or 0) or 0,
+      tonumber(worker.symbol_record_ms or 0) or 0,
+      tonumber(worker.usage_record_ms or 0) or 0,
+      tonumber(worker.chunk_send_wait_ms or 0) or 0,
+      tonumber(worker.bytes_read or 0) or 0,
+      tonumber(worker.outline_captures or 0) or 0,
+      tonumber(worker.usage_captures or 0) or 0)
+    log_quiet("Tree-sitter aggregate profile: root=%s coordinator_ms=%.1f shards_ms=%.1f aggregate_total_ms=%.1f load_ms=%.1f append_ms=%.1f symbol_sort_ms=%.1f usage_sort_ms=%.1f symbol_artifact_ms=%.1f usage_artifact_ms=%.1f artifact_encode_ms=%.1f artifact_write_ms=%.1f emit_reset_ms=%.1f emit_symbols_ms=%.1f emit_usages_ms=%.1f emit_serialize_ms=%.1f emit_send_wait_ms=%.1f emit_chunks=%d emit_records=%d serialized_size_calls=%d serialized_size_bytes=%d artifacts_loaded=%d files_loaded=%d query_artifacts_written=%d query_artifact_bytes=%d",
+      tostring(index.root),
+      tonumber(worker.coordinator_total_ms or 0) or 0,
+      tonumber(worker.sharded_total_ms or 0) or 0,
+      tonumber(worker.aggregate_total_ms or 0) or 0,
+      tonumber(worker.aggregate_load_ms or 0) or 0,
+      tonumber(worker.aggregate_append_ms or 0) or 0,
+      tonumber(worker.aggregate_symbol_sort_ms or 0) or 0,
+      tonumber(worker.aggregate_usage_sort_ms or 0) or 0,
+      tonumber(worker.aggregate_symbol_query_artifact_ms or 0) or 0,
+      tonumber(worker.aggregate_usage_query_artifact_ms or 0) or 0,
+      tonumber(worker.aggregate_query_artifact_encode_ms or 0) or 0,
+      tonumber(worker.aggregate_query_artifact_file_write_ms or 0) or 0,
+      tonumber(worker.aggregate_emit_reset_ms or 0) or 0,
+      tonumber(worker.aggregate_emit_symbols_ms or 0) or 0,
+      tonumber(worker.aggregate_emit_usages_ms or 0) or 0,
+      tonumber(worker.aggregate_emit_serialize_ms or 0) or 0,
+      tonumber(worker.aggregate_emit_send_wait_ms or 0) or 0,
+      tonumber(worker.aggregate_emit_chunks or 0) or 0,
+      tonumber(worker.aggregate_emit_records or 0) or 0,
+      tonumber(worker.aggregate_serialized_size_calls or 0) or 0,
+      tonumber(worker.aggregate_serialized_size_bytes or 0) or 0,
+      tonumber(worker.aggregate_artifacts_loaded or 0) or 0,
+      tonumber(worker.aggregate_files_loaded or 0) or 0,
+      tonumber(worker.aggregate_query_artifacts_written or 0) or 0,
+      tonumber(worker.aggregate_query_artifact_bytes or 0) or 0)
     core.add_thread(function()
       safe_yield(0)
       local pending_started = now()
@@ -1370,6 +1426,14 @@ local function add_worker_diagnostics(index, phase, diagnostics, role)
 
   for key, value in pairs(diagnostics) do
     if type(value) == "number" then
+      if role and key ~= "worker_id" and key ~= "job_id" then
+        local role_key = tostring(role) .. "_" .. tostring(key)
+        if tostring(key):match("_max$") or key == "files_scanned" then
+          worker[role_key] = math.max(worker[role_key] or 0, value)
+        else
+          worker[role_key] = (worker[role_key] or 0) + value
+        end
+      end
       if tostring(key):match("_max$") or key == "files_scanned" then
         worker[key] = math.max(worker[key] or 0, value)
       elseif key ~= "worker_id" and key ~= "job_id" then

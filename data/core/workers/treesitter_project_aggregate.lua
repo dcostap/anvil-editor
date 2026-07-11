@@ -22,12 +22,22 @@ local function elapsed_ms(started)
   return (now() - started) * 1000
 end
 
+local function add_metric(diagnostics, key, value)
+  if diagnostics then diagnostics[key] = (diagnostics[key] or 0) + (tonumber(value) or 0) end
+end
+
+local function inc_metric(diagnostics, key, value)
+  add_metric(diagnostics, key, value or 1)
+end
+
 local artifact_sequence = 0
 local serialized_size
 
-local function write_lua_payload(dir, prefix, payload, ctx)
+local function write_lua_payload(dir, prefix, payload, ctx, diagnostics)
   if not dir or dir == "" then return nil, "missing-dir" end
+  local mkdir_started = now()
   local ok, err = common.mkdirp(dir)
+  add_metric(diagnostics, "query_artifact_mkdir_ms", elapsed_ms(mkdir_started))
   if not ok and err ~= "path exists" then return nil, err or "mkdir-failed" end
   artifact_sequence = artifact_sequence + 1
   local path = common.normalize_path(dir .. PATHSEP .. string.format(
@@ -38,11 +48,19 @@ local function write_lua_payload(dir, prefix, payload, ctx)
     tostring(ctx and ctx.job_id or 0),
     artifact_sequence
   ))
+  local open_started = now()
   local fp, open_err = io.open(path, "wb")
+  add_metric(diagnostics, "query_artifact_open_ms", elapsed_ms(open_started))
   if not fp then return nil, open_err or "open-failed" end
+  local encode_started = now()
   local content = artifact_codec.encode(payload)
+  add_metric(diagnostics, "query_artifact_encode_ms", elapsed_ms(encode_started))
+  local write_started = now()
   local wrote, write_err = fp:write(content)
   local closed, close_err = fp:close()
+  add_metric(diagnostics, "query_artifact_file_write_ms", elapsed_ms(write_started))
+  inc_metric(diagnostics, "query_artifacts_written", 1)
+  add_metric(diagnostics, "query_artifact_bytes", #content)
   if not wrote or not closed then
     os.remove(path)
     return nil, write_err or close_err or "write-failed"
@@ -63,14 +81,14 @@ local function combined_chunk_artifact(chunks, count, bytes)
   }
 end
 
-local function write_lua_array_chunks(dir, prefix, field, items, chunk_records, chunk_bytes, ctx)
+local function write_lua_array_chunks(dir, prefix, field, items, chunk_records, chunk_bytes, ctx, diagnostics)
   chunk_records = math.max(1, math.floor(tonumber(chunk_records) or DEFAULT_CHUNK_RECORDS))
   chunk_bytes = math.max(4096, math.floor(tonumber(chunk_bytes) or DEFAULT_CHUNK_BYTES))
   local chunks, chunk = {}, {}
   local total_bytes, estimated = 0, 256
   local function flush(force)
     if #chunk == 0 and not force then return true end
-    local artifact, err = write_lua_payload(dir, prefix, { [field] = chunk }, ctx)
+    local artifact, err = write_lua_payload(dir, prefix, { [field] = chunk }, ctx, diagnostics)
     if not artifact then return nil, err end
     if (artifact.bytes or 0) > chunk_bytes then pcall(os.remove, artifact.path); return nil, "query-artifact-byte-limit-exceeded" end
     chunks[#chunks + 1] = artifact
@@ -79,7 +97,7 @@ local function write_lua_array_chunks(dir, prefix, field, items, chunk_records, 
     return true
   end
   for _, item in ipairs(items) do
-    local bytes = serialized_size(item)
+    local bytes = serialized_size(item, diagnostics)
     if #chunk > 0 and (#chunk >= chunk_records or estimated + bytes + 128 > chunk_bytes) then
       local ok, err = flush(false); if not ok then return nil, err end
     end
@@ -90,7 +108,7 @@ local function write_lua_array_chunks(dir, prefix, field, items, chunk_records, 
   return combined_chunk_artifact(chunks, #items, total_bytes)
 end
 
-local function write_lua_usages_by_name_chunks(dir, prefix, usages_by_name, usage_count, chunk_records, chunk_bytes, ctx)
+local function write_lua_usages_by_name_chunks(dir, prefix, usages_by_name, usage_count, chunk_records, chunk_bytes, ctx, diagnostics)
   chunk_records = math.max(1, math.floor(tonumber(chunk_records) or DEFAULT_CHUNK_RECORDS))
   chunk_bytes = math.max(4096, math.floor(tonumber(chunk_bytes) or DEFAULT_CHUNK_BYTES))
   local chunks = {}
@@ -101,7 +119,7 @@ local function write_lua_usages_by_name_chunks(dir, prefix, usages_by_name, usag
 
   local function flush(force)
     if records == 0 and not force then return true end
-    local artifact, err = write_lua_payload(dir, prefix, { usages_by_name = current }, ctx)
+    local artifact, err = write_lua_payload(dir, prefix, { usages_by_name = current }, ctx, diagnostics)
     if not artifact then return nil, err end
     if (artifact.bytes or 0) > chunk_bytes then pcall(os.remove, artifact.path); return nil, "query-artifact-byte-limit-exceeded" end
     chunks[#chunks + 1] = artifact
@@ -121,7 +139,7 @@ local function write_lua_usages_by_name_chunks(dir, prefix, usages_by_name, usag
   else
     for _, name in ipairs(names) do
       for _, usage in ipairs(usages_by_name[name] or {}) do
-        local bytes = serialized_size(usage) + #name + 128
+        local bytes = serialized_size(usage, diagnostics) + #name + 128
         if records > 0 and (records >= chunk_records or estimated + bytes > chunk_bytes) then
           local ok, err = flush(false)
           if not ok then return nil, err end
@@ -236,12 +254,17 @@ local function append_base_payload(aggregate, chunk_payload, replacement_dir, in
   end
 end
 
-serialized_size = function(value)
-  return #common.serialize(value)
+serialized_size = function(value, diagnostics)
+  local started = now()
+  local bytes = #common.serialize(value)
+  add_metric(diagnostics, "emit_serialize_ms", elapsed_ms(started))
+  inc_metric(diagnostics, "serialized_size_calls", 1)
+  add_metric(diagnostics, "serialized_size_bytes", bytes)
+  return bytes
 end
 
-local function truncate_record(record, max_bytes)
-  local bytes = serialized_size(record)
+local function truncate_record(record, max_bytes, diagnostics)
+  local bytes = serialized_size(record, diagnostics)
   if bytes <= max_bytes then return record, bytes end
   local copy = {}
   for key, value in pairs(record or {}) do copy[key] = value end
@@ -250,17 +273,22 @@ local function truncate_record(record, max_bytes)
     if type(value) == "string" and #value > 1024 then copy[key] = value:sub(1, 1000) .. "…[truncated]" end
   end
   copy.transport_truncated = true
-  bytes = serialized_size(copy)
+  bytes = serialized_size(copy, diagnostics)
   if bytes > max_bytes then return nil, bytes end
   return copy, bytes
 end
 
-local function send_aggregate_payload(ctx, payload, max_bytes)
+local function send_aggregate_payload(ctx, payload, max_bytes, diagnostics)
   payload.serialized_bytes = 0
-  payload.serialized_bytes = serialized_size(payload)
-  payload.serialized_bytes = serialized_size(payload)
+  payload.serialized_bytes = serialized_size(payload, diagnostics)
+  payload.serialized_bytes = serialized_size(payload, diagnostics)
   if payload.serialized_bytes > max_bytes then return false, "aggregate-chunk-too-large" end
-  return ctx.send({ type = "chunk", payload = payload })
+  local send_started = now()
+  local ok, err = ctx.send({ type = "chunk", payload = payload })
+  add_metric(diagnostics, "emit_send_wait_ms", elapsed_ms(send_started))
+  inc_metric(diagnostics, "emit_chunks", 1)
+  add_metric(diagnostics, "emit_records", payload.records or 0)
+  return ok, err
 end
 
 local function compact_symbol(symbol)
@@ -271,17 +299,17 @@ local function compact_symbol(symbol)
   return copy
 end
 
-local function send_symbol_chunks(ctx, aggregate, chunk_records, chunk_bytes)
+local function send_symbol_chunks(ctx, aggregate, chunk_records, chunk_bytes, diagnostics)
   local chunk, estimated = {}, 256
   local function flush()
     if #chunk == 0 then return true end
     local payload = { kind = "aggregate", symbols = chunk, records = #chunk }
     chunk, estimated = {}, 256
-    return send_aggregate_payload(ctx, payload, chunk_bytes)
+    return send_aggregate_payload(ctx, payload, chunk_bytes, diagnostics)
   end
   for _, original in ipairs(aggregate.symbols) do
     if ctx.cancelled() then return false, "cancelled" end
-    local symbol, bytes = truncate_record(compact_symbol(original), chunk_bytes - 1024)
+    local symbol, bytes = truncate_record(compact_symbol(original), chunk_bytes - 1024, diagnostics)
     if not symbol then return false, "oversized-symbol-record" end
     if #chunk > 0 and (#chunk >= chunk_records or estimated + bytes + 64 > chunk_bytes) then
       local ok, err = flush()
@@ -313,7 +341,7 @@ local function compact_usage(name, usage)
   }
 end
 
-local function send_usage_chunks(ctx, aggregate, chunk_records, chunk_bytes)
+local function send_usage_chunks(ctx, aggregate, chunk_records, chunk_bytes, diagnostics)
   local names = {}
   for name in pairs(aggregate.usages_by_name) do names[#names + 1] = name end
   table.sort(names)
@@ -331,13 +359,13 @@ local function send_usage_chunks(ctx, aggregate, chunk_records, chunk_bytes)
     usages_by_name = {}
     records = 0
     estimated = 256
-    return send_aggregate_payload(ctx, payload, chunk_bytes)
+    return send_aggregate_payload(ctx, payload, chunk_bytes, diagnostics)
   end
   for _, name in ipairs(names) do
     if ctx.cancelled() then return false, "cancelled" end
     local list = aggregate.usages_by_name[name] or {}
     for _, original in ipairs(list) do
-      local usage, bytes = truncate_record(compact_usage(name, original), chunk_bytes - 1024)
+      local usage, bytes = truncate_record(compact_usage(name, original), chunk_bytes - 1024, diagnostics)
       if not usage then return false, "oversized-usage-record" end
       if records > 0 and (records >= chunk_records or estimated + bytes + #name + 128 > chunk_bytes) then
         local ok, err = flush(false)
@@ -375,7 +403,25 @@ function worker.run(payload, ctx)
     files_loaded = 0,
     load_ms = 0,
     base_load_ms = 0,
+    append_ms = 0,
     sort_ms = 0,
+    symbol_sort_ms = 0,
+    usage_sort_ms = 0,
+    query_artifact_mkdir_ms = 0,
+    query_artifact_open_ms = 0,
+    query_artifact_encode_ms = 0,
+    query_artifact_file_write_ms = 0,
+    query_artifacts_written = 0,
+    query_artifact_bytes = 0,
+    emit_reset_ms = 0,
+    emit_symbols_ms = 0,
+    emit_usages_ms = 0,
+    emit_serialize_ms = 0,
+    emit_send_wait_ms = 0,
+    emit_chunks = 0,
+    emit_records = 0,
+    serialized_size_calls = 0,
+    serialized_size_bytes = 0,
     symbols_total = 0,
     usage_count = 0,
   }
@@ -411,10 +457,12 @@ function worker.run(payload, ctx)
   end
 
   local function consume_payload(chunk_payload)
+    local append_started = now()
     for _, file in ipairs((chunk_payload and chunk_payload.files) or {}) do
       append_file(aggregate, file, include_usages, usage_cap)
       diagnostics.files_loaded = diagnostics.files_loaded + 1
     end
+    diagnostics.append_ms = diagnostics.append_ms + elapsed_ms(append_started)
   end
 
   for _, artifact in ipairs(payload.artifacts or {}) do
@@ -436,8 +484,12 @@ function worker.run(payload, ctx)
   consume_payload(payload)
 
   local sort_started = now()
+  local symbol_sort_started = now()
   sort_symbols(aggregate.symbols)
+  diagnostics.symbol_sort_ms = elapsed_ms(symbol_sort_started)
+  local usage_sort_started = now()
   for _, list in pairs(aggregate.usages_by_name) do sort_usages(list) end
+  diagnostics.usage_sort_ms = elapsed_ms(usage_sort_started)
   diagnostics.sort_ms = elapsed_ms(sort_started)
   diagnostics.symbols_total = #aggregate.symbols
   diagnostics.usage_count = aggregate.usage_count
@@ -458,7 +510,8 @@ function worker.run(payload, ctx)
       compact_symbols,
       query_artifact_chunk_records,
       query_artifact_chunk_bytes,
-      ctx
+      ctx,
+      diagnostics
     )
     diagnostics.symbol_query_artifact_ms = elapsed_ms(artifact_started)
     if artifact then
@@ -476,7 +529,8 @@ function worker.run(payload, ctx)
       aggregate.usage_count,
       query_artifact_chunk_records,
       query_artifact_chunk_bytes,
-      ctx
+      ctx,
+      diagnostics
     )
     diagnostics.usage_query_artifact_ms = elapsed_ms(usage_artifact_started)
     if usage_artifact then
@@ -496,11 +550,17 @@ function worker.run(payload, ctx)
     usage_truncated_reason = aggregate.usage_truncated_reason,
     records = 0,
   }
-  local ok, err = send_aggregate_payload(ctx, reset_payload, chunk_bytes)
+  local emit_started = now()
+  local ok, err = send_aggregate_payload(ctx, reset_payload, chunk_bytes, diagnostics)
+  diagnostics.emit_reset_ms = elapsed_ms(emit_started)
   if not ok then ctx.send({ type = "cancelled", payload = { reason = err or "cancelled" } }); return end
-  ok, err = send_symbol_chunks(ctx, aggregate, chunk_records, chunk_bytes)
+  emit_started = now()
+  ok, err = send_symbol_chunks(ctx, aggregate, chunk_records, chunk_bytes, diagnostics)
+  diagnostics.emit_symbols_ms = elapsed_ms(emit_started)
   if not ok then ctx.send({ type = "cancelled", payload = { reason = err or "cancelled" } }); return end
-  ok, err = send_usage_chunks(ctx, aggregate, chunk_records, chunk_bytes)
+  emit_started = now()
+  ok, err = send_usage_chunks(ctx, aggregate, chunk_records, chunk_bytes, diagnostics)
+  diagnostics.emit_usages_ms = elapsed_ms(emit_started)
   if not ok then ctx.send({ type = "cancelled", payload = { reason = err or "cancelled" } }); return end
 
   diagnostics.total_ms = elapsed_ms(started)
