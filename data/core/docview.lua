@@ -5526,6 +5526,14 @@ end
 ---Draw the entire document view.
 ---Renders background, gutters, text, selections, carets, and scrollbars.
 function DocView:draw()
+  if self.wrapped_settings and self.wrapped_doc_line_count ~= #self.doc.lines then
+    core.log_quiet(
+      "DocView draw: rebuilding stale wrapped rows for %s (cached_lines=%s document_lines=%d)",
+      self.doc:get_name(), tostring(self.wrapped_doc_line_count), #self.doc.lines
+    )
+    self:update_wrap_cache()
+  end
+
   if self:has_composed_visual_rows() then
     if self.wrapped_settings then
       local centered = core.centered_editor
