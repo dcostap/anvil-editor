@@ -7,6 +7,7 @@ local DocView = require "core.docview"
 local MarkdownView = require "core.markdownview"
 local markdown_completion = require "core.markdown.completion"
 local markdown_live = require "core.markdown.live_render"
+local markdown_tables = require "core.markdown.tables"
 
 command.add(function()
   local view = core.active_view
@@ -41,6 +42,30 @@ end, {
   end,
   ["markdown-live-preview:untrust-project-remote-images"] = function(view)
     markdown_live.set_project_remote_image_trust(view, false)
+  end,
+  ["markdown-live-preview:table-insert-row"] = function(view)
+    markdown_tables.insert_row(view)
+  end,
+  ["markdown-live-preview:table-delete-row"] = function(view)
+    markdown_tables.delete_row(view)
+  end,
+  ["markdown-live-preview:table-move-row-up"] = function(view)
+    markdown_tables.move_row(view, -1)
+  end,
+  ["markdown-live-preview:table-move-row-down"] = function(view)
+    markdown_tables.move_row(view, 1)
+  end,
+  ["markdown-live-preview:table-insert-column"] = function(view)
+    markdown_tables.insert_column(view)
+  end,
+  ["markdown-live-preview:table-delete-column"] = function(view)
+    markdown_tables.delete_column(view)
+  end,
+  ["markdown-live-preview:table-move-column-left"] = function(view)
+    markdown_tables.move_column(view, -1)
+  end,
+  ["markdown-live-preview:table-move-column-right"] = function(view)
+    markdown_tables.move_column(view, 1)
   end,
 })
 

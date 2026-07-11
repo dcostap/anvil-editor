@@ -8,6 +8,15 @@ Parser-confirmed GFM table ranges receive a first-party table background while p
 
 Touching a table line uses the safe whole-line Editor path. Malformed/incomplete tables, parser uncertainty, and capture overflow remain raw. Links, images, tags, and other nested inline constructs continue to use the normal semantic fragment composition when their ranges do not conflict with table cell presentation.
 
-The current slice intentionally remains styled source rather than replacing the block with a second grid model. Row/column editing commands are the next table slice; they must edit the Document through ordinary transactions and fall back rather than serialize uncertain structures.
+The table remains styled source rather than a second grid model. The following commands edit canonical leading/trailing-pipe tables through ordinary Document transactions:
 
-Focused UI coverage verifies header/body semantic cells, delimiter/background styling, non-table boundaries, exact source text, and active-line reveal.
+- `markdown-live-preview:table-insert-row`
+- `markdown-live-preview:table-delete-row`
+- `markdown-live-preview:table-move-row-up` / `table-move-row-down`
+- `markdown-live-preview:table-insert-column`
+- `markdown-live-preview:table-delete-column`
+- `markdown-live-preview:table-move-column-left` / `table-move-column-right`
+
+Row commands preserve existing row text and never delete/move the header or delimiter row. Column commands preserve exact cell interiors, including alignment-marker text, and apply one undoable multi-line transaction. The command context must come from a current semantic table and every affected row must have consistent canonical outer pipes. Optional-pipe, malformed, incomplete, inconsistent, or stale structures are declined instead of normalized or partially rewritten. Pipe discovery ignores escaped pipes and matched backtick runs.
+
+Focused UI coverage verifies header/body semantic cells, delimiter/background styling, non-table boundaries, exact source text, active-line reveal, row insertion/deletion/movement, column insertion/deletion/movement, and undo restoration.

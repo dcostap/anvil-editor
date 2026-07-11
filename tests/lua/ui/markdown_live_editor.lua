@@ -1135,6 +1135,53 @@ test.describe("Markdown Live Editor", function()
     test.equal(view:get_line_render(3), nil)
   end)
 
+  test.it("edits canonical GFM table rows and columns through commands", function()
+    local view, doc = make_view("| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n\nplain", "table-commands.md")
+    local old_active = core.active_view
+    core.active_view = view
+    local function reparse()
+      markdown_model.get(doc):submit("table-command-test")
+      refresh(view)
+    end
+    local ok, err = pcall(function()
+      doc:set_selection(3, 3)
+      refresh(view)
+      test.equal(command.perform("markdown-live-preview:table-insert-row"), true)
+      test.equal(doc.lines[4], "|  |  |\n")
+      doc:undo(); reparse()
+
+      doc:set_selection(3, 3)
+      test.equal(command.perform("markdown-live-preview:table-delete-row"), true)
+      test.equal(doc.lines[3], "| 3 | 4 |\n")
+      doc:undo(); reparse()
+
+      doc:set_selection(3, 3)
+      test.equal(command.perform("markdown-live-preview:table-move-row-down"), true)
+      test.equal(doc.lines[3], "| 3 | 4 |\n")
+      test.equal(doc.lines[4], "| 1 | 2 |\n")
+      doc:undo(); reparse()
+
+      doc:set_selection(3, 3)
+      test.equal(command.perform("markdown-live-preview:table-insert-column"), true)
+      test.equal(doc.lines[1], "| A |  | B |\n")
+      test.equal(doc.lines[3], "| 1 |  | 2 |\n")
+      doc:undo(); reparse()
+
+      doc:set_selection(3, 3)
+      test.equal(command.perform("markdown-live-preview:table-delete-column"), true)
+      test.equal(doc.lines[1], "| B |\n")
+      test.equal(doc.lines[3], "| 2 |\n")
+      doc:undo(); reparse()
+
+      doc:set_selection(3, 3)
+      test.equal(command.perform("markdown-live-preview:table-move-column-right"), true)
+      test.equal(doc.lines[1], "| B | A |\n")
+      test.equal(doc.lines[3], "| 2 | 1 |\n")
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
   test.it("presents resolved note, heading, and block embeds as bounded visual rows", function()
     local root = USERDIR .. PATHSEP .. "markdown-live-note-embeds-" .. system.get_process_id()
     test.ok(common.mkdirp(root))
@@ -1151,19 +1198,24 @@ test.describe("Markdown Live Editor", function()
     local view, doc = make_view("![[Target]]\n![[Target#Child]]\n![[Target#^block-id]]\nplain", source)
     doc:set_selection(4, 1)
     refresh(view)
+    local render_provider
+    for _, entry in ipairs(view:line_render_provider_entries()) do
+      if entry.id == "markdown-live" then render_provider = entry.provider break end
+    end
+    render_provider = test.not_nil(render_provider)
     local ok, err = pcall(function()
-      local markdown_rows
-      for _, entry in ipairs(view:visual_row_provider_entries()) do
-        if entry.id == "markdown-live" then markdown_rows = entry.provider break end
+      local function preview(line)
+        local rendered = test.not_nil(render_provider:render_line(view, line))
+        for _, fragment in ipairs(rendered.fragments or {}) do
+          if fragment.embed_preview then return fragment end
+        end
       end
-      markdown_rows = test.not_nil(markdown_rows)
-      local note_rows = test.not_nil(markdown_rows:visual_rows(view, 1, "after"))
-      test.same({ note_rows[1].text, note_rows[2].text, note_rows[3].text }, { "Target", "first", "second" })
-      local heading_rows = test.not_nil(markdown_rows:visual_rows(view, 2, "after"))
-      test.same({ heading_rows[1].text, heading_rows[2].text }, { "child text", "block content" })
-      local block_rows = test.not_nil(markdown_rows:visual_rows(view, 3, "after"))
-      test.same({ block_rows[1].text }, { "block content" })
-      test.equal(markdown_rows:visual_rows(view, 4, "after"), nil)
+      local note_preview = test.not_nil(preview(1))
+      test.same(note_preview.preview_lines, { "Target", "first", "second" })
+      test.equal(note_preview.widget.type, "markdown-embed-preview")
+      test.same(test.not_nil(preview(2)).preview_lines, { "child text", "block content" })
+      test.same(test.not_nil(preview(3)).preview_lines, { "block content" })
+      test.equal(preview(4), nil)
       test.equal(index.status, "ready")
     end)
     core.projects = old_projects

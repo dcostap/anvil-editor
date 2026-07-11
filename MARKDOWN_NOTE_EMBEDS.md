@@ -4,7 +4,7 @@ Implemented as the Phase 7 internal-note embed slice.
 
 ## Presentation
 
-Resolved `![[Note]]`, `![[Note#Heading]]`, current-note heading embeds, and `![[Note#^block-id]]` retain their editable source line and add bounded composed visual rows beneath it:
+Resolved `![[Note]]`, `![[Note#Heading]]`, current-note heading embeds, and `![[Note#^block-id]]` retain their editable source line and add bounded line-local preview rows beneath it:
 
 - note embeds publish up to three representative non-empty source lines;
 - heading embeds publish up to two non-empty lines within that heading section;
@@ -12,7 +12,7 @@ Resolved `![[Note]]`, `![[Note#Heading]]`, current-note heading embeds, and `![[
 
 Preview lines are extracted cooperatively while the Project Markdown index already owns the note text. Rendering never synchronously opens or scans a target file. Per-entry preview storage is capped by line count and 240 characters per line; oversized shallow notes safely produce an empty preview.
 
-Rows use stable semantic IDs, first-party card styles, and generic `DocView` visual-row composition. Clicking a row activates the shared resolved link, so navigation history, heading/block positioning, ambiguity safety, Project boundaries, and stale-target checks remain owned by the existing link interaction layer.
+Rows use stable semantic IDs, first-party card styles, and the generic rendered-fragment widget/metric contract. They do not attach a Document-wide visual-row provider, so ordinary caret movement in notes without embeds retains line-local metric invalidation. Clicking a row activates the shared resolved link, so navigation history, heading/block positioning, ambiguity safety, Project boundaries, and stale-target checks remain owned by the existing link interaction layer.
 
 ## Consistency and fallback
 

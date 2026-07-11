@@ -868,6 +868,55 @@ local function decorate_link_fragment(view, line, span, fragment, opts)
   return fragment
 end
 
+local function embed_preview_for_resolution(resolution)
+  if not (resolution and resolution.status == "resolved" and resolution.kind == "note") then return nil end
+  if resolution.block then return resolution.block.embed_preview end
+  if resolution.heading then return resolution.heading.embed_preview end
+  return resolution.entry and resolution.entry.embed_preview
+end
+
+local function embed_preview_fragment(view, line_text, span)
+  local link = span.link
+  if not (link and link.kind == "embed") or is_image_target(link.path)
+    or attachment_kind(link.path) or semantic_comment_overlaps(view, span.line, span.col1, span.col2)
+  then
+    return nil
+  end
+  local resolution = resolve_live_link(view, link)
+  local preview = embed_preview_for_resolution(resolution)
+  if not preview or #preview == 0 then return nil end
+  local line_height = view:get_line_height()
+  local padding = math.max(2, math.floor(4 * SCALE))
+  return {
+    source_col1 = #line_text + 1, source_col2 = #line_text + 1,
+    width = 0, draw_x_offset = 0,
+    draw_y_offset = line_height,
+    semantic_id = span.semantic_id .. ":preview",
+    embed_preview = true, preview_lines = preview,
+    widget = {
+      type = "markdown-embed-preview",
+      width = math.max(1, view.size.x),
+      height = line_height + #preview * line_height + padding * 2,
+      cursor = "hand",
+      draw = function(_, fragment, x, y)
+        local card_x = x - view:get_font():get_width(line_text)
+        local card_y = y + (fragment.draw_y_offset or line_height)
+        local width = math.max(1, view.size.x)
+        renderer.draw_rect(card_x, card_y, width, #preview * line_height + padding * 2,
+          style.markdown_live_embed_background)
+        for i, text in ipairs(preview) do
+          renderer.draw_text(view:get_font(), text, card_x + padding,
+            card_y + padding + (i - 1) * line_height, style.markdown_live_embed_text)
+        end
+      end,
+      on_mouse_pressed = function(_, owner, _, button)
+        if button ~= "left" then return false end
+        return live.open_link(owner, { link = link, resolution = resolution })
+      end,
+    },
+  }
+end
+
 local function semantic_link_fragments(view, line_text, line, reveal_units, opts)
   local fragments = {}
   for _, span in ipairs(semantic_link_spans(view, line_text, line)) do
@@ -898,7 +947,11 @@ local function semantic_link_fragments(view, line_text, line, reveal_units, opts
         end
       end
       fragment = decorate_link_fragment(view, line, span, fragment, opts)
-      if fragment then fragments[#fragments + 1] = fragment end
+      if fragment then
+        fragments[#fragments + 1] = fragment
+        local preview = embed_preview_fragment(view, line_text, span)
+        if preview then fragments[#fragments + 1] = preview end
+      end
     end
   end
   return fragments
@@ -1244,61 +1297,8 @@ local view_in_source_mode
 local provider = {}
 local poi_provider = {}
 local decoration_provider = {}
-local visual_row_provider = {}
 local file_drop_provider = attachments.drop_provider()
 local clipboard_paste_provider = attachments.paste_provider()
-
-function visual_row_provider:generation(view)
-  if view_in_source_mode and view_in_source_mode(view) then return "source" end
-  local instance = current_semantic_model(view)
-  local owner = view.__markdown_live_owner
-  local index = owner and owner.link_index
-  return table.concat({
-    instance and instance.generation or 0,
-    index and index.status or "none",
-    index and index.generation or 0,
-  }, ":")
-end
-
-local function embed_preview_for_resolution(resolution)
-  if not (resolution and resolution.status == "resolved" and resolution.kind == "note") then return nil end
-  if resolution.block then return resolution.block.embed_preview end
-  if resolution.heading then return resolution.heading.embed_preview end
-  return resolution.entry and resolution.entry.embed_preview
-end
-
-function visual_row_provider:visual_rows(view, line, placement)
-  if placement ~= "after" or view_in_source_mode(view) or not current_semantic_model(view) then return nil end
-  local text = (view.doc.lines[line] or ""):gsub("\n$", "")
-  local rows = {}
-  for _, span in ipairs(semantic_link_spans(view, text, line)) do
-    local link = span.link
-    if link and link.kind == "embed" and not is_image_target(link.path)
-      and not attachment_kind(link.path) and not semantic_comment_overlaps(view, line, span.col1, span.col2)
-    then
-      local resolution = resolve_live_link(view, link)
-      local preview = embed_preview_for_resolution(resolution)
-      for i, preview_text in ipairs(preview or {}) do
-        rows[#rows + 1] = {
-          id = span.semantic_id .. ":preview:" .. i,
-          text = preview_text,
-          embed_preview = true,
-          link = link,
-          resolution = resolution,
-          draw = function(v, row, x, y, w, h)
-            renderer.draw_rect(x, y, w, h, style.markdown_live_embed_background)
-            renderer.draw_text(v:get_font(), row.text, x + style.padding.x, y, style.markdown_live_embed_text)
-          end,
-          on_click = function(v, row, button)
-            if button ~= "left" then return false end
-            return live.open_link(v, { link = row.link, resolution = row.resolution })
-          end,
-        }
-      end
-    end
-  end
-  return #rows > 0 and rows or nil
-end
 
 function poi_provider:points_of_interest(view)
   local instance = current_semantic_model(view)
@@ -1855,7 +1855,6 @@ function live.attach(view)
   if not (view and view.extends and view:extends(DocView)) then return false end
   if view.__markdown_live_attached then return false end
   view:add_visual_metric_provider(PROVIDER_ID, provider)
-  view:add_visual_row_provider(PROVIDER_ID, visual_row_provider)
   view:add_line_render_provider(PROVIDER_ID, provider)
   view:add_decoration_provider(PROVIDER_ID, decoration_provider)
   view:add_clipboard_paste_provider(PROVIDER_ID, clipboard_paste_provider)
@@ -1878,7 +1877,6 @@ function live.detach(view)
   unbind_semantic_model(view)
   clear_image_cache(view)
   view:remove_visual_metric_provider(PROVIDER_ID)
-  view:remove_visual_row_provider(PROVIDER_ID)
   view:remove_line_render_provider(PROVIDER_ID)
   view:remove_decoration_provider(PROVIDER_ID)
   view:remove_clipboard_paste_provider(PROVIDER_ID)
