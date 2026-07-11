@@ -696,11 +696,17 @@ end
 load_recent_commands()
 
 local function parse_query(s)
-  local before, grep = s, nil
-  local p = s:find("#", 1, true)
-  if p then
-    before = s:sub(1, p - 1)
-    grep = s:sub(p + 1):gsub("^%s+", "")
+  local before, grep, symbol = s, nil, nil
+  local grep_pos = s:find("#", 1, true)
+  local symbol_pos = s:find("$", 1, true)
+  if symbol_pos == 1 and s:sub(1, 2) == "$$" then symbol_pos = nil end
+
+  if grep_pos and (not symbol_pos or grep_pos < symbol_pos) then
+    before = s:sub(1, grep_pos - 1)
+    grep = s:sub(grep_pos + 1):gsub("^%s+", "")
+  elseif symbol_pos then
+    before = s:sub(1, symbol_pos - 1)
+    symbol = s:sub(symbol_pos + 1):gsub("^%s+", "")
   end
 
   local base, line = before, nil
@@ -709,7 +715,7 @@ local function parse_query(s)
     base = b:gsub("%s+$", "")
     line = tonumber(n)
   end
-  return base:gsub("^%s+", ""):gsub("%s+$", ""), line, grep
+  return base:gsub("^%s+", ""):gsub("%s+$", ""), line, grep, symbol
 end
 
 local function trim_query(q)
@@ -734,9 +740,15 @@ function fuzzy_searcher.split_prompt_mode_marker(text)
   local prefix, after = split_mode_prefix(text)
   if prefix ~= "" then return "", prefix, after end
 
-  local marker_pos = text:find("#", 1, true)
+  local grep_pos = text:find("#", 1, true)
+  local symbol_pos = text:find("$", 1, true)
+  local marker_pos = grep_pos
+  local marker = "#"
+  if symbol_pos and (not marker_pos or symbol_pos < marker_pos) then
+    marker_pos, marker = symbol_pos, "$"
+  end
   if marker_pos then
-    return text:sub(1, marker_pos - 1), "#", text:sub(marker_pos + 1)
+    return text:sub(1, marker_pos - 1), marker, text:sub(marker_pos + 1)
   end
   return text, "", ""
 end
@@ -2469,8 +2481,8 @@ function FSView:is_deep_code_mode()
     local r = self:selected_result()
     return r and (r.kind == "grep" or r.kind == "symbol")
   end
-  local prefix = split_mode_prefix(self.input and self.input:get_text() or "")
-  return prefix == "#" or prefix == "$" or prefix == "$$"
+  local mode = fuzzy_searcher.prompt_mode(self.input and self.input:get_text() or "")
+  return mode == "#" or mode == "$" or mode == "$$"
 end
 
 function FSView:is_full_width_mode()
@@ -4054,7 +4066,9 @@ local function symbol_result_from_item(item, query, opts)
   local line2 = item.line2 or (item.name_range and item.name_range["end"] and item.name_range["end"].line) or item.end_line
   local col2 = item.col2 or (item.name_range and item.name_range["end"] and item.name_range["end"].col) or item.end_col
   local _, name_spans = fuzzy_match(query, label)
-  local _, file_spans = fuzzy_match(query, file)
+  local path_query = trim_query(opts.path_query)
+  local path_score, file_spans = fuzzy_match_file_fast(path_query, file)
+  if path_query ~= "" and not path_score then return nil end
   return {
     kind = "symbol",
     label = label,
@@ -4080,6 +4094,8 @@ local function symbol_result_from_item(item, query, opts)
     query = query,
     match_spans = name_spans or {},
     file_spans = file_spans or {},
+    path_score = path_score or 0,
+    path_query = path_query,
     symbol_scope = opts.scope,
   }
 end
@@ -4089,15 +4105,18 @@ local function set_symbol_results(view, query, results, source_label, status, re
   view:cancel_deferred_loading_feedback()
   view.has_more = false
   local out = {}
-  for i, item in ipairs(results or {}) do
-    if i > limit then view.has_more = true; break end
-    out[#out + 1] = symbol_result_from_item(item, query, opts)
+  for _, item in ipairs(results or {}) do
+    local result = symbol_result_from_item(item, query, opts)
+    if result then
+      if #out >= limit then view.has_more = true; break end
+      out[#out + 1] = result
+    end
   end
   view.results = out
   view.selected = common.clamp(view.selected or 1, 1, math.max(1, #out))
   view:ensure_selection_visible()
   if status == "fresh" or status == "stale" then
-    local count = #(results or {})
+    local count = #out
     local suffix = source_label and source_label ~= "" and (" — " .. source_label) or ""
     view.status = string.format("%d symbol%s%s", count, count == 1 and "" or "s", suffix)
   elseif reason then
@@ -4117,6 +4136,10 @@ local function project_symbol_pending_status(reason)
   end
   if reason == "indexing" then return "Indexing Project symbols…" end
   return tostring(reason or "Indexing Project symbols…")
+end
+
+function fuzzy_searcher.cancel_symbol_search()
+  symbol_generation = symbol_generation + 1
 end
 
 local function project_symbol_roots_indexing(ts_symbols, meta)
@@ -4144,11 +4167,15 @@ local function project_symbol_roots_indexing(ts_symbols, meta)
   return false
 end
 
-function FSView:start_symbol_search(query, reset_selection)
+function FSView:start_symbol_search(query, reset_selection, path_query)
   symbol_generation = symbol_generation + 1
   local gen = symbol_generation
   local limit = self:max_result_limit()
   query = trim_query(query)
+  path_query = trim_query(path_query)
+  local candidate_limit = path_query ~= ""
+    and math.max(limit + 1, fuzzy_searcher.fuzzy_candidate_limit or 500)
+    or (limit + 1)
   if query == "" then
     self:cancel_deferred_loading_feedback()
     self.results = {}
@@ -4185,11 +4212,11 @@ function FSView:start_symbol_search(query, reset_selection)
         if ts_symbols.workspace_symbols_async then
           async_request, reason, status, meta = ts_symbols.workspace_symbols_async(query, {
             force = false,
-            limit = limit + 1,
+            limit = candidate_limit,
             allow_stale = false,
           })
         else
-          results, reason, status, meta = ts_symbols.workspace_symbols(query, { force = false, limit = limit + 1, allow_stale = false })
+          results, reason, status, meta = ts_symbols.workspace_symbols(query, { force = false, limit = candidate_limit, allow_stale = false })
         end
         if async_request then
           self:set_pending_status("Searching Project symbols…")
@@ -4238,18 +4265,21 @@ function FSView:start_symbol_search(query, reset_selection)
       self:set_pending_status("Searching LSP Project symbols…")
       local lsp_provider = require "core.lsp.provider"
       local deadline = system.get_time() + ((config.lsp and config.lsp.navigation_timeout) or 10)
-      results, reason, status = lsp_provider.workspace_symbols(query, { force = true })
+      results, reason, status = lsp_provider.workspace_symbols(query, { force = true, limit = candidate_limit })
       while status ~= "fresh" and status ~= "stale" and status ~= "unavailable" and system.get_time() < deadline do
         if gen ~= symbol_generation or active_view ~= self then return end
         coroutine.yield(0.05)
-        results, reason, status = lsp_provider.workspace_symbols(query)
+        results, reason, status = lsp_provider.workspace_symbols(query, { limit = candidate_limit })
       end
       source_label = (status == "fresh" or status == "stale") and "LSP" or source_label
     end
 
     if gen ~= symbol_generation or active_view ~= self then return end
     if status == "fresh" or status == "stale" then
-      set_symbol_results(self, query, results, source_label, status, reason, limit, { scope = "project" })
+      set_symbol_results(self, query, results, source_label, status, reason, limit, {
+        scope = "project",
+        path_query = path_query,
+      })
     else
       self:cancel_deferred_loading_feedback()
       self.results = {}
@@ -4324,8 +4354,8 @@ function FSView:refresh(text)
   end
   text = text or self.input:get_text()
   local files_changed = self.last_files_generation ~= fuzzy_searcher.files_generation
-  local base, line, grep = parse_query(text)
-  local query_key = base .. "\0" .. tostring(line or "") .. "\0" .. tostring(grep or "")
+  local base, line, grep, symbol = parse_query(text)
+  local query_key = table.concat({ base, tostring(line or ""), tostring(grep or ""), tostring(symbol or "") }, "\0")
   local query_changed = query_key ~= self.current_query_key
 
   if query_changed then
@@ -4340,8 +4370,15 @@ function FSView:refresh(text)
   self.last_files_generation = fuzzy_searcher.files_generation
 
   if grep ~= nil then
+    fuzzy_searcher.cancel_symbol_search()
     if query_changed or force_refresh then self:start_grep(base, line, grep) end
+  elseif symbol ~= nil then
+    kill_file_search()
+    kill_grep()
+    kill_fuzzy_grep_jobs()
+    if query_changed or force_refresh then self:start_symbol_search(symbol, query_changed, base) end
   else
+    fuzzy_searcher.cancel_symbol_search()
     kill_grep()
     kill_fuzzy_grep_jobs()
     self:refresh_normal(base, line, query_changed, force_refresh)

@@ -102,6 +102,29 @@ test.describe("Fuzzy Searcher mode switching", function()
     test.equal(draws[3].text, "parse_package\n")
   end)
 
+  test.it("renders an inline symbol separator as a mode marker", function()
+    fuzzy_searcher.open("")
+    local picker = core.fuzzy_searcher_active_view
+    picker.input:set_text("odin/parser $parse package")
+
+    local draws = {}
+    local old_draw_text = renderer.draw_text
+    renderer.draw_text = function(font, text, x, _, color)
+      draws[#draws + 1] = { text = text, color = color }
+      return x + font:get_width(text)
+    end
+    local ok, err = pcall(function()
+      picker.input.textview:draw_line_text(1, 0, 0)
+    end)
+    renderer.draw_text = old_draw_text
+    if not ok then error(err, 0) end
+
+    test.equal(draws[1].text, "odin/parser ")
+    test.equal(draws[2].text, "$")
+    test.equal(draws[2].color, style.dim)
+    test.equal(draws[3].text, "parse package\n")
+  end)
+
   test.it("places the caret after the initial mode prefix when opened", function()
     fuzzy_searcher.open("#")
 
@@ -205,6 +228,16 @@ test.describe("Fuzzy Searcher mode switching", function()
 
     test.equal(core.fuzzy_searcher_active_view, picker)
     test.equal(picker_text(), "odin/parser #parse_package")
+  end)
+
+  test.it("restores inline path/symbol prompts as exact symbol-mode history", function()
+    fuzzy_searcher.open("")
+    core.fuzzy_searcher_active_view.input:set_text("odin/parser $parse package")
+    core.fuzzy_searcher_active_view:close()
+
+    fuzzy_searcher.open("$")
+
+    test.equal(picker_text(), "odin/parser $parse package")
   end)
 
   test.it("does not replace an auto-seeded grep prompt with saved history", function(context)
