@@ -158,6 +158,7 @@ local REVEAL_TYPES = {
   wiki_link = true,
   embed = true,
   tag = true,
+  hard_break = true,
 }
 
 local function node_line_range(node, line, line_text)
@@ -928,6 +929,22 @@ local function frontmatter_for_line(view, line)
   end
 end
 
+local function semantic_break_fragments(view, line_text, line, reveal_units)
+  local fragments = {}
+  for _, node in ipairs(semantic_line(view, line) or {}) do
+    if node.type == "hard_break" and node.source.line1 == line
+      and not reveal_unit_matches(reveal_units, node.id, node.source.col1, #line_text + 1)
+    then
+      fragments[#fragments + 1] = {
+        source_col1 = node.source.col1, source_col2 = #line_text + 1,
+        text = " ↵", color = style.markdown_live_hidden_syntax,
+        semantic_id = node.id, hard_break = true,
+      }
+    end
+  end
+  return fragments
+end
+
 local function semantic_footnote_fragments(view, line_text, line, reveal_units)
   local fragments = {}
   for _, node in ipairs(semantic_line(view, line) or {}) do
@@ -1067,17 +1084,18 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
           }
         end
       end
-    elseif node.type == "list_item" then
+    elseif node.type == "list" or node.type == "list_item" then
       local marker = attributes.list
-      if marker and marker.line1 == line then
+      local marker_key = marker and table.concat({ marker.line1, marker.col1, marker.col2 }, ":")
+      if marker and marker.line1 == line and not seen[marker_key] then
+        seen[marker_key] = true
         local raw = line_text:sub(marker.col1, marker.col2 - 1)
-        if not raw:match("%d") then
-          fragments[#fragments + 1] = {
-            source_col1 = marker.col1, source_col2 = marker.col2,
-            text = "•", color = style.markdown_live_list_marker,
-            semantic_id = node.id .. ":marker",
-          }
-        end
+        local ordered = raw:match("^(%d+[.)])")
+        fragments[#fragments + 1] = {
+          source_col1 = marker.col1, source_col2 = marker.col2,
+          text = ordered or "•", color = style.markdown_live_list_marker,
+          semantic_id = node.id .. ":marker",
+        }
       end
       local task = attributes.task_checked or attributes.task_unchecked
       if task and task.line1 == line then
@@ -1111,6 +1129,9 @@ local function inline_fragments(line_text, line, view, reveal_units)
     add_fragment(fragments, occupied, fragment)
   end
   for _, fragment in ipairs(semantic_link_fragments(view, line_text, line, reveal_units)) do
+    add_fragment(fragments, occupied, fragment)
+  end
+  for _, fragment in ipairs(semantic_break_fragments(view, line_text, line, reveal_units)) do
     add_fragment(fragments, occupied, fragment)
   end
   for _, fragment in ipairs(semantic_footnote_fragments(view, line_text, line, reveal_units)) do
@@ -1189,27 +1210,45 @@ local function fenced_code_for_line(view, line)
     local ranges = {}
     if reason ~= "limit" then
       for _, node in ipairs(nodes or {}) do
-        if node.type == "code_fenced" then ranges[#ranges + 1] = node end
+        if node.type == "code_fenced" or node.type == "code_indented" then
+          ranges[#ranges + 1] = node
+        end
       end
     else
-      core.log_quiet("Markdown fenced-code presentation exceeded capture bound for %s", view.doc:get_name())
+      core.log_quiet("Markdown code-block presentation exceeded capture bound for %s", view.doc:get_name())
     end
     cache = { generation = instance.generation, ranges = ranges }
     view.__markdown_live_fenced_code_cache = cache
   end
   for _, node in ipairs(cache.ranges) do
-    local line2 = node.source.line2
-    if node.source.col2 == 1 and line2 > node.source.line1 then line2 = line2 - 1 end
-    if line >= node.source.line1 and line <= line2 then
-      node.effective_line2 = line2
-      return node
+    if node.type == "code_fenced" then
+      local line2 = node.source.line2
+      if node.source.col2 == 1 and line2 > node.source.line1 then line2 = line2 - 1 end
+      if line >= node.source.line1 and line <= line2 then
+        node.effective_line2 = line2
+        return node
+      end
+    end
+  end
+end
+
+local function indented_code_for_line(view, line)
+  fenced_code_for_line(view, line)
+  local cache = view.__markdown_live_fenced_code_cache
+  for _, node in ipairs(cache and cache.ranges or {}) do
+    if node.type == "code_indented" then
+      local line2 = node.source.line2
+      if node.source.col2 == 1 and line2 > node.source.line1 then line2 = line2 - 1 end
+      if line >= node.source.line1 and line <= line2 then return node end
     end
   end
 end
 
 function decoration_provider:line_background(view, line)
   if view_in_source_mode(view) or line_in_semantic_comment(view, line) then return nil end
-  if fenced_code_for_line(view, line) then return style.markdown_live_code_background end
+  if fenced_code_for_line(view, line) or indented_code_for_line(view, line) then
+    return style.markdown_live_code_background
+  end
   if callout_for_line(view, line) then return style.markdown_live_callout_background end
   return frontmatter_for_line(view, line) and style.markdown_live_frontmatter_background or nil
 end

@@ -915,6 +915,37 @@ test.describe("Markdown Live Editor", function()
     test.equal(has_bullet, false)
   end)
 
+  test.it("presents ordered markers, hard breaks, and indented code without replacing source content", function()
+    local view, doc = make_view("    local code\nplain\n\n1. first\n   2. nested\n\nline  \nnext\nplain", "remaining-blocks.md")
+    doc:set_selection(9, 1)
+    refresh(view)
+    local ordered = test.not_nil(view:get_line_render(4))
+    test.equal(ordered.fragments[1].text, "1.")
+    test.equal(ordered.fragments[1].color, style.markdown_live_list_marker)
+    local nested = test.not_nil(view:get_line_render(5))
+    local has_nested_marker = false
+    for _, fragment in ipairs(nested.fragments) do
+      if fragment.text == "2." then has_nested_marker = true end
+    end
+    test.equal(has_nested_marker, true)
+    local hard_break = test.not_nil(view:get_line_render(7))
+    local break_fragment
+    for _, fragment in ipairs(hard_break.fragments) do
+      if fragment.hard_break then break_fragment = fragment break end
+    end
+    test.equal(test.not_nil(break_fragment).text, " ↵")
+    test.equal(view:get_line_render(1), nil)
+
+    local markdown_decoration
+    for _, entry in ipairs(view:decoration_provider_entries()) do
+      if entry.id == "markdown-live" then markdown_decoration = entry.provider break end
+    end
+    markdown_decoration = test.not_nil(markdown_decoration)
+    test.equal(markdown_decoration:line_background(view, 1), style.markdown_live_code_background)
+    doc:set_selection(7, 6)
+    test.equal(view:get_line_render(7), nil)
+  end)
+
   test.it("resolves and presents full, collapsed, and shortcut reference links", function()
     local view, doc = make_view("[Anvil docs][docs]\n[docs][]\n[docs]\n\n[docs]: Guide.md \"Guide\"\nText[^note]\n[^note]: Footnote body\nplain", "references.md")
     doc:set_selection(8, 1)
