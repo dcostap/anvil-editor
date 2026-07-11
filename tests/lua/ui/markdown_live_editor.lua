@@ -1104,6 +1104,39 @@ test.describe("Markdown Live Editor", function()
     test.equal(view:get_line_render(1), nil)
   end)
 
+  test.it("presents non-image attachment links and embeds as source-preserving chips", function()
+    local view, doc = make_view("![[manual.pdf]] [[song.mp3|Audio]] [clip](movie.mp4)\nplain", "attachments.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+    local rendered = test.not_nil(view:get_line_render(1))
+    local chips = {}
+    for _, fragment in ipairs(rendered.fragments) do
+      if fragment.attachment_chip then chips[#chips + 1] = fragment end
+    end
+    test.equal(#chips, 3)
+    test.equal(chips[1].text, "▣ manual.pdf")
+    test.equal(chips[1].attachment_kind, "pdf")
+    test.equal(chips[2].text, "♪ Audio")
+    test.equal(chips[2].attachment_kind, "audio")
+    test.equal(chips[3].text, "▶ clip")
+    test.equal(chips[3].attachment_kind, "video")
+    for _, chip in ipairs(chips) do
+      test.equal(chip.background, style.markdown_live_attachment_bg)
+      test.equal(chip.cursor, "hand")
+    end
+
+    doc:set_selection(1, 4)
+    local active = view:get_line_render(1)
+    local remaining_chips = 0
+    for _, fragment in ipairs(active and active.fragments or {}) do
+      if fragment.attachment_chip then
+        remaining_chips = remaining_chips + 1
+        test.ok(fragment.source_col1 > 1)
+      end
+    end
+    test.equal(remaining_chips, 2)
+  end)
+
   test.it("copies dropped attachments and inserts configured source-preserving links", function()
     local root = USERDIR .. PATHSEP .. "markdown-live-attachment-project-" .. system.get_process_id()
     local outside = USERDIR .. PATHSEP .. "markdown-live-attachment-source-" .. system.get_process_id()

@@ -17,6 +17,8 @@ local live = {}
 local PROVIDER_ID = "markdown-live"
 local MARKDOWN_EXTENSIONS = { md = true, markdown = true, mdown = true }
 local IMAGE_EXTENSIONS = { avif = true, bmp = true, gif = true, jpeg = true, jpg = true, png = true, svg = true, webp = true }
+local AUDIO_EXTENSIONS = { flac = true, mp3 = true, ogg = true, wav = true }
+local VIDEO_EXTENSIONS = { mov = true, mp4 = true, webm = true }
 
 local function extension(path)
   return (path or ""):match("%.([^.\\/]+)$") and (path or ""):match("%.([^.\\/]+)$"):lower() or nil
@@ -501,9 +503,20 @@ local function semantic_formatting_fragments(view, line_text, line, reveal_units
   return merged
 end
 
-local function is_image_target(path)
+local function target_extension(path)
   local ext = ((path or ""):match("^[^#?]+") or (path or "")):match("%.([^%.?#/\\]+)$")
-  return ext and IMAGE_EXTENSIONS[ext:lower()] == true
+  return ext and ext:lower() or nil
+end
+
+local function is_image_target(path)
+  return IMAGE_EXTENSIONS[target_extension(path) or ""] == true
+end
+
+local function attachment_kind(path)
+  local ext = target_extension(path)
+  if ext == "pdf" then return "pdf", "▣" end
+  if AUDIO_EXTENSIONS[ext or ""] then return "audio", "♪" end
+  if VIDEO_EXTENSIONS[ext or ""] then return "video", "▶" end
 end
 
 local function image_vertical_padding()
@@ -849,7 +862,7 @@ local function decorate_link_fragment(view, line, span, fragment, opts)
   fragment.overdraw = bold or nil
   fragment.strikethrough = strike or nil
   fragment.background = code and style.markdown_live_inline_code_bg
-    or highlight and style.markdown_live_highlight_bg or nil
+    or highlight and style.markdown_live_highlight_bg or fragment.background
   fragment.semantic_id = #ids > 0 and table.concat(ids, "+") or fragment.semantic_id
   return fragment
 end
@@ -862,12 +875,26 @@ local function semantic_link_fragments(view, line_text, line, reveal_units, opts
       local fragment = image_fragment(view, span)
       if not fragment then
         local link = span.link
-        fragment = {
-          source_col1 = span.col1,
-          source_col2 = span.col2,
-          text = link.display ~= "" and link.display or link.raw_target,
-          color = style.markdown_live_link,
-        }
+        local kind, icon = attachment_kind(link.path or link.raw_target)
+        local label = link.display ~= "" and link.display or link.raw_target
+        if kind then
+          fragment = {
+            source_col1 = span.col1,
+            source_col2 = span.col2,
+            text = icon .. " " .. label,
+            color = style.markdown_live_link,
+            background = style.markdown_live_attachment_bg,
+            attachment_chip = true,
+            attachment_kind = kind,
+          }
+        else
+          fragment = {
+            source_col1 = span.col1,
+            source_col2 = span.col2,
+            text = label,
+            color = style.markdown_live_link,
+          }
+        end
       end
       fragment = decorate_link_fragment(view, line, span, fragment, opts)
       if fragment then fragments[#fragments + 1] = fragment end

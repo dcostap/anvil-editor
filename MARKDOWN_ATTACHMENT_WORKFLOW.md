@@ -20,6 +20,12 @@ Images use embed syntax; other files use ordinary links. `config.markdown_live_a
 
 Imported paths are immediately published to the owning Markdown Link Index. Read-only Editors decline before any copy.
 
+## Live attachment chips
+
+Parser-confirmed links and embeds targeting PDF, audio, or video attachments render as compact source-mapped chips while inactive. Chips retain ordinary Project-index resolution colors, generic Markdown link POIs, platform-primary-modifier activation, aliases, and construct-sensitive source reveal. Activation continues through the shared link contract rather than introducing a second attachment-opening path.
+
+Supported groups are PDF, audio (`flac`, `mp3`, `ogg`, `wav`), and video (`mov`, `mp4`, `webm`). Images continue through the dedicated image asset service. Unknown file types remain ordinary links rather than being guessed from arbitrary URL suffixes.
+
 ## Regression evidence
 
-Focused tests cover the generic provider contract/removal, external image copying, collision naming, Project-local no-copy links, Wikilink versus Markdown serialization, nested-note relative paths, undo/redo of insertion, real drop routing, and existing Markdown image/link rendering suites.
+Focused tests cover the generic provider contract/removal, external image copying, collision naming, Project-local no-copy links, Wikilink versus Markdown serialization, nested-note relative paths, undo/redo of insertion, real drop routing, PDF/audio/video chip presentation and reveal, and existing Markdown image/link rendering suites.
