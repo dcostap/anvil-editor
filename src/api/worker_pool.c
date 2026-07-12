@@ -180,6 +180,33 @@ static void push_job_handle(lua_State *L, AnvilWorkerJob *job) {
   lua_setmetatable(L, -2);
 }
 
+static const char **read_submit_string_array(lua_State *L, int table, const char *field, uint32_t max_count, uint32_t *count) {
+  *count = 0;
+  lua_getfield(L, table, field);
+  if (lua_isnil(L, -1)) { lua_pop(L, 1); return NULL; }
+  if (lua_isstring(L, -1)) {
+    const char **items = (const char **)SDL_calloc(1, sizeof(*items));
+    if (!items) luaL_error(L, "out of memory reading native Project run string");
+    items[0] = lua_tostring(L, -1);
+    lua_pop(L, 1);
+    *count = 1;
+    return items;
+  }
+  luaL_checktype(L, -1, LUA_TTABLE);
+  size_t length = lua_rawlen(L, -1);
+  luaL_argcheck(L, length <= max_count, table, "native Project run string table exceeds limit");
+  const char **items = length ? (const char **)SDL_calloc(length, sizeof(*items)) : NULL;
+  if (length && !items) luaL_error(L, "out of memory reading native Project run strings");
+  for (size_t i = 0; i < length; i++) {
+    lua_rawgeti(L, -1, (lua_Integer)i + 1);
+    items[i] = luaL_checkstring(L, -1);
+    lua_pop(L, 1);
+  }
+  lua_pop(L, 1);
+  *count = (uint32_t)length;
+  return items;
+}
+
 static int pool_submit(lua_State *L) {
   LuaWorkerPool *pool = check_pool(L, 1);
   luaL_checktype(L, 2, LUA_TTABLE);
@@ -206,6 +233,8 @@ static int pool_submit(lua_State *L) {
   spec.usage_match_limit = opt_uint32_field(L, 2, "usage_match_limit", 0);
   spec.usage_max_captures = opt_uint32_field(L, 2, "usage_max_captures", 0);
   spec.project_usage_cap = opt_uint32_field(L, 2, "project_usage_cap", 750000);
+  spec.project_root = opt_string_field(L, 2, "project_root", NULL);
+  spec.project_progress_files = opt_uint32_field(L, 2, "project_progress_files", 64);
   spec.max_file_bytes = opt_uint32_field(L, 2, "max_file_bytes", 0);
   bool capture_present = false, line_present = false, compact_present = false;
   bool capture_paging = opt_bool_field(L, 2, "capture_paging", &capture_present);
@@ -263,8 +292,53 @@ static int pool_submit(lua_State *L) {
     }
   }
   lua_pop(L, 1);
+
+  spec.project_excluded_paths = read_submit_string_array(L, 2, "excluded_paths", 65536,
+    &spec.project_excluded_path_count);
+  spec.project_ignore_patterns = read_submit_string_array(L, 2, "ignore_patterns", 4096,
+    &spec.project_ignore_pattern_count);
+  AnvilWorkerProjectRunLanguageSpec *project_languages = NULL;
+  const char ***language_patterns = NULL;
+  lua_getfield(L, 2, "languages");
+  if (lua_istable(L, -1)) {
+    size_t language_count = lua_rawlen(L, -1);
+    luaL_argcheck(L, language_count <= 256, 2, "native Project run exceeds 256 languages");
+    project_languages = language_count
+      ? (AnvilWorkerProjectRunLanguageSpec *)SDL_calloc(language_count, sizeof(*project_languages)) : NULL;
+    language_patterns = language_count ? (const char ***)SDL_calloc(language_count, sizeof(*language_patterns)) : NULL;
+    if (language_count && (!project_languages || !language_patterns)) return luaL_error(L, "out of memory reading native Project languages");
+    spec.project_languages = project_languages;
+    spec.project_language_count = (uint32_t)language_count;
+    for (uint32_t i = 0; i < spec.project_language_count; i++) {
+      lua_rawgeti(L, -1, (lua_Integer)i + 1);
+      luaL_checktype(L, -1, LUA_TTABLE);
+      AnvilWorkerProjectRunLanguageSpec *language = &project_languages[i];
+      language->id = opt_string_field(L, -1, "id", NULL);
+      language->grammar = opt_string_field(L, -1, "grammar", NULL);
+      language_patterns[i] = read_submit_string_array(L, -1, "files", 4096, &language->file_pattern_count);
+      language->file_patterns = language_patterns[i];
+      language->outline_query = opt_lstring_field(L, -1, "outline_query", &language->outline_query_len);
+      language->usage_query = opt_lstring_field(L, -1, "usage_query", &language->usage_query_len);
+      language->parse_timeout_ms = opt_uint32_field(L, -1, "parse_timeout_ms", 1000);
+      language->query_timeout_ms = opt_uint32_field(L, -1, "query_timeout_ms", 20);
+      language->match_limit = opt_uint32_field(L, -1, "match_limit", 50000);
+      language->max_captures = opt_uint32_field(L, -1, "max_captures", 50000);
+      language->usage_query_timeout_ms = opt_uint32_field(L, -1, "usage_query_timeout_ms", 20);
+      language->usage_match_limit = opt_uint32_field(L, -1, "usage_match_limit", 50000);
+      language->usage_max_captures = opt_uint32_field(L, -1, "usage_max_captures", 50000);
+      luaL_argcheck(L, language->id && language->grammar && language->outline_query && language->file_pattern_count, 2,
+        "native Project run language requires id, grammar, files, and outline_query");
+      lua_pop(L, 1);
+    }
+  }
+  lua_pop(L, 1);
   char *error = NULL;
   AnvilWorkerJob *job = anvil_worker_pool_submit(pool->pool, &spec, &error);
+  SDL_free((void *)spec.project_excluded_paths);
+  SDL_free((void *)spec.project_ignore_patterns);
+  for (uint32_t i = 0; i < spec.project_language_count; i++) SDL_free((void *)language_patterns[i]);
+  SDL_free(language_patterns);
+  SDL_free(project_languages);
   SDL_free(project_files);
   if (!job) {
     lua_pushnil(L);
@@ -1260,6 +1334,7 @@ static const luaL_Reg project_builder_methods[] = {
 
 static const luaL_Reg project_snapshot_methods[] = {
   { "summary", project_snapshot_summary },
+  { "close", project_snapshot_gc },
   { "files", project_snapshot_files },
   { "symbols", project_snapshot_symbols },
   { "usages", project_snapshot_usages },

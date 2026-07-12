@@ -1334,7 +1334,7 @@ fun make%d(): DebouncedThing%d = DebouncedThing%d()
     common.rm(root, true)
   end)
 
-  test.it("Tree-sitter Project indexing shards file batches across scheduler jobs", function()
+  test.it("Tree-sitter Project indexing uses one native enumerating run", function()
     symbol_index.reset_for_tests()
     local root = USERDIR .. PATHSEP .. "treesitter-sharded-index-"
       .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
@@ -1416,8 +1416,9 @@ fun make%d(): ShardedThing%d = ShardedThing%d()
 
     local phases = status.diagnostics and status.diagnostics.phases or {}
     local combined = phases.combined and phases.combined.worker or {}
-    test.ok((combined.coordinator_jobs or 0) >= 1, common.serialize(phases.combined))
-    test.ok((combined.shard_jobs or 0) >= 6, common.serialize(phases.combined))
+    test.equal(combined.coordinator_jobs, nil, common.serialize(phases.combined))
+    test.equal(combined.shard_jobs, 1, common.serialize(phases.combined))
+    test.equal(combined.native_project_run_jobs, 1, common.serialize(phases.combined))
     test.equal(combined.files_scanned, 6)
     test.equal(combined.parse_calls, 6)
     test.equal(combined.artifacts_sent, nil, common.serialize(combined))

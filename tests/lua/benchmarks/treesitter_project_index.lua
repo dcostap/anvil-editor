@@ -236,34 +236,44 @@ local function run_cancellation_case()
   })
   local progress_deadline = system.get_time() + 10
   local status
-  local scheduler
+  local scheduler, native_handle
   repeat
     status = symbol_index.status(root)
     scheduler = status.worker_run and status.worker_run.scheduler
-    if scheduler and scheduler:outstanding_count() > 0
-    and status.worker_run and (status.worker_run.total_shards or 0) > 0 then break end
+    native_handle = status.worker_handle
+    local native_running = native_handle and worker_pool.system():status(native_handle) ~= nil
+    if native_running or (scheduler and scheduler:outstanding_count() > 0
+    and status.worker_run and (status.worker_run.total_shards or 0) > 0) then break end
     coroutine.yield(0.001)
   until system.get_time() >= progress_deadline
   test.equal(status.status, "indexing", "cancellation fixture completed before cancellation")
-  test.ok(scheduler and scheduler:outstanding_count() > 0, "cancellation fixture had no outstanding jobs")
+  test.ok(native_handle or (scheduler and scheduler:outstanding_count() > 0), "cancellation fixture had no outstanding jobs")
   local started = system.get_time()
   symbol_index.invalidate(root)
-  local cancellation_ms
+  local cancellation_ms, last_native_status
   local cancel_deadline = system.get_time() + 10
   repeat
     status = symbol_index.status(root)
-    if scheduler:outstanding_count() == 0 then
+    local native_status = native_handle and worker_pool.system():status(native_handle) or nil
+    last_native_status = native_status
+    local native_drained = not native_status or native_status.status == "cancelled"
+      or native_status.status == "failed" or native_status.status == "complete"
+      or native_status.status == "stale"
+    local drained = native_handle and native_drained
+      or (not native_handle and scheduler:outstanding_count() == 0)
+    if drained then
       cancellation_ms = (system.get_time() - started) * 1000
       break
     end
     coroutine.yield(0.001)
   until system.get_time() >= cancel_deadline
-  test.not_nil(cancellation_ms, "Project cancellation did not drain outstanding jobs")
+  test.not_nil(cancellation_ms, "Project cancellation did not drain outstanding jobs (native status="
+    .. tostring(last_native_status and last_native_status.status) .. ")")
   report.cancellation = report.cancellation or {}
   report.cancellation.project_run = {
     latency_ms = cancellation_ms,
     final_status = status.status,
-    outstanding_jobs = scheduler:outstanding_count(),
+    outstanding_jobs = native_handle and 0 or scheduler:outstanding_count(),
   }
   if remove_after then common.rm(root, true) end
 end

@@ -987,6 +987,31 @@ local function project_index_languages_payload()
   return out
 end
 
+local function native_project_run_languages_payload()
+  local out = {}
+  for _, language in ipairs(registry.get_languages() or {}) do
+    local sources = language.query_sources or {}
+    if sources.outline then
+      local usage_kind = usage_query_kind(language)
+      out[#out + 1] = {
+        id = language.id,
+        grammar = language.grammar,
+        files = language.files,
+        outline_query = sources.outline,
+        usage_query = usage_kind and sources[usage_kind] or nil,
+        parse_timeout_ms = language.parse_timeout_ms or DEFAULT_PARSE_TIMEOUT_MS,
+        query_timeout_ms = effective_query_limit(language, "outline", "query_timeout_ms", DEFAULT_QUERY_TIMEOUT_MS),
+        match_limit = effective_query_limit(language, "outline", "match_limit", DEFAULT_MATCH_LIMIT),
+        max_captures = effective_query_limit(language, "outline", "max_captures", DEFAULT_MAX_CAPTURES),
+        usage_query_timeout_ms = effective_query_limit(language, "usages", "query_timeout_ms", DEFAULT_QUERY_TIMEOUT_MS),
+        usage_match_limit = effective_query_limit(language, "usages", "match_limit", DEFAULT_MATCH_LIMIT),
+        usage_max_captures = effective_query_limit(language, "usages", "max_captures", DEFAULT_MAX_CAPTURES),
+      }
+    end
+  end
+  return out
+end
+
 local function project_index_exclusions_payload()
   local excluded = {}
   for _, entry in ipairs(project_paths_module().entries()) do
@@ -1607,6 +1632,7 @@ local function publish_native_snapshot(index, run, message)
   if not ok or not snapshot_or_error then
     pcall(run.native_builder.close, run.native_builder)
     run.native_builder = nil
+    if index.native_partial_snapshot then pcall(index.native_partial_snapshot.close, index.native_partial_snapshot) end
     index.native_partial_snapshot = nil
     index.partial_symbols_cache = nil
     index.worker_run = nil
@@ -1617,6 +1643,7 @@ local function publish_native_snapshot(index, run, message)
   pcall(run.native_builder.close, run.native_builder)
   run.native_builder = nil
   index.native_snapshot = snapshot
+  if index.native_partial_snapshot then pcall(index.native_partial_snapshot.close, index.native_partial_snapshot) end
   index.native_partial_snapshot = nil
   index.partial_symbols_cache = nil
   core.add_thread(function()
@@ -1985,6 +2012,107 @@ local function submit_sharded_scan(index, generation, opts, phase)
   }
   index.worker_run = run
   index.worker_handle = nil
+
+  if phase == "combined" and not opts.files and not opts.base_snapshot and not opts.remove_paths then
+    run.native_orchestrated = true
+    run.coordinator_done = true
+    run.total_shards = 1
+    local excluded_paths = {}
+    for _, entry in ipairs(project_index_exclusions_payload()) do excluded_paths[#excluded_paths + 1] = entry.path end
+    local handle, submit_error = worker_pool.system():submit({
+      kind = "treesitter_project_run",
+      native = true,
+      native_kind = "treesitter_project_run",
+      priority = "background",
+      generation = generation,
+      project_paths_generation = index.project_paths_generation,
+      phase = phase,
+      native_payload = {
+        project_builder_id = run.native_builder_id,
+        project_root = index.root,
+        excluded_paths = excluded_paths,
+        ignore_patterns = config.ignore_files,
+        languages = native_project_run_languages_payload(),
+        project_usage_cap = index.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP,
+        project_progress_files = opts.progress_files or 64,
+        max_file_bytes = MAX_FILE_BYTES,
+      },
+      is_stale = function(message) return not current_run_message(index, run, message) end,
+      on_progress = function(message)
+        if not current_run_message(index, run, message) then return end
+        local p = message.payload or {}
+        index.files_scanned = (p.files_completed or 0) + (p.files_skipped or 0)
+        index.files_indexed = p.files_completed or 0
+        index.files_total = index.files_indexed
+        local now = system.get_time()
+        if (run.partial_publications or 0) < 8
+        and (not index.native_partial_snapshot or now - (run.last_partial_snapshot_at or 0) >= 1) then
+          local ok, partial = pcall(run.native_builder.snapshot, run.native_builder, { status = "partial" })
+          if ok and partial then
+            local previous = index.native_partial_snapshot
+            index.native_partial_snapshot = partial
+            index.partial_symbols_cache = nil
+            run.last_partial_snapshot_at = now
+            run.partial_publications = (run.partial_publications or 0) + 1
+            if previous and previous ~= partial then pcall(previous.close, previous) end
+          end
+        end
+        core.redraw = true
+      end,
+      on_result = function(message)
+        if not current_run_message(index, run, message) or message.type ~= "result" then return end
+        local p = message.payload or {}
+        index.files_scanned = (p.files_completed or 0) + (p.files_skipped or 0)
+        index.files_indexed = p.files_completed or 0
+        index.files_total = index.files_indexed
+        add_worker_diagnostics(index, phase, {
+          files_scanned = index.files_scanned,
+          files_indexed = index.files_indexed,
+          files_skipped = p.files_skipped or 0,
+          parse_calls = p.files_completed or 0,
+          symbols_emitted = p.symbols_found or 0,
+          usages_emitted = p.usages_found or 0,
+          native_project_run_jobs = 1,
+          native_batch_ms = p.batch_total_ms or 0,
+          parse_ms = p.batch_parse_ms or 0,
+          native_project_record_ms = p.batch_project_record_ms or 0,
+          native_project_files_transferred = p.files_completed or 0,
+        }, "sharded")
+      end,
+      on_error = function(message)
+        if current_run_message(index, run, message) then finish_sharded_phase(index, run, "failed", message) end
+      end,
+      on_cancelled = function(message)
+        if current_run_message(index, run, message) then finish_sharded_phase(index, run, "cancelled", message) end
+      end,
+      on_complete = function(message)
+        if not current_run_message(index, run, message) then return end
+        run.completed_shards = 1
+        -- Publish progress for at least one scheduler turn before replacing it with
+        -- the immutable final snapshot. This keeps partial queries observable and
+        -- avoids consuming progress and completion in the same worker-pool drain.
+        core.add_thread(function()
+          safe_yield(0.01)
+          if current_run_message(index, run, message) then
+            finish_sharded_phase(index, run, "ready", message)
+          end
+        end)
+      end,
+    })
+    if not handle then
+      pcall(native_builder.close, native_builder)
+      run.native_builder = nil
+      index.worker_run = nil
+      index.status = "failed"
+      index.symbol_status = "failed"
+      index.usage_status = "failed"
+      index.reason = submit_error or "native-project-run-submit-failed"
+      return false, index.reason
+    end
+    index.worker_handle = handle
+    log_quiet("Tree-sitter Project index: submitted native run generation=%d root=%s", generation, tostring(index.root))
+    return true, "scheduled"
+  end
 
   local base_payload = make_index_payload(index, opts, phase)
   base_payload.artifact_chunks = false

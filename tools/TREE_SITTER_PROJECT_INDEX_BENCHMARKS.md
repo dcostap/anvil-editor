@@ -30,6 +30,8 @@ Use the same build type, Project inputs, options, and otherwise-idle machine for
 
 The Phase 4 native-query baseline is `tools/baselines/treesitter-project-index-native-queries.lua`. It measures bounded native symbol/usage queries after publication without materializing Project-wide record tables in Lua or writing query artifacts.
 
+The Phase 5 native-orchestration baseline is `tools/baselines/treesitter-project-index-native-orchestration.lua`. Full scans use one Lua-visible native run handle with native enumeration, cost-balanced parsing lanes, coalesced progress, and direct snapshot publication.
+
 `-TimeoutSeconds` is a per-indexing-case deadline. The runner raises Meson's overall timeout multiplier when necessary so the configured cases can use their full deadlines.
 
 The benchmark currently cannot obtain native peak working-set, actual per-stage CPU time, or Lua GC pause duration from Anvil's public runtime APIs. It reports periodically observed Lua heap size and cumulative worker-stage elapsed time instead; parallel worker elapsed totals can exceed wall time. Use an external process profiler when native peak memory, CPU attribution, or GC pause distributions are required.

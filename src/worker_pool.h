@@ -40,6 +40,24 @@ typedef struct AnvilWorkerProjectBatchFileSpec {
   uint32_t max_file_bytes;
 } AnvilWorkerProjectBatchFileSpec;
 
+typedef struct AnvilWorkerProjectRunLanguageSpec {
+  const char *id;
+  const char *grammar;
+  const char *const *file_patterns;
+  uint32_t file_pattern_count;
+  const char *outline_query;
+  size_t outline_query_len;
+  const char *usage_query;
+  size_t usage_query_len;
+  uint32_t parse_timeout_ms;
+  uint32_t query_timeout_ms;
+  uint32_t match_limit;
+  uint32_t max_captures;
+  uint32_t usage_query_timeout_ms;
+  uint32_t usage_match_limit;
+  uint32_t usage_max_captures;
+} AnvilWorkerProjectRunLanguageSpec;
+
 typedef struct AnvilWorkerJobSpec {
   const char *kind;
   const char *value;
@@ -71,6 +89,14 @@ typedef struct AnvilWorkerJobSpec {
   uint32_t project_file_count;
   uint64_t project_builder_id;
   uint32_t project_usage_cap;
+  const char *project_root;
+  const char *const *project_excluded_paths;
+  uint32_t project_excluded_path_count;
+  const char *const *project_ignore_patterns;
+  uint32_t project_ignore_pattern_count;
+  const AnvilWorkerProjectRunLanguageSpec *project_languages;
+  uint32_t project_language_count;
+  uint32_t project_progress_files;
 } AnvilWorkerJobSpec;
 
 AnvilWorkerPool *anvil_worker_pool_create(const char *name, int worker_count);

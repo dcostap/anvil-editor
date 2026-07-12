@@ -1,4 +1,5 @@
 local test = require "core.test"
+local common = require "core.common"
 local native_pool = require "worker_pool_native"
 
 local function drain_until(pool, predicate, limit)
@@ -462,6 +463,61 @@ test.describe("worker_pool_native", function()
     os.remove(path2)
     os.remove(path3)
     os.remove(path4)
+  end)
+
+  test.test("native Project runs enumerate, filter, parse, and publish through one job", function()
+    local root = USERDIR .. PATHSEP .. "native-project-run"
+    common.rm(root, true)
+    common.mkdirp(root .. PATHSEP .. "ignored")
+    common.mkdirp(root .. PATHSEP .. "excluded")
+    local function write(path, text)
+      local fp = test.not_nil(io.open(path, "wb")); fp:write(text); fp:close()
+    end
+    write(root .. PATHSEP .. "a.c", "int alpha(void) { return alpha(); }\n")
+    write(root .. PATHSEP .. "b.c", "int beta(void) { return beta(); }\n")
+    write(root .. PATHSEP .. "ignored" .. PATHSEP .. "skip.c", "int skipped(void) { return 0; }\n")
+    write(root .. PATHSEP .. "excluded" .. PATHSEP .. "skip.c", "int excluded(void) { return 0; }\n")
+    write(root .. PATHSEP .. "note.txt", "not source\n")
+    local outline_query = [[
+      (function_definition declarator: (function_declarator
+        declarator: (identifier) @name
+        parameters: (parameter_list) @signature.params)) @outline.function
+    ]]
+    local pool = new_pool("lua-native-project-run", 2)
+    local builder = native_pool.new_project_builder({ usage_cap = 100 })
+    local handle = test.not_nil(pool:submit({
+      kind = "treesitter_project_run",
+      project_builder_id = builder:id(),
+      project_root = root,
+      excluded_paths = { root .. PATHSEP .. "excluded" },
+      ignore_patterns = "^ignored/",
+      project_usage_cap = 100,
+      max_file_bytes = 1024 * 1024,
+      languages = {
+        {
+          id = "c", grammar = "c", files = { "native%-project%-run.*%.c$" }, outline_query = outline_query,
+          usage_query = "(identifier) @reference", parse_timeout_ms = 1000,
+          query_timeout_ms = 100, usage_query_timeout_ms = 100,
+          match_limit = 100, max_captures = 100, usage_match_limit = 100, usage_max_captures = 100,
+        },
+      },
+    }))
+    local final_payload, progress_count = nil, 0
+    test.ok(drain_until(pool, function(message)
+      if message.type == "progress" then progress_count = progress_count + 1 end
+      if message.type == "result" then final_payload = message.payload end
+      return message.type == "final" and message.job_id == handle:status().id
+    end, 10000))
+    test.ok(progress_count > 0)
+    test.equal(final_payload.files_completed, 2)
+    local snapshot = builder:freeze()
+    test.equal(snapshot:summary().files, 2)
+    test.same({ "a.c", "b.c" }, (function()
+      local out = {}
+      for _, file in ipairs(snapshot:files({ limit = 10 })) do out[#out + 1] = file.relpath:gsub("\\", "/") end
+      return out
+    end)())
+    common.rm(root, true)
   end)
 
   test.test("cancelling a native Project batch publishes no partial ownership", function()
