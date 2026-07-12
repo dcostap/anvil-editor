@@ -65,6 +65,36 @@ void anvil_ts_project_snapshot_summary(const AnvilTSProjectSnapshot *snapshot, A
 bool anvil_ts_project_snapshot_file_at(const AnvilTSProjectSnapshot *snapshot, uint32_t index, AnvilTSProjectSnapshotFileView *view);
 bool anvil_ts_project_snapshot_symbol_at(const AnvilTSProjectSnapshot *snapshot, uint32_t index, AnvilTSProjectFileResult **file, uint32_t *file_symbol_index);
 bool anvil_ts_project_snapshot_usage_at(const AnvilTSProjectSnapshot *snapshot, uint32_t index, AnvilTSProjectFileResult **file, uint32_t *file_usage_index);
+/* Query filter arrays must be sorted bytewise ascending. Returned indices use
+ * snapshot order and are owned by the caller. */
+bool anvil_ts_project_snapshot_query_symbols(
+  const AnvilTSProjectSnapshot *snapshot,
+  const char *query,
+  uint32_t offset,
+  uint32_t limit,
+  const char *const *kinds,
+  uint32_t kind_count,
+  const char *const *excluded_paths,
+  uint32_t excluded_path_count,
+  uint32_t **indices,
+  uint32_t *count,
+  uint32_t *total,
+  bool *has_more
+);
+bool anvil_ts_project_snapshot_query_usages(
+  const AnvilTSProjectSnapshot *snapshot,
+  const char *name,
+  uint32_t name_len,
+  uint32_t offset,
+  uint32_t limit,
+  bool include_declarations,
+  const char *const *excluded_paths,
+  uint32_t excluded_path_count,
+  uint32_t **indices,
+  uint32_t *count,
+  uint32_t *total,
+  bool *has_more
+);
 
 #ifdef __cplusplus
 }

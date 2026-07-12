@@ -1,5 +1,8 @@
 #include "project_index.h"
 
+#include "../fuzzy.h"
+
+#include <limits.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -49,6 +52,7 @@ struct AnvilTSProjectSnapshot {
   uint32_t file_count;
   ProjectRecordRef *symbols;
   uint32_t symbol_count;
+  FuzzyIndex symbol_fuzzy;
   ProjectRecordRef *usages;
   uint32_t usage_count;
   ProjectUsageNameEntry *usage_names;
@@ -443,6 +447,7 @@ static void snapshot_destroy(AnvilTSProjectSnapshot *snapshot) {
   free(snapshot->usage_names);
   free(snapshot->usage_name_slots);
   free(snapshot->files);
+  fuzzy_index_free(&snapshot->symbol_fuzzy);
   free(snapshot->symbols);
   free(snapshot->usages);
   free(snapshot);
@@ -565,6 +570,25 @@ AnvilTSProjectSnapshot *anvil_ts_project_builder_snapshot(
   }
   qsort(snapshot->symbols, snapshot->symbol_count, sizeof(*snapshot->symbols), symbol_ref_compare);
   qsort(snapshot->usages, snapshot->usage_count, sizeof(*snapshot->usages), usage_ref_compare);
+  const char **fuzzy_items = snapshot->symbol_count
+    ? (const char **)malloc((size_t)snapshot->symbol_count * sizeof(*fuzzy_items)) : NULL;
+  if (snapshot->symbol_count && !fuzzy_items) {
+    snapshot_destroy(snapshot);
+    set_error(error, "out of memory preparing native Project symbol fuzzy index");
+    return NULL;
+  }
+  for (uint32_t i = 0; i < snapshot->symbol_count; i++) {
+    AnvilTSProjectSymbolView symbol;
+    anvil_ts_project_file_symbol_at(snapshot->symbols[i].file, snapshot->symbols[i].index, &symbol);
+    fuzzy_items[i] = symbol.name;
+  }
+  bool fuzzy_ok = fuzzy_index_build(&snapshot->symbol_fuzzy, fuzzy_items, snapshot->symbol_count, FUZZY_MODE_GENERIC);
+  free(fuzzy_items);
+  if (!fuzzy_ok) {
+    snapshot_destroy(snapshot);
+    set_error(error, "out of memory building native Project symbol fuzzy index");
+    return NULL;
+  }
   if (!build_usage_name_lookup(snapshot)) {
     snapshot_destroy(snapshot);
     set_error(error, "out of memory building native Project usage-name lookup");
@@ -624,5 +648,229 @@ bool anvil_ts_project_snapshot_usage_at(const AnvilTSProjectSnapshot *snapshot, 
   if (!snapshot || index >= snapshot->usage_count) return false;
   if (file) *file = snapshot->usages[index].file;
   if (file_usage_index) *file_usage_index = snapshot->usages[index].index;
+  return true;
+}
+
+static bool query_path_excluded(
+  const char *path,
+  const char *const *excluded_paths,
+  uint32_t excluded_path_count
+) {
+  const char *target = path ? path : "";
+  uint32_t low = 0, high = excluded_path_count;
+  while (low < high) {
+    uint32_t middle = low + (high - low) / 2;
+    int compared = strcmp(target, excluded_paths[middle] ? excluded_paths[middle] : "");
+    if (compared == 0) return true;
+    if (compared < 0) high = middle; else low = middle + 1;
+  }
+  return false;
+}
+
+static bool query_symbol_kind_allowed(
+  const AnvilTSProjectSymbolView *symbol,
+  const char *const *kinds,
+  uint32_t kind_count
+) {
+  if (!kind_count) return true;
+  for (uint32_t i = 0; i < kind_count; i++) {
+    const char *kind = kinds[i] ? kinds[i] : "";
+    size_t length = strlen(kind);
+    if (length == symbol->kind_len && (!length || memcmp(symbol->kind, kind, length) == 0)) return true;
+  }
+  return false;
+}
+
+static bool query_symbol_allowed(
+  const AnvilTSProjectSnapshot *snapshot,
+  uint32_t symbol_index,
+  const char *const *kinds,
+  uint32_t kind_count,
+  const char *const *excluded_paths,
+  uint32_t excluded_path_count
+) {
+  ProjectRecordRef ref = snapshot->symbols[symbol_index];
+  if (query_path_excluded(anvil_ts_project_file_path(ref.file), excluded_paths, excluded_path_count)) return false;
+  AnvilTSProjectSymbolView symbol;
+  return anvil_ts_project_file_symbol_at(ref.file, ref.index, &symbol) &&
+    query_symbol_kind_allowed(&symbol, kinds, kind_count);
+}
+
+static bool query_fuzzy_better(const FuzzyIndex *index, const FuzzySearchResult *a, const FuzzySearchResult *b) {
+  if (a->score != b->score) return a->score > b->score;
+  int compared = strcmp(fuzzy_index_text(index, a->entry_index), fuzzy_index_text(index, b->entry_index));
+  if (compared) return compared < 0;
+  return a->source_index < b->source_index;
+}
+
+static void query_insert_fuzzy(
+  const FuzzyIndex *index,
+  FuzzySearchResult *top,
+  uint32_t *top_count,
+  uint32_t capacity,
+  FuzzySearchResult candidate
+) {
+  if (!capacity) return;
+  if (*top_count >= capacity && !query_fuzzy_better(index, &candidate, &top[*top_count - 1])) return;
+  uint32_t position = *top_count;
+  if (*top_count < capacity) (*top_count)++;
+  else position = capacity - 1;
+  while (position > 0 && query_fuzzy_better(index, &candidate, &top[position - 1])) {
+    top[position] = top[position - 1];
+    position--;
+  }
+  top[position] = candidate;
+}
+
+static uint32_t query_collect_fuzzy_symbols(
+  const AnvilTSProjectSnapshot *snapshot,
+  const char *query,
+  const char *const *kinds,
+  uint32_t kind_count,
+  const char *const *excluded_paths,
+  uint32_t excluded_path_count,
+  const FuzzySearchResult *after,
+  FuzzySearchResult *top,
+  uint32_t capacity,
+  uint32_t *matched_total
+) {
+  uint32_t top_count = 0, matched = 0;
+  for (uint32_t i = 0; i < snapshot->symbol_count; i++) {
+    if (!query_symbol_allowed(snapshot, i, kinds, kind_count, excluded_paths, excluded_path_count)) continue;
+    const FuzzyEntry *entry = &snapshot->symbol_fuzzy.entries[i];
+    const char *text = snapshot->symbol_fuzzy.text_arena + entry->text_offset;
+    const char *lower = snapshot->symbol_fuzzy.lower_arena + entry->lower_offset;
+    int score = fuzzy_match_score(FUZZY_MODE_GENERIC, text, lower, entry->len, entry->basename_start, query);
+    if (score == INT_MIN) continue;
+    FuzzySearchResult candidate = { i, i + 1, score };
+    matched++;
+    if (after && !query_fuzzy_better(&snapshot->symbol_fuzzy, after, &candidate)) continue;
+    query_insert_fuzzy(&snapshot->symbol_fuzzy, top, &top_count, capacity, candidate);
+  }
+  if (matched_total) *matched_total = matched;
+  return top_count;
+}
+
+bool anvil_ts_project_snapshot_query_symbols(
+  const AnvilTSProjectSnapshot *snapshot,
+  const char *query,
+  uint32_t offset,
+  uint32_t limit,
+  const char *const *kinds,
+  uint32_t kind_count,
+  const char *const *excluded_paths,
+  uint32_t excluded_path_count,
+  uint32_t **indices,
+  uint32_t *count,
+  uint32_t *total,
+  bool *has_more
+) {
+  if (indices) *indices = NULL;
+  if (count) *count = 0;
+  if (total) *total = 0;
+  if (has_more) *has_more = false;
+  if (!snapshot || !indices || (kind_count && !kinds) || (excluded_path_count && !excluded_paths)) return false;
+  if (offset > snapshot->symbol_count) offset = snapshot->symbol_count;
+  uint32_t *out = limit ? (uint32_t *)malloc((size_t)limit * sizeof(*out)) : NULL;
+  if (limit && !out) return false;
+  uint32_t matched = 0, out_count = 0;
+  query = query ? query : "";
+  if (!*query) {
+    for (uint32_t i = 0; i < snapshot->symbol_count; i++) {
+      if (!query_symbol_allowed(snapshot, i, kinds, kind_count, excluded_paths, excluded_path_count)) continue;
+      if (matched >= offset && out_count < limit) out[out_count++] = i;
+      matched++;
+    }
+  } else {
+    FuzzySearchResult cursor;
+    const FuzzySearchResult *after = NULL;
+    uint32_t remaining = offset;
+    bool beyond_end = false;
+    while (remaining) {
+      uint32_t step = remaining < 4096 ? remaining : 4096;
+      FuzzySearchResult *scratch = (FuzzySearchResult *)malloc((size_t)step * sizeof(*scratch));
+      if (!scratch) { free(out); return false; }
+      uint32_t top_count = query_collect_fuzzy_symbols(snapshot, query, kinds, kind_count,
+        excluded_paths, excluded_path_count, after, scratch, step, &matched);
+      if (top_count < step) {
+        beyond_end = true;
+        free(scratch);
+        break;
+      }
+      cursor = scratch[step - 1];
+      after = &cursor;
+      remaining -= step;
+      free(scratch);
+    }
+    if (!beyond_end) {
+      FuzzySearchResult *page = limit ? (FuzzySearchResult *)malloc((size_t)limit * sizeof(*page)) : NULL;
+      if (limit && !page) { free(out); return false; }
+      uint32_t page_count = query_collect_fuzzy_symbols(snapshot, query, kinds, kind_count,
+        excluded_paths, excluded_path_count, after, page, limit, &matched);
+      for (uint32_t i = 0; i < page_count; i++) out[out_count++] = page[i].entry_index;
+      free(page);
+    }
+  }
+  *indices = out;
+  if (count) *count = out_count;
+  if (total) *total = matched;
+  if (has_more) *has_more = matched > offset + out_count;
+  return true;
+}
+
+static ProjectUsageNameEntry *snapshot_usage_name(
+  const AnvilTSProjectSnapshot *snapshot,
+  const char *name,
+  uint32_t name_len
+) {
+  if (!snapshot->usage_name_slot_count) return NULL;
+  uint32_t slot = (uint32_t)bytes_hash(name, name_len) & (snapshot->usage_name_slot_count - 1);
+  while (snapshot->usage_name_slots[slot]) {
+    ProjectUsageNameEntry *entry = &snapshot->usage_names[snapshot->usage_name_slots[slot] - 1];
+    if (entry->name_len == name_len && (!name_len || memcmp(entry->name, name, name_len) == 0)) return entry;
+    slot = (slot + 1) & (snapshot->usage_name_slot_count - 1);
+  }
+  return NULL;
+}
+
+bool anvil_ts_project_snapshot_query_usages(
+  const AnvilTSProjectSnapshot *snapshot,
+  const char *name,
+  uint32_t name_len,
+  uint32_t offset,
+  uint32_t limit,
+  bool include_declarations,
+  const char *const *excluded_paths,
+  uint32_t excluded_path_count,
+  uint32_t **indices,
+  uint32_t *count,
+  uint32_t *total,
+  bool *has_more
+) {
+  if (indices) *indices = NULL;
+  if (count) *count = 0;
+  if (total) *total = 0;
+  if (has_more) *has_more = false;
+  if (!snapshot || !name || !indices || (excluded_path_count && !excluded_paths)) return false;
+  ProjectUsageNameEntry *entry = snapshot_usage_name(snapshot, name, name_len);
+  uint32_t available = entry ? entry->usage_count : 0;
+  if (offset > available) offset = available;
+  uint32_t *out = limit ? (uint32_t *)malloc((size_t)limit * sizeof(*out)) : NULL;
+  if (limit && !out) return false;
+  uint32_t matched = 0, out_count = 0;
+  for (uint32_t i = 0; i < available; i++) {
+    uint32_t usage_index = entry->usage_indices[i];
+    ProjectRecordRef ref = snapshot->usages[usage_index];
+    AnvilTSProjectUsageView usage;
+    if (!anvil_ts_project_file_usage_at(ref.file, ref.index, &usage)) continue;
+    if (!include_declarations && usage.is_declaration) continue;
+    if (query_path_excluded(anvil_ts_project_file_path(ref.file), excluded_paths, excluded_path_count)) continue;
+    if (matched >= offset && out_count < limit) out[out_count++] = usage_index;
+    matched++;
+  }
+  *indices = out;
+  if (count) *count = out_count;
+  if (total) *total = matched;
+  if (has_more) *has_more = matched > offset + out_count;
   return true;
 }

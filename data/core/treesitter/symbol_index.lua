@@ -1283,8 +1283,11 @@ local function finish_worker_scan(index, message, status)
     local diagnostics = index.diagnostics or {}
     local worker = diagnostics.worker or {}
     local ui = diagnostics.ui or {}
+    local native_summary = index.native_snapshot and index.native_snapshot:summary() or nil
     log_quiet("Tree-sitter Project index: worker indexed %d symbol(s), %d usage(s)%s under %s in %.1fms",
-      #index.symbols, index.usage_count or 0, index.usage_truncated and " (truncated)" or "",
+      native_summary and native_summary.symbols or #index.symbols,
+      native_summary and native_summary.usages or index.usage_count or 0,
+      index.usage_truncated and " (truncated)" or "",
       index.root, ((index.finished_at or system.get_time()) - (index.started_at or system.get_time())) * 1000)
     log_quiet("Tree-sitter indexing baseline: root=%s phase=%s worker=%s job=%s files scanned=%d indexed=%d skipped=%d parse_calls=%d chunks=%d worker_ms=%.1f read_ms=%.1f parse_ms=%.1f outline_query_ms=%.1f usage_query_ms=%.1f symbol_record_ms=%.1f usage_record_ms=%.1f send_wait_ms=%.1f ui_adopt_ms=%.1f aggregate_rebuild_ms=%.1f aggregate_rebuilds=%d max_chunk_adopt_ms=%.1f metadata_cache_hits=%d metadata_cache_misses=%d aggregate_deferred=%d",
       tostring(index.root), tostring(worker.phase or message.phase), tostring(worker.worker_id), tostring(worker.job_id),
@@ -1617,25 +1620,27 @@ local function publish_native_snapshot(index, run, message)
   index.native_partial_snapshot = nil
   index.partial_symbols_cache = nil
   core.add_thread(function()
-    local files_by_path = {}
     local by_path = {}
+    local query_excluded = { symbols = {}, usages = {} }
+    local project_paths_generation = project_paths_module().generation()
     local file_offset = 1
     while true do
       if not current_run_message(index, run, message) then return end
-      local page = snapshot:files({ offset = file_offset, limit = 4096 })
+      local page = snapshot:files({ offset = file_offset, limit = 512 })
       for _, file in ipairs(page) do
-        local entry = {
+        by_path[file.path] = {
           path = file.path,
           relpath = file.relpath,
           fingerprint = file.fingerprint,
           language_id = file.language_id,
-          symbols = {},
-          usages_by_name = {},
-          usage_count = 0,
           usage_complete = file.usage_complete,
         }
-        files_by_path[file.path] = entry
-        by_path[file.path] = entry
+        if not project_path_allows(file.path, "symbols") then
+          query_excluded.symbols[#query_excluded.symbols + 1] = file.path
+        end
+        if not project_path_allows(file.path, "usages") then
+          query_excluded.usages[#query_excluded.usages + 1] = file.path
+        end
         index.worker_seen_paths[file.path] = true
       end
       if file_offset + #page > page.total then break end
@@ -1643,60 +1648,21 @@ local function publish_native_snapshot(index, run, message)
       safe_yield(0)
     end
 
-    local symbols = {}
-    local symbol_offset = 1
-    while true do
-      if not current_run_message(index, run, message) then return end
-      local page = snapshot:symbols({ offset = symbol_offset, limit = 4096 })
-      for _, symbol in ipairs(page) do
-        symbol.text = nil
-        symbol.file = nil
-        symbol.range = nil
-        symbol.search_text = nil
-        symbols[#symbols + 1] = symbol
-        local entry = files_by_path[symbol.path]
-        if entry then entry.symbols[#entry.symbols + 1] = symbol end
-      end
-      if symbol_offset + #page > page.total then break end
-      symbol_offset = page.next_offset
-      safe_yield(0)
-    end
-
-    local usages_by_name = {}
-    local usage_count = 0
-    local usage_offset = 1
-    while true do
-      if not current_run_message(index, run, message) then return end
-      local page = snapshot:usages({ offset = usage_offset, limit = 4096 })
-      for _, usage in ipairs(page) do
-        local usage_name = usage.name
-        usage.name = nil
-        usage.text = nil
-        usage.file = nil
-        usage.range = nil
-        local global_list = usages_by_name[usage_name]
-        if not global_list then global_list = {}; usages_by_name[usage_name] = global_list end
-        global_list[#global_list + 1] = usage
-        usage_count = usage_count + 1
-        local entry = files_by_path[usage.path]
-        if entry then
-          local file_list = entry.usages_by_name[usage_name]
-          if not file_list then file_list = {}; entry.usages_by_name[usage_name] = file_list end
-          file_list[#file_list + 1] = usage
-          entry.usage_count = entry.usage_count + 1
-        end
-      end
-      if usage_offset + #page > page.total then break end
-      usage_offset = page.next_offset
-      safe_yield(0)
-    end
-
     if not current_run_message(index, run, message) then return end
     local summary = snapshot:summary()
     index.by_path = by_path
-    index.symbols = symbols
-    index.usages_by_name = usages_by_name
-    index.usage_count = usage_count
+    index.native_query_filter_cache = {}
+    for _, kind in ipairs({ "symbols", "usages" }) do
+      table.sort(query_excluded[kind])
+      index.native_query_filter_cache[kind .. "\0"] = {
+        snapshot = snapshot,
+        project_paths_generation = project_paths_generation,
+        paths = query_excluded[kind],
+      }
+    end
+    index.symbols = {}
+    index.usages_by_name = {}
+    index.usage_count = summary.usages
     index.usage_truncated = summary.usage_truncated and true or false
     index.usage_truncated_reason = index.usage_truncated and "project-usage-cap" or nil
     index.aggregate_dirty = false
@@ -2540,6 +2506,117 @@ local function merge_status(current, next_status)
   return "fresh"
 end
 
+local function native_query_excluded_paths(index, snapshot, kind)
+  refresh_current_core_docs_for_index(index)
+  if refresh_open_document_overlays then refresh_open_document_overlays(index) end
+  local suppressed, signature = overlay_paths(index)
+  local generation = project_paths_module().generation()
+  index.native_query_filter_cache = index.native_query_filter_cache or {}
+  local cache_key = tostring(kind) .. "\0" .. signature
+  local cache = index.native_query_filter_cache[cache_key]
+  if cache and cache.snapshot == snapshot and cache.project_paths_generation == generation then
+    return cache.paths, suppressed
+  end
+  local excluded = {}
+  if snapshot == index.native_snapshot then
+    for path in pairs(index.by_path or {}) do
+      if suppressed[path] or not project_path_allows(path, kind) then excluded[#excluded + 1] = path end
+    end
+  else
+    local offset = 1
+    while true do
+      local page = snapshot:files({ offset = offset, limit = 4096 })
+      for _, file in ipairs(page) do
+        if suppressed[file.path] or not project_path_allows(file.path, kind) then excluded[#excluded + 1] = file.path end
+      end
+      if offset + #page > page.total then break end
+      offset = page.next_offset
+    end
+  end
+  table.sort(excluded)
+  cache = { snapshot = snapshot, project_paths_generation = generation, paths = excluded }
+  index.native_query_filter_cache[cache_key] = cache
+  return excluded, suppressed
+end
+
+local function symbol_kind_allowed(symbol, kinds)
+  if not kinds or #kinds == 0 then return true end
+  for _, kind in ipairs(kinds) do
+    if symbol.kind == kind then return true end
+  end
+  return false
+end
+
+local function insert_bounded(items, item, less, capacity)
+  if capacity <= 0 then return end
+  local low, high = 1, #items + 1
+  while low < high do
+    local middle = math.floor((low + high) / 2)
+    if less(item, items[middle]) then high = middle else low = middle + 1 end
+  end
+  if low <= capacity then
+    table.insert(items, low, item)
+    if #items > capacity then items[#items] = nil end
+  end
+end
+
+local function bounded_overlay_symbols(index, suppressed, query, opts, capacity)
+  local candidates, matched = {}, 0
+  local kinds = opts.symbol_kinds or opts.kinds
+  query = tostring(query or "")
+  for path, entry in pairs(index.open_docs or {}) do
+    if suppressed[path] and overlay_entry_current(entry) then
+      for _, symbol in ipairs(entry.symbols or {}) do
+        if project_path_allows(symbol.path, opts.kind or "symbols") and symbol_kind_allowed(symbol, kinds) then
+          local score = query == "" and 0 or (native_fuzzy and native_fuzzy.score(symbol_fuzzy_text(symbol), query, { mode = "generic" }))
+          if query == "" or score then
+            matched = matched + 1
+            local candidate = { symbol = symbol, score = score or 0 }
+            insert_bounded(candidates, candidate, function(a, b)
+              if a.score ~= b.score then return a.score > b.score end
+              local an, bn = symbol_fuzzy_text(a.symbol), symbol_fuzzy_text(b.symbol)
+              if an ~= bn then return an < bn end
+              return symbol_less(a.symbol, b.symbol)
+            end, capacity)
+          end
+        end
+      end
+    end
+  end
+  local out = {}
+  for _, candidate in ipairs(candidates) do out[#out + 1] = candidate.symbol end
+  return out, matched > #out
+end
+
+local function native_project_symbols(index, snapshot, query, opts)
+  local kind = opts.kind or "symbols"
+  local excluded, suppressed = native_query_excluded_paths(index, snapshot, kind)
+  local limit = math.max(0, math.floor(tonumber(opts.limit) or DEFAULT_QUERY_LIMIT))
+  local candidate_limit = math.min(4096, limit + 1)
+  local overlays, overlay_more = bounded_overlay_symbols(index, suppressed, query, opts, candidate_limit)
+  local native_limit = candidate_limit
+  local query_started = system.get_time()
+  local page = snapshot:query_symbols(query, {
+    offset = 0,
+    limit = native_limit,
+    kinds = opts.symbol_kinds or opts.kinds,
+    excluded_paths = excluded,
+  })
+  local query_ms = (system.get_time() - query_started) * 1000
+  add_ui_metric(index, "native_symbol_query_ms", query_ms)
+  max_ui_metric(index, "native_symbol_query_max_ms", query_ms)
+  inc_ui_metric(index, "native_symbol_queries", 1)
+  local combined = {}
+  for _, symbol in ipairs(page) do combined[#combined + 1] = symbol end
+  for _, symbol in ipairs(overlays) do combined[#combined + 1] = symbol end
+  sort_symbols(combined)
+  local results, merged_more = filtered_symbols(combined, query, limit)
+  for i, symbol in ipairs(results) do
+    results[i] = public_symbol(refresh_project_path_metadata(index, symbol, kind))
+  end
+  return results, page.has_more or overlay_more or merged_more, has_pending_open_doc_overlay(index)
+end
+
 function symbol_index.workspace_symbols(query, opts)
   opts = opts or {}
   local roots = project_path_roots("symbols", opts)
@@ -2554,10 +2631,27 @@ function symbol_index.workspace_symbols(query, opts)
 
   for _, root in ipairs(roots) do
     local index = symbol_index.ensure_scan(root, scan_options_from_query(opts))
-    local disk_symbols, disk_symbol_count = partial_snapshot_symbols(index,
-      query_text ~= "" and not opts.allow_large_sync_query and sync_limit or nil)
+    local native_snapshot = index.symbol_status == "ready" and index.native_snapshot
+      or (opts.allow_stale and (index.native_partial_snapshot or index.native_snapshot))
+    local disk_symbols, disk_symbol_count = {}, 0
+    if not native_snapshot then
+      disk_symbols, disk_symbol_count = partial_snapshot_symbols(index,
+        query_text ~= "" and not opts.allow_large_sync_query and sync_limit or nil)
+    end
     local root_status = "pending"
-    if index.symbol_status == "ready" then
+    if native_snapshot and not index.aggregate_dirty then
+      local source, native_more, overlay_pending = native_project_symbols(index, native_snapshot, query_text, opts)
+      if single_root and #all_symbols == 0 then
+        all_symbols = source
+      else
+        for _, symbol in ipairs(source) do all_symbols[#all_symbols + 1] = symbol end
+      end
+      has_more = has_more or native_more
+      root_status = index.symbol_status == "ready" and not overlay_pending and "fresh" or "stale"
+      if overlay_pending then reason = reason or "overlay-indexing"
+      elseif root_status == "stale" then reason = reason or "indexing" end
+      any_usable = true
+    elseif index.symbol_status == "ready" then
       refresh_current_core_docs_for_index(index)
       if has_pending_open_doc_overlay(index) then
         reason = reason or "overlay-indexing"
@@ -2616,8 +2710,9 @@ function symbol_index.workspace_symbols(query, opts)
   end
   if any_usable then
     if #per_root > 1 then sort_symbols(all_symbols) end
-    local results
-    results, has_more = filtered_symbols(all_symbols, query, opts.limit)
+    local results, filtered_more
+    results, filtered_more = filtered_symbols(all_symbols, query, opts.limit)
+    has_more = has_more or filtered_more
     for i, symbol in ipairs(results) do results[i] = public_symbol(symbol) end
     return results, status == "fresh" and nil or (reason or "indexing"), status == "fresh" and "fresh" or "stale", {
       has_more = has_more,
@@ -3070,8 +3165,79 @@ local function async_snapshot_stale_reason(meta)
   return nil
 end
 
+local function completed_native_query_request(results, reason, source_status, meta)
+  local query_project_paths_generation = project_paths_module().generation()
+  local generations = {}
+  for _, root_meta in ipairs(meta and meta.roots or {}) do
+    local index = root_meta.index
+    generations[#generations + 1] = {
+      index = index,
+      generation = index and index.generation,
+      project_paths_generation = index and index.project_paths_generation,
+    }
+  end
+  local request = {
+    status = "pending",
+    reason = reason,
+    source_status = source_status,
+    results = results,
+    has_more = meta and meta.has_more or false,
+    meta = meta,
+  }
+  function request:cancel()
+    if self.done then return false end
+    self.cancelled = true
+    self.status = "cancelled"
+    self.reason = "cancelled"
+    self.results = nil
+    self.done = true
+    return true
+  end
+  core.add_thread(function()
+    safe_yield(0)
+    if request.done then return end
+    if project_paths_module().generation() ~= query_project_paths_generation then
+      request.status = "stale-cancelled"
+      request.reason = "project-paths-generation-changed"
+      request.results = nil
+      request.done = true
+      return
+    end
+    for _, captured in ipairs(generations) do
+      local index = captured.index
+      if not index or index.generation ~= captured.generation
+      or index.project_paths_generation ~= captured.project_paths_generation then
+        request.status = "stale-cancelled"
+        request.reason = "index-generation-changed"
+        request.results = nil
+        request.done = true
+        return
+      end
+    end
+    request.status = source_status
+    request.done = true
+  end)
+  return request, nil, "pending", meta
+end
+
+local function query_roots_have_native_snapshots(kind, opts)
+  local roots = project_path_roots(kind, opts)
+  if #roots == 0 then return false end
+  for _, root in ipairs(roots) do
+    local index = index_for_root(root)
+    if not (index.native_snapshot or (opts.allow_stale and index.native_partial_snapshot)) then return false end
+  end
+  return true
+end
+
 function symbol_index.workspace_symbols_async(query, opts)
   opts = opts or {}
+  if query_roots_have_native_snapshots("symbols", opts) then
+    local native_results, native_reason, native_status, native_meta = symbol_index.workspace_symbols(query, opts)
+    if native_status == "fresh" or native_status == "stale" then
+      return completed_native_query_request(native_results, native_reason, native_status, native_meta)
+    end
+  end
   local symbols, reason, status, meta = workspace_symbol_snapshot(query, opts)
   local query_payload
   local artifact
@@ -3253,6 +3419,12 @@ end
 
 function symbol_index.workspace_usages_async(name, opts)
   opts = opts or {}
+  if query_roots_have_native_snapshots("usages", opts) then
+    local native_results, native_reason, native_status, native_meta = symbol_index.workspace_usages(name, opts)
+    if native_status == "fresh" or native_status == "stale" then
+      return completed_native_query_request(native_results, native_reason, native_status, native_meta)
+    end
+  end
   local usages, reason, status, meta = workspace_usage_snapshot(name, opts)
   local query_payload
   local artifact
@@ -3344,6 +3516,52 @@ function symbol_index.workspace_usages_async(name, opts)
   return request, nil, "pending", meta
 end
 
+local function bounded_overlay_usages(index, suppressed, name, opts, capacity)
+  local candidates, matched = {}, 0
+  local include_declaration = opts.include_declaration ~= false
+  for path, entry in pairs(index.open_docs or {}) do
+    if suppressed[path] and overlay_entry_current(entry) then
+      for _, usage in ipairs((entry.usages_by_name or {})[name] or {}) do
+        if (include_declaration or not usage.is_declaration)
+        and project_path_allows(usage.path, "usages") then
+          matched = matched + 1
+          insert_bounded(candidates, usage, usage_less, capacity)
+        end
+      end
+    end
+  end
+  return candidates, matched > #candidates
+end
+
+local function native_project_usages(index, snapshot, name, opts)
+  local excluded, suppressed = native_query_excluded_paths(index, snapshot, "usages")
+  local limit = math.max(0, math.floor(tonumber(opts.limit) or DEFAULT_QUERY_LIMIT))
+  local candidate_limit = math.min(4096, limit + 1)
+  local overlays, overlay_more = bounded_overlay_usages(index, suppressed, name, opts, candidate_limit)
+  local native_limit = candidate_limit
+  local query_started = system.get_time()
+  local page = snapshot:query_usages(name, {
+    offset = 0,
+    limit = native_limit,
+    include_declaration = opts.include_declaration ~= false,
+    excluded_paths = excluded,
+  })
+  local query_ms = (system.get_time() - query_started) * 1000
+  add_ui_metric(index, "native_usage_query_ms", query_ms)
+  max_ui_metric(index, "native_usage_query_max_ms", query_ms)
+  inc_ui_metric(index, "native_usage_queries", 1)
+  local combined = {}
+  for _, usage in ipairs(page) do combined[#combined + 1] = usage end
+  for _, usage in ipairs(overlays) do combined[#combined + 1] = usage end
+  sort_usages(combined)
+  local has_more = page.has_more or overlay_more or #combined > limit
+  while #combined > limit do combined[#combined] = nil end
+  for i, usage in ipairs(combined) do
+    combined[i] = public_usage(name, refresh_project_path_metadata(index, usage, "usages"))
+  end
+  return combined, has_more, has_pending_open_doc_overlay(index)
+end
+
 function symbol_index.workspace_usages(name, opts)
   opts = opts or {}
   name = tostring(name or "")
@@ -3362,7 +3580,21 @@ function symbol_index.workspace_usages(name, opts)
   for _, root in ipairs(roots) do
     local index = symbol_index.ensure_scan(root, scan_options_from_query(opts))
     local root_status = "pending"
-    if index.usage_status == "ready" then
+    local native_snapshot = index.usage_status == "ready" and index.native_snapshot
+      or (opts.allow_stale and (index.native_partial_snapshot or index.native_snapshot))
+    if native_snapshot and not index.aggregate_dirty then
+      local source, native_more, overlay_pending = native_project_usages(index, native_snapshot, name, opts)
+      if single_root and #all_usages == 0 then
+        all_usages = source
+      else
+        for _, usage in ipairs(source) do all_usages[#all_usages + 1] = usage end
+      end
+      has_more = has_more or native_more
+      root_status = index.usage_status == "ready" and not overlay_pending and "fresh" or "stale"
+      if overlay_pending then reason = reason or "overlay-indexing"
+      elseif root_status == "stale" then reason = reason or "indexing" end
+      any_usable = true
+    elseif index.usage_status == "ready" then
       refresh_current_core_docs_for_index(index)
       if has_pending_open_doc_overlay(index) then
         reason = reason or "overlay-indexing"
@@ -3411,9 +3643,9 @@ function symbol_index.workspace_usages(name, opts)
   end
   if any_usable then
     if #per_root > 1 then sort_usages(all_usages) end
-    local results
-    results, has_more = filter_usages(all_usages, opts, name)
-    has_more = has_more or usage_truncated
+    local results, filtered_more
+    results, filtered_more = filter_usages(all_usages, opts, name)
+    has_more = has_more or filtered_more or usage_truncated
     return results, status == "fresh" and nil or (reason or "indexing"), status == "fresh" and "fresh" or "stale", {
       has_more = has_more,
       roots = per_root,

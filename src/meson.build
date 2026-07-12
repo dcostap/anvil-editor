@@ -206,6 +206,7 @@ worker_pool_test = executable('worker_pool_test',
     [
         '../tests/native/worker_pool_test.c',
         'worker_pool.c',
+        'fuzzy.c',
         'markdown_parser.c',
         'markdown_extensions.c',
         'treesitter/languages.c',

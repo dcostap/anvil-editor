@@ -759,6 +759,110 @@ static int project_snapshot_usages(lua_State *L) {
   return 1;
 }
 
+static int project_query_string_compare(const void *left, const void *right) {
+  const char *const *a = (const char *const *)left;
+  const char *const *b = (const char *const *)right;
+  return strcmp(*a ? *a : "", *b ? *b : "");
+}
+
+static const char **project_query_string_array(lua_State *L, int opts, const char *field, uint32_t *count) {
+  *count = 0;
+  if (!lua_istable(L, opts)) return NULL;
+  lua_getfield(L, opts, field);
+  if (lua_isnil(L, -1)) { lua_pop(L, 1); return NULL; }
+  luaL_checktype(L, -1, LUA_TTABLE);
+  size_t length = lua_rawlen(L, -1);
+  luaL_argcheck(L, length <= 65536, opts, "Project query filter exceeds 65536 items");
+  for (size_t i = 0; i < length; i++) {
+    lua_rawgeti(L, -1, (lua_Integer)i + 1);
+    luaL_checktype(L, -1, LUA_TSTRING);
+    lua_pop(L, 1);
+  }
+  const char **items = length ? (const char **)malloc(length * sizeof(*items)) : NULL;
+  if (length && !items) luaL_error(L, "out of memory reading native Project query filter");
+  for (size_t i = 0; i < length; i++) {
+    lua_rawgeti(L, -1, (lua_Integer)i + 1);
+    items[i] = lua_tostring(L, -1);
+    lua_pop(L, 1);
+  }
+  lua_pop(L, 1);
+  if (length > 1) qsort(items, length, sizeof(*items), project_query_string_compare);
+  *count = (uint32_t)length;
+  return items;
+}
+
+static int project_snapshot_query_symbols(lua_State *L) {
+  LuaProjectSnapshot *snapshot = check_project_snapshot(L, 1);
+  const char *query = luaL_optstring(L, 2, "");
+  uint32_t offset = 0, limit = 200;
+  if (lua_istable(L, 3)) {
+    offset = opt_uint32_field(L, 3, "offset", 0);
+    limit = opt_uint32_field(L, 3, "limit", 200);
+    luaL_argcheck(L, limit <= PROJECT_RECORD_PAGE_LIMIT, 3, "Project query limit exceeds 4096");
+  }
+  uint32_t kind_count = 0, excluded_path_count = 0;
+  const char **kinds = project_query_string_array(L, 3, "kinds", &kind_count);
+  const char **excluded_paths = project_query_string_array(L, 3, "excluded_paths", &excluded_path_count);
+  uint32_t *indices = NULL, count = 0, total = 0;
+  bool has_more = false;
+  bool ok = anvil_ts_project_snapshot_query_symbols(snapshot->snapshot, query, offset, limit,
+    kinds, kind_count, excluded_paths, excluded_path_count, &indices, &count, &total, &has_more);
+  free(kinds);
+  free(excluded_paths);
+  if (!ok) { free(indices); return luaL_error(L, "native Project symbol query failed"); }
+  lua_createtable(L, (int)count, 3);
+  for (uint32_t i = 0; i < count; i++) {
+    AnvilTSProjectFileResult *file = NULL;
+    uint32_t file_index = 0;
+    anvil_ts_project_snapshot_symbol_at(snapshot->snapshot, indices[i], &file, &file_index);
+    push_snapshot_symbol(L, file, file_index);
+    lua_rawseti(L, -2, (int)i + 1);
+  }
+  free(indices);
+  lua_pushinteger(L, offset + count); lua_setfield(L, -2, "next_offset");
+  lua_pushinteger(L, total); lua_setfield(L, -2, "total");
+  lua_pushboolean(L, has_more); lua_setfield(L, -2, "has_more");
+  return 1;
+}
+
+static int project_snapshot_query_usages(lua_State *L) {
+  LuaProjectSnapshot *snapshot = check_project_snapshot(L, 1);
+  size_t name_len = 0;
+  const char *name = luaL_checklstring(L, 2, &name_len);
+  luaL_argcheck(L, name_len <= UINT32_MAX, 2, "Project usage name exceeds uint32 range");
+  uint32_t offset = 0, limit = 500;
+  bool include_declarations = true;
+  if (lua_istable(L, 3)) {
+    offset = opt_uint32_field(L, 3, "offset", 0);
+    limit = opt_uint32_field(L, 3, "limit", 500);
+    luaL_argcheck(L, limit <= PROJECT_RECORD_PAGE_LIMIT, 3, "Project query limit exceeds 4096");
+    lua_getfield(L, 3, "include_declaration");
+    if (!lua_isnil(L, -1)) include_declarations = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+  }
+  uint32_t excluded_path_count = 0;
+  const char **excluded_paths = project_query_string_array(L, 3, "excluded_paths", &excluded_path_count);
+  uint32_t *indices = NULL, count = 0, total = 0;
+  bool has_more = false;
+  bool ok = anvil_ts_project_snapshot_query_usages(snapshot->snapshot, name, (uint32_t)name_len,
+    offset, limit, include_declarations, excluded_paths, excluded_path_count, &indices, &count, &total, &has_more);
+  free(excluded_paths);
+  if (!ok) { free(indices); return luaL_error(L, "native Project usage query failed"); }
+  lua_createtable(L, (int)count, 3);
+  for (uint32_t i = 0; i < count; i++) {
+    AnvilTSProjectFileResult *file = NULL;
+    uint32_t file_index = 0;
+    anvil_ts_project_snapshot_usage_at(snapshot->snapshot, indices[i], &file, &file_index);
+    push_snapshot_usage(L, file, file_index);
+    lua_rawseti(L, -2, (int)i + 1);
+  }
+  free(indices);
+  lua_pushinteger(L, offset + count); lua_setfield(L, -2, "next_offset");
+  lua_pushinteger(L, total); lua_setfield(L, -2, "total");
+  lua_pushboolean(L, has_more); lua_setfield(L, -2, "has_more");
+  return 1;
+}
+
 static int project_snapshot_files(lua_State *L) {
   LuaProjectSnapshot *snapshot = check_project_snapshot(L, 1);
   uint32_t offset, limit;
@@ -1159,6 +1263,8 @@ static const luaL_Reg project_snapshot_methods[] = {
   { "files", project_snapshot_files },
   { "symbols", project_snapshot_symbols },
   { "usages", project_snapshot_usages },
+  { "query_symbols", project_snapshot_query_symbols },
+  { "query_usages", project_snapshot_query_usages },
   { "__gc", project_snapshot_gc },
   { NULL, NULL }
 };

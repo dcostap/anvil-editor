@@ -161,7 +161,7 @@ local function run_case(name, root, remove_after, expected_files)
     files_on_disk = count_files(root),
     files_indexed = status.files_indexed or worker.files_indexed,
     bytes_read = worker.bytes_read,
-    symbols = #(status.symbols or {}),
+    symbols = status.native_snapshot and status.native_snapshot:summary().symbols or #(status.symbols or {}),
     usages = status.usage_count or 0,
     first_partial_symbols_ms = first_symbols_ms,
     final_symbols_ms = final_symbols_ms or final_ms,
@@ -236,12 +236,14 @@ local function run_cancellation_case()
   })
   local progress_deadline = system.get_time() + 10
   local status
+  local scheduler
   repeat
     status = symbol_index.status(root)
-    if (status.files_scanned or 0) > 0 or #(status.symbols or {}) > 0 then break end
+    scheduler = status.worker_run and status.worker_run.scheduler
+    if scheduler and scheduler:outstanding_count() > 0
+    and status.worker_run and (status.worker_run.total_shards or 0) > 0 then break end
     coroutine.yield(0.001)
   until system.get_time() >= progress_deadline
-  local scheduler = status.worker_run and status.worker_run.scheduler
   test.equal(status.status, "indexing", "cancellation fixture completed before cancellation")
   test.ok(scheduler and scheduler:outstanding_count() > 0, "cancellation fixture had no outstanding jobs")
   local started = system.get_time()

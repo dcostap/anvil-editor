@@ -306,7 +306,10 @@ test.describe("worker_pool_native", function()
               declarator: (identifier) @name
               parameters: (parameter_list) @signature.params)) @outline.function
         ]],
-        usage_query = [[(identifier) @reference]],
+        usage_query = [[
+          (function_declarator declarator: (identifier) @definition.function)
+          (identifier) @reference
+        ]],
         capture_paging = false,
         line_range_lookup = false,
         compact_project_records = true,
@@ -339,6 +342,35 @@ test.describe("worker_pool_native", function()
     test.equal(usages.total, 2)
     test.equal(usages[1].relpath, "a.c")
     test.equal(usages[2].relpath, "a.c")
+
+    local first_page = partial:query_symbols("", { offset = 0, limit = 1 })
+    test.equal(#first_page, 1)
+    test.equal(first_page[1].name, "alpha")
+    test.equal(first_page.total, 2)
+    test.equal(first_page.has_more, true)
+    local second_page = partial:query_symbols("", { offset = first_page.next_offset, limit = 1 })
+    test.equal(#second_page, 1)
+    test.equal(second_page[1].name, "zed")
+    test.equal(second_page.has_more, false)
+    local selective = partial:query_symbols("zd", { limit = 10, kinds = { "function" } })
+    test.equal(#selective, 1)
+    test.equal(selective[1].name, "zed")
+    local excluded = partial:query_symbols("", { limit = 10, excluded_paths = { "a.c" } })
+    test.equal(#excluded, 1)
+    test.equal(excluded[1].name, "zed")
+    local usage_page = partial:query_usages("alpha", { offset = 0, limit = 1 })
+    test.equal(#usage_page, 1)
+    test.equal(usage_page.total, 2)
+    test.equal(usage_page.has_more, true)
+    local usage_page2 = partial:query_usages("alpha", { offset = usage_page.next_offset, limit = 1 })
+    test.equal(#usage_page2, 1)
+    test.equal(usage_page2.has_more, false)
+    local references_only = partial:query_usages("alpha", { limit = 10, include_declaration = false })
+    test.equal(references_only.total, 1)
+    test.equal(references_only[1].is_declaration, false)
+    test.equal(partial:query_usages("alpha", { limit = 10, excluded_paths = { "a.c" } }).total, 0)
+    test.error(function() partial:query_symbols("", { limit = 4097 }) end)
+    test.error(function() partial:query_usages("alpha", { limit = 4097 }) end)
 
     local replacement = extract("a.c", "int beta(void) { return beta(); }\n")
     test.ok(replacement:adopt_project(builder:id(), { fingerprint = "a-2", usage_complete = true }))

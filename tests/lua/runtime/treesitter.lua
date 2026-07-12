@@ -1271,9 +1271,8 @@ fun make(): EagerThing = EagerThing()
     local public_eager = test.not_nil(find_symbol(symbols, "EagerThing", "class"))
     test.equal(public_eager.text, "EagerThing")
     test.not_nil(public_eager.range)
-    local internal_symbol = test.not_nil(find_symbol(status.symbols, "EagerThing", "class"))
-    test.is_nil(internal_symbol.text)
-    test.is_nil(internal_symbol.range)
+    test.equal(#status.symbols, 0, "native snapshots must not materialize Project symbols in Lua")
+    test.ok(status.native_snapshot:summary().symbols > 0)
     test.not_nil(status.diagnostics)
     test.not_nil(status.diagnostics.phases)
     test.not_nil(status.diagnostics.phases.combined)
@@ -1288,12 +1287,17 @@ fun make(): EagerThing = EagerThing()
     test.equal(usage_status, "fresh", reason)
     test.equal(#refs, 2)
     test.equal(refs[1].name, "EagerThing")
+    local refs_with_declaration, default_reason, default_status = symbol_index.workspace_usages("EagerThing", {
+      root = root,
+      limit = 20,
+      refresh_after_seconds = 0,
+    })
+    test.equal(default_status, "fresh", default_reason)
+    test.ok(#refs_with_declaration > #refs)
     test.equal(refs[1].text, "EagerThing")
     test.not_nil(refs[1].range)
-    local internal = test.not_nil((status.usages_by_name.EagerThing or {})[1])
-    test.is_nil(internal.name)
-    test.is_nil(internal.text)
-    test.is_nil(internal.range)
+    test.equal(next(status.usages_by_name), nil, "native snapshots must not materialize Project usages in Lua")
+    test.ok(status.native_snapshot:summary().usages > 0)
     common.rm(root, true)
   end)
 
@@ -1368,6 +1372,47 @@ fun make%d(): ShardedThing%d = ShardedThing%d()
     for i = 1, 6 do
       test.ok(find_symbol(symbols, "ShardedThing" .. i, "class"), "missing ShardedThing" .. tostring(i))
     end
+    local async_request, async_reason, async_status = symbol_index.workspace_symbols_async("ShardedThing", {
+      root = root,
+      limit = 20,
+      refresh_after_seconds = 0,
+    })
+    test.equal(async_status, "pending", async_reason)
+    test.is_nil(async_request.handle, "native Project queries must not submit Lua query workers")
+    test.is_nil(async_request.query_artifact)
+    wait_async_request(async_request)
+    test.equal(async_request.status, "fresh", async_request.reason)
+    test.equal(#async_request.results, 6)
+
+    local overlay_path = common.normalize_path(root .. PATHSEP .. "Model1.kt")
+    local overlay_symbols = {
+      { name = "BoundedOverlayClass", text = "BoundedOverlayClass", kind = "class", path = overlay_path,
+        relpath = "Model1.kt", start_line = 1, start_col = 1 },
+    }
+    for i = 1, 500 do
+      overlay_symbols[#overlay_symbols + 1] = {
+        name = string.format("BoundedOverlayFunction%03d", i),
+        text = string.format("BoundedOverlayFunction%03d", i),
+        kind = "function",
+        path = overlay_path,
+        relpath = "Model1.kt",
+        start_line = i + 1,
+        start_col = 1,
+      }
+    end
+    local overlay_doc = seed_open_doc_overlay(status, overlay_path, { symbols = overlay_symbols })
+    symbol_index.remember_open_document(overlay_doc)
+    local overlay_results, overlay_reason, overlay_status, overlay_meta = symbol_index.workspace_symbols("BoundedOverlay", {
+      root = root,
+      symbol_kinds = { "function" },
+      limit = 5,
+      refresh_after_seconds = 0,
+    })
+    test.equal(overlay_status, "fresh", overlay_reason)
+    test.equal(#overlay_results, 5)
+    test.ok(overlay_meta.has_more)
+    for _, symbol in ipairs(overlay_results) do test.equal(symbol.kind, "function") end
+    symbol_index.clear_open_document(overlay_doc, "test")
 
     local phases = status.diagnostics and status.diagnostics.phases or {}
     local combined = phases.combined and phases.combined.worker or {}
@@ -1384,12 +1429,36 @@ fun make%d(): ShardedThing%d = ShardedThing%d()
       common.serialize(status.diagnostics and status.diagnostics.ui))
     for path, entry in pairs(status.by_path or {}) do
       test.not_nil(entry.fingerprint, path)
-      test.not_nil(entry.symbols, path)
-      test.not_nil(entry.usages_by_name, path)
+      test.is_nil(entry.symbols, path)
+      test.is_nil(entry.usages_by_name, path)
     end
     test.equal(#(system.list_dir(artifact_dir) or {}), 0, "index artifacts were not cleaned up")
     test.ok((status.usage_count or 0) <= 4, "usage cap exceeded: " .. tostring(status.usage_count))
     test.ok(status.usage_truncated)
+
+    local project_paths_request = test.not_nil(symbol_index.workspace_symbols_async("ShardedThing", {
+      root = root, limit = 20, refresh_after_seconds = 0,
+    }))
+    local original_project_paths_generation = project_paths.generation
+    local changed_project_paths_generation = original_project_paths_generation() + 1
+    project_paths.generation = function() return changed_project_paths_generation end
+    wait_async_request(project_paths_request)
+    project_paths.generation = original_project_paths_generation
+    test.equal(project_paths_request.status, "stale-cancelled")
+    test.equal(project_paths_request.reason, "project-paths-generation-changed")
+
+    local cancelled_request = test.not_nil(symbol_index.workspace_symbols_async("ShardedThing", {
+      root = root, limit = 20, refresh_after_seconds = 0,
+    }))
+    test.ok(cancelled_request:cancel())
+    test.equal(cancelled_request.status, "cancelled")
+    local stale_request = test.not_nil(symbol_index.workspace_symbols_async("ShardedThing", {
+      root = root, limit = 20, refresh_after_seconds = 0,
+    }))
+    symbol_index.invalidate(root)
+    wait_async_request(stale_request)
+    test.equal(stale_request.status, "stale-cancelled")
+    test.is_nil(stale_request.results)
     common.rm(root, true)
     common.rm(artifact_dir, true)
   end)

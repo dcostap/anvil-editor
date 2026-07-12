@@ -28,6 +28,8 @@ pwsh -File .\tools\anvil_treesitter_project_index_benchmark.ps1 `
 
 Use the same build type, Project inputs, options, and otherwise-idle machine for before/after comparisons. Report medians and p95 from repeated runs when evaluating a migration phase. Do not promote local elapsed-time values into ordinary test assertions.
 
+The Phase 4 native-query baseline is `tools/baselines/treesitter-project-index-native-queries.lua`. It measures bounded native symbol/usage queries after publication without materializing Project-wide record tables in Lua or writing query artifacts.
+
 `-TimeoutSeconds` is a per-indexing-case deadline. The runner raises Meson's overall timeout multiplier when necessary so the configured cases can use their full deadlines.
 
 The benchmark currently cannot obtain native peak working-set, actual per-stage CPU time, or Lua GC pause duration from Anvil's public runtime APIs. It reports periodically observed Lua heap size and cumulative worker-stage elapsed time instead; parallel worker elapsed totals can exceed wall time. Use an external process profiler when native peak memory, CPU attribution, or GC pause distributions are required.
