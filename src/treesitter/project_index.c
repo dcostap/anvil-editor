@@ -114,10 +114,22 @@ static uint64_t bytes_hash(const char *text, uint32_t length) {
 static uint64_t path_hash(const char *path) {
   uint64_t hash = UINT64_C(1469598103934665603);
   for (const unsigned char *cursor = (const unsigned char *)(path ? path : ""); *cursor; cursor++) {
+#ifdef _WIN32
+    hash ^= (unsigned char)SDL_tolower(*cursor);
+#else
     hash ^= *cursor;
+#endif
     hash *= UINT64_C(1099511628211);
   }
   return hash ? hash : 1;
+}
+
+static bool project_path_equal(const char *left, const char *right) {
+#ifdef _WIN32
+  return SDL_strcasecmp(left ? left : "", right ? right : "") == 0;
+#else
+  return strcmp(left ? left : "", right ? right : "") == 0;
+#endif
 }
 
 static bool rebuild_path_slots(AnvilTSProjectBuilder *builder, uint32_t required_files) {
@@ -147,7 +159,7 @@ static uint32_t builder_file_index(const AnvilTSProjectBuilder *builder, const c
   while (builder->path_slots[slot]) {
     uint32_t index = builder->path_slots[slot] - 1;
     const char *existing = anvil_ts_project_file_path(builder->files[index].file);
-    if (strcmp(existing ? existing : "", path ? path : "") == 0) return index;
+    if (project_path_equal(existing, path)) return index;
     slot = (slot + 1) & (builder->path_slot_count - 1);
   }
   return UINT32_MAX;
@@ -344,6 +356,29 @@ bool anvil_ts_project_builder_adopt(
   return anvil_ts_project_builder_adopt_batch(builder, files, fingerprints, completeness, 1, error);
 }
 
+static int project_path_compare(const char *left, const char *right) {
+#ifdef _WIN32
+  return SDL_strcasecmp(left ? left : "", right ? right : "");
+#else
+  return strcmp(left ? left : "", right ? right : "");
+#endif
+}
+
+static bool project_path_in_scope(const char *path, const char *scope) {
+  if (!path || !scope) return false;
+  size_t scope_len = strlen(scope);
+  while (scope_len > 1 && (scope[scope_len - 1] == '/' || scope[scope_len - 1] == '\\') &&
+      !(scope_len == 3 && scope[1] == ':')) scope_len--;
+  if (!scope_len) return false;
+#ifdef _WIN32
+  if (SDL_strncasecmp(path, scope, scope_len) != 0) return false;
+#else
+  if (strncmp(path, scope, scope_len) != 0) return false;
+#endif
+  if (scope[scope_len - 1] == '/' || scope[scope_len - 1] == '\\') return true;
+  return path[scope_len] == '\0' || path[scope_len] == '/' || path[scope_len] == '\\';
+}
+
 bool anvil_ts_project_builder_remove(AnvilTSProjectBuilder *builder, const char *path) {
   if (!builder || !path) return false;
   SDL_LockMutex(builder->mutex);
@@ -373,6 +408,79 @@ bool anvil_ts_project_builder_remove(AnvilTSProjectBuilder *builder, const char 
   builder->version++;
   SDL_UnlockMutex(builder->mutex);
   release_file_entry(&removed);
+  return true;
+}
+
+bool anvil_ts_project_builder_fingerprint_matches(AnvilTSProjectBuilder *builder, const char *path, const char *fingerprint) {
+  if (!builder || !path || !fingerprint) return false;
+  SDL_LockMutex(builder->mutex);
+  uint32_t index = builder_file_index(builder, path);
+  bool matches = index != UINT32_MAX && builder->files[index].fingerprint &&
+    strcmp(builder->files[index].fingerprint, fingerprint) == 0;
+  SDL_UnlockMutex(builder->mutex);
+  return matches;
+}
+
+static bool sorted_paths_contains(const char *const *paths, uint32_t count, const char *path) {
+  uint32_t low = 0, high = count;
+  while (low < high) {
+    uint32_t middle = low + (high - low) / 2;
+    int order = project_path_compare(paths[middle], path);
+    if (order < 0) low = middle + 1; else high = middle;
+  }
+  return low < count && project_path_compare(paths[low], path) == 0;
+}
+
+bool anvil_ts_project_builder_remove_scope_missing(
+  AnvilTSProjectBuilder *builder,
+  const char *const *scope_paths,
+  uint32_t scope_count,
+  const char *const *seen_paths,
+  uint32_t seen_count,
+  char **error
+) {
+  if (error) *error = NULL;
+  if (!builder || (scope_count && !scope_paths) || (seen_count && !seen_paths)) {
+    set_error(error, "invalid native Project scoped removal");
+    return false;
+  }
+  SDL_LockMutex(builder->mutex);
+  uint32_t remove_count = 0;
+  for (uint32_t i = 0; i < builder->file_count; i++) {
+    const char *path = anvil_ts_project_file_path(builder->files[i].file);
+    bool scoped = false;
+    for (uint32_t s = 0; s < scope_count && !scoped; s++) scoped = project_path_in_scope(path, scope_paths[s]);
+    if (scoped && !sorted_paths_contains(seen_paths, seen_count, path)) remove_count++;
+  }
+  char **remove_paths = remove_count ? (char **)calloc(remove_count, sizeof(*remove_paths)) : NULL;
+  if (remove_count && !remove_paths) {
+    SDL_UnlockMutex(builder->mutex);
+    set_error(error, "out of memory preparing native Project scoped removal");
+    return false;
+  }
+  uint32_t remove_index = 0;
+  for (uint32_t i = 0; i < builder->file_count; i++) {
+    const char *path = anvil_ts_project_file_path(builder->files[i].file);
+    bool scoped = false;
+    for (uint32_t s = 0; s < scope_count && !scoped; s++) scoped = project_path_in_scope(path, scope_paths[s]);
+    if (scoped && !sorted_paths_contains(seen_paths, seen_count, path)) {
+      remove_paths[remove_index] = project_strdup(path);
+      if (!remove_paths[remove_index]) {
+        for (uint32_t r = 0; r < remove_index; r++) free(remove_paths[r]);
+        free(remove_paths);
+        SDL_UnlockMutex(builder->mutex);
+        set_error(error, "out of memory copying native Project scoped removal path");
+        return false;
+      }
+      remove_index++;
+    }
+  }
+  SDL_UnlockMutex(builder->mutex);
+  for (uint32_t i = 0; i < remove_count; i++) {
+    (void)anvil_ts_project_builder_remove(builder, remove_paths[i]);
+    free(remove_paths[i]);
+  }
+  free(remove_paths);
   return true;
 }
 
@@ -651,20 +759,136 @@ bool anvil_ts_project_snapshot_usage_at(const AnvilTSProjectSnapshot *snapshot, 
   return true;
 }
 
-static bool query_path_excluded(
-  const char *path,
-  const char *const *excluded_paths,
-  uint32_t excluded_path_count
-) {
-  const char *target = path ? path : "";
-  uint32_t low = 0, high = excluded_path_count;
-  while (low < high) {
-    uint32_t middle = low + (high - low) / 2;
-    int compared = strcmp(target, excluded_paths[middle] ? excluded_paths[middle] : "");
-    if (compared == 0) return true;
-    if (compared < 0) high = middle; else low = middle + 1;
+typedef struct ProjectPathRuleSlot {
+  const char *path;
+  uint64_t hash;
+  uint32_t length;
+  bool excluded;
+} ProjectPathRuleSlot;
+
+typedef struct ProjectPathRuleSet {
+  ProjectPathRuleSlot *slots;
+  uint32_t slot_count;
+} ProjectPathRuleSet;
+
+static uint32_t project_rule_length(const char *path) {
+  size_t length = strlen(path ? path : "");
+  while (length > 1 && (path[length - 1] == '/' || path[length - 1] == '\\') &&
+      !(length == 3 && path[1] == ':')) length--;
+  return length > UINT32_MAX ? UINT32_MAX : (uint32_t)length;
+}
+
+static uint64_t project_rule_hash(const char *path, uint32_t length) {
+  uint64_t hash = UINT64_C(1469598103934665603);
+  for (uint32_t i = 0; i < length; i++) {
+    unsigned char byte = (unsigned char)path[i];
+#ifdef _WIN32
+    byte = (unsigned char)SDL_tolower(byte);
+#endif
+    hash ^= byte;
+    hash *= UINT64_C(1099511628211);
   }
-  return false;
+  return hash ? hash : 1;
+}
+
+static bool project_rule_prefix_equal(const char *rule, const char *path, uint32_t length) {
+#ifdef _WIN32
+  return SDL_strncasecmp(rule, path, length) == 0;
+#else
+  return strncmp(rule, path, length) == 0;
+#endif
+}
+
+static bool project_path_rules_build(
+  ProjectPathRuleSet *rules,
+  const char *const *excluded_paths,
+  uint32_t excluded_count,
+  const char *const *included_paths,
+  uint32_t included_count
+) {
+  memset(rules, 0, sizeof(*rules));
+  uint64_t count = (uint64_t)excluded_count + included_count;
+  if (!count) return true;
+  uint32_t slots = 16;
+  while ((uint64_t)slots / 2 < count) {
+    if (slots > UINT32_MAX / 2) return false;
+    slots *= 2;
+  }
+  rules->slots = (ProjectPathRuleSlot *)calloc(slots, sizeof(*rules->slots));
+  if (!rules->slots) return false;
+  rules->slot_count = slots;
+  for (uint32_t pass = 0; pass < 2; pass++) {
+    const char *const *paths = pass == 0 ? included_paths : excluded_paths;
+    uint32_t path_count = pass == 0 ? included_count : excluded_count;
+    for (uint32_t i = 0; i < path_count; i++) {
+      const char *path = paths[i];
+      uint32_t length = project_rule_length(path);
+      if (!path || !length) continue;
+      uint64_t hash = project_rule_hash(path, length);
+      uint32_t slot = (uint32_t)hash & (slots - 1);
+      while (rules->slots[slot].path) {
+        ProjectPathRuleSlot *existing = &rules->slots[slot];
+        if (existing->hash == hash && existing->length == length &&
+            project_rule_prefix_equal(existing->path, path, length)) {
+          if (pass == 1) existing->excluded = true;
+          goto inserted;
+        }
+        slot = (slot + 1) & (slots - 1);
+      }
+      rules->slots[slot] = (ProjectPathRuleSlot) { path, hash, length, pass == 1 };
+inserted:;
+    }
+  }
+  return true;
+}
+
+static void project_path_rules_free(ProjectPathRuleSet *rules) {
+  free(rules->slots);
+  memset(rules, 0, sizeof(*rules));
+}
+
+static const ProjectPathRuleSlot *project_path_rule_lookup(
+  const ProjectPathRuleSet *rules,
+  const char *path,
+  uint32_t length,
+  uint64_t hash
+) {
+  if (!rules->slot_count || !length) return NULL;
+  uint32_t slot = (uint32_t)hash & (rules->slot_count - 1);
+  while (rules->slots[slot].path) {
+    const ProjectPathRuleSlot *candidate = &rules->slots[slot];
+    if (candidate->hash == hash && candidate->length == length &&
+        project_rule_prefix_equal(candidate->path, path, length)) return candidate;
+    slot = (slot + 1) & (rules->slot_count - 1);
+  }
+  return NULL;
+}
+
+static bool query_path_excluded(const char *path, const ProjectPathRuleSet *rules) {
+  path = path ? path : "";
+  uint64_t hash = UINT64_C(1469598103934665603);
+  const ProjectPathRuleSlot *matched = NULL;
+  for (uint32_t i = 0; path[i]; i++) {
+    if ((path[i] == '/' || path[i] == '\\') && i > 0) {
+      const ProjectPathRuleSlot *candidate = project_path_rule_lookup(rules, path, i, hash ? hash : 1);
+      if (candidate) matched = candidate;
+    }
+    unsigned char byte = (unsigned char)path[i];
+#ifdef _WIN32
+    byte = (unsigned char)SDL_tolower(byte);
+#endif
+    hash ^= byte;
+    hash *= UINT64_C(1099511628211);
+    if ((i == 0 && (path[i] == '/' || path[i] == '\\')) ||
+        (i == 2 && path[1] == ':' && (path[i] == '/' || path[i] == '\\'))) {
+      const ProjectPathRuleSlot *candidate = project_path_rule_lookup(rules, path, i + 1, hash ? hash : 1);
+      if (candidate) matched = candidate;
+    }
+  }
+  uint32_t length = (uint32_t)strlen(path);
+  const ProjectPathRuleSlot *exact = project_path_rule_lookup(rules, path, length, hash ? hash : 1);
+  if (exact) matched = exact;
+  return matched && matched->excluded;
 }
 
 static bool query_symbol_kind_allowed(
@@ -686,11 +910,10 @@ static bool query_symbol_allowed(
   uint32_t symbol_index,
   const char *const *kinds,
   uint32_t kind_count,
-  const char *const *excluded_paths,
-  uint32_t excluded_path_count
+  const ProjectPathRuleSet *path_rules
 ) {
   ProjectRecordRef ref = snapshot->symbols[symbol_index];
-  if (query_path_excluded(anvil_ts_project_file_path(ref.file), excluded_paths, excluded_path_count)) return false;
+  if (query_path_excluded(anvil_ts_project_file_path(ref.file), path_rules)) return false;
   AnvilTSProjectSymbolView symbol;
   return anvil_ts_project_file_symbol_at(ref.file, ref.index, &symbol) &&
     query_symbol_kind_allowed(&symbol, kinds, kind_count);
@@ -727,8 +950,7 @@ static uint32_t query_collect_fuzzy_symbols(
   const char *query,
   const char *const *kinds,
   uint32_t kind_count,
-  const char *const *excluded_paths,
-  uint32_t excluded_path_count,
+  const ProjectPathRuleSet *path_rules,
   const FuzzySearchResult *after,
   FuzzySearchResult *top,
   uint32_t capacity,
@@ -736,7 +958,7 @@ static uint32_t query_collect_fuzzy_symbols(
 ) {
   uint32_t top_count = 0, matched = 0;
   for (uint32_t i = 0; i < snapshot->symbol_count; i++) {
-    if (!query_symbol_allowed(snapshot, i, kinds, kind_count, excluded_paths, excluded_path_count)) continue;
+    if (!query_symbol_allowed(snapshot, i, kinds, kind_count, path_rules)) continue;
     const FuzzyEntry *entry = &snapshot->symbol_fuzzy.entries[i];
     const char *text = snapshot->symbol_fuzzy.text_arena + entry->text_offset;
     const char *lower = snapshot->symbol_fuzzy.lower_arena + entry->lower_offset;
@@ -760,6 +982,8 @@ bool anvil_ts_project_snapshot_query_symbols(
   uint32_t kind_count,
   const char *const *excluded_paths,
   uint32_t excluded_path_count,
+  const char *const *included_paths,
+  uint32_t included_path_count,
   uint32_t **indices,
   uint32_t *count,
   uint32_t *total,
@@ -769,15 +993,19 @@ bool anvil_ts_project_snapshot_query_symbols(
   if (count) *count = 0;
   if (total) *total = 0;
   if (has_more) *has_more = false;
-  if (!snapshot || !indices || (kind_count && !kinds) || (excluded_path_count && !excluded_paths)) return false;
+  if (!snapshot || !indices || (kind_count && !kinds) || (excluded_path_count && !excluded_paths) ||
+      (included_path_count && !included_paths)) return false;
+  ProjectPathRuleSet path_rules;
+  if (!project_path_rules_build(&path_rules, excluded_paths, excluded_path_count,
+      included_paths, included_path_count)) return false;
   if (offset > snapshot->symbol_count) offset = snapshot->symbol_count;
   uint32_t *out = limit ? (uint32_t *)malloc((size_t)limit * sizeof(*out)) : NULL;
-  if (limit && !out) return false;
+  if (limit && !out) { project_path_rules_free(&path_rules); return false; }
   uint32_t matched = 0, out_count = 0;
   query = query ? query : "";
   if (!*query) {
     for (uint32_t i = 0; i < snapshot->symbol_count; i++) {
-      if (!query_symbol_allowed(snapshot, i, kinds, kind_count, excluded_paths, excluded_path_count)) continue;
+      if (!query_symbol_allowed(snapshot, i, kinds, kind_count, &path_rules)) continue;
       if (matched >= offset && out_count < limit) out[out_count++] = i;
       matched++;
     }
@@ -789,9 +1017,9 @@ bool anvil_ts_project_snapshot_query_symbols(
     while (remaining) {
       uint32_t step = remaining < 4096 ? remaining : 4096;
       FuzzySearchResult *scratch = (FuzzySearchResult *)malloc((size_t)step * sizeof(*scratch));
-      if (!scratch) { free(out); return false; }
+      if (!scratch) { free(out); project_path_rules_free(&path_rules); return false; }
       uint32_t top_count = query_collect_fuzzy_symbols(snapshot, query, kinds, kind_count,
-        excluded_paths, excluded_path_count, after, scratch, step, &matched);
+        &path_rules, after, scratch, step, &matched);
       if (top_count < step) {
         beyond_end = true;
         free(scratch);
@@ -804,9 +1032,9 @@ bool anvil_ts_project_snapshot_query_symbols(
     }
     if (!beyond_end) {
       FuzzySearchResult *page = limit ? (FuzzySearchResult *)malloc((size_t)limit * sizeof(*page)) : NULL;
-      if (limit && !page) { free(out); return false; }
+      if (limit && !page) { free(out); project_path_rules_free(&path_rules); return false; }
       uint32_t page_count = query_collect_fuzzy_symbols(snapshot, query, kinds, kind_count,
-        excluded_paths, excluded_path_count, after, page, limit, &matched);
+        &path_rules, after, page, limit, &matched);
       for (uint32_t i = 0; i < page_count; i++) out[out_count++] = page[i].entry_index;
       free(page);
     }
@@ -815,6 +1043,7 @@ bool anvil_ts_project_snapshot_query_symbols(
   if (count) *count = out_count;
   if (total) *total = matched;
   if (has_more) *has_more = matched > offset + out_count;
+  project_path_rules_free(&path_rules);
   return true;
 }
 
@@ -842,6 +1071,8 @@ bool anvil_ts_project_snapshot_query_usages(
   bool include_declarations,
   const char *const *excluded_paths,
   uint32_t excluded_path_count,
+  const char *const *included_paths,
+  uint32_t included_path_count,
   uint32_t **indices,
   uint32_t *count,
   uint32_t *total,
@@ -851,12 +1082,16 @@ bool anvil_ts_project_snapshot_query_usages(
   if (count) *count = 0;
   if (total) *total = 0;
   if (has_more) *has_more = false;
-  if (!snapshot || !name || !indices || (excluded_path_count && !excluded_paths)) return false;
+  if (!snapshot || !name || !indices || (excluded_path_count && !excluded_paths) ||
+      (included_path_count && !included_paths)) return false;
+  ProjectPathRuleSet path_rules;
+  if (!project_path_rules_build(&path_rules, excluded_paths, excluded_path_count,
+      included_paths, included_path_count)) return false;
   ProjectUsageNameEntry *entry = snapshot_usage_name(snapshot, name, name_len);
   uint32_t available = entry ? entry->usage_count : 0;
   if (offset > available) offset = available;
   uint32_t *out = limit ? (uint32_t *)malloc((size_t)limit * sizeof(*out)) : NULL;
-  if (limit && !out) return false;
+  if (limit && !out) { project_path_rules_free(&path_rules); return false; }
   uint32_t matched = 0, out_count = 0;
   for (uint32_t i = 0; i < available; i++) {
     uint32_t usage_index = entry->usage_indices[i];
@@ -864,7 +1099,7 @@ bool anvil_ts_project_snapshot_query_usages(
     AnvilTSProjectUsageView usage;
     if (!anvil_ts_project_file_usage_at(ref.file, ref.index, &usage)) continue;
     if (!include_declarations && usage.is_declaration) continue;
-    if (query_path_excluded(anvil_ts_project_file_path(ref.file), excluded_paths, excluded_path_count)) continue;
+    if (query_path_excluded(anvil_ts_project_file_path(ref.file), &path_rules)) continue;
     if (matched >= offset && out_count < limit) out[out_count++] = usage_index;
     matched++;
   }
@@ -872,5 +1107,6 @@ bool anvil_ts_project_snapshot_query_usages(
   if (count) *count = out_count;
   if (total) *total = matched;
   if (has_more) *has_more = matched > offset + out_count;
+  project_path_rules_free(&path_rules);
   return true;
 }

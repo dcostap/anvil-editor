@@ -2851,14 +2851,11 @@ function core.run_step(options)
       worker_pool_slowest_callback_name = drain_stats.slowest_callback_name or ""
       if worker_pool_drain_wall_ms > 20 then
         core.log_quiet(
-          "Worker pool drain slow: wall=%.1fms drain=%.1fms messages=%d dispatch=%.1fms callback=%.1fms slow_dispatch=%.1fms/%s slow_callback=%.1fms/%s ts_chunk=%.1fms ts_metadata=%.1fms ts_aggregate=%.1fms",
+          "Worker pool drain slow: wall=%.1fms drain=%.1fms messages=%d dispatch=%.1fms callback=%.1fms slow_dispatch=%.1fms/%s slow_callback=%.1fms/%s",
           worker_pool_drain_wall_ms, worker_pool_drain_ms, worker_pool_drain_messages,
           worker_pool_dispatch_ms, worker_pool_callback_ms,
           worker_pool_slowest_dispatch_ms, tostring(worker_pool_slowest_message_type),
-          worker_pool_slowest_callback_ms, tostring(worker_pool_slowest_callback_name),
-          worker_pool_frame_stats.treesitter_project_chunk_adoption_ms or 0,
-          worker_pool_frame_stats.treesitter_project_chunk_metadata_ms or 0,
-          worker_pool_frame_stats.treesitter_project_aggregate_rebuild_ms or 0
+          worker_pool_slowest_callback_ms, tostring(worker_pool_slowest_callback_name)
         )
       end
     end
@@ -2919,10 +2916,6 @@ function core.run_step(options)
       local worker_pool_module = package.loaded["core.worker_pool"]
       if worker_pool_module and worker_pool_module.shutdown_system then
         worker_pool_module.shutdown_system({ cancel_running = true, timeout_ms = 1000 })
-      end
-      local treesitter_symbol_index = package.loaded["core.treesitter.symbol_index"]
-      if treesitter_symbol_index and treesitter_symbol_index.cleanup_artifacts then
-        treesitter_symbol_index.cleanup_artifacts()
       end
       core.worker_pool_frame_stats = nil
       core.in_live_resize_frame = previous_live_resize_frame

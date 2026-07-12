@@ -323,7 +323,7 @@ test.describe("worker_pool_native", function()
     end
 
     local later = extract("z.c", "int zed(void) { return zed(); }\n")
-    local earlier = extract("a.c", "int alpha(void) { return alpha(); }\n")
+    local earlier = extract("vendor/a.c", "int alpha(void) { return alpha(); }\n")
     test.ok(later:adopt_project(builder:id(), { fingerprint = "z-1", usage_complete = true }))
     test.ok(earlier:adopt_project(builder:id(), { fingerprint = "a-1", usage_complete = true }))
 
@@ -336,13 +336,13 @@ test.describe("worker_pool_native", function()
     test.equal(partial_summary.usage_names, 1)
     test.equal(partial_summary.usage_truncated, true)
     local symbols = partial:symbols({ offset = 1, limit = 10 })
-    test.equal(symbols[1].relpath, "a.c")
+    test.equal(symbols[1].relpath, "vendor/a.c")
     test.equal(symbols[2].relpath, "z.c")
     local usages = partial:usages({ offset = 1, limit = 10 })
     test.equal(#usages, 2)
     test.equal(usages.total, 2)
-    test.equal(usages[1].relpath, "a.c")
-    test.equal(usages[2].relpath, "a.c")
+    test.equal(usages[1].relpath, "vendor/a.c")
+    test.equal(usages[2].relpath, "vendor/a.c")
 
     local first_page = partial:query_symbols("", { offset = 0, limit = 1 })
     test.equal(#first_page, 1)
@@ -356,9 +356,13 @@ test.describe("worker_pool_native", function()
     local selective = partial:query_symbols("zd", { limit = 10, kinds = { "function" } })
     test.equal(#selective, 1)
     test.equal(selective[1].name, "zed")
-    local excluded = partial:query_symbols("", { limit = 10, excluded_paths = { "a.c" } })
+    local excluded = partial:query_symbols("", { limit = 10, excluded_paths = { "vendor/a.c" } })
     test.equal(#excluded, 1)
     test.equal(excluded[1].name, "zed")
+    local nested_override = partial:query_symbols("", {
+      limit = 10, excluded_paths = { "vendor" }, included_paths = { "vendor/a.c" },
+    })
+    test.equal(#nested_override, 2)
     local usage_page = partial:query_usages("alpha", { offset = 0, limit = 1 })
     test.equal(#usage_page, 1)
     test.equal(usage_page.total, 2)
@@ -369,11 +373,15 @@ test.describe("worker_pool_native", function()
     local references_only = partial:query_usages("alpha", { limit = 10, include_declaration = false })
     test.equal(references_only.total, 1)
     test.equal(references_only[1].is_declaration, false)
-    test.equal(partial:query_usages("alpha", { limit = 10, excluded_paths = { "a.c" } }).total, 0)
+    test.equal(partial:query_usages("alpha", { limit = 10, excluded_paths = { "vendor/a.c" } }).total, 0)
+    test.equal(partial:query_usages("alpha", {
+      limit = 10, excluded_paths = { "vendor" }, included_paths = { "vendor/a.c" },
+    }).total, 2)
     test.error(function() partial:query_symbols("", { limit = 4097 }) end)
     test.error(function() partial:query_usages("alpha", { limit = 4097 }) end)
 
-    local replacement = extract("a.c", "int beta(void) { return beta(); }\n")
+    local replacement_path = PATHSEP == "\\" and "VENDOR/A.C" or "vendor/a.c"
+    local replacement = extract(replacement_path, "int beta(void) { return beta(); }\n")
     test.ok(replacement:adopt_project(builder:id(), { fingerprint = "a-2", usage_complete = true }))
     local removed = extract("q.c", "int removed(void) { return removed(); }\n")
     test.ok(removed:adopt_project(builder:id(), { fingerprint = "q-1", usage_complete = true }))
@@ -386,7 +394,7 @@ test.describe("worker_pool_native", function()
     test.equal(ready_symbols[1].name, "beta")
     test.equal(ready_symbols[2].name, "zed")
     local files = ready:files({ offset = 1, limit = 10 })
-    test.equal(files[1].relpath, "a.c")
+    test.equal(files[1].relpath, replacement_path)
     test.equal(files[1].fingerprint, "a-2")
     test.error(function() extract("q.c", "int q(void) { return 0; }\n"):adopt_project(builder:id()) end)
     builder:close()
@@ -483,6 +491,14 @@ test.describe("worker_pool_native", function()
         declarator: (identifier) @name
         parameters: (parameter_list) @signature.params)) @outline.function
     ]]
+    local languages = {
+      {
+        id = "c", grammar = "c", files = { "native%-project%-run.*%.c$" }, outline_query = outline_query,
+        usage_query = "(identifier) @reference", parse_timeout_ms = 1000,
+        query_timeout_ms = 100, usage_query_timeout_ms = 100,
+        match_limit = 100, max_captures = 100, usage_match_limit = 100, usage_max_captures = 100,
+      },
+    }
     local pool = new_pool("lua-native-project-run", 2)
     local builder = native_pool.new_project_builder({ usage_cap = 100 })
     local handle = test.not_nil(pool:submit({
@@ -493,14 +509,7 @@ test.describe("worker_pool_native", function()
       ignore_patterns = "^ignored/",
       project_usage_cap = 100,
       max_file_bytes = 1024 * 1024,
-      languages = {
-        {
-          id = "c", grammar = "c", files = { "native%-project%-run.*%.c$" }, outline_query = outline_query,
-          usage_query = "(identifier) @reference", parse_timeout_ms = 1000,
-          query_timeout_ms = 100, usage_query_timeout_ms = 100,
-          match_limit = 100, max_captures = 100, usage_match_limit = 100, usage_max_captures = 100,
-        },
-      },
+      languages = languages,
     }))
     local final_payload, progress_count = nil, 0
     test.ok(drain_until(pool, function(message)
@@ -517,6 +526,62 @@ test.describe("worker_pool_native", function()
       for _, file in ipairs(snapshot:files({ limit = 10 })) do out[#out + 1] = file.relpath:gsub("\\", "/") end
       return out
     end)())
+
+    local timeout_builder = native_pool.new_project_builder({ usage_cap = 100, base_snapshot = snapshot })
+    languages[1].parse_timeout_ms = 999
+    local timeout_handle = test.not_nil(pool:submit({
+      kind = "treesitter_project_run",
+      project_builder_id = timeout_builder:id(),
+      project_root = root,
+      project_scoped = true,
+      scan_paths = { root .. PATHSEP .. "a.c" },
+      project_usage_cap = 100,
+      max_file_bytes = 1024 * 1024,
+      languages = languages,
+    }))
+    local timeout_payload
+    test.ok(drain_until(pool, function(message)
+      if message.job_id == timeout_handle:status().id and message.type == "result" then timeout_payload = message.payload end
+      return message.job_id == timeout_handle:status().id and message.type == "final"
+    end, 10000))
+    test.equal(timeout_payload.files_reused, 0)
+    timeout_builder:close()
+    languages[1].parse_timeout_ms = 1000
+
+    local failed_builder = native_pool.new_project_builder({ usage_cap = 100, base_snapshot = snapshot })
+    local failed_handle = test.not_nil(pool:submit({
+      kind = "treesitter_project_run",
+      project_builder_id = failed_builder:id(),
+      project_root = root,
+      project_scoped = true,
+      scan_paths = { root .. PATHSEP .. "missing" },
+      project_usage_cap = 100,
+      max_file_bytes = 1024 * 1024,
+      languages = languages,
+    }))
+    local scan_error
+    test.ok(drain_until(pool, function(message)
+      if message.job_id == failed_handle:status().id and message.type == "error" then scan_error = message.error end
+      return scan_error ~= nil
+    end, 10000))
+    test.not_nil(scan_error)
+    test.equal(failed_builder:snapshot({ status = "partial" }):summary().files, 2)
+    failed_builder:close()
+
+    local outside_builder = native_pool.new_project_builder({ usage_cap = 100 })
+    local outside_handle, outside_error = pool:submit({
+      kind = "treesitter_project_run",
+      project_builder_id = outside_builder:id(),
+      project_root = root,
+      project_scoped = true,
+      scan_paths = { common.dirname(root) },
+      project_usage_cap = 100,
+      max_file_bytes = 1024 * 1024,
+      languages = languages,
+    })
+    test.is_nil(outside_handle)
+    test.not_nil(outside_error)
+    outside_builder:close()
     common.rm(root, true)
   end)
 

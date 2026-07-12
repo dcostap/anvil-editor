@@ -16,7 +16,9 @@ The default cases are:
 - a large mixed-language synthetic Project;
 - cancellation while Project work is outstanding.
 
-Each completed indexing case records wall time to first observable symbols, final symbols, final usages, and final readiness; cumulative worker-stage elapsed timings; file/byte/capture/record counts; observed Lua heap usage; temporary artifact I/O; native query-cache/parser-reuse/skipped-line-index counters; native batch/snapshot transfer counters; manifest/aggregate/inline UI adoption totals and maxima; and empty/short/selective Project Symbol Search latency. Synthetic cases fail rather than silently recording a baseline if any generated file is skipped. Cancellation cases cover an active Project run plus dedicated parsing, aggregation, and query jobs.
+Each completed indexing case records wall time to first observable symbols, final symbols, final usages, and final readiness; cumulative worker-stage elapsed timings; file/byte/capture/record counts; observed Lua heap usage; temporary artifact I/O; native query-cache/parser-reuse/skipped-line-index counters; native batch/snapshot transfer counters; manifest/aggregate/inline UI adoption totals and maxima; and empty/short/selective Project Symbol Search latency. Synthetic cases fail rather than silently recording a baseline if any generated file is skipped.
+
+Cancellation measurement covers an active native Project run and verifies terminal cleanup.
 
 Synthetic density and timeout are configurable, for example:
 
@@ -31,6 +33,8 @@ Use the same build type, Project inputs, options, and otherwise-idle machine for
 The Phase 4 native-query baseline is `tools/baselines/treesitter-project-index-native-queries.lua`. It measures bounded native symbol/usage queries after publication without materializing Project-wide record tables in Lua or writing query artifacts.
 
 The Phase 5 native-orchestration baseline is `tools/baselines/treesitter-project-index-native-orchestration.lua`. Full scans use one Lua-visible native run handle with native enumeration, cost-balanced parsing lanes, coalesced progress, and direct snapshot publication.
+
+The final Phase 6–7 baseline is `tools/baselines/treesitter-project-index-native-final.lua`. Targeted refreshes reuse immutable native file records, scoped deletion happens natively, query filtering uses bounded native path rules, and superseded Lua artifact/shard/query-worker machinery is removed.
 
 `-TimeoutSeconds` is a per-indexing-case deadline. The runner raises Meson's overall timeout multiplier when necessary so the configured cases can use their full deadlines.
 

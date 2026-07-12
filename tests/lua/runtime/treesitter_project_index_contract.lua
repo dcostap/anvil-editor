@@ -1,6 +1,5 @@
 local common = require "core.common"
 local registry = require "core.treesitter.registry"
-local records = require "core.treesitter.project_index_records"
 local native_pool = require "worker_pool_native"
 local test = require "core.test"
 
@@ -194,33 +193,4 @@ test.describe("Tree-sitter Project index behavior contract", function()
       test.equal(usage_count, #case.usages)
     end)
   end
-
-  test.test("prefers declarations when duplicate usage captures share a range", function()
-    local lines = { "target\n" }
-    local range = { start_line = 1, start_col = 1, end_line = 1, end_col = 7, start_byte = 0, end_byte = 6 }
-    local usages, count = records.usages_from_captures({
-      common.merge({ capture = "reference" }, range),
-      common.merge({ capture = "definition.function" }, range),
-    }, "duplicate.c", "duplicate.c", lines, { id = "c" })
-    test.equal(count, 1)
-    test.equal(#usages.target, 1)
-    test.equal(usages.target[1].capture, "definition.function")
-    test.equal(usages.target[1].is_declaration, true)
-  end)
-
-  test.test("bounds very long declaration and line previews", function()
-    local long_name = string.rep("n", 1200)
-    local source = "int " .. long_name .. "(void) { return 0; }\n"
-    local lines = records.lines_from_text(source)
-    local symbol = records.symbols_from_captures({
-      { capture = "outline.function", match_id = 1, start_line = 1, start_col = 1, end_line = 1, end_col = #source, start_byte = 0, end_byte = #source - 1 },
-      { capture = "name", match_id = 1, start_line = 1, start_col = 5, end_line = 1, end_col = 5 + #long_name, start_byte = 4, end_byte = 4 + #long_name },
-    }, lines)[1]
-    test.ok(#symbol.declaration <= 1024)
-    local usage = records.usage_from_capture("long.c", "long.c", lines, { id = "c" }, {
-      capture = "reference", start_line = 1, start_col = 5, end_line = 1,
-      end_col = 5 + #long_name, start_byte = 4, end_byte = 4 + #long_name,
-    })
-    test.ok(#usage.line_text <= 512)
-  end)
 end)

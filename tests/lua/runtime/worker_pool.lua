@@ -1,6 +1,5 @@
 local test = require "core.test"
 local worker_pool = require "core.worker_pool"
-local IndexScheduler = require "core.treesitter.index_scheduler"
 
 local function drain_until(pool, predicate, limit)
   limit = limit or 1000
@@ -262,80 +261,6 @@ test.describe("worker_pool", function()
     test.ok(stale > 0)
     test.equal(done, false)
     test.equal(pool:cancel(handle), false)
-  end)
-
-  test.test("Tree-sitter index scheduler caps running jobs and leaves a worker free", function()
-    local pool = new_pool("test-index-scheduler", 2)
-    local scheduler = IndexScheduler.new({ pool = pool, max_running = 1 })
-    local completed = 0
-    local max_running = 0
-    for i = 1, 5 do
-      scheduler:submit({
-        kind = "worker_pool_test",
-        payload = { op = "count_until_cancel", count = 30, sleep = 0.002 },
-        on_progress = function()
-          max_running = math.max(max_running, scheduler:running_count())
-        end,
-        on_complete = function()
-          completed = completed + 1
-        end,
-      })
-    end
-    test.ok(drain_until(pool, function() return scheduler:running_count() == 1 end))
-    test.equal(scheduler:queued_count(), 4)
-
-    local interactive_done = false
-    pool:submit({
-      kind = "worker_pool_test",
-      payload = { op = "echo", value = "interactive" },
-      on_complete = function() interactive_done = true end,
-    })
-    test.ok(drain_until(pool, function() return interactive_done end, 500))
-    test.ok(max_running <= 1)
-    scheduler:cancel_all()
-    test.ok(drain_until(pool, function() return scheduler:outstanding_count() == 0 or completed == 5 end))
-  end)
-
-  test.test("Tree-sitter index scheduler releases stale terminal jobs", function()
-    local pool = new_pool("test-index-scheduler-stale", 1)
-    local scheduler = IndexScheduler.new({ pool = pool, max_running = 1 })
-    local stale_count = 0
-    local stale_handle = scheduler:submit({
-      kind = "worker_pool_test",
-      payload = { op = "echo", value = "old" },
-      is_stale = function() return true end,
-      on_stale = function() stale_count = stale_count + 1 end,
-    })
-    local second_done = false
-    scheduler:submit({
-      kind = "worker_pool_test",
-      payload = { op = "echo", value = "new" },
-      on_complete = function() second_done = true end,
-    })
-    test.ok(drain_until(pool, function() return second_done end))
-    test.ok(stale_count > 0)
-    test.equal(stale_handle.state, "stale")
-    test.equal(scheduler:outstanding_count(), 0)
-  end)
-
-  test.test("Tree-sitter index scheduler cancels queued jobs cheaply", function()
-    local pool = new_pool("test-index-scheduler-cancel", 1)
-    local scheduler = IndexScheduler.new({ pool = pool, max_running = 1 })
-    scheduler:submit({ kind = "worker_pool_test", payload = { op = "count_until_cancel", count = 20, sleep = 0.002 } })
-    local queued_cancelled = 0
-    for _ = 1, 3 do
-      scheduler:submit({
-        kind = "worker_pool_test",
-        payload = { op = "echo", value = "queued" },
-        on_cancelled = function(message)
-          if message.payload and message.payload.before_start then queued_cancelled = queued_cancelled + 1 end
-        end,
-      })
-    end
-    test.equal(scheduler:queued_count(), 3)
-    scheduler:cancel_all()
-    test.equal(queued_cancelled, 3)
-    test.equal(scheduler:queued_count(), 0)
   end)
 
   test.test("pools can be created and destroyed repeatedly", function()

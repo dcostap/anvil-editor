@@ -278,87 +278,6 @@ local function run_cancellation_case()
   if remove_after then common.rm(root, true) end
 end
 
-local function measure_worker_cancellation(stage, spec, delay_seconds)
-  local pool = worker_pool.new({ name = "treesitter-project-benchmark-cancel-" .. stage, worker_count = 1 })
-  local terminal
-  spec.on_cancelled = function() terminal = "cancelled" end
-  spec.on_complete = function() terminal = terminal or "complete" end
-  spec.on_error = function() terminal = "failed" end
-  local handle = test.not_nil(pool:submit(spec))
-  coroutine.yield(delay_seconds or 0.01)
-  local started = system.get_time()
-  test.ok(pool:cancel(handle), stage .. " benchmark job completed before cancellation")
-  local deadline = system.get_time() + 15
-  repeat
-    pool:drain({ max_ms = 5, max_messages = 64 })
-    if terminal then break end
-    coroutine.yield(0.001)
-  until system.get_time() >= deadline
-  local status = pool:status(handle)
-  local result = {
-    latency_ms = terminal and (system.get_time() - started) * 1000 or nil,
-    terminal = terminal,
-    final_status = status and status.status,
-  }
-  test.equal(terminal, "cancelled", stage .. " cancellation did not reach a cancelled terminal state")
-  pool:shutdown({ cancel_running = true, timeout_ms = 1000 })
-  return result
-end
-
-local function run_parse_aggregation_and_query_cancellation_cases()
-  registry.reload()
-  local language = test.not_nil(registry.get("cancel-parse.c", ""))
-  local parse_root = USERDIR .. PATHSEP .. "treesitter-project-index-benchmark-cancel-parse"
-  common.rm(parse_root, true)
-  mkdir(parse_root)
-  local parse_path = parse_root .. PATHSEP .. "cancel-parse.c"
-  local parse_lines = {}
-  for i = 1, env_number("ANVIL_TS_BENCH_CANCEL_PARSE_SYMBOLS", 50000) do
-    parse_lines[i] = string.format("int cancel_parse_%06d(int value) { return value + %d; }\n", i, i)
-  end
-  write_file(parse_path, table.concat(parse_lines))
-  report.cancellation = report.cancellation or {}
-  report.cancellation.parsing = measure_worker_cancellation("parsing", {
-    kind = "treesitter_project_index",
-    payload = {
-      root = parse_root,
-      files = { { path = parse_path, root = parse_root, info = system.get_file_info(parse_path), language_id = language.id } },
-      languages = { language },
-      include_usages = true,
-      max_file_bytes = 32 * 1024 * 1024,
-    },
-  }, 0.02)
-  common.rm(parse_root, true)
-
-  local aggregate_files = {}
-  local query_symbols = {}
-  for i = 1, env_number("ANVIL_TS_BENCH_CANCEL_AGGREGATE_RECORDS", 50000) do
-    local symbol = {
-      name = string.format("CancellationSymbol%06d", i),
-      search_text = string.format("CancellationSymbol%06d", i),
-      path = string.format("cancel/%06d.c", i),
-      relpath = string.format("cancel/%06d.c", i),
-      start_line = 1,
-    }
-    aggregate_files[i] = {
-      path = symbol.path,
-      relpath = symbol.relpath,
-      symbols = { symbol },
-      usages_by_name = {},
-      usage_complete = true,
-    }
-    query_symbols[i] = symbol
-  end
-  report.cancellation.aggregation = measure_worker_cancellation("aggregation", {
-    kind = "treesitter_project_aggregate",
-    payload = { files = aggregate_files, chunk_records = 512 },
-  })
-  report.cancellation.query = measure_worker_cancellation("query", {
-    kind = "treesitter_symbol_query",
-    payload = { symbols = query_symbols, query = "symbol49999", limit = 200 },
-  })
-end
-
 test.describe("Tree-sitter Project index benchmark", function()
   test.test("records fixture, real, synthetic, query, and cancellation baselines", function()
     local small, small_remove = synthetic_project("small", 8, 4)
@@ -381,7 +300,6 @@ test.describe("Tree-sitter Project index benchmark", function()
     )
     run_case("large-mixed-synthetic", large, large_remove, env_number("ANVIL_TS_BENCH_LARGE_FILES", 1000))
     run_cancellation_case()
-    run_parse_aggregation_and_query_cancellation_cases()
 
     local report_path = os.getenv("ANVIL_TS_BENCH_REPORT")
     if report_path and report_path ~= "" then

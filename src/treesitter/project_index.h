@@ -52,6 +52,15 @@ bool anvil_ts_project_builder_adopt(
   char **error
 );
 bool anvil_ts_project_builder_remove(AnvilTSProjectBuilder *builder, const char *path);
+bool anvil_ts_project_builder_fingerprint_matches(AnvilTSProjectBuilder *builder, const char *path, const char *fingerprint);
+bool anvil_ts_project_builder_remove_scope_missing(
+  AnvilTSProjectBuilder *builder,
+  const char *const *scope_paths,
+  uint32_t scope_count,
+  const char *const *seen_paths,
+  uint32_t seen_count,
+  char **error
+);
 AnvilTSProjectSnapshot *anvil_ts_project_builder_snapshot(
   AnvilTSProjectBuilder *builder,
   const char *status,
@@ -65,8 +74,9 @@ void anvil_ts_project_snapshot_summary(const AnvilTSProjectSnapshot *snapshot, A
 bool anvil_ts_project_snapshot_file_at(const AnvilTSProjectSnapshot *snapshot, uint32_t index, AnvilTSProjectSnapshotFileView *view);
 bool anvil_ts_project_snapshot_symbol_at(const AnvilTSProjectSnapshot *snapshot, uint32_t index, AnvilTSProjectFileResult **file, uint32_t *file_symbol_index);
 bool anvil_ts_project_snapshot_usage_at(const AnvilTSProjectSnapshot *snapshot, uint32_t index, AnvilTSProjectFileResult **file, uint32_t *file_usage_index);
-/* Query filter arrays must be sorted bytewise ascending. Returned indices use
- * snapshot order and are owned by the caller. */
+/* Path filters are scope rules: the longest matching included/excluded path
+ * wins, with exclusion winning ties. Returned indices use snapshot order and
+ * are owned by the caller. */
 bool anvil_ts_project_snapshot_query_symbols(
   const AnvilTSProjectSnapshot *snapshot,
   const char *query,
@@ -76,6 +86,8 @@ bool anvil_ts_project_snapshot_query_symbols(
   uint32_t kind_count,
   const char *const *excluded_paths,
   uint32_t excluded_path_count,
+  const char *const *included_paths,
+  uint32_t included_path_count,
   uint32_t **indices,
   uint32_t *count,
   uint32_t *total,
@@ -90,6 +102,8 @@ bool anvil_ts_project_snapshot_query_usages(
   bool include_declarations,
   const char *const *excluded_paths,
   uint32_t excluded_path_count,
+  const char *const *included_paths,
+  uint32_t included_path_count,
   uint32_t **indices,
   uint32_t *count,
   uint32_t *total,
