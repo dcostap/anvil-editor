@@ -96,7 +96,13 @@ local function wait_for_scan(root, timeout)
   repeat
     status = symbol_index.status(root)
     local elapsed_ms = (system.get_time() - (status.started_at or system.get_time())) * 1000
-    if not first_symbols_ms and #(status.symbols or {}) > 0 then first_symbols_ms = elapsed_ms end
+    if not first_symbols_ms then
+      local partial = status.native_partial_snapshot
+      local partial_ok, partial_summary = pcall(function() return partial and partial:summary() end)
+      if #(status.symbols or {}) > 0 or (partial_ok and partial_summary and (partial_summary.symbols or 0) > 0) then
+        first_symbols_ms = elapsed_ms
+      end
+    end
     if not final_symbols_ms and status.symbol_status == "ready" then final_symbols_ms = elapsed_ms end
     if not final_usages_ms and status.usage_status == "ready" then final_usages_ms = elapsed_ms end
     peak_lua_kib = math.max(peak_lua_kib, collectgarbage("count"))
@@ -165,6 +171,7 @@ local function run_case(name, root, remove_after, expected_files)
       total = worker.total_ms,
       read = worker.file_read_ms,
       native = worker.native_total_ms,
+      native_batch = worker.native_batch_ms,
       parse = worker.parse_ms,
       native_project_records = worker.native_project_record_ms,
       outline_query = worker.outline_query_ms,
@@ -180,6 +187,8 @@ local function run_case(name, root, remove_after, expected_files)
       query_cache_misses = worker.query_cache_misses,
       parser_reuses = worker.parser_reuses,
       line_indexes_skipped = worker.line_indexes_skipped,
+      native_batch_jobs = worker.native_batch_jobs,
+      native_project_files_transferred = worker.native_project_files_transferred,
       native_project_symbol_records = worker.native_project_symbol_records,
       native_project_usage_records = worker.native_project_usage_records,
     },
@@ -218,7 +227,13 @@ local function run_cancellation_case()
     env_number("ANVIL_TS_BENCH_CANCEL_SYMBOLS_PER_FILE", 40)
   )
   symbol_index.reset_for_tests()
-  symbol_index.start_project_indexing({ root = root, reason = "benchmark-cancellation", refresh_after_seconds = 0 })
+  symbol_index.start_project_indexing({
+    root = root,
+    reason = "benchmark-cancellation",
+    refresh_after_seconds = 0,
+    batch_files = 1,
+    max_running_index_shards = 1,
+  })
   local progress_deadline = system.get_time() + 10
   local status
   repeat

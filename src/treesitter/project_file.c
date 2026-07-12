@@ -6,6 +6,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <SDL3/SDL.h>
+
 #define ANVIL_PROJECT_NO_OFFSET UINT32_MAX
 
 typedef struct Slice {
@@ -66,6 +68,7 @@ typedef struct UsageSlot {
 } UsageSlot;
 
 struct AnvilTSProjectFileResult {
+  SDL_AtomicInt refcount;
   char *path;
   char *relpath;
   char *language_id;
@@ -638,6 +641,7 @@ AnvilTSProjectFileResult *anvil_ts_project_file_build(
   }
   AnvilTSProjectFileResult *result = (AnvilTSProjectFileResult *)calloc(1, sizeof(*result));
   if (!result) { set_error(error, "out of memory allocating native Project file result"); return NULL; }
+  SDL_SetAtomicInt(&result->refcount, 1);
   result->path = project_strdup(path);
   result->relpath = project_strdup(relpath ? relpath : path);
   result->language_id = project_strdup(language_id);
@@ -650,8 +654,12 @@ AnvilTSProjectFileResult *anvil_ts_project_file_build(
   return result;
 }
 
+void anvil_ts_project_file_retain(AnvilTSProjectFileResult *result) {
+  if (result) SDL_AtomicIncRef(&result->refcount);
+}
+
 void anvil_ts_project_file_free(AnvilTSProjectFileResult *result) {
-  if (!result) return;
+  if (!result || !SDL_AtomicDecRef(&result->refcount)) return;
   for (uint32_t i = 0; i < result->symbol_count; i++) free(result->symbols[i].children);
   free(result->symbols);
   free(result->usages);

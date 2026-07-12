@@ -13,6 +13,8 @@ local ArtifactSession = require "core.treesitter.artifact_session"
 local artifact_codec = require "core.treesitter.artifact_codec"
 local fuzzy_ok, native_fuzzy = pcall(require, "fuzzy")
 if not fuzzy_ok then native_fuzzy = nil end
+local project_native_ok, project_native = pcall(require, "worker_pool_native")
+if not project_native_ok then project_native = nil end
 
 local symbol_index = {}
 
@@ -40,7 +42,6 @@ local DEFAULT_SYNC_QUERY_ITEM_LIMIT = 5000
 local DEFAULT_ASYNC_OVERLAY_SNAPSHOT_LIMIT = 1000
 local DEFAULT_INDEX_BATCH_FILES = 64
 local DEFAULT_INDEX_BATCH_BYTES = 4 * 1024 * 1024
-local DEFAULT_SHARD_USAGE_BUDGET = 8192
 local MAX_FILE_BYTES = 2 * 1024 * 1024
 
 local native_ok, native = nil, nil
@@ -1403,11 +1404,17 @@ local function cancel_index_work(index)
   if index.worker_run and index.worker_run.aggregate_artifacts then
     cleanup_worker_artifacts(index.worker_run.aggregate_artifacts)
   end
+  if index.worker_run and index.worker_run.native_builder then
+    pcall(index.worker_run.native_builder.close, index.worker_run.native_builder)
+    index.worker_run.native_builder = nil
+  end
   if index.worker_aggregate_artifacts then
     cleanup_worker_artifacts(index.worker_aggregate_artifacts)
     index.worker_aggregate_artifacts = nil
   end
   index.pending_aggregate = nil
+  index.native_partial_snapshot = nil
+  index.partial_symbols_cache = nil
   reset_adoption_queue(index)
   index.worker_base_aggregate = nil
   index.worker_run = nil
@@ -1592,18 +1599,126 @@ local function submit_worker_aggregate(index, run, message, on_done)
   return true
 end
 
+local function publish_native_snapshot(index, run, message)
+  local ok, snapshot_or_error = pcall(run.native_builder.freeze, run.native_builder)
+  if not ok or not snapshot_or_error then
+    pcall(run.native_builder.close, run.native_builder)
+    run.native_builder = nil
+    index.native_partial_snapshot = nil
+    index.partial_symbols_cache = nil
+    index.worker_run = nil
+    finish_worker_scan(index, { error = snapshot_or_error or "native-snapshot-freeze-failed", payload = {} }, "failed")
+    return
+  end
+  local snapshot = snapshot_or_error
+  pcall(run.native_builder.close, run.native_builder)
+  run.native_builder = nil
+  index.native_snapshot = snapshot
+  index.native_partial_snapshot = nil
+  index.partial_symbols_cache = nil
+  core.add_thread(function()
+    local files_by_path = {}
+    local by_path = {}
+    local file_offset = 1
+    while true do
+      if not current_run_message(index, run, message) then return end
+      local page = snapshot:files({ offset = file_offset, limit = 4096 })
+      for _, file in ipairs(page) do
+        local entry = {
+          path = file.path,
+          relpath = file.relpath,
+          fingerprint = file.fingerprint,
+          language_id = file.language_id,
+          symbols = {},
+          usages_by_name = {},
+          usage_count = 0,
+          usage_complete = file.usage_complete,
+        }
+        files_by_path[file.path] = entry
+        by_path[file.path] = entry
+        index.worker_seen_paths[file.path] = true
+      end
+      if file_offset + #page > page.total then break end
+      file_offset = page.next_offset
+      safe_yield(0)
+    end
+
+    local symbols = {}
+    local symbol_offset = 1
+    while true do
+      if not current_run_message(index, run, message) then return end
+      local page = snapshot:symbols({ offset = symbol_offset, limit = 4096 })
+      for _, symbol in ipairs(page) do
+        symbol.text = nil
+        symbol.file = nil
+        symbol.range = nil
+        symbol.search_text = nil
+        symbols[#symbols + 1] = symbol
+        local entry = files_by_path[symbol.path]
+        if entry then entry.symbols[#entry.symbols + 1] = symbol end
+      end
+      if symbol_offset + #page > page.total then break end
+      symbol_offset = page.next_offset
+      safe_yield(0)
+    end
+
+    local usages_by_name = {}
+    local usage_count = 0
+    local usage_offset = 1
+    while true do
+      if not current_run_message(index, run, message) then return end
+      local page = snapshot:usages({ offset = usage_offset, limit = 4096 })
+      for _, usage in ipairs(page) do
+        local usage_name = usage.name
+        usage.name = nil
+        usage.text = nil
+        usage.file = nil
+        usage.range = nil
+        local global_list = usages_by_name[usage_name]
+        if not global_list then global_list = {}; usages_by_name[usage_name] = global_list end
+        global_list[#global_list + 1] = usage
+        usage_count = usage_count + 1
+        local entry = files_by_path[usage.path]
+        if entry then
+          local file_list = entry.usages_by_name[usage_name]
+          if not file_list then file_list = {}; entry.usages_by_name[usage_name] = file_list end
+          file_list[#file_list + 1] = usage
+          entry.usage_count = entry.usage_count + 1
+        end
+      end
+      if usage_offset + #page > page.total then break end
+      usage_offset = page.next_offset
+      safe_yield(0)
+    end
+
+    if not current_run_message(index, run, message) then return end
+    local summary = snapshot:summary()
+    index.by_path = by_path
+    index.symbols = symbols
+    index.usages_by_name = usages_by_name
+    index.usage_count = usage_count
+    index.usage_truncated = summary.usage_truncated and true or false
+    index.usage_truncated_reason = index.usage_truncated and "project-usage-cap" or nil
+    index.aggregate_dirty = false
+    invalidate_combined_symbols_cache(index)
+    invalidate_index_query_artifacts(index)
+    index.worker_run = nil
+    finish_worker_scan(index, message, "ready")
+  end)
+end
+
 local function finish_sharded_phase(index, run, status, message)
   if not current_run_message(index, run, message) then return end
   run.terminal = true
-  if status == "ready" and run.aggregate_artifacts and #run.aggregate_artifacts > 0 then
-    local submitted = submit_worker_aggregate(index, run, message, function(ok, aggregate_message)
-      index.worker_run = nil
-      finish_worker_scan(index, aggregate_message or message, ok and "ready" or "failed")
-    end)
-    if submitted then return end
-    index.worker_run = nil
-    finish_worker_scan(index, message, "failed")
+  if status == "ready" and run.native_builder then
+    publish_native_snapshot(index, run, message)
   else
+    if run.native_builder then
+      pcall(run.native_builder.close, run.native_builder)
+      run.native_builder = nil
+    end
+    index.native_partial_snapshot = nil
+    index.partial_symbols_cache = nil
     index.worker_run = nil
     finish_worker_scan(index, message, status)
   end
@@ -1825,8 +1940,8 @@ local function make_index_payload(index, opts, phase)
     chunk_records = opts.chunk_records or DEFAULT_WORKER_CHUNK_RECORDS,
     chunk_bytes = opts.chunk_bytes or DEFAULT_WORKER_CHUNK_BYTES,
     max_usage_captures_per_file = opts.max_usage_captures_per_file or DEFAULT_MAX_CAPTURES,
-    artifact_chunks = opts.artifact_chunks ~= false,
-    artifact_dir = opts.artifact_dir or default_index_artifact_dir(),
+    artifact_chunks = false,
+    artifact_dir = opts.artifact_dir,
   }
 end
 
@@ -1834,6 +1949,25 @@ local function submit_sharded_scan(index, generation, opts, phase)
   opts = opts or {}
   phase = phase or "combined"
   cancel_index_work(index)
+  if not project_native then
+    index.status = "failed"
+    index.symbol_status = "failed"
+    index.usage_status = "failed"
+    index.reason = "native-project-builder-unavailable"
+    return false, index.reason
+  end
+  local builder_ok, native_builder = pcall(project_native.new_project_builder, {
+    usage_cap = index.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP,
+    base_snapshot = opts.base_snapshot,
+  })
+  if not builder_ok or not native_builder then
+    index.status = "failed"
+    index.symbol_status = "failed"
+    index.usage_status = "failed"
+    index.reason = tostring(native_builder or "native-project-builder-create-failed")
+    return false, index.reason
+  end
+  for _, path in ipairs(opts.remove_paths or {}) do native_builder:remove(path) end
   index.status = "indexing"
   if phase ~= "usages" then
     index.symbol_status = "indexing"
@@ -1880,12 +2014,16 @@ local function submit_sharded_scan(index, generation, opts, phase)
     shard_budgets = {},
     usage_budget_remaining = index.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP,
     usage_truncated = false,
-    aggregate_artifacts = {},
+    native_builder = native_builder,
+    native_builder_id = native_builder:id(),
   }
   index.worker_run = run
   index.worker_handle = nil
 
   local base_payload = make_index_payload(index, opts, phase)
+  base_payload.artifact_chunks = false
+  base_payload.artifact_dir = nil
+  base_payload.native_project_builder_id = run.native_builder_id
   local pump_shards
   local function defer_pump(message)
     core.add_thread(function()
@@ -1904,27 +2042,53 @@ local function submit_sharded_scan(index, generation, opts, phase)
     local include_usages = phase ~= "symbols"
     local shard_budget = 0
     if include_usages then
-      local default_shard_budget = math.max(DEFAULT_SHARD_USAGE_BUDGET, (tonumber(opts.batch_files or DEFAULT_INDEX_BATCH_FILES) or DEFAULT_INDEX_BATCH_FILES) * 256)
-      local per_shard_cap = tonumber(opts.shard_usage_budget or default_shard_budget) or default_shard_budget
-      shard_budget = math.max(0, math.min(run.usage_budget_remaining or 0, per_shard_cap))
-      run.usage_budget_remaining = math.max(0, (run.usage_budget_remaining or 0) - shard_budget)
+      local reservation_count = math.max(1, run.usage_reservation_batch_count or 1)
+      local project_cap = index.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP
+      local base = math.floor(project_cap / reservation_count)
+      local remainder = project_cap % reservation_count
+      shard_budget = base + (shard_id <= remainder and 1 or 0)
       run.shard_budgets[shard_id] = shard_budget
     end
-    local payload = common.merge(base_payload, {
-      root = batch.root or index.root,
-      files = batch.files or {},
-      include_usages = include_usages,
-      project_usage_cap = include_usages and shard_budget or 0,
-      shard_id = shard_id,
-    })
+    local native_files = {}
+    for _, file in ipairs(batch.files or {}) do
+      local language = registry.get(file.path)
+      local info = file.info or system.get_file_info(file.path)
+      if language and language.query_sources and language.query_sources.outline
+      and (not info or not info.size or info.size <= MAX_FILE_BYTES) then
+        local sources = language.query_sources
+        local usage_kind = include_usages and usage_query_kind(language) or nil
+        native_files[#native_files + 1] = {
+          path = file.path,
+          relpath = common.relative_path(index.root, file.path):gsub("\\", "/"),
+          fingerprint = file_fingerprint(file.path, info, language),
+          language = language.grammar,
+          outline_query = sources.outline,
+          usage_query = usage_kind and sources[usage_kind] or nil,
+          parse_timeout_ms = language.parse_timeout_ms or DEFAULT_PARSE_TIMEOUT_MS,
+          query_timeout_ms = effective_query_limit(language, "outline", "query_timeout_ms", DEFAULT_QUERY_TIMEOUT_MS),
+          match_limit = effective_query_limit(language, "outline", "match_limit", DEFAULT_MATCH_LIMIT),
+          max_captures = effective_query_limit(language, "outline", "max_captures", DEFAULT_MAX_CAPTURES),
+          usage_query_timeout_ms = effective_query_limit(language, "usages", "query_timeout_ms", DEFAULT_QUERY_TIMEOUT_MS),
+          usage_match_limit = effective_query_limit(language, "usages", "match_limit", DEFAULT_MATCH_LIMIT),
+          usage_max_captures = effective_query_limit(language, "usages", "max_captures", DEFAULT_MAX_CAPTURES),
+          max_file_bytes = MAX_FILE_BYTES,
+        }
+      end
+    end
     local handle
     handle = scheduler:submit({
-      kind = "treesitter_project_index",
+      kind = "treesitter_project_batch",
+      native = true,
+      native_kind = "treesitter_project_batch",
       priority = "background",
       generation = generation,
       project_paths_generation = index.project_paths_generation,
       phase = phase,
-      payload = payload,
+      native_payload = {
+        project_builder_id = run.native_builder_id,
+        project_usage_cap = include_usages and shard_budget or 0,
+        files = native_files,
+      },
       is_stale = function(message)
         return not current_run_message(index, run, message)
       end,
@@ -1937,30 +2101,26 @@ local function submit_sharded_scan(index, generation, opts, phase)
         core.redraw = true
       end,
       on_result = function(message)
-        if not current_run_message(index, run, message) then return end
-        if message.type == "chunk" then
-          local artifact = message.payload and message.payload.artifact
-          if artifact and artifact.path then run.aggregate_artifacts[#run.aggregate_artifacts + 1] = artifact end
-          apply_worker_chunk(index, message)
-        elseif message.type == "final" then
-          local p = message.payload or {}
-          run.accepted_files_indexed = (run.accepted_files_indexed or 0) + (p.files_indexed or 0)
-          run.accepted_files_scanned = (run.accepted_files_scanned or 0) + (p.files_scanned or 0)
-          index.files_indexed = run.accepted_files_indexed
-          index.files_total = run.accepted_files_indexed
-          if phase ~= "symbols" then
-            local reserved = run.shard_budgets[shard_id] or 0
-            local used = math.max(0, tonumber(p.usage_budget_used or p.usage_count or 0) or 0)
-            if used < reserved then
-              run.usage_budget_remaining = (run.usage_budget_remaining or 0) + (reserved - used)
-              run.shard_budgets[shard_id] = used
-            end
-            run.usage_truncated = run.usage_truncated or (p.usage_truncated and true or false)
-            index.usage_truncated = run.usage_truncated
-            index.usage_truncated_reason = run.usage_truncated and "project-usage-cap" or nil
-          end
-          add_worker_diagnostics(index, phase, p.diagnostics, "sharded")
-        end
+        if not current_run_message(index, run, message) or message.type ~= "result" then return end
+        local p = message.payload or {}
+        run.shard_results = run.shard_results or {}
+        run.shard_results[shard_id] = p
+        run.accepted_files_indexed = (run.accepted_files_indexed or 0) + (p.files_completed or 0)
+        run.accepted_files_scanned = (run.accepted_files_scanned or 0) + (p.files_completed or 0) + (p.files_skipped or 0)
+        index.files_indexed = run.accepted_files_indexed
+        index.files_total = run.accepted_files_indexed
+        add_worker_diagnostics(index, phase, {
+          files_indexed = p.files_completed or 0,
+          files_skipped = p.files_skipped or 0,
+          parse_calls = p.files_completed or 0,
+          symbols_emitted = p.symbols_found or 0,
+          usages_emitted = p.usages_found or 0,
+          native_batch_jobs = 1,
+          native_batch_ms = p.batch_total_ms or 0,
+          parse_ms = p.batch_parse_ms or 0,
+          native_project_record_ms = p.batch_project_record_ms or 0,
+          native_project_files_transferred = p.files_completed or 0,
+        }, "sharded")
       end,
       on_error = function(message)
         if not current_run_message(index, run, message) then return end
@@ -1982,6 +2142,16 @@ local function submit_sharded_scan(index, generation, opts, phase)
       on_complete = function(message)
         if not current_run_message(index, run, message) then return end
         run.completed_shards = run.completed_shards + 1
+        if (run.partial_publishes or 0) < 3
+        and (run.completed_shards == 1 or system.get_time() - (run.last_partial_publish or 0) >= 1.0) then
+          local partial_ok, partial = pcall(run.native_builder.snapshot, run.native_builder, { status = "partial" })
+          if partial_ok and partial then
+            index.native_partial_snapshot = partial
+            index.partial_symbols_cache = nil
+            run.last_partial_publish = system.get_time()
+            run.partial_publishes = (run.partial_publishes or 0) + 1
+          end
+        end
         defer_pump(message)
         maybe_finish_sharded_phase(index, run, message)
       end,
@@ -1998,7 +2168,24 @@ local function submit_sharded_scan(index, generation, opts, phase)
     end
   end
 
-  scheduler:submit({
+  if opts.files then
+    local direct_message = {
+      type = "complete",
+      generation = generation,
+      project_paths_generation = index.project_paths_generation,
+      phase = phase,
+      payload = {},
+    }
+    run.coordinator_done = true
+    run.usage_reservation_batch_count = #opts.files > 0 and 1 or 0
+    run.coordinator_files_scanned = #opts.files
+    index.files_scanned = #opts.files
+    add_worker_diagnostics(index, phase, { files_scanned = #opts.files, direct_batches = 1 }, "coordinator")
+    if #opts.files > 0 then run.pending_batches[#run.pending_batches + 1] = { root = index.root, files = opts.files } end
+    pump_shards()
+    maybe_finish_sharded_phase(index, run, direct_message)
+  else
+    scheduler:submit({
     kind = "treesitter_project_index",
     priority = "background",
     generation = generation,
@@ -2009,6 +2196,7 @@ local function submit_sharded_scan(index, generation, opts, phase)
       batch_files = opts.batch_files or DEFAULT_INDEX_BATCH_FILES,
       batch_bytes = opts.batch_bytes or DEFAULT_INDEX_BATCH_BYTES,
       include_usages = false,
+      roots = { { path = opts.scan_root or index.root, root_path = index.root } },
     }),
     is_stale = function(message)
       return not current_run_message(index, run, message)
@@ -2026,7 +2214,6 @@ local function submit_sharded_scan(index, generation, opts, phase)
       if message.type == "chunk" then
         local p = message.payload or {}
         for _, batch in ipairs(p.batches or {}) do run.pending_batches[#run.pending_batches + 1] = batch end
-        pump_shards()
       elseif message.type == "final" then
         local p = message.payload or {}
         run.coordinator_files_scanned = p.files_scanned or run.coordinator_files_scanned or 0
@@ -2050,13 +2237,16 @@ local function submit_sharded_scan(index, generation, opts, phase)
     on_complete = function(message)
       if not current_run_message(index, run, message) then return end
       run.coordinator_done = true
+      run.usage_reservation_batch_count = #run.pending_batches
       defer_pump(message)
       maybe_finish_sharded_phase(index, run, message)
     end,
   })
+  end
 
   log_quiet("Tree-sitter Project index: submitted sharded worker phase=%s generation=%d project_paths_generation=%d root=%s max_running=%d",
     tostring(phase), generation, index.project_paths_generation, tostring(index.root), scheduler.max_running or 0)
+  return true, "scheduled"
 end
 
 submit_worker_scan = function(index, generation, opts, phase)
@@ -2108,7 +2298,6 @@ local function scan_options_from_query(opts)
     batch_files = opts.batch_files,
     batch_bytes = opts.batch_bytes,
     max_running_index_shards = opts.max_running_index_shards,
-    shard_usage_budget = opts.shard_usage_budget,
     chunk_files = opts.chunk_files,
     chunk_records = opts.chunk_records,
     chunk_bytes = opts.chunk_bytes,
@@ -2194,8 +2383,35 @@ overlay_entry_current = function(entry)
   return ts and ts.status == "ready" and entry.change_id == change_id
 end
 
-local function combined_symbols(index, kind)
+local function partial_snapshot_symbols(index, max_items)
+  local snapshot = index.native_partial_snapshot
+  if not snapshot or index.symbol_status == "ready" then return index.symbols or {}, #(index.symbols or {}) end
+  local ok, summary = pcall(snapshot.summary, snapshot)
+  local count = ok and summary and (summary.symbols or 0) or 0
+  if max_items and count > max_items then return nil, count end
+  local cache = index.partial_symbols_cache
+  if cache and cache.snapshot == snapshot then return cache.symbols, #cache.symbols end
+  local symbols, offset = {}, 1
+  while offset <= count do
+    local page_ok, page = pcall(snapshot.symbols, snapshot, { offset = offset, limit = 4096 })
+    if not page_ok then return nil, count end
+    for _, symbol in ipairs(page) do
+      symbol.text = nil
+      symbol.file = nil
+      symbol.range = nil
+      symbol.search_text = nil
+      symbols[#symbols + 1] = symbol
+    end
+    if #page == 0 or offset + #page > (page.total or count) then break end
+    offset = page.next_offset
+  end
+  index.partial_symbols_cache = { snapshot = snapshot, symbols = symbols }
+  return symbols, #symbols
+end
+
+local function combined_symbols(index, kind, disk_symbols)
   kind = kind or "symbols"
+  disk_symbols = disk_symbols or index.symbols or {}
   if refresh_open_document_overlays then refresh_open_document_overlays(index) end
   index.combined_symbols_cache = index.combined_symbols_cache or {}
   local project_paths_generation = project_paths_module().generation()
@@ -2206,7 +2422,7 @@ local function combined_symbols(index, kind)
   and cache.project_paths_generation == project_paths_generation
   and cache.overlay_generation == (index.overlay_generation or 0)
   and cache.overlay_paths_signature == paths_signature
-  and cache.symbols_table == index.symbols then
+  and cache.symbols_table == disk_symbols then
     inc_ui_metric(index, "combined_symbols_cache_hits", 1)
     return cache.symbols
   end
@@ -2214,7 +2430,7 @@ local function combined_symbols(index, kind)
   inc_ui_metric(index, "combined_symbols_cache_misses", 1)
   local overlay = index.open_docs or {}
   local out = {}
-  for _, symbol in ipairs(index.symbols or {}) do
+  for _, symbol in ipairs(disk_symbols) do
     if not paths[symbol.path] and project_path_allows(symbol.path, kind) then
       out[#out + 1] = refresh_project_path_metadata(index, copy_item(symbol), kind)
     end
@@ -2234,7 +2450,7 @@ local function combined_symbols(index, kind)
     project_paths_generation = project_paths_generation,
     overlay_generation = index.overlay_generation or 0,
     overlay_paths_signature = paths_signature,
-    symbols_table = index.symbols,
+    symbols_table = disk_symbols,
     symbols = out,
   }
   return out
@@ -2338,6 +2554,8 @@ function symbol_index.workspace_symbols(query, opts)
 
   for _, root in ipairs(roots) do
     local index = symbol_index.ensure_scan(root, scan_options_from_query(opts))
+    local disk_symbols, disk_symbol_count = partial_snapshot_symbols(index,
+      query_text ~= "" and not opts.allow_large_sync_query and sync_limit or nil)
     local root_status = "pending"
     if index.symbol_status == "ready" then
       refresh_current_core_docs_for_index(index)
@@ -2345,19 +2563,19 @@ function symbol_index.workspace_symbols(query, opts)
         reason = reason or "overlay-indexing"
       elseif index.aggregate_dirty then
         reason = reason or "aggregate-dirty"
-      elseif query_text ~= "" and #(index.symbols or {}) > sync_limit and not opts.allow_large_sync_query then
+      elseif query_text ~= "" and disk_symbol_count > sync_limit and not opts.allow_large_sync_query then
         reason = reason or "query-too-large"
       else
         local suppressed = overlay_paths(index)
         local kind = opts.kind or "symbols"
         local source
         if kind == "symbols" and next(suppressed) == nil then
-          source = index.symbols or {}
+          source = disk_symbols or {}
         else
-          if query_text ~= "" and #(index.symbols or {}) > sync_limit and not opts.allow_large_sync_query then
+          if query_text ~= "" and disk_symbol_count > sync_limit and not opts.allow_large_sync_query then
             reason = reason or "query-too-large"
           else
-            source = combined_symbols(index, kind)
+            source = combined_symbols(index, kind, disk_symbols)
           end
         end
         if source then
@@ -2370,13 +2588,13 @@ function symbol_index.workspace_symbols(query, opts)
           any_usable = true
         end
       end
-    elseif (#(index.symbols or {}) > 0 or next(index.open_docs or {}) ~= nil) and opts.allow_stale then
+    elseif (disk_symbol_count > 0 or next(index.open_docs or {}) ~= nil) and opts.allow_stale then
       if index.aggregate_dirty then
         reason = reason or "aggregate-dirty"
-      elseif query_text ~= "" and #(index.symbols or {}) > sync_limit and not opts.allow_large_sync_query then
+      elseif query_text ~= "" and disk_symbol_count > sync_limit and not opts.allow_large_sync_query then
         reason = reason or "query-too-large"
       else
-        local source = combined_symbols(index, opts.kind or "symbols")
+        local source = combined_symbols(index, opts.kind or "symbols", disk_symbols)
         if single_root and #all_symbols == 0 then
           all_symbols = source
         else
@@ -3544,6 +3762,22 @@ local function submit_targeted_file_reindex(index, path, opts)
   if not common.path_belongs_to(path, index.root) then return false, "outside-project" end
 
   local info = system.get_file_info(path)
+  if index.native_snapshot then
+    local language = info and info.type == "file" and registry.get(path) or nil
+    local files = {}
+    if language and language.query_sources and language.query_sources.outline then
+      files[1] = { path = path, root = index.root, info = serializable_file_info(info), language_id = language.id }
+    end
+    index.generation = (index.generation or 0) + 1
+    local scheduled, reason = submit_sharded_scan(index, index.generation, {
+      reason = opts.reason or "file-dirty",
+      base_snapshot = index.native_snapshot,
+      remove_paths = { path },
+      files = files,
+      max_running_index_shards = 1,
+    }, "targeted")
+    return scheduled and true or false, reason
+  end
   if not info or info.type ~= "file" then
     local changed = false
     if index.by_path[path] then
@@ -3715,6 +3949,25 @@ local function submit_targeted_directory_reindex(index, dir, opts)
   end
 
   local info = system.get_file_info(dir)
+  if index.native_snapshot then
+    local remove_paths = {}
+    for path in pairs(index.by_path or {}) do
+      if common.path_equals(path, dir) or common.path_belongs_to(path, dir) then remove_paths[#remove_paths + 1] = path end
+    end
+    table.sort(remove_paths)
+    index.generation = (index.generation or 0) + 1
+    local scheduled, reason = submit_sharded_scan(index, index.generation, {
+      reason = opts.reason or "directory-dirty",
+      base_snapshot = index.native_snapshot,
+      remove_paths = remove_paths,
+      scan_root = info and info.type == "dir" and dir or index.root,
+      files = (not info or info.type ~= "dir") and {} or nil,
+      batch_files = opts.batch_files,
+      batch_bytes = opts.batch_bytes,
+      max_running_index_shards = opts.max_running_index_shards,
+    }, "targeted-directory")
+    return scheduled and true or false, reason
+  end
   if not info or info.type ~= "dir" then
     prune_missing_watches(index, dir)
     local changed = false

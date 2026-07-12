@@ -21,6 +21,25 @@ typedef enum AnvilWorkerTreeSitterResultCapability {
   ANVIL_WORKER_TS_COMPACT_PROJECT_RECORDS = 1u << 2,
 } AnvilWorkerTreeSitterResultCapability;
 
+typedef struct AnvilWorkerProjectBatchFileSpec {
+  const char *path;
+  const char *relpath;
+  const char *fingerprint;
+  const char *language;
+  const char *outline_query;
+  size_t outline_query_len;
+  const char *usage_query;
+  size_t usage_query_len;
+  uint32_t parse_timeout_ms;
+  uint32_t query_timeout_ms;
+  uint32_t match_limit;
+  uint32_t max_captures;
+  uint32_t usage_query_timeout_ms;
+  uint32_t usage_match_limit;
+  uint32_t usage_max_captures;
+  uint32_t max_file_bytes;
+} AnvilWorkerProjectBatchFileSpec;
+
 typedef struct AnvilWorkerJobSpec {
   const char *kind;
   const char *value;
@@ -44,9 +63,14 @@ typedef struct AnvilWorkerJobSpec {
   uint32_t usage_query_timeout_ms;
   uint32_t usage_match_limit;
   uint32_t usage_max_captures;
+  uint32_t max_file_bytes;
   uint32_t result_capabilities;
   bool result_capabilities_set;
   AnvilWorkerTreeSitterIndexResult *previous_result;
+  const AnvilWorkerProjectBatchFileSpec *project_files;
+  uint32_t project_file_count;
+  uint64_t project_builder_id;
+  uint32_t project_usage_cap;
 } AnvilWorkerJobSpec;
 
 AnvilWorkerPool *anvil_worker_pool_create(const char *name, int worker_count);
@@ -72,6 +96,13 @@ const char *anvil_worker_result_value(const AnvilWorkerResult *result);
 const char *anvil_worker_result_error(const AnvilWorkerResult *result);
 int anvil_worker_result_index(const AnvilWorkerResult *result);
 bool anvil_worker_result_cancelled(const AnvilWorkerResult *result);
+uint32_t anvil_worker_result_files_completed(const AnvilWorkerResult *result);
+uint32_t anvil_worker_result_files_skipped(const AnvilWorkerResult *result);
+uint32_t anvil_worker_result_symbols_found(const AnvilWorkerResult *result);
+uint32_t anvil_worker_result_usages_found(const AnvilWorkerResult *result);
+double anvil_worker_result_batch_total_ms(const AnvilWorkerResult *result);
+double anvil_worker_result_batch_parse_ms(const AnvilWorkerResult *result);
+double anvil_worker_result_batch_project_record_ms(const AnvilWorkerResult *result);
 AnvilWorkerTreeSitterIndexResult *anvil_worker_result_steal_treesitter_index_result(AnvilWorkerResult *result);
 
 void anvil_worker_treesitter_index_result_retain(AnvilWorkerTreeSitterIndexResult *result);
@@ -106,6 +137,7 @@ bool anvil_worker_treesitter_index_result_parser_reused(const AnvilWorkerTreeSit
 uint32_t anvil_worker_treesitter_index_result_capabilities(const AnvilWorkerTreeSitterIndexResult *result);
 uint32_t anvil_worker_treesitter_index_result_project_symbol_count(const AnvilWorkerTreeSitterIndexResult *result);
 uint32_t anvil_worker_treesitter_index_result_project_usage_count(const AnvilWorkerTreeSitterIndexResult *result);
+AnvilTSProjectFileResult *anvil_worker_treesitter_index_result_take_project_file(AnvilWorkerTreeSitterIndexResult *result);
 const char *anvil_worker_treesitter_index_result_project_path(const AnvilWorkerTreeSitterIndexResult *result);
 const char *anvil_worker_treesitter_index_result_project_relpath(const AnvilWorkerTreeSitterIndexResult *result);
 bool anvil_worker_treesitter_index_result_project_symbol_at(const AnvilWorkerTreeSitterIndexResult *result, uint32_t index, AnvilTSProjectSymbolView *view);

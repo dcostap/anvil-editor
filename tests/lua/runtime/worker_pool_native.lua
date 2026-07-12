@@ -290,6 +290,181 @@ test.describe("worker_pool_native", function()
     test.ok(#usages[1].line_text <= 512)
   end)
 
+  test.test("native Project builders publish immutable deterministic snapshots", function()
+    local pool = new_pool("lua-native-project-builder", 2)
+    local builder = native_pool.new_project_builder({ usage_cap = 2 })
+    local function extract(path, source)
+      return submit_result(pool, {
+        kind = "treesitter_index_text",
+        language = "c",
+        path = path,
+        relpath = path,
+        text = source,
+        outline_query = [[
+          (function_definition
+            declarator: (function_declarator
+              declarator: (identifier) @name
+              parameters: (parameter_list) @signature.params)) @outline.function
+        ]],
+        usage_query = [[(identifier) @reference]],
+        capture_paging = false,
+        line_range_lookup = false,
+        compact_project_records = true,
+        parse_timeout_ms = 1000,
+        query_timeout_ms = 100,
+        usage_query_timeout_ms = 100,
+        max_captures = 100,
+        usage_max_captures = 100,
+      })
+    end
+
+    local later = extract("z.c", "int zed(void) { return zed(); }\n")
+    local earlier = extract("a.c", "int alpha(void) { return alpha(); }\n")
+    test.ok(later:adopt_project(builder:id(), { fingerprint = "z-1", usage_complete = true }))
+    test.ok(earlier:adopt_project(builder:id(), { fingerprint = "a-1", usage_complete = true }))
+
+    local partial = builder:snapshot({ status = "partial" })
+    local partial_summary = partial:summary()
+    test.equal(partial_summary.status, "partial")
+    test.equal(partial_summary.files, 2)
+    test.equal(partial_summary.symbols, 2)
+    test.equal(partial_summary.usages, 2)
+    test.equal(partial_summary.usage_names, 1)
+    test.equal(partial_summary.usage_truncated, true)
+    local symbols = partial:symbols({ offset = 1, limit = 10 })
+    test.equal(symbols[1].relpath, "a.c")
+    test.equal(symbols[2].relpath, "z.c")
+    local usages = partial:usages({ offset = 1, limit = 10 })
+    test.equal(#usages, 2)
+    test.equal(usages.total, 2)
+    test.equal(usages[1].relpath, "a.c")
+    test.equal(usages[2].relpath, "a.c")
+
+    local replacement = extract("a.c", "int beta(void) { return beta(); }\n")
+    test.ok(replacement:adopt_project(builder:id(), { fingerprint = "a-2", usage_complete = true }))
+    local removed = extract("q.c", "int removed(void) { return removed(); }\n")
+    test.ok(removed:adopt_project(builder:id(), { fingerprint = "q-1", usage_complete = true }))
+    test.equal(builder:remove("q.c"), true)
+    test.equal(builder:remove("q.c"), false)
+    local ready = builder:freeze()
+    test.equal(ready:summary().status, "ready")
+    local ready_symbols = ready:symbols({ offset = 1, limit = 10 })
+    test.equal(#ready_symbols, 2)
+    test.equal(ready_symbols[1].name, "beta")
+    test.equal(ready_symbols[2].name, "zed")
+    local files = ready:files({ offset = 1, limit = 10 })
+    test.equal(files[1].relpath, "a.c")
+    test.equal(files[1].fingerprint, "a-2")
+    test.error(function() extract("q.c", "int q(void) { return 0; }\n"):adopt_project(builder:id()) end)
+    builder:close()
+    test.equal(ready:symbols({ limit = 10 })[1].name, "beta")
+    pool:shutdown({ cancel_running = true })
+  end)
+
+  test.test("native Project batch jobs transfer bounded file sets without record messages", function()
+    local path1 = USERDIR .. PATHSEP .. "native-project-batch-a.c"
+    local path2 = USERDIR .. PATHSEP .. "native-project-batch-b.c"
+    local path3 = USERDIR .. PATHSEP .. "native-project-batch-usage-failed.c"
+    local path4 = USERDIR .. PATHSEP .. "native-project-batch-outline-failed.c"
+    for path, source in pairs({
+      [path1] = "int batch_a(void) { return batch_a(); }\n",
+      [path2] = "int batch_b(void) { return batch_b(); }\n",
+      [path3] = "int batch_usage_failed(void) { return 0; }\n",
+      [path4] = "int batch_outline_failed(void) { return 0; }\n",
+    }) do
+      local fp = test.not_nil(io.open(path, "wb"))
+      fp:write(source)
+      fp:close()
+    end
+    local pool = new_pool("lua-native-project-batch", 2)
+    local builder = native_pool.new_project_builder({ usage_cap = 100 })
+    local outline_query = [[
+      (function_definition
+        declarator: (function_declarator
+          declarator: (identifier) @name
+          parameters: (parameter_list) @signature.params)) @outline.function
+    ]]
+    local usage_query = [[(identifier) @reference]]
+    local handle = test.not_nil(pool:submit({
+      kind = "treesitter_project_batch",
+      project_builder_id = builder:id(),
+      files = {
+        { path = path2, relpath = "b.c", fingerprint = "b-1", language = "c",
+          outline_query = outline_query, usage_query = usage_query, parse_timeout_ms = 1000,
+          query_timeout_ms = 100, usage_query_timeout_ms = 100, max_captures = 100, usage_max_captures = 100 },
+        { path = path1, relpath = "a.c", fingerprint = "a-1", language = "c",
+          outline_query = outline_query, usage_query = usage_query, parse_timeout_ms = 1000,
+          query_timeout_ms = 100, usage_query_timeout_ms = 100, max_captures = 100 },
+        { path = path3, relpath = "usage-failed.c", fingerprint = "failed-1", language = "c",
+          outline_query = outline_query, usage_query = "(not_a_c_node) @reference", parse_timeout_ms = 1000,
+          query_timeout_ms = 100, usage_query_timeout_ms = 100, max_captures = 100, usage_max_captures = 100 },
+        { path = path4, relpath = "outline-failed.c", fingerprint = "outline-failed-1", language = "c",
+          outline_query = "(not_a_c_node) @outline.function", usage_query = usage_query, parse_timeout_ms = 1000,
+          query_timeout_ms = 100, usage_query_timeout_ms = 100, max_captures = 100, usage_max_captures = 100 },
+        { path = path1 .. ".gone", relpath = "gone.c", fingerprint = "gone", language = "c",
+          outline_query = outline_query, usage_query = usage_query, parse_timeout_ms = 1000,
+          query_timeout_ms = 100, usage_query_timeout_ms = 100, max_captures = 100, usage_max_captures = 100 },
+      },
+    }))
+    local batch_payload, saw_record_handle
+    test.ok(drain_until(pool, function(message)
+      if message.type == "result" then
+        batch_payload = message.payload
+        saw_record_handle = message.result ~= nil
+      end
+      return message.type == "final" and message.job_id == handle:status().id
+    end))
+    test.equal(saw_record_handle, false)
+    test.equal(batch_payload.files_completed, 3)
+    test.equal(batch_payload.files_skipped, 2)
+    local snapshot = builder:freeze()
+    test.same({ "a.c", "b.c", "usage-failed.c" }, (function()
+      local out = {}
+      for _, file in ipairs(snapshot:files({ limit = 10 })) do out[#out + 1] = file.relpath end
+      return out
+    end)())
+    test.equal(snapshot:summary().symbols, 3)
+    test.equal(snapshot:summary().usages, 4)
+    test.equal(snapshot:summary().usage_complete, false)
+    os.remove(path1)
+    os.remove(path2)
+    os.remove(path3)
+    os.remove(path4)
+  end)
+
+  test.test("cancelling a native Project batch publishes no partial ownership", function()
+    local path = USERDIR .. PATHSEP .. "native-project-batch-cancel.c"
+    local fp = test.not_nil(io.open(path, "wb"))
+    fp:write(string.rep("int cancellable_value = 1;\n", 50000))
+    fp:close()
+    local files = {}
+    for i = 1, 20 do
+      files[i] = {
+        path = path, relpath = string.format("cancel-%02d.c", i), fingerprint = tostring(i), language = "c",
+        outline_query = "(declaration) @outline.variable", usage_query = "(identifier) @reference",
+        parse_timeout_ms = 5000, query_timeout_ms = 1000, usage_query_timeout_ms = 1000,
+        max_captures = 100000, usage_max_captures = 100000,
+      }
+    end
+    local pool = new_pool("lua-native-project-batch-cancel", 1)
+    local builder = native_pool.new_project_builder({ usage_cap = 100 })
+    local handle = test.not_nil(pool:submit({
+      kind = "treesitter_project_batch",
+      project_builder_id = builder:id(),
+      files = files,
+    }))
+    for _ = 1, 100 do
+      if pool:status(handle).status == "running" then break end
+      coroutine.yield(0.001)
+    end
+    test.ok(pool:cancel(handle))
+    test.ok(drain_until(pool, function(message) return message.type == "cancelled" end, 5000))
+    local partial = builder:snapshot({ status = "cancelled" })
+    test.equal(partial:summary().files, 0)
+    builder:close()
+    os.remove(path)
+  end)
+
   test.test("Markdown block reuse requires an identical complete structural query", function()
     local pool = new_pool("lua-native-markdown-query-reuse", 1)
     local spec = {

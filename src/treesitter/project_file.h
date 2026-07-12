@@ -77,6 +77,7 @@ AnvilTSProjectFileResult *anvil_ts_project_file_build(
   uint32_t usage_count,
   char **error
 );
+void anvil_ts_project_file_retain(AnvilTSProjectFileResult *result);
 void anvil_ts_project_file_free(AnvilTSProjectFileResult *result);
 const char *anvil_ts_project_file_path(const AnvilTSProjectFileResult *result);
 const char *anvil_ts_project_file_relpath(const AnvilTSProjectFileResult *result);

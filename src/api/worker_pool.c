@@ -1,5 +1,6 @@
 #include "api.h"
 #include "../worker_pool.h"
+#include "../treesitter/project_index.h"
 
 #include <SDL3/SDL.h>
 
@@ -12,6 +13,8 @@
 #define API_TYPE_WORKER_JOB "NativeWorkerJob"
 #define API_TYPE_WORKER_CANCEL_TOKEN "NativeWorkerCancelToken"
 #define API_TYPE_TREESITTER_INDEX_RESULT "NativeTreeSitterIndexResult"
+#define API_TYPE_PROJECT_BUILDER "NativeTreeSitterProjectBuilder"
+#define API_TYPE_PROJECT_SNAPSHOT "NativeTreeSitterProjectSnapshot"
 
 typedef struct {
   AnvilWorkerPool *pool;
@@ -29,6 +32,14 @@ typedef struct {
   AnvilWorkerTreeSitterIndexResult *result;
 } LuaTreeSitterIndexResult;
 
+typedef struct {
+  AnvilTSProjectBuilder *builder;
+} LuaProjectBuilder;
+
+typedef struct {
+  AnvilTSProjectSnapshot *snapshot;
+} LuaProjectSnapshot;
+
 static LuaWorkerPool *check_pool(lua_State *L, int idx) {
   LuaWorkerPool *pool = (LuaWorkerPool *)luaL_checkudata(L, idx, API_TYPE_WORKER_POOL);
   luaL_argcheck(L, pool && pool->pool, idx, "closed native worker pool");
@@ -45,6 +56,18 @@ static LuaWorkerCancelToken *check_cancel_token(lua_State *L, int idx) {
   LuaWorkerCancelToken *token = (LuaWorkerCancelToken *)luaL_checkudata(L, idx, API_TYPE_WORKER_CANCEL_TOKEN);
   luaL_argcheck(L, token && token->token, idx, "released native worker cancel token");
   return token;
+}
+
+static LuaProjectBuilder *check_project_builder(lua_State *L, int idx) {
+  LuaProjectBuilder *builder = (LuaProjectBuilder *)luaL_checkudata(L, idx, API_TYPE_PROJECT_BUILDER);
+  luaL_argcheck(L, builder && builder->builder, idx, "closed native Project builder");
+  return builder;
+}
+
+static LuaProjectSnapshot *check_project_snapshot(lua_State *L, int idx) {
+  LuaProjectSnapshot *snapshot = (LuaProjectSnapshot *)luaL_checkudata(L, idx, API_TYPE_PROJECT_SNAPSHOT);
+  luaL_argcheck(L, snapshot && snapshot->snapshot, idx, "closed native Project snapshot");
+  return snapshot;
 }
 
 static LuaTreeSitterIndexResult *check_treesitter_index_result(lua_State *L, int idx) {
@@ -182,6 +205,8 @@ static int pool_submit(lua_State *L) {
   spec.usage_query_timeout_ms = opt_uint32_field(L, 2, "usage_query_timeout_ms", 0);
   spec.usage_match_limit = opt_uint32_field(L, 2, "usage_match_limit", 0);
   spec.usage_max_captures = opt_uint32_field(L, 2, "usage_max_captures", 0);
+  spec.project_usage_cap = opt_uint32_field(L, 2, "project_usage_cap", 750000);
+  spec.max_file_bytes = opt_uint32_field(L, 2, "max_file_bytes", 0);
   bool capture_present = false, line_present = false, compact_present = false;
   bool capture_paging = opt_bool_field(L, 2, "capture_paging", &capture_present);
   bool line_range_lookup = opt_bool_field(L, 2, "line_range_lookup", &line_present);
@@ -196,8 +221,51 @@ static int pool_submit(lua_State *L) {
     spec.previous_result = previous->result;
   }
   lua_pop(L, 1);
+
+  AnvilWorkerProjectBatchFileSpec *project_files = NULL;
+  lua_getfield(L, 2, "project_builder_id");
+  if (!lua_isnil(L, -1)) {
+    lua_Integer raw_id = luaL_checkinteger(L, -1);
+    luaL_argcheck(L, raw_id > 0, 2, "invalid native Project builder id");
+    spec.project_builder_id = (uint64_t)raw_id;
+  }
+  lua_pop(L, 1);
+  lua_getfield(L, 2, "files");
+  if (lua_istable(L, -1)) {
+    size_t file_count = lua_rawlen(L, -1);
+    luaL_argcheck(L, file_count <= 4096 && file_count <= SIZE_MAX / sizeof(*project_files), 2,
+      "native Project batch exceeds 4096-file limit");
+    if (file_count) project_files = (AnvilWorkerProjectBatchFileSpec *)SDL_calloc(file_count, sizeof(*project_files));
+    if (file_count && !project_files) { lua_pop(L, 1); return luaL_error(L, "out of memory preparing native Project batch"); }
+    spec.project_files = project_files;
+    spec.project_file_count = (uint32_t)file_count;
+    for (uint32_t i = 0; i < spec.project_file_count; i++) {
+      lua_rawgeti(L, -1, (int)i + 1);
+      luaL_checktype(L, -1, LUA_TTABLE);
+      AnvilWorkerProjectBatchFileSpec *file = &project_files[i];
+      file->path = opt_string_field(L, -1, "path", NULL);
+      file->relpath = opt_string_field(L, -1, "relpath", file->path);
+      file->fingerprint = opt_string_field(L, -1, "fingerprint", "");
+      file->language = opt_string_field(L, -1, "language", NULL);
+      file->outline_query = opt_lstring_field(L, -1, "outline_query", &file->outline_query_len);
+      file->usage_query = opt_lstring_field(L, -1, "usage_query", &file->usage_query_len);
+      file->parse_timeout_ms = opt_uint32_field(L, -1, "parse_timeout_ms", 0);
+      file->query_timeout_ms = opt_uint32_field(L, -1, "query_timeout_ms", 0);
+      file->match_limit = opt_uint32_field(L, -1, "match_limit", 0);
+      file->max_captures = opt_uint32_field(L, -1, "max_captures", 0);
+      file->usage_query_timeout_ms = opt_uint32_field(L, -1, "usage_query_timeout_ms", 0);
+      file->usage_match_limit = opt_uint32_field(L, -1, "usage_match_limit", 0);
+      file->usage_max_captures = opt_uint32_field(L, -1, "usage_max_captures", 0);
+      file->max_file_bytes = opt_uint32_field(L, -1, "max_file_bytes", 0);
+      luaL_argcheck(L, file->path && file->language && file->outline_query, 2,
+        "native Project batch file requires path, language, and outline_query");
+      lua_pop(L, 1);
+    }
+  }
+  lua_pop(L, 1);
   char *error = NULL;
   AnvilWorkerJob *job = anvil_worker_pool_submit(pool->pool, &spec, &error);
+  SDL_free(project_files);
   if (!job) {
     lua_pushnil(L);
     lua_pushstring(L, error ? error : "submit failed");
@@ -361,6 +429,65 @@ static void push_project_usage(lua_State *L, AnvilWorkerTreeSitterIndexResult *r
   set_project_path_fields(L, result);
 }
 
+static void set_project_file_path_fields(lua_State *L, AnvilTSProjectFileResult *file) {
+  const char *path = anvil_ts_project_file_path(file);
+  const char *relpath = anvil_ts_project_file_relpath(file);
+  const char *language = anvil_ts_project_file_language(file);
+  lua_pushstring(L, path ? path : ""); lua_setfield(L, -2, "path");
+  lua_pushstring(L, relpath ? relpath : (path ? path : "")); lua_setfield(L, -2, "file");
+  lua_pushstring(L, relpath ? relpath : (path ? path : "")); lua_setfield(L, -2, "relpath");
+  lua_pushstring(L, language ? language : ""); lua_setfield(L, -2, "language_id");
+}
+
+static void push_snapshot_symbol(lua_State *L, AnvilTSProjectFileResult *file, uint32_t index) {
+  AnvilTSProjectSymbolView symbol;
+  if (!anvil_ts_project_file_symbol_at(file, index, &symbol)) { lua_pushnil(L); return; }
+  lua_createtable(L, 0, 22);
+  lua_pushlstring(L, symbol.name, symbol.name_len); lua_setfield(L, -2, "name");
+  lua_pushlstring(L, symbol.name, symbol.name_len); lua_setfield(L, -2, "text");
+  lua_pushlstring(L, symbol.kind, symbol.kind_len); lua_setfield(L, -2, "kind");
+  if (symbol.signature) { lua_pushlstring(L, symbol.signature, symbol.signature_len); lua_setfield(L, -2, "signature"); }
+  if (symbol.declaration) { lua_pushlstring(L, symbol.declaration, symbol.declaration_len); lua_setfield(L, -2, "declaration"); }
+  if (symbol.has_declaration_name_span) {
+    lua_createtable(L, 2, 0);
+    lua_pushinteger(L, symbol.declaration_name_start); lua_rawseti(L, -2, 1);
+    lua_pushinteger(L, symbol.declaration_name_end); lua_rawseti(L, -2, 2);
+    lua_setfield(L, -2, "declaration_name_span");
+  }
+  set_project_location_fields(L, &symbol.range);
+  push_project_range(L, &symbol.name_range); lua_setfield(L, -2, "name_range");
+  lua_pushinteger(L, symbol.index); lua_setfield(L, -2, "index");
+  lua_pushinteger(L, symbol.depth); lua_setfield(L, -2, "depth");
+  if (symbol.parent != UINT32_MAX) {
+    lua_pushinteger(L, symbol.parent); lua_setfield(L, -2, "parent");
+    AnvilTSProjectSymbolView parent;
+    if (anvil_ts_project_file_symbol_at(file, symbol.parent - 1, &parent)) {
+      lua_pushlstring(L, parent.name, parent.name_len); lua_setfield(L, -2, "parent_name");
+    }
+  }
+  lua_createtable(L, (int)symbol.child_count, 0);
+  for (uint32_t i = 0; i < symbol.child_count; i++) {
+    lua_pushinteger(L, symbol.children[i]); lua_rawseti(L, -2, (int)i + 1);
+  }
+  lua_setfield(L, -2, "children");
+  set_project_file_path_fields(L, file);
+}
+
+static void push_snapshot_usage(lua_State *L, AnvilTSProjectFileResult *file, uint32_t index) {
+  AnvilTSProjectUsageView usage;
+  if (!anvil_ts_project_file_usage_at(file, index, &usage)) { lua_pushnil(L); return; }
+  lua_createtable(L, 0, 20);
+  lua_pushlstring(L, usage.name, usage.name_len); lua_setfield(L, -2, "name");
+  lua_pushlstring(L, usage.name, usage.name_len); lua_setfield(L, -2, "text");
+  lua_pushlstring(L, usage.capture, usage.capture_len); lua_setfield(L, -2, "capture");
+  lua_pushlstring(L, usage.kind, usage.kind_len); lua_setfield(L, -2, "kind");
+  lua_pushlstring(L, usage.line_text, usage.line_text_len); lua_setfield(L, -2, "line_text");
+  lua_pushboolean(L, usage.is_declaration); lua_setfield(L, -2, "is_declaration");
+  lua_pushboolean(L, true); lua_setfield(L, -2, "workspace_tree_sitter_fallback");
+  set_project_location_fields(L, &usage.range);
+  set_project_file_path_fields(L, file);
+}
+
 static int treesitter_index_result_summary(lua_State *L) {
   LuaTreeSitterIndexResult *result = check_treesitter_index_result(L, 1);
   lua_createtable(L, 0, 6);
@@ -469,6 +596,112 @@ static int treesitter_index_result_summary(lua_State *L) {
   return 1;
 }
 
+static void push_project_snapshot(lua_State *L, AnvilTSProjectSnapshot *snapshot) {
+  LuaProjectSnapshot *lua_snapshot = (LuaProjectSnapshot *)lua_newuserdata(L, sizeof(*lua_snapshot));
+  lua_snapshot->snapshot = snapshot;
+  luaL_getmetatable(L, API_TYPE_PROJECT_SNAPSHOT);
+  lua_setmetatable(L, -2);
+}
+
+static int treesitter_index_result_adopt_project(lua_State *L) {
+  LuaTreeSitterIndexResult *result = check_treesitter_index_result(L, 1);
+  lua_Integer raw_id = luaL_checkinteger(L, 2);
+  luaL_argcheck(L, raw_id > 0, 2, "invalid native Project builder id");
+  const char *fingerprint = "";
+  bool usage_complete = true;
+  if (lua_istable(L, 3)) {
+    fingerprint = opt_string_field(L, 3, "fingerprint", "");
+    lua_getfield(L, 3, "usage_complete");
+    if (!lua_isnil(L, -1)) usage_complete = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+  }
+  AnvilTSProjectBuilder *builder = anvil_ts_project_builder_open((uint64_t)raw_id);
+  if (!builder) return luaL_error(L, "native Project builder is unavailable");
+  AnvilTSProjectFileResult *file = anvil_worker_treesitter_index_result_take_project_file(result->result);
+  if (!file) {
+    anvil_ts_project_builder_release(builder);
+    return luaL_error(L, "native Tree-sitter result has no transferable Project file");
+  }
+  char *error = NULL;
+  bool adopted = anvil_ts_project_builder_adopt(builder, file, fingerprint, usage_complete, &error);
+  anvil_ts_project_builder_release(builder);
+  if (!adopted) {
+    anvil_ts_project_file_free(file);
+    lua_pushstring(L, error ? error : "native Project adoption failed");
+    free(error);
+    return lua_error(L);
+  }
+  free(error);
+  lua_pushboolean(L, 1);
+  return 1;
+}
+
+static int project_builder_id(lua_State *L) {
+  LuaProjectBuilder *builder = check_project_builder(L, 1);
+  lua_pushinteger(L, (lua_Integer)anvil_ts_project_builder_id(builder->builder));
+  return 1;
+}
+
+static int project_builder_remove(lua_State *L) {
+  LuaProjectBuilder *builder = check_project_builder(L, 1);
+  const char *path = luaL_checkstring(L, 2);
+  lua_pushboolean(L, anvil_ts_project_builder_remove(builder->builder, path));
+  return 1;
+}
+
+static int project_builder_make_snapshot(lua_State *L, bool freeze) {
+  LuaProjectBuilder *builder = check_project_builder(L, 1);
+  const char *status = freeze ? "ready" : "partial";
+  if (lua_istable(L, 2)) status = opt_string_field(L, 2, "status", status);
+  char *error = NULL;
+  AnvilTSProjectSnapshot *snapshot = anvil_ts_project_builder_snapshot(builder->builder, status, freeze, &error);
+  if (!snapshot) {
+    lua_pushstring(L, error ? error : "native Project snapshot failed");
+    free(error);
+    return lua_error(L);
+  }
+  free(error);
+  push_project_snapshot(L, snapshot);
+  return 1;
+}
+
+static int project_builder_snapshot(lua_State *L) { return project_builder_make_snapshot(L, false); }
+static int project_builder_freeze(lua_State *L) { return project_builder_make_snapshot(L, true); }
+
+static int project_builder_gc(lua_State *L) {
+  LuaProjectBuilder *builder = (LuaProjectBuilder *)luaL_checkudata(L, 1, API_TYPE_PROJECT_BUILDER);
+  if (builder && builder->builder) {
+    AnvilTSProjectBuilder *native_builder = builder->builder;
+    builder->builder = NULL;
+    anvil_ts_project_builder_close(native_builder);
+  }
+  return 0;
+}
+
+static int project_snapshot_summary(lua_State *L) {
+  LuaProjectSnapshot *snapshot = check_project_snapshot(L, 1);
+  AnvilTSProjectSnapshotSummary summary;
+  anvil_ts_project_snapshot_summary(snapshot->snapshot, &summary);
+  lua_createtable(L, 0, 6);
+  lua_pushstring(L, summary.status ? summary.status : "failed"); lua_setfield(L, -2, "status");
+  lua_pushinteger(L, summary.files); lua_setfield(L, -2, "files");
+  lua_pushinteger(L, summary.symbols); lua_setfield(L, -2, "symbols");
+  lua_pushinteger(L, summary.usages); lua_setfield(L, -2, "usages");
+  lua_pushinteger(L, summary.usage_names); lua_setfield(L, -2, "usage_names");
+  lua_pushboolean(L, summary.usage_truncated); lua_setfield(L, -2, "usage_truncated");
+  lua_pushboolean(L, summary.usage_complete); lua_setfield(L, -2, "usage_complete");
+  return 1;
+}
+
+static int project_snapshot_gc(lua_State *L) {
+  LuaProjectSnapshot *snapshot = (LuaProjectSnapshot *)luaL_checkudata(L, 1, API_TYPE_PROJECT_SNAPSHOT);
+  if (snapshot && snapshot->snapshot) {
+    anvil_ts_project_snapshot_release(snapshot->snapshot);
+    snapshot->snapshot = NULL;
+  }
+  return 0;
+}
+
 #define PROJECT_RECORD_PAGE_LIMIT 4096u
 
 static void project_page_options(lua_State *L, int table, uint32_t *offset, uint32_t *limit) {
@@ -480,6 +713,76 @@ static void project_page_options(lua_State *L, int table, uint32_t *offset, uint
     luaL_argcheck(L, *limit <= PROJECT_RECORD_PAGE_LIMIT, table, "Project record page limit exceeds 4096");
   }
   if (*offset == 0) *offset = 1;
+}
+
+static int project_snapshot_symbols(lua_State *L) {
+  LuaProjectSnapshot *snapshot = check_project_snapshot(L, 1);
+  uint32_t offset, limit;
+  project_page_options(L, 2, &offset, &limit);
+  AnvilTSProjectSnapshotSummary summary;
+  anvil_ts_project_snapshot_summary(snapshot->snapshot, &summary);
+  uint32_t start = offset - 1;
+  if (start > summary.symbols) start = summary.symbols;
+  uint32_t out_count = limit < summary.symbols - start ? limit : summary.symbols - start;
+  lua_createtable(L, (int)out_count, 0);
+  for (uint32_t i = 0; i < out_count; i++) {
+    AnvilTSProjectFileResult *file = NULL;
+    uint32_t file_index = 0;
+    anvil_ts_project_snapshot_symbol_at(snapshot->snapshot, start + i, &file, &file_index);
+    push_snapshot_symbol(L, file, file_index);
+    lua_rawseti(L, -2, (int)i + 1);
+  }
+  lua_pushinteger(L, start + out_count + 1); lua_setfield(L, -2, "next_offset");
+  lua_pushinteger(L, summary.symbols); lua_setfield(L, -2, "total");
+  return 1;
+}
+
+static int project_snapshot_usages(lua_State *L) {
+  LuaProjectSnapshot *snapshot = check_project_snapshot(L, 1);
+  uint32_t offset, limit;
+  project_page_options(L, 2, &offset, &limit);
+  AnvilTSProjectSnapshotSummary summary;
+  anvil_ts_project_snapshot_summary(snapshot->snapshot, &summary);
+  uint32_t start = offset - 1;
+  if (start > summary.usages) start = summary.usages;
+  uint32_t out_count = limit < summary.usages - start ? limit : summary.usages - start;
+  lua_createtable(L, (int)out_count, 0);
+  for (uint32_t i = 0; i < out_count; i++) {
+    AnvilTSProjectFileResult *file = NULL;
+    uint32_t file_index = 0;
+    anvil_ts_project_snapshot_usage_at(snapshot->snapshot, start + i, &file, &file_index);
+    push_snapshot_usage(L, file, file_index);
+    lua_rawseti(L, -2, (int)i + 1);
+  }
+  lua_pushinteger(L, start + out_count + 1); lua_setfield(L, -2, "next_offset");
+  lua_pushinteger(L, summary.usages); lua_setfield(L, -2, "total");
+  return 1;
+}
+
+static int project_snapshot_files(lua_State *L) {
+  LuaProjectSnapshot *snapshot = check_project_snapshot(L, 1);
+  uint32_t offset, limit;
+  project_page_options(L, 2, &offset, &limit);
+  AnvilTSProjectSnapshotSummary summary;
+  anvil_ts_project_snapshot_summary(snapshot->snapshot, &summary);
+  uint32_t start = offset - 1;
+  if (start > summary.files) start = summary.files;
+  uint32_t out_count = limit < summary.files - start ? limit : summary.files - start;
+  lua_createtable(L, (int)out_count, 0);
+  for (uint32_t i = 0; i < out_count; i++) {
+    AnvilTSProjectSnapshotFileView view;
+    anvil_ts_project_snapshot_file_at(snapshot->snapshot, start + i, &view);
+    lua_createtable(L, 0, 8);
+    set_project_file_path_fields(L, view.file);
+    lua_pushstring(L, view.fingerprint ? view.fingerprint : ""); lua_setfield(L, -2, "fingerprint");
+    lua_pushboolean(L, view.usage_complete); lua_setfield(L, -2, "usage_complete");
+    lua_pushinteger(L, anvil_ts_project_file_symbol_count(view.file)); lua_setfield(L, -2, "symbol_count");
+    lua_pushinteger(L, anvil_ts_project_file_usage_count(view.file)); lua_setfield(L, -2, "usage_count");
+    lua_rawseti(L, -2, (int)i + 1);
+  }
+  lua_pushinteger(L, start + out_count + 1); lua_setfield(L, -2, "next_offset");
+  lua_pushinteger(L, summary.files); lua_setfield(L, -2, "total");
+  return 1;
 }
 
 static int treesitter_index_result_symbols(lua_State *L) {
@@ -613,6 +916,23 @@ static void push_result(lua_State *L, AnvilWorkerResult *result) {
     lua_pushstring(L, error);
     lua_setfield(L, -2, "error");
   }
+  uint32_t files_completed = anvil_worker_result_files_completed(result);
+  uint32_t files_skipped = anvil_worker_result_files_skipped(result);
+  uint32_t symbols_found = anvil_worker_result_symbols_found(result);
+  uint32_t usages_found = anvil_worker_result_usages_found(result);
+  double batch_total_ms = anvil_worker_result_batch_total_ms(result);
+  if (files_completed || files_skipped || symbols_found || usages_found || batch_total_ms > 0.0) {
+    lua_getfield(L, -1, "payload");
+    if (!lua_istable(L, -1)) { lua_pop(L, 1); lua_createtable(L, 0, 4); }
+    lua_pushinteger(L, files_completed); lua_setfield(L, -2, "files_completed");
+    lua_pushinteger(L, files_skipped); lua_setfield(L, -2, "files_skipped");
+    lua_pushinteger(L, symbols_found); lua_setfield(L, -2, "symbols_found");
+    lua_pushinteger(L, usages_found); lua_setfield(L, -2, "usages_found");
+    lua_pushnumber(L, batch_total_ms); lua_setfield(L, -2, "batch_total_ms");
+    lua_pushnumber(L, anvil_worker_result_batch_parse_ms(result)); lua_setfield(L, -2, "batch_parse_ms");
+    lua_pushnumber(L, anvil_worker_result_batch_project_record_ms(result)); lua_setfield(L, -2, "batch_project_record_ms");
+    lua_setfield(L, -2, "payload");
+  }
   int index = anvil_worker_result_index(result);
   if (index != 0) {
     lua_pushinteger(L, index);
@@ -745,6 +1065,26 @@ static int f_open_cancel_token(lua_State *L) {
   return 1;
 }
 
+static int f_new_project_builder(lua_State *L) {
+  uint32_t usage_cap = 750000;
+  AnvilTSProjectSnapshot *base_snapshot = NULL;
+  if (lua_istable(L, 1)) {
+    usage_cap = opt_uint32_field(L, 1, "usage_cap", usage_cap);
+    lua_getfield(L, 1, "base_snapshot");
+    if (!lua_isnil(L, -1)) base_snapshot = check_project_snapshot(L, -1)->snapshot;
+    lua_pop(L, 1);
+  }
+  AnvilTSProjectBuilder *native_builder = base_snapshot
+    ? anvil_ts_project_builder_create_from_snapshot(base_snapshot, usage_cap)
+    : anvil_ts_project_builder_create(usage_cap);
+  if (!native_builder) return luaL_error(L, "failed to create native Project builder");
+  LuaProjectBuilder *builder = (LuaProjectBuilder *)lua_newuserdata(L, sizeof(*builder));
+  builder->builder = native_builder;
+  luaL_getmetatable(L, API_TYPE_PROJECT_BUILDER);
+  lua_setmetatable(L, -2);
+  return 1;
+}
+
 static int f_new(lua_State *L) {
   int worker_count = 0;
   const char *name = "native-worker-pool";
@@ -794,6 +1134,7 @@ static const luaL_Reg cancel_token_methods[] = {
 
 static const luaL_Reg treesitter_index_result_methods[] = {
   { "summary", treesitter_index_result_summary },
+  { "adopt_project", treesitter_index_result_adopt_project },
   { "symbols", treesitter_index_result_symbols },
   { "usages", treesitter_index_result_usages },
   { "captures", treesitter_index_result_captures },
@@ -803,8 +1144,28 @@ static const luaL_Reg treesitter_index_result_methods[] = {
   { NULL, NULL }
 };
 
+static const luaL_Reg project_builder_methods[] = {
+  { "id", project_builder_id },
+  { "snapshot", project_builder_snapshot },
+  { "freeze", project_builder_freeze },
+  { "remove", project_builder_remove },
+  { "close", project_builder_gc },
+  { "__gc", project_builder_gc },
+  { NULL, NULL }
+};
+
+static const luaL_Reg project_snapshot_methods[] = {
+  { "summary", project_snapshot_summary },
+  { "files", project_snapshot_files },
+  { "symbols", project_snapshot_symbols },
+  { "usages", project_snapshot_usages },
+  { "__gc", project_snapshot_gc },
+  { NULL, NULL }
+};
+
 static const luaL_Reg lib[] = {
   { "new", f_new },
+  { "new_project_builder", f_new_project_builder },
   { "new_cancel_token", f_new_cancel_token },
   { "open_cancel_token", f_open_cancel_token },
   { NULL, NULL }
@@ -833,6 +1194,18 @@ int luaopen_worker_pool_native(lua_State *L) {
   lua_pushvalue(L, -1);
   lua_setfield(L, -2, "__index");
   luaL_setfuncs(L, treesitter_index_result_methods, 0);
+  lua_pop(L, 1);
+
+  luaL_newmetatable(L, API_TYPE_PROJECT_BUILDER);
+  lua_pushvalue(L, -1);
+  lua_setfield(L, -2, "__index");
+  luaL_setfuncs(L, project_builder_methods, 0);
+  lua_pop(L, 1);
+
+  luaL_newmetatable(L, API_TYPE_PROJECT_SNAPSHOT);
+  lua_pushvalue(L, -1);
+  lua_setfield(L, -2, "__index");
+  luaL_setfuncs(L, project_snapshot_methods, 0);
   lua_pop(L, 1);
 
   luaL_newlib(L, lib);

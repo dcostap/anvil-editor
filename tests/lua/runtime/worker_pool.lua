@@ -113,19 +113,27 @@ test.describe("worker_pool", function()
   test.test("native jobs can run through the core worker_pool facade", function()
     local pool = new_pool("test-native-facade", 1)
     local seen
+    local observed_metadata = {}
     local completed = false
     local handle = pool:submit({
       native = true,
       kind = "test_echo",
+      generation = 17,
+      project_paths_generation = 23,
+      phase = "native-metadata",
       payload = { value = "native hello" },
       on_result = function(message)
-        if message.type == "result" then seen = message.payload.value end
+        if message.type == "result" then
+          seen = message.payload.value
+          observed_metadata = { message.generation, message.project_paths_generation, message.phase }
+        end
       end,
       on_complete = function() completed = true end,
     })
     test.not_nil(handle)
     test.ok(drain_until(pool, function() return completed end))
     test.equal(seen, "native hello")
+    test.same({ 17, 23, "native-metadata" }, observed_metadata)
     test.equal(pool:status(handle).status, "complete")
   end)
 

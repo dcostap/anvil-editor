@@ -16,7 +16,7 @@ The default cases are:
 - a large mixed-language synthetic Project;
 - cancellation while Project work is outstanding.
 
-Each completed indexing case records wall time to first observable symbols, final symbols, final usages, and final readiness; cumulative worker-stage elapsed timings; file/byte/capture/record counts; observed Lua heap usage; temporary artifact I/O; native query-cache/parser-reuse/skipped-line-index counters; manifest/aggregate/inline UI adoption totals and maxima; and empty/short/selective Project Symbol Search latency. Synthetic cases fail rather than silently recording a baseline if any generated file is skipped. Cancellation cases cover an active Project run plus dedicated parsing, aggregation, and query jobs.
+Each completed indexing case records wall time to first observable symbols, final symbols, final usages, and final readiness; cumulative worker-stage elapsed timings; file/byte/capture/record counts; observed Lua heap usage; temporary artifact I/O; native query-cache/parser-reuse/skipped-line-index counters; native batch/snapshot transfer counters; manifest/aggregate/inline UI adoption totals and maxima; and empty/short/selective Project Symbol Search latency. Synthetic cases fail rather than silently recording a baseline if any generated file is skipped. Cancellation cases cover an active Project run plus dedicated parsing, aggregation, and query jobs.
 
 Synthetic density and timeout are configurable, for example:
 

@@ -538,6 +538,12 @@ function worker_pool:drain(options)
           message.native_job_id = native_job_id
           message.job_id = job_id
           message.worker_id = "native"
+          local job = self.jobs[job_id]
+          if job and job.handle then
+            message.generation = job.handle.generation
+            message.project_paths_generation = job.handle.project_paths_generation
+            message.phase = job.handle.phase
+          end
           local _, message_stats = self:dispatch_message(message)
           note_dispatch(message_stats)
           if is_terminal_type(message.type) then self.native_jobs[native_job_id] = nil end

@@ -1297,7 +1297,7 @@ fun make(): EagerThing = EagerThing()
     common.rm(root, true)
   end)
 
-  test.it("Tree-sitter Project chunk adoption debounces aggregate rebuilds", function()
+  test.it("Tree-sitter Project native snapshot publication bypasses aggregate rebuilds", function()
     symbol_index.reset_for_tests()
     local root = USERDIR .. PATHSEP .. "treesitter-aggregate-debounce-"
       .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
@@ -1314,8 +1314,9 @@ fun make%d(): DebouncedThing%d = DebouncedThing%d()
     symbol_index.ensure_scan(root, { force = true, refresh_after_seconds = 0, chunk_files = 1 })
     local status = wait_index_ready(root)
     local ui = status.diagnostics and status.diagnostics.ui or {}
-    test.ok((ui.chunks_adopted or 0) >= 2, common.serialize(ui))
-    test.ok((ui.aggregate_rebuilds or 0) < (ui.chunks_adopted or 0), common.serialize(ui))
+    test.equal(ui.chunks_adopted, nil, common.serialize(ui))
+    test.equal(ui.aggregate_rebuilds, nil, common.serialize(ui))
+    test.not_nil(status.native_snapshot)
     status.aggregate_dirty = true
     local dirty_symbols, dirty_reason, dirty_status = symbol_index.workspace_symbols("DebouncedThing1", {
       root = root,
@@ -1351,7 +1352,6 @@ fun make%d(): ShardedThing%d = ShardedThing%d()
       refresh_after_seconds = 0,
       batch_files = 1,
       max_running_index_shards = 2,
-      shard_usage_budget = 2,
       artifact_dir = artifact_dir,
     })
     local status = wait_index_ready(root)
@@ -1375,19 +1375,17 @@ fun make%d(): ShardedThing%d = ShardedThing%d()
     test.ok((combined.shard_jobs or 0) >= 6, common.serialize(phases.combined))
     test.equal(combined.files_scanned, 6)
     test.equal(combined.parse_calls, 6)
-    test.ok((combined.artifacts_sent or 0) > 0, common.serialize(combined))
-    test.ok((combined.aggregate_jobs or 0) > 0, common.serialize(combined))
+    test.equal(combined.artifacts_sent, nil, common.serialize(combined))
+    test.equal(combined.aggregate_jobs, nil, common.serialize(combined))
+    test.equal(combined.native_project_files_transferred, 6, common.serialize(combined))
+    test.not_nil(status.native_snapshot)
     test.equal(((status.diagnostics and status.diagnostics.ui and status.diagnostics.ui.aggregate_rebuilds) or 0), 0)
-    test.equal(((status.diagnostics and status.diagnostics.ui and status.diagnostics.ui.artifacts_loaded) or 0), 0,
+    test.equal(((status.diagnostics and status.diagnostics.ui and status.diagnostics.ui.manifest_chunks_adopted) or 0), 0,
       common.serialize(status.diagnostics and status.diagnostics.ui))
-    test.ok(((status.diagnostics and status.diagnostics.ui and status.diagnostics.ui.manifest_chunks_adopted) or 0) > 0,
-      common.serialize(status.diagnostics and status.diagnostics.ui))
-    test.ok(((status.diagnostics and status.diagnostics.ui and status.diagnostics.ui.adoption_items_enqueued) or 0) > 0)
-    test.ok(((status.diagnostics and status.diagnostics.ui and status.diagnostics.ui.adoption_pump_slices) or 0) > 0)
     for path, entry in pairs(status.by_path or {}) do
       test.not_nil(entry.fingerprint, path)
-      test.is_nil(entry.symbols, path)
-      test.is_nil(entry.usages_by_name, path)
+      test.not_nil(entry.symbols, path)
+      test.not_nil(entry.usages_by_name, path)
     end
     test.equal(#(system.list_dir(artifact_dir) or {}), 0, "index artifacts were not cleaned up")
     test.ok((status.usage_count or 0) <= 4, "usage cap exceeded: " .. tostring(status.usage_count))
@@ -1396,7 +1394,49 @@ fun make%d(): ShardedThing%d = ShardedThing%d()
     common.rm(artifact_dir, true)
   end)
 
-  test.it("Tree-sitter Project sharded usage budgets return unused reservations to later batches", function()
+  test.it("Tree-sitter Project queries can consume a published partial native snapshot", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-partial-snapshot-query-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    for i = 1, 80 do
+      local lines = { "package demo", "", string.format("class PartialThing%03d", i), "" }
+      for j = 1, 30 do
+        lines[#lines + 1] = string.format("fun make%d(): PartialThing%03d = PartialThing%03d()", j, i, i)
+      end
+      write_file(root .. PATHSEP .. string.format("Model%03d.kt", i), table.concat(lines, "\n"))
+    end
+
+    symbol_index.ensure_scan(root, {
+      force = true,
+      refresh_after_seconds = 0,
+      batch_files = 1,
+      max_running_index_shards = 1,
+    })
+    local deadline = system.get_time() + 10
+    local status
+    repeat
+      status = symbol_index.status(root)
+      local partial = status.native_partial_snapshot
+      local ok, summary = pcall(function() return partial and partial:summary() end)
+      if status.status == "indexing" and ok and summary and summary.symbols > 0 then break end
+      coroutine.yield(0.001)
+    until system.get_time() >= deadline
+    test.equal(status.status, "indexing", "fixture completed before observing a partial snapshot")
+
+    local symbols, reason, query_status = symbol_index.workspace_symbols("PartialThing001", {
+      root = root,
+      allow_stale = true,
+      limit = 20,
+      refresh_after_seconds = 0,
+    })
+    test.equal(query_status, "stale", reason)
+    test.ok(find_symbol(symbols, "PartialThing001", "class"), common.serialize(symbols))
+    symbol_index.invalidate(root)
+    common.rm(root, true)
+  end)
+
+  test.it("Tree-sitter Project assigns deterministic usage reservations in sorted batch order", function()
     symbol_index.reset_for_tests()
     local root = USERDIR .. PATHSEP .. "treesitter-shard-budget-return-"
       .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
@@ -1417,12 +1457,19 @@ fun make%d(): BudgetReturnThing%d = BudgetReturnThing%d()
       refresh_after_seconds = 0,
       batch_files = 1,
       max_running_index_shards = 1,
-      shard_usage_budget = 80,
     })
     local status = wait_index_ready(root)
     test.equal(status.status, "ready")
 
-    local refs, reason, usage_status = symbol_index.workspace_usages("BudgetReturnThing4", {
+    local refs, reason, usage_status = symbol_index.workspace_usages("BudgetReturnThing3", {
+      root = root,
+      include_declaration = false,
+      limit = 20,
+      refresh_after_seconds = 0,
+    })
+    test.equal(usage_status, "fresh", reason)
+    test.equal(#refs, 2)
+    refs, reason, usage_status = symbol_index.workspace_usages("BudgetReturnThing4", {
       root = root,
       include_declaration = false,
       limit = 20,
@@ -1434,7 +1481,7 @@ fun make%d(): BudgetReturnThing%d = BudgetReturnThing%d()
     common.rm(root, true)
   end)
 
-  test.it("Tree-sitter Project chunk adoption caches per-file Project path metadata", function()
+  test.it("Tree-sitter Project snapshot publication preserves per-file Project path metadata", function()
     symbol_index.reset_for_tests()
     local root = USERDIR .. PATHSEP .. "treesitter-metadata-cache-"
       .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
@@ -1653,8 +1700,9 @@ fun make(): AsyncNewThing = AsyncNewThing()
     test.equal(#refs, 0)
     local index = symbol_index.status(root)
     test.not_nil(index and index.diagnostics and index.diagnostics.phases and index.diagnostics.phases.targeted)
-    test.equal(index.diagnostics.phases.targeted.worker.native_index_jobs, 1)
-    test.ok(((index.diagnostics and index.diagnostics.ui and index.diagnostics.ui.incremental_aggregate_updates) or 0) >= 1)
+    test.equal(index.diagnostics.phases.targeted.worker.native_batch_jobs, 1)
+    test.not_nil(index.native_snapshot)
+    test.equal(((index.diagnostics and index.diagnostics.ui and index.diagnostics.ui.incremental_aggregate_updates) or 0), 0)
     test.equal(((index.diagnostics and index.diagnostics.ui and index.diagnostics.ui.aggregate_rebuilds) or 0), 0)
 
     common.rm(root, true)
@@ -1818,8 +1866,8 @@ fun make(): AsyncAddedDirThing = AsyncAddedDirThing()
     test.equal(#refs, 0)
     local index = symbol_index.status(root)
     test.not_nil(index and index.diagnostics and index.diagnostics.phases and index.diagnostics.phases["targeted-directory"])
-    test.ok((index.diagnostics.phases["targeted-directory"].worker.native_index_jobs or 0) >= 2)
-    test.ok((index.diagnostics.phases["targeted-directory"].worker.aggregate_jobs or 0) >= 1)
+    test.ok((index.diagnostics.phases["targeted-directory"].worker.native_batch_jobs or 0) >= 1)
+    test.equal(index.diagnostics.phases["targeted-directory"].worker.aggregate_jobs, nil)
     test.equal(((index.diagnostics and index.diagnostics.ui and index.diagnostics.ui.aggregate_rebuilds) or 0), 0)
 
     common.rm(root, true)

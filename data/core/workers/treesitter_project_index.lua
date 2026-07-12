@@ -249,7 +249,10 @@ local function native_index_text_job(native_opts, text, path, relpath, payload, 
     record_chunk = payload.native_result_record_chunk or payload.chunk_records or DEFAULT_CHUNK_RECORDS,
   })
   add_metric(metrics, "native_index_result_adapt_ms", elapsed_ms(adapt_started))
-  if result then inc_metric(metrics, "native_index_jobs", 1) end
+  if result then
+    result._native_handle = result_handle
+    inc_metric(metrics, "native_index_jobs", 1)
+  end
   return result, adapt_err, not result
 end
 
@@ -617,6 +620,33 @@ local function index_file(path, root_path, language, payload, ctx, info, usage_r
     return nil, (result.outline and result.outline.error) or "outline-query-failed", info
   end
 
+  local usage_complete = payload.include_usages ~= false
+  if usage_kind then
+    if usage_effective_cap <= 0 or not result.usage or not query_status_ok(result.usage)
+    or result.usage.status == "limit" or (result.project and result.project.usage_count >= usage_effective_cap) then
+      usage_complete = false
+    end
+  end
+
+  if payload.native_project_builder_id and result.project and result._native_handle then
+    local fingerprint = make_fingerprint(info, language)
+    result._native_handle:adopt_project(payload.native_project_builder_id, {
+      fingerprint = fingerprint,
+      usage_complete = usage_complete,
+    })
+    inc_metric(metrics, "native_project_files_transferred", 1)
+    return {
+      path = path,
+      relpath = relpath,
+      fingerprint = fingerprint,
+      language_id = language.id,
+      native_only = true,
+      symbol_count = result.project.symbol_count,
+      usage_count = result.project.usage_count,
+      usage_complete = usage_complete,
+    }, nil, info
+  end
+
   local symbol_record_started = now()
   local symbols = {}
   if result.project then
@@ -638,7 +668,6 @@ local function index_file(path, root_path, language, payload, ctx, info, usage_r
   end
 
   local usages_by_name, usage_count = {}, 0
-  local usage_complete = payload.include_usages ~= false
   if usage_kind then
     if usage_effective_cap > 0 and result.usage and query_status_ok(result.usage) then
       local usage_record_started = now()
@@ -704,13 +733,16 @@ local function walk(root, payload, ctx, state, chunk)
           if file_result then
             state.files_indexed = state.files_indexed + 1
             inc_metric(state.metrics, "files_indexed", 1)
-            state.symbols_total = state.symbols_total + #(file_result.symbols or {})
-            inc_metric(state.metrics, "symbols_emitted", #(file_result.symbols or {}))
+            local symbol_count = file_result.symbol_count or #(file_result.symbols or {})
+            state.symbols_total = state.symbols_total + symbol_count
+            inc_metric(state.metrics, "symbols_emitted", symbol_count)
             state.usage_count = state.usage_count + (file_result.usage_count or 0)
             inc_metric(state.metrics, "usages_emitted", file_result.usage_count or 0)
             if file_result.usage_complete == false then state.usage_truncated = true end
-            local ok, flush_err = push_file_bounded(ctx, payload, root, state, chunk, file_result)
-            if not ok then return false, flush_err end
+            if not file_result.native_only then
+              local ok, flush_err = push_file_bounded(ctx, payload, root, state, chunk, file_result)
+              if not ok then return false, flush_err end
+            end
           else
             state.files_skipped = state.files_skipped + 1
             inc_metric(state.metrics, "files_skipped", 1)
@@ -730,6 +762,7 @@ local function walk_batches(root, payload, ctx, state)
   local scan_root = normalize(root.path or root)
   local root_path = normalize(root.root_path or payload.root_path or payload.root or scan_root)
   local stack = { scan_root }
+  local discovered = {}
   local batch = { root = root_path, files = {}, bytes = 0 }
   local max_files = tonumber(payload.batch_files or DEFAULT_BATCH_FILES) or DEFAULT_BATCH_FILES
   local max_bytes = tonumber(payload.batch_bytes or DEFAULT_BATCH_BYTES) or DEFAULT_BATCH_BYTES
@@ -777,8 +810,7 @@ local function walk_batches(root, payload, ctx, state)
         inc_metric(state.metrics, "files_scanned", 1)
         local language = match_language(path, payload.languages)
         if language then
-          local ok, err = add_to_batch(path, info, language)
-          if not ok then return false, err end
+          discovered[#discovered + 1] = { path = path, info = info, language = language }
         else
           state.files_skipped = state.files_skipped + 1
           inc_metric(state.metrics, "files_skipped", 1)
@@ -786,6 +818,12 @@ local function walk_batches(root, payload, ctx, state)
         send_progress(ctx, state, payload, path, false)
       end
     end
+  end
+  table.sort(discovered, function(a, b) return a.path < b.path end)
+  for _, file in ipairs(discovered) do
+    if ctx.cancelled() then return false, "cancelled" end
+    local ok, err = add_to_batch(file.path, file.info, file.language)
+    if not ok then return false, err end
   end
   return send_batch(ctx, payload, state, batch, true)
 end
@@ -817,13 +855,16 @@ local function index_files(payload, ctx, state, chunk)
       if file_result then
         state.files_indexed = state.files_indexed + 1
         inc_metric(state.metrics, "files_indexed", 1)
-        state.symbols_total = state.symbols_total + #(file_result.symbols or {})
-        inc_metric(state.metrics, "symbols_emitted", #(file_result.symbols or {}))
+        local symbol_count = file_result.symbol_count or #(file_result.symbols or {})
+        state.symbols_total = state.symbols_total + symbol_count
+        inc_metric(state.metrics, "symbols_emitted", symbol_count)
         state.usage_count = state.usage_count + (file_result.usage_count or 0)
         inc_metric(state.metrics, "usages_emitted", file_result.usage_count or 0)
         if file_result.usage_complete == false then state.usage_truncated = true end
-        local ok, flush_err = push_file_bounded(ctx, payload, { path = file_root }, state, chunk, file_result)
-        if not ok then return false, flush_err end
+        if not file_result.native_only then
+          local ok, flush_err = push_file_bounded(ctx, payload, { path = file_root }, state, chunk, file_result)
+          if not ok then return false, flush_err end
+        end
       else
         state.files_skipped = state.files_skipped + 1
         inc_metric(state.metrics, "files_skipped", 1)
