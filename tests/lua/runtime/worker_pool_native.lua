@@ -402,6 +402,22 @@ test.describe("worker_pool_native", function()
     pool:shutdown({ cancel_running = true })
   end)
 
+  test.test("native Project snapshots can transfer destruction to a worker", function()
+    local builder = native_pool.new_project_builder({ usage_cap = 10 })
+    local snapshot = builder:freeze()
+    builder:close()
+    local pool = new_pool("lua-native-project-snapshot-release", 1)
+    local handle = test.not_nil(pool:submit({
+      kind = "project_snapshot_release",
+      release_snapshot = snapshot,
+    }))
+    test.ok(drain_until(pool, function(message)
+      return message.type == "final" and message.job_id == handle:status().id
+    end, 5000))
+    test.ok(not pcall(function() return snapshot:summary() end),
+      "snapshot ownership should have moved to the worker")
+  end)
+
   test.test("native Project batch jobs transfer bounded file sets without record messages", function()
     local path1 = USERDIR .. PATHSEP .. "native-project-batch-a.c"
     local path2 = USERDIR .. PATHSEP .. "native-project-batch-b.c"
@@ -503,7 +519,7 @@ test.describe("worker_pool_native", function()
     local builder = native_pool.new_project_builder({ usage_cap = 100 })
     local handle = test.not_nil(pool:submit({
       kind = "treesitter_project_run",
-      project_builder_id = builder:id(),
+      project_builder = builder,
       project_root = root,
       excluded_paths = { root .. PATHSEP .. "excluded" },
       ignore_patterns = "^ignored/",
@@ -519,7 +535,8 @@ test.describe("worker_pool_native", function()
     end, 10000))
     test.ok(progress_count > 0)
     test.equal(final_payload.files_completed, 2)
-    local snapshot = builder:freeze()
+    local snapshot = test.not_nil(final_payload.snapshot,
+      "native Project run must finish its immutable snapshot before publishing to Lua")
     test.equal(snapshot:summary().files, 2)
     test.same({ "a.c", "b.c" }, (function()
       local out = {}

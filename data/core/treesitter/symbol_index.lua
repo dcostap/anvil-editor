@@ -117,6 +117,7 @@ local function new_index(root)
     overlay_generation = 0,
     combined_symbols_cache = {},
     diagnostics = { ui = {} },
+    completed_runs = {},
     project_path_metadata_cache = {},
     project_path_metadata_cache_generation = nil,
   }
@@ -250,14 +251,13 @@ local function drain_pending_reindexes(index)
   if pending_dirs and next(pending_dirs) ~= nil then
     index.pending_reindex_dirs = {}
     drained = true
+    local dirs, force = {}, false
     for dir, pending in pairs(pending_dirs) do
-      if symbol_index.mark_directory_dirty then
-        if type(pending) == "table" then
-          symbol_index.mark_directory_dirty(dir, pending.reason or "queued-during-indexing", { force = pending.force })
-        else
-          symbol_index.mark_directory_dirty(dir, pending or "queued-during-indexing")
-        end
-      end
+      dirs[#dirs + 1] = dir
+      if type(pending) == "table" and pending.force then force = true end
+    end
+    if symbol_index.mark_directories_dirty then
+      symbol_index.mark_directories_dirty(dirs, "queued-during-indexing", { force = force })
     end
   end
 
@@ -272,6 +272,19 @@ local function drain_pending_reindexes(index)
     end
   end
   return drained
+end
+
+local function add_coalesced_scope(scopes, path, value)
+  for existing in pairs(scopes) do
+    if common.path_equals(existing, path) or common.path_belongs_to(path, existing) then
+      return false
+    end
+  end
+  for existing in pairs(scopes) do
+    if common.path_belongs_to(existing, path) then scopes[existing] = nil end
+  end
+  scopes[path] = value
+  return true
 end
 
 local function watch_dir(index, dir)
@@ -370,10 +383,8 @@ local function start_project_watcher(index)
         log_quiet("Tree-sitter Project index: filesystem watcher failed for %s: %s", tostring(root), tostring(err))
         safe_yield(5)
       else
-        for dir in pairs(changed_dirs) do
-          if symbol_index.mark_directory_dirty then
-            symbol_index.mark_directory_dirty(dir, "project-watch")
-          end
+        if next(changed_dirs) and symbol_index.mark_directories_dirty then
+          symbol_index.mark_directories_dirty(changed_dirs, "project-watch")
         end
         safe_yield(0.25)
       end
@@ -446,6 +457,16 @@ local function finish_worker_scan(index, message, status)
   index.worker_handle = nil
   index.worker_seen_paths = nil
   index.finished_at = system.get_time()
+  index.last_completed_run = {
+    generation = message.generation,
+    phase = message.phase,
+    status = status,
+    diagnostics = index.diagnostics,
+    finished_at = index.finished_at,
+  }
+  index.completed_runs = index.completed_runs or {}
+  index.completed_runs[message.generation] = index.last_completed_run
+  index.completed_runs[message.generation - 32] = nil
   core.redraw = true
   if status == "ready" then
     local diagnostics = index.diagnostics or {}
@@ -485,6 +506,7 @@ local function finish_worker_scan(index, message, status)
 end
 
 local submit_worker_scan
+local close_snapshot
 
 local function cancel_index_work(index)
   if not index then return false end
@@ -493,11 +515,7 @@ local function cancel_index_work(index)
     cancelled = worker_pool.system():cancel(index.worker_handle) or cancelled
     index.worker_handle = nil
   end
-  if index.worker_run and index.worker_run.native_builder then
-    pcall(index.worker_run.native_builder.close, index.worker_run.native_builder)
-    index.worker_run.native_builder = nil
-  end
-  if index.native_partial_snapshot then pcall(index.native_partial_snapshot.close, index.native_partial_snapshot) end
+  if index.native_partial_snapshot then close_snapshot(index, index.native_partial_snapshot, "cancelled-partial") end
   index.native_partial_snapshot = nil
   index.partial_symbols_cache = nil
   index.worker_run = nil
@@ -543,25 +561,46 @@ local function current_run_message(index, run, message)
      and message.phase == run.phase
 end
 
+close_snapshot = function(index, snapshot, kind)
+  if not snapshot then return 0 end
+  local started = now()
+  local handle, submit_error = worker_pool.system():submit({
+    kind = "project_snapshot_release",
+    native = true,
+    native_kind = "project_snapshot_release",
+    priority = "background",
+    native_payload = { release_snapshot = snapshot },
+  })
+  if not handle then
+    pcall(snapshot.close, snapshot)
+    log_quiet("Tree-sitter Project index: asynchronous %s snapshot release unavailable for %s: %s",
+      tostring(kind or "native"), tostring(index and index.root), tostring(submit_error))
+  end
+  local duration = elapsed_ms(started)
+  add_ui_metric(index, "native_snapshot_release_submit_ms", duration)
+  max_ui_metric(index, "native_snapshot_release_submit_max_ms", duration)
+  if duration > 10 then
+    log_quiet("Tree-sitter Project index: submitted asynchronous %s snapshot release for %s in %.1fms",
+      tostring(kind or "native"), tostring(index and index.root), duration)
+  end
+  return duration
+end
+
 local function publish_native_snapshot(index, run, message)
-  local ok, snapshot_or_error = pcall(run.native_builder.freeze, run.native_builder)
-  if not ok or not snapshot_or_error then
-    pcall(run.native_builder.close, run.native_builder)
-    run.native_builder = nil
-    if index.native_partial_snapshot then pcall(index.native_partial_snapshot.close, index.native_partial_snapshot) end
+  local snapshot = run.completed_snapshot
+  if not snapshot then
+    close_snapshot(index, index.native_partial_snapshot, "partial")
     index.native_partial_snapshot = nil
     index.partial_symbols_cache = nil
     index.worker_run = nil
-    finish_worker_scan(index, { error = snapshot_or_error or "native-snapshot-freeze-failed", payload = {} }, "failed")
+    finish_worker_scan(index, { error = "native-worker-snapshot-missing", payload = {} }, "failed")
     return
   end
-  local snapshot = snapshot_or_error
-  pcall(run.native_builder.close, run.native_builder)
-  run.native_builder = nil
+  run.completed_snapshot = nil
   local previous_snapshot = index.native_snapshot
   index.native_snapshot = snapshot
-  if previous_snapshot and previous_snapshot ~= snapshot then pcall(previous_snapshot.close, previous_snapshot) end
-  if index.native_partial_snapshot then pcall(index.native_partial_snapshot.close, index.native_partial_snapshot) end
+  if previous_snapshot and previous_snapshot ~= snapshot then close_snapshot(index, previous_snapshot, "ready") end
+  close_snapshot(index, index.native_partial_snapshot, "partial")
   index.native_partial_snapshot = nil
   index.partial_symbols_cache = nil
   if not current_run_message(index, run, message) then return end
@@ -581,13 +620,12 @@ end
 local function finish_native_run(index, run, status, message)
   if not current_run_message(index, run, message) then return end
   run.terminal = true
-  if status == "ready" and run.native_builder then
+  if status == "ready" and run.completed_snapshot then
     publish_native_snapshot(index, run, message)
   else
-    if run.native_builder then
-      pcall(run.native_builder.close, run.native_builder)
-      run.native_builder = nil
-    end
+    if run.completed_snapshot then close_snapshot(index, run.completed_snapshot, "unpublished") end
+    run.completed_snapshot = nil
+    close_snapshot(index, index.native_partial_snapshot, "cancelled-partial")
     index.native_partial_snapshot = nil
     index.partial_symbols_cache = nil
     index.worker_run = nil
@@ -604,17 +642,6 @@ local function submit_native_run(index, generation, opts, phase)
     index.symbol_status = "failed"
     index.usage_status = "failed"
     index.reason = "native-project-builder-unavailable"
-    return false, index.reason
-  end
-  local builder_ok, native_builder = pcall(project_native.new_project_builder, {
-    usage_cap = index.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP,
-    base_snapshot = opts.base_snapshot,
-  })
-  if not builder_ok or not native_builder then
-    index.status = "failed"
-    index.symbol_status = "failed"
-    index.usage_status = "failed"
-    index.reason = tostring(native_builder or "native-project-builder-create-failed")
     return false, index.reason
   end
   index.status = "indexing"
@@ -649,8 +676,6 @@ local function submit_native_run(index, generation, opts, phase)
     project_paths_generation = index.project_paths_generation,
     phase = phase,
     opts = opts,
-    native_builder = native_builder,
-    native_builder_id = native_builder:id(),
   }
   index.worker_run = run
   index.worker_handle = nil
@@ -660,6 +685,8 @@ local function submit_native_run(index, generation, opts, phase)
     local scan_paths, scoped = {}, phase ~= "combined" or opts.files ~= nil or opts.scan_root ~= nil
     if opts.files then
       for _, file in ipairs(opts.files) do scan_paths[#scan_paths + 1] = file.path end
+    elseif opts.scan_roots then
+      for _, path in ipairs(opts.scan_roots) do scan_paths[#scan_paths + 1] = path end
     elseif opts.scan_root then
       scan_paths[1] = opts.scan_root
     end
@@ -676,7 +703,7 @@ local function submit_native_run(index, generation, opts, phase)
       project_paths_generation = index.project_paths_generation,
       phase = phase,
       native_payload = {
-        project_builder_id = run.native_builder_id,
+        base_snapshot = opts.base_snapshot,
         project_root = index.root,
         project_scoped = scoped,
         scan_paths = scan_paths,
@@ -686,27 +713,26 @@ local function submit_native_run(index, generation, opts, phase)
         languages = native_project_run_languages_payload(),
         project_usage_cap = index.project_usage_cap or DEFAULT_PROJECT_USAGE_CAP,
         project_progress_files = opts.progress_files or 64,
+        publish_partial_snapshots = phase == "combined",
         max_file_bytes = MAX_FILE_BYTES,
       },
       is_stale = function(message) return not current_run_message(index, run, message) end,
+      on_stale = function(message)
+        local snapshot = message and message.payload and message.payload.snapshot
+        if snapshot then close_snapshot(index, snapshot, "stale") end
+      end,
       on_progress = function(message)
         if not current_run_message(index, run, message) then return end
         local p = message.payload or {}
         index.files_scanned = (p.files_completed or 0) + (p.files_skipped or 0)
         index.files_indexed = p.files_completed or 0
         index.files_total = index.files_indexed
-        local now = system.get_time()
-        if (run.partial_publications or 0) < 8
-        and (not index.native_partial_snapshot or now - (run.last_partial_snapshot_at or 0) >= 1) then
-          local ok, partial = pcall(run.native_builder.snapshot, run.native_builder, { status = "partial" })
-          if ok and partial then
-            local previous = index.native_partial_snapshot
-            index.native_partial_snapshot = partial
-            index.partial_symbols_cache = nil
-            run.last_partial_snapshot_at = now
-            run.partial_publications = (run.partial_publications or 0) + 1
-            if previous and previous ~= partial then pcall(previous.close, previous) end
-          end
+        local partial = p.snapshot
+        if partial then
+          local previous = index.native_partial_snapshot
+          index.native_partial_snapshot = partial
+          index.partial_symbols_cache = nil
+          if previous and previous ~= partial then close_snapshot(index, previous, "partial") end
         end
         core.redraw = true
       end,
@@ -716,6 +742,7 @@ local function submit_native_run(index, generation, opts, phase)
         index.files_scanned = (p.files_completed or 0) + (p.files_skipped or 0)
         index.files_indexed = p.files_completed or 0
         index.files_total = index.files_indexed
+        run.completed_snapshot = p.snapshot
         add_worker_diagnostics(index, phase, {
           files_scanned = index.files_scanned,
           files_indexed = index.files_indexed,
@@ -728,6 +755,8 @@ local function submit_native_run(index, generation, opts, phase)
           native_batch_ms = p.batch_total_ms or 0,
           parse_ms = p.batch_parse_ms or 0,
           native_project_record_ms = p.batch_project_record_ms or 0,
+          native_project_builder_ms = p.project_builder_ms or 0,
+          native_project_snapshot_ms = p.project_snapshot_ms or 0,
           native_project_files_transferred = p.files_completed or 0,
         })
       end,
@@ -751,8 +780,6 @@ local function submit_native_run(index, generation, opts, phase)
       end,
     })
     if not handle then
-      pcall(native_builder.close, native_builder)
-      run.native_builder = nil
       index.worker_run = nil
       index.status = "failed"
       index.symbol_status = "failed"
@@ -765,8 +792,6 @@ local function submit_native_run(index, generation, opts, phase)
     return true, "scheduled"
   end
 
-  pcall(native_builder.close, native_builder)
-  run.native_builder = nil
   index.worker_run = nil
   index.status = "failed"
   index.symbol_status = "failed"
@@ -1805,22 +1830,26 @@ local function submit_targeted_file_reindex(index, path, opts)
   return false, "native-snapshot-unavailable"
 end
 
-local function submit_targeted_directory_reindex(index, dir, opts)
+local function submit_targeted_directories_reindex(index, dirs, opts)
   opts = opts or {}
-  if not index or not dir then return false, "no-index" end
-  if not (common.path_equals(dir, index.root) or common.path_belongs_to(dir, index.root)) then
-    return false, "outside-project"
-  end
+  if not index or not dirs or #dirs == 0 then return false, "no-index" end
 
   if index.native_snapshot then
-    local info = system.get_file_info(dir)
-    local exists = info and info.type == "dir"
+    local scan_roots, remove_paths = {}, {}
+    for _, dir in ipairs(dirs) do
+      if not (common.path_equals(dir, index.root) or common.path_belongs_to(dir, index.root)) then
+        return false, "outside-project"
+      end
+      local info = system.get_file_info(dir)
+      if info and info.type == "dir" then scan_roots[#scan_roots + 1] = dir
+      else remove_paths[#remove_paths + 1] = dir end
+    end
     index.generation = (index.generation or 0) + 1
     local scheduled, reason = submit_native_run(index, index.generation, {
       reason = opts.reason or "directory-dirty",
       base_snapshot = index.native_snapshot,
-      remove_paths = exists and {} or { dir },
-      scan_root = exists and dir or nil,
+      remove_paths = remove_paths,
+      scan_roots = scan_roots,
     }, "targeted-directory")
     return scheduled and true or false, reason
   end
@@ -1836,19 +1865,10 @@ function symbol_index.reindex_file(path, opts)
     if common.path_belongs_to(path, index.root) then
       matched = true
       if index.status == "indexing" then
-        local run = index.worker_run
-        local active_file = run and run.phase == "targeted" and run.opts and run.opts.files and run.opts.files[1]
-        if active_file and common.path_equals(active_file.path, path) then
-          local submitted, submit_reason = submit_targeted_file_reindex(index, path, opts)
-          log_quiet("Tree-sitter Project index: superseded targeted file refresh for %s under %s (%s)",
-            tostring(path), tostring(index.root), tostring(submit_reason))
-          if not submitted then return false, submit_reason end
-        else
-          index.pending_reindex_paths = index.pending_reindex_paths or {}
-          index.pending_reindex_paths[path] = opts.reason or "file-dirty"
-          log_quiet("Tree-sitter Project index: coalesced targeted file refresh for %s under %s while worker indexing (%s)",
-            tostring(path), tostring(index.root), tostring(index.pending_reindex_paths[path]))
-        end
+        index.pending_reindex_paths = index.pending_reindex_paths or {}
+        index.pending_reindex_paths[path] = opts.reason or "file-dirty"
+        log_quiet("Tree-sitter Project index: coalesced targeted file refresh for %s under %s while worker indexing (%s)",
+          tostring(path), tostring(index.root), tostring(index.pending_reindex_paths[path]))
       else
         local submitted, submit_reason = submit_targeted_file_reindex(index, path, opts)
         if not submitted and submit_reason ~= "fresh" then
@@ -1869,50 +1889,59 @@ function symbol_index.reindex_file(path, opts)
   return matched, matched and nil or "no-index"
 end
 
-function symbol_index.mark_directory_dirty(dir, reason, opts)
+function symbol_index.mark_directories_dirty(dirs, reason, opts)
   opts = opts or {}
-  dir = dir and common.normalize_path(dir)
-  if not dir then return false, "no-directory" end
+  if type(dirs) ~= "table" then return false, "no-directory" end
+  local scopes = {}
+  for key, value in pairs(dirs) do
+    local dir = type(key) == "number" and value or key
+    dir = dir and common.normalize_path(dir)
+    if dir then add_coalesced_scope(scopes, dir, true) end
+  end
+  if not next(scopes) then return false, "no-directory" end
   opts = common.merge(opts, { reason = reason or opts.reason or "directory-dirty" })
   local matched = false
   for _, index in pairs(indexes) do
-    if common.path_equals(dir, index.root) or common.path_belongs_to(dir, index.root) then
+    local index_dirs = {}
+    for dir in pairs(scopes) do
+      if common.path_equals(dir, index.root) or common.path_belongs_to(dir, index.root) then
+        index_dirs[#index_dirs + 1] = dir
+      end
+    end
+    if #index_dirs > 0 then
       matched = true
       if index.status == "indexing" then
-        local run = index.worker_run
-        if run and run.phase == "targeted-directory" and run.opts
-        and run.opts.scan_root and common.path_equals(run.opts.scan_root, dir) then
-          local submitted, submit_reason = submit_targeted_directory_reindex(index, dir, opts)
-          log_quiet("Tree-sitter Project index: superseded targeted directory refresh for %s under %s (%s)",
-            tostring(dir), tostring(index.root), tostring(submit_reason))
-          if not submitted then return false, submit_reason end
-        else
-          index.pending_reindex_dirs = index.pending_reindex_dirs or {}
-          index.pending_reindex_dirs[dir] = {
+        index.pending_reindex_dirs = index.pending_reindex_dirs or {}
+        for _, dir in ipairs(index_dirs) do
+          add_coalesced_scope(index.pending_reindex_dirs, dir, {
             reason = opts.reason or "directory-dirty",
             force = opts.force,
-          }
+          })
           log_quiet("Tree-sitter Project index: coalesced dirty directory refresh for %s under %s while worker indexing (%s)",
-            tostring(dir), tostring(index.root), tostring(index.pending_reindex_dirs[dir].reason))
+            tostring(dir), tostring(index.root), tostring(opts.reason))
         end
       else
-        local submitted, submit_reason = submit_targeted_directory_reindex(index, dir, opts)
+        local submitted, submit_reason = submit_targeted_directories_reindex(index, index_dirs, opts)
         if not submitted then
           index.status = "failed"
           index.symbol_status = "failed"
           index.usage_status = "failed"
           index.reason = submit_reason or "targeted-directory-submit-failed"
           index.finished_at = system.get_time()
-          log_quiet("Tree-sitter Project index: targeted directory worker reindex for %s under %s failed: %s",
-            tostring(dir), tostring(index.root), tostring(submit_reason))
+          log_quiet("Tree-sitter Project index: targeted directory worker reindex for %d scope(s) under %s failed: %s",
+            #index_dirs, tostring(index.root), tostring(submit_reason))
         else
-          log_quiet("Tree-sitter Project index: scheduled targeted directory worker reindex for dirty directory %s under %s (%s)",
-            tostring(dir), tostring(index.root), tostring(submit_reason or opts.reason or "directory-dirty"))
+          log_quiet("Tree-sitter Project index: scheduled targeted directory worker reindex for %d dirty scope(s) under %s (%s)",
+            #index_dirs, tostring(index.root), tostring(submit_reason or opts.reason or "directory-dirty"))
         end
       end
     end
   end
   return matched, matched and nil or "no-index"
+end
+
+function symbol_index.mark_directory_dirty(dir, reason, opts)
+  return symbol_index.mark_directories_dirty({ dir }, reason, opts)
 end
 
 function symbol_index.mark_file_dirty(path, reason)

@@ -128,6 +128,44 @@ local function time_symbol_query(root, query, limit)
   }
 end
 
+local function time_unchanged_targeted_refresh(root, snapshot)
+  local files = snapshot and snapshot:files({ limit = 1 }) or {}
+  local file = files[1]
+  if not file or not file.path then return nil end
+  local before = symbol_index.status(root)
+  local expected_generation = (before.generation or 0) + 1
+  local started = system.get_time()
+  local matched, reason = symbol_index.reindex_file(file.path, {
+    force = true,
+    reason = "benchmark-targeted-refresh",
+  })
+  test.ok(matched, reason)
+  local deadline = system.get_time() + env_number("ANVIL_TS_BENCH_TIMEOUT_SECONDS", 120)
+  local status
+  repeat
+    status = symbol_index.status(root)
+    local completed = status.completed_runs and status.completed_runs[expected_generation]
+    if completed then break end
+    coroutine.yield(0.001)
+  until system.get_time() >= deadline
+  local completed = status.completed_runs and status.completed_runs[expected_generation]
+  test.not_nil(completed, "targeted refresh did not publish completion diagnostics")
+  test.equal(completed.status, "ready", status.reason)
+  local diagnostics = completed.diagnostics or {}
+  local targeted = diagnostics.worker or {}
+  local ui = diagnostics.ui or {}
+  return {
+    wall_ms = (system.get_time() - started) * 1000,
+    files_scanned = targeted.files_scanned,
+    files_reused = targeted.files_reused,
+    parse_ms = targeted.parse_ms,
+    builder_ms = targeted.native_project_builder_ms,
+    snapshot_ms = targeted.native_project_snapshot_ms,
+    ui_snapshot_release_submit_ms = ui.native_snapshot_release_submit_ms,
+    ui_snapshot_release_submit_max_ms = ui.native_snapshot_release_submit_max_ms,
+  }
+end
+
 local function combined_ui(diagnostics)
   local out = common.merge({}, diagnostics and diagnostics.ui or {})
   for _, phase in pairs(diagnostics and diagnostics.phases or {}) do
@@ -174,6 +212,8 @@ local function run_case(name, root, remove_after, expected_files)
       native_batch = worker.native_batch_ms,
       parse = worker.parse_ms,
       native_project_records = worker.native_project_record_ms,
+      native_project_builder = worker.native_project_builder_ms,
+      native_project_snapshot = worker.native_project_snapshot_ms,
       outline_query = worker.outline_query_ms,
       usage_query = worker.usage_query_ms,
       symbol_records = worker.symbol_record_ms,
@@ -215,6 +255,7 @@ local function run_case(name, root, remove_after, expected_files)
       selective = time_symbol_query(root, "bench_0001", 200),
     },
   }
+  case_report.targeted_refresh = time_unchanged_targeted_refresh(root, status.native_snapshot)
   report.cases[#report.cases + 1] = case_report
   print("treesitter-project-index-benchmark " .. common.serialize(case_report))
   if remove_after then common.rm(root, true) end

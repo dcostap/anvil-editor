@@ -18,6 +18,8 @@ The default cases are:
 
 Each completed indexing case records wall time to first observable symbols, final symbols, final usages, and final readiness; cumulative worker-stage elapsed timings; file/byte/capture/record counts; observed Lua heap usage; temporary artifact I/O; native query-cache/parser-reuse/skipped-line-index counters; native batch/snapshot transfer counters; manifest/aggregate/inline UI adoption totals and maxima; and empty/short/selective Project Symbol Search latency. Synthetic cases fail rather than silently recording a baseline if any generated file is skipped.
 
+After each completed case, the benchmark also performs an unchanged single-file targeted refresh and records wall time, files reused, native builder seeding time, native final-snapshot construction time, and UI time spent submitting retired snapshots for asynchronous destruction. This guards the targeted publication path that is not represented by initial full-scan timing alone.
+
 Cancellation measurement covers an active native Project run and verifies terminal cleanup.
 
 Synthetic density and timeout are configurable, for example:

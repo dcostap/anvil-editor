@@ -14,6 +14,23 @@ The intended result is:
 
 This plan focuses on **Project indexing and Project-wide symbol/usage queries**. The active-Document Tree-sitter service is already native and asynchronous; it should remain separate initially and only share proven reusable primitives such as compiled-query caches and native snapshot utilities.
 
+## Post-migration responsiveness repair — 2026-07-13
+
+A targeted-refresh performance capture found that the first Phase 6 implementation still called native Project snapshot construction from Lua worker-pool callbacks. Although records stayed native, constructing the immutable snapshot rebuilt global symbol/usage query structures synchronously on the UI thread. Repeated watcher scopes could also serialize into multiple targeted runs.
+
+The repaired publication path now:
+
+- creates builders from ready base snapshots inside the native worker run;
+- builds both partial and final immutable snapshots on native worker threads;
+- returns already-built snapshot handles in bounded progress/result messages;
+- limits partial snapshot publication to full combined scans, not short targeted refreshes;
+- transfers retired snapshot destruction to a native worker instead of freeing large snapshots from Lua callbacks/GC;
+- coalesces overlapping watcher directory scopes and submits disjoint dirty directories in one scoped native run;
+- queues repeated dirty-file intent instead of repeatedly cancelling/restarting the active targeted run;
+- records native builder/snapshot time and targeted-refresh benchmark measurements separately.
+
+Lua publication is consequently the generation check plus handle swap required by the original plan. The regression seam is the native Project-run result contract: a successful result must contain its completed immutable snapshot.
+
 ## Investigation summary
 
 ### Current Anvil pipeline

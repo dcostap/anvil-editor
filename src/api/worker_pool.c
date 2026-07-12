@@ -235,6 +235,7 @@ static int pool_submit(lua_State *L) {
   spec.project_usage_cap = opt_uint32_field(L, 2, "project_usage_cap", 750000);
   spec.project_root = opt_string_field(L, 2, "project_root", NULL);
   spec.project_progress_files = opt_uint32_field(L, 2, "project_progress_files", 64);
+  spec.project_publish_partial_snapshots = opt_bool_field(L, 2, "publish_partial_snapshots", NULL);
   spec.project_scoped = opt_bool_field(L, 2, "project_scoped", NULL);
   spec.max_file_bytes = opt_uint32_field(L, 2, "max_file_bytes", 0);
   bool capture_present = false, line_present = false, compact_present = false;
@@ -253,11 +254,38 @@ static int pool_submit(lua_State *L) {
   lua_pop(L, 1);
 
   AnvilWorkerProjectBatchFileSpec *project_files = NULL;
+  LuaProjectBuilder *transferred_builder = NULL;
+  LuaProjectSnapshot *transferred_snapshot = NULL;
+  lua_getfield(L, 2, "project_builder");
+  if (!lua_isnil(L, -1)) {
+    transferred_builder = check_project_builder(L, -1);
+    spec.project_builder = transferred_builder->builder;
+    spec.project_builder_id = anvil_ts_project_builder_id(transferred_builder->builder);
+    spec.transfer_project_builder = true;
+  }
+  lua_pop(L, 1);
+  lua_getfield(L, 2, "release_snapshot");
+  if (!lua_isnil(L, -1)) {
+    luaL_argcheck(L, spec.kind && strcmp(spec.kind, "project_snapshot_release") == 0, 2,
+      "release_snapshot is only valid for project_snapshot_release jobs");
+    transferred_snapshot = check_project_snapshot(L, -1);
+    spec.project_snapshot_to_release = transferred_snapshot->snapshot;
+  }
+  lua_pop(L, 1);
   lua_getfield(L, 2, "project_builder_id");
   if (!lua_isnil(L, -1)) {
+    luaL_argcheck(L, transferred_builder == NULL, 2,
+      "native Project submission accepts project_builder or project_builder_id, not both");
     lua_Integer raw_id = luaL_checkinteger(L, -1);
     luaL_argcheck(L, raw_id > 0, 2, "invalid native Project builder id");
     spec.project_builder_id = (uint64_t)raw_id;
+  }
+  lua_pop(L, 1);
+  lua_getfield(L, 2, "base_snapshot");
+  if (!lua_isnil(L, -1)) {
+    luaL_argcheck(L, transferred_builder == NULL && spec.project_builder_id == 0, 2,
+      "native Project submission accepts base_snapshot or an existing builder, not both");
+    spec.project_base_snapshot = check_project_snapshot(L, -1)->snapshot;
   }
   lua_pop(L, 1);
   lua_getfield(L, 2, "files");
@@ -352,6 +380,18 @@ static int pool_submit(lua_State *L) {
     lua_pushstring(L, error ? error : "submit failed");
     SDL_free(error);
     return 2;
+  }
+  if (transferred_builder && transferred_builder->builder) {
+    /* The worker job retained the builder during submission. Drop the Lua
+     * owner's reference and make the moved-from userdata harmless. */
+    AnvilTSProjectBuilder *builder = transferred_builder->builder;
+    transferred_builder->builder = NULL;
+    anvil_ts_project_builder_release(builder);
+  }
+  if (transferred_snapshot && transferred_snapshot->snapshot) {
+    AnvilTSProjectSnapshot *snapshot = transferred_snapshot->snapshot;
+    transferred_snapshot->snapshot = NULL;
+    anvil_ts_project_snapshot_release(snapshot);
   }
   push_job_handle(L, job);
   return 1;
@@ -1102,6 +1142,19 @@ static void push_result(lua_State *L, AnvilWorkerResult *result) {
     lua_setfield(L, -2, "result");
     lua_setfield(L, -2, "payload");
   }
+  AnvilTSProjectSnapshot *project_snapshot = anvil_worker_result_steal_project_snapshot(result);
+  if (project_snapshot) {
+    push_project_snapshot(L, project_snapshot);
+    lua_setfield(L, -2, "snapshot");
+    lua_getfield(L, -1, "payload");
+    if (!lua_istable(L, -1)) {
+      lua_pop(L, 1);
+      lua_createtable(L, 0, 1);
+    }
+    lua_getfield(L, -2, "snapshot");
+    lua_setfield(L, -2, "snapshot");
+    lua_setfield(L, -2, "payload");
+  }
   const char *error = anvil_worker_result_error(result);
   if (error) {
     lua_pushstring(L, error);
@@ -1124,6 +1177,8 @@ static void push_result(lua_State *L, AnvilWorkerResult *result) {
     lua_pushnumber(L, batch_total_ms); lua_setfield(L, -2, "batch_total_ms");
     lua_pushnumber(L, anvil_worker_result_batch_parse_ms(result)); lua_setfield(L, -2, "batch_parse_ms");
     lua_pushnumber(L, anvil_worker_result_batch_project_record_ms(result)); lua_setfield(L, -2, "batch_project_record_ms");
+    lua_pushnumber(L, anvil_worker_result_project_builder_ms(result)); lua_setfield(L, -2, "project_builder_ms");
+    lua_pushnumber(L, anvil_worker_result_project_snapshot_ms(result)); lua_setfield(L, -2, "project_snapshot_ms");
     lua_setfield(L, -2, "payload");
   }
   int index = anvil_worker_result_index(result);

@@ -55,6 +55,10 @@ struct AnvilWorkerJob {
   AnvilWorkerProjectBatchFileSpec *project_files;
   uint32_t project_file_count;
   uint64_t project_builder_id;
+  AnvilTSProjectBuilder *project_builder;
+  AnvilTSProjectSnapshot *project_base_snapshot;
+  AnvilTSProjectSnapshot *project_snapshot_to_release;
+  bool close_project_builder;
   uint32_t project_usage_cap;
   char *project_root;
   char **project_scan_paths;
@@ -69,6 +73,7 @@ struct AnvilWorkerJob {
   AnvilWorkerProjectRunLanguageSpec *project_languages;
   uint32_t project_language_count;
   uint32_t project_progress_files;
+  bool project_publish_partial_snapshots;
   struct AnvilWorkerJob *cancel_parent;
 
   struct AnvilWorkerJob *next;
@@ -91,7 +96,10 @@ struct AnvilWorkerResult {
   double batch_total_ms;
   double batch_parse_ms;
   double batch_project_record_ms;
+  double project_builder_ms;
+  double project_snapshot_ms;
   AnvilWorkerTreeSitterIndexResult *treesitter_index_result;
+  AnvilTSProjectSnapshot *project_snapshot;
   struct AnvilWorkerResult *next;
 };
 
@@ -361,6 +369,12 @@ static void job_free(AnvilWorkerJob *job) {
   }
   SDL_free(job->project_languages);
   anvil_worker_treesitter_index_result_free(job->previous_result);
+  if (job->project_builder) {
+    if (job->close_project_builder) anvil_ts_project_builder_close(job->project_builder);
+    else anvil_ts_project_builder_release(job->project_builder);
+  }
+  anvil_ts_project_snapshot_release(job->project_base_snapshot);
+  anvil_ts_project_snapshot_release(job->project_snapshot_to_release);
   SDL_free(job);
 }
 
@@ -2641,6 +2655,8 @@ typedef struct ProjectRunExecution {
   uint32_t *file_usage_counts;
   bool *file_usage_retry;
   char *fatal_error;
+  uint32_t partial_publications;
+  uint64_t last_partial_publication_ns;
 } ProjectRunExecution;
 
 typedef struct ProjectRunThread {
@@ -2780,7 +2796,21 @@ static int SDLCALL project_run_thread_main(void *userdata) {
         progress->symbols_found = execution->symbols > UINT32_MAX ? UINT32_MAX : (uint32_t)execution->symbols;
         progress->usages_found = execution->usages > UINT32_MAX ? UINT32_MAX : (uint32_t)execution->usages;
       }
+      bool publish_partial = job->project_publish_partial_snapshots &&
+        execution->partial_publications < 8 &&
+        (!execution->last_partial_publication_ns ||
+          SDL_GetTicksNS() - execution->last_partial_publication_ns >= UINT64_C(1000000000));
+      if (publish_partial) {
+        execution->partial_publications++;
+        execution->last_partial_publication_ns = SDL_GetTicksNS();
+      }
       SDL_UnlockMutex(execution->mutex);
+      if (progress && publish_partial) {
+        char *partial_error = NULL;
+        progress->project_snapshot = anvil_ts_project_builder_snapshot(
+          execution->builder, "partial", false, &partial_error);
+        SDL_free(partial_error);
+      }
       if (progress) enqueue_result(context.pool, progress);
     }
   }
@@ -2809,8 +2839,17 @@ static int SDLCALL project_run_thread_main(void *userdata) {
 
 static void run_treesitter_project_run(AnvilWorkerContext *context, AnvilWorkerJob *job) {
   uint64_t started = SDL_GetTicksNS();
-  AnvilTSProjectBuilder *builder = anvil_ts_project_builder_open(job->project_builder_id);
+  uint64_t builder_started = SDL_GetTicksNS();
+  bool worker_created_builder = !job->project_builder && !job->project_builder_id;
+  bool job_owns_builder = (job->project_builder && job->close_project_builder) || worker_created_builder;
+  AnvilTSProjectBuilder *builder = job->project_builder ? job->project_builder
+    : (job->project_builder_id ? anvil_ts_project_builder_open(job->project_builder_id)
+      : anvil_ts_project_builder_create_from_snapshot(job->project_base_snapshot, job->project_usage_cap));
+  double builder_ms = ticks_ns_to_ms(SDL_GetTicksNS() - builder_started);
   if (!builder) {
+    AnvilTSProjectSnapshot *base_snapshot = job->project_base_snapshot;
+    job->project_base_snapshot = NULL;
+    anvil_ts_project_snapshot_release(base_snapshot);
     SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
     AnvilWorkerResult *result = result_new(job, "error");
     if (result) result->error = pool_strdup("native Project run builder is unavailable");
@@ -3012,9 +3051,15 @@ static void run_treesitter_project_run(AnvilWorkerContext *context, AnvilWorkerJ
   char *fatal_error = execution.fatal_error;
   if (execution.mutex) SDL_DestroyMutex(execution.mutex);
   bool cancelled = job_cancelled(job);
-  anvil_ts_project_builder_release(builder);
   project_run_walk_free(&walk);
   if (fatal_error) {
+    if (job_owns_builder) {
+      job->project_builder = NULL;
+      job->close_project_builder = false;
+      anvil_ts_project_builder_close(builder);
+    } else if (!job->project_builder) {
+      anvil_ts_project_builder_release(builder);
+    }
     SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
     AnvilWorkerResult *result = result_new(job, "error");
     if (result) result->error = fatal_error; else SDL_free(fatal_error);
@@ -3022,9 +3067,49 @@ static void run_treesitter_project_run(AnvilWorkerContext *context, AnvilWorkerJ
     return;
   }
   if (cancelled) {
+    if (job_owns_builder) {
+      job->project_builder = NULL;
+      job->close_project_builder = false;
+      anvil_ts_project_builder_close(builder);
+    } else if (!job->project_builder) {
+      anvil_ts_project_builder_release(builder);
+    }
     SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_CANCELLED);
     enqueue_simple_result(context->pool, job, "cancelled");
     return;
+  }
+  /* Seeding retained every shared file record needed by the builder. The old
+   * immutable snapshot remains published by Lua, but the worker job no longer
+   * needs to prolong its lifetime until Lua handle collection. */
+  AnvilTSProjectSnapshot *base_snapshot = job->project_base_snapshot;
+  job->project_base_snapshot = NULL;
+  anvil_ts_project_snapshot_release(base_snapshot);
+  char *snapshot_error = NULL;
+  uint64_t snapshot_started = SDL_GetTicksNS();
+  AnvilTSProjectSnapshot *snapshot = anvil_ts_project_builder_snapshot(builder, "ready", true, &snapshot_error);
+  double snapshot_ms = ticks_ns_to_ms(SDL_GetTicksNS() - snapshot_started);
+  if (!snapshot) {
+    if (job_owns_builder) {
+      job->project_builder = NULL;
+      job->close_project_builder = false;
+      anvil_ts_project_builder_close(builder);
+    } else if (!job->project_builder) {
+      anvil_ts_project_builder_release(builder);
+    }
+    SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
+    AnvilWorkerResult *error_result = result_new(job, "error");
+    if (error_result) error_result->error = snapshot_error ? snapshot_error : pool_strdup("native Project snapshot failed");
+    else SDL_free(snapshot_error);
+    enqueue_result(context->pool, error_result);
+    return;
+  }
+  SDL_free(snapshot_error);
+  if (job_owns_builder) {
+    job->project_builder = NULL;
+    job->close_project_builder = false;
+    anvil_ts_project_builder_close(builder);
+  } else if (!job->project_builder) {
+    anvil_ts_project_builder_release(builder);
   }
   AnvilWorkerResult *result = result_new(job, "result");
   if (result) {
@@ -3036,6 +3121,11 @@ static void run_treesitter_project_run(AnvilWorkerContext *context, AnvilWorkerJ
     result->batch_total_ms = ticks_ns_to_ms(SDL_GetTicksNS() - started);
     result->batch_parse_ms = parse_ms;
     result->batch_project_record_ms = project_record_ms;
+    result->project_builder_ms = builder_ms;
+    result->project_snapshot_ms = snapshot_ms;
+    result->project_snapshot = snapshot;
+  } else {
+    anvil_ts_project_snapshot_release(snapshot);
   }
   enqueue_result(context->pool, result);
   SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_COMPLETE);
@@ -3187,6 +3277,11 @@ static void run_job(AnvilWorkerContext *context, AnvilWorkerJob *job) {
   AnvilWorkerPool *pool = context->pool;
   SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_RUNNING);
   if (job_cancelled(job)) {
+    if (job->project_snapshot_to_release) {
+      AnvilTSProjectSnapshot *snapshot = job->project_snapshot_to_release;
+      job->project_snapshot_to_release = NULL;
+      anvil_ts_project_snapshot_release(snapshot);
+    }
     SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_CANCELLED);
     enqueue_simple_result(pool, job, "cancelled");
     return;
@@ -3203,6 +3298,12 @@ static void run_job(AnvilWorkerContext *context, AnvilWorkerJob *job) {
     run_treesitter_index_text(context, job);
   } else if (strcmp(kind, "treesitter_project_run") == 0) {
     run_treesitter_project_run(context, job);
+  } else if (strcmp(kind, "project_snapshot_release") == 0) {
+    AnvilTSProjectSnapshot *snapshot = job->project_snapshot_to_release;
+    job->project_snapshot_to_release = NULL;
+    anvil_ts_project_snapshot_release(snapshot);
+    SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_COMPLETE);
+    enqueue_simple_result(context->pool, job, "final");
   } else if (strcmp(kind, "treesitter_project_batch") == 0) {
     run_treesitter_project_batch(context, job);
   } else if (strcmp(kind, "markdown_parse") == 0) {
@@ -3450,10 +3551,17 @@ AnvilWorkerJob *anvil_worker_pool_submit(AnvilWorkerPool *pool, const AnvilWorke
   job->previous_result = spec->previous_result;
   anvil_worker_treesitter_index_result_retain(job->previous_result);
   job->project_builder_id = spec->project_builder_id;
+  job->project_builder = spec->project_builder;
+  anvil_ts_project_builder_retain(job->project_builder);
+  job->project_base_snapshot = spec->project_base_snapshot;
+  anvil_ts_project_snapshot_retain(job->project_base_snapshot);
+  job->project_snapshot_to_release = spec->project_snapshot_to_release;
+  anvil_ts_project_snapshot_retain(job->project_snapshot_to_release);
   job->project_usage_cap = spec->project_usage_cap;
   job->project_root = pool_strdup(spec->project_root);
   job->project_scoped = spec->project_scoped;
   job->project_progress_files = spec->project_progress_files ? spec->project_progress_files : 64;
+  job->project_publish_partial_snapshots = spec->project_publish_partial_snapshots;
   job->project_file_count = spec->project_file_count;
   if (job->project_file_count) {
     if (!spec->project_files || (size_t)job->project_file_count > SIZE_MAX / sizeof(*job->project_files)) {
@@ -3581,9 +3689,15 @@ project_run_copy_oom:
   return NULL;
 project_run_copy_done:
 
+  /* Submission has completed all fallible copies. From this point the job may
+   * own the caller's builder reference and will close it on every terminal
+   * path, including cancellation before execution. */
+  job->close_project_builder = spec->transfer_project_builder && job->project_builder != NULL;
+
   SDL_LockMutex(pool->queue_mutex);
   if (pool->terminate) {
     SDL_UnlockMutex(pool->queue_mutex);
+    job->close_project_builder = false;
     anvil_worker_job_release(job);
     anvil_worker_job_release(job);
     pool_set_error(error, "worker pool is shutting down");
@@ -3628,6 +3742,7 @@ void anvil_worker_result_free(AnvilWorkerResult *result) {
   SDL_free(result->value);
   SDL_free(result->error);
   anvil_worker_treesitter_index_result_free(result->treesitter_index_result);
+  anvil_ts_project_snapshot_release(result->project_snapshot);
   SDL_free(result);
 }
 
@@ -3635,6 +3750,13 @@ AnvilWorkerTreeSitterIndexResult *anvil_worker_result_steal_treesitter_index_res
   if (!result) return NULL;
   AnvilWorkerTreeSitterIndexResult *out = result->treesitter_index_result;
   result->treesitter_index_result = NULL;
+  return out;
+}
+
+AnvilTSProjectSnapshot *anvil_worker_result_steal_project_snapshot(AnvilWorkerResult *result) {
+  if (!result) return NULL;
+  AnvilTSProjectSnapshot *out = result->project_snapshot;
+  result->project_snapshot = NULL;
   return out;
 }
 
@@ -3668,6 +3790,8 @@ uint32_t anvil_worker_result_usages_found(const AnvilWorkerResult *result) { ret
 double anvil_worker_result_batch_total_ms(const AnvilWorkerResult *result) { return result ? result->batch_total_ms : 0.0; }
 double anvil_worker_result_batch_parse_ms(const AnvilWorkerResult *result) { return result ? result->batch_parse_ms : 0.0; }
 double anvil_worker_result_batch_project_record_ms(const AnvilWorkerResult *result) { return result ? result->batch_project_record_ms : 0.0; }
+double anvil_worker_result_project_builder_ms(const AnvilWorkerResult *result) { return result ? result->project_builder_ms : 0.0; }
+double anvil_worker_result_project_snapshot_ms(const AnvilWorkerResult *result) { return result ? result->project_snapshot_ms : 0.0; }
 
 uint64_t anvil_worker_pool_submitted_count(const AnvilWorkerPool *pool) {
   if (!pool) return 0;

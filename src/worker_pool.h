@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include "treesitter/project_file.h"
+#include "treesitter/project_index.h"
 
 typedef struct AnvilWorkerPool AnvilWorkerPool;
 typedef struct AnvilWorkerJob AnvilWorkerJob;
@@ -88,6 +89,10 @@ typedef struct AnvilWorkerJobSpec {
   const AnvilWorkerProjectBatchFileSpec *project_files;
   uint32_t project_file_count;
   uint64_t project_builder_id;
+  AnvilTSProjectBuilder *project_builder;
+  AnvilTSProjectSnapshot *project_base_snapshot;
+  AnvilTSProjectSnapshot *project_snapshot_to_release;
+  bool transfer_project_builder;
   uint32_t project_usage_cap;
   const char *project_root;
   const char *const *project_scan_paths;
@@ -102,6 +107,7 @@ typedef struct AnvilWorkerJobSpec {
   const AnvilWorkerProjectRunLanguageSpec *project_languages;
   uint32_t project_language_count;
   uint32_t project_progress_files;
+  bool project_publish_partial_snapshots;
 } AnvilWorkerJobSpec;
 
 AnvilWorkerPool *anvil_worker_pool_create(const char *name, int worker_count);
@@ -135,7 +141,10 @@ uint32_t anvil_worker_result_usages_found(const AnvilWorkerResult *result);
 double anvil_worker_result_batch_total_ms(const AnvilWorkerResult *result);
 double anvil_worker_result_batch_parse_ms(const AnvilWorkerResult *result);
 double anvil_worker_result_batch_project_record_ms(const AnvilWorkerResult *result);
+double anvil_worker_result_project_builder_ms(const AnvilWorkerResult *result);
+double anvil_worker_result_project_snapshot_ms(const AnvilWorkerResult *result);
 AnvilWorkerTreeSitterIndexResult *anvil_worker_result_steal_treesitter_index_result(AnvilWorkerResult *result);
+AnvilTSProjectSnapshot *anvil_worker_result_steal_project_snapshot(AnvilWorkerResult *result);
 
 void anvil_worker_treesitter_index_result_retain(AnvilWorkerTreeSitterIndexResult *result);
 void anvil_worker_treesitter_index_result_free(AnvilWorkerTreeSitterIndexResult *result);
