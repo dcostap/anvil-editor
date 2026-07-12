@@ -128,6 +128,27 @@ test.describe("node tabs", function()
     test.equal(views[1], keep)
   end)
 
+  test.it("keeps the layout tree valid during focus notifications from a split", function()
+    local root = make_leaf(1200, { "left" })
+    root.size.y = 800
+    local set_active_view = core.set_active_view
+    core.set_active_view = function(view)
+      local result = set_active_view(view)
+      root:update_layout()
+      return result
+    end
+
+    local ok, err = pcall(function()
+      root:split("right", named_view("right"))
+    end)
+    core.set_active_view = set_active_view
+
+    test.ok(ok, err)
+    test.equal(root.type, "hsplit")
+    test.not_nil(root.a)
+    test.not_nil(root.b)
+  end)
+
   test.it("close_all_views releases features owned by removed tabs", function()
     local root = make_leaf(1200, { "keep" })
     local keep = root.views[1]

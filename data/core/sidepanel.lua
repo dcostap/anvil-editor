@@ -94,20 +94,24 @@ local function attach_locked_side_node(container)
   local placeholder = side_placeholder()
   M.attaching_side_node = true
   local main = Node()
+  local side = Node()
+  local split_node = Node("hsplit")
   main:consume(container)
 
-  container:consume(Node("hsplit"))
+  -- Build the replacement nodes before exposing a split in the live tree.
+  -- Leaf construction changes focus and can synchronously notify observers.
+  container:consume(split_node)
   container.a = main
-  container.b = Node()
-  container.b.__sidepanel_side_node = true
+  container.b = side
+  side.__sidepanel_side_node = true
   container.__sidepanel_container_node = true
 
   M.container_node = container
   M.main_node = main
-  M.side_node = container.b
-  container.b:add_view(placeholder)
-  container.b.locked = { x = true }
-  container.b.resizable = false
+  M.side_node = side
+  side:add_view(placeholder)
+  side.locked = { x = true }
+  side.resizable = false
   M.attaching_side_node = false
   return M.side_node
 end

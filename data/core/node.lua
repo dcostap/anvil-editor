@@ -165,10 +165,15 @@ function Node:split(dir, view, locked, resizable)
   local node_type = assert(type_map[dir], "Invalid direction")
   local last_active = core.active_view
   local child = Node()
+  local sibling = Node()
+  local split_node = Node(node_type)
   child:consume(self)
-  self:consume(Node(node_type))
+  -- Construct both children before exposing the split in the live tree.
+  -- Creating a leaf activates its EmptyView, and focus observers are allowed
+  -- to inspect/layout the tree synchronously.
+  self:consume(split_node)
   self.a = child
-  self.b = Node()
+  self.b = sibling
   if view then self.b:add_view(view) end
   if locked then
     assert(type(locked) == 'table')
