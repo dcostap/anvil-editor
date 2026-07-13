@@ -367,14 +367,19 @@ static bool build_declaration(Buffer *out, const AnvilTSSnapshot *snapshot, cons
   const char *text;
   uint32_t length;
   if (!capture_text(snapshot, item, &text, &length)) return false;
-  for (uint32_t i = 0; i < length; i++) {
-    if (text[i] == '{') { length = i; break; }
-  }
   if (!length || name->start_byte < item->start_byte || name->end_byte < name->start_byte) return true;
   uint32_t name_start = name->start_byte - item->start_byte;
   uint32_t name_end = name->end_byte - item->start_byte;
+  if (name_start >= length) return true;
+  uint32_t declaration_start = 0;
+  for (uint32_t i = 0; i < name_start; i++) {
+    if (text[i] == '\r' || text[i] == '\n') declaration_start = i + 1;
+  }
+  for (uint32_t i = declaration_start; i < length; i++) {
+    if (text[i] == '{') { length = i; break; }
+  }
   bool pending_space = false, seen = false;
-  for (uint32_t i = 0; i < length; i++) {
+  for (uint32_t i = declaration_start; i < length; i++) {
     if (ascii_space(text[i])) {
       if (seen) pending_space = true;
       continue;

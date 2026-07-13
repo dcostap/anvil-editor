@@ -333,6 +333,37 @@ Route_Message_Type :: enum c.uchar {
     test.same(by_name.RESOLVE.declaration_name_span, { 1, 7 })
   end)
 
+  test.test("native Project declaration previews start on the symbol name line", function()
+    registry.reload()
+    local language = test.not_nil(registry.get("preview.odin", ""))
+    local pool = new_pool("lua-native-project-preview-line", 1)
+    local result = submit_result(pool, {
+      kind = "treesitter_index_text",
+      language = language.grammar,
+      path = "preview.odin",
+      relpath = "preview.odin",
+      text = [[package demo
+@(require_results)
+    resolve :: proc() {}
+]],
+      outline_query = language.query_sources.outline,
+      capture_paging = false,
+      line_range_lookup = false,
+      compact_project_records = true,
+      parse_timeout_ms = 1000,
+      query_timeout_ms = 100,
+      max_captures = 100,
+    })
+    local symbols = result:symbols({ limit = 20 })
+    local resolve
+    for _, symbol in ipairs(symbols) do
+      if symbol.name == "resolve" then resolve = symbol end
+    end
+    test.not_nil(resolve)
+    test.equal(resolve.declaration, "resolve :: proc()")
+    test.same(resolve.declaration_name_span, { 1, 7 })
+  end)
+
   test.test("native Project builders publish immutable deterministic snapshots", function()
     local pool = new_pool("lua-native-project-builder", 2)
     local builder = native_pool.new_project_builder({ usage_cap = 2 })
