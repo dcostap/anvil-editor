@@ -171,7 +171,8 @@ plugin_defaults("linewrapping", {
   require_tokenization = false,
 })
 plugin_defaults("navigation_history", {
-  debug = false,
+  debug = true,
+  debug_main_log = true,
   max_entries = 150,
 })
 plugin_defaults("projectsearch", {

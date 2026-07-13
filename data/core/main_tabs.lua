@@ -208,9 +208,22 @@ function M.open_doc(doc, opts)
   end
 
   local insert_idx = old_idx
+  local navigation_anchor
   if not opts.replace_dirty_singleton and promote_dirty_singleton_if_needed(node, editor) then
     insert_idx = old_idx + 1
   else
+    local history = core.navigation_history
+    if history and editor and node.active_view == editor and history.capture_place then
+      local ok, place = pcall(history.capture_place, editor)
+      if ok then
+        navigation_anchor = place
+        core.log_quiet("Main tabs: captured departing singleton Main Editor for Navigation History: %s",
+          tostring(editor.doc and (editor.doc.abs_filename or editor.doc.filename) or editor))
+      else
+        core.log_quiet("Main tabs: could not capture departing singleton Main Editor for Navigation History: %s",
+          tostring(place))
+      end
+    end
     if editor and editor.release_owned_features then
       editor:release_owned_features("main-editor-replace")
     end
@@ -222,6 +235,16 @@ function M.open_doc(doc, opts)
   apply_editor_state(view, opts.source_view)
   table.insert(node.views, math.min(insert_idx, #node.views + 1), view)
   node:set_active_view(view)
+  if navigation_anchor and core.navigation_history and core.navigation_history.record_place then
+    local ok, recorded = pcall(core.navigation_history.record_place, navigation_anchor, {
+      reason = "main-editor-replace",
+    })
+    if ok then
+      core.log_quiet("Main tabs: departing singleton Main Editor Navigation Place recorded=%s", tostring(recorded))
+    else
+      core.log_quiet("Main tabs: could not record departing singleton Main Editor Navigation Place: %s", tostring(recorded))
+    end
+  end
   if core.root_panel and core.root_panel.root_node then core.root_panel.root_node:update_layout() end
   local line = view.selection_state and view.selection_state.selections[1] or view.doc:get_selection()
   view:scroll_to_line(line, true, true)

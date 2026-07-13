@@ -392,27 +392,41 @@ end
 
 local function load_workspace()
   core.add_thread(function()
-    local workspace = consume_workspace(core.root_project().path)
-    project_paths.load_workspace_state(
-      workspace and workspace.project_paths,
-      workspace and workspace.directories
-    )
-    refresh_project_path_consumers("workspace load")
-    if workspace then
-      if workspace.visited_files then
-        core.visited_files = workspace.visited_files
-        if core.prune_visited_files then core.prune_visited_files() end
+    local function restore_workspace_state()
+      local workspace = consume_workspace(core.root_project().path)
+      project_paths.load_workspace_state(
+        workspace and workspace.project_paths,
+        workspace and workspace.directories
+      )
+      refresh_project_path_consumers("workspace load")
+      if workspace then
+        if workspace.visited_files then
+          core.visited_files = workspace.visited_files
+          if core.prune_visited_files then core.prune_visited_files() end
+        end
+        local root = get_unlocked_root(core.root_panel.root_node)
+        local active_view = load_node(root, workspace.documents)
+        if active_view then
+          core.set_active_view(active_view)
+        end
+        sidepanel.restore_workspace_state(workspace.side_panel, load_view)
+        sync_workspace_project_paths_to_core_projects()
+        tool_window.restore_project_state(core.root_project(), workspace.tool_windows)
       end
-      local root = get_unlocked_root(core.root_panel.root_node)
-      local active_view = load_node(root, workspace.documents)
-      if active_view then
-        core.set_active_view(active_view)
-      end
-      sidepanel.restore_workspace_state(workspace.side_panel, load_view)
-      sync_workspace_project_paths_to_core_projects()
-      tool_window.restore_project_state(core.root_project(), workspace.tool_windows)
+      untitled_recovery.restore_project(core.root_project().path)
     end
-    untitled_recovery.restore_project(core.root_project().path)
+
+    local history = core.navigation_history
+    if history and history.clear_history then
+      history.clear_history()
+      core.log_quiet("Workspace: reset Navigation History before restoring Project state")
+    end
+    if history and history.suppress_recording then
+      history.suppress_recording(restore_workspace_state)
+      core.log_quiet("Workspace: restored Project state with Navigation History recording suppressed")
+    else
+      restore_workspace_state()
+    end
     maybe_show_empty_project_file_tree()
   end)
 end

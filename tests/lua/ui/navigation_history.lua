@@ -7,8 +7,11 @@ local file_context = require "core.file_context"
 local DocView = require "core.docview"
 local command_slots = require "plugins.command_slots"
 local git_view = require "plugins.git_view"
+local fuzzy_searcher = require "plugins.fuzzy_searcher"
 
 local navigation_history = require "plugins.navigation_history"
+
+local navigation_test_file_id = 0
 
 local fake_git_backend = {
   repo_for_path = function(path) return { root = path } end,
@@ -57,6 +60,33 @@ local function open_editor(context, text)
   return view, doc
 end
 
+local function write_navigation_file(context, label, text)
+  navigation_test_file_id = navigation_test_file_id + 1
+  local path = (os.getenv("TEMP") or os.getenv("TMP") or USERDIR)
+    .. PATHSEP .. "anvil-navigation-history-test-"
+    .. system.get_process_id() .. "-" .. navigation_test_file_id .. "-" .. label
+  local fp = assert(io.open(path, "wb"))
+  fp:write(text or "")
+  fp:close()
+  track(context, "navigation_files", path)
+  return path
+end
+
+local function open_named_editor(context, label, text)
+  local path = write_navigation_file(context, label, text)
+  local doc = track(context, "docs", core.open_doc(path))
+  local view = track(context, "views", core.root_panel:open_doc(doc))
+  core.set_active_view(view)
+  return view, doc, path
+end
+
+local function track_active_editor(context)
+  local view = core.active_view
+  if view then track(context, "views", view) end
+  if view and view.doc then track(context, "docs", view.doc) end
+  return view
+end
+
 local function open_side_editor(context, name, text)
   local doc = track(context, "docs", core.open_doc())
   if text and text ~= "" then doc:text_input(text) end
@@ -81,6 +111,8 @@ end
 test.describe("IntelliJ-style navigation history", function()
   test.after_each(function(context)
     navigation_history.clear_history()
+
+    if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
 
     if context.original_fake_git_file_at then
       fake_git_backend.file_at = context.original_fake_git_file_at
@@ -122,7 +154,94 @@ test.describe("IntelliJ-style navigation history", function()
       if doc:is_dirty() then doc:clean() end
       remove_doc(doc)
     end
+    for _, path in ipairs(context.navigation_files or {}) do
+      os.remove(path)
+    end
     navigation_history.clear_history()
+  end)
+
+  test.it("returns directly to the departing singleton Main Editor", function(context)
+    local first, _, first_path = open_named_editor(context, "singleton-first.txt", "one\ntwo\nthree\n")
+    set_caret(first, 3, 2)
+    navigation_history.clear_history()
+
+    local _, _, second_path = open_named_editor(context, "singleton-second.txt", "alpha\nbeta\n")
+
+    local back = navigation_history.back_places()
+    test.equal(#back, 1)
+    test.ok(common.path_equals(back[1].filename, first_path))
+    test.equal(back[1].line, 3)
+    test.equal(back[1].col, 2)
+
+    test.ok(command.perform("navigation:back"))
+    local restored = track_active_editor(context)
+    test.ok(common.path_equals(restored.doc.abs_filename, first_path))
+    local line, col = caret(restored)
+    test.equal(line, 3)
+    test.equal(col, 2)
+
+    test.ok(command.perform("navigation:forward"))
+    local restored_second = track_active_editor(context)
+    test.ok(common.path_equals(restored_second.doc.abs_filename, second_path))
+  end)
+
+  test.it("branches singleton Main Editor history and clears stale forward places", function(context)
+    local first = open_named_editor(context, "branch-first.txt", "first\nline\n")
+    set_caret(first, 2, 3)
+    navigation_history.clear_history()
+
+    local second = open_named_editor(context, "branch-second.txt", "second\n")
+    test.ok(command.perform("navigation:back"))
+    local restored_first = track_active_editor(context)
+    test.equal(restored_first.doc.abs_filename, first.doc.abs_filename)
+    test.ok(navigation_history.is_forward_available())
+
+    local third = open_named_editor(context, "branch-third.txt", "third\n")
+    test.equal(core.active_view, third)
+    test.not_ok(navigation_history.is_forward_available())
+
+    local back = navigation_history.back_places()
+    test.equal(#back, 1)
+    test.equal(back[1].filename, first.doc.abs_filename)
+    test.ok(not common.path_equals(back[1].filename, second.doc.abs_filename))
+  end)
+
+  test.it("records the source Main Editor when a Fuzzy Searcher result replaces it", function(context)
+    local first, _, first_path = open_named_editor(context, "fuzzy-source.txt", "source\nline\n")
+    set_caret(first, 2, 4)
+    local target_path = write_navigation_file(context, "fuzzy-target.txt", "target\n")
+    navigation_history.clear_history()
+
+    fuzzy_searcher.open_static_results("Navigation target", {
+      { kind = "file", file = target_path, text = target_path },
+    })
+    local picker = core.fuzzy_searcher_active_view
+    picker.selected = 1
+    picker:confirm(false)
+
+    test.ok(common.path_equals(core.active_view.doc.abs_filename, target_path))
+    test.ok(command.perform("navigation:back"))
+    local restored = track_active_editor(context)
+    test.ok(common.path_equals(restored.doc.abs_filename, first_path))
+    local line, col = caret(restored)
+    test.equal(line, 2)
+    test.equal(col, 4)
+  end)
+
+  test.it("records the active untitled Main Tab instead of a hidden singleton Editor", function(context)
+    open_named_editor(context, "hidden-singleton.txt", "hidden\n")
+    local untitled = open_editor(context, "active untitled")
+    navigation_history.clear_history()
+
+    open_named_editor(context, "replacement-singleton.txt", "replacement\n")
+
+    local back = navigation_history.back_places()
+    test.equal(#back, 1)
+    test.equal(back[1].doc, untitled.doc)
+    test.equal(back[1].filename, nil)
+
+    test.ok(command.perform("navigation:back"))
+    test.equal(core.active_view, untitled)
   end)
 
   test.it("goes back and forward between editor places recorded by tab navigation", function(context)
