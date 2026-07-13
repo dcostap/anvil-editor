@@ -132,11 +132,24 @@ end
 
 local function declaration_preview(doc, item, name_capture)
   if not doc or not item or not name_capture then return nil end
-  local raw = strip_signature_body(text_for_capture(doc, item))
+  local raw = text_for_capture(doc, item)
   if raw == "" then return nil end
   local name_start = (name_capture.start_byte or 0) - (item.start_byte or 0) + 1
   local name_end = (name_capture.end_byte or 0) - (item.start_byte or 0)
   if name_start < 1 or name_end < name_start or name_start > #raw then return nil end
+
+  -- A declaration capture can begin on an earlier line than its name (for
+  -- example, when a return type is split across lines). Autocomplete previews
+  -- should retain only same-line context before the highlighted name.
+  local name_line_start = raw:sub(1, name_start - 1):match(".*[\r\n]()") or 1
+  if name_line_start > 1 then
+    raw = raw:sub(name_line_start)
+    name_start = name_start - name_line_start + 1
+    name_end = name_end - name_line_start + 1
+  end
+
+  raw = strip_signature_body(raw)
+  if name_start > #raw then return nil end
   name_end = math.min(name_end, #raw)
   return collapse_text_with_span(raw, name_start, name_end)
 end

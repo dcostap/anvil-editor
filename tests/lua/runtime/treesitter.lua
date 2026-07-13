@@ -2076,6 +2076,17 @@ int main(void) { return helper(); }]])
     doc:on_close()
   end)
 
+  test.it("declaration previews start on the symbol name line", function()
+    local doc = c_doc([[static int
+    split_line_name(void) { return 1; }]])
+    test.ok(wait_ready(doc))
+    local symbol = find_symbol(treesitter.get_document_outline(doc), "split_line_name", "function")
+    test.ok(symbol)
+    test.equal(symbol.declaration, "split_line_name(void)")
+    test.same(symbol.declaration_name_span, { 1, 15 })
+    doc:on_close()
+  end)
+
   test.it("C++ document outline includes straightforward parent nesting", function()
     local doc = cpp_doc([[namespace demo {
 class MenuGui {
