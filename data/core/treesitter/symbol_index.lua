@@ -1037,8 +1037,26 @@ local function public_symbol(symbol)
   return item
 end
 
-local function filtered_symbols(symbols, query, limit)
+local function symbol_language_allowed(symbol, languages)
+  if not languages or #languages == 0 then return true end
+  local language_id = tostring(symbol and symbol.language_id or "")
+  for _, allowed in ipairs(languages) do
+    if language_id == tostring(allowed) then return true end
+  end
+  return false
+end
+
+local function filtered_symbols(symbols, query, limit, opts)
   symbols = symbols or {}
+  opts = opts or {}
+  local languages = opts.language_ids or opts.languages
+  if languages and #languages > 0 then
+    local allowed = {}
+    for _, symbol in ipairs(symbols) do
+      if symbol_language_allowed(symbol, languages) then allowed[#allowed + 1] = symbol end
+    end
+    symbols = allowed
+  end
   query = tostring(query or "")
   limit = math.max(0, math.floor(tonumber(limit) or DEFAULT_QUERY_LIMIT))
   local out = {}
@@ -1137,7 +1155,9 @@ local function bounded_overlay_symbols(index, suppressed, query, opts, capacity)
   for path, entry in pairs(index.open_docs or {}) do
     if suppressed[path] and overlay_entry_current(entry) then
       for _, symbol in ipairs(entry.symbols or {}) do
-        if project_path_allows(symbol.path, opts.kind or "symbols") and symbol_kind_allowed(symbol, kinds) then
+        if project_path_allows(symbol.path, opts.kind or "symbols")
+        and symbol_kind_allowed(symbol, kinds)
+        and symbol_language_allowed(symbol, opts.language_ids or opts.languages) then
           local score = query == "" and 0 or (native_fuzzy and native_fuzzy.score(symbol_fuzzy_text(symbol), query, { mode = "generic" }))
           if query == "" or score then
             matched = matched + 1
@@ -1170,6 +1190,7 @@ local function native_project_symbols(index, snapshot, query, opts)
     offset = 0,
     limit = native_limit,
     kinds = opts.symbol_kinds or opts.kinds,
+    languages = opts.language_ids or opts.languages,
     excluded_paths = excluded,
     included_paths = included,
   })
@@ -1181,7 +1202,7 @@ local function native_project_symbols(index, snapshot, query, opts)
   for _, symbol in ipairs(page) do combined[#combined + 1] = symbol end
   for _, symbol in ipairs(overlays) do combined[#combined + 1] = symbol end
   sort_symbols(combined)
-  local results, merged_more = filtered_symbols(combined, query, limit)
+  local results, merged_more = filtered_symbols(combined, query, limit, opts)
   for i, symbol in ipairs(results) do
     results[i] = public_symbol(refresh_project_path_metadata(index, symbol, kind))
   end
@@ -1278,7 +1299,7 @@ function symbol_index.workspace_symbols(query, opts)
   if any_usable then
     if #per_root > 1 then sort_symbols(all_symbols) end
     local results, filtered_more
-    results, filtered_more = filtered_symbols(all_symbols, query, opts.limit)
+    results, filtered_more = filtered_symbols(all_symbols, query, opts.limit, opts)
     has_more = has_more or filtered_more
     for i, symbol in ipairs(results) do results[i] = public_symbol(symbol) end
     return results, status == "fresh" and nil or (reason or "indexing"), status == "fresh" and "fresh" or "stale", {
@@ -1969,7 +1990,7 @@ function symbol_index.current_document_symbols(doc, query, opts)
     symbol.relpath = relpath or path
     symbol.text = symbol.name
   end
-  local results, has_more = filtered_symbols(symbols, query, opts.limit)
+  local results, has_more = filtered_symbols(symbols, query, opts.limit, opts)
   return results, nil, "fresh", { has_more = has_more }
 end
 

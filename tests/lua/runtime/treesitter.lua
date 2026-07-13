@@ -480,13 +480,19 @@ Point :: struct {
   y: int,
 }
 
+Route_Message_Type :: enum c.uchar {
+  ADD,
+  CHANGE = 0xc,
+  RESOLVE = 0xb,
+}
+
 main :: proc() {
   value := 42
   return
 }
 ]])
     test.ok(wait_ready(doc))
-    local tokens = ts_highlight.line_tokens(doc, 8)
+    local tokens = ts_highlight.line_tokens(doc, 14)
     test.equal(token_type_for_text(tokens, "main"), "function")
     test.equal(token_type_for_text(tokens, "proc"), "keyword.function")
 
@@ -498,6 +504,26 @@ main :: proc() {
     test.equal(main_symbol.signature, "()")
     test.equal(main_symbol.declaration, "main :: proc()")
     test.same(main_symbol.declaration_name_span, { 1, 4 })
+    local route_type = find_symbol(symbols, "Route_Message_Type", "enum")
+    test.ok(route_type)
+    local add = find_symbol(symbols, "ADD", "enum_member")
+    test.ok(add)
+    test.equal(add.parent_name, "Route_Message_Type")
+    local resolve = find_symbol(symbols, "RESOLVE", "enum_member")
+    test.ok(resolve)
+    test.equal(resolve.parent_name, "Route_Message_Type")
+    test.equal(resolve.signature, "0xb")
+    test.equal(resolve.declaration, "RESOLVE")
+    test.same(resolve.declaration_name_span, { 1, 7 })
+    local member_counts = {}
+    for _, symbol in ipairs(symbols) do
+      if symbol.kind == "enum_member" then
+        member_counts[symbol.name] = (member_counts[symbol.name] or 0) + 1
+      end
+    end
+    test.equal(member_counts.ADD, 1)
+    test.equal(member_counts.CHANGE, 1)
+    test.equal(member_counts.RESOLVE, 1)
     doc:on_close()
   end)
 

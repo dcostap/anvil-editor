@@ -9,12 +9,24 @@ local Doc = require "core.doc"
 local DocView = require "core.docview"
 local MarkdownView = require "core.markdownview"
 local RootPanel = require "core.rootpanel"
+local project_paths = require "core.project_paths"
+local tree_sitter_registry = require "core.treesitter.registry"
 
 ---@class plugins.autocomplete.symbolinfo
 ---Text value of the symbol displayed on the autocomplete box.
 ---@field text string
 ---Additional information displayed on autocomplete box, eg: item type.
 ---@field info? string
+---Rich row preview containing the displayed declaration or contextual symbol.
+---@field preview_text? string
+---Inclusive byte span of `text` within `preview_text`.
+---@field preview_name_span? integer[]
+---Whether `info` is shown beside a rich preview.
+---@field preview_show_info? boolean
+---Containing symbol used to build a contextual preview.
+---@field preview_context? string
+---Signature or value suffix used to build a contextual preview.
+---@field preview_detail? string
 ---Name of a registered icon.
 ---@field icon? string
 ---Description shown when the symbol is hovered on the autocomplete box.
@@ -118,7 +130,7 @@ config.plugins.autocomplete.config_spec = {
       description = "Which symbols to show on the suggestions list.",
       path = "suggestions_scope",
       type = "selection",
-      default = "global",
+      default = "related",
       values = {
         {"All Documents", "global"},
         {"Current Document", "local"},
@@ -447,7 +459,10 @@ end
 
 local function row_text_width(font, info_font, suggestion, hide_info, max_chars)
   if suggestion and suggestion.preview_text then
-    return style.get_small_font(font):get_width(display_text(suggestion.preview_text, max_chars))
+    local width = style.get_small_font(font):get_width(display_text(suggestion.preview_text, max_chars))
+    local info = suggestion.preview_show_info and not hide_info and display_info(suggestion) or nil
+    if info and info ~= "" then width = width + style.padding.x + info_font:get_width(info) end
+    return width
   end
 
   local label, info = row_text_parts(suggestion, hide_info, max_chars)
@@ -477,6 +492,61 @@ end
 local function tree_sitter_symbol_index_module()
   local ok, symbols = pcall(require, "core.treesitter.symbol_index")
   return ok and symbols or nil
+end
+
+local function project_completion_language_ids(doc)
+  local path = doc and (doc.abs_filename or doc.filename)
+  if not path or path == "" then return nil end
+  local resolved = project_paths.resolve(path)
+  if not resolved or not resolved.flags or resolved.flags.autocomplete == false then return nil end
+  local ts = doc.treesitter
+  local language_id = ts and ts.language_id
+  if not language_id then return nil end
+  local language = ts.language or tree_sitter_registry.get(path, "")
+  local configured = language and language.autocomplete_languages
+  if configured and #configured > 0 then
+    local ids = {}
+    for i, id in ipairs(configured) do ids[i] = id end
+    return ids
+  end
+  return { language_id }
+end
+
+local function valid_preview_span(name, text, span)
+  if type(span) ~= "table" or not span[1] or not span[2] then return false end
+  text = tostring(text or "")
+  local first, last = tonumber(span[1]), tonumber(span[2])
+  return first and last and first >= 1 and last >= first and last <= #text
+     and text:sub(first, last) == tostring(name or "")
+end
+
+local function project_symbol_preview(symbol)
+  local name = tostring(symbol and symbol.name or "")
+  local parent = symbol and symbol.parent_name and tostring(symbol.parent_name) or ""
+  local signature = symbol and symbol.signature and tostring(symbol.signature) or ""
+  if parent ~= "" then
+    local prefix = parent .. "."
+    local detail = ""
+    if signature ~= "" then
+      if symbol.kind == "enum_member" then
+        detail = " = " .. signature
+      elseif signature:match("^[%(%[]") then
+        detail = signature
+      else
+        detail = " " .. signature
+      end
+    end
+    return prefix .. name .. detail, { #prefix + 1, #prefix + #name }, true, parent, detail
+  end
+  if valid_preview_span(name, symbol and symbol.declaration, symbol and symbol.declaration_name_span) then
+    return symbol.declaration, symbol.declaration_name_span, false
+  end
+  return nil, nil, false
+end
+
+local function human_symbol_kind(kind)
+  kind = tostring(kind or "project symbol")
+  return kind:gsub("_", " ")
 end
 
 local function native_fuzzy_module()
@@ -945,11 +1015,13 @@ function update_suggestions()
     add_cache_symbols(text_symbols)
 
     local symbol_index = tree_sitter_symbol_index_module()
-    if symbol_index and partial ~= "" then
+    local project_language_ids = project_completion_language_ids(doc)
+    if symbol_index and project_language_ids and partial ~= "" then
       local function add_project_symbols(query)
         if not query or query == "" then return end
         local project_symbols, _reason, project_status = symbol_index.workspace_symbols(query, {
           kind = "autocomplete",
+          language_ids = project_language_ids,
           limit = math.max(20, config.plugins.autocomplete.max_suggestions * 2),
           allow_stale = true,
         })
@@ -957,11 +1029,16 @@ function update_suggestions()
           for _, symbol in ipairs(project_symbols or {}) do
             local name = symbol.name
             if name and name ~= "" and #name <= max_symbol_length() then
+              local preview_text, preview_name_span, preview_show_info, preview_context, preview_detail =
+                project_symbol_preview(symbol)
               local item = {
                 text = name,
-                info = symbol.kind or "project symbol",
-                preview_text = symbol.declaration,
-                preview_name_span = symbol.declaration_name_span,
+                info = preview_show_info and human_symbol_kind(symbol.kind) or (symbol.kind or "project symbol"),
+                preview_text = preview_text,
+                preview_name_span = preview_name_span,
+                preview_show_info = preview_show_info,
+                preview_context = preview_context,
+                preview_detail = preview_detail,
                 no_icon = true,
               }
               for k, v in pairs(source_location_fields(symbol) or {}) do item[k] = v end
@@ -1412,7 +1489,18 @@ local function draw_suggestion_row(font, suggestion, rx, y, rw, lh, has_icons, s
   if suggestion.preview_text then
     local preview_font = style.get_small_font(font)
     local preview_y = y + math.max(0, math.floor((lh - preview_font:get_height()) / 2))
-    draw_preview_text(preview_font, suggestion, text_padding, preview_y, text_width, lh)
+    local preview_info = suggestion.preview_show_info and not hide_info and display_info(suggestion) or nil
+    local info_width = preview_info and preview_info ~= "" and style.font:get_width(preview_info) or 0
+    local info_gap = info_width > 0 and style.padding.x or 0
+    local preview_width = math.max(0, text_width - info_width - info_gap)
+    local preview_end = draw_preview_text(preview_font, suggestion, text_padding, preview_y, preview_width, lh)
+    if info_width > 0 then
+      common.draw_text(
+        style.font, style.dim, preview_info, "left",
+        preview_end + info_gap, y,
+        math.max(0, text_width - (preview_end - text_padding) - info_gap), lh
+      )
+    end
   else
     local label_end = draw_matched_text(font, style.text, style.accent, suggestion, text_padding, y, text_width, lh, label)
     if info and info ~= "" then
@@ -1728,6 +1816,12 @@ end
 ---@return boolean
 function autocomplete.is_open()
   return #suggestions > 0
+end
+
+---Return the currently selected completion item, if any.
+---@return plugins.autocomplete.symbolinfo?
+function autocomplete.get_selected_suggestion()
+  return suggestions[suggestions_idx]
 end
 
 ---Manually invoke the completion list using the provided symbols.

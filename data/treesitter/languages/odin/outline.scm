@@ -13,7 +13,26 @@
   (identifier) @name) @outline.struct
 
 (enum_declaration
-  (identifier) @name) @outline.enum
+  (identifier) @name
+  "::") @outline.enum
+
+; The Odin grammar exposes enum names and values as direct children of the
+; declaration rather than wrapping each entry in a named member node. Capture
+; the member identifier itself as the outline item so containment can attach it
+; to the enum, and keep an explicit value as its signature/detail.
+(enum_declaration
+  "{"
+  (identifier) @name @outline.enum_member
+  .
+  "="
+  .
+  (expression) @signature)
+
+(enum_declaration
+  "{"
+  (identifier) @name @outline.enum_member
+  .
+  ["," "}"])
 
 (union_declaration
   (identifier) @name) @outline.union

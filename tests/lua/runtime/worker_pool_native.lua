@@ -1,5 +1,6 @@
 local test = require "core.test"
 local common = require "core.common"
+local registry = require "core.treesitter.registry"
 local native_pool = require "worker_pool_native"
 
 local function drain_until(pool, predicate, limit)
@@ -291,6 +292,47 @@ test.describe("worker_pool_native", function()
     test.ok(#usages[1].line_text <= 512)
   end)
 
+  test.test("native Odin Project records preserve enum-member hierarchy and values", function()
+    registry.reload()
+    local language = test.not_nil(registry.get("enum.odin", ""))
+    local pool = new_pool("lua-native-odin-enum", 1)
+    local result = submit_result(pool, {
+      kind = "treesitter_index_text",
+      language = language.grammar,
+      path = "enum.odin",
+      relpath = "enum.odin",
+      text = [[package demo
+Route_Message_Type :: enum c.uchar {
+  ADD,
+  CHANGE = 0xc,
+  RESOLVE = 0xb,
+}
+]],
+      outline_query = language.query_sources.outline,
+      capture_paging = false,
+      line_range_lookup = false,
+      compact_project_records = true,
+      parse_timeout_ms = 1000,
+      query_timeout_ms = 100,
+      max_captures = 100,
+    })
+    local symbols = result:symbols({ limit = 20 })
+    test.equal(#symbols, 5)
+    local by_name = {}
+    for _, symbol in ipairs(symbols) do by_name[symbol.name] = symbol end
+    test.equal(by_name.Route_Message_Type.kind, "enum")
+    test.equal(by_name.ADD.kind, "enum_member")
+    test.equal(by_name.ADD.parent_name, "Route_Message_Type")
+    test.equal(by_name.CHANGE.kind, "enum_member")
+    test.equal(by_name.CHANGE.parent_name, "Route_Message_Type")
+    test.equal(by_name.CHANGE.signature, "0xc")
+    test.equal(by_name.RESOLVE.kind, "enum_member")
+    test.equal(by_name.RESOLVE.parent_name, "Route_Message_Type")
+    test.equal(by_name.RESOLVE.signature, "0xb")
+    test.equal(by_name.RESOLVE.declaration, "RESOLVE")
+    test.same(by_name.RESOLVE.declaration_name_span, { 1, 7 })
+  end)
+
   test.test("native Project builders publish immutable deterministic snapshots", function()
     local pool = new_pool("lua-native-project-builder", 2)
     local builder = native_pool.new_project_builder({ usage_cap = 2 })
@@ -356,6 +398,10 @@ test.describe("worker_pool_native", function()
     local selective = partial:query_symbols("zd", { limit = 10, kinds = { "function" } })
     test.equal(#selective, 1)
     test.equal(selective[1].name, "zed")
+    local c_symbols = partial:query_symbols("", { limit = 10, languages = { "c" } })
+    test.equal(#c_symbols, 2)
+    local odin_symbols = partial:query_symbols("", { limit = 10, languages = { "odin" } })
+    test.equal(#odin_symbols, 0)
     local excluded = partial:query_symbols("", { limit = 10, excluded_paths = { "vendor/a.c" } })
     test.equal(#excluded, 1)
     test.equal(excluded[1].name, "zed")

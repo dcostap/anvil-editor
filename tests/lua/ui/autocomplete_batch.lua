@@ -1,7 +1,9 @@
 local core = require "core"
 local command = require "core.command"
+local common = require "core.common"
 local config = require "core.config"
 local test = require "core.test"
+local symbol_index = require "core.treesitter.symbol_index"
 local autocomplete = require "plugins.autocomplete"
 
 local function track(context, kind, value)
@@ -28,6 +30,69 @@ local function open_editor(context, text)
   return view, doc
 end
 
+local function write_file(path, text)
+  local fp = assert(io.open(path, "wb"))
+  fp:write(text or "")
+  fp:close()
+end
+
+local function open_file_editor(context, path)
+  local doc = track(context, "docs", core.open_doc(path))
+  doc:set_selection(#doc.lines, #(doc.lines[#doc.lines] or ""))
+  local view = track(context, "views", core.root_panel:open_doc(doc))
+  core.set_active_view(view)
+  return view, doc
+end
+
+local function seed_odin_project_symbol(context, active_relative_path)
+  symbol_index.reset_for_tests()
+  context.reset_symbol_index = true
+  context.autocomplete_scope = context.autocomplete_scope or config.plugins.autocomplete.suggestions_scope
+  config.plugins.autocomplete.suggestions_scope = "none"
+  local suffix = tostring(system.get_process_id()) .. "-" .. tostring(math.floor(system.get_time() * 1000000))
+  local root = core.root_project().path
+  local fixture_root = root .. PATHSEP .. ".autocomplete-odin-project-" .. suffix
+  common.mkdirp(fixture_root)
+  context.temp_roots = context.temp_roots or {}
+  context.temp_roots[#context.temp_roots + 1] = fixture_root
+
+  local source_path = common.normalize_path(fixture_root .. PATHSEP .. "types.odin")
+  write_file(source_path, "package demo\nRoute_Message_Type :: enum c.uchar { RESOLVE = 0xb }\n")
+  local index = symbol_index.status(root)
+  index.status = "ready"
+  index.symbol_status = "ready"
+  index.usage_status = "ready"
+  -- Keep this focused UI fixture synchronous; filesystem watcher behavior is
+  -- covered by the Tree-sitter runtime suite.
+  index.watch_running = true
+  index.finished_at = system.get_time()
+  index.symbols = {
+    {
+      name = "RESOLVE",
+      text = "RESOLVE",
+      kind = "enum_member",
+      parent_name = "Route_Message_Type",
+      signature = "0xb",
+      language_id = "odin",
+      path = source_path,
+      file = "types.odin",
+      relpath = "types.odin",
+      start_line = 2,
+      start_col = 42,
+      end_line = 2,
+      end_col = 49,
+      name_range = {
+        start = { line = 2, col = 42 },
+        ["end"] = { line = 2, col = 49 },
+      },
+    },
+  }
+
+  local active_path = common.normalize_path(fixture_root .. PATHSEP .. active_relative_path)
+  write_file(active_path, "reso")
+  return root, active_path
+end
+
 local function set_view_selections(view, selections)
   view:with_selection_state(function()
     view.doc:set_selection(selections[1], selections[2], selections[3], selections[4])
@@ -51,6 +116,9 @@ test.describe("autocomplete batch behavior", function()
     if context.autocomplete_max_symbol_length then
       config.plugins.autocomplete.max_symbol_length = context.autocomplete_max_symbol_length
     end
+    if context.autocomplete_scope then
+      config.plugins.autocomplete.suggestions_scope = context.autocomplete_scope
+    end
     local root = core.root_panel.root_node
     for _, view in ipairs(context.views or {}) do
       local node = root:get_node_for_view(view)
@@ -60,6 +128,9 @@ test.describe("autocomplete batch behavior", function()
       if doc:is_dirty() then doc:clean() end
       remove_doc(doc)
     end
+    if context.reset_symbol_index then symbol_index.reset_for_tests() end
+    for _, root_path in ipairs(context.temp_roots or {}) do common.rm(root_path, true) end
+    for _, path in ipairs(context.temp_files or {}) do os.remove(path) end
   end)
 
   test.it("typing over many overlapping selected ranges should not be rejected into autocomplete-only state", function(context)
@@ -137,5 +208,49 @@ test.describe("autocomplete batch behavior", function()
     test.ok(draw_text > context_draw)
     test.is_nil(autocomplete._test.code_symbol_chunk_match_score("D3D11_CREATE_2D_TEXTURE_FAILED", chunks))
     test.is_nil(autocomplete._test.code_symbol_chunk_match_score("_sg_d3d11_CreateTexture2D", chunks))
+  end)
+
+  test.it("does not offer loaded Project symbols in an external unsupported-language file", function(context)
+    seed_odin_project_symbol(context, "current.odin")
+    local seeded, reason, status = symbol_index.workspace_symbols("reso", {
+      kind = "autocomplete", limit = 10, allow_stale = true,
+    })
+    test.ok(status == "fresh" or status == "stale", reason)
+    test.equal(#(seeded or {}), 1)
+    test.equal(seeded[1].name, "RESOLVE")
+    local external = USERDIR .. PATHSEP .. "autocomplete-external-" .. tostring(system.get_process_id()) .. ".js"
+    write_file(external, "reso")
+    context.temp_files = context.temp_files or {}
+    context.temp_files[#context.temp_files + 1] = external
+    open_file_editor(context, external)
+
+    autocomplete.trigger()
+
+    test.ok(not autocomplete.is_open(), "external JavaScript should not receive Odin Project symbols")
+  end)
+
+  test.it("does not offer Project symbols from an incompatible language", function(context)
+    local _, active_path = seed_odin_project_symbol(context, "current.kt")
+    open_file_editor(context, active_path)
+
+    autocomplete.trigger()
+
+    test.ok(not autocomplete.is_open(), "Kotlin should not receive Odin Project symbols")
+  end)
+
+  test.it("shows contextual enum-member Project suggestions while inserting only the member name", function(context)
+    local _, active_path = seed_odin_project_symbol(context, "current.odin")
+    local _, doc = open_file_editor(context, active_path)
+
+    autocomplete.trigger()
+
+    test.ok(autocomplete.is_open())
+    local item = test.not_nil(autocomplete.get_selected_suggestion())
+    test.equal(item.preview_text, "Route_Message_Type.RESOLVE = 0xb")
+    test.same(item.preview_name_span, { 20, 26 })
+    test.equal(item.info, "enum member")
+    test.equal(item.preview_show_info, true)
+    test.ok(command.perform("autocomplete:complete"))
+    test.equal(table.concat(doc.lines), "RESOLVE\n")
   end)
 end)
