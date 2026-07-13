@@ -275,6 +275,7 @@ fuzzy_searcher.files_cache_root = nil
 fuzzy_searcher.files_cache = nil
 fuzzy_searcher.files_indexing = false
 fuzzy_searcher.files_generation = 0
+fuzzy_searcher.files_scope_generation = 0
 fuzzy_searcher.files_metadata = {}
 fuzzy_searcher.files_fuzzy_index = nil
 fuzzy_searcher.files_fuzzy_index_generation = -1
@@ -589,6 +590,7 @@ local function ensure_file_index()
       table.sort(t)
       fuzzy_searcher.files_cache = t
       fuzzy_searcher.files_indexing = false
+      fuzzy_searcher.files_scope_generation = fuzzy_searcher.files_scope_generation + 1
       rebuild_native_file_index()
       if active_view then active_view.dirty = true; active_view:schedule_update(true) end
     end
@@ -1336,6 +1338,7 @@ local function decorate_grep_result(result, root)
   if not abs or project_paths.is_excluded(abs, "grep") then return nil end
   local display = project_paths.display_path(abs, { kind = "grep" })
   if display then
+    if display.rank_penalty == math.huge then return nil end
     result.file = display.text
     result.abs_path = display.abs_path
     result.root_label = display.root_label
@@ -2189,26 +2192,99 @@ local function draw_grep_result_row(font, result, x, y, width, collapse_file, co
   return line_x
 end
 
+fuzzy_searcher.grep_order = {
+  PATH_NONE = 0,
+  PATH_LOOSE = 1,
+  PATH_COMPACT = 2,
+  PATH_CONTIGUOUS = 3,
+  SAME_FILE_SCORE_SLACK = 500,
+  SAME_FILE_MAX_BURST = 6,
+}
+
+function fuzzy_searcher.grep_order.path_match_class(query, text)
+  query = trim_query(query):lower():gsub("[/\\]", "/")
+  if query == "" then return fuzzy_searcher.grep_order.PATH_NONE end
+  text = tostring(text or ""):lower():gsub("[/\\]", "/")
+  local words = {}
+  for word in query:gmatch("%S+") do
+    words[#words+1] = word
+  end
+  local all_contiguous = true
+  for _, word in ipairs(words) do
+    if not text:find(word, 1, true) then all_contiguous = false; break end
+  end
+  if all_contiguous then return fuzzy_searcher.grep_order.PATH_CONTIGUOUS end
+
+  for _, word in ipairs(words) do
+    local scan, first, previous, last, max_gap = 1, nil, nil, nil, 0
+    for i = 1, #word do
+      local position = text:find(word:sub(i, i), scan, true)
+      if not position then return fuzzy_searcher.grep_order.PATH_LOOSE end
+      first = first or position
+      if previous then max_gap = math.max(max_gap, position - previous - 1) end
+      previous, last, scan = position, position, position + 1
+    end
+    local span = last - first + 1
+    if span > #word * 2 + 4 or max_gap > math.max(10, #word * 2) then
+      return fuzzy_searcher.grep_order.PATH_LOOSE
+    end
+  end
+  return fuzzy_searcher.grep_order.PATH_COMPACT
+end
+
 local function build_scope(base, line, max_count)
   if base:sub(1, 1) == ">" then base = "" end
   local limit = max_count or 200
   local list = {}
+  local meta = {
+    by_path = {},
+    has_more = false,
+    indexing = fuzzy_searcher.files_indexing,
+    query = base,
+    limit = limit,
+  }
+  local function add_match(item, score)
+    local abs = fullpath(item)
+    local key = abs and common.path_compare_key(abs)
+    if not key then return end
+    local rank_penalty = fuzzy_searcher.file_rank_penalty(item)
+    if rank_penalty == math.huge then return end
+    list[#list+1] = abs
+    meta.by_path[key] = {
+      score = (tonumber(score) or 0) - rank_penalty,
+      match_class = fuzzy_searcher.grep_order.path_match_class(base, item),
+      text = item,
+    }
+  end
   if not line and native_file_index_ready() then
     local ok, matches = pcall(function()
       return fuzzy_searcher.files_fuzzy_index:search(base, { limit = limit, spans = false })
     end)
     if ok and matches then
-      for _, match in ipairs(matches) do list[#list+1] = fullpath(match.text) end
-      return list
+      for _, match in ipairs(matches) do add_match(match.text, match.score) end
+      meta.has_more = matches.has_more == true
+      meta.count = #list
+      if meta.has_more then
+        core.log_quiet("Fuzzy grep scope: %q limited to %d files", tostring(base), #list)
+      end
+      return list, meta
     end
   end
 
-  local matches = fuzzy_filter(get_files(), base, limit)
+  local matches = fuzzy_filter(get_files(), base, limit + 1)
+  if #matches > limit then
+    meta.has_more = true
+    matches[#matches] = nil
+  end
   for _, match in ipairs(matches) do
     local f = match.item
-    if (not line) or line_exists(f, line) then list[#list+1] = fullpath(f) end
+    if (not line) or line_exists(f, line) then add_match(f, match.score) end
   end
-  return list
+  meta.count = #list
+  if meta.has_more then
+    core.log_quiet("Fuzzy grep scope: %q limited to %d files", tostring(base), #list)
+  end
+  return list, meta
 end
 
 local everything = {
@@ -2366,6 +2442,7 @@ function FSView:new(prefix, opts)
   self.pending_select_index = nil
   self.status = ""
   self.last_files_generation = -1
+  self.last_files_scope_generation = -1
   self.dirty = true
   self.scrollable = false
   self.hovered_result = nil
@@ -3581,7 +3658,113 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
   self:ensure_selection_visible()
 end
 
-function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, gen, preserve_results)
+function fuzzy_searcher.grep_order.file_key(r)
+  local file = tostring(r and (r.abs_path or r.file) or "")
+  if file == "" then return "" end
+  return common.path_compare_key(file)
+end
+
+function fuzzy_searcher.grep_order.result_key(r)
+  local file_key = fuzzy_searcher.grep_order.file_key(r)
+  if file_key == "" then return nil end
+  return file_key .. "\0" .. tostring(r.line or "")
+end
+
+function fuzzy_searcher.grep_order.better(a, b)
+  local ap, bp = a.path_match_class or 0, b.path_match_class or 0
+  if ap ~= bp then return ap > bp end
+
+  local as, bs = a.fuzzy_score or 0, b.fuzzy_score or 0
+  if as ~= bs then return as > bs end
+
+  local aps, bps = a.path_score or 0, b.path_score or 0
+  if aps ~= bps then return aps > bps end
+
+  local af, bf = fuzzy_searcher.grep_order.file_key(a), fuzzy_searcher.grep_order.file_key(b)
+  if af ~= bf then return af < bf end
+
+  local al, bl = tonumber(a.line) or 0, tonumber(b.line) or 0
+  if al ~= bl then return al < bl end
+
+  local ac, bc = tonumber(a.col) or 0, tonumber(b.col) or 0
+  if ac ~= bc then return ac < bc end
+
+  return tostring(a.text or "") < tostring(b.text or "")
+end
+
+function fuzzy_searcher.grep_order.regroup(sorted)
+  local out, used = {}, {}
+  for i, anchor in ipairs(sorted) do
+    if not used[i] then
+      out[#out+1] = anchor
+      used[i] = true
+
+      local anchor_file = fuzzy_searcher.grep_order.file_key(anchor)
+      local anchor_score = anchor.fuzzy_score or 0
+      local anchor_path_class = anchor.path_match_class or 0
+      local pulled = 1
+      if anchor_file ~= "" then
+        -- Search the complete ranked tail rather than an arbitrary eight-row
+        -- window. Keep the burst bounded so one large file cannot monopolize
+        -- the picker, and never pull a weaker path-match class across a
+        -- stronger one.
+        for j = i + 1, #sorted do
+          local candidate = sorted[j]
+          if not used[j]
+            and fuzzy_searcher.grep_order.file_key(candidate) == anchor_file
+            and (candidate.path_match_class or 0) == anchor_path_class
+            and anchor_score - (candidate.fuzzy_score or 0) <= fuzzy_searcher.grep_order.SAME_FILE_SCORE_SLACK then
+            out[#out+1] = candidate
+            used[j] = true
+            pulled = pulled + 1
+            if pulled >= fuzzy_searcher.grep_order.SAME_FILE_MAX_BURST then break end
+          end
+        end
+      end
+    end
+  end
+  return out
+end
+
+function fuzzy_searcher.grep_order.results(results)
+  local out = {}
+  for i, result in ipairs(results or {}) do out[i] = result end
+  table.sort(out, fuzzy_searcher.grep_order.better)
+  return fuzzy_searcher.grep_order.regroup(out)
+end
+
+function fuzzy_searcher.grep_order.worse(a, b)
+  return fuzzy_searcher.grep_order.better(b, a)
+end
+
+function fuzzy_searcher.grep_order.retain_top(heap, candidate, limit)
+  limit = math.max(1, math.floor(tonumber(limit) or 1))
+  if #heap < limit then
+    local pos = #heap + 1
+    while pos > 1 do
+      local parent = math.floor(pos / 2)
+      if not fuzzy_searcher.grep_order.worse(candidate, heap[parent]) then break end
+      heap[pos] = heap[parent]
+      pos = parent
+    end
+    heap[pos] = candidate
+    return true
+  end
+
+  if not fuzzy_searcher.grep_order.better(candidate, heap[1]) then return false end
+  local pos, count = 1, #heap
+  while pos * 2 <= count do
+    local child = pos * 2
+    if child < count and fuzzy_searcher.grep_order.worse(heap[child + 1], heap[child]) then child = child + 1 end
+    if not fuzzy_searcher.grep_order.worse(heap[child], candidate) then break end
+    heap[pos] = heap[child]
+    pos = child
+  end
+  heap[pos] = candidate
+  return true
+end
+
+function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, gen, preserve_results, scope_meta)
   -- Grep results are streamed asynchronously. Do not page them by clearing and
   -- restarting the search while the user scrolls; publish a growing stable
   -- prefix and let selection stop naturally at the currently available end.
@@ -3604,70 +3787,22 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
     end
   end
   if #jobs == 0 then return end
+
+  -- A job is useful only while it contributes to the active query. Retaining
+  -- every prefix typed into the prompt otherwise leaves multiple rg processes
+  -- and their line caches alive until the picker closes.
+  for key, job in pairs(fuzzy_grep_jobs) do
+    if not added_jobs[key] then
+      job.cancelled = true
+      if job.proc and job.proc:running() then pcall(function() job.proc:kill() end) end
+      fuzzy_grep_jobs[key] = nil
+      core.log_quiet("Fuzzy grep: retired obsolete job %s", tostring(job.seed))
+    end
+  end
   local exact_results = #terms == 1 and not terms[1].exact and trim_query(grep):lower() == terms[1].text
   local fuzzy_query = terms_fuzzy_query(terms)
   local initial_settle_seconds = 0.10
   local initial_settle_visible_multiplier = 2
-  local same_file_group_scan = 8
-  local same_file_group_score_slack = 500
-  local same_file_group_max_burst = 3
-
-  local function grep_result_file_key(r)
-    local file = tostring(r and (r.abs_path or r.file) or "")
-    if file == "" then return "" end
-    return common.path_compare_key(file)
-  end
-
-  local function grep_result_key(r)
-    local file_key = grep_result_file_key(r)
-    if file_key == "" then return nil end
-    return file_key .. "\0" .. tostring(r.line or "")
-  end
-
-  local function grep_result_better(a, b)
-    local as, bs = a.fuzzy_score or 0, b.fuzzy_score or 0
-    if as ~= bs then return as > bs end
-
-    local af, bf = grep_result_file_key(a), grep_result_file_key(b)
-    if af ~= bf then return af < bf end
-
-    local al, bl = tonumber(a.line) or 0, tonumber(b.line) or 0
-    if al ~= bl then return al < bl end
-
-    local ac, bc = tonumber(a.col) or 0, tonumber(b.col) or 0
-    if ac ~= bc then return ac < bc end
-
-    return tostring(a.text or "") < tostring(b.text or "")
-  end
-
-  local function regroup_nearby_same_file_grep_results(sorted)
-    local out, used = {}, {}
-    for i, anchor in ipairs(sorted) do
-      if not used[i] then
-        out[#out+1] = anchor
-        used[i] = true
-
-        local anchor_file = grep_result_file_key(anchor)
-        local anchor_score = anchor.fuzzy_score or 0
-        local pulled = 1
-        if anchor_file ~= "" then
-          local last = math.min(#sorted, i + same_file_group_scan)
-          for j = i + 1, last do
-            local candidate = sorted[j]
-            if not used[j]
-              and grep_result_file_key(candidate) == anchor_file
-              and anchor_score - (candidate.fuzzy_score or 0) <= same_file_group_score_slack then
-              out[#out+1] = candidate
-              used[j] = true
-              pulled = pulled + 1
-              if pulled >= same_file_group_max_burst then break end
-            end
-          end
-        end
-      end
-    end
-    return out
-  end
 
   local function jobs_label()
     if #jobs == 1 then return jobs[1].seed end
@@ -3690,10 +3825,13 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
     local processed = {}
     for _, s in ipairs(jobs) do processed[s.key] = 0 end
     local max_candidates = fuzzy_searcher.fuzzy_candidate_limit or 500
+    max_candidates = math.max(1, max_candidates, limit)
+    local matched_candidate_count = 0
+    local candidate_version = 0
     local slice_start = system.get_time()
     local stream_started = system.get_time()
     local last_publish = 0
-    local published_candidate_count = 0
+    local published_candidate_version = 0
     local first_publish_done = false
     local initial_candidate_target = math.max(
       20,
@@ -3711,7 +3849,7 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
       )
       for i = 1, visible_bottom do
         local r = existing[i]
-        local key = grep_result_key(r)
+        local key = fuzzy_searcher.grep_order.result_key(r)
         if key and not committed_keys[key] then
           committed_keys[key] = true
           committed_results[#committed_results+1] = r
@@ -3771,13 +3909,29 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
         content_match_start = content_match_start,
         base_query = base_query,
       }
+      local scope_key = source.abs_path and common.path_compare_key(source.abs_path)
+      local path_info = scope_key and scope_meta and scope_meta.by_path and scope_meta.by_path[scope_key]
+      if path_info then
+        r.path_match_class = path_info.match_class
+        r.path_score = path_info.score
+      elseif base_query ~= "" then
+        local path_score = fuzzy_match_file_fast(base_query, r.file)
+        r.path_match_class = fuzzy_searcher.grep_order.path_match_class(base_query, r.file)
+        r.path_score = path_score or 0
+      else
+        r.path_match_class = fuzzy_searcher.grep_order.PATH_NONE
+        r.path_score = 0
+      end
       if base_query ~= "" then
         local _, file_spans = fuzzy_match(base_query, r.file)
         r.file_spans = file_spans or {}
       end
 
       candidate_seen[key] = true
-      candidates[#candidates+1] = r
+      matched_candidate_count = matched_candidate_count + 1
+      if fuzzy_searcher.grep_order.retain_top(candidates, r, max_candidates) then
+        candidate_version = candidate_version + 1
+      end
     end
 
     local function job_stats()
@@ -3795,18 +3949,25 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
       if not initial_publish_ready(final) then return true end
       if first_publish_done then commit_visible_prefix() end
 
+      local selected_key = fuzzy_searcher.grep_order.result_key(self.results and self.results[self.selected])
+      if final then
+        -- Streaming publications favor stability, but completion is the
+        -- authoritative ranking. Do not let process timing permanently pin a
+        -- weaker visible prefix above better matches that arrived later.
+        committed_results, committed_keys = {}, {}
+      end
+
       local running, truncated, scanned = job_stats()
       local tail = {}
       for _, candidate in ipairs(candidates) do
-        local key = grep_result_key(candidate)
+        local key = fuzzy_searcher.grep_order.result_key(candidate)
         if key and not committed_keys[key] then tail[#tail+1] = candidate end
       end
-      table.sort(tail, grep_result_better)
-      tail = regroup_nearby_same_file_grep_results(tail)
+      tail = fuzzy_searcher.grep_order.results(tail)
 
       local out, emitted = {}, {}
       for _, r in ipairs(committed_results) do
-        local key = grep_result_key(r)
+        local key = fuzzy_searcher.grep_order.result_key(r)
         if key and not emitted[key] then
           out[#out+1] = r
           emitted[key] = true
@@ -3815,7 +3976,7 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
       end
       if #out < limit then
         for _, r in ipairs(tail) do
-          local key = grep_result_key(r)
+          local key = fuzzy_searcher.grep_order.result_key(r)
           if key and not emitted[key] then
             out[#out+1] = r
             emitted[key] = true
@@ -3824,8 +3985,9 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
         end
       end
 
-      local has_more = #candidates > limit or running or truncated
-      local fuzzy_count = #candidates
+      local scope_limited = scope_meta and scope_meta.has_more
+      local has_more = matched_candidate_count > limit or running or truncated or scope_limited
+      local fuzzy_count = matched_candidate_count
       local status
       if exact_results then
         if final then
@@ -3842,6 +4004,9 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
       else
         status = string.format("%d fuzzy matches — scanning '%s'… %d lines", fuzzy_count, jobs_label(), scanned)
       end
+      if final and scope_limited then
+        status = status .. string.format(" — path scope limited to %d files", tonumber(scope_meta.count) or 0)
+      end
       if final and self.loading_feedback_pending and #out == 0 and not has_more then
         self.loading_feedback_status = status
         return true
@@ -3853,15 +4018,24 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
       if self.pending_select_index then
         self.selected = common.clamp(self.pending_select_index, 1, math.max(1, #out))
         self.pending_select_index = nil
+      elseif selected_key then
+        local selected_index
+        for i, result in ipairs(out) do
+          if fuzzy_searcher.grep_order.result_key(result) == selected_key then selected_index = i; break end
+        end
+        self.selected = selected_index or common.clamp(self.selected, 1, math.max(1, #out))
       else
         self.selected = common.clamp(self.selected, 1, math.max(1, #out))
       end
       self.viewport_offset = common.clamp(self.viewport_offset, 1, math.max(1, #out))
       self:ensure_selection_visible()
       self.status = status
+      if final and matched_candidate_count > #candidates then
+        core.log_quiet("Fuzzy grep: ranked best %d of %d matching lines", #candidates, matched_candidate_count)
+      end
       self:schedule_update(true)
       last_publish = system.get_time()
-      published_candidate_count = #candidates
+      published_candidate_version = candidate_version
       first_publish_done = true
       commit_visible_prefix()
       return true
@@ -3870,10 +4044,10 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
     while gen == grep_generation and active_view == self do
       local all_done = true
       for _, s in ipairs(jobs) do
-        while (processed[s.key] or 0) < #s.lines and #candidates < max_candidates do
+        while (processed[s.key] or 0) < #s.lines do
           processed[s.key] = (processed[s.key] or 0) + 1
           add_candidate(s.lines[processed[s.key]])
-          if #candidates ~= published_candidate_count
+          if candidate_version ~= published_candidate_version
             and #candidates > 0
             and system.get_time() - last_publish > 0.04
             and initial_publish_ready(false) then
@@ -3884,13 +4058,13 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
         if not s.done or (processed[s.key] or 0) < #s.lines then all_done = false end
       end
 
-      if #candidates ~= published_candidate_count
+      if candidate_version ~= published_candidate_version
         and #candidates > 0
         and system.get_time() - last_publish > 0.08
         and initial_publish_ready(false) then
         publish(false)
       end
-      if (#candidates >= max_candidates) or all_done then break end
+      if all_done then break end
       coroutine.yield(1 / config.fps)
       slice_start = system.get_time()
     end
@@ -3928,17 +4102,17 @@ function FSView:start_grep(base, line, grep)
 
   local limit = self:max_result_limit()
   local roots = project_paths.search_roots("grep")
-  local scope = nil
+  local scope, scope_meta = nil, nil
   if base ~= "" or line then
-    scope = build_scope(base, line, 200)
+    scope, scope_meta = build_scope(base, line, 200)
     if #scope == 0 then
       self:cancel_deferred_loading_feedback()
       self.results = {}
       self.selected = 1
       self.viewport_offset = 1
       self.hovered_result = nil
-      self.has_more = false
-      self.status = "No files in scope"
+      self.has_more = scope_meta and scope_meta.indexing or false
+      self.status = self.has_more and "Indexing files for path scope…" or "No files in scope"
       self:schedule_update(true)
       return
     end
@@ -3950,7 +4124,7 @@ function FSView:start_grep(base, line, grep)
   local terms = parse_code_search_terms(grep)
   local single_token_exact = #terms == 1 and not terms[1].exact and trim_query(grep):lower() == terms[1].text
   if not exact_query and (#terms > 1 or single_token_exact) then
-    self:start_grep_fuzzy_stream(base, line, grep, terms, scope, roots, gen, preserve_results)
+    self:start_grep_fuzzy_stream(base, line, grep, terms, scope, roots, gen, preserve_results, scope_meta)
     return
   end
 
@@ -3986,6 +4160,18 @@ function FSView:start_grep(base, line, grep)
         r.content_match_start = r.col
       end
       r.base_query = base:sub(1, 1) == ">" and "" or base
+      local path_key = r.abs_path and common.path_compare_key(r.abs_path)
+      local path_info = path_key and scope_meta and scope_meta.by_path and scope_meta.by_path[path_key]
+      if path_info then
+        r.path_match_class = path_info.match_class
+        r.path_score = path_info.score
+      else
+        r.path_match_class = r.base_query ~= ""
+          and fuzzy_searcher.grep_order.path_match_class(r.base_query, r.file)
+          or fuzzy_searcher.grep_order.PATH_NONE
+        r.path_score = 0
+      end
+      r.fuzzy_score = fuzzy_match(grep, r.text) or 0
       if r.base_query ~= "" and not r.file_spans then
         local _, file_spans = fuzzy_match(r.base_query, r.file)
         r.file_spans = file_spans or {}
@@ -4032,7 +4218,18 @@ function FSView:start_grep(base, line, grep)
       return
     end
     if not results_started then begin_results() end
+    local selected_key = fuzzy_searcher.grep_order.result_key(self.results and self.results[self.selected])
+    self.results = fuzzy_searcher.grep_order.results(self.results)
+    if selected_key then
+      for i, result in ipairs(self.results) do
+        if fuzzy_searcher.grep_order.result_key(result) == selected_key then self.selected = i; break end
+      end
+    end
     self.status = string.format("%d exact matches", #self.results)
+    if scope_meta and scope_meta.has_more then
+      self.has_more = true
+      self.status = self.status .. string.format(" — path scope limited to %d files", tonumber(scope_meta.count) or 0)
+    end
     self:schedule_update(true)
   end)
 end
@@ -4372,6 +4569,7 @@ function FSView:refresh(text)
   end
   text = text or self.input:get_text()
   local files_changed = self.last_files_generation ~= fuzzy_searcher.files_generation
+  local files_scope_changed = self.last_files_scope_generation ~= fuzzy_searcher.files_scope_generation
   local base, line, grep, symbol = parse_query(text)
   local query_key = table.concat({ base, tostring(line or ""), tostring(grep or ""), tostring(symbol or "") }, "\0")
   local query_changed = query_key ~= self.current_query_key
@@ -4381,15 +4579,17 @@ function FSView:refresh(text)
     self:reset_pagination()
   end
 
-  if not self.force_refresh and not self.dirty and not files_changed then return end
+  if not self.force_refresh and not self.dirty and not files_changed and not files_scope_changed then return end
   local force_refresh = self.force_refresh
   self.force_refresh = false
   self.dirty = false
   self.last_files_generation = fuzzy_searcher.files_generation
+  self.last_files_scope_generation = fuzzy_searcher.files_scope_generation
 
   if grep ~= nil then
     fuzzy_searcher.cancel_symbol_search()
-    if query_changed or force_refresh then self:start_grep(base, line, grep) end
+    local scoped_index_changed = (base ~= "" or line ~= nil) and files_scope_changed
+    if query_changed or force_refresh or scoped_index_changed then self:start_grep(base, line, grep) end
   elseif symbol ~= nil then
     kill_file_search()
     kill_grep()
@@ -5017,13 +5217,20 @@ return {
     file_result_key = file_result_key,
     build_scope = build_scope,
     decorate_grep_result = decorate_grep_result,
+    grep_path_match_class = fuzzy_searcher.grep_order.path_match_class,
+    order_grep_results = fuzzy_searcher.grep_order.results,
+    retain_top_grep_result = fuzzy_searcher.grep_order.retain_top,
     symbol_result_from_item = symbol_result_from_item,
     result_main_text = fuzzy_searcher.result_main_text,
     set_file_cache_for_test = function(files)
+      -- Invalidate any fd thread started by an earlier test before publishing
+      -- the deterministic fixture cache.
+      fuzzy_searcher.files_generation = fuzzy_searcher.files_generation + 1
       clear_native_file_index()
       fuzzy_searcher.files_cache_root = fuzzy_searcher.file_roots_signature(project_paths.search_roots("files"))
       fuzzy_searcher.files_cache = files or {}
       fuzzy_searcher.files_indexing = false
+      fuzzy_searcher.files_scope_generation = fuzzy_searcher.files_scope_generation + 1
     end,
     file_search_rows = function(query, files, skip_path, limit)
       local recent_matches, skip_keys = collect_recent_file_matches(query or "", nil, skip_path)
