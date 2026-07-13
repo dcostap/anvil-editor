@@ -2,6 +2,13 @@
 
 Additional dependency notes and license text for Tree-sitter are in `tree-sitter.md`.
 
+## JetBrains Platform Icons
+
+The symbol-kind SVGs under `resources/icons/symbols` include assets from the
+IntelliJ Platform icon set, copyright JetBrains s.r.o. and contributors. They
+are distributed under Apache License 2.0; the complete license is included at
+`resources/icons/symbols/LICENSE.txt`.
+
 ## rxi/lite
 
 Copyright (c) 2020 rxi

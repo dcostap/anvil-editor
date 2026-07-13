@@ -10,6 +10,7 @@ local DocView = require "core.docview"
 local MarkdownView = require "core.markdownview"
 local RootPanel = require "core.rootpanel"
 local project_paths = require "core.project_paths"
+local symbol_icons = require "core.symbol_icons"
 local tree_sitter_registry = require "core.treesitter.registry"
 
 ---@class plugins.autocomplete.symbolinfo
@@ -434,6 +435,33 @@ end
 local function display_icon(suggestion)
   if suggestion and suggestion.no_icon then return nil end
   return suggestion and suggestion.icon
+end
+
+local function display_icon_width(suggestion, row_height)
+  local icon = display_icon(suggestion)
+  if not icon then return 0 end
+  if symbol_icons.resolve_kind(icon) then
+    return symbol_icons.size_for_row(row_height)
+  end
+  local registered = autocomplete.icons[icon]
+  return registered and registered.font:get_width(registered.char) or 0
+end
+
+local function draw_display_icon(suggestion, x, y, width, row_height)
+  local icon = display_icon(suggestion)
+  if not icon then return false end
+  local icon_width = display_icon_width(suggestion, row_height)
+  if icon_width <= 0 then return false end
+  local draw_x = x + math.max(0, math.floor((width - icon_width) / 2))
+  if symbol_icons.resolve_kind(icon) then
+    return symbol_icons.draw(icon, draw_x, y, row_height, icon_width)
+  end
+
+  local registered = autocomplete.icons[icon]
+  if not registered then return false end
+  local color = type(registered.color) == "string" and style.syntax[registered.color] or registered.color
+  common.draw_text(registered.font, color or style.dim, registered.char, "center", x, y, width, row_height)
+  return true
 end
 
 local function row_text_parts(suggestion, hide_info, max_chars)
@@ -983,11 +1011,11 @@ function update_suggestions()
       add_text_symbol(
         symbol.name,
         symbol.kind or "symbol",
-        nil,
+        symbol.kind,
         symbol.autocomplete_priority,
         symbol.completion_preview,
         symbol.completion_preview_name_span,
-        true,
+        false,
         source_location_fields(symbol, doc)
       )
     end
@@ -1039,7 +1067,7 @@ function update_suggestions()
                 preview_show_info = preview_show_info,
                 preview_context = preview_context,
                 preview_detail = preview_detail,
-                no_icon = true,
+                icon = symbol.kind,
               }
               for k, v in pairs(source_location_fields(symbol) or {}) do item[k] = v end
               add_candidate_item(setmetatable(item, mt), item_richness(item) > 0)
@@ -1164,7 +1192,8 @@ local function get_suggestions_rect(av)
   y = y + av:get_line_height() + style.padding.y
   local font = av:get_font()
   local th = font:get_height()
-  local has_icons = false
+  local lh = th + style.padding.y
+  local icon_column_width = 0
   local hide_info = config.plugins.autocomplete.hide_info
   local hide_icons = config.plugins.autocomplete.hide_icons
 
@@ -1173,17 +1202,15 @@ local function get_suggestions_rect(av)
   local content_width = 0
   for _, s in ipairs(suggestions) do
     local w = row_text_width(font, style.font, s, hide_info, ROW_PREVIEW_MAX_CHARS)
-    local icon = display_icon(s)
-    if not hide_icons and icon and autocomplete.icons[icon] then
-      w = w + autocomplete.icons[icon].font:get_width(
-        autocomplete.icons[icon].char
-      ) + (style.padding.x / 2)
-      has_icons = true
+    if not hide_icons then
+      local icon_width = display_icon_width(s, lh)
+      if icon_width > 0 then
+        icon_column_width = math.max(icon_column_width, icon_width + style.padding.x / 2)
+      end
     end
     content_width = math.max(content_width, w)
   end
 
-  local lh = th + style.padding.y
   local view_top = av.position.y
   local view_bottom = av.position.y + av.size.y
   local _, window_height = system.get_window_size(core.window)
@@ -1205,7 +1232,7 @@ local function get_suggestions_rect(av)
     rect_y = above_bottom - (max_items * lh + style.padding.y)
   end
 
-  local rect_width = math.max(150, content_width + style.padding.x * 2)
+  local rect_width = math.max(150, content_width + icon_column_width + style.padding.x * 2)
   rect_width = math.min(rect_width, available_width)
 
   return
@@ -1213,7 +1240,7 @@ local function get_suggestions_rect(av)
     rect_y,
     rect_width,
     max_items * lh + style.padding.y,
-    has_icons,
+    icon_column_width,
     max_items
 end
 
@@ -1452,28 +1479,19 @@ local function draw_description_box(text, sx, sy, sw, sh)
   desc_rect = { x = x, y = y, w = width, h = height }
 end
 
-local function draw_suggestion_row(font, suggestion, rx, y, rw, lh, has_icons, selected, max_chars)
+local function draw_suggestion_row(font, suggestion, rx, y, rw, lh, icon_column_width, selected, max_chars)
   local row_bg = selected and style.autocomplete_selection or style.background3
   if selected then renderer.draw_rect(rx, y, rw, lh, row_bg) end
 
   local icon_l_padding, icon_r_padding = 0, 0
-  if has_icons then
-    local icon = display_icon(suggestion)
-    if icon and autocomplete.icons[icon] then
-      local ifont = autocomplete.icons[icon].font
-      local itext = autocomplete.icons[icon].char
-      local icolor = style.dim
-      if config.plugins.autocomplete.icon_position == "left" then
-        common.draw_text(
-          ifont, icolor, itext, "left", rx + style.padding.x, y, rw, lh
-        )
-        icon_l_padding = ifont:get_width(itext) + (style.padding.x / 2)
-      else
-        common.draw_text(
-          ifont, icolor, itext, "right", rx, y, rw - style.padding.x, lh
-        )
-        icon_r_padding = ifont:get_width(itext) + (style.padding.x / 2)
-      end
+  if icon_column_width > 0 then
+    if config.plugins.autocomplete.icon_position == "left" then
+      draw_display_icon(suggestion, rx + style.padding.x, y, icon_column_width - style.padding.x / 2, lh)
+      icon_l_padding = icon_column_width
+    else
+      local icon_x = rx + rw - style.padding.x - icon_column_width + style.padding.x / 2
+      draw_display_icon(suggestion, icon_x, y, icon_column_width - style.padding.x / 2, lh)
+      icon_r_padding = icon_column_width
     end
   end
 
@@ -1530,7 +1548,7 @@ local function draw_suggestions_box(av)
     return
   end
 
-  local rx, ry, rw, rh, has_icons, visible_count = get_suggestions_rect(av)
+  local rx, ry, rw, rh, icon_column_width, visible_count = get_suggestions_rect(av)
   renderer.draw_rect(rx, ry, rw, rh, style.background3)
   desc_rect = nil
 
@@ -1545,7 +1563,7 @@ local function draw_suggestions_box(av)
     local s = suggestions[i]
     if not s then break end
     local selected = suggestions_idx == i
-    draw_suggestion_row(font, s, rx, y, rw, lh, has_icons, selected, ROW_PREVIEW_MAX_CHARS)
+    draw_suggestion_row(font, s, rx, y, rw, lh, icon_column_width, selected, ROW_PREVIEW_MAX_CHARS)
     if selected then
       selected_item = s
       selected_y = y
@@ -1561,16 +1579,11 @@ local function draw_suggestions_box(av)
   if selected_item then
     local hide_info = config.plugins.autocomplete.hide_info
     local full_width = row_text_width(font, style.font, selected_item, hide_info)
-    local icon = display_icon(selected_item)
-    if has_icons and icon and autocomplete.icons[icon] then
-      full_width = full_width + autocomplete.icons[icon].font:get_width(
-        autocomplete.icons[icon].char
-      ) + (style.padding.x / 2)
-    end
+    full_width = full_width + icon_column_width
     local ww = system.get_window_size(core.window)
     local overlay_width = math.max(rw, full_width + style.padding.x * 2)
     overlay_width = math.min(overlay_width, math.max(rw, ww - rx - style.padding.x))
-    draw_suggestion_row(font, selected_item, rx, selected_y, overlay_width, lh, has_icons, true)
+    draw_suggestion_row(font, selected_item, rx, selected_y, overlay_width, lh, icon_column_width, true)
     if selected_desc and #selected_desc > 0 then
       draw_description_box(selected_desc, rx, ry, rw, rh)
     end
@@ -1869,37 +1882,6 @@ end
 --
 for name, _ in pairs(style.syntax) do
   autocomplete.add_icon(name, "M", style.icon_font, name)
-end
-
-local completion_kind_icon_colors = {
-  class = "type.class",
-  color = "constant",
-  constructor = "function.constructor",
-  enum = "type.enum",
-  enum_member = "constant.enum_member",
-  event = "function.event",
-  field = "variable.field",
-  file = "string",
-  folder = "string",
-  interface = "type.interface",
-  method = "function.method",
-  module = "type.namespace",
-  namespace = "type.namespace",
-  package = "type.namespace",
-  property = "variable.property",
-  reference = "variable",
-  snippet = "markup",
-  struct = "type.struct",
-  text = "normal",
-  type_parameter = "type.parameter",
-  unit = "number",
-  value = "constant",
-}
-
-for icon_name, color in pairs(completion_kind_icon_colors) do
-  if style.syntax[color] then
-    autocomplete.add_icon(icon_name, "M", style.icon_font, color)
-  end
 end
 
 --

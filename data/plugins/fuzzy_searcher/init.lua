@@ -1959,6 +1959,17 @@ local draw_file_result_row
 local grep_row_columns
 
 local function draw_symbol_result_row(font, r, x, y, width)
+  local symbol_icons = require "core.symbol_icons"
+  local row_height = font:get_height() + style.padding.y
+  local icon_size = symbol_icons.size_for_row(row_height)
+  local icon_column_width = 0
+  if symbol_icons.resolve_kind(r.symbol_kind or "symbol") then
+    icon_column_width = icon_size + math.max(4 * (SCALE or 1), style.padding.x / 2)
+    symbol_icons.draw(r.symbol_kind or "symbol", x, y, row_height, icon_size)
+  end
+
+  x = x + icon_column_width
+  width = math.max(0, width - icon_column_width)
   local path_w, gap, text_w = grep_row_columns(width)
   local line = tonumber(r.line) or 1
   local line_suffix = line <= 9999 and string.format(":%-4d", line) or ":" .. tostring(line)

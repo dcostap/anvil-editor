@@ -1,0 +1,5 @@
+<!-- Copyright 2026 Anvil contributors. Derived from the Apache-2.0 JetBrains ExpUI node-icon style; see LICENSE.txt. -->
+<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="8" cy="8" r="6.5" fill="#25324D" stroke="#548AF7"/>
+  <path d="M5.25 4.5V8.9C5.25 10.55 6.28 11.5 8 11.5C9.72 11.5 10.75 10.55 10.75 8.9V4.5H9.7V8.83C9.7 9.96 9.12 10.59 8 10.59C6.88 10.59 6.3 9.96 6.3 8.83V4.5H5.25Z" fill="#548AF7"/>
+</svg>

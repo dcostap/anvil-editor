@@ -66,6 +66,19 @@ test.describe("Fuzzy Searcher Project symbols", function()
     test.same(row.file_spans, {})
   end)
 
+  test.it("provides scalable visual icons for code-symbol kinds", function()
+    local symbol_icons = require "core.symbol_icons"
+
+    test.equal(symbol_icons.resolve_kind("function"), "function")
+    test.equal(symbol_icons.resolve_kind("struct"), "struct")
+    test.equal(symbol_icons.resolve_kind("constant"), "constant")
+    test.is_nil(symbol_icons.resolve_kind("not-a-symbol-kind"))
+
+    local icon, err = symbol_icons.get("function", 16)
+    test.not_nil(icon, err)
+    test.same({ icon:get_size() }, { 16, 16 })
+  end)
+
   test.it("scopes inline symbol search by path and highlights each query in its own column", function(context)
     context.original_lsp_enabled = lsp_manager.is_enabled
     context.original_ts_workspace_symbols_async = symbol_index.workspace_symbols_async
