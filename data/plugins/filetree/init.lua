@@ -3218,6 +3218,7 @@ function FileTreeView:apply_edits()
 end
 
 local view = FileTreeView()
+view.navigation_scope_kind = "file-tree"
 file_context.exclude_main_panel_view(view)
 sidepanel.register_panel("filetree", view)
 view.node = sidepanel.side_node

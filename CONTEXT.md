@@ -57,11 +57,15 @@ A file in Anvil's navigation history, ordered by last visit for returning to pre
 _Avoid_: recent tab, file tab history
 
 **Navigation Place**:
-A focusable place the user can return to through Navigation History, including editor locations and tool views with their own cursor or selection.
+A focusable place the user can return to through the current Navigation Scope's Navigation History, including editor locations and tool views with their own cursor or selection.
 _Avoid_: editor-only location, browser page
 
+**Navigation Scope**:
+A focused work context that owns an independent Navigation History, such as Editors collectively, the File Tree, one Command Output panel, or one Project's Git View family.
+_Avoid_: global history, focus group
+
 **Navigation History**:
-The app-level back/forward sequence of Navigation Places used to return through recent focus and location changes.
+A Navigation Scope's back/forward sequence of Navigation Places used to return through recent focus and location changes without crossing into another scope.
 _Avoid_: file history, tab history
 
 **Document / Doc**:

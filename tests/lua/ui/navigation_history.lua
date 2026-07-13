@@ -1,12 +1,37 @@
 local core = require "core"
 local command = require "core.command"
-local keymap = require "core.keymap"
+local common = require "core.common"
 local test = require "core.test"
 local sidepanel = require "core.sidepanel"
 local file_context = require "core.file_context"
 local DocView = require "core.docview"
+local command_slots = require "plugins.command_slots"
+local git_view = require "plugins.git_view"
 
 local navigation_history = require "plugins.navigation_history"
+
+local fake_git_backend = {
+  repo_for_path = function(path) return { root = path } end,
+  build_log_args = function() return { "log" } end,
+  parse_status_z = function() return {} end,
+  parse_log_page = function() return { commits = {} } end,
+  file_history = function(_, _, _, callback)
+    callback({ commits = {}, has_more = false }, nil)
+    return { cancel = function() end }
+  end,
+  changed_files = function(_, _, _, _, callback)
+    callback({}, nil)
+    return { cancel = function() end }
+  end,
+  file_at = function(_, _, relpath, _, callback)
+    callback("contents for " .. tostring(relpath) .. "\n", nil)
+    return { cancel = function() end }
+  end,
+  run_git = function(_, _, _, callback)
+    callback({ code = 0, stdout = "" }, nil)
+    return { cancel = function() end }
+  end,
+}
 
 local function track(context, kind, value)
   context[kind] = context[kind] or {}
@@ -53,20 +78,26 @@ local function caret(view)
   end)
 end
 
-local function press_alt_key(key)
-  local previous_alt = keymap.modkeys.alt
-  keymap.modkeys.alt = true
-  local ok, result = xpcall(function()
-    return keymap.on_key_pressed(key)
-  end, debug.traceback)
-  keymap.modkeys.alt = previous_alt
-  if not ok then error(result, 0) end
-  return result
-end
-
 test.describe("IntelliJ-style navigation history", function()
   test.after_each(function(context)
     navigation_history.clear_history()
+
+    if context.original_fake_git_file_at then
+      fake_git_backend.file_at = context.original_fake_git_file_at
+    end
+
+    if context.original_file_tree_dir then
+      local filetree = require "plugins.filetree"
+      filetree.current_dir = context.original_file_tree_dir
+      filetree:refresh(false, true)
+    end
+    if context.file_tree_test_root then common.rm(context.file_tree_test_root, true) end
+
+    for _, state in ipairs(context.output_slot_states or {}) do
+      state.slot.output_history = state.output_history
+      state.slot.output_history_index = state.output_history_index
+      state.slot.view = state.view
+    end
 
     local root = core.root_panel.root_node
     for _, view in ipairs(context.side_views or {}) do
@@ -83,6 +114,9 @@ test.describe("IntelliJ-style navigation history", function()
     for _, view in ipairs(context.views or {}) do
       local node = root:get_node_for_view(view)
       if node then node:remove_view(root, view) end
+    end
+    for _, key in ipairs(context.git_session_keys or {}) do
+      if core.main_tabs and core.main_tabs.git_sessions then core.main_tabs.git_sessions[key] = nil end
     end
     for _, doc in ipairs(context.docs or {}) do
       if doc:is_dirty() then doc:clean() end
@@ -118,34 +152,319 @@ test.describe("IntelliJ-style navigation history", function()
     test.equal(col, 1)
   end)
 
-  test.it("uses global back shortcut while file tree is focused", function(context)
-    local editor = open_editor(context, "one")
+  test.it("keeps Editor history isolated while the File Tree is focused", function(context)
+    local first = open_editor(context, "one")
+    local second = open_editor(context, "two")
+    local node = core.root_panel.root_node:get_node_for_view(first)
+
+    node:set_active_view(first)
     navigation_history.clear_history()
+    node:set_active_view(second)
+    test.ok(navigation_history.is_back_available())
 
     local filetree = require "plugins.filetree"
     core.set_active_view(filetree)
     test.equal(core.active_view, filetree)
-    test.ok(navigation_history.is_back_available())
+    test.ok(not navigation_history.is_back_available())
 
-    test.ok(press_alt_key("left"))
-    test.equal(core.active_view, editor)
+    test.ok(not command.perform("navigation:back"))
+    test.equal(core.active_view, filetree)
+
+    node:set_active_view(second)
+    test.ok(command.perform("navigation:back"))
+    test.equal(core.active_view, first)
   end)
 
-  test.it("uses global forward shortcut while file tree is focused", function(context)
+  test.it("checkpoints a departing Editor without connecting it to the File Tree scope", function(context)
     local first = open_editor(context, "one")
     local second = open_editor(context, "two")
     local filetree = require "plugins.filetree"
+    local node = core.root_panel.root_node:get_node_for_view(first)
 
-    core.set_active_view(first)
+    node:set_active_view(first)
     navigation_history.clear_history()
     core.set_active_view(filetree)
-    core.set_active_view(second)
+    node:set_active_view(second)
+
+    test.ok(navigation_history.is_back_available())
+    test.ok(command.perform("navigation:back"))
+    test.equal(core.active_view, first)
+  end)
+
+  test.it("navigates File Tree selections inside the File Tree scope", function()
+    local filetree = require "plugins.filetree"
+    sidepanel.show("filetree", { focus = true })
+    filetree.position.x, filetree.position.y = 0, 0
+    filetree.size.x, filetree.size.y = 800, 600
+    local entries = filetree:build_entries(false)
+    test.ok(#entries >= 2, "expected at least two File Tree entries")
+    local first = entries[1]
+    local target = entries[2]
+    set_caret(filetree, first.line, 1)
+    local first_place = navigation_history.capture_current_place()
+    navigation_history.clear_history()
+
+    set_caret(filetree, target.line, 1)
+    test.ok(navigation_history.record_place(first_place, { check_current = false, reason = "test-file-tree-selection" }))
+    test.ok(navigation_history.is_back_available())
+
     test.ok(command.perform("navigation:back"))
     test.equal(core.active_view, filetree)
-    test.ok(navigation_history.is_forward_available())
+    test.equal(filetree.doc:get_selection(), first.line)
+  end)
 
-    test.ok(press_alt_key("right"))
+  test.it("restores the File Tree directory before restoring its selected path", function(context)
+    local filetree = require "plugins.filetree"
+    local root = core.root_project()
+    local parent_dir = root.path .. PATHSEP .. "navigation-history-file-tree-test"
+    local child_dir = parent_dir .. PATHSEP .. "child"
+    test.ok(common.mkdirp(child_dir))
+    local fixture_path = child_dir .. PATHSEP .. "fixture.txt"
+    local fp = assert(io.open(fixture_path, "wb"))
+    fp:write("fixture\n")
+    fp:close()
+    context.file_tree_test_root = parent_dir
+    context.original_file_tree_dir = filetree.current_dir
+    sidepanel.show("filetree", { focus = true })
+
+    filetree.current_dir = child_dir
+    filetree:refresh(false, true)
+    local child_entry = filetree:build_entries(false)[1]
+    test.not_nil(child_entry)
+    set_caret(filetree, child_entry.line, 1)
+    local child_place = navigation_history.capture_current_place()
+
+    filetree.current_dir = parent_dir
+    filetree:refresh(false, true)
+    local parent_entry = filetree:build_entries(false)[1]
+    test.not_nil(parent_entry)
+    set_caret(filetree, parent_entry.line, 1)
+    navigation_history.clear_history()
+    test.ok(navigation_history.record_place(child_place, {
+      check_current = false,
+      reason = "test-file-tree-directory",
+    }))
+
+    test.ok(command.perform("navigation:back"))
+    test.ok(common.path_equals(filetree.current_dir, child_dir))
+    local restored = filetree:entry_for_line(filetree.doc:get_selection())
+    test.not_nil(restored)
+    test.ok(common.path_equals(restored.abs, child_entry.abs))
+  end)
+
+  test.it("navigates Command Output Views within their panel scope", function(context)
+    local editor = open_editor(context, "editor")
+    local panel = track(context, "side_views", command_slots.CommandOutputPanel())
+    sidepanel.register_panel("navigation output", panel)
+    sidepanel.show("navigation output", { focus = true })
+    local first = panel:select_slot(1, { focus = true })
+    local second = panel:slot_view(command_slots.slots[2])
+    test.ok(first ~= second)
+
+    navigation_history.clear_history()
+    panel:select_slot(2, { focus = true })
     test.equal(core.active_view, second)
+    test.ok(navigation_history.is_back_available())
+
+    test.ok(command.perform("navigation:back"))
+    test.equal(core.active_view, first)
+    test.ok(core.active_view ~= editor)
+  end)
+
+  test.it("restores Command Output History entries as Navigation Places", function(context)
+    local slot = command_slots.slots[1]
+    track(context, "output_slot_states", {
+      slot = slot,
+      output_history = slot.output_history,
+      output_history_index = slot.output_history_index,
+      view = slot.view,
+    })
+    local first = { text = "first output\n" }
+    local second = { text = "second output\n" }
+    slot.output_history = { first, second }
+    slot.output_history_index = 1
+
+    local panel = track(context, "side_views", command_slots.CommandOutputPanel())
+    sidepanel.register_panel("navigation output history", panel)
+    sidepanel.show("navigation output history", { focus = true })
+    local view = panel:select_slot(1, { focus = true })
+    view:show_entry(first)
+    navigation_history.clear_history()
+
+    test.ok(command.perform("command-slots:history-next"))
+    test.equal(view.displayed_entry, second)
+    test.ok(navigation_history.is_back_available())
+
+    test.ok(command.perform("navigation:back"))
+    test.equal(core.active_view, view)
+    test.equal(view.displayed_entry, first)
+
+    local evicted_place = navigation_history.capture_current_place()
+    slot.output_history = { second }
+    slot.output_history_index = 1
+    view:show_entry(second)
+    navigation_history.clear_history()
+    test.ok(not navigation_history.record_place(evicted_place, {
+      check_current = false,
+      reason = "test-evicted-output",
+    }))
+  end)
+
+  test.it("restores a blank Command Output place after newer output appears", function(context)
+    local slot = command_slots.slots[1]
+    track(context, "output_slot_states", {
+      slot = slot,
+      output_history = slot.output_history,
+      output_history_index = slot.output_history_index,
+      view = slot.view,
+    })
+    slot.output_history = {}
+    slot.output_history_index = nil
+
+    local panel = track(context, "side_views", command_slots.CommandOutputPanel())
+    sidepanel.register_panel("navigation blank output", panel)
+    sidepanel.show("navigation blank output", { focus = true })
+    local view = panel:select_slot(1, { focus = true })
+    view:show_entry(nil)
+    local blank_place = navigation_history.capture_current_place()
+
+    local newer = { text = "newer output\n" }
+    slot.output_history = { newer }
+    slot.output_history_index = 1
+    view:show_entry(newer)
+    navigation_history.clear_history()
+    test.ok(navigation_history.record_place(blank_place, {
+      check_current = false,
+      reason = "test-blank-output",
+    }))
+
+    test.ok(command.perform("navigation:back"))
+    test.equal(core.active_view, view)
+    test.equal(view.displayed_entry, nil)
+    test.equal(view.doc.output_text, "")
+  end)
+
+  test.it("navigates nested Git panes within one Project Git scope", function(context)
+    local project = { path = "C:/navigation-history-git" }
+    local tw, log_view = git_view.open_view(project, {
+      root = core.root_panel,
+      git_view_opts = { backend = fake_git_backend },
+    })
+    track(context, "views", log_view)
+    track(context, "git_session_keys", project.path)
+    log_view.model:log_tab().commits = {
+      { hash = "first", short_hash = "first", subject = "First", parents = {} },
+      { hash = "second", short_hash = "second", subject = "Second", parents = {} },
+    }
+    log_view:update_pane_docs()
+    log_view:focus_list_pane()
+    test.equal(core.active_view.git_owner_view, log_view)
+    core.active_view.doc:set_selection(1, 1)
+    navigation_history.clear_history()
+    test.ok(command.perform("git:select-next-row"))
+    test.equal(log_view.model:selected_commit().hash, "second")
+    local commits = log_view.model:log_tab().commits
+    log_view.model:log_tab().commits = { commits[2], commits[1] }
+    log_view.model:log_tab().selected_commit = 1
+    log_view.model:log_tab().selected_commit_hash = "second"
+    log_view:update_pane_docs()
+    core.active_view.doc:set_selection(1, 1)
+    test.ok(command.perform("navigation:back"))
+    test.equal(log_view.model:selected_commit().hash, "first")
+    test.equal(core.active_view.doc:get_selection(), 2)
+
+    local removed_commit_place = navigation_history.capture_current_place()
+    log_view.model:select_log_index(1, function() end)
+    log_view:update_pane_docs()
+    core.active_view.doc:set_selection(1, 1)
+    navigation_history.clear_history()
+    test.ok(navigation_history.record_place(removed_commit_place, {
+      check_current = false,
+      reason = "test-removed-git-anchor",
+    }))
+    log_view.model:log_tab().commits = { log_view.model:log_tab().commits[1] }
+    log_view:update_pane_docs()
+    test.ok(not navigation_history.is_back_available())
+
+    local history_tab = {
+      id = "navigation-history-file-history",
+      kind = "file_history",
+      title = "History",
+      closable = true,
+      relpath = "file.lua",
+      commits = {},
+      selected_commit = 1,
+    }
+    log_view.model.tabs[#log_view.model.tabs + 1] = history_tab
+    navigation_history.clear_history()
+    local history_view = git_view.ensure_tab_view(tw, history_tab, true)
+    track(context, "views", history_view)
+    test.equal(core.active_view.git_owner_view, history_view)
+    test.ok(navigation_history.is_back_available())
+
+    test.ok(command.perform("navigation:back"))
+    test.equal(core.active_view.git_owner_view, log_view)
+    test.equal(core.active_view.git_pane, "log-list")
+  end)
+
+  test.it("restores the selected Git file before restoring a diff pane", function(context)
+    local project = { path = "C:/navigation-history-git-diff" }
+    local tw, log_view = git_view.open_view(project, {
+      root = core.root_panel,
+      git_view_opts = { backend = fake_git_backend },
+    })
+    track(context, "views", log_view)
+    track(context, "git_session_keys", project.path)
+    local tab = {
+      id = "navigation-history-diff",
+      kind = "commit_diff",
+      title = "Diff",
+      closable = true,
+      left = "left",
+      right = "right",
+      changed_files = {
+        { status = "modified", old_path = "first.lua", new_path = "first.lua" },
+        { status = "modified", old_path = "second.lua", new_path = "second.lua" },
+      },
+      selected_file = 1,
+      selected_file_path = "first.lua",
+      left_text = "first old\n",
+      right_text = "first new\n",
+      left_name = "first.lua",
+      right_name = "first.lua",
+      diff_generation = 1,
+    }
+    log_view.model.tabs[#log_view.model.tabs + 1] = tab
+    local diff_owner = git_view.ensure_tab_view(tw, tab, true)
+    track(context, "views", diff_owner)
+    test.ok(diff_owner:focus_diff_pane("left"))
+    local first_file_place = navigation_history.capture_current_place()
+
+    diff_owner.model:select_diff_file(tab, 2, function() end)
+    diff_owner:update_pane_docs()
+    test.ok(diff_owner:focus_diff_pane("left"))
+    navigation_history.clear_history()
+    test.ok(navigation_history.record_place(first_file_place, {
+      check_current = false,
+      reason = "test-git-diff-file",
+    }))
+
+    context.original_fake_git_file_at = fake_git_backend.file_at
+    local pending_file_loads = {}
+    fake_git_backend.file_at = function(_, _, relpath, _, callback)
+      pending_file_loads[#pending_file_loads + 1] = function()
+        callback("deferred contents for " .. tostring(relpath) .. "\n", nil)
+      end
+      return { cancel = function() end }
+    end
+    test.ok(command.perform("navigation:back"))
+    test.equal(tab.selected_file_path, "first.lua")
+    test.equal(#pending_file_loads, 2)
+    for _, finish in ipairs(pending_file_loads) do finish() end
+    fake_git_backend.file_at = context.original_fake_git_file_at
+    context.original_fake_git_file_at = nil
+    test.equal(core.active_view.git_owner_view, diff_owner)
+    test.equal(core.active_view, tab.diff_view.doc_view_a)
   end)
 
   test.it("records editor mouse-style cursor jumps through document commands", function(context)

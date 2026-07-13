@@ -1451,10 +1451,6 @@ local function install_commands()
 end
 
 local function install_keymaps()
-  keymap.add({
-    ["alt+left"] = "command-slots:history-previous",
-    ["alt+right"] = "command-slots:history-next",
-  })
   keymap.add_direct({
     ["alt+3"] = "command-slots:focus-output",
   })
