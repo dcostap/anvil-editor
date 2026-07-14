@@ -1961,9 +1961,8 @@ end
 local draw_file_result_row
 local grep_row_columns
 
-local function draw_symbol_result_row(font, r, x, y, width)
+local function draw_symbol_result_row(font, r, x, y, width, row_height)
   local symbol_icons = require "core.symbol_icons"
-  local row_height = font:get_height() + style.padding.y
   local icon_size = symbol_icons.size_for_row(row_height)
   local icon_column_width = 0
   if symbol_icons.resolve_kind(r.symbol_kind or "symbol") then
@@ -2590,7 +2589,8 @@ end
 function FSView:list_metrics(font)
   font = font or style.code_font
   local pad = style.padding.x
-  local lh = font:get_height()
+  local row_padding = style.fuzzy_searcher_result_row_padding
+  local lh = font:get_height() + row_padding * 2
   local x, y = self.position.x, self.position.y
   local w, h = self.size.x, self.size.y
   local top = y + self.input.size.y + pad * 3 + lh
@@ -2606,7 +2606,7 @@ function FSView:list_metrics(font)
   return {
     x = x, y = y, w = w, h = h, top = top, list_w = list_w, list_h = list_h,
     vertical_preview = vertical_preview,
-    lh = lh, total_rows = total_rows, result_rows = result_rows,
+    lh = lh, row_padding = row_padding, total_rows = total_rows, result_rows = result_rows,
     results_top = top + lh,
     bottom_indicator_y = top + math.max(0, total_rows - 1) * lh,
   }
@@ -4821,6 +4821,7 @@ function FSView:draw()
   local m = self:list_metrics(font)
   local x, y, w, h = m.x, m.y, m.w, m.h
   local top, list_w, lh = m.top, m.list_w, m.lh
+  local row_padding = m.row_padding
   self:ensure_selection_visible()
 
   renderer.draw_text(font, self.status or "", x + pad, y + self.input.size.y + pad * 1.5, style.dim)
@@ -4839,10 +4840,10 @@ function FSView:draw()
   local arrow_color = style.dim
   local up_arrow, down_arrow = "▲", "▼"
   if self.viewport_offset > 1 then
-    renderer.draw_text(font, up_arrow, x + (list_w - font:get_width(up_arrow)) / 2, top, arrow_color)
+    renderer.draw_text(font, up_arrow, x + (list_w - font:get_width(up_arrow)) / 2, top + row_padding, arrow_color)
   end
   if self.viewport_offset + m.result_rows - 1 < #self.results or self:can_load_more() then
-    renderer.draw_text(font, down_arrow, x + (list_w - font:get_width(down_arrow)) / 2, m.bottom_indicator_y, arrow_color)
+    renderer.draw_text(font, down_arrow, x + (list_w - font:get_width(down_arrow)) / 2, m.bottom_indicator_y + row_padding, arrow_color)
   end
 
   local last = math.min(#self.results, self.viewport_offset + m.result_rows - 1)
@@ -4857,6 +4858,7 @@ function FSView:draw()
   for idx = self.viewport_offset, last do
     local r = self.results[idx]
     local yy = m.results_top + (idx - self.viewport_offset) * lh
+    local row_y = yy + row_padding
     if r.header then
       previous_rendered_grep_file = nil
       previous_rendered_grep_line_x = nil
@@ -4864,7 +4866,7 @@ function FSView:draw()
       if r.separator then
         renderer.draw_rect(x + pad, yy + math.floor(lh / 2), math.max(0, row_text_w), style.divider_size, style.divider)
       else
-        renderer.draw_text(font, truncate_text(font, r.label, row_text_w), x + pad, yy, style.accent)
+        renderer.draw_text(font, truncate_text(font, r.label, row_text_w), x + pad, row_y, style.accent)
       end
     else
       if idx == self.selected then
@@ -4882,42 +4884,42 @@ function FSView:draw()
       if r.kind == "grep" then
         local file = tostring(r.file or "")
         local collapse_file = file ~= "" and previous_rendered_was_grep and file == previous_rendered_grep_file
-        previous_rendered_grep_line_x = draw_grep_result_row(font, r, x + pad, yy, row_text_w, collapse_file, previous_rendered_grep_line_x)
+        previous_rendered_grep_line_x = draw_grep_result_row(font, r, x + pad, row_y, row_text_w, collapse_file, previous_rendered_grep_line_x)
         previous_rendered_grep_file = file
         previous_rendered_was_grep = true
       elseif r.kind == "file" then
         previous_rendered_grep_file = nil
         previous_rendered_grep_line_x = nil
         previous_rendered_was_grep = false
-        draw_file_result_row(font, r.file or r.label, r.match_spans, "", x + pad, yy, row_text_w, nil, r.prefix_span, r.root_role)
+        draw_file_result_row(font, r.file or r.label, r.match_spans, "", x + pad, row_y, row_text_w, nil, r.prefix_span, r.root_role)
       elseif r.kind == "symbol" then
         previous_rendered_grep_file = nil
         previous_rendered_grep_line_x = nil
         previous_rendered_was_grep = false
-        draw_symbol_result_row(font, r, x + pad, yy, row_text_w)
+        draw_symbol_result_row(font, r, x + pad, row_y, row_text_w, lh)
       elseif r.kind == "command" then
         previous_rendered_grep_file = nil
         previous_rendered_grep_line_x = nil
         previous_rendered_was_grep = false
-        draw_command_result_row(font, r, x + pad, yy, row_text_w)
+        draw_command_result_row(font, r, x + pad, row_y, row_text_w)
       elseif r.kind == "project" then
         previous_rendered_grep_file = nil
         previous_rendered_grep_line_x = nil
         previous_rendered_was_grep = false
-        draw_project_result_row(font, r, x + pad, yy, row_text_w)
+        draw_project_result_row(font, r, x + pad, row_y, row_text_w)
       elseif r.kind == "everything" then
         previous_rendered_grep_file = nil
         previous_rendered_grep_line_x = nil
         previous_rendered_was_grep = false
-        draw_everything_result_row(font, r, x + pad, yy, row_text_w)
+        draw_everything_result_row(font, r, x + pad, row_y, row_text_w)
       elseif r.kind == "new_project" then
         previous_rendered_grep_file = nil
         previous_rendered_grep_line_x = nil
         previous_rendered_was_grep = false
-        draw_new_project_result_row(font, r, x + pad, yy, row_text_w)
+        draw_new_project_result_row(font, r, x + pad, row_y, row_text_w)
       else
         local label, spans, prefix = result_list_label_and_spans(r)
-        draw_prefixed_highlighted_text(font, prefix, label, x + pad, yy, row_text_w, style.text, spans)
+        draw_prefixed_highlighted_text(font, prefix, label, x + pad, row_y, row_text_w, style.text, spans)
         previous_rendered_grep_file = nil
         previous_rendered_grep_line_x = nil
         previous_rendered_was_grep = false

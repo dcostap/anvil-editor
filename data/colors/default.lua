@@ -205,6 +205,7 @@ style.image_grid_bright = c("AAAAAA")
 style.image_grid_dark = c("555555")
 style.fuzzy_searcher_preview_background = { 0, 0, 0, 210 }
 style.fuzzy_searcher_overlay_background = { 0, 0, 0, 110 }
+style.fuzzy_searcher_result_row_padding = 2 * SCALE
 style.filetree_operation_create = { 130, 220, 140, 255 }
 style.filetree_operation_copy = { 105, 210, 230, 255 }
 style.filetree_operation_move = { 130, 175, 255, 255 }
