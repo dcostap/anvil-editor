@@ -1296,7 +1296,7 @@ local function get_suggestions_rect(av)
     if not hide_icons then
       local icon_width = display_icon_width(s, lh)
       if icon_width > 0 then
-        icon_column_width = math.max(icon_column_width, icon_width + style.padding.x / 2)
+        icon_column_width = math.max(icon_column_width, icon_width + style.padding.x * 3 / 8)
       end
     end
     content_width = math.max(content_width, w)
@@ -1577,11 +1577,11 @@ local function draw_suggestion_row(font, suggestion, rx, y, rw, lh, icon_column_
   local icon_l_padding, icon_r_padding = 0, 0
   if icon_column_width > 0 then
     if config.plugins.autocomplete.icon_position == "left" then
-      draw_display_icon(suggestion, rx + style.padding.x, y, icon_column_width - style.padding.x / 2, lh)
+      draw_display_icon(suggestion, rx + style.padding.x * 0.75, y, icon_column_width - style.padding.x * 3 / 8, lh)
       icon_l_padding = icon_column_width
     else
-      local icon_x = rx + rw - style.padding.x - icon_column_width + style.padding.x / 2
-      draw_display_icon(suggestion, icon_x, y, icon_column_width - style.padding.x / 2, lh)
+      local icon_x = rx + rw - style.padding.x - icon_column_width + style.padding.x * 3 / 8
+      draw_display_icon(suggestion, icon_x, y, icon_column_width - style.padding.x * 3 / 8, lh)
       icon_r_padding = icon_column_width
     end
   end
