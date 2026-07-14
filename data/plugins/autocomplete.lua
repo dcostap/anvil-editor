@@ -28,6 +28,8 @@ local tree_sitter_registry = require "core.treesitter.registry"
 ---@field preview_context? string
 ---Signature or value suffix used to build a contextual preview.
 ---@field preview_detail? string
+---Context prefix inserted before the completed symbol unless it is already present.
+---@field completion_prefix? string
 ---Name of a registered icon.
 ---@field icon? string
 ---Description shown when the symbol is hovered on the autocomplete box.
@@ -1070,6 +1072,8 @@ function update_suggestions()
                 preview_show_info = preview_show_info,
                 preview_context = preview_context,
                 preview_detail = preview_detail,
+                completion_prefix = symbol.kind == "enum_member" and preview_context and preview_context ~= ""
+                  and preview_context .. "." or nil,
                 icon = symbol.kind,
               }
               for k, v in pairs(source_location_fields(symbol) or {}) do item[k] = v end
@@ -2023,7 +2027,10 @@ command.add(predicate, {
           col1 = replace_col1,
           line2 = line2,
           col2 = col2,
-          text = item.text,
+          text = item.completion_prefix
+            and line:sub(replace_col1 - #item.completion_prefix, replace_col1 - 1) ~= item.completion_prefix
+            and item.completion_prefix .. item.text
+            or item.text,
           idx = idx,
         }
         final_by_idx[idx] = "end"
