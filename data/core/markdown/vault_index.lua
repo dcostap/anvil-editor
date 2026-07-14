@@ -39,7 +39,11 @@ local pending_renames = {}
 local doc_hooks_installed = false
 
 local function trim(text)
-  return (text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  text = text or ""
+  local first = text:find("%S")
+  if not first then return "" end
+  local _, last = text:find("^.*%S")
+  return text:sub(first, last)
 end
 
 local function extension(path)
@@ -386,8 +390,12 @@ end
 
 local function clean_embed_line(line)
   line = trim(line)
-  line = line:gsub("^#+%s*", ""):gsub("%s*#+%s*$", "")
-  line = line:gsub("%s+%^[%w%-]+%s*$", "")
+  line = line:gsub("^#+%s*", "")
+  -- Guard suffix patterns by their required literal. Without this, Lua's
+  -- unanchored leading whitespace repetition backtracks quadratically over
+  -- long padded table cells that do not contain a heading marker or block id.
+  if line:find("#%s*$") then line = line:gsub("%s*#+%s*$", "") end
+  if line:find("%^[%w%-]+%s*$") then line = line:gsub("%s+%^[%w%-]+%s*$", "") end
   if #line > 240 then line = line:sub(1, 237) .. "..." end
   return line
 end

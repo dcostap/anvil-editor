@@ -300,9 +300,9 @@ keymap.add_direct({
   ["ctrl+shift+d"] = "doc:go-to-line",
   ["ctrl+shift+D"] = "doc:go-to-line",
 })
--- Markdown Live Preview remains opt-in while Tier 0 correctness and Tier 1 rendering mature.
--- Preserve an explicit USERDIR/project-module opt-in loaded before first-party defaults.
-if config.markdown_live_editor == nil then config.markdown_live_editor = false end
+-- Enable Markdown Live Preview by default while preserving an explicit
+-- USERDIR/project-module override loaded before first-party defaults.
+if config.markdown_live_editor == nil then config.markdown_live_editor = true end
 if config.markdown_live_reveal_mode == nil then config.markdown_live_reveal_mode = "construct" end
 if config.markdown_live_link_path_policy == nil then
   config.markdown_live_link_path_policy = "shortest_unique"

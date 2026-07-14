@@ -44,6 +44,23 @@ local function normalized(path)
 end
 
 test.describe("Markdown vault index", function()
+  test.it("indexes notes with very long table padding without blocking", function()
+    local root = temp_root("markdown-vault-long-table-padding")
+    mkdirp(root)
+    local path = join_path(root, "Padded.md")
+    write_file(path, "|" .. string.rep(" ", 20000) .. "|\n")
+    local index = vault_index.get_index(root)
+
+    local started = system.get_time()
+    test.equal(index:update_path(path), true)
+    local elapsed = system.get_time() - started
+    local note_count = index:note_count()
+    common.rm(root, true)
+
+    test.equal(note_count, 1)
+    test.ok(elapsed < 1, string.format("Markdown indexing blocked for %.3fs", elapsed))
+  end)
+
   test.it("cooperatively builds a cold index and publishes readiness", function()
     local root = temp_root("markdown-vault-async")
     mkdirp(root)
