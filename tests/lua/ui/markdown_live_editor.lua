@@ -5,6 +5,7 @@ local core = require "core"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
 local markdown = require "core.markdown"
+local markdown_completion = require "core.markdown.completion"
 local markdown_model = require "core.markdown.model"
 local keymap = require "core.keymap"
 local linewrapping = require "core.linewrapping"
@@ -767,10 +768,16 @@ test.describe("Markdown Live Editor", function()
         local content = (doc.lines[line] or ""):gsub("\n$", "")
         doc:set_selection(line, #content + 1)
         refresh(view)
+        local deadline = system.get_time() + 5
+        while system.get_time() < deadline do
+          local ready = markdown_completion.symbols(view)
+          if ready then break end
+          coroutine.yield(0.01)
+        end
         core.active_view = view
         offered = nil
         test.equal(command.perform("markdown-live-preview:complete-link"), true)
-        return view, doc, test.not_nil(offered)
+        return view, doc, test.not_nil(offered, "completion was not offered for " .. text)
       end
       local function item_for(symbols, target)
         for _, item in pairs(symbols.items) do
@@ -987,6 +994,17 @@ test.describe("Markdown Live Editor", function()
     local view, doc = make_view("[Anvil docs][docs]\n[docs][]\n[docs]\n\n[docs]: Guide.md \"Guide\"\nText[^note]\n[^note]: Footnote body\nplain", "references.md")
     doc:set_selection(8, 1)
     refresh(view)
+    view:get_line_render(1)
+    local reference_deadline = system.get_time() + 5
+    while system.get_time() < reference_deadline do
+      local rendered = view:get_line_render(1)
+      local ready = false
+      for _, fragment in ipairs(rendered and rendered.fragments or {}) do
+        if fragment.link and fragment.link.kind == "reference" then ready = true break end
+      end
+      if ready then break end
+      coroutine.yield(0.01)
+    end
     local expected = { "Anvil docs", "docs", "docs" }
     for line = 1, 3 do
       local rendered = test.not_nil(view:get_line_render(line))
@@ -1139,6 +1157,60 @@ test.describe("Markdown Live Editor", function()
 
     doc:set_selection(1, 2)
     test.equal(view:get_line_render(1), nil)
+  end)
+
+  test.it("keeps whole-Document semantic adoption out of line rendering", function()
+    local view, doc = make_view(
+      "[Guide][docs]\n\n[docs]: Guide.md\n\n```lua\nprint('ok')\n```\nplain",
+      "bounded-render.md"
+    )
+    doc:set_selection(8, 1)
+    refresh(view)
+    local instance = test.not_nil(markdown_model.peek(doc))
+    local old_nodes_for_lines = instance.nodes_for_lines
+    local whole_document_queries = 0
+    instance.nodes_for_lines = function(self, line1, line2, opts)
+      if line1 == 1 and line2 == #doc.lines then whole_document_queries = whole_document_queries + 1 end
+      return old_nodes_for_lines(self, line1, line2, opts)
+    end
+    view.__markdown_live_reference_cache = nil
+    view:invalidate_line_render("markdown-live")
+
+    view:get_line_render(1)
+    view:get_line_render(5)
+    view:get_line_render(6)
+    test.equal(whole_document_queries, 0)
+    instance.nodes_for_lines = old_nodes_for_lines
+  end)
+
+  test.it("keeps ordinary body edits from invalidating every Markdown row", function()
+    local lines = { "# Heading", "", "preview", "", "body" }
+    for i = 1, 100 do lines[#lines + 1] = "plain line " .. i end
+    local view, doc = make_view(table.concat(lines, "\n"), "bounded-edit.md")
+    doc:set_selection(80, 2)
+    refresh(view)
+    view:get_visual_row_metric_cache()
+    local before = view:get_render_cache_diagnostics().metric_invalidations
+    local instance = test.not_nil(markdown_model.peek(doc))
+
+    doc:insert(80, 2, "x")
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    coroutine.yield(0.05)
+    local delta = view:get_render_cache_diagnostics().metric_invalidations - before
+    test.ok(delta < #doc.lines, "ordinary body edit invalidated every Markdown row")
+  end)
+
+  test.it("presents Setext headings through the semantic heading path", function()
+    local view, doc = make_view("Setext title\n============\nplain", "setext.md")
+    doc:set_selection(3, 1)
+    refresh(view)
+
+    local rendered = test.not_nil(view:get_line_render(1))
+    test.ok(rendered.fragments[1].font:get_height() > view:get_font():get_height())
+    local marker = test.not_nil(view:get_line_render(2))
+    test.equal(marker.fragments[1].hidden, true)
+    doc:set_selection(2, 3)
+    test.equal(view:get_line_render(2), nil)
   end)
 
   test.it("keeps source visible for a tab-indented fence-like block", function()

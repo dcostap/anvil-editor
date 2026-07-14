@@ -13,6 +13,8 @@ local MARKDOWN_EXTENSIONS = {}
 for _, ext in ipairs(MARKDOWN_EXTENSION_LIST) do MARKDOWN_EXTENSIONS[ext] = true end
 
 local MAX_COOPERATIVE_NOTE_BYTES = 512 * 1024
+local DOC_UPDATE_DEBOUNCE_SECONDS = 0.03
+local MAX_NATIVE_WATCH_DIRS = 2048
 
 local ATTACHMENT_EXTENSIONS = {
   avif = true,
@@ -173,9 +175,22 @@ end
 local function parse_inline_list(value)
   local values = {}
   if value:sub(1, 1) ~= "[" or value:sub(-1) ~= "]" then return nil end
-  for item in value:sub(2, -2):gmatch("[^,]+") do
-    item = unquote_scalar(item)
-    if item ~= "" then values[#values + 1] = item end
+  local body, start, quote, escaped = value:sub(2, -2), 1, nil, false
+  for i = 1, #body + 1 do
+    local char = body:sub(i, i)
+    if escaped then
+      escaped = false
+    elseif quote == '"' and char == "\\" then
+      escaped = true
+    elseif quote then
+      if char == quote then quote = nil end
+    elseif char == '"' or char == "'" then
+      quote = char
+    elseif char == "," or i > #body then
+      local item = unquote_scalar(body:sub(start, i - 1))
+      if item ~= "" then values[#values + 1] = item end
+      start = i + 1
+    end
   end
   return values
 end
@@ -259,6 +274,11 @@ function Index:new(root)
     pending_watch_dirs = {},
     pending_scan_dirs = {},
     subtree_scan_running = false,
+    doc_update_serials = setmetatable({}, { __mode = "k" }),
+    watch_dir_limit = MAX_NATIVE_WATCH_DIRS,
+    watch_dir_count = 0,
+    watcher_mode = "stopped",
+    diagnostics = { doc_updates = 0, doc_updates_coalesced = 0, degraded_rescans = 0 },
   }, self)
 end
 
@@ -439,6 +459,30 @@ local function attach_embed_previews(text, anchor_index)
   return note_preview
 end
 
+local function note_fact_signature(entry)
+  local parts = {}
+  local function add(...)
+    for i = 1, select("#", ...) do parts[#parts + 1] = tostring(select(i, ...)) end
+    parts[#parts + 1] = "\0"
+  end
+  for _, value in ipairs(entry.aliases or {}) do add("alias", value) end
+  for _, value in ipairs(entry.tags or {}) do add("tag", value) end
+  for _, value in ipairs(entry.embed_preview or {}) do add("preview", value) end
+  for _, heading in ipairs(entry.headings or {}) do
+    add("heading", heading.text, heading.line, heading.level, heading.path_slug)
+    for _, value in ipairs(heading.embed_preview or {}) do add("heading-preview", value) end
+  end
+  for _, block in ipairs(entry.blocks or {}) do
+    add("block", block.id, block.line)
+    for _, value in ipairs(block.embed_preview or {}) do add("block-preview", value) end
+  end
+  for _, link in ipairs(entry.outbound_links or {}) do
+    add("link", link.kind, link.source_line, link.source_col1, link.source_col2,
+      link.raw_target, link.alias)
+  end
+  return table.concat(parts)
+end
+
 function Index:make_note_entry(path, text, opts)
   opts = opts or {}
   local file_info = system.get_file_info(path)
@@ -470,7 +514,7 @@ function Index:make_note_entry(path, text, opts)
   local display_name = display_basename(strip_markdown_extension(rel))
   local metadata = parse_frontmatter_metadata(text)
   local embed_preview = attach_embed_previews(text, anchor_index)
-  return {
+  local entry = {
     kind = "note",
     abs_path = common.normalize_path(path),
     rel_path = rel,
@@ -489,6 +533,8 @@ function Index:make_note_entry(path, text, opts)
     modified = file_info and file_info.modified,
     size = file_info and file_info.size,
   }
+  entry.fact_signature = note_fact_signature(entry)
+  return entry
 end
 
 function Index:make_attachment_entry(path)
@@ -507,8 +553,24 @@ function Index:watch_dir(dir)
   if not self.watcher or self.watched_dirs[dir] then return false end
   local info = system.get_file_info(dir)
   if not (info and info.type == "dir") then return false end
+  local monitor = self.watcher.monitor
+  if monitor and monitor.mode and monitor:mode() == "single" and next(self.watched_dirs) then
+    return true
+  end
+  if self.watch_dir_count >= self.watch_dir_limit then
+    if self.watcher_mode ~= "degraded" then
+      self.watcher_mode = "degraded"
+      core.log_quiet(
+        "Markdown index watcher budget exhausted for %s after %d directories; enabling bounded rescans",
+        self.root, self.watch_dir_count
+      )
+    end
+    return false
+  end
   self.watcher:watch(dir)
   self.watched_dirs[dir] = true
+  self.watch_dir_count = self.watch_dir_count + 1
+  if self.watcher.scanned and self.watcher.scanned[dir] then self.watcher_mode = "degraded" end
   return true
 end
 
@@ -672,10 +734,13 @@ function Index:start_watcher()
     return false
   end
   self.watcher = watcher
+  self.watcher_mode = "native"
+  self.watch_dir_count = 0
   self.watcher_serial = self.watcher_serial + 1
   local serial = self.watcher_serial
   self:watch_dir(self.root)
   core.add_thread(function()
+    local next_degraded_rescan = system.get_time() + 5
     while self.watcher == watcher and self.watcher_serial == serial do
       local checked, err = pcall(watcher.check, watcher, function(path)
         self.pending_watch_dirs[path] = true
@@ -695,6 +760,11 @@ function Index:start_watcher()
         end
         coroutine.yield(0)
       end
+      if self.watcher_mode == "degraded" and system.get_time() >= next_degraded_rescan then
+        self.diagnostics.degraded_rescans = self.diagnostics.degraded_rescans + 1
+        self:queue_subtree_scan({ self.root }, "watcher-degraded")
+        next_degraded_rescan = system.get_time() + 5
+      end
       coroutine.yield(0.2)
     end
   end)
@@ -709,6 +779,8 @@ function Index:stop_watcher()
   self.watcher_serial = self.watcher_serial + 1
   for dir in pairs(self.watched_dirs) do pcall(watcher.unwatch, watcher, dir) end
   self.watched_dirs = {}
+  self.watch_dir_count = 0
+  self.watcher_mode = "stopped"
   self.pending_watch_dirs = {}
   self.pending_scan_dirs = {}
   self.subtree_scan_running = false
@@ -748,6 +820,7 @@ function Index:rebuild_async(reason)
     while #dirs > 0 do
       if serial ~= self.rebuild_serial then return end
       local dir = table.remove(dirs)
+      self:watch_dir(dir)
       for _, name in ipairs(system.list_dir(dir) or {}) do
         if name ~= ".git" and name ~= ".run-meson-tests" then
           local path = join_path(dir, name)
@@ -874,12 +947,14 @@ local function target_edit_for_link(line_text, link, target)
     local raw = source:sub(opener + 1, finish)
     local leading = #(raw:match("^%s*") or "")
     local trailing = #(raw:match("%s*$") or "")
-    return {
+    local edit = {
       line1 = link.source_line, line2 = link.source_line,
       col1 = col1 + opener + leading,
       col2 = col1 + opener + #raw - trailing,
       text = target,
     }
+    edit.expected_text = line_text:sub(edit.col1, edit.col2 - 1)
+    return edit
   elseif link.kind == "markdown" or link.kind == "image" then
     local destination_open = source:find("](", 1, true)
     if not destination_open then return nil end
@@ -890,10 +965,12 @@ local function target_edit_for_link(line_text, link, target)
     if target:find("%s") and line_text:sub(found - 1, found - 1) ~= "<" then
       target = "<" .. target .. ">"
     end
-    return {
+    local edit = {
       line1 = link.source_line, line2 = link.source_line,
       col1 = found, col2 = found + #raw_target, text = target,
     }
+    edit.expected_text = line_text:sub(edit.col1, edit.col2 - 1)
+    return edit
   end
 end
 
@@ -1040,14 +1117,40 @@ function Index:update_doc(doc, opts)
   if not (doc and doc.abs_filename and is_markdown(doc.abs_filename)) then return false end
   if not common.path_belongs_to(common.normalize_path(doc.abs_filename), self.root) then return false end
   local text = doc:get_text(1, 1, math.huge, math.huge)
-  local entry = self:make_note_entry(doc.abs_filename, text)
+  local shallow = opts.cooperative ~= false and #text > MAX_COOPERATIVE_NOTE_BYTES
+  local entry = self:make_note_entry(doc.abs_filename, text, {
+    shallow = shallow,
+  })
   entry.doc = doc
+  local previous = self.notes_by_abs[path_key(doc.abs_filename)]
+  local facts_changed = not previous or previous.fact_signature ~= entry.fact_signature
   self:add_note_entry(entry)
-  if not opts.rebuilding then
+  self.diagnostics.doc_updates = self.diagnostics.doc_updates + 1
+  if not opts.rebuilding and facts_changed then
     self.generation = self.generation + 1
     self:notify("document-updated", doc)
   end
+  if shallow then
+    core.log_quiet("Markdown index shallow-indexed oversized open Document %s (%d bytes)",
+      doc.abs_filename, #text)
+  end
   core.log_quiet("Markdown vault index updated doc %s", doc.abs_filename)
+  return true
+end
+
+function Index:schedule_doc_update(doc)
+  local serial = (self.doc_update_serials[doc] or 0) + 1
+  if serial > 1 then
+    self.diagnostics.doc_updates_coalesced = self.diagnostics.doc_updates_coalesced + 1
+  end
+  self.doc_update_serials[doc] = serial
+  core.add_thread(function()
+    coroutine.yield(DOC_UPDATE_DEBOUNCE_SECONDS)
+    if self.doc_listeners[doc] and self.doc_update_serials[doc] == serial then
+      self.doc_update_serials[doc] = 0
+      self:update_doc(doc, { cooperative = true })
+    end
+  end)
   return true
 end
 
@@ -1055,13 +1158,13 @@ function Index:track_doc(doc)
   if not (doc and doc.add_text_change_listener) then return false end
   if not (doc.abs_filename and common.path_belongs_to(common.normalize_path(doc.abs_filename), self.root)) then return false end
   if self.doc_listeners[doc] then
-    self:update_doc(doc)
+    self:schedule_doc_update(doc)
     return false
   end
   local id = "markdown-vault-index-" .. tostring(self)
   doc:add_text_change_listener(id, {
     after_change = function()
-      self:update_doc(doc)
+      self:schedule_doc_update(doc)
     end,
   })
   if doc.add_metadata_listener then
@@ -1079,6 +1182,7 @@ function Index:untrack_doc(doc)
   if not id then return false end
   if doc and doc.remove_text_change_listener then doc:remove_text_change_listener(id) end
   if doc and doc.remove_metadata_listener then doc:remove_metadata_listener(id) end
+  self.doc_update_serials[doc] = nil
   self.doc_listeners[doc] = nil
   return true
 end

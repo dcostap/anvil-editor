@@ -119,6 +119,17 @@ test.describe("Markdown semantic model", function()
     markdown_model.close(doc, "test")
   end)
 
+  test.it("closes native results rejected during publication", function()
+    local doc = make_doc("# Heading\n")
+    local instance = markdown_model.get(doc, { ensure = false })
+    local closed = 0
+    local result = { close = function() closed = closed + 1; return true end }
+
+    test.equal(instance:publish(result, doc.text_revision + 1, "stale", instance.parse_generation), false)
+    test.equal(closed, 1)
+    markdown_model.close(doc, "test")
+  end)
+
   test.it("publishes exact Obsidian Wikilink and embed semantics", function()
     local doc = make_doc("[[Note#Heading|Alias]] and ![[image.png|640x480]]\n")
     local instance = markdown_model.get(doc)

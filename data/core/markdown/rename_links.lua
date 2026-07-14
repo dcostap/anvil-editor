@@ -31,6 +31,9 @@ local function apply_edits_to_text(text, edits)
     if edit.col1 < 1 or edit.col2 < edit.col1 or edit.col2 > #line + 1 then
       return nil, "rename edit no longer matches source"
     end
+    if edit.expected_text ~= nil and line:sub(edit.col1, edit.col2 - 1) ~= edit.expected_text then
+      return nil, "rename source changed after preview"
+    end
     lines[edit.line1] = line:sub(1, edit.col1 - 1) .. edit.text .. line:sub(edit.col2)
   end
   local result = table.concat(lines, "\n")
@@ -41,7 +44,51 @@ end
 function rename_links.apply(plan)
   if not (plan and plan.files) or plan.applied then return false, { reason = "rename plan unavailable", applied = {} } end
   local result = { applied = {}, failed = {}, total = #plan.files }
+  local prepared = {}
   for _, file_plan in ipairs(plan.files) do
+    local text, err
+    if file_plan.doc then
+      local ok
+      ok, text = pcall(file_plan.doc.get_text, file_plan.doc, 1, 1, math.huge, math.huge)
+      if not ok then err, text = text, nil end
+    else
+      text, err = read_file(file_plan.path)
+    end
+    local updated
+    if text then updated, err = apply_edits_to_text(text, file_plan.edits) end
+    if not updated then
+      result.failed[#result.failed + 1] = { path = file_plan.path, error = tostring(err) }
+      result.reason = "rename plan became stale"
+      core.log_quiet("Markdown rename preflight rejected %s: %s", file_plan.path, tostring(err))
+      core.error("Markdown links were not updated because %s changed after the preview", file_plan.path)
+      return false, result
+    end
+    prepared[#prepared + 1] = { file_plan = file_plan, original = text, updated = updated }
+  end
+
+  local applied_records = {}
+  local function rollback()
+    result.rolled_back = {}
+    for i = #applied_records, 1, -1 do
+      local record = applied_records[i]
+      local file_plan = record.file_plan
+      local ok
+      if file_plan.doc then
+        ok = pcall(function()
+          file_plan.doc:apply_edits({ {
+            line1 = 1, col1 = 1, line2 = math.huge, col2 = math.huge,
+            text = record.original,
+          } }, { type = "markdown-link-rename-rollback" })
+        end)
+      else
+        ok = pcall(Doc.write_text_safely, file_plan.path, record.original)
+      end
+      if ok then result.rolled_back[#result.rolled_back + 1] = file_plan.path end
+    end
+    result.applied = {}
+  end
+  for _, record in ipairs(prepared) do
+    local file_plan = record.file_plan
     local ok, err
     if file_plan.doc then
       ok, err = pcall(function()
@@ -52,25 +99,25 @@ function rename_links.apply(plan)
         })
       end)
     else
-      local text
-      text, err = read_file(file_plan.path)
-      if text then
-        local updated
-        updated, err = apply_edits_to_text(text, file_plan.edits)
-        if updated then ok, err = pcall(Doc.write_text_safely, file_plan.path, updated) end
-      end
+      ok, err = pcall(Doc.write_text_safely, file_plan.path, record.updated)
     end
     if ok then
       result.applied[#result.applied + 1] = file_plan.path
-      if plan.index then
-        if file_plan.doc then plan.index:update_doc(file_plan.doc)
-        else plan.index:update_path(file_plan.path, { cooperative = true }) end
-      end
+      applied_records[#applied_records + 1] = record
     else
       result.failed[#result.failed + 1] = { path = file_plan.path, error = tostring(err) }
+      local applied_before_rollback = #result.applied
+      rollback()
       core.error("Markdown rename updated %d/%d files before %s failed: %s",
-        #result.applied, #plan.files, file_plan.path, tostring(err))
+        applied_before_rollback, #plan.files, file_plan.path, tostring(err))
       return false, result
+    end
+  end
+  if plan.index then
+    for _, record in ipairs(prepared) do
+      local file_plan = record.file_plan
+      if file_plan.doc then plan.index:update_doc(file_plan.doc)
+      else plan.index:update_path(file_plan.path, { cooperative = true }) end
     end
   end
   plan.applied = true

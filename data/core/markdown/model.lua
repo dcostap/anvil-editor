@@ -237,6 +237,7 @@ end
 
 function Model:publish(result, revision, signature, generation, changed_range)
   if not self:is_current(revision, signature, generation) then
+    if result then result:close() end
     self.diagnostics.stale = self.diagnostics.stale + 1
     core.log_quiet("Markdown model discarded stale generation %d", generation)
     return false
@@ -247,11 +248,13 @@ function Model:publish(result, revision, signature, generation, changed_range)
   if (block_status ~= "ready" and block_status ~= "limit")
     or (inline_status ~= "ready" and inline_status ~= "limit")
   then
+    self.request = nil
     self.status = "error"
     self.reason = (summary.outline and summary.outline.error)
       or (summary.usage and summary.usage.error)
       or "Markdown semantic query failed"
     self.diagnostics.failed = self.diagnostics.failed + 1
+    result:close()
     self:notify("error")
     return false
   end
@@ -362,7 +365,8 @@ function Model:submit(reason)
     on_cancelled = function()
       if self.parse_generation == generation then self.request = nil end
     end,
-    on_stale = function()
+    on_stale = function(message)
+      if message and message.result then message.result:close() end
       self.diagnostics.stale = self.diagnostics.stale + 1
     end,
   })

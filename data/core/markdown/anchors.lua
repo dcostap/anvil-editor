@@ -69,12 +69,18 @@ local function has_block_id_boundary(line, col1, col2)
     and (after == "" or after:match("%s") or after:match("[.,;:!?%)]"))
 end
 
-function anchors.find_block_ids_in_lines(lines)
+function anchors.find_block_ids_in_lines(lines, blocks)
   local result = {}
+  local excluded = {}
+  for _, block in ipairs(blocks or {}) do
+    if block.type == "code" or block.type == "html" or block.type == "frontmatter" then
+      for line = block.line1, block.line2 do excluded[line] = true end
+    end
+  end
   for line_no, line in ipairs(lines or {}) do
-    local spans = parser.parse_inline(line, line_no)
+    local spans = not excluded[line_no] and parser.parse_inline(line, line_no) or {}
     local start = 1
-    while true do
+    while not excluded[line_no] do
       local col1, col2, id = line:find("%^(%w[%w%-]*)", start)
       if not col1 then break end
       if has_block_id_boundary(line, col1, col2) and not is_in_span(spans, col1, col2 + 1) then
@@ -97,7 +103,7 @@ function anchors.index_document(text_or_parse_result)
     or parser.parse(text_or_parse_result or "")
   return {
     headings = anchors.collect_headings(parsed.blocks),
-    blocks = anchors.find_block_ids_in_lines(parsed.lines),
+    blocks = anchors.find_block_ids_in_lines(parsed.lines, parsed.blocks),
   }
 end
 

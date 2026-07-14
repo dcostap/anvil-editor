@@ -164,8 +164,8 @@ function parser.parse_inline(line, line_no, base_col)
 end
 
 local function parse_atx_heading(line, line_no)
-  local indent, marks, after = line:match("^(%s*)(#+)(%s+.*)$")
-  if not marks or #marks > 6 then return nil end
+  local indent, marks = line:match("^( *)(#+)[ \t]+.*$")
+  if not marks or #indent > 3 or #marks > 6 then return nil end
 
   local marker_col1 = #indent + 1
   local content_col1 = marker_col1 + #marks
@@ -199,20 +199,55 @@ local function parse_atx_heading(line, line_no)
   }
 end
 
+local function parse_setext_heading(lines, line_no)
+  local line, underline = lines[line_no], lines[line_no + 1]
+  if not underline or is_blank(line) then return nil end
+  local indent, marks = underline:match("^( *)(=+)[ \t]*$")
+  local level = 1
+  if not marks then
+    indent, marks = underline:match("^( *)(%-+)[ \t]*$")
+    level = 2
+  end
+  if not marks or #indent > 3 then return nil end
+  local content_col1 = line:find("%S") or 1
+  local content_col2 = #line + 1
+  while content_col2 > content_col1 and line:sub(content_col2 - 1, content_col2 - 1):match("%s") do
+    content_col2 = content_col2 - 1
+  end
+  return {
+    type = "heading",
+    line1 = line_no,
+    line2 = line_no + 1,
+    col1 = content_col1,
+    col2 = #underline + 1,
+    level = level,
+    content_col1 = content_col1,
+    content_col2 = content_col2,
+    text = line:sub(content_col1, content_col2 - 1),
+    inline = parser.parse_inline(line:sub(content_col1, content_col2 - 1), line_no, content_col1),
+    setext = true,
+  }, line_no + 2
+end
+
 local function is_fence(line)
-  return line:match("^%s*```") or line:match("^%s*~~~")
+  local indent, marker = line:match("^( *)(`+)")
+  if marker and #indent <= 3 and #marker >= 3 then return true end
+  indent, marker = line:match("^( *)(~+)")
+  return marker ~= nil and #indent <= 3 and #marker >= 3
 end
 
 local function parse_fenced_code(lines, start_line)
   local line = lines[start_line]
-  local indent, marker, info = line:match("^(%s*)([`~][`~][`~]+)%s*(.-)%s*$")
+  local indent, marker, info = line:match("^( *)(`+)[ \t]*(.-)[ \t]*$")
+  if not marker then indent, marker, info = line:match("^( *)(~+)[ \t]*(.-)[ \t]*$") end
+  if indent and #indent > 3 then return nil end
   if not marker then return nil end
   local fence_char = marker:sub(1, 1)
   local fence_len = #marker
   local i = start_line + 1
   while i <= #lines do
-    local close = lines[i]:match("^%s*(" .. fence_char:rep(fence_len) .. fence_char .. "*)%s*$")
-    if close then break end
+    local close_indent, close = lines[i]:match("^( *)(" .. fence_char:rep(fence_len) .. fence_char .. "*)[ \t]*$")
+    if close and #close_indent <= 3 then break end
     i = i + 1
   end
   return {
@@ -225,6 +260,65 @@ local function parse_fenced_code(lines, start_line)
   }, math.min(i + 1, #lines + 1)
 end
 
+local HTML_BLOCK_TAGS = {
+  address = true, article = true, aside = true, base = true, basefont = true,
+  blockquote = true, body = true, caption = true, center = true, col = true,
+  colgroup = true, dd = true, details = true, dialog = true, dir = true,
+  div = true, dl = true, dt = true, fieldset = true, figcaption = true,
+  figure = true, footer = true, form = true, frame = true, frameset = true,
+  h1 = true, h2 = true, h3 = true, h4 = true, h5 = true, h6 = true,
+  head = true, header = true, hr = true, html = true, iframe = true,
+  legend = true, li = true, link = true, main = true, menu = true,
+  menuitem = true, nav = true, noframes = true, ol = true, optgroup = true,
+  option = true, p = true, param = true, search = true, section = true,
+  summary = true, table = true, tbody = true, td = true, tfoot = true,
+  th = true, thead = true, title = true, tr = true, track = true, ul = true,
+}
+
+local function parse_frontmatter(lines, start_line)
+  if start_line ~= 1 then return nil end
+  local delimiter = lines[1]
+  if delimiter ~= "---" and delimiter ~= "+++" then return nil end
+  for line = 2, #lines do
+    if lines[line] == delimiter then
+      return { type = "frontmatter", line1 = 1, line2 = line, col1 = 1, col2 = #delimiter + 1 }, line + 1
+    end
+  end
+end
+
+local function parse_html_block(lines, start_line)
+  local text = lines[start_line] or ""
+  local indent, body = text:match("^( *)(.*)$")
+  if #indent > 3 or body:sub(1, 1) ~= "<" then return nil end
+  local terminator
+  if body:find("^<!%-%-") then
+    terminator = "%-%->"
+  elseif body:find("^<%?") then
+    terminator = "%?>"
+  elseif body:find("^<!%[CDATA%[") then
+    terminator = "%]%]>"
+  elseif body:find("^<![A-Z]") then
+    terminator = ">"
+  else
+    local tag = body:match("^</?([%a][%w-]*)[%s>/]")
+    tag = tag and tag:lower()
+    if tag == "script" or tag == "pre" or tag == "style" or tag == "textarea" then
+      terminator = "</" .. tag .. "%s*>"
+    elseif not HTML_BLOCK_TAGS[tag or ""] then
+      return nil
+    end
+  end
+  local line = start_line
+  if terminator then
+    while line <= #lines and not (lines[line] or ""):lower():find(terminator) do line = line + 1 end
+  else
+    while line + 1 <= #lines and not is_blank(lines[line + 1]) do line = line + 1 end
+  end
+  line = math.min(line, #lines)
+  return { type = "html", line1 = start_line, line2 = line, col1 = 1,
+    col2 = #(lines[line] or "") + 1 }, line + 1
+end
+
 function parser.parse_blocks_from_lines(lines)
   local blocks = {}
   local i = 1
@@ -233,15 +327,19 @@ function parser.parse_blocks_from_lines(lines)
     if is_blank(line) then
       i = i + 1
     else
-      local fence_block, next_i = parse_fenced_code(lines, i)
-      if fence_block then
-        blocks[#blocks + 1] = fence_block
+      local special, next_i = parse_frontmatter(lines, i)
+      if not special then special, next_i = parse_html_block(lines, i) end
+      if not special then special, next_i = parse_fenced_code(lines, i) end
+      if special then
+        blocks[#blocks + 1] = special
         i = next_i
       else
-        local heading = parse_atx_heading(line, i)
+        local heading
+        heading, next_i = parse_setext_heading(lines, i)
+        if not heading then heading, next_i = parse_atx_heading(line, i), i + 1 end
         if heading then
           blocks[#blocks + 1] = heading
-          i = i + 1
+          i = next_i
         else
           local start_i = i
           local text_lines = {}
@@ -282,9 +380,8 @@ function parser.parse(text)
   local all_links = {}
   for _, block in ipairs(blocks) do
     if block.type == "heading" then
-      local source = lines[block.line1] or ""
-      for _, link in ipairs(links.find_links(source, block.line1)) do
-        all_links[#all_links + 1] = link
+      for _, span in ipairs(block.inline or {}) do
+        if span.link then all_links[#all_links + 1] = span.link end
       end
     elseif block.links then
       for _, link in ipairs(block.links) do all_links[#all_links + 1] = link end

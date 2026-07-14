@@ -12,6 +12,12 @@ local function split_once(text, sep)
   return text:sub(1, index - 1), text:sub(index + #sep)
 end
 
+local function percent_decode(text)
+  return (text or ""):gsub("%%(%x%x)", function(hex)
+    return string.char(tonumber(hex, 16))
+  end)
+end
+
 function links.parse_resize(text)
   if type(text) ~= "string" then return nil end
   local width, height = text:match("^(%d+)[xX](%d+)$")
@@ -55,6 +61,15 @@ end
 
 local function apply_target_model(result, raw_target, alias)
   local path, subtarget = parse_subtarget(raw_target)
+  local filesystem_destination = result.kind == "markdown" or result.kind == "image"
+    or result.kind == "reference"
+  if filesystem_destination and not path:match("^[%a][%w+.-]*:") then
+    path = percent_decode(path)
+    if subtarget then
+      if subtarget.text then subtarget.text = percent_decode(subtarget.text) end
+      if subtarget.id then subtarget.id = percent_decode(subtarget.id) end
+    end
+  end
   result.raw_target = raw_target
   result.path = path
   result.subtarget = subtarget

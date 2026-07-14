@@ -50,32 +50,15 @@ local function closes_fence(line, marker, count)
   return run and #indent <= 3 and #run >= count and rest ~= nil
 end
 
+local semantic_line
+
 local function line_in_raw_block(view, line)
-  local doc = view.doc
-  local signature = tostring(doc.text_revision or 0) .. ":" .. tostring(#doc.lines)
-  local cache = view.__markdown_live_raw_block_cache
-  if not (cache and cache.signature == signature) then
-    local suppressed = {}
-    local marker, count
-    for i, raw in ipairs(doc.lines) do
-      local text = (raw or ""):gsub("\n$", "")
-      if marker then
-        suppressed[i] = true
-        if closes_fence(text, marker, count) then marker, count = nil, nil end
-      else
-        local m, c = fence_marker(text)
-        if m then
-          suppressed[i] = true
-          marker, count = m, c
-        elseif text:match("^    %S") or text:match("^\t%S") then
-          suppressed[i] = true
-        end
-      end
+  for _, node in ipairs(semantic_line(view, line) or {}) do
+    if node.type == "code_fenced" or node.type == "code_indented" or node.type == "html" then
+      return true
     end
-    cache = { signature = signature, suppressed = suppressed }
-    view.__markdown_live_raw_block_cache = cache
   end
-  return cache.suppressed[line] == true
+  return false
 end
 
 local function current_selection_state(view)
@@ -116,7 +99,7 @@ local function current_semantic_model(view)
   end
 end
 
-local function semantic_line(view, line)
+semantic_line = function(view, line)
   local instance = current_semantic_model(view)
   if not instance then return nil end
   local cache = view.__markdown_live_semantic_line_cache
@@ -241,6 +224,29 @@ local function semantic_heading_for_line(view, line_text, line)
       end
       if suppressed then return nil end
       local heading = heading_for_line(line_text, line)
+      if not heading and node.source.line2 > node.source.line1 then
+        local underline = (view.doc.lines[line + 1] or ""):gsub("\n$", "")
+        local indent, marks = underline:match("^( *)(=+)[ \t]*$")
+        local level = 1
+        if not marks then
+          indent, marks = underline:match("^( *)(%-+)[ \t]*$")
+          level = 2
+        end
+        if marks and #indent <= 3 then
+          local content_col1 = line_text:find("%S") or 1
+          local content_col2 = #line_text + 1
+          while content_col2 > content_col1
+            and line_text:sub(content_col2 - 1, content_col2 - 1):match("%s")
+          do
+            content_col2 = content_col2 - 1
+          end
+          heading = {
+            level = level, line = line, marker_col1 = content_col1,
+            content_col1 = content_col1, content_col2 = content_col2,
+            text = line_text:sub(content_col1, content_col2 - 1), setext = true,
+          }
+        end
+      end
       if heading then
         heading.semantic_id = node.id
         heading.semantic_generation = generation
@@ -248,6 +254,17 @@ local function semantic_heading_for_line(view, line_text, line)
         heading.source_col2 = #line_text + 1
         return heading
       end
+    end
+  end
+end
+
+local function semantic_setext_marker_for_line(view, line_text, line)
+  local indent, marks = line_text:match("^( *)(=+)[ \t]*$")
+  if not marks then indent, marks = line_text:match("^( *)(%-+)[ \t]*$") end
+  if not marks or #indent > 3 then return nil end
+  for _, node in ipairs(semantic_line(view, line) or {}) do
+    if node.type == "heading" and node.source.line1 < line and node.source.line2 >= line then
+      return node
     end
   end
 end
@@ -668,9 +685,9 @@ local function normalize_reference_label(value)
   return value:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", ""):lower()
 end
 
-local function reference_definitions(view)
-  local instance = current_semantic_model(view)
-  if not instance then return {} end
+local function prepare_reference_definitions(view, instance)
+  instance = instance or current_semantic_model(view)
+  if not instance or instance.status ~= "ready" then return {} end
   local cache = view.__markdown_live_reference_cache
   if cache and cache.generation == instance.generation then return cache.definitions end
   local nodes, reason = instance:nodes_for_lines(1, #view.doc.lines, { limit = 8192 })
@@ -700,6 +717,28 @@ local function reference_definitions(view)
   cache = { generation = instance.generation, definitions = definitions }
   view.__markdown_live_reference_cache = cache
   return definitions
+end
+
+local function reference_definitions(view)
+  local instance = current_semantic_model(view)
+  if not instance then return {} end
+  local cache = view.__markdown_live_reference_cache
+  if cache and cache.generation == instance.generation then return cache.definitions end
+  if not view.__markdown_live_reference_prepare_pending then
+    view.__markdown_live_reference_prepare_pending = instance.generation
+    core.add_thread(function()
+      coroutine.yield(0)
+      if view.__markdown_live_attached and current_semantic_model(view) == instance then
+        prepare_reference_definitions(view, instance)
+        view:invalidate_line_render(PROVIDER_ID)
+        core.redraw = true
+      end
+      if view.__markdown_live_reference_prepare_pending == instance.generation then
+        view.__markdown_live_reference_prepare_pending = nil
+      end
+    end)
+  end
+  return {}
 end
 
 local function reference_link_from_node(view, line_text, line, node)
@@ -1350,25 +1389,7 @@ view_in_source_mode = function(view)
 end
 
 local function fenced_code_for_line(view, line)
-  local instance = current_semantic_model(view)
-  if not instance then return nil end
-  local cache = view.__markdown_live_fenced_code_cache
-  if not cache or cache.generation ~= instance.generation then
-    local nodes, reason = instance:nodes_for_lines(1, #view.doc.lines, { limit = 4096 })
-    local ranges = {}
-    if reason ~= "limit" then
-      for _, node in ipairs(nodes or {}) do
-        if node.type == "code_fenced" or node.type == "code_indented" then
-          ranges[#ranges + 1] = node
-        end
-      end
-    else
-      core.log_quiet("Markdown code-block presentation exceeded capture bound for %s", view.doc:get_name())
-    end
-    cache = { generation = instance.generation, ranges = ranges }
-    view.__markdown_live_fenced_code_cache = cache
-  end
-  for _, node in ipairs(cache.ranges) do
+  for _, node in ipairs(semantic_line(view, line) or {}) do
     if node.type == "code_fenced" then
       local line2 = node.source.line2
       if node.source.col2 == 1 and line2 > node.source.line1 then line2 = line2 - 1 end
@@ -1381,9 +1402,7 @@ local function fenced_code_for_line(view, line)
 end
 
 local function indented_code_for_line(view, line)
-  fenced_code_for_line(view, line)
-  local cache = view.__markdown_live_fenced_code_cache
-  for _, node in ipairs(cache and cache.ranges or {}) do
+  for _, node in ipairs(semantic_line(view, line) or {}) do
     if node.type == "code_indented" then
       local line2 = node.source.line2
       if node.source.col2 == 1 and line2 > node.source.line1 then line2 = line2 - 1 end
@@ -1490,20 +1509,32 @@ local function heading_content_fragments(view, text, heading, font, reveal_units
 end
 
 local function active_heading_fragments(view, text, heading, font, reveal_units)
-  local fragments = {
-    { source_col1 = 1, source_col2 = heading.content_col1, text = text:sub(1, heading.content_col1 - 1), font = font, color = style.markdown_live_heading_marker },
-  }
+  local fragments = {}
+  if heading.content_col1 > 1 then
+    fragments[#fragments + 1] = {
+      source_col1 = 1, source_col2 = heading.content_col1,
+      text = text:sub(1, heading.content_col1 - 1), font = font,
+      color = style.markdown_live_heading_marker,
+    }
+  end
   for _, fragment in ipairs(heading_content_fragments(view, text, heading, font, reveal_units)) do fragments[#fragments + 1] = fragment end
-  fragments[#fragments + 1] = { source_col1 = heading.content_col2, source_col2 = #text + 1, text = text:sub(heading.content_col2), font = font, color = style.markdown_live_heading_marker }
+  if heading.content_col2 < #text + 1 then
+    fragments[#fragments + 1] = { source_col1 = heading.content_col2, source_col2 = #text + 1,
+      text = text:sub(heading.content_col2), font = font, color = style.markdown_live_heading_marker }
+  end
   return fragments
 end
 
 local function inactive_heading_fragments(view, text, heading, font, reveal_units)
-  local fragments = {
-    { source_col1 = 1, source_col2 = heading.content_col1, hidden = true },
-  }
+  local fragments = {}
+  if heading.content_col1 > 1 then
+    fragments[#fragments + 1] = { source_col1 = 1, source_col2 = heading.content_col1, hidden = true }
+  end
   for _, fragment in ipairs(heading_content_fragments(view, text, heading, font, reveal_units)) do fragments[#fragments + 1] = fragment end
-  fragments[#fragments + 1] = { source_col1 = heading.content_col2, source_col2 = #text + 1, hidden = true }
+  if heading.content_col2 < #text + 1 then
+    fragments[#fragments + 1] = { source_col1 = heading.content_col2,
+      source_col2 = #text + 1, hidden = true }
+  end
   return fragments
 end
 
@@ -1605,8 +1636,19 @@ function provider:render_line(view, line)
   if not in_comment and line_in_raw_block(view, line) then return { raw_passthrough = true } end
 
   local text = (view.doc.lines[line] or ""):gsub("\n$", "")
-  local heading = semantic_heading_for_line(view, text, line)
   local reveal_units = reveal_units_for_line(view, line)
+  local setext_marker = semantic_setext_marker_for_line(view, text, line)
+  if setext_marker then
+    if reveal_unit_matches(reveal_units, setext_marker.id, 1, #text + 1) then
+      return { raw_passthrough = true }
+    end
+    return {
+      source_text = text,
+      semantic_id = setext_marker.id .. ":setext-marker",
+      fragments = { { source_col1 = 1, source_col2 = #text + 1, hidden = true } },
+    }
+  end
+  local heading = semantic_heading_for_line(view, text, line)
   if heading then return heading_render_line(view, text, heading, reveal_units) end
 
   local image_span = image_only_span(view, text, line)
@@ -1692,7 +1734,6 @@ end
 
 local function invalidate_metadata_caches(view, event)
   if not view then return end
-  view.__markdown_live_raw_block_cache = nil
   if not event or event.filename_changed or event.syntax_changed then
     clear_image_cache(view)
   end
@@ -1746,6 +1787,7 @@ end
 
 local function invalidate_semantic_publication(view, instance, reason)
   view.__markdown_live_semantic_line_cache = nil
+  view.__markdown_live_reference_prepare_pending = nil
   local owner = view.__markdown_live_owner
   local pending_line = owner and owner.semantic_pending_line
   if owner and reason ~= "pending" then owner.semantic_pending_line = nil end

@@ -43,6 +43,12 @@ local function normalized(path)
   return common.normalize_path(path)
 end
 
+local function wait_until(predicate, timeout)
+  local deadline = system.get_time() + (timeout or 5)
+  while not predicate() and system.get_time() < deadline do coroutine.yield(0.01) end
+  return predicate()
+end
+
 test.describe("Markdown vault index", function()
   test.it("indexes notes with very long table padding without blocking", function()
     local root = temp_root("markdown-vault-long-table-padding")
@@ -285,6 +291,19 @@ test.describe("Markdown vault index", function()
     common.rm(root, true)
   end)
 
+  test.it("resolves percent-encoded Markdown destinations", function()
+    local root = temp_root("markdown-vault-percent-encoded")
+    mkdirp(root)
+    local source = join_path(root, "Source.md")
+    write_file(source, "source\n")
+    write_file(join_path(root, "Note name.md"), "# Note\n")
+    local index = vault_index.get_index(root):rebuild("percent-encoded-test")
+    local link = test.not_nil(links.find_links("[Note](Note%20name.md)", 1)[1])
+
+    test.equal(index:resolve(link, source).status, "resolved")
+    common.rm(root, true)
+  end)
+
   test.it("resolves against the source note's owning Project", function()
     local root1 = temp_root("markdown-vault-project-one")
     local root2 = temp_root("markdown-vault-project-two")
@@ -361,6 +380,9 @@ test.describe("Markdown vault index", function()
       local doc = Doc(note_path, note_path, true)
       doc:insert(1, 1, "# New\n\nText ^new\n")
       index:track_doc(doc)
+      test.ok(wait_until(function()
+        return index:resolve(wiki("[[Note#New]]"), note_path).status == "resolved"
+      end), "initial tracked Document overlay was not published")
 
       local heading = index:resolve(wiki("[[Note#New]]"), note_path)
       test.equal(heading.status, "resolved")
@@ -371,6 +393,9 @@ test.describe("Markdown vault index", function()
 
       doc:remove(1, 1, math.huge, math.huge)
       doc:insert(1, 1, "# New Heading\n\nText ^new\n")
+      test.ok(wait_until(function()
+        return index:resolve(wiki("[[Note#New Heading]]"), note_path).status == "resolved"
+      end), "tracked Document update was not published")
       heading = index:resolve(wiki("[[Note#New Heading]]"), note_path)
       test.equal(heading.status, "resolved")
       local old = index:resolve(wiki("[[Note#New]]"), note_path)
@@ -419,6 +444,123 @@ test.describe("Markdown vault index", function()
     local updated = test.not_nil(io.open(ref_path, "rb")); local updated_text = updated:read("*a"); updated:close()
     test.equal(updated_text,
       "[[Renamed#Heading|Alias]] ![[Renamed]] [old](Renamed.md#Heading) [[Renamed?mode#Heading]] `[[Old]]`\n")
+    common.rm(root, true)
+  end)
+
+  test.it("coalesces ordinary tracked Document edits without publishing unchanged link facts", function()
+    local root = temp_root("markdown-vault-doc-coalesce")
+    mkdirp(root)
+    local note_path = join_path(root, "Note.md")
+    local lines = { "# Heading", "", "preview", "", "body" }
+    for i = 1, 100 do lines[#lines + 1] = "line " .. i end
+    write_file(note_path, table.concat(lines, "\n") .. "\n")
+    local index = vault_index.get_index(root):rebuild("coalesce-test")
+    local doc = Doc(note_path, note_path, true)
+    doc:insert(1, 1, table.concat(lines, "\n") .. "\n")
+    index:track_doc(doc)
+    coroutine.yield(0.05)
+    local generation = index.generation
+    local updates = index.diagnostics.doc_updates
+
+    doc:insert(80, 1, "a")
+    doc:insert(80, 2, "b")
+    doc:insert(80, 3, "c")
+    test.equal(index.generation, generation)
+    test.ok(wait_until(function() return index.diagnostics.doc_updates > updates end))
+    test.ok(index.diagnostics.doc_updates - updates < 3)
+    test.ok(index.diagnostics.doc_updates_coalesced >= 1)
+    test.equal(index.generation, generation)
+    index:on_doc_closed(doc)
+    common.rm(root, true)
+  end)
+
+  test.it("enters degraded watcher mode after its deterministic directory budget", function()
+    local root = temp_root("markdown-vault-watch-budget")
+    local child = join_path(root, "child")
+    mkdirp(child)
+    local index = vault_index.get_index(root)
+    index.watcher = { watch = function() end, scanned = {} }
+    index.watcher_mode = "native"
+    index.watch_dir_limit = 1
+
+    test.equal(index:watch_dir(root), true)
+    test.equal(index:watch_dir(child), false)
+    test.equal(index.watcher_mode, "degraded")
+    index.watcher = nil
+    index.watched_dirs = {}
+    index.watch_dir_count = 0
+    common.rm(root, true)
+  end)
+
+  test.it("excludes raw HTML links from note rename plans", function()
+    local root = temp_root("markdown-vault-rename-html")
+    mkdirp(root)
+    local old_path = join_path(root, "Old.md")
+    local new_path = join_path(root, "New.md")
+    write_file(old_path, "# Old\n")
+    write_file(join_path(root, "Reference.md"), "<div>\n[Old](Old.md)\n</div>\n")
+    local index = vault_index.get_index(root):rebuild("rename-html-test")
+
+    local plan = test.not_nil(index:plan_note_rename(old_path, new_path))
+    test.equal(#plan.files, 0)
+    common.rm(root, true)
+  end)
+
+  test.it("rejects stale rename plans before changing any file", function()
+    local root = temp_root("markdown-vault-stale-rename")
+    mkdirp(root)
+    local old_path = join_path(root, "Old.md")
+    local new_path = join_path(root, "New.md")
+    local first_path = join_path(root, "First.md")
+    local second_path = join_path(root, "Second.md")
+    write_file(old_path, "# Old\n")
+    write_file(first_path, "[Old](Old.md)\n")
+    write_file(second_path, "[Old](Old.md)\n")
+    local index = vault_index.get_index(root):rebuild("stale-rename-test")
+    local plan = test.not_nil(index:plan_note_rename(old_path, new_path))
+    write_file(second_path, "prefix [Old](Old.md)\n")
+
+    local applied, result = rename_links.apply(plan)
+    test.equal(applied, false)
+    test.equal(#result.applied, 0)
+    local first = test.not_nil(io.open(first_path, "rb"))
+    local first_text = first:read("*a")
+    first:close()
+    local second = test.not_nil(io.open(second_path, "rb"))
+    local second_text = second:read("*a")
+    second:close()
+    test.equal(first_text, "[Old](Old.md)\n")
+    test.equal(second_text, "prefix [Old](Old.md)\n")
+    common.rm(root, true)
+  end)
+
+  test.it("indexes Setext headings and ignores block IDs inside raw blocks", function()
+    local root = temp_root("markdown-vault-setext-raw")
+    mkdirp(root)
+    local note = join_path(root, "Note.md")
+    write_file(note, table.concat({
+      "Setext heading", "==============", "", "```", "code ^not-a-block", "```",
+      "", "<div>", "html ^not-html-block", "</div>", "", "real ^real-block", "",
+    }, "\n"))
+    local index = vault_index.get_index(root):rebuild("setext-raw-test")
+    local source = join_path(root, "Source.md")
+
+    test.equal(index:resolve(wiki("[[Note#Setext heading]]"), source).status, "resolved")
+    test.equal(index:resolve(wiki("[[Note#^real-block]]"), source).status, "resolved")
+    test.equal(index:resolve(wiki("[[Note#^not-a-block]]"), source).status, "missing")
+    test.equal(index:resolve(wiki("[[Note#^not-html-block]]"), source).status, "missing")
+    common.rm(root, true)
+  end)
+
+  test.it("preserves commas inside quoted frontmatter aliases", function()
+    local root = temp_root("markdown-vault-quoted-alias")
+    mkdirp(root)
+    write_file(join_path(root, "Person.md"), "---\naliases: [\"Last, First\", Other]\n---\n")
+    local index = vault_index.get_index(root):rebuild("quoted-alias-test")
+    local source = join_path(root, "Source.md")
+
+    test.equal(index:resolve(wiki("[[Last, First]]"), source).status, "resolved")
+    test.equal(index:resolve(wiki("[[Other]]"), source).status, "resolved")
     common.rm(root, true)
   end)
 
@@ -495,8 +637,14 @@ test.describe("Markdown vault index", function()
       local doc = Doc(old_path, old_path, true)
       doc:insert(1, 1, "# Renamed\n")
       index:track_doc(doc)
+      test.ok(wait_until(function()
+        return index:resolve(wiki("[[Old]]"), old_path).status == "resolved"
+      end))
       test.equal(index:resolve(wiki("[[Old]]"), old_path).status, "resolved")
       doc:set_filename(new_path, new_path)
+      test.ok(wait_until(function()
+        return index:resolve(wiki("[[New]]"), new_path).status == "resolved"
+      end))
       test.equal(index:resolve(wiki("[[Old]]"), new_path).status, "missing")
       test.equal(index:resolve(wiki("[[New]]"), new_path).status, "resolved")
     end)
@@ -516,6 +664,9 @@ test.describe("Markdown vault index", function()
       doc:insert(1, 1, "# Open Overlay\n")
       index:track_doc(doc)
       doc:set_filename(new_path, new_path)
+      test.ok(wait_until(function()
+        return index:resolve(wiki("[[New#Open Overlay]]"), new_path).status == "resolved"
+      end))
       test.equal(index:resolve(wiki("[[Old#Disk Original]]"), new_path).status, "resolved")
       test.equal(index:resolve(wiki("[[New#Open Overlay]]"), new_path).status, "resolved")
     end)

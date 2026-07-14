@@ -103,23 +103,33 @@ local function find_obsidian_vault_root(source_dir, project_root)
   return scan_up(source_dir) or scan_up(project_root)
 end
 
-local function obsidian_attachment_folder(root)
+local function obsidian_attachment_folder(root, source_dir)
   if not root then return nil end
   local app_json = join_path(join_path(root, ".obsidian"), "app.json")
   local settings = read_file(app_json)
   if not settings then return nil end
-  local decoded = json.decode(settings)
+  local ok, decoded = pcall(json.decode, settings)
+  if not ok then
+    local core = package.loaded.core
+    if core and core.log_quiet then
+      core.log_quiet("Markdown ignored malformed Obsidian attachment settings in %s: %s",
+        app_json, tostring(decoded))
+    end
+    return nil
+  end
   local folder = type(decoded) == "table" and decoded.attachmentFolderPath or nil
   if type(folder) ~= "string" or folder == "" then return nil end
-  folder = folder:gsub("^%./", ""):gsub("^%.\\", "")
-  if folder == "." then return root end
+  if folder == "/" or folder == "\\" then return root end
+  if folder == "." or folder == "./" or folder == ".\\" then return source_dir or root end
+  local note_relative = folder:match("^%./(.+)$") or folder:match("^%.\\(.+)$")
+  if note_relative then return join_path(source_dir or root, note_relative) end
   if is_absolute_path(folder) then return folder end
   return join_path(root, folder)
 end
 
 local function resolve_in_obsidian_attachment_folder(rel, source_dir, project_root)
   local root = find_obsidian_vault_root(source_dir, project_root)
-  local folder = obsidian_attachment_folder(root)
+  local folder = obsidian_attachment_folder(root, source_dir)
   return try_relative_file(folder, rel)
 end
 
@@ -127,7 +137,7 @@ function images.attachment_directory(opts)
   opts = opts or {}
   local source_dir = dirname(opts.source_path)
   local root = find_obsidian_vault_root(source_dir, opts.project_root)
-  local obsidian_folder = obsidian_attachment_folder(root)
+  local obsidian_folder = obsidian_attachment_folder(root, source_dir)
   if obsidian_folder then return common.normalize_path(obsidian_folder) end
   local configured = opts.configured_folder or "attachments"
   if configured == "." then return common.normalize_path(source_dir or opts.project_root) end

@@ -66,6 +66,43 @@ test.describe("Markdown image helpers", function()
     common.rm(root, true)
   end)
 
+  test.it("honors every Obsidian attachment-folder location policy", function()
+    local root = USERDIR .. PATHSEP .. "markdown-image-attachment-policies-" .. system.get_process_id()
+    local obsidian = root .. PATHSEP .. ".obsidian"
+    local notes = root .. PATHSEP .. "notes"
+    test.ok(common.mkdirp(obsidian))
+    test.ok(common.mkdirp(notes))
+    local source = notes .. PATHSEP .. "Note.md"
+    local app_json = obsidian .. PATHSEP .. "app.json"
+
+    write_file(app_json, [[{"attachmentFolderPath":"/"}]])
+    test.equal(images.attachment_directory({ source_path = source, project_root = root }), common.normalize_path(root))
+
+    write_file(app_json, [[{"attachmentFolderPath":"./"}]])
+    test.equal(images.attachment_directory({ source_path = source, project_root = root }), common.normalize_path(notes))
+
+    write_file(app_json, [[{"attachmentFolderPath":"./assets"}]])
+    test.equal(
+      images.attachment_directory({ source_path = source, project_root = root }),
+      common.normalize_path(notes .. PATHSEP .. "assets")
+    )
+
+    write_file(app_json, [[{"attachmentFolderPath":"vault-assets"}]])
+    test.equal(
+      images.attachment_directory({ source_path = source, project_root = root }),
+      common.normalize_path(root .. PATHSEP .. "vault-assets")
+    )
+
+    write_file(app_json, [[{"attachmentFolderPath":]])
+    test.equal(
+      images.attachment_directory({
+        source_path = source, project_root = root, configured_folder = "fallback-assets",
+      }),
+      common.normalize_path(root .. PATHSEP .. "fallback-assets")
+    )
+    common.rm(root, true)
+  end)
+
   test.it("keys local assets by resolution context and retries missing files by generation", function()
     local root = USERDIR .. PATHSEP .. "markdown-image-assets-" .. system.get_process_id()
     local one = root .. PATHSEP .. "one"
