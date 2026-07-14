@@ -2911,6 +2911,7 @@ local function line_render_signature(view, line, source_text)
   local parts = {
     source_text,
     tostring(view.__line_render_generation or 0),
+    tostring(core.color_theme_generation or 0),
   }
   for _, entry in ipairs(view:line_render_provider_entries()) do
     parts[#parts + 1] = tostring(entry.id)

@@ -253,6 +253,48 @@ style.syntax["string.escape"] = c(C.invalid_string_escape)
 style.syntax["punctuation.delimiter"] = c(C.semicolon)
 style.syntax["punctuation.bracket"] = c(C.semicolon)
 
+-- Markdown Live Preview. These must be rebound after the light palette and
+-- syntax slots are installed; otherwise aliases inherited from colors.default
+-- keep their dark-theme color tables when the theme changes at runtime.
+style.markdown_live_heading_marker = style.dim
+style.markdown_live_link = c(C.ctrl_clickable)
+style.markdown_live_external_link = c(C.ctrl_clickable)
+style.markdown_live_missing_link = c("c2410c")
+style.markdown_live_ambiguous_link = c("9a6700")
+style.markdown_live_pending_link = style.dim
+style.markdown_live_unresolved_link = c("c2410c")
+style.markdown_live_inline_code_bg = style.background2
+style.markdown_live_code_background = style.background2
+style.markdown_live_code_header = style.dim
+style.markdown_live_highlight_bg = c("fff1b8")
+style.markdown_live_quote_bar = style.accent
+style.markdown_live_callout_background = style.background2
+style.markdown_live_callout_icon = style.accent
+style.markdown_live_frontmatter_background = style.background2
+style.markdown_live_frontmatter_delimiter = style.dim
+style.markdown_live_frontmatter_key = style.accent
+style.markdown_live_list_marker = style.accent
+style.markdown_live_task_checked = style.dim
+style.markdown_live_task_unchecked = style.accent
+style.markdown_live_rule = style.dim
+style.markdown_live_tag = style.accent
+style.markdown_live_reference_definition = style.dim
+style.markdown_live_math_background = style.background2
+style.markdown_live_math = style.syntax.literal
+style.markdown_live_footnote = style.accent
+style.markdown_live_image_background = style.background2
+style.markdown_live_image_loading = style.dim
+style.markdown_live_image_blocked = c("9a6700")
+style.markdown_live_image_error = style.error
+style.markdown_live_attachment_bg = style.background2
+style.markdown_live_embed_background = style.background2
+style.markdown_live_embed_text = style.text
+style.markdown_live_table_background = style.background2
+style.markdown_live_table_header = style.accent
+style.markdown_live_table_cell = style.text
+style.markdown_live_table_separator = style.dim
+style.markdown_live_hidden_syntax = style.dim
+
 style.log["INFO"] = { icon = "i", color = style.text }
 style.log["WARN"] = { icon = "!", color = style.warn }
 style.log["ERROR"] = { icon = "!", color = style.error }

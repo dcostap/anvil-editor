@@ -1345,6 +1345,15 @@ function core.reload_module(name)
   -- map colors that may be missing on the new color scheme
   if is_color_scheme then
     map_new_syntax_colors()
+    core.color_theme_generation = (core.color_theme_generation or 0) + 1
+    core.redraw = true
+    if core.log_quiet then
+      core.log_quiet(
+        "Color theme generation %d after reloading %s",
+        core.color_theme_generation,
+        name
+      )
+    end
   end
 end
 
