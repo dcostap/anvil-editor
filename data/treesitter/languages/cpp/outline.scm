@@ -21,6 +21,27 @@
   name: (_) @name
   body: (enumerator_list)) @outline.enum
 
+(enumerator
+  name: (identifier) @name
+  value: (expression)? @signature) @outline.enum_member
+
+(field_declaration
+  type: (_) @signature
+  declarator: [
+    (field_identifier) @name
+    (pointer_declarator
+      declarator: (field_identifier) @name)
+    (reference_declarator
+      (field_identifier) @name)
+    (array_declarator
+      declarator: (field_identifier) @name)
+  ]) @outline.field
+
+(field_declaration
+  declarator: (function_declarator
+    declarator: (field_identifier) @name
+    parameters: (parameter_list) @signature.params)) @outline.method
+
 (function_definition
   declarator: (function_declarator
     declarator: (identifier) @name

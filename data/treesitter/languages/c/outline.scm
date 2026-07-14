@@ -28,6 +28,20 @@
   name: (type_identifier) @name
   body: (enumerator_list)) @outline.enum
 
+(enumerator
+  name: (identifier) @name
+  value: (expression)? @signature) @outline.enum_member
+
+(field_declaration
+  type: (_) @signature
+  declarator: [
+    (field_identifier) @name
+    (pointer_declarator
+      declarator: (field_identifier) @name)
+    (array_declarator
+      declarator: (field_identifier) @name)
+  ]) @outline.field
+
 (type_definition
   declarator: (type_identifier) @name) @outline.type
 

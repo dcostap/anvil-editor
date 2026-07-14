@@ -4,6 +4,7 @@ local common = require "core.common"
 local config = require "core.config"
 local test = require "core.test"
 local symbol_index = require "core.treesitter.symbol_index"
+local treesitter = require "core.treesitter"
 local autocomplete = require "plugins.autocomplete"
 
 local function track(context, kind, value)
@@ -42,6 +43,16 @@ local function open_file_editor(context, path)
   local view = track(context, "views", core.root_panel:open_doc(doc))
   core.set_active_view(view)
   return view, doc
+end
+
+local function wait_treesitter_ready(doc, timeout)
+  local deadline = system.get_time() + (timeout or 3)
+  while system.get_time() < deadline do
+    treesitter.poll_doc(doc)
+    if doc.treesitter and doc.treesitter.status == "ready" then return true end
+    coroutine.yield(0.01)
+  end
+  return false
 end
 
 local function seed_odin_project_symbol(context, active_relative_path)
@@ -294,5 +305,115 @@ test.describe("autocomplete batch behavior", function()
     test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, "RESOLVE")
     test.ok(command.perform("autocomplete:complete"))
     test.equal(table.concat(doc.lines), "Route_Message_Type.RESOLVE\n")
+  end)
+
+  test.it("opens after a container dot and prioritizes that container's members", function(context)
+    local root, active_path = seed_odin_project_symbol(context, "current.odin")
+    local index = symbol_index.status(root)
+    index.symbols[#index.symbols + 1] = common.merge({}, index.symbols[1], {
+      parent_name = "Other_Message_Type",
+      path = common.normalize_path(root .. PATHSEP .. "other.odin"),
+      file = "other.odin",
+      relpath = "other.odin",
+    })
+    write_file(active_path, "Route_Message_Type")
+    local _, doc = open_file_editor(context, active_path)
+
+    core.root_panel:on_text_input(".")
+
+    test.ok(autocomplete.is_open(), "expected member completion to open immediately after the dot")
+    core.root_panel:on_text_input("R")
+    test.ok(autocomplete.is_open(), "expected member completion to remain open below the normal minimum length")
+    local item = test.not_nil(autocomplete.get_selected_suggestion())
+    test.equal(item.text, "RESOLVE")
+    test.equal(item.preview_context, "Route_Message_Type")
+    test.ok(command.perform("autocomplete:complete"))
+    test.equal(table.concat(doc.lines), "Route_Message_Type.RESOLVE\n")
+  end)
+
+  test.it("uses the same container context for non-enum members", function(context)
+    local root, active_path = seed_odin_project_symbol(context, "current.odin")
+    local symbol = symbol_index.status(root).symbols[1]
+    symbol.name = "count"
+    symbol.text = "count"
+    symbol.kind = "field"
+    symbol.parent_name = "Point"
+    symbol.signature = "int"
+    write_file(active_path, "Point")
+    local _, doc = open_file_editor(context, active_path)
+
+    core.root_panel:on_text_input(".")
+
+    test.ok(autocomplete.is_open())
+    local item = test.not_nil(autocomplete.get_selected_suggestion())
+    test.equal(item.text, "count")
+    test.equal(item.preview_context, "Point")
+    test.equal(item.icon, "field")
+    test.ok(command.perform("autocomplete:complete"))
+    test.equal(table.concat(doc.lines), "Point.count\n")
+  end)
+
+  test.it("uses freshly parsed members from the current Document", function(context)
+    local _, active_path = seed_odin_project_symbol(context, "current.odin")
+    write_file(active_path, "Point :: struct { count: int }\nPoint.")
+    local _, doc = open_file_editor(context, active_path)
+    test.ok(wait_treesitter_ready(doc), "expected current Document Tree-sitter data")
+
+    autocomplete.trigger()
+
+    test.ok(autocomplete.is_open())
+    local item = test.not_nil(autocomplete.get_selected_suggestion())
+    test.equal(item.text, "count")
+    test.equal(item.preview_context, "Point")
+    test.ok(command.perform("autocomplete:complete"))
+    test.equal(table.concat(doc.lines), "Point :: struct { count: int }\nPoint.count\n")
+  end)
+
+  test.it("does not force generic suggestions after an unresolved receiver dot", function(context)
+    local _, active_path = seed_odin_project_symbol(context, "current.odin")
+    write_file(active_path, "instance")
+    open_file_editor(context, active_path)
+
+    core.root_panel:on_text_input(".")
+
+    test.ok(not autocomplete.is_open(), "an unresolved instance receiver should not force generic suggestions")
+  end)
+
+  test.it("uses the active language's configured member separator", function(context)
+    local root, active_path = seed_odin_project_symbol(context, "current.cpp")
+    local symbol = symbol_index.status(root).symbols[1]
+    symbol.name = "reset"
+    symbol.text = "reset"
+    symbol.kind = "method"
+    symbol.parent_name = "MenuGui"
+    symbol.signature = "()"
+    symbol.language_id = "cpp"
+    write_file(active_path, "MenuGui")
+    local _, doc = open_file_editor(context, active_path)
+
+    core.root_panel:on_text_input("::")
+
+    test.ok(autocomplete.is_open())
+    test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, "reset")
+    test.ok(command.perform("autocomplete:complete"))
+    test.equal(table.concat(doc.lines), "MenuGui::reset\n")
+  end)
+
+  test.it("does not add an invalid qualifier to unscoped C enum members", function(context)
+    local root, active_path = seed_odin_project_symbol(context, "current.c")
+    local symbol = symbol_index.status(root).symbols[1]
+    symbol.name = "RED"
+    symbol.text = "RED"
+    symbol.parent_name = "Color"
+    symbol.language_id = "c"
+    write_file(active_path, "RE")
+    local _, doc = open_file_editor(context, active_path)
+
+    autocomplete.trigger()
+
+    test.ok(autocomplete.is_open())
+    test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, "RED")
+    test.ok(command.perform("autocomplete:complete"))
+    test.equal(table.concat(doc.lines), "RED\n")
   end)
 end)

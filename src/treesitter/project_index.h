@@ -74,7 +74,7 @@ void anvil_ts_project_snapshot_summary(const AnvilTSProjectSnapshot *snapshot, A
 bool anvil_ts_project_snapshot_file_at(const AnvilTSProjectSnapshot *snapshot, uint32_t index, AnvilTSProjectSnapshotFileView *view);
 bool anvil_ts_project_snapshot_symbol_at(const AnvilTSProjectSnapshot *snapshot, uint32_t index, AnvilTSProjectFileResult **file, uint32_t *file_symbol_index);
 bool anvil_ts_project_snapshot_usage_at(const AnvilTSProjectSnapshot *snapshot, uint32_t index, AnvilTSProjectFileResult **file, uint32_t *file_usage_index);
-/* Language and kind filters are exact allowlists. Path filters are scope rules:
+/* Language, kind, and parent-name filters are exact allowlists. Path filters are scope rules:
  * the longest matching included/excluded path wins, with exclusion winning
  * ties. Returned indices use snapshot order and are owned by the caller. */
 bool anvil_ts_project_snapshot_query_symbols(
@@ -84,6 +84,8 @@ bool anvil_ts_project_snapshot_query_symbols(
   uint32_t limit,
   const char *const *kinds,
   uint32_t kind_count,
+  const char *const *parent_names,
+  uint32_t parent_name_count,
   const char *const *languages,
   uint32_t language_count,
   const char *const *excluded_paths,

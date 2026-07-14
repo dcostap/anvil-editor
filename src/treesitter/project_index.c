@@ -919,11 +919,31 @@ static bool query_symbol_language_allowed(
   return false;
 }
 
+static bool query_symbol_parent_allowed(
+  const AnvilTSProjectFileResult *file,
+  const AnvilTSProjectSymbolView *symbol,
+  const char *const *parent_names,
+  uint32_t parent_name_count
+) {
+  if (!parent_name_count) return true;
+  if (symbol->parent == UINT32_MAX || symbol->parent == 0) return false;
+  AnvilTSProjectSymbolView parent;
+  if (!anvil_ts_project_file_symbol_at(file, symbol->parent - 1, &parent)) return false;
+  for (uint32_t i = 0; i < parent_name_count; i++) {
+    const char *name = parent_names[i] ? parent_names[i] : "";
+    size_t length = strlen(name);
+    if (length == parent.name_len && (!length || memcmp(parent.name, name, length) == 0)) return true;
+  }
+  return false;
+}
+
 static bool query_symbol_allowed(
   const AnvilTSProjectSnapshot *snapshot,
   uint32_t symbol_index,
   const char *const *kinds,
   uint32_t kind_count,
+  const char *const *parent_names,
+  uint32_t parent_name_count,
   const char *const *languages,
   uint32_t language_count,
   const ProjectPathRuleSet *path_rules
@@ -933,7 +953,8 @@ static bool query_symbol_allowed(
   if (!query_symbol_language_allowed(ref.file, languages, language_count)) return false;
   AnvilTSProjectSymbolView symbol;
   return anvil_ts_project_file_symbol_at(ref.file, ref.index, &symbol) &&
-    query_symbol_kind_allowed(&symbol, kinds, kind_count);
+    query_symbol_kind_allowed(&symbol, kinds, kind_count) &&
+    query_symbol_parent_allowed(ref.file, &symbol, parent_names, parent_name_count);
 }
 
 static bool query_fuzzy_better(const FuzzyIndex *index, const FuzzySearchResult *a, const FuzzySearchResult *b) {
@@ -967,6 +988,8 @@ static uint32_t query_collect_fuzzy_symbols(
   const char *query,
   const char *const *kinds,
   uint32_t kind_count,
+  const char *const *parent_names,
+  uint32_t parent_name_count,
   const char *const *languages,
   uint32_t language_count,
   const ProjectPathRuleSet *path_rules,
@@ -977,7 +1000,8 @@ static uint32_t query_collect_fuzzy_symbols(
 ) {
   uint32_t top_count = 0, matched = 0;
   for (uint32_t i = 0; i < snapshot->symbol_count; i++) {
-    if (!query_symbol_allowed(snapshot, i, kinds, kind_count, languages, language_count, path_rules)) continue;
+    if (!query_symbol_allowed(snapshot, i, kinds, kind_count, parent_names, parent_name_count,
+        languages, language_count, path_rules)) continue;
     const FuzzyEntry *entry = &snapshot->symbol_fuzzy.entries[i];
     const char *text = snapshot->symbol_fuzzy.text_arena + entry->text_offset;
     const char *lower = snapshot->symbol_fuzzy.lower_arena + entry->lower_offset;
@@ -999,6 +1023,8 @@ bool anvil_ts_project_snapshot_query_symbols(
   uint32_t limit,
   const char *const *kinds,
   uint32_t kind_count,
+  const char *const *parent_names,
+  uint32_t parent_name_count,
   const char *const *languages,
   uint32_t language_count,
   const char *const *excluded_paths,
@@ -1014,7 +1040,8 @@ bool anvil_ts_project_snapshot_query_symbols(
   if (count) *count = 0;
   if (total) *total = 0;
   if (has_more) *has_more = false;
-  if (!snapshot || !indices || (kind_count && !kinds) || (language_count && !languages) ||
+  if (!snapshot || !indices || (kind_count && !kinds) || (parent_name_count && !parent_names) ||
+      (language_count && !languages) ||
       (excluded_path_count && !excluded_paths) ||
       (included_path_count && !included_paths)) return false;
   ProjectPathRuleSet path_rules;
@@ -1027,7 +1054,8 @@ bool anvil_ts_project_snapshot_query_symbols(
   query = query ? query : "";
   if (!*query) {
     for (uint32_t i = 0; i < snapshot->symbol_count; i++) {
-      if (!query_symbol_allowed(snapshot, i, kinds, kind_count, languages, language_count, &path_rules)) continue;
+      if (!query_symbol_allowed(snapshot, i, kinds, kind_count, parent_names, parent_name_count,
+          languages, language_count, &path_rules)) continue;
       if (matched >= offset && out_count < limit) out[out_count++] = i;
       matched++;
     }
@@ -1040,8 +1068,8 @@ bool anvil_ts_project_snapshot_query_symbols(
       uint32_t step = remaining < 4096 ? remaining : 4096;
       FuzzySearchResult *scratch = (FuzzySearchResult *)malloc((size_t)step * sizeof(*scratch));
       if (!scratch) { free(out); project_path_rules_free(&path_rules); return false; }
-      uint32_t top_count = query_collect_fuzzy_symbols(snapshot, query, kinds, kind_count, languages, language_count,
-        &path_rules, after, scratch, step, &matched);
+      uint32_t top_count = query_collect_fuzzy_symbols(snapshot, query, kinds, kind_count,
+        parent_names, parent_name_count, languages, language_count, &path_rules, after, scratch, step, &matched);
       if (top_count < step) {
         beyond_end = true;
         free(scratch);
@@ -1055,8 +1083,8 @@ bool anvil_ts_project_snapshot_query_symbols(
     if (!beyond_end) {
       FuzzySearchResult *page = limit ? (FuzzySearchResult *)malloc((size_t)limit * sizeof(*page)) : NULL;
       if (limit && !page) { free(out); project_path_rules_free(&path_rules); return false; }
-      uint32_t page_count = query_collect_fuzzy_symbols(snapshot, query, kinds, kind_count, languages, language_count,
-        &path_rules, after, page, limit, &matched);
+      uint32_t page_count = query_collect_fuzzy_symbols(snapshot, query, kinds, kind_count,
+        parent_names, parent_name_count, languages, language_count, &path_rules, after, page, limit, &matched);
       for (uint32_t i = 0; i < page_count; i++) out[out_count++] = page[i].entry_index;
       free(page);
     }

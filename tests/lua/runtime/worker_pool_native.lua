@@ -331,6 +331,24 @@ Route_Message_Type :: enum c.uchar {
     test.equal(by_name.RESOLVE.signature, "0xb")
     test.equal(by_name.RESOLVE.declaration, "RESOLVE")
     test.same(by_name.RESOLVE.declaration_name_span, { 1, 7 })
+
+    local builder = native_pool.new_project_builder({ usage_cap = 10 })
+    test.ok(result:adopt_project(builder:id(), { fingerprint = "enum-1", usage_complete = true }))
+    local snapshot = builder:freeze()
+    local members = snapshot:query_symbols("", {
+      limit = 20,
+      parent_names = { "Route_Message_Type" },
+    })
+    test.equal(#members, 3)
+    for _, member in ipairs(members) do
+      test.equal(member.parent_name, "Route_Message_Type")
+    end
+    local filtered_members = snapshot:query_symbols("res", {
+      limit = 20,
+      parent_names = { "Route_Message_Type" },
+    })
+    test.equal(#filtered_members, 1)
+    test.equal(filtered_members[1].name, "RESOLVE")
   end)
 
   test.test("native Project declaration previews start on the symbol name line", function()

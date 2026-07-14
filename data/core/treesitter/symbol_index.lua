@@ -1046,6 +1046,15 @@ local function symbol_language_allowed(symbol, languages)
   return false
 end
 
+local function symbol_parent_allowed(symbol, parent_names)
+  if not parent_names or #parent_names == 0 then return true end
+  local parent_name = tostring(symbol and symbol.parent_name or "")
+  for _, allowed in ipairs(parent_names) do
+    if parent_name == tostring(allowed) then return true end
+  end
+  return false
+end
+
 local function filtered_symbols(symbols, query, limit, opts)
   symbols = symbols or {}
   opts = opts or {}
@@ -1054,6 +1063,14 @@ local function filtered_symbols(symbols, query, limit, opts)
     local allowed = {}
     for _, symbol in ipairs(symbols) do
       if symbol_language_allowed(symbol, languages) then allowed[#allowed + 1] = symbol end
+    end
+    symbols = allowed
+  end
+  local parent_names = opts.parent_names
+  if parent_names and #parent_names > 0 then
+    local allowed = {}
+    for _, symbol in ipairs(symbols) do
+      if symbol_parent_allowed(symbol, parent_names) then allowed[#allowed + 1] = symbol end
     end
     symbols = allowed
   end
@@ -1157,7 +1174,8 @@ local function bounded_overlay_symbols(index, suppressed, query, opts, capacity)
       for _, symbol in ipairs(entry.symbols or {}) do
         if project_path_allows(symbol.path, opts.kind or "symbols")
         and symbol_kind_allowed(symbol, kinds)
-        and symbol_language_allowed(symbol, opts.language_ids or opts.languages) then
+        and symbol_language_allowed(symbol, opts.language_ids or opts.languages)
+        and symbol_parent_allowed(symbol, opts.parent_names) then
           local score = query == "" and 0 or (native_fuzzy and native_fuzzy.score(symbol_fuzzy_text(symbol), query, { mode = "generic" }))
           if query == "" or score then
             matched = matched + 1
@@ -1190,6 +1208,7 @@ local function native_project_symbols(index, snapshot, query, opts)
     offset = 0,
     limit = native_limit,
     kinds = opts.symbol_kinds or opts.kinds,
+    parent_names = opts.parent_names,
     languages = opts.language_ids or opts.languages,
     excluded_paths = excluded,
     included_paths = included,

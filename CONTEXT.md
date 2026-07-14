@@ -48,6 +48,10 @@ _Avoid_: global symbol search
 A search for syntactic usages of a named code symbol across a loaded Project.
 _Avoid_: semantic references, global references
 
+**Contextual Member Completion**:
+Autocomplete suggestions prioritized for the named container immediately before a member-access separator, such as enum members after `Color.` or class members after `Widget.`. It does not imply resolving the runtime type of an instance expression.
+_Avoid_: semantic instance completion, dot autocomplete
+
 **Current Document Symbol Search**:
 A search over named code symbols in the active Document only.
 _Avoid_: local symbol search, file symbol search

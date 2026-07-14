@@ -921,18 +921,20 @@ static int project_snapshot_query_symbols(lua_State *L) {
     limit = opt_uint32_field(L, 3, "limit", 200);
     luaL_argcheck(L, limit <= PROJECT_RECORD_PAGE_LIMIT, 3, "Project query limit exceeds 4096");
   }
-  uint32_t kind_count = 0, language_count = 0, excluded_path_count = 0, included_path_count = 0;
+  uint32_t kind_count = 0, parent_name_count = 0, language_count = 0, excluded_path_count = 0, included_path_count = 0;
   const char **kinds = project_query_string_array(L, 3, "kinds", &kind_count);
+  const char **parent_names = project_query_string_array(L, 3, "parent_names", &parent_name_count);
   const char **languages = project_query_string_array(L, 3, "languages", &language_count);
   const char **excluded_paths = project_query_string_array(L, 3, "excluded_paths", &excluded_path_count);
   const char **included_paths = project_query_string_array(L, 3, "included_paths", &included_path_count);
   uint32_t *indices = NULL, count = 0, total = 0;
   bool has_more = false;
   bool ok = anvil_ts_project_snapshot_query_symbols(snapshot->snapshot, query, offset, limit,
-    kinds, kind_count, languages, language_count,
+    kinds, kind_count, parent_names, parent_name_count, languages, language_count,
     excluded_paths, excluded_path_count, included_paths, included_path_count,
     &indices, &count, &total, &has_more);
   free(kinds);
+  free(parent_names);
   free(languages);
   free(excluded_paths);
   free(included_paths);

@@ -27,6 +27,7 @@ local builtin_configs = {
     line_comments = { "//" },
     block_comment = { "/*", "*/" },
     autocomplete_languages = { "c", "cpp" },
+    member_completion_separators = { "." },
     queries = {
       highlights = "highlights.scm",
       outline = "outline.scm",
@@ -45,6 +46,8 @@ local builtin_configs = {
     line_comments = { "//" },
     block_comment = { "/*", "*/" },
     autocomplete_languages = { "c", "cpp" },
+    member_completion_separators = { "::", "." },
+    enum_completion_separator = "::",
     parse_timeout_ms = 5000,
     queries = {
       highlights = "highlights.scm",
@@ -127,6 +130,14 @@ end
 
 function registry.get_languages()
   return registry.languages or registry.reload()
+end
+
+function registry.get_by_id(id)
+  id = tostring(id or "")
+  for _, language in ipairs(registry.get_languages()) do
+    if language.id == id then return language end
+  end
+  return nil
 end
 
 local function find(text, field)

@@ -486,19 +486,39 @@ Route_Message_Type :: enum c.uchar {
   RESOLVE = 0xb,
 }
 
+Flags :: bit_field u32 {
+  active: bool | 1,
+  mode: u8 | 3,
+}
+
 main :: proc() {
   value := 42
   return
 }
 ]])
     test.ok(wait_ready(doc))
-    local tokens = ts_highlight.line_tokens(doc, 14)
+    local tokens = ts_highlight.line_tokens(doc, 19)
     test.equal(token_type_for_text(tokens, "main"), "function")
     test.equal(token_type_for_text(tokens, "proc"), "keyword.function")
 
     local symbols = treesitter.get_document_outline(doc)
     test.ok(find_symbol(symbols, "demo", "module"))
-    test.ok(find_symbol(symbols, "Point", "struct"))
+    local point = find_symbol(symbols, "Point", "struct")
+    test.ok(point)
+    local x_field = find_symbol(symbols, "x", "field")
+    local y_field = find_symbol(symbols, "y", "field")
+    test.ok(x_field)
+    test.ok(y_field)
+    test.equal(x_field.parent_name, "Point")
+    test.equal(y_field.parent_name, "Point")
+    test.equal(x_field.signature, "int")
+    local active_field = find_symbol(symbols, "active", "field")
+    local mode_field = find_symbol(symbols, "mode", "field")
+    test.ok(active_field)
+    test.ok(mode_field)
+    test.equal(active_field.parent_name, "Flags")
+    test.equal(mode_field.parent_name, "Flags")
+    test.equal(active_field.signature, "bool")
     local main_symbol = find_symbol(symbols, "main", "function")
     test.ok(main_symbol)
     test.equal(main_symbol.signature, "()")
@@ -531,21 +551,42 @@ main :: proc() {
     local doc = kotlin_doc([[package demo
 
 class Box(val value: Int) {
+  val label: String = "box"
   fun doubled(): Int = value * 2
 }
 
+enum class State { READY, DONE }
+
+fun create(): Box = Box(1)
 val answer = Box(21).doubled()
 ]])
     test.ok(wait_ready(doc))
-    local tokens = ts_highlight.line_tokens(doc, 4)
+    local tokens = ts_highlight.line_tokens(doc, 5)
     test.equal(token_type_for_text(tokens, "fun"), "keyword.function")
     test.equal(token_type_for_text(tokens, "doubled"), "function")
 
     local symbols = treesitter.get_document_outline(doc)
     test.ok(find_symbol(symbols, "Box", "class"))
-    local doubled_symbol = find_symbol(symbols, "doubled", "function")
+    local doubled_symbol = find_symbol(symbols, "doubled", "method")
     test.ok(doubled_symbol)
     test.equal(doubled_symbol.signature, "()")
+    test.equal(doubled_symbol.parent_name, "Box")
+    local label = find_symbol(symbols, "label", "property")
+    test.ok(label)
+    test.equal(label.parent_name, "Box")
+    local value = find_symbol(symbols, "value", "property")
+    test.ok(value)
+    test.equal(value.parent_name, "Box")
+    test.equal(value.signature, "Int")
+    local ready = find_symbol(symbols, "READY", "enum_member")
+    local done = find_symbol(symbols, "DONE", "enum_member")
+    test.ok(ready)
+    test.ok(done)
+    test.equal(ready.parent_name, "State")
+    test.equal(done.parent_name, "State")
+    local create = find_symbol(symbols, "create", "function")
+    test.ok(create)
+    test.equal(create.parent_name, nil)
     test.ok(find_symbol(symbols, "answer", "variable"))
     doc:on_close()
   end)
@@ -2053,17 +2094,37 @@ main :: proc() {}
   end)
 
   test.it("C document outline returns sorted symbols with ranges", function()
-    local doc = c_doc([[struct Point { int x; int y; };
-enum Color { RED, BLUE };
+    local doc = c_doc([[struct Point { int x; int y; const char *name; int values[4]; };
+enum Color { RED = 1, BLUE };
 static int helper(void) { return 1; }
 int main(void) { return helper(); }]])
     test.ok(wait_ready(doc))
     local symbols = treesitter.get_document_outline(doc)
-    test.ok(#symbols >= 4)
+    test.ok(#symbols >= 8)
     test.same({ symbols[1].name, symbols[1].kind }, { "Point", "struct" })
-    test.same({ symbols[2].name, symbols[2].kind }, { "Color", "enum" })
-    test.same({ symbols[3].name, symbols[3].kind }, { "helper", "function" })
-    test.same({ symbols[4].name, symbols[4].kind }, { "main", "function" })
+    local x_field = find_symbol(symbols, "x", "field")
+    local y_field = find_symbol(symbols, "y", "field")
+    local red = find_symbol(symbols, "RED", "enum_member")
+    local blue = find_symbol(symbols, "BLUE", "enum_member")
+    local name_field = find_symbol(symbols, "name", "field")
+    local values_field = find_symbol(symbols, "values", "field")
+    test.ok(x_field)
+    test.ok(y_field)
+    test.ok(red)
+    test.ok(blue)
+    test.ok(name_field)
+    test.ok(values_field)
+    test.equal(x_field.parent_name, "Point")
+    test.equal(y_field.parent_name, "Point")
+    test.equal(red.parent_name, "Color")
+    test.equal(blue.parent_name, "Color")
+    test.equal(red.signature, "1")
+    local point_members = symbol_index.current_document_symbols(doc, "", {
+      parent_names = { "Point" },
+      limit = 20,
+    })
+    test.equal(#point_members, 4)
+    for _, member in ipairs(point_members) do test.equal(member.parent_name, "Point") end
     local main = find_symbol(symbols, "main", "function")
     test.ok(main)
     test.equal(main.start_line, 4)
@@ -2091,22 +2152,46 @@ int main(void) { return helper(); }]])
     local doc = cpp_doc([[namespace demo {
 class MenuGui {
 public:
+  int count;
+  int *buffer;
+  int values[4];
+  int &reference;
+  void reset();
   void draw_settings() { }
 };
 }
+enum Color { RED, BLUE };
 int main() { return 0; }]])
     test.ok(wait_ready(doc))
     local symbols = treesitter.get_document_outline(doc)
     local namespace = find_symbol(symbols, "demo", "namespace")
     local class = find_symbol(symbols, "MenuGui", "class")
     local method = find_symbol(symbols, "draw_settings", "method")
+    local reset = find_symbol(symbols, "reset", "method")
+    local count = find_symbol(symbols, "count", "field")
+    local buffer = find_symbol(symbols, "buffer", "field")
+    local values = find_symbol(symbols, "values", "field")
+    local reference = find_symbol(symbols, "reference", "field")
+    local red = find_symbol(symbols, "RED", "enum_member")
     local main = find_symbol(symbols, "main", "function")
     test.ok(namespace)
     test.ok(class)
     test.ok(method)
+    test.ok(reset)
+    test.ok(count)
+    test.ok(buffer)
+    test.ok(values)
+    test.ok(reference)
+    test.ok(red)
     test.ok(main)
     test.equal(class.parent, namespace.index)
     test.equal(method.parent, class.index)
+    test.equal(reset.parent, class.index)
+    test.equal(count.parent, class.index)
+    test.equal(buffer.parent, class.index)
+    test.equal(values.parent, class.index)
+    test.equal(reference.parent, class.index)
+    test.equal(red.parent_name, "Color")
     test.equal(main.parent, nil)
     test.ok(#namespace.children >= 1)
     test.ok(#class.children >= 1)

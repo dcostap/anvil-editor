@@ -544,6 +544,28 @@ local function project_completion_language_ids(doc)
   return { language_id }
 end
 
+local function member_completion_receiver(doc)
+  if not doc or not core.active_view or core.active_view.doc ~= doc then return nil end
+  local _, line1, col1 = autocomplete.get_partial_symbol()
+  local language = doc.treesitter and doc.treesitter.language
+  local separators = language and language.member_completion_separators or { "." }
+  local separator_line, separator_col, separator_length
+  for _, separator in ipairs(separators) do
+    separator = tostring(separator or "")
+    if separator ~= "" and (not separator_length or #separator > separator_length) then
+      local start_line, start_col = doc:position_offset(line1, col1, -#separator)
+      if start_line == line1 and doc:get_text(start_line, start_col, line1, col1) == separator then
+        separator_line, separator_col, separator_length = start_line, start_col, #separator
+      end
+    end
+  end
+  if not separator_line then return nil end
+  local receiver_line, receiver_col = doc:position_offset(separator_line, separator_col, translate_start_of_word)
+  if receiver_line ~= separator_line or receiver_col == separator_col then return nil end
+  local receiver = doc:get_text(receiver_line, receiver_col, separator_line, separator_col)
+  return receiver ~= "" and receiver or nil
+end
+
 local function valid_preview_span(name, text, span)
   if type(span) ~= "table" or not span[1] or not span[2] then return false end
   text = tostring(text or "")
@@ -893,6 +915,7 @@ function update_suggestions()
   desc_rect = nil
 
   local assigned_sym = {}
+  local contextual_member_count = 0
 
   local lsp_available = has_lsp_completion(doc)
 
@@ -1049,42 +1072,101 @@ function update_suggestions()
 
     local symbol_index = tree_sitter_symbol_index_module()
     local project_language_ids = project_completion_language_ids(doc)
-    if symbol_index and project_language_ids and partial ~= "" then
-      local function add_project_symbols(query)
-        if not query or query == "" then return end
+    if symbol_index and project_language_ids then
+      local function project_item(symbol)
+        local name = symbol.name
+        if not name or name == "" or #name > max_symbol_length() then return nil end
+        local preview_text, preview_name_span, preview_show_info, preview_context, preview_detail =
+          project_symbol_preview(symbol)
+        local language = tree_sitter_registry.get_by_id(symbol.language_id)
+          or tree_sitter_registry.get(symbol.path or symbol.abs_filename or "", "")
+        local enum_separator = language and language.enum_completion_separator
+        local item = {
+          text = name,
+          info = preview_show_info and human_symbol_kind(symbol.kind) or (symbol.kind or "project symbol"),
+          preview_text = preview_text,
+          preview_name_span = preview_name_span,
+          preview_show_info = preview_show_info,
+          preview_context = preview_context,
+          preview_detail = preview_detail,
+          completion_prefix = symbol.kind == "enum_member" and preview_context and preview_context ~= ""
+            and type(enum_separator) == "string" and enum_separator ~= ""
+            and preview_context .. enum_separator or nil,
+          icon = symbol.kind,
+        }
+        for k, v in pairs(source_location_fields(symbol) or {}) do item[k] = v end
+        return setmetatable(item, mt)
+      end
+
+      local function query_project_symbols(query, query_opts)
+        query_opts = query_opts or {}
         local project_symbols, _reason, project_status = symbol_index.workspace_symbols(query, {
           kind = "autocomplete",
           language_ids = project_language_ids,
+          parent_names = query_opts.parent_names,
           limit = math.max(20, config.plugins.autocomplete.max_suggestions * 2),
           allow_stale = true,
         })
-        if project_status == "fresh" or project_status == "stale" then
-          for _, symbol in ipairs(project_symbols or {}) do
-            local name = symbol.name
-            if name and name ~= "" and #name <= max_symbol_length() then
-              local preview_text, preview_name_span, preview_show_info, preview_context, preview_detail =
-                project_symbol_preview(symbol)
-              local item = {
-                text = name,
-                info = preview_show_info and human_symbol_kind(symbol.kind) or (symbol.kind or "project symbol"),
-                preview_text = preview_text,
-                preview_name_span = preview_name_span,
-                preview_show_info = preview_show_info,
-                preview_context = preview_context,
-                preview_detail = preview_detail,
-                completion_prefix = symbol.kind == "enum_member" and preview_context and preview_context ~= ""
-                  and preview_context .. "." or nil,
-                icon = symbol.kind,
-              }
-              for k, v in pairs(source_location_fields(symbol) or {}) do item[k] = v end
-              add_candidate_item(setmetatable(item, mt), item_richness(item) > 0)
+        if project_status ~= "fresh" and project_status ~= "stale" then return {} end
+        return project_symbols or {}
+      end
+
+      local contextual_names = {}
+      local receiver = member_completion_receiver(doc)
+      if receiver then
+        local contextual_symbols = {}
+        if symbol_index.current_document_symbols then
+          local current_symbols = symbol_index.current_document_symbols(doc, partial, {
+            parent_names = { receiver },
+            limit = math.max(20, config.plugins.autocomplete.max_suggestions * 2),
+          })
+          for _, symbol in ipairs(current_symbols or {}) do contextual_symbols[#contextual_symbols + 1] = symbol end
+        end
+        for _, symbol in ipairs(query_project_symbols(partial, { parent_names = { receiver } })) do
+          contextual_symbols[#contextual_symbols + 1] = symbol
+        end
+        local active_path = common.normalize_path(doc.abs_filename or doc.filename or "")
+        local active_dir = active_path ~= "" and common.dirname(active_path) or ""
+        local function locality(symbol)
+          local path = common.normalize_path(symbol.path or symbol.abs_filename or "")
+          if path ~= "" and active_path ~= "" and common.path_equals(path, active_path) then return 2 end
+          if path ~= "" and active_dir ~= "" and common.path_equals(common.dirname(path), active_dir) then return 1 end
+          return 0
+        end
+        table.sort(contextual_symbols, function(a, b)
+          local al, bl = locality(a), locality(b)
+          if al ~= bl then return al > bl end
+          if tostring(a.name) ~= tostring(b.name) then return tostring(a.name) < tostring(b.name) end
+          return tostring(a.path or a.file or "") < tostring(b.path or b.file or "")
+        end)
+        for _, symbol in ipairs(contextual_symbols) do
+          local name = tostring(symbol.name or "")
+          if name ~= "" and not contextual_names[name] then
+            local item = project_item(symbol)
+            if item then
+              item.autocomplete_priority = 10000 + locality(symbol)
+              contextual_names[name] = true
+              manual_items[#manual_items + 1] = item
+              contextual_member_count = contextual_member_count + 1
             end
           end
         end
       end
-      add_project_symbols(partial)
-      local chunk_query = code_symbol_chunk_query(partial)
-      if chunk_query and chunk_query ~= partial then add_project_symbols(chunk_query) end
+
+      local function add_project_symbols(query)
+        if not query or query == "" then return end
+        for _, symbol in ipairs(query_project_symbols(query)) do
+          if not contextual_names[tostring(symbol.name or "")] then
+            local item = project_item(symbol)
+            if item then add_candidate_item(item, item_richness(item) > 0) end
+          end
+        end
+      end
+      if partial ~= "" then
+        add_project_symbols(partial)
+        local chunk_query = code_symbol_chunk_query(partial)
+        if chunk_query and chunk_query ~= partial then add_project_symbols(chunk_query) end
+      end
     end
   end
 
@@ -1112,6 +1194,7 @@ function update_suggestions()
   -- also tries `text draw`, which can find `draw_text` after the direct matches.
   if max_items > 0 then
     local ordered, seen = {}, {}
+    for _, item in ipairs(suggestions) do seen[suggestion_text(item)] = item end
     local function append_matches(matches, query)
       for _, item in ipairs(matches or {}) do
         local key = suggestion_text(item)
@@ -1155,6 +1238,7 @@ function update_suggestions()
 
   suggestions_idx = 1
   suggestions_offset = 1
+  return contextual_member_count
 end
 
 local function get_active_view()
@@ -1631,17 +1715,22 @@ local function show_autocomplete(opts)
     if lsp_available and opts.text and completion.is_trigger_character and completion.is_trigger_character(doc, opts.text) then
       trigger_character = opts.text:sub(-1)
     end
-    local should_open = triggered_manually
+    local member_receiver = member_completion_receiver(doc)
+    local should_open_normally = triggered_manually
       or provider_force_open
       or #partial >= config.plugins.autocomplete.min_len
       or (opts.keep_open and #partial > 0)
       or trigger_character ~= nil
+    local should_open = should_open_normally or member_receiver ~= nil
 
     if should_open then
       if lsp_available then
         request_lsp_completion(av, { manual = triggered_manually, trigger_character = trigger_character })
       end
-      update_suggestions()
+      local contextual_member_count = update_suggestions()
+      if member_receiver and not should_open_normally and contextual_member_count == 0 then
+        reset_suggestions()
+      end
 
       if not triggered_manually then
         last_line, last_col = av.doc:get_selection()
@@ -1820,7 +1909,7 @@ function autocomplete.open(on_close, opts)
     if opts.force_basic ~= nil then
       force_basic_suggestions = opts.force_basic == true
     else
-      force_basic_suggestions = at_word_completion_position()
+      force_basic_suggestions = at_word_completion_position() or member_completion_receiver(av.doc) ~= nil
     end
     last_line, last_col = av.doc:get_selection()
     last_doc = av.doc

@@ -9,7 +9,8 @@ local cases = {
     filename = "contract.c",
     source = "struct Outer { int value; };\r\nstatic int helper(int value) { return value + 1; }\r\nint main(void) { return helper(2); }\r\n",
     symbols = {
-      { "Outer", "struct", nil, "struct Outer", { 8, 12 }, { 1, 1, 1, 28 }, { 1, 8, 1, 13 }, nil, 0, {} },
+      { "Outer", "struct", nil, "struct Outer", { 8, 12 }, { 1, 1, 1, 28 }, { 1, 8, 1, 13 }, nil, 0, { 2 } },
+      { "value", "field", "int", "int value;", { 5, 9 }, { 1, 16, 1, 26 }, { 1, 20, 1, 25 }, "Outer", 1, {} },
       { "helper", "function", "(int value)", "static int helper(int value)", { 12, 17 }, { 2, 1, 2, 51 }, { 2, 12, 2, 18 }, nil, 0, {} },
       { "main", "function", "(void)", "int main(void)", { 5, 8 }, { 3, 1, 3, 37 }, { 3, 5, 3, 9 }, nil, 0, {} },
     },
@@ -43,7 +44,8 @@ local cases = {
     source = "package contract\n\nPoint :: struct {\n  x: int,\n}\n\nmake_point :: proc(value: int) -> Point {\n  return Point{x = value}\n}\n",
     symbols = {
       { "contract", "module", nil, "package contract", { 9, 16 }, { 1, 1, 1, 17 }, { 1, 9, 1, 17 }, nil, 0, {} },
-      { "Point", "struct", nil, "Point :: struct", { 1, 5 }, { 3, 1, 5, 2 }, { 3, 1, 3, 6 }, nil, 0, {} },
+      { "Point", "struct", nil, "Point :: struct", { 1, 5 }, { 3, 1, 5, 2 }, { 3, 1, 3, 6 }, nil, 0, { 3 } },
+      { "x", "field", "int", "x: int", { 1, 1 }, { 4, 3, 4, 9 }, { 4, 3, 4, 4 }, "Point", 1, {} },
       { "make_point", "function", "(value: int) -> Point", "make_point :: proc(value: int) -> Point", { 1, 10 }, { 7, 1, 9, 2 }, { 7, 1, 7, 11 }, nil, 0, {} },
     },
     usages = {
@@ -65,8 +67,9 @@ local cases = {
     filename = "contract.kt",
     source = "package contract\n\nclass Box(val value: Int) {\n  fun doubled(): Int = value * 2\n}\n\nfun broken(value: Int): Int {\n  return value +\n",
     symbols = {
-      { "Box", "class", nil, "class Box(val value: Int)", { 7, 9 }, { 3, 1, 5, 2 }, { 3, 7, 3, 10 }, nil, 0, { 2 } },
-      { "doubled", "function", "()", "fun doubled(): Int = value * 2", { 5, 11 }, { 4, 3, 4, 33 }, { 4, 7, 4, 14 }, "Box", 1, {} },
+      { "Box", "class", nil, "class Box(val value: Int)", { 7, 9 }, { 3, 1, 5, 2 }, { 3, 7, 3, 10 }, nil, 0, { 2, 3 } },
+      { "value", "property", "Int", "val value: Int", { 5, 9 }, { 3, 11, 3, 25 }, { 3, 15, 3, 20 }, "Box", 1, {} },
+      { "doubled", "method", "()", "fun doubled(): Int = value * 2", { 5, 11 }, { 4, 3, 4, 33 }, { 4, 7, 4, 14 }, "Box", 1, {} },
     },
     usages = {
       { "contract", "definition.namespace", true, { 1, 9, 1, 17 }, "package contract" },

@@ -9,6 +9,7 @@ return {
   headers = {},
   line_comments = { "//" },
   block_comment = { "/*", "*/" },
+  member_completion_separators = { "." },
   queries = {
     highlights = "highlights.scm",
     outline = "outline.scm",

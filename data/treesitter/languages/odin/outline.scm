@@ -12,6 +12,11 @@
 (struct_declaration
   (identifier) @name) @outline.struct
 
+(struct_declaration
+  (field
+    (identifier) @name
+    (type) @signature) @outline.field)
+
 (enum_declaration
   (identifier) @name
   "::") @outline.enum
@@ -38,7 +43,16 @@
   (identifier) @name) @outline.union
 
 (bit_field_declaration
-  (identifier) @name) @outline.struct
+  (identifier) @name
+  "::") @outline.struct
+
+(bit_field_declaration
+  "{"
+  (identifier) @name @outline.field
+  .
+  ":"
+  .
+  (type) @signature)
 
 (const_type_declaration
   (identifier) @name) @outline.type
