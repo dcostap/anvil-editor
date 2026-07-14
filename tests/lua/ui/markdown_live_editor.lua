@@ -1141,6 +1141,27 @@ test.describe("Markdown Live Editor", function()
     test.equal(view:get_line_render(1), nil)
   end)
 
+  test.it("keeps source visible for a tab-indented fence-like block", function()
+    local view, doc = make_view(
+      "- item\n\t```\n\tselect first_row\nfrom second_row\n\t```\nplain",
+      "tab-indented-fence.md"
+    )
+    doc:set_selection(6, 1)
+    refresh(view)
+    local rendered = view:get_line_render(3)
+    if rendered then
+      local visible = {}
+      for _, fragment in ipairs(rendered.fragments or {}) do
+        if not fragment.hidden then visible[#visible + 1] = fragment.text or "" end
+      end
+      visible = table.concat(visible)
+      test.ok(
+        visible:find("select first_row", 1, true),
+        "the first code source line disappeared outside the caret"
+      )
+    end
+  end)
+
   test.it("presents semantic GFM table cells as styled editable source", function()
     local view, doc = make_view("| Name | Value |\n| :--- | ---: |\n| one | two |\n\nplain", "table.md")
     doc:set_selection(5, 1)

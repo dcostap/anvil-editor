@@ -1575,9 +1575,17 @@ function provider:render_line(view, line)
   if fenced then
     local text = (view.doc.lines[line] or ""):gsub("\n$", "")
     local reveal_units = reveal_units_for_line(view, line)
-    if (line == fenced.source.line1 or line == fenced.effective_line2) and #reveal_units == 0 then
+    local delimiter_kind
+    if line == fenced.source.line1 then
+      delimiter_kind = "open"
+    elseif line == fenced.effective_line2 then
+      local opening = (view.doc.lines[fenced.source.line1] or ""):gsub("\n$", "")
+      local marker, count = fence_marker(opening)
+      if marker and closes_fence(text, marker, count) then delimiter_kind = "close" end
+    end
+    if delimiter_kind and #reveal_units == 0 then
       local label = ""
-      if line == fenced.source.line1 then
+      if delimiter_kind == "open" then
         label = text:match("^%s*[`~]+%s*(.-)%s*$") or ""
       end
       return {
@@ -1587,7 +1595,7 @@ function provider:render_line(view, line)
           {
             source_col1 = 1, source_col2 = #text + 1,
             text = label, color = style.markdown_live_code_header,
-            semantic_id = fenced.id .. (line == fenced.source.line1 and ":open" or ":close"),
+            semantic_id = fenced.id .. ":" .. delimiter_kind,
           },
         },
       }
