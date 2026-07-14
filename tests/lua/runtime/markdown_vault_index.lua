@@ -456,9 +456,12 @@ test.describe("Markdown vault index", function()
     write_file(note_path, table.concat(lines, "\n") .. "\n")
     local index = vault_index.get_index(root):rebuild("coalesce-test")
     local doc = Doc(note_path, note_path, true)
+    -- Doc:set_filename automatically tracks the new Document before its test
+    -- contents are inserted. Remove that empty overlay so the explicit track
+    -- below establishes the intended baseline synchronously.
+    test.ok(index:untrack_doc(doc))
     doc:insert(1, 1, table.concat(lines, "\n") .. "\n")
-    index:track_doc(doc)
-    coroutine.yield(0.05)
+    test.ok(index:track_doc(doc))
     local generation = index.generation
     local updates = index.diagnostics.doc_updates
 

@@ -23,6 +23,7 @@ test.describe("Fuzzy Searcher loading feedback delay", function()
   end)
 
   test.it("keeps current file results visible while async query feedback is delayed", function()
+    fuzzy_searcher._test.clear_prompt_history()
     fuzzy_searcher._test.set_file_cache_for_test({ "alpha.lua", "beta.lua" })
     fuzzy_searcher.open("")
     local picker = assert(core.fuzzy_searcher_active_view)

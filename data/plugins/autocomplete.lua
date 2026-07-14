@@ -425,6 +425,8 @@ local suggestions_offset = 1
 local suggestions_idx = 1
 local suggestions = {}
 local last_line, last_col
+local last_doc
+local pending_deletion_doc
 
 local function display_info(suggestion)
   local info = suggestion and suggestion.info
@@ -868,6 +870,7 @@ local function reset_suggestions(skip_close)
 
   triggered_manually = false
   force_basic_suggestions = true
+  pending_deletion_doc = nil
   reset_lsp_completion_items()
 
   if not skip_close then
@@ -1627,6 +1630,7 @@ local function show_autocomplete(opts)
     local should_open = triggered_manually
       or provider_force_open
       or #partial >= config.plugins.autocomplete.min_len
+      or (opts.keep_open and #partial > 0)
       or trigger_character ~= nil
 
     if should_open then
@@ -1637,6 +1641,7 @@ local function show_autocomplete(opts)
 
       if not triggered_manually then
         last_line, last_col = av.doc:get_selection()
+        last_doc = av.doc
       else
         local line, col = av.doc:get_selection()
         local char = av.doc:get_char(line, col-1, line, col-1)
@@ -1662,7 +1667,6 @@ end
 -- Patch event logic into RootPanel and Doc
 --
 local on_text_input = RootPanel.on_text_input
-local on_text_remove = Doc.remove
 local on_doc_close = Doc.on_close
 local on_mouse_pressed = RootPanel.on_mouse_pressed
 local on_mouse_released = RootPanel.on_mouse_released
@@ -1728,17 +1732,18 @@ RootPanel.on_mouse_wheel = function(self, y, x)
   return on_mouse_wheel(self, y, x)
 end
 
-Doc.remove = function(self, line1, col1, line2, col2)
-  on_text_remove(self, line1, col1, line2, col2)
+Doc.register_text_transaction_handler("autocomplete", function(doc, transaction)
+  if doc ~= last_doc or #suggestions == 0 then return end
 
-  if triggered_manually and line1 == line2 then
-    if last_col >= col1 then
-      reset_suggestions()
-    else
-      show_autocomplete()
+  local deleted = transaction and transaction.edits and #transaction.edits > 0
+  for _, edit in ipairs(transaction and transaction.edits or {}) do
+    if edit.text ~= "" or edit.old_text == "" then
+      deleted = false
+      break
     end
   end
-end
+  pending_deletion_doc = deleted and doc or nil
+end)
 
 Doc.on_close = function(self)
   on_doc_close(self)
@@ -1754,10 +1759,13 @@ RootPanel.update = function(...)
 
   local av = get_active_view()
   if av then
-    -- reset suggestions if caret was moved
     local line, col = av.doc:get_selection()
+    local deleted = pending_deletion_doc == av.doc and #suggestions > 0
+    pending_deletion_doc = nil
 
-    if not triggered_manually then
+    if deleted and line == last_line and col <= last_col then
+      show_autocomplete({ keep_open = true })
+    elseif not triggered_manually then
       if line ~= last_line or col ~= last_col then
         reset_suggestions()
       end
@@ -1811,6 +1819,7 @@ function autocomplete.open(on_close, opts)
       force_basic_suggestions = at_word_completion_position()
     end
     last_line, last_col = av.doc:get_selection()
+    last_doc = av.doc
     request_lsp_completion(av, { manual = true })
     update_suggestions()
   end

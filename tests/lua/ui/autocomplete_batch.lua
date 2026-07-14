@@ -159,6 +159,33 @@ test.describe("autocomplete batch behavior", function()
     )
   end)
 
+  test.it("keeps the popup open while deleting letters from the active word", function(context)
+    local view, doc = open_editor(context, "")
+    autocomplete.add({
+      name = "test-autocomplete-delete-refresh",
+      files = ".*",
+      items = { foobar = "", foobaz = "" },
+    })
+
+    core.root_panel:on_text_input("foobar")
+    test.ok(autocomplete.is_open(), "expected autocomplete to open while typing")
+
+    test.ok(command.perform("doc:backspace"))
+    core.root_panel:update()
+
+    test.equal(table.concat(doc.lines), "fooba\n")
+    test.ok(autocomplete.is_open(), "expected autocomplete to stay open after deleting a letter")
+    test.ok(command.perform("autocomplete:next"))
+    test.equal(autocomplete.get_selected_suggestion().text, "foobaz")
+
+    for _ = 1, 3 do
+      test.ok(command.perform("doc:backspace"))
+      core.root_panel:update()
+    end
+    test.equal(table.concat(doc.lines), "fo\n")
+    test.ok(autocomplete.is_open(), "expected autocomplete to stay open below the normal minimum length")
+  end)
+
   test.it("ignores oversized suggestions before matching", function(context)
     context.autocomplete_max_symbol_length = config.plugins.autocomplete.max_symbol_length
     config.plugins.autocomplete.max_symbol_length = 40
