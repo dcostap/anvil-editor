@@ -302,6 +302,72 @@ test.describe("Document View Selection State edit characterization", function()
     })
   end)
 
+  test.it("whole-line paste over a linewise selection replaces it before inserting the copied line", function(context)
+    local doc, main = new_shared_views(context, "source\nreplace me\nafter")
+    core.set_active_view(main)
+    set_view_selection(main, 2, 1, 3, 1)
+    core.cursor_clipboard = {
+      [1] = "source",
+      full = "source\n",
+    }
+    core.cursor_clipboard_whole_line = {
+      [1] = true,
+    }
+    system.set_clipboard("source\n")
+
+    test.ok(command.perform("doc:paste"))
+
+    test.equal(text(doc), "source\nsource\nafter\n")
+    test.same(selection(main), { 3, 1, 3, 1 })
+  end)
+
+  test.it("whole-line paste over a partial selection matches delete then whole-line paste", function(context)
+    local doc, main = new_shared_views(context, "top\nabcXYZdef\nbottom")
+    core.set_active_view(main)
+    set_view_selection(main, 2, 4, 2, 7)
+    core.cursor_clipboard = {
+      [1] = "LINE",
+      full = "LINE\n",
+    }
+    core.cursor_clipboard_whole_line = {
+      [1] = true,
+    }
+    system.set_clipboard("LINE\n")
+
+    test.ok(command.perform("doc:paste"))
+
+    test.equal(text(doc), "top\nLINE\nabcdef\nbottom\n")
+    test.same(selection(main), { 3, 4, 3, 4 })
+  end)
+
+  test.it("whole-line paste handles disjoint selections on the same line atomically", function(context)
+    local doc, main = new_shared_views(context, "abXXcdYYef")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      1, 3, 1, 5,
+      1, 7, 1, 9,
+    })
+    core.cursor_clipboard = {
+      [1] = "LINE",
+      full = "LINE\n",
+    }
+    core.cursor_clipboard_whole_line = {
+      [1] = true,
+    }
+    system.set_clipboard("LINE\n")
+    local changes = 0
+    function doc:on_text_change() changes = changes + 1 end
+
+    test.ok(command.perform("doc:paste"))
+
+    test.equal(text(doc), "LINE\nLINE\nabcdef\n")
+    test.same(selection(main), {
+      3, 3, 3, 3,
+      3, 5, 3, 5,
+    })
+    test.equal(changes, 1)
+  end)
+
   test.it("cut removes whole lines at multiple carets in one document change", function(context)
     local doc, main = new_shared_views(context, "aa\nbb\ncc\ndd")
     core.set_active_view(main)
@@ -503,6 +569,24 @@ test.describe("Document View Selection State edit characterization", function()
 
     test.equal(text(doc), "if outer {\n  {\n    \n  }\n}\n")
     test.same(selection(main), { 3, 5, 3, 5 })
+  end)
+
+  test.it("newline replacing multiline block contents matches delete then smart newline", function(context)
+    local cases = {
+      { "main {", "}" },
+      { "call(", ")" },
+      { "items[", "]" },
+    }
+    for _, case in ipairs(cases) do
+      local doc, main = new_shared_views(context, case[1] .. "\n  first\n  second\n" .. case[2])
+      core.set_active_view(main)
+      set_view_selection(main, 1, #case[1] + 1, 4, 1)
+
+      test.ok(command.perform("doc:newline"))
+
+      test.equal(text(doc), case[1] .. "\n  \n" .. case[2] .. "\n")
+      test.same(selection(main), { 2, 3, 2, 3 })
+    end
   end)
 
   test.it("newline replacing selected text after an opening brace keeps smart indentation", function(context)

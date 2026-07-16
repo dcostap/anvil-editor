@@ -540,37 +540,36 @@ local function edits_are_non_overlapping(doc, edits)
 end
 
 local function smart_newline_edit(doc, line1, col1, line2, col2)
-  if line1 ~= line2 then return nil end
-
-  local text = doc.lines[line1] or ""
-  local selection_delta = col2 - col1
-  local virtual_text = text
-  if selection_delta > 0 then
-    virtual_text = text:sub(1, col1 - 1) .. text:sub(col2)
+  local has_selection = line1 ~= line2 or col1 ~= col2
+  local virtual_text = doc.lines[line1] or ""
+  if has_selection then
+    virtual_text = virtual_text:sub(1, col1 - 1) .. (doc.lines[line2] or ""):sub(col2)
   end
 
-  local function real_col(virtual_col, affinity)
-    if selection_delta <= 0 or virtual_col < col1 then return virtual_col end
-    if virtual_col == col1 and affinity == "start" then return col1 end
-    return virtual_col + selection_delta
+  local function real_position(virtual_col, affinity)
+    if not has_selection or virtual_col < col1 then return line1, virtual_col end
+    if virtual_col == col1 and affinity == "start" then return line1, col1 end
+    return line2, col2 + virtual_col - col1
   end
 
   local opener, opener_col = previous_non_space_on_line(virtual_text, col1)
-  local opener_real_col = opener_col and real_col(opener_col)
+  local opener_real_line, opener_real_col = real_position(opener_col or col1, "start")
   local closer = opener and smart_newline_pairs[opener]
-  if not closer or not position_is_code(doc, line1, opener_real_col) then return nil end
+  if not closer or not position_is_code(doc, opener_real_line, opener_real_col) then return nil end
 
   local base_indent = leading_indent(virtual_text)
   local inner_indent = base_indent .. one_indent_string(doc)
   local next_char, next_col = next_non_space_on_line(virtual_text, col1)
-  local next_real_col = next_col and real_col(next_col, "end")
+  local next_real_line, next_real_col
+  if next_col then next_real_line, next_real_col = real_position(next_col, "end") end
 
-  if next_char == closer and position_is_code(doc, line1, next_real_col) then
+  if next_char == closer and position_is_code(doc, next_real_line, next_real_col) then
     local insert_text = "\n" .. inner_indent .. "\n" .. base_indent
+    local edit_start_line, edit_start_col = real_position(opener_col + 1, "start")
     return {
-      line1 = line1,
-      col1 = real_col(opener_col + 1, "start"),
-      line2 = line1,
+      line1 = edit_start_line,
+      col1 = edit_start_col,
+      line2 = next_real_line,
       col2 = next_real_col,
       text = insert_text,
       caret_offset = #("\n" .. inner_indent),
@@ -580,15 +579,15 @@ local function smart_newline_edit(doc, line1, col1, line2, col2)
 
   if next_char ~= nil then return nil end
 
-  local edit_start = real_col(opener_col + 1, "start")
-  local edit_end = real_col(line_end_col(virtual_text), "end")
-  if opening_delimiter_is_unmatched(doc, line1, opener_real_col, opener, closer, line1, col1, line2, col2) then
+  local edit_start_line, edit_start_col = real_position(opener_col + 1, "start")
+  local edit_end_line, edit_end_col = real_position(line_end_col(virtual_text), "end")
+  if opening_delimiter_is_unmatched(doc, opener_real_line, opener_real_col, opener, closer, line1, col1, line2, col2) then
     local insert_text = "\n" .. inner_indent .. "\n" .. base_indent .. closer
     return {
-      line1 = line1,
-      col1 = edit_start,
-      line2 = line1,
-      col2 = edit_end,
+      line1 = edit_start_line,
+      col1 = edit_start_col,
+      line2 = edit_end_line,
+      col2 = edit_end_col,
       text = insert_text,
       caret_offset = #("\n" .. inner_indent),
       reason = "after-unmatched-delimiter",
@@ -597,10 +596,10 @@ local function smart_newline_edit(doc, line1, col1, line2, col2)
 
   local insert_text = "\n" .. inner_indent
   return {
-    line1 = line1,
-    col1 = edit_start,
-    line2 = line1,
-    col2 = edit_end,
+    line1 = edit_start_line,
+    col1 = edit_start_col,
+    line2 = edit_end_line,
+    col2 = edit_end_col,
     text = insert_text,
     caret_offset = #insert_text,
     reason = "after-opener",
@@ -701,32 +700,53 @@ end
 
 local function paste_whole_lines_by_selection(doc, text_for_idx)
   local edits = {}
-  local entries = {}
-  for idx, line1, col1 in doc:get_selections(false) do
+  local final_by_idx = {}
+  for idx, line1, col1, line2, col2 in doc:get_selections(true) do
     local text = tostring(text_for_idx(idx) or ""):gsub("\r", "") .. "\n"
-    edits[#edits + 1] = { line1 = line1, col1 = 1, line2 = line1, col2 = 1, text = text, idx = idx }
-    entries[#entries + 1] = { idx = idx, line = line1, col = col1, line_delta = newline_count(text) }
+    if line1 ~= line2 or col1 ~= col2 then
+      local prefix = doc:get_text(line1, 1, line1, col1)
+      edits[#edits + 1] = {
+        line1 = line1, col1 = 1, line2 = line2, col2 = col2,
+        text = text .. prefix, idx = idx,
+      }
+      final_by_idx[idx] = #text + #prefix
+    else
+      edits[#edits + 1] = {
+        line1 = line1, col1 = 1, line2 = line1, col2 = 1,
+        text = text, idx = idx,
+      }
+      final_by_idx[idx] = #text + col1 - 1
+    end
   end
   if #edits == 0 then return end
 
-  table.sort(entries, function(a, b)
-    if a.line == b.line then return a.idx < b.idx end
-    return a.line < b.line
-  end)
-  local selections = {}
-  local cumulative_line_delta = 0
-  for _, entry in ipairs(entries) do
-    local line = entry.line + cumulative_line_delta + entry.line_delta
-    selections[#selections + 1] = line
-    selections[#selections + 1] = entry.col
-    selections[#selections + 1] = line
-    selections[#selections + 1] = entry.col
-    cumulative_line_delta = cumulative_line_delta + entry.line_delta
+  local non_overlapping, normalized = edits_are_non_overlapping(doc, edits)
+  if not non_overlapping then
+    core.log_quiet("Whole-line paste using sequential fallback for overlapping selections in %s", doc:get_name())
+    return run_legacy_doc_edit_as_batch(doc, "insert", function(target_doc)
+      for idx = #target_doc.selections / 4, 1, -1 do
+        local line1, col1, line2, col2 = target_doc:get_selection_idx(idx, true)
+        local text = tostring(text_for_idx(idx) or ""):gsub("\r", "") .. "\n"
+        if line1 ~= line2 or col1 ~= col2 then
+          target_doc:remove(line1, col1, line2, col2)
+        end
+        target_doc:insert(line1, 1, text)
+        target_doc:set_selections(idx, line1 + newline_count(text), col1)
+      end
+      target_doc:merge_cursors()
+    end)
   end
+
+  local selections, last_selection = doc:selections_after_edits(
+    normalized,
+    final_by_idx,
+    doc.last_selection,
+    { normalized = true }
+  )
   return doc:apply_edits(edits, {
     type = "insert",
     selections = selections,
-    last_selection = doc.last_selection,
+    last_selection = last_selection,
     merge_cursors = false,
   })
 end
