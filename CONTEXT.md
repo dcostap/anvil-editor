@@ -52,6 +52,10 @@ _Avoid_: semantic references, global references
 Autocomplete suggestions prioritized for the named container immediately before a member-access separator, such as enum members after `Color.` or class members after `Widget.`. It does not imply resolving the runtime type of an instance expression.
 _Avoid_: semantic instance completion, dot autocomplete
 
+**Container-Owned Member Symbol**:
+A named code symbol that belongs to a containing type or similar named container and is generally not valid as an unqualified completion outside that container, such as a field, method, or scoped enum member.
+_Avoid_: self-scoped symbol
+
 **Current Document Symbol Search**:
 A search over named code symbols in the active Document only.
 _Avoid_: local symbol search, file symbol search

@@ -1055,9 +1055,25 @@ local function symbol_parent_allowed(symbol, parent_names)
   return false
 end
 
+local function symbol_kind_allowed(symbol, kinds)
+  if not kinds or #kinds == 0 then return true end
+  for _, kind in ipairs(kinds) do
+    if symbol.kind == kind then return true end
+  end
+  return false
+end
+
 local function filtered_symbols(symbols, query, limit, opts)
   symbols = symbols or {}
   opts = opts or {}
+  local kinds = opts.symbol_kinds or opts.kinds
+  if kinds and #kinds > 0 then
+    local allowed = {}
+    for _, symbol in ipairs(symbols) do
+      if symbol_kind_allowed(symbol, kinds) then allowed[#allowed + 1] = symbol end
+    end
+    symbols = allowed
+  end
   local languages = opts.language_ids or opts.languages
   if languages and #languages > 0 then
     local allowed = {}
@@ -1142,14 +1158,6 @@ local function native_query_path_rules(index, snapshot, kind)
   }
   index.native_query_filter_cache[cache_key] = cache
   return excluded, included, suppressed
-end
-
-local function symbol_kind_allowed(symbol, kinds)
-  if not kinds or #kinds == 0 then return true end
-  for _, kind in ipairs(kinds) do
-    if symbol.kind == kind then return true end
-  end
-  return false
 end
 
 local function insert_bounded(items, item, less, capacity)

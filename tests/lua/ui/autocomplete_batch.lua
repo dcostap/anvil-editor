@@ -276,22 +276,46 @@ test.describe("autocomplete batch behavior", function()
     test.ok(not autocomplete.is_open(), "Kotlin should not receive Odin Project symbols")
   end)
 
-  test.it("accepts contextual enum-member Project suggestions with their enum prefix", function(context)
+  test.it("excludes container-owned Project members from bare completion", function(context)
     local _, active_path = seed_odin_project_symbol(context, "current.odin")
-    local _, doc = open_file_editor(context, active_path)
+    local symbol = symbol_index.status(core.root_project().path).symbols[1]
+    symbol.name = "field1"
+    symbol.text = "field1"
+    symbol.kind = "field"
+    symbol.parent_name = "TestStruct"
+    symbol.signature = "int"
+    write_file(active_path, "field1")
+    open_file_editor(context, active_path)
+
+    autocomplete.trigger()
+
+    test.ok(not autocomplete.is_open(), "a struct field should require Contextual Member Completion")
+  end)
+
+  test.it("excludes scoped Odin enum members from bare completion", function(context)
+    local _, active_path = seed_odin_project_symbol(context, "current.odin")
+    open_file_editor(context, active_path)
+
+    autocomplete.trigger()
+
+    test.ok(not autocomplete.is_open(), "an Odin enum member should require its enum receiver")
+  end)
+
+  test.it("keeps top-level Project symbols in bare completion", function(context)
+    local _, active_path = seed_odin_project_symbol(context, "current.odin")
+    local symbol = symbol_index.status(core.root_project().path).symbols[1]
+    symbol.name = "resolve_message"
+    symbol.text = "resolve_message"
+    symbol.kind = "function"
+    symbol.parent_name = nil
+    symbol.signature = "()"
+    write_file(active_path, "resolve")
+    open_file_editor(context, active_path)
 
     autocomplete.trigger()
 
     test.ok(autocomplete.is_open())
-    local item = test.not_nil(autocomplete.get_selected_suggestion())
-    test.equal(item.preview_text, "Route_Message_Type.RESOLVE = 0xb")
-    test.same(item.preview_name_span, { 20, 26 })
-    test.equal(item.info, "enum member")
-    test.equal(item.preview_show_info, true)
-    test.equal(item.icon, "enum_member")
-    test.ok(not item.no_icon, "expected the code-symbol suggestion to show its kind icon")
-    test.ok(command.perform("autocomplete:complete"))
-    test.equal(table.concat(doc.lines), "Route_Message_Type.RESOLVE\n")
+    test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, "resolve_message")
   end)
 
   test.it("does not duplicate an enum prefix already present at the caret", function(context)

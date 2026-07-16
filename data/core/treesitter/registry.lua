@@ -28,6 +28,9 @@ local builtin_configs = {
     block_comment = { "/*", "*/" },
     autocomplete_languages = { "c", "cpp" },
     member_completion_separators = { "." },
+    bare_completion_symbol_kinds = {
+      "function", "macro", "struct", "union", "enum", "enum_member", "type",
+    },
     queries = {
       highlights = "highlights.scm",
       outline = "outline.scm",
@@ -48,6 +51,9 @@ local builtin_configs = {
     autocomplete_languages = { "c", "cpp" },
     member_completion_separators = { "::", "." },
     enum_completion_separator = "::",
+    bare_completion_symbol_kinds = {
+      "namespace", "class", "struct", "union", "enum", "enum_member", "function", "type",
+    },
     parse_timeout_ms = 5000,
     queries = {
       highlights = "highlights.scm",

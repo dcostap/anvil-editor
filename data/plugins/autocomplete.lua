@@ -1104,6 +1104,7 @@ function update_suggestions()
           kind = "autocomplete",
           language_ids = project_language_ids,
           parent_names = query_opts.parent_names,
+          symbol_kinds = query_opts.symbol_kinds,
           limit = math.max(20, config.plugins.autocomplete.max_suggestions * 2),
           allow_stale = true,
         })
@@ -1155,7 +1156,10 @@ function update_suggestions()
 
       local function add_project_symbols(query)
         if not query or query == "" then return end
-        for _, symbol in ipairs(query_project_symbols(query)) do
+        local language = doc.treesitter and doc.treesitter.language
+        for _, symbol in ipairs(query_project_symbols(query, {
+          symbol_kinds = language and language.bare_completion_symbol_kinds,
+        })) do
           if not contextual_names[tostring(symbol.name or "")] then
             local item = project_item(symbol)
             if item then add_candidate_item(item, item_richness(item) > 0) end

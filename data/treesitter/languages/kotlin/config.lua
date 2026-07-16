@@ -11,6 +11,9 @@ return {
   block_comment = { "/*", "*/" },
   member_completion_separators = { "." },
   enum_completion_separator = ".",
+  bare_completion_symbol_kinds = {
+    "class", "function", "variable", "type",
+  },
   parse_timeout_ms = 5000,
   queries = {
     highlights = "highlights.scm",
