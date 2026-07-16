@@ -25,6 +25,7 @@ local core_plugins = {
   intellij_find = true,
   navigation_history = true,
   scale_debug_log = true,
+  selection_surround = true,
   smart_indent_rules = true,
   theme_editor = true,
   untitled_recovery = true,
@@ -204,6 +205,7 @@ require_core_plugin "intellij_find"
 require_core_plugin "untitled_recovery"
 require_core_plugin "untitled_tabs"
 reload_core_plugin "scale_debug_log"
+require_core_plugin "selection_surround"
 require_core_plugin "smart_indent_rules"
 -- require_core_plugin "editor_wallpaper"
 require_core_plugin "centered_editor"

@@ -144,6 +144,10 @@ _Avoid_: listener, split
 The caret and selection state owned by a Document View.
 _Avoid_: Document selection, shared selection
 
+**Selection Surrounding**:
+An editing action that keeps selected text selected while placing matching delimiters around it. A multiline line-content selection may become an indented delimiter block.
+_Avoid_: auto-pairing, wrapper conversion
+
 **Current Line Highlight**:
 A background highlight that marks the visual row containing the active caret in a Document View.
 _Avoid_: Line highlighting, active line highlight

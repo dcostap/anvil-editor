@@ -1859,8 +1859,13 @@ local function selection_ranges_after_edits(self, normalized, ranges_by_idx, las
     local new_start = edit.start_offset + delta
     local range = ranges_by_idx and ranges_by_idx[edit.idx]
     if range then
-      local start_offset = range[1] == "end" and new_start + #edit.text or new_start
-      local end_offset = range[2] == "end" and new_start + #edit.text or new_start
+      local function range_offset(target)
+        if target == "end" then return new_start + #edit.text end
+        if type(target) == "number" then return new_start + target end
+        return new_start
+      end
+      local start_offset = range_offset(range[1])
+      local end_offset = range_offset(range[2])
       range_offsets[edit.idx] = { start_offset, end_offset }
     end
     delta = delta + #edit.text - (edit.end_offset - edit.start_offset)
@@ -1906,6 +1911,12 @@ local function selection_ranges_after_edits(self, normalized, ranges_by_idx, las
     end
   end
   return new_selections, last_selection or self.last_selection
+end
+
+function Doc:selection_ranges_after_edits(edits, ranges_by_idx, last_selection, opts)
+  opts = opts or {}
+  local normalized = opts.normalized and edits or plan_normalized_edits(self, edits, opts)
+  return selection_ranges_after_edits(self, normalized, ranges_by_idx, last_selection)
 end
 
 
