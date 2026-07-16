@@ -21,17 +21,13 @@ local fuzzy_native = require "fuzzy"
 
 local PreviewDocView = DocView:extend()
 
-function PreviewDocView:get_gutter_width()
-  local padding = style.padding.x * 2
-  if config.show_line_numbers then
-    return self:get_font():get_width("00000") + padding, padding
-  end
-  return style.padding.x, padding
+function PreviewDocView:get_line_number_gutter_width()
+  return self:get_font():get_width("00000")
 end
 
 function PreviewDocView:draw_line_gutter(line, x, y, width)
   local lh = self:get_line_height()
-  if config.show_line_numbers then
+  if self:line_numbers_visible() then
     local color = style.line_number
     for _, line1, _, line2 in self.doc:get_selections(true) do
       if line >= line1 and line <= line2 then

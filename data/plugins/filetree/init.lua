@@ -831,6 +831,7 @@ end
 
 local FileTreeView = DocView:extend()
 FileTreeView.context = "application"
+FileTreeView.show_line_numbers = false
 
 function FileTreeView:__tostring() return "FileTreeView" end
 
@@ -900,10 +901,6 @@ end
 
 function FileTreeView:get_name()
   return "File Tree: " .. common.relative_path(core.root_project().path, self.current_dir)
-end
-
-function FileTreeView:get_gutter_width()
-  return style.padding.x * 2, style.padding.x
 end
 
 function FileTreeView:git_root()
@@ -2046,7 +2043,6 @@ function FileTreeView:draw_line_body(line, x, y)
   local stats = perf_stats()
   local start = perf_call(stats, "filetree_draw_line_body_calls")
   local gw = self:get_gutter_width()
-  local meta = self.line_meta[line]
   self:draw_folder_row_background(
     line,
     x + self.scroll.x,

@@ -46,6 +46,20 @@ test.describe("DocView gutter line numbers", function()
     test.equal(nine:get_gutter_width(), ten:get_gutter_width())
   end)
 
+  test.it("allows one Document View to hide line numbers without removing its gutter", function(context)
+    local view = make_view(context, 3)
+    view.show_line_numbers = false
+    local draw_count = 0
+    context.original_common_draw_text = common.draw_text
+    common.draw_text = function() draw_count = draw_count + 1 end
+
+    local gutter_width = view:get_gutter_width()
+    view:draw_line_gutter(1, 0, 0, gutter_width)
+
+    test.ok(gutter_width > 0, "expected hidden line numbers to retain gutter spacing")
+    test.equal(draw_count, 0)
+  end)
+
   test.it("keeps the git hunk marker lane stable from nine to ten lines", function(context)
     local function marker_x_for(line_count)
       local view = make_view(context, line_count)

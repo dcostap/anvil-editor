@@ -1360,15 +1360,23 @@ function DocView:get_line_number_gutter_width()
   return self:get_font():get_width(string.rep("0", digits))
 end
 
----Get the gutter width (line numbers area).
+---Whether this Document View should draw line-number labels.
+---A per-view boolean overrides the global line-number setting.
+---@return boolean visible
+function DocView:line_numbers_visible()
+  if self.show_line_numbers ~= nil then return self.show_line_numbers end
+  return config.show_line_numbers
+end
+
+---Get the standard Document View gutter width.
 ---@return number width Total gutter width
 ---@return number padding Padding within gutter
 function DocView:get_gutter_width()
   local padding = style.padding.x * 2
-  if config.show_line_numbers then
+  if self:line_numbers_visible() then
     return self:get_line_number_gutter_width() + padding, padding
   end
-  return style.padding.x, padding
+  return padding, padding
 end
 
 local function compact_fold_views(doc)
@@ -2775,7 +2783,7 @@ end
 function DocView:draw_fold_widget_gutter(fold, x, y, width)
   local lh = self:get_line_height()
   renderer.draw_rect(x, y, width, lh, style.gutter_bg or style.background2)
-  if config.show_line_numbers then
+  if self:line_numbers_visible() then
     local color = selection_overlaps_fold(self.doc, fold) and style.line_number2 or style.line_number
     common.draw_text(self:get_font(), color, tostring(fold.line1), "right", x + style.padding.x, y, width - style.padding.x, lh)
   end
@@ -3951,8 +3959,29 @@ function DocView:line_has_current_line_highlight(line)
 end
 
 function DocView:draw_current_line_highlights(minline, maxline)
+  if self:has_composed_visual_rows() then
+    if config.highlight_current_line == false then return end
+    local highlighted_rows = {}
+    local hcl = config.highlight_current_line
+    for _, line1, col1, line2, col2 in self.doc:get_selections(false) do
+      if line1 > maxline then break end
+      if line1 >= minline and (hcl ~= "no_selection" or (line1 == line2 and col1 == col2)) then
+        local line_end = self.wrapped_settings
+          and linewrapping.has_wrapped_line_end_affinity(self, line1, col1)
+          or false
+        highlighted_rows[self:get_composed_visual_row_for_position(line1, col1, line_end)] = true
+      end
+    end
+    for entry in self:iter_visible_visual_rows() do
+      if highlighted_rows[entry.visual_row] then
+        self:draw_line_highlight(self.position.x, entry.y)
+      end
+    end
+    self:draw_content_left_edge()
+    return
+  end
   if self.wrapped_settings then
-    if core.active_view ~= self or config.highlight_current_line == false then return end
+    if config.highlight_current_line == false then return end
     local lh = self:get_line_height()
     local hcl = config.highlight_current_line
     for _, line1, col1, line2, col2 in self.doc:get_selections(false) do
@@ -5400,7 +5429,7 @@ end
 function DocView:draw_line_gutter(line, x, y, width)
   local lh = self:get_line_height()
   local height = lh
-  if config.show_line_numbers then
+  if self:line_numbers_visible() then
     local color = style.line_number
     local gutter_selection_cache = self.__line_gutter_selection_cache
     if gutter_selection_cache then
@@ -5512,7 +5541,8 @@ function DocView:draw_folded()
 
   local minline, maxline = self:get_visible_line_range()
   self:prepare_line_body_draw_cache(minline, maxline)
-  self.__current_line_highlights_drawn_before_content = false
+  self:draw_current_line_highlights(minline, maxline)
+  self.__current_line_highlights_drawn_before_content = true
 
   local x = self.position.x - self.scroll.x
   local gw, gpad = self:get_gutter_width()

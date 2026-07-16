@@ -1,4 +1,5 @@
 local core = require "core"
+local config = require "core.config"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
 local style = require "core.style"
@@ -97,6 +98,53 @@ test.describe("DocView decoration providers", function()
     test.equal(view:get_scrollable_line_count(), base + 2)
     test.equal(view:remove_visual_row_provider("test"), true)
     test.equal(view:get_scrollable_line_count(), base)
+  end)
+
+  test.it("draws composed-row current-line highlights across the gutter before row content", function()
+    local view, doc = make_view("one\ntwo\nthree")
+    view.position.x = 17
+    view.size.x = 360
+    view:add_visual_row_provider("test", {})
+    doc:set_selection(2, 1)
+
+    local old_highlight = config.highlight_current_line
+    local old_text = renderer.draw_text
+    local old_rect = renderer.draw_rect
+    local old_push = core.push_clip_rect
+    local old_pop = core.pop_clip_rect
+    local events = {}
+    config.highlight_current_line = true
+    renderer.draw_text = function(font, text, x) return x + (font and font:get_width(text) or 0) end
+    renderer.draw_rect = function() end
+    core.push_clip_rect = function() end
+    core.pop_clip_rect = function() end
+    view.draw_overlay = function() end
+    view.draw_line_gutter = function(_, line)
+      events[#events + 1] = { kind = "gutter", line = line }
+    end
+    view.draw_line_highlight = function(self, x, y)
+      local rx, ry, rw, rh = self:get_line_highlight_rect(x, y)
+      events[#events + 1] = { kind = "highlight", x = rx, y = ry, w = rw, h = rh }
+    end
+
+    local ok, err = pcall(function() view:draw() end)
+    config.highlight_current_line = old_highlight
+    renderer.draw_text = old_text
+    renderer.draw_rect = old_rect
+    core.push_clip_rect = old_push
+    core.pop_clip_rect = old_pop
+    if not ok then error(err, 0) end
+
+    local highlight_index
+    local first_gutter_index
+    for index, event in ipairs(events) do
+      if event.kind == "highlight" and not highlight_index then highlight_index = index end
+      if event.kind == "gutter" and not first_gutter_index then first_gutter_index = index end
+    end
+    test.not_nil(highlight_index, "expected a Current Line Highlight")
+    test.ok(highlight_index < first_gutter_index, "expected the highlight beneath the gutter and row content")
+    test.equal(events[highlight_index].x, view.position.x)
+    test.equal(events[highlight_index].w, view.size.x)
   end)
 
   test.it("draws and clicks provider-owned visual rows without selecting text", function()
