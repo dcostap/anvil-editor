@@ -1452,7 +1452,7 @@ end
 function StatusBar:draw()
   if not self.visible and self.size.y <= 0 then return end
 
-  local background = style.tab_background
+  local background = style.background
   local ds = style.divider_size or 0
   renderer.draw_rect(self.position.x, self.position.y - ds, self.size.x, self.size.y + ds, background)
 
@@ -1523,6 +1523,9 @@ function StatusBar:draw()
     end
   end
 
+  -- The status bar view is clipped to its node, so draw the border inside its
+  -- top edge rather than in the divider space above it.
+  renderer.draw_rect(self.position.x, self.position.y, self.size.x, ds, style.divider)
 end
 
 return StatusBar

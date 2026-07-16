@@ -523,6 +523,13 @@ function TitleBar:draw()
   self:draw_window_title()
   self:draw_titlebar_tabs()
   self:draw_window_controls()
+  renderer.draw_rect(
+    self.position.x,
+    self.position.y + self.size.y - style.divider_size,
+    self.size.x,
+    style.divider_size,
+    style.divider
+  )
 end
 
 return TitleBar

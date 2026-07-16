@@ -20,7 +20,7 @@ local C = {
   scrollbar_thumb = "c9ccd6",
   scrollbar_thumb_hover = "aeb3c2",
   scrollbar_thumb_active = "8f96a8",
-  tearline = "d4d4d4",
+  tearline = "dfdfdf",
   whitespace = "adadad",
 
   -- attributes from IntelliJ Light / ExpUI Light
@@ -80,8 +80,8 @@ local C = {
 -- Core UI
 style.background = c(C.text_bg)
 style.background2 = c("f7f8fa")
-style.tab_background = c("ebecf0")
-style.titlebar = style.tab_background
+style.tab_background = style.background
+style.titlebar = style.background
 style.background3 = c("ffffff")
 style.autocomplete_border = { common.color "rgba(0, 0, 0, 0.28)" }
 style.autocomplete_selection = c("e8f1ff")

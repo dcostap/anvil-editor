@@ -21,7 +21,7 @@ local C = {
   scrollbar_thumb = "3C3F41",
   scrollbar_thumb_hover = "5a5f63",
   scrollbar_thumb_active = "74797d",
-  tearline = "4E5153",
+  tearline = "3e4045",
   whitespace = "46494B",
 
   -- attributes
@@ -81,8 +81,8 @@ local C = {
 -- Core UI
 style.background = c(C.text_bg)
 style.background2 = c("26282b")
-style.tab_background = c("202126")
-style.titlebar = style.tab_background
+style.tab_background = style.background
+style.titlebar = style.background
 style.background3 = c(C.text_bg)
 style.autocomplete_border = { common.color "rgba(255, 255, 255, 0.25)" }
 style.autocomplete_selection = c("30343a")
