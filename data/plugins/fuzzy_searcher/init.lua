@@ -790,7 +790,7 @@ function fuzzy_searcher.normalize_prompt_history(data)
           local mode = fuzzy_searcher.prompt_mode(text)
           seen[mode] = seen[mode] or {}
           normalized[mode] = normalized[mode] or {}
-          if trim_query(text) ~= "" and not seen[mode][text] and #normalized[mode] < 50 then
+          if not seen[mode][text] and #normalized[mode] < 50 then
             normalized[mode][#normalized[mode] + 1] = text
             seen[mode][text] = true
           end
@@ -830,8 +830,6 @@ end
 
 function fuzzy_searcher.record_prompt_history_text(text)
   text = tostring(text or "")
-  local leading_mode, query = split_mode_prefix(text)
-  if trim_query(text) == "" or (leading_mode ~= "" and trim_query(query) == "") then return end
 
   local mode = fuzzy_searcher.prompt_mode(text)
   local history = fuzzy_searcher.prompt_history_for_mode(mode)
@@ -848,7 +846,7 @@ function fuzzy_searcher.restored_prompt_text(text)
   if query ~= "" then return text, false end
   local mode = leading_mode ~= "" and leading_mode or fuzzy_searcher.prompt_mode(text)
   local latest = fuzzy_searcher.prompt_history_for_mode(mode)[1]
-  if latest and latest ~= "" then return latest, true end
+  if latest ~= nil then return latest, true end
   return text, false
 end
 

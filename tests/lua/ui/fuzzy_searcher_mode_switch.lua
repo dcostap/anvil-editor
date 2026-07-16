@@ -79,6 +79,20 @@ test.describe("Fuzzy Searcher mode switching", function()
     test.is_nil(history[""])
   end)
 
+  test.it("loads stored blank queries for each mode", function()
+    local history, migrated = fuzzy_searcher._test.normalize_prompt_history({
+      version = 2,
+      modes = {
+        [""] = { "", "init.lua" },
+        [">"] = { ">", ">build" },
+      },
+    })
+
+    test.ok(not migrated)
+    test.same(history[""], { "", "init.lua" })
+    test.same(history[">"], { ">", ">build" })
+  end)
+
   test.it("renders an inline path/content separator as a mode marker", function()
     fuzzy_searcher.open("")
     local picker = core.fuzzy_searcher_active_view
@@ -183,6 +197,36 @@ test.describe("Fuzzy Searcher mode switching", function()
 
     test.equal(picker.input:get_text(), ">line wrapping")
     test.same({ picker.input.textview.doc:get_selection() }, { 1, 2, 1, #">line wrapping" + 1 })
+  end)
+
+  test.it("remembers a blank query in a prefixed mode", function()
+    fuzzy_searcher.open(">")
+    core.fuzzy_searcher_active_view.input:set_text(">line wrapping")
+    core.fuzzy_searcher_active_view:close()
+
+    fuzzy_searcher.open(">")
+    core.fuzzy_searcher_active_view.input:set_text(">")
+    core.fuzzy_searcher_active_view:close()
+
+    fuzzy_searcher.open(">")
+
+    test.equal(picker_text(), ">")
+    test.same(fuzzy_searcher._test.prompt_history(">"), { ">", ">line wrapping" })
+  end)
+
+  test.it("remembers a blank file query", function()
+    fuzzy_searcher.open("")
+    core.fuzzy_searcher_active_view.input:set_text("init.lua")
+    core.fuzzy_searcher_active_view:close()
+
+    fuzzy_searcher.open("")
+    core.fuzzy_searcher_active_view.input:set_text("")
+    core.fuzzy_searcher_active_view:close()
+
+    fuzzy_searcher.open("")
+
+    test.equal(picker_text(), "")
+    test.same(fuzzy_searcher._test.prompt_history(""), { "", "init.lua" })
   end)
 
   test.it("restores an inline path/content grep prompt without moving its mode marker", function()
