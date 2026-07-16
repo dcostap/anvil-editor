@@ -133,6 +133,50 @@ test.describe("Tree-sitter DocView highlighting", function()
     doc:on_close()
   end)
 
+  test.it("keeps Odin delimiter-heavy text aligned with its caret column", function()
+    local prefix = "main :: proc()" .. string.rep(":", 28) .. "sdf- ds f-as d-f sd- -sa d-f -"
+    local text = prefix .. "{"
+    local doc = odin_doc(text)
+    test.ok(wait_ready(doc))
+    local view = DocView(doc)
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 2000, 240
+    view:set_wrapping_enabled(false)
+    view.__test_force_known_bounds = true
+
+    local drawn_brace_x
+    local old_draw_text = renderer.draw_text
+    local old_draw_text_known_bounds = renderer.draw_text_known_bounds
+    local function record_brace(font, chunk, x, opts)
+      local brace = chunk:find("{", 1, true)
+      if brace then
+        drawn_brace_x = x + font:get_width(chunk:sub(1, brace - 1), opts)
+      end
+    end
+    renderer.draw_text = function(font, chunk, x, _, _, opts)
+      record_brace(font, chunk, x, opts)
+      return x + font:get_width(chunk, opts)
+    end
+    renderer.draw_text_known_bounds = function(font, chunk, x, _, _, _, w, _, _, opts)
+      record_brace(font, chunk, x, opts)
+      return x + w
+    end
+
+    local ok, err = pcall(function()
+      view:draw_line_text(1, 0, 0)
+    end)
+    renderer.draw_text = old_draw_text
+    renderer.draw_text_known_bounds = old_draw_text_known_bounds
+    if not ok then
+      doc:on_close()
+      error(err, 0)
+    end
+
+    test.not_nil(drawn_brace_x)
+    test.equal(drawn_brace_x, view:get_col_x_offset(1, #prefix + 1))
+    doc:on_close()
+  end)
+
   test.it("DocView draw uses Tree-sitter Kotlin render tokens when ready", function()
     local doc = kotlin_doc("package demo\n\nclass Box(val value: Int) {\n  fun doubled(): Int = value * 2\n}")
     test.ok(wait_ready(doc))

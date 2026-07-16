@@ -234,6 +234,24 @@ local function has_ligature_sensitive_ascii(text)
   return text:find("[=><!/*:.|&f%-]") ~= nil
 end
 
+local function draw_text_known_advance(font, text, x, y, width, height, color, opts)
+  local bounds_x = math.floor(x)
+  local bounds_y = math.floor(y)
+  renderer.draw_text_known_bounds(
+    font, text, x, y,
+    bounds_x,
+    bounds_y,
+    math.max(1, math.ceil(x + width - bounds_x)),
+    math.max(1, math.ceil(y + height - bounds_y)),
+    color,
+    opts
+  )
+  -- The integer bounds conservatively describe the cached draw command; they
+  -- are not the text advance. Returning their rounded width accumulates drift
+  -- at every syntax-color boundary on fractional-width monospace fonts.
+  return x + width
+end
+
 local function get_fast_ascii_monospace_x_offset(self, line, col, line_text, font)
   if col <= 1 then return 0 end
   if has_relevant_syntax_fonts(self.doc) or not font_looks_monospace(font) then return nil end
@@ -4447,11 +4465,10 @@ function DocView:draw_line_text(line, x, y)
       and not has_ligature_sensitive_ascii(text) then
         perf_known_bounds_segments = perf_known_bounds_segments + 1
         local width = #text * default_ascii_cell_width
-        return renderer.draw_text_known_bounds(
+        return draw_text_known_advance(
           font, text, sx, sy,
-          math.floor(sx), math.floor(sy),
-          math.max(1, math.ceil(width)),
-          math.max(1, math.ceil(default_font_height)),
+          width,
+          default_font_height,
           color
         )
       end
@@ -4651,15 +4668,13 @@ function DocView:draw_line_text(line, x, y)
         and fast_ascii_monospace_width(text, char_width, tab_width, tx - line_start_tx)
         or (#text * char_width)
 
-      tx = renderer.draw_text_known_bounds(
+      tx = draw_text_known_advance(
         default_font,
         text,
         tx,
         ty,
-        math.floor(tx),
-        math.floor(ty),
-        math.max(1, math.ceil(width)),
-        math.max(1, math.ceil(unwrapped_default_font_height)),
+        width,
+        unwrapped_default_font_height,
         normal_color,
         text_has_tabs and { tab_offset = tx - line_start_tx } or nil
       )
@@ -4692,15 +4707,13 @@ function DocView:draw_line_text(line, x, y)
       local width = pending_has_tabs
         and fast_ascii_monospace_width(text, unwrapped_default_ascii_width, unwrapped_tab_width, tab_offset)
         or (#text * unwrapped_default_ascii_width)
-      tx = renderer.draw_text_known_bounds(
+      tx = draw_text_known_advance(
         pending_font,
         text,
         tx,
         ty,
-        math.floor(tx),
-        math.floor(ty),
-        math.max(1, math.ceil(width)),
-        math.max(1, math.ceil(unwrapped_default_font_height)),
+        width,
+        unwrapped_default_font_height,
         pending_color,
         pending_has_tabs and { tab_offset = tab_offset } or nil
       )
