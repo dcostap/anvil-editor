@@ -394,6 +394,20 @@ local function leading_indent(text)
   return tostring(text or ""):match("^[\t ]*") or ""
 end
 
+local function indent_visual_width(text, tab_size)
+  local indent = leading_indent(text)
+  local width = 0
+  tab_size = math.max(1, tonumber(tab_size) or 1)
+  for i = 1, #indent do
+    if indent:sub(i, i) == "\t" then
+      width = width + tab_size - (width % tab_size)
+    else
+      width = width + 1
+    end
+  end
+  return width, #indent + 1
+end
+
 local function one_indent_string(doc)
   local text = doc:get_indent_string(1)
   return text
@@ -481,6 +495,8 @@ end
 
 local function opening_delimiter_is_unmatched(doc, line, col, opener, closer, skip_line1, skip_col1, skip_line2, skip_col2)
   local depth = 1
+  local _, indent_size = doc:get_indent_info()
+  local opener_indent_width = indent_visual_width(doc.lines[line], indent_size)
   for l = line, #doc.lines do
     local text = doc.lines[l]
     local start_col = l == line and col + 1 or 1
@@ -492,6 +508,16 @@ local function opening_delimiter_is_unmatched(doc, line, col, opener, closer, sk
         if ch == opener then
           depth = depth + 1
         else
+          if depth == 1 and l > line then
+            local closer_indent_width, first_content_col = indent_visual_width(text, indent_size)
+            if i == first_content_col and closer_indent_width < opener_indent_width then
+              core.log_quiet(
+                "Smart newline kept outer closer in %s at %d:%d for nested opener at %d:%d",
+                doc:get_name(), l, i, line, col
+              )
+              return true
+            end
+          end
           depth = depth - 1
           if depth == 0 then return false end
         end

@@ -494,6 +494,17 @@ test.describe("Document View Selection State edit characterization", function()
     test.same(selection(main), { 2, 3, 2, 3 })
   end)
 
+  test.it("newline after a nested unmatched brace does not mistake the outer closer for its match", function(context)
+    local doc, main = new_shared_views(context, "if outer {\n  {\n}")
+    core.set_active_view(main)
+    set_view_selection(main, 2, 4, 2, 4)
+
+    test.ok(command.perform("doc:newline"))
+
+    test.equal(text(doc), "if outer {\n  {\n    \n  }\n}\n")
+    test.same(selection(main), { 3, 5, 3, 5 })
+  end)
+
   test.it("newline replacing selected text after an opening brace keeps smart indentation", function(context)
     local doc, main = new_shared_views(context, "fun test() {selected_word\n}")
     core.set_active_view(main)
