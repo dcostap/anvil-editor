@@ -18,8 +18,6 @@ local bracketmatch = {
   style = "frame",
   -- color the bracket
   color_char = false,
-  -- the size of the lines used in "underline" and "frame"
-  line_size = math.ceil(1 * SCALE),
   line_limit = 3000,
 }
 
@@ -196,7 +194,7 @@ local function draw_decoration(dv, x, y, line, col, width)
   local block_color = style.bracketmatch_block_color
   local frame_color = style.bracketmatch_frame_color
 
-  local thickness = conf.line_size
+  local thickness = math.max(1, SCALE)
 
   -- position data
   local screen_x, screen_y = dv:get_line_screen_position(line, col)
@@ -216,9 +214,9 @@ local function draw_decoration(dv, x, y, line, col, width)
   if conf.style == "underline" then
     renderer.draw_rect(screen_x, screen_y + lh - thickness, screen_w, thickness, color)
   elseif conf.style == "frame" then
-    renderer.draw_rect(screen_x - thickness, screen_y - thickness, screen_w + thickness, thickness, frame_color) --top
+    renderer.draw_rect(screen_x, screen_y, screen_w, thickness, frame_color) --top
     renderer.draw_rect(screen_x, screen_y + lh - thickness, screen_w, thickness, frame_color) --bottom
-    renderer.draw_rect(screen_x - thickness, screen_y, thickness, lh, frame_color) --left
+    renderer.draw_rect(screen_x, screen_y, thickness, lh, frame_color) --left
     renderer.draw_rect(screen_x2 - thickness, screen_y, thickness, lh, frame_color) --right
   end
 end

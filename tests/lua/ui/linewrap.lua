@@ -463,6 +463,51 @@ test.describe("line wrapping visual navigation", function()
     test.ok(max_len <= 512, "expected long unwrapped text to be chunked before renderer draw")
   end)
 
+  test.it("keeps ligature-sensitive unwrapped runs aligned with caret positions", function(context)
+    local prefix = "main :: proc()" .. string.rep(":", 40)
+    local text = prefix .. "{"
+    local view, doc = open_editor(context, text)
+    view.wrapping_enabled = false
+    view.wrapped_settings = nil
+    view.__test_force_known_bounds = true
+    view.size.x = 2000
+
+    local old_get_render_line = doc.highlighter.get_render_line
+    doc.highlighter.get_render_line = function()
+      return {
+        text = text .. "\n",
+        tokens = { "normal", prefix, "keyword", "{", "normal", "\n" },
+        source = "test",
+      }
+    end
+
+    local drawn_brace_x
+    local old_draw_text = renderer.draw_text
+    local old_draw_text_known_bounds = renderer.draw_text_known_bounds
+    renderer.draw_text = function(font, chunk, x, _, _, opts)
+      if chunk == "{" then drawn_brace_x = x end
+      return x + font:get_width(chunk, opts)
+    end
+    renderer.draw_text_known_bounds = function(font, chunk, x, _, _, _, w)
+      if chunk == "{" then drawn_brace_x = x end
+      return x + w
+    end
+
+    local line_x, line_y = view:get_line_screen_position(1)
+    local ok, err = pcall(function()
+      view:draw_line_text(1, line_x, line_y)
+    end)
+
+    renderer.draw_text = old_draw_text
+    renderer.draw_text_known_bounds = old_draw_text_known_bounds
+    doc.highlighter.get_render_line = old_get_render_line
+    if not ok then error(err, 0) end
+
+    local caret_x = select(1, view:get_line_screen_position(1, #prefix + 1))
+    test.not_nil(drawn_brace_x)
+    test.equal(drawn_brace_x, caret_x, "expected the rendered brace and caret column to stay aligned")
+  end)
+
   test.it("skips far-left chunks of deeply scrolled unwrapped long lines", function(context)
     local view = open_editor(context, string.rep("f", 8000))
     view.wrapping_enabled = false

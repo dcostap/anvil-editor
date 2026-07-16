@@ -228,6 +228,12 @@ local function has_relevant_syntax_fonts(doc)
   return false
 end
 
+local function has_ligature_sensitive_ascii(text)
+  -- Keep this in sync with the renderer's text_needs_shaping() probes.
+  -- Known monospace cell bounds are not exact for these shaped runs.
+  return text:find("[=><!/*:.|&f%-]") ~= nil
+end
+
 local function get_fast_ascii_monospace_x_offset(self, line, col, line_text, font)
   if col <= 1 then return 0 end
   if has_relevant_syntax_fonts(self.doc) or not font_looks_monospace(font) then return nil end
@@ -4435,7 +4441,10 @@ function DocView:draw_line_text(line, x, y)
       if text == "" then return sx end
       perf_segments = perf_segments + 1
       perf_bytes = perf_bytes + #text
-      if can_use_known_bounds and uses_default_font and not text:find("[\t\128-\255]") then
+      if can_use_known_bounds
+      and uses_default_font
+      and not text:find("[\t\128-\255]")
+      and not has_ligature_sensitive_ascii(text) then
         perf_known_bounds_segments = perf_known_bounds_segments + 1
         local width = #text * default_ascii_cell_width
         return renderer.draw_text_known_bounds(
@@ -4592,6 +4601,7 @@ function DocView:draw_line_text(line, x, y)
     and tokens[1] == "normal"
     and not style.syntax_fonts.normal
     and render_line.text:find("[\128-\255]") == nil
+    and not has_ligature_sensitive_ascii(render_line.text)
   then
     local text = tokens[2]
     if text:sub(-1) == "\n" then text = text:sub(1, -2) end
@@ -4676,7 +4686,8 @@ function DocView:draw_line_text(line, x, y)
     and (not package.loaded["core.test"] or self.__test_force_known_bounds)
     and (core.window or self.__test_force_known_bounds)
     and pending_font == default_font
-    and not text:find("[\128-\255]") then
+    and not text:find("[\128-\255]")
+    and not has_ligature_sensitive_ascii(text) then
       local tab_offset = tx - start_tx
       local width = pending_has_tabs
         and fast_ascii_monospace_width(text, unwrapped_default_ascii_width, unwrapped_tab_width, tab_offset)
