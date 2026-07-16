@@ -221,6 +221,9 @@ Current first-party tests live in:
 - `tests/native` — native C/C++ tests wired into Meson, currently `anvil:fuzzy`.
 - `tests/gui/smoke` — actual GUI smoke tests that launch the real app window.
 
+IF THE FEATURE YOU IMPLEMENTED IS SMALL TO MEDIUM-SIZED, ONLY RUN THE SPECIFIC NEW TESTS.
+THE WHOLE TEST SUITE SHOULD ONLY BE RAN IF THE FEATURE YOU IMPLEMENTED IS VERY VERY BIG AND CROSSES A LOT OF BOUNDARIES.
+
 Run tests through Meson by default. The full Meson test command now includes Anvil's native fuzzy test plus the Lua runtime and in-process UI suites:
 
 ```sh
