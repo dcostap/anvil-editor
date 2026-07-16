@@ -47,6 +47,13 @@ test.describe("File Tree Line Hints", function()
       local ok, err = common.rm(context.temp_root, true)
       test.ok(ok, err)
     end
+    if context.saved_line_hint_state then
+      local state = context.saved_line_hint_state
+      state.filetree.line_hint_cache = state.line_hint_cache
+      state.filetree.line_hint_reference_time = state.line_hint_reference_time
+      state.filetree.get_folder_hint_counts = state.get_folder_hint_counts
+      os.time = state.os_time
+    end
   end)
 
   test.it("show file size/date and async direct folder counts/date", function(context)
@@ -118,5 +125,50 @@ test.describe("File Tree Line Hints", function()
 
     test.ok(file_hint:find("23 K", 1, true), file_hint)
     test.ok(file_hint:match("%d%d%d%d %a%a%a%s+%d+ %d%d:%d%d"), file_hint)
+  end)
+
+  test.it("shows a fixed prose age after the modified date", function(context)
+    local filetree = require "plugins.filetree"
+    context.saved_line_hint_state = {
+      filetree = filetree,
+      line_hint_cache = filetree.line_hint_cache,
+      line_hint_reference_time = filetree.line_hint_reference_time,
+      get_folder_hint_counts = filetree.get_folder_hint_counts,
+      os_time = os.time,
+    }
+    local now = os.time()
+    filetree.line_hint_reference_time = now
+    filetree.line_hint_cache = {}
+
+    local cases = {
+      { 22 * 60, "22 minutes ago" },
+      { 35 * 60, "35 minutes ago" },
+      { 60 * 60 + 35 * 60, "1:35 hours ago" },
+      { 24 * 60 * 60, "1 day ago" },
+      { 3 * 24 * 60 * 60, "3 days ago" },
+      { 60 * 24 * 60 * 60, "2 months ago" },
+      { 730 * 24 * 60 * 60, "2 years ago" },
+    }
+
+    for index, case in ipairs(cases) do
+      local hint = filetree:format_line_hint_for_path("relative-time-" .. index, {
+        type = "file",
+        size = 0,
+        modified = now - case[1],
+      })
+      local suffix = " · " .. case[2]
+      test.equal(hint:sub(-#suffix), suffix)
+    end
+
+    filetree.line_hint_reference_time = nil
+    filetree.get_folder_hint_counts = function() return { error = true } end
+    os.time = function() return now end
+    local info = { type = "dir", modified = now - 35 * 60 }
+    local first = filetree:format_line_hint_for_path("relative-time-dir", info)
+    os.time = function() return now + 24 * 60 * 60 end
+    local second = filetree:format_line_hint_for_path("relative-time-dir", info)
+
+    test.equal(second, first)
+    test.equal(second:sub(-#" · 35 minutes ago"), " · 35 minutes ago")
   end)
 end)

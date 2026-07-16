@@ -273,6 +273,40 @@ local function format_modified_time(modified)
   )
 end
 
+local function format_relative_time(modified, reference_time)
+  local value = tonumber(modified)
+  local now = tonumber(reference_time)
+  if not value or not now then return nil end
+
+  local age = math.max(0, now - value)
+  local minutes = math.floor(age / 60)
+  if minutes < 1 then return "just now" end
+  if minutes < 60 then
+    return string.format("%d minute%s ago", minutes, minutes == 1 and "" or "s")
+  end
+
+  local hours = math.floor(minutes / 60)
+  if hours < 24 then
+    local remaining_minutes = minutes % 60
+    if remaining_minutes == 0 then
+      return string.format("%d hour%s ago", hours, hours == 1 and "" or "s")
+    end
+    return string.format("%d:%02d hours ago", hours, remaining_minutes)
+  end
+
+  local days = math.floor(hours / 24)
+  if days < 30 then
+    return string.format("%d day%s ago", days, days == 1 and "" or "s")
+  end
+  if days < 365 then
+    local months = math.floor(days / 30)
+    return string.format("%d month%s ago", months, months == 1 and "" or "s")
+  end
+
+  local years = math.floor(days / 365)
+  return string.format("%d year%s ago", years, years == 1 and "" or "s")
+end
+
 local function count_direct_children(path, show_hidden, yield_budget)
   local names, err = system.list_dir(path)
   if not names then return nil, nil, err or "unable to list directory" end
@@ -1523,6 +1557,7 @@ function FileTreeView:refresh(keep_selection, preserve_expansion, reveal_paths)
   self.line_hint_count_cache = {}
   self.line_hint_count_pending = {}
   self.line_hint_count_queue = {}
+  self.line_hint_reference_time = os.time()
 
   local out = {}
   for i, item in ipairs(self.original_entries) do
@@ -1948,6 +1983,9 @@ function FileTreeView:format_line_hint_for_path(abs, info)
 
   local modified = format_modified_time(info.modified)
   if not modified then perf_finish(stats, "filetree_line_hint_format_ms", start); return nil end
+  if not self.line_hint_reference_time then self.line_hint_reference_time = os.time() end
+  local relative = format_relative_time(info.modified, self.line_hint_reference_time)
+  local modified_hint = relative and string.format("%s · %s", modified, relative) or modified
 
   if info.type == "file" then
     self.line_hint_cache = self.line_hint_cache or {}
@@ -1962,7 +2000,7 @@ function FileTreeView:format_line_hint_for_path(abs, info)
     end
 
     perf_add(stats, "filetree_line_hint_cache_misses", 1)
-    local text = string.format("%s · %s", format_file_size(info.size), modified)
+    local text = string.format("%s · %s", format_file_size(info.size), modified_hint)
     self.line_hint_cache[key] = {
       type = info.type,
       size = info.size,
@@ -1973,15 +2011,15 @@ function FileTreeView:format_line_hint_for_path(abs, info)
     return text
   elseif info.type == "dir" then
     local counts = self:get_folder_hint_counts(abs, info.modified, true)
-    if counts and counts.error then perf_finish(stats, "filetree_line_hint_format_ms", start); return modified end
+    if counts and counts.error then perf_finish(stats, "filetree_line_hint_format_ms", start); return modified_hint end
     if counts and counts.folders and counts.files then
       perf_add(stats, "filetree_line_hint_folder_count_hits", 1)
       perf_finish(stats, "filetree_line_hint_format_ms", start)
-      return string.format("%4d   · %s", counts.folders + counts.files, modified)
+      return string.format("%4d   · %s", counts.folders + counts.files, modified_hint)
     end
     perf_add(stats, "filetree_line_hint_folder_count_pending", 1)
     perf_finish(stats, "filetree_line_hint_format_ms", start)
-    return string.format("%s   · %s", "   …", modified)
+    return string.format("%s   · %s", "   …", modified_hint)
   end
   perf_finish(stats, "filetree_line_hint_format_ms", start)
 end
