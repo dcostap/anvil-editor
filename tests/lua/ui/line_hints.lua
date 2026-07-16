@@ -141,13 +141,15 @@ test.describe("File Tree Line Hints", function()
     filetree.line_hint_cache = {}
 
     local cases = {
-      { 22 * 60, "22 minutes ago" },
-      { 35 * 60, "35 minutes ago" },
-      { 60 * 60 + 35 * 60, "1:35 hours ago" },
+      { 22 * 60, "22 mins ago" },
+      { 35 * 60, "35 mins ago" },
+      { 60 * 60 + 35 * 60, "1:35 hrs ago" },
+      { 10 * 60 * 60 + 35 * 60, "10 hrs ago" },
+      { 23 * 60 * 60 + 59 * 60, "23 hrs ago" },
       { 24 * 60 * 60, "1 day ago" },
       { 3 * 24 * 60 * 60, "3 days ago" },
-      { 60 * 24 * 60 * 60, "2 months ago" },
-      { 730 * 24 * 60 * 60, "2 years ago" },
+      { 60 * 24 * 60 * 60, "2 mos ago" },
+      { 730 * 24 * 60 * 60, "2 yrs ago" },
     }
 
     for index, case in ipairs(cases) do
@@ -156,8 +158,10 @@ test.describe("File Tree Line Hints", function()
         size = 0,
         modified = now - case[1],
       })
-      local suffix = " · " .. case[2]
-      test.equal(hint:sub(-#suffix), suffix)
+      local relative_column = hint:match("· ([^·]*)$")
+      test.not_nil(relative_column, hint)
+      test.equal(#relative_column, 12)
+      test.equal((relative_column:gsub("%s+$", "")), case[2])
     end
 
     filetree.line_hint_reference_time = nil
@@ -169,6 +173,8 @@ test.describe("File Tree Line Hints", function()
     local second = filetree:format_line_hint_for_path("relative-time-dir", info)
 
     test.equal(second, first)
-    test.equal(second:sub(-#" · 35 minutes ago"), " · 35 minutes ago")
+    local relative_column = second:match("· ([^·]*)$")
+    test.equal(#relative_column, 12)
+    test.equal((relative_column:gsub("%s+$", "")), "35 mins ago")
   end)
 end)

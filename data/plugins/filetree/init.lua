@@ -273,6 +273,8 @@ local function format_modified_time(modified)
   )
 end
 
+local RELATIVE_TIME_COLUMN_WIDTH = 12
+
 local function format_relative_time(modified, reference_time)
   local value = tonumber(modified)
   local now = tonumber(reference_time)
@@ -282,16 +284,16 @@ local function format_relative_time(modified, reference_time)
   local minutes = math.floor(age / 60)
   if minutes < 1 then return "just now" end
   if minutes < 60 then
-    return string.format("%d minute%s ago", minutes, minutes == 1 and "" or "s")
+    return string.format("%d min%s ago", minutes, minutes == 1 and "" or "s")
   end
 
   local hours = math.floor(minutes / 60)
   if hours < 24 then
     local remaining_minutes = minutes % 60
-    if remaining_minutes == 0 then
-      return string.format("%d hour%s ago", hours, hours == 1 and "" or "s")
+    if hours > 9 or remaining_minutes == 0 then
+      return string.format("%d hr%s ago", hours, hours == 1 and "" or "s")
     end
-    return string.format("%d:%02d hours ago", hours, remaining_minutes)
+    return string.format("%d:%02d hrs ago", hours, remaining_minutes)
   end
 
   local days = math.floor(hours / 24)
@@ -300,11 +302,12 @@ local function format_relative_time(modified, reference_time)
   end
   if days < 365 then
     local months = math.floor(days / 30)
-    return string.format("%d month%s ago", months, months == 1 and "" or "s")
+    return string.format("%d mo%s ago", months, months == 1 and "" or "s")
   end
 
   local years = math.floor(days / 365)
-  return string.format("%d year%s ago", years, years == 1 and "" or "s")
+  if years > 99 then return "99+ yrs ago" end
+  return string.format("%d yr%s ago", years, years == 1 and "" or "s")
 end
 
 local function count_direct_children(path, show_hidden, yield_budget)
@@ -1985,7 +1988,10 @@ function FileTreeView:format_line_hint_for_path(abs, info)
   if not modified then perf_finish(stats, "filetree_line_hint_format_ms", start); return nil end
   if not self.line_hint_reference_time then self.line_hint_reference_time = os.time() end
   local relative = format_relative_time(info.modified, self.line_hint_reference_time)
-  local modified_hint = relative and string.format("%s · %s", modified, relative) or modified
+  local relative_column = relative
+    and string.format("%-" .. RELATIVE_TIME_COLUMN_WIDTH .. "s", relative)
+    or nil
+  local modified_hint = relative_column and string.format("%s · %s", modified, relative_column) or modified
 
   if info.type == "file" then
     self.line_hint_cache = self.line_hint_cache or {}
