@@ -1,7 +1,8 @@
 local core = require "core"
 local common = require "core.common"
-local style = require "core.style"
 local config = require "core.config"
+local file_context = require "core.file_context"
+local style = require "core.style"
 
 local LineWrapping = {}
 
@@ -797,13 +798,21 @@ function LineWrapping.guide_color()
 end
 
 function LineWrapping.draw_guide(docview)
-  if config.plugins.linewrapping.guide and docview.wrapped_settings.width ~= math.huge then
+  if config.plugins.linewrapping.guide
+  and file_context.is_editor_view(docview)
+  and docview.wrapped_settings.width ~= math.huge then
     local x = docview:get_content_offset()
     local gw = docview:get_gutter_width()
+    local guide_width = math.max(1, math.floor(SCALE))
+    local guide_x = x + gw + docview.wrapped_settings.width
+    local scrollbar_width = docview.v_scrollbar.expanded_size or style.expanded_scrollbar_size
+    local content_left = docview.position.x + gw
+    local content_right = docview.position.x + docview.size.x - scrollbar_width
+    if guide_x <= content_left or guide_x + guide_width >= content_right then return end
     renderer.draw_rect(
-      x + gw + docview.wrapped_settings.width,
+      guide_x,
       docview.position.y,
-      math.max(1, math.floor(SCALE)),
+      guide_width,
       docview.size.y,
       LineWrapping.guide_color()
     )

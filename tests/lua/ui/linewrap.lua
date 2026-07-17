@@ -2,6 +2,7 @@ local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
 local command = require "core.command"
+local DocView = require "core.docview"
 local style = require "core.style"
 local test = require "core.test"
 local tokenizer = require "core.tokenizer"
@@ -67,6 +68,18 @@ local function configure_wrapping_for_test(context, view)
 
   view.wrapping_enabled = true
   LineWrapping.update_docview_breaks(view)
+end
+
+local function count_wrap_guides(view)
+  local count = 0
+  local old_draw_rect = renderer.draw_rect
+  renderer.draw_rect = function(_, _, _, _, color)
+    if color == style.line_wrapping_guide then count = count + 1 end
+  end
+  local ok, err = pcall(LineWrapping.draw_guide, view)
+  renderer.draw_rect = old_draw_rect
+  if not ok then error(err, 0) end
+  return count
 end
 
 local function restore_config(context)
@@ -1114,6 +1127,26 @@ test.describe("line wrapping visual navigation", function()
     if not ok then error(err, 0) end
 
     test.same(events, { "guide", "caret" })
+  end)
+
+  test.it("hides the wrap guide when wrapping follows the viewport edge", function(context)
+    local view = open_editor(context, string.rep("x", 40))
+    configure_wrapping_for_test(context, view)
+    config.plugins.linewrapping.width_override = nil
+    LineWrapping.update_docview_breaks(view)
+
+    test.equal(count_wrap_guides(view), 0)
+  end)
+
+  test.it("hides the wrap guide in document-backed tool views", function(context)
+    local doc = track(context, "docs", core.open_doc())
+    doc:text_input(string.rep("x", 40))
+    local view = track(context, "views", DocView(doc))
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 320, 240
+    configure_wrapping_for_test(context, view)
+
+    test.equal(count_wrap_guides(view), 0)
   end)
 
   test.it("draws visual-end caret on the previous wrapped row before right moves to the next row", function(context)

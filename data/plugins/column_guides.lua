@@ -3,6 +3,7 @@
 local core = require "core"
 local command = require "core.command"
 local config = require "core.config"
+local file_context = require "core.file_context"
 local style = require "core.style"
 local DocView = require "core.docview"
 
@@ -50,7 +51,7 @@ config.plugins.column_guides.config_spec = {
   }
 
 local function guide_color()
-  return style.whitespace
+  return style.line_wrapping_guide
 end
 
 local function guide_columns(conf)
@@ -72,6 +73,7 @@ end
 local function draw_column_guides(dv)
   local conf = config.plugins.column_guides
   if type(conf) ~= "table" or conf.enabled == false then return end
+  if not file_context.is_editor_view(dv) then return end
 
   local font = dv:get_font()
   local char_w = font:get_width("n")
