@@ -106,13 +106,15 @@ end
 local TITLEBAR_PANE_SAFE_ZONE_RATIO = 0.15
 local HIDDEN_RIGHT_TABS_OPACITY = 0.60
 
-local function color_with_opacity(color, opacity)
+local function color_faded_over_titlebar(color, opacity)
   if not color or opacity >= 1 then return color end
+  local effective_opacity = opacity * (color[4] or 255) / 255
+  local background = style.titlebar
   return {
-    color[1] or 0,
-    color[2] or 0,
-    color[3] or 0,
-    math.floor((color[4] or 255) * opacity + 0.5),
+    math.floor(background[1] + ((color[1] or 0) - background[1]) * effective_opacity + 0.5),
+    math.floor(background[2] + ((color[2] or 0) - background[2]) * effective_opacity + 0.5),
+    math.floor(background[3] + ((color[3] or 0) - background[3]) * effective_opacity + 0.5),
+    255,
   }
 end
 
@@ -392,7 +394,7 @@ function TitleBar:draw_titlebar_tabs()
       local opacity = pane == "right" and not panes().right_visible()
         and HIDDEN_RIGHT_TABS_OPACITY or 1
       local function pane_color(color)
-        return color_with_opacity(color, opacity)
+        return color_faded_over_titlebar(color, opacity)
       end
       local full_x, full_y, _, full_h = self:get_pane_tabs_rect(pane)
       local x, y, w, h, show_left, show_right = self:get_titlebar_tabs_content_rect(pane, node, views)

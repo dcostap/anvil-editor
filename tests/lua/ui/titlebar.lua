@@ -219,6 +219,12 @@ test.describe("Title Bar", function()
     titlebar:draw_titlebar_tabs()
 
     test.not_nil(title_color)
-    test.equal(title_color[4], math.floor((style.text[4] or 255) * 0.60 + 0.5))
+    test.equal(title_color[4], 255)
+    for channel = 1, 3 do
+      local background = style.titlebar[channel]
+      local foreground = style.text[channel]
+      test.ok(title_color[channel] > math.min(background, foreground))
+      test.ok(title_color[channel] < math.max(background, foreground))
+    end
   end)
 end)
