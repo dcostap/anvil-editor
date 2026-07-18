@@ -69,8 +69,8 @@ A focusable place the user can return to through the current Navigation Scope's 
 _Avoid_: editor-only location, browser page
 
 **Navigation Scope**:
-A focused work context that owns an independent Navigation History, such as Editors collectively, the File Tree, one Command Output panel, or one Project's Git View family.
-_Avoid_: global history, focus group
+A top-level pane that owns one independent Navigation History shared by all of its Pane Views.
+_Avoid_: tool-specific history, global history, focus group
 
 **Navigation History**:
 A Navigation Scope's back/forward sequence of Navigation Places used to return through recent focus and location changes without crossing into another scope.
@@ -116,28 +116,20 @@ _Avoid_: Buffer, editor tab
 An Editor mode that presents formatted Markdown inline while keeping the underlying Markdown source directly editable.
 _Avoid_: Live Markdown Editor, Markdown Live Editor
 
-**Main Editor**:
-An Editor hosted in the Main Panel.
-_Avoid_: Main DocView, primary editor
+**Blank Editor Placeholder**:
+The tabless blank editing surface shown when the Left Pane has no Open Views. It keeps the Left Pane present without representing a real open tab.
+_Avoid_: Empty tab, welcome tab
 
 **Zoom**:
 The user-facing way to make Anvil's interface and document text larger or smaller without changing Document contents.
 _Avoid_: Scale in user-facing command names
 
-**Side Editor**:
-An Editor hosted in the Side Editor Slot for the split-editor experience.
-_Avoid_: Side DocView, Side Panel DocView, Split DocView, side buffer
-
-**Side Editor Slot**:
-A secondary editor area that can show one Side Editor while the active Main Surface is an Editing Surface. It hides whenever the Side Panel is visible.
-_Avoid_: Side Panel file tab, side split panel
-
 **Editing Surface**:
-A Main Surface whose primary purpose is editing or navigating a Document.
+A Pane View whose primary purpose is editing or navigating a Document.
 _Avoid_: Code context, editor context
 
 **Surface Focus Target**:
-A focusable sub-area inside the active Main Surface, such as a Git list pane or Git diff text pane.
+A focusable sub-area inside a Pane View, such as a Git list pane or Git diff text pane.
 _Avoid_: listener, split
 
 **Selection State**:
@@ -168,24 +160,36 @@ _Avoid_: Selection session
 The top-level UI container for the editor window.
 _Avoid_: App shell, main panel
 
-**Main Panel**:
-The main document-editing area where ordinary Document Views open by default.
-_Avoid_: Primary node, primary panel, main view
+**Left Pane**:
+The permanent left-side top-level view container. It cannot be hidden and shows the Blank Editor Placeholder when it has no Open Views.
+_Avoid_: Main Panel, primary pane, left split
 
-**Main Tab**:
-A top-level titlebar tab that switches the Main Panel between major work surfaces, such as the Main Editor, an untitled document, or a Git-related view.
-_Avoid_: File tab, buffer tab, Node tab
+**Right Pane**:
+The hideable right-side top-level view container. It owns right-side tools such as the File Tree as well as Editors opened on the right.
+_Avoid_: Side Panel, Side Editor Slot, right split
 
-**Main Surface**:
-The work surface activated by a Main Tab.
-_Avoid_: Main tab content, workspace view
+**Pane View**:
+A top-level work surface belonging to the Left Pane or Right Pane.
+_Avoid_: Main Surface, pane content
 
-**Side Panel**:
-The right-side UI panel that appears when needed, takes a substantial portion of the window width, and hosts auxiliary tool views such as the file tree. The Side Panel is global and independent of Main Tabs.
-_Avoid_: Side node, secondary panel, Side Editor Slot
+**Open View**:
+A Pane View retained by its pane and represented by a Pane Tab.
+_Avoid_: Active View, loaded tab
+
+**Selected View**:
+The Open View selected for presentation in its pane. It is visible whenever its pane is shown.
+_Avoid_: Active View, visible active view
+
+**Focused View**:
+The Selected View whose focus scope currently receives input, including input received by one of its Surface Focus Targets.
+_Avoid_: Focused active view, globally active view
+
+**Pane Tab**:
+A Title Bar tab representing one Open View in either the Left Pane or Right Pane.
+_Avoid_: Main Tab, file tab, buffer tab, Node tab
 
 **File Tree**:
-A Side Panel tool for viewing and editing Project files and directories.
+A permanent, singleton Right Pane tool for viewing and editing Project files and directories.
 _Avoid_: old file tree
 
 **Project Paths View**:
@@ -257,11 +261,11 @@ A floating in-window tool for inspecting and temporarily changing the current th
 _Avoid_: Theme popup, color config
 
 **Git View**:
-The family of top-level Git-related Main Surfaces for a Project, including the Git Log, Commit Diff Views, File History Views, Directory History Views, and Combined Path History Views. It is not a visible container with nested tabs.
+The family of top-level Git-related Pane Views for a Project, including the Git Log, Commit Diff Views, File History Views, Directory History Views, and Combined Path History Views. It is not a visible container with nested tabs.
 _Avoid_: Git popup, Git panel, Git tab container
 
 **Git Log**:
-The singleton Main Tab for browsing commits from one selected Git repository in a Project and opening commit-focused views. Closing its visible tab hides it so the same Git Log can be restored later.
+The singleton Left Pane tab for browsing commits from one selected Git repository in a Project and opening commit-focused views. Closing its visible tab hides it so the same Git Log can be restored later.
 _Avoid_: commit browser, main Git View
 
 **Selected Git Repository**:
@@ -269,19 +273,19 @@ The repository whose commits the Project's singleton Git Log currently displays.
 _Avoid_: active repository, current repo
 
 **Commit Diff View**:
-A closable Main Tab for browsing all files changed by a commit or working-tree state and comparing them against another Git state.
+A closable Left Pane tab for browsing all files changed by a commit or working-tree state and comparing them against another Git state.
 _Avoid_: commit diff tab
 
 **File History View**:
-A closable Main Tab showing revisions affecting one project file or a selection within that file.
+A closable Left Pane tab showing revisions affecting one project file or a selection within that file.
 _Avoid_: file log, selection log
 
 **Directory History View**:
-A closable Main Tab showing revisions that affected paths beneath one project directory.
+A closable Left Pane tab showing revisions that affected paths beneath one project directory.
 _Avoid_: folder log, directory log
 
 **Combined Path History View**:
-A closable Main Tab showing revisions that affected any path in a selected set of project files or directories.
+A closable Left Pane tab showing revisions that affected any path in a selected set of project files or directories.
 _Avoid_: multi-file log, combined log
 
 **Local Changes Revision**:
@@ -301,7 +305,7 @@ One document surface in a Diff View, representing one of the compared text sourc
 _Avoid_: diff pane, side view
 
 **Text Diff View**:
-A top-level Main Tab comparing arbitrary text selections or generated text, independent of whether the text came from Git.
+A Left Pane tab comparing arbitrary text selections or generated text, independent of whether the text came from Git.
 _Avoid_: string comparison
 
 **Blank Diff View**:

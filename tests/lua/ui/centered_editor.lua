@@ -42,7 +42,7 @@ local function save_centered_config(context)
     max_width = cfg.max_width,
     scale_width = cfg.scale_width,
     min_margin = cfg.min_margin,
-    main_tabs_only = cfg.main_tabs_only,
+    pane_views_only = cfg.pane_views_only,
   }
 end
 
@@ -54,7 +54,7 @@ local function restore_centered_config(context)
   cfg.max_width = saved.max_width
   cfg.scale_width = saved.scale_width
   cfg.min_margin = saved.min_margin
-  cfg.main_tabs_only = saved.main_tabs_only
+  cfg.pane_views_only = saved.pane_views_only
 end
 
 local function use_test_centered_config()
@@ -63,7 +63,7 @@ local function use_test_centered_config()
   cfg.max_width = 200
   cfg.scale_width = false
   cfg.min_margin = 0
-  cfg.main_tabs_only = true
+  cfg.pane_views_only = true
 end
 
 test.describe("centered editor", function()

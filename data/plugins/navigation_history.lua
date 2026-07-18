@@ -8,13 +8,11 @@ local common = require "core.common"
 local config = require "core.config"
 local file_context = require "core.file_context"
 local Node = require "core.node"
-local sidepanel = require "core.sidepanel"
+local panes = require "core.panes"
 
 local M = {}
 
 local histories = {}
-local EDITOR_SCOPE = "editors"
-local FILE_TREE_SCOPE = "file-tree"
 local restoring = false
 local suppress_count = 0
 
@@ -28,10 +26,10 @@ local tracked_commands = {
   ["find-replace:previous-find"] = true,
   ["poi:previous"] = true,
   ["poi:next"] = true,
-  ["poi:side-previous-activate"] = true,
-  ["poi:side-next-activate"] = true,
+  ["poi:right-previous-activate"] = true,
+  ["poi:right-next-activate"] = true,
   ["poi:activate"] = true,
-  ["poi:activate-side"] = true,
+  ["poi:activate-right"] = true,
   ["filetree:focus-current-file"] = true,
   ["filetree:focus-file"] = true,
   ["filetree:up-dir"] = true,
@@ -146,7 +144,7 @@ end
 local function is_transient_place_view(view)
   if not view then return true end
   if view == core.global_prompt_bar or view == core.nag_view or view == core.status_bar or view == core.title_bar then return true end
-  if view.__sidepanel_placeholder then return true end
+  if panes.is_placeholder(view) then return true end
   if view.local_find_input then return true end
   if fuzzy_searcher_owns_view(view) then return true end
   return false
@@ -155,7 +153,7 @@ end
 local function command_output_owner(view)
   if not view then return nil end
   if view.command_output_panel then return view end
-  local owner = view.__sidepanel_focus_owner
+  local owner = view.__pane_focus_owner
   if view.command_output_view and owner and owner.command_output_panel then return owner end
 end
 
@@ -176,24 +174,28 @@ end
 local function navigation_scope(view)
   if type(view) ~= "table" or is_transient_place_view(view) then return nil end
 
+  local pane, pane_owner = panes.pane_for_view(view)
+  if not pane then return nil end
+
   local owner = git_owner(view)
   if owner then
     return {
-      key = owner.tool_window or owner.model,
+      key = pane,
       kind = "git",
       owner = owner,
+      pane = pane,
     }
   end
 
   owner = command_output_owner(view)
-  if owner then return { key = owner, kind = "command-output", owner = owner } end
+  if owner then return { key = pane, kind = "command-output", owner = owner, pane = pane } end
 
   if view.navigation_scope_kind == "file-tree" then
-    return { key = FILE_TREE_SCOPE, kind = "file-tree", owner = view }
+    return { key = pane, kind = "file-tree", owner = view, pane = pane }
   end
 
   if file_context.is_editor_view(view) or (view.doc and view.doc.git_historical_read_only) then
-    return { key = EDITOR_SCOPE, kind = "editor", owner = view }
+    return { key = pane, kind = "editor", owner = pane_owner or view, pane = pane }
   end
 end
 
@@ -317,11 +319,10 @@ local function place_label(place)
   if not place then return "<nil>" end
   local selection_count = place.selection_state and math.floor(#(place.selection_state.selections or {}) / 4) or 0
   return string.format(
-    "{scope=%s key=%s file=%s view=%s doc=%s sel=%s,%s-%s,%s selections=%d scroll=%.1f,%.1f side=%s/%s/%s git=%s/%s/%s output_slot=%s tree_dir=%s}",
-    tostring(place.scope_kind), tostring(place.scope_key), tostring(place.filename), tostring(place.view),
+    "{scope=%s key=%s pane=%s file=%s view=%s doc=%s sel=%s,%s-%s,%s selections=%d scroll=%.1f,%.1f git=%s/%s/%s output_slot=%s tree_dir=%s}",
+    tostring(place.scope_kind), tostring(place.scope_key), tostring(place.pane), tostring(place.filename), tostring(place.view),
     tostring(place.doc), tostring(place.line), tostring(place.col), tostring(place.line2), tostring(place.col2),
     selection_count, tonumber(place.scroll_x) or 0, tonumber(place.scroll_y) or 0,
-    tostring(place.side_view), tostring(place.side_file), tostring(place.side_editor),
     tostring(place.git_tab_id), tostring(place.git_pane), tostring(place.git_diff_side),
     tostring(place.output_slot_index), tostring(place.file_tree_current_dir))
 end
@@ -397,7 +398,6 @@ function M.capture_place(view)
   local line2 = selections[offset + 2] or line
   local col2 = selections[offset + 3] or col
   local path = doc and doc.abs_filename or view.path
-  local is_side_view = sidepanel.is_side_view(view)
   local output_owner = scope.kind == "command-output" and scope.owner or nil
   local git_view = scope.kind == "git" and scope.owner or nil
   local git_diff_side
@@ -416,12 +416,10 @@ function M.capture_place(view)
     scope_key = scope.key,
     scope_kind = scope.kind,
     scope_owner = scope.owner,
+    pane = scope.pane,
     view = view,
     doc = doc,
     filename = path and common.normalize_path(path) or nil,
-    side_view = is_side_view,
-    side_file = is_side_view and view == sidepanel.file_view,
-    side_editor = is_side_view and sidepanel.is_side_editor(view),
     selection_state = clone_selection_state(selection_state),
     line = line,
     col = col,
@@ -460,7 +458,7 @@ local function place_invalid_reason(place)
     local view = owner.views and owner.views[place.output_slot_index]
     if not view then return "command-output-view-missing" end
     if view ~= place.view then return "command-output-view-replaced" end
-    if view.__sidepanel_focus_owner ~= owner then return "command-output-owner-changed" end
+    if view.__pane_focus_owner ~= owner then return "command-output-owner-changed" end
     if not output_entry_exists(view.slot, place.output_entry) then return "command-output-entry-evicted" end
     return nil
   end
@@ -493,10 +491,9 @@ local function place_invalid_reason(place)
     if place.doc ~= nil and place.view.doc ~= place.doc then return "open-view-document-changed" end
     return nil
   end
-  -- A removed side tool cannot be recreated as its original view type. Side
-  -- Editors and the replaceable side file view can be rebuilt from a Document
-  -- or path while preserving their side location.
-  if place.side_view and not (place.side_file or place.side_editor) then return "removed-side-tool-not-rebuildable" end
+  if place.scope_kind ~= "editor" and place.view and not view_is_open(place.view) then
+    return "removed-tool-not-rebuildable"
+  end
   if place.doc and doc_in_core_docs(place.doc) then return nil end
   if not place.filename then return "document-closed-and-no-filename" end
   if not system.get_file_info(place.filename) then return "file-missing" end
@@ -594,7 +591,7 @@ function M.record_place(place, opts)
   else
     dump_history(place.scope_key, history, "after-rejected-record:" .. reason)
   end
-  if reason == "main-editor-replace" then flush_debug_log() end
+  if reason == "pane-editor-replace" then flush_debug_log() end
   return recorded
 end
 
@@ -705,41 +702,13 @@ end
 local function restore_missing_view(place, doc)
   debug_log("restore missing view begin place=%s supplied_doc=%s doc_open=%s",
     place_label(place), tostring(doc), tostring(doc and doc_in_core_docs(doc)))
-  if place.side_view and (place.side_file or place.side_editor) then
-    local side_panel_was_visible = sidepanel.visible
-    local view
-
-    if place.filename and not (doc and doc_in_core_docs(doc)) then
-      if place.doc then
-        doc = core.open_doc(place.filename)
-      else
-        view = sidepanel.open_path_in_side(place.filename, { focus = false })
-      end
-    end
-    if not view and doc then
-      view = sidepanel.open_doc_in_side(doc, { focus = false })
-    end
-
-    if view then
-      if side_panel_was_visible then
-        sidepanel.show(view, { focus = false })
-      else
-        sidepanel.make_view_visible(view)
-      end
-      debug_log("rebuilt side navigation target %s", place_label(place))
-    end
-    debug_log("restore missing side view result place=%s view=%s doc=%s",
-      place_label(place), view_label(view), tostring(doc))
-    return view, doc
-  end
-
   if place.filename then
-    debug_log("restore missing main view opening file=%s", tostring(place.filename))
+    debug_log("restore missing pane view opening file=%s pane=%s", tostring(place.filename), tostring(place.pane))
     doc = core.open_doc(place.filename)
   end
   if doc then
-    local view = core.root_panel:open_doc(doc)
-    debug_log("restore missing main view result place=%s view=%s doc=%s",
+    local view = panes.open_doc(doc, { pane = place.pane or place.scope_key, focus = false })
+    debug_log("restore missing pane view result place=%s view=%s doc=%s",
       place_label(place), view_label(view), tostring(doc))
     return view, doc
   end
@@ -750,7 +719,7 @@ end
 local function restore_command_output_place(place)
   local owner = place.scope_owner
   if not (owner and place.output_slot_index) then return nil end
-  sidepanel.show(owner, { focus = false })
+  panes.show(place.pane or "right", { view = owner, focus = false })
   local view = owner:select_slot(place.output_slot_index, { focus = true })
   local slot = view and view.slot
   if view and output_entry_exists(slot, place.output_entry)
@@ -918,15 +887,13 @@ function M.restore_place(place)
       if not view then
         debug_log("restore route=rebuild-missing-view place=%s", place_label(place))
         view, doc = restore_missing_view(place, doc)
-      elseif sidepanel.is_side_view(view) then
-      -- Restoring a side target selects it, but presentation remains current:
-      -- an existing Side Editor Slot stays a slot, while tools that have no
-      -- slot presentation show the Side Panel.
-        sidepanel.make_view_visible(view)
       else
         local node = core.root_panel.root_node:get_node_for_view(view)
-        debug_log("restore route=existing-main-view node=%s view=%s", tostring(node), view_label(view))
-        if node then node:set_active_view(view) end
+        debug_log("restore route=existing-pane-view node=%s view=%s", tostring(node), view_label(view))
+        if node then
+          node:set_active_view(view)
+          panes.show(place.pane or place.scope_key, { view = view, focus = false })
+        end
       end
     end
     if not view then error("could not open navigation target") end

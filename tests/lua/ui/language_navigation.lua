@@ -58,10 +58,10 @@ test.describe("language navigation", function()
     context.original_projects = core.projects
     context.original_active_view = core.active_view
     context.original_cwd = system.getcwd()
-    context.original_main_panel_views = nil
-    local node = core.root_panel and core.root_panel:get_main_panel()
+    context.original_left_pane_views = nil
+    local node = core.root_panel and core.root_panel:get_left_pane()
     if node then
-      context.original_main_panel_views = { views = node.views, active_view = node.active_view }
+      context.original_left_pane_views = { views = node.views, active_view = node.active_view }
       node.views = {}
       node:add_view(EmptyView())
       core.set_active_view(node.active_view)
@@ -93,11 +93,11 @@ test.describe("language navigation", function()
         test.ok(ok, err)
       end
     end
-    if context.original_main_panel_views then
-      local node = core.root_panel and core.root_panel:get_main_panel()
+    if context.original_left_pane_views then
+      local node = core.root_panel and core.root_panel:get_left_pane()
       if node then
-        node.views = context.original_main_panel_views.views
-        node.active_view = context.original_main_panel_views.active_view
+        node.views = context.original_left_pane_views.views
+        node.active_view = context.original_left_pane_views.active_view
       end
     end
     core.projects = context.original_projects
@@ -136,12 +136,12 @@ target :: proc() {}
     end))
 
     local project_file_tabs = 0
-    for _, item in ipairs(core.root_panel:get_main_panel().views) do
+    for _, item in ipairs(core.root_panel:get_left_pane().views) do
       if item.doc and item.doc.abs_filename and common.path_belongs_to(item.doc.abs_filename, context.temp_root) then
         project_file_tabs = project_file_tabs + 1
       end
     end
-    test.equal(project_file_tabs, 1)
+    test.equal(project_file_tabs, 2, "dirty source Editor should remain as a dedicated Pane Tab")
     local doc = core.active_view.doc
     local line1, col1, line2, col2 = doc:get_selection(true)
     test.equal(line1, 3)

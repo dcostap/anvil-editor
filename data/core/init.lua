@@ -627,8 +627,7 @@ function core.init()
 
   -- Some plugins (eg: console) require the Root Panel layout tree to be initialized to defaults.
   local cur_node = core.root_panel.root_node
-  cur_node.is_main_panel_node = true
-  cur_node.is_primary_node = true -- deprecated compatibility alias
+  cur_node.pane_id = "left"
   cur_node:split("up", core.title_bar, {y = true})
   cur_node = cur_node.b
   cur_node:split("up", core.nag_view, {y = true})
@@ -639,14 +638,10 @@ function core.init()
   -- Load default commands first so plugins/core features can override them.
   command.add_defaults()
 
-  -- Core right-side panel manager. It is initialized before plugins so panels
-  -- can register views into the shared side node during plugin loading.
-  require "core.sidepanel"
-
-  -- Ensure an empty project starts with the singleton Main Editor Main Tab. This
-  -- runs after the Side Panel has created its locked node so the tab is added to
-  -- the real Main Panel leaf, not to the pre-sidepanel layout root.
-  require("core.main_tabs").ensure_main_editor()
+  -- Build the two top-level panes before plugins register permanent Pane Views.
+  local panes = require "core.panes"
+  panes.ensure_nodes()
+  panes.ensure_left_placeholder()
 
   -- Shared Point of Interest navigation commands/keymaps are loaded before
   -- plugins so providers can attach themselves during plugin initialization.
@@ -1616,7 +1611,9 @@ function core.open_image(filename)
     if not file then return false end
     file:close()
 
-    local node = core.root_panel:get_active_node_default()
+    local panes = require "core.panes"
+    local pane = panes.resolve_target()
+    local node = panes.node(pane)
     for i, view in ipairs(node.views) do
       if common.path_equals(view.path, abs_filename) then
         node:set_active_view(node.views[i])
@@ -1625,7 +1622,7 @@ function core.open_image(filename)
     end
     local view = ImageView(abs_filename)
     if view.image then
-      node:add_view(view)
+      panes.open_view(view, { pane = pane, focus = true })
       core.root_panel.root_node:update_layout()
       return view
     else
@@ -1649,7 +1646,9 @@ function core.open_markdown(filename)
     end
     file:close()
 
-    local node = core.root_panel:get_active_node_default()
+    local panes = require "core.panes"
+    local pane = panes.resolve_target()
+    local node = panes.node(pane)
     for i, view in ipairs(node.views) do
       if common.path_equals(view.path, filename) then
         node:set_active_view(node.views[i])
@@ -1658,7 +1657,7 @@ function core.open_markdown(filename)
     end
 
     local view = MarkdownView(filename)
-    node:add_view(view)
+    panes.open_view(view, { pane = pane, focus = true })
     core.root_panel.root_node:update_layout()
     return view
   end
@@ -1671,11 +1670,7 @@ end
 ---@param filename string Path to the file to open
 ---@return core.imageview|core.docview
 function core.open_file(filename)
-  local view = core.open_image(filename)
-  if not view then
-    return core.root_panel:open_doc(core.open_doc(filename))
-  end
-  return view
+  return require("core.panes").open_path(filename)
 end
 
 
@@ -1889,9 +1884,9 @@ function core.on_event(type, ...)
       return true
     end
     if core.active_window ~= core.window then
-      local main_node = core.root_panel and core.root_panel.get_main_panel and core.root_panel:get_main_panel()
-      if main_node and main_node.active_view then
-        activate_for_main_window(main_node.active_view)
+      local left_node = core.root_panel and core.root_panel.get_left_pane and core.root_panel:get_left_pane()
+      if left_node and left_node.active_view then
+        activate_for_main_window(left_node.active_view)
       else
         core.active_window = core.window
       end

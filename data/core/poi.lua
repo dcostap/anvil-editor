@@ -2,6 +2,7 @@ local core = require "core"
 local command = require "core.command"
 local keymap = require "core.keymap"
 local navigation_feedback = require "core.navigation_feedback"
+local panes = require "core.panes"
 
 local M = core.poi or {}
 core.poi = M
@@ -192,29 +193,17 @@ function M.activate(view, poi, opts)
   return false
 end
 
-local function focus_view_for_side_owner(owner)
-  local sidepanel = core.sidepanel or package.loaded["core.sidepanel"]
-  if sidepanel and owner and type(sidepanel.restorable_side_focus_view) == "function" then
-    owner = sidepanel.restorable_side_focus_view(owner) or owner
-  end
+local function focus_view_for_pane_owner(owner)
   if owner and type(owner.get_focus_view) == "function" then
     return owner:get_focus_view() or owner
   end
   return owner
 end
 
-function M.side_target_view()
-  local sidepanel = core.sidepanel or package.loaded["core.sidepanel"]
-  if not sidepanel then return nil end
-  local active = core.active_view
-  local owner = sidepanel.side_focus_owner and sidepanel.side_focus_owner(active)
-  if owner then return focus_view_for_side_owner(owner) end
-  if sidepanel.visible and sidepanel.active_side_view then
-    owner = sidepanel.active_side_view()
-    if owner and not owner.__sidepanel_placeholder then
-      return focus_view_for_side_owner(owner)
-    end
-  end
+function M.right_target_view()
+  if not panes.right_visible() then return nil end
+  local owner = panes.selected_view("right")
+  if owner and not panes.is_placeholder(owner) then return focus_view_for_pane_owner(owner) end
 end
 
 local function active_view_has_activatable_poi(...)
@@ -223,16 +212,14 @@ local function active_view_has_activatable_poi(...)
   return poi ~= nil, view, poi, ...
 end
 
-local function perform_side_navigate_activate(direction)
+local function perform_right_navigate_activate(direction)
   local starting_focus = core.active_view
-  local sidepanel = core.sidepanel or package.loaded["core.sidepanel"]
-  local starting_side_owner = sidepanel and sidepanel.side_focus_owner and sidepanel.side_focus_owner(starting_focus)
-  local target = M.side_target_view()
-  local selected = M.navigate(target, direction, { source = "side-panel" })
+  local starting_right = panes.pane_for_view(starting_focus) == "right"
+  local target = M.right_target_view()
+  local selected = M.navigate(target, direction, { source = "right-pane" })
   if type(selected) ~= "table" then return end
-  local preserve_side_focus = starting_side_owner ~= nil
-  M.activate(target, selected, { preserve_focus = preserve_side_focus, source = "side-panel" })
-  if preserve_side_focus and starting_focus then core.set_active_view(starting_focus) end
+  M.activate(target, selected, { pane = "left", preserve_focus = starting_right, source = "right-pane" })
+  if starting_right and starting_focus then core.set_active_view(starting_focus) end
 end
 
 command.add(nil, {
@@ -242,11 +229,11 @@ command.add(nil, {
   ["poi:next"] = function()
     M.navigate(core.active_view, 1)
   end,
-  ["poi:side-previous-activate"] = function()
-    perform_side_navigate_activate(-1)
+  ["poi:right-previous-activate"] = function()
+    perform_right_navigate_activate(-1)
   end,
-  ["poi:side-next-activate"] = function()
-    perform_side_navigate_activate(1)
+  ["poi:right-next-activate"] = function()
+    perform_right_navigate_activate(1)
   end,
 })
 
@@ -254,8 +241,8 @@ command.add(active_view_has_activatable_poi, {
   ["poi:activate"] = function(view, poi)
     M.activate(view, poi, { preserve_focus = false })
   end,
-  ["poi:activate-side"] = function(view, poi)
-    M.activate(view, poi, { side = true, preserve_focus = false })
+  ["poi:activate-right"] = function(view, poi)
+    M.activate(view, poi, { pane = "right", preserve_focus = false })
   end,
 })
 
@@ -263,10 +250,10 @@ keymap.add({
   ["ctrl+alt+,"] = "poi:previous",
   ["ctrl+alt+."] = "poi:next",
   ["alt+r"] = "poi:activate",
-  ["alt+shift+r"] = "poi:activate-side",
-  ["ctrl+shift+r"] = "poi:activate-side",
-  ["alt+8"] = "poi:side-previous-activate",
-  ["alt+9"] = "poi:side-next-activate",
+  ["alt+shift+r"] = "poi:activate-right",
+  ["ctrl+shift+r"] = "poi:activate-right",
+  ["alt+8"] = "poi:right-previous-activate",
+  ["alt+9"] = "poi:right-next-activate",
 })
 
 return M

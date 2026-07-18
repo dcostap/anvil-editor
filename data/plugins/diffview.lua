@@ -8,6 +8,7 @@ local style = require "core.style"
 local DocView = require "core.docview"
 local Doc = require "core.doc"
 local View = require "core.view"
+local panes = require "core.panes"
 local diff_model = require "plugins.diff.model"
 
 ---Configuration options for `diffview` plugin.
@@ -362,6 +363,7 @@ end
 ---@param compare_type? plugins.diffview.view.type
 ---@param names? plugins.diffview.view.string_names
 function DiffView:new(a, b, compare_type, names)
+  self.__hide_right_pane_on_focus = true
   DiffView.super.new(self)
 
   self.scrollable = true
@@ -1695,7 +1697,7 @@ local function start_compare()
     return
   end
   local view = DiffView(element_a, element_b, DiffView.type.FILE_FILE)
-  core.root_panel:get_active_node_default():add_view(view)
+  panes.open_view(view, { pane = "left", focus = true })
   core.set_active_view(view)
   element_a = nil
   element_b = nil
@@ -1707,7 +1709,7 @@ local function start_compare_string()
     return
   end
   local view = DiffView(element_a_text, element_b_text, DiffView.type.STRING_STRING)
-  core.root_panel:get_active_node_default():add_view(view)
+  panes.open_view(view, { pane = "left", focus = true })
   core.set_active_view(view)
   element_a_text = nil
   element_b_text = nil
@@ -2127,7 +2129,7 @@ end
 ---Helper differences view to rootpanel add.
 ---@param view plugins.diffview.view
 compare_add_to_root_node = function(view)
-  core.root_panel:get_active_node_default():add_view(view)
+  panes.open_view(view, { pane = "left", focus = true })
   core.set_active_view(view)
 end
 

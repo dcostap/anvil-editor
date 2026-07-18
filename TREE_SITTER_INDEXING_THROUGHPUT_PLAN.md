@@ -397,7 +397,7 @@ Initial hot spots from captures and static scan:
   - this maps primarily to Milestone 8 if it needs reusable file walking / metadata jobs.
 - `data/plugins/gitdiff_highlight/init.lua`
   - process-backed diff/highlight refresh work that can still run expensive adoption on the UI coroutine.
-- Older file search paths such as `data/plugins/findfile.lua` and `data/plugins/projectsearch.lua`, which predate the worker-pool indexing model.
+- Older file search paths such as `data/plugins/findfile.lua`, which predate the worker-pool indexing model.
 
 ### Work
 

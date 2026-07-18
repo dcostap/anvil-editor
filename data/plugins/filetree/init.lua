@@ -11,7 +11,7 @@ local Doc = require "core.doc"
 local DocView = require "core.docview"
 local file_context = require "core.file_context"
 local project_paths = require "core.project_paths"
-local sidepanel = require "core.sidepanel"
+local panes = require "core.panes"
 local storage = require "core.storage"
 local DirWatch = require "core.dirwatch"
 local git_backend = require "plugins.git.backend"
@@ -2856,14 +2856,14 @@ function FileTreeView:open_selected_files()
 
   if #files <= 1 then return false end
   for _, entry in ipairs(files) do
-    sidepanel.open_path_in_main(entry.abs, { preserve_focus = true })
+    panes.open_path(entry.abs, { pane = "left", preserve_focus = true })
   end
   return true
 end
 
 function FileTreeView:open_item(target)
   self:sync_meta()
-  if target ~= "side" and self:open_selected_files() then return end
+  if target ~= "right" and self:open_selected_files() then return end
 
   local line = self.doc:get_selection(true)
   local entry, err = self:entry_for_line(line)
@@ -2885,10 +2885,10 @@ function FileTreeView:open_item(target)
     end
   else
     if info and info.type == "file" then
-      if target == "side" then
-        sidepanel.open_path_in_side(entry.abs, { focus = true, source_view = self.last_main_panel_view })
+      if target == "right" then
+        panes.open_path(entry.abs, { pane = "right", focus = true, source_view = self.last_left_pane_view })
       else
-        sidepanel.open_path_in_main(entry.abs, { preserve_focus = true })
+        panes.open_path(entry.abs, { pane = "left", preserve_focus = true })
       end
     end
   end
@@ -3259,9 +3259,10 @@ end
 
 local view = FileTreeView()
 view.navigation_scope_kind = "file-tree"
-file_context.exclude_main_panel_view(view)
-sidepanel.register_panel("filetree", view)
-view.node = sidepanel.side_node
+view.__pane_permanent = true
+file_context.exclude_content_view(view)
+panes.register_view("right", "filetree", view, { permanent = true })
+view.node = panes.node("right")
 
 local function wrap_doc_command(name, filetree_handler)
   local base = command.map[name]
@@ -3298,25 +3299,25 @@ wrap_doc_command("doc:paste", function(v)
   return v:paste_lines_with_metadata()
 end)
 
-local function current_main_panel_view()
-  return sidepanel.current_main_panel_view(view.last_main_panel_view)
+local function current_content_view()
+  return panes.selected_view("left") or view.last_left_pane_view
 end
 
 local function current_file_path()
-  return file_context.current_file_path(view.last_main_panel_view)
+  return file_context.current_file_path(view.last_left_pane_view)
 end
 
-local function remember_current_main_panel_view()
-  view.last_main_panel_view = current_main_panel_view() or view.last_main_panel_view
+local function remember_current_content_view()
+  view.last_left_pane_view = current_content_view() or view.last_left_pane_view
 end
 
-local function hide_and_focus_main_panel_view()
-  sidepanel.focus_main(true)
+local function hide_and_focus_left_pane_view()
+  panes.hide_right(true)
 end
 
 local function show_and_focus_filetree()
-  remember_current_main_panel_view()
-  sidepanel.show("filetree", { focus = true })
+  remember_current_content_view()
+  panes.show("right", { view = view, focus = true })
 end
 
 local function find_entry(filename)
@@ -3347,7 +3348,7 @@ local function focus_entry(entry, filename)
     view.scroll.x = 0
   end
 
-  sidepanel.show("filetree", { focus = true })
+  panes.show("right", { view = view, focus = true })
   return true
 end
 
@@ -3357,7 +3358,7 @@ local function focus_file(filename)
   local resolved = filename and project_paths.resolve(filename)
   if not filename or not root or not resolved or resolved.flags.browsable == false then return end
 
-  sidepanel.show("filetree", { focus = false })
+  panes.show("right", { view = view, focus = false })
   local refreshed = false
   if resolved.entry.role == "root" and not in_project(filename, view.current_dir) then
     view.current_dir = root.path
@@ -3382,7 +3383,7 @@ end
 command.add(nil, {
   ["filetree:toggle"] = function()
     if view.visible then
-      hide_and_focus_main_panel_view()
+      hide_and_focus_left_pane_view()
     else
       show_and_focus_filetree()
     end
@@ -3391,7 +3392,7 @@ command.add(nil, {
     show_and_focus_filetree()
   end,
   ["filetree:focus-editor-and-hide"] = function()
-    hide_and_focus_main_panel_view()
+    hide_and_focus_left_pane_view()
   end,
   ["filetree:focus-and-show"] = function()
     show_and_focus_filetree()
@@ -3421,8 +3422,8 @@ command.add(function() return core.active_view:is(FileTreeView) end, {
   ["filetree:open"] = function()
     view:open_item()
   end,
-  ["filetree:open-side"] = function()
-    view:open_item("side")
+  ["filetree:open-right"] = function()
+    view:open_item("right")
   end,
   ["filetree:up-dir"] = function()
     view:up_dir()
@@ -3438,11 +3439,11 @@ command.add(function() return core.active_view:is(FileTreeView) end, {
 
 keymap.add {
   ["ctrl+\\"] = "filetree:toggle",
-  ["alt+1"] = "sidepanel:hide",
+  ["alt+1"] = "pane:focus-left-and-hide-right",
   ["alt+2"] = "filetree:focus-and-show",
   ["alt+r"] = "filetree:open",
-  ["alt+shift+r"] = "filetree:open-side",
-  ["ctrl+return"] = "filetree:open-side",
+  ["alt+shift+r"] = "filetree:open-right",
+  ["ctrl+return"] = "filetree:open-right",
   ["ctrl+s"] = "filetree:apply",
   ["f5"] = "filetree:refresh",
   ["alt+home"] = "filetree:project-root",

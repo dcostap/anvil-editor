@@ -2017,41 +2017,29 @@ local function select_source_range(view, line1, col1, line2, col2)
   return select_range()
 end
 
-local function open_completion_source_view(item, target_side, line1, col1, line2, col2, restore_focus)
+local function open_completion_source_view(item, target_opposite, line1, col1, line2, col2, restore_focus)
   local path = item.source_path
-  if target_side then
-    local ok, sidepanel = pcall(require, "core.sidepanel")
-    if not ok or not sidepanel then return nil end
-    local opts = { line = line1, col = col1, line2 = line2, col2 = col2, focus = true, restore_focus = restore_focus }
-    if path and path ~= "" then return sidepanel.open_path_in_side(path, opts) end
-    if item.source_doc then return sidepanel.open_doc_in_side(item.source_doc, opts) end
-    return nil
-  end
-
-  local ok, sidepanel = pcall(require, "core.sidepanel")
+  local panes = require "core.panes"
   local active_docview = get_active_view()
-  if ok and sidepanel then
-    local opts = {
-      line = line1,
-      col = col1,
-      line2 = line2,
-      col2 = col2,
-      source_view = active_docview,
-      replace_dirty_singleton = true,
-    }
-    if path and path ~= "" then return sidepanel.open_path_in_main(path, opts) end
-    if item.source_doc and (not active_docview or active_docview.doc ~= item.source_doc) then
-      return sidepanel.open_doc_in_main(item.source_doc, opts)
-    end
-  elseif path and path ~= "" then
-    return core.open_file(path)
-  elseif item.source_doc and (not active_docview or active_docview.doc ~= item.source_doc) then
-    return core.root_panel:open_doc(item.source_doc)
+  local source_pane = panes.pane_for_view(active_docview) or "left"
+  local target_pane = target_opposite and panes.opposite(source_pane) or source_pane
+  local opts = {
+    pane = target_pane,
+    line = line1,
+    col = col1,
+    line2 = line2,
+    col2 = col2,
+    source_view = active_docview,
+    focus = true,
+  }
+  if path and path ~= "" then return panes.open_path(path, opts) end
+  if item.source_doc and (target_opposite or not active_docview or active_docview.doc ~= item.source_doc) then
+    return panes.open_doc(item.source_doc, opts)
   end
   return active_docview
 end
 
-local function reveal_completion_source(target_side)
+local function reveal_completion_source(target_opposite)
   local item = suggestions[suggestions_idx]
   local line1, col1, line2, col2 = source_range(item)
   if not line1 then
@@ -2061,13 +2049,13 @@ local function reveal_completion_source(target_side)
 
   local restore_focus = get_active_view()
   reset_suggestions()
-  local view = open_completion_source_view(item, target_side, line1, col1, line2, col2, restore_focus)
+  local view = open_completion_source_view(item, target_opposite, line1, col1, line2, col2, restore_focus)
   if not view or not view.doc then
     quiet_log("Autocomplete source navigation could not open source for %s", tostring(item.text or item))
     return true
   end
 
-  if not target_side then select_source_range(view, line1, col1, line2, col2) end
+  if not target_opposite then select_source_range(view, line1, col1, line2, col2) end
   return true
 end
 
@@ -2172,7 +2160,7 @@ command.add(predicate, {
     return reveal_completion_source(false)
   end,
 
-  ["autocomplete:go-to-declaration-side"] = function()
+  ["autocomplete:go-to-declaration-opposite"] = function()
     return reveal_completion_source(true)
   end,
 
@@ -2189,7 +2177,7 @@ keymap.add {
   ["alt+space"]    = "autocomplete:trigger",
   ["tab"]          = "autocomplete:complete",
   ["alt+r"]        = { "autocomplete:go-to-declaration", "language:go-to-declaration" },
-  ["alt+shift+r"]  = { "autocomplete:go-to-declaration-side", "language:show-references" },
+  ["alt+shift+r"]  = "language:show-references",
   ["up"]           = "autocomplete:previous",
   ["down"]         = "autocomplete:next",
   ["escape"]       = "autocomplete:cancel",

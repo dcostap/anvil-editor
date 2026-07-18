@@ -3,7 +3,7 @@ local common = require "core.common"
 local Project = require "core.project"
 local project_paths = require "core.project_paths"
 local storage = require "core.storage"
-local sidepanel = require "core.sidepanel"
+local panes = require "core.panes"
 local test = require "core.test"
 
 local function join_path(...)
@@ -77,7 +77,7 @@ local function make_fake_root_panel(label, state, doc)
     self.root_node.views = {}
     self.root_node.active_view = nil
   end
-  function panel:get_main_panel()
+  function panel:get_left_pane()
     return { is_empty = function() return false end }
   end
   return panel, view
@@ -97,8 +97,20 @@ test.describe("Workspace persistence", function()
     context.original_quit_request = core.quit_request
     context.original_navigation_history = core.navigation_history
     context.original_filetree_module = package.loaded["plugins.filetree"]
-    context.original_sidepanel_save_workspace_state = sidepanel.save_workspace_state
-    context.original_sidepanel_restore_workspace_state = sidepanel.restore_workspace_state
+    context.original_panes_save_workspace_state = panes.save_workspace_state
+    context.original_panes_restore_workspace_state = panes.restore_workspace_state
+    panes.save_workspace_state = function(save_view)
+      local views = {}
+      for _, view in ipairs(core.root_panel and core.root_panel.root_node and core.root_panel.root_node.views or {}) do
+        local saved = save_view(view)
+        if saved then views[#views + 1] = saved end
+      end
+      return { panes = { left = { views = views }, right = { views = {} } }, right_visible = false, focused_pane = "left" }
+    end
+    panes.restore_workspace_state = function(state)
+      context.restored_pane_state = state
+      return true
+    end
     context.original_cwd = system.getcwd()
     context.temp_root = USERDIR
       .. PATHSEP .. "workspace-tests-"
@@ -130,8 +142,8 @@ test.describe("Workspace persistence", function()
     core.quit_request = context.original_quit_request
     core.navigation_history = context.original_navigation_history
     package.loaded["plugins.filetree"] = context.original_filetree_module
-    sidepanel.save_workspace_state = context.original_sidepanel_save_workspace_state
-    sidepanel.restore_workspace_state = context.original_sidepanel_restore_workspace_state
+    panes.save_workspace_state = context.original_panes_save_workspace_state
+    panes.restore_workspace_state = context.original_panes_restore_workspace_state
     if context.original_cwd then
       pcall(system.chdir, context.original_cwd)
     end
@@ -180,8 +192,8 @@ test.describe("Workspace persistence", function()
 
     local saved = storage.load("ws", "test_project-10")
     test.type(saved, "table")
-    test.equal(#saved.documents.views, 1)
-    test.equal(saved.documents.views[1].state.label, "current")
+    test.equal(#saved.documents.panes.left.views, 1)
+    test.equal(saved.documents.panes.left.views[1].state.label, "current")
   end)
 
   test.test("skips views with invalid control characters in filenames", function(context)
@@ -201,7 +213,7 @@ test.describe("Workspace persistence", function()
     test.equal(#keys, 1)
     local saved = storage.load("ws", keys[1])
     test.type(saved, "table")
-    test.equal(#saved.documents.views, 0)
+    test.equal(#saved.documents.panes.left.views, 0)
   end)
 
   test.test("skips named-file views that restored as missing new files", function(context)
@@ -222,7 +234,7 @@ test.describe("Workspace persistence", function()
     test.equal(#keys, 1)
     local saved = storage.load("ws", keys[1])
     test.type(saved, "table")
-    test.equal(#saved.documents.views, 0)
+    test.equal(#saved.documents.panes.left.views, 0)
   end)
 
   test.test("restoring a workspace preserves local Project Paths on disk", function(context)
@@ -273,7 +285,7 @@ test.describe("Workspace persistence", function()
     test.equal(calls, 1)
   end)
 
-  test.test("saves Side Panel Workspace state with the main layout", function(context)
+  test.test("saves two-pane Workspace state", function(context)
     local project_path = join_path(context.temp_root, "source_project")
     local other_path = join_path(context.temp_root, "other_project")
     local panel, view = make_fake_root_panel("main")
@@ -283,9 +295,9 @@ test.describe("Workspace persistence", function()
     core.visited_files = {}
     core.root_panel = panel
     core.active_view = view
-    sidepanel.save_workspace_state = function(save_view)
+    panes.save_workspace_state = function(save_view)
       test.type(save_view, "function")
-      return { marker = "side-file" }
+      return { marker = "pane-state" }
     end
 
     core.set_project(other_path)
@@ -294,16 +306,15 @@ test.describe("Workspace persistence", function()
     test.equal(#keys, 1)
     local saved = storage.load("ws", keys[1])
     test.type(saved, "table")
-    test.same(saved.side_panel, { marker = "side-file" })
+    test.same(saved.documents, { marker = "pane-state" })
   end)
 
-  test.test("restores Side Panel Workspace state after the main layout", function(context)
+  test.test("restores two-pane Workspace state", function(context)
     local project_path = join_path(context.temp_root, "test_project")
     local source_path = join_path(context.temp_root, "source_project")
     storage.save("ws", "test_project-10", {
       path = project_path,
-      documents = empty_leaf_state(),
-      side_panel = { marker = "restored-side-file" },
+      documents = { marker = "restored-pane-state" },
       visited_files = {},
     })
 
@@ -314,15 +325,15 @@ test.describe("Workspace persistence", function()
     core.visited_files = {}
     core.root_panel = panel
     core.active_view = view
-    sidepanel.restore_workspace_state = function(state, load_view)
+    panes.restore_workspace_state = function(state, load_view)
       test.type(load_view, "function")
-      context.restored_side_panel_state = state
+      context.restored_pane_state = state
     end
 
     core.set_project(project_path)
     run_last_captured_thread(context)
 
-    test.same(context.restored_side_panel_state, { marker = "restored-side-file" })
+    test.same(context.restored_pane_state, { marker = "restored-pane-state" })
   end)
 
   test.test("resets Navigation History and suppresses synthetic places while restoring a Workspace", function(context)

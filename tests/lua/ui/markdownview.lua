@@ -7,6 +7,7 @@ local style = require "core.style"
 local test = require "core.test"
 local DocView = require "core.docview"
 local MarkdownView = require "core.markdownview"
+local panes = require "core.panes"
 
 local temp_root
 local project_temp_root
@@ -1603,53 +1604,14 @@ For more detailed instructions visit: https://github.com/dcostap/anvil-editor#bu
     doc_node:close_view(core.root_panel.root_node, doc_view)
   end)
 
-  test.test("places markdown previews according to config.markdown_preview_mode", function(context)
+  test.test("opens markdown previews in the opposite pane", function(context)
     local path = context.temp_root .. PATHSEP .. "preview-placement.md"
     write_file(path, "# Preview\n")
-
-    local original_mode = config.markdown_preview_mode
-    local modes = {
-      right = "right",
-      left = "left",
-      top = "up",
-      bottom = "down",
-      newtab = "newtab"
-    }
-
-    for mode, direction in pairs(modes) do
-      config.markdown_preview_mode = mode
-      local doc_view = core.open_file(path)
-      local doc_node = core.root_panel.root_node:get_node_for_view(doc_view)
-
-      command.perform("markdown-view:preview")
-
-      local preview
-      for _, view in ipairs(core.root_panel.root_node:get_children()) do
-        if view:extends(MarkdownView) and view.linked_doc == doc_view.doc then
-          preview = view
-          break
-        end
-      end
-
-      test.not_nil(preview, mode)
-      local preview_node = core.root_panel.root_node:get_node_for_view(preview)
-      if direction == "newtab" then
-        test.equal(preview_node, doc_node)
-      else
-        local parent = preview_node:get_parent_node(core.root_panel.root_node)
-        test.not_nil(parent, mode)
-        local split_type = (direction == "left" or direction == "right") and "hsplit" or "vsplit"
-        local split_child = (direction == "left" or direction == "up") and parent.a or parent.b
-        test.equal(parent.type, split_type)
-        test.equal(split_child, preview_node)
-      end
-
-      preview_node:close_view(core.root_panel.root_node, preview)
-      doc_node = core.root_panel.root_node:get_node_for_view(doc_view)
-      doc_node:close_view(core.root_panel.root_node, doc_view)
-    end
-
-    config.markdown_preview_mode = original_mode
+    local doc_view = panes.open_path(path, { pane = "left", focus = true })
+    command.perform("markdown-view:preview")
+    local preview = panes.selected_view("right")
+    test.ok(preview:extends(MarkdownView))
+    test.equal(preview.linked_doc, doc_view.doc)
   end)
 
   test.test("view raw opens the markdown doc and links standalone previews", function(context)
@@ -1733,48 +1695,14 @@ For more detailed instructions visit: https://github.com/dcostap/anvil-editor#bu
     core.root_panel.root_node:get_node_for_view(preview):close_view(core.root_panel.root_node, preview)
   end)
 
-  test.test("view raw places doc views according to config.markdown_preview_mode", function(context)
+  test.test("view raw opens the document in the opposite pane", function(context)
     local path = context.temp_root .. PATHSEP .. "raw-placement.md"
     write_file(path, "# Preview\n")
-
-    local original_mode = config.markdown_preview_mode
-    local modes = {
-      right = "left",
-      left = "right",
-      top = "down",
-      bottom = "up",
-      newtab = "newtab"
-    }
-
-    for mode, direction in pairs(modes) do
-      config.markdown_preview_mode = mode
-      local node = core.root_panel:get_active_node_default()
-      local preview = MarkdownView(path)
-      node:add_view(preview)
-      node = core.root_panel.root_node:get_node_for_view(preview)
-      node:set_active_view(preview)
-
-      command.perform("markdown-view:view-raw")
-
-      local raw_view = core.active_view
-      test.ok(raw_view:extends(DocView), mode)
-      local raw_node = core.root_panel.root_node:get_node_for_view(raw_view)
-      if direction == "newtab" then
-        test.equal(raw_node, node)
-      else
-        local parent = raw_node:get_parent_node(core.root_panel.root_node)
-        test.not_nil(parent, mode)
-        local split_type = (direction == "left" or direction == "right") and "hsplit" or "vsplit"
-        local split_child = (direction == "left" or direction == "up") and parent.a or parent.b
-        test.equal(parent.type, split_type)
-        test.equal(split_child, raw_node)
-      end
-
-      raw_node:close_view(core.root_panel.root_node, raw_view)
-      node = core.root_panel.root_node:get_node_for_view(preview)
-      node:close_view(core.root_panel.root_node, preview)
-    end
-
-    config.markdown_preview_mode = original_mode
+    local preview = panes.open_view(MarkdownView(path), { pane = "right", focus = true })
+    command.perform("markdown-view:view-raw")
+    local raw_view = panes.selected_view("left")
+    test.ok(raw_view:extends(DocView))
+    test.equal(common.normalize_path(raw_view.doc.abs_filename), common.normalize_path(path))
+    test.equal(preview.linked_doc, raw_view.doc)
   end)
 end)

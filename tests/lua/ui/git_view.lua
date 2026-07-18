@@ -3,7 +3,7 @@ local command = require "core.command"
 local style = require "core.style"
 local test = require "core.test"
 local tool_window = require "core.tool_window"
-local sidepanel = require "core.sidepanel"
+local panes = require "core.panes"
 local View = require "core.view"
 local RootPanel = require "core.rootpanel"
 local git_view = require "plugins.git_view"
@@ -39,7 +39,7 @@ local function fake_root()
     size = { x = 0, y = 0 },
     root_node = node,
     get_active_node_default = function() return node end,
-    get_main_panel = function() return node end,
+    get_left_pane = function() return node end,
     update = function() end,
     draw = function() end,
   }
@@ -100,7 +100,7 @@ test.describe("Git View command", function()
     tool_window.reset_for_tests()
   end)
 
-  test.test("git:open-view reuses one project Git Main Tab session", function(context)
+  test.test("git:open-view reuses one project Git pane session", function(context)
     local first = open_fake_git_view(context.project)
     local second = open_fake_git_view(context.project)
     test.equal(first, second)
@@ -108,7 +108,7 @@ test.describe("Git View command", function()
     test.not_nil(first.git_view)
   end)
 
-  test.test("opening a Git Main Tab focuses the visible list DocView", function(context)
+  test.test("opening a Git Pane Tab focuses the visible list DocView", function(context)
     local tw, view = open_fake_git_view(context.project)
     test.equal(core.active_view.git_owner_view, view)
     test.equal(core.active_view.git_pane, "log-list")
@@ -356,24 +356,22 @@ test.describe("Git View command", function()
     test.equal(core.active_view.git_pane, "details")
   end)
 
-  test.it("surface focus command hides the Side Panel and cycles Git panes", function(context)
+  test.it("focusing a Git View hides the Right Pane", function(context)
     local tw, view = open_fake_git_view(context.project)
-    local main_node = core.root_panel:get_main_panel()
-    main_node:add_view(view)
-    core.active_view = view
+    panes.open_view(view, { pane = "left", focus = false })
     local panel = View()
-    sidepanel.register_panel("git-test-panel", panel)
-    sidepanel.show("git-test-panel", { focus = true })
-    test.equal(sidepanel.visible, true)
+    panes.register_view("right", "git-test-panel", panel)
+    panes.show("right", { view = panel, focus = true })
+    test.equal(panes.right_visible(), true)
     test.equal(core.active_view, panel)
 
-    test.equal(command.perform("surface:focus-next-target-or-sidepanel"), true)
+    tw:activate_root()
 
-    test.equal(sidepanel.visible, false)
+    test.equal(panes.right_visible(), false)
     test.equal(core.active_view.git_owner_view, view)
     test.equal(core.active_view.git_pane, "log-list")
-    sidepanel.remove_view(panel, false)
-    main_node:remove_view(core.root_panel.root_node, view)
+    panes.remove_view(panel, { force = true, focus_left = false })
+    panes.remove_view(view, { force = true, focus_left = false })
   end)
 
   test.it("pane focus cycles through Git diff list and both text panes", function(context)
@@ -472,7 +470,7 @@ test.describe("Git View command", function()
     test.equal(tw.hidden, false)
   end)
 
-  test.test("saves and restores hidden Git View Main Tab state", function(context)
+  test.test("saves and restores hidden Git View Pane Tab state", function(context)
     local tw, view = open_fake_git_view(context.project)
     local history_tab = view.model:open_file_history("src/app.lua")
     view.model.active_tab = history_tab.id
@@ -626,7 +624,7 @@ test.describe("Git View command", function()
     test.equal(tw.hidden, false)
   end)
 
-  test.test("closing the Git Log Main Tab removes the owning Git session", function(context)
+  test.test("closing the Git Log Pane Tab removes the owning Git session", function(context)
     local tw, view = open_fake_git_view(context.project)
     local closed = false
     view:try_close(function() closed = true end)
@@ -636,7 +634,7 @@ test.describe("Git View command", function()
     test.equal(tool_window.get(context.project, "git"), nil)
   end)
 
-  test.test("closing the Git Log Main Tab removes sibling Git tabs and repairs focus", function(context)
+  test.test("closing the Git Log Pane Tab removes sibling Git tabs and repairs focus", function(context)
     local tw, view = open_fake_git_view(context.project)
     local tab = {
       id = "diff-sibling",
@@ -668,8 +666,7 @@ test.describe("Git View command", function()
       root = RootPanel(),
       git_view_opts = { backend = fake_backend },
     })
-    tw.root.root_node.is_main_panel_node = nil
-    tw.root.root_node.is_primary_node = nil
+    tw.root.root_node.pane_id = nil
     core.active_view = {}
 
     local ok = pcall(command.is_valid, "git:focus-list-pane")

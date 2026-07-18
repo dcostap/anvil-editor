@@ -48,7 +48,7 @@ function M.should_center(view)
   local cfg = settings()
   if not cfg.enabled then return false end
   if not view or getmetatable(view) ~= DocView or not view.doc then return false end
-  if cfg.main_tabs_only then
+  if cfg.pane_views_only then
     local node = root_node_for_view(view)
     if not node or not node.get_view_idx or not node:get_view_idx(view) then
       return false

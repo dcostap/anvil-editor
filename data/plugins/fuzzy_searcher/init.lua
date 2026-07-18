@@ -14,7 +14,7 @@ local DocView = require "core.docview"
 local ImageView = require "core.imageview"
 local file_context = require "core.file_context"
 local project_paths = require "core.project_paths"
-local sidepanel = require "core.sidepanel"
+local panes = require "core.panes"
 local Widget = require "widget"
 local TextBox = require "widget.textbox"
 local fuzzy_native = require "fuzzy"
@@ -183,7 +183,7 @@ local function ensure_input_focus(picker, reason)
   picker:swap_active_child(picker.input)
   local input_view = picker.input.input_text and picker.input.textview or picker.input
   if input_view and core.active_view ~= input_view then
-    local restore = file_context.current_main_panel_view(core.active_view) or core.active_view
+    local restore = file_context.current_content_view(core.active_view) or core.active_view
     if restore and restore ~= picker and restore ~= picker.input and restore ~= input_view then
       picker.prev_view = restore
     end
@@ -2420,7 +2420,7 @@ end
 function FSView:new(prefix, opts)
   opts = opts or {}
   FSView.super.new(self, nil, true) -- floating widget; widget lib owns RootPanel routing
-  file_context.exclude_main_panel_view(self)
+  file_context.exclude_content_view(self)
   self.type_name = "plugins.fuzzy_searcher"
   self.name = "Fuzzy Searcher"
   self.background_color = style.background
@@ -2466,7 +2466,7 @@ function FSView:new(prefix, opts)
 
   local source_view = core.active_view
   local source_doc = source_view and source_view.doc
-  self.source_view = file_context.current_main_panel_view(source_view) or source_view
+  self.source_view = file_context.current_content_view(source_view) or source_view
   self.source_doc = source_doc
   self.source_file_path = file_context.view_file_path(source_view)
   self.source_file_line = source_doc and source_doc:get_selection(false) or 1
@@ -2500,8 +2500,8 @@ function FSView:new(prefix, opts)
     input.hover_border = style.dim
     input.border.color = input.hover_border
   end
-  file_context.exclude_main_panel_view(self.input)
-  file_context.exclude_main_panel_view(self.input.textview)
+  file_context.exclude_content_view(self.input)
+  file_context.exclude_content_view(self.input.textview)
   self.input.on_change = function(_, text)
     if self.static_mode then return end
     if self._applying_prompt_history then return end
@@ -4755,7 +4755,8 @@ function FSView:confirm(target_side)
     local source_view = self.source_view
     self:close()
     if target_side then
-      sidepanel.open_path_in_side(path, {
+      panes.open_path(path, {
+        pane = "right",
         line = line,
         col = col,
         line2 = line2,
@@ -4764,13 +4765,13 @@ function FSView:confirm(target_side)
         restore_focus = source_view,
       })
     else
-      sidepanel.open_path_in_main(path, {
+      panes.open_path(path, {
+        pane = "left",
         line = line,
         col = col,
         line2 = line2,
         col2 = col2,
         source_view = source_view,
-        replace_dirty_singleton = true,
       })
     end
   end
@@ -5114,7 +5115,6 @@ core.fuzzy_searcher_install_global_keymaps = function()
     ["ctrl+shift+a"] = "fuzzy-searcher:open-commands",
     ["ctrl+shift+p"] = "fuzzy-searcher:open-commands",
   }, true)
-  keymap.unbind("ctrl+shift+f", "project-search:find")
 end
 core.fuzzy_searcher_install_global_keymaps()
 

@@ -507,7 +507,7 @@ function Scrollbar:get_native_window_resize_edge_width()
   if root_right <= 0 then return 0 end
 
   -- Only inset scrollbars whose owning view reaches the window edge.
-  -- Split/side-panel scrollbars away from the outer edge should stay flush.
+  -- Nested scrollbars away from the outer edge should stay flush.
   local scrollbar_right = self.rect.x + self.rect.w
   if math.abs(scrollbar_right - root_right) > 1 then return 0 end
 

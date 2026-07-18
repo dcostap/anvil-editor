@@ -1,10 +1,9 @@
 local core = require "core"
 local command = require "core.command"
 local common = require "core.common"
-local file_context = require "core.file_context"
-local config = require "core.config"
 local DocView = require "core.docview"
 local MarkdownView = require "core.markdownview"
+local panes = require "core.panes"
 local markdown_completion = require "core.markdown.completion"
 local markdown_live = require "core.markdown.live_render"
 local markdown_tables = require "core.markdown.tables"
@@ -74,20 +73,6 @@ end, {
   end,
 })
 
-local markdown_preview_split_directions = {
-  bottom = "down",
-  top = "up",
-  left = "left",
-  right = "right"
-}
-
-local markdown_raw_split_directions = {
-  bottom = "up",
-  top = "down",
-  left = "right",
-  right = "left"
-}
-
 local function get_doc_preview(dv)
   local doc = dv.doc
   for _, view in ipairs(core.root_panel.root_node:get_children()) do
@@ -117,27 +102,12 @@ end
 
 local function open_raw_doc_view(path, mv)
   local doc = core.open_doc(path)
-  local node = core.root_panel.root_node:get_node_for_view(mv)
-    or core.root_panel:get_active_node_default()
-  if config.markdown_preview_mode == "newtab" then
-    for _, view in ipairs(node.views) do
-      if view:extends(DocView) and view.doc == doc then
-        file_context.mark_editor_view(view)
-        node:set_active_view(view)
-        return view
-      end
-    end
-    local view = file_context.mark_editor_view(DocView(doc))
-    node:add_view(view)
-    core.root_panel.root_node:update_layout()
-    view:scroll_to_line(view.doc:get_selection(), true, true)
-    return view
-  end
-
-  local view = file_context.mark_editor_view(DocView(doc))
-  local split_direction = markdown_raw_split_directions[config.markdown_preview_mode] or "left"
-  node:split(split_direction, view)
-  core.root_panel.root_node:update_layout()
+  local source_pane = panes.pane_for_view(mv) or "left"
+  local view = panes.open_doc(doc, {
+    pane = panes.opposite(source_pane),
+    source_view = mv,
+    focus = true,
+  })
   view:scroll_to_line(view.doc:get_selection(), true, true)
   return view
 end
@@ -152,30 +122,18 @@ end, {
   ["markdown-view:preview"] = function(dv)
     local view = get_doc_preview(dv)
     if view then
-      local node = core.root_panel.root_node:get_node_for_view(view)
-      if node then
-        node:set_active_view(view)
-      end
+      local pane = panes.pane_for_view(view)
+      if pane then panes.show(pane, { view = view, focus = true }) end
       return
     end
 
-    local node = core.root_panel.root_node:get_node_for_view(dv)
-      or core.root_panel:get_active_node_default()
     view = MarkdownView({
       linked_doc = dv.doc,
       path = dv.doc.abs_filename,
       title = dv.doc:get_name()
     })
-    local mode = config.markdown_preview_mode
-    local split_direction = markdown_preview_split_directions[mode]
-    if mode == "newtab" then
-      node:add_view(view)
-    else
-      (split_direction and node or core.root_panel:get_active_node_default()):split(
-        split_direction or "right",
-        view
-      )
-    end
+    local source_pane = panes.pane_for_view(dv) or "left"
+    panes.open_view(view, { pane = panes.opposite(source_pane), focus = true })
     core.root_panel.root_node:update_layout()
   end
 })

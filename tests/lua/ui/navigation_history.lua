@@ -2,7 +2,7 @@ local core = require "core"
 local command = require "core.command"
 local common = require "core.common"
 local test = require "core.test"
-local sidepanel = require "core.sidepanel"
+local panes = require "core.panes"
 local file_context = require "core.file_context"
 local DocView = require "core.docview"
 local command_slots = require "plugins.command_slots"
@@ -55,7 +55,7 @@ end
 local function open_editor(context, text)
   local doc = track(context, "docs", core.open_doc())
   if text and text ~= "" then doc:text_input(text) end
-  local view = track(context, "views", core.root_panel:open_doc(doc))
+  local view = track(context, "views", require("core.panes").open_doc(doc, { pane = "left" }))
   core.set_active_view(view)
   return view, doc
 end
@@ -75,7 +75,7 @@ end
 local function open_named_editor(context, label, text)
   local path = write_navigation_file(context, label, text)
   local doc = track(context, "docs", core.open_doc(path))
-  local view = track(context, "views", core.root_panel:open_doc(doc))
+  local view = track(context, "views", require("core.panes").open_doc(doc, { pane = "left" }))
   core.set_active_view(view)
   return view, doc, path
 end
@@ -91,7 +91,7 @@ local function open_side_editor(context, name, text)
   local doc = track(context, "docs", core.open_doc())
   if text and text ~= "" then doc:text_input(text) end
   local view = track(context, "side_views", file_context.mark_editor_view(DocView(doc)))
-  sidepanel.register_panel(name, view)
+  panes.register_view("right", name, view)
   return view, doc
 end
 
@@ -133,22 +133,16 @@ test.describe("IntelliJ-style navigation history", function()
 
     local root = core.root_panel.root_node
     for _, view in ipairs(context.side_views or {}) do
-      if sidepanel.contains_view(view) then sidepanel.remove_view(view, false) end
+      if panes.contains_view("right", view) then panes.remove_view(view, { force = true, focus_left = false }) end
     end
-    if sidepanel.file_view and sidepanel.contains_view(sidepanel.file_view) then
-      sidepanel.remove_view(sidepanel.file_view, false)
-    end
-    sidepanel.file_view = nil
-    sidepanel.file_view_path = nil
-    sidepanel.current_panel = nil
-    sidepanel.hide(false)
+    panes.hide_right(false)
 
     for _, view in ipairs(context.views or {}) do
       local node = root:get_node_for_view(view)
       if node then node:remove_view(root, view) end
     end
     for _, key in ipairs(context.git_session_keys or {}) do
-      if core.main_tabs and core.main_tabs.git_sessions then core.main_tabs.git_sessions[key] = nil end
+      if core.panes and core.panes.git_sessions then core.panes.git_sessions[key] = nil end
     end
     for _, doc in ipairs(context.docs or {}) do
       if doc:is_dirty() then doc:clean() end
@@ -160,7 +154,7 @@ test.describe("IntelliJ-style navigation history", function()
     navigation_history.clear_history()
   end)
 
-  test.it("returns directly to the departing singleton Main Editor", function(context)
+  test.it("returns directly to the departing singleton Editor", function(context)
     local first, _, first_path = open_named_editor(context, "singleton-first.txt", "one\ntwo\nthree\n")
     set_caret(first, 3, 2)
     navigation_history.clear_history()
@@ -185,7 +179,7 @@ test.describe("IntelliJ-style navigation history", function()
     test.ok(common.path_equals(restored_second.doc.abs_filename, second_path))
   end)
 
-  test.it("branches singleton Main Editor history and clears stale forward places", function(context)
+  test.it("branches singleton Editor history and clears stale forward places", function(context)
     local first = open_named_editor(context, "branch-first.txt", "first\nline\n")
     set_caret(first, 2, 3)
     navigation_history.clear_history()
@@ -206,7 +200,7 @@ test.describe("IntelliJ-style navigation history", function()
     test.ok(not common.path_equals(back[1].filename, second.doc.abs_filename))
   end)
 
-  test.it("records the source Main Editor when a Fuzzy Searcher result replaces it", function(context)
+  test.it("records the source singleton Editor when a Fuzzy Searcher result replaces it", function(context)
     local first, _, first_path = open_named_editor(context, "fuzzy-source.txt", "source\nline\n")
     set_caret(first, 2, 4)
     local target_path = write_navigation_file(context, "fuzzy-target.txt", "target\n")
@@ -228,7 +222,7 @@ test.describe("IntelliJ-style navigation history", function()
     test.equal(col, 4)
   end)
 
-  test.it("records the active untitled Main Tab instead of a hidden singleton Editor", function(context)
+  test.it("records the active untitled Pane Tab instead of a hidden singleton Editor", function(context)
     open_named_editor(context, "hidden-singleton.txt", "hidden\n")
     local untitled = open_editor(context, "active untitled")
     navigation_history.clear_history()
@@ -312,7 +306,7 @@ test.describe("IntelliJ-style navigation history", function()
 
   test.it("navigates File Tree selections inside the File Tree scope", function()
     local filetree = require "plugins.filetree"
-    sidepanel.show("filetree", { focus = true })
+    panes.show("right", { view = require("plugins.filetree"), focus = true })
     filetree.position.x, filetree.position.y = 0, 0
     filetree.size.x, filetree.size.y = 800, 600
     local entries = filetree:build_entries(false)
@@ -344,7 +338,7 @@ test.describe("IntelliJ-style navigation history", function()
     fp:close()
     context.file_tree_test_root = parent_dir
     context.original_file_tree_dir = filetree.current_dir
-    sidepanel.show("filetree", { focus = true })
+    panes.show("right", { view = require("plugins.filetree"), focus = true })
 
     filetree.current_dir = child_dir
     filetree:refresh(false, true)
@@ -374,8 +368,8 @@ test.describe("IntelliJ-style navigation history", function()
   test.it("navigates Command Output Views within their panel scope", function(context)
     local editor = open_editor(context, "editor")
     local panel = track(context, "side_views", command_slots.CommandOutputPanel())
-    sidepanel.register_panel("navigation output", panel)
-    sidepanel.show("navigation output", { focus = true })
+    panes.register_view("right", "navigation output", panel)
+    panes.show("right", { view = panel, focus = true })
     local first = panel:select_slot(1, { focus = true })
     local second = panel:slot_view(command_slots.slots[2])
     test.ok(first ~= second)
@@ -404,8 +398,8 @@ test.describe("IntelliJ-style navigation history", function()
     slot.output_history_index = 1
 
     local panel = track(context, "side_views", command_slots.CommandOutputPanel())
-    sidepanel.register_panel("navigation output history", panel)
-    sidepanel.show("navigation output history", { focus = true })
+    panes.register_view("right", "navigation output history", panel)
+    panes.show("right", { view = panel, focus = true })
     local view = panel:select_slot(1, { focus = true })
     view:show_entry(first)
     navigation_history.clear_history()
@@ -441,8 +435,8 @@ test.describe("IntelliJ-style navigation history", function()
     slot.output_history_index = nil
 
     local panel = track(context, "side_views", command_slots.CommandOutputPanel())
-    sidepanel.register_panel("navigation blank output", panel)
-    sidepanel.show("navigation blank output", { focus = true })
+    panes.register_view("right", "navigation blank output", panel)
+    panes.show("right", { view = panel, focus = true })
     local view = panel:select_slot(1, { focus = true })
     view:show_entry(nil)
     local blank_place = navigation_history.capture_current_place()
@@ -657,223 +651,42 @@ test.describe("IntelliJ-style navigation history", function()
     test.ok(not navigation_history.is_forward_available())
   end)
 
-  test.it("restoring a main editor place does not hide or blank a visible side panel", function(context)
-    local main = open_editor(context, "main one\nmain two")
-    local side_doc = track(context, "docs", core.open_doc())
-    side_doc:text_input("side one\nside two")
-    local side_view = track(context, "side_views", sidepanel.open_doc_in_side(side_doc, {
-      source_view = main,
-      focus = false,
-    }))
-    sidepanel.show("file", { focus = true })
-    test.equal(sidepanel.visible, true)
-    test.equal(sidepanel.active_side_view(), side_view)
-
-    set_caret(main, 2, 3)
-    set_caret(side_view, 1, 4)
-    core.set_active_view(main)
+  test.it("shares Right Pane history across File Tree and Editor tabs", function(context)
+    local panes = require "core.panes"
+    local filetree = require "plugins.filetree"
+    panes.show("right", { view = filetree, focus = true })
+    local entries = filetree:build_entries(false)
+    test.ok(#entries > 0)
+    set_caret(filetree, entries[1].line, 1)
     navigation_history.clear_history()
 
-    core.set_active_view(side_view)
-    test.ok(navigation_history.is_back_available())
+    local doc = track(context, "docs", core.open_doc())
+    doc:text_input("right one\nright two")
+    local editor = panes.open_doc(doc, { pane = "right", focus = true })
+    set_caret(editor, 2, 4)
+    panes.show("right", { view = filetree, focus = true })
 
     test.ok(command.perform("navigation:back"))
-    test.equal(core.active_view, main)
-    test.equal(sidepanel.visible, true)
-    test.equal(sidepanel.active_side_view(), side_view)
-    local line, col = caret(main)
-    test.equal(line, 2)
-    test.equal(col, 3)
-  end)
-
-  test.it("restoring a side editor place keeps side panel visibility as-is", function(context)
-    local main = open_editor(context, "main one\nmain two")
-    local side_doc = track(context, "docs", core.open_doc())
-    side_doc:text_input("side one\nside two")
-    local side_view = track(context, "side_views", sidepanel.open_doc_in_side(side_doc, {
-      source_view = main,
-      focus = false,
-    }))
-    sidepanel.show("file", { focus = true })
-    test.equal(sidepanel.visible, true)
-
-    set_caret(main, 1, 6)
-    set_caret(side_view, 2, 5)
-    core.set_active_view(side_view)
-    navigation_history.clear_history()
-
-    core.set_active_view(main)
-    test.ok(navigation_history.is_back_available())
-
-    test.ok(command.perform("navigation:back"))
-    test.equal(core.active_view, side_view)
-    test.equal(sidepanel.visible, true)
-    test.equal(sidepanel.active_side_view(), side_view)
-    local line, col = caret(side_view)
-    test.equal(line, 2)
-    test.equal(col, 5)
-  end)
-
-  test.it("restoring an accessible Side Editor Slot keeps it in slot mode", function(context)
-    local main = open_editor(context, "main one\nmain two")
-    local side_doc = track(context, "docs", core.open_doc())
-    side_doc:text_input("side one\nside two")
-    local side_view = track(context, "side_views", sidepanel.open_doc_in_side(side_doc, {
-      source_view = main,
-      focus = true,
-    }))
-    set_caret(side_view, 2, 3)
-    test.equal(sidepanel.visible, false)
-    test.equal(sidepanel.side_editor_slot_visible, true)
-    navigation_history.clear_history()
-
-    core.set_active_view(main)
-    test.ok(navigation_history.is_back_available())
-
-    test.ok(command.perform("navigation:back"))
-    test.equal(core.active_view, side_view)
-    test.equal(sidepanel.visible, false)
-    test.equal(sidepanel.side_editor_slot_visible, true)
-    test.equal(sidepanel.active_side_view(), side_view)
-    local line, col = caret(side_view)
-    test.equal(line, 2)
-    test.equal(col, 3)
-  end)
-
-  test.it("restores a replaced Side Editor place on the side", function(context)
-    local main = open_editor(context, "main")
-    local first_doc = track(context, "docs", core.open_doc())
-    first_doc:text_input("first one\nfirst two")
-    first_doc:clean()
-    local first_side = track(context, "side_views", sidepanel.open_doc_in_side(first_doc, {
-      source_view = main,
-      focus = true,
-    }))
-    set_caret(first_side, 2, 4)
-    local first_place = navigation_history.capture_place(first_side)
-
-    local second_doc = track(context, "docs", core.open_doc())
-    second_doc:text_input("second")
-    second_doc:clean()
-    local second_side = track(context, "side_views", sidepanel.open_doc_in_side(second_doc, {
-      source_view = main,
-      focus = true,
-    }))
-    set_caret(second_side, 1, 5)
-    test.ok(not sidepanel.contains_view(first_side))
-    navigation_history.clear_history()
-    test.ok(navigation_history.record_place(first_place, { check_current = false }))
-
-    test.ok(command.perform("navigation:back"))
-    local restored = core.active_view
-    test.ok(restored ~= first_side)
-    test.ok(sidepanel.is_side_editor(restored))
-    test.equal(sidepanel.file_view, restored)
-    test.equal(sidepanel.active_side_view(), restored)
-    test.equal(restored.doc, first_doc)
-    test.equal(sidepanel.visible, false)
-    test.equal(sidepanel.side_editor_slot_visible, true)
-    local line, col = caret(restored)
+    test.equal(core.active_view, editor)
+    local line, col = caret(editor)
     test.equal(line, 2)
     test.equal(col, 4)
-
-    test.ok(command.perform("navigation:forward"))
-    restored = core.active_view
-    test.ok(restored ~= second_side)
-    test.ok(sidepanel.is_side_editor(restored))
-    test.equal(sidepanel.file_view, restored)
-    test.equal(sidepanel.active_side_view(), restored)
-    test.equal(restored.doc, second_doc)
-    test.equal(sidepanel.visible, false)
-    test.equal(sidepanel.side_editor_slot_visible, true)
-    line, col = caret(restored)
-    test.equal(line, 1)
-    test.equal(col, 5)
   end)
 
-  test.it("restoring a side editor place from a hidden side panel shows the side panel", function(context)
-    local main = open_editor(context, "main one\nmain two")
-    local side_view = open_side_editor(context, "history side", "side one\nside two")
-    sidepanel.show("history side", { focus = true })
-    set_caret(side_view, 2, 3)
-    navigation_history.clear_history()
+  test.it("restoring a hidden Right Pane place expands that pane", function(context)
+    local panes = require "core.panes"
+    local left = open_editor(context, "left")
+    local doc = track(context, "docs", core.open_doc())
+    doc:text_input("right one\nright two")
+    local right = panes.open_doc(doc, { pane = "right", focus = true })
+    set_caret(right, 2, 3)
+    local place = navigation_history.capture_place(right)
 
-    core.set_active_view(main)
-    sidepanel.hide(false)
-    test.equal(sidepanel.visible, false)
-    test.ok(navigation_history.is_back_available())
-
-    test.ok(command.perform("navigation:back"))
-    test.equal(core.active_view, side_view)
-    test.equal(sidepanel.visible, true)
-    test.equal(sidepanel.active_side_view(), side_view)
-    local line, col = caret(side_view)
-    test.equal(line, 2)
-    test.equal(col, 3)
-  end)
-
-  test.it("restoring between main editors keeps a visible side panel unchanged", function(context)
-    local first = open_editor(context, "first one\nfirst two")
-    local second = open_editor(context, "second one\nsecond two")
-    local side_view = open_side_editor(context, "persistent side", "side")
-    sidepanel.show("persistent side", { focus = false })
-    test.equal(sidepanel.visible, true)
-    test.equal(sidepanel.active_side_view(), side_view)
-
-    set_caret(first, 2, 2)
-    set_caret(second, 1, 4)
-    core.set_active_view(first)
-    navigation_history.clear_history()
-
-    core.set_active_view(second)
-    test.ok(command.perform("navigation:back"))
-    test.equal(core.active_view, first)
-    test.equal(sidepanel.visible, true)
-    test.equal(sidepanel.active_side_view(), side_view)
-    local line, col = caret(first)
-    test.equal(line, 2)
-    test.equal(col, 2)
-  end)
-
-  test.it("restoring between main editors keeps a hidden side panel hidden", function(context)
-    local first = open_editor(context, "first")
-    local second = open_editor(context, "second")
-    local side_view = open_side_editor(context, "hidden side", "side")
-    sidepanel.show("hidden side", { focus = false })
-    sidepanel.hide(false)
-    test.equal(sidepanel.visible, false)
-
-    core.set_active_view(first)
-    navigation_history.clear_history()
-    core.set_active_view(second)
-
-    test.ok(command.perform("navigation:back"))
-    test.equal(core.active_view, first)
-    test.equal(sidepanel.visible, false)
-    test.equal(sidepanel.active_side_view(), side_view)
-  end)
-
-  test.it("restoring between side editors switches side view and keeps side panel visible", function(context)
-    local main = open_editor(context, "main")
-    local side_a = open_side_editor(context, "side A", "alpha\nbeta")
-    local side_b = open_side_editor(context, "side B", "gamma\ndelta")
-
-    sidepanel.show("side A", { focus = true })
-    set_caret(side_a, 2, 2)
-    set_caret(side_b, 1, 3)
-    navigation_history.clear_history()
-
-    sidepanel.show("side B", { focus = true })
-    test.ok(navigation_history.is_back_available())
-
-    test.ok(command.perform("navigation:back"))
-    test.equal(core.active_view, side_a)
-    test.equal(sidepanel.visible, true)
-    test.equal(sidepanel.active_side_view(), side_a)
-    local line, col = caret(side_a)
-    test.equal(line, 2)
-    test.equal(col, 2)
-
-    core.set_active_view(main)
+    panes.hide_right(true)
+    test.equal(core.active_view, left)
+    test.equal(panes.right_visible(), false)
+    test.ok(navigation_history.restore_place(place))
+    test.equal(core.active_view, right)
+    test.equal(panes.right_visible(), true)
   end)
 end)

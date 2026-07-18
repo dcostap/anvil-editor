@@ -14,7 +14,7 @@ Copy the high-value parts of IntelliJ's Git history and text-diff workflow witho
 
 The result should feel like one coherent Anvil feature:
 
-- every substantial Git or Diff surface is a top-level Main Tab;
+- every substantial Git or Diff surface is a top-level Pane Tab;
 - there are no nested Git tabs;
 - file-backed Diff Sides are real views of the same Document used by Editors;
 - history selection updates its Diff View immediately;
@@ -37,9 +37,9 @@ These are not part of this plan unless requested later:
 
 ## Product decisions
 
-### Top-level Main Tabs
+### Top-level Left Pane tabs
 
-The visible Git surfaces are sibling Main Tabs, not children of a Git container:
+The visible Git surfaces are sibling Left Pane tabs, not children of a Git container:
 
 - Git Log
 - Commit Diff View
@@ -47,12 +47,12 @@ The visible Git surfaces are sibling Main Tabs, not children of a Git container:
 - Directory History View
 - combined multi-path history when implemented
 
-Text Diff Views, including Blank Diff Views and Clipboard Comparisons, are also top-level Main Tabs.
+Text Diff Views, including Blank Diff Views and Clipboard Comparisons, are also top-level Left Pane tabs.
 
 ### Tab identity and reuse
 
 - There is one singleton Git Log per Project.
-- Closing the Git Log removes its visible Main Tab but retains its state. `git:show-log` restores and focuses it.
+- Closing the Git Log removes its visible Pane Tab but retains its state. `git:show-log` restores and focuses it.
 - A Commit Diff View is reused by normalized repository and comparison endpoints. A request that specifies a changed file focuses that file in the reused tab.
 - File History is reused by normalized repository and path.
 - Selection history is reused only for the same repository, file, and selected line range. A different range opens another tab.
@@ -75,7 +75,7 @@ Behavior:
    - prefer the repository containing the focused project file;
    - otherwise use the Root Project repository;
    - when a Project contains several repositories, expose a repository selector and remember independent UI state for each repository.
-3. Restore/focus the singleton Git Log Main Tab.
+3. Restore/focus the singleton Git Log Pane Tab.
 4. Refresh on activation, preserving valid state.
 
 The Git Log lists committed revisions only. Remove Anvil's synthetic Working Tree row from this surface. Local changes remain available through history views, Git gutters/File Tree status, and `git:open-working-tree-diff`.
@@ -233,7 +233,7 @@ The armed state has no timeout. It resets when navigation state changes, includi
 
 - caret/selection movement;
 - selecting another file;
-- changing focus or Main Tab;
+- changing focus or Pane Tab;
 - editing either side;
 - refreshing/reloading the comparison;
 - swapping sides;
@@ -332,7 +332,7 @@ Ignore-whitespace policies, unified mode, three-way mode, breadcrumbs, and a ful
 
 Canonical command: `diff-view:open-blank`.
 
-- Open a new top-level Main Tab.
+- Open a new top-level Pane Tab.
 - Create two ordinary editable untitled Documents.
 - Recompute differences live.
 - Include both Documents in normal untitled recovery.
@@ -353,7 +353,7 @@ Mirror IntelliJ:
 - current selection or current file is the right side;
 - a full-file right side shares the canonical Document;
 - a selected fragment remains mapped to and editable in the canonical Document;
-- opening a comparison creates a new top-level Main Tab;
+- opening a comparison creates a new top-level Pane Tab;
 - swapping sides remains available.
 
 The general command search may expose both explicit commands. Context menus are not required by this plan.
@@ -366,7 +366,7 @@ Existing file/file and selected-text comparisons should be migrated onto the sam
 
 Git data refreshes when:
 
-- a Git-related Main Tab becomes active after focus was elsewhere;
+- a Git-related Pane Tab becomes active after focus was elsewhere;
 - Anvil regains application focus while a Git-related tab is active;
 - the user invokes the explicit refresh command.
 
@@ -407,11 +407,11 @@ A Project-level Git state service should own the singleton Git Log state and sha
 
 ## Architecture cleanup
 
-The current Git implementation still carries both secondary-window and Main Tab concepts. Clean this up rather than adding adapters:
+The current Git implementation still carries both secondary-window and Pane Tab concepts. Clean this up rather than adding adapters:
 
 - remove Git's dependency on `core.tool_window`;
-- move Git persistence into Main Tab/Workspace state directly;
-- remove `__main_tabs` pseudo-tool-window branches;
+- move Git persistence into Pane Tab/Workspace state directly;
+- remove obsolete pseudo-tool-window branches;
 - remove obsolete internal tab-strip drawing helpers;
 - rename view/session fields so they describe Main Surfaces rather than windows;
 - if no other feature uses `core.tool_window` after migration, remove the framework, native routing hooks, performance counters, Workspace fields, tests, and obsolete Project Tool Window glossary entry in the same cleanup;
@@ -495,18 +495,18 @@ Implementation:
 
 ### Slice 3: Blank and Clipboard Diff workflows
 
-Seam: commands, Main Tabs, Workspace/untitled recovery, and shared Document edits.
+Seam: commands, Left Pane tabs, Workspace/untitled recovery, and shared Document edits.
 
 Tests first:
 
-- each Blank Diff command opens a new Main Tab with two editable untitled Documents;
+- each Blank Diff command opens a new Pane Tab with two editable untitled Documents;
 - dirty close/recovery/Workspace restore preserves both sides;
 - clipboard comparison uses clipboard-left/current-right orientation;
 - whole-file and selected-fragment comparisons edit the real Document.
 
-### Slice 4: Main Tab Git ownership
+### Slice 4: Pane Tab Git ownership
 
-Seam: Git commands, Main Tab list, and Workspace state.
+Seam: Git commands, Pane Tab list, and Workspace state.
 
 Tests first:
 

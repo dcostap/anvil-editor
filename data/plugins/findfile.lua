@@ -5,7 +5,6 @@ local common = require "core.common"
 local command = require "core.command"
 local file_context = require "core.file_context"
 local keymap = require "core.keymap"
-local sidepanel = require "core.sidepanel"
 local style = require "core.style"
 local StatusBar = require "core.statusbar"
 
@@ -313,10 +312,10 @@ end
 local function open_file_in_project(project, path, line)
   local filename = file_in_project(project, path)
   if filename then
-    sidepanel.open_path_in_main(filename, {
+    require("core.panes").open_path(filename, {
+      pane = "left",
       line = line or 1,
       col = 1,
-      replace_dirty_singleton = true,
     })
   end
 end

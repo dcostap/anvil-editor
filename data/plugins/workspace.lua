@@ -4,7 +4,7 @@ local command = require "core.command"
 local common = require "core.common"
 local storage = require "core.storage"
 local project_paths = require "core.project_paths"
-local sidepanel = require "core.sidepanel"
+local panes = require "core.panes"
 local tool_window = require "core.tool_window"
 local untitled_recovery = require "plugins.untitled_recovery"
 
@@ -75,6 +75,11 @@ end
 
 local function count_saved_views(node)
   if type(node) ~= "table" then return 0 end
+  if node.panes then
+    local left = node.panes.left and node.panes.left.views or {}
+    local right = node.panes.right and node.panes.right.views or {}
+    return #left + #right
+  end
   if node.type == "leaf" then
     return type(node.views) == "table" and #node.views or 0
   end
@@ -173,24 +178,6 @@ local function consume_workspace(project_dir)
 end
 
 
-local function has_no_locked_children(node)
-  if node.locked then return false end
-  if node.type == "leaf" then return true end
-  return has_no_locked_children(node.a) and has_no_locked_children(node.b)
-end
-
-
-local function get_unlocked_root(node)
-  if node.type == "leaf" then
-    return not node.locked and node
-  end
-  if has_no_locked_children(node) then
-    return node
-  end
-  return get_unlocked_root(node.a) or get_unlocked_root(node.b)
-end
-
-
 ---@param view core.view
 local function save_view(view)
   local state = view:get_state()
@@ -251,57 +238,6 @@ local function load_view(t)
 end
 
 
-local function save_node(node)
-  local res = {}
-  res.type = node.type
-  if node.type == "leaf" then
-    res.views = {}
-    for _, view in ipairs(node.views) do
-      local t = save_view(view)
-      if t then
-        table.insert(res.views, t)
-        if node.active_view == view then
-          res.active_view = #res.views
-        end
-      end
-    end
-  else
-    res.divider = node.divider
-    res.a = save_node(node.a)
-    res.b = save_node(node.b)
-  end
-  return res
-end
-
-
-local function load_node(node, t)
-  if t.type == "leaf" then
-    local res
-    local active_view
-    for i, v in ipairs(t.views) do
-      local view = load_view(v)
-      if view then
-        if v.active then res = view end
-        node:add_view(view)
-        if t.active_view == i then
-          active_view = view
-        end
-      end
-    end
-    if active_view then
-      node:set_active_view(active_view)
-    end
-    return res
-  else
-    node:split(t.type == "hsplit" and "right" or "down")
-    node.divider = t.divider
-    local res1 = load_node(node.a, t.a)
-    local res2 = load_node(node.b, t.b)
-    return res1 or res2
-  end
-end
-
-
 local function refresh_project_path_consumers(reason)
   local ok, filetree = pcall(require, "plugins.filetree")
   if ok and filetree and filetree.refresh_preserving_selection_paths then
@@ -344,12 +280,10 @@ local function save_workspace()
   clear_duplicate_workspace_entries(entries, key)
 
   untitled_recovery.flush_all("workspace save", true)
-  local root = get_unlocked_root(core.root_panel.root_node)
-  local documents = save_node(root)
+  local documents = panes.save_workspace_state(save_view)
   storage.save(STORAGE_MODULE, key, {
     path = project_dir,
     documents = documents,
-    side_panel = sidepanel.save_workspace_state(save_view),
     project_paths = project_paths.save_workspace_state(),
     visited_files = core.prune_visited_files and core.prune_visited_files() or core.visited_files,
     tool_windows = tool_window.get_project_state(project),
@@ -371,9 +305,9 @@ function core.save_workspace()
   return save_workspace()
 end
 
-local function main_panel_workspace_is_empty()
-  local main_panel = core.root_panel and core.root_panel:get_main_panel()
-  return main_panel and main_panel:is_empty() and #core.docs == 0
+local function left_pane_workspace_is_empty()
+  local left_pane = core.root_panel and core.root_panel:get_left_pane()
+  return left_pane and left_pane:is_empty() and #core.docs == 0
 end
 
 local function maybe_show_empty_project_file_tree()
@@ -384,7 +318,7 @@ local function maybe_show_empty_project_file_tree()
   coroutine.yield()
   coroutine.yield()
   if core.active_view == initial_active_view
-  and main_panel_workspace_is_empty()
+  and left_pane_workspace_is_empty()
   and command.is_valid("filetree:focus-and-show") then
     command.perform("filetree:focus-and-show")
   end
@@ -404,12 +338,7 @@ local function load_workspace()
           core.visited_files = workspace.visited_files
           if core.prune_visited_files then core.prune_visited_files() end
         end
-        local root = get_unlocked_root(core.root_panel.root_node)
-        local active_view = load_node(root, workspace.documents)
-        if active_view then
-          core.set_active_view(active_view)
-        end
-        sidepanel.restore_workspace_state(workspace.side_panel, load_view)
+        panes.restore_workspace_state(workspace.documents, load_view)
         sync_workspace_project_paths_to_core_projects()
         tool_window.restore_project_state(core.root_project(), workspace.tool_windows)
       end

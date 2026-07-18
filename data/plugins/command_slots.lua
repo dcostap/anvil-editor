@@ -1,5 +1,5 @@
 -- mod-version:3 priority:250
--- Project-scoped PowerShell command slots with read-only side-panel output.
+-- Project-scoped PowerShell command slots with read-only Right Pane output.
 local core = require "core"
 local command = require "core.command"
 local common = require "core.common"
@@ -14,7 +14,7 @@ local Doc = require "core.doc"
 local DocView = require "core.docview"
 local View = require "core.view"
 local file_context = require "core.file_context"
-local sidepanel = require "core.sidepanel"
+local panes = require "core.panes"
 
 local M = core.command_slots or {}
 core.command_slots = M
@@ -561,7 +561,7 @@ function CommandOutputView:new(slot)
   self.slot = slot
   self.command_output_view = true
   self.poi_cache = nil
-  file_context.exclude_main_panel_view(self)
+  file_context.exclude_content_view(self)
 end
 
 function CommandOutputView:get_name()
@@ -711,12 +711,13 @@ function CommandOutputView:activate_point_of_interest(poi, opts)
   opts = opts or {}
   local preserve_focus = opts.preserve_focus
   if preserve_focus == nil then preserve_focus = true end
-  local open = opts.side and sidepanel.open_path_in_side or sidepanel.open_path_in_main
-  return open(poi.path, {
+  return panes.open_path(poi.path, {
+    pane = opts.pane or "left",
     line = poi.target_line or poi.line,
     col = poi.target_col or 1,
-    focus = opts.side and true or nil,
+    focus = opts.pane == "right" and true or nil,
     preserve_focus = preserve_focus,
+    restore_focus = preserve_focus and core.active_view or nil,
   })
 end
 
@@ -772,7 +773,7 @@ function CommandOutputPanel:new()
   self.hovered_scroll_button = 0
   self.tab_bar = new_command_output_tab_bar(self)
   self.cursor = "arrow"
-  file_context.exclude_main_panel_view(self)
+  file_context.exclude_content_view(self)
 end
 
 function CommandOutputPanel:get_name()
@@ -795,7 +796,7 @@ function CommandOutputPanel:slot_view(slot)
   if not slot.view then
     slot.view = CommandOutputView(slot)
   end
-  slot.view.__sidepanel_focus_owner = self
+  slot.view.__pane_focus_owner = self
   self.views = self.views or {}
   if slot.index then self.views[slot.index] = slot.view end
   return slot.view
@@ -846,10 +847,8 @@ function CommandOutputPanel:select_slot(index, opts)
 
   self.active_slot_index = index
   self.active_view = self:slot_view(self:active_slot())
+  panes.remember_focus(self, self.active_view)
   self.manual_tab_scroll = nil
-  if self.active_view and sidepanel.side_focus_views then
-    sidepanel.side_focus_views[self] = self.active_view
-  end
   local view = self.active_view
   if old_view and old_view ~= view and old_view.on_mouse_left then
     old_view:on_mouse_left()
@@ -998,21 +997,18 @@ M.CommandOutputPanel = CommandOutputPanel
 
 local function ensure_output_panel()
   if not M.output_panel or not M.output_panel.command_output_panel or M.output_panel.command_output_panel_version ~= COMMAND_OUTPUT_PANEL_VERSION then
-    if M.output_panel then sidepanel.remove_view(M.output_panel, false) end
+    if M.output_panel then panes.remove_view(M.output_panel, { force = true, focus_left = false }) end
     M.output_panel = CommandOutputPanel()
   end
-  if not sidepanel.contains_view(M.output_panel) then
-    sidepanel.register_panel("command-output", M.output_panel)
-  else
-    sidepanel.attach_view("command-output", M.output_panel)
-    sidepanel.add_view(M.output_panel)
+  if not panes.contains_view("right", M.output_panel) then
+    panes.register_view("right", "command-output", M.output_panel)
   end
   return M.output_panel
 end
 
 local function ensure_output_view(slot, focus)
   local panel = ensure_output_panel()
-  sidepanel.show(panel, { focus = focus == true })
+  panes.show("right", { view = panel, focus = focus == true })
   return panel:select_slot(slot.index, { focus = focus == true, follow_end = true })
 end
 
@@ -1260,7 +1256,7 @@ end
 
 local function default_run_command(slot, command_text)
   local active_before = core.active_view
-  local focus_output = not not (sidepanel.is_side_view(active_before) or sidepanel.side_focus_owner(active_before))
+  local focus_output = panes.pane_for_view(active_before) == "right"
 
   if slot.running then
     M.kill_slot(slot.index, "rerun")
@@ -1379,7 +1375,7 @@ end
 local function active_output_panel()
   local view = core.active_view
   if view and view.command_output_panel then return view end
-  local owner = view and view.__sidepanel_focus_owner
+  local owner = view and view.__pane_focus_owner
   if owner and owner.command_output_panel then return owner end
 end
 
@@ -1394,7 +1390,7 @@ function M.navigate_output_history(delta)
   local panel = active_output_panel()
   if not panel then
     local slot = active_output_slot()
-    panel = slot and slot.view and slot.view.__sidepanel_focus_owner
+    panel = slot and slot.view and slot.view.__pane_focus_owner
   end
   if panel and panel.switch_history then
     return panel:switch_history(delta)
@@ -1419,7 +1415,7 @@ local function install_commands()
   end
   map["command-slots:focus-output"] = function()
     local panel = ensure_output_panel()
-    sidepanel.show(panel, { focus = true })
+    panes.show("right", { view = panel, focus = true })
     local slot = panel:active_slot()
     if slot then
       panel:select_slot(slot.index, { focus = true, follow_end = true })
@@ -1427,12 +1423,12 @@ local function install_commands()
   end
   map["command-slots:switch-next"] = function()
     local panel = ensure_output_panel()
-    sidepanel.show(panel, { focus = true })
+    panes.show("right", { view = panel, focus = true })
     return panel:switch_tab(1)
   end
   map["command-slots:switch-previous"] = function()
     local panel = ensure_output_panel()
-    sidepanel.show(panel, { focus = true })
+    panes.show("right", { view = panel, focus = true })
     return panel:switch_tab(-1)
   end
   command.add(nil, map)
@@ -1558,7 +1554,7 @@ end
 
 function M._reset_for_tests()
   if M.output_panel then
-    sidepanel.remove_view(M.output_panel, false)
+    panes.remove_view(M.output_panel, { force = true, focus_left = false })
     M.output_panel = nil
   end
   for _, slot in ipairs(M.slots) do

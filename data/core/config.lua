@@ -45,7 +45,6 @@ config.images_background_mode = "grid"
 ---
 ---Defaults to "right".
 ---@type config.markdownpreviewmode
-config.markdown_preview_mode = "right"
 
 ---The color used for the background of transparent images when the
 ---background mode is set to solid.
@@ -355,7 +354,6 @@ config.borderless = false
 ---Currently intended for the integrated Windows titlebar path.
 ---Defaults to false.
 ---@type boolean
-config.integrated_titlebar_tabs = false
 
 ---Minimum width for integrated titlebar tabs.
 ---Defaults to 80 * SCALE.

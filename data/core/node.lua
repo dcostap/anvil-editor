@@ -34,8 +34,7 @@ local Tabs = require "core.tabs"
 ---@field b core.node?
 ---@field locked core.node.lock?
 ---@field resizable boolean?
----@field is_main_panel_node boolean? Marks the Main Panel node.
----@field is_primary_node boolean? Deprecated compatibility alias for `is_main_panel_node`.
+---@field pane_id "left"|"right"? Marks a top-level Pane node.
 ---@field move_towards function
 local Node = Object:extend()
 
@@ -191,7 +190,7 @@ end
 
 ---Remove a view from this node.
 ---If this is the last view, may collapse the node or replace with EmptyView.
----Handles Main Panel logic and tree restructuring.
+---Keeps top-level Pane nodes structurally present while collapsing ordinary splits.
 ---@param root core.node The root node of the tree
 ---@param view core.view View to remove
 function Node:remove_view(root, view)
@@ -209,13 +208,10 @@ function Node:remove_view(root, view)
   else
     local parent = self:get_parent_node(root)
     if not parent then
-      local self_is_main_panel = self.is_main_panel_node or self.is_primary_node
       self.views = {}
-      self:add_view(EmptyView())
-      if self_is_main_panel then
-        self.is_main_panel_node = true
-        self.is_primary_node = true
-      end
+      local placeholder = EmptyView()
+      placeholder.__pane_placeholder = self.pane_id ~= nil
+      self:add_view(placeholder)
       core.last_active_view = nil
       return
     end
@@ -228,28 +224,18 @@ function Node:remove_view(root, view)
     else
       locked_size = locked_size_y
     end
-    local self_is_main_panel = self.is_main_panel_node or self.is_primary_node
-    local next_main_panel
-    if self_is_main_panel then
-      next_main_panel = core.root_panel:select_next_main_panel()
-    end
-    if locked_size or (self_is_main_panel and not next_main_panel) then
+    if locked_size or self.pane_id then
       self.views = {}
-      self:add_view(EmptyView())
+      local placeholder = EmptyView()
+      placeholder.__pane_placeholder = self.pane_id ~= nil
+      self:add_view(placeholder)
     else
-      if other == next_main_panel then
-        next_main_panel = parent
-      end
       parent:consume(other)
       local p = parent
       while p.type ~= "leaf" do
         p = p[is_a and "a" or "b"]
       end
       p:set_active_view(p.active_view)
-      if self_is_main_panel then
-        next_main_panel.is_main_panel_node = true
-        next_main_panel.is_primary_node = true
-      end
     end
   end
   core.last_active_view = nil
@@ -261,8 +247,8 @@ end
 ---@param root core.node The root node of the tree
 ---@param view core.view View to close
 function Node:close_view(root, view)
-  local main_tabs = core.main_tabs
-  if main_tabs and main_tabs.close_view and main_tabs.close_view(self, root, view) then return end
+  local panes = core.panes
+  if panes and panes.pane_for_view(view) and panes.close_view(view) then return end
   local do_close = function()
     self:remove_view(root, view)
   end
@@ -424,18 +410,8 @@ end
 ---Based on config settings, number of views, and drag state.
 ---@return boolean show True if tabs should be displayed
 function Node:should_show_tabs()
+  if self.pane_id then return false end
   if self.locked then return false end
-  if config.integrated_titlebar_tabs and core.title_bar and core.title_bar.visible and core.root_panel
-     and (self.is_main_panel_node or self.is_primary_node) then
-    return false
-  end
-  if config.integrated_titlebar_tabs and core.title_bar and core.title_bar.visible and core.root_panel then
-    local active_node = core.root_panel:get_active_node()
-    if active_node and active_node.locked and core.last_active_view then
-      active_node = core.root_panel.root_node:get_node_for_view(core.last_active_view) or active_node
-    end
-    if active_node == self then return false end
-  end
   local dn = core.root_panel and core.root_panel.dragged_node
   if config.hide_tabs then
     return false
@@ -817,11 +793,11 @@ function Node:close_all_views(keep_view)
     -- Locked leaves are structural UI chrome/panels (title bar, prompt bar,
     -- status bar, etc.), not user tabs. Explicit tab-closing commands should
     -- be content-agnostic, but they must not remove the editor chrome itself.
-    if self.locked then return end
+    if self.locked and not self.pane_id then return end
     local i = 1
     while i <= #self.views do
       local view = self.views[i]
-      if view ~= keep_view then
+      if view ~= keep_view and not view.__pane_permanent then
         if view.release_owned_features then view:release_owned_features("close-all-views") end
         table.remove(self.views, i)
         if view == node_active_view then
@@ -832,17 +808,19 @@ function Node:close_all_views(keep_view)
       end
     end
     self.tab_offset = 1
-    if #self.views == 0 and (self.is_main_panel_node or self.is_primary_node) then
-      self:add_view(EmptyView())
+    if #self.views == 0 and self.pane_id then
+      local placeholder = EmptyView()
+      placeholder.__pane_placeholder = true
+      self:add_view(placeholder)
     elseif #self.views > 0 and lost_active_view then
       self:set_active_view(self.views[1])
     end
   else
     self.a:close_all_views(keep_view)
     self.b:close_all_views(keep_view)
-    if self.a:is_empty() and not (self.a.is_main_panel_node or self.a.is_primary_node) then
+    if self.a:is_empty() and not self.a.pane_id then
       self:consume(self.b)
-    elseif self.b:is_empty() and not (self.b.is_main_panel_node or self.b.is_primary_node) then
+    elseif self.b:is_empty() and not self.b.pane_id then
       self:consume(self.a)
     end
   end
@@ -858,7 +836,9 @@ function Node:close_all_docviews(keep_active)
     local i = 1
     while i <= #self.views do
       local view = self.views[i]
-      if (view.context == "workspace" or view.context == "session") and (not keep_active or view ~= self.active_view) then
+      if not view.__pane_permanent
+      and (view.context == "workspace" or view.context == "session")
+      and (not keep_active or view ~= self.active_view) then
         if view.release_owned_features then view:release_owned_features("close-all-docviews") end
         table.remove(self.views, i)
         if view == node_active_view then
@@ -869,12 +849,11 @@ function Node:close_all_docviews(keep_active)
       end
     end
     self.tab_offset = 1
-    if #self.views == 0 and (self.is_main_panel_node or self.is_primary_node) then
-      -- If we are not in the Main Panel and had the active view, it does not
-      -- matter to reassign the active view because the close_all_docviews top
-      -- call will let the Main Panel take the active view anyway.
+    if #self.views == 0 and self.pane_id then
       -- Set the empty view and take the active view.
-      self:add_view(EmptyView())
+      local placeholder = EmptyView()
+      placeholder.__pane_placeholder = true
+      self:add_view(placeholder)
     elseif #self.views > 0 and lost_active_view then
       -- In practice we never get there but if a view remain we need
       -- to reset the Node's active view.
@@ -883,9 +862,9 @@ function Node:close_all_docviews(keep_active)
   else
     self.a:close_all_docviews(keep_active)
     self.b:close_all_docviews(keep_active)
-    if self.a:is_empty() and not (self.a.is_main_panel_node or self.a.is_primary_node) then
+    if self.a:is_empty() and not self.a.pane_id then
       self:consume(self.b)
-    elseif self.b:is_empty() and not (self.b.is_main_panel_node or self.b.is_primary_node) then
+    elseif self.b:is_empty() and not self.b.pane_id then
       self:consume(self.a)
     end
   end

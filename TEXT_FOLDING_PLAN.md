@@ -127,7 +127,7 @@ Search should still inspect all real Document text.
 - If a match is inside a collapsed Fold Region, expand that Fold Region before selecting/scolling to the match.
 - Repeat-find/previous-find should behave the same way.
 - Local IntelliJ-style find in `data/plugins/intellij_find.lua` is the first integration target because it is first-party and loaded by defaults.
-- Core find/replace and `search_ui` should be updated or routed through the same unfold-before-select helper.
+- Core find/replace should be updated or routed through the same unfold-before-select helper.
 
 Navigation that jumps to a line/range should unfold target folds first. Because fold state is per `DocView`, this should be a view-level API rather than scattered direct `doc:set_selection(...)` calls:
 
@@ -386,7 +386,7 @@ Do not migrate DiffView yet. Do not expose ordinary editor fold commands beyond 
 - Add `select_and_reveal` / `reveal_range` helpers with fold policy options.
 - Update keyboard movement/select/delete paths in `data/core/commands/doc.lua` and `DocView.translate` so carets do not land invisibly inside collapsed folds.
 - Update first-party local find (`data/plugins/intellij_find.lua`) to expand target folds before selecting matches.
-- Update core find/replace and `search_ui` navigation paths to use the same helper.
+- Update core find/replace navigation paths to use the same helper.
 - Migrate in-repo navigation/result-activation callers that currently do direct `doc:set_selection(...)` plus scroll, including go-to-line, POI, language navigation, diagnostics, project search, file pickers, and navigation/edit-location history.
 - Keep these integrations gated from wrapped default Editors until Phase 3 unless the helper expands or rejects folds in wrapped views.
 

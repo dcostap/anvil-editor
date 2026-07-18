@@ -54,6 +54,7 @@ local function set_doc_lines(doc, lines)
 end
 
 function GitView:new(project, opts)
+  self.__hide_right_pane_on_focus = true
   GitView.super.new(self)
   opts = opts or {}
   self.project = project
@@ -198,11 +199,11 @@ end
 
 function GitView:try_close(callback)
   if self.tab_id == "log" then
-    if self.tool_window and not self.tool_window.__main_tabs then
+    if self.tool_window and not self.tool_window.__pane_session then
       self.tool_window:hide()
       return false
     end
-    if self.tool_window and self.tool_window.__main_tabs then
+    if self.tool_window and self.tool_window.__pane_session then
       local tw = self.tool_window
       local active_before = core.active_view
       local active_owner_before = active_before and (active_before.git_owner_view or active_before)
@@ -233,13 +234,13 @@ function GitView:try_close(callback)
       tw.git_view = nil
       tw.git_model = nil
       tw.hidden = true
-      if core.main_tabs and core.main_tabs.git_sessions then core.main_tabs.git_sessions[tw.project_key] = nil end
+      if core.panes and core.panes.git_sessions then core.panes.git_sessions[tw.project_key] = nil end
       if active_was_session_view then
-        local main = core.root_panel and core.root_panel.get_main_panel and core.root_panel:get_main_panel()
+        local main = core.root_panel and core.root_panel.get_left_pane and core.root_panel:get_left_pane()
         if main and main.active_view and main.active_view ~= self then
           core.set_active_view(main.active_view)
-        elseif core.main_tabs and tw.root == core.root_panel then
-          core.main_tabs.blank_main_editor(true)
+        elseif core.panes and tw.root == core.root_panel then
+          core.panes.remove_view(self, { force = true })
         else
           core.active_view = nil
         end

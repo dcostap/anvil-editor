@@ -92,7 +92,7 @@ plugin_defaults("centered_editor", {
   max_width = 1200,
   scale_width = true,
   min_margin = 0,
-  main_tabs_only = true,
+  pane_views_only = true,
 })
 plugin_defaults("command_slots", {
   max_output_bytes = 10 * 1024 * 1024,
@@ -176,21 +176,10 @@ plugin_defaults("navigation_history", {
   debug_main_log = true,
   max_entries = 150,
 })
-plugin_defaults("projectsearch", {
-  threading = {
-    workers = math.ceil(thread.get_cpu_count() / 2) + 1,
-  },
-  live_search = false,
-  syntax_highlighting = true,
-})
 plugin_defaults("scale", {
   autodetect = true,
   default_scale = DEFAULT_SCALE,
   use_mousewheel = true,
-})
-plugin_defaults("search_ui", {
-  replace_core_find = true,
-  position = "bottom",
 })
 plugin_defaults("trimwhitespace", {
   enabled = true,
@@ -283,7 +272,6 @@ config.select_add_next_no_case = true
 -- integration for shadow/resize/snap behavior while Lua draws the top bar.
 if PLATFORM == "Windows" then
   config.borderless = true
-  config.integrated_titlebar_tabs = false
 end
 -- Cleaner tabs: grow to fit titles between compact min/max widths.
 style.tab_min_width = 110 * SCALE

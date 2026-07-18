@@ -104,8 +104,8 @@ function ToolWindow:hide()
     local restore_last_active_view = core.last_active_view
     local app_root_panel = core.tool_window_main_root_panel or core.root_panel
     if app_root_panel == self.root then app_root_panel = nil end
-    local main_node = app_root_panel and app_root_panel.get_main_panel and app_root_panel:get_main_panel()
-    local fallback_view = main_node and main_node.active_view or nil
+    local left_node = app_root_panel and app_root_panel.get_left_pane and app_root_panel:get_left_pane()
+    local fallback_view = left_node and left_node.active_view or nil
     if fallback_view then
       local previous_event_window = core.event_window
       core.active_window = core.window
@@ -263,8 +263,8 @@ function tool_window.get(project, kind)
   local tw = tool_window.windows[key_for(project, kind)]
   if tw then return tw end
   local core = package.loaded.core
-  if kind == "git" and core and core.main_tabs and core.main_tabs.git_sessions then
-    return core.main_tabs.git_sessions[project_key(project)]
+  if kind == "git" and core and core.panes and core.panes.git_sessions then
+    return core.panes.git_sessions[project_key(project)]
   end
 end
 
@@ -289,8 +289,8 @@ function tool_window.get_project_state(project)
   end
   for _, tw in pairs(tool_window.windows) do add_state(tw) end
   local core = package.loaded.core
-  if core and core.main_tabs and core.main_tabs.git_sessions then
-    for _, tw in pairs(core.main_tabs.git_sessions) do add_state(tw) end
+  if core and core.panes and core.panes.git_sessions then
+    for _, tw in pairs(core.panes.git_sessions) do add_state(tw) end
   end
   table.sort(states, function(a, b) return tostring(a.kind) < tostring(b.kind) end)
   return states
@@ -356,7 +356,7 @@ function tool_window.reset_for_tests()
   end
   tool_window.windows = {}
   tool_window.windows_by_id = {}
-  if core.main_tabs then core.main_tabs.git_sessions = {} end
+  if core.panes then core.panes.git_sessions = {} end
   core.active_window = core.window
   core.event_window = core.window
 end

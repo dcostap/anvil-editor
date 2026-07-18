@@ -16,10 +16,10 @@ A Point of Interest is a navigable target within a view. It may also be activata
 - `alt+r` activates the POI under the **text caret**. Mouse-pointer/link-click activation can be added later.
 - POI activation only applies when the target resolves to a real existing file/location.
 - POI navigation keeps the current no-wrap behavior and uses Navigation Boundary Feedback at boundaries.
-- `alt+8` / `alt+9` navigate previous/next POI in the Side Panel and immediately activate it into the Main Panel.
-- Side-panel POI commands preserve the starting focus:
-  - If focus starts in the Main Panel, it remains in the Main Panel.
-  - If focus starts in the Side Panel, it remains in the Side Panel.
+- `alt+8` / `alt+9` navigate previous/next POI in the Right Pane and immediately activate it into the Left Pane.
+- Right Pane POI commands preserve the starting focus:
+  - If focus starts in the Left Pane, it remains in the Left Pane.
+  - If focus starts in the Right Pane, it remains in the Right Pane.
 
 ## User-facing commands and keymaps
 
@@ -30,8 +30,8 @@ Add a new command family:
 - `poi:previous`
 - `poi:next`
 - `poi:activate`
-- `poi:side-previous-activate`
-- `poi:side-next-activate`
+- `poi:right-previous-activate`
+- `poi:right-next-activate`
 
 Existing commands should be migrated cleanly where possible:
 
@@ -44,8 +44,8 @@ Existing commands should be migrated cleanly where possible:
 - `ctrl+alt+,` -> `poi:previous`
 - `ctrl+alt+.` -> `poi:next`
 - `alt+r` -> `poi:activate`
-- `alt+8` -> `poi:side-previous-activate`
-- `alt+9` -> `poi:side-next-activate`
+- `alt+8` -> `poi:right-previous-activate`
+- `alt+9` -> `poi:right-next-activate`
 
 `alt+r` must be registered in a way that allows existing contextual uses, such as File Tree open and fuzzy picker confirm, to continue when no activatable POI exists.
 
@@ -217,34 +217,35 @@ Implementation notes:
 
 ### Activation
 
-Command Output POI activation opens the target in the Main Panel:
+Command Output POI activation opens the target in the Left Pane:
 
 ```lua
-sidepanel.open_path_in_main(path, {
+panes.open_path(path, {
+  pane = "left",
   line = poi.target_line,
   col = poi.target_col,
   preserve_focus = opts and opts.preserve_focus,
 })
 ```
 
-For ordinary `alt+r` while focused in Command Output View, preserve focus according to the command's opts. The default should be sensible for repeated activation from output; the side-panel navigation commands explicitly preserve the starting focus.
+For ordinary `alt+r` while focused in Command Output View, preserve focus according to the command's opts. The default should be sensible for repeated activation from output; the Right Pane navigation commands explicitly preserve the starting focus.
 
-## Side-panel POI navigation
+## Right Pane POI navigation
 
-`poi:side-previous-activate` / `poi:side-next-activate` should target the active/restorable Side Panel focus view.
+`poi:right-previous-activate` / `poi:right-next-activate` should target the active/restorable Right Pane focus view.
 
 Target selection:
 
-1. If the active view is a Side Panel focus view, use that owner/focus view.
-2. Otherwise use the current visible Side Panel view's restorable focus view.
+1. If the active view is a Right Pane focus view, use that owner/focus view.
+2. Otherwise use the current visible Right Pane view's restorable focus view.
 3. If that view is a container, ask it for its focus view, e.g. `CommandOutputPanel:get_focus_view()`.
-4. If there is no Side Panel POI provider or no POIs, show boundary feedback.
+4. If there is no Right Pane POI provider or no POIs, show boundary feedback.
 
 Flow:
 
 1. Save `starting_focus = core.active_view`.
-2. Navigate Side Panel target view to previous/next POI.
-3. Activate the selected POI into the Main Panel.
+2. Navigate Right Pane target view to previous/next POI.
+3. Activate the selected POI into the Left Pane.
 4. Restore `starting_focus` if it is still valid and the command is configured to preserve focus.
 
 This is what allows staying in the editor while stepping through compiler errors in the Command Output View, and also staying in the Command Output View when focus started there.
@@ -274,9 +275,9 @@ Add UI tests under `tests/lua/ui`:
 - `poi:next` / `poi:previous` navigate an Editor's Git-change provider without wrapping.
 - Command Output View POI navigation moves the caret to detected output locations.
 - Command Output View draws underlines only for detected Text POI bounds.
-- `poi:activate` opens an existing referenced file in Main Panel at the expected line/column.
-- `poi:side-next-activate` from Main Panel activates Command Output POIs and preserves Main Panel focus.
-- `poi:side-next-activate` from Side Panel activates Command Output POIs and preserves Side Panel focus.
+- `poi:activate` opens an existing referenced file in Left Pane at the expected line/column.
+- `poi:right-next-activate` from Left Pane activates Command Output POIs and preserves Left Pane focus.
+- `poi:right-next-activate` from Right Pane activates Command Output POIs and preserves Right Pane focus.
 
 Do not test exact shortcut bindings; invoke commands with `command.perform(...)`.
 
@@ -286,7 +287,7 @@ Do not test exact shortcut bindings; invoke commands with `command.perform(...)`
 2. Refactor Git change navigation into an Editor POI provider while preserving current behavior.
 3. Wire DiffView hunk navigation into the POI provider model.
 4. Add Command Output View parser/provider and activation.
-5. Add Side Panel navigate-and-activate commands.
+5. Add Right Pane navigate-and-activate commands.
 6. Add targeted tests, run relevant Lua syntax checks and Meson test targets.
 7. Remove obsolete duplicated navigation code where cleanly migrated.
 

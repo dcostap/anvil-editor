@@ -108,8 +108,7 @@ end
 function RootPanel:new()
   RootPanel.super.new(self)
   self.root_node = Node()
-  self.root_node.is_main_panel_node = true
-  self.root_node.is_primary_node = true -- deprecated compatibility alias
+  self.root_node.pane_id = "left"
   self.deferred_draws = {}
   self.mouse = { x = 0, y = 0 }
   self.drag_overlay = { x = 0, y = 0, w = 0, h = 0, visible = false, opacity = 0,
@@ -139,29 +138,30 @@ end
 
 
 ---Get the layout node containing the currently active view.
----Falls back to the Main Panel if active view not found.
----@return core.node node Node containing active view or the Main Panel node
+---Falls back to the Left Pane if active view is not found.
+---@return core.node node Node containing active view or the Left Pane node
 function RootPanel:get_active_node()
   local active = core.active_view
   local node = self.root_node:get_node_for_view(active)
-  if not node and active and active.git_owner_view then
-    node = self.root_node:get_node_for_view(active.git_owner_view)
+  if not node and active then
+    local owner = active.__pane_focus_owner or active.git_owner_view or active.diff_view_parent
+    if owner then node = self.root_node:get_node_for_view(owner) end
   end
-  if not node then node = self:get_main_panel() end
+  if not node then node = self:get_left_pane() end
   return node
 end
 
 
----Find the Main Panel node in the layout tree recursively.
+---Find the Left Pane node in the layout tree recursively.
 ---@param node core.node Node to search from
----@return core.node node The Main Panel node
-local function get_main_panel(node)
+---@return core.node node The Left Pane node
+local function get_left_pane(node)
   if not node then return nil end
-  if node.is_main_panel_node or node.is_primary_node then
+  if node.pane_id == "left" then
     return node
   end
   if node.type ~= "leaf" then
-    return get_main_panel(node.a) or get_main_panel(node.b)
+    return get_left_pane(node.a) or get_left_pane(node.b)
   end
 end
 
@@ -178,20 +178,21 @@ end
 
 
 ---Get the active node, ensuring it's not locked.
----If active node is locked, switches to the Main Panel instead.
+---If active node is locked, switches to the Left Pane instead.
 ---Use this when adding new views to ensure they go to an editable node.
 ---@return core.node node Unlocked node suitable for adding views
 function RootPanel:get_active_node_default()
   local active = core.active_view
   local node = self.root_node:get_node_for_view(active)
-  if not node and active and active.git_owner_view then
-    node = self.root_node:get_node_for_view(active.git_owner_view)
+  if not node and active then
+    local owner = active.__pane_focus_owner or active.git_owner_view or active.diff_view_parent
+    if owner then node = self.root_node:get_node_for_view(owner) end
   end
-  if not node then node = self:get_main_panel() end
+  if not node then node = self:get_left_pane() end
   if node and node.locked then
-    local main_panel = self:get_main_panel()
-    local default_view = main_panel and main_panel.views[1]
-    assert(default_view, "internal error: cannot find Main Panel node.")
+    local left_pane = self:get_left_pane()
+    local default_view = left_pane and left_pane.views[1]
+    assert(default_view, "internal error: cannot find Left Pane node.")
     core.set_active_view(default_view)
     node = self:get_active_node()
   end
@@ -199,65 +200,24 @@ function RootPanel:get_active_node_default()
 end
 
 
----Get the Main Panel node, where ordinary documents open by default.
----@return core.node node The Main Panel node
-function RootPanel:get_main_panel()
-  return get_main_panel(self.root_node)
+---Get the permanent Left Pane node.
+---@return core.node node The Left Pane node
+function RootPanel:get_left_pane()
+  return get_left_pane(self.root_node)
       or get_first_leaf(self.root_node, true)
       or get_first_leaf(self.root_node, false)
 end
 
----@deprecated Use `RootPanel:get_main_panel()` instead.
-function RootPanel:get_primary_node()
-  core.deprecation_log("RootPanel:get_primary_node")
-  return self:get_main_panel()
-end
 
-
----Find next available unlocked node to become the Main Panel.
----Searches recursively through the tree for unlocked leaf nodes.
----@param node core.node Node to search from
----@return core.node? node Next unlocked leaf node, or nil if none found
-local function select_next_main_panel(node)
-  if node.is_main_panel_node or node.is_primary_node then return end
-  if node.type ~= "leaf" then
-    return select_next_main_panel(node.a) or select_next_main_panel(node.b)
-  else
-    local lx, ly = node:get_locked_size()
-    if not lx and not ly then
-      return node
-    end
-  end
-end
-
-
----Select a new Main Panel from available unlocked nodes.
----Used when closing the current Main Panel node.
----@return core.node node Next available unlocked node to be Main Panel
-function RootPanel:select_next_main_panel()
-  return select_next_main_panel(self.root_node)
-end
-
----@deprecated Use `RootPanel:select_next_main_panel()` instead.
-function RootPanel:select_next_primary_node()
-  core.deprecation_log("RootPanel:select_next_primary_node")
-  return self:select_next_main_panel()
-end
-
-
----Open a document in the active node, or the Main Panel when needed.
+---Open a document in one explicit layout node.
 ---If document is already open, switches to that view instead.
 ---Creates a new DocView and adds it as a tab in the target node.
 ---@param doc core.doc Document to open
 ---@param opts? table Options. opts.source_view copies scroll/selection from another DocView; opts.node targets a specific leaf node.
 ---@return core.docview view The view displaying the document
-function RootPanel:open_doc(doc, opts)
+function RootPanel:open_doc_in_node(doc, opts)
   opts = opts or {}
   local node = opts.node or self:get_active_node_default()
-  local main_tabs = core.main_tabs or require "core.main_tabs"
-  local main_tab_view = main_tabs.open_doc(doc, common.merge(opts, { node = node }))
-  if main_tab_view then return main_tab_view end
-
   for i, view in ipairs(node.views) do
     if view.doc == doc then
       file_context.mark_editor_view(view)
@@ -278,6 +238,10 @@ function RootPanel:open_doc(doc, opts)
   local line = view.selection_state and view.selection_state.selections[1] or view.doc:get_selection()
   view:scroll_to_line(line, true, true)
   return view
+end
+
+function RootPanel:open_doc(doc, opts)
+  return require("core.panes").open_doc(doc, opts)
 end
 
 
@@ -792,7 +756,7 @@ function RootPanel:update()
   -- Keep view geometry current before per-view update hooks run.  View:update()
   -- refreshes cached scrollbar rectangles from view position/size; after a tab
   -- close the newly active view may still carry geometry from the last time it
-  -- was active, which can draw its scrollbar at a stale split/side-panel width
+  -- was active, which can draw its scrollbar at a stale nested-view width
   -- for one frame.  Run layout first, then again after updates in case update
   -- hooks changed the tree or animated locked view sizes.
   phase_start = perf_active and system.get_time()

@@ -4,15 +4,18 @@ local command = require "core.command"
 local common = require "core.common"
 local config = require "core.config"
 local Node = require "core.node"
+local panes = require "core.panes"
 
 
 local t = {
   ["root:close"] = function(node)
-    node:close_active_view(core.root_panel.root_node)
+    if not panes.close_view(core.active_view) then
+      node:close_active_view(core.root_panel.root_node)
+    end
   end,
 
   ["root:close-or-quit"] = function(node)
-    if node and (not node:is_empty() or not (node.is_main_panel_node or node.is_primary_node)) then
+    if node and (not node:is_empty() or not node.pane_id) then
       node:close_active_view(core.root_panel.root_node)
     else
       core.quit()
@@ -63,12 +66,7 @@ local t = {
 
 for i = 1, 9 do
   t["root:switch-to-tab-" .. i] = function(node)
-    local main_tabs = core.main_tabs or require "core.main_tabs"
-    if main_tabs.switch_to_index(i) then return end
-    local view = node.views[i]
-    if view then
-      node:set_active_view(view)
-    end
+    panes.switch_to_index(panes.focused_pane(), i)
   end
 end
 
@@ -125,21 +123,11 @@ command.add(function(node)
   end,
   {
     ["root:switch-to-previous-tab"] = function(node)
-      local main_tabs = core.main_tabs or require "core.main_tabs"
-      if main_tabs.switch(-1) then return end
-      local idx = node:get_view_idx(node.active_view)
-      idx = idx - 1
-      if idx < 1 then idx = #node.views end
-      node:set_active_view(node.views[idx])
+      panes.switch(panes.focused_pane(), -1)
     end,
 
     ["root:switch-to-next-tab"] = function(node)
-      local main_tabs = core.main_tabs or require "core.main_tabs"
-      if main_tabs.switch(1) then return end
-      local idx = node:get_view_idx(node.active_view)
-      idx = idx + 1
-      if idx > #node.views then idx = 1 end
-      node:set_active_view(node.views[idx])
+      panes.switch(panes.focused_pane(), 1)
     end,
 
     ["root:scroll-tabs-backward"] = function(node)

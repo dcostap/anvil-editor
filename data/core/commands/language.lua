@@ -5,6 +5,7 @@ local config = require "core.config"
 local keymap = require "core.keymap"
 local intelligence = require "core.language_intelligence"
 local lsp_position = require "core.lsp.position"
+local panes = require "core.panes"
 
 local language = {}
 
@@ -97,17 +98,11 @@ local function open_location(result, opts)
 
   local path = result_path(result)
   if not path then return false, "location has no path" end
-  local target_side = opts.side == true
-  local sidepanel = require "core.sidepanel"
-  local view
-  if target_side then
-    view = sidepanel.open_path_in_side(path, { focus = true, restore_focus = opts.view })
-  else
-    view = sidepanel.open_path_in_main(path, {
-      source_view = opts.view,
-      replace_dirty_singleton = true,
-    })
-  end
+  local view = panes.open_path(path, {
+    pane = opts.pane,
+    source_view = opts.view,
+    focus = true,
+  })
   if not view or not view.doc then return false, "failed to open target" end
   local range = result_doc_range(view, result)
   if range then

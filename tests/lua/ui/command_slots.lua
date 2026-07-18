@@ -3,7 +3,7 @@ local command = require "core.command"
 local config = require "core.config"
 local common = require "core.common"
 local process = require "core.process"
-local sidepanel = require "core.sidepanel"
+local panes = require "core.panes"
 local storage = require "core.storage"
 local test = require "core.test"
 local View = require "core.view"
@@ -217,7 +217,7 @@ test.describe("Command Slots", function()
     test.ok(common.path_equals(points[9].path, rust))
   end)
 
-  test.it("navigates Command Output View POIs and activates them in the Main Panel", function(context)
+  test.it("navigates Command Output View POIs and activates them in the Left Pane", function(context)
     context.temp_root = join_path(USERDIR, "command-output-activate-poi")
     test.ok(common.mkdirp(join_path(context.temp_root, "src")))
     local target = join_path(context.temp_root, "src", "main.c")
@@ -236,15 +236,15 @@ test.describe("Command Slots", function()
     test.same(view.doc.selections, { 2, 1, 2, 1 })
     test.ok(command.perform("poi:activate"))
 
-    local main_node = core.root_panel and core.root_panel:get_main_panel()
-    local main = main_node and main_node.active_view
-    context.cleanup_views = { main }
-    test.equal(core.active_view, main)
-    test.ok(main and main.doc and common.path_equals(main.doc.abs_filename, target))
-    test.same(main:get_selection_state().selections, { 2, 3, 2, 3 })
+    local left_node = core.root_panel and core.root_panel:get_left_pane()
+    local left = left_node and left_node.active_view
+    context.cleanup_views = { left }
+    test.equal(core.active_view, left)
+    test.ok(left and left.doc and common.path_equals(left.doc.abs_filename, target))
+    test.same(left:get_selection_state().selections, { 2, 3, 2, 3 })
   end)
 
-  test.it("activates Command Output View POIs into the Side Panel on the side activation command", function(context)
+  test.it("activates Command Output View POIs in the Right Pane on the right activation command", function(context)
     context.temp_root = join_path(USERDIR, "command-output-activate-side-poi")
     test.ok(common.mkdirp(join_path(context.temp_root, "src")))
     local target = join_path(context.temp_root, "src", "side.c")
@@ -257,10 +257,10 @@ test.describe("Command Slots", function()
     view.doc:set_selection(1, 1)
     core.set_active_view(view)
 
-    test.ok(command.perform("poi:activate-side"))
+    test.ok(command.perform("poi:activate-right"))
 
     test.ok(core.active_view and core.active_view.doc and common.path_equals(core.active_view.doc.abs_filename, target))
-    test.ok(sidepanel.is_side_view(core.active_view))
+    test.equal(panes.pane_for_view(core.active_view), "right")
     context.cleanup_views = { core.active_view }
   end)
 
@@ -322,7 +322,7 @@ test.describe("Command Slots", function()
     test.ok(rects[1].w > 0)
   end)
 
-  test.it("keeps focus in the starting panel while stepping through Side Panel Command Output POIs", function(context)
+  test.it("keeps focus in the starting pane while stepping through Right Pane Command Output POIs", function(context)
     context.temp_root = join_path(USERDIR, "command-output-side-poi")
     test.ok(common.mkdirp(join_path(context.temp_root, "src")))
     local first = join_path(context.temp_root, "src", "first.c")
@@ -341,26 +341,26 @@ test.describe("Command Slots", function()
     output.doc:set_text("header\nsrc/first.c:1:1\nsrc/second.c:2:1\n")
     output.doc:set_selection(1, 1)
 
-    local main_before = sidepanel.focus_main(false)
-    test.ok(main_before)
-    core.set_active_view(main_before)
-    test.ok(command.perform("poi:side-next-activate"))
-    local main_node = core.root_panel and core.root_panel:get_main_panel()
-    test.equal(core.active_view, main_node and main_node.active_view)
+    local left_before = panes.show("left", { focus = true })
+    test.ok(left_before)
+    core.set_active_view(left_before)
+    test.ok(command.perform("poi:right-next-activate"))
+    local left_node = core.root_panel and core.root_panel:get_left_pane()
+    test.equal(core.active_view, left_node and left_node.active_view)
     test.ok(core.active_view and core.active_view.doc and common.path_equals(core.active_view.doc.abs_filename, first))
     test.same(output.doc.selections, { 2, 1, 2, 1 })
-    context.cleanup_views = { main_node and main_node.active_view }
+    context.cleanup_views = { left_node and left_node.active_view }
 
     core.set_active_view(output)
-    test.ok(command.perform("poi:side-next-activate"))
+    test.ok(command.perform("poi:right-next-activate"))
     test.equal(core.active_view, output)
     test.same(output.doc.selections, { 3, 1, 3, 1 })
-    if main_node and main_node.active_view then
-      context.cleanup_views[#context.cleanup_views + 1] = main_node.active_view
+    if left_node and left_node.active_view then
+      context.cleanup_views[#context.cleanup_views + 1] = left_node.active_view
     end
   end)
 
-  test.it("does not navigate hidden Side Panel Command Output POIs from the Main Panel", function(context)
+  test.it("does not navigate hidden Right Pane Command Output POIs from the Left Pane", function(context)
     context.temp_root = join_path(USERDIR, "command-output-hidden-side-poi")
     test.ok(common.mkdirp(join_path(context.temp_root, "src")))
     local target = join_path(context.temp_root, "src", "hidden.c")
@@ -374,14 +374,14 @@ test.describe("Command Slots", function()
     output.poi_cache = nil
     output.doc:set_text("header\nsrc/hidden.c:1:1\n")
     output.doc:set_selection(1, 1)
-    sidepanel.hide(false)
-    local main_before = sidepanel.focus_main(false)
-    test.ok(main_before)
-    core.set_active_view(main_before)
+    panes.hide_right(false)
+    local left_before = panes.show("left", { focus = true })
+    test.ok(left_before)
+    core.set_active_view(left_before)
 
-    test.ok(command.perform("poi:side-next-activate"))
+    test.ok(command.perform("poi:right-next-activate"))
 
-    test.equal(core.active_view, main_before)
+    test.equal(core.active_view, left_before)
     test.same(output.doc.selections, { 1, 1, 1, 1 })
   end)
 
@@ -417,10 +417,10 @@ test.describe("Command Slots", function()
     test.same({ 1, 2, 1, 2 }, view.doc.selections)
   end)
 
-  test.it("shows one tabbed Command Output panel without stealing Main Panel focus", function()
+  test.it("shows one tabbed Command Output panel without stealing Left Pane focus", function()
     config.plugins.command_slots.powershell_candidates = {}
-    if sidepanel.is_side_view(core.active_view) then
-      sidepanel.focus_main(false)
+    if panes.pane_for_view(core.active_view) == "right" then
+      panes.show("left", { focus = true })
     end
     local previous = core.active_view
 
@@ -428,29 +428,29 @@ test.describe("Command Slots", function()
 
     test.equal(core.active_view, previous)
     test.ok(command_slots.output_panel and command_slots.output_panel.command_output_panel)
-    test.ok(sidepanel.contains_view(command_slots.output_panel))
+    test.ok(panes.contains_view("right", command_slots.output_panel))
     test.equal(command_slots.output_panel.active_slot_index, 1)
     test.equal(command_slots.slots[1].view:get_name(), "A: Write-Output 'one'")
     test.equal(command_slots.output_panel:slot_view(command_slots.slots[2]):get_name(), "S: No commands")
   end)
 
   test.it("focuses Command Output panel on demand", function()
-    if sidepanel.is_side_view(core.active_view) then
-      sidepanel.focus_main(false)
+    if panes.pane_for_view(core.active_view) == "right" then
+      panes.show("left", { focus = true })
     end
 
     test.ok(command.perform("command-slots:focus-output"))
 
     test.ok(command_slots.output_panel and command_slots.output_panel.command_output_panel)
-    test.ok(sidepanel.contains_view(command_slots.output_panel))
+    test.ok(panes.contains_view("right", command_slots.output_panel))
     test.ok(core.active_view and core.active_view.command_output_view)
     test.equal(core.active_view.slot.index, command_slots.output_panel.active_slot_index)
   end)
 
   test.it("restores focus to the visible Command Output slot after an unfocused run switches tabs", function()
     config.plugins.command_slots.powershell_candidates = {}
-    if sidepanel.is_side_view(core.active_view) then
-      sidepanel.focus_main(false)
+    if panes.pane_for_view(core.active_view) == "right" then
+      panes.show("left", { focus = true })
     end
     local previous = core.active_view
 
@@ -464,16 +464,16 @@ test.describe("Command Slots", function()
     test.equal(core.active_view, previous)
     test.equal(panel.active_slot_index, 2)
 
-    sidepanel.focus_side()
+    panes.show("right", { focus = true })
 
     test.equal(core.active_view, command_slots.slots[2].view)
   end)
 
-  test.it("focuses Command Output when a command is run from another Side Panel view", function()
+  test.it("focuses Command Output when a command is run from another Right Pane view", function()
     config.plugins.command_slots.powershell_candidates = {}
     local dummy = View()
-    sidepanel.register_panel("command-slots-test-side", dummy)
-    sidepanel.show("command-slots-test-side", { focus = true })
+    panes.register_view("right", "command-slots-test-right", dummy)
+    panes.show("right", { view = dummy, focus = true })
     test.equal(core.active_view, dummy)
 
     test.ok(command_slots.run_command(2, "Write-Output 'side'"))
@@ -481,7 +481,7 @@ test.describe("Command Slots", function()
     test.ok(core.active_view and core.active_view.command_output_view)
     test.equal(core.active_view.slot.index, 2)
     test.equal(command_slots.output_panel.active_slot_index, 2)
-    sidepanel.remove_view(dummy, false)
+    panes.remove_view(dummy, { force = true, focus_left = false })
   end)
 
   test.it("navigates per-slot Command Output History and new runs switch to newest", function()

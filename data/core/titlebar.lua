@@ -92,12 +92,20 @@ local function title_tabs_x()
   return math.floor(220 * SCALE)
 end
 
-local function title_tabs_right_padding()
-  return math.floor(80 * SCALE)
-end
-
 local function titlebar_scroll_button_width()
   return math.floor(24 * SCALE)
+end
+
+local function panes()
+  return core.panes or require "core.panes"
+end
+
+local function pane_tab_views(node)
+  local views = {}
+  for _, view in ipairs(node and node.views or {}) do
+    if not panes().is_placeholder(view) then views[#views + 1] = view end
+  end
+  return views
 end
 
 local TITLE_ELLIPSIS = "…"
@@ -132,9 +140,9 @@ function TitleBar:new()
   self.visible = true
 end
 
-function TitleBar:get_tabs_node()
+function TitleBar:get_tabs_node(pane)
   if not core.root_panel then return nil end
-  return core.root_panel:get_main_panel()
+  return panes().node(pane or "left")
 end
 
 function TitleBar:configure_hit_test(borderless)
@@ -142,21 +150,8 @@ function TitleBar:configure_hit_test(borderless)
     local title_height = title_bar_height()
     local controls_width = caption_button_width() * #title_commands
     local client_x, client_width = 0, 0
-    if config.integrated_titlebar_tabs then
-      local tabs_x, _, tabs_w = self:get_tabs_rect()
-      client_x = tabs_x
-      local node = self:get_tabs_node()
-      local count = (node and not node.locked and node.views) and #node.views or 0
-      if count > 0 then
-        local content_x, _, content_w, _, show_left, show_right = self:get_titlebar_tabs_content_rect(node)
-        local tab_width = self:get_titlebar_tab_width(node, content_w)
-        local visible_count = tab_width > 0 and math.min(count, math.floor(content_w / tab_width)) or 0
-        local bw = titlebar_scroll_button_width()
-        local interactive_right = content_x + math.min(content_w, tab_width * visible_count) + (show_right and bw or 0)
-        if show_left then interactive_right = math.max(interactive_right, tabs_x + bw) end
-        client_width = math.min(tabs_w, math.max(0, interactive_right - tabs_x))
-      end
-    end
+    client_x = title_tabs_x()
+    client_width = math.max(0, self.size.x - controls_width - client_x)
     local _, _, resize_border = window_frame_metrics()
     system.set_window_hit_test(core.window, title_height, controls_width, math.floor(resize_border or 8 * SCALE), client_x, client_width)
     -- core.hit_test_title_height = title_height
@@ -171,41 +166,45 @@ function TitleBar:on_scale_change()
   self:configure_hit_test(self.visible)
 end
 
-function TitleBar:scroll_titlebar_tabs_to_active(node)
+function TitleBar:scroll_titlebar_tabs_to_active(pane, node)
   if not (node and node.views and node.active_view) then return end
-  local idx = node:get_view_idx(node.active_view)
+  local views = pane_tab_views(node)
+  local idx
+  for i, view in ipairs(views) do
+    if view == node.active_view then idx = i; break end
+  end
   if not idx then return end
-  local _, _, full_w = self:get_tabs_rect()
+  local _, _, full_w = self:get_pane_tabs_rect(pane)
   if full_w <= 0 then return end
   local bw = titlebar_scroll_button_width()
   local function visible_count_for_offset(offset)
     local buttons = (offset > 1 and 1 or 0) + 1
     local w = math.max(0, full_w - bw * buttons)
-    local tw = self:get_titlebar_tab_width(node, w)
+    local tw = self:get_titlebar_tab_width(views, w)
     return math.max(1, math.floor(w / tw))
   end
-  local offset = node.tab_offset or 1
+  local offset = node.titlebar_tab_offset or 1
   if idx < offset then offset = idx end
   local visible_count = visible_count_for_offset(offset)
   if idx > offset + visible_count - 1 then
     offset = idx - visible_count + 1
   end
-  node.tab_offset = common.clamp(offset, 1, math.max(1, #node.views))
+  node.titlebar_tab_offset = common.clamp(offset, 1, math.max(1, #views))
 end
 
 function TitleBar:update()
   self.size.y = self.visible and title_bar_height() or 0
   title_commands[2] = core.window_mode == "maximized" and restore_command or maximize_command
-  local node = self:get_tabs_node()
-  self:scroll_titlebar_tabs_to_active(node)
-  local tab_count = (node and not node.locked and node.views) and #node.views or 0
-  local tab_offset = node and node.tab_offset or 0
-  if self.last_configured_width ~= self.size.x
-     or self.last_configured_tab_count ~= tab_count
-     or self.last_configured_tab_offset ~= tab_offset then
-    self.last_configured_width = self.size.x
-    self.last_configured_tab_count = tab_count
-    self.last_configured_tab_offset = tab_offset
+  local signature = { tostring(self.size.x) }
+  for _, pane in ipairs({ "left", "right" }) do
+    local node = self:get_tabs_node(pane)
+    self:scroll_titlebar_tabs_to_active(pane, node)
+    signature[#signature + 1] = tostring(#pane_tab_views(node))
+    signature[#signature + 1] = tostring(node and node.titlebar_tab_offset or 0)
+  end
+  signature = table.concat(signature, ":")
+  if self.last_configured_signature ~= signature then
+    self.last_configured_signature = signature
     self:configure_hit_test(self.visible)
   end
   TitleBar.super.update(self)
@@ -236,132 +235,137 @@ function TitleBar:draw_window_title()
   local controls_width = caption_button_width() * #title_commands
   local title_x = logo_slot + style.padding.x * 2
   local right_x = self.size.x - controls_width - style.padding.x
-  if config.integrated_titlebar_tabs then
-    right_x = math.min(right_x, title_tabs_x() - style.padding.x)
-  end
+  right_x = math.min(right_x, title_tabs_x() - style.padding.x)
   local x = ox + title_x
   local w = math.max(0, right_x - title_x)
   local title = truncate_text_right(style.font, current_project_title(), w)
   common.draw_text(style.font, color, title, "left", x, y, w, h)
 end
 
-function TitleBar:get_tabs_rect()
+function TitleBar:get_pane_tabs_rect(pane)
+  local midpoint = math.floor(self.size.x / 2)
+  if pane == "left" then
+    local x = title_tabs_x()
+    return x, 0, math.max(0, midpoint - x), self.size.y
+  end
   local controls_width = caption_button_width() * #title_commands
-  local x = title_tabs_x()
-  local tabs_right_limit = math.floor(self.size.x * (config.integrated_titlebar_tabs_max_fraction or 0.60))
-  local controls_left = self.size.x - controls_width - title_tabs_right_padding()
-  local right = math.min(tabs_right_limit, controls_left)
-  local w = math.max(0, right - x)
-  return x, 0, w, self.size.y
+  local right = self.size.x - controls_width - style.padding.x
+  return midpoint, 0, math.max(0, right - midpoint), self.size.y
 end
 
-function TitleBar:get_titlebar_tab_width(node, available_width)
-  local count = math.max(1, #node.views)
+function TitleBar:get_titlebar_tab_width(views, available_width)
+  local count = math.max(1, #views)
   local min_width = config.integrated_titlebar_tab_min_width or 80 * SCALE
   local max_width = config.integrated_titlebar_tab_max_width or style.tab_width
   return math.max(1, math.min(max_width, math.max(min_width, available_width / count)))
 end
 
-function TitleBar:get_titlebar_tabs_content_rect(node)
-  local x, y, w, h = self:get_tabs_rect()
+function TitleBar:get_titlebar_tabs_content_rect(pane, node, views)
+  local x, y, w, h = self:get_pane_tabs_rect(pane)
+  views = views or pane_tab_views(node)
   if not node then return x, y, w, h, false, false end
   local bw = titlebar_scroll_button_width()
-  local first = node.tab_offset or 1
-  local tw = self:get_titlebar_tab_width(node, w)
+  local first = node.titlebar_tab_offset or 1
+  local tw = self:get_titlebar_tab_width(views, w)
   local visible_count = tw > 0 and math.floor(w / tw) or 0
   local show_left = first > 1
-  local show_right = first + visible_count - 1 < #node.views
+  local show_right = first + visible_count - 1 < #views
   if show_left or show_right then
     local buttons = (show_left and 1 or 0) + (show_right and 1 or 0)
     w = math.max(0, w - bw * buttons)
-    tw = self:get_titlebar_tab_width(node, w)
+    tw = self:get_titlebar_tab_width(views, w)
     visible_count = tw > 0 and math.floor(w / tw) or 0
-    show_right = first + visible_count - 1 < #node.views
+    show_right = first + visible_count - 1 < #views
     buttons = (show_left and 1 or 0) + (show_right and 1 or 0)
-    w = math.max(0, (select(3, self:get_tabs_rect())) - bw * buttons)
+    w = math.max(0, (select(3, self:get_pane_tabs_rect(pane))) - bw * buttons)
   end
   if show_left then x = x + bw end
   return x, y, w, h, show_left, show_right
 end
 
 function TitleBar:get_titlebar_scroll_button_at(px, py)
-  local node = self:get_tabs_node()
-  if not node then return nil end
-  local full_x, full_y, full_w, full_h = self:get_tabs_rect()
-  local x, y, w, h, show_left, show_right = self:get_titlebar_tabs_content_rect(node)
-  local bw = titlebar_scroll_button_width()
-  if py < full_y or py >= full_y + full_h then return nil end
-  if show_left and px >= full_x and px < full_x + bw then return 1 end
-  if show_right and px >= x + w and px < x + w + bw then return 2 end
+  for _, pane in ipairs({ "left", "right" }) do
+    local node = self:get_tabs_node(pane)
+    local views = pane_tab_views(node)
+    local full_x, full_y, _, full_h = self:get_pane_tabs_rect(pane)
+    local x, _, w, _, show_left, show_right = self:get_titlebar_tabs_content_rect(pane, node, views)
+    local bw = titlebar_scroll_button_width()
+    if py >= full_y and py < full_y + full_h then
+      if show_left and px >= full_x and px < full_x + bw then return pane, 1 end
+      if show_right and px >= x + w and px < x + w + bw then return pane, 2 end
+    end
+  end
 end
 
-function TitleBar:get_titlebar_tab_rect(node, idx)
-  local x, y, w, h = self:get_titlebar_tabs_content_rect(node)
-  local tw = self:get_titlebar_tab_width(node, w)
-  local visible_pos = idx - (node.tab_offset or 1) + 1
+function TitleBar:get_titlebar_tab_rect(pane, node, views, idx)
+  local x, y, w, h = self:get_titlebar_tabs_content_rect(pane, node, views)
+  local tw = self:get_titlebar_tab_width(views, w)
+  local visible_pos = idx - (node.titlebar_tab_offset or 1) + 1
   return x + (visible_pos - 1) * tw, y, tw, h
 end
 
 function TitleBar:get_titlebar_tab_at(px, py)
-  if not config.integrated_titlebar_tabs then return nil end
-  local node = self:get_tabs_node()
-  if not node or node.locked or not node.views or #node.views < 1 then return nil end
-  local x, y, w, h = self:get_titlebar_tabs_content_rect(node)
-  if px < x or px >= x + w or py < y or py >= y + h then return nil end
-  local tw = self:get_titlebar_tab_width(node, w)
-  if tw <= 0 then return nil end
-  local idx = math.floor((px - x) / tw) + (node.tab_offset or 1)
-  local visible_count = math.floor(w / tw)
-  local max_idx = math.min(#node.views, (node.tab_offset or 1) + visible_count - 1)
-  if idx >= (node.tab_offset or 1) and idx <= max_idx and px < x + tw * visible_count then
-    return node, idx
+  for _, pane in ipairs({ "left", "right" }) do
+    local node = self:get_tabs_node(pane)
+    local views = pane_tab_views(node)
+    if node and #views > 0 then
+      local x, y, w, h = self:get_titlebar_tabs_content_rect(pane, node, views)
+      if px >= x and px < x + w and py >= y and py < y + h then
+        local tw = self:get_titlebar_tab_width(views, w)
+        if tw > 0 then
+          local first = node.titlebar_tab_offset or 1
+          local idx = math.floor((px - x) / tw) + first
+          local max_idx = math.min(#views, first + math.floor(w / tw) - 1)
+          if idx >= first and idx <= max_idx then return pane, node, views[idx], idx end
+        end
+      end
+    end
   end
 end
 
 local draw_caption_glyph
 
 function TitleBar:draw_titlebar_tabs()
-  if not config.integrated_titlebar_tabs then return end
-  local node = self:get_tabs_node()
-  if not node or node.locked or not node.views or #node.views < 1 then return end
-
-  local full_x, full_y, full_w, full_h = self:get_tabs_rect()
-  local x, y, w, h, show_left, show_right = self:get_titlebar_tabs_content_rect(node)
-  if w <= 0 then return end
-  local tw = self:get_titlebar_tab_width(node, w)
-  if tw <= 0 then return end
-  local ds = style.divider_size
-  local bw = titlebar_scroll_button_width()
-  if show_left then
-    renderer.draw_rect(full_x, full_y, bw, full_h, self.hovered_tab_scroll_button == 1 and style.titlebar_tab_hover or style.titlebar)
-    common.draw_text(style.font, style.text, "‹", "center", full_x, full_y, bw, full_h)
-  end
-  if show_right then
-    renderer.draw_rect(x + w, full_y, bw, full_h, self.hovered_tab_scroll_button == 2 and style.titlebar_tab_hover or style.titlebar)
-    common.draw_text(style.font, style.text, "›", "center", x + w, full_y, bw, full_h)
-  end
-  core.push_clip_rect(x, y, w, h)
-  local first = node.tab_offset or 1
-  local visible_count = math.floor(w / tw)
-  local last = math.min(#node.views, first + visible_count - 1)
-  for i = first, last do
-    local view = node.views[i]
-    local tx, ty, tab_w, tab_h = self:get_titlebar_tab_rect(node, i)
-    if tx >= x + w then break end
-    local active = view == node.active_view
-    local hovered = self.hovered_tab_index == i
-    if active then
-      renderer.draw_rect(tx, ty, tab_w, tab_h, style.background)
-      renderer.draw_rect(tx, ty + tab_h - ds, tab_w, ds, style.caret)
-    elseif hovered then
-      renderer.draw_rect(tx, ty, tab_w, tab_h, style.titlebar_tab_hover)
+  local focused_pane = panes().focused_pane()
+  for _, pane in ipairs({ "left", "right" }) do
+    local node = self:get_tabs_node(pane)
+    local views = pane_tab_views(node)
+    if node and #views > 0 then
+      local full_x, full_y, _, full_h = self:get_pane_tabs_rect(pane)
+      local x, y, w, h, show_left, show_right = self:get_titlebar_tabs_content_rect(pane, node, views)
+      local tw = self:get_titlebar_tab_width(views, w)
+      local ds = style.divider_size
+      local bw = titlebar_scroll_button_width()
+      local hovered_scroll = self.hovered_tab_scroll_pane == pane and self.hovered_tab_scroll_button
+      if show_left then
+        renderer.draw_rect(full_x, full_y, bw, full_h, hovered_scroll == 1 and style.titlebar_tab_hover or style.titlebar)
+        common.draw_text(style.font, style.text, "‹", "center", full_x, full_y, bw, full_h)
+      end
+      if show_right then
+        renderer.draw_rect(x + w, full_y, bw, full_h, hovered_scroll == 2 and style.titlebar_tab_hover or style.titlebar)
+        common.draw_text(style.font, style.text, "›", "center", x + w, full_y, bw, full_h)
+      end
+      core.push_clip_rect(x, y, w, h)
+      local first = node.titlebar_tab_offset or 1
+      local last = math.min(#views, first + math.floor(w / tw) - 1)
+      for i = first, last do
+        local view = views[i]
+        local tx, ty, tab_w, tab_h = self:get_titlebar_tab_rect(pane, node, views, i)
+        if tx >= x + w then break end
+        local selected = view == node.active_view
+        local hovered = self.hovered_tab_pane == pane and self.hovered_tab_view == view
+        if selected then
+          renderer.draw_rect(tx, ty, tab_w, tab_h, style.background)
+          if focused_pane == pane then renderer.draw_rect(tx, ty + tab_h - ds, tab_w, ds, style.caret) end
+        elseif hovered then
+          renderer.draw_rect(tx, ty, tab_w, tab_h, style.titlebar_tab_hover)
+        end
+        renderer.draw_rect(tx + tab_w, ty + style.padding.y, ds, tab_h - style.padding.y * 2, style.divider)
+        node:draw_tab_title(view, node:get_tab_title_font(), selected, hovered, tx + style.padding.x, ty, tab_w - style.padding.x * 2, tab_h)
+      end
+      core.pop_clip_rect()
     end
-    renderer.draw_rect(tx + tab_w, ty + style.padding.y, ds, tab_h - style.padding.y * 2, style.divider)
-
-    local title_w = tab_w - style.padding.x * 2
-    node:draw_tab_title(view, node:get_tab_title_font(), active, hovered, tx + style.padding.x, ty, title_w, tab_h)
   end
-  core.pop_clip_rect()
 end
 
 function TitleBar:each_control_item()
@@ -444,8 +448,10 @@ function TitleBar:on_mouse_pressed(button, x, y, clicks)
   TitleBar.super.on_mouse_pressed(self, button, x, y, clicks)
   if button == "left" then
     self.pressed_item = self.hovered_item
-    self.pressed_tab_index = self.hovered_tab_index
+    self.pressed_tab_view = self.hovered_tab_view
+    self.pressed_tab_pane = self.hovered_tab_pane
     self.pressed_tab_scroll_button = self.hovered_tab_scroll_button
+    self.pressed_tab_scroll_pane = self.hovered_tab_scroll_pane
   end
 end
 
@@ -455,44 +461,60 @@ function TitleBar:on_mouse_released(button, x, y)
   local item = self.hovered_item
   if button == "left" and item and item == self.pressed_item then
     item.action()
-  elseif self.hovered_tab_scroll_button and self.hovered_tab_scroll_button == self.pressed_tab_scroll_button then
-    local node = self:get_tabs_node()
-    if node then node:scroll_tabs(self.hovered_tab_scroll_button) end
-  elseif self.hovered_tab_index then
-    local node, idx, close = self:get_titlebar_tab_at(x, y)
-    if node and idx == self.hovered_tab_index then
+  elseif self.hovered_tab_scroll_button
+  and self.hovered_tab_scroll_button == self.pressed_tab_scroll_button
+  and self.hovered_tab_scroll_pane == self.pressed_tab_scroll_pane then
+    local node = self:get_tabs_node(self.hovered_tab_scroll_pane)
+    if node then
+      local delta = self.hovered_tab_scroll_button == 1 and -1 or 1
+      node.titlebar_tab_offset = common.clamp((node.titlebar_tab_offset or 1) + delta, 1, math.max(1, #pane_tab_views(node)))
+    end
+  elseif self.hovered_tab_view then
+    local pane, node, view = self:get_titlebar_tab_at(x, y)
+    if node and view == self.hovered_tab_view and pane == self.hovered_tab_pane then
       if button == "middle" then
-        node:close_view(core.root_panel.root_node, node.views[idx])
-      elseif button == "left" and idx == self.pressed_tab_index then
-        node:set_active_view(node.views[idx])
+        panes().close_view(view)
+      elseif button == "left" and view == self.pressed_tab_view and pane == self.pressed_tab_pane then
+        node:set_active_view(view)
+        panes().show(pane, { view = view, focus = true })
       end
     end
   end
   self.pressed_item = nil
-  self.pressed_tab_index = nil
+  self.pressed_tab_view = nil
+  self.pressed_tab_pane = nil
   self.pressed_tab_scroll_button = nil
+  self.pressed_tab_scroll_pane = nil
 end
 
 
 function TitleBar:on_mouse_left()
   TitleBar.super.on_mouse_left(self)
   self.hovered_item = nil
-  self.hovered_tab_index = nil
+  self.hovered_tab_view = nil
+  self.hovered_tab_pane = nil
   self.hovered_tab_scroll_button = nil
+  self.hovered_tab_scroll_pane = nil
   self.pressed_item = nil
-  self.pressed_tab_index = nil
+  self.pressed_tab_view = nil
+  self.pressed_tab_pane = nil
   self.pressed_tab_scroll_button = nil
+  self.pressed_tab_scroll_pane = nil
 end
 
 function TitleBar:on_mouse_wheel(y, x)
-  if not self.hovered_tab_index then return end
-  local node = self:get_tabs_node()
-  if not node or not node.views or #node.views < 2 then return true end
-  local idx = node:get_view_idx(node.active_view) or self.hovered_tab_index
+  if not self.hovered_tab_view then return end
+  local pane = self.hovered_tab_pane
+  local node = self:get_tabs_node(pane)
+  local views = pane_tab_views(node)
+  if #views < 2 then return true end
+  local idx = 1
+  for i, view in ipairs(views) do if view == node.active_view then idx = i; break end end
   idx = idx + (y > 0 and -1 or 1)
-  if idx < 1 then idx = #node.views end
-  if idx > #node.views then idx = 1 end
-  node:set_active_view(node.views[idx])
+  if idx < 1 then idx = #views end
+  if idx > #views then idx = 1 end
+  node:set_active_view(views[idx])
+  panes().show(pane, { view = views[idx], focus = true })
   return true
 end
 
@@ -501,12 +523,14 @@ function TitleBar:on_mouse_moved(px, py, ...)
   if self.size.y == 0 then return end
   TitleBar.super.on_mouse_moved(self, px, py, ...)
   self.hovered_item = nil
-  self.hovered_tab_index = nil
-  self.hovered_tab_scroll_button = self:get_titlebar_scroll_button_at(px, py)
+  self.hovered_tab_view = nil
+  self.hovered_tab_pane = nil
+  self.hovered_tab_scroll_pane, self.hovered_tab_scroll_button = self:get_titlebar_scroll_button_at(px, py)
   if self.hovered_tab_scroll_button then return end
-  local tab_node, tab_idx = self:get_titlebar_tab_at(px, py)
-  if tab_node and tab_idx then
-    self.hovered_tab_index = tab_idx
+  local pane, _, view = self:get_titlebar_tab_at(px, py)
+  if pane and view then
+    self.hovered_tab_pane = pane
+    self.hovered_tab_view = view
     return
   end
   for item, x, y, w, h in self:each_control_item() do
