@@ -463,9 +463,12 @@ function TitleBar:draw_titlebar_tabs()
         local hovered = self.hovered_tab_pane == pane and self.hovered_tab_view == view
         if selected then
           renderer.draw_rect(tx, ty, tab_w, tab_h, pane_color(style.background))
-          if focused_pane == pane then renderer.draw_rect(tx, ty + tab_h - ds, tab_w, ds, pane_color(style.caret)) end
-        elseif hovered then
+        end
+        if hovered then
           renderer.draw_rect(tx, ty, tab_w, tab_h, pane_color(style.titlebar_tab_hover))
+        end
+        if selected and focused_pane == pane then
+          renderer.draw_rect(tx, ty + tab_h - ds, tab_w, ds, pane_color(style.caret))
         end
         local separator_h = math.max(0, tab_h - ds)
         renderer.draw_rect(tx, ty, ds, separator_h, pane_color(style.titlebar_tab_separator))

@@ -228,6 +228,42 @@ test.describe("Title Bar", function()
     end
   end)
 
+  test.it("shows hover feedback on the selected Pane Tab", function(context)
+    local titlebar = TitleBar()
+    titlebar.position.x, titlebar.position.y = 0, 0
+    titlebar.size.x, titlebar.size.y = 1200 * SCALE, 32 * SCALE
+
+    local view = {}
+    local node = {
+      views = { view },
+      active_view = view,
+      titlebar_tab_offset = 1,
+      get_tab_title_font = function() return style.font end,
+      draw_tab_title = function() end,
+    }
+    titlebar.get_tabs_node = function(_, pane)
+      return pane == "left" and node or nil
+    end
+    titlebar.hovered_tab_pane = "left"
+    titlebar.hovered_tab_view = view
+
+    context.original_draw_rect = renderer.draw_rect
+    context.original_set_clip_rect = renderer.set_clip_rect
+    local hover_rects = {}
+    renderer.draw_rect = function(x, y, w, h, color)
+      if color == style.titlebar_tab_hover then
+        hover_rects[#hover_rects + 1] = { x = x, y = y, w = w, h = h }
+      end
+    end
+    renderer.set_clip_rect = function() end
+
+    titlebar:draw_titlebar_tabs()
+
+    test.equal(#hover_rects, 1)
+    test.ok(hover_rects[1].w > 0)
+    test.equal(hover_rects[1].h, titlebar.size.y)
+  end)
+
   test.it("fades Right Pane tabs while the Right Pane is hidden", function(context)
     local titlebar = TitleBar()
     titlebar.position.x, titlebar.position.y = 0, 0
