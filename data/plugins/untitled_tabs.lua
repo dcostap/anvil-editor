@@ -171,7 +171,7 @@ local function untitled_tab_title_width(view, font)
   return width + style.padding.x * 2 + style.divider_size * 2
 end
 
-local function draw_untitled_tab_title(view, font, is_active, is_hovered, x, y, w, h)
+local function draw_untitled_tab_title(view, font, is_active, is_hovered, x, y, w, h, color_override)
   local doc = view and view.doc
   if not is_untitled_doc(doc) then return false end
 
@@ -179,7 +179,7 @@ local function draw_untitled_tab_title(view, font, is_active, is_hovered, x, y, 
   if doc:is_dirty() then secondary = secondary .. "*" end
 
   local primary = first_text_snippet(doc)
-  local title_color = (is_active or is_hovered) and style.text or style.dim
+  local title_color = color_override or ((is_active or is_hovered) and style.text or style.dim)
   local primary_color = title_color
   local secondary_color = title_color
   local sfont = secondary_font()
@@ -452,9 +452,9 @@ if not core.__untitled_tabs_patched then
   end
 
   local tabs_draw_tab_title = Tabs.draw_tab_title
-  function Tabs:draw_tab_title(view, font, is_active, is_hovered, x, y, w, h)
-    if draw_untitled_tab_title(view, font, is_active, is_hovered, x, y, w, h) then return end
-    return tabs_draw_tab_title(self, view, font, is_active, is_hovered, x, y, w, h)
+  function Tabs:draw_tab_title(view, font, is_active, is_hovered, x, y, w, h, color_override)
+    if draw_untitled_tab_title(view, font, is_active, is_hovered, x, y, w, h, color_override) then return end
+    return tabs_draw_tab_title(self, view, font, is_active, is_hovered, x, y, w, h, color_override)
   end
 end
 

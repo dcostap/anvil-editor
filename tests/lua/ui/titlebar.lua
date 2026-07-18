@@ -1,6 +1,7 @@
 local common = require "core.common"
 local config = require "core.config"
 local core = require "core"
+local Node = require "core.node"
 local style = require "core.style"
 local test = require "core.test"
 local TitleBar = require "core.titlebar"
@@ -190,17 +191,12 @@ test.describe("Title Bar", function()
     titlebar.position.x, titlebar.position.y = 0, 0
     titlebar.size.x, titlebar.size.y = 1200 * SCALE, 32 * SCALE
 
-    local view = {}
+    local view = { get_name = function() return "Right tab" end }
     local title_color
-    local node = {
-      views = { view },
-      active_view = view,
-      titlebar_tab_offset = 1,
-      get_tab_title_font = function() return style.font end,
-      draw_tab_title = function(_, _, _, _, _, _, _, _, _, color)
-        title_color = color
-      end,
-    }
+    local node = Node()
+    node.views = { view }
+    node.active_view = view
+    node.titlebar_tab_offset = 1
     titlebar.get_tabs_node = function(_, pane)
       return pane == "right" and node or nil
     end
@@ -213,8 +209,12 @@ test.describe("Title Bar", function()
     }
     context.original_draw_rect = renderer.draw_rect
     context.original_set_clip_rect = renderer.set_clip_rect
+    context.original_common_draw_text = common.draw_text
     renderer.draw_rect = function() end
     renderer.set_clip_rect = function() end
+    common.draw_text = function(_, color)
+      title_color = color
+    end
 
     titlebar:draw_titlebar_tabs()
 
