@@ -759,10 +759,24 @@ end
 local function find_bar_rows(layout, state, info_text)
   local font, pad, sep = layout.font, layout.pad, layout.sep
   local right = layout.x + layout.w
-  local info_w = prompt_bar_renderer.info_width(info_text, font, math.max(80 * SCALE, layout.w * 0.24))
-  local info = { text = info_text, x = right - info_w, w = info_w }
-  local field_right = info_w > 0 and (info.x - pad) or right
-  field_right = math.max(layout.x, field_right)
+  -- Reserve the complete results slot independently of its current text.
+  -- The text can change from empty, to an error, to a match count without
+  -- changing the geometry of either input field.
+  -- Keep this compact so the reserved area does not leave a large gap before
+  -- the result count. Longer status text is clipped within the same stable
+  -- slot rather than moving the input fields.
+  local info_slot_w = 130 * SCALE
+  info_slot_w = math.min(info_slot_w, math.max(0, layout.w - pad))
+  local info_slot_x = right - pad - info_slot_w
+  local info_x = info_slot_x + sep + pad
+  local info_w = math.max(0, right - pad - info_x)
+  local info = {
+    text = info_text,
+    x = info_x,
+    w = info_w,
+    separator_x = info_slot_x,
+  }
+  local field_right = math.max(layout.x, info_slot_x - pad)
   local find_label = "Find: "
   local replace_label = "Replace: "
 
@@ -778,6 +792,7 @@ local function find_bar_rows(layout, state, info_text)
     local replace_w = replace_label_w + replace_input_w
     local find_row = make_field_row(layout, find_label, layout.x, find_w)
     local replace_row = make_field_row(layout, replace_label, layout.x + find_w + gap, replace_w)
+    replace_row.separator_x = gap > 0 and replace_row.x - gap or nil
     return find_row, replace_row, info
   end
 
@@ -824,11 +839,27 @@ local function draw_local_find(view)
 
   if replace_row then
     draw_input_field(state.replace)
+    if replace_row.separator_x then
+      prompt_bar_renderer.draw_vertical_divider(
+        replace_row.separator_x,
+        layout.y,
+        layout.h
+      )
+    end
   end
 
   if info and info.text ~= "" and info.w > 0 then
     local color = state.error and style.error or style.dim
-    prompt_bar_renderer.draw_info(layout.font, info.text, info.x, layout.y, info.w, layout.h, color)
+    prompt_bar_renderer.draw_info(
+      layout.font,
+      info.text,
+      info.x,
+      layout.y,
+      info.w,
+      layout.h,
+      color
+    )
+    prompt_bar_renderer.draw_vertical_divider(info.separator_x, layout.y, layout.h)
   end
 
   prompt_bar_renderer.draw_top_divider(layout.x, layout.y, layout.w)

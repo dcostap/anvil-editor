@@ -38,19 +38,12 @@ function prompt_bar_renderer.label_width(label, font)
     + prompt_bar_renderer.label_input_gap()
 end
 
-function prompt_bar_renderer.info_width(text, font, max_width)
-  if not text or text == "" then return 0 end
-  local width = resolve_font(font):get_width(text) + style.padding.x
-  if max_width then width = math.min(width, max_width) end
-  return math.max(0, width)
-end
-
 function prompt_bar_renderer.label_color(brightness)
   return common.lerp(style.text, style.accent, (brightness or 0) / 100)
 end
 
 function prompt_bar_renderer.top_separator_color()
-  return style.tab_background
+  return style.divider
 end
 
 function prompt_bar_renderer.draw_background(x, y, w, h)
@@ -60,6 +53,11 @@ end
 function prompt_bar_renderer.draw_top_divider(x, y, w)
   local h = math.max(1, style.divider_size or 1)
   renderer.draw_rect(x, y, w, h, prompt_bar_renderer.top_separator_color())
+end
+
+function prompt_bar_renderer.draw_vertical_divider(x, y, h)
+  local w = math.max(1, style.divider_size or 1)
+  renderer.draw_rect(x, y, w, h, style.divider)
 end
 
 function prompt_bar_renderer.draw_label(font, label, x, y, w, h, brightness)
