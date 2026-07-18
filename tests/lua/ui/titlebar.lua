@@ -81,8 +81,45 @@ test.describe("Title Bar", function()
     local midpoint = math.floor(titlebar.size.x / 2)
 
     test.ok(lx + lw <= midpoint)
-    test.equal(rx, midpoint)
+    test.ok(rx >= midpoint)
     test.ok(rw > 0)
+  end)
+
+  test.it("anchors Right Pane tabs beside the window controls and adds tabs leftward", function()
+    local titlebar = TitleBar()
+    titlebar.position.x, titlebar.position.y = 0, 0
+    titlebar.size.x, titlebar.size.y = 1200 * SCALE, 32 * SCALE
+
+    local controls_x
+    for _, x in titlebar:each_control_item() do
+      controls_x = x
+      break
+    end
+
+    local first, second = {}, {}
+    local node = {
+      views = { first },
+      active_view = first,
+      titlebar_tab_offset = 1,
+    }
+
+    local first_x, _, first_width = titlebar:get_titlebar_tab_rect("right", node, node.views, 1)
+    test.equal(first_x + first_width, controls_x)
+
+    node.views = { first, second }
+    first_x, _, first_width = titlebar:get_titlebar_tab_rect("right", node, node.views, 1)
+    local second_x, _, second_width = titlebar:get_titlebar_tab_rect("right", node, node.views, 2)
+    test.equal(first_x + first_width, controls_x)
+    test.equal(second_x + second_width, first_x)
+
+    titlebar.get_tabs_node = function(_, pane)
+      return pane == "right" and node or nil
+    end
+    local pane, _, hit_first = titlebar:get_titlebar_tab_at(first_x + first_width / 2, titlebar.size.y / 2)
+    local _, _, hit_second = titlebar:get_titlebar_tab_at(second_x + second_width / 2, titlebar.size.y / 2)
+    test.equal(pane, "right")
+    test.equal(hit_first, first)
+    test.equal(hit_second, second)
   end)
 
   test.it("reserves a draggable safe zone covering at least 15 percent of app width in each pane", function(context)
@@ -100,8 +137,9 @@ test.describe("Title Bar", function()
     test.ok(left_safe_width >= minimum_safe_width)
     test.ok(right_safe_width >= minimum_safe_width)
     test.ok(left_tabs_x + left_tabs_width <= left_safe_x)
-    test.ok(right_tabs_x + right_tabs_width <= right_safe_x)
+    test.ok(right_safe_x + right_safe_width <= right_tabs_x)
     test.equal(left_safe_x + left_safe_width, midpoint)
+    test.equal(right_safe_x, midpoint)
     test.is_nil(titlebar:get_titlebar_tab_at(left_safe_x + left_safe_width / 2, titlebar.size.y / 2))
     test.is_nil(titlebar:get_titlebar_tab_at(right_safe_x + right_safe_width / 2, titlebar.size.y / 2))
     test.is_nil(titlebar:get_titlebar_scroll_button_at(left_safe_x + left_safe_width / 2, titlebar.size.y / 2))
@@ -115,9 +153,13 @@ test.describe("Title Bar", function()
     titlebar:configure_hit_test(true)
 
     test.not_nil(hit_test_args)
-    test.equal(hit_test_args[5], left_tabs_x)
+    local left_interactive_x, _, left_interactive_width = titlebar:get_pane_tabs_interactive_rect("left")
+    local right_interactive_x, _, right_interactive_width = titlebar:get_pane_tabs_interactive_rect("right")
+    test.equal(hit_test_args[5], left_interactive_x)
+    test.equal(hit_test_args[6], left_interactive_width)
     test.ok(hit_test_args[6] <= left_tabs_width)
-    test.equal(hit_test_args[7], right_tabs_x)
+    test.equal(hit_test_args[7], right_interactive_x)
+    test.equal(hit_test_args[8], right_interactive_width)
     test.ok(hit_test_args[8] <= right_tabs_width)
   end)
 
