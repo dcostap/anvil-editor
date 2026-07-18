@@ -115,9 +115,37 @@ test.describe("Title Bar", function()
 
     test.not_nil(hit_test_args)
     test.equal(hit_test_args[5], left_tabs_x)
-    test.equal(hit_test_args[6], left_tabs_width)
+    test.ok(hit_test_args[6] <= left_tabs_width)
     test.equal(hit_test_args[7], right_tabs_x)
-    test.equal(hit_test_args[8], right_tabs_width)
+    test.ok(hit_test_args[8] <= right_tabs_width)
+  end)
+
+  test.it("keeps unused tab capacity available for native window dragging", function(context)
+    local titlebar = TitleBar()
+    titlebar.position.x, titlebar.position.y = 0, 0
+    titlebar.size.x, titlebar.size.y = 1200 * SCALE, 32 * SCALE
+
+    local view = {}
+    local node = {
+      views = { view },
+      active_view = view,
+      titlebar_tab_offset = 1,
+    }
+    titlebar.get_tabs_node = function(_, pane)
+      return pane == "left" and node or nil
+    end
+
+    context.original_set_window_hit_test = system.set_window_hit_test
+    local hit_test_args
+    system.set_window_hit_test = function(...)
+      hit_test_args = { ... }
+    end
+    titlebar:configure_hit_test(true)
+
+    local tabs_x, _, tabs_capacity = titlebar:get_pane_tabs_rect("left")
+    test.equal(hit_test_args[5], tabs_x)
+    test.ok(hit_test_args[6] > 0)
+    test.ok(hit_test_args[6] < tabs_capacity)
   end)
 
   test.it("draws clear separators on both sides of every Pane Tab", function(context)

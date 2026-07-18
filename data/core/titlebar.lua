@@ -165,8 +165,8 @@ function TitleBar:configure_hit_test(borderless)
   if borderless then
     local title_height = title_bar_height()
     local controls_width = caption_button_width() * #title_commands
-    local left_x, _, left_width = self:get_pane_tabs_rect("left")
-    local right_x, _, right_width = self:get_pane_tabs_rect("right")
+    local left_x, _, left_width = self:get_pane_tabs_interactive_rect("left")
+    local right_x, _, right_width = self:get_pane_tabs_interactive_rect("right")
     local _, _, resize_border = window_frame_metrics()
     system.set_window_hit_test(
       core.window,
@@ -319,16 +319,38 @@ function TitleBar:get_titlebar_tabs_content_rect(pane, node, views)
   return x, y, w, h, show_left, show_right
 end
 
+function TitleBar:get_pane_tabs_interactive_rect(pane)
+  local full_x, full_y, _, full_h = self:get_pane_tabs_rect(pane)
+  local node = self:get_tabs_node(pane)
+  local views = pane_tab_views(node)
+  if not node or #views == 0 then return full_x, full_y, 0, full_h end
+
+  local x, _, w, _, show_left, show_right = self:get_titlebar_tabs_content_rect(pane, node, views)
+  local used_tabs_width = self:get_titlebar_tabs_used_width(node, views, w)
+  local bw = titlebar_scroll_button_width()
+  local interactive_width = (x - full_x) + used_tabs_width + (show_right and bw or 0)
+  return full_x, full_y, interactive_width, full_h
+end
+
+function TitleBar:get_titlebar_tabs_used_width(node, views, available_width)
+  local tw = self:get_titlebar_tab_width(views, available_width)
+  local first = node.titlebar_tab_offset or 1
+  local visible_count = tw > 0 and math.floor(available_width / tw) or 0
+  local shown_count = math.max(0, math.min(#views - first + 1, visible_count))
+  return shown_count * tw
+end
+
 function TitleBar:get_titlebar_scroll_button_at(px, py)
   for _, pane in ipairs({ "left", "right" }) do
     local node = self:get_tabs_node(pane)
     local views = pane_tab_views(node)
     local full_x, full_y, _, full_h = self:get_pane_tabs_rect(pane)
     local x, _, w, _, show_left, show_right = self:get_titlebar_tabs_content_rect(pane, node, views)
+    local used_tabs_width = self:get_titlebar_tabs_used_width(node, views, w)
     local bw = titlebar_scroll_button_width()
     if py >= full_y and py < full_y + full_h then
       if show_left and px >= full_x and px < full_x + bw then return pane, 1 end
-      if show_right and px >= x + w and px < x + w + bw then return pane, 2 end
+      if show_right and px >= x + used_tabs_width and px < x + used_tabs_width + bw then return pane, 2 end
     end
   end
 end
@@ -375,6 +397,7 @@ function TitleBar:draw_titlebar_tabs()
       local full_x, full_y, _, full_h = self:get_pane_tabs_rect(pane)
       local x, y, w, h, show_left, show_right = self:get_titlebar_tabs_content_rect(pane, node, views)
       local tw = self:get_titlebar_tab_width(views, w)
+      local used_tabs_width = self:get_titlebar_tabs_used_width(node, views, w)
       local ds = style.divider_size
       local bw = titlebar_scroll_button_width()
       local hovered_scroll = self.hovered_tab_scroll_pane == pane and self.hovered_tab_scroll_button
@@ -383,8 +406,8 @@ function TitleBar:draw_titlebar_tabs()
         common.draw_text(style.font, pane_color(style.text), "‹", "center", full_x, full_y, bw, full_h)
       end
       if show_right then
-        renderer.draw_rect(x + w, full_y, bw, full_h, pane_color(hovered_scroll == 2 and style.titlebar_tab_hover or style.titlebar))
-        common.draw_text(style.font, pane_color(style.text), "›", "center", x + w, full_y, bw, full_h)
+        renderer.draw_rect(x + used_tabs_width, full_y, bw, full_h, pane_color(hovered_scroll == 2 and style.titlebar_tab_hover or style.titlebar))
+        common.draw_text(style.font, pane_color(style.text), "›", "center", x + used_tabs_width, full_y, bw, full_h)
       end
       core.push_clip_rect(x, y, w, h)
       local first = node.titlebar_tab_offset or 1
