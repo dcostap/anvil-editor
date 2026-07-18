@@ -201,6 +201,7 @@ style.titlebar_control_hover = { 255, 255, 255, 18 }
 style.titlebar_control_pressed = { 255, 255, 255, 32 }
 style.titlebar_close_text = { 255, 255, 255, 255 }
 style.titlebar_tab_hover = { 255, 255, 255, 12 }
+style.titlebar_tab_separator = c("565a61")
 style.image_grid_bright = c("AAAAAA")
 style.image_grid_dark = c("555555")
 style.fuzzy_searcher_preview_background = { 0, 0, 0, 210 }

@@ -474,7 +474,8 @@ end
 ---@param y number Screen y coordinate
 ---@param w number Width
 ---@param h number Height
-function Tabs:draw_tab_title(item, font, is_active, is_hovered, x, y, w, h)
+---@param color_override? renderer.color Optional explicit title color
+function Tabs:draw_tab_title(item, font, is_active, is_hovered, x, y, w, h, color_override)
   local text = self:get_item_title(item)
   local dots_width = font:get_width("…")
   local align = "left"
@@ -488,9 +489,9 @@ function Tabs:draw_tab_title(item, font, is_active, is_hovered, x, y, w, h)
       end
     end
   end
-  local color = style.dim
-  if is_active then color = style.text end
-  if is_hovered then color = style.text end
+  local color = color_override or style.dim
+  if not color_override and is_active then color = style.text end
+  if not color_override and is_hovered then color = style.text end
   common.draw_text(font, color, text, align, x, y, w, h)
 end
 

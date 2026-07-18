@@ -691,8 +691,9 @@ end
 ---@param y number Screen y coordinate
 ---@param w number Width
 ---@param h number Height
-function Node:draw_tab_title(view, font, is_active, is_hovered, x, y, w, h)
-  return self:get_tab_bar():draw_tab_title(view, font, is_active, is_hovered, x, y, w, h)
+---@param color_override? renderer.color Optional explicit title color
+function Node:draw_tab_title(view, font, is_active, is_hovered, x, y, w, h, color_override)
+  return self:get_tab_bar():draw_tab_title(view, font, is_active, is_hovered, x, y, w, h, color_override)
 end
 
 

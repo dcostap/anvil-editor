@@ -8,6 +8,8 @@ struct HitTestInfo {
   int resize_border;
   int titlebar_client_x;
   int titlebar_client_width;
+  int titlebar_client2_x;
+  int titlebar_client2_width;
 };
 typedef struct HitTestInfo HitTestInfo;
 

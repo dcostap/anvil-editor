@@ -88,8 +88,32 @@ local function title_bar_height()
   return math.max(style.font:get_height() + style.padding.y * 2, math.floor(title_height or 32 * SCALE))
 end
 
+local function current_project_title()
+  local project = core.root_project and core.root_project()
+  if project and project.path and project.path ~= "" then
+    return common.basename(project.path)
+  end
+  return "Anvil"
+end
+
 local function title_tabs_x()
-  return math.floor(220 * SCALE)
+  local logo_slot = math.floor(math.min(22 * SCALE, title_bar_height() - 6 * SCALE))
+  local title_x = logo_slot + style.padding.x * 2
+  local natural_x = title_x + style.font:get_width(current_project_title()) + style.padding.x
+  return math.ceil(math.min(220 * SCALE, natural_x))
+end
+
+local TITLEBAR_PANE_SAFE_ZONE_RATIO = 0.15
+local HIDDEN_RIGHT_TABS_OPACITY = 0.60
+
+local function color_with_opacity(color, opacity)
+  if not color or opacity >= 1 then return color end
+  return {
+    color[1] or 0,
+    color[2] or 0,
+    color[3] or 0,
+    math.floor((color[4] or 255) * opacity + 0.5),
+  }
 end
 
 local function titlebar_scroll_button_width()
@@ -109,14 +133,6 @@ local function pane_tab_views(node)
 end
 
 local TITLE_ELLIPSIS = "…"
-
-local function current_project_title()
-  local project = core.root_project and core.root_project()
-  if project and project.path and project.path ~= "" then
-    return common.basename(project.path)
-  end
-  return "Anvil"
-end
 
 local function truncate_text_right(font, text, max_width)
   max_width = math.max(0, max_width or 0)
@@ -149,11 +165,19 @@ function TitleBar:configure_hit_test(borderless)
   if borderless then
     local title_height = title_bar_height()
     local controls_width = caption_button_width() * #title_commands
-    local client_x, client_width = 0, 0
-    client_x = title_tabs_x()
-    client_width = math.max(0, self.size.x - controls_width - client_x)
+    local left_x, _, left_width = self:get_pane_tabs_rect("left")
+    local right_x, _, right_width = self:get_pane_tabs_rect("right")
     local _, _, resize_border = window_frame_metrics()
-    system.set_window_hit_test(core.window, title_height, controls_width, math.floor(resize_border or 8 * SCALE), client_x, client_width)
+    system.set_window_hit_test(
+      core.window,
+      title_height,
+      controls_width,
+      math.floor(resize_border or 8 * SCALE),
+      left_x,
+      left_width,
+      right_x,
+      right_width
+    )
     -- core.hit_test_title_height = title_height
   else
     system.set_window_hit_test(core.window)
@@ -195,7 +219,7 @@ end
 function TitleBar:update()
   self.size.y = self.visible and title_bar_height() or 0
   title_commands[2] = core.window_mode == "maximized" and restore_command or maximize_command
-  local signature = { tostring(self.size.x) }
+  local signature = { tostring(self.size.x), tostring(title_tabs_x()) }
   for _, pane in ipairs({ "left", "right" }) do
     local node = self:get_tabs_node(pane)
     self:scroll_titlebar_tabs_to_active(pane, node)
@@ -242,7 +266,7 @@ function TitleBar:draw_window_title()
   common.draw_text(style.font, color, title, "left", x, y, w, h)
 end
 
-function TitleBar:get_pane_tabs_rect(pane)
+function TitleBar:get_pane_title_rect(pane)
   local midpoint = math.floor(self.size.x / 2)
   if pane == "left" then
     local x = title_tabs_x()
@@ -251,6 +275,18 @@ function TitleBar:get_pane_tabs_rect(pane)
   local controls_width = caption_button_width() * #title_commands
   local right = self.size.x - controls_width - style.padding.x
   return midpoint, 0, math.max(0, right - midpoint), self.size.y
+end
+
+function TitleBar:get_pane_safe_rect(pane)
+  local x, y, w, h = self:get_pane_title_rect(pane)
+  local safe_width = math.min(w, math.ceil(self.size.x * TITLEBAR_PANE_SAFE_ZONE_RATIO))
+  return x + w - safe_width, y, safe_width, h
+end
+
+function TitleBar:get_pane_tabs_rect(pane)
+  local x, y, w, h = self:get_pane_title_rect(pane)
+  local _, _, safe_width = self:get_pane_safe_rect(pane)
+  return x, y, math.max(0, w - safe_width), h
 end
 
 function TitleBar:get_titlebar_tab_width(views, available_width)
@@ -331,6 +367,11 @@ function TitleBar:draw_titlebar_tabs()
     local node = self:get_tabs_node(pane)
     local views = pane_tab_views(node)
     if node and #views > 0 then
+      local opacity = pane == "right" and not panes().right_visible()
+        and HIDDEN_RIGHT_TABS_OPACITY or 1
+      local function pane_color(color)
+        return color_with_opacity(color, opacity)
+      end
       local full_x, full_y, _, full_h = self:get_pane_tabs_rect(pane)
       local x, y, w, h, show_left, show_right = self:get_titlebar_tabs_content_rect(pane, node, views)
       local tw = self:get_titlebar_tab_width(views, w)
@@ -338,12 +379,12 @@ function TitleBar:draw_titlebar_tabs()
       local bw = titlebar_scroll_button_width()
       local hovered_scroll = self.hovered_tab_scroll_pane == pane and self.hovered_tab_scroll_button
       if show_left then
-        renderer.draw_rect(full_x, full_y, bw, full_h, hovered_scroll == 1 and style.titlebar_tab_hover or style.titlebar)
-        common.draw_text(style.font, style.text, "‹", "center", full_x, full_y, bw, full_h)
+        renderer.draw_rect(full_x, full_y, bw, full_h, pane_color(hovered_scroll == 1 and style.titlebar_tab_hover or style.titlebar))
+        common.draw_text(style.font, pane_color(style.text), "‹", "center", full_x, full_y, bw, full_h)
       end
       if show_right then
-        renderer.draw_rect(x + w, full_y, bw, full_h, hovered_scroll == 2 and style.titlebar_tab_hover or style.titlebar)
-        common.draw_text(style.font, style.text, "›", "center", x + w, full_y, bw, full_h)
+        renderer.draw_rect(x + w, full_y, bw, full_h, pane_color(hovered_scroll == 2 and style.titlebar_tab_hover or style.titlebar))
+        common.draw_text(style.font, pane_color(style.text), "›", "center", x + w, full_y, bw, full_h)
       end
       core.push_clip_rect(x, y, w, h)
       local first = node.titlebar_tab_offset or 1
@@ -355,13 +396,17 @@ function TitleBar:draw_titlebar_tabs()
         local selected = view == node.active_view
         local hovered = self.hovered_tab_pane == pane and self.hovered_tab_view == view
         if selected then
-          renderer.draw_rect(tx, ty, tab_w, tab_h, style.background)
-          if focused_pane == pane then renderer.draw_rect(tx, ty + tab_h - ds, tab_w, ds, style.caret) end
+          renderer.draw_rect(tx, ty, tab_w, tab_h, pane_color(style.background))
+          if focused_pane == pane then renderer.draw_rect(tx, ty + tab_h - ds, tab_w, ds, pane_color(style.caret)) end
         elseif hovered then
-          renderer.draw_rect(tx, ty, tab_w, tab_h, style.titlebar_tab_hover)
+          renderer.draw_rect(tx, ty, tab_w, tab_h, pane_color(style.titlebar_tab_hover))
         end
-        renderer.draw_rect(tx + tab_w, ty + style.padding.y, ds, tab_h - style.padding.y * 2, style.divider)
-        node:draw_tab_title(view, node:get_tab_title_font(), selected, hovered, tx + style.padding.x, ty, tab_w - style.padding.x * 2, tab_h)
+        local separator_h = math.max(0, tab_h - ds)
+        renderer.draw_rect(tx, ty, ds, separator_h, pane_color(style.titlebar_tab_separator))
+        renderer.draw_rect(tx + tab_w - ds, ty, ds, separator_h, pane_color(style.titlebar_tab_separator))
+        local title_color = pane_color((selected or hovered) and style.text or style.dim)
+        node:draw_tab_title(view, node:get_tab_title_font(), selected, hovered,
+          tx + style.padding.x, ty, tab_w - style.padding.x * 2, tab_h, title_color)
       end
       core.pop_clip_rect()
     end

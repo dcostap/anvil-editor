@@ -122,9 +122,12 @@ static SDL_HitTestResult SDLCALL hit_test(SDL_Window *window, const SDL_Point *p
     pt->y > resize_border &&
     #endif
     pt->x > resize_border && pt->x < w - controls_width) {
-    if (hit_info.titlebar_client_width > 0 &&
-        pt->x >= hit_info.titlebar_client_x &&
-        pt->x < hit_info.titlebar_client_x + hit_info.titlebar_client_width) {
+    if ((hit_info.titlebar_client_width > 0 &&
+         pt->x >= hit_info.titlebar_client_x &&
+         pt->x < hit_info.titlebar_client_x + hit_info.titlebar_client_width) ||
+        (hit_info.titlebar_client2_width > 0 &&
+         pt->x >= hit_info.titlebar_client2_x &&
+         pt->x < hit_info.titlebar_client2_x + hit_info.titlebar_client2_width)) {
       return SDL_HITTEST_NORMAL;
     }
     return SDL_HITTEST_DRAGGABLE;
@@ -656,7 +659,7 @@ static int f_set_window_hit_test(lua_State *L) {
   RenWindow *window_renderer = *(RenWindow**) luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
   if (lua_gettop(L) == 1) {
     SDL_SetWindowHitTest(window_renderer->cache.window, NULL, NULL);
-    win32_frame_set_hit_test(window_renderer, 0, 0, 0, 0, 0);
+    win32_frame_set_hit_test(window_renderer, 0, 0, 0, 0, 0, 0, 0);
     return 0;
   }
   float scale = window_renderer->scale_x;
@@ -667,10 +670,14 @@ static int f_set_window_hit_test(lua_State *L) {
   window_renderer->hit_test_info.controls_width = controls_width;
   int client_x = luaL_optinteger(L, 5, 0) / scale;
   int client_width = luaL_optinteger(L, 6, 0) / scale;
+  int client2_x = luaL_optinteger(L, 7, 0) / scale;
+  int client2_width = luaL_optinteger(L, 8, 0) / scale;
   window_renderer->hit_test_info.resize_border = resize_border;
   window_renderer->hit_test_info.titlebar_client_x = client_x;
   window_renderer->hit_test_info.titlebar_client_width = client_width;
-  win32_frame_set_hit_test(window_renderer, title_height, controls_width, resize_border, client_x, client_width);
+  window_renderer->hit_test_info.titlebar_client2_x = client2_x;
+  window_renderer->hit_test_info.titlebar_client2_width = client2_width;
+  win32_frame_set_hit_test(window_renderer, title_height, controls_width, resize_border, client_x, client_width, client2_x, client2_width);
 #if defined(SDL_PLATFORM_WINDOWS)
   if (window_renderer->win32_frame) return 0;
 #endif

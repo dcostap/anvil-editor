@@ -238,6 +238,8 @@ static LRESULT hit_test(Win32FrameData *frame, HWND hwnd, LPARAM lparam) {
   int controls_width = ren->hit_test_info.controls_width;
   int client_x = ren->hit_test_info.titlebar_client_x;
   int client_width = ren->hit_test_info.titlebar_client_width;
+  int client2_x = ren->hit_test_info.titlebar_client2_x;
+  int client2_width = ren->hit_test_info.titlebar_client2_width;
 
   if (resize <= 0) resize = scale_for_dpi(hwnd, 8);
 
@@ -267,7 +269,8 @@ static LRESULT hit_test(Win32FrameData *frame, HWND hwnd, LPARAM lparam) {
   }
 
   if (title_height > 0 && y >= 0 && y < title_height) {
-    if (client_width > 0 && x >= client_x && x < client_x + client_width) {
+    if ((client_width > 0 && x >= client_x && x < client_x + client_width) ||
+        (client2_width > 0 && x >= client2_x && x < client2_x + client2_width)) {
       return HTCLIENT;
     }
 
@@ -641,13 +644,15 @@ bool win32_frame_sync_client_size(RenWindow *ren) {
   return true;
 }
 
-void win32_frame_set_hit_test(RenWindow *ren, int title_height, int controls_width, int resize_border, int client_x, int client_width) {
+void win32_frame_set_hit_test(RenWindow *ren, int title_height, int controls_width, int resize_border, int client_x, int client_width, int client2_x, int client2_width) {
   if (!ren) return;
   ren->hit_test_info.title_height = title_height;
   ren->hit_test_info.controls_width = controls_width;
   ren->hit_test_info.resize_border = resize_border;
   ren->hit_test_info.titlebar_client_x = client_x;
   ren->hit_test_info.titlebar_client_width = client_width;
+  ren->hit_test_info.titlebar_client2_x = client2_x;
+  ren->hit_test_info.titlebar_client2_width = client2_width;
 }
 
 void win32_frame_destroy(RenWindow *ren) {
