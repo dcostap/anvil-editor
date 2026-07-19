@@ -189,7 +189,7 @@ A Title Bar tab representing one Open View in either the Left Pane or Right Pane
 _Avoid_: Main Tab, file tab, buffer tab, Node tab
 
 **Title Bar Safe Zone**:
-A deliberately tab-free region in each pane's Title Bar allocation that remains available for moving and otherwise interacting with the application window.
+A deliberately tab-free region between the Left Pane Tabs and Right Pane Tabs that remains available for moving and otherwise interacting with the application window.
 _Avoid_: tab gap, unused tab space
 
 **File Tree**:

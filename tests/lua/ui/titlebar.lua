@@ -71,18 +71,44 @@ test.describe("Title Bar", function()
       string.format("gap=%g padding=%g", tabs_x - title_right, style.padding.x))
   end)
 
-  test.it("allocates independent titlebar tab regions to both panes", function()
+  test.it("keeps Left and Right Pane tab regions separated by one safe zone", function()
     local titlebar = TitleBar()
     titlebar.position.x, titlebar.position.y = 0, 0
     titlebar.size.x, titlebar.size.y = 1200 * SCALE, 32 * SCALE
 
+    local left_node = { views = { {} }, titlebar_tab_offset = 1 }
+    local right_node = { views = { {} }, titlebar_tab_offset = 1 }
+    titlebar.get_tabs_node = function(_, pane)
+      return pane == "left" and left_node or right_node
+    end
+
     local lx, _, lw = titlebar:get_pane_tabs_rect("left")
     local rx, _, rw = titlebar:get_pane_tabs_rect("right")
-    local midpoint = math.floor(titlebar.size.x / 2)
+    local safe_x, _, safe_width = titlebar:get_titlebar_safe_rect()
 
-    test.ok(lx + lw <= midpoint)
-    test.ok(rx >= midpoint)
+    test.ok(lw > 0)
     test.ok(rw > 0)
+    test.ok(lx + lw <= safe_x)
+    test.ok(safe_x + safe_width <= rx)
+  end)
+
+  test.it("shares Title Bar width with the pane that has greater tab demand", function()
+    local titlebar = TitleBar()
+    titlebar.position.x, titlebar.position.y = 0, 0
+    titlebar.size.x, titlebar.size.y = 1800 * SCALE, 32 * SCALE
+
+    local left_node = { views = { {} }, titlebar_tab_offset = 1 }
+    local right_node = { views = { {}, {}, {}, {}, {} }, titlebar_tab_offset = 1 }
+    titlebar.get_tabs_node = function(_, pane)
+      return pane == "left" and left_node or right_node
+    end
+
+    local _, _, left_width = titlebar:get_pane_tabs_rect("left")
+    local right_x, _, right_width = titlebar:get_pane_tabs_rect("right")
+    test.ok(right_x < titlebar.size.x / 2,
+      "Right Pane tabs should borrow unused width from the Left Pane allocation")
+    test.ok(math.abs(left_width - right_width / #right_node.views) < 0.001,
+      "cooperative narrowing should preserve equal per-tab widths")
   end)
 
   test.it("anchors Right Pane tabs beside the window controls and adds tabs leftward", function()
@@ -102,6 +128,9 @@ test.describe("Title Bar", function()
       active_view = first,
       titlebar_tab_offset = 1,
     }
+    titlebar.get_tabs_node = function(_, pane)
+      return pane == "right" and node or nil
+    end
 
     local first_x, _, first_width = titlebar:get_titlebar_tab_rect("right", node, node.views, 1)
     test.equal(first_x + first_width, controls_x)
@@ -112,9 +141,6 @@ test.describe("Title Bar", function()
     test.equal(first_x + first_width, controls_x)
     test.equal(second_x + second_width, first_x)
 
-    titlebar.get_tabs_node = function(_, pane)
-      return pane == "right" and node or nil
-    end
     local pane, _, hit_first = titlebar:get_titlebar_tab_at(first_x + first_width / 2, titlebar.size.y / 2)
     local _, _, hit_second = titlebar:get_titlebar_tab_at(second_x + second_width / 2, titlebar.size.y / 2)
     test.equal(pane, "right")
@@ -122,28 +148,20 @@ test.describe("Title Bar", function()
     test.equal(hit_second, second)
   end)
 
-  test.it("reserves a draggable safe zone covering at least 15 percent of app width in each pane", function(context)
+  test.it("keeps a draggable safe zone between the Left and Right Pane tabs", function(context)
     local titlebar = TitleBar()
     titlebar.position.x, titlebar.position.y = 0, 0
     titlebar.size.x, titlebar.size.y = 1200 * SCALE, 32 * SCALE
 
-    local minimum_safe_width = math.floor(titlebar.size.x * 0.15)
-    local left_safe_x, _, left_safe_width = titlebar:get_pane_safe_rect("left")
-    local right_safe_x, _, right_safe_width = titlebar:get_pane_safe_rect("right")
+    local safe_x, _, safe_width = titlebar:get_titlebar_safe_rect()
     local left_tabs_x, _, left_tabs_width = titlebar:get_pane_tabs_rect("left")
     local right_tabs_x, _, right_tabs_width = titlebar:get_pane_tabs_rect("right")
-    local midpoint = math.floor(titlebar.size.x / 2)
 
-    test.ok(left_safe_width >= minimum_safe_width)
-    test.ok(right_safe_width >= minimum_safe_width)
-    test.ok(left_tabs_x + left_tabs_width <= left_safe_x)
-    test.ok(right_safe_x + right_safe_width <= right_tabs_x)
-    test.equal(left_safe_x + left_safe_width, midpoint)
-    test.equal(right_safe_x, midpoint)
-    test.is_nil(titlebar:get_titlebar_tab_at(left_safe_x + left_safe_width / 2, titlebar.size.y / 2))
-    test.is_nil(titlebar:get_titlebar_tab_at(right_safe_x + right_safe_width / 2, titlebar.size.y / 2))
-    test.is_nil(titlebar:get_titlebar_scroll_button_at(left_safe_x + left_safe_width / 2, titlebar.size.y / 2))
-    test.is_nil(titlebar:get_titlebar_scroll_button_at(right_safe_x + right_safe_width / 2, titlebar.size.y / 2))
+    test.ok(safe_width > 0)
+    test.ok(left_tabs_x + left_tabs_width <= safe_x)
+    test.ok(safe_x + safe_width <= right_tabs_x)
+    test.is_nil(titlebar:get_titlebar_tab_at(safe_x + safe_width / 2, titlebar.size.y / 2))
+    test.is_nil(titlebar:get_titlebar_scroll_button_at(safe_x + safe_width / 2, titlebar.size.y / 2))
 
     context.original_set_window_hit_test = system.set_window_hit_test
     local hit_test_args
@@ -163,7 +181,36 @@ test.describe("Title Bar", function()
     test.ok(hit_test_args[8] <= right_tabs_width)
   end)
 
-  test.it("keeps unused tab capacity available for native window dragging", function(context)
+  test.it("backfills hidden Pane Tabs and removes overflow buttons after growing", function()
+    local titlebar = TitleBar()
+    titlebar.position.x, titlebar.position.y = 0, 0
+    titlebar.size.x, titlebar.size.y = 900 * SCALE, 32 * SCALE
+
+    local views = {}
+    for i = 1, 10 do views[i] = {} end
+    local node = {
+      views = views,
+      active_view = views[#views],
+      titlebar_tab_offset = 1,
+    }
+    titlebar.get_tabs_node = function(_, pane)
+      return pane == "right" and node or nil
+    end
+
+    titlebar:scroll_titlebar_tabs_to_active("right", node)
+    test.ok(node.titlebar_tab_offset > 1)
+
+    titlebar.size.x = 1800 * SCALE
+    titlebar:scroll_titlebar_tabs_to_active("right", node)
+
+    test.equal(node.titlebar_tab_offset, 1)
+    local _, _, _, _, show_previous, show_next =
+      titlebar:get_titlebar_tabs_content_rect("right", node, views)
+    test.ok(not show_previous)
+    test.ok(not show_next)
+  end)
+
+  test.it("keeps unused shared Title Bar width available for native window dragging", function(context)
     local titlebar = TitleBar()
     titlebar.position.x, titlebar.position.y = 0, 0
     titlebar.size.x, titlebar.size.y = 1200 * SCALE, 32 * SCALE
@@ -178,6 +225,12 @@ test.describe("Title Bar", function()
       return pane == "left" and node or nil
     end
 
+    titlebar.size.x = 2000 * SCALE
+    local tabs_x, _, tabs_capacity = titlebar:get_pane_tabs_rect("left")
+    local safe_x, _, safe_width = titlebar:get_titlebar_safe_rect()
+    test.ok(safe_width > tabs_capacity)
+    test.is_nil(titlebar:get_titlebar_tab_at(safe_x + safe_width / 2, titlebar.size.y / 2))
+
     context.original_set_window_hit_test = system.set_window_hit_test
     local hit_test_args
     system.set_window_hit_test = function(...)
@@ -185,10 +238,9 @@ test.describe("Title Bar", function()
     end
     titlebar:configure_hit_test(true)
 
-    local tabs_x, _, tabs_capacity = titlebar:get_pane_tabs_rect("left")
     test.equal(hit_test_args[5], tabs_x)
     test.ok(hit_test_args[6] > 0)
-    test.ok(hit_test_args[6] < tabs_capacity)
+    test.ok(hit_test_args[6] <= tabs_capacity)
   end)
 
   test.it("draws clear separators on both sides of every Pane Tab", function(context)
@@ -262,6 +314,48 @@ test.describe("Title Bar", function()
     test.equal(#hover_rects, 1)
     test.ok(hover_rects[1].w > 0)
     test.equal(hover_rects[1].h, titlebar.size.y)
+  end)
+
+  test.it("clips each Pane Tab label inside its minimum side padding", function(context)
+    local titlebar = TitleBar()
+    titlebar.position.x, titlebar.position.y = 0, 0
+    titlebar.size.x, titlebar.size.y = 1200 * SCALE, 32 * SCALE
+
+    local view = {}
+    local title_rect
+    local node = {
+      views = { view },
+      active_view = view,
+      titlebar_tab_offset = 1,
+      get_tab_title_font = function() return style.font end,
+      draw_tab_title = function(_, _, _, _, _, x, y, w, h)
+        title_rect = { x = x, y = y, w = w, h = h }
+      end,
+    }
+    titlebar.get_tabs_node = function(_, pane)
+      return pane == "left" and node or nil
+    end
+
+    context.original_draw_rect = renderer.draw_rect
+    context.original_set_clip_rect = renderer.set_clip_rect
+    renderer.draw_rect = function() end
+    local clips = {}
+    renderer.set_clip_rect = function(x, y, w, h)
+      clips[#clips + 1] = { x = x, y = y, w = w, h = h }
+    end
+
+    titlebar:draw_titlebar_tabs()
+
+    test.not_nil(title_rect)
+    local found_title_clip = false
+    for _, clip in ipairs(clips) do
+      if clip.x == title_rect.x and clip.y == title_rect.y
+      and clip.w == title_rect.w and clip.h == title_rect.h then
+        found_title_clip = true
+        break
+      end
+    end
+    test.ok(found_title_clip, "Pane Tab title drawing must not enter its side padding")
   end)
 
   test.it("fades Right Pane tabs while the Right Pane is hidden", function(context)

@@ -350,20 +350,15 @@ config.draw_whitespace = false
 ---@type boolean
 config.borderless = false
 
----Moves the active editor tab strip into the custom title bar.
----Currently intended for the integrated Windows titlebar path.
----Defaults to false.
----@type boolean
-
 ---Minimum width for integrated titlebar tabs.
----Defaults to 80 * SCALE.
+---Defaults to 90 * SCALE.
 ---@type number
-config.integrated_titlebar_tab_min_width = 80 * SCALE
+config.integrated_titlebar_tab_min_width = 90 * SCALE
 
 ---Maximum width for integrated titlebar tabs.
----Defaults to style.tab_width when not set.
----@type number?
-config.integrated_titlebar_tab_max_width = nil
+---Defaults to 500 * SCALE.
+---@type number
+config.integrated_titlebar_tab_max_width = 500 * SCALE
 
 ---Maximum number of clicks recognized by Anvil.
 ---
