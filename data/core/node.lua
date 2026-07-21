@@ -384,6 +384,10 @@ function Node:get_tab_title_font()
   return self:get_tab_bar():get_tab_title_font()
 end
 
+function Node:get_tab_preferred_width(idx)
+  return self:get_tab_bar():get_tab_preferred_width(idx)
+end
+
 function Node:get_tab_width(idx)
   return self:get_tab_bar():get_tab_width(idx)
 end

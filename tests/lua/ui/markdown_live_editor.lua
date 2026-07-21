@@ -134,6 +134,30 @@ test.describe("Markdown Live Editor", function()
     test.ok(view:get_col_x_offset(1, 8) > 0)
   end)
 
+  test.it("uses the rendered heading row height for its highlight and caret", function()
+    local view, doc = make_view("# Title\nbody", "note.md")
+    doc:set_selection(1, 4)
+    refresh(view)
+
+    local row_height = view:get_visual_row_height(1)
+    local old_draw_rect = renderer.draw_rect
+    local highlight_height, caret_height
+    renderer.draw_rect = function(x, y, width, height, color)
+      if color == style.line_highlight then highlight_height = height end
+      if color == style.caret then caret_height = height end
+    end
+    local ok, err = pcall(function()
+      view:draw_current_line_highlights(1, 2)
+      view:draw_caret(10, 10, 1, 4)
+    end)
+    renderer.draw_rect = old_draw_rect
+    if not ok then error(err) end
+
+    test.ok(row_height > view:get_line_height())
+    test.equal(highlight_height, row_height)
+    test.equal(caret_height, row_height)
+  end)
+
   test.it("adopts published heading and inline semantic identities", function()
     local view, doc = make_view("# **Title**\nText with ***bold***.\nplain", "note.md")
     doc:set_selection(3, 1)
@@ -644,6 +668,38 @@ test.describe("Markdown Live Editor", function()
     test.equal(view:get_col_x_offset(1, #"See [[Note|Alias]]" + 1), raw_width)
   end)
 
+  test.it("keeps every textual link blue and underlined in active and inactive presentation", function()
+    local target = "2021-09; 28 (Tuesday)#Tema escandallo configurador"
+    local source = "[[" .. target .. "]]\n[[Plan Unión Escandallos y Configurador]]\nplain"
+    local view, doc = make_view(source, "links.md")
+    doc:set_selection(3, 1)
+    refresh(view)
+
+    local function textual_link(line)
+      for _, fragment in ipairs(view:get_line_render(line).fragments or {}) do
+        if fragment.link and not fragment.widget then return fragment end
+      end
+    end
+    local inactive_target = test.not_nil(textual_link(1))
+    test.equal(inactive_target.text, target)
+    test.equal(inactive_target.color, style.markdown_live_link)
+    test.equal(inactive_target.underline, true)
+    local inactive_missing = test.not_nil(textual_link(2))
+    test.equal(inactive_missing.color, style.markdown_live_link)
+    test.equal(inactive_missing.underline, true)
+
+    doc:set_selection(1, 5)
+    local active_target = test.not_nil(textual_link(1))
+    test.equal(active_target.text, target)
+    test.equal(active_target.color, style.markdown_live_link)
+    test.equal(active_target.underline, true)
+    local visible = {}
+    for _, fragment in ipairs(view:iter_line_render_fragments(view:get_line_render(1))) do
+      if not fragment.hidden then visible[#visible + 1] = fragment.text or "" end
+    end
+    test.equal(table.concat(visible), "[[" .. target .. "]]")
+  end)
+
   test.it("opens resolved links by command and modifier-click with navigation targets", function()
     local root = USERDIR .. PATHSEP .. "markdown-live-open-link-" .. system.get_process_id()
     test.ok(common.mkdirp(root))
@@ -940,7 +996,13 @@ test.describe("Markdown Live Editor", function()
         if fragment.text == text then return fragment end
       end
     end
-    test.not_nil(find_text(1, "•"))
+    local bullet
+    for _, fragment in ipairs(fragments(1)) do
+      if fragment.unordered_list_marker then bullet = fragment break end
+    end
+    bullet = test.not_nil(bullet)
+    test.not_nil(bullet.widget)
+    test.equal(bullet.text or "", "")
     local unchecked = test.not_nil(find_text(2, "☐"))
     test.not_nil(find_text(3, "☑"))
     test.not_nil(find_text(4, "│ "))
@@ -954,7 +1016,7 @@ test.describe("Markdown Live Editor", function()
     local active = view:get_line_render(1)
     local has_bullet = false
     for _, fragment in ipairs(active and active.fragments or {}) do
-      if fragment.text == "•" then has_bullet = true end
+      if fragment.unordered_list_marker then has_bullet = true end
     end
     test.equal(has_bullet, false)
   end)
@@ -1032,7 +1094,14 @@ test.describe("Markdown Live Editor", function()
     end
     test.equal(test.not_nil(definition_fragment).footnote_definition, "note")
     doc:set_selection(1, 4)
-    test.equal(view:get_line_render(1), nil)
+    local active_reference = test.not_nil(view:get_line_render(1))
+    local active_link
+    for _, fragment in ipairs(active_reference.fragments) do
+      if fragment.link and fragment.link.kind == "reference" then active_link = fragment break end
+    end
+    active_link = test.not_nil(active_link)
+    test.equal(active_link.color, style.markdown_live_link)
+    test.equal(active_link.underline, true)
   end)
 
   test.it("styles semantic Obsidian tags without treating numeric or word-bound hashes as tags", function()
@@ -1136,27 +1205,34 @@ test.describe("Markdown Live Editor", function()
     test.equal(view:get_line_render(3), nil)
   end)
 
-  test.it("presents fenced code chrome while preserving raw editable code content", function()
+  test.it("keeps inactive fence padding and reveals the whole fence while editing it", function()
     local view, doc = make_view("```lua\nprint('ok')\n```\nplain", "fence.md")
     doc:set_selection(4, 1)
     refresh(view)
     view:invalidate_line_render("fence-ready")
     local opening = test.not_nil(view:get_line_render(1))
-    test.equal(opening.fragments[1].text, "lua")
+    test.equal(opening.fragments[1].hidden, true)
     test.equal(view:get_line_render(2), nil)
     local closing = test.not_nil(view:get_line_render(3))
-    test.equal(closing.fragments[1].text, "")
+    test.equal(closing.fragments[1].hidden, true)
+    test.equal(view:get_visual_row_height(1), view:get_line_height())
+    test.equal(view:get_visual_row_height(3), view:get_line_height())
 
     local markdown_decoration
     for _, entry in ipairs(view:decoration_provider_entries()) do
       if entry.id == "markdown-live" then markdown_decoration = entry.provider break end
     end
     markdown_decoration = test.not_nil(markdown_decoration)
+    test.equal(markdown_decoration:line_background(view, 1), style.markdown_live_code_background)
     test.equal(markdown_decoration:line_background(view, 2), style.markdown_live_code_background)
+    test.equal(markdown_decoration:line_background(view, 3), style.markdown_live_code_background)
     test.equal(markdown_decoration:line_background(view, 4), nil)
 
-    doc:set_selection(1, 2)
+    doc:set_selection(2, 4)
     test.equal(view:get_line_render(1), nil)
+    test.equal(view:get_line_render(3), nil)
+    test.equal(view:get_visual_row_height(1), view:get_line_height())
+    test.equal(view:get_visual_row_height(3), view:get_line_height())
   end)
 
   test.it("keeps whole-Document semantic adoption out of line rendering", function()
@@ -1234,33 +1310,62 @@ test.describe("Markdown Live Editor", function()
     end
   end)
 
-  test.it("presents semantic GFM table cells as styled editable source", function()
+  test.it("presents inactive GFM tables as an aligned compact grid", function()
     local view, doc = make_view("| Name | Value |\n| :--- | ---: |\n| one | two |\n\nplain", "table.md")
     doc:set_selection(5, 1)
     refresh(view)
     local header = test.not_nil(view:get_line_render(1))
     local header_cells = 0
+    local header_widths = {}
     for _, fragment in ipairs(header.fragments) do
       if fragment.table_cell then
         header_cells = header_cells + 1
+        header_widths[header_cells] = fragment.width
         test.equal(fragment.color, style.markdown_live_table_header)
+        test.equal(fragment.table_alignment, header_cells == 2 and "right" or "left")
+      elseif fragment.table_border then
+        test.not_nil(fragment.widget)
+        test.equal(fragment.text or "", "")
       end
     end
     test.equal(header_cells, 2)
     local row = test.not_nil(view:get_line_render(3))
     local row_cells = 0
     for _, fragment in ipairs(row.fragments) do
-      if fragment.table_cell then row_cells = row_cells + 1 end
+      if fragment.table_cell then
+        row_cells = row_cells + 1
+        test.equal(fragment.width, header_widths[row_cells])
+      end
     end
     test.equal(row_cells, 2)
+    local delimiter = test.not_nil(view:get_line_render(2))
+    test.not_nil(delimiter.fragments[1].widget)
+    test.ok(view:get_visual_row_height(2) < view:get_line_height())
 
     local markdown_decoration
     for _, entry in ipairs(view:decoration_provider_entries()) do
       if entry.id == "markdown-live" then markdown_decoration = entry.provider break end
     end
     markdown_decoration = test.not_nil(markdown_decoration)
-    test.equal(markdown_decoration:line_background(view, 2), style.markdown_live_table_background)
+    test.equal(markdown_decoration:line_background(view, 1), nil)
+    test.equal(markdown_decoration:line_background(view, 2), nil)
+    test.equal(markdown_decoration:line_background(view, 3), nil)
     test.equal(markdown_decoration:line_background(view, 5), nil)
+
+    local old_width = header_widths[1]
+    doc:insert(3, 3, "a much longer value ")
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    local updated_header = test.not_nil(view:get_line_render(1))
+    local updated_width
+    for _, fragment in ipairs(updated_header.fragments) do
+      if fragment.table_cell and fragment.table_column == 1 then
+        updated_width = fragment.width
+        break
+      end
+    end
+    test.ok(test.not_nil(updated_width) > old_width)
+
     doc:set_selection(3, 4)
     test.equal(view:get_line_render(3), nil)
   end)

@@ -2559,6 +2559,15 @@ function DocView:get_visual_row_height(row)
   return cache and cache.heights[common.clamp(row, 1, cache.row_count)] or self:get_line_height()
 end
 
+---Returns the resolved visual-row height for a Document position.
+---@param line integer
+---@param col? integer
+---@param line_end? boolean
+---@return number
+function DocView:get_position_visual_row_height(line, col, line_end)
+  return self:get_visual_row_height(self:get_visual_row(line, col or 1, line_end))
+end
+
 function DocView:get_visual_row_y_offset(row)
   local cache = self:get_visual_row_metric_cache()
   if cache then
@@ -3127,7 +3136,8 @@ function DocView:get_line_render_col_x_offset(render_line, col)
     else
       local text = fragment.text or ""
       if col < col2 and not fragment.widget then
-        return xoffset + font:get_width(text:sub(1, math.max(0, col - col1)), { tab_offset = xoffset })
+        return xoffset + (fragment.text_x_offset or 0)
+          + font:get_width(text:sub(1, math.max(0, col - col1)), { tab_offset = xoffset })
       end
       xoffset = xoffset + (fragment.width or (fragment.widget and fragment.widget.width) or font:get_width(text, { tab_offset = xoffset }))
     end
@@ -3161,8 +3171,10 @@ function DocView:get_line_render_x_offset_col(render_line, x)
         if fragment.widget and text == "" then
           return (x <= xoffset + width / 2) and col1 or col2
         end
+        local text_offset = fragment.text_x_offset or 0
+        if x <= xoffset + text_offset then return col1 end
         local col = col1
-        local local_x = xoffset
+        local local_x = xoffset + text_offset
         for char in common.utf8_chars(text) do
           local w = font:get_width(char, { tab_offset = local_x })
           if local_x + w >= x then
@@ -3921,15 +3933,15 @@ end
 ---Draw the current line highlight bar.
 ---@param x number Screen x coordinate
 ---@param y number Screen y coordinate
-function DocView:get_line_highlight_rect(x, y)
-  local lh = self:get_line_height()
+function DocView:get_line_highlight_rect(x, y, height)
+  local lh = height or self:get_line_height()
   local pos_x = self.__full_width_highlight_position_x or self.position.x
   local size_x = self.__full_width_highlight_size_x or self.size.x
   return pos_x, y, size_x, lh
 end
 
-function DocView:draw_line_highlight(x, y)
-  local rx, ry, rw, rh = self:get_line_highlight_rect(x, y)
+function DocView:draw_line_highlight(x, y, height)
+  local rx, ry, rw, rh = self:get_line_highlight_rect(x, y, height)
   renderer.draw_rect(rx, ry, rw, rh, style.line_highlight)
 end
 
@@ -3974,7 +3986,7 @@ function DocView:draw_current_line_highlights(minline, maxline)
     end
     for entry in self:iter_visible_visual_rows() do
       if highlighted_rows[entry.visual_row] then
-        self:draw_line_highlight(self.position.x, entry.y)
+        self:draw_line_highlight(self.position.x, entry.y, entry.height)
       end
     end
     self:draw_content_left_edge()
@@ -3998,13 +4010,13 @@ function DocView:draw_current_line_highlights(minline, maxline)
     return
   end
   if config.highlight_current_line == false then return end
-  local _, y = self:get_line_screen_position(minline)
-  local lh = self:get_line_height()
   for line = minline, maxline do
     if self:line_has_current_line_highlight(line) then
-      self:draw_line_highlight(self.position.x, y)
+      local _, y = self:get_line_screen_position(line)
+      self:draw_line_highlight(
+        self.position.x, y, self:get_position_visual_row_height(line, 1)
+      )
     end
-    y = y + lh
   end
   self:draw_content_left_edge()
 end
@@ -4330,28 +4342,39 @@ local function cached_fast_ascii_monospace_width(self, line, text, font, indent_
   return width
 end
 
-local function draw_render_fragment_text(fragment, font, text, x, y, color, opts)
-  local width = font:get_width(text, opts)
+local function draw_render_fragment_text(
+  fragment, font, text, x, y, color, opts, background_y, background_height
+)
+  local text_width = font:get_width(text, opts)
+  local width = math.max(text_width, fragment.width or 0)
+  local text_x = x + (fragment.text_x_offset or 0)
   if fragment.background then
-    renderer.draw_rect(x, y, width, math.max(1, font:get_height()), fragment.background)
+    renderer.draw_rect(
+      x,
+      fragment.background_full_height and (background_y or y) or y,
+      width,
+      fragment.background_full_height and (background_height or font:get_height())
+        or math.max(1, font:get_height()),
+      fragment.background
+    )
   end
-  local next_x = renderer.draw_text(font, text, x, y, color, opts)
+  local next_x = renderer.draw_text(font, text, text_x, y, color, opts)
   if fragment.overdraw then
     renderer.draw_text(
-      font, text, x + (fragment.overdraw_dx or math.max(1, SCALE)), y, color, opts
+      font, text, text_x + (fragment.overdraw_dx or math.max(1, SCALE)), y, color, opts
     )
   end
   if fragment.strikethrough then
     renderer.draw_rect(
-      x, y + math.floor(font:get_height() / 2), width, math.max(1, SCALE), color
+      text_x, y + math.floor(font:get_height() / 2), text_width, math.max(1, SCALE), color
     )
   end
   if fragment.underline then
     renderer.draw_rect(
-      x, y + font:get_height() - math.max(1, SCALE), width, math.max(1, SCALE), color
+      text_x, y + font:get_height() - math.max(1, SCALE), text_width, math.max(1, SCALE), color
     )
   end
-  return next_x
+  return math.max(next_x, x + width)
 end
 
 ---Draw the text content of a line with syntax highlighting.
@@ -4422,13 +4445,13 @@ function DocView:draw_line_text(line, x, y)
     local tx = x
     local row = self:get_visual_row(line, 1)
     local row_height = self:get_visual_row_height(row)
-    local ty = y + self:get_line_text_y_offset()
     local _, indent_size = self.doc:get_indent_info()
     for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
       if not fragment.hidden then
         local font = render_fragment_font(self, fragment)
         font:set_tab_size(indent_size)
         local text = fragment.text or ""
+        local ty = y + math.max(0, (row_height - font:get_height()) / 2)
         if fragment.widget and fragment.widget.draw then
           local ok, err = pcall(fragment.widget.draw, self, fragment, tx, y, row_height)
           if not ok then core.log_quiet("DocView render widget draw failed for %s: %s", self.doc:get_name(), tostring(err)) end
@@ -4436,7 +4459,7 @@ function DocView:draw_line_text(line, x, y)
         elseif text ~= "" then
           local color = render_fragment_color(fragment)
           tx = draw_render_fragment_text(
-            fragment, font, text, tx, ty, color, { tab_offset = tx - x }
+            fragment, font, text, tx, ty, color, { tab_offset = tx - x }, y, row_height
           )
         elseif fragment.width then
           tx = tx + fragment.width
@@ -4983,7 +5006,10 @@ function DocView:draw_caret(x, y, line, col, caret_idx, color)
 
   local stats = core.docview_frame_stats
   if stats then stats.caret_draw_calls = stats.caret_draw_calls + 1 end
-  local lh = self:get_line_height()
+  local line_end = self.wrapped_settings
+    and linewrapping.has_wrapped_line_end_affinity(self, line, col)
+    or false
+  local lh = self:get_position_visual_row_height(line, col, line_end)
   if self.doc.overwrite then
     local w = self:get_font():get_width(self.doc:get_char(line, col))
     renderer.draw_rect(x, y + lh, w, style.caret_width * 2, color)
@@ -5009,7 +5035,7 @@ function DocView:search_match_screen_rect(line, col1, col2)
     -- line's first visual row.
     x2 = self.position.x + self.size.x
   end
-  return x1, y1, x2, self:get_line_height()
+  return x1, y1, x2, self:get_position_visual_row_height(line, col1)
 end
 
 function DocView:draw_search_match_background(line, col1, col2, primary)
@@ -5177,7 +5203,10 @@ local function draw_decoration_line_backgrounds(view, line, x, y)
           end
         end
       else
-        renderer.draw_rect(view.position.x, y, view.size.x, lh, color)
+        renderer.draw_rect(
+          view.position.x, y, view.size.x,
+          view:get_position_visual_row_height(line, 1), color
+        )
       end
     end
   end
@@ -5210,7 +5239,11 @@ local function draw_decoration_inline_ranges(view, line, x, y)
           local tx1 = view:get_col_x_offset(line, col1)
           local tx2 = view:get_col_x_offset(line, col2)
           local width = tx2 - tx1
-          if width > 0 then renderer.draw_rect(x + tx1, y, width, lh, color) end
+          if width > 0 then
+            renderer.draw_rect(
+              x + tx1, y, width, view:get_position_visual_row_height(line, col1), color
+            )
+          end
         end
       end
     end
@@ -5354,11 +5387,13 @@ function DocView:draw_line_body(line, x, y)
 
   if not self.__current_line_highlights_drawn_before_content
   and self:line_has_current_line_highlight(line) then
-    self:draw_line_highlight(x + self.scroll.x, y)
+    self:draw_line_highlight(
+      x + self.scroll.x, y, self:get_position_visual_row_height(line, 1)
+    )
   end
 
   -- draw selection if it overlaps this line
-  local lh = self:get_line_height()
+  local lh = self:get_position_visual_row_height(line, 1)
   local selection_cache = self.__line_body_selection_cache
   local fallback_search_matches
   local cached_selections = selection_cache and selection_cache[line]
@@ -5428,8 +5463,10 @@ end
 ---@return integer height Line height
 function DocView:draw_line_gutter(line, x, y, width)
   local lh = self:get_line_height()
-  local height = lh
-  if self:line_numbers_visible() then
+  local row_height = self.wrapped_settings and lh
+    or self:get_position_visual_row_height(line, 1)
+  local height = row_height
+  if self:line_numbers_visible() and row_height >= self:get_font():get_height() then
     local color = style.line_number
     local gutter_selection_cache = self.__line_gutter_selection_cache
     if gutter_selection_cache then
@@ -5444,7 +5481,7 @@ function DocView:draw_line_gutter(line, x, y, width)
       end
     end
     x = x + style.padding.x
-    common.draw_text(self:get_font(), color, line, "right", x, y, width, lh)
+    common.draw_text(self:get_font(), color, line, "right", x, y, width, row_height)
   end
   if self.wrapped_settings then
     height = math.max(height, lh * linewrapping.get_wrapped_line_count(self, line))
@@ -5461,7 +5498,7 @@ end
 function DocView:draw_ime_decoration(line1, col1, line2, col2)
   local x, y = self:get_line_screen_position(line1)
   local line_size = math.max(1, SCALE)
-  local lh = self:get_line_height()
+  local lh = self:get_position_visual_row_height(line1, col1)
 
   -- Draw IME underline
   local x1 = self:get_col_x_offset(line1, col1)

@@ -14,6 +14,8 @@ The Markdown provider evaluates every selection range in the view-local selectio
 
 Targeted visual-height updates now identify the old first visible metric row before applying Fenwick-tree deltas. Height changes strictly above that row adjust both current and target scroll positions by the aggregate delta. The visible content anchor therefore stays at the same screen y-coordinate when Markdown above it expands or collapses.
 
+Current Line Highlights, selections, search markers, line-number layout, decoration backgrounds, and carets resolve the same visual-row metric as rendered text. Enlarged headings therefore keep their text, row chrome, and caret geometry aligned instead of mixing heading metrics with the base Editor line height.
+
 ## Red-green evidence
 
 Before implementation:

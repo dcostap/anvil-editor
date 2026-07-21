@@ -116,6 +116,52 @@ local function titlebar_tab_width_limits()
   return math.max(1, min_width), math.max(min_width, max_width)
 end
 
+local function node_view_index(node, view)
+  for i, candidate in ipairs(node and node.views or {}) do
+    if candidate == view then return i end
+  end
+end
+
+local function titlebar_tab_preferred_width(node, view)
+  local min_width, max_width = titlebar_tab_width_limits()
+  local idx = node_view_index(node, view)
+  local width = idx and node.get_tab_preferred_width and node:get_tab_preferred_width(idx)
+  if not width and view and view.get_name and node and node.get_tab_title_font then
+    local font = node:get_tab_title_font()
+    width = font:get_width(view:get_name() or "") + style.padding.x * 2 + style.divider_size * 2
+  end
+  return common.clamp(width or min_width, min_width, max_width)
+end
+
+local function titlebar_tab_width_demand(node, views)
+  local min_width = titlebar_tab_width_limits()
+  local minimum = #views * min_width
+  local preferred = 0
+  for _, view in ipairs(views) do
+    preferred = preferred + titlebar_tab_preferred_width(node, view)
+  end
+  return minimum, preferred
+end
+
+local function sum_widths(widths, first, last)
+  local total = 0
+  for i = first, last do total = total + (widths[i] or 0) end
+  return total
+end
+
+local function visible_tab_count(widths, first, available_width)
+  local count, used = 0, 0
+  for i = first, #widths do
+    local width = widths[i]
+    if count > 0 and used + width > available_width + 0.001 then break end
+    if count == 0 and available_width <= 0 then break end
+    count = count + 1
+    used = used + width
+    if used >= available_width - 0.001 then break end
+  end
+  return count
+end
+
 local function color_faded_over_titlebar(color, opacity)
   if not color or opacity >= 1 then return color end
   local effective_opacity = opacity * (color[4] or 255) / 255
@@ -214,8 +260,8 @@ function TitleBar:scroll_titlebar_tabs_to_active(pane, node)
   if full_w <= 0 then return end
   local function visible_count_for_offset(offset)
     local _, _, w = self:get_titlebar_tabs_content_rect(pane, node, views, offset)
-    local tw = self:get_titlebar_tab_width(views, w)
-    return math.max(1, math.floor(w / tw))
+    local widths = self:get_titlebar_tab_widths(node, views, w)
+    return math.max(1, visible_tab_count(widths, offset, w))
   end
 
   local capacity_changed = node.titlebar_tab_capacity ~= full_w
@@ -247,6 +293,11 @@ function TitleBar:update()
     self:scroll_titlebar_tabs_to_active(pane, node)
     signature[#signature + 1] = tostring(#pane_tab_views(node))
     signature[#signature + 1] = tostring(node and node.titlebar_tab_offset or 0)
+  end
+  for _, pane in ipairs({ "left", "right" }) do
+    local x, _, width = self:get_pane_tabs_interactive_rect(pane)
+    signature[#signature + 1] = tostring(x)
+    signature[#signature + 1] = tostring(width)
   end
   signature = table.concat(signature, ":")
   if self.last_configured_signature ~= signature then
@@ -288,10 +339,9 @@ function TitleBar:draw_window_title()
   common.draw_text(style.font, color, title, "left", x, y, w, h)
 end
 
-local function allocate_cooperative_tab_widths(available_width, left_count, right_count)
-  local min_tab_width, max_tab_width = titlebar_tab_width_limits()
-  local left_min, right_min = left_count * min_tab_width, right_count * min_tab_width
-  local left_preferred, right_preferred = left_count * max_tab_width, right_count * max_tab_width
+local function allocate_cooperative_tab_widths(
+  available_width, left_min, left_preferred, right_min, right_preferred
+)
   local total_min = left_min + right_min
   local total_preferred = left_preferred + right_preferred
 
@@ -309,11 +359,11 @@ local function allocate_cooperative_tab_widths(available_width, left_count, righ
       right_min + distributable * right_flexible / total_flexible
   end
 
-  local populated = (left_count > 0 and 1 or 0) + (right_count > 0 and 1 or 0)
+  local populated = (left_min > 0 and 1 or 0) + (right_min > 0 and 1 or 0)
   if populated == 0 or available_width <= 0 then return 0, 0 end
-  local base = math.min(min_tab_width, available_width / populated)
-  local left_width = left_count > 0 and base or 0
-  local right_width = right_count > 0 and base or 0
+  local base = available_width / populated
+  local left_width = left_min > 0 and math.min(left_min, base) or 0
+  local right_width = right_min > 0 and math.min(right_min, base) or 0
   local remaining = math.max(0, available_width - left_width - right_width)
   local left_unmet = math.max(0, left_min - left_width)
   local right_unmet = math.max(0, right_min - right_width)
@@ -334,9 +384,14 @@ function TitleBar:get_titlebar_layout()
     math.max(math.ceil(self.size.x * TITLEBAR_SAFE_ZONE_RATIO), titlebar_safe_zone_min_width()))
   local tabs_width = math.max(0, lane_width - safe_width)
 
-  local left_count = #pane_tab_views(self:get_tabs_node("left"))
-  local right_count = #pane_tab_views(self:get_tabs_node("right"))
-  local left_width, right_width = allocate_cooperative_tab_widths(tabs_width, left_count, right_count)
+  local left_node = self:get_tabs_node("left")
+  local right_node = self:get_tabs_node("right")
+  local left_views = pane_tab_views(left_node)
+  local right_views = pane_tab_views(right_node)
+  local left_min, left_preferred = titlebar_tab_width_demand(left_node, left_views)
+  local right_min, right_preferred = titlebar_tab_width_demand(right_node, right_views)
+  local left_width, right_width = allocate_cooperative_tab_widths(
+    tabs_width, left_min, left_preferred, right_min, right_preferred)
   local right_x = lane_right - right_width
   local safe_x = lane_x + left_width
   return lane_x, left_width, safe_x, math.max(0, right_x - safe_x), right_x, right_width
@@ -353,10 +408,30 @@ function TitleBar:get_pane_tabs_rect(pane)
   return left_x, 0, left_width, self.size.y
 end
 
-function TitleBar:get_titlebar_tab_width(views, available_width)
-  local count = math.max(1, #views)
+function TitleBar:get_titlebar_tab_widths(node, views, available_width)
   local min_width, max_width = titlebar_tab_width_limits()
-  return math.max(1, math.min(max_width, math.max(min_width, available_width / count)))
+  local widths = {}
+  local total_preferred = 0
+  for i, view in ipairs(views) do
+    local width = common.clamp(titlebar_tab_preferred_width(node, view), min_width, max_width)
+    widths[i] = width
+    total_preferred = total_preferred + width
+  end
+
+  local total_minimum = #views * min_width
+  if total_preferred <= available_width or total_preferred <= total_minimum then
+    return widths
+  end
+  if total_minimum > available_width then
+    for i = 1, #widths do widths[i] = min_width end
+    return widths
+  end
+
+  local ratio = (available_width - total_minimum) / (total_preferred - total_minimum)
+  for i, width in ipairs(widths) do
+    widths[i] = min_width + (width - min_width) * ratio
+  end
+  return widths
 end
 
 function TitleBar:get_titlebar_tabs_content_rect(pane, node, views, first_offset)
@@ -365,19 +440,18 @@ function TitleBar:get_titlebar_tabs_content_rect(pane, node, views, first_offset
   if not node then return x, y, w, h, false, false end
   local bw = titlebar_scroll_button_width()
   local first = first_offset or node.titlebar_tab_offset or 1
-  local tw = self:get_titlebar_tab_width(views, w)
-  local visible_count = tw > 0 and math.floor(w / tw) or 0
   local show_previous = first > 1
-  local show_next = first + visible_count - 1 < #views
-  if show_previous or show_next then
+  local show_next = false
+  local full_w = w
+  for _ = 1, 2 do
     local buttons = (show_previous and 1 or 0) + (show_next and 1 or 0)
-    w = math.max(0, w - bw * buttons)
-    tw = self:get_titlebar_tab_width(views, w)
-    visible_count = tw > 0 and math.floor(w / tw) or 0
+    w = math.max(0, full_w - bw * buttons)
+    local widths = self:get_titlebar_tab_widths(node, views, w)
+    local visible_count = visible_tab_count(widths, first, w)
     show_next = first + visible_count - 1 < #views
-    buttons = (show_previous and 1 or 0) + (show_next and 1 or 0)
-    w = math.max(0, (select(3, self:get_pane_tabs_rect(pane))) - bw * buttons)
   end
+  local buttons = (show_previous and 1 or 0) + (show_next and 1 or 0)
+  w = math.max(0, full_w - bw * buttons)
   local has_physical_left_button = pane == "right" and show_next or pane ~= "right" and show_previous
   if has_physical_left_button then x = x + bw end
   return x, y, w, h, show_previous, show_next
@@ -411,11 +485,11 @@ function TitleBar:get_pane_tabs_interactive_rect(pane)
 end
 
 function TitleBar:get_titlebar_tabs_used_width(node, views, available_width)
-  local tw = self:get_titlebar_tab_width(views, available_width)
+  local widths = self:get_titlebar_tab_widths(node, views, available_width)
   local first = node.titlebar_tab_offset or 1
-  local visible_count = tw > 0 and math.floor(available_width / tw) or 0
+  local visible_count = visible_tab_count(widths, first, available_width)
   local shown_count = math.max(0, math.min(#views - first + 1, visible_count))
-  return shown_count * tw
+  return sum_widths(widths, first, first + shown_count - 1)
 end
 
 function TitleBar:get_titlebar_scroll_button_at(px, py)
@@ -440,10 +514,12 @@ end
 
 function TitleBar:get_titlebar_tab_rect(pane, node, views, idx)
   local x, y, w, h = self:get_titlebar_tabs_content_rect(pane, node, views)
-  local tw = self:get_titlebar_tab_width(views, w)
-  local visible_pos = idx - (node.titlebar_tab_offset or 1) + 1
-  if pane == "right" then return x + w - visible_pos * tw, y, tw, h end
-  return x + (visible_pos - 1) * tw, y, tw, h
+  local widths = self:get_titlebar_tab_widths(node, views, w)
+  local first = node.titlebar_tab_offset or 1
+  local before = sum_widths(widths, first, idx - 1)
+  local tab_width = widths[idx] or 0
+  if pane == "right" then return x + w - before - tab_width, y, tab_width, h end
+  return x + before, y, tab_width, h
 end
 
 function TitleBar:get_titlebar_tab_at(px, py)
@@ -452,20 +528,17 @@ function TitleBar:get_titlebar_tab_at(px, py)
     local views = pane_tab_views(node)
     if node and #views > 0 then
       local x, y, w, h = self:get_titlebar_tabs_content_rect(pane, node, views)
-      local tw = self:get_titlebar_tab_width(views, w)
+      local widths = self:get_titlebar_tab_widths(node, views, w)
       local used_width = self:get_titlebar_tabs_used_width(node, views, w)
       local used_x = pane == "right" and x + w - used_width or x
       if px >= used_x and px < used_x + used_width and py >= y and py < y + h then
-        if tw > 0 then
-          local first = node.titlebar_tab_offset or 1
-          local idx
-          if pane == "right" then
-            idx = math.ceil((used_x + used_width - px) / tw) + first - 1
-          else
-            idx = math.floor((px - used_x) / tw) + first
+        local first = node.titlebar_tab_offset or 1
+        local visible_count = visible_tab_count(widths, first, w)
+        for idx = first, math.min(#views, first + visible_count - 1) do
+          local tab_x, _, tab_width = self:get_titlebar_tab_rect(pane, node, views, idx)
+          if px >= tab_x and px < tab_x + tab_width then
+            return pane, node, views[idx], idx
           end
-          local max_idx = math.min(#views, first + math.floor(w / tw) - 1)
-          if idx >= first and idx <= max_idx then return pane, node, views[idx], idx end
         end
       end
     end
@@ -487,7 +560,7 @@ function TitleBar:draw_titlebar_tabs()
       end
       local _, full_y, _, full_h = self:get_pane_tabs_rect(pane)
       local x, y, w, h, show_previous, show_next = self:get_titlebar_tabs_content_rect(pane, node, views)
-      local tw = self:get_titlebar_tab_width(views, w)
+      local widths = self:get_titlebar_tab_widths(node, views, w)
       local used_tabs_width = self:get_titlebar_tabs_used_width(node, views, w)
       local used_x = pane == "right" and x + w - used_tabs_width or x
       local ds = style.divider_size
@@ -514,7 +587,7 @@ function TitleBar:draw_titlebar_tabs()
       end
       core.push_clip_rect(used_x, y, used_tabs_width, h)
       local first = node.titlebar_tab_offset or 1
-      local last = math.min(#views, first + math.floor(w / tw) - 1)
+      local last = math.min(#views, first + visible_tab_count(widths, first, w) - 1)
       for i = first, last do
         local view = views[i]
         local tx, ty, tab_w, tab_h = self:get_titlebar_tab_rect(pane, node, views, i)

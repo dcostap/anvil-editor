@@ -28,7 +28,7 @@ Semantic link fragments now carry a normalized `link_resolution`:
 
 Fragment-only heading and block targets resolve against the source Document. Heading entries retain their structural ancestor path, so targets such as `[[Note#Parent#Child]]` distinguish repeated child headings under different parents while ordinary single-heading targets remain supported. Local query/fragment suffixes are removed before path lookup, and Windows drive paths are classified as absolute paths before URI-scheme checks.
 
-The base style schema defines distinct Live Preview colors for all statuses. Link index status/generation participates in provider cache generation, and index publications invalidate attached views. Images retain the same semantic resolution metadata while preserving widget/placeholder styling.
+Every textual link uses the same blue underlined Live Preview style. Status remains normalized metadata for navigation, creation, ambiguity handling, diagnostics, and cache invalidation; it does not recolor the link. Link index status/generation participates in provider cache generation, and index publications invalidate attached views. Images retain the same semantic resolution metadata while preserving widget/placeholder styling.
 
 ## Open-Document overlays
 
@@ -36,4 +36,4 @@ A tracked unsaved Document immediately replaces its disk entry and updates headi
 
 ## Regression evidence
 
-Focused tests cover cooperative cold indexing across multiple yield batches, readiness events, targeted filesystem create/modify/delete/subtree reconciliation, watcher consumer lifecycle, overlay preservation, note/heading/nested-heading/block/attachment/URL resolution, ambiguity, aliases, unsaved edits, Project ownership, rename/move behavior, distinct status styling, semantic rendering, and lifecycle regressions.
+Focused tests cover cooperative cold indexing across multiple yield batches, readiness events, targeted filesystem create/modify/delete/subtree reconciliation, watcher consumer lifecycle, overlay preservation, note/heading/nested-heading/block/attachment/URL resolution, ambiguity, aliases, unsaved edits, Project ownership, rename/move behavior, unified styling with distinct status metadata, semantic rendering, and lifecycle regressions.

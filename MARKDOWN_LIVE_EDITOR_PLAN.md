@@ -127,7 +127,7 @@ The history shows a broad, very fast scaffolding pass followed by reactive stabi
 ### Internal links
 
 - `[[Note]]`, aliases, heading links, block links, and standard Markdown note links resolve within the owning link boundary.
-- Existing links are visually distinct from missing and ambiguous links.
+- Existing, missing, and ambiguous links retain distinct resolution behavior while sharing one blue underlined textual style.
 - The status bar explains the resolved destination or failure reason.
 - The open-link command and the selected mouse gesture open notes as Editors, jump to headings/blocks, open attachments, or launch external URLs.
 - Editing text normally is never blocked by link hit regions.
@@ -794,10 +794,10 @@ Absolute paths outside the link root are external file links, not internal notes
 
 ### Present and interact
 
-- resolved internal link: normal link style
-- missing link: unresolved style and creation affordance if enabled
-- ambiguous link: warning style and candidate picker action
-- pending index: neutral/pending style, not falsely missing
+- resolved internal link: unified link style and normal navigation
+- missing link: unified link style and creation affordance if enabled
+- ambiguous link: unified link style and candidate picker action
+- pending index: unified link style with pending resolution metadata
 - invalid syntax: raw source
 - external URL: external-link style
 
@@ -1054,7 +1054,7 @@ Exit gate: a representative prose note can be edited entirely in Live Preview wi
 
 ### Phase 4: internal links end to end
 
-**Cooperative index, watcher reconciliation, status/interaction, completion, and confirmed rename-maintenance slices completed July 10, 2026.** Project indexes now publish cold/indexing/ready generations, build in bounded cooperative batches, preserve tracked open-Document overlays, and use consumer-owned recursive directory watches for targeted create/modify/delete/subtree reconciliation. They resolve notes, aliases, structurally nested heading paths, blocks, attachments, and URLs while driving distinct pending/resolved/missing/ambiguous/external semantic link presentation. Generic rendered-fragment input supports platform-primary-modifier click without stealing normal selection; the keyboard command and semantic POI activation open resolved/external links with Navigation History, ambiguous links use a deterministic picker, and missing links require an explicit create command. Dynamic Autocomplete providers now cover `[[`, `[[#`, `[[##`, `[[^`, and `[[^^`, with per-link-root shortest-unique/relative/root serialization policies. Tracked note renames now produce target-only affected-file plans, a filterable preview, explicit confirmation, safe writes/open-Document transactions, and visible partial-failure reporting. Contracts and regression evidence are recorded in `MARKDOWN_LINK_INDEX.md`, `MARKDOWN_LINK_INTERACTION.md`, `MARKDOWN_LINK_COMPLETION.md`, and `MARKDOWN_RENAME_MAINTENANCE.md`.
+**Cooperative index, watcher reconciliation, status/interaction, completion, and confirmed rename-maintenance slices completed July 10, 2026.** Project indexes now publish cold/indexing/ready generations, build in bounded cooperative batches, preserve tracked open-Document overlays, and use consumer-owned recursive directory watches for targeted create/modify/delete/subtree reconciliation. They resolve notes, aliases, structurally nested heading paths, blocks, attachments, and URLs while retaining distinct pending/resolved/missing/ambiguous/external semantic status behind a unified blue underlined textual presentation. Generic rendered-fragment input supports platform-primary-modifier click without stealing normal selection; the keyboard command and semantic POI activation open resolved/external links with Navigation History, ambiguous links use a deterministic picker, and missing links require an explicit create command. Dynamic Autocomplete providers now cover `[[`, `[[#`, `[[##`, `[[^`, and `[[^^`, with per-link-root shortest-unique/relative/root serialization policies. Tracked note renames now produce target-only affected-file plans, a filterable preview, explicit confirmation, safe writes/open-Document transactions, and visible partial-failure reporting. Contracts and regression evidence are recorded in `MARKDOWN_LINK_INDEX.md`, `MARKDOWN_LINK_INTERACTION.md`, `MARKDOWN_LINK_COMPLETION.md`, and `MARKDOWN_RENAME_MAINTENANCE.md`.
 
 - Build asynchronous/cooperative Markdown Link Index.
 - Add watcher reconciliation and open-Document overlay.

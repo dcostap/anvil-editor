@@ -781,6 +781,7 @@ local function semantic_link_spans(view, line_text, line)
             link = link,
             text = link.display,
             semantic_id = node.id,
+            attributes = node.attributes,
           }
         end
       end
@@ -863,13 +864,6 @@ local function decorate_link_fragment(view, line, span, fragment, opts)
   opts = opts or {}
   if semantic_comment_overlaps(view, line, span.col1, span.col2) then return nil end
   local resolution = resolve_live_link(view, span.link)
-  local resolution_colors = {
-    resolved = style.markdown_live_link,
-    external = style.markdown_live_external_link,
-    missing = style.markdown_live_missing_link,
-    ambiguous = style.markdown_live_ambiguous_link,
-    pending = style.markdown_live_pending_link,
-  }
   fragment.link = span.link
   fragment.link_resolution = resolution
   fragment.cursor = "hand"
@@ -878,8 +872,9 @@ local function decorate_link_fragment(view, line, span, fragment, opts)
     if button ~= "left" or not keymap.modkeys[modifier] then return false end
     return live.open_link(owner, { link = self.link, resolution = self.link_resolution })
   end
-  if not fragment.image_status then
-    fragment.color = resolution_colors[resolution.status] or fragment.color
+  if not fragment.widget and not fragment.image_status then
+    fragment.color = style.markdown_live_link
+    fragment.underline = true
   end
   local bold, italic, strike, highlight, code = false, false, false, false, false
   local ids = { span.semantic_id }
@@ -905,6 +900,58 @@ local function decorate_link_fragment(view, line, span, fragment, opts)
     or highlight and style.markdown_live_highlight_bg or fragment.background
   fragment.semantic_id = #ids > 0 and table.concat(ids, "+") or fragment.semantic_id
   return fragment
+end
+
+local function textual_link_label(link)
+  if link.alias and link.alias ~= "" then return link.alias end
+  if link.kind == "wiki" or link.kind == "embed" then
+    return link.raw_target or link.display or ""
+  end
+  return link.display ~= "" and link.display or link.raw_target or ""
+end
+
+local function revealed_link_fragments(view, line_text, line, span, opts)
+  if span.link and (span.link.kind == "image" or span.link.kind == "embed")
+    and is_image_target(span.link.path)
+  then
+    return {}
+  end
+  local linked_col1, linked_col2
+  if span.type == "wiki_link" or span.type == "embed" then
+    local marker_width = line_text:sub(span.col1, span.col1) == "!" and 3 or 2
+    linked_col1, linked_col2 = span.col1 + marker_width, span.col2 - 2
+  else
+    local attributes = span.attributes or {}
+    local range = attributes.link_text or attributes.reference_label
+      or attributes.link_destination
+    if range and range.line1 == line and range.line2 == line then
+      linked_col1, linked_col2 = range.col1, range.col2
+    end
+  end
+  if not linked_col1 or linked_col2 <= linked_col1 then
+    linked_col1, linked_col2 = span.col1, span.col2
+  end
+
+  local fragments = {}
+  local function marker(col1, col2)
+    if col2 <= col1 then return end
+    fragments[#fragments + 1] = {
+      source_col1 = col1, source_col2 = col2,
+      text = line_text:sub(col1, col2 - 1),
+      color = style.markdown_live_hidden_syntax,
+      font = opts and opts.base_font or nil,
+      semantic_id = span.semantic_id .. ":syntax:" .. col1,
+    }
+  end
+  marker(span.col1, linked_col1)
+  local linked = decorate_link_fragment(view, line, span, {
+    source_col1 = linked_col1, source_col2 = linked_col2,
+    text = line_text:sub(linked_col1, linked_col2 - 1),
+    semantic_id = span.semantic_id,
+  }, opts)
+  if linked then fragments[#fragments + 1] = linked end
+  marker(linked_col2, span.col2)
+  return fragments
 end
 
 local function embed_preview_for_resolution(resolution)
@@ -960,12 +1007,16 @@ local function semantic_link_fragments(view, line_text, line, reveal_units, opts
   local fragments = {}
   for _, span in ipairs(semantic_link_spans(view, line_text, line)) do
     local revealed = reveal_unit_matches(reveal_units, span.semantic_id, span.col1, span.col2)
-    if span.link and not revealed then
+    if span.link and revealed then
+      for _, fragment in ipairs(revealed_link_fragments(view, line_text, line, span, opts)) do
+        fragments[#fragments + 1] = fragment
+      end
+    elseif span.link then
       local fragment = image_fragment(view, span)
       if not fragment then
         local link = span.link
         local kind, icon = attachment_kind(link.path or link.raw_target)
-        local label = link.display ~= "" and link.display or link.raw_target
+        local label = textual_link_label(link)
         if kind then
           fragment = {
             source_col1 = span.col1,
@@ -1047,6 +1098,235 @@ local function table_for_line(view, line)
       if line >= node.source.line1 and line <= line2 then return node end
     end
   end
+end
+
+local TABLE_MAX_PRESENTATION_ROWS = 256
+local TABLE_MAX_PRESENTATION_COLUMNS = 64
+
+local function table_pipe_positions(text)
+  local positions = {}
+  local escaped, ticks = false, 0
+  local i = 1
+  while i <= #text do
+    local char = text:sub(i, i)
+    if escaped then
+      escaped = false
+    elseif char == "\\" then
+      escaped = true
+    elseif char == "`" then
+      local finish = i
+      while text:sub(finish + 1, finish + 1) == "`" do finish = finish + 1 end
+      local count = finish - i + 1
+      if ticks == 0 then ticks = count elseif ticks == count then ticks = 0 end
+      i = finish
+    elseif char == "|" and ticks == 0 then
+      positions[#positions + 1] = i
+    end
+    i = i + 1
+  end
+  return positions
+end
+
+local function table_source_row(text)
+  local pipes = table_pipe_positions(text)
+  if #pipes == 0 then return nil end
+  local first = text:find("%S")
+  local last = text:match("^.*()%S")
+  local outer_left = first and pipes[1] == first
+  local outer_right = last and pipes[#pipes] == last
+  local first_inner = outer_left and 2 or 1
+  local last_inner = outer_right and #pipes - 1 or #pipes
+  local cells, separators = {}, {}
+  local start_col = outer_left and pipes[1] + 1 or 1
+  if outer_left then
+    separators[#separators + 1] = { col1 = 1, col2 = pipes[1] + 1 }
+  else
+    separators[#separators + 1] = { col1 = 1, col2 = 1 }
+  end
+  for i = first_inner, last_inner do
+    local pipe = pipes[i]
+    cells[#cells + 1] = { col1 = start_col, col2 = pipe }
+    separators[#separators + 1] = { col1 = pipe, col2 = pipe + 1 }
+    start_col = pipe + 1
+  end
+  local end_col = outer_right and pipes[#pipes] or #text + 1
+  if end_col >= start_col then cells[#cells + 1] = { col1 = start_col, col2 = end_col } end
+  if not outer_right then
+    separators[#separators + 1] = { col1 = #text + 1, col2 = #text + 1 }
+  elseif separators[#separators].col1 ~= pipes[#pipes] then
+    separators[#separators + 1] = {
+      col1 = pipes[#pipes], col2 = #text + 1,
+    }
+  end
+  return { cells = cells, separators = separators }
+end
+
+local function table_cell_text(text, cell)
+  return (text:sub(cell.col1, cell.col2 - 1):gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+local function table_layout(view, table_node)
+  local instance = current_semantic_model(view)
+  if not instance then return nil end
+  local font = view:get_font()
+  local line2 = table_node.source.line2
+  if table_node.source.col2 == 1 and line2 > table_node.source.line1 then line2 = line2 - 1 end
+  local line1 = table_node.source.line1
+  if line2 - line1 + 1 > TABLE_MAX_PRESENTATION_ROWS then
+    core.log_quiet("Markdown table presentation kept raw beyond %d rows at %s:%d",
+      TABLE_MAX_PRESENTATION_ROWS, view.doc:get_name(), line1)
+    return nil
+  end
+  local cache = view.__markdown_live_table_layout_cache
+  if not cache or cache.generation ~= instance.generation
+    or cache.font ~= font or cache.font_size ~= font:get_size()
+  then
+    cache = {
+      generation = instance.generation, font = font,
+      font_size = font:get_size(), layouts = {},
+    }
+    view.__markdown_live_table_layout_cache = cache
+  end
+  if cache.layouts[table_node.id] ~= nil then
+    return cache.layouts[table_node.id] or nil
+  end
+
+  local rows, columns = {}, nil
+  for line = line1, line2 do
+    local text = (view.doc.lines[line] or ""):gsub("\n$", "")
+    local row = table_source_row(text)
+    if not row or #row.cells == 0 or #row.cells > TABLE_MAX_PRESENTATION_COLUMNS then
+      cache.layouts[table_node.id] = false
+      core.log_quiet("Markdown table presentation fell back to source at %s:%d",
+        view.doc:get_name(), line)
+      return nil
+    end
+    columns = columns or #row.cells
+    if #row.cells ~= columns then
+      cache.layouts[table_node.id] = false
+      core.log_quiet("Markdown table presentation found inconsistent columns at %s:%d",
+        view.doc:get_name(), line)
+      return nil
+    end
+    row.line, row.text = line, text
+    rows[line] = row
+  end
+
+  local pad = math.max(font:get_width(" "), SCALE)
+  local widths = {}
+  for column = 1, columns do widths[column] = pad * 4 end
+  for line = line1, line2 do
+    if line ~= line1 + 1 then
+      local row = rows[line]
+      for column, cell in ipairs(row.cells) do
+        local cell_font = line == line1 and inline_style_font(view, "strong") or font
+        widths[column] = math.max(
+          widths[column], cell_font:get_width(table_cell_text(row.text, cell)) + pad * 2
+        )
+      end
+    end
+  end
+  local alignments = {}
+  for column, cell in ipairs(rows[line1 + 1].cells) do
+    local marker = table_cell_text(rows[line1 + 1].text, cell)
+    local left, right = marker:sub(1, 1) == ":", marker:sub(-1) == ":"
+    alignments[column] = left and right and "center" or right and "right" or "left"
+  end
+  local separator_width = math.max(font:get_width(" "), math.max(1, SCALE * 3))
+  local total_width = separator_width * (columns + 1)
+  for _, width in ipairs(widths) do total_width = total_width + width end
+  local layout = {
+    id = table_node.id, line1 = line1, line2 = line2,
+    delimiter_line = line1 + 1, rows = rows, columns = columns,
+    widths = widths, alignments = alignments, padding = pad,
+    separator_width = separator_width, total_width = total_width,
+  }
+  cache.layouts[table_node.id] = layout
+  return layout
+end
+
+local function table_row_fragments(view, table_node, line)
+  local layout = table_layout(view, table_node)
+  if not layout then return nil end
+  local row = layout.rows[line]
+  if not row then return nil end
+  if line == layout.delimiter_line then
+    local thickness = math.max(1, math.floor(SCALE))
+    return {
+      {
+        source_col1 = 1, source_col2 = #row.text + 1,
+        width = layout.total_width,
+        semantic_id = table_node.id .. ":delimiter",
+        table_separator = true,
+        widget = {
+          width = layout.total_width,
+          height = thickness,
+          draw = function(_, _, x, y)
+            renderer.draw_rect(x, y, layout.total_width, thickness,
+              style.markdown_live_table_separator)
+          end,
+        },
+      },
+    }, layout
+  end
+
+  local fragments = {}
+  local header = line == layout.line1
+  local cell_font = header and inline_style_font(view, "strong") or view:get_font()
+  local function border_fragment(separator, id)
+    local line_width = math.max(1, math.floor(SCALE))
+    return {
+      source_col1 = separator.col1, source_col2 = separator.col2,
+      text = "", width = layout.separator_width,
+      semantic_id = id,
+      table_border = true,
+      widget = {
+        width = layout.separator_width,
+        height = view:get_line_height(),
+        draw = function(_, _, x, y, row_height)
+          renderer.draw_rect(x, y, layout.separator_width, row_height,
+            style.markdown_live_table_background)
+          renderer.draw_rect(
+            x + math.floor((layout.separator_width - line_width) / 2), y,
+            line_width, row_height, style.markdown_live_table_separator
+          )
+        end,
+      },
+    }
+  end
+  for column, cell in ipairs(row.cells) do
+    local cell_text = table_cell_text(row.text, cell)
+    local text_width = cell_font:get_width(cell_text)
+    local alignment = layout.alignments[column]
+    local text_x_offset = alignment == "right"
+      and math.max(layout.padding, layout.widths[column] - text_width - layout.padding)
+      or alignment == "center"
+      and math.max(layout.padding, (layout.widths[column] - text_width) / 2)
+      or layout.padding
+    local separator = row.separators[column]
+    fragments[#fragments + 1] = border_fragment(
+      separator, table_node.id .. ":pipe:" .. line .. ":" .. column
+    )
+    fragments[#fragments + 1] = {
+      source_col1 = cell.col1, source_col2 = cell.col2,
+      text = cell_text,
+      width = layout.widths[column],
+      text_x_offset = text_x_offset,
+      table_alignment = alignment,
+      font = header and cell_font or nil,
+      color = header and style.markdown_live_table_header
+        or style.markdown_live_table_cell,
+      background = style.markdown_live_table_background,
+      background_full_height = true,
+      semantic_id = table_node.id .. ":cell:" .. line .. ":" .. column,
+      table_cell = true, table_header = header, table_column = column,
+    }
+  end
+  local separator = row.separators[#row.cells + 1]
+  fragments[#fragments + 1] = border_fragment(
+    separator, table_node.id .. ":pipe:" .. line .. ":end"
+  )
+  return fragments, layout
 end
 
 local function frontmatter_for_line(view, line)
@@ -1149,34 +1429,7 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
   local frontmatter, frontmatter_line2 = frontmatter_for_line(view, line)
   local table_node = table_for_line(view, line)
   if table_node then
-    local header = false
-    local cells = {}
-    for _, node in ipairs(semantic_line(view, line) or {}) do
-      if node.type == "table_header" and node.source.line1 == line then header = true end
-      if node.type == "table_cell" and node.source.line1 == line and node.source.line2 == line then
-        cells[#cells + 1] = node
-      end
-    end
-    table.sort(cells, function(a, b) return a.source.col1 < b.source.col1 end)
-    if #cells == 0 then
-      return {
-        {
-          source_col1 = 1, source_col2 = #line_text + 1, text = line_text,
-          color = style.markdown_live_table_separator,
-          semantic_id = table_node.id .. ":separator:" .. line,
-          table_separator = true,
-        },
-      }
-    end
-    for _, cell in ipairs(cells) do
-      fragments[#fragments + 1] = {
-        source_col1 = cell.source.col1, source_col2 = cell.source.col2,
-        text = line_text:sub(cell.source.col1, cell.source.col2 - 1),
-        color = header and style.markdown_live_table_header or style.markdown_live_table_cell,
-        semantic_id = cell.id, table_cell = true, table_header = header,
-      }
-    end
-    return fragments
+    return table_row_fragments(view, table_node, line) or {}
   end
   if frontmatter then
     if line == frontmatter.source.line1 or line == frontmatter_line2 then
@@ -1234,7 +1487,8 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
           source_col1 = attributes.reference_destination.col1,
           source_col2 = attributes.reference_destination.col2,
           text = semantic_range_text_from_doc(view, attributes.reference_destination),
-          color = style.markdown_live_external_link,
+          color = style.markdown_live_link,
+          underline = true,
           semantic_id = node.id .. ":definition-destination",
         }
       end
@@ -1273,11 +1527,33 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
         seen[marker_key] = true
         local raw = line_text:sub(marker.col1, marker.col2 - 1)
         local ordered = raw:match("^(%d+[.)])")
-        fragments[#fragments + 1] = {
-          source_col1 = marker.col1, source_col2 = marker.col2,
-          text = ordered or "•", color = style.markdown_live_list_marker,
-          semantic_id = node.id .. ":marker",
-        }
+        if ordered then
+          fragments[#fragments + 1] = {
+            source_col1 = marker.col1, source_col2 = marker.col2,
+            text = ordered, color = style.markdown_live_list_marker,
+            semantic_id = node.id .. ":marker",
+          }
+        else
+          local marker_width = math.max(view:get_font():get_width(" "), math.floor(SCALE * 4))
+          local marker_size = math.max(2, math.floor(view:get_font():get_height() * 0.24))
+          fragments[#fragments + 1] = {
+            source_col1 = marker.col1, source_col2 = marker.col2,
+            text = "", width = marker_width,
+            color = style.markdown_live_list_marker,
+            semantic_id = node.id .. ":marker",
+            unordered_list_marker = true,
+            widget = {
+              width = marker_width, height = view:get_line_height(),
+              draw = function(_, _, x, y, row_height)
+                renderer.draw_rect(
+                  x + math.floor((marker_width - marker_size) / 2),
+                  y + math.floor((row_height - marker_size) / 2),
+                  marker_size, marker_size, style.markdown_live_list_marker
+                )
+              end,
+            },
+          }
+        end
       end
       local task = attributes.task_checked or attributes.task_unchecked
       if task and task.line1 == line then
@@ -1411,14 +1687,41 @@ local function indented_code_for_line(view, line)
   end
 end
 
+local function fenced_code_delimiter_kind(view, fenced, line)
+  if line == fenced.source.line1 then return "open" end
+  if line ~= fenced.effective_line2 then return nil end
+  local opening = (view.doc.lines[fenced.source.line1] or ""):gsub("\n$", "")
+  local closing = (view.doc.lines[line] or ""):gsub("\n$", "")
+  local marker, count = fence_marker(opening)
+  return marker and closes_fence(closing, marker, count) and "close" or nil
+end
+
+local function fenced_code_is_active(view, fenced, state)
+  state = state or current_selection_state(view)
+  for i = 1, #(state and state.selections or {}), 4 do
+    local line1 = state.selections[i]
+    local line2 = state.selections[i + 2] or line1
+    if line1 and math.max(line1, line2) >= fenced.source.line1
+      and math.min(line1, line2) <= fenced.effective_line2
+    then
+      return true
+    end
+  end
+  return false
+end
+
 function decoration_provider:line_background(view, line)
   if view_in_source_mode(view) or line_in_semantic_comment(view, line) then return nil end
-  if fenced_code_for_line(view, line) or indented_code_for_line(view, line) then
+  local fenced = fenced_code_for_line(view, line)
+  if fenced then
+    return style.markdown_live_code_background
+  end
+  if indented_code_for_line(view, line) then
     return style.markdown_live_code_background
   end
   if callout_for_line(view, line) then return style.markdown_live_callout_background end
   if frontmatter_for_line(view, line) then return style.markdown_live_frontmatter_background end
-  return table_for_line(view, line) and style.markdown_live_table_background or nil
+  return nil
 end
 
 function provider:line_generation(view, line)
@@ -1433,6 +1736,10 @@ function provider:line_generation(view, line)
   local index = owner and owner.link_index
   parts[#parts + 1] = "index:" .. tostring(index and index.status or "none")
     .. ":" .. tostring(index and index.generation or 0)
+  local fenced = fenced_code_for_line(view, line)
+  if fenced and fenced_code_delimiter_kind(view, fenced, line) then
+    parts[#parts + 1] = "fence-active:" .. tostring(fenced_code_is_active(view, fenced))
+  end
   return table.concat(parts, "|")
 end
 
@@ -1558,6 +1865,17 @@ function provider:line_height(view, line)
   local in_comment = line_in_semantic_comment(view, line)
   if line_is_wrapped(view, line) then return nil end
   local text = (view.doc.lines[line] or ""):gsub("\n$", "")
+  if not in_comment then
+    local table_node = table_for_line(view, line)
+    if table_node then
+      local layout = table_layout(view, table_node)
+      if layout and line == layout.delimiter_line
+        and #reveal_units_for_line(view, line) == 0
+      then
+        return math.max(1, math.floor(SCALE))
+      end
+    end
+  end
   local heading = semantic_heading_for_line(view, text, line)
   if heading then
     local height = math.max(
@@ -1605,27 +1923,15 @@ function provider:render_line(view, line)
   local fenced = not in_comment and fenced_code_for_line(view, line)
   if fenced then
     local text = (view.doc.lines[line] or ""):gsub("\n$", "")
-    local reveal_units = reveal_units_for_line(view, line)
-    local delimiter_kind
-    if line == fenced.source.line1 then
-      delimiter_kind = "open"
-    elseif line == fenced.effective_line2 then
-      local opening = (view.doc.lines[fenced.source.line1] or ""):gsub("\n$", "")
-      local marker, count = fence_marker(opening)
-      if marker and closes_fence(text, marker, count) then delimiter_kind = "close" end
-    end
-    if delimiter_kind and #reveal_units == 0 then
-      local label = ""
-      if delimiter_kind == "open" then
-        label = text:match("^%s*[`~]+%s*(.-)%s*$") or ""
-      end
+    local delimiter_kind = fenced_code_delimiter_kind(view, fenced, line)
+    if delimiter_kind and not fenced_code_is_active(view, fenced) then
       return {
         source_text = text,
         semantic_generation = select(2, semantic_line(view, line)),
         fragments = {
           {
             source_col1 = 1, source_col2 = #text + 1,
-            text = label, color = style.markdown_live_code_header,
+            hidden = true,
             semantic_id = fenced.id .. ":" .. delimiter_kind,
           },
         },
@@ -1786,6 +2092,7 @@ local function ensure_owner(view)
 end
 
 local function invalidate_semantic_publication(view, instance, reason)
+  local previous_table_cache = view.__markdown_live_table_layout_cache
   view.__markdown_live_semantic_line_cache = nil
   view.__markdown_live_reference_prepare_pending = nil
   local owner = view.__markdown_live_owner
@@ -1797,6 +2104,32 @@ local function invalidate_semantic_publication(view, instance, reason)
   elseif reason == "published" then
     ranges = instance.changed_ranges
   end
+  if ranges and #ranges > 0 then
+    local expanded = {}
+    for _, range in ipairs(ranges) do
+      local line1 = range.line1 or 1
+      local line2 = range.line2 or line1
+      for _, layout in pairs(previous_table_cache and previous_table_cache.layouts or {}) do
+        if layout and line2 >= layout.line1 and line1 <= layout.line2 then
+          line1, line2 = math.min(line1, layout.line1), math.max(line2, layout.line2)
+        end
+      end
+      local nodes = instance:nodes_for_lines(line1, line2, { limit = 4096 })
+      for _, node in ipairs(nodes or {}) do
+        if node.type == "table" then
+          local table_line2 = node.source.line2
+          if node.source.col2 == 1 and table_line2 > node.source.line1 then
+            table_line2 = table_line2 - 1
+          end
+          line1 = math.min(line1, node.source.line1)
+          line2 = math.max(line2, table_line2)
+        end
+      end
+      expanded[#expanded + 1] = { line1 = line1, line2 = line2 }
+    end
+    ranges = expanded
+  end
+  view.__markdown_live_table_layout_cache = nil
   if ranges and #ranges > 0 then
     for _, range in ipairs(ranges) do
       local line1 = common.clamp(range.line1 or 1, 1, #view.doc.lines)
@@ -1885,6 +2218,12 @@ local function invalidate_selection_lines(view, new_state, old_state)
       local line2 = state.selections[i + 2] or line1
       if line1 then
         for line = math.min(line1, line2), math.max(line1, line2) do lines[line] = true end
+        for _, endpoint in ipairs({ line1, line2 }) do
+          local fenced = fenced_code_for_line(view, endpoint)
+          if fenced then
+            for line = fenced.source.line1, fenced.effective_line2 do lines[line] = true end
+          end
+        end
         if line1 == line2 and state.selections[i + 1] == state.selections[i + 3] then
           for _, unit in ipairs(reveal_units_for_line(view, line1, state)) do
             if unit.line1 and unit.line2 then

@@ -92,7 +92,7 @@ test.describe("Title Bar", function()
     test.ok(safe_x + safe_width <= rx)
   end)
 
-  test.it("shares Title Bar width with the pane that has greater tab demand", function()
+  test.it("allocates Title Bar width from each pane's tab demand", function()
     local titlebar = TitleBar()
     titlebar.position.x, titlebar.position.y = 0, 0
     titlebar.size.x, titlebar.size.y = 1800 * SCALE, 32 * SCALE
@@ -104,11 +104,10 @@ test.describe("Title Bar", function()
     end
 
     local _, _, left_width = titlebar:get_pane_tabs_rect("left")
-    local right_x, _, right_width = titlebar:get_pane_tabs_rect("right")
-    test.ok(right_x < titlebar.size.x / 2,
-      "Right Pane tabs should borrow unused width from the Left Pane allocation")
+    local _, _, right_width = titlebar:get_pane_tabs_rect("right")
+    test.ok(right_width > left_width)
     test.ok(math.abs(left_width - right_width / #right_node.views) < 0.001,
-      "cooperative narrowing should preserve equal per-tab widths")
+      "equally sized labels should have equal per-tab widths")
   end)
 
   test.it("anchors Right Pane tabs beside the window controls and adds tabs leftward", function()
@@ -148,6 +147,28 @@ test.describe("Title Bar", function()
     test.equal(hit_second, second)
   end)
 
+  test.it("sizes each Pane Tab from its own label", function()
+    local titlebar = TitleBar()
+    titlebar.position.x, titlebar.position.y = 0, 0
+    titlebar.size.x, titlebar.size.y = 1800 * SCALE, 32 * SCALE
+
+    local short = { get_name = function() return "a.lua" end }
+    local long = { get_name = function() return "a-significantly-longer-document-name.lua" end }
+    local node = Node()
+    node.views = { short, long }
+    node.active_view = short
+    node.titlebar_tab_offset = 1
+    titlebar.get_tabs_node = function(_, pane)
+      return pane == "left" and node or nil
+    end
+
+    local _, _, short_width = titlebar:get_titlebar_tab_rect("left", node, node.views, 1)
+    local _, _, long_width = titlebar:get_titlebar_tab_rect("left", node, node.views, 2)
+
+    test.ok(short_width < long_width,
+      string.format("short=%g long=%g", short_width, long_width))
+  end)
+
   test.it("keeps a draggable safe zone between the Left and Right Pane tabs", function(context)
     local titlebar = TitleBar()
     titlebar.position.x, titlebar.position.y = 0, 0
@@ -184,7 +205,7 @@ test.describe("Title Bar", function()
   test.it("backfills hidden Pane Tabs and removes overflow buttons after growing", function()
     local titlebar = TitleBar()
     titlebar.position.x, titlebar.position.y = 0, 0
-    titlebar.size.x, titlebar.size.y = 900 * SCALE, 32 * SCALE
+    titlebar.size.x, titlebar.size.y = 600 * SCALE, 32 * SCALE
 
     local views = {}
     for i = 1, 10 do views[i] = {} end

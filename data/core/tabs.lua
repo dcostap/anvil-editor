@@ -49,6 +49,7 @@ local function new_layout_cache(key)
   return {
     key = key,
     widths = {},
+    preferred_widths = {},
     width_prefix = nil,
     visible_counts = {},
     scroll_button_width = nil,
@@ -104,6 +105,18 @@ function Tabs:get_cached_tab_width(idx, compute, token_fn)
     cache.widths[idx] = entry
     cache.width_prefix = nil
     cache.visible_counts = {}
+  end
+  return entry.width
+end
+
+function Tabs:get_cached_tab_preferred_width(idx, compute, token_fn)
+  local cache = self:get_layout_cache()
+  local item = self:item(idx)
+  local token = token_fn and token_fn(self, idx, item) or self:get_tab_width_cache_token(idx, item)
+  local entry = cache.preferred_widths[idx]
+  if not entry or entry.item ~= item or entry.token ~= token then
+    entry = { item = item, token = token, width = compute() }
+    cache.preferred_widths[idx] = entry
   end
   return entry.width
 end
@@ -178,13 +191,30 @@ function Tabs:get_tab_title_width(item)
   return tab_title_font():get_width(text) + style.padding.x * 2 + style.divider_size * 2
 end
 
-function Tabs:compute_tab_width(idx)
+function Tabs:compute_tab_preferred_width(idx)
   local custom = self.options.get_tab_width
   if custom then
     local width = custom(self.owner, idx, self:item(idx), tab_title_font(), self)
-    if width then return common.clamp(width, tab_min_width(), tab_max_width()) end
+    if width then return width end
   end
-  return common.clamp(self:get_tab_title_width(self:item(idx)), tab_min_width(), tab_max_width())
+  return self:get_tab_title_width(self:item(idx))
+end
+
+function Tabs:get_tab_preferred_width(idx)
+  local custom_token = self.options.get_tab_width_cache_token
+  if self.options.get_tab_width and not custom_token then
+    return self:compute_tab_preferred_width(idx)
+  end
+  local token_fn = custom_token and function(tabbar, tab_idx, item)
+    return custom_token(tabbar.owner, tab_idx, item, tabbar)
+  end
+  return self:get_cached_tab_preferred_width(idx, function()
+    return self:compute_tab_preferred_width(idx)
+  end, token_fn)
+end
+
+function Tabs:compute_tab_width(idx)
+  return common.clamp(self:get_tab_preferred_width(idx), tab_min_width(), tab_max_width())
 end
 
 function Tabs:get_tab_width(idx)

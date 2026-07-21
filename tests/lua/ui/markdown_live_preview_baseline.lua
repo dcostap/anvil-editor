@@ -89,7 +89,7 @@ test.describe("Markdown Live Preview prototype baseline", function()
     test.not_nil(command.map["markdown-live-preview:untrust-project-remote-images"])
   end)
 
-  test.it("styles resolved, missing, and ambiguous wikilinks by status", function()
+  test.it("keeps resolved, missing, and ambiguous wikilinks visually consistent", function()
     with_live_preview(function()
       local root = USERDIR .. PATHSEP .. "markdown-live-baseline-links-" .. system.get_process_id()
       local ok, err = common.mkdirp(root .. PATHSEP .. "a")
@@ -123,8 +123,8 @@ test.describe("Markdown Live Preview prototype baseline", function()
         end
         test.equal(#link_colors, 3)
         test.same(link_colors[1], style.markdown_live_link)
-        test.same(link_colors[2], style.markdown_live_missing_link)
-        test.same(link_colors[3], style.markdown_live_ambiguous_link)
+        test.same(link_colors[2], style.markdown_live_link)
+        test.same(link_colors[3], style.markdown_live_link)
       end)
 
       core.projects = old_projects
@@ -172,15 +172,18 @@ test.describe("Markdown Live Preview prototype baseline", function()
         return old_render_line(...)
       end
       local old_draw_text = renderer.draw_text
+      local old_draw_rect = renderer.draw_rect
       renderer.draw_text = function(font, text, x, _, _, opts)
         return x + font:get_width(text, opts)
       end
+      renderer.draw_rect = function() end
       local ok, err = pcall(function()
         view:get_col_x_offset(1, 5)
         view:get_x_offset_col(1, 10)
         view:draw_line_text(1, 0, 0)
       end)
       renderer.draw_text = old_draw_text
+      renderer.draw_rect = old_draw_rect
       provider.render_line = old_render_line
       if not ok then error(err, 0) end
 
@@ -282,13 +285,16 @@ test.describe("Markdown Live Preview prototype baseline", function()
       end
 
       local old_draw_text = renderer.draw_text
+      local old_draw_rect = renderer.draw_rect
       local drawn = {}
       renderer.draw_text = function(font, text, x, y, color, opts)
         drawn[#drawn + 1] = text
         return x + font:get_width(text, opts)
       end
+      renderer.draw_rect = function() end
       local ok, err = pcall(view.draw_line_text, view, 1, 0, 0)
       renderer.draw_text = old_draw_text
+      renderer.draw_rect = old_draw_rect
       if not ok then error(err, 0) end
       test.equal(table.concat(drawn), "See Álias after")
 

@@ -28,7 +28,7 @@ Imported paths are immediately published to the owning Markdown Link Index. Read
 
 ## Live attachment chips
 
-Parser-confirmed links and embeds targeting PDF, audio, or video attachments render as compact source-mapped chips while inactive. Chips retain ordinary Project-index resolution colors, generic Markdown link POIs, platform-primary-modifier activation, aliases, and construct-sensitive source reveal. Activation continues through the shared link contract rather than introducing a second attachment-opening path.
+Parser-confirmed links and embeds targeting PDF, audio, or video attachments render as compact source-mapped chips while inactive. Chips retain the unified blue underlined textual-link style, Project-index resolution metadata, generic Markdown link POIs, platform-primary-modifier activation, aliases, and construct-sensitive source reveal. Activation continues through the shared link contract rather than introducing a second attachment-opening path.
 
 Supported groups are PDF, audio (`flac`, `mp3`, `ogg`, `wav`), and video (`mov`, `mp4`, `webm`). Images continue through the dedicated image asset service. Unknown file types remain ordinary links rather than being guessed from arbitrary URL suffixes.
 

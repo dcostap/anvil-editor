@@ -277,6 +277,8 @@ end
 style.tab_min_width = 110 * SCALE
 style.tab_max_width = 250 * SCALE
 style.tab_width = style.tab_min_width
+-- Pane Tabs follow short labels closely while retaining a useful click target.
+config.integrated_titlebar_tab_min_width = 48 * SCALE
 -- Keep the official autosave plugin disabled if it ever gets installed later.
 config.plugins.autosave = false
 -- Re-apply local shortcuts after plugins that append their own bindings.

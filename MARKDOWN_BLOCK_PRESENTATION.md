@@ -6,7 +6,7 @@ Implemented July 10, 2026 as the first Phase 6 slice in `MARKDOWN_LIVE_EDITOR_PL
 
 Live Preview now composes block-level marker fragments with the existing semantic inline/link pipeline:
 
-- unordered list markers render as `•` while preserving their exact source columns;
+- unordered list markers render as font-independent bullet widgets while preserving their exact source columns;
 - ordered and nested-list markers retain their source numbering and delimiter;
 - unchecked/checked task markers render as `☐` / `☑` with distinct first-party styles; and
 - blockquote source prefixes render as a compact `│ ` quote marker; and
@@ -16,7 +16,7 @@ Markers are sourced from current Tree-sitter block nodes and attributes, not lin
 
 Semantically confirmed Obsidian callouts replace their inactive `[!type]` header marker with compact callout chrome, preserve custom titles and nested inline links/images, show fold intent, and apply a first-party card background across the quote range. Known callout names are classified for future type-specific styling; unknown names use the same safe generic fallback while retaining their normalized type. Active headers reveal exact source. This slice presents fold signs but does not yet make them collapse content.
 
-Fenced code blocks use bounded whole-Document semantic ranges: inactive opening fences become a language header, closing fences are visually suppressed, and every block line receives the first-party code background through the generic decoration-provider contract. Indented code receives the same semantic background. All code content remains raw, syntax-highlightable Editor text. Active opening/closing lines reveal exact fence source. Comment suppression takes precedence over fenced-looking text, and capture-bound overflow falls back wholly to raw presentation.
+Fenced code blocks use bounded whole-Document semantic ranges. When the caret is outside a block, both fence delimiter rows retain normal padded code-row height and background while their delimiter/language text stays hidden. Entering any line of the block restores both exact delimiter rows, including the opening language info string, while code content remains raw, syntax-highlightable Editor text. Every fenced-code row receives the first-party code background through the generic decoration-provider contract. Indented code receives the same semantic background. Comment suppression takes precedence over fenced-looking text, and capture-bound overflow falls back wholly to raw presentation.
 
 ## Editing and reveal
 

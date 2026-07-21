@@ -258,11 +258,6 @@ style.syntax["punctuation.bracket"] = c(C.semicolon)
 -- keep their dark-theme color tables when the theme changes at runtime.
 style.markdown_live_heading_marker = style.dim
 style.markdown_live_link = c(C.ctrl_clickable)
-style.markdown_live_external_link = c(C.ctrl_clickable)
-style.markdown_live_missing_link = c("c2410c")
-style.markdown_live_ambiguous_link = c("9a6700")
-style.markdown_live_pending_link = style.dim
-style.markdown_live_unresolved_link = c("c2410c")
 style.markdown_live_inline_code_bg = style.background2
 style.markdown_live_code_background = style.background2
 style.markdown_live_code_header = style.dim
