@@ -162,6 +162,7 @@ style.titlebar_control_hover = { 0, 0, 0, 13 }
 style.titlebar_control_pressed = { 0, 0, 0, 29 }
 style.titlebar_close_text = { 0, 0, 0, 255 }
 style.titlebar_tab_hover = { 0, 0, 0, 12 }
+style.titlebar_tab_separator = style.divider
 style.image_grid_bright = c("ffffff")
 style.image_grid_dark = c("dfe1e5")
 style.fuzzy_searcher_preview_background = { 255, 255, 255, 235 }
@@ -252,6 +253,16 @@ style.syntax["tag"] = c(C.doc_comment_tag)
 style.syntax["string.escape"] = c(C.invalid_string_escape)
 style.syntax["punctuation.delimiter"] = c(C.semicolon)
 style.syntax["punctuation.bracket"] = c(C.semicolon)
+
+-- Project path roles. These are assigned after the light semantic palette so
+-- aliases do not retain the dark theme's color tables during theme changes.
+style.project_path_external = style.accent
+style.project_path_external_dim = style.dim
+style.project_path_vendored = style.syntax.metadata
+style.project_path_vendored_dim = style.dim
+style.project_path_excluded = style.error
+style.project_path_missing = style.warn
+style.project_path_separator = style.dim
 
 -- Markdown Live Preview. These must be rebound after the light palette and
 -- syntax slots are installed; otherwise aliases inherited from colors.default
