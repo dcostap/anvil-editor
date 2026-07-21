@@ -16,6 +16,12 @@ Targeted visual-height updates now identify the old first visible metric row bef
 
 Current Line Highlights, selections, search markers, line-number layout, decoration backgrounds, and carets resolve the same visual-row metric as rendered text. Enlarged headings therefore keep their text, row chrome, and caret geometry aligned instead of mixing heading metrics with the base Editor line height.
 
+## Pending-publication continuity
+
+Once a current semantic snapshot has produced a rendered line, ordinary single-line text input does not send that line through raw Source presentation while the background parser catches up. A pre-change Document listener captures the authoritative presentation before selection and transaction invalidation can discard it. The line-render transaction hook then clones those fragments, applies the exact source edit to the containing identity-mapped fragment, and keeps the same fonts, hidden markers, decorations, source columns, and visual-row height. Repeated keystrokes can advance this view-local optimistic render through several pending parser generations.
+
+The optimistic entry is accepted only when its reconstructed source exactly matches the current Document revision. Unsupported or structural edits remain conservative, and the first parse of a cold Document still uses raw source. Publication discards all optimistic entries and re-adopts authoritative semantic output. Provider cache signatures no longer query transient semantic state, so unrelated resident rows also remain visually stable while a parse is pending.
+
 ## Red-green evidence
 
 Before implementation:
@@ -23,4 +29,4 @@ Before implementation:
 - changing a row above the viewport moved the anchored line by the full height delta; and
 - IME composition did not create a line-render interaction snapshot.
 
-Focused tests now verify stable screen y, synchronized current/target scroll positions, IME begin/end ownership, pointer freeze, and disjoint multi-cursor reveal behavior.
+Focused tests now verify stable screen y, synchronized current/target scroll positions, IME begin/end ownership, pointer freeze, disjoint multi-cursor reveal behavior, repeated pending paragraph edits, pre-edit capture after selection invalidation, and source-revealed inline edits without raw-frame flicker.

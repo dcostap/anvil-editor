@@ -1713,6 +1713,247 @@ local function prose_render_line(view, line_text, render_line)
 end
 
 local view_in_source_mode
+
+local function clone_render_line(render_line)
+  local clone = {}
+  for key, value in pairs(render_line or {}) do clone[key] = value end
+  clone.fragments = {}
+  for _, fragment in ipairs(render_line and render_line.fragments or {}) do
+    local copy = {}
+    for key, value in pairs(fragment) do copy[key] = value end
+    clone.fragments[#clone.fragments + 1] = copy
+  end
+  clone.hit_test_fragments = nil
+  return clone
+end
+
+local function apply_inline_edit_to_render(render_line, current_text, edit)
+  local start_col, end_col = edit.col1, edit.col2
+  local replacement = edit.text or ""
+  if not start_col or not end_col or start_col > end_col then
+    return nil
+  end
+
+  local owner_index
+  for i, fragment in ipairs(render_line.fragments or {}) do
+    local col1 = fragment.source_col1 or 1
+    local col2 = fragment.source_col2 or col1
+    local contains
+    if start_col == end_col then
+      contains = col1 <= start_col and start_col < col2
+      if not contains and start_col == #current_text + 1 and col2 == start_col then
+        contains = i == #render_line.fragments
+      end
+    else
+      contains = col1 <= start_col and end_col <= col2
+    end
+    if contains then owner_index = i break end
+  end
+  local owner = owner_index and render_line.fragments[owner_index]
+  if not owner or owner.hidden or owner.widget or owner.width or owner.text_x_offset then return nil end
+  local owner_col1 = owner.source_col1 or 1
+  local owner_col2 = owner.source_col2 or owner_col1
+  local old_span = current_text:sub(owner_col1, owner_col2 - 1)
+  if owner.text ~= old_span then return nil end
+
+  local delta = #replacement - (end_col - start_col)
+  owner.text = old_span:sub(1, start_col - owner_col1)
+    .. replacement .. old_span:sub(end_col - owner_col1 + 1)
+  owner.source_col2 = owner_col2 + delta
+  for i = owner_index + 1, #render_line.fragments do
+    local fragment = render_line.fragments[i]
+    local col1 = fragment.source_col1 or 1
+    local col2 = fragment.source_col2 or col1
+    fragment.source_col1 = col1 + delta
+    fragment.source_col2 = col2 + delta
+  end
+  current_text = current_text:sub(1, start_col - 1)
+    .. replacement .. current_text:sub(end_col)
+  render_line.source_text = current_text
+  return current_text
+end
+
+local function split_optimistic_render(render_line, text)
+  local lines, line_start = {}, 1
+  while true do
+    local newline = text:find("\n", line_start, true)
+    local line_end = newline or (#text + 1)
+    local source = text:sub(line_start, line_end - 1)
+    local line_render = clone_render_line(render_line)
+    line_render.source_text = source
+    line_render.fragments = {}
+    for _, fragment in ipairs(render_line.fragments or {}) do
+      local col1 = fragment.source_col1 or 1
+      local col2 = fragment.source_col2 or col1
+      local from, to = math.max(col1, line_start), math.min(col2, line_end)
+      if from < to or (from == to and col1 == col2 and from == line_start) then
+        if fragment.widget and (from ~= col1 or to ~= col2) then return nil end
+        local copy = {}
+        for key, value in pairs(fragment) do copy[key] = value end
+        copy.source_col1 = from - line_start + 1
+        copy.source_col2 = to - line_start + 1
+        if copy.text and not copy.widget then
+          copy.text = copy.text:sub(from - col1 + 1, to - col1)
+        end
+        line_render.fragments[#line_render.fragments + 1] = copy
+      end
+    end
+    lines[#lines + 1] = line_render
+    if not newline then break end
+    line_start = newline + 1
+  end
+  return lines
+end
+
+local function cached_render_line(view, line)
+  local owner = view.__markdown_live_owner
+  local pre_edit = owner and owner.pre_edit_lines and owner.pre_edit_lines[line]
+  if pre_edit then return pre_edit.render_line end
+  local cache = view.__line_render_cache
+  local cached = cache and cache.lines and cache.lines[line]
+  return cached and cached.render_line ~= false and cached.render_line or nil
+end
+
+local function capture_pre_edit_renders(view, change)
+  local owner = view.__markdown_live_owner
+  if not owner or view_in_source_mode and view_in_source_mode(view) then return end
+  local lines = {}
+  local transaction = change and change.transaction
+  for _, edit in ipairs(transaction and transaction.edits or {}) do
+    for line = edit.line1 or 1, edit.line2 or edit.line1 or 1 do lines[line] = true end
+  end
+  if change and change.kind == "raw_insert" and change.line then lines[change.line] = true end
+  if change and change.kind == "raw_remove" then
+    for line = change.line1 or 1, change.line2 or change.line1 or 1 do lines[line] = true end
+  end
+  owner.pre_edit_lines = {}
+  for line in pairs(lines) do
+    local render = view:get_line_render(line)
+    owner.pre_edit_lines[line] = {
+      source_text = (view.doc.lines[line] or ""):gsub("\n$", ""),
+      render_line = render and clone_render_line(render) or nil,
+      height = view:get_visual_row_height(line),
+    }
+  end
+end
+
+local function capture_optimistic_renders(view, transaction)
+  local owner = view.__markdown_live_owner
+  if not owner or not transaction or transaction.type == "load" then return end
+  local pre_edit_lines = owner.pre_edit_lines or {}
+  owner.optimistic_lines = owner.optimistic_lines or {}
+  for _, entry in pairs(owner.optimistic_lines) do entry.revision = view.doc.text_revision end
+
+  local structural = false
+  for _, edit in ipairs(transaction.edits or {}) do
+    if edit.line1 ~= edit.line2 or (edit.text or ""):find("\n", 1, true) then
+      structural = true
+      break
+    end
+  end
+  if structural then
+    local ranges = transaction.changed_ranges or {}
+    local edit = transaction.edits and transaction.edits[1]
+    local range = ranges[1]
+    local cache = view.__line_render_cache
+    local next_lines = {}
+    if #ranges == 1 and range and cache and cache.lines then
+      local old_line1 = range.old_line1 or 1
+      local old_line2 = range.old_line2 or old_line1
+      local delta = range.line_delta or 0
+      for old_line, cached in pairs(cache.lines) do
+        local render = cached.render_line ~= false and cached.render_line or nil
+        local new_line
+        if old_line < old_line1 then new_line = old_line
+        elseif old_line > old_line2 then new_line = old_line + delta end
+        local current = new_line and (view.doc.lines[new_line] or ""):gsub("\n$", "")
+        if render and current == render.source_text then
+          next_lines[new_line] = {
+            revision = view.doc.text_revision, source_text = current,
+            render_line = clone_render_line(render), height = view:get_visual_row_height(old_line),
+          }
+        end
+      end
+
+      if edit and #transaction.edits == 1 and edit.line1 == edit.line2 then
+        local old_render = cached_render_line(view, edit.line1)
+        local combined = old_render and old_render.source_text
+        local transformed = old_render and clone_render_line(old_render)
+        combined = transformed and apply_inline_edit_to_render(transformed, combined, edit)
+        local new_line1 = range.new_line1 or edit.line1
+        local new_line2 = range.new_line2 or new_line1
+        local current_parts = {}
+        for line = new_line1, new_line2 do
+          current_parts[#current_parts + 1] = (view.doc.lines[line] or ""):gsub("\n$", "")
+        end
+        local current = table.concat(current_parts, "\n")
+        local split = combined == current and split_optimistic_render(transformed, combined) or nil
+        if split and #split == new_line2 - new_line1 + 1 then
+          local height = pre_edit_lines[edit.line1] and pre_edit_lines[edit.line1].height
+            or view:get_visual_row_height(edit.line1)
+          for i, render in ipairs(split) do
+            next_lines[new_line1 + i - 1] = {
+              revision = view.doc.text_revision, source_text = render.source_text,
+              render_line = render, height = height,
+            }
+          end
+        end
+      end
+    end
+    owner.optimistic_lines = next_lines
+    owner.pre_edit_lines = nil
+    local retained = 0
+    for _ in pairs(next_lines) do retained = retained + 1 end
+    core.log_quiet(
+      "Markdown Live Preview retained %d resident rendered lines across a structural edit",
+      retained
+    )
+    return
+  end
+
+  local edits_by_line = {}
+  for _, edit in ipairs(transaction.edits or {}) do
+    local edits = edits_by_line[edit.line1]
+    if not edits then edits = {}; edits_by_line[edit.line1] = edits end
+    edits[#edits + 1] = edit
+  end
+
+  for line, edits in pairs(edits_by_line) do
+    local old_render = cached_render_line(view, line)
+    local render = old_render and clone_render_line(old_render)
+    local text = render and render.source_text
+    table.sort(edits, function(a, b) return a.col1 > b.col1 end)
+    for _, edit in ipairs(edits) do
+      text = render and apply_inline_edit_to_render(render, text, edit)
+      if not text then render = nil break end
+    end
+    local current_text = (view.doc.lines[line] or ""):gsub("\n$", "")
+    if render and text == current_text then
+      owner.optimistic_lines[line] = {
+        revision = view.doc.text_revision,
+        source_text = current_text,
+        render_line = render,
+        height = pre_edit_lines[line] and pre_edit_lines[line].height
+          or view:get_visual_row_height(line),
+      }
+      core.log_quiet("Markdown Live Preview retained rendered line %d while semantics are pending", line)
+    else
+      owner.optimistic_lines[line] = nil
+      core.log_quiet("Markdown Live Preview could not retain rendered line %d for this edit", line)
+    end
+  end
+  owner.pre_edit_lines = nil
+end
+
+local function optimistic_render(view, line)
+  local owner = view.__markdown_live_owner
+  local entry = owner and owner.optimistic_lines and owner.optimistic_lines[line]
+  local text = (view.doc.lines[line] or ""):gsub("\n$", "")
+  if entry and entry.revision == view.doc.text_revision and entry.source_text == text then
+    return entry
+  end
+end
+
 local provider = {}
 local poi_provider = {}
 local decoration_provider = {}
@@ -1835,26 +2076,14 @@ end
 
 function provider:line_generation(view, line)
   if view_in_source_mode(view) then return "source" end
-  local parts = {}
-  parts[#parts + 1] = "font:" .. self:generation(view)
-  for _, unit in ipairs(reveal_units_for_line(view, line)) do
-    parts[#parts + 1] = table.concat({
-      unit.type or "", unit.id or "", unit.col1 or 0, unit.col2 or 0,
-    }, ":")
-  end
-  local owner = view.__markdown_live_owner
-  local index = owner and owner.link_index
-  parts[#parts + 1] = "index:" .. tostring(index and index.status or "none")
-    .. ":" .. tostring(index and index.generation or 0)
-  local fenced = fenced_code_for_line(view, line)
-  if fenced and fenced_code_delimiter_kind(view, fenced, line) then
-    parts[#parts + 1] = "fence-active:" .. tostring(fenced_code_is_active(view, fenced))
-  end
-  return table.concat(parts, "|")
+  local optimistic = optimistic_render(view, line)
+  return "font:" .. self:generation(view)
+    .. (optimistic and ":optimistic:" .. tostring(optimistic.revision) or "")
 end
 
 function provider:on_text_transaction(view, transaction, line1)
   if not line1 then return nil end
+  capture_optimistic_renders(view, transaction)
   local suffix_changed = transaction and transaction.type == "load"
   for _, range in ipairs(transaction and transaction.changed_ranges or {}) do
     if (range.line_delta or 0) ~= 0 then suffix_changed = true break end
@@ -1973,9 +2202,12 @@ local function heading_render_line(view, text, heading, reveal_units)
 end
 
 function provider:line_height(view, line)
-  if view_in_source_mode(view) or not current_semantic_model(view) then return nil end
-  local in_comment = line_in_semantic_comment(view, line)
+  if view_in_source_mode(view) then return nil end
   if line_is_wrapped(view, line) then return nil end
+  local optimistic = optimistic_render(view, line)
+  if optimistic and not current_semantic_model(view) then return optimistic.height end
+  if not current_semantic_model(view) then return nil end
+  local in_comment = line_in_semantic_comment(view, line)
   local text = (view.doc.lines[line] or ""):gsub("\n$", "")
   local body_height = markdown_live_body_line_height(view)
   if not in_comment then
@@ -2030,9 +2262,12 @@ function provider:line_height(view, line)
 end
 
 function provider:render_line(view, line)
-  if view_in_source_mode(view) or not current_semantic_model(view) then
+  if view_in_source_mode(view) then
     return { raw_passthrough = true }
   end
+  local optimistic = optimistic_render(view, line)
+  if optimistic and not current_semantic_model(view) then return optimistic.render_line end
+  if not current_semantic_model(view) then return { raw_passthrough = true } end
   local in_comment = line_in_semantic_comment(view, line)
   local fenced = not in_comment and fenced_code_for_line(view, line)
   if fenced then
@@ -2181,6 +2416,9 @@ local function ensure_owner(view)
       if self.doc and self.doc.remove_metadata_listener then
         self.doc:remove_metadata_listener(self.listener_id)
       end
+      if self.doc and self.doc.remove_text_change_listener then
+        self.doc:remove_text_change_listener(self.text_listener_id)
+      end
       live.detach(owner_view)
       if owner_view.__markdown_live_owner == self then owner_view.__markdown_live_owner = nil end
       core.log_quiet(
@@ -2189,7 +2427,17 @@ local function ensure_owner(view)
     end,
   }
   view.__markdown_live_owner = owner
+  owner.text_listener_id = owner.listener_id .. ":pre-edit"
   view:add_owned_feature(PROVIDER_ID, owner)
+  if owner.doc.add_text_change_listener then
+    owner.doc:add_text_change_listener(owner.text_listener_id, {
+      before_change = function(_, change)
+        if view.__markdown_live_owner == owner and view.__markdown_live_attached then
+          capture_pre_edit_renders(view, change)
+        end
+      end,
+    })
+  end
   if owner.doc.add_metadata_listener then
     owner.doc:add_metadata_listener(owner.listener_id, function(_, event)
       if view.__markdown_live_owner ~= owner then return end
@@ -2210,6 +2458,7 @@ local function invalidate_semantic_publication(view, instance, reason)
   view.__markdown_live_semantic_line_cache = nil
   view.__markdown_live_reference_prepare_pending = nil
   local owner = view.__markdown_live_owner
+  if owner then owner.optimistic_lines = nil end
   local pending_line = owner and owner.semantic_pending_line
   if owner and reason ~= "pending" then owner.semantic_pending_line = nil end
   local ranges

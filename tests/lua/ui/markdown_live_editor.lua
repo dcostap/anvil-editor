@@ -170,6 +170,68 @@ test.describe("Markdown Live Editor", function()
     test.not_nil(view:get_line_render(2))
   end)
 
+  test.it("keeps an edited formatted paragraph rendered while semantics are pending", function()
+    local view, doc = make_view("Before **bold** after\nplain", "pending-edit.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+    local instance = test.not_nil(markdown_model.peek(doc))
+
+    doc:set_selection(1, #doc.lines[1])
+    test.equal(visible_render_text(view, 1), "Before bold after")
+    view:on_text_input("!")
+    test.equal(instance.status, "pending")
+    test.equal(visible_render_text(view, 1), "Before bold after!")
+
+    view:on_text_input("?")
+    test.equal(instance.status, "pending")
+    local pending = test.not_nil(view:get_line_render(1))
+    test.equal(visible_render_text(view, 1), "Before bold after!?")
+    for _, fragment in ipairs(pending.fragments or {}) do
+      test.ok(primary_font_path(fragment.font):match("Inter%-"), primary_font_path(fragment.font))
+    end
+  end)
+
+  test.it("captures current presentation before an edit even after selection invalidation", function()
+    local view, doc = make_view("Before **bold** after\nplain", "pending-pre-edit.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+    test.equal(visible_render_text(view, 1), "Before bold after")
+
+    doc:set_selection(1, #doc.lines[1])
+    view:on_text_input("!")
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(visible_render_text(view, 1), "Before bold after!")
+  end)
+
+  test.it("keeps revealed inline syntax stable while typing inside it", function()
+    local view, doc = make_view("Before **bold** after\nplain", "pending-inline-edit.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+    local instance = test.not_nil(markdown_model.peek(doc))
+
+    doc:set_selection(1, 11)
+    test.equal(visible_render_text(view, 1), "Before **bold** after")
+    view:on_text_input("X")
+    test.equal(instance.status, "pending")
+    test.equal(visible_render_text(view, 1), "Before **bXold** after")
+  end)
+
+  test.it("retains rendered paragraphs and shifted resident rows while inserting a line", function()
+    local view, doc = make_view("Before **bold** after\n# Following\nplain", "pending-line-split.md")
+    doc:set_selection(3, 1)
+    refresh(view)
+    test.equal(visible_render_text(view, 1), "Before bold after")
+    test.equal(visible_render_text(view, 2), "Following")
+
+    doc:set_selection(1, #doc.lines[1])
+    test.equal(visible_render_text(view, 1), "Before bold after")
+    view:on_text_input("\n")
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(visible_render_text(view, 1), "Before bold after")
+    test.equal(visible_render_text(view, 2), "")
+    test.equal(visible_render_text(view, 3), "Following")
+  end)
+
   test.it("renders inactive headings with larger row metrics and hidden markers", function()
     local view, doc = make_view("# Title\nbody", "note.md")
     doc:set_selection(2, 1)
@@ -254,7 +316,8 @@ test.describe("Markdown Live Editor", function()
 
     local previous_generation = instance.generation
     doc:insert(1, 1, "inserted\n")
-    test.equal(view:get_line_render(4), nil)
+    local optimistic = test.not_nil(view:get_line_render(4))
+    test.equal(optimistic.semantic_generation, instance.generation)
     local split = DocView(doc)
     split.size.x, split.size.y = 500, 200
     split:set_wrapping_enabled(false)

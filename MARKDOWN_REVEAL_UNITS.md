@@ -21,7 +21,7 @@ Equal-range overlapping semantic nodes, such as Tree-sitter image plus native em
 
 A non-empty selection reveals every touched source line. If a line contains localized inline constructs or a list marker but none contains the collapsed caret, those constructs remain rendered rather than expanding merely because the caret shares their line. Lines without a localized construct still use whole-line reveal as the safe fallback. Setting `markdown_live_reveal_mode = "line"` explicitly retains unconditional whole-line reveal behavior.
 
-Cold, pending, failed, truncated, and stale semantic states still use raw rendering, independent of reveal policy.
+Cold, failed, truncated, and stale semantic states still use raw rendering, independent of reveal policy. After the first semantic publication, supported single-line edits retain a transactionally updated rendered line while the replacement snapshot is pending; this continuity path preserves the already chosen reveal unit rather than briefly exposing the whole line.
 
 ## View-local interaction
 
@@ -31,4 +31,4 @@ Provider cache generations encode the selected semantic units rather than a coar
 
 ## Regression evidence
 
-Focused tests cover isolated formatting and link reveal, same-line caret locality, fixed list-marker geometry, nested heading formatting, multiline comment reveal/re-hide, multi-cursor headings, line fallback, pointer freeze, IME lifetime, Source Mode, wrapping, semantic links/images, and pending raw fallback.
+Focused tests cover isolated formatting and link reveal, same-line caret locality, fixed list-marker geometry, nested heading formatting, multiline comment reveal/re-hide, multi-cursor headings, line fallback, pointer freeze, IME lifetime, Source Mode, wrapping, semantic links/images, cold pending fallback, and incremental pending-render continuity.

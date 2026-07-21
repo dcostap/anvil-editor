@@ -2,9 +2,9 @@
 
 Implemented July 10, 2026 as the first Phase 3 slice in `MARKDOWN_LIVE_EDITOR_PLAN.md`.
 
-## Snapshot fallback
+## Snapshot continuity
 
-A Markdown line renders only from a current semantic snapshot. Cold, pending, stale, failed, and detached states use ordinary raw source rendering. Existing unaffected cached lines may retain their prior current semantic output while an incremental publication is pending; changed and dependency-widened ranges fall back immediately.
+A cold Markdown Document renders raw until its first current semantic snapshot arrives. Existing unaffected cached lines retain their prior current semantic output during later incremental publications. Before an ordinary edit mutates the Document, the active view captures the touched line's current presentation even if a caret move already invalidated its resident cache entry. That presentation is cloned and patched from the exact transaction, so current text appears immediately without changing fonts, exposing unrelated markers, or dropping decorations while parsing is pending. The optimistic line is revision- and source-checked and is replaced wholesale by authoritative semantic output on publication. Unsupported, stale, failed, detached, or structurally uncertain states retain conservative raw fallback.
 
 ## Semantic families
 
@@ -36,4 +36,4 @@ Fence and multiline-comment delimiters can affect a suffix. Provider transaction
 
 ## Red-green evidence
 
-Focused tests cover pending raw fallback, direct semantic rendering without the ad hoc parser, CommonMark intraword-underscore behavior, nested attribute composition, escapes/comments inside formatting and headings, multiline delimiter removal/formation, active marker reveal, generic decoration drawing, wrapping, image regressions, and semantic identity retention.
+Focused tests cover cold pending fallback, incremental pending-render continuity, direct semantic rendering without the ad hoc parser, CommonMark intraword-underscore behavior, nested attribute composition, escapes/comments inside formatting and headings, multiline delimiter removal/formation, active marker reveal, generic decoration drawing, wrapping, image regressions, and semantic identity retention.

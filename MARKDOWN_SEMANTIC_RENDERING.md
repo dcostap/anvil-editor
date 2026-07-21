@@ -12,13 +12,13 @@ The first async publication invalidates the view and establishes semantic render
 
 The existing Phase 2 renderer remains deliberately narrow, but heading render lines and emphasis fragments now adopt stable IDs from semantic nodes. This includes emphasis nested inside headings and triple-delimiter strong/emphasis reconciliation. Render results expose the semantic generation used to construct them.
 
-The local prototype parser remains as the conservative rendering fallback while the semantic model is cold, pending, unavailable, or while syntax families have not yet migrated. Removing that fallback is Phase 3 work, not hidden in this bridge.
+Cold, unavailable, and unsupported semantic states retain conservative raw fallback. Once a current snapshot exists, ordinary resident-line edits use a view-local optimistic render patched from the exact text transaction until the next authoritative publication.
 
 ## Live Preview typography
 
 Markdown Live Preview uses bundled proportional Inter faces for prose, headings, links, lists, quotes, tables, frontmatter, callouts, and revealed Markdown source outside raw blocks. Regular, Italic, SemiBold, and SemiBold Italic files provide real face variants; strong text and headings use SemiBold without synthetic emboldening or duplicate shifted overdraw. Body metrics follow the Editor's current text size so zoom remains coherent. The variants are exposed as `style.markdown_live_font`, `style.markdown_live_italic_font`, `style.markdown_live_bold_font`, and `style.markdown_live_bold_italic_font`, and are not assigned to the general UI or ordinary Document views.
 
-Inline code, fenced and indented code blocks, math source, raw HTML blocks, and Source Mode retain `style.code_font`. While the semantic model is cold or pending, the conservative raw fallback can also temporarily use the normal code font until the current snapshot is published. The Inter font is distributed under the SIL Open Font License recorded in `licenses/licenses.md`.
+Inline code, fenced and indented code blocks, math source, raw HTML blocks, and Source Mode retain `style.code_font`. A cold semantic model can temporarily use the normal code font until its first snapshot is published. Incremental ordinary prose edits retain their prior proportional presentation while the replacement snapshot is pending. The Inter font is distributed under the SIL Open Font License recorded in `licenses/licenses.md`.
 
 ## Contextual invalidation
 
@@ -33,6 +33,8 @@ Red-green tests cover:
 - heading and inline semantic identity adoption;
 - heading-contained and triple-delimiter emphasis identities;
 - retention of an unaffected heading cache entry across a same-line edit/publication;
+- immediate rendered text and typography across repeated pending paragraph edits;
+- stable revealed inline syntax while typing inside a construct;
 - semantic re-adoption after a line-shifting edit rendered while pending; and
 - a fence edit changing a later line from raw passthrough to rendered heading; and
 - proportional prose/heading rendering with monospaced inline, fenced, and Source Mode code paths.
