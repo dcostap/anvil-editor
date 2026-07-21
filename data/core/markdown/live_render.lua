@@ -2441,6 +2441,30 @@ local function fenced_code_is_active(view, fenced, state)
   return false
 end
 
+local function fenced_code_content_render_line(view, line, text)
+  local fragments = {}
+  local col = 1
+  for _, syntax_type, token_text in view.doc.highlighter:each_render_token(line) do
+    if col > #text then break end
+    token_text = token_text:sub(1, #text - col + 1)
+    if token_text ~= "" then
+      fragments[#fragments + 1] = {
+        source_col1 = col,
+        source_col2 = col + #token_text,
+        text = token_text,
+        font = style.syntax_fonts[syntax_type],
+        color = style.syntax[syntax_type],
+      }
+      col = col + #token_text
+    end
+  end
+  return {
+    source_text = text,
+    x_offset = view:get_font():get_width(" "),
+    fragments = fragments,
+  }
+end
+
 function decoration_provider:line_background(view, line)
   if view_in_source_mode(view) or line_in_semantic_comment(view, line) then return nil end
   local fenced = fenced_code_for_line(view, line)
@@ -2705,20 +2729,23 @@ function provider:render_line(view, line)
   if fenced then
     local text = (view.doc.lines[line] or ""):gsub("\n$", "")
     local delimiter_kind = fenced_code_delimiter_kind(view, fenced, line)
-    if delimiter_kind and not fenced_code_is_active(view, fenced) then
-      return {
-        source_text = text,
-        semantic_generation = select(2, semantic_line(view, line)),
-        fragments = {
-          {
-            source_col1 = 1, source_col2 = #text + 1,
-            hidden = true,
-            semantic_id = fenced.id .. ":" .. delimiter_kind,
+    if delimiter_kind then
+      if not fenced_code_is_active(view, fenced) then
+        return {
+          source_text = text,
+          semantic_generation = select(2, semantic_line(view, line)),
+          fragments = {
+            {
+              source_col1 = 1, source_col2 = #text + 1,
+              hidden = true,
+              semantic_id = fenced.id .. ":" .. delimiter_kind,
+            },
           },
-        },
-      }
+        }
+      end
+      return { raw_passthrough = true }
     end
-    return { raw_passthrough = true }
+    return fenced_code_content_render_line(view, line, text)
   end
   if not in_comment and line_in_raw_block(view, line) then return { raw_passthrough = true } end
 

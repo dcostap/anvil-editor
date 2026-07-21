@@ -117,7 +117,11 @@ test.describe("Markdown Live Editor", function()
     )
     test.equal(strong.overdraw, nil)
     test.ok(code_path and not code_path:match("Inter%-Regular%.ttf$"), code_path)
-    test.equal(view:get_line_render(3), nil)
+    local code_inset = view:get_col_x_offset(3, 1)
+    test.equal(
+      view:get_col_x_offset(3, #"return true" + 1) - code_inset,
+      view:get_font():get_width("return true")
+    )
   end)
 
   test.it("toggles and persists view-local Source Mode without moving editor state", function()
@@ -344,6 +348,28 @@ test.describe("Markdown Live Editor", function()
     test.equal(caret_height, row_height)
   end)
 
+  test.it("uses the rendered heading row height for its highlight when wrapping is enabled", function()
+    local view, doc = make_view("# Title\nbody", "note.md")
+    view:set_wrapping_enabled(true)
+    doc:set_selection(1, 4)
+    refresh(view)
+
+    local row_height = view:get_position_visual_row_height(1, 4)
+    local old_draw_rect = renderer.draw_rect
+    local highlight_height
+    renderer.draw_rect = function(_, _, _, height, color)
+      if color == style.line_highlight then highlight_height = height end
+    end
+    local ok, err = pcall(function()
+      view:draw_current_line_highlights(1, 2)
+    end)
+    renderer.draw_rect = old_draw_rect
+    if not ok then error(err) end
+
+    test.ok(row_height > view:get_line_height())
+    test.equal(highlight_height, row_height)
+  end)
+
   test.it("adopts published heading and inline semantic identities", function()
     local view, doc = make_view("# **Title**\nText with ***bold***.\nplain", "note.md")
     doc:set_selection(3, 1)
@@ -412,7 +438,7 @@ test.describe("Markdown Live Editor", function()
     view:set_wrapping_enabled(true)
     doc:set_selection(4, 1)
     refresh(view)
-    test.equal(view:get_line_render(2), nil)
+    test.equal(visible_render_text(view, 2), "# [[" .. target .. "|Alias]] after")
     local function break_signature()
       local first, _, count = linewrapping.get_line_idx_col_count(view, 2)
       local cols = {}
@@ -432,7 +458,8 @@ test.describe("Markdown Live Editor", function()
     local rendered_breaks = break_signature()
     test.ok(rendered_breaks ~= raw_breaks, raw_breaks .. " -> " .. rendered_breaks)
     doc:raw_insert(1, 1, "```", doc.undo_stack, system.get_time())
-    test.equal(view:get_line_render(2), nil)
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    test.equal(visible_render_text(view, 2), "# [[" .. target .. "|Alias]] after")
     test.equal(break_signature(), raw_breaks)
   end)
 
@@ -577,9 +604,11 @@ test.describe("Markdown Live Editor", function()
     doc:set_selection(7, 1)
     refresh(view)
     test.equal(view:get_visual_row_height(2), view:get_line_height())
-    test.equal(view:get_col_x_offset(2, 3), view:get_font():get_width("# "))
-    test.equal(view:get_col_x_offset(3, #"**not bold**" + 1), view:get_font():get_width("**not bold**"))
-    test.equal(view:get_col_x_offset(5, 3), view:get_font():get_width("# "))
+    local code_inset = view:get_col_x_offset(2, 1)
+    test.ok(code_inset > 0)
+    test.equal(view:get_col_x_offset(2, 3), code_inset + view:get_font():get_width("# "))
+    test.equal(view:get_col_x_offset(3, #"**not bold**" + 1), code_inset + view:get_font():get_width("**not bold**"))
+    test.equal(view:get_col_x_offset(5, 3), code_inset + view:get_font():get_width("# "))
     test.ok(view:get_visual_row_height(7) > view:get_line_height())
   end)
 
@@ -1484,7 +1513,7 @@ test.describe("Markdown Live Editor", function()
     view:invalidate_line_render("fence-ready")
     local opening = test.not_nil(view:get_line_render(1))
     test.equal(opening.fragments[1].hidden, true)
-    test.equal(view:get_line_render(2), nil)
+    test.ok(test.not_nil(view:get_line_render(2)).x_offset > 0)
     local closing = test.not_nil(view:get_line_render(3))
     test.equal(closing.fragments[1].hidden, true)
     test.equal(view:get_visual_row_height(1), view:get_line_height())
@@ -1505,6 +1534,36 @@ test.describe("Markdown Live Editor", function()
     test.equal(view:get_line_render(3), nil)
     test.equal(view:get_visual_row_height(1), view:get_line_height())
     test.equal(view:get_visual_row_height(3), view:get_line_height())
+  end)
+
+  test.it("insets fenced code content without moving revealed fence delimiters", function()
+    local view, doc = make_view("```lua\nprint('ok')\n```\nplain", "fence-padding.md")
+    doc:set_selection(4, 1)
+    refresh(view)
+
+    local content_inset = view:get_col_x_offset(2, 1)
+    test.ok(content_inset > 0, "expected fenced code content to have a left inset")
+    test.equal(
+      view:get_col_x_offset(2, #"print('ok')" + 1),
+      content_inset + view:get_font():get_width("print('ok')")
+    )
+    test.equal(view:get_x_offset_col(2, content_inset / 2), 1)
+
+    local old_draw_text = renderer.draw_text
+    local first_text_x
+    renderer.draw_text = function(font, text, x, y, color, opts)
+      if text ~= "" and not first_text_x then first_text_x = x end
+      return x + font:get_width(text, opts)
+    end
+    local ok, err = pcall(view.draw_line_text, view, 2, 100, 0)
+    renderer.draw_text = old_draw_text
+    if not ok then error(err) end
+    test.equal(first_text_x, 100 + content_inset)
+
+    doc:set_selection(2, 4)
+    test.equal(view:get_col_x_offset(1, 1), 0)
+    test.equal(view:get_col_x_offset(2, 1), content_inset)
+    test.equal(view:get_col_x_offset(3, 1), 0)
   end)
 
   test.it("keeps whole-Document semantic adoption out of line rendering", function()

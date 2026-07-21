@@ -3015,15 +3015,16 @@ function DocView:get_render_fragment_at_position(x, y)
     if next_line ~= line then row_end = #(self.doc.lines[line] or "") end
     local line_x = self:get_line_screen_position(line)
     local begin_width = row_start ~= 1 and (self.wrapped_line_offsets[line] or 0) or 0
+    local line_x_offset = render_line.x_offset or 0
     local row_render_x = self:get_line_render_col_x_offset(render_line, row_start)
     for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
       local col1 = fragment.source_col1 or 1
       local col2 = fragment.source_col2 or col1
       local from, to = math.max(col1, row_start), math.min(col2, row_end)
       if not fragment.hidden and from < to and col >= from and col <= to then
-        local left = line_x + begin_width
+        local left = line_x + line_x_offset + begin_width
           + self:get_line_render_col_x_offset(render_line, from) - row_render_x
-        local right = line_x + begin_width
+        local right = line_x + line_x_offset + begin_width
           + self:get_line_render_col_x_offset(render_line, to) - row_render_x
         if x >= math.min(left, right) and x <= math.max(left, right) then
           return { line = line, fragment = fragment }
@@ -3036,7 +3037,7 @@ function DocView:get_render_fragment_at_position(x, y)
   local xrel, yrel = x - line_x, y - line_y
   local row = self:get_visual_row(line, 1)
   local row_height = self:get_visual_row_height(row)
-  local tx = 0
+  local tx = render_line.x_offset or 0
   local _, indent_size = self.doc:get_indent_info()
   for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
     if not fragment.hidden then
@@ -3062,7 +3063,7 @@ function DocView:get_render_widget_at_position(x, y)
   local xrel, yrel = x - line_x, y - line_y
   local row = self:get_visual_row(line, 1)
   local row_height = self:get_visual_row_height(row)
-  local tx = 0
+  local tx = render_line.x_offset or 0
   local _, indent_size = self.doc:get_indent_info()
   for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
     if not fragment.hidden then
@@ -3123,7 +3124,7 @@ end
 
 function DocView:get_line_render_col_x_offset(render_line, col)
   col = math.max(1, col or 1)
-  local xoffset = 0
+  local xoffset = render_line.x_offset or 0
   local _, indent_size = self.doc:get_indent_info()
   for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
     local col1 = fragment.source_col1 or 1
@@ -3168,7 +3169,7 @@ end
 
 function DocView:get_line_render_x_offset_col(render_line, x)
   render_line = render_line_for_hit_test(render_line)
-  local xoffset = 0
+  local xoffset = render_line.x_offset or 0
   local _, indent_size = self.doc:get_indent_info()
   for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
     local col1 = fragment.source_col1 or 1
@@ -3212,7 +3213,7 @@ end
 ---@param y number Vertical offset from the rendered row origin
 ---@return integer? col Source column, or nil when ordinary mapping should be used
 function DocView:get_line_render_position_col(render_line, x, y)
-  local xoffset = 0
+  local xoffset = render_line.x_offset or 0
   local _, indent_size = self.doc:get_indent_info()
   for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
     local font = render_fragment_font(self, fragment)
@@ -3265,7 +3266,8 @@ function DocView:get_col_x_offset(line, col, line_end)
       end
       local _, _, _, row_start = linewrapping.get_line_idx_col_count(self, line, col, line_end)
       local row_offset = self:get_line_render_col_x_offset(render_line, row_start)
-      return (row_start ~= 1 and (self.wrapped_line_offsets[line] or 0) or 0)
+      return (render_line.x_offset or 0)
+        + (row_start ~= 1 and (self.wrapped_line_offsets[line] or 0) or 0)
         + rendered_offset - row_offset
     end
     return rendered_offset
@@ -4075,16 +4077,14 @@ function DocView:draw_current_line_highlights(minline, maxline)
   end
   if self.wrapped_settings then
     if config.highlight_current_line == false then return end
-    local lh = self:get_line_height()
     local hcl = config.highlight_current_line
     for _, line1, col1, line2, col2 in self.doc:get_selections(false) do
       if line1 > maxline then break end
       if line1 >= minline and (hcl ~= "no_selection" or (line1 == line2 and col1 == col2)) then
         local line_end = linewrapping.has_wrapped_line_end_affinity(self, line1, col1)
         local idx = linewrapping.get_line_idx_col_count(self, line1, col1, line_end)
-        local _, y = self:get_line_screen_position(line1)
-        local first_idx = linewrapping.get_line_idx_col_count(self, line1)
-        self:draw_line_highlight(self.position.x, y + lh * (idx - first_idx))
+        local _, y = self:get_line_screen_position(line1, col1, line_end)
+        self:draw_line_highlight(self.position.x, y, self:get_visual_row_height(idx))
       end
     end
     self:draw_content_left_edge()
@@ -4544,7 +4544,8 @@ function DocView:draw_line_text(line, x, y)
       local _, row_start = linewrapping.get_idx_line_col(self, idx)
       local next_line, row_end = linewrapping.get_idx_line_col(self, idx + 1)
       if next_line ~= line then row_end = #(self.doc.lines[line] or "") end
-      local tx = x + (row_start ~= 1 and begin_width or 0)
+      local tx = x + (render_line.x_offset or 0)
+        + (row_start ~= 1 and begin_width or 0)
       local ty = y + text_y_offset + (idx - first_idx) * lh
       for _, fragment in ipairs(fragments) do
         local col1 = fragment.source_col1 or 1
@@ -4580,7 +4581,7 @@ function DocView:draw_line_text(line, x, y)
     return lh * count
   end
   if render_line then
-    local tx = x
+    local tx = x + (render_line.x_offset or 0)
     local row = self:get_visual_row(line, 1)
     local row_height = self:get_visual_row_height(row)
     local _, indent_size = self.doc:get_indent_info()
@@ -5468,9 +5469,14 @@ function DocView:draw_line_body(line, x, y)
       end
     end
     if highlight_rows then
+      local row0_y_offset = self:get_visual_row_y_offset(idx0)
       for i = visible_idx1, visible_idx2 do
         if highlight_rows[i] then
-          self:draw_line_highlight(x + self.scroll.x, y + lh * (i - idx0))
+          self:draw_line_highlight(
+            x + self.scroll.x,
+            y + self:get_visual_row_y_offset(i) - row0_y_offset,
+            self:get_visual_row_height(i)
+          )
         end
       end
     end

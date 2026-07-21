@@ -354,6 +354,7 @@ local function compute_rendered_line_breaks(
   local splits = { start_col }
   local row_start = start_col
   local last_space
+  local line_x_offset = render_line.x_offset or 0
   local function rendered_x(col)
     return docview:get_line_render_col_x_offset(render_line, col)
   end
@@ -361,7 +362,7 @@ local function compute_rendered_line_breaks(
   for char in common.utf8_chars(text:sub(start_col, visible_end)) do
     local next_col = col + #char
     if char == " " then last_space = col end
-    local leading = row_start > 1 and begin_width or 0
+    local leading = line_x_offset + (row_start > 1 and begin_width or 0)
     local row_width = leading + rendered_x(next_col) - rendered_x(row_start)
     if row_width > width and col > row_start then
       local split = col
@@ -370,7 +371,7 @@ local function compute_rendered_line_breaks(
       if split > splits[#splits] then splits[#splits + 1] = split end
       row_start = split
       if last_space and last_space < row_start then last_space = nil end
-      leading = row_start > 1 and begin_width or 0
+      leading = line_x_offset + (row_start > 1 and begin_width or 0)
       row_width = leading + rendered_x(next_col) - rendered_x(row_start)
       if row_width > width and col > row_start then
         splits[#splits + 1] = col
@@ -973,13 +974,14 @@ function LineWrapping.get_line_col_from_index_and_x(docview, idx, x)
     return 1, 1, false
   end
   local row_end_col, soft_end = LineWrapping.get_idx_visual_end_col(docview, idx, line)
-  local xoffset = col ~= 1 and docview.wrapped_line_offsets[line] or 0
+  local render_line = docview.get_line_render and docview:get_line_render(line)
+  local xoffset = (render_line and render_line.x_offset or 0)
+    + (col ~= 1 and docview.wrapped_line_offsets[line] or 0)
   if x < xoffset then
     perf_frame_add("linewrapping_get_line_col_from_index_and_x_calls", 1)
     perf_elapsed("linewrapping_get_line_col_from_index_and_x_ms", perf_start)
     return line, col, false
   end
-  local render_line = docview.get_line_render and docview:get_line_render(line)
   if render_line then
     local row_render_x = docview:get_line_render_col_x_offset(render_line, col)
     local target_x = row_render_x + math.max(0, x - xoffset)
