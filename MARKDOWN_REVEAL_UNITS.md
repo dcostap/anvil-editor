@@ -4,12 +4,14 @@ Implemented July 10, 2026 as the fourth Phase 3 slice in `MARKDOWN_LIVE_EDITOR_P
 
 ## Construct selection
 
-With `config.markdown_live_reveal_mode = "construct"`, each collapsed caret selects the smallest complete semantic construct containing its source column. Supported units include headings, formatting, inline code, escapes, comments, links, images, Wikilinks, and embeds.
+With `config.markdown_live_reveal_mode = "construct"`, each collapsed caret selects the smallest complete semantic construct containing its source column. Supported units include headings, formatting, inline code, escapes, comments, links, images, Wikilinks, embeds, and unordered-list source markers.
 
 Only markers/replacements belonging to that unit are revealed. Examples:
 
 - entering one of two bold spans reveals only that span;
 - entering one Wikilink exposes its exact source while another Wikilink remains decoded;
+- moving elsewhere on a line does not reveal its bold, italic, link, or other localized inline constructs;
+- entering an unordered-list marker swaps only the drawn bullet for its source marker inside the same fixed-width slot;
 - entering nested bold inside a heading keeps the heading marker hidden; and
 - entering a multiline comment reveals the full comment construct across its lines.
 
@@ -17,7 +19,7 @@ Equal-range overlapping semantic nodes, such as Tree-sitter image plus native em
 
 ## Conservative fallback
 
-A non-empty selection reveals every touched source line. If no supported semantic construct contains a collapsed caret, the caret line is revealed as the safe fallback. Setting `markdown_live_reveal_mode = "line"` explicitly retains whole-line reveal behavior.
+A non-empty selection reveals every touched source line. If a line contains localized inline constructs or a list marker but none contains the collapsed caret, those constructs remain rendered rather than expanding merely because the caret shares their line. Lines without a localized construct still use whole-line reveal as the safe fallback. Setting `markdown_live_reveal_mode = "line"` explicitly retains unconditional whole-line reveal behavior.
 
 Cold, pending, failed, truncated, and stale semantic states still use raw rendering, independent of reveal policy.
 
@@ -29,4 +31,4 @@ Provider cache generations encode the selected semantic units rather than a coar
 
 ## Regression evidence
 
-Focused tests cover isolated formatting and link reveal, nested heading formatting, multiline comment reveal/re-hide, multi-cursor headings, line fallback, pointer freeze, IME lifetime, Source Mode, wrapping, semantic links/images, and pending raw fallback.
+Focused tests cover isolated formatting and link reveal, same-line caret locality, fixed list-marker geometry, nested heading formatting, multiline comment reveal/re-hide, multi-cursor headings, line fallback, pointer freeze, IME lifetime, Source Mode, wrapping, semantic links/images, and pending raw fallback.

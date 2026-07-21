@@ -469,12 +469,33 @@ test.describe("Markdown Live Editor", function()
     test.ok(seen["*"] == nil)
   end)
 
-  test.it("reveals raw inline Markdown on the active line", function()
+  test.it("keeps an inline construct rendered when the caret is elsewhere on its line", function()
     local view, doc = make_view("See [[Note|Alias]]", "note.md")
     refresh(view)
     doc:set_selection(1, 1)
-    local raw_width = live_body_font(view):get_width("See [[Note|Alias]]")
-    test.equal(view:get_col_x_offset(1, #"See [[Note|Alias]]" + 1), raw_width)
+    test.equal(visible_render_text(view, 1), "See Alias")
+    test.equal(
+      view:get_col_x_offset(1, #"See [[Note|Alias]]" + 1),
+      live_body_font(view):get_width("See Alias")
+    )
+  end)
+
+  test.it("reveals emphasis syntax only while the caret is within that construct", function()
+    local source = "before **bold** after *italic* tail\nplain"
+    local view, doc = make_view(source, "localized-emphasis.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+    local inactive_width = view:get_col_x_offset(1, #(source:match("[^\n]+")) + 1)
+
+    doc:set_selection(1, 2)
+    test.equal(visible_render_text(view, 1), "before bold after italic tail")
+    test.equal(view:get_col_x_offset(1, #(source:match("[^\n]+")) + 1), inactive_width)
+
+    doc:set_selection(1, 11)
+    test.equal(visible_render_text(view, 1), "before **bold** after italic tail")
+
+    doc:set_selection(1, 18)
+    test.equal(visible_render_text(view, 1), "before bold after italic tail")
   end)
 
   test.it("renders emphasis text with styled fonts and normal text color", function()
@@ -728,7 +749,7 @@ test.describe("Markdown Live Editor", function()
     local alias_width = live_body_font(view):get_width("See Alias")
     test.equal(view:get_col_x_offset(1, #"See [[Note|Alias]]" + 1), alias_width)
 
-    doc:set_selection(1, 1)
+    doc:set_selection(1, 7)
     local raw_width = live_body_font(view):get_width("See [[Note|Alias]]")
     test.equal(view:get_col_x_offset(1, #"See [[Note|Alias]]" + 1), raw_width)
   end)
@@ -1076,14 +1097,41 @@ test.describe("Markdown Live Editor", function()
     local checkbox_x = line_x + view:get_line_render_col_x_offset(view:get_line_render(2), unchecked.source_col1) + 2
     test.equal(view:on_mouse_pressed("left", checkbox_x, line_y + 2, 1), true)
     test.equal(doc.lines[2], "- [x] todo\n")
+  end)
+
+  test.it("keeps unordered list geometry stable and reveals only its marker token", function()
+    local view, doc = make_view("- item\nplain", "list-marker.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+
+    local inactive = test.not_nil(view:get_line_render(1))
+    local bullet
+    for _, fragment in ipairs(inactive.fragments or {}) do
+      if fragment.unordered_list_marker then bullet = fragment break end
+    end
+    bullet = test.not_nil(bullet)
+    local inactive_content_x = view:get_col_x_offset(1, 3)
+
+    doc:set_selection(1, 3)
+    local body_active = test.not_nil(view:get_line_render(1))
+    local body_bullet
+    for _, fragment in ipairs(body_active.fragments or {}) do
+      if fragment.unordered_list_marker then body_bullet = fragment break end
+    end
+    test.not_nil(test.not_nil(body_bullet).widget)
+    test.equal(view:get_col_x_offset(1, 3), inactive_content_x)
 
     doc:set_selection(1, 2)
-    local active = view:get_line_render(1)
-    local has_bullet = false
-    for _, fragment in ipairs(active and active.fragments or {}) do
-      if fragment.unordered_list_marker then has_bullet = true end
+    local marker_active = test.not_nil(view:get_line_render(1))
+    local source_marker
+    for _, fragment in ipairs(marker_active.fragments or {}) do
+      if fragment.unordered_list_source_marker then source_marker = fragment break end
     end
-    test.equal(has_bullet, false)
+    source_marker = test.not_nil(source_marker)
+    test.equal(source_marker.text, "- ")
+    test.equal(source_marker.widget, nil)
+    test.equal(source_marker.width, bullet.width)
+    test.equal(view:get_col_x_offset(1, 3), inactive_content_x)
   end)
 
   test.it("presents ordered markers, hard breaks, and indented code without replacing source content", function()

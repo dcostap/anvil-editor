@@ -147,6 +147,20 @@ local REVEAL_TYPES = {
   math = true,
 }
 
+local function list_marker_for_line(view, line)
+  for _, node in ipairs(semantic_line(view, line) or {}) do
+    if node.type == "list" or node.type == "list_item" then
+      local marker = node.attributes and node.attributes.list
+      if marker and marker.line1 == line then
+        local text = (view.doc.lines[line] or ""):gsub("\n$", "")
+        local raw = text:sub(marker.col1, marker.col2 - 1)
+        local token = raw:match("^%S+") or raw
+        return marker, node, marker.col1 + #token
+      end
+    end
+  end
+end
+
 local function node_line_range(node, line, line_text)
   if line < node.source.line1 or line > node.source.line2 then return nil end
   return line == node.source.line1 and node.source.col1 or 1,
@@ -173,9 +187,10 @@ local function reveal_units_for_line(view, line, state)
         end
       else
         local cursor_text = (view.doc.lines[line1] or ""):gsub("\n$", "")
-        local best, best_size
+        local best, best_size, has_localized_reveal
         for _, node in ipairs(semantic_line(view, line1) or {}) do
           if REVEAL_TYPES[node.type] then
+            if node.type ~= "heading" then has_localized_reveal = true end
             local node_col1, node_col2 = node_line_range(node, line1, cursor_text)
             if node_col1 and col1 >= node_col1 and col1 < node_col2 then
               local size = (node.source.end_byte or 0) - (node.source.start_byte or 0)
@@ -183,13 +198,20 @@ local function reveal_units_for_line(view, line, state)
             end
           end
         end
-        if best and line >= best.source.line1 and line <= best.source.line2 then
+        local list_marker, list_node, list_marker_token_col2 = list_marker_for_line(view, line1)
+        if list_marker and col1 >= list_marker.col1 and col1 <= list_marker_token_col2 then
+          units[#units + 1] = {
+            type = "list_marker", id = list_node.id,
+            col1 = list_marker.col1, col2 = list_marker.col2,
+            line1 = line1, line2 = line1,
+          }
+        elseif best and line >= best.source.line1 and line <= best.source.line2 then
           local unit_col1, unit_col2 = node_line_range(best, line, line_text)
           units[#units + 1] = {
             type = best.type, id = best.id, col1 = unit_col1, col2 = unit_col2,
             line1 = best.source.line1, line2 = best.source.line2,
           }
-        elseif not best and line == line1 then
+        elseif not best and not list_marker and not has_localized_reveal and line == line1 then
           units[#units + 1] = { type = "line", col1 = 1, col2 = #line_text + 1, whole_line = true }
         end
       end
@@ -1568,25 +1590,42 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
           }
         else
           local body_font = markdown_live_body_font(view)
-          local marker_width = math.max(body_font:get_width(" "), math.floor(SCALE * 4))
+          local raw_width = body_font:get_width(raw)
+          local marker_width = math.max(
+            body_font:get_width(" "), raw_width, math.floor(SCALE * 4)
+          )
           local marker_size = math.max(2, math.floor(body_font:get_height() * 0.24))
-          fragments[#fragments + 1] = {
-            source_col1 = marker.col1, source_col2 = marker.col2,
-            text = "", width = marker_width,
-            color = style.markdown_live_list_marker,
-            semantic_id = node.id .. ":marker",
-            unordered_list_marker = true,
-            widget = {
-              width = marker_width, height = markdown_live_body_line_height(view),
-              draw = function(_, _, x, y, row_height)
-                renderer.draw_rect(
-                  x + math.floor((marker_width - marker_size) / 2),
-                  y + math.floor((row_height - marker_size) / 2),
-                  marker_size, marker_size, style.markdown_live_list_marker
-                )
-              end,
-            },
-          }
+          local marker_revealed = reveal_unit_matches(
+            reveal_units, node.id, marker.col1, marker.col2
+          )
+          if marker_revealed then
+            fragments[#fragments + 1] = {
+              source_col1 = marker.col1, source_col2 = marker.col2,
+              text = raw, width = marker_width,
+              text_x_offset = math.max(0, (marker_width - raw_width) / 2),
+              color = style.markdown_live_list_marker,
+              semantic_id = node.id .. ":marker",
+              unordered_list_source_marker = true,
+            }
+          else
+            fragments[#fragments + 1] = {
+              source_col1 = marker.col1, source_col2 = marker.col2,
+              text = "", width = marker_width,
+              color = style.markdown_live_list_marker,
+              semantic_id = node.id .. ":marker",
+              unordered_list_marker = true,
+              widget = {
+                width = marker_width, height = markdown_live_body_line_height(view),
+                draw = function(_, _, x, y, row_height)
+                  renderer.draw_rect(
+                    x + math.floor((marker_width - marker_size) / 2),
+                    y + math.floor((row_height - marker_size) / 2),
+                    marker_size, marker_size, style.markdown_live_list_marker
+                  )
+                end,
+              },
+            }
+          end
         end
       end
       local task = attributes.task_checked or attributes.task_unchecked
