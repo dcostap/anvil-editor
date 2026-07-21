@@ -408,6 +408,9 @@ function LineWrapping.compute_line_breaks_from_col(doc, default_font, line, widt
   if line_text:sub(-1) == "\n" then visible_end_col = visible_end_col - 1 end
   if docview and docview.get_line_render then
     local render_line = docview:get_line_render(line)
+    if render_line and render_line.disable_wrapping then
+      return { start_col }, 0
+    end
     local has_widget = false
     for _, fragment in ipairs(render_line and render_line.fragments or {}) do
       if fragment.widget then has_widget = true break end

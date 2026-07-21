@@ -19,7 +19,7 @@ Equal-range overlapping semantic nodes, such as Tree-sitter image plus native em
 
 ## Conservative fallback
 
-A non-empty selection reveals every touched source line. If a line contains localized inline constructs or a list marker but none contains the collapsed caret, those constructs remain rendered rather than expanding merely because the caret shares their line. Lines without a localized construct still use whole-line reveal as the safe fallback. Setting `markdown_live_reveal_mode = "line"` explicitly retains unconditional whole-line reveal behavior.
+A non-empty selection reveals only semantic constructs whose source ranges actually intersect the selection. Selecting ordinary text elsewhere on the same line therefore leaves bold, italic, links, and other inline presentation intact; an unordered-list marker changes to source only when the selected range touches the marker token itself. Heading source is revealed only when a heading marker range is selected. Lines without localized constructs still use whole-line reveal as the safe fallback. Setting `markdown_live_reveal_mode = "line"` explicitly retains unconditional whole-line reveal behavior for collapsed carets.
 
 Cold, failed, truncated, and stale semantic states still use raw rendering, independent of reveal policy. After the first semantic publication, supported single-line edits retain a transactionally updated rendered line while the replacement snapshot is pending; this continuity path preserves the already chosen reveal unit rather than briefly exposing the whole line.
 
@@ -31,4 +31,4 @@ Provider cache generations encode the selected semantic units rather than a coar
 
 ## Regression evidence
 
-Focused tests cover isolated formatting and link reveal, same-line caret locality, fixed list-marker geometry, nested heading formatting, multiline comment reveal/re-hide, multi-cursor headings, line fallback, pointer freeze, IME lifetime, Source Mode, wrapping, semantic links/images, cold pending fallback, and incremental pending-render continuity.
+Focused tests cover isolated formatting and link reveal, same-line caret and selection locality, fixed list-marker geometry for carets and selections, nested heading formatting, multiline comment reveal/re-hide, multi-cursor headings, line fallback, pointer freeze, IME lifetime, Source Mode, wrapping, semantic links/images, cold pending fallback, and incremental pending-render continuity.

@@ -4348,6 +4348,49 @@ local function draw_render_fragment_text(
   local text_width = font:get_width(text, opts)
   local width = math.max(text_width, fragment.width or 0)
   local text_x = x + (fragment.text_x_offset or 0)
+  if fragment.text_lines then
+    if fragment.background then
+      renderer.draw_rect(
+        x, background_y or y, width, background_height or font:get_height(),
+        fragment.background
+      )
+    end
+    local border_width = math.max(1, math.floor(SCALE))
+    if fragment.background_border_top then
+      renderer.draw_rect(
+        x, background_y or y, width, border_width, fragment.background_border_top
+      )
+    end
+    if fragment.background_border_bottom then
+      local height = background_height or font:get_height()
+      renderer.draw_rect(
+        x, (background_y or y) + height - border_width,
+        width, border_width, fragment.background_border_bottom
+      )
+    end
+    local line_height = fragment.text_line_height or font:get_height()
+    local line_y = (background_y or y) + (fragment.text_y_padding or 0)
+    for _, line in ipairs(fragment.text_lines) do
+      local line_text = type(line) == "table" and line.text or line
+      local line_x_offset = type(line) == "table" and line.x_offset
+        or fragment.text_x_offset or 0
+      if fragment.text_line_background and line_text and line_text ~= "" then
+        local padding = fragment.text_line_background_padding or 0
+        renderer.draw_rect(
+          x + line_x_offset - padding,
+          line_y,
+          font:get_width(line_text, opts) + padding * 2,
+          line_height,
+          fragment.text_line_background
+        )
+      end
+      renderer.draw_text(
+        font, line_text or "", x + line_x_offset, line_y, color, opts
+      )
+      line_y = line_y + line_height
+    end
+    return x + width
+  end
   if fragment.background then
     renderer.draw_rect(
       x,
@@ -4393,7 +4436,7 @@ function DocView:draw_line_text(line, x, y)
   end
 
   local render_line = self:get_line_render(line)
-  if render_line and self.wrapped_settings then
+  if render_line and self.wrapped_settings and not render_line.disable_wrapping then
     local first_idx, _, count = linewrapping.get_line_idx_col_count(self, line)
     local visible_idx1 = math.max(first_idx, self.__wrapped_draw_first_idx or first_idx)
     local visible_idx2 = math.min(first_idx + count - 1, self.__wrapped_draw_last_idx or (first_idx + count - 1))
@@ -5463,7 +5506,10 @@ end
 ---@return integer height Line height
 function DocView:draw_line_gutter(line, x, y, width)
   local lh = self:get_line_height()
-  local row_height = self.wrapped_settings and lh
+  local render_line = self.wrapped_settings and self:get_line_render(line)
+  local uses_wrapped_rows = self.wrapped_settings
+    and not (render_line and render_line.disable_wrapping)
+  local row_height = uses_wrapped_rows and lh
     or self:get_position_visual_row_height(line, 1)
   local height = row_height
   if self:line_numbers_visible() and row_height >= self:get_font():get_height() then
@@ -5483,7 +5529,7 @@ function DocView:draw_line_gutter(line, x, y, width)
     x = x + style.padding.x
     common.draw_text(self:get_font(), color, line, "right", x, y, width, row_height)
   end
-  if self.wrapped_settings then
+  if uses_wrapped_rows then
     height = math.max(height, lh * linewrapping.get_wrapped_line_count(self, line))
   end
   return height

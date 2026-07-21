@@ -185,13 +185,51 @@ function SS.get_sticky_lines(doc, start_line, max_sticky_lines, level_cache)
   return res
 end
 
--- TODO: Workaround - Remove when anvil/anvil#1382 is merged and released
 local function get_visible_line_range(dv)
-  local _, y, _, y2 = dv:get_content_bounds()
-  local lh = dv:get_line_height()
-  local minline = math.max(1, math.floor((y - style.padding.y) / lh) + 1)
-  local maxline = math.min(#dv.doc.lines, math.floor((y2 - style.padding.y) / lh) + 1)
-  return minline, maxline
+  return dv:get_visible_line_range()
+end
+
+local function sticky_line_height(docview, line)
+  if docview.get_position_visual_row_height then
+    return docview:get_position_visual_row_height(line, 1)
+  end
+  return docview:get_line_height()
+end
+
+function SS.get_sticky_stack_height(docview, sticky_lines)
+  local height = 0
+  for _, line in ipairs(sticky_lines or {}) do
+    height = height + sticky_line_height(docview, line)
+  end
+  return height
+end
+
+function SS.get_sticky_layout(docview, sticky_lines, reference_line)
+  local layout = {}
+  local y = docview.position.y
+  local reference_y
+  if reference_line then
+    local _reference_x
+    _reference_x, reference_y = docview:get_line_screen_position(reference_line)
+  end
+  for i = #(sticky_lines or {}), 1, -1 do
+    local line = sticky_lines[i]
+    local height = sticky_line_height(docview, line)
+    layout[#layout + 1] = {
+      line = line,
+      y = reference_y and math.min(y, reference_y) or y,
+      height = height,
+    }
+    y = y + height
+  end
+  return layout
+end
+
+local function sticky_entry_at_y(layout, y)
+  for i = #layout, 1, -1 do
+    local entry = layout[i]
+    if y >= entry.y and y < entry.y + entry.height then return entry end
+  end
 end
 
 local function start_model_build(docview, doc, max_sticky_lines)
@@ -285,6 +323,7 @@ local function schedule_model_build(docview, doc)
   docview.sticky_scroll_model_ready = false
   docview.sticky_scroll_model_building = false
   docview.sticky_scroll_cache = {}
+  docview.sticky_scroll_level_cache = {}
 end
 
 local last_max_sticky_lines
@@ -318,7 +357,6 @@ function DocView:update(...)
   end
 
   local minline, _ = get_visible_line_range(self)
-  local lh = self:get_line_height()
 
   -- We need to find the first line that'll be visible
   -- even after the sticky lines are drawn.
@@ -335,10 +373,15 @@ function DocView:update(...)
       end
       scroll_lines = docview.sticky_scroll_cache[i]
     else
-      scroll_lines = {}
+      if not docview.sticky_scroll_cache[i] then
+        docview.sticky_scroll_cache[i] = SS.get_sticky_lines(
+          self.doc, i, sticky_scroll.max_sticky_lines, docview.sticky_scroll_level_cache
+        )
+      end
+      scroll_lines = docview.sticky_scroll_cache[i]
     end
     local _, nl_y = self:get_line_screen_position(i)
-    if nl_y >= self.position.y + lh * #scroll_lines then
+    if nl_y >= self.position.y + SS.get_sticky_stack_height(self, scroll_lines) then
       break
     end
     new_sticky_lines = scroll_lines
@@ -356,7 +399,6 @@ function DocView:draw_overlay(...)
   if not SS.should_run(self) then return res end
 
   local minline, _ = get_visible_line_range(self)
-  local lh = self:get_line_height()
 
   -- Ignore the horizontal scroll position when drawing sticky lines
   local scroll_x = self.scroll.x
@@ -364,10 +406,9 @@ function DocView:draw_overlay(...)
   local x = self:get_line_screen_position(minline)
   self.scroll.x = scroll_x
 
-  local y
   local gw, gpad = self:get_gutter_width()
   local data = SS.managed_docviews[self]
-  local _, rl_y = self:get_line_screen_position(data.reference_line)
+  local layout = SS.get_sticky_layout(self, data.sticky_lines, data.reference_line)
 
   -- We need to reset the clip, because when DocView:draw_overlay is called
   -- it's too small for us.
@@ -376,21 +417,19 @@ function DocView:draw_overlay(...)
 
   local drawn = false
   local max_y = 0
-  for i=1, #data.sticky_lines do
-    y = self.position.y + (#data.sticky_lines - i) * lh
-    local l = data.sticky_lines[i]
-    y = math.min(y, rl_y)
-    max_y = math.max(y, max_y)
+  for _, entry in ipairs(layout) do
+    local l, y, height = entry.line, entry.y, entry.height
+    max_y = math.max(y + height, max_y)
     drawn = true
-    renderer.draw_rect(self.position.x, y, self.size.x, lh, style.background)
+    renderer.draw_rect(self.position.x, y, self.size.x, height, style.background)
     self:draw_line_gutter(l, self.position.x, y, gpad and gw - gpad or gw)
     self:draw_line_text(l, x, y)
     if data.hovered_sticky_scroll_line == l then
-      renderer.draw_rect(self.position.x, y, self.size.x, lh, style.drag_overlay)
+      renderer.draw_rect(self.position.x, y, self.size.x, height, style.drag_overlay)
     end
   end
   if drawn then
-    renderer.draw_rect(self.position.x, max_y + lh, self.size.x, style.divider_size, style.divider)
+    renderer.draw_rect(self.position.x, max_y, self.size.x, style.divider_size, style.divider)
   end
 
   -- Restore clip rect
@@ -408,17 +447,20 @@ function DocView:on_mouse_pressed(button, x, y, clicks, ...)
     return old_mouse_pressed(self, button, x, y, clicks, ...)
   end
 
-  local lh = self:get_line_height()
-  local rl_x, rl_y = self:get_line_screen_position(data.reference_line)
-  if y >= math.min(rl_y + lh, lh * #data.sticky_lines + self.position.y) or y < self.position.y then
+  local layout = SS.get_sticky_layout(self, data.sticky_lines, data.reference_line)
+  local entry = sticky_entry_at_y(layout, y)
+  if not entry or y < self.position.y then
     data.sticky_lines_mouse_pressed = true
     return old_mouse_pressed(self, button, x, y, clicks, ...)
   end
 
-  local clicked_line = data.sticky_lines[#data.sticky_lines - math.floor((y - self.position.y) / lh)]
-  local col = self:get_x_offset_col(clicked_line, x - rl_x)
-  self:scroll_to_make_visible(clicked_line, col)
-  self.doc:set_selection(clicked_line, col)
+  local scroll_x = self.scroll.x
+  self.scroll.x = 0
+  local sticky_x = self:get_line_screen_position(entry.line)
+  self.scroll.x = scroll_x
+  local col = self:get_x_offset_col(entry.line, x - sticky_x)
+  self:scroll_to_make_visible(entry.line, col)
+  self.doc:set_selection(entry.line, col)
   return true
 end
 
@@ -432,10 +474,10 @@ function DocView:on_mouse_moved(x, y, ...)
     return old_mouse_moved(self, x, y, ...)
   end
 
-  local lh = self:get_line_height()
-  local _, rl_y = self:get_line_screen_position(data.reference_line)
+  local layout = SS.get_sticky_layout(self, data.sticky_lines, data.reference_line)
+  local entry = sticky_entry_at_y(layout, y)
   if self.mouse_selecting
-   or y >= math.min(rl_y + lh, lh * #data.sticky_lines + self.position.y)
+   or not entry
    or y < self.position.y
    or x < self.position.x
    or x >= self.position.x + self.size.x
@@ -445,7 +487,7 @@ function DocView:on_mouse_moved(x, y, ...)
   end
 
   self.cursor = "hand"
-  data.hovered_sticky_scroll_line = data.sticky_lines[#data.sticky_lines - math.floor((y - self.position.y) / lh)]
+  data.hovered_sticky_scroll_line = entry.line
   return true
 end
 
@@ -456,26 +498,23 @@ function DocView:scroll_to_make_visible(line, col, ...)
 
   -- We need to scroll the view to account for the sticky lines.
 
-  local lh = self:get_line_height()
   local before_scroll = self.scroll.y
   local _, ly = self:get_line_screen_position(line, col)
   ly = ly - self.position.y + (before_scroll - self.scroll.to.y)
   local data = SS.managed_docviews[self]
   -- Avoid moving the caret under the sticky lines.
-  local num_sticky_lines
+  local sticky_height
   if data.sticky_lines_mouse_pressed or self.mouse_selecting then
-    -- On mouse click, use the current number of visible sticky lines
-    -- to avoid scrolling too much.
     data.sticky_lines_mouse_pressed = false
-    num_sticky_lines = data.sticky_lines and #data.sticky_lines or 0
+    sticky_height = SS.get_sticky_stack_height(self, data.sticky_lines)
   else
-    -- When the movement wasn't caused by mouse clicks, use the maximum number
-    -- of possible sticky lines, to avoid scrolling in an inconsistent way
-    -- when adjusting for the changing number of sticky lines.
-    num_sticky_lines = sticky_scroll.max_sticky_lines
+    sticky_height = SS.get_sticky_stack_height(self, data.sticky_lines)
+    if sticky_height == 0 then
+      sticky_height = sticky_scroll.max_sticky_lines * self:get_line_height()
+    end
   end
-  if ly < num_sticky_lines * lh then
-    self.scroll.to.y = self.scroll.to.y - ((num_sticky_lines * lh) - ly)
+  if ly < sticky_height then
+    self.scroll.to.y = self.scroll.to.y - (sticky_height - ly)
     if self.notify_scroll_listeners then self:notify_scroll_listeners("sticky_scroll_adjust") end
   end
 end

@@ -203,6 +203,26 @@ test.describe("Markdown Live Editor", function()
     test.equal(visible_render_text(view, 1), "Before bold after!")
   end)
 
+  test.it("preserves nonstandard row heights while wrapped metrics rebuild during an edit", function()
+    local view, doc = make_view("# Heading\nparagraph\n## Next\nplain", "pending-row-heights.md")
+    view.size.x = 500
+    view:set_wrapping_enabled(true)
+    doc:set_selection(2, #doc.lines[2])
+    refresh(view)
+    local instance = test.not_nil(markdown_model.peek(doc))
+    local heading_height = view:get_visual_row_height(1)
+    local next_height = view:get_visual_row_height(3)
+    local _, next_y = view:get_line_screen_position(3)
+
+    view:on_text_input("!")
+    test.equal(instance.status, "pending")
+    view:invalidate_visual_metrics("pending-height-regression")
+    test.equal(view:get_visual_row_height(1), heading_height)
+    test.equal(view:get_visual_row_height(3), next_height)
+    local _, pending_next_y = view:get_line_screen_position(3)
+    test.equal(pending_next_y, next_y)
+  end)
+
   test.it("keeps revealed inline syntax stable while typing inside it", function()
     local view, doc = make_view("Before **bold** after\nplain", "pending-inline-edit.md")
     doc:set_selection(2, 1)
@@ -230,6 +250,32 @@ test.describe("Markdown Live Editor", function()
     test.equal(visible_render_text(view, 1), "Before bold after")
     test.equal(visible_render_text(view, 2), "")
     test.equal(visible_render_text(view, 3), "Following")
+  end)
+
+  test.it("preserves shifted nonstandard row heights while inserting a line", function()
+    local view, doc = make_view("# Heading\nparagraph\n## Following\nplain", "pending-structural-heights.md")
+    view.size.x = 500
+    view:set_wrapping_enabled(true)
+    doc:set_selection(2, #doc.lines[2])
+    refresh(view)
+    local heading_height = view:get_visual_row_height(1)
+    local following_height = view:get_visual_row_height(3)
+    local _, plain_y = view:get_line_screen_position(4)
+
+    view:on_text_input("\n")
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    view:invalidate_visual_metrics("pending-structural-height-regression")
+    test.equal(view:get_visual_row_height(1), heading_height)
+    test.equal(view:get_visual_row_height(4), following_height)
+    local _, pending_plain_y = view:get_line_screen_position(5)
+    test.equal(pending_plain_y, plain_y + view:get_visual_row_height(3))
+
+    view:on_text_input("\n")
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    view:invalidate_visual_metrics("repeated-pending-structural-height-regression")
+    test.equal(view:get_visual_row_height(5), following_height)
+    local _, repeated_plain_y = view:get_line_screen_position(6)
+    test.equal(repeated_plain_y, pending_plain_y + view:get_visual_row_height(4))
   end)
 
   test.it("renders inactive headings with larger row metrics and hidden markers", function()
@@ -559,6 +605,31 @@ test.describe("Markdown Live Editor", function()
 
     doc:set_selection(1, 18)
     test.equal(visible_render_text(view, 1), "before bold after italic tail")
+  end)
+
+  test.it("reveals only constructs intersected by a nonempty selection", function()
+    local view, doc = make_view("- before **bold** after *italic*\nplain", "localized-selection.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+
+    doc:set_selection(1, 3, 1, 9)
+    test.equal(visible_render_text(view, 1), "before bold after italic")
+    local body_bullet
+    for _, fragment in ipairs(test.not_nil(view:get_line_render(1)).fragments or {}) do
+      if fragment.unordered_list_marker then body_bullet = fragment break end
+    end
+    test.not_nil(test.not_nil(body_bullet).widget)
+
+    doc:set_selection(1, 12, 1, 16)
+    test.equal(visible_render_text(view, 1), "before **bold** after italic")
+    local bold_bullet
+    for _, fragment in ipairs(test.not_nil(view:get_line_render(1)).fragments or {}) do
+      if fragment.unordered_list_marker then bold_bullet = fragment break end
+    end
+    test.not_nil(test.not_nil(bold_bullet).widget)
+
+    doc:set_selection(1, 1, 1, 2)
+    test.equal(visible_render_text(view, 1), "- before bold after italic")
   end)
 
   test.it("renders emphasis text with styled fonts and normal text color", function()
@@ -1544,6 +1615,85 @@ test.describe("Markdown Live Editor", function()
 
     doc:set_selection(3, 4)
     test.equal(visible_render_text(view, 3), "| a much longer value one | two |")
+  end)
+
+  test.it("wraps long table cells inside aligned variable-height rows", function()
+    local view, doc = make_view(
+      "| Command | Action |\n| --- | --- |\n"
+        .. "| `/rp_campaign_status` | Show scene, turn, configuration, and Git state |\n"
+        .. "| `/rp_recap` | Recap the story without advancing it |\n\nplain",
+      "wrapped-table.md"
+    )
+    view.size.x = 380
+    view:set_wrapping_enabled(true)
+    doc:set_selection(6, 1)
+    refresh(view)
+
+    local row = test.not_nil(view:get_line_render(3))
+    test.equal(row.disable_wrapping, true)
+    local _, _, wrapped_rows = linewrapping.get_line_idx_col_count(view, 3)
+    test.equal(wrapped_rows, 1)
+    local wrapped_cell
+    local code_cell
+    for _, fragment in ipairs(row.fragments or {}) do
+      if fragment.table_cell and fragment.table_column == 1 then code_cell = fragment end
+      if fragment.table_cell and #(fragment.text_lines or {}) > 1 then
+        wrapped_cell = fragment
+      end
+    end
+    wrapped_cell = test.not_nil(wrapped_cell)
+    code_cell = test.not_nil(code_cell)
+    test.ok(not (code_cell.text_lines[1].text or ""):find("`", 1, true))
+    test.equal(code_cell.text_line_background, style.markdown_live_inline_code_bg)
+    test.equal(#code_cell.text_lines, 1)
+    test.equal(code_cell.background_border_bottom, style.markdown_live_table_separator)
+    test.ok(view:get_visual_row_height(3) > view:get_line_height())
+
+    view.size.x = 386
+    view:update_wrap_cache()
+    view:invalidate_line_render("test-resize", 4, 4)
+    local resized_last = test.not_nil(view:get_line_render(4))
+    local resized_header = test.not_nil(view:get_line_render(1))
+    local function column_widths(render)
+      local result = {}
+      for _, fragment in ipairs(render.fragments or {}) do
+        if fragment.table_cell then result[fragment.table_column] = fragment.width end
+      end
+      return result
+    end
+    local last_widths, header_widths = column_widths(resized_last), column_widths(resized_header)
+    test.same(header_widths, last_widths)
+    for _, fragment in ipairs(resized_header.fragments or {}) do
+      if fragment.table_cell then
+        test.equal(fragment.background_border_top, style.markdown_live_table_separator)
+      end
+    end
+
+    local delimiter_numbers = 0
+    local old_common_draw_text = common.draw_text
+    common.draw_text = function() delimiter_numbers = delimiter_numbers + 1 end
+    local gutter_ok, gutter_err = pcall(function()
+      view:draw_line_gutter(2, 0, 0, view:get_gutter_width())
+    end)
+    common.draw_text = old_common_draw_text
+    if not gutter_ok then error(gutter_err) end
+    test.equal(delimiter_numbers, 0)
+
+    local ys = {}
+    local old_draw_text = renderer.draw_text
+    local old_draw_rect = renderer.draw_rect
+    renderer.draw_text = function(font, text, x, y)
+      if text ~= "" then ys[y] = true end
+      return x + font:get_width(text)
+    end
+    renderer.draw_rect = function() end
+    local ok, err = pcall(function() view:draw_line_text(3, 0, 0) end)
+    renderer.draw_text = old_draw_text
+    renderer.draw_rect = old_draw_rect
+    if not ok then error(err) end
+    local distinct_y = 0
+    for _ in pairs(ys) do distinct_y = distinct_y + 1 end
+    test.ok(distinct_y > 1)
   end)
 
   test.it("edits canonical GFM table rows and columns through commands", function()

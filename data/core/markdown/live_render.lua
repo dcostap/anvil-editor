@@ -99,8 +99,21 @@ local function current_semantic_model(view)
   end
 end
 
-semantic_line = function(view, line)
+local function render_semantic_model(view, line)
   local instance = current_semantic_model(view)
+  if instance then return instance end
+  local owner = view.__markdown_live_owner
+  if owner and owner.semantic_pending_line and line >= owner.semantic_pending_line then return nil end
+  instance = markdown_model.peek(view.doc)
+  if instance and instance.can_render_published_line
+    and instance:can_render_published_line(line)
+  then
+    return instance
+  end
+end
+
+semantic_line = function(view, line)
+  local instance = render_semantic_model(view, line)
   if not instance then return nil end
   local cache = view.__markdown_live_semantic_line_cache
   if not cache or cache.generation ~= instance.generation then
@@ -108,7 +121,9 @@ semantic_line = function(view, line)
     view.__markdown_live_semantic_line_cache = cache
   end
   if cache.lines[line] == nil then
-    local nodes, reason = instance:nodes_for_lines(line, line, { limit = 512 })
+    local nodes, reason = instance:nodes_for_lines(line, line, {
+      limit = 512, allow_pending_result = instance.status == "pending",
+    })
     if reason == "limit" then
       core.log_quiet("Markdown semantic render query was truncated on line %d; using fallback", line)
       nodes = nil
@@ -167,6 +182,31 @@ local function node_line_range(node, line, line_text)
     line == node.source.line2 and node.source.col2 or #line_text + 1
 end
 
+local function position_before(line1, col1, line2, col2)
+  return line1 < line2 or (line1 == line2 and col1 < col2)
+end
+
+local function ordered_selection(line1, col1, line2, col2)
+  if position_before(line2, col2, line1, col1) then
+    return line2, col2, line1, col1
+  end
+  return line1, col1, line2, col2
+end
+
+local function source_intersects_selection(source, line1, col1, line2, col2)
+  line1, col1, line2, col2 = ordered_selection(line1, col1, line2, col2)
+  return position_before(source.line1, source.col1, line2, col2)
+    and position_before(line1, col1, source.line2, source.col2)
+end
+
+local function selection_touches_line(line, line_text, line1, col1, line2, col2)
+  line1, col1, line2, col2 = ordered_selection(line1, col1, line2, col2)
+  if line < line1 or line > line2 then return false end
+  local from = line == line1 and col1 or 1
+  local to = line == line2 and col2 or #line_text + 1
+  return from < to
+end
+
 local function reveal_units_for_line(view, line, state)
   state = state or current_selection_state(view)
   local selections = state and state.selections or view.doc.selections or {}
@@ -178,7 +218,51 @@ local function reveal_units_for_line(view, line, state)
     if line1 and line2 then
       local collapsed = line1 == line2 and col1 == col2
       if not collapsed then
-        if line >= math.min(line1, line2) and line <= math.max(line1, line2) then
+        local touches_line = selection_touches_line(
+          line, line_text, line1, col1, line2, col2
+        )
+        local has_localized_reveal, added = false, {}
+        for _, node in ipairs(semantic_line(view, line) or {}) do
+          if REVEAL_TYPES[node.type] then
+            has_localized_reveal = true
+            local intersects = false
+            if node.type == "heading" then
+              for _, marker in ipairs(node.marker_ranges or {}) do
+                if source_intersects_selection(marker, line1, col1, line2, col2) then
+                  intersects = true
+                  break
+                end
+              end
+            else
+              intersects = source_intersects_selection(
+                node.source, line1, col1, line2, col2
+              )
+            end
+            if intersects and not added[node.id] then
+              local unit_col1, unit_col2 = node_line_range(node, line, line_text)
+              units[#units + 1] = {
+                type = node.type, id = node.id, col1 = unit_col1, col2 = unit_col2,
+                line1 = node.source.line1, line2 = node.source.line2,
+              }
+              added[node.id] = true
+            end
+          end
+        end
+        local list_marker, list_node, list_marker_token_col2 = list_marker_for_line(view, line)
+        if list_marker then
+          local marker_source = {
+            line1 = line, col1 = list_marker.col1,
+            line2 = line, col2 = list_marker_token_col2,
+          }
+          if source_intersects_selection(marker_source, line1, col1, line2, col2) then
+            units[#units + 1] = {
+              type = "list_marker", id = list_node.id,
+              col1 = list_marker.col1, col2 = list_marker.col2,
+              line1 = line, line2 = line,
+            }
+          end
+        end
+        if touches_line and not has_localized_reveal and not list_marker then
           units[#units + 1] = { type = "line", col1 = 1, col2 = #line_text + 1, whole_line = true }
         end
       elseif config.markdown_live_reveal_mode == "line" then
@@ -1219,10 +1303,67 @@ local function table_cell_text(text, cell)
   return (text:sub(cell.col1, cell.col2 - 1):gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
+local function table_cell_presentation(view, text, header)
+  if not header then
+    local ticks = text:match("^(`+)")
+    if ticks and #text >= #ticks * 2 and text:sub(-#ticks) == ticks then
+      return {
+        text = text:sub(#ticks + 1, -#ticks - 1),
+        font = inline_style_font(view, "code"),
+        color = style.markdown_live_table_cell,
+        background = style.markdown_live_inline_code_bg,
+        nowrap = true,
+      }
+    end
+  end
+  return {
+    text = text,
+    font = header and inline_style_font(view, "strong") or markdown_live_body_font(view),
+    color = header and style.markdown_live_table_header or style.markdown_live_table_cell,
+  }
+end
+
+local function table_wrap_text(font, text, width)
+  if text == "" then return { "" } end
+  width = math.max(1, width)
+  local lines, current = {}, ""
+  local function push()
+    lines[#lines + 1] = current
+    current = ""
+  end
+  for word, spaces in text:gmatch("(%S+)(%s*)") do
+    local candidate = current == "" and word or current .. " " .. word
+    if current ~= "" and font:get_width(candidate) > width then push() end
+    if font:get_width(word) <= width then
+      current = current == "" and word or current .. " " .. word
+    else
+      for char in common.utf8_chars(word) do
+        if current ~= "" and font:get_width(current .. char) > width then push() end
+        current = current .. char
+      end
+    end
+    if spaces ~= "" and current ~= "" and font:get_width(current .. " ") <= width then
+      -- Word spacing is normalized visually; source remains authoritative when revealed.
+    end
+  end
+  if current ~= "" or #lines == 0 then push() end
+  return lines
+end
+
+local function table_available_width(view)
+  -- Tables may use the full editor viewport even when prose has a narrower
+  -- configured wrap column. This matches reading-mode table layout and avoids
+  -- wrapping an otherwise fitting grid merely because of the prose guide.
+  local scrollbar_width = view.v_scrollbar.expanded_size or style.expanded_scrollbar_size
+  local width = view.size.x - view:get_gutter_width() - scrollbar_width - style.padding.x
+  return math.max(math.floor(SCALE * 160), width)
+end
+
 local function table_layout(view, table_node)
-  local instance = current_semantic_model(view)
+  local instance = render_semantic_model(view, table_node.source.line1)
   if not instance then return nil end
   local font = markdown_live_body_font(view)
+  local available_width = table_available_width(view)
   local line2 = table_node.source.line2
   if table_node.source.col2 == 1 and line2 > table_node.source.line1 then line2 = line2 - 1 end
   local line1 = table_node.source.line1
@@ -1234,10 +1375,11 @@ local function table_layout(view, table_node)
   local cache = view.__markdown_live_table_layout_cache
   if not cache or cache.generation ~= instance.generation
     or cache.font ~= font or cache.font_size ~= font:get_size()
+    or cache.available_width ~= available_width
   then
     cache = {
       generation = instance.generation, font = font,
-      font_size = font:get_size(), layouts = {},
+      font_size = font:get_size(), available_width = available_width, layouts = {},
     }
     view.__markdown_live_table_layout_cache = cache
   end
@@ -1266,19 +1408,41 @@ local function table_layout(view, table_node)
     rows[line] = row
   end
 
-  local pad = math.max(font:get_width(" "), SCALE)
-  local widths = {}
+  local pad = math.max(font:get_width(" ") * 1.5, SCALE * 6)
+  local vertical_pad = math.max(math.floor(SCALE * 5), 2)
+  local widths, presentations = {}, {}
+  local minimums = {}
   for column = 1, columns do widths[column] = pad * 4 end
   for line = line1, line2 do
     if line ~= line1 + 1 then
       local row = rows[line]
+      presentations[line] = {}
       for column, cell in ipairs(row.cells) do
-        local cell_font = line == line1 and inline_style_font(view, "strong") or font
+        local presentation = table_cell_presentation(
+          view, table_cell_text(row.text, cell), line == line1
+        )
+        presentations[line][column] = presentation
         widths[column] = math.max(
-          widths[column], cell_font:get_width(table_cell_text(row.text, cell)) + pad * 2
+          widths[column], presentation.font:get_width(presentation.text) + pad * 2
         )
       end
     end
+  end
+  for column = 1, columns do
+    local header_text = table_cell_text(rows[line1].text, rows[line1].cells[column])
+    minimums[column] = math.max(
+      pad * 2 + inline_style_font(view, "strong"):get_width(header_text),
+      pad * 2 + font:get_width("MMMM")
+    )
+    for row_line = line1, line2 do
+      local presentation = presentations[row_line] and presentations[row_line][column]
+      if presentation and presentation.nowrap then
+        minimums[column] = math.max(
+          minimums[column], presentation.font:get_width(presentation.text) + pad * 2
+        )
+      end
+    end
+    widths[column] = math.max(widths[column], minimums[column])
   end
   local alignments = {}
   for column, cell in ipairs(rows[line1 + 1].cells) do
@@ -1287,12 +1451,49 @@ local function table_layout(view, table_node)
     alignments[column] = left and right and "center" or right and "right" or "left"
   end
   local separator_width = math.max(font:get_width(" "), math.max(1, SCALE * 3))
-  local total_width = separator_width * (columns + 1)
+  local chrome_width = separator_width * (columns + 1)
+  local content_budget = math.max(1, available_width - chrome_width)
+  local natural_content_width, minimum_content_width = 0, 0
+  for column, width in ipairs(widths) do
+    natural_content_width = natural_content_width + width
+    minimum_content_width = minimum_content_width + minimums[column]
+  end
+  if natural_content_width > content_budget then
+    local target = math.max(content_budget, minimum_content_width)
+    local flexible = math.max(1, natural_content_width - minimum_content_width)
+    local shrink = natural_content_width - target
+    for column, width in ipairs(widths) do
+      local share = (width - minimums[column]) / flexible
+      widths[column] = math.max(minimums[column], width - shrink * share)
+    end
+  end
+  local total_width = chrome_width
   for _, width in ipairs(widths) do total_width = total_width + width end
+  local row_heights, wrapped_cells = {}, {}
+  local text_line_height = markdown_live_body_line_height(view)
+  for row_line = line1, line2 do
+    if row_line ~= line1 + 1 then
+      wrapped_cells[row_line] = {}
+      local row = rows[row_line]
+      local max_lines = 1
+      for column, cell in ipairs(row.cells) do
+        local presentation = presentations[row_line][column]
+        local wrapped = table_wrap_text(
+          presentation.font, presentation.text, widths[column] - pad * 2
+        )
+        wrapped_cells[row_line][column] = wrapped
+        max_lines = math.max(max_lines, #wrapped)
+      end
+      row_heights[row_line] = max_lines * text_line_height + vertical_pad * 2
+    end
+  end
   local layout = {
     id = table_node.id, line1 = line1, line2 = line2,
     delimiter_line = line1 + 1, rows = rows, columns = columns,
     widths = widths, alignments = alignments, padding = pad,
+    vertical_padding = vertical_pad, text_line_height = text_line_height,
+    row_heights = row_heights, wrapped_cells = wrapped_cells,
+    presentations = presentations,
     separator_width = separator_width, total_width = total_width,
   }
   cache.layouts[table_node.id] = layout
@@ -1326,8 +1527,7 @@ local function table_row_fragments(view, table_node, line)
 
   local fragments = {}
   local header = line == layout.line1
-  local cell_font = header and inline_style_font(view, "strong")
-    or markdown_live_body_font(view)
+  local row_height = layout.row_heights[line] or markdown_live_body_line_height(view)
   local function border_fragment(separator, id)
     local line_width = math.max(1, math.floor(SCALE))
     return {
@@ -1337,7 +1537,7 @@ local function table_row_fragments(view, table_node, line)
       table_border = true,
       widget = {
         width = layout.separator_width,
-        height = markdown_live_body_line_height(view),
+        height = row_height,
         draw = function(_, _, x, y, row_height)
           renderer.draw_rect(x, y, layout.separator_width, row_height,
             style.markdown_live_table_background)
@@ -1345,19 +1545,37 @@ local function table_row_fragments(view, table_node, line)
             x + math.floor((layout.separator_width - line_width) / 2), y,
             line_width, row_height, style.markdown_live_table_separator
           )
+          if header then
+            renderer.draw_rect(
+              x, y, layout.separator_width, line_width,
+              style.markdown_live_table_separator
+            )
+          end
+          if not header then
+            renderer.draw_rect(
+              x, y + row_height - line_width, layout.separator_width, line_width,
+              style.markdown_live_table_separator
+            )
+          end
         end,
       },
     }
   end
   for column, cell in ipairs(row.cells) do
     local cell_text = table_cell_text(row.text, cell)
-    local text_width = cell_font:get_width(cell_text)
+    local presentation = layout.presentations[line][column]
+    local cell_font = presentation.font
     local alignment = layout.alignments[column]
-    local text_x_offset = alignment == "right"
-      and math.max(layout.padding, layout.widths[column] - text_width - layout.padding)
-      or alignment == "center"
-      and math.max(layout.padding, (layout.widths[column] - text_width) / 2)
-      or layout.padding
+    local text_lines = {}
+    for _, wrapped in ipairs(layout.wrapped_cells[line][column]) do
+      local text_width = cell_font:get_width(wrapped)
+      local offset = alignment == "right"
+        and math.max(layout.padding, layout.widths[column] - text_width - layout.padding)
+        or alignment == "center"
+        and math.max(layout.padding, (layout.widths[column] - text_width) / 2)
+        or layout.padding
+      text_lines[#text_lines + 1] = { text = wrapped, x_offset = offset }
+    end
     local separator = row.separators[column]
     fragments[#fragments + 1] = border_fragment(
       separator, table_node.id .. ":pipe:" .. line .. ":" .. column
@@ -1366,13 +1584,19 @@ local function table_row_fragments(view, table_node, line)
       source_col1 = cell.col1, source_col2 = cell.col2,
       text = cell_text,
       width = layout.widths[column],
-      text_x_offset = text_x_offset,
+      text_x_offset = text_lines[1] and text_lines[1].x_offset or layout.padding,
+      text_lines = text_lines,
+      text_line_height = layout.text_line_height,
+      text_y_padding = layout.vertical_padding,
+      text_line_background = presentation.background,
+      text_line_background_padding = presentation.background and math.max(1, SCALE * 2) or nil,
       table_alignment = alignment,
-      font = header and cell_font or nil,
-      color = header and style.markdown_live_table_header
-        or style.markdown_live_table_cell,
+      font = cell_font,
+      color = presentation.color,
       background = style.markdown_live_table_background,
       background_full_height = true,
+      background_border_top = header and style.markdown_live_table_separator or nil,
+      background_border_bottom = not header and style.markdown_live_table_separator or nil,
       semantic_id = table_node.id .. ":cell:" .. line .. ":" .. column,
       table_cell = true, table_header = header, table_column = column,
     }
@@ -1727,11 +1951,31 @@ local function clone_render_line(render_line)
   return clone
 end
 
+local function render_line_metric_height(view, render_line)
+  local height = markdown_live_body_line_height(view)
+  for _, fragment in ipairs(render_line and render_line.fragments or {}) do
+    if fragment.font then
+      height = math.max(
+        height, math.floor(fragment.font:get_height() * config.line_height)
+      )
+    end
+    if fragment.widget and fragment.widget.height then
+      height = math.max(height, fragment.widget.height)
+    end
+  end
+  return height
+end
+
 local function apply_inline_edit_to_render(render_line, current_text, edit)
   local start_col, end_col = edit.col1, edit.col2
   local replacement = edit.text or ""
   if not start_col or not end_col or start_col > end_col then
     return nil
+  end
+  if current_text == "" and #(render_line.fragments or {}) == 0 then
+    render_line.fragments = {
+      { source_col1 = 1, source_col2 = 1, text = "" },
+    }
   end
 
   local owner_index
@@ -1857,11 +2101,22 @@ local function capture_optimistic_renders(view, transaction)
     local range = ranges[1]
     local cache = view.__line_render_cache
     local next_lines = {}
-    if #ranges == 1 and range and cache and cache.lines then
+    local previous_metric_state = owner.pending_metric_state
+      or { heights = owner.published_line_heights or {} }
+    local next_metric_state
+    if #ranges == 1 and range then
       local old_line1 = range.old_line1 or 1
       local old_line2 = range.old_line2 or old_line1
       local delta = range.line_delta or 0
-      for old_line, cached in pairs(cache.lines) do
+      next_metric_state = {
+        source = previous_metric_state,
+        old_line1 = old_line1, old_line2 = old_line2,
+        new_line1 = range.new_line1 or old_line1,
+        new_line2 = range.new_line2 or old_line1,
+        line_delta = delta,
+        overrides = {},
+      }
+      for old_line, cached in pairs(cache and cache.lines or {}) do
         local render = cached.render_line ~= false and cached.render_line or nil
         local new_line
         if old_line < old_line1 then new_line = old_line
@@ -1889,18 +2144,19 @@ local function capture_optimistic_renders(view, transaction)
         local current = table.concat(current_parts, "\n")
         local split = combined == current and split_optimistic_render(transformed, combined) or nil
         if split and #split == new_line2 - new_line1 + 1 then
-          local height = pre_edit_lines[edit.line1] and pre_edit_lines[edit.line1].height
-            or view:get_visual_row_height(edit.line1)
           for i, render in ipairs(split) do
+            local render_height = render_line_metric_height(view, render)
             next_lines[new_line1 + i - 1] = {
               revision = view.doc.text_revision, source_text = render.source_text,
-              render_line = render, height = height,
+              render_line = render, height = render_height,
             }
+            next_metric_state.overrides[new_line1 + i - 1] = render_height
           end
         end
       end
     end
     owner.optimistic_lines = next_lines
+    owner.pending_metric_state = next_metric_state
     owner.pre_edit_lines = nil
     local retained = 0
     for _ in pairs(next_lines) do retained = retained + 1 end
@@ -1951,6 +2207,17 @@ local function optimistic_render(view, line)
   local text = (view.doc.lines[line] or ""):gsub("\n$", "")
   if entry and entry.revision == view.doc.text_revision and entry.source_text == text then
     return entry
+  end
+end
+
+local function retained_metric_height(state, line)
+  if not state then return nil end
+  if state.heights then return state.heights[line] end
+  local override = state.overrides and state.overrides[line]
+  if override then return override end
+  if line < state.new_line1 then return retained_metric_height(state.source, line) end
+  if line > state.new_line2 then
+    return retained_metric_height(state.source, line - state.line_delta)
   end
 end
 
@@ -2078,6 +2345,7 @@ function provider:line_generation(view, line)
   if view_in_source_mode(view) then return "source" end
   local optimistic = optimistic_render(view, line)
   return "font:" .. self:generation(view)
+    .. ":width:" .. tostring(table_available_width(view))
     .. (optimistic and ":optimistic:" .. tostring(optimistic.revision) or "")
 end
 
@@ -2201,12 +2469,12 @@ local function heading_render_line(view, text, heading, reveal_units)
   })
 end
 
-function provider:line_height(view, line)
+local function compute_line_height(view, line)
   if view_in_source_mode(view) then return nil end
   if line_is_wrapped(view, line) then return nil end
   local optimistic = optimistic_render(view, line)
   if optimistic and not current_semantic_model(view) then return optimistic.height end
-  if not current_semantic_model(view) then return nil end
+  if not render_semantic_model(view, line) then return nil end
   local in_comment = line_in_semantic_comment(view, line)
   local text = (view.doc.lines[line] or ""):gsub("\n$", "")
   local body_height = markdown_live_body_line_height(view)
@@ -2214,10 +2482,11 @@ function provider:line_height(view, line)
     local table_node = table_for_line(view, line)
     if table_node then
       local layout = table_layout(view, table_node)
-      if layout and line == layout.delimiter_line
-        and #reveal_units_for_line(view, line) == 0
-      then
-        return math.max(1, math.floor(SCALE))
+      if layout and #reveal_units_for_line(view, line) == 0 then
+        if line == layout.delimiter_line then
+          return math.max(1, math.floor(SCALE))
+        end
+        if layout.row_heights[line] then return layout.row_heights[line] end
       end
     end
   end
@@ -2261,13 +2530,31 @@ function provider:line_height(view, line)
   return body_height
 end
 
+function provider:line_height(view, line)
+  local owner = view.__markdown_live_owner
+  if not current_semantic_model(view) then
+    local retained = owner and retained_metric_height(owner.pending_metric_state, line)
+    if retained then return retained end
+  end
+  local height = compute_line_height(view, line)
+  if current_semantic_model(view) and owner then
+    owner.published_line_heights = owner.published_line_heights or {}
+    if height and height ~= view:get_line_height() then
+      owner.published_line_heights[line] = height
+    else
+      owner.published_line_heights[line] = nil
+    end
+  end
+  return height
+end
+
 function provider:render_line(view, line)
   if view_in_source_mode(view) then
     return { raw_passthrough = true }
   end
   local optimistic = optimistic_render(view, line)
   if optimistic and not current_semantic_model(view) then return optimistic.render_line end
-  if not current_semantic_model(view) then return { raw_passthrough = true } end
+  if not render_semantic_model(view, line) then return { raw_passthrough = true } end
   local in_comment = line_in_semantic_comment(view, line)
   local fenced = not in_comment and fenced_code_for_line(view, line)
   if fenced then
@@ -2305,6 +2592,23 @@ function provider:render_line(view, line)
   end
   local heading = semantic_heading_for_line(view, text, line)
   if heading then return heading_render_line(view, text, heading, reveal_units) end
+
+  local table_node = table_for_line(view, line)
+  local table_revealed = false
+  for _, unit in ipairs(reveal_units) do
+    if unit.whole_line then table_revealed = true break end
+  end
+  if table_node and not table_revealed then
+    local fragments, layout = table_row_fragments(view, table_node, line)
+    if fragments and layout then
+      return prose_render_line(view, text, {
+        fragments = fragments,
+        disable_wrapping = true,
+        table_row = true,
+        table_row_height = layout.row_heights[line],
+      })
+    end
+  end
 
   local image_span = image_only_span(view, text, line)
   if image_span then
@@ -2458,7 +2762,11 @@ local function invalidate_semantic_publication(view, instance, reason)
   view.__markdown_live_semantic_line_cache = nil
   view.__markdown_live_reference_prepare_pending = nil
   local owner = view.__markdown_live_owner
-  if owner then owner.optimistic_lines = nil end
+  if owner then
+    owner.optimistic_lines = nil
+    owner.pending_metric_state = nil
+    owner.published_line_heights = {}
+  end
   local pending_line = owner and owner.semantic_pending_line
   if owner and reason ~= "pending" then owner.semantic_pending_line = nil end
   local ranges
@@ -2587,8 +2895,8 @@ local function invalidate_selection_lines(view, new_state, old_state)
             for line = fenced.source.line1, fenced.effective_line2 do lines[line] = true end
           end
         end
-        if line1 == line2 and state.selections[i + 1] == state.selections[i + 3] then
-          for _, unit in ipairs(reveal_units_for_line(view, line1, state)) do
+        for _, endpoint in ipairs({ line1, line2 }) do
+          for _, unit in ipairs(reveal_units_for_line(view, endpoint, state)) do
             if unit.line1 and unit.line2 then
               for line = unit.line1, unit.line2 do lines[line] = true end
             end

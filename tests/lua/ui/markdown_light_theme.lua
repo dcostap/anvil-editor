@@ -41,13 +41,15 @@ test.describe("Markdown Live Preview light theme", function()
         "markdown_live_image_background",
         "markdown_live_attachment_bg",
         "markdown_live_embed_background",
-        "markdown_live_table_background",
       }) do
         test.equal(style[key], style.background2, key .. " did not follow the light palette")
         test.ok(style[key] ~= dark_background, key .. " retained the dark palette")
       end
       test.equal(style.markdown_live_embed_text, style.text)
+      test.equal(style.markdown_live_table_background, style.background)
+      test.equal(style.markdown_live_table_header, style.text)
       test.equal(style.markdown_live_table_cell, style.text)
+      test.equal(style.markdown_live_table_separator, style.divider)
     end)
   end)
 

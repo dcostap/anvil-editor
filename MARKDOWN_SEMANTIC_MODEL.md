@@ -12,7 +12,7 @@ Implemented July 10, 2026 as the worker/publication portion of Phase 1 in `MARKD
 6. Parse/query captures remain in a refcounted native result handle. Per-query interval indexes answer source-line ranges without scanning every capture; Lua adopts only the bounded matches. Superseded/closed models release their Lua ownership deterministically while queued jobs retain their own native reference.
 7. Publication checks parse generation, `Doc.text_revision`, filename, absolute filename, syntax identity, and continued Markdown eligibility. Published snapshots include the coalesced changed source-line range.
 8. Text transactions debounce and supersede old requests. Running native work observes job and shared cancel tokens.
-9. Pending, stale, failed, unsupported, and malformed input remains on the raw-source path.
+9. Pending changed/unsafe ranges, stale revisions, failed states, unsupported constructs, and malformed input remain on the raw-source path. Rendering may explicitly read the last publication for unchanged lines outside a non-structural pending range so visual metrics do not collapse while the next snapshot is computed.
 
 The model exposes capture and node queries; it is not connected to drawing yet. Phase 2 render/cache work consumes this model instead of parsing during draw or hit testing.
 

@@ -138,6 +138,9 @@ function Model:new(doc)
     request = nil,
     debounce_serial = 0,
     pending_changed_range = nil,
+    pending_structural_change = false,
+    active_changed_range = nil,
+    active_structural_change = false,
     changed_ranges = {},
     semantic_id_by_source = {},
     semantic_id_by_native = {},
@@ -285,6 +288,8 @@ function Model:publish(result, revision, signature, generation, changed_range)
     self.diagnostics.full_publications = self.diagnostics.full_publications + 1
   end
   self.changed_ranges = changed_range and { common.merge({}, changed_range) } or {}
+  self.active_changed_range = nil
+  self.active_structural_change = false
   core.log_quiet(
     "Markdown model published generation=%d revision=%d bytes=%d lines=%d parse_ms=%.3f total_ms=%.3f",
     self.generation,
@@ -320,6 +325,9 @@ function Model:submit(reason)
   local text = source_text(doc)
   local changed_range = self.pending_changed_range
   self.pending_changed_range = nil
+  self.active_changed_range = changed_range and common.merge({}, changed_range) or nil
+  self.active_structural_change = self.pending_structural_change
+  self.pending_structural_change = false
   self.status = "pending"
   self.reason = reason or "parse requested"
   self.diagnostics.requests = self.diagnostics.requests + 1
@@ -397,6 +405,7 @@ function Model:schedule(reason, transaction)
       self.pending_changed_range.line1 = math.min(self.pending_changed_range.line1, line1)
       self.pending_changed_range.line2 = math.max(self.pending_changed_range.line2, line2)
     end
+    if (range.line_delta or 0) ~= 0 then self.pending_structural_change = true end
   end
   self.debounce_serial = self.debounce_serial + 1
   local serial = self.debounce_serial
@@ -409,6 +418,19 @@ function Model:schedule(reason, transaction)
     self:submit(reason)
   end)
   return true
+end
+
+function Model:can_render_published_line(line)
+  local doc = self:doc()
+  if not (doc and self.result and self.published_metadata == metadata_signature(doc)) then return false end
+  if self.status == "ready" then return self.published_revision == doc.text_revision end
+  if self.status ~= "pending" then return false end
+  local range = self.pending_changed_range or self.active_changed_range
+  if not range then return false end
+  if self.pending_structural_change or self.active_structural_change then
+    return line < range.line1
+  end
+  return line < range.line1 or line > range.line2
 end
 
 function Model:ensure()
@@ -453,9 +475,14 @@ local function extension_capture(name)
 end
 
 function Model:captures_for_lines(kind, line1, line2, opts)
-  if self.status ~= "ready" or not self.result then return nil, self.status end
+  opts = opts or {}
+  if not self.result or (self.status ~= "ready"
+    and not (self.status == "pending" and opts.allow_pending_result))
+  then
+    return nil, self.status
+  end
   local result_kind = kind == "inline" and "usage" or "outline"
-  local captures = self.result:captures_for_lines(result_kind, line1, line2, opts or {})
+  local captures = self.result:captures_for_lines(result_kind, line1, line2, opts)
   if kind == "inline" then
     local parents = {}
     for _, capture in ipairs(captures) do

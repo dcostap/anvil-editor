@@ -8,7 +8,7 @@ Implemented July 10, 2026 as the fourth Phase 2 slice in `MARKDOWN_LIVE_EDITOR_P
 
 ## Multi-cursor reveal
 
-The Markdown provider evaluates every selection range in the view-local selection state. Multiple carets reveal each touched source line independently; lines between disjoint carets remain rendered. Cache invalidation targets the union of old/new selection lines.
+The Markdown provider evaluates every selection range in the view-local selection state. Collapsed carets reveal their containing construct. Non-empty selections reveal only constructs whose source ranges intersect the selected range, rather than switching every touched line to source presentation. Multiple carets and ranges remain independent, and lines between disjoint selections remain rendered. Cache invalidation targets the union of old/new selection lines and any intersected multiline reveal units.
 
 ## Viewport anchoring
 
@@ -22,6 +22,12 @@ Once a current semantic snapshot has produced a rendered line, ordinary single-l
 
 The optimistic entry is accepted only when its reconstructed source exactly matches the current Document revision. Unsupported or structural edits remain conservative, and the first parse of a cold Document still uses raw source. Publication discards all optimistic entries and re-adopts authoritative semantic output. Provider cache signatures no longer query transient semantic state, so unrelated resident rows also remain visually stable while a parse is pending.
 
+Visual-metric reconstruction follows the same continuity rule. During an ordinary non-structural edit, unchanged lines may read the last published semantic result only outside the coalesced changed range. This preserves heading, image, compact-table, and other nonstandard row heights when wrapping forces a full metric-tree rebuild. Delimiter-sensitive and structural edits mark their affected suffix unsafe, so stale semantics are never used where block structure may have changed.
+
+Structural edits preserve geometry without querying stale shifted semantics. The view maintains published per-line metric results and represents each pending line insertion/removal as an O(1) line-map layer over those results. Unaffected heights therefore shift to their new line numbers immediately, while split rendered lines derive their own fragment/widget heights. Repeated Enter presses chain line maps without rescanning the Document or collapsing headings and other tall rows to the base Editor height.
+
+Sticky Lines consume the same visual-row metrics as the document. Stacked Markdown headings use each source line's resolved height for backgrounds, text placement, hit testing, hover, and scroll occlusion rather than multiplying the base Editor line height. While the asynchronous hierarchy model rebuilds after an edit, Sticky Lines use a cached direct hierarchy calculation from current source instead of disappearing for the debounce interval.
+
 ## Red-green evidence
 
 Before implementation:
@@ -29,4 +35,4 @@ Before implementation:
 - changing a row above the viewport moved the anchored line by the full height delta; and
 - IME composition did not create a line-render interaction snapshot.
 
-Focused tests now verify stable screen y, synchronized current/target scroll positions, IME begin/end ownership, pointer freeze, disjoint multi-cursor reveal behavior, repeated pending paragraph edits, pre-edit capture after selection invalidation, and source-revealed inline edits without raw-frame flicker.
+Focused tests now verify stable screen y, synchronized current/target scroll positions, IME begin/end ownership, pointer freeze, disjoint multi-cursor reveal behavior, repeated pending paragraph edits, pre-edit capture after selection invalidation, wrapped metric-tree reconstruction with nonstandard row heights, single and repeated pending line insertion with shifted custom heights, and source-revealed inline edits without raw-frame flicker.
