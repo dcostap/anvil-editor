@@ -2304,6 +2304,69 @@ test.describe("Markdown Live Editor", function()
     test.equal(final_drawn, 1)
   end)
 
+  test.it("keeps an active image visible after mouse selection when wrapping is enabled", function()
+    local image_path = USERDIR .. PATHSEP .. "markdown-live-active-wrap-" .. system.get_process_id() .. ".png"
+    local fp = io.open(image_path, "wb")
+    test.not_nil(fp)
+    fp:write("png")
+    fp:close()
+    local image_url = common.basename and common.basename(image_path) or image_path:match("[^" .. PATHSEP .. "]+$")
+    local source = "![" .. string.rep("long image description ", 8) .. "](" .. image_url .. ")"
+    local view, doc = make_view(source .. "\nother", USERDIR .. PATHSEP .. "note.md")
+    view.size.x = view:get_font():get_width("long image description long")
+    doc:set_selection(2, 1)
+    local old_active = core.active_view
+    local old_load_image = canvas.load_image
+    local old_draw_canvas = renderer.draw_canvas
+    local old_draw_text = renderer.draw_text
+    local old_draw_text_known_bounds = renderer.draw_text_known_bounds
+    local drawn = 0
+    canvas.load_image = function()
+      return {
+        get_size = function() return 80, 40 end,
+        scaled = function(self) return self end,
+      }
+    end
+    renderer.draw_canvas = function() drawn = drawn + 1 end
+    renderer.draw_text = function(font, text, x, _, _, opts)
+      return x + font:get_width(text, opts)
+    end
+    renderer.draw_text_known_bounds = function() end
+
+    local function draw_image_line()
+      view:update_wrap_cache()
+      drawn = 0
+      view:draw_line_text(1, 0, 0)
+      return drawn, view:get_visual_row_count_for_line(1)
+    end
+
+    refresh(view)
+    view:set_wrapping_enabled(true)
+    local inactive_drawn, inactive_rows = draw_image_line()
+    core.active_view = view
+    local x, y = view:get_line_screen_position(1)
+    local performed = command.perform("doc:set-cursor", x + 1, y + 1)
+    local held_drawn, held_rows = draw_image_line()
+    view:on_mouse_released("left", x + 1, y + 1)
+    local released_drawn, released_rows = draw_image_line()
+    local released_last_row_height = view:get_position_visual_row_height(1, #source + 1)
+
+    renderer.draw_text_known_bounds = old_draw_text_known_bounds
+    renderer.draw_text = old_draw_text
+    renderer.draw_canvas = old_draw_canvas
+    canvas.load_image = old_load_image
+    core.active_view = old_active
+    os.remove(image_path)
+    test.equal(performed, true)
+    test.equal(inactive_drawn, 1)
+    test.equal(inactive_rows, 1)
+    test.equal(held_drawn, 1)
+    test.equal(held_rows, 1)
+    test.equal(released_drawn, 1)
+    test.ok(released_rows > 1)
+    test.ok(released_last_row_height > view:get_line_height())
+  end)
+
   test.it("renders wikilink image embeds from Obsidian attachmentFolderPath", function()
     local root = USERDIR .. PATHSEP .. "markdown-live-attachments-" .. system.get_process_id()
     local obsidian = root .. PATHSEP .. ".obsidian"

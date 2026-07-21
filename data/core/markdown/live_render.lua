@@ -997,6 +997,7 @@ local function image_only_render_line(view, text, line, span, active)
   end
   return {
     source_text = text,
+    disable_wrapping = true,
     fragments = {
       { source_col1 = 1, source_col2 = span.col1, hidden = true },
       image,
@@ -2636,15 +2637,42 @@ local function heading_render_line(view, text, heading, reveal_units)
   })
 end
 
-local function compute_line_height(view, line)
+local function render_line_widget_height(render_line)
+  local max_height
+  for _, fragment in ipairs(render_line and render_line.fragments or {}) do
+    if fragment.widget and fragment.widget.height then
+      max_height = math.max(max_height or 0, fragment.widget.height)
+    end
+  end
+  return max_height
+end
+
+local function compute_line_height(view, line, entry)
   if view_in_source_mode(view) then return nil end
-  if line_is_wrapped(view, line) then return nil end
+  local wrapped = line_is_wrapped(view, line)
   local optimistic = optimistic_render(view, line)
-  if optimistic and not current_semantic_model(view) then return optimistic.height end
+  if not wrapped and optimistic and not current_semantic_model(view) then return optimistic.height end
   if not render_semantic_model(view, line) then return nil end
   local in_comment = line_in_semantic_comment(view, line)
   local text = (view.doc.lines[line] or ""):gsub("\n$", "")
   local body_height = markdown_live_body_line_height(view)
+  if wrapped then
+    local image_span = not in_comment and image_only_span(view, text, line)
+    local final_row = entry and entry.row_in_line
+      and entry.row_in_line == view:get_visual_row_count_for_line(line)
+    if image_span and final_row then
+      local reveal_units = reveal_units_for_line(view, line)
+      local image_revealed = reveal_unit_matches(
+        reveal_units, image_span.semantic_id, image_span.col1, image_span.col2
+      )
+      if image_revealed then
+        local render_line = image_only_render_line(view, text, line, image_span, true)
+        local max_height = render_line_widget_height(render_line)
+        if max_height then return math.max(body_height, max_height) end
+      end
+    end
+    return nil
+  end
   if not in_comment then
     local table_node = table_for_line(view, line)
     if table_node then
@@ -2679,14 +2707,7 @@ local function compute_line_height(view, line)
       reveal_units, image_span.semantic_id, image_span.col1, image_span.col2
     )
     local render_line = image_only_render_line(view, text, line, image_span, image_revealed)
-    local max_height
-    if render_line then
-      for _, fragment in ipairs(render_line.fragments or {}) do
-        if fragment.widget and fragment.widget.height then
-          max_height = math.max(max_height or 0, fragment.widget.height)
-        end
-      end
-    end
+    local max_height = render_line_widget_height(render_line)
     if max_height then return math.max(body_height, max_height) end
   end
   local max_height
@@ -2699,16 +2720,17 @@ local function compute_line_height(view, line)
   return body_height
 end
 
-function provider:line_height(view, line)
+function provider:line_height(view, line, entry)
   local owner = view.__markdown_live_owner
-  if not current_semantic_model(view) then
+  local wrapped = line_is_wrapped(view, line)
+  if not wrapped and not current_semantic_model(view) then
     local retained = owner and retained_metric_height(owner.pending_metric_state, line)
     if retained then return retained end
   end
-  local height = compute_line_height(view, line)
+  local height = compute_line_height(view, line, entry)
   if current_semantic_model(view) and owner then
     owner.published_line_heights = owner.published_line_heights or {}
-    if height and height ~= view:get_line_height() then
+    if not wrapped and height and height ~= view:get_line_height() then
       owner.published_line_heights[line] = height
     else
       owner.published_line_heights[line] = nil
@@ -2781,7 +2803,6 @@ function provider:render_line(view, line)
 
   local image_span = image_only_span(view, text, line)
   if image_span then
-    if line_is_wrapped(view, line) then return { raw_passthrough = true } end
     local image_revealed = reveal_unit_matches(
       reveal_units, image_span.semantic_id, image_span.col1, image_span.col2
     )

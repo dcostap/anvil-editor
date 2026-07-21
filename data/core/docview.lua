@@ -4535,28 +4535,48 @@ function DocView:draw_line_text(line, x, y)
     local first_idx, _, count = linewrapping.get_line_idx_col_count(self, line)
     local visible_idx1 = math.max(first_idx, self.__wrapped_draw_first_idx or first_idx)
     local visible_idx2 = math.min(first_idx + count - 1, self.__wrapped_draw_last_idx or (first_idx + count - 1))
-    local lh = self:get_line_height()
     local text_y_offset = self:get_line_text_y_offset()
     local begin_width = self.wrapped_line_offsets[line] or 0
+    local first_visual_row = self:get_visual_row(line, 1)
+    local first_row_y_offset = self:get_visual_row_y_offset(first_visual_row)
     local _, indent_size = self.doc:get_indent_info()
     local fragments = self:iter_line_render_fragments(render_line)
     for idx = visible_idx1, visible_idx2 do
       local _, row_start = linewrapping.get_idx_line_col(self, idx)
       local next_line, row_end = linewrapping.get_idx_line_col(self, idx + 1)
-      if next_line ~= line then row_end = #(self.doc.lines[line] or "") end
+      local last_row = next_line ~= line
+      if last_row then row_end = #(self.doc.lines[line] or "") end
       local tx = x + (render_line.x_offset or 0)
         + (row_start ~= 1 and begin_width or 0)
-      local ty = y + text_y_offset + (idx - first_idx) * lh
+      local visual_row = self:get_visual_row(line, row_start)
+      local row_y = y + self:get_visual_row_y_offset(visual_row) - first_row_y_offset
+      local row_height = self:get_visual_row_height(visual_row)
+      local ty = row_y + text_y_offset
       for _, fragment in ipairs(fragments) do
         local col1 = fragment.source_col1 or 1
         local col2 = fragment.source_col2 or col1
         local from = math.max(col1, row_start)
         local to = math.min(col2, row_end)
-        if from < to and not fragment.hidden then
+        local anchored_widget = col1 == col2
+          and fragment.widget and fragment.widget.draw
+          and col1 >= row_start
+          and (col1 < row_end or (last_row and col1 == row_end))
+        if anchored_widget and not fragment.hidden then
+          local anchor_x = x + self:get_line_render_col_x_offset(render_line, col1)
+          local ok, err = pcall(
+            fragment.widget.draw, self, fragment, anchor_x, row_y, row_height
+          )
+          if not ok then
+            core.log_quiet(
+              "DocView wrapped anchored widget draw failed for %s: %s",
+              self.doc:get_name(), tostring(err)
+            )
+          end
+        elseif from < to and not fragment.hidden then
           local font = render_fragment_font(self, fragment)
           font:set_tab_size(indent_size)
           if fragment.widget and fragment.widget.draw and from == col1 and to == col2 then
-            local ok, err = pcall(fragment.widget.draw, self, fragment, tx, ty, lh)
+            local ok, err = pcall(fragment.widget.draw, self, fragment, tx, row_y, row_height)
             if not ok then
               core.log_quiet("DocView wrapped render widget draw failed for %s: %s", self.doc:get_name(), tostring(err))
             end
@@ -4578,7 +4598,7 @@ function DocView:draw_line_text(line, x, y)
         end
       end
     end
-    return lh * count
+    return self:get_visual_row_y_offset(first_visual_row + count) - first_row_y_offset
   end
   if render_line then
     local tx = x + (render_line.x_offset or 0)
