@@ -14,6 +14,12 @@ The existing Phase 2 renderer remains deliberately narrow, but heading render li
 
 The local prototype parser remains as the conservative rendering fallback while the semantic model is cold, pending, unavailable, or while syntax families have not yet migrated. Removing that fallback is Phase 3 work, not hidden in this bridge.
 
+## Live Preview typography
+
+Markdown Live Preview uses bundled proportional Inter faces for prose, headings, links, lists, quotes, tables, frontmatter, callouts, and revealed Markdown source outside raw blocks. Regular, Italic, SemiBold, and SemiBold Italic files provide real face variants; strong text and headings use SemiBold without synthetic emboldening or duplicate shifted overdraw. Body metrics follow the Editor's current text size so zoom remains coherent. The variants are exposed as `style.markdown_live_font`, `style.markdown_live_italic_font`, `style.markdown_live_bold_font`, and `style.markdown_live_bold_italic_font`, and are not assigned to the general UI or ordinary Document views.
+
+Inline code, fenced and indented code blocks, math source, raw HTML blocks, and Source Mode retain `style.code_font`. While the semantic model is cold or pending, the conservative raw fallback can also temporarily use the normal code font until the current snapshot is published. The Inter font is distributed under the SIL Open Font License recorded in `licenses/licenses.md`.
+
 ## Contextual invalidation
 
 A generic line-render-provider transaction hook can widen ordinary changed-line invalidation. Markdown widens edits to the suffix because fenced/raw-block and reference context can affect later lines. Sparse line-render caches clear only resident entries in that range. Line-count changes already invalidate shifted suffixes; semantic publication now also re-adopts those suffixes after pending fallback rendering.
@@ -28,7 +34,8 @@ Red-green tests cover:
 - heading-contained and triple-delimiter emphasis identities;
 - retention of an unaffected heading cache entry across a same-line edit/publication;
 - semantic re-adoption after a line-shifting edit rendered while pending; and
-- a fence edit changing a later line from raw passthrough to rendered heading.
+- a fence edit changing a later line from raw passthrough to rendered heading; and
+- proportional prose/heading rendering with monospaced inline, fenced, and Source Mode code paths.
 
 The representative 100 KiB benchmark (`tests/lua/benchmarks/markdown_live_render.lua`) measured on July 10, 2026:
 

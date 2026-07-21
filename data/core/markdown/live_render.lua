@@ -317,31 +317,60 @@ local function semantic_formatting_spans(view, line_text, line)
   return spans
 end
 
+local function markdown_live_scaled_font(view, source, size)
+  size = size or view:get_font():get_size()
+  if source:get_size() == size then return source end
+  local cache = view.__markdown_live_scaled_fonts or {}
+  view.__markdown_live_scaled_fonts = cache
+  local fonts = cache[source]
+  if not fonts then
+    fonts = {}
+    cache[source] = fonts
+  end
+  if not fonts[size] then fonts[size] = source:copy(size) end
+  return fonts[size]
+end
+
+local function markdown_live_body_font(view)
+  return markdown_live_scaled_font(view, style.markdown_live_font)
+end
+
+local function markdown_live_body_line_height(view)
+  return math.floor(markdown_live_body_font(view):get_height() * config.line_height)
+end
+
 local function heading_font(view, level)
   view.__markdown_live_heading_fonts = view.__markdown_live_heading_fonts or {}
   local cache = view.__markdown_live_heading_fonts
-  local font = view:get_font()
+  local font = markdown_live_scaled_font(view, style.markdown_live_bold_font)
   local size = font:get_size()
   local scale = ({ 1.65, 1.45, 1.30, 1.18, 1.08, 1.0 })[level] or 1
   local key = tostring(font) .. ":" .. tostring(size) .. ":" .. tostring(level)
   if not cache[key] then
-    cache[key] = font:copy(math.max(1, math.floor(size * scale)), { bold = true })
+    cache[key] = font:copy(math.max(1, math.floor(size * scale)))
   end
   return cache[key]
 end
 
-local function inline_style_font(view, span_type, base_font)
+local function inline_style_font(view, span_type, base_font, base_bold)
   view.__markdown_live_inline_fonts = view.__markdown_live_inline_fonts or {}
   local cache = view.__markdown_live_inline_fonts
-  local font = span_type == "code" and style.code_font or base_font or view:get_font()
-  local size = base_font and base_font:get_size() or font:get_size()
+  local font
+  if span_type == "code" then
+    font = style.code_font
+  elseif span_type == "strong_emphasis" or base_bold and span_type == "emphasis" then
+    font = style.markdown_live_bold_italic_font
+  elseif span_type == "strong" then
+    font = style.markdown_live_bold_font
+  elseif span_type == "emphasis" then
+    font = style.markdown_live_italic_font
+  else
+    font = base_font or style.markdown_live_font
+  end
+  local size = base_font and base_font:get_size() or view:get_font():get_size()
   local key = tostring(font) .. ":" .. tostring(size) .. ":" .. tostring(span_type)
   if not cache[key] then
-    local attrs = {}
-    if span_type == "strong" or span_type == "strong_emphasis" then attrs.bold = true end
-    if span_type == "emphasis" or span_type == "strong_emphasis" then attrs.italic = true end
-    if span_type == "strikethrough" then attrs.strikethrough = true end
-    cache[key] = font:copy(size, attrs)
+    cache[key] = font:copy(size)
   end
   return cache[key]
 end
@@ -459,11 +488,11 @@ local function semantic_formatting_fragments(view, line_text, line, reveal_units
         return {
           source_col1 = col1, source_col2 = col2,
           text = line_text:sub(col1, col2 - 1),
-          font = code and inline_style_font(view, "code", opts.base_font)
-            or font_type ~= "normal" and inline_style_font(view, font_type, opts.base_font)
+          font = code and inline_style_font(view, "code", opts.base_font, opts.base_bold)
+            or font_type ~= "normal"
+              and inline_style_font(view, font_type, opts.base_font, opts.base_bold)
             or opts.base_font,
           color = opts.color or normal_text_color(),
-          overdraw = bold or nil,
           strikethrough = strike or nil,
           background = code and style.markdown_live_inline_code_bg
             or highlight and style.markdown_live_highlight_bg or nil,
@@ -824,19 +853,21 @@ local function image_only_render_line(view, text, line, span, active)
   if not image then return nil end
   image.semantic_id = span.semantic_id
   if active and image.widget then
-    local leading_width = span.col1 > 1 and view:get_font():get_width(text:sub(1, span.col1 - 1)) or 0
+    local body_font = markdown_live_body_font(view)
+    local leading_width = span.col1 > 1
+      and body_font:get_width(text:sub(1, span.col1 - 1)) or 0
     image.source_col1 = #text + 1
     image.source_col2 = #text + 1
-    image.draw_x_offset = leading_width - view:get_font():get_width(text)
-    image.draw_y_offset = view:get_line_height() + image_vertical_padding()
-    image.widget.height = image.widget.height + view:get_line_height()
+    image.draw_x_offset = leading_width - body_font:get_width(text)
+    image.draw_y_offset = markdown_live_body_line_height(view) + image_vertical_padding()
+    image.widget.height = image.widget.height + markdown_live_body_line_height(view)
     return {
       source_text = text,
       fragments = { image },
     }
   end
   if image.widget and span.col1 > 1 then
-    image.draw_x_offset = view:get_font():get_width(text:sub(1, span.col1 - 1))
+    image.draw_x_offset = markdown_live_body_font(view):get_width(text:sub(1, span.col1 - 1))
   end
   return {
     source_text = text,
@@ -891,10 +922,10 @@ local function decorate_link_fragment(view, line, span, fragment, opts)
   end
   local font_type = bold and italic and "strong_emphasis"
     or bold and "strong" or italic and "emphasis" or "normal"
-  fragment.font = code and inline_style_font(view, "code", opts.base_font)
-    or font_type ~= "normal" and inline_style_font(view, font_type, opts.base_font)
+  fragment.font = code and inline_style_font(view, "code", opts.base_font, opts.base_bold)
+    or font_type ~= "normal"
+      and inline_style_font(view, font_type, opts.base_font, opts.base_bold)
     or opts.base_font or fragment.font
-  fragment.overdraw = bold or nil
   fragment.strikethrough = strike or nil
   fragment.background = code and style.markdown_live_inline_code_bg
     or highlight and style.markdown_live_highlight_bg or fragment.background
@@ -971,7 +1002,8 @@ local function embed_preview_fragment(view, line_text, span)
   local resolution = resolve_live_link(view, link)
   local preview = embed_preview_for_resolution(resolution)
   if not preview or #preview == 0 then return nil end
-  local line_height = view:get_line_height()
+  local body_font = markdown_live_body_font(view)
+  local line_height = markdown_live_body_line_height(view)
   local padding = math.max(2, math.floor(4 * SCALE))
   return {
     source_col1 = #line_text + 1, source_col2 = #line_text + 1,
@@ -985,13 +1017,13 @@ local function embed_preview_fragment(view, line_text, span)
       height = line_height + #preview * line_height + padding * 2,
       cursor = "hand",
       draw = function(_, fragment, x, y)
-        local card_x = x - view:get_font():get_width(line_text)
+        local card_x = x - body_font:get_width(line_text)
         local card_y = y + (fragment.draw_y_offset or line_height)
         local width = math.max(1, view.size.x)
         renderer.draw_rect(card_x, card_y, width, #preview * line_height + padding * 2,
           style.markdown_live_embed_background)
         for i, text in ipairs(preview) do
-          renderer.draw_text(view:get_font(), text, card_x + padding,
+          renderer.draw_text(body_font, text, card_x + padding,
             card_y + padding + (i - 1) * line_height, style.markdown_live_embed_text)
         end
       end,
@@ -1168,7 +1200,7 @@ end
 local function table_layout(view, table_node)
   local instance = current_semantic_model(view)
   if not instance then return nil end
-  local font = view:get_font()
+  local font = markdown_live_body_font(view)
   local line2 = table_node.source.line2
   if table_node.source.col2 == 1 and line2 > table_node.source.line1 then line2 = line2 - 1 end
   local line1 = table_node.source.line1
@@ -1272,7 +1304,8 @@ local function table_row_fragments(view, table_node, line)
 
   local fragments = {}
   local header = line == layout.line1
-  local cell_font = header and inline_style_font(view, "strong") or view:get_font()
+  local cell_font = header and inline_style_font(view, "strong")
+    or markdown_live_body_font(view)
   local function border_fragment(separator, id)
     local line_width = math.max(1, math.floor(SCALE))
     return {
@@ -1282,7 +1315,7 @@ local function table_row_fragments(view, table_node, line)
       table_border = true,
       widget = {
         width = layout.separator_width,
-        height = view:get_line_height(),
+        height = markdown_live_body_line_height(view),
         draw = function(_, _, x, y, row_height)
           renderer.draw_rect(x, y, layout.separator_width, row_height,
             style.markdown_live_table_background)
@@ -1534,8 +1567,9 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
             semantic_id = node.id .. ":marker",
           }
         else
-          local marker_width = math.max(view:get_font():get_width(" "), math.floor(SCALE * 4))
-          local marker_size = math.max(2, math.floor(view:get_font():get_height() * 0.24))
+          local body_font = markdown_live_body_font(view)
+          local marker_width = math.max(body_font:get_width(" "), math.floor(SCALE * 4))
+          local marker_size = math.max(2, math.floor(body_font:get_height() * 0.24))
           fragments[#fragments + 1] = {
             source_col1 = marker.col1, source_col2 = marker.col2,
             text = "", width = marker_width,
@@ -1543,7 +1577,7 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
             semantic_id = node.id .. ":marker",
             unordered_list_marker = true,
             widget = {
-              width = marker_width, height = view:get_line_height(),
+              width = marker_width, height = markdown_live_body_line_height(view),
               draw = function(_, _, x, y, row_height)
                 renderer.draw_rect(
                   x + math.floor((marker_width - marker_size) / 2),
@@ -1606,6 +1640,37 @@ local function inline_fragments(line_text, line, view, reveal_units)
   end
   table.sort(fragments, function(a, b) return (a.source_col1 or 1) < (b.source_col1 or 1) end)
   return fragments
+end
+
+local function prose_render_line(view, line_text, render_line)
+  local font = markdown_live_body_font(view)
+  local fragments, cursor = {}, 1
+  for _, fragment in ipairs(render_line.fragments or {}) do
+    local col1 = math.max(1, fragment.source_col1 or cursor)
+    local col2 = math.max(col1, fragment.source_col2 or col1)
+    if col1 > cursor then
+      fragments[#fragments + 1] = {
+        source_col1 = cursor, source_col2 = col1,
+        text = line_text:sub(cursor, col1 - 1), font = font,
+      }
+    end
+    if not fragment.font then fragment.font = font end
+    fragments[#fragments + 1] = fragment
+    cursor = math.max(cursor, col2)
+  end
+  if cursor <= #line_text then
+    fragments[#fragments + 1] = {
+      source_col1 = cursor, source_col2 = #line_text + 1,
+      text = line_text:sub(cursor), font = font,
+    }
+  elseif #fragments == 0 then
+    fragments[1] = {
+      source_col1 = 1, source_col2 = 1, text = "", font = font,
+    }
+  end
+  render_line.source_text = line_text
+  render_line.fragments = fragments
+  return render_line
 end
 
 local view_in_source_mode
@@ -1724,9 +1789,15 @@ function decoration_provider:line_background(view, line)
   return nil
 end
 
+function provider:generation(view)
+  local font = markdown_live_body_font(view)
+  return tostring(font) .. ":" .. tostring(font:get_size())
+end
+
 function provider:line_generation(view, line)
   if view_in_source_mode(view) then return "source" end
   local parts = {}
+  parts[#parts + 1] = "font:" .. self:generation(view)
   for _, unit in ipairs(reveal_units_for_line(view, line)) do
     parts[#parts + 1] = table.concat({
       unit.type or "", unit.id or "", unit.col1 or 0, unit.col2 or 0,
@@ -1781,6 +1852,7 @@ local function heading_content_fragments(view, text, heading, font, reveal_units
   local fragments, occupied = {}, {}
   for _, fragment in ipairs(semantic_link_fragments(view, text, heading.line, reveal_units, {
     base_font = font,
+    base_bold = true,
   })) do
     if fragment.source_col1 >= heading.content_col1 and fragment.source_col2 <= heading.content_col2 then
       add_fragment(fragments, occupied, fragment)
@@ -1790,6 +1862,7 @@ local function heading_content_fragments(view, text, heading, font, reveal_units
     col1 = heading.content_col1,
     col2 = heading.content_col2,
     base_font = font,
+    base_bold = true,
     color = style.text,
   })) do
     add_fragment(fragments, occupied, fragment)
@@ -1850,14 +1923,14 @@ local function heading_render_line(view, text, heading, reveal_units)
   local heading_revealed = reveal_unit_matches(
     reveal_units, heading.semantic_id, heading.source_col1, heading.source_col2
   )
-  return {
+  return prose_render_line(view, text, {
     source_text = text,
     semantic_id = heading.semantic_id,
     semantic_generation = heading.semantic_generation,
     fragments = heading_revealed
       and active_heading_fragments(view, text, heading, font, reveal_units)
       or inactive_heading_fragments(view, text, heading, font, reveal_units),
-  }
+  })
 end
 
 function provider:line_height(view, line)
@@ -1865,6 +1938,7 @@ function provider:line_height(view, line)
   local in_comment = line_in_semantic_comment(view, line)
   if line_is_wrapped(view, line) then return nil end
   local text = (view.doc.lines[line] or ""):gsub("\n$", "")
+  local body_height = markdown_live_body_line_height(view)
   if not in_comment then
     local table_node = table_for_line(view, line)
     if table_node then
@@ -1879,7 +1953,7 @@ function provider:line_height(view, line)
   local heading = semantic_heading_for_line(view, text, line)
   if heading then
     local height = math.max(
-      view:get_line_height(),
+      body_height,
       math.floor(heading_font(view, heading.level):get_height() * config.line_height)
     )
     local render_line = heading_render_line(view, text, heading, reveal_units_for_line(view, line))
@@ -1904,7 +1978,7 @@ function provider:line_height(view, line)
         end
       end
     end
-    if max_height then return math.max(view:get_line_height(), max_height) end
+    if max_height then return math.max(body_height, max_height) end
   end
   local max_height
   for _, fragment in ipairs(inline_fragments(text, line, view, reveal_units)) do
@@ -1912,7 +1986,8 @@ function provider:line_height(view, line)
       max_height = math.max(max_height or 0, fragment.widget.height)
     end
   end
-  if max_height then return math.max(view:get_line_height(), max_height) end
+  if max_height then return math.max(body_height, max_height) end
+  return body_height
 end
 
 function provider:render_line(view, line)
@@ -1946,13 +2021,13 @@ function provider:render_line(view, line)
   local setext_marker = semantic_setext_marker_for_line(view, text, line)
   if setext_marker then
     if reveal_unit_matches(reveal_units, setext_marker.id, 1, #text + 1) then
-      return { raw_passthrough = true }
+      return prose_render_line(view, text, { fragments = {} })
     end
-    return {
+    return prose_render_line(view, text, {
       source_text = text,
       semantic_id = setext_marker.id .. ":setext-marker",
       fragments = { { source_col1 = 1, source_col2 = #text + 1, hidden = true } },
-    }
+    })
   end
   local heading = semantic_heading_for_line(view, text, line)
   if heading then return heading_render_line(view, text, heading, reveal_units) end
@@ -1968,20 +2043,20 @@ function provider:render_line(view, line)
       for _, fragment in ipairs(render_line.fragments or {}) do
         if fragment.semantic_id then decorate_link_fragment(view, line, image_span, fragment) end
       end
-      return render_line
+      return prose_render_line(view, text, render_line)
     end
   end
 
   local fragments = inline_fragments(text, line, view, reveal_units)
   if #fragments > 0 then
     local _, semantic_generation = semantic_line(view, line)
-    return {
+    return prose_render_line(view, text, {
       source_text = text,
       semantic_generation = semantic_generation,
       fragments = fragments,
-    }
+    })
   end
-  if #reveal_units > 0 then return { raw_passthrough = true } end
+  return prose_render_line(view, text, { fragments = {} })
 end
 
 function live.image_at_position(view, x, y)

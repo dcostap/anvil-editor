@@ -211,6 +211,10 @@ if core.fuzzy_searcher_install_global_keymaps then
 end
 -- Matching UI/code fonts with separate objects so UI and code scaling can diverge.
 local font_path = DATADIR .. "/fonts/CaskaydiaCoveNerdFontMono-Regular.ttf"
+local markdown_live_font_path = DATADIR .. "/fonts/Inter-Regular.ttf"
+local markdown_live_bold_font_path = DATADIR .. "/fonts/Inter-SemiBold.ttf"
+local markdown_live_italic_font_path = DATADIR .. "/fonts/Inter-Italic.ttf"
+local markdown_live_bold_italic_font_path = DATADIR .. "/fonts/Inter-SemiBoldItalic.ttf"
 local font_size = 15 * SCALE
 local max_default_font_group = 10 -- native renderer FONT_FALLBACK_MAX
 
@@ -233,11 +237,11 @@ local default_font_fallbacks = {
   { "C:/Windows/Fonts/msjh.ttc", "C:/Windows/Fonts/mingliub.ttc" },
 }
 
-local function load_optional_font(paths, fonts)
+local function load_optional_font(paths, fonts, options)
   if #fonts >= max_default_font_group then return end
   for _, path in ipairs(paths) do
     if system.get_file_info(path) then
-      local ok, font_or_error = pcall(renderer.font.load, path, font_size)
+      local ok, font_or_error = pcall(renderer.font.load, path, font_size, options)
       if ok and font_or_error then
         table.insert(fonts, font_or_error)
         core.log_quiet("Default font fallback loaded: %s", path)
@@ -248,17 +252,30 @@ local function load_optional_font(paths, fonts)
   end
 end
 
-local function load_text_font()
+local function load_text_font(primary_path, options, fallback_options)
   local fonts = {
-    renderer.font.load(font_path, font_size, { ligatures = true }),
+    renderer.font.load(primary_path, font_size, options or { ligatures = true }),
   }
   for _, paths in ipairs(default_font_fallbacks) do
-    load_optional_font(paths, fonts)
+    load_optional_font(paths, fonts, fallback_options)
   end
   return renderer.font.group(fonts)
 end
-style.font = load_text_font()
-style.code_font = load_text_font()
+style.font = load_text_font(font_path)
+style.code_font = load_text_font(font_path)
+-- Live Preview prose uses a proportional face; source mode, fenced/indented
+-- code, inline code, math, and every non-Markdown editor retain code_font.
+style.markdown_live_font = load_text_font(markdown_live_font_path)
+style.markdown_live_bold_font = load_text_font(
+  markdown_live_bold_font_path, nil, { ligatures = true, bold = true }
+)
+style.markdown_live_italic_font = load_text_font(
+  markdown_live_italic_font_path, nil, { ligatures = true, italic = true }
+)
+style.markdown_live_bold_italic_font = load_text_font(
+  markdown_live_bold_italic_font_path, nil,
+  { ligatures = true, bold = true, italic = true }
+)
 -- First-party editable file tree.
 require_core_plugin "custom_nagview"
 require_core_plugin "filetree"

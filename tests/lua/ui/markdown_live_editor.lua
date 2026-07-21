@@ -53,6 +53,26 @@ local function refresh(view)
   return result
 end
 
+local function live_body_font(view)
+  local font = style.markdown_live_font
+  local size = view:get_font():get_size()
+  return font:get_size() == size and font or font:copy(size)
+end
+
+local function primary_font_path(font)
+  local paths = font:get_path()
+  return type(paths) == "table" and paths[1] or paths
+end
+
+local function visible_render_text(view, line)
+  local rendered = test.not_nil(view:get_line_render(line))
+  local visible = {}
+  for _, fragment in ipairs(view:iter_line_render_fragments(rendered)) do
+    if not fragment.hidden then visible[#visible + 1] = fragment.text or "" end
+  end
+  return table.concat(visible)
+end
+
 test.describe("Markdown Live Editor", function()
   test.before_each(function(context)
     context.old_markdown_live_editor = config.markdown_live_editor
@@ -70,6 +90,34 @@ test.describe("Markdown Live Editor", function()
     test.equal(md.__markdown_live_attached, true)
     refresh(txt)
     test.equal(txt.__markdown_live_attached, nil)
+  end)
+
+  test.it("uses Inter for Live Preview prose while keeping code monospaced", function()
+    local view, doc = make_view(
+      "Plain **bold**, *italic*, ***both***, and `code`\n```lua\nreturn true\n```\n", "note.md"
+    )
+    doc:set_selection(1, 1)
+    refresh(view)
+
+    local prose_path, strong_path, italic_path, both_path, code_path, strong
+    for _, fragment in ipairs(view:iter_line_render_fragments(view:get_line_render(1))) do
+      if fragment.text == "Plain " then prose_path = primary_font_path(fragment.font) end
+      if fragment.text == "bold" then
+        strong, strong_path = fragment, primary_font_path(fragment.font)
+      end
+      if fragment.text == "italic" then italic_path = primary_font_path(fragment.font) end
+      if fragment.text == "both" then both_path = primary_font_path(fragment.font) end
+      if fragment.text == "code" then code_path = primary_font_path(fragment.font) end
+    end
+    test.ok(prose_path and prose_path:match("Inter%-Regular%.ttf$"), prose_path)
+    test.ok(strong_path and strong_path:match("Inter%-SemiBold%.ttf$"), strong_path)
+    test.ok(italic_path and italic_path:match("Inter%-Italic%.ttf$"), italic_path)
+    test.ok(
+      both_path and both_path:match("Inter%-SemiBoldItalic%.ttf$"), both_path
+    )
+    test.equal(strong.overdraw, nil)
+    test.ok(code_path and not code_path:match("Inter%-Regular%.ttf$"), code_path)
+    test.equal(view:get_line_render(3), nil)
   end)
 
   test.it("toggles and persists view-local Source Mode without moving editor state", function()
@@ -129,6 +177,11 @@ test.describe("Markdown Live Editor", function()
 
     local base_lh = view:get_line_height()
     test.ok(view:get_visual_row_height(1) > base_lh)
+    local heading_text_font
+    for _, fragment in ipairs(view:get_line_render(1).fragments) do
+      if fragment.text == "Title" then heading_text_font = fragment.font break end
+    end
+    test.ok(primary_font_path(test.not_nil(heading_text_font)):match("Inter%-SemiBold%.ttf$"))
     test.equal(view:get_col_x_offset(1, 1), 0)
     test.equal(view:get_col_x_offset(1, 3), 0)
     test.ok(view:get_col_x_offset(1, 8) > 0)
@@ -273,9 +326,9 @@ test.describe("Markdown Live Editor", function()
       if fragment.text and fragment.text ~= "" then seen[fragment.text] = fragment end
     end
     test.equal(seen.bold.background, style.markdown_live_highlight_bg)
-    test.equal(seen.bold.overdraw, true)
+    test.ok(primary_font_path(seen.bold.font):match("Inter%-SemiBold%.ttf$"))
     test.equal(seen.italic.background, style.markdown_live_highlight_bg)
-    test.equal(seen.inner.overdraw, true)
+    test.ok(primary_font_path(seen.inner.font):match("Inter%-SemiBoldItalic%.ttf$"))
     test.ok(seen.inner.font ~= view:get_font())
   end)
 
@@ -288,14 +341,14 @@ test.describe("Markdown Live Editor", function()
     for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
       if fragment.text and fragment.text ~= "" then seen[fragment.text] = fragment end
     end
-    test.equal(seen["*"].overdraw, true)
+    test.ok(primary_font_path(seen["*"].font):match("Inter%-SemiBold%.ttf$"))
     local before, after
     for text, fragment in pairs(seen) do
       if text:find("before", 1, true) then before = fragment end
       if text:find("after", 1, true) then after = fragment end
     end
-    test.equal(test.not_nil(before).overdraw, true)
-    test.equal(test.not_nil(after).overdraw, true)
+    test.ok(primary_font_path(test.not_nil(before).font):match("Inter%-SemiBold%.ttf$"))
+    test.ok(primary_font_path(test.not_nil(after).font):match("Inter%-SemiBold%.ttf$"))
     test.equal(seen.hide, nil)
   end)
 
@@ -310,7 +363,7 @@ test.describe("Markdown Live Editor", function()
     test.ok(wait_status(instance, "ready"), instance.reason)
     test.equal(
       view:get_col_x_offset(2, #"still hidden%%" + 1),
-      view:get_font():get_width("still hidden%%")
+      live_body_font(view):get_width("still hidden%%")
     )
   end)
 
@@ -318,7 +371,7 @@ test.describe("Markdown Live Editor", function()
     local view, doc = make_view("before %x%\nsecret\n%%\nplain", "note.md")
     doc:set_selection(4, 1)
     refresh(view)
-    test.equal(view:get_col_x_offset(2, #"secret" + 1), view:get_font():get_width("secret"))
+    test.equal(view:get_col_x_offset(2, #"secret" + 1), live_body_font(view):get_width("secret"))
     doc:remove(1, 9, 1, 10)
     test.equal(view:get_line_render(2), nil)
     local instance = test.not_nil(markdown_model.peek(doc))
@@ -343,8 +396,11 @@ test.describe("Markdown Live Editor", function()
     doc:set_selection(1, 5)
     test.ok(view:get_visual_row_height(1) > view:get_line_height())
     test.ok(view:get_col_x_offset(1, 2) > 0)
-    test.ok(view:get_col_x_offset(1, 4) > view:get_font():get_width("##") * 1.2)
-    test.ok(view:get_col_x_offset(1, #"## Title ##" + 1) > view:get_font():get_width("## Title ##") * 1.2)
+    local heading_font = view:get_line_render(1).fragments[1].font
+    test.equal(view:get_col_x_offset(1, 4), heading_font:get_width("## "))
+    test.equal(
+      view:get_col_x_offset(1, #"## Title ##" + 1), heading_font:get_width("## Title ##")
+    )
   end)
 
   test.it("keeps drag-selection heading layout stable until release", function()
@@ -417,7 +473,7 @@ test.describe("Markdown Live Editor", function()
     local view, doc = make_view("See [[Note|Alias]]", "note.md")
     refresh(view)
     doc:set_selection(1, 1)
-    local raw_width = view:get_font():get_width("See [[Note|Alias]]")
+    local raw_width = live_body_font(view):get_width("See [[Note|Alias]]")
     test.equal(view:get_col_x_offset(1, #"See [[Note|Alias]]" + 1), raw_width)
   end)
 
@@ -440,9 +496,9 @@ test.describe("Markdown Live Editor", function()
     test.equal(seen.italic.color, style.text)
     test.equal(seen.both.color, style.text)
     test.equal(seen.mid.color, style.text)
-    test.equal(seen.bold.overdraw, true)
-    test.equal(seen.italic.overdraw, nil)
-    test.equal(seen.both.overdraw, true)
+    test.ok(primary_font_path(seen.bold.font):match("Inter%-SemiBold%.ttf$"))
+    test.ok(primary_font_path(seen.italic.font):match("Inter%-Italic%.ttf$"))
+    test.ok(primary_font_path(seen.both.font):match("Inter%-SemiBoldItalic%.ttf$"))
     test.ok(seen.bold.font ~= view:get_font())
     test.ok(seen.italic.font ~= view:get_font())
     test.ok(seen.both.font ~= view:get_font())
@@ -502,7 +558,8 @@ test.describe("Markdown Live Editor", function()
     test.equal(seen.mark.background, style.markdown_live_highlight_bg)
     test.equal(seen.gone.strikethrough, true)
     test.not_nil(seen["*"])
-    local rendered_width = view:get_font():get_width("code mark gone and *literal*")
+    local rendered_width = seen.code.font:get_width("code")
+      + live_body_font(view):get_width(" mark gone and *literal*")
     test.equal(view:get_col_x_offset(1, #(source:match("[^\n]+")) + 1), rendered_width)
   end)
 
@@ -513,7 +570,10 @@ test.describe("Markdown Live Editor", function()
     refresh(view)
     test.equal(view:get_col_x_offset(2, #"```" + 1), 0)
     test.equal(view:get_col_x_offset(3, #"# hidden heading" + 1), 0)
-    test.equal(view:get_visual_row_height(3), view:get_line_height())
+    test.equal(
+      view:get_visual_row_height(3),
+      math.floor(live_body_font(view):get_height() * config.line_height)
+    )
     test.equal(view:get_col_x_offset(4, #"```" + 1), 0)
   end)
 
@@ -528,8 +588,8 @@ test.describe("Markdown Live Editor", function()
       if fragment.text == "hide" then content = fragment end
     end
     test.equal(test.not_nil(marker).color, style.markdown_live_hidden_syntax)
-    test.equal(marker.overdraw, true)
-    test.equal(test.not_nil(content).overdraw, true)
+    test.ok(primary_font_path(marker.font):match("Inter%-SemiBold%.ttf$"))
+    test.ok(primary_font_path(test.not_nil(content).font):match("Inter%-SemiBold%.ttf$"))
   end)
 
   test.it("reveals and re-hides every line of a multiline comment construct", function()
@@ -537,7 +597,9 @@ test.describe("Markdown Live Editor", function()
     local view, doc = make_view(source, "note.md")
     doc:set_selection(1, 3)
     refresh(view)
-    test.equal(view:get_col_x_offset(2, #"middle" + 1), view:get_font():get_width("middle"))
+    test.equal(
+      view:get_col_x_offset(2, #"middle" + 1), live_body_font(view):get_width("middle")
+    )
     doc:set_selection(4, 1)
     test.equal(view:get_col_x_offset(2, #"middle" + 1), 0)
   end)
@@ -557,7 +619,10 @@ test.describe("Markdown Live Editor", function()
     test.equal(visible_text(1), "before ")
     test.equal(visible_text(2), " after")
     doc:set_selection(1, 10)
-    test.equal(view:get_col_x_offset(1, #"before %%hidden" + 1), view:get_font():get_width("before %%hidden"))
+    test.equal(
+      view:get_col_x_offset(1, #"before %%hidden" + 1),
+      live_body_font(view):get_width("before %%hidden")
+    )
   end)
 
   test.it("renders short Markdown lines even when line wrapping is enabled", function()
@@ -596,9 +661,9 @@ test.describe("Markdown Live Editor", function()
     end
     link = test.not_nil(link)
     test.not_nil(link.link_resolution)
-    test.equal(link.overdraw, true)
+    test.ok(primary_font_path(link.font):match("Inter%-SemiBold%.ttf$"))
     test.not_nil(link.semantic_id)
-    test.equal(view:get_col_x_offset(1, #"**[Label](target.md)**" + 1), view:get_font():get_width("Label"))
+    test.equal(view:get_col_x_offset(1, #"**[Label](target.md)**" + 1), link.font:get_width("Label"))
   end)
 
   test.it("renders decoded semantic links inside headings", function()
@@ -631,7 +696,7 @@ test.describe("Markdown Live Editor", function()
     refresh(view)
     test.equal(
       view:get_col_x_offset(1, #"[](folder/target.md)" + 1),
-      view:get_font():get_width("folder/target.md")
+      live_body_font(view):get_width("folder/target.md")
     )
   end)
 
@@ -660,11 +725,11 @@ test.describe("Markdown Live Editor", function()
     refresh(view)
     doc:set_selection(2, 1)
 
-    local alias_width = view:get_font():get_width("See Alias")
+    local alias_width = live_body_font(view):get_width("See Alias")
     test.equal(view:get_col_x_offset(1, #"See [[Note|Alias]]" + 1), alias_width)
 
     doc:set_selection(1, 1)
-    local raw_width = view:get_font():get_width("See [[Note|Alias]]")
+    local raw_width = live_body_font(view):get_width("See [[Note|Alias]]")
     test.equal(view:get_col_x_offset(1, #"See [[Note|Alias]]" + 1), raw_width)
   end)
 
@@ -1049,7 +1114,7 @@ test.describe("Markdown Live Editor", function()
     markdown_decoration = test.not_nil(markdown_decoration)
     test.equal(markdown_decoration:line_background(view, 1), style.markdown_live_code_background)
     doc:set_selection(7, 6)
-    test.equal(view:get_line_render(7), nil)
+    test.equal(visible_render_text(view, 7), "line  ")
   end)
 
   test.it("resolves and presents full, collapsed, and shortcut reference links", function()
@@ -1147,7 +1212,7 @@ test.describe("Markdown Live Editor", function()
     test.equal(markdown_decoration:line_background(view, 6), nil)
 
     doc:set_selection(2, 3)
-    test.equal(view:get_line_render(2), nil)
+    test.equal(visible_render_text(view, 2), "aliases: [Example]")
   end)
 
   test.it("presents semantic callout headers, bodies, and unknown-type fallbacks", function()
@@ -1191,7 +1256,7 @@ test.describe("Markdown Live Editor", function()
     test.equal(markdown_decoration:line_background(view, 7), nil)
 
     doc:set_selection(1, 5)
-    test.equal(view:get_line_render(1), nil)
+    test.equal(visible_render_text(view, 1), "> [!note]+ Custom title")
   end)
 
   test.it("presents semantic thematic breaks and reveals their source when active", function()
@@ -1202,7 +1267,7 @@ test.describe("Markdown Live Editor", function()
     test.equal(rule.fragments[1].text, "────────────────")
     test.equal(rule.fragments[1].color, style.markdown_live_rule)
     doc:set_selection(3, 2)
-    test.equal(view:get_line_render(3), nil)
+    test.equal(visible_render_text(view, 3), "---")
   end)
 
   test.it("keeps inactive fence padding and reveals the whole fence while editing it", function()
@@ -1286,7 +1351,7 @@ test.describe("Markdown Live Editor", function()
     local marker = test.not_nil(view:get_line_render(2))
     test.equal(marker.fragments[1].hidden, true)
     doc:set_selection(2, 3)
-    test.equal(view:get_line_render(2), nil)
+    test.equal(visible_render_text(view, 2), "============")
   end)
 
   test.it("keeps source visible for a tab-indented fence-like block", function()
@@ -1367,7 +1432,7 @@ test.describe("Markdown Live Editor", function()
     test.ok(test.not_nil(updated_width) > old_width)
 
     doc:set_selection(3, 4)
-    test.equal(view:get_line_render(3), nil)
+    test.equal(visible_render_text(view, 3), "| a much longer value one | two |")
   end)
 
   test.it("edits canonical GFM table rows and columns through commands", function()
@@ -1479,7 +1544,7 @@ test.describe("Markdown Live Editor", function()
       test.equal(found, true)
     end
     doc:set_selection(1, 10)
-    test.equal(view:get_line_render(1), nil)
+    test.equal(visible_render_text(view, 1), "Inline $x^2 + y^2$ text")
   end)
 
   test.it("presents non-image attachment links and embeds as source-preserving chips", function()
@@ -2050,7 +2115,10 @@ test.describe("Markdown Live Editor", function()
     end
 
     refresh(view)
-    test.equal(view:get_visual_row_height(1), view:get_line_height())
+    test.equal(
+      view:get_visual_row_height(1),
+      math.floor(live_body_font(view):get_height() * config.line_height)
+    )
 
     canvas.load_image = old_load_image
     os.remove(image_path)
@@ -2062,7 +2130,7 @@ test.describe("Markdown Live Editor", function()
     local view, doc = make_view("![Alt](image.png)\nother", "note.md")
     doc:set_selection(2, 1)
     refresh(view)
-    local link_width = view:get_font():get_width("Alt")
+    local link_width = live_body_font(view):get_width("Alt")
     test.equal(view:get_col_x_offset(1, #"![Alt](image.png)" + 1), link_width)
     config.markdown_live_render_images = old
   end)

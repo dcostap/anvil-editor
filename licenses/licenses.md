@@ -53,6 +53,12 @@ Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 
+## Inter
+
+Copyright 2020 The Inter Project Authors (https://github.com/rsms/inter)
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+
 # SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
 
 PREAMBLE

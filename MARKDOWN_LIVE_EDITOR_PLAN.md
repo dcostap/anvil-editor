@@ -1312,7 +1312,7 @@ Retain the existing `MarkdownView` as an optional Reading view during the rebuil
 
 ### 4. Typography
 
-Use the proportional UI/text font for body text and headings, monospace for inline and fenced code, and the normal code font in Source Mode.
+Use the bundled proportional Markdown body font (Inter) for Live Preview prose and headings. Keep the normal code font for inline code, math source, fenced/indented/raw blocks, and Source Mode. Do not apply Inter to the general UI or non-Markdown Editors.
 
 ### 5. Link activation
 
