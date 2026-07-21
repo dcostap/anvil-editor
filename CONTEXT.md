@@ -112,6 +112,10 @@ _Avoid_: Line guide, ruler
 A Document View used to edit a file or untitled Document. Document-backed tool panels are not Editors, even when they use Document View mechanics.
 _Avoid_: Buffer, editor tab
 
+**Standard Editor**:
+An Editor that presents ordinary Document source without a specialized presentation mode such as Markdown Live Preview.
+_Avoid_: Standard Editor DocView, normal Editor, plain Editor
+
 **Markdown Live Preview**:
 An Editor mode that presents formatted Markdown inline while keeping the underlying Markdown source directly editable.
 _Avoid_: Live Markdown Editor, Markdown Live Editor

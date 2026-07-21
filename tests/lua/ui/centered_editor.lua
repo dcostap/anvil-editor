@@ -2,6 +2,7 @@ local core = require "core"
 local command = require "core.command"
 local config = require "core.config"
 local linewrapping = require "core.linewrapping"
+local markdown = require "core.markdown"
 local style = require "core.style"
 local test = require "core.test"
 
@@ -40,6 +41,7 @@ local function save_centered_config(context)
   context.centered_config = {
     enabled = cfg.enabled,
     max_width = cfg.max_width,
+    markdown_live_max_width = cfg.markdown_live_max_width,
     scale_width = cfg.scale_width,
     min_margin = cfg.min_margin,
     pane_views_only = cfg.pane_views_only,
@@ -52,6 +54,7 @@ local function restore_centered_config(context)
   local cfg = config.plugins.centered_editor
   cfg.enabled = saved.enabled
   cfg.max_width = saved.max_width
+  cfg.markdown_live_max_width = saved.markdown_live_max_width
   cfg.scale_width = saved.scale_width
   cfg.min_margin = saved.min_margin
   cfg.pane_views_only = saved.pane_views_only
@@ -61,6 +64,7 @@ local function use_test_centered_config()
   local cfg = config.plugins.centered_editor
   cfg.enabled = true
   cfg.max_width = 200
+  cfg.markdown_live_max_width = 120
   cfg.scale_width = false
   cfg.min_margin = 0
   cfg.pane_views_only = true
@@ -123,6 +127,36 @@ test.describe("centered editor", function()
 
     local scrollbar_width = view.v_scrollbar.expanded_size or style.expanded_scrollbar_size
     test.equal(linewrapping.compute_wrap_width(view), math.max(0, lane_width - view:get_gutter_width() - scrollbar_width))
+  end)
+
+  test.it("uses the Markdown Live Preview width for centering and wrapping", function(context)
+    local standard_view = open_editor(context, "standard\n")
+    local markdown_view, markdown_doc = open_editor(context, "markdown\n")
+    markdown_doc.filename = "centered-width.md"
+    markdown_doc.abs_filename = "centered-width.md"
+    test.equal(markdown.live_render.refresh_view(markdown_view), true)
+
+    standard_view.size.x = 150
+    markdown_view.size.x = 150
+    test.equal(centered_editor.should_center(standard_view), false)
+    test.equal(centered_editor.should_center(markdown_view), true)
+
+    local _, standard_width = centered_editor.get_lane_rect(standard_view)
+    local _, markdown_width = centered_editor.get_lane_rect(markdown_view)
+    test.equal(standard_width, 150)
+    test.equal(markdown_width, 120)
+
+    markdown_view.wrapping_enabled = true
+    local scrollbar_width = markdown_view.v_scrollbar.expanded_size
+      or style.expanded_scrollbar_size
+    test.equal(
+      linewrapping.compute_wrap_width(markdown_view),
+      math.max(0, markdown_width - markdown_view:get_gutter_width() - scrollbar_width)
+    )
+
+    test.equal(markdown.live_render.detach(markdown_view), true)
+    test.equal(centered_editor.should_center(markdown_view), false)
+    test.equal(select(2, centered_editor.get_lane_rect(markdown_view)), 150)
   end)
 
   test.it("allows unwrapped right-side drawn text to receive document mouse commands", function(context)

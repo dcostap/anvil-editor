@@ -70,10 +70,16 @@ local function guide_columns(conf)
   end
 end
 
+local function is_standard_editor(dv)
+  return file_context.is_editor_view(dv)
+    and getmetatable(dv) == DocView
+    and not dv:has_line_render_providers()
+end
+
 local function draw_column_guides(dv)
   local conf = config.plugins.column_guides
   if type(conf) ~= "table" or conf.enabled == false then return end
-  if not file_context.is_editor_view(dv) then return end
+  if not is_standard_editor(dv) then return end
 
   local font = dv:get_font()
   local char_w = font:get_width("n")

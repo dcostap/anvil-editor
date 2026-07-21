@@ -54,14 +54,18 @@ function M.should_center(view)
       return false
     end
   end
-  local max_width = M.get_scaled_max_width()
+  local max_width = M.get_scaled_max_width(view)
   if max_width <= 0 then return false end
   return view.size and view.size.x > max_width + (tonumber(cfg.min_margin) or 0) * 2
 end
 
-function M.get_scaled_max_width()
+function M.get_scaled_max_width(view)
   local cfg = settings()
-  local max_width = tonumber(cfg.max_width) or 0
+  local max_width
+  if view and view.__markdown_live_attached then
+    max_width = tonumber(cfg.markdown_live_max_width)
+  end
+  if max_width == nil then max_width = tonumber(cfg.max_width) or 0 end
   if cfg.scale_width ~= false then
     max_width = max_width * SCALE
   end
@@ -70,7 +74,7 @@ end
 
 function M.get_lane_rect(view)
   local cfg = settings()
-  local max_width = M.get_scaled_max_width()
+  local max_width = M.get_scaled_max_width(view)
   if max_width <= 0 then max_width = view.size.x end
   local min_margin = tonumber(cfg.min_margin) or 0
   if cfg.scale_width ~= false then min_margin = min_margin * SCALE end
