@@ -1362,29 +1362,54 @@ local function table_cell_presentation(view, text, source_col1, source_col2, hea
 end
 
 local function table_wrap_text(font, text, width)
-  if text == "" then return { "" } end
+  if text == "" then return { { text = "", col1 = 1, col2 = 1 } } end
   width = math.max(1, width)
-  local lines, current = {}, ""
-  local function push()
-    lines[#lines + 1] = current
-    current = ""
+  local lines = {}
+  local line_start, line_end
+  local function push_line()
+    if line_start then
+      lines[#lines + 1] = {
+        text = text:sub(line_start, line_end),
+        col1 = line_start,
+        col2 = line_end + 1,
+      }
+      line_start, line_end = nil, nil
+    end
   end
-  for word, spaces in text:gmatch("(%S+)(%s*)") do
-    local candidate = current == "" and word or current .. " " .. word
-    if current ~= "" and font:get_width(candidate) > width then push() end
-    if font:get_width(word) <= width then
-      current = current == "" and word or current .. " " .. word
+
+  local search = 1
+  while true do
+    local word_start, word_end = text:find("%S+", search)
+    if not word_start then break end
+    if line_start and font:get_width(text:sub(line_start, word_end)) <= width then
+      line_end = word_end
     else
-      for char in common.utf8_chars(word) do
-        if current ~= "" and font:get_width(current .. char) > width then push() end
-        current = current .. char
+      push_line()
+      local word = text:sub(word_start, word_end)
+      if font:get_width(word) <= width then
+        line_start, line_end = word_start, word_end
+      else
+        local chunk_start, chunk_end = word_start, word_start - 1
+        local chunk = ""
+        for char in common.utf8_chars(word) do
+          if chunk ~= "" and font:get_width(chunk .. char) > width then
+            lines[#lines + 1] = {
+              text = chunk, col1 = chunk_start, col2 = chunk_end + 1,
+            }
+            chunk_start, chunk = chunk_end + 1, ""
+          end
+          chunk = chunk .. char
+          chunk_end = chunk_end + #char
+        end
+        if chunk ~= "" then
+          line_start, line_end = chunk_start, chunk_end
+        end
       end
     end
-    if spaces ~= "" and current ~= "" and font:get_width(current .. " ") <= width then
-      -- Word spacing is normalized visually; source remains authoritative when revealed.
-    end
+    search = word_end + 1
   end
-  if current ~= "" or #lines == 0 then push() end
+  push_line()
+  if #lines == 0 then lines[1] = { text = "", col1 = 1, col2 = 1 } end
   return lines
 end
 
@@ -1606,13 +1631,19 @@ local function table_row_fragments(view, table_node, line)
     local alignment = layout.alignments[column]
     local text_lines = {}
     for _, wrapped in ipairs(layout.wrapped_cells[line][column]) do
-      local text_width = cell_font:get_width(wrapped)
+      local wrapped_text = wrapped.text or ""
+      local text_width = cell_font:get_width(wrapped_text)
       local offset = alignment == "right"
         and math.max(layout.padding, layout.widths[column] - text_width - layout.padding)
         or alignment == "center"
         and math.max(layout.padding, (layout.widths[column] - text_width) / 2)
         or layout.padding
-      text_lines[#text_lines + 1] = { text = wrapped, x_offset = offset }
+      text_lines[#text_lines + 1] = {
+        text = wrapped_text,
+        x_offset = offset,
+        source_col1 = presentation.source_col1 + (wrapped.col1 or 1) - 1,
+        source_col2 = presentation.source_col1 + (wrapped.col2 or 1) - 1,
+      }
     end
     local separator = row.separators[column]
     fragments[#fragments + 1] = border_fragment(

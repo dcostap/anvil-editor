@@ -324,9 +324,20 @@ function Model:submit(reason)
   local signature = metadata_signature(doc)
   local text = source_text(doc)
   local changed_range = self.pending_changed_range
+  if self.active_changed_range then
+    changed_range = changed_range or {}
+    changed_range.line1 = math.min(
+      changed_range.line1 or math.huge, self.active_changed_range.line1
+    )
+    changed_range.line2 = math.max(
+      changed_range.line2 or -math.huge, self.active_changed_range.line2
+    )
+  end
+  local structural_change = self.pending_structural_change
+    or self.active_structural_change
   self.pending_changed_range = nil
   self.active_changed_range = changed_range and common.merge({}, changed_range) or nil
-  self.active_structural_change = self.pending_structural_change
+  self.active_structural_change = structural_change
   self.pending_structural_change = false
   self.status = "pending"
   self.reason = reason or "parse requested"

@@ -3206,6 +3206,50 @@ function DocView:get_line_render_x_offset_col(render_line, x)
   return #(render_line.source_text or "") + 1
 end
 
+---Resolve a position inside a rendered fragment that owns internal text rows.
+---@param render_line table
+---@param x number Horizontal offset from the rendered line origin
+---@param y number Vertical offset from the rendered row origin
+---@return integer? col Source column, or nil when ordinary mapping should be used
+function DocView:get_line_render_position_col(render_line, x, y)
+  local xoffset = 0
+  local _, indent_size = self.doc:get_indent_info()
+  for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
+    local font = render_fragment_font(self, fragment)
+    font:set_tab_size(indent_size)
+    local text = fragment.text or ""
+    local width = fragment.width
+      or (fragment.widget and fragment.widget.width)
+      or font:get_width(text, { tab_offset = xoffset })
+    if x <= xoffset + width then
+      if not fragment.text_lines then return nil end
+      local line_height = fragment.text_line_height or font:get_height()
+      local line_index = common.clamp(
+        math.floor((y - (fragment.text_y_padding or 0)) / math.max(1, line_height)) + 1,
+        1,
+        #fragment.text_lines
+      )
+      local line = fragment.text_lines[line_index]
+      if type(line) ~= "table" or not line.source_col1 then return nil end
+      local line_text = line.text or ""
+      local local_x = xoffset + (line.x_offset or fragment.text_x_offset or 0)
+      if x <= local_x then return line.source_col1 end
+      local col = line.source_col1
+      for char in common.utf8_chars(line_text) do
+        local char_width = font:get_width(char, { tab_offset = local_x })
+        if local_x + char_width >= x then
+          return x <= local_x + char_width / 2
+            and col or math.min(col + #char, line.source_col2)
+        end
+        local_x = local_x + char_width
+        col = col + #char
+      end
+      return line.source_col2
+    end
+    xoffset = xoffset + width
+  end
+end
+
 ---Get the horizontal pixel offset for a column position.
 ---Accounts for tabs, syntax highlighting fonts, and caches long lines.
 ---@param line integer Line number
@@ -3416,10 +3460,27 @@ function DocView:resolve_screen_position(x, y)
         end
         return entry.line, 1
       elseif entry then
+        local render_line = self:get_line_render(entry.line)
+        local rendered_col = render_line and self:get_line_render_position_col(
+          render_line, x - ox, y - (oy + self:get_visual_row_y_offset(idx))
+        )
+        if rendered_col then
+          self.wrapped_last_resolved_line_end = nil
+          return entry.line, rendered_col
+        end
         local line, col, line_end = linewrapping.get_line_col_from_index_and_x(self, entry.wrapped_idx, x - ox)
         self.wrapped_last_resolved_line_end = line_end and { line, col } or nil
         return line, col
       end
+    end
+    local row_line = linewrapping.get_idx_line_col(self, idx)
+    local render_line = self:get_line_render(row_line)
+    local rendered_col = render_line and self:get_line_render_position_col(
+      render_line, x - ox, y - (oy + self:get_visual_row_y_offset(idx))
+    )
+    if rendered_col then
+      self.wrapped_last_resolved_line_end = nil
+      return row_line, rendered_col
     end
     local line, col, line_end = linewrapping.get_line_col_from_index_and_x(self, idx, x - ox)
     self.wrapped_last_resolved_line_end = line_end and { line, col } or nil
@@ -3447,6 +3508,11 @@ function DocView:resolve_screen_position(x, y)
       line = entry.line
     end
   end
+  local render_line = self:get_line_render(line)
+  local rendered_col = render_line and self:get_line_render_position_col(
+    render_line, x - ox, y - (oy + self:get_visual_row_y_offset(row))
+  )
+  if rendered_col then return line, rendered_col end
   local col = self:get_x_offset_col(line, x - ox)
   return line, col
 end
@@ -4361,7 +4427,21 @@ local function draw_render_fragment_text(
   fragment, font, text, x, y, color, opts, background_y, background_height
 )
   local text_width = font:get_width(text, opts)
-  local width = math.max(text_width, fragment.width or 0)
+  local width
+  if fragment.text_lines then
+    width = fragment.width
+    if not width then
+      width = 0
+      for _, line in ipairs(fragment.text_lines) do
+        local line_text = type(line) == "table" and line.text or line
+        local line_x_offset = type(line) == "table" and line.x_offset
+          or fragment.text_x_offset or 0
+        width = math.max(width, line_x_offset + font:get_width(line_text or "", opts))
+      end
+    end
+  else
+    width = math.max(text_width, fragment.width or 0)
+  end
   local text_x = x + (fragment.text_x_offset or 0)
   if fragment.text_lines then
     if fragment.background then

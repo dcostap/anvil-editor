@@ -1691,6 +1691,21 @@ test.describe("Markdown Live Editor", function()
     test.equal(code_cell.background_border_bottom, style.markdown_live_table_separator)
     test.ok(view:get_visual_row_height(3) > view:get_line_height())
 
+    local wrapped_x = 0
+    for _, fragment in ipairs(row.fragments or {}) do
+      if fragment == wrapped_cell then break end
+      wrapped_x = wrapped_x + (fragment.width or 0)
+    end
+    local continuation = test.not_nil(wrapped_cell.text_lines[2])
+    local line_x, line_y = view:get_line_screen_position(3)
+    local hit_line, hit_col = view:resolve_screen_position(
+      line_x + wrapped_x + continuation.x_offset + 1,
+      line_y + wrapped_cell.text_y_padding + wrapped_cell.text_line_height + 1
+    )
+    test.equal(hit_line, 3)
+    test.ok(hit_col >= continuation.source_col1)
+    test.ok(hit_col <= continuation.source_col2)
+
     view.size.x = 386
     view:update_wrap_cache()
     view:invalidate_line_render("test-resize", 4, 4)
@@ -1722,13 +1737,20 @@ test.describe("Markdown Live Editor", function()
     test.equal(delimiter_numbers, 0)
 
     local ys = {}
+    local vertical_borders = {}
     local old_draw_text = renderer.draw_text
     local old_draw_rect = renderer.draw_rect
     renderer.draw_text = function(font, text, x, y)
       if text ~= "" then ys[y] = true end
       return x + font:get_width(text)
     end
-    renderer.draw_rect = function() end
+    renderer.draw_rect = function(x, y, width, height)
+      if width <= math.max(1, math.ceil(SCALE))
+        and height >= view:get_position_visual_row_height(3, 1) - 1
+      then
+        vertical_borders[#vertical_borders + 1] = x
+      end
+    end
     local ok, err = pcall(function() view:draw_line_text(3, 0, 0) end)
     renderer.draw_text = old_draw_text
     renderer.draw_rect = old_draw_rect
@@ -1736,6 +1758,23 @@ test.describe("Markdown Live Editor", function()
     local distinct_y = 0
     for _ in pairs(ys) do distinct_y = distinct_y + 1 end
     test.ok(distinct_y > 1)
+    local current_row = test.not_nil(view:get_line_render(3))
+    local expected_last_border_x, cursor = nil, 0
+    for _, fragment in ipairs(current_row.fragments or {}) do
+      if fragment.table_border then
+        expected_last_border_x = cursor
+          + math.floor(((fragment.width or 0) - math.max(1, math.floor(SCALE))) / 2)
+      end
+      cursor = cursor + (fragment.width or 0)
+    end
+    local aligned = false
+    for _, border_x in ipairs(vertical_borders) do
+      if math.abs(border_x - test.not_nil(expected_last_border_x)) < 0.01 then
+        aligned = true
+        break
+      end
+    end
+    test.ok(aligned, "wrapped text shifted the table's final border")
 
     doc:set_selection(3, 8)
     test.equal(view:get_line_render_selection_state().selections[1], 3)

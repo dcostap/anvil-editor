@@ -304,6 +304,29 @@ test.describe("Markdown semantic model", function()
     test.equal(instance:can_render_published_line(3), false)
     test.equal(instance:can_render_published_line(4), false)
 
+    test.ok(instance:submit("replacement-range-test"))
+    test.equal(instance.pending_changed_range, nil)
+    test.equal(test.not_nil(instance.active_changed_range).line1, 2)
+    test.equal(instance.active_changed_range.line2, 4)
+    test.equal(instance:can_render_published_line(2), false)
+    test.equal(instance:can_render_published_line(4), false)
+
+    markdown_model.close(doc, "test")
+  end)
+
+  test.it("preserves structural invalidation when a parse is superseded", function()
+    local doc = make_doc("one\ntwo\nthree\n")
+    local instance = markdown_model.get(doc)
+    test.ok(wait_status(instance, "ready"), instance.reason)
+
+    doc:insert(2, 1, "inserted\n")
+    test.ok(instance:submit("active-structural-test"))
+    test.equal(instance.active_structural_change, true)
+    doc:insert(4, 1, "changed ")
+    test.ok(instance:submit("replacement-structural-test"))
+    test.equal(instance.active_structural_change, true)
+    test.equal(instance:can_render_published_line(2), false)
+
     markdown_model.close(doc, "test")
   end)
 
