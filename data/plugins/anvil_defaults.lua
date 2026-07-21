@@ -90,7 +90,7 @@ plugin_defaults("column_guides", {
 plugin_defaults("centered_editor", {
   enabled = true,
   max_width = 1200,
-  markdown_live_max_width = 700,
+  markdown_live_max_width = 800,
   scale_width = true,
   min_margin = 0,
   pane_views_only = true,
