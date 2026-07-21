@@ -26,7 +26,9 @@ Visual-metric reconstruction follows the same continuity rule. During an ordinar
 
 Structural edits preserve geometry without querying stale shifted semantics. The view maintains published per-line metric results and represents each pending line insertion/removal as an O(1) line-map layer over those results. Unaffected heights therefore shift to their new line numbers immediately, while split rendered lines derive their own fragment/widget heights. Repeated Enter presses chain line maps without rescanning the Document or collapsing headings and other tall rows to the base Editor height.
 
-Sticky Lines consume the same visual-row metrics as the document. Stacked Markdown headings use each source line's resolved height for backgrounds, text placement, hit testing, hover, and scroll occlusion rather than multiplying the base Editor line height. While the asynchronous hierarchy model rebuilds after an edit, Sticky Lines use a cached direct hierarchy calculation from current source instead of disappearing for the debounce interval.
+Multi-range structural transactions map every unaffected logical line in one pass. Pre-edit and shifted height capture resolve each Document line through its first visual row, avoiding accidental use of an unrelated absolute wrapped-row index.
+
+Sticky Lines consume the same visual-row metrics as the document. Stacked Markdown headings include every visible wrapped row in backgrounds, text placement, hit testing, hover, and scroll occlusion rather than multiplying the base Editor line height. Wrapped-row clicks resolve against the clicked continuation row, and collapsed folds allocate and clip only their one visible composed row. While the asynchronous hierarchy model rebuilds after an edit, Sticky Lines use a cached direct hierarchy calculation from current source instead of disappearing for the debounce interval.
 
 ## Red-green evidence
 

@@ -68,4 +68,36 @@ test.describe("sticky scroll", function()
     test.equal(layout[2].y, view.position.y + base * 2)
     test.equal(layout[2].height, base * 3)
   end)
+
+  test.it("allocates every wrapped visual row of a sticky heading", function()
+    local view = make_view(
+      "# A parent heading long enough to wrap across several visual rows in a narrow editor\nbody"
+    )
+    view.size.x = 190
+    view:set_wrapping_enabled(true)
+    local row_count = view:get_line_visual_row_count(1)
+    test.ok(row_count > 1)
+
+    local layout = sticky_scroll.get_sticky_layout(view, { 1 }, 2)
+    test.equal(#layout, 1)
+    test.equal(layout[1].height, view:get_line_height() * row_count)
+
+    local row2_col = test.not_nil(view:get_visual_row_bounds_for_line(1, 2))
+    local data = sticky_scroll.managed_docviews[view]
+    data.enabled = true
+    data.sticky_lines = { 1 }
+    data.reference_line = nil
+    local sticky_x = view:get_line_screen_position(1)
+    test.equal(
+      view:on_mouse_pressed("left", sticky_x + 4, layout[1].y + view:get_line_height() + 2, 1),
+      true
+    )
+    local selected_line, selected_col = view.doc:get_selection()
+    test.equal(selected_line, 1)
+    test.ok(selected_col >= row2_col)
+
+    view:add_fold_region { line1 = 1, line2 = 2 }
+    local folded = sticky_scroll.get_sticky_layout(view, { 1 }, 2)
+    test.equal(folded[1].height, view:get_position_visual_row_height(1, 1))
+  end)
 end)

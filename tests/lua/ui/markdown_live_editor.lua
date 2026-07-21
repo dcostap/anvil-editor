@@ -278,6 +278,31 @@ test.describe("Markdown Live Editor", function()
     test.equal(repeated_plain_y, pending_plain_y + view:get_visual_row_height(4))
   end)
 
+  test.it("preserves unaffected custom heights across multi-range structural edits", function()
+    local view, doc = make_view(
+      "# One\nparagraph\n## Two\nparagraph\n### Three\nplain",
+      "pending-multi-structural-heights.md"
+    )
+    view.size.x = 500
+    view:set_wrapping_enabled(true)
+    doc:set_selection(6, 1)
+    refresh(view)
+    local heights = {
+      view:get_position_visual_row_height(1, 1),
+      view:get_position_visual_row_height(3, 1),
+      view:get_position_visual_row_height(5, 1),
+    }
+    doc:apply_edits({
+      { line1 = 2, col1 = #doc.lines[2], line2 = 2, col2 = #doc.lines[2], text = "\n" },
+      { line1 = 4, col1 = #doc.lines[4], line2 = 4, col2 = #doc.lines[4], text = "\n" },
+    }, { type = "multi-structural-height-test" })
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    view:invalidate_visual_metrics("pending-multi-structural-height-regression")
+    test.equal(view:get_position_visual_row_height(1, 1), heights[1])
+    test.equal(view:get_position_visual_row_height(4, 1), heights[2])
+    test.equal(view:get_position_visual_row_height(7, 1), heights[3])
+  end)
+
   test.it("renders inactive headings with larger row metrics and hidden markers", function()
     local view, doc = make_view("# Title\nbody", "note.md")
     doc:set_selection(2, 1)
@@ -1576,6 +1601,8 @@ test.describe("Markdown Live Editor", function()
       end
     end
     test.equal(header_cells, 2)
+    local name_x = view:get_col_x_offset(1, 3)
+    test.equal(view:get_line_render_x_offset_col(header, name_x + 1), 3)
     local row = test.not_nil(view:get_line_render(3))
     local row_cells = 0
     for _, fragment in ipairs(row.fragments) do
@@ -1602,6 +1629,16 @@ test.describe("Markdown Live Editor", function()
     local old_width = header_widths[1]
     doc:insert(3, 3, "a much longer value ")
     local instance = test.not_nil(markdown_model.peek(doc))
+    test.equal(instance.status, "pending")
+    local pending_header = test.not_nil(view:get_line_render(1))
+    local pending_width
+    for _, fragment in ipairs(pending_header.fragments) do
+      if fragment.table_cell and fragment.table_column == 1 then
+        pending_width = fragment.width
+        break
+      end
+    end
+    test.ok(test.not_nil(pending_width) > old_width)
     test.ok(wait_status(instance, "ready"), instance.reason)
     local updated_header = test.not_nil(view:get_line_render(1))
     local updated_width
@@ -1615,6 +1652,11 @@ test.describe("Markdown Live Editor", function()
 
     doc:set_selection(3, 4)
     test.equal(visible_render_text(view, 3), "| a much longer value one | two |")
+    test.equal(view:get_position_visual_row_height(3, 1), view:get_line_height())
+
+    doc:set_selection(2, 4)
+    test.equal(visible_render_text(view, 2), "| :--- | ---: |")
+    test.equal(view:get_position_visual_row_height(2, 1), view:get_line_height())
   end)
 
   test.it("wraps long table cells inside aligned variable-height rows", function()
@@ -1694,6 +1736,52 @@ test.describe("Markdown Live Editor", function()
     local distinct_y = 0
     for _ in pairs(ys) do distinct_y = distinct_y + 1 end
     test.ok(distinct_y > 1)
+
+    doc:set_selection(3, 8)
+    test.equal(view:get_line_render_selection_state().selections[1], 3)
+    local active_row = test.not_nil(view:get_line_render(3))
+    for _, fragment in ipairs(active_row.fragments or {}) do
+      test.ok(not fragment.table_cell)
+    end
+    test.ok(visible_render_text(view, 3):find("`/rp_campaign_status`", 1, true))
+  end)
+
+  test.it("remeasures table row metrics when an unwrapped viewport narrows", function()
+    local view, doc = make_view(
+      "| Command | Action |\n| --- | --- |\n"
+        .. "| `/rp_status` | Show scene, turn, configuration, repository, and synchronization state |\n\nplain",
+      "unwrapped-table-resize.md"
+    )
+    view.size.x = 900
+    doc:set_selection(5, 1)
+    refresh(view)
+    local wide_height = view:get_position_visual_row_height(3, 1)
+
+    view.size.x = 360
+    local narrow_height = view:get_position_visual_row_height(3, 1)
+    test.ok(narrow_height > wide_height)
+    local _, plain_y = view:get_line_screen_position(5)
+    local _, table_y = view:get_line_screen_position(3)
+    test.ok(plain_y >= table_y + narrow_height)
+  end)
+
+  test.it("keeps empty table-cell source mappings valid", function()
+    local view, doc = make_view(
+      "| A | B |\n| --- | --- |\n|   | value |\n\nplain",
+      "empty-table-cell.md"
+    )
+    doc:set_selection(5, 1)
+    refresh(view)
+    local row = test.not_nil(view:get_line_render(3))
+    local empty
+    for _, fragment in ipairs(row.fragments or {}) do
+      if fragment.table_cell and fragment.table_column == 1 then empty = fragment break end
+    end
+    empty = test.not_nil(empty)
+    test.equal(empty.text, "")
+    test.equal(empty.text_source_col1, empty.text_source_col2)
+    test.ok(empty.text_source_col1 >= empty.source_col1)
+    test.ok(empty.text_source_col2 <= empty.source_col2)
   end)
 
   test.it("edits canonical GFM table rows and columns through commands", function()

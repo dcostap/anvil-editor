@@ -66,6 +66,26 @@ local function current_selection_state(view)
   return view.selection_state or { selections = view.doc.selections }
 end
 
+local function selection_intersects_line(view, line)
+  local state = current_selection_state(view)
+  for i = 1, #(state and state.selections or {}), 4 do
+    local line1 = state.selections[i]
+    local line2 = state.selections[i + 2] or line1
+    if line1 and line >= math.min(line1, line2) and line <= math.max(line1, line2) then
+      return true
+    end
+  end
+  return false
+end
+
+local function table_line_revealed(view, line, reveal_units)
+  if selection_intersects_line(view, line) then return true end
+  for _, unit in ipairs(reveal_units or {}) do
+    if unit.whole_line then return true end
+  end
+  return false
+end
+
 local function heading_for_line(line_text, line)
   local indent, marks = line_text:match("^(%s*)(#+)%s+")
   if not marks or #marks > 6 then return nil end
@@ -1299,16 +1319,32 @@ local function table_source_row(text)
   return { cells = cells, separators = separators }
 end
 
-local function table_cell_text(text, cell)
-  return (text:sub(cell.col1, cell.col2 - 1):gsub("^%s+", ""):gsub("%s+$", ""))
+local function table_cell_content(text, cell)
+  local raw = text:sub(cell.col1, cell.col2 - 1)
+  local leading = #(raw:match("^%s*") or "")
+  local trailing = #(raw:match("%s*$") or "")
+  local source_col1, source_col2 = cell.col1 + leading, cell.col2 - trailing
+  if source_col1 > source_col2 then
+    local empty_col = common.clamp(
+      cell.col1 + math.floor(#raw / 2), cell.col1, cell.col2
+    )
+    return "", empty_col, empty_col
+  end
+  return raw:sub(leading + 1, #raw - trailing), source_col1, source_col2
 end
 
-local function table_cell_presentation(view, text, header)
+local function table_cell_text(text, cell)
+  return (table_cell_content(text, cell))
+end
+
+local function table_cell_presentation(view, text, source_col1, source_col2, header)
   if not header then
     local ticks = text:match("^(`+)")
     if ticks and #text >= #ticks * 2 and text:sub(-#ticks) == ticks then
       return {
         text = text:sub(#ticks + 1, -#ticks - 1),
+        source_col1 = source_col1 + #ticks,
+        source_col2 = source_col2 - #ticks,
         font = inline_style_font(view, "code"),
         color = style.markdown_live_table_cell,
         background = style.markdown_live_inline_code_bg,
@@ -1318,6 +1354,8 @@ local function table_cell_presentation(view, text, header)
   end
   return {
     text = text,
+    source_col1 = source_col1,
+    source_col2 = source_col2,
     font = header and inline_style_font(view, "strong") or markdown_live_body_font(view),
     color = header and style.markdown_live_table_header or style.markdown_live_table_cell,
   }
@@ -1418,8 +1456,9 @@ local function table_layout(view, table_node)
       local row = rows[line]
       presentations[line] = {}
       for column, cell in ipairs(row.cells) do
+        local text, source_col1, source_col2 = table_cell_content(row.text, cell)
         local presentation = table_cell_presentation(
-          view, table_cell_text(row.text, cell), line == line1
+          view, text, source_col1, source_col2, line == line1
         )
         presentations[line][column] = presentation
         widths[column] = math.max(
@@ -1562,7 +1601,6 @@ local function table_row_fragments(view, table_node, line)
     }
   end
   for column, cell in ipairs(row.cells) do
-    local cell_text = table_cell_text(row.text, cell)
     local presentation = layout.presentations[line][column]
     local cell_font = presentation.font
     local alignment = layout.alignments[column]
@@ -1582,9 +1620,11 @@ local function table_row_fragments(view, table_node, line)
     )
     fragments[#fragments + 1] = {
       source_col1 = cell.col1, source_col2 = cell.col2,
-      text = cell_text,
+      text = presentation.text,
       width = layout.widths[column],
       text_x_offset = text_lines[1] and text_lines[1].x_offset or layout.padding,
+      text_source_col1 = presentation.source_col1,
+      text_source_col2 = presentation.source_col2,
       text_lines = text_lines,
       text_line_height = layout.text_line_height,
       text_y_padding = layout.vertical_padding,
@@ -1708,6 +1748,7 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
   local frontmatter, frontmatter_line2 = frontmatter_for_line(view, line)
   local table_node = table_for_line(view, line)
   if table_node then
+    if table_line_revealed(view, line, reveal_units) then return {} end
     return table_row_fragments(view, table_node, line) or {}
   end
   if frontmatter then
@@ -2076,10 +2117,12 @@ local function capture_pre_edit_renders(view, change)
     owner.pre_edit_lines[line] = {
       source_text = (view.doc.lines[line] or ""):gsub("\n$", ""),
       render_line = render and clone_render_line(render) or nil,
-      height = view:get_visual_row_height(line),
+      height = view:get_position_visual_row_height(line, 1),
     }
   end
 end
+
+local retained_metric_height
 
 local function capture_optimistic_renders(view, transaction)
   local owner = view.__markdown_live_owner
@@ -2125,7 +2168,9 @@ local function capture_optimistic_renders(view, transaction)
         if render and current == render.source_text then
           next_lines[new_line] = {
             revision = view.doc.text_revision, source_text = current,
-            render_line = clone_render_line(render), height = view:get_visual_row_height(old_line),
+            render_line = clone_render_line(render),
+            height = retained_metric_height(previous_metric_state, old_line)
+              or render_line_metric_height(view, render),
           }
         end
       end
@@ -2152,6 +2197,49 @@ local function capture_optimistic_renders(view, transaction)
             }
             next_metric_state.overrides[new_line1 + i - 1] = render_height
           end
+        end
+      end
+    elseif #ranges > 1 then
+      local ordered = {}
+      local total_delta = 0
+      for _, changed in ipairs(ranges) do
+        ordered[#ordered + 1] = changed
+        total_delta = total_delta + (changed.line_delta or 0)
+      end
+      table.sort(ordered, function(a, b)
+        return (a.old_line1 or 1) < (b.old_line1 or 1)
+      end)
+      local function map_unchanged_line(old_line)
+        local delta = 0
+        for _, changed in ipairs(ordered) do
+          local old_line1 = changed.old_line1 or 1
+          local old_line2 = changed.old_line2 or old_line1
+          if old_line < old_line1 then return old_line + delta end
+          if old_line <= old_line2 then return nil end
+          delta = delta + (changed.line_delta or 0)
+        end
+        return old_line + delta
+      end
+
+      next_metric_state = { heights = {} }
+      local old_line_count = math.max(0, #view.doc.lines - total_delta)
+      for old_line = 1, old_line_count do
+        local new_line = map_unchanged_line(old_line)
+        local height = retained_metric_height(previous_metric_state, old_line)
+        if new_line and height then next_metric_state.heights[new_line] = height end
+      end
+      for old_line, cached in pairs(cache and cache.lines or {}) do
+        local new_line = map_unchanged_line(old_line)
+        local render = cached.render_line ~= false and cached.render_line or nil
+        local current = new_line and (view.doc.lines[new_line] or ""):gsub("\n$", "")
+        if render and current == render.source_text then
+          next_lines[new_line] = {
+            revision = view.doc.text_revision,
+            source_text = current,
+            render_line = clone_render_line(render),
+            height = retained_metric_height(previous_metric_state, old_line)
+              or render_line_metric_height(view, render),
+          }
         end
       end
     end
@@ -2190,7 +2278,7 @@ local function capture_optimistic_renders(view, transaction)
         source_text = current_text,
         render_line = render,
         height = pre_edit_lines[line] and pre_edit_lines[line].height
-          or view:get_visual_row_height(line),
+          or view:get_position_visual_row_height(line, 1),
       }
       core.log_quiet("Markdown Live Preview retained rendered line %d while semantics are pending", line)
     else
@@ -2210,7 +2298,7 @@ local function optimistic_render(view, line)
   end
 end
 
-local function retained_metric_height(state, line)
+retained_metric_height = function(state, line)
   if not state then return nil end
   if state.heights then return state.heights[line] end
   local override = state.overrides and state.overrides[line]
@@ -2339,19 +2427,43 @@ end
 function provider:generation(view)
   local font = markdown_live_body_font(view)
   return tostring(font) .. ":" .. tostring(font:get_size())
+    .. ":width:" .. tostring(table_available_width(view))
 end
 
 function provider:line_generation(view, line)
   if view_in_source_mode(view) then return "source" end
   local optimistic = optimistic_render(view, line)
   return "font:" .. self:generation(view)
-    .. ":width:" .. tostring(table_available_width(view))
     .. (optimistic and ":optimistic:" .. tostring(optimistic.revision) or "")
 end
 
 function provider:on_text_transaction(view, transaction, line1)
   if not line1 then return nil end
+  local table_line1, table_line2
+  local table_cache = view.__markdown_live_table_layout_cache
+  for id, layout in pairs(table_cache and table_cache.layouts or {}) do
+    if layout then
+      for _, range in ipairs(transaction and transaction.changed_ranges or {}) do
+        local old_line1 = range.old_line1 or range.new_line1 or line1
+        local old_line2 = range.old_line2 or old_line1
+        if old_line2 >= layout.line1 and old_line1 <= layout.line2 then
+          table_line1 = math.min(table_line1 or layout.line1, layout.line1)
+          table_line2 = math.max(table_line2 or layout.line2, layout.line2)
+          table_cache.layouts[id] = nil
+          break
+        end
+      end
+    end
+  end
   capture_optimistic_renders(view, transaction)
+  if table_line1 then
+    local owner = view.__markdown_live_owner
+    for line, entry in pairs(owner and owner.optimistic_lines or {}) do
+      if entry.render_line and entry.render_line.table_row then
+        owner.optimistic_lines[line] = nil
+      end
+    end
+  end
   local suffix_changed = transaction and transaction.type == "load"
   for _, range in ipairs(transaction and transaction.changed_ranges or {}) do
     if (range.line_delta or 0) ~= 0 then suffix_changed = true break end
@@ -2376,12 +2488,12 @@ function provider:on_text_transaction(view, transaction, line1)
       if suffix_changed then break end
     end
   end
-  if not suffix_changed then return nil end
+  if not suffix_changed then return table_line1, table_line2 end
   local owner = view.__markdown_live_owner
   if owner then
     owner.semantic_pending_line = math.min(owner.semantic_pending_line or line1, line1)
   end
-  return line1, #view.doc.lines
+  return math.min(line1, table_line1 or line1), #view.doc.lines
 end
 
 local function heading_content_fragments(view, text, heading, font, reveal_units)
@@ -2482,7 +2594,9 @@ local function compute_line_height(view, line)
     local table_node = table_for_line(view, line)
     if table_node then
       local layout = table_layout(view, table_node)
-      if layout and #reveal_units_for_line(view, line) == 0 then
+      local reveal_units = reveal_units_for_line(view, line)
+      if table_line_revealed(view, line, reveal_units) then return nil end
+      if layout then
         if line == layout.delimiter_line then
           return math.max(1, math.floor(SCALE))
         end
@@ -2594,10 +2708,7 @@ function provider:render_line(view, line)
   if heading then return heading_render_line(view, text, heading, reveal_units) end
 
   local table_node = table_for_line(view, line)
-  local table_revealed = false
-  for _, unit in ipairs(reveal_units) do
-    if unit.whole_line then table_revealed = true break end
-  end
+  local table_revealed = table_line_revealed(view, line, reveal_units)
   if table_node and not table_revealed then
     local fragments, layout = table_row_fragments(view, table_node, line)
     if fragments and layout then

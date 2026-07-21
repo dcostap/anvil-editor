@@ -425,8 +425,18 @@ function Model:can_render_published_line(line)
   if not (doc and self.result and self.published_metadata == metadata_signature(doc)) then return false end
   if self.status == "ready" then return self.published_revision == doc.text_revision end
   if self.status ~= "pending" then return false end
-  local range = self.pending_changed_range or self.active_changed_range
-  if not range then return false end
+  local pending, active = self.pending_changed_range, self.active_changed_range
+  if not (pending or active) then return false end
+  local range = {
+    line1 = math.min(
+      pending and pending.line1 or math.huge,
+      active and active.line1 or math.huge
+    ),
+    line2 = math.max(
+      pending and pending.line2 or -math.huge,
+      active and active.line2 or -math.huge
+    ),
+  }
   if self.pending_structural_change or self.active_structural_change then
     return line < range.line1
   end

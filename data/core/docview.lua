@@ -3136,6 +3136,19 @@ function DocView:get_line_render_col_x_offset(render_line, col)
     else
       local text = fragment.text or ""
       if col < col2 and not fragment.widget then
+        local text_col1 = fragment.text_source_col1
+        local text_col2 = fragment.text_source_col2
+        if text_col1 and text_col2 then
+          if col <= text_col1 then return xoffset + (fragment.text_x_offset or 0) end
+          if col <= text_col2 then
+            return xoffset + (fragment.text_x_offset or 0)
+              + font:get_width(
+                text:sub(1, math.max(0, col - text_col1)),
+                { tab_offset = xoffset }
+              )
+          end
+          return xoffset + (fragment.width or font:get_width(text))
+        end
         return xoffset + (fragment.text_x_offset or 0)
           + font:get_width(text:sub(1, math.max(0, col - col1)), { tab_offset = xoffset })
       end
@@ -3172,18 +3185,20 @@ function DocView:get_line_render_x_offset_col(render_line, x)
           return (x <= xoffset + width / 2) and col1 or col2
         end
         local text_offset = fragment.text_x_offset or 0
-        if x <= xoffset + text_offset then return col1 end
-        local col = col1
+        local text_col1 = fragment.text_source_col1 or col1
+        local text_col2 = fragment.text_source_col2 or col2
+        if x <= xoffset + text_offset then return text_col1 end
+        local col = text_col1
         local local_x = xoffset + text_offset
         for char in common.utf8_chars(text) do
           local w = font:get_width(char, { tab_offset = local_x })
           if local_x + w >= x then
-            return (x <= local_x + w / 2) and col or math.min(col + #char, col2)
+            return (x <= local_x + w / 2) and col or math.min(col + #char, text_col2)
           end
           local_x = local_x + w
           col = col + #char
         end
-        return col2
+        return text_col2
       end
       xoffset = xoffset + width
     end

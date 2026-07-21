@@ -4,6 +4,7 @@ local DocView = require "core.docview"
 local style = require "core.style"
 local common = require "core.common"
 local command = require "core.command"
+local linewrapping = require "core.linewrapping"
 
 local SS = {}
 
@@ -190,7 +191,16 @@ local function get_visible_line_range(dv)
 end
 
 local function sticky_line_height(docview, line)
-  if docview.get_position_visual_row_height then
+  if docview.get_visual_row and docview.get_visual_row_height then
+    local first_row = docview:get_visual_row(line, 1)
+    local row_count = docview.get_visual_row_count_for_line
+      and docview:get_visual_row_count_for_line(line) or 1
+    local height = 0
+    for row = first_row, first_row + math.max(1, row_count) - 1 do
+      height = height + docview:get_visual_row_height(row)
+    end
+    return height
+  elseif docview.get_position_visual_row_height then
     return docview:get_position_visual_row_height(line, 1)
   end
   return docview:get_line_height()
@@ -421,12 +431,14 @@ function DocView:draw_overlay(...)
     local l, y, height = entry.line, entry.y, entry.height
     max_y = math.max(y + height, max_y)
     drawn = true
+    renderer.set_clip_rect(self.position.x, y, self.size.x, height)
     renderer.draw_rect(self.position.x, y, self.size.x, height, style.background)
     self:draw_line_gutter(l, self.position.x, y, gpad and gw - gpad or gw)
     self:draw_line_text(l, x, y)
     if data.hovered_sticky_scroll_line == l then
       renderer.draw_rect(self.position.x, y, self.size.x, height, style.drag_overlay)
     end
+    renderer.set_clip_rect(self.position.x, self.position.y, self.size.x, self.size.y)
   end
   if drawn then
     renderer.draw_rect(self.position.x, max_y, self.size.x, style.divider_size, style.divider)
@@ -458,7 +470,30 @@ function DocView:on_mouse_pressed(button, x, y, clicks, ...)
   self.scroll.x = 0
   local sticky_x = self:get_line_screen_position(entry.line)
   self.scroll.x = scroll_x
-  local col = self:get_x_offset_col(entry.line, x - sticky_x)
+  local col
+  local row_count = self.get_visual_row_count_for_line
+    and self:get_visual_row_count_for_line(entry.line) or 1
+  if self.wrapped_settings and row_count > 1 then
+    local first_row = self:get_visual_row(entry.line, 1)
+    local relative_y = math.max(0, y - entry.y)
+    local row_in_line, consumed = 1, 0
+    for index = 1, row_count do
+      local height = self:get_visual_row_height(first_row + index - 1)
+      row_in_line = index
+      if relative_y < consumed + height then break end
+      consumed = consumed + height
+    end
+    local first_idx = self.wrapped_line_to_idx and self.wrapped_line_to_idx[entry.line]
+    if not first_idx then
+      first_idx = linewrapping.get_line_idx_col_count(self, entry.line)
+    end
+    local _, resolved_col = linewrapping.get_line_col_from_index_and_x(
+      self, first_idx + row_in_line - 1, x - sticky_x
+    )
+    col = resolved_col
+  else
+    col = self:get_x_offset_col(entry.line, x - sticky_x)
+  end
   self:scroll_to_make_visible(entry.line, col)
   self.doc:set_selection(entry.line, col)
   return true

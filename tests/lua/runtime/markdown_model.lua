@@ -286,6 +286,27 @@ test.describe("Markdown semantic model", function()
     markdown_model.close(doc, "test")
   end)
 
+  test.it("keeps active and queued edit ranges unsafe for published rendering", function()
+    local doc = make_doc("first\nsecond\nthird\nfourth\n")
+    local instance = markdown_model.get(doc)
+    test.ok(wait_status(instance, "ready"), instance.reason)
+
+    doc:insert(2, 1, "changed ")
+    test.equal(instance.status, "pending")
+    test.ok(instance:submit("active-range-test"))
+    test.equal(test.not_nil(instance.active_changed_range).line1, 2)
+
+    doc:insert(4, 1, "queued ")
+    test.equal(instance.status, "pending")
+    test.equal(test.not_nil(instance.pending_changed_range).line1, 4)
+    test.equal(instance:can_render_published_line(1), true)
+    test.equal(instance:can_render_published_line(2), false)
+    test.equal(instance:can_render_published_line(3), false)
+    test.equal(instance:can_render_published_line(4), false)
+
+    markdown_model.close(doc, "test")
+  end)
+
   test.it("does not allocate models for non-Markdown Documents", function()
     local doc = make_doc("# Plain text", "note.txt")
     test.equal(markdown_model.get(doc), nil)
