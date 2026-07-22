@@ -227,6 +227,16 @@ local function selection_touches_line(line, line_text, line1, col1, line2, col2)
   return from < to
 end
 
+local function semantic_node_targets_image(node, line_text)
+  if node.type == "image" then return true end
+  if node.type ~= "embed" then return false end
+  local target = node.attributes and node.attributes.target
+  if not (target and target.line1 == target.line2) then return false end
+  local value = line_text:sub(target.col1, target.col2 - 1):match("^[^#|]+") or ""
+  local ext = value:match("%.([^%.?#/\\]+)$")
+  return IMAGE_EXTENSIONS[ext and ext:lower() or ""] == true
+end
+
 local function reveal_units_for_line(view, line, state)
   state = state or current_selection_state(view)
   local selections = state and state.selections or view.doc.selections or {}
@@ -296,7 +306,11 @@ local function reveal_units_for_line(view, line, state)
           if REVEAL_TYPES[node.type] then
             if node.type ~= "heading" then has_localized_reveal = true end
             local node_col1, node_col2 = node_line_range(node, line1, cursor_text)
-            if node_col1 and col1 >= node_col1 and col1 < node_col2 then
+            local inclusive_image_edge = semantic_node_targets_image(node, cursor_text)
+              and col1 == node_col2
+            if node_col1 and col1 >= node_col1
+              and (col1 < node_col2 or inclusive_image_edge)
+            then
               local size = (node.source.end_byte or 0) - (node.source.start_byte or 0)
               if not best_size or size < best_size then best, best_size = node, size end
             end
@@ -974,10 +988,13 @@ local function image_only_span(view, line_text, line)
   end
 end
 
+local revealed_link_fragments
+
 local function image_only_render_line(view, text, line, span, active)
   local image = image_fragment(view, span, active and { width = 0 } or nil)
   if not image then return nil end
   image.semantic_id = span.semantic_id
+  image.image_anchor = true
   if active and image.widget then
     local body_font = markdown_live_body_font(view)
     local leading_width = span.col1 > 1
@@ -987,9 +1004,14 @@ local function image_only_render_line(view, text, line, span, active)
     image.draw_x_offset = leading_width - body_font:get_width(text)
     image.draw_y_offset = markdown_live_body_line_height(view) + image_vertical_padding()
     image.widget.height = image.widget.height + markdown_live_body_line_height(view)
+    local fragments = revealed_link_fragments(view, text, line, span, {
+      base_font = body_font,
+    })
+    fragments[#fragments + 1] = image
     return {
       source_text = text,
-      fragments = { image },
+      caret_height = markdown_live_body_line_height(view),
+      fragments = fragments,
     }
   end
   if image.widget and span.col1 > 1 then
@@ -1068,19 +1090,14 @@ local function textual_link_label(link)
   return link.display ~= "" and link.display or link.raw_target or ""
 end
 
-local function revealed_link_fragments(view, line_text, line, span, opts)
-  if span.link and (span.link.kind == "image" or span.link.kind == "embed")
-    and is_image_target(span.link.path)
-  then
-    return {}
-  end
+revealed_link_fragments = function(view, line_text, line, span, opts)
   local linked_col1, linked_col2
   if span.type == "wiki_link" or span.type == "embed" then
     local marker_width = line_text:sub(span.col1, span.col1) == "!" and 3 or 2
     linked_col1, linked_col2 = span.col1 + marker_width, span.col2 - 2
   else
     local attributes = span.attributes or {}
-    local range = attributes.link_text or attributes.reference_label
+    local range = attributes.link_text or attributes.image_alt or attributes.reference_label
       or attributes.link_destination
     if range and range.line1 == line and range.line2 == line then
       linked_col1, linked_col2 = range.col1, range.col2
@@ -1166,7 +1183,24 @@ local function semantic_link_fragments(view, line_text, line, reveal_units, opts
   local fragments = {}
   for _, span in ipairs(semantic_link_spans(view, line_text, line)) do
     local revealed = reveal_unit_matches(reveal_units, span.semantic_id, span.col1, span.col2)
-    if span.link and revealed then
+    local image_link = span.link
+      and (span.link.kind == "image" or span.link.kind == "embed")
+      and is_image_target(span.link.path)
+    if image_link and revealed then
+      for _, fragment in ipairs(revealed_link_fragments(view, line_text, line, span, opts)) do
+        fragments[#fragments + 1] = fragment
+      end
+      local image = image_fragment(view, span, { width = 0 })
+      if image and image.widget then
+        image.source_col1, image.source_col2 = span.col2, span.col2
+        image.semantic_id = span.semantic_id
+        image.image_anchor = true
+        image.image_block = true
+        image.image_block_col1, image.image_block_col2 = span.col1, span.col2
+        image.image_block_active = true
+        fragments[#fragments + 1] = image
+      end
+    elseif span.link and revealed then
       for _, fragment in ipairs(revealed_link_fragments(view, line_text, line, span, opts)) do
         fragments[#fragments + 1] = fragment
       end
@@ -1197,6 +1231,13 @@ local function semantic_link_fragments(view, line_text, line, reveal_units, opts
       end
       fragment = decorate_link_fragment(view, line, span, fragment, opts)
       if fragment then
+        if image_link and fragment.widget then
+          fragment.width = 0
+          fragment.image_anchor = true
+          fragment.image_block = true
+          fragment.image_block_col1, fragment.image_block_col2 = span.col1, span.col2
+          fragment.image_block_active = false
+        end
         fragments[#fragments + 1] = fragment
         local preview = embed_preview_fragment(view, line_text, span)
         if preview then fragments[#fragments + 1] = preview end
@@ -2009,6 +2050,57 @@ local function prose_render_line(view, line_text, render_line)
   return render_line
 end
 
+local function layout_inline_image_rows(view, line_text, render_line)
+  local blocks = {}
+  for _, fragment in ipairs(render_line.fragments or {}) do
+    if fragment.image_block and fragment.widget then blocks[#blocks + 1] = fragment end
+  end
+  if #blocks == 0 then return render_line end
+  table.sort(blocks, function(a, b)
+    return (a.image_block_col1 or 1) < (b.image_block_col1 or 1)
+  end)
+
+  local body_height = markdown_live_body_line_height(view)
+  local rows, y, segment_start = {}, 0, 1
+  for _, block in ipairs(blocks) do
+    local block_col1 = block.image_block_col1 or block.source_col1 or segment_start
+    local block_col2 = block.image_block_col2 or block.source_col2 or block_col1
+    local top_end = block.image_block_active and block_col2 or block_col1
+    if top_end > segment_start then
+      rows[#rows + 1] = {
+        source_col1 = segment_start,
+        source_col2 = top_end,
+        end_inclusive = block.image_block_active or nil,
+        y_offset = y,
+        height = body_height,
+      }
+      y = y + body_height
+    end
+
+    block.layout_x = 0
+    block.draw_x_offset = 0
+    block.draw_y_offset = y + (block.widget.padding or 0)
+    y = y + block.widget.height
+    segment_start = block_col2
+  end
+
+  if segment_start <= #line_text then
+    rows[#rows + 1] = {
+      source_col1 = segment_start,
+      source_col2 = #line_text + 1,
+      end_inclusive = true,
+      y_offset = y,
+      height = body_height,
+    }
+    y = y + body_height
+  end
+
+  render_line.position_rows = rows
+  render_line.layout_height = math.max(body_height, y)
+  render_line.disable_wrapping = true
+  return render_line
+end
+
 local view_in_source_mode
 
 local function clone_render_line(render_line)
@@ -2710,8 +2802,13 @@ local function compute_line_height(view, line, entry)
     local max_height = render_line_widget_height(render_line)
     if max_height then return math.max(body_height, max_height) end
   end
+  local inline = inline_fragments(text, line, view, reveal_units)
+  local inline_render = layout_inline_image_rows(view, text, prose_render_line(view, text, {
+    fragments = inline,
+  }))
+  if inline_render.layout_height then return inline_render.layout_height end
   local max_height
-  for _, fragment in ipairs(inline_fragments(text, line, view, reveal_units)) do
+  for _, fragment in ipairs(inline) do
     if fragment.widget and fragment.widget.height then
       max_height = math.max(max_height or 0, fragment.widget.height)
     end
@@ -2809,7 +2906,9 @@ function provider:render_line(view, line)
     local render_line = image_only_render_line(view, text, line, image_span, image_revealed)
     if render_line then
       for _, fragment in ipairs(render_line.fragments or {}) do
-        if fragment.semantic_id then decorate_link_fragment(view, line, image_span, fragment) end
+        if fragment.image_anchor then
+          decorate_link_fragment(view, line, image_span, fragment)
+        end
       end
       return prose_render_line(view, text, render_line)
     end
@@ -2818,11 +2917,11 @@ function provider:render_line(view, line)
   local fragments = inline_fragments(text, line, view, reveal_units)
   if #fragments > 0 then
     local _, semantic_generation = semantic_line(view, line)
-    return prose_render_line(view, text, {
+    return layout_inline_image_rows(view, text, prose_render_line(view, text, {
       source_text = text,
       semantic_generation = semantic_generation,
       fragments = fragments,
-    })
+    }))
   end
   return prose_render_line(view, text, { fragments = {} })
 end

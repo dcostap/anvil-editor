@@ -2169,6 +2169,7 @@ test.describe("Markdown Live Editor", function()
     local old_draw_text = renderer.draw_text
     local drawn = 0
     local drawn_text = {}
+    local old_draw_rect = renderer.draw_rect
     canvas.load_image = function(path)
       test.equal(path, image_path)
       return {
@@ -2177,6 +2178,7 @@ test.describe("Markdown Live Editor", function()
       }
     end
     renderer.draw_canvas = function() drawn = drawn + 1 end
+    renderer.draw_rect = function() end
     renderer.draw_text = function(font, text, x, y, color, opts)
       drawn_text[#drawn_text + 1] = text
       return x + font:get_width(text, opts)
@@ -2194,7 +2196,7 @@ test.describe("Markdown Live Editor", function()
     doc:set_selection(1, 1)
     test.ok(view:get_visual_row_height(1) > inactive_height)
     view:draw_line_text(1, 0, 0)
-    test.equal(drawn_text[1], "![Alt](" .. image_url .. ")")
+    test.equal(table.concat(drawn_text), "![Alt](" .. image_url .. ")")
     doc:set_selection(2, 1)
     test.equal(view:get_visual_row_height(1), inactive_height)
     test.equal(view:get_x_offset_col(1, 1), 1)
@@ -2203,8 +2205,141 @@ test.describe("Markdown Live Editor", function()
     canvas.load_image = old_load_image
     renderer.draw_canvas = old_draw_canvas
     renderer.draw_text = old_draw_text
+    renderer.draw_rect = old_draw_rect
     os.remove(image_path)
     test.equal(drawn, 2)
+  end)
+
+  test.it("keeps image source active at its right edge with link styling and a text-height caret", function()
+    local image_path = USERDIR .. PATHSEP .. "markdown-live-source-caret-" .. system.get_process_id() .. ".png"
+    local fp = io.open(image_path, "wb")
+    test.not_nil(fp)
+    fp:write("png")
+    fp:close()
+    local image_url = common.basename and common.basename(image_path) or image_path:match("[^" .. PATHSEP .. "]+$")
+    local source = "![Alt](" .. image_url .. ")"
+    local view, doc = make_view(source .. "\nother", USERDIR .. PATHSEP .. "note.md")
+    doc:set_selection(1, #source + 1)
+    local old_load_image = canvas.load_image
+    local old_draw_rect = renderer.draw_rect
+    local caret_height
+    canvas.load_image = function()
+      return {
+        get_size = function() return 80, 40 end,
+        scaled = function(self) return self end,
+      }
+    end
+    renderer.draw_rect = function(_, _, _, height, color)
+      if color == style.caret then caret_height = height end
+    end
+
+    refresh(view)
+    local render_line = test.not_nil(view:get_line_render(1))
+    local visible, linked = {}, nil
+    for _, fragment in ipairs(view:iter_line_render_fragments(render_line)) do
+      if not fragment.hidden then visible[#visible + 1] = fragment.text or "" end
+      if fragment.text == "Alt"
+        and fragment.color == style.markdown_live_link and fragment.underline
+      then
+        linked = fragment
+      end
+    end
+    local x, y = view:get_line_screen_position(1, #source + 1)
+    view:draw_caret(x, y, 1, #source + 1, 1, style.caret)
+    local wiki_source = "![[" .. image_url .. "]]"
+    local wiki_view, wiki_doc = make_view(
+      wiki_source .. "\nother", USERDIR .. PATHSEP .. "wiki-note.md"
+    )
+    wiki_doc:set_selection(1, #wiki_source + 1)
+    refresh(wiki_view)
+    local wiki_visible = {}
+    for _, fragment in ipairs(wiki_view:iter_line_render_fragments(
+      test.not_nil(wiki_view:get_line_render(1))
+    )) do
+      if not fragment.hidden then wiki_visible[#wiki_visible + 1] = fragment.text or "" end
+    end
+
+    renderer.draw_rect = old_draw_rect
+    canvas.load_image = old_load_image
+    os.remove(image_path)
+    test.equal(table.concat(visible), source)
+    test.equal(table.concat(wiki_visible), wiki_source)
+    test.equal(test.not_nil(linked).color, style.markdown_live_link)
+    test.equal(linked.underline, true)
+    test.equal(
+      caret_height,
+      math.floor(live_body_font(view):get_height() * config.line_height)
+    )
+  end)
+
+  test.it("lays out surrounding image text above and below the image row", function()
+    local image_path = USERDIR .. PATHSEP .. "markdown-live-surrounding-text-" .. system.get_process_id() .. ".png"
+    local fp = io.open(image_path, "wb")
+    test.not_nil(fp)
+    fp:write("png")
+    fp:close()
+    local image_url = common.basename and common.basename(image_path) or image_path:match("[^" .. PATHSEP .. "]+$")
+    local prefix, image_source, suffix = "before ", "![Alt](" .. image_url .. ")", " after"
+    local source = prefix .. image_source .. suffix
+    local image_end = #prefix + #image_source + 1
+    local view, doc = make_view(source .. "\nother", USERDIR .. PATHSEP .. "note.md")
+    doc:set_selection(2, 1)
+    local old_load_image = canvas.load_image
+    local old_draw_canvas = renderer.draw_canvas
+    local old_draw_text = renderer.draw_text
+    local old_draw_rect = renderer.draw_rect
+    local image_y, drawn_text
+    canvas.load_image = function()
+      return {
+        get_size = function() return 80, 40 end,
+        scaled = function(self) return self end,
+      }
+    end
+    renderer.draw_canvas = function(_, _, y) image_y = y end
+    renderer.draw_rect = function() end
+    renderer.draw_text = function(font, text, x, y, color, opts)
+      drawn_text[#drawn_text + 1] = { text = text, y = y }
+      return x + font:get_width(text, opts)
+    end
+
+    local function draw_positions()
+      image_y, drawn_text = nil, {}
+      view:draw_line_text(1, 0, 0)
+      local before_y, after_y
+      for _, draw in ipairs(drawn_text) do
+        if draw.text:find("before", 1, true) then before_y = draw.y end
+        if draw.text:find("after", 1, true) then after_y = draw.y end
+      end
+      return before_y, image_y, after_y
+    end
+
+    refresh(view)
+    local inactive_before_y, inactive_image_y, inactive_after_y = draw_positions()
+    local _, inactive_before_caret_y = view:get_line_screen_position(1, 1)
+    local _, inactive_after_caret_y = view:get_line_screen_position(1, #source + 1)
+    doc:set_selection(1, image_end)
+    local active_before_y, active_image_y, active_after_y = draw_positions()
+    local active_render = test.not_nil(view:get_line_render(1))
+    local visible = {}
+    for _, fragment in ipairs(view:iter_line_render_fragments(active_render)) do
+      if not fragment.hidden then visible[#visible + 1] = fragment.text or "" end
+    end
+    local _, active_source_caret_y = view:get_line_screen_position(1, image_end)
+    local _, active_after_caret_y = view:get_line_screen_position(1, #source + 1)
+
+    renderer.draw_rect = old_draw_rect
+    renderer.draw_text = old_draw_text
+    renderer.draw_canvas = old_draw_canvas
+    canvas.load_image = old_load_image
+    os.remove(image_path)
+    test.ok(inactive_before_y < inactive_image_y)
+    test.ok(inactive_image_y < inactive_after_y)
+    test.ok(inactive_before_caret_y < inactive_after_caret_y)
+    test.ok(active_before_y < active_image_y)
+    test.ok(active_image_y < active_after_y)
+    test.ok(table.concat(visible):find(image_source, 1, true))
+    test.equal(active_source_caret_y, inactive_before_caret_y)
+    test.ok(active_source_caret_y < active_after_caret_y)
   end)
 
   test.it("invalidates every cached line sharing a completed image asset", function()
@@ -2318,6 +2453,7 @@ test.describe("Markdown Live Editor", function()
     local old_active = core.active_view
     local old_load_image = canvas.load_image
     local old_draw_canvas = renderer.draw_canvas
+    local old_draw_rect = renderer.draw_rect
     local old_draw_text = renderer.draw_text
     local old_draw_text_known_bounds = renderer.draw_text_known_bounds
     local drawn = 0
@@ -2328,6 +2464,7 @@ test.describe("Markdown Live Editor", function()
       }
     end
     renderer.draw_canvas = function() drawn = drawn + 1 end
+    renderer.draw_rect = function() end
     renderer.draw_text = function(font, text, x, _, _, opts)
       return x + font:get_width(text, opts)
     end
@@ -2353,6 +2490,7 @@ test.describe("Markdown Live Editor", function()
 
     renderer.draw_text_known_bounds = old_draw_text_known_bounds
     renderer.draw_text = old_draw_text
+    renderer.draw_rect = old_draw_rect
     renderer.draw_canvas = old_draw_canvas
     canvas.load_image = old_load_image
     core.active_view = old_active

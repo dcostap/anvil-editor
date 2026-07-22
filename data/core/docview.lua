@@ -2568,6 +2568,33 @@ function DocView:get_position_visual_row_height(line, col, line_end)
   return self:get_visual_row_height(self:get_visual_row(line, col or 1, line_end))
 end
 
+---Returns the caret height requested by a specialized line presentation.
+---@param line integer
+---@param col? integer
+---@param line_end? boolean
+---@return number
+function DocView:get_position_caret_height(line, col, line_end)
+  local row_height = self:get_position_visual_row_height(line, col, line_end)
+  local render_line = self:get_line_render(line)
+  local position_row = render_line
+    and self:get_line_render_position_row(render_line, col or 1)
+  if position_row and position_row.height then
+    row_height = math.max(1, tonumber(position_row.height) or row_height)
+  end
+  local requested = render_line and render_line.caret_height
+  if type(requested) == "function" then
+    local ok, value = pcall(requested, self, render_line, line, col or 1, row_height)
+    if ok then requested = value else
+      core.log_quiet(
+        "DocView line-render caret height failed for %s: %s",
+        self.doc:get_name(), tostring(value)
+      )
+      requested = nil
+    end
+  end
+  return math.max(1, tonumber(requested) or row_height)
+end
+
 function DocView:get_visual_row_y_offset(row)
   local cache = self:get_visual_row_metric_cache()
   if cache then
@@ -2822,6 +2849,12 @@ end
 ---@return number x Screen x coordinate
 ---@return number y Screen y coordinate
 function DocView:get_line_screen_position(line, col, line_end)
+  local function render_y_offset()
+    if not col then return 0 end
+    local render_line = self:get_line_render(line)
+    local row = render_line and self:get_line_render_position_row(render_line, col)
+    return row and (row.y_offset or 0) or 0
+  end
   if self.wrapped_settings then
     if line_end == nil and self.__use_wrapped_caret_affinity then
       line_end = linewrapping.has_wrapped_line_end_affinity(self, line, col)
@@ -2834,12 +2867,13 @@ function DocView:get_line_screen_position(line, col, line_end)
     end
     local x, y = self:get_content_offset()
     local gw = self:get_gutter_width()
-    return x + gw + (col and self:get_col_x_offset(line, col, line_end) or 0), y + self:get_visual_row_y_offset(idx) + style.padding.y
+    return x + gw + (col and self:get_col_x_offset(line, col, line_end) or 0),
+      y + self:get_visual_row_y_offset(idx) + style.padding.y + render_y_offset()
   end
   local x, y = self:get_content_offset()
   local gw = self:get_gutter_width()
   local row = self:has_composed_visual_rows() and self:get_composed_visual_row_for_position(line, col, line_end) or line
-  y = y + self:get_visual_row_y_offset(row) + style.padding.y
+  y = y + self:get_visual_row_y_offset(row) + style.padding.y + render_y_offset()
   if col then
     return x + gw + self:get_col_x_offset(line, col), y
   else
@@ -3009,7 +3043,7 @@ function DocView:get_render_fragment_at_position(x, y)
   local line, col = self:resolve_screen_position(x, y)
   local render_line = self:get_line_render(line)
   if not render_line then return nil end
-  if self.wrapped_settings then
+  if self.wrapped_settings and not render_line.disable_wrapping then
     local idx, _, _, row_start = linewrapping.get_line_idx_col_count(self, line, col)
     local next_line, row_end = linewrapping.get_idx_line_col(self, idx + 1)
     if next_line ~= line then row_end = #(self.doc.lines[line] or "") end
@@ -3041,12 +3075,25 @@ function DocView:get_render_fragment_at_position(x, y)
   local _, indent_size = self.doc:get_indent_info()
   for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
     if not fragment.hidden then
+      local col1 = fragment.source_col1 or 1
+      local position_row = self:get_line_render_position_row(
+        render_line, col1, (fragment.source_col2 or col1) > col1
+      )
       local font = fragment.font or self:get_font()
       font:set_tab_size(indent_size)
       local text = fragment.text or ""
       local width = fragment.width or (fragment.widget and fragment.widget.width)
         or font:get_width(text, { tab_offset = tx })
-      if xrel >= tx and xrel <= tx + width and yrel >= 0 and yrel <= row_height then
+      local left = fragment.layout_x ~= nil and fragment.layout_x
+        or position_row and self:get_line_render_col_x_offset(
+          render_line, col1, position_row
+        )
+        or tx
+      local top = position_row and (position_row.y_offset or 0) or 0
+      local height = position_row and (position_row.height or row_height) or row_height
+      if xrel >= left and xrel <= left + width
+        and yrel >= top and yrel <= top + height
+      then
         return { line = line, fragment = fragment }
       end
       tx = tx + width
@@ -3071,12 +3118,13 @@ function DocView:get_render_widget_at_position(x, y)
       font:set_tab_size(indent_size)
       local widget = fragment.widget
       local text = fragment.text or ""
-      local width = fragment.width or (widget and widget.width)
-        or font:get_width(text, { tab_offset = tx })
+      local width = widget and (fragment.hit_width or widget.width or fragment.width)
+        or fragment.width or font:get_width(text, { tab_offset = tx })
       if widget then
         local padding = widget.padding or 0
         local height = widget.image_height or widget.height or row_height
-        local left = tx + (fragment.draw_x_offset or 0)
+        local left = (fragment.layout_x ~= nil and fragment.layout_x or tx)
+          + (fragment.draw_x_offset or 0)
         local top = fragment.draw_y_offset and (fragment.draw_y_offset - padding)
           or (math.max(0, (row_height - height) / 2) - padding)
         if xrel >= left and xrel <= left + width and
@@ -3122,7 +3170,25 @@ function DocView:iter_line_render_fragments(render_line)
   return fragments
 end
 
-function DocView:get_line_render_col_x_offset(render_line, col)
+function DocView:get_line_render_position_row(render_line, col, prefer_next)
+  col = math.max(1, col or 1)
+  local rows = render_line and render_line.position_rows or {}
+  for index, row in ipairs(rows) do
+    local col1 = math.max(1, row.source_col1 or 1)
+    local col2 = math.max(col1, row.source_col2 or col1)
+    if col >= col1 and (col < col2 or (row.end_inclusive and col == col2)) then
+      local next_row = rows[index + 1]
+      if prefer_next and col == col2 and next_row
+        and col >= (next_row.source_col1 or col)
+      then
+        return next_row
+      end
+      return row
+    end
+  end
+end
+
+local function get_line_render_raw_col_x_offset(self, render_line, col)
   col = math.max(1, col or 1)
   local xoffset = render_line.x_offset or 0
   local _, indent_size = self.doc:get_indent_info()
@@ -3157,6 +3223,16 @@ function DocView:get_line_render_col_x_offset(render_line, col)
     end
   end
   return xoffset
+end
+
+function DocView:get_line_render_col_x_offset(render_line, col, position_row)
+  local xoffset = get_line_render_raw_col_x_offset(self, render_line, col)
+  local row = position_row or self:get_line_render_position_row(render_line, col)
+  if not row then return xoffset end
+  local row_start = get_line_render_raw_col_x_offset(
+    self, render_line, row.source_col1 or 1
+  )
+  return (render_line.x_offset or 0) + (row.x_offset or 0) + xoffset - row_start
 end
 
 local function render_line_for_hit_test(render_line)
@@ -3213,6 +3289,30 @@ end
 ---@param y number Vertical offset from the rendered row origin
 ---@return integer? col Source column, or nil when ordinary mapping should be used
 function DocView:get_line_render_position_col(render_line, x, y)
+  if render_line.position_rows then
+    local row
+    for _, candidate in ipairs(render_line.position_rows) do
+      local top = candidate.y_offset or 0
+      local height = candidate.height or self:get_line_height()
+      if y >= top and y < top + height then row = candidate break end
+    end
+    if row then
+      local col = row.source_col1 or 1
+      local col2 = row.source_col2 or col
+      local previous_x = self:get_line_render_col_x_offset(render_line, col, row)
+      if x <= previous_x then return col end
+      local source = render_line.source_text or ""
+      for char in common.utf8_chars(source:sub(col, math.max(col, col2 - 1))) do
+        local next_col = col + #char
+        local next_x = self:get_line_render_col_x_offset(render_line, next_col, row)
+        if x <= next_x then
+          return x <= previous_x + (next_x - previous_x) / 2 and col or next_col
+        end
+        col, previous_x = next_col, next_x
+      end
+      return col2
+    end
+  end
   local xoffset = render_line.x_offset or 0
   local _, indent_size = self.doc:get_indent_info()
   for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
@@ -3260,7 +3360,7 @@ function DocView:get_col_x_offset(line, col, line_end)
   local render_line = self:get_line_render(line)
   if render_line then
     local rendered_offset = self:get_line_render_col_x_offset(render_line, col)
-    if self.wrapped_settings then
+    if self.wrapped_settings and not render_line.disable_wrapping then
       if line_end == nil and self.__use_wrapped_caret_affinity then
         line_end = linewrapping.has_wrapped_line_end_affinity(self, line, col)
       end
@@ -4607,21 +4707,36 @@ function DocView:draw_line_text(line, x, y)
     local _, indent_size = self.doc:get_indent_info()
     for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
       if not fragment.hidden then
+        local col1 = fragment.source_col1 or 1
+        local position_row = self:get_line_render_position_row(
+          render_line, col1, (fragment.source_col2 or col1) > col1
+        )
+        local draw_x = fragment.layout_x ~= nil and x + fragment.layout_x
+        or position_row and x + self:get_line_render_col_x_offset(
+          render_line, col1, position_row
+        )
+          or tx
+        local draw_y = y + (position_row and (position_row.y_offset or 0) or 0)
+        local draw_height = position_row and (position_row.height or row_height)
+          or row_height
         local font = render_fragment_font(self, fragment)
         font:set_tab_size(indent_size)
         local text = fragment.text or ""
-        local ty = y + math.max(0, (row_height - font:get_height()) / 2)
+        local ty = draw_y + math.max(0, (draw_height - font:get_height()) / 2)
         if fragment.widget and fragment.widget.draw then
-          local ok, err = pcall(fragment.widget.draw, self, fragment, tx, y, row_height)
+          local ok, err = pcall(
+            fragment.widget.draw, self, fragment, draw_x, y, row_height
+          )
           if not ok then core.log_quiet("DocView render widget draw failed for %s: %s", self.doc:get_name(), tostring(err)) end
-          tx = tx + (fragment.width or fragment.widget.width or 0)
+          tx = draw_x + (fragment.width or fragment.widget.width or 0)
         elseif text ~= "" then
           local color = render_fragment_color(fragment)
           tx = draw_render_fragment_text(
-            fragment, font, text, tx, ty, color, { tab_offset = tx - x }, y, row_height
+            fragment, font, text, draw_x, ty, color,
+            { tab_offset = draw_x - x }, draw_y, draw_height
           )
         elseif fragment.width then
-          tx = tx + fragment.width
+          tx = draw_x + fragment.width
         end
       end
     end
@@ -5168,7 +5283,7 @@ function DocView:draw_caret(x, y, line, col, caret_idx, color)
   local line_end = self.wrapped_settings
     and linewrapping.has_wrapped_line_end_affinity(self, line, col)
     or false
-  local lh = self:get_position_visual_row_height(line, col, line_end)
+  local lh = self:get_position_caret_height(line, col, line_end)
   if self.doc.overwrite then
     local w = self:get_font():get_width(self.doc:get_char(line, col))
     renderer.draw_rect(x, y + lh, w, style.caret_width * 2, color)
