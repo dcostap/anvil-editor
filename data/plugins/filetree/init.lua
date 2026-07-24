@@ -176,6 +176,15 @@ local function path_join(a, b)
   return a .. PATHSEP .. b
 end
 
+-- File Tree parents are always absolute normalized paths. Keep child path
+-- construction lexical: calling the native absolute-path API for every row is
+-- needlessly expensive and does not add filesystem identity guarantees (the
+-- Project Paths model intentionally uses lexical path identity too).
+local function child_path(parent, name)
+  local ok, path = pcall(common.normalize_path, path_join(parent, name))
+  return ok and path or nil
+end
+
 local function path_depth(path)
   local n, i = 0, 1
   while true do
@@ -832,8 +841,8 @@ local function recover_known_line_meta(view)
     if parsed then
       local parent = parsed.level == 0 and root or stack[parsed.level - 1]
       if parent and parent.type == "dir" then
-        local abs = system.absolute_path(path_join(parent.abs, parsed.name))
-          or common.normalize_path(path_join(parent.abs, parsed.name))
+        local abs = child_path(parent.abs, parsed.name)
+        if not abs then goto continue end
         local meta = type(view.line_meta[i]) == "table" and view.line_meta[i] or nil
         local known = view.known_originals[path_key(abs)]
         local entry_type = parsed.wants_dir and "dir"
@@ -863,6 +872,7 @@ local function recover_known_line_meta(view)
         end
       end
     end
+    ::continue::
   end
 end
 
@@ -903,6 +913,8 @@ function FileTreeView:new()
   self.original_by_name = {}
   self.known_originals = {}
   self.line_meta = {}
+  self.entry_snapshot_generation = 0
+  self.entry_snapshots = {}
   self.line_hint_cache = {}
   self.line_hint_count_cache = {}
   self.line_hint_count_pending = {}
@@ -1209,6 +1221,11 @@ function FileTreeView:set_caption(text)
   self.caption = text
 end
 
+function FileTreeView:invalidate_entry_snapshots()
+  self.entry_snapshot_generation = (self.entry_snapshot_generation or 0) + 1
+  self.entry_snapshots = {}
+end
+
 function FileTreeView:snapshot_lines()
   self.last_lines = {}
   for i, line in ipairs(self.doc.lines) do
@@ -1219,9 +1236,7 @@ function FileTreeView:snapshot_lines()
     self.line_meta[i] = nil
   end
   self.last_change_id = self.doc:get_change_id()
-  self.__line_hint_entries_change_id = nil
-  self.__line_hint_entries_by_line = nil
-  self.__line_hint_errors = nil
+  self:invalidate_entry_snapshots()
 end
 
 function FileTreeView:sync_meta()
@@ -1375,32 +1390,39 @@ function FileTreeView:restore_expanded_paths(expanded)
     return #a < #b
   end)
 
-  for _, path in ipairs(paths) do
-    local entries = self:build_entries(false)
-    for _, entry in ipairs(entries) do
-      if common.path_equals(entry.abs, path) and entry.type == "dir" then
+  local index = 1
+  while index <= #paths do
+    local depth = path_depth(paths[index])
+    local _, _, snapshot = self:build_entries(false)
+    local pending = {}
+    while index <= #paths and path_depth(paths[index]) == depth do
+      local path = paths[index]
+      local entry = snapshot.by_abs[path_key(path)]
+      if entry and entry.type == "dir" then
         local meta = self.line_meta[entry.line]
         if type(meta) == "table" and not meta.expanded and system.get_file_info(path) then
-          self:expand_folder(entry.line, entry, false)
+          pending[#pending + 1] = entry
         end
-        break
       end
+      index = index + 1
+    end
+    -- Expanding from the bottom keeps every earlier line number valid while
+    -- allowing all folders at one depth to share a single resolved snapshot.
+    table.sort(pending, function(a, b) return a.line > b.line end)
+    for _, entry in ipairs(pending) do
+      self:expand_folder(entry.line, entry, false)
     end
   end
 end
 
 function FileTreeView:capture_selection_paths()
-  self:sync_meta()
-  local entries, errors = self:build_entries(false)
-  local by_line = {}
-  for _, entry in ipairs(entries) do
-    if not errors[entry.line] then by_line[entry.line] = entry end
-  end
+  local _, errors, snapshot = self:build_entries(false)
+  local by_line = snapshot.by_line
 
   local selections = {}
   for idx, line1, col1, line2, col2 in self.doc:get_selections(false) do
-    local entry1 = by_line[line1]
-    local entry2 = by_line[line2]
+    local entry1 = not errors[line1] and by_line[line1]
+    local entry2 = not errors[line2] and by_line[line2]
     if not entry1 or not entry2 then return nil end
     selections[idx] = {
       line1_abs = entry1.abs,
@@ -1419,9 +1441,8 @@ end
 function FileTreeView:restore_selection_paths(snapshot)
   if not snapshot or not snapshot.selections then return false end
 
-  local entries = self:build_entries(false)
-  local by_abs = {}
-  for _, entry in ipairs(entries) do by_abs[path_key(entry.abs)] = entry end
+  local _, _, entries_snapshot = self:build_entries(false)
+  local by_abs = entries_snapshot.by_abs
 
   local function restore(selections, last_selection)
     local restored = {}
@@ -1863,23 +1884,10 @@ end
 function FileTreeView:get_line_hint_entry(line)
   local stats = perf_stats()
   local start = perf_call(stats, "filetree_line_hint_entry_calls")
-  local change_id = self.doc:get_change_id()
-  if self.__line_hint_entries_change_id ~= change_id
-      or self.__line_hint_entries_dir ~= self.current_dir then
-    perf_add(stats, "filetree_line_hint_entry_rebuilds", 1)
-    local build_start = perf_start(stats)
-    local entries, errors = self:build_entries(false)
-    local by_line = {}
-    for _, entry in ipairs(entries) do by_line[entry.line] = entry end
-    self.__line_hint_entries_change_id = change_id
-    self.__line_hint_entries_dir = self.current_dir
-    self.__line_hint_entries_by_line = by_line
-    self.__line_hint_errors = errors
-    perf_finish(stats, "filetree_line_hint_entry_build_ms", build_start)
-  end
+  local _, errors, snapshot = self:build_entries(false)
   local entry
-  if not (self.__line_hint_errors and self.__line_hint_errors[line]) then
-    entry = self.__line_hint_entries_by_line and self.__line_hint_entries_by_line[line]
+  if not errors[line] then
+    entry = snapshot.by_line[line]
   end
   perf_finish(stats, "filetree_line_hint_entry_ms", start)
   return entry
@@ -2192,6 +2200,26 @@ end
 
 function FileTreeView:build_entries(include_hidden)
   self:sync_meta()
+  include_hidden = not not include_hidden
+  local stats = perf_stats()
+  local cache_key = include_hidden and "hidden" or "visible"
+  local generation = self.entry_snapshot_generation or 0
+  local change_id = self.doc:get_change_id()
+  local project_paths_generation = project_paths.generation()
+  local current_indent_size = indent_size()
+  local cached = self.entry_snapshots and self.entry_snapshots[cache_key]
+  if cached
+      and cached.generation == generation
+      and cached.change_id == change_id
+      and cached.current_dir == self.current_dir
+      and cached.project_paths_generation == project_paths_generation
+      and cached.indent_size == current_indent_size then
+    perf_add(stats, "filetree_entry_snapshot_hits", 1)
+    return cached.entries, cached.errors, cached
+  end
+
+  local build_start = perf_call(stats, "filetree_entry_snapshot_builds")
+  local diagnostic_start = system.get_time()
   local rows = self:collect_rows(include_hidden)
   local entries, errors = {}, {}
   local root = { abs = self.current_dir, type = "dir", level = -1 }
@@ -2218,8 +2246,11 @@ function FileTreeView:build_entries(include_hidden)
     if meta and meta.project_path_root and meta.original_abs then
       abs = meta.original_abs
     else
-      abs = system.absolute_path(path_join(parent.abs, parsed.name))
-        or common.normalize_path(path_join(parent.abs, parsed.name))
+      abs = child_path(parent.abs, parsed.name)
+      if not abs then
+        errors[row.line] = "invalid path"
+        goto continue
+      end
     end
     local resolved = project_paths.resolve(abs)
     if not (resolved and resolved.flags.browsable ~= false) then
@@ -2265,7 +2296,34 @@ function FileTreeView:build_entries(include_hidden)
     ::continue::
   end
 
-  return entries, errors
+  local by_line, by_abs = {}, {}
+  for _, entry in ipairs(entries) do
+    by_line[entry.line] = entry
+    by_abs[path_key(entry.abs)] = entry
+  end
+  local snapshot = {
+    generation = generation,
+    change_id = change_id,
+    current_dir = self.current_dir,
+    project_paths_generation = project_paths_generation,
+    indent_size = current_indent_size,
+    entries = entries,
+    errors = errors,
+    by_line = by_line,
+    by_abs = by_abs,
+  }
+  self.entry_snapshots = self.entry_snapshots or {}
+  self.entry_snapshots[cache_key] = snapshot
+  perf_add(stats, "filetree_entry_snapshot_rows", #rows)
+  perf_finish(stats, "filetree_entry_snapshot_build_ms", build_start)
+  local elapsed_ms = (system.get_time() - diagnostic_start) * 1000
+  if elapsed_ms >= 25 then
+    core.log_quiet(
+      "File Tree entry snapshot rebuilt rows=%d hidden=%s elapsed=%.1fms generation=%d",
+      #rows, tostring(include_hidden), elapsed_ms, generation
+    )
+  end
+  return entries, errors, snapshot
 end
 
 function FileTreeView:plan_changes(status_only)
@@ -2707,12 +2765,9 @@ function FileTreeView:get_line_status(line)
 end
 
 function FileTreeView:entry_for_line(line)
-  local entries, errors = self:build_entries(false)
+  local _, errors, snapshot = self:build_entries(false)
   if errors[line] then return nil, errors[line] end
-  for _, e in ipairs(entries) do
-    if e.line == line then return e end
-  end
-  return nil
+  return snapshot.by_line[line]
 end
 
 function FileTreeView:read_folder_lines(abs, indent, parent_entry)
@@ -2832,9 +2887,8 @@ end
 
 function FileTreeView:open_selected_files()
   local slots = merge_line_ranges(self:selected_covered_line_slots())
-  local entries, errors = self:build_entries(false)
-  local entries_by_line = {}
-  for _, entry in ipairs(entries) do entries_by_line[entry.line] = entry end
+  local _, errors, snapshot = self:build_entries(false)
+  local entries_by_line = snapshot.by_line
 
   local files, seen = {}, {}
   for _, slot in ipairs(slots) do
@@ -3321,10 +3375,9 @@ local function show_and_focus_filetree()
 end
 
 local function find_entry(filename)
-  local entries = view:build_entries(false)
-  for _, entry in ipairs(entries) do
-    if common.path_equals(entry.abs, filename) then return entry end
-  end
+  if not filename then return nil end
+  local _, _, snapshot = view:build_entries(false)
+  return snapshot.by_abs[path_key(filename)]
 end
 
 local function focus_entry(entry, filename)

@@ -231,7 +231,7 @@ local function write_frame_header(file)
     "command_calls", "command_total_ms", "command_predicate_ms", "command_body_ms", "slowest_command_ms", "slowest_command_name",
     "statusbar_selection_ms", "statusbar_selection_cache_hits", "statusbar_selection_cache_misses",
     "docview_line_hint_calls", "docview_line_hint_drawn", "docview_line_hint_ms", "docview_line_hint_get_ms", "docview_line_hint_normalize_ms", "docview_line_hint_layout_ms", "docview_line_hint_measure_ms", "docview_line_hint_truncate_ms", "docview_line_hint_draw_ms", "docview_line_hint_draw_text_calls", "docview_line_hint_draw_text_ms", "docview_line_hint_skip_no_hint", "docview_line_hint_skip_no_space", "docview_line_hint_skip_truncated",
-    "filetree_line_hint_calls", "filetree_line_hint_ms", "filetree_line_hint_get_file_info_calls", "filetree_line_hint_get_file_info_ms", "filetree_line_hint_format_ms", "filetree_line_hint_git_ms", "filetree_line_hint_segments", "filetree_line_hint_cache_hits", "filetree_line_hint_cache_misses", "filetree_line_hint_folder_count_hits", "filetree_line_hint_folder_count_pending", "filetree_line_hint_entry_calls", "filetree_line_hint_entry_ms", "filetree_line_hint_entry_rebuilds", "filetree_line_hint_entry_build_ms", "filetree_folder_row_background_calls", "filetree_folder_row_background_rects", "filetree_folder_row_background_ms", "filetree_line_is_dir_calls", "filetree_line_is_dir_ms", "filetree_draw_line_body_calls", "filetree_draw_line_body_ms", "filetree_draw_line_text_calls", "filetree_draw_line_text_ms", "filetree_draw_line_text_git_ms", "filetree_draw_line_text_colored_calls", "filetree_draw_line_text_plain_calls",
+    "filetree_line_hint_calls", "filetree_line_hint_ms", "filetree_line_hint_get_file_info_calls", "filetree_line_hint_get_file_info_ms", "filetree_line_hint_format_ms", "filetree_line_hint_git_ms", "filetree_line_hint_segments", "filetree_line_hint_cache_hits", "filetree_line_hint_cache_misses", "filetree_line_hint_folder_count_hits", "filetree_line_hint_folder_count_pending", "filetree_line_hint_entry_calls", "filetree_line_hint_entry_ms", "filetree_entry_snapshot_hits", "filetree_entry_snapshot_builds", "filetree_entry_snapshot_rows", "filetree_entry_snapshot_build_ms", "filetree_folder_row_background_calls", "filetree_folder_row_background_rects", "filetree_folder_row_background_ms", "filetree_line_is_dir_calls", "filetree_line_is_dir_ms", "filetree_draw_line_body_calls", "filetree_draw_line_body_ms", "filetree_draw_line_text_calls", "filetree_draw_line_text_ms", "filetree_draw_line_text_git_ms", "filetree_draw_line_text_colored_calls", "filetree_draw_line_text_plain_calls",
     "over_budget" .. (#diagnostic_frame_keys > 0 and "," .. table.concat(diagnostic_frame_keys, ",") or "")
   }, ",") .. "\n")
 end
@@ -293,8 +293,10 @@ local aggregate_detail_keys = {
   "filetree_line_hint_folder_count_pending",
   "filetree_line_hint_entry_calls",
   "filetree_line_hint_entry_ms",
-  "filetree_line_hint_entry_rebuilds",
-  "filetree_line_hint_entry_build_ms",
+  "filetree_entry_snapshot_hits",
+  "filetree_entry_snapshot_builds",
+  "filetree_entry_snapshot_rows",
+  "filetree_entry_snapshot_build_ms",
   "filetree_folder_row_background_calls",
   "filetree_folder_row_background_rects",
   "filetree_folder_row_background_ms",
@@ -655,8 +657,10 @@ function perf.on_frame(snapshot)
     tostring(snapshot_value(snapshot, "filetree_line_hint_folder_count_pending")),
     tostring(snapshot_value(snapshot, "filetree_line_hint_entry_calls")),
     string.format("%.3f", snapshot.filetree_line_hint_entry_ms or 0),
-    tostring(snapshot_value(snapshot, "filetree_line_hint_entry_rebuilds")),
-    string.format("%.3f", snapshot.filetree_line_hint_entry_build_ms or 0),
+    tostring(snapshot_value(snapshot, "filetree_entry_snapshot_hits")),
+    tostring(snapshot_value(snapshot, "filetree_entry_snapshot_builds")),
+    tostring(snapshot_value(snapshot, "filetree_entry_snapshot_rows")),
+    string.format("%.3f", snapshot.filetree_entry_snapshot_build_ms or 0),
     tostring(snapshot_value(snapshot, "filetree_folder_row_background_calls")),
     tostring(snapshot_value(snapshot, "filetree_folder_row_background_rects")),
     string.format("%.3f", snapshot.filetree_folder_row_background_ms or 0),
@@ -821,6 +825,10 @@ local function write_summary(path)
   drill_metric("filetree line hint format ms", "filetree_line_hint_format_ms", redraw_denom, "redraw")
   drill_metric("filetree line hint git ms", "filetree_line_hint_git_ms", redraw_denom, "redraw")
   drill_metric("filetree line hint entry ms", "filetree_line_hint_entry_ms", redraw_denom, "redraw")
+  drill_metric("filetree entry snapshot hits", "filetree_entry_snapshot_hits", run_denom, "run_loop")
+  drill_metric("filetree entry snapshot builds", "filetree_entry_snapshot_builds", run_denom, "run_loop")
+  drill_metric("filetree entry snapshot rows", "filetree_entry_snapshot_rows", run_denom, "run_loop")
+  drill_metric("filetree entry snapshot build ms", "filetree_entry_snapshot_build_ms", run_denom, "run_loop")
   drill_metric("filetree folder row bg rects", "filetree_folder_row_background_rects", redraw_denom, "redraw")
   drill_metric("filetree folder row bg ms", "filetree_folder_row_background_ms", redraw_denom, "redraw")
   drill_metric("filetree line_is_dir calls", "filetree_line_is_dir_calls", redraw_denom, "redraw")

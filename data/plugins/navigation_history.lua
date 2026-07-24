@@ -1041,7 +1041,14 @@ local function record_transition(before, after, reason)
   debug_log("transition recording reason=%s scope_changed=%s significant=%s before=%s after=%s",
     tostring(reason), tostring(scope_changed), tostring(significant), place_label(before), place_label(after))
   local history = core.navigation_history or M
-  local recorded = history.record_place(before, { reason = reason })
+  -- `after` was captured immediately above and the transition was already
+  -- compared against it. Do not capture the focused view a third time inside
+  -- record_place; tool views such as the File Tree may need to derive a
+  -- navigation anchor from a large model.
+  local recorded = history.record_place(before, {
+    reason = reason,
+    check_current = false,
+  })
   debug_log("transition record result reason=%s recorded=%s", tostring(reason), tostring(recorded))
 end
 
