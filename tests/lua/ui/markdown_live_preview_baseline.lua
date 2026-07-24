@@ -158,6 +158,73 @@ test.describe("Markdown Live Preview prototype baseline", function()
     end)
   end)
 
+  test.it("recomputes only affected wrapped rows when the caret moves", function()
+    with_live_preview(function()
+      local lines = {}
+      for i = 1, 80 do
+        lines[i] = i == 1 and "# Heading"
+          or ("line " .. i .. " with enough words to wrap in a narrow editor")
+      end
+      local view, doc = make_view(table.concat(lines, "\n"))
+      view.size.x = 180
+      view:set_wrapping_enabled(true)
+      refresh(view)
+
+      local calls = 0
+      view:add_visual_metric_provider("markdown-wrapped-baseline-observer", {
+        line_height = function()
+          calls = calls + 1
+        end,
+      })
+      doc:set_selection(2, 1)
+      view:get_visual_row_height(1)
+      local first_pass = calls
+      local expected = view:get_visual_row_count_for_line(2)
+        + view:get_visual_row_count_for_line(3)
+
+      doc:set_selection(3, 1)
+      view:get_visual_row_height(1)
+      local second_pass = calls - first_pass
+
+      test.equal(first_pass, view:get_scrollable_line_count())
+      test.equal(second_pass, expected)
+      test.ok(second_pass < first_pass)
+    end)
+  end)
+
+  test.it("does not reflow an existing wrapped selection when it grows", function()
+    with_live_preview(function()
+      local lines = {}
+      for i = 1, 80 do
+        lines[i] = "line " .. i .. " with enough words to wrap in a narrow editor"
+      end
+      local view, doc = make_view(table.concat(lines, "\n"))
+      view.size.x = 180
+      view:set_wrapping_enabled(true)
+      refresh(view)
+
+      local calls = 0
+      view:add_visual_metric_provider("markdown-wrapped-selection-observer", {
+        line_height = function()
+          calls = calls + 1
+        end,
+      })
+      doc:set_selection(2, 2, 60, 1)
+      view:get_visual_row_height(1)
+      local first_pass = calls
+      local expected_max = view:get_visual_row_count_for_line(2)
+        + view:get_visual_row_count_for_line(60)
+        + view:get_visual_row_count_for_line(61)
+
+      doc:set_selection(2, 2, 61, 1)
+      view:get_visual_row_height(1)
+      local second_pass = calls - first_pass
+
+      test.ok(second_pass <= expected_max)
+      test.ok(second_pass < first_pass)
+    end)
+  end)
+
   test.it("reuses one rendered line across mapping and draw paths", function()
     with_live_preview(function()
       local view, doc = make_view("See [[Target|Alias]] and **bold**\nother")

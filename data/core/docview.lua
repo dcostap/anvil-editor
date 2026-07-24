@@ -1240,19 +1240,52 @@ function DocView:remove_visual_metric_provider(id)
   return true
 end
 
+local function invalidate_visual_metric_rows(view, cache, row1, row2)
+  row1 = common.clamp(math.floor(row1), 1, cache.row_count)
+  row2 = common.clamp(math.floor(row2 or row1), row1, cache.row_count)
+  cache.dirty_rows = cache.dirty_rows or {}
+  for row = row1, row2 do cache.dirty_rows[row] = true end
+  cache.invalidated_rows = (cache.invalidated_rows or 0) + row2 - row1 + 1
+  view.render_cache_diagnostics.metric_invalidations =
+    view.render_cache_diagnostics.metric_invalidations + row2 - row1 + 1
+end
+
 function DocView:invalidate_visual_metrics(_provider_id, line1, line2)
   local cache = self.__visual_metric_cache
-  if line1 and not self.wrapped_settings and not self:has_composed_visual_rows() then
-    if cache then
-      line1 = common.clamp(math.floor(line1), 1, cache.row_count)
-      line2 = common.clamp(math.floor(line2 or line1), line1, cache.row_count)
-      cache.dirty_rows = cache.dirty_rows or {}
-      for row = line1, line2 do cache.dirty_rows[row] = true end
-      cache.invalidated_rows = (cache.invalidated_rows or 0) + line2 - line1 + 1
-      self.render_cache_diagnostics.metric_invalidations =
-        self.render_cache_diagnostics.metric_invalidations + line2 - line1 + 1
+  if line1 and not self:has_composed_visual_rows() then
+    if not cache then return end
+    if not self.wrapped_settings then
+      invalidate_visual_metric_rows(self, cache, line1, line2)
+      return
     end
-    return
+
+    -- A wrapped logical line can own several metric rows. Preserve unaffected
+    -- rows when the current wrap map still has the same total row count as the
+    -- cache; otherwise row indices may have shifted and a full rebuild is the
+    -- only safe option.
+    local current_row_count = linewrapping.get_total_wrapped_lines(self)
+    local current_wrap_generation = self.__wrap_layout_generation or 0
+    local unchanged_except_wrap = cache.signature == self:get_visual_metric_signature(
+      cache.wrap_layout_generation or current_wrap_generation
+    )
+    if cache.row_count == current_row_count and self.wrapped_line_to_idx
+      and unchanged_except_wrap
+    then
+      local logical_line1 = common.clamp(math.floor(line1), 1, #self.doc.lines)
+      local logical_line2 = common.clamp(
+        math.floor(line2 or logical_line1), logical_line1, #self.doc.lines
+      )
+      local row1 = self.wrapped_line_to_idx[logical_line1]
+      local next_row = self.wrapped_line_to_idx[logical_line2 + 1]
+      if row1 then
+        invalidate_visual_metric_rows(
+          self, cache, row1, next_row and next_row - 1 or current_row_count
+        )
+        cache.wrap_layout_generation = current_wrap_generation
+        cache.signature = self:get_visual_metric_signature()
+        return
+      end
+    end
   end
   if cache then
     self.render_cache_diagnostics.metric_invalidations =
@@ -2435,13 +2468,13 @@ function DocView:get_metric_row_entry(row)
   return { type = "line", line = row, row_in_line = 1, absolute_row = row, row = row }
 end
 
-function DocView:get_visual_metric_signature()
+function DocView:get_visual_metric_signature(wrap_layout_generation)
   local parts = {
     tostring(self:get_scrollable_line_count()),
     tostring(self:get_line_height()),
     tostring(self.doc.text_revision or 0),
     tostring(self.fold_generation or 0),
-    tostring(self.__wrap_layout_generation or 0),
+    tostring(wrap_layout_generation or self.__wrap_layout_generation or 0),
     tostring(self.__visual_metric_generation or 0),
   }
   for _, entry in ipairs(self:visual_metric_provider_entries()) do
@@ -2553,6 +2586,7 @@ function DocView:get_visual_row_metric_cache()
   end
   cache = {
     signature = signature,
+    wrap_layout_generation = self.__wrap_layout_generation or 0,
     heights = heights,
     height_tree = height_tree,
     total_height = total,

@@ -748,7 +748,10 @@ local function image_fragment(view, span, opts)
     download_remote = remote_image_allowed(view, link.path, project),
     retry_generation = owner and owner.link_index and owner.link_index.generation or 0,
   }
-  local key = images.asset_key(link.path, asset_opts)
+  -- get_asset already resolves the source path while deriving its cache key.
+  -- Reuse that key instead of repeating the filesystem/vault search here.
+  local entry = images.get_asset(link.path, asset_opts)
+  local key = entry.key or images.asset_key(link.path, asset_opts)
   local reference_id = link.semantic_id or table.concat({ span.line, span.col1, span.col2 }, ":")
   local old_key = view.__markdown_live_image_references[reference_id]
   if old_key and old_key ~= key then
@@ -763,7 +766,6 @@ local function image_fragment(view, span, opts)
   end
   view.__markdown_live_image_references[reference_id] = key
 
-  local entry = images.get_asset(link.path, asset_opts)
   local record = view.__markdown_live_image_cache[key]
   if not record or record.entry ~= entry then
     if record then images.unsubscribe(record.entry, view) end
@@ -3238,32 +3240,75 @@ end
 
 local function invalidate_selection_lines(view, new_state, old_state)
   local lines = {}
-  for _, state in ipairs({ old_state, new_state }) do
+  local states = { old_state, new_state }
+  local touched_by_state = { {}, {} }
+  local function add_reveal_ranges(state, line)
+    for _, unit in ipairs(reveal_units_for_line(view, line, state)) do
+      if unit.line1 and unit.line2 then
+        for unit_line = unit.line1, unit.line2 do lines[unit_line] = true end
+      end
+    end
+  end
+  for state_index = 1, 2 do
+    local state = states[state_index]
+    local touched = touched_by_state[state_index]
     for i = 1, #(state and state.selections or {}), 4 do
       local line1 = state.selections[i]
+      local col1 = state.selections[i + 1]
       local line2 = state.selections[i + 2] or line1
+      local col2 = state.selections[i + 3] or col1
       if line1 then
-        for line = math.min(line1, line2), math.max(line1, line2) do lines[line] = true end
+        for line = math.min(line1, line2), math.max(line1, line2) do
+          local text = (view.doc.lines[line] or ""):gsub("\n$", "")
+          if selection_touches_line(line, text, line1, col1, line2, col2) then
+            touched[line] = true
+          end
+        end
         for _, endpoint in ipairs({ line1, line2 }) do
+          lines[endpoint] = true
           local fenced = fenced_code_for_line(view, endpoint)
           if fenced then
             for line = fenced.source.line1, fenced.effective_line2 do lines[line] = true end
           end
         end
         for _, endpoint in ipairs({ line1, line2 }) do
-          for _, unit in ipairs(reveal_units_for_line(view, endpoint, state)) do
-            if unit.line1 and unit.line2 then
-              for line = unit.line1, unit.line2 do lines[line] = true end
-            end
-          end
+          add_reveal_ranges(state, endpoint)
         end
       end
     end
   end
-  for line in pairs(lines) do
-    view:invalidate_line_render(PROVIDER_ID, line, line)
-    view:invalidate_visual_metrics(PROVIDER_ID, line, line)
+  local changed_touch_lines = {}
+  for line in pairs(touched_by_state[1]) do
+    if not touched_by_state[2][line] then changed_touch_lines[line] = true end
   end
+  for line in pairs(touched_by_state[2]) do
+    if not touched_by_state[1][line] then changed_touch_lines[line] = true end
+  end
+  for line in pairs(changed_touch_lines) do
+    lines[line] = true
+    add_reveal_ranges(old_state, line)
+    add_reveal_ranges(new_state, line)
+  end
+  local ordered = {}
+  for line in pairs(lines) do ordered[#ordered + 1] = line end
+  table.sort(ordered)
+  local line1, line2
+  local function invalidate_range()
+    if not line1 then return end
+    view:invalidate_line_render(PROVIDER_ID, line1, line2)
+    view:invalidate_visual_metrics(PROVIDER_ID, line1, line2)
+  end
+  for _, line in ipairs(ordered) do
+    if not line1 then
+      line1, line2 = line, line
+    elseif line == line2 + 1 then
+      line2 = line
+    else
+      invalidate_range()
+      line1, line2 = line, line
+    end
+  end
+  invalidate_range()
 end
 
 function live.attach(view)
