@@ -38,6 +38,12 @@ local drawwhitespace = {
   },
 }
 
+local function markdown_live_mode(view)
+  local live_render = package.loaded["core.markdown.live_render"]
+  return live_render and live_render.is_live_mode
+    and live_render.is_live_mode(view)
+end
+
 
 local function get_option(substitution, option)
   local value = substitution[option]
@@ -668,6 +674,8 @@ function DocView:draw_line_text(idx, x, y)
     not drawwhitespace.enabled
     or
     getmetatable(self) ~= DocView
+    or
+    markdown_live_mode(self)
   then
     return draw_line_text(self, idx, x, y)
   end

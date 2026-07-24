@@ -15,6 +15,9 @@ local style = require "core.style"
 local worker_pool = require "core.worker_pool"
 local test = require "core.test"
 
+require "plugins.drawwhitespace"
+require "plugins.indent_guides"
+
 local function wait_status(instance, wanted, timeout)
   local deadline = system.get_time() + (timeout or 5)
   repeat
@@ -368,6 +371,32 @@ test.describe("Markdown Live Editor", function()
 
     test.ok(row_height > view:get_line_height())
     test.equal(highlight_height, row_height)
+  end)
+
+  test.it("uses the rendered heading row height for selections when wrapping is enabled", function()
+    local view, doc = make_view("# Title\nbody", "note.md")
+    view:set_wrapping_enabled(true)
+    doc:set_selection(2, 1)
+    refresh(view)
+    doc:set_selection(1, 3, 1, 8)
+
+    local row_height = view:get_position_visual_row_height(1, 3)
+    local old_draw_rect = renderer.draw_rect
+    local selection_height
+    view.draw_line_text = function() return row_height end
+    renderer.draw_rect = function(_, _, _, height, color)
+      if color == style.selection then selection_height = height end
+    end
+    local ok, err = pcall(function()
+      view:prepare_line_body_draw_cache(1, 2)
+      local x, y = view:get_line_screen_position(1)
+      view:draw_line_body(1, x, y)
+    end)
+    renderer.draw_rect = old_draw_rect
+    if not ok then error(err) end
+
+    test.ok(row_height > view:get_line_height())
+    test.equal(selection_height, row_height)
   end)
 
   test.it("adopts published heading and inline semantic identities", function()
@@ -1351,6 +1380,106 @@ test.describe("Markdown Live Editor", function()
     test.equal(markdown_decoration:line_background(view, 1), style.markdown_live_code_background)
     doc:set_selection(7, 6)
     test.equal(visible_render_text(view, 7), "line  ")
+  end)
+
+  test.it("numbers and spaces ordered list markers and reveals their source at the caret", function()
+    local view, doc = make_view(
+      "1. first\n1. second\n   1. nested\n   1. nested second\n"
+        .. "      continuation\n   1. nested third\n1. third\nplain\n1. restarted",
+      "ordered-list-spacing.md"
+    )
+    doc:set_selection(8, 1)
+    refresh(view)
+
+    local inactive = test.not_nil(view:get_line_render(2))
+    local marker
+    for _, fragment in ipairs(inactive.fragments or {}) do
+      if fragment.ordered_list_marker then marker = fragment break end
+    end
+    marker = test.not_nil(marker)
+    local content_x = view:get_col_x_offset(2, 4)
+    test.equal(marker.text, "2.")
+    test.ok(content_x >= live_body_font(view):get_width("1. "))
+    local nested = test.not_nil(view:get_line_render(4))
+    local nested_marker
+    for _, fragment in ipairs(nested.fragments or {}) do
+      if fragment.ordered_list_marker then nested_marker = fragment break end
+    end
+    test.equal(test.not_nil(nested_marker).text, "2.")
+    test.equal(visible_render_text(view, 6):match("(%d+[.)])"), "3.")
+    test.equal(visible_render_text(view, 7):match("(%d+[.)])"), "3.")
+    test.equal(visible_render_text(view, 9):match("(%d+[.)])"), "1.")
+
+    doc:set_selection(2, 2)
+    local active = test.not_nil(view:get_line_render(2))
+    local source_marker
+    for _, fragment in ipairs(active.fragments or {}) do
+      if fragment.ordered_list_source_marker then source_marker = fragment break end
+    end
+    source_marker = test.not_nil(source_marker)
+    test.equal(source_marker.text, "1. ")
+    test.equal(view:get_col_x_offset(2, 4), content_x)
+  end)
+
+  test.it("suppresses source whitespace and indent guides only in Live Preview", function()
+    local view, doc = make_view(
+      "1. first\n   1. nested\n            indented\nParagraph  gap\nplain",
+      "live-source-guides.md"
+    )
+    doc:set_selection(5, 1)
+    refresh(view)
+    command.perform("draw-whitespace:toggle", true)
+
+    local old_draw_rect_grid = renderer.draw_rect_grid
+    local old_draw_rect = renderer.draw_rect
+    local old_draw_text = renderer.draw_text
+    local old_draw_text_known_bounds = renderer.draw_text_known_bounds
+
+    local function draw_indicators()
+      local drew_whitespace, drew_indent_guide = false, false
+      renderer.draw_rect_grid = function(_, _, _, _, _, _, color)
+        if color == style.whitespace or color == style.whitespace_trailing then
+          drew_whitespace = true
+        elseif color == style.indent_guide or color == style.indent_guide_active then
+          drew_indent_guide = true
+        end
+      end
+      renderer.draw_rect = function(_, _, _, _, color)
+        if color == style.whitespace or color == style.whitespace_trailing then
+          drew_whitespace = true
+        elseif color == style.indent_guide or color == style.indent_guide_active then
+          drew_indent_guide = true
+        end
+      end
+      renderer.draw_text = function(font, text, x)
+        if tostring(text):find("·", 1, true) or tostring(text):find("→", 1, true) then
+          drew_whitespace = true
+        end
+        return x + font:get_width(tostring(text))
+      end
+      renderer.draw_text_known_bounds = renderer.draw_text
+      local list_x, list_y = view:get_line_screen_position(3)
+      view:draw_line_body(3, list_x, list_y)
+      local prose_x, prose_y = view:get_line_screen_position(4)
+      view:draw_line_body(4, prose_x, prose_y)
+      return drew_whitespace, drew_indent_guide
+    end
+
+    local ok, err = pcall(function()
+      local live_whitespace, live_indent = draw_indicators()
+      test.equal(live_whitespace, false)
+      test.equal(live_indent, false)
+
+      markdown.live_render.set_source_mode(view, true, "test")
+      local source_whitespace, source_indent = draw_indicators()
+      test.equal(source_whitespace, true)
+      test.equal(source_indent, true)
+    end)
+    renderer.draw_rect_grid = old_draw_rect_grid
+    renderer.draw_rect = old_draw_rect
+    renderer.draw_text = old_draw_text
+    renderer.draw_text_known_bounds = old_draw_text_known_bounds
+    if not ok then error(err) end
   end)
 
   test.it("resolves and presents full, collapsed, and shortcut reference links", function()

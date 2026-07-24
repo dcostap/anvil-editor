@@ -14,6 +14,12 @@ local indent_guides = {
 
 local indent_cache_by_doc = setmetatable({}, { __mode = "k" })
 
+local function markdown_live_mode(view)
+  local live_render = package.loaded["core.markdown.live_render"]
+  return live_render and live_render.is_live_mode
+    and live_render.is_live_mode(view)
+end
+
 local function guide_color(active)
   return active and style.indent_guide_active or style.indent_guide
 end
@@ -154,7 +160,7 @@ function DocView:draw_line_body(line, x, y)
   local line_height = old_draw_line_body(self, line, x, y)
 
   local conf = indent_guides
-  if conf.enabled then
+  if conf.enabled and not markdown_live_mode(self) then
     local _, indent_size = self.doc:get_indent_info()
     indent_size = indent_size or config.indent_size or 2
     local indent_cols = effective_indent_cols(self.doc, line, indent_size)

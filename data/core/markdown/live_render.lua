@@ -1812,6 +1812,54 @@ local function semantic_tag_fragments(view, line_text, line, reveal_units)
   return fragments
 end
 
+local function markdown_indent_width(prefix)
+  local width = 0
+  for char in (prefix or ""):gmatch(".") do
+    width = char == "\t" and width + (4 - width % 4) or width + 1
+  end
+  return width
+end
+
+local function ordered_list_display_marker(view, line, ordered)
+  local revision = view.doc.text_revision or view.doc:get_change_id()
+  local cache = view.__markdown_live_ordered_marker_cache
+  if not cache or cache.revision ~= revision then
+    cache = { revision = revision, lines = {} }
+    local states = {}
+    local function clear_from(indent, inclusive)
+      for state_indent in pairs(states) do
+        if state_indent > indent or inclusive and state_indent == indent then
+          states[state_indent] = nil
+        end
+      end
+    end
+    for source_line, source in ipairs(view.doc.lines) do
+      local text = source:gsub("\n$", "")
+      if not text:match("^%s*$") then
+        local indent, number, delimiter = text:match("^([ \t]*)(%d+)([.)])%s+")
+        local indent_width = markdown_indent_width(
+          indent or text:match("^[ \t]*") or ""
+        )
+        if number then
+          clear_from(indent_width, false)
+          local state = states[indent_width]
+          if not state or state.delimiter ~= delimiter then
+            state = { delimiter = delimiter, number = tonumber(number) }
+            states[indent_width] = state
+          else
+            state.number = state.number + 1
+          end
+          cache.lines[source_line] = tostring(state.number) .. delimiter
+        else
+          clear_from(indent_width, true)
+        end
+      end
+    end
+    view.__markdown_live_ordered_marker_cache = cache
+  end
+  return cache.lines[line] or ordered
+end
+
 local function semantic_block_fragments(view, line_text, line, reveal_units)
   for _, unit in ipairs(reveal_units or {}) do
     if unit.whole_line then return {} end
@@ -1920,22 +1968,40 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
         seen[marker_key] = true
         local raw = line_text:sub(marker.col1, marker.col2 - 1)
         local ordered = raw:match("^(%d+[.)])")
+        local body_font = markdown_live_body_font(view)
+        local raw_width = body_font:get_width(raw)
+        local marker_width = math.max(
+          body_font:get_width(" "), raw_width, math.floor(SCALE * 4)
+        )
+        local marker_revealed = reveal_unit_matches(
+          reveal_units, node.id, marker.col1, marker.col2
+        )
         if ordered then
-          fragments[#fragments + 1] = {
-            source_col1 = marker.col1, source_col2 = marker.col2,
-            text = ordered, color = style.markdown_live_list_marker,
-            semantic_id = node.id .. ":marker",
-          }
+          local display_marker = ordered_list_display_marker(
+            view, line, ordered
+          )
+          marker_width = math.max(
+            marker_width, body_font:get_width(display_marker .. " ")
+          )
+          if marker_revealed then
+            fragments[#fragments + 1] = {
+              source_col1 = marker.col1, source_col2 = marker.col2,
+              text = raw, width = marker_width,
+              color = style.markdown_live_list_marker,
+              semantic_id = node.id .. ":marker",
+              ordered_list_source_marker = true,
+            }
+          else
+            fragments[#fragments + 1] = {
+              source_col1 = marker.col1, source_col2 = marker.col2,
+              text = display_marker, width = marker_width,
+              color = style.markdown_live_list_marker,
+              semantic_id = node.id .. ":marker",
+              ordered_list_marker = true,
+            }
+          end
         else
-          local body_font = markdown_live_body_font(view)
-          local raw_width = body_font:get_width(raw)
-          local marker_width = math.max(
-            body_font:get_width(" "), raw_width, math.floor(SCALE * 4)
-          )
           local marker_size = math.max(2, math.floor(body_font:get_height() * 0.24))
-          local marker_revealed = reveal_unit_matches(
-            reveal_units, node.id, marker.col1, marker.col2
-          )
           if marker_revealed then
             fragments[#fragments + 1] = {
               source_col1 = marker.col1, source_col2 = marker.col2,
@@ -3426,6 +3492,11 @@ end
 
 function live.is_source_mode(view)
   return view_in_source_mode(view)
+end
+
+function live.is_live_mode(view)
+  return view and view.__markdown_live_attached == true
+    and not view_in_source_mode(view)
 end
 
 function live.set_source_mode(view, enabled, reason)

@@ -311,7 +311,13 @@ local function get_wrapped_segment_bounds(view, line, col1, col2, idx1, idx2, id
   return x1, x2
 end
 
-local function draw_wrapped_search_match(view, line, col1, col2, x, y, idx0, lh, primary, outline, visible_idx1, visible_idx2)
+local function wrapped_row_geometry(view, y, first_idx, idx)
+  local first_y_offset = view:get_visual_row_y_offset(first_idx)
+  local row_y = y + view:get_visual_row_y_offset(idx) - first_y_offset
+  return row_y, view:get_visual_row_height(idx)
+end
+
+local function draw_wrapped_search_match(view, line, col1, col2, x, y, idx0, primary, outline, visible_idx1, visible_idx2)
   local idx1 = linewrapping.get_line_idx_col_count(view, line, col1)
   local idx2 = linewrapping.get_line_idx_col_count(view, line, col2)
   local from_idx = math.max(idx1, visible_idx1 or idx1)
@@ -319,7 +325,10 @@ local function draw_wrapped_search_match(view, line, col1, col2, x, y, idx0, lh,
   for i = from_idx, to_idx do
     local x1, x2 = get_wrapped_segment_bounds(view, line, col1, col2, idx1, idx2, i)
     if x1 and x2 then
-      draw_wrapped_search_match_segment(view, x + x1, y + (i - idx0) * lh, x + x2, lh, primary, outline)
+      local row_y, row_height = wrapped_row_geometry(view, y, idx0, i)
+      draw_wrapped_search_match_segment(
+        view, x + x1, row_y, x + x2, row_height, primary, outline
+      )
     end
   end
 end
@@ -5465,7 +5474,6 @@ local function provider_call(view, entry, method, ...)
 end
 
 local function draw_decoration_line_backgrounds(view, line, x, y)
-  local lh = view:get_line_height()
   for _, entry in ipairs(view:decoration_provider_entries()) do
     local color = provider_call(view, entry, "line_background", view, line)
     if color then
@@ -5473,7 +5481,10 @@ local function draw_decoration_line_backgrounds(view, line, x, y)
         local first_idx = view.wrapped_line_to_idx and view.wrapped_line_to_idx[line]
         if first_idx then
           for idx = view.__wrapped_draw_first_idx, view.__wrapped_draw_last_idx do
-            renderer.draw_rect(view.position.x, y + (idx - first_idx) * lh, view.size.x, lh, color)
+            local row_y, row_height = wrapped_row_geometry(view, y, first_idx, idx)
+            renderer.draw_rect(
+              view.position.x, row_y, view.size.x, row_height, color
+            )
           end
         end
       else
@@ -5487,7 +5498,6 @@ local function draw_decoration_line_backgrounds(view, line, x, y)
 end
 
 local function draw_decoration_inline_ranges(view, line, x, y)
-  local lh = view:get_line_height()
   for _, entry in ipairs(view:decoration_provider_entries()) do
     local ranges = provider_call(view, entry, "inline_ranges", view, line)
     for _, range in ipairs(ranges or {}) do
@@ -5505,7 +5515,14 @@ local function draw_decoration_inline_ranges(view, line, x, y)
                 local seg_col2 = math.min(col2, row_end)
                 local tx1 = view:get_col_x_offset(line, seg_col1, false)
                 local tx2 = view:get_col_x_offset(line, seg_col2, seg_col2 == row_end)
-                if tx2 > tx1 then renderer.draw_rect(x + tx1, y + (idx - first_idx) * lh, tx2 - tx1, lh, color) end
+                if tx2 > tx1 then
+                  local row_y, row_height = wrapped_row_geometry(
+                    view, y, first_idx, idx
+                  )
+                  renderer.draw_rect(
+                    x + tx1, row_y, tx2 - tx1, row_height, color
+                  )
+                end
               end
             end
           end
@@ -5631,7 +5648,10 @@ function DocView:draw_line_body(line, x, y)
             for i = math.max(idx1, visible_idx1), math.min(idx2, visible_idx2) do
               local x1, x2 = get_wrapped_segment_bounds(self, line, col1, col2, idx1, idx2, i)
               if x1 and x2 and x2 > x1 then
-                renderer.draw_rect(x + x1, y + (i - idx0) * lh, x2 - x1, lh, style.selection)
+                local row_y, row_height = wrapped_row_geometry(self, y, idx0, i)
+                renderer.draw_rect(
+                  x + x1, row_y, x2 - x1, row_height, style.selection
+                )
               end
             end
           end
@@ -5639,14 +5659,20 @@ function DocView:draw_line_body(line, x, y)
       end
     end
     for _, match in ipairs(search_matches or {}) do
-      draw_wrapped_search_match(self, line, match[1], match[2], x, y, idx0, lh, match[3], false, visible_idx1, visible_idx2)
+      draw_wrapped_search_match(
+        self, line, match[1], match[2], x, y, idx0,
+        match[3], false, visible_idx1, visible_idx2
+      )
     end
     draw_decoration_inline_ranges(self, line, x, y)
 
     local line_height = self:draw_line_text(line, x, y)
 
     for _, match in ipairs(search_matches or {}) do
-      draw_wrapped_search_match(self, line, match[1], match[2], x, y, idx0, lh, match[3], true, visible_idx1, visible_idx2)
+      draw_wrapped_search_match(
+        self, line, match[1], match[2], x, y, idx0,
+        match[3], true, visible_idx1, visible_idx2
+      )
     end
 
     local underline_module = DocView.__lsp_diagnostic_underlines_module or package.loaded["core.lsp.diagnostic_underlines"]
@@ -5654,7 +5680,8 @@ function DocView:draw_line_body(line, x, y)
       underline_module.draw_line(self, line, x, y)
     end
     if visible_idx2 == idx0 + count - 1 then
-      self:draw_line_hint(line, x, y + lh * (count - 1))
+      local hint_y = wrapped_row_geometry(self, y, idx0, idx0 + count - 1)
+      self:draw_line_hint(line, x, hint_y)
     end
 
     self.__wrapped_draw_first_idx = old_visible_idx1
