@@ -2243,6 +2243,43 @@ void ren_draw_poly(RenSurface *rs, RenPoint *points, unsigned short npoints, Ren
   FT_Outline_Done(library, &outline);
 }
 
+void ren_draw_rounded_rect(RenSurface *rs, RenRect rect, float radius, RenColor color) {
+  if (rect.width <= 0 || rect.height <= 0 || color.a == 0) return;
+
+  int r = (int)roundf(radius);
+  int max_radius = (int)(rect.width < rect.height ? rect.width : rect.height) / 2;
+  if (r > max_radius) r = max_radius;
+  if (r <= 0) {
+    ren_draw_rect(rs, rect, color, false);
+    return;
+  }
+
+  int x = (int)rect.x;
+  int y = (int)rect.y;
+  int right = (int)(rect.x + rect.width);
+  int bottom = (int)(rect.y + rect.height);
+  int k = (int)roundf((float)r * 0.55228475f);
+  RenPoint points[] = {
+    { x + r, y, POLY_NORMAL },
+    { right - r, y, POLY_NORMAL },
+    { right - r + k, y, POLY_CONTROL_CUBIC },
+    { right, y + r - k, POLY_CONTROL_CUBIC },
+    { right, y + r, POLY_NORMAL },
+    { right, bottom - r, POLY_NORMAL },
+    { right, bottom - r + k, POLY_CONTROL_CUBIC },
+    { right - r + k, bottom, POLY_CONTROL_CUBIC },
+    { right - r, bottom, POLY_NORMAL },
+    { x + r, bottom, POLY_NORMAL },
+    { x + r - k, bottom, POLY_CONTROL_CUBIC },
+    { x, bottom - r + k, POLY_CONTROL_CUBIC },
+    { x, bottom - r, POLY_NORMAL },
+    { x, y + r, POLY_NORMAL },
+    { x, y + r - k, POLY_CONTROL_CUBIC },
+    { x + r - k, y, POLY_CONTROL_CUBIC },
+  };
+  ren_draw_poly(rs, points, (unsigned short)(sizeof(points) / sizeof(points[0])), color);
+}
+
 /******************* Rectangles **********************/
 static inline RenColor blend_pixel(RenColor dst, RenColor src) {
   int ia = 0xff - src.a;

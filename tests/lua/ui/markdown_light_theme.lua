@@ -56,15 +56,16 @@ test.describe("Markdown Live Preview light theme", function()
   test.it("does not retain dark-only chrome and project-path colors", function()
     with_style_snapshot(function()
       core.reload_module("colors.default")
-      local dark_titlebar_separator = style.titlebar_tab_separator
+      local dark_titlebar_tab_active = style.titlebar_tab_active
       local dark_project_path_external = style.project_path_external
       local dark_project_path_vendored = style.project_path_vendored
       local dark_project_path_excluded = style.project_path_excluded
 
       core.reload_module("colors.light")
 
-      test.equal(style.titlebar_tab_separator, style.divider)
-      test.ok(style.titlebar_tab_separator ~= dark_titlebar_separator)
+      test.ok(style.titlebar ~= style.background)
+      test.equal(style.titlebar_tab_active, style.background)
+      test.ok(style.titlebar_tab_active ~= dark_titlebar_tab_active)
       test.equal(style.project_path_external, style.accent)
       test.equal(style.project_path_external_dim, style.dim)
       test.equal(style.project_path_vendored, style.syntax.metadata)

@@ -1,8 +1,11 @@
 local core = require "core"
+local Doc = require "core.doc"
+local DocView = require "core.docview"
 local style = require "core.style"
 local test = require "core.test"
 local Node = require "core.node"
 local View = require "core.view"
+require "plugins.untitled_tabs"
 
 local function named_view(name)
   local view = View()
@@ -27,12 +30,14 @@ test.describe("node tabs", function()
   local old_tab_max_width
   local old_tab_width
   local old_active_view
+  local old_renderer_draw_text
 
   test.before_each(function()
     old_tab_min_width = style.tab_min_width
     old_tab_max_width = style.tab_max_width
     old_tab_width = style.tab_width
     old_active_view = core.active_view
+    old_renderer_draw_text = renderer.draw_text
     style.tab_min_width = 100 * SCALE
     style.tab_max_width = 240 * SCALE
     style.tab_width = style.tab_min_width
@@ -42,6 +47,7 @@ test.describe("node tabs", function()
     style.tab_min_width = old_tab_min_width
     style.tab_max_width = old_tab_max_width
     style.tab_width = old_tab_width
+    renderer.draw_text = old_renderer_draw_text
     if old_active_view then
       core.set_active_view(old_active_view)
     end
@@ -60,6 +66,27 @@ test.describe("node tabs", function()
   test.it("caps title-sized tabs at the maximum width", function()
     local node = make_leaf(1200, { "very-very-very-very-very-very-long-tab-name.lua" })
     test.equal(node:get_tab_width(1), style.tab_max_width)
+  end)
+
+  test.it("uses one compact font for every part of a Pane Tab title", function()
+    local doc = Doc()
+    doc.new_file = true
+    doc.intellij_untitled = true
+    doc.intellij_untitled_name = "Untitled-1"
+    doc:insert(1, 1, "Example title")
+    local view = DocView(doc)
+    local node = Node("leaf")
+    local fonts = {}
+    renderer.draw_text = function(font)
+      fonts[#fonts + 1] = font
+    end
+
+    local font = node:get_tab_title_font()
+    node:draw_tab_title(view, font, true, false, 0, 0, 300 * SCALE, 32 * SCALE)
+
+    test.equal(#fonts, 2)
+    test.equal(fonts[1], fonts[2])
+    test.ok(font:get_size() < style.font:get_size())
   end)
 
   test.it("pages tabs without changing the active tab", function()

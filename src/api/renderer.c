@@ -413,6 +413,24 @@ static int f_draw_rect(lua_State *L) {
 }
 
 
+static int f_draw_rounded_rect(lua_State *L) {
+  lua_Number x = luaL_checknumber(L, 1);
+  lua_Number y = luaL_checknumber(L, 2);
+  lua_Number w = luaL_checknumber(L, 3);
+  lua_Number h = luaL_checknumber(L, 4);
+  lua_Number radius = luaL_checknumber(L, 5);
+  RenRect rect = rect_to_grid(x, y, w, h);
+  RenColor color = luaXL_checkcolor(L, 6, 255);
+  RenWindow *window = ren_get_target_window();
+  if (!window) {
+    return luaL_error(L, "no target window found");
+  } else {
+    rencache_draw_rounded_rect(&window->cache, rect, radius, color);
+  }
+  return 0;
+}
+
+
 static int f_draw_poly(lua_State *L) {
   static const char normal_tag[] = { POLY_NORMAL };
   static const char conic_bezier_tag[] = { POLY_NORMAL, POLY_CONTROL_CONIC, POLY_NORMAL };
@@ -707,6 +725,7 @@ static const luaL_Reg lib[] = {
   { "get_last_frame_stats", f_get_last_frame_stats },
   { "set_clip_rect",      f_set_clip_rect      },
   { "draw_rect",          f_draw_rect          },
+  { "draw_rounded_rect",  f_draw_rounded_rect  },
   { "draw_text",          f_draw_text          },
   { "draw_text_known_bounds", f_draw_text_known_bounds },
   { "draw_poly",          f_draw_poly          },

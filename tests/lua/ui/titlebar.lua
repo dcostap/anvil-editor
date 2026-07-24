@@ -12,6 +12,7 @@ test.describe("Title Bar", function()
     if context.original_common_draw_text then common.draw_text = context.original_common_draw_text end
     if context.original_set_window_hit_test then system.set_window_hit_test = context.original_set_window_hit_test end
     if context.original_draw_rect then renderer.draw_rect = context.original_draw_rect end
+    if context.original_draw_rounded_rect then renderer.draw_rounded_rect = context.original_draw_rounded_rect end
     if context.original_set_clip_rect then renderer.set_clip_rect = context.original_set_clip_rect end
     if context.original_panes then core.panes = context.original_panes end
   end)
@@ -264,7 +265,7 @@ test.describe("Title Bar", function()
     test.ok(hit_test_args[6] <= tabs_capacity)
   end)
 
-  test.it("draws clear separators on both sides of every Pane Tab", function(context)
+  test.it("renders the selected Pane Tab as an inset rounded tile", function(context)
     local titlebar = TitleBar()
     titlebar.position.x, titlebar.position.y = 0, 0
     titlebar.size.x, titlebar.size.y = 1200 * SCALE, 32 * SCALE
@@ -282,23 +283,28 @@ test.describe("Title Bar", function()
     end
 
     context.original_draw_rect = renderer.draw_rect
+    context.original_draw_rounded_rect = renderer.draw_rounded_rect
     context.original_set_clip_rect = renderer.set_clip_rect
-    local separators = {}
-    renderer.draw_rect = function(x, y, w, h, color)
-      if color == style.titlebar_tab_separator then
-        separators[#separators + 1] = { x = x, y = y, w = w, h = h }
-      end
+    renderer.draw_rect = function() end
+    local tiles = {}
+    renderer.draw_rounded_rect = function(x, y, w, h, radius, color)
+      tiles[#tiles + 1] = { x = x, y = y, w = w, h = h, radius = radius, color = color }
     end
     renderer.set_clip_rect = function() end
 
     titlebar:draw_titlebar_tabs()
 
-    test.not_nil(style.titlebar_tab_separator)
-    test.equal(#separators, #views * 2)
-    for _, separator in ipairs(separators) do
-      test.equal(separator.w, style.divider_size)
-      test.ok(separator.h >= titlebar.size.y - style.divider_size)
-    end
+    test.equal(#tiles, 1)
+    test.equal(tiles[1].color, style.titlebar_tab_active)
+    test.ok(tiles[1].radius > 0)
+
+    local tab_x, tab_y, tab_w, tab_h =
+      titlebar:get_titlebar_tab_rect("left", node, views, 1)
+    test.ok(tiles[1].x > tab_x)
+    test.ok(tiles[1].y > tab_y)
+    test.ok(tiles[1].x + tiles[1].w < tab_x + tab_w)
+    test.ok(tiles[1].y + tiles[1].h > tab_y + tab_h,
+      "lower rounded corners should extend below the clipped Title Bar")
   end)
 
   test.it("shows hover feedback on the selected Pane Tab", function(context)
@@ -321,11 +327,13 @@ test.describe("Title Bar", function()
     titlebar.hovered_tab_view = view
 
     context.original_draw_rect = renderer.draw_rect
+    context.original_draw_rounded_rect = renderer.draw_rounded_rect
     context.original_set_clip_rect = renderer.set_clip_rect
     local hover_rects = {}
-    renderer.draw_rect = function(x, y, w, h, color)
+    renderer.draw_rect = function() end
+    renderer.draw_rounded_rect = function(x, y, w, h, radius, color)
       if color == style.titlebar_tab_hover then
-        hover_rects[#hover_rects + 1] = { x = x, y = y, w = w, h = h }
+        hover_rects[#hover_rects + 1] = { x = x, y = y, w = w, h = h, radius = radius }
       end
     end
     renderer.set_clip_rect = function() end
@@ -333,8 +341,7 @@ test.describe("Title Bar", function()
     titlebar:draw_titlebar_tabs()
 
     test.equal(#hover_rects, 1)
-    test.ok(hover_rects[1].w > 0)
-    test.equal(hover_rects[1].h, titlebar.size.y)
+    test.ok(hover_rects[1].radius > 0)
   end)
 
   test.it("clips each Pane Tab label inside its minimum side padding", function(context)
@@ -358,8 +365,10 @@ test.describe("Title Bar", function()
     end
 
     context.original_draw_rect = renderer.draw_rect
+    context.original_draw_rounded_rect = renderer.draw_rounded_rect
     context.original_set_clip_rect = renderer.set_clip_rect
     renderer.draw_rect = function() end
+    renderer.draw_rounded_rect = function() end
     local clips = {}
     renderer.set_clip_rect = function(x, y, w, h)
       clips[#clips + 1] = { x = x, y = y, w = w, h = h }
@@ -401,9 +410,11 @@ test.describe("Title Bar", function()
       right_visible = function() return false end,
     }
     context.original_draw_rect = renderer.draw_rect
+    context.original_draw_rounded_rect = renderer.draw_rounded_rect
     context.original_set_clip_rect = renderer.set_clip_rect
     context.original_common_draw_text = common.draw_text
     renderer.draw_rect = function() end
+    renderer.draw_rounded_rect = function() end
     renderer.set_clip_rect = function() end
     common.draw_text = function(_, color)
       title_color = color

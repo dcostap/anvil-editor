@@ -134,23 +134,6 @@ local function truncate_to_width(font, text, max_w)
   return best > 0 and (text:usub(1, best) .. dots) or dots
 end
 
-local function secondary_font()
-  local base_size = style.font:get_size()
-  local desired_size = math.max(8 * SCALE, base_size * 0.85)
-  if M._secondary_font
-     and M._secondary_font_base == style.font
-     and M._secondary_font_size == desired_size then
-    return M._secondary_font
-  end
-  local ok, font = pcall(function()
-    return style.font:copy(desired_size)
-  end)
-  M._secondary_font_base = style.font
-  M._secondary_font_size = desired_size
-  M._secondary_font = ok and font or style.font
-  return M._secondary_font
-end
-
 local function title_gap()
   return math.max(2 * SCALE, style.padding.x * 0.35)
 end
@@ -163,8 +146,7 @@ local function untitled_tab_title_width(view, font)
   if doc:is_dirty() then secondary = secondary .. "*" end
 
   local primary = first_text_snippet(doc)
-  local sfont = secondary_font()
-  local width = sfont:get_width(secondary)
+  local width = font:get_width(secondary)
   if primary and primary ~= "" then
     width = width + title_gap() + font:get_width(primary)
   end
@@ -182,7 +164,7 @@ local function draw_untitled_tab_title(view, font, is_active, is_hovered, x, y, 
   local title_color = color_override or ((is_active or is_hovered) and style.text or style.dim)
   local primary_color = title_color
   local secondary_color = title_color
-  local sfont = secondary_font()
+  local sfont = font
   local gap = title_gap()
 
   if not primary or primary == "" then

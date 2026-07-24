@@ -72,7 +72,7 @@ static void rencache_activate_window(SDL_Window *window) {
 #define CMD_BUF_CANVAS_INIT_SIZE (1024 * 64)
 #define COMMAND_BARE_SIZE offsetof(Command, command)
 
-enum CommandType { SET_CLIP, DRAW_TEXT, DRAW_RECT, DRAW_RECT_GRID, DRAW_POLY, DRAW_CANVAS, DRAW_PIXELS };
+enum CommandType { SET_CLIP, DRAW_TEXT, DRAW_RECT, DRAW_ROUNDED_RECT, DRAW_RECT_GRID, DRAW_POLY, DRAW_CANVAS, DRAW_PIXELS };
 
 typedef struct {
   enum CommandType type;
@@ -102,6 +102,12 @@ typedef struct {
   RenColor color;
   bool replace;
 } DrawRectCommand;
+
+typedef struct {
+  RenRect rect;
+  RenColor color;
+  float radius;
+} DrawRoundedRectCommand;
 
 typedef struct {
   RenRect rect;
@@ -230,6 +236,7 @@ static void* push_command(RenCache *ren_cache, enum CommandType type, int size) 
       case SET_CLIP: g_rencache_frame_stats.set_clip_commands++; break;
       case DRAW_TEXT: g_rencache_frame_stats.text_commands++; break;
       case DRAW_RECT:
+      case DRAW_ROUNDED_RECT:
       case DRAW_RECT_GRID: g_rencache_frame_stats.rect_commands++; break;
       case DRAW_POLY: g_rencache_frame_stats.poly_commands++; break;
       case DRAW_CANVAS: g_rencache_frame_stats.canvas_commands++; break;
@@ -306,6 +313,20 @@ void rencache_draw_rect(RenCache *ren_cache, RenRect rect, RenColor color, bool 
     cmd->rect = rect;
     cmd->color = color;
     cmd->replace = replace;
+  }
+}
+
+void rencache_draw_rounded_rect(RenCache *ren_cache, RenRect rect, float radius, RenColor color) {
+  if (rect.width <= 0 || rect.height <= 0 || color.a == 0 ||
+      !rects_overlap(ren_cache->last_clip_rect, rect)) {
+    return;
+  }
+  DrawRoundedRectCommand *cmd = push_command(ren_cache, DRAW_ROUNDED_RECT, sizeof(DrawRoundedRectCommand));
+  if (cmd) {
+    float max_radius = (float)(rect.width < rect.height ? rect.width : rect.height) * 0.5f;
+    cmd->rect = rect;
+    cmd->color = color;
+    cmd->radius = radius < 0.0f ? 0.0f : (radius > max_radius ? max_radius : radius);
   }
 }
 
@@ -530,6 +551,10 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
         DrawRectCommand *rcmd = (DrawRectCommand*)&cmd->command;
         if (!anvil_d3d11_push_rect(ren_cache->window, rcmd->rect, clip, rcmd->color)) { fail_reason = "draw_rect"; goto fail; }
       } break;
+      case DRAW_ROUNDED_RECT: {
+        DrawRoundedRectCommand *rcmd = (DrawRoundedRectCommand*)&cmd->command;
+        if (!anvil_d3d11_push_rounded_rect(ren_cache->window, rcmd->rect, rcmd->radius, clip, rcmd->color)) { fail_reason = "draw_rounded_rect"; goto fail; }
+      } break;
       case DRAW_RECT_GRID: {
         DrawRectGridCommand *gcmd = (DrawRectGridCommand*)&cmd->command;
         if (!anvil_d3d11_push_rect_grid(ren_cache->window, gcmd->x, gcmd->y, gcmd->step_x, gcmd->w, gcmd->h, gcmd->count, clip, gcmd->color)) { fail_reason = "draw_rect_grid"; goto fail; }
@@ -669,6 +694,7 @@ void rencache_end_frame(RenCache *ren_cache) {
     while (next_command(ren_cache, &cmd)) {
       SetClipCommand *ccmd = (SetClipCommand*)&cmd->command;
       DrawRectCommand *rcmd = (DrawRectCommand*)&cmd->command;
+      DrawRoundedRectCommand *rrcmd = (DrawRoundedRectCommand*)&cmd->command;
       DrawRectGridCommand *gcmd = (DrawRectGridCommand*)&cmd->command;
       DrawTextCommand *tcmd = (DrawTextCommand*)&cmd->command;
       DrawBezierCommand *bcmd = (DrawBezierCommand*)&cmd->command;
@@ -680,6 +706,9 @@ void rencache_end_frame(RenCache *ren_cache) {
           break;
         case DRAW_RECT:
           ren_draw_rect(&rs, rcmd->rect, rcmd->color, rcmd->replace);
+          break;
+        case DRAW_ROUNDED_RECT:
+          ren_draw_rounded_rect(&rs, rrcmd->rect, rrcmd->radius, rrcmd->color);
           break;
         case DRAW_RECT_GRID:
           for (int i = 0; i < gcmd->count; i++) {

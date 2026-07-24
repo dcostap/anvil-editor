@@ -179,7 +179,10 @@ function Tabs:get_size()
 end
 
 local function tab_title_font()
-  return style.get_small_font(style.font)
+  return style.get_scaled_font(
+    style.font,
+    math.max(8 * SCALE, style.font:get_size() * 0.90)
+  )
 end
 
 function Tabs:get_tab_title_font()

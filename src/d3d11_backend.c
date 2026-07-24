@@ -454,7 +454,7 @@ static const char *quad_shader_source =
   "SamplerState smp0 : register(s0);\n"
   "cbuffer QuadConstants : register(b0) { float2 viewport; float2 _pad; };\n"
   "struct VSIn { float4 dst : POSITION; float4 uvrect : TEXCOORD0; float4 color : COLOR0; float4 style : TEXCOORD1; uint vertex_id : SV_VertexID; };\n"
-  "struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; float4 color : COLOR0; float mode : TEXCOORD1; };\n"
+  "struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; float4 color : COLOR0; float4 style : TEXCOORD1; };\n"
   "struct PSOut { float4 color : SV_Target0; float4 coverage : SV_Target1; };\n"
   "VSOut vs_main(VSIn input) {\n"
   "  VSOut output;\n"
@@ -475,25 +475,37 @@ static const char *quad_shader_source =
   "  output.pos = float4(p, 0.0f, 1.0f);\n"
   "  output.uv = uvs[vid];\n"
   "  output.color = input.color;\n"
-  "  output.mode = input.style.x;\n"
+  "  output.style = input.style;\n"
   "  return output;\n"
   "}\n"
   "PSOut ps_main(VSOut input) {\n"
   "  PSOut output;\n"
-  "  if (input.mode > 2.5f) {\n"
+  "  if (input.style.x > 3.5f) {\n"
+  "    float radius = input.style.y;\n"
+  "    float2 size = input.style.zw;\n"
+  "    float2 centered = input.uv - size * 0.5f;\n"
+  "    float2 q = abs(centered) - (size * 0.5f - radius);\n"
+  "    float distance = length(max(q, 0.0f)) + min(max(q.x, q.y), 0.0f) - radius;\n"
+  "    float coverage = 1.0f - smoothstep(-0.75f, 0.75f, distance);\n"
+  "    float a = input.color.a * coverage;\n"
+  "    output.color = float4(input.color.rgb * a, a);\n"
+  "    output.coverage = float4(a, a, a, a);\n"
+  "    return output;\n"
+  "  }\n"
+  "  if (input.style.x > 2.5f) {\n"
   "    float a = input.color.a;\n"
   "    output.color = float4(input.color.rgb * a, a);\n"
   "    output.coverage = float4(a, a, a, a);\n"
   "    return output;\n"
   "  }\n"
   "  float4 s = tex0.Sample(smp0, input.uv);\n"
-  "  if (input.mode < 0.5f) {\n"
+  "  if (input.style.x < 0.5f) {\n"
   "    float a = input.color.a * s.r;\n"
   "    output.color = float4(input.color.rgb * a, a);\n"
   "    output.coverage = float4(a, a, a, a);\n"
   "    return output;\n"
   "  }\n"
-  "  if (input.mode < 1.5f) {\n"
+  "  if (input.style.x < 1.5f) {\n"
   "    float3 coverage = input.color.a * s.rgb;\n"
   "    float a = max(coverage.r, max(coverage.g, coverage.b));\n"
   "    output.color = float4(input.color.rgb * coverage, a);\n"
@@ -1156,6 +1168,42 @@ bool anvil_d3d11_push_rect(SDL_Window *window, RenRect rect, RenRect clip, RenCo
   float ca = color.a / 255.0f;
 
   D3D11QuadInstance inst = { x0, y0, x1, y1, 0, 0, 1, 1, cr, cg, cb, ca, 3.0f, 0, 0, 0 };
+  return d3d11_queue_quad(g_d3d11.white_srv, &inst, false);
+}
+
+bool anvil_d3d11_push_rounded_rect(SDL_Window *window, RenRect rect, float radius, RenRect clip, RenColor color) {
+  if (window != g_d3d11.active_window) return false;
+  if (color.a == 0 || rect.width <= 0 || rect.height <= 0) return true;
+  if (radius <= 0.0f) return anvil_d3d11_push_rect(window, rect, clip, color);
+  if (!d3d11_ensure_quad_pipeline() || !d3d11_ensure_white_texture()) return false;
+  g_d3d11.stats.frame.rect_pushes++;
+
+  float width = (float)rect.width;
+  float height = (float)rect.height;
+  float max_radius = (width < height ? width : height) * 0.5f;
+  if (radius > max_radius) radius = max_radius;
+  RenRect r = d3d11_intersect_renrect(rect, clip);
+  if (r.width <= 0 || r.height <= 0) return true;
+
+  float x0 = (float)r.x;
+  float y0 = (float)r.y;
+  float x1 = (float)(r.x + r.width);
+  float y1 = (float)(r.y + r.height);
+  float u0 = x0 - (float)rect.x;
+  float v0 = y0 - (float)rect.y;
+  float u1 = x1 - (float)rect.x;
+  float v1 = y1 - (float)rect.y;
+  float cr = color.r / 255.0f;
+  float cg = color.g / 255.0f;
+  float cb = color.b / 255.0f;
+  float ca = color.a / 255.0f;
+
+  D3D11QuadInstance inst = {
+    x0, y0, x1, y1,
+    u0, v0, u1, v1,
+    cr, cg, cb, ca,
+    4.0f, radius, width, height,
+  };
   return d3d11_queue_quad(g_d3d11.white_srv, &inst, false);
 }
 

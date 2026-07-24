@@ -105,6 +105,9 @@ end
 
 local TITLEBAR_SAFE_ZONE_RATIO = 0.10
 local HIDDEN_RIGHT_TABS_OPACITY = 0.60
+local TITLEBAR_TAB_SIDE_INSET = math.floor(3 * SCALE)
+local TITLEBAR_TAB_TOP_INSET = math.floor(4 * SCALE)
+local TITLEBAR_TAB_RADIUS = math.floor(8 * SCALE)
 
 local function titlebar_safe_zone_min_width()
   return math.floor(80 * SCALE)
@@ -176,6 +179,21 @@ end
 
 local function titlebar_scroll_button_width()
   return math.floor(24 * SCALE)
+end
+
+local function draw_titlebar_tab_tile(x, y, w, h, color)
+  local side_inset = math.min(TITLEBAR_TAB_SIDE_INSET, math.max(0, w / 2 - 1))
+  local top_inset = math.min(TITLEBAR_TAB_TOP_INSET, math.max(0, h - 1))
+  local tile_w = math.max(1, w - side_inset * 2)
+  local radius = math.min(TITLEBAR_TAB_RADIUS, tile_w / 2)
+  renderer.draw_rounded_rect(
+    x + side_inset,
+    y + top_inset,
+    tile_w,
+    math.max(1, h - top_inset + radius),
+    radius,
+    color
+  )
 end
 
 local function panes()
@@ -548,7 +566,6 @@ end
 local draw_caption_glyph
 
 function TitleBar:draw_titlebar_tabs()
-  local focused_pane = panes().focused_pane()
   for _, pane in ipairs({ "left", "right" }) do
     local node = self:get_tabs_node(pane)
     local views = pane_tab_views(node)
@@ -563,7 +580,6 @@ function TitleBar:draw_titlebar_tabs()
       local widths = self:get_titlebar_tab_widths(node, views, w)
       local used_tabs_width = self:get_titlebar_tabs_used_width(node, views, w)
       local used_x = pane == "right" and x + w - used_tabs_width or x
-      local ds = style.divider_size
       local bw = titlebar_scroll_button_width()
       local hovered_scroll = self.hovered_tab_scroll_pane == pane and self.hovered_tab_scroll_button
       if pane == "right" then
@@ -594,17 +610,11 @@ function TitleBar:draw_titlebar_tabs()
         local selected = view == node.active_view
         local hovered = self.hovered_tab_pane == pane and self.hovered_tab_view == view
         if selected then
-          renderer.draw_rect(tx, ty, tab_w, tab_h, pane_color(style.background))
+          draw_titlebar_tab_tile(tx, ty, tab_w, tab_h, pane_color(style.titlebar_tab_active))
         end
         if hovered then
-          renderer.draw_rect(tx, ty, tab_w, tab_h, pane_color(style.titlebar_tab_hover))
+          draw_titlebar_tab_tile(tx, ty, tab_w, tab_h, pane_color(style.titlebar_tab_hover))
         end
-        if selected and focused_pane == pane then
-          renderer.draw_rect(tx, ty + tab_h - ds, tab_w, ds, pane_color(style.caret))
-        end
-        local separator_h = math.max(0, tab_h - ds)
-        renderer.draw_rect(tx, ty, ds, separator_h, pane_color(style.titlebar_tab_separator))
-        renderer.draw_rect(tx + tab_w - ds, ty, ds, separator_h, pane_color(style.titlebar_tab_separator))
         local title_color = pane_color((selected or hovered) and style.text or style.dim)
         local title_x = tx + style.padding.x
         local title_w = math.max(0, tab_w - style.padding.x * 2)
