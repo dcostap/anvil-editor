@@ -412,11 +412,14 @@ function LineWrapping.compute_line_breaks_from_col(doc, default_font, line, widt
     if render_line and render_line.disable_wrapping then
       return { start_col }, 0
     end
-    local has_widget = false
+    local has_non_inline_widget = false
     for _, fragment in ipairs(render_line and render_line.fragments or {}) do
-      if fragment.widget then has_widget = true break end
+      if fragment.widget and fragment.widget.wrapping ~= "inline" then
+        has_non_inline_widget = true
+        break
+      end
     end
-    if render_line and not has_widget then
+    if render_line and not has_non_inline_widget then
       return compute_rendered_line_breaks(
         docview, render_line, default_font, line, width, mode,
         start_col, begin_width

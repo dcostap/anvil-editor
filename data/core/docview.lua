@@ -285,6 +285,9 @@ end
 
 local function apply_resolved_line_end_affinity(docview)
   linewrapping.apply_resolved_line_end_affinity(docview)
+  if docview.apply_resolved_line_render_position_row_affinity then
+    docview:apply_resolved_line_render_position_row_affinity()
+  end
 end
 
 local function draw_wrapped_search_match_segment(view, x1, y, x2, h, primary, outline)
@@ -2645,8 +2648,7 @@ end
 function DocView:get_position_caret_height(line, col, line_end)
   local row_height = self:get_position_visual_row_height(line, col, line_end)
   local render_line = self:get_line_render(line)
-  local position_row = render_line
-    and self:get_line_render_position_row(render_line, col or 1)
+  local _, position_row = self:get_position_line_render_row(line, col or 1)
   if position_row and position_row.height then
     row_height = math.max(1, tonumber(position_row.height) or row_height)
   end
@@ -2920,8 +2922,7 @@ end
 function DocView:get_line_screen_position(line, col, line_end)
   local function render_y_offset()
     if not col then return 0 end
-    local render_line = self:get_line_render(line)
-    local row = render_line and self:get_line_render_position_row(render_line, col)
+    local _, row = self:get_position_line_render_row(line, col)
     return row and (row.y_offset or 0) or 0
   end
   if self.wrapped_settings then
@@ -3250,11 +3251,183 @@ function DocView:get_line_render_position_row(render_line, col, prefer_next)
       if prefer_next and col == col2 and next_row
         and col >= (next_row.source_col1 or col)
       then
-        return next_row
+        return next_row, index + 1
       end
-      return row
+      return row, index
     end
   end
+end
+
+---Return the independently navigable caret rows exposed by a rendered line.
+---@param line integer
+---@return table? render_line
+---@return table? rows
+function DocView:get_line_render_position_rows(line)
+  local render_line = self:get_line_render(line)
+  local rows = render_line and render_line.position_rows
+  if type(rows) ~= "table" or #rows == 0 then return render_line, nil end
+  return render_line, rows
+end
+
+local function render_position_key(line, col)
+  return tostring(line) .. ":" .. tostring(col)
+end
+
+---Resolve a caret row with view-local boundary affinity.
+function DocView:get_position_line_render_row(line, col, prefer_next)
+  local render_line, rows = self:get_line_render_position_rows(line)
+  if not rows then return render_line, nil, nil end
+  local affinity = self.line_render_position_row_affinity
+  if affinity
+  and affinity.selection_key == linewrapping.selection_state_key(self.doc)
+  and affinity.text_revision == (self.doc.text_revision or 0)
+  then
+    local index = affinity.positions[render_position_key(line, col)]
+    if index and rows[index] then return render_line, rows[index], index end
+  end
+  local row, index = self:get_line_render_position_row(render_line, col, prefer_next)
+  return render_line, row, index
+end
+
+function DocView:clear_pending_line_render_position_row_affinity()
+  self.__pending_line_render_position_rows = nil
+end
+
+function DocView:queue_line_render_position_row_affinity(line, col, index)
+  if not (line and col and index) then return end
+  self.__pending_line_render_position_rows =
+    self.__pending_line_render_position_rows or {}
+  self.__pending_line_render_position_rows[render_position_key(line, col)] = index
+end
+
+function DocView:apply_pending_line_render_position_row_affinity()
+  local positions = self.__pending_line_render_position_rows
+  self.__pending_line_render_position_rows = nil
+  if positions and next(positions) then
+    self.line_render_position_row_affinity = {
+      selection_key = linewrapping.selection_state_key(self.doc),
+      text_revision = self.doc.text_revision or 0,
+      positions = positions,
+    }
+  else
+    self.line_render_position_row_affinity = nil
+  end
+end
+
+function DocView:apply_resolved_line_render_position_row_affinity()
+  local resolved = self.resolved_line_render_position_row
+  self.resolved_line_render_position_row = nil
+  if not resolved then return end
+  local line, col, index = resolved[1], resolved[2], resolved[3]
+  for _, caret_line, caret_col in self.doc:get_selections(false) do
+    if caret_line == line and caret_col == col then
+      self.line_render_position_row_affinity = {
+        selection_key = linewrapping.selection_state_key(self.doc),
+        text_revision = self.doc.text_revision or 0,
+        positions = { [render_position_key(line, col)] = index },
+      }
+      return
+    end
+  end
+end
+
+---Return the source bounds of the rendered caret row containing a position.
+---@param line integer
+---@param col integer
+---@return integer? col1
+---@return integer? col2
+function DocView:get_line_render_position_row_bounds(line, col)
+  local _, row, index = self:get_position_line_render_row(line, col)
+  if not row then return nil end
+  return math.max(1, row.source_col1 or 1),
+    math.max(row.source_col1 or 1, row.source_col2 or row.source_col1 or 1),
+    index
+end
+
+local function position_row_target_col(view, render_line, row, x)
+  local top = row.y_offset or 0
+  local height = math.max(1, row.height or view:get_line_height())
+  local col = view:get_line_render_position_col(render_line, x, top + height / 2)
+  local col1 = math.max(1, row.source_col1 or 1)
+  local col2 = math.max(col1, row.source_col2 or col1)
+  return common.clamp(col or col1, col1, col2)
+end
+
+local function desired_position_row_x(view, line, col)
+  local last = view.last_x_offset or {}
+  view.last_x_offset = last
+  if last.line == line and last.col == col then return last.offset or 0 end
+  return view:get_col_x_offset(line, col)
+end
+
+local function remember_position_row_x(view, line, col, x)
+  view.last_x_offset = view.last_x_offset or {}
+  view.last_x_offset.offset = x
+  view.last_x_offset.line = line
+  view.last_x_offset.col = col
+  view.last_x_offset.line_end = false
+end
+
+---Move between independently navigable caret rows inside one rendered line.
+---@return integer? line
+---@return integer? col
+function DocView:move_within_line_render_position_rows(line, col, direction)
+  local render_line, rows = self:get_line_render_position_rows(line)
+  if not rows or #rows < 2 then return nil end
+  local _, _, index = self:get_position_line_render_row(line, col)
+  local target = index and rows[index + direction]
+  if not target then return nil end
+  local x = desired_position_row_x(self, line, col)
+  local target_col = position_row_target_col(self, render_line, target, x)
+  remember_position_row_x(self, line, target_col, x)
+  self:queue_line_render_position_row_affinity(
+    line, target_col, index + direction
+  )
+  return line, target_col
+end
+
+---Land on the first/last caret row when vertical movement enters a rendered line.
+---@return integer col
+function DocView:land_on_line_render_position_row(line, fallback_col, direction, x)
+  local render_line, rows = self:get_line_render_position_rows(line)
+  if not rows or #rows < 2 then return fallback_col end
+  local target = direction < 0 and rows[#rows] or rows[1]
+  local target_index = direction < 0 and #rows or 1
+  x = x or 0
+  local col = position_row_target_col(self, render_line, target, x)
+  remember_position_row_x(self, line, col, x)
+  self:queue_line_render_position_row_affinity(line, col, target_index)
+  return col
+end
+
+---Whether an unwrapped navigation command must honor rendered caret rows.
+function DocView:needs_line_render_position_navigation(command_name)
+  local direction = command_name:find("previous%-line", 1) and -1
+    or command_name:find("next%-line", 1) and 1 or nil
+  for _, line in self.doc:get_selections(false) do
+    local _, rows = self:get_line_render_position_rows(line)
+    if rows and #rows > 1 then return true end
+    if direction then
+      local target = common.clamp(line + direction, 1, #self.doc.lines)
+      local _, target_rows = self:get_line_render_position_rows(target)
+      if target_rows and #target_rows > 1 then return true end
+    end
+  end
+  return false
+end
+
+---Resolve Current Line Highlight geometry for one caret position.
+---@return number y
+---@return number height
+function DocView:get_position_highlight_geometry(line, col, line_end)
+  local _, row = self:get_position_line_render_row(line, col or 1)
+  if row then
+    local _, line_y = self:get_line_screen_position(line)
+    return line_y + (row.highlight_y_offset or row.y_offset or 0),
+      math.max(1, row.highlight_height or row.height or self:get_line_height())
+  end
+  local _, y = self:get_line_screen_position(line, col, line_end)
+  return y, self:get_position_visual_row_height(line, col or 1, line_end)
 end
 
 local function get_line_render_raw_col_x_offset(self, render_line, col)
@@ -3359,27 +3532,31 @@ end
 ---@return integer? col Source column, or nil when ordinary mapping should be used
 function DocView:get_line_render_position_col(render_line, x, y)
   if render_line.position_rows then
-    local row
-    for _, candidate in ipairs(render_line.position_rows) do
+    local row, row_index
+    for index, candidate in ipairs(render_line.position_rows) do
       local top = candidate.y_offset or 0
       local height = candidate.height or self:get_line_height()
-      if y >= top and y < top + height then row = candidate break end
+      if y >= top and y < top + height then
+        row, row_index = candidate, index
+        break
+      end
     end
     if row then
       local col = row.source_col1 or 1
       local col2 = row.source_col2 or col
       local previous_x = self:get_line_render_col_x_offset(render_line, col, row)
-      if x <= previous_x then return col end
+      if x <= previous_x then return col, row_index end
       local source = render_line.source_text or ""
       for char in common.utf8_chars(source:sub(col, math.max(col, col2 - 1))) do
         local next_col = col + #char
         local next_x = self:get_line_render_col_x_offset(render_line, next_col, row)
         if x <= next_x then
-          return x <= previous_x + (next_x - previous_x) / 2 and col or next_col
+          return x <= previous_x + (next_x - previous_x) / 2 and col or next_col,
+            row_index
         end
         col, previous_x = next_col, next_x
       end
-      return col2
+      return col2, row_index
     end
   end
   local xoffset = render_line.x_offset or 0
@@ -3428,7 +3605,10 @@ end
 function DocView:get_col_x_offset(line, col, line_end)
   local render_line = self:get_line_render(line)
   if render_line then
-    local rendered_offset = self:get_line_render_col_x_offset(render_line, col)
+    local _, position_row = self:get_position_line_render_row(line, col)
+    local rendered_offset = self:get_line_render_col_x_offset(
+      render_line, col, position_row
+    )
     if self.wrapped_settings and not render_line.disable_wrapping then
       if line_end == nil and self.__use_wrapped_caret_affinity then
         line_end = linewrapping.has_wrapped_line_end_affinity(self, line, col)
@@ -3609,6 +3789,7 @@ end
 ---@return integer col Column number
 function DocView:resolve_screen_position(x, y)
   self.resolved_fold_widget = nil
+  self.resolved_line_render_position_row = nil
   if self.wrapped_settings then
     local content_x, content_y = self:get_content_offset()
     local ox, oy = content_x + self:get_gutter_width(), content_y + style.padding.y
@@ -3632,11 +3813,19 @@ function DocView:resolve_screen_position(x, y)
         return entry.line, 1
       elseif entry then
         local render_line = self:get_line_render(entry.line)
-        local rendered_col = render_line and self:get_line_render_position_col(
-          render_line, x - ox, y - (oy + self:get_visual_row_y_offset(idx))
-        )
+        local rendered_col, rendered_row
+        if render_line then
+          rendered_col, rendered_row = self:get_line_render_position_col(
+            render_line, x - ox, y - (oy + self:get_visual_row_y_offset(idx))
+          )
+        end
         if rendered_col then
           self.wrapped_last_resolved_line_end = nil
+          if rendered_row then
+            self.resolved_line_render_position_row = {
+              entry.line, rendered_col, rendered_row,
+            }
+          end
           return entry.line, rendered_col
         end
         local line, col, line_end = linewrapping.get_line_col_from_index_and_x(self, entry.wrapped_idx, x - ox)
@@ -3646,11 +3835,19 @@ function DocView:resolve_screen_position(x, y)
     end
     local row_line = linewrapping.get_idx_line_col(self, idx)
     local render_line = self:get_line_render(row_line)
-    local rendered_col = render_line and self:get_line_render_position_col(
-      render_line, x - ox, y - (oy + self:get_visual_row_y_offset(idx))
-    )
+    local rendered_col, rendered_row
+    if render_line then
+      rendered_col, rendered_row = self:get_line_render_position_col(
+        render_line, x - ox, y - (oy + self:get_visual_row_y_offset(idx))
+      )
+    end
     if rendered_col then
       self.wrapped_last_resolved_line_end = nil
+      if rendered_row then
+        self.resolved_line_render_position_row = {
+          row_line, rendered_col, rendered_row,
+        }
+      end
       return row_line, rendered_col
     end
     local line, col, line_end = linewrapping.get_line_col_from_index_and_x(self, idx, x - ox)
@@ -3680,10 +3877,20 @@ function DocView:resolve_screen_position(x, y)
     end
   end
   local render_line = self:get_line_render(line)
-  local rendered_col = render_line and self:get_line_render_position_col(
-    render_line, x - ox, y - (oy + self:get_visual_row_y_offset(row))
-  )
-  if rendered_col then return line, rendered_col end
+  local rendered_col, rendered_row
+  if render_line then
+    rendered_col, rendered_row = self:get_line_render_position_col(
+      render_line, x - ox, y - (oy + self:get_visual_row_y_offset(row))
+    )
+  end
+  if rendered_col then
+    if rendered_row then
+      self.resolved_line_render_position_row = {
+        line, rendered_col, rendered_row,
+      }
+    end
+    return line, rendered_col
+  end
   local col = self:get_x_offset_col(line, x - ox)
   return line, col
 end
@@ -3885,7 +4092,7 @@ function DocView:on_mouse_moved(x, y, ...)
       self.doc:set_selection(l1, c1, l2, c2)
     end
   end
-  if self.wrapped_settings and selecting then
+  if selecting then
     apply_resolved_line_end_affinity(self)
   end
 end
@@ -3980,7 +4187,7 @@ function DocView:on_mouse_pressed(button, x, y, clicks)
   end
   if button ~= "left" or not self.hovering_gutter then
     local result = DocView.super.on_mouse_pressed(self, button, x, y, clicks)
-    if self.wrapped_settings and button == "left" then
+    if button == "left" then
       apply_resolved_line_end_affinity(self)
     end
     return result
@@ -4233,12 +4440,18 @@ function DocView:draw_current_line_highlights(minline, maxline)
         local line_end = self.wrapped_settings
           and linewrapping.has_wrapped_line_end_affinity(self, line1, col1)
           or false
-        highlighted_rows[self:get_composed_visual_row_for_position(line1, col1, line_end)] = true
+        highlighted_rows[self:get_composed_visual_row_for_position(line1, col1, line_end)] = {
+          line = line1, col = col1, line_end = line_end,
+        }
       end
     end
     for entry in self:iter_visible_visual_rows() do
-      if highlighted_rows[entry.visual_row] then
-        self:draw_line_highlight(self.position.x, entry.y, entry.height)
+      local position = highlighted_rows[entry.visual_row]
+      if position then
+        local y, height = self:get_position_highlight_geometry(
+          position.line, position.col, position.line_end
+        )
+        self:draw_line_highlight(self.position.x, y, height)
       end
     end
     self:draw_content_left_edge()
@@ -4251,21 +4464,24 @@ function DocView:draw_current_line_highlights(minline, maxline)
       if line1 > maxline then break end
       if line1 >= minline and (hcl ~= "no_selection" or (line1 == line2 and col1 == col2)) then
         local line_end = linewrapping.has_wrapped_line_end_affinity(self, line1, col1)
-        local idx = linewrapping.get_line_idx_col_count(self, line1, col1, line_end)
-        local _, y = self:get_line_screen_position(line1, col1, line_end)
-        self:draw_line_highlight(self.position.x, y, self:get_visual_row_height(idx))
+        local y, height = self:get_position_highlight_geometry(
+          line1, col1, line_end
+        )
+        self:draw_line_highlight(self.position.x, y, height)
       end
     end
     self:draw_content_left_edge()
     return
   end
   if config.highlight_current_line == false then return end
-  for line = minline, maxline do
-    if self:line_has_current_line_highlight(line) then
-      local _, y = self:get_line_screen_position(line)
-      self:draw_line_highlight(
-        self.position.x, y, self:get_position_visual_row_height(line, 1)
-      )
+  local hcl = config.highlight_current_line
+  for _, line1, col1, line2, col2 in self.doc:get_selections(false) do
+    if line1 > maxline then break end
+    if line1 >= minline
+    and (hcl ~= "no_selection" or (line1 == line2 and col1 == col2))
+    then
+      local y, height = self:get_position_highlight_geometry(line1, col1, false)
+      self:draw_line_highlight(self.position.x, y, height)
     end
   end
   self:draw_content_left_edge()
@@ -4774,6 +4990,87 @@ function DocView:draw_line_text(line, x, y)
     return self:get_visual_row_y_offset(first_visual_row + count) - first_row_y_offset
   end
   if render_line then
+    if render_line.position_rows then
+      local fragments = self:iter_line_render_fragments(render_line)
+      local _, indent_size = self.doc:get_indent_info()
+      local layout_height = render_line.layout_height
+        or self:get_position_visual_row_height(line, 1)
+
+      -- Block widgets are anchored to the rendered Document line rather than
+      -- to one text caret row. Draw each exactly once; text fragments below
+      -- are then sliced through the same source ranges used for navigation.
+      for _, fragment in ipairs(fragments) do
+        if fragment.image_block and fragment.widget and fragment.widget.draw
+        and not fragment.hidden then
+          local draw_x = x + (fragment.layout_x or 0)
+          local ok, err = pcall(
+            fragment.widget.draw, self, fragment, draw_x, y, layout_height
+          )
+          if not ok then
+            core.log_quiet(
+              "DocView positioned render widget draw failed for %s: %s",
+              self.doc:get_name(), tostring(err)
+            )
+          end
+        end
+      end
+
+      for _, row in ipairs(render_line.position_rows) do
+        local row_start = row.source_col1 or 1
+        local row_end = row.source_col2 or row_start
+        local row_height = math.max(1, row.height or self:get_line_height())
+        local row_y = y + (row.y_offset or 0)
+        local tx = x + (render_line.x_offset or 0) + (row.x_offset or 0)
+        for _, fragment in ipairs(fragments) do
+          if not fragment.image_block and not fragment.hidden then
+            local col1 = fragment.source_col1 or 1
+            local col2 = fragment.source_col2 or col1
+            local from = math.max(col1, row_start)
+            local to = math.min(col2, row_end)
+            if from < to then
+              local font = render_fragment_font(self, fragment)
+              font:set_tab_size(indent_size)
+              if fragment.widget and fragment.widget.draw
+              and from == col1 and to == col2 then
+                local ok, err = pcall(
+                  fragment.widget.draw, self, fragment, tx, row_y, row_height
+                )
+                if not ok then
+                  core.log_quiet(
+                    "DocView positioned inline widget draw failed for %s: %s",
+                    self.doc:get_name(), tostring(err)
+                  )
+                end
+                tx = tx + (fragment.width or fragment.widget.width or 0)
+              else
+                local text = fragment.text or ""
+                local text_col1 = fragment.text_source_col1 or col1
+                local text_col2 = fragment.text_source_col2 or col2
+                local visible_from = math.max(from, text_col1)
+                local visible_to = math.min(to, text_col2)
+                local text_from = math.min(
+                  #text + 1, visible_from - text_col1 + 1
+                )
+                local text_to = math.min(#text, visible_to - text_col1)
+                local segment = text_to >= text_from
+                  and text:sub(text_from, text_to) or ""
+                if segment ~= "" then
+                  local ty = row_y + math.max(0, (row_height - font:get_height()) / 2)
+                  tx = draw_render_fragment_text(
+                    fragment, font, segment, tx, ty,
+                    render_fragment_color(fragment), { tab_offset = tx - x },
+                    row_y, row_height
+                  )
+                elseif fragment.width and from == col1 and to == col2 then
+                  tx = tx + fragment.width
+                end
+              end
+            end
+          end
+        end
+      end
+      return layout_height
+    end
     local tx = x + (render_line.x_offset or 0)
     local row = self:get_visual_row(line, 1)
     local row_height = self:get_visual_row_height(row)
@@ -5382,7 +5679,10 @@ function DocView:search_match_screen_rect(line, col1, col2)
     -- line's first visual row.
     x2 = self.position.x + self.size.x
   end
-  return x1, y1, x2, self:get_position_visual_row_height(line, col1)
+  local _, position_row = self:get_position_line_render_row(line, col1)
+  local height = position_row and position_row.height
+    or self:get_position_visual_row_height(line, col1)
+  return x1, y1, x2, height
 end
 
 function DocView:draw_search_match_background(line, col1, col2, primary)
@@ -5617,6 +5917,32 @@ end
   ---@param x number Screen x coordinate
 ---@param y number Screen y coordinate
 ---@return integer height Line height
+local function draw_line_render_position_row_range(
+  view, render_line, col1, col2, x, y, color
+)
+  local rows = render_line and render_line.position_rows
+  if type(rows) ~= "table" or #rows == 0 then return false end
+  local drawn = false
+  for _, row in ipairs(rows) do
+    local row_col1 = math.max(1, row.source_col1 or 1)
+    local row_col2 = math.max(row_col1, row.source_col2 or row_col1)
+    local from = math.max(col1, row_col1)
+    local to = math.min(col2, row_col2)
+    if from < to then
+      local x1 = x + view:get_line_render_col_x_offset(render_line, from, row)
+      local x2 = x + view:get_line_render_col_x_offset(render_line, to, row)
+      if x2 > x1 then
+        renderer.draw_rect(
+          x1, y + (row.y_offset or 0), x2 - x1,
+          math.max(1, row.height or view:get_line_height()), color
+        )
+        drawn = true
+      end
+    end
+  end
+  return drawn
+end
+
 function DocView:draw_line_body(line, x, y)
   if not self.doc.lines[line] then
     core.log_quiet(
@@ -5679,25 +6005,28 @@ function DocView:draw_line_body(line, x, y)
           local idx = linewrapping.get_line_idx_col_count(self, line, col1, line_end)
           if idx >= idx0 and idx < idx0 + count then
             highlight_rows = highlight_rows or {}
-            highlight_rows[idx] = true
+            highlight_rows[idx] = { col = col1, line_end = line_end }
           end
         end
       end
     end
     if highlight_rows then
-      local row0_y_offset = self:get_visual_row_y_offset(idx0)
       for i = visible_idx1, visible_idx2 do
-        if highlight_rows[i] then
+        local position = highlight_rows[i]
+        if position then
+          local highlight_y, highlight_height =
+            self:get_position_highlight_geometry(
+              line, position.col, position.line_end
+            )
           self:draw_line_highlight(
-            x + self.scroll.x,
-            y + self:get_visual_row_y_offset(i) - row0_y_offset,
-            self:get_visual_row_height(i)
+            x + self.scroll.x, highlight_y, highlight_height
           )
         end
       end
     end
 
     local search_matches
+    local render_line = self:get_line_render(line)
     for _, line1, col1, line2, col2 in self.doc:get_selections(true) do
       if line >= line1 and line <= line2 then
         if line1 ~= line then col1 = 1 end
@@ -5706,6 +6035,10 @@ function DocView:draw_line_body(line, x, y)
           if self.doc:is_search_selection(line1, col1, line, col2) then
             search_matches = search_matches or {}
             search_matches[#search_matches + 1] = { col1, col2, true }
+          elseif render_line and render_line.position_rows then
+            draw_line_render_position_row_range(
+              self, render_line, col1, col2, x, y, style.selection
+            )
           else
             local idx1 = linewrapping.get_line_idx_col_count(self, line, col1)
             local idx2 = linewrapping.get_line_idx_col_count(self, line, col2)
@@ -5757,24 +6090,41 @@ function DocView:draw_line_body(line, x, y)
 
   if not self.__current_line_highlights_drawn_before_content
   and self:line_has_current_line_highlight(line) then
-    self:draw_line_highlight(
-      x + self.scroll.x, y, self:get_position_visual_row_height(line, 1)
-    )
+    for _, line1, col1, line2, col2 in self.doc:get_selections(false) do
+      if line1 == line
+      and (config.highlight_current_line ~= "no_selection"
+        or (line1 == line2 and col1 == col2))
+      then
+        local highlight_y, highlight_height =
+          self:get_position_highlight_geometry(line, col1, false)
+        self:draw_line_highlight(
+          x + self.scroll.x, highlight_y, highlight_height
+        )
+        break
+      end
+    end
   end
 
   -- draw selection if it overlaps this line
   local lh = self:get_position_visual_row_height(line, 1)
   local selection_cache = self.__line_body_selection_cache
+  local render_line = self:get_line_render(line)
   local fallback_search_matches
   local cached_selections = selection_cache and selection_cache[line]
   if cached_selections then
     for _, sel in ipairs(cached_selections) do
-      local x1 = x + self:get_col_x_offset(line, sel[1])
-      local x2 = x + self:get_col_x_offset(line, sel[2])
-      if x1 ~= x2 then
-        local stats = core.docview_frame_stats
-        if stats then stats.selection_rect_calls = stats.selection_rect_calls + 1 end
-        renderer.draw_rect(x1, y, x2 - x1, lh, sel[3])
+      if render_line and render_line.position_rows then
+        draw_line_render_position_row_range(
+          self, render_line, sel[1], sel[2], x, y, sel[3]
+        )
+      else
+        local x1 = x + self:get_col_x_offset(line, sel[1])
+        local x2 = x + self:get_col_x_offset(line, sel[2])
+        if x1 ~= x2 then
+          local stats = core.docview_frame_stats
+          if stats then stats.selection_rect_calls = stats.selection_rect_calls + 1 end
+          renderer.draw_rect(x1, y, x2 - x1, lh, sel[3])
+        end
       end
     end
   elseif not selection_cache then
@@ -5787,6 +6137,10 @@ function DocView:draw_line_body(line, x, y)
         if self.doc:is_search_selection(line1, col1, line, col2) then
           fallback_search_matches = fallback_search_matches or {}
           fallback_search_matches[#fallback_search_matches + 1] = { col1, col2, true }
+        elseif render_line and render_line.position_rows then
+          draw_line_render_position_row_range(
+            self, render_line, col1, col2, x, y, style.selection
+          )
         else
           local x1 = x + self:get_col_x_offset(line, col1)
           local x2 = x + self:get_col_x_offset(line, col2)
@@ -5869,9 +6223,9 @@ end
 ---@param line2 integer End line
 ---@param col2 integer End column
 function DocView:draw_ime_decoration(line1, col1, line2, col2)
-  local x, y = self:get_line_screen_position(line1)
+  local x, y = self:get_line_screen_position(line1, col1)
   local line_size = math.max(1, SCALE)
-  local lh = self:get_position_visual_row_height(line1, col1)
+  local lh = self:get_position_caret_height(line1, col1)
 
   -- Draw IME underline
   local x1 = self:get_col_x_offset(line1, col1)

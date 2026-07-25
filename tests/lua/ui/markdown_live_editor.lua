@@ -67,6 +67,40 @@ local function primary_font_path(font)
   return type(paths) == "table" and paths[1] or paths
 end
 
+local function with_inline_image_text_fixture(callback)
+  local image_path = USERDIR .. PATHSEP .. "markdown-live-caret-rows-" .. system.get_process_id() .. ".png"
+  local fp = test.not_nil(io.open(image_path, "wb"))
+  fp:write("png")
+  fp:close()
+  local image_url = common.basename and common.basename(image_path)
+    or image_path:match("[^" .. PATHSEP .. "]+$")
+  local prefix, image_source, suffix = "aaaa ", "![[" .. image_url .. "]]", " Testing this change"
+  local source = prefix .. image_source .. suffix
+  local image_end = #prefix + #image_source + 1
+  local view, doc = make_view(source .. "\nnext", USERDIR .. PATHSEP .. "caret-rows-note.md")
+  view:set_wrapping_enabled(true)
+  doc:set_selection(2, 1)
+
+  local old_load_image = canvas.load_image
+  canvas.load_image = function()
+    return {
+      get_size = function() return 320, 240 end,
+      scaled = function(self) return self end,
+    }
+  end
+  local ok, err = pcall(function()
+    refresh(view)
+    callback(view, doc, {
+      source = source,
+      image_end = image_end,
+      suffix = suffix,
+    })
+  end)
+  canvas.load_image = old_load_image
+  os.remove(image_path)
+  if not ok then error(err, 0) end
+end
+
 local function visible_render_text(view, line)
   local rendered = test.not_nil(view:get_line_render(line))
   local visible = {}
@@ -1383,6 +1417,27 @@ test.describe("Markdown Live Editor", function()
     test.equal(view:get_col_x_offset(1, 3), inactive_content_x)
   end)
 
+  test.it("wraps inactive list items by their rendered width", function()
+    local source = "- Bocetar la posible solución (sin escribir el sql final) a 3 puntos en el tema escandallos - configurador"
+    local view, doc = make_view(source .. "\nplain", "list-wrapping.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+
+    local render_line = test.not_nil(view:get_line_render(1))
+    local bullet
+    for _, fragment in ipairs(render_line.fragments or {}) do
+      if fragment.unordered_list_marker then bullet = fragment break end
+    end
+    test.not_nil(test.not_nil(bullet).widget)
+
+    local rendered_width = view:get_line_render_col_x_offset(render_line, #source + 1)
+    local raw_width = view:get_font():get_width(source)
+    test.ok(raw_width > rendered_width, "fixture must be wider as raw source")
+    linewrapping.reconstruct_breaks(view, view:get_font(), math.ceil(rendered_width))
+
+    test.equal(view:get_line_visual_row_count(1), 1)
+  end)
+
   test.it("presents ordered markers, hard breaks, and indented code without replacing source content", function()
     local view, doc = make_view("    local code\nplain\n\n1. first\n   2. nested\n\nline  \nnext\nplain", "remaining-blocks.md")
     doc:set_selection(9, 1)
@@ -2551,6 +2606,170 @@ test.describe("Markdown Live Editor", function()
     test.ok(table.concat(visible):find(image_source, 1, true))
     test.equal(active_source_caret_y, inactive_before_caret_y)
     test.ok(active_source_caret_y < active_after_caret_y)
+  end)
+
+  test.it("highlights the whole image block from the prefix and only the suffix caret row", function()
+    with_inline_image_text_fixture(function(view, doc, fixture)
+      local old_highlight = config.highlight_current_line
+      local old_draw_rect = renderer.draw_rect
+      local highlights = {}
+      config.highlight_current_line = true
+      renderer.draw_rect = function() end
+      view.draw_line_highlight = function(_, _, y, height)
+        highlights[#highlights + 1] = { y = y, height = height }
+      end
+
+      doc:set_selection(1, 2)
+      local prefix_render = test.not_nil(view:get_line_render(1))
+      view:draw_current_line_highlights(1, 2)
+      test.equal(#highlights, 1)
+      test.equal(highlights[1].height, prefix_render.layout_height)
+
+      highlights = {}
+      doc:set_selection(1, fixture.image_end + 1)
+      local _, suffix_y = view:get_line_screen_position(1, fixture.image_end + 1)
+      view:draw_current_line_highlights(1, 2)
+      config.highlight_current_line = old_highlight
+      renderer.draw_rect = old_draw_rect
+      test.equal(#highlights, 1)
+      test.equal(highlights[1].y, suffix_y)
+      test.equal(
+        highlights[1].height,
+        math.floor(live_body_font(view):get_height() * config.line_height)
+      )
+    end)
+  end)
+
+  test.it("moves up from the following Document line into text below an inline image", function()
+    with_inline_image_text_fixture(function(view, doc, fixture)
+      local old_active = core.active_view
+      core.active_view = view
+      doc:set_selection(2, 1)
+      command.perform("doc:move-to-previous-line")
+      local line, col = doc:get_selection()
+      test.equal(line, 1)
+      test.equal(col, fixture.image_end)
+
+      command.perform("doc:move-to-previous-line")
+      line, col = doc:get_selection()
+      test.equal(line, 1)
+      test.equal(col, 1)
+
+      command.perform("doc:move-to-next-line")
+      line, col = doc:get_selection()
+      test.equal(line, 1)
+      test.equal(col, fixture.image_end)
+
+      command.perform("doc:move-to-next-line")
+      core.active_view = old_active
+      line, col = doc:get_selection()
+      test.equal(line, 2)
+      test.equal(col, 1)
+    end)
+  end)
+
+  test.it("selects only the suffix caret row with Shift+Home below an inline image", function()
+    with_inline_image_text_fixture(function(view, doc, fixture)
+      local old_active = core.active_view
+      core.active_view = view
+      doc:set_selection(1, #fixture.source + 1)
+      command.perform("doc:select-to-start-of-indentation")
+      core.active_view = old_active
+
+      local line1, col1, line2, col2 = doc:get_selection()
+      test.same({ line1, col1, line2, col2 }, {
+        1, fixture.image_end, 1, #fixture.source + 1,
+      })
+    end)
+  end)
+
+  test.it("keeps inline-image caret-row navigation when soft wrapping is disabled", function()
+    with_inline_image_text_fixture(function(view, doc, fixture)
+      local old_active = core.active_view
+      core.active_view = view
+      view:set_wrapping_enabled(false)
+
+      doc:set_selection(2, 1)
+      command.perform("doc:move-to-previous-line")
+      local line, col = doc:get_selection()
+      test.equal(line, 1)
+      test.equal(col, fixture.image_end)
+
+      doc:set_selection(1, #fixture.source + 1)
+      command.perform("doc:select-to-start-of-indentation")
+      core.active_view = old_active
+      local line1, col1, line2, col2 = doc:get_selection()
+      test.same({ line1, col1, line2, col2 }, {
+        1, fixture.image_end, 1, #fixture.source + 1,
+      })
+    end)
+  end)
+
+  test.it("draws a suffix-only selection on the caret row below an inline image", function()
+    with_inline_image_text_fixture(function(view, doc, fixture)
+      doc:set_selection(
+        1, fixture.image_end,
+        1, #fixture.source + 1
+      )
+      local expected_y = select(2, view:get_line_screen_position(1, fixture.image_end))
+      local expected_height = math.floor(
+        live_body_font(view):get_height() * config.line_height
+      )
+      local old_draw_rect = renderer.draw_rect
+      local old_draw_text = renderer.draw_text
+      local old_draw_canvas = renderer.draw_canvas
+      local selections = {}
+      renderer.draw_rect = function(x, y, width, height, color)
+        if color == style.selection then
+          selections[#selections + 1] = {
+            x = x, y = y, width = width, height = height,
+          }
+        end
+      end
+      renderer.draw_text = function(font, text, x, _, _, opts)
+        return x + font:get_width(text, opts)
+      end
+      renderer.draw_canvas = function() end
+      local x, y = view:get_line_screen_position(1)
+      local ok, err = pcall(view.draw_line_body, view, 1, x, y)
+      renderer.draw_canvas = old_draw_canvas
+      renderer.draw_text = old_draw_text
+      renderer.draw_rect = old_draw_rect
+      if not ok then error(err, 0) end
+
+      test.equal(#selections, 1)
+      test.equal(selections[1].y, expected_y)
+      test.equal(selections[1].height, expected_height)
+    end)
+  end)
+
+  test.it("soft-wraps suffix text as it is typed below an inline image", function()
+    with_inline_image_text_fixture(function(view, doc, fixture)
+      local old_active = core.active_view
+      core.active_view = view
+      view.size.x = 180
+      view:update_wrap_cache()
+      doc:set_selection(1, #fixture.source + 1)
+      view:on_text_input(" with enough additional words to wrap onto several rows")
+
+      command.perform("doc:move-to-previous-line")
+      core.active_view = old_active
+      local line, col = doc:get_selection()
+      test.equal(line, 1)
+      test.ok(col > fixture.image_end, "expected Up to remain within wrapped suffix text")
+    end)
+  end)
+
+  test.it("keeps a text-height caret immediately after typing below an inline image", function()
+    with_inline_image_text_fixture(function(view, doc, fixture)
+      doc:set_selection(1, #fixture.source + 1)
+      view:on_text_input("x")
+      local line, col = doc:get_selection()
+      test.equal(
+        view:get_position_caret_height(line, col),
+        math.floor(live_body_font(view):get_height() * config.line_height)
+      )
+    end)
   end)
 
   test.it("invalidates every cached line sharing a completed image asset", function()

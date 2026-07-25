@@ -16,9 +16,15 @@ Wrapped provider output is drawn row by row, slicing visible fragments by each r
 
 Changing provider state, active-line reveal state, image completion, or provider attachment updates affected wrap breaks. Full provider changes rebuild wrapping; targeted line invalidations rebuild only the affected logical lines.
 
-## Conservative boundaries
+## Widget boundary
 
-Wrapped inline text and aliases are supported in this slice. Complex widgets that need multi-row layout remain constrained to one source/render row until the later generic widget contract. Raw/code lines continue through the established source wrapping path.
+Wrapped inline text and aliases use rendered-width measurement. Render widgets remain
+on the conservative raw-width path by default. A one-row atomic widget may opt into
+rendered wrapping with `widget.wrapping = "inline"`; its fragment width then
+participates in the same source-column-to-rendered-x mapping as text. Complex or
+multi-row widgets do not opt in and therefore cannot accidentally be split across
+Wrapped Visual Rows. Raw/code lines continue through the established source wrapping
+path.
 
 ## Red-green evidence
 

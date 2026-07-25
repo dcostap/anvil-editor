@@ -264,6 +264,9 @@ end
 
 local function apply_resolved_wrap_affinity(dv)
   linewrapping.apply_resolved_line_end_affinity(dv)
+  if dv.apply_resolved_line_render_position_row_affinity then
+    dv:apply_resolved_line_render_position_row_affinity()
+  end
 end
 
 local function set_cursor(dv, x, y, snap_type)
@@ -2286,7 +2289,15 @@ local function add_line_end_affinity(positions, line, col, line_end)
 end
 
 local function wrapped_move_to(dv, name, move_fn, ...)
-  if not dv.wrapped_settings then return perform_unwrapped_navigation(name, dv, ...) end
+  if not dv.wrapped_settings
+  and not (dv.needs_line_render_position_navigation
+    and dv:needs_line_render_position_navigation(name))
+  then
+    return perform_unwrapped_navigation(name, dv, ...)
+  end
+  if dv.clear_pending_line_render_position_row_affinity then
+    dv:clear_pending_line_render_position_row_affinity()
+  end
   local selections = {}
   local affinity_positions = {}
   for _, line1, col1 in dv.doc:get_selections(false) do
@@ -2299,10 +2310,21 @@ local function wrapped_move_to(dv, name, move_fn, ...)
   end
   dv.doc:set_selection_list(selections, dv.doc.last_selection, { merge_cursors = true })
   linewrapping.set_wrapped_line_end_affinity(dv, affinity_positions)
+  if dv.apply_pending_line_render_position_row_affinity then
+    dv:apply_pending_line_render_position_row_affinity()
+  end
 end
 
 local function wrapped_select_to(dv, name, move_fn, ...)
-  if not dv.wrapped_settings then return perform_unwrapped_navigation(name, dv, ...) end
+  if not dv.wrapped_settings
+  and not (dv.needs_line_render_position_navigation
+    and dv:needs_line_render_position_navigation(name))
+  then
+    return perform_unwrapped_navigation(name, dv, ...)
+  end
+  if dv.clear_pending_line_render_position_row_affinity then
+    dv:clear_pending_line_render_position_row_affinity()
+  end
   local selections = {}
   local affinity_positions = {}
   for _, line1, col1, line2, col2 in dv.doc:get_selections(false) do
@@ -2315,12 +2337,20 @@ local function wrapped_select_to(dv, name, move_fn, ...)
   end
   dv.doc:set_selection_list(selections, dv.doc.last_selection, { merge_cursors = true })
   linewrapping.set_wrapped_line_end_affinity(dv, affinity_positions)
+  if dv.apply_pending_line_render_position_row_affinity then
+    dv:apply_pending_line_render_position_row_affinity()
+  end
   set_primary_selection(dv.doc)
 end
 
 local function wrapped_delete_to(dv, name, move_fn, ...)
   if not can_edit(dv, "delete") then return end
-  if not dv.wrapped_settings then return perform_unwrapped_navigation(name, dv, ...) end
+  if not dv.wrapped_settings
+  and not (dv.needs_line_render_position_navigation
+    and dv:needs_line_render_position_navigation(name))
+  then
+    return perform_unwrapped_navigation(name, dv, ...)
+  end
   local args = { n = select("#", ...), ... }
   return dv.doc:delete_to(function(target_doc, line, col)
     return move_fn(target_doc, line, col, table.unpack(args, 1, args.n))
@@ -2336,10 +2366,24 @@ local function wrapped_forward_endpoint_command(dv, name, ...)
 end
 
 local function move_to_wrapped_previous_line(doc, line, col, dv)
+  if dv and dv.move_within_line_render_position_rows then
+    local target_line, target_col = dv:move_within_line_render_position_rows(
+      line, col, -1
+    )
+    if target_line then return target_line, target_col, false end
+  end
   if dv and dv.has_collapsed_folds and dv:has_collapsed_folds() then
     local hidden, fold = dv:is_line_hidden_by_fold(math.max(1, (line or 1) - 1))
     if hidden and dv:get_visual_row_count_for_line(line) <= 1 then return fold.line1, 1 end
-    return dv:folded_visual_line_position(line, col, -1)
+    local target_line, target_col, target_line_end =
+      dv:folded_visual_line_position(line, col, -1)
+    if target_line ~= line and dv.land_on_line_render_position_row then
+      target_col = dv:land_on_line_render_position_row(
+        target_line, target_col, -1,
+        dv.last_x_offset and dv.last_x_offset.offset or 0
+      )
+    end
+    return target_line, target_col, target_line_end
   end
   local target_line, target_col, target_line_end = linewrapping.wrapped_visual_line_position(dv, line, col, -1)
   if dv and dv.is_line_hidden_by_fold then
@@ -2354,12 +2398,32 @@ local function move_to_wrapped_previous_line(doc, line, col, dv)
   end
   local landed_fold = dv and dv.get_collapsed_fold_at_line and dv:get_collapsed_fold_at_line(target_line)
   if landed_fold and landed_fold.line1 == target_line then target_col = 1 end
+  if dv and target_line ~= line and dv.land_on_line_render_position_row then
+    target_col = dv:land_on_line_render_position_row(
+      target_line, target_col, -1,
+      dv.last_x_offset and dv.last_x_offset.offset or 0
+    )
+  end
   return target_line, target_col, target_line_end
 end
 
 local function move_to_wrapped_next_line(doc, line, col, dv)
+  if dv and dv.move_within_line_render_position_rows then
+    local target_line, target_col = dv:move_within_line_render_position_rows(
+      line, col, 1
+    )
+    if target_line then return target_line, target_col, false end
+  end
   if dv and dv.has_collapsed_folds and dv:has_collapsed_folds() then
-    return dv:folded_visual_line_position(line, col, 1)
+    local target_line, target_col, target_line_end =
+      dv:folded_visual_line_position(line, col, 1)
+    if target_line ~= line and dv.land_on_line_render_position_row then
+      target_col = dv:land_on_line_render_position_row(
+        target_line, target_col, 1,
+        dv.last_x_offset and dv.last_x_offset.offset or 0
+      )
+    end
+    return target_line, target_col, target_line_end
   end
   local target_line, target_col, target_line_end = linewrapping.wrapped_visual_line_position(dv, line, col, 1)
   if dv and dv.is_line_hidden_by_fold then
@@ -2374,18 +2438,51 @@ local function move_to_wrapped_next_line(doc, line, col, dv)
   end
   local landed_fold = dv and dv.get_collapsed_fold_at_line and dv:get_collapsed_fold_at_line(target_line)
   if landed_fold and landed_fold.line1 == target_line then target_col = 1 end
+  if dv and target_line ~= line and dv.land_on_line_render_position_row then
+    target_col = dv:land_on_line_render_position_row(
+      target_line, target_col, 1,
+      dv.last_x_offset and dv.last_x_offset.offset or 0
+    )
+  end
   return target_line, target_col, target_line_end
 end
 
 local function move_to_wrapped_end_of_line(doc, line, col, dv)
+  if dv and dv.get_line_render_position_row_bounds then
+    local _, row_end, row_index = dv:get_line_render_position_row_bounds(line, col)
+    if row_end and col ~= row_end then
+      if dv.queue_line_render_position_row_affinity then
+        dv:queue_line_render_position_row_affinity(line, row_end, row_index)
+      end
+      return line, row_end, false
+    end
+  end
   return linewrapping.wrapped_end_of_line_position(dv, doc, line, col, translate.end_of_line)
 end
 
 local function move_to_wrapped_start_of_line(doc, line, col, dv)
+  if dv and dv.get_line_render_position_row_bounds then
+    local row_start, _, row_index = dv:get_line_render_position_row_bounds(line, col)
+    if row_start and col ~= row_start then
+      if dv.queue_line_render_position_row_affinity then
+        dv:queue_line_render_position_row_affinity(line, row_start, row_index)
+      end
+      return line, row_start, false
+    end
+  end
   return linewrapping.wrapped_start_of_line_position(dv, doc, line, col, translate.start_of_line)
 end
 
 local function move_to_wrapped_start_of_indentation(doc, line, col, dv)
+  if dv and dv.get_line_render_position_row_bounds then
+    local row_start, _, row_index = dv:get_line_render_position_row_bounds(line, col)
+    if row_start and row_start ~= 1 and col ~= row_start then
+      if dv.queue_line_render_position_row_affinity then
+        dv:queue_line_render_position_row_affinity(line, row_start, row_index)
+      end
+      return line, row_start, false
+    end
+  end
   return linewrapping.wrapped_start_of_indentation_position(dv, doc, line, col, translate.start_of_indentation)
 end
 

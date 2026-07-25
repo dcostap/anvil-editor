@@ -2074,6 +2074,7 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
               semantic_id = node.id .. ":marker",
               unordered_list_marker = true,
               widget = {
+                wrapping = "inline",
                 width = marker_width, height = markdown_live_body_line_height(view),
                 draw = function(_, _, x, y, row_height)
                   renderer.draw_rect(
@@ -2182,20 +2183,52 @@ local function layout_inline_image_rows(view, line_text, render_line)
   end)
 
   local body_height = markdown_live_body_line_height(view)
+  local wrap_width = view.wrapped_settings and view.wrapped_settings.width or math.huge
+  local wrap_mode = config.plugins.linewrapping.mode
   local rows, y, segment_start = {}, 0, 1
-  for _, block in ipairs(blocks) do
+  local function rendered_x(col)
+    return view:get_line_render_col_x_offset(render_line, col)
+  end
+  local function append_text_rows(col1, col2, highlight_full_layout)
+    if col2 <= col1 then return end
+    local row_start, col, last_space = col1, col1, nil
+    local function append_row(row_end)
+      if row_end <= row_start then return end
+      rows[#rows + 1] = {
+        source_col1 = row_start,
+        source_col2 = row_end,
+        y_offset = y,
+        height = body_height,
+        highlight_full_layout = highlight_full_layout or nil,
+      }
+      y = y + body_height
+      row_start = row_end
+    end
+    for char in common.utf8_chars(line_text:sub(col1, col2 - 1)) do
+      local next_col = col + #char
+      if char == " " then last_space = col end
+      local row_width = rendered_x(next_col) - rendered_x(row_start)
+      if wrap_width ~= math.huge and row_width > wrap_width and col > row_start then
+        local split = col
+        if wrap_mode == "word" and last_space and last_space >= row_start then
+          split = last_space + 1
+        end
+        append_row(split)
+        if last_space and last_space < row_start then last_space = nil end
+      end
+      col = next_col
+    end
+    append_row(col2)
+  end
+
+  for block_index, block in ipairs(blocks) do
     local block_col1 = block.image_block_col1 or block.source_col1 or segment_start
     local block_col2 = block.image_block_col2 or block.source_col2 or block_col1
     local top_end = block.image_block_active and block_col2 or block_col1
-    if top_end > segment_start then
-      rows[#rows + 1] = {
-        source_col1 = segment_start,
-        source_col2 = top_end,
-        end_inclusive = block.image_block_active or nil,
-        y_offset = y,
-        height = body_height,
-      }
-      y = y + body_height
+    append_text_rows(segment_start, top_end, block_index == 1 and segment_start == 1)
+    if block.image_block_active and rows[#rows]
+    and rows[#rows].source_col2 == top_end then
+      rows[#rows].end_inclusive = true
     end
 
     block.layout_x = 0
@@ -2206,18 +2239,24 @@ local function layout_inline_image_rows(view, line_text, render_line)
   end
 
   if segment_start <= #line_text then
-    rows[#rows + 1] = {
-      source_col1 = segment_start,
-      source_col2 = #line_text + 1,
-      end_inclusive = true,
-      y_offset = y,
-      height = body_height,
-    }
-    y = y + body_height
+    append_text_rows(segment_start, #line_text + 1, false)
+    if rows[#rows] and rows[#rows].source_col2 == #line_text + 1 then
+      rows[#rows].end_inclusive = true
+    end
   end
 
   render_line.position_rows = rows
   render_line.layout_height = math.max(body_height, y)
+  for _, row in ipairs(rows) do
+    row.highlight_y_offset = row.y_offset
+    row.highlight_height = row.height
+  end
+  for _, row in ipairs(rows) do
+    if row.highlight_full_layout then
+      row.highlight_y_offset = 0
+      row.highlight_height = render_line.layout_height
+    end
+  end
   render_line.disable_wrapping = true
   return render_line
 end
@@ -2510,6 +2549,7 @@ local function capture_optimistic_renders(view, transaction)
   for line, edits in pairs(edits_by_line) do
     local old_render = cached_render_line(view, line)
     local render = old_render and clone_render_line(old_render)
+    local had_position_rows = render and render.position_rows ~= nil
     local text = render and render.source_text
     table.sort(edits, function(a, b) return a.col1 > b.col1 end)
     for _, edit in ipairs(edits) do
@@ -2518,11 +2558,17 @@ local function capture_optimistic_renders(view, transaction)
     end
     local current_text = (view.doc.lines[line] or ""):gsub("\n$", "")
     if render and text == current_text then
+      if had_position_rows then
+        render.position_rows = nil
+        render.layout_height = nil
+        render = layout_inline_image_rows(view, current_text, render)
+      end
       owner.optimistic_lines[line] = {
         revision = view.doc.text_revision,
         source_text = current_text,
         render_line = render,
-        height = pre_edit_lines[line] and pre_edit_lines[line].height
+        height = render.layout_height
+          or pre_edit_lines[line] and pre_edit_lines[line].height
           or view:get_position_visual_row_height(line, 1),
       }
       core.log_quiet("Markdown Live Preview retained rendered line %d while semantics are pending", line)
