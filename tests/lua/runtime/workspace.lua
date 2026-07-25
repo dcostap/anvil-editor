@@ -309,6 +309,31 @@ test.describe("Workspace persistence", function()
     test.same(saved.documents, { marker = "pane-state" })
   end)
 
+  test.test("persists Recent File view and edit metadata in the Workspace", function(context)
+    local project_path = join_path(context.temp_root, "source_project")
+    local other_path = join_path(context.temp_root, "other_project")
+    local recent_path = join_path(project_path, "recent.lua")
+    local panel, view = make_fake_root_panel("main")
+    core.projects = { Project(project_path) }
+    core.recent_projects = {}
+    core.docs = {}
+    core.visited_files = {
+      { path = recent_path, last_viewed = 123, last_edited = 100 },
+    }
+    core.root_panel = panel
+    core.active_view = view
+
+    core.set_project(other_path)
+
+    local keys = workspace_keys_for_path(project_path)
+    test.equal(#keys, 1)
+    local saved = storage.load("ws", keys[1])
+    test.equal(#saved.visited_files, 1)
+    test.ok(common.path_equals(saved.visited_files[1].path, recent_path))
+    test.equal(saved.visited_files[1].last_viewed, 123)
+    test.equal(saved.visited_files[1].last_edited, 100)
+  end)
+
   test.test("restores two-pane Workspace state", function(context)
     local project_path = join_path(context.temp_root, "test_project")
     local source_path = join_path(context.temp_root, "source_project")

@@ -470,6 +470,7 @@ function Doc:save(filename, abs_filename)
   self:set_filename(filename, abs_filename)
   self.new_file = false
   self:clean()
+  if core.set_recent_file_edited then core.set_recent_file_edited(self.abs_filename) end
 end
 
 
@@ -1595,6 +1596,7 @@ function Doc:raw_insert(line, col, text, undo_stack, time)
     },
   })
   self:notify_text_change_listeners("after", { type = "raw_insert", kind = "raw_insert", line = line, col = col, text = text })
+  if self.abs_filename and core.set_recent_file_edited then core.set_recent_file_edited(self.abs_filename) end
 end
 
 
@@ -1662,6 +1664,7 @@ function Doc:raw_remove(line1, col1, line2, col2, undo_stack, time)
     },
   })
   self:notify_text_change_listeners("after", { type = "raw_remove", kind = "raw_remove", line1 = line1, col1 = col1, line2 = line2, col2 = col2 })
+  if self.abs_filename and core.set_recent_file_edited then core.set_recent_file_edited(self.abs_filename) end
 end
 
 

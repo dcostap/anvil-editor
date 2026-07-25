@@ -61,7 +61,7 @@ A search over named code symbols in the active Document only.
 _Avoid_: local symbol search, file symbol search
 
 **Recent File**:
-A file in Anvil's navigation history, ordered by last visit for returning to previously viewed files.
+A file in Anvil's navigation history, ordered by last view for returning to previously viewed files. It retains when it was last viewed and last edited.
 _Avoid_: recent tab, file tab history
 
 **Navigation Place**:

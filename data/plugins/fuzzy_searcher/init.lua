@@ -359,6 +359,20 @@ local function compact_age(ts)
   return tostring(math.floor(elapsed / week)) .. "w"
 end
 
+function fuzzy_searcher.format_recent_file_age(ts, now)
+  ts = tonumber(ts)
+  if not ts then return nil end
+  local elapsed = math.max(0, (tonumber(now) or os.time()) - ts)
+  local minute = 60
+  local hour = 60 * minute
+  local day = 24 * hour
+  local year = 365 * day
+  if elapsed < hour then return tostring(math.floor(elapsed / minute)) .. " min" end
+  if elapsed < day then return tostring(math.floor(elapsed / hour)) .. " h" end
+  if elapsed < year then return tostring(math.floor(elapsed / day)) .. " d" end
+  return tostring(math.floor(elapsed / year)) .. " yr"
+end
+
 local function filetime_to_time(filetime)
   if filetime == nil then return nil end
   local n = tonumber(filetime)
@@ -598,11 +612,13 @@ local function get_files()
   return fuzzy_searcher.files_cache or {}
 end
 
-local function get_recent_files(skip_path)
+function fuzzy_searcher.get_recent_file_entries(skip_path)
   local current_key = skip_path and common.path_compare_key(skip_path) or nil
   local out, seen = {}, {}
 
-  for _, abs in ipairs(core.visited_files or {}) do
+  local recent_files = core.visited_files or {}
+  for _, recent in ipairs(recent_files) do
+    local abs = core.recent_file_path and core.recent_file_path(recent) or recent
     abs = tostring(abs or "")
     if abs ~= "" then
       abs = common.normalize_path(abs)
@@ -615,12 +631,23 @@ local function get_recent_files(skip_path)
         local info = system.get_file_info(abs)
         if info and info.type == "file" then
           seen[key] = true
-          out[#out+1] = fuzzy_searcher.file_display_item(abs) or abs
+          out[#out+1] = {
+            text = fuzzy_searcher.file_display_item(abs) or abs,
+            abs_path = abs,
+            last_viewed = type(recent) == "table" and recent.last_viewed or nil,
+            last_edited = type(recent) == "table" and recent.last_edited or tonumber(info.modified),
+          }
         end
       end
     end
   end
 
+  return out
+end
+
+local function get_recent_files(skip_path)
+  local out = {}
+  for _, entry in ipairs(fuzzy_searcher.get_recent_file_entries(skip_path)) do out[#out+1] = entry.text end
   return out
 end
 
@@ -776,6 +803,7 @@ function fuzzy_searcher.normalize_prompt_history(data)
   if type(data) ~= "table" then return normalized, false end
   local version2 = data.version == 2 and type(data.modes) == "table"
   local modes = version2 and data.modes or data
+  local changed = not version2
 
   for stored_mode, entries in pairs(modes) do
     stored_mode = tostring(stored_mode or "")
@@ -784,9 +812,10 @@ function fuzzy_searcher.normalize_prompt_history(data)
         if type(entry) == "string" then
           local text = version2 and entry or (stored_mode .. entry)
           local mode = fuzzy_searcher.prompt_mode(text)
+          if mode == "" then changed = true end
           seen[mode] = seen[mode] or {}
-          normalized[mode] = normalized[mode] or {}
-          if not seen[mode][text] and #normalized[mode] < 50 then
+          if mode ~= "" then normalized[mode] = normalized[mode] or {} end
+          if mode ~= "" and not seen[mode][text] and #normalized[mode] < 50 then
             normalized[mode][#normalized[mode] + 1] = text
             seen[mode][text] = true
           end
@@ -794,7 +823,7 @@ function fuzzy_searcher.normalize_prompt_history(data)
       end
     end
   end
-  return normalized, not version2
+  return normalized, changed
 end
 
 function fuzzy_searcher.load_prompt_history()
@@ -804,7 +833,7 @@ function fuzzy_searcher.load_prompt_history()
   fuzzy_searcher.prompt_history = history
   fuzzy_searcher.prompt_history_loaded = true
   if migrated and type(stored) == "table" then
-    core.log_quiet("Fuzzy Searcher: migrated prompt history to exact prompt restore points")
+    core.log_quiet("Fuzzy Searcher: normalized prompt history and removed remembered file queries")
     storage.save("fuzzy_searcher", "prompt_history", { version = 2, modes = history })
   end
 end
@@ -828,6 +857,7 @@ function fuzzy_searcher.record_prompt_history_text(text)
   text = tostring(text or "")
 
   local mode = fuzzy_searcher.prompt_mode(text)
+  if mode == "" then return end
   local history = fuzzy_searcher.prompt_history_for_mode(mode)
   for i = #history, 1, -1 do
     if history[i] == text then table.remove(history, i) end
@@ -841,6 +871,7 @@ function fuzzy_searcher.restored_prompt_text(text)
   local leading_mode, query = split_mode_prefix(text)
   if query ~= "" then return text, false end
   local mode = leading_mode ~= "" and leading_mode or fuzzy_searcher.prompt_mode(text)
+  if mode == "" then return "", false end
   local latest = fuzzy_searcher.prompt_history_for_mode(mode)[1]
   if latest ~= nil then return latest, true end
   return text, false
@@ -1005,7 +1036,8 @@ local function collect_recent_file_matches(query, line, skip_path)
   local matches, skip_keys = {}, {}
   local empty_query = trim_query(query) == ""
 
-  for _, item in ipairs(get_recent_files(skip_path)) do
+  for _, recent in ipairs(fuzzy_searcher.get_recent_file_entries(skip_path)) do
+    local item = recent.text
     local key = file_result_key(item)
     if key then skip_keys[key] = true end
     local score, spans = 0, {}
@@ -1013,7 +1045,11 @@ local function collect_recent_file_matches(query, line, skip_path)
       score, spans = fuzzy_match_file_fast(query, item)
     end
     if score and line_exists(item, line) then
-      matches[#matches+1] = { item = item, text = item, score = score, spans = spans or {} }
+      matches[#matches+1] = {
+        item = item, text = item, score = score, spans = spans or {},
+        last_viewed = recent.last_viewed,
+        last_edited = recent.last_edited,
+      }
     end
   end
 
@@ -1034,6 +1070,8 @@ function fuzzy_searcher.file_match_row(match, query, line, recent)
     rank_penalty = meta.rank_penalty,
     line = line or 1, col = 1, query = query,
     match_spans = match.spans or {}, recent = recent or nil,
+    last_viewed = match.last_viewed,
+    last_edited = match.last_edited,
   }
 end
 
@@ -1944,6 +1982,40 @@ local function draw_project_result_row(font, r, x, y, width)
     label_w = math.max(0, width - age_w - gap)
   end
   draw_prefixed_highlighted_text(font, prefix, label, x, y, label_w, style.text, spans)
+end
+
+function fuzzy_searcher.draw_recent_file_metadata(font, r, x, y, width)
+  local recent_file_icons = require "core.recent_file_icons"
+  local parts = {}
+  local edited = fuzzy_searcher.format_recent_file_age(r.last_edited)
+  local viewed = fuzzy_searcher.format_recent_file_age(r.last_viewed)
+  if edited then parts[#parts+1] = { icon = "pencil", text = edited } end
+  if viewed then parts[#parts+1] = { icon = "eye", text = viewed } end
+  if #parts == 0 then return width end
+
+  local row_height = font:get_height()
+  local icon_size = recent_file_icons.size_for_row(row_height)
+  local icon_gap = math.max(2 * (SCALE or 1), style.padding.x / 4)
+  local separator = "  ·  "
+  local separator_w = font:get_width(separator)
+  local metadata_w = (#parts - 1) * separator_w
+  local age_cell_w = font:get_width("999 min")
+  for _, part in ipairs(parts) do
+    part.cell_width = math.max(age_cell_w, font:get_width(part.text))
+    metadata_w = metadata_w + icon_size + icon_gap + part.cell_width
+  end
+
+  local outer_gap = style.padding.x
+  if metadata_w + outer_gap >= width then return width end
+  local cx = x + width - metadata_w
+  for index, part in ipairs(parts) do
+    if index > 1 then cx = renderer.draw_text(font, separator, cx, y, style.dim) end
+    recent_file_icons.draw(part.icon, cx, y, row_height, icon_size)
+    cx = cx + icon_size + icon_gap
+    renderer.draw_text(font, part.text, cx, y, style.dim)
+    cx = cx + part.cell_width
+  end
+  return math.max(0, width - metadata_w - outer_gap)
 end
 
 local function draw_new_project_result_row(font, r, x, y, width)
@@ -4886,7 +4958,8 @@ function FSView:draw()
         previous_rendered_grep_file = nil
         previous_rendered_grep_line_x = nil
         previous_rendered_was_grep = false
-        draw_file_result_row(font, r.file or r.label, r.match_spans, "", x + pad, row_y, row_text_w, nil, r.prefix_span, r.root_role)
+        local file_text_w = r.recent and fuzzy_searcher.draw_recent_file_metadata(font, r, x + pad, row_y, row_text_w) or row_text_w
+        draw_file_result_row(font, r.file or r.label, r.match_spans, "", x + pad, row_y, file_text_w, nil, r.prefix_span, r.root_role)
       elseif r.kind == "symbol" then
         previous_rendered_grep_file = nil
         previous_rendered_grep_line_x = nil
@@ -5020,6 +5093,12 @@ local function switch_picker_prefix(view, prefix)
   prefix = prefix or ""
   local old_text = view.input and view.input:get_text() or ""
   local _, query = split_mode_prefix(old_text)
+  if prefix == "" then
+    fuzzy_searcher.record_prompt_history_text(old_text)
+    fuzzy_searcher.apply_prompt_history_text(view, "", false)
+    ensure_input_focus(view, "switch-prefix-files-empty")
+    return
+  end
   if fuzzy_searcher.prompt_mode(old_text) == prefix then
     ensure_input_focus(view, "switch-prefix-same-mode")
     return
@@ -5049,7 +5128,12 @@ function open(prefix)
     local selection = selected_text_for_search()
     if selection ~= "" then prefix = "#" .. quote_exact_query(selection) end
   end
-  local initial_text, select_restored_query = fuzzy_searcher.restored_prompt_text(prefix)
+  local initial_text, select_restored_query
+  if prefix == "" then
+    initial_text, select_restored_query = "", false
+  else
+    initial_text, select_restored_query = fuzzy_searcher.restored_prompt_text(prefix)
+  end
   active_view = FSView(initial_text)
   core.fuzzy_searcher_active_view = active_view
   if select_restored_query then
@@ -5193,6 +5277,8 @@ return {
     everything_result_from_item = everything_result_from_item,
     everything_project_result_is_recent_duplicate = everything_project_result_is_recent_duplicate,
     recent_project_key_set = recent_project_key_set,
+    format_recent_file_age = fuzzy_searcher.format_recent_file_age,
+    draw_recent_file_metadata = fuzzy_searcher.draw_recent_file_metadata,
     split_mode_prefix = split_mode_prefix,
     normalize_prompt_history = fuzzy_searcher.normalize_prompt_history,
     clear_prompt_history = function()

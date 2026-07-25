@@ -1374,6 +1374,9 @@ end
 
 
 local function normalize_visited_filename(filename)
+  if type(filename) == "table" then
+    filename = filename.path
+  end
   if type(filename) ~= "string" or filename == "" then return nil end
   local normalized = common.normalize_path(filename)
   if not normalized or normalized == "" then return nil end
@@ -1385,35 +1388,101 @@ local function normalize_visited_filename(filename)
   return normalized
 end
 
+local function recent_file_entry(value, fallback_viewed)
+  local filename = normalize_visited_filename(value)
+  if not filename then return nil end
+  local last_edited = tonumber(type(value) == "table" and value.last_edited)
+  local info = not last_edited and system.get_file_info(filename) or nil
+  return {
+    path = filename,
+    last_viewed = tonumber(type(value) == "table" and value.last_viewed) or fallback_viewed or os.time(),
+    last_edited = last_edited or tonumber(info and info.modified),
+  }
+end
+
+function core.recent_file_path(value)
+  return normalize_visited_filename(value)
+end
+
 function core.prune_visited_files()
   local max_files = math.max(0, tonumber(config.max_visited_files) or 0)
+  if max_files == 0 then
+    core.visited_files = {}
+    return core.visited_files
+  end
   local pruned, seen = {}, {}
-  for _, filename in ipairs(core.visited_files or {}) do
-    local normalized = normalize_visited_filename(filename)
+  local now = os.time()
+  for index, value in ipairs(core.visited_files or {}) do
+    local normalized = normalize_visited_filename(value)
     local key = normalized and common.path_compare_key(normalized)
     if key and not seen[key] then
-      pruned[#pruned + 1] = normalized
-      seen[key] = true
+      pruned[#pruned + 1] = recent_file_entry(value, now - index + 1)
+      seen[key] = #pruned
       if #pruned >= max_files then break end
+    elseif key and seen[key] and type(value) == "table" then
+      local existing = pruned[seen[key]]
+      existing.last_viewed = math.max(existing.last_viewed or 0, tonumber(value.last_viewed) or 0)
+      local duplicate_last_edited = tonumber(value.last_edited)
+      if duplicate_last_edited and (not existing.last_edited or duplicate_last_edited > existing.last_edited) then
+        existing.last_edited = duplicate_last_edited
+      end
     end
   end
   core.visited_files = pruned
   return pruned
 end
 
-function core.set_visited(filename)
+function core.set_visited(filename, when)
   filename = normalize_visited_filename(filename)
   if not filename then return end
   local key = common.path_compare_key(filename)
   local visited = core.visited_files or {}
+  local previous
   for i = #visited, 1, -1 do
-    if common.path_compare_key(visited[i]) == key then
+    local path = normalize_visited_filename(visited[i])
+    if path and common.path_compare_key(path) == key then
+      previous = recent_file_entry(visited[i]) or previous
       table.remove(visited, i)
     end
   end
-  table.insert(visited, 1, filename)
+  local info = not (previous and previous.last_edited) and system.get_file_info(filename) or nil
+  table.insert(visited, 1, {
+    path = filename,
+    last_viewed = tonumber(when) or os.time(),
+    last_edited = previous and previous.last_edited or tonumber(info and info.modified),
+  })
   core.visited_files = visited
   core.prune_visited_files()
+end
+
+function core.set_recent_file_edited(filename, when)
+  filename = normalize_visited_filename(filename)
+  if not filename then return end
+  local key = common.path_compare_key(filename)
+  for _, entry in ipairs(core.visited_files or {}) do
+    local path = normalize_visited_filename(entry)
+    if path and common.path_compare_key(path) == key and type(entry) == "table" then
+      entry.last_edited = tonumber(when) or os.time()
+      return entry
+    end
+  end
+
+  core.prune_visited_files()
+  for _, entry in ipairs(core.visited_files or {}) do
+    if common.path_compare_key(entry.path) == key then
+      entry.last_edited = tonumber(when) or os.time()
+      return entry
+    end
+  end
+
+  local timestamp = tonumber(when) or os.time()
+  table.insert(core.visited_files, 1, {
+    path = filename,
+    last_viewed = timestamp,
+    last_edited = timestamp,
+  })
+  core.prune_visited_files()
+  return core.visited_files[1]
 end
 
 

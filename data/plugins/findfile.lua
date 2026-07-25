@@ -324,7 +324,8 @@ local function get_visited_files()
   local files = {}
   local current_key = common.path_compare_key(file_context.current_file_path())
   local seen = {}
-  for _, file in ipairs(core.visited_files) do
+  for _, recent in ipairs(core.visited_files) do
+    local file = core.recent_file_path(recent)
     local key = common.path_compare_key(file)
     if key and key ~= current_key and not seen[key] and is_file(file) then
       seen[key] = true

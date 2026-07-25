@@ -336,7 +336,11 @@ local function load_workspace()
       if workspace then
         if workspace.visited_files then
           core.visited_files = workspace.visited_files
+          local legacy_recent_files = type(core.visited_files[1]) == "string"
           if core.prune_visited_files then core.prune_visited_files() end
+          if legacy_recent_files then
+            core.log_quiet("Workspace: migrated path-only Recent Files to view/edit metadata")
+          end
         end
         panes.restore_workspace_state(workspace.documents, load_view)
         sync_workspace_project_paths_to_core_projects()

@@ -84,6 +84,7 @@ test.describe("Project path identity", function()
     core.set_visited(file_path:lower())
 
     test.equal(#core.visited_files, 1)
+    test.ok(common.path_equals(core.visited_files[1].path, file_path))
   end)
 
   test.test("keeps visited files in most-recent-first order when trimming", function(context)
@@ -96,7 +97,7 @@ test.describe("Project path identity", function()
 
     test.equal(#core.visited_files, 5)
     for i, expected in ipairs({ 10, 9, 8, 7, 6 }) do
-      test.ok(core.visited_files[i]:find("recent%-" .. expected .. "%.txt$"), "unexpected recent at " .. i .. ": " .. tostring(core.visited_files[i]))
+      test.ok(core.visited_files[i].path:find("recent%-" .. expected .. "%.txt$"), "unexpected recent at " .. i .. ": " .. tostring(core.visited_files[i].path))
     end
   end)
 
@@ -109,7 +110,41 @@ test.describe("Project path identity", function()
     core.set_visited(first)
 
     test.equal(#core.visited_files, 2)
-    test.ok(common.path_equals(core.visited_files[1], first), "expected first path to move to front")
-    test.ok(common.path_equals(core.visited_files[2], second), "expected second path to remain once")
+    test.ok(common.path_equals(core.visited_files[1].path, first), "expected first path to move to front")
+    test.ok(common.path_equals(core.visited_files[2].path, second), "expected second path to remain once")
+  end)
+
+  test.test("stores view and edit times without reordering a Recent File on edit", function(context)
+    local first = join_path(context.temp_root, "first.txt")
+    local second = join_path(context.temp_root, "second.txt")
+    core.visited_files = {}
+
+    core.set_visited(first, 100)
+    core.set_visited(second, 200)
+    core.set_recent_file_edited(first, 300)
+
+    test.ok(common.path_equals(core.visited_files[1].path, second))
+    test.ok(common.path_equals(core.visited_files[2].path, first))
+    test.equal(core.visited_files[2].last_viewed, 100)
+    test.equal(core.visited_files[2].last_edited, 300)
+  end)
+
+  test.test("updates Recent File edit metadata when its Document changes", function(context)
+    local path = join_path(context.temp_root, "edited.txt")
+    local fp = assert(io.open(path, "wb"))
+    fp:write("before\n")
+    fp:close()
+    core.visited_files = {}
+
+    local doc = core.open_doc(path)
+    core.set_visited(path, 100)
+    doc:insert(1, 1, "after ")
+
+    test.ok((core.visited_files[1].last_edited or 0) > 100)
+    doc:clean()
+    for i = #core.docs, 1, -1 do
+      if core.docs[i] == doc then table.remove(core.docs, i) end
+    end
+    doc:on_close()
   end)
 end)

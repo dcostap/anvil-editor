@@ -46,6 +46,7 @@ for module_name in core compat plugins colors fonts widget treesitter; do
 done
 mkdir -p "$datadir/icons"
 cp -R "$sourcedir/resources/icons/symbols" "$datadir/icons/"
+cp -R "$sourcedir/resources/icons/recent_files" "$datadir/icons/"
 if [ -d "$sourcedir/subprojects/colors" ]; then
   cp -a "$sourcedir/subprojects/colors/colors" "$datadir/"
 fi
