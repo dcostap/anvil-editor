@@ -13,6 +13,7 @@ local delimiters = {
   ["<"] = { close = ">" },
   ["\""] = { close = "\"" },
   ["'"] = { close = "'" },
+  ["`"] = { close = "`" },
 }
 
 local function line_body(text)

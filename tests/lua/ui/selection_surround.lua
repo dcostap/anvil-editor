@@ -67,6 +67,7 @@ test.describe("Selection surrounding", function()
       { "<", "<test>" },
       { "\"", "\"test\"" },
       { "'", "'test'" },
+      { "`", "`test`" },
     }
     for _, case in ipairs(cases) do
       local view, doc = new_view(context, "test")
@@ -155,6 +156,7 @@ test.describe("Selection surrounding", function()
       { "<", "<one\ntwo>\n" },
       { "\"", "\"one\ntwo\"\n" },
       { "'", "'one\ntwo'\n" },
+      { "`", "`one\ntwo`\n" },
     }
     for _, case in ipairs(cases) do
       local view, doc = new_view(context, "one\ntwo")
