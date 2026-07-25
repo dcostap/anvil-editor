@@ -22,14 +22,21 @@ local disk_state = setmetatable({}, { __mode = "k" })
 local save_generation = 0
 local loop_running = false
 local MAX_SNAPSHOT_CONTENT_SIZE = 5 * 1024 * 1024
+local protected_init_path = system.absolute_path(USERDIR .. PATHSEP .. "init.lua")
+local protected_project_root
+local protected_project_file
 
 local function is_protected_doc(doc)
   if not doc or not doc.abs_filename then return false end
-  local init_path = system.absolute_path(USERDIR .. PATHSEP .. "init.lua")
-  local project_file = core.project_absolute_path and core.project_absolute_path(".anvil_project.lua")
-    or system.absolute_path(".anvil_project.lua")
-  return common.path_equals(doc.abs_filename, init_path)
-      or common.path_equals(doc.abs_filename, project_file)
+  local root = core.root_project and core.root_project() or nil
+  if root ~= protected_project_root then
+    protected_project_root = root
+    protected_project_file = root and root.absolute_path
+      and root:absolute_path(".anvil_project.lua")
+      or system.absolute_path(".anvil_project.lua")
+  end
+  return common.path_equals(doc.abs_filename, protected_init_path)
+      or common.path_equals(doc.abs_filename, protected_project_file)
 end
 
 local function is_untitled_doc(doc)
