@@ -711,12 +711,25 @@ local function image_vertical_padding()
 end
 
 local function image_available_width(view)
-  local width = linewrapping.compute_wrap_width(view)
-  if width == math.huge then
-    local scrollbar_width = view.v_scrollbar.expanded_size or style.expanded_scrollbar_size
-    width = view.size.x - view:get_gutter_width() - scrollbar_width
-  end
+  -- Block images use the presentation viewport rather than the prose wrap
+  -- column. A narrow prose guide must not shrink an image block or make its
+  -- editable source occupy phantom rows above the image.
+  local scrollbar_width = view.v_scrollbar.expanded_size or style.expanded_scrollbar_size
+  local width = view:get_presentation_viewport_width()
+    - view:get_gutter_width() - scrollbar_width
   return math.max(1, math.floor(width))
+end
+
+local function perf_frame_add(key, amount)
+  local perf = package.loaded["core.perf"]
+  if perf and perf.frame_add then perf.frame_add(key, amount or 1) end
+end
+
+local function perf_detail(key, amount)
+  local perf = package.loaded["core.perf"]
+  if perf and perf.is_recording and perf.is_recording() and perf.add_detail then
+    perf.add_detail(key, amount or 1)
+  end
 end
 
 local function add_fragment(fragments, occupied, fragment)
@@ -742,6 +755,7 @@ local function remote_image_allowed(view, url, project)
 end
 
 local function image_fragment(view, span, opts)
+  perf_frame_add("markdown_live_image_fragment_calls", 1)
   opts = opts or {}
   if config.markdown_live_render_images ~= true then return nil end
   local link = span.link
@@ -1240,7 +1254,7 @@ local function semantic_link_fragments(view, line_text, line, reveal_units, opts
       for _, fragment in ipairs(revealed_link_fragments(view, line_text, line, span, opts)) do
         fragments[#fragments + 1] = fragment
       end
-      local image = image_fragment(view, span, { width = 0 })
+      local image = image_fragment(view, span, { block = true, width = 0 })
       if image and image.widget then
         image.source_col1, image.source_col2 = span.col2, span.col2
         image.semantic_id = span.semantic_id
@@ -1255,7 +1269,7 @@ local function semantic_link_fragments(view, line_text, line, reveal_units, opts
         fragments[#fragments + 1] = fragment
       end
     elseif span.link then
-      local fragment = image_fragment(view, span)
+      local fragment = image_fragment(view, span, image_link and { block = true } or nil)
       if not fragment then
         local link = span.link
         local kind, icon = attachment_kind(link.path or link.raw_target)
@@ -1515,7 +1529,8 @@ local function table_available_width(view)
   -- configured wrap column. This matches reading-mode table layout and avoids
   -- wrapping an otherwise fitting grid merely because of the prose guide.
   local scrollbar_width = view.v_scrollbar.expanded_size or style.expanded_scrollbar_size
-  local width = view.size.x - view:get_gutter_width() - scrollbar_width - style.padding.x
+  local width = view:get_presentation_viewport_width()
+    - view:get_gutter_width() - scrollbar_width - style.padding.x
   return math.max(math.floor(SCALE * 160), width)
 end
 
@@ -2183,7 +2198,7 @@ local function layout_inline_image_rows(view, line_text, render_line)
   end)
 
   local body_height = markdown_live_body_line_height(view)
-  local wrap_width = view.wrapped_settings and view.wrapped_settings.width or math.huge
+  local wrap_width = image_available_width(view)
   local wrap_mode = config.plugins.linewrapping.mode
   local rows, y, segment_start = {}, 0, 1
   local function rendered_x(col)
@@ -2744,11 +2759,77 @@ function decoration_provider:line_number_visible(view)
   return false
 end
 
+local function provider_generation_state(view)
+  local presentation_generation = view:get_presentation_layout_generation()
+  local wrap_generation = view.__wrap_layout_generation or 0
+  local theme_generation = core.color_theme_generation or 0
+  local body_font = style.markdown_live_font
+  local body_font_size = view:get_font():get_size()
+  local scrollbar_width = view.v_scrollbar.expanded_size or style.expanded_scrollbar_size
+  local padding_x = style.padding.x
+  local cache = view.__markdown_live_provider_generation_state
+  if cache
+    and cache.presentation_generation == presentation_generation
+    and cache.wrap_generation == wrap_generation
+    and cache.theme_generation == theme_generation
+    and cache.body_font == body_font
+    and cache.body_font_size == body_font_size
+    and cache.scrollbar_width == scrollbar_width
+    and cache.padding_x == padding_x
+    and cache.scale == SCALE
+  then
+    return cache
+  end
+  cache = {
+    presentation_generation = presentation_generation,
+    wrap_generation = wrap_generation,
+    theme_generation = theme_generation,
+    body_font = body_font,
+    body_font_size = body_font_size,
+    scrollbar_width = scrollbar_width,
+    padding_x = padding_x,
+    scale = SCALE,
+  }
+  view.__markdown_live_provider_generation_state = cache
+  return cache
+end
+
+function provider:generation_seed(view)
+  return provider_generation_state(view)
+end
+
 function provider:generation(view)
+  perf_frame_add("markdown_live_provider_generation_requests", 1)
+  local state = provider_generation_state(view)
+  if state.generation then
+    perf_frame_add("markdown_live_provider_generation_cache_hits", 1)
+    return state.generation
+  end
   local font = markdown_live_body_font(view)
-  return tostring(font) .. ":" .. tostring(font:get_size())
-    .. ":width:" .. tostring(table_available_width(view))
-    .. ":image-width:" .. tostring(image_available_width(view))
+  local table_width = table_available_width(view)
+  local image_width = image_available_width(view)
+  local geometry_context = view.__centered_editor_in_geometry and "centered" or "host"
+  perf_frame_add("markdown_live_provider_generation_calls", 1)
+  perf_frame_add(
+    geometry_context == "centered"
+      and "markdown_live_provider_generation_centered_calls"
+      or "markdown_live_provider_generation_host_calls",
+    1
+  )
+  perf_detail(string.format(
+    "markdown_live_provider_geometry:%s:view_width=%d:table_width=%d:image_width=%d",
+    geometry_context,
+    math.floor(tonumber(view.size and view.size.x) or 0),
+    math.floor(tonumber(table_width) or 0),
+    math.floor(tonumber(image_width) or 0)
+  ), 1)
+  -- `markdown_live_body_font()` may return a fresh size-adjusted copy. Keying
+  -- by that temporary object's identity makes an unchanged layout look new
+  -- whenever wrapping is locally refreshed.
+  state.generation = tostring(state.body_font) .. ":" .. tostring(font:get_size())
+    .. ":width:" .. tostring(table_width)
+    .. ":image-width:" .. tostring(image_width)
+  return state.generation
 end
 
 function provider:line_generation(view, line)
@@ -3220,6 +3301,7 @@ local function ensure_owner(view)
 end
 
 local function invalidate_semantic_publication(view, instance, reason)
+  perf_frame_add("markdown_live_semantic_publications", 1)
   local previous_table_cache = view.__markdown_live_table_layout_cache
   view.__markdown_live_semantic_line_cache = nil
   view.__markdown_live_reference_prepare_pending = nil
@@ -3262,6 +3344,17 @@ local function invalidate_semantic_publication(view, instance, reason)
     end
     ranges = expanded
   end
+  local publication_lines = 0
+  for _, range in ipairs(ranges or {}) do
+    publication_lines = publication_lines
+      + math.max(0, (range.line2 or range.line1 or 1) - (range.line1 or 1) + 1)
+  end
+  perf_frame_add("markdown_live_semantic_publication_ranges", #(ranges or {}))
+  perf_frame_add("markdown_live_semantic_publication_lines", publication_lines)
+  perf_detail(string.format(
+    "markdown_live_semantic_publication:reason=%s:ranges=%d:lines=%d",
+    tostring(reason), #(ranges or {}), publication_lines
+  ), 1)
   view.__markdown_live_table_layout_cache = nil
   if ranges and #ranges > 0 then
     for _, range in ipairs(ranges) do
@@ -3272,6 +3365,7 @@ local function invalidate_semantic_publication(view, instance, reason)
       view:invalidate_visual_metrics(PROVIDER_ID, line1, line2)
     end
   else
+    perf_frame_add("markdown_live_semantic_global_invalidations", 1)
     prune_image_references(view)
     view:invalidate_line_render(PROVIDER_ID)
     view:invalidate_visual_metrics(PROVIDER_ID)
@@ -3324,8 +3418,12 @@ local function bind_link_index(view)
   owner.link_index = index
   owner.link_listener_id = listener_id
   index:acquire(listener_id)
-  index:add_listener(listener_id, function()
+  index:add_listener(listener_id, function(_, reason)
     if view.__markdown_live_owner ~= owner or not view.__markdown_live_attached then return end
+    perf_frame_add("markdown_live_link_index_invalidations", 1)
+    perf_detail(
+      "markdown_live_link_index_invalidation:" .. tostring(reason or "unknown"), 1
+    )
     view:invalidate_line_render(PROVIDER_ID)
     view:invalidate_visual_metrics(PROVIDER_ID)
     core.redraw = true
@@ -3416,6 +3514,11 @@ local function invalidate_selection_lines(view, new_state, old_state)
   invalidate_range()
 end
 
+function provider:on_selection_interaction_end(view, new_state, old_state)
+  invalidate_selection_lines(view, new_state, old_state)
+  return true
+end
+
 function live.attach(view)
   if not (view and view.extends and view:extends(DocView)) then return false end
   if view.__markdown_live_attached then return false end
@@ -3426,6 +3529,11 @@ function live.attach(view)
   view:add_file_drop_provider(PROVIDER_ID, file_drop_provider)
   view:add_poi_provider(PROVIDER_ID, poi_provider)
   view:add_selection_listener(PROVIDER_ID, function(owner, new_state, old_state)
+    -- During mouse drag and IME interactions the renderer deliberately uses
+    -- the frozen selection captured at interaction start. Rebuilding rows for
+    -- every transient selection is therefore both expensive and ineffective;
+    -- the interaction-end hook invalidates the final old/new ranges once.
+    if owner.__line_render_interaction_state then return end
     invalidate_selection_lines(owner, new_state, old_state)
   end)
   view.__markdown_live_attached = true

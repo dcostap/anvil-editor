@@ -162,6 +162,70 @@ local diagnostic_frame_keys = {
   "docview_update_active_focus_ms",
   "docview_update_ime_ms",
   "docview_update_super_ms",
+  "docview_visual_metric_cache_calls",
+  "docview_visual_metric_cache_hits",
+  "docview_visual_metric_cache_lookup_ms",
+  "docview_visual_metric_signature_ms",
+  "docview_visual_metric_signature_cache_hits",
+  "docview_visual_metric_signature_computations",
+  "docview_visual_metric_signature_changes",
+  "docview_visual_metric_full_rebuilds",
+  "docview_visual_metric_full_rebuild_rows",
+  "docview_visual_metric_full_rebuild_ms",
+  "docview_visual_metric_dirty_passes",
+  "docview_visual_metric_dirty_rows",
+  "docview_visual_metric_row_splices",
+  "docview_visual_metric_row_splice_rows",
+  "docview_line_render_cache_calls",
+  "docview_line_render_cache_hits",
+  "docview_line_render_cache_misses",
+  "docview_line_render_cold_misses",
+  "docview_line_render_signature_misses",
+  "docview_line_render_cache_lookup_ms",
+  "docview_line_render_build_ms",
+  "docview_fragment_normalization_calls",
+  "docview_fragment_normalization_cache_hits",
+  "docview_fragment_normalization_builds",
+  "markdown_live_provider_generation_requests",
+  "markdown_live_provider_generation_cache_hits",
+  "markdown_live_provider_generation_calls",
+  "markdown_live_provider_generation_host_calls",
+  "markdown_live_provider_generation_centered_calls",
+  "markdown_live_semantic_publications",
+  "markdown_live_semantic_publication_ranges",
+  "markdown_live_semantic_publication_lines",
+  "markdown_live_semantic_global_invalidations",
+  "markdown_live_link_index_invalidations",
+  "markdown_live_image_fragment_calls",
+  "markdown_image_get_asset_calls",
+  "markdown_image_asset_key_calls",
+  "markdown_image_asset_request_key_cache_hits",
+  "markdown_image_asset_cache_hits",
+  "markdown_image_asset_cache_misses",
+  "markdown_image_asset_retry_checks",
+  "markdown_image_asset_refreshes",
+  "markdown_image_resolve_local_path_calls",
+  "markdown_image_resolve_local_path_skips",
+  "markdown_image_resolve_local_path_misses",
+  "markdown_image_resolve_absolute_hits",
+  "markdown_image_resolve_source_hits",
+  "markdown_image_resolve_project_hits",
+  "markdown_image_resolve_attachment_hits",
+  "markdown_image_file_exists_calls",
+  "centered_editor_should_center_calls",
+  "centered_editor_should_center_true",
+  "centered_editor_should_center_disabled",
+  "centered_editor_should_center_non_editor",
+  "centered_editor_should_center_not_pane",
+  "centered_editor_should_center_no_width",
+  "centered_editor_should_center_too_narrow",
+  "centered_editor_node_lookup_calls",
+  "centered_editor_node_lookup_cache_hits",
+  "centered_editor_node_lookup_ms",
+  "centered_editor_with_geometry_calls",
+  "centered_editor_with_geometry_entries",
+  "centered_editor_with_geometry_nested_bypasses",
+  "centered_editor_with_geometry_inactive_bypasses",
   "ime_set_location_calls",
   "ime_set_location_ms",
   "ime_set_location_changed",
@@ -169,6 +233,9 @@ local diagnostic_frame_keys = {
   "linewrapping_update_docview_breaks_calls",
   "linewrapping_update_docview_breaks_ms",
   "linewrapping_update_docview_breaks_width_changed",
+  "linewrapping_update_docview_breaks_text_changed",
+  "linewrapping_update_docview_breaks_line_count_changed",
+  "linewrapping_reconstruct_line_render_invalidation_calls",
   "linewrapping_reconstruct_breaks_calls",
   "linewrapping_reconstruct_breaks_ms",
   "linewrapping_reconstruct_breaks_lines",
@@ -705,12 +772,57 @@ local function write_counts_csv(path, header, rows)
   file:close()
 end
 
+local function context_text(value)
+  return tostring(value or ""):gsub("[\r\n]+", " ")
+end
+
+local function capture_recording_context()
+  local view = core.active_view
+  local doc = view and view.doc
+  local bytes = 0
+  for _, line in ipairs(doc and doc.lines or {}) do bytes = bytes + #line end
+  local function count_entries(tbl)
+    local count = 0
+    for _ in pairs(tbl or {}) do count = count + 1 end
+    return count
+  end
+  return {
+    view_name = context_text(view),
+    document_name = context_text(doc and doc:get_name()),
+    document_path = context_text(doc and (doc.abs_filename or doc.filename)),
+    document_lines = doc and #doc.lines or 0,
+    document_bytes = bytes,
+    view_x = view and view.position and view.position.x or 0,
+    view_y = view and view.position and view.position.y or 0,
+    view_width = view and view.size and view.size.x or 0,
+    view_height = view and view.size and view.size.y or 0,
+    wrapping_enabled = view and view.wrapping_enabled == true or false,
+    has_wrapped_layout = view and view.wrapped_settings ~= nil or false,
+    markdown_live_preview = view and view.__markdown_live_attached == true or false,
+    visual_metric_providers = count_entries(view and view.visual_metric_providers),
+    line_render_providers = count_entries(view and view.line_render_providers),
+  }
+end
+
 local function write_summary(path)
   local file = io.open(path, "wb")
   if not file then return end
   local elapsed = record.stop_time - record.start_time
   file:write("Anvil performance recording\n")
   file:write(string.format("Elapsed: %.3fs\n", elapsed))
+  local context = record.context or {}
+  file:write(string.format(
+    "Context: view=%s document=%s path=%s lines=%d bytes=%d\n",
+    context.view_name or "", context.document_name or "", context.document_path or "",
+    context.document_lines or 0, context.document_bytes or 0
+  ))
+  file:write(string.format(
+    "Context geometry: x=%.1f y=%.1f width=%.1f height=%.1f wrapping=%s wrapped_layout=%s markdown_live_preview=%s metric_providers=%d line_render_providers=%d\n",
+    context.view_x or 0, context.view_y or 0, context.view_width or 0, context.view_height or 0,
+    tostring(context.wrapping_enabled == true), tostring(context.has_wrapped_layout == true),
+    tostring(context.markdown_live_preview == true), context.visual_metric_providers or 0,
+    context.line_render_providers or 0
+  ))
   file:write(string.format("Run-loop iterations: %d\n", record.iteration_count))
   file:write(string.format("Idle/non-redraw iterations: %d\n", record.idle_iteration_count))
   file:write(string.format("UI update iterations: %d (%d with redraw, %d without redraw)\n",
@@ -803,6 +915,60 @@ local function write_summary(path)
   local run_denom = math.max(0, record.iteration_count or 0)
   file:write("DocView/FileTree drilldown totals:\n")
   file:write(string.format("  Denominators: redraw=%d, ui_update=%d, run_loop=%d\n", redraw_denom, update_denom, run_denom))
+  file:write("  Cache/Markdown/centered-layout diagnostics:\n")
+  drill_metric("visual metric cache calls", "docview_visual_metric_cache_calls", run_denom, "run_loop")
+  drill_metric("visual metric cache hits", "docview_visual_metric_cache_hits", run_denom, "run_loop")
+  drill_metric("visual metric cache lookup ms", "docview_visual_metric_cache_lookup_ms", run_denom, "run_loop")
+  drill_metric("visual metric signature ms", "docview_visual_metric_signature_ms", run_denom, "run_loop")
+  drill_metric("visual metric signature cache hits", "docview_visual_metric_signature_cache_hits", run_denom, "run_loop")
+  drill_metric("visual metric signature computations", "docview_visual_metric_signature_computations", run_denom, "run_loop")
+  drill_metric("visual metric signature changes", "docview_visual_metric_signature_changes", run_denom, "run_loop")
+  drill_metric("visual metric full rebuilds", "docview_visual_metric_full_rebuilds", run_denom, "run_loop")
+  drill_metric("visual metric full rebuild rows", "docview_visual_metric_full_rebuild_rows", run_denom, "run_loop")
+  drill_metric("visual metric full rebuild ms", "docview_visual_metric_full_rebuild_ms", run_denom, "run_loop")
+  drill_metric("visual metric dirty passes", "docview_visual_metric_dirty_passes", run_denom, "run_loop")
+  drill_metric("visual metric dirty rows", "docview_visual_metric_dirty_rows", run_denom, "run_loop")
+  drill_metric("visual metric row splices", "docview_visual_metric_row_splices", run_denom, "run_loop")
+  drill_metric("visual metric row splice rows", "docview_visual_metric_row_splice_rows", run_denom, "run_loop")
+  drill_metric("line render cache calls", "docview_line_render_cache_calls", run_denom, "run_loop")
+  drill_metric("line render cache hits", "docview_line_render_cache_hits", run_denom, "run_loop")
+  drill_metric("line render cache misses", "docview_line_render_cache_misses", run_denom, "run_loop")
+  drill_metric("line render cold misses", "docview_line_render_cold_misses", run_denom, "run_loop")
+  drill_metric("line render signature misses", "docview_line_render_signature_misses", run_denom, "run_loop")
+  drill_metric("line render cache lookup ms", "docview_line_render_cache_lookup_ms", run_denom, "run_loop")
+  drill_metric("line render build ms", "docview_line_render_build_ms", run_denom, "run_loop")
+  drill_metric("fragment normalization calls", "docview_fragment_normalization_calls", run_denom, "run_loop")
+  drill_metric("fragment normalization cache hits", "docview_fragment_normalization_cache_hits", run_denom, "run_loop")
+  drill_metric("fragment normalization builds", "docview_fragment_normalization_builds", run_denom, "run_loop")
+  drill_metric("Markdown provider generation requests", "markdown_live_provider_generation_requests", run_denom, "run_loop")
+  drill_metric("Markdown provider generation cache hits", "markdown_live_provider_generation_cache_hits", run_denom, "run_loop")
+  drill_metric("Markdown provider generations", "markdown_live_provider_generation_calls", run_denom, "run_loop")
+  drill_metric("Markdown generations at host geometry", "markdown_live_provider_generation_host_calls", run_denom, "run_loop")
+  drill_metric("Markdown generations in centered geometry", "markdown_live_provider_generation_centered_calls", run_denom, "run_loop")
+  drill_metric("Markdown semantic publications", "markdown_live_semantic_publications", run_denom, "run_loop")
+  drill_metric("Markdown semantic publication ranges", "markdown_live_semantic_publication_ranges", run_denom, "run_loop")
+  drill_metric("Markdown semantic publication lines", "markdown_live_semantic_publication_lines", run_denom, "run_loop")
+  drill_metric("Markdown semantic global invalidations", "markdown_live_semantic_global_invalidations", run_denom, "run_loop")
+  drill_metric("Markdown link-index invalidations", "markdown_live_link_index_invalidations", run_denom, "run_loop")
+  drill_metric("Markdown image fragment builds", "markdown_live_image_fragment_calls", run_denom, "run_loop")
+  drill_metric("Markdown image get_asset calls", "markdown_image_get_asset_calls", run_denom, "run_loop")
+  drill_metric("Markdown image asset-key calls", "markdown_image_asset_key_calls", run_denom, "run_loop")
+  drill_metric("Markdown image request-key cache hits", "markdown_image_asset_request_key_cache_hits", run_denom, "run_loop")
+  drill_metric("Markdown image asset cache hits", "markdown_image_asset_cache_hits", run_denom, "run_loop")
+  drill_metric("Markdown image asset cache misses", "markdown_image_asset_cache_misses", run_denom, "run_loop")
+  drill_metric("Markdown image retry checks", "markdown_image_asset_retry_checks", run_denom, "run_loop")
+  drill_metric("Markdown image refreshes", "markdown_image_asset_refreshes", run_denom, "run_loop")
+  drill_metric("Markdown local-path resolutions", "markdown_image_resolve_local_path_calls", run_denom, "run_loop")
+  drill_metric("Markdown local-path misses", "markdown_image_resolve_local_path_misses", run_denom, "run_loop")
+  drill_metric("Markdown image file-exists calls", "markdown_image_file_exists_calls", run_denom, "run_loop")
+  drill_metric("centered should_center calls", "centered_editor_should_center_calls", run_denom, "run_loop")
+  drill_metric("centered should_center true", "centered_editor_should_center_true", run_denom, "run_loop")
+  drill_metric("centered node lookup calls", "centered_editor_node_lookup_calls", run_denom, "run_loop")
+  drill_metric("centered node lookup cache hits", "centered_editor_node_lookup_cache_hits", run_denom, "run_loop")
+  drill_metric("centered node lookup ms", "centered_editor_node_lookup_ms", run_denom, "run_loop")
+  drill_metric("centered geometry wrapper calls", "centered_editor_with_geometry_calls", run_denom, "run_loop")
+  drill_metric("centered geometry entries", "centered_editor_with_geometry_entries", run_denom, "run_loop")
+  drill_metric("centered nested bypasses", "centered_editor_with_geometry_nested_bypasses", run_denom, "run_loop")
   file:write("  Draw/redraw metrics:\n")
   drill_metric("docview line hint calls", "docview_line_hint_calls", redraw_denom, "redraw")
   drill_metric("docview line hint drawn", "docview_line_hint_drawn", redraw_denom, "redraw")
@@ -852,6 +1018,9 @@ local function write_summary(path)
   drill_metric("linewrap update_docview calls", "linewrapping_update_docview_breaks_calls", update_denom, "update")
   drill_metric("linewrap update_docview ms", "linewrapping_update_docview_breaks_ms", update_denom, "update")
   drill_metric("linewrap width-changed calls", "linewrapping_update_docview_breaks_width_changed", update_denom, "update")
+  drill_metric("linewrap text-changed calls", "linewrapping_update_docview_breaks_text_changed", update_denom, "update")
+  drill_metric("linewrap line-count-changed calls", "linewrapping_update_docview_breaks_line_count_changed", update_denom, "update")
+  drill_metric("linewrap line-render invalidation reconstructs", "linewrapping_reconstruct_line_render_invalidation_calls", update_denom, "update")
   drill_metric("linewrap reconstruct calls", "linewrapping_reconstruct_breaks_calls", update_denom, "update")
   drill_metric("linewrap reconstruct ms", "linewrapping_reconstruct_breaks_ms", update_denom, "update")
   drill_metric("linewrap reconstruct lines", "linewrapping_reconstruct_breaks_lines", update_denom, "update")
@@ -905,6 +1074,20 @@ local function write_summary(path)
     file:write(string.format("%6.2f%% %7d %s\n", pct, row.count, row.key))
   end
 
+  file:write("\nObserved cache/geometry modes:\n")
+  local mode_count = 0
+  for _, row in ipairs(sorted_counts(record.detail_counts)) do
+    if row.key:find("^markdown_live_provider_geometry:")
+      or row.key:find("^centered_editor_geometry:")
+      or row.key:find("^docview_visual_metric_signature_transition:")
+    then
+      mode_count = mode_count + 1
+      file:write(string.format("%12.3f %s\n", row.count, row.key))
+      if mode_count >= 40 then break end
+    end
+  end
+  if mode_count == 0 then file:write("  (none recorded)\n") end
+
   file:write("\nTop perf detail counters/timers:\n")
   for i, row in ipairs(sorted_counts(record.detail_counts)) do
     if i > 60 then break end
@@ -957,6 +1140,7 @@ function perf.start_recording()
     slow_frames = {},
     slow_updates = {},
     linewrap_compute_rows = {},
+    context = capture_recording_context(),
     redraw_intervals = {},
     lua_samples = {},
     sample_count = 0,

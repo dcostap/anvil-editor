@@ -197,6 +197,11 @@ local function perf_frame_add(key, amount)
   if perf and perf.frame_add then perf.frame_add(key, amount or 1) end
 end
 
+local function perf_detail(key, amount)
+  local perf = package.loaded["core.perf"]
+  if perf and perf.add_detail then perf.add_detail(key, amount or 1) end
+end
+
 local function perf_elapsed(key, start_time)
   if start_time then perf_frame_add(key, (system.get_time() - start_time) * 1000) end
 end
@@ -810,9 +815,23 @@ function DocView:new(doc)
   self.render_cache_diagnostics = {
     line_hits = 0,
     line_misses = 0,
+    line_cold_misses = 0,
+    line_signature_misses = 0,
     line_invalidations = 0,
+    fragment_normalization_calls = 0,
+    fragment_normalization_cache_hits = 0,
+    fragment_normalization_builds = 0,
     metric_recomputations = 0,
     metric_invalidations = 0,
+    metric_cache_hits = 0,
+    metric_signature_cache_hits = 0,
+    metric_signature_computations = 0,
+    metric_signature_changes = 0,
+    metric_full_rebuilds = 0,
+    metric_full_rebuild_rows = 0,
+    metric_dirty_passes = 0,
+    metric_dirty_rows = 0,
+    metric_row_splices = 0,
   }
   self.decoration_providers = {}
   self.poi_providers = {}
@@ -1210,6 +1229,24 @@ function DocView:get_h_scrollable_size()
 end
 
 
+---Return the stable viewport width used by specialized Document presentations.
+---Unlike `size.x`, this remains tied to the effective presentation area while
+---a layout adapter temporarily substitutes drawing geometry.
+---@return number width
+function DocView:get_presentation_viewport_width()
+  return self.size.x
+end
+
+
+---Return a cheap generation token for presentation geometry that can affect
+---specialized line and row layout. Layout adapters should override this with
+---a token that remains stable while they temporarily substitute draw geometry.
+---@return any generation
+function DocView:get_presentation_layout_generation()
+  return self.size.x
+end
+
+
 ---Get the font used for rendering text.
 ---@return renderer.font font The code font
 function DocView:get_font()
@@ -1233,15 +1270,24 @@ function DocView:add_visual_metric_provider(id, provider, opts)
   opts = opts or {}
   self.visual_metric_providers = self.visual_metric_providers or {}
   self.visual_metric_providers[id] = { id = id, provider = provider, priority = opts.priority or provider.priority or 0 }
+  self.__visual_metric_provider_entries = nil
+  self.__visual_metric_signature_state = nil
   self:invalidate_visual_metrics(id)
 end
 
 function DocView:remove_visual_metric_provider(id)
   if not self.visual_metric_providers or not self.visual_metric_providers[id] then return false end
   self.visual_metric_providers[id] = nil
+  self.__visual_metric_provider_entries = nil
+  self.__visual_metric_signature_state = nil
   self:invalidate_visual_metrics(id)
   return true
 end
+
+local metric_tree_add
+local metric_tree_row_at_y
+local metric_tree_build
+local compute_visual_row_height
 
 local function invalidate_visual_metric_rows(view, cache, row1, row2)
   row1 = common.clamp(math.floor(row1), 1, cache.row_count)
@@ -1255,6 +1301,8 @@ end
 
 function DocView:invalidate_visual_metrics(_provider_id, line1, line2)
   local cache = self.__visual_metric_cache
+  local wrap_change = self.__line_render_wrap_change
+  self.__line_render_wrap_change = nil
   if line1 and not self:has_composed_visual_rows() then
     if not cache then return end
     if not self.wrapped_settings then
@@ -1268,9 +1316,65 @@ function DocView:invalidate_visual_metrics(_provider_id, line1, line2)
     -- only safe option.
     local current_row_count = linewrapping.get_total_wrapped_lines(self)
     local current_wrap_generation = self.__wrap_layout_generation or 0
-    local unchanged_except_wrap = cache.signature == self:get_visual_metric_signature(
-      cache.wrap_layout_generation or current_wrap_generation
+    local comparison_signature = self:get_visual_metric_signature(
+      cache.wrap_layout_generation or current_wrap_generation,
+      cache.row_count,
+      cache.text_revision
     )
+    local unchanged_except_wrap = cache.signature == comparison_signature
+    if wrap_change
+      and unchanged_except_wrap
+      and cache.row_count == wrap_change.old_row_count
+      and current_row_count == wrap_change.new_row_count
+      and cache.wrap_layout_generation == wrap_change.old_wrap_generation
+    then
+      local old_row1, old_row2 = wrap_change.old_row1, wrap_change.old_row2
+      local new_row1, new_row2 = wrap_change.new_row1, wrap_change.new_row2
+      local remove_count = math.max(0, old_row2 - old_row1 + 1)
+      local insert_count = math.max(0, new_row2 - new_row1 + 1)
+      local old_anchor = metric_tree_row_at_y(
+        cache.height_tree, cache.row_count, math.max(0, self.scroll and self.scroll.y or 0)
+      )
+      local removed_height = 0
+      for row = old_row1, old_row2 do
+        removed_height = removed_height + (cache.heights[row] or 0)
+      end
+      local default_height = self:get_line_height()
+      local inserted = {}
+      for row = 1, insert_count do inserted[row] = default_height end
+      common.splice(cache.heights, old_row1, remove_count, inserted)
+
+      local shifted_dirty = {}
+      local row_delta = insert_count - remove_count
+      for row in pairs(cache.dirty_rows or {}) do
+        if row < old_row1 then
+          shifted_dirty[row] = true
+        elseif row > old_row2 then
+          shifted_dirty[row + row_delta] = true
+        end
+      end
+      for row = new_row1, new_row2 do shifted_dirty[row] = true end
+      cache.dirty_rows = shifted_dirty
+      cache.row_count = current_row_count
+      cache.total_height = cache.total_height - removed_height + insert_count * default_height
+      cache.height_tree = metric_tree_build(cache.heights, cache.row_count)
+      if old_row2 < old_anchor and self.scroll then
+        local delta = insert_count * default_height - removed_height
+        self.scroll.y = self.scroll.y + delta
+        self.scroll.to.y = self.scroll.to.y + delta
+      end
+      cache.invalidated_rows = (cache.invalidated_rows or 0) + insert_count
+      cache.wrap_layout_generation = current_wrap_generation
+      cache.text_revision = self.doc.text_revision or 0
+      cache.signature = self:get_visual_metric_signature()
+      self.render_cache_diagnostics.metric_invalidations =
+        self.render_cache_diagnostics.metric_invalidations + insert_count
+      self.render_cache_diagnostics.metric_row_splices =
+        self.render_cache_diagnostics.metric_row_splices + 1
+      perf_frame_add("docview_visual_metric_row_splices", 1)
+      perf_frame_add("docview_visual_metric_row_splice_rows", insert_count)
+      return
+    end
     if cache.row_count == current_row_count and self.wrapped_line_to_idx
       and unchanged_except_wrap
     then
@@ -1285,6 +1389,7 @@ function DocView:invalidate_visual_metrics(_provider_id, line1, line2)
           self, cache, row1, next_row and next_row - 1 or current_row_count
         )
         cache.wrap_layout_generation = current_wrap_generation
+        cache.text_revision = self.doc.text_revision or 0
         cache.signature = self:get_visual_metric_signature()
         return
       end
@@ -1299,6 +1404,7 @@ function DocView:invalidate_visual_metrics(_provider_id, line1, line2)
 end
 
 function DocView:visual_metric_provider_entries()
+  if self.__visual_metric_provider_entries then return self.__visual_metric_provider_entries end
   local result = {}
   for _, entry in pairs(self.visual_metric_providers or {}) do
     result[#result + 1] = entry
@@ -1307,6 +1413,7 @@ function DocView:visual_metric_provider_entries()
     if a.priority == b.priority then return a.id < b.id end
     return a.priority < b.priority
   end)
+  self.__visual_metric_provider_entries = result
   return result
 end
 
@@ -1330,12 +1437,14 @@ function DocView:add_line_render_provider(id, provider, opts)
   opts = opts or {}
   self.line_render_providers = self.line_render_providers or {}
   self.line_render_providers[id] = { id = id, provider = provider, priority = opts.priority or provider.priority or 0 }
+  self.__line_render_provider_entries = nil
   self:invalidate_line_render(id)
 end
 
 function DocView:remove_line_render_provider(id)
   if not self.line_render_providers or not self.line_render_providers[id] then return false end
   self.line_render_providers[id] = nil
+  self.__line_render_provider_entries = nil
   self:invalidate_line_render(id)
   return true
 end
@@ -1358,9 +1467,23 @@ function DocView:invalidate_line_render(_provider_id, line1, line2)
     local layout_line1 = common.clamp(requested_line1, 1, #self.doc.lines)
     local layout_line2 = common.clamp(requested_line2, layout_line1, #self.doc.lines)
     if self.wrapped_settings and not self.__line_render_wrap_invalidating then
+      local old_row_count = linewrapping.get_total_wrapped_lines(self)
+      local old_row1 = self.wrapped_line_to_idx[layout_line1] or 1
+      local old_row2 = (self.wrapped_line_to_idx[layout_line2 + 1] or (old_row_count + 1)) - 1
+      local old_wrap_generation = self.__wrap_layout_generation or 0
       self.__line_render_wrap_invalidating = true
       linewrapping.update_breaks(self, layout_line1, layout_line2, 0)
       self.__line_render_wrap_invalidating = nil
+      local new_row_count = linewrapping.get_total_wrapped_lines(self)
+      self.__line_render_wrap_change = {
+        old_row_count = old_row_count,
+        new_row_count = new_row_count,
+        old_row1 = old_row1,
+        old_row2 = old_row2,
+        new_row1 = self.wrapped_line_to_idx[layout_line1] or 1,
+        new_row2 = (self.wrapped_line_to_idx[layout_line2 + 1] or (new_row_count + 1)) - 1,
+        old_wrap_generation = old_wrap_generation,
+      }
     end
     return
   end
@@ -1368,11 +1491,14 @@ function DocView:invalidate_line_render(_provider_id, line1, line2)
     self.render_cache_diagnostics.line_invalidations =
       self.render_cache_diagnostics.line_invalidations + #self.doc.lines
   end
+  perf_detail("docview_line_render_full_invalidation:" .. tostring(_provider_id or "unknown"), 1)
   self.__line_render_generation = (self.__line_render_generation or 0) + 1
+  self.__line_render_wrap_change = nil
   self.__line_render_cache = nil
   self.__line_width_cache = {}
   self.__unwrapped_content_width_cache = nil
   if self.wrapped_settings and not self.__line_render_wrap_invalidating then
+    perf_frame_add("linewrapping_reconstruct_line_render_invalidation_calls", 1)
     self.__line_render_wrap_invalidating = true
     linewrapping.reconstruct_breaks(
       self, self.wrapped_settings.font, self.wrapped_settings.width
@@ -1382,7 +1508,10 @@ function DocView:invalidate_line_render(_provider_id, line1, line2)
 end
 
 function DocView:line_render_provider_entries()
-  return sorted_inline_provider_entries(self.line_render_providers)
+  if not self.__line_render_provider_entries then
+    self.__line_render_provider_entries = sorted_inline_provider_entries(self.line_render_providers)
+  end
+  return self.__line_render_provider_entries
 end
 
 function DocView:get_render_cache_diagnostics()
@@ -1706,15 +1835,39 @@ function DocView:begin_line_render_interaction(reason)
     reason = reason,
     selection_state = self:get_selection_state(),
   }
-  self:invalidate_line_render("interaction")
-  self:invalidate_visual_metrics("interaction")
 end
 
 function DocView:end_line_render_interaction(reason)
-  if not self.__line_render_interaction_state then return false end
+  local interaction = self.__line_render_interaction_state
+  if not interaction then return false end
   self.__line_render_interaction_state = nil
-  self:invalidate_line_render(reason or "interaction")
-  self:invalidate_visual_metrics(reason or "interaction")
+  local new_state = self:get_selection_state()
+  local needs_fallback = false
+  for _, entry in ipairs(self:line_render_provider_entries()) do
+    local provider = entry.provider
+    local fn = provider and provider.on_selection_interaction_end
+    if fn then
+      local ok, handled = pcall(
+        fn, provider, self, new_state, interaction.selection_state,
+        reason or interaction.reason or "interaction"
+      )
+      if not ok then
+        core.log_quiet(
+          "DocView line-render provider %s interaction end failed for %s: %s",
+          tostring(entry.id), self.doc:get_name(), tostring(handled)
+        )
+        needs_fallback = true
+      elseif handled == false then
+        needs_fallback = true
+      end
+    else
+      needs_fallback = true
+    end
+  end
+  if needs_fallback then
+    self:invalidate_line_render(reason or "interaction")
+    self:invalidate_visual_metrics(reason or "interaction")
+  end
   return true
 end
 
@@ -2497,16 +2650,73 @@ function DocView:get_metric_row_entry(row)
   return { type = "line", line = row, row_in_line = 1, absolute_row = row, row = row }
 end
 
-function DocView:get_visual_metric_signature(wrap_layout_generation)
+function DocView:get_visual_metric_signature(
+  wrap_layout_generation, row_count_override, text_revision_override
+)
+  local row_count = row_count_override or self:get_scrollable_line_count()
+  local line_height = self:get_line_height()
+  local text_revision = text_revision_override or self.doc.text_revision or 0
+  local fold_generation = self.fold_generation or 0
+  local wrap_generation = wrap_layout_generation or self.__wrap_layout_generation or 0
+  local metric_generation = self.__visual_metric_generation or 0
+  local theme_generation = core.color_theme_generation or 0
+  local presentation_generation = self:get_presentation_layout_generation()
+  local entries = self:visual_metric_provider_entries()
+  local cacheable = wrap_layout_generation == nil
+    and row_count_override == nil and text_revision_override == nil
+  for _, entry in ipairs(entries) do
+    local provider = entry.provider
+    if provider and provider.generation and not provider.generation_seed then
+      cacheable = false
+      break
+    end
+  end
+
+  local state = cacheable and self.__visual_metric_signature_state
+  local same = state
+    and state.row_count == row_count
+    and state.line_height == line_height
+    and state.text_revision == text_revision
+    and state.fold_generation == fold_generation
+    and state.wrap_generation == wrap_generation
+    and state.metric_generation == metric_generation
+    and state.theme_generation == theme_generation
+    and state.presentation_generation == presentation_generation
+    and state.entries == entries
+  if same then
+    for index, entry in ipairs(entries) do
+      local provider = entry.provider
+      local seed_fn = provider and provider.generation and provider.generation_seed
+      if seed_fn then
+        local ok, seed = pcall(seed_fn, provider, self)
+        if state.provider_seeds[index] ~= (ok and seed or "error") then
+          same = false
+          break
+        end
+      elseif state.provider_seeds[index] ~= nil then
+        same = false
+        break
+      end
+    end
+  end
+  if same then
+    self.render_cache_diagnostics.metric_signature_cache_hits =
+      self.render_cache_diagnostics.metric_signature_cache_hits + 1
+    perf_frame_add("docview_visual_metric_signature_cache_hits", 1)
+    return state.signature
+  end
+
   local parts = {
-    tostring(self:get_scrollable_line_count()),
-    tostring(self:get_line_height()),
-    tostring(self.doc.text_revision or 0),
-    tostring(self.fold_generation or 0),
-    tostring(wrap_layout_generation or self.__wrap_layout_generation or 0),
-    tostring(self.__visual_metric_generation or 0),
+    tostring(row_count),
+    tostring(line_height),
+    tostring(text_revision),
+    tostring(fold_generation),
+    tostring(wrap_generation),
+    tostring(metric_generation),
+    tostring(theme_generation),
+    tostring(presentation_generation),
   }
-  for _, entry in ipairs(self:visual_metric_provider_entries()) do
+  for _, entry in ipairs(entries) do
     parts[#parts + 1] = tostring(entry.id)
     parts[#parts + 1] = tostring(entry.priority)
     local provider = entry.provider
@@ -2515,14 +2725,52 @@ function DocView:get_visual_metric_signature(wrap_layout_generation)
       parts[#parts + 1] = ok and tostring(gen) or "error"
     end
   end
-  return table.concat(parts, "|")
+  local signature = table.concat(parts, "|")
+  self.render_cache_diagnostics.metric_signature_computations =
+    self.render_cache_diagnostics.metric_signature_computations + 1
+  perf_frame_add("docview_visual_metric_signature_computations", 1)
+  if cacheable then
+    local provider_seeds = {}
+    for index, entry in ipairs(entries) do
+      local provider = entry.provider
+      local seed_fn = provider and provider.generation and provider.generation_seed
+      if seed_fn then
+        local ok, seed = pcall(seed_fn, provider, self)
+        provider_seeds[index] = ok and seed or "error"
+      end
+    end
+    self.__visual_metric_signature_state = {
+      signature = signature,
+      row_count = row_count,
+      line_height = line_height,
+      text_revision = text_revision,
+      fold_generation = fold_generation,
+      wrap_generation = wrap_generation,
+      metric_generation = metric_generation,
+      theme_generation = theme_generation,
+      presentation_generation = presentation_generation,
+      entries = entries,
+      provider_seeds = provider_seeds,
+    }
+  end
+  return signature
 end
 
-local function metric_tree_add(tree, row_count, row, delta)
+metric_tree_add = function(tree, row_count, row, delta)
   while row <= row_count do
     tree[row] = (tree[row] or 0) + delta
     row = row + bit.band(row, -row)
   end
+end
+
+metric_tree_build = function(heights, row_count)
+  local tree = {}
+  for row = 1, row_count do
+    tree[row] = (tree[row] or 0) + (heights[row] or 0)
+    local parent = row + bit.band(row, -row)
+    if parent <= row_count then tree[parent] = (tree[parent] or 0) + tree[row] end
+  end
+  return tree
 end
 
 local function metric_tree_sum(tree, row)
@@ -2534,7 +2782,7 @@ local function metric_tree_sum(tree, row)
   return total
 end
 
-local function metric_tree_row_at_y(tree, row_count, y)
+metric_tree_row_at_y = function(tree, row_count, y)
   local index, accumulated = 0, 0
   local step = 1
   while step * 2 <= row_count do step = step * 2 end
@@ -2550,7 +2798,7 @@ local function metric_tree_row_at_y(tree, row_count, y)
   return common.clamp(index + 1, 1, row_count)
 end
 
-local function compute_visual_row_height(view, row, providers, default_height)
+compute_visual_row_height = function(view, row, providers, default_height)
   view.render_cache_diagnostics.metric_recomputations =
     view.render_cache_diagnostics.metric_recomputations + 1
   local entry = view:get_metric_row_entry(row)
@@ -2574,12 +2822,28 @@ end
 
 function DocView:get_visual_row_metric_cache()
   if not self:has_visual_metric_providers() then return nil end
+  local perf_active = core.perf_frame_stats ~= nil
+  local lookup_start = perf_active and system.get_time()
+  perf_frame_add("docview_visual_metric_cache_calls", 1)
+  local signature_start = perf_active and system.get_time()
   local signature = self:get_visual_metric_signature()
+  perf_elapsed("docview_visual_metric_signature_ms", signature_start)
   local cache = self.__visual_metric_cache
   local providers = self:visual_metric_provider_entries()
   local default_height = self:get_line_height()
   if cache and cache.signature == signature then
+    self.render_cache_diagnostics.metric_cache_hits =
+      self.render_cache_diagnostics.metric_cache_hits + 1
+    perf_frame_add("docview_visual_metric_cache_hits", 1)
     if cache.dirty_rows then
+      local dirty_rows = 0
+      for _ in pairs(cache.dirty_rows) do dirty_rows = dirty_rows + 1 end
+      self.render_cache_diagnostics.metric_dirty_passes =
+        self.render_cache_diagnostics.metric_dirty_passes + 1
+      self.render_cache_diagnostics.metric_dirty_rows =
+        self.render_cache_diagnostics.metric_dirty_rows + dirty_rows
+      perf_frame_add("docview_visual_metric_dirty_passes", 1)
+      perf_frame_add("docview_visual_metric_dirty_rows", dirty_rows)
       local anchor_row = metric_tree_row_at_y(
         cache.height_tree, cache.row_count, math.max(0, self.scroll and self.scroll.y or 0)
       )
@@ -2600,10 +2864,29 @@ function DocView:get_visual_row_metric_cache()
         self.scroll.to.y = self.scroll.to.y + anchor_delta
       end
     end
+    perf_elapsed("docview_visual_metric_cache_lookup_ms", lookup_start)
     return cache
   end
 
+  if cache then
+    self.render_cache_diagnostics.metric_signature_changes =
+      self.render_cache_diagnostics.metric_signature_changes + 1
+    perf_frame_add("docview_visual_metric_signature_changes", 1)
+    perf_detail(
+      "docview_visual_metric_signature_transition:" ..
+      tostring(cache.signature) .. " -> " .. tostring(signature),
+      1
+    )
+  end
+
+  local rebuild_start = perf_active and system.get_time()
   local row_count = self:get_scrollable_line_count()
+  self.render_cache_diagnostics.metric_full_rebuilds =
+    self.render_cache_diagnostics.metric_full_rebuilds + 1
+  self.render_cache_diagnostics.metric_full_rebuild_rows =
+    self.render_cache_diagnostics.metric_full_rebuild_rows + row_count
+  perf_frame_add("docview_visual_metric_full_rebuilds", 1)
+  perf_frame_add("docview_visual_metric_full_rebuild_rows", row_count)
   local heights = {}
   local height_tree = {}
   local total = 0
@@ -2616,6 +2899,7 @@ function DocView:get_visual_row_metric_cache()
   cache = {
     signature = signature,
     wrap_layout_generation = self.__wrap_layout_generation or 0,
+    text_revision = self.doc.text_revision or 0,
     heights = heights,
     height_tree = height_tree,
     total_height = total,
@@ -2623,6 +2907,8 @@ function DocView:get_visual_row_metric_cache()
     invalidated_rows = 0,
   }
   self.__visual_metric_cache = cache
+  perf_elapsed("docview_visual_metric_full_rebuild_ms", rebuild_start)
+  perf_elapsed("docview_visual_metric_cache_lookup_ms", lookup_start)
   return cache
 end
 
@@ -3073,6 +3359,9 @@ end
 
 function DocView:get_line_render(line)
   if not self:has_line_render_providers() then return nil end
+  local perf_active = core.perf_frame_stats ~= nil
+  local lookup_start = perf_active and system.get_time()
+  perf_frame_add("docview_line_render_cache_calls", 1)
   local source_text = (self.doc.lines[line] or ""):gsub("\n$", "")
   local generation = self.__line_render_generation or 0
   local cache = self.__line_render_cache
@@ -3085,10 +3374,23 @@ function DocView:get_line_render(line)
   if cached and cached.signature == signature then
     cache.hits = cache.hits + 1
     self.render_cache_diagnostics.line_hits = self.render_cache_diagnostics.line_hits + 1
+    perf_frame_add("docview_line_render_cache_hits", 1)
+    perf_elapsed("docview_line_render_cache_lookup_ms", lookup_start)
     return cached.render_line or nil
   end
   cache.misses = cache.misses + 1
   self.render_cache_diagnostics.line_misses = self.render_cache_diagnostics.line_misses + 1
+  perf_frame_add("docview_line_render_cache_misses", 1)
+  if cached then
+    self.render_cache_diagnostics.line_signature_misses =
+      self.render_cache_diagnostics.line_signature_misses + 1
+    perf_frame_add("docview_line_render_signature_misses", 1)
+  else
+    self.render_cache_diagnostics.line_cold_misses =
+      self.render_cache_diagnostics.line_cold_misses + 1
+    perf_frame_add("docview_line_render_cold_misses", 1)
+  end
+  local build_start = perf_active and system.get_time()
   local context = { source_text = source_text, line = line }
   local resolved
   for _, entry in ipairs(self:line_render_provider_entries()) do
@@ -3105,6 +3407,8 @@ function DocView:get_line_render(line)
     end
   end
   cache.lines[line] = { signature = signature, render_line = resolved or false }
+  perf_elapsed("docview_line_render_build_ms", build_start)
+  perf_elapsed("docview_line_render_cache_lookup_ms", lookup_start)
   return resolved
 end
 
@@ -3218,9 +3522,26 @@ end
 
 function DocView:iter_line_render_fragments(render_line)
   local source_text = render_line.source_text or ""
+  local source_fragments = render_line.fragments
+  self.render_cache_diagnostics.fragment_normalization_calls =
+    self.render_cache_diagnostics.fragment_normalization_calls + 1
+  perf_frame_add("docview_fragment_normalization_calls", 1)
+  local cache = render_line.__normalized_fragments_cache
+  if cache
+    and cache.source_text == source_text
+    and cache.source_fragments == source_fragments
+  then
+    self.render_cache_diagnostics.fragment_normalization_cache_hits =
+      self.render_cache_diagnostics.fragment_normalization_cache_hits + 1
+    perf_frame_add("docview_fragment_normalization_cache_hits", 1)
+    return cache.fragments
+  end
+  self.render_cache_diagnostics.fragment_normalization_builds =
+    self.render_cache_diagnostics.fragment_normalization_builds + 1
+  perf_frame_add("docview_fragment_normalization_builds", 1)
   local fragments = {}
   local cursor = 1
-  for _, fragment in ipairs(render_line.fragments or {}) do
+  for _, fragment in ipairs(source_fragments or {}) do
     local col1 = math.max(1, math.floor(fragment.source_col1 or cursor))
     local default_col2 = fragment.text and (col1 + #fragment.text) or col1
     local col2 = math.max(col1, math.floor(fragment.source_col2 or default_col2))
@@ -3237,6 +3558,11 @@ function DocView:iter_line_render_fragments(render_line)
   if cursor <= #source_text then
     fragments[#fragments + 1] = { source_col1 = cursor, source_col2 = #source_text + 1, text = source_text:sub(cursor) }
   end
+  render_line.__normalized_fragments_cache = {
+    source_text = source_text,
+    source_fragments = source_fragments,
+    fragments = fragments,
+  }
   return fragments
 end
 

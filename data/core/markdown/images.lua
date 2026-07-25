@@ -3,6 +3,11 @@ local json = require "core.json"
 
 local images = {}
 
+local function perf_frame_add(key, amount)
+  local perf = package.loaded["core.perf"]
+  if perf and perf.frame_add then perf.frame_add(key, amount or 1) end
+end
+
 images.default_cache_dir = USERDIR .. PATHSEP .. "cache"
 
 local function hash_text(text)
@@ -70,6 +75,7 @@ local function is_absolute_path(path)
 end
 
 local function file_exists(path)
+  perf_frame_add("markdown_image_file_exists_calls", 1)
   local info = path and system.get_file_info(path)
   return info and info.type == "file"
 end
@@ -146,22 +152,47 @@ function images.attachment_directory(opts)
 end
 
 function images.resolve_local_path(url, opts)
+  perf_frame_add("markdown_image_resolve_local_path_calls", 1)
   opts = opts or {}
-  if type(url) ~= "string" or url == "" or images.is_remote(url) then return nil end
+  if type(url) ~= "string" or url == "" or images.is_remote(url) then
+    perf_frame_add("markdown_image_resolve_local_path_skips", 1)
+    return nil
+  end
   local filesystem_url = filesystem_path_from_url(url)
-  if filesystem_url == "" then return nil end
+  if filesystem_url == "" then
+    perf_frame_add("markdown_image_resolve_local_path_misses", 1)
+    return nil
+  end
   if is_absolute_path(filesystem_url) then
-    return file_exists(filesystem_url) and filesystem_url or nil
+    local resolved = file_exists(filesystem_url) and filesystem_url or nil
+    perf_frame_add(
+      resolved and "markdown_image_resolve_absolute_hits"
+        or "markdown_image_resolve_local_path_misses",
+      1
+    )
+    return resolved
   end
 
   local source_dir = dirname(opts.source_path)
   local path = try_relative_file(source_dir, filesystem_url)
-  if path then return path end
+  if path then
+    perf_frame_add("markdown_image_resolve_source_hits", 1)
+    return path
+  end
 
   path = try_relative_file(opts.project_root, filesystem_url)
-  if path then return path end
+  if path then
+    perf_frame_add("markdown_image_resolve_project_hits", 1)
+    return path
+  end
 
-  return resolve_in_obsidian_attachment_folder(filesystem_url, source_dir, opts.project_root)
+  path = resolve_in_obsidian_attachment_folder(filesystem_url, source_dir, opts.project_root)
+  perf_frame_add(
+    path and "markdown_image_resolve_attachment_hits"
+      or "markdown_image_resolve_local_path_misses",
+    1
+  )
+  return path
 end
 
 function images.load_from_path(path, opts)
@@ -175,6 +206,7 @@ function images.load_from_path(path, opts)
 end
 
 local assets = {}
+local asset_request_keys = {}
 local asset_clock = 0
 local MAX_ASSETS = 256
 
@@ -205,7 +237,19 @@ local function normalize_context_path(path)
   return path and common.path_compare_key(common.normalize_path(path)) or ""
 end
 
+local function asset_request_key(url, opts)
+  return table.concat({
+    tostring(url or ""),
+    normalize_context_path(opts.source_path),
+    normalize_context_path(opts.project_root),
+    normalize_context_path(opts.cache_dir or images.default_cache_dir),
+    opts.download_remote and "on" or "off",
+    tostring(opts.retry_generation or ""),
+  }, "\0")
+end
+
 function images.asset_key(url, opts)
+  perf_frame_add("markdown_image_asset_key_calls", 1)
   opts = opts or {}
   local local_path = images.resolve_local_path(url, opts)
   if local_path then return "local\0" .. normalize_context_path(local_path) end
@@ -244,6 +288,7 @@ local function apply_loaded(entry, loaded)
 end
 
 local function refresh_asset(entry, url, opts)
+  perf_frame_add("markdown_image_asset_refreshes", 1)
   entry.alt = opts.alt
   entry.url = url
   entry.retry_generation = opts.retry_generation
@@ -304,10 +349,22 @@ local function refresh_asset(entry, url, opts)
 end
 
 function images.get_asset(url, opts)
+  perf_frame_add("markdown_image_get_asset_calls", 1)
   opts = opts or {}
-  local key = images.asset_key(url, opts)
+  local request_key = asset_request_key(url, opts)
+  local key = asset_request_keys[request_key]
+  -- Missing local references must be re-resolved: an explicit render
+  -- invalidation is also how newly-created attachment files are adopted.
+  if key and key:sub(1, 8) == "missing\0" then key = nil end
+  if key then
+    perf_frame_add("markdown_image_asset_request_key_cache_hits", 1)
+  else
+    key = images.asset_key(url, opts)
+    asset_request_keys[request_key] = key
+  end
   local entry = assets[key]
   if not entry then
+    perf_frame_add("markdown_image_asset_cache_misses", 1)
     entry = {
       key = key,
       status = "idle",
@@ -319,9 +376,11 @@ function images.get_asset(url, opts)
     return refresh_asset(entry, url, opts)
   end
 
+  perf_frame_add("markdown_image_asset_cache_hits", 1)
   touch(entry)
   local retry = entry.retry_generation ~= opts.retry_generation
   if retry and entry.status ~= "loading" then
+    perf_frame_add("markdown_image_asset_retry_checks", 1)
     local info = entry.path and system.get_file_info(entry.path)
     local changed = info and (info.modified ~= entry.modified or info.size ~= entry.size)
     if entry.status == "error" or entry.status == "remote-disabled" or changed then
@@ -348,6 +407,7 @@ end
 
 function images.clear_assets()
   assets = {}
+  asset_request_keys = {}
   asset_clock = 0
 end
 

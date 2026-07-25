@@ -659,17 +659,55 @@ test.describe("Markdown Live Editor", function()
     )
   end)
 
+  test.it("reuses normalized fragments for a cached rendered line", function()
+    local view = make_view("**bold** and plain", "note.md")
+    refresh(view)
+    local render_line = test.not_nil(view:get_line_render(1))
+    local before = view:get_render_cache_diagnostics()
+    view:iter_line_render_fragments(render_line)
+    view:iter_line_render_fragments(render_line)
+    local after = view:get_render_cache_diagnostics()
+    test.equal(
+      after.fragment_normalization_builds - before.fragment_normalization_builds,
+      1
+    )
+    test.equal(
+      after.fragment_normalization_cache_hits - before.fragment_normalization_cache_hits,
+      1
+    )
+  end)
+
   test.it("keeps drag-selection heading layout stable until release", function()
-    local view, doc = make_view("## Title ##\nbody", "note.md")
+    local view, doc = make_view(
+      "## Title ##\nbody\nplain 3\nplain 4\nplain 5\nplain 6\nplain 7\nplain 8",
+      "note.md"
+    )
     doc:set_selection(2, 1)
     refresh(view)
     test.equal(view:get_x_offset_col(1, 1), 4)
+    view:get_visual_row_metric_cache()
+    local before = view:get_render_cache_diagnostics()
     view:begin_line_render_interaction("test")
+    local begun = view:get_render_cache_diagnostics()
+    test.equal(begun.line_invalidations, before.line_invalidations)
+    test.equal(begun.metric_invalidations, before.metric_invalidations)
     doc:set_selection(1, 4)
     test.equal(view:get_x_offset_col(1, 1), 4)
     test.equal(view:get_col_x_offset(1, 4), 0)
+    local moved = view:get_render_cache_diagnostics()
+    test.equal(
+      moved.line_invalidations,
+      begun.line_invalidations,
+      "frozen drag rendering should defer selection invalidation until release"
+    )
+    test.equal(moved.metric_invalidations, begun.metric_invalidations)
     view:end_line_render_interaction("test")
     test.ok(view:get_col_x_offset(1, 4) > 0)
+    local ended = view:get_render_cache_diagnostics()
+    test.ok(
+      ended.line_invalidations - begun.line_invalidations <= 2,
+      "ending the interaction should invalidate only selection-dependent lines"
+    )
   end)
 
   test.it("reveals every multi-cursor line without expanding lines between them", function()
@@ -1823,6 +1861,70 @@ test.describe("Markdown Live Editor", function()
     test.ok(delta < #doc.lines, "ordinary body edit invalidated every Markdown row")
   end)
 
+  test.it("preserves cached metrics when an active link changes its wrapped row count", function()
+    local target = string.rep("long-target-segment-", 12) .. ".md"
+    local lines = { "[short](" .. target .. ")", "plain" }
+    for i = 1, 100 do lines[#lines + 1] = "unchanged line " .. i end
+    local view, doc = make_view(table.concat(lines, "\n"), "wrapped-link-edit.md")
+    view.size.x = 220
+    view:set_wrapping_enabled(true)
+    doc:set_selection(2, 1)
+    refresh(view)
+    view:update_wrap_cache()
+    view:get_visual_row_metric_cache()
+    local before = view:get_render_cache_diagnostics().metric_full_rebuilds
+
+    doc:set_selection(1, 3)
+    view:get_visual_row_metric_cache()
+
+    local after = view:get_render_cache_diagnostics()
+    test.equal(
+      after.metric_full_rebuilds,
+      before,
+      string.format(
+        "a local wrapped-row count change should preserve unaffected metrics (splices=%s invalidations=%s)",
+        tostring(after.metric_row_splices), tostring(after.metric_invalidations)
+      )
+    )
+
+    local splices_before_edit = after.metric_row_splices
+    doc:insert(1, 9, string.rep("typed-segment-", 12))
+    view:get_visual_row_metric_cache()
+    local edited = view:get_render_cache_diagnostics()
+    test.equal(
+      edited.metric_full_rebuilds,
+      before,
+      "typing a local wrapped-row count change should preserve unaffected metrics"
+    )
+    test.ok(
+      edited.metric_row_splices > splices_before_edit,
+      "typing should splice the changed wrapped rows into the metric cache"
+    )
+  end)
+
+  test.it("reports visual metric cache rebuilds and steady-state hits", function()
+    local view = make_view("# Heading\n\nplain\n\n![diagram](missing.png)", "metric-diagnostics.md")
+    refresh(view)
+
+    local before = view:get_render_cache_diagnostics()
+    view:get_visual_row_metric_cache()
+    view:get_visual_row_metric_cache()
+    local after = view:get_render_cache_diagnostics()
+
+    test.ok(
+      after.metric_full_rebuilds > (before.metric_full_rebuilds or 0),
+      "expected the cold visual metric lookup to report a full rebuild"
+    )
+    test.ok(
+      after.metric_cache_hits > (before.metric_cache_hits or 0),
+      "expected the warmed visual metric lookup to report a cache hit"
+    )
+    test.ok(
+      after.metric_full_rebuild_rows >= #view.doc.lines,
+      "expected the diagnostic to report rows processed by the full rebuild"
+    )
+  end)
+
   test.it("presents Setext headings through the semantic heading path", function()
     local view, doc = make_view("Setext title\n============\nplain", "setext.md")
     doc:set_selection(3, 1)
@@ -2426,7 +2528,7 @@ test.describe("Markdown Live Editor", function()
     test.equal(drawn, 2)
   end)
 
-  test.it("fills block image width while preserving explicit image sizes", function()
+  test.it("fills available width for image blocks, including images beside text", function()
     local image_path = USERDIR .. PATHSEP .. "markdown-live-full-width-" .. system.get_process_id() .. ".png"
     local fp = test.not_nil(io.open(image_path, "wb"))
     fp:write("png")
@@ -2461,8 +2563,8 @@ test.describe("Markdown Live Editor", function()
       test.equal(full.widget.image_height, math.floor(available / 2))
       test.equal(sized.widget.width, 300)
       test.equal(sized.widget.image_height, 150)
-      test.equal(inline.widget.width, 200)
-      test.equal(inline.widget.image_height, 100)
+      test.equal(inline.widget.width, available)
+      test.equal(inline.widget.image_height, math.floor(available / 2))
 
       view.size.x = 600
       local resized = test.not_nil(rendered_image(1))
@@ -2472,6 +2574,51 @@ test.describe("Markdown Live Editor", function()
       test.ok(resized.widget.width < full.widget.width)
     end)
     canvas.load_image = old_load_image
+    os.remove(image_path)
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("keeps inline image blocks directly below source with a narrow prose wrap width", function()
+    local image_url = "inline-block-" .. system.get_process_id() .. ".png"
+    local image_path = USERDIR .. PATHSEP .. image_url
+    local fp = test.not_nil(io.open(image_path, "wb"))
+    fp:write("png")
+    fp:close()
+    local source = "before ![[" .. image_url .. "]] after"
+    local view, doc = make_view(source .. "\nother", USERDIR .. PATHSEP .. "inline-block-note.md")
+    view.size.x = 800
+    view:set_wrapping_enabled(true)
+    doc:set_selection(1, 12)
+
+    local old_width_override = config.plugins.linewrapping.width_override
+    local old_load_image = canvas.load_image
+    config.plugins.linewrapping.width_override = 120
+    canvas.load_image = function()
+      return {
+        get_size = function() return 200, 100 end,
+        scaled = function(self) return self end,
+      }
+    end
+    local ok, err = pcall(function()
+      refresh(view)
+      local image
+      for _, fragment in ipairs(test.not_nil(view:get_line_render(1)).fragments or {}) do
+        if fragment.widget and fragment.widget.type == "image" then image = fragment break end
+      end
+      image = test.not_nil(image)
+      local scrollbar_width = view.v_scrollbar.expanded_size or style.expanded_scrollbar_size
+      local available = math.floor(
+        view:get_presentation_viewport_width() - view:get_gutter_width() - scrollbar_width
+      )
+      test.equal(image.widget.width, available)
+      test.equal(
+        image.draw_y_offset,
+        math.floor(live_body_font(view):get_height() * config.line_height)
+          + image.widget.padding
+      )
+    end)
+    canvas.load_image = old_load_image
+    config.plugins.linewrapping.width_override = old_width_override
     os.remove(image_path)
     if not ok then error(err, 0) end
   end)
@@ -2570,21 +2717,30 @@ test.describe("Markdown Live Editor", function()
 
     local function draw_positions()
       image_y, drawn_text = nil, {}
+      local image_height
+      for _, fragment in ipairs(test.not_nil(view:get_line_render(1)).fragments or {}) do
+        if fragment.widget and fragment.widget.type == "image" then
+          image_height = fragment.widget.image_height
+          break
+        end
+      end
       view:draw_line_text(1, 0, 0)
       local before_y, after_y
       for _, draw in ipairs(drawn_text) do
         if draw.text:find("before", 1, true) then before_y = draw.y end
         if draw.text:find("after", 1, true) then after_y = draw.y end
       end
-      return before_y, image_y, after_y
+      return before_y, image_y, after_y, test.not_nil(image_height)
     end
 
     refresh(view)
-    local inactive_before_y, inactive_image_y, inactive_after_y = draw_positions()
+    local inactive_before_y, inactive_image_y, inactive_after_y, inactive_image_height =
+      draw_positions()
     local _, inactive_before_caret_y = view:get_line_screen_position(1, 1)
     local _, inactive_after_caret_y = view:get_line_screen_position(1, #source + 1)
     doc:set_selection(1, image_end)
-    local active_before_y, active_image_y, active_after_y = draw_positions()
+    local active_before_y, active_image_y, active_after_y, active_image_height =
+      draw_positions()
     local active_render = test.not_nil(view:get_line_render(1))
     local visible = {}
     for _, fragment in ipairs(view:iter_line_render_fragments(active_render)) do
@@ -2600,9 +2756,11 @@ test.describe("Markdown Live Editor", function()
     os.remove(image_path)
     test.ok(inactive_before_y < inactive_image_y)
     test.ok(inactive_image_y < inactive_after_y)
+    test.ok(inactive_image_y + inactive_image_height <= inactive_after_y)
     test.ok(inactive_before_caret_y < inactive_after_caret_y)
     test.ok(active_before_y < active_image_y)
     test.ok(active_image_y < active_after_y)
+    test.ok(active_image_y + active_image_height <= active_after_y)
     test.ok(table.concat(visible):find(image_source, 1, true))
     test.equal(active_source_caret_y, inactive_before_caret_y)
     test.ok(active_source_caret_y < active_after_caret_y)
@@ -2886,14 +3044,17 @@ test.describe("Markdown Live Editor", function()
     local old_draw_rect = renderer.draw_rect
     local old_draw_text = renderer.draw_text
     local old_draw_text_known_bounds = renderer.draw_text_known_bounds
-    local drawn = 0
+    local drawn, drawn_y = 0, nil
     canvas.load_image = function()
       return {
         get_size = function() return 80, 40 end,
         scaled = function(self) return self end,
       }
     end
-    renderer.draw_canvas = function() drawn = drawn + 1 end
+    renderer.draw_canvas = function(_, _, y)
+      drawn = drawn + 1
+      drawn_y = y
+    end
     renderer.draw_rect = function() end
     renderer.draw_text = function(font, text, x, _, _, opts)
       return x + font:get_width(text, opts)
@@ -2902,7 +3063,7 @@ test.describe("Markdown Live Editor", function()
 
     local function draw_image_line()
       view:update_wrap_cache()
-      drawn = 0
+      drawn, drawn_y = 0, nil
       view:draw_line_text(1, 0, 0)
       return drawn, view:get_visual_row_count_for_line(1)
     end
@@ -2917,6 +3078,15 @@ test.describe("Markdown Live Editor", function()
     view:on_mouse_released("left", x + 1, y + 1)
     local released_drawn, released_rows = draw_image_line()
     local released_last_row_height = view:get_position_visual_row_height(1, #source + 1)
+    local released_image_height
+    for _, fragment in ipairs(test.not_nil(view:get_line_render(1)).fragments or {}) do
+      if fragment.widget and fragment.widget.type == "image" then
+        released_image_height = fragment.widget.image_height
+        break
+      end
+    end
+    local _, next_line_y = view:get_line_screen_position(2)
+    local released_image_bottom = test.not_nil(drawn_y) + test.not_nil(released_image_height)
 
     renderer.draw_text_known_bounds = old_draw_text_known_bounds
     renderer.draw_text = old_draw_text
@@ -2933,6 +3103,13 @@ test.describe("Markdown Live Editor", function()
     test.equal(released_drawn, 1)
     test.ok(released_rows > 1)
     test.ok(released_last_row_height > view:get_line_height())
+    test.ok(
+      released_image_bottom <= next_line_y,
+      string.format(
+        "active image bottom should stay above the next line (%s > %s)",
+        tostring(released_image_bottom), tostring(next_line_y)
+      )
+    )
   end)
 
   test.it("renders wikilink image embeds from Obsidian attachmentFolderPath", function()

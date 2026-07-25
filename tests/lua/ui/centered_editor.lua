@@ -159,6 +159,45 @@ test.describe("centered editor", function()
     test.equal(select(2, centered_editor.get_lane_rect(markdown_view)), 150)
   end)
 
+  test.it("keeps Markdown Live Preview caches stable across centered geometry", function(context)
+    local view, doc = open_editor(
+      context,
+      "# Heading\n\n| Name | Value |\n| --- | --- |\n| one | two |\n\nplain\n"
+    )
+    doc.filename = "centered-cache.md"
+    doc.abs_filename = "centered-cache.md"
+    test.equal(markdown.live_render.refresh_view(view), true)
+    view.wrapping_enabled = true
+    view:update_wrap_cache()
+
+    view:get_visual_row_metric_cache()
+    view:get_line_render(1)
+    local before = view:get_render_cache_diagnostics()
+
+    centered_editor.with_editor_geometry(view, function()
+      for _ = 1, 100 do view:get_visual_row_metric_cache() end
+      view:get_line_render(1)
+    end)
+    for _ = 1, 100 do view:get_visual_row_metric_cache() end
+    view:get_line_render(1)
+
+    local after = view:get_render_cache_diagnostics()
+    test.equal(after.metric_full_rebuilds, before.metric_full_rebuilds)
+    test.equal(after.metric_signature_changes, before.metric_signature_changes)
+    test.equal(after.line_signature_misses, before.line_signature_misses)
+    test.equal(
+      after.metric_signature_computations,
+      before.metric_signature_computations,
+      "cache hits should reuse the validated metric signature"
+    )
+    test.ok(
+      after.metric_signature_cache_hits - before.metric_signature_cache_hits >= 200,
+      "expected repeated metric lookups to hit the signature cache"
+    )
+
+    test.equal(markdown.live_render.detach(view), true)
+  end)
+
   test.it("allows unwrapped right-side drawn text to receive document mouse commands", function(context)
     local view = open_editor(context, string.rep("x", 1000) .. "\n")
     local lane_x, lane_width = centered_editor.get_lane_rect(view)

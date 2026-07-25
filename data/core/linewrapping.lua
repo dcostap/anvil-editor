@@ -700,6 +700,7 @@ function LineWrapping.update_same_line_suffix_breaks(docview, range, transaction
   if not first_idx then return false end
   local total = LineWrapping.get_total_wrapped_lines(docview)
   local next_first_idx = docview.wrapped_line_to_idx[line + 1] or (total + 1)
+  local old_wrap_generation = docview.__wrap_layout_generation or 0
   if next_first_idx <= first_idx then return false end
 
   local affected_col = math.max(1, tonumber(edit.col1) or 1)
@@ -747,6 +748,21 @@ function LineWrapping.update_same_line_suffix_breaks(docview, range, transaction
     end
   end
 
+  local new_total = LineWrapping.get_total_wrapped_lines(docview)
+  docview.wrapped_doc_line_count = #docview.doc.lines
+  docview.wrapped_text_revision = docview.doc.text_revision or 0
+  docview.__wrap_layout_generation = old_wrap_generation + 1
+  docview.__composed_visual_row_cache = nil
+  docview.__line_render_wrap_change = {
+    old_row_count = total,
+    new_row_count = new_total,
+    old_row1 = first_idx,
+    old_row2 = next_first_idx - 1,
+    new_row1 = docview.wrapped_line_to_idx[line] or first_idx,
+    new_row2 = (docview.wrapped_line_to_idx[line + 1] or (new_total + 1)) - 1,
+    old_wrap_generation = old_wrap_generation,
+  }
+
   perf_frame_add("linewrapping_update_breaks_partial_calls", 1)
   perf_frame_add("linewrapping_update_breaks_partial_preserved_rows", restart_idx - first_idx)
   perf_frame_add("linewrapping_update_breaks_calls", 1)
@@ -759,6 +775,8 @@ function LineWrapping.update_breaks(docview, old_line1, old_line2, net_lines)
   local perf_active = core.perf_frame_stats ~= nil
   local perf_start = perf_active and system.get_time()
   local perf_lines = 0
+  local old_row_count = LineWrapping.get_total_wrapped_lines(docview)
+  local old_wrap_generation = docview.__wrap_layout_generation or 0
   local old_idx1 = docview.wrapped_line_to_idx[old_line1] or 1
   local old_idx2 = (docview.wrapped_line_to_idx[old_line2 + 1] or ((#docview.wrapped_lines / 2) + 1)) - 1
   local offset = (old_idx1 - 1) * 2 + 1
@@ -795,6 +813,16 @@ function LineWrapping.update_breaks(docview, old_line1, old_line2, net_lines)
   docview.wrapped_text_revision = docview.doc.text_revision or 0
   docview.__wrap_layout_generation = (docview.__wrap_layout_generation or 0) + 1
   docview.__composed_visual_row_cache = nil
+  local new_row_count = LineWrapping.get_total_wrapped_lines(docview)
+  docview.__line_render_wrap_change = {
+    old_row_count = old_row_count,
+    new_row_count = new_row_count,
+    old_row1 = old_idx1,
+    old_row2 = old_idx2,
+    new_row1 = docview.wrapped_line_to_idx[new_line1] or 1,
+    new_row2 = (docview.wrapped_line_to_idx[new_line2 + 1] or (new_row_count + 1)) - 1,
+    old_wrap_generation = old_wrap_generation,
+  }
   perf_frame_add("linewrapping_update_breaks_calls", 1)
   perf_frame_add("linewrapping_update_breaks_lines", perf_lines)
   perf_elapsed("linewrapping_update_breaks_ms", perf_start)
