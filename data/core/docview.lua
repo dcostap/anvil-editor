@@ -1410,6 +1410,32 @@ function DocView:line_numbers_visible()
   return config.show_line_numbers
 end
 
+---Whether the line number for one logical line should be drawn.
+---Decoration providers may return a boolean from `line_number_visible` to
+---override the normal all-lines presentation for a specialized Editor mode.
+---@param line integer Logical Document line
+---@return boolean visible
+function DocView:line_number_visible_at(line)
+  if not self:line_numbers_visible() then return false end
+  local visible = true
+  for _, entry in ipairs(self:decoration_provider_entries()) do
+    local provider = entry.provider
+    local fn = provider and provider.line_number_visible
+    if fn then
+      local ok, result = pcall(fn, provider, self, line)
+      if ok and type(result) == "boolean" then
+        visible = result
+      elseif not ok then
+        core.log_quiet(
+          "DocView decoration provider %s.line_number_visible failed for %s: %s",
+          tostring(entry.id), self.doc:get_name(), tostring(result)
+        )
+      end
+    end
+  end
+  return visible
+end
+
 ---Get the standard Document View gutter width.
 ---@return number width Total gutter width
 ---@return number padding Padding within gutter
@@ -2862,7 +2888,7 @@ end
 function DocView:draw_fold_widget_gutter(fold, x, y, width)
   local lh = self:get_line_height()
   renderer.draw_rect(x, y, width, lh, style.gutter_bg or style.background2)
-  if self:line_numbers_visible() then
+  if self:line_number_visible_at(fold.line1) then
     local color = selection_overlaps_fold(self.doc, fold) and style.line_number2 or style.line_number
     common.draw_text(self:get_font(), color, tostring(fold.line1), "right", x + style.padding.x, y, width - style.padding.x, lh)
   end
@@ -4726,8 +4752,12 @@ function DocView:draw_line_text(line, x, y)
             tx = tx + (fragment.width or fragment.widget.width or 0)
           else
             local text = fragment.text or ""
-            local text_from = math.min(#text + 1, from - col1 + 1)
-            local text_to = math.min(#text, to - col1)
+            local text_col1 = fragment.text_source_col1 or col1
+            local text_col2 = fragment.text_source_col2 or col2
+            local visible_from = math.max(from, text_col1)
+            local visible_to = math.min(to, text_col2)
+            local text_from = math.min(#text + 1, visible_from - text_col1 + 1)
+            local text_to = math.min(#text, visible_to - text_col1)
             local segment = text_to >= text_from and text:sub(text_from, text_to) or ""
             if segment ~= "" then
               local color = render_fragment_color(fragment)
@@ -5809,7 +5839,7 @@ function DocView:draw_line_gutter(line, x, y, width)
   local row_height = uses_wrapped_rows and lh
     or self:get_position_visual_row_height(line, 1)
   local height = row_height
-  if self:line_numbers_visible() and row_height >= self:get_font():get_height() then
+  if self:line_number_visible_at(line) and row_height >= self:get_font():get_height() then
     local color = style.line_number
     local gutter_selection_cache = self.__line_gutter_selection_cache
     if gutter_selection_cache then

@@ -16,6 +16,8 @@ Targeted visual-height updates now identify the old first visible metric row bef
 
 Current Line Highlights, selections, search markers, line-number layout, decoration backgrounds, and carets resolve the same visual-row metric as rendered text. Enlarged headings therefore keep their text, row chrome, and caret geometry aligned instead of mixing heading metrics with the base Editor line height.
 
+Markdown Live Preview retains the normal gutter width without drawing line numbers. Source Mode restores ordinary all-line numbering, and Standard Editors remain unchanged.
+
 ## Pending-publication continuity
 
 Once a current semantic snapshot has produced a rendered line, ordinary single-line text input does not send that line through raw Source presentation while the background parser catches up. A pre-change Document listener captures the authoritative presentation before selection and transaction invalidation can discard it. The line-render transaction hook then clones those fragments, applies the exact source edit to the containing identity-mapped fragment, and keeps the same fonts, hidden markers, decorations, source columns, and visual-row height. Repeated keystrokes can advance this view-local optimistic render through several pending parser generations.

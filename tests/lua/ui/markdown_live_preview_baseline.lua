@@ -371,4 +371,61 @@ test.describe("Markdown Live Preview prototype baseline", function()
       test.ok(rendered_rows < raw_rows)
     end)
   end)
+
+  test.it("keeps UTF-8 link text intact across rendered wrap rows", function()
+    with_live_preview(function()
+      local target = "21-09-2021#Conf Impresoras Plotter Oficina técnica"
+      local prefix = "Install "
+      local source = prefix .. "[[" .. target .. "]]"
+      local view, doc = make_view(source .. "\nother")
+      doc:set_selection(2, 1)
+      refresh(view)
+
+      local render_line = test.not_nil(view:get_line_render(1))
+      local link
+      for _, fragment in ipairs(render_line.fragments or {}) do
+        if fragment.link and fragment.text == target then
+          link = fragment
+          break
+        end
+      end
+      link = test.not_nil(link)
+
+      local accent_byte = test.not_nil(target:find("é", 1, true))
+      local target_col1 = test.not_nil(source:find(target, 1, true))
+      test.equal(link.text_source_col1, target_col1)
+      test.equal(link.text_source_col2, target_col1 + #target)
+      local candidate_split = target_col1 + accent_byte - 1
+      local split_x = view:get_line_render_col_x_offset(render_line, candidate_split)
+      local next_x = view:get_line_render_col_x_offset(render_line, candidate_split + 2)
+      local width = split_x + (next_x - split_x) / 2
+      local old_mode = config.plugins.linewrapping.mode
+      config.plugins.linewrapping.mode = "letter"
+      linewrapping.reconstruct_breaks(view, view:get_font(), width)
+      test.equal(linewrapping.is_soft_wrap_row_start(view, 1, candidate_split), true)
+
+      local old_draw_text = renderer.draw_text
+      local old_draw_rect = renderer.draw_rect
+      local drawn = {}
+      renderer.draw_text = function(font, text, x, y, color, opts)
+        drawn[#drawn + 1] = text
+        return x + font:get_width(text, opts)
+      end
+      renderer.draw_rect = function() end
+      local ok, err = pcall(view.draw_line_text, view, 1, 0, 0)
+      renderer.draw_text = old_draw_text
+      renderer.draw_rect = old_draw_rect
+      config.plugins.linewrapping.mode = old_mode
+      if not ok then error(err, 0) end
+
+      test.equal(table.concat(drawn), prefix .. target)
+      for _, segment in ipairs(drawn) do
+        local characters = {}
+        for character in common.utf8_chars(segment) do
+          characters[#characters + 1] = character
+        end
+        test.equal(table.concat(characters), segment)
+      end
+    end)
+  end)
 end)

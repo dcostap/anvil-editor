@@ -710,6 +710,15 @@ local function image_vertical_padding()
   return math.max(1, math.floor(6 * SCALE))
 end
 
+local function image_available_width(view)
+  local width = linewrapping.compute_wrap_width(view)
+  if width == math.huge then
+    local scrollbar_width = view.v_scrollbar.expanded_size or style.expanded_scrollbar_size
+    width = view.size.x - view:get_gutter_width() - scrollbar_width
+  end
+  return math.max(1, math.floor(width))
+end
+
 local function add_fragment(fragments, occupied, fragment)
   local col1 = fragment.source_col1 or 1
   local col2 = fragment.source_col2 or col1
@@ -785,7 +794,18 @@ local function image_fragment(view, span, opts)
 
   if entry.status == "ready" and entry.image then
     local natural_w, natural_h = entry.image:get_size()
-    local width, height = images.scale_size(natural_w, natural_h, 320 * SCALE, link.resize, false)
+    local width, height
+    if opts.block then
+      local available_width = math.max(1, math.floor(opts.available_width or image_available_width(view)))
+      local resize = link.resize or { width = available_width }
+      width, height = images.scale_size(
+        natural_w, natural_h, available_width, resize, true
+      )
+    else
+      width, height = images.scale_size(
+        natural_w, natural_h, 320 * SCALE, link.resize, false
+      )
+    end
     local padding = image_vertical_padding()
     return {
       source_col1 = span.col1,
@@ -993,14 +1013,18 @@ end
 local revealed_link_fragments
 
 local function image_only_render_line(view, text, line, span, active)
-  local image = image_fragment(view, span, active and { width = 0 } or nil)
+  local body_font = markdown_live_body_font(view)
+  local leading_width = span.col1 > 1
+    and body_font:get_width(text:sub(1, span.col1 - 1)) or 0
+  local image = image_fragment(view, span, {
+    block = true,
+    available_width = image_available_width(view) - leading_width,
+    width = active and 0 or nil,
+  })
   if not image then return nil end
   image.semantic_id = span.semantic_id
   image.image_anchor = true
   if active and image.widget then
-    local body_font = markdown_live_body_font(view)
-    local leading_width = span.col1 > 1
-      and body_font:get_width(text:sub(1, span.col1 - 1)) or 0
     image.source_col1 = #text + 1
     image.source_col2 = #text + 1
     image.draw_x_offset = leading_width - body_font:get_width(text)
@@ -1181,6 +1205,30 @@ local function embed_preview_fragment(view, line_text, span)
   }
 end
 
+local function link_text_source_range(line_text, span, label)
+  if not label or label == "" then return nil end
+  local attributes = span.attributes or {}
+  local candidate_names = {
+    "alias", "target", "link_text", "image_alt",
+    "reference_label", "link_destination",
+  }
+  for _, name in ipairs(candidate_names) do
+    local range = attributes[name]
+    if range and (not range.line1 or range.line1 == span.line)
+      and (not range.line2 or range.line2 == span.line)
+    then
+      local col1 = math.max(span.col1, range.col1 or span.col1)
+      local col2 = math.min(span.col2, range.col2 or span.col2)
+      local source = col2 > col1 and line_text:sub(col1, col2 - 1) or ""
+      local offset = source:find(label, 1, true)
+      if offset then
+        local text_col1 = col1 + offset - 1
+        return text_col1, text_col1 + #label
+      end
+    end
+  end
+end
+
 local function semantic_link_fragments(view, line_text, line, reveal_units, opts)
   local fragments = {}
   for _, span in ipairs(semantic_link_spans(view, line_text, line)) do
@@ -1229,6 +1277,11 @@ local function semantic_link_fragments(view, line_text, line, reveal_units, opts
             text = label,
             color = style.markdown_live_link,
           }
+        end
+        local text_col1, text_col2 = link_text_source_range(line_text, span, fragment.text)
+        if text_col1 then
+          fragment.text_source_col1 = text_col1
+          fragment.text_source_col2 = text_col2
         end
       end
       fragment = decorate_link_fragment(view, line, span, fragment, opts)
@@ -2640,10 +2693,16 @@ function decoration_provider:line_background(view, line)
   return nil
 end
 
+function decoration_provider:line_number_visible(view)
+  if view_in_source_mode(view) then return nil end
+  return false
+end
+
 function provider:generation(view)
   local font = markdown_live_body_font(view)
   return tostring(font) .. ":" .. tostring(font:get_size())
     .. ":width:" .. tostring(table_available_width(view))
+    .. ":image-width:" .. tostring(image_available_width(view))
 end
 
 function provider:line_generation(view, line)

@@ -95,6 +95,38 @@ test.describe("Markdown Live Editor", function()
     test.equal(txt.__markdown_live_attached, nil)
   end)
 
+  test.it("hides gutter line numbers in Live Preview", function()
+    local view, doc = make_view("one\ntwo\nthree\nfour", "sparse-gutter.md")
+    doc:set_selections(1, 2, 1, 1, 1)
+    doc:set_selections(2, 4, 1, 4, 1, nil, 0)
+    refresh(view)
+
+    local old_show_line_numbers = config.show_line_numbers
+    local old_draw_text = common.draw_text
+    config.show_line_numbers = true
+    local drawn = {}
+    common.draw_text = function(_, _, text)
+      drawn[#drawn + 1] = tostring(text)
+    end
+    local ok, err = pcall(function()
+      local width = view:get_gutter_width()
+      for line = 1, 4 do
+        view:draw_line_gutter(line, 0, 0, width)
+      end
+      test.same(drawn, {})
+
+      markdown.live_render.set_source_mode(view, true, "test-sparse-gutter")
+      drawn = {}
+      for line = 1, 4 do
+        view:draw_line_gutter(line, 0, 0, width)
+      end
+      test.same(drawn, { "1", "2", "3", "4" })
+    end)
+    common.draw_text = old_draw_text
+    config.show_line_numbers = old_show_line_numbers
+    if not ok then error(err, 0) end
+  end)
+
   test.it("uses Inter for Live Preview prose while keeping code monospaced", function()
     local view, doc = make_view(
       "Plain **bold**, *italic*, ***both***, and `code`\n```lua\nreturn true\n```\n", "note.md"
@@ -2339,6 +2371,56 @@ test.describe("Markdown Live Editor", function()
     test.equal(drawn, 2)
   end)
 
+  test.it("fills block image width while preserving explicit image sizes", function()
+    local image_path = USERDIR .. PATHSEP .. "markdown-live-full-width-" .. system.get_process_id() .. ".png"
+    local fp = test.not_nil(io.open(image_path, "wb"))
+    fp:write("png")
+    fp:close()
+    local image_url = common.basename and common.basename(image_path)
+      or image_path:match("[^" .. PATHSEP .. "]+$")
+    local source = "![Full](" .. image_url .. ")\n![Sized|300](" .. image_url
+      .. ")\nBefore ![Inline](" .. image_url .. ") after\nother"
+    local view, doc = make_view(source, USERDIR .. PATHSEP .. "full-width-note.md")
+    view.size.x = 800
+    doc:set_selection(4, 1)
+
+    local old_load_image = canvas.load_image
+    canvas.load_image = function()
+      return {
+        get_size = function() return 200, 100 end,
+        scaled = function(self) return self end,
+      }
+    end
+    local ok, err = pcall(function()
+      refresh(view)
+      local function rendered_image(line)
+        for _, fragment in ipairs(view:get_line_render(line).fragments or {}) do
+          if fragment.widget and fragment.widget.type == "image" then return fragment end
+        end
+      end
+      local full = test.not_nil(rendered_image(1))
+      local sized = test.not_nil(rendered_image(2))
+      local inline = test.not_nil(rendered_image(3))
+      local available = math.floor(linewrapping.compute_wrap_width(view))
+      test.equal(full.widget.width, available)
+      test.equal(full.widget.image_height, math.floor(available / 2))
+      test.equal(sized.widget.width, 300)
+      test.equal(sized.widget.image_height, 150)
+      test.equal(inline.widget.width, 200)
+      test.equal(inline.widget.image_height, 100)
+
+      view.size.x = 600
+      local resized = test.not_nil(rendered_image(1))
+      local resized_available = math.floor(linewrapping.compute_wrap_width(view))
+      test.equal(resized.widget.width, resized_available)
+      test.equal(resized.widget.image_height, math.floor(resized_available / 2))
+      test.ok(resized.widget.width < full.widget.width)
+    end)
+    canvas.load_image = old_load_image
+    os.remove(image_path)
+    if not ok then error(err, 0) end
+  end)
+
   test.it("keeps image source active at its right edge with link styling and a text-height caret", function()
     local image_path = USERDIR .. PATHSEP .. "markdown-live-source-caret-" .. system.get_process_id() .. ".png"
     local fp = io.open(image_path, "wb")
@@ -2872,7 +2954,7 @@ test.describe("Markdown Live Editor", function()
     os.remove(image_path)
   end)
 
-  test.it("keeps tiny image rows at least normal line height", function()
+  test.it("keeps block image rows at least normal line height", function()
     local image_path = USERDIR .. PATHSEP .. "markdown-live-tiny-image-" .. system.get_process_id() .. ".png"
     local fp = io.open(image_path, "wb")
     test.not_nil(fp)
@@ -2892,9 +2974,9 @@ test.describe("Markdown Live Editor", function()
     end
 
     refresh(view)
-    test.equal(
-      view:get_visual_row_height(1),
-      math.floor(live_body_font(view):get_height() * config.line_height)
+    test.ok(
+      view:get_visual_row_height(1)
+        >= math.floor(live_body_font(view):get_height() * config.line_height)
     )
 
     canvas.load_image = old_load_image
