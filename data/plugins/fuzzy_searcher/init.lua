@@ -62,6 +62,7 @@ end
 
 local fuzzy_searcher = {
   copy_feedback = require "core.copy_feedback",
+  file_icons = require "core.file_icons",
   result_limit = 30,
   max_result_limit = 500,
   width = 0.90,
@@ -2093,7 +2094,10 @@ local function draw_everything_result_row(font, r, x, y, width)
   local path_w = math.max(0, width - meta_w)
   local kind = r.is_folder and "folder" or "file"
   local kind_color = r.is_folder and (style.accent) or (style.dim)
-  draw_file_result_row(font, r.path or r.label, r.match_spans, r.is_folder and "@ " or "", x, y, path_w)
+  draw_file_result_row(
+    font, r.path or r.label, r.match_spans, r.is_folder and "@ " or "",
+    x, y, path_w, nil, nil, nil, not r.is_folder
+  )
   local mx = x + path_w + gap
   renderer.draw_text(font, kind, mx, y, kind_color)
   mx = mx + kind_w
@@ -2147,11 +2151,19 @@ local function project_path_prefix_color(role)
   return style.project_path_external
 end
 
-draw_file_result_row = function(font, file, spans, prefix, x, y, width, suffix, prefix_span, root_role)
+draw_file_result_row = function(font, file, spans, prefix, x, y, width, suffix, prefix_span, root_role, show_file_icon)
   file = tostring(file or "")
   spans = spans or {}
   prefix = prefix or ""
   suffix = suffix or ""
+
+  if show_file_icon then
+    local row_height = font:get_height()
+    local icon_column_width = fuzzy_searcher.file_icons.column_width(row_height)
+    fuzzy_searcher.file_icons.draw(file, x, y, row_height)
+    x = x + icon_column_width
+    width = math.max(0, width - icon_column_width)
+  end
 
   local path_font = style.get_small_font(font)
   local prefix_color = style.dim
@@ -2238,7 +2250,10 @@ local function draw_grep_result_row(font, result, x, y, width, collapse_file, co
   else
     local prefix = result.exact and "# " or "~# "
     local _end_x
-    _end_x, line_x = draw_file_result_row(font, result.file or "", result.file_spans, prefix, x, y, path_w, line_suffix, result.prefix_span, result.root_role)
+    _end_x, line_x = draw_file_result_row(
+      font, result.file or "", result.file_spans, prefix, x, y, path_w,
+      line_suffix, result.prefix_span, result.root_role, true
+    )
   end
   if text_w <= 0 then return line_x end
   local preview_font = style.get_small_font(font)
@@ -4959,7 +4974,10 @@ function FSView:draw()
         previous_rendered_grep_line_x = nil
         previous_rendered_was_grep = false
         local file_text_w = r.recent and fuzzy_searcher.draw_recent_file_metadata(font, r, x + pad, row_y, row_text_w) or row_text_w
-        draw_file_result_row(font, r.file or r.label, r.match_spans, "", x + pad, row_y, file_text_w, nil, r.prefix_span, r.root_role)
+        draw_file_result_row(
+          font, r.file or r.label, r.match_spans, "", x + pad, row_y,
+          file_text_w, nil, r.prefix_span, r.root_role, true
+        )
       elseif r.kind == "symbol" then
         previous_rendered_grep_file = nil
         previous_rendered_grep_line_x = nil
@@ -5279,6 +5297,7 @@ return {
     recent_project_key_set = recent_project_key_set,
     format_recent_file_age = fuzzy_searcher.format_recent_file_age,
     draw_recent_file_metadata = fuzzy_searcher.draw_recent_file_metadata,
+    draw_file_result_row = draw_file_result_row,
     split_mode_prefix = split_mode_prefix,
     normalize_prompt_history = fuzzy_searcher.normalize_prompt_history,
     clear_prompt_history = function()

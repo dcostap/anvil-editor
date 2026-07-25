@@ -10,6 +10,7 @@ local style = require "core.style"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
 local file_context = require "core.file_context"
+local file_icons = require "core.file_icons"
 local project_paths = require "core.project_paths"
 local panes = require "core.panes"
 local storage = require "core.storage"
@@ -950,6 +951,11 @@ end
 
 function FileTreeView:get_name()
   return "File Tree: " .. common.relative_path(core.root_project().path, self.current_dir)
+end
+
+function FileTreeView:get_gutter_width()
+  local left_padding = math.max(1, math.floor(2 * (SCALE or 1) + 0.5))
+  return left_padding + file_icons.column_width(self:get_line_height()), 0
 end
 
 function FileTreeView:git_root()
@@ -2155,6 +2161,11 @@ function FileTreeView:draw_line_gutter(line, x, y, width)
     local color = filetree_render.git_gutter_color(status) or style.git_change_deletion
     local w = style.gitdiff_width
     renderer.draw_rect(x + style.padding.x * 0.5, y, w, lh, color)
+  end
+  local parsed = self:parse_line(line)
+  if parsed and not self:line_is_dir(line) then
+    local icon_column_width = file_icons.column_width(lh)
+    file_icons.draw(parsed.name, x + math.max(0, width - icon_column_width), y, lh)
   end
   return lh
 end
