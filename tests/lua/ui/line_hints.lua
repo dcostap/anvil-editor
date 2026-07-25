@@ -104,18 +104,23 @@ test.describe("File Tree Line Hints", function()
 
     local initial_folder_a_hint = filetree:get_line_hint(folder_a_line).text
     local initial_folder_b_hint = filetree:get_line_hint(folder_b_line).text
-    local file_hint = filetree:get_line_hint(file_line).text
+    local file_hint_data = filetree:get_line_hint(file_line)
+    local file_hint = file_hint_data.text
 
     test.ok(initial_folder_a_hint:find("…", 1, true), initial_folder_a_hint)
     test.ok(initial_folder_a_hint:find("·", 1, true), initial_folder_a_hint)
     test.ok(initial_folder_b_hint:find("…", 1, true), initial_folder_b_hint)
     test.ok(initial_folder_b_hint:find("·", 1, true), initial_folder_b_hint)
-    test.ok(initial_folder_a_hint:match("%d%d%d%d %a%a%a%s+%d+ %d%d:%d%d"), initial_folder_a_hint)
+    test.ok(initial_folder_a_hint:find("ago", 1, true)
+      or initial_folder_a_hint:find("just now", 1, true), initial_folder_a_hint)
+    test.ok(not initial_folder_a_hint:match("%d%d%d%d %a%a%a%s+%d+ %d%d:%d%d"), initial_folder_a_hint)
 
     local folder_a_hint = wait_for_folder_count(filetree, folder_a_line, 3)
     local folder_b_hint = wait_for_folder_count(filetree, folder_b_line, 3)
     test.ok(hint_has_folder_count(folder_a_hint, 3), folder_a_hint)
-    test.ok(folder_a_hint:match("%d%d%d%d %a%a%a%s+%d+ %d%d:%d%d"), folder_a_hint)
+    test.ok(folder_a_hint:find("ago", 1, true)
+      or folder_a_hint:find("just now", 1, true), folder_a_hint)
+    test.ok(not folder_a_hint:match("%d%d%d%d %a%a%a%s+%d+ %d%d:%d%d"), folder_a_hint)
     test.ok(hint_has_folder_count(folder_b_hint, 3), folder_b_hint)
 
     local folder_c_hint = wait_for_folder_count(filetree, folder_c_line, 2)
@@ -124,10 +129,14 @@ test.describe("File Tree Line Hints", function()
     test.ok(hint_has_folder_count(folder_d_hint, 0), folder_d_hint)
 
     test.ok(file_hint:find("23 K", 1, true), file_hint)
-    test.ok(file_hint:match("%d%d%d%d %a%a%a%s+%d+ %d%d:%d%d"), file_hint)
+    test.ok(file_hint:find("ago", 1, true)
+      or file_hint:find("just now", 1, true), file_hint)
+    test.ok(not file_hint:match("%d%d%d%d %a%a%a%s+%d+ %d%d:%d%d"), file_hint)
+    test.ok(file_hint_data.font:get_size() < filetree:get_font():get_size(),
+      "File Tree metadata should use a smaller font")
   end)
 
-  test.it("shows a fixed prose age after the modified date", function(context)
+  test.it("shows a fixed prose age without the modified date", function(context)
     local filetree = require "plugins.filetree"
     context.saved_line_hint_state = {
       filetree = filetree,
@@ -162,6 +171,7 @@ test.describe("File Tree Line Hints", function()
       test.not_nil(relative_column, hint)
       test.equal(#relative_column, 12)
       test.equal((relative_column:gsub("%s+$", "")), case[2])
+      test.ok(not hint:match("%d%d%d%d %a%a%a%s+%d+ %d%d:%d%d"), hint)
     end
 
     filetree.line_hint_reference_time = nil
@@ -173,8 +183,7 @@ test.describe("File Tree Line Hints", function()
     local second = filetree:format_line_hint_for_path("relative-time-dir", info)
 
     test.equal(second, first)
-    local relative_column = second:match("· ([^·]*)$")
-    test.equal(#relative_column, 12)
-    test.equal((relative_column:gsub("%s+$", "")), "35 mins ago")
+    test.equal(#second, 12)
+    test.equal((second:gsub("%s+$", "")), "35 mins ago")
   end)
 end)

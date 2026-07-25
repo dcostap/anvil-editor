@@ -277,6 +277,9 @@ style.markdown_live_bold_italic_font = load_text_font(
   markdown_live_bold_italic_font_path, nil,
   { ligatures = true, bold = true, italic = true }
 )
+-- Keep scrollbars visible in a small/contracted form instead of expanding/fading.
+-- Set this before constructing singleton views such as the File Tree.
+config.force_scrollbar_status = "contracted"
 -- First-party editable file tree.
 require_core_plugin "custom_nagview"
 require_core_plugin "filetree"
@@ -344,5 +347,3 @@ config.scroll_animation_type = "constant"
 config.animation_rate = 4
 -- Mouse wheel step; default is 70 * SCALE.
 config.mouse_wheel_scroll = 120 * SCALE
--- Keep scrollbars visible in a small/contracted form instead of expanding/fading.
-config.force_scrollbar_status = "contracted"

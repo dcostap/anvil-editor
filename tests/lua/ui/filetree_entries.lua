@@ -32,6 +32,11 @@ local function find_entry(name)
 end
 
 test.describe("File Tree entry snapshots", function()
+  test.it("uses the configured contracted scrollbar status", function()
+    test.equal(filetree.v_scrollbar.force_status, "contracted")
+    test.equal(filetree.h_scrollbar.force_status, "contracted")
+  end)
+
   test.after_each(function(context)
     if context.original_resolve then
       project_paths.resolve = context.original_resolve

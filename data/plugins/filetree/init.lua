@@ -78,11 +78,6 @@ local function perf_call(stats, key)
 end
 
 local GIT_STATUS_MAX_OUTPUT = 2 * 1024 * 1024
-local MONTH_NAMES = {
-  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-}
-
 local function indent_prefix(level)
   return string.rep(INDENT_TEXT, level)
 end
@@ -270,17 +265,6 @@ local function format_file_size(size)
     rounded = math.floor(value + 0.5)
   end
   return string.format("%3d %s", rounded, units[unit])
-end
-
-local function format_modified_time(modified)
-  local value = tonumber(modified)
-  if not value then return nil end
-  local t = os.date("*t", value)
-  if not t then return nil end
-  return string.format(
-    "%04d %s %2d %02d:%02d",
-    t.year, MONTH_NAMES[t.month] or "???", t.day, t.hour, t.min
-  )
 end
 
 local RELATIVE_TIME_COLUMN_WIDTH = 12
@@ -1998,14 +1982,10 @@ function FileTreeView:format_line_hint_for_path(abs, info)
   local start = perf_start(stats)
   if not info or not info.type then perf_finish(stats, "filetree_line_hint_format_ms", start); return nil end
 
-  local modified = format_modified_time(info.modified)
-  if not modified then perf_finish(stats, "filetree_line_hint_format_ms", start); return nil end
   if not self.line_hint_reference_time then self.line_hint_reference_time = os.time() end
   local relative = format_relative_time(info.modified, self.line_hint_reference_time)
-  local relative_column = relative
-    and string.format("%-" .. RELATIVE_TIME_COLUMN_WIDTH .. "s", relative)
-    or nil
-  local modified_hint = relative_column and string.format("%s · %s", modified, relative_column) or modified
+  if not relative then perf_finish(stats, "filetree_line_hint_format_ms", start); return nil end
+  local relative_hint = string.format("%-" .. RELATIVE_TIME_COLUMN_WIDTH .. "s", relative)
 
   if info.type == "file" then
     self.line_hint_cache = self.line_hint_cache or {}
@@ -2020,7 +2000,7 @@ function FileTreeView:format_line_hint_for_path(abs, info)
     end
 
     perf_add(stats, "filetree_line_hint_cache_misses", 1)
-    local text = string.format("%s · %s", format_file_size(info.size), modified_hint)
+    local text = string.format("%s · %s", format_file_size(info.size), relative_hint)
     self.line_hint_cache[key] = {
       type = info.type,
       size = info.size,
@@ -2031,15 +2011,15 @@ function FileTreeView:format_line_hint_for_path(abs, info)
     return text
   elseif info.type == "dir" then
     local counts = self:get_folder_hint_counts(abs, info.modified, true)
-    if counts and counts.error then perf_finish(stats, "filetree_line_hint_format_ms", start); return modified_hint end
+    if counts and counts.error then perf_finish(stats, "filetree_line_hint_format_ms", start); return relative_hint end
     if counts and counts.folders and counts.files then
       perf_add(stats, "filetree_line_hint_folder_count_hits", 1)
       perf_finish(stats, "filetree_line_hint_format_ms", start)
-      return string.format("%4d   · %s", counts.folders + counts.files, modified_hint)
+      return string.format("%4d   · %s", counts.folders + counts.files, relative_hint)
     end
     perf_add(stats, "filetree_line_hint_folder_count_pending", 1)
     perf_finish(stats, "filetree_line_hint_format_ms", start)
-    return string.format("%s   · %s", "   …", modified_hint)
+    return string.format("%s   · %s", "   …", relative_hint)
   end
   perf_finish(stats, "filetree_line_hint_format_ms", start)
 end
@@ -2064,7 +2044,7 @@ function FileTreeView:get_line_hint(line)
   local text = self:format_line_hint_for_path(entry.abs, info)
   if not text then return finish(nil) end
 
-  local font = self:get_font()
+  local font = style.get_small_font(self:get_font())
   local dim = style.dim
   local git_start = perf_start(stats)
   local git = self:get_git_info_for_entry(entry)
