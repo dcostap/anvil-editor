@@ -113,17 +113,27 @@ test.describe("Fuzzy Searcher recent files", function()
     end
   end)
 
-  test.it("left-aligns Recent File ages in a fixed-width metadata cell", function()
-    local font = {
-      get_height = function() return 14 end,
-      get_width = function(_, text) return #text end,
-    }
+  test.it("uses a smaller font and tight right-aligned cells for Recent File ages", function()
+    local function make_font(size)
+      local font = {}
+      function font:get_height() return size end
+      function font:get_size() return size end
+      function font:get_width(text) return #text * size end
+      function font:copy(new_size) return make_font(new_size) end
+      return font
+    end
+
+    local font = make_font(15)
     local age_x = {}
+    local age_fonts = {}
     local old_draw_text = renderer.draw_text
     local old_draw_canvas = renderer.draw_canvas
-    renderer.draw_text = function(_, text, x)
-      if text == "6 min" or text == "19 d" then age_x[text] = x end
-      return x + #text
+    renderer.draw_text = function(draw_font, text, x)
+      if text == "6 min" or text == "19 d" then
+        age_x[text] = x
+        age_fonts[text] = draw_font
+      end
+      return x + draw_font:get_width(text)
     end
     renderer.draw_canvas = function() end
     local now = os.time()
@@ -135,6 +145,11 @@ test.describe("Fuzzy Searcher recent files", function()
     renderer.draw_canvas = old_draw_canvas
     if not ok then error(err, 0) end
 
-    test.equal(age_x["6 min"], age_x["19 d"])
+    test.ok(age_fonts["6 min"]:get_size() < font:get_size())
+    test.ok(age_fonts["19 d"]:get_size() < font:get_size())
+    test.equal(
+      age_x["6 min"] + age_fonts["6 min"]:get_width("6 min"),
+      age_x["19 d"] + age_fonts["19 d"]:get_width("19 d")
+    )
   end)
 end)

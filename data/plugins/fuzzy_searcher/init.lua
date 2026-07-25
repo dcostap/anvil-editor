@@ -1987,6 +1987,8 @@ end
 
 function fuzzy_searcher.draw_recent_file_metadata(font, r, x, y, width)
   local recent_file_icons = require "core.recent_file_icons"
+  local metadata_font = style.get_small_font(font)
+  local metadata_y = y + math.max(0, math.floor((font:get_height() - metadata_font:get_height()) / 2))
   local parts = {}
   local edited = fuzzy_searcher.format_recent_file_age(r.last_edited)
   local viewed = fuzzy_searcher.format_recent_file_age(r.last_viewed)
@@ -1994,15 +1996,14 @@ function fuzzy_searcher.draw_recent_file_metadata(font, r, x, y, width)
   if viewed then parts[#parts+1] = { icon = "eye", text = viewed } end
   if #parts == 0 then return width end
 
-  local row_height = font:get_height()
+  local row_height = metadata_font:get_height()
   local icon_size = recent_file_icons.size_for_row(row_height)
   local icon_gap = math.max(2 * (SCALE or 1), style.padding.x / 4)
   local separator = "  ·  "
-  local separator_w = font:get_width(separator)
+  local separator_w = metadata_font:get_width(separator)
   local metadata_w = (#parts - 1) * separator_w
-  local age_cell_w = font:get_width("999 min")
   for _, part in ipairs(parts) do
-    part.cell_width = math.max(age_cell_w, font:get_width(part.text))
+    part.cell_width = metadata_font:get_width(part.text)
     metadata_w = metadata_w + icon_size + icon_gap + part.cell_width
   end
 
@@ -2010,10 +2011,10 @@ function fuzzy_searcher.draw_recent_file_metadata(font, r, x, y, width)
   if metadata_w + outer_gap >= width then return width end
   local cx = x + width - metadata_w
   for index, part in ipairs(parts) do
-    if index > 1 then cx = renderer.draw_text(font, separator, cx, y, style.dim) end
-    recent_file_icons.draw(part.icon, cx, y, row_height, icon_size)
+    if index > 1 then cx = renderer.draw_text(metadata_font, separator, cx, metadata_y, style.dim) end
+    recent_file_icons.draw(part.icon, cx, metadata_y, row_height, icon_size)
     cx = cx + icon_size + icon_gap
-    renderer.draw_text(font, part.text, cx, y, style.dim)
+    renderer.draw_text(metadata_font, part.text, cx, metadata_y, style.dim)
     cx = cx + part.cell_width
   end
   return math.max(0, width - metadata_w - outer_gap)
