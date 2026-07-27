@@ -15,6 +15,7 @@ local ImageView = require "core.imageview"
 local file_context = require "core.file_context"
 local project_paths = require "core.project_paths"
 local panes = require "core.panes"
+local DirWatch = require "core.dirwatch"
 local Widget = require "widget"
 local TextBox = require "widget.textbox"
 local fuzzy_native = require "fuzzy"
@@ -73,7 +74,6 @@ local fuzzy_searcher = {
   min_height = 650 * SCALE,
   preview_width = 0.50,
   deep_code_results_height = 0.42,
-  fd = bundled_tool("fd.exe"),
   rg = bundled_tool("rg.exe"),
   fuzzy_candidate_limit = 500,
   fuzzy_scan_limit = 10000,
@@ -276,6 +276,11 @@ fuzzy_searcher.files_scope_generation = 0
 fuzzy_searcher.files_metadata = {}
 fuzzy_searcher.files_fuzzy_index = nil
 fuzzy_searcher.files_fuzzy_index_generation = -1
+fuzzy_searcher.files_last_indexed_at = nil
+fuzzy_searcher.files_refresh_pending = false
+fuzzy_searcher.files_refresh_deadline = nil
+fuzzy_searcher.files_refresh_reason = nil
+fuzzy_searcher.files_cache_test_override = false
 local command_cache
 local recent_commands = {}
 local recent_command_set = {}
@@ -305,26 +310,27 @@ function fuzzy_searcher.project_roots_label(roots)
   return string.format("%d Project path roots", #roots)
 end
 
-function fuzzy_searcher.remember_file_metadata(meta)
+function fuzzy_searcher.remember_file_metadata(meta, metadata)
   if not (meta and meta.text and meta.abs_path) then return nil end
+  metadata = metadata or fuzzy_searcher.files_metadata
   local text = meta.text
-  local existing = fuzzy_searcher.files_metadata[text]
+  local existing = metadata[text]
   if existing and not common.path_equals(existing.abs_path, meta.abs_path) then
     if system.get_file_info(existing.abs_path) then
       text = string.format("%s  —  %s", text, display_root(meta.abs_path))
       meta = common.merge(meta, { text = text, disambiguated = true })
     else
-      fuzzy_searcher.files_metadata[text] = nil
+      metadata[text] = nil
     end
   end
-  fuzzy_searcher.files_metadata[text] = meta
+  metadata[text] = meta
   return text
 end
 
-function fuzzy_searcher.file_display_item(abs_path)
+function fuzzy_searcher.file_display_item(abs_path, metadata)
   local display = project_paths.display_path(abs_path, { kind = "files" })
   if not display then return nil end
-  return fuzzy_searcher.remember_file_metadata(display)
+  return fuzzy_searcher.remember_file_metadata(display, metadata)
 end
 
 local function fullpath(path)
@@ -536,76 +542,371 @@ function fuzzy_searcher.file_roots_signature(roots)
   return table.concat(parts, "\0")
 end
 
-local function ensure_file_index()
-  local roots = project_paths.search_roots("files")
-  local signature = fuzzy_searcher.file_roots_signature(roots)
-  if fuzzy_searcher.files_cache and fuzzy_searcher.files_cache_root == signature then return end
-  if fuzzy_searcher.files_indexing and fuzzy_searcher.files_cache_root == signature then return end
+fuzzy_searcher.FILE_WATCH_POLL_INTERVAL = 0.10
+fuzzy_searcher.FILE_WATCH_DEBOUNCE = 0.15
+fuzzy_searcher.FILE_WATCH_DIRECTORY_LIMIT = 4096
+fuzzy_searcher.FILE_INDEX_OPEN_RECONCILE_AFTER = 30.0
+fuzzy_searcher.FILE_INDEX_DEGRADED_RECONCILE_AFTER = 1.0
+fuzzy_searcher.FILE_INDEX_DEGRADED_ACTIVE_RECONCILE_AFTER = 5.0
+fuzzy_searcher.file_watch_scopes = {}
+fuzzy_searcher.file_watch_signature = nil
+fuzzy_searcher.file_watch_service_running = false
+fuzzy_searcher.file_watch_degraded = false
+
+-- A module reload leaves old cooperative threads alive until they next resume.
+-- Give each load a core-owned token so old file watchers close themselves
+-- instead of continuing to index the same Project in parallel.
+fuzzy_searcher.file_watch_service_token = (core.__fuzzy_file_watch_service_token or 0) + 1
+core.__fuzzy_file_watch_service_token = fuzzy_searcher.file_watch_service_token
+
+function fuzzy_searcher.close_file_watch_scopes(scopes)
+  for _, scope in ipairs(scopes or {}) do
+    for path in pairs(scope.watched_dirs or {}) do
+      pcall(scope.watcher.unwatch, scope.watcher, path)
+    end
+  end
+end
+
+function fuzzy_searcher.watch_scope_dir(scope, path)
+  path = path and common.normalize_path(path)
+  if not path or scope.watched_dirs[path] then return false end
+  local info = system.get_file_info(path)
+  if not info or info.type ~= "dir" then return false end
+  if (scope.watched_dir_count or 0) >= fuzzy_searcher.FILE_WATCH_DIRECTORY_LIMIT then
+    if not scope.watch_budget_exhausted then
+      scope.watch_budget_exhausted = true
+      fuzzy_searcher.file_watch_degraded = true
+      core.log_quiet(
+        "Fuzzy file index watcher budget exhausted under %s after %d directories; picker-open reconciliation remains enabled",
+        tostring(scope.root), scope.watched_dir_count or 0
+      )
+    end
+    return false
+  end
+  scope.watcher:watch(path)
+  scope.watched_dirs[path] = true
+  scope.watched_dir_count = (scope.watched_dir_count or 0) + 1
+  return true
+end
+
+function fuzzy_searcher.refresh_scope_watches(scope, dir, initial)
+  local monitor = scope.watcher and scope.watcher.monitor
+  local mode = monitor and monitor.mode and monitor:mode()
+  if mode == "single" then return true end
+
+  dir = common.normalize_path(dir or scope.root)
+  for watched in pairs(scope.watched_dirs) do
+    if common.path_equals(watched, dir) or common.path_belongs_to(watched, dir) then
+      local watched_info = system.get_file_info(watched)
+      if not watched_info or watched_info.type ~= "dir" then
+        pcall(scope.watcher.unwatch, scope.watcher, watched)
+        scope.watched_dirs[watched] = nil
+        scope.watched_dir_count = math.max(0, (scope.watched_dir_count or 1) - 1)
+      end
+    end
+  end
+
+  local info = dir and system.get_file_info(dir)
+  if not info or info.type ~= "dir" then return false end
+
+  local stack, visited = { dir }, 0
+  while #stack > 0 do
+    local current = table.remove(stack)
+    for _, name in ipairs(system.list_dir(current) or {}) do
+      if name ~= ".git" then
+        local child = common.normalize_path(current .. PATHSEP .. name)
+        local child_info = system.get_file_info(child)
+        if child_info and child_info.type == "dir" and not child_info.symlink
+          and not project_paths.is_excluded(child, "files")
+        then
+          local added = fuzzy_searcher.watch_scope_dir(scope, child)
+          if added or initial then stack[#stack + 1] = child end
+        end
+      end
+      visited = visited + 1
+      if visited % 128 == 0 then coroutine.yield(0) end
+    end
+  end
+  return true
+end
+
+function fuzzy_searcher.request_file_index_refresh(reason, delay)
+  if not fuzzy_searcher.files_cache_root or fuzzy_searcher.files_cache_test_override then return false end
+  fuzzy_searcher.files_refresh_pending = true
+  fuzzy_searcher.files_refresh_reason = reason or "filesystem-change"
+  fuzzy_searcher.files_refresh_deadline = system.get_time()
+    + (delay == nil and fuzzy_searcher.FILE_WATCH_DEBOUNCE or delay)
+  return true
+end
+
+function fuzzy_searcher.configure_file_watch_scopes(roots, signature)
+  if fuzzy_searcher.file_watch_signature == signature then return end
+  fuzzy_searcher.close_file_watch_scopes(fuzzy_searcher.file_watch_scopes)
+  fuzzy_searcher.file_watch_scopes = {}
+  fuzzy_searcher.file_watch_signature = signature
+  fuzzy_searcher.file_watch_degraded = false
+
+  for _, root in ipairs(roots or {}) do
+    local path = common.normalize_path(root.path)
+    local info = path and system.get_file_info(path)
+    if info and info.type == "dir" then
+      local ok, watcher = pcall(DirWatch)
+      if ok and watcher then
+        local scope = {
+          root = path,
+          watcher = watcher,
+          watched_dirs = {},
+          watched_dir_count = 0,
+          recursive_setup_pending = true,
+        }
+        local watched_ok, watched = pcall(fuzzy_searcher.watch_scope_dir, scope, path)
+        if watched_ok and watched then
+          fuzzy_searcher.file_watch_scopes[#fuzzy_searcher.file_watch_scopes + 1] = scope
+        else
+          fuzzy_searcher.file_watch_degraded = true
+          core.log_quiet("Fuzzy file index could not watch %s: %s", tostring(path), tostring(watched))
+        end
+      else
+        fuzzy_searcher.file_watch_degraded = true
+        core.log_quiet("Fuzzy file index watcher unavailable for %s: %s", tostring(path), tostring(watcher))
+      end
+    elseif path then
+      fuzzy_searcher.file_watch_degraded = true
+    end
+  end
+  core.log_quiet(
+    "Fuzzy file index configured %d filesystem watcher(s)%s",
+    #fuzzy_searcher.file_watch_scopes,
+    fuzzy_searcher.file_watch_degraded and " (degraded)" or ""
+  )
+end
+
+function fuzzy_searcher.ensure_file_watch_service(roots, signature)
+  if fuzzy_searcher.files_cache_test_override then return end
+  fuzzy_searcher.configure_file_watch_scopes(roots, signature)
+  if fuzzy_searcher.file_watch_service_running then return end
+  fuzzy_searcher.file_watch_service_running = true
+
+  core.add_thread(function()
+    while core.__fuzzy_file_watch_service_token == fuzzy_searcher.file_watch_service_token do
+      local current_roots = project_paths.search_roots("files")
+      local current_signature = fuzzy_searcher.file_roots_signature(current_roots)
+      if current_signature ~= fuzzy_searcher.file_watch_signature then
+        fuzzy_searcher.configure_file_watch_scopes(current_roots, current_signature)
+        if fuzzy_searcher.files_cache_root and not fuzzy_searcher.files_cache_test_override then
+          fuzzy_searcher.files_generation = fuzzy_searcher.files_generation + 1
+          fuzzy_searcher.files_indexing = false
+          clear_native_file_index()
+          fuzzy_searcher.files_cache_root = current_signature
+          fuzzy_searcher.files_cache = {}
+          fuzzy_searcher.files_metadata = {}
+          fuzzy_searcher.start_file_index(current_roots, current_signature, "project-paths-changed", false)
+        end
+      end
+
+      for _, scope in ipairs(fuzzy_searcher.file_watch_scopes) do
+        if scope.recursive_setup_pending then
+          scope.recursive_setup_pending = false
+          local monitor = scope.watcher and scope.watcher.monitor
+          local multiple = monitor and monitor.mode and monitor:mode() == "multiple"
+          local ok, err = pcall(fuzzy_searcher.refresh_scope_watches, scope, scope.root, true)
+          if not ok then
+            core.log_quiet("Fuzzy file index recursive watch setup failed for %s: %s", scope.root, tostring(err))
+          elseif multiple then
+            -- Files can be created while a non-recursive watch graph is being
+            -- installed. Reconcile once after setup to close that race.
+            fuzzy_searcher.request_file_index_refresh("watch-setup-reconcile", 0)
+          end
+        end
+
+        local changed_dirs = {}
+        local ok, err = pcall(scope.watcher.check, scope.watcher, function(path)
+          path = path and common.normalize_path(path)
+          if path and (common.path_equals(path, scope.root) or common.path_belongs_to(path, scope.root)) then
+            changed_dirs[path] = true
+          end
+        end, 0.02, 0.01)
+        if not ok then
+          fuzzy_searcher.file_watch_degraded = true
+          core.log_quiet("Fuzzy file index watcher failed for %s: %s", scope.root, tostring(err))
+        elseif next(changed_dirs) then
+          for changed_dir in pairs(changed_dirs) do
+            local refresh_ok, refresh_err = pcall(fuzzy_searcher.refresh_scope_watches, scope, changed_dir, false)
+            if not refresh_ok then
+              core.log_quiet("Fuzzy file index watch refresh failed for %s: %s", changed_dir, tostring(refresh_err))
+            end
+          end
+          core.log_quiet("Fuzzy file index noticed external filesystem changes under %s", scope.root)
+          fuzzy_searcher.request_file_index_refresh("filesystem-watch")
+        end
+      end
+
+      if fuzzy_searcher.file_watch_degraded
+        and not fuzzy_searcher.files_indexing
+        and not fuzzy_searcher.files_refresh_pending
+        and active_view and active_view.is_visible and active_view:is_visible()
+      then
+        local indexed_at = fuzzy_searcher.files_last_indexed_at or 0
+        if system.get_time() - indexed_at
+          >= fuzzy_searcher.FILE_INDEX_DEGRADED_ACTIVE_RECONCILE_AFTER
+        then
+          fuzzy_searcher.request_file_index_refresh("degraded-active-reconcile", 0)
+        end
+      end
+
+      if fuzzy_searcher.files_refresh_pending
+        and not fuzzy_searcher.files_indexing
+        and system.get_time() >= (fuzzy_searcher.files_refresh_deadline or 0)
+      then
+        local refresh_roots = project_paths.search_roots("files")
+        local refresh_signature = fuzzy_searcher.file_roots_signature(refresh_roots)
+        local reason = fuzzy_searcher.files_refresh_reason or "filesystem-change"
+        fuzzy_searcher.files_refresh_pending = false
+        fuzzy_searcher.files_refresh_deadline = nil
+        fuzzy_searcher.files_refresh_reason = nil
+        if refresh_signature == fuzzy_searcher.files_cache_root then
+          fuzzy_searcher.start_file_index(refresh_roots, refresh_signature, reason, true)
+        end
+      end
+
+      coroutine.yield(fuzzy_searcher.FILE_WATCH_POLL_INTERVAL)
+    end
+    fuzzy_searcher.close_file_watch_scopes(fuzzy_searcher.file_watch_scopes)
+    fuzzy_searcher.file_watch_scopes = {}
+    fuzzy_searcher.file_watch_service_running = false
+  end)
+end
+
+function fuzzy_searcher.start_file_index(roots, signature, reason, preserve_cache)
+  if fuzzy_searcher.files_indexing then
+    fuzzy_searcher.request_file_index_refresh(reason or "index-changed-during-scan")
+    return false
+  end
 
   clear_native_file_index()
   fuzzy_searcher.files_cache_root = signature
-  fuzzy_searcher.files_cache = {}
-  fuzzy_searcher.files_metadata = {}
+  if not preserve_cache then
+    fuzzy_searcher.files_cache = {}
+    fuzzy_searcher.files_metadata = {}
+  end
   fuzzy_searcher.files_indexing = true
+  fuzzy_searcher.files_refresh_pending = false
+  fuzzy_searcher.files_refresh_deadline = nil
+  fuzzy_searcher.files_refresh_reason = nil
   fuzzy_searcher.files_generation = fuzzy_searcher.files_generation + 1
   local gen = fuzzy_searcher.files_generation
 
+  core.log_quiet("Fuzzy file index scan started (%s)", tostring(reason or "initial"))
   core.add_thread(function()
-    local t, n, seen = {}, 0, {}
+    local files, seen, metadata = {}, {}, {}
+    local scan_failed = false
     for _, root in ipairs(roots) do
       if gen ~= fuzzy_searcher.files_generation or fuzzy_searcher.files_cache_root ~= signature then return end
-      local proc, err = process.start({
-        fuzzy_searcher.fd,
-        "--type", "f",
-        "--hidden",
-        "--exclude", ".git",
-        "."
-      }, {
-        cwd = root.path,
-        stdout = process.REDIRECT_PIPE,
-        stderr = process.REDIRECT_DISCARD,
-        stdin = process.REDIRECT_DISCARD,
-      })
-
-      if not proc then
-        core.log_quiet("fuzzy_searcher: fd failed for %s: %s", tostring(root.path), err or "unknown error")
+      local root_info = system.get_file_info(root.path)
+      if not root_info or root_info.type ~= "dir" then
+        scan_failed = true
+        core.log_quiet("Fuzzy file index root is unavailable: %s", tostring(root.path))
       else
-        while true do
-          local line = proc.stdout:read("line", { scan = 1 / config.fps })
-          if line and line ~= "" then
-            line = line:gsub("^%.[/\\]", ""):gsub("[/\\]", PATHSEP)
-            local abs = common.normalize_path(root.path .. PATHSEP .. line)
-            local key = abs and common.path_compare_key(abs)
-            if key and not seen[key] and not project_paths.is_excluded(abs, "files") then
-              local item = fuzzy_searcher.file_display_item(abs)
-              if item then
-                seen[key] = true
-                t[#t+1] = item
-                n = n + 1
-                if n % 250 == 0 and gen == fuzzy_searcher.files_generation and fuzzy_searcher.files_cache_root == signature then
-                  fuzzy_searcher.files_cache = t
-                  if active_view then active_view.dirty = true; active_view:schedule_update(true) end
+        local stack, visited_entries = { common.normalize_path(root.path) }, 0
+        local slice_started_at = system.get_time()
+        while #stack > 0 do
+          local dir = table.remove(stack)
+          local names, list_err = system.list_dir(dir)
+          if not names then
+            scan_failed = true
+            core.log_quiet("Fuzzy file index could not list %s: %s", tostring(dir), tostring(list_err))
+          else
+            for _, name in ipairs(names) do
+              if name ~= ".git" then
+                local abs = common.normalize_path(dir .. PATHSEP .. name)
+                local info = system.get_file_info(abs)
+                if info and info.type == "dir" and not info.symlink
+                  and not project_paths.is_excluded(abs, "files")
+                then
+                  stack[#stack + 1] = abs
+                elseif info and info.type == "file"
+                  and not project_paths.is_excluded(abs, "files")
+                then
+                  local key = common.path_compare_key(abs)
+                  if key and not seen[key] then
+                    local item = fuzzy_searcher.file_display_item(abs, metadata)
+                    if item then
+                      seen[key] = true
+                      files[#files+1] = item
+                    end
+                  end
                 end
               end
+              visited_entries = visited_entries + 1
+              if visited_entries % 64 == 0
+                and system.get_time() - slice_started_at >= (fuzzy_searcher.fuzzy_time_slice or 0.006)
+              then
+                coroutine.yield(0)
+                slice_started_at = system.get_time()
+              end
+              if gen ~= fuzzy_searcher.files_generation
+                or fuzzy_searcher.files_cache_root ~= signature
+              then
+                return
+              end
             end
-          elseif not proc:running() then
-            break
-          else
-            coroutine.yield(1 / config.fps)
           end
         end
-        proc:wait(process.WAIT_DEADLINE)
       end
     end
+
     if gen == fuzzy_searcher.files_generation and fuzzy_searcher.files_cache_root == signature then
-      table.sort(t)
-      fuzzy_searcher.files_cache = t
+      table.sort(files)
+      if scan_failed then fuzzy_searcher.file_watch_degraded = true end
+      if not scan_failed or not preserve_cache then
+        fuzzy_searcher.files_cache = files
+        fuzzy_searcher.files_metadata = metadata
+        fuzzy_searcher.files_scope_generation = fuzzy_searcher.files_scope_generation + 1
+      else
+        core.log_quiet("Fuzzy file index retained its previous snapshot after an incomplete scan")
+      end
       fuzzy_searcher.files_indexing = false
-      fuzzy_searcher.files_scope_generation = fuzzy_searcher.files_scope_generation + 1
+      fuzzy_searcher.files_last_indexed_at = system.get_time()
       rebuild_native_file_index()
+      core.log_quiet("Fuzzy file index scan finished with %d files", #(fuzzy_searcher.files_cache or {}))
       if active_view then active_view.dirty = true; active_view:schedule_update(true) end
     end
   end)
+  return true
+end
+
+local function ensure_file_index()
+  local roots = project_paths.search_roots("files")
+  local signature = fuzzy_searcher.file_roots_signature(roots)
+
+  if fuzzy_searcher.files_cache_test_override and fuzzy_searcher.files_cache_root == signature then return end
+  if fuzzy_searcher.files_cache_root ~= signature then
+    fuzzy_searcher.files_cache_test_override = false
+    fuzzy_searcher.files_generation = fuzzy_searcher.files_generation + 1
+    fuzzy_searcher.files_indexing = false
+    fuzzy_searcher.files_cache_root = signature
+    fuzzy_searcher.files_cache = nil
+    fuzzy_searcher.files_metadata = {}
+    clear_native_file_index()
+  end
+
+  fuzzy_searcher.ensure_file_watch_service(roots, signature)
+  if fuzzy_searcher.files_cache or fuzzy_searcher.files_indexing then return end
+  fuzzy_searcher.start_file_index(roots, signature, "initial", false)
+end
+
+function fuzzy_searcher.reconcile_file_index_for_picker_open()
+  if fuzzy_searcher.files_cache_test_override or fuzzy_searcher.files_indexing then return end
+  local age = fuzzy_searcher.files_last_indexed_at
+    and (system.get_time() - fuzzy_searcher.files_last_indexed_at)
+  local reconcile_after = fuzzy_searcher.file_watch_degraded
+    and fuzzy_searcher.FILE_INDEX_DEGRADED_RECONCILE_AFTER
+    or fuzzy_searcher.FILE_INDEX_OPEN_RECONCILE_AFTER
+  if fuzzy_searcher.files_cache
+    and (not age or age >= reconcile_after)
+  then
+    fuzzy_searcher.request_file_index_refresh("picker-open-reconcile", 0)
+  end
 end
 
 local function get_files()
@@ -2447,7 +2748,10 @@ function FSView:new(prefix, opts)
     self.input.textview.doc.readonly = true
   end
 
-  if not self.static_mode and tostring(prefix or ""):sub(1, 2) ~= "@@" then ensure_file_index() end
+  if not self.static_mode and tostring(prefix or ""):sub(1, 2) ~= "@@" then
+    ensure_file_index()
+    fuzzy_searcher.reconcile_file_index_for_picker_open()
+  end
   self:show()
   self:layout()
   ensure_input_focus(self)
@@ -5169,13 +5473,15 @@ return {
     symbol_result_from_item = symbol_result_from_item,
     result_main_text = fuzzy_searcher.result_main_text,
     set_file_cache_for_test = function(files)
-      -- Invalidate any fd thread started by an earlier test before publishing
+      -- Invalidate any filesystem scan started by an earlier test before publishing
       -- the deterministic fixture cache.
       fuzzy_searcher.files_generation = fuzzy_searcher.files_generation + 1
       clear_native_file_index()
       fuzzy_searcher.files_cache_root = fuzzy_searcher.file_roots_signature(project_paths.search_roots("files"))
       fuzzy_searcher.files_cache = files or {}
       fuzzy_searcher.files_indexing = false
+      fuzzy_searcher.files_cache_test_override = true
+      fuzzy_searcher.files_refresh_pending = false
       fuzzy_searcher.files_scope_generation = fuzzy_searcher.files_scope_generation + 1
     end,
     file_search_rows = function(query, files, skip_path, limit)
