@@ -924,9 +924,7 @@ local function image_fragment(view, span, opts)
         on_mouse_pressed = function(_, owner, hit, button)
           if button ~= "left" then return false end
           owner.doc:set_selection(hit.line, 1)
-          local image_overlay = require "core.markdown.image_overlay"
-          image_overlay.open(hit.fragment.image_path)
-          return true
+          return common.open_in_system(hit.fragment.image_path)
         end,
         draw = function(_, fragment, x, y, row_height)
           local image = entry.image
@@ -1262,7 +1260,11 @@ revealed_link_fragments = function(view, line_text, line, span, opts)
 end
 
 local function embed_preview_for_resolution(resolution)
-  if not (resolution and resolution.status == "resolved" and resolution.kind == "note") then return nil end
+  if not (resolution and resolution.status == "resolved" and resolution.kind == "note")
+    or resolution.subtarget_missing
+  then
+    return nil
+  end
   if resolution.block then return resolution.block.embed_preview end
   if resolution.heading then return resolution.heading.embed_preview end
   return resolution.entry and resolution.entry.embed_preview
@@ -4561,6 +4563,9 @@ local function open_link_resolution(resolution)
     return false
   end
   record_navigation_origin()
+  if resolution.kind == "attachment" then
+    return common.open_in_system(resolution.path)
+  end
   local target_view = core.open_file(resolution.path)
   if target_view and resolution.line and target_view.set_selection_state then
     target_view:set_selection_state({

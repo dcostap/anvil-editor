@@ -2,6 +2,7 @@ local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
 local DirWatch = require "core.dirwatch"
+local json = require "core.json"
 local anchors = require "core.markdown.anchors"
 local links = require "core.markdown.links"
 local parser = require "core.markdown.parser"
@@ -17,11 +18,16 @@ local DOC_UPDATE_DEBOUNCE_SECONDS = 0.03
 local MAX_NATIVE_WATCH_DIRS = 2048
 
 local ATTACHMENT_EXTENSIONS = {
+  ["3gp"] = true,
   avif = true,
+  base = true,
   bmp = true,
+  canvas = true,
   gif = true,
   jpeg = true,
   jpg = true,
+  m4a = true,
+  mkv = true,
   png = true,
   svg = true,
   webp = true,
@@ -32,6 +38,7 @@ local ATTACHMENT_EXTENSIONS = {
   mp4 = true,
   webm = true,
   mov = true,
+  ogv = true,
   pdf = true,
 }
 
@@ -111,6 +118,19 @@ end
 
 local function is_attachment(path)
   return ATTACHMENT_EXTENSIONS[extension(path) or ""] == true
+end
+
+local function read_obsidian_app_settings(root)
+  local path = join_path(join_path(root, ".obsidian"), "app.json")
+  local text = read_file(path)
+  if not text then return {} end
+  local ok, decoded, decode_err = pcall(json.decode, text)
+  if not ok or type(decoded) ~= "table" then
+    core.log_quiet("Markdown ignored malformed Obsidian app settings in %s: %s",
+      path, tostring(ok and decode_err or decoded))
+    return {}
+  end
+  return decoded
 end
 
 local function add_to_multi(map, key, value)
@@ -251,6 +271,7 @@ local Index = {}
 Index.__index = Index
 
 function Index:new(root)
+  local obsidian_settings = read_obsidian_app_settings(root)
   return setmetatable({
     root = common.normalize_path(root),
     link_path_policy = link_path_policies[path_key(root)] or config.markdown_live_link_path_policy
@@ -278,8 +299,18 @@ function Index:new(root)
     watch_dir_limit = MAX_NATIVE_WATCH_DIRS,
     watch_dir_count = 0,
     watcher_mode = "stopped",
+    show_unsupported_files = obsidian_settings.showUnsupportedFiles == true,
     diagnostics = { doc_updates = 0, doc_updates_coalesced = 0, degraded_rescans = 0 },
   }, self)
+end
+
+function Index:refresh_obsidian_settings()
+  local settings = read_obsidian_app_settings(self.root)
+  self.show_unsupported_files = settings.showUnsupportedFiles == true
+end
+
+function Index:is_attachment(path)
+  return is_attachment(path) or (self.show_unsupported_files and not is_markdown(path))
 end
 
 function Index:add_listener(id, fn)
@@ -577,7 +608,7 @@ end
 function Index:scan_dir(dir, skip_key)
   self:watch_dir(dir)
   for _, name in ipairs(system.list_dir(dir) or {}) do
-    if name ~= ".git" and name ~= ".run-meson-tests" then
+    if name ~= ".git" and name ~= ".obsidian" and name ~= ".run-meson-tests" then
       local path = join_path(dir, name)
       local info = system.get_file_info(path)
       if info and info.type == "dir" then
@@ -591,6 +622,7 @@ end
 
 function Index:rebuild(reason, opts)
   opts = opts or {}
+  self:refresh_obsidian_settings()
   self.rebuild_serial = self.rebuild_serial + 1
   self.status, self.reason = "indexing", reason or "manual"
   self:clear()
@@ -631,7 +663,7 @@ function Index:queue_subtree_scan(dirs, reason)
         local dir = table.remove(stack)
         self:watch_dir(dir)
         for _, name in ipairs(system.list_dir(dir) or {}) do
-          if name ~= ".git" and name ~= ".run-meson-tests" then
+          if name ~= ".git" and name ~= ".obsidian" and name ~= ".run-meson-tests" then
             local path = join_path(dir, name)
             local info = system.get_file_info(path)
             if info and info.type == "dir" then
@@ -639,7 +671,7 @@ function Index:queue_subtree_scan(dirs, reason)
             elseif info and info.type == "file" then
               local key = path_key(path)
               local entry = self.notes_by_abs[key] or self.attachments_by_abs[key]
-              if not (entry and entry.doc) and (is_markdown(path) or is_attachment(path)) then
+              if not (entry and entry.doc) and (is_markdown(path) or self:is_attachment(path)) then
                 self:update_path(path, { rebuilding = true, cooperative = true })
                 changed = true
               end
@@ -677,13 +709,15 @@ function Index:reconcile_dir(dir, reason, opts)
   self:watch_dir(normalized)
   local seen, changed, discovered_dirs = {}, false, {}
   for _, name in ipairs(system.list_dir(normalized) or {}) do
-    if name ~= ".git" and name ~= ".run-meson-tests" then
+    if name ~= ".git" and name ~= ".obsidian" and name ~= ".run-meson-tests" then
       local path = join_path(normalized, name)
       local child_info = system.get_file_info(path)
       if child_info and child_info.type == "dir" then
         if not self.watched_dirs[path] then discovered_dirs[#discovered_dirs + 1] = path end
         self:watch_dir(path)
-      elseif child_info and child_info.type == "file" and (is_markdown(path) or is_attachment(path)) then
+      elseif child_info and child_info.type == "file"
+        and (is_markdown(path) or self:is_attachment(path))
+      then
         local key = path_key(path)
         seen[key] = true
         local entry = self.notes_by_abs[key] or self.attachments_by_abs[key]
@@ -809,6 +843,7 @@ function Index:ensure(reason)
 end
 
 function Index:rebuild_async(reason)
+  self:refresh_obsidian_settings()
   self.rebuild_serial = self.rebuild_serial + 1
   local serial = self.rebuild_serial
   self.status, self.reason = "indexing", reason or "async-rebuild"
@@ -822,7 +857,7 @@ function Index:rebuild_async(reason)
       local dir = table.remove(dirs)
       self:watch_dir(dir)
       for _, name in ipairs(system.list_dir(dir) or {}) do
-        if name ~= ".git" and name ~= ".run-meson-tests" then
+        if name ~= ".git" and name ~= ".obsidian" and name ~= ".run-meson-tests" then
           local path = join_path(dir, name)
           local info = system.get_file_info(path)
           if info and info.type == "dir" then
@@ -1100,7 +1135,7 @@ function Index:update_path(path, opts)
     if shallow then
       core.log_quiet("Markdown index shallow-indexed oversized note %s (%d bytes)", path, info.size)
     end
-  elseif is_attachment(path) and file_exists(path) then
+  elseif self:is_attachment(path) and file_exists(path) then
     self:add_attachment_entry(self:make_attachment_entry(path))
   else
     return false
@@ -1241,7 +1276,13 @@ end
 function Index:resolve_entry_result(entry, link, target)
   if entry.kind == "note" then
     local extra, err = self:resolve_subtarget(entry, link.subtarget)
-    if not extra then return missing(target, err) end
+    if not extra then
+      return resolved(entry.kind, entry, {
+        line = 1,
+        subtarget_missing = true,
+        reason = err,
+      })
+    end
     return resolved(entry.kind, entry, extra)
   end
   return resolved(entry.kind, entry)

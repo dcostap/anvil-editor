@@ -26,6 +26,13 @@ Semantic link fragments now carry a normalized `link_resolution`:
 - `ambiguous` when multiple notes match; and
 - `external` for URI schemes or external paths.
 
+When an Obsidian vault enables `showUnsupportedFiles`, the index also adopts
+non-Markdown files outside `.obsidian`, so extension-qualified links such as
+`[[message.msg]]` resolve by the same exact-path/basename rules as supported
+attachments. A missing heading or block inside an existing note retains the
+resolved note and records `subtarget_missing`; activation falls back to line 1
+instead of treating the whole file target as missing.
+
 Fragment-only heading and block targets resolve against the source Document. Heading entries retain their structural ancestor path, so targets such as `[[Note#Parent#Child]]` distinguish repeated child headings under different parents while ordinary single-heading targets remain supported. Local query/fragment suffixes are removed before path lookup, and Windows drive paths are classified as absolute paths before URI-scheme checks.
 
 Every textual link uses the same blue underlined Live Preview style. Status remains normalized metadata for navigation, creation, ambiguity handling, diagnostics, and cache invalidation; it does not recolor the link. Link index status/generation participates in provider cache generation, and index publications invalidate attached views. Images retain the same semantic resolution metadata while preserving widget/placeholder styling.

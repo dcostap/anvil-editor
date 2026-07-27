@@ -23,8 +23,14 @@ Commands are tested by name rather than by configurable key bindings.
 
 ## Resolution behavior
 
-- Resolved notes/attachments open through `core.open_file`.
+- Resolved notes open through `core.open_file`; resolved attachments use the
+  system launcher so the OS-selected application handles the file.
 - Heading and block results move the target Editor selection and viewport.
+- If the note exists but its requested heading/block does not, navigation opens
+  the note at line 1. A genuinely missing note remains missing and is never
+  created by the open action.
+- Clicking a rendered local image launches the resolved image path through the
+  system application, matching other attachment activation.
 - External targets use the system launcher.
 - Pending and missing targets are never opened implicitly.
 - Missing targets require the explicit create command, remain inside the owning Project, create parent directories only when absent, strip query/fragment suffixes, default extensionless targets to `.md`, and follow resolver semantics: path-like targets are source-directory-relative while bare names are Project-root-relative. Invalid normalization and parent traversal fail safely at the Project boundary.

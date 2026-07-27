@@ -1629,6 +1629,44 @@ test.describe("Markdown Live Editor", function()
     if not ok then error(err, 0) end
   end)
 
+  test.it("opens resolved Obsidian unsupported-file links in the system application", function()
+    local root = USERDIR .. PATHSEP .. "markdown-live-open-unsupported-" .. system.get_process_id()
+    test.ok(common.mkdirp(root .. PATHSEP .. ".obsidian"))
+    test.ok(common.mkdirp(root .. PATHSEP .. "attachments"))
+    local app = test.not_nil(io.open(root .. PATHSEP .. ".obsidian" .. PATHSEP .. "app.json", "wb"))
+    app:write([[{"showUnsupportedFiles":true}]])
+    app:close()
+    local target_path = root .. PATHSEP .. "attachments" .. PATHSEP .. "NO CONSUMOS .msg"
+    local fp = test.not_nil(io.open(target_path, "wb"))
+    fp:write("message")
+    fp:close()
+    local source_path = root .. PATHSEP .. "Source.md"
+    local old_projects = core.projects
+    core.projects = { Project(root) }
+    markdown.vault_index.get_index(root):rebuild("ui-open-unsupported-link")
+    local view, doc = make_view("[[NO CONSUMOS .msg]]\n", source_path)
+    doc:set_selection(1, 5)
+    refresh(view)
+    local old_active = core.active_view
+    local old_open_in_system = common.open_in_system
+    local old_open_file = core.open_file
+    local opened_in_system, opened_in_editor
+    core.active_view = view
+    common.open_in_system = function(path) opened_in_system = path return true end
+    core.open_file = function(path) opened_in_editor = path end
+    local ok, err = pcall(function()
+      test.equal(command.perform("markdown-live-preview:open-link"), true)
+      test.equal(opened_in_system, common.normalize_path(target_path))
+      test.equal(opened_in_editor, nil)
+    end)
+    common.open_in_system = old_open_in_system
+    core.open_file = old_open_file
+    core.active_view = old_active
+    core.projects = old_projects
+    common.rm(root, true)
+    if not ok then error(err, 0) end
+  end)
+
   test.it("publishes semantic link POIs for generic navigation and activation", function()
     local root = USERDIR .. PATHSEP .. "markdown-live-link-poi-" .. system.get_process_id()
     test.ok(common.mkdirp(root))
@@ -3950,7 +3988,7 @@ test.describe("Markdown Live Editor", function()
     core.root_panel = old_root_panel
   end)
 
-  test.it("opens the image overlay when clicking a rendered image", function()
+  test.it("opens a clicked rendered image in the system application", function()
     local image_path = USERDIR .. PATHSEP .. "markdown-live-click-image-" .. system.get_process_id() .. ".png"
     local fp = io.open(image_path, "wb")
     test.not_nil(fp)
@@ -3960,8 +3998,7 @@ test.describe("Markdown Live Editor", function()
     local view, doc = make_view("![[" .. image_url .. "]]\nother", USERDIR .. PATHSEP .. "note.md")
     doc:set_selection(2, 1)
     local old_load_image = canvas.load_image
-    local overlay = require "core.markdown.image_overlay"
-    local old_open = overlay.open
+    local old_open = common.open_in_system
     local opened_path
     canvas.load_image = function()
       return {
@@ -3969,7 +4006,7 @@ test.describe("Markdown Live Editor", function()
         scaled = function(self) return self end,
       }
     end
-    overlay.open = function(path)
+    common.open_in_system = function(path)
       opened_path = path
       return true
     end
@@ -3981,7 +4018,7 @@ test.describe("Markdown Live Editor", function()
     local line = doc:get_selection()
     test.equal(line, 1)
 
-    overlay.open = old_open
+    common.open_in_system = old_open
     canvas.load_image = old_load_image
     os.remove(image_path)
   end)
