@@ -884,6 +884,28 @@ test.describe("Markdown Live Editor", function()
     test.equal(table.concat(visible), "See [[One|First]] and Second")
   end)
 
+  test.it("syntax-highlights JavaScript fences through the info string", function()
+    local view, doc = make_view("```js\nconst value = 1\n```\n", "highlight.md")
+    doc:set_selection(1, 1)
+    refresh(view)
+
+    local colors
+    local deadline = system.get_time() + 5
+    repeat
+      colors = {}
+      for _, fragment in ipairs(view:iter_line_render_fragments(view:get_line_render(2))) do
+        local text = (fragment.text or ""):match("^%s*(.-)%s*$")
+        if text ~= "" then colors[text] = fragment.color end
+      end
+      if colors.const == style.syntax.keyword then break end
+      coroutine.yield(0)
+    until system.get_time() >= deadline
+    test.equal(colors.const, style.syntax.keyword)
+    test.equal(colors.value, style.syntax.symbol)
+    test.equal(colors["="], style.syntax.operator)
+    test.equal(colors["1"], style.syntax.number)
+  end)
+
   test.it("reveals a Wikilink at the caret position after its closing brackets", function()
     local source = "[[APPi-Sage]]"
     local view, doc = make_view(source .. "\nplain", "right-edge-link.md")

@@ -29,6 +29,26 @@ local function find_node(nodes, node_type)
 end
 
 test.describe("Markdown semantic model", function()
+  test.it("completes fenced-code info metadata from a body-line lookup", function()
+    local doc = make_doc("```javascript title=example\nconst value = 1\n```\n")
+    local instance = markdown_model.get(doc)
+    test.ok(wait_status(instance, "ready"), instance.reason)
+
+    local fenced, reason = instance:fenced_node_for_line(2)
+    test.not_nil(fenced, reason)
+    test.equal(fenced.type, "code_fenced")
+    test.not_nil(fenced.attributes.code_info)
+    test.equal(fenced.attributes.code_info.line1, 1)
+    test.equal(
+      doc.lines[1]:sub(
+        fenced.attributes.code_info.col1,
+        fenced.attributes.code_info.col2 - 1
+      ),
+      "javascript title=example"
+    )
+    markdown_model.close(doc, "test")
+  end)
+
   test.it("shares one asynchronously published model per Document", function()
     local doc = make_doc("# Heading\n\nText with **bold** and *italic*.\n")
     local first = markdown_model.get(doc)

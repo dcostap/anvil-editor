@@ -4,11 +4,13 @@ local config = require "core.config"
 local DocView = require "core.docview"
 local attachments = require "core.markdown.attachments"
 local images = require "core.markdown.images"
+local fence_highlight = require "core.markdown.fence_highlight"
 local link_completion = require "core.markdown.completion"
 local keymap = require "core.keymap"
 local linewrapping = require "core.linewrapping"
 local markdown_links = require "core.markdown.links"
 local markdown_model = require "core.markdown.model"
+local tokenizer = require "core.tokenizer"
 local vault_index = require "core.markdown.vault_index"
 local style = require "core.style"
 
@@ -2997,22 +2999,36 @@ local function fenced_code_is_active(view, fenced, state)
   return false
 end
 
-local function fenced_code_content_render_line(view, line, text)
+local function fenced_code_content_render_line(view, line, text, fenced)
   local fragments = {}
   local col = 1
-  for _, syntax_type, token_text in view.doc.highlighter:each_render_token(line) do
-    if col > #text then break end
-    token_text = token_text:sub(1, #text - col + 1)
-    if token_text ~= "" then
-      fragments[#fragments + 1] = {
-        source_col1 = col,
-        source_col2 = col + #token_text,
-        text = token_text,
-        font = style.syntax_fonts[syntax_type],
-        color = style.syntax[syntax_type],
-      }
-      col = col + #token_text
+  local owner = view.__markdown_live_owner
+  local service = owner and owner.fence_service
+  local entry = service and service:line_tokens(fenced, line, 100)
+  if entry then
+    for _, syntax_type, token_text in tokenizer.each_token(entry.tokens) do
+      if col > #text then break end
+      token_text = token_text:sub(1, #text - col + 1)
+      if token_text ~= "" then
+        fragments[#fragments + 1] = {
+          source_col1 = col,
+          source_col2 = col + #token_text,
+          text = token_text,
+          font = style.syntax_fonts[syntax_type],
+          color = style.syntax[syntax_type] or style.syntax.normal,
+        }
+        col = col + #token_text
+      end
     end
+  end
+  if col <= #text then
+    fragments[#fragments + 1] = {
+      source_col1 = col,
+      source_col2 = #text + 1,
+      text = text:sub(col),
+      font = style.syntax_fonts.normal,
+      color = style.syntax.normal,
+    }
   end
   return {
     source_text = text,
@@ -3121,7 +3137,14 @@ end
 function provider:line_generation(view, line)
   if view_in_source_mode(view) then return "source" end
   local optimistic = optimistic_render(view, line)
+  local fence_generation = ""
+  local owner = view.__markdown_live_owner
+  local fenced = fenced_code_for_line(view, line)
+  if fenced and owner and owner.fence_service then
+    fence_generation = ":fence:" .. tostring(owner.fence_service:line_generation(fenced, line))
+  end
   return "font:" .. self:generation(view)
+    .. fence_generation
     .. (optimistic and ":optimistic:" .. tostring(optimistic.revision) or "")
 end
 
@@ -3456,7 +3479,7 @@ function provider:render_line(view, line)
       end
       return { raw_passthrough = true }
     end
-    return fenced_code_content_render_line(view, line, text)
+    return fenced_code_content_render_line(view, line, text, fenced)
   end
   if not in_comment and line_in_raw_block(view, line) then return { raw_passthrough = true } end
 
@@ -3646,6 +3669,7 @@ local function invalidate_semantic_publication(view, instance, reason)
   view.__markdown_live_reference_prepare_pending = nil
   local owner = view.__markdown_live_owner
   if owner then
+    if owner.fence_service then owner.fence_service:reconcile(instance) end
     owner.optimistic_lines = nil
     owner.pending_metric_state = nil
     owner.published_line_heights = {}
@@ -3712,6 +3736,34 @@ local function invalidate_semantic_publication(view, instance, reason)
   core.redraw = true
 end
 
+local function bind_fence_service(view, instance)
+  local owner = view.__markdown_live_owner
+  if not owner then return end
+  local service = fence_highlight.get(view.doc)
+  if owner.fence_service and owner.fence_service ~= service then
+    owner.fence_service:remove_listener(owner.fence_listener_id)
+  end
+  owner.fence_service = service
+  owner.fence_listener_id = owner.listener_id .. ":fences"
+  service:reconcile(instance)
+  service:add_listener(owner.fence_listener_id, function(_, line1, line2)
+    if view.__markdown_live_owner ~= owner or not view.__markdown_live_attached then return end
+    line1 = common.clamp(line1 or 1, 1, #view.doc.lines)
+    line2 = common.clamp(line2 or line1, line1, #view.doc.lines)
+    view:invalidate_line_render(PROVIDER_ID, line1, line2)
+    view:invalidate_visual_metrics(PROVIDER_ID, line1, line2)
+    core.redraw = true
+  end)
+end
+
+local function unbind_fence_service(view)
+  local owner = view.__markdown_live_owner
+  if not (owner and owner.fence_service) then return end
+  owner.fence_service:remove_listener(owner.fence_listener_id)
+  owner.fence_service = nil
+  owner.fence_listener_id = nil
+end
+
 local function bind_semantic_model(view)
   local owner = view.__markdown_live_owner
   if not owner then return end
@@ -3723,6 +3775,7 @@ local function bind_semantic_model(view)
   end
   owner.semantic_model = instance
   owner.semantic_listener_id = listener_id
+  bind_fence_service(view, instance)
   if instance.status == "pending" then
     -- This view did not necessarily observe the edit that made the shared model pending.
     owner.semantic_pending_line = 1
@@ -3888,6 +3941,7 @@ end
 function live.detach(view)
   if not (view and view.__markdown_live_attached) then return false end
   unbind_link_index(view)
+  unbind_fence_service(view)
   unbind_semantic_model(view)
   clear_image_cache(view)
   view:remove_visual_metric_provider(PROVIDER_ID)

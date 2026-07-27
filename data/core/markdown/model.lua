@@ -569,6 +569,49 @@ function Model:nodes_for_lines(line1, line2, opts)
   return self:stabilize_node_ids(build_nodes(captures)), block_reason or inline_reason
 end
 
+---Returns the fenced-code block containing a line, completing opening-line
+---metadata through a second bounded semantic query when necessary.
+---@param line integer
+---@param opts? table
+---@return table? node
+---@return string? reason
+function Model:fenced_node_for_line(line, opts)
+  opts = common.merge({ limit = 512 }, opts or {})
+  local nodes, reason = self:nodes_for_lines(line, line, opts)
+  if not nodes or reason == "limit" then return nil, reason end
+
+  local fenced
+  for _, node in ipairs(nodes) do
+    if node.type == "code_fenced"
+      and line >= node.source.line1 and line <= node.source.line2
+    then
+      fenced = node
+      break
+    end
+  end
+  if not fenced or (fenced.attributes and fenced.attributes.code_info) then
+    return fenced, reason
+  end
+
+  local opening_nodes, opening_reason = self:nodes_for_lines(
+    fenced.source.line1, fenced.source.line1, opts
+  )
+  if not opening_nodes or opening_reason == "limit" then
+    return nil, opening_reason
+  end
+  for _, candidate in ipairs(opening_nodes) do
+    if candidate.type == "code_fenced"
+      and (candidate.id == fenced.id or (
+        candidate.source.start_byte == fenced.source.start_byte
+        and candidate.source.end_byte == fenced.source.end_byte
+      ))
+    then
+      return candidate, opening_reason
+    end
+  end
+  return nil, "incomplete"
+end
+
 function Model:close(reason)
   local doc = self:doc()
   if doc and doc.remove_metadata_listener then doc:remove_metadata_listener(METADATA_LISTENER_ID) end
