@@ -2518,7 +2518,7 @@ local everything = {
   probe_generation = 0,
   search_generation = 0,
   host = os.getenv("EVERYTHING_HOST") or "localhost",
-  port = os.getenv("EVERYTHING_PORT") or "54367",
+  port = os.getenv("EVERYTHING_PORT") or "5777",
 }
 
 local function everything_endpoint()
@@ -3663,7 +3663,7 @@ function FSView:start_everything_file_search(query, offset, append)
         self.everything_results = {}
         self.everything_total = 0
         self.everything_has_more = false
-        self.everything_status = "Everything is not available. Enable Everything's HTTP server on localhost:54367."
+        self.everything_status = "Everything is not available. Enable Everything's HTTP server on localhost:5777."
         self.dirty = true
         self:schedule_update(true)
         return
@@ -3811,7 +3811,7 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
       else
         self:cancel_deferred_everything_loading()
         self.everything_loading = false
-        self.everything_status = "Everything is not available. Enable Everything's HTTP server on localhost:54367."
+        self.everything_status = "Everything is not available. Enable Everything's HTTP server on localhost:5777."
       end
     end
     for i = 1, math.min(limit, #(self.everything_results or {})) do
@@ -5439,6 +5439,7 @@ return {
     everything_project_search_query = everything_project_search_query,
     everything_file_search_params = everything_file_search_params,
     everything_file_search_query = everything_file_search_query,
+    everything_endpoint = everything_endpoint,
     everything_path_depth = everything_path_depth,
     sort_everything_project_results = sort_everything_project_results,
     everything_result_from_item = everything_result_from_item,

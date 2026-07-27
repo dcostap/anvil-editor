@@ -6,6 +6,12 @@ local fuzzy_searcher = require "plugins.fuzzy_searcher"
 local helpers = fuzzy_searcher._test
 
 test.describe("Fuzzy Searcher Everything search", function()
+  test.it("uses the Everything HTTP endpoint shared with the Pi extension", function()
+    local host = os.getenv("EVERYTHING_HOST") or "localhost"
+    local port = os.getenv("EVERYTHING_PORT") or "5777"
+    test.equal(helpers.everything_endpoint(), "http://" .. host .. ":" .. port .. "/")
+  end)
+
   test.it("asks Everything for project-like folders by name and path", function()
     local params = helpers.everything_project_search_params("sm64", 80, 0)
 
