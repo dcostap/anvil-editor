@@ -4,6 +4,7 @@ local command = require "core.command"
 local config = require "core.config"
 local http = require "core.http"
 local style = require "core.style"
+local syntax = require "core.syntax"
 local test = require "core.test"
 local DocView = require "core.docview"
 local MarkdownView = require "core.markdownview"
@@ -554,6 +555,31 @@ local lua_var = 1
     test.equal(MarkdownView.resolve_color(colors_by_text["lua_var"]), style.syntax["normal"])
     test.equal(MarkdownView.resolve_color(colors_by_text["="]), style.syntax["operator"])
     test.equal(MarkdownView.resolve_color(colors_by_text["1"]), style.syntax["number"])
+  end)
+
+  test.test("re-resolves fenced code when a language alias is registered", function()
+    local alias = "anvil-markdownview-late-alias"
+    local view = MarkdownView("```" .. alias .. "\nlocal value = 1\n```")
+    view.size.x = 420
+    view.size.y = 240
+
+    local initial_layout = view:ensure_layout()
+    test.equal(view.layout, initial_layout)
+    view:release_owned_features("view-remove")
+    test.equal(syntax.add_language_alias(alias, "lua"), true)
+    test.is_nil(view.layout)
+
+    local colors_by_text = {}
+    for _, command in ipairs(view:ensure_layout().commands) do
+      if command.type == "text" and command.tabbed then
+        for _, fragment in ipairs(command.fragments) do
+          local text = fragment.text:match("^%s*(.-)%s*$")
+          if text ~= "" then colors_by_text[text] = fragment.color end
+        end
+      end
+    end
+    test.equal(MarkdownView.resolve_color(colors_by_text["local"]), style.syntax.keyword)
+    view:release_owned_features("test")
   end)
 
   test.test("uses a fixed font object for all markdown font roles when configured", function()

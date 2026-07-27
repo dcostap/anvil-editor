@@ -26,53 +26,6 @@ local IMAGE_CACHE_DIR = USERDIR .. PATHSEP .. "cache"
 local TABLE_BORDER = math.max(style.divider_size, 1)
 local TABLE_CELL_PADDING_X = style.padding.x
 local TABLE_CELL_PADDING_Y = math.max(common.round(style.padding.y / 2), 1)
-local CODE_FENCE_ALIASES = {
-  bash = "sh",
-  caddyfile = "caddyfile",
-  c = "c",
-  ["c#"] = "cs",
-  cc = "cpp",
-  cmake = "cmake",
-  cpp = "cpp",
-  ["c++"] = "cpp",
-  cxx = "cpp",
-  css = "css",
-  d = "d",
-  dart = "dart",
-  go = "go",
-  glsl = "glsl",
-  h = "cpp",
-  hpp = "cpp",
-  html = "html",
-  ini = "ini",
-  java = "java",
-  javascript = "js",
-  js = "js",
-  json = "json",
-  julia = "jl",
-  liquid = "liquid",
-  lua = "lua",
-  markdown = "md",
-  md = "md",
-  mjs = "js",
-  moon = "moon",
-  nim = "nim",
-  nix = "nix",
-  perl = "pl",
-  php = "php",
-  py = "py",
-  python = "py",
-  rescript = "res",
-  ruby = "rb",
-  rust = "rs",
-  sh = "sh",
-  toml = "toml",
-  typescript = "ts",
-  v = "v",
-  xml = "xml",
-  yaml = "yaml"
-}
-local CODE_FENCE_SYNTAX_CACHE = {}
 local parse_inline
 local parse_inline_lines
 local extract_single_image
@@ -793,45 +746,9 @@ local function get_reference_definition(line)
   end
 end
 
-local function normalize_syntax_name(name)
-  return name:lower():gsub("[%W_]+", "")
-end
-
-local function get_code_fence_language(info)
-  local language = trim(info or ""):match("^[^%s]+")
-  if not language or language == "" then
-    return nil
-  end
-  language = language:lower()
-    :gsub("^language%-", "")
-    :gsub("^lang%-", "")
-  return CODE_FENCE_ALIASES[language] or language
-end
-
 local function resolve_code_fence_syntax(info)
-  local language = get_code_fence_language(info)
-  if not language then
-    return syntax.plain_text_syntax
-  end
-
-  local cached = CODE_FENCE_SYNTAX_CACHE[language]
-  if cached then
-    return cached
-  end
-
-  local resolved = syntax.get("codeblock." .. language)
-  if resolved == syntax.plain_text_syntax then
-    local normalized = normalize_syntax_name(language)
-    for _, item in ipairs(syntax.items) do
-      if normalize_syntax_name(item.name or "") == normalized then
-        resolved = item
-        break
-      end
-    end
-  end
-
-  CODE_FENCE_SYNTAX_CACHE[language] = resolved
-  return resolved
+  local resolved = syntax.resolve_language(info, { source = "markdown-fence" })
+  return resolved or syntax.plain_text_syntax
 end
 
 local function find_next_inline_marker(text, start_index)
@@ -2971,6 +2888,12 @@ function MarkdownView:new(source, title)
   self.selection_cursor = nil
   self.selecting = false
 
+  local owner = setmetatable({ self }, { __mode = "v" })
+  syntax.add_registry_listener(self, function()
+    local view = owner[1]
+    if view then view:invalidate_layout() end
+  end)
+
   if type(source) == "table" then
     self.linked_doc = source.linked_doc or source.doc
     self.path = source.path
@@ -2988,6 +2911,20 @@ function MarkdownView:new(source, title)
   else
     self:set_text(source or "")
   end
+end
+
+---Releases registry subscriptions owned by this view.
+---@param reason? string
+function MarkdownView:release_owned_features(reason)
+  -- Node tab moves use remove/add and report view-remove even though this same
+  -- view remains alive. The weak registry subscription must survive that move.
+  if reason == "view-remove" then return end
+  syntax.remove_registry_listener(self)
+end
+
+function MarkdownView:try_close(do_close)
+  self:release_owned_features("view-close")
+  do_close()
 end
 
 ---Returns the persisted view state for file-backed previews.
