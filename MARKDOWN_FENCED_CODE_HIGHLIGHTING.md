@@ -1,6 +1,6 @@
 # Markdown Live Preview Fenced-Code Highlighting Plan
 
-Status: proposed July 27, 2026.
+Status: implemented July 27, 2026.
 
 ## Goal
 

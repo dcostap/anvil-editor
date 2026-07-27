@@ -6,6 +6,7 @@ local Doc = require "core.doc"
 local DocView = require "core.docview"
 local markdown = require "core.markdown"
 local markdown_completion = require "core.markdown.completion"
+local fence_highlight = require "core.markdown.fence_highlight"
 local markdown_model = require "core.markdown.model"
 local keymap = require "core.keymap"
 local linewrapping = require "core.linewrapping"
@@ -965,6 +966,42 @@ test.describe("Markdown Live Editor", function()
     deadline = system.get_time() + 5
     while local_color() == nil and system.get_time() < deadline do coroutine.yield(0) end
     test.not_equal(local_color(), style.syntax.keyword)
+  end)
+
+  test.it("uses ready syntax fonts when measuring fenced rows", function()
+    local view, doc = make_view("```js\nconst value = 1\n```\n", "font-metrics.md")
+    doc:set_selection(1, 1)
+    local old_keyword_font = style.syntax_fonts.keyword
+    local tall_font = view:get_font():copy(view:get_font():get_size() * 2)
+    style.syntax_fonts.keyword = tall_font
+    local ok, err = pcall(function()
+      refresh(view)
+      local service = test.not_nil(fence_highlight.peek(doc))
+      test.equal(service:get_diagnostics().lines_tokenized, 0)
+      view:get_visual_row_height(2)
+      test.equal(service:get_diagnostics().lines_tokenized, 0)
+      local deadline = system.get_time() + 5
+      repeat
+        local rendered = view:get_line_render(2)
+        local ready
+        for _, fragment in ipairs(view:iter_line_render_fragments(rendered)) do
+          if (fragment.text or ""):match("^%s*(.-)%s*$") == "const"
+            and fragment.font == tall_font
+          then
+            ready = true
+            break
+          end
+        end
+        if ready then break end
+        coroutine.yield(0)
+      until system.get_time() >= deadline
+      test.ok(
+        view:get_visual_row_height(2)
+          >= math.floor(tall_font:get_height() * config.line_height)
+      )
+    end)
+    style.syntax_fonts.keyword = old_keyword_font
+    if not ok then error(err, 0) end
   end)
 
   test.it("reveals a Wikilink at the caret position after its closing brackets", function()

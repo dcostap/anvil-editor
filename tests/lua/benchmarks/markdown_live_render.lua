@@ -2,6 +2,7 @@ local config = require "core.config"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
 local markdown = require "core.markdown"
+local fence_highlight = require "core.markdown.fence_highlight"
 local markdown_model = require "core.markdown.model"
 local test = require "core.test"
 local worker_pool = require "core.worker_pool"
@@ -20,6 +21,22 @@ local function representative_source(bytes)
     lines[#lines + 1], size, i = line, size + #line, i + 1
   end
   return table.concat(lines)
+end
+
+local function fenced_source(count, body_lines)
+  local lines = {}
+  for fence = 1, count do
+    local language = fence % 2 == 0 and "js" or "lua"
+    lines[#lines + 1] = "```" .. language
+    for line = 1, body_lines do
+      lines[#lines + 1] = language == "js"
+        and string.format("const value%d_%d = %d", fence, line, line)
+        or string.format("local value%d_%d = %d", fence, line, line)
+    end
+    lines[#lines + 1] = "```"
+    lines[#lines + 1] = ""
+  end
+  return table.concat(lines, "\n")
 end
 
 local function wait_ready(instance, timeout)
@@ -49,6 +66,43 @@ local function measure(samples, fn)
 end
 
 test.describe("Markdown live render benchmark", function()
+  test.it("reports lazy fenced-code demand and cache diagnostics", function()
+    local old_enabled = config.markdown_live_editor
+    config.markdown_live_editor = true
+    local doc = Doc("fence-benchmark.md", "fence-benchmark.md", true)
+    doc:insert(1, 1, fenced_source(2000, 3))
+    doc:clear_undo_redo()
+    local view = DocView(doc)
+    view.size.x, view.size.y = 1200, 800
+    view:set_wrapping_enabled(false)
+    markdown.live_render.refresh_view(view)
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_ready(instance), instance.reason)
+
+    for line = 1, 30 do view:get_line_render(line) end
+    local service = test.not_nil(fence_highlight.peek(doc))
+    local deadline = system.get_time() + 10
+    while service:get_diagnostics().pending_work and system.get_time() < deadline do
+      coroutine.yield(0)
+    end
+    local diagnostics = service:get_diagnostics()
+    print(string.format(
+      "Markdown fence benchmark: document_lines=%d tokenized=%d cached=%d bytes=%d pairs=%d checkpoints=%d queued=%d evictions=%d",
+      #doc.lines,
+      diagnostics.lines_tokenized,
+      diagnostics.cached_lines,
+      diagnostics.cached_source_bytes,
+      diagnostics.cached_token_pairs,
+      diagnostics.checkpoint_count,
+      diagnostics.queued_lines,
+      diagnostics.evictions
+    ))
+    test.ok(diagnostics.lines_tokenized < 2000 * 3)
+    markdown.live_render.release(view, "benchmark")
+    markdown_model.close(doc, "benchmark")
+    config.markdown_live_editor = old_enabled
+  end)
+
   test.it("reports cached viewport and caret-transition latency", function()
     local old_enabled = config.markdown_live_editor
     config.markdown_live_editor = true

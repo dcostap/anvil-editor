@@ -3359,6 +3359,21 @@ local function with_block_spacing(view, line, entry, height, heading)
   return height + block_spacing_after(view, line, heading)
 end
 
+local function fenced_code_ready_line_height(view, line, fenced)
+  local base_font = style.syntax_fonts.normal or view:get_font()
+  local height = base_font:get_height()
+  local owner = view.__markdown_live_owner
+  local service = owner and owner.fence_service
+  local entry = service and service:peek_line_tokens(fenced, line)
+  if entry then
+    for _, syntax_type in tokenizer.each_token(entry.tokens) do
+      local font = style.syntax_fonts[syntax_type] or view:get_font()
+      height = math.max(height, font:get_height())
+    end
+  end
+  return math.max(math.floor(height * config.line_height), height)
+end
+
 local function compute_line_height(view, line, entry)
   if view_in_source_mode(view) then return nil end
   local wrapped = line_is_wrapped(view, line)
@@ -3369,6 +3384,11 @@ local function compute_line_height(view, line, entry)
   local text = (view.doc.lines[line] or ""):gsub("\n$", "")
   local body_height = markdown_live_body_line_height(view)
   local heading = semantic_heading_for_line(view, text, line)
+  local fenced = not in_comment and fenced_code_for_line(view, line)
+  local fenced_height
+  if fenced and not fenced_code_delimiter_kind(view, fenced, line) then
+    fenced_height = fenced_code_ready_line_height(view, line, fenced)
+  end
   if wrapped then
     local image_span = not in_comment and image_only_span(view, text, line)
     local final_row = entry and entry.row_in_line
@@ -3388,10 +3408,10 @@ local function compute_line_height(view, line, entry)
         end
       end
     end
-    local height = heading and math.max(
+    local height = fenced_height or (heading and math.max(
       body_height,
       heading_text_row_height(view, heading.level)
-    ) or body_height
+    ) or body_height)
     return with_block_spacing(view, line, entry, height, heading)
   end
   if not in_comment then
@@ -3419,6 +3439,7 @@ local function compute_line_height(view, line, entry)
     end
     return with_block_spacing(view, line, entry, height, heading)
   end
+  if fenced_height then return fenced_height end
   if not in_comment and line_in_raw_block(view, line) then return nil end
   local reveal_units = reveal_units_for_line(view, line)
   local image_span = image_only_span(view, text, line)

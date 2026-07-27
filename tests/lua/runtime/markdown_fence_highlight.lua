@@ -270,4 +270,105 @@ test.describe("Markdown fenced-code highlighting", function()
     service:close("test")
     markdown_model.close(doc, "test")
   end)
+
+  test.it("bounds render tokens and replays evicted lines from checkpoints", function()
+    local lines = { "```lua" }
+    for index = 1, 12 do lines[#lines + 1] = "local value" .. index .. " = " .. index end
+    lines[#lines + 1] = "```"
+    local doc = make_doc(table.concat(lines, "\n") .. "\n")
+    local model = markdown_model.get(doc)
+    test.ok(wait_status(model, "ready"), model.reason)
+    local node = test.not_nil(model:fenced_node_for_line(13))
+    local service = fence_highlight.get(doc)
+    service:reconcile(model)
+    service:set_cache_limits({
+      render_lines = 2,
+      source_bytes = 1024,
+      token_pairs = 20,
+      checkpoints = 2,
+      blocks = 4,
+    })
+    local listener = {}
+    service:add_listener(listener, function() end)
+
+    test.is_nil(service:line_tokens(node, 13, 100))
+    test.not_nil(wait_entry(service, node, 13))
+    local diagnostics = service:get_diagnostics()
+    test.ok(diagnostics.cached_lines <= 2)
+    test.ok(diagnostics.checkpoint_count <= 2)
+    test.ok(diagnostics.evictions > 0)
+
+    test.is_nil(service:line_tokens(node, 3, 100))
+    test.not_nil(wait_entry(service, node, 3))
+    test.ok(service:get_diagnostics().replayed_lines > 0)
+
+    service:remove_listener(listener)
+    service:close("test")
+    markdown_model.close(doc, "test")
+  end)
+
+  test.it("preserves deeper demand when an earlier evicted line is also requested", function()
+    local lines = { "```lua" }
+    for index = 1, 100 do lines[#lines + 1] = "local value" .. index .. " = " .. index end
+    lines[#lines + 1] = "```"
+    local doc = make_doc(table.concat(lines, "\n") .. "\n")
+    local model = markdown_model.get(doc)
+    test.ok(wait_status(model, "ready"), model.reason)
+    local node = test.not_nil(model:fenced_node_for_line(101))
+    local service = fence_highlight.get(doc)
+    service:reconcile(model)
+    service:set_cache_limits({ render_lines = 30, checkpoints = 4 })
+    local keeper = {}
+    service:add_listener(keeper, function() end)
+    test.is_nil(service:line_tokens(node, 101, 100))
+    test.not_nil(wait_entry(service, node, 101))
+
+    local ready40, ready60
+    local listener = {}
+    service:add_listener(listener, function()
+      ready40 = ready40 or service:line_tokens(node, 41, 100) ~= nil
+      ready60 = ready60 or service:line_tokens(node, 61, 100) ~= nil
+    end)
+
+    test.is_nil(service:line_tokens(node, 61, 100))
+    test.is_nil(service:line_tokens(node, 41, 100))
+    local deadline = system.get_time() + 5
+    while not (ready40 and ready60) and system.get_time() < deadline do coroutine.yield(0) end
+    test.equal(ready40, true)
+    test.equal(ready60, true)
+
+    service:remove_listener(listener)
+    service:remove_listener(keeper)
+    service:close("test")
+    markdown_model.close(doc, "test")
+  end)
+
+  test.it("falls back to plain for one line larger than the cache budget", function()
+    local doc = make_doc("```lua\nlocal oversized_value = 123456789\n```\n")
+    local model = markdown_model.get(doc)
+    test.ok(wait_status(model, "ready"), model.reason)
+    local node = test.not_nil(model:fenced_node_for_line(2))
+    local service = fence_highlight.get(doc)
+    service:reconcile(model)
+    service:set_cache_limits({ source_bytes = 8, token_pairs = 2 })
+    local listener = {}
+    service:add_listener(listener, function() end)
+    test.is_nil(service:line_tokens(node, 2, 100))
+    local deadline = system.get_time() + 5
+    while service:get_diagnostics().oversized_lines == 0
+      and system.get_time() < deadline
+    do
+      coroutine.yield(0)
+    end
+    local entry, reason = service:line_tokens(node, 2, 100)
+    test.is_nil(entry)
+    test.equal(reason, "oversized")
+    local diagnostics = service:get_diagnostics()
+    test.ok(diagnostics.cached_source_bytes <= diagnostics.limits.source_bytes)
+    test.ok(diagnostics.cached_token_pairs <= diagnostics.limits.token_pairs)
+
+    service:remove_listener(listener)
+    service:close("test")
+    markdown_model.close(doc, "test")
+  end)
 end)
