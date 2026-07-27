@@ -433,6 +433,39 @@ end
 
 local active_tokenizer = lua_tokenizer
 local using_native = false
+local backend_generation = 0
+local backend_listeners = setmetatable({}, { __mode = "k" })
+
+local function notify_backend_changed(reason)
+  backend_generation = backend_generation + 1
+  local identity = using_native and "native" or "lua"
+  for id, callback in pairs(backend_listeners) do
+    local ok, err = pcall(callback, backend_generation, identity, reason)
+    if not ok then
+      core.log_quiet("Tokenizer backend listener %s failed: %s", tostring(id), tostring(err))
+    end
+  end
+end
+
+function tokenizer.get_backend_generation()
+  return backend_generation
+end
+
+function tokenizer.get_backend_identity()
+  return using_native and "native" or "lua"
+end
+
+function tokenizer.add_backend_listener(id, callback)
+  assert(id ~= nil, "tokenizer backend listener id is required")
+  assert(type(callback) == "function", "tokenizer backend listener callback is required")
+  backend_listeners[id] = callback
+end
+
+function tokenizer.remove_backend_listener(id)
+  if not backend_listeners[id] then return false end
+  backend_listeners[id] = nil
+  return true
+end
 
 ---Enable or disable the native tokenizer backend.
 ---
@@ -442,9 +475,12 @@ local using_native = false
 ---@param enabled boolean
 ---@return boolean enabled True when the native backend is active after the call.
 function tokenizer.set_use_native(enabled)
+  enabled = enabled == true
+  local changed = using_native ~= enabled
   if enabled then
     active_tokenizer = native_tokenizer
     using_native = true
+    if changed then notify_backend_changed("backend") end
     return true
   end
 
@@ -452,6 +488,7 @@ function tokenizer.set_use_native(enabled)
   using_native = false
   tokenizer[native_text_arena_field] = nil
   tokenizer[native_token_arena_field] = nil
+  if changed then notify_backend_changed("backend") end
   return false
 end
 
@@ -480,6 +517,7 @@ function tokenizer.clear_native_cache(root_syntax)
   for _, doc in ipairs(core.docs or {}) do
     clear_native_cache_from_syntax(doc.syntax, visited)
   end
+  notify_backend_changed("cache-reset")
 end
 
 

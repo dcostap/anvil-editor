@@ -906,6 +906,67 @@ test.describe("Markdown Live Editor", function()
     test.equal(colors["1"], style.syntax.number)
   end)
 
+  test.it("does not expose stale fence tokens before semantic republication", function()
+    local view, doc = make_view("```lua\n--[[\ninside\n]]\n```\n", "stateful.md")
+    doc:set_selection(1, 1)
+    refresh(view)
+
+    local function color_for(line, wanted)
+      local rendered = view:get_line_render(line)
+      if not rendered then return nil end
+      for _, fragment in ipairs(view:iter_line_render_fragments(rendered)) do
+        if (fragment.text or ""):match("^%s*(.-)%s*$") == wanted then
+          return fragment.color
+        end
+      end
+    end
+
+    local deadline = system.get_time() + 5
+    while color_for(3, "inside") ~= style.syntax.comment
+      and system.get_time() < deadline
+    do
+      coroutine.yield(0)
+    end
+    test.equal(color_for(3, "inside"), style.syntax.comment)
+
+    doc:remove(2, 1, 2, 5)
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.not_equal(color_for(3, "inside"), style.syntax.comment)
+  end)
+
+  test.it("drops a stale language selection while an info edit is pending", function()
+    local view, doc = make_view("```lua\nlocal value = 1\n```\n", "language-switch.md")
+    doc:set_selection(1, 1)
+    refresh(view)
+
+    local function local_color()
+      local rendered = view:get_line_render(2)
+      if not rendered then return nil end
+      for _, fragment in ipairs(view:iter_line_render_fragments(rendered)) do
+        if (fragment.text or ""):match("^%s*(.-)%s*$") == "local" then
+          return fragment.color
+        end
+      end
+    end
+
+    local deadline = system.get_time() + 5
+    while local_color() ~= style.syntax.keyword and system.get_time() < deadline do
+      coroutine.yield(0)
+    end
+    test.equal(local_color(), style.syntax.keyword)
+
+    doc:remove(1, 4, 1, 7)
+    doc:insert(1, 4, "python")
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.not_equal(local_color(), style.syntax.keyword)
+
+    local model = markdown_model.peek(doc)
+    test.ok(wait_status(model, "ready"), model.reason)
+    deadline = system.get_time() + 5
+    while local_color() == nil and system.get_time() < deadline do coroutine.yield(0) end
+    test.not_equal(local_color(), style.syntax.keyword)
+  end)
+
   test.it("reveals a Wikilink at the caret position after its closing brackets", function()
     local source = "[[APPi-Sage]]"
     local view, doc = make_view(source .. "\nplain", "right-edge-link.md")

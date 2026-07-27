@@ -3137,8 +3137,13 @@ end
 function provider:line_generation(view, line)
   if view_in_source_mode(view) then return "source" end
   local optimistic = optimistic_render(view, line)
-  local fence_generation = ""
   local owner = view.__markdown_live_owner
+  if optimistic and owner and owner.fence_service
+    and owner.fence_service:is_line_unsafe(line)
+  then
+    optimistic = nil
+  end
+  local fence_generation = ""
   local fenced = fenced_code_for_line(view, line)
   if fenced and owner and owner.fence_service then
     fence_generation = ":fence:" .. tostring(owner.fence_service:line_generation(fenced, line))
@@ -3167,6 +3172,18 @@ function provider:on_text_transaction(view, transaction, line1)
     end
   end
   capture_optimistic_renders(view, transaction)
+  local owner = view.__markdown_live_owner
+  local fence_line1, fence_line2
+  if owner and owner.fence_service then
+    fence_line1, fence_line2 = owner.fence_service:on_text_transaction(transaction)
+    if fence_line1 then
+      for optimistic_line in pairs(owner.optimistic_lines or {}) do
+        if optimistic_line >= fence_line1 and optimistic_line <= (fence_line2 or fence_line1) then
+          owner.optimistic_lines[optimistic_line] = nil
+        end
+      end
+    end
+  end
   if table_line1 then
     local owner = view.__markdown_live_owner
     for line, entry in pairs(owner and owner.optimistic_lines or {}) do
@@ -3199,12 +3216,16 @@ function provider:on_text_transaction(view, transaction, line1)
       if suffix_changed then break end
     end
   end
-  if not suffix_changed then return table_line1, table_line2 end
-  local owner = view.__markdown_live_owner
+  if not suffix_changed then
+    local affected_line1 = math.min(table_line1 or math.huge, fence_line1 or math.huge)
+    local affected_line2 = math.max(table_line2 or -math.huge, fence_line2 or -math.huge)
+    return affected_line1 ~= math.huge and affected_line1 or nil,
+      affected_line2 ~= -math.huge and affected_line2 or nil
+  end
   if owner then
     owner.semantic_pending_line = math.min(owner.semantic_pending_line or line1, line1)
   end
-  return math.min(line1, table_line1 or line1), #view.doc.lines
+  return math.min(line1, table_line1 or line1, fence_line1 or line1), #view.doc.lines
 end
 
 local function heading_content_fragments(view, text, heading, font, reveal_units)
@@ -3456,6 +3477,12 @@ function provider:render_line(view, line)
     return { raw_passthrough = true }
   end
   local optimistic = optimistic_render(view, line)
+  local owner = view.__markdown_live_owner
+  if optimistic and owner and owner.fence_service
+    and owner.fence_service:is_line_unsafe(line)
+  then
+    optimistic = nil
+  end
   if optimistic and not current_semantic_model(view) then return optimistic.render_line end
   if not render_semantic_model(view, line) then return { raw_passthrough = true } end
   local in_comment = line_in_semantic_comment(view, line)

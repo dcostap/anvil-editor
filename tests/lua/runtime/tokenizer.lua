@@ -11,6 +11,32 @@ local function collect_each_token(tokens, scol)
 end
 
 test.describe("tokenizer", function()
+  test.test("publishes backend identity and cache generations", function()
+    local original = tokenizer.is_using_native()
+    local listener = {}
+    local events = {}
+    tokenizer.add_backend_listener(listener, function(generation, identity, reason)
+      events[#events + 1] = { generation, identity, reason }
+    end)
+
+    local before = tokenizer.get_backend_generation()
+    tokenizer.set_use_native(not original)
+    test.ok(tokenizer.get_backend_generation() > before)
+    test.equal(tokenizer.get_backend_identity(), original and "lua" or "native")
+    test.equal(events[#events][2], tokenizer.get_backend_identity())
+    test.equal(events[#events][3], "backend")
+
+    before = tokenizer.get_backend_generation()
+    tokenizer.set_use_native(not original)
+    test.equal(tokenizer.get_backend_generation(), before)
+    tokenizer.clear_native_cache()
+    test.ok(tokenizer.get_backend_generation() > before)
+    test.equal(events[#events][3], "cache-reset")
+
+    tokenizer.set_use_native(original)
+    tokenizer.remove_backend_listener(listener)
+  end)
+
   test.test("toggles the native module while keeping each_token", function()
     local original = config.native_tokenizer
     local syntax = {
