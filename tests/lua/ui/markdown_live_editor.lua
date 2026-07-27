@@ -907,6 +907,45 @@ test.describe("Markdown Live Editor", function()
     test.equal(colors["1"], style.syntax.number)
   end)
 
+  test.it("syntax-highlights SQL fences through the info string", function()
+    local view, doc = make_view(
+      "```sql\nselect *\nfrom MovimientoStock\nwhere MovOrigen = 'B6166B54'\norder by fecha desc\n```\n",
+      "sql-highlight.md"
+    )
+    doc:set_selection(1, 1)
+    refresh(view)
+
+    local function color_for(line, wanted)
+      local rendered = view:get_line_render(line)
+      if not rendered then return nil end
+      for _, fragment in ipairs(view:iter_line_render_fragments(rendered)) do
+        if (fragment.text or ""):match("^%s*(.-)%s*$") == wanted then
+          return fragment.color
+        end
+      end
+    end
+
+    local deadline = system.get_time() + 5
+    while system.get_time() < deadline do
+      local ready = color_for(2, "select") == style.syntax.keyword
+        and color_for(3, "from") == style.syntax.keyword
+        and color_for(4, "where") == style.syntax.keyword
+        and color_for(4, "'B6166B54'") == style.syntax.string
+        and color_for(5, "order") == style.syntax.keyword
+        and color_for(5, "by") == style.syntax.keyword
+        and color_for(5, "desc") == style.syntax.keyword
+      if ready then break end
+      coroutine.yield(0)
+    end
+    test.equal(color_for(2, "select"), style.syntax.keyword)
+    test.equal(color_for(3, "from"), style.syntax.keyword)
+    test.equal(color_for(4, "where"), style.syntax.keyword)
+    test.equal(color_for(4, "'B6166B54'"), style.syntax.string)
+    test.equal(color_for(5, "order"), style.syntax.keyword)
+    test.equal(color_for(5, "by"), style.syntax.keyword)
+    test.equal(color_for(5, "desc"), style.syntax.keyword)
+  end)
+
   test.it("does not expose stale fence tokens before semantic republication", function()
     local view, doc = make_view("```lua\n--[[\ninside\n]]\n```\n", "stateful.md")
     doc:set_selection(1, 1)
