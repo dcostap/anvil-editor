@@ -112,7 +112,7 @@ local function filter_item(self, item, match, match_type)
   if match_type == "function" then
     matched = match(self, item)
   else
-    matched = system.fuzzy_match(item.label or item.name, match, false)
+    matched = common.fuzzy_match(item.label or item.name, match, false)
   end
 
   local child_matched = false

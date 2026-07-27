@@ -31,6 +31,31 @@ test.describe("native fuzzy Lua API", function()
     test.equal(match.match_start, 5)
   end)
 
+  test.it("matches Latin letters without diacritics", function()
+    local results = fuzzy.filter({ "éclair", "eclair", "resume", "naïve" }, "ecl", { limit = 10 })
+    local found_accented = false
+    for _, result in ipairs(results) do
+      if result.text == "éclair" then found_accented = true end
+    end
+    test.ok(found_accented)
+    results = fuzzy.filter({ "éclair", "eclair" }, "écl", { limit = 10 })
+    test.ok(#results == 2)
+    results = fuzzy.filter({ "eclair" }, "ëcl", { limit = 10 })
+    test.equal(results[1].text, "eclair")
+
+    local match = fuzzy.match("éclair", "ecl", { spans = true })
+    test.same(match.spans, { { 1, 4 } })
+    test.equal(match.match_class, "contiguous")
+  end)
+
+  test.it("matches text after embedded NUL bytes", function()
+    local text = "prefix\0éclair"
+    test.ok(fuzzy.score(text, "ecl"))
+    local match = fuzzy.match(text, "ecl", { spans = true })
+    test.equal(match.text, text)
+    test.same(match.spans, { { 8, 11 } })
+  end)
+
   test.it("treats slash and backslash as the same separator in path mode", function()
     local idx = fuzzy.index({ "src\\core/main.lua", "src/core\\test.lua" }, { mode = "path" })
     local results = idx:search("core\\main", { limit = 10, spans = true })

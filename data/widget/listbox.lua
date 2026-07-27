@@ -5,6 +5,7 @@
 --
 
 local core = require "core"
+local common = require "core.common"
 local style = require "core.style"
 local Widget = require "widget"
 local MessageBox = require "widget.messagebox"
@@ -104,7 +105,7 @@ function ListBox:filter(match)
       if match_type == "function" then
         score = match(self, idx, row, self.row_data_original[idx])
       else
-        score = system.fuzzy_match(self:get_row_text(row), match, false)
+        score = common.fuzzy_match(self:get_row_text(row), match, false)
       end
       if score then
         table.insert(rows, {row, self.row_data_original[idx], score, idx})

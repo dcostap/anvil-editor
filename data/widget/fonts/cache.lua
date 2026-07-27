@@ -257,7 +257,7 @@ function FontCache:search(name, style, monospaced)
 
   for _, font in ipairs(self.fonts) do
     if not monospaced or (monospaced and font.monospace) then
-      local score = system.fuzzy_match(
+      local score = common.fuzzy_match(
         font.fullname:ulower(),
         name .. " " .. style,
         false

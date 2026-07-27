@@ -878,70 +878,6 @@ function fuzzy_searcher.restored_prompt_text(text)
   return text, false
 end
 
-local function split_words(q)
-  local t = {}
-  for w in trim_query(q):lower():gmatch("%S+") do t[#t+1] = w end
-  return t
-end
-
-local SCORE_MATCH = 16
-local BONUS_BOUNDARY = SCORE_MATCH / 2
-local BONUS_BOUNDARY_WHITE = BONUS_BOUNDARY + 2
-local BONUS_BOUNDARY_DELIMITER = BONUS_BOUNDARY + 1
-local BONUS_NON_WORD = BONUS_BOUNDARY
-local BONUS_CAMEL123 = BONUS_BOUNDARY - 1
-local BONUS_CONSECUTIVE = 4
-
-local function char_class_at(text, idx)
-  if idx < 1 or idx > #text then return "white" end
-  local ch = text:sub(idx, idx)
-  local b = ch:byte()
-  if ch:match("%s") then return "white" end
-  if ch == "/" or ch == "\\" or ch == ":" or ch == ";" or ch == "," or ch == "|" then return "delimiter" end
-  if b and b >= 48 and b <= 57 then return "number" end
-  if b and b >= 97 and b <= 122 then return "lower" end
-  if b and b >= 65 and b <= 90 then return "upper" end
-  if ch:match("%a") then return "letter" end
-  return "nonword"
-end
-
-local function bonus_for(prev_class, class)
-  if class ~= "white" then
-    if prev_class == "white" then return BONUS_BOUNDARY_WHITE end
-    if prev_class == "delimiter" then return BONUS_BOUNDARY_DELIMITER end
-    if prev_class == "nonword" then return BONUS_BOUNDARY end
-  end
-  if (prev_class == "lower" and class == "upper") or (prev_class ~= "number" and class == "number") then
-    return BONUS_CAMEL123
-  end
-  if class == "nonword" or class == "delimiter" then return BONUS_NON_WORD end
-  if class == "white" then return BONUS_BOUNDARY_WHITE end
-  return 0
-end
-
-local function bonus_at(text, idx)
-  local prev_class = idx == 1 and "white" or char_class_at(text, idx - 1)
-  return bonus_for(prev_class, char_class_at(text, idx))
-end
-
-local function positions_to_spans(positions, offset)
-  local spans = {}
-  offset = offset or 0
-  local s, e
-  for _, p in ipairs(positions or {}) do
-    if not s then
-      s, e = p, p
-    elseif p == e + 1 then
-      e = p
-    else
-      spans[#spans+1] = { offset + s, offset + e }
-      s, e = p, p
-    end
-  end
-  if s then spans[#spans+1] = { offset + s, offset + e } end
-  return spans
-end
-
 local function fuzzy_match(query, text)
   query = trim_query(query)
   text = tostring(text or "")
@@ -951,84 +887,13 @@ local function fuzzy_match(query, text)
   return match.score, match.spans or {}, match.selection_span, match.match_start
 end
 
-local function fuzzy_subsequence_too_weak(word_len, positions)
-  if word_len < 4 then return false end
-  if not positions or #positions == 0 then return false end
-  local longest_run, current_run, max_gap = 1, 1, 0
-  for i = 2, #positions do
-    local gap = positions[i] - positions[i - 1] - 1
-    if gap > max_gap then max_gap = gap end
-    if positions[i] == positions[i - 1] + 1 then
-      current_run = current_run + 1
-    else
-      current_run = 1
-    end
-    if current_run > longest_run then longest_run = current_run end
-  end
-  if longest_run >= math.ceil(word_len / 2) then return false end
-  local span = positions[#positions] - positions[1] + 1
-  if span > word_len * 2 + 4 then return true end
-  return max_gap > math.max(10, word_len * 2)
-end
-
-local function fuzzy_match_file_fast_word(word, text, lower, base_start)
-  word = tostring(trim_query(word) or ""):lower():gsub("[/\\]", "/")
-  if word == "" then return 0, {} end
-
-  local positions = {}
-  local score = 0
-  local scan = 1
-  local last = 0
-  for i = 1, #word do
-    local p = lower:find(word:sub(i, i), scan, true)
-    if not p then return nil end
-    positions[#positions+1] = p
-
-    local b = bonus_at(text, p)
-    score = score + SCORE_MATCH + b
-    if p == last + 1 then score = score + BONUS_CONSECUTIVE end
-    if p >= base_start then score = score + 8 end
-    if text:sub(p, p) == word:sub(i, i) then score = score + 1 end
-
-    last = p
-    scan = p + 1
-  end
-
-  if fuzzy_subsequence_too_weak(#word, positions) then return nil end
-
-  score = score - (positions[1] or 1)
-  score = score - math.floor((positions[#positions] - positions[1]) / 3)
-  return score, positions_to_spans(positions)
-end
-
 local function fuzzy_match_file_fast(query, text)
   query = trim_query(query)
   text = tostring(text or "")
   if query == "" then return 0, {} end
-
-  local lower = text:lower():gsub("[/\\]", "/")
-  local base = text:match("[^/\\]+$") or text
-  local base_start = #text - #base + 1
-  local total, spans = 0, {}
-
-  for _, word in ipairs(split_words(query)) do
-    local normalized_word = tostring(word or ""):lower():gsub("[/\\]", "/")
-    local exact_s, exact_e = lower:find(normalized_word, 1, true)
-    local score, word_spans
-    if exact_s then
-      score = SCORE_MATCH * #normalized_word + 120 - exact_s - math.floor((exact_e - exact_s) / 2)
-      if exact_s >= base_start then score = score + 120 end
-      word_spans = { { exact_s, exact_e } }
-    else
-      score, word_spans = fuzzy_match_file_fast_word(word, text, lower, base_start)
-      if not score then return nil end
-    end
-    total = total + score
-    for _, span in ipairs(word_spans) do spans[#spans+1] = span end
-  end
-
-  total = total - math.floor(#text / 8)
-  return total, spans
+  local match = fuzzy_native.match(text, query, { mode = "path", spans = true })
+  if not match then return nil end
+  return match.score, match.spans or {}
 end
 
 local line_exists
@@ -2283,33 +2148,12 @@ fuzzy_searcher.grep_order = {
 }
 
 function fuzzy_searcher.grep_order.path_match_class(query, text)
-  query = trim_query(query):lower():gsub("[/\\]", "/")
+  query = trim_query(query)
   if query == "" then return fuzzy_searcher.grep_order.PATH_NONE end
-  text = tostring(text or ""):lower():gsub("[/\\]", "/")
-  local words = {}
-  for word in query:gmatch("%S+") do
-    words[#words+1] = word
-  end
-  local all_contiguous = true
-  for _, word in ipairs(words) do
-    if not text:find(word, 1, true) then all_contiguous = false; break end
-  end
-  if all_contiguous then return fuzzy_searcher.grep_order.PATH_CONTIGUOUS end
-
-  for _, word in ipairs(words) do
-    local scan, first, previous, last, max_gap = 1, nil, nil, nil, 0
-    for i = 1, #word do
-      local position = text:find(word:sub(i, i), scan, true)
-      if not position then return fuzzy_searcher.grep_order.PATH_LOOSE end
-      first = first or position
-      if previous then max_gap = math.max(max_gap, position - previous - 1) end
-      previous, last, scan = position, position, position + 1
-    end
-    local span = last - first + 1
-    if span > #word * 2 + 4 or max_gap > math.max(10, #word * 2) then
-      return fuzzy_searcher.grep_order.PATH_LOOSE
-    end
-  end
+  text = tostring(text or "")
+  local match = fuzzy_native.match(text, query, { mode = "path" })
+  if not match or match.match_class == "loose" then return fuzzy_searcher.grep_order.PATH_LOOSE end
+  if match.match_class == "contiguous" then return fuzzy_searcher.grep_order.PATH_CONTIGUOUS end
   return fuzzy_searcher.grep_order.PATH_COMPACT
 end
 

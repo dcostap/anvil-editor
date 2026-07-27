@@ -210,33 +210,23 @@ static int f_filter(lua_State *L) {
 }
 
 static int match_text(lua_State *L, bool as_table) {
-  size_t text_len, query_len;
+  size_t text_len = 0, query_len = 0;
   const char *text = luaL_checklstring(L, 1, &text_len);
   const char *query = luaL_checklstring(L, 2, &query_len);
   (void)query_len;
   FuzzyMode mode = opt_mode(L, 3);
   bool include_spans = as_table ? opt_spans(L, 3) : false;
   if (text_len > UINT32_MAX) return 0;
-
-  char *lower = (char *)malloc(text_len + 1);
-  if (!lower) luaL_error(L, "out of memory");
-  for (size_t i = 0; i < text_len; ++i) lower[i] = fuzzy_normalize_match_char(mode, text[i]);
-  lower[text_len] = '\0';
-
-  uint32_t basename_start = 0;
-  if (mode == FUZZY_MODE_PATH) {
-    for (size_t i = text_len; i > 0; --i) {
-      if (text[i - 1] == '/' || text[i - 1] == '\\') { basename_start = (uint32_t)i; break; }
-    }
-  }
-  int score = fuzzy_match_score(mode, text, lower, (uint32_t)text_len, basename_start, query);
+  FuzzyMatchBuffer buffer;
+  if (!fuzzy_match_buffer_build(&buffer, mode, text, (uint32_t)text_len)) luaL_error(L, "out of memory");
+  int score = fuzzy_match_buffer_score(mode, &buffer, query);
   if (score == INT_MIN) {
-    free(lower);
+    fuzzy_match_buffer_free(&buffer);
     return 0;
   }
 
   if (!as_table) {
-    free(lower);
+    fuzzy_match_buffer_free(&buffer);
     lua_pushinteger(L, score);
     return 1;
   }
@@ -244,11 +234,15 @@ static int match_text(lua_State *L, bool as_table) {
   lua_createtable(L, 0, include_spans ? 5 : 2);
   lua_pushinteger(L, score);
   lua_setfield(L, -2, "score");
-  lua_pushstring(L, text);
+  lua_pushlstring(L, text, text_len);
   lua_setfield(L, -2, "text");
+  lua_pushstring(L, fuzzy_match_class_name(
+    fuzzy_match_text_class(mode, buffer.lower, buffer.len, query)));
+  lua_setfield(L, -2, "match_class");
   if (include_spans) {
     FuzzySpan spans[FUZZY_MAX_RETURN_SPANS];
-    uint32_t count = fuzzy_match_text_spans(mode, lower, (uint32_t)text_len, query, spans, FUZZY_MAX_RETURN_SPANS);
+    uint32_t count = fuzzy_match_buffer_spans(mode, text, (uint32_t)text_len,
+      &buffer, query, spans, FUZZY_MAX_RETURN_SPANS);
     lua_createtable(L, count, 0);
     for (uint32_t i = 0; i < count; ++i) {
       push_span_table(L, &spans[i]);
@@ -257,7 +251,7 @@ static int match_text(lua_State *L, bool as_table) {
     lua_setfield(L, -2, "spans");
     push_match_position_fields(L, spans, count);
   }
-  free(lower);
+  fuzzy_match_buffer_free(&buffer);
   return 1;
 }
 

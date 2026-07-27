@@ -61,6 +61,44 @@ static int test_case_insensitive_and_limit(void) {
   return 0;
 }
 
+static int test_diacritic_insensitive_matching(void) {
+  const char *items[] = { "éclair", "e\314\201clair", "eclair", "resume", "naïve" };
+  FuzzyIndex idx;
+  CHECK(fuzzy_index_build(&idx, items, 5, FUZZY_MODE_GENERIC));
+
+  uint32_t count = 0;
+  bool has_more = false;
+  FuzzySearchResult *r = fuzzy_index_search(&idx, "ecl", 10, &count, &has_more);
+  CHECK(r != NULL);
+  CHECK(find_text(&idx, r, count, "éclair") >= 0);
+  free(r);
+
+  r = fuzzy_index_search(&idx, "écl", 10, &count, &has_more);
+  CHECK(r != NULL);
+  CHECK(find_text(&idx, r, count, "éclair") >= 0);
+  CHECK(find_text(&idx, r, count, "eclair") >= 0);
+  free(r);
+
+  r = fuzzy_index_search(&idx, "ëcl", 10, &count, &has_more);
+  CHECK(r != NULL);
+  CHECK(find_text(&idx, r, count, "eclair") >= 0);
+  free(r);
+
+  FuzzySpan spans[8];
+  uint32_t n = fuzzy_match_spans(&idx, 0, "ecl", spans, 8);
+  CHECK(n == 1);
+  CHECK(spans[0].start == 1);
+  CHECK(spans[0].end == 4);
+
+  n = fuzzy_match_spans(&idx, 1, "ecl", spans, 8);
+  CHECK(n == 1);
+  CHECK(spans[0].start == 1);
+  CHECK(spans[0].end == 5);
+
+  fuzzy_index_free(&idx);
+  return 0;
+}
+
 static int test_path_basename_preference(void) {
   const char *items[] = {
     "src/render/backend.c",
@@ -329,6 +367,7 @@ int main(void) {
   int rc = 0;
   rc |= test_generic_basic();
   rc |= test_case_insensitive_and_limit();
+  rc |= test_diacritic_insensitive_matching();
   rc |= test_path_basename_preference();
   rc |= test_path_mode_treats_slash_and_backslash_as_same_separator();
   rc |= test_generic_mode_keeps_slash_and_backslash_distinct();

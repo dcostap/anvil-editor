@@ -48,6 +48,22 @@ test.describe("Fuzzy Searcher recent files", function()
     test.equal(rows[1].file, slash_path)
   end)
 
+  test.it("matches file names without requiring their diacritics", function(context)
+    local path = make_file(context, "fuzzy-éclair.lua")
+
+    local rows = fuzzy_searcher._test.file_search_rows("fuzzy-eclair", { path }, nil, 10)
+
+    test.equal(rows[1].file, path)
+  end)
+
+  test.it("classifies diacritic-insensitive path matches like plain paths", function()
+    local classify = fuzzy_searcher._test.grep_path_match_class
+    local plain = classify("fuzzy-eclair", "folder/fuzzy-eclair.lua")
+    local accented = classify("fuzzy-eclair", "folder/fuzzy-éclair.lua")
+
+    test.equal(accented, plain)
+  end)
+
   test.it("skips the current file only from recents and keeps matching recents above general matches", function(context)
     local current = make_file(context, "fuzzy-current-needle.lua")
     local recent_newer = make_file(context, "fuzzy-recent-newer-needle.lua")

@@ -1003,7 +1003,7 @@ static uint32_t query_collect_fuzzy_symbols(
     if (!query_symbol_allowed(snapshot, i, kinds, kind_count, parent_names, parent_name_count,
         languages, language_count, path_rules)) continue;
     const FuzzyEntry *entry = &snapshot->symbol_fuzzy.entries[i];
-    const char *text = snapshot->symbol_fuzzy.text_arena + entry->text_offset;
+    const char *text = snapshot->symbol_fuzzy.match_arena + entry->match_offset;
     const char *lower = snapshot->symbol_fuzzy.lower_arena + entry->lower_offset;
     int score = fuzzy_match_score(FUZZY_MODE_GENERIC, text, lower, entry->len, entry->basename_start, query);
     if (score == INT_MIN) continue;
