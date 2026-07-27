@@ -873,6 +873,17 @@ test.describe("Markdown Live Editor", function()
     test.equal(table.concat(visible), "See [[One|First]] and Second")
   end)
 
+  test.it("reveals a Wikilink at the caret position after its closing brackets", function()
+    local source = "[[APPi-Sage]]"
+    local view, doc = make_view(source .. "\nplain", "right-edge-link.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+
+    doc:set_selection(1, #source + 1)
+
+    test.equal(visible_render_text(view, 1), source)
+  end)
+
   test.it("keeps heading markers hidden when revealing a nested inline construct", function()
     local source = "# Head **bold** tail\nplain"
     local view, doc = make_view(source, "note.md")
@@ -1390,7 +1401,7 @@ test.describe("Markdown Live Editor", function()
     if not ok then error(err, 0) end
   end)
 
-  test.it("renders semantic list, task, and quote markers with task toggles", function()
+  test.it("renders task markers as consistent checkbox widgets without list bullets", function()
     local view, doc = make_view("- item\n- [ ] todo\n- [x] done\n> quote\nplain", "blocks.md")
     doc:set_selection(5, 1)
     refresh(view)
@@ -1410,14 +1421,140 @@ test.describe("Markdown Live Editor", function()
     bullet = test.not_nil(bullet)
     test.not_nil(bullet.widget)
     test.equal(bullet.text or "", "")
-    local unchecked = test.not_nil(find_text(2, "☐"))
-    test.not_nil(find_text(3, "☑"))
+    local function task_checkbox(line)
+      local checkbox, list_bullet
+      for _, fragment in ipairs(fragments(line)) do
+        if fragment.markdown_task_checkbox then checkbox = fragment end
+        if fragment.unordered_list_marker and fragment.widget then list_bullet = fragment end
+      end
+      test.equal(list_bullet, nil)
+      return test.not_nil(checkbox)
+    end
+    local unchecked = task_checkbox(2)
+    local checked = task_checkbox(3)
+    test.equal(unchecked.text or "", "")
+    test.equal(checked.text or "", "")
+    test.not_nil(unchecked.widget)
+    test.not_nil(checked.widget)
+    test.equal(unchecked.width, checked.width)
+    test.equal(unchecked.widget.width, checked.widget.width)
     test.not_nil(find_text(4, "│ "))
+  end)
 
-    local line_x, line_y = view:get_line_screen_position(2)
-    local checkbox_x = line_x + view:get_line_render_col_x_offset(view:get_line_render(2), unchecked.source_col1) + 2
+  test.it("uses rounded task checkboxes and circular unordered list bullets", function()
+    local view, doc = make_view(
+      "- [ ] task\n- [x] done\n- item\nplain", "rounded-list-markers.md"
+    )
+    doc:set_selection(4, 1)
+    refresh(view)
+    local checkbox, checked_checkbox, bullet
+    for _, fragment in ipairs(test.not_nil(view:get_line_render(1)).fragments or {}) do
+      if fragment.markdown_task_checkbox then checkbox = fragment end
+    end
+    for _, fragment in ipairs(test.not_nil(view:get_line_render(2)).fragments or {}) do
+      if fragment.markdown_task_checkbox then checked_checkbox = fragment end
+    end
+    for _, fragment in ipairs(test.not_nil(view:get_line_render(3)).fragments or {}) do
+      if fragment.unordered_list_marker then bullet = fragment end
+    end
+    checkbox = test.not_nil(checkbox)
+    checked_checkbox = test.not_nil(checked_checkbox)
+    bullet = test.not_nil(bullet)
+
+    local old_rounded = renderer.draw_rounded_rect
+    local old_rect = renderer.draw_rect
+    local old_text = renderer.draw_text
+    local rounded_calls = 0
+    local checkmark_calls = 0
+    renderer.draw_rounded_rect = function()
+      rounded_calls = rounded_calls + 1
+    end
+    renderer.draw_rect = function() end
+    renderer.draw_text = function(_, text)
+      if text == "✓" then checkmark_calls = checkmark_calls + 1 end
+    end
+    local ok, err = pcall(function()
+      checkbox.widget.draw(view, checkbox, 0, 0, checkbox.widget.height)
+      local checkbox_calls = rounded_calls
+      test.ok(checkbox_calls > 0, "expected a rounded checkbox")
+      checked_checkbox.widget.draw(
+        view, checked_checkbox, 0, 0, checked_checkbox.widget.height
+      )
+      test.equal(checkmark_calls, 1)
+      bullet.widget.draw(view, bullet, 0, 0, bullet.widget.height)
+      test.ok(rounded_calls > checkbox_calls, "expected a circular bullet")
+    end)
+    renderer.draw_rounded_rect = old_rounded
+    renderer.draw_rect = old_rect
+    renderer.draw_text = old_text
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("preserves list hierarchy across plain and task markers", function()
+    local view, doc = make_view(
+      " - [ ] parent task\n - parent plain\n\t - child plain\n\t - [ ] child task\nplain",
+      "list-hierarchy.md"
+    )
+    doc.get_indent_info = function() return false, 1 end
+    doc:set_selection(5, 1)
+    refresh(view)
+
+    local parent_task_x = view:get_col_x_offset(1, 8)
+    local parent_plain_x = view:get_col_x_offset(2, 4)
+    local child_plain_x = view:get_col_x_offset(3, 5)
+    local child_task_x = view:get_col_x_offset(4, 9)
+    test.equal(parent_task_x, parent_plain_x)
+    test.equal(child_task_x, child_plain_x)
+    local indent_step = live_body_font(view):get_width(
+      string.rep(" ", config.markdown_live_list_indent_spaces)
+    )
+    test.equal(child_plain_x - parent_plain_x, indent_step)
+    test.equal(child_task_x - parent_task_x, indent_step)
+  end)
+
+  test.it("toggles task checkboxes without moving the caret", function()
+    local view, doc = make_view("- [ ] todo\nplain", "task-toggle.md")
+    doc:set_selection(2, 3)
+    refresh(view)
+    local checkbox
+    for _, fragment in ipairs(test.not_nil(view:get_line_render(1)).fragments or {}) do
+      if fragment.markdown_task_checkbox then checkbox = fragment break end
+    end
+    checkbox = test.not_nil(checkbox)
+    local selection = view:get_selection_state()
+
+    local line_x, line_y = view:get_line_screen_position(1)
+    local checkbox_x = line_x
+      + view:get_line_render_col_x_offset(view:get_line_render(1), checkbox.source_col1) + 2
     test.equal(view:on_mouse_pressed("left", checkbox_x, line_y + 2, 1), true)
-    test.equal(doc.lines[2], "- [x] todo\n")
+    test.equal(doc.lines[1], "- [x] todo\n")
+    test.same(view:get_selection_state(), selection)
+    local immediate_checkbox
+    for _, fragment in ipairs(test.not_nil(view:get_line_render(1)).fragments or {}) do
+      if fragment.markdown_task_checkbox then immediate_checkbox = fragment break end
+    end
+    immediate_checkbox = test.not_nil(immediate_checkbox)
+    test.equal(immediate_checkbox.checked, true)
+    test.equal(immediate_checkbox.widget.checked, true)
+  end)
+
+  test.it("reveals only the task marker source when the caret enters its checkbox", function()
+    local view, doc = make_view(" - [ ] todo\nplain", "task-reveal.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+
+    doc:set_selection(1, 4)
+    local task_source, checkbox, list_bullet
+    for _, fragment in ipairs(test.not_nil(view:get_line_render(1)).fragments or {}) do
+      if fragment.markdown_task_source_marker then task_source = fragment end
+      if fragment.markdown_task_checkbox then checkbox = fragment end
+      if fragment.unordered_list_marker and fragment.widget then list_bullet = fragment end
+    end
+    task_source = test.not_nil(task_source)
+    test.equal(task_source.text, "[ ]")
+    test.equal(task_source.widget, nil)
+    test.equal(checkbox, nil)
+    test.equal(list_bullet, nil)
   end)
 
   test.it("keeps unordered list geometry stable and reveals only its marker token", function()
@@ -1474,6 +1611,30 @@ test.describe("Markdown Live Editor", function()
     linewrapping.reconstruct_breaks(view, view:get_font(), math.ceil(rendered_width))
 
     test.equal(view:get_line_visual_row_count(1), 1)
+  end)
+
+  test.it("hangs wrapped list continuations from the rendered content lane", function()
+    local source = " - [ ] alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu"
+    local view, doc = make_view(source .. "\nplain", "list-hanging-wrap.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+    local old_indent = config.plugins.linewrapping.indent
+    local old_wrapping_indent = config.plugins.linewrapping.wrapping_indent
+    config.plugins.linewrapping.indent = true
+    config.plugins.linewrapping.wrapping_indent = 2
+    local ok, err = pcall(function()
+      local render_line = test.not_nil(view:get_line_render(1))
+      local content_x = view:get_line_render_col_x_offset(render_line, 8)
+      local extra = linewrapping.continuation_indent_width(live_body_font(view), "")
+      linewrapping.reconstruct_breaks(
+        view, view:get_font(), live_body_font(view):get_width("alpha beta gamma delta")
+      )
+      test.ok(view:get_line_visual_row_count(1) > 1)
+      test.equal(view.wrapped_line_offsets[1], content_x + extra)
+    end)
+    config.plugins.linewrapping.indent = old_indent
+    config.plugins.linewrapping.wrapping_indent = old_wrapping_indent
+    if not ok then error(err, 0) end
   end)
 
   test.it("presents ordered markers, hard breaks, and indented code without replacing source content", function()

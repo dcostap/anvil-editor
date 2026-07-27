@@ -189,9 +189,19 @@ local function list_marker_for_line(view, line)
       if marker and marker.line1 == line then
         local text = (view.doc.lines[line] or ""):gsub("\n$", "")
         local raw = text:sub(marker.col1, marker.col2 - 1)
-        local token = raw:match("^%S+") or raw
-        return marker, node, marker.col1 + #token
+        local _, token_end = raw:find("%S+")
+        return marker, node, marker.col1 + (token_end or #raw)
       end
+    end
+  end
+end
+
+local function task_marker_for_line(view, line)
+  for _, node in ipairs(semantic_line(view, line) or {}) do
+    local attributes = node.attributes or {}
+    local marker = attributes.task_checked or attributes.task_unchecked
+    if marker and marker.line1 == line then
+      return marker, node
     end
   end
 end
@@ -227,15 +237,12 @@ local function selection_touches_line(line, line_text, line1, col1, line2, col2)
   return from < to
 end
 
-local function semantic_node_targets_image(node, line_text)
-  if node.type == "image" then return true end
-  if node.type ~= "embed" then return false end
-  local target = node.attributes and node.attributes.target
-  if not (target and target.line1 == target.line2) then return false end
-  local value = line_text:sub(target.col1, target.col2 - 1):match("^[^#|]+") or ""
-  local ext = value:match("%.([^%.?#/\\]+)$")
-  return IMAGE_EXTENSIONS[ext and ext:lower() or ""] == true
-end
+local REVEAL_AT_RIGHT_EDGE_TYPES = {
+  link = true,
+  image = true,
+  wiki_link = true,
+  embed = true,
+}
 
 local function reveal_units_for_line(view, line, state)
   state = state or current_selection_state(view)
@@ -292,6 +299,16 @@ local function reveal_units_for_line(view, line, state)
             }
           end
         end
+        local task_marker, task_node = task_marker_for_line(view, line)
+        if task_marker and source_intersects_selection(
+          task_marker, line1, col1, line2, col2
+        ) then
+          units[#units + 1] = {
+            type = "task_marker", id = task_node.id .. ":task",
+            col1 = task_marker.col1, col2 = task_marker.col2,
+            line1 = line, line2 = line,
+          }
+        end
         if touches_line and not has_localized_reveal and not list_marker then
           units[#units + 1] = { type = "line", col1 = 1, col2 = #line_text + 1, whole_line = true }
         end
@@ -301,26 +318,36 @@ local function reveal_units_for_line(view, line, state)
         end
       else
         local cursor_text = (view.doc.lines[line1] or ""):gsub("\n$", "")
-        local best, best_size, has_localized_reveal
+        local best, best_size, best_contains, has_localized_reveal
         for _, node in ipairs(semantic_line(view, line1) or {}) do
           if REVEAL_TYPES[node.type] then
             if node.type ~= "heading" then has_localized_reveal = true end
             local node_col1, node_col2 = node_line_range(node, line1, cursor_text)
-            local inclusive_image_edge = semantic_node_targets_image(node, cursor_text)
-              and col1 == node_col2
-            if node_col1 and col1 >= node_col1
-              and (col1 < node_col2 or inclusive_image_edge)
-            then
+            local contains = node_col1 and col1 >= node_col1 and col1 < node_col2
+            local inclusive_right_edge = node_col1
+              and REVEAL_AT_RIGHT_EDGE_TYPES[node.type] and col1 == node_col2
+            if contains or inclusive_right_edge then
               local size = (node.source.end_byte or 0) - (node.source.start_byte or 0)
-              if not best_size or size < best_size then best, best_size = node, size end
+              if not best_size or size < best_size
+                or size == best_size and contains and not best_contains
+              then
+                best, best_size, best_contains = node, size, contains
+              end
             end
           end
         end
         local list_marker, list_node, list_marker_token_col2 = list_marker_for_line(view, line1)
+        local task_marker, task_node = task_marker_for_line(view, line1)
         if list_marker and col1 >= list_marker.col1 and col1 <= list_marker_token_col2 then
           units[#units + 1] = {
             type = "list_marker", id = list_node.id,
             col1 = list_marker.col1, col2 = list_marker.col2,
+            line1 = line1, line2 = line1,
+          }
+        elseif task_marker and col1 >= task_marker.col1 and col1 <= task_marker.col2 then
+          units[#units + 1] = {
+            type = "task_marker", id = task_node.id .. ":task",
+            col1 = task_marker.col1, col2 = task_marker.col2,
             line1 = line1, line2 = line1,
           }
         elseif best and line >= best.source.line1 and line <= best.source.line2 then
@@ -1890,6 +1917,14 @@ local function markdown_indent_width(prefix)
   return width
 end
 
+local function markdown_list_visual_indent_width(prefix)
+  local source_width = markdown_indent_width(prefix)
+  local visual_step = math.max(
+    1, math.floor(tonumber(config.markdown_live_list_indent_spaces) or 4)
+  )
+  return math.floor(source_width / 4) * visual_step + source_width % 4
+end
+
 local function ordered_list_display_marker(view, line, ordered)
   local revision = view.doc.text_revision or view.doc:get_change_id()
   local cache = view.__markdown_live_ordered_marker_cache
@@ -1928,6 +1963,60 @@ local function ordered_list_display_marker(view, line, ordered)
     view.__markdown_live_ordered_marker_cache = cache
   end
   return cache.lines[line] or ordered
+end
+
+local function list_item_content_col(line_text, marker, task)
+  local col = task and task.col2 or marker and marker.col2 or 1
+  while col <= #line_text and line_text:sub(col, col):match("[ \t]") do
+    col = col + 1
+  end
+  return col
+end
+
+local function draw_task_checkmark(box_x, box_y, box_size, color, font)
+  local glyph = "✓"
+  renderer.draw_text(
+    font, glyph,
+    box_x + math.floor((box_size - font:get_width(glyph)) / 2),
+    box_y + math.floor((box_size - font:get_height()) / 2),
+    color
+  )
+end
+
+local function task_checkbox_widget(
+  width, height, box_size, checked, checkmark_font, box_area_x, box_area_width
+)
+  box_area_x = box_area_x or 0
+  box_area_width = box_area_width or width
+  return {
+    wrapping = "inline", cursor = "hand", width = width, height = height,
+    checked = checked,
+    draw = function(_, fragment, x, y, visual_row_height)
+      local is_checked = fragment.checked
+      local checkbox_color = is_checked and style.markdown_live_task_checked
+        or style.markdown_live_task_unchecked
+      local border = math.max(1, math.floor(SCALE))
+      local box_x = x + box_area_x + math.floor((box_area_width - box_size) / 2)
+      local box_y = y + math.floor((visual_row_height - box_size) / 2)
+      local radius = math.max(border, math.floor(box_size * 0.22))
+      renderer.draw_rounded_rect(
+        box_x, box_y, box_size, box_size, radius, checkbox_color
+      )
+      if is_checked then
+        draw_task_checkmark(
+          box_x, box_y, box_size, style.markdown_live_task_checkmark,
+          checkmark_font
+        )
+      else
+        local inner_size = math.max(1, box_size - border * 2)
+        renderer.draw_rounded_rect(
+          box_x + border, box_y + border,
+          inner_size, inner_size, math.max(0, radius - border),
+          style.markdown_live_task_background
+        )
+      end
+    end,
+  }
 end
 
 local function semantic_block_fragments(view, line_text, line, reveal_units)
@@ -2032,30 +2121,74 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
         end
       end
     elseif node.type == "list" or node.type == "list_item" then
+      local task = attributes.task_checked or attributes.task_unchecked
       local marker = attributes.list
+      local body_font = markdown_live_body_font(view)
+      local checkmark_font = markdown_live_scaled_font(
+        view, style.markdown_live_bold_font,
+        math.max(1, math.floor(body_font:get_size() * 0.78))
+      )
+      local row_height = markdown_live_body_line_height(view)
+      local checked = task and attributes.task_checked ~= nil
+      local task_semantic_id = task and (node.id .. ":task")
+      local task_revealed = task and reveal_unit_matches(
+        reveal_units, task_semantic_id, task.col1, task.col2
+      )
+      local task_raw = task and line_text:sub(task.col1, task.col2 - 1)
+      local task_content_col = task and list_item_content_col(line_text, marker, task)
+      local list_control_size = math.max(
+        math.floor(SCALE * 10), math.floor(body_font:get_height() * 0.72)
+      )
+      local box_size = task and list_control_size
+      local task_source_width = task and math.max(
+        body_font:get_width("[ ]"), body_font:get_width("[x]"),
+        body_font:get_width("[X]"), box_size + math.floor(SCALE * 2)
+      )
+      local function toggle_task(_, owner, _, button)
+        if button ~= "left" then return false end
+        local selection = owner:get_selection_state()
+        local source = (owner.doc.lines[line] or ""):sub(task.col1, task.col2 - 1)
+        local currently_checked = source:match("^%[[xX]%]$") ~= nil
+        owner:with_selection_state(function()
+          owner.doc:set_selection(line, task.col1, line, task.col2)
+          owner.doc:text_input(currently_checked and "[ ]" or "[x]")
+          owner:set_selection_state(selection)
+        end)
+        return true
+      end
+
+      local task_checkbox_in_marker = false
       local marker_key = marker and table.concat({ marker.line1, marker.col1, marker.col2 }, ":")
       if marker and marker.line1 == line and not seen[marker_key] then
         seen[marker_key] = true
-        local raw = line_text:sub(marker.col1, marker.col2 - 1)
-        local ordered = raw:match("^(%d+[.)])")
-        local body_font = markdown_live_body_font(view)
-        local raw_width = body_font:get_width(raw)
-        local marker_width = math.max(
-          body_font:get_width(" "), raw_width, math.floor(SCALE * 4)
+        local captured_raw = line_text:sub(marker.col1, marker.col2 - 1)
+        local token_start = captured_raw:find("%S") or 1
+        local token_col = marker.col1 + token_start - 1
+        local indent = line_text:sub(1, token_col - 1):match("([ \t]*)$") or ""
+        local marker_source_col1 = token_col - #indent
+        local raw = line_text:sub(marker_source_col1, marker.col2 - 1)
+        local ordered = raw:match("^%s*(%d+[.)])")
+        local indent_width = body_font:get_width(
+          string.rep(" ", markdown_list_visual_indent_width(indent))
         )
+        local raw_width = body_font:get_width(raw)
+        local marker_gap_width = body_font:get_width(" ")
+        local marker_control_width = math.max(
+          body_font:get_width("-"), list_control_size
+        )
+        local marker_lane_width = marker_control_width + marker_gap_width
+        local marker_width = indent_width + marker_lane_width
         local marker_revealed = reveal_unit_matches(
           reveal_units, node.id, marker.col1, marker.col2
         )
         if ordered then
-          local display_marker = ordered_list_display_marker(
-            view, line, ordered
-          )
+          local display_marker = ordered_list_display_marker(view, line, ordered)
           marker_width = math.max(
-            marker_width, body_font:get_width(display_marker .. " ")
+            marker_width, indent_width + body_font:get_width(display_marker .. " ")
           )
           if marker_revealed then
             fragments[#fragments + 1] = {
-              source_col1 = marker.col1, source_col2 = marker.col2,
+              source_col1 = marker_source_col1, source_col2 = marker.col2,
               text = raw, width = marker_width,
               color = style.markdown_live_list_marker,
               semantic_id = node.id .. ":marker",
@@ -2063,8 +2196,9 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
             }
           else
             fragments[#fragments + 1] = {
-              source_col1 = marker.col1, source_col2 = marker.col2,
+              source_col1 = marker_source_col1, source_col2 = marker.col2,
               text = display_marker, width = marker_width,
+              text_x_offset = indent_width,
               color = style.markdown_live_list_marker,
               semantic_id = node.id .. ":marker",
               ordered_list_marker = true,
@@ -2074,55 +2208,102 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
           local marker_size = math.max(2, math.floor(body_font:get_height() * 0.24))
           if marker_revealed then
             fragments[#fragments + 1] = {
-              source_col1 = marker.col1, source_col2 = marker.col2,
+              source_col1 = marker_source_col1, source_col2 = marker.col2,
               text = raw, width = marker_width,
               text_x_offset = math.max(0, (marker_width - raw_width) / 2),
               color = style.markdown_live_list_marker,
               semantic_id = node.id .. ":marker",
               unordered_list_source_marker = true,
             }
+          elseif task and not task_revealed then
+            task_checkbox_in_marker = true
+            local checkbox_widget = task_checkbox_widget(
+              marker_width, row_height, box_size, checked,
+              checkmark_font, indent_width, marker_control_width
+            )
+            checkbox_widget.on_mouse_pressed = toggle_task
+            fragments[#fragments + 1] = {
+              source_col1 = marker_source_col1, source_col2 = task_content_col,
+              text = "", width = marker_width,
+              color = checked and style.markdown_live_task_checked
+                or style.markdown_live_task_unchecked,
+              semantic_id = task_semantic_id,
+              markdown_task_checkbox = true, checked = checked,
+              markdown_list_content_col = task_content_col,
+              draw_x_offset = indent_width
+                + math.floor((marker_control_width - box_size) / 2),
+              hit_width = box_size,
+              widget = checkbox_widget,
+            }
           else
             fragments[#fragments + 1] = {
-              source_col1 = marker.col1, source_col2 = marker.col2,
+              source_col1 = marker_source_col1, source_col2 = marker.col2,
               text = "", width = marker_width,
               color = style.markdown_live_list_marker,
               semantic_id = node.id .. ":marker",
-              unordered_list_marker = true,
-              widget = {
-                wrapping = "inline",
-                width = marker_width, height = markdown_live_body_line_height(view),
-                draw = function(_, _, x, y, row_height)
-                  renderer.draw_rect(
-                    x + math.floor((marker_width - marker_size) / 2),
-                    y + math.floor((row_height - marker_size) / 2),
-                    marker_size, marker_size, style.markdown_live_list_marker
+            }
+          end
+          if not task then
+            local fragment = fragments[#fragments]
+            fragment.markdown_list_content_col = list_item_content_col(
+              line_text, marker, nil
+            )
+            if not marker_revealed then
+              fragment.unordered_list_marker = true
+              fragment.widget = {
+                wrapping = "inline", width = marker_width, height = row_height,
+                draw = function(_, _, x, y, visual_row_height)
+                  local bullet_x = x + indent_width
+                    + math.floor((marker_control_width - marker_size) / 2)
+                  local bullet_y = y + math.floor((visual_row_height - marker_size) / 2)
+                  renderer.draw_rounded_rect(
+                    bullet_x, bullet_y, marker_size, marker_size,
+                    marker_size / 2, style.markdown_live_list_marker
                   )
                 end,
-              },
-            }
+              }
+            end
           end
         end
       end
-      local task = attributes.task_checked or attributes.task_unchecked
       if task and task.line1 == line then
-        local checked = attributes.task_checked ~= nil
-        fragments[#fragments + 1] = {
-          source_col1 = task.col1, source_col2 = task.col2,
-          text = checked and "☑" or "☐",
-          color = checked and style.markdown_live_task_checked or style.markdown_live_task_unchecked,
-          cursor = "hand",
-          semantic_id = node.id .. ":task",
-          on_mouse_pressed = function(_, owner, _, button)
-            if button ~= "left" then return false end
-            owner:set_selection_state({
-              selections = { line, task.col1, line, task.col2 }, last_selection = 1,
-            })
-            owner:with_selection_state(function()
-              owner.doc:text_input(checked and "[ ]" or "[x]")
-            end)
-            return true
-          end,
-        }
+        if task_revealed then
+          fragments[#fragments + 1] = {
+            source_col1 = task.col1, source_col2 = task_content_col,
+            text_source_col1 = task.col1, text_source_col2 = task.col2,
+            text = task_raw, width = task_source_width,
+            text_x_offset = math.max(
+              0, (task_source_width - body_font:get_width(task_raw)) / 2
+            ),
+            color = style.markdown_live_list_marker,
+            semantic_id = task_semantic_id,
+            markdown_task_source_marker = true,
+            markdown_list_content_col = task_content_col,
+          }
+        elseif not task_checkbox_in_marker then
+          local checkbox_widget = task_checkbox_widget(
+            task_source_width, row_height, box_size, checked, checkmark_font
+          )
+          checkbox_widget.on_mouse_pressed = toggle_task
+          fragments[#fragments + 1] = {
+            source_col1 = task.col1, source_col2 = task_content_col,
+            text = "", width = task_source_width,
+            color = checked and style.markdown_live_task_checked
+              or style.markdown_live_task_unchecked,
+            semantic_id = task_semantic_id,
+            markdown_task_checkbox = true, checked = checked,
+            markdown_list_content_col = task_content_col,
+            draw_x_offset = math.floor((task_source_width - box_size) / 2),
+            hit_width = box_size,
+            widget = checkbox_widget,
+          }
+        else
+          fragments[#fragments + 1] = {
+            source_col1 = task.col1, source_col2 = task_content_col,
+            text = "", width = 0, semantic_id = task_semantic_id,
+            markdown_list_content_col = task_content_col,
+          }
+        end
       end
     end
   end
@@ -2170,6 +2351,10 @@ local function prose_render_line(view, line_text, render_line)
     end
     if not fragment.font then fragment.font = font end
     fragments[#fragments + 1] = fragment
+    if fragment.markdown_list_content_col then
+      render_line.continuation_indent_col = fragment.markdown_list_content_col
+      render_line.continuation_indent_font = font
+    end
     cursor = math.max(cursor, col2)
   end
   if cursor <= #line_text then
@@ -2334,6 +2519,30 @@ local function apply_inline_edit_to_render(render_line, current_text, edit)
     if contains then owner_index = i break end
   end
   local owner = owner_index and render_line.fragments[owner_index]
+  if owner and owner.markdown_task_checkbox
+    and replacement:match("^%[[ xX]%]$")
+  then
+    local delta = #replacement - (end_col - start_col)
+    local updated_text = current_text:sub(1, start_col - 1)
+      .. replacement .. current_text:sub(end_col)
+    owner.checked = replacement:match("^%[[xX]%]$") ~= nil
+    owner.color = owner.checked and style.markdown_live_task_checked
+      or style.markdown_live_task_unchecked
+    if owner.widget then
+      local widget = {}
+      for key, value in pairs(owner.widget) do widget[key] = value end
+      widget.checked = owner.checked
+      owner.widget = widget
+    end
+    owner.source_col2 = (owner.source_col2 or owner.source_col1 or 1) + delta
+    for i = owner_index + 1, #render_line.fragments do
+      local fragment = render_line.fragments[i]
+      fragment.source_col1 = (fragment.source_col1 or 1) + delta
+      fragment.source_col2 = (fragment.source_col2 or fragment.source_col1) + delta
+    end
+    render_line.source_text = updated_text
+    return updated_text
+  end
   if not owner or owner.hidden or owner.widget or owner.width or owner.text_x_offset then return nil end
   local owner_col1 = owner.source_col1 or 1
   local owner_col2 = owner.source_col2 or owner_col1

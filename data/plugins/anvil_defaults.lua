@@ -317,6 +317,9 @@ keymap.add_direct({
 -- USERDIR/project-module override loaded before first-party defaults.
 if config.markdown_live_editor == nil then config.markdown_live_editor = true end
 if config.markdown_live_reveal_mode == nil then config.markdown_live_reveal_mode = "construct" end
+if config.markdown_live_list_indent_spaces == nil then
+  config.markdown_live_list_indent_spaces = 8
+end
 if config.markdown_live_link_path_policy == nil then
   config.markdown_live_link_path_policy = "shortest_unique"
 end

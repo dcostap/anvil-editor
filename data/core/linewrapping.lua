@@ -358,6 +358,12 @@ local function compute_rendered_line_breaks(
   local function rendered_x(col)
     return docview:get_line_render_col_x_offset(render_line, col)
   end
+  if render_line.continuation_indent_col then
+    local continuation_font = render_line.continuation_indent_font or default_font
+    begin_width = rendered_x(render_line.continuation_indent_col) - line_x_offset
+      + LineWrapping.continuation_indent_width(continuation_font, "")
+    begin_width = clamp_continuation_indent_width(begin_width, width)
+  end
   local col = start_col
   for char in common.utf8_chars(text:sub(start_col, visible_end)) do
     local next_col = col + #char

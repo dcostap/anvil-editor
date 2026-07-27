@@ -120,6 +120,14 @@ _Avoid_: Standard Editor DocView, normal Editor, plain Editor
 An Editor mode that presents formatted Markdown inline while keeping the underlying Markdown source directly editable.
 _Avoid_: Live Markdown Editor, Markdown Live Editor
 
+**Markdown Source Mode**:
+An Editor mode that shows all Markdown source syntax normally instead of presenting formatted Markdown inline.
+_Avoid_: Raw rendering mode
+
+**Markdown Reveal Unit**:
+The smallest formatted Markdown construct whose source syntax becomes visible while it is being edited in Markdown Live Preview.
+_Avoid_: Raw rendering mode
+
 **Blank Editor Placeholder**:
 The tabless blank editing surface shown when the Left Pane has no Open Views. It keeps the Left Pane present without representing a real open tab.
 _Avoid_: Empty tab, welcome tab
