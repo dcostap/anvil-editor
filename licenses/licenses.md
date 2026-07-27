@@ -59,6 +59,14 @@ Copyright 2020 The Inter Project Authors (https://github.com/rsms/inter)
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 
+## Merriweather
+
+Copyright 2020 The Merriweather Project Authors
+(https://github.com/EbenSorkin/Merriweather4) with Reserved Font Name
+"Merriweather".
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+
 # SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
 
 PREAMBLE

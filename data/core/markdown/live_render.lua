@@ -509,7 +509,7 @@ end
 local function heading_font(view, level)
   view.__markdown_live_heading_fonts = view.__markdown_live_heading_fonts or {}
   local cache = view.__markdown_live_heading_fonts
-  local font = markdown_live_scaled_font(view, style.markdown_live_bold_font)
+  local font = markdown_live_scaled_font(view, style.markdown_live_heading_font)
   local size = font:get_size()
   local scale = ({ 1.65, 1.45, 1.30, 1.18, 1.08, 1.0 })[level] or 1
   local key = tostring(font) .. ":" .. tostring(size) .. ":" .. tostring(level)
@@ -519,12 +519,35 @@ local function heading_font(view, level)
   return cache[key]
 end
 
-local function inline_style_font(view, span_type, base_font, base_bold)
+local function heading_italic_font(view, level)
+  return markdown_live_scaled_font(
+    view, style.markdown_live_heading_italic_font,
+    heading_font(view, level):get_size()
+  )
+end
+
+local function heading_text_row_height(view, level)
+  local font_height = heading_font(view, level):get_height()
+  return math.max(
+    font_height,
+    math.floor(font_height * config.markdown_live_heading_line_height + 0.5)
+  )
+end
+
+local function inline_style_font(
+  view, span_type, base_font, base_bold, base_italic_font
+)
   view.__markdown_live_inline_fonts = view.__markdown_live_inline_fonts or {}
   local cache = view.__markdown_live_inline_fonts
   local font
   if span_type == "code" then
     font = style.code_font
+  elseif base_bold and (span_type == "emphasis" or span_type == "strong_emphasis")
+    and base_italic_font
+  then
+    font = base_italic_font
+  elseif base_bold and span_type == "strong" and base_font then
+    font = base_font
   elseif span_type == "strong_emphasis" or base_bold and span_type == "emphasis" then
     font = style.markdown_live_bold_italic_font
   elseif span_type == "strong" then
@@ -655,9 +678,14 @@ local function semantic_formatting_fragments(view, line_text, line, reveal_units
         return {
           source_col1 = col1, source_col2 = col2,
           text = line_text:sub(col1, col2 - 1),
-          font = code and inline_style_font(view, "code", opts.base_font, opts.base_bold)
+          font = code and inline_style_font(
+            view, "code", opts.base_font, opts.base_bold, opts.base_italic_font
+          )
             or font_type ~= "normal"
-              and inline_style_font(view, font_type, opts.base_font, opts.base_bold)
+              and inline_style_font(
+                view, font_type, opts.base_font, opts.base_bold,
+                opts.base_italic_font
+              )
             or opts.base_font,
           color = opts.color or normal_text_color(),
           strikethrough = strike or nil,
@@ -1138,9 +1166,13 @@ local function decorate_link_fragment(view, line, span, fragment, opts)
   end
   local font_type = bold and italic and "strong_emphasis"
     or bold and "strong" or italic and "emphasis" or "normal"
-  fragment.font = code and inline_style_font(view, "code", opts.base_font, opts.base_bold)
+  fragment.font = code and inline_style_font(
+    view, "code", opts.base_font, opts.base_bold, opts.base_italic_font
+  )
     or font_type ~= "normal"
-      and inline_style_font(view, font_type, opts.base_font, opts.base_bold)
+      and inline_style_font(
+        view, font_type, opts.base_font, opts.base_bold, opts.base_italic_font
+      )
     or opts.base_font or fragment.font
   fragment.strikethrough = strike or nil
   fragment.background = code and style.markdown_live_inline_code_bg
@@ -2339,6 +2371,9 @@ end
 
 local function prose_render_line(view, line_text, render_line)
   local font = markdown_live_body_font(view)
+  render_line.text_row_height = render_line.text_row_height
+    or markdown_live_body_line_height(view)
+  render_line.caret_height = render_line.caret_height or render_line.text_row_height
   local fragments, cursor = {}, 1
   for _, fragment in ipairs(render_line.fragments or {}) do
     local col1 = math.max(1, fragment.source_col1 or cursor)
@@ -2370,6 +2405,40 @@ local function prose_render_line(view, line_text, render_line)
   render_line.source_text = line_text
   render_line.fragments = fragments
   return render_line
+end
+
+local function set_render_line_task_completion(render_line, checked, content_col)
+  if not (render_line and content_col) then return render_line end
+  render_line.markdown_task_checked = checked == true
+  render_line.markdown_task_content_col = content_col
+  for _, fragment in ipairs(render_line.fragments or {}) do
+    local col2 = fragment.source_col2 or fragment.source_col1 or 1
+    if col2 > content_col and not fragment.widget and fragment.text ~= nil then
+      if not fragment.markdown_task_base_style_saved then
+        fragment.markdown_task_base_style_saved = true
+        fragment.markdown_task_base_color = fragment.color
+        fragment.markdown_task_base_strikethrough = fragment.strikethrough
+      end
+      if checked then
+        fragment.color = style.markdown_live_task_completed_text
+        fragment.strikethrough = true
+      else
+        fragment.color = fragment.markdown_task_base_color
+        fragment.strikethrough = fragment.markdown_task_base_strikethrough
+      end
+    end
+  end
+  return render_line
+end
+
+local function apply_task_completion_presentation(view, line_text, line, render_line)
+  local task, node = task_marker_for_line(view, line)
+  if not (task and node) then return render_line end
+  local attributes = node.attributes or {}
+  local content_col = list_item_content_col(line_text, attributes.list, task)
+  return set_render_line_task_completion(
+    render_line, attributes.task_checked ~= nil, content_col
+  )
 end
 
 local function layout_inline_image_rows(view, line_text, render_line)
@@ -2541,6 +2610,9 @@ local function apply_inline_edit_to_render(render_line, current_text, edit)
       fragment.source_col2 = (fragment.source_col2 or fragment.source_col1) + delta
     end
     render_line.source_text = updated_text
+    set_render_line_task_completion(
+      render_line, owner.checked, render_line.markdown_task_content_col
+    )
     return updated_text
   end
   if not owner or owner.hidden or owner.widget or owner.width or owner.text_x_offset then return nil end
@@ -2968,6 +3040,11 @@ function decoration_provider:line_number_visible(view)
   return false
 end
 
+function decoration_provider:line_number_gutter_visible(view)
+  if view_in_source_mode(view) then return nil end
+  return false
+end
+
 local function provider_generation_state(view)
   local presentation_generation = view:get_presentation_layout_generation()
   local wrap_generation = view.__wrap_layout_generation or 0
@@ -3109,9 +3186,11 @@ end
 
 local function heading_content_fragments(view, text, heading, font, reveal_units)
   local fragments, occupied = {}, {}
+  local italic_font = heading_italic_font(view, heading.level)
   for _, fragment in ipairs(semantic_link_fragments(view, text, heading.line, reveal_units, {
     base_font = font,
     base_bold = true,
+    base_italic_font = italic_font,
   })) do
     if fragment.source_col1 >= heading.content_col1 and fragment.source_col2 <= heading.content_col2 then
       add_fragment(fragments, occupied, fragment)
@@ -3122,6 +3201,7 @@ local function heading_content_fragments(view, text, heading, font, reveal_units
     col2 = heading.content_col2,
     base_font = font,
     base_bold = true,
+    base_italic_font = italic_font,
     color = style.text,
   })) do
     add_fragment(fragments, occupied, fragment)
@@ -3179,11 +3259,17 @@ end
 
 local function heading_render_line(view, text, heading, reveal_units)
   local font = heading_font(view, heading.level)
+  local text_row_height = math.max(
+    markdown_live_body_line_height(view),
+    heading_text_row_height(view, heading.level)
+  )
   local heading_revealed = reveal_unit_matches(
     reveal_units, heading.semantic_id, heading.source_col1, heading.source_col2
   )
   return prose_render_line(view, text, {
     source_text = text,
+    text_row_height = text_row_height,
+    caret_height = text_row_height,
     semantic_id = heading.semantic_id,
     semantic_generation = heading.semantic_generation,
     fragments = heading_revealed
@@ -3202,6 +3288,33 @@ local function render_line_widget_height(render_line)
   return max_height
 end
 
+local function markdown_block_gap(view)
+  return math.max(1, math.floor(markdown_live_body_font(view):get_height() * 0.7))
+end
+
+local function block_spacing_after(view, line, heading)
+  local text = (view.doc.lines[line] or ""):gsub("\n$", "")
+  local next_text = (view.doc.lines[line + 1] or ""):gsub("\n$", "")
+  if text:match("^%s*$") or next_text == "" or next_text:match("^%s*$") then
+    return 0
+  end
+  if heading and not heading.setext then return markdown_block_gap(view) end
+  if semantic_heading_for_line(view, next_text, line + 1) then
+    return markdown_block_gap(view)
+  end
+  return 0
+end
+
+local function final_visual_row_for_line(view, line, entry)
+  if not view.wrapped_settings then return true end
+  return entry and entry.row_in_line == view:get_visual_row_count_for_line(line)
+end
+
+local function with_block_spacing(view, line, entry, height, heading)
+  if not height or not final_visual_row_for_line(view, line, entry) then return height end
+  return height + block_spacing_after(view, line, heading)
+end
+
 local function compute_line_height(view, line, entry)
   if view_in_source_mode(view) then return nil end
   local wrapped = line_is_wrapped(view, line)
@@ -3211,6 +3324,7 @@ local function compute_line_height(view, line, entry)
   local in_comment = line_in_semantic_comment(view, line)
   local text = (view.doc.lines[line] or ""):gsub("\n$", "")
   local body_height = markdown_live_body_line_height(view)
+  local heading = semantic_heading_for_line(view, text, line)
   if wrapped then
     local image_span = not in_comment and image_only_span(view, text, line)
     local final_row = entry and entry.row_in_line
@@ -3223,10 +3337,18 @@ local function compute_line_height(view, line, entry)
       if image_revealed then
         local render_line = image_only_render_line(view, text, line, image_span, true)
         local max_height = render_line_widget_height(render_line)
-        if max_height then return math.max(body_height, max_height) end
+        if max_height then
+          return with_block_spacing(
+            view, line, entry, math.max(body_height, max_height), heading
+          )
+        end
       end
     end
-    return nil
+    local height = heading and math.max(
+      body_height,
+      heading_text_row_height(view, heading.level)
+    ) or body_height
+    return with_block_spacing(view, line, entry, height, heading)
   end
   if not in_comment then
     local table_node = table_for_line(view, line)
@@ -3242,17 +3364,16 @@ local function compute_line_height(view, line, entry)
       end
     end
   end
-  local heading = semantic_heading_for_line(view, text, line)
   if heading then
     local height = math.max(
       body_height,
-      math.floor(heading_font(view, heading.level):get_height() * config.line_height)
+      heading_text_row_height(view, heading.level)
     )
     local render_line = heading_render_line(view, text, heading, reveal_units_for_line(view, line))
     for _, fragment in ipairs(render_line.fragments or {}) do
       if fragment.widget and fragment.widget.height then height = math.max(height, fragment.widget.height) end
     end
-    return height
+    return with_block_spacing(view, line, entry, height, heading)
   end
   if not in_comment and line_in_raw_block(view, line) then return nil end
   local reveal_units = reveal_units_for_line(view, line)
@@ -3263,7 +3384,11 @@ local function compute_line_height(view, line, entry)
     )
     local render_line = image_only_render_line(view, text, line, image_span, image_revealed)
     local max_height = render_line_widget_height(render_line)
-    if max_height then return math.max(body_height, max_height) end
+    if max_height then
+      return with_block_spacing(
+        view, line, entry, math.max(body_height, max_height), heading
+      )
+    end
   end
   local inline = inline_fragments(text, line, view, reveal_units)
   local inline_render = layout_inline_image_rows(view, text, prose_render_line(view, text, {
@@ -3276,8 +3401,12 @@ local function compute_line_height(view, line, entry)
       max_height = math.max(max_height or 0, fragment.widget.height)
     end
   end
-  if max_height then return math.max(body_height, max_height) end
-  return body_height
+  if max_height then
+    return with_block_spacing(
+      view, line, entry, math.max(body_height, max_height), heading
+    )
+  end
+  return with_block_spacing(view, line, entry, body_height, heading)
 end
 
 function provider:line_height(view, line, entry)
@@ -3380,11 +3509,12 @@ function provider:render_line(view, line)
   local fragments = inline_fragments(text, line, view, reveal_units)
   if #fragments > 0 then
     local _, semantic_generation = semantic_line(view, line)
-    return layout_inline_image_rows(view, text, prose_render_line(view, text, {
+    local render_line = layout_inline_image_rows(view, text, prose_render_line(view, text, {
       source_text = text,
       semantic_generation = semantic_generation,
       fragments = fragments,
     }))
+    return apply_task_completion_presentation(view, text, line, render_line)
   end
   return prose_render_line(view, text, { fragments = {} })
 end
@@ -3732,8 +3862,10 @@ function live.attach(view)
   if not (view and view.extends and view:extends(DocView)) then return false end
   if view.__markdown_live_attached then return false end
   view:add_visual_metric_provider(PROVIDER_ID, provider)
-  view:add_line_render_provider(PROVIDER_ID, provider)
   view:add_decoration_provider(PROVIDER_ID, decoration_provider)
+  -- Install gutter policy before the render provider reconstructs soft-wrap
+  -- breaks so wrapping immediately uses the Live Preview content width.
+  view:add_line_render_provider(PROVIDER_ID, provider)
   view:add_clipboard_paste_provider(PROVIDER_ID, clipboard_paste_provider)
   view:add_file_drop_provider(PROVIDER_ID, file_drop_provider)
   view:add_poi_provider(PROVIDER_ID, poi_provider)
@@ -3759,8 +3891,10 @@ function live.detach(view)
   unbind_semantic_model(view)
   clear_image_cache(view)
   view:remove_visual_metric_provider(PROVIDER_ID)
-  view:remove_line_render_provider(PROVIDER_ID)
+  -- Restore ordinary gutter policy before removing rendered wrapping so the
+  -- reconstruction returns directly to the Source/standard Editor width.
   view:remove_decoration_provider(PROVIDER_ID)
+  view:remove_line_render_provider(PROVIDER_ID)
   view:remove_clipboard_paste_provider(PROVIDER_ID)
   view:remove_file_drop_provider(PROVIDER_ID)
   view:remove_poi_provider(PROVIDER_ID)

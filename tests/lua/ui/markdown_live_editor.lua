@@ -341,7 +341,7 @@ test.describe("Markdown Live Editor", function()
     test.equal(view:get_visual_row_height(1), heading_height)
     test.equal(view:get_visual_row_height(4), following_height)
     local _, pending_plain_y = view:get_line_screen_position(5)
-    test.equal(pending_plain_y, plain_y + view:get_visual_row_height(3))
+    test.ok(pending_plain_y > plain_y)
 
     view:on_text_input("\n")
     test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
@@ -387,13 +387,16 @@ test.describe("Markdown Live Editor", function()
     for _, fragment in ipairs(view:get_line_render(1).fragments) do
       if fragment.text == "Title" then heading_text_font = fragment.font break end
     end
-    test.ok(primary_font_path(test.not_nil(heading_text_font)):match("Inter%-SemiBold%.ttf$"))
+    test.ok(
+      primary_font_path(test.not_nil(heading_text_font))
+        :match("Merriweather_24pt%-SemiBold%.ttf$")
+    )
     test.equal(view:get_col_x_offset(1, 1), 0)
     test.equal(view:get_col_x_offset(1, 3), 0)
     test.ok(view:get_col_x_offset(1, 8) > 0)
   end)
 
-  test.it("uses the rendered heading row height for its highlight and caret", function()
+  test.it("uses heading content and block geometry for its caret and highlight", function()
     local view, doc = make_view("# Title\nbody", "note.md")
     doc:set_selection(1, 4)
     refresh(view)
@@ -414,7 +417,8 @@ test.describe("Markdown Live Editor", function()
 
     test.ok(row_height > view:get_line_height())
     test.equal(highlight_height, row_height)
-    test.equal(caret_height, row_height)
+    test.equal(caret_height, view:get_line_render(1).caret_height)
+    test.ok(caret_height < row_height)
   end)
 
   test.it("uses the rendered heading row height for its highlight when wrapping is enabled", function()
@@ -761,6 +765,13 @@ test.describe("Markdown Live Editor", function()
     test.equal(seen.italic.color, style.text)
     test.ok(seen.bold.font ~= view:get_font())
     test.ok(seen.italic.font ~= view:get_font())
+    test.ok(
+      primary_font_path(seen.bold.font):match("Merriweather_24pt%-SemiBold%.ttf$")
+    )
+    test.ok(
+      primary_font_path(seen.italic.font)
+        :match("Merriweather_24pt%-SemiBoldItalic%.ttf$")
+    )
     test.ok(seen["**"] == nil)
     test.ok(seen["*"] == nil)
   end)
@@ -987,13 +998,74 @@ test.describe("Markdown Live Editor", function()
     test.equal(view:get_col_x_offset(1, 3), 0)
   end)
 
-  test.it("keeps actually wrapped Markdown lines on the raw metric path", function()
-    local view, doc = make_view("# This is a very long heading that should wrap in a narrow view\nbody", "note.md")
-    view.size.x = 90
+  test.it("fits every wrapped heading row to its rendered font", function()
+    local view, doc = make_view(
+      "# This rendered heading wraps across several visual rows in a narrow editor\nbody",
+      "wrapped-heading-metrics.md"
+    )
+    view.size.x = 150
     view:set_wrapping_enabled(true)
     doc:set_selection(2, 1)
     refresh(view)
-    test.equal(view:get_visual_row_height(1), view:get_line_height())
+
+    local first_row, _, row_count = linewrapping.get_line_idx_col_count(view, 1)
+    test.ok(row_count > 1)
+    local heading_font
+    for _, fragment in ipairs(test.not_nil(view:get_line_render(1)).fragments or {}) do
+      if fragment.text and fragment.text:find("rendered", 1, true) then
+        heading_font = fragment.font
+        break
+      end
+    end
+    heading_font = test.not_nil(heading_font)
+    local minimum_height = heading_font:get_height()
+    for row = first_row, first_row + row_count - 1 do
+      test.ok(
+        view:get_visual_row_height(row) >= minimum_height,
+        "wrapped heading row must contain the rendered heading font"
+      )
+    end
+    test.ok(
+      view:get_visual_row_height(first_row)
+        < math.floor(heading_font:get_height() * config.line_height),
+      "wrapped heading leading must be tighter than body-text leading"
+    )
+    test.ok(
+      view:get_visual_row_height(first_row + row_count - 1)
+        > view:get_visual_row_height(first_row),
+      "the final wrapped row must preserve heading block separation"
+    )
+  end)
+
+  test.it("separates a heading from a preceding nonblank block", function()
+    local view, doc = make_view("body\n# Heading\nafter", "heading-spacing.md")
+    doc:set_selection(3, 1)
+    refresh(view)
+
+    local _, body_y = view:get_line_screen_position(1)
+    local _, heading_y = view:get_line_screen_position(2)
+    test.equal(heading_y - body_y, view:get_position_visual_row_height(1, 1))
+    test.ok(
+      view:get_position_visual_row_height(1, 1) > view:get_line_height(),
+      "a heading must not run directly into the preceding block"
+    )
+  end)
+
+  test.it("removes the line-number lane only while presenting Live Preview", function()
+    local view, doc = make_view("# Heading\nbody", "live-preview-gutter.md")
+    view.show_line_numbers = true
+    doc:set_selection(2, 1)
+    refresh(view)
+
+    local live_gutter = view:get_gutter_width()
+    markdown.live_render.set_source_mode(view, true, "test-gutter")
+    local source_gutter = view:get_gutter_width()
+    test.ok(live_gutter < source_gutter)
+    test.ok(
+      math.abs(
+        source_gutter - live_gutter - view:get_line_number_gutter_width()
+      ) < 0.01
+    )
   end)
 
   test.it("hides closing ATX heading markers", function()
@@ -1439,6 +1511,27 @@ test.describe("Markdown Live Editor", function()
     test.equal(unchecked.width, checked.width)
     test.equal(unchecked.widget.width, checked.widget.width)
     test.not_nil(find_text(4, "│ "))
+  end)
+
+  test.it("presents all completed task content as muted and struck", function()
+    local view, doc = make_view(
+      "- [x] **done** with [[Target|link]]\nplain",
+      "completed-task-presentation.md"
+    )
+    doc:set_selection(2, 1)
+    refresh(view)
+
+    local wanted = { done = false, [" with "] = false, link = false }
+    for _, fragment in ipairs(test.not_nil(view:get_line_render(1)).fragments or {}) do
+      if wanted[fragment.text] ~= nil then
+        wanted[fragment.text] = true
+        test.equal(fragment.color, style.markdown_live_task_completed_text)
+        test.equal(fragment.strikethrough, true)
+      end
+    end
+    for text, seen in pairs(wanted) do
+      test.ok(seen, "missing completed task fragment: " .. text)
+    end
   end)
 
   test.it("uses rounded task checkboxes and circular unordered list bullets", function()

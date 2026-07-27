@@ -216,6 +216,10 @@ local markdown_live_font_path = DATADIR .. "/fonts/Inter-Regular.ttf"
 local markdown_live_bold_font_path = DATADIR .. "/fonts/Inter-SemiBold.ttf"
 local markdown_live_italic_font_path = DATADIR .. "/fonts/Inter-Italic.ttf"
 local markdown_live_bold_italic_font_path = DATADIR .. "/fonts/Inter-SemiBoldItalic.ttf"
+local markdown_live_heading_font_path = DATADIR
+  .. "/fonts/Merriweather_24pt-SemiBold.ttf"
+local markdown_live_heading_italic_font_path = DATADIR
+  .. "/fonts/Merriweather_24pt-SemiBoldItalic.ttf"
 local font_size = 15 * SCALE
 local max_default_font_group = 10 -- native renderer FONT_FALLBACK_MAX
 
@@ -277,6 +281,13 @@ style.markdown_live_bold_italic_font = load_text_font(
   markdown_live_bold_italic_font_path, nil,
   { ligatures = true, bold = true, italic = true }
 )
+style.markdown_live_heading_font = load_text_font(
+  markdown_live_heading_font_path, nil, { ligatures = true, bold = true }
+)
+style.markdown_live_heading_italic_font = load_text_font(
+  markdown_live_heading_italic_font_path, nil,
+  { ligatures = true, bold = true, italic = true }
+)
 -- Keep scrollbars visible in a small/contracted form instead of expanding/fading.
 -- Set this before constructing singleton views such as the File Tree.
 config.force_scrollbar_status = "contracted"
@@ -317,6 +328,9 @@ keymap.add_direct({
 -- USERDIR/project-module override loaded before first-party defaults.
 if config.markdown_live_editor == nil then config.markdown_live_editor = true end
 if config.markdown_live_reveal_mode == nil then config.markdown_live_reveal_mode = "construct" end
+if config.markdown_live_heading_line_height == nil then
+  config.markdown_live_heading_line_height = 1.08
+end
 if config.markdown_live_list_indent_spaces == nil then
   config.markdown_live_list_indent_spaces = 8
 end

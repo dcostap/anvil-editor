@@ -1542,6 +1542,31 @@ function DocView:line_numbers_visible()
   return config.show_line_numbers
 end
 
+---Whether the gutter should reserve the line-number lane.
+---Specialized presentations may hide every line number without changing the
+---view's ordinary line-number preference (for example, while Source Mode is
+---temporarily inactive).
+---@return boolean visible
+function DocView:line_number_gutter_visible()
+  local visible = self:line_numbers_visible()
+  for _, entry in ipairs(self:decoration_provider_entries()) do
+    local provider = entry.provider
+    local fn = provider and provider.line_number_gutter_visible
+    if fn then
+      local ok, result = pcall(fn, provider, self)
+      if ok and type(result) == "boolean" then
+        visible = result
+      elseif not ok then
+        core.log_quiet(
+          "DocView decoration provider %s.line_number_gutter_visible failed for %s: %s",
+          tostring(entry.id), self.doc:get_name(), tostring(result)
+        )
+      end
+    end
+  end
+  return visible
+end
+
 ---Whether the line number for one logical line should be drawn.
 ---Decoration providers may return a boolean from `line_number_visible` to
 ---override the normal all-lines presentation for a specialized Editor mode.
@@ -1573,7 +1598,7 @@ end
 ---@return number padding Padding within gutter
 function DocView:get_gutter_width()
   local padding = style.padding.x * 2
-  if self:line_numbers_visible() then
+  if self:line_number_gutter_visible() then
     return self:get_line_number_gutter_width() + padding, padding
   end
   return padding, padding
@@ -5246,7 +5271,6 @@ function DocView:draw_line_text(line, x, y)
     local first_idx, _, count = linewrapping.get_line_idx_col_count(self, line)
     local visible_idx1 = math.max(first_idx, self.__wrapped_draw_first_idx or first_idx)
     local visible_idx2 = math.min(first_idx + count - 1, self.__wrapped_draw_last_idx or (first_idx + count - 1))
-    local text_y_offset = self:get_line_text_y_offset()
     local begin_width = self.wrapped_line_offsets[line] or 0
     local first_visual_row = self:get_visual_row(line, 1)
     local first_row_y_offset = self:get_visual_row_y_offset(first_visual_row)
@@ -5262,7 +5286,9 @@ function DocView:draw_line_text(line, x, y)
       local visual_row = self:get_visual_row(line, row_start)
       local row_y = y + self:get_visual_row_y_offset(visual_row) - first_row_y_offset
       local row_height = self:get_visual_row_height(visual_row)
-      local ty = row_y + text_y_offset
+      local content_height = render_line.table_row and row_height or math.min(
+        row_height, render_line.text_row_height or row_height
+      )
       for _, fragment in ipairs(fragments) do
         local col1 = fragment.source_col1 or 1
         local col2 = fragment.source_col2 or col1
@@ -5275,7 +5301,7 @@ function DocView:draw_line_text(line, x, y)
         if anchored_widget and not fragment.hidden then
           local anchor_x = x + self:get_line_render_col_x_offset(render_line, col1)
           local ok, err = pcall(
-            fragment.widget.draw, self, fragment, anchor_x, row_y, row_height
+            fragment.widget.draw, self, fragment, anchor_x, row_y, content_height
           )
           if not ok then
             core.log_quiet(
@@ -5287,7 +5313,9 @@ function DocView:draw_line_text(line, x, y)
           local font = render_fragment_font(self, fragment)
           font:set_tab_size(indent_size)
           if fragment.widget and fragment.widget.draw and from == col1 and to == col2 then
-            local ok, err = pcall(fragment.widget.draw, self, fragment, tx, row_y, row_height)
+            local ok, err = pcall(
+              fragment.widget.draw, self, fragment, tx, row_y, content_height
+            )
             if not ok then
               core.log_quiet("DocView wrapped render widget draw failed for %s: %s", self.doc:get_name(), tostring(err))
             end
@@ -5303,8 +5331,11 @@ function DocView:draw_line_text(line, x, y)
             local segment = text_to >= text_from and text:sub(text_from, text_to) or ""
             if segment ~= "" then
               local color = render_fragment_color(fragment)
+              local segment_y = row_y
+                + math.max(0, (content_height - font:get_height()) / 2)
               tx = draw_render_fragment_text(
-                fragment, font, segment, tx, ty, color, { tab_offset = tx - x }
+                fragment, font, segment, tx, segment_y, color,
+                { tab_offset = tx - x }
               )
             elseif fragment.width and from == col1 and to == col2 then
               tx = tx + fragment.width
@@ -5400,6 +5431,9 @@ function DocView:draw_line_text(line, x, y)
     local tx = x + (render_line.x_offset or 0)
     local row = self:get_visual_row(line, 1)
     local row_height = self:get_visual_row_height(row)
+    local content_height = render_line.table_row and row_height or math.min(
+      row_height, render_line.text_row_height or row_height
+    )
     local _, indent_size = self.doc:get_indent_info()
     for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
       if not fragment.hidden then
@@ -5414,14 +5448,14 @@ function DocView:draw_line_text(line, x, y)
           or tx
         local draw_y = y + (position_row and (position_row.y_offset or 0) or 0)
         local draw_height = position_row and (position_row.height or row_height)
-          or row_height
+          or content_height
         local font = render_fragment_font(self, fragment)
         font:set_tab_size(indent_size)
         local text = fragment.text or ""
         local ty = draw_y + math.max(0, (draw_height - font:get_height()) / 2)
         if fragment.widget and fragment.widget.draw then
           local ok, err = pcall(
-            fragment.widget.draw, self, fragment, draw_x, y, row_height
+            fragment.widget.draw, self, fragment, draw_x, y, content_height
           )
           if not ok then core.log_quiet("DocView render widget draw failed for %s: %s", self.doc:get_name(), tostring(err)) end
           tx = draw_x + (fragment.width or fragment.widget.width or 0)

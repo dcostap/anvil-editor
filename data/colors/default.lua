@@ -123,6 +123,7 @@ style.markdown_live_frontmatter_key = style.accent
 style.markdown_live_list_marker = style.dim
 style.markdown_live_task_checked = style.accent
 style.markdown_live_task_unchecked = style.dim
+style.markdown_live_task_completed_text = style.dim
 style.markdown_live_task_background = style.background
 style.markdown_live_task_checkmark = style.background
 style.markdown_live_rule = style.dim
