@@ -1332,6 +1332,17 @@ function DocView:invalidate_visual_metrics(_provider_id, line1, line2)
       local new_row1, new_row2 = wrap_change.new_row1, wrap_change.new_row2
       local remove_count = math.max(0, old_row2 - old_row1 + 1)
       local insert_count = math.max(0, new_row2 - new_row1 + 1)
+      -- Reconstructing a line render can leave the wrapped-row topology
+      -- unchanged. Keep the last resolved heights in that case: replacing
+      -- them with base-line placeholders makes the viewport anchor resolve
+      -- against a transient, internally inconsistent metric tree.
+      if old_row1 == new_row1 and remove_count == insert_count then
+        invalidate_visual_metric_rows(self, cache, new_row1, new_row2)
+        cache.wrap_layout_generation = current_wrap_generation
+        cache.text_revision = self.doc.text_revision or 0
+        cache.signature = self:get_visual_metric_signature()
+        return
+      end
       local old_anchor = metric_tree_row_at_y(
         cache.height_tree, cache.row_count, math.max(0, self.scroll and self.scroll.y or 0)
       )
@@ -1340,8 +1351,20 @@ function DocView:invalidate_visual_metrics(_provider_id, line1, line2)
         removed_height = removed_height + (cache.heights[row] or 0)
       end
       local default_height = self:get_line_height()
+      local providers = self:visual_metric_provider_entries()
       local inserted = {}
-      for row = 1, insert_count do inserted[row] = default_height end
+      local inserted_height = 0
+      -- Measure the replacement slice before publishing the new metric tree.
+      -- A tree containing the new row mapping but temporary base heights can
+      -- map the old scroll offset to the wrong anchor row, causing the later
+      -- dirty pass to apply the same height change as a viewport correction.
+      for offset = 0, insert_count - 1 do
+        local height = compute_visual_row_height(
+          self, new_row1 + offset, providers, default_height
+        )
+        inserted[offset + 1] = height
+        inserted_height = inserted_height + height
+      end
       common.splice(cache.heights, old_row1, remove_count, inserted)
 
       local shifted_dirty = {}
@@ -1353,13 +1376,12 @@ function DocView:invalidate_visual_metrics(_provider_id, line1, line2)
           shifted_dirty[row + row_delta] = true
         end
       end
-      for row = new_row1, new_row2 do shifted_dirty[row] = true end
-      cache.dirty_rows = shifted_dirty
+      cache.dirty_rows = next(shifted_dirty) and shifted_dirty or nil
       cache.row_count = current_row_count
-      cache.total_height = cache.total_height - removed_height + insert_count * default_height
+      cache.total_height = cache.total_height - removed_height + inserted_height
       cache.height_tree = metric_tree_build(cache.heights, cache.row_count)
       if old_row2 < old_anchor and self.scroll then
-        local delta = insert_count * default_height - removed_height
+        local delta = inserted_height - removed_height
         self.scroll.y = self.scroll.y + delta
         self.scroll.to.y = self.scroll.to.y + delta
       end
@@ -3543,6 +3565,12 @@ end
 
 local function render_fragment_color(fragment)
   return fragment.color or style.syntax.normal
+end
+
+---Discard normalized fragment copies after mutating a render line in place.
+---@param render_line table?
+function DocView:invalidate_line_render_fragment_normalization(render_line)
+  if render_line then render_line.__normalized_fragments_cache = nil end
 end
 
 function DocView:iter_line_render_fragments(render_line)

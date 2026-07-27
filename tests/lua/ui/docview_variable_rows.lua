@@ -122,6 +122,105 @@ test.describe("DocView variable visual row metrics", function()
     test.equal(view.scroll.y, view.scroll.to.y)
   end)
 
+  test.it("keeps a stable viewport anchor across a same-row wrap refresh", function()
+    local lines = {}
+    for i = 1, 80 do lines[i] = "line " .. i end
+    local view = make_view(table.concat(lines, "\n"))
+    local lh = view:get_line_height()
+    local tall_height = lh * 50
+    view:add_line_render_provider("tall-render", {
+      render_line = function(_, _, line, context)
+        if line ~= 1 then return end
+        return {
+          source_text = context.source_text,
+          fragments = {
+            {
+              source_col1 = 1,
+              source_col2 = #context.source_text + 1,
+              text = context.source_text,
+            },
+          },
+          disable_wrapping = true,
+        }
+      end,
+    })
+    view:add_visual_metric_provider("tall-metric", {
+      line_height = function(_, _, line)
+        if line == 1 then return tall_height end
+      end,
+    })
+    view:set_wrapping_enabled(true)
+    test.equal(view:get_visual_row_height(1), tall_height)
+
+    local initial_scroll = tall_height - lh * 5
+    view.scroll.y, view.scroll.to.y = initial_scroll, initial_scroll
+    view:invalidate_line_render("same-row-refresh", 1, 1)
+    view:invalidate_visual_metrics("same-row-refresh", 1, 1)
+
+    test.equal(view:get_visual_row_height(1), tall_height)
+    test.equal(view.scroll.y, initial_scroll)
+    test.equal(view.scroll.to.y, initial_scroll)
+  end)
+
+  test.it("does not anchor a real row splice from placeholder heights", function()
+    local lines = {
+      string.rep("wrapped metric words ", 30),
+    }
+    for i = 2, 80 do lines[i] = "line " .. i end
+    local view = make_view(table.concat(lines, "\n"))
+    view.size.x = 140
+    local compact = false
+    view:add_line_render_provider("topology-render", {
+      render_line = function(_, _, line, context)
+        if line ~= 1 or not compact then return end
+        return {
+          source_text = context.source_text,
+          fragments = {
+            {
+              source_col1 = 1,
+              source_col2 = #context.source_text + 1,
+              text = context.source_text,
+            },
+          },
+          disable_wrapping = true,
+        }
+      end,
+    })
+    view:set_wrapping_enabled(true)
+    local expanded_rows = view:get_visual_row_count_for_line(1)
+    test.ok(expanded_rows > 2)
+    local lh = view:get_line_height()
+    local expanded_row_height = lh * 5
+
+    compact = true
+    view:invalidate_line_render("compact-topology", 1, 1)
+    view:add_visual_metric_provider("topology-metric", {
+      line_height = function(_, _, line)
+        if line == 1 then
+          return compact and expanded_rows * expanded_row_height
+            or expanded_row_height
+        end
+      end,
+    })
+    local compact_height = expanded_rows * expanded_row_height
+    test.equal(view:get_visual_row_count_for_line(1), 1)
+    test.equal(view:get_visual_row_height(1), compact_height)
+
+    local initial_scroll = compact_height - lh * 5
+    view.scroll.y, view.scroll.to.y = initial_scroll, initial_scroll
+    local _, following_y = view:get_line_screen_position(2)
+    compact = false
+    view:invalidate_line_render("expand-topology", 1, 1)
+    view:invalidate_visual_metrics("expand-topology", 1, 1)
+
+    test.equal(view:get_visual_row_count_for_line(1), expanded_rows)
+    view:get_visual_row_metric_cache()
+    local _, expanded_following_y = view:get_line_screen_position(2)
+    test.equal(expanded_following_y, following_y)
+    test.equal(view.scroll.y, initial_scroll)
+    test.equal(view.scroll.to.y, initial_scroll)
+  end)
+
   test.it("draws non-composed lines at metric y positions", function()
     local view = make_view("one\ntwo\nthree")
     view.size.y = 200

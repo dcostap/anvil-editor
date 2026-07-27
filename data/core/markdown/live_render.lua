@@ -2561,6 +2561,11 @@ local function layout_inline_image_rows(view, line_text, render_line)
       row.highlight_height = render_line.layout_height
     end
   end
+  -- Measuring the text segments above populates DocView's normalized-fragment
+  -- cache before the image's final block offsets are assigned. Rebuild those
+  -- copies so drawing and hit testing use the positioned image rather than
+  -- vertically centering it across the whole multi-row layout.
+  view:invalidate_line_render_fragment_normalization(render_line)
   render_line.disable_wrapping = true
   return render_line
 end

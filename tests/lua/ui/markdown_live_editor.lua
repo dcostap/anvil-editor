@@ -3482,6 +3482,83 @@ test.describe("Markdown Live Editor", function()
     test.ok(active_source_caret_y < active_after_caret_y)
   end)
 
+  test.it("reserves a tall inline image before wrapped trailing text while hidden or revealed", function()
+    local image_path = USERDIR .. PATHSEP
+      .. "markdown-live-tall-inline-" .. system.get_process_id() .. ".png"
+    local fp = test.not_nil(io.open(image_path, "wb"))
+    fp:write("png")
+    fp:close()
+    local image_url = common.basename and common.basename(image_path)
+      or image_path:match("[^" .. PATHSEP .. "]+$")
+    local prefix = "aaaa ghfghf "
+    local image_source = "![[" .. image_url .. "]]"
+    local suffix = " Testing this change " .. string.rep("abcdefghij", 18)
+    local view, doc = make_view(
+      prefix .. image_source .. suffix .. "\nfollowing line",
+      USERDIR .. PATHSEP .. "tall-inline-note.md"
+    )
+    view.size.x = 800
+    view:set_wrapping_enabled(true)
+    doc:set_selection(2, 1)
+
+    local old_load_image = canvas.load_image
+    local old_draw_canvas = renderer.draw_canvas
+    local old_draw_text = renderer.draw_text
+    local old_draw_rect = renderer.draw_rect
+    local image_y, suffix_y
+    canvas.load_image = function()
+      return {
+        get_size = function() return 1295, 1600 end,
+        scaled = function(self) return self end,
+      }
+    end
+    renderer.draw_canvas = function(_, _, y) image_y = y end
+    renderer.draw_rect = function() end
+    renderer.draw_text = function(font, text, x, y, color, opts)
+      if text:find("Testing this change", 1, true) then suffix_y = y end
+      return x + font:get_width(text, opts)
+    end
+
+    local function assert_image_precedes_suffix()
+      image_y, suffix_y = nil, nil
+      local render_line = test.not_nil(view:get_line_render(1))
+      local image_height
+      for _, fragment in ipairs(view:iter_line_render_fragments(render_line)) do
+        if fragment.widget and fragment.widget.type == "image" then
+          image_height = fragment.widget.image_height
+          break
+        end
+      end
+      view:draw_line_text(1, 0, 0)
+      local _, line_y = view:get_line_screen_position(1, 1)
+      local _, following_y = view:get_line_screen_position(2, 1)
+      image_y, image_height, suffix_y = test.not_nil(image_y),
+        test.not_nil(image_height), test.not_nil(suffix_y)
+      test.ok(
+        image_y + image_height <= suffix_y,
+        string.format(
+          "image bottom %s must not pass suffix y %s (image y %s, height %s)",
+          image_y + image_height, suffix_y, image_y, image_height
+        )
+      )
+      test.ok(line_y + render_line.layout_height <= following_y)
+    end
+
+    local ok, err = pcall(function()
+      refresh(view)
+      assert_image_precedes_suffix()
+      doc:set_selection(1, #prefix + 3)
+      assert_image_precedes_suffix()
+    end)
+
+    renderer.draw_rect = old_draw_rect
+    renderer.draw_text = old_draw_text
+    renderer.draw_canvas = old_draw_canvas
+    canvas.load_image = old_load_image
+    os.remove(image_path)
+    if not ok then error(err, 0) end
+  end)
+
   test.it("highlights the whole image block from the prefix and only the suffix caret row", function()
     with_inline_image_text_fixture(function(view, doc, fixture)
       local old_highlight = config.highlight_current_line
@@ -3540,6 +3617,86 @@ test.describe("Markdown Live Editor", function()
       test.equal(line, 2)
       test.equal(col, 1)
     end)
+  end)
+
+  test.it("keeps scrolling stable while moving through wrapped text below a tall image", function()
+    local image_path = USERDIR .. PATHSEP
+      .. "markdown-live-tall-caret-scroll-" .. system.get_process_id() .. ".png"
+    local fp = test.not_nil(io.open(image_path, "wb"))
+    fp:write("png")
+    fp:close()
+    local image_url = common.basename and common.basename(image_path)
+      or image_path:match("[^" .. PATHSEP .. "]+$")
+    local prefix = "before "
+    local image_source = "![[" .. image_url .. "]]"
+    local suffix = " " .. string.rep("wrapped suffix words ", 45)
+    local trailing = {}
+    for i = 1, 80 do trailing[i] = "following line " .. i end
+    local source = prefix .. image_source .. suffix
+    local view, doc = make_view(
+      source .. "\n" .. table.concat(trailing, "\n"),
+      USERDIR .. PATHSEP .. "tall-caret-scroll-note.md"
+    )
+    view.size.x, view.size.y = 420, 220
+    view:set_wrapping_enabled(true)
+    doc:set_selection(2, 1)
+
+    local old_load_image = canvas.load_image
+    local old_active = core.active_view
+    canvas.load_image = function()
+      return {
+        get_size = function() return 1295, 1600 end,
+        scaled = function(self) return self end,
+      }
+    end
+    local ok, err = pcall(function()
+      refresh(view)
+      local render_line = test.not_nil(view:get_line_render(1))
+      local rows = test.not_nil(render_line.position_rows)
+      test.ok(#rows >= 5, "expected several navigable suffix rows")
+      local target_index = #rows - 1
+      local target = rows[target_index]
+      test.ok(
+        (target.y_offset or 0) > view:get_line_height(),
+        "expected the target row below the tall image"
+      )
+      local target_col = math.floor(
+        ((target.source_col1 or 1) + (target.source_col2 or target.source_col1 or 1)) / 2
+      )
+      doc:set_selection(1, target_col)
+      render_line = test.not_nil(view:get_line_render(1))
+      target = test.not_nil(test.not_nil(render_line.position_rows)[target_index])
+      view:get_visual_row_metric_cache()
+
+      local context_rows = view:get_visible_scroll_context_lines()
+      local initial_scroll = math.max(
+        view:get_line_height() * 2,
+        (target.y_offset or 0) - view:get_line_height() * (context_rows + 2)
+      )
+      view.scroll.y, view.scroll.to.y = initial_scroll, initial_scroll
+      core.active_view = view
+
+      test.equal(command.perform("doc:move-to-previous-line"), true)
+      local line, col = doc:get_selection()
+      test.equal(line, 1)
+      view:get_line_screen_position(line, col)
+
+      test.equal(view.scroll.y, initial_scroll)
+      test.equal(view.scroll.to.y, initial_scroll)
+      view:update()
+      test.ok(
+        math.abs(view.scroll.y - initial_scroll) < view.size.y,
+        "one caret-row move must not teleport the current viewport"
+      )
+      test.ok(
+        math.abs(view.scroll.to.y - initial_scroll) < view.size.y,
+        "one caret-row move must not target an image-sized scroll correction"
+      )
+    end)
+    core.active_view = old_active
+    canvas.load_image = old_load_image
+    os.remove(image_path)
+    if not ok then error(err, 0) end
   end)
 
   test.it("selects only the suffix caret row with Shift+Home below an inline image", function()
