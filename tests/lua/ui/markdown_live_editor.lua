@@ -806,6 +806,30 @@ test.describe("Markdown Live Editor", function()
     test.equal(visible_render_text(view, 1), "before bold after italic tail")
   end)
 
+  test.it("reveals inline construct source at the caret position after its closing delimiter", function()
+    local cases = {
+      { source = "**bold**", inactive = "bold" },
+      { source = "*italic*", inactive = "italic" },
+      { source = "`code`", inactive = "code" },
+      { source = "==mark==", inactive = "mark" },
+      { source = "~~gone~~", inactive = "gone" },
+      { source = "\\*", inactive = "*" },
+      { source = "%%hidden%%", inactive = "" },
+    }
+    local lines = {}
+    for _, case in ipairs(cases) do lines[#lines + 1] = case.source end
+    lines[#lines + 1] = "plain"
+    local view, doc = make_view(table.concat(lines, "\n"), "right-edge-inline.md")
+    doc:set_selection(#lines, 1)
+    refresh(view)
+
+    for line, case in ipairs(cases) do
+      test.equal(visible_render_text(view, line), case.inactive)
+      doc:set_selection(line, #case.source + 1)
+      test.equal(visible_render_text(view, line), case.source)
+    end
+  end)
+
   test.it("reveals only constructs intersected by a nonempty selection", function()
     local view, doc = make_view("- before **bold** after *italic*\nplain", "localized-selection.md")
     doc:set_selection(2, 1)
@@ -907,6 +931,65 @@ test.describe("Markdown Live Editor", function()
     test.equal(colors["1"], style.syntax.number)
   end)
 
+  test.it("preserves every wrapped heading row while structural semantics are pending", function()
+    local heading = "# " .. string.rep("long wrapped heading words ", 10)
+    local view, doc = make_view("prefix\n" .. heading .. "\nbody", "pending-wrapped-heading.md")
+    view.size.x = 180
+    view:set_wrapping_enabled(true)
+    doc:set_selection(3, 1)
+    refresh(view)
+    local count = view:get_visual_row_count_for_line(2)
+    test.ok(count > 1)
+    local heights = {}
+    local first = linewrapping.get_line_idx_col_count(view, 2)
+    for row = 1, count do heights[row] = view:get_visual_row_height(first + row - 1) end
+
+    doc:insert(1, 1, "inserted\n")
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    view:invalidate_visual_metrics("pending-wrapped-heading-regression")
+
+    local shifted_first = linewrapping.get_line_idx_col_count(view, 3)
+    test.equal(view:get_visual_row_count_for_line(3), count)
+    for row = 1, count do
+      test.equal(view:get_visual_row_height(shifted_first + row - 1), heights[row])
+    end
+  end)
+
+  test.it("captures visible presentation before a structural edit when render caches are cold", function()
+    local lines = { "# Heading", "", "Before **bold** after", "", "## Following" }
+    for i = 1, 80 do lines[#lines + 1] = "plain line " .. i end
+    local view, doc = make_view(table.concat(lines, "\n"), "cold-structural-presentation.md")
+    view.size.y = 1200
+    view:set_wrapping_enabled(false)
+    doc:set_selection(3, #doc.lines[3])
+    refresh(view)
+    local heading_height = view:get_position_visual_row_height(1, 1)
+    view:invalidate_line_render("cold-structural-regression")
+    view:invalidate_visual_metrics("cold-structural-regression")
+
+    view:on_text_input("\n")
+
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.not_nil(view:get_line_render(1), "a cold visible heading flashed as raw source")
+    test.not_nil(view:get_line_render(6), "a shifted visible heading flashed as raw source")
+    test.equal(view:get_position_visual_row_height(1, 1), heading_height)
+  end)
+
+  test.it("keeps a formatted row stable when one edit crosses rendered fragments", function()
+    local view, doc = make_view("Before **bold** after\nplain", "pending-cross-fragment.md")
+    view:set_wrapping_enabled(true)
+    doc:set_selection(2, 1)
+    refresh(view)
+    local height = view:get_position_visual_row_height(1, 1)
+
+    doc:set_selection(1, 11, 1, 17)
+    view:on_text_input("replacement")
+
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.not_nil(view:get_line_render(1), "the edited row flashed as raw source")
+    test.equal(view:get_position_visual_row_height(1, 1), height)
+  end)
+
   test.it("syntax-highlights SQL fences through the info string", function()
     local view, doc = make_view(
       "```sql\nselect *\nfrom MovimientoStock\nwhere MovOrigen = 'B6166B54'\norder by fecha desc\n```\n",
@@ -971,7 +1054,133 @@ test.describe("Markdown Live Editor", function()
 
     doc:remove(2, 1, 2, 5)
     test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.not_nil(view:get_line_render(3), "the fenced row flashed as raw source")
+    test.equal(
+      color_for(3, "inside"), style.syntax.comment,
+      "fence transition depended on transaction-handler order"
+    )
+    local model = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_status(model, "ready"), model.reason)
+    local deadline = system.get_time() + 5
+    while color_for(3, "inside") == style.syntax.comment
+      and system.get_time() < deadline
+    do
+      coroutine.yield(0)
+    end
     test.not_equal(color_for(3, "inside"), style.syntax.comment)
+  end)
+
+  test.it("keeps structural fence edits local while semantics are pending", function()
+    local lines = {
+      "# First", "", "```sql", "select *", "from Example", "```", "", "# Following",
+      "", "```sql", "select id", "from Other", "```",
+    }
+    for i = 1, 250 do lines[#lines + 1] = "plain line " .. i end
+    local view, doc = make_view(table.concat(lines, "\n"), "bounded-fence-edit.md")
+    view:set_wrapping_enabled(true)
+    doc:set_selection(4, #doc.lines[4])
+    refresh(view)
+    for line = 1, #doc.lines do view:get_line_render(line) end
+    view:get_visual_row_metric_cache()
+    local before = view:get_render_cache_diagnostics()
+
+    view:on_text_input("\n")
+
+    local after = view:get_render_cache_diagnostics()
+    test.ok(
+      after.line_invalidations - before.line_invalidations < 20,
+      "a newline inside one fence invalidated the Document suffix"
+    )
+    test.not_nil(view:get_line_render(4), "the edited fence row flashed as raw source")
+    test.not_nil(view:get_line_render(9), "a following heading flashed as raw source")
+    test.not_nil(view:get_line_render(12), "a following code block flashed as raw source")
+
+    local instance = test.not_nil(markdown_model.peek(doc))
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    local published = view:get_render_cache_diagnostics()
+    test.ok(
+      published.line_invalidations - before.line_invalidations < 40,
+      "publishing a local fence edit invalidated the Document suffix"
+    )
+  end)
+
+  test.it("never exposes an unrendered fenced row during structural wrapping updates", function()
+    local view, doc = make_view(
+      "```sql\nselect one\nfrom Example\nwhere active = true\n```\n",
+      "fence-structural-transition.md"
+    )
+    view:set_wrapping_enabled(true)
+    doc:set_selection(3, 6)
+    refresh(view)
+    for line = 1, #doc.lines do view:get_line_render(line) end
+    view:get_visual_row_metric_cache()
+
+    local original = view.get_line_render
+    local editing, exposed = false, false
+    function view:get_line_render(line, ...)
+      local rendered = original(self, line, ...)
+      if editing and line >= 2 and line <= 4 and not rendered then exposed = true end
+      return rendered
+    end
+    editing = true
+    view:on_text_input("\n")
+    editing = false
+
+    test.equal(exposed, false, "wrapping observed a raw fenced row during the edit")
+  end)
+
+  test.it("keeps a paragraph rendered when deleting its following blank line", function()
+    local view, doc = make_view(
+      "A paragraph that must remain in the Live Preview font.\n\nFollowing paragraph.\n",
+      "paragraph-line-join.md"
+    )
+    doc:set_selection(2, 1)
+    refresh(view)
+    test.not_nil(view:get_line_render(1))
+
+    doc:remove(1, #doc.lines[1], 2, 1)
+
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.not_nil(
+      view:get_line_render(1),
+      "the retained paragraph flashed as raw source after joining the blank line"
+    )
+  end)
+
+  test.it("does not retain prose formatting when a new fence changes its context", function()
+    local view, doc = make_view("before\n*italic*\nafter\n", "new-fence-context.md")
+    doc:set_selection(1, 1)
+    refresh(view)
+    test.equal(visible_render_text(view, 2), "italic")
+
+    doc:insert(2, 1, "```lua\n")
+
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(
+      visible_render_text(view, 3), "*italic*",
+      "the newly fenced row retained its old prose semantics"
+    )
+  end)
+
+  test.it("keeps a fence stable while the caret moves within it", function()
+    local lines = { "```sql" }
+    for i = 1, 40 do lines[#lines + 1] = "select column_" .. i end
+    lines[#lines + 1] = "```"
+    local view, doc = make_view(table.concat(lines, "\n"), "fence-caret-stability.md")
+    doc:set_selection(10, 4)
+    refresh(view)
+    for line = 1, #doc.lines do view:get_line_render(line) end
+    local before = view:get_render_cache_diagnostics()
+
+    doc:set_selection(11, 4)
+    doc:set_selection(11, #doc.lines[11])
+    doc:set_selection(11, 1)
+
+    local after = view:get_render_cache_diagnostics()
+    test.equal(
+      after.line_invalidations, before.line_invalidations,
+      "caret movement invalidated selection-independent fenced rows"
+    )
   end)
 
   test.it("drops a stale language selection while an info edit is pending", function()
@@ -1008,7 +1217,9 @@ test.describe("Markdown Live Editor", function()
   end)
 
   test.it("uses ready syntax fonts when measuring fenced rows", function()
-    local view, doc = make_view("```js\nconst value = 1\n```\n", "font-metrics.md")
+    local view, doc = make_view(
+      "```js\nconst value = 1\nvalue = value + 1\n```\n", "font-metrics.md"
+    )
     doc:set_selection(1, 1)
     local old_keyword_font = style.syntax_fonts.keyword
     local tall_font = view:get_font():copy(view:get_font():get_size() * 2)
@@ -1037,6 +1248,10 @@ test.describe("Markdown Live Editor", function()
       test.ok(
         view:get_visual_row_height(2)
           >= math.floor(tall_font:get_height() * config.line_height)
+      )
+      test.equal(
+        view:get_visual_row_height(3), view:get_visual_row_height(2),
+        "syntax categories gave adjacent fenced rows different heights"
       )
     end)
     style.syntax_fonts.keyword = old_keyword_font
@@ -2272,6 +2487,56 @@ test.describe("Markdown Live Editor", function()
     coroutine.yield(0.05)
     local delta = view:get_render_cache_diagnostics().metric_invalidations - before
     test.ok(delta < #doc.lines, "ordinary body edit invalidated every Markdown row")
+  end)
+
+  test.it("reveals fence delimiters when a selection crosses the whole block", function()
+    local view, doc = make_view(
+      "before\n```lua\nprint('ok')\n```\nafter\n", "fence-crossing-selection.md"
+    )
+    doc:set_selection(1, 1)
+    refresh(view)
+    test.equal(test.not_nil(view:get_line_render(2)).fragments[1].hidden, true)
+    test.equal(test.not_nil(view:get_line_render(4)).fragments[1].hidden, true)
+
+    doc:set_selection(1, 1, 5, 1)
+
+    test.equal(view:get_line_render(2), nil)
+    test.equal(view:get_line_render(4), nil)
+  end)
+
+  test.it("does not rebuild unaffected wrapped rows after a local edit", function()
+    local lines = { "# Heading", "", "body" }
+    for i = 1, 100 do lines[#lines + 1] = "plain line " .. i end
+    local view, doc = make_view(table.concat(lines, "\n"), "stable-wrapped-render.md")
+    view:set_wrapping_enabled(true)
+    doc:set_selection(3, #doc.lines[3])
+    refresh(view)
+    local unaffected = test.not_nil(view:get_line_render(80))
+
+    view:on_text_input("x")
+
+    test.equal(view:get_line_render(80), unaffected)
+  end)
+
+  test.it("limits vault-index refreshes to link-dependent rows", function()
+    local lines = { "# Heading", "", "[[Target]]", "", "body" }
+    for i = 1, 100 do lines[#lines + 1] = "plain line " .. i end
+    local view = make_view(table.concat(lines, "\n"), "bounded-index-refresh.md")
+    view:set_wrapping_enabled(true)
+    refresh(view)
+    view:get_visual_row_metric_cache()
+    local before = view:get_render_cache_diagnostics()
+    local owner = test.not_nil(view.__markdown_live_owner)
+    local index = test.not_nil(owner.link_index)
+
+    index:notify("document-updated", view.doc)
+
+    local after = view:get_render_cache_diagnostics()
+    test.ok(
+      after.metric_invalidations - before.metric_invalidations < #view.doc.lines,
+      "a vault fact change invalidated every Markdown row"
+    )
+    test.equal(after.metric_full_rebuilds, before.metric_full_rebuilds)
   end)
 
   test.it("preserves cached metrics when an active link changes its wrapped row count", function()

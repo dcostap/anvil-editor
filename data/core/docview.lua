@@ -6888,16 +6888,19 @@ Doc.register_text_transaction_handler("docview-render-caches", function(doc, tra
     line2 = math.max(line2 or old_line2, old_line2, new_line2)
     if old_line2 - old_line1 ~= new_line2 - new_line1 then line_structure_changed = true end
   end
-  if line_structure_changed and line1 then line2 = math.max(line2 or line1, #doc.lines) end
   for view in pairs(DocView.registry[doc] or {}) do
     if view and view.doc == doc then
       local invalid_line1, invalid_line2 = line1, line2
-      for _, entry in ipairs(view:line_render_provider_entries()) do
+      local provider_entries = view:line_render_provider_entries()
+      local providers_handle_line_structure = line_structure_changed and #provider_entries > 0
+      for _, entry in ipairs(provider_entries) do
         local fn = entry.provider and entry.provider.on_text_transaction
         if fn then
-          local ok, provider_line1, provider_line2 = pcall(
+          local ok, provider_line1, provider_line2, handles_line_structure = pcall(
             fn, entry.provider, view, transaction, line1, line2
           )
+          providers_handle_line_structure = providers_handle_line_structure
+            and ok and handles_line_structure == true
           if ok and provider_line1 then
             invalid_line1 = math.min(invalid_line1 or provider_line1, provider_line1)
             invalid_line2 = math.max(invalid_line2 or provider_line2 or provider_line1, provider_line2 or provider_line1)
@@ -6907,7 +6910,12 @@ Doc.register_text_transaction_handler("docview-render-caches", function(doc, tra
               tostring(entry.id), doc:get_name(), tostring(provider_line1)
             )
           end
+        else
+          providers_handle_line_structure = false
         end
+      end
+      if line_structure_changed and not providers_handle_line_structure and line1 then
+        invalid_line2 = math.max(invalid_line2 or line1, #doc.lines)
       end
       if view:has_line_render_providers() then
         local wrapping_already_updated = invalid_line1 == line1 and invalid_line2 == line2

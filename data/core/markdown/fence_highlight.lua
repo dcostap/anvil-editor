@@ -799,6 +799,25 @@ function Service:is_line_unsafe(line)
   return false
 end
 
+---Returns whether a line belonged to a known fenced block in the most recent
+---published semantics. The block coordinates are transaction-adjusted, so
+---this remains suitable for optimistic presentation while a reparse is
+---pending.
+function Service:contains_line(line)
+  for _, block in pairs(self.blocks) do
+    local line2 = block.closing_line or block.body_line2
+    if line >= block.opening_line and line <= line2 then return true end
+  end
+  return false
+end
+
+function Service:is_opening_line(line)
+  for _, block in pairs(self.blocks) do
+    if line == block.opening_line then return true end
+  end
+  return false
+end
+
 function Service:next_queued_block()
   local best_index, best
   for index, block in ipairs(self.queue) do
