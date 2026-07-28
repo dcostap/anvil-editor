@@ -242,6 +242,14 @@ local function sticky_entry_at_y(layout, y)
   end
 end
 
+local function intersect_rect(x1, y1, w1, h1, x2, y2, w2, h2)
+  local x = math.max(x1, x2)
+  local y = math.max(y1, y2)
+  local right = math.min(x1 + w1, x2 + w2)
+  local bottom = math.min(y1 + h1, y2 + h2)
+  return x, y, math.max(0, right - x), math.max(0, bottom - y)
+end
+
 local function start_model_build(docview, doc, max_sticky_lines)
   docview.sticky_scroll_model_generation = (docview.sticky_scroll_model_generation or 0) + 1
   local generation = docview.sticky_scroll_model_generation
@@ -420,10 +428,18 @@ function DocView:draw_overlay(...)
   local data = SS.managed_docviews[self]
   local layout = SS.get_sticky_layout(self, data.sticky_lines, data.reference_line)
 
-  -- We need to reset the clip, because when DocView:draw_overlay is called
-  -- it's too small for us.
-  local old_clip_rect = core.clip_rect_stack[#core.clip_rect_stack]
-  renderer.set_clip_rect(self.position.x, self.position.y, self.size.x, self.size.y)
+  -- DocView narrows the active clip to exclude the gutter before drawing its
+  -- overlay. Widen it to the whole view, but retain the enclosing clip because
+  -- a sticky row being pushed out can temporarily have a y above the view.
+  local clip_index = #core.clip_rect_stack
+  local old_clip_rect = core.clip_rect_stack[clip_index]
+  local enclosing_clip_rect = core.clip_rect_stack[clip_index - 1] or old_clip_rect
+  local clip_x, clip_y, clip_w, clip_h = intersect_rect(
+    self.position.x, self.position.y, self.size.x, self.size.y,
+    table.unpack(enclosing_clip_rect)
+  )
+  core.clip_rect_stack[clip_index] = { clip_x, clip_y, clip_w, clip_h }
+  renderer.set_clip_rect(clip_x, clip_y, clip_w, clip_h)
 
   local drawn = false
   local max_y = 0
@@ -431,20 +447,21 @@ function DocView:draw_overlay(...)
     local l, y, height = entry.line, entry.y, entry.height
     max_y = math.max(y + height, max_y)
     drawn = true
-    renderer.set_clip_rect(self.position.x, y, self.size.x, height)
+    core.push_clip_rect(self.position.x, y, self.size.x, height)
     renderer.draw_rect(self.position.x, y, self.size.x, height, style.background)
     self:draw_line_gutter(l, self.position.x, y, gpad and gw - gpad or gw)
     self:draw_line_text(l, x, y)
     if data.hovered_sticky_scroll_line == l then
       renderer.draw_rect(self.position.x, y, self.size.x, height, style.drag_overlay)
     end
-    renderer.set_clip_rect(self.position.x, self.position.y, self.size.x, self.size.y)
+    core.pop_clip_rect()
   end
   if drawn then
     renderer.draw_rect(self.position.x, max_y, self.size.x, style.divider_size, style.divider)
   end
 
   -- Restore clip rect
+  core.clip_rect_stack[clip_index] = old_clip_rect
   renderer.set_clip_rect(table.unpack(old_clip_rect))
   return res
 end

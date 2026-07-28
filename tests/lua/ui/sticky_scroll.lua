@@ -1,3 +1,4 @@
+local core = require "core"
 local test = require "core.test"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
@@ -99,5 +100,49 @@ test.describe("sticky scroll", function()
     view:add_fold_region { line1 = 1, line2 = 2 }
     local folded = sticky_scroll.get_sticky_layout(view, { 1 }, 2)
     test.equal(folded[1].height, view:get_position_visual_row_height(1, 1))
+  end)
+
+  test.it("keeps sticky lines inside the enclosing view clip", function()
+    local view = make_view("# Parent\nbody")
+    local data = sticky_scroll.managed_docviews[view]
+    data.enabled = true
+    data.sticky_lines = { 1 }
+    data.reference_line = 2
+    view.scroll.y = view:get_line_height() * 3
+    view.scroll.to.y = view.scroll.y
+
+    local clip_top = view.position.y
+    local layout = sticky_scroll.get_sticky_layout(view, data.sticky_lines, data.reference_line)
+    test.ok(layout[1].y < clip_top)
+
+    local initial_clip_depth = #core.clip_rect_stack
+    local original_set_clip_rect = renderer.set_clip_rect
+    local original_draw_rect = renderer.draw_rect
+    local escaped = false
+    local checking = false
+    renderer.set_clip_rect = function(_, y, _, h)
+      if checking and h > 0 and y < clip_top then escaped = true end
+    end
+    renderer.draw_rect = function() end
+    core.push_clip_rect(view.position.x, view.position.y, view.size.x, view.size.y)
+    local gutter_width = view:get_gutter_width()
+    core.push_clip_rect(
+      view.position.x + gutter_width,
+      view.position.y,
+      view.size.x - gutter_width,
+      view.size.y
+    )
+    view.draw_line_gutter = function() end
+    view.draw_line_text = function() end
+
+    checking = true
+    local ok, err = pcall(function() view:draw_overlay() end)
+    checking = false
+
+    while #core.clip_rect_stack > initial_clip_depth do core.pop_clip_rect() end
+    renderer.set_clip_rect = original_set_clip_rect
+    renderer.draw_rect = original_draw_rect
+    test.ok(ok, err)
+    test.equal(escaped, false)
   end)
 end)
