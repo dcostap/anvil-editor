@@ -7,6 +7,7 @@ local core_syntax = require "core.syntax"
 local DocView = require "core.docview"
 local Doc = require "core.doc"
 
+local detectindent = {}
 local cache = setmetatable({}, { __mode = "k" })
 local comments_cache = {}
 local auto_detect_max_lines = 150
@@ -182,8 +183,79 @@ local function get_comment_patterns(syntax, _loop)
   return nil
 end
 
+local function is_markdown_syntax(syntax)
+  local name = syntax and syntax.name
+  return type(name) == "string"
+    and name:lower():find("markdown", 1, true) ~= nil
+end
+
+local function line_body(line)
+  return tostring(line or ""):gsub("[\r\n]+$", "")
+end
+
+local function markdown_fence_opener(line)
+  local body = line_body(line)
+  local indent, marker, info = body:match("^( *)(`+)(.*)$")
+  if not marker then indent, marker, info = body:match("^( *)(~+)(.*)$") end
+  if not marker or #indent > 3 or #marker < 3 then return nil end
+  if marker:sub(1, 1) == "`" and info:find("`", 1, true) then return nil end
+  return { marker = marker:sub(1, 1), length = #marker }
+end
+
+local function markdown_fence_closer(line, fence)
+  local body = line_body(line)
+  local indent, marker = body:match(
+    "^( *)(" .. fence.marker:rep(fence.length) .. fence.marker .. "*)[ \t]*$"
+  )
+  return marker ~= nil and #indent <= 3
+end
+
+local function markdown_html_comment_start(line)
+  local indent, body = line_body(line):match("^( *)(.*)$")
+  if #indent > 3 or body:sub(1, 4) ~= "<!--" then return nil end
+  return #indent + 1
+end
+
+local function get_markdown_non_empty_lines(lines)
+  return coroutine.wrap(function()
+    local i = 0
+    local fence
+    local in_html_comment = false
+    for _, line in ipairs(lines) do
+      local excluded = false
+      if fence then
+        excluded = true
+        if markdown_fence_closer(line, fence) then fence = nil end
+      elseif in_html_comment then
+        excluded = true
+        if line:find("-->", 1, true) then in_html_comment = false end
+      else
+        fence = markdown_fence_opener(line)
+        if fence then
+          excluded = true
+        else
+          local comment_start = markdown_html_comment_start(line)
+          if comment_start then
+            excluded = true
+            if not line:find("-->", comment_start + 4, true) then
+              in_html_comment = true
+            end
+          end
+        end
+      end
+      if not excluded and line:gsub("^%s+", "") ~= "" then
+        i = i + 1
+        coroutine.yield(i, line)
+      end
+    end
+  end)
+end
+
 
 local function get_non_empty_lines(syntax, lines)
+  if is_markdown_syntax(syntax) then
+    return get_markdown_non_empty_lines(lines)
+  end
   return coroutine.wrap(function()
     local comments = get_comment_patterns(syntax)
 
@@ -284,6 +356,10 @@ local function detect_indent_stat(doc)
   end
 end
 
+function detectindent.detect(doc)
+  return detect_indent_stat(doc)
+end
+
 
 local function update_cache(doc)
   local type, size, score = detect_indent_stat(doc)
@@ -295,6 +371,11 @@ local function update_cache(doc)
   end
   cache[doc] = { type = type, size = size, confirmed = (score >= score_threshold) }
   doc.indent_info = cache[doc]
+  core.log_quiet(
+    "Indent detection for %s: syntax=%s type=%s size=%d score=%d confirmed=%s",
+    doc:get_name(), tostring(doc.syntax and doc.syntax.name), type, size, score,
+    tostring(score >= score_threshold)
+  )
 end
 
 -- Override DocView to ensure we only apply detectindent to visible doc views.
@@ -418,3 +499,5 @@ command.add(
     set_indent_type(core.active_view.doc, "soft")
   end
 })
+
+return detectindent
