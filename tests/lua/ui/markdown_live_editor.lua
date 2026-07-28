@@ -421,6 +421,47 @@ test.describe("Markdown Live Editor", function()
     test.ok(caret_height < row_height)
   end)
 
+  test.it("bottom-aligns heading content and its caret within the visual row", function()
+    local view, doc = make_view("# Title\nbody", "note.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+
+    local render_line = test.not_nil(view:get_line_render(1))
+    local row_height = view:get_visual_row_height(1)
+    local content_height = test.not_nil(render_line.text_row_height)
+    test.ok(row_height > content_height, "expected heading block spacing")
+
+    local old_draw_text = renderer.draw_text
+    local old_draw_rect = renderer.draw_rect
+    local title_y, caret_y
+    renderer.draw_text = function(font, text, x, y, color, opts)
+      if text == "Title" then title_y = y end
+      return x + font:get_width(text, opts)
+    end
+    renderer.draw_rect = function(_, y, _, _, color)
+      if color == style.caret then caret_y = y end
+    end
+    local ok, err = pcall(function()
+      view:draw_line_text(1, 0, 0)
+      view:draw_caret(0, 0, 1, 4)
+    end)
+    renderer.draw_text = old_draw_text
+    renderer.draw_rect = old_draw_rect
+    if not ok then error(err, 0) end
+
+    local title_font
+    for _, fragment in ipairs(render_line.fragments or {}) do
+      if fragment.text == "Title" then title_font = fragment.font break end
+    end
+    title_font = test.not_nil(title_font)
+    test.equal(
+      title_y,
+      row_height - content_height
+        + math.max(0, (content_height - title_font:get_height()) / 2)
+    )
+    test.equal(caret_y, row_height - content_height)
+  end)
+
   test.it("uses the rendered heading row height for its highlight when wrapping is enabled", function()
     local view, doc = make_view("# Title\nbody", "note.md")
     view:set_wrapping_enabled(true)

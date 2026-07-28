@@ -3786,6 +3786,7 @@ local function heading_render_line(view, text, heading, reveal_units)
   return prose_render_line(view, text, {
     source_text = text,
     text_row_height = text_row_height,
+    content_vertical_alignment = "bottom",
     caret_height = text_row_height,
     semantic_id = heading.semantic_id,
     semantic_generation = heading.semantic_generation,

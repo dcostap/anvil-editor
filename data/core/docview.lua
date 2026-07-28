@@ -3207,6 +3207,15 @@ local function position_ge(line1, col1, line2, col2)
   return line1 > line2 or line1 == line2 and col1 >= col2
 end
 
+local function line_render_content_geometry(render_line, row_height)
+  local content_height = render_line.table_row and row_height or math.min(
+    row_height, render_line.text_row_height or row_height
+  )
+  local y_offset = render_line.content_vertical_alignment == "bottom"
+    and math.max(0, row_height - content_height) or 0
+  return y_offset, content_height
+end
+
 local function selection_covers_fold(doc, fold)
   local fold_col1 = fold.col1 or 1
   local fold_col2 = fold.col2 or (#(doc.lines[fold.line2] or "") + 1)
@@ -5314,9 +5323,10 @@ function DocView:draw_line_text(line, x, y)
       local visual_row = self:get_visual_row(line, row_start)
       local row_y = y + self:get_visual_row_y_offset(visual_row) - first_row_y_offset
       local row_height = self:get_visual_row_height(visual_row)
-      local content_height = render_line.table_row and row_height or math.min(
-        row_height, render_line.text_row_height or row_height
+      local content_y_offset, content_height = line_render_content_geometry(
+        render_line, row_height
       )
+      local content_y = row_y + content_y_offset
       for _, fragment in ipairs(fragments) do
         local col1 = fragment.source_col1 or 1
         local col2 = fragment.source_col2 or col1
@@ -5329,7 +5339,7 @@ function DocView:draw_line_text(line, x, y)
         if anchored_widget and not fragment.hidden then
           local anchor_x = x + self:get_line_render_col_x_offset(render_line, col1)
           local ok, err = pcall(
-            fragment.widget.draw, self, fragment, anchor_x, row_y, content_height
+            fragment.widget.draw, self, fragment, anchor_x, content_y, content_height
           )
           if not ok then
             core.log_quiet(
@@ -5342,7 +5352,7 @@ function DocView:draw_line_text(line, x, y)
           font:set_tab_size(indent_size)
           if fragment.widget and fragment.widget.draw and from == col1 and to == col2 then
             local ok, err = pcall(
-              fragment.widget.draw, self, fragment, tx, row_y, content_height
+              fragment.widget.draw, self, fragment, tx, content_y, content_height
             )
             if not ok then
               core.log_quiet("DocView wrapped render widget draw failed for %s: %s", self.doc:get_name(), tostring(err))
@@ -5359,7 +5369,7 @@ function DocView:draw_line_text(line, x, y)
             local segment = text_to >= text_from and text:sub(text_from, text_to) or ""
             if segment ~= "" then
               local color = render_fragment_color(fragment)
-              local segment_y = row_y
+              local segment_y = content_y
                 + math.max(0, (content_height - font:get_height()) / 2)
               tx = draw_render_fragment_text(
                 fragment, font, segment, tx, segment_y, color,
@@ -5459,9 +5469,10 @@ function DocView:draw_line_text(line, x, y)
     local tx = x + (render_line.x_offset or 0)
     local row = self:get_visual_row(line, 1)
     local row_height = self:get_visual_row_height(row)
-    local content_height = render_line.table_row and row_height or math.min(
-      row_height, render_line.text_row_height or row_height
+    local content_y_offset, content_height = line_render_content_geometry(
+      render_line, row_height
     )
+    local content_y = y + content_y_offset
     local _, indent_size = self.doc:get_indent_info()
     for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
       if not fragment.hidden then
@@ -5474,7 +5485,8 @@ function DocView:draw_line_text(line, x, y)
           render_line, col1, position_row
         )
           or tx
-        local draw_y = y + (position_row and (position_row.y_offset or 0) or 0)
+        local draw_y = content_y
+          + (position_row and (position_row.y_offset or 0) or 0)
         local draw_height = position_row and (position_row.height or row_height)
           or content_height
         local font = render_fragment_font(self, fragment)
@@ -5483,7 +5495,7 @@ function DocView:draw_line_text(line, x, y)
         local ty = draw_y + math.max(0, (draw_height - font:get_height()) / 2)
         if fragment.widget and fragment.widget.draw then
           local ok, err = pcall(
-            fragment.widget.draw, self, fragment, draw_x, y, content_height
+            fragment.widget.draw, self, fragment, draw_x, content_y, content_height
           )
           if not ok then core.log_quiet("DocView render widget draw failed for %s: %s", self.doc:get_name(), tostring(err)) end
           tx = draw_x + (fragment.width or fragment.widget.width or 0)
@@ -6042,6 +6054,13 @@ function DocView:draw_caret(x, y, line, col, caret_idx, color)
     and linewrapping.has_wrapped_line_end_affinity(self, line, col)
     or false
   local lh = self:get_position_caret_height(line, col, line_end)
+  local render_line = self:get_line_render(line)
+  local _, position_row = self:get_position_line_render_row(line, col)
+  if render_line and not position_row then
+    local row_height = self:get_position_visual_row_height(line, col, line_end)
+    local content_y_offset = line_render_content_geometry(render_line, row_height)
+    y = y + content_y_offset
+  end
   if self.doc.overwrite then
     local w = self:get_font():get_width(self.doc:get_char(line, col))
     renderer.draw_rect(x, y + lh, w, style.caret_width * 2, color)
