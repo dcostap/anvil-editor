@@ -2,8 +2,11 @@
 -- First-party selection surrounding behavior.
 
 local core = require "core"
+local command = require "core.command"
 local DocView = require "core.docview"
+local keymap = require "core.keymap"
 local linewrapping = require "core.linewrapping"
+local markdown_live = require "core.markdown.live_render"
 local translate = require "core.doc.translate"
 
 local delimiters = {
@@ -227,5 +230,36 @@ function DocView:on_text_input(text)
   self.doc:clear_search_selections()
   return apply_surround(self, text, delimiter) or original_on_text_input(self, text)
 end
+
+local function selected_markdown_view()
+  local view = core.active_view
+  if view and view:extends(DocView)
+    and markdown_live.is_markdown_doc(view.doc)
+    and view.doc:has_any_selection()
+  then
+    return true, view
+  end
+  return false
+end
+
+local function surround_markdown_selection(view, opener, closer)
+  if not view:can_edit("format Markdown selection", { warn = true }) then return end
+  view.doc:clear_search_selections()
+  apply_surround(view, opener, { close = closer })
+end
+
+command.add(selected_markdown_view, {
+  ["markdown:surround-bold"] = function(view)
+    surround_markdown_selection(view, "**", "**")
+  end,
+  ["markdown:surround-italic"] = function(view)
+    surround_markdown_selection(view, "_", "_")
+  end,
+})
+
+keymap.add {
+  ["ctrl+b"] = "markdown:surround-bold",
+  ["ctrl+i"] = "markdown:surround-italic",
+}
 
 return {}

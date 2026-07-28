@@ -3,6 +3,7 @@ local config = require "core.config"
 local command = require "core.command"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
+local markdown_live = require "core.markdown.live_render"
 local test = require "core.test"
 
 require "plugins.selection_surround"
@@ -18,8 +19,8 @@ local function set_text(doc, text)
   doc:set_selection(1, 1)
 end
 
-local function new_view(context, text)
-  local doc = Doc()
+local function new_view(context, text, filename)
+  local doc = filename and Doc(filename, filename, true) or Doc()
   set_text(doc, text)
   local view = DocView(doc)
   context.docs[#context.docs + 1] = doc
@@ -192,5 +193,37 @@ test.describe("Selection surrounding", function()
 
     test.equal(document_text(doc), "(test)\n")
     test.same(doc.selections, { 1, 6, 1, 2 })
+  end)
+
+  test.it("surrounds selected Markdown in Live Preview and Source Mode", function(context)
+    local view, doc = new_view(context, "alpha beta", "note.md")
+    core.set_active_view(view)
+    markdown_live.set_source_mode(view, false, "selection-surround-test")
+    doc:set_selection(1, 1, 1, 6)
+
+    test.ok(command.perform("markdown:surround-bold"))
+    test.equal(document_text(doc), "**alpha** beta\n")
+    test.equal(selection_text(doc), "alpha")
+
+    markdown_live.set_source_mode(view, true, "selection-surround-test")
+    test.ok(markdown_live.is_source_mode(view))
+    doc:set_selection(1, 11, 1, 15)
+    test.ok(command.perform("markdown:surround-italic"))
+    test.equal(document_text(doc), "**alpha** _beta_\n")
+    test.equal(selection_text(doc), "beta")
+  end)
+
+  test.it("offers Markdown surround commands only for selected Markdown text", function(context)
+    local markdown_view, markdown_doc = new_view(context, "alpha", "note.md")
+    core.set_active_view(markdown_view)
+    markdown_doc:set_selection(1, 1)
+    test.equal(command.perform("markdown:surround-bold"), false)
+    test.equal(document_text(markdown_doc), "alpha\n")
+
+    local text_view, text_doc = new_view(context, "alpha", "note.txt")
+    core.set_active_view(text_view)
+    text_doc:set_selection(1, 1, 1, 6)
+    test.equal(command.perform("markdown:surround-italic"), false)
+    test.equal(document_text(text_doc), "alpha\n")
   end)
 end)
