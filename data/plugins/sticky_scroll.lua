@@ -114,78 +114,6 @@ function SS.should_run(dv)
   return true
 end
 
----Return an array of the sticly lines that should be shown.
----
----@param doc core.doc
----@param start_line integer #the reference line
----@param max_sticky_lines integer #the maximum allowed sticky lines
----@return table #an ordered list of lines that should be shown as sticky
-function SS.get_sticky_lines(doc, start_line, max_sticky_lines, level_cache)
-  local res = {}
-  local last_level
-  local original_start_line = start_line
-  start_line = common.clamp(start_line, 1, #doc.lines)
-
-  local raw_get_level = SS.get_level_getter(doc)
-  if not raw_get_level then return res end
-  local function get_level(doc, line)
-    if not level_cache then return raw_get_level(doc, line) end
-    local level = level_cache[line]
-    if level == nil then
-      level = raw_get_level(doc, line)
-      level_cache[line] = level
-    end
-    return level
-  end
-
-  -- Find the first usable line
-  repeat
-    if start_line <= 0 then return res end
-    last_level = get_level(doc, start_line)
-    start_line = start_line - 1
-  until last_level >= 0
-
-  -- If we had to skip some lines, check if we need to stick the usable one
-  if original_start_line ~= start_line + 1 then
-    local found = false
-    -- Check if there are valid lines after the original start line
-    for i = original_start_line, #doc.lines do
-      local next_indent_level = get_level(doc, i)
-      if next_indent_level >= 0 then
-        if next_indent_level == 0 and next_indent_level < last_level then
-          -- We are at the end of the block,
-          -- so there aren't any sticky lines to be shown
-          return res
-        end
-        -- If there is an indent level higher than original start line,
-        -- stick the usable line that was found
-        if next_indent_level > last_level then
-          table.insert(res, start_line + 1)
-        end
-        found = true
-        break
-      end
-    end
-    -- If there are no valid lines, we don't need to show sticky lines.
-    if not found then return res end
-  end
-
-  -- Find sticky lines to show, starting from the current line,
-  -- until we get to one that has level 0.
-  for i = start_line, 1, -1 do
-    local level = get_level(doc, i)
-    if level >= 0 and level < last_level then
-      table.insert(res, i)
-      last_level = level
-    end
-    if level == 0 then break end
-  end
-
-  -- Only keep the lines we're allowed to show
-  common.splice(res, 1, math.max(0, #res - max_sticky_lines))
-  return res
-end
-
 local function get_visible_line_range(dv)
   return dv:get_visible_line_range()
 end
@@ -250,22 +178,25 @@ local function intersect_rect(x1, y1, w1, h1, x2, y2, w2, h2)
   return x, y, math.max(0, right - x), math.max(0, bottom - y)
 end
 
-local function start_model_build(docview, doc, max_sticky_lines)
+local function start_model_build(docview, doc)
   docview.sticky_scroll_model_generation = (docview.sticky_scroll_model_generation or 0) + 1
   local generation = docview.sticky_scroll_model_generation
-  docview.sticky_scroll_model_ready = false
   docview.sticky_scroll_model_building = true
   docview.sticky_scroll_model_pending_time = nil
-  docview.sticky_scroll_model_change_id = doc:get_change_id()
-  docview.sticky_scroll_model_syntax = doc.syntax
-  docview.sticky_scroll_model_max_sticky_lines = max_sticky_lines
-  docview.sticky_scroll_model_line_scope = {}
-  docview.sticky_scroll_model_scopes = {}
+  local change_id = doc:get_change_id()
 
   local get_level = SS.get_level_getter(doc)
   if not get_level then
+    docview.sticky_scroll_model_scopes = {}
+    docview.sticky_scroll_model_line_scope = {}
+    docview.sticky_scroll_cache = {}
+    docview.sticky_scroll_model_change_id = change_id
     docview.sticky_scroll_model_building = false
     docview.sticky_scroll_model_ready = true
+    core.log_quiet(
+      "Sticky scroll model: published empty model for %s at change %s",
+      doc:get_name(), tostring(change_id)
+    )
     return
   end
 
@@ -273,7 +204,6 @@ local function start_model_build(docview, doc, max_sticky_lines)
     local scopes = {}
     local line_scope = {}
     local stack = {}
-    local change_id = doc:get_change_id()
     local slice_start = system.get_time()
     local slice_lines = 0
     local slice_budget = 0.001
@@ -306,7 +236,12 @@ local function start_model_build(docview, doc, max_sticky_lines)
         docview.sticky_scroll_model_scopes = scopes
         docview.sticky_scroll_model_line_scope = line_scope
         docview.sticky_scroll_cache = {}
+        docview.sticky_scroll_model_change_id = change_id
         docview.sticky_scroll_model_ready = true
+        core.log_quiet(
+          "Sticky scroll model: published %d scopes for %s at change %s",
+          #scopes, doc:get_name(), tostring(change_id)
+        )
       end
       docview.sticky_scroll_model_building = false
     end
@@ -334,14 +269,10 @@ local function get_model_sticky_lines(docview, start_line, max_sticky_lines)
   return res
 end
 
-local function schedule_model_build(docview, doc)
+local function schedule_model_build(docview)
   docview.sticky_scroll_model_generation = (docview.sticky_scroll_model_generation or 0) + 1
   docview.sticky_scroll_model_pending_time = system.get_time() + (sticky_scroll.rebuild_debounce or 0)
-  docview.sticky_scroll_model_pending_change_id = doc:get_change_id()
-  docview.sticky_scroll_model_ready = false
   docview.sticky_scroll_model_building = false
-  docview.sticky_scroll_cache = {}
-  docview.sticky_scroll_level_cache = {}
 end
 
 local last_max_sticky_lines
@@ -350,28 +281,38 @@ function DocView:update(...)
   local res = old_dv_update(self, ...)
   if not SS.should_run(self) then return res end
 
-  -- Simple cache. Gets reset on every doc change.
-  -- Could be made smarter, but this will do for now™.
+  -- The cache belongs to the last atomically published scope model. Document
+  -- changes schedule its replacement without exposing a half-built model.
   local docview = SS.managed_docviews[self]
   local current_change_id = self.doc:get_change_id()
   local settings_changed = last_max_sticky_lines ~= sticky_scroll.max_sticky_lines
     or docview.syntax ~= self.doc.syntax
   if settings_changed then
     docview.sticky_scroll_cache = {}
-    docview.sticky_scroll_level_cache = {}
+    docview.sticky_scroll_model_scopes = {}
+    docview.sticky_scroll_model_line_scope = {}
+    docview.sticky_scroll_model_ready = false
+    docview.sticky_lines = {}
     docview.reference_line = 1
     docview.syntax = self.doc.syntax
     docview.sticky_scroll_last_change_id = current_change_id
     last_max_sticky_lines = sticky_scroll.max_sticky_lines
-    start_model_build(docview, self.doc, sticky_scroll.max_sticky_lines)
+    start_model_build(docview, self.doc)
   elseif docview.sticky_scroll_last_change_id ~= current_change_id then
-    docview.reference_line = 1
     docview.sticky_scroll_last_change_id = current_change_id
-    schedule_model_build(docview, self.doc)
+    schedule_model_build(docview)
   elseif docview.sticky_scroll_model_pending_time
      and system.get_time() >= docview.sticky_scroll_model_pending_time
      and not docview.sticky_scroll_model_building then
-    start_model_build(docview, self.doc, sticky_scroll.max_sticky_lines)
+    start_model_build(docview, self.doc)
+  end
+
+  -- Scope models are published atomically. While a replacement is pending or
+  -- building, retain the last settled sticky stack instead of substituting a
+  -- different hierarchy heuristic whose candidates can flicker during typing.
+  if not docview.sticky_scroll_model_ready
+  or docview.sticky_scroll_model_change_id ~= current_change_id then
+    return res
   end
 
   local minline, _ = get_visible_line_range(self)
@@ -384,20 +325,12 @@ function DocView:update(...)
   local new_reference_line = to
   for i = from, to do
     -- Simple cache
-    local scroll_lines
-    if docview.sticky_scroll_model_ready then
-      if not docview.sticky_scroll_cache[i] then
-        docview.sticky_scroll_cache[i] = get_model_sticky_lines(docview, i, sticky_scroll.max_sticky_lines)
-      end
-      scroll_lines = docview.sticky_scroll_cache[i]
-    else
-      if not docview.sticky_scroll_cache[i] then
-        docview.sticky_scroll_cache[i] = SS.get_sticky_lines(
-          self.doc, i, sticky_scroll.max_sticky_lines, docview.sticky_scroll_level_cache
-        )
-      end
-      scroll_lines = docview.sticky_scroll_cache[i]
+    if not docview.sticky_scroll_cache[i] then
+      docview.sticky_scroll_cache[i] = get_model_sticky_lines(
+        docview, i, sticky_scroll.max_sticky_lines
+      )
     end
+    local scroll_lines = docview.sticky_scroll_cache[i]
     local _, nl_y = self:get_line_screen_position(i)
     if nl_y >= self.position.y + SS.get_sticky_stack_height(self, scroll_lines) then
       break

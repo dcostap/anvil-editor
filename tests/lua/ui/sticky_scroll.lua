@@ -32,22 +32,43 @@ test.describe("sticky scroll", function()
     test.ok(sticky_scroll.get_level_from_indent(doc, 1) >= 0)
   end)
 
-  test.it("uses current Markdown hierarchy while its async model rebuilds", function()
-    local lines = { "# Parent", "## Child" }
-    for i = 3, 24 do lines[i] = "paragraph " .. i end
+  test.it("keeps the settled Markdown scope chain while rebuilding after typing", function()
+    local lines = { "# Parent", "## Short section" }
+    for i = 3, 6 do lines[i] = "short section paragraph " .. i end
+    lines[7] = "## Following section"
+    for i = 8, 24 do lines[i] = "following section paragraph " .. i end
     local view = make_view(table.concat(lines, "\n"))
     local data = sticky_scroll.managed_docviews[view]
-    data.syntax = view.doc.syntax
-    data.sticky_scroll_last_change_id = view.doc:get_change_id()
-    data.sticky_scroll_model_ready = false
-    data.sticky_scroll_model_building = true
-    data.sticky_scroll_cache = {}
-    data.sticky_scroll_level_cache = {}
-    view.scroll.y = view:get_visual_row_y_offset(14)
+    view.scroll.y = view:get_visual_row_y_offset(5)
     view.scroll.to.y = view.scroll.y
 
     view:update()
-    test.ok(#data.sticky_lines > 0)
+    local deadline = system.get_time() + 1
+    while not data.sticky_scroll_model_ready and system.get_time() < deadline do
+      coroutine.yield(0)
+    end
+    test.ok(data.sticky_scroll_model_ready)
+    view:update()
+    test.same(data.sticky_lines, { 1 })
+
+    view.doc:insert(5, 2, "x")
+    view:update()
+
+    test.same(data.sticky_lines, { 1 })
+    local changed_id = view.doc:get_change_id()
+    test.ok(data.sticky_scroll_model_change_id ~= changed_id)
+
+    data.sticky_scroll_model_pending_time = 0
+    view:update()
+    deadline = system.get_time() + 1
+    while data.sticky_scroll_model_change_id ~= changed_id
+      and system.get_time() < deadline
+    do
+      coroutine.yield(0)
+    end
+    test.equal(data.sticky_scroll_model_change_id, changed_id)
+    view:update()
+    test.same(data.sticky_lines, { 1 })
   end)
 
   test.it("lays out sticky Markdown headings with their visual row heights", function()
