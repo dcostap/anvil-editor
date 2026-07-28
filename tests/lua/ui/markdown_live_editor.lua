@@ -639,6 +639,61 @@ test.describe("Markdown Live Editor", function()
     test.equal(view:get_col_x_offset(2, #"secret" + 1), 0)
   end)
 
+  test.it("keeps a wrapped suffix rendered while typing after a literal percentage", function()
+    local paragraph = string.rep("wrapped prose ", 20)
+      .. "realmente estaba el 99% hecho"
+    local view, doc = make_view(
+      paragraph .. "\n## Following heading\n**following bold text**\nplain",
+      "literal-percentage.md"
+    )
+    view.size.x = 360
+    view:set_wrapping_enabled(true)
+    doc:set_selection(4, 1)
+    refresh(view)
+    doc:set_selection(1, #doc.lines[1])
+
+    view:on_text_input("!")
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(visible_render_text(view, 2), "Following heading")
+    test.equal(visible_render_text(view, 3), "following bold text")
+
+    view:on_text_input("?")
+    test.equal(visible_render_text(view, 2), "Following heading")
+    test.equal(visible_render_text(view, 3), "following bold text")
+  end)
+
+  test.it("invalidates comment-dependent suffix rendering when a delimiter is broken", function()
+    local view, doc = make_view("before %%hidden\nsecret\nend%%\n# after", "note.md")
+    doc:set_selection(4, 1)
+    refresh(view)
+    test.equal(view:get_col_x_offset(2, #"secret" + 1), 0)
+
+    doc:insert(1, 9, "x")
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(view:get_line_render(2), nil)
+  end)
+
+  test.it("keeps a fenced suffix rendered while editing only the info string", function()
+    local view, doc = make_view("```lua\n# code\n```\n## Following heading\nplain", "note.md")
+    doc:set_selection(5, 1)
+    refresh(view)
+    doc:set_selection(1, #doc.lines[1])
+
+    view:on_text_input("x")
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(visible_render_text(view, 4), "Following heading")
+  end)
+
+  test.it("invalidates fence-dependent suffix rendering when an opener is broken", function()
+    local view, doc = make_view("```\n# code\n```\n# after", "note.md")
+    doc:set_selection(4, 1)
+    refresh(view)
+
+    doc:insert(1, 1, "x")
+    test.equal(test.not_nil(markdown_model.peek(doc)).status, "pending")
+    test.equal(view:get_line_render(2), nil)
+  end)
+
   test.it("applies semantic comments and escapes inside headings", function()
     local view, doc = make_view("# visible %%hidden%% \\*literal*\nplain", "note.md")
     doc:set_selection(2, 1)

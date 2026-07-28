@@ -3474,6 +3474,86 @@ local function provisional_fenced_lines(view)
   return fenced
 end
 
+local function marker_is_escaped(text, col)
+  local slashes = 0
+  for index = col - 1, 1, -1 do
+    if text:sub(index, index) ~= "\\" then break end
+    slashes = slashes + 1
+  end
+  return slashes % 2 == 1
+end
+
+-- Cross-line Markdown context depends on delimiter topology, not on the mere
+-- presence of characters that could be delimiters. Keep positions and prose
+-- out of this signature so typing beside `99%` or in a fence info string does
+-- not invalidate the Document suffix, while forming/breaking actual delimiter
+-- runs still does.
+local function inline_context_marker_signature(text)
+  local parts = {}
+  local col = 1
+  while col <= #text do
+    local marker = text:sub(col, col)
+    if marker == "%" or marker == "`" or marker == "$" then
+      local col2 = col + 1
+      while text:sub(col2, col2) == marker do col2 = col2 + 1 end
+      parts[#parts + 1] = table.concat({
+        marker,
+        tostring(col2 - col),
+        marker_is_escaped(text, col) and "escaped" or "active",
+      }, ":")
+      col = col2
+    else
+      col = col + 1
+    end
+  end
+  return table.concat(parts, "|")
+end
+
+local function fence_context_signature(text)
+  local marker, count = fence_marker(text)
+  if not marker then return "none" end
+  local _, _, rest = text:find(
+    "^%s*" .. (marker == "`" and "`+" or "~+") .. "(.*)$"
+  )
+  return table.concat({
+    marker,
+    tostring(count),
+    rest and rest:match("^%s*$") and "bare" or "info",
+  }, ":")
+end
+
+local function raw_context_signature(text)
+  return fence_context_signature(text) .. "\0" .. inline_context_marker_signature(text)
+end
+
+local function transaction_changes_raw_context(view, transaction, pre_edit_lines)
+  if transaction and transaction.type == "load" then return true end
+  local lines = {}
+  for _, edit in ipairs(transaction and transaction.edits or {}) do
+    for line = edit.line1 or 1, edit.line2 or edit.line1 or 1 do lines[line] = true end
+  end
+  for _, range in ipairs(transaction and transaction.changed_ranges or {}) do
+    local line1 = math.min(
+      range.old_line1 or range.new_line1 or 1,
+      range.new_line1 or range.old_line1 or 1
+    )
+    local line2 = math.max(
+      range.old_line2 or range.new_line2 or line1,
+      range.new_line2 or range.old_line2 or line1
+    )
+    for line = line1, line2 do lines[line] = true end
+  end
+  for line in pairs(lines) do
+    local previous = pre_edit_lines and pre_edit_lines[line]
+    if not previous then return true end
+    local current = (view.doc.lines[line] or ""):gsub("\n$", "")
+    if raw_context_signature(previous.source_text or "") ~= raw_context_signature(current) then
+      return true
+    end
+  end
+  return false
+end
+
 function provider:on_text_transaction(view, transaction, line1, line2)
   if not line1 then return nil end
   local table_line1, table_line2
@@ -3560,25 +3640,7 @@ function provider:on_text_transaction(view, transaction, line1, line2)
   for _, range in ipairs(transaction and transaction.changed_ranges or {}) do
     if (range.line_delta or 0) ~= 0 then structural_change = true break end
   end
-  local raw_context_changed = transaction and transaction.type == "load"
-  for _, edit in ipairs(transaction and transaction.edits or {}) do
-    if (edit.text or ""):find("[`~%%]") or (edit.old_text or ""):find("[`~%%]") then
-      raw_context_changed = true
-      break
-    end
-  end
-  if not raw_context_changed then
-    for _, range in ipairs(transaction and transaction.changed_ranges or {}) do
-      for line = range.new_line1 or line1, range.new_line2 or range.new_line1 or line1 do
-        local changed_line = view.doc.lines[line] or ""
-        if changed_line:match("^%s*[`~]") or changed_line:find("%", 1, true) then
-          raw_context_changed = true
-          break
-        end
-      end
-      if raw_context_changed then break end
-    end
-  end
+  local raw_context_changed = transaction_changes_raw_context(view, transaction, pre_edit_lines)
   if raw_context_changed and owner then
     local fenced = provisional_fenced_lines(view)
     for optimistic_line, optimistic in pairs(owner.optimistic_lines or {}) do
