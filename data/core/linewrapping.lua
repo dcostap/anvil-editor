@@ -195,6 +195,18 @@ local function perf_frame_add(key, amount)
   if perf and perf.frame_add then perf.frame_add(key, amount or 1) end
 end
 
+local function perf_detail(key, amount)
+  local perf = package.loaded["core.perf"]
+  if perf and perf.is_recording and perf.is_recording() and perf.add_detail then
+    perf.add_detail(key, amount or 1)
+  end
+end
+
+local function perf_recording()
+  local perf = package.loaded["core.perf"]
+  return perf and perf.is_recording and perf.is_recording() and perf.add_detail
+end
+
 local function perf_elapsed(key, start_time)
   if start_time then perf_frame_add(key, (system.get_time() - start_time) * 1000) end
 end
@@ -778,6 +790,17 @@ function LineWrapping.update_same_line_suffix_breaks(docview, range, transaction
 end
 
 function LineWrapping.update_breaks(docview, old_line1, old_line2, net_lines)
+  if perf_recording() then
+    local caller = debug.getinfo(2, "Sl") or {}
+    perf_detail(string.format(
+      "linewrapping_update_breaks_range:range=%s-%s:net=%s:new_lines=%s:caller=%s:%s:revision=%s",
+      tostring(old_line1), tostring(old_line2), tostring(net_lines or 0),
+      tostring(math.max(0, (old_line2 or old_line1) - old_line1 + 1 + (net_lines or 0))),
+      tostring(caller.short_src or caller.source or "unknown"),
+      tostring(caller.currentline or 0),
+      tostring(docview.doc and docview.doc.text_revision or "none")
+    ), 1)
+  end
   local perf_active = core.perf_frame_stats ~= nil
   local perf_start = perf_active and system.get_time()
   local perf_lines = 0

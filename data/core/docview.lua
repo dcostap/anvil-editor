@@ -1472,6 +1472,29 @@ function DocView:remove_line_render_provider(id)
 end
 
 function DocView:invalidate_line_render(_provider_id, line1, line2)
+  local perf = package.loaded["core.perf"]
+  if perf and perf.is_recording and perf.is_recording() and perf.add_detail then
+    local caller = debug.getinfo(2, "Sl") or {}
+    local requested_line1 = line1 and math.max(1, math.floor(line1)) or nil
+    local requested_line2 = requested_line1
+      and math.max(requested_line1, math.floor(line2 or requested_line1)) or nil
+    local owner = self.__markdown_live_owner
+    local model = owner and owner.semantic_model
+    perf.add_detail(string.format(
+      "docview_line_render_invalidation:provider=%s:range=%s-%s:lines=%s:caller=%s:%s:revision=%s:model=%s:pending=%s:pending_wrap=%s:adoption=%s",
+      tostring(_provider_id or "unknown"),
+      tostring(requested_line1 or "full"),
+      tostring(requested_line2 or "full"),
+      tostring(requested_line1 and (requested_line2 - requested_line1 + 1) or "full"),
+      tostring(caller.short_src or caller.source or "unknown"),
+      tostring(caller.currentline or 0),
+      tostring(self.doc and self.doc.text_revision or "none"),
+      tostring(model and model.status or "none"),
+      tostring(owner and owner.semantic_pending_line or "none"),
+      tostring(owner and owner.semantic_pending_wrap_line or "none"),
+      tostring(owner and owner.semantic_adoption_line or "none")
+    ), 1)
+  end
   local cache = self.__line_render_cache
   if line1 and cache and cache.generation == (self.__line_render_generation or 0) then
     local requested_line1 = math.max(1, math.floor(line1))
