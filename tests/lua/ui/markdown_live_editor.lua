@@ -8,7 +8,6 @@ local markdown = require "core.markdown"
 local markdown_completion = require "core.markdown.completion"
 local fence_highlight = require "core.markdown.fence_highlight"
 local markdown_model = require "core.markdown.model"
-local keymap = require "core.keymap"
 local linewrapping = require "core.linewrapping"
 local markdown_rename_links = require "core.markdown.rename_links"
 local Project = require "core.project"
@@ -1564,7 +1563,7 @@ test.describe("Markdown Live Editor", function()
     test.equal(table.concat(visible), "[[" .. target .. "]]")
   end)
 
-  test.it("opens resolved links by command and modifier-click with navigation targets", function()
+  test.it("opens resolved links by command and left-click with navigation targets", function()
     local root = USERDIR .. PATHSEP .. "markdown-live-open-link-" .. system.get_process_id()
     test.ok(common.mkdirp(root))
     local target_path = root .. PATHSEP .. "Target.md"
@@ -1598,18 +1597,7 @@ test.describe("Markdown Live Editor", function()
       opened = nil
       doc:set_selection(2, 1)
       local x, y = view:get_line_screen_position(1)
-      keymap.modkeys["ctrl"] = true
       view:on_mouse_pressed("left", x + 2, y + 2, 1)
-      keymap.modkeys["ctrl"] = false
-      test.equal(opened, common.normalize_path(target_path))
-
-      opened = nil
-      local old_platform = PLATFORM
-      PLATFORM = "Mac OS X"
-      keymap.modkeys["cmd"] = true
-      view:on_mouse_pressed("left", x + 2, y + 2, 1)
-      keymap.modkeys["cmd"] = false
-      PLATFORM = old_platform
       test.equal(opened, common.normalize_path(target_path))
 
       os.remove(target_path)
@@ -1621,8 +1609,6 @@ test.describe("Markdown Live Editor", function()
       test.equal(command.perform("markdown-live-preview:open-link"), true)
       test.equal(opened, nil)
     end)
-    keymap.modkeys["ctrl"] = false
-    keymap.modkeys["cmd"] = false
     core.open_file, core.active_view = old_open_file, old_active
     core.projects = old_projects
     common.rm(root, true)

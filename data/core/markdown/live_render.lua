@@ -6,7 +6,6 @@ local attachments = require "core.markdown.attachments"
 local images = require "core.markdown.images"
 local fence_highlight = require "core.markdown.fence_highlight"
 local link_completion = require "core.markdown.completion"
-local keymap = require "core.keymap"
 local linewrapping = require "core.linewrapping"
 local markdown_links = require "core.markdown.links"
 local markdown_model = require "core.markdown.model"
@@ -1174,8 +1173,11 @@ local function decorate_link_fragment(view, line, span, fragment, opts)
   fragment.link_resolution = resolution
   fragment.cursor = "hand"
   fragment.on_mouse_pressed = function(self, owner, _, button)
-    local modifier = PLATFORM == "Mac OS X" and "cmd" or "ctrl"
-    if button ~= "left" or not keymap.modkeys[modifier] then return false end
+    if button ~= "left" then return false end
+    owner:set_selection_state({
+      selections = { line, span.col1, line, span.col1 },
+      last_selection = 1,
+    })
     return live.open_link(owner, { link = self.link, resolution = self.link_resolution })
   end
   if not fragment.widget and not fragment.image_status then

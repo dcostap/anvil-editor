@@ -5,6 +5,9 @@ local test = require "core.test"
 local panes = require "core.panes"
 local file_context = require "core.file_context"
 local DocView = require "core.docview"
+local markdown = require "core.markdown"
+local markdown_model = require "core.markdown.model"
+local worker_pool = require "core.worker_pool"
 local command_slots = require "plugins.command_slots"
 local git_view = require "plugins.git_view"
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
@@ -108,6 +111,18 @@ local function caret(view)
   end)
 end
 
+local function refresh_markdown(view)
+  markdown.live_render.refresh_view(view)
+  local instance = test.not_nil(markdown_model.peek(view.doc))
+  local deadline = system.get_time() + 5
+  while instance.status ~= "ready" and system.get_time() < deadline do
+    local pool = worker_pool.current_system()
+    if pool then pool:drain({ max_ms = 5, max_messages = 64 }) end
+    if instance.status ~= "ready" then coroutine.yield(0.01) end
+  end
+  test.equal(instance.status, "ready", instance.reason)
+end
+
 test.describe("IntelliJ-style navigation history", function()
   test.after_each(function(context)
     navigation_history.clear_history()
@@ -151,6 +166,9 @@ test.describe("IntelliJ-style navigation history", function()
     for _, path in ipairs(context.navigation_files or {}) do
       os.remove(path)
     end
+    for _, path in ipairs(context.navigation_roots or {}) do
+      common.rm(path, true)
+    end
     navigation_history.clear_history()
   end)
 
@@ -177,6 +195,45 @@ test.describe("IntelliJ-style navigation history", function()
     test.ok(command.perform("navigation:forward"))
     local restored_second = track_active_editor(context)
     test.ok(common.path_equals(restored_second.doc.abs_filename, second_path))
+  end)
+
+  test.it("returns to the clicked Markdown link instead of the previous caret", function(context)
+    local root = (os.getenv("TEMP") or os.getenv("TMP") or USERDIR)
+      .. PATHSEP .. "anvil-navigation-markdown-link-" .. system.get_process_id()
+    common.rm(root, true)
+    test.ok(common.mkdirp(root))
+    track(context, "navigation_roots", root)
+
+    local source_path = root .. PATHSEP .. "Source.md"
+    local target_path = root .. PATHSEP .. "Target.md"
+    local lines = { "[[Target]]" }
+    for line = 2, 107 do lines[line] = "line " .. line end
+    local source_file = test.not_nil(io.open(source_path, "wb"))
+    source_file:write(table.concat(lines, "\n"), "\n")
+    source_file:close()
+    local target_file = test.not_nil(io.open(target_path, "wb"))
+    target_file:write("# Target\n")
+    target_file:close()
+
+    markdown.vault_index.get_index(root):rebuild("ui-navigation-markdown-link")
+    local source_doc = track(context, "docs", core.open_doc(source_path))
+    local source = track(context, "views", panes.open_doc(source_doc, { pane = "left" }))
+    core.set_active_view(source)
+    set_caret(source, 107, 1)
+    refresh_markdown(source)
+    source.scroll.y, source.scroll.to.y = 0, 0
+    navigation_history.clear_history()
+
+    local x, y = source:get_line_screen_position(1)
+    test.ok(source:on_mouse_pressed("left", x + 2, y + 2, 1))
+    local target = track_active_editor(context)
+    test.ok(common.path_equals(target.doc.abs_filename, target_path))
+
+    test.ok(command.perform("navigation:back"))
+    local restored = track_active_editor(context)
+    test.ok(common.path_equals(restored.doc.abs_filename, source_path))
+    local line = caret(restored)
+    test.equal(line, 1)
   end)
 
   test.it("branches singleton Editor history and clears stale forward places", function(context)
