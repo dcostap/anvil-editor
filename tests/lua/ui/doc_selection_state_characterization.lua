@@ -185,6 +185,32 @@ test.describe("Document View Selection State edit characterization", function()
     })
   end)
 
+  test.it("batch paste undo restores every original caret", function(context)
+    local doc, main = new_shared_views(context, "ab\ncd")
+    core.set_active_view(main)
+    local original = {
+      1, 2, 1, 2,
+      2, 2, 2, 2,
+    }
+    set_view_selections(main, original)
+    core.cursor_clipboard = {
+      [1] = "X\nY",
+      [2] = "P\nQ",
+      full = "X\nY\nP\nQ",
+    }
+    core.cursor_clipboard_whole_line = {
+      [1] = false,
+      [2] = false,
+    }
+    system.set_clipboard("X\nY\nP\nQ")
+
+    test.ok(command.perform("doc:paste"))
+    main:with_selection_state(function() doc:undo() end)
+
+    test.equal(text(doc), "ab\ncd\n")
+    test.same(selection(main), original)
+  end)
+
   test.it("internal paste inserts every normal clipboard payload at one caret when counts differ", function(context)
     local doc, main = new_shared_views(context, "ab")
     core.set_active_view(main)
@@ -368,6 +394,109 @@ test.describe("Document View Selection State edit characterization", function()
     test.equal(changes, 1)
   end)
 
+  test.it("overlapping whole-line paste plans a local transaction", function(context)
+    local doc, main = new_shared_views(context, "before\nabXXcdYYef\nafter")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      2, 3, 2, 5,
+      2, 7, 2, 9,
+    })
+    core.cursor_clipboard = {
+      [1] = "LINE",
+      full = "LINE\n",
+    }
+    core.cursor_clipboard_whole_line = {
+      [1] = true,
+    }
+    system.set_clipboard("LINE\n")
+    local transaction
+    function doc:on_text_change(_, tx) transaction = tx end
+
+    test.ok(command.perform("doc:paste"))
+
+    transaction = test.not_nil(transaction)
+    test.equal(#transaction.changed_ranges, 1)
+    test.equal(transaction.changed_ranges[1].old_line1, 2)
+    test.equal(transaction.changed_ranges[1].old_line2, 2)
+  end)
+
+  test.it("whole-line paste preserves a payload inserted at another selection endpoint", function(context)
+    local doc, main = new_shared_views(context, "aa\nbb\ncc")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      1, 2, 2, 1,
+      2, 1, 2, 1,
+    })
+    core.cursor_clipboard = {
+      [1] = "X",
+      [2] = "Y",
+      full = "X\nY\n",
+    }
+    core.cursor_clipboard_whole_line = {
+      [1] = true,
+      [2] = true,
+    }
+    system.set_clipboard("X\nY\n")
+
+    test.ok(command.perform("doc:paste"))
+
+    test.equal(text(doc), "X\naY\nbb\ncc\n")
+  end)
+
+  test.it("whole-line paste associates payloads by selection index regardless of spatial order", function(context)
+    local doc, main = new_shared_views(context, "aa\nbb\ncc")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      3, 1, 3, 1,
+      1, 1, 1, 1,
+    })
+    core.cursor_clipboard = {
+      [1] = "THREE",
+      [2] = "ONE",
+      full = "THREE\nONE\n",
+    }
+    core.cursor_clipboard_whole_line = {
+      [1] = true,
+      [2] = true,
+    }
+    system.set_clipboard("THREE\nONE\n")
+
+    test.ok(command.perform("doc:paste"))
+
+    test.equal(text(doc), "ONE\naa\nbb\nTHREE\ncc\n")
+    test.same(selection(main), {
+      5, 1, 5, 1,
+      2, 1, 2, 1,
+    })
+  end)
+
+  test.it("whole-line paste preserves selection-index payload order on the same line", function(context)
+    local doc, main = new_shared_views(context, "abcdef\nnext")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      1, 3, 1, 3,
+      1, 6, 1, 6,
+    })
+    core.cursor_clipboard = {
+      [1] = "A",
+      [2] = "B",
+      full = "A\nB\n",
+    }
+    core.cursor_clipboard_whole_line = {
+      [1] = true,
+      [2] = true,
+    }
+    system.set_clipboard("A\nB\n")
+
+    test.ok(command.perform("doc:paste"))
+
+    test.equal(text(doc), "A\nB\nabcdef\nnext\n")
+    test.same(selection(main), {
+      3, 3, 3, 3,
+      3, 6, 3, 6,
+    })
+  end)
+
   test.it("cut removes whole lines at multiple carets in one document change", function(context)
     local doc, main = new_shared_views(context, "aa\nbb\ncc\ndd")
     core.set_active_view(main)
@@ -389,6 +518,21 @@ test.describe("Document View Selection State edit characterization", function()
       2, 1, 2, 1,
     })
     test.equal(system.get_clipboard(), "aa\ncc\n")
+  end)
+
+  test.it("cut reports only the removed line ranges", function(context)
+    local doc, main = new_shared_views(context, "aa\nbb\ncc\ndd")
+    core.set_active_view(main)
+    set_view_selection(main, 3, 1, 3, 1)
+    local transaction
+    function doc:on_text_change(_, tx) transaction = tx end
+
+    test.ok(command.perform("doc:cut"))
+
+    transaction = test.not_nil(transaction)
+    test.equal(#transaction.changed_ranges, 1)
+    test.equal(transaction.changed_ranges[1].old_line1, 3)
+    test.equal(transaction.changed_ranges[1].old_line2, 4)
   end)
 
   test.it("newline removes whitespace-only selected lines and inserts indentation", function(context)
@@ -863,9 +1007,60 @@ test.describe("Document View Selection State edit characterization", function()
 
     test.ok(command.perform("doc:duplicate-lines"))
 
-    test.equal(text(doc), "aa\nbb\nbb\n\n")
+    test.equal(text(doc), "aa\nbb\nbb\n")
     test.equal(changes, 1)
     test.same(selection(main), { 3, 1, 3, 1 })
+  end)
+
+  test.it("duplicate-lines edits only the final selected line", function(context)
+    local doc, main = new_shared_views(context, "aa\nbb\ncc\ndd")
+    core.set_active_view(main)
+    set_view_selection(main, 4, 1, 4, 1)
+    local transaction
+    function doc:on_text_change(_, tx) transaction = tx end
+
+    test.ok(command.perform("doc:duplicate-lines"))
+
+    transaction = test.not_nil(transaction)
+    test.equal(#transaction.changed_ranges, 1)
+    test.equal(transaction.changed_ranges[1].old_line1, 4)
+  end)
+
+  test.it("duplicate-lines coalesces multiple carets on the same line", function(context)
+    local doc, main = new_shared_views(context, "aa\nbb\ncc")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      2, 1, 2, 1,
+      2, 2, 2, 2,
+    })
+    local changes = 0
+    function doc:on_text_change() changes = changes + 1 end
+
+    test.ok(command.perform("doc:duplicate-lines"))
+
+    test.equal(text(doc), "aa\nbb\nbb\ncc\n")
+    test.same(selection(main), {
+      3, 1, 3, 1,
+      3, 2, 3, 2,
+    })
+    test.equal(changes, 1)
+  end)
+
+  test.it("duplicate-lines handles selections supplied in reverse spatial order", function(context)
+    local doc, main = new_shared_views(context, "aa\nbb\ncc")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      3, 1, 3, 1,
+      1, 1, 1, 1,
+    })
+
+    test.ok(command.perform("doc:duplicate-lines"))
+
+    test.equal(text(doc), "aa\naa\nbb\ncc\ncc\n")
+    test.same(selection(main), {
+      5, 1, 5, 1,
+      2, 1, 2, 1,
+    })
   end)
 
   test.it("delete-lines deletes a final-line selection", function(context)
@@ -879,9 +1074,9 @@ test.describe("Document View Selection State edit characterization", function()
 
     test.ok(command.perform("doc:delete-lines"))
 
-    test.equal(text(doc), "aa\n\n")
+    test.equal(text(doc), "aa\n")
     test.equal(changes, 1)
-    test.same(selection(main), { 2, 1, 2, 1 })
+    test.same(selection(main), { 1, 1, 1, 1 })
   end)
 
   test.it("move-lines-up handles a boundary selection while moving later lines", function(context)
@@ -898,7 +1093,7 @@ test.describe("Document View Selection State edit characterization", function()
 
     test.ok(command.perform("doc:move-lines-up"))
 
-    test.equal(text(doc), "aa\ncc\nbb\n\n")
+    test.equal(text(doc), "aa\ncc\nbb\n")
     test.equal(changes, 1)
     test.same(selection(main), {
       1, 1, 1, 1,
@@ -920,12 +1115,30 @@ test.describe("Document View Selection State edit characterization", function()
 
     test.ok(command.perform("doc:move-lines-down"))
 
-    test.equal(text(doc), "bb\naa\n\ncc\n\n")
+    test.equal(text(doc), "bb\naa\ncc\n")
     test.equal(changes, 1)
     test.same(selection(main), {
       2, 1, 2, 1,
+      3, 1, 3, 1,
+    })
+  end)
+
+  test.it("boundary line moves use localized transactions", function(context)
+    local doc, main = new_shared_views(context, "aa\nbb\ncc\ndd\nee")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      1, 1, 1, 1,
       4, 1, 4, 1,
     })
+    local transaction
+    function doc:on_text_change(_, tx) transaction = tx end
+
+    test.ok(command.perform("doc:move-lines-up"))
+
+    transaction = test.not_nil(transaction)
+    test.equal(#transaction.changed_ranges, 1)
+    test.equal(transaction.changed_ranges[1].old_line1, 3)
+    test.equal(transaction.changed_ranges[1].old_line2, 5)
   end)
 
   test.it("duplicate-lines preserves independent multi-line selections after duplication", function(context)
@@ -938,7 +1151,7 @@ test.describe("Document View Selection State edit characterization", function()
 
     test.ok(command.perform("doc:duplicate-lines"))
 
-    test.equal(text(doc), "aa\naa\nbb\ncc\ndd\ncc\ndd\n\n")
+    test.equal(text(doc), "aa\naa\nbb\ncc\ndd\ncc\ndd\n")
     test.same(selection(main), {
       2, 2, 2, 2,
       6, 2, 7, 2,
@@ -962,6 +1175,19 @@ test.describe("Document View Selection State edit characterization", function()
     })
   end)
 
+  test.it("delete-lines handles selections supplied in reverse spatial order", function(context)
+    local doc, main = new_shared_views(context, "aa\nbb\ncc")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      3, 1, 3, 1,
+      1, 1, 1, 1,
+    })
+
+    test.ok(command.perform("doc:delete-lines"))
+
+    test.equal(text(doc), "bb\n")
+  end)
+
   test.it("join-lines joins each selected line range with spaces", function(context)
     local doc, main = new_shared_views(context, "aa\n  bb\ncc")
     core.set_active_view(main)
@@ -977,6 +1203,21 @@ test.describe("Document View Selection State edit characterization", function()
       1, 9, 1, 9,
       1, 9, 1, 9,
     })
+  end)
+
+  test.it("join-lines coalesces overlapping ranges into one transaction", function(context)
+    local doc, main = new_shared_views(context, "aa\n  bb\ncc")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      1, 1, 1, 1,
+      2, 1, 3, 1,
+    })
+    local changes = 0
+    function doc:on_text_change() changes = changes + 1 end
+
+    test.ok(command.perform("doc:join-lines"))
+
+    test.equal(changes, 1)
   end)
 
   test.it("join-lines batches independent selected line ranges", function(context)
@@ -1006,7 +1247,7 @@ test.describe("Document View Selection State edit characterization", function()
 
     test.ok(command.perform("doc:move-lines-up"))
 
-    test.equal(text(doc), "bb\naa\ndd\ncc\n\n")
+    test.equal(text(doc), "bb\naa\ndd\ncc\n")
     test.same(selection(main), {
       1, 1, 1, 1,
       3, 1, 3, 1,
@@ -1023,7 +1264,7 @@ test.describe("Document View Selection State edit characterization", function()
 
     test.ok(command.perform("doc:move-lines-down"))
 
-    test.equal(text(doc), "bb\naa\ndd\ncc\n\n")
+    test.equal(text(doc), "bb\naa\ndd\ncc\n")
     test.same(selection(main), {
       2, 1, 2, 1,
       4, 1, 4, 1,
@@ -1047,6 +1288,23 @@ test.describe("Document View Selection State edit characterization", function()
     })
   end)
 
+  test.it("move-lines-up handles selections supplied in reverse spatial order", function(context)
+    local doc, main = new_shared_views(context, "aa\nbb\ncc\ndd\nee")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      4, 1, 4, 1,
+      2, 1, 2, 1,
+    })
+
+    test.ok(command.perform("doc:move-lines-up"))
+
+    test.equal(text(doc), "bb\naa\ndd\ncc\nee\n")
+    test.same(selection(main), {
+      3, 1, 3, 1,
+      1, 1, 1, 1,
+    })
+  end)
+
   test.it("move-lines-down batches independent non-final selected lines", function(context)
     local doc, main = new_shared_views(context, "aa\nbb\ncc\ndd\nee")
     core.set_active_view(main)
@@ -1061,6 +1319,23 @@ test.describe("Document View Selection State edit characterization", function()
     test.same(selection(main), {
       2, 1, 2, 1,
       4, 1, 4, 1,
+    })
+  end)
+
+  test.it("move-lines-down handles selections supplied in reverse spatial order", function(context)
+    local doc, main = new_shared_views(context, "aa\nbb\ncc\ndd\nee")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      3, 1, 3, 1,
+      1, 1, 1, 1,
+    })
+
+    test.ok(command.perform("doc:move-lines-down"))
+
+    test.equal(text(doc), "bb\naa\ndd\ncc\nee\n")
+    test.same(selection(main), {
+      4, 1, 4, 1,
+      2, 1, 2, 1,
     })
   end)
 

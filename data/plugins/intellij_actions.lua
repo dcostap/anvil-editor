@@ -12,9 +12,6 @@ local Node = require "core.node"
 local file_context = require "core.file_context"
 local navigation_history = require "plugins.navigation_history"
 
-local core_doc_paste = core.intellij_actions_core_doc_paste or command.map["doc:paste"]
-core.intellij_actions_core_doc_paste = core_doc_paste
-
 local function can_edit(dv, reason)
   return not (dv and dv.can_edit) or dv:can_edit(reason, { warn = true })
 end
@@ -1081,34 +1078,6 @@ local function restore_selection_origin_or_select_none(dv)
   end
 end
 
-local function patch_paste_undo_selection(doc, undo_start_idx, selections)
-  -- Multi-cursor paste performs one insert per cursor.  For multi-line text,
-  -- the first insert shifts the still-pending lower cursors, and raw_insert()
-  -- records that shifted intermediate selection as the earliest selection in
-  -- the undo group.  Undo finally restores that earliest selection, so cursors
-  -- come back on the wrong lines.  Replace the first selection snapshot created
-  -- by this paste command with the real pre-paste selections.
-  for i = undo_start_idx, doc.undo_stack.idx - 1 do
-    local cmd = doc.undo_stack[i]
-    if cmd and cmd.type == "selection" then
-      doc.undo_stack[i] = { type = "selection", time = cmd.time, selection_owner_id = cmd.selection_owner_id, table.unpack(selections) }
-      return
-    end
-  end
-end
-
-local function paste_preserving_multicursor_undo(dv)
-  if not can_edit(dv, "paste") then return end
-  if not core_doc_paste then return end
-  local doc = dv.doc
-  local undo_start_idx = doc.undo_stack.idx
-  local selections = { table.unpack(doc.selections) }
-  core_doc_paste.perform(dv)
-  if doc.undo_stack.idx > undo_start_idx and #selections > 4 then
-    patch_paste_undo_selection(doc, undo_start_idx, selections)
-  end
-end
-
 local function duplicate_current_line(dv)
   if not can_edit(dv, "duplicate line") then return end
   local doc = dv.doc
@@ -1409,17 +1378,6 @@ end, {
   ["user:open-file-in-associated-program"] = open_file_in_associated_program,
   ["user:reveal-active-file-in-explorer"] = reveal_active_file_in_explorer,
   ["user:open-terminal-at-active-file"] = open_terminal_at_active_file,
-})
-
--- GlobalPromptBar (the small bottom input used by Open File, Command Palette,
--- etc.) also inherits from DocView. Keep Ctrl+V valid there while still
--- applying the multi-cursor undo fix in normal editor documents.
-command.add(function()
-  local DocView = require "core.docview"
-  local view = core.active_view
-  return view and view:extends(DocView), view
-end, {
-  ["doc:paste"] = paste_preserving_multicursor_undo,
 })
 
 keymap.add({
