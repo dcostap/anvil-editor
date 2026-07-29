@@ -36,6 +36,7 @@ function Model.new(project, opts)
     repo = nil,
     error = nil,
     active_jobs = {},
+    details_tree_collapsed = {},
   }, Model)
   if opts.state then self:apply_state(opts.state) end
   return self
@@ -45,6 +46,22 @@ local function clone_table(t)
   if type(t) ~= "table" then return nil end
   local copy = {}
   for key, value in pairs(t) do copy[key] = value end
+  return copy
+end
+
+local function clone_boolean_map(t)
+  if type(t) ~= "table" then return nil end
+  local copy = {}
+  for key, value in pairs(t) do
+    if value == true then copy[key] = true end
+  end
+  return copy
+end
+
+local function clone_boolean_maps(t)
+  if type(t) ~= "table" then return {} end
+  local copy = {}
+  for key, value in pairs(t) do copy[key] = clone_boolean_map(value) or {} end
   return copy
 end
 
@@ -102,6 +119,7 @@ function Model:get_state()
   local state = {
     repo = self.repo and { root = self.repo.root },
     active_tab = self.active_tab,
+    details_tree_collapsed = clone_boolean_maps(self.details_tree_collapsed),
     tabs = {},
   }
   for _, tab in ipairs(self.tabs or {}) do
@@ -123,6 +141,7 @@ function Model:get_state()
         commit = lightweight_commit(tab.commit),
         selected_file = tab.selected_file,
         selected_file_path = tab.selected_file_path or selected_file and changed_file_path(selected_file),
+        file_tree_collapsed = clone_boolean_map(tab.file_tree_collapsed),
       }
     elseif tab.kind == "file_history" then
       state.tabs[#state.tabs + 1] = {
@@ -152,6 +171,7 @@ function Model:apply_state(state)
   end
   self:cancel_jobs()
   self.repo = type(state.repo) == "table" and state.repo.root and { root = state.repo.root } or nil
+  self.details_tree_collapsed = clone_boolean_maps(state.details_tree_collapsed)
   self.tabs = { new_log_tab() }
   for _, saved in ipairs(state.tabs or {}) do
     if type(saved) == "table" and saved.kind == "log" then
@@ -169,6 +189,7 @@ function Model:apply_state(state)
         changed_files = {},
         selected_file = tonumber(saved.selected_file) or 1,
         selected_file_path = saved.selected_file_path,
+        file_tree_collapsed = clone_boolean_map(saved.file_tree_collapsed) or {},
         loading = false,
         loading_file = false,
         error = nil,
@@ -383,7 +404,8 @@ function Model:working_tree_left_revision()
   return self.backend.EMPTY_TREE
 end
 
-function Model:open_commit_diff(commit, callback)
+function Model:open_commit_diff(commit, callback, opts)
+  opts = opts or {}
   commit = commit or self:selected_commit()
   if not commit then return nil, { kind = "no_commit", message = "No commit selected" } end
   if not self.repo then return nil, { kind = "no_repo", message = "Git repository is not loaded" } end
@@ -402,6 +424,11 @@ function Model:open_commit_diff(commit, callback)
   elseif commit.kind == "working_tree" then
     tab.commit = commit
   end
+  if opts.selected_file_path then
+    tab.selected_file_path = changed_file_path({ path = opts.selected_file_path })
+    local selected = changed_file_index_by_path(tab.changed_files, tab.selected_file_path)
+    if selected then tab.selected_file = selected end
+  end
   self.active_tab = tab.id
   if commit.kind == "working_tree" then
     self:load_changed_files(tab, callback)
@@ -413,8 +440,8 @@ function Model:open_commit_diff(commit, callback)
   return tab
 end
 
-function Model:open_selected_commit_diff(callback)
-  return self:open_commit_diff(self:selected_commit(), callback)
+function Model:open_selected_commit_diff(callback, opts)
+  return self:open_commit_diff(self:selected_commit(), callback, opts)
 end
 
 function Model:open_working_tree_diff(callback)
@@ -830,7 +857,8 @@ function Model:_finish_refresh(generation, status_records, log_page, err, callba
   tab.loading_more = false
   tab.error = err
   tab.commits = {}
-  if status_records and #status_records > 0 then
+  local working_records = working_tree_diff_records(status_records)
+  if #working_records > 0 then
     tab.commits[#tab.commits + 1] = {
       kind = "working_tree",
       hash = "WORKING_TREE",
@@ -838,7 +866,7 @@ function Model:_finish_refresh(generation, status_records, log_page, err, callba
       subject = "Working Tree",
       author_name = "",
       refs = "",
-      changed_files = status_records,
+      changed_files = working_records,
     }
   end
   append_log_commits(tab, log_page)
@@ -870,7 +898,7 @@ function Model:_start_refresh_jobs(repo, generation, callback)
   end
 
   local status_job, status_done
-  status_job = self.backend.run_git(repo, { "status", "--porcelain=v1", "-z" }, {}, function(result, err)
+  status_job = self.backend.run_git(repo, { "status", "--porcelain=v1", "-z", "--untracked-files=all" }, {}, function(result, err)
     status_done = true
     self:_untrack_job(status_job)
     if generation ~= self.generation then return end

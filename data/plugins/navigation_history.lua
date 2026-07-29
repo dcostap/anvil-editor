@@ -15,6 +15,7 @@ local M = {}
 local histories = {}
 local restoring = false
 local suppress_count = 0
+local retired_editors = {}
 
 local tracked_commands = {
   ["doc:set-cursor"] = true,
@@ -147,6 +148,57 @@ local function is_transient_place_view(view)
   if panes.is_placeholder(view) then return true end
   if view.local_find_input then return true end
   if fuzzy_searcher_owns_view(view) then return true end
+  return false
+end
+
+local function history_references_view(view)
+  for _, history in pairs(histories) do
+    for _, stack in ipairs({ history.back, history.forward }) do
+      for _, place in ipairs(stack) do
+        if place.view == view then return true end
+      end
+    end
+  end
+  return false
+end
+
+local function release_unreferenced_retired_editors(reason)
+  for view in pairs(retired_editors) do
+    if not history_references_view(view) then
+      retired_editors[view] = nil
+      view.__pane_retired_editor = nil
+      if view.release_owned_features then
+        view:release_owned_features(reason or "navigation-history-release")
+      end
+      core.log_quiet(
+        "Navigation History released retired Editor for %s: %s",
+        view.doc and view.doc:get_name() or tostring(view),
+        tostring(reason or "unreferenced")
+      )
+    end
+  end
+end
+
+function M.retain_replaced_editor(view, pane)
+  if not (view and view.doc and history_references_view(view)) then return false end
+  retired_editors[view] = true
+  view.__pane_retired_editor = pane
+  core.log_quiet("Navigation History retained replaced Editor for %s", view.doc:get_name())
+  return true
+end
+
+function M.activate_retired_editor(view)
+  if not retired_editors[view] then return false end
+  retired_editors[view] = nil
+  view.__pane_retired_editor = nil
+  core.log_quiet("Navigation History reactivated retained Editor for %s", view.doc:get_name())
+  return true
+end
+
+function M.retains_doc(doc)
+  for view in pairs(retired_editors) do
+    if view.doc == doc then return true end
+  end
   return false
 end
 
@@ -358,6 +410,11 @@ local function capture_git_anchor(owner, view, line, diff_side)
     local file = index and tab.changed_files and tab.changed_files[index]
     return nil, file and (file.new_path or file.path or file.old_path) or nil
   end
+  if view.git_pane == "details" and owner.detail_commit_for_tab then
+    local commit = owner:detail_commit_for_tab(tab)
+    local file = view.path_tree_record_for_line and view:path_tree_record_for_line(line or 1)
+    return commit and commit.hash or nil, file and (file.new_path or file.path or file.old_path) or nil
+  end
   if diff_side and tab.kind == "commit_diff" then
     local file = tab.changed_files and tab.changed_files[tab.selected_file or 1]
     return nil, file and (file.new_path or file.path or file.old_path) or nil
@@ -528,6 +585,7 @@ local function trim_all_histories(reason)
       histories[scope_key] = nil
     end
   end
+  release_unreferenced_retired_editors("history-trim:" .. tostring(reason))
 end
 
 local function push_place(stack, place, stack_name, reason)
@@ -592,6 +650,7 @@ function M.record_place(place, opts)
     dump_history(place.scope_key, history, "after-rejected-record:" .. reason)
   end
   if reason == "pane-editor-replace" then flush_debug_log() end
+  release_unreferenced_retired_editors("history-record")
   return recorded
 end
 
@@ -607,6 +666,7 @@ function M.clear_history()
   for _ in pairs(histories) do scope_count = scope_count + 1 end
   debug_log("clear all histories scope_count=%d", scope_count)
   histories = {}
+  release_unreferenced_retired_editors("history-clear")
   flush_debug_log()
 end
 
@@ -682,18 +742,32 @@ local function apply_place_to_view(view, place)
       view.doc:set_selection(place.line, place.col, place.line2 or place.line, place.col2 or place.col)
     end
   end
+  -- A retained Markdown Editor's metric cache still describes the place we
+  -- are leaving until the restored Selection State has been adopted. Resolve
+  -- those targeted metric changes before applying the checkpoint's exact
+  -- scroll offsets, otherwise the next update treats the checkpoint scroll
+  -- position as the old viewport anchor and shifts it a second time.
+  if view == place.view and view.has_visual_metric_providers
+    and view:has_visual_metric_providers() and view.get_visual_row_metric_cache
+  then
+    view:get_visual_row_metric_cache()
+  end
   if view.scroll then
     view.scroll.to.x, view.scroll.x = place.scroll_x or 0, place.scroll_x or 0
     if not restored_file_tree_selection then
       view.scroll.to.y, view.scroll.y = place.scroll_y or 0, place.scroll_y or 0
     end
   end
-  if place.line and place.col and not restored_file_tree_selection then
-    if view.scroll_to_make_visible then
-      view:scroll_to_make_visible(place.line, place.col)
-    elseif view.scroll_to_line then
-      view:scroll_to_line(place.line, true, true)
-    end
+  if view.doc and place.line and place.col and not restored_file_tree_selection then
+    local state = view.get_selection_state and view:get_selection_state()
+    local last = state and state.last_selection or 1
+    local selections = state and state.selections or {}
+    local offset = (last - 1) * 4
+    view.last_line1 = selections[offset + 1] or place.line
+    view.last_col1 = selections[offset + 2] or place.col
+    view.last_line2 = selections[offset + 3] or place.line2 or place.line
+    view.last_col2 = selections[offset + 4] or place.col2 or place.col
+    view.needs_initial_scroll_validation = nil
   end
   debug_log("apply complete target=%s destination=%s restored_tree_selection=%s",
     place_label(place), view_label(view), tostring(not not restored_file_tree_selection))
@@ -740,8 +814,10 @@ local function restore_git_anchor(owner, place, on_diff_ready)
   if not tab then return end
   local resolved_line
   if place.git_commit_hash and tab.commits then
+    local anchored_commit
     for index, commit in ipairs(tab.commits) do
       if commit.hash == place.git_commit_hash then
+        anchored_commit = commit
         resolved_line = index
         if tab.kind == "log" and owner.model.select_log_index then
           owner.model:select_log_index(index, function() core.redraw = true end)
@@ -753,6 +829,31 @@ local function restore_git_anchor(owner, place, on_diff_ready)
           end
         end
         break
+      end
+    end
+    if anchored_commit and place.git_pane == "details" and place.git_file_path then
+      resolved_line = nil
+      if anchored_commit.changed_files_loading then
+        if on_diff_ready then
+          core.add_thread(function()
+            while anchored_commit.changed_files_loading do coroutine.yield(0.03) end
+            on_diff_ready()
+          end)
+        end
+        return nil, true
+      end
+      if owner.update_pane_docs then owner:update_pane_docs() end
+      local details = owner.pane_view and owner:pane_view("details")
+      local tree = details and details.path_tree
+      if tree then
+        for index, file in ipairs(tree.records or {}) do
+          local path = file.new_path or file.path or file.old_path
+          if path == place.git_file_path then
+            local tree_line = tree:line_for_record(index) or tree:visible_line_for_record(index)
+            if tree_line then return (details.path_tree_line_offset or 0) + tree_line, false end
+            break
+          end
+        end
       end
     end
   elseif place.git_file_path and tab.kind == "commit_diff" then
@@ -783,7 +884,10 @@ local function restore_git_anchor(owner, place, on_diff_ready)
         if owner.update_pane_docs then owner:update_pane_docs() end
         local list = owner.pane_view and owner:pane_view("file-list")
         if not place.git_diff_side then
-          resolved_line = list and list.git_file_index_to_line and list.git_file_index_to_line[index] or index
+          resolved_line = list and (
+            list.git_file_index_to_line and list.git_file_index_to_line[index]
+              or list.git_file_index_to_visible_line and list.git_file_index_to_visible_line[index]
+          ) or index
         elseif not callback_called then
           return nil, true
         end
@@ -822,9 +926,21 @@ local function complete_deferred_git_restore(owner, place)
   restoring = true
   local ok, err = xpcall(function()
     if owner.update_pane_docs then owner:update_pane_docs() end
+    local resolved_line
+    if place.git_pane == "details" then
+      resolved_line = select(1, restore_git_anchor(owner, place, nil))
+    end
     local view = focus_git_place(owner, place)
     if not view or view == owner then error("could not restore deferred Git diff pane") end
-    apply_place_to_view(view, place)
+    local applied_place = place
+    if resolved_line then
+      applied_place = {}
+      for key, value in pairs(place) do applied_place[key] = value end
+      applied_place.line = resolved_line
+      applied_place.line2 = resolved_line
+      applied_place.selection_state = nil
+    end
+    apply_place_to_view(view, applied_place)
     core.set_active_view(view)
   end, debug.traceback)
   restoring = previous_restoring
@@ -846,7 +962,8 @@ local function restore_git_place(place)
     callback_called = true
     if restore_returned then complete_deferred_git_restore(owner, place) end
   end
-  local resolved_line, pending = restore_git_anchor(owner, place, place.git_diff_side and on_diff_ready or nil)
+  local needs_deferred_anchor = place.git_diff_side or place.git_pane == "details"
+  local resolved_line, pending = restore_git_anchor(owner, place, needs_deferred_anchor and on_diff_ready or nil)
   restore_returned = true
   if pending and not callback_called then
     local node = core.root_panel.root_node:get_node_for_view(owner)
@@ -879,6 +996,12 @@ function M.restore_place(place)
       debug_log("restore route=git place=%s", place_label(place))
       view, resolved_git_line, deferred_git_restore = restore_git_place(place)
     else
+      if view and not view_is_open(view) and view.__pane_retired_editor
+        and panes.restore_retired_editor(view, place.pane or place.scope_key)
+      then
+        doc = view.doc
+        debug_log("restore route=retained-pane-view view=%s", view_label(view))
+      end
       if view and (not view_is_open(view) or view.doc ~= doc) then
         debug_log("restore discarding stale view=%s expected_doc=%s place=%s",
           view_label(view), tostring(doc), place_label(place))
@@ -962,6 +1085,7 @@ function M.go_back()
   local restored = M.restore_place(target)
   main_debug_log("back complete restored=%s active=%s target=%s", tostring(restored), view_label(core.active_view), place_label(target))
   dump_history(current.scope_key, history, "after-back")
+  release_unreferenced_retired_editors("go-back")
   flush_debug_log()
   return restored
 end
@@ -993,6 +1117,7 @@ function M.go_forward()
   local restored = M.restore_place(target)
   main_debug_log("forward complete restored=%s active=%s target=%s", tostring(restored), view_label(core.active_view), place_label(target))
   dump_history(current.scope_key, history, "after-forward")
+  release_unreferenced_retired_editors("go-forward")
   flush_debug_log()
   return restored
 end

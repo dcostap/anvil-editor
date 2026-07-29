@@ -7,6 +7,7 @@ local style = require "core.style"
 local test = require "core.test"
 
 local centered_editor = require "plugins.centered_editor"
+local sticky_scroll = require "plugins.sticky_scroll"
 
 local function track(context, kind, value)
   context[kind] = context[kind] or {}
@@ -215,5 +216,31 @@ test.describe("centered editor", function()
 
     view.wrapping_enabled = true
     test.equal(command.is_valid("doc:set-cursor", right_of_lane_x, y), false)
+  end)
+
+  test.it("limits sticky-line hover and clicks to the centered drawing lane", function(context)
+    local view, doc = open_editor(context, "# Heading\nbody\n")
+    view.wrapping_enabled = true
+    local lane_x, lane_width = centered_editor.get_lane_rect(view)
+    local data = sticky_scroll.managed_docviews[view]
+    data.enabled = true
+    data.sticky_lines = { 1 }
+    data.reference_line = nil
+    local y = view.position.y + view:get_line_height() / 2
+    local inside_x = lane_x + view:get_gutter_width() + 4
+    local outside_x = lane_x + lane_width + 20
+
+    test.ok(outside_x < view.position.x + view.size.x)
+    test.equal(view:on_mouse_moved(inside_x, y, 0, 0), true)
+    test.equal(data.hovered_sticky_scroll_line, 1)
+
+    view:on_mouse_moved(outside_x, y, 0, 0)
+    test.equal(data.hovered_sticky_scroll_line, nil)
+
+    doc:set_selection(2, 1)
+    view:on_mouse_pressed("left", outside_x, y, 1)
+    local line, col = doc:get_selection()
+    test.equal(line, 2)
+    test.equal(col, 1)
   end)
 end)

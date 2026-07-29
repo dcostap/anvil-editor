@@ -197,6 +197,74 @@ test.describe("IntelliJ-style navigation history", function()
     test.ok(common.path_equals(restored_second.doc.abs_filename, second_path))
   end)
 
+  test.it("returns to an already-rendered Markdown Editor without a raw fallback", function(context)
+    local first, first_doc, first_path = open_named_editor(
+      context,
+      "rendered-first.md",
+      "# First heading\n\nbody\n"
+    )
+    first.position.x, first.position.y = 0, 0
+    first.size.x, first.size.y = 800, 600
+    refresh_markdown(first)
+    test.not_nil(first:get_line_render(1))
+    set_caret(first, 3, 3)
+    first.scroll.x, first.scroll.to.x = 0, 0
+    first.scroll.y, first.scroll.to.y = 24, 24
+    navigation_history.clear_history()
+
+    local _, _, second_path = open_named_editor(context, "rendered-second.md", "# Second heading\n")
+    test.equal(#navigation_history.back_places(), 1, "replacement did not record the departing Editor")
+
+    test.ok(command.perform("navigation:back"))
+    local restored = track_active_editor(context)
+    test.ok(common.path_equals(restored.doc.abs_filename, first_path))
+    test.equal(restored, first)
+    test.equal(restored.doc, first_doc)
+    test.not_nil(restored:get_line_render(1), "the rendered Markdown Editor flashed as source")
+    local line, col = caret(restored)
+    test.equal(line, 3)
+    test.equal(col, 3)
+    test.equal(restored.scroll.y, 24)
+    test.equal(restored.scroll.to.y, 24)
+    test.equal(core.active_view, restored)
+
+    test.ok(command.perform("navigation:forward"))
+    test.ok(common.path_equals(core.active_view.doc.abs_filename, second_path))
+    test.ok(command.perform("navigation:back"))
+    test.equal(core.active_view, first)
+    test.not_nil(first:get_line_render(1), "repeated file history navigation flashed as source")
+  end)
+
+  test.it("restores an Editor checkpoint's scroll position without caret-driven scrolling", function(context)
+    local lines = {}
+    for line = 1, 100 do lines[line] = "line " .. line end
+    local view = open_editor(context, table.concat(lines, "\n"))
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 800, 300
+    set_caret(view, 60, 1)
+    view.scroll.x, view.scroll.to.x = 0, 0
+    view.scroll.y, view.scroll.to.y = 120, 120
+    local checkpoint = navigation_history.capture_current_place()
+
+    set_caret(view, 2, 1)
+    view.scroll.y, view.scroll.to.y = 0, 0
+    navigation_history.clear_history()
+    test.ok(navigation_history.record_place(checkpoint, {
+      check_current = false,
+      reason = "test-camera-restore",
+    }))
+
+    test.ok(command.perform("navigation:back"))
+    test.equal(core.active_view, view)
+    local line = caret(view)
+    test.equal(line, 60)
+    test.equal(view.scroll.y, 120)
+    test.equal(view.scroll.to.y, 120)
+    view:with_selection_state(function() view:update() end)
+    test.equal(view.scroll.y, 120)
+    test.equal(view.scroll.to.y, 120)
+  end)
+
   test.it("returns to the clicked Markdown link instead of the previous caret", function(context)
     local root = (os.getenv("TEMP") or os.getenv("TMP") or USERDIR)
       .. PATHSEP .. "anvil-navigation-markdown-link-" .. system.get_process_id()
@@ -635,6 +703,60 @@ test.describe("IntelliJ-style navigation history", function()
     context.original_fake_git_file_at = nil
     test.equal(core.active_view.git_owner_view, diff_owner)
     test.equal(core.active_view, tab.diff_view.doc_view_a)
+  end)
+
+  test.it("restores the commit and changed-file row for Git details", function(context)
+    local project = { path = "C:/navigation-history-git-details" }
+    local tw, log_view = git_view.open_view(project, {
+      root = core.root_panel,
+      git_view_opts = { backend = fake_git_backend },
+    })
+    track(context, "views", log_view)
+    track(context, "git_session_keys", project.path)
+    local first = {
+      hash = "details-first",
+      short_hash = "first",
+      subject = "First",
+      parents = {},
+      changed_files_loaded = true,
+      changed_files = {
+        { status = "modified", old_path = "src/one.lua", new_path = "src/one.lua" },
+        { status = "modified", old_path = "src/two.lua", new_path = "src/two.lua" },
+      },
+    }
+    local second = {
+      hash = "details-second",
+      short_hash = "second",
+      subject = "Second",
+      parents = {},
+      changed_files_loaded = true,
+      changed_files = {
+        { status = "modified", old_path = "other.lua", new_path = "other.lua" },
+      },
+    }
+    log_view.model:log_tab().commits = { first, second }
+    log_view.model:log_tab().selected_commit = 1
+    log_view:update_pane_docs()
+    log_view:focus_pane_view("details")
+    local details = core.active_view
+    local first_line = details.path_tree_line_offset + details.path_tree:line_for_record(2)
+    details.doc:set_selection(first_line, 1)
+    local first_place = navigation_history.capture_current_place()
+
+    log_view.model:select_log_index(2, function() end)
+    log_view:update_pane_docs()
+    details.doc:set_selection(details.path_tree_line_offset + 1, 1)
+    navigation_history.clear_history()
+    test.ok(navigation_history.record_place(first_place, {
+      check_current = false,
+      reason = "test-git-details-file",
+    }))
+
+    test.ok(command.perform("navigation:back"))
+    test.equal(log_view.model:selected_commit().hash, "details-first")
+    test.equal(core.active_view.git_pane, "details")
+    local restored = core.active_view:path_tree_record_for_line(core.active_view.doc:get_selection())
+    test.equal(restored.new_path, "src/two.lua")
   end)
 
   test.it("records editor mouse-style cursor jumps through document commands", function(context)

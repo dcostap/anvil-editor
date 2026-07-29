@@ -199,6 +199,12 @@ function M.right_visible()
   return M.right_shown == true
 end
 
+local function focus_target(view)
+  if not view then return nil end
+  local remembered = M.focus_by_owner and M.focus_by_owner[view]
+  return remembered or (view.get_focus_view and view:get_focus_view()) or view
+end
+
 function M.show(pane, opts)
   pane = valid_pane(pane)
   opts = opts or {}
@@ -207,7 +213,7 @@ function M.show(pane, opts)
     local view = opts.view or M.selected_view("left")
     if opts.view and M.contains_view("left", opts.view) then M.node("left").active_view = opts.view end
     remember_selected("left", view)
-    if opts.focus ~= false and view then core.set_active_view(view) end
+    if opts.focus ~= false and view then core.set_active_view(focus_target(view)) end
     return view
   end
 
@@ -225,8 +231,7 @@ function M.show(pane, opts)
     view.visible = true
     M.update_right_view_size(view)
     if opts.focus ~= false then
-      local focus = M.focus_by_owner and M.focus_by_owner[view]
-      core.set_active_view(focus or (view.get_focus_view and view:get_focus_view()) or view)
+      core.set_active_view(focus_target(view))
     end
   end
   if core.root_panel and core.root_panel.root_node then core.root_panel.root_node:update_layout() end
@@ -244,7 +249,7 @@ function M.hide_right(focus_left)
   end
   if focus_left ~= false then
     local left = M.selected_view("left")
-    if left then core.set_active_view(left) end
+    if left then core.set_active_view(focus_target(left)) end
   end
   if core.root_panel and core.root_panel.root_node then core.root_panel.root_node:update_layout() end
   return true
@@ -342,6 +347,23 @@ local function select_view(pane, view, focus)
   if core.root_panel and core.root_panel.root_node then core.root_panel.root_node:update_layout() end
 end
 
+local function detach_replaced_singleton(pane, view)
+  if pane == "right" then remove_right_view(view)
+  else remove_from_node(M.node("left"), view) end
+end
+
+local function retain_or_release_replaced_singleton(pane, view, reason)
+  if not view then return false end
+  local history = core.navigation_history
+  if history and history.retain_replaced_editor
+    and history.retain_replaced_editor(view, pane)
+  then
+    return true
+  end
+  if view.release_owned_features then view:release_owned_features(reason or "pane-editor-replace") end
+  return false
+end
+
 function M.open_doc(doc, opts)
   opts = opts or {}
   local pane = M.resolve_target(opts)
@@ -352,6 +374,7 @@ function M.open_doc(doc, opts)
   local source = opts.source_view
   local view
   local singleton
+  local replaced_singleton
   local navigation_anchor
   for _, candidate in ipairs(M.open_views(pane)) do
     if candidate.__pane_singleton_editor then singleton = candidate end
@@ -375,8 +398,8 @@ function M.open_doc(doc, opts)
             local ok, place = pcall(history.capture_place, singleton)
             if ok then navigation_anchor = place end
           end
-          if singleton.release_owned_features then singleton:release_owned_features("pane-editor-replace") end
-          remove_from_node(M.node(pane), singleton)
+          detach_replaced_singleton(pane, singleton)
+          replaced_singleton = singleton
         end
       end
       view = file_context.mark_editor_view(DocView(doc))
@@ -393,9 +416,36 @@ function M.open_doc(doc, opts)
   if navigation_anchor and core.navigation_history and core.navigation_history.record_place then
     core.navigation_history.record_place(navigation_anchor, { reason = "pane-editor-replace" })
   end
+  retain_or_release_replaced_singleton(pane, replaced_singleton, "pane-editor-replace")
   local restore = opts.preserve_focus and (opts.restore_focus or source) or opts.restore_focus
   if opts.focus == false and restore then core.set_active_view(restore) end
   return view
+end
+
+function M.restore_retired_editor(view, pane)
+  pane = valid_pane(pane)
+  if not (view and view.__pane_retired_editor == pane and view.doc) then return false end
+  if M.contains_view(pane, view) then return false end
+
+  local replaced = M.singleton_editor(pane)
+  if replaced and replaced ~= view then
+    local dirty = replaced.doc and replaced.doc.is_dirty and replaced.doc:is_dirty()
+    if dirty then
+      replaced.__pane_singleton_editor = nil
+      replaced = nil
+    else
+      detach_replaced_singleton(pane, replaced)
+    end
+  end
+
+  local history = core.navigation_history
+  if history and history.activate_retired_editor then history.activate_retired_editor(view) end
+  view.__pane_retired_editor = nil
+  view.__pane_singleton_editor = true
+  add_view_to_pane(pane, view)
+  select_view(pane, view, false)
+  retain_or_release_replaced_singleton(pane, replaced, "pane-editor-history-replace")
+  return true
 end
 
 function M.open_view(view, opts)

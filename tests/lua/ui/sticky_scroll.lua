@@ -2,6 +2,7 @@ local core = require "core"
 local test = require "core.test"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
+local style = require "core.style"
 local sticky_scroll = require "plugins.sticky_scroll"
 
 local function make_view(text)
@@ -165,5 +166,57 @@ test.describe("sticky scroll", function()
     renderer.draw_rect = original_draw_rect
     test.ok(ok, err)
     test.equal(escaped, false)
+  end)
+
+  test.it("draws one fading shadow below the sticky stack", function()
+    local view = make_view("# Parent\n## Child\nbody")
+    local data = sticky_scroll.managed_docviews[view]
+    data.enabled = true
+    data.sticky_lines = { 2, 1 }
+    data.reference_line = nil
+    local layout = sticky_scroll.get_sticky_layout(view, data.sticky_lines, nil)
+    local shadow = style.sticky_scroll_shadow
+    local shadow_rects = {}
+    local initial_clip_depth = #core.clip_rect_stack
+    local original_set_clip_rect = renderer.set_clip_rect
+    local original_draw_rect = renderer.draw_rect
+    renderer.set_clip_rect = function() end
+    renderer.draw_rect = function(x, y, w, h, color)
+      if color[1] == shadow[1]
+       and color[2] == shadow[2]
+       and color[3] == shadow[3]
+      then
+        shadow_rects[#shadow_rects + 1] = { x = x, y = y, w = w, h = h, alpha = color[4] or 255 }
+      end
+    end
+    core.push_clip_rect(view.position.x, view.position.y, view.size.x, view.size.y)
+    local gutter_width = view:get_gutter_width()
+    core.push_clip_rect(
+      view.position.x + gutter_width,
+      view.position.y,
+      view.size.x - gutter_width,
+      view.size.y
+    )
+    view.draw_line_gutter = function() end
+    view.draw_line_text = function() end
+
+    local ok, err = pcall(function() view:draw_overlay() end)
+
+    while #core.clip_rect_stack > initial_clip_depth do core.pop_clip_rect() end
+    renderer.set_clip_rect = original_set_clip_rect
+    renderer.draw_rect = original_draw_rect
+    test.ok(ok, err)
+    local stack_bottom = 0
+    for _, entry in ipairs(layout) do
+      stack_bottom = math.max(stack_bottom, entry.y + entry.height)
+    end
+    local first = test.not_nil(shadow_rects[1])
+    test.ok(first.y > stack_bottom)
+    local faded = false
+    for _, rect in ipairs(shadow_rects) do
+      test.ok(rect.y > stack_bottom)
+      if rect.y > first.y and rect.alpha < first.alpha then faded = true end
+    end
+    test.equal(faded, true)
   end)
 end)

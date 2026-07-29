@@ -208,6 +208,8 @@ test.describe("plugins.git.model", function()
     selection_tab.selected_commit = 1
     diff_tab.left_text = "large content must not persist"
     diff_tab.right_text = "large content must not persist"
+    diff_tab.file_tree_collapsed = { src = true }
+    model.details_tree_collapsed = { abc123 = { src = true } }
     model.active_tab = selection_tab.id
 
     local state = model:get_state()
@@ -217,6 +219,8 @@ test.describe("plugins.git.model", function()
     test.equal(#restored.tabs, 4)
     test.equal(restored:find_tab(diff_tab.id).left_text, nil)
     test.equal(restored:find_tab(diff_tab.id).right_text, nil)
+    test.equal(restored:find_tab(diff_tab.id).file_tree_collapsed.src, true)
+    test.equal(restored.details_tree_collapsed.abc123.src, true)
     test.equal(restored:find_tab(selection_tab.id).history_context.type, "selection")
     test.equal(restored:find_tab(selection_tab.id).history_context.start_line, 3)
     test.equal(restored:get_state().tabs[4].selected_commit_hash, "sel789")
@@ -706,6 +710,9 @@ test.describe("plugins.git.model", function()
     end
     local model = Model.new({ path = "C:/repo" }, { backend = backend })
     model:refresh_log()
+    for _, commit in ipairs(model:log_tab().commits) do
+      test.ok(commit.kind ~= "working_tree", "directory summaries should not create an activatable Working Tree revision")
+    end
     local tab = model:open_working_tree_diff()
     test.equal(#tab.changed_files, 0)
     test.equal(tab.left_text, nil)

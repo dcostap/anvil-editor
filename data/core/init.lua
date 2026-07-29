@@ -2403,7 +2403,10 @@ function core.step(next_frame_time, options)
   -- close unreferenced docs
   for i = #core.docs, 1, -1 do
     local doc = core.docs[i]
-    if #core.get_views_referencing_doc(doc) == 0 then
+    local history = core.navigation_history
+    local retained_for_navigation = history and history.retains_doc
+      and history.retains_doc(doc)
+    if #core.get_views_referencing_doc(doc) == 0 and not retained_for_navigation then
       table.remove(core.docs, i)
       doc:on_close()
       core.collect_garbage = true

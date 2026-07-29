@@ -170,12 +170,35 @@ local function sticky_entry_at_y(layout, y)
   end
 end
 
+local function sticky_horizontal_bounds(docview)
+  local width = docview.get_presentation_viewport_width
+    and docview:get_presentation_viewport_width() or docview.size.x
+  local x = docview.position.x
+  if width ~= docview.size.x and docview.get_content_offset then
+    x = select(1, docview:get_content_offset()) + (docview.scroll.x or 0)
+  end
+  return x, width
+end
+
 local function intersect_rect(x1, y1, w1, h1, x2, y2, w2, h2)
   local x = math.max(x1, x2)
   local y = math.max(y1, y2)
   local right = math.min(x1 + w1, x2 + w2)
   local bottom = math.min(y1 + h1, y2 + h2)
   return x, y, math.max(0, right - x), math.max(0, bottom - y)
+end
+
+local function draw_sticky_shadow(x, y, width)
+  local height = math.max(2, math.ceil(style.sticky_scroll_shadow_height))
+  local source = style.sticky_scroll_shadow
+  local color = { source[1], source[2], source[3], source[4] or 255 }
+  core.push_clip_rect(x, y, width, height)
+  for offset = 0, height - 1 do
+    local fade = 1 - offset / (height - 1)
+    color[4] = math.floor((source[4] or 255) * fade * fade + 0.5)
+    renderer.draw_rect(x, y + offset, width, 1, color)
+  end
+  core.pop_clip_rect()
 end
 
 local function start_model_build(docview, doc)
@@ -391,6 +414,9 @@ function DocView:draw_overlay(...)
   end
   if drawn then
     renderer.draw_rect(self.position.x, max_y, self.size.x, style.divider_size, style.divider)
+    draw_sticky_shadow(
+      self.position.x, max_y + style.divider_size, self.size.x
+    )
   end
 
   -- Restore clip rect
@@ -411,7 +437,11 @@ function DocView:on_mouse_pressed(button, x, y, clicks, ...)
 
   local layout = SS.get_sticky_layout(self, data.sticky_lines, data.reference_line)
   local entry = sticky_entry_at_y(layout, y)
-  if not entry or y < self.position.y then
+  local bounds_x, bounds_width = sticky_horizontal_bounds(self)
+  if not entry
+   or y < self.position.y
+   or x < bounds_x
+   or x >= bounds_x + bounds_width then
     data.sticky_lines_mouse_pressed = true
     return old_mouse_pressed(self, button, x, y, clicks, ...)
   end
@@ -461,11 +491,12 @@ function DocView:on_mouse_moved(x, y, ...)
 
   local layout = SS.get_sticky_layout(self, data.sticky_lines, data.reference_line)
   local entry = sticky_entry_at_y(layout, y)
+  local bounds_x, bounds_width = sticky_horizontal_bounds(self)
   if self.mouse_selecting
    or not entry
    or y < self.position.y
-   or x < self.position.x
-   or x >= self.position.x + self.size.x
+   or x < bounds_x
+   or x >= bounds_x + bounds_width
    or self.v_scrollbar:overlaps(x, y)
    then
     return old_mouse_moved(self, x, y, ...)
