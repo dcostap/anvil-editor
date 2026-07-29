@@ -206,9 +206,9 @@ A packet owns:
 
 - an immutable command buffer after sealing;
 - copied text bytes used by text commands;
-- per-command relative bounds and origins;
-- retained Font/font-group references from the moment each text command is added;
-- the tab size, tab offset, native Font generation, and surface-scale signature used to compile each text command;
+- renderer-equivalent per-command relative bounds, origins, advances, and glyph-bearing/x-offset contributions;
+- retained snapshots of every child Font userdata in each resolved fallback array, in order, from the moment each text command is added;
+- the tab size, tab offset, native generation of every fallback Font, and surface-scale signature used to compile each text command;
 - command-layer ranges;
 - Wrapped Visual Row command ranges;
 - total allocated bytes and command counts;
@@ -222,9 +222,9 @@ RECT
 RECT_GRID
 ```
 
-All packet text should have known relative bounds by the time the packet is sealed. Width measurement and tab-aware advance calculation occur during cold compilation, not during every replay.
+All packet text should have known relative bounds by the time the packet is sealed. The native builder should call the same renderer measurement routine used by `rencache_draw_text()`, including its returned glyph bearing/x-offset, Font fallback selection, shaping, width, height, and tab-aware advance. Measurement occurs during cold compilation, not during every replay. Lua must not approximate a nontrivial text rectangle as origin plus width.
 
-Packet replay must also make mutable Font state visible to rencache dirty hashing. Ordinary translated text commands should include the captured native Font-generation signature in their hashed bytes, or the renderer must explicitly invalidate affected rencache cells when that generation changes. Rebuilding a packet with the same Font pointer is not sufficient if the Font's glyph metrics or rasterization changed in place.
+Packet replay must also make mutable Font state visible to rencache dirty hashing. Ordinary translated text commands should include a captured generation signature covering every non-null fallback Font in order, or the renderer must explicitly invalidate affected rencache cells when any member generation changes. Rebuilding a packet with the same Font pointers is not sufficient if one Font's glyph metrics or rasterization changed in place.
 
 ### Why packets should expand into normal rencache commands
 
@@ -270,11 +270,10 @@ Suggested shape:
 ```lua
 local builder = renderer.display_packet.new()
 
-builder:add_text_known_bounds(
+local advance = builder:add_text(
   layer, visual_row,
   font, text,
   relative_x, relative_y,
-  bounds_x, bounds_y, bounds_w, bounds_h,
   color,
   tab_offset,
   tab_size
@@ -297,6 +296,8 @@ packet:draw(origin_x, origin_y, layer, first_visual_row, last_visual_row)
 packet:release()
 ```
 
+`add_text()` resolves and snapshots the complete fallback array, measures the text through renderer-native bounds logic, stores the resulting known-bounds packet command, and returns the measured advance needed by the cold compiler. A specialized known-bounds internal helper may exist for proven ASCII cases, but the public integration must not bypass glyph-bearing/x-offset semantics.
+
 The exact argument packing may be adjusted to reduce API complexity, but these semantics are required:
 
 - packet construction is explicit;
@@ -314,14 +315,26 @@ The API should be implemented as ordinary Lua C functions. It does not need a Lu
 
 Packet commands store native `RenFont` pointers, so two distinct lifetimes must be protected:
 
-1. **Build/retained lifetime:** the builder must retain every Lua Font or font group as soon as `add_text_known_bounds()` accepts it. The sealed packet continues to own those references while it is reusable.
-2. **Active-frame lifetime:** replay copies raw `RenFont *` pointers into the rencache frame command buffer. Before replay returns, every referenced Font/font group must also be inserted into a renderer-owned active-frame reference table. That table is cleared only after `rencache_end_frame()` has synchronously consumed the commands.
+1. **Build/retained lifetime:** when `add_text()` resolves a Font or Font-group table, the builder must snapshot and retain every child Font userdata in the resulting fallback array. Retaining only the mutable group table is unsafe because callers can replace or remove children. The sealed packet continues to own the child references while it is reusable.
+2. **Active-frame lifetime:** replay copies raw `RenFont *` pointers into the rencache frame command buffer. Before replay returns, every referenced child Font userdata must also be inserted into a renderer-owned active-frame reference table. That table is cleared only after `rencache_end_frame()` has synchronously consumed the commands.
 
-The active-frame reference table is required in LuaJIT builds as well as non-JIT builds. Packet eviction, explicit `release()`, view closure, and Lua collection may all happen after replay but before frame end; none may free a Font still referenced by the frame command buffer.
+The active-frame reference table is required in LuaJIT builds as well as non-JIT builds. Packet eviction, explicit `release()`, view closure, Font-group mutation, and Lua collection may all happen after replay but before frame end; none may free a Font still referenced by the frame command buffer.
 
 Persistent packet ownership may use registry references or a userdata environment/uservalue table. Active-frame ownership should use one renderer-level table rather than pinning entire view caches.
 
-A packet must be invalidated before replay when a retained Font's size, tab size, native generation, surface scale, or relevant metrics change. Retaining a Font prevents a dangling pointer; it does not make stale geometry correct. Replay must copy the packet's captured tab size into the ordinary rencache text command rather than reading whichever mutable tab size the shared Font currently has.
+A packet must be invalidated before replay when any retained fallback Font's identity, order, size, tab size, native generation, surface scale, or relevant metrics change. Retaining Fonts prevents dangling pointers; it does not make stale geometry correct. Replay must copy the packet's captured tab size into the ordinary rencache text command rather than reading whichever mutable tab size a shared Font currently has.
+
+### Frame-reference cleanup under LuaJIT
+
+`data/core/jitsetup.lua` replaces `renderer.begin_frame()` and `renderer.end_frame()` with FFI wrappers, so packet reference cleanup cannot live only in `src/api/renderer.c:f_end_frame()`. Define one lifecycle used by both paths:
+
+1. beginning a frame clears references left by an explicitly abandoned prior frame, then starts a new active-frame reference set;
+2. packet replay pins child Fonts into that set;
+3. normal frame end calls `rencache_end_frame()` first and clears the set only after command consumption returns;
+4. an error/abort path marks the frame abandoned and clears references only after its command stream can no longer be consumed;
+5. the next frame defensively retires any stale abandoned-frame set.
+
+This may be implemented by adding ordinary Lua C lifecycle helpers called around the FFI begin/end functions, or by moving ownership into a shared C frame object. Tests must exercise both LuaJIT and non-JIT lifecycle semantics. The references must neither leak indefinitely nor be released before frame consumption.
 
 ### Command layers
 
@@ -414,7 +427,14 @@ The compiler must preserve:
 
 The fast ASCII monospace calculation may still be used during packet construction. It simply must not run every stable frame.
 
-Do not switch this first implementation to `Highlighter:get_render_line()`. That API may substitute Tree-sitter/LSP render tokens, while the current wrapped renderer and ordinary wrap calculation use the tokenizer stream. Changing token sources would combine a rendering behavior migration with the performance rewrite and could produce different colors, segment boundaries, and wrap interactions. Any future semantic/render-token unification must update the legacy path, wrapping behavior, packet compiler, and parity fixtures together as a separate change.
+Do not switch this first implementation to `Highlighter:get_render_line()`. That API may substitute Tree-sitter/LSP render tokens, while the current wrapped **text renderer** uses the highlighter tokenizer stream. Changing the text-drawing source would combine a rendering behavior migration with the performance rewrite and could produce different colors and segment boundaries.
+
+The wrap-layout token source is a separate concern and the existing `wrapped_lines` map remains authoritative:
+
+- when `config.plugins.linewrapping.require_tokenization = true`, wrap calculation consumes highlighter tokens and syntax Fonts may affect row boundaries;
+- when it is `false`, `linewrapping.lua` uses `spew_tokens` and intentionally treats the complete line as one `normal` token for layout.
+
+Packet construction must consume the existing row boundaries; it must not recompute them from the text-drawing token stream. Any future semantic/render-token unification must update the legacy text path, wrapping policy, packet compiler, and parity fixtures together as a separate change.
 
 ### Draw Whitespace integration
 
@@ -430,12 +450,15 @@ The loaded and enabled plugin should explicitly register a first-party packet co
 - wrapped-row clipping;
 - tab-stop-aware placement;
 - repeated-marker batching;
+- the existing derived marker Font created through `font:copy(..., { ligatures = false })` for repeated space markers;
 - rectangle-grid fallback where marker advance differs from a space;
 - selected-only behavior where supported.
 
 For the first vertical slice, `show_selected_only = true` may deliberately use the old Lua path because its result depends on live Selection State. The normal first-party default (`show_selected_only = false`) must use packets.
 
 If the plugin is absent, disabled, or reloaded, its contributor must be absent or generation-invalidated immediately. Core packet compilation must never emit whitespace markers merely because old contributor state remains cached.
+
+Do not substitute the source code Font for the plugin's cached no-ligature marker Font. Retain every child of the derived Font/group like any other packet Font, and include its identity, size, generation, and recreation in contributor/packet invalidation. Repeated configured markers must shape exactly as they do in the legacy path.
 
 Whitespace commands belong before text commands in the packet's content layer.
 
@@ -458,6 +481,8 @@ Preserve:
 `highlight_active = true` depends on the active caret and can use translucent colors for which drawing an active guide over a cached normal guide would not preserve current compositing. In the first implementation, use the complete existing dynamic Indent Guide path whenever active highlighting is enabled. Do not packetize any guides in that mode.
 
 When `highlight_active = false`, which is the current default, all ordinary guide commands can replay from the packet. A later measured change may add an explicit guide-depth exclusion mechanism, but it is not part of this milestone.
+
+Preserve current wrapped-line coverage: the legacy wrapper emits one `line_height` guide segment at the logical Document line's supplied `y`; it does not duplicate that segment across every Wrapped Visual Row. The initial packet must assign the guide command to the first local row only. Extending guides through continuation rows is a separate visual behavior change and must not be hidden inside this optimization.
 
 ### Plugin wrapping cleanup
 
@@ -498,6 +523,7 @@ Conceptual entry:
   source_line = source_line,
   token_identity = token_table,
   tokenizer_revision = tokenizer_revision,
+  syntax_generation = syntax_generation,
   line_wrap_generation = line_wrap_generation,
   font_signature = font_signature,
   style_generation = style_generation,
@@ -531,6 +557,8 @@ Use transaction changed ranges and existing Document/Highlighter invalidation se
 
 Prefer a stable per-line tokenizer revision/identity over hashing every token string every frame. If the existing highlighter cannot provide one reliably, add a per-line tokenizer revision and bump it from `Highlighter:update_notify()`. Tree-sitter/LSP render-token generations are deliberately not packet inputs in the first implementation because the existing wrapped renderer does not consume `get_render_line()`.
 
+`Doc:set_syntax()` calls `Highlighter:soft_reset()` without changing Document text. Add a syntax/highlighter-reset generation that invalidates packet token identity independently of `Doc:get_change_id()` and `text_revision`.
+
 #### Wrapping
 
 - row boundaries for the line change;
@@ -541,6 +569,8 @@ Prefer a stable per-line tokenizer revision/identity over hashing every token st
 Add or maintain a per-line wrap generation. A global `__wrap_layout_generation` alone is too broad for incremental edits because it would invalidate every cached visible line.
 
 When `config.plugins.linewrapping.require_tokenization` allows syntax Fonts to participate in wrap-width calculation, include the relevant syntax Font identities, sizes, and native generations in the wrap settings signature and reconstruct affected row boundaries when they change. Rebuilding only the display packet against stale `wrapped_lines` is not correct. When wrapping intentionally uses only the default Font, preserve that existing behavior rather than broadening this change into a wrap-policy redesign.
+
+Also include the syntax/highlighter-reset generation in tokenization-dependent wrap settings. A syntax metadata change can select different token types and syntax Fonts without changing text; it must reconstruct `wrapped_lines` before packets are rebuilt against them. When tokenization-dependent wrapping is disabled, the syntax change still invalidates packet text but need not change the normal-token wrap map solely because syntax metadata changed.
 
 #### Font and scale
 
@@ -568,6 +598,18 @@ Use `core.color_theme_generation` for theme reloads. If runtime style mutation c
 - any future packet contributor's generation.
 
 Each contributor should expose a cheap generation/signature. Compute it once per frame or only when settings are changed, not once per line.
+
+### Centralized discard path
+
+All packet removal must go through one cache-owned discard function. It must:
+
+1. remove the entry from line/LRU indices;
+2. decrement resident packet and byte accounting exactly once;
+3. call the packet's idempotent native `release()` immediately;
+4. clear the Lua entry reference;
+5. preserve only renderer-owned active-frame child-Font pins for commands already replayed.
+
+Use this path for text/token/syntax invalidation, wrap changes, theme/Font/scale changes, contributor changes, entry replacement, view closure, explicit cache clear, oversized-entry rejection after construction, and LRU eviction. Native memory is not considered reclaimed merely because an entry became unreachable to Lua.
 
 ### Bounded memory
 
@@ -609,15 +651,32 @@ For very large physical lines:
 1. validate packet sealing and requested layer/row range;
 2. calculate translated command bounds and the worst-case bytes required by the selected commands;
 3. reserve the complete worst-case frame-command capacity before changing command-buffer position or statistics;
-4. if reservation fails, leave the frame buffer and statistics unchanged so the caller may use the legacy path;
-5. pin every referenced Font/font group in the renderer's active-frame reference table;
-6. skip commands definitely outside the active clip where doing so is cheap;
-7. append equivalent ordinary commands to the active frame buffer;
-8. copy packet-owned text bytes into the frame command buffer;
-9. preserve captured tab offsets, tab sizes, Font generations, and Font fallback arrays;
-10. update ordinary and packet-specific frame statistics only for the committed replay.
+4. if validation or a policy/size limit rejects the packet before allocation is attempted, leave the frame unchanged and return a recoverable result that permits the legacy path;
+5. if actual command-buffer allocation fails, mark the complete frame failed rather than promising that the more expensive legacy path can still fit;
+6. on successful reservation, pin every referenced child Font in the renderer's active-frame reference table;
+7. skip commands definitely outside the active clip where doing so is cheap;
+8. append equivalent ordinary commands to the active frame buffer;
+9. copy packet-owned text bytes into the frame command buffer;
+10. preserve captured tab offsets, tab sizes, complete fallback Font arrays/generation signatures, and renderer-equivalent text bounds;
+11. update ordinary and packet-specific frame statistics only for the committed replay.
 
-Replay must be transactional from the caller's perspective. No validation or allocation failure after the preflight step may leave a partial line in rencache. If implementation constraints require a checkpoint, restore command-buffer position, `resize_issue`, and all affected statistics before returning a recoverable failure.
+Replay is atomic for the selected layer from the caller's perspective. Validation and recoverable rejection may not leave a partial layer. Genuine allocation failure is different: it is a frame-level resource failure, not a line-level fallback condition.
+
+### Frame-level allocation failure
+
+Content and foreground-guide layers cannot be merged into one transaction because Bracket Match and post-text overlays must remain interleaved between them. Therefore a later guide-layer allocation failure cannot safely fall back by redrawing the whole line without duplicating committed content.
+
+Define a frame-failure path instead:
+
+1. mark the active rencache frame failed;
+2. stop accepting further draw commands for that frame;
+3. discard/reset the failed frame's command stream and its provisional statistics;
+4. skip renderer submission/presentation for that frame so the previously presented frame remains visible;
+5. retire active-frame resource references only after the failed command stream is abandoned;
+6. request another redraw and retry with normal buffer growth on a later frame;
+7. expose a diagnostic counter and quiet log for the failure.
+
+Do not clear `resize_issue` and then attempt legacy drawing into the same insufficient buffer. Recoverable legacy fallback is only for rejection detected before an allocation attempt; actual allocation failure aborts the frame.
 
 ### Frame statistics
 
@@ -631,6 +690,8 @@ display_packet_rect_commands_replayed
 display_packet_source_bytes
 display_packet_frame_bytes_copied
 display_packet_replay_ms
+display_packet_frame_allocation_failures
+rencache_frame_failed
 ```
 
 Lua-side diagnostics should add:
@@ -645,6 +706,7 @@ docview_line_packet_evictions
 docview_line_packet_resident_packets
 docview_line_packet_resident_bytes
 docview_line_packet_fallback_<reason>
+docview_line_packet_frame_failures
 ```
 
 Use `core.log_quiet(...)` for native API absence, oversized packets, stale packet rejection, and fallback reasons that would help diagnose future behavior.
@@ -672,7 +734,7 @@ Native packet construction must validate:
 - missing Fonts;
 - packet mutation after sealing.
 
-Packet construction may return a normal Lua error or recoverable nil/error result before it submits anything. Replay allocation failure must return a recoverable result with no frame-buffer side effects; only then may the Document View log quietly and render that line through the existing path for the frame.
+Packet construction may return a normal Lua error or recoverable nil/error result before it submits anything. Replay validation/policy rejection detected before allocation may return a recoverable result and use the legacy path. Actual command-buffer allocation failure must enter the frame-failure path; the Document View must not attempt line fallback in that failed frame.
 
 ## Implementation phases
 
@@ -705,16 +767,17 @@ Do not test exact keyboard shortcuts or cosmetic preference constants.
 
 #### Red test
 
-Add a focused native or Lua-runtime test proving that the renderer cannot yet create, seal, translate, range-filter, and replay a packet.
+Write focused contract tests for creating, sealing, translating, row/layer filtering, replaying, and releasing a packet. Keep these as permanent regression tests; before implementation they fail because the required API/behavior is unavailable, not because the test asserts that an API is absent.
 
 #### Implementation
 
 - Add `API_TYPE_DISPLAY_PACKET`.
-- Implement packet builder, sealing, idempotent explicit release, `__gc`, memory accounting, persistent Font retention, and renderer-owned active-frame Font pinning under LuaJIT and non-JIT builds.
+- Implement packet builder, sealing, idempotent explicit release, `__gc`, memory accounting, snapshot retention of every fallback child Font, and renderer-owned active-frame child-Font pinning under LuaJIT and non-JIT builds.
 - Add text-known-bounds, rect, and rect-grid packet commands.
-- Capture tab size, tab offset, native Font generation, and surface-scale state in text commands.
+- Measure text through renderer-equivalent native advance/bearing bounds and capture tab size, tab offset, every fallback Font generation, and surface-scale state in text commands.
 - Add command layers and Wrapped Visual Row indices.
-- Add preflight reservation and atomic translated replay into ordinary rencache commands.
+- Add preflight validation, atomic translated layer replay, and a frame-failure path for genuine command-buffer allocation failure.
+- Add active-frame reference lifecycle hooks used by both the ordinary renderer API and `jitsetup.lua` FFI begin/end wrappers, including abandoned-frame cleanup.
 - Add diagnostics.
 - Keep the Document View unchanged.
 
@@ -729,9 +792,13 @@ Test:
 - clip interaction;
 - Font lifetime after caller references are dropped;
 - packet eviction/release after replay but before `rencache_end_frame()`;
+- LuaJIT FFI frame-end cleanup and abandoned-frame cleanup without reference leaks;
+- mutation/removal of children from a Font-group table after packet construction;
 - two views using one shared Font with different tab sizes;
 - in-place Font generation and display-scale changes;
-- allocation failure without partial command emission;
+- nonzero glyph-bearing/x-offset bounds and dirty-region coverage;
+- recoverable pre-allocation rejection without partial layer emission;
+- actual allocation failure aborting the complete frame without attempting legacy line fallback;
 - garbage collection before and after sealing;
 - malformed input rejection;
 - software and D3D-compatible rencache command emission.
@@ -760,7 +827,7 @@ Confirm it fails because every draw currently traverses tokens.
 
 #### Green validation
 
-Run the targeted wrapped-text tests and verify behavior for ASCII, tabs, UTF-8, ligatures, syntax Fonts, two-view tab sizes, and wrap-boundary token splitting. Verify separately that the packet path did not silently switch to Tree-sitter/LSP `get_render_line()` tokens.
+Run the targeted wrapped-text tests and verify behavior for ASCII, tabs, UTF-8, ligatures, nonzero glyph bearings, complete fallback Font groups, syntax Fonts, two-view tab sizes, and wrap-boundary token splitting. Verify separately that the packet path did not silently switch to Tree-sitter/LSP `get_render_line()` tokens or recompute wrap boundaries from the drawing token stream.
 
 At this phase, capture a short performance run. If cache hits do not substantially reduce `wrapped_text`, stop and correct the boundary before adding more contributors.
 
@@ -778,7 +845,7 @@ Add behavior tests comparing packet and legacy marker operations for the whitesp
 - Register the contributor only while the plugin is loaded and enabled; invalidate it on disable or reload.
 - Keep selected-only mode on the dynamic fallback initially if necessary.
 - Ensure eligible packet lines bypass the old wrapper exactly once.
-- Preserve tab and repeated-marker batching.
+- Preserve tab/repeated-marker batching and the derived no-ligature marker Font.
 
 #### Green validation
 
@@ -806,6 +873,7 @@ Add packet/legacy parity fixtures and a stable redraw test showing normal guide 
 - Replay that layer at the existing foreground point.
 - Register the contributor only while the plugin is loaded and enabled.
 - Use the complete legacy guide path when active-guide highlighting is enabled.
+- Preserve first-Wrapped-Visual-Row-only guide coverage from the current wrapper.
 - Add correct invalidation for neighboring blank-line effective indentation.
 - Remove duplicate wrapper work for eligible lines.
 
@@ -828,19 +896,21 @@ Implement and test one invalidation source at a time:
 2. insert a line;
 3. remove a line;
 4. tokenizer retokenization extending to later lines;
-5. wrap-width change;
-6. syntax-Font metric change while tokenization-dependent wrapping is enabled;
-7. Font/Zoom and display-scale change;
-8. theme reload;
-9. runtime style mutation;
-10. whitespace option and plugin activation change;
-11. Indent Guide option, active-highlight mode, and plugin activation change;
-12. plugin/module reload;
-13. view close;
-14. LRU count eviction with immediate native release;
-15. LRU byte eviction with immediate native release;
-16. eviction/release after replay but before frame end;
-17. oversized-line bypass.
+5. `Doc:set_syntax()`/highlighter reset with unchanged text;
+6. wrap-width change;
+7. syntax-Font metric or syntax-generation change while tokenization-dependent wrapping is enabled;
+8. Font/Zoom and display-scale change;
+9. theme reload;
+10. runtime style mutation;
+11. whitespace option, marker-Font recreation, and plugin activation change;
+12. Indent Guide option, active-highlight mode, first-row coverage, and plugin activation change;
+13. plugin/module reload;
+14. view close;
+15. every invalidation/replacement path using centralized immediate release;
+16. LRU count eviction with immediate native release;
+17. LRU byte eviction with immediate native release;
+18. eviction/release after replay but before frame end;
+19. oversized-line bypass.
 
 For each case verify observable output changes correctly and unaffected visible lines remain cache hits where safe.
 
@@ -897,16 +967,20 @@ Test:
 - text ownership;
 - Font reference retention through the Lua API;
 - builder Font retention before sealing;
-- active-frame Font pinning after packet release and Lua GC;
+- snapshot retention of every Font-group child despite later table mutation;
+- active-frame child-Font pinning after packet release and Lua GC;
+- ordinary and LuaJIT FFI frame-reference cleanup, including abandoned frames;
 - captured tab-size replay across shared Fonts and two views;
-- native Font-generation/surface-scale invalidation;
+- complete fallback-array Font-generation/surface-scale invalidation;
+- renderer-equivalent text advance and nonzero x-offset/bearing bounds;
 - translated bounds;
 - row/layer ranges;
 - command order;
 - integer-overflow guards;
 - empty packets;
 - very large text rejection/bounding;
-- atomic replay failure and command/statistics rollback;
+- recoverable pre-allocation rejection and layer rollback;
+- actual allocation failure marking/discarding the complete frame without legacy fallback;
 - idempotent explicit release with immediate native memory reclamation;
 - cleanup after partial construction failure.
 
@@ -992,6 +1066,10 @@ Inserting/removing lines shifts cache entries safely. No packet from the old lin
 
 Syntax, whitespace, and guide colors change on the next draw. Old packet colors never survive a theme generation change.
 
+### Syntax change without text change
+
+`Doc:set_syntax()` resets tokenizer state and packet text. When tokenization-dependent wrapping is enabled, it also reconstructs wrap boundaries before packet rebuild; when disabled, the existing normal-token wrap policy remains authoritative.
+
 ### Zoom/Font change
 
 All metric-dependent packets and tokenization-dependent wrap boundaries rebuild. Native Font generation and surface scale participate in validation/dirty invalidation. No packet retains stale widths or stale Font pointers.
@@ -1003,6 +1081,10 @@ Changed Wrapped Visual Row boundaries invalidate the right entries. Rows do not 
 ### Two Document Views of one Document
 
 Each view uses its own width/layout packets. Editing invalidates both views correctly without sharing incompatible geometry. Two views using the same Font but different tab sizes replay their captured tab state independently.
+
+### Font-group mutation
+
+After packet construction, a caller replaces/removes a child from the original Font-group table. The packet and any active frame retain the snapshotted child userdata safely; subsequent signature validation invalidates the packet rather than dereferencing a freed Font or silently using a different fallback array.
 
 ### Two visible Editors
 
@@ -1028,9 +1110,21 @@ Disabling or unloading Draw Whitespace or Indent Guides removes/deactivates its 
 
 A packet is replayed, evicted, explicitly released, and collected before frame end. Its native packet memory is reclaimed immediately, but renderer-owned active-frame references keep every Font alive until `rencache_end_frame()` completes.
 
+### Non-LRU invalidation disposal
+
+Text, syntax, wrap, theme, Font, contributor, replacement, and view-close invalidations all use the same discard path, update byte accounting once, and immediately release native packet storage.
+
 ### Replay allocation failure
 
-Forced frame-command reservation failure leaves command-buffer position, `resize_issue`, and frame statistics unchanged. The legacy renderer then draws the complete line exactly once.
+Recoverable validation/size rejection before allocation leaves the frame unchanged and permits legacy rendering. Forced command-buffer allocation failure marks and discards the complete frame, retains the previously presented frame, releases references only after abandonment, requests a redraw, and never attempts legacy line rendering in the insufficient buffer.
+
+### Whitespace marker Font
+
+Repeated whitespace markers use the same derived no-ligature Font as the legacy plugin, including after Font/theme/plugin reload invalidation.
+
+### Wrapped Indent Guide coverage
+
+With active highlighting disabled, packetized guides retain the current first-Wrapped-Visual-Row-only coverage. Enabling active highlighting switches the complete guide path back to the legacy dynamic implementation.
 
 ## Risks and mitigations
 
@@ -1042,9 +1136,9 @@ Forced frame-command reservation failure leaves command-buffer position, `resize
 
 ### Dangling Font pointers
 
-**Risk:** a packet or builder outlives its Font userdata, or a packet is released after replay while rencache still contains raw Font pointers.
+**Risk:** a packet or builder outlives a Font userdata, a mutable Font-group table drops a snapshotted child, or a packet is released after replay while rencache still contains raw Font pointers.
 
-**Mitigation:** builder/packet-owned persistent references, renderer-owned active-frame references under all Lua builds, clearing only after frame end, and tests that release/collect a packet between replay and frame completion.
+**Mitigation:** snapshot every fallback child userdata, builder/packet-owned persistent child references, renderer-owned active-frame child references under all Lua builds, explicit LuaJIT FFI cleanup only after frame consumption, abandoned-frame retirement, and tests that mutate groups or release/collect a packet between replay and frame completion.
 
 ### Excessive packet memory
 
@@ -1054,9 +1148,15 @@ Forced frame-command reservation failure leaves command-buffer position, `resize
 
 ### Mutable tab and Font state
 
-**Risk:** a shared Font's current tab size, native generation, or surface scale differs from the state used to compile packet bounds.
+**Risk:** a shared Font's current tab size, a primary or fallback Font's native generation, or surface scale differs from the state used to compile packet bounds.
 
-**Mitigation:** snapshot tab size/offset and native Font state in packet commands, copy them into ordinary rencache commands, include generation in dirty hashing or explicit invalidation, and test two views with different indentation settings.
+**Mitigation:** snapshot tab size/offset and every fallback Font's identity/generation in packet commands, copy them into ordinary rencache commands, include the complete signature in dirty hashing or explicit invalidation, and test two views with different indentation settings and mutable Font groups.
+
+### Inexact text bounds
+
+**Risk:** packet bounds based only on origin and advance omit a negative/positive glyph bearing, causing clipping or stale dirty cells for shaped or syntax-specific text.
+
+**Mitigation:** measure packet text through the renderer-native width routine, retain its x-offset and exact rectangle semantics, and compare packet/legacy bounds for nonzero-bearing fixtures.
 
 ### Long-line cold-build hitch
 
@@ -1082,11 +1182,17 @@ Forced frame-command reservation failure leaves command-buffer position, `resize
 
 **Mitigation:** expand packets into ordinary rencache commands and test unchanged, scrolled, clipped, recolored, and evicted cases.
 
-### Partial replay before fallback
+### Allocation failure across packet layers
 
-**Risk:** command-buffer allocation failure leaves half a packet submitted and prevents the legacy path from completing the line.
+**Risk:** a later packet layer fails after content and intervening overlays were already committed; redrawing the line through the legacy path would duplicate content, while the insufficient buffer cannot reliably hold the fallback anyway.
 
-**Mitigation:** preflight and reserve the complete worst-case replay allocation, commit commands/statistics only after successful reservation, and test forced failure with exact rollback.
+**Mitigation:** keep validation rejection atomic and recoverable before allocation, but treat genuine command-buffer allocation failure as a complete frame failure. Discard/skip the failed frame, preserve the previously presented frame, request redraw, and do not attempt legacy line fallback.
+
+### Syntax metadata leaves stale wrapped rows
+
+**Risk:** `Doc:set_syntax()` changes tokenizer state and syntax Fonts without changing Document text, leaving tokenization-dependent `wrapped_lines` stale.
+
+**Mitigation:** include syntax/highlighter-reset generation in packet validity and tokenization-dependent wrap settings, reconstruct rows before packet rebuild, and test syntax changes with identical text.
 
 ### Cold compilation merely moves Lua work
 
@@ -1122,10 +1228,12 @@ The implementation target is complete when:
 - stable redraws do not rerun their Lua token/whitespace/guide construction;
 - dynamic overlays remain correct;
 - unsupported presentation modes fall back without visual loss;
-- builders and packets retain Fonts safely, active frames pin Fonts through `rencache_end_frame()`, and packet release cannot create dangling frame pointers;
-- text replay preserves captured tab size, Font generation, and scale-dependent invalidation;
-- packet replay is atomic and can fall back without partial emission;
-- packet caches are bounded by immediately reclaimed native bytes, not merely collectable Lua references;
+- builders and packets snapshot/retain every fallback child Font safely, active frames pin those children through `rencache_end_frame()`, LuaJIT and ordinary frame paths retire references correctly, and packet release cannot create dangling frame pointers;
+- text replay preserves renderer-equivalent advance/bearing bounds, captured tab size, complete fallback Font generations, and scale-dependent invalidation;
+- recoverable packet rejection is atomic, while genuine command-buffer allocation failure discards the complete frame without attempting unsafe legacy fallback;
+- packet caches are bounded by immediately reclaimed native bytes through one discard path used by every invalidation/replacement/eviction, not merely collectable Lua references;
+- syntax changes invalidate packet tokens and tokenization-dependent wrap rows even when Document text is unchanged;
+- whitespace packets preserve the derived no-ligature marker Font and Indent Guide packets preserve current first-row-only wrapped coverage;
 - absent, disabled, active-highlight, and reloaded contributors preserve existing behavior;
 - targeted red-green tests cover packet replay, parity, invalidation, and eviction;
 - affected existing UI tests pass;
