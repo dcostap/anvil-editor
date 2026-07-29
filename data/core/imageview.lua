@@ -184,7 +184,7 @@ function ImageView:scale_image()
     if self.zoom_scale == 1 then
       self.image_scaled = self.image
     elseif self.type ~= "svg" then
-      self.image_scaled = self.image:scaled(new_w, new_h, "nearest")
+      self.image_scaled = self.image:scaled(new_w, new_h, "linear")
     else
       self.image_scaled = canvas.load_svg_image(self.path, new_w, new_h)
     end

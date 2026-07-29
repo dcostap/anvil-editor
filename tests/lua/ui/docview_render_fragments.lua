@@ -220,27 +220,45 @@ test.describe("DocView render fragments", function()
   test.it("routes pointer cursor and clicks through rendered text fragments", function()
     local view = make_view("link")
     local clicked = false
+    local link_fragment
     view:add_line_render_provider("interactive", {
       render_line = function()
+        link_fragment = {
+          source_col1 = 1, source_col2 = 5, text = "link", cursor = "hand",
+          on_mouse_pressed = function(_, owner, hit, button)
+            test.equal(owner, view)
+            test.equal(hit.line, 1)
+            test.equal(button, "left")
+            clicked = true
+            return true
+          end,
+        }
         return {
-          fragments = {
-            {
-              source_col1 = 1, source_col2 = 5, text = "link", cursor = "hand",
-              on_mouse_pressed = function(_, owner, hit, button)
-                test.equal(owner, view)
-                test.equal(hit.line, 1)
-                test.equal(button, "left")
-                clicked = true
-                return true
-              end,
-            },
-          },
+          fragments = { link_fragment },
         }
       end,
     })
     local x, y = view:get_line_screen_position(1)
     view:on_mouse_moved(x + 2, y + 2)
     test.equal(view.cursor, "hand")
+    local hovered_fragment = test.not_nil(
+      view:get_render_fragment_at_position(x + 2, y + 2)
+    ).fragment
+    test.equal(hovered_fragment.hovered, true)
+
+    local old_draw_rect = renderer.draw_rect
+    local old_draw_text = renderer.draw_text
+    local hover_drawn = false
+    renderer.draw_rect = function(_, _, _, _, color)
+      if color == style.interactive_hover_background then hover_drawn = true end
+    end
+    renderer.draw_text = function(font, text, draw_x)
+      return draw_x + font:get_width(text)
+    end
+    view:draw_line_text(1, x, y)
+    renderer.draw_text = old_draw_text
+    renderer.draw_rect = old_draw_rect
+    test.equal(hover_drawn, true)
     test.equal(view:on_mouse_pressed("left", x + 2, y + 2, 1), true)
     test.equal(clicked, true)
 
@@ -249,6 +267,7 @@ test.describe("DocView render fragments", function()
     x, y = view:get_line_screen_position(1)
     view:on_mouse_moved(x + view:get_font():get_width("link") + 30, y + 2)
     test.equal(view.cursor, "ibeam")
+    test.equal(hovered_fragment.hovered, nil)
     view:on_mouse_pressed("left", x + view:get_font():get_width("link") + 30, y + 2, 1)
     test.equal(clicked, false)
   end)
@@ -256,28 +275,29 @@ test.describe("DocView render fragments", function()
   test.it("routes pointer cursor and clicks through rendered widgets", function()
     local view = make_view("widget")
     local clicked = false
+    local widget_fragment
     view:add_line_render_provider("widget", {
       render_line = function()
-        return {
-          fragments = {
-            {
-              source_col1 = 1,
-              source_col2 = 7,
-              width = 40,
-              widget = {
-                width = 40,
-                height = view:get_line_height(),
-                cursor = "hand",
-                on_mouse_pressed = function(_, owner, hit, button)
-                  test.equal(owner, view)
-                  test.equal(hit.line, 1)
-                  test.equal(button, "left")
-                  clicked = true
-                  return true
-                end,
-              },
-            },
+        widget_fragment = {
+          source_col1 = 1,
+          source_col2 = 7,
+          width = 40,
+          widget = {
+            width = 40,
+            height = view:get_line_height(),
+            cursor = "hand",
+            on_mouse_pressed = function(_, owner, hit, button)
+              test.equal(owner, view)
+              test.equal(hit.line, 1)
+              test.equal(button, "left")
+              clicked = true
+              return true
+            end,
+            draw = function() end,
           },
+        }
+        return {
+          fragments = { widget_fragment },
         }
       end,
     })
@@ -285,6 +305,17 @@ test.describe("DocView render fragments", function()
     x, y = x + 5, y + 5
     view:on_mouse_moved(x, y)
     test.equal(view.cursor, "hand")
+    test.equal(test.not_nil(view:get_render_widget_at_position(x, y)).fragment.hovered, true)
+
+    local old_draw_rect = renderer.draw_rect
+    local hover_drawn = false
+    renderer.draw_rect = function(_, _, _, _, color)
+      if color == style.interactive_hover_overlay then hover_drawn = true end
+    end
+    local line_x, line_y = view:get_line_screen_position(1)
+    view:draw_line_text(1, line_x, line_y)
+    renderer.draw_rect = old_draw_rect
+    test.equal(hover_drawn, true)
     test.equal(view:on_mouse_pressed("left", x, y, 1), true)
     test.equal(clicked, true)
   end)

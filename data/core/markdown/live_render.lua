@@ -830,6 +830,8 @@ local function add_fragment(fragments, occupied, fragment)
   return true
 end
 
+local resolve_live_link
+
 local function remote_image_allowed(view, url, project)
   if not images.is_remote(url) then return false end
   if config.markdown_live_download_remote_images == true then return true end
@@ -851,17 +853,20 @@ local function image_fragment(view, span, opts)
   view.__markdown_live_image_references = view.__markdown_live_image_references or {}
   local project = core.current_project(view.doc.abs_filename)
   local owner = view.__markdown_live_owner
+  local resolution = resolve_live_link(view, link)
+  local image_source = resolution.status == "resolved" and resolution.kind == "attachment"
+    and resolution.path or link.path
   local asset_opts = {
     alt = link.alias or link.alt,
     source_path = view.doc.abs_filename,
     project_root = project and project.path,
-    download_remote = remote_image_allowed(view, link.path, project),
+    download_remote = remote_image_allowed(view, image_source, project),
     retry_generation = owner and owner.link_index and owner.link_index.generation or 0,
   }
   -- get_asset already resolves the source path while deriving its cache key.
   -- Reuse that key instead of repeating the filesystem/vault search here.
-  local entry = images.get_asset(link.path, asset_opts)
-  local key = entry.key or images.asset_key(link.path, asset_opts)
+  local entry = images.get_asset(image_source, asset_opts)
+  local key = entry.key or images.asset_key(image_source, asset_opts)
   local reference_id = link.semantic_id or table.concat({ span.line, span.col1, span.col2 }, ":")
   local old_key = view.__markdown_live_image_references[reference_id]
   if old_key and old_key ~= key then
@@ -898,9 +903,8 @@ local function image_fragment(view, span, opts)
     local width, height
     if opts.block then
       local available_width = math.max(1, math.floor(opts.available_width or image_available_width(view)))
-      local resize = link.resize or { width = available_width }
       width, height = images.scale_size(
-        natural_w, natural_h, available_width, resize, true
+        natural_w, natural_h, available_width, link.resize, false
       )
     else
       width, height = images.scale_size(
@@ -929,7 +933,7 @@ local function image_fragment(view, span, opts)
           local image = entry.image
           if width ~= natural_w or height ~= natural_h then
             if not entry.scaled_image or entry.scaled_width ~= width or entry.scaled_height ~= height then
-              entry.scaled_image = image:scaled(width, height, "nearest")
+              entry.scaled_image = image:scaled(width, height, "linear")
               entry.scaled_width, entry.scaled_height = width, height
             end
             image = entry.scaled_image
@@ -1123,16 +1127,18 @@ local function image_only_render_line(view, text, line, span, active)
   if not image then return nil end
   image.semantic_id = span.semantic_id
   image.image_anchor = true
-  if active and image.widget then
-    image.source_col1 = #text + 1
-    image.source_col2 = #text + 1
-    image.draw_x_offset = leading_width - body_font:get_width(text)
-    image.draw_y_offset = markdown_live_body_line_height(view) + image_vertical_padding()
-    image.widget.height = image.widget.height + markdown_live_body_line_height(view)
+  if active then
     local fragments = revealed_link_fragments(view, text, line, span, {
       base_font = body_font,
     })
-    fragments[#fragments + 1] = image
+    if image.widget then
+      image.source_col1 = #text + 1
+      image.source_col2 = #text + 1
+      image.draw_x_offset = leading_width - body_font:get_width(text)
+      image.draw_y_offset = markdown_live_body_line_height(view) + image_vertical_padding()
+      image.widget.height = image.widget.height + markdown_live_body_line_height(view)
+      fragments[#fragments + 1] = image
+    end
     return {
       source_text = text,
       caret_height = markdown_live_body_line_height(view),
@@ -1153,7 +1159,7 @@ local function image_only_render_line(view, text, line, span, active)
   }
 end
 
-local function resolve_live_link(view, link)
+resolve_live_link = function(view, link)
   local owner = view.__markdown_live_owner
   local index = owner and owner.link_index
   local target = link.raw_target or link.path or ""

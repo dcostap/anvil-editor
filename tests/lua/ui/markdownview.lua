@@ -350,6 +350,71 @@ print("hello")
     test.ok(selection_index < text_index)
   end)
 
+  test.test("draws inline code backgrounds below rendered text selections", function()
+    local rendered_text = "before inline code after"
+    local view = MarkdownView("before `inline code` after")
+    view.position.x = 0
+    view.position.y = 0
+    view.size.x = 400
+    view.size.y = 300
+    view.selection_anchor = 1
+    view.selection_cursor = #rendered_text + 1
+    view:ensure_layout()
+
+    local events = {}
+    local original_draw_text = renderer.draw_text
+    local original_draw_rect = renderer.draw_rect
+    local original_push_clip_rect = core.push_clip_rect
+    local original_pop_clip_rect = core.pop_clip_rect
+
+    view.draw_background = function() end
+    view.draw_scrollbar = function() end
+    core.push_clip_rect = function() end
+    core.pop_clip_rect = function() end
+    renderer.draw_rect = function(_, _, _, _, color)
+      if color == style.background2 then
+        events[#events + 1] = "inline-code-background"
+      elseif color == style.selection then
+        events[#events + 1] = "selection"
+      end
+    end
+    renderer.draw_text = function(font, text, x, y, color, opts)
+      if text ~= "" then
+        events[#events + 1] = "text"
+      end
+      return x + font:get_width(text, opts)
+    end
+
+    view:draw()
+
+    renderer.draw_text = original_draw_text
+    renderer.draw_rect = original_draw_rect
+    core.push_clip_rect = original_push_clip_rect
+    core.pop_clip_rect = original_pop_clip_rect
+
+    local background_index
+    local selection_index
+    local first_text_index
+    local background_count = 0
+    for index, event in ipairs(events) do
+      if event == "inline-code-background" then
+        background_count = background_count + 1
+        background_index = background_index or index
+      elseif event == "selection" then
+        selection_index = selection_index or index
+      elseif event == "text" then
+        first_text_index = first_text_index or index
+      end
+    end
+
+    test.equal(background_count, 1)
+    test.not_nil(background_index)
+    test.not_nil(selection_index)
+    test.not_nil(first_text_index)
+    test.ok(background_index < selection_index)
+    test.ok(selection_index < first_text_index)
+  end)
+
   test.test("copies selected rendered text", function()
     local view = MarkdownView("# Title\n\nParagraph one")
     view.size.x = 400
@@ -917,14 +982,15 @@ Second line
     write_file(source_path, "Start ![Icon](icon.png) end\n")
 
     local original_load_image = canvas.load_image
-    local loaded_path
+    local loaded_path, scale_mode
     canvas.load_image = function(path)
       loaded_path = path
       return {
         get_size = function()
           return 64, 32
         end,
-        scaled = function(_, width, height)
+        scaled = function(_, width, height, mode)
+          scale_mode = mode
           return {
             get_size = function()
               return width, height
@@ -955,6 +1021,7 @@ Second line
     test.not_nil(inline_image)
     test.ok(inline_image.width > 0)
     test.ok(inline_image.height > 0)
+    test.equal(scale_mode, "linear")
   end)
 
   test.test("supports multi-backtick code spans and link titles", function()
@@ -1165,14 +1232,15 @@ Text with a footnote.[^note]
     write_file(source_path, "![Diagram](diagram.png)\n")
 
     local original_load_image = canvas.load_image
-    local loaded_path
+    local loaded_path, scale_mode
     canvas.load_image = function(path)
       loaded_path = path
       return {
         get_size = function()
           return 800, 400
         end,
-        scaled = function(_, width, height)
+        scaled = function(_, width, height, mode)
+          scale_mode = mode
           return {
             get_size = function()
               return width, height
@@ -1195,6 +1263,7 @@ Text with a footnote.[^note]
     test.equal(layout.commands[1].width, layout.width)
     test.equal(layout.commands[1].height, math.floor(400 * (layout.width / 800)))
     test.equal(layout.commands[1].image_url, "diagram.png")
+    test.equal(scale_mode, "linear")
   end)
 
   test.test("downloads remote markdown images to the cache", function()

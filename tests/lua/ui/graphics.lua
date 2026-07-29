@@ -188,6 +188,31 @@ test.describe("graphics apis", function()
     test.equal(view.path, image_path)
   end)
 
+  test.test("uses smooth filtering when the image viewer scales raster images", function(context)
+    local image_path = context.temp_root .. PATHSEP .. "smooth-scale.png"
+    write_file(image_path, "not-a-real-png")
+    local original_load_image = canvas.load_image
+    local scale_mode
+    canvas.load_image = function()
+      return {
+        get_size = function() return 100, 50 end,
+        scaled = function(_, width, height, mode)
+          scale_mode = mode
+          return { get_size = function() return width, height end }
+        end,
+      }
+    end
+
+    local ok, err = pcall(function()
+      local view = ImageView(image_path, "fixed", 0.5)
+      view.size.x, view.size.y = 200, 100
+      view:scale_image()
+      test.equal(scale_mode, "linear")
+    end)
+    canvas.load_image = original_load_image
+    if not ok then error(err, 0) end
+  end)
+
   test.test("draws text with maximum-size FFI font fallback group", function()
     local font_path = DATADIR .. PATHSEP .. "fonts" .. PATHSEP .. "FiraSans-Regular.ttf"
     local base_font = renderer.font.load(font_path, 12 * SCALE)

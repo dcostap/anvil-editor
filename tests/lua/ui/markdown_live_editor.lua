@@ -3326,7 +3326,18 @@ test.describe("Markdown Live Editor", function()
     test.equal(drawn, 2)
   end)
 
-  test.it("fills available width for image blocks, including images beside text", function()
+  test.it("reveals raw source when the caret enters an unavailable image embed", function()
+    local source = "![[missing-image-" .. system.get_process_id() .. ".png]]"
+    local view, doc = make_view(source .. "\nother", USERDIR .. PATHSEP .. "missing-image-note.md")
+    doc:set_selection(2, 1)
+    refresh(view)
+    test.match(visible_render_text(view, 1), "[image unavailable:", nil, true)
+
+    doc:set_selection(1, 5)
+    test.equal(visible_render_text(view, 1), source)
+  end)
+
+  test.it("keeps image blocks at native resolution and only shrinks them to fit", function()
     local image_path = USERDIR .. PATHSEP .. "markdown-live-full-width-" .. system.get_process_id() .. ".png"
     local fp = test.not_nil(io.open(image_path, "wb"))
     fp:write("png")
@@ -3334,20 +3345,28 @@ test.describe("Markdown Live Editor", function()
     local image_url = common.basename and common.basename(image_path)
       or image_path:match("[^" .. PATHSEP .. "]+$")
     local source = "![Full](" .. image_url .. ")\n![Sized|300](" .. image_url
-      .. ")\nBefore ![Inline](" .. image_url .. ") after\nother"
+      .. ")\n![Small|100](" .. image_url .. ")\nBefore ![Inline](" .. image_url
+      .. ") after\nother"
     local view, doc = make_view(source, USERDIR .. PATHSEP .. "full-width-note.md")
     view.size.x = 800
-    doc:set_selection(4, 1)
+    doc:set_selection(5, 1)
 
     local old_load_image = canvas.load_image
+    local old_draw_canvas = renderer.draw_canvas
+    local scale_modes = {}
     canvas.load_image = function()
       return {
         get_size = function() return 200, 100 end,
-        scaled = function(self) return self end,
+        scaled = function(self, _, _, mode)
+          scale_modes[#scale_modes + 1] = mode
+          return self
+        end,
       }
     end
     local ok, err = pcall(function()
       refresh(view)
+      renderer.draw_canvas = function() end
+      view:draw_line_text(3, 0, 0)
       local function rendered_image(line)
         for _, fragment in ipairs(view:get_line_render(line).fragments or {}) do
           if fragment.widget and fragment.widget.type == "image" then return fragment end
@@ -3355,23 +3374,28 @@ test.describe("Markdown Live Editor", function()
       end
       local full = test.not_nil(rendered_image(1))
       local sized = test.not_nil(rendered_image(2))
-      local inline = test.not_nil(rendered_image(3))
-      local available = math.floor(linewrapping.compute_wrap_width(view))
-      test.equal(full.widget.width, available)
-      test.equal(full.widget.image_height, math.floor(available / 2))
-      test.equal(sized.widget.width, 300)
-      test.equal(sized.widget.image_height, 150)
-      test.equal(inline.widget.width, available)
-      test.equal(inline.widget.image_height, math.floor(available / 2))
+      local small = test.not_nil(rendered_image(3))
+      local inline = test.not_nil(rendered_image(4))
+      test.equal(full.widget.width, 200)
+      test.equal(full.widget.image_height, 100)
+      test.equal(sized.widget.width, 200)
+      test.equal(sized.widget.image_height, 100)
+      test.equal(small.widget.width, 100)
+      test.equal(small.widget.image_height, 50)
+      test.equal(inline.widget.width, 200)
+      test.equal(inline.widget.image_height, 100)
 
-      view.size.x = 600
+      view.size.x = 150
       local resized = test.not_nil(rendered_image(1))
       local resized_available = math.floor(linewrapping.compute_wrap_width(view))
       test.equal(resized.widget.width, resized_available)
       test.equal(resized.widget.image_height, math.floor(resized_available / 2))
       test.ok(resized.widget.width < full.widget.width)
+      test.ok(#scale_modes > 0)
+      for _, mode in ipairs(scale_modes) do test.equal(mode, "linear") end
     end)
     canvas.load_image = old_load_image
+    renderer.draw_canvas = old_draw_canvas
     os.remove(image_path)
     if not ok then error(err, 0) end
   end)
@@ -3393,7 +3417,7 @@ test.describe("Markdown Live Editor", function()
     config.plugins.linewrapping.width_override = 120
     canvas.load_image = function()
       return {
-        get_size = function() return 200, 100 end,
+        get_size = function() return 1000, 500 end,
         scaled = function(self) return self end,
       }
     end
@@ -4102,6 +4126,51 @@ test.describe("Markdown Live Editor", function()
     canvas.load_image = old_load_image
     os.remove(image_path)
     common.rm(root, true)
+  end)
+
+  test.it("renders wikilink images found by unique filename anywhere in an Obsidian vault", function()
+    local root = USERDIR .. PATHSEP .. "markdown-live-vault-images-" .. system.get_process_id()
+    local obsidian = root .. PATHSEP .. ".obsidian"
+    local notes = root .. PATHSEP .. "SISTEMAS"
+    local media = notes .. PATHSEP .. "attachments"
+    test.ok(common.mkdirp(obsidian))
+    test.ok(common.mkdirp(media))
+    local app = test.not_nil(io.open(obsidian .. PATHSEP .. "app.json", "wb"))
+    app:write("{}")
+    app:close()
+    local image_path = media .. PATHSEP .. "Pasted image.png"
+    local image = test.not_nil(io.open(image_path, "wb"))
+    image:write("png")
+    image:close()
+
+    local source = notes .. PATHSEP .. "AP 4g.md"
+    local old_projects = core.projects
+    local old_load_image = canvas.load_image
+    local view
+    core.projects = { Project(root) }
+    markdown.vault_index.get_index(root):rebuild("vault-image-ui-test")
+    local loaded_path
+    canvas.load_image = function(path)
+      loaded_path = path
+      return {
+        get_size = function() return 80, 40 end,
+        scaled = function(self) return self end,
+      }
+    end
+
+    local ok, err = pcall(function()
+      local doc
+      view, doc = make_view("![[Pasted image.png]]\nother", source)
+      doc:set_selection(2, 1)
+      refresh(view)
+      test.ok(view:get_visual_row_height(1) > 40)
+      test.ok(common.path_equals(test.not_nil(loaded_path), image_path))
+    end)
+    if view then markdown.live_render.detach(view) end
+    canvas.load_image = old_load_image
+    core.projects = old_projects
+    common.rm(root, true)
+    if not ok then error(err, 0) end
   end)
 
   test.it("clamps image overlay zoom to renderer-safe scaled dimensions", function()

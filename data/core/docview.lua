@@ -48,6 +48,7 @@ local IME_STATE = {line1 = 0, col1 = 0, line2 = 0, col2 = 0, w = 0, h = 0}
 ---@field last_col1 integer
 ---@field last_line2 integer
 ---@field last_col2 integer
+---@field hovered_render_fragment table?
 local DocView = View:extend()
 
 function DocView:__tostring() return "DocView" end
@@ -3599,6 +3600,13 @@ local function render_fragment_color(fragment)
   return fragment.color or style.syntax.normal
 end
 
+local function fragment_uses_hand_cursor(fragment)
+  return fragment and (
+    fragment.cursor == "hand"
+    or (fragment.widget and fragment.widget.cursor == "hand")
+  )
+end
+
 ---Discard normalized fragment copies after mutating a render line in place.
 ---@param render_line table?
 function DocView:invalidate_line_render_fragment_normalization(render_line)
@@ -4475,16 +4483,28 @@ function DocView:on_mouse_moved(x, y, ...)
     end
   end
 
+  local hovered_fragment
   if not selecting and not self.hovering_gutter and
     not self:scrollbar_hovering() and not self:scrollbar_dragging()
   then
     local hit = self:get_render_widget_at_position(x, y)
     if hit and hit.widget.cursor then
       self.cursor = hit.widget.cursor
+      if self.cursor == "hand" then hovered_fragment = hit.fragment end
     else
       hit = self:get_render_fragment_at_position(x, y)
-      if hit and hit.fragment.cursor then self.cursor = hit.fragment.cursor end
+      if hit and hit.fragment.cursor then
+        self.cursor = hit.fragment.cursor
+        if self.cursor == "hand" then hovered_fragment = hit.fragment end
+      end
     end
+  end
+
+  if self.hovered_render_fragment ~= hovered_fragment then
+    if self.hovered_render_fragment then self.hovered_render_fragment.hovered = nil end
+    self.hovered_render_fragment = hovered_fragment
+    if hovered_fragment then hovered_fragment.hovered = true end
+    core.redraw = true
   end
 
   if self.mouse_selecting then
@@ -4505,6 +4525,15 @@ function DocView:on_mouse_moved(x, y, ...)
   end
   if selecting then
     apply_resolved_line_end_affinity(self)
+  end
+end
+
+function DocView:on_mouse_left()
+  DocView.super.on_mouse_left(self)
+  if self.hovered_render_fragment then
+    self.hovered_render_fragment.hovered = nil
+    self.hovered_render_fragment = nil
+    core.redraw = true
   end
 end
 
@@ -5219,6 +5248,18 @@ local function cached_fast_ascii_monospace_width(self, line, text, font, indent_
   return width
 end
 
+local function draw_render_fragment_background(fragment, x, y, width, height)
+  if fragment.background then
+    renderer.draw_rect(x, y, width, height, fragment.background)
+  end
+  if fragment.hovered and fragment_uses_hand_cursor(fragment) then
+    renderer.draw_rect(
+      x, y, width, height,
+      fragment.hover_background or style.interactive_hover_background
+    )
+  end
+end
+
 local function draw_render_fragment_text(
   fragment, font, text, x, y, color, opts, background_y, background_height
 )
@@ -5240,12 +5281,10 @@ local function draw_render_fragment_text(
   end
   local text_x = x + (fragment.text_x_offset or 0)
   if fragment.text_lines then
-    if fragment.background then
-      renderer.draw_rect(
-        x, background_y or y, width, background_height or font:get_height(),
-        fragment.background
-      )
-    end
+    draw_render_fragment_background(
+      fragment, x, background_y or y, width,
+      background_height or font:get_height()
+    )
     local border_width = math.max(1, math.floor(SCALE))
     if fragment.background_border_top then
       renderer.draw_rect(
@@ -5282,16 +5321,14 @@ local function draw_render_fragment_text(
     end
     return x + width
   end
-  if fragment.background then
-    renderer.draw_rect(
-      x,
-      fragment.background_full_height and (background_y or y) or y,
-      width,
-      fragment.background_full_height and (background_height or font:get_height())
-        or math.max(1, font:get_height()),
-      fragment.background
-    )
-  end
+  draw_render_fragment_background(
+    fragment,
+    x,
+    fragment.background_full_height and (background_y or y) or y,
+    width,
+    fragment.background_full_height and (background_height or font:get_height())
+      or math.max(1, font:get_height())
+  )
   local next_x = renderer.draw_text(font, text, text_x, y, color, opts)
   if fragment.overdraw then
     renderer.draw_text(
@@ -5309,6 +5346,40 @@ local function draw_render_fragment_text(
     )
   end
   return math.max(next_x, x + width)
+end
+
+local function draw_render_widget(view, fragment, x, y, row_height, context)
+  local widget = fragment.widget
+  local ok, err = pcall(widget.draw, view, fragment, x, y, row_height)
+  if not ok then
+    core.log_quiet(
+      "DocView %s draw failed for %s: %s",
+      context or "render widget", view.doc:get_name(), tostring(err)
+    )
+    return false
+  end
+  if not (fragment.hovered and fragment_uses_hand_cursor(fragment)) then return true end
+
+  local padding = widget.padding or 0
+  local width = fragment.hit_width or widget.width or fragment.width or 0
+  local content_height = widget.image_height or widget.height or row_height
+  local left = x + (fragment.draw_x_offset or 0)
+  local top = fragment.draw_y_offset and (y + fragment.draw_y_offset - padding)
+    or (y + math.max(0, (row_height - content_height) / 2) - padding)
+  local height = content_height + padding * 2
+  renderer.draw_rect(left, top, width, height, style.interactive_hover_overlay)
+  local border = math.max(1, math.floor(SCALE))
+  renderer.draw_rect(left, top, width, border, style.interactive_hover_border)
+  renderer.draw_rect(
+    left, top + math.max(0, height - border), width, border,
+    style.interactive_hover_border
+  )
+  renderer.draw_rect(left, top, border, height, style.interactive_hover_border)
+  renderer.draw_rect(
+    left + math.max(0, width - border), top, border, height,
+    style.interactive_hover_border
+  )
+  return true
 end
 
 ---Draw the text content of a line with syntax highlighting.
@@ -5361,25 +5432,18 @@ function DocView:draw_line_text(line, x, y)
           and (col1 < row_end or (last_row and col1 == row_end))
         if anchored_widget and not fragment.hidden then
           local anchor_x = x + self:get_line_render_col_x_offset(render_line, col1)
-          local ok, err = pcall(
-            fragment.widget.draw, self, fragment, anchor_x, content_y, content_height
+          draw_render_widget(
+            self, fragment, anchor_x, content_y, content_height,
+            "wrapped anchored widget"
           )
-          if not ok then
-            core.log_quiet(
-              "DocView wrapped anchored widget draw failed for %s: %s",
-              self.doc:get_name(), tostring(err)
-            )
-          end
         elseif from < to and not fragment.hidden then
           local font = render_fragment_font(self, fragment)
           font:set_tab_size(indent_size)
           if fragment.widget and fragment.widget.draw and from == col1 and to == col2 then
-            local ok, err = pcall(
-              fragment.widget.draw, self, fragment, tx, content_y, content_height
+            draw_render_widget(
+              self, fragment, tx, content_y, content_height,
+              "wrapped render widget"
             )
-            if not ok then
-              core.log_quiet("DocView wrapped render widget draw failed for %s: %s", self.doc:get_name(), tostring(err))
-            end
             tx = tx + (fragment.width or fragment.widget.width or 0)
           else
             local text = fragment.text or ""
@@ -5421,15 +5485,10 @@ function DocView:draw_line_text(line, x, y)
         if fragment.image_block and fragment.widget and fragment.widget.draw
         and not fragment.hidden then
           local draw_x = x + (fragment.layout_x or 0)
-          local ok, err = pcall(
-            fragment.widget.draw, self, fragment, draw_x, y, layout_height
+          draw_render_widget(
+            self, fragment, draw_x, y, layout_height,
+            "positioned render widget"
           )
-          if not ok then
-            core.log_quiet(
-              "DocView positioned render widget draw failed for %s: %s",
-              self.doc:get_name(), tostring(err)
-            )
-          end
         end
       end
 
@@ -5450,15 +5509,10 @@ function DocView:draw_line_text(line, x, y)
               font:set_tab_size(indent_size)
               if fragment.widget and fragment.widget.draw
               and from == col1 and to == col2 then
-                local ok, err = pcall(
-                  fragment.widget.draw, self, fragment, tx, row_y, row_height
+                draw_render_widget(
+                  self, fragment, tx, row_y, row_height,
+                  "positioned inline widget"
                 )
-                if not ok then
-                  core.log_quiet(
-                    "DocView positioned inline widget draw failed for %s: %s",
-                    self.doc:get_name(), tostring(err)
-                  )
-                end
                 tx = tx + (fragment.width or fragment.widget.width or 0)
               else
                 local text = fragment.text or ""
@@ -5517,10 +5571,10 @@ function DocView:draw_line_text(line, x, y)
         local text = fragment.text or ""
         local ty = draw_y + math.max(0, (draw_height - font:get_height()) / 2)
         if fragment.widget and fragment.widget.draw then
-          local ok, err = pcall(
-            fragment.widget.draw, self, fragment, draw_x, content_y, content_height
+          draw_render_widget(
+            self, fragment, draw_x, content_y, content_height,
+            "render widget"
           )
-          if not ok then core.log_quiet("DocView render widget draw failed for %s: %s", self.doc:get_name(), tostring(err)) end
           tx = draw_x + (fragment.width or fragment.widget.width or 0)
         elseif text ~= "" then
           local color = render_fragment_color(fragment)
