@@ -73,6 +73,34 @@ static double token_similarity(const char *a, const char *b, int len_a, int len_
   return 2.0 * matches / (countA + countB);
 }
 
+static int structural_prefix_key(const char *src, char *key, int key_size) {
+  int out = 0;
+  bool found_boundary = false;
+  bool found_identifier = false;
+
+  while (*src == ' ' || *src == '\t') src++;
+  while (*src && *src != '\r' && *src != '\n') {
+    char c = *src++;
+    if (c == '"' || c == '\'' || c == '(' || c == '=') {
+      found_boundary = true;
+      break;
+    }
+    if (c == ' ' || c == '\t') continue;
+    if (is_token_char(c)) found_identifier = true;
+    if (out >= key_size - 1) return 0;
+    key[out++] = c;
+  }
+  key[out] = '\0';
+  return found_boundary && found_identifier && out >= 4 ? out : 0;
+}
+
+static bool has_matching_structural_prefix(const char *a, const char *b) {
+  char key_a[256], key_b[256];
+  int len_a = structural_prefix_key(a, key_a, (int)sizeof(key_a));
+  int len_b = structural_prefix_key(b, key_b, (int)sizeof(key_b));
+  return len_a > 0 && len_a == len_b && strcmp(key_a, key_b) == 0;
+}
+
 
 static double similarity(const char *a, const char *b) {
   if (strcmp(a, b) == 0) return 1.0;
@@ -89,11 +117,25 @@ static double similarity(const char *a, const char *b) {
   while (suffix < la && suffix < lb && a[la - 1 - suffix] == b[lb - 1 - suffix]) suffix++;
 
   double fast_score = (double)(prefix + suffix) / (la > lb ? la : lb);
+  if (has_matching_structural_prefix(a, b)) {
+    double token_score = token_similarity(a, b, la, lb);
+    return token_score > 0.5 ? token_score : 0.5;
+  }
   if (fast_score >= 0.8 || la < 20 || lb < 20)
     return fast_score;
 
   // Fast whitespace-token-based fallback
   return token_similarity(a, b, la, lb);
+}
+
+static double table_line_similarity(lua_State *L, int Aidx, int ai, int Bidx, int bi) {
+  lua_rawgeti(L, Aidx, ai);
+  const char *a = lua_tostring(L, -1);
+  lua_rawgeti(L, Bidx, bi);
+  const char *b = lua_tostring(L, -1);
+  double score = similarity(a, b);
+  lua_pop(L, 2);
+  return score;
 }
 
 
@@ -385,6 +427,23 @@ static int f_diff(lua_State *L) {
         ai++; bi++;
         continue;
       }
+
+      // Prefer an adjacent structural match over eagerly deleting the current
+      // source line. This keeps a modification paired when one side inserted
+      // a neighboring line before it.
+      double skip_b = bi + 1 < mj
+        ? table_line_similarity(L, Aidx, ai, Bidx, bi + 1) : 0.0;
+      double skip_a = ai + 1 < mi
+        ? table_line_similarity(L, Aidx, ai + 1, Bidx, bi) : 0.0;
+      if (skip_b >= 0.4 && skip_b > skip_a) {
+        lua_rawgeti(L, Bidx, bi);
+        const char *inserted = lua_tostring(L, -1);
+        push_edit(L, "insert", "b", inserted);
+        lua_rawseti(L, result_idx, out_i++);
+        lua_pop(L, 1);
+        bi++;
+        continue;
+      }
     }
 
     if (mi > ai) {
@@ -457,6 +516,19 @@ static int diff_iterator(lua_State *L) {
         lua_setfield(L, -2, "b");
 
         state->ai++; state->bi++;
+        return 1;
+      }
+
+      double skip_b = state->bi + 1 < mj
+        ? table_line_similarity(L, Aidx, state->ai, Bidx, state->bi + 1) : 0.0;
+      double skip_a = state->ai + 1 < mi
+        ? table_line_similarity(L, Aidx, state->ai + 1, Bidx, state->bi) : 0.0;
+      if (skip_b >= 0.4 && skip_b > skip_a) {
+        lua_rawgeti(L, Bidx, state->bi);
+        const char *inserted = lua_tostring(L, -1);
+        lua_pop(L, 1);
+        push_edit(L, "insert", "b", inserted);
+        state->bi++;
         return 1;
       }
     }

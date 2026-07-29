@@ -1,6 +1,7 @@
 local core = require "core"
 local command = require "core.command"
 local config = require "core.config"
+local style = require "core.style"
 local test = require "core.test"
 local diffview = require "plugins.diffview"
 local Doc = require "core.doc"
@@ -431,21 +432,8 @@ test.describe("DiffView batch behavior", function()
     test.ok(file_exists(path), "read-only file delete should be blocked")
   end)
 
-  test.it("read-only diff targets reject sync actions", function(context)
-    local view, err = diffview.open({
-      contents = {
-        diffview.content.text("old"),
-        diffview.content.text("new", { read_only_reason = "target snapshot" }),
-      },
-      editable_policy = "read-only",
-    }, true)
-    test.ok(view, err)
-    track(context, "diffviews", view)
-    wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
-
-    local before = text(view.doc_view_b.doc)
-    view:sync(1, 1, true)
-    test.equal(before, text(view.doc_view_b.doc))
+  test.it("does not expose hunk application as a Diff View action", function()
+    test.equal(nil, command.map["diff-view:sync-change"])
   end)
 
   test.it("rejects same document requests and balances assignment hooks", function(context)
@@ -801,7 +789,7 @@ test.describe("DiffView batch behavior", function()
     end
   end)
 
-  test.it("draws curved divider connectors and opposite-side gap markers", function(context)
+  test.it("draws polished central line numbers, curved connectors, and gap markers", function(context)
     local view = track(context, "diffviews", diffview.string_to_string(
       "aa\nbb",
       "aa\ninserted\nbb",
@@ -824,6 +812,7 @@ test.describe("DiffView batch behavior", function()
     local polygons = {}
     local markers = {}
     local arrows = {}
+    local line_numbers = {}
     renderer.draw_poly = function(points, color)
       polygons[#polygons + 1] = { points = points, color = color }
     end
@@ -832,6 +821,7 @@ test.describe("DiffView batch behavior", function()
     end
     renderer.draw_text = function(font, text, x, y, color)
       if text == ">" or text == "<" then arrows[#arrows + 1] = { text = text, x = x, y = y, color = color } end
+      if tostring(text):match("^%d+$") then line_numbers[#line_numbers + 1] = { text = tostring(text), x = x, y = y, color = color } end
       return x
     end
     core.push_clip_rect = function() end
@@ -847,8 +837,97 @@ test.describe("DiffView batch behavior", function()
     test.ok(#polygons >= 1, "expected an inserted hunk connector in the divider")
     test.ok(#polygons[1].points > 4, "expected a curved connector, not a simple rectangle")
     test.ok(#markers >= 1, "expected a thin gap marker on the side without inserted lines")
-    test.ok(markers[1].h <= math.max(1, SCALE) + 0.01, "expected a thin marker line")
-    test.ok(#arrows >= 1, "expected visible divider sync arrows")
+    local has_thin_marker = false
+    for _, marker in ipairs(markers) do
+      if marker.h <= math.max(1, SCALE) + 0.01 then has_thin_marker = true; break end
+    end
+    test.ok(has_thin_marker, "expected a thin marker line")
+    test.ok(#line_numbers >= 2, "expected both Diff Side line numbers in the central divider")
+    test.equal(false, view.doc_view_a.show_line_numbers)
+    test.equal(false, view.doc_view_b.show_line_numbers)
+    test.equal(false, view.scrollable, "the Diff View should not add a third parent scrollbar")
+    test.equal(
+      view.position.x + view.size.x,
+      view.doc_view_b.position.x + view.doc_view_b.size.x,
+      "the right Diff Side should extend to the view edge"
+    )
+    test.equal(0, #arrows, "hunk apply arrows should not clutter the divider")
+  end)
+
+  test.it("uses dedicated subdued colors for diff overview markers", function(context)
+    local left, right = {}, {}
+    for i = 1, 60 do left[i], right[i] = "same " .. i, "same " .. i end
+    left[30] = 'description: "old managed extension bundle"'
+    right[30] = 'description: "new managed assistant extensions"'
+    local view = track(context, "diffviews", diffview.string_to_string(
+      table.concat(left, "\n"),
+      table.concat(right, "\n"),
+      "left",
+      "right",
+      true
+    ))
+    wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 800, 100
+    view:update()
+
+    local old_draw_rect = renderer.draw_rect
+    local saw_overview_color = false
+    renderer.draw_rect = function(x, y, w, h, color)
+      if color == style.diff_overview_modify then saw_overview_color = true end
+    end
+    local ok, err = pcall(function() view:draw_scrollbar() end)
+    renderer.draw_rect = old_draw_rect
+    if not ok then error(err, 0) end
+    test.ok(saw_overview_color, "expected the theme's subdued modify overview color")
+  end)
+
+  test.it("uses a neutral changed-line background before inline old/new emphasis", function(context)
+    local view = track(context, "diffviews", diffview.string_to_string(
+      '    description: "Verifies that APPi loaded its managed Pi extension bundle",',
+      '    description: "Comprueba que APPi cargó las extensiones administradas del asistente IA",',
+      "left",
+      "right",
+      true
+    ))
+    wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
+
+    local left_provider = view.doc_view_a.decoration_providers["diff-view"].provider
+    local right_provider = view.doc_view_b.decoration_providers["diff-view"].provider
+    test.same(style.diff_modify_background, left_provider:line_background(view.doc_view_a, 1))
+    test.same(style.diff_modify_background, right_provider:line_background(view.doc_view_b, 1))
+
+    local left_ranges = left_provider:inline_ranges(view.doc_view_a, 1)
+    local right_ranges = right_provider:inline_ranges(view.doc_view_b, 1)
+    test.ok(#left_ranges <= 3 and #right_ranges <= 3, "expected grouped inline emphasis")
+
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 800, 200
+    view:update()
+    local old_draw_poly = renderer.draw_poly
+    local old_draw_rect = renderer.draw_rect
+    local old_draw_text = renderer.draw_text
+    local old_push_clip_rect = core.push_clip_rect
+    local old_pop_clip_rect = core.pop_clip_rect
+    local connectors = 0
+    local connector_color
+    renderer.draw_poly = function(_, color)
+      connectors = connectors + 1
+      connector_color = color
+    end
+    renderer.draw_rect = function() end
+    renderer.draw_text = function(_, _, x) return x end
+    core.push_clip_rect = function() end
+    core.pop_clip_rect = function() end
+    local ok, err = pcall(function() view:draw_divider_changes() end)
+    renderer.draw_poly = old_draw_poly
+    renderer.draw_rect = old_draw_rect
+    renderer.draw_text = old_draw_text
+    core.push_clip_rect = old_push_clip_rect
+    core.pop_clip_rect = old_pop_clip_rect
+    if not ok then error(err, 0) end
+    test.equal(1, connectors, "paired modified lines should have one coherent connector")
+    test.same(style.diff_modify_background, connector_color)
   end)
 
   test.it("keeps folded panes synchronized around insert-only hunks", function(context)
@@ -919,25 +998,4 @@ test.describe("DiffView batch behavior", function()
     test.ok(view.doc_view_a.poi_providers["diff-view"] ~= nil)
   end)
 
-  test.it("syncing an inserted hunk into the other side emits one document change", function(context)
-    local view = track(context, "diffviews", diffview.string_to_string(
-      "aa\ninserted\nbb",
-      "aa\nbb",
-      "left",
-      "right",
-      true
-    ))
-    wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
-
-    local target = view.doc_view_b.doc
-    local changes = 0
-    function target:on_text_change()
-      changes = changes + 1
-    end
-
-    view:sync(2, 1, true)
-
-    test.equal(text(target), "aa\ninserted\nbb\n")
-    test.equal(changes, 1)
-  end)
 end)

@@ -25,7 +25,60 @@ end
 function DiffModel:inline_ranges(side, line)
   local changes = side_changes(self, side)
   local change = changes and changes[line]
-  return change and change.changes or nil
+  return change and change.inline_ranges or nil
+end
+
+local function collapsed_inline_edits(edits)
+  local collapsed = {}
+  for _, edit in ipairs(edits or {}) do
+    local previous = collapsed[#collapsed]
+    if previous and previous.tag == edit.tag then
+      previous.val = previous.val .. (edit.val or "")
+    else
+      collapsed[#collapsed + 1] = { tag = edit.tag, val = edit.val or "" }
+    end
+  end
+  return collapsed
+end
+
+local function bridgeable_equal_text(text)
+  return #text <= 2 or text:match("^[%s%p]+$") ~= nil
+end
+
+---Build calm changed ranges for the target text represented by `insert`
+---records in diff.inline_diff(). Tiny equal islands and punctuation-only gaps
+---are absorbed so translated or substantially rewritten phrases do not turn
+---into a barcode of one-character highlights.
+local function inline_ranges_for_target(edits)
+  local ranges = {}
+  local active
+  local col = 1
+  for _, edit in ipairs(collapsed_inline_edits(edits)) do
+    local len = #edit.val
+    if edit.tag == "insert" then
+      if active then
+        active.col2 = col + len
+      else
+        active = { col1 = col, col2 = col + len }
+      end
+      col = col + len
+    elseif edit.tag == "equal" then
+      if active and not bridgeable_equal_text(edit.val) then
+        ranges[#ranges + 1] = active
+        active = nil
+      end
+      col = col + len
+    end
+    -- Deletes consume no columns in the target text and therefore neither
+    -- split nor advance its highlight range.
+  end
+  if active then ranges[#ranges + 1] = active end
+  return ranges
+end
+
+local function inline_change(from, to)
+  local edits = diff.inline_diff(from or "", to or "")
+  return edits, inline_ranges_for_target(edits)
 end
 
 function DiffModel:hunk_at(side, line)
@@ -113,17 +166,21 @@ function M.compute(a_lines, b_lines, opts)
         b_to_a[bi] = ai
       end
       if edit.a then
+        local changes, inline_ranges = inline_change(edit.b, edit.a)
         a_changes[#a_changes + 1] = {
           tag = edit.tag,
-          changes = diff.inline_diff(edit.b or "", edit.a),
+          changes = changes,
+          inline_ranges = inline_ranges,
         }
         ai = ai + 1
         a_offset = 0
       end
       if edit.b then
+        local changes, inline_ranges = inline_change(edit.a, edit.b)
         b_changes[#b_changes + 1] = {
           tag = edit.tag,
-          changes = diff.inline_diff(edit.a or "", edit.b),
+          changes = changes,
+          inline_ranges = inline_ranges,
         }
         bi = bi + 1
         b_offset = 0

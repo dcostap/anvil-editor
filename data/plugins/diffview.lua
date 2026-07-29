@@ -104,7 +104,6 @@ local is_fold_widget_line
 ---@field a_gaps table<integer,table<integer,integer>>
 ---@field b_gaps table<integer,table<integer,integer>>
 ---@field compare_type plugins.diffview.view.type
----@field hovered_sync? plugins.diffview.view.hovered_sync
 ---@overload fun(a:string,b:string,ct?:plugins.diffview.view.type,names?:plugins.diffview.view.string_names):plugins.diffview.view
 local DiffView = View:extend()
 local MutableDiffRequestChain
@@ -117,12 +116,6 @@ DiffView.type = {
   FILE_FILE = 3,
   STRING_STRING = 4
 }
-
----Represents the active sync indicator.
----@class plugins.diffview.view.hovered_sync
----@field is_a boolean
----@field line integer
----@field target_line integer
 
 ---Names used when a or b are not files.
 ---@class plugins.diffview.view.string_names
@@ -366,12 +359,14 @@ function DiffView:new(a, b, compare_type, names)
   self.__hide_right_pane_on_focus = true
   DiffView.super.new(self)
 
-  self.scrollable = true
+  -- Scrolling belongs to the two synchronized Diff Sides. A third scrollbar
+  -- on this container only duplicated the right-side scrollbar and left a
+  -- conspicuously wide dead strip at the outer edge.
+  self.scrollable = false
   local request, request_err = validate_request(type(a) == "table" and a.contents and a or legacy_request(a, b, compare_type, names))
   if not request then error(request_err, 2) end
   self.request = request
   self.compare_type = self.request.compare_type or compare_type or DiffView.type.STRING_STRING
-  self.hovered_sync = nil
   self.skip_update_diff = false
   self.diff_generation = 0
   self.disposed = false
@@ -385,6 +380,10 @@ function DiffView:new(a, b, compare_type, names)
 
   self.doc_view_a = DocView(doc_a)
   self.doc_view_b = DocView(doc_b)
+  -- IntelliJ-style Diff Views put both line-number lanes in the center so the
+  -- compared text starts at the outer edges instead of wasting two gutters.
+  self.doc_view_a.show_line_numbers = false
+  self.doc_view_b.show_line_numbers = false
   self.side_editable = {
     a = content_editable(self.request, self.request.contents[1]),
     b = content_editable(self.request, self.request.contents[2]),
@@ -408,8 +407,6 @@ function DiffView:new(a, b, compare_type, names)
   self:install_view_integrations()
   self:update_diff()
 
-  self.v_scrollbar.contracted_size = style.expanded_scrollbar_size * 2
-  self.v_scrollbar.expanded_size = style.expanded_scrollbar_size * 2
 end
 
 function DiffView:get_focus_view()
@@ -496,127 +493,7 @@ function DiffView:update_diff()
   diff_updater_idx = diff_updater_idx + 1
 end
 
-function DiffView:sync(line, target_line, is_a)
-  local changes = is_a and self.a_changes or self.b_changes
-  local target_changes = is_a and self.b_changes or self.a_changes
-  local target_gaps = is_a and self.b_gaps or self.a_gaps
-
-  ---@type core.docview
-  local from = is_a and self.doc_view_a or self.doc_view_b
-  ---@type core.docview
-  local to = is_a and self.doc_view_b or self.doc_view_a
-  if to.can_edit and not to:can_edit("diff sync", { warn = true }) then return false end
-
-  local l = line
-  local tag = changes[l].tag
-  local text = ""
-  local total = 0
-  while changes[l] and changes[l].tag == tag do
-    total = total + 1
-    changes[l] = {tag = "equal"}
-    text = text .. from.doc.lines[l]
-    l = l + 1
-  end
-  if tag == "modify" then
-    with_docview_selection(to, function()
-      to.doc:set_selection(target_line, 1, target_line+total-1, math.huge)
-      to.doc:replace(function() return text:sub(1, #text-1) end)
-    end)
-    for i=target_line, target_line+total-1 do
-      target_changes[i] = {tag = "equal"}
-    end
-  else
-    with_docview_selection(to, function()
-      if line == 1 and target_line == 1 then
-        to.doc:apply_edits({
-          { line1 = target_line, col1 = 1, line2 = target_line, col2 = 1, text = text },
-        }, { type = "insert", merge_cursors = false })
-        target_line = target_line - 1
-      else
-        to.doc:apply_edits({
-          { line1 = target_line, col1 = math.huge, line2 = target_line, col2 = math.huge, text = "\n" .. text:sub(1, #text - 1) },
-        }, { type = "insert", merge_cursors = false })
-      end
-    end)
-
-    -- update target changes and target gaps
-    local changes_inserts = {}
-
-    for _=1, total do
-      table.insert(changes_inserts, {tag = "equal"})
-    end
-
-    common.splice(target_changes, target_line, 0, changes_inserts)
-
-    local gaps_inserts = {}
-    local gaps = {0, 0}
-
-    if target_gaps[target_line+1] then
-      gaps = {0, target_gaps[target_line+1][2] - total}
-      target_gaps[target_line+1] = {table.unpack(gaps)}
-      for i=target_line+2, #target_gaps do
-        target_gaps[i][2] = target_gaps[i][2] - total
-      end
-    end
-
-    for _=1, total do
-      table.insert(gaps_inserts, {table.unpack(gaps)})
-    end
-
-    common.splice(target_gaps, target_line, 0, gaps_inserts)
-  end
-end
-
-function DiffView:sync_selected()
-  local view, changes, to_view, is_a
-
-  if core.active_view == self.doc_view_a then
-    view = self.doc_view_a
-    to_view = self.doc_view_b
-    changes = self.a_changes
-    is_a = true
-  elseif core.active_view == self.doc_view_b then
-    view = self.doc_view_b
-    to_view = self.doc_view_a
-    changes = self.b_changes
-  end
-
-  if not view then return end
-
-  local line = view.doc:get_selection()
-  local tag = changes[line].tag
-  if tag == "equal" then
-    core.error("No valid change selected")
-    return
-  end
-
-  while changes[line-1] and changes[line-1].tag == tag do
-    line = line - 1
-  end
-
-  view.doc:set_selection(line, 1, line, 1)
-
-  local _, y = view:get_line_screen_position(line, 1)
-  to_view.scroll.to.y =  view.scroll.y
-  to_view.scroll.y =  view.scroll.y
-
-  local target_line = to_view:resolve_screen_position(
-    to_view.position.x + style.padding.x, y
-  )
-
-  self:sync(line, target_line, is_a)
-end
-
 function DiffView:on_mouse_pressed(button, x, y, clicks)
-  if button == "left" and self.hovered_sync then
-    self:sync(
-      self.hovered_sync.line,
-      self.hovered_sync.target_line,
-      self.hovered_sync.is_a
-    )
-    self.hovered_sync = nil
-    return
-  end
   if DiffView.super.on_mouse_pressed(self, button, x, y, clicks) then
     self.scroll.y = self.scroll.to.y
     self.doc_view_a.scroll.to.y = self.scroll.y
@@ -657,51 +534,6 @@ function DiffView:on_mouse_released(...)
   call_docview_method(self.doc_view_b, self.doc_view_b.on_mouse_released, ...)
 end
 
----@param self plugins.diffview.view
-local function check_hovered_sync(self, x, y)
-  local x1 = self.doc_view_a.position.x + self.doc_view_a.size.x
-  local x2 = self.doc_view_b.position.x + style.padding.x / 2
-
-  if x >= x1 and x <= x2 then
-    ---@type integer
-    local line
-    ---@type integer
-    local target_line
-    ---@type diff.changes[]
-    local changes
-    ---@type boolean
-    local is_a = false
-
-    -- hovering side A
-    if x <= x1 + ((x2 - x1) / 2) then
-      line = self.doc_view_a:resolve_screen_position(x1 - style.padding.x, y)
-      target_line = self.doc_view_b:resolve_screen_position(x2 - style.padding.x, y)
-      changes = self.a_changes
-      is_a = true
-
-    -- hovering side B
-    elseif x >= x1 + ((x2 - x1) / 2) + style.padding.x / 2  then
-      line = self.doc_view_b:resolve_screen_position(x2 - style.padding.x, y)
-      target_line = self.doc_view_a:resolve_screen_position(x1 - style.padding.x, y)
-      changes = self.b_changes
-    end
-
-    -- check if hovering valid line and save it
-    if line and changes[line] and changes[line].tag ~= "equal" then
-      if not changes[line-1] or changes[line-1].tag ~= changes[line].tag then
-        self.hovered_sync = {
-          is_a = is_a,
-          line = line,
-          target_line = target_line
-        }
-        return
-      end
-    end
-  end
-
-  self.hovered_sync = nil
-end
-
 function DiffView:on_mouse_moved(...)
   -- ignore config.animate_drag_scroll by setting scroll.y to scroll.to.y
   -- since views would end in different positions, also scrolling two
@@ -735,7 +567,6 @@ function DiffView:on_mouse_moved(...)
     self.doc_view_a.scroll.to.y = self.doc_view_b.scroll.y
     return true
   end
-  check_hovered_sync(self, ...)
 end
 
 function DiffView:on_mouse_left()
@@ -760,8 +591,6 @@ function DiffView:on_mouse_wheel(y, x)
 end
 
 function DiffView:on_scale_change(...)
-  self.v_scrollbar.contracted_size = style.expanded_scrollbar_size  * 2
-  self.v_scrollbar.expanded_size = style.expanded_scrollbar_size * 2
   self.doc_view_a:on_scale_change(...)
   self.doc_view_b:on_scale_change(...)
 end
@@ -818,29 +647,11 @@ local function is_fold_hidden_line(folds, line)
   return fold and line > fold.hidden_start, fold
 end
 
-local function folded_visual_line_count(doc_view, folds, line)
-  return visual_line_count(doc_view, line)
-end
-
-local function effective_row_before_line(doc_view, gaps, folds, line)
-  return visual_rows_before_line(doc_view, line)
-end
-
-local function effective_visual_line_count(doc_view, gaps, folds)
-  return doc_view:get_scrollable_line_count()
-end
-
-local function line_for_effective_row(doc_view, gaps, folds, row)
-  local fallback = #doc_view.doc.lines
-  for line = 1, #doc_view.doc.lines do
-    local count = folded_visual_line_count(doc_view, folds, line)
-    if count > 0 then
-      local start_row = effective_row_before_line(doc_view, gaps, folds, line)
-      if row < start_row + count then return line end
-      fallback = line
-    end
-  end
-  return fallback
+local function line_for_visual_row(doc_view, row)
+  local total = math.max(1, doc_view:get_scrollable_line_count())
+  local visual_row = common.clamp(math.floor(tonumber(row) or 0) + 1, 1, total)
+  local line = doc_view:get_visual_row_line_col(visual_row)
+  return common.clamp(line or 1, 1, #doc_view.doc.lines)
 end
 
 local function install_core_gap_rows_for_docview(doc_view, gaps)
@@ -1213,13 +1024,10 @@ function DiffView:sync_caret_from(doc_view, is_a)
   if self.syncing_diff_caret then return end
   local other = is_a and self.doc_view_b or self.doc_view_a
   if not other then return end
-  local source_gaps = is_a and self.a_gaps or self.b_gaps
-  local target_gaps = is_a and self.b_gaps or self.a_gaps
-  local source_folds = is_a and self.diff_folds_a or self.diff_folds_b
   local target_folds = is_a and self.diff_folds_b or self.diff_folds_a
   local line, col = doc_view.doc:get_selection()
-  local row = effective_row_before_line(doc_view, source_gaps, source_folds, line)
-  local target_line = line_for_effective_row(other, target_gaps, target_folds, row)
+  local row = visual_rows_before_line(doc_view, line)
+  local target_line = line_for_visual_row(other, row)
   local target_col = math.max(1, math.min(col or 1, #(other.doc.lines[target_line] or "")))
   target_line, target_col = clamp_position_out_of_fold(other, target_folds, other.doc:get_selection(), target_line, target_col)
   self.syncing_diff_caret = true
@@ -1228,8 +1036,8 @@ function DiffView:sync_caret_from(doc_view, is_a)
 end
 
 function DiffView:get_scrollable_size()
-  local a_count = effective_visual_line_count(self.doc_view_a, self.a_gaps, self.diff_folds_a)
-  local b_count = effective_visual_line_count(self.doc_view_b, self.b_gaps, self.diff_folds_b)
+  local a_count = self.doc_view_a:get_scrollable_line_count()
+  local b_count = self.doc_view_b:get_scrollable_line_count()
   local lc = math.max(a_count, b_count)
   if not config.scroll_past_end then
     local _, _, _, h_scroll = self.h_scrollbar:get_track_rect()
@@ -1245,8 +1053,15 @@ local function diff_color(tag, background)
 end
 
 local function gap_marker_color(tag)
-  if tag == "delete" then return style.git_change_deletion or diff_color(tag) end
-  return diff_color(tag)
+  if tag == "delete" then return style.diff_marker_delete or diff_color(tag) end
+  if tag == "insert" then return style.diff_marker_insert or diff_color(tag) end
+  return style.diff_marker_modify or diff_color(tag)
+end
+
+local function overview_marker_color(tag)
+  if tag == "delete" then return style.diff_overview_delete or style.diff_delete end
+  if tag == "insert" then return style.diff_overview_insert or style.diff_insert end
+  if tag == "modify" then return style.diff_overview_modify or style.diff_modify end
 end
 
 local function alpha_color(color, alpha)
@@ -1330,10 +1145,22 @@ local function change_blocks(changes, tags)
   return blocks
 end
 
-local function line_range_y(doc_view, folds, start_line, end_line)
+local function cached_change_blocks(view, side, kind, tags)
+  local changes = side == "a" and view.a_changes or view.b_changes
+  local cache = view.__change_blocks_cache
+  if not cache or cache.a_source ~= view.a_changes or cache.b_source ~= view.b_changes then
+    cache = { a_source = view.a_changes, b_source = view.b_changes }
+    view.__change_blocks_cache = cache
+  end
+  local key = side .. ":" .. kind
+  if not cache[key] then cache[key] = change_blocks(changes, tags) end
+  return cache[key]
+end
+
+local function line_range_y(doc_view, start_line, end_line)
   local _, start_y = doc_view:get_line_screen_position(start_line, 1)
   local _, end_y = doc_view:get_line_screen_position(end_line, 1)
-  end_y = end_y + folded_visual_line_count(doc_view, folds, end_line) * doc_view:get_line_height()
+  end_y = end_y + visual_line_count(doc_view, end_line) * doc_view:get_line_height()
   return start_y, end_y
 end
 
@@ -1383,7 +1210,7 @@ local function diff_decoration_provider(parent, is_a)
         if config.plugins.diffview.plain_text then color = alpha_color(color, 128) end
         return color
       elseif change.tag == "modify" then
-        local color = is_a and style.diff_delete_background or style.diff_insert_background
+        local color = style.diff_modify_background
         if config.plugins.diffview.plain_text then color = alpha_color(color, 128) end
         return color
       end
@@ -1391,18 +1218,12 @@ local function diff_decoration_provider(parent, is_a)
     inline_ranges = function(_, view, line)
       local changes = is_a and parent.a_changes or parent.b_changes
       local change = changes[line]
-      if not change or change.tag ~= "modify" or not change.changes then return nil end
+      if not change or change.tag ~= "modify" or not change.inline_ranges then return nil end
       local ranges = {}
-      local deletes = 0
       local color = is_a and style.diff_delete_inline or style.diff_insert_inline
       if config.plugins.diffview.plain_text then color = is_a and style.diff_delete or style.diff_insert end
-      for i, edit in ipairs(change.changes) do
-        if edit.tag == "insert" then
-          local col1 = i - deletes
-          ranges[#ranges + 1] = { col1 = col1, col2 = col1 + #edit.val, color = color }
-        elseif edit.tag == "delete" then
-          deletes = deletes + 1
-        end
+      for _, range in ipairs(change.inline_ranges) do
+        ranges[#ranges + 1] = { col1 = range.col1, col2 = range.col2, color = color }
       end
       return ranges
     end,
@@ -1520,31 +1341,58 @@ local function redraw_thumb(view_scrollbar)
   view_scrollbar:draw_thumb()
 end
 
-function DiffView:draw_divider_sync_actions()
-  local left = self.doc_view_a
-  local right = self.doc_view_b
-  local x1 = left.position.x + left.size.x
-  local x2 = right.position.x
-  if x2 <= x1 then return end
-  local pad = style.padding.x / 2
-  local function draw_action(is_a, line, y)
-    local icon = is_a and ">" or "<"
-    local ax = is_a and (x1 + pad) or (x2 - pad)
-    local color = style.text
-    if self.hovered_sync and self.hovered_sync.is_a == is_a and self.hovered_sync.line == line then
-      color = style.caret
+function DiffView:get_divider_width()
+  local connector_min_width = 36 * SCALE
+  if config.show_line_numbers == false then return connector_min_width end
+  local number_width = math.max(
+    self.doc_view_a:get_line_number_gutter_width(),
+    self.doc_view_b:get_line_number_gutter_width()
+  )
+  return math.max(connector_min_width, (number_width + style.padding.x * 1.5) * 2)
+end
+
+local function line_number_color(doc, line)
+  for _, line1, _, line2 in doc:get_selections(true) do
+    if line1 > line then break end
+    if line >= line1 and line <= line2 then return style.line_number2 end
+  end
+  return style.line_number
+end
+
+local function draw_divider_side_line_numbers(doc_view, folds, x, width)
+  if config.show_line_numbers == false or width <= 0 then return end
+  local minline, maxline = doc_view:get_visible_line_range()
+  local font = doc_view:get_font()
+  local line_height = doc_view:get_line_height()
+  local fold_index = 1
+  local fold = folds and folds[fold_index]
+  local line = minline
+  while line <= maxline do
+    while fold and line > fold.hidden_end do
+      fold_index = fold_index + 1
+      fold = folds[fold_index]
     end
-    local ay = y + (left:get_line_height() / 2) - (style.icon_font:get_height() / 2)
-    renderer.draw_text(style.icon_font, icon, ax, ay, color)
+    if fold and line >= fold.hidden_start and line <= fold.hidden_end then
+      local _, y = doc_view:get_line_screen_position(fold.hidden_start)
+      if y + line_height >= doc_view.position.y and y <= doc_view.position.y + doc_view.size.y then
+        common.draw_text(font, style.line_number, "…", "right", x, y, width - style.padding.x, line_height)
+      end
+      line = fold.hidden_end + 1
+    else
+      local _, y = doc_view:get_line_screen_position(line)
+      if y + line_height >= doc_view.position.y and y <= doc_view.position.y + doc_view.size.y then
+        common.draw_text(font, line_number_color(doc_view.doc, line), line, "right", x, y, width - style.padding.x, line_height)
+      end
+      line = line + 1
+    end
   end
-  for _, block in ipairs(change_blocks(self.a_changes)) do
-    local _, y = left:get_line_screen_position(block.start_line, 1)
-    draw_action(true, block.start_line, y)
-  end
-  for _, block in ipairs(change_blocks(self.b_changes)) do
-    local _, y = right:get_line_screen_position(block.start_line, 1)
-    draw_action(false, block.start_line, y)
-  end
+end
+
+function DiffView:draw_divider_line_numbers(x1, x2)
+  if config.show_line_numbers == false then return end
+  local center = x1 + (x2 - x1) / 2
+  draw_divider_side_line_numbers(self.doc_view_a, self.diff_folds_a, x1, center - x1)
+  draw_divider_side_line_numbers(self.doc_view_b, self.diff_folds_b, center, x2 - center)
 end
 
 function DiffView:draw_divider_changes()
@@ -1556,124 +1404,98 @@ function DiffView:draw_divider_changes()
 
   core.push_clip_rect(self.position.x, self.position.y, self.size.x, self.size.y)
 
-  local connector_alpha = 95
+  renderer.draw_rect(x1, self.position.y, x2 - x1, self.size.y, style.background2)
+
   local function draw_connector(tag, left_start_y, left_end_y, right_start_y, right_end_y)
     draw_curved_trapezium(
       x1, x2,
       left_start_y, left_end_y,
       right_start_y, right_end_y,
-      alpha_color(diff_color(tag, true), connector_alpha)
+      diff_color(tag, true)
     )
   end
 
-  for _, block in ipairs(change_blocks(self.a_changes, { delete = true, modify = true })) do
-    local a_start_y, a_end_y = line_range_y(left, self.diff_folds_a, block.start_line, block.end_line)
+  for _, block in ipairs(cached_change_blocks(self, "a", "connectors", { delete = true, modify = true })) do
+    local a_start_y, a_end_y = line_range_y(left, block.start_line, block.end_line)
     if block.tag == "delete" then
       draw_connector(block.tag, a_start_y, a_end_y, a_start_y, a_start_y)
       draw_gap_marker(right, a_start_y, gap_marker_color(block.tag))
     else
-      local start_row = effective_row_before_line(left, self.a_gaps, self.diff_folds_a, block.start_line)
-      local end_row = effective_row_before_line(left, self.a_gaps, self.diff_folds_a, block.end_line)
-      local b_start_line = line_for_effective_row(right, self.b_gaps, self.diff_folds_b, start_row)
-      local b_end_line = line_for_effective_row(right, self.b_gaps, self.diff_folds_b, end_row)
-      local b_start_y, b_end_y = line_range_y(right, self.diff_folds_b, b_start_line, b_end_line)
+      local start_row = visual_rows_before_line(left, block.start_line)
+      local end_row = visual_rows_before_line(left, block.end_line)
+      local b_start_line = line_for_visual_row(right, start_row)
+      local b_end_line = line_for_visual_row(right, end_row)
+      local b_start_y, b_end_y = line_range_y(right, b_start_line, b_end_line)
       draw_connector(block.tag, a_start_y, a_end_y, b_start_y, b_end_y)
     end
   end
 
-  for _, block in ipairs(change_blocks(self.b_changes, { insert = true })) do
-    local b_start_y, b_end_y = line_range_y(right, self.diff_folds_b, block.start_line, block.end_line)
+  for _, block in ipairs(cached_change_blocks(self, "b", "inserts", { insert = true })) do
+    local b_start_y, b_end_y = line_range_y(right, block.start_line, block.end_line)
     draw_connector(block.tag, b_start_y, b_start_y, b_start_y, b_end_y)
-    draw_gap_marker(left, b_start_y, diff_color(block.tag))
+    draw_gap_marker(left, b_start_y, gap_marker_color(block.tag))
   end
 
-  self:draw_divider_sync_actions()
+  self:draw_divider_line_numbers(x1, x2)
+
+  local divider_width = math.max(1, style.divider_size or SCALE)
+  local center = x1 + (x2 - x1) / 2
+  renderer.draw_rect(center - divider_width / 2, self.position.y, divider_width, self.size.y, style.divider)
   core.pop_clip_rect()
 end
 
 function DiffView:draw_scrollbar()
-  DiffView.super.draw_scrollbar(self)
-
   for _, side in ipairs {
-    {view = self.doc_view_a, changes = self.a_changes, gaps = self.a_gaps, folds = self.diff_folds_a},
-    {view = self.doc_view_b, changes = self.b_changes, gaps = self.b_gaps, folds = self.diff_folds_b},
+    {view = self.doc_view_a, blocks = cached_change_blocks(self, "a", "overview")},
+    {view = self.doc_view_b, blocks = cached_change_blocks(self, "b", "overview")},
   } do
     local view = side.view
-    local changes = side.changes
     local scrollbar = view.v_scrollbar
 
     local lh = view:get_line_height()
     local full_h = view:get_scrollable_size()
-    local visible_h = view.size.y
     local x, y, w, h = scrollbar:get_track_rect()
 
-    local scroll_range = math.max(1, full_h - visible_h)
+    local overview_range = math.max(1, full_h)
 
-    -- Step 1: group consecutive lines of same change tag
-    local change_lines = {}
-    for line, change in pairs(changes) do
-      change_lines[#change_lines+1] = { line = line, tag = change.tag }
-    end
-    table.sort(change_lines, function(a, b) return a.line < b.line end)
-
-    local i = 1
-    while i <= #change_lines do
-      local tag = change_lines[i].tag
-      local start_line = change_lines[i].line
-      local end_line = start_line
-
-      -- Group consecutive lines with same tag
-      while i + 1 <= #change_lines and
-            change_lines[i+1].tag == tag and
-            change_lines[i+1].line == end_line + 1 do
-        i = i + 1
-        end_line = change_lines[i].line
-      end
-
-      -- Draw block for [start_line, end_line]
-      local color =
-        tag == "insert" and style.diff_insert
-        or tag == "delete" and style.diff_delete
-        or tag == "modify" and style.diff_modify
+    for _, block in ipairs(side.blocks) do
+      local color = overview_marker_color(block.tag)
 
       if color then
-        local start_row = visual_rows_before_line(view, start_line)
-        local end_row = visual_rows_before_line(view, end_line)
-          + folded_visual_line_count(view, side.folds, end_line)
+        local start_row = visual_rows_before_line(view, block.start_line)
+        local end_row = visual_rows_before_line(view, block.end_line)
+          + visual_line_count(view, block.end_line)
         local scroll_y_start = start_row * lh
         local scroll_y_end = end_row * lh
-        local ratio_start = scroll_y_start / scroll_range
-        local ratio_end = scroll_y_end / scroll_range
+        local ratio_start = common.clamp(scroll_y_start / overview_range, 0, 1)
+        local ratio_end = common.clamp(scroll_y_end / overview_range, ratio_start, 1)
         local marker_y = y + ratio_start * h
-        local marker_h = math.max(2, (ratio_end - ratio_start) * h) * SCALE
+        local marker_h = math.max(2 * SCALE, (ratio_end - ratio_start) * h)
+        local marker_w = math.max(2 * SCALE, math.min(w, 5 * SCALE))
+        local marker_x = x + w - marker_w
 
-        renderer.draw_rect(x, marker_y, w, marker_h, color)
+        renderer.draw_rect(marker_x, marker_y, marker_w, marker_h, color)
 
-        local sx, _, sw = self.v_scrollbar:get_track_rect()
-        renderer.draw_rect(sx, marker_y, sw, marker_h, color)
       end
-
-      i = i + 1
     end
   end
 
   redraw_thumb(self.doc_view_a.v_scrollbar)
   redraw_thumb(self.doc_view_b.v_scrollbar)
-  redraw_thumb(self.v_scrollbar)
 end
 
 function DiffView:update()
   DiffView.super.update(self)
-  local _, _, scroll_w, _ = self.v_scrollbar:_get_track_rect_normal()
+  local divider_half = self:get_divider_width() / 2
 
   self.doc_view_a.position.x = self.position.x
   self.doc_view_a.position.y = self.position.y
-  self.doc_view_a.size.x = (self.size.x / 2) - scroll_w - 20 * SCALE
+  self.doc_view_a.size.x = math.max(0, (self.size.x / 2) - divider_half)
   self.doc_view_a.size.y = self.size.y
 
-  self.doc_view_b.position.x = (self.position.x + self.size.x / 2) - scroll_w + 20 * SCALE
+  self.doc_view_b.position.x = (self.position.x + self.size.x / 2) + divider_half
   self.doc_view_b.position.y = self.position.y
-  self.doc_view_b.size.x = (self.size.x / 2) - scroll_w - 20 * SCALE
+  self.doc_view_b.size.x = math.max(0, (self.size.x / 2) - divider_half)
   self.doc_view_b.size.y = self.size.y
 
   call_docview_method(self.doc_view_a, self.doc_view_a.update)
@@ -1838,7 +1660,7 @@ local function navigate_diff_change(dv, direction)
   end)
 end
 
--- Register changes navigation and sync commands
+-- Register change navigation commands.
 command.add(
   function()
     return core.active_view
@@ -1852,10 +1674,6 @@ command.add(
 
   ["diff-view:next-change"] = function(dv)
     return navigate_diff_change(dv, 1)
-  end,
-
-  ["diff-view:sync-change"] = function(dv)
-    dv.diff_view_parent:sync_selected()
   end
 })
 
@@ -1873,7 +1691,6 @@ end, {
 keymap.add({
   ["ctrl+alt+,"] = "poi:previous",
   ["ctrl+alt+."] = "poi:next",
-  ["ctrl+return"] = "diff-view:sync-change",
   ["ctrl+r"] = "diff-view:toggle-folding",
 })
 
