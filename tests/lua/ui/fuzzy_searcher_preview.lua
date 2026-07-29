@@ -2,6 +2,7 @@ local core = require "core"
 local command = require "core.command"
 local common = require "core.common"
 local config = require "core.config"
+local keymap = require "core.keymap"
 local style = require "core.style"
 local test = require "core.test"
 
@@ -63,6 +64,35 @@ local function range_x(view, line, col1, col2)
   return math.min(x1, x2), math.max(x1, x2)
 end
 
+local function press_command_binding(name)
+  local bindings = keymap.get_bindings(name)
+  test.ok(bindings and bindings[1], "expected command to have an input binding: " .. name)
+
+  local modifiers = {
+    ctrl = true, shift = true, alt = true, altgr = true,
+    super = true, cmd = true, option = true,
+  }
+  local previous = {}
+  for modifier in pairs(modifiers) do
+    previous[modifier] = keymap.modkeys[modifier]
+    keymap.modkeys[modifier] = false
+  end
+
+  local key
+  for part in bindings[1]:gmatch("[^+]+") do
+    if modifiers[part] then
+      keymap.modkeys[part] = true
+    else
+      key = part
+    end
+  end
+
+  local ok, result = pcall(keymap.on_key_pressed, assert(key, "expected a bound non-modifier key"))
+  for modifier in pairs(modifiers) do keymap.modkeys[modifier] = previous[modifier] end
+  if not ok then error(result, 0) end
+  return result
+end
+
 test.describe("Fuzzy Searcher preview", function()
   test.before_each(function(context)
     context.linewrapping_enable_by_default = config.plugins.linewrapping.enable_by_default
@@ -70,6 +100,12 @@ test.describe("Fuzzy Searcher preview", function()
 
   test.after_each(function(context)
     config.plugins.linewrapping.enable_by_default = context.linewrapping_enable_by_default
+    if context.open_project_in_same_window then
+      core.open_project_in_same_window = context.open_project_in_same_window
+    end
+    if context.open_project_in_new_window then
+      core.open_project_in_new_window = context.open_project_in_new_window
+    end
     if core.fuzzy_searcher_active_view then
       core.fuzzy_searcher_active_view:close()
     end
@@ -173,6 +209,36 @@ test.describe("Fuzzy Searcher preview", function()
     test.ok(view and view.doc and view.doc.abs_filename == path, "expected side-accepted file to become active")
     test.equal(panes.pane_for_view(view), "right")
     test.ok(file_context.is_editor_view(view), "expected accepted file to be focused as a Right Pane Editor")
+  end)
+
+  test.it("routes Point of Interest Activation through modal picker input", function(context)
+    local project = temp_file_path("fuzzy-project-activation-test")
+    local opened
+    context.open_project_in_same_window = core.open_project_in_same_window
+    core.open_project_in_same_window = function(path) opened = path end
+
+    fuzzy_searcher.open_static_results("Projects", {
+      { kind = "project", label = project, project = project },
+    })
+
+    test.ok(press_command_binding("poi:activate"), "expected activation input to be handled")
+    test.equal(opened, project)
+    test.is_nil(core.fuzzy_searcher_active_view, "expected activation to close the picker")
+  end)
+
+  test.it("routes alternate Point of Interest Activation through modal picker input", function(context)
+    local project = temp_file_path("fuzzy-project-alternate-activation-test")
+    local opened
+    context.open_project_in_new_window = core.open_project_in_new_window
+    core.open_project_in_new_window = function(path) opened = path end
+
+    fuzzy_searcher.open_static_results("Projects", {
+      { kind = "project", label = project, project = project },
+    })
+
+    test.ok(press_command_binding("poi:activate-right"), "expected alternate activation input to be handled")
+    test.equal(opened, project)
+    test.is_nil(core.fuzzy_searcher_active_view, "expected activation to close the picker")
   end)
 
   test.it("moves to the leftmost fuzzy chunk without selecting separated chunks", function(context)

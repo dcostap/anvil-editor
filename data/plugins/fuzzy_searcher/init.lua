@@ -194,8 +194,11 @@ local function ensure_input_focus(picker, reason)
   if reason then fuzzy_focus_log(reason, picker) end
 end
 
-local function modal_fuzzy_command_allowed(cmd)
-  return type(cmd) == "string" and cmd:match("^fuzzy%-searcher:") ~= nil
+local function modal_picker_command_allowed(cmd)
+  if type(cmd) ~= "string" then return false end
+  return cmd:match("^fuzzy%-searcher:") ~= nil
+      or cmd == "poi:activate"
+      or cmd == "poi:activate-right"
 end
 
 local function modal_textbox_command_allowed(cmd)
@@ -220,12 +223,12 @@ local function modal_command(stroke, predicate)
   end
 end
 
-local function modal_fuzzy_command(stroke, picker)
+local function modal_picker_command(stroke, picker)
   -- Ctrl+Enter is also claimed by local IntelliJ conflict disabling. Keep the
   -- picker modal command authoritative even when the global keymap was later
   -- overwritten.
   if stroke == "ctrl+return" then return "fuzzy-searcher:confirm-side" end
-  local cmd = modal_command(stroke, modal_fuzzy_command_allowed)
+  local cmd = modal_command(stroke, modal_picker_command_allowed)
   if cmd == "fuzzy-searcher:copy-selected" then
     local textview = picker and picker.input and picker.input.textview
     local state = textview and textview:get_selection_state()
@@ -5312,12 +5315,12 @@ keymap.on_key_pressed = function(key, ...)
   if key:match("^wheel") and scale_mouse_wheel_modkeys_pressed() then
     return keymap.__fuzzy_searcher_original_on_key_pressed(key, ...)
   end
-  local fuzzy_cmd = modal_fuzzy_command(stroke, picker)
-  local textbox_cmd = not fuzzy_cmd and modal_textbox_command(stroke)
-  if fuzzy_cmd then
+  local picker_cmd = modal_picker_command(stroke, picker)
+  local textbox_cmd = not picker_cmd and modal_textbox_command(stroke)
+  if picker_cmd then
     ensure_input_focus(picker)
-    fuzzy_focus_log("key-fuzzy-command", picker, "key=" .. tostring(key) .. " stroke=" .. tostring(stroke) .. " cmd=" .. tostring(fuzzy_cmd))
-    command.perform(fuzzy_cmd, ...)
+    fuzzy_focus_log("key-picker-command", picker, "key=" .. tostring(key) .. " stroke=" .. tostring(stroke) .. " cmd=" .. tostring(picker_cmd))
+    command.perform(picker_cmd, ...)
   elseif textbox_cmd and (not picker.static_mode or textbox_cmd == "doc:copy") then
     ensure_input_focus(picker)
     fuzzy_focus_log("key-textbox-command", picker, "key=" .. tostring(key) .. " stroke=" .. tostring(stroke) .. " cmd=" .. tostring(textbox_cmd))
