@@ -97,13 +97,28 @@ local function draw_column_guides(dv)
 end
 
 local old_draw_current_line_highlights = DocView.draw_current_line_highlights
+
+local function perf_scope_begin(name)
+  if not core.perf_draw_scope_active then return nil end
+  local perf = package.loaded["core.perf"]
+  return perf and perf.scope_begin and perf.scope_begin(name) or nil
+end
+
+local function perf_scope_end(token)
+  if not token then return end
+  local perf = package.loaded["core.perf"]
+  if perf and perf.scope_end then perf.scope_end(token) end
+end
+
 function DocView:draw_current_line_highlights(...)
+  local scope = perf_scope_begin("column_guides")
   old_draw_current_line_highlights(self, ...)
 
   -- Draw one uninterrupted viewport-height guide before line bodies are drawn.
   -- This keeps the guide visible past EOF and below text, selections, search
   -- matches, hints, and carets while remaining above current-line highlights.
   draw_column_guides(self)
+  perf_scope_end(scope)
 end
 
 command.add_toggle("column-guides:toggle", {

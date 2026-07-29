@@ -78,9 +78,24 @@ function DocView:update()
 end
 
 local docview_draw_caret = DocView.draw_caret
+
+local function perf_scope_begin(name)
+  if not core.perf_draw_scope_active then return nil end
+  local perf = package.loaded["core.perf"]
+  return perf and perf.scope_begin and perf.scope_begin(name) or nil
+end
+
+local function perf_scope_end(token)
+  if not token then return end
+  local perf = package.loaded["core.perf"]
+  if perf and perf.scope_end then perf.scope_end(token) end
+end
+
 function DocView:draw_caret(x, y, line, col, caret_idx_arg, color)
+  local scope = perf_scope_begin("smooth_caret")
   if not smoothcaret.enabled then
     docview_draw_caret(self, x, y, line, col, caret_idx_arg, color)
+    perf_scope_end(scope)
     return
   end
 
@@ -90,4 +105,5 @@ function DocView:draw_caret(x, y, line, col, caret_idx_arg, color)
   docview_draw_caret(self, c.current.x - self.scroll.x, c.current.y - self.scroll.y, line, col, caret_idx_arg, color)
 
   self.smoothcaret_draw_caret_idx = idx + 1
+  perf_scope_end(scope)
 end

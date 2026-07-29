@@ -91,7 +91,21 @@ local function get_ruler(v)
 end
 
 local draw_overlay = DocView.draw_overlay
+
+local function perf_scope_begin(name)
+  if not core.perf_draw_scope_active then return nil end
+  local perf = package.loaded["core.perf"]
+  return perf and perf.scope_begin and perf.scope_begin(name) or nil
+end
+
+local function perf_scope_end(token)
+  if not token then return end
+  local perf = package.loaded["core.perf"]
+  if perf and perf.scope_end then perf.scope_end(token) end
+end
+
 function DocView:draw_overlay(...)
+  local scope = perf_scope_begin("line_guides")
   if
     type(config.plugins.lineguide) == "table"
     and
@@ -121,6 +135,7 @@ function DocView:draw_overlay(...)
   end
   -- everything else like the cursor above the line guides
   draw_overlay(self, ...)
+  perf_scope_end(scope)
 end
 
 command.add_toggle("lineguide:toggle", {

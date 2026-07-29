@@ -46,9 +46,24 @@ end
 
 local draw_line_body = DocView.draw_line_body
 
+local function perf_scope_begin(name)
+  if not core.perf_draw_scope_active then return nil end
+  local perf = package.loaded["core.perf"]
+  return perf and perf.scope_begin and perf.scope_begin(name) or nil
+end
+
+local function perf_scope_end(token)
+  if not token then return end
+  local perf = package.loaded["core.perf"]
+  if perf and perf.scope_end then perf.scope_end(token) end
+end
+
 function DocView:draw_line_body(line, x, y)
+  local scope = perf_scope_begin("selection_highlight")
   if self.doc.intellij_find_active then
-    return draw_line_body(self, line, x, y)
+    local result = draw_line_body(self, line, x, y)
+    perf_scope_end(scope)
+    return result
   end
 
   local line1, col1, line2, col2 = self.doc:get_selection(true)
@@ -81,5 +96,7 @@ function DocView:draw_line_body(line, x, y)
     end
   end
   ::return_value::
-  return draw_line_body(self, line, x, y)
+  local result = draw_line_body(self, line, x, y)
+  perf_scope_end(scope)
+  return result
 end

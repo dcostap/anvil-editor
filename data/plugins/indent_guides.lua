@@ -14,6 +14,18 @@ local indent_guides = {
 
 local indent_cache_by_doc = setmetatable({}, { __mode = "k" })
 
+local function perf_scope_begin(name)
+  if not core.perf_draw_scope_active then return nil end
+  local perf = package.loaded["core.perf"]
+  return perf and perf.scope_begin and perf.scope_begin(name) or nil
+end
+
+local function perf_scope_end(token)
+  if not token then return end
+  local perf = package.loaded["core.perf"]
+  if perf and perf.scope_end then perf.scope_end(token) end
+end
+
 local function markdown_live_mode(view)
   local live_render = package.loaded["core.markdown.live_render"]
   return live_render and live_render.is_live_mode
@@ -157,6 +169,7 @@ end
 
 local old_draw_line_body = DocView.draw_line_body
 function DocView:draw_line_body(line, x, y)
+  local scope = perf_scope_begin("indent_guides")
   local line_height = old_draw_line_body(self, line, x, y)
 
   local conf = indent_guides
@@ -202,5 +215,6 @@ function DocView:draw_line_body(line, x, y)
     end
   end
 
+  perf_scope_end(scope)
   return line_height
 end

@@ -33,6 +33,7 @@ local function remove_recording_files(frames_path, summary_path)
   os.remove(base .. "_lua_samples.csv")
   os.remove(base .. "_api_calls.csv")
   os.remove(base .. "_details.csv")
+  os.remove(base .. "_draw_scopes.csv")
 end
 
 test.describe("Markdown performance diagnostics", function()

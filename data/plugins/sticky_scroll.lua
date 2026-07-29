@@ -8,6 +8,18 @@ local linewrapping = require "core.linewrapping"
 
 local SS = {}
 
+local function perf_scope_begin(name)
+  if not core.perf_draw_scope_active then return nil end
+  local perf = package.loaded["core.perf"]
+  return perf and perf.scope_begin and perf.scope_begin(name) or nil
+end
+
+local function perf_scope_end(token)
+  if not token then return end
+  local perf = package.loaded["core.perf"]
+  if perf and perf.scope_end then perf.scope_end(token) end
+end
+
 local function get_doc_line_text(doc, line)
   if doc.get_utf8_line then return doc:get_utf8_line(line) end
   return doc.lines[line] or ""
@@ -375,8 +387,12 @@ end
 
 local old_dv_draw_overlay = DocView.draw_overlay
 function DocView:draw_overlay(...)
+  local scope = perf_scope_begin("sticky_scroll_overlay")
   local res = old_dv_draw_overlay(self, ...)
-  if not SS.should_run(self) then return res end
+  if not SS.should_run(self) then
+    perf_scope_end(scope)
+    return res
+  end
 
   local minline, _ = get_visible_line_range(self)
 
@@ -428,6 +444,7 @@ function DocView:draw_overlay(...)
   -- Restore clip rect
   core.clip_rect_stack[clip_index] = old_clip_rect
   renderer.set_clip_rect(table.unpack(old_clip_rect))
+  perf_scope_end(scope)
   return res
 end
 

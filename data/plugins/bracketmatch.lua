@@ -224,11 +224,24 @@ end
 
 local draw_line_text = DocView.draw_line_text
 
+local function perf_scope_begin(name)
+  if not core.perf_draw_scope_active then return nil end
+  local perf = package.loaded["core.perf"]
+  return perf and perf.scope_begin and perf.scope_begin(name) or nil
+end
+
+local function perf_scope_end(token)
+  if not token then return end
+  local perf = package.loaded["core.perf"]
+  if perf and perf.scope_end then perf.scope_end(token) end
+end
+
 --- @param line integer
 --- @param x number
 --- @param y number
 --- @return number
 function DocView:draw_line_text(line, x, y)
+  local scope = perf_scope_begin("bracket_match")
   local lh = draw_line_text(self, line, x, y)
   local width = 1
   if self.doc == state.doc and state.line2 then
@@ -249,6 +262,7 @@ function DocView:draw_line_text(line, x, y)
       draw_decoration(self, x, y, line, state.col2, width)
     end
   end
+  perf_scope_end(scope)
   return lh
 end
 

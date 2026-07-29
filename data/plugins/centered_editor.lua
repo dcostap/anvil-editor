@@ -27,6 +27,18 @@ local function perf_detail(key, amount)
   end
 end
 
+local function perf_scope_begin(name)
+  if not core.perf_draw_scope_active then return nil end
+  local perf = package.loaded["core.perf"]
+  return perf and perf.scope_begin and perf.scope_begin(name) or nil
+end
+
+local function perf_scope_end(token)
+  if not token then return end
+  local perf = package.loaded["core.perf"]
+  if perf and perf.scope_end then perf.scope_end(token) end
+end
+
 local pack = table.pack or function(...)
   return { n = select("#", ...), ... }
 end
@@ -327,13 +339,17 @@ function DocView:draw(...)
     return originals.docview.draw(self, ...)
   end
 
+  local scope = perf_scope_begin("centered_editor")
+
   -- Paint the whole tab background first; the existing draw chain then uses
   -- centered geometry for the document origin while preserving the full
   -- drawable width unless line wrapping is active.
   self:draw_background(style.background)
-  return M.with_editor_geometry(self, function(...)
+  local result = M.with_editor_geometry(self, function(...)
     return originals.docview.draw(self, ...)
   end, ...)
+  perf_scope_end(scope)
+  return result
 end
 
 save_docview_method("on_mouse_moved")

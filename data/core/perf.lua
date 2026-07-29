@@ -7,6 +7,8 @@ local record = nil
 local renderer_originals = {}
 local system_originals = {}
 local sample_interval = 10000
+local draw_scope_frame = nil
+local pending_draw_scope_frame = nil
 
 local function csv_escape(value)
   value = tostring(value or "")
@@ -55,6 +57,147 @@ function perf.frame_add(key, amount)
   if not stats or not key then return end
   stats[key] = (stats[key] or 0) + (amount or 1)
   perf.add_detail(key, amount or 1)
+end
+
+local function finish_scope_token(token, now)
+  local frame = draw_scope_frame
+  if not frame or not token or token.finished then return end
+  token.finished = true
+  local elapsed_ms = math.max(0, (now - token.started) * 1000)
+  local exclusive_ms = math.max(0, elapsed_ms - token.child_ms)
+  local heap_delta_kb = token.lua_heap_start_kb
+    and (collectgarbage("count") - token.lua_heap_start_kb) or 0
+  local row = frame.paths[token.path]
+  if not row then
+    row = {
+      path = token.path, calls = 0, inclusive_ms = 0, exclusive_ms = 0,
+      lua_heap_delta_kb = 0, lua_heap_drop_calls = 0,
+    }
+    frame.paths[token.path] = row
+  end
+  row.calls = row.calls + 1
+  row.inclusive_ms = row.inclusive_ms + elapsed_ms
+  row.exclusive_ms = row.exclusive_ms + exclusive_ms
+  row.lua_heap_delta_kb = row.lua_heap_delta_kb + heap_delta_kb
+  if token.lua_heap_start_kb and heap_delta_kb < 0 then
+    row.lua_heap_drop_calls = row.lua_heap_drop_calls + 1
+  end
+  if token.parent then token.parent.child_ms = token.parent.child_ms + elapsed_ms end
+end
+
+---Start hierarchical draw-scope collection for one redraw frame.
+function perf.begin_draw_frame()
+  if not recording then
+    core.perf_draw_scope_active = false
+    return
+  end
+  core.perf_draw_scope_active = true
+  draw_scope_frame = {
+    started = system.get_time(),
+    stack = {},
+    paths = {},
+    imbalance = 0,
+    lua_heap_start_kb = collectgarbage("count"),
+  }
+end
+
+---Begin one named draw scope. Scopes must be ended in stack order.
+---@param name string
+---@param capture_heap? boolean
+---@return table? token
+function perf.scope_begin(name, capture_heap)
+  local frame = draw_scope_frame
+  if not frame then return nil end
+  local stack = frame.stack
+  local parent = stack[#stack]
+  local clean_name = tostring(name or "unnamed"):gsub("[/\r\n]", "_")
+  local lua_heap_start_kb = capture_heap and collectgarbage("count") or nil
+  local token = {
+    path = parent and (parent.path .. "/" .. clean_name) or clean_name,
+    parent = parent,
+    started = system.get_time(),
+    child_ms = 0,
+    lua_heap_start_kb = lua_heap_start_kb,
+  }
+  stack[#stack + 1] = token
+  return token
+end
+
+---End a draw scope returned by scope_begin().
+---@param token table?
+function perf.scope_end(token)
+  local frame = draw_scope_frame
+  if not frame or not token or token.finished then return end
+  local stack = frame.stack
+  local now = system.get_time()
+  if stack[#stack] ~= token then
+    frame.imbalance = frame.imbalance + 1
+    local found
+    for i = #stack, 1, -1 do
+      if stack[i] == token then found = i break end
+    end
+    if not found then return end
+    for i = #stack, found, -1 do
+      local open = table.remove(stack)
+      finish_scope_token(open, now)
+    end
+    return
+  end
+  table.remove(stack)
+  finish_scope_token(token, now)
+end
+
+---Add an already-timed leaf child to an open scope without allocating one
+---scope token per hot-loop operation.
+---@param parent table?
+---@param name string
+---@param elapsed_ms number
+---@param calls? integer
+function perf.scope_add_child(parent, name, elapsed_ms, calls)
+  local frame = draw_scope_frame
+  calls = calls or 1
+  elapsed_ms = math.max(0, tonumber(elapsed_ms) or 0)
+  if not frame or not parent or parent.finished or calls <= 0 then return end
+  local clean_name = tostring(name or "unnamed"):gsub("[/\r\n]", "_")
+  local path = parent.path .. "/" .. clean_name
+  local row = frame.paths[path]
+  if not row then
+    row = {
+      path = path, calls = 0, inclusive_ms = 0, exclusive_ms = 0,
+      lua_heap_delta_kb = 0, lua_heap_drop_calls = 0,
+    }
+    frame.paths[path] = row
+  end
+  row.calls = row.calls + calls
+  row.inclusive_ms = row.inclusive_ms + elapsed_ms
+  row.exclusive_ms = row.exclusive_ms + elapsed_ms
+  parent.child_ms = parent.child_ms + elapsed_ms
+end
+
+---Finish collection for the current redraw. perf.on_frame() publishes it.
+function perf.finish_draw_frame()
+  local frame = draw_scope_frame
+  if not frame then
+    core.perf_draw_scope_active = false
+    return
+  end
+  local now = system.get_time()
+  while #frame.stack > 0 do
+    frame.imbalance = frame.imbalance + 1
+    finish_scope_token(table.remove(frame.stack), now)
+  end
+  if frame.imbalance > 0 then
+    core.log_quiet(
+      "Performance draw scopes: auto-closed an imbalanced scope stack (%d)",
+      frame.imbalance
+    )
+  end
+  frame.elapsed_ms = math.max(0, (now - frame.started) * 1000)
+  frame.lua_heap_end_kb = collectgarbage("count")
+  frame.lua_heap_delta_kb = frame.lua_heap_end_kb - frame.lua_heap_start_kb
+  pending_draw_scope_frame = frame
+  draw_scope_frame = nil
+  core.perf_draw_scope_active = false
 end
 
 function perf.record_linewrap_compute(row)
@@ -461,8 +604,68 @@ local function aggregate_renderer_details(renderer_stats)
   end
 end
 
+local function sorted_scope_rows(paths)
+  local rows = {}
+  for _, row in pairs(paths or {}) do rows[#rows + 1] = row end
+  table.sort(rows, function(a, b) return a.path < b.path end)
+  return rows
+end
+
+local function publish_draw_scope_frame(snapshot)
+  local frame = pending_draw_scope_frame
+  pending_draw_scope_frame = nil
+  if not frame or not record or not snapshot.did_redraw then return end
+  record.scope_frame_count = record.scope_frame_count + 1
+  frame.index = record.scope_frame_count
+  frame.time = snapshot.time or system.get_time()
+  frame.draw_emit_ms = snapshot.draw_emit_ms or frame.elapsed_ms or 0
+  local rows = sorted_scope_rows(frame.paths)
+  for _, row in ipairs(rows) do
+    record.scope_file:write(table.concat({
+      tostring(frame.index),
+      string.format("%.6f", frame.time),
+      string.format("%.3f", frame.draw_emit_ms),
+      csv_escape(row.path),
+      tostring(row.calls),
+      string.format("%.3f", row.inclusive_ms),
+      string.format("%.3f", row.exclusive_ms),
+      string.format("%.3f", row.lua_heap_delta_kb or 0),
+      tostring(row.lua_heap_drop_calls or 0),
+      string.format("%.3f", frame.lua_heap_delta_kb or 0),
+      tostring(frame.imbalance or 0),
+    }, ",") .. "\n")
+
+    local aggregate = record.scope_aggregates[row.path]
+    if not aggregate then
+      aggregate = {
+        path = row.path, frames = 0, calls = 0,
+        inclusive_ms = 0, exclusive_ms = 0,
+        max_inclusive_ms = 0, max_exclusive_ms = 0,
+        lua_heap_delta_kb = 0, lua_heap_drop_calls = 0,
+      }
+      record.scope_aggregates[row.path] = aggregate
+    end
+    aggregate.frames = aggregate.frames + 1
+    aggregate.calls = aggregate.calls + row.calls
+    aggregate.inclusive_ms = aggregate.inclusive_ms + row.inclusive_ms
+    aggregate.exclusive_ms = aggregate.exclusive_ms + row.exclusive_ms
+    aggregate.max_inclusive_ms = math.max(aggregate.max_inclusive_ms, row.inclusive_ms)
+    aggregate.max_exclusive_ms = math.max(aggregate.max_exclusive_ms, row.exclusive_ms)
+    aggregate.lua_heap_delta_kb = aggregate.lua_heap_delta_kb + (row.lua_heap_delta_kb or 0)
+    aggregate.lua_heap_drop_calls = aggregate.lua_heap_drop_calls + (row.lua_heap_drop_calls or 0)
+  end
+
+  if frame.draw_emit_ms > 10 then
+    local slow = record.slow_scope_frames
+    slow[#slow + 1] = frame
+    table.sort(slow, function(a, b) return a.draw_emit_ms > b.draw_emit_ms end)
+    while #slow > 30 do table.remove(slow) end
+  end
+end
+
 function perf.on_frame(snapshot)
   if not recording or not record or not snapshot then return end
+  publish_draw_scope_frame(snapshot)
   local now = snapshot.time or system.get_time()
   local renderer_stats = snapshot.did_redraw and renderer.get_last_frame_stats and renderer.get_last_frame_stats() or {}
   record.iteration_count = record.iteration_count + 1
@@ -845,6 +1048,10 @@ local function write_summary(path)
   local elapsed = record.stop_time - record.start_time
   file:write("Anvil performance recording\n")
   file:write(string.format("Elapsed: %.3fs\n", elapsed))
+  file:write(string.format(
+    "Draw scope capture: frames=%d csv=%s\n",
+    record.scope_frame_count or 0, record.scope_path or ""
+  ))
   local context = record.context or {}
   file:write(string.format(
     "Context: view=%s document=%s path=%s lines=%d bytes=%d\n",
@@ -1108,6 +1315,49 @@ local function write_summary(path)
   drill_metric("node tab animation ms", "node_tab_animation_ms", update_denom, "update")
   file:write("\n")
 
+  file:write("Draw scope aggregates (exclusive time identifies work owned by the scope itself):\n")
+  file:write("Heap deltas are inclusive; heap_drop_calls counts captured scopes ending below their starting heap and is collection evidence, not a complete GC-cycle count.\n")
+  file:write("calls,frames,total_inclusive_ms,total_exclusive_ms,avg_inclusive_ms,avg_exclusive_ms,max_inclusive_ms,max_exclusive_ms,lua_heap_delta_kb,lua_heap_drop_calls,path\n")
+  local scope_aggregates = {}
+  for _, row in pairs(record.scope_aggregates or {}) do scope_aggregates[#scope_aggregates + 1] = row end
+  table.sort(scope_aggregates, function(a, b)
+    if a.exclusive_ms == b.exclusive_ms then return a.path < b.path end
+    return a.exclusive_ms > b.exclusive_ms
+  end)
+  for _, row in ipairs(scope_aggregates) do
+    file:write(string.format(
+      "%d,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%s\n",
+      row.calls, row.frames, row.inclusive_ms, row.exclusive_ms,
+      row.frames > 0 and row.inclusive_ms / row.frames or 0,
+      row.frames > 0 and row.exclusive_ms / row.frames or 0,
+      row.max_inclusive_ms, row.max_exclusive_ms,
+      row.lua_heap_delta_kb or 0, row.lua_heap_drop_calls or 0,
+      csv_escape(row.path)
+    ))
+  end
+  if #scope_aggregates == 0 then file:write("  (none recorded)\n") end
+  file:write("\n")
+
+  file:write("Slow draw scope frames (draw_emit_ms > 10; lexical paths preserve the scope tree):\n")
+  for _, frame in ipairs(record.slow_scope_frames or {}) do
+    file:write(string.format(
+      "Frame %d time=%.6f draw_emit_ms=%.3f lua_heap_delta_kb=%.3f scope_imbalance=%d\n",
+      frame.index or 0, frame.time or 0, frame.draw_emit_ms or 0,
+      frame.lua_heap_delta_kb or 0, frame.imbalance or 0
+    ))
+    for _, row in ipairs(sorted_scope_rows(frame.paths)) do
+      local _, depth = row.path:gsub("/", "")
+      file:write(string.format(
+        "%s%s calls=%d inclusive_ms=%.3f exclusive_ms=%.3f heap_delta_kb=%.3f heap_drop_calls=%d\n",
+        string.rep("  ", depth + 1), row.path, row.calls,
+        row.inclusive_ms, row.exclusive_ms,
+        row.lua_heap_delta_kb or 0, row.lua_heap_drop_calls or 0
+      ))
+    end
+  end
+  if #(record.slow_scope_frames or {}) == 0 then file:write("  (none recorded)\n") end
+  file:write("\n")
+
   file:write("Slow Markdown model publication callbacks (top by elapsed_ms):\n")
   file:write("time,elapsed_ms,path,bytes,lines,generation,revision,incremental,changed_line1,changed_line2,native_parse_ms,native_total_ms,summary_ms,previous_close_ms,state_ms,notify_ms,listener_count,slowest_listener_ms,slowest_listener_id\n")
   for _, row in ipairs(record.markdown_model_publication_rows or {}) do
@@ -1201,7 +1451,10 @@ function perf.start_recording()
   local base = output_dir() .. PATHSEP .. timestamp_name()
   local frames_path = base .. "_frames.csv"
   local file = assert(io.open(frames_path, "wb"))
+  local scope_path = base .. "_draw_scopes.csv"
+  local scope_file = assert(io.open(scope_path, "wb"))
   write_frame_header(file)
+  scope_file:write("frame,time,draw_emit_ms,path,calls,inclusive_ms,exclusive_ms,scope_heap_delta_kb,scope_heap_drop_calls,frame_heap_delta_kb,scope_imbalance\n")
   record = {
     base = base,
     frames_path = frames_path,
@@ -1209,7 +1462,9 @@ function perf.start_recording()
     samples_path = base .. "_lua_samples.csv",
     api_path = base .. "_api_calls.csv",
     detail_path = base .. "_details.csv",
+    scope_path = scope_path,
     file = file,
+    scope_file = scope_file,
     start_time = system.get_time(),
     stop_time = nil,
     iteration_count = 0,
@@ -1235,7 +1490,13 @@ function perf.start_recording()
     sample_count = 0,
     api_calls = {},
     detail_counts = {},
+    scope_frame_count = 0,
+    scope_aggregates = {},
+    slow_scope_frames = {},
   }
+  draw_scope_frame = nil
+  pending_draw_scope_frame = nil
+  core.perf_draw_scope_active = false
   recording = true
   wrap_renderer_api("draw_text")
   wrap_renderer_api("draw_text_known_bounds")
@@ -1257,6 +1518,7 @@ function perf.stop_recording()
   unwrap_system_api()
   record.stop_time = system.get_time()
   record.file:close()
+  record.scope_file:close()
   write_counts_csv(record.samples_path, "samples,source", sorted_counts(record.lua_samples))
   write_counts_csv(record.api_path, "calls,api_source", sorted_counts(record.api_calls))
   write_counts_csv(record.detail_path, "value,metric", sorted_counts(record.detail_counts))
@@ -1264,6 +1526,9 @@ function perf.stop_recording()
   local summary_path = record.summary_path
   recording = false
   record = nil
+  draw_scope_frame = nil
+  pending_draw_scope_frame = nil
+  core.perf_draw_scope_active = false
   system.set_clipboard(summary_path)
   core.log("Performance recording saved: %s", summary_path)
   return summary_path

@@ -2433,7 +2433,17 @@ function core.step(next_frame_time, options)
   core.docview_frame_stats = core.perf_frame_stats
   core.render_frame_id = (core.render_frame_id or 0) + 1
   core.render_frame_active = true
+  local draw_perf = package.loaded["core.perf"]
+  local root_draw_scope
+  if draw_perf and draw_perf.is_recording and draw_perf.is_recording() then
+    draw_perf.begin_draw_frame()
+    root_draw_scope = draw_perf.scope_begin("root_panel_draw", true)
+  end
   core.root_panel:draw()
+  if root_draw_scope then
+    draw_perf.scope_end(root_draw_scope)
+    draw_perf.finish_draw_frame()
+  end
   core.render_frame_active = false
   step_stats.draw_emit_ms = (system.get_time() - draw_emit_start_time) * 1000
   local renderer_end_start_time = system.get_time()

@@ -207,6 +207,18 @@ local function perf_elapsed(key, start_time)
   if start_time then perf_frame_add(key, (system.get_time() - start_time) * 1000) end
 end
 
+local function perf_scope_begin(name, capture_heap)
+  if not core.perf_draw_scope_active then return nil end
+  local perf = package.loaded["core.perf"]
+  return perf and perf.scope_begin and perf.scope_begin(name, capture_heap) or nil
+end
+
+local function perf_scope_end(token)
+  if not token then return end
+  local perf = package.loaded["core.perf"]
+  if perf and perf.scope_end then perf.scope_end(token) end
+end
+
 local monospace_font_cache = setmetatable({}, { __mode = "k" })
 
 local function font_looks_monospace(font)
@@ -5917,9 +5929,12 @@ function DocView:draw_line_text(line, x, y)
     return lh
   end
   if self.wrapped_settings then
+    local wrapped_text_scope = perf_scope_begin("wrapped_text", true)
     local perf_active = core.perf_frame_stats ~= nil
     local perf_start = perf_active and system.get_time()
     local perf_segments, perf_bytes, perf_known_bounds_segments = 0, 0, 0
+    local substring_ms, enqueue_known_ms, enqueue_measured_ms = 0, 0, 0
+    local substring_calls, enqueue_known_calls, enqueue_measured_calls = 0, 0, 0
     local default_font = self:get_font()
     local default_font_height = default_font:get_height()
     local default_ascii_cell_width = default_font:get_width(" ")
@@ -5943,14 +5958,26 @@ function DocView:draw_line_text(line, x, y)
       and not has_ligature_sensitive_ascii(text) then
         perf_known_bounds_segments = perf_known_bounds_segments + 1
         local width = #text * default_ascii_cell_width
-        return draw_text_known_advance(
+        local enqueue_start = perf_active and system.get_time()
+        local result = draw_text_known_advance(
           font, text, sx, sy,
           width,
           default_font_height,
           color
         )
+        if enqueue_start then
+          enqueue_known_ms = enqueue_known_ms + (system.get_time() - enqueue_start) * 1000
+          enqueue_known_calls = enqueue_known_calls + 1
+        end
+        return result
       end
-      return renderer.draw_text(font, text, sx, sy, color)
+      local enqueue_start = perf_active and system.get_time()
+      local result = renderer.draw_text(font, text, sx, sy, color)
+      if enqueue_start then
+        enqueue_measured_ms = enqueue_measured_ms + (system.get_time() - enqueue_start) * 1000
+        enqueue_measured_calls = enqueue_measured_calls + 1
+      end
+      return result
     end
 
     local row_idx = visible_idx1
@@ -5972,6 +5999,7 @@ function DocView:draw_line_text(line, x, y)
       return true
     end
 
+    local token_loop_scope = perf_scope_begin("token_and_wrap_loop")
     for _, type, text in self.doc.highlighter:each_token(line) do
       if row_idx > visible_idx2 then break end
       local token_end_col = token_start_col + #text
@@ -5984,7 +6012,12 @@ function DocView:draw_line_text(line, x, y)
         else
           local draw_start_col = math.max(token_start_col, row_start_col)
           local draw_end_col = math.min(token_end_col, row_end_col)
+          local substring_start = perf_active and system.get_time()
           local rendered_text = text:sub(draw_start_col - token_start_col + 1, draw_end_col - token_start_col)
+          if substring_start then
+            substring_ms = substring_ms + (system.get_time() - substring_start) * 1000
+            substring_calls = substring_calls + 1
+          end
           tx = draw_segment(font, rendered_text, tx, ty, color, syntax_font == nil)
           if token_end_col >= row_end_col then
             if not advance_row() then break end
@@ -5995,12 +6028,20 @@ function DocView:draw_line_text(line, x, y)
       end
       token_start_col = token_end_col
     end
+    local scope_perf = token_loop_scope and package.loaded["core.perf"]
+    if scope_perf and scope_perf.scope_add_child then
+      scope_perf.scope_add_child(token_loop_scope, "substring", substring_ms, substring_calls)
+      scope_perf.scope_add_child(token_loop_scope, "enqueue_known_bounds", enqueue_known_ms, enqueue_known_calls)
+      scope_perf.scope_add_child(token_loop_scope, "enqueue_measured", enqueue_measured_ms, enqueue_measured_calls)
+    end
+    perf_scope_end(token_loop_scope)
     perf_frame_add("linewrapping_draw_line_text_calls", 1)
     perf_frame_add("linewrapping_draw_line_text_rows", drawn_rows)
     perf_frame_add("linewrapping_draw_line_text_segments", perf_segments)
     perf_frame_add("linewrapping_draw_line_text_bytes", perf_bytes)
     perf_frame_add("linewrapping_draw_line_text_known_bounds_segments", perf_known_bounds_segments)
     perf_elapsed("linewrapping_draw_line_text_ms", perf_start)
+    perf_scope_end(wrapped_text_scope)
     return lh * count
   end
 
@@ -6743,6 +6784,8 @@ function DocView:draw_line_body(line, x, y)
   end
 
   if self.wrapped_settings then
+    local wrapped_body_scope = perf_scope_begin("wrapped_line_body")
+    local body_phase_scope = perf_scope_begin("geometry")
     local lh = self:get_line_height()
     local idx0, _, count = linewrapping.get_line_idx_col_count(self, line)
     local first_row, last_row = 1, count
@@ -6773,8 +6816,12 @@ function DocView:draw_line_body(line, x, y)
         for row = 1, count do
           height = height + self:get_visual_row_height(idx0 + row - 1)
         end
+        perf_scope_end(body_phase_scope)
+        perf_scope_end(wrapped_body_scope)
         return height
       end
+      perf_scope_end(body_phase_scope)
+      perf_scope_end(wrapped_body_scope)
       return lh * count
     end
     local visible_idx1 = idx0 + first_row - 1
@@ -6783,6 +6830,8 @@ function DocView:draw_line_body(line, x, y)
     local old_visible_idx2 = self.__wrapped_draw_last_idx
     self.__wrapped_draw_first_idx = visible_idx1
     self.__wrapped_draw_last_idx = visible_idx2
+    perf_scope_end(body_phase_scope)
+    body_phase_scope = perf_scope_begin("backgrounds_and_selections")
     draw_decoration_line_backgrounds(self, line, x, y)
     local highlight_rows
     local hcl = config.highlight_current_line
@@ -6851,9 +6900,13 @@ function DocView:draw_line_body(line, x, y)
       )
     end
     draw_decoration_inline_ranges(self, line, x, y)
+    perf_scope_end(body_phase_scope)
 
+    body_phase_scope = perf_scope_begin("text")
     local line_height = self:draw_line_text(line, x, y)
+    perf_scope_end(body_phase_scope)
 
+    body_phase_scope = perf_scope_begin("post_text_overlays")
     for _, match in ipairs(search_matches or {}) do
       draw_wrapped_search_match(
         self, line, match[1], match[2], x, y, idx0,
@@ -6872,6 +6925,8 @@ function DocView:draw_line_body(line, x, y)
 
     self.__wrapped_draw_first_idx = old_visible_idx1
     self.__wrapped_draw_last_idx = old_visible_idx2
+    perf_scope_end(body_phase_scope)
+    perf_scope_end(wrapped_body_scope)
     return line_height
   end
 
@@ -7046,11 +7101,15 @@ function DocView:draw_overlay()
 end
 
 function DocView:draw_overlay_unwrapped()
+  local scope = perf_scope_begin("core_overlay")
   local stats = core.docview_frame_stats
   local overlay_start = stats and system.get_time()
   local minline, maxline = self:get_visible_line_range()
   local is_active = core.active_view == self
-  if not is_active or not self:active_window_has_focus() then return end
+  if not is_active or not self:active_window_has_focus() then
+    perf_scope_end(scope)
+    return
+  end
 
   -- draw caret if it overlaps this line
   local T = config.blink_period
@@ -7084,10 +7143,12 @@ function DocView:draw_overlay_unwrapped()
     end
   end
   if stats then stats.overlay_ms = stats.overlay_ms + (system.get_time() - overlay_start) * 1000 end
+  perf_scope_end(scope)
 end
 
 
 function DocView:draw_folded()
+  local draw_scope = perf_scope_begin("draw_folded")
   self:draw_background(style.background)
   local _, indent_size = self.doc:get_indent_info()
   self:get_font():set_tab_size(indent_size)
@@ -7141,14 +7202,23 @@ function DocView:draw_folded()
   self.__visible_caret_cache = nil
 
   self:draw_scrollbar()
+  perf_scope_end(draw_scope)
 end
 
 function DocView:draw_wrapped()
-  if self:has_composed_visual_rows() then return self:draw_folded() end
+  local draw_scope = perf_scope_begin("draw_wrapped", true)
+  if self:has_composed_visual_rows() then
+    local result = self:draw_folded()
+    perf_scope_end(draw_scope)
+    return result
+  end
+  local phase_scope = perf_scope_begin("background")
   self:draw_background(style.background)
   local _, indent_size = self.doc:get_indent_info()
   self:get_font():set_tab_size(indent_size)
+  perf_scope_end(phase_scope)
 
+  phase_scope = perf_scope_begin("visible_geometry")
   local lh = self:get_line_height()
   local _, y1, _, y2 = self:get_content_bounds()
   local total = linewrapping.get_total_wrapped_lines(self)
@@ -7159,7 +7229,11 @@ function DocView:draw_wrapped()
   maxidx = common.clamp(maxidx, 1, total)
   minidx, maxidx = overscan_metric_rows(cache, minidx, maxidx, total)
   if maxidx < minidx then
+    perf_scope_end(phase_scope)
+    phase_scope = perf_scope_begin("scrollbar")
     self:draw_scrollbar()
+    perf_scope_end(phase_scope)
+    perf_scope_end(draw_scope)
     return
   end
 
@@ -7168,11 +7242,15 @@ function DocView:draw_wrapped()
   local gutter_w = gpad and gw - gpad or gw
   local first_line = linewrapping.get_idx_line_col(self, minidx)
   local last_line = linewrapping.get_idx_line_col(self, maxidx)
+  perf_scope_end(phase_scope)
 
+  phase_scope = perf_scope_begin("prepare")
   self:prepare_line_body_draw_cache(first_line, last_line)
   self:draw_current_line_highlights(first_line, last_line)
   self.__current_line_highlights_drawn_before_content = true
+  perf_scope_end(phase_scope)
 
+  phase_scope = perf_scope_begin("gutters")
   for line = first_line, last_line do
     local first_idx = self.wrapped_line_to_idx[line]
     if first_idx then
@@ -7180,7 +7258,9 @@ function DocView:draw_wrapped()
       self:draw_line_gutter(line, self.position.x, y, gutter_w)
     end
   end
+  perf_scope_end(phase_scope)
 
+  phase_scope = perf_scope_begin("line_bodies", true)
   core.push_clip_rect(self.position.x + gw, self.position.y, math.max(0, self.size.x - gw), self.size.y)
   for line = first_line, last_line do
     local first_idx = self.wrapped_line_to_idx[line]
@@ -7189,7 +7269,10 @@ function DocView:draw_wrapped()
       self:draw_line_body(line, x + gw, y)
     end
   end
+  perf_scope_end(phase_scope)
+  phase_scope = perf_scope_begin("overlay")
   self:draw_overlay()
+  perf_scope_end(phase_scope)
   core.pop_clip_rect()
 
   self.__current_line_highlights_drawn_before_content = nil
@@ -7199,12 +7282,15 @@ function DocView:draw_wrapped()
   self.__line_gutter_selection_cache = nil
   self.__visible_caret_cache = nil
 
+  phase_scope = perf_scope_begin("scrollbar")
   self:draw_scrollbar()
+  perf_scope_end(phase_scope)
+  perf_scope_end(draw_scope)
 end
 
 ---Draw the entire document view.
 ---Renders background, gutters, text, selections, carets, and scrollbars.
-function DocView:draw()
+local function draw_docview(self)
   if self.wrapped_settings then
     local document_lines = #self.doc.lines
     local wrapped_last_line = self.wrapped_lines
@@ -7260,7 +7346,6 @@ function DocView:draw()
   local lh = self:get_line_height()
 
   local stats = core.docview_frame_stats
-  local draw_start = stats and system.get_time()
   if stats then stats.visible_lines = stats.visible_lines + math.max(0, maxline - minline + 1) end
   self:prepare_line_body_draw_cache(minline, maxline)
   self:draw_current_line_highlights(minline, maxline)
@@ -7294,7 +7379,17 @@ function DocView:draw()
   self.__line_gutter_selection_cache = nil
 
   self:draw_scrollbar()
-  if stats then stats.draw_ms = stats.draw_ms + (system.get_time() - draw_start) * 1000 end
+end
+
+function DocView:draw()
+  local stats = core.docview_frame_stats
+  if not stats then return draw_docview(self) end
+  local draw_scope = perf_scope_begin("docview_core", true)
+  local draw_start = system.get_time()
+  local result = draw_docview(self)
+  stats.draw_ms = stats.draw_ms + (system.get_time() - draw_start) * 1000
+  perf_scope_end(draw_scope)
+  return result
 end
 
 local function bind_selection_method(name)

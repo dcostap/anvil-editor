@@ -22,6 +22,7 @@ end
 local function draw_hud()
   if core.perf_capture_active then return end
   if not hud.visible and not perf.is_recording() then return end
+  local scope = perf.scope_begin("performance_hud")
 
   local s = core.performance_snapshot or {}
   local font = style.code_font
@@ -71,6 +72,7 @@ local function draw_hud()
     renderer.draw_text(font, line, x + pad, ty, i == 1 and style.performance_hud_text or style.performance_hud_dim)
     ty = ty + line_h
   end
+  perf.scope_end(scope)
 end
 
 local old_root_draw = RootPanel.draw

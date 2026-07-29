@@ -47,6 +47,18 @@ local function perf_elapsed(key, start_time)
   if start_time then perf_frame_add(key, (system.get_time() - start_time) * 1000) end
 end
 
+local function perf_scope_begin(name, capture_heap)
+  if not core.perf_draw_scope_active then return nil end
+  local perf = package.loaded["core.perf"]
+  return perf and perf.scope_begin and perf.scope_begin(name, capture_heap) or nil
+end
+
+local function perf_scope_end(token)
+  if not token then return end
+  local perf = package.loaded["core.perf"]
+  if perf and perf.scope_end then perf.scope_end(token) end
+end
+
 local function new_tab_bar(owner)
   return Tabs(owner, {
     should_show = function(node) return node:should_show_tabs() end,
@@ -761,16 +773,21 @@ end
 function Node:draw()
   if self.type == "leaf" then
     if self:should_show_tabs() then
+      local tabs_scope = perf_scope_begin("tabs")
       self:draw_tabs()
+      perf_scope_end(tabs_scope)
     end
     local view = self.active_view
     local pos, size = view.position, view.size
     if view._core_step_first_update and size.x > 0 and size.y > 0 then
+      local view_scope = perf_scope_begin("active_view:" .. tostring(view), true)
       core.push_clip_rect(pos.x, pos.y, size.x, size.y)
       call_view_method(view, view.draw)
       core.pop_clip_rect()
+      perf_scope_end(view_scope)
     end
   else
+    local divider_scope = perf_scope_begin("divider")
     local x, y, w, h = self:get_divider_rect()
     local color = style.divider
     if core.title_bar and (node_contains_view(self.a, core.title_bar) or node_contains_view(self.b, core.title_bar)) then
@@ -779,6 +796,7 @@ function Node:draw()
       color = style.tab_background
     end
     renderer.draw_rect(x, y, w, h, color)
+    perf_scope_end(divider_scope)
     self:propagate("draw")
   end
 end

@@ -7,6 +7,18 @@ local DocView = require "core.docview"
 local linewrapping = require "core.linewrapping"
 local command = require "core.command"
 
+local function perf_scope_begin(name)
+  if not core.perf_draw_scope_active then return nil end
+  local perf = package.loaded["core.perf"]
+  return perf and perf.scope_begin and perf.scope_begin(name) or nil
+end
+
+local function perf_scope_end(token)
+  if not token then return end
+  local perf = package.loaded["core.perf"]
+  if perf and perf.scope_end then perf.scope_end(token) end
+end
+
 local drawwhitespace = {
   enabled = true,
   show_leading = true,
@@ -685,6 +697,8 @@ function DocView:draw_line_text(idx, x, y)
     return draw_line_text(self, idx, x, y)
   end
 
+  local scope = perf_scope_begin("draw_whitespace")
+
   if not self.drawwhitespace_selections then
     self.drawwhitespace_selections = {}
   end
@@ -754,7 +768,9 @@ function DocView:draw_line_text(idx, x, y)
   end
 
   ::not_selected::
-  return draw_line_text(self, idx, x, y)
+  local result = draw_line_text(self, idx, x, y)
+  perf_scope_end(scope)
+  return result
 end
 
 

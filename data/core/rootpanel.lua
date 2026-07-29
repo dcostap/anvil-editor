@@ -54,6 +54,18 @@ local function perf_elapsed(key, start_time)
   if start_time then perf_frame_add(key, (system.get_time() - start_time) * 1000) end
 end
 
+local function perf_scope_begin(name, capture_heap)
+  if not core.perf_draw_scope_active then return nil end
+  local perf = package.loaded["core.perf"]
+  return perf and perf.scope_begin and perf.scope_begin(name, capture_heap) or nil
+end
+
+local function perf_scope_end(token)
+  if not token then return end
+  local perf = package.loaded["core.perf"]
+  if perf and perf.scope_end then perf.scope_end(token) end
+end
+
 function RootPanel:__tostring() return "RootPanel" end
 
 local function call_view_method(view, method, ...)
@@ -900,21 +912,31 @@ end
 ---Render the entire UI each frame.
 ---Draw order: 1) node tree, 2) deferred draws, 3) drag overlays, 4) cursor update
 function RootPanel:draw()
+  local scope = perf_scope_begin("root_panel_core", true)
+  local phase = perf_scope_begin("node_tree")
   self.root_node:draw()
+  perf_scope_end(phase)
+  phase = perf_scope_begin("deferred_draws")
   while #self.deferred_draws > 0 do
     local t = table.remove(self.deferred_draws)
     t.fn(table.unpack(t))
   end
+  perf_scope_end(phase)
 
+  phase = perf_scope_begin("drag_overlays")
   self:draw_drag_overlay(self.drag_overlay)
   self:draw_drag_overlay(self.drag_overlay_tab)
   if self.dragged_node and self.dragged_node.dragging then
     self:draw_grabbed_tab()
   end
+  perf_scope_end(phase)
+  phase = perf_scope_begin("cursor_update")
   if core.cursor_change_req then
     system.set_cursor(core.cursor_change_req)
     core.cursor_change_req = nil
   end
+  perf_scope_end(phase)
+  perf_scope_end(scope)
 end
 
 return RootPanel

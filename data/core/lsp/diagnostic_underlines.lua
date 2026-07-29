@@ -5,6 +5,18 @@ local diagnostic_markers = require "core.lsp.diagnostic_markers"
 
 local diagnostic_underlines = {}
 
+local function perf_scope_begin(name)
+  if not core.perf_draw_scope_active then return nil end
+  local perf = package.loaded["core.perf"]
+  return perf and perf.scope_begin and perf.scope_begin(name) or nil
+end
+
+local function perf_scope_end(token)
+  if not token then return end
+  local perf = package.loaded["core.perf"]
+  if perf and perf.scope_end then perf.scope_end(token) end
+end
+
 local SQUIGGLE_Y_OFFSET = 2
 
 local cache = setmetatable({}, { __mode = "k" })
@@ -217,11 +229,13 @@ function diagnostic_underlines.install()
   DocView.__lsp_diagnostic_underlines_base_draw_line_body = base_draw_line_body
 
   function DocView:draw_line_body(line, x, y)
+    local scope = perf_scope_begin("diagnostic_underlines")
     local height = base_draw_line_body(self, line, x, y)
     if not self.wrapped_settings then
       local module = DocView.__lsp_diagnostic_underlines_module or diagnostic_underlines
       module.draw_line(self, line, x, y)
     end
+    perf_scope_end(scope)
     return height
   end
 
