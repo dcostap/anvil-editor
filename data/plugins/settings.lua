@@ -574,8 +574,8 @@ settings.add("Editor",
       default = {
         fonts = {
           {
-            name = "JetBrains Mono Regular",
-            path = DATADIR .. "/fonts/JetBrainsMono-Regular.ttf"
+            name = "CaskaydiaCove Nerd Font Mono SemiLight",
+            path = DATADIR .. "/fonts/CaskaydiaCoveNerdFontMono-SemiLight.ttf"
           }
         },
         options = {

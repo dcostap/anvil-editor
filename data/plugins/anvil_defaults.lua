@@ -210,8 +210,8 @@ end
 if core.fuzzy_searcher_install_global_keymaps then
   core.fuzzy_searcher_install_global_keymaps()
 end
--- Matching UI/code fonts with separate objects so UI and code scaling can diverge.
 local font_path = DATADIR .. "/fonts/CaskaydiaCoveNerdFontMono-Regular.ttf"
+local code_font_path = DATADIR .. "/fonts/CaskaydiaCoveNerdFontMono-SemiLight.ttf"
 local markdown_live_font_path = DATADIR .. "/fonts/Inter-Regular.ttf"
 local markdown_live_bold_font_path = DATADIR .. "/fonts/Inter-SemiBold.ttf"
 local markdown_live_italic_font_path = DATADIR .. "/fonts/Inter-Italic.ttf"
@@ -267,7 +267,7 @@ local function load_text_font(primary_path, options, fallback_options)
   return renderer.font.group(fonts)
 end
 style.font = load_text_font(font_path)
-style.code_font = load_text_font(font_path)
+style.code_font = load_text_font(code_font_path)
 -- Live Preview prose uses a proportional face; source mode, fenced/indented
 -- code, inline code, math, and every non-Markdown editor retain code_font.
 style.markdown_live_font = load_text_font(markdown_live_font_path)
