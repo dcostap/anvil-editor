@@ -287,6 +287,8 @@ fuzzy_searcher.files_fuzzy_index_kind = nil
 fuzzy_searcher.files_materialized_cache = nil
 fuzzy_searcher.files_materialized_generation = -1
 fuzzy_searcher.files_last_scan_diagnostics = nil
+fuzzy_searcher.files_scan_reason = nil
+fuzzy_searcher.files_skip_next_picker_refresh = false
 fuzzy_searcher.files_cache_test_override = false
 local command_cache
 local recent_commands = {}
@@ -573,6 +575,7 @@ local function cancel_file_index_scan()
   end
   fuzzy_searcher.files_indexing = false
   fuzzy_searcher.files_refresh_requested = false
+  fuzzy_searcher.files_scan_reason = nil
 end
 
 local function lua_ignore_pattern_to_glob(pattern)
@@ -708,6 +711,8 @@ local function start_file_index(roots, signature, reason)
   end
 
   fuzzy_searcher.files_indexing = true
+  fuzzy_searcher.files_scan_reason = reason or "picker-open"
+  if reason ~= "project-prewarm" then fuzzy_searcher.files_skip_next_picker_refresh = false end
   fuzzy_searcher.files_refresh_requested = false
   fuzzy_searcher.files_scan_generation = fuzzy_searcher.files_scan_generation + 1
   local scan_generation = fuzzy_searcher.files_scan_generation
@@ -817,8 +822,10 @@ local function start_file_index(roots, signature, reason)
     end
 
     local refresh_requested = fuzzy_searcher.files_refresh_requested
+    local completed_reason = fuzzy_searcher.files_scan_reason
     fuzzy_searcher.files_indexing = false
     fuzzy_searcher.files_refresh_requested = false
+    fuzzy_searcher.files_scan_reason = nil
     if scan_failed then
       pcall(native_builder.free, native_builder)
       core.log_quiet("Fuzzy file index retained its previous snapshot after scanning failed")
@@ -849,6 +856,8 @@ local function start_file_index(roots, signature, reason)
           native_feed_ms = native_feed_seconds * 1000,
           native_finish_ms = finish_seconds * 1000,
         }
+        fuzzy_searcher.files_skip_next_picker_refresh = completed_reason == "project-prewarm"
+          and active_view == nil
         if previous_index and previous_index ~= native_index and previous_index.free then
           pcall(previous_index.free, previous_index)
         end
@@ -879,6 +888,7 @@ local function prepare_file_index_roots(roots, signature)
   fuzzy_searcher.files_metadata = {}
   fuzzy_searcher.files_generation = fuzzy_searcher.files_generation + 1
   clear_native_file_index()
+  fuzzy_searcher.files_skip_next_picker_refresh = false
 end
 
 local function ensure_file_index()
@@ -890,9 +900,27 @@ local function ensure_file_index()
   start_file_index(roots, signature, "initial-picker-open")
 end
 
+local function prewarm_file_index()
+  local roots = project_paths.search_roots("files")
+  if #roots == 0 then return false end
+  local signature = fuzzy_searcher.file_roots_signature(roots)
+  prepare_file_index_roots(roots, signature)
+  if native_file_index_ready() or fuzzy_searcher.files_cache or fuzzy_searcher.files_indexing then return false end
+  return start_file_index(roots, signature, "project-prewarm")
+end
+
 function fuzzy_searcher.refresh_file_index_for_picker_open()
+  if fuzzy_searcher.files_skip_next_picker_refresh and native_file_index_ready() then
+    fuzzy_searcher.files_skip_next_picker_refresh = false
+    core.log_quiet("Fuzzy native file index: first picker open is using the prewarmed snapshot")
+    return false
+  end
   if fuzzy_searcher.files_indexing then
-    fuzzy_searcher.files_refresh_requested = true
+    if fuzzy_searcher.files_scan_reason ~= "project-prewarm" then
+      fuzzy_searcher.files_refresh_requested = true
+    else
+      core.log_quiet("Fuzzy native file index: picker joined the in-progress Project prewarm")
+    end
     return
   end
   local roots = project_paths.search_roots("files")
@@ -969,26 +997,6 @@ end
 local function get_recent_files(skip_path)
   local out = {}
   for _, entry in ipairs(fuzzy_searcher.get_recent_file_entries(skip_path)) do out[#out+1] = entry.text end
-  return out
-end
-
-local function get_file_search_items()
-  -- `fd` already returns a unique project-relative file list.  Avoid calling
-  -- fullpath()/normalize_path() for every indexed file on each keystroke; on
-  -- large projects that pre-scan allocation/normalization dominated latency.
-  local files = get_files()
-  local recents = get_recent_files()
-  if #recents == 0 then return files end
-
-  local out, recent_set = {}, {}
-  for _, f in ipairs(recents) do recent_set[f] = true end
-  for _, f in ipairs(files) do
-    out[#out+1] = f
-    recent_set[f] = nil
-  end
-  for _, f in ipairs(recents) do
-    if recent_set[f] then out[#out+1] = f end
-  end
   return out
 end
 
@@ -2524,12 +2532,18 @@ local function build_scope(base, line, max_count)
       text = text,
     }
   end
-  if not line and native_file_index_ready() then
+  if native_file_index_ready() then
     local ok, matches = pcall(function()
-      return fuzzy_searcher.files_fuzzy_index:search(base, { limit = limit, spans = false })
+      return fuzzy_searcher.files_fuzzy_index:search(base, {
+        limit = line and math.max(limit * 10, 1000) or limit,
+        spans = false,
+      })
     end)
     if ok and matches then
-      for _, match in ipairs(matches) do add_match(match, match.score) end
+      for _, match in ipairs(matches) do
+        if not line or line_exists(match, line) then add_match(match, match.score) end
+        if #list >= limit then break end
+      end
       meta.has_more = matches.has_more == true
       meta.count = #list
       if meta.has_more then
@@ -3508,16 +3522,20 @@ function FSView:start_file_search(query, line, reset_selection)
   core.add_thread(function()
     local recent_matches, skip_keys = collect_recent_file_matches(query, line, skip_path)
 
-    if not line and native_file_index_ready() then
+    if native_file_index_ready() then
       local ok, native_results = pcall(function()
-        return fuzzy_searcher.files_fuzzy_index:search(query, { limit = keep_limit + #recent_matches + 32, spans = true })
+        return fuzzy_searcher.files_fuzzy_index:search(query, {
+          limit = line and math.max(keep_limit * 10, 1000)
+            or (keep_limit + #recent_matches + 32),
+          spans = true,
+        })
       end)
       if ok and native_results and gen == file_search_generation and active_view == self then
         local general_matches = {}
         for _, match in ipairs(native_results) do
           local item = adopt_native_file_match(match)
           local key = file_result_key(match)
-          if key and not skip_keys[key] then
+          if key and not skip_keys[key] and (not line or line_exists(match, line)) then
             general_matches[#general_matches+1] = {
               item = match, text = item, score = fuzzy_searcher.adjusted_file_score(match.score or 0, match),
               spans = match.spans or {}
@@ -3743,7 +3761,7 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
   local function add_file_results(query, max_items)
     if max_items <= 0 then self.has_more = true; return end
 
-    if trim_query(query) == "" and not line then
+    if trim_query(query) == "" and not line and not native_file_index_ready() then
       local recent_matches, skip_keys = collect_recent_file_matches(query, line, self.source_file_path)
       local general_matches = {}
       for _, item in ipairs(get_files()) do
@@ -5491,6 +5509,17 @@ keymap.on_key_pressed = function(key, ...)
   return true
 end
 
+local cli = package.loaded["core.cli"]
+if not (cli and cli.last_command == "test") then
+  core.add_thread(function()
+    -- Workspace Project Paths are restored just after plugins load. Let that
+    -- settle, then build the first immutable file snapshot before the picker
+    -- is needed.
+    coroutine.yield(0.5)
+    if core.projects and core.projects[1] then prewarm_file_index() end
+  end)
+end
+
 return {
   open = open,
   open_static_results = open_static_results,
@@ -5533,6 +5562,7 @@ return {
         files = fuzzy_searcher.files_cache,
         count = file_index_count(),
         native = native_project_file_index_ready(),
+        materialized = fuzzy_searcher.files_materialized_generation == fuzzy_searcher.files_generation,
         diagnostics = fuzzy_searcher.files_last_scan_diagnostics,
         generation = fuzzy_searcher.files_generation,
       }
@@ -5540,6 +5570,10 @@ return {
     refresh_file_index_for_test = function()
       fuzzy_searcher.files_cache_test_override = false
       return fuzzy_searcher.refresh_file_index_for_picker_open()
+    end,
+    prewarm_file_index_for_test = function()
+      fuzzy_searcher.files_cache_test_override = false
+      return prewarm_file_index()
     end,
     cancel_file_index_for_test = cancel_file_index_scan,
     build_scope = build_scope,

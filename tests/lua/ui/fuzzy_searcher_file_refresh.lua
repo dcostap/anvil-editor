@@ -70,6 +70,12 @@ test.describe("Fuzzy Searcher file refresh", function()
     test.equal(helpers.file_index_status().native, true,
       "expected filesystem candidates to remain owned by the native file index")
 
+    picker.input:set_text("existing-file:1")
+    test.ok(wait_until(function() return picker_has_path(picker, existing) end),
+      "expected line-qualified file searches to query the native snapshot")
+    test.equal(helpers.file_index_status().materialized, false,
+      "expected line-qualified search not to materialize the entire file list in Lua")
+
     picker.input:set_text("created-externally")
     write_file(created)
 
@@ -182,5 +188,28 @@ test.describe("Fuzzy Searcher file refresh", function()
       coroutine.yield(0.1)
       test.ok(not picker_has_path(picker, path), "expected ignored path to stay out of the native index: " .. path)
     end
+  end)
+
+  test.it("prewarms Project files and avoids a redundant scan on the first picker open", function(context)
+    local existing = context.root .. PATHSEP .. "prewarmed-project-file.md"
+    write_file(existing)
+
+    test.ok(helpers.prewarm_file_index_for_test())
+    test.ok(wait_until(function()
+      local status = helpers.file_index_status()
+      return status.native and not status.indexing
+    end), "expected Project file prewarming to complete")
+
+    local scanner_starts = 0
+    context.original_process_start = process.start
+    process.start = function(...)
+      scanner_starts = scanner_starts + 1
+      return context.original_process_start(...)
+    end
+    fuzzy_searcher.open("prewarmed-project-file")
+    local picker = assert(core.fuzzy_searcher_active_view)
+    test.ok(wait_until(function() return picker_has_path(picker, existing) end))
+    test.equal(scanner_starts, 0,
+      "expected the first picker open to consume the prewarmed snapshot without rescanning")
   end)
 end)
