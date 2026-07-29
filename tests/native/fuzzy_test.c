@@ -4,6 +4,20 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+#define FILE_ROOT_PATH "C:\\project"
+#define FILE_ROOT_RELATIVE "src\\main.cpp"
+#define FILE_VENDOR_RELATIVE "vendor\\lib\\foo.cpp"
+#define FILE_VENDOR_DISPLAY "library\\foo.cpp"
+#define FILE_EXTERNAL_DISPLAY "Java Sources\\java\\String.java"
+#else
+#define FILE_ROOT_PATH "C:/project"
+#define FILE_ROOT_RELATIVE "src/main.cpp"
+#define FILE_VENDOR_RELATIVE "vendor/lib/foo.cpp"
+#define FILE_VENDOR_DISPLAY "library/foo.cpp"
+#define FILE_EXTERNAL_DISPLAY "Java Sources/java/String.java"
+#endif
+
 #define CHECK(cond) do { \
   if (!(cond)) { \
     fprintf(stderr, "CHECK failed at %s:%d: %s\n", __FILE__, __LINE__, #cond); \
@@ -363,6 +377,60 @@ static int test_empty_query_deterministic(void) {
   return 0;
 }
 
+static int test_project_file_index_builder(void) {
+  FuzzyFilePathMappingSpec mappings[] = {
+    { "vendor/lib", "library", "vendored", "vendor-library", 75 },
+  };
+  FuzzyFileRootSpec roots[] = {
+    { "C:/project", "project", "root", "root", 0, mappings, 1 },
+    { "C:/external", "Java Sources", "external", "java", 150, NULL, 0 },
+  };
+  FuzzyFileIndexBuilder *builder = fuzzy_file_index_builder_create(roots, 2);
+  CHECK(builder != NULL);
+  static const char first[] = "./src/main.cpp\0vendor/lib/foo.cpp\0src/main.cpp\0part";
+  static const char second[] = "ial.cpp\0";
+  static const char external[] = "java/String.java\0";
+  CHECK(fuzzy_file_index_builder_feed(builder, 0, first, sizeof(first) - 1));
+  CHECK(fuzzy_file_index_builder_feed(builder, 0, second, sizeof(second) - 1));
+  CHECK(fuzzy_file_index_builder_feed(builder, 1, external, sizeof(external) - 1));
+
+  FuzzyFileIndexStats stats = { 0 };
+  FuzzyFileIndex *index = fuzzy_file_index_builder_finish(builder, &stats);
+  CHECK(index != NULL);
+  CHECK(stats.candidates == 5);
+  CHECK(stats.accepted == 4);
+  CHECK(stats.duplicates == 1);
+  CHECK(fuzzy_file_index_count(index) == 4);
+
+  bool found_root = false, found_vendored = false, found_external = false;
+  for (uint32_t i = 0; i < fuzzy_file_index_count(index); ++i) {
+    FuzzyFileEntryView entry = { 0 };
+    CHECK(fuzzy_file_index_entry_at(index, i, &entry));
+    if (strcmp(entry.display_path, FILE_ROOT_RELATIVE) == 0) {
+      found_root = strcmp(entry.relative_path, FILE_ROOT_RELATIVE) == 0
+        && strcmp(entry.root_path, FILE_ROOT_PATH) == 0
+        && strcmp(entry.role, "root") == 0 && entry.root_index == 0;
+    } else if (strcmp(entry.display_path, FILE_VENDOR_DISPLAY) == 0) {
+      found_vendored = strcmp(entry.relative_path, FILE_VENDOR_RELATIVE) == 0
+        && strcmp(entry.role, "vendored") == 0 && strcmp(entry.root_id, "vendor-library") == 0;
+    } else if (strcmp(entry.display_path, FILE_EXTERNAL_DISPLAY) == 0) {
+      found_external = strcmp(entry.role, "external") == 0 && entry.rank_penalty == 150;
+    }
+  }
+  CHECK(found_root);
+  CHECK(found_vendored);
+  CHECK(found_external);
+
+  uint32_t count = 0;
+  bool has_more = false;
+  FuzzySearchResult *results = fuzzy_file_index_search(index, "String", 10, &count, &has_more);
+  CHECK(results != NULL);
+  CHECK(count == 1);
+  free(results);
+  fuzzy_file_index_free(index);
+  return 0;
+}
+
 int main(void) {
   int rc = 0;
   rc |= test_generic_basic();
@@ -380,5 +448,6 @@ int main(void) {
   rc |= test_spans();
   rc |= test_limit_zero();
   rc |= test_empty_query_deterministic();
+  rc |= test_project_file_index_builder();
   return rc;
 }

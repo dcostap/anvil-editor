@@ -684,3 +684,541 @@ uint32_t fuzzy_match_spans(const FuzzyIndex *idx, uint32_t entry_index, const ch
   return map_match_spans(idx->mode, original, (uint32_t)strlen(original),
     normalized, count, spans, max_spans);
 }
+
+typedef struct {
+  char *relative_prefix;
+  char *label;
+  char *role;
+  char *id;
+  int32_t rank_penalty;
+} FuzzyFilePathMapping;
+
+typedef struct {
+  char *path;
+  char *label;
+  char *role;
+  char *id;
+  int32_t rank_penalty;
+  FuzzyFilePathMapping *mappings;
+  uint32_t mapping_count;
+} FuzzyFileRoot;
+
+typedef struct {
+  char *relative_path;
+  char *display_path;
+  uint32_t root_index;
+  uint32_t mapping_index;
+} FuzzyFileEntry;
+
+struct FuzzyFileIndexBuilder {
+  FuzzyFileRoot *roots;
+  uint32_t root_count;
+  FuzzyFileEntry *entries;
+  uint32_t count;
+  uint32_t capacity;
+  uint32_t *dedup_slots;
+  uint32_t dedup_capacity;
+  char *pending;
+  size_t pending_len;
+  size_t pending_capacity;
+  uint32_t pending_root;
+  bool has_pending_root;
+  bool failed;
+  FuzzyFileIndexStats stats;
+};
+
+struct FuzzyFileIndex {
+  FuzzyFileRoot *roots;
+  uint32_t root_count;
+  FuzzyFileEntry *entries;
+  uint32_t count;
+  FuzzyIndex fuzzy;
+};
+
+#ifdef _WIN32
+#define FUZZY_FILE_PATHSEP '\\'
+#else
+#define FUZZY_FILE_PATHSEP '/'
+#endif
+
+static char *file_strdup(const char *text) {
+  text = text ? text : "";
+  size_t len = strlen(text);
+  char *copy = (char *)malloc(len + 1);
+  if (copy) memcpy(copy, text, len + 1);
+  return copy;
+}
+
+static char file_path_char(char c) {
+  return (c == '/' || c == '\\') ? FUZZY_FILE_PATHSEP : c;
+}
+
+static char file_identity_char(char c) {
+  c = file_path_char(c);
+#ifdef _WIN32
+  c = lower_ascii_char(c);
+#endif
+  return c;
+}
+
+static char *file_normalized_copy(const char *text, bool trim_edges) {
+  char *copy = file_strdup(text);
+  if (!copy) return NULL;
+  size_t len = strlen(copy);
+  for (size_t i = 0; i < len; ++i) copy[i] = file_path_char(copy[i]);
+  if (trim_edges) {
+    size_t start = 0;
+    while (start < len && copy[start] == FUZZY_FILE_PATHSEP) start++;
+    while (len > start && copy[len - 1] == FUZZY_FILE_PATHSEP) len--;
+    if (start) memmove(copy, copy + start, len - start);
+    len -= start;
+    copy[len] = '\0';
+  } else {
+    while (len > 1 && copy[len - 1] == FUZZY_FILE_PATHSEP) copy[--len] = '\0';
+  }
+  return copy;
+}
+
+static void file_mapping_free(FuzzyFilePathMapping *mapping) {
+  if (!mapping) return;
+  free(mapping->relative_prefix);
+  free(mapping->label);
+  free(mapping->role);
+  free(mapping->id);
+  memset(mapping, 0, sizeof(*mapping));
+}
+
+static void file_root_free(FuzzyFileRoot *root) {
+  if (!root) return;
+  free(root->path);
+  free(root->label);
+  free(root->role);
+  free(root->id);
+  for (uint32_t i = 0; i < root->mapping_count; ++i) file_mapping_free(&root->mappings[i]);
+  free(root->mappings);
+  memset(root, 0, sizeof(*root));
+}
+
+static void file_roots_free(FuzzyFileRoot *roots, uint32_t count) {
+  for (uint32_t i = 0; i < count; ++i) file_root_free(&roots[i]);
+  free(roots);
+}
+
+static void file_entries_free(FuzzyFileEntry *entries, uint32_t count) {
+  for (uint32_t i = 0; i < count; ++i) {
+    free(entries[i].relative_path);
+    free(entries[i].display_path);
+  }
+  free(entries);
+}
+
+static bool file_root_copy(FuzzyFileRoot *out, const FuzzyFileRootSpec *spec) {
+  memset(out, 0, sizeof(*out));
+  out->path = file_normalized_copy(spec->path, false);
+  out->label = file_strdup(spec->label);
+  out->role = file_strdup(spec->role);
+  out->id = file_strdup(spec->id);
+  out->rank_penalty = spec->rank_penalty;
+  out->mapping_count = spec->mapping_count;
+  if (!out->path || !out->label || !out->role || !out->id) return false;
+  if (out->mapping_count) {
+    out->mappings = (FuzzyFilePathMapping *)calloc(out->mapping_count, sizeof(*out->mappings));
+    if (!out->mappings) return false;
+  }
+  for (uint32_t i = 0; i < out->mapping_count; ++i) {
+    const FuzzyFilePathMappingSpec *source = &spec->mappings[i];
+    FuzzyFilePathMapping *mapping = &out->mappings[i];
+    mapping->relative_prefix = file_normalized_copy(source->relative_prefix, true);
+    mapping->label = file_strdup(source->label);
+    mapping->role = file_strdup(source->role);
+    mapping->id = file_strdup(source->id);
+    mapping->rank_penalty = source->rank_penalty;
+    if (!mapping->relative_prefix || !mapping->label || !mapping->role || !mapping->id) return false;
+  }
+  return true;
+}
+
+FuzzyFileIndexBuilder *fuzzy_file_index_builder_create(
+  const FuzzyFileRootSpec *roots,
+  uint32_t root_count
+) {
+  if (!roots || root_count == 0) return NULL;
+  FuzzyFileIndexBuilder *builder = (FuzzyFileIndexBuilder *)calloc(1, sizeof(*builder));
+  if (!builder) return NULL;
+  builder->roots = (FuzzyFileRoot *)calloc(root_count, sizeof(*builder->roots));
+  builder->root_count = root_count;
+  if (!builder->roots) {
+    fuzzy_file_index_builder_free(builder);
+    return NULL;
+  }
+  for (uint32_t i = 0; i < root_count; ++i) {
+    if (!file_root_copy(&builder->roots[i], &roots[i])) {
+      fuzzy_file_index_builder_free(builder);
+      return NULL;
+    }
+  }
+  return builder;
+}
+
+void fuzzy_file_index_builder_free(FuzzyFileIndexBuilder *builder) {
+  if (!builder) return;
+  file_roots_free(builder->roots, builder->root_count);
+  file_entries_free(builder->entries, builder->count);
+  free(builder->dedup_slots);
+  free(builder->pending);
+  free(builder);
+}
+
+static uint64_t file_identity_hash(const FuzzyFileRoot *root, const char *relative) {
+  uint64_t hash = UINT64_C(1469598103934665603);
+  const char *parts[] = { root->path, "\\", relative };
+  for (uint32_t p = 0; p < 3; ++p) {
+    for (const char *s = parts[p]; *s; ++s) {
+      hash ^= (unsigned char)file_identity_char(*s);
+      hash *= UINT64_C(1099511628211);
+    }
+  }
+  return hash;
+}
+
+static bool file_identity_equal(
+  const FuzzyFileRoot *left_root,
+  const char *left,
+  const FuzzyFileRoot *right_root,
+  const char *right
+) {
+  const char *left_parts[] = { left_root->path, "\\", left };
+  const char *right_parts[] = { right_root->path, "\\", right };
+  for (uint32_t p = 0; p < 3; ++p) {
+    const char *a = left_parts[p], *b = right_parts[p];
+    while (*a && *b) {
+      if (file_identity_char(*a++) != file_identity_char(*b++)) return false;
+    }
+    if (*a || *b) return false;
+  }
+  return true;
+}
+
+static bool file_dedup_rebuild(FuzzyFileIndexBuilder *builder, uint32_t capacity) {
+  uint32_t *slots = (uint32_t *)calloc(capacity, sizeof(*slots));
+  if (!slots) return false;
+  for (uint32_t i = 0; i < builder->count; ++i) {
+    FuzzyFileEntry *entry = &builder->entries[i];
+    uint64_t hash = file_identity_hash(&builder->roots[entry->root_index], entry->relative_path);
+    uint32_t slot = (uint32_t)hash & (capacity - 1);
+    while (slots[slot]) slot = (slot + 1) & (capacity - 1);
+    slots[slot] = i + 1;
+  }
+  free(builder->dedup_slots);
+  builder->dedup_slots = slots;
+  builder->dedup_capacity = capacity;
+  return true;
+}
+
+static bool file_dedup_ensure(FuzzyFileIndexBuilder *builder) {
+  if (builder->dedup_capacity && (builder->count + 1) * 10 < builder->dedup_capacity * 7) return true;
+  uint32_t capacity = builder->dedup_capacity ? builder->dedup_capacity * 2 : 256;
+  if (capacity < builder->dedup_capacity) return false;
+  return file_dedup_rebuild(builder, capacity);
+}
+
+static bool file_mapping_matches(const char *relative, const char *prefix) {
+  size_t prefix_len = strlen(prefix);
+  if (prefix_len == 0) return true;
+  for (size_t i = 0; i < prefix_len; ++i) {
+    if (!relative[i] || file_identity_char(relative[i]) != file_identity_char(prefix[i])) return false;
+  }
+  return relative[prefix_len] == '\0' || relative[prefix_len] == FUZZY_FILE_PATHSEP;
+}
+
+static uint32_t file_best_mapping(const FuzzyFileRoot *root, const char *relative) {
+  uint32_t best = UINT32_MAX;
+  size_t best_len = 0;
+  for (uint32_t i = 0; i < root->mapping_count; ++i) {
+    const char *prefix = root->mappings[i].relative_prefix;
+    size_t len = strlen(prefix);
+    if (len >= best_len && file_mapping_matches(relative, prefix)) {
+      best = i;
+      best_len = len;
+    }
+  }
+  return best;
+}
+
+static char *file_display_path(
+  const FuzzyFileRoot *root,
+  uint32_t mapping_index,
+  const char *relative
+) {
+  const char *label = root->label;
+  const char *role = root->role;
+  const char *shown_relative = relative;
+  if (mapping_index != UINT32_MAX) {
+    const FuzzyFilePathMapping *mapping = &root->mappings[mapping_index];
+    size_t prefix_len = strlen(mapping->relative_prefix);
+    label = mapping->label;
+    role = mapping->role;
+    shown_relative = relative + prefix_len;
+    if (*shown_relative == FUZZY_FILE_PATHSEP) shown_relative++;
+  }
+  if (strcmp(role, "root") == 0) return file_strdup(shown_relative);
+  size_t label_len = strlen(label), rel_len = strlen(shown_relative);
+  size_t total = label_len + (rel_len ? 1 : 0) + rel_len;
+  char *display = (char *)malloc(total + 1);
+  if (!display) return NULL;
+  memcpy(display, label, label_len);
+  size_t offset = label_len;
+  if (rel_len) display[offset++] = FUZZY_FILE_PATHSEP;
+  memcpy(display + offset, shown_relative, rel_len + 1);
+  return display;
+}
+
+static char *file_candidate_normalize(const char *data, size_t len) {
+  while (len && data[len - 1] == '\r') len--;
+  if (len >= 2 && data[0] == '.' && (data[1] == '/' || data[1] == '\\')) {
+    data += 2;
+    len -= 2;
+  }
+  if (len == 0 || len > UINT32_MAX) return NULL;
+  char *relative = (char *)malloc(len + 1);
+  if (!relative) return NULL;
+  for (size_t i = 0; i < len; ++i) relative[i] = file_path_char(data[i]);
+  relative[len] = '\0';
+  return relative;
+}
+
+static bool file_builder_add_candidate(
+  FuzzyFileIndexBuilder *builder,
+  uint32_t root_index,
+  const char *data,
+  size_t len
+) {
+  builder->stats.candidates++;
+  char *relative = file_candidate_normalize(data, len);
+  if (!relative) return len == 0;
+  if (!file_dedup_ensure(builder)) {
+    free(relative);
+    return false;
+  }
+  FuzzyFileRoot *root = &builder->roots[root_index];
+  uint64_t hash = file_identity_hash(root, relative);
+  uint32_t slot = (uint32_t)hash & (builder->dedup_capacity - 1);
+  while (builder->dedup_slots[slot]) {
+    FuzzyFileEntry *existing = &builder->entries[builder->dedup_slots[slot] - 1];
+    if (file_identity_equal(root, relative,
+      &builder->roots[existing->root_index], existing->relative_path)) {
+      builder->stats.duplicates++;
+      free(relative);
+      return true;
+    }
+    slot = (slot + 1) & (builder->dedup_capacity - 1);
+  }
+  if (builder->count == builder->capacity) {
+    uint32_t capacity = builder->capacity ? builder->capacity * 2 : 256;
+    if (capacity < builder->capacity) {
+      free(relative);
+      return false;
+    }
+    FuzzyFileEntry *entries = (FuzzyFileEntry *)realloc(builder->entries, sizeof(*entries) * capacity);
+    if (!entries) {
+      free(relative);
+      return false;
+    }
+    builder->entries = entries;
+    builder->capacity = capacity;
+  }
+  uint32_t mapping_index = file_best_mapping(root, relative);
+  char *display = file_display_path(root, mapping_index, relative);
+  if (!display) {
+    free(relative);
+    return false;
+  }
+  FuzzyFileEntry *entry = &builder->entries[builder->count];
+  entry->relative_path = relative;
+  entry->display_path = display;
+  entry->root_index = root_index;
+  entry->mapping_index = mapping_index;
+  builder->dedup_slots[slot] = ++builder->count;
+  builder->stats.accepted++;
+  return true;
+}
+
+static bool file_pending_append(FuzzyFileIndexBuilder *builder, const char *data, size_t len) {
+  if (len > SIZE_MAX - builder->pending_len - 1) return false;
+  size_t needed = builder->pending_len + len + 1;
+  if (needed > builder->pending_capacity) {
+    size_t capacity = builder->pending_capacity ? builder->pending_capacity : 256;
+    while (capacity < needed) {
+      if (capacity > SIZE_MAX / 2) return false;
+      capacity *= 2;
+    }
+    char *pending = (char *)realloc(builder->pending, capacity);
+    if (!pending) return false;
+    builder->pending = pending;
+    builder->pending_capacity = capacity;
+  }
+  memcpy(builder->pending + builder->pending_len, data, len);
+  builder->pending_len += len;
+  builder->pending[builder->pending_len] = '\0';
+  return true;
+}
+
+bool fuzzy_file_index_builder_feed(
+  FuzzyFileIndexBuilder *builder,
+  uint32_t root_index,
+  const char *data,
+  size_t len
+) {
+  if (!builder || builder->failed || root_index >= builder->root_count || (!data && len)) return false;
+  if (builder->pending_len && builder->has_pending_root && builder->pending_root != root_index) {
+    builder->failed = true;
+    return false;
+  }
+  builder->stats.input_bytes += len;
+  builder->pending_root = root_index;
+  builder->has_pending_root = true;
+  const char *cursor = data;
+  const char *end = data + len;
+  while (cursor < end) {
+    const char *separator = (const char *)memchr(cursor, '\0', (size_t)(end - cursor));
+    if (!separator) {
+      if (!file_pending_append(builder, cursor, (size_t)(end - cursor))) builder->failed = true;
+      break;
+    }
+    size_t fragment_len = (size_t)(separator - cursor);
+    bool ok;
+    if (builder->pending_len) {
+      ok = file_pending_append(builder, cursor, fragment_len)
+        && file_builder_add_candidate(builder, root_index, builder->pending, builder->pending_len);
+      builder->pending_len = 0;
+    } else {
+      ok = file_builder_add_candidate(builder, root_index, cursor, fragment_len);
+    }
+    if (!ok) {
+      builder->failed = true;
+      return false;
+    }
+    cursor = separator + 1;
+  }
+  return !builder->failed;
+}
+
+static int file_entry_compare(const void *left, const void *right) {
+  const FuzzyFileEntry *a = (const FuzzyFileEntry *)left;
+  const FuzzyFileEntry *b = (const FuzzyFileEntry *)right;
+  int display = strcmp(a->display_path, b->display_path);
+  if (display) return display;
+  if (a->root_index < b->root_index) return -1;
+  if (a->root_index > b->root_index) return 1;
+  return strcmp(a->relative_path, b->relative_path);
+}
+
+FuzzyFileIndex *fuzzy_file_index_builder_finish(
+  FuzzyFileIndexBuilder *builder,
+  FuzzyFileIndexStats *stats
+) {
+  if (!builder) return NULL;
+  if (!builder->failed && builder->pending_len) {
+    if (!file_builder_add_candidate(builder, builder->pending_root,
+      builder->pending, builder->pending_len)) builder->failed = true;
+    builder->pending_len = 0;
+  }
+  if (stats) *stats = builder->stats;
+  if (builder->failed) {
+    fuzzy_file_index_builder_free(builder);
+    return NULL;
+  }
+  qsort(builder->entries, builder->count, sizeof(*builder->entries), file_entry_compare);
+  const char **items = builder->count
+    ? (const char **)calloc(builder->count, sizeof(*items)) : NULL;
+  if (builder->count && !items) {
+    fuzzy_file_index_builder_free(builder);
+    return NULL;
+  }
+  for (uint32_t i = 0; i < builder->count; ++i) items[i] = builder->entries[i].display_path;
+  FuzzyFileIndex *index = (FuzzyFileIndex *)calloc(1, sizeof(*index));
+  if (!index || !fuzzy_index_build(index ? &index->fuzzy : NULL,
+    items, builder->count, FUZZY_MODE_PATH)) {
+    free(items);
+    free(index);
+    fuzzy_file_index_builder_free(builder);
+    return NULL;
+  }
+  free(items);
+  index->roots = builder->roots;
+  index->root_count = builder->root_count;
+  index->entries = builder->entries;
+  index->count = builder->count;
+  builder->roots = NULL;
+  builder->root_count = 0;
+  builder->entries = NULL;
+  builder->count = 0;
+  fuzzy_file_index_builder_free(builder);
+  return index;
+}
+
+void fuzzy_file_index_free(FuzzyFileIndex *index) {
+  if (!index) return;
+  fuzzy_index_free(&index->fuzzy);
+  file_roots_free(index->roots, index->root_count);
+  file_entries_free(index->entries, index->count);
+  free(index);
+}
+
+uint32_t fuzzy_file_index_count(const FuzzyFileIndex *index) {
+  return index ? index->count : 0;
+}
+
+bool fuzzy_file_index_entry_at(
+  const FuzzyFileIndex *index,
+  uint32_t index_number,
+  FuzzyFileEntryView *view
+) {
+  if (!index || !view || index_number >= index->count) return false;
+  const FuzzyFileEntry *entry = &index->entries[index_number];
+  const FuzzyFileRoot *root = &index->roots[entry->root_index];
+  const char *label = root->label, *role = root->role, *id = root->id;
+  int32_t rank_penalty = root->rank_penalty;
+  if (entry->mapping_index != UINT32_MAX) {
+    const FuzzyFilePathMapping *mapping = &root->mappings[entry->mapping_index];
+    label = mapping->label;
+    role = mapping->role;
+    id = mapping->id;
+    rank_penalty = mapping->rank_penalty;
+  }
+  view->display_path = entry->display_path;
+  view->relative_path = entry->relative_path;
+  view->root_path = root->path;
+  view->root_label = label;
+  view->role = role;
+  view->root_id = id;
+  view->rank_penalty = rank_penalty;
+  view->root_index = entry->root_index;
+  return true;
+}
+
+FuzzySearchResult *fuzzy_file_index_search(
+  const FuzzyFileIndex *index,
+  const char *query,
+  uint32_t limit,
+  uint32_t *out_count,
+  bool *out_has_more
+) {
+  if (!index) {
+    if (out_count) *out_count = 0;
+    if (out_has_more) *out_has_more = false;
+    return NULL;
+  }
+  return fuzzy_index_search(&index->fuzzy, query, limit, out_count, out_has_more);
+}
+
+uint32_t fuzzy_file_index_match_spans(
+  const FuzzyFileIndex *index,
+  uint32_t fuzzy_entry_index,
+  const char *query,
+  FuzzySpan *spans,
+  uint32_t max_spans
+) {
+  if (!index) return 0;
+  return fuzzy_match_spans(&index->fuzzy, fuzzy_entry_index, query, spans, max_spans);
+}
