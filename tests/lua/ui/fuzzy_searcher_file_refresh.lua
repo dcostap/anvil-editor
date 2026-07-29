@@ -56,6 +56,10 @@ test.describe("Fuzzy Searcher file refresh", function()
       local ok, err = common.rm(context.root, true)
       test.ok(ok, err)
     end
+    if context.secondary_root and system.get_file_info(context.secondary_root) then
+      local ok, err = common.rm(context.secondary_root, true)
+      test.ok(ok, err)
+    end
   end)
 
   test.it("refreshes external filesystem changes when the picker is reopened", function(context)
@@ -211,5 +215,26 @@ test.describe("Fuzzy Searcher file refresh", function()
     test.ok(wait_until(function() return picker_has_path(picker, existing) end))
     test.equal(scanner_starts, 0,
       "expected the first picker open to consume the prewarmed snapshot without rescanning")
+  end)
+
+  test.it("invalidates a prewarmed snapshot before opening files from a different Project", function(context)
+    local old_file = context.root .. PATHSEP .. "old-project-file.md"
+    write_file(old_file)
+    test.ok(helpers.prewarm_file_index_for_test())
+    test.ok(wait_until(function() return helpers.file_index_status().native end))
+
+    context.secondary_root = context.root .. "-secondary"
+    test.ok(common.mkdirp(context.secondary_root))
+    local new_file = context.secondary_root .. PATHSEP .. "new-project-file.md"
+    write_file(new_file)
+    core.projects = { Project(context.secondary_root) }
+    system.chdir(context.secondary_root)
+    project_paths.configure_project {}
+
+    fuzzy_searcher.open("new-project-file")
+    local picker = assert(core.fuzzy_searcher_active_view)
+    test.ok(wait_until(function() return picker_has_path(picker, new_file) end),
+      "expected picker open to replace the stale prewarmed Project snapshot")
+    test.ok(not picker_has_path(picker, old_file))
   end)
 end)

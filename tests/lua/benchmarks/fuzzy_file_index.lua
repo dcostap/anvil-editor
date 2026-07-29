@@ -125,15 +125,21 @@ test.describe("Fuzzy Searcher file-index benchmark", function()
     project_paths.configure_project {}
 
     local started = system.get_time()
+    local expected_root = common.normalize_path(root)
     fuzzy_searcher.open(os.getenv("ANVIL_FUZZY_FILE_BENCH_QUERY") or "vehicle")
     local deadline = started + env_count("ANVIL_FUZZY_FILE_BENCH_TIMEOUT", 30)
     local status = helpers.file_index_status()
-    while (status.indexing or not status.native) and system.get_time() < deadline do
+    local function expected_snapshot_ready()
+      return status.native and not status.indexing
+        and type(status.root_signature) == "string"
+        and status.root_signature:find(expected_root, 1, true) ~= nil
+    end
+    while not expected_snapshot_ready() and system.get_time() < deadline do
       coroutine.yield(0.01)
       status = helpers.file_index_status()
     end
     local elapsed = elapsed_ms(started)
-    test.equal(status.native, true, "real Project native file index did not become ready")
+    test.ok(expected_snapshot_ready(), "real Project native file index did not become ready")
     test.ok(status.count > 0, "real Project native file index was empty")
     print("fuzzy-file-index-real-benchmark " .. common.serialize({
       benchmark = "fuzzy-file-index-real-project",

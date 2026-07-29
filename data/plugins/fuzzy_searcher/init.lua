@@ -924,6 +924,10 @@ local function prewarm_file_index()
 end
 
 function fuzzy_searcher.refresh_file_index_for_picker_open()
+  local roots = project_paths.search_roots("files")
+  local signature = fuzzy_searcher.file_roots_signature(roots)
+  if fuzzy_searcher.files_cache_test_override and fuzzy_searcher.files_cache_root == signature then return end
+  prepare_file_index_roots(roots, signature)
   if fuzzy_searcher.files_skip_next_picker_refresh and native_file_index_ready() then
     fuzzy_searcher.files_skip_next_picker_refresh = false
     core.log_quiet("Fuzzy native file index: first picker open is using the prewarmed snapshot")
@@ -937,10 +941,6 @@ function fuzzy_searcher.refresh_file_index_for_picker_open()
     end
     return
   end
-  local roots = project_paths.search_roots("files")
-  local signature = fuzzy_searcher.file_roots_signature(roots)
-  if fuzzy_searcher.files_cache_test_override and fuzzy_searcher.files_cache_root == signature then return end
-  prepare_file_index_roots(roots, signature)
   start_file_index(roots, signature, "picker-open")
 end
 
@@ -5524,7 +5524,9 @@ keymap.on_key_pressed = function(key, ...)
 end
 
 local cli = package.loaded["core.cli"]
-if not (cli and cli.last_command == "test") then
+if not ((cli and cli.last_command == "test")
+  or (type(ARGS) == "table" and ARGS[2] == "test"))
+then
   core.add_thread(function()
     -- Workspace Project Paths are restored just after plugins load. Let that
     -- settle, then build the first immutable file snapshot before the picker
@@ -5578,6 +5580,7 @@ return {
         native = native_project_file_index_ready(),
         materialized = fuzzy_searcher.files_materialized_generation == fuzzy_searcher.files_generation,
         diagnostics = fuzzy_searcher.files_last_scan_diagnostics,
+        root_signature = fuzzy_searcher.files_cache_root,
         generation = fuzzy_searcher.files_generation,
       }
     end,
