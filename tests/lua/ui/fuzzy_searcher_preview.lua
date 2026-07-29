@@ -167,7 +167,7 @@ test.describe("Fuzzy Searcher preview", function()
     }
     picker.selected = 1
 
-    picker:confirm(true)
+    test.ok(command.perform("poi:activate-right"))
 
     local view = core.active_view
     test.ok(view and view.doc and view.doc.abs_filename == path, "expected side-accepted file to become active")
@@ -197,7 +197,7 @@ test.describe("Fuzzy Searcher preview", function()
     }
     picker.selected = 1
 
-    picker:confirm(false)
+    test.ok(command.perform("poi:activate"))
 
     local view = core.active_view
     test.ok(view and view.doc and view.doc.abs_filename == path, "expected accepted grep result to open its file")

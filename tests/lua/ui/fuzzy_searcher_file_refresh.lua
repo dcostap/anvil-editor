@@ -25,13 +25,13 @@ local function wait_until(predicate, timeout)
   return predicate()
 end
 
-test.describe("Fuzzy Searcher filesystem updates", function()
+test.describe("Fuzzy Searcher file refresh", function()
   test.before_each(function(context)
     context.original_projects = core.projects
     context.original_visited_files = core.visited_files
     context.original_cwd = system.getcwd()
     context.root = USERDIR
-      .. PATHSEP .. "fuzzy-filesystem-watch-"
+      .. PATHSEP .. "fuzzy-file-refresh-"
       .. system.get_process_id() .. "-"
       .. math.floor(system.get_time() * 1000000)
     test.ok(common.mkdirp(context.root))
@@ -48,16 +48,13 @@ test.describe("Fuzzy Searcher filesystem updates", function()
     core.projects = context.original_projects
     core.visited_files = context.original_visited_files
     if context.original_cwd then pcall(system.chdir, context.original_cwd) end
-    -- Let the persistent file-index service release its native watch on the
-    -- temporary Project before removing that Project from disk on Windows.
-    coroutine.yield(0.25)
     if context.root and system.get_file_info(context.root) then
       local ok, err = common.rm(context.root, true)
       test.ok(ok, err)
     end
   end)
 
-  test.it("reflects externally created, renamed, and deleted files without opening them", function(context)
+  test.it("refreshes external filesystem changes when the picker is reopened", function(context)
     local existing = context.root .. PATHSEP .. "existing-file.md"
     local created = context.root .. PATHSEP .. "created-externally.md"
     write_file(existing)
@@ -70,30 +67,49 @@ test.describe("Fuzzy Searcher filesystem updates", function()
     picker.input:set_text("created-externally")
     write_file(created)
 
+    coroutine.yield(0.5)
+    test.ok(not picker_has_path(picker, created),
+      "expected the open picker to keep its completed file snapshot")
+    test.not_nil(system.get_file_info(created), "expected the external file fixture to remain on disk")
+
+    picker:close()
+    fuzzy_searcher.open("created-externally")
+    picker = assert(core.fuzzy_searcher_active_view)
     test.ok(wait_until(function() return picker_has_path(picker, created) end),
-      "expected an externally created file to enter fuzzy file results")
+      "expected reopening the picker to discover an externally created file")
 
     local nested_dir = context.root .. PATHSEP .. "new-directory" .. PATHSEP .. "nested"
     local nested = nested_dir .. PATHSEP .. "nested-external-file.md"
     test.ok(common.mkdirp(nested_dir))
     write_file(nested)
-    picker.input:set_text("nested-external-file")
+    picker:close()
+    fuzzy_searcher.open("nested-external-file")
+    picker = assert(core.fuzzy_searcher_active_view)
     test.ok(wait_until(function() return picker_has_path(picker, nested) end),
-      "expected a file in an externally created directory to enter fuzzy file results")
+      "expected reopening the picker to discover a newly created directory")
 
     local renamed = context.root .. PATHSEP .. "renamed-externally.md"
     test.ok(os.rename(created, renamed))
-    picker.input:set_text("renamed-externally")
+    picker:close()
+    fuzzy_searcher.open("renamed-externally")
+    picker = assert(core.fuzzy_searcher_active_view)
     test.ok(wait_until(function() return picker_has_path(picker, renamed) end),
-      "expected an externally renamed file to enter fuzzy file results")
+      "expected reopening the picker to discover an externally renamed file")
 
     picker.input:set_text("created-externally")
     test.ok(wait_until(function() return not picker_has_path(picker, created) end),
       "expected the old external filename to leave fuzzy file results")
 
     test.ok(os.remove(renamed))
+    local deletion_scan_marker = context.root .. PATHSEP .. "deletion-scan-complete.md"
+    write_file(deletion_scan_marker)
+    picker:close()
+    fuzzy_searcher.open("deletion-scan-complete")
+    picker = assert(core.fuzzy_searcher_active_view)
+    test.ok(wait_until(function() return picker_has_path(picker, deletion_scan_marker) end),
+      "expected the deletion refresh to finish scanning")
     picker.input:set_text("renamed-externally")
     test.ok(wait_until(function() return not picker_has_path(picker, renamed) end),
-      "expected an externally deleted file to leave fuzzy file results")
+      "expected reopening the picker to remove an externally deleted file")
   end)
 end)
