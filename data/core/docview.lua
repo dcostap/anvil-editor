@@ -4044,7 +4044,12 @@ local function get_line_render_raw_col_x_offset(self, render_line, col)
     local fragment = entry.fragment
     local col1 = fragment.source_col1 or 1
     local col2 = fragment.source_col2 or col1
-    if col <= col1 then return xoffset end
+    -- A zero-length widget is inserted immediately before its source anchor,
+    -- so the caret at that anchor belongs on the widget's right-hand side.
+    local widget_before_anchor = fragment.widget and col1 == col2
+    if col < col1 or (col == col1 and not widget_before_anchor) then
+      return xoffset
+    end
     if fragment.hidden then
       if col <= col2 then return xoffset end
     else
@@ -4103,7 +4108,10 @@ function DocView:get_line_render_col_x_cursor(render_line)
       local fragment = entry.fragment
       local col1 = fragment.source_col1 or 1
       local col2 = fragment.source_col2 or col1
-      if col <= col1 then return xoffset end
+      local widget_before_anchor = fragment.widget and col1 == col2
+      if col < col1 or (col == col1 and not widget_before_anchor) then
+        return xoffset
+      end
       if fragment.hidden then
         if col <= col2 then return xoffset end
       elseif col < col2 then
@@ -5724,7 +5732,11 @@ function DocView:draw_line_text(line, x, y)
           and col1 >= row_start
           and (col1 < row_end or (last_row and col1 == row_end))
         if anchored_widget and not fragment.hidden then
-          local anchor_x = x + self:get_line_render_col_x_offset(render_line, col1)
+          local width = fragment.width or fragment.widget.width or 0
+          -- Column mapping places the anchor caret after this widget; drawing
+          -- still starts one widget width before that caret.
+          local anchor_x = x
+            + self:get_line_render_col_x_offset(render_line, col1) - width
           draw_render_widget(
             self, fragment, anchor_x, content_y, content_height,
             "wrapped anchored widget"

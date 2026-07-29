@@ -100,7 +100,7 @@ test.describe("File-type icons", function()
     local icon_width = file_icons.column_width(view:get_line_height())
     test.equal(
       end_x - name_x,
-      icon_width + view:get_font():get_width("example.py", { tab_offset = name_x })
+      view:get_font():get_width("example.py", { tab_offset = name_x })
     )
 
     local drawn
@@ -122,9 +122,37 @@ test.describe("File-type icons", function()
 
     test.not_nil(drawn)
     test.equal(drawn.path, "example.py")
-    test.equal(drawn.x, 100 + name_x)
+    test.equal(drawn.x, 100 + name_x - icon_width)
     test.equal(drawn.y, 20)
     test.equal(drawn.row_height, view:get_line_height())
+  end)
+
+  test.it("keeps the caret after a Path Tree file icon when moving left onto the filename", function()
+    local command = require "core.command"
+    local core = require "core"
+    local Doc = require "core.doc"
+    local file_icons = require "core.file_icons"
+    local path_tree = require "plugins.path_tree"
+
+    local tree = path_tree.build({ { path = "src/example.py" } })
+    local view = path_tree.View(Doc(nil, nil, true))
+    view:set_path_tree(tree)
+
+    local line = tree:line_for_record(1)
+    local text = view.doc.lines[line]:gsub("\n$", "")
+    local name_col = assert(text:find("example.py", 1, true))
+    view.doc:set_selection(line, name_col + 1)
+    core.active_view = view
+
+    test.equal(command.perform("doc:move-to-previous-char"), true)
+    local caret_line, caret_col = view.doc:get_selection()
+    test.equal(caret_line, line)
+    test.equal(caret_col, name_col)
+    test.equal(
+      view:get_col_x_offset(line, caret_col),
+      view:get_font():get_width(text:sub(1, name_col - 1))
+        + file_icons.column_width(view:get_line_height())
+    )
   end)
 
   test.it("includes inline icons in File Tree filename geometry", function()
@@ -144,10 +172,14 @@ test.describe("File-type icons", function()
     local parsed = test.not_nil(filetree:parse_line(line))
     local name_x = filetree:get_col_x_offset(line, parsed.name_col)
     local end_x = filetree:get_col_x_offset(line, #text + 1)
+    local icon_width = file_icons.column_width(filetree:get_line_height())
+    test.equal(
+      name_x,
+      filetree:get_font():get_width(text:sub(1, parsed.name_col - 1)) + icon_width
+    )
     test.equal(
       end_x - name_x,
-      file_icons.column_width(filetree:get_line_height())
-        + filetree:get_font():get_width(text:sub(parsed.name_col), { tab_offset = name_x })
+      filetree:get_font():get_width(text:sub(parsed.name_col), { tab_offset = name_x })
     )
   end)
 
