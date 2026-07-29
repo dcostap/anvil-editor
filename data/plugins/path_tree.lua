@@ -362,24 +362,83 @@ function path_tree.draw_row_text(view, text, x, y, kind, is_dir)
 end
 
 function path_tree.gutter_width(view)
-  local left_padding = math.max(1, math.floor(2 * (SCALE or 1) + 0.5))
-  return left_padding + file_icons.column_width(view:get_line_height()), 0
+  return math.max(1, math.floor(style.padding.x * 0.5 + 0.5)), 0
 end
 
-function path_tree.draw_file_icon(view, name, x, y, width)
+function path_tree.status_gutter_width(view)
+  local scale = SCALE or 1
+  local width = style.padding.x * 0.5 + style.gitdiff_width + 2 * scale
+  return math.max(path_tree.gutter_width(view), math.floor(width + 0.5)), 0
+end
+
+function path_tree.inline_file_render(view, source_text, name_col, name, color)
   local line_height = view:get_line_height()
   local icon_width = file_icons.column_width(line_height)
-  return file_icons.draw(name, x + math.max(0, width - icon_width), y, line_height)
+  name_col = math.max(1, math.min(#source_text + 1, math.floor(name_col or 1)))
+  return {
+    fragments = {
+      {
+        source_col1 = name_col,
+        source_col2 = name_col,
+        width = icon_width,
+        widget = {
+          width = icon_width,
+          height = line_height,
+          draw = function(_, _, x, y, row_height)
+            file_icons.draw(name, x, y, row_height)
+          end,
+        },
+      },
+      {
+        source_col1 = name_col,
+        source_col2 = #source_text + 1,
+        text = source_text:sub(name_col),
+        color = color,
+      },
+    },
+  }
 end
+
+local INLINE_FILE_ICON_PROVIDER = {
+  generation = function(_, view, line)
+    return view:get_inline_file_icon_generation(line)
+  end,
+  render_line = function(_, view, line, context)
+    return view:get_inline_file_render(line, context)
+  end,
+}
 
 local PathTreeView = DocView:extend()
 PathTreeView.show_line_numbers = false
 
 function PathTreeView:new(doc)
   PathTreeView.super.new(self, doc)
+  self:add_line_render_provider("path-tree-inline-file-icons", INLINE_FILE_ICON_PROVIDER)
   self:set_wrapping_enabled(false)
   self.path_tree = nil
   self.path_tree_line_offset = 0
+end
+
+function PathTreeView:get_inline_file_icon_generation(line)
+  local row = self:path_tree_row(line)
+  return table.concat({
+    tostring(self.path_tree),
+    tostring(self.path_tree_line_offset or 0),
+    tostring(row and row.id or ""),
+    tostring(row and row.kind or ""),
+  }, "\0")
+end
+
+function PathTreeView:get_inline_file_render(line, context)
+  local row = self:path_tree_row(line)
+  if not (row and row.type == "file") then return nil end
+  return path_tree.inline_file_render(
+    self,
+    context.source_text,
+    (row.depth or 0) + 1,
+    row.name,
+    path_tree.row_text_color(row.kind, false)
+  )
 end
 
 function PathTreeView:invalidate_path_tree_document(old_line_count)
@@ -469,6 +528,9 @@ function PathTreeView:draw_line_body(line, x, y)
 end
 
 function PathTreeView:draw_line_text(line, x, y)
+  if self:get_line_render(line) then
+    return PathTreeView.super.draw_line_text(self, line, x, y)
+  end
   local row = self:path_tree_row(line)
   if row then
     local text = (self.doc:get_utf8_line(line) or ""):gsub("\n$", "")
@@ -482,7 +544,6 @@ end
 function PathTreeView:draw_line_gutter(line, x, y, width)
   local row = self:path_tree_row(line)
   path_tree.draw_folder_row_background(self, row and row.type == "dir", self.position.x, y, width)
-  if row and row.type == "file" then path_tree.draw_file_icon(self, row.name, x, y, width) end
   return self:get_line_height()
 end
 

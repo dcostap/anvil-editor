@@ -76,11 +76,79 @@ test.describe("File-type icons", function()
     test.ok(drawn_font:get_size() <= 22, "expected the glyph to remain within its row")
   end)
 
-  test.it("keeps the File Tree icon gutter narrower than three text cells", function()
+  test.it("keeps the File Tree status gutter narrower than three text cells", function()
     local filetree = require "plugins.filetree"
     local gutter_width = filetree:get_gutter_width()
 
     test.ok(gutter_width < filetree:get_font():get_width("000"))
+  end)
+
+  test.it("renders Path Tree file icons inline after indentation", function()
+    local Doc = require "core.doc"
+    local file_icons = require "core.file_icons"
+    local path_tree = require "plugins.path_tree"
+
+    local tree = path_tree.build({ { path = "src/example.py" } })
+    local view = path_tree.View(Doc(nil, nil, true))
+    view:set_path_tree(tree)
+
+    local line = tree:line_for_record(1)
+    local text = view.doc.lines[line]:gsub("\n$", "")
+    local name_col = assert(text:find("example.py", 1, true))
+    local name_x = view:get_col_x_offset(line, name_col)
+    local end_x = view:get_col_x_offset(line, #text + 1)
+    local icon_width = file_icons.column_width(view:get_line_height())
+    test.equal(
+      end_x - name_x,
+      icon_width + view:get_font():get_width("example.py", { tab_offset = name_x })
+    )
+
+    local drawn
+    local old_draw = file_icons.draw
+    local old_draw_text = renderer.draw_text
+    file_icons.draw = function(path, x, y, row_height)
+      drawn = { path = path, x = x, y = y, row_height = row_height }
+      return true, icon_width
+    end
+    renderer.draw_text = function(font, rendered_text, x, _, _, opts)
+      return x + font:get_width(rendered_text, opts)
+    end
+    local ok, err = pcall(function()
+      view:draw_line_text(line, 100, 20)
+    end)
+    file_icons.draw = old_draw
+    renderer.draw_text = old_draw_text
+    if not ok then error(err, 0) end
+
+    test.not_nil(drawn)
+    test.equal(drawn.path, "example.py")
+    test.equal(drawn.x, 100 + name_x)
+    test.equal(drawn.y, 20)
+    test.equal(drawn.row_height, view:get_line_height())
+  end)
+
+  test.it("includes inline icons in File Tree filename geometry", function()
+    local file_icons = require "core.file_icons"
+    local filetree = require "plugins.filetree"
+    local file_entry
+    for _, entry in ipairs(filetree:build_entries(false)) do
+      if entry.type == "file" then
+        file_entry = entry
+        break
+      end
+    end
+    file_entry = test.not_nil(file_entry, "expected the test Project to contain a file")
+
+    local line = file_entry.line
+    local text = filetree.doc.lines[line]:gsub("\n$", "")
+    local parsed = test.not_nil(filetree:parse_line(line))
+    local name_x = filetree:get_col_x_offset(line, parsed.name_col)
+    local end_x = filetree:get_col_x_offset(line, #text + 1)
+    test.equal(
+      end_x - name_x,
+      file_icons.column_width(filetree:get_line_height())
+        + filetree:get_font():get_width(text:sub(parsed.name_col), { tab_offset = name_x })
+    )
   end)
 
   test.it("reserves an icon column when rendering Fuzzy Searcher file rows", function()

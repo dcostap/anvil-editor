@@ -793,7 +793,7 @@ local function ordered_moves_or_cycle(moves)
 end
 
 local function parse_text(text)
-  local level, _, indent_err = parse_leading_indent(text)
+  local level, name_col, indent_err = parse_leading_indent(text)
   if indent_err then
     return nil, indent_err
   end
@@ -811,6 +811,7 @@ local function parse_text(text)
     indent = level,
     level = level,
     name = name,
+    name_col = name_col,
     wants_dir = wants_dir,
   }
 end
@@ -936,7 +937,29 @@ function FileTreeView:get_name()
 end
 
 function FileTreeView:get_gutter_width()
-  return path_tree.gutter_width(self)
+  return path_tree.status_gutter_width(self)
+end
+
+function FileTreeView:get_inline_file_icon_generation(line)
+  return table.concat({
+    tostring(self.entry_snapshot_generation or 0),
+    tostring(self.git_status and self.git_status.generation or 0),
+    tostring(line),
+  }, "\0")
+end
+
+function FileTreeView:get_inline_file_render(line, context)
+  local parsed = self:parse_line(line)
+  if not parsed or self:line_is_dir(line) then return nil end
+  local project_path_color = self:project_path_line_color(line)
+  local git = self:get_git_info_for_line(line)
+  return path_tree.inline_file_render(
+    self,
+    context.source_text,
+    parsed.name_col,
+    parsed.name,
+    project_path_color or path_tree.row_text_color(git and git.kind, false)
+  )
 end
 
 function FileTreeView:git_root()
@@ -2101,6 +2124,16 @@ end
 function FileTreeView:draw_line_text(line, x, y)
   local stats = perf_stats()
   local start = perf_call(stats, "filetree_draw_line_text_calls")
+  local render_line = self:get_line_render(line)
+  if render_line then
+    local result = FileTreeView.super.draw_line_text(self, line, x, y)
+    local filename_fragment = render_line.fragments and render_line.fragments[#render_line.fragments]
+    perf_add(stats, filename_fragment and filename_fragment.color
+      and "filetree_draw_line_text_colored_calls"
+      or "filetree_draw_line_text_plain_calls", 1)
+    perf_finish(stats, "filetree_draw_line_text_ms", start)
+    return result
+  end
   local git_start = perf_start(stats)
   local git = self:get_git_info_for_line(line)
   perf_finish(stats, "filetree_draw_line_text_git_ms", git_start)
@@ -2136,10 +2169,6 @@ function FileTreeView:draw_line_gutter(line, x, y, width)
     local color = path_tree.git_gutter_color(status) or style.git_change_deletion
     local w = style.gitdiff_width
     renderer.draw_rect(x + style.padding.x * 0.5, y, w, lh, color)
-  end
-  local parsed = self:parse_line(line)
-  if parsed and not self:line_is_dir(line) then
-    path_tree.draw_file_icon(self, parsed.name, x, y, width)
   end
   return lh
 end
