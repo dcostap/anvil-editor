@@ -11,6 +11,37 @@ local function record(path, kind, additions, deletions)
 end
 
 test.describe("Path Tree", function()
+  test.it("compacts consecutive single-child directories when requested", function()
+    local tree = path_tree.build({
+      record("src/main/java/App.java", "modified"),
+      record("README.md", "modified"),
+    }, { compact_directories = true })
+
+    test.same(tree:lines(), {
+      "src/main/java/",
+      "\t\t\tApp.java",
+      "README.md",
+    })
+
+    local compact = tree:row(1)
+    test.equal(compact.type, "dir")
+    test.equal(compact.path, "src/main/java")
+    test.same(compact.compact_paths, { "src", "src/main", "src/main/java" })
+    test.equal(tree:line_for_path("src", "dir"), 1)
+    test.equal(tree:line_for_path("src/main", "dir"), 1)
+    test.equal(tree:line_for_path("src/main/java", "dir"), 1)
+
+    test.ok(tree:toggle(compact.path))
+    test.same(tree:lines(), {
+      "src/main/java/",
+      "README.md",
+    })
+    test.equal(tree:visible_line_for_record(1), 1)
+
+    test.ok(tree:toggle(compact.path))
+    test.equal(tree:line_for_record(1), 2)
+  end)
+
   test.it("builds one deterministic hierarchy from paths in arbitrary order", function()
     local tree = path_tree.build({
       record("src/main/App.kt", "modified", 2, 1),

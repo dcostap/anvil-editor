@@ -525,6 +525,7 @@ local function changed_file_tree(files, collapsed)
   return path_tree.build(files or {}, {
     record_path = changed_file_path,
     collapsed = collapsed,
+    compact_directories = true,
   })
 end
 

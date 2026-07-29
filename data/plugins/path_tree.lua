@@ -169,28 +169,51 @@ end
 
 function Tree:flatten(node)
   for _, child in ipairs(node.children) do
+    local row_node = child
+    local compact_nodes = { child }
+    if self.options.compact_directories and child.type == "dir" then
+      while not self.collapsed[row_node.path]
+          and #row_node.children == 1
+          and row_node.children[1].type == "dir" do
+        row_node = row_node.children[1]
+        compact_nodes[#compact_nodes + 1] = row_node
+      end
+    end
+
+    local compact_paths = {}
+    local display_names = {}
+    for _, compact_node in ipairs(compact_nodes) do
+      compact_paths[#compact_paths + 1] = compact_node.path
+      display_names[#display_names + 1] = compact_node.name
+    end
+
     local line = #self.rows + 1
     local row = {
-      id = (child.type == "dir" and "dir:" or "file:") .. child.path,
-      name = child.name,
-      path = child.path,
+      id = (row_node.type == "dir" and "dir:" or "file:") .. row_node.path,
+      name = row_node.name,
+      display_name = table.concat(display_names, "/"),
+      path = row_node.path,
       depth = child.depth,
-      type = child.type,
+      type = row_node.type,
       kind = child.kind,
       stat = clone_stat(child.stat),
-      record = child.record,
-      record_index = child.record_index,
-      record_indices = child.record_indices,
-      node = child,
-      expanded = child.type ~= "dir" or not self.collapsed[child.path],
-      text = string.rep("\t", child.depth) .. child.name .. (child.type == "dir" and "/" or ""),
+      record = row_node.record,
+      record_index = row_node.record_index,
+      record_indices = row_node.record_indices,
+      node = row_node,
+      compact_paths = compact_paths,
+      expanded = row_node.type ~= "dir" or not self.collapsed[row_node.path],
+      text = string.rep("\t", child.depth) .. table.concat(display_names, "/")
+        .. (row_node.type == "dir" and "/" or ""),
     }
     self.rows[line] = row
-    self.line_to_record[line] = child.record_index
-    self.path_to_line[child.path] = line
-    if child.type == "dir" then self.dir_path_to_line[child.path] = line end
-    for _, index in ipairs(child.record_indices) do self.record_to_line[index] = line end
-    if child.type == "dir" and row.expanded then self:flatten(child) end
+    self.line_to_record[line] = row_node.record_index
+    for _, compact_node in ipairs(compact_nodes) do
+      self.path_to_line[compact_node.path] = line
+      if compact_node.type == "dir" then self.dir_path_to_line[compact_node.path] = line end
+    end
+    for _, index in ipairs(row_node.record_indices) do self.record_to_line[index] = line end
+    if row_node.type == "dir" and row.expanded then self:flatten(row_node) end
   end
 end
 
