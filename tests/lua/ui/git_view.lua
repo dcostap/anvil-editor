@@ -137,7 +137,7 @@ test.describe("Git View command", function()
       { hash = "a", short_hash = "a", subject = "First" },
       { hash = "b", short_hash = "b", subject = "Second" },
     }
-    local second_row_y = view:commit_list_y() + style.font:get_height() + 2 * SCALE
+    local second_row_y = view:commit_list_y() + view:row_height()
     view:on_mouse_pressed("left", 10, second_row_y, 1)
     test.equal(view.model:selected_commit().hash, "b")
     test.equal(tw.hidden, false)
@@ -271,8 +271,8 @@ test.describe("Git View command", function()
     local list = tab_view:pane_view("file-list")
     test.ok(list:extends(path_tree.View))
     test.equal(list.doc.lines[1], "src/main/\n")
-    test.equal(list.doc.lines[2], "\t\tApp.kt\n")
-    test.equal(list.doc.lines[3], "\t\tUtil.kt\n")
+    test.equal(list.doc.lines[2], "\tApp.kt\n")
+    test.equal(list.doc.lines[3], "\tUtil.kt\n")
     test.equal(list.doc.lines[4], "README.md\n")
     test.equal(list.git_file_line_to_index[2], 1)
     test.equal(list.git_file_line_to_index[3], 3)
@@ -282,6 +282,8 @@ test.describe("Git View command", function()
     local hint = list:get_line_hint(2)
     test.equal(hint[1].text, "+2")
     test.equal(hint[2].text, " −44")
+    test.equal(hint[1].font, style.get_small_font(style.code_font))
+    test.equal(hint[2].font, style.get_small_font(style.code_font))
 
     core.active_view = list
     list.doc:set_selection(1, 1)
@@ -297,8 +299,8 @@ test.describe("Git View command", function()
     test.equal(list.doc.lines[3], nil)
     test.equal(tab.selected_file, 1)
     test.equal(command.perform("git:activate-selected-row"), true)
-    test.equal(list.doc.lines[2], "\t\tApp.kt\n")
-    test.equal(list.doc.lines[3], "\t\tUtil.kt\n")
+    test.equal(list.doc.lines[2], "\tApp.kt\n")
+    test.equal(list.doc.lines[3], "\tUtil.kt\n")
 
     tab_view:select_relative(1)
     test.equal(tab.selected_file, 3)
@@ -481,6 +483,8 @@ test.describe("Git View command", function()
     local doc_view = diff.doc_view_a
     test.equal(core.active_view, doc_view)
     test.equal(core.active_view.git_owner_view, tab_view)
+    test.equal(diff.doc_view_a:get_font(), style.code_font)
+    test.equal(diff.doc_view_b:get_font(), style.code_font)
   end)
 
   test.it("styles Git Log pane content and keeps its DocViews unwrapped", function(context)
@@ -504,7 +508,7 @@ test.describe("Git View command", function()
     local old_draw_text = renderer.draw_text
     local old_draw_text_known_bounds = renderer.draw_text_known_bounds
     local function capture(font, text, x, y, color)
-      calls[#calls + 1] = { text = text, color = color }
+      calls[#calls + 1] = { font = font, text = text, color = color }
       return x + font:get_width(text)
     end
     renderer.draw_text = capture
@@ -513,16 +517,30 @@ test.describe("Git View command", function()
       list:draw_line_text(1, 0, 0)
       test.equal(calls[1].text, "abcdef1")
       test.equal(calls[1].color, style.accent)
+      test.equal(calls[1].font, style.code_font)
+      test.equal(calls[3].font, style.prose_font)
       calls = {}
       details:draw_line_text(3, 0, 0)
       test.equal(calls[1].text, "Hash: ")
       test.equal(calls[1].color, style.dim)
+      test.equal(calls[1].font, style.prose_font)
       test.equal(calls[2].text, "abcdef123456")
       test.equal(calls[2].color, style.accent)
+      test.equal(calls[2].font, style.code_font)
     end)
     renderer.draw_text = old_draw_text
     renderer.draw_text_known_bounds = old_draw_text_known_bounds
     if not ok then error(err, 0) end
+  end)
+
+  test.it("uses prose typography for Git navigation panes", function(context)
+    local tw, view = open_fake_git_view(context.project)
+    view:update_pane_docs()
+
+    test.equal(view:pane_view("log-list"):get_font(), style.prose_font)
+    test.equal(view:pane_view("history-list"):get_font(), style.prose_font)
+    test.equal(view:pane_view("file-list"):get_font(), style.prose_font)
+    test.equal(view:pane_view("details"):get_font(), style.prose_font)
   end)
 
   test.test("pane focus cycle enters Log list and details DocViews", function(context)

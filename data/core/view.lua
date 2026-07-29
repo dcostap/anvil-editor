@@ -465,21 +465,28 @@ function View:clamp_scroll_position()
 end
 
 
----Update scrollbar positions and sizes.
----Called automatically by update(). Rarely needs to be called manually.
-function View:update_scrollbar()
+---Synchronize scrollbar rectangles and thumb positions with current geometry.
+---Unlike update_scrollbar(), this does not advance scrollbar animations.
+function View:sync_scrollbar_geometry()
   local v_scrollable = self:get_scrollable_size()
   self.v_scrollbar:set_size(self.position.x, self.position.y, self.size.x, self.size.y, v_scrollable)
   local v_percent = self.scroll.y/(v_scrollable - self.size.y)
   -- Avoid setting nan percent
   self.v_scrollbar:set_percent(v_percent == v_percent and v_percent or 0)
-  self.v_scrollbar:update()
 
   local h_scrollable = self:get_h_scrollable_size()
   self.h_scrollbar:set_size(self.position.x, self.position.y, self.size.x, self.size.y, h_scrollable)
   local h_percent = self.scroll.x/(h_scrollable - self.size.x)
   -- Avoid setting nan percent
   self.h_scrollbar:set_percent(h_percent == h_percent and h_percent or 0)
+end
+
+
+---Update scrollbar positions, sizes, and animations.
+---Called automatically by update(). Rarely needs to be called manually.
+function View:update_scrollbar()
+  self:sync_scrollbar_geometry()
+  self.v_scrollbar:update()
   self.h_scrollbar:update()
 end
 

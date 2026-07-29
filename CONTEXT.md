@@ -136,6 +136,10 @@ _Avoid_: Empty tab, welcome tab
 The user-facing way to make Anvil's interface and document text larger or smaller without changing Document contents.
 _Avoid_: Scale in user-facing command names
 
+**Typography Role**:
+A globally configurable text style for a semantic use such as interface text, source code, prose, emphasis, or headings.
+_Avoid_: Global font, Markdown font
+
 **Editing Surface**:
 A Pane View whose primary purpose is editing or navigating a Document.
 _Avoid_: Code context, editor context

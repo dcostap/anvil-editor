@@ -16,6 +16,7 @@ local file_context = require "core.file_context"
 local poi = require "core.poi"
 local project_paths = require "core.project_paths"
 local panes = require "core.panes"
+local path_tree = require "plugins.path_tree"
 local Widget = require "widget"
 local TextBox = require "widget.textbox"
 local fuzzy_native = require "fuzzy"
@@ -349,6 +350,18 @@ local function fullpath(path)
   local normalized = common.normalize_path(path)
   if normalized and common.is_absolute_path(normalized) then return normalized end
   return project_dir() .. PATHSEP .. path:gsub("[/\\]", PATHSEP)
+end
+
+---Return the File Tree Git status kind for a file result when available.
+---@param file string
+---@return string?
+function fuzzy_searcher.git_kind_for_file(file)
+  local filetree = package.loaded["plugins.filetree"]
+  if not (filetree and filetree.get_git_info_for_entry) then return nil end
+  local abs = fullpath(file)
+  if not abs then return nil end
+  local info = filetree:get_git_info_for_entry({ abs = abs, type = "file" })
+  return info and info.kind or nil
 end
 
 local function file_result_key(path)
@@ -2037,6 +2050,8 @@ end
 
 local function draw_project_result_row(font, r, x, y, width)
   local label, spans, prefix = result_list_label_and_spans(r)
+  local project_font = style.prose_font:get_size() == font:get_size()
+    and style.prose_font or style.get_scaled_font(style.prose_font, font:get_size())
   local age = r.opened_at and compact_age(r.opened_at)
   local gap = style.padding.x
   local label_w = width
@@ -2045,7 +2060,9 @@ local function draw_project_result_row(font, r, x, y, width)
     renderer.draw_text(font, age, x + width - age_w, y, style.dim)
     label_w = math.max(0, width - age_w - gap)
   end
-  draw_prefixed_highlighted_text(font, prefix, label, x, y, label_w, style.text, spans)
+  local cx = renderer.draw_text(font, prefix, x, y, style.dim)
+  local project_y = y + math.max(0, math.floor((font:get_height() - project_font:get_height()) / 2))
+  draw_highlighted_text(project_font, label, cx, project_y, math.max(0, x + label_w - cx), style.text, spans)
 end
 
 function fuzzy_searcher.draw_recent_file_metadata(font, r, x, y, width)
@@ -2086,7 +2103,10 @@ end
 local function draw_new_project_result_row(font, r, x, y, width)
   local prefix = "Open this new folder as project: "
   local cx = renderer.draw_text(font, prefix, x, y, style.dim)
-  draw_highlighted_text(font, r.project or r.label or "", cx, y, math.max(0, x + width - cx), style.text, {})
+  local project_font = style.prose_font:get_size() == font:get_size()
+    and style.prose_font or style.get_scaled_font(style.prose_font, font:get_size())
+  local project_y = y + math.max(0, math.floor((font:get_height() - project_font:get_height()) / 2))
+  draw_highlighted_text(project_font, r.project or r.label or "", cx, project_y, math.max(0, x + width - cx), style.text, {})
 end
 
 local draw_file_result_row
@@ -2215,26 +2235,37 @@ local function project_path_prefix_color(role)
   return style.project_path_external
 end
 
-draw_file_result_row = function(font, file, spans, prefix, x, y, width, suffix, prefix_span, root_role, show_file_icon)
+draw_file_result_row = function(font, file, spans, prefix, x, y, width, suffix, prefix_span, root_role, show_file_icon, git_kind)
   file = tostring(file or "")
   spans = spans or {}
   prefix = prefix or ""
   suffix = suffix or ""
 
+  local row_height = font:get_height()
+  local marker_width = math.max(1, style.gitdiff_width or (2 * (SCALE or 1)))
+  local marker_gap = math.max(2 * (SCALE or 1), style.padding.x / 4)
+  local marker_column_width = marker_width + marker_gap
+  local marker_color = path_tree.git_gutter_color(git_kind or fuzzy_searcher.git_kind_for_file(file))
+  if marker_color then renderer.draw_rect(x, y, marker_width, row_height, marker_color) end
+  x = x + marker_column_width
+  width = math.max(0, width - marker_column_width)
+
   if show_file_icon then
-    local row_height = font:get_height()
     local icon_column_width = fuzzy_searcher.file_icons.column_width(row_height)
     fuzzy_searcher.file_icons.draw(file, x, y, row_height)
     x = x + icon_column_width
     width = math.max(0, width - icon_column_width)
   end
 
-  local path_font = style.get_small_font(font)
+  local file_font = style.prose_font:get_size() == font:get_size()
+    and style.prose_font or style.get_scaled_font(style.prose_font, font:get_size())
+  local path_font = style.get_small_font(file_font)
   local prefix_color = style.dim
   local dir_color = style.dim
   local suffix_color = style.dim
   local name_color = style.text
   local line_h = font:get_height()
+  local name_y = y + math.max(0, math.floor((line_h - file_font:get_height()) / 2))
   local path_y = y + math.max(0, math.floor((line_h - path_font:get_height()) / 2))
 
   local cx = renderer.draw_text(font, prefix, x, y, prefix_color)
@@ -2254,7 +2285,7 @@ draw_file_result_row = function(font, file, spans, prefix, x, y, width, suffix, 
   end
   local suffix_width = suffix ~= "" and font:get_width(suffix) or 0
 
-  local name_width = font:get_width(name)
+  local name_width = file_font:get_width(name)
   if dir ~= "" then
     local scale = SCALE or 1
     local min_name_width = math.min(name_width, math.max(48 * scale, available * 0.55))
@@ -2282,7 +2313,7 @@ draw_file_result_row = function(font, file, spans, prefix, x, y, width, suffix, 
   end
 
   local name_available = suffix_width > 0 and math.max(0, available - suffix_width) or available
-  cx = draw_highlighted_text(font, name, cx, y, name_available, name_color, name_spans)
+  cx = draw_highlighted_text(file_font, name, cx, name_y, name_available, name_color, name_spans)
   local suffix_x = cx
   if suffix ~= "" and cx < right then
     cx = renderer.draw_text(font, truncate_text(font, suffix, right - cx), cx, y, suffix_color)

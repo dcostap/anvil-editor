@@ -8,6 +8,8 @@ local keymap = require "core.keymap"
 local style = require "core.style"
 local StatusBar = require "core.statusbar"
 
+local findfile = {}
+
 ---Configuration options for `findfile` plugin.
 ---@class config.plugins.findfile
 ---Show the latest visited files.
@@ -53,6 +55,16 @@ local coroutine_running = false
 local cache_expiration_time = 0
 local last_indexed_projects = ""
 local active_find_file_label = "Open File From Project"
+
+---Draw a file-search result with the shared proportional prose face while the
+---prompt, status, and other non-path text retain their normal monospace face.
+function findfile.draw_file_suggestion(item, font, color, x, y, w, h)
+  local path_font = style.prose_font:get_size() == font:get_size()
+    and style.prose_font or style.get_scaled_font(style.prose_font, font:get_size())
+  common.draw_text(
+    path_font, color, item.display_text or item.text, nil, x, y, 0, h
+  )
+end
 
 local function basedir_files()
   local files_return = {}
@@ -429,6 +441,7 @@ command.add(nil, {
 
     active_find_file_label = label or "Open File From Project"
     core.global_prompt_bar:enter(active_find_file_label, {
+      draw_text = findfile.draw_file_suggestion,
       submit = function(text, suggestion)
         if not suggestion then
           if text == "" then return end
@@ -520,3 +533,5 @@ core.status_bar:add_item({
     command.perform "core:find-file"
   end
 })
+
+return findfile

@@ -2069,7 +2069,7 @@ function FileTreeView:get_line_hint(line)
   local git_start = perf_start(stats)
   local git = self:get_git_info_for_entry(entry)
   perf_finish(stats, "filetree_line_hint_git_ms", git_start)
-  local segments = path_tree.changed_stat_segments(git and git.stat, font) or {}
+  local segments = path_tree.changed_stat_segments(git and git.stat) or {}
   if #segments > 0 then segments[#segments + 1] = { text = "   ", font = font, color = dim } end
   if #segments == 0 and git and git.kind == "ignored" then
     segments[#segments + 1] = { text = "ignored   ", font = font, color = style.filetree_git_status_ignored }

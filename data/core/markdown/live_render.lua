@@ -20,6 +20,11 @@ local MARKDOWN_EXTENSIONS = { md = true, markdown = true, mdown = true }
 local IMAGE_EXTENSIONS = { avif = true, bmp = true, gif = true, jpeg = true, jpg = true, png = true, svg = true, webp = true }
 local AUDIO_EXTENSIONS = { flac = true, mp3 = true, ogg = true, wav = true }
 local VIDEO_EXTENSIONS = { mov = true, mp4 = true, webm = true }
+local PROSE_FONT_ROLE_NAMES = {
+  "prose_font", "prose_strong_font", "prose_emphasis_font",
+  "prose_strong_emphasis_font", "prose_heading_font",
+  "prose_heading_emphasis_font",
+}
 
 local function extension(path)
   return (path or ""):match("%.([^.\\/]+)$") and (path or ""):match("%.([^.\\/]+)$"):lower() or nil
@@ -492,7 +497,7 @@ local function markdown_live_scaled_font(view, source, size)
 end
 
 local function markdown_live_body_font(view)
-  return markdown_live_scaled_font(view, style.markdown_live_font)
+  return markdown_live_scaled_font(view, style.prose_font)
 end
 
 local function markdown_live_body_line_height(view)
@@ -502,7 +507,7 @@ end
 local function heading_font(view, level)
   view.__markdown_live_heading_fonts = view.__markdown_live_heading_fonts or {}
   local cache = view.__markdown_live_heading_fonts
-  local font = markdown_live_scaled_font(view, style.markdown_live_heading_font)
+  local font = markdown_live_scaled_font(view, style.prose_heading_font)
   local size = font:get_size()
   local scale = ({ 1.65, 1.45, 1.30, 1.18, 1.08, 1.0 })[level] or 1
   local key = tostring(font) .. ":" .. tostring(size) .. ":" .. tostring(level)
@@ -514,7 +519,7 @@ end
 
 local function heading_italic_font(view, level)
   return markdown_live_scaled_font(
-    view, style.markdown_live_heading_italic_font,
+    view, style.prose_heading_emphasis_font,
     heading_font(view, level):get_size()
   )
 end
@@ -542,13 +547,13 @@ local function inline_style_font(
   elseif base_bold and span_type == "strong" and base_font then
     font = base_font
   elseif span_type == "strong_emphasis" or base_bold and span_type == "emphasis" then
-    font = style.markdown_live_bold_italic_font
+    font = style.prose_strong_emphasis_font
   elseif span_type == "strong" then
-    font = style.markdown_live_bold_font
+    font = style.prose_strong_font
   elseif span_type == "emphasis" then
-    font = style.markdown_live_italic_font
+    font = style.prose_emphasis_font
   else
-    font = base_font or style.markdown_live_font
+    font = base_font or style.prose_font
   end
   local size = base_font and base_font:get_size() or view:get_font():get_size()
   local key = tostring(font) .. ":" .. tostring(size) .. ":" .. tostring(span_type)
@@ -2282,7 +2287,7 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
       local marker = attributes.list
       local body_font = markdown_live_body_font(view)
       local checkmark_font = markdown_live_scaled_font(
-        view, style.markdown_live_bold_font,
+        view, style.prose_strong_font,
         math.max(1, math.floor(body_font:get_size() * 0.78))
       )
       local row_height = markdown_live_body_line_height(view)
@@ -3465,16 +3470,28 @@ local function provider_generation_state(view)
   local presentation_generation = view:get_presentation_layout_generation()
   local wrap_generation = view.__wrap_layout_generation or 0
   local theme_generation = core.color_theme_generation or 0
-  local body_font = style.markdown_live_font
+  local body_font = style.prose_font
   local body_font_size = view:get_font():get_size()
   local scrollbar_width = view.v_scrollbar.expanded_size or style.expanded_scrollbar_size
   local padding_x = style.padding.x
   local cache = view.__markdown_live_provider_generation_state
+  local prose_typography_unchanged = cache and cache.prose_fonts ~= nil
+  if prose_typography_unchanged then
+    for _, name in ipairs(PROSE_FONT_ROLE_NAMES) do
+      local font = style[name]
+      local cached = cache.prose_fonts[name]
+      if not cached or cached.font ~= font or cached.size ~= font:get_size() then
+        prose_typography_unchanged = false
+        break
+      end
+    end
+  end
   if cache
     and cache.presentation_generation == presentation_generation
     and cache.wrap_generation == wrap_generation
     and cache.theme_generation == theme_generation
     and cache.body_font == body_font
+    and prose_typography_unchanged
     and cache.body_font_size == body_font_size
     and cache.scrollbar_width == scrollbar_width
     and cache.padding_x == padding_x
@@ -3482,11 +3499,22 @@ local function provider_generation_state(view)
   then
     return cache
   end
+  local prose_fonts = {}
+  local prose_typography = {}
+  for _, name in ipairs(PROSE_FONT_ROLE_NAMES) do
+    local font = style[name]
+    local size = font:get_size()
+    prose_fonts[name] = { font = font, size = size }
+    prose_typography[#prose_typography + 1] = tostring(font)
+    prose_typography[#prose_typography + 1] = tostring(size)
+  end
   cache = {
     presentation_generation = presentation_generation,
     wrap_generation = wrap_generation,
     theme_generation = theme_generation,
     body_font = body_font,
+    prose_fonts = prose_fonts,
+    prose_typography_signature = table.concat(prose_typography, ":"),
     body_font_size = body_font_size,
     scrollbar_width = scrollbar_width,
     padding_x = padding_x,
@@ -3528,7 +3556,7 @@ function provider:generation(view)
   -- `markdown_live_body_font()` may return a fresh size-adjusted copy. Keying
   -- by that temporary object's identity makes an unchanged layout look new
   -- whenever wrapping is locally refreshed.
-  state.generation = tostring(state.body_font) .. ":" .. tostring(font:get_size())
+  state.generation = state.prose_typography_signature .. ":" .. tostring(font:get_size())
     .. ":width:" .. tostring(table_width)
     .. ":image-width:" .. tostring(image_width)
   return state.generation

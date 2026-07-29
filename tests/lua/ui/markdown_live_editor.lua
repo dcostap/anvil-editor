@@ -58,7 +58,7 @@ local function refresh(view)
 end
 
 local function live_body_font(view)
-  local font = style.markdown_live_font
+  local font = style.prose_font
   local size = view:get_font():get_size()
   return font:get_size() == size and font or font:copy(size)
 end
@@ -192,6 +192,32 @@ test.describe("Markdown Live Editor", function()
       view:get_col_x_offset(3, #"return true" + 1) - code_inset,
       view:get_font():get_width("return true")
     )
+  end)
+
+  test.it("adopts a changed global prose variant without reopening the view", function()
+    local view, doc = make_view("Plain **bold** text", "typography-role.md")
+    doc:set_selection(1, 1)
+    refresh(view)
+
+    local before
+    for _, fragment in ipairs(view:iter_line_render_fragments(view:get_line_render(1))) do
+      if fragment.text == "bold" then before = fragment end
+    end
+    test.not_nil(before)
+    test.ok(primary_font_path(before.font):match("Inter%-SemiBold%.ttf$"))
+
+    local original = style.prose_strong_font
+    style.prose_strong_font = style.code_font:copy(style.code_font:get_size())
+    local ok, err = pcall(function()
+      local bold
+      for _, fragment in ipairs(view:iter_line_render_fragments(view:get_line_render(1))) do
+        if fragment.text == "bold" then bold = fragment end
+      end
+      test.not_nil(bold)
+      test.equal(primary_font_path(bold.font), primary_font_path(style.code_font))
+    end)
+    style.prose_strong_font = original
+    if not ok then error(err, 0) end
   end)
 
   test.it("toggles and persists view-local Source Mode without moving editor state", function()

@@ -406,6 +406,64 @@ settings.add("Graphics",
   }
 )
 
+local function prose_font_option(label, description, path, name, filename, bold, italic)
+  return {
+    label = label,
+    description = description,
+    path = path,
+    type = settings.type.FONT,
+    fonts_list = style,
+    default = {
+      fonts = {
+        {
+          name = name,
+          path = DATADIR .. "/fonts/" .. filename,
+        },
+      },
+      options = {
+        size = 15,
+        antialiasing = "subpixel",
+        hinting = "slight",
+        ligatures = true,
+        bold = bold == true,
+        italic = italic == true,
+      },
+    },
+  }
+end
+
+settings.add("Typography",
+  {
+    prose_font_option(
+      "Prose Font", "Regular proportional text used by prose and navigation surfaces.",
+      "prose_font", "Inter Regular", "Inter-Regular.ttf"
+    ),
+    prose_font_option(
+      "Prose Strong Font", "Strong proportional prose text.",
+      "prose_strong_font", "Inter SemiBold", "Inter-SemiBold.ttf", true
+    ),
+    prose_font_option(
+      "Prose Emphasis Font", "Emphasized proportional prose text.",
+      "prose_emphasis_font", "Inter Italic", "Inter-Italic.ttf", false, true
+    ),
+    prose_font_option(
+      "Prose Strong Emphasis Font", "Strong emphasized proportional prose text.",
+      "prose_strong_emphasis_font", "Inter SemiBold Italic",
+      "Inter-SemiBoldItalic.ttf", true, true
+    ),
+    prose_font_option(
+      "Prose Heading Font", "Heading text used by prose presentations.",
+      "prose_heading_font", "Merriweather 24pt SemiBold",
+      "Merriweather_24pt-SemiBold.ttf", true
+    ),
+    prose_font_option(
+      "Prose Heading Emphasis Font", "Emphasized heading text used by prose presentations.",
+      "prose_heading_emphasis_font", "Merriweather 24pt SemiBold Italic",
+      "Merriweather_24pt-SemiBoldItalic.ttf", true, true
+    ),
+  }
+)
+
 settings.add("User Interface",
   {
     {

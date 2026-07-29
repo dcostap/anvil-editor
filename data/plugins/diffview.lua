@@ -53,7 +53,7 @@ config.plugins.diffview.config_spec = {
       description = "Collapse long unchanged diff regions by default.",
       path = "fold_unchanged_by_default",
       type = "toggle",
-      default = true
+      default = config.plugins.diffview.fold_unchanged_by_default
     },
     {
       label = "Fold Context Lines",

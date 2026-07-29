@@ -686,6 +686,22 @@ function Node:update()
 end
 
 
+---Synchronize active leaf scrollbars after the final layout pass.
+---View updates are allowed to change locked sizes, so their cached scrollbar
+---rectangles can otherwise describe the geometry from the initial layout.
+function Node:sync_scrollbar_geometry()
+  if self.type == "leaf" then
+    local view = self.active_view
+    if view and view.sync_scrollbar_geometry then
+      call_view_method(view, view.sync_scrollbar_geometry)
+    end
+  else
+    self.a:sync_scrollbar_geometry()
+    self.b:sync_scrollbar_geometry()
+  end
+end
+
+
 ---Draw a tab's title text with ellipsis if needed.
 ---@param view core.view View whose name to display
 ---@param font renderer.font Font to use

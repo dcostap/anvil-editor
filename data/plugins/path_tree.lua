@@ -332,8 +332,9 @@ function path_tree.git_gutter_color(kind)
   if kind == "deletion" or kind == "deleted" then return style.git_change_deletion end
 end
 
-function path_tree.changed_stat_segments(stat, font)
+function path_tree.changed_stat_segments(stat)
   if not (stat and ((stat.additions or 0) > 0 or (stat.deletions or 0) > 0)) then return nil end
+  local font = style.get_small_font(style.code_font)
   return {
     { text = string.format("+%d", stat.additions or 0), font = font, color = style.filetree_git_line_additions },
     { text = string.format(" −%d", stat.deletions or 0), font = font, color = style.filetree_git_line_deletions },
@@ -416,6 +417,7 @@ PathTreeView.show_line_numbers = false
 
 function PathTreeView:new(doc)
   PathTreeView.super.new(self, doc)
+  self.font = "prose_font"
   self:add_line_render_provider("path-tree-inline-file-icons", INLINE_FILE_ICON_PROVIDER)
   self:set_wrapping_enabled(false)
   self.path_tree = nil
@@ -552,8 +554,7 @@ end
 
 function PathTreeView:get_line_hint(line)
   local row = self:path_tree_row(line)
-  local font = style.get_small_font(self:get_font())
-  return row and path_tree.changed_stat_segments(row.stat, font) or nil
+  return row and path_tree.changed_stat_segments(row.stat) or nil
 end
 
 path_tree.Tree = Tree

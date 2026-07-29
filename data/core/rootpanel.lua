@@ -767,6 +767,10 @@ function RootPanel:update()
   perf_elapsed("rootpanel_node_update_ms", phase_start)
   phase_start = perf_active and system.get_time()
   self.root_node:update_layout()
+  -- The final layout can move or resize views after View:update() cached their
+  -- scrollbar rectangles. Synchronize geometry without advancing animations a
+  -- second time so drawing always uses this frame's final layout.
+  self.root_node:sync_scrollbar_geometry()
   perf_elapsed("rootpanel_final_layout_ms", phase_start)
 
   phase_start = perf_active and system.get_time()

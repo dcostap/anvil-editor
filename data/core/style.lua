@@ -44,6 +44,15 @@ style.big_font = style.font:copy(46 * SCALE)
 style.icon_font = renderer.font.load(DATADIR .. "/fonts/icons.ttf", 16 * SCALE, {antialiasing="grayscale", hinting="full"})
 style.icon_big_font = style.icon_font:copy(23 * SCALE)
 style.code_font = renderer.font.load(DATADIR .. "/fonts/JetBrainsMono-Regular.ttf", 15 * SCALE)
+-- Reusable proportional typography roles. Markdown Live Preview, navigation
+-- trees, and other prose-oriented surfaces may share these faces without
+-- making the fonts belong to any one feature.
+style.prose_font = renderer.font.load(DATADIR .. "/fonts/Inter-Regular.ttf", 15 * SCALE)
+style.prose_strong_font = renderer.font.load(DATADIR .. "/fonts/Inter-SemiBold.ttf", 15 * SCALE)
+style.prose_emphasis_font = renderer.font.load(DATADIR .. "/fonts/Inter-Italic.ttf", 15 * SCALE)
+style.prose_strong_emphasis_font = renderer.font.load(DATADIR .. "/fonts/Inter-SemiBoldItalic.ttf", 15 * SCALE)
+style.prose_heading_font = renderer.font.load(DATADIR .. "/fonts/Merriweather_24pt-SemiBold.ttf", 15 * SCALE)
+style.prose_heading_emphasis_font = renderer.font.load(DATADIR .. "/fonts/Merriweather_24pt-SemiBoldItalic.ttf", 15 * SCALE)
 
 local scaled_font_cache = {}
 

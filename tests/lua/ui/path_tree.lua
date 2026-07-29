@@ -1,4 +1,5 @@
 local Doc = require "core.doc"
+local style = require "core.style"
 local test = require "core.test"
 local path_tree = require "plugins.path_tree"
 
@@ -11,6 +12,20 @@ local function record(path, kind, additions, deletions)
 end
 
 test.describe("Path Tree", function()
+  test.it("uses the global prose typography role", function()
+    local view = path_tree.View(Doc(nil, nil, true))
+    test.equal(view:get_font(), style.prose_font)
+
+    local original = style.prose_font
+    local replacement = original:copy(original:get_size())
+    style.prose_font = replacement
+    local ok, err = pcall(function()
+      test.equal(view:get_font(), replacement)
+    end)
+    style.prose_font = original
+    if not ok then error(err, 0) end
+  end)
+
   test.it("compacts consecutive single-child directories when requested", function()
     local tree = path_tree.build({
       record("src/main/java/App.java", "modified"),
@@ -94,6 +109,8 @@ test.describe("Path Tree", function()
     local embedded_hint = embedded:get_line_hint(3)
     test.equal(whole_hint[1].text, "+5")
     test.equal(whole_hint[2].text, " −2")
+    test.equal(whole_hint[1].font, style.get_small_font(style.code_font))
+    test.equal(whole_hint[2].font, style.get_small_font(style.code_font))
     test.equal(embedded_hint[1].text, whole_hint[1].text)
     test.equal(embedded_hint[2].text, whole_hint[2].text)
   end)

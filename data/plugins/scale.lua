@@ -90,7 +90,12 @@ function scale.set(scale)
   style.margin.tab.top              = style.margin.tab.top              * s
   config.mouse_wheel_scroll         = config.mouse_wheel_scroll         * s
 
-  for _, name in ipairs {"font", "big_font", "icon_font", "icon_big_font"} do
+  for _, name in ipairs {
+    "font", "big_font", "icon_font", "icon_big_font",
+    "prose_font", "prose_strong_font", "prose_emphasis_font",
+    "prose_strong_emphasis_font", "prose_heading_font",
+    "prose_heading_emphasis_font",
+  } do
     style[name]:set_size(s * style[name]:get_size())
   end
 

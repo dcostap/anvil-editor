@@ -107,7 +107,7 @@ plugin_defaults("diffview", {
   log_times = false,
   plain_text = false,
   plain_text_color = style.diffview_plain_text,
-  fold_unchanged_by_default = true,
+  fold_unchanged_by_default = false,
   fold_context_lines = 6,
   fold_min_lines = 16,
 })
@@ -212,13 +212,13 @@ if core.fuzzy_searcher_install_global_keymaps then
 end
 local font_path = DATADIR .. "/fonts/CaskaydiaCoveNerdFontMono-Regular.ttf"
 local code_font_path = DATADIR .. "/fonts/CaskaydiaCoveNerdFontMono-SemiLight.ttf"
-local markdown_live_font_path = DATADIR .. "/fonts/Inter-Regular.ttf"
-local markdown_live_bold_font_path = DATADIR .. "/fonts/Inter-SemiBold.ttf"
-local markdown_live_italic_font_path = DATADIR .. "/fonts/Inter-Italic.ttf"
-local markdown_live_bold_italic_font_path = DATADIR .. "/fonts/Inter-SemiBoldItalic.ttf"
-local markdown_live_heading_font_path = DATADIR
+local prose_font_path = DATADIR .. "/fonts/Inter-Regular.ttf"
+local prose_strong_font_path = DATADIR .. "/fonts/Inter-SemiBold.ttf"
+local prose_emphasis_font_path = DATADIR .. "/fonts/Inter-Italic.ttf"
+local prose_strong_emphasis_font_path = DATADIR .. "/fonts/Inter-SemiBoldItalic.ttf"
+local prose_heading_font_path = DATADIR
   .. "/fonts/Merriweather_24pt-SemiBold.ttf"
-local markdown_live_heading_italic_font_path = DATADIR
+local prose_heading_emphasis_font_path = DATADIR
   .. "/fonts/Merriweather_24pt-SemiBoldItalic.ttf"
 local font_size = 15 * SCALE
 local max_default_font_group = 10 -- native renderer FONT_FALLBACK_MAX
@@ -268,24 +268,24 @@ local function load_text_font(primary_path, options, fallback_options)
 end
 style.font = load_text_font(font_path)
 style.code_font = load_text_font(code_font_path)
--- Live Preview prose uses a proportional face; source mode, fenced/indented
--- code, inline code, math, and every non-Markdown editor retain code_font.
-style.markdown_live_font = load_text_font(markdown_live_font_path)
-style.markdown_live_bold_font = load_text_font(
-  markdown_live_bold_font_path, nil, { ligatures = true, bold = true }
+-- Reusable proportional typography roles. Live Preview prose and compact
+-- navigation surfaces use these roles; source and diff text retain code_font.
+style.prose_font = load_text_font(prose_font_path)
+style.prose_strong_font = load_text_font(
+  prose_strong_font_path, nil, { ligatures = true, bold = true }
 )
-style.markdown_live_italic_font = load_text_font(
-  markdown_live_italic_font_path, nil, { ligatures = true, italic = true }
+style.prose_emphasis_font = load_text_font(
+  prose_emphasis_font_path, nil, { ligatures = true, italic = true }
 )
-style.markdown_live_bold_italic_font = load_text_font(
-  markdown_live_bold_italic_font_path, nil,
+style.prose_strong_emphasis_font = load_text_font(
+  prose_strong_emphasis_font_path, nil,
   { ligatures = true, bold = true, italic = true }
 )
-style.markdown_live_heading_font = load_text_font(
-  markdown_live_heading_font_path, nil, { ligatures = true, bold = true }
+style.prose_heading_font = load_text_font(
+  prose_heading_font_path, nil, { ligatures = true, bold = true }
 )
-style.markdown_live_heading_italic_font = load_text_font(
-  markdown_live_heading_italic_font_path, nil,
+style.prose_heading_emphasis_font = load_text_font(
+  prose_heading_emphasis_font_path, nil,
   { ligatures = true, bold = true, italic = true }
 )
 -- Keep scrollbars visible in a small/contracted form instead of expanding/fading.

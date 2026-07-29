@@ -67,10 +67,11 @@ local function set_doc_lines(view, lines)
 end
 
 local function draw_segments(view, x, y, segments)
-  local font = view:get_font()
+  local default_font = view:get_font()
   local tx = x
-  local ty = y + view:get_line_text_y_offset()
   for _, segment in ipairs(segments or {}) do
+    local font = segment.font or default_font
+    local ty = y + (view:get_line_height() - font:get_height()) / 2
     tx = renderer.draw_text(font, segment.text or "", tx, ty, segment.color or style.text, {
       tab_offset = tx - x,
     })
@@ -108,6 +109,7 @@ function GitView:pane_view(name)
   if not view then
     local ViewType = (name == "file-list" or name == "details") and path_tree.View or DocView
     view = ViewType(make_pane_doc("Git " .. name))
+    view.font = "prose_font"
     view:set_wrapping_enabled(false)
     view.git_owner_view = self
     view.git_pane = name
@@ -123,7 +125,7 @@ function GitView:pane_view(name)
       local commit_meta = v.git_commit_line_meta and v.git_commit_line_meta[line]
       if commit_meta and commit_meta.role == "commit" then
         return draw_segments(v, x, y, {
-          { text = commit_meta.hash or "", color = style.accent },
+          { text = commit_meta.hash or "", color = style.accent, font = style.code_font },
           { text = "  ", color = style.dim },
           { text = commit_meta.subject or "", color = style.text },
         })
@@ -139,7 +141,11 @@ function GitView:pane_view(name)
         elseif detail_meta.role == "field" then
           return draw_segments(v, x, y, {
             { text = detail_meta.label or "", color = style.dim },
-            { text = detail_meta.value or "", color = detail_meta.value_color or style.text },
+            {
+              text = detail_meta.value or "",
+              color = detail_meta.value_color or style.text,
+              font = detail_meta.value_is_code and style.code_font or nil,
+            },
           })
         elseif detail_meta.role == "message" then
           return draw_segments(v, x, y, { { text = detail_meta.text or "", color = detail_meta.error and style.error or style.dim } })
@@ -309,7 +315,11 @@ function GitView:commit_list_y()
 end
 
 function GitView:row_height()
-  return style.font:get_height() + 2 * SCALE
+  local tab = self:model_tab()
+  local pane = tab and tab.kind == "file_history" and "history-list"
+    or tab and tab.kind == "commit_diff" and "file-list"
+    or "log-list"
+  return self:pane_view(pane):get_line_height()
 end
 
 function GitView:get_scrollable_size()
@@ -555,7 +565,13 @@ local function commit_details_lines(commit)
     return lines, line_meta
   end
   add(commit.subject or "", { role = "subject", text = commit.subject or "" })
-  add("Hash: " .. tostring(commit.hash or ""), { role = "field", label = "Hash: ", value = tostring(commit.hash or ""), value_color = style.accent })
+  add("Hash: " .. tostring(commit.hash or ""), {
+    role = "field",
+    label = "Hash: ",
+    value = tostring(commit.hash or ""),
+    value_color = style.accent,
+    value_is_code = true,
+  })
   if commit.author_name and commit.author_name ~= "" then
     add("Author: " .. commit.author_name, { role = "field", label = "Author: ", value = commit.author_name })
   end
@@ -923,20 +939,21 @@ end
 
 function GitView:tab_rects(x, y)
   local rects = {}
-  local cursor = x + style.font:get_width("Tabs: ")
+  local font = style.prose_font
+  local cursor = x + font:get_width("Tabs: ")
   for _, tab in ipairs(self.model.tabs) do
     local label = tab_label(tab)
     if tab.id == self.model.active_tab then label = "[" .. label .. "]" end
-    local width = style.font:get_width(label)
-    rects[#rects + 1] = { tab = tab, x = cursor, y = y, w = width, h = style.font:get_height() }
-    cursor = cursor + width + style.font:get_width(" ")
+    local width = font:get_width(label)
+    rects[#rects + 1] = { tab = tab, x = cursor, y = y, w = width, h = font:get_height() }
+    cursor = cursor + width + font:get_width(" ")
   end
   return rects
 end
 
 function GitView:tab_at_point(px, py)
   local x = self.position.x + style.padding.x
-  local y = self.position.y + style.padding.y + style.font:get_height() + style.padding.y
+  local y = self.position.y + style.padding.y + style.prose_font:get_height() + style.padding.y
   for _, rect in ipairs(self:tab_rects(x, y)) do
     if px >= rect.x and px <= rect.x + rect.w and py >= rect.y and py <= rect.y + rect.h then
       return rect.tab
@@ -945,55 +962,60 @@ function GitView:tab_at_point(px, py)
 end
 
 function GitView:draw_tabs(x, y)
-  renderer.draw_text(style.font, "Tabs:", x, y, style.dim)
+  local font = style.prose_font
+  renderer.draw_text(font, "Tabs:", x, y, style.dim)
   for _, rect in ipairs(self:tab_rects(x, y)) do
     local color = rect.tab.id == self.model.active_tab and style.accent or style.dim
     local label = tab_label(rect.tab)
     if rect.tab.id == self.model.active_tab then label = "[" .. label .. "]" end
-    renderer.draw_text(style.font, label, rect.x, y, color)
+    renderer.draw_text(font, label, rect.x, y, color)
   end
 end
 
 function GitView:draw_commit_details(commit, x, y, width)
-  renderer.draw_text(style.font, "Details", x, y, style.text)
-  y = y + style.font:get_height() + style.padding.y
+  local font = style.prose_font
+  renderer.draw_text(font, "Details", x, y, style.text)
+  y = y + font:get_height() + style.padding.y
   if not commit then
-    renderer.draw_text(style.font, "Select a commit", x, y, style.dim)
+    renderer.draw_text(font, "Select a commit", x, y, style.dim)
     return
   end
-  renderer.draw_text(style.font, commit.subject or "", x, y, style.text)
-  y = y + style.font:get_height() + 2 * SCALE
-  renderer.draw_text(style.font, "Hash: " .. tostring(commit.hash or ""), x, y, style.dim)
-  y = y + style.font:get_height() + 2 * SCALE
+  renderer.draw_text(font, commit.subject or "", x, y, style.text)
+  y = y + font:get_height() + 2 * SCALE
+  local hash_label = "Hash: "
+  local hash_x = renderer.draw_text(font, hash_label, x, y, style.dim)
+  local hash_y = y + math.max(0, (font:get_height() - style.code_font:get_height()) / 2)
+  renderer.draw_text(style.code_font, tostring(commit.hash or ""), hash_x, hash_y, style.accent)
+  y = y + font:get_height() + 2 * SCALE
   if commit.author_name and commit.author_name ~= "" then
-    renderer.draw_text(style.font, "Author: " .. commit.author_name, x, y, style.dim)
-    y = y + style.font:get_height() + 2 * SCALE
+    renderer.draw_text(font, "Author: " .. commit.author_name, x, y, style.dim)
+    y = y + font:get_height() + 2 * SCALE
   end
   if commit.refs and commit.refs ~= "" then
-    renderer.draw_text(style.font, "Refs: " .. commit.refs, x, y, style.dim)
-    y = y + style.font:get_height() + 2 * SCALE
+    renderer.draw_text(font, "Refs: " .. commit.refs, x, y, style.dim)
+    y = y + font:get_height() + 2 * SCALE
   end
   y = y + style.padding.y
-  renderer.draw_text(style.font, "Changed files", x, y, style.text)
-  y = y + style.font:get_height() + style.padding.y
+  renderer.draw_text(font, "Changed files", x, y, style.text)
+  y = y + font:get_height() + style.padding.y
   if commit.changed_files_loading then
-    renderer.draw_text(style.font, "Loading changed files...", x, y, style.dim)
+    renderer.draw_text(font, "Loading changed files...", x, y, style.dim)
     return
   end
   if commit.changed_files_error then
-    renderer.draw_text(style.font, "Git error: " .. tostring(commit.changed_files_error.message or commit.changed_files_error.kind or commit.changed_files_error), x, y, style.error)
+    renderer.draw_text(font, "Git error: " .. tostring(commit.changed_files_error.message or commit.changed_files_error.kind or commit.changed_files_error), x, y, style.error)
     return
   end
   local files = commit.changed_files or {}
   if #files == 0 then
-    renderer.draw_text(style.font, commit.changed_files_loaded and "No changed files" or "Select a commit to load changed files", x, y, style.dim)
+    renderer.draw_text(font, commit.changed_files_loaded and "No changed files" or "Select a commit to load changed files", x, y, style.dim)
     return
   end
   for _, file in ipairs(files) do
     local label = file.path or file.new_path or file.old_path or ""
-    renderer.draw_text(style.font, string.format("%s  %s", file.kind or file.status or file.xy or "", label), x, y, style.text)
-    y = y + style.font:get_height() + 2 * SCALE
-    if y > self.position.y + self.size.y - style.font:get_height() then break end
+    renderer.draw_text(font, string.format("%s  %s", file.kind or file.status or file.xy or "", label), x, y, style.text)
+    y = y + font:get_height() + 2 * SCALE
+    if y > self.position.y + self.size.y - font:get_height() then break end
   end
 end
 
@@ -1199,15 +1221,15 @@ function GitView:draw_diff_tab(tab, x, y)
   local diff_w = self.position.x + self.size.x - diff_x - style.padding.x
   local diff_h = self.position.y + self.size.y - diff_y - style.padding.y
   if tab.loading_file then
-    renderer.draw_text(style.font, "Loading file diff...", diff_x + style.padding.x, diff_y, style.dim)
+    renderer.draw_text(style.prose_font, "Loading file diff...", diff_x + style.padding.x, diff_y, style.dim)
     return
   end
   if tab.file_error then
-    renderer.draw_text(style.font, "Git error: " .. tostring(tab.file_error.message or tab.file_error.kind or tab.file_error), diff_x + style.padding.x, diff_y, style.error)
+    renderer.draw_text(style.prose_font, "Git error: " .. tostring(tab.file_error.message or tab.file_error.kind or tab.file_error), diff_x + style.padding.x, diff_y, style.error)
     return
   end
   if tab.left_text == nil and tab.right_text == nil then
-    renderer.draw_text(style.font, "Select a changed file", diff_x + style.padding.x, diff_y, style.dim)
+    renderer.draw_text(style.prose_font, "Select a changed file", diff_x + style.padding.x, diff_y, style.dim)
     return
   end
   local view = self:ensure_diff_view(tab)
@@ -1223,7 +1245,7 @@ function GitView:draw()
   local y = self.position.y + style.padding.y
   local tab = self:model_tab()
   if not tab then
-    renderer.draw_text(style.font, "Git tab is no longer available", x, y, style.dim)
+    renderer.draw_text(style.prose_font, "Git tab is no longer available", x, y, style.dim)
   elseif tab.kind == "commit_diff" then
     self:draw_diff_tab(tab, x, y)
   elseif tab.kind == "file_history" then

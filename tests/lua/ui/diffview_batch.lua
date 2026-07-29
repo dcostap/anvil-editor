@@ -483,6 +483,26 @@ test.describe("DiffView batch behavior", function()
     test.equal(view:get_name(), "Text Diff View")
   end)
 
+  test.it("shows long unchanged regions expanded by default", function(context)
+    test.equal(config.plugins.diffview.fold_unchanged_by_default, false)
+
+    local left, right = {}, {}
+    for i = 1, 14 do left[i], right[i] = "same " .. i, "same " .. i end
+    left[7], right[7] = "old", "new"
+    local view = track(context, "diffviews", diffview.string_to_string(
+      table.concat(left, "\n"),
+      table.concat(right, "\n"),
+      "left",
+      "right",
+      true
+    ))
+    wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
+
+    test.equal(view.folding_enabled, false)
+    test.equal(#view.diff_folds_a, 0)
+    test.equal(#view.diff_folds_b, 0)
+  end)
+
   test.it("folds long unchanged regions and toggles them from diff DocViews", function(context)
     local old_context = config.plugins.diffview.fold_context_lines
     local old_min = config.plugins.diffview.fold_min_lines
@@ -701,11 +721,14 @@ test.describe("DiffView batch behavior", function()
   test.it("uses core folding for caret movement and scroll synchronization", function(context)
     local old_context = config.plugins.diffview.fold_context_lines
     local old_min = config.plugins.diffview.fold_min_lines
+    local old_default = config.plugins.diffview.fold_unchanged_by_default
     config.plugins.diffview.fold_context_lines = 1
     config.plugins.diffview.fold_min_lines = 3
+    config.plugins.diffview.fold_unchanged_by_default = true
     context.restore_diff_folding_config = function()
       config.plugins.diffview.fold_context_lines = old_context
       config.plugins.diffview.fold_min_lines = old_min
+      config.plugins.diffview.fold_unchanged_by_default = old_default
     end
 
     local left, right = {}, {}
@@ -1016,11 +1039,14 @@ test.describe("DiffView batch behavior", function()
   test.it("keeps folded panes synchronized around insert-only hunks", function(context)
     local old_context = config.plugins.diffview.fold_context_lines
     local old_min = config.plugins.diffview.fold_min_lines
+    local old_default = config.plugins.diffview.fold_unchanged_by_default
     config.plugins.diffview.fold_context_lines = 2
     config.plugins.diffview.fold_min_lines = 3
+    config.plugins.diffview.fold_unchanged_by_default = true
     context.restore_diff_folding_config = function()
       config.plugins.diffview.fold_context_lines = old_context
       config.plugins.diffview.fold_min_lines = old_min
+      config.plugins.diffview.fold_unchanged_by_default = old_default
     end
 
     local left, right = {}, { "inserted" }

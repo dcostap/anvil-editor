@@ -1312,7 +1312,7 @@ Retain the existing `MarkdownView` as an optional Reading view during the rebuil
 
 ### 4. Typography
 
-Use the bundled proportional Markdown body font (Inter) for Live Preview prose and headings. Keep the normal code font for inline code, math source, fenced/indented/raw blocks, and Source Mode. Do not apply Inter to the general UI or non-Markdown Editors.
+Use Anvil's bundled proportional prose Typography Roles for Live Preview prose and headings. Keep the normal code font for inline code, math source, fenced/indented/raw blocks, Source Mode, Standard Editors, and Diff Sides. Navigation-oriented Document Views such as the File Tree and Git lists may share the regular prose role without changing the general interface font.
 
 ### 5. Link activation
 
