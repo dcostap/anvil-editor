@@ -65,4 +65,28 @@ test.describe("Native fuzzy file index", function()
     test.equal(vendored.root_id, "vendor-library")
     index:free()
   end)
+
+
+  test.it("finalizes an immutable fuzzy snapshot off the Lua thread", function()
+    local builder = fuzzy.file_index_builder {
+      { path = path("C:/project"), label = "project", role = "root", id = "root" },
+    }
+    local chunks = {}
+    for i = 1, 10000 do chunks[i] = string.format("src/file_%05d.cpp\0", i) end
+    builder:feed(1, table.concat(chunks))
+
+    local task = builder:finish_async()
+    local index, stats
+    local deadline = system.get_time() + 5
+    repeat
+      index, stats = task:poll()
+      if not index then coroutine.yield(0.001) end
+    until index or system.get_time() >= deadline
+
+    test.not_nil(index, "native file-index finalization did not complete")
+    test.equal(stats.accepted, 10000)
+    test.equal(#index, 10000)
+    test.equal(#index:search("file_10000", { limit = 5 }), 1)
+    index:free()
+  end)
 end)

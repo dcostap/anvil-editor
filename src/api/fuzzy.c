@@ -6,10 +6,12 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <SDL3/SDL.h>
 
 #define API_TYPE_FUZZY_INDEX "FuzzyIndex"
 #define API_TYPE_FUZZY_FILE_BUILDER "FuzzyFileIndexBuilder"
 #define API_TYPE_FUZZY_FILE_INDEX "FuzzyFileIndex"
+#define API_TYPE_FUZZY_FILE_BUILD_TASK "FuzzyFileIndexBuildTask"
 #define FUZZY_MAX_RETURN_SPANS 256
 
 typedef struct {
@@ -23,6 +25,15 @@ typedef struct {
 typedef struct {
   FuzzyFileIndex *index;
 } LuaFuzzyFileIndex;
+
+typedef struct {
+  FuzzyFileIndexBuilder *builder;
+  FuzzyFileIndex *index;
+  FuzzyFileIndexStats stats;
+  SDL_Thread *thread;
+  SDL_AtomicInt done;
+  bool consumed;
+} LuaFuzzyFileBuildTask;
 
 static FuzzyMode opt_mode(lua_State *L, int opts_index) {
   FuzzyMode mode = FUZZY_MODE_GENERIC;
@@ -93,6 +104,10 @@ static LuaFuzzyFileIndexBuilder *check_file_builder(lua_State *L, int idx) {
 
 static LuaFuzzyFileIndex *check_file_index(lua_State *L, int idx) {
   return (LuaFuzzyFileIndex *)luaL_checkudata(L, idx, API_TYPE_FUZZY_FILE_INDEX);
+}
+
+static LuaFuzzyFileBuildTask *check_file_build_task(lua_State *L, int idx) {
+  return (LuaFuzzyFileBuildTask *)luaL_checkudata(L, idx, API_TYPE_FUZZY_FILE_BUILD_TASK);
 }
 
 static void push_span_table(lua_State *L, const FuzzySpan *span) {
@@ -306,6 +321,43 @@ static int file_builder_gc(lua_State *L) {
   return 0;
 }
 
+static void push_file_index_stats(lua_State *L, const FuzzyFileIndexStats *stats) {
+  lua_createtable(L, 0, 4);
+  lua_pushinteger(L, stats->candidates); lua_setfield(L, -2, "candidates");
+  lua_pushinteger(L, stats->accepted); lua_setfield(L, -2, "accepted");
+  lua_pushinteger(L, stats->duplicates); lua_setfield(L, -2, "duplicates");
+  lua_pushnumber(L, (lua_Number)stats->input_bytes); lua_setfield(L, -2, "input_bytes");
+}
+
+static int SDLCALL file_builder_finish_thread(void *payload) {
+  LuaFuzzyFileBuildTask *task = (LuaFuzzyFileBuildTask *)payload;
+  task->index = fuzzy_file_index_builder_finish(task->builder, &task->stats);
+  task->builder = NULL;
+  SDL_SetAtomicInt(&task->done, 1);
+  return task->index ? 0 : 1;
+}
+
+static int file_builder_finish_async(lua_State *L) {
+  LuaFuzzyFileIndexBuilder *builder = check_file_builder(L, 1);
+  luaL_argcheck(L, builder->builder != NULL, 1, "file-index builder is already finished");
+  LuaFuzzyFileBuildTask *task =
+    (LuaFuzzyFileBuildTask *)lua_newuserdata(L, sizeof(*task));
+  memset(task, 0, sizeof(*task));
+  task->builder = builder->builder;
+  builder->builder = NULL;
+  luaL_getmetatable(L, API_TYPE_FUZZY_FILE_BUILD_TASK);
+  lua_setmetatable(L, -2);
+  task->thread = SDL_CreateThread(file_builder_finish_thread,
+    "fuzzy-file-index-finish", task);
+  if (!task->thread) {
+    fuzzy_file_index_builder_free(task->builder);
+    task->builder = NULL;
+    task->consumed = true;
+    return luaL_error(L, "could not start native file-index finalization thread: %s", SDL_GetError());
+  }
+  return 1;
+}
+
 static void push_file_entry_fields(lua_State *L, const FuzzyFileEntryView *entry) {
   lua_pushstring(L, entry->display_path); lua_setfield(L, -2, "text");
   lua_pushstring(L, entry->relative_path); lua_setfield(L, -2, "relative_path");
@@ -334,12 +386,44 @@ static int file_builder_finish(lua_State *L) {
   lua_index->index = index;
   luaL_getmetatable(L, API_TYPE_FUZZY_FILE_INDEX);
   lua_setmetatable(L, -2);
-  lua_createtable(L, 0, 4);
-  lua_pushinteger(L, stats.candidates); lua_setfield(L, -2, "candidates");
-  lua_pushinteger(L, stats.accepted); lua_setfield(L, -2, "accepted");
-  lua_pushinteger(L, stats.duplicates); lua_setfield(L, -2, "duplicates");
-  lua_pushnumber(L, (lua_Number)stats.input_bytes); lua_setfield(L, -2, "input_bytes");
+  push_file_index_stats(L, &stats);
   return 2;
+}
+
+static int file_build_task_poll(lua_State *L) {
+  LuaFuzzyFileBuildTask *task = check_file_build_task(L, 1);
+  luaL_argcheck(L, !task->consumed, 1, "file-index build result is already consumed");
+  if (SDL_GetAtomicInt(&task->done) == 0) return 0;
+  if (task->thread) {
+    SDL_WaitThread(task->thread, NULL);
+    task->thread = NULL;
+  }
+  if (!task->index) {
+    task->consumed = true;
+    return luaL_error(L, "native file-index finalization failed");
+  }
+  LuaFuzzyFileIndex *lua_index = (LuaFuzzyFileIndex *)lua_newuserdata(L, sizeof(*lua_index));
+  lua_index->index = task->index;
+  task->index = NULL;
+  task->consumed = true;
+  luaL_getmetatable(L, API_TYPE_FUZZY_FILE_INDEX);
+  lua_setmetatable(L, -2);
+  push_file_index_stats(L, &task->stats);
+  return 2;
+}
+
+static int file_build_task_gc(lua_State *L) {
+  LuaFuzzyFileBuildTask *task = check_file_build_task(L, 1);
+  if (task->thread) {
+    SDL_WaitThread(task->thread, NULL);
+    task->thread = NULL;
+  }
+  fuzzy_file_index_builder_free(task->builder);
+  fuzzy_file_index_free(task->index);
+  task->builder = NULL;
+  task->index = NULL;
+  task->consumed = true;
+  return 0;
 }
 
 static int file_index_gc(lua_State *L) {
@@ -493,8 +577,15 @@ static const luaL_Reg index_methods[] = {
 static const luaL_Reg file_builder_methods[] = {
   { "feed", file_builder_feed },
   { "finish", file_builder_finish },
+  { "finish_async", file_builder_finish_async },
   { "free", file_builder_gc },
   { "__gc", file_builder_gc },
+  { NULL, NULL }
+};
+
+static const luaL_Reg file_build_task_methods[] = {
+  { "poll", file_build_task_poll },
+  { "__gc", file_build_task_gc },
   { NULL, NULL }
 };
 
@@ -533,6 +624,12 @@ int luaopen_fuzzy(lua_State *L) {
   lua_pushvalue(L, -1);
   lua_setfield(L, -2, "__index");
   luaL_setfuncs(L, file_index_methods, 0);
+  lua_pop(L, 1);
+
+  luaL_newmetatable(L, API_TYPE_FUZZY_FILE_BUILD_TASK);
+  lua_pushvalue(L, -1);
+  lua_setfield(L, -2, "__index");
+  luaL_setfuncs(L, file_build_task_methods, 0);
   lua_pop(L, 1);
 
   luaL_newlib(L, lib);

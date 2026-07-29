@@ -821,22 +821,32 @@ local function start_file_index(roots, signature, reason)
       return
     end
 
-    local refresh_requested = fuzzy_searcher.files_refresh_requested
     local completed_reason = fuzzy_searcher.files_scan_reason
-    fuzzy_searcher.files_indexing = false
-    fuzzy_searcher.files_refresh_requested = false
-    fuzzy_searcher.files_scan_reason = nil
     if scan_failed then
       pcall(native_builder.free, native_builder)
       core.log_quiet("Fuzzy file index retained its previous snapshot after scanning failed")
     else
       local finish_started = system.get_time()
-      local finished, native_index, native_stats = pcall(native_builder.finish, native_builder)
+      local task_started, finish_task = pcall(native_builder.finish_async, native_builder)
+      local finished, native_index, native_stats = task_started, nil, nil
+      if task_started then
+        repeat
+          finished, native_index, native_stats = pcall(finish_task.poll, finish_task)
+          if finished and not native_index then coroutine.yield(0.005) end
+        until not finished or native_index
+      end
       local finish_seconds = system.get_time() - finish_started
       if not finished or not native_index then
         scan_failed = true
-        core.log_quiet("Fuzzy native file index finalization failed: %s", tostring(native_index))
+        core.log_quiet("Fuzzy native file index finalization failed: %s",
+          tostring(task_started and native_index or finish_task))
       else
+        if scan_generation ~= fuzzy_searcher.files_scan_generation
+          or fuzzy_searcher.files_cache_root ~= signature
+        then
+          pcall(native_index.free, native_index)
+          return
+        end
         local previous_index = fuzzy_searcher.files_fuzzy_index
         fuzzy_searcher.files_generation = fuzzy_searcher.files_generation + 1
         fuzzy_searcher.files_cache = nil
@@ -873,6 +883,10 @@ local function start_file_index(roots, signature, reason)
         )
       end
     end
+    local refresh_requested = fuzzy_searcher.files_refresh_requested
+    fuzzy_searcher.files_indexing = false
+    fuzzy_searcher.files_refresh_requested = false
+    fuzzy_searcher.files_scan_reason = nil
     if active_view then active_view.dirty = true; active_view:schedule_update(true) end
     if refresh_requested then fuzzy_searcher.refresh_file_index_for_picker_open() end
   end)
