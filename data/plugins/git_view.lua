@@ -646,7 +646,7 @@ local function close_git_view_tab(view)
 end
 
 command.add(function()
-  local view = active_git_view()
+  local view = focused_git_view()
   if view then return true, view end
   return false
 end, {
@@ -655,9 +655,7 @@ end, {
   end,
   ["git:activate-selected-row"] = function(view)
     if not view then return end
-    local active_tab = view.model:selected_tab()
-    local diff_tab, err = view:activate_selected(function() core.redraw = true end)
-    if active_tab.kind ~= "commit_diff" and diff_tab then git_view.ensure_tab_view(view.tool_window, diff_tab, true) end
+    local diff_tab, err = view:activate_selected_point(function() core.redraw = true end)
     if not diff_tab and err then core.log_quiet("Git View: activate selected row skipped: %s", err.message or err.kind) end
   end,
   ["git:close-selected-tab"] = close_git_view_tab,
@@ -676,7 +674,6 @@ end, {
 keymap.add({
   ["ctrl+k"] = "git:open-view",
   ["return"] = "git:activate-selected-row",
-  ["alt+r"] = "git:activate-selected-row",
   ["alt+shift+`"] = "git:focus-diff-pane",
 })
 

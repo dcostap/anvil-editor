@@ -1,5 +1,7 @@
 local common = require "core.common"
 local core = require "core"
+local command = require "core.command"
+local panes = require "core.panes"
 local test = require "core.test"
 local filetree = require "plugins.filetree"
 local project_paths = require "core.project_paths"
@@ -94,5 +96,36 @@ test.describe("File Tree entry snapshots", function()
     local child = find_entry("child.txt")
     test.not_nil(child)
     test.ok(common.path_equals(child.abs, root .. PATHSEP .. "folder" .. PATHSEP .. "child.txt"))
+  end)
+
+  test.it("activates the selected entry through Point of Interest Activation", function(context)
+    local root = setup_tree(context)
+    local entry = find_entry("root.txt")
+    test.not_nil(entry)
+    filetree.doc:set_selection(entry.line, 1)
+    core.set_active_view(filetree)
+    local opened
+    local original_open_path = panes.open_path
+    panes.open_path = function(path, opts)
+      opened = { path = path, opts = opts }
+      return {}
+    end
+    local ok, result = pcall(command.perform, "poi:activate")
+    panes.open_path = original_open_path
+    if not ok then error(result, 0) end
+
+    test.ok(result)
+    test.ok(common.path_equals(opened.path, root .. PATHSEP .. "root.txt"))
+    test.equal(opened.opts.pane, "left")
+
+    panes.open_path = function(path, opts)
+      opened = { path = path, opts = opts }
+      return {}
+    end
+    ok, result = pcall(command.perform, "poi:activate-right")
+    panes.open_path = original_open_path
+    if not ok then error(result, 0) end
+    test.ok(result)
+    test.equal(opened.opts.pane, "right")
   end)
 end)

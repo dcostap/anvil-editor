@@ -6,6 +6,51 @@ local panes = require "core.panes"
 
 local M = core.poi or {}
 core.poi = M
+M.activation_providers = M.activation_providers or {}
+
+---Register a provider for context-sensitive Point of Interest Activation.
+---Providers above priority 0 run before a view's own POIs; providers at or below 0
+---are fallbacks used only when the Focused View has no activatable POI.
+function M.add_activation_provider(id, provider, opts)
+  assert(type(id) == "string" and id ~= "", "POI activation provider id must be a non-empty string")
+  assert(type(provider) == "table" and type(provider.point_at_caret) == "function",
+    "POI activation provider must define point_at_caret")
+  opts = opts or {}
+  M.activation_providers[id] = {
+    id = id,
+    provider = provider,
+    priority = tonumber(opts.priority or provider.priority) or 0,
+  }
+end
+
+function M.remove_activation_provider(id)
+  if not M.activation_providers[id] then return false end
+  M.activation_providers[id] = nil
+  return true
+end
+
+local function sorted_activation_providers()
+  local providers = {}
+  for _, entry in pairs(M.activation_providers) do providers[#providers + 1] = entry end
+  table.sort(providers, function(a, b)
+    if a.priority ~= b.priority then return a.priority > b.priority end
+    return a.id < b.id
+  end)
+  return providers
+end
+
+local function provider_point_at_caret(view, opts, before_view)
+  for _, entry in ipairs(sorted_activation_providers()) do
+    if (entry.priority > 0) == before_view then
+      local ok, point = pcall(entry.provider.point_at_caret, entry.provider, view, opts or {})
+      if not ok then
+        core.log_quiet("POI activation provider %s failed: %s", entry.id, tostring(point))
+      elseif point and M.is_activatable(view, point) then
+        return point
+      end
+    end
+  end
+end
 
 local function normalize_direction(direction)
   if direction == "previous" or direction == "prev" or direction == "backward" then return -1 end
@@ -91,7 +136,10 @@ end
 
 function M.point_at_caret(view, opts)
   opts = opts or {}
-  if not view or not view.doc then return nil end
+  if not view then return nil end
+  local point = provider_point_at_caret(view, opts, true)
+  if point then return point end
+  if not view.doc then return provider_point_at_caret(view, opts, false) end
   return with_selection_state(view, function()
     local line, col = view.doc:get_selection()
     if type(view.get_point_of_interest_at) == "function" then
@@ -99,12 +147,14 @@ function M.point_at_caret(view, opts)
       if poi and (not opts.activatable or M.is_activatable(view, poi)) then return poi end
     end
     local points = M.points_for_view(view, opts)
-    if not points then return nil end
-    for _, poi in ipairs(points) do
-      if point_contains(poi, line, col) and (not opts.activatable or M.is_activatable(view, poi)) then
-        return poi
+    if points then
+      for _, poi in ipairs(points) do
+        if point_contains(poi, line, col) and (not opts.activatable or M.is_activatable(view, poi)) then
+          return poi
+        end
       end
     end
+    return provider_point_at_caret(view, opts, false)
   end)
 end
 
@@ -207,7 +257,7 @@ function M.right_target_view()
 end
 
 local function active_view_has_activatable_poi(...)
-  local view = core.active_view
+  local view = provider_view(core.active_view)
   local poi = M.point_at_caret(view, { activatable = true, silent = true })
   return poi ~= nil, view, poi, ...
 end

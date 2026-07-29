@@ -8,15 +8,13 @@ local command = require "core.command"
 local keymap = require "core.keymap"
 local style = require "core.style"
 local Doc = require "core.doc"
-local DocView = require "core.docview"
 local file_context = require "core.file_context"
-local file_icons = require "core.file_icons"
 local project_paths = require "core.project_paths"
 local panes = require "core.panes"
 local storage = require "core.storage"
 local DirWatch = require "core.dirwatch"
 local git_backend = require "plugins.git.backend"
-local filetree_render = require "plugins.filetree.render"
+local path_tree = require "plugins.path_tree"
 
 local FILETREE_SETTINGS_MODULE = "filetree"
 local FILETREE_SETTINGS_KEY = "settings"
@@ -466,7 +464,7 @@ local function git_status_kind(xy)
 end
 
 local function stronger_git_kind(a, b)
-  return filetree_render.stronger_git_kind(a, b)
+  return path_tree.stronger_kind(a, b)
 end
 
 local function is_rename_op(op)
@@ -861,7 +859,7 @@ local function recover_known_line_meta(view)
   end
 end
 
-local FileTreeView = DocView:extend()
+local FileTreeView = path_tree.View:extend()
 FileTreeView.context = "application"
 FileTreeView.show_line_numbers = false
 
@@ -938,8 +936,7 @@ function FileTreeView:get_name()
 end
 
 function FileTreeView:get_gutter_width()
-  local left_padding = math.max(1, math.floor(2 * (SCALE or 1) + 0.5))
-  return left_padding + file_icons.column_width(self:get_line_height()), 0
+  return path_tree.gutter_width(self)
 end
 
 function FileTreeView:git_root()
@@ -1069,7 +1066,7 @@ function FileTreeView:get_git_info_for_line(line)
 end
 
 function FileTreeView:git_text_color(kind)
-  return filetree_render.git_text_color(kind)
+  return path_tree.git_text_color(kind)
 end
 
 function FileTreeView:set_target_size(axis, value)
@@ -2049,7 +2046,7 @@ function FileTreeView:get_line_hint(line)
   local git_start = perf_start(stats)
   local git = self:get_git_info_for_entry(entry)
   perf_finish(stats, "filetree_line_hint_git_ms", git_start)
-  local segments = filetree_render.changed_stat_segments(git and git.stat, font) or {}
+  local segments = path_tree.changed_stat_segments(git and git.stat, font) or {}
   if #segments > 0 then segments[#segments + 1] = { text = "   ", font = font, color = dim } end
   if #segments == 0 and git and git.kind == "ignored" then
     segments[#segments + 1] = { text = "ignored   ", font = font, color = style.filetree_git_status_ignored }
@@ -2066,12 +2063,10 @@ end
 function FileTreeView:draw_folder_row_background(line, x, y, width)
   local stats = perf_stats()
   local start = perf_call(stats, "filetree_folder_row_background_calls")
-  local color = filetree_config.folder_row_background
-  if not color or not self:line_is_dir(line) then
+  if not path_tree.draw_folder_row_background(self, self:line_is_dir(line), x, y, width) then
     perf_finish(stats, "filetree_folder_row_background_ms", start)
     return false
   end
-  renderer.draw_rect(x, y, width, self:get_line_height(), color)
   perf_add(stats, "filetree_folder_row_background_rects", 1)
   perf_finish(stats, "filetree_folder_row_background_ms", start)
   return true
@@ -2120,7 +2115,7 @@ function FileTreeView:draw_line_text(line, x, y)
     perf_finish(stats, "filetree_draw_line_text_ms", start)
     return self:get_line_height()
   end
-  if not filetree_render.draw_row_text(self, text, x, y, git and git.kind, self:line_is_dir(line)) then
+  if not path_tree.draw_row_text(self, text, x, y, git and git.kind, self:line_is_dir(line)) then
     perf_add(stats, "filetree_draw_line_text_plain_calls", 1)
     local result = FileTreeView.super.draw_line_text(self, line, x, y)
     perf_finish(stats, "filetree_draw_line_text_ms", start)
@@ -2138,14 +2133,13 @@ function FileTreeView:draw_line_gutter(line, x, y, width)
   self:draw_folder_row_background(line, self.position.x, y, gw)
   local status = self:get_line_status(line)
   if status then
-    local color = filetree_render.git_gutter_color(status) or style.git_change_deletion
+    local color = path_tree.git_gutter_color(status) or style.git_change_deletion
     local w = style.gitdiff_width
     renderer.draw_rect(x + style.padding.x * 0.5, y, w, lh, color)
   end
   local parsed = self:parse_line(line)
   if parsed and not self:line_is_dir(line) then
-    local icon_column_width = file_icons.column_width(lh)
-    file_icons.draw(parsed.name, x + math.max(0, width - icon_column_width), y, lh)
+    path_tree.draw_file_icon(self, parsed.name, x, y, width)
   end
   return lh
 end
@@ -2908,13 +2902,13 @@ end
 
 function FileTreeView:open_item(target)
   self:sync_meta()
-  if target ~= "right" and self:open_selected_files() then return end
+  if target ~= "right" and self:open_selected_files() then return true end
 
   local line = self.doc:get_selection(true)
   local entry, err = self:entry_for_line(line)
   if not entry then
     if err then core.error("File Tree: %s", err) end
-    return
+    return false
   end
 
   local info = system.get_file_info(entry.abs)
@@ -2925,18 +2919,37 @@ function FileTreeView:open_item(target)
     if type(meta) == "table" and meta.expanded then
       self:collapse_folder(line, entry)
     else
-      if (not info or info.type ~= "dir") and not (type(meta) == "table" and meta.draft) then return end
+      if (not info or info.type ~= "dir") and not (type(meta) == "table" and meta.draft) then return false end
       self:expand_folder(line, entry, true)
     end
+    return true
   else
     if info and info.type == "file" then
       if target == "right" then
-        panes.open_path(entry.abs, { pane = "right", focus = true, source_view = self.last_left_pane_view })
+        return panes.open_path(entry.abs, { pane = "right", focus = true, source_view = self.last_left_pane_view }) ~= nil
       else
-        panes.open_path(entry.abs, { pane = "left", preserve_focus = true })
+        return panes.open_path(entry.abs, { pane = "left", preserve_focus = true }) ~= nil
       end
     end
   end
+  return false
+end
+
+function FileTreeView:get_point_of_interest_at(line)
+  local entry = self:entry_for_line(line)
+  if not entry then return nil end
+  local text = (self.doc:get_utf8_line(line) or ""):gsub("\n$", "")
+  return {
+    kind = entry.type == "dir" and "directory" or "file",
+    line = line,
+    col = 1,
+    line2 = line,
+    col2 = math.max(2, #text + 1),
+    text_bounds = true,
+    activate = function(_, _, opts)
+      return self:open_item(opts and opts.pane == "right" and "right" or nil)
+    end,
+  }
 end
 
 function FileTreeView:on_file_dropped(filename)
@@ -3485,8 +3498,6 @@ keymap.add {
   ["ctrl+\\"] = "filetree:toggle",
   ["alt+1"] = "pane:focus-left-and-hide-right",
   ["alt+2"] = "filetree:focus-and-show",
-  ["alt+r"] = "filetree:open",
-  ["alt+shift+r"] = "filetree:open-right",
   ["ctrl+return"] = "filetree:open-right",
   ["ctrl+s"] = "filetree:apply",
   ["f5"] = "filetree:refresh",

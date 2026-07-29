@@ -3,6 +3,7 @@ local command = require "core.command"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
 local file_context = require "core.file_context"
+local poi = require "core.poi"
 local test = require "core.test"
 
 local gitdiff = require "plugins.gitdiff_highlight"
@@ -33,6 +34,8 @@ test.describe("Point of Interest navigation", function()
   end)
 
   test.after_each(function(context)
+    poi.remove_activation_provider("test-focused-activation")
+    poi.remove_activation_provider("test-fallback-activation")
     for _, view in ipairs(context.diffviews or {}) do
       view.doc_view_a.doc:on_close()
       view.doc_view_b.doc:on_close()
@@ -82,6 +85,63 @@ test.describe("Point of Interest navigation", function()
 
     test.not_ok(command.is_valid("language:show-references"))
     test.not_ok(command.is_valid("language:go-to-declaration"))
+  end)
+
+  test.it("uses language declaration as the Editor's fallback activation", function(context)
+    local doc = Doc()
+    doc:insert(1, 1, "target")
+    doc:set_selection(1, 3)
+    local view = DocView(doc)
+    file_context.mark_editor_view(view)
+    context.docs = { doc }
+    core.set_active_view(view)
+
+    test.ok(command.is_valid("poi:activate"))
+  end)
+
+  test.it("lets a focused context override the view's ordinary activation", function(context)
+    local activated
+    local view = make_editor("target")
+    context.docs = { view.doc }
+    view.get_point_of_interest_at = function()
+      return {
+        line = 1, col = 1, line2 = 1, col2 = 2, text_bounds = true,
+        activate = function() activated = "view"; return true end,
+      }
+    end
+    poi.add_activation_provider("test-focused-activation", {
+      priority = 1000,
+      point_at_caret = function()
+        return {
+          line = 1, col = 1, line2 = 1, col2 = 2, text_bounds = true,
+          activate = function() activated = "context"; return true end,
+        }
+      end,
+    })
+    core.set_active_view(view)
+
+    test.ok(command.perform("poi:activate"))
+    test.equal(activated, "context")
+  end)
+
+  test.it("uses a fallback activation provider when a view has no POI collection", function(context)
+    local activated = false
+    local view = make_editor("!!!")
+    context.docs = { view.doc }
+    view.get_points_of_interest = false
+    poi.add_activation_provider("test-fallback-activation", {
+      priority = -1000,
+      point_at_caret = function()
+        return {
+          line = 1, col = 1, line2 = 1, col2 = 2, text_bounds = true,
+          activate = function() activated = true; return true end,
+        }
+      end,
+    })
+    core.set_active_view(view)
+
+    test.ok(command.perform("poi:activate"))
+    test.ok(activated)
   end)
 
   test.it("treats DiffView hunk POIs as line-only region targets", function(context)

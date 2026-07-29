@@ -10,6 +10,7 @@ local DocView = require "core.docview"
 local MarkdownView = require "core.markdownview"
 local RootPanel = require "core.rootpanel"
 local project_paths = require "core.project_paths"
+local poi = require "core.poi"
 local symbol_icons = require "core.symbol_icons"
 local tree_sitter_registry = require "core.treesitter.registry"
 
@@ -2066,7 +2067,7 @@ end
 
 local function predicate()
   local active_docview = get_active_view()
-  return active_docview and #suggestions > 0, active_docview
+  return active_docview and active_docview.doc == last_doc and #suggestions > 0, active_docview
 end
 
 command.add(docview_predicate, {
@@ -2169,6 +2170,26 @@ command.add(predicate, {
   end,
 })
 
+poi.add_activation_provider("autocomplete-source", {
+  priority = 200,
+  point_at_caret = function()
+    local active_docview = get_active_view()
+    if not active_docview or active_docview.doc ~= last_doc or #suggestions == 0 then return nil end
+    local line, col = active_docview.doc:get_selection()
+    return {
+      kind = "completion-source",
+      line = line,
+      col = col,
+      line2 = line,
+      col2 = col + 1,
+      text_bounds = true,
+      activate = function(_, _, opts)
+        return reveal_completion_source(opts and opts.pane == "right")
+      end,
+    }
+  end,
+})
+
 --
 -- Keymaps
 --
@@ -2176,8 +2197,6 @@ pcall(require, "core.commands.language")
 keymap.add {
   ["alt+space"]    = "autocomplete:trigger",
   ["tab"]          = "autocomplete:complete",
-  ["alt+r"]        = { "autocomplete:go-to-declaration", "language:go-to-declaration" },
-  ["alt+shift+r"]  = "language:show-references",
   ["up"]           = "autocomplete:previous",
   ["down"]         = "autocomplete:next",
   ["escape"]       = "autocomplete:cancel",

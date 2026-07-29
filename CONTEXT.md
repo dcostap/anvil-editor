@@ -208,6 +208,10 @@ _Avoid_: tab gap, unused tab space
 A permanent, singleton Right Pane tool for viewing and editing Project files and directories.
 _Avoid_: old file tree
 
+**Path Tree**:
+A hierarchical presentation of a scoped set of file and directory paths, such as files changed by a Git revision. Unlike the File Tree, a Path Tree is not the permanent Project-browsing tool.
+_Avoid_: file list, mini File Tree
+
 **Project Paths View**:
 A Project tool for reviewing and changing Project Path Roles, labels, locations, and storage scope.
 _Avoid_: external folder manager, path rules dialog

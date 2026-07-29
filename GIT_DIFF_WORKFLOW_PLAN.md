@@ -215,7 +215,7 @@ Extract/reuse a shared project-relative path-tree projection that owns:
 - expansion state where applicable;
 - path-to-row and row-to-path mapping.
 
-Reuse `plugins.filetree.render` for visual status colors, folder rows, and addition/deletion hints. File Tree editing behavior remains owned by File Tree; Git views reuse hierarchy and rendering, not filesystem mutation behavior.
+Use `plugins.path_tree` for the hierarchy, DocView presentation, visual status colors, file icons, folder rows, expansion state, and addition/deletion hints. File Tree editing behavior remains owned by File Tree; Git views reuse hierarchy and presentation, not filesystem mutation behavior.
 
 The flattened leaf order is the authoritative cross-file navigation order.
 

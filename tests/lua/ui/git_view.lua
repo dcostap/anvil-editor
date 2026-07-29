@@ -1,5 +1,6 @@
 local core = require "core"
 local command = require "core.command"
+local config = require "core.config"
 local style = require "core.style"
 local test = require "core.test"
 local tool_window = require "core.tool_window"
@@ -7,6 +8,7 @@ local panes = require "core.panes"
 local View = require "core.view"
 local RootPanel = require "core.rootpanel"
 local git_view = require "plugins.git_view"
+local path_tree = require "plugins.path_tree"
 local real_backend = require "plugins.git.backend"
 require "core.poi"
 
@@ -89,6 +91,7 @@ test.describe("Git View command", function()
     context.original_projects = core.projects
     context.original_active_view = core.active_view
     context.original_active_window = core.active_window
+    context.original_linewrapping_default = config.plugins.linewrapping.enable_by_default
     tool_window.reset_for_tests()
     context.project = { path = "C:/repo" }
   end)
@@ -97,6 +100,7 @@ test.describe("Git View command", function()
     core.projects = context.original_projects
     core.active_view = context.original_active_view
     core.active_window = context.original_active_window
+    config.plugins.linewrapping.enable_by_default = context.original_linewrapping_default
     tool_window.reset_for_tests()
   end)
 
@@ -137,6 +141,12 @@ test.describe("Git View command", function()
     view:on_mouse_pressed("left", 10, second_row_y, 1)
     test.equal(view.model:selected_commit().hash, "b")
     test.equal(tw.hidden, false)
+  end)
+
+  test.it("does not repeat the Git Pane Tab title inside the Git screen", function(context)
+    local tw, view = open_fake_git_view(context.project)
+    view.position.y = 30
+    test.equal(view:commit_list_y(), view.position.y + style.padding.y)
   end)
 
   test.test("opened Git items become real tool-window tabs", function(context)
@@ -249,24 +259,26 @@ test.describe("Git View command", function()
       closable = true,
       changed_files = {
         { status = "modified", old_path = "src/main/App.kt", new_path = "src/main/App.kt", stat = { additions = 2, deletions = 44 } },
-        { status = "added", old_path = "src/main/Util.kt", new_path = "src/main/Util.kt", stat = { additions = 3, deletions = 0 } },
         { status = "deleted", old_path = "README.md", new_path = "README.md", stat = { additions = 0, deletions = 5 } },
+        { status = "added", old_path = "src/main/Util.kt", new_path = "src/main/Util.kt", stat = { additions = 3, deletions = 0 } },
       },
-      selected_file = 2,
+      selected_file = 3,
     }
     view.model.tabs[#view.model.tabs + 1] = tab
     local tab_view = git_view.ensure_tab_view(tw, tab, true)
 
     tab_view:update_pane_docs()
     local list = tab_view:pane_view("file-list")
-    test.equal(list.doc.lines[1], "src\n")
-    test.equal(list.doc.lines[2], "\tmain\n")
+    test.ok(list:extends(path_tree.View))
+    test.equal(list.doc.lines[1], "src/\n")
+    test.equal(list.doc.lines[2], "\tmain/\n")
     test.equal(list.doc.lines[3], "\t\tApp.kt\n")
     test.equal(list.doc.lines[4], "\t\tUtil.kt\n")
     test.equal(list.doc.lines[5], "README.md\n")
     test.equal(list.git_file_line_to_index[3], 1)
-    test.equal(list.git_file_line_to_index[4], 2)
-    test.equal(list.git_file_index_to_line[2], 4)
+    test.equal(list.git_file_line_to_index[4], 3)
+    test.equal(list.git_file_index_to_line[3], 4)
+    test.equal(list.git_file_index_to_line[2], 5)
     test.equal(list.doc:get_selection(), 4)
     local hint = list:get_line_hint(3)
     test.equal(hint[1].text, "+2")
@@ -275,10 +287,144 @@ test.describe("Git View command", function()
     core.active_view = list
     list.doc:set_selection(1, 1)
     tab_view:sync_selection_from_pane()
-    test.equal(tab.selected_file, 2)
+    test.equal(tab.selected_file, 3)
     list.doc:set_selection(3, 1)
     tab_view:sync_selection_from_pane()
     test.equal(tab.selected_file, 1)
+
+    list.doc:set_selection(2, 1)
+    test.equal(command.perform("git:activate-selected-row"), true)
+    test.equal(list.doc.lines[3], "README.md\n")
+    test.equal(list.doc.lines[4], nil)
+    test.equal(tab.selected_file, 1)
+    test.equal(command.perform("git:activate-selected-row"), true)
+    test.equal(list.doc.lines[3], "\t\tApp.kt\n")
+    test.equal(list.doc.lines[4], "\t\tUtil.kt\n")
+
+    tab_view:select_relative(1)
+    test.equal(tab.selected_file, 3)
+    test.equal(list.doc:get_selection(), 4)
+    tab_view:select_relative(1)
+    test.equal(tab.selected_file, 2)
+    test.equal(list.doc:get_selection(), 5)
+
+    view.model:log_tab().commits = {
+      { hash = "tree", subject = "Tree", changed_files = tab.changed_files, changed_files_loaded = true },
+    }
+    view.model:log_tab().selected_commit = 1
+    view:update_pane_docs()
+    local details = view:pane_view("details")
+    test.ok(details:extends(path_tree.View))
+    test.same(details.path_tree:lines(), list.path_tree:lines())
+  end)
+
+  test.it("keeps an inactive list caret on the collapsed ancestor of its selected file", function(context)
+    local tw, view = open_fake_git_view(context.project)
+    local tab = {
+      id = "diff-collapsed-selection",
+      kind = "commit_diff",
+      title = "Diff collapsed selection",
+      closable = true,
+      changed_files = {
+        { status = "modified", old_path = "README.md", new_path = "README.md" },
+        { status = "modified", old_path = "src/main/App.kt", new_path = "src/main/App.kt" },
+      },
+      selected_file = 2,
+    }
+    view.model.tabs[#view.model.tabs + 1] = tab
+    local tab_view = git_view.ensure_tab_view(tw, tab, true)
+    tab_view:update_pane_docs()
+    local list = tab_view:pane_view("file-list")
+    core.active_view = list
+    list.doc:set_selection(1, 1)
+
+    test.equal(command.perform("git:activate-selected-row"), true)
+    test.equal(tab.selected_file, 2)
+    test.equal(list.doc.lines[1], "src/\n")
+    test.equal(list.doc.lines[2], "README.md\n")
+
+    core.active_view = tab_view
+    tab_view:update_pane_docs()
+    test.equal(list.doc:get_selection(), 1)
+  end)
+
+  test.it("activates a changed file from Git Log details with that file preselected", function(context)
+    local tw, view = open_fake_git_view(context.project)
+    local commit = {
+      hash = "details-tree",
+      subject = "Details tree",
+      parents = {},
+      changed_files_loaded = true,
+      changed_files = {
+        { status = "modified", old_path = "src/App.kt", new_path = "src/App.kt" },
+        { status = "deleted", old_path = "README.md", new_path = nil },
+        { status = "added", old_path = nil, new_path = "src/Util.kt" },
+      },
+    }
+    local backend = {}
+    for key, value in pairs(fake_backend) do backend[key] = value end
+    backend.changed_files = function(repo, left, right, opts, callback)
+      callback(commit.changed_files, nil)
+      return { cancel = function() end }
+    end
+    view.model.backend = backend
+    view.model:log_tab().commits = { commit }
+    view.model:log_tab().selected_commit = 1
+    view:update_pane_docs()
+
+    local details = view:pane_view("details")
+    local folder_line = details.path_tree_line_offset + details.path_tree:line_for_path("src", "dir")
+    core.active_view = details
+    details.doc:set_selection(folder_line, 1)
+    test.equal(view:activate_selected_point(function() core.redraw = true end), nil)
+    view:update_pane_docs()
+    test.equal(details.path_tree:is_expanded("src"), false)
+    test.equal(details.path_tree:line_for_record(3), nil)
+    test.equal(view:activate_selected_point(function() core.redraw = true end), nil)
+    view:update_pane_docs()
+    test.equal(details.path_tree:is_expanded("src"), true)
+
+    local line = details.path_tree_line_offset + details.path_tree:line_for_record(3)
+    details.doc:set_selection(line, 1)
+    test.not_nil(details:get_point_of_interest_at(line))
+
+    test.equal(command.perform("poi:activate"), true)
+    local opened = view.model:selected_tab()
+    test.not_nil(opened)
+    test.equal(opened.kind, "commit_diff")
+    test.equal(opened.selected_file_path, "src/Util.kt")
+    test.equal(opened.selected_file, 3)
+  end)
+
+  test.it("invalidates embedded Path Tree layout when Git details rows are replaced", function(context)
+    local tw, view = open_fake_git_view(context.project)
+    local long_name = string.rep("i", 260) .. ".txt"
+    local commit = {
+      hash = "details-layout",
+      subject = "Details layout",
+      parents = {},
+      changed_files_loaded = true,
+      changed_files = {
+        { status = "modified", old_path = "a/b/" .. long_name, new_path = "a/b/" .. long_name },
+      },
+    }
+    view.model:log_tab().commits = { commit }
+    view.model:log_tab().selected_commit = 1
+    view:update_pane_docs()
+    local details = view:pane_view("details")
+    local line = details.path_tree_line_offset + 3
+    local before = details:get_col_x_offset(line, 100)
+    local before_revision = details.doc.text_revision
+
+    commit.changed_files = {
+      { status = "modified", old_path = "a/x.txt", new_path = "a/x.txt" },
+      { status = "modified", old_path = long_name, new_path = long_name },
+    }
+    view:update_pane_docs()
+    local after = details:get_col_x_offset(line, 100)
+
+    test.not_equal(before, after)
+    test.ok(details.doc.text_revision > before_revision)
   end)
 
   test.test("commit diff tabs can focus diff content and return to the Git list", function(context)
@@ -338,6 +484,48 @@ test.describe("Git View command", function()
     test.equal(core.active_view.git_owner_view, tab_view)
   end)
 
+  test.it("styles Git Log pane content and keeps its DocViews unwrapped", function(context)
+    config.plugins.linewrapping.enable_by_default = true
+    local tw, view = open_fake_git_view(context.project)
+    view.model:log_tab().commits = {
+      {
+        hash = "abcdef123456",
+        short_hash = "abcdef1",
+        subject = "Make the Git screen readable",
+        author_name = "Darius",
+      },
+    }
+    view:update_pane_docs()
+    local list = view:pane_view("log-list")
+    local details = view:pane_view("details")
+    test.equal(list:is_wrapping_enabled(), false)
+    test.equal(details:is_wrapping_enabled(), false)
+
+    local calls = {}
+    local old_draw_text = renderer.draw_text
+    local old_draw_text_known_bounds = renderer.draw_text_known_bounds
+    local function capture(font, text, x, y, color)
+      calls[#calls + 1] = { text = text, color = color }
+      return x + font:get_width(text)
+    end
+    renderer.draw_text = capture
+    renderer.draw_text_known_bounds = capture
+    local ok, err = pcall(function()
+      list:draw_line_text(1, 0, 0)
+      test.equal(calls[1].text, "abcdef1")
+      test.equal(calls[1].color, style.accent)
+      calls = {}
+      details:draw_line_text(3, 0, 0)
+      test.equal(calls[1].text, "Hash: ")
+      test.equal(calls[1].color, style.dim)
+      test.equal(calls[2].text, "abcdef123456")
+      test.equal(calls[2].color, style.accent)
+    end)
+    renderer.draw_text = old_draw_text
+    renderer.draw_text_known_bounds = old_draw_text_known_bounds
+    if not ok then error(err, 0) end
+  end)
+
   test.test("pane focus cycle enters Log list and details DocViews", function(context)
     local tw, view = open_fake_git_view(context.project)
     core.active_view = view
@@ -368,6 +556,21 @@ test.describe("Git View command", function()
     tw:activate_root()
 
     test.equal(panes.right_visible(), false)
+    test.equal(core.active_view.git_owner_view, view)
+    test.equal(core.active_view.git_pane, "log-list")
+    panes.remove_view(panel, { force = true, focus_left = false })
+    panes.remove_view(view, { force = true, focus_left = false })
+  end)
+
+  test.it("hiding the File Tree restores the caret-bearing Git surface", function(context)
+    local tw, view = open_fake_git_view(context.project)
+    panes.open_view(view, { pane = "left", focus = false })
+    local panel = View()
+    panes.register_view("right", "git-focus-restore-panel", panel)
+    panes.show("right", { view = panel, focus = true })
+
+    panes.hide_right(true)
+
     test.equal(core.active_view.git_owner_view, view)
     test.equal(core.active_view.git_pane, "log-list")
     panes.remove_view(panel, { force = true, focus_left = false })
@@ -446,12 +649,27 @@ test.describe("Git View command", function()
     test.equal(view.model:selected_commit().hash, "b")
     local list = view:pane_view("log-list")
     test.equal(list.doc:get_selection(), 2)
-    test.equal(command.perform("git:activate-selected-row"), true)
+    test.equal(command.perform("poi:activate"), true)
     test.equal(view.model:selected_tab().kind, "commit_diff")
     test.equal(#tw.root:get_active_node_default().views, 2)
 
     core.active_view = {}
     test.equal(command.perform("git:select-next-row"), false)
+  end)
+
+  test.it("does not activate a Git row while another Pane View has focus", function(context)
+    local tw, view = open_fake_git_view(context.project)
+    core.projects = { context.project }
+    view.model:log_tab().commits = {
+      { hash = "a", short_hash = "a", subject = "First", parents = {} },
+    }
+    local panel = View()
+    panes.register_view("right", "git-row-focus-scope-panel", panel)
+    panes.show("right", { view = panel, focus = true })
+
+    test.equal(command.perform("git:activate-selected-row"), false)
+    test.equal(view.model:selected_tab().kind, "log")
+    panes.remove_view(panel, { force = true, focus_left = false })
   end)
 
   test.test("mouse wheel scrolls a long log", function(context)
@@ -468,6 +686,39 @@ test.describe("Git View command", function()
     view:on_mouse_wheel(-1, 0)
     test.ok(view.scroll.to.y > 0)
     test.equal(tw.hidden, false)
+  end)
+
+  test.it("scrolls the rendered Path Tree while navigating an inactive diff file list", function(context)
+    local tw, view = open_fake_git_view(context.project)
+    local files = {}
+    for index = 1, 40 do
+      local path = string.format("src/file-%03d.lua", index)
+      files[index] = { status = "modified", old_path = path, new_path = path }
+    end
+    local tab = {
+      id = "diff-path-tree-scroll",
+      kind = "commit_diff",
+      title = "Diff Path Tree scroll",
+      closable = true,
+      changed_files = files,
+      selected_file = 1,
+    }
+    view.model.tabs[#view.model.tabs + 1] = tab
+    local tab_view = git_view.ensure_tab_view(tw, tab, true)
+    tab_view:update_pane_docs()
+    local list = tab_view:pane_view("file-list")
+    list.position.x, list.position.y = 0, 0
+    list.size.x, list.size.y = 240, 80
+    core.active_view = tab_view
+
+    for _ = 1, 20 do tab_view:select_relative(1) end
+    test.equal(tab.selected_file, 21)
+    test.ok(list.scroll.y > 0)
+
+    local before = list.scroll.to.y
+    tab.file_list_hover = true
+    test.equal(tab_view:on_mouse_wheel(-1, 0), true)
+    test.ok(list.scroll.to.y > before)
   end)
 
   test.test("saves and restores hidden Git View Pane Tab state", function(context)

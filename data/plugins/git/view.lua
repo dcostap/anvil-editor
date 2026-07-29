@@ -10,7 +10,7 @@ local Doc = require "core.doc"
 local DocView = require "core.docview"
 local View = require "core.view"
 local GitModel = require "plugins.git.model"
-local filetree_render = require "plugins.filetree.render"
+local path_tree = require "plugins.path_tree"
 
 local GitView = View:extend()
 
@@ -35,10 +35,12 @@ local function make_pane_doc(name)
   return doc
 end
 
-local function set_doc_lines(doc, lines)
+local function set_doc_lines(view, lines)
+  local doc = view.doc
   local text = table.concat(lines or {}, "\n")
   if text ~= "" then text = text .. "\n" end
   if doc.git_view_pane_text == text then return end
+  local old_line_count = #doc.lines
   doc.git_view_pane_text = text
   doc.lines = {}
   if text == "" then
@@ -46,11 +48,34 @@ local function set_doc_lines(doc, lines)
   else
     for line in text:gmatch("[^\n]*\n") do doc.lines[#doc.lines + 1] = line end
   end
+  if view.invalidate_path_tree_document then
+    view:invalidate_path_tree_document(old_line_count)
+  else
+    if doc.highlighter then doc.highlighter:soft_reset() end
+    doc:clear_cache(1, math.max(old_line_count, #doc.lines))
+    doc.text_revision = (doc.text_revision or 0) + 1
+    doc:sanitize_selection()
+    view:invalidate_line_render("git-pane-document")
+    view:invalidate_visual_metrics("git-pane-document")
+  end
   doc:clear_undo_redo()
   doc:clean()
   local current_line = doc:get_selection()
   local line = math.max(1, math.min(#doc.lines, current_line or 1))
   doc:set_selection(line, 1, line, 1)
+  if view.scroll_to_make_visible then view:scroll_to_make_visible(line, 1, true) end
+end
+
+local function draw_segments(view, x, y, segments)
+  local font = view:get_font()
+  local tx = x
+  local ty = y + view:get_line_text_y_offset()
+  for _, segment in ipairs(segments or {}) do
+    tx = renderer.draw_text(font, segment.text or "", tx, ty, segment.color or style.text, {
+      tab_offset = tx - x,
+    })
+  end
+  return view:get_line_height()
 end
 
 function GitView:new(project, opts)
@@ -81,43 +106,46 @@ function GitView:pane_view(name)
   self.pane_views = self.pane_views or {}
   local view = self.pane_views[name]
   if not view then
-    view = DocView(make_pane_doc("Git " .. name))
+    local ViewType = (name == "file-list" or name == "details") and path_tree.View or DocView
+    view = ViewType(make_pane_doc("Git " .. name))
+    view:set_wrapping_enabled(false)
     view.git_owner_view = self
     view.git_pane = name
-    view.get_gutter_width = function() return 0 end
-    view.draw_line_gutter = function(v) return v:get_line_height() end
+    view.get_point_of_interest_at = function(v, line)
+      return self:point_of_interest_for_pane(v, line)
+    end
+    if ViewType == DocView then
+      view.get_gutter_width = function() return 0 end
+      view.draw_line_gutter = function(v) return v:get_line_height() end
+    end
     local draw_line_text = view.draw_line_text
     view.draw_line_text = function(v, line, x, y)
-      if v.git_pane == "file-list" then
-        local meta = v.git_file_line_meta and v.git_file_line_meta[line]
-        if meta then
-          local text = (v.doc:get_utf8_line(line) or ""):gsub("\n$", "")
-          if filetree_render.draw_row_text(v, text, x, y, meta.kind, meta.type == "dir") then
-            return v:get_line_height()
-          end
+      local commit_meta = v.git_commit_line_meta and v.git_commit_line_meta[line]
+      if commit_meta and commit_meta.role == "commit" then
+        return draw_segments(v, x, y, {
+          { text = commit_meta.hash or "", color = style.accent },
+          { text = "  ", color = style.dim },
+          { text = commit_meta.subject or "", color = style.text },
+        })
+      elseif commit_meta and commit_meta.role == "message" then
+        return draw_segments(v, x, y, { { text = commit_meta.text or "", color = commit_meta.error and style.error or style.dim } })
+      end
+      local detail_meta = v.git_detail_line_meta and v.git_detail_line_meta[line]
+      if detail_meta then
+        if detail_meta.role == "heading" then
+          return draw_segments(v, x, y, { { text = detail_meta.text or "", color = style.accent } })
+        elseif detail_meta.role == "subject" then
+          return draw_segments(v, x, y, { { text = detail_meta.text or "", color = style.text } })
+        elseif detail_meta.role == "field" then
+          return draw_segments(v, x, y, {
+            { text = detail_meta.label or "", color = style.dim },
+            { text = detail_meta.value or "", color = detail_meta.value_color or style.text },
+          })
+        elseif detail_meta.role == "message" then
+          return draw_segments(v, x, y, { { text = detail_meta.text or "", color = detail_meta.error and style.error or style.dim } })
         end
       end
       return draw_line_text(v, line, x, y)
-    end
-    local draw_line_body = view.draw_line_body
-    view.draw_line_body = function(v, line, x, y)
-      if v.git_pane == "file-list" then
-        local meta = v.git_file_line_meta and v.git_file_line_meta[line]
-        local gw = v:get_gutter_width()
-        filetree_render.draw_folder_row_background(v, meta and meta.type == "dir", x + v.scroll.x, y, math.max(0, v.size.x - gw))
-      end
-      return draw_line_body(v, line, x, y)
-    end
-    view.get_line_hint = function(v, line)
-      if v.git_pane ~= "file-list" then return nil end
-      local meta = v.git_file_line_meta and v.git_file_line_meta[line]
-      if not meta then return nil end
-      if meta.type == "dir" and meta.stat then
-        return filetree_render.changed_stat_segments(meta.stat, v:get_font())
-      end
-      local index = v.git_file_line_to_index and v.git_file_line_to_index[line]
-      local file = index and v.git_file_records and v.git_file_records[index]
-      return filetree_render.changed_stat_segments(file and file.stat, v:get_font())
     end
     self.pane_views[name] = view
   end
@@ -127,7 +155,7 @@ end
 
 function GitView:set_pane_lines(name, lines)
   local view = self:pane_view(name)
-  set_doc_lines(view.doc, lines)
+  set_doc_lines(view, lines)
   return view
 end
 
@@ -278,7 +306,6 @@ end
 
 function GitView:commit_list_y()
   return self.position.y + style.padding.y
-    + style.font:get_height() + style.padding.y
 end
 
 function GitView:row_height()
@@ -293,11 +320,26 @@ function GitView:get_scrollable_size()
   return self.size.y + math.max(0, rows * self:row_height() - (self.size.y - (self:commit_list_y() - self.position.y)))
 end
 
+local function scroll_pane_view(view, y, x)
+  local handled = view:on_mouse_wheel(y, x)
+  if handled ~= nil then return handled end
+  if not view.scrollable then return false end
+  if y ~= 0 then
+    local max_y = math.max(0, view:get_scrollable_size() - view.size.y)
+    view.scroll.to.y = common.clamp(view.scroll.to.y + (-y * config.mouse_wheel_scroll), 0, max_y)
+  end
+  if x ~= 0 and view.get_h_scrollable_size then
+    local max_x = math.max(0, view:get_h_scrollable_size() - view.size.x)
+    view.scroll.to.x = common.clamp(view.scroll.to.x + (-x * config.mouse_wheel_scroll), 0, max_x)
+  end
+  return y ~= 0 or x ~= 0
+end
+
 function GitView:on_mouse_wheel(y, x)
   self:activate_model_tab(function() core.redraw = true end)
   local active = core.active_view
   if active and active.git_owner_view == self and active.git_pane and active.on_mouse_wheel then
-    return active:on_mouse_wheel(y, x) ~= false
+    return scroll_pane_view(active, y, x)
   end
   local tab = self.model:selected_tab()
   if tab and tab.kind == "file_history" then
@@ -311,10 +353,10 @@ function GitView:on_mouse_wheel(y, x)
   if tab and tab.kind == "commit_diff" then
     if tab.file_list_hover then
       if y == 0 then return false end
-      local visible = self.size.y - (self:commit_list_y() - self.position.y) - style.padding.y
-      local max_scroll = math.max(0, #(tab.changed_files or {}) * self:row_height() - visible)
-      tab.file_scroll = common.clamp((tab.file_scroll or 0) + (-y * config.mouse_wheel_scroll), 0, max_scroll)
-      return true
+      local list = self:pane_view("file-list")
+      local handled = scroll_pane_view(list, y, x)
+      tab.file_scroll = list.scroll.to.y
+      return handled
     end
     if tab.diff_view and tab.diff_view.on_mouse_wheel then
       return tab.diff_view:on_mouse_wheel(y, x) ~= false
@@ -384,7 +426,9 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
     self.mouse_pane = pane
     if not content_click then pane:on_mouse_pressed(button, x, y, clicks) end
     self:sync_selection_from_pane()
-    if clicks and clicks > 1 and pane.git_pane ~= "details" and self.activate_selected then
+    local toggled_details_folder = clicks and clicks > 1 and pane.git_pane == "details"
+      and self:toggle_details_tree_folder(pane, pane.doc:get_selection())
+    if clicks and clicks > 1 and not toggled_details_folder and self.activate_selected then
       local active_tab = self.model:selected_tab()
       local diff_tab = self:activate_selected(function() core.redraw = true end)
       if active_tab.kind ~= "commit_diff" and diff_tab and self.on_model_tab_open then self:on_model_tab_open(diff_tab) end
@@ -431,9 +475,11 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
     if x < self.position.x then return true end
     self.focus_pane = "list"
     self.focused_diff_doc_view = nil
-    local line = math.floor((y - self:commit_list_y() + (selected_tab.file_scroll or 0)) / self:row_height()) + 1
-    local index = selected_tab.file_line_to_index and selected_tab.file_line_to_index[line] or line
-    if index >= 1 and index <= #(selected_tab.changed_files or {}) then
+    local list = self:pane_view("file-list")
+    local line = math.floor((y - self:commit_list_y() + (list.scroll.y or 0)) / self:row_height()) + 1
+    local index = selected_tab.file_line_to_index and selected_tab.file_line_to_index[line]
+    if not selected_tab.file_line_to_index then index = line end
+    if index and index >= 1 and index <= #(selected_tab.changed_files or {}) then
       self.model:select_diff_file(selected_tab, index, function() core.redraw = true end)
       core.redraw = true
     end
@@ -471,123 +517,82 @@ local function tab_label(tab)
   return (tab.id == "log" and "Log" or tab.title or tab.kind or "Tab")
 end
 
-local function file_label(file, path)
-  local status = file and (file.status or file.kind or file.raw_status or file.xy) or ""
-  path = path or (file and (file.path or file.new_path or file.old_path) or "")
-  return string.format("%s  %s", status, path)
-end
-
 local function changed_file_path(file)
   return file and (file.path or file.new_path or file.old_path) or ""
 end
 
-local function changed_file_kind(file)
-  return file and (file.status or file.kind or file.raw_status or file.xy) or nil
+local function changed_file_tree(files, collapsed)
+  return path_tree.build(files or {}, {
+    record_path = changed_file_path,
+    collapsed = collapsed,
+  })
 end
 
-local function split_path(path)
-  local parts = {}
-  path = tostring(path or "")
-  for part in path:gmatch("[^/\\]+") do parts[#parts + 1] = part end
-  if #parts == 0 and path ~= "" then parts[1] = path end
-  return parts
-end
-
-local function clone_stat(stat)
-  if not stat then return nil end
-  return { additions = stat.additions or 0, deletions = stat.deletions or 0 }
-end
-
-local function add_stat(total, stat)
-  if not stat then return total end
-  total = total or { additions = 0, deletions = 0 }
-  total.additions = total.additions + (stat.additions or 0)
-  total.deletions = total.deletions + (stat.deletions or 0)
-  return total
-end
-
-local function changed_file_tree_lines(files)
-  local lines = {}
-  local line_to_index = {}
-  local index_to_line = {}
-  local line_meta = {}
-  local open_folders = {}
-  local folder_lines = {}
-  for index, file in ipairs(files or {}) do
-    local path = changed_file_path(file)
-    local parts = split_path(path)
-    local kind = changed_file_kind(file)
-    if #parts == 0 then
-      lines[#lines + 1] = file_label(file)
-      line_to_index[#lines] = index
-      index_to_line[index] = #lines
-      line_meta[#lines] = { type = "file", kind = kind }
-    else
-      local prefix = ""
-      for depth = 1, #parts - 1 do
-        prefix = prefix == "" and parts[depth] or (prefix .. "/" .. parts[depth])
-        if not open_folders[depth] or open_folders[depth] ~= prefix then
-          for i = depth, #open_folders do open_folders[i] = nil end
-          lines[#lines + 1] = string.rep("\t", depth - 1) .. parts[depth]
-          line_meta[#lines] = { type = "dir", kind = kind, stat = clone_stat(file and file.stat) }
-          folder_lines[prefix] = #lines
-          open_folders[depth] = prefix
-        else
-          local line = folder_lines[prefix]
-          if line and line_meta[line] then
-            line_meta[line].stat = add_stat(line_meta[line].stat, file and file.stat)
-            line_meta[line].kind = filetree_render.stronger_git_kind(line_meta[line].kind, kind)
-          end
-        end
-      end
-      lines[#lines + 1] = string.rep("\t", math.max(0, #parts - 1)) .. parts[#parts]
-      line_to_index[#lines] = index
-      index_to_line[index] = #lines
-      line_meta[#lines] = { type = "file", kind = kind }
+local function sync_changed_file_tree_mappings(tab, tree)
+  tab.file_line_to_index = tree and tree.line_to_record or nil
+  tab.file_index_to_line = tree and tree.record_to_line or nil
+  tab.file_index_to_visible_line = nil
+  if tree then
+    tab.file_index_to_visible_line = {}
+    for index = 1, #tree.records do
+      tab.file_index_to_visible_line[index] = tree:visible_line_for_record(index)
     end
   end
-  return lines, line_to_index, index_to_line, line_meta
-end
-
-local function append_changed_file_tree_lines(lines, files)
-  local tree = changed_file_tree_lines(files)
-  for _, line in ipairs(tree) do lines[#lines + 1] = line end
+  tab.file_line_meta = tree and tree.rows or nil
 end
 
 local function commit_details_lines(commit)
-  local lines = { "Details" }
+  local lines, line_meta = {}, {}
+  local tree, tree_offset
+  local function add(text, meta)
+    lines[#lines + 1] = text
+    line_meta[#lines] = meta
+  end
+  add("Details", { role = "heading", text = "Details" })
   if not commit then
-    lines[#lines + 1] = "Select a commit"
-    return lines
+    add("Select a commit", { role = "message", text = "Select a commit" })
+    return lines, line_meta
   end
-  lines[#lines + 1] = commit.subject or ""
-  lines[#lines + 1] = "Hash: " .. tostring(commit.hash or "")
-  if commit.author_name and commit.author_name ~= "" then lines[#lines + 1] = "Author: " .. commit.author_name end
-  if commit.refs and commit.refs ~= "" then lines[#lines + 1] = "Refs: " .. commit.refs end
-  lines[#lines + 1] = ""
-  lines[#lines + 1] = "Changed files"
+  add(commit.subject or "", { role = "subject", text = commit.subject or "" })
+  add("Hash: " .. tostring(commit.hash or ""), { role = "field", label = "Hash: ", value = tostring(commit.hash or ""), value_color = style.accent })
+  if commit.author_name and commit.author_name ~= "" then
+    add("Author: " .. commit.author_name, { role = "field", label = "Author: ", value = commit.author_name })
+  end
+  if commit.refs and commit.refs ~= "" then
+    add("Refs: " .. commit.refs, { role = "field", label = "Refs: ", value = commit.refs, value_color = style.good })
+  end
+  add("", nil)
+  add("Changed files", { role = "heading", text = "Changed files" })
   if commit.changed_files_loading then
-    lines[#lines + 1] = "Loading changed files..."
+    add("Loading changed files...", { role = "message", text = "Loading changed files..." })
   elseif commit.changed_files_error then
-    lines[#lines + 1] = "Git error: " .. tostring(commit.changed_files_error.message or commit.changed_files_error.kind or commit.changed_files_error)
+    local text = "Git error: " .. tostring(commit.changed_files_error.message or commit.changed_files_error.kind or commit.changed_files_error)
+    add(text, { role = "message", text = text, error = true })
   elseif #(commit.changed_files or {}) == 0 then
-    lines[#lines + 1] = commit.changed_files_loaded and "No changed files" or "Select a commit to load changed files"
+    local text = commit.changed_files_loaded and "No changed files" or "Select a commit to load changed files"
+    add(text, { role = "message", text = text })
   else
-    append_changed_file_tree_lines(lines, commit.changed_files or {})
+    tree = changed_file_tree(commit.changed_files or {}, commit.details_tree_collapsed)
+    tree_offset = #lines
+    for _, text in ipairs(tree:lines()) do add(text, nil) end
   end
-  return lines
+  return lines, line_meta, tree, tree_offset
 end
 
 function GitView:detail_commit_for_tab(tab)
   if not tab then return nil end
+  local commit
   if tab.kind == "file_history" then
-    local commit = tab.commits and tab.commits[tab.selected_commit]
+    commit = tab.commits and tab.commits[tab.selected_commit]
     if tab.selected_commit_hash and (not commit or commit.hash ~= tab.selected_commit_hash) then return nil end
-    return commit
+  else
+    local log_tab = self.model:log_tab()
+    commit = log_tab.commits and log_tab.commits[log_tab.selected_commit]
+    if log_tab.selected_commit_hash and (not commit or commit.hash ~= log_tab.selected_commit_hash) then return nil end
   end
-  local log_tab = self.model:log_tab()
-  local commit = log_tab.commits and log_tab.commits[log_tab.selected_commit]
-  if log_tab.selected_commit_hash and (not commit or commit.hash ~= log_tab.selected_commit_hash) then return nil end
+  local key = commit and (commit.kind == "working_tree" and "WORKING_TREE" or commit.hash)
+  local collapsed = key and self.model.details_tree_collapsed and self.model.details_tree_collapsed[key]
+  if collapsed then commit.details_tree_collapsed = collapsed end
   return commit
 end
 
@@ -598,6 +603,29 @@ local function sync_inactive_pane_line(view, line)
   if current_line ~= line then
     view.doc:set_selection(line, math.max(1, math.min(current_col or 1, #view.doc.lines[line])))
   end
+end
+
+function GitView:details_tree_item(view, line)
+  if not (view and view.git_pane == "details" and view.path_tree_row) then return nil end
+  local row = view:path_tree_row(line)
+  if not row then return nil end
+  local commit = self:detail_commit_for_tab(self:model_tab())
+  local record = view:path_tree_record_for_line(line)
+  return commit, row, record
+end
+
+function GitView:toggle_details_tree_folder(view, line)
+  local commit, row = self:details_tree_item(view, line)
+  if not (commit and row and row.type == "dir" and view:toggle_path_tree_folder(line)) then return false end
+  commit.details_tree_collapsed = view.path_tree.collapsed
+  local key = commit.kind == "working_tree" and "WORKING_TREE" or commit.hash
+  if key then
+    self.model.details_tree_collapsed = self.model.details_tree_collapsed or {}
+    self.model.details_tree_collapsed[key] = commit.details_tree_collapsed
+  end
+  core.log_quiet("Git View details Path Tree folder %s", view:path_tree_row(line).expanded and "expanded" or "collapsed")
+  core.redraw = true
+  return true
 end
 
 function GitView:sync_selection_from_pane()
@@ -622,23 +650,102 @@ function GitView:sync_selection_from_pane()
     if index and index >= 1 and index <= #(tab.changed_files or {}) and index ~= tab.selected_file then
       self.model:select_diff_file(tab, index, function() core.redraw = true end)
     end
+  elseif active.git_pane == "details" then
+    local commit, _, record = self:details_tree_item(active, line)
+    if commit and record then commit.selected_changed_file_path = changed_file_path(record) end
   end
 end
 
 function GitView:activate_selected(callback)
   self:sync_selection_from_pane()
+  local active = core.active_view
+  local details_commit, details_row, details_record = self:details_tree_item(
+    active, active and active.doc and active.doc:get_selection() or 1
+  )
+  if details_row and details_row.type == "dir" then
+    self:toggle_details_tree_folder(active, active.doc:get_selection())
+    return nil
+  end
+  local details_path = details_record and changed_file_path(details_record)
   self:activate_model_tab(function() core.redraw = true end)
   local tab = self.model:selected_tab()
   if tab.kind == "commit_diff" then
     local active = core.active_view
     if active and active.git_owner_view == self and active.git_pane == "file-list" then
       local line = active.doc and active.doc:get_selection() or 1
-      if active.git_file_line_to_index and not active.git_file_line_to_index[line] then return nil end
+      if active.git_file_line_to_index and not active.git_file_line_to_index[line] then
+        if active.toggle_path_tree_folder and active:toggle_path_tree_folder(line) then
+          tab.file_tree_collapsed = active.path_tree.collapsed
+          sync_changed_file_tree_mappings(tab, active.path_tree)
+          active.git_file_line_to_index = tab.file_line_to_index or {}
+          active.git_file_index_to_line = tab.file_index_to_line or {}
+          active.git_file_index_to_visible_line = tab.file_index_to_visible_line or {}
+          active.git_file_line_meta = tab.file_line_meta or {}
+          core.log_quiet("Git View Path Tree folder %s", active.path_tree_row(line).expanded and "expanded" or "collapsed")
+          core.redraw = true
+          return tab
+        end
+        return nil
+      end
     end
     self.model:load_selected_diff_file(tab, callback or function() core.redraw = true end)
     return tab
   end
+  if details_commit then
+    return self.model:open_commit_diff(details_commit, callback or function() core.redraw = true end, {
+      selected_file_path = details_path or details_commit.selected_changed_file_path,
+    })
+  end
   return self.model:open_selected_commit_diff(callback or function() core.redraw = true end)
+end
+
+function GitView:activate_selected_point(callback)
+  local active_tab = self.model:selected_tab()
+  local diff_tab, err = self:activate_selected(callback)
+  if active_tab.kind ~= "commit_diff" and diff_tab and self.on_model_tab_open then
+    self:on_model_tab_open(diff_tab)
+  end
+  return diff_tab, err
+end
+
+function GitView:point_of_interest_for_pane(view, line)
+  local tab = self:model_tab()
+  if not tab then return nil end
+  local kind
+  if view.git_pane == "log-list" then
+    if not self.model:log_tab().commits[line] then return nil end
+    kind = "git-commit"
+  elseif view.git_pane == "history-list" then
+    if tab.kind ~= "file_history" or not (tab.commits and tab.commits[line]) then return nil end
+    kind = "git-commit"
+  elseif view.git_pane == "file-list" then
+    if tab.kind ~= "commit_diff" then return nil end
+    local index = view.git_file_line_to_index and view.git_file_line_to_index[line]
+    if not index or not (tab.changed_files and tab.changed_files[index]) then return nil end
+    kind = "git-changed-file"
+  elseif view.git_pane == "details" then
+    local _, row, record = self:details_tree_item(view, line)
+    if not (row and row.type == "file" and record) then return nil end
+    kind = "git-changed-file"
+  else
+    return nil
+  end
+  local text = (view.doc:get_utf8_line(line) or ""):gsub("\n$", "")
+  return {
+    kind = kind,
+    line = line,
+    col = 1,
+    line2 = line,
+    col2 = math.max(2, #text + 1),
+    text_bounds = true,
+    activate = function()
+      local opened, err = self:activate_selected_point(function() core.redraw = true end)
+      if not opened and err then
+        core.log_quiet("Git View: Point of Interest Activation skipped: %s", err.message or err.kind)
+      end
+      return opened ~= nil
+    end,
+  }
 end
 
 function GitView:update_pane_docs()
@@ -646,23 +753,42 @@ function GitView:update_pane_docs()
   if not tab then return end
   if tab.kind == "file_history" then
     local lines = {}
+    local line_meta = {}
     if tab.loading and #(tab.commits or {}) == 0 then
       lines[1] = "Loading file history..."
+      line_meta[1] = { role = "message", text = lines[1] }
     elseif tab.error then
       lines[1] = "Git error: " .. tostring(tab.error.message or tab.error.kind or tab.error)
+      line_meta[1] = { role = "message", text = lines[1], error = true }
     elseif #(tab.commits or {}) == 0 then
       lines[1] = "No file history"
+      line_meta[1] = { role = "message", text = lines[1] }
     else
-      for _, commit in ipairs(tab.commits or {}) do lines[#lines + 1] = commit_label(commit) end
-      if tab.loading then lines[#lines + 1] = "Loading more commits..." elseif tab.has_more then lines[#lines + 1] = "Load more commits..." end
+      for _, commit in ipairs(tab.commits or {}) do
+        lines[#lines + 1] = commit_label(commit)
+        line_meta[#lines] = { role = "commit", hash = commit.short_hash or commit.hash or "", subject = commit.subject or "" }
+      end
+      if tab.loading then
+        lines[#lines + 1] = "Loading more commits..."
+        line_meta[#lines] = { role = "message", text = lines[#lines] }
+      elseif tab.has_more then
+        lines[#lines + 1] = "Load more commits..."
+        line_meta[#lines] = { role = "message", text = lines[#lines] }
+      end
     end
     local list_view = self:set_pane_lines("history-list", lines)
+    list_view.git_commit_line_meta = line_meta
     sync_inactive_pane_line(list_view, tab.selected_commit)
-    self:set_pane_lines("details", commit_details_lines(self:detail_commit_for_tab(tab)))
+    local detail_lines, detail_meta, detail_tree, detail_tree_offset = commit_details_lines(self:detail_commit_for_tab(tab))
+    local details = self:set_pane_lines("details", detail_lines)
+    details.git_detail_line_meta = detail_meta
+    details:set_path_tree(detail_tree, detail_tree_offset or 0)
   elseif tab.kind == "commit_diff" then
     local lines = {}
+    local tree
     tab.file_line_to_index = nil
     tab.file_index_to_line = nil
+    tab.file_index_to_visible_line = nil
     tab.file_line_meta = nil
     if tab.loading then
       lines[1] = "Loading changed files..."
@@ -671,34 +797,56 @@ function GitView:update_pane_docs()
     elseif #(tab.changed_files or {}) == 0 then
       lines[1] = "No changed files"
     else
-      local line_to_index, index_to_line, line_meta
-      lines, line_to_index, index_to_line, line_meta = changed_file_tree_lines(tab.changed_files or {})
-      tab.file_line_to_index = line_to_index
-      tab.file_index_to_line = index_to_line
-      tab.file_line_meta = line_meta
+      tree = changed_file_tree(tab.changed_files or {}, tab.file_tree_collapsed)
+      lines = tree:lines()
+      sync_changed_file_tree_mappings(tab, tree)
     end
     local list_view = self:set_pane_lines("file-list", lines)
+    list_view:set_path_tree(tree, 0)
     list_view.git_file_line_to_index = tab.file_line_to_index or {}
     list_view.git_file_index_to_line = tab.file_index_to_line or {}
+    list_view.git_file_index_to_visible_line = tab.file_index_to_visible_line or {}
     list_view.git_file_line_meta = tab.file_line_meta or {}
     list_view.git_file_records = tab.changed_files or {}
-    sync_inactive_pane_line(list_view, list_view.git_file_index_to_line[tab.selected_file] or tab.selected_file)
+    sync_inactive_pane_line(
+      list_view,
+      list_view.git_file_index_to_line[tab.selected_file]
+        or list_view.git_file_index_to_visible_line[tab.selected_file]
+        or tab.selected_file
+    )
   else
     local log_tab = self.model:log_tab()
     local lines = {}
+    local line_meta = {}
     if log_tab.loading then
       lines[1] = "Loading Git log..."
+      line_meta[1] = { role = "message", text = lines[1] }
     elseif log_tab.error then
       lines[1] = "Git error: " .. tostring(log_tab.error.message or log_tab.error.kind or log_tab.error)
+      line_meta[1] = { role = "message", text = lines[1], error = true }
     elseif #log_tab.commits == 0 then
       lines[1] = "No commits"
+      line_meta[1] = { role = "message", text = lines[1] }
     else
-      for _, commit in ipairs(log_tab.commits) do lines[#lines + 1] = commit_label(commit) end
-      if log_tab.loading_more then lines[#lines + 1] = "Loading more commits..." elseif log_tab.has_more then lines[#lines + 1] = "Load more commits..." end
+      for _, commit in ipairs(log_tab.commits) do
+        lines[#lines + 1] = commit_label(commit)
+        line_meta[#lines] = { role = "commit", hash = commit.short_hash or commit.hash or "", subject = commit.subject or "" }
+      end
+      if log_tab.loading_more then
+        lines[#lines + 1] = "Loading more commits..."
+        line_meta[#lines] = { role = "message", text = lines[#lines] }
+      elseif log_tab.has_more then
+        lines[#lines + 1] = "Load more commits..."
+        line_meta[#lines] = { role = "message", text = lines[#lines] }
+      end
     end
     local list_view = self:set_pane_lines("log-list", lines)
+    list_view.git_commit_line_meta = line_meta
     sync_inactive_pane_line(list_view, log_tab.selected_commit)
-    self:set_pane_lines("details", commit_details_lines(self:detail_commit_for_tab(log_tab)))
+    local detail_lines, detail_meta, detail_tree, detail_tree_offset = commit_details_lines(self:detail_commit_for_tab(log_tab))
+    local details = self:set_pane_lines("details", detail_lines)
+    details.git_detail_line_meta = detail_meta
+    details:set_path_tree(detail_tree, detail_tree_offset or 0)
   end
 end
 
@@ -742,14 +890,31 @@ function GitView:select_relative(delta)
     return tab.commits[index]
   elseif tab.kind == "commit_diff" then
     if #(tab.changed_files or {}) == 0 then return nil end
-    local file = self.model:select_diff_file(tab, (tab.selected_file or 1) + delta, function() core.redraw = true end)
+    local index = tab.selected_file or 1
+    local line = tab.file_index_to_line and tab.file_index_to_line[index]
+    if not line then
+      local list = self:pane_view("file-list")
+      line = list.doc and list.doc:get_selection() or nil
+    end
+    local direction = delta < 0 and -1 or 1
+    local remaining = math.abs(delta)
+    while line and remaining > 0 do
+      repeat line = line + direction until not tab.file_line_to_index or tab.file_line_to_index[line] or line < 1 or line > #(tab.file_line_meta or {})
+      local candidate = tab.file_line_to_index and tab.file_line_to_index[line]
+      if not candidate then break end
+      index = candidate
+      remaining = remaining - 1
+    end
+    if not line then index = index + delta end
+    local file = self.model:select_diff_file(tab, index, function() core.redraw = true end)
     self:update_pane_docs()
     local list = self:pane_view("file-list")
-    local line = list.git_file_index_to_line and list.git_file_index_to_line[tab.selected_file] or tab.selected_file or 1
+    local line = list.git_file_index_to_line and list.git_file_index_to_line[tab.selected_file]
+      or list.git_file_index_to_visible_line and list.git_file_index_to_visible_line[tab.selected_file]
+      or tab.selected_file or 1
     list.doc:set_selection(line, 1, line, 1)
-    local row_y = (line - 1) * self:row_height()
-    local visible = self.size.y - (self:commit_list_y() - self.position.y) - style.padding.y
-    tab.file_scroll = common.clamp(tab.file_scroll or 0, math.max(0, row_y - visible + self:row_height()), row_y)
+    list:scroll_to_make_visible(line, 1, true)
+    tab.file_scroll = list.scroll.y
     core.redraw = true
     return file
   end
@@ -989,7 +1154,7 @@ function GitView:focus_list_pane()
 end
 
 function GitView:history_commits_y()
-  return self:commit_list_y() + style.font:get_height() + style.padding.y
+  return self:commit_list_y()
 end
 
 function GitView:history_visible_height()
@@ -1008,7 +1173,6 @@ function GitView:draw_history_tab(tab, x, y)
   local detail_x = self.position.x + list_width + style.padding.x
   local list_right = detail_x - style.padding.x
   local top = self:history_commits_y()
-  renderer.draw_text(style.font, tab.relpath or "", x, y, style.text)
   local list = self:pane_view("history-list")
   local details = self:pane_view("details")
   list.position.x, list.position.y = x, top
@@ -1057,8 +1221,6 @@ function GitView:draw()
   local x = self.position.x + style.padding.x
   local y = self.position.y + style.padding.y
   local tab = self:model_tab()
-  renderer.draw_text(style.font, self:get_name(), x, y, style.text)
-  y = y + style.font:get_height() + style.padding.y
   if not tab then
     renderer.draw_text(style.font, "Git tab is no longer available", x, y, style.dim)
   elseif tab.kind == "commit_diff" then

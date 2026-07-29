@@ -2,10 +2,10 @@ local core = require "core"
 local command = require "core.command"
 local common = require "core.common"
 local config = require "core.config"
-local keymap = require "core.keymap"
 local intelligence = require "core.language_intelligence"
 local lsp_position = require "core.lsp.position"
 local panes = require "core.panes"
+local poi = require "core.poi"
 
 local language = {}
 
@@ -87,6 +87,13 @@ local function open_location(result, opts)
     local view = opts.view or core.active_view
     local doc = view and view.doc
     if doc then
+      if opts.pane and panes.pane_for_view(view) ~= opts.pane then
+        view = panes.open_doc(doc, {
+          pane = opts.pane,
+          source_view = opts.view,
+          focus = true,
+        }) or view
+      end
       if view.expand_folds_covering_range then
         view:expand_folds_covering_range(result.start_line, result.start_col, result.end_line, result.end_col, "language-location")
       end
@@ -282,7 +289,8 @@ local function request_until_ready(request_fn, on_ready, on_unavailable, opts)
   end)
 end
 
-function language.goto_declaration(view)
+function language.goto_declaration(view, opts)
+  opts = opts or {}
   view = view or core.active_view
   local doc = view and view.doc
   if not doc then return false, "no active document" end
@@ -299,7 +307,7 @@ function language.goto_declaration(view)
 
   local function open_declaration_results(results)
     if #results == 1 then
-      open_location(results[1], { view = view, navigation_anchor = navigation_anchor })
+      open_location(results[1], { view = view, navigation_anchor = navigation_anchor, pane = opts.pane })
     elseif #results > 1 then
       local items = {}
       for _, result in ipairs(results) do
@@ -332,7 +340,7 @@ function language.goto_declaration(view)
   local function try_local_declaration(reason)
     local fallback, fallback_reason = intelligence.local_declaration(doc, line, col)
     if fallback then
-      open_location(fallback, { view = view, navigation_anchor = navigation_anchor })
+      open_location(fallback, { view = view, navigation_anchor = navigation_anchor, pane = opts.pane })
     else
       try_workspace_declaration(fallback_reason or reason)
     end
@@ -530,9 +538,24 @@ command.add(symbol_doc_view_predicate, {
   end,
 })
 
-keymap.add({
-  ["alt+r"] = "language:go-to-declaration",
-  ["alt+shift+r"] = "language:show-references",
-}, true)
+poi.add_activation_provider("language-declaration", {
+  priority = -100,
+  point_at_caret = function(_, view)
+    local valid, doc_view = symbol_doc_view_predicate(view)
+    if not valid or doc_view.context == "application" or doc_view.doc.git_view_pane_read_only then return nil end
+    local line, col = doc_view.doc:get_selection()
+    return {
+      kind = "declaration",
+      line = line,
+      col = col,
+      line2 = line,
+      col2 = col + 1,
+      text_bounds = true,
+      activate = function(_, _, opts)
+        return language.goto_declaration(doc_view, opts)
+      end,
+    }
+  end,
+})
 
 return language
