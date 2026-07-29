@@ -2198,6 +2198,7 @@ end
 
 function DocView:bump_fold_generation(reason)
   self.fold_generation = (self.fold_generation or 0) + 1
+  self.__collapsed_fold_cache = nil
   self.__fold_layout_cache = nil
   self.__composed_visual_row_cache = nil
   core.redraw = true
@@ -2214,6 +2215,9 @@ function DocView:has_collapsed_folds()
 end
 
 function DocView:get_collapsed_folds()
+  local generation = self.fold_generation or 0
+  local cache = self.__collapsed_fold_cache
+  if cache and cache.generation == generation then return cache.folds end
   local folds = {}
   for _, fold in ipairs(self.fold_regions or {}) do
     if fold.collapsed and self:refresh_fold_region(fold) then folds[#folds + 1] = fold end
@@ -2222,6 +2226,7 @@ function DocView:get_collapsed_folds()
     if a.line1 == b.line1 then return a.line2 < b.line2 end
     return a.line1 < b.line1
   end)
+  self.__collapsed_fold_cache = { generation = generation, folds = folds }
   return folds
 end
 
@@ -2675,7 +2680,22 @@ function DocView:composed_visual_rows()
   local signature = self:visual_row_cache_signature()
   local cache = self.__composed_visual_row_cache
   if not cache or cache.signature ~= signature then
-    cache = { signature = signature, entries = self:build_composed_visual_rows() }
+    local entries = self:build_composed_visual_rows()
+    local position_rows = {}
+    for index, entry in ipairs(entries) do
+      if entry.type == "line" then
+        position_rows[entry.line] = position_rows[entry.line] or index
+      elseif entry.type == "fold" then
+        for line = entry.fold.line1, entry.fold.line2 do
+          position_rows[line] = index
+        end
+      end
+    end
+    cache = {
+      signature = signature,
+      entries = entries,
+      position_rows = position_rows,
+    }
     self.__composed_visual_row_cache = cache
   end
   return cache.entries
@@ -2688,6 +2708,20 @@ end
 function DocView:get_composed_visual_row_for_position(line, col, line_end)
   line = common.clamp(line or 1, 1, #self.doc.lines)
   local rows = self:composed_visual_rows()
+  local indexed_row = self.__composed_visual_row_cache.position_rows[line]
+  if indexed_row then
+    local entry = rows[indexed_row]
+    if entry.type == "line" and self.wrapped_settings then
+      local idx = linewrapping.get_line_idx_col_count(self, line, col, line_end)
+      local first_idx = self.wrapped_line_to_idx and self.wrapped_line_to_idx[line] or idx
+      return common.clamp(
+        indexed_row + math.max(0, idx - first_idx),
+        indexed_row,
+        indexed_row + self:get_line_visual_row_count(line) - 1
+      )
+    end
+    return indexed_row
+  end
   local fallback = 1
   for i, entry in ipairs(rows) do
     if entry.type == "line" and entry.line == line then
@@ -3846,7 +3880,16 @@ function DocView:get_position_highlight_geometry(line, col, line_end)
       math.max(1, row.highlight_height or row.height or self:get_line_height())
   end
   local _, y = self:get_line_screen_position(line, col, line_end)
-  return y, self:get_position_visual_row_height(line, col or 1, line_end)
+  local row_height = self:get_position_visual_row_height(
+    line, col or 1, line_end
+  )
+  local render_line = self:get_line_render(line)
+  if render_line and render_line.highlight_height then
+    return y + (render_line.highlight_y_offset or 0), math.min(
+      row_height, math.max(1, tonumber(render_line.highlight_height) or row_height)
+    )
+  end
+  return y, row_height
 end
 
 local function get_line_render_raw_col_x_offset(self, render_line, col)

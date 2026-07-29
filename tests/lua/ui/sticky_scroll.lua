@@ -2,6 +2,7 @@ local core = require "core"
 local test = require "core.test"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
+local markdown_live = require "core.markdown.live_render"
 local style = require "core.style"
 local sticky_scroll = require "plugins.sticky_scroll"
 
@@ -16,6 +17,16 @@ local function make_view(text)
 end
 
 test.describe("sticky scroll", function()
+  test.it("does not run in Markdown Live Preview", function()
+    local view = make_view("# Parent\nbody")
+    test.equal(markdown_live.attach(view), true)
+    test.equal(markdown_live.is_live_mode(view), true)
+
+    test.equal(sticky_scroll.should_run(view), false)
+
+    markdown_live.detach(view)
+  end)
+
   test.it("uses cleaned UTF-8 text when measuring indentation in binary-marked documents", function()
     local invalid_surrogate = "\237\160\128"
     local line = "  " .. invalid_surrogate .. "heading\n"

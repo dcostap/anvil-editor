@@ -396,7 +396,7 @@ test.describe("Markdown Live Editor", function()
     test.ok(view:get_col_x_offset(1, 8) > 0)
   end)
 
-  test.it("uses heading content and block geometry for its caret and highlight", function()
+  test.it("keeps heading caret and highlight out of trailing block spacing", function()
     local view, doc = make_view("# Title\nbody", "note.md")
     doc:set_selection(1, 4)
     refresh(view)
@@ -416,12 +416,13 @@ test.describe("Markdown Live Editor", function()
     if not ok then error(err) end
 
     test.ok(row_height > view:get_line_height())
-    test.equal(highlight_height, row_height)
+    test.equal(highlight_height, view:get_line_render(1).highlight_height)
     test.equal(caret_height, view:get_line_render(1).caret_height)
+    test.equal(highlight_height, caret_height)
     test.ok(caret_height < row_height)
   end)
 
-  test.it("bottom-aligns heading content and its caret within the visual row", function()
+  test.it("keeps heading content and its caret above trailing block spacing", function()
     local view, doc = make_view("# Title\nbody", "note.md")
     doc:set_selection(2, 1)
     refresh(view)
@@ -456,13 +457,12 @@ test.describe("Markdown Live Editor", function()
     title_font = test.not_nil(title_font)
     test.equal(
       title_y,
-      row_height - content_height
-        + math.max(0, (content_height - title_font:get_height()) / 2)
+      math.max(0, (content_height - title_font:get_height()) / 2)
     )
-    test.equal(caret_y, row_height - content_height)
+    test.equal(caret_y, 0)
   end)
 
-  test.it("uses the rendered heading row height for its highlight when wrapping is enabled", function()
+  test.it("uses heading content height for its highlight when wrapping is enabled", function()
     local view, doc = make_view("# Title\nbody", "note.md")
     view:set_wrapping_enabled(true)
     doc:set_selection(1, 4)
@@ -481,7 +481,8 @@ test.describe("Markdown Live Editor", function()
     if not ok then error(err) end
 
     test.ok(row_height > view:get_line_height())
-    test.equal(highlight_height, row_height)
+    test.equal(highlight_height, view:get_line_render(1).highlight_height)
+    test.ok(highlight_height < row_height)
   end)
 
   test.it("uses the rendered heading row height for selections when wrapping is enabled", function()

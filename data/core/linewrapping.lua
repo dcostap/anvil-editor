@@ -626,16 +626,19 @@ local function wrap_settings_signature(docview, default_font, width)
   }
 end
 
-local function same_wrap_settings(a, b)
+local function same_wrap_settings_except_width(a, b)
   if not a or not b then return false end
-  return a.width == b.width
-    and a.font == b.font
+  return a.font == b.font
     and a.font_size == b.font_size
     and a.mode == b.mode
     and a.indent == b.indent
     and a.wrapping_indent == b.wrapping_indent
     and a.require_tokenization == b.require_tokenization
     and a.indent_size == b.indent_size
+end
+
+local function same_wrap_settings(a, b)
+  return same_wrap_settings_except_width(a, b) and a.width == b.width
 end
 
 function LineWrapping.reconstruct_breaks(docview, default_font, width, line_offset)
@@ -897,7 +900,27 @@ function LineWrapping.update_docview_breaks(docview)
   local settings = wrap_settings_signature(docview, docview:get_font(), width)
   local stale_line_count = docview.wrapped_doc_line_count ~= #docview.doc.lines
   local stale_text = docview.wrapped_text_revision ~= (docview.doc.text_revision or 0)
-  if stale_line_count or stale_text or not same_wrap_settings(docview.wrapped_settings, settings) then
+  local settings_changed = not same_wrap_settings(docview.wrapped_settings, settings)
+  if stale_line_count or stale_text or settings_changed then
+    local width_only = not stale_line_count and not stale_text
+      and docview.wrapped_settings
+      and docview.wrapped_settings.width ~= width
+      and same_wrap_settings_except_width(docview.wrapped_settings, settings)
+    local live_resize = core.in_live_resize_frame
+      or core.window_resizing_until and core.window_resizing_until > system.get_time()
+    if width_only and live_resize then
+      if not docview.__deferred_live_resize_wrap_width then
+        core.log_quiet(
+          "Deferring width-only wrapped layout during live resize for %s",
+          docview.doc:get_name()
+        )
+      end
+      docview.__deferred_live_resize_wrap_width = width
+      perf_frame_add("linewrapping_update_docview_breaks_live_resize_deferred", 1)
+      perf_frame_add("linewrapping_update_docview_breaks_calls", 1)
+      perf_elapsed("linewrapping_update_docview_breaks_ms", perf_start)
+      return
+    end
     if stale_line_count then
       perf_frame_add("linewrapping_update_docview_breaks_line_count_changed", 1)
     elseif stale_text then
@@ -905,8 +928,17 @@ function LineWrapping.update_docview_breaks(docview)
     else
       perf_frame_add("linewrapping_update_docview_breaks_width_changed", 1)
     end
+    if docview.__deferred_live_resize_wrap_width then
+      core.log_quiet(
+        "Applying deferred wrapped layout after live resize for %s",
+        docview.doc:get_name()
+      )
+      docview.__deferred_live_resize_wrap_width = nil
+    end
     docview.scroll.to.x = 0
     LineWrapping.reconstruct_breaks(docview, settings.font, width)
+  elseif docview.__deferred_live_resize_wrap_width then
+    docview.__deferred_live_resize_wrap_width = nil
   end
   perf_frame_add("linewrapping_update_docview_breaks_calls", 1)
   perf_elapsed("linewrapping_update_docview_breaks_ms", perf_start)

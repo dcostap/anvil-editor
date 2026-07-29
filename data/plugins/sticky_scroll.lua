@@ -42,6 +42,11 @@ local sticky_scroll = {
   filetype_overrides = filetype_overrides,
 }
 
+local function markdown_live_mode(view)
+  local live_render = package.loaded["core.markdown.live_render"]
+  return live_render and live_render.is_live_mode
+    and live_render.is_live_mode(view)
+end
 
 -- Automatically remove docview (keys) when not needed anymore
 -- Automatically create a docview entry on access
@@ -109,6 +114,7 @@ end
 ---return boolean
 function SS.should_run(dv)
   if dv and not dv:is(DocView) then return false end
+  if dv and markdown_live_mode(dv) then return false end
   if dv and not SS.managed_docviews[dv].enabled then return false end
   if not sticky_scroll.enabled then return false end
   return true
