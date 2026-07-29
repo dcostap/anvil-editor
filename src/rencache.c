@@ -602,7 +602,7 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
               }
               RenSurface trs = { .surface = surface, .scale_x = 1, .scale_y = 1 };
               ren_set_clip_rect(&trs, (RenRect){0, 0, tw, th});
-              ren_draw_poly(&trs, points, bcmd->npoints, bcmd->color);
+              ren_draw_poly_mask(&trs, points, bcmd->npoints, bcmd->color);
               SDL_free(points);
               RenRect dst = { ox, oy, tw, th };
               if (!anvil_d3d11_push_pixels(ren_cache->window, (const char *)surface->pixels,
