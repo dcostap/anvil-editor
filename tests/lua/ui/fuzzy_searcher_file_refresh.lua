@@ -2,9 +2,11 @@ local core = require "core"
 local common = require "core.common"
 local Project = require "core.project"
 local project_paths = require "core.project_paths"
+local process = require "core.process"
 local test = require "core.test"
 
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
+local helpers = fuzzy_searcher._test
 
 local function write_file(path, text)
   local fp = assert(io.open(path, "wb"))
@@ -42,6 +44,8 @@ test.describe("Fuzzy Searcher file refresh", function()
   end)
 
   test.after_each(function(context)
+    helpers.cancel_file_index_for_test()
+    if context.original_process_start then process.start = context.original_process_start end
     if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
     project_paths.configure_project {}
     project_paths.load_workspace_state(nil)
@@ -111,5 +115,40 @@ test.describe("Fuzzy Searcher file refresh", function()
     picker.input:set_text("renamed-externally")
     test.ok(wait_until(function() return not picker_has_path(picker, renamed) end),
       "expected reopening the picker to remove an externally deleted file")
+  end)
+
+  test.it("keeps the completed file snapshot searchable while a refresh is still running", function(context)
+    local existing = context.root .. PATHSEP .. "existing-snapshot-file.md"
+    write_file(existing)
+    helpers.set_file_cache_for_test({ helpers.file_display_item(existing) })
+
+    local fake_running = true
+    local fake_started = false
+    local fake_process = {
+      stdout = {
+        read = function()
+          coroutine.yield(0.01)
+          error("timeout expired")
+        end,
+      },
+      running = function() return fake_running end,
+      kill = function() fake_running = false end,
+      wait = function() return fake_running and nil or 0 end,
+    }
+    context.original_process_start = process.start
+    process.start = function()
+      fake_started = true
+      return fake_process
+    end
+
+    helpers.refresh_file_index_for_test()
+    fuzzy_searcher.open("existing-snapshot-file")
+    local picker = assert(core.fuzzy_searcher_active_view)
+
+    test.ok(wait_until(function() return fake_started end),
+      "expected the replacement filesystem scan to start")
+    test.equal(helpers.file_index_status().indexing, true)
+    test.ok(picker_has_path(picker, existing),
+      "expected the previous completed snapshot to remain searchable during refresh")
   end)
 end)

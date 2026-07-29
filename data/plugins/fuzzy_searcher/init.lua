@@ -625,6 +625,75 @@ local function file_scan_exclude_globs(root, ignore_rules)
   return globs
 end
 
+-- Keep scanner output parsing and candidate adoption in one seam. Besides
+-- making the filesystem process loop easier to account for, this lets the
+-- large-Project benchmark feed an rg-compatible NUL-delimited stream through
+-- the exact same path without creating a hundred thousand fixture files.
+local function new_file_index_accumulator(ignore_rules)
+  return {
+    files = {},
+    seen = {},
+    metadata = {},
+    ignore_rules = ignore_rules or core.get_ignore_file_rules(),
+    candidates = 0,
+    accepted = 0,
+  }
+end
+
+local function ingest_file_index_candidate(accumulator, root, line)
+  accumulator.candidates = accumulator.candidates + 1
+  line = line:gsub("\r$", ""):gsub("^%.[/\\]", ""):gsub("[/\\]", PATHSEP)
+  if line == "" then return false end
+  local abs = common.is_absolute_path(line)
+    and common.normalize_path(line)
+    or common.normalize_path(root.path .. PATHSEP .. line)
+  local relative = abs and common.relative_path(root.path, abs) or line
+  local key = abs and common.path_compare_key(abs)
+  if key and not accumulator.seen[key]
+    and not ignored_file_result(relative, accumulator.ignore_rules)
+    and not project_paths.is_excluded(abs, "files")
+  then
+    local item = fuzzy_searcher.file_display_item(abs, accumulator.metadata)
+    if item then
+      accumulator.seen[key] = true
+      accumulator.files[#accumulator.files + 1] = item
+      accumulator.accepted = accumulator.accepted + 1
+      return true
+    end
+  end
+  return false
+end
+
+local function ingest_file_index_chunk(accumulator, root, pending, chunk, on_candidate)
+  pending = (pending or "") .. (chunk or "")
+  local from, parsed = 1, 0
+  while true do
+    local separator = pending:find("\0", from, true)
+    if not separator then break end
+    ingest_file_index_candidate(accumulator, root, pending:sub(from, separator - 1))
+    parsed = parsed + 1
+    if on_candidate then on_candidate(parsed) end
+    from = separator + 1
+  end
+  return pending:sub(from), parsed
+end
+
+local function file_scan_command(root, ignore_rules)
+  local args = {
+    fuzzy_searcher.rg,
+    "--files",
+    "--hidden",
+    "--null",
+    "--max-filesize", tostring(config.file_size_limit) .. "M",
+  }
+  for _, glob in ipairs(file_scan_exclude_globs(root, ignore_rules)) do
+    args[#args + 1] = "--glob"
+    args[#args + 1] = glob
+  end
+  args[#args + 1] = "."
+  return args
+end
+
 local function start_file_index(roots, signature, reason)
   if fuzzy_searcher.files_indexing then return false end
 
@@ -637,28 +706,8 @@ local function start_file_index(roots, signature, reason)
   core.log_quiet("Fuzzy file index scan started (%s)", tostring(reason or "picker-open"))
   core.add_thread(function()
     coroutine.yield(0.05)
-    local files, seen, metadata = {}, {}, {}
+    local accumulator = new_file_index_accumulator(ignore_rules)
     local scan_failed = false
-
-    local function add_file(root, line)
-      line = line:gsub("\r$", ""):gsub("^%.[/\\]", ""):gsub("[/\\]", PATHSEP)
-      if line == "" then return end
-      local abs = common.is_absolute_path(line)
-        and common.normalize_path(line)
-        or common.normalize_path(root.path .. PATHSEP .. line)
-      local relative = abs and common.relative_path(root.path, abs) or line
-      local key = abs and common.path_compare_key(abs)
-      if key and not seen[key]
-        and not ignored_file_result(relative, ignore_rules)
-        and not project_paths.is_excluded(abs, "files")
-      then
-        local item = fuzzy_searcher.file_display_item(abs, metadata)
-        if item then
-          seen[key] = true
-          files[#files + 1] = item
-        end
-      end
-    end
 
     for _, root in ipairs(roots) do
       if scan_generation ~= fuzzy_searcher.files_scan_generation
@@ -667,18 +716,7 @@ local function start_file_index(roots, signature, reason)
         return
       end
 
-      local args = {
-        fuzzy_searcher.rg,
-        "--files",
-        "--hidden",
-        "--null",
-        "--max-filesize", tostring(config.file_size_limit) .. "M",
-      }
-      for _, glob in ipairs(file_scan_exclude_globs(root, ignore_rules)) do
-        args[#args + 1] = "--glob"
-        args[#args + 1] = glob
-      end
-      args[#args + 1] = "."
+      local args = file_scan_command(root, ignore_rules)
 
       local proc, start_error = process.start(args, {
         cwd = root.path,
@@ -721,17 +759,13 @@ local function start_file_index(roots, signature, reason)
           proc.stdout.read, proc.stdout, 16384, { scan = 0.01, timeout = 0.1 }
         )
         if ok and chunk_or_error then
-          pending = pending .. chunk_or_error
-          local from = 1
-          while true do
-            local separator = pending:find("\0", from, true)
-            if not separator then break end
-            add_file(root, pending:sub(from, separator - 1))
-            count = count + 1
-            from = separator + 1
-            if count % 500 == 0 then coroutine.yield(0) end
-          end
-          pending = pending:sub(from)
+          pending = ingest_file_index_chunk(
+            accumulator, root, pending, chunk_or_error,
+            function()
+              count = count + 1
+              if count % 500 == 0 then coroutine.yield(0) end
+            end
+          )
         elseif not ok and not tostring(chunk_or_error):find("timeout expired", 1, true) then
           read_failed = true
           core.log_quiet(
@@ -748,7 +782,7 @@ local function start_file_index(roots, signature, reason)
       local execute_code = proc:wait(process.WAIT_DEADLINE)
       if fuzzy_searcher.files_scan_proc == proc then fuzzy_searcher.files_scan_proc = nil end
       if core.__fuzzy_file_scan_proc == proc then core.__fuzzy_file_scan_proc = nil end
-      if pending ~= "" then add_file(root, pending) end
+      if pending ~= "" then ingest_file_index_candidate(accumulator, root, pending) end
 
       -- ripgrep uses exit code 1 for an empty, otherwise successful result set.
       if timed_out or read_failed or (execute_code ~= 0 and execute_code ~= 1) then
@@ -773,9 +807,10 @@ local function start_file_index(roots, signature, reason)
     if scan_failed then
       core.log_quiet("Fuzzy file index retained its previous snapshot after scanning failed")
     else
+      local files = accumulator.files
       table.sort(files)
       fuzzy_searcher.files_cache = files
-      fuzzy_searcher.files_metadata = metadata
+      fuzzy_searcher.files_metadata = accumulator.metadata
       fuzzy_searcher.files_generation = fuzzy_searcher.files_generation + 1
       fuzzy_searcher.files_scope_generation = fuzzy_searcher.files_scope_generation + 1
       rebuild_native_file_index()
@@ -5411,6 +5446,22 @@ return {
     file_display_item = fuzzy_searcher.file_display_item,
     fullpath = fullpath,
     file_result_key = file_result_key,
+    new_file_index_accumulator = new_file_index_accumulator,
+    ingest_file_index_chunk = ingest_file_index_chunk,
+    ingest_file_index_candidate = ingest_file_index_candidate,
+    file_scan_command = file_scan_command,
+    file_index_status = function()
+      return {
+        indexing = fuzzy_searcher.files_indexing,
+        files = fuzzy_searcher.files_cache,
+        generation = fuzzy_searcher.files_generation,
+      }
+    end,
+    refresh_file_index_for_test = function()
+      fuzzy_searcher.files_cache_test_override = false
+      return fuzzy_searcher.refresh_file_index_for_picker_open()
+    end,
+    cancel_file_index_for_test = cancel_file_index_scan,
     build_scope = build_scope,
     decorate_grep_result = decorate_grep_result,
     grep_path_match_class = fuzzy_searcher.grep_order.path_match_class,
