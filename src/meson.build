@@ -30,6 +30,7 @@ anvil_sources = [
     'tokenizer/lutf8.c',
     'api/encoding.c',
     'api/diff.c',
+    'diff_engine.cpp',
     'api/utils/lxlauxlib.c',
     'arena_allocator.c',
     'custom_events.c',

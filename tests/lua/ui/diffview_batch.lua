@@ -837,6 +837,7 @@ test.describe("DiffView batch behavior", function()
     test.ok(#polygons >= 1, "expected an inserted hunk connector in the divider")
     test.ok(#polygons[1].points > 4, "expected a curved connector, not a simple rectangle")
     test.ok(#markers >= 1, "expected a thin gap marker on the side without inserted lines")
+    test.same(style.background, markers[1].color, "central line-number columns should match a standard DocView")
     local has_thin_marker = false
     for _, marker in ipairs(markers) do
       if marker.h <= math.max(1, SCALE) + 0.01 then has_thin_marker = true; break end
@@ -845,6 +846,12 @@ test.describe("DiffView batch behavior", function()
     test.ok(#line_numbers >= 2, "expected both Diff Side line numbers in the central divider")
     test.equal(false, view.doc_view_a.show_line_numbers)
     test.equal(false, view.doc_view_b.show_line_numbers)
+    local left_gutter_width = view.doc_view_a:get_gutter_width()
+    local right_gutter_width = view.doc_view_b:get_gutter_width()
+    test.equal(left_gutter_width, 0, "the left Diff Side should not retain an empty inner gutter; got " .. tostring(left_gutter_width)
+      .. ", configured " .. tostring(view.doc_view_a.gutter_padding)
+      .. ", numbers " .. tostring(view.doc_view_a:line_number_gutter_visible()))
+    test.equal(right_gutter_width, 0, "the right Diff Side should not retain an empty inner gutter; got " .. tostring(right_gutter_width))
     test.equal(false, view.scrollable, "the Diff View should not add a third parent scrollbar")
     test.equal(
       view.position.x + view.size.x,
@@ -900,6 +907,8 @@ test.describe("DiffView batch behavior", function()
     local left_ranges = left_provider:inline_ranges(view.doc_view_a, 1)
     local right_ranges = right_provider:inline_ranges(view.doc_view_b, 1)
     test.ok(#left_ranges <= 3 and #right_ranges <= 3, "expected grouped inline emphasis")
+    test.same(left_ranges[1].color, style.diff_modify_inline)
+    test.same(right_ranges[1].color, style.diff_modify_inline)
 
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 800, 200
@@ -928,6 +937,80 @@ test.describe("DiffView batch behavior", function()
     if not ok then error(err, 0) end
     test.equal(1, connectors, "paired modified lines should have one coherent connector")
     test.same(style.diff_modify_background, connector_color)
+  end)
+
+  test.it("keeps later lines aligned when paired replacements wrap to different row counts", function(context)
+    local old_message = '    message = "Pi rechazó el mensaje, pero no confirmó la retirada de su correlación.",'
+    local new_message = '    message = "El asistente IA rechazó el mensaje, pero no confirmó la retirada de su correlación.",'
+    local view = track(context, "diffviews", diffview.string_to_string(
+      table.concat({ "before", old_message, "retirement.exceptionOrNull()", "after" }, "\n"),
+      table.concat({ "before", new_message, "retirement.exceptionOrNull()", "after" }, "\n"),
+      "left",
+      "right",
+      true
+    ))
+    wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
+    view.doc_view_a:set_wrapping_enabled(true)
+    view.doc_view_b:set_wrapping_enabled(true)
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 620, 300
+    view:update()
+
+    local left_rows = view.doc_view_a:get_visual_row_count_for_line(2)
+    local right_rows = view.doc_view_b:get_visual_row_count_for_line(2)
+    test.ok(left_rows ~= right_rows, "fixture should wrap the replacement to different heights")
+    local _, left_y = view.doc_view_a:get_line_screen_position(3, 1)
+    local _, right_y = view.doc_view_b:get_line_screen_position(3, 1)
+    test.equal(left_y, right_y, "the line after a differently wrapped replacement should remain aligned")
+    test.equal(view.doc_view_a:get_scrollable_line_count(), view.doc_view_b:get_scrollable_line_count())
+  end)
+
+  test.it("renders an expanded comment replacement as one compact modification", function(context)
+    local old_comment = "// Let Swing paint the lightweight loading surface before cold Compose/Skiko initialization occupies the EDT."
+    local new_comments = table.concat({
+      "// First let the loading Canvas become displayable and create its native buffers. ComposePanel",
+      "// then has to initialize and compose on the AWT event thread, so the Canvas renders actively",
+      "// on its own thread until the complete chat tree is ready.",
+    }, "\n")
+    local timer = "Timer(AI_CHAT_COMPOSE_START_DELAY_MILLIS) {"
+    local view = track(context, "diffviews", diffview.string_to_string(
+      old_comment .. "\n" .. timer,
+      new_comments .. "\n" .. timer,
+      "left",
+      "right",
+      true
+    ))
+    wait_until(function() return view.updater_idx == nil end, 1, "expected diff computation to finish")
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 1000, 300
+    view:update()
+
+    local old_draw_poly = renderer.draw_poly
+    local old_draw_rect = renderer.draw_rect
+    local old_draw_text = renderer.draw_text
+    local old_push_clip_rect = core.push_clip_rect
+    local old_pop_clip_rect = core.pop_clip_rect
+    local connector_colors = {}
+    renderer.draw_poly = function(_, color) connector_colors[#connector_colors + 1] = color end
+    renderer.draw_rect = function() end
+    renderer.draw_text = function(_, _, x) return x end
+    core.push_clip_rect = function() end
+    core.pop_clip_rect = function() end
+    local ok, err = pcall(function() view:draw_divider_changes() end)
+    renderer.draw_poly = old_draw_poly
+    renderer.draw_rect = old_draw_rect
+    renderer.draw_text = old_draw_text
+    core.push_clip_rect = old_push_clip_rect
+    core.pop_clip_rect = old_pop_clip_rect
+    if not ok then error(err, 0) end
+
+    test.ok(#connector_colors >= 2, "expected paired and continuation connectors")
+    for _, color in ipairs(connector_colors) do
+      test.same(color, style.diff_modify_background)
+    end
+    local _, left_timer_y = view.doc_view_a:get_line_screen_position(2, 1)
+    local _, right_timer_y = view.doc_view_b:get_line_screen_position(4, 1)
+    test.equal(left_timer_y, right_timer_y)
   end)
 
   test.it("keeps folded panes synchronized around insert-only hunks", function(context)

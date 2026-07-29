@@ -384,6 +384,10 @@ function DiffView:new(a, b, compare_type, names)
   -- compared text starts at the outer edges instead of wasting two gutters.
   self.doc_view_a.show_line_numbers = false
   self.doc_view_b.show_line_numbers = false
+  self.doc_view_a.gutter_padding = 0
+  self.doc_view_b.gutter_padding = 0
+  self.doc_view_a.suppress_gitdiff_gutter = true
+  self.doc_view_b.suppress_gitdiff_gutter = true
   self.side_editable = {
     a = content_editable(self.request, self.request.contents[1]),
     b = content_editable(self.request, self.request.contents[2]),
@@ -469,11 +473,11 @@ function DiffView:update_diff()
     self.diff_model = model
     self.a_gaps = model.a_gaps
     self.b_gaps = model.b_gaps
-    self:install_core_gap_rows()
     self.a_changes = model.a_changes
     self.b_changes = model.b_changes
     self.diff_equal_blocks = model.equal_blocks
     self:rebuild_diff_folds()
+    self:refresh_core_gap_rows(true)
 
     self.updater_idx = nil
 
@@ -654,23 +658,78 @@ local function line_for_visual_row(doc_view, row)
   return common.clamp(line or 1, 1, #doc_view.doc.lines)
 end
 
-local function install_core_gap_rows_for_docview(doc_view, gaps)
+local function install_core_gap_rows_for_docview(doc_view, gaps, trailing_gap)
   if not doc_view or not doc_view.add_visual_row_provider then return end
-  local before, any = {}, false
+  local before, after, any = {}, {}, false
   for line, gap in pairs(gaps or {}) do
     local cumulative = math.max(0, math.floor(tonumber(gap[2]) or 0))
     if cumulative > 0 then before[line], any = cumulative, true end
   end
+  trailing_gap = math.max(0, math.floor(tonumber(trailing_gap) or 0))
+  if trailing_gap > 0 then
+    local last_visible = #doc_view.doc.lines
+    while last_visible > 1 and doc_view:get_visual_row_count_for_line(last_visible) == 0 do
+      last_visible = last_visible - 1
+    end
+    after[last_visible], any = trailing_gap, true
+  end
   if any then
-    doc_view:add_visual_row_provider("diff-gaps", { before = before }, { priority = 50 })
+    doc_view:add_visual_row_provider("diff-gaps", { before = before, after = after }, { priority = 50 })
   else
     doc_view:remove_visual_row_provider("diff-gaps")
   end
 end
 
-function DiffView:install_core_gap_rows()
-  install_core_gap_rows_for_docview(self.doc_view_a, self.a_gaps)
-  install_core_gap_rows_for_docview(self.doc_view_b, self.b_gaps)
+local function gap_layout_signature(doc_view)
+  return table.concat({
+    tostring(doc_view.size and doc_view.size.x or 0),
+    tostring(doc_view.doc and doc_view.doc.text_revision or 0),
+    tostring(doc_view.__wrap_layout_generation or 0),
+    tostring(doc_view.fold_generation or 0),
+    tostring(doc_view.wrapping_enabled),
+  }, ":")
+end
+
+function DiffView:refresh_core_gap_rows(force)
+  local model = self.diff_model
+  if not model then return end
+  local signature = gap_layout_signature(self.doc_view_a) .. "|" .. gap_layout_signature(self.doc_view_b)
+  if not force and signature == self.__diff_gap_layout_signature then return end
+
+  local a_gaps, b_gaps = {}, {}
+  local a_height, b_height = 0, 0
+  local a_gap_total, b_gap_total = 0, 0
+
+  for _, pair in ipairs(model.alignment or {}) do
+    if a_height < b_height and pair.a then
+      local delta = b_height - a_height
+      a_gap_total = a_gap_total + delta
+      a_height = b_height
+    elseif b_height < a_height and pair.b then
+      local delta = a_height - b_height
+      b_gap_total = b_gap_total + delta
+      b_height = a_height
+    end
+
+    if pair.a then
+      a_gaps[pair.a] = { 0, a_gap_total }
+      a_height = a_height + self.doc_view_a:get_visual_row_count_for_line(pair.a)
+    end
+    if pair.b then
+      b_gaps[pair.b] = { 0, b_gap_total }
+      b_height = b_height + self.doc_view_b:get_visual_row_count_for_line(pair.b)
+    end
+  end
+
+  local a_trailing = math.max(0, b_height - a_height)
+  local b_trailing = math.max(0, a_height - b_height)
+  self.a_gaps, self.b_gaps = a_gaps, b_gaps
+  install_core_gap_rows_for_docview(self.doc_view_a, a_gaps, a_trailing)
+  install_core_gap_rows_for_docview(self.doc_view_b, b_gaps, b_trailing)
+  -- Installing providers changes fold generations, so retain the post-install
+  -- signature rather than triggering another identical rebuild next frame.
+  self.__diff_gap_layout_signature = gap_layout_signature(self.doc_view_a)
+    .. "|" .. gap_layout_signature(self.doc_view_b)
 end
 
 local function clear_core_diff_folds(doc_view)
@@ -1124,19 +1183,28 @@ local function draw_gap_marker(doc_view, y, color)
   )
 end
 
-local function change_blocks(changes, tags)
+local function change_blocks(changes, tags, use_raw_tag)
   local blocks = {}
   local i = 1
   while i <= #changes do
     local change = changes[i]
-    local tag = change and change.tag
+    local tag = change and (use_raw_tag and change.raw_tag or change.tag)
+    tag = tag or (change and change.tag)
     if tag and tag ~= "equal" and (not tags or tags[tag]) then
       local start_line = i
       local end_line = i
-      while changes[end_line + 1] and changes[end_line + 1].tag == tag do
+      while changes[end_line + 1] do
+        local next_change = changes[end_line + 1]
+        local next_tag = (use_raw_tag and next_change.raw_tag or next_change.tag) or next_change.tag
+        if next_tag ~= tag then break end
         end_line = end_line + 1
       end
-      blocks[#blocks + 1] = { tag = tag, start_line = start_line, end_line = end_line }
+      blocks[#blocks + 1] = {
+        tag = tag,
+        display_tag = change.tag,
+        start_line = start_line,
+        end_line = end_line,
+      }
       i = end_line + 1
     else
       i = i + 1
@@ -1145,7 +1213,7 @@ local function change_blocks(changes, tags)
   return blocks
 end
 
-local function cached_change_blocks(view, side, kind, tags)
+local function cached_change_blocks(view, side, kind, tags, use_raw_tag)
   local changes = side == "a" and view.a_changes or view.b_changes
   local cache = view.__change_blocks_cache
   if not cache or cache.a_source ~= view.a_changes or cache.b_source ~= view.b_changes then
@@ -1153,7 +1221,7 @@ local function cached_change_blocks(view, side, kind, tags)
     view.__change_blocks_cache = cache
   end
   local key = side .. ":" .. kind
-  if not cache[key] then cache[key] = change_blocks(changes, tags) end
+  if not cache[key] then cache[key] = change_blocks(changes, tags, use_raw_tag) end
   return cache[key]
 end
 
@@ -1220,8 +1288,8 @@ local function diff_decoration_provider(parent, is_a)
       local change = changes[line]
       if not change or change.tag ~= "modify" or not change.inline_ranges then return nil end
       local ranges = {}
-      local color = is_a and style.diff_delete_inline or style.diff_insert_inline
-      if config.plugins.diffview.plain_text then color = is_a and style.diff_delete or style.diff_insert end
+      local color = style.diff_modify_inline
+      if config.plugins.diffview.plain_text then color = style.diff_modify end
       for _, range in ipairs(change.inline_ranges) do
         ranges[#ranges + 1] = { col1 = range.col1, col2 = range.col2, color = color }
       end
@@ -1404,7 +1472,7 @@ function DiffView:draw_divider_changes()
 
   core.push_clip_rect(self.position.x, self.position.y, self.size.x, self.size.y)
 
-  renderer.draw_rect(x1, self.position.y, x2 - x1, self.size.y, style.background2)
+  renderer.draw_rect(x1, self.position.y, x2 - x1, self.size.y, style.background)
 
   local function draw_connector(tag, left_start_y, left_end_y, right_start_y, right_end_y)
     draw_curved_trapezium(
@@ -1415,25 +1483,25 @@ function DiffView:draw_divider_changes()
     )
   end
 
-  for _, block in ipairs(cached_change_blocks(self, "a", "connectors", { delete = true, modify = true })) do
+  for _, block in ipairs(cached_change_blocks(self, "a", "connectors", { delete = true, modify = true }, true)) do
     local a_start_y, a_end_y = line_range_y(left, block.start_line, block.end_line)
     if block.tag == "delete" then
-      draw_connector(block.tag, a_start_y, a_end_y, a_start_y, a_start_y)
-      draw_gap_marker(right, a_start_y, gap_marker_color(block.tag))
+      draw_connector(block.display_tag, a_start_y, a_end_y, a_start_y, a_start_y)
+      draw_gap_marker(right, a_start_y, gap_marker_color(block.display_tag))
     else
       local start_row = visual_rows_before_line(left, block.start_line)
       local end_row = visual_rows_before_line(left, block.end_line)
       local b_start_line = line_for_visual_row(right, start_row)
       local b_end_line = line_for_visual_row(right, end_row)
       local b_start_y, b_end_y = line_range_y(right, b_start_line, b_end_line)
-      draw_connector(block.tag, a_start_y, a_end_y, b_start_y, b_end_y)
+      draw_connector(block.display_tag, a_start_y, a_end_y, b_start_y, b_end_y)
     end
   end
 
-  for _, block in ipairs(cached_change_blocks(self, "b", "inserts", { insert = true })) do
+  for _, block in ipairs(cached_change_blocks(self, "b", "inserts", { insert = true }, true)) do
     local b_start_y, b_end_y = line_range_y(right, block.start_line, block.end_line)
-    draw_connector(block.tag, b_start_y, b_start_y, b_start_y, b_end_y)
-    draw_gap_marker(left, b_start_y, gap_marker_color(block.tag))
+    draw_connector(block.display_tag, b_start_y, b_start_y, b_start_y, b_end_y)
+    draw_gap_marker(left, b_start_y, gap_marker_color(block.display_tag))
   end
 
   self:draw_divider_line_numbers(x1, x2)
@@ -1500,6 +1568,7 @@ function DiffView:update()
 
   call_docview_method(self.doc_view_a, self.doc_view_a.update)
   call_docview_method(self.doc_view_b, self.doc_view_b.update)
+  self:refresh_core_gap_rows(false)
 end
 
 function DiffView:draw()

@@ -5,6 +5,7 @@ project('anvil',
     meson_version : '>= 0.63',
     default_options : [
         'c_std=gnu11',
+        'cpp_std=c++11',
         'wrap_mode=nofallback'
     ]
 )

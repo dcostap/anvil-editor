@@ -28,57 +28,97 @@ function DiffModel:inline_ranges(side, line)
   return change and change.inline_ranges or nil
 end
 
-local function collapsed_inline_edits(edits)
-  local collapsed = {}
-  for _, edit in ipairs(edits or {}) do
-    local previous = collapsed[#collapsed]
-    if previous and previous.tag == edit.tag then
-      previous.val = previous.val .. (edit.val or "")
+local function token_segments(text)
+  local segments, values = {}, {}
+  local cursor = 1
+  local function is_space(byte)
+    return byte == 32 or (byte and byte >= 9 and byte <= 13)
+  end
+  local function is_word(byte)
+    return byte and (
+      (byte >= 48 and byte <= 57)
+      or (byte >= 65 and byte <= 90)
+      or byte == 95
+      or (byte >= 97 and byte <= 122)
+      or byte >= 128
+    )
+  end
+  local function is_operator(byte)
+    return byte and ("=+-*/%<>!&|^~?:."):find(string.char(byte), 1, true) ~= nil
+  end
+
+  while cursor <= #text do
+    while cursor <= #text and is_space(text:byte(cursor)) do cursor = cursor + 1 end
+    if cursor > #text then break end
+    local start_col = cursor
+    if is_word(text:byte(cursor)) then
+      repeat cursor = cursor + 1
+      until cursor > #text or not is_word(text:byte(cursor))
+    elseif is_operator(text:byte(cursor)) then
+      repeat cursor = cursor + 1
+      until cursor > #text or not is_operator(text:byte(cursor))
     else
-      collapsed[#collapsed + 1] = { tag = edit.tag, val = edit.val or "" }
+      -- Operators and delimiters are boundaries and tokens in their own right.
+      cursor = cursor + 1
     end
+    local end_col = cursor - 1
+    segments[#segments + 1] = {
+      text = text:sub(start_col, end_col),
+      col1 = start_col,
+      col2 = end_col + 1,
+    }
+    values[#values + 1] = segments[#segments].text
   end
-  return collapsed
+  return segments, values
 end
 
-local function bridgeable_equal_text(text)
-  return #text <= 2 or text:match("^[%s%p]+$") ~= nil
+local function content_range(segment)
+  local col1, col2 = segment.col1, segment.col2
+  while col1 < col2 and segment.text:sub(col1 - segment.col1 + 1, col1 - segment.col1 + 1):match("%p") do
+    col1 = col1 + 1
+  end
+  while col2 > col1 and segment.text:sub(col2 - segment.col1, col2 - segment.col1):match("%p") do
+    col2 = col2 - 1
+  end
+  if col1 == col2 then return segment.col1, segment.col2 end
+  return col1, col2
 end
 
----Build calm changed ranges for the target text represented by `insert`
----records in diff.inline_diff(). Tiny equal islands and punctuation-only gaps
----are absorbed so translated or substantially rewritten phrases do not turn
----into a barcode of one-character highlights.
-local function inline_ranges_for_target(edits)
+local function append_token_range(ranges, target, col1, col2)
+  if col2 <= col1 then return end
+  local previous = ranges[#ranges]
+  if previous and target:sub(previous.col2, col1 - 1):match("^%s*$") then
+    previous.col2 = math.max(previous.col2, col2)
+  else
+    ranges[#ranges + 1] = { col1 = col1, col2 = col2 }
+  end
+end
+
+---Use word alignment so repeated letters cannot make partially replaced words
+---look unchanged. Modified, inserted, and deleted text is emphasized only at
+---whole-word granularity, matching IntelliJ's restrained inline presentation.
+local function token_inline_ranges(from, target)
+  local _, from_values = token_segments(from)
+  local target_segments, target_values = token_segments(target)
+
   local ranges = {}
-  local active
-  local col = 1
-  for _, edit in ipairs(collapsed_inline_edits(edits)) do
-    local len = #edit.val
-    if edit.tag == "insert" then
-      if active then
-        active.col2 = col + len
-      else
-        active = { col1 = col, col2 = col + len }
-      end
-      col = col + len
-    elseif edit.tag == "equal" then
-      if active and not bridgeable_equal_text(edit.val) then
-        ranges[#ranges + 1] = active
-        active = nil
-      end
-      col = col + len
+  local target_index = 1
+  for edit in diff.diff_iter(from_values, target_values) do
+    local target_segment = edit.b and target_segments[target_index] or nil
+    if (edit.tag == "modify" or edit.tag == "insert") and target_segment then
+      local col1, col2 = content_range(target_segment)
+      append_token_range(ranges, target, col1, col2)
     end
-    -- Deletes consume no columns in the target text and therefore neither
-    -- split nor advance its highlight range.
+    if edit.b then target_index = target_index + 1 end
   end
-  if active then ranges[#ranges + 1] = active end
   return ranges
 end
 
 local function inline_change(from, to)
-  local edits = diff.inline_diff(from or "", to or "")
-  return edits, inline_ranges_for_target(edits)
+  from, to = from or "", to or ""
+  local edits = diff.inline_diff(from, to)
+  if from == to then return edits, {} end
+  return edits, token_inline_ranges(from, to)
 end
 
 function DiffModel:hunk_at(side, line)
@@ -137,6 +177,7 @@ function M.compute(a_lines, b_lines, opts)
   local a_gaps, b_gaps = {}, {}
   local a_changes, b_changes = {}, {}
   local a_to_b, b_to_a = {}, {}
+  local alignment = {}
   local equal_blocks = {}
   local equal_block, seen_change = nil, false
 
@@ -149,6 +190,11 @@ function M.compute(a_lines, b_lines, opts)
   end
 
   for edit in diff.diff_iter(a_lines, b_lines) do
+    alignment[#alignment + 1] = {
+      tag = edit.tag,
+      a = edit.a and ai or nil,
+      b = edit.b and bi or nil,
+    }
     if edit.tag == "equal" or edit.tag == "modify" then
       a_gaps[ai] = { a_offset, a_offset_total }
       b_gaps[bi] = { b_offset, b_offset_total }
@@ -225,6 +271,39 @@ function M.compute(a_lines, b_lines, opts)
     bi = bi + 1
   end
 
+  -- Once a changed block contains a confidently paired replacement, present
+  -- its unmatched continuation lines as part of that modification rather
+  -- than as a visually separate red/green delete/insert pair. Keep raw_tag so
+  -- the renderer can still use the correct one-sided connector geometry.
+  local changed_run = {}
+  local function mark_modify(change)
+    if change and change.tag ~= "equal" then
+      change.raw_tag = change.tag
+      change.tag = "modify"
+    end
+  end
+  local function flush_changed_run()
+    local has_modify = false
+    for _, pair in ipairs(changed_run) do
+      if pair.tag == "modify" then has_modify = true; break end
+    end
+    if has_modify then
+      for _, pair in ipairs(changed_run) do
+        mark_modify(pair.a and a_changes[pair.a] or nil)
+        mark_modify(pair.b and b_changes[pair.b] or nil)
+      end
+    end
+    changed_run = {}
+  end
+  for _, pair in ipairs(alignment) do
+    if pair.tag == "equal" then
+      flush_changed_run()
+    else
+      changed_run[#changed_run + 1] = pair
+    end
+  end
+  flush_changed_run()
+
   return setmetatable({
     a_len = a_len,
     b_len = b_len,
@@ -235,6 +314,7 @@ function M.compute(a_lines, b_lines, opts)
     equal_blocks = equal_blocks,
     a_to_b = a_to_b,
     b_to_a = b_to_a,
+    alignment = alignment,
   }, DiffModel)
 end
 

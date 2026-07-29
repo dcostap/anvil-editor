@@ -466,7 +466,7 @@ end
 local old_docview_gutter = DocView.draw_line_gutter
 local old_gutter_width = DocView.get_gutter_width
 function DocView:draw_line_gutter(line, x, y, width)
-	if not plugin_config.gutter or not get_state(self.doc).is_in_repo then
+	if self.suppress_gitdiff_gutter or not plugin_config.gutter or not get_state(self.doc).is_in_repo then
 		return old_docview_gutter(self, line, x, y, width)
 	end
 
@@ -490,6 +490,7 @@ end
 
 function DocView:get_gutter_width()
 	local gw, gpad = old_gutter_width(self)
+	if self.suppress_gitdiff_gutter then return gw, gpad end
 	-- Reserve the gitdiff marker lane immediately so newly opened files do not
 	-- shift right after async git state flips from unknown to tracked.
 	return gw + style.padding.x * style.gitdiff_width / 12, gpad

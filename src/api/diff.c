@@ -5,13 +5,12 @@
 #include <stdbool.h>
 
 #include "api.h"
+#include "../diff_engine.h"
 
 #define MAX_TOKENS 64
 #define SCRATCH_SIZE 1024
 
-typedef struct {
-  int i, j;
-} Pair;
+typedef AnvilDiffPair Pair;
 
 typedef struct {
   Pair *pairs;
@@ -19,6 +18,15 @@ typedef struct {
   int ai, bi, pi;
   int lenA, lenB;
 } DiffState;
+
+static int diff_state_gc(lua_State *L) {
+  DiffState *state = (DiffState *)lua_touserdata(L, 1);
+  if (state && state->pairs) {
+    anvil_diff_pairs_free(state->pairs);
+    state->pairs = NULL;
+  }
+  return 0;
+}
 
 static bool is_token_char(char c) {
   return ((unsigned char)c >= 0x80) || // UTF-8 lead/continuation byte
@@ -101,6 +109,22 @@ static bool has_matching_structural_prefix(const char *a, const char *b) {
   return len_a > 0 && len_a == len_b && strcmp(key_a, key_b) == 0;
 }
 
+static const char *comment_marker(const char *src) {
+  while (*src == ' ' || *src == '\t') src++;
+  if (src[0] == '/' && src[1] == '/') return "//";
+  if (src[0] == '/' && src[1] == '*') return "/*";
+  if (src[0] == '-' && src[1] == '-') return "--";
+  if (src[0] == '#') return "#";
+  if (src[0] == '*') return "*";
+  return NULL;
+}
+
+static bool has_matching_comment_marker(const char *a, const char *b) {
+  const char *marker_a = comment_marker(a);
+  const char *marker_b = comment_marker(b);
+  return marker_a && marker_b && strcmp(marker_a, marker_b) == 0;
+}
+
 
 static double similarity(const char *a, const char *b) {
   if (strcmp(a, b) == 0) return 1.0;
@@ -117,7 +141,7 @@ static double similarity(const char *a, const char *b) {
   while (suffix < la && suffix < lb && a[la - 1 - suffix] == b[lb - 1 - suffix]) suffix++;
 
   double fast_score = (double)(prefix + suffix) / (la > lb ? la : lb);
-  if (has_matching_structural_prefix(a, b)) {
+  if (has_matching_structural_prefix(a, b) || has_matching_comment_marker(a, b)) {
     double token_score = token_similarity(a, b, la, lb);
     return token_score > 0.5 ? token_score : 0.5;
   }
@@ -139,58 +163,35 @@ static double table_line_similarity(lua_State *L, int Aidx, int ai, int Bidx, in
 }
 
 
-static Pair *build_lcs(lua_State *L, int Aidx, int Bidx, int *npairs, double threshold) {
+static Pair *build_equal_pairs(lua_State *L, int Aidx, int Bidx, int *npairs) {
   int n = (int)lua_rawlen(L, Aidx);
   int m = (int)lua_rawlen(L, Bidx);
-
-  int **dp = SDL_malloc((n+1) * sizeof(int*));
-  for (int i = 0; i <= n; i++) dp[i] = SDL_calloc(m+1, sizeof(int));
-
+  AnvilDiffLine *a_lines = SDL_malloc((size_t)(n > 0 ? n : 1) * sizeof(*a_lines));
+  AnvilDiffLine *b_lines = SDL_malloc((size_t)(m > 0 ? m : 1) * sizeof(*b_lines));
+  if (!a_lines || !b_lines) {
+    SDL_free(a_lines);
+    SDL_free(b_lines);
+    luaL_error(L, "out of memory preparing histogram diff");
+  }
   for (int i = 1; i <= n; i++) {
+    size_t len = 0;
     lua_rawgeti(L, Aidx, i);
-    const char *a = lua_tostring(L, -1);
-    for (int j = 1; j <= m; j++) {
-      lua_rawgeti(L, Bidx, j);
-      const char *b = lua_tostring(L, -1);
-      if (strcmp(a, b) == 0)
-        dp[i][j] = dp[i-1][j-1] + 1;
-      else
-        dp[i][j] = (dp[i-1][j] >= dp[i][j-1]) ? dp[i-1][j] : dp[i][j-1];
-      lua_pop(L, 1);
-    }
+    a_lines[i - 1].data = lua_tolstring(L, -1, &len);
+    a_lines[i - 1].length = len;
+    lua_pop(L, 1);
+  }
+  for (int i = 1; i <= m; i++) {
+    size_t len = 0;
+    lua_rawgeti(L, Bidx, i);
+    b_lines[i - 1].data = lua_tolstring(L, -1, &len);
+    b_lines[i - 1].length = len;
     lua_pop(L, 1);
   }
 
-  Pair *pairs = SDL_malloc((n + m) * sizeof(Pair));
-  int count = 0;
-  int i = n, j = m;
-  while (i > 0 && j > 0) {
-    lua_rawgeti(L, Aidx, i);
-    const char *a = lua_tostring(L, -1);
-    lua_rawgeti(L, Bidx, j);
-    const char *b = lua_tostring(L, -1);
-    if (strcmp(a, b) == 0) {
-      pairs[count++] = (Pair){i, j};
-      i--; j--;
-    } else if (dp[i-1][j] >= dp[i][j-1]) {
-      i--;
-    } else {
-      j--;
-    }
-    lua_pop(L, 2);
-  }
-
-  // Reverse pairs to ascending order
-  for (int k = 0; k < count / 2; k++) {
-    Pair tmp = pairs[k];
-    pairs[k] = pairs[count - k - 1];
-    pairs[count - k - 1] = tmp;
-  }
-
-  for (int i = 0; i <= n; i++) SDL_free(dp[i]);
-  SDL_free(dp);
-
-  *npairs = count;
+  Pair *pairs = anvil_diff_equal_pairs(a_lines, n, b_lines, m, npairs);
+  SDL_free(a_lines);
+  SDL_free(b_lines);
+  if (!pairs) luaL_error(L, "histogram diff engine failed");
   return pairs;
 }
 
@@ -377,14 +378,12 @@ static int f_inline_diff(lua_State *L) {
 static int f_diff(lua_State *L) {
   luaL_checktype(L, 1, LUA_TTABLE);
   luaL_checktype(L, 2, LUA_TTABLE);
-  double threshold = luaL_optnumber(L, 3, 0.75);
-
   int Aidx = 1, Bidx = 2;
   int lenA = (int)lua_rawlen(L, Aidx);
   int lenB = (int)lua_rawlen(L, Bidx);
 
   int npairs;
-  Pair *pairs = build_lcs(L, Aidx, Bidx, &npairs, threshold);
+  Pair *pairs = build_equal_pairs(L, Aidx, Bidx, &npairs);
 
   lua_newtable(L);
   int result_idx = lua_gettop(L);
@@ -463,7 +462,7 @@ static int f_diff(lua_State *L) {
     }
   }
 
-  SDL_free(pairs);
+  anvil_diff_pairs_free(pairs);
   return 1;
 }
 
@@ -555,7 +554,7 @@ static int diff_iterator(lua_State *L) {
   }
 
   if (state->pairs) {
-    SDL_free(state->pairs);
+    anvil_diff_pairs_free(state->pairs);
     state->pairs = NULL;
   }
 
@@ -575,20 +574,22 @@ static int diff_iterator(lua_State *L) {
 static int f_diff_iter(lua_State *L) {
   luaL_checktype(L, 1, LUA_TTABLE);
   luaL_checktype(L, 2, LUA_TTABLE);
-  double threshold = luaL_optnumber(L, 3, 0.75);
-
-  DiffState *state = SDL_malloc(sizeof(DiffState));
+  DiffState *state = (DiffState *)lua_newuserdata(L, sizeof(DiffState));
+  int state_idx = lua_gettop(L);
+  memset(state, 0, sizeof(*state));
+  luaL_getmetatable(L, "diff.iterator_state");
+  lua_setmetatable(L, -2);
   state->lenA = (int)lua_rawlen(L, 1);
   state->lenB = (int)lua_rawlen(L, 2);
   state->ai = 1;
   state->bi = 1;
   state->pi = 0;
-  state->pairs = build_lcs(L, 1, 2, &state->npairs, threshold);
+  state->pairs = build_equal_pairs(L, 1, 2, &state->npairs);
 
-  /* Push tables and state to closure */
+  /* Push tables and the owning userdata to the closure. */
   lua_pushvalue(L, 1);
   lua_pushvalue(L, 2);
-  lua_pushlightuserdata(L, state);
+  lua_pushvalue(L, state_idx);
 
   lua_pushcclosure(L, diff_iterator, 3);
   return 1;
@@ -605,6 +606,11 @@ static const struct luaL_Reg lib[] = {
 
 
 int luaopen_diff(lua_State *L) {
+  if (luaL_newmetatable(L, "diff.iterator_state")) {
+    lua_pushcfunction(L, diff_state_gc);
+    lua_setfield(L, -2, "__gc");
+  }
+  lua_pop(L, 1);
   luaL_newlib(L, lib);
   return 1;
 }
