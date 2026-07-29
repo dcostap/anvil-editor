@@ -14,6 +14,14 @@ int RENDERER_FONT_REF = LUA_NOREF;
 // a reference index to a table that stores canvases during a render cycle
 int RENDERER_CANVAS_REF = LUA_NOREF;
 
+typedef struct {
+  char *text;
+  size_t text_len;
+  size_t count;
+  uint32_t *byte_offsets;
+  double *advances;
+} LuaTextLayout;
+
 static int font_get_options(
   lua_State *L,
   ERenFontAntialiasing *antialiasing,
@@ -412,6 +420,164 @@ static int f_draw_rect(lua_State *L) {
   return 0;
 }
 
+static LuaTextLayout *check_text_layout(lua_State *L, int index) {
+  return (LuaTextLayout *)luaL_checkudata(L, index, API_TYPE_TEXT_LAYOUT);
+}
+
+static size_t text_layout_boundary_at_or_before(const LuaTextLayout *layout, size_t byte_offset) {
+  size_t low = 0, high = layout->count;
+  while (low + 1 < high) {
+    size_t middle = low + (high - low) / 2;
+    if (layout->byte_offsets[middle] <= byte_offset) low = middle;
+    else high = middle;
+  }
+  return low;
+}
+
+static int f_text_layout_gc(lua_State *L) {
+  LuaTextLayout *layout = check_text_layout(L, 1);
+  SDL_free(layout->text);
+  SDL_free(layout->byte_offsets);
+  SDL_free(layout->advances);
+  memset(layout, 0, sizeof(*layout));
+  return 0;
+}
+
+static int f_text_layout_width(lua_State *L) {
+  LuaTextLayout *layout = check_text_layout(L, 1);
+  lua_pushnumber(L, layout->count ? layout->advances[layout->count - 1] : 0);
+  return 1;
+}
+
+static int f_text_layout_width_at(lua_State *L) {
+  LuaTextLayout *layout = check_text_layout(L, 1);
+  lua_Integer raw = luaL_checkinteger(L, 2);
+  size_t byte_offset = raw <= 0 ? 0 : (size_t)raw;
+  if (byte_offset > layout->text_len) byte_offset = layout->text_len;
+  lua_pushnumber(L, layout->advances[text_layout_boundary_at_or_before(layout, byte_offset)]);
+  return 1;
+}
+
+static int f_text_layout_width_cursor_next(lua_State *L) {
+  LuaTextLayout *layout = check_text_layout(L, lua_upvalueindex(1));
+  lua_Integer raw = luaL_checkinteger(L, 1);
+  size_t byte_offset = raw <= 0 ? 0 : (size_t)raw;
+  if (byte_offset > layout->text_len) byte_offset = layout->text_len;
+  size_t index = (size_t)lua_tointeger(L, lua_upvalueindex(2));
+  if (index >= layout->count) index = layout->count ? layout->count - 1 : 0;
+  if (layout->count > 0) {
+    if (layout->byte_offsets[index] > byte_offset) {
+      index = text_layout_boundary_at_or_before(layout, byte_offset);
+    } else {
+      while (index + 1 < layout->count
+        && layout->byte_offsets[index + 1] <= byte_offset)
+        index++;
+    }
+  }
+  lua_pushinteger(L, (lua_Integer)index);
+  lua_replace(L, lua_upvalueindex(2));
+  lua_pushnumber(L, layout->count ? layout->advances[index] : 0);
+  return 1;
+}
+
+static int f_text_layout_width_cursor(lua_State *L) {
+  check_text_layout(L, 1);
+  lua_pushvalue(L, 1);
+  lua_pushinteger(L, 0);
+  lua_pushcclosure(L, f_text_layout_width_cursor_next, 2);
+  return 1;
+}
+
+static int f_text_layout_byte_at_x(lua_State *L) {
+  LuaTextLayout *layout = check_text_layout(L, 1);
+  double x = luaL_checknumber(L, 2);
+  if (layout->count <= 1 || x <= 0) {
+    lua_pushinteger(L, 0);
+    return 1;
+  }
+  size_t low = 0, high = layout->count - 1;
+  while (low + 1 < high) {
+    size_t middle = low + (high - low) / 2;
+    if (layout->advances[middle] < x) low = middle;
+    else high = middle;
+  }
+  double midpoint = layout->advances[low]
+    + (layout->advances[high] - layout->advances[low]) * 0.5;
+  lua_pushinteger(L, (lua_Integer)layout->byte_offsets[x <= midpoint ? low : high]);
+  return 1;
+}
+
+static int f_text_layout_wrap(lua_State *L) {
+  LuaTextLayout *layout = check_text_layout(L, 1);
+  double wrap_width = luaL_checknumber(L, 2);
+  const char *mode = luaL_optstring(L, 3, "letter");
+  lua_Integer raw_start = luaL_optinteger(L, 4, 0);
+  double first_leading = luaL_optnumber(L, 5, 0);
+  double continuation_leading = luaL_optnumber(L, 6, 0);
+  size_t start_byte = raw_start <= 0 ? 0 : (size_t)raw_start;
+  if (start_byte > layout->text_len) start_byte = layout->text_len;
+  size_t start = text_layout_boundary_at_or_before(layout, start_byte);
+  size_t row_start = start, last_space = SIZE_MAX;
+  int out = 1;
+  lua_createtable(L, 8, 0);
+  lua_pushinteger(L, (lua_Integer)layout->byte_offsets[start]);
+  lua_rawseti(L, -2, out++);
+  for (size_t index = start + 1; index < layout->count; index++) {
+    size_t char_start = layout->byte_offsets[index - 1];
+    if (layout->text[char_start] == ' ' && layout->byte_offsets[index] == char_start + 1)
+      last_space = index - 1;
+    double leading = row_start == start ? first_leading : continuation_leading;
+    double row_width = leading + layout->advances[index] - layout->advances[row_start];
+    if (wrap_width > 0 && row_width > wrap_width && index - 1 > row_start) {
+      size_t split = index - 1;
+      if (strcmp(mode, "word") == 0 && last_space != SIZE_MAX && last_space >= row_start)
+        split = last_space + 1;
+      if (split <= row_start) split = index - 1;
+      lua_pushinteger(L, (lua_Integer)layout->byte_offsets[split]);
+      lua_rawseti(L, -2, out++);
+      row_start = split;
+      if (last_space != SIZE_MAX && last_space < row_start) last_space = SIZE_MAX;
+    }
+  }
+  return 1;
+}
+
+static int f_font_text_layout(lua_State *L) {
+  RenFont *fonts[FONT_FALLBACK_MAX]; font_retrieve(L, fonts, 1);
+  size_t len;
+  const char *text = luaL_checklstring(L, 2, &len);
+  RenTab tab = luaXL_checktab(L, 3);
+  LuaTextLayout *layout = (LuaTextLayout *)lua_newuserdata(L, sizeof(*layout));
+  memset(layout, 0, sizeof(*layout));
+  layout->text = (char *)SDL_malloc(len + 1);
+  layout->byte_offsets = (uint32_t *)SDL_malloc(sizeof(*layout->byte_offsets) * (len + 1));
+  layout->advances = (double *)SDL_malloc(sizeof(*layout->advances) * (len + 1));
+  if (!layout->text || !layout->byte_offsets || !layout->advances) {
+    SDL_free(layout->text);
+    SDL_free(layout->byte_offsets);
+    SDL_free(layout->advances);
+    memset(layout, 0, sizeof(*layout));
+    return luaL_error(L, "out of memory creating text layout");
+  }
+  memcpy(layout->text, text, len);
+  layout->text[len] = '\0';
+  layout->text_len = len;
+  layout->count = ren_font_group_get_advances(
+    fonts, text, len, tab, layout->byte_offsets, layout->advances
+  );
+  if (layout->count > 1) {
+    double shaped_width = ren_font_group_get_width(fonts, text, len, tab, NULL);
+    double advance_width = layout->advances[layout->count - 1];
+    if (advance_width > 0 && shaped_width != advance_width) {
+      double scale = shaped_width / advance_width;
+      for (size_t index = 1; index < layout->count; index++)
+        layout->advances[index] *= scale;
+    }
+  }
+  luaL_setmetatable(L, API_TYPE_TEXT_LAYOUT);
+  return 1;
+}
+
 
 static int f_draw_rounded_rect(lua_State *L) {
   lua_Number x = luaL_checknumber(L, 1);
@@ -742,11 +908,22 @@ static const luaL_Reg fontLib[] = {
   { "group",              f_font_group              },
   { "set_tab_size",       f_font_set_tab_size       },
   { "get_width",          f_font_get_width          },
+  { "text_layout",        f_font_text_layout        },
   { "get_height",         f_font_get_height         },
   { "get_size",           f_font_get_size           },
   { "set_size",           f_font_set_size           },
   { "get_path",           f_font_get_path           },
   { "get_metadata",       f_font_get_metadata       },
+  { NULL, NULL }
+};
+
+static const luaL_Reg textLayoutLib[] = {
+  { "__gc",      f_text_layout_gc        },
+  { "width",     f_text_layout_width     },
+  { "width_at",  f_text_layout_width_at  },
+  { "width_cursor", f_text_layout_width_cursor },
+  { "byte_at_x", f_text_layout_byte_at_x },
+  { "wrap",      f_text_layout_wrap      },
   { NULL, NULL }
 };
 
@@ -767,5 +944,10 @@ int luaopen_renderer(lua_State *L) {
   lua_pushvalue(L, -1);
   lua_setfield(L, -2, "__index");
   lua_setfield(L, -2, "font");
+  luaL_newmetatable(L, API_TYPE_TEXT_LAYOUT);
+  luaL_setfuncs(L, textLayoutLib, 0);
+  lua_pushvalue(L, -1);
+  lua_setfield(L, -2, "__index");
+  lua_pop(L, 1);
   return 1;
 }

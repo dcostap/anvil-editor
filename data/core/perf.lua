@@ -79,6 +79,22 @@ function perf.record_linewrap_compute(row)
   while #rows > 30 do table.remove(rows) end
 end
 
+local function record_slowest_row(rows, row, limit)
+  rows[#rows + 1] = row
+  table.sort(rows, function(a, b) return (a.elapsed_ms or 0) > (b.elapsed_ms or 0) end)
+  while #rows > (limit or 30) do table.remove(rows) end
+end
+
+function perf.record_markdown_model_publication(row)
+  if not recording or not record or not row then return end
+  record_slowest_row(record.markdown_model_publication_rows, row)
+end
+
+function perf.record_markdown_view_publication(row)
+  if not recording or not record or not row then return end
+  record_slowest_row(record.markdown_view_publication_rows, row)
+end
+
 local function hook()
   if not record then return end
   local level = 2
@@ -195,6 +211,19 @@ local diagnostic_frame_keys = {
   "markdown_live_semantic_publication_ranges",
   "markdown_live_semantic_publication_lines",
   "markdown_live_semantic_global_invalidations",
+  "markdown_model_publication_ms",
+  "markdown_model_publication_summary_ms",
+  "markdown_model_publication_previous_close_ms",
+  "markdown_model_publication_state_ms",
+  "markdown_model_publication_notify_ms",
+  "markdown_model_publication_listener_calls",
+  "markdown_live_publication_listener_ms",
+  "markdown_live_publication_reset_ms",
+  "markdown_live_publication_fence_reconcile_ms",
+  "markdown_live_publication_range_expand_ms",
+  "markdown_live_publication_prune_images_ms",
+  "markdown_live_publication_line_invalidate_ms",
+  "markdown_live_publication_metric_invalidate_ms",
   "markdown_live_link_index_invalidations",
   "markdown_live_image_fragment_calls",
   "markdown_image_get_asset_calls",
@@ -239,6 +268,12 @@ local diagnostic_frame_keys = {
   "linewrapping_reconstruct_breaks_calls",
   "linewrapping_reconstruct_breaks_ms",
   "linewrapping_reconstruct_breaks_lines",
+  "linewrapping_async_reconstruct_calls",
+  "linewrapping_async_reconstruct_lines",
+  "linewrapping_async_reconstruct_ms",
+  "linewrapping_async_reconstruct_yields",
+  "linewrapping_async_reconstruct_commits",
+  "linewrapping_async_reconstruct_cancelled",
   "linewrapping_update_breaks_calls",
   "linewrapping_update_breaks_ms",
   "linewrapping_update_breaks_lines",
@@ -949,6 +984,19 @@ local function write_summary(path)
   drill_metric("Markdown semantic publication ranges", "markdown_live_semantic_publication_ranges", run_denom, "run_loop")
   drill_metric("Markdown semantic publication lines", "markdown_live_semantic_publication_lines", run_denom, "run_loop")
   drill_metric("Markdown semantic global invalidations", "markdown_live_semantic_global_invalidations", run_denom, "run_loop")
+  drill_metric("Markdown model publication ms", "markdown_model_publication_ms", run_denom, "run_loop")
+  drill_metric("Markdown publication summary ms", "markdown_model_publication_summary_ms", run_denom, "run_loop")
+  drill_metric("Markdown previous-result close ms", "markdown_model_publication_previous_close_ms", run_denom, "run_loop")
+  drill_metric("Markdown publication state ms", "markdown_model_publication_state_ms", run_denom, "run_loop")
+  drill_metric("Markdown publication notify ms", "markdown_model_publication_notify_ms", run_denom, "run_loop")
+  drill_metric("Markdown publication listeners", "markdown_model_publication_listener_calls", run_denom, "run_loop")
+  drill_metric("Markdown view publication ms", "markdown_live_publication_listener_ms", run_denom, "run_loop")
+  drill_metric("Markdown view reset ms", "markdown_live_publication_reset_ms", run_denom, "run_loop")
+  drill_metric("Markdown fence reconcile ms", "markdown_live_publication_fence_reconcile_ms", run_denom, "run_loop")
+  drill_metric("Markdown publication expand ms", "markdown_live_publication_range_expand_ms", run_denom, "run_loop")
+  drill_metric("Markdown publication image prune ms", "markdown_live_publication_prune_images_ms", run_denom, "run_loop")
+  drill_metric("Markdown line invalidation ms", "markdown_live_publication_line_invalidate_ms", run_denom, "run_loop")
+  drill_metric("Markdown metric invalidation ms", "markdown_live_publication_metric_invalidate_ms", run_denom, "run_loop")
   drill_metric("Markdown link-index invalidations", "markdown_live_link_index_invalidations", run_denom, "run_loop")
   drill_metric("Markdown image fragment builds", "markdown_live_image_fragment_calls", run_denom, "run_loop")
   drill_metric("Markdown image get_asset calls", "markdown_image_get_asset_calls", run_denom, "run_loop")
@@ -1024,6 +1072,12 @@ local function write_summary(path)
   drill_metric("linewrap reconstruct calls", "linewrapping_reconstruct_breaks_calls", update_denom, "update")
   drill_metric("linewrap reconstruct ms", "linewrapping_reconstruct_breaks_ms", update_denom, "update")
   drill_metric("linewrap reconstruct lines", "linewrapping_reconstruct_breaks_lines", update_denom, "update")
+  drill_metric("linewrap async reconstruct calls", "linewrapping_async_reconstruct_calls", update_denom, "update")
+  drill_metric("linewrap async reconstruct lines", "linewrapping_async_reconstruct_lines", update_denom, "update")
+  drill_metric("linewrap async reconstruct ms", "linewrapping_async_reconstruct_ms", update_denom, "update")
+  drill_metric("linewrap async reconstruct yields", "linewrapping_async_reconstruct_yields", update_denom, "update")
+  drill_metric("linewrap async reconstruct commits", "linewrapping_async_reconstruct_commits", update_denom, "update")
+  drill_metric("linewrap async reconstruct cancelled", "linewrapping_async_reconstruct_cancelled", update_denom, "update")
   drill_metric("linewrap update_breaks calls", "linewrapping_update_breaks_calls", update_denom, "update")
   drill_metric("linewrap update_breaks ms", "linewrapping_update_breaks_ms", update_denom, "update")
   drill_metric("linewrap update_breaks lines", "linewrapping_update_breaks_lines", update_denom, "update")
@@ -1052,6 +1106,39 @@ local function write_summary(path)
   drill_metric("node active view update ms", "node_active_view_update_ms", update_denom, "update")
   drill_metric("node tab hover ms", "node_tab_hover_update_ms", update_denom, "update")
   drill_metric("node tab animation ms", "node_tab_animation_ms", update_denom, "update")
+  file:write("\n")
+
+  file:write("Slow Markdown model publication callbacks (top by elapsed_ms):\n")
+  file:write("time,elapsed_ms,path,bytes,lines,generation,revision,incremental,changed_line1,changed_line2,native_parse_ms,native_total_ms,summary_ms,previous_close_ms,state_ms,notify_ms,listener_count,slowest_listener_ms,slowest_listener_id\n")
+  for _, row in ipairs(record.markdown_model_publication_rows or {}) do
+    file:write(string.format(
+      "%.6f,%.3f,%s,%d,%d,%d,%d,%d,%d,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%.3f,%s\n",
+      row.time or 0, row.elapsed_ms or 0, csv_escape(row.path), row.bytes or 0, row.lines or 0,
+      row.generation or 0, row.revision or 0, row.incremental and 1 or 0,
+      row.changed_line1 or 0, row.changed_line2 or 0,
+      row.native_parse_ms or 0, row.native_total_ms or 0,
+      row.summary_ms or 0, row.previous_close_ms or 0, row.state_ms or 0,
+      row.notify_ms or 0, row.listener_count or 0, row.slowest_listener_ms or 0,
+      csv_escape(row.slowest_listener_id)
+    ))
+  end
+  file:write("\n")
+
+  file:write("Slow Markdown Live Preview publication listeners (top by elapsed_ms):\n")
+  file:write("time,elapsed_ms,path,bytes,lines,reason,generation,wrapped,active,visible,view_width,range_count,publication_lines,global_invalidation,reset_ms,fence_reconcile_ms,range_expand_ms,prune_images_ms,line_invalidate_ms,metric_invalidate_ms\n")
+  for _, row in ipairs(record.markdown_view_publication_rows or {}) do
+    file:write(string.format(
+      "%.6f,%.3f,%s,%d,%d,%s,%d,%d,%d,%d,%.3f,%d,%d,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
+      row.time or 0, row.elapsed_ms or 0, csv_escape(row.path), row.bytes or 0, row.lines or 0,
+      csv_escape(row.reason), row.generation or 0, row.wrapped and 1 or 0,
+      row.active and 1 or 0, row.visible and 1 or 0, row.view_width or 0,
+      row.range_count or 0, row.publication_lines or 0,
+      row.global_invalidation and 1 or 0, row.reset_ms or 0,
+      row.fence_reconcile_ms or 0, row.range_expand_ms or 0,
+      row.prune_images_ms or 0, row.line_invalidate_ms or 0,
+      row.metric_invalidate_ms or 0
+    ))
+  end
   file:write("\n")
 
   file:write("Slow linewrap compute calls (top by elapsed_ms):\n")
@@ -1140,6 +1227,8 @@ function perf.start_recording()
     slow_frames = {},
     slow_updates = {},
     linewrap_compute_rows = {},
+    markdown_model_publication_rows = {},
+    markdown_view_publication_rows = {},
     context = capture_recording_context(),
     redraw_intervals = {},
     lua_samples = {},

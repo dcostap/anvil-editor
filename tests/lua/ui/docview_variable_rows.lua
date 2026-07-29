@@ -2,6 +2,7 @@ local core = require "core"
 local config = require "core.config"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
+local linewrapping = require "core.linewrapping"
 local style = require "core.style"
 local test = require "core.test"
 
@@ -17,6 +18,29 @@ local function make_view(text)
 end
 
 test.describe("DocView variable visual row metrics", function()
+  test.it("does not adopt sliced wrapping after the wrap cache is cleared", function()
+    local view = make_view(table.concat({
+      "first rendered line",
+      "second rendered line",
+      "third rendered line",
+    }, "\n"))
+    view:add_line_render_provider("slow-wrap", {
+      render_line = function(_, owner, line)
+        system.sleep(0.002)
+        local text = (owner.doc.lines[line] or ""):gsub("\n$", "")
+        return {
+          source_text = text,
+          fragments = { { source_col1 = 1, source_col2 = #text + 1, text = text } },
+        }
+      end,
+    })
+    linewrapping.reconstruct_breaks_async(view, view:get_font(), 80, { budget_ms = 1 })
+    linewrapping.clear_wrap_cache(view)
+    for _ = 1, 8 do coroutine.yield(0.01) end
+    test.equal(view.wrapped_settings, nil)
+    test.equal(view.wrapped_lines, nil)
+  end)
+
   test.it("uses provider row heights for scroll size and line positions", function()
     local view = make_view("one\ntwo\nthree")
     local lh = view:get_line_height()

@@ -52,6 +52,7 @@ local function refresh(view)
       if instance.status ~= "ready" then system.sleep(0.001) end
     end
     test.equal(instance.status, "ready", instance.reason)
+    linewrapping.complete_async_reconstruction(view)
   end
   return result
 end
@@ -2724,6 +2725,41 @@ test.describe("Markdown Live Editor", function()
     )
   end)
 
+  test.it("keeps pathological single lines on the bounded source path", function()
+    local view, doc = make_view("# " .. string.rep("A", 70000), "huge-markdown-line.md")
+    view:set_wrapping_enabled(true)
+    refresh(view)
+    test.equal(view:get_line_render(1), nil)
+    local _, _, wrapped_rows = linewrapping.get_line_idx_col_count(view, 1, 1)
+    test.ok(wrapped_rows > 1)
+    markdown.live_render.release(view, "test")
+    markdown_model.close(doc, "test")
+  end)
+
+  test.it("uses sparse prose metrics and shares exceptional line presentations", function()
+    local lines = {}
+    for line = 1, 240 do
+      lines[line] = line % 60 == 0 and ("## Heading " .. line)
+        or ("ordinary prose line " .. line)
+    end
+    local view = make_view(table.concat(lines, "\n"), "sparse-metrics.md")
+    refresh(view)
+    view:invalidate_visual_metrics("sparse-metric-regression")
+    local before = view:get_render_cache_diagnostics()
+    view:get_visual_row_metric_cache()
+    local measured = view:get_render_cache_diagnostics()
+    test.ok(
+      measured.metric_sparse_skips - before.metric_sparse_skips > 220,
+      "ordinary prose should use the sparse default height"
+    )
+    local misses = measured.line_misses
+    view:get_line_render(60)
+    test.equal(
+      view:get_render_cache_diagnostics().line_misses, misses,
+      "metric and rendering should consume the same heading presentation"
+    )
+  end)
+
   test.it("presents Setext headings through the semantic heading path", function()
     local view, doc = make_view("Setext title\n============\nplain", "setext.md")
     doc:set_selection(3, 1)
@@ -2959,6 +2995,30 @@ test.describe("Markdown Live Editor", function()
       test.ok(not fragment.table_cell)
     end
     test.ok(visible_render_text(view, 3):find("`/rp_campaign_status`", 1, true))
+  end)
+
+  test.it("bounds embedded data-image presentation inside table cells", function()
+    local payload = string.rep("A", 5000)
+    local source = table.concat({
+      "| Asset |",
+      "| --- |",
+      "| ![Diagram](data:image/png;base64," .. payload .. ") |",
+    }, "\n")
+    local view, doc = make_view(source, "table-data-image.md")
+    view:set_wrapping_enabled(true)
+    refresh(view)
+
+    local rendered = test.not_nil(view:get_line_render(3))
+    local cell
+    for _, fragment in ipairs(rendered.fragments or {}) do
+      if fragment.table_cell then cell = fragment break end
+    end
+    cell = test.not_nil(cell)
+    test.ok(#(cell.text or "") < 256, "embedded payload should not become rendered table text")
+    test.ok((cell.text or ""):find("Diagram", 1, true) ~= nil)
+
+    markdown.live_render.release(view, "test")
+    markdown_model.close(doc, "test")
   end)
 
   test.it("remeasures table row metrics when an unwrapped viewport narrows", function()

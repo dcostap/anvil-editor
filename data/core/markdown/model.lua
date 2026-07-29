@@ -13,6 +13,15 @@ local MARKDOWN_EXTENSIONS = { md = true, markdown = true, mdown = true }
 local DEBOUNCE_SECONDS = 0.015
 local METADATA_LISTENER_ID = "markdown-semantic-model"
 
+local function active_perf()
+  local perf = package.loaded["core.perf"]
+  return perf and perf.is_recording and perf.is_recording() and perf or nil
+end
+
+local function elapsed_ms(started)
+  return started and (system.get_time() - started) * 1000 or 0
+end
+
 local function extension(path)
   local value = (path or ""):match("%.([^.\\/]+)$")
   return value and value:lower() or nil
@@ -40,89 +49,6 @@ end
 
 local function source_text(doc)
   return table.concat(doc and doc.lines or {})
-end
-
-local function capture_range(capture)
-  return {
-    line1 = capture.start_line,
-    col1 = capture.start_col,
-    line2 = capture.end_line,
-    col2 = capture.end_col,
-    start_byte = capture.start_byte,
-    end_byte = capture.end_byte,
-  }
-end
-
-local function contains(outer, inner)
-  return outer.start_byte <= inner.start_byte and outer.end_byte >= inner.end_byte
-end
-
-local function parent_capture_name(name)
-  return name:match("^block%.") or name:match("^span%.")
-end
-
-local function canonical_type(name)
-  return name:gsub("^block%.", ""):gsub("^span%.", ""):gsub("%.", "_")
-end
-
-local function build_nodes(captures)
-  local nodes = {}
-  local decorations = {}
-  local seen_nodes = {}
-  for _, capture in ipairs(captures) do
-    local name = capture.capture or ""
-    if parent_capture_name(name) then
-      local range = capture_range(capture)
-      local key = table.concat({ name, range.start_byte, range.end_byte }, ":")
-      if not seen_nodes[key] then
-        seen_nodes[key] = true
-        nodes[#nodes + 1] = {
-          id = table.concat({ name, capture.node_id or range.start_byte .. ":" .. range.end_byte }, ":"),
-          type = canonical_type(name),
-          source = range,
-          marker_ranges = {},
-          content_ranges = {},
-          attributes = {},
-          confidence = "complete",
-        }
-      end
-    elseif name:match("^marker%.") or name:match("^content%.") then
-      decorations[#decorations + 1] = capture
-    end
-  end
-
-  table.sort(nodes, function(a, b)
-    if a.source.start_byte == b.source.start_byte then return a.source.end_byte < b.source.end_byte end
-    return a.source.start_byte < b.source.start_byte
-  end)
-  for _, capture in ipairs(decorations) do
-    local range = capture_range(capture)
-    local family = capture.capture:match("^[^.]+%.(wiki)_")
-      or capture.capture:match("^[^.]+%.(embed)_")
-      or capture.capture:match("^[^.]+%.(highlight)")
-      or capture.capture:match("^[^.]+%.(comment)")
-    if family == "wiki" then family = "wiki_link" end
-    local extension_link_content = capture.capture == "content.target"
-      or capture.capture == "content.alias"
-    local best
-    for _, node in ipairs(nodes) do
-      local family_match = not family or node.type == family
-      local link_match = not extension_link_content
-        or node.type == "wiki_link" or node.type == "embed"
-      if contains(node.source, range) and family_match and link_match and (not best or
-        node.source.end_byte - node.source.start_byte < best.source.end_byte - best.source.start_byte)
-      then
-        best = node
-      end
-    end
-    if best then
-      local destination = capture.capture:match("^marker%.") and best.marker_ranges or best.content_ranges
-      destination[#destination + 1] = range
-      local attribute = capture.capture:match("^[^.]+%.(.+)$")
-      if attribute then best.attributes[attribute:gsub("%.", "_")] = range end
-    end
-  end
-  return nodes
 end
 
 function Model:new(doc)
@@ -183,9 +109,30 @@ function Model:remove_listener(id)
 end
 
 function Model:notify(reason)
+  local perf = active_perf()
+  local listener_count, total_ms = 0, 0
+  local slowest_listener_ms, slowest_listener_id = 0, ""
   for id, fn in pairs(self.listeners) do
+    local started = perf and system.get_time()
     local ok, err = pcall(fn, self, reason)
+    if perf then
+      local listener_ms = elapsed_ms(started)
+      listener_count = listener_count + 1
+      total_ms = total_ms + listener_ms
+      if listener_ms > slowest_listener_ms then
+        slowest_listener_ms = listener_ms
+        slowest_listener_id = id
+      end
+    end
     if not ok then core.log_quiet("Markdown model listener %s failed: %s", tostring(id), tostring(err)) end
+  end
+  if perf then
+    return {
+      count = listener_count,
+      total_ms = total_ms,
+      slowest_ms = slowest_listener_ms,
+      slowest_id = slowest_listener_id,
+    }
   end
 end
 
@@ -245,7 +192,11 @@ function Model:publish(result, revision, signature, generation, changed_range)
     core.log_quiet("Markdown model discarded stale generation %d", generation)
     return false
   end
+  local perf = active_perf()
+  local publication_started = perf and system.get_time()
+  local summary_started = perf and system.get_time()
   local summary = result:summary()
+  local summary_ms = elapsed_ms(summary_started)
   local block_status = summary.outline and summary.outline.status
   local inline_status = summary.usage and summary.usage.status
   if (block_status ~= "ready" and block_status ~= "limit")
@@ -262,19 +213,26 @@ function Model:publish(result, revision, signature, generation, changed_range)
     return false
   end
 
+  local state_started = perf and system.get_time()
   local previous_result = self.result
   self.previous_semantic_id_by_source = self.semantic_id_by_source
   self.previous_semantic_id_by_native = self.semantic_id_by_native
   self.semantic_id_by_source = {}
   self.semantic_id_by_native = {}
   self.result = result
+  local state_ms = elapsed_ms(state_started)
+  local previous_close_started = perf and system.get_time()
   if previous_result and previous_result ~= result then previous_result:close() end
+  local previous_close_ms = elapsed_ms(previous_close_started)
+  state_started = perf and system.get_time()
   self.request = nil
   self.status = "ready"
   self.reason = nil
   self.generation = self.generation + 1
   self.published_revision = revision
   self.published_metadata = signature
+  self.published_byte_len = summary.byte_len or 0
+  self.published_line_count = summary.line_count or 0
   self.diagnostics.published = self.diagnostics.published + 1
   self.diagnostics.last_parse_ms = summary.metrics and summary.metrics.parse_ms or 0
   self.diagnostics.last_total_ms = summary.metrics and summary.metrics.total_ms or 0
@@ -290,6 +248,7 @@ function Model:publish(result, revision, signature, generation, changed_range)
   self.changed_ranges = changed_range and { common.merge({}, changed_range) } or {}
   self.active_changed_range = nil
   self.active_structural_change = false
+  state_ms = state_ms + elapsed_ms(state_started)
   core.log_quiet(
     "Markdown model published generation=%d revision=%d bytes=%d lines=%d parse_ms=%.3f total_ms=%.3f",
     self.generation,
@@ -299,7 +258,40 @@ function Model:publish(result, revision, signature, generation, changed_range)
     self.diagnostics.last_parse_ms,
     self.diagnostics.last_total_ms
   )
-  self:notify("published")
+  local notify_started = perf and system.get_time()
+  local notify_stats = self:notify("published")
+  local notify_ms = elapsed_ms(notify_started)
+  if perf then
+    local total_ms = elapsed_ms(publication_started)
+    perf.frame_add("markdown_model_publication_ms", total_ms)
+    perf.frame_add("markdown_model_publication_summary_ms", summary_ms)
+    perf.frame_add("markdown_model_publication_previous_close_ms", previous_close_ms)
+    perf.frame_add("markdown_model_publication_state_ms", state_ms)
+    perf.frame_add("markdown_model_publication_notify_ms", notify_ms)
+    perf.frame_add("markdown_model_publication_listener_calls", notify_stats.count)
+    local doc = self:doc()
+    perf.record_markdown_model_publication({
+      time = system.get_time(),
+      elapsed_ms = total_ms,
+      path = doc and (doc.abs_filename or doc.filename or doc:get_name()) or "",
+      bytes = summary.byte_len or 0,
+      lines = summary.line_count or 0,
+      generation = generation,
+      revision = revision,
+      incremental = summary.metrics and summary.metrics.incremental == true,
+      changed_line1 = changed_range and changed_range.line1,
+      changed_line2 = changed_range and changed_range.line2,
+      native_parse_ms = summary.metrics and summary.metrics.parse_ms or 0,
+      native_total_ms = summary.metrics and summary.metrics.total_ms or 0,
+      summary_ms = summary_ms,
+      previous_close_ms = previous_close_ms,
+      state_ms = state_ms,
+      notify_ms = notify_ms,
+      listener_count = notify_stats.count,
+      slowest_listener_ms = notify_stats.slowest_ms,
+      slowest_listener_id = notify_stats.slowest_id,
+    })
+  end
   core.redraw = true
   return true
 end
@@ -553,20 +545,27 @@ function Model:stabilize_node_ids(nodes)
 end
 
 function Model:inline_nodes_for_lines(line1, line2, opts)
-  local inlines, reason = self:captures_for_lines("inline", line1, line2, opts)
-  if not inlines then return nil, reason end
-  return self:stabilize_node_ids(build_nodes(inlines)), reason
+  opts = opts or {}
+  if not self.result or (self.status ~= "ready"
+    and not (self.status == "pending" and opts.allow_pending_result))
+  then
+    return nil, self.status
+  end
+  local nodes = self.result:semantic_nodes_for_lines(
+    "inline", line1, line2, opts
+  )
+  return self:stabilize_node_ids(nodes), nodes.truncated and "limit" or nil
 end
 
 function Model:nodes_for_lines(line1, line2, opts)
-  local blocks, block_reason = self:captures_for_lines("block", line1, line2, opts)
-  if not blocks then return nil, block_reason end
-  local inlines, inline_reason = self:captures_for_lines("inline", line1, line2, opts)
-  if not inlines then return nil, inline_reason end
-  local captures = {}
-  for _, capture in ipairs(blocks) do captures[#captures + 1] = capture end
-  for _, capture in ipairs(inlines) do captures[#captures + 1] = capture end
-  return self:stabilize_node_ids(build_nodes(captures)), block_reason or inline_reason
+  opts = opts or {}
+  if not self.result or (self.status ~= "ready"
+    and not (self.status == "pending" and opts.allow_pending_result))
+  then
+    return nil, self.status
+  end
+  local nodes = self.result:semantic_nodes_for_lines("both", line1, line2, opts)
+  return self:stabilize_node_ids(nodes), nodes.truncated and "limit" or nil
 end
 
 ---Returns the fenced-code block containing a line, completing opening-line

@@ -833,6 +833,8 @@ function DocView:new(doc)
     metric_dirty_passes = 0,
     metric_dirty_rows = 0,
     metric_row_splices = 0,
+    metric_provider_queries = 0,
+    metric_sparse_skips = 0,
   }
   self.decoration_providers = {}
   self.poi_providers = {}
@@ -1472,7 +1474,8 @@ function DocView:remove_line_render_provider(id)
   return true
 end
 
-function DocView:invalidate_line_render(_provider_id, line1, line2)
+function DocView:invalidate_line_render(_provider_id, line1, line2, opts)
+  opts = opts or {}
   local perf = package.loaded["core.perf"]
   if perf and perf.is_recording and perf.is_recording() and perf.add_detail then
     local caller = debug.getinfo(2, "Sl") or {}
@@ -1544,11 +1547,21 @@ function DocView:invalidate_line_render(_provider_id, line1, line2)
   self.__line_width_cache = {}
   self.__unwrapped_content_width_cache = nil
   if self.wrapped_settings and not self.__line_render_wrap_invalidating then
-    perf_frame_add("linewrapping_reconstruct_line_render_invalidation_calls", 1)
     self.__line_render_wrap_invalidating = true
-    linewrapping.reconstruct_breaks(
-      self, self.wrapped_settings.font, self.wrapped_settings.width
-    )
+    if opts.defer_wrapped_reconstruction then
+      perf_frame_add("linewrapping_async_line_render_invalidation_calls", 1)
+      linewrapping.reconstruct_breaks_async(
+        self, self.wrapped_settings.font, self.wrapped_settings.width, {
+          budget_ms = opts.wrapped_reconstruction_budget_ms,
+          on_complete = opts.on_wrapped_reconstructed,
+        }
+      )
+    else
+      perf_frame_add("linewrapping_reconstruct_line_render_invalidation_calls", 1)
+      linewrapping.reconstruct_breaks(
+        self, self.wrapped_settings.font, self.wrapped_settings.width
+      )
+    end
     self.__line_render_wrap_invalidating = nil
   end
 end
@@ -1643,7 +1656,8 @@ end
 ---@return number width Total gutter width
 ---@return number padding Padding within gutter
 function DocView:get_gutter_width()
-  local padding = style.padding.x * 2
+  local padding = self.gutter_padding
+  if padding == nil then padding = style.padding.x * 2 end
   if self:line_number_gutter_visible() then
     return self:get_line_number_gutter_width() + padding, padding
   end
@@ -2903,14 +2917,86 @@ metric_tree_row_at_y = function(tree, row_count, y)
   return common.clamp(index + 1, 1, row_count)
 end
 
-compute_visual_row_height = function(view, row, providers, default_height)
+local function prepare_sparse_visual_metrics(view, providers, default_height, row_count)
+  local prepared = {}
+  for _, provider_entry in ipairs(providers) do
+    local provider = provider_entry.provider
+    if provider and provider.sparse_line_metrics then
+      local ok, descriptor = pcall(
+        provider.sparse_line_metrics, provider, view, row_count, default_height
+      )
+      if ok and type(descriptor) == "table" and descriptor.complete then
+        prepared[provider_entry.id] = descriptor
+        if descriptor.default_height then
+          default_height = math.max(1, tonumber(descriptor.default_height) or default_height)
+        end
+      elseif not ok then
+        core.log_quiet(
+          "DocView visual metric provider %s.sparse_line_metrics failed for %s: %s",
+          tostring(provider_entry.id), view.doc:get_name(), tostring(descriptor)
+        )
+      end
+    end
+  end
+  return prepared, default_height
+end
+
+compute_visual_row_height = function(
+  view, row, providers, default_height, sparse_metrics, force, line_metrics_cache
+)
   view.render_cache_diagnostics.metric_recomputations =
     view.render_cache_diagnostics.metric_recomputations + 1
   local entry = view:get_metric_row_entry(row)
   local height = default_height
   for _, provider_entry in ipairs(providers) do
     local provider = provider_entry.provider
-    if provider and provider.line_height then
+    local sparse = sparse_metrics and sparse_metrics[provider_entry.id]
+    local should_query = force or not sparse
+      or (sparse.rows and sparse.rows[row])
+      or (sparse.lines and sparse.lines[entry.line])
+    if should_query and provider and provider.line_metrics and entry.row_in_line then
+      local provider_cache = line_metrics_cache and line_metrics_cache[provider_entry.id]
+      if not provider_cache and line_metrics_cache then
+        provider_cache = {}
+        line_metrics_cache[provider_entry.id] = provider_cache
+      end
+      local descriptor = provider_cache and provider_cache[entry.line]
+      if descriptor == nil then
+        view.render_cache_diagnostics.metric_provider_queries =
+          view.render_cache_diagnostics.metric_provider_queries + 1
+        local ok, value = pcall(
+          provider.line_metrics, provider, view, entry.line,
+          view:get_visual_row_count_for_line(entry.line)
+        )
+        if not ok then
+          core.log_quiet(
+            "DocView visual metric provider %s.line_metrics failed for %s: %s",
+            tostring(provider_entry.id), view.doc:get_name(), tostring(value)
+          )
+          value = false
+        end
+        descriptor = type(value) == "table" and value or false
+        if provider_cache then provider_cache[entry.line] = descriptor end
+      end
+      if descriptor then
+        local value = descriptor.heights and descriptor.heights[entry.row_in_line]
+          or (entry.row_in_line == descriptor.row_count and descriptor.final_height)
+          or descriptor.height
+        if value then height = math.max(1, tonumber(value) or height) end
+      elseif provider.line_height then
+        local ok, value = pcall(provider.line_height, provider, view, entry.line, entry)
+        if ok and value then
+          height = math.max(1, tonumber(value) or height)
+        elseif not ok then
+          core.log_quiet(
+            "DocView visual metric provider %s.line_height failed for %s: %s",
+            tostring(provider_entry.id), view.doc:get_name(), tostring(value)
+          )
+        end
+      end
+    elseif should_query and provider and provider.line_height then
+      view.render_cache_diagnostics.metric_provider_queries =
+        view.render_cache_diagnostics.metric_provider_queries + 1
       local ok, value = pcall(provider.line_height, provider, view, entry.line, entry)
       if ok and value then
         height = math.max(1, tonumber(value) or height)
@@ -2920,6 +3006,9 @@ compute_visual_row_height = function(view, row, providers, default_height)
           tostring(provider_entry.id), view.doc:get_name(), tostring(value)
         )
       end
+    elseif sparse and provider and provider.line_height then
+      view.render_cache_diagnostics.metric_sparse_skips =
+        view.render_cache_diagnostics.metric_sparse_skips + 1
     end
   end
   return height
@@ -2953,8 +3042,12 @@ function DocView:get_visual_row_metric_cache()
         cache.height_tree, cache.row_count, math.max(0, self.scroll and self.scroll.y or 0)
       )
       local anchor_delta = 0
+      local line_metrics_cache = {}
       for row in pairs(cache.dirty_rows) do
-        local height = compute_visual_row_height(self, row, providers, default_height)
+        local height = compute_visual_row_height(
+          self, row, providers, cache.default_height or default_height,
+          cache.sparse_metrics, true, line_metrics_cache
+        )
         local delta = height - cache.heights[row]
         if delta ~= 0 then
           cache.heights[row] = height
@@ -2986,6 +3079,10 @@ function DocView:get_visual_row_metric_cache()
 
   local rebuild_start = perf_active and system.get_time()
   local row_count = self:get_scrollable_line_count()
+  local sparse_metrics
+  sparse_metrics, default_height = prepare_sparse_visual_metrics(
+    self, providers, default_height, row_count
+  )
   self.render_cache_diagnostics.metric_full_rebuilds =
     self.render_cache_diagnostics.metric_full_rebuilds + 1
   self.render_cache_diagnostics.metric_full_rebuild_rows =
@@ -2993,14 +3090,17 @@ function DocView:get_visual_row_metric_cache()
   perf_frame_add("docview_visual_metric_full_rebuilds", 1)
   perf_frame_add("docview_visual_metric_full_rebuild_rows", row_count)
   local heights = {}
-  local height_tree = {}
+  local line_metrics_cache = {}
   local total = 0
   for row = 1, row_count do
-    local height = compute_visual_row_height(self, row, providers, default_height)
+    local height = compute_visual_row_height(
+      self, row, providers, default_height, sparse_metrics, false,
+      line_metrics_cache
+    )
     heights[row] = height
     total = total + height
-    metric_tree_add(height_tree, row_count, row, height)
   end
+  local height_tree = metric_tree_build(heights, row_count)
   cache = {
     signature = signature,
     wrap_layout_generation = self.__wrap_layout_generation or 0,
@@ -3010,6 +3110,8 @@ function DocView:get_visual_row_metric_cache()
     total_height = total,
     row_count = row_count,
     invalidated_rows = 0,
+    default_height = default_height,
+    sparse_metrics = sparse_metrics,
   }
   self.__visual_metric_cache = cache
   perf_elapsed("docview_visual_metric_full_rebuild_ms", rebuild_start)
@@ -3452,9 +3554,8 @@ function DocView:get_visible_line_range()
 end
 
 
-local function line_render_signature(view, line, source_text)
+local function line_render_signature(view, line)
   local parts = {
-    source_text,
     tostring(view.__line_render_generation or 0),
     tostring(core.color_theme_generation or 0),
   }
@@ -3476,16 +3577,16 @@ function DocView:get_line_render(line)
   local perf_active = core.perf_frame_stats ~= nil
   local lookup_start = perf_active and system.get_time()
   perf_frame_add("docview_line_render_cache_calls", 1)
-  local source_text = (self.doc.lines[line] or ""):gsub("\n$", "")
+  local source_line = self.doc.lines[line] or ""
   local generation = self.__line_render_generation or 0
   local cache = self.__line_render_cache
   if not cache or cache.generation ~= generation then
     cache = { generation = generation, lines = {}, hits = 0, misses = 0, invalidated_lines = 0 }
     self.__line_render_cache = cache
   end
-  local signature = line_render_signature(self, line, source_text)
+  local signature = line_render_signature(self, line)
   local cached = cache.lines[line]
-  if cached and cached.signature == signature then
+  if cached and cached.source_line == source_line and cached.signature == signature then
     cache.hits = cache.hits + 1
     self.render_cache_diagnostics.line_hits = self.render_cache_diagnostics.line_hits + 1
     perf_frame_add("docview_line_render_cache_hits", 1)
@@ -3505,6 +3606,7 @@ function DocView:get_line_render(line)
     perf_frame_add("docview_line_render_cold_misses", 1)
   end
   local build_start = perf_active and system.get_time()
+  local source_text = source_line:sub(-1) == "\n" and source_line:sub(1, -2) or source_line
   local context = { source_text = source_text, line = line }
   local resolved
   for _, entry in ipairs(self:line_render_provider_entries()) do
@@ -3520,7 +3622,11 @@ function DocView:get_line_render(line)
       end
     end
   end
-  cache.lines[line] = { signature = signature, render_line = resolved or false }
+  cache.lines[line] = {
+    source_line = source_line,
+    signature = signature,
+    render_line = resolved or false,
+  }
   perf_elapsed("docview_line_render_build_ms", build_start)
   perf_elapsed("docview_line_render_cache_lookup_ms", lookup_start)
   return resolved
@@ -3644,7 +3750,10 @@ end
 ---Discard normalized fragment copies after mutating a render line in place.
 ---@param render_line table?
 function DocView:invalidate_line_render_fragment_normalization(render_line)
-  if render_line then render_line.__normalized_fragments_cache = nil end
+  if render_line then
+    render_line.__normalized_fragments_cache = nil
+    render_line.__native_text_layout_cache = nil
+  end
 end
 
 function DocView:iter_line_render_fragments(render_line)
@@ -3896,11 +4005,45 @@ local function get_line_render_raw_col_x_offset(self, render_line, col)
   col = math.max(1, col or 1)
   local xoffset = render_line.x_offset or 0
   local _, indent_size = self.doc:get_indent_info()
-  for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
+  local fragments = self:iter_line_render_fragments(render_line)
+  local layout_cache = render_line.__native_text_layout_cache
+  if not layout_cache or layout_cache.fragments ~= fragments
+    or layout_cache.indent_size ~= indent_size
+  then
+    local entries = {}
+    local tx = xoffset
+    for index, fragment in ipairs(fragments) do
+      local font = render_fragment_font(self, fragment)
+      font:set_tab_size(indent_size)
+      local text = fragment.text or ""
+      local text_layout
+      if not fragment.hidden and not fragment.widget and font.text_layout then
+        text_layout = font:text_layout(text, { tab_offset = tx })
+      end
+      local width = fragment.hidden and 0
+        or fragment.width or (fragment.widget and fragment.widget.width)
+        or (text_layout and text_layout:width())
+        or font:get_width(text, { tab_offset = tx })
+      entries[index] = {
+        fragment = fragment,
+        x = tx,
+        width = width,
+        text_layout = text_layout,
+      }
+      if not fragment.hidden then tx = tx + width end
+    end
+    layout_cache = {
+      fragments = fragments,
+      indent_size = indent_size,
+      entries = entries,
+      width = tx - xoffset,
+    }
+    render_line.__native_text_layout_cache = layout_cache
+  end
+  for _, entry in ipairs(layout_cache.entries) do
+    local fragment = entry.fragment
     local col1 = fragment.source_col1 or 1
     local col2 = fragment.source_col2 or col1
-    local font = render_fragment_font(self, fragment)
-    font:set_tab_size(indent_size)
     if col <= col1 then return xoffset end
     if fragment.hidden then
       if col <= col2 then return xoffset end
@@ -3913,20 +4056,115 @@ local function get_line_render_raw_col_x_offset(self, render_line, col)
           if col <= text_col1 then return xoffset + (fragment.text_x_offset or 0) end
           if col <= text_col2 then
             return xoffset + (fragment.text_x_offset or 0)
-              + font:get_width(
-                text:sub(1, math.max(0, col - text_col1)),
-                { tab_offset = xoffset }
-              )
+              + (entry.text_layout and entry.text_layout:width_at(
+                math.max(0, col - text_col1)
+              ) or render_fragment_font(self, fragment):get_width(
+                text:sub(1, math.max(0, col - text_col1)), { tab_offset = xoffset }
+              ))
           end
-          return xoffset + (fragment.width or font:get_width(text))
+          return xoffset + entry.width
         end
         return xoffset + (fragment.text_x_offset or 0)
-          + font:get_width(text:sub(1, math.max(0, col - col1)), { tab_offset = xoffset })
+          + (entry.text_layout and entry.text_layout:width_at(math.max(0, col - col1))
+            or render_fragment_font(self, fragment):get_width(
+              text:sub(1, math.max(0, col - col1)), { tab_offset = xoffset }
+            ))
       end
-      xoffset = xoffset + (fragment.width or (fragment.widget and fragment.widget.width) or font:get_width(text, { tab_offset = xoffset }))
+      xoffset = xoffset + entry.width
     end
   end
   return xoffset
+end
+
+---Return a source-column width mapper optimized for monotonically increasing
+---columns. Wrapping scans every UTF-8 boundary in order, so retaining the
+---current fragment avoids restarting the mixed-fragment search per character.
+function DocView:get_line_render_col_x_cursor(render_line)
+  get_line_render_raw_col_x_offset(self, render_line, 1)
+  local cache = render_line.__native_text_layout_cache
+  local entries = cache and cache.entries or {}
+  local index = 1
+  local xoffset = render_line.x_offset or 0
+  local width_cursors = {}
+  local function layout_width_at(entry, entry_index, byte_offset)
+    if not entry.text_layout then return nil end
+    local cursor = width_cursors[entry_index]
+    if cursor == nil then
+      cursor = entry.text_layout.width_cursor
+        and entry.text_layout:width_cursor() or false
+      width_cursors[entry_index] = cursor
+    end
+    return cursor and cursor(byte_offset) or entry.text_layout:width_at(byte_offset)
+  end
+  return function(col)
+    col = math.max(1, col or 1)
+    while index <= #entries do
+      local entry = entries[index]
+      local fragment = entry.fragment
+      local col1 = fragment.source_col1 or 1
+      local col2 = fragment.source_col2 or col1
+      if col <= col1 then return xoffset end
+      if fragment.hidden then
+        if col <= col2 then return xoffset end
+      elseif col < col2 then
+        local text = fragment.text or ""
+        if fragment.widget then
+          xoffset = xoffset + entry.width
+          index = index + 1
+          return xoffset
+        end
+        local text_col1 = fragment.text_source_col1
+        local text_col2 = fragment.text_source_col2
+        if text_col1 and text_col2 then
+          if col <= text_col1 then return xoffset + (fragment.text_x_offset or 0) end
+          if col <= text_col2 then
+            return xoffset + (fragment.text_x_offset or 0)
+              + (layout_width_at(entry, index, math.max(0, col - text_col1))
+                or render_fragment_font(self, fragment):get_width(
+                text:sub(1, math.max(0, col - text_col1)), { tab_offset = xoffset }
+              ))
+          end
+          return xoffset + entry.width
+        end
+        return xoffset + (fragment.text_x_offset or 0)
+          + (layout_width_at(entry, index, math.max(0, col - col1))
+            or render_fragment_font(self, fragment):get_width(
+              text:sub(1, math.max(0, col - col1)), { tab_offset = xoffset }
+            ))
+      end
+      if not fragment.hidden then xoffset = xoffset + entry.width end
+      index = index + 1
+    end
+    return xoffset
+  end
+end
+
+---Use the native layout's UTF-8 advances and wrapping scan when a rendered
+---line is one source-preserving text run. More elaborate mixed-font/hidden
+---fragment lines keep the general rendered-column mapping path.
+function DocView:get_line_render_native_wrap(render_line, width, mode, start_col, begin_width)
+  get_line_render_raw_col_x_offset(self, render_line, 1)
+  local cache = render_line.__native_text_layout_cache
+  if not cache or #cache.entries ~= 1 then return nil end
+  local entry = cache.entries[1]
+  local fragment = entry.fragment
+  local source_text = render_line.source_text or ""
+  if fragment.hidden or fragment.widget or not entry.text_layout
+    or (fragment.source_col1 or 1) ~= 1
+    or (fragment.source_col2 or 1) ~= #source_text + 1
+    or fragment.text ~= source_text
+    or fragment.text_source_col1 or fragment.text_source_col2
+  then
+    return nil
+  end
+  local zero_breaks = entry.text_layout:wrap(
+    width, mode, math.max(0, (start_col or 1) - 1),
+    render_line.x_offset or 0,
+    (render_line.x_offset or 0) + (begin_width or 0)
+  )
+  local splits = {}
+  for index, byte_offset in ipairs(zero_breaks) do splits[index] = byte_offset + 1 end
+  return splits
 end
 
 function DocView:get_line_render_col_x_offset(render_line, col, position_row)
@@ -3951,7 +4189,11 @@ function DocView:get_line_render_x_offset_col(render_line, x)
   render_line = render_line_for_hit_test(render_line)
   local xoffset = render_line.x_offset or 0
   local _, indent_size = self.doc:get_indent_info()
-  for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
+  -- Populate the native per-fragment layout cache shared with width mapping.
+  get_line_render_raw_col_x_offset(self, render_line, 1)
+  local layout_cache = render_line.__native_text_layout_cache
+  for index, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
+    local entry = layout_cache and layout_cache.entries[index]
     local col1 = fragment.source_col1 or 1
     local col2 = fragment.source_col2 or col1
     local font = render_fragment_font(self, fragment)
@@ -3960,7 +4202,9 @@ function DocView:get_line_render_x_offset_col(render_line, x)
       if x <= xoffset then return col1 end
     else
       local text = fragment.text or ""
-      local width = fragment.width or (fragment.widget and fragment.widget.width) or font:get_width(text, { tab_offset = xoffset })
+      local width = entry and entry.width
+        or fragment.width or (fragment.widget and fragment.widget.width)
+        or font:get_width(text, { tab_offset = xoffset })
       if xoffset + width >= x then
         if fragment.widget and text == "" then
           return (x <= xoffset + width / 2) and col1 or col2
@@ -3969,8 +4213,14 @@ function DocView:get_line_render_x_offset_col(render_line, x)
         local text_col1 = fragment.text_source_col1 or col1
         local text_col2 = fragment.text_source_col2 or col2
         if x <= xoffset + text_offset then return text_col1 end
-        local col = text_col1
         local local_x = xoffset + text_offset
+        if entry and entry.text_layout then
+          return math.min(
+            text_col1 + entry.text_layout:byte_at_x(math.max(0, x - local_x)),
+            text_col2
+          )
+        end
+        local col = text_col1
         for char in common.utf8_chars(text) do
           local w = font:get_width(char, { tab_offset = local_x })
           if local_x + w >= x then

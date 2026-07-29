@@ -74,6 +74,13 @@ void update_font_scale(RenWindow *window_renderer, RenFont **fonts);
 #endif
 void ren_font_group_set_tab_size(RenFont **font, int n);
 double ren_font_group_get_width(RenFont **font, const char *text, size_t len, RenTab tab, int *x_offset);
+/* Produces one cumulative horizontal advance for every UTF-8 byte boundary.
+ * `byte_offsets` and `advances` need room for `len + 1` entries. The returned
+ * count always includes the zero-byte/zero-width origin. */
+size_t ren_font_group_get_advances(
+  RenFont **font, const char *text, size_t len, RenTab tab,
+  uint32_t *byte_offsets, double *advances
+);
 double ren_draw_text(RenSurface *rs, RenFont **font, const char *text, size_t len, float x, float y, RenColor color, RenTab tab);
 bool ren_draw_text_d3d11(SDL_Window *window, RenRect clip, RenFont **font, const char *text, size_t len, float x, float y, RenColor color, RenTab tab);
 void ren_text_stats_begin_frame(void);
@@ -91,6 +98,7 @@ void ren_draw_pixels(RenSurface *rs, RenRect rect, const char* bytes, size_t len
 // function to draw polygons and curves
 int ren_poly_cbox(RenPoint *points, int npoints, RenRect *cbox);
 void ren_draw_poly(RenSurface *rs, RenPoint *points, unsigned short npoints, RenColor color);
+void ren_draw_poly_mask(RenSurface *rs, RenPoint *points, unsigned short npoints, RenColor color);
 
 int video_init(void);
 int ren_init(void);

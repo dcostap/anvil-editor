@@ -819,6 +819,15 @@ local function perf_detail(key, amount)
   end
 end
 
+local function active_perf()
+  local perf = package.loaded["core.perf"]
+  return perf and perf.is_recording and perf.is_recording() and perf or nil
+end
+
+local function elapsed_ms(started)
+  return started and (system.get_time() - started) * 1000 or 0
+end
+
 local function add_fragment(fragments, occupied, fragment)
   local col1 = fragment.source_col1 or 1
   local col2 = fragment.source_col2 or col1
@@ -1473,9 +1482,22 @@ end
 
 local TABLE_MAX_PRESENTATION_ROWS = 256
 local TABLE_MAX_PRESENTATION_COLUMNS = 64
+local TABLE_MAX_CELL_PRESENTATION_BYTES = 4096
+local TABLE_LAYOUT_GEOMETRY_CACHE_LIMIT = 4
+local MAX_RICH_SOURCE_LINE_BYTES = 64 * 1024
 
 local function table_pipe_positions(text)
   local positions = {}
+  if not text:find("[\\`]", 1) then
+    local search = 1
+    while true do
+      local pipe = text:find("|", search, true)
+      if not pipe then break end
+      positions[#positions + 1] = pipe
+      search = pipe + 1
+    end
+    return positions
+  end
   local escaped, ticks = false, 0
   local i = 1
   while i <= #text do
@@ -1551,6 +1573,32 @@ local function table_cell_text(text, cell)
 end
 
 local function table_cell_presentation(view, text, source_col1, source_col2, header)
+  local image_alt = text:match("^!%[([^%]]*)%]%(%s*data:image/[%w%+%.%-]+[;,]")
+  if image_alt or #text > TABLE_MAX_CELL_PRESENTATION_BYTES then
+    local display
+    if image_alt then
+      display = image_alt ~= "" and ("[Embedded image: " .. image_alt .. "]")
+        or "[Embedded image]"
+    else
+      local parts, bytes = {}, 0
+      for char in common.utf8_chars(text) do
+        if bytes + #char > TABLE_MAX_CELL_PRESENTATION_BYTES then break end
+        parts[#parts + 1] = char
+        bytes = bytes + #char
+      end
+      display = table.concat(parts) .. "… [cell content truncated]"
+    end
+    perf_frame_add("markdown_live_table_cell_elisions", 1)
+    return {
+      text = display,
+      source_col1 = source_col1,
+      source_col2 = source_col2,
+      font = header and inline_style_font(view, "strong") or markdown_live_body_font(view),
+      color = header and style.markdown_live_table_header or style.markdown_live_table_cell,
+      nowrap = true,
+      source_elided = true,
+    }
+  end
   if not header then
     local ticks = text:match("^(`+)")
     if ticks and #text >= #ticks * 2 and text:sub(-#ticks) == ticks then
@@ -1577,6 +1625,24 @@ end
 local function table_wrap_text(font, text, width)
   if text == "" then return { { text = "", col1 = 1, col2 = 1 } } end
   width = math.max(1, width)
+  if font.text_layout then
+    local layout = font:text_layout(text)
+    local starts = layout:wrap(width, "word")
+    local lines = {}
+    for index, zero_start in ipairs(starts) do
+      local col1 = zero_start + 1
+      local col2 = (starts[index + 1] or #text) + 1
+      while col1 < col2 and text:sub(col1, col1):match("%s") do col1 = col1 + 1 end
+      while col2 > col1 and text:sub(col2 - 1, col2 - 1):match("%s") do col2 = col2 - 1 end
+      lines[#lines + 1] = {
+        text = text:sub(col1, col2 - 1),
+        col1 = col1,
+        col2 = col2,
+      }
+    end
+    if #lines == 0 then lines[1] = { text = "", col1 = 1, col2 = 1 } end
+    return lines
+  end
   local lines = {}
   local line_start, line_end
   local function push_line()
@@ -1650,18 +1716,34 @@ local function table_layout(view, table_node)
     return nil
   end
   local cache = view.__markdown_live_table_layout_cache
-  if not cache or cache.generation ~= instance.generation
-    or cache.font ~= font or cache.font_size ~= font:get_size()
-    or cache.available_width ~= available_width
-  then
-    cache = {
-      generation = instance.generation, font = font,
-      font_size = font:get_size(), available_width = available_width, layouts = {},
-    }
+  if not cache or cache.generation ~= instance.generation then
+    cache = { generation = instance.generation, buckets = {}, bucket_order = {} }
     view.__markdown_live_table_layout_cache = cache
   end
-  if cache.layouts[table_node.id] ~= nil then
-    return cache.layouts[table_node.id] or nil
+  local geometry_key = table.concat({
+    tostring(font), tostring(font:get_size()), tostring(available_width),
+  }, ":")
+  local bucket = cache.buckets[geometry_key]
+  if not bucket then
+    bucket = {
+      font = font, font_size = font:get_size(), available_width = available_width,
+      layouts = {},
+    }
+    cache.buckets[geometry_key] = bucket
+  end
+  for index = #cache.bucket_order, 1, -1 do
+    if cache.bucket_order[index] == geometry_key then table.remove(cache.bucket_order, index) end
+  end
+  cache.bucket_order[#cache.bucket_order + 1] = geometry_key
+  while #cache.bucket_order > TABLE_LAYOUT_GEOMETRY_CACHE_LIMIT do
+    local evicted = table.remove(cache.bucket_order, 1)
+    cache.buckets[evicted] = nil
+    perf_frame_add("markdown_live_table_geometry_bucket_evictions", 1)
+  end
+  cache.layouts = bucket.layouts
+  local layouts = bucket.layouts
+  if layouts[table_node.id] ~= nil then
+    return layouts[table_node.id] or nil
   end
 
   local rows, columns = {}, nil
@@ -1669,14 +1751,14 @@ local function table_layout(view, table_node)
     local text = (view.doc.lines[line] or ""):gsub("\n$", "")
     local row = table_source_row(text)
     if not row or #row.cells == 0 or #row.cells > TABLE_MAX_PRESENTATION_COLUMNS then
-      cache.layouts[table_node.id] = false
+      layouts[table_node.id] = false
       core.log_quiet("Markdown table presentation fell back to source at %s:%d",
         view.doc:get_name(), line)
       return nil
     end
     columns = columns or #row.cells
     if #row.cells ~= columns then
-      cache.layouts[table_node.id] = false
+      layouts[table_node.id] = false
       core.log_quiet("Markdown table presentation found inconsistent columns at %s:%d",
         view.doc:get_name(), line)
       return nil
@@ -1774,7 +1856,7 @@ local function table_layout(view, table_node)
     presentations = presentations,
     separator_width = separator_width, total_width = total_width,
   }
-  cache.layouts[table_node.id] = layout
+  layouts[table_node.id] = layout
   return layout
 end
 
@@ -2594,9 +2676,10 @@ local function clone_render_line(render_line)
 end
 
 local function render_line_metric_height(view, render_line)
-  local height = markdown_live_body_line_height(view)
+  local height = render_line and render_line.text_row_height
+    or markdown_live_body_line_height(view)
   for _, fragment in ipairs(render_line and render_line.fragments or {}) do
-    if fragment.font then
+    if not render_line.text_row_height and fragment.font then
       height = math.max(
         height, math.floor(fragment.font:get_height() * config.line_height)
       )
@@ -3304,6 +3387,17 @@ local function fenced_code_is_active(view, fenced, state)
   return false
 end
 
+local function fenced_code_line_height(view)
+  local base_font = style.syntax_fonts.normal or view:get_font()
+  local height = base_font:get_height()
+  -- Keep every code row stable while lazy tokenization publishes new token
+  -- categories with potentially different font metrics.
+  for _, font in pairs(style.syntax_fonts) do
+    if font and font.get_height then height = math.max(height, font:get_height()) end
+  end
+  return math.max(math.floor(height * config.line_height), height)
+end
+
 local function fenced_code_content_render_line(view, line, text, fenced)
   local fragments = {}
   local col = 1
@@ -3338,6 +3432,7 @@ local function fenced_code_content_render_line(view, line, text, fenced)
   return {
     source_text = text,
     x_offset = view:get_font():get_width(" "),
+    text_row_height = fenced_code_line_height(view),
     fragments = fragments,
   }
 end
@@ -3441,6 +3536,13 @@ end
 
 function provider:line_generation(view, line)
   if view_in_source_mode(view) then return "source" end
+  if #(view.doc.lines[line] or "") > MAX_RICH_SOURCE_LINE_BYTES then
+    local context = view.__markdown_live_line_generation_context or {}
+    view.__markdown_live_line_generation_context = context
+    context.line, context.optimistic, context.owner, context.fenced =
+      line, false, view.__markdown_live_owner or false, false
+    return "bounded-source:" .. tostring(view.doc.text_revision or 0)
+  end
   local optimistic = optimistic_render(view, line)
   local owner = view.__markdown_live_owner
   local fence_generation = ""
@@ -3458,6 +3560,12 @@ function provider:line_generation(view, line)
   then
     semantic_state = ":semantic-adopt:" .. tostring(owner.semantic_adoption_generation or 0)
   end
+  local context = view.__markdown_live_line_generation_context or {}
+  view.__markdown_live_line_generation_context = context
+  context.line = line
+  context.optimistic = optimistic or false
+  context.owner = owner or false
+  context.fenced = fenced or false
   return "font:" .. self:generation(view)
     .. fence_generation
     .. semantic_state
@@ -3802,16 +3910,6 @@ local function heading_render_line(view, text, heading, reveal_units)
   })
 end
 
-local function render_line_widget_height(render_line)
-  local max_height
-  for _, fragment in ipairs(render_line and render_line.fragments or {}) do
-    if fragment.widget and fragment.widget.height then
-      max_height = math.max(max_height or 0, fragment.widget.height)
-    end
-  end
-  return max_height
-end
-
 local function markdown_block_gap(view)
   return math.max(1, math.floor(markdown_live_body_font(view):get_height() * 0.7))
 end
@@ -3839,18 +3937,6 @@ local function with_block_spacing(view, line, entry, height, heading)
   return height + block_spacing_after(view, line, heading)
 end
 
-local function fenced_code_line_height(view)
-  local base_font = style.syntax_fonts.normal or view:get_font()
-  local height = base_font:get_height()
-  -- Fence metrics must not depend on which token categories happen to be on a
-  -- row, or on whether asynchronous tokenization has reached that row yet.
-  -- Both make rows jump as the caret moves or fresh tokens are published.
-  for _, font in pairs(style.syntax_fonts) do
-    if font and font.get_height then height = math.max(height, font:get_height()) end
-  end
-  return math.max(math.floor(height * config.line_height), height)
-end
-
 local function compute_line_height(view, line, entry)
   if view_in_source_mode(view) then return nil end
   local wrapped = line_is_wrapped(view, line)
@@ -3862,99 +3948,30 @@ local function compute_line_height(view, line, entry)
     end
     if not wrapped then return optimistic.height end
   end
-  if not render_semantic_model(view, line) then return nil end
-  local in_comment = line_in_semantic_comment(view, line)
-  local text = (view.doc.lines[line] or ""):gsub("\n$", "")
-  local body_height = markdown_live_body_line_height(view)
+  -- Resolve the presentation once through DocView's line cache. Metrics and
+  -- drawing now consume the same fragment/widget/layout plan instead of
+  -- independently rebuilding headings, images, tables, and inline spans.
+  local render_line = view:get_line_render(line)
+  if not render_line then return view:get_line_height() end
+  if render_line.metric_height then return render_line.metric_height end
+  local text = render_line.source_text
+    or (view.doc.lines[line] or ""):gsub("\n$", "")
   local heading = semantic_heading_for_line(view, text, line)
-  local fenced = not in_comment and fenced_code_for_line(view, line)
-  local fenced_height
-  if fenced and not fenced_code_delimiter_kind(view, fenced, line) then
-    fenced_height = fenced_code_line_height(view)
-  end
+  local body_height = render_line.text_row_height
+    or markdown_live_body_line_height(view)
   if wrapped then
-    local image_span = not in_comment and image_only_span(view, text, line)
     local final_row = entry and entry.row_in_line
       and entry.row_in_line == view:get_visual_row_count_for_line(line)
-    if image_span and final_row then
-      local reveal_units = reveal_units_for_line(view, line)
-      local image_revealed = reveal_unit_matches(
-        reveal_units, image_span.semantic_id, image_span.col1, image_span.col2
-      )
-      if image_revealed then
-        local render_line = image_only_render_line(view, text, line, image_span, true)
-        local max_height = render_line_widget_height(render_line)
-        if max_height then
-          return with_block_spacing(
-            view, line, entry, math.max(body_height, max_height), heading
-          )
-        end
-      end
-    end
-    local height = fenced_height or (heading and math.max(
-      body_height,
-      heading_text_row_height(view, heading.level)
-    ) or body_height)
-    return with_block_spacing(view, line, entry, height, heading)
-  end
-  if not in_comment then
-    local table_node = table_for_line(view, line)
-    if table_node then
-      local layout = table_layout(view, table_node)
-      local reveal_units = reveal_units_for_line(view, line)
-      if table_line_revealed(view, line, reveal_units) then return nil end
-      if layout then
-        if line == layout.delimiter_line then
-          return math.max(1, math.floor(SCALE))
-        end
-        if layout.row_heights[line] then return layout.row_heights[line] end
-      end
-    end
-  end
-  if heading then
-    local height = math.max(
-      body_height,
-      heading_text_row_height(view, heading.level)
-    )
-    local render_line = heading_render_line(view, text, heading, reveal_units_for_line(view, line))
-    for _, fragment in ipairs(render_line.fragments or {}) do
-      if fragment.widget and fragment.widget.height then height = math.max(height, fragment.widget.height) end
+    local height = body_height
+    if final_row then
+      height = math.max(height, render_line_metric_height(view, render_line))
     end
     return with_block_spacing(view, line, entry, height, heading)
   end
-  if fenced_height then return fenced_height end
-  if not in_comment and line_in_raw_block(view, line) then return nil end
-  local reveal_units = reveal_units_for_line(view, line)
-  local image_span = image_only_span(view, text, line)
-  if image_span then
-    local image_revealed = reveal_unit_matches(
-      reveal_units, image_span.semantic_id, image_span.col1, image_span.col2
-    )
-    local render_line = image_only_render_line(view, text, line, image_span, image_revealed)
-    local max_height = render_line_widget_height(render_line)
-    if max_height then
-      return with_block_spacing(
-        view, line, entry, math.max(body_height, max_height), heading
-      )
-    end
-  end
-  local inline = inline_fragments(text, line, view, reveal_units)
-  local inline_render = layout_inline_image_rows(view, text, prose_render_line(view, text, {
-    fragments = inline,
-  }))
-  if inline_render.layout_height then return inline_render.layout_height end
-  local max_height
-  for _, fragment in ipairs(inline) do
-    if fragment.widget and fragment.widget.height then
-      max_height = math.max(max_height or 0, fragment.widget.height)
-    end
-  end
-  if max_height then
-    return with_block_spacing(
-      view, line, entry, math.max(body_height, max_height), heading
-    )
-  end
-  return with_block_spacing(view, line, entry, body_height, heading)
+  if render_line.layout_height then return render_line.layout_height end
+  if render_line.table_row_height then return render_line.table_row_height end
+  local height = math.max(body_height, render_line_metric_height(view, render_line))
+  return with_block_spacing(view, line, entry, height, heading)
 end
 
 function provider:line_height(view, line, entry)
@@ -3974,6 +3991,78 @@ function provider:line_height(view, line, entry)
     end
   end
   return height
+end
+
+---Resolve one logical line once for a visual-metric pass. Wrapped body rows
+---share a height; only the final row can add widgets or block spacing.
+function provider:line_metrics(view, line, row_count)
+  row_count = math.max(1, row_count or 1)
+  if not line_is_wrapped(view, line) then
+    local height = self:line_height(view, line, { row_in_line = 1 })
+    return { row_count = 1, height = height, final_height = height }
+  end
+  local optimistic = optimistic_render(view, line)
+  if optimistic and optimistic.row_heights then
+    local heights = {}
+    for row = 1, row_count do
+      heights[row] = compute_line_height(view, line, { row_in_line = row })
+    end
+    return { row_count = row_count, heights = heights }
+  end
+  local height = compute_line_height(view, line, { row_in_line = 1 })
+  if row_count == 1 then
+    return { row_count = 1, height = height, final_height = height }
+  end
+  return {
+    row_count = row_count,
+    height = height,
+    final_height = compute_line_height(view, line, { row_in_line = row_count }),
+  }
+end
+
+local sparse_metric_node_types = {
+  heading = true,
+  code_fenced = true,
+  code_indented = true,
+  html = true,
+  link_reference = true,
+  table = true,
+  table_header = true,
+  table_row = true,
+  table_cell = true,
+  thematic_break = true,
+  image = true,
+  embed = true,
+  math = true,
+}
+
+---Describe the small set of unwrapped lines whose Markdown presentation can
+---differ from the body-row height. DocView can initialize every ordinary
+---prose row from the default and ask line_height only for these exceptions.
+function provider:sparse_line_metrics(view)
+  if view_in_source_mode(view) or view.wrapped_settings then return nil end
+  local instance = current_semantic_model(view)
+  if not instance then return nil end
+  local nodes, reason = instance:nodes_for_lines(1, #view.doc.lines, {
+    limit = 100000,
+  })
+  if not nodes or reason == "limit" then return nil end
+  local lines = {}
+  for _, node in ipairs(nodes) do
+    if sparse_metric_node_types[node.type] then
+      local line1 = math.max(1, node.source.line1 or 1)
+      local line2 = math.min(#view.doc.lines, node.source.line2 or line1)
+      for line = line1, line2 do lines[line] = true end
+      if node.type == "heading" and line1 > 1 then lines[line1 - 1] = true end
+    end
+  end
+  local owner = view.__markdown_live_owner
+  for line in pairs(owner and owner.published_line_heights or {}) do lines[line] = true end
+  return {
+    complete = true,
+    default_height = markdown_live_body_line_height(view),
+    lines = lines,
+  }
 end
 
 local function record_raw_fallback(view, line, reason)
@@ -4003,19 +4092,43 @@ local function record_raw_fallback(view, line, reason)
   end
 end
 
-function provider:render_line(view, line)
+function provider:render_line(view, line, _context)
   if view_in_source_mode(view) then
     return { raw_passthrough = true }
   end
-  local optimistic = optimistic_render(view, line)
-  local owner = view.__markdown_live_owner
+  if #(view.doc.lines[line] or "") > MAX_RICH_SOURCE_LINE_BYTES then
+    record_raw_fallback(view, line, "source-line-limit")
+    return { raw_passthrough = true }
+  end
+  local generation_context = view.__markdown_live_line_generation_context
+  if not generation_context or generation_context.line ~= line then generation_context = nil end
+  local optimistic
+  if generation_context then
+    optimistic = generation_context.optimistic ~= false
+      and generation_context.optimistic or nil
+  else
+    optimistic = optimistic_render(view, line)
+  end
+  local owner
+  if generation_context then
+    owner = generation_context.owner ~= false and generation_context.owner or nil
+  else
+    owner = view.__markdown_live_owner
+  end
   if optimistic and not current_semantic_model(view) then return optimistic.render_line end
   if not render_semantic_model(view, line) then
     record_raw_fallback(view, line, "semantic-unavailable")
     return { raw_passthrough = true }
   end
   local in_comment = line_in_semantic_comment(view, line)
-  local fenced = not in_comment and fenced_code_for_line(view, line)
+  local fenced
+  if not in_comment then
+    if generation_context then
+      fenced = generation_context.fenced ~= false and generation_context.fenced or nil
+    else
+      fenced = fenced_code_for_line(view, line)
+    end
+  end
   if fenced then
     local text = (view.doc.lines[line] or ""):gsub("\n$", "")
     local delimiter_kind = fenced_code_delimiter_kind(view, fenced, line)
@@ -4023,6 +4136,7 @@ function provider:render_line(view, line)
       if not fenced_code_is_active(view, fenced) then
         return {
           source_text = text,
+          metric_height = view:get_line_height(),
           semantic_generation = select(2, semantic_line(view, line)),
           fragments = {
             {
@@ -4057,14 +4171,24 @@ function provider:render_line(view, line)
 
   local table_node = table_for_line(view, line)
   local table_revealed = table_line_revealed(view, line, reveal_units)
+  if table_node and table_revealed then
+    return prose_render_line(view, text, {
+      fragments = {},
+      metric_height = view:get_line_height(),
+    })
+  end
   if table_node and not table_revealed then
     local fragments, layout = table_row_fragments(view, table_node, line)
     if fragments and layout then
+      local metric_height = layout.row_heights[line]
+      if line == layout.delimiter_line then
+        metric_height = math.max(1, math.floor(SCALE))
+      end
       return prose_render_line(view, text, {
         fragments = fragments,
         disable_wrapping = true,
         table_row = true,
-        table_row_height = layout.row_heights[line],
+        table_row_height = metric_height,
       })
     end
   end
@@ -4219,6 +4343,10 @@ local function ensure_owner(view)
 end
 
 local function invalidate_semantic_publication(view, instance, reason)
+  local perf = active_perf()
+  local publication_started = perf and system.get_time()
+  local reset_started = perf and system.get_time()
+  local fence_reconcile_ms = 0
   perf_frame_add("markdown_live_semantic_publications", 1)
   local previous_table_cache = view.__markdown_live_table_layout_cache
   view.__markdown_live_semantic_line_cache = nil
@@ -4236,7 +4364,11 @@ local function invalidate_semantic_publication(view, instance, reason)
       )
     end
     owner.raw_fallback_record = nil
-    if owner.fence_service then owner.fence_service:reconcile(instance) end
+    if owner.fence_service then
+      local reconcile_started = perf and system.get_time()
+      owner.fence_service:reconcile(instance)
+      fence_reconcile_ms = elapsed_ms(reconcile_started)
+    end
     owner.optimistic_lines = nil
     owner.pending_metric_state = nil
     owner.published_line_heights = {}
@@ -4249,6 +4381,8 @@ local function invalidate_semantic_publication(view, instance, reason)
       owner.semantic_adoption_generation = instance.generation
     end
   end
+  local reset_ms = math.max(0, elapsed_ms(reset_started) - fence_reconcile_ms)
+  local range_expand_started = perf and system.get_time()
   local ranges
   if reason == "published" and pending_wrap_line then
     ranges = { { line1 = pending_wrap_line, line2 = #view.doc.lines } }
@@ -4291,20 +4425,76 @@ local function invalidate_semantic_publication(view, instance, reason)
     "markdown_live_semantic_publication:reason=%s:ranges=%d:lines=%d",
     tostring(reason), #(ranges or {}), publication_lines
   ), 1)
+  local range_expand_ms = elapsed_ms(range_expand_started)
   view.__markdown_live_table_layout_cache = nil
+  local prune_images_ms, line_invalidate_ms, metric_invalidate_ms = 0, 0, 0
+  local global_invalidation = not (ranges and #ranges > 0)
   if ranges and #ranges > 0 then
     for _, range in ipairs(ranges) do
       local line1 = common.clamp(range.line1 or 1, 1, #view.doc.lines)
       local line2 = common.clamp(range.line2 or line1, line1, #view.doc.lines)
+      local phase_started = perf and system.get_time()
       prune_image_references(view, line1, line2)
+      prune_images_ms = prune_images_ms + elapsed_ms(phase_started)
+      phase_started = perf and system.get_time()
       view:invalidate_line_render(PROVIDER_ID, line1, line2)
+      line_invalidate_ms = line_invalidate_ms + elapsed_ms(phase_started)
+      phase_started = perf and system.get_time()
       view:invalidate_visual_metrics(PROVIDER_ID, line1, line2)
+      metric_invalidate_ms = metric_invalidate_ms + elapsed_ms(phase_started)
     end
   else
     perf_frame_add("markdown_live_semantic_global_invalidations", 1)
+    local phase_started = perf and system.get_time()
     prune_image_references(view)
-    view:invalidate_line_render(PROVIDER_ID)
+    prune_images_ms = elapsed_ms(phase_started)
+    phase_started = perf and system.get_time()
+    view:invalidate_line_render(PROVIDER_ID, nil, nil, {
+      defer_wrapped_reconstruction = true,
+      on_wrapped_reconstructed = function()
+        if view.__markdown_live_attached then
+          view:invalidate_visual_metrics(PROVIDER_ID)
+        end
+      end,
+    })
+    line_invalidate_ms = elapsed_ms(phase_started)
+    phase_started = perf and system.get_time()
     view:invalidate_visual_metrics(PROVIDER_ID)
+    metric_invalidate_ms = elapsed_ms(phase_started)
+  end
+  if perf then
+    local total_ms = elapsed_ms(publication_started)
+    perf.frame_add("markdown_live_publication_listener_ms", total_ms)
+    perf.frame_add("markdown_live_publication_reset_ms", reset_ms)
+    perf.frame_add("markdown_live_publication_fence_reconcile_ms", fence_reconcile_ms)
+    perf.frame_add("markdown_live_publication_range_expand_ms", range_expand_ms)
+    perf.frame_add("markdown_live_publication_prune_images_ms", prune_images_ms)
+    perf.frame_add("markdown_live_publication_line_invalidate_ms", line_invalidate_ms)
+    perf.frame_add("markdown_live_publication_metric_invalidate_ms", metric_invalidate_ms)
+    local root = core.root_panel and core.root_panel.root_node
+    local node = root and root.get_node_for_view and root:get_node_for_view(view)
+    perf.record_markdown_view_publication({
+      time = system.get_time(),
+      elapsed_ms = total_ms,
+      path = view.doc.abs_filename or view.doc.filename or view.doc:get_name(),
+      bytes = instance.published_byte_len or 0,
+      lines = instance.published_line_count or #view.doc.lines,
+      reason = reason,
+      generation = instance.generation,
+      wrapped = view.wrapped_settings ~= nil,
+      active = core.active_view == view,
+      visible = not node or node.active_view == view,
+      view_width = view.size and view.size.x or 0,
+      range_count = #(ranges or {}),
+      publication_lines = publication_lines,
+      global_invalidation = global_invalidation,
+      reset_ms = reset_ms,
+      fence_reconcile_ms = fence_reconcile_ms,
+      range_expand_ms = range_expand_ms,
+      prune_images_ms = prune_images_ms,
+      line_invalidate_ms = line_invalidate_ms,
+      metric_invalidate_ms = metric_invalidate_ms,
+    })
   end
   core.redraw = true
 end

@@ -1117,6 +1117,361 @@ static int treesitter_index_result_captures_for_lines(lua_State *L) {
   return 1;
 }
 
+typedef struct {
+  const char *name;
+  uint32_t name_len;
+  uint32_t start_byte, end_byte;
+  uint32_t start_line, start_col, end_line, end_col;
+  uint64_t node_id;
+} SemanticCaptureView;
+
+typedef struct {
+  SemanticCaptureView capture;
+} SemanticNodeView;
+
+typedef struct {
+  uint32_t start_byte, end_byte, prefix_max_end;
+} SemanticInterval;
+
+static bool capture_view_at(
+  AnvilWorkerTreeSitterIndexResult *result, const char *kind, uint32_t index,
+  SemanticCaptureView *out
+) {
+  int32_t priority = 0;
+  uint32_t match_id = 0, pattern_index = 0, capture_index = 0, order = 0;
+  return anvil_worker_treesitter_index_result_capture_at(
+    result, kind, index, &out->name, &out->name_len,
+    &out->start_byte, &out->end_byte, &out->start_line, &out->start_col,
+    &out->end_line, &out->end_col, &priority, &match_id, &pattern_index,
+    &capture_index, &order, &out->node_id
+  );
+}
+
+static bool capture_name_equal(const SemanticCaptureView *capture, const char *name) {
+  size_t len = strlen(name);
+  return capture->name_len == len && memcmp(capture->name, name, len) == 0;
+}
+
+static bool capture_name_prefix(const SemanticCaptureView *capture, const char *prefix) {
+  size_t len = strlen(prefix);
+  return capture->name_len >= len && memcmp(capture->name, prefix, len) == 0;
+}
+
+static bool semantic_parent(const SemanticCaptureView *capture) {
+  return capture_name_prefix(capture, "block.") || capture_name_prefix(capture, "span.");
+}
+
+static bool semantic_decoration(const SemanticCaptureView *capture) {
+  return capture_name_prefix(capture, "marker.") || capture_name_prefix(capture, "content.");
+}
+
+static bool extension_parent(const SemanticCaptureView *capture) {
+  return capture_name_equal(capture, "span.wiki_link")
+    || capture_name_equal(capture, "span.embed")
+    || capture_name_equal(capture, "span.comment")
+    || capture_name_equal(capture, "span.tag");
+}
+
+static bool extension_capture_native(const SemanticCaptureView *capture) {
+  return capture_name_equal(capture, "span.wiki_link")
+    || capture_name_equal(capture, "span.embed")
+    || capture_name_equal(capture, "span.highlight")
+    || capture_name_equal(capture, "span.comment")
+    || capture_name_equal(capture, "span.tag")
+    || capture_name_prefix(capture, "marker.wiki_")
+    || capture_name_prefix(capture, "marker.embed_")
+    || capture_name_prefix(capture, "marker.highlight_")
+    || capture_name_prefix(capture, "marker.comment_")
+    || capture_name_equal(capture, "content.target")
+    || capture_name_equal(capture, "content.alias")
+    || capture_name_equal(capture, "content.highlight")
+    || capture_name_equal(capture, "content.comment")
+    || capture_name_equal(capture, "content.tag");
+}
+
+static bool capture_contains(
+  const SemanticCaptureView *outer, const SemanticCaptureView *inner
+) {
+  return outer->start_byte <= inner->start_byte && outer->end_byte >= inner->end_byte;
+}
+
+static int semantic_interval_compare(const void *left_raw, const void *right_raw) {
+  const SemanticInterval *left = (const SemanticInterval *)left_raw;
+  const SemanticInterval *right = (const SemanticInterval *)right_raw;
+  if (left->start_byte < right->start_byte) return -1;
+  if (left->start_byte > right->start_byte) return 1;
+  if (left->end_byte < right->end_byte) return -1;
+  if (left->end_byte > right->end_byte) return 1;
+  return 0;
+}
+
+static uint32_t build_semantic_intervals(
+  SemanticCaptureView *captures, uint32_t capture_count,
+  bool comments_only, SemanticInterval *intervals
+) {
+  uint32_t count = 0;
+  for (uint32_t index = 0; index < capture_count; index++) {
+    SemanticCaptureView *capture = &captures[index];
+    if (!extension_parent(capture)
+      || (comments_only && !capture_name_equal(capture, "span.comment")))
+      continue;
+    intervals[count++] = (SemanticInterval) {
+      .start_byte = capture->start_byte,
+      .end_byte = capture->end_byte,
+      .prefix_max_end = 0,
+    };
+  }
+  qsort(intervals, count, sizeof(*intervals), semantic_interval_compare);
+  uint32_t max_end = 0;
+  for (uint32_t index = 0; index < count; index++) {
+    if (intervals[index].end_byte > max_end) max_end = intervals[index].end_byte;
+    intervals[index].prefix_max_end = max_end;
+  }
+  return count;
+}
+
+static bool semantic_interval_contains(
+  const SemanticInterval *intervals, uint32_t count,
+  const SemanticCaptureView *capture
+) {
+  uint32_t low = 0, high = count;
+  while (low < high) {
+    uint32_t middle = low + (high - low) / 2;
+    if (intervals[middle].start_byte <= capture->start_byte) low = middle + 1;
+    else high = middle;
+  }
+  return low > 0 && intervals[low - 1].prefix_max_end >= capture->end_byte;
+}
+
+static int semantic_node_compare(const void *left_raw, const void *right_raw) {
+  const SemanticNodeView *left = (const SemanticNodeView *)left_raw;
+  const SemanticNodeView *right = (const SemanticNodeView *)right_raw;
+  if (left->capture.start_byte < right->capture.start_byte) return -1;
+  if (left->capture.start_byte > right->capture.start_byte) return 1;
+  if (left->capture.end_byte < right->capture.end_byte) return -1;
+  if (left->capture.end_byte > right->capture.end_byte) return 1;
+  size_t common_len = left->capture.name_len < right->capture.name_len
+    ? left->capture.name_len : right->capture.name_len;
+  int name_order = memcmp(left->capture.name, right->capture.name, common_len);
+  if (name_order != 0) return name_order;
+  return left->capture.name_len < right->capture.name_len ? -1
+    : left->capture.name_len > right->capture.name_len ? 1 : 0;
+}
+
+static void push_semantic_range(lua_State *L, const SemanticCaptureView *capture) {
+  lua_createtable(L, 0, 6);
+  lua_pushinteger(L, capture->start_line); lua_setfield(L, -2, "line1");
+  lua_pushinteger(L, capture->start_col); lua_setfield(L, -2, "col1");
+  lua_pushinteger(L, capture->end_line); lua_setfield(L, -2, "line2");
+  lua_pushinteger(L, capture->end_col); lua_setfield(L, -2, "col2");
+  lua_pushinteger(L, capture->start_byte); lua_setfield(L, -2, "start_byte");
+  lua_pushinteger(L, capture->end_byte); lua_setfield(L, -2, "end_byte");
+}
+
+static void push_canonical_capture_suffix(
+  lua_State *L, const SemanticCaptureView *capture, size_t skip
+) {
+  luaL_Buffer buffer;
+  luaL_buffinit(L, &buffer);
+  for (size_t index = skip; index < capture->name_len; index++)
+    luaL_addchar(&buffer, capture->name[index] == '.' ? '_' : capture->name[index]);
+  luaL_pushresult(&buffer);
+}
+
+static bool same_semantic_node(
+  const SemanticNodeView *node, const SemanticCaptureView *capture
+) {
+  return node->capture.start_byte == capture->start_byte
+    && node->capture.end_byte == capture->end_byte
+    && node->capture.name_len == capture->name_len
+    && memcmp(node->capture.name, capture->name, capture->name_len) == 0;
+}
+
+static int treesitter_index_result_semantic_nodes_for_lines(lua_State *L) {
+  LuaTreeSitterIndexResult *lua_result = check_treesitter_index_result(L, 1);
+  AnvilWorkerTreeSitterIndexResult *result = lua_result->result;
+  const char *requested = luaL_optstring(L, 2, "both");
+  lua_Integer raw_line1 = luaL_checkinteger(L, 3);
+  lua_Integer raw_line2 = luaL_checkinteger(L, 4);
+  luaL_argcheck(L, raw_line1 > 0 && raw_line1 <= UINT32_MAX, 3, "invalid start line");
+  luaL_argcheck(L, raw_line2 >= raw_line1 && raw_line2 <= UINT32_MAX, 4, "invalid end line");
+  uint32_t limit = lua_istable(L, 5) ? opt_uint32_field(L, 5, "limit", 4096) : 4096;
+  const char *kinds[2];
+  uint32_t kind_count = 0;
+  if (strcmp(requested, "block") == 0 || strcmp(requested, "outline") == 0) {
+    kinds[kind_count++] = "outline";
+  } else if (strcmp(requested, "inline") == 0 || strcmp(requested, "usage") == 0) {
+    kinds[kind_count++] = "usage";
+  } else {
+    kinds[kind_count++] = "outline";
+    kinds[kind_count++] = "usage";
+  }
+
+  uint32_t capacity = limit > 0 ? limit : 1;
+  uint32_t *indices = (uint32_t *)SDL_malloc(sizeof(*indices) * capacity);
+  SemanticCaptureView *captures = (SemanticCaptureView *)SDL_malloc(sizeof(*captures) * capacity);
+  SemanticNodeView *nodes = (SemanticNodeView *)SDL_malloc(sizeof(*nodes) * capacity);
+  if (!indices || !captures || !nodes) {
+    SDL_free(indices); SDL_free(captures); SDL_free(nodes);
+    return luaL_error(L, "out of memory normalizing Markdown semantic nodes");
+  }
+  uint32_t capture_count = 0, total = 0;
+  bool truncated = false;
+  for (uint32_t kind_index = 0; kind_index < kind_count; kind_index++) {
+    uint32_t remaining = capture_count < limit ? limit - capture_count : 0;
+    uint32_t matches = anvil_worker_treesitter_index_result_captures_for_lines(
+      result, kinds[kind_index], (uint32_t)raw_line1, (uint32_t)raw_line2,
+      indices, remaining
+    );
+    total += matches;
+    uint32_t emitted = matches < remaining ? matches : remaining;
+    for (uint32_t index = 0; index < emitted; index++) {
+      if (capture_view_at(result, kinds[kind_index], indices[index], &captures[capture_count]))
+        capture_count++;
+    }
+    if (matches > emitted) truncated = true;
+  }
+
+  /* Suppress CommonMark captures nested inside first-party extension spans. */
+  bool has_inline = kind_count == 2 || strcmp(kinds[0], "usage") == 0;
+  if (has_inline) {
+    SemanticInterval *extension_intervals = (SemanticInterval *)SDL_malloc(
+      sizeof(*extension_intervals) * (capture_count > 0 ? capture_count : 1)
+    );
+    SemanticInterval *comment_intervals = (SemanticInterval *)SDL_malloc(
+      sizeof(*comment_intervals) * (capture_count > 0 ? capture_count : 1)
+    );
+    if (!extension_intervals || !comment_intervals) {
+      SDL_free(extension_intervals); SDL_free(comment_intervals);
+      SDL_free(indices); SDL_free(captures); SDL_free(nodes);
+      return luaL_error(L, "out of memory indexing Markdown extension spans");
+    }
+    uint32_t extension_count = build_semantic_intervals(
+      captures, capture_count, false, extension_intervals
+    );
+    uint32_t comment_count = build_semantic_intervals(
+      captures, capture_count, true, comment_intervals
+    );
+    for (uint32_t index = 0; index < capture_count; index++) {
+      SemanticCaptureView *capture = &captures[index];
+      if (extension_capture_native(capture)) continue;
+      bool any_extension = capture_name_equal(capture, "span.link_reference")
+        || capture_name_prefix(capture, "content.link");
+      if (semantic_interval_contains(
+          any_extension ? extension_intervals : comment_intervals,
+          any_extension ? extension_count : comment_count, capture
+      )) {
+        capture->name = NULL;
+        capture->name_len = 0;
+      }
+    }
+    SDL_free(extension_intervals);
+    SDL_free(comment_intervals);
+  }
+
+  uint32_t node_count = 0;
+  for (uint32_t index = 0; index < capture_count; index++) {
+    SemanticCaptureView *capture = &captures[index];
+    if (!capture->name || !semantic_parent(capture)) continue;
+    nodes[node_count++].capture = *capture;
+  }
+  qsort(nodes, node_count, sizeof(*nodes), semantic_node_compare);
+  uint32_t unique_count = 0;
+  for (uint32_t index = 0; index < node_count; index++) {
+    if (unique_count == 0 || !same_semantic_node(&nodes[unique_count - 1], &nodes[index].capture))
+      nodes[unique_count++] = nodes[index];
+  }
+  node_count = unique_count;
+
+  lua_createtable(L, (int)node_count, 2);
+  int result_table = lua_gettop(L);
+  for (uint32_t index = 0; index < node_count; index++) {
+    SemanticCaptureView *capture = &nodes[index].capture;
+    lua_createtable(L, 0, 8);
+    char id_suffix[32];
+    SDL_snprintf(id_suffix, sizeof(id_suffix), ":%llu",
+      (unsigned long long)capture->node_id);
+    luaL_Buffer id_buffer;
+    luaL_buffinit(L, &id_buffer);
+    luaL_addlstring(&id_buffer, capture->name, capture->name_len);
+    luaL_addstring(&id_buffer, id_suffix);
+    luaL_pushresult(&id_buffer);
+    lua_setfield(L, -2, "id");
+    push_canonical_capture_suffix(L, capture, capture_name_prefix(capture, "block.") ? 6 : 5);
+    lua_setfield(L, -2, "type");
+    push_semantic_range(L, capture); lua_setfield(L, -2, "source");
+    lua_createtable(L, 2, 0); lua_setfield(L, -2, "marker_ranges");
+    lua_createtable(L, 2, 0); lua_setfield(L, -2, "content_ranges");
+    lua_createtable(L, 0, 4); lua_setfield(L, -2, "attributes");
+    lua_pushstring(L, "complete"); lua_setfield(L, -2, "confidence");
+    lua_rawseti(L, result_table, (int)index + 1);
+  }
+
+  for (uint32_t capture_index = 0; capture_index < capture_count; capture_index++) {
+    SemanticCaptureView *decoration = &captures[capture_index];
+    if (!decoration->name || !semantic_decoration(decoration)) continue;
+    int best = -1;
+    uint32_t best_size = UINT32_MAX;
+    bool target_or_alias = capture_name_equal(decoration, "content.target")
+      || capture_name_equal(decoration, "content.alias");
+    uint32_t low = 0, high = node_count;
+    while (low < high) {
+      uint32_t middle = low + (high - low) / 2;
+      if (nodes[middle].capture.start_byte <= decoration->start_byte) low = middle + 1;
+      else high = middle;
+    }
+    for (uint32_t reverse = low; reverse > 0; reverse--) {
+      uint32_t node_index = reverse - 1;
+      SemanticCaptureView *parent = &nodes[node_index].capture;
+      if (best >= 0 && parent->start_byte < nodes[best].capture.start_byte) break;
+      if (!capture_contains(parent, decoration)) continue;
+      bool family_match = true;
+      if (capture_name_prefix(decoration, "marker.wiki_")
+        || capture_name_prefix(decoration, "content.wiki_"))
+        family_match = capture_name_equal(parent, "span.wiki_link");
+      else if (capture_name_prefix(decoration, "marker.embed_")
+        || capture_name_prefix(decoration, "content.embed_"))
+        family_match = capture_name_equal(parent, "span.embed");
+      else if (capture_name_prefix(decoration, "marker.highlight")
+        || capture_name_prefix(decoration, "content.highlight"))
+        family_match = capture_name_equal(parent, "span.highlight");
+      else if (capture_name_prefix(decoration, "marker.comment")
+        || capture_name_prefix(decoration, "content.comment"))
+        family_match = capture_name_equal(parent, "span.comment");
+      if (target_or_alias)
+        family_match = capture_name_equal(parent, "span.wiki_link")
+          || capture_name_equal(parent, "span.embed");
+      uint32_t size = parent->end_byte - parent->start_byte;
+      if (family_match && size < best_size) { best = (int)node_index; best_size = size; }
+    }
+    if (best < 0) continue;
+    lua_rawgeti(L, result_table, best + 1);
+    const char *range_field = capture_name_prefix(decoration, "marker.")
+      ? "marker_ranges" : "content_ranges";
+    lua_getfield(L, -1, range_field);
+    size_t range_count = lua_rawlen(L, -1);
+    push_semantic_range(L, decoration);
+    lua_rawseti(L, -2, (int)range_count + 1);
+    lua_pop(L, 1);
+    const char *dot = memchr(decoration->name, '.', decoration->name_len);
+    if (dot && (size_t)(dot - decoration->name + 1) < decoration->name_len) {
+      lua_getfield(L, -1, "attributes");
+      push_semantic_range(L, decoration);
+      SemanticCaptureView suffix = *decoration;
+      size_t skip = (size_t)(dot - decoration->name + 1);
+      push_canonical_capture_suffix(L, &suffix, skip);
+      lua_insert(L, -2);
+      lua_settable(L, -3);
+      lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+  }
+  lua_pushinteger(L, total); lua_setfield(L, result_table, "total");
+  lua_pushboolean(L, truncated); lua_setfield(L, result_table, "truncated");
+  SDL_free(indices); SDL_free(captures); SDL_free(nodes);
+  return 1;
+}
+
 static void push_result(lua_State *L, AnvilWorkerResult *result) {
   lua_createtable(L, 0, 8);
   lua_pushinteger(L, (lua_Integer)anvil_worker_result_job_id(result));
@@ -1392,6 +1747,7 @@ static const luaL_Reg treesitter_index_result_methods[] = {
   { "usages", treesitter_index_result_usages },
   { "captures", treesitter_index_result_captures },
   { "captures_for_lines", treesitter_index_result_captures_for_lines },
+  { "semantic_nodes_for_lines", treesitter_index_result_semantic_nodes_for_lines },
   { "close", treesitter_index_result_close },
   { "__gc", treesitter_index_result_gc },
   { NULL, NULL }

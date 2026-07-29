@@ -2215,13 +2215,14 @@ void raster_span(int y, int count, const FT_Span *spans, void *user) {
       SDL_GetPixelFormatDetails(draw_rect_surface->format),
       SDL_GetSurfacePalette(draw_rect_surface),
       param->color.r, param->color.g, param->color.b,
-      (param->color.a * spans[i].coverage) >> 8
+      (param->color.a * spans[i].coverage + 127) / 255
     );
     SDL_BlitSurfaceScaled(draw_rect_surface, NULL, param->surface, &actual, SDL_SCALEMODE_LINEAR);
   }
 }
 
-void ren_draw_poly(RenSurface *rs, RenPoint *points, unsigned short npoints, RenColor color) {
+static void ren_draw_poly_mode(RenSurface *rs, RenPoint *points, unsigned short npoints,
+                               RenColor color, bool straight_alpha_mask) {
   FT_Outline outline;
   if (npoints == 0 || npoints > MAX_POLY_POINTS) return;
   if (FT_Outline_New(library, npoints, 1, &outline) != 0) return;
@@ -2234,13 +2235,69 @@ void ren_draw_poly(RenSurface *rs, RenPoint *points, unsigned short npoints, Ren
   outline.contours[0] = npoints - 1;
   RenPolyParams params = { .color = color, .surface = rs->surface };
   SDL_GetSurfaceClipRect(rs->surface, &params.clip);
+
+  SDL_BlendMode previous_blend = SDL_BLENDMODE_INVALID;
+  bool restore_blend = straight_alpha_mask
+    && SDL_GetSurfaceBlendMode(draw_rect_surface, &previous_blend);
+  if (restore_blend) SDL_SetSurfaceBlendMode(draw_rect_surface, SDL_BLENDMODE_NONE);
+
   FT_Outline_Render(library, &outline, &(FT_Raster_Params) {
     .target = NULL,
     .flags = FT_RASTER_FLAG_AA | FT_RASTER_FLAG_DIRECT,
     .gray_spans = &raster_span,
     .user = &params,
   });
+
+  if (restore_blend) SDL_SetSurfaceBlendMode(draw_rect_surface, previous_blend);
   FT_Outline_Done(library, &outline);
+}
+
+void ren_draw_poly(RenSurface *rs, RenPoint *points, unsigned short npoints, RenColor color) {
+  ren_draw_poly_mode(rs, points, npoints, color, false);
+}
+
+void ren_draw_poly_mask(RenSurface *rs, RenPoint *points, unsigned short npoints, RenColor color) {
+  // D3D uploads this transparent surface and applies coverage in its shader.
+  // Replace spans here to retain straight-alpha RGB; normal SDL blending would
+  // premultiply them once and the shader would multiply them a second time,
+  // producing dark antialiasing halos around curved polygon edges.
+  ren_draw_poly_mode(rs, points, npoints, color, true);
+}
+
+size_t ren_font_group_get_advances(
+  RenFont **fonts, const char *text, size_t len, RenTab tab,
+  uint32_t *byte_offsets, double *advances
+) {
+  if (!byte_offsets || !advances) return 0;
+  g_text_frame_stats.width_calls++;
+  g_text_frame_stats.width_bytes += len;
+  size_t count = 1;
+  double width = 0;
+  const char *start = text;
+  const char *end = text + len;
+  byte_offsets[0] = 0;
+  advances[0] = 0;
+
+  /* Caret and wrapping advances intentionally use character advances. This
+   * matches the editor's established hit-testing behavior while moving UTF-8
+   * decoding, fallback lookup, tab expansion, and glyph measurement into one
+   * native pass. Text drawing remains free to shape ligature runs. */
+  while (text < end) {
+    unsigned int codepoint;
+    text = utf8_to_codepoint(text, end, &codepoint);
+    GlyphMetric *metric = NULL;
+    font_group_get_glyph(fonts, codepoint, 0, NULL, &metric);
+    width += font_get_xadvance(fonts[0], codepoint, metric, width, tab);
+    byte_offsets[count] = (uint32_t)(text - start);
+#ifdef ANVIL_USE_SDL_RENDERER
+    advances[count] = width / fonts[0]->scale;
+#else
+    advances[count] = width;
+#endif
+    count++;
+    g_text_frame_stats.width_chars++;
+  }
+  return count;
 }
 
 void ren_draw_rounded_rect(RenSurface *rs, RenRect rect, float radius, RenColor color) {

@@ -47,6 +47,12 @@ local function run_case(target_bytes)
   local query_ms = (system.get_time() - query_started) * 1000
   test.ok(#nodes > 0)
 
+  local batch_started = system.get_time()
+  local batch_nodes = test.not_nil(instance:nodes_for_lines(1, math.min(60, line_count), {
+    limit = 10000,
+  }))
+  local batch_query_ms = (system.get_time() - batch_started) * 1000
+
   started = system.get_time()
   doc:insert(middle, 4, "edited ")
   test.ok(wait_ready(instance, 15), instance.reason)
@@ -57,11 +63,11 @@ local function run_case(target_bytes)
   test.ok(instance.diagnostics.reused_inline_regions > 0)
 
   print(string.format(
-    "markdown-semantic-benchmark bytes=%d lines=%d full_e2e_ms=%.3f full_native_ms=%.3f incremental_e2e_ms=%.3f incremental_native_ms=%.3f block_parse_ms=%.3f inline_parse_ms=%.3f incremental_total_ms=%.3f block_query_ms=%.3f inline_query_ms=%.3f visible_query_ms=%.3f visible_nodes=%d",
+    "markdown-semantic-benchmark bytes=%d lines=%d full_e2e_ms=%.3f full_native_ms=%.3f incremental_e2e_ms=%.3f incremental_native_ms=%.3f block_parse_ms=%.3f inline_parse_ms=%.3f incremental_total_ms=%.3f block_query_ms=%.3f inline_query_ms=%.3f visible_query_ms=%.3f visible_nodes=%d normalized_60_line_query_ms=%.3f normalized_60_line_nodes=%d",
     #source, line_count, full_ms, full_native_ms, incremental_ms,
     incremental_native_ms, summary.metrics.block_parse_ms,
     summary.metrics.inline_parse_ms, summary.metrics.total_ms, summary.metrics.outline_query_ms,
-    summary.metrics.usage_query_ms, query_ms, #nodes
+    summary.metrics.usage_query_ms, query_ms, #nodes, batch_query_ms, #batch_nodes
   ))
   io.stdout:flush()
   markdown_model.close(doc, "benchmark")

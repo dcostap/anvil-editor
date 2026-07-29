@@ -365,40 +365,59 @@ local function compute_rendered_line_breaks(
   begin_width = clamp_continuation_indent_width(begin_width or 0, width)
   local splits = { start_col }
   local row_start = start_col
+  local row_start_x
   local last_space
+  local last_space_next_x
   local line_x_offset = render_line.x_offset or 0
-  local function rendered_x(col)
-    return docview:get_line_render_col_x_offset(render_line, col)
-  end
   if render_line.continuation_indent_col then
     local continuation_font = render_line.continuation_indent_font or default_font
-    begin_width = rendered_x(render_line.continuation_indent_col) - line_x_offset
+    begin_width = docview:get_line_render_col_x_offset(
+      render_line, render_line.continuation_indent_col
+    ) - line_x_offset
       + LineWrapping.continuation_indent_width(continuation_font, "")
     begin_width = clamp_continuation_indent_width(begin_width, width)
   end
+  local rendered_x = docview.get_line_render_col_x_cursor
+    and docview:get_line_render_col_x_cursor(render_line)
+    or function(col) return docview:get_line_render_col_x_offset(render_line, col) end
+  row_start_x = rendered_x(row_start)
+  if docview.get_line_render_native_wrap then
+    local native_splits = docview:get_line_render_native_wrap(
+      render_line, width, mode, start_col, begin_width
+    )
+    if native_splits then return native_splits, begin_width, "rendered_native" end
+  end
   local col = start_col
+  local col_x = row_start_x
   for char in common.utf8_chars(text:sub(start_col, visible_end)) do
     local next_col = col + #char
-    if char == " " then last_space = col end
+    local next_x = rendered_x(next_col)
+    if char == " " then
+      last_space = col
+      last_space_next_x = next_x
+    end
     local leading = line_x_offset + (row_start > 1 and begin_width or 0)
-    local row_width = leading + rendered_x(next_col) - rendered_x(row_start)
+    local row_width = leading + next_x - row_start_x
     if row_width > width and col > row_start then
       local split = col
       if mode == "word" and last_space and last_space >= row_start then split = last_space + 1 end
       if split <= row_start then split = col end
       if split > splits[#splits] then splits[#splits + 1] = split end
       row_start = split
+      row_start_x = split == col and col_x or last_space_next_x or col_x
       if last_space and last_space < row_start then last_space = nil end
       leading = line_x_offset + (row_start > 1 and begin_width or 0)
-      row_width = leading + rendered_x(next_col) - rendered_x(row_start)
+      row_width = leading + next_x - row_start_x
       if row_width > width and col > row_start then
         splits[#splits + 1] = col
         row_start = col
+        row_start_x = col_x
       end
     end
+    col_x = next_x
     col = next_col
   end
-  return splits, begin_width
+  return splits, begin_width, "rendered_cursor"
 end
 
 -- Computes the breaks for a line suffix. `start_col` must be a valid byte
@@ -425,10 +444,40 @@ function LineWrapping.compute_line_breaks_from_col(doc, default_font, line, widt
   local line_text = doc:get_utf8_line(line)
   local visible_end_col = #line_text
   if line_text:sub(-1) == "\n" then visible_end_col = visible_end_col - 1 end
+  local function finish(result_splits, result_begin_width, branch)
+    local perf_elapsed_ms = perf_start and ((system.get_time() - perf_start) * 1000) or 0
+    local branch_key = tostring(branch or perf_branch or "empty"):gsub("[^%w_]", "_")
+    perf_frame_add("linewrapping_compute_line_breaks_calls", 1)
+    perf_frame_add("linewrapping_compute_line_breaks_bytes", perf_bytes)
+    perf_frame_add("linewrapping_compute_line_breaks_splits", #result_splits)
+    perf_frame_add("linewrapping_compute_branch_" .. branch_key .. "_calls", 1)
+    perf_frame_add("linewrapping_compute_branch_" .. branch_key .. "_bytes", perf_bytes)
+    perf_frame_add("linewrapping_compute_branch_" .. branch_key .. "_ms", perf_elapsed_ms)
+    local perf = package.loaded["core.perf"]
+    if perf and perf.record_linewrap_compute and (perf_elapsed_ms > 2 or perf_bytes > 50000) then
+      perf.record_linewrap_compute({
+        elapsed_ms = perf_elapsed_ms,
+        line = line,
+        bytes = #line_text,
+        visible_bytes = perf_bytes,
+        splits = #result_splits,
+        width = width,
+        mode = mode,
+        tokenized = config.plugins.linewrapping.require_tokenization,
+        ascii = perf_ascii,
+        has_space = perf_has_space,
+        has_tab = perf_has_tab,
+        has_non_ascii = perf_has_non_ascii,
+        branch = branch or perf_branch or "empty",
+      })
+    end
+    perf_frame_add("linewrapping_compute_line_breaks_ms", perf_elapsed_ms)
+    return result_splits, result_begin_width
+  end
   if docview and docview.get_line_render then
     local render_line = docview:get_line_render(line)
     if render_line and render_line.disable_wrapping then
-      return { start_col }, 0
+      return finish({ start_col }, 0, "rendered_disabled")
     end
     local has_non_inline_widget = false
     for _, fragment in ipairs(render_line and render_line.fragments or {}) do
@@ -438,10 +487,19 @@ function LineWrapping.compute_line_breaks_from_col(doc, default_font, line, widt
       end
     end
     if render_line and not has_non_inline_widget then
-      return compute_rendered_line_breaks(
+      if perf_active then
+        perf_bytes = math.max(0, visible_end_col - start_col + 1)
+        local visible_text = line_text:sub(start_col, visible_end_col)
+        perf_has_space = visible_text:find(" ", 1, true) ~= nil
+        perf_has_tab = visible_text:find("\t", 1, true) ~= nil
+        perf_has_non_ascii = visible_text:find("[\128-\255]") ~= nil
+        perf_ascii = not perf_has_non_ascii
+      end
+      local rendered_splits, rendered_begin_width, rendered_branch = compute_rendered_line_breaks(
         docview, render_line, default_font, line, width, mode,
         start_col, begin_width
       )
+      return finish(rendered_splits, rendered_begin_width, rendered_branch)
     end
   end
   local default_ascii_cell_width = default_font:get_width(" ")
@@ -565,34 +623,7 @@ function LineWrapping.compute_line_breaks_from_col(doc, default_font, line, widt
       i = i + #text
     end
   end
-  local perf_elapsed_ms = perf_start and ((system.get_time() - perf_start) * 1000) or 0
-  local branch_key = tostring(perf_branch or "empty"):gsub("[^%w_]", "_")
-  perf_frame_add("linewrapping_compute_line_breaks_calls", 1)
-  perf_frame_add("linewrapping_compute_line_breaks_bytes", perf_bytes)
-  perf_frame_add("linewrapping_compute_line_breaks_splits", #splits)
-  perf_frame_add("linewrapping_compute_branch_" .. branch_key .. "_calls", 1)
-  perf_frame_add("linewrapping_compute_branch_" .. branch_key .. "_bytes", perf_bytes)
-  perf_frame_add("linewrapping_compute_branch_" .. branch_key .. "_ms", perf_elapsed_ms)
-  local perf = package.loaded["core.perf"]
-  if perf and perf.record_linewrap_compute and (perf_elapsed_ms > 2 or perf_bytes > 50000) then
-    perf.record_linewrap_compute({
-      elapsed_ms = perf_elapsed_ms,
-      line = line,
-      bytes = #line_text,
-      visible_bytes = perf_bytes,
-      splits = #splits,
-      width = width,
-      mode = mode,
-      tokenized = config.plugins.linewrapping.require_tokenization,
-      ascii = perf_ascii,
-      has_space = perf_has_space,
-      has_tab = perf_has_tab,
-      has_non_ascii = perf_has_non_ascii,
-      branch = perf_branch or "empty",
-    })
-  end
-  perf_frame_add("linewrapping_compute_line_breaks_ms", perf_elapsed_ms)
-  return splits, begin_width
+  return finish(splits, begin_width)
 end
 
 function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode, docview)
@@ -602,6 +633,7 @@ function LineWrapping.compute_line_breaks(doc, default_font, line, width, mode, 
 end
 
 function LineWrapping.clear_wrap_cache(docview)
+  docview.__async_wrap_reconstruction = nil
   docview.__wrap_layout_generation = (docview.__wrap_layout_generation or 0) + 1
   docview.__composed_visual_row_cache = nil
   docview.wrapped_lines = nil
@@ -641,7 +673,8 @@ local function same_wrap_settings(a, b)
   return same_wrap_settings_except_width(a, b) and a.width == b.width
 end
 
-function LineWrapping.reconstruct_breaks(docview, default_font, width, line_offset)
+function LineWrapping.reconstruct_breaks(docview, default_font, width)
+  docview.__async_wrap_reconstruction = nil
   docview.__wrap_layout_generation = (docview.__wrap_layout_generation or 0) + 1
   docview.__composed_visual_row_cache = nil
   local perf_active = core.perf_frame_stats ~= nil
@@ -655,22 +688,19 @@ function LineWrapping.reconstruct_breaks(docview, default_font, width, line_offs
     docview.wrapped_settings = wrap_settings_signature(docview, default_font, width)
     docview.wrapped_doc_line_count = #doc.lines
     docview.wrapped_text_revision = doc.text_revision or 0
-    for i = line_offset or 1, #doc.lines do
+    local wrapped_row_count = 0
+    for i = 1, #doc.lines do
       reconstructed_lines = reconstructed_lines + 1
       local breaks, offset = LineWrapping.compute_line_breaks(
         doc, default_font, i, width, config.plugins.linewrapping.mode, docview
       )
-      table.insert(docview.wrapped_line_offsets, offset)
+      docview.wrapped_line_offsets[i] = offset
+      docview.wrapped_line_to_idx[i] = wrapped_row_count + 1
       for _, col in ipairs(breaks) do
-        table.insert(docview.wrapped_lines, i)
-        table.insert(docview.wrapped_lines, col)
-      end
-    end
-    local last_wrap = nil
-    for i = 1, #docview.wrapped_lines, 2 do
-      if not last_wrap or last_wrap ~= docview.wrapped_lines[i] then
-        table.insert(docview.wrapped_line_to_idx, (i + 1) / 2)
-        last_wrap = docview.wrapped_lines[i]
+        wrapped_row_count = wrapped_row_count + 1
+        local row_offset = wrapped_row_count * 2
+        docview.wrapped_lines[row_offset - 1] = i
+        docview.wrapped_lines[row_offset] = col
       end
     end
   else
@@ -679,6 +709,139 @@ function LineWrapping.reconstruct_breaks(docview, default_font, width, line_offs
   perf_frame_add("linewrapping_reconstruct_breaks_calls", 1)
   perf_frame_add("linewrapping_reconstruct_breaks_lines", reconstructed_lines)
   perf_elapsed("linewrapping_reconstruct_breaks_ms", perf_start)
+end
+
+---Rebuild a wrapped layout in bounded main-thread slices and atomically adopt
+---it when complete. The existing layout remains readable while the new one is
+---prepared, avoiding a whole-Document publication stall.
+function LineWrapping.reconstruct_breaks_async(docview, default_font, width, opts)
+  opts = opts or {}
+  if width == math.huge then
+    LineWrapping.clear_wrap_cache(docview)
+    if opts.on_complete then opts.on_complete(true) end
+    return true
+  end
+  local doc = docview.doc
+  local token = {
+    doc = doc,
+    revision = doc.text_revision or 0,
+    line_count = #doc.lines,
+    next_line = 1,
+    wrapped_lines = {},
+    wrapped_line_to_idx = {},
+    wrapped_line_offsets = {},
+    wrapped_row_count = 0,
+    work_ms = 0,
+    yields = 0,
+    settings = wrap_settings_signature(docview, default_font, width),
+  }
+  docview.__async_wrap_reconstruction = token
+  perf_frame_add("linewrapping_async_reconstruct_calls", 1)
+
+  local function current()
+    return docview.__async_wrap_reconstruction == token
+      and docview.doc == doc
+      and (doc.text_revision or 0) == token.revision
+      and #doc.lines == token.line_count
+  end
+
+  local function finish()
+    if not current() then return false end
+    docview.wrapped_lines = token.wrapped_lines
+    docview.wrapped_line_to_idx = token.wrapped_line_to_idx
+    docview.wrapped_line_offsets = token.wrapped_line_offsets
+    docview.wrapped_settings = token.settings
+    docview.wrapped_doc_line_count = token.line_count
+    docview.wrapped_text_revision = token.revision
+    docview.__wrap_layout_generation = (docview.__wrap_layout_generation or 0) + 1
+    docview.__composed_visual_row_cache = nil
+    docview.__line_render_wrap_change = nil
+    docview.__async_wrap_reconstruction = nil
+    perf_frame_add("linewrapping_async_reconstruct_commits", 1)
+    core.log_quiet(
+      "Committed sliced wrapped layout for %s: lines=%d rows=%d work_ms=%.3f yields=%d",
+      doc:get_name(), token.line_count, token.wrapped_row_count,
+      token.work_ms, token.yields
+    )
+    if opts.on_complete then
+      local ok, err = pcall(opts.on_complete, true)
+      if not ok then
+        core.log_quiet("Async wrapped-layout completion failed for %s: %s", doc:get_name(), tostring(err))
+      end
+    end
+    core.redraw = true
+    return true
+  end
+
+  local budget_ms = math.max(1, tonumber(opts.budget_ms) or 4)
+  local function advance()
+    if not current() then
+      if docview.__async_wrap_reconstruction == token then
+        docview.__async_wrap_reconstruction = nil
+        perf_frame_add("linewrapping_async_reconstruct_cancelled", 1)
+        core.log_quiet(
+          "Cancelled stale sliced wrapped layout for %s at line %d/%d",
+          doc:get_name(), token.next_line, token.line_count
+        )
+        if opts.on_complete then pcall(opts.on_complete, false) end
+      end
+      return "cancelled"
+    end
+    local started = system.get_time()
+    local lines = 0
+    while token.next_line <= token.line_count do
+      local line = token.next_line
+      local breaks, offset = LineWrapping.compute_line_breaks(
+        doc, default_font, line, width, config.plugins.linewrapping.mode, docview
+      )
+      token.wrapped_line_offsets[line] = offset
+      token.wrapped_line_to_idx[line] = token.wrapped_row_count + 1
+      for _, col in ipairs(breaks) do
+        token.wrapped_row_count = token.wrapped_row_count + 1
+        local row_offset = token.wrapped_row_count * 2
+        token.wrapped_lines[row_offset - 1] = line
+        token.wrapped_lines[row_offset] = col
+      end
+      token.next_line = line + 1
+      lines = lines + 1
+      if (system.get_time() - started) * 1000 >= budget_ms then break end
+    end
+    local work_ms = (system.get_time() - started) * 1000
+    token.work_ms = token.work_ms + work_ms
+    perf_frame_add("linewrapping_async_reconstruct_lines", lines)
+    perf_frame_add("linewrapping_async_reconstruct_ms", work_ms)
+    if token.next_line > token.line_count then
+      finish()
+      return "complete"
+    end
+    perf_frame_add("linewrapping_async_reconstruct_yields", 1)
+    token.yields = token.yields + 1
+    return "pending"
+  end
+
+  local status = advance()
+  token.advance = advance
+  if status == "pending" then
+    core.log_quiet(
+      "Continuing wrapped layout in slices for %s: lines=%d budget_ms=%.1f",
+      doc:get_name(), token.line_count, budget_ms
+    )
+    core.add_thread(function()
+      while advance() == "pending" do coroutine.yield(0.005) end
+    end)
+  end
+  return status == "complete"
+end
+
+---Synchronously finish a pending sliced reconstruction when a caller requires
+---immediate geometry (primarily deterministic headless/UI test setup).
+function LineWrapping.complete_async_reconstruction(docview)
+  local token = docview and docview.__async_wrap_reconstruction
+  while token and docview.__async_wrap_reconstruction == token and token.advance do
+    local status = token.advance()
+    if status ~= "pending" then return status == "complete" end
+  end
+  return docview and docview.__async_wrap_reconstruction == nil
 end
 
 local function rebuild_line_to_idx_from(docview, line, offset)
