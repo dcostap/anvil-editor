@@ -1113,6 +1113,40 @@ static int file_entry_compare(const void *left, const void *right) {
   return strcmp(a->relative_path, b->relative_path);
 }
 
+static bool file_disambiguate_display_collisions(FuzzyFileIndexBuilder *builder) {
+  uint32_t start = 0;
+  while (start < builder->count) {
+    uint32_t end = start + 1;
+    while (end < builder->count
+      && strcmp(builder->entries[start].display_path, builder->entries[end].display_path) == 0) end++;
+    if (end - start > 1) {
+      for (uint32_t i = start; i < end; ++i) {
+        FuzzyFileEntry *entry = &builder->entries[i];
+        const char *root_path = builder->roots[entry->root_index].path;
+        size_t display_len = strlen(entry->display_path);
+        size_t root_len = strlen(root_path);
+        size_t relative_len = strlen(entry->relative_path);
+        static const char suffix[] = "  \xE2\x80\x94  ";
+        size_t suffix_len = sizeof(suffix) - 1;
+        if (display_len > SIZE_MAX - suffix_len - root_len - relative_len - 2) return false;
+        size_t total = display_len + suffix_len + root_len + 1 + relative_len;
+        char *display = (char *)malloc(total + 1);
+        if (!display) return false;
+        size_t offset = 0;
+        memcpy(display + offset, entry->display_path, display_len); offset += display_len;
+        memcpy(display + offset, suffix, suffix_len); offset += suffix_len;
+        memcpy(display + offset, root_path, root_len); offset += root_len;
+        display[offset++] = FUZZY_FILE_PATHSEP;
+        memcpy(display + offset, entry->relative_path, relative_len + 1);
+        free(entry->display_path);
+        entry->display_path = display;
+      }
+    }
+    start = end;
+  }
+  return true;
+}
+
 FuzzyFileIndex *fuzzy_file_index_builder_finish(
   FuzzyFileIndexBuilder *builder,
   FuzzyFileIndexStats *stats
@@ -1125,6 +1159,11 @@ FuzzyFileIndex *fuzzy_file_index_builder_finish(
   }
   if (stats) *stats = builder->stats;
   if (builder->failed) {
+    fuzzy_file_index_builder_free(builder);
+    return NULL;
+  }
+  qsort(builder->entries, builder->count, sizeof(*builder->entries), file_entry_compare);
+  if (!file_disambiguate_display_collisions(builder)) {
     fuzzy_file_index_builder_free(builder);
     return NULL;
   }

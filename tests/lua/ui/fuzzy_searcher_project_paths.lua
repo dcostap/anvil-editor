@@ -22,6 +22,18 @@ local function write_file(path, text)
   fp:close()
 end
 
+local function wait_until(predicate, timeout)
+  local deadline = system.get_time() + (timeout or 5)
+  while not predicate() and system.get_time() < deadline do coroutine.yield(0.02) end
+  return predicate()
+end
+
+local function picker_result_for_path(picker, path)
+  for _, result in ipairs(picker.results or {}) do
+    if result.abs_path and common.path_equals(result.abs_path, path) then return result end
+  end
+end
+
 test.describe("Fuzzy Searcher Project Path Roles", function()
   test.before_each(function(context)
     context.original_projects = core.projects
@@ -139,6 +151,29 @@ test.describe("Fuzzy Searcher Project Path Roles", function()
     result = helpers.decorate_grep_result({ file = common.relative_path(context.root, vendored_file), line = 1, col = 1, text = "NEEDLE" }, context.root)
     test.equal(result.file, vendored_item)
     test.ok(common.path_equals(result.abs_path, vendored_file))
+  end)
+
+  test.it("preserves Project Path roles through native filesystem ingestion", function(context)
+    local external_file = join_path(context.external, "java", "lang", "NativeString.java")
+    local vendored_file = join_path(context.root, "src", "vendor", "library1", "foo", "NativeBaz.java")
+    write_file(external_file)
+    write_file(vendored_file)
+
+    fuzzy_searcher.open("NativeString")
+    local picker = assert(core.fuzzy_searcher_active_view)
+    test.ok(wait_until(function() return picker_result_for_path(picker, external_file) end),
+      "expected the native index to publish the External Project Directory file")
+    local external = picker_result_for_path(picker, external_file)
+    test.equal(external.file, "Java Sources" .. PATHSEP .. "java" .. PATHSEP .. "lang" .. PATHSEP .. "NativeString.java")
+    test.equal(external.root_role, "external")
+    test.equal(helpers.file_index_status().native, true)
+
+    picker.input:set_text("NativeBaz")
+    test.ok(wait_until(function() return picker_result_for_path(picker, vendored_file) end),
+      "expected the native index to retain the Vendored Project Directory mapping")
+    local vendored = picker_result_for_path(picker, vendored_file)
+    test.equal(vendored.file, "library1" .. PATHSEP .. "foo" .. PATHSEP .. "NativeBaz.java")
+    test.equal(vendored.root_role, "vendored")
   end)
 
   test.it("rejects grep results beneath a Project Path with grep disabled", function(context)

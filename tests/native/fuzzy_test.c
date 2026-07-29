@@ -431,6 +431,30 @@ static int test_project_file_index_builder(void) {
   return 0;
 }
 
+static int test_project_file_index_disambiguates_display_collisions(void) {
+  FuzzyFileRootSpec roots[] = {
+    { "C:/project", "project", "root", "root", 0, NULL, 0 },
+    { "C:/external", "shared", "external", "external", 0, NULL, 0 },
+  };
+  FuzzyFileIndexBuilder *builder = fuzzy_file_index_builder_create(roots, 2);
+  CHECK(builder != NULL);
+  static const char root_file[] = "shared/file.c\0";
+  static const char external_file[] = "file.c\0";
+  CHECK(fuzzy_file_index_builder_feed(builder, 0, root_file, sizeof(root_file) - 1));
+  CHECK(fuzzy_file_index_builder_feed(builder, 1, external_file, sizeof(external_file) - 1));
+  FuzzyFileIndex *index = fuzzy_file_index_builder_finish(builder, NULL);
+  CHECK(index != NULL);
+  CHECK(fuzzy_file_index_count(index) == 2);
+  FuzzyFileEntryView first = { 0 }, second = { 0 };
+  CHECK(fuzzy_file_index_entry_at(index, 0, &first));
+  CHECK(fuzzy_file_index_entry_at(index, 1, &second));
+  CHECK(strcmp(first.display_path, second.display_path) != 0);
+  CHECK(strstr(first.display_path, "shared") != NULL);
+  CHECK(strstr(second.display_path, "shared") != NULL);
+  fuzzy_file_index_free(index);
+  return 0;
+}
+
 int main(void) {
   int rc = 0;
   rc |= test_generic_basic();
@@ -449,5 +473,6 @@ int main(void) {
   rc |= test_limit_zero();
   rc |= test_empty_query_deterministic();
   rc |= test_project_file_index_builder();
+  rc |= test_project_file_index_disambiguates_display_collisions();
   return rc;
 }

@@ -67,6 +67,8 @@ test.describe("Fuzzy Searcher file refresh", function()
     local picker = assert(core.fuzzy_searcher_active_view)
     test.ok(wait_until(function() return picker_has_path(picker, existing) end),
       "expected the initial project file index to become ready")
+    test.equal(helpers.file_index_status().native, true,
+      "expected filesystem candidates to remain owned by the native file index")
 
     picker.input:set_text("created-externally")
     write_file(created)
@@ -150,5 +152,35 @@ test.describe("Fuzzy Searcher file refresh", function()
     test.equal(helpers.file_index_status().indexing, true)
     test.ok(picker_has_path(picker, existing),
       "expected the previous completed snapshot to remain searchable during refresh")
+  end)
+
+  test.it("applies configured file and directory ignores before native ingestion", function(context)
+    local marker = context.root .. PATHSEP .. "native-ignore-scan-ready.md"
+    local ignored_executable = context.root .. PATHSEP .. "native-ignore-executable.exe"
+    local ignored_module_dir = context.root .. PATHSEP .. "node_modules"
+    local ignored_module = ignored_module_dir .. PATHSEP .. "native-ignore-module.md"
+    local ignored_trash_dir = context.root .. PATHSEP .. ".Trash-old"
+    local ignored_trash = ignored_trash_dir .. PATHSEP .. "native-ignore-trash.md"
+    test.ok(common.mkdirp(ignored_module_dir))
+    test.ok(common.mkdirp(ignored_trash_dir))
+    write_file(marker)
+    write_file(ignored_executable)
+    write_file(ignored_module)
+    write_file(ignored_trash)
+
+    fuzzy_searcher.open("native-ignore-scan-ready")
+    local picker = assert(core.fuzzy_searcher_active_view)
+    test.ok(wait_until(function() return picker_has_path(picker, marker) end),
+      "expected the native scanner to finish before checking ignored paths")
+
+    for query, path in pairs({
+      ["native-ignore-executable"] = ignored_executable,
+      ["native-ignore-module"] = ignored_module,
+      ["native-ignore-trash"] = ignored_trash,
+    }) do
+      picker.input:set_text(query)
+      coroutine.yield(0.1)
+      test.ok(not picker_has_path(picker, path), "expected ignored path to stay out of the native index: " .. path)
+    end
   end)
 end)

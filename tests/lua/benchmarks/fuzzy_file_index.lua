@@ -4,7 +4,6 @@ local Project = require "core.project"
 local project_paths = require "core.project_paths"
 local test = require "core.test"
 local fuzzy_native = require "fuzzy"
-
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
 local helpers = fuzzy_searcher._test
 
@@ -28,7 +27,7 @@ local function build_scanner_payload(file_count)
   return table.concat(paths, "\0") .. "\0"
 end
 
-local function run_case(root, file_count, chunk_bytes)
+local function run_case(file_count, chunk_bytes)
   collectgarbage("collect")
   local lua_before_kib = collectgarbage("count")
   local total_started = system.get_time()
@@ -37,35 +36,29 @@ local function run_case(root, file_count, chunk_bytes)
   local payload = build_scanner_payload(file_count)
   local discovery_ms = elapsed_ms(discovery_started)
 
-  local accumulator = helpers.new_file_index_accumulator(core.get_ignore_file_rules())
+  local builder = fuzzy_native.file_index_builder {
+    {
+      path = USERDIR .. PATHSEP .. "fuzzy-file-index-benchmark",
+      label = "fuzzy-file-index-benchmark",
+      role = "root",
+      id = "root",
+      rank_penalty = 0,
+    },
+  }
   local ingestion_started = system.get_time()
-  local pending = ""
-  local first_candidate_ingested_ms
+  local first_chunk_ingested_ms
   for offset = 1, #payload, chunk_bytes do
-    pending = helpers.ingest_file_index_chunk(
-      accumulator,
-      { path = root },
-      pending,
-      payload:sub(offset, offset + chunk_bytes - 1)
-    )
-    if not first_candidate_ingested_ms and accumulator.accepted > 0 then
-      first_candidate_ingested_ms = elapsed_ms(total_started)
-    end
+    builder:feed(1, payload:sub(offset, offset + chunk_bytes - 1))
+    if not first_chunk_ingested_ms then first_chunk_ingested_ms = elapsed_ms(total_started) end
   end
-  if pending ~= "" then helpers.ingest_file_index_candidate(accumulator, { path = root }, pending) end
-  local ingestion_ms = elapsed_ms(ingestion_started)
+  local native_ingestion_ms = elapsed_ms(ingestion_started)
 
-  test.equal(accumulator.candidates, file_count)
-  test.equal(accumulator.accepted, file_count)
-  test.equal(#accumulator.files, file_count)
-
-  local sort_started = system.get_time()
-  table.sort(accumulator.files)
-  local sort_ms = elapsed_ms(sort_started)
-
-  local native_started = system.get_time()
-  local index = fuzzy_native.index(accumulator.files, { mode = "path" })
-  local native_index_ms = elapsed_ms(native_started)
+  local finalize_started = system.get_time()
+  local index, stats = builder:finish()
+  local native_finalize_ms = elapsed_ms(finalize_started)
+  test.equal(stats.candidates, file_count)
+  test.equal(stats.accepted, file_count)
+  test.equal(#index, file_count)
 
   local query_started = system.get_time()
   local query = string.format("file_%06d", file_count)
@@ -77,25 +70,26 @@ local function run_case(root, file_count, chunk_bytes)
 
   local report = {
     benchmark = "fuzzy-file-index",
+    implementation = "native-project-file-index",
     recorded_at = os.date("!%Y-%m-%dT%H:%M:%SZ"),
     files = file_count,
     scanner_payload_bytes = #payload,
     scanner_chunk_bytes = chunk_bytes,
     stages_ms = {
       synthetic_discovery = discovery_ms,
-      lua_ingestion = ingestion_ms,
-      sort = sort_ms,
-      native_fuzzy_index = native_index_ms,
+      native_ingestion = native_ingestion_ms,
+      native_finalize_and_fuzzy_index = native_finalize_ms,
       first_query = first_query_ms,
     },
-    first_candidate_ingested_ms = first_candidate_ingested_ms,
+    first_chunk_ingested_ms = first_chunk_ingested_ms,
     time_to_first_results_ms = time_to_first_results_ms,
     lua_memory_kib = {
       before = lua_before_kib,
       after = collectgarbage("count"),
     },
-    candidates = accumulator.candidates,
-    accepted = accumulator.accepted,
+    candidates = stats.candidates,
+    accepted = stats.accepted,
+    duplicates = stats.duplicates,
     query_results = #results,
   }
   print("fuzzy-file-index-benchmark " .. common.serialize(report))
@@ -103,28 +97,8 @@ local function run_case(root, file_count, chunk_bytes)
 end
 
 test.describe("Fuzzy Searcher file-index benchmark", function()
-  test.before_each(function(context)
-    context.original_projects = core.projects
-    context.original_cwd = system.getcwd()
-    context.root = USERDIR .. PATHSEP .. "fuzzy-file-index-benchmark"
-    common.rm(context.root, true)
-    local ok, err = common.mkdirp(context.root)
-    test.ok(ok, err)
-    core.projects = { Project(context.root) }
-    system.chdir(context.root)
-    project_paths.configure_project {}
-  end)
-
-  test.after_each(function(context)
-    project_paths.configure_project {}
-    core.projects = context.original_projects
-    if context.original_cwd then pcall(system.chdir, context.original_cwd) end
-    if context.root then common.rm(context.root, true) end
-  end)
-
-  test.test("records discovery, ingestion, native-index, and first-result baselines for 100k paths", function(context)
+  test.test("records native ingestion, finalization, and first-result baselines for 100k paths", function()
     local report = run_case(
-      context.root,
       env_count("ANVIL_FUZZY_FILE_BENCH_FILES", 100000),
       env_count("ANVIL_FUZZY_FILE_BENCH_CHUNK_BYTES", 16384)
     )
@@ -135,5 +109,44 @@ test.describe("Fuzzy Searcher file-index benchmark", function()
       fp:write("return ", common.serialize(report), "\n")
       fp:close()
     end
+  end)
+
+  test.test("records an optional real-Project scanner-to-search baseline", function()
+    local root = os.getenv("ANVIL_FUZZY_FILE_BENCH_REAL_ROOT")
+    if not root or root == "" then return end
+    local info = system.get_file_info(root)
+    test.ok(info and info.type == "dir", "real benchmark root is unavailable: " .. tostring(root))
+
+    local original_projects = core.projects
+    local original_cwd = system.getcwd()
+    helpers.cancel_file_index_for_test()
+    core.projects = { Project(root) }
+    system.chdir(root)
+    project_paths.configure_project {}
+
+    local started = system.get_time()
+    fuzzy_searcher.open(os.getenv("ANVIL_FUZZY_FILE_BENCH_QUERY") or "vehicle")
+    local deadline = started + env_count("ANVIL_FUZZY_FILE_BENCH_TIMEOUT", 30)
+    local status = helpers.file_index_status()
+    while (status.indexing or not status.native) and system.get_time() < deadline do
+      coroutine.yield(0.01)
+      status = helpers.file_index_status()
+    end
+    local elapsed = elapsed_ms(started)
+    test.equal(status.native, true, "real Project native file index did not become ready")
+    test.ok(status.count > 0, "real Project native file index was empty")
+    print("fuzzy-file-index-real-benchmark " .. common.serialize({
+      benchmark = "fuzzy-file-index-real-project",
+      root = root,
+      files = status.count,
+      scanner_to_searchable_ms = elapsed,
+      diagnostics = status.diagnostics,
+    }))
+
+    if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
+    helpers.cancel_file_index_for_test()
+    project_paths.configure_project {}
+    core.projects = original_projects
+    if original_cwd then system.chdir(original_cwd) end
   end)
 end)

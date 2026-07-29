@@ -283,6 +283,10 @@ fuzzy_searcher.files_scope_generation = 0
 fuzzy_searcher.files_metadata = {}
 fuzzy_searcher.files_fuzzy_index = nil
 fuzzy_searcher.files_fuzzy_index_generation = -1
+fuzzy_searcher.files_fuzzy_index_kind = nil
+fuzzy_searcher.files_materialized_cache = nil
+fuzzy_searcher.files_materialized_generation = -1
+fuzzy_searcher.files_last_scan_diagnostics = nil
 fuzzy_searcher.files_cache_test_override = false
 local command_cache
 local recent_commands = {}
@@ -339,6 +343,9 @@ end
 local function fullpath(path)
   if type(path) == "table" then
     if path.abs_path then return common.normalize_path(path.abs_path) end
+    if path.root_path and path.relative_path then
+      return common.normalize_path(path.root_path .. PATHSEP .. path.relative_path)
+    end
     return fullpath(path.path or path.file or path.text or "")
   end
   path = tostring(path or "")
@@ -527,21 +534,9 @@ local function clear_native_file_index()
   end
   fuzzy_searcher.files_fuzzy_index = nil
   fuzzy_searcher.files_fuzzy_index_generation = -1
-end
-
-local function rebuild_native_file_index()
-  if not fuzzy_searcher.files_cache then return nil end
-  if fuzzy_searcher.files_fuzzy_index and fuzzy_searcher.files_fuzzy_index_generation == fuzzy_searcher.files_generation then return fuzzy_searcher.files_fuzzy_index end
-  clear_native_file_index()
-  local ok, idx = pcall(function()
-    return fuzzy_native.index(fuzzy_searcher.files_cache, { mode = "path" })
-  end)
-  if ok then
-    fuzzy_searcher.files_fuzzy_index = idx
-    fuzzy_searcher.files_fuzzy_index_generation = fuzzy_searcher.files_generation
-    return idx
-  end
-  return nil
+  fuzzy_searcher.files_fuzzy_index_kind = nil
+  fuzzy_searcher.files_materialized_cache = nil
+  fuzzy_searcher.files_materialized_generation = -1
 end
 
 local function native_file_index_ready()
@@ -580,38 +575,57 @@ local function cancel_file_index_scan()
   fuzzy_searcher.files_refresh_requested = false
 end
 
-local function ignored_file_result(path, ignore_rules)
-  if common.match_ignore_rule(path, { type = "file" }, ignore_rules) then return true end
-  local dir = common.dirname(path)
-  while dir and dir ~= "" and dir ~= "." do
-    if common.match_ignore_rule(dir, { type = "dir" }, ignore_rules) then return true end
-    local parent = common.dirname(dir)
-    if parent == dir then break end
-    dir = parent
+local function lua_ignore_pattern_to_glob(pattern)
+  local out, i = {}, 1
+  while i <= #pattern do
+    local c = pattern:sub(i, i)
+    local next_c = pattern:sub(i + 1, i + 1)
+    if c == "%" then
+      if next_c == "" then return nil end
+      out[#out + 1] = next_c
+      i = i + 2
+    elseif c == "." and next_c == "*" then
+      out[#out + 1] = "*"
+      i = i + 2
+    elseif c:find("[%^%$%(%)%[%]%+%-%?%*%.]") then
+      return nil
+    else
+      out[#out + 1] = c
+      i = i + 1
+    end
   end
-  return false
+  return table.concat(out)
 end
 
-local function literal_ignored_directory_globs(ignore_rules)
+local function ignored_rule_globs(ignore_rules)
   local globs = {}
   for _, rule in ipairs(ignore_rules) do
-    if rule.match_dir and not rule.use_path then
-      local encoded = rule.pattern:match("^%^(.+)/%$?$")
-      if encoded then
-        local remainder = encoded:gsub("%%.", "")
-        if not remainder:find("[%(%)%[%]%*%+%?%^%$]") then
-          local literal = encoded:gsub("%%(.)", "%1")
-          globs[#globs + 1] = "!**/" .. literal .. "/**"
-        end
+    local body, glob
+    if rule.match_dir then
+      body = rule.pattern:match("^%^(.+)/%$?$")
+      glob = body and lua_ignore_pattern_to_glob(body)
+      if glob then globs[#globs + 1] = "!**/" .. glob .. "/**" end
+    else
+      local anchored_start = rule.pattern:sub(1, 1) == "^"
+      local anchored_end = rule.pattern:sub(-1) == "$"
+      body = rule.pattern
+      if anchored_start then body = body:sub(2) end
+      if anchored_end then body = body:sub(1, -2) end
+      glob = anchored_end and lua_ignore_pattern_to_glob(body) or nil
+      if glob then
+        globs[#globs + 1] = anchored_start and ("!**/" .. glob) or ("!**/*" .. glob)
       end
+    end
+    if not glob then
+      core.log_quiet("Fuzzy native file index: unsupported ignore pattern remains scanner-unfiltered: %s", tostring(rule.pattern))
     end
   end
   return globs
 end
 
 local function file_scan_exclude_globs(root, ignore_rules)
-  local globs = { "!.git" }
-  for _, glob in ipairs(literal_ignored_directory_globs(ignore_rules)) do
+  local globs = { "!**/.git/**" }
+  for _, glob in ipairs(ignored_rule_globs(ignore_rules)) do
     globs[#globs + 1] = glob
   end
   for _, entry in ipairs(project_paths.entries()) do
@@ -625,57 +639,44 @@ local function file_scan_exclude_globs(root, ignore_rules)
   return globs
 end
 
--- Keep scanner output parsing and candidate adoption in one seam. Besides
--- making the filesystem process loop easier to account for, this lets the
--- large-Project benchmark feed an rg-compatible NUL-delimited stream through
--- the exact same path without creating a hundred thousand fixture files.
-local function new_file_index_accumulator(ignore_rules)
-  return {
-    files = {},
-    seen = {},
-    metadata = {},
-    ignore_rules = ignore_rules or core.get_ignore_file_rules(),
-    candidates = 0,
-    accepted = 0,
-  }
-end
-
-local function ingest_file_index_candidate(accumulator, root, line)
-  accumulator.candidates = accumulator.candidates + 1
-  line = line:gsub("\r$", ""):gsub("^%.[/\\]", ""):gsub("[/\\]", PATHSEP)
-  if line == "" then return false end
-  local abs = common.is_absolute_path(line)
-    and common.normalize_path(line)
-    or common.normalize_path(root.path .. PATHSEP .. line)
-  local relative = abs and common.relative_path(root.path, abs) or line
-  local key = abs and common.path_compare_key(abs)
-  if key and not accumulator.seen[key]
-    and not ignored_file_result(relative, accumulator.ignore_rules)
-    and not project_paths.is_excluded(abs, "files")
-  then
-    local item = fuzzy_searcher.file_display_item(abs, accumulator.metadata)
-    if item then
-      accumulator.seen[key] = true
-      accumulator.files[#accumulator.files + 1] = item
-      accumulator.accepted = accumulator.accepted + 1
-      return true
+local function native_file_index_root_specs(roots)
+  local entries = project_paths.entries()
+  local specs = {}
+  for _, root in ipairs(roots or {}) do
+    local spec = {
+      path = root.path,
+      label = root.label or common.basename(root.path),
+      role = root.role or "root",
+      id = tostring(root.id or root.path),
+      rank_penalty = math.floor(tonumber(root.rank_penalty) or 0),
+      mappings = {},
+    }
+    for _, entry in ipairs(entries) do
+      if entry.role ~= "excluded" and entry.searchable ~= false
+        and not common.path_equals(entry.path, root.path)
+        and common.path_belongs_to(entry.path, root.path)
+      then
+        spec.mappings[#spec.mappings + 1] = {
+          relative_prefix = common.relative_path(root.path, entry.path),
+          label = entry.label or common.basename(entry.path),
+          role = entry.role or "external",
+          id = tostring(entry.id or entry.path),
+          rank_penalty = math.floor(tonumber(entry.rank_penalty) or 0),
+        }
+      end
     end
+    specs[#specs + 1] = spec
   end
-  return false
+  return specs
 end
 
-local function ingest_file_index_chunk(accumulator, root, pending, chunk, on_candidate)
-  pending = (pending or "") .. (chunk or "")
-  local from, parsed = 1, 0
-  while true do
-    local separator = pending:find("\0", from, true)
-    if not separator then break end
-    ingest_file_index_candidate(accumulator, root, pending:sub(from, separator - 1))
-    parsed = parsed + 1
-    if on_candidate then on_candidate(parsed) end
-    from = separator + 1
-  end
-  return pending:sub(from), parsed
+local function native_project_file_index_ready()
+  return native_file_index_ready() and fuzzy_searcher.files_fuzzy_index_kind == "project"
+end
+
+local function file_index_count()
+  if native_file_index_ready() then return #fuzzy_searcher.files_fuzzy_index end
+  return #(fuzzy_searcher.files_cache or {})
 end
 
 local function file_scan_command(root, ignore_rules)
@@ -697,6 +698,15 @@ end
 local function start_file_index(roots, signature, reason)
   if fuzzy_searcher.files_indexing then return false end
 
+  local builder_ok, native_builder = pcall(
+    fuzzy_native.file_index_builder,
+    native_file_index_root_specs(roots)
+  )
+  if not builder_ok or not native_builder then
+    core.log_quiet("Fuzzy native file index builder could not start: %s", tostring(native_builder))
+    return false
+  end
+
   fuzzy_searcher.files_indexing = true
   fuzzy_searcher.files_refresh_requested = false
   fuzzy_searcher.files_scan_generation = fuzzy_searcher.files_scan_generation + 1
@@ -706,13 +716,15 @@ local function start_file_index(roots, signature, reason)
   core.log_quiet("Fuzzy file index scan started (%s)", tostring(reason or "picker-open"))
   core.add_thread(function()
     coroutine.yield(0.05)
-    local accumulator = new_file_index_accumulator(ignore_rules)
     local scan_failed = false
+    local scan_started = system.get_time()
+    local native_feed_seconds = 0
 
-    for _, root in ipairs(roots) do
+    for root_index, root in ipairs(roots) do
       if scan_generation ~= fuzzy_searcher.files_scan_generation
         or fuzzy_searcher.files_cache_root ~= signature
       then
+        pcall(native_builder.free, native_builder)
         return
       end
 
@@ -735,9 +747,7 @@ local function start_file_index(roots, signature, reason)
       fuzzy_searcher.files_scan_proc = proc
       core.__fuzzy_file_scan_proc = proc
 
-      local pending = ""
-      local count = 0
-      local deadline = system.get_time() + 30
+      local progress_deadline = system.get_time() + 30
       local read_failed, timed_out = false, false
       while true do
         if scan_generation ~= fuzzy_searcher.files_scan_generation
@@ -747,25 +757,30 @@ local function start_file_index(roots, signature, reason)
           proc:wait(process.WAIT_DEADLINE)
           if fuzzy_searcher.files_scan_proc == proc then fuzzy_searcher.files_scan_proc = nil end
           if core.__fuzzy_file_scan_proc == proc then core.__fuzzy_file_scan_proc = nil end
+          pcall(native_builder.free, native_builder)
           return
         end
-        if system.get_time() >= deadline then
+        if system.get_time() >= progress_deadline then
           timed_out = true
           if proc:running() then pcall(function() proc:kill() end) end
           break
         end
 
         local ok, chunk_or_error = pcall(
-          proc.stdout.read, proc.stdout, 16384, { scan = 0.01, timeout = 0.1 }
+          proc.stdout.read, proc.stdout, 256 * 1024, { scan = 0.001, timeout = 0.1 }
         )
         if ok and chunk_or_error then
-          pending = ingest_file_index_chunk(
-            accumulator, root, pending, chunk_or_error,
-            function()
-              count = count + 1
-              if count % 500 == 0 then coroutine.yield(0) end
-            end
-          )
+          progress_deadline = system.get_time() + 30
+          local feed_started = system.get_time()
+          local fed, feed_error = pcall(native_builder.feed, native_builder, root_index, chunk_or_error)
+          native_feed_seconds = native_feed_seconds + (system.get_time() - feed_started)
+          if not fed then
+            read_failed = true
+            core.log_quiet("Fuzzy native file index ingestion failed for %s: %s",
+              tostring(root.path), tostring(feed_error))
+            if proc:running() then pcall(function() proc:kill() end) end
+            break
+          end
         elseif not ok and not tostring(chunk_or_error):find("timeout expired", 1, true) then
           read_failed = true
           core.log_quiet(
@@ -782,7 +797,6 @@ local function start_file_index(roots, signature, reason)
       local execute_code = proc:wait(process.WAIT_DEADLINE)
       if fuzzy_searcher.files_scan_proc == proc then fuzzy_searcher.files_scan_proc = nil end
       if core.__fuzzy_file_scan_proc == proc then core.__fuzzy_file_scan_proc = nil end
-      if pending ~= "" then ingest_file_index_candidate(accumulator, root, pending) end
 
       -- ripgrep uses exit code 1 for an empty, otherwise successful result set.
       if timed_out or read_failed or (execute_code ~= 0 and execute_code ~= 1) then
@@ -798,6 +812,7 @@ local function start_file_index(roots, signature, reason)
     if scan_generation ~= fuzzy_searcher.files_scan_generation
       or fuzzy_searcher.files_cache_root ~= signature
     then
+      pcall(native_builder.free, native_builder)
       return
     end
 
@@ -805,16 +820,49 @@ local function start_file_index(roots, signature, reason)
     fuzzy_searcher.files_indexing = false
     fuzzy_searcher.files_refresh_requested = false
     if scan_failed then
+      pcall(native_builder.free, native_builder)
       core.log_quiet("Fuzzy file index retained its previous snapshot after scanning failed")
     else
-      local files = accumulator.files
-      table.sort(files)
-      fuzzy_searcher.files_cache = files
-      fuzzy_searcher.files_metadata = accumulator.metadata
-      fuzzy_searcher.files_generation = fuzzy_searcher.files_generation + 1
-      fuzzy_searcher.files_scope_generation = fuzzy_searcher.files_scope_generation + 1
-      rebuild_native_file_index()
-      core.log_quiet("Fuzzy file index scan finished with %d files", #files)
+      local finish_started = system.get_time()
+      local finished, native_index, native_stats = pcall(native_builder.finish, native_builder)
+      local finish_seconds = system.get_time() - finish_started
+      if not finished or not native_index then
+        scan_failed = true
+        core.log_quiet("Fuzzy native file index finalization failed: %s", tostring(native_index))
+      else
+        local previous_index = fuzzy_searcher.files_fuzzy_index
+        fuzzy_searcher.files_generation = fuzzy_searcher.files_generation + 1
+        fuzzy_searcher.files_cache = nil
+        fuzzy_searcher.files_metadata = {}
+        fuzzy_searcher.files_materialized_cache = nil
+        fuzzy_searcher.files_materialized_generation = -1
+        fuzzy_searcher.files_fuzzy_index = native_index
+        fuzzy_searcher.files_fuzzy_index_generation = fuzzy_searcher.files_generation
+        fuzzy_searcher.files_fuzzy_index_kind = "project"
+        fuzzy_searcher.files_scope_generation = fuzzy_searcher.files_scope_generation + 1
+        fuzzy_searcher.files_last_scan_diagnostics = {
+          files = #native_index,
+          candidates = tonumber(native_stats and native_stats.candidates) or #native_index,
+          duplicates = tonumber(native_stats and native_stats.duplicates) or 0,
+          input_bytes = tonumber(native_stats and native_stats.input_bytes) or 0,
+          total_ms = (system.get_time() - scan_started) * 1000,
+          native_feed_ms = native_feed_seconds * 1000,
+          native_finish_ms = finish_seconds * 1000,
+        }
+        if previous_index and previous_index ~= native_index and previous_index.free then
+          pcall(previous_index.free, previous_index)
+        end
+        core.log_quiet(
+          "Fuzzy native file index scan finished files=%d candidates=%d duplicates=%d bytes=%d scan_ms=%.3f feed_ms=%.3f finish_ms=%.3f",
+          #native_index,
+          tonumber(native_stats and native_stats.candidates) or #native_index,
+          tonumber(native_stats and native_stats.duplicates) or 0,
+          tonumber(native_stats and native_stats.input_bytes) or 0,
+          (system.get_time() - scan_started) * 1000,
+          native_feed_seconds * 1000,
+          finish_seconds * 1000
+        )
+      end
     end
     if active_view then active_view.dirty = true; active_view:schedule_update(true) end
     if refresh_requested then fuzzy_searcher.refresh_file_index_for_picker_open() end
@@ -838,7 +886,7 @@ local function ensure_file_index()
   local signature = fuzzy_searcher.file_roots_signature(roots)
   if fuzzy_searcher.files_cache_test_override and fuzzy_searcher.files_cache_root == signature then return end
   prepare_file_index_roots(roots, signature)
-  if fuzzy_searcher.files_cache or fuzzy_searcher.files_indexing then return end
+  if native_file_index_ready() or fuzzy_searcher.files_cache or fuzzy_searcher.files_indexing then return end
   start_file_index(roots, signature, "initial-picker-open")
 end
 
@@ -856,7 +904,33 @@ end
 
 local function get_files()
   ensure_file_index()
+  if native_project_file_index_ready() then
+    if fuzzy_searcher.files_materialized_generation ~= fuzzy_searcher.files_generation then
+      local files = {}
+      for i = 1, #fuzzy_searcher.files_fuzzy_index do
+        local item = fuzzy_searcher.files_fuzzy_index:entry(i)
+        if item then
+          item.abs_path = common.normalize_path(item.root_path .. PATHSEP .. item.relative_path)
+          fuzzy_searcher.files_metadata[item.text] = item
+          files[#files + 1] = item.text
+        end
+      end
+      fuzzy_searcher.files_materialized_cache = files
+      fuzzy_searcher.files_materialized_generation = fuzzy_searcher.files_generation
+      core.log_quiet("Fuzzy native file index materialized %d Lua paths for fallback processing", #files)
+    end
+    return fuzzy_searcher.files_materialized_cache or {}
+  end
   return fuzzy_searcher.files_cache or {}
+end
+
+local function adopt_native_file_match(item)
+  if type(item) ~= "table" or not item.text then return item end
+  if not item.root_path or not item.relative_path then return item.text end
+  item.abs_path = item.abs_path
+    or common.normalize_path(item.root_path .. PATHSEP .. item.relative_path)
+  fuzzy_searcher.files_metadata[item.text] = item
+  return item.text
 end
 
 function fuzzy_searcher.get_recent_file_entries(skip_path)
@@ -1218,6 +1292,9 @@ local function build_sectioned_file_results(recent_matches, general_matches, lim
 end
 
 function fuzzy_searcher.file_rank_penalty(item)
+  if type(item) == "table" and item.rank_penalty ~= nil then
+    return tonumber(item.rank_penalty) or 0
+  end
   local text = type(item) == "table" and item.text or item
   local meta = text and fuzzy_searcher.files_metadata[text]
   return tonumber(meta and meta.rank_penalty) or 0
@@ -2433,6 +2510,8 @@ local function build_scope(base, line, max_count)
     limit = limit,
   }
   local function add_match(item, score)
+    local text = type(item) == "table" and item.text or item
+    if type(item) == "table" then adopt_native_file_match(item) end
     local abs = fullpath(item)
     local key = abs and common.path_compare_key(abs)
     if not key then return end
@@ -2441,8 +2520,8 @@ local function build_scope(base, line, max_count)
     list[#list+1] = abs
     meta.by_path[key] = {
       score = (tonumber(score) or 0) - rank_penalty,
-      match_class = fuzzy_searcher.grep_order.path_match_class(base, item),
-      text = item,
+      match_class = fuzzy_searcher.grep_order.path_match_class(base, text),
+      text = text,
     }
   end
   if not line and native_file_index_ready() then
@@ -2450,7 +2529,7 @@ local function build_scope(base, line, max_count)
       return fuzzy_searcher.files_fuzzy_index:search(base, { limit = limit, spans = false })
     end)
     if ok and matches then
-      for _, match in ipairs(matches) do add_match(match.text, match.score) end
+      for _, match in ipairs(matches) do add_match(match, match.score) end
       meta.has_more = matches.has_more == true
       meta.count = #list
       if meta.has_more then
@@ -3401,8 +3480,8 @@ function FSView:start_file_search(query, line, reset_selection)
   local skip_path = self.source_file_path
 
   local loading_status = fuzzy_searcher.files_indexing
-    and string.format("Indexing files… %d found — %s", #(fuzzy_searcher.files_cache or {}), roots_label)
-    or string.format("Searching %d files…", #(fuzzy_searcher.files_cache or {}))
+    and string.format("Indexing files… %d available — %s", file_index_count(), roots_label)
+    or string.format("Searching %d files…", file_index_count())
   self:defer_loading_feedback(loading_status, {
     clear_results = not self.loading_more,
     reset_selection = reset_selection,
@@ -3436,10 +3515,11 @@ function FSView:start_file_search(query, line, reset_selection)
       if ok and native_results and gen == file_search_generation and active_view == self then
         local general_matches = {}
         for _, match in ipairs(native_results) do
-          local key = file_result_key(match.text)
+          local item = adopt_native_file_match(match)
+          local key = file_result_key(match)
           if key and not skip_keys[key] then
             general_matches[#general_matches+1] = {
-              item = match.text, text = match.text, score = fuzzy_searcher.adjusted_file_score(match.score or 0, match.text),
+              item = match, text = item, score = fuzzy_searcher.adjusted_file_score(match.score or 0, match),
               spans = match.spans or {}
             }
             if #general_matches >= keep_limit then break end
@@ -3449,7 +3529,7 @@ function FSView:start_file_search(query, line, reset_selection)
         local out, hidden = build_sectioned_file_results(recent_matches, general_matches, self:result_limit(), query, line)
         local has_more = hidden or native_results.has_more
         local status = string.format("%d recent + %d file matches shown%s — %d files indexed — %s",
-          #recent_matches, #general_matches, has_more and "+" or "", #(fuzzy_searcher.files_cache or {}), roots_label)
+          #recent_matches, #general_matches, has_more and "+" or "", file_index_count(), roots_label)
         if self.loading_feedback_pending and #out == 0 and not has_more then
           self.loading_feedback_status = status
           return
@@ -3477,7 +3557,7 @@ function FSView:start_file_search(query, line, reset_selection)
       if final then
         local total_matches = #recent_matches + matched_general
         status = fuzzy_searcher.files_indexing
-          and string.format("%d file matches — still indexing %d files — %s", total_matches, #(fuzzy_searcher.files_cache or {}), roots_label)
+          and string.format("%d file matches — refreshing with %d files available — %s", total_matches, file_index_count(), roots_label)
           or string.format("%d file matches — %d files indexed — %s", total_matches, #items, roots_label)
       else
         status = string.format("%d file matches — scanning %d/%d…", #recent_matches + matched_general, scanned, #items)
@@ -3830,9 +3910,9 @@ function FSView:refresh_normal(base, line, reset_selection, force_refresh)
     local extra = self.everything_status and self.everything_status ~= "" and (" — " .. self.everything_status) or ""
     self.status = string.format("%d recent projects%s", #get_recent_projects(), extra)
   elseif fuzzy_searcher.files_indexing then
-    self.status = string.format("Indexing files… %d found — %s", #(fuzzy_searcher.files_cache or {}), fuzzy_searcher.project_roots_label())
+    self.status = string.format("Indexing files… %d available — %s", file_index_count(), fuzzy_searcher.project_roots_label())
   else
-    self.status = string.format("%d files indexed — %s", #(fuzzy_searcher.files_cache or {}), fuzzy_searcher.project_roots_label())
+    self.status = string.format("%d files indexed — %s", file_index_count(), fuzzy_searcher.project_roots_label())
   end
 
   self.results = out
@@ -5446,14 +5526,14 @@ return {
     file_display_item = fuzzy_searcher.file_display_item,
     fullpath = fullpath,
     file_result_key = file_result_key,
-    new_file_index_accumulator = new_file_index_accumulator,
-    ingest_file_index_chunk = ingest_file_index_chunk,
-    ingest_file_index_candidate = ingest_file_index_candidate,
     file_scan_command = file_scan_command,
     file_index_status = function()
       return {
         indexing = fuzzy_searcher.files_indexing,
         files = fuzzy_searcher.files_cache,
+        count = file_index_count(),
+        native = native_project_file_index_ready(),
+        diagnostics = fuzzy_searcher.files_last_scan_diagnostics,
         generation = fuzzy_searcher.files_generation,
       }
     end,
