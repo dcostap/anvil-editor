@@ -212,6 +212,10 @@ _Avoid_: old file tree
 A hierarchical presentation of a scoped set of file and directory paths, such as files changed by a Git revision. Unlike the File Tree, a Path Tree is not the permanent Project-browsing tool.
 _Avoid_: file list, mini File Tree
 
+**Compacted Directory Chain**:
+A Path Tree row that presents consecutive single-child directories as one slash-separated directory path. Its visible children are one hierarchy level below the compacted row regardless of how many directory names it contains.
+_Avoid_: merged folder
+
 **Project Paths View**:
 A Project tool for reviewing and changing Project Path Roles, labels, locations, and storage scope.
 _Avoid_: external folder manager, path rules dialog

@@ -19,14 +19,16 @@ test.describe("Path Tree", function()
 
     test.same(tree:lines(), {
       "src/main/java/",
-      "\t\t\tApp.java",
+      "\tApp.java",
       "README.md",
     })
 
     local compact = tree:row(1)
     test.equal(compact.type, "dir")
+    test.equal(compact.depth, 0)
     test.equal(compact.path, "src/main/java")
     test.same(compact.compact_paths, { "src", "src/main", "src/main/java" })
+    test.equal(tree:row(2).depth, 1)
     test.equal(tree:line_for_path("src", "dir"), 1)
     test.equal(tree:line_for_path("src/main", "dir"), 1)
     test.equal(tree:line_for_path("src/main/java", "dir"), 1)

@@ -167,7 +167,8 @@ local function aggregate_node(node)
   end
 end
 
-function Tree:flatten(node)
+function Tree:flatten(node, visual_depth)
+  visual_depth = visual_depth or 0
   for _, child in ipairs(node.children) do
     local row_node = child
     local compact_nodes = { child }
@@ -193,7 +194,7 @@ function Tree:flatten(node)
       name = row_node.name,
       display_name = table.concat(display_names, "/"),
       path = row_node.path,
-      depth = child.depth,
+      depth = visual_depth,
       type = row_node.type,
       kind = child.kind,
       stat = clone_stat(child.stat),
@@ -203,7 +204,7 @@ function Tree:flatten(node)
       node = row_node,
       compact_paths = compact_paths,
       expanded = row_node.type ~= "dir" or not self.collapsed[row_node.path],
-      text = string.rep("\t", child.depth) .. table.concat(display_names, "/")
+      text = string.rep("\t", visual_depth) .. table.concat(display_names, "/")
         .. (row_node.type == "dir" and "/" or ""),
     }
     self.rows[line] = row
@@ -213,7 +214,9 @@ function Tree:flatten(node)
       if compact_node.type == "dir" then self.dir_path_to_line[compact_node.path] = line end
     end
     for _, index in ipairs(row_node.record_indices) do self.record_to_line[index] = line end
-    if row_node.type == "dir" and row.expanded then self:flatten(row_node) end
+    if row_node.type == "dir" and row.expanded then
+      self:flatten(row_node, visual_depth + 1)
+    end
   end
 end
 
