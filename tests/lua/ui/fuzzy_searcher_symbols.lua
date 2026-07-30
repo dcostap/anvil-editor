@@ -25,6 +25,12 @@ test.describe("Fuzzy Searcher Project symbols", function()
     if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
   end)
 
+  test.it("does not start the file index for Project Symbol Search", function()
+    test.not_ok(helpers.prompt_uses_file_index("$symbol"))
+    test.not_ok(helpers.prompt_uses_file_index("src/game $symbol"))
+    test.ok(helpers.prompt_uses_file_index("vehicle.cpp"))
+  end)
+
   test.it("does not keep Project symbol search pending while only usage indexing is running", function(context)
     context.original_lsp_enabled = lsp_manager.is_enabled
     context.original_ts_workspace_symbols_async = symbol_index.workspace_symbols_async
@@ -51,6 +57,82 @@ test.describe("Fuzzy Searcher Project symbols", function()
 
     test.ok(wait_until(function() return picker.status == "0 symbols — Tree-sitter" end))
     test.equal(#(picker.results or {}), 0)
+  end)
+
+  test.it("surfaces a terminal Tree-sitter Project index failure instead of polling forever", function(context)
+    context.original_lsp_enabled = lsp_manager.is_enabled
+    context.original_ts_workspace_symbols_async = symbol_index.workspace_symbols_async
+
+    lsp_manager.is_enabled = function() return false end
+    local calls = 0
+    symbol_index.workspace_symbols_async = function(query)
+      calls = calls + 1
+      test.equal(query, "broken")
+      return nil, "invalid-project-input", "unavailable", { roots = {} }
+    end
+
+    fuzzy_searcher.open("$broken")
+    local picker = core.fuzzy_searcher_active_view
+    picker:refresh("$broken")
+
+    test.ok(wait_until(function()
+      return picker.status == "Project symbols unavailable: invalid-project-input"
+    end))
+    test.equal(calls, 1)
+  end)
+
+  test.it("cancels the obsolete native Project Symbol query immediately", function(context)
+    context.original_lsp_enabled = lsp_manager.is_enabled
+    context.original_ts_workspace_symbols_async = symbol_index.workspace_symbols_async
+    lsp_manager.is_enabled = function() return false end
+
+    local requests = {}
+    symbol_index.workspace_symbols_async = function()
+      local request = {
+        done = false,
+        status = "pending",
+        cancel = function(self)
+          self.done = true
+          self.status = "cancelled"
+          self.cancelled = true
+          return true
+        end,
+      }
+      requests[#requests + 1] = request
+      return request, nil, "pending", { roots = {} }
+    end
+
+    fuzzy_searcher.open("$first")
+    local picker = core.fuzzy_searcher_active_view
+    test.ok(wait_until(function()
+      return requests[1] and picker.symbol_search_request == requests[1]
+    end))
+
+    picker:start_symbol_search("second", true, "")
+
+    test.ok(requests[1].cancelled)
+  end)
+
+  test.it("shows Project indexing progress for large Projects", function(context)
+    context.original_lsp_enabled = lsp_manager.is_enabled
+    context.original_ts_workspace_symbols_async = symbol_index.workspace_symbols_async
+
+    lsp_manager.is_enabled = function() return false end
+    symbol_index.workspace_symbols_async = function()
+      local index = { status = "indexing", symbol_status = "indexing", files_scanned = 12345 }
+      return nil, "indexing", "pending", {
+        index = index,
+        roots = { { status = "pending", index = index } },
+      }
+    end
+
+    fuzzy_searcher.open("$progress")
+    local picker = core.fuzzy_searcher_active_view
+    picker:refresh("$progress")
+
+    test.ok(wait_until(function()
+      return picker.status == "Indexing Project symbols… 12345 files scanned"
+    end))
   end)
 
   test.it("highlights symbol text but not incidental path matches in normal symbol mode", function()

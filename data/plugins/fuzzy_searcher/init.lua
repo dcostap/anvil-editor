@@ -1136,6 +1136,10 @@ function fuzzy_searcher.prompt_mode(text)
   return marker
 end
 
+local function prompt_uses_file_index(text)
+  return fuzzy_searcher.prompt_mode(text) == ""
+end
+
 function fuzzy_searcher.prompt_query_start(text)
   local before, marker = fuzzy_searcher.split_prompt_mode_marker(text)
   return marker ~= "" and (#before + #marker + 1) or 1
@@ -2818,7 +2822,7 @@ function FSView:new(prefix, opts)
     self.input.textview.doc.readonly = true
   end
 
-  if not self.static_mode and tostring(prefix or ""):sub(1, 2) ~= "@@" then
+  if not self.static_mode and prompt_uses_file_index(prefix) then
     fuzzy_searcher.refresh_file_index_for_picker_open()
   end
   self:show()
@@ -4649,16 +4653,37 @@ local function lsp_enabled()
   return ok and manager and manager.is_enabled and manager.is_enabled() ~= false
 end
 
-local function project_symbol_pending_status(reason)
+local function project_symbol_pending_status(reason, meta)
   if reason == "aggregate-dirty" or reason == "query-artifact-not-ready" then
     return "Finishing Project symbol index…"
   end
-  if reason == "indexing" then return "Indexing Project symbols…" end
+  if reason == "indexing" then
+    local files_scanned = 0
+    local seen = {}
+    for _, root in ipairs((meta and meta.roots) or {}) do
+      local index = root and root.index
+      if index and not seen[index] then
+        seen[index] = true
+        files_scanned = files_scanned + (tonumber(index.files_scanned) or 0)
+      end
+    end
+    local index = meta and meta.index
+    if index and not seen[index] then
+      files_scanned = files_scanned + (tonumber(index.files_scanned) or 0)
+    end
+    if files_scanned > 0 then
+      return string.format("Indexing Project symbols… %d files scanned", files_scanned)
+    end
+    return "Indexing Project symbols…"
+  end
   return tostring(reason or "Indexing Project symbols…")
 end
 
 function fuzzy_searcher.cancel_symbol_search()
   symbol_generation = symbol_generation + 1
+  local request = active_view and active_view.symbol_search_request
+  if request and request.cancel then request:cancel() end
+  if active_view then active_view.symbol_search_request = nil end
 end
 
 local function project_symbol_roots_indexing(ts_symbols, meta)
@@ -4687,7 +4712,7 @@ local function project_symbol_roots_indexing(ts_symbols, meta)
 end
 
 function FSView:start_symbol_search(query, reset_selection, path_query)
-  symbol_generation = symbol_generation + 1
+  fuzzy_searcher.cancel_symbol_search()
   local gen = symbol_generation
   local limit = self:max_result_limit()
   query = trim_query(query)
@@ -4738,6 +4763,7 @@ function FSView:start_symbol_search(query, reset_selection, path_query)
           results, reason, status, meta = ts_symbols.workspace_symbols(query, { force = false, limit = candidate_limit, allow_stale = false })
         end
         if async_request then
+          self.symbol_search_request = async_request
           self:set_pending_status("Searching Project symbols…")
           while not async_request.done and system.get_time() < deadline do
             if gen ~= symbol_generation or active_view ~= self then
@@ -4749,6 +4775,9 @@ function FSView:start_symbol_search(query, reset_selection, path_query)
           if gen ~= symbol_generation or active_view ~= self then
             async_request:cancel()
             return
+          end
+          if self.symbol_search_request == async_request then
+            self.symbol_search_request = nil
           end
           if async_request.done and async_request.status == "fresh" then
             results = async_request.results
@@ -4773,7 +4802,7 @@ function FSView:start_symbol_search(query, reset_selection, path_query)
         elseif status == "unavailable" then
           break
         end
-        self:set_pending_status(project_symbol_pending_status(reason))
+        self:set_pending_status(project_symbol_pending_status(reason, meta))
         coroutine.yield(0.05)
       end
       source_label = "Tree-sitter"
@@ -4895,6 +4924,11 @@ function FSView:refresh(text)
     local scoped_index_changed = (base ~= "" or line ~= nil) and files_scope_changed
     if query_changed or force_refresh or scoped_index_changed then self:start_grep(base, line, grep) end
   elseif symbol ~= nil then
+    if fuzzy_searcher.files_indexing
+    and fuzzy_searcher.files_scan_reason ~= "project-prewarm" then
+      core.log_quiet("Fuzzy file index scan cancelled after switching to Project Symbol Search")
+      cancel_file_index_scan()
+    end
     kill_file_search()
     kill_grep()
     kill_fuzzy_grep_jobs()
@@ -5554,6 +5588,7 @@ return {
     draw_recent_file_metadata = fuzzy_searcher.draw_recent_file_metadata,
     draw_file_result_row = draw_file_result_row,
     split_mode_prefix = split_mode_prefix,
+    prompt_uses_file_index = prompt_uses_file_index,
     normalize_prompt_history = fuzzy_searcher.normalize_prompt_history,
     clear_prompt_history = function()
       fuzzy_searcher.prompt_history_loaded = true

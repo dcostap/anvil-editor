@@ -12,6 +12,7 @@ extern "C" {
 
 typedef struct AnvilTSProjectBuilder AnvilTSProjectBuilder;
 typedef struct AnvilTSProjectSnapshot AnvilTSProjectSnapshot;
+typedef bool (*AnvilTSProjectQueryCancelFn)(void *payload);
 
 typedef struct AnvilTSProjectSnapshotSummary {
   const char *status;
@@ -95,7 +96,9 @@ bool anvil_ts_project_snapshot_query_symbols(
   uint32_t **indices,
   uint32_t *count,
   uint32_t *total,
-  bool *has_more
+  bool *has_more,
+  AnvilTSProjectQueryCancelFn cancel,
+  void *cancel_payload
 );
 bool anvil_ts_project_snapshot_query_usages(
   const AnvilTSProjectSnapshot *snapshot,

@@ -119,7 +119,7 @@ config.ignore_files = {
   "%.pyc$",         "%.pyo$",       "%.exe$",        "%.dll$",   "%.obj$", "%.o$",
   "%.a$",           "%.lib$",       "%.so$",         "%.dylib$", "%.ncb$", "%.sdf$",
   "%.suo$",         "%.pdb$",       "%.idb$",        "%.class$", "%.psd$", "%.db$",
-  "^desktop%.ini$", "^%.DS_Store$", "^%.directory$",
+  "^desktop%.ini$", "^%.DS_Store$", "^%._.*$", "^%.directory$",
 }
 
 ---Lua pattern used to find symbols when advanced syntax highlighting

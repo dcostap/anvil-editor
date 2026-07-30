@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define PROJECT_RECORD_PAGE_LIMIT 4096u
+
 #define API_TYPE_WORKER_POOL "NativeWorkerPool"
 #define API_TYPE_WORKER_JOB "NativeWorkerJob"
 #define API_TYPE_WORKER_CANCEL_TOKEN "NativeWorkerCancelToken"
@@ -256,6 +258,7 @@ static int pool_submit(lua_State *L) {
   AnvilWorkerProjectBatchFileSpec *project_files = NULL;
   LuaProjectBuilder *transferred_builder = NULL;
   LuaProjectSnapshot *transferred_snapshot = NULL;
+  LuaProjectSnapshot *query_snapshot = NULL;
   lua_getfield(L, 2, "project_builder");
   if (!lua_isnil(L, -1)) {
     transferred_builder = check_project_builder(L, -1);
@@ -264,6 +267,18 @@ static int pool_submit(lua_State *L) {
     spec.transfer_project_builder = true;
   }
   lua_pop(L, 1);
+  lua_getfield(L, 2, "query_snapshot");
+  if (!lua_isnil(L, -1)) {
+    luaL_argcheck(L, spec.kind && strcmp(spec.kind, "project_snapshot_query_symbols") == 0, 2,
+      "query_snapshot is only valid for Project symbol query jobs");
+    query_snapshot = check_project_snapshot(L, -1);
+    spec.project_query_snapshot = query_snapshot->snapshot;
+  }
+  lua_pop(L, 1);
+  spec.project_query_offset = opt_uint32_field(L, 2, "offset", 0);
+  spec.project_query_limit = opt_uint32_field(L, 2, "limit", 200);
+  luaL_argcheck(L, spec.project_query_limit <= PROJECT_RECORD_PAGE_LIMIT, 2,
+    "Project query limit exceeds 4096");
   lua_getfield(L, 2, "release_snapshot");
   if (!lua_isnil(L, -1)) {
     luaL_argcheck(L, spec.kind && strcmp(spec.kind, "project_snapshot_release") == 0, 2,
@@ -328,6 +343,14 @@ static int pool_submit(lua_State *L) {
     &spec.project_remove_path_count);
   spec.project_excluded_paths = read_submit_string_array(L, 2, "excluded_paths", 65536,
     &spec.project_excluded_path_count);
+  spec.project_query_included_paths = read_submit_string_array(L, 2, "included_paths", 65536,
+    &spec.project_query_included_path_count);
+  spec.project_query_kinds = read_submit_string_array(L, 2, "kinds", 65536,
+    &spec.project_query_kind_count);
+  spec.project_query_parent_names = read_submit_string_array(L, 2, "parent_names", 65536,
+    &spec.project_query_parent_name_count);
+  spec.project_query_languages = read_submit_string_array(L, 2, "query_languages", 65536,
+    &spec.project_query_language_count);
   spec.project_ignore_patterns = read_submit_string_array(L, 2, "ignore_patterns", 4096,
     &spec.project_ignore_pattern_count);
   AnvilWorkerProjectRunLanguageSpec *project_languages = NULL;
@@ -370,6 +393,10 @@ static int pool_submit(lua_State *L) {
   SDL_free((void *)spec.project_scan_paths);
   SDL_free((void *)spec.project_remove_paths);
   SDL_free((void *)spec.project_excluded_paths);
+  SDL_free((void *)spec.project_query_included_paths);
+  SDL_free((void *)spec.project_query_kinds);
+  SDL_free((void *)spec.project_query_parent_names);
+  SDL_free((void *)spec.project_query_languages);
   SDL_free((void *)spec.project_ignore_patterns);
   for (uint32_t i = 0; i < spec.project_language_count; i++) SDL_free((void *)language_patterns[i]);
   SDL_free(language_patterns);
@@ -823,8 +850,6 @@ static int project_snapshot_gc(lua_State *L) {
   return 0;
 }
 
-#define PROJECT_RECORD_PAGE_LIMIT 4096u
-
 static void project_page_options(lua_State *L, int table, uint32_t *offset, uint32_t *limit) {
   *offset = 1;
   *limit = 256;
@@ -932,7 +957,7 @@ static int project_snapshot_query_symbols(lua_State *L) {
   bool ok = anvil_ts_project_snapshot_query_symbols(snapshot->snapshot, query, offset, limit,
     kinds, kind_count, parent_names, parent_name_count, languages, language_count,
     excluded_paths, excluded_path_count, included_paths, included_path_count,
-    &indices, &count, &total, &has_more);
+    &indices, &count, &total, &has_more, NULL, NULL);
   free(kinds);
   free(parent_names);
   free(languages);
@@ -1502,6 +1527,32 @@ static void push_result(lua_State *L, AnvilWorkerResult *result) {
     lua_setfield(L, -2, "result");
     lua_setfield(L, -2, "payload");
   }
+  if (anvil_worker_result_has_project_symbol_query(result)) {
+    uint32_t query_count = anvil_worker_result_project_symbol_query_count(result);
+    lua_createtable(L, (int)query_count, 3);
+    for (uint32_t i = 0; i < query_count; i++) {
+      AnvilTSProjectFileResult *file = NULL;
+      uint32_t file_symbol_index = 0;
+      if (anvil_worker_result_project_symbol_query_at(result, i, &file, &file_symbol_index)) {
+        push_snapshot_symbol(L, file, file_symbol_index);
+      } else {
+        lua_pushnil(L);
+      }
+      lua_rawseti(L, -2, (int)i + 1);
+    }
+    lua_pushinteger(L, anvil_worker_result_project_symbol_query_total(result));
+    lua_setfield(L, -2, "total");
+    lua_pushboolean(L, anvil_worker_result_project_symbol_query_has_more(result));
+    lua_setfield(L, -2, "has_more");
+    lua_pushnumber(L, anvil_worker_result_project_symbol_query_ms(result));
+    lua_setfield(L, -2, "query_ms");
+    lua_setfield(L, -2, "symbols");
+    lua_getfield(L, -1, "payload");
+    if (!lua_istable(L, -1)) { lua_pop(L, 1); lua_createtable(L, 0, 1); }
+    lua_getfield(L, -2, "symbols");
+    lua_setfield(L, -2, "symbols");
+    lua_setfield(L, -2, "payload");
+  }
   AnvilTSProjectSnapshot *project_snapshot = anvil_worker_result_steal_project_snapshot(result);
   if (project_snapshot) {
     push_project_snapshot(L, project_snapshot);
@@ -1531,6 +1582,22 @@ static void push_result(lua_State *L, AnvilWorkerResult *result) {
     if (!lua_istable(L, -1)) { lua_pop(L, 1); lua_createtable(L, 0, 4); }
     lua_pushinteger(L, files_completed); lua_setfield(L, -2, "files_completed");
     lua_pushinteger(L, files_skipped); lua_setfield(L, -2, "files_skipped");
+    lua_pushinteger(L, anvil_worker_result_invalid_text_files_skipped(result));
+    lua_setfield(L, -2, "invalid_text_files_skipped");
+    lua_pushinteger(L, anvil_worker_result_io_files_skipped(result));
+    lua_setfield(L, -2, "io_files_skipped");
+    lua_pushinteger(L, anvil_worker_result_parse_files_skipped(result));
+    lua_setfield(L, -2, "parse_files_skipped");
+    const char *first_skipped_path = anvil_worker_result_first_skipped_path(result);
+    const char *first_skipped_reason = anvil_worker_result_first_skipped_reason(result);
+    if (first_skipped_path) {
+      lua_pushstring(L, first_skipped_path);
+      lua_setfield(L, -2, "first_skipped_path");
+    }
+    if (first_skipped_reason) {
+      lua_pushstring(L, first_skipped_reason);
+      lua_setfield(L, -2, "first_skipped_reason");
+    }
     lua_pushinteger(L, files_reused); lua_setfield(L, -2, "files_reused");
     lua_pushinteger(L, symbols_found); lua_setfield(L, -2, "symbols_found");
     lua_pushinteger(L, usages_found); lua_setfield(L, -2, "usages_found");

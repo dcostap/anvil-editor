@@ -1125,6 +1125,105 @@ fun make(): EagerThing = EagerThing()
     common.rm(root, true)
   end)
 
+  test.it("Tree-sitter Project indexing skips invalid text files without losing valid symbols", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-invalid-project-file-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    write_file(root .. PATHSEP .. "Valid.kt", [[package demo
+
+class ValidAfterInvalidFile
+]])
+    write_file(root .. PATHSEP .. "Binary.kt", "class BeforeNul\0class AfterNul\n")
+    write_file(root .. PATHSEP .. "._AppleDouble.kt", [[package metadata
+
+class AppleDoubleMustBeIgnored
+]])
+
+    symbol_index.start_project_indexing({ root = root, reason = "test", refresh_after_seconds = 0 })
+    local status = wait_index_ready(root)
+    test.equal(status.status, "ready", status.reason)
+    test.equal(status.symbol_status, "ready", status.reason)
+    test.equal(status.diagnostics.phases.combined.worker.files_skipped, 1)
+    test.equal(status.diagnostics.phases.combined.worker.invalid_text_files_skipped, 1)
+    test.equal(status.diagnostics.phases.combined.worker.io_files_skipped, 0)
+    test.equal(status.diagnostics.phases.combined.worker.parse_files_skipped, 0)
+    test.ok((status.diagnostics.phases.combined.worker.first_skipped_path or ""):find("Binary.kt", 1, true))
+    test.equal(status.diagnostics.phases.combined.worker.first_skipped_reason,
+      "Tree-sitter input contains embedded NUL")
+
+    local symbols, reason, query_status = symbol_index.workspace_symbols("ValidAfterInvalidFile", {
+      root = root,
+      limit = 20,
+      refresh_after_seconds = 0,
+    })
+    test.equal(query_status, "fresh", reason)
+    test.ok(find_symbol(symbols, "ValidAfterInvalidFile", "class"))
+    symbols, reason, query_status = symbol_index.workspace_symbols("AppleDoubleMustBeIgnored", {
+      root = root,
+      limit = 20,
+      refresh_after_seconds = 0,
+    })
+    test.equal(query_status, "fresh", reason)
+    test.equal(#symbols, 0)
+
+    local valid_path = root .. PATHSEP .. "Valid.kt"
+    write_file(valid_path, "class StaleBeforeNul\0class StaleAfterNul\n")
+    local expected_generation = status.generation + 1
+    local matched, reindex_reason = symbol_index.reindex_file(valid_path, {
+      force = true,
+      reason = "became-invalid-text",
+    })
+    test.ok(matched, reindex_reason)
+    local deadline = system.get_time() + 5
+    repeat
+      status = symbol_index.status(root)
+      if status.completed_runs and status.completed_runs[expected_generation] then break end
+      coroutine.yield(0.03)
+    until system.get_time() >= deadline
+    test.equal(status.completed_runs[expected_generation].status, "ready")
+    symbols, reason, query_status = symbol_index.workspace_symbols("ValidAfterInvalidFile", {
+      root = root,
+      limit = 20,
+      refresh_after_seconds = 0,
+    })
+    test.equal(query_status, "fresh", reason)
+    test.equal(#symbols, 0, "a file that becomes invalid text must not retain stale symbols")
+    common.rm(root, true)
+  end)
+
+  test.it("Tree-sitter Project queries surface terminal index failures without restarting", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-terminal-index-failure-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    local index = symbol_index.status(root)
+    index.generation = 17
+    index.status = "failed"
+    index.symbol_status = "failed"
+    index.usage_status = "failed"
+    index.reason = "synthetic-terminal-failure"
+
+    local symbols, reason, query_status = symbol_index.workspace_symbols("Anything", {
+      root = root,
+      refresh_after_seconds = 0,
+    })
+    test.is_nil(symbols)
+    test.equal(reason, "synthetic-terminal-failure")
+    test.equal(query_status, "unavailable")
+    test.equal(index.generation, 17)
+
+    local usages, usage_reason, usage_status = symbol_index.workspace_usages("Anything", {
+      root = root,
+      refresh_after_seconds = 0,
+    })
+    test.is_nil(usages)
+    test.equal(usage_reason, "synthetic-terminal-failure")
+    test.equal(usage_status, "unavailable")
+    test.equal(index.generation, 17)
+    common.rm(root, true)
+  end)
+
   test.it("Tree-sitter Project native snapshot publication keeps Project records out of Lua", function()
     symbol_index.reset_for_tests()
     local root = USERDIR .. PATHSEP .. "treesitter-native-publication-"
@@ -1194,10 +1293,20 @@ fun make%d(): ShardedThing%d = ShardedThing%d()
       refresh_after_seconds = 0,
     })
     test.equal(async_status, "pending", async_reason)
-    test.is_nil(async_request.handle, "native Project queries must not submit Lua query workers")
+    test.not_nil(async_request.handle, "native Project queries must run outside the UI thread")
     wait_async_request(async_request)
     test.equal(async_request.status, "fresh", async_request.reason)
     test.equal(#async_request.results, 6)
+
+    local cancelled_request = test.not_nil(symbol_index.workspace_symbols_async("ShardedThing", {
+      root = root,
+      limit = 20,
+      refresh_after_seconds = 0,
+    }))
+    test.not_nil(cancelled_request.handle)
+    test.ok(cancelled_request:cancel())
+    test.equal(cancelled_request.status, "cancelled")
+    test.is_nil(cancelled_request.results)
 
     local overlay_path = common.normalize_path(root .. PATHSEP .. "Model1.kt")
     local overlay_symbols = {
@@ -1254,11 +1363,11 @@ fun make%d(): ShardedThing%d = ShardedThing%d()
     test.equal(project_paths_request.status, "stale-cancelled")
     test.equal(project_paths_request.reason, "project-paths-generation-changed")
 
-    local cancelled_request = test.not_nil(symbol_index.workspace_symbols_async("ShardedThing", {
+    local project_paths_cancelled_request = test.not_nil(symbol_index.workspace_symbols_async("ShardedThing", {
       root = root, limit = 20, refresh_after_seconds = 0,
     }))
-    test.ok(cancelled_request:cancel())
-    test.equal(cancelled_request.status, "cancelled")
+    test.ok(project_paths_cancelled_request:cancel())
+    test.equal(project_paths_cancelled_request.status, "cancelled")
     local stale_request = test.not_nil(symbol_index.workspace_symbols_async("ShardedThing", {
       root = root, limit = 20, refresh_after_seconds = 0,
     }))
@@ -1266,6 +1375,27 @@ fun make%d(): ShardedThing%d = ShardedThing%d()
     wait_async_request(stale_request)
     test.equal(stale_request.status, "stale-cancelled")
     test.is_nil(stale_request.results)
+    common.rm(root, true)
+  end)
+
+  test.it("Tree-sitter Project watcher ignores excluded filesystem noise", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-watcher-ignore-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    mkdir(root .. PATHSEP .. ".git")
+    local index = seed_ready_symbol_index(root, { "StableWatcherThing" })
+    index.watch_running = true
+    local generation = index.generation
+
+    local matched, reason = symbol_index.mark_directory_dirty(
+      root .. PATHSEP .. ".git", "project-watch"
+    )
+
+    test.not_ok(matched)
+    test.equal(reason, "ignored")
+    test.equal(index.generation, generation)
+    test.equal(index.status, "ready")
     common.rm(root, true)
   end)
 

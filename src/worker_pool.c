@@ -58,6 +58,17 @@ struct AnvilWorkerJob {
   AnvilTSProjectBuilder *project_builder;
   AnvilTSProjectSnapshot *project_base_snapshot;
   AnvilTSProjectSnapshot *project_snapshot_to_release;
+  AnvilTSProjectSnapshot *project_query_snapshot;
+  uint32_t project_query_offset;
+  uint32_t project_query_limit;
+  char **project_query_kinds;
+  uint32_t project_query_kind_count;
+  char **project_query_parent_names;
+  uint32_t project_query_parent_name_count;
+  char **project_query_languages;
+  uint32_t project_query_language_count;
+  char **project_query_included_paths;
+  uint32_t project_query_included_path_count;
   bool close_project_builder;
   uint32_t project_usage_cap;
   char *project_root;
@@ -90,6 +101,9 @@ struct AnvilWorkerResult {
   bool cancelled;
   uint32_t files_completed;
   uint32_t files_skipped;
+  uint32_t invalid_text_files_skipped;
+  uint32_t io_files_skipped;
+  uint32_t parse_files_skipped;
   uint32_t files_reused;
   uint32_t symbols_found;
   uint32_t usages_found;
@@ -98,6 +112,15 @@ struct AnvilWorkerResult {
   double batch_project_record_ms;
   double project_builder_ms;
   double project_snapshot_ms;
+  char *first_skipped_path;
+  char *first_skipped_reason;
+  bool project_symbol_query;
+  AnvilTSProjectSnapshot *project_query_snapshot;
+  uint32_t *project_query_indices;
+  uint32_t project_query_count;
+  uint32_t project_query_total;
+  bool project_query_has_more;
+  double project_query_ms;
   AnvilWorkerTreeSitterIndexResult *treesitter_index_result;
   AnvilTSProjectSnapshot *project_snapshot;
   struct AnvilWorkerResult *next;
@@ -329,6 +352,25 @@ const char *anvil_worker_cancel_token_name(const AnvilWorkerCancelToken *token) 
   return token && token->name ? token->name : "";
 }
 
+static void free_string_array(char **items, uint32_t count) {
+  for (uint32_t i = 0; i < count; i++) SDL_free(items[i]);
+  SDL_free(items);
+}
+
+static char **copy_string_array(const char *const *items, uint32_t count) {
+  if (!count) return NULL;
+  char **copy = (char **)SDL_calloc(count, sizeof(*copy));
+  if (!copy) return NULL;
+  for (uint32_t i = 0; i < count; i++) {
+    copy[i] = pool_strdup(items[i]);
+    if (!copy[i]) {
+      free_string_array(copy, count);
+      return NULL;
+    }
+  }
+  return copy;
+}
+
 static void job_free(AnvilWorkerJob *job) {
   if (!job) return;
   SDL_free(job->kind);
@@ -375,6 +417,11 @@ static void job_free(AnvilWorkerJob *job) {
   }
   anvil_ts_project_snapshot_release(job->project_base_snapshot);
   anvil_ts_project_snapshot_release(job->project_snapshot_to_release);
+  anvil_ts_project_snapshot_release(job->project_query_snapshot);
+  free_string_array(job->project_query_kinds, job->project_query_kind_count);
+  free_string_array(job->project_query_parent_names, job->project_query_parent_name_count);
+  free_string_array(job->project_query_languages, job->project_query_language_count);
+  free_string_array(job->project_query_included_paths, job->project_query_included_path_count);
   SDL_free(job);
 }
 
@@ -2647,6 +2694,9 @@ typedef struct ProjectRunExecution {
   SDL_Mutex *mutex;
   uint32_t completed;
   uint32_t skipped;
+  uint32_t invalid_text_skipped;
+  uint32_t io_skipped;
+  uint32_t parse_skipped;
   uint32_t reused;
   uint64_t symbols;
   uint64_t usages;
@@ -2654,10 +2704,60 @@ typedef struct ProjectRunExecution {
   double project_record_ms;
   uint32_t *file_usage_counts;
   bool *file_usage_retry;
+  bool *file_skipped;
   char *fatal_error;
+  char *first_skipped_path;
+  char *first_skipped_reason;
   uint32_t partial_publications;
   uint64_t last_partial_publication_ns;
 } ProjectRunExecution;
+
+typedef enum ProjectRunFileSkipKind {
+  PROJECT_RUN_FILE_FATAL = 0,
+  PROJECT_RUN_FILE_IO,
+  PROJECT_RUN_FILE_INVALID_TEXT,
+  PROJECT_RUN_FILE_PARSE,
+} ProjectRunFileSkipKind;
+
+static ProjectRunFileSkipKind project_run_file_skip_kind(const char *error) {
+  if (!error) return PROJECT_RUN_FILE_FATAL;
+  if (strcmp(error, "Tree-sitter input contains embedded NUL") == 0 ||
+      strcmp(error, "Tree-sitter input exceeds 4GB byte limit") == 0) {
+    return PROJECT_RUN_FILE_INVALID_TEXT;
+  }
+  if (strcmp(error, "failed to open Tree-sitter index file") == 0 ||
+      strcmp(error, "failed to seek Tree-sitter index file") == 0 ||
+      strcmp(error, "failed to size Tree-sitter index file") == 0 ||
+      strcmp(error, "failed to rewind Tree-sitter index file") == 0 ||
+      strcmp(error, "failed to read Tree-sitter index file") == 0 ||
+      strcmp(error, "Tree-sitter index file exceeds byte limit") == 0) {
+    return PROJECT_RUN_FILE_IO;
+  }
+  if (strcmp(error, "Tree-sitter parse timed out") == 0 ||
+      strcmp(error, "Tree-sitter parse failed") == 0) {
+    return PROJECT_RUN_FILE_PARSE;
+  }
+  return PROJECT_RUN_FILE_FATAL;
+}
+
+static void project_run_record_file_skip(
+  ProjectRunExecution *execution,
+  uint32_t file_index,
+  const char *path,
+  const char *reason,
+  ProjectRunFileSkipKind kind
+) {
+  SDL_LockMutex(execution->mutex);
+  if (execution->file_skipped) execution->file_skipped[file_index] = true;
+  if (kind == PROJECT_RUN_FILE_INVALID_TEXT) execution->invalid_text_skipped++;
+  else if (kind == PROJECT_RUN_FILE_IO) execution->io_skipped++;
+  else if (kind == PROJECT_RUN_FILE_PARSE) execution->parse_skipped++;
+  if (!execution->first_skipped_path) {
+    execution->first_skipped_path = pool_strdup(path ? path : "");
+    execution->first_skipped_reason = pool_strdup(reason ? reason : "Project file indexing failed");
+  }
+  SDL_UnlockMutex(execution->mutex);
+}
 
 typedef struct ProjectRunThread {
   ProjectRunExecution *execution;
@@ -2732,8 +2832,9 @@ static int SDLCALL project_run_thread_main(void *userdata) {
     AnvilWorkerTreeSitterIndexResult *result = execute_project_batch_file(&context, job, &spec, &file_error, &file_cancelled);
     if (!result) {
       if (file_cancelled || job_cancelled(job)) { SDL_free(file_error); break; }
-      if (file_error && (strcmp(file_error, "failed to open Tree-sitter index file") == 0 ||
-          strcmp(file_error, "Tree-sitter index file exceeds byte limit") == 0)) {
+      ProjectRunFileSkipKind skip_kind = project_run_file_skip_kind(file_error);
+      if (skip_kind != PROJECT_RUN_FILE_FATAL) {
+        project_run_record_file_skip(execution, i, file->path, file_error, skip_kind);
         local_skipped++;
         SDL_free(file_error);
         continue;
@@ -2897,6 +2998,7 @@ static void run_treesitter_project_run(AnvilWorkerContext *context, AnvilWorkerJ
     .mutex = SDL_CreateMutex(),
     .file_usage_counts = walk.file_count ? (uint32_t *)SDL_calloc(walk.file_count, sizeof(uint32_t)) : NULL,
     .file_usage_retry = walk.file_count ? (bool *)SDL_calloc(walk.file_count, sizeof(bool)) : NULL,
+    .file_skipped = walk.file_count ? (bool *)SDL_calloc(walk.file_count, sizeof(bool)) : NULL,
   };
   if (!enumerated && !job_cancelled(job)) {
     execution.fatal_error = walk.error ? pool_strdup(walk.error) : pool_strdup(SDL_GetError());
@@ -2907,7 +3009,7 @@ static void run_treesitter_project_run(AnvilWorkerContext *context, AnvilWorkerJ
   SDL_Thread **threads = worker_count ? (SDL_Thread **)SDL_calloc(worker_count, sizeof(*threads)) : NULL;
   ProjectRunThread *thread_data = worker_count ? (ProjectRunThread *)SDL_calloc(worker_count, sizeof(*thread_data)) : NULL;
   uint32_t *boundaries = worker_count ? (uint32_t *)SDL_calloc(worker_count + 1, sizeof(*boundaries)) : NULL;
-  if (!execution.mutex || (walk.file_count && (!execution.file_usage_counts || !execution.file_usage_retry)) ||
+  if (!execution.mutex || (walk.file_count && (!execution.file_usage_counts || !execution.file_usage_retry || !execution.file_skipped)) ||
       (worker_count && (!threads || !thread_data || !boundaries))) {
     execution.fatal_error = pool_strdup("out of memory starting native Project run workers");
   }
@@ -2980,8 +3082,8 @@ static void run_treesitter_project_run(AnvilWorkerContext *context, AnvilWorkerJ
     AnvilWorkerTreeSitterIndexResult *retry = execute_project_batch_file(context, job, &spec, &retry_error, &retry_cancelled);
     if (!retry) {
       if (retry_cancelled || job_cancelled(job)) { SDL_free(retry_error); break; }
-      if (retry_error && (strcmp(retry_error, "failed to open Tree-sitter index file") == 0 ||
-          strcmp(retry_error, "Tree-sitter index file exceeds byte limit") == 0)) {
+      ProjectRunFileSkipKind skip_kind = project_run_file_skip_kind(retry_error);
+      if (skip_kind != PROJECT_RUN_FILE_FATAL) {
         SDL_free(retry_error);
         continue;
       }
@@ -3012,6 +3114,20 @@ static void run_treesitter_project_run(AnvilWorkerContext *context, AnvilWorkerJ
     execution.parse_ms += anvil_worker_treesitter_index_result_precise_parse_ms(retry);
     execution.project_record_ms += anvil_worker_treesitter_index_result_project_record_ms(retry);
     anvil_worker_treesitter_index_result_free(retry);
+  }
+  /* A previously indexed file can later become unreadable, binary-like, or
+     unparseable. Remove its retained record rather than publishing stale
+     symbols merely because the path still exists in the scanned scope. */
+  for (uint32_t i = 0; !execution.fatal_error && !job_cancelled(job) && i < walk.file_count; i++) {
+    if (!execution.file_skipped[i]) continue;
+    const char *skipped_path[1] = { walk.files[i].path };
+    char *remove_error = NULL;
+    if (!anvil_ts_project_builder_remove_scope_missing(builder,
+        skipped_path, 1, NULL, 0, &remove_error)) {
+      execution.fatal_error = remove_error ? pool_strdup(remove_error) :
+        pool_strdup("native Project skipped-file removal failed");
+      free(remove_error);
+    }
   }
   if (!execution.fatal_error && !job_cancelled(job) && job->project_scoped && job->project_scan_path_count) {
     const char **seen_paths = walk.file_count ? (const char **)SDL_calloc(walk.file_count, sizeof(*seen_paths)) : NULL;
@@ -3045,10 +3161,16 @@ static void run_treesitter_project_run(AnvilWorkerContext *context, AnvilWorkerJ
   SDL_free(boundaries);
   SDL_free(execution.file_usage_counts);
   SDL_free(execution.file_usage_retry);
+  SDL_free(execution.file_skipped);
   uint32_t completed = execution.completed, skipped = execution.skipped;
+  uint32_t invalid_text_skipped = execution.invalid_text_skipped;
+  uint32_t io_skipped = execution.io_skipped;
+  uint32_t parse_skipped = execution.parse_skipped;
   uint64_t symbols = execution.symbols, usages = execution.usages;
   double parse_ms = execution.parse_ms, project_record_ms = execution.project_record_ms;
   char *fatal_error = execution.fatal_error;
+  char *first_skipped_path = execution.first_skipped_path;
+  char *first_skipped_reason = execution.first_skipped_reason;
   if (execution.mutex) SDL_DestroyMutex(execution.mutex);
   bool cancelled = job_cancelled(job);
   project_run_walk_free(&walk);
@@ -3063,6 +3185,8 @@ static void run_treesitter_project_run(AnvilWorkerContext *context, AnvilWorkerJ
     SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
     AnvilWorkerResult *result = result_new(job, "error");
     if (result) result->error = fatal_error; else SDL_free(fatal_error);
+    SDL_free(first_skipped_path);
+    SDL_free(first_skipped_reason);
     enqueue_result(context->pool, result);
     return;
   }
@@ -3075,6 +3199,8 @@ static void run_treesitter_project_run(AnvilWorkerContext *context, AnvilWorkerJ
       anvil_ts_project_builder_release(builder);
     }
     SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_CANCELLED);
+    SDL_free(first_skipped_path);
+    SDL_free(first_skipped_reason);
     enqueue_simple_result(context->pool, job, "cancelled");
     return;
   }
@@ -3100,6 +3226,8 @@ static void run_treesitter_project_run(AnvilWorkerContext *context, AnvilWorkerJ
     AnvilWorkerResult *error_result = result_new(job, "error");
     if (error_result) error_result->error = snapshot_error ? snapshot_error : pool_strdup("native Project snapshot failed");
     else SDL_free(snapshot_error);
+    SDL_free(first_skipped_path);
+    SDL_free(first_skipped_reason);
     enqueue_result(context->pool, error_result);
     return;
   }
@@ -3115,7 +3243,12 @@ static void run_treesitter_project_run(AnvilWorkerContext *context, AnvilWorkerJ
   if (result) {
     result->files_completed = completed;
     result->files_skipped = skipped;
+    result->invalid_text_files_skipped = invalid_text_skipped;
+    result->io_files_skipped = io_skipped;
+    result->parse_files_skipped = parse_skipped;
     result->files_reused = execution.reused;
+    result->first_skipped_path = first_skipped_path;
+    result->first_skipped_reason = first_skipped_reason;
     result->symbols_found = symbols > UINT32_MAX ? UINT32_MAX : (uint32_t)symbols;
     result->usages_found = usages > UINT32_MAX ? UINT32_MAX : (uint32_t)usages;
     result->batch_total_ms = ticks_ns_to_ms(SDL_GetTicksNS() - started);
@@ -3125,6 +3258,8 @@ static void run_treesitter_project_run(AnvilWorkerContext *context, AnvilWorkerJ
     result->project_snapshot_ms = snapshot_ms;
     result->project_snapshot = snapshot;
   } else {
+    SDL_free(first_skipped_path);
+    SDL_free(first_skipped_reason);
     anvil_ts_project_snapshot_release(snapshot);
   }
   enqueue_result(context->pool, result);
@@ -3273,6 +3408,56 @@ static void run_treesitter_project_batch(AnvilWorkerContext *context, AnvilWorke
   enqueue_simple_result(pool, job, "final");
 }
 
+static bool project_symbol_query_cancelled(void *payload) {
+  return job_cancelled((AnvilWorkerJob *)payload);
+}
+
+static void run_project_snapshot_query_symbols(AnvilWorkerContext *context, AnvilWorkerJob *job) {
+  uint64_t started = SDL_GetTicksNS();
+  uint32_t *indices = NULL, count = 0, total = 0;
+  bool has_more = false;
+  bool ok = anvil_ts_project_snapshot_query_symbols(
+    job->project_query_snapshot, job->value ? job->value : "",
+    job->project_query_offset, job->project_query_limit ? job->project_query_limit : 200,
+    (const char *const *)job->project_query_kinds, job->project_query_kind_count,
+    (const char *const *)job->project_query_parent_names, job->project_query_parent_name_count,
+    (const char *const *)job->project_query_languages, job->project_query_language_count,
+    (const char *const *)job->project_excluded_paths, job->project_excluded_path_count,
+    (const char *const *)job->project_query_included_paths, job->project_query_included_path_count,
+    &indices, &count, &total, &has_more, project_symbol_query_cancelled, job
+  );
+  if (!ok) {
+    SDL_free(indices);
+    if (job_cancelled(job)) {
+      SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_CANCELLED);
+      enqueue_simple_result(context->pool, job, "cancelled");
+    } else {
+      SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
+      AnvilWorkerResult *error = result_new(job, "error");
+      if (error) error->error = pool_strdup("native Project symbol query failed");
+      enqueue_result(context->pool, error);
+    }
+    return;
+  }
+  AnvilWorkerResult *result = result_new(job, "result");
+  if (!result) {
+    SDL_free(indices);
+    SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
+    return;
+  }
+  result->project_symbol_query = true;
+  result->project_query_snapshot = job->project_query_snapshot;
+  anvil_ts_project_snapshot_retain(result->project_query_snapshot);
+  result->project_query_indices = indices;
+  result->project_query_count = count;
+  result->project_query_total = total;
+  result->project_query_has_more = has_more;
+  result->project_query_ms = ticks_ns_to_ms(SDL_GetTicksNS() - started);
+  enqueue_result(context->pool, result);
+  SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_COMPLETE);
+  enqueue_simple_result(context->pool, job, "final");
+}
+
 static void run_job(AnvilWorkerContext *context, AnvilWorkerJob *job) {
   AnvilWorkerPool *pool = context->pool;
   SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_RUNNING);
@@ -3298,6 +3483,8 @@ static void run_job(AnvilWorkerContext *context, AnvilWorkerJob *job) {
     run_treesitter_index_text(context, job);
   } else if (strcmp(kind, "treesitter_project_run") == 0) {
     run_treesitter_project_run(context, job);
+  } else if (strcmp(kind, "project_snapshot_query_symbols") == 0) {
+    run_project_snapshot_query_symbols(context, job);
   } else if (strcmp(kind, "project_snapshot_release") == 0) {
     AnvilTSProjectSnapshot *snapshot = job->project_snapshot_to_release;
     job->project_snapshot_to_release = NULL;
@@ -3473,7 +3660,11 @@ AnvilWorkerJob *anvil_worker_pool_submit(AnvilWorkerPool *pool, const AnvilWorke
   if (spec->project_file_count > 4096 || spec->project_language_count > 256 ||
       spec->project_scan_path_count > 65536 || spec->project_remove_path_count > 65536 ||
       spec->project_excluded_path_count > 65536 ||
-      spec->project_ignore_pattern_count > 4096) {
+      spec->project_ignore_pattern_count > 4096 ||
+      spec->project_query_kind_count > 65536 ||
+      spec->project_query_parent_name_count > 65536 ||
+      spec->project_query_language_count > 65536 ||
+      spec->project_query_included_path_count > 65536) {
     pool_set_error(error, "native Project job input exceeds its bounded table limit");
     return NULL;
   }
@@ -3481,6 +3672,10 @@ AnvilWorkerJob *anvil_worker_pool_submit(AnvilWorkerPool *pool, const AnvilWorke
       (spec->project_remove_path_count && !spec->project_remove_paths) ||
       (spec->project_excluded_path_count && !spec->project_excluded_paths) ||
       (spec->project_ignore_pattern_count && !spec->project_ignore_patterns) ||
+      (spec->project_query_kind_count && !spec->project_query_kinds) ||
+      (spec->project_query_parent_name_count && !spec->project_query_parent_names) ||
+      (spec->project_query_language_count && !spec->project_query_languages) ||
+      (spec->project_query_included_path_count && !spec->project_query_included_paths) ||
       (spec->project_language_count && !spec->project_languages)) {
     pool_set_error(error, "invalid native Project run tables");
     return NULL;
@@ -3502,6 +3697,11 @@ AnvilWorkerJob *anvil_worker_pool_submit(AnvilWorkerPool *pool, const AnvilWorke
         return NULL;
       }
     }
+  }
+  if (strcmp(spec->kind, "project_snapshot_query_symbols") == 0 &&
+      !spec->project_query_snapshot) {
+    pool_set_error(error, "native Project symbol query requires a snapshot");
+    return NULL;
   }
   if (spec->text_len > UINT32_MAX || spec->outline_query_len > UINT32_MAX || spec->usage_query_len > UINT32_MAX) {
     pool_set_error(error, "Tree-sitter worker input exceeds 4GB byte limit");
@@ -3557,6 +3757,26 @@ AnvilWorkerJob *anvil_worker_pool_submit(AnvilWorkerPool *pool, const AnvilWorke
   anvil_ts_project_snapshot_retain(job->project_base_snapshot);
   job->project_snapshot_to_release = spec->project_snapshot_to_release;
   anvil_ts_project_snapshot_retain(job->project_snapshot_to_release);
+  job->project_query_snapshot = spec->project_query_snapshot;
+  anvil_ts_project_snapshot_retain(job->project_query_snapshot);
+  job->project_query_offset = spec->project_query_offset;
+  job->project_query_limit = spec->project_query_limit;
+  job->project_query_kind_count = spec->project_query_kind_count;
+  job->project_query_parent_name_count = spec->project_query_parent_name_count;
+  job->project_query_language_count = spec->project_query_language_count;
+  job->project_query_included_path_count = spec->project_query_included_path_count;
+  job->project_query_kinds = copy_string_array(spec->project_query_kinds, spec->project_query_kind_count);
+  job->project_query_parent_names = copy_string_array(spec->project_query_parent_names, spec->project_query_parent_name_count);
+  job->project_query_languages = copy_string_array(spec->project_query_languages, spec->project_query_language_count);
+  job->project_query_included_paths = copy_string_array(spec->project_query_included_paths, spec->project_query_included_path_count);
+  if ((job->project_query_kind_count && !job->project_query_kinds) ||
+      (job->project_query_parent_name_count && !job->project_query_parent_names) ||
+      (job->project_query_language_count && !job->project_query_languages) ||
+      (job->project_query_included_path_count && !job->project_query_included_paths)) {
+    anvil_worker_job_release(job); anvil_worker_job_release(job);
+    pool_set_error(error, "out of memory copying native Project symbol query");
+    return NULL;
+  }
   job->project_usage_cap = spec->project_usage_cap;
   job->project_root = pool_strdup(spec->project_root);
   job->project_scoped = spec->project_scoped;
@@ -3741,6 +3961,10 @@ void anvil_worker_result_free(AnvilWorkerResult *result) {
   SDL_free(result->type);
   SDL_free(result->value);
   SDL_free(result->error);
+  SDL_free(result->first_skipped_path);
+  SDL_free(result->first_skipped_reason);
+  anvil_ts_project_snapshot_release(result->project_query_snapshot);
+  SDL_free(result->project_query_indices);
   anvil_worker_treesitter_index_result_free(result->treesitter_index_result);
   anvil_ts_project_snapshot_release(result->project_snapshot);
   SDL_free(result);
@@ -3784,9 +4008,25 @@ int anvil_worker_result_index(const AnvilWorkerResult *result) { return result ?
 bool anvil_worker_result_cancelled(const AnvilWorkerResult *result) { return result ? result->cancelled : false; }
 uint32_t anvil_worker_result_files_completed(const AnvilWorkerResult *result) { return result ? result->files_completed : 0; }
 uint32_t anvil_worker_result_files_skipped(const AnvilWorkerResult *result) { return result ? result->files_skipped : 0; }
+uint32_t anvil_worker_result_invalid_text_files_skipped(const AnvilWorkerResult *result) { return result ? result->invalid_text_files_skipped : 0; }
+uint32_t anvil_worker_result_io_files_skipped(const AnvilWorkerResult *result) { return result ? result->io_files_skipped : 0; }
+uint32_t anvil_worker_result_parse_files_skipped(const AnvilWorkerResult *result) { return result ? result->parse_files_skipped : 0; }
+const char *anvil_worker_result_first_skipped_path(const AnvilWorkerResult *result) { return result ? result->first_skipped_path : NULL; }
+const char *anvil_worker_result_first_skipped_reason(const AnvilWorkerResult *result) { return result ? result->first_skipped_reason : NULL; }
 uint32_t anvil_worker_result_files_reused(const AnvilWorkerResult *result) { return result ? result->files_reused : 0; }
 uint32_t anvil_worker_result_symbols_found(const AnvilWorkerResult *result) { return result ? result->symbols_found : 0; }
 uint32_t anvil_worker_result_usages_found(const AnvilWorkerResult *result) { return result ? result->usages_found : 0; }
+bool anvil_worker_result_has_project_symbol_query(const AnvilWorkerResult *result) { return result && result->project_symbol_query; }
+uint32_t anvil_worker_result_project_symbol_query_count(const AnvilWorkerResult *result) { return result ? result->project_query_count : 0; }
+uint32_t anvil_worker_result_project_symbol_query_total(const AnvilWorkerResult *result) { return result ? result->project_query_total : 0; }
+bool anvil_worker_result_project_symbol_query_has_more(const AnvilWorkerResult *result) { return result && result->project_query_has_more; }
+double anvil_worker_result_project_symbol_query_ms(const AnvilWorkerResult *result) { return result ? result->project_query_ms : 0.0; }
+bool anvil_worker_result_project_symbol_query_at(const AnvilWorkerResult *result, uint32_t index, AnvilTSProjectFileResult **file, uint32_t *file_symbol_index) {
+  if (!result || !result->project_symbol_query || index >= result->project_query_count ||
+      !result->project_query_snapshot || !result->project_query_indices) return false;
+  return anvil_ts_project_snapshot_symbol_at(result->project_query_snapshot,
+    result->project_query_indices[index], file, file_symbol_index);
+}
 double anvil_worker_result_batch_total_ms(const AnvilWorkerResult *result) { return result ? result->batch_total_ms : 0.0; }
 double anvil_worker_result_batch_parse_ms(const AnvilWorkerResult *result) { return result ? result->batch_parse_ms : 0.0; }
 double anvil_worker_result_batch_project_record_ms(const AnvilWorkerResult *result) { return result ? result->batch_project_record_ms : 0.0; }

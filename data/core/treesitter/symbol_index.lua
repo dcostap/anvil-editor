@@ -113,6 +113,7 @@ local function new_index(root)
     worker_handle = nil,
     worker_run = nil,
     worker_seen_paths = nil,
+    symbol_query_requests = {},
     project_paths_generation = nil,
     overlay_generation = 0,
     combined_symbols_cache = {},
@@ -489,6 +490,12 @@ local function finish_worker_scan(index, message, status)
       tonumber(worker.native_batch_ms or worker.total_ms or 0) or 0,
       tonumber(worker.parse_ms or 0) or 0,
       tonumber(worker.native_project_record_ms or 0) or 0)
+    if worker.first_skipped_path then
+      log_quiet("Tree-sitter Project index: skipped %d file(s) under %s; first=%s reason=%s",
+        tonumber(worker.files_skipped or 0) or 0,
+        tostring(index.root), tostring(worker.first_skipped_path),
+        tostring(worker.first_skipped_reason or "unavailable"))
+    end
     core.add_thread(function()
       safe_yield(0)
       local pending_started = now()
@@ -511,6 +518,16 @@ local close_snapshot
 local function cancel_index_work(index)
   if not index then return false end
   local cancelled = false
+  local symbol_requests = {}
+  for request in pairs(index.symbol_query_requests or {}) do
+    symbol_requests[#symbol_requests + 1] = request
+  end
+  for _, request in ipairs(symbol_requests) do
+    if request.cancel_stale then
+      request:cancel_stale("index-generation-changed")
+      cancelled = true
+    end
+  end
   if index.worker_handle then
     cancelled = worker_pool.system():cancel(index.worker_handle) or cancelled
     index.worker_handle = nil
@@ -747,6 +764,11 @@ local function submit_native_run(index, generation, opts, phase)
           files_scanned = index.files_scanned,
           files_indexed = index.files_indexed,
           files_skipped = p.files_skipped or 0,
+          invalid_text_files_skipped = p.invalid_text_files_skipped or 0,
+          io_files_skipped = p.io_files_skipped or 0,
+          parse_files_skipped = p.parse_files_skipped or 0,
+          first_skipped_path = p.first_skipped_path,
+          first_skipped_reason = p.first_skipped_reason,
           parse_calls = math.max(0, (p.files_completed or 0) - (p.files_reused or 0)),
           files_reused = p.files_reused or 0,
           symbols_emitted = p.symbols_found or 0,
@@ -811,6 +833,9 @@ function symbol_index.ensure_scan(root, opts)
   local index = index_for_root(root)
   start_project_watcher(index)
   if index.status == "indexing" and not opts.force then return index end
+  if (index.status == "failed" or index.status == "cancelled") and not opts.force then
+    return index
+  end
   if index.status == "ready" and not opts.force then
     local refresh_after = tonumber(opts.refresh_after_seconds or DEFAULT_REFRESH_AFTER_SECONDS)
     if refresh_after <= 0 or (index.finished_at and system.get_time() - index.finished_at < refresh_after) then
@@ -1128,6 +1153,7 @@ end
 local function merge_status(current, next_status)
   if current == "pending" or next_status == "pending" then return "pending" end
   if current == "stale" or next_status == "stale" then return "stale" end
+  if current == "unavailable" or next_status == "unavailable" then return "unavailable" end
   return "fresh"
 end
 
@@ -1313,6 +1339,9 @@ function symbol_index.workspace_symbols(query, opts)
         reason = reason or "indexing"
         any_usable = true
       end
+    elseif index.symbol_status == "failed" or index.symbol_status == "cancelled" then
+      root_status = "unavailable"
+      reason = reason or index.reason or index.symbol_status
     else
       reason = reason or "indexing"
     end
@@ -1321,7 +1350,8 @@ function symbol_index.workspace_symbols(query, opts)
   end
 
   if any_usable and status ~= "fresh" and not opts.allow_stale then
-    return nil, reason or "indexing", "pending", { roots = per_root, index = #per_root == 1 and per_root[1].index or nil }
+    return nil, reason or "indexing", status == "unavailable" and "unavailable" or "pending",
+      { roots = per_root, index = #per_root == 1 and per_root[1].index or nil }
   end
   if any_usable then
     if #per_root > 1 then sort_symbols(all_symbols) end
@@ -1335,7 +1365,8 @@ function symbol_index.workspace_symbols(query, opts)
       index = #per_root == 1 and per_root[1].index or nil,
     }
   end
-  return nil, reason or "indexing", "pending", { roots = per_root, index = #per_root == 1 and per_root[1].index or nil }
+  return nil, reason or "indexing", status == "unavailable" and "unavailable" or "pending",
+    { roots = per_root, index = #per_root == 1 and per_root[1].index or nil }
 end
 
 local function public_usage(name, usage)
@@ -1426,8 +1457,221 @@ local function completed_native_query_request(results, reason, source_status, me
   return request, nil, "pending", meta
 end
 
+local function native_workspace_symbols_async(query, opts, roots)
+  local pool = worker_pool.system()
+  local project_paths_generation = project_paths_module().generation()
+  local children, per_root = {}, {}
+  local candidate_limit = math.min(4096,
+    math.max(0, math.floor(tonumber(opts.limit) or DEFAULT_QUERY_LIMIT)) + 1)
+
+  for _, root in ipairs(roots) do
+    local index = symbol_index.ensure_scan(root, scan_options_from_query(opts))
+    local snapshot = index.symbol_status == "ready" and index.native_snapshot
+      or (opts.allow_stale and (index.native_partial_snapshot or index.native_snapshot))
+    if not snapshot then
+      local status = index.symbol_status == "failed" and "unavailable" or "pending"
+      return nil, index.reason or (status == "pending" and "indexing" or status), status, {
+        roots = per_root, index = #roots == 1 and index or nil,
+      }
+    end
+    refresh_current_core_docs_for_index(index)
+    if has_pending_open_doc_overlay(index) then
+      return nil, "overlay-indexing", "pending", { roots = per_root, index = #roots == 1 and index or nil }
+    end
+    local excluded, included, suppressed = native_query_path_rules(index, snapshot, opts.kind or "symbols")
+    local overlays, overlay_more = bounded_overlay_symbols(index, suppressed, query, opts, candidate_limit)
+    local child = {
+      root = root,
+      index = index,
+      snapshot = snapshot,
+      generation = index.generation,
+      overlay_generation = index.overlay_generation,
+      project_paths_generation = index.project_paths_generation,
+      excluded = excluded,
+      included = included,
+      overlays = overlays,
+      overlay_more = overlay_more,
+      source_status = index.symbol_status == "ready" and "fresh" or "stale",
+    }
+    children[#children + 1] = child
+    per_root[#per_root + 1] = { root = root, status = "pending", index = index }
+  end
+
+  local request = {
+    status = "pending",
+    reason = "querying",
+    results = nil,
+    handles = {},
+    children = children,
+    meta = { roots = per_root, index = #children == 1 and children[1].index or nil },
+    remaining = #children,
+    diagnostics = { native_query_ms = 0 },
+  }
+
+  local function unregister()
+    for _, child in ipairs(children) do
+      if child.index.symbol_query_requests then
+        child.index.symbol_query_requests[request] = nil
+      end
+    end
+  end
+
+  local function cancel_handles()
+    for _, handle in ipairs(request.handles) do pool:cancel(handle) end
+  end
+
+  function request:cancel()
+    if self.done then return false end
+    self.cancelled = true
+    self.status = "cancelled"
+    self.reason = "cancelled"
+    self.results = nil
+    self.done = true
+    cancel_handles()
+    unregister()
+    return true
+  end
+
+  function request:cancel_stale(reason)
+    if self.done then return false end
+    self.status = "stale-cancelled"
+    self.reason = reason or "index-generation-changed"
+    self.results = nil
+    self.done = true
+    cancel_handles()
+    unregister()
+    return true
+  end
+
+  local function fail(reason)
+    if request.done then return end
+    request.status = "unavailable"
+    request.reason = reason or "native-project-symbol-query-failed"
+    request.results = nil
+    request.done = true
+    cancel_handles()
+    unregister()
+  end
+
+  local function finalize()
+    if request.done or request.remaining > 0 then return end
+    if project_paths_module().generation() ~= project_paths_generation then
+      request:cancel_stale("project-paths-generation-changed")
+      return
+    end
+    local combined, has_more, source_status = {}, false, "fresh"
+    for _, child in ipairs(children) do
+      if child.index.generation ~= child.generation
+      or child.index.overlay_generation ~= child.overlay_generation
+      or child.index.project_paths_generation ~= child.project_paths_generation then
+        request:cancel_stale("index-generation-changed")
+        return
+      end
+      local kind = opts.kind or "symbols"
+      for _, symbol in ipairs(child.symbols or {}) do
+        combined[#combined + 1] = public_symbol(
+          refresh_project_path_metadata(child.index, symbol, kind)
+        )
+      end
+      for _, symbol in ipairs(child.overlays or {}) do
+        combined[#combined + 1] = public_symbol(
+          refresh_project_path_metadata(child.index, symbol, kind)
+        )
+      end
+      has_more = has_more or child.has_more or child.overlay_more
+      if child.source_status == "stale" then source_status = "stale" end
+    end
+    if #children > 1 then sort_symbols(combined) end
+    local results, filtered_more = filtered_symbols(combined, query, opts.limit, opts)
+    request.results = results
+    request.has_more = has_more or filtered_more
+    request.meta.has_more = request.has_more
+    request.status = source_status
+    request.reason = source_status == "stale" and "indexing" or nil
+    request.done = true
+    unregister()
+  end
+
+  for _, child in ipairs(children) do
+    child.index.symbol_query_requests = child.index.symbol_query_requests or {}
+    child.index.symbol_query_requests[request] = true
+    local handle, submit_error = pool:submit({
+      kind = "project_snapshot_query_symbols",
+      native = true,
+      native_kind = "project_snapshot_query_symbols",
+      priority = "interactive",
+      generation = child.generation,
+      project_paths_generation = child.project_paths_generation,
+      phase = "symbols-query",
+      native_payload = {
+        query_snapshot = child.snapshot,
+        value = tostring(query or ""),
+        offset = 0,
+        limit = candidate_limit,
+        kinds = opts.symbol_kinds or opts.kinds,
+        parent_names = opts.parent_names,
+        query_languages = opts.language_ids or opts.languages,
+        excluded_paths = child.excluded,
+        included_paths = child.included,
+      },
+      is_stale = function()
+        if request.done then return true end
+        if project_paths_module().generation() ~= project_paths_generation then
+          request:cancel_stale("project-paths-generation-changed")
+          return true
+        end
+        if child.index.generation ~= child.generation
+        or child.index.overlay_generation ~= child.overlay_generation
+        or child.index.project_paths_generation ~= child.project_paths_generation then
+          request:cancel_stale("index-generation-changed")
+          return true
+        end
+        return false
+      end,
+      on_result = function(message)
+        if request.done or message.type ~= "result" then return end
+        local payload = message.payload or {}
+        child.symbols = payload.symbols or {}
+        child.has_more = child.symbols.has_more and true or false
+        local query_ms = tonumber(child.symbols.query_ms) or 0
+        request.diagnostics.native_query_ms = request.diagnostics.native_query_ms + query_ms
+        add_ui_metric(child.index, "native_symbol_query_ms", query_ms)
+        max_ui_metric(child.index, "native_symbol_query_max_ms", query_ms)
+        inc_ui_metric(child.index, "native_symbol_queries", 1)
+      end,
+      on_error = function(message) fail(message.error) end,
+      on_cancelled = function()
+        if not request.done then fail("cancelled") end
+      end,
+      on_complete = function()
+        if request.done then return end
+        child.complete = true
+        request.remaining = request.remaining - 1
+        finalize()
+      end,
+    })
+    if not handle then
+      fail(submit_error)
+      return request, submit_error, "pending", request.meta
+    end
+    child.handle = handle
+    request.handles[#request.handles + 1] = handle
+    request.handle = request.handle or handle
+  end
+  return request, nil, "pending", request.meta
+end
+
 function symbol_index.workspace_symbols_async(query, opts)
-  local results, reason, status, meta = symbol_index.workspace_symbols(query, opts or {})
+  opts = opts or {}
+  local roots = project_path_roots("symbols", opts)
+  local any_native = false
+  for _, root in ipairs(roots) do
+    local index = index_for_root(root)
+    if index.native_snapshot or index.native_partial_snapshot then any_native = true; break end
+  end
+  if any_native then return native_workspace_symbols_async(query, opts, roots) end
+
+  local results, reason, status, meta = symbol_index.workspace_symbols(query, opts)
   if status == "fresh" or status == "stale" then
     return completed_native_query_request(results, reason, status, meta)
   end
@@ -1555,6 +1799,9 @@ function symbol_index.workspace_usages(name, opts)
         reason = reason or "indexing"
         any_usable = true
       end
+    elseif index.usage_status == "failed" or index.usage_status == "cancelled" then
+      root_status = "unavailable"
+      reason = reason or index.reason or index.usage_status
     else
       reason = reason or "indexing"
     end
@@ -1565,7 +1812,8 @@ function symbol_index.workspace_usages(name, opts)
   end
 
   if any_usable and status ~= "fresh" and not opts.allow_stale then
-    return nil, reason or "indexing", "pending", { roots = per_root, index = #per_root == 1 and per_root[1].index or nil }
+    return nil, reason or "indexing", status == "unavailable" and "unavailable" or "pending",
+      { roots = per_root, index = #per_root == 1 and per_root[1].index or nil }
   end
   if any_usable then
     if #per_root > 1 then sort_usages(all_usages) end
@@ -1580,7 +1828,8 @@ function symbol_index.workspace_usages(name, opts)
       usage_truncated_reason = usage_truncated_reason,
     }
   end
-  return nil, reason or "indexing", "pending", { roots = per_root, index = #per_root == 1 and per_root[1].index or nil }
+  return nil, reason or "indexing", status == "unavailable" and "unavailable" or "pending",
+    { roots = per_root, index = #per_root == 1 and per_root[1].index or nil }
 end
 
 function symbol_index.workspace_references(name, opts)
@@ -1949,11 +2198,31 @@ function symbol_index.mark_directories_dirty(dirs, reason, opts)
   if not next(scopes) then return false, "no-directory" end
   opts = common.merge(opts, { reason = reason or opts.reason or "directory-dirty" })
   local matched = false
+  local ignored = false
   for _, index in pairs(indexes) do
     local index_dirs = {}
     for dir in pairs(scopes) do
       if common.path_equals(dir, index.root) or common.path_belongs_to(dir, index.root) then
-        index_dirs[#index_dirs + 1] = dir
+        local allowed = project_path_allows(dir, "symbols")
+        if allowed then
+          local info = system.get_file_info(dir)
+          local relative = common.relative_path(index.root, dir)
+          local filter_info = info and {
+            type = info.type,
+            size = info.size or 0,
+            modified = info.modified,
+            filename = relative,
+          } or {
+            type = "dir",
+            size = 0,
+            filename = relative,
+          }
+          allowed = not common.match_ignore_rule(
+            relative, filter_info, core.get_ignore_file_rules()
+          )
+        end
+        if allowed then index_dirs[#index_dirs + 1] = dir
+        else ignored = true end
       end
     end
     if #index_dirs > 0 then
@@ -1985,7 +2254,7 @@ function symbol_index.mark_directories_dirty(dirs, reason, opts)
       end
     end
   end
-  return matched, matched and nil or "no-index"
+  return matched, matched and nil or (ignored and "ignored" or "no-index")
 end
 
 function symbol_index.mark_directory_dirty(dir, reason, opts)
