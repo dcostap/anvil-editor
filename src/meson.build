@@ -16,6 +16,7 @@ anvil_sources = [
     'api/fuzzy.c',
     'api/worker_pool.c',
     'fuzzy.c',
+    'git_status_index.c',
     'worker_pool.c',
     'markdown_parser.c',
     'markdown_extensions.c',
@@ -204,11 +205,20 @@ fuzzy_test = executable('fuzzy_test',
 )
 test('fuzzy', fuzzy_test, env: anvil_test_env)
 
+git_status_index_test = executable('git_status_index_test',
+    ['../tests/native/git_status_index_test.c', 'git_status_index.c'],
+    include_directories: anvil_includes,
+    dependencies: [sdl_dep],
+    c_args: anvil_cargs,
+)
+test('git-status-index', git_status_index_test, env: anvil_test_env)
+
 worker_pool_test = executable('worker_pool_test',
     [
         '../tests/native/worker_pool_test.c',
         'worker_pool.c',
         'fuzzy.c',
+        'git_status_index.c',
         'markdown_parser.c',
         'markdown_extensions.c',
         'treesitter/languages.c',

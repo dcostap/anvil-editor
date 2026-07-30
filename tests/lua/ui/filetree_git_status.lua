@@ -47,11 +47,26 @@ local function make_controller(options)
   local presented = options.presented ~= false
   local now = 10
   local publications = {}
+  local function build_snapshot(payload, _, callback)
+    local snapshot = { payload = payload }
+    function snapshot:summary() return { status_records = 1, numstat_records = 1 } end
+    function snapshot:lookup(path)
+      path = path:lower():gsub("\\", "/")
+      if path == "src/app.lua" then
+        return { kind = "modified", additions = 2, deletions = 1 }
+      elseif path == "first.lua" then
+        return { kind = "modified" }
+      end
+    end
+    function snapshot:close() self.closed = true end
+    callback(snapshot)
+  end
   local controller = git_status.new {
     backend = backend,
     root = function() return options.root or "C:/repo/project" end,
     presented = function() return presented end,
     clock = function() return now end,
+    build_snapshot = options.build_snapshot or build_snapshot,
     publish = function(snapshot, detail)
       publications[#publications + 1] = { snapshot = snapshot, detail = detail }
     end,
@@ -102,31 +117,6 @@ test.describe("File Tree Git status controller", function()
     test.equal(info.kind, "modified")
     test.equal(info.additions, 2)
     test.equal(info.deletions, 1)
-  end)
-
-  test.it("inherits collapsed ignored and untracked directories while preserving stronger descendants", function()
-    local snapshot = git_status.build_lua_snapshot {
-      repository_root = "C:/repo",
-      status_text = table.concat({
-        "!! build/",
-        "?? scratch/",
-        " M build/kept.lua",
-        "",
-      }, "\0"),
-      numstat_text = "3\t4\tbuild/kept.lua\0",
-      case_insensitive_paths = true,
-    }
-
-    test.equal(snapshot:lookup("build/generated/object.o", false).kind, "ignored")
-    test.equal(snapshot:lookup("scratch/new/note.md", false).kind, "untracked")
-    local exact = snapshot:lookup("BUILD/KEPT.LUA", false)
-    test.equal(exact.kind, "modified")
-    test.equal(exact.additions, 3)
-    test.equal(exact.deletions, 4)
-    local parent = snapshot:lookup("build", true)
-    test.equal(parent.kind, "modified")
-    test.equal(parent.additions, 3)
-    test.equal(parent.deletions, 4)
   end)
 
   test.it("cancels hidden work and rejects its stale completion", function()

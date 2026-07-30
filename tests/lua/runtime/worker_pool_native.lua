@@ -98,6 +98,51 @@ test.describe("worker_pool_native", function()
     test.ok(#messages <= 2)
   end)
 
+  test.test("File Tree Git status jobs preserve binary payloads and return bounded snapshots", function()
+    local pool = new_pool("lua-native-filetree-git-status", 1)
+    local handle = test.not_nil(pool:submit({
+      kind = "filetree_git_status_index",
+      repository_root = "C:/repo",
+      status_text = table.concat({
+        "!! build/",
+        "?? scratch/",
+        " M build/kept.lua",
+        "",
+      }, "\0"),
+      numstat_text = "3\t4\tbuild/kept.lua\0",
+      case_insensitive_paths = true,
+    }))
+    local snapshot
+    test.ok(drain_until(pool, function(message)
+      if message.type == "result" then snapshot = message.snapshot end
+      return message.type == "final"
+    end))
+    test.not_nil(snapshot)
+    test.equal(snapshot:lookup("build/generated/object.o", false).kind, "ignored")
+    test.equal(snapshot:lookup("scratch/new/note.md", false).kind, "untracked")
+    local exact = snapshot:lookup("BUILD/KEPT.LUA", false)
+    test.equal(exact.kind, "modified")
+    test.equal(exact.additions, 3)
+    test.equal(exact.deletions, 4)
+    local parent = snapshot:lookup("build", true)
+    test.equal(parent.kind, "modified")
+    test.equal(parent.additions, 3)
+    test.equal(parent.deletions, 4)
+    local summary = snapshot:summary()
+    test.equal(summary.status_records, 3)
+    test.equal(summary.subtree_summaries, 2)
+    test.ok(summary.parent_edges > 0)
+    test.equal(pool:status(handle).status, "complete")
+    local release = test.not_nil(pool:submit({
+      kind = "filetree_git_status_snapshot_release",
+      release_git_status_snapshot = snapshot,
+    }))
+    test.not_ok(pcall(function() snapshot:summary() end), "moved snapshot should be harmless")
+    test.ok(drain_until(pool, function(message)
+      return message.job_id == pool:status(release).id and message.type == "final"
+    end))
+  end)
+
   test.test("Tree-sitter index job returns bounded result handle", function()
     local pool = new_pool("lua-native-treesitter-index", 1)
     local handle = pool:submit({

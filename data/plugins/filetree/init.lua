@@ -881,13 +881,24 @@ end
 
 function FileTreeView:get_git_info_for_entry(entry)
   if not entry then return nil end
+  local generation = self.git_status and self.git_status.generation or 0
+  if entry.git_status_lookup_generation == generation then
+    return entry.git_status_lookup or nil
+  end
   local info = self.git_status_controller:lookup(entry.abs, entry.type == "dir")
-  if not info then return nil end
+  if not info then
+    entry.git_status_lookup_generation = generation
+    entry.git_status_lookup = false
+    return nil
+  end
   local stat
   if info.additions ~= nil then
     stat = { additions = info.additions, deletions = info.deletions }
   end
-  return { kind = info.kind, stat = stat }
+  local result = { kind = info.kind, stat = stat }
+  entry.git_status_lookup_generation = generation
+  entry.git_status_lookup = result
+  return result
 end
 
 function FileTreeView:get_git_info_for_line(line)

@@ -1,8 +1,9 @@
 -- mod-version:3
--- File Tree Git status control plane. Repository-scale parsing is temporarily
--- isolated behind build_lua_snapshot; the native worker replaces that builder.
+-- File Tree Git status control plane. Repository-scale parsing and aggregation
+-- are owned by the native worker-pool job and immutable snapshot handle.
 
 local common = require "core.common"
+local worker_pool = require "core.worker_pool"
 local git_backend = require "plugins.git.backend"
 
 local git_status = {}
@@ -11,18 +12,6 @@ Controller.__index = Controller
 
 local REFRESH_INTERVAL = 2
 local MAX_OUTPUT = 16 * 1024 * 1024
-local KIND_RANK = {
-  deleted = 7,
-  added = 6,
-  modified = 5,
-  renamed = 5,
-  copied = 5,
-  typechange = 5,
-  unmerged = 5,
-  untracked = 2,
-  ignored = 1,
-}
-local UNMERGED = { DD = true, AU = true, UD = true, UA = true, DU = true, AA = true, UU = true }
 
 local function now()
   return system and system.get_time and system.get_time() or os.clock()
@@ -33,198 +22,56 @@ local function log_quiet(fmt, ...)
   if core and core.log_quiet then core.log_quiet(fmt, ...) end
 end
 
-local function stronger(a, b)
-  if not a or (KIND_RANK[b] or 0) > (KIND_RANK[a] or 0) then return b end
-  return a
-end
-
-local function status_kind(xy)
-  if xy == "!!" then return "ignored" end
-  if xy == "??" then return "untracked" end
-  if UNMERGED[xy] or xy:find("U", 1, true) then return "unmerged" end
-  if xy:find("R", 1, true) then return "renamed" end
-  if xy:find("C", 1, true) then return "copied" end
-  if xy:find("D", 1, true) then return "deleted" end
-  if xy:find("A", 1, true) then return "added" end
-  if xy:find("M", 1, true) then return "modified" end
-  if xy:find("T", 1, true) then return "typechange" end
-end
-
-local function canonical_rel(path, case_insensitive)
-  if type(path) ~= "string" then return nil end
-  path = path:gsub("\\", "/"):gsub("^%./+", ""):gsub("/+$", "")
-  if path == "" or path:sub(1, 1) == "/" or path:match("^%a:[/\\]") then return nil end
-  local parts = {}
-  for part in path:gmatch("[^/]+") do
-    if part == ".." or part == "" then return nil end
-    if part ~= "." then parts[#parts + 1] = part end
-  end
-  if #parts == 0 then return nil end
-  path = table.concat(parts, "/")
-  return case_insensitive and path:lower() or path
-end
-
-local function parents(rel)
-  return function(_, current)
-    current = current or rel
-    local parent = current:match("^(.*)/[^/]+$")
-    return parent, parent
-  end, nil, rel
-end
-
-local function each_nul(text)
-  local offset, length = 1, #(text or "")
-  return function()
-    if offset > length then return nil end
-    local finish = text:find("\0", offset, true)
-    local value
-    if finish then
-      value, offset = text:sub(offset, finish - 1), finish + 1
-    else
-      value, offset = text:sub(offset), length + 1
-    end
-    return value
-  end
-end
-
-local Snapshot = {}
-Snapshot.__index = Snapshot
-
-function Snapshot:close()
-  if self.closed then return false end
-  self.closed = true
-  self.exact, self.directories, self.subtrees = nil, nil, nil
-  self.stats, self.directory_stats = nil, nil
-  return true
-end
-
-function Snapshot:summary()
-  return {
-    repository_root = self.repository_root,
-    status_bytes = self.status_bytes,
-    numstat_bytes = self.numstat_bytes,
-    status_records = self.status_records,
-    numstat_records = self.numstat_records,
-    parent_edges = self.parent_edges,
-    subtree_summaries = self.subtree_summaries,
-    rejected_records = self.rejected_records,
-    build_ms = self.build_ms,
+local function release_snapshot(snapshot)
+  if not (snapshot and snapshot.close) then return end
+  local pool = worker_pool.system()
+  local handle = pool:submit {
+    kind = "filetree-git-status-snapshot-release",
+    priority = "background",
+    native = true,
+    native_kind = "filetree_git_status_snapshot_release",
+    native_payload = { release_git_status_snapshot = snapshot },
   }
+  if not handle then snapshot:close() end
 end
 
-local function stat_values(stat)
-  if not stat then return nil, nil end
-  return stat.additions, stat.deletions
-end
-
-function Snapshot:lookup(path, is_directory)
-  if self.closed then return nil end
-  local rel = path
-  if self.repository_root and type(path) == "string" and common.path_belongs_to(path, self.repository_root) then
-    rel = common.relative_path(self.repository_root, path)
-  end
-  rel = canonical_rel(rel, self.case_insensitive_paths)
-  if not rel then return nil end
-
-  local kind = self.exact[rel]
-  if is_directory then kind = stronger(kind, self.directories[rel]) end
-  local current = rel
-  while current do
-    kind = stronger(kind, self.subtrees[current])
-    current = current:match("^(.*)/[^/]+$")
-  end
-  local stat = is_directory and self.directory_stats[rel] or self.stats[rel]
-  local additions, deletions = stat_values(stat)
-  if not kind and additions == nil then return nil end
-  return { kind = kind, additions = additions, deletions = deletions }
-end
-
-function git_status.build_lua_snapshot(payload)
-  payload = payload or {}
-  local started = now()
-  local exact, directories, subtrees = {}, {}, {}
-  local stats, directory_stats = {}, {}
-  local status_records, numstat_records, parent_edges = 0, 0, 0
-  local subtree_summaries, rejected_records = 0, 0
-  local insensitive = not not payload.case_insensitive_paths
-  local fields = each_nul(payload.status_text or "")
-
-  while true do
-    local field = fields()
-    if field == nil then break end
-    if field ~= "" then
-      local xy, raw_path = field:sub(1, 2), field:sub(4)
-      local kind = status_kind(xy)
-      local directory_summary = raw_path:match("[/\\]$") ~= nil
-      local rel = canonical_rel(raw_path, insensitive)
-      if (kind == "renamed" or kind == "copied") then fields() end -- porcelain v1 -z: destination then source
-      if kind and rel then
-        status_records = status_records + 1
-        exact[rel] = stronger(exact[rel], kind)
-        if directory_summary and (kind == "ignored" or kind == "untracked") then
-          subtrees[rel] = stronger(subtrees[rel], kind)
-          subtree_summaries = subtree_summaries + 1
-        end
-        for parent in parents(rel) do
-          directories[parent] = stronger(directories[parent], kind)
-          parent_edges = parent_edges + 1
-        end
-      else
-        rejected_records = rejected_records + 1
-      end
+local function native_builder(payload, generation, callback)
+  local pool = worker_pool.system()
+  local delivered = false
+  local function deliver(snapshot, err)
+    if delivered then
+      release_snapshot(snapshot)
+      return
     end
+    delivered = true
+    callback(snapshot, err)
   end
-
-  fields = each_nul(payload.numstat_text or "")
-  while true do
-    local field = fields()
-    if field == nil then break end
-    if field ~= "" then
-      local added_text, deleted_text, raw_path = field:match("^([^\t]*)\t([^\t]*)\t(.*)$")
-      if raw_path == "" then
-        fields() -- old path
-        raw_path = fields() -- new path
-      end
-      local additions, deletions = tonumber(added_text), tonumber(deleted_text)
-      local rel = canonical_rel(raw_path, insensitive)
-      if additions and deletions and rel then
-        numstat_records = numstat_records + 1
-        stats[rel] = { additions = additions, deletions = deletions }
-        for parent in parents(rel) do
-          local total = directory_stats[parent]
-          if not total then total = { additions = 0, deletions = 0 }; directory_stats[parent] = total end
-          total.additions = total.additions + additions
-          total.deletions = total.deletions + deletions
-          parent_edges = parent_edges + 1
-        end
-      else
-        rejected_records = rejected_records + 1
-      end
-    end
+  local handle, err = pool:submit {
+    kind = "filetree-git-status-index",
+    generation = generation,
+    phase = "snapshot-build",
+    priority = "interactive",
+    native = true,
+    native_kind = "filetree_git_status_index",
+    native_payload = payload,
+    on_result = function(message)
+      deliver(message.snapshot or (message.payload and message.payload.snapshot))
+    end,
+    on_error = function(message) deliver(nil, message.error or "native Git status build failed") end,
+    on_cancelled = function() deliver(nil, "cancelled") end,
+    on_stale = function(message)
+      local snapshot = message.snapshot or (message.payload and message.payload.snapshot)
+      release_snapshot(snapshot)
+    end,
+  }
+  if not handle then
+    deliver(nil, err or "native Git status worker unavailable")
+    return nil
   end
-
-  return setmetatable({
-    repository_root = payload.repository_root and common.normalize_path(payload.repository_root),
-    case_insensitive_paths = insensitive,
-    exact = exact,
-    directories = directories,
-    subtrees = subtrees,
-    stats = stats,
-    directory_stats = directory_stats,
-    status_bytes = #(payload.status_text or ""),
-    numstat_bytes = #(payload.numstat_text or ""),
-    status_records = status_records,
-    numstat_records = numstat_records,
-    parent_edges = parent_edges,
-    subtree_summaries = subtree_summaries,
-    rejected_records = rejected_records,
-    build_ms = (now() - started) * 1000,
-  }, Snapshot)
-end
-
-local function default_builder(payload, _, callback)
-  local ok, snapshot = pcall(git_status.build_lua_snapshot, payload)
-  if ok then callback(snapshot) else callback(nil, snapshot) end
+  return {
+    cancel = function() return pool:cancel(handle) end,
+    handle = handle,
+  }
 end
 
 local function cancel_job(job)
@@ -235,13 +82,13 @@ function git_status.new(options)
   options = options or {}
   assert(type(options.root) == "function", "File Tree Git status controller requires root()")
   assert(type(options.presented) == "function", "File Tree Git status controller requires presented()")
-  local self = setmetatable({
+  return setmetatable({
     backend = options.backend or git_backend,
     root = options.root,
     presented = options.presented,
     clock = options.clock or now,
     publish = options.publish,
-    build_snapshot = options.build_snapshot or default_builder,
+    build_snapshot = options.build_snapshot or native_builder,
     refresh_interval = options.refresh_interval or REFRESH_INTERVAL,
     max_output = options.max_output or MAX_OUTPUT,
     case_insensitive_paths = options.case_insensitive_paths ~= nil
@@ -257,10 +104,10 @@ function git_status.new(options)
     coalesced_requests = 0,
     was_presented = false,
   }, Controller)
-  return self
 end
 
 function Controller:request(reason, force)
+  local was_dirty = self.dirty
   self.generation = self.generation + 1
   self.dirty = true
   self.forced = self.forced or not not force
@@ -268,7 +115,7 @@ function Controller:request(reason, force)
   if self.active then
     self.coalesced_requests = self.coalesced_requests + 1
     self:cancel_active("superseded")
-  elseif self.dirty and self.pending_reason ~= reason then
+  elseif was_dirty then
     self.coalesced_requests = self.coalesced_requests + 1
   end
   log_quiet("File Tree Git request generation=%d root=%s reason=%s forced=%s",
@@ -302,21 +149,23 @@ function Controller:finish_failure(generation, root, phase, err)
     phase, generation, tostring(root), tostring(err and (err.message or err.kind) or err))
 end
 
-function Controller:adopt(snapshot, generation, root, reason)
+function Controller:adopt(snapshot, generation, root, repository_root, reason)
   if not self:is_current(generation, root) then
-    if snapshot and snapshot.close then snapshot:close() end
+    release_snapshot(snapshot)
     return
   end
   local previous = self.snapshot
   self.snapshot = snapshot
+  self.snapshot_repository_root = repository_root
   self.published_generation = generation
   self.active = false
   self.stage = nil
   self.discovery_job, self.status_job, self.numstat_job, self.native_job = nil, nil, nil, nil
-  if previous and previous ~= snapshot and previous.close then previous:close() end
+  if previous and previous ~= snapshot then release_snapshot(previous) end
   local summary = snapshot and snapshot.summary and snapshot:summary() or {}
-  log_quiet("File Tree Git published generation=%d root=%s status_records=%s numstat_records=%s build_ms=%s",
-    generation, tostring(root), tostring(summary.status_records), tostring(summary.numstat_records), tostring(summary.build_ms))
+  log_quiet("File Tree Git published generation=%d root=%s status_records=%s numstat_records=%s parent_edges=%s build_ms=%s",
+    generation, tostring(root), tostring(summary.status_records), tostring(summary.numstat_records),
+    tostring(summary.parent_edges), tostring(summary.build_ms))
   if self.publish then self.publish(snapshot, { generation = generation, root = root, reason = reason }) end
 end
 
@@ -331,7 +180,7 @@ function Controller:build(generation, root, repo, status_text, numstat_text, rea
   }
   local returned = self.build_snapshot(payload, generation, function(snapshot, err)
     if not snapshot then return self:finish_failure(generation, root, "snapshot-build", err) end
-    self:adopt(snapshot, generation, root, reason)
+    self:adopt(snapshot, generation, root, repo.root, reason)
   end)
   if self.active and self.stage == "native-build" then self.native_job = returned end
 end
@@ -366,7 +215,6 @@ function Controller:start_git(generation, root, repo, reason)
       if result then
         numstat_text = result.stdout or ""
       else
-        numstat_text = ""
         log_quiet("File Tree Git numstat failed generation=%d root=%s: %s",
           generation, tostring(root), tostring(err and (err.message or err.kind) or err))
       end
@@ -433,7 +281,12 @@ function Controller:update()
 end
 
 function Controller:lookup(path, is_directory)
-  return self.snapshot and self.snapshot:lookup(path, is_directory) or nil
+  if not self.snapshot then return nil end
+  local relative = path
+  if self.snapshot_repository_root and common.path_belongs_to(path, self.snapshot_repository_root) then
+    relative = common.relative_path(self.snapshot_repository_root, path)
+  end
+  return self.snapshot:lookup(relative:gsub("\\", "/"), is_directory)
 end
 
 function Controller:status()
@@ -449,7 +302,7 @@ end
 
 function Controller:close()
   self:cancel_active("close")
-  if self.snapshot and self.snapshot.close then self.snapshot:close() end
+  release_snapshot(self.snapshot)
   self.snapshot = nil
 end
 

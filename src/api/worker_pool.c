@@ -17,6 +17,7 @@
 #define API_TYPE_TREESITTER_INDEX_RESULT "NativeTreeSitterIndexResult"
 #define API_TYPE_PROJECT_BUILDER "NativeTreeSitterProjectBuilder"
 #define API_TYPE_PROJECT_SNAPSHOT "NativeTreeSitterProjectSnapshot"
+#define API_TYPE_GIT_STATUS_SNAPSHOT "NativeFileTreeGitStatusSnapshot"
 
 typedef struct {
   AnvilWorkerPool *pool;
@@ -41,6 +42,10 @@ typedef struct {
 typedef struct {
   AnvilTSProjectSnapshot *snapshot;
 } LuaProjectSnapshot;
+
+typedef struct {
+  AnvilGitStatusSnapshot *snapshot;
+} LuaGitStatusSnapshot;
 
 static LuaWorkerPool *check_pool(lua_State *L, int idx) {
   LuaWorkerPool *pool = (LuaWorkerPool *)luaL_checkudata(L, idx, API_TYPE_WORKER_POOL);
@@ -76,6 +81,12 @@ static LuaTreeSitterIndexResult *check_treesitter_index_result(lua_State *L, int
   LuaTreeSitterIndexResult *result = (LuaTreeSitterIndexResult *)luaL_checkudata(L, idx, API_TYPE_TREESITTER_INDEX_RESULT);
   luaL_argcheck(L, result && result->result, idx, "released native Tree-sitter index result");
   return result;
+}
+
+static LuaGitStatusSnapshot *check_git_status_snapshot(lua_State *L, int idx) {
+  LuaGitStatusSnapshot *snapshot = (LuaGitStatusSnapshot *)luaL_checkudata(L, idx, API_TYPE_GIT_STATUS_SNAPSHOT);
+  luaL_argcheck(L, snapshot && snapshot->snapshot, idx, "closed native File Tree Git status snapshot");
+  return snapshot;
 }
 
 static int opt_int_field(lua_State *L, int table, const char *key, int def) {
@@ -227,6 +238,10 @@ static int pool_submit(lua_State *L) {
   spec.outline_query = opt_lstring_field(L, 2, "outline_query", &spec.outline_query_len);
   spec.usage_query = opt_lstring_field(L, 2, "usage_query", &spec.usage_query_len);
   spec.cancel_token = opt_string_field(L, 2, "cancel_token", NULL);
+  spec.repository_root = opt_string_field(L, 2, "repository_root", NULL);
+  spec.status_text = opt_lstring_field(L, 2, "status_text", &spec.status_text_len);
+  spec.numstat_text = opt_lstring_field(L, 2, "numstat_text", &spec.numstat_text_len);
+  spec.case_insensitive_paths = opt_bool_field(L, 2, "case_insensitive_paths", NULL);
   spec.parse_timeout_ms = opt_uint32_field(L, 2, "parse_timeout_ms", 0);
   spec.query_timeout_ms = opt_uint32_field(L, 2, "query_timeout_ms", 0);
   spec.match_limit = opt_uint32_field(L, 2, "match_limit", 0);
@@ -258,6 +273,7 @@ static int pool_submit(lua_State *L) {
   AnvilWorkerProjectBatchFileSpec *project_files = NULL;
   LuaProjectBuilder *transferred_builder = NULL;
   LuaProjectSnapshot *transferred_snapshot = NULL;
+  LuaGitStatusSnapshot *transferred_git_status_snapshot = NULL;
   LuaProjectSnapshot *query_snapshot = NULL;
   lua_getfield(L, 2, "project_builder");
   if (!lua_isnil(L, -1)) {
@@ -285,6 +301,14 @@ static int pool_submit(lua_State *L) {
       "release_snapshot is only valid for project_snapshot_release jobs");
     transferred_snapshot = check_project_snapshot(L, -1);
     spec.project_snapshot_to_release = transferred_snapshot->snapshot;
+  }
+  lua_pop(L, 1);
+  lua_getfield(L, 2, "release_git_status_snapshot");
+  if (!lua_isnil(L, -1)) {
+    luaL_argcheck(L, spec.kind && strcmp(spec.kind, "filetree_git_status_snapshot_release") == 0, 2,
+      "release_git_status_snapshot is only valid for File Tree Git status release jobs");
+    transferred_git_status_snapshot = check_git_status_snapshot(L, -1);
+    spec.git_status_snapshot_to_release = transferred_git_status_snapshot->snapshot;
   }
   lua_pop(L, 1);
   lua_getfield(L, 2, "project_builder_id");
@@ -419,6 +443,11 @@ static int pool_submit(lua_State *L) {
     AnvilTSProjectSnapshot *snapshot = transferred_snapshot->snapshot;
     transferred_snapshot->snapshot = NULL;
     anvil_ts_project_snapshot_release(snapshot);
+  }
+  if (transferred_git_status_snapshot && transferred_git_status_snapshot->snapshot) {
+    AnvilGitStatusSnapshot *snapshot = transferred_git_status_snapshot->snapshot;
+    transferred_git_status_snapshot->snapshot = NULL;
+    anvil_git_status_snapshot_release(snapshot);
   }
   push_job_handle(L, job);
   return 1;
@@ -749,6 +778,63 @@ static void push_project_snapshot(lua_State *L, AnvilTSProjectSnapshot *snapshot
   lua_snapshot->snapshot = snapshot;
   luaL_getmetatable(L, API_TYPE_PROJECT_SNAPSHOT);
   lua_setmetatable(L, -2);
+}
+
+static void push_git_status_snapshot(lua_State *L, AnvilGitStatusSnapshot *snapshot) {
+  LuaGitStatusSnapshot *lua_snapshot = (LuaGitStatusSnapshot *)lua_newuserdata(L, sizeof(*lua_snapshot));
+  lua_snapshot->snapshot = snapshot;
+  luaL_getmetatable(L, API_TYPE_GIT_STATUS_SNAPSHOT);
+  lua_setmetatable(L, -2);
+}
+
+static int git_status_snapshot_close(lua_State *L) {
+  LuaGitStatusSnapshot *snapshot = (LuaGitStatusSnapshot *)luaL_checkudata(L, 1, API_TYPE_GIT_STATUS_SNAPSHOT);
+  bool released = snapshot && snapshot->snapshot;
+  if (released) {
+    anvil_git_status_snapshot_release(snapshot->snapshot);
+    snapshot->snapshot = NULL;
+  }
+  lua_pushboolean(L, released);
+  return 1;
+}
+
+static int git_status_snapshot_summary(lua_State *L) {
+  LuaGitStatusSnapshot *snapshot = check_git_status_snapshot(L, 1);
+  AnvilGitStatusSummary summary;
+  anvil_git_status_snapshot_summary(snapshot->snapshot, &summary);
+  lua_createtable(L, 0, 9);
+#define SET_SUMMARY_INTEGER(name) do { lua_pushnumber(L, (lua_Number)summary.name); lua_setfield(L, -2, #name); } while (0)
+  SET_SUMMARY_INTEGER(status_bytes);
+  SET_SUMMARY_INTEGER(numstat_bytes);
+  SET_SUMMARY_INTEGER(status_records);
+  SET_SUMMARY_INTEGER(numstat_records);
+  SET_SUMMARY_INTEGER(parent_edges);
+  SET_SUMMARY_INTEGER(subtree_summaries);
+  SET_SUMMARY_INTEGER(rejected_records);
+  SET_SUMMARY_INTEGER(entry_count);
+#undef SET_SUMMARY_INTEGER
+  lua_pushnumber(L, summary.build_ms); lua_setfield(L, -2, "build_ms");
+  return 1;
+}
+
+static int git_status_snapshot_lookup(lua_State *L) {
+  LuaGitStatusSnapshot *snapshot = check_git_status_snapshot(L, 1);
+  size_t path_len = 0;
+  const char *path = luaL_checklstring(L, 2, &path_len);
+  bool is_directory = lua_toboolean(L, 3) != 0;
+  AnvilGitStatusLookup lookup;
+  if (!anvil_git_status_snapshot_lookup(snapshot->snapshot, path, path_len, is_directory, &lookup)) {
+    lua_pushnil(L);
+    return 1;
+  }
+  lua_createtable(L, 0, 3);
+  const char *kind = anvil_git_status_kind_name(lookup.kind);
+  if (kind) { lua_pushstring(L, kind); lua_setfield(L, -2, "kind"); }
+  if (lookup.has_numstat) {
+    lua_pushnumber(L, (lua_Number)lookup.additions); lua_setfield(L, -2, "additions");
+    lua_pushnumber(L, (lua_Number)lookup.deletions); lua_setfield(L, -2, "deletions");
+  }
+  return 1;
 }
 
 static int treesitter_index_result_adopt_project(lua_State *L) {
@@ -1566,6 +1652,16 @@ static void push_result(lua_State *L, AnvilWorkerResult *result) {
     lua_setfield(L, -2, "snapshot");
     lua_setfield(L, -2, "payload");
   }
+  AnvilGitStatusSnapshot *git_status_snapshot = anvil_worker_result_steal_git_status_snapshot(result);
+  if (git_status_snapshot) {
+    push_git_status_snapshot(L, git_status_snapshot);
+    lua_setfield(L, -2, "snapshot");
+    lua_getfield(L, -1, "payload");
+    if (!lua_istable(L, -1)) { lua_pop(L, 1); lua_createtable(L, 0, 1); }
+    lua_getfield(L, -2, "snapshot");
+    lua_setfield(L, -2, "snapshot");
+    lua_setfield(L, -2, "payload");
+  }
   const char *error = anvil_worker_result_error(result);
   if (error) {
     lua_pushstring(L, error);
@@ -1842,6 +1938,14 @@ static const luaL_Reg project_snapshot_methods[] = {
   { NULL, NULL }
 };
 
+static const luaL_Reg git_status_snapshot_methods[] = {
+  { "summary", git_status_snapshot_summary },
+  { "lookup", git_status_snapshot_lookup },
+  { "close", git_status_snapshot_close },
+  { "__gc", git_status_snapshot_close },
+  { NULL, NULL }
+};
+
 static const luaL_Reg lib[] = {
   { "new", f_new },
   { "new_project_builder", f_new_project_builder },
@@ -1885,6 +1989,12 @@ int luaopen_worker_pool_native(lua_State *L) {
   lua_pushvalue(L, -1);
   lua_setfield(L, -2, "__index");
   luaL_setfuncs(L, project_snapshot_methods, 0);
+  lua_pop(L, 1);
+
+  luaL_newmetatable(L, API_TYPE_GIT_STATUS_SNAPSHOT);
+  lua_pushvalue(L, -1);
+  lua_setfield(L, -2, "__index");
+  luaL_setfuncs(L, git_status_snapshot_methods, 0);
   lua_pop(L, 1);
 
   luaL_newlib(L, lib);

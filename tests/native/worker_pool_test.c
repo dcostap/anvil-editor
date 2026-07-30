@@ -156,7 +156,45 @@ int main(int argc, char **argv) {
   CHECK(strcmp(anvil_worker_job_status_string(markdown_job), "complete") == 0);
   anvil_worker_job_release(markdown_job);
 
-  CHECK(anvil_worker_pool_submitted_count(pool) == 5);
+  static const char git_status_text[] = "!! build/\0 M build/kept.lua\0";
+  static const char git_numstat_text[] = "7\t3\tbuild/kept.lua\0";
+  AnvilWorkerJobSpec git_status = { 0 };
+  git_status.kind = "filetree_git_status_index";
+  git_status.repository_root = "C:/repo";
+  git_status.status_text = git_status_text;
+  git_status.status_text_len = sizeof(git_status_text) - 1;
+  git_status.numstat_text = git_numstat_text;
+  git_status.numstat_text_len = sizeof(git_numstat_text) - 1;
+  git_status.case_insensitive_paths = true;
+  AnvilWorkerJob *git_status_job = anvil_worker_pool_submit(pool, &git_status, &error);
+  CHECK(git_status_job != NULL);
+  uint64_t git_status_id = anvil_worker_job_id(git_status_job);
+  int saw_git_status_result = 0;
+  start = SDL_GetTicks();
+  while ((int)(SDL_GetTicks() - start) < 1000 && !saw_git_status_result) {
+    AnvilWorkerResult *result = anvil_worker_pool_pop_result(pool);
+    if (result) {
+      if (anvil_worker_result_job_id(result) == git_status_id && strcmp(anvil_worker_result_type(result), "result") == 0) {
+        AnvilGitStatusSnapshot *snapshot = anvil_worker_result_steal_git_status_snapshot(result);
+        AnvilGitStatusLookup lookup;
+        CHECK(snapshot != NULL);
+        CHECK(anvil_git_status_snapshot_lookup(snapshot, "build/generated.o", strlen("build/generated.o"), false, &lookup));
+        CHECK(lookup.kind == ANVIL_GIT_STATUS_IGNORED);
+        CHECK(anvil_git_status_snapshot_lookup(snapshot, "BUILD/KEPT.LUA", strlen("BUILD/KEPT.LUA"), false, &lookup));
+        CHECK(lookup.kind == ANVIL_GIT_STATUS_MODIFIED && lookup.has_numstat);
+        anvil_git_status_snapshot_release(snapshot);
+        saw_git_status_result = 1;
+      }
+      anvil_worker_result_free(result);
+    } else {
+      SDL_Delay(1);
+    }
+  }
+  CHECK(saw_git_status_result);
+  CHECK(drain_until_type(pool, git_status_id, "final", 1000));
+  anvil_worker_job_release(git_status_job);
+
+  CHECK(anvil_worker_pool_submitted_count(pool) == 6);
   CHECK(anvil_worker_pool_completed_count(pool) >= 1);
   CHECK(anvil_worker_pool_cancelled_count(pool) >= 1);
   CHECK(anvil_worker_pool_failed_count(pool) >= 1);

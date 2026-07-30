@@ -9,6 +9,7 @@
 
 #include "treesitter/project_file.h"
 #include "treesitter/project_index.h"
+#include "git_status_index.h"
 
 typedef struct AnvilWorkerPool AnvilWorkerPool;
 typedef struct AnvilWorkerJob AnvilWorkerJob;
@@ -75,6 +76,13 @@ typedef struct AnvilWorkerJobSpec {
   const char *usage_query;
   size_t usage_query_len;
   const char *cancel_token;
+  const char *repository_root;
+  const char *status_text;
+  size_t status_text_len;
+  const char *numstat_text;
+  size_t numstat_text_len;
+  bool case_insensitive_paths;
+  AnvilGitStatusSnapshot *git_status_snapshot_to_release;
   uint32_t parse_timeout_ms;
   uint32_t query_timeout_ms;
   uint32_t match_limit;
@@ -167,6 +175,7 @@ double anvil_worker_result_project_builder_ms(const AnvilWorkerResult *result);
 double anvil_worker_result_project_snapshot_ms(const AnvilWorkerResult *result);
 AnvilWorkerTreeSitterIndexResult *anvil_worker_result_steal_treesitter_index_result(AnvilWorkerResult *result);
 AnvilTSProjectSnapshot *anvil_worker_result_steal_project_snapshot(AnvilWorkerResult *result);
+AnvilGitStatusSnapshot *anvil_worker_result_steal_git_status_snapshot(AnvilWorkerResult *result);
 
 void anvil_worker_treesitter_index_result_retain(AnvilWorkerTreeSitterIndexResult *result);
 void anvil_worker_treesitter_index_result_free(AnvilWorkerTreeSitterIndexResult *result);

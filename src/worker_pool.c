@@ -1,5 +1,6 @@
 #include "worker_pool.h"
 
+#include "git_status_index.h"
 #include "markdown_parser.h"
 #include "markdown_extensions.h"
 #include "treesitter/languages.h"
@@ -42,6 +43,13 @@ struct AnvilWorkerJob {
   char *usage_query;
   size_t usage_query_len;
   char *cancel_token;
+  char *repository_root;
+  char *status_text;
+  size_t status_text_len;
+  char *numstat_text;
+  size_t numstat_text_len;
+  bool case_insensitive_paths;
+  AnvilGitStatusSnapshot *git_status_snapshot_to_release;
   uint32_t parse_timeout_ms;
   uint32_t query_timeout_ms;
   uint32_t match_limit;
@@ -123,6 +131,7 @@ struct AnvilWorkerResult {
   double project_query_ms;
   AnvilWorkerTreeSitterIndexResult *treesitter_index_result;
   AnvilTSProjectSnapshot *project_snapshot;
+  AnvilGitStatusSnapshot *git_status_snapshot;
   struct AnvilWorkerResult *next;
 };
 
@@ -382,6 +391,10 @@ static void job_free(AnvilWorkerJob *job) {
   SDL_free(job->outline_query);
   SDL_free(job->usage_query);
   SDL_free(job->cancel_token);
+  SDL_free(job->repository_root);
+  free(job->status_text);
+  free(job->numstat_text);
+  anvil_git_status_snapshot_release(job->git_status_snapshot_to_release);
   for (uint32_t i = 0; i < job->project_file_count; i++) {
     SDL_free((void *)job->project_files[i].path);
     SDL_free((void *)job->project_files[i].relpath);
@@ -3458,6 +3471,49 @@ static void run_project_snapshot_query_symbols(AnvilWorkerContext *context, Anvi
   enqueue_simple_result(context->pool, job, "final");
 }
 
+static bool git_status_job_cancelled(void *userdata) {
+  return job_cancelled((AnvilWorkerJob *)userdata);
+}
+
+static void run_filetree_git_status_index(AnvilWorkerContext *context, AnvilWorkerJob *job) {
+  AnvilGitStatusBuildSpec spec = {
+    .repository_root = job->repository_root,
+    .status_text = job->status_text,
+    .status_text_len = job->status_text_len,
+    .numstat_text = job->numstat_text,
+    .numstat_text_len = job->numstat_text_len,
+    .case_insensitive_paths = job->case_insensitive_paths,
+    .cancelled = git_status_job_cancelled,
+    .cancel_userdata = job,
+  };
+  char *error = NULL;
+  AnvilGitStatusSnapshot *snapshot = anvil_git_status_snapshot_build(&spec, &error);
+  if (!snapshot) {
+    if (job_cancelled(job) || (error && strcmp(error, "cancelled") == 0)) {
+      SDL_free(error);
+      SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_CANCELLED);
+      enqueue_simple_result(context->pool, job, "cancelled");
+    } else {
+      SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
+      AnvilWorkerResult *result = result_new(job, "error");
+      if (result) result->error = error ? error : pool_strdup("native Git status index failed");
+      else SDL_free(error);
+      enqueue_result(context->pool, result);
+    }
+    return;
+  }
+  AnvilWorkerResult *result = result_new(job, "result");
+  if (!result) {
+    anvil_git_status_snapshot_release(snapshot);
+    SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
+    return;
+  }
+  result->git_status_snapshot = snapshot;
+  enqueue_result(context->pool, result);
+  SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_COMPLETE);
+  enqueue_simple_result(context->pool, job, "final");
+}
+
 static void run_job(AnvilWorkerContext *context, AnvilWorkerJob *job) {
   AnvilWorkerPool *pool = context->pool;
   SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_RUNNING);
@@ -3466,6 +3522,11 @@ static void run_job(AnvilWorkerContext *context, AnvilWorkerJob *job) {
       AnvilTSProjectSnapshot *snapshot = job->project_snapshot_to_release;
       job->project_snapshot_to_release = NULL;
       anvil_ts_project_snapshot_release(snapshot);
+    }
+    if (job->git_status_snapshot_to_release) {
+      AnvilGitStatusSnapshot *snapshot = job->git_status_snapshot_to_release;
+      job->git_status_snapshot_to_release = NULL;
+      anvil_git_status_snapshot_release(snapshot);
     }
     SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_CANCELLED);
     enqueue_simple_result(pool, job, "cancelled");
@@ -3495,6 +3556,14 @@ static void run_job(AnvilWorkerContext *context, AnvilWorkerJob *job) {
     run_treesitter_project_batch(context, job);
   } else if (strcmp(kind, "markdown_parse") == 0) {
     run_markdown_parse(context, job);
+  } else if (strcmp(kind, "filetree_git_status_index") == 0) {
+    run_filetree_git_status_index(context, job);
+  } else if (strcmp(kind, "filetree_git_status_snapshot_release") == 0) {
+    AnvilGitStatusSnapshot *snapshot = job->git_status_snapshot_to_release;
+    job->git_status_snapshot_to_release = NULL;
+    anvil_git_status_snapshot_release(snapshot);
+    SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_COMPLETE);
+    enqueue_simple_result(context->pool, job, "final");
   } else {
     SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
     AnvilWorkerResult *result = result_new(job, "error");
@@ -3707,6 +3776,16 @@ AnvilWorkerJob *anvil_worker_pool_submit(AnvilWorkerPool *pool, const AnvilWorke
     pool_set_error(error, "Tree-sitter worker input exceeds 4GB byte limit");
     return NULL;
   }
+  if ((spec->status_text_len && !spec->status_text) || (spec->numstat_text_len && !spec->numstat_text) ||
+      spec->status_text_len > UINT32_MAX || spec->numstat_text_len > UINT32_MAX) {
+    pool_set_error(error, "Git status worker input exceeds 4GB byte limit");
+    return NULL;
+  }
+  if (strcmp(spec->kind, "filetree_git_status_index") == 0 &&
+      (!spec->repository_root || !spec->repository_root[0])) {
+    pool_set_error(error, "Git status worker requires a repository root");
+    return NULL;
+  }
   size_t outline_query_len = spec->outline_query
     ? (spec->outline_query_len ? spec->outline_query_len : strlen(spec->outline_query)) : 0;
   size_t usage_query_len = spec->usage_query
@@ -3737,6 +3816,14 @@ AnvilWorkerJob *anvil_worker_pool_submit(AnvilWorkerPool *pool, const AnvilWorke
   job->outline_query = spec->outline_query ? pool_memdup0(spec->outline_query, job->outline_query_len) : NULL;
   job->usage_query = spec->usage_query ? pool_memdup0(spec->usage_query, job->usage_query_len) : NULL;
   job->cancel_token = pool_strdup(spec->cancel_token);
+  job->repository_root = pool_strdup(spec->repository_root);
+  job->status_text_len = spec->status_text_len;
+  job->status_text = spec->status_text ? pool_textdup(spec->status_text, spec->status_text_len) : NULL;
+  job->numstat_text_len = spec->numstat_text_len;
+  job->numstat_text = spec->numstat_text ? pool_textdup(spec->numstat_text, spec->numstat_text_len) : NULL;
+  job->case_insensitive_paths = spec->case_insensitive_paths;
+  job->git_status_snapshot_to_release = spec->git_status_snapshot_to_release;
+  anvil_git_status_snapshot_retain(job->git_status_snapshot_to_release);
   job->parse_timeout_ms = spec->parse_timeout_ms;
   job->query_timeout_ms = spec->query_timeout_ms;
   job->match_limit = spec->match_limit;
@@ -3895,7 +3982,9 @@ AnvilWorkerJob *anvil_worker_pool_submit(AnvilWorkerPool *pool, const AnvilWorke
   if (!job->kind || (spec->value && !job->value) || (spec->path && !job->path) ||
       (spec->relpath && !job->relpath) || (spec->language && !job->language) || (spec->text && !job->text) ||
       (spec->outline_query && !job->outline_query) || (spec->usage_query && !job->usage_query) ||
-      (spec->cancel_token && !job->cancel_token) || (spec->project_root && !job->project_root)) {
+      (spec->cancel_token && !job->cancel_token) || (spec->repository_root && !job->repository_root) ||
+      (spec->status_text && !job->status_text) || (spec->numstat_text && !job->numstat_text) ||
+      (spec->project_root && !job->project_root)) {
     anvil_worker_job_release(job);
     anvil_worker_job_release(job);
     pool_set_error(error, "out of memory copying worker job spec");
@@ -3967,6 +4056,7 @@ void anvil_worker_result_free(AnvilWorkerResult *result) {
   SDL_free(result->project_query_indices);
   anvil_worker_treesitter_index_result_free(result->treesitter_index_result);
   anvil_ts_project_snapshot_release(result->project_snapshot);
+  anvil_git_status_snapshot_release(result->git_status_snapshot);
   SDL_free(result);
 }
 
@@ -3981,6 +4071,13 @@ AnvilTSProjectSnapshot *anvil_worker_result_steal_project_snapshot(AnvilWorkerRe
   if (!result) return NULL;
   AnvilTSProjectSnapshot *out = result->project_snapshot;
   result->project_snapshot = NULL;
+  return out;
+}
+
+AnvilGitStatusSnapshot *anvil_worker_result_steal_git_status_snapshot(AnvilWorkerResult *result) {
+  if (!result) return NULL;
+  AnvilGitStatusSnapshot *out = result->git_status_snapshot;
+  result->git_status_snapshot = NULL;
   return out;
 }
 
