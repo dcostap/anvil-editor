@@ -11,7 +11,6 @@ local Controller = {}
 Controller.__index = Controller
 
 local REFRESH_INTERVAL = 2
-local MAX_OUTPUT = 16 * 1024 * 1024
 
 local function now()
   return system and system.get_time and system.get_time() or os.clock()
@@ -24,7 +23,8 @@ end
 
 local function release_snapshot(snapshot)
   if not (snapshot and snapshot.close) then return end
-  local pool = worker_pool.system()
+  local pool = worker_pool.current_system()
+  if not pool then snapshot:close(); return end
   local handle = pool:submit {
     kind = "filetree-git-status-snapshot-release",
     priority = "background",
@@ -90,7 +90,7 @@ function git_status.new(options)
     publish = options.publish,
     build_snapshot = options.build_snapshot or native_builder,
     refresh_interval = options.refresh_interval or REFRESH_INTERVAL,
-    max_output = options.max_output or MAX_OUTPUT,
+    max_output = options.max_output,
     case_insensitive_paths = options.case_insensitive_paths ~= nil
       and options.case_insensitive_paths or PLATFORM == "Windows",
     generation = 0,

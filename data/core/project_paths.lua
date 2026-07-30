@@ -136,7 +136,7 @@ end
 local function entries_signature(entries, root_key)
   local fields = {
     "path", "label", "role", "source", "browsable", "searchable", "grep",
-    "symbols", "usages", "autocomplete", "rank_penalty", "filetree_style",
+    "symbols", "usages", "autocomplete", "rank_penalty", "filetree_style", "exists",
   }
   local rows = {}
   for _, entry in ipairs(entries or {}) do

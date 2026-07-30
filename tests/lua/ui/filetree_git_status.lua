@@ -108,6 +108,8 @@ test.describe("File Tree Git status controller", function()
     test.not_nil(numstat_call)
     test.ok(contains(status_call.args, "--untracked-files=normal"))
     test.not_ok(contains(status_call.args, "-uall"))
+    test.equal(status_call.opts.max_output, nil,
+      "the shared Git backend should apply its configured output cap")
 
     status_call.callback({ stdout = " M src/app.lua\0" })
     test.equal(#publications, 0)

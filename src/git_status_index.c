@@ -29,6 +29,7 @@ struct AnvilGitStatusSnapshot {
   char *repository_root;
   bool case_insensitive_paths;
   GitEntry *entries;
+  char *path_arena;
   uint32_t capacity;
   uint32_t count;
   AnvilGitStatusSummary summary;
@@ -310,6 +311,30 @@ static bool parse_numstat(AnvilGitStatusSnapshot *snapshot, const AnvilGitStatus
   return true;
 }
 
+static bool compact_paths(AnvilGitStatusSnapshot *snapshot) {
+  size_t bytes = 0;
+  for (uint32_t i = 0; i < snapshot->capacity; i++) {
+    GitEntry *entry = &snapshot->entries[i];
+    if (!entry->path) continue;
+    if ((size_t)entry->path_len + 1 > SIZE_MAX - bytes) return false;
+    bytes += (size_t)entry->path_len + 1;
+  }
+  char *arena = bytes ? (char *)SDL_malloc(bytes) : NULL;
+  if (bytes && !arena) return false;
+  size_t offset = 0;
+  for (uint32_t i = 0; i < snapshot->capacity; i++) {
+    GitEntry *entry = &snapshot->entries[i];
+    if (!entry->path) continue;
+    char *old_path = entry->path;
+    memcpy(arena + offset, old_path, (size_t)entry->path_len + 1);
+    entry->path = arena + offset;
+    offset += (size_t)entry->path_len + 1;
+    SDL_free(old_path);
+  }
+  snapshot->path_arena = arena;
+  return true;
+}
+
 AnvilGitStatusSnapshot *anvil_git_status_snapshot_build(const AnvilGitStatusBuildSpec *spec, char **error) {
   if (error) *error = NULL;
   if (!spec || (!spec->status_text && spec->status_text_len) || (!spec->numstat_text && spec->numstat_text_len)) {
@@ -326,7 +351,9 @@ AnvilGitStatusSnapshot *anvil_git_status_snapshot_build(const AnvilGitStatusBuil
   snapshot->summary.status_bytes = spec->status_text_len;
   snapshot->summary.numstat_bytes = spec->numstat_text_len;
   if (!snapshot->repository_root || !grow(snapshot, INITIAL_CAPACITY) ||
-      !parse_status(snapshot, spec, error) || !parse_numstat(snapshot, spec, error)) {
+      !parse_status(snapshot, spec, error) || !parse_numstat(snapshot, spec, error) ||
+      !compact_paths(snapshot)) {
+    if (error && !*error) set_error(error, "out of memory compacting Git status paths");
     anvil_git_status_snapshot_release(snapshot);
     return NULL;
   }
@@ -341,7 +368,10 @@ void anvil_git_status_snapshot_retain(AnvilGitStatusSnapshot *snapshot) {
 
 void anvil_git_status_snapshot_release(AnvilGitStatusSnapshot *snapshot) {
   if (!snapshot || SDL_AddAtomicInt(&snapshot->refcount, -1) != 1) return;
-  for (uint32_t i = 0; i < snapshot->capacity; i++) SDL_free(snapshot->entries[i].path);
+  if (!snapshot->path_arena) {
+    for (uint32_t i = 0; i < snapshot->capacity; i++) SDL_free(snapshot->entries[i].path);
+  }
+  SDL_free(snapshot->path_arena);
   SDL_free(snapshot->entries);
   SDL_free(snapshot->repository_root);
   SDL_free(snapshot);

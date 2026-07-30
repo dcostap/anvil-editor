@@ -3506,6 +3506,9 @@ static void run_filetree_git_status_index(AnvilWorkerContext *context, AnvilWork
   if (!result) {
     anvil_git_status_snapshot_release(snapshot);
     SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
+    AnvilWorkerResult *terminal = result_new(job, "error");
+    if (terminal) terminal->error = pool_strdup("out of memory publishing native Git status snapshot");
+    enqueue_result(context->pool, terminal);
     return;
   }
   result->git_status_snapshot = snapshot;
