@@ -168,25 +168,24 @@ static char *strip_markdown_extension(const char *path) {
 
 static char *heading_slug(const char *text) {
   size_t len = strlen(text);
-  char *slug = (char *)SDL_malloc(len * 3 + 4);
+  char *slug = (char *)SDL_malloc(len + 1);
   if (!slug) return NULL;
   size_t out = 0;
-  bool dash = false, code = false;
+  bool dash = false;
   for (size_t i = 0; i < len; i++) {
     char c = text[i];
-    if (c == '`') { code = !code; continue; }
+    if (c == '`' || c == '*' || c == '_' || c == '~' || c == '[' || c == ']'
+        || c == '(' || c == ')' || c == '!' || c == '#') continue;
     if (c == '&' && i + 4 < len && strncmp(text + i, "&amp;", 5) == 0) {
       if (out && dash) slug[out++] = '-';
       dash = false;
       memcpy(slug + out, "and", 3); out += 3; i += 4; continue;
     }
-    if (isalnum((unsigned char)c) || c == '_' || c == '-') {
+    if (isalnum((unsigned char)c) || c == '-') {
       if (out && dash) slug[out++] = '-';
       dash = false;
       slug[out++] = ascii_lower(c);
     } else if (isspace((unsigned char)c)) dash = out > 0;
-    else if ((unsigned char)c >= 128) slug[out++] = c;
-    (void)code;
   }
   while (out && slug[out - 1] == '-') out--;
   slug[out] = '\0';
@@ -338,8 +337,9 @@ static bool append_heading(AnvilMarkdownVaultNoteView *note, const char *text, u
   note->headings = grown;
   AnvilMarkdownVaultHeadingView *heading = &grown[note->heading_count++];
   SDL_memset(heading, 0, sizeof(*heading));
-  heading->text = SDL_strdup(text); heading->slug = slug; heading->line = line; heading->level = level;
-  if (!heading->text || !heading->slug) return false;
+  heading->text = SDL_strdup(text); heading->normalized_text = heading_slug(text);
+  heading->slug = slug; heading->line = line; heading->level = level;
+  if (!heading->text || !heading->normalized_text || !heading->slug) return false;
   for (uint32_t i = level; i < 6; i++) { SDL_free(hierarchy[i]); hierarchy[i] = NULL; SDL_free(slug_hierarchy[i]); slug_hierarchy[i] = NULL; }
   SDL_free(hierarchy[level - 1]); SDL_free(slug_hierarchy[level - 1]);
   hierarchy[level - 1] = SDL_strdup(text); slug_hierarchy[level - 1] = heading_slug(text);
@@ -507,6 +507,7 @@ static bool parse_note_text(OwnedNote *owned, char *text, size_t len, bool shall
   }
   if (shallow) { SDL_free(lines.items); SDL_free(structural.excluded); return true; }
   bool fence = false, html = false;
+  bool structural_fallback = structural.excluded == NULL;
   char *hierarchy[6] = { 0 }, *slug_hierarchy[6] = { 0 };
   for (uint32_t i = body_start; i < lines.count; i++) {
     if ((i & 127u) == 0 && cancelled_fn && cancelled_fn(cancel_userdata)) {
@@ -514,11 +515,12 @@ static bool parse_note_text(OwnedNote *owned, char *text, size_t len, bool shall
       SDL_free(lines.items); SDL_free(structural.excluded); return false;
     }
     const char *line = lines.items[i];
-    if (line_is_fence(line)) { fence = !fence; continue; }
+    if (structural_fallback && line_is_fence(line)) { fence = !fence; continue; }
     const char *trim = line; while (*trim && isspace((unsigned char)*trim)) trim++;
-    if (!fence && trim[0] == '<' &&
+    if (structural_fallback && !fence && trim[0] == '<' &&
         (isalpha((unsigned char)trim[1]) || trim[1] == '/' || trim[1] == '!')) html = true;
-    bool excluded = fence || html || (structural.excluded && i < structural.count && structural.excluded[i]);
+    bool excluded = (structural_fallback && (fence || html))
+      || (structural.excluded && i < structural.count && structural.excluded[i]);
     if (!excluded) {
       uint32_t level = 0; while (line[level] == '#' && level < 6) level++;
       if (level && isspace((unsigned char)line[level])) {
@@ -542,7 +544,9 @@ static bool parse_note_text(OwnedNote *owned, char *text, size_t len, bool shall
       }
       if (!parse_links(note, line, i + 1)) { SDL_free(lines.items); SDL_free(structural.excluded); return false; }
     }
-    if (html && ((trim[0] == '<' && trim[1] == '/') || contains_ci(trim, "-->"))) html = false;
+    if (structural_fallback && html && (!trim[0]
+        || (trim[0] == '<' && trim[1] == '/') || contains_ci(trim, "-->")
+        || (strchr(trim, '>') && strstr(trim, "</")))) html = false;
   }
   for (uint32_t i = 0; i < 6; i++) { SDL_free(hierarchy[i]); SDL_free(slug_hierarchy[i]); }
   for (uint32_t h = 0; h < note->heading_count; h++) {
@@ -608,7 +612,8 @@ static void free_note(OwnedNote *owned) {
   SDL_free((void *)note->relative_no_extension); SDL_free((void *)note->display_name);
   free_strings(note->aliases, note->alias_count); free_strings(note->tags, note->tag_count); free_strings(note->preview, note->preview_count);
   for (uint32_t i = 0; i < note->heading_count; i++) {
-    SDL_free((void *)note->headings[i].text); SDL_free((void *)note->headings[i].slug);
+    SDL_free((void *)note->headings[i].text); SDL_free((void *)note->headings[i].normalized_text);
+    SDL_free((void *)note->headings[i].slug);
     SDL_free((void *)note->headings[i].path_text); SDL_free((void *)note->headings[i].path_slug);
     free_strings(note->headings[i].preview, note->headings[i].preview_count);
   }
@@ -644,9 +649,10 @@ static bool clone_note(OwnedNote *destination, const AnvilMarkdownVaultNoteView 
     note->heading_count = source->heading_count;
     for (uint32_t i = 0; i < source->heading_count; i++) {
       const AnvilMarkdownVaultHeadingView *from = &source->headings[i]; AnvilMarkdownVaultHeadingView *to = &note->headings[i];
-      to->text = SDL_strdup(from->text); to->slug = SDL_strdup(from->slug); to->path_text = SDL_strdup(from->path_text); to->path_slug = SDL_strdup(from->path_slug);
+      to->text = SDL_strdup(from->text); to->normalized_text = SDL_strdup(from->normalized_text);
+      to->slug = SDL_strdup(from->slug); to->path_text = SDL_strdup(from->path_text); to->path_slug = SDL_strdup(from->path_slug);
       to->line = from->line; to->level = from->level;
-      if (!to->text || !to->slug || !to->path_text || !to->path_slug
+      if (!to->text || !to->normalized_text || !to->slug || !to->path_text || !to->path_slug
           || !clone_string_list(&to->preview, &to->preview_count, from->preview, from->preview_count)) goto failed;
     }
   }
@@ -1132,14 +1138,25 @@ static char *normalize_absolute_path(const char *path) {
 static bool resolve_link_note(const AnvilMarkdownVaultSnapshot *snapshot,
   const AnvilMarkdownVaultNoteView *source, const AnvilMarkdownVaultLinkView *link, uint32_t *index) {
   const char *path = link->path; if (!path || !path[0]) return false;
+  bool explicit_source_relative = strchr(path, '/') || strchr(path, '\\') || path[0] == '.';
+  bool can_resolve_from_source = explicit_source_relative
+    || strcmp(link->kind, "markdown") == 0 || strcmp(link->kind, "image") == 0;
+  if (explicit_source_relative) {
+    const char *separator = source->absolute_path + strlen(source->absolute_path);
+    while (separator > source->absolute_path && separator[-1] != '/' && separator[-1] != '\\') separator--;
+    size_t directory_len = (size_t)(separator - source->absolute_path), bytes = directory_len + strlen(path) + 1;
+    char *joined = (char *)SDL_malloc(bytes); if (!joined) return false;
+    memcpy(joined, source->absolute_path, directory_len); strcpy(joined + directory_len, path);
+    char *absolute = normalize_absolute_path(joined); SDL_free(joined);
+    bool found = absolute && absolute_note_index(snapshot, absolute, index); SDL_free(absolute);
+    if (found) return true;
+  }
   const char *root_relative = path; while (root_relative[0] == '.' && (root_relative[1] == '/' || root_relative[1] == '\\')) root_relative += 2;
   while (*root_relative == '/' || *root_relative == '\\') root_relative++;
   const TargetGroup *group = find_target_group(snapshot->note_targets, snapshot->note_target_count, root_relative, false);
   if (!group) group = find_target_group(snapshot->note_targets_ci, snapshot->note_target_ci_count, root_relative, true);
   if (group && group->count == 1) { *index = group->indices[0]; return true; }
-  bool source_relative = strcmp(link->kind, "markdown") == 0 || strcmp(link->kind, "image") == 0
-    || strchr(path, '/') || strchr(path, '\\') || path[0] == '.';
-  if (!source_relative) return false;
+  if (!can_resolve_from_source || explicit_source_relative) return false;
   const char *separator = source->absolute_path + strlen(source->absolute_path);
   while (separator > source->absolute_path && separator[-1] != '/' && separator[-1] != '\\') separator--;
   size_t directory_len = (size_t)(separator - source->absolute_path), bytes = directory_len + strlen(path) + 1;
@@ -1245,6 +1262,12 @@ uint32_t anvil_markdown_vault_resolve_attachments(const AnvilMarkdownVaultSnapsh
 uint32_t anvil_markdown_vault_linked_notes(const AnvilMarkdownVaultSnapshot *snapshot, const char *target, uint32_t *indices, uint32_t capacity) {
   if (!snapshot || !target) return 0;
   const TargetGroup *group = find_target_group(snapshot->linked_targets, snapshot->linked_target_count, target, false);
+  uint32_t canonical_note = 0;
+  if (!group && path_is_absolute(target)
+      && anvil_markdown_vault_note_lookup(snapshot, target, &canonical_note)) {
+    group = find_target_group(snapshot->linked_targets, snapshot->linked_target_count,
+      snapshot->notes[canonical_note].view.absolute_path, false);
+  }
   if (!group) {
     const TargetGroup *notes = find_target_group(snapshot->note_targets, snapshot->note_target_count, target, false);
     if (!notes) notes = find_target_group(snapshot->note_targets_ci, snapshot->note_target_ci_count, target, true);

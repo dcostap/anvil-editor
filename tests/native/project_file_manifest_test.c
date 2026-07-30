@@ -18,9 +18,12 @@ static bool always_cancel(void *userdata) { (void)userdata; return true; }
 
 int main(void) {
   CHECK(SDL_Init(0));
-  char root[512];
+  char root[512], outside[600], leak_path[700];
   SDL_snprintf(root, sizeof(root), "manifest-test-%llu", (unsigned long long)SDL_GetTicksNS());
+  SDL_snprintf(outside, sizeof(outside), "%s-outside", root);
   CHECK(SDL_CreateDirectory(root));
+  CHECK(SDL_CreateDirectory(outside));
+  SDL_snprintf(leak_path, sizeof(leak_path), "%s/Leak.md", outside); CHECK(write_file(leak_path, "# Leak\n"));
   char notes[600], git[600], nested[700], path[800];
   SDL_snprintf(notes, sizeof(notes), "%s/notes", root);
   SDL_snprintf(git, sizeof(git), "%s/.git", root);
@@ -58,6 +61,16 @@ int main(void) {
     CHECK(strcmp(previous, record.relative_path) < 0);
     previous = record.relative_path;
   }
+  char traversal_scope[1400];
+  SDL_snprintf(traversal_scope, sizeof(traversal_scope), "%s/../%s", root, outside);
+  const char *traversal_scopes[] = { traversal_scope };
+  AnvilProjectFileManifestBuildSpec traversal_spec = {
+    .root = root, .previous = snapshot, .scan_paths = traversal_scopes,
+    .scan_path_count = 1, .scoped = true,
+  };
+  AnvilProjectFileManifestSnapshot *traversal = anvil_project_file_manifest_build(&traversal_spec, &error);
+  CHECK(traversal == NULL && error != NULL);
+  SDL_free(error); error = NULL;
   char removed_path[800], added_path[800];
   SDL_snprintf(removed_path, sizeof(removed_path), "%s/a.md", notes); CHECK(SDL_RemovePath(removed_path));
   SDL_snprintf(added_path, sizeof(added_path), "%s/c.md", notes); CHECK(write_file(added_path, "# C\n"));
@@ -97,6 +110,7 @@ int main(void) {
   SDL_snprintf(path, sizeof(path), "%s/image.png", root); SDL_RemovePath(path);
   SDL_snprintf(path, sizeof(path), "%s/plain.txt", root); SDL_RemovePath(path);
   SDL_RemovePath(nested); SDL_RemovePath(notes); SDL_RemovePath(git); SDL_RemovePath(root);
+  SDL_RemovePath(leak_path); SDL_RemovePath(outside);
   SDL_Quit();
   return 0;
 }

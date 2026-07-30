@@ -208,9 +208,22 @@ static bool path_equal(const char *a, const char *b) {
   return !*a && !*b;
 }
 
+static bool path_has_parent_component(const char *path) {
+  if (!path) return false;
+  while (*path) {
+    while (*path == '/' || *path == '\\') path++;
+    const char *segment = path;
+    while (*path && *path != '/' && *path != '\\') path++;
+    if (path - segment == 2 && segment[0] == '.' && segment[1] == '.') return true;
+  }
+  return false;
+}
+
 static bool path_within(const char *path, const char *scope) {
+  if (!path || !scope) return false;
   size_t length = strlen(scope);
   while (length && (scope[length - 1] == '/' || scope[length - 1] == '\\')) length--;
+  if (strlen(path) < length) return false;
   for (size_t i = 0; i < length; i++) {
     char left = path[i] == '\\' ? '/' : path[i], right = scope[i] == '\\' ? '/' : scope[i];
 #ifdef _WIN32
@@ -305,6 +318,23 @@ AnvilProjectFileManifestSnapshot *anvil_project_file_manifest_build(
   const AnvilProjectFileManifestBuildSpec *spec, char **error) {
   if (error) *error = NULL;
   if (!spec || !spec->root || !spec->root[0]) { set_error(error, "Project manifest requires a root"); return NULL; }
+  if (path_has_parent_component(spec->root)) {
+    set_error(error, "Project manifest root contains parent traversal"); return NULL;
+  }
+  for (uint32_t i = 0; i < spec->scan_path_count; i++) {
+    if (!spec->scan_paths || !spec->scan_paths[i]
+        || path_has_parent_component(spec->scan_paths[i])
+        || !path_within(spec->scan_paths[i], spec->root)) {
+      set_error(error, "Project manifest scan path is outside its root"); return NULL;
+    }
+  }
+  for (uint32_t i = 0; i < spec->remove_path_count; i++) {
+    if (!spec->remove_paths || !spec->remove_paths[i]
+        || path_has_parent_component(spec->remove_paths[i])
+        || !path_within(spec->remove_paths[i], spec->root)) {
+      set_error(error, "Project manifest removal path is outside its root"); return NULL;
+    }
+  }
   if (is_cancelled(spec)) { set_error(error, "cancelled"); return NULL; }
   Uint64 started = SDL_GetTicksNS();
   AnvilProjectFileManifestSnapshot *snapshot = (AnvilProjectFileManifestSnapshot *)SDL_calloc(1, sizeof(*snapshot));

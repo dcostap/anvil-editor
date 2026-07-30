@@ -114,6 +114,45 @@ test.describe("worker_pool_native", function()
     test.same(order, { "interactive", "background" })
   end)
 
+  test.test("background native work leaves one worker available for interactive jobs", function()
+    local pool = new_pool("lua-native-background-reservation", 2)
+    local first = test.not_nil(pool:submit({
+      kind = "test_count", count = 500, sleep_ms = 2, priority = "background",
+    }))
+    local second = test.not_nil(pool:submit({
+      kind = "test_count", count = 500, sleep_ms = 2, priority = "background",
+    }))
+    local background_ids = {
+      [pool:status(first).id] = true,
+      [pool:status(second).id] = true,
+    }
+    local started = {}
+    test.ok(drain_until(pool, function(message)
+      if message.type == "progress" and background_ids[message.job_id] then
+        started[message.job_id] = true
+        return true
+      end
+      return false
+    end))
+    local deadline = system.get_time() + 0.05
+    while system.get_time() < deadline do
+      for _, message in ipairs(pool:drain({ max_messages = 64 })) do
+        if message.type == "progress" and background_ids[message.job_id] then
+          started[message.job_id] = true
+        end
+      end
+      coroutine.yield(0.001)
+    end
+    local started_count = 0
+    for _ in pairs(started) do started_count = started_count + 1 end
+    test.equal(started_count, 1)
+
+    pool:submit({ kind = "test_echo", value = "interactive-ready", priority = "interactive" })
+    test.ok(drain_until(pool, function(message)
+      return message.type == "result" and message.value == "interactive-ready"
+    end, 200))
+  end)
+
   test.test("File Tree Git status jobs preserve binary payloads and return bounded snapshots", function()
     local pool = new_pool("lua-native-filetree-git-status", 1)
     local handle = test.not_nil(pool:submit({

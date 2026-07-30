@@ -633,6 +633,10 @@ function Index:rebuild_async(reason)
       self.manifest_job = nil
       if serial ~= self.rebuild_serial then manifest:close(); return end
       local manifest_summary = manifest:summary()
+      local manifest_adopted = false
+      local function close_unadopted_manifest()
+        if not manifest_adopted then manifest:close() end
+      end
       local vault_handle, vault_error = pool:submit {
         kind = "markdown-vault-index",
         generation = serial,
@@ -649,15 +653,15 @@ function Index:rebuild_async(reason)
         on_stale = function(vault_message)
           local snapshot = vault_message.vault_snapshot or (vault_message.payload and vault_message.payload.vault_snapshot)
           if snapshot then release_vault_snapshot(snapshot) end
-          manifest:close()
+          close_unadopted_manifest()
         end,
-        on_error = function(vault_message) manifest:close(); finish_error(vault_message) end,
-        on_cancelled = function(vault_message) manifest:close(); finish_error(vault_message or "cancelled") end,
+        on_error = function(vault_message) close_unadopted_manifest(); finish_error(vault_message) end,
+        on_cancelled = function(vault_message) close_unadopted_manifest(); finish_error(vault_message or "cancelled") end,
         on_result = function(vault_message)
           local snapshot = vault_message.vault_snapshot or (vault_message.payload and vault_message.payload.vault_snapshot)
           if not snapshot and vault_message.type == "final" then return end
-          if not snapshot then manifest:close(); return finish_error("native vault result missing snapshot") end
-          if serial ~= self.rebuild_serial then manifest:close(); release_vault_snapshot(snapshot); return end
+          if not snapshot then close_unadopted_manifest(); return finish_error("native vault result missing snapshot") end
+          if serial ~= self.rebuild_serial then close_unadopted_manifest(); release_vault_snapshot(snapshot); return end
           self.vault_job = nil
           local overlays = {}
           for _, entry in pairs(self.notes_by_abs) do if entry.doc then overlays[#overlays + 1] = entry end end
@@ -676,6 +680,7 @@ function Index:rebuild_async(reason)
           end
           if self.manifest_snapshot then self.manifest_snapshot:close() end
           self.manifest_snapshot = manifest
+          manifest_adopted = true
           if self.watcher then self:adopt_manifest_watch_dirs(manifest, self.watcher, self.watcher_serial) end
           self.status, self.reason = "ready", nil
           self.generation = self.generation + 1

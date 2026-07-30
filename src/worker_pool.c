@@ -252,6 +252,7 @@ struct AnvilWorkerPool {
   uint64_t failed;
   uint64_t result_count;
   uint32_t active_project_runs;
+  uint32_t active_background_jobs;
 };
 
 static char *pool_memdup0(const char *source, size_t len) {
@@ -2486,6 +2487,17 @@ static bool project_run_path_belongs(const char *path, const char *root) {
   return boundary == '\0' || boundary == '/' || boundary == '\\' || root[root_len - 1] == '/' || root[root_len - 1] == '\\';
 }
 
+static bool project_run_path_has_parent_component(const char *path) {
+  if (!path) return false;
+  while (*path) {
+    while (*path == '/' || *path == '\\') path++;
+    const char *segment = path;
+    while (*path && *path != '/' && *path != '\\') path++;
+    if (path - segment == 2 && segment[0] == '.' && segment[1] == '.') return true;
+  }
+  return false;
+}
+
 static bool project_run_excluded(const AnvilWorkerJob *job, const char *path) {
   for (uint32_t i = 0; i < job->project_excluded_path_count; i++) {
     if (project_run_path_belongs(path, job->project_excluded_paths[i])) return true;
@@ -3731,12 +3743,20 @@ static int worker_main(void *userdata) {
     AnvilWorkerJob **selected = NULL;
     while (!pool->terminate) {
       int selected_priority = INT_MIN;
+      uint32_t background_limit = pool->worker_count > 1 ? (uint32_t)pool->worker_count - 1 : 1;
       for (AnvilWorkerJob **cursor = &pool->input_first; *cursor; cursor = &(*cursor)->next) {
-        if (!is_project_run_job(*cursor) && (*cursor)->priority > selected_priority) {
+        bool background_at_capacity = (*cursor)->priority < 0
+          && pool->active_background_jobs >= background_limit;
+        if (!is_project_run_job(*cursor) && !background_at_capacity
+            && (*cursor)->priority > selected_priority) {
           selected = cursor; selected_priority = (*cursor)->priority;
         }
       }
-      if (!selected && pool->input_first && pool->active_project_runs == 0) selected = &pool->input_first;
+      if (!selected && pool->active_project_runs == 0) {
+        for (AnvilWorkerJob **cursor = &pool->input_first; *cursor; cursor = &(*cursor)->next) {
+          if (is_project_run_job(*cursor)) { selected = cursor; break; }
+        }
+      }
       if (selected) break;
       SDL_WaitCondition(pool->queue_cond, pool->queue_mutex);
     }
@@ -3753,7 +3773,9 @@ static int worker_main(void *userdata) {
     if (!job->next) pool->input_last = selected;
     job->next = NULL;
     bool project_run = is_project_run_job(job);
+    bool background = !project_run && job->priority < 0;
     if (project_run) pool->active_project_runs++;
+    if (background) pool->active_background_jobs++;
     running_add_locked(pool, job);
     SDL_UnlockMutex(pool->queue_mutex);
 
@@ -3767,6 +3789,7 @@ static int worker_main(void *userdata) {
     SDL_LockMutex(pool->queue_mutex);
     running_remove_locked(pool, job);
     if (project_run && pool->active_project_runs) pool->active_project_runs--;
+    if (background && pool->active_background_jobs) pool->active_background_jobs--;
     SDL_BroadcastCondition(pool->queue_cond);
     SDL_UnlockMutex(pool->queue_mutex);
     anvil_worker_job_release(job);
@@ -3896,18 +3919,21 @@ AnvilWorkerJob *anvil_worker_pool_submit(AnvilWorkerPool *pool, const AnvilWorke
     return NULL;
   }
   if (strcmp(spec->kind, "treesitter_project_run") == 0) {
-    if (!spec->project_root || !spec->project_root[0]) {
+    if (!spec->project_root || !spec->project_root[0]
+        || project_run_path_has_parent_component(spec->project_root)) {
       pool_set_error(error, "native Project run requires a root");
       return NULL;
     }
     for (uint32_t i = 0; i < spec->project_scan_path_count; i++) {
-      if (!project_run_path_belongs(spec->project_scan_paths[i], spec->project_root)) {
+      if (project_run_path_has_parent_component(spec->project_scan_paths[i])
+          || !project_run_path_belongs(spec->project_scan_paths[i], spec->project_root)) {
         pool_set_error(error, "native Project scan path is outside its root");
         return NULL;
       }
     }
     for (uint32_t i = 0; i < spec->project_remove_path_count; i++) {
-      if (!project_run_path_belongs(spec->project_remove_paths[i], spec->project_root)) {
+      if (project_run_path_has_parent_component(spec->project_remove_paths[i])
+          || !project_run_path_belongs(spec->project_remove_paths[i], spec->project_root)) {
         pool_set_error(error, "native Project removal path is outside its root");
         return NULL;
       }
@@ -3923,15 +3949,18 @@ AnvilWorkerJob *anvil_worker_pool_submit(AnvilWorkerPool *pool, const AnvilWorke
     return NULL;
   }
   if (strcmp(spec->kind, "project_file_manifest") == 0 &&
-      (!spec->project_root || !spec->project_root[0])) {
+      (!spec->project_root || !spec->project_root[0]
+        || project_run_path_has_parent_component(spec->project_root))) {
     pool_set_error(error, "Project file manifest requires a root");
     return NULL;
   }
   if (strcmp(spec->kind, "project_file_manifest") == 0) {
-    for (uint32_t i = 0; i < spec->project_scan_path_count; i++) if (!project_run_path_belongs(spec->project_scan_paths[i], spec->project_root)) {
+    for (uint32_t i = 0; i < spec->project_scan_path_count; i++) if (project_run_path_has_parent_component(spec->project_scan_paths[i])
+        || !project_run_path_belongs(spec->project_scan_paths[i], spec->project_root)) {
       pool_set_error(error, "Project file manifest scan path is outside its root"); return NULL;
     }
-    for (uint32_t i = 0; i < spec->project_remove_path_count; i++) if (!project_run_path_belongs(spec->project_remove_paths[i], spec->project_root)) {
+    for (uint32_t i = 0; i < spec->project_remove_path_count; i++) if (project_run_path_has_parent_component(spec->project_remove_paths[i])
+        || !project_run_path_belongs(spec->project_remove_paths[i], spec->project_root)) {
       pool_set_error(error, "Project file manifest removal path is outside its root"); return NULL;
     }
   }

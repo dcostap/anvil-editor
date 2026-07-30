@@ -36,6 +36,7 @@ int main(void) {
   CHECK(note.alias_count == 2 && strcmp(note.aliases[0], "Alias, One") == 0);
   CHECK(note.tag_count == 2 && strcmp(note.tags[0], "tag") == 0);
   CHECK(note.heading_count == 2 && strcmp(note.headings[1].path_slug, "parent#child") == 0);
+  CHECK(strcmp(note.headings[0].normalized_text, "parent") == 0);
   CHECK(note.block_count == 1 && strcmp(note.blocks[0].id, "block-id") == 0);
   uint32_t matches[4];
   CHECK(anvil_markdown_vault_resolve_notes(snapshot, "Alias, One", matches, 4) == 1);

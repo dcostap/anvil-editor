@@ -4,6 +4,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -1002,7 +1003,7 @@ static void push_markdown_vault_note(lua_State *L, const AnvilMarkdownVaultNoteV
     push_string_list(L, heading->preview, heading->preview_count); lua_setfield(L, -2, "embed_preview");
     lua_pushvalue(L, -1); lua_rawseti(L, headings_table, (int)i + 1);
     lua_pushvalue(L, -1); lua_setfield(L, slug_table, heading->slug);
-    lua_pushvalue(L, -1); lua_setfield(L, text_table, heading->slug);
+    lua_pushvalue(L, -1); lua_setfield(L, text_table, heading->normalized_text);
     lua_setfield(L, path_table, heading->path_slug);
   }
   lua_setfield(L, -5, "headings_by_path");
@@ -1120,7 +1121,9 @@ static int markdown_vault_resolve_attachments_lua(lua_State *L) { return markdow
 static int markdown_vault_linked_notes_lua(lua_State *L) {
   LuaMarkdownVaultSnapshot *snapshot = check_markdown_vault_snapshot(L, 1); const char *target = luaL_checkstring(L, 2);
   uint32_t total = anvil_markdown_vault_linked_notes(snapshot->snapshot, target, NULL, 0);
-  uint32_t count = total > 4096 ? 4096 : total; uint32_t *indices = count ? (uint32_t *)SDL_malloc((size_t)count * sizeof(*indices)) : NULL;
+  if (total > INT_MAX) return luaL_error(L, "Markdown rename result exceeds Lua table capacity");
+  uint32_t count = total; uint32_t *indices = count ? (uint32_t *)SDL_malloc((size_t)count * sizeof(*indices)) : NULL;
+  if (count && !indices) return luaL_error(L, "out of memory reading Markdown rename sources");
   if (count) anvil_markdown_vault_linked_notes(snapshot->snapshot, target, indices, count);
   lua_createtable(L, (int)count, 1);
   for (uint32_t i = 0; i < count; i++) { AnvilMarkdownVaultNoteView note; anvil_markdown_vault_note_at(snapshot->snapshot, indices[i], &note); push_markdown_vault_note(L, &note); lua_rawseti(L, -2, (int)i + 1); }

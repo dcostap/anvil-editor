@@ -20,6 +20,7 @@ typedef struct AnvilMarkdownVaultBuildSpec {
 
 typedef struct AnvilMarkdownVaultHeadingView {
   const char *text;
+  const char *normalized_text;
   const char *slug;
   const char *path_text;
   const char *path_slug;
