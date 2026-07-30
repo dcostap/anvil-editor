@@ -17,6 +17,14 @@ local function load_font()
 end
 
 test.describe("native Display Packet", function()
+  test.it("reports unavailable asynchronous frame capture without a D3D target", function()
+    local ok, reason = renwindow.request_frame_capture(
+      test_window(), USERDIR .. PATHSEP .. "unavailable-frame-capture.png"
+    )
+    test.equal(ok, false)
+    test.equal(reason, "d3d11_unavailable")
+  end)
+
   test.it("seals immutable relative commands with layer and row metadata", function()
     local font = load_font()
     local builder = renderer.display_packet.new()
@@ -75,6 +83,10 @@ test.describe("native Display Packet", function()
     local stats = renderer.get_last_frame_stats()
     test.equal(stats.display_packet_replays, 1)
     test.equal(stats.display_packet_commands_replayed, 1)
+    test.equal(type(stats.texture_batch_breaks), "number")
+    test.equal(type(stats.quad_batches), "number")
+    test.equal(type(stats.unique_batch_srvs), "number")
+    test.equal(type(stats.repeated_batch_srvs), "number")
     local drawn = renwindow.get_color(window, 16, 8)
     local skipped = renwindow.get_color(window, 7, 8)
     test.ok(drawn[2] > 240 and drawn[1] < 10)

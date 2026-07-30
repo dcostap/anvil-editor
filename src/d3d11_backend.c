@@ -1,11 +1,13 @@
 #if defined(_WIN32) && defined(ANVIL_USE_SDL_RENDERER)
 
 #define WIN32_LEAN_AND_MEAN
+#define ANVIL_D3D11_QUAD_TEXTURE_SLOTS 8
 #include <windows.h>
 #include <dwmapi.h>
 #include <d3d11.h>
 #include <d3dcompiler.h>
 #include <dxgi1_2.h>
+#include <SDL3_image/SDL_image.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <math.h>
@@ -33,13 +35,6 @@ typedef struct D3D11QuadConstants {
   float pad1;
 } D3D11QuadConstants;
 
-typedef struct D3D11QuadBatch {
-  ID3D11ShaderResourceView *srv;
-  int start;
-  int count;
-  bool has_texture_dependent;
-} D3D11QuadBatch;
-
 typedef struct D3D11CachedTexture D3D11CachedTexture;
 struct D3D11CachedTexture {
   D3D11CachedTexture *next;
@@ -66,6 +61,7 @@ struct D3D11Window {
   int height;
   int buffer_count;
   DXGI_SWAP_EFFECT swap_effect;
+  char *capture_path;
 };
 
 typedef struct D3D11FrameStats {
@@ -150,9 +146,10 @@ typedef struct D3D11State {
   int quad_instance_count;
   int quad_instance_capacity;
   int quad_instance_buffer_capacity;
-  D3D11QuadBatch *quad_batches;
-  int quad_batch_count;
-  int quad_batch_capacity;
+  ID3D11ShaderResourceView *quad_srvs[ANVIL_D3D11_QUAD_TEXTURE_SLOTS];
+  int quad_srv_count;
+  ID3D11ShaderResourceView *quad_last_texture_srv;
+  int quad_texture_runs;
   ID3D11Texture2D *white_texture;
   ID3D11ShaderResourceView *white_srv;
   ID3D11Texture2D *upload_texture;
@@ -451,6 +448,13 @@ static void d3d11_reset_device(void) {
 
 static const char *quad_shader_source =
   "Texture2D tex0 : register(t0);\n"
+  "Texture2D tex1 : register(t1);\n"
+  "Texture2D tex2 : register(t2);\n"
+  "Texture2D tex3 : register(t3);\n"
+  "Texture2D tex4 : register(t4);\n"
+  "Texture2D tex5 : register(t5);\n"
+  "Texture2D tex6 : register(t6);\n"
+  "Texture2D tex7 : register(t7);\n"
   "SamplerState smp0 : register(s0);\n"
   "cbuffer QuadConstants : register(b0) { float2 viewport; float2 _pad; };\n"
   "struct VSIn { float4 dst : POSITION; float4 uvrect : TEXCOORD0; float4 color : COLOR0; float4 style : TEXCOORD1; uint vertex_id : SV_VertexID; };\n"
@@ -478,6 +482,16 @@ static const char *quad_shader_source =
   "  output.style = input.style;\n"
   "  return output;\n"
   "}\n"
+  "float4 sample_quad_texture(float slot, float2 uv) {\n"
+  "  if (slot < 0.5f) return tex0.Sample(smp0, uv);\n"
+  "  if (slot < 1.5f) return tex1.Sample(smp0, uv);\n"
+  "  if (slot < 2.5f) return tex2.Sample(smp0, uv);\n"
+  "  if (slot < 3.5f) return tex3.Sample(smp0, uv);\n"
+  "  if (slot < 4.5f) return tex4.Sample(smp0, uv);\n"
+  "  if (slot < 5.5f) return tex5.Sample(smp0, uv);\n"
+  "  if (slot < 6.5f) return tex6.Sample(smp0, uv);\n"
+  "  return tex7.Sample(smp0, uv);\n"
+  "}\n"
   "PSOut ps_main(VSOut input) {\n"
   "  PSOut output;\n"
   "  if (input.style.x > 3.5f) {\n"
@@ -498,7 +512,7 @@ static const char *quad_shader_source =
   "    output.coverage = float4(a, a, a, a);\n"
   "    return output;\n"
   "  }\n"
-  "  float4 s = tex0.Sample(smp0, input.uv);\n"
+  "  float4 s = sample_quad_texture(input.style.y, input.uv);\n"
   "  if (input.style.x < 0.5f) {\n"
   "    float a = input.color.a * s.r;\n"
   "    output.color = float4(input.color.rgb * a, a);\n"
@@ -567,6 +581,22 @@ int anvil_d3d11_last_quad_instances(void) {
 
 int anvil_d3d11_last_texture_quads(void) {
   return g_d3d11.stats.frame.texture_quads;
+}
+
+int anvil_d3d11_last_texture_batch_breaks(void) {
+  return g_d3d11.stats.frame.texture_batch_breaks;
+}
+
+int anvil_d3d11_last_quad_batches(void) {
+  return g_d3d11.stats.frame.quad_batches;
+}
+
+int anvil_d3d11_last_unique_batch_srvs(void) {
+  return g_d3d11.stats.frame.unique_batch_srvs;
+}
+
+int anvil_d3d11_last_repeated_batch_srvs(void) {
+  return g_d3d11.stats.frame.repeated_batch_srvs;
 }
 
 int anvil_d3d11_last_texture_uploads(void) {
@@ -815,6 +845,7 @@ static void d3d11_destroy_window(D3D11Window *w) {
   if (!w) return;
   d3d11_release_window_buffers(w);
   SAFE_RELEASE(w->swapchain);
+  SDL_free(w->capture_path);
   free(w);
 }
 
@@ -1081,20 +1112,6 @@ static bool d3d11_ensure_quad_instance_buffer_capacity(int vertex_count) {
   return true;
 }
 
-static bool d3d11_reserve_quad_batches(int extra) {
-  int needed = g_d3d11.quad_batch_count + extra;
-  if (needed <= g_d3d11.quad_batch_capacity) return true;
-
-  int new_capacity = g_d3d11.quad_batch_capacity ? g_d3d11.quad_batch_capacity * 2 : 256;
-  while (new_capacity < needed) new_capacity *= 2;
-  D3D11QuadBatch *new_batches = (D3D11QuadBatch *)realloc(g_d3d11.quad_batches,
-                                                          sizeof(D3D11QuadBatch) * (size_t)new_capacity);
-  if (!new_batches) return false;
-  g_d3d11.quad_batches = new_batches;
-  g_d3d11.quad_batch_capacity = new_capacity;
-  return true;
-}
-
 static bool d3d11_flush_quads(void);
 static bool d3d11_ensure_white_texture(void);
 static bool d3d11_queue_quad(ID3D11ShaderResourceView *srv,
@@ -1145,7 +1162,9 @@ bool anvil_d3d11_begin_frame(SDL_Window *window, int width, int height, RenColor
     d3d11_prune_texture_cache(600u);
   }
   g_d3d11.quad_instance_count = 0;
-  g_d3d11.quad_batch_count = 0;
+  g_d3d11.quad_srv_count = 0;
+  g_d3d11.quad_last_texture_srv = NULL;
+  g_d3d11.quad_texture_runs = 0;
   g_d3d11.active_window = window;
   return true;
 }
@@ -1470,7 +1489,6 @@ static bool d3d11_ensure_upload_texture(int width, int height) {
 
 static bool d3d11_flush_quads(void) {
   if (g_d3d11.quad_instance_count <= 0) return true;
-  if (g_d3d11.quad_batch_count <= 0) return false;
   if (!d3d11_ensure_quad_instance_buffer_capacity(g_d3d11.quad_instance_count)) return false;
 
   LARGE_INTEGER t0, t1;
@@ -1508,37 +1526,37 @@ static bool d3d11_flush_quads(void) {
   g_d3d11.context->lpVtbl->RSSetState(g_d3d11.context, g_d3d11.raster);
   g_d3d11.context->lpVtbl->OMSetBlendState(g_d3d11.context, g_d3d11.blend, blend_factor, 0xffffffffu);
 
-  int submitted_instances = 0;
-  int unique_srvs = 0;
-  for (int i = 0; i < g_d3d11.quad_batch_count; i++) {
-    bool seen_srv = false;
-    for (int j = 0; j < i; j++) {
-      if (g_d3d11.quad_batches[j].srv == g_d3d11.quad_batches[i].srv) {
-        seen_srv = true;
-        break;
-      }
-    }
-    if (!seen_srv) unique_srvs++;
-    D3D11QuadBatch *batch = &g_d3d11.quad_batches[i];
-    if (!batch->srv || batch->count <= 0) continue;
-    g_d3d11.context->lpVtbl->PSSetShaderResources(g_d3d11.context, 0, 1, &batch->srv);
-    g_d3d11.context->lpVtbl->DrawInstanced(g_d3d11.context, 4, (UINT)batch->count, 0, (UINT)batch->start);
-    g_d3d11.stats.frame.draw_calls++;
-    g_d3d11.stats.frame.quad_draws++;
-    g_d3d11.stats.frame.texture_draws++;
-    submitted_instances += batch->count;
+  if (g_d3d11.quad_srv_count > 0) {
+    g_d3d11.context->lpVtbl->PSSetShaderResources(
+      g_d3d11.context, 0, (UINT)g_d3d11.quad_srv_count, g_d3d11.quad_srvs
+    );
+  }
+  g_d3d11.context->lpVtbl->DrawInstanced(
+    g_d3d11.context, 4, (UINT)g_d3d11.quad_instance_count, 0, 0
+  );
+  g_d3d11.stats.frame.draw_calls++;
+  g_d3d11.stats.frame.quad_draws++;
+  g_d3d11.stats.frame.texture_draws++;
+
+  g_d3d11.stats.frame.quad_instances += g_d3d11.quad_instance_count;
+  g_d3d11.stats.frame.quad_vertices += g_d3d11.quad_instance_count * 4;
+  g_d3d11.stats.frame.quad_batches++;
+  g_d3d11.stats.frame.unique_batch_srvs += g_d3d11.quad_srv_count;
+  if (g_d3d11.quad_texture_runs > g_d3d11.quad_srv_count) {
+    g_d3d11.stats.frame.repeated_batch_srvs +=
+      g_d3d11.quad_texture_runs - g_d3d11.quad_srv_count;
   }
 
-  g_d3d11.stats.frame.quad_instances += submitted_instances;
-  g_d3d11.stats.frame.quad_vertices += submitted_instances * 4;
-  g_d3d11.stats.frame.quad_batches += g_d3d11.quad_batch_count;
-  g_d3d11.stats.frame.unique_batch_srvs += unique_srvs;
-  g_d3d11.stats.frame.repeated_batch_srvs += g_d3d11.quad_batch_count - unique_srvs;
-
-  ID3D11ShaderResourceView *null_srv = NULL;
-  g_d3d11.context->lpVtbl->PSSetShaderResources(g_d3d11.context, 0, 1, &null_srv);
+  ID3D11ShaderResourceView *null_srvs[ANVIL_D3D11_QUAD_TEXTURE_SLOTS] = { 0 };
+  if (g_d3d11.quad_srv_count > 0) {
+    g_d3d11.context->lpVtbl->PSSetShaderResources(
+      g_d3d11.context, 0, (UINT)g_d3d11.quad_srv_count, null_srvs
+    );
+  }
   g_d3d11.quad_instance_count = 0;
-  g_d3d11.quad_batch_count = 0;
+  g_d3d11.quad_srv_count = 0;
+  g_d3d11.quad_last_texture_srv = NULL;
+  g_d3d11.quad_texture_runs = 0;
   QueryPerformanceCounter(&t1);
   g_d3d11.stats.frame.flush_quads_ms += d3d11_ms_between(t0, t1);
   return true;
@@ -1548,29 +1566,34 @@ static bool d3d11_queue_quad(ID3D11ShaderResourceView *srv,
                              const D3D11QuadInstance *inst,
                              bool texture_dependent) {
   if (!srv || !inst) return false;
-
-  D3D11QuadBatch *batch = g_d3d11.quad_batch_count > 0
-    ? &g_d3d11.quad_batches[g_d3d11.quad_batch_count - 1]
-    : NULL;
-  if (batch && texture_dependent && batch->has_texture_dependent && batch->srv != srv) {
-    g_d3d11.stats.frame.texture_batch_breaks++;
-    batch = NULL;
+  D3D11QuadInstance queued = *inst;
+  if (texture_dependent) {
+    if (g_d3d11.quad_last_texture_srv
+        && g_d3d11.quad_last_texture_srv != srv) {
+      g_d3d11.stats.frame.texture_batch_breaks++;
+    }
+    int slot = -1;
+    for (int i = 0; i < g_d3d11.quad_srv_count; i++) {
+      if (g_d3d11.quad_srvs[i] == srv) {
+        slot = i;
+        break;
+      }
+    }
+    if (slot < 0 && g_d3d11.quad_srv_count >= ANVIL_D3D11_QUAD_TEXTURE_SLOTS) {
+      if (!d3d11_flush_quads()) return false;
+    }
+    if (slot < 0) {
+      slot = g_d3d11.quad_srv_count;
+      g_d3d11.quad_srvs[g_d3d11.quad_srv_count++] = srv;
+    }
+    if (g_d3d11.quad_last_texture_srv != srv) {
+      g_d3d11.quad_last_texture_srv = srv;
+      g_d3d11.quad_texture_runs++;
+    }
+    queued.pad0 = (float)slot;
   }
-  if (!batch) {
-    if (!d3d11_reserve_quad_batches(1)) return false;
-    batch = &g_d3d11.quad_batches[g_d3d11.quad_batch_count++];
-    batch->srv = srv;
-    batch->start = g_d3d11.quad_instance_count;
-    batch->count = 0;
-    batch->has_texture_dependent = texture_dependent;
-  } else if (texture_dependent && !batch->has_texture_dependent) {
-    batch->srv = srv;
-    batch->has_texture_dependent = true;
-  }
-
   if (!d3d11_reserve_quad_instances(1)) return false;
-  g_d3d11.quad_instances[g_d3d11.quad_instance_count++] = *inst;
-  batch->count++;
+  g_d3d11.quad_instances[g_d3d11.quad_instance_count++] = queued;
   return true;
 }
 
@@ -1675,15 +1698,90 @@ bool anvil_d3d11_push_pixels(SDL_Window *window, const char *bytes, size_t len,
 
 void anvil_d3d11_abort_frame_reason(SDL_Window *window, const char *reason) {
   if (!window || window == g_d3d11.active_window) {
+    D3D11Window *w = d3d11_find_window(window ? window : g_d3d11.active_window);
+    if (w) {
+      SDL_free(w->capture_path);
+      w->capture_path = NULL;
+    }
     g_d3d11.active_window = NULL;
     g_d3d11.quad_instance_count = 0;
-    g_d3d11.quad_batch_count = 0;
+    g_d3d11.quad_srv_count = 0;
+    g_d3d11.quad_last_texture_srv = NULL;
+    g_d3d11.quad_texture_runs = 0;
     d3d11_stats_abort_reason(reason ? reason : "abort");
   }
 }
 
 void anvil_d3d11_abort_frame(SDL_Window *window) {
   anvil_d3d11_abort_frame_reason(window, "abort");
+}
+
+bool anvil_d3d11_request_frame_capture(SDL_Window *window, const char *path) {
+  if (!anvil_d3d11_enabled() || !window || !path || !path[0]) return false;
+  D3D11Window *w = d3d11_find_window(window);
+  if (!w || !w->backbuffer || !g_d3d11.device || !g_d3d11.context) return false;
+  char *copy = SDL_strdup(path);
+  if (!copy) return false;
+  SDL_free(w->capture_path);
+  w->capture_path = copy;
+  return true;
+}
+
+static bool d3d11_capture_backbuffer(D3D11Window *w, const char *path) {
+  if (!w || !w->backbuffer || !path || !path[0]
+      || !g_d3d11.device || !g_d3d11.context) return false;
+
+  D3D11_TEXTURE2D_DESC desc;
+  w->backbuffer->lpVtbl->GetDesc(w->backbuffer, &desc);
+  D3D11_TEXTURE2D_DESC staging_desc = desc;
+  staging_desc.Usage = D3D11_USAGE_STAGING;
+  staging_desc.BindFlags = 0;
+  staging_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+  staging_desc.MiscFlags = 0;
+
+  ID3D11Texture2D *staging = NULL;
+  HRESULT hr = g_d3d11.device->lpVtbl->CreateTexture2D(
+    g_d3d11.device, &staging_desc, NULL, &staging
+  );
+  if (FAILED(hr) || !staging) return false;
+
+  g_d3d11.context->lpVtbl->CopyResource(
+    g_d3d11.context, (ID3D11Resource *)staging,
+    (ID3D11Resource *)w->backbuffer
+  );
+
+  D3D11_MAPPED_SUBRESOURCE mapped;
+  hr = g_d3d11.context->lpVtbl->Map(
+    g_d3d11.context, (ID3D11Resource *)staging, 0,
+    D3D11_MAP_READ, 0, &mapped
+  );
+  if (FAILED(hr)) {
+    SAFE_RELEASE(staging);
+    return false;
+  }
+
+  SDL_Surface *surface = SDL_CreateSurface(
+    (int)desc.Width, (int)desc.Height, SDL_PIXELFORMAT_BGRA32
+  );
+  bool saved = false;
+  if (surface && SDL_LockSurface(surface)) {
+    const size_t row_bytes = (size_t)desc.Width * 4;
+    for (UINT y = 0; y < desc.Height; y++) {
+      memcpy(
+        (uint8_t *)surface->pixels + (size_t)y * (size_t)surface->pitch,
+        (const uint8_t *)mapped.pData + (size_t)y * (size_t)mapped.RowPitch,
+        row_bytes
+      );
+    }
+    SDL_UnlockSurface(surface);
+    saved = IMG_SavePNG(surface, path);
+  }
+  if (surface) SDL_DestroySurface(surface);
+  g_d3d11.context->lpVtbl->Unmap(
+    g_d3d11.context, (ID3D11Resource *)staging, 0
+  );
+  SAFE_RELEASE(staging);
+  return saved;
 }
 
 bool anvil_d3d11_end_frame(SDL_Window *window) {
@@ -1699,6 +1797,15 @@ bool anvil_d3d11_end_frame(SDL_Window *window) {
     return false;
   }
 
+  if (w->capture_path) {
+    char *capture_path = w->capture_path;
+    w->capture_path = NULL;
+    if (!d3d11_capture_backbuffer(w, capture_path)) {
+      fprintf(stderr, "anvil: failed to capture D3D11 frame to %s\n", capture_path);
+    }
+    SDL_free(capture_path);
+  }
+
   LARGE_INTEGER present_start, present_end, dwm_start, dwm_end;
   UINT sync_interval = d3d11_present_sync_interval();
   if (anvil_resize_diag_live_resize() && d3d11_should_present_zero_live_resize()) sync_interval = 0;
@@ -1711,7 +1818,9 @@ bool anvil_d3d11_end_frame(SDL_Window *window) {
   g_d3d11.last_sync_interval = (int)sync_interval;
   g_d3d11.active_window = NULL;
   g_d3d11.quad_instance_count = 0;
-  g_d3d11.quad_batch_count = 0;
+  g_d3d11.quad_srv_count = 0;
+  g_d3d11.quad_last_texture_srv = NULL;
+  g_d3d11.quad_texture_runs = 0;
   if (FAILED(hr)) {
     g_d3d11.stats.frame.fail_reason = "present";
     d3d11_stats_end(false, hr);
@@ -1851,10 +1960,9 @@ void anvil_d3d11_shutdown(void) {
   g_d3d11.quad_instance_count = 0;
   g_d3d11.quad_instance_capacity = 0;
   g_d3d11.quad_instance_buffer_capacity = 0;
-  free(g_d3d11.quad_batches);
-  g_d3d11.quad_batches = NULL;
-  g_d3d11.quad_batch_count = 0;
-  g_d3d11.quad_batch_capacity = 0;
+  g_d3d11.quad_srv_count = 0;
+  g_d3d11.quad_last_texture_srv = NULL;
+  g_d3d11.quad_texture_runs = 0;
   g_d3d11.active_window = NULL;
   SAFE_RELEASE(g_d3d11.factory);
   SAFE_RELEASE(g_d3d11.context);

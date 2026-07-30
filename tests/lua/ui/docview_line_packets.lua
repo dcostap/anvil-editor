@@ -596,6 +596,26 @@ test.describe("Document View line display packet parity baseline", function()
     if not ok then error(err, 0) end
   end)
 
+  test.it("replays unwrapped lines while the caret moves", function(context)
+    local doc, view = new_view(context, "first line\nsecond line\nthird line")
+    view.__test_force_line_packets = true
+    local window = packet_window()
+
+    draw_packet_line(window, view, 1)
+    local first = line_packets.diagnostics(view)
+    test.is_nil(first.last_build_error)
+    test.same(first.fallbacks, {})
+    test.equal(first.builds, 1)
+    test.equal(first.misses, 1)
+    test.not_nil(line_packets.inspect_line(view, 1))
+
+    doc:set_selection(2, 1)
+    draw_packet_line(window, view, 1)
+    local second = line_packets.diagnostics(view)
+    test.equal(second.builds, 1)
+    test.equal(second.hits, 1)
+  end)
+
   test.it("keeps selected-only whitespace and active Indent Guides dynamic", function(context)
     command.perform("draw-whitespace:toggle", true)
     drawwhitespace.show_selected_only = true

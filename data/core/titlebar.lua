@@ -232,6 +232,47 @@ function TitleBar:new()
   self.visible = true
 end
 
+function TitleBar:get_geometry_cache()
+  if not core.frame_start then return nil end
+  local left_node = self:get_tabs_node("left")
+  local right_node = self:get_tabs_node("right")
+  local left_count = #(left_node and left_node.views or {})
+  local right_count = #(right_node and right_node.views or {})
+  local min_width = config.integrated_titlebar_tab_min_width
+  local max_width = config.integrated_titlebar_tab_max_width
+  local cache = self.geometry_cache
+  if cache
+  and cache.frame == core.frame_start
+  and cache.width == self.size.x
+  and cache.height == self.size.y
+  and cache.scale == SCALE
+  and cache.min_width == min_width
+  and cache.max_width == max_width
+  and cache.tab_width == style.tab_width
+  and cache.left_node == left_node
+  and cache.left_count == left_count
+  and cache.right_node == right_node
+  and cache.right_count == right_count then
+    return cache
+  end
+  cache = {
+    frame = core.frame_start,
+    width = self.size.x,
+    height = self.size.y,
+    scale = SCALE,
+    min_width = min_width,
+    max_width = max_width,
+    tab_width = style.tab_width,
+    left_node = left_node,
+    left_count = left_count,
+    right_node = right_node,
+    right_count = right_count,
+    widths = {},
+  }
+  self.geometry_cache = cache
+  return cache
+end
+
 function TitleBar:get_tabs_node(pane)
   if not core.root_panel then return nil end
   return panes().node(pane or "left")
@@ -394,6 +435,8 @@ local function allocate_cooperative_tab_widths(
 end
 
 function TitleBar:get_titlebar_layout()
+  local cache = self:get_geometry_cache()
+  if cache and cache.layout then return table.unpack(cache.layout) end
   local lane_x = title_tabs_x()
   local controls_width = caption_button_width() * #title_commands
   local lane_right = math.max(lane_x, self.size.x - controls_width)
@@ -412,7 +455,11 @@ function TitleBar:get_titlebar_layout()
     tabs_width, left_min, left_preferred, right_min, right_preferred)
   local right_x = lane_right - right_width
   local safe_x = lane_x + left_width
-  return lane_x, left_width, safe_x, math.max(0, right_x - safe_x), right_x, right_width
+  local layout = {
+    lane_x, left_width, safe_x, math.max(0, right_x - safe_x), right_x, right_width
+  }
+  if cache then cache.layout = layout end
+  return table.unpack(layout)
 end
 
 function TitleBar:get_titlebar_safe_rect()
@@ -427,6 +474,10 @@ function TitleBar:get_pane_tabs_rect(pane)
 end
 
 function TitleBar:get_titlebar_tab_widths(node, views, available_width)
+  local cache = self:get_geometry_cache()
+  local node_widths = cache and cache.widths[node]
+  local cached_widths = node_widths and node_widths[available_width]
+  if cached_widths and cached_widths.count == #views then return cached_widths.widths end
   local min_width, max_width = titlebar_tab_width_limits()
   local widths = {}
   local total_preferred = 0
@@ -438,16 +489,31 @@ function TitleBar:get_titlebar_tab_widths(node, views, available_width)
 
   local total_minimum = #views * min_width
   if total_preferred <= available_width or total_preferred <= total_minimum then
+    if cache then
+      node_widths = node_widths or {}
+      cache.widths[node] = node_widths
+      node_widths[available_width] = { count = #views, widths = widths }
+    end
     return widths
   end
   if total_minimum > available_width then
     for i = 1, #widths do widths[i] = min_width end
+    if cache then
+      node_widths = node_widths or {}
+      cache.widths[node] = node_widths
+      node_widths[available_width] = { count = #views, widths = widths }
+    end
     return widths
   end
 
   local ratio = (available_width - total_minimum) / (total_preferred - total_minimum)
   for i, width in ipairs(widths) do
     widths[i] = min_width + (width - min_width) * ratio
+  end
+  if cache then
+    node_widths = node_widths or {}
+    cache.widths[node] = node_widths
+    node_widths[available_width] = { count = #views, widths = widths }
   end
   return widths
 end
@@ -578,7 +644,10 @@ function TitleBar:draw_titlebar_tabs()
       local _, full_y, _, full_h = self:get_pane_tabs_rect(pane)
       local x, y, w, h, show_previous, show_next = self:get_titlebar_tabs_content_rect(pane, node, views)
       local widths = self:get_titlebar_tab_widths(node, views, w)
-      local used_tabs_width = self:get_titlebar_tabs_used_width(node, views, w)
+      local first = node.titlebar_tab_offset or 1
+      local visible_count = visible_tab_count(widths, first, w)
+      local last = math.min(#views, first + visible_count - 1)
+      local used_tabs_width = sum_widths(widths, first, last)
       local used_x = pane == "right" and x + w - used_tabs_width or x
       local bw = titlebar_scroll_button_width()
       local hovered_scroll = self.hovered_tab_scroll_pane == pane and self.hovered_tab_scroll_button
@@ -602,11 +671,14 @@ function TitleBar:draw_titlebar_tabs()
         end
       end
       core.push_clip_rect(used_x, y, used_tabs_width, h)
-      local first = node.titlebar_tab_offset or 1
-      local last = math.min(#views, first + visible_tab_count(widths, first, w) - 1)
+      local preceding_width = 0
       for i = first, last do
         local view = views[i]
-        local tx, ty, tab_w, tab_h = self:get_titlebar_tab_rect(pane, node, views, i)
+        local tab_w = widths[i] or 0
+        local tx = pane == "right"
+          and x + w - preceding_width - tab_w
+          or x + preceding_width
+        local ty, tab_h = y, h
         local selected = view == node.active_view
         local hovered = self.hovered_tab_pane == pane and self.hovered_tab_view == view
         if selected then
@@ -622,6 +694,7 @@ function TitleBar:draw_titlebar_tabs()
         node:draw_tab_title(view, node:get_tab_title_font(), selected, hovered,
           title_x, ty, title_w, tab_h, title_color)
         core.pop_clip_rect()
+        preceding_width = preceding_width + tab_w
       end
       core.pop_clip_rect()
     end

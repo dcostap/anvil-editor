@@ -215,7 +215,6 @@ local function eligible(view, line)
     return false, "native_api_missing"
   end
   if not standard_docview(view) then return false, "nonstandard_docview" end
-  if not view.wrapped_settings then return false, "not_wrapped" end
   if view.has_visual_metric_providers and view:has_visual_metric_providers() then
     return false, "variable_visual_metrics"
   end
@@ -399,7 +398,8 @@ local function make_key(
     built_last = built_last,
     wrapped_row_count = count,
     row_signature = row_signature,
-    continuation_offset = view.wrapped_line_offsets[line] or 0,
+    continuation_offset = view.wrapped_line_offsets
+      and view.wrapped_line_offsets[line] or 0,
     base_signature = base_signature,
   }
 end
@@ -415,7 +415,9 @@ local function key_matches(
     and key.built_last == built_last
     and key.wrapped_row_count == count
     and key.row_signature == row_signature
-    and key.continuation_offset == (view.wrapped_line_offsets[line] or 0)
+    and key.continuation_offset == (
+      view.wrapped_line_offsets and view.wrapped_line_offsets[line] or 0
+    )
     and key.base_signature == base_signature
 end
 
@@ -424,7 +426,8 @@ local function compile_syntax(
 )
   local default_font = view:get_font()
   local text_y_offset = view:get_line_text_y_offset()
-  local begin_width = view.wrapped_line_offsets[line] or 0
+  local begin_width = view.wrapped_line_offsets
+    and view.wrapped_line_offsets[line] or 0
   local line_height = view:get_line_height()
   local _, indent_size = view.doc:get_indent_info()
   indent_size = indent_size or 2

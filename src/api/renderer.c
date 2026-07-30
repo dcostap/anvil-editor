@@ -940,6 +940,14 @@ static int f_get_last_frame_stats(lua_State *L) {
   lua_setfield(L, -2, "quad_instances");
   lua_pushinteger(L, anvil_d3d11_last_texture_quads());
   lua_setfield(L, -2, "texture_quads");
+  lua_pushinteger(L, anvil_d3d11_last_texture_batch_breaks());
+  lua_setfield(L, -2, "texture_batch_breaks");
+  lua_pushinteger(L, anvil_d3d11_last_quad_batches());
+  lua_setfield(L, -2, "quad_batches");
+  lua_pushinteger(L, anvil_d3d11_last_unique_batch_srvs());
+  lua_setfield(L, -2, "unique_batch_srvs");
+  lua_pushinteger(L, anvil_d3d11_last_repeated_batch_srvs());
+  lua_setfield(L, -2, "repeated_batch_srvs");
   lua_pushinteger(L, anvil_d3d11_last_texture_uploads());
   lua_setfield(L, -2, "texture_uploads");
   lua_pushinteger(L, (lua_Integer)anvil_d3d11_last_texture_upload_bytes());

@@ -5939,9 +5939,9 @@ function DocView:draw_line_text(line, x, y)
     renderer.draw_text(self:get_font(), self.doc.lines[line], x, y + text_y_offset, provider_text_color)
     return lh
   end
+  local packet_height = line_packets.draw_content(self, line, x, y)
+  if packet_height then return packet_height end
   if self.wrapped_settings then
-    local packet_height = line_packets.draw_content(self, line, x, y)
-    if packet_height then return packet_height end
     local wrapped_text_scope = perf_scope_begin("wrapped_text", true)
     local perf_active = core.perf_frame_stats ~= nil
     local perf_start = perf_active and system.get_time()

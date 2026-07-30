@@ -18,6 +18,10 @@ const char *anvil_d3d11_last_frame_path(void);
 int anvil_d3d11_last_draw_calls(void);
 int anvil_d3d11_last_quad_instances(void);
 int anvil_d3d11_last_texture_quads(void);
+int anvil_d3d11_last_texture_batch_breaks(void);
+int anvil_d3d11_last_quad_batches(void);
+int anvil_d3d11_last_unique_batch_srvs(void);
+int anvil_d3d11_last_repeated_batch_srvs(void);
 int anvil_d3d11_last_texture_uploads(void);
 size_t anvil_d3d11_last_texture_upload_bytes(void);
 double anvil_d3d11_last_glyph_push_ms(void);
@@ -41,6 +45,7 @@ bool anvil_d3d11_push_pixels(SDL_Window *window, const char *bytes, size_t len,
                               int width, int height, int pitch,
                               RenRect dst_px, RenRect clip_px);
 bool anvil_d3d11_end_frame(SDL_Window *window);
+bool anvil_d3d11_request_frame_capture(SDL_Window *window, const char *path);
 void anvil_d3d11_abort_frame(SDL_Window *window);
 void anvil_d3d11_abort_frame_reason(SDL_Window *window, const char *reason);
 
@@ -56,6 +61,10 @@ static inline const char *anvil_d3d11_last_frame_path(void) { return "none"; }
 static inline int anvil_d3d11_last_draw_calls(void) { return 0; }
 static inline int anvil_d3d11_last_quad_instances(void) { return 0; }
 static inline int anvil_d3d11_last_texture_quads(void) { return 0; }
+static inline int anvil_d3d11_last_texture_batch_breaks(void) { return 0; }
+static inline int anvil_d3d11_last_quad_batches(void) { return 0; }
+static inline int anvil_d3d11_last_unique_batch_srvs(void) { return 0; }
+static inline int anvil_d3d11_last_repeated_batch_srvs(void) { return 0; }
 static inline int anvil_d3d11_last_texture_uploads(void) { return 0; }
 static inline size_t anvil_d3d11_last_texture_upload_bytes(void) { return 0; }
 static inline double anvil_d3d11_last_glyph_push_ms(void) { return 0.0; }
@@ -98,6 +107,10 @@ static inline bool anvil_d3d11_push_pixels(SDL_Window *window, const char *bytes
 }
 static inline bool anvil_d3d11_end_frame(SDL_Window *window) {
   (void)window;
+  return false;
+}
+static inline bool anvil_d3d11_request_frame_capture(SDL_Window *window, const char *path) {
+  (void)window; (void)path;
   return false;
 }
 static inline void anvil_d3d11_abort_frame(SDL_Window *window) { (void)window; }

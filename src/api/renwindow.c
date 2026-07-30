@@ -3,6 +3,7 @@
 #include "api.h"
 #include "../renwindow.h"
 #include "../rencache.h"
+#include "../d3d11_backend.h"
 
 static RenWindow *persistant_window = NULL;
 
@@ -161,12 +162,25 @@ static int f_get_color(lua_State *L) {
   return 1;
 }
 
+static int f_request_frame_capture(lua_State *L) {
+  RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  const char *path = luaL_checkstring(L, 2);
+  if (!anvil_d3d11_request_frame_capture(window_renderer->cache.window, path)) {
+    lua_pushboolean(L, false);
+    lua_pushliteral(L, "d3d11_unavailable");
+    return 2;
+  }
+  lua_pushboolean(L, true);
+  return 1;
+}
+
 static const luaL_Reg renwindow_lib[] = {
   { "create",           f_renwin_create     },
   { "__gc",             f_renwin_gc         },
   { "get_size",         f_renwin_get_size   },
   { "get_refresh_rate", f_get_refresh_rate  },
   { "get_color",        f_get_color         },
+  { "request_frame_capture", f_request_frame_capture },
   { "_persist",         f_renwin_persist    },
   { "_restore",         f_renwin_restore    },
   {NULL, NULL}
