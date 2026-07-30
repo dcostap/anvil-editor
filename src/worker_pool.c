@@ -16,6 +16,7 @@
 #include <pcre2.h>
 
 #include <stdio.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -31,6 +32,7 @@ struct AnvilWorkerJob {
   SDL_AtomicInt status;
   uint64_t id;
   char *kind;
+  int priority;
   char *value;
   int count;
   uint32_t sleep_ms;
@@ -3602,7 +3604,12 @@ static void run_markdown_vault_index(AnvilWorkerContext *context, AnvilWorkerJob
     return;
   }
   AnvilWorkerResult *result = result_new(job, "result");
-  if (!result) { anvil_markdown_vault_snapshot_release(snapshot); SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED); return; }
+  if (!result) {
+    anvil_markdown_vault_snapshot_release(snapshot); SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
+    AnvilWorkerResult *terminal = result_new(job, "error");
+    if (terminal) terminal->error = pool_strdup("out of memory publishing native Markdown vault snapshot");
+    enqueue_result(context->pool, terminal); return;
+  }
   result->markdown_vault_snapshot = snapshot;
   enqueue_result(context->pool, result);
   SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_COMPLETE);
@@ -3628,7 +3635,12 @@ static void run_markdown_vault_overlay(AnvilWorkerContext *context, AnvilWorkerJ
     return;
   }
   AnvilWorkerResult *result = result_new(job, "result");
-  if (!result) { anvil_markdown_vault_snapshot_release(snapshot); SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED); return; }
+  if (!result) {
+    anvil_markdown_vault_snapshot_release(snapshot); SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
+    AnvilWorkerResult *terminal = result_new(job, "error");
+    if (terminal) terminal->error = pool_strdup("out of memory publishing native Markdown vault overlay");
+    enqueue_result(context->pool, terminal); return;
+  }
   result->markdown_vault_snapshot = snapshot; enqueue_result(context->pool, result);
   SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_COMPLETE); enqueue_simple_result(context->pool, job, "final");
 }
@@ -3718,8 +3730,11 @@ static int worker_main(void *userdata) {
     SDL_LockMutex(pool->queue_mutex);
     AnvilWorkerJob **selected = NULL;
     while (!pool->terminate) {
+      int selected_priority = INT_MIN;
       for (AnvilWorkerJob **cursor = &pool->input_first; *cursor; cursor = &(*cursor)->next) {
-        if (!is_project_run_job(*cursor)) { selected = cursor; break; }
+        if (!is_project_run_job(*cursor) && (*cursor)->priority > selected_priority) {
+          selected = cursor; selected_priority = (*cursor)->priority;
+        }
       }
       if (!selected && pool->input_first && pool->active_project_runs == 0) selected = &pool->input_first;
       if (selected) break;
@@ -3956,6 +3971,7 @@ AnvilWorkerJob *anvil_worker_pool_submit(AnvilWorkerPool *pool, const AnvilWorke
   SDL_SetAtomicInt(&job->refcount, 2); /* Lua handle + queue/worker ownership. */
   SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_QUEUED);
   job->kind = pool_strdup(spec->kind);
+  job->priority = spec->priority;
   job->value = pool_strdup(spec->value);
   job->count = spec->count;
   job->sleep_ms = spec->sleep_ms;

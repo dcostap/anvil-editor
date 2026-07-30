@@ -248,6 +248,10 @@ static int pool_submit(lua_State *L) {
   AnvilWorkerJobSpec spec;
   memset(&spec, 0, sizeof(spec));
   spec.kind = opt_string_field(L, 2, "kind", NULL);
+  const char *priority = opt_string_field(L, 2, "priority", "normal");
+  if (strcmp(priority, "interactive") == 0) spec.priority = 1;
+  else if (strcmp(priority, "background") == 0) spec.priority = -1;
+  else luaL_argcheck(L, strcmp(priority, "normal") == 0, 2, "native worker priority must be interactive, normal, or background");
   spec.value = opt_string_field(L, 2, "value", NULL);
   spec.count = opt_int_field(L, 2, "count", 0);
   int sleep_ms = opt_int_field(L, 2, "sleep_ms", 0);
@@ -1199,11 +1203,25 @@ static int markdown_vault_completion(lua_State *L) {
   AnvilMarkdownVaultSnapshot *snapshot = lua_snapshot->snapshot;
   const char *mode = luaL_checkstring(L, 2), *query = luaL_optstring(L, 3, ""), *source = luaL_optstring(L, 4, "");
   const char *policy = luaL_optstring(L, 5, "shortest_unique");
-  uint32_t limit = (uint32_t)luaL_optinteger(L, 6, 200); if (!limit) limit = 1; if (limit > 4096) limit = 4096;
-  AnvilMarkdownVaultSummary summary; anvil_markdown_vault_snapshot_summary(snapshot, &summary);
+  uint32_t requested_limit = (uint32_t)luaL_optinteger(L, 6, 200);
+  if (!requested_limit) requested_limit = 1;
+  if (requested_limit > 4096) requested_limit = 4096;
+  (void)requested_limit;
+  uint32_t limit = 4096; /* bounded superset; Lua applies deterministic ordering and the requested limit */
   lua_createtable(L, (int)limit, 0); uint32_t out = 0;
   uint32_t source_index = 0; bool has_source = source[0] && anvil_markdown_vault_note_lookup(snapshot, source, &source_index);
-  for (uint32_t i = 0; out < limit && i < summary.note_count; i++) {
+  uint32_t candidate_indices[4096], candidate_count = 0;
+  if ((strcmp(mode, "current_heading") == 0 || strcmp(mode, "current_block") == 0) && has_source) {
+    candidate_indices[0] = source_index; candidate_count = 1;
+  } else {
+    AnvilMarkdownVaultCompletionKind kind = strcmp(mode, "note") == 0 ? ANVIL_MARKDOWN_VAULT_COMPLETION_NOTES
+      : (strcmp(mode, "global_heading") == 0 ? ANVIL_MARKDOWN_VAULT_COMPLETION_HEADINGS : ANVIL_MARKDOWN_VAULT_COMPLETION_BLOCKS);
+    uint32_t total = anvil_markdown_vault_completion_candidates(snapshot, kind, query, 0, NULL, 0);
+    candidate_count = total < 4096 ? total : 4096;
+    anvil_markdown_vault_completion_candidates(snapshot, kind, query, 0, candidate_indices, candidate_count);
+  }
+  for (uint32_t candidate = 0; out < limit && candidate < candidate_count; candidate++) {
+    uint32_t i = candidate_indices[candidate];
     AnvilMarkdownVaultNoteView note; if (!anvil_markdown_vault_note_at(snapshot, i, &note)) continue;
     bool current = has_source && i == source_index;
     if (strcmp(mode, "note") == 0) {
@@ -1240,7 +1258,17 @@ static int markdown_vault_completion(lua_State *L) {
       SDL_free(note_target);
     }
   }
-  if (strcmp(mode, "note") == 0) for (uint32_t i = 0; out < limit && i < summary.attachment_count; i++) {
+  if (strcmp(mode, "note") == 0) {
+    uint32_t total = anvil_markdown_vault_completion_candidates(
+      snapshot, ANVIL_MARKDOWN_VAULT_COMPLETION_ATTACHMENTS, query, 0, NULL, 0
+    );
+    candidate_count = total < 4096 ? total : 4096;
+    anvil_markdown_vault_completion_candidates(
+      snapshot, ANVIL_MARKDOWN_VAULT_COMPLETION_ATTACHMENTS, query, 0, candidate_indices, candidate_count
+    );
+  }
+  if (strcmp(mode, "note") == 0) for (uint32_t candidate = 0; out < limit && candidate < candidate_count; candidate++) {
+    uint32_t i = candidate_indices[candidate];
     AnvilMarkdownVaultAttachmentView entry; if (!anvil_markdown_vault_attachment_at(snapshot, i, &entry)) continue;
     if (lua_contains_ci(entry.display_name, query) || lua_contains_ci(entry.relative_path, query)) {
       push_completion_candidate(L, entry.display_name, entry.relative_path, "attachment", entry.absolute_path, entry.relative_path, 1, entry.relative_path); lua_rawseti(L, -2, ++out);

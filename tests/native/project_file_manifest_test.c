@@ -62,9 +62,11 @@ int main(void) {
   SDL_snprintf(removed_path, sizeof(removed_path), "%s/a.md", notes); CHECK(SDL_RemovePath(removed_path));
   SDL_snprintf(added_path, sizeof(added_path), "%s/c.md", notes); CHECK(write_file(added_path, "# C\n"));
   char outside_path[800]; SDL_snprintf(outside_path, sizeof(outside_path), "%s/image.png", root); CHECK(SDL_RemovePath(outside_path));
-  const char *scopes[] = { notes };
+  char obsidian[800], excluded_path[800]; SDL_snprintf(obsidian, sizeof(obsidian), "%s/.obsidian", root); CHECK(SDL_CreateDirectory(obsidian));
+  SDL_snprintf(excluded_path, sizeof(excluded_path), "%s/Hidden.md", obsidian); CHECK(write_file(excluded_path, "# Hidden\n"));
+  const char *scopes[] = { notes, obsidian };
   AnvilProjectFileManifestBuildSpec scoped_spec = {
-    .root = root, .previous = snapshot, .scan_paths = scopes, .scan_path_count = 1, .scoped = true,
+    .root = root, .previous = snapshot, .scan_paths = scopes, .scan_path_count = 2, .scoped = true,
   };
   AnvilProjectFileManifestSnapshot *scoped = anvil_project_file_manifest_build(&scoped_spec, &error);
   CHECK(scoped != NULL);
@@ -72,6 +74,7 @@ int main(void) {
   CHECK(anvil_project_file_manifest_lookup(scoped, "notes/c.md", &record));
   CHECK(anvil_project_file_manifest_lookup(scoped, "notes/nested/b.markdown", &record));
   CHECK(anvil_project_file_manifest_lookup(scoped, "image.png", &record));
+  CHECK(!anvil_project_file_manifest_lookup(scoped, ".obsidian/Hidden.md", &record));
   anvil_project_file_manifest_release(scoped);
   anvil_project_file_manifest_release(snapshot);
 
@@ -90,6 +93,7 @@ int main(void) {
   SDL_snprintf(path, sizeof(path), "%s/ignored.md", git); SDL_RemovePath(path);
   SDL_snprintf(path, sizeof(path), "%s/b.markdown", nested); SDL_RemovePath(path);
   SDL_RemovePath(added_path);
+  SDL_RemovePath(excluded_path); SDL_RemovePath(obsidian);
   SDL_snprintf(path, sizeof(path), "%s/image.png", root); SDL_RemovePath(path);
   SDL_snprintf(path, sizeof(path), "%s/plain.txt", root); SDL_RemovePath(path);
   SDL_RemovePath(nested); SDL_RemovePath(notes); SDL_RemovePath(git); SDL_RemovePath(root);

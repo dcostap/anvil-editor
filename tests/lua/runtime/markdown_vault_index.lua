@@ -559,6 +559,57 @@ test.describe("Markdown vault index", function()
     common.rm(root, true)
   end)
 
+  test.it("cancels native rebuilds when the final consumer releases", function()
+    local root = temp_root("markdown-vault-release-cancel")
+    mkdirp(root)
+    for i = 1, 200 do write_file(join_path(root, "Note" .. i .. ".md"), "# Note\n") end
+    local index = vault_index.get_index(root)
+    test.ok(index:acquire("release-cancel-test"))
+    index:rebuild_async("release-cancel-test")
+    test.ok(index.manifest_job ~= nil or index.vault_job ~= nil)
+    test.ok(index:release("release-cancel-test"))
+    test.equal(index.manifest_job, nil)
+    test.equal(index.vault_job, nil)
+    test.ok(index.status ~= "indexing")
+    common.rm(root, true)
+  end)
+
+  test.it("adopts native manifest directories for multi-watch backends", function()
+    local root = temp_root("markdown-vault-nested-watch")
+    local nested = join_path(root, "one", "two")
+    mkdirp(nested)
+    write_file(join_path(nested, "Note.md"), "# Note\n")
+    local index = vault_index.get_index(root):rebuild("nested-watch-test")
+    local watched = {}
+    local watcher = {
+      monitor = { mode = function() return "multiple" end },
+      watch = function(_, path) watched[common.path_compare_key(path)] = true end,
+      unwatch = function() end,
+    }
+    index.watcher, index.watcher_serial = watcher, index.watcher_serial + 1
+    index:watch_dir(root)
+    index:adopt_manifest_watch_dirs(index.manifest_snapshot, watcher, index.watcher_serial)
+    test.ok(wait_until(function() return watched[common.path_compare_key(nested)] end),
+      "nested manifest directory was not watched")
+    index:stop_watcher()
+    common.rm(root, true)
+  end)
+
+  test.it("plans renames for source-relative percent-encoded links", function()
+    local root = temp_root("markdown-vault-rename-relative-encoded")
+    local nested = join_path(root, "nested")
+    mkdirp(nested)
+    local old_path = join_path(root, "Old Note.md")
+    local new_path = join_path(root, "New Note.md")
+    write_file(old_path, "# Old\n")
+    write_file(join_path(nested, "Reference.md"), "[Old](../Old%20Note.md)\n")
+    local index = vault_index.get_index(root):rebuild("rename-relative-encoded-test")
+    local plan = test.not_nil(index:plan_note_rename(old_path, new_path))
+    test.equal(#plan.files, 1)
+    test.equal(#plan.files[1].edits, 1)
+    common.rm(root, true)
+  end)
+
   test.it("rejects stale rename plans before changing any file", function()
     local root = temp_root("markdown-vault-stale-rename")
     mkdirp(root)
@@ -608,6 +659,18 @@ test.describe("Markdown vault index", function()
     test.equal(html_block.status, "resolved")
     test.equal(html_block.line, 1)
     test.equal(html_block.subtarget_missing, true)
+    common.rm(root, true)
+  end)
+
+  test.it("disambiguates duplicate heading slugs", function()
+    local root = temp_root("markdown-vault-duplicate-headings")
+    mkdirp(root)
+    local note = join_path(root, "Note.md")
+    write_file(note, "# Same\nfirst\n# Same\nsecond\n")
+    local index = vault_index.get_index(root):rebuild("duplicate-heading-test")
+    local result = index:resolve(wiki("[[Note#same-1]]"), join_path(root, "Source.md"))
+    test.equal(result.status, "resolved")
+    test.equal(result.line, 3)
     common.rm(root, true)
   end)
 

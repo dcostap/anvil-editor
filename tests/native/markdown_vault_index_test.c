@@ -41,6 +41,10 @@ int main(void) {
   CHECK(anvil_markdown_vault_resolve_notes(snapshot, "Alias, One", matches, 4) == 1);
   CHECK(anvil_markdown_vault_resolve_attachments(snapshot, "image.png", matches, 4) == 1);
   CHECK(anvil_markdown_vault_linked_notes(snapshot, "Note.md", matches, 4) == 1);
+  CHECK(anvil_markdown_vault_completion_candidates(snapshot,
+    ANVIL_MARKDOWN_VAULT_COMPLETION_NOTES, "Alias", 0, matches, 4) == 1);
+  CHECK(anvil_markdown_vault_completion_candidates(snapshot,
+    ANVIL_MARKDOWN_VAULT_COMPLETION_HEADINGS, "does-not-exist", 0, matches, 4) == 0);
   spec.previous = snapshot;
   AnvilMarkdownVaultSnapshot *reused = anvil_markdown_vault_snapshot_build(&spec, &error);
   CHECK(reused != NULL);

@@ -104,6 +104,13 @@ typedef struct AnvilMarkdownVaultSummary {
   double build_ms;
 } AnvilMarkdownVaultSummary;
 
+typedef enum AnvilMarkdownVaultCompletionKind {
+  ANVIL_MARKDOWN_VAULT_COMPLETION_NOTES = 1,
+  ANVIL_MARKDOWN_VAULT_COMPLETION_HEADINGS,
+  ANVIL_MARKDOWN_VAULT_COMPLETION_BLOCKS,
+  ANVIL_MARKDOWN_VAULT_COMPLETION_ATTACHMENTS,
+} AnvilMarkdownVaultCompletionKind;
+
 AnvilMarkdownVaultSnapshot *anvil_markdown_vault_snapshot_build(const AnvilMarkdownVaultBuildSpec *spec, char **error);
 AnvilMarkdownVaultSnapshot *anvil_markdown_vault_overlay_build(
   const char *absolute_path, const char *relative_path,
@@ -120,5 +127,7 @@ bool anvil_markdown_vault_attachment_lookup(const AnvilMarkdownVaultSnapshot *sn
 uint32_t anvil_markdown_vault_resolve_notes(const AnvilMarkdownVaultSnapshot *snapshot, const char *target, uint32_t *indices, uint32_t capacity);
 uint32_t anvil_markdown_vault_resolve_attachments(const AnvilMarkdownVaultSnapshot *snapshot, const char *target, uint32_t *indices, uint32_t capacity);
 uint32_t anvil_markdown_vault_linked_notes(const AnvilMarkdownVaultSnapshot *snapshot, const char *target, uint32_t *indices, uint32_t capacity);
+uint32_t anvil_markdown_vault_completion_candidates(const AnvilMarkdownVaultSnapshot *snapshot,
+  AnvilMarkdownVaultCompletionKind kind, const char *query, uint32_t offset, uint32_t *indices, uint32_t capacity);
 
 #endif

@@ -397,8 +397,6 @@ end
 
 function Index:watch_dir(dir)
   if not self.watcher or self.watched_dirs[dir] then return false end
-  local info = system.get_file_info(dir)
-  if not (info and info.type == "dir") then return false end
   local monitor = self.watcher.monitor
   if monitor and monitor.mode and monitor:mode() == "single" and next(self.watched_dirs) then
     return true
@@ -423,12 +421,29 @@ end
 function Index:rebuild(reason, opts)
   opts = opts or {}
   self:rebuild_async(reason or "manual")
-  local serial = self.rebuild_serial
-  while self.status == "indexing" and self.rebuild_serial == serial do
+  while self.status == "indexing" or self.manifest_job or self.vault_job or self.pending_manifest_reason do
     coroutine.yield(0.001)
   end
   if opts.skip_path and self.status == "ready" then self:remove_path_entry(opts.skip_path) end
   return self
+end
+
+function Index:adopt_manifest_watch_dirs(manifest, watcher, watcher_serial)
+  local monitor = watcher and watcher.monitor
+  if monitor and monitor.mode and monitor:mode() == "single" then return end
+  core.add_thread(function()
+    local summary, offset = manifest:summary(), 0
+    while self.watcher == watcher and self.watcher_serial == watcher_serial
+      and self.manifest_snapshot == manifest and offset < summary.records
+    do
+      local page = manifest:page(offset, 128)
+      for _, record in ipairs(page) do
+        if record.kind == "directory" then self:watch_dir(record.absolute_path) end
+      end
+      offset = page.next_offset
+      coroutine.yield(0)
+    end
+  end)
 end
 
 function Index:queue_subtree_scan(dirs, reason)
@@ -463,6 +478,7 @@ function Index:start_watcher()
   self.watcher_serial = self.watcher_serial + 1
   local serial = self.watcher_serial
   self:watch_dir(self.root)
+  if self.manifest_snapshot then self:adopt_manifest_watch_dirs(self.manifest_snapshot, watcher, serial) end
   core.add_thread(function()
     local next_degraded_rescan = system.get_time() + 5
     while self.watcher == watcher and self.watcher_serial == serial do
@@ -522,7 +538,20 @@ end
 function Index:release(id)
   if not self.consumers[id] then return false end
   self.consumers[id] = nil
-  if not next(self.consumers) then self:stop_watcher() end
+  if not next(self.consumers) then
+    self:stop_watcher()
+    if not next(self.doc_listeners) and (self.manifest_job or self.vault_job) then
+      self.rebuild_serial = self.rebuild_serial + 1
+      local pool = worker_pool.current_system()
+      if pool then
+        if self.manifest_job then pool:cancel(self.manifest_job) end
+        if self.vault_job then pool:cancel(self.vault_job) end
+      end
+      self.manifest_job, self.vault_job, self.pending_manifest_reason = nil, nil, nil
+      self.status, self.reason = self.disk_snapshot and "ready" or "cold", "no active consumers"
+      core.log_quiet("Markdown vault cancelled inactive rebuild: root=%s generation=%d", self.root, self.rebuild_serial)
+    end
+  end
   return true
 end
 
@@ -535,7 +564,7 @@ end
 function Index:rebuild_async(reason)
   local started_at = system.get_time()
   local rebuild_reason = reason or "async-rebuild"
-  if self.manifest_job then
+  if self.manifest_job or self.vault_job then
     self.pending_manifest_reason = rebuild_reason
     core.log_quiet("Markdown vault index coalesced native manifest request: root=%s reason=%s",
       self.root, rebuild_reason)
@@ -567,6 +596,7 @@ function Index:rebuild_async(reason)
     for _, path in ipairs(scan_paths) do self.dirty_manifest_scopes[path_key(path)] = path end
     self.manifest_job = nil
     self.vault_job = nil
+    self.pending_manifest_reason = nil
     self.status, self.reason = "error", tostring(message and (message.error or message) or "manifest failed")
     self:notify("error", self.reason)
     core.log_quiet("Markdown native manifest failed: root=%s generation=%d error=%s",
@@ -646,6 +676,7 @@ function Index:rebuild_async(reason)
           end
           if self.manifest_snapshot then self.manifest_snapshot:close() end
           self.manifest_snapshot = manifest
+          if self.watcher then self:adopt_manifest_watch_dirs(manifest, self.watcher, self.watcher_serial) end
           self.status, self.reason = "ready", nil
           self.generation = self.generation + 1
           self:notify("ready")

@@ -67,6 +67,7 @@ typedef struct AnvilWorkerJobSpec {
   const char *value;
   int count;
   uint32_t sleep_ms;
+  int priority;
 
   const char *path;
   const char *relpath;

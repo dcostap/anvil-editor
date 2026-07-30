@@ -5,6 +5,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <sys/stat.h>
+#endif
+
 typedef struct ManifestOwnedRecord {
   char *absolute_path;
   char *relative_path;
@@ -40,6 +46,32 @@ static void set_error(char **error, const char *message) {
 static bool excluded_name(const char *name) {
   return strcmp(name, ".git") == 0 || strcmp(name, ".obsidian") == 0 ||
     strcmp(name, ".run-meson-tests") == 0;
+}
+
+static bool path_has_excluded_component(const char *root, const char *path) {
+  const char *relative = path + strlen(root);
+  while (*relative == '/' || *relative == '\\') relative++;
+  while (*relative) {
+    const char *end = relative; while (*end && *end != '/' && *end != '\\') end++;
+    size_t length = (size_t)(end - relative);
+    if ((length == 4 && strncmp(relative, ".git", 4) == 0)
+        || (length == 9 && strncmp(relative, ".obsidian", 9) == 0)
+        || (length == 16 && strncmp(relative, ".run-meson-tests", 16) == 0)) return true;
+    relative = end; while (*relative == '/' || *relative == '\\') relative++;
+  }
+  return false;
+}
+
+static bool directory_is_link(const char *path) {
+#ifdef _WIN32
+  int length = MultiByteToWideChar(CP_UTF8, 0, path, -1, NULL, 0); if (!length) return true;
+  WCHAR *wide = (WCHAR *)SDL_malloc((size_t)length * sizeof(WCHAR)); if (!wide) return true;
+  if (!MultiByteToWideChar(CP_UTF8, 0, path, -1, wide, length)) { SDL_free(wide); return true; }
+  DWORD attributes = GetFileAttributesW(wide); SDL_free(wide);
+  return attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+#else
+  struct stat info; return lstat(path, &info) != 0 || S_ISLNK(info.st_mode);
+#endif
 }
 
 static const char *extension(const char *path) {
@@ -142,7 +174,7 @@ static SDL_EnumerationResult SDLCALL walk_callback(void *userdata, const char *d
   bool ok = true;
   if (info.type == SDL_PATHTYPE_DIRECTORY) {
     ok = add_record(walk, path, &info, ANVIL_MANIFEST_DIRECTORY);
-    if (ok && !is_cancelled(walk->spec)) {
+    if (ok && !is_cancelled(walk->spec) && !directory_is_link(path)) {
       bool enumerated = SDL_EnumerateDirectory(path, walk_callback, walk);
       if (!enumerated && !walk->error) walk->snapshot->summary.inaccessible_entries++;
     }
@@ -203,10 +235,16 @@ static bool copy_previous_record(ManifestWalk *walk, const ManifestOwnedRecord *
 
 static bool scan_scope(ManifestWalk *walk, const char *path) {
   if (!path || !path_within(path, walk->snapshot->root)) return true;
+  if (path_has_excluded_component(walk->snapshot->root, path)) return true;
   SDL_PathInfo info; if (!SDL_GetPathInfo(path, &info)) return true;
   if (info.type == SDL_PATHTYPE_DIRECTORY) {
     if (!path_equal(path, walk->snapshot->root) && !add_record(walk, path, &info, ANVIL_MANIFEST_DIRECTORY)) return false;
-    return SDL_EnumerateDirectory(path, walk_callback, walk);
+    if (directory_is_link(path)) return true;
+    if (!SDL_EnumerateDirectory(path, walk_callback, walk)) {
+      if (walk->error) return false;
+      walk->snapshot->summary.inaccessible_entries++;
+    }
+    return true;
   }
   if (info.type == SDL_PATHTYPE_FILE) {
     const char *ext = extension(path);
@@ -281,12 +319,16 @@ AnvilProjectFileManifestSnapshot *anvil_project_file_manifest_build(
   bool ok = snapshot->root != NULL;
   if (ok && scoped) {
     for (uint64_t i = 0; ok && i < spec->previous->count; i++) {
+      if ((i & 255u) == 0 && is_cancelled(spec)) { ok = false; break; }
       const ManifestOwnedRecord *record = &spec->previous->records[i];
       if (!record_in_scopes(record->absolute_path, spec->scan_paths, spec->scan_path_count)
           && !record_in_scopes(record->absolute_path, spec->remove_paths, spec->remove_path_count))
         ok = copy_previous_record(&walk, record);
     }
-    for (uint32_t i = 0; ok && i < spec->scan_path_count; i++) ok = scan_scope(&walk, spec->scan_paths[i]);
+    for (uint32_t i = 0; ok && i < spec->scan_path_count; i++) {
+      if (is_cancelled(spec)) { ok = false; break; }
+      ok = scan_scope(&walk, spec->scan_paths[i]);
+    }
   } else if (ok) {
     ok = SDL_EnumerateDirectory(snapshot->root, walk_callback, &walk);
   }

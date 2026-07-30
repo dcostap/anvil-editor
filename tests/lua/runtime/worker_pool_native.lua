@@ -98,6 +98,22 @@ test.describe("worker_pool_native", function()
     test.ok(#messages <= 2)
   end)
 
+  test.test("interactive native jobs overtake queued background work", function()
+    local pool = new_pool("lua-native-priority", 1)
+    pool:submit({ kind = "test_count", count = 20, sleep_ms = 2 })
+    test.ok(drain_until(pool, function(message) return message.type == "progress" end))
+    pool:submit({ kind = "test_echo", value = "background", priority = "background" })
+    pool:submit({ kind = "test_echo", value = "interactive", priority = "interactive" })
+    local order = {}
+    test.ok(drain_until(pool, function(message)
+      if message.type == "result" and (message.value == "background" or message.value == "interactive") then
+        order[#order + 1] = message.value
+      end
+      return #order == 2
+    end, 5000))
+    test.same(order, { "interactive", "background" })
+  end)
+
   test.test("File Tree Git status jobs preserve binary payloads and return bounded snapshots", function()
     local pool = new_pool("lua-native-filetree-git-status", 1)
     local handle = test.not_nil(pool:submit({
