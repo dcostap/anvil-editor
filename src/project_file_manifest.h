@@ -17,6 +17,12 @@ typedef enum AnvilManifestEntryKind {
 
 typedef struct AnvilProjectFileManifestBuildSpec {
   const char *root;
+  const AnvilProjectFileManifestSnapshot *previous;
+  const char *const *scan_paths;
+  uint32_t scan_path_count;
+  const char *const *remove_paths;
+  uint32_t remove_path_count;
+  bool scoped;
   bool show_unsupported_files;
   AnvilManifestCancelledFn cancelled;
   void *cancel_userdata;

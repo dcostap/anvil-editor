@@ -16,6 +16,12 @@ typedef struct OwnedAttachment {
   AnvilMarkdownVaultAttachmentView view;
 } OwnedAttachment;
 
+typedef struct TargetGroup {
+  char *key;
+  uint32_t *indices;
+  uint32_t count;
+} TargetGroup;
+
 struct AnvilMarkdownVaultSnapshot {
   SDL_AtomicInt refcount;
   OwnedNote *notes;
@@ -24,6 +30,10 @@ struct AnvilMarkdownVaultSnapshot {
   OwnedAttachment *attachments;
   uint32_t attachment_count;
   uint32_t attachment_capacity;
+  TargetGroup *note_targets;
+  uint32_t note_target_count;
+  TargetGroup *attachment_targets;
+  uint32_t attachment_target_count;
   AnvilMarkdownVaultSummary summary;
 };
 
@@ -38,6 +48,10 @@ typedef struct StructuralLines {
 } StructuralLines;
 
 static bool path_match(const char *candidate, const char *target);
+static int owned_note_compare(const void *left, const void *right);
+static int owned_attachment_compare(const void *left, const void *right);
+static bool build_target_indexes(AnvilMarkdownVaultSnapshot *snapshot,
+  AnvilMarkdownVaultCancelledFn cancelled_fn, void *cancel_userdata);
 
 static char *dup_range(const char *text, size_t len) {
   char *copy = (char *)SDL_malloc(len + 1);
@@ -615,9 +629,10 @@ failed:
 static const AnvilMarkdownVaultNoteView *find_reusable_note(const AnvilMarkdownVaultSnapshot *snapshot,
   const AnvilProjectFileManifestRecord *record) {
   if (!snapshot) return NULL;
-  for (uint32_t i = 0; i < snapshot->note_count; i++) {
-    const AnvilMarkdownVaultNoteView *note = &snapshot->notes[i].view;
-    if (path_match(note->absolute_path, record->absolute_path) && note->size == record->size && note->modified == record->modified) return note;
+  uint32_t index = 0;
+  if (anvil_markdown_vault_note_lookup(snapshot, record->absolute_path, &index)) {
+    const AnvilMarkdownVaultNoteView *note = &snapshot->notes[index].view;
+    if (note->size == record->size && note->modified == record->modified) return note;
   }
   return NULL;
 }
@@ -714,6 +729,12 @@ AnvilMarkdownVaultSnapshot *anvil_markdown_vault_snapshot_build(const AnvilMarkd
     }
   }
   snapshot->summary.note_count = snapshot->note_count; snapshot->summary.attachment_count = snapshot->attachment_count;
+  if (snapshot->note_count > 1) qsort(snapshot->notes, snapshot->note_count, sizeof(*snapshot->notes), owned_note_compare);
+  if (snapshot->attachment_count > 1) qsort(snapshot->attachments, snapshot->attachment_count, sizeof(*snapshot->attachments), owned_attachment_compare);
+  if (!build_target_indexes(snapshot, spec->cancelled, spec->cancel_userdata)) {
+    set_error(error, cancelled(spec) ? "cancelled" : "out of memory building Markdown vault lookup indexes");
+    anvil_markdown_vault_snapshot_release(snapshot); return NULL;
+  }
   snapshot->summary.build_ms = (double)(SDL_GetTicksNS() - started) / 1000000.0;
   return snapshot;
 }
@@ -753,6 +774,10 @@ AnvilMarkdownVaultSnapshot *anvil_markdown_vault_overlay_build(
   snapshot->note_count = 1; snapshot->summary.note_count = 1; snapshot->summary.bytes_read = text_len;
   snapshot->summary.shallow_notes = note->shallow ? 1 : 0; snapshot->summary.headings = note->heading_count;
   snapshot->summary.blocks = note->block_count; snapshot->summary.links = note->link_count;
+  if (!build_target_indexes(snapshot, cancelled_fn, cancel_userdata)) {
+    set_error(error, cancelled_fn && cancelled_fn(cancel_userdata) ? "cancelled" : "out of memory building Markdown overlay lookup indexes");
+    anvil_markdown_vault_snapshot_release(snapshot); return NULL;
+  }
   snapshot->summary.build_ms = (double)(SDL_GetTicksNS() - started) / 1000000.0;
   return snapshot;
 }
@@ -764,6 +789,9 @@ void anvil_markdown_vault_snapshot_release(AnvilMarkdownVaultSnapshot *snapshot)
   for (uint32_t i = 0; i < snapshot->attachment_count; i++) {
     SDL_free((void *)snapshot->attachments[i].view.absolute_path); SDL_free((void *)snapshot->attachments[i].view.relative_path); SDL_free((void *)snapshot->attachments[i].view.display_name);
   }
+  for (uint32_t i = 0; i < snapshot->note_target_count; i++) { SDL_free(snapshot->note_targets[i].key); SDL_free(snapshot->note_targets[i].indices); }
+  for (uint32_t i = 0; i < snapshot->attachment_target_count; i++) { SDL_free(snapshot->attachment_targets[i].key); SDL_free(snapshot->attachment_targets[i].indices); }
+  SDL_free(snapshot->note_targets); SDL_free(snapshot->attachment_targets);
   SDL_free(snapshot->notes); SDL_free(snapshot->attachments); SDL_free(snapshot);
 }
 void anvil_markdown_vault_snapshot_summary(const AnvilMarkdownVaultSnapshot *snapshot, AnvilMarkdownVaultSummary *summary) {
@@ -788,8 +816,143 @@ static bool path_match(const char *candidate, const char *target) {
   return !*candidate && !*target;
 }
 
+static int path_compare(const char *a, const char *b) {
+  while (*a && *b) {
+    char left = ascii_lower(*a == '\\' ? '/' : *a), right = ascii_lower(*b == '\\' ? '/' : *b);
+    if (left != right) return (unsigned char)left < (unsigned char)right ? -1 : 1;
+    a++; b++;
+  }
+  return *a ? 1 : (*b ? -1 : 0);
+}
+
+static int owned_note_compare(const void *left, const void *right) {
+  return path_compare(((const OwnedNote *)left)->view.relative_path, ((const OwnedNote *)right)->view.relative_path);
+}
+
+static int owned_attachment_compare(const void *left, const void *right) {
+  return path_compare(((const OwnedAttachment *)left)->view.relative_path, ((const OwnedAttachment *)right)->view.relative_path);
+}
+
+typedef struct TargetPair { char *key; uint32_t index; } TargetPair;
+
+static char *target_key(const char *text) {
+  char *key = SDL_strdup(text ? text : ""); if (!key) return NULL;
+  for (char *cursor = key; *cursor; cursor++) {
+    if (*cursor == '\\') *cursor = '/'; else *cursor = ascii_lower(*cursor);
+  }
+  return key;
+}
+
+static int target_pair_compare(const void *left, const void *right) {
+  const TargetPair *a = (const TargetPair *)left, *b = (const TargetPair *)right;
+  int compared = strcmp(a->key, b->key); if (compared) return compared;
+  return a->index < b->index ? -1 : (a->index > b->index ? 1 : 0);
+}
+
+static bool add_target_pair(TargetPair *pairs, uint32_t *count, const char *text, uint32_t index) {
+  pairs[*count].key = target_key(text); if (!pairs[*count].key) return false;
+  pairs[*count].index = index; (*count)++; return true;
+}
+
+static bool collapse_target_pairs(TargetPair *pairs, uint32_t pair_count, TargetGroup **out, uint32_t *out_count) {
+  if (!pair_count) return true;
+  qsort(pairs, pair_count, sizeof(*pairs), target_pair_compare);
+  uint32_t groups = 1; for (uint32_t i = 1; i < pair_count; i++) if (strcmp(pairs[i - 1].key, pairs[i].key) != 0) groups++;
+  TargetGroup *result = (TargetGroup *)SDL_calloc(groups, sizeof(*result)); if (!result) return false;
+  uint32_t group = 0, start = 0;
+  while (start < pair_count) {
+    uint32_t end = start + 1; while (end < pair_count && strcmp(pairs[start].key, pairs[end].key) == 0) end++;
+    result[group].key = pairs[start].key; pairs[start].key = NULL;
+    result[group].indices = (uint32_t *)SDL_malloc((end - start) * sizeof(uint32_t));
+    if (!result[group].indices) {
+      for (uint32_t i = 0; i <= group; i++) { SDL_free(result[i].key); SDL_free(result[i].indices); }
+      SDL_free(result); return false;
+    }
+    uint32_t previous = UINT32_MAX;
+    for (uint32_t i = start; i < end; i++) if (pairs[i].index != previous) {
+      result[group].indices[result[group].count++] = pairs[i].index; previous = pairs[i].index;
+    }
+    group++; start = end;
+  }
+  *out = result; *out_count = groups; return true;
+}
+
+static bool build_target_indexes(AnvilMarkdownVaultSnapshot *snapshot,
+  AnvilMarkdownVaultCancelledFn cancelled_fn, void *cancel_userdata) {
+  uint64_t note_pairs = 0;
+  for (uint32_t i = 0; i < snapshot->note_count; i++) note_pairs += 4 + snapshot->notes[i].view.alias_count;
+  uint64_t attachment_pairs = (uint64_t)snapshot->attachment_count * 2;
+  if (note_pairs > UINT32_MAX || attachment_pairs > UINT32_MAX) return false;
+  TargetPair *notes = note_pairs ? (TargetPair *)SDL_calloc((size_t)note_pairs, sizeof(*notes)) : NULL;
+  TargetPair *attachments = attachment_pairs ? (TargetPair *)SDL_calloc((size_t)attachment_pairs, sizeof(*attachments)) : NULL;
+  if ((note_pairs && !notes) || (attachment_pairs && !attachments)) { SDL_free(notes); SDL_free(attachments); return false; }
+  uint32_t note_count = 0, attachment_count = 0; bool ok = true;
+  for (uint32_t i = 0; ok && i < snapshot->note_count; i++) {
+    if ((i & 255u) == 0 && cancelled_fn && cancelled_fn(cancel_userdata)) { ok = false; break; }
+    const AnvilMarkdownVaultNoteView *note = &snapshot->notes[i].view;
+    ok = add_target_pair(notes, &note_count, note->relative_path, i)
+      && add_target_pair(notes, &note_count, note->relative_no_extension, i)
+      && add_target_pair(notes, &note_count, basename_ptr(note->relative_no_extension), i)
+      && add_target_pair(notes, &note_count, note->display_name, i);
+    for (uint32_t a = 0; ok && a < note->alias_count; a++) ok = add_target_pair(notes, &note_count, note->aliases[a], i);
+  }
+  for (uint32_t i = 0; ok && i < snapshot->attachment_count; i++) {
+    if ((i & 255u) == 0 && cancelled_fn && cancelled_fn(cancel_userdata)) { ok = false; break; }
+    const AnvilMarkdownVaultAttachmentView *entry = &snapshot->attachments[i].view;
+    ok = add_target_pair(attachments, &attachment_count, entry->relative_path, i)
+      && add_target_pair(attachments, &attachment_count, entry->display_name, i);
+  }
+  if (ok) ok = collapse_target_pairs(notes, note_count, &snapshot->note_targets, &snapshot->note_target_count)
+    && collapse_target_pairs(attachments, attachment_count, &snapshot->attachment_targets, &snapshot->attachment_target_count);
+  for (uint32_t i = 0; i < note_count; i++) SDL_free(notes[i].key);
+  for (uint32_t i = 0; i < attachment_count; i++) SDL_free(attachments[i].key);
+  SDL_free(notes); SDL_free(attachments); return ok;
+}
+
+static const TargetGroup *find_target_group(const TargetGroup *groups, uint32_t count, const char *target) {
+  char *key = target_key(target); if (!key) return NULL;
+  uint32_t low = 0, high = count;
+  while (low < high) { uint32_t middle = low + (high - low) / 2; int compared = strcmp(groups[middle].key, key); if (compared < 0) low = middle + 1; else high = middle; }
+  const TargetGroup *result = low < count && strcmp(groups[low].key, key) == 0 ? &groups[low] : NULL; SDL_free(key); return result;
+}
+
+static bool path_is_absolute(const char *path) {
+  return path && ((isalpha((unsigned char)path[0]) && path[1] == ':' && (path[2] == '/' || path[2] == '\\'))
+    || ((path[0] == '/' || path[0] == '\\') && (path[1] == '/' || path[1] == '\\')) || path[0] == '/');
+}
+
+static bool binary_note_path(const AnvilMarkdownVaultSnapshot *snapshot, const char *path, bool absolute, uint32_t *index) {
+  uint32_t low = 0, high = snapshot->note_count;
+  while (low < high) {
+    uint32_t middle = low + (high - low) / 2; const AnvilMarkdownVaultNoteView *note = &snapshot->notes[middle].view;
+    int compared = path_compare(absolute ? note->absolute_path : note->relative_path, path);
+    if (compared < 0) low = middle + 1; else high = middle;
+  }
+  if (low < snapshot->note_count) {
+    const AnvilMarkdownVaultNoteView *note = &snapshot->notes[low].view;
+    if (path_match(absolute ? note->absolute_path : note->relative_path, path)) { if (index) *index = low; return true; }
+  }
+  return false;
+}
+
+static bool binary_attachment_path(const AnvilMarkdownVaultSnapshot *snapshot, const char *path, bool absolute, uint32_t *index) {
+  uint32_t low = 0, high = snapshot->attachment_count;
+  while (low < high) {
+    uint32_t middle = low + (high - low) / 2; const AnvilMarkdownVaultAttachmentView *entry = &snapshot->attachments[middle].view;
+    int compared = path_compare(absolute ? entry->absolute_path : entry->relative_path, path);
+    if (compared < 0) low = middle + 1; else high = middle;
+  }
+  if (low < snapshot->attachment_count) {
+    const AnvilMarkdownVaultAttachmentView *entry = &snapshot->attachments[low].view;
+    if (path_match(absolute ? entry->absolute_path : entry->relative_path, path)) { if (index) *index = low; return true; }
+  }
+  return false;
+}
+
 bool anvil_markdown_vault_note_lookup(const AnvilMarkdownVaultSnapshot *snapshot, const char *path, uint32_t *index) {
   if (!snapshot || !path) return false;
+  if (path_is_absolute(path)) return binary_note_path(snapshot, path, true, index);
+  if (binary_note_path(snapshot, path, false, index)) return true;
   for (uint32_t i = 0; i < snapshot->note_count; i++) {
     const AnvilMarkdownVaultNoteView *note = &snapshot->notes[i].view;
     if (path_match(note->absolute_path, path) || path_match(note->relative_path, path)) { if (index) *index = i; return true; }
@@ -799,6 +962,8 @@ bool anvil_markdown_vault_note_lookup(const AnvilMarkdownVaultSnapshot *snapshot
 }
 bool anvil_markdown_vault_attachment_lookup(const AnvilMarkdownVaultSnapshot *snapshot, const char *path, uint32_t *index) {
   if (!snapshot || !path) return false;
+  if (path_is_absolute(path)) return binary_attachment_path(snapshot, path, true, index);
+  if (binary_attachment_path(snapshot, path, false, index)) return true;
   for (uint32_t i = 0; i < snapshot->attachment_count; i++) {
     const AnvilMarkdownVaultAttachmentView *entry = &snapshot->attachments[i].view;
     if (path_match(entry->absolute_path, path) || path_match(entry->relative_path, path)) { if (index) *index = i; return true; }
@@ -807,23 +972,19 @@ bool anvil_markdown_vault_attachment_lookup(const AnvilMarkdownVaultSnapshot *sn
 }
 uint32_t anvil_markdown_vault_resolve_notes(const AnvilMarkdownVaultSnapshot *snapshot, const char *target, uint32_t *indices, uint32_t capacity) {
   if (!snapshot || !target) return 0;
-  uint32_t count = 0;
-  for (uint32_t i = 0; i < snapshot->note_count; i++) {
-    const AnvilMarkdownVaultNoteView *note = &snapshot->notes[i].view; bool match = path_match(note->relative_path, target) || path_match(note->display_name, target);
-    if (!match) match = path_match(note->relative_no_extension, target) || path_match(basename_ptr(note->relative_no_extension), target);
-    for (uint32_t a = 0; !match && a < note->alias_count; a++) match = path_match(note->aliases[a], target);
-    if (match) { if (count < capacity) indices[count] = i; count++; }
-  }
-  return count;
+  const TargetGroup *group = find_target_group(snapshot->note_targets, snapshot->note_target_count, target);
+  if (!group) return 0;
+  uint32_t copied = group->count < capacity ? group->count : capacity;
+  if (indices && copied) memcpy(indices, group->indices, copied * sizeof(uint32_t));
+  return group->count;
 }
 uint32_t anvil_markdown_vault_resolve_attachments(const AnvilMarkdownVaultSnapshot *snapshot, const char *target, uint32_t *indices, uint32_t capacity) {
   if (!snapshot || !target) return 0;
-  uint32_t count = 0;
-  for (uint32_t i = 0; i < snapshot->attachment_count; i++) {
-    const AnvilMarkdownVaultAttachmentView *entry = &snapshot->attachments[i].view;
-    if (path_match(entry->relative_path, target) || path_match(entry->display_name, target)) { if (count < capacity) indices[count] = i; count++; }
-  }
-  return count;
+  const TargetGroup *group = find_target_group(snapshot->attachment_targets, snapshot->attachment_target_count, target);
+  if (!group) return 0;
+  uint32_t copied = group->count < capacity ? group->count : capacity;
+  if (indices && copied) memcpy(indices, group->indices, copied * sizeof(uint32_t));
+  return group->count;
 }
 uint32_t anvil_markdown_vault_linked_notes(const AnvilMarkdownVaultSnapshot *snapshot, const char *target, uint32_t *indices, uint32_t capacity) {
   if (!snapshot || !target) return 0;

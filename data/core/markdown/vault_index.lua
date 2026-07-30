@@ -227,6 +227,7 @@ function Index:new(root)
       last_rebuild = nil,
     },
     removed_paths = {},
+    dirty_manifest_scopes = {},
   }, self)
 end
 
@@ -385,6 +386,7 @@ function Index:remove_path(path)
   if existing then
     self.removed_paths[path_key(path)] = { path = common.normalize_path(path), serial = self.rebuild_serial }
   end
+  self.dirty_manifest_scopes[path_key(path)] = common.normalize_path(path)
   if removed or existing then
     self.generation = self.generation + 1
     self:notify("path-removed", path)
@@ -442,6 +444,7 @@ function Index:reconcile_dir(dir, reason, opts)
     path_key(normalized) ~= path_key(self.root)
     and not common.path_belongs_to(normalized, self.root)
   ) then return false end
+  self.dirty_manifest_scopes[path_key(normalized)] = normalized
   if opts.cooperative then self:rebuild_async(reason or "watch")
   else self:rebuild(reason or "filesystem-reconcile") end
   return true
@@ -549,9 +552,19 @@ function Index:rebuild_async(reason)
     rebuild_reason
   )
 
+  local scan_paths = {}
+  if self.manifest_snapshot then
+    for key, path in pairs(self.dirty_manifest_scopes) do
+      scan_paths[#scan_paths + 1] = path
+      self.dirty_manifest_scopes[key] = nil
+    end
+    table.sort(scan_paths)
+  end
+
   local pool = worker_pool.system()
   local function finish_error(message)
     if serial ~= self.rebuild_serial then return end
+    for _, path in ipairs(scan_paths) do self.dirty_manifest_scopes[path_key(path)] = path end
     self.manifest_job = nil
     self.vault_job = nil
     self.status, self.reason = "error", tostring(message and (message.error or message) or "manifest failed")
@@ -570,6 +583,9 @@ function Index:rebuild_async(reason)
     native_payload = {
       project_root = self.root,
       show_unsupported_files = self.show_unsupported_files,
+      manifest = #scan_paths > 0 and self.manifest_snapshot or nil,
+      scan_paths = scan_paths,
+      project_scoped = #scan_paths > 0,
     },
     is_stale = function() return serial ~= self.rebuild_serial end,
     on_stale = function(message)
@@ -603,6 +619,7 @@ function Index:rebuild_async(reason)
         on_stale = function(vault_message)
           local snapshot = vault_message.vault_snapshot or (vault_message.payload and vault_message.payload.vault_snapshot)
           if snapshot then release_vault_snapshot(snapshot) end
+          manifest:close()
         end,
         on_error = function(vault_message) manifest:close(); finish_error(vault_message) end,
         on_cancelled = function(vault_message) manifest:close(); finish_error(vault_message or "cancelled") end,
@@ -934,6 +951,7 @@ function Index:update_path(path, opts)
   if not path then return false end
   self.removed_paths[path_key(path)] = nil
   if not ((is_markdown(path) or self:is_attachment(path)) and file_exists(path)) then return false end
+  self.dirty_manifest_scopes[path_key(path)] = path
   self:rebuild(opts.reason or "path-updated")
   return self:note(path) ~= nil or self:attachment(path) ~= nil
 end

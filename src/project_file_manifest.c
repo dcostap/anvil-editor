@@ -163,6 +163,82 @@ static int record_compare(const void *left, const void *right) {
   return strcmp(a->relative_path, b->relative_path);
 }
 
+static bool path_equal(const char *a, const char *b) {
+  while (*a && *b) {
+    char left = *a == '\\' ? '/' : *a, right = *b == '\\' ? '/' : *b;
+#ifdef _WIN32
+    if (left >= 'A' && left <= 'Z') left = (char)(left + 32);
+    if (right >= 'A' && right <= 'Z') right = (char)(right + 32);
+#endif
+    if (left != right) return false;
+    a++; b++;
+  }
+  return !*a && !*b;
+}
+
+static bool path_within(const char *path, const char *scope) {
+  size_t length = strlen(scope);
+  while (length && (scope[length - 1] == '/' || scope[length - 1] == '\\')) length--;
+  for (size_t i = 0; i < length; i++) {
+    char left = path[i] == '\\' ? '/' : path[i], right = scope[i] == '\\' ? '/' : scope[i];
+#ifdef _WIN32
+    if (left >= 'A' && left <= 'Z') left = (char)(left + 32);
+    if (right >= 'A' && right <= 'Z') right = (char)(right + 32);
+#endif
+    if (!path[i] || left != right) return false;
+  }
+  return !path[length] || path[length] == '/' || path[length] == '\\';
+}
+
+static bool record_in_scopes(const char *path, const char *const *paths, uint32_t count) {
+  for (uint32_t i = 0; i < count; i++) if (paths[i] && path_within(path, paths[i])) return true;
+  return false;
+}
+
+static bool copy_previous_record(ManifestWalk *walk, const ManifestOwnedRecord *source) {
+  SDL_PathInfo info; SDL_memset(&info, 0, sizeof(info)); info.size = source->size; info.modify_time = source->modified;
+  info.type = source->kind == ANVIL_MANIFEST_DIRECTORY ? SDL_PATHTYPE_DIRECTORY : SDL_PATHTYPE_FILE;
+  return add_record(walk, source->absolute_path, &info, source->kind);
+}
+
+static bool scan_scope(ManifestWalk *walk, const char *path) {
+  if (!path || !path_within(path, walk->snapshot->root)) return true;
+  SDL_PathInfo info; if (!SDL_GetPathInfo(path, &info)) return true;
+  if (info.type == SDL_PATHTYPE_DIRECTORY) {
+    if (!path_equal(path, walk->snapshot->root) && !add_record(walk, path, &info, ANVIL_MANIFEST_DIRECTORY)) return false;
+    return SDL_EnumerateDirectory(path, walk_callback, walk);
+  }
+  if (info.type == SDL_PATHTYPE_FILE) {
+    const char *ext = extension(path);
+    AnvilManifestEntryKind kind = markdown_extension(ext) ? ANVIL_MANIFEST_MARKDOWN :
+      (attachment_extension(ext) || walk->spec->show_unsupported_files ? ANVIL_MANIFEST_ATTACHMENT : ANVIL_MANIFEST_OTHER_FILE);
+    return add_record(walk, path, &info, kind);
+  }
+  return true;
+}
+
+static void deduplicate_and_recount(AnvilProjectFileManifestSnapshot *snapshot) {
+  uint64_t inaccessible = snapshot->summary.inaccessible_entries;
+  uint64_t write = 0;
+  for (uint64_t read = 0; read < snapshot->count; read++) {
+    if (write && strcmp(snapshot->records[write - 1].relative_path, snapshot->records[read].relative_path) == 0) {
+      SDL_free(snapshot->records[read].absolute_path); SDL_free(snapshot->records[read].relative_path); continue;
+    }
+    if (write != read) snapshot->records[write] = snapshot->records[read];
+    write++;
+  }
+  snapshot->count = write; SDL_memset(&snapshot->summary, 0, sizeof(snapshot->summary));
+  snapshot->summary.inaccessible_entries = inaccessible;
+  for (uint64_t i = 0; i < snapshot->count; i++) {
+    ManifestOwnedRecord *record = &snapshot->records[i];
+    if (record->kind == ANVIL_MANIFEST_DIRECTORY) snapshot->summary.directories++;
+    else { snapshot->summary.files++; snapshot->summary.total_bytes += record->size;
+      if (record->kind == ANVIL_MANIFEST_MARKDOWN) snapshot->summary.markdown_files++;
+      else if (record->kind == ANVIL_MANIFEST_ATTACHMENT) snapshot->summary.attachments++;
+      else snapshot->summary.other_files++; }
+  }
+}
+
 static bool compact_paths(AnvilProjectFileManifestSnapshot *snapshot) {
   size_t bytes = 0;
   for (uint64_t i = 0; i < snapshot->count; i++) {
@@ -198,9 +274,25 @@ AnvilProjectFileManifestSnapshot *anvil_project_file_manifest_build(
   SDL_SetAtomicInt(&snapshot->refcount, 1);
   snapshot->root = SDL_strdup(spec->root);
   ManifestWalk walk = { spec, snapshot, NULL };
-  bool ok = snapshot->root && SDL_EnumerateDirectory(snapshot->root, walk_callback, &walk);
+  bool scoped = spec->scoped && spec->previous && spec->scan_path_count > 0;
+  for (uint32_t i = 0; scoped && i < spec->scan_path_count; i++) {
+    if (spec->scan_paths[i] && path_equal(spec->scan_paths[i], snapshot->root)) scoped = false;
+  }
+  bool ok = snapshot->root != NULL;
+  if (ok && scoped) {
+    for (uint64_t i = 0; ok && i < spec->previous->count; i++) {
+      const ManifestOwnedRecord *record = &spec->previous->records[i];
+      if (!record_in_scopes(record->absolute_path, spec->scan_paths, spec->scan_path_count)
+          && !record_in_scopes(record->absolute_path, spec->remove_paths, spec->remove_path_count))
+        ok = copy_previous_record(&walk, record);
+    }
+    for (uint32_t i = 0; ok && i < spec->scan_path_count; i++) ok = scan_scope(&walk, spec->scan_paths[i]);
+  } else if (ok) {
+    ok = SDL_EnumerateDirectory(snapshot->root, walk_callback, &walk);
+  }
   if (is_cancelled(spec)) { SDL_free(walk.error); walk.error = SDL_strdup("cancelled"); ok = false; }
   if (ok && snapshot->count > 1) qsort(snapshot->records, (size_t)snapshot->count, sizeof(*snapshot->records), record_compare);
+  if (ok) deduplicate_and_recount(snapshot);
   if (ok) ok = compact_paths(snapshot);
   if (!ok) {
     set_error(error, walk.error ? walk.error : (SDL_GetError()[0] ? SDL_GetError() : "Project manifest scan failed"));

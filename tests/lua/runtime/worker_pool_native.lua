@@ -168,6 +168,23 @@ test.describe("worker_pool_native", function()
     local page = manifest:page(0, 2)
     test.equal(#page, 2)
     test.equal(page.total, summary.records)
+    os.remove(root .. PATHSEP .. "image.png")
+    write(root .. PATHSEP .. "notes" .. PATHSEP .. "b.md", "# B\n")
+    test.not_nil(pool:submit({
+      kind = "project_file_manifest",
+      project_root = root,
+      manifest = manifest,
+      scan_paths = { root .. PATHSEP .. "notes" },
+      project_scoped = true,
+    }))
+    local scoped
+    test.ok(drain_until(pool, function(message)
+      if message.type == "result" then scoped = message.manifest end
+      return message.type == "final"
+    end))
+    test.not_nil(scoped:lookup("notes/b.md"))
+    test.not_nil(scoped:lookup("image.png"), "scoped scan should preserve records outside its scope")
+    scoped:close()
     manifest:close()
     test.ok(common.rm(root, true))
   end)

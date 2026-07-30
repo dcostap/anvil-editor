@@ -58,6 +58,21 @@ int main(void) {
     CHECK(strcmp(previous, record.relative_path) < 0);
     previous = record.relative_path;
   }
+  char removed_path[800], added_path[800];
+  SDL_snprintf(removed_path, sizeof(removed_path), "%s/a.md", notes); CHECK(SDL_RemovePath(removed_path));
+  SDL_snprintf(added_path, sizeof(added_path), "%s/c.md", notes); CHECK(write_file(added_path, "# C\n"));
+  char outside_path[800]; SDL_snprintf(outside_path, sizeof(outside_path), "%s/image.png", root); CHECK(SDL_RemovePath(outside_path));
+  const char *scopes[] = { notes };
+  AnvilProjectFileManifestBuildSpec scoped_spec = {
+    .root = root, .previous = snapshot, .scan_paths = scopes, .scan_path_count = 1, .scoped = true,
+  };
+  AnvilProjectFileManifestSnapshot *scoped = anvil_project_file_manifest_build(&scoped_spec, &error);
+  CHECK(scoped != NULL);
+  CHECK(!anvil_project_file_manifest_lookup(scoped, "notes/a.md", &record));
+  CHECK(anvil_project_file_manifest_lookup(scoped, "notes/c.md", &record));
+  CHECK(anvil_project_file_manifest_lookup(scoped, "notes/nested/b.markdown", &record));
+  CHECK(anvil_project_file_manifest_lookup(scoped, "image.png", &record));
+  anvil_project_file_manifest_release(scoped);
   anvil_project_file_manifest_release(snapshot);
 
   spec.show_unsupported_files = true;
@@ -74,7 +89,7 @@ int main(void) {
 
   SDL_snprintf(path, sizeof(path), "%s/ignored.md", git); SDL_RemovePath(path);
   SDL_snprintf(path, sizeof(path), "%s/b.markdown", nested); SDL_RemovePath(path);
-  SDL_snprintf(path, sizeof(path), "%s/a.md", notes); SDL_RemovePath(path);
+  SDL_RemovePath(added_path);
   SDL_snprintf(path, sizeof(path), "%s/image.png", root); SDL_RemovePath(path);
   SDL_snprintf(path, sizeof(path), "%s/plain.txt", root); SDL_RemovePath(path);
   SDL_RemovePath(nested); SDL_RemovePath(notes); SDL_RemovePath(git); SDL_RemovePath(root);

@@ -3536,6 +3536,12 @@ static bool manifest_job_cancelled(void *userdata) {
 static void run_project_file_manifest(AnvilWorkerContext *context, AnvilWorkerJob *job) {
   AnvilProjectFileManifestBuildSpec spec = {
     .root = job->project_root,
+    .previous = job->manifest_snapshot,
+    .scan_paths = (const char *const *)job->project_scan_paths,
+    .scan_path_count = job->project_scan_path_count,
+    .remove_paths = (const char *const *)job->project_remove_paths,
+    .remove_path_count = job->project_remove_path_count,
+    .scoped = job->project_scoped,
     .show_unsupported_files = job->manifest_show_unsupported_files,
     .cancelled = manifest_job_cancelled,
     .cancel_userdata = job,
@@ -3905,6 +3911,14 @@ AnvilWorkerJob *anvil_worker_pool_submit(AnvilWorkerPool *pool, const AnvilWorke
       (!spec->project_root || !spec->project_root[0])) {
     pool_set_error(error, "Project file manifest requires a root");
     return NULL;
+  }
+  if (strcmp(spec->kind, "project_file_manifest") == 0) {
+    for (uint32_t i = 0; i < spec->project_scan_path_count; i++) if (!project_run_path_belongs(spec->project_scan_paths[i], spec->project_root)) {
+      pool_set_error(error, "Project file manifest scan path is outside its root"); return NULL;
+    }
+    for (uint32_t i = 0; i < spec->project_remove_path_count; i++) if (!project_run_path_belongs(spec->project_remove_paths[i], spec->project_root)) {
+      pool_set_error(error, "Project file manifest removal path is outside its root"); return NULL;
+    }
   }
   if (strcmp(spec->kind, "markdown_vault_index") == 0 && !spec->manifest_snapshot) {
     pool_set_error(error, "Markdown vault index requires a Project file manifest");
