@@ -9,7 +9,7 @@ end
 function anchors.normalize_heading(text)
   text = trim(text):lower()
   text = text:gsub("`([^`]*)`", "%1")
-  text = text:gsub("[%*_~%[%]%(%)!#]", "")
+  text = text:gsub("[%*~%[%]%(%)!#]", "")
   text = text:gsub("&amp;", "and")
   text = text:gsub("[^%w%s%-%_]+", "")
   text = trim(text):gsub("%s+", "-")

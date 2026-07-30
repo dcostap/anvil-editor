@@ -174,14 +174,14 @@ static char *heading_slug(const char *text) {
   bool dash = false;
   for (size_t i = 0; i < len; i++) {
     char c = text[i];
-    if (c == '`' || c == '*' || c == '_' || c == '~' || c == '[' || c == ']'
+    if (c == '`' || c == '*' || c == '~' || c == '[' || c == ']'
         || c == '(' || c == ')' || c == '!' || c == '#') continue;
     if (c == '&' && i + 4 < len && strncmp(text + i, "&amp;", 5) == 0) {
       if (out && dash) slug[out++] = '-';
       dash = false;
       memcpy(slug + out, "and", 3); out += 3; i += 4; continue;
     }
-    if (isalnum((unsigned char)c) || c == '-') {
+    if (isalnum((unsigned char)c) || c == '-' || c == '_') {
       if (out && dash) slug[out++] = '-';
       dash = false;
       slug[out++] = ascii_lower(c);
@@ -522,9 +522,13 @@ static bool parse_note_text(OwnedNote *owned, char *text, size_t len, bool shall
     bool excluded = (structural_fallback && (fence || html))
       || (structural.excluded && i < structural.count && structural.excluded[i]);
     if (!excluded) {
-      uint32_t level = 0; while (line[level] == '#' && level < 6) level++;
-      if (level && isspace((unsigned char)line[level])) {
-        const char *start = line + level; while (*start && isspace((unsigned char)*start)) start++;
+      const char *heading_line = line;
+      uint32_t indent = 0;
+      while (indent < 3 && heading_line[indent] == ' ') indent++;
+      heading_line += indent;
+      uint32_t level = 0; while (heading_line[level] == '#' && level < 6) level++;
+      if (level && isspace((unsigned char)heading_line[level])) {
+        const char *start = heading_line + level; while (*start && isspace((unsigned char)*start)) start++;
         size_t text_len = strlen(start); while (text_len && isspace((unsigned char)start[text_len - 1])) text_len--;
         while (text_len && start[text_len - 1] == '#') { text_len--; while (text_len && isspace((unsigned char)start[text_len - 1])) text_len--; }
         char *heading = dup_range(start, text_len);

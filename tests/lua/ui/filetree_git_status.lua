@@ -147,7 +147,7 @@ test.describe("File Tree Git status controller", function()
     test.equal(#publications, 1)
 
     state.advance(3)
-    controller:request("failure", true)
+    controller:request("failure")
     controller:update()
     local failed_status = backend.git_calls[3]
     if failed_status.args[1] ~= "status" then failed_status = backend.git_calls[4] end
@@ -157,7 +157,22 @@ test.describe("File Tree Git status controller", function()
 
     controller:request("retry", true)
     controller:update()
-    test.equal(#backend.repo_calls, 1)
-    test.equal(#backend.git_calls, 6)
+    test.equal(#backend.repo_calls, 2)
+  end)
+
+  test.it("rediscovers repository roots on forced refresh", function()
+    local controller, backend, _, state = make_controller()
+    controller:request("first", true)
+    controller:update()
+    backend.repo_calls[1].callback({ root = "C:/repo" })
+    local status_call, numstat_call = backend.git_calls[1], backend.git_calls[2]
+    if status_call.args[1] ~= "status" then status_call, numstat_call = numstat_call, status_call end
+    status_call.callback({ stdout = "" })
+    numstat_call.callback({ stdout = "" })
+
+    state.advance(3)
+    controller:request("manual-refresh", true)
+    controller:update()
+    test.equal(#backend.repo_calls, 2)
   end)
 end)

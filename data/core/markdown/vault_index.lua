@@ -233,7 +233,10 @@ end
 
 function Index:refresh_obsidian_settings()
   local settings = read_obsidian_app_settings(self.root)
-  self.show_unsupported_files = settings.showUnsupportedFiles == true
+  local show_unsupported_files = settings.showUnsupportedFiles == true
+  local changed = show_unsupported_files ~= self.show_unsupported_files
+  self.show_unsupported_files = show_unsupported_files
+  return changed
 end
 
 function Index:is_attachment(path)
@@ -283,7 +286,10 @@ local function release_vault_snapshot(snapshot)
     native_kind = "markdown_vault_snapshot_release",
     native_payload = { release_markdown_vault_snapshot = snapshot },
   }
-  if not handle then snapshot:close() end
+  snapshot:close()
+  if not handle then
+    core.log_quiet("Markdown vault snapshot release fell back to the current thread")
+  end
 end
 
 function Index:note(path)
@@ -300,6 +306,7 @@ function Index:attachment(path)
   if type(path) ~= "string" or path == "" then return nil end
   local absolute = common.is_absolute_path(path) and path or join_path(self.root, path)
   absolute = common.normalize_path(absolute)
+  if self.removed_paths[path_key(absolute)] then return nil end
   return self.attachments_by_abs[path_key(absolute)]
     or (self.disk_snapshot and self.disk_snapshot:attachment(absolute))
 end
@@ -381,6 +388,8 @@ function Index:add_attachment_entry(entry)
 end
 
 function Index:remove_path(path)
+  if type(path) ~= "string" or path == "" then return false end
+  path = common.normalize_path(common.is_absolute_path(path) and path or join_path(self.root, path))
   local existing = self:note(path) or self:attachment(path)
   local removed = self:remove_path_entry(path)
   if existing then
@@ -570,7 +579,7 @@ function Index:rebuild_async(reason)
       self.root, rebuild_reason)
     return false
   end
-  self:refresh_obsidian_settings()
+  local classification_changed = self:refresh_obsidian_settings()
   self.rebuild_serial = self.rebuild_serial + 1
   local serial = self.rebuild_serial
   self.status, self.reason = "indexing", rebuild_reason
@@ -582,12 +591,15 @@ function Index:rebuild_async(reason)
   )
 
   local scan_paths = {}
-  if self.manifest_snapshot then
+  if self.manifest_snapshot and not classification_changed then
     for key, path in pairs(self.dirty_manifest_scopes) do
       scan_paths[#scan_paths + 1] = path
       self.dirty_manifest_scopes[key] = nil
     end
     table.sort(scan_paths)
+  elseif classification_changed then
+    self.dirty_manifest_scopes = {}
+    core.log_quiet("Markdown vault attachment policy changed; forcing a full manifest rebuild: root=%s", self.root)
   end
 
   local pool = worker_pool.system()
@@ -673,6 +685,7 @@ function Index:rebuild_async(reason)
           self.disk_snapshot = snapshot
           for key, removed in pairs(self.removed_paths) do
             if serial > (removed.serial or 0)
+              and file_exists(removed.path)
               and (snapshot:note(removed.path) or snapshot:attachment(removed.path))
             then
               self.removed_paths[key] = nil
@@ -729,6 +742,13 @@ end
 
 function Index:note_count()
   local count = self.disk_snapshot and self.disk_snapshot:summary().note_count or 0
+  for _, removed in pairs(self.removed_paths) do
+    if self.disk_snapshot and self.disk_snapshot:note(removed.path)
+      and not self.notes_by_abs[path_key(removed.path)]
+    then
+      count = count - 1
+    end
+  end
   for _, entry in pairs(self.notes_by_abs) do
     if not (self.disk_snapshot and self.disk_snapshot:note(entry.abs_path)) then count = count + 1 end
   end
@@ -737,6 +757,13 @@ end
 
 function Index:attachment_count()
   local count = self.disk_snapshot and self.disk_snapshot:summary().attachment_count or 0
+  for _, removed in pairs(self.removed_paths) do
+    if self.disk_snapshot and self.disk_snapshot:attachment(removed.path)
+      and not self.attachments_by_abs[path_key(removed.path)]
+    then
+      count = count - 1
+    end
+  end
   for _, entry in pairs(self.attachments_by_abs) do
     if not (self.disk_snapshot and self.disk_snapshot:attachment(entry.abs_path)) then count = count + 1 end
   end
@@ -924,7 +951,11 @@ function Index:completion_candidates(mode, query, source_path, limit)
     for _, candidate in ipairs(self.disk_snapshot:completion(
       mode, query, source_path or "", self.link_path_policy, limit
     )) do
-      if not (candidate.path and self.notes_by_abs[path_key(candidate.path)]) then
+      local candidate_key = candidate.path and path_key(candidate.path)
+      if not (candidate_key and (
+        self.removed_paths[candidate_key] or self.notes_by_abs[candidate_key]
+          or self.attachments_by_abs[candidate_key]
+      )) then
         local key = candidate.kind .. "\0" .. candidate.target .. "\0" .. tostring(candidate.path or "")
         seen[key] = true
         candidates[#candidates + 1] = candidate
@@ -988,6 +1019,10 @@ function Index:update_path(path, opts)
   self.removed_paths[path_key(path)] = nil
   if not ((is_markdown(path) or self:is_attachment(path)) and file_exists(path)) then return false end
   self.dirty_manifest_scopes[path_key(path)] = path
+  if opts.cooperative then
+    self:rebuild_async(opts.reason or "path-updated")
+    return true
+  end
   self:rebuild(opts.reason or "path-updated")
   return self:note(path) ~= nil or self:attachment(path) ~= nil
 end

@@ -876,7 +876,6 @@ end
 
 function FileTreeView:schedule_git_status_refresh(reason, force)
   self.git_status_controller:request(reason, force)
-  self.git_status_controller:update()
 end
 
 function FileTreeView:get_git_info_for_entry(entry)

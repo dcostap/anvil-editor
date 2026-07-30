@@ -62,7 +62,7 @@ static bool path_has_excluded_component(const char *root, const char *path) {
   return false;
 }
 
-static bool directory_is_link(const char *path) {
+static bool path_is_link(const char *path) {
 #ifdef _WIN32
   int length = MultiByteToWideChar(CP_UTF8, 0, path, -1, NULL, 0); if (!length) return true;
   WCHAR *wide = (WCHAR *)SDL_malloc((size_t)length * sizeof(WCHAR)); if (!wide) return true;
@@ -171,10 +171,14 @@ static SDL_EnumerationResult SDLCALL walk_callback(void *userdata, const char *d
     SDL_free(path);
     return SDL_ENUM_CONTINUE;
   }
+  if ((info.type == SDL_PATHTYPE_DIRECTORY || info.type == SDL_PATHTYPE_FILE) && path_is_link(path)) {
+    SDL_free(path);
+    return SDL_ENUM_CONTINUE;
+  }
   bool ok = true;
   if (info.type == SDL_PATHTYPE_DIRECTORY) {
     ok = add_record(walk, path, &info, ANVIL_MANIFEST_DIRECTORY);
-    if (ok && !is_cancelled(walk->spec) && !directory_is_link(path)) {
+    if (ok && !is_cancelled(walk->spec)) {
       bool enumerated = SDL_EnumerateDirectory(path, walk_callback, walk);
       if (!enumerated && !walk->error) walk->snapshot->summary.inaccessible_entries++;
     }
@@ -250,9 +254,11 @@ static bool scan_scope(ManifestWalk *walk, const char *path) {
   if (!path || !path_within(path, walk->snapshot->root)) return true;
   if (path_has_excluded_component(walk->snapshot->root, path)) return true;
   SDL_PathInfo info; if (!SDL_GetPathInfo(path, &info)) return true;
+  if (!path_equal(path, walk->snapshot->root)
+      && (info.type == SDL_PATHTYPE_DIRECTORY || info.type == SDL_PATHTYPE_FILE)
+      && path_is_link(path)) return true;
   if (info.type == SDL_PATHTYPE_DIRECTORY) {
     if (!path_equal(path, walk->snapshot->root) && !add_record(walk, path, &info, ANVIL_MANIFEST_DIRECTORY)) return false;
-    if (directory_is_link(path)) return true;
     if (!SDL_EnumerateDirectory(path, walk_callback, walk)) {
       if (walk->error) return false;
       walk->snapshot->summary.inaccessible_entries++;
@@ -364,8 +370,11 @@ AnvilProjectFileManifestSnapshot *anvil_project_file_manifest_build(
   }
   if (is_cancelled(spec)) { SDL_free(walk.error); walk.error = SDL_strdup("cancelled"); ok = false; }
   if (ok && snapshot->count > 1) qsort(snapshot->records, (size_t)snapshot->count, sizeof(*snapshot->records), record_compare);
+  if (ok && is_cancelled(spec)) { SDL_free(walk.error); walk.error = SDL_strdup("cancelled"); ok = false; }
   if (ok) deduplicate_and_recount(snapshot);
+  if (ok && is_cancelled(spec)) { SDL_free(walk.error); walk.error = SDL_strdup("cancelled"); ok = false; }
   if (ok) ok = compact_paths(snapshot);
+  if (ok && is_cancelled(spec)) { SDL_free(walk.error); walk.error = SDL_strdup("cancelled"); ok = false; }
   if (!ok) {
     set_error(error, walk.error ? walk.error : (SDL_GetError()[0] ? SDL_GetError() : "Project manifest scan failed"));
     SDL_free(walk.error);

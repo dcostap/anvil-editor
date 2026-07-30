@@ -32,7 +32,8 @@ local function release_snapshot(snapshot)
     native_kind = "filetree_git_status_snapshot_release",
     native_payload = { release_git_status_snapshot = snapshot },
   }
-  if not handle then snapshot:close() end
+  snapshot:close()
+  if not handle then log_quiet("File Tree Git snapshot release fell back to the current thread") end
 end
 
 local function native_builder(payload, generation, callback)
@@ -144,6 +145,10 @@ end
 
 function Controller:finish_failure(generation, root, phase, err)
   if not self:is_current(generation, root) then return end
+  if phase == "status" then
+    self.repository_cache[common.path_compare_key(root)] = nil
+    log_quiet("File Tree Git invalidated cached repository after status failure: root=%s", tostring(root))
+  end
   self:cancel_active(phase .. "-failed")
   log_quiet("File Tree Git %s failed generation=%d root=%s: %s",
     phase, generation, tostring(root), tostring(err and (err.message or err.kind) or err))
@@ -232,7 +237,7 @@ function Controller:start()
   local root = self.root()
   if not root then return end
   root = common.normalize_path(root)
-  local generation, reason = self.generation, self.pending_reason or "refresh"
+  local generation, reason, forced = self.generation, self.pending_reason or "refresh", self.forced
   self.pending_reason, self.dirty, self.forced = nil, false, false
   self.active, self.active_generation, self.active_root = true, generation, root
   self.last_start = self.clock()
@@ -241,7 +246,9 @@ function Controller:start()
     return self:publish_empty(generation, root, "git-disabled")
   end
 
-  local cached = self.repository_cache[common.path_compare_key(root)]
+  local cache_key = common.path_compare_key(root)
+  if forced then self.repository_cache[cache_key] = nil end
+  local cached = self.repository_cache[cache_key]
   if cached then return self:start_git(generation, root, cached, reason) end
 
   self.stage = "repository-discovery"

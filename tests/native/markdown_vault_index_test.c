@@ -18,7 +18,8 @@ int main(void) {
   SDL_snprintf(image_path, sizeof(image_path), "%s/image.png", root);
   CHECK(write_file(note_path,
     "---\naliases: [\"Alias, One\", Second]\ntags: [#tag, other]\n---\n"
-    "# Parent\nbody\n## Child\ntext ^block-id\n[[Source#Heading|source]]\n![image](image.png)\n"));
+    "# Parent\nbody\n## Child\ntext ^block-id\n# foo_bar\n# foobar\n   ## Indented heading\n"
+    "[[Source#Heading|source]]\n![image](image.png)\n"));
   CHECK(write_file(source_path, "# Heading\n[[Note]]\n"));
   CHECK(write_file(image_path, "png"));
   AnvilProjectFileManifestBuildSpec manifest_spec = { .root = root };
@@ -30,13 +31,17 @@ int main(void) {
   CHECK(snapshot != NULL);
   AnvilMarkdownVaultSummary summary; anvil_markdown_vault_snapshot_summary(snapshot, &summary);
   CHECK(summary.note_count == 2 && summary.attachment_count == 1);
-  CHECK(summary.headings == 3 && summary.blocks == 1 && summary.links == 3);
+  CHECK(summary.headings == 6 && summary.blocks == 1 && summary.links == 3);
   uint32_t index = 0; CHECK(anvil_markdown_vault_note_lookup(snapshot, "Note", &index));
   AnvilMarkdownVaultNoteView note; CHECK(anvil_markdown_vault_note_at(snapshot, index, &note));
   CHECK(note.alias_count == 2 && strcmp(note.aliases[0], "Alias, One") == 0);
   CHECK(note.tag_count == 2 && strcmp(note.tags[0], "tag") == 0);
-  CHECK(note.heading_count == 2 && strcmp(note.headings[1].path_slug, "parent#child") == 0);
+  CHECK(note.heading_count == 5 && strcmp(note.headings[1].path_slug, "parent#child") == 0);
   CHECK(strcmp(note.headings[0].normalized_text, "parent") == 0);
+  CHECK(strcmp(note.headings[2].normalized_text, "foo_bar") == 0);
+  CHECK(strcmp(note.headings[3].normalized_text, "foobar") == 0);
+  CHECK(strcmp(note.headings[4].normalized_text, "indented-heading") == 0);
+  CHECK(note.headings[4].line == 11);
   CHECK(note.block_count == 1 && strcmp(note.blocks[0].id, "block-id") == 0);
   uint32_t matches[4];
   CHECK(anvil_markdown_vault_resolve_notes(snapshot, "Alias, One", matches, 4) == 1);
