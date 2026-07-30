@@ -13,7 +13,7 @@ local project_paths = require "core.project_paths"
 local panes = require "core.panes"
 local storage = require "core.storage"
 local DirWatch = require "core.dirwatch"
-local git_backend = require "plugins.git.backend"
+local filetree_git_status = require "plugins.filetree.git_status"
 local path_tree = require "plugins.path_tree"
 
 local FILETREE_SETTINGS_MODULE = "filetree"
@@ -52,7 +52,6 @@ local INDENT_TEXT = "\t"
 local NO_META = false
 local LINE_HINT_COUNT_WORKER_BUDGET = 0.008
 local LINE_HINT_COUNT_CHILD_BUDGET = 0.004
-local GIT_STATUS_REFRESH_INTERVAL = 2
 
 local function perf_stats()
   return core.docview_frame_stats
@@ -75,7 +74,6 @@ local function perf_call(stats, key)
   return perf_start(stats)
 end
 
-local GIT_STATUS_MAX_OUTPUT = 2 * 1024 * 1024
 local function indent_prefix(level)
   return string.rep(INDENT_TEXT, level)
 end
@@ -364,107 +362,6 @@ end
 local function op_path(path)
   local path = rel_path(path):gsub("\\", "/")
   return path
-end
-
-local function run_process_capture(args, options, max_stdout)
-  if not process or not process.start then return nil, "", "process API unavailable" end
-
-  options = options or {}
-  options.stdout = process.REDIRECT_PIPE
-  options.stderr = process.REDIRECT_PIPE
-  options.stdin = process.REDIRECT_DISCARD
-
-  local proc, start_err = process.start(args, options)
-  if not proc then return nil, "", start_err or "process start failed" end
-
-  local stdout_chunks, stderr_chunks = {}, {}
-  local stdout_size, stderr_size = 0, 0
-  max_stdout = max_stdout or GIT_STATUS_MAX_OUTPUT
-
-  local function read_available(stream, chunks, size, cap)
-    while true do
-      local chunk, errmsg, errcode = proc:read(stream, 8192)
-      if chunk and #chunk > 0 then
-        chunks[#chunks + 1] = chunk
-        size = size + #chunk
-        if size > cap then proc:kill(); return size, false, "output too large" end
-      elseif errcode == process.ERROR_WOULDBLOCK or chunk == "" then
-        return size, true
-      elseif not chunk then
-        if errcode == process.ERROR_PIPE then return size, true end
-        return size, false, errmsg or "process read failed"
-      else
-        return size, true
-      end
-    end
-  end
-
-  while proc:running() do
-    local ok, err
-    stdout_size, ok, err = read_available(process.STREAM_STDOUT, stdout_chunks, stdout_size, max_stdout)
-    if not ok then return nil, table.concat(stdout_chunks), err end
-    stderr_size, ok, err = read_available(process.STREAM_STDERR, stderr_chunks, stderr_size, 64 * 1024)
-    if not ok then return nil, table.concat(stdout_chunks), err end
-    coroutine.yield(0.02)
-  end
-
-  stdout_size = select(1, read_available(process.STREAM_STDOUT, stdout_chunks, stdout_size, max_stdout))
-  stderr_size = select(1, read_available(process.STREAM_STDERR, stderr_chunks, stderr_size, 64 * 1024))
-  return proc:returncode() or 0, table.concat(stdout_chunks), table.concat(stderr_chunks)
-end
-
-local function split_nul(text)
-  local out, i = {}, 1
-  while i <= #text do
-    local j = text:find("%z", i)
-    if not j then
-      if i <= #text then out[#out + 1] = text:sub(i) end
-      break
-    end
-    out[#out + 1] = text:sub(i, j - 1)
-    i = j + 1
-  end
-  return out
-end
-
-local function normalize_git_rel(path)
-  if type(path) ~= "string" then return nil end
-  path = path:gsub("\\", "/")
-  path = path:gsub("^%./", "")
-  if path == "" then return nil end
-  return path
-end
-
-local function git_abs(root, rel)
-  rel = normalize_git_rel(rel)
-  if not rel then return nil end
-  return common.normalize_path(path_join(root, rel:gsub("/", PATHSEP)))
-end
-
-local function parent_rel_paths(rel)
-  local parents = {}
-  rel = normalize_git_rel(rel)
-  if not rel then return parents end
-  local current = common.dirname(rel:gsub("/", PATHSEP))
-  while current and current ~= "." and current ~= "" do
-    parents[#parents + 1] = current:gsub("\\", "/")
-    current = common.dirname(current)
-  end
-  return parents
-end
-
-local function git_status_kind(xy)
-  if xy == "!!" then return "ignored" end
-  if xy == "??" then return "untracked" end
-  local x, y = xy:sub(1, 1), xy:sub(2, 2)
-  if x == "D" or y == "D" then return "deleted" end
-  if x == "A" or y == "A" then return "added" end
-  if x ~= " " or y ~= " " then return "modified" end
-  return nil
-end
-
-local function stronger_git_kind(a, b)
-  return path_tree.stronger_kind(a, b)
 end
 
 local function is_rename_op(op)
@@ -906,10 +803,20 @@ function FileTreeView:new()
   self.line_hint_count_worker_running = false
   self.last_lines = nil
   self.status_cache = nil
-  self.git_status = { files = {}, dirs = {}, stats = {}, dir_stats = {}, generation = 0 }
-  self.git_status_worker_running = false
-  self.git_status_refresh_requested = false
-  self.git_status_last_refresh = 0
+  self.git_status = { generation = 0 }
+  self.git_status_controller = filetree_git_status.new {
+    root = function() return self:git_root() end,
+    presented = function()
+      return panes.right_visible()
+        and panes.selected_view("right") == self
+        and self.visible
+    end,
+    publish = function(_, detail)
+      self.git_status = { generation = detail.generation }
+      self.status_cache = nil
+      core.redraw = true
+    end,
+  }
   self.has_possible_edits = false
   self.filesystem_watch = DirWatch()
   self.filesystem_watched_dirs = {}
@@ -968,119 +875,19 @@ function FileTreeView:git_root()
 end
 
 function FileTreeView:schedule_git_status_refresh(reason, force)
-  local now = system.get_time()
-  if not force and now - (self.git_status_last_refresh or 0) < GIT_STATUS_REFRESH_INTERVAL then
-    return
-  end
-  self.git_status_last_refresh = now
-  self.git_status_refresh_requested = true
-  if self.git_status_worker_running then return end
-  self.git_status_worker_running = true
-
-  core.add_thread(function()
-    while self.git_status_refresh_requested do
-      self.git_status_refresh_requested = false
-      self:refresh_git_status(reason)
-    end
-    self.git_status_worker_running = false
-  end)
-end
-
-function FileTreeView:refresh_git_status(reason)
-  local root = self:git_root()
-  if not root then return end
-
-  local files, dirs = {}, {}
-  local stats, dir_stats = {}, {}
-  local in_repo = false
-
-  local git_path = git_backend.git_path()
-  if not git_path then
-    self.git_status = { files = files, dirs = dirs, stats = stats, dir_stats = dir_stats, generation = (self.git_status and self.git_status.generation or 0) + 1 }
-    return
-  end
-
-  local code, out, err = run_process_capture(
-    { git_path, "rev-parse", "--show-toplevel" }, { cwd = root }, 64 * 1024
-  )
-  if code == 0 and trim(out) ~= "" then
-    root = common.normalize_path(trim(out))
-    in_repo = true
-  end
-  if not in_repo then
-    self.git_status = { files = files, dirs = dirs, stats = stats, dir_stats = dir_stats, generation = (self.git_status and self.git_status.generation or 0) + 1 }
-    return
-  end
-
-  code, out, err = run_process_capture(
-    { git_path, "status", "--porcelain=v1", "--ignored", "-uall", "-z" },
-    { cwd = root }, GIT_STATUS_MAX_OUTPUT
-  )
-  if code ~= 0 then
-    core.log_quiet("File Tree git status failed (%s): %s", tostring(reason or "refresh"), tostring(err))
-    return
-  end
-
-  for _, record in ipairs(git_backend.parse_status_z(out)) do
-    local rel = normalize_git_rel(record.new_path or record.path or record.old_path)
-    local kind = git_status_kind(record.xy) or record.kind
-    if rel and kind then
-      local abs = git_abs(root, rel)
-      if abs then files[path_key(abs)] = stronger_git_kind(files[path_key(abs)], kind) end
-      for _, parent in ipairs(parent_rel_paths(rel)) do
-        local pabs = git_abs(root, parent)
-        if pabs then dirs[path_key(pabs)] = stronger_git_kind(dirs[path_key(pabs)], kind) end
-      end
-    end
-  end
-
-  code, out, err = run_process_capture(
-    { git_path, "diff", "--numstat", "--no-renames", "-z", "HEAD", "--" },
-    { cwd = root }, GIT_STATUS_MAX_OUTPUT
-  )
-  if code == 0 then
-    for _, record in ipairs(split_nul(out)) do
-      local added_text, deleted_text, rel = record:match("^([^\t]*)\t([^\t]*)\t(.+)$")
-      local added, deleted = tonumber(added_text), tonumber(deleted_text)
-      rel = normalize_git_rel(rel)
-      if added and deleted and rel then
-        local abs = git_abs(root, rel)
-        if abs then stats[path_key(abs)] = { additions = added, deletions = deleted } end
-        for _, parent in ipairs(parent_rel_paths(rel)) do
-          local pabs = git_abs(root, parent)
-          if pabs then
-            local key = path_key(pabs)
-            local total = dir_stats[key] or { additions = 0, deletions = 0 }
-            total.additions = total.additions + added
-            total.deletions = total.deletions + deleted
-            dir_stats[key] = total
-          end
-        end
-      end
-    end
-  else
-    core.log_quiet("File Tree git numstat failed (%s): %s", tostring(reason or "refresh"), tostring(err))
-  end
-
-  self.git_status = {
-    files = files,
-    dirs = dirs,
-    stats = stats,
-    dir_stats = dir_stats,
-    generation = (self.git_status and self.git_status.generation or 0) + 1,
-  }
-  core.redraw = true
+  self.git_status_controller:request(reason, force)
+  self.git_status_controller:update()
 end
 
 function FileTreeView:get_git_info_for_entry(entry)
-  if not entry or not self.git_status then return nil end
-  local key = path_key(entry.abs)
-  local kind = self.git_status.files[key]
-  local stat = entry.type ~= "dir" and self.git_status.stats[key] or nil
-  if entry.type == "dir" then
-    kind = kind or self.git_status.dirs[key]
+  if not entry then return nil end
+  local info = self.git_status_controller:lookup(entry.abs, entry.type == "dir")
+  if not info then return nil end
+  local stat
+  if info.additions ~= nil then
+    stat = { additions = info.additions, deletions = info.deletions }
   end
-  if kind or stat then return { kind = kind, stat = stat } end
+  return { kind = info.kind, stat = stat }
 end
 
 function FileTreeView:get_git_info_for_line(line)
@@ -1105,6 +912,7 @@ end
 
 function FileTreeView:update()
   FileTreeView.super.update(self)
+  self.git_status_controller:update()
 end
 
 function FileTreeView:filesystem_reveal_paths(path)
@@ -1622,7 +1430,7 @@ function FileTreeView:refresh(keep_selection, preserve_expansion, reveal_paths)
     self.doc:set_selection(math.min(l, #self.doc.lines), c)
   end
   self:update_filesystem_watches()
-  self:schedule_git_status_refresh("filetree-refresh", true)
+  self:schedule_git_status_refresh("filetree-refresh", false)
 end
 
 function FileTreeView:get_sort_mode()
@@ -3501,6 +3309,7 @@ command.add(nil, {
 command.add(function() return core.active_view:is(FileTreeView) end, {
   ["filetree:refresh"] = function()
     view:refresh_preserving_selection_paths(true)
+    view:schedule_git_status_refresh("manual-refresh", true)
   end,
   ["filetree:apply"] = function()
     view:apply_edits()

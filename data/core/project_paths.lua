@@ -5,6 +5,7 @@ local project_paths = {}
 
 local project_entries = {}
 local workspace_entries = {}
+local workspace_entries_root_key
 local project_config_snapshot
 local generation = 0
 local merged_entries_cache
@@ -130,6 +131,21 @@ local function copy_list(entries)
     result[i] = copy_entry(entry)
   end
   return result
+end
+
+local function entries_signature(entries, root_key)
+  local fields = {
+    "path", "label", "role", "source", "browsable", "searchable", "grep",
+    "symbols", "usages", "autocomplete", "rank_penalty", "filetree_style",
+  }
+  local rows = {}
+  for _, entry in ipairs(entries or {}) do
+    local values = {}
+    for _, field in ipairs(fields) do values[#values + 1] = tostring(entry[field]) end
+    rows[#rows + 1] = table.concat(values, "\0")
+  end
+  table.sort(rows)
+  return (root_key or path_key(root_path()) or "") .. "\2" .. table.concat(rows, "\1")
 end
 
 local function invalidate(reason)
@@ -647,6 +663,8 @@ function project_paths.save_project_state()
 end
 
 function project_paths.load_workspace_state(state, legacy_directories)
+  local current_root_key = path_key(root_path()) or ""
+  local previous_signature = entries_signature(workspace_entries, workspace_entries_root_key or "")
   local entries = {}
   if type(state) == "table" then
     for _, entry in ipairs(state.entries or state) do
@@ -668,8 +686,10 @@ function project_paths.load_workspace_state(state, legacy_directories)
     end
   end
   workspace_entries = normalize_entries(entries, { source = "workspace", base = root_path() })
-  invalidate("workspace load")
-  return project_paths.entries()
+  local changed = previous_signature ~= entries_signature(workspace_entries, current_root_key)
+  workspace_entries_root_key = current_root_key
+  if changed then invalidate("workspace load") end
+  return project_paths.entries(), changed
 end
 
 function project_paths.save_workspace_state()

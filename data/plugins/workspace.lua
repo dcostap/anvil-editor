@@ -328,11 +328,15 @@ local function load_workspace()
   core.add_thread(function()
     local function restore_workspace_state()
       local workspace = consume_workspace(core.root_project().path)
-      project_paths.load_workspace_state(
+      local _, project_paths_changed = project_paths.load_workspace_state(
         workspace and workspace.project_paths,
         workspace and workspace.directories
       )
-      refresh_project_path_consumers("workspace load")
+      if project_paths_changed then
+        refresh_project_path_consumers("workspace load")
+      elseif core.log_quiet then
+        core.log_quiet("Workspace: skipped unchanged Project Path consumer refresh")
+      end
       if workspace then
         if workspace.visited_files then
           core.visited_files = workspace.visited_files
