@@ -104,6 +104,8 @@ local function new_index(root)
     watched_dirs = {},
     watch_generation = 0,
     watch_running = false,
+    watch_ignored_events = 0,
+    watch_irrelevant_events = 0,
     files_total = 0,
     files_scanned = 0,
     files_indexed = 0,
@@ -371,12 +373,12 @@ local function start_project_watcher(index)
     end
 
     while index.watch_generation == generation do
-      local changed_dirs = {}
+      local changed_paths = {}
       ok, err = pcall(function()
-        index.watcher:check(function(path)
-          path = path and common.normalize_path(path)
-          if path and (common.path_equals(path, root) or common.path_belongs_to(path, root)) then
-            changed_dirs[path] = true
+        index.watcher:check(function(path, changed_path)
+          changed_path = common.normalize_path(changed_path or path)
+          if changed_path and (common.path_equals(changed_path, root) or common.path_belongs_to(changed_path, root)) then
+            changed_paths[changed_path] = true
           end
         end, 0.02, 0.01)
       end)
@@ -384,8 +386,8 @@ local function start_project_watcher(index)
         log_quiet("Tree-sitter Project index: filesystem watcher failed for %s: %s", tostring(root), tostring(err))
         safe_yield(5)
       else
-        if next(changed_dirs) and symbol_index.mark_directories_dirty then
-          symbol_index.mark_directories_dirty(changed_dirs, "project-watch")
+        if next(changed_paths) and symbol_index.mark_watch_paths_dirty then
+          symbol_index.mark_watch_paths_dirty(root, changed_paths, "project-watch")
         end
         safe_yield(0.25)
       end
@@ -1560,7 +1562,7 @@ local function native_workspace_symbols_async(query, opts, roots)
       return
     end
     local combined, has_more, source_status = {}, false, "fresh"
-    for _, child in ipairs(children) do
+    for child_index, child in ipairs(children) do
       if child.index.generation ~= child.generation
       or child.index.overlay_generation ~= child.overlay_generation
       or child.index.project_paths_generation ~= child.project_paths_generation then
@@ -1580,6 +1582,7 @@ local function native_workspace_symbols_async(query, opts, roots)
       end
       has_more = has_more or child.has_more or child.overlay_more
       if child.source_status == "stale" then source_status = "stale" end
+      request.meta.roots[child_index].status = child.source_status
     end
     if #children > 1 then sort_symbols(combined) end
     local results, filtered_more = filtered_symbols(combined, query, opts.limit, opts)
@@ -2259,6 +2262,91 @@ end
 
 function symbol_index.mark_directory_dirty(dir, reason, opts)
   return symbol_index.mark_directories_dirty({ dir }, reason, opts)
+end
+
+local function watch_path_allowed(index, path, info, assumed_type)
+  if not project_path_allows(path, "symbols") then return false end
+  local relative = common.relative_path(index.root, path)
+  local filter_info = {
+    type = (info and info.type) or assumed_type or "file",
+    size = (info and info.size) or 0,
+    modified = info and info.modified,
+    filename = relative,
+  }
+  return not common.match_ignore_rule(
+    relative, filter_info, core.get_ignore_file_rules()
+  )
+end
+
+local function has_project_index_provider(path)
+  local language = registry.get(path)
+  return language and language.query_sources and language.query_sources.outline ~= nil
+end
+
+---Turn changed filesystem leaf paths into the smallest relevant directory
+---refresh scopes. Files that cannot contribute to the Project symbol index are
+---discarded before a native worker job is submitted.
+---@param root string
+---@param paths table<string, boolean>|string[]
+---@param reason? string
+---@param opts? table
+---@return boolean matched
+---@return string? reason
+function symbol_index.mark_watch_paths_dirty(root, paths, reason, opts)
+  root = normalize_root(root)
+  if type(paths) ~= "table" then return false, "no-path" end
+  local index = indexes[root]
+  if not index then return false, "no-index" end
+
+  local scopes = {}
+  local ignored, irrelevant = 0, 0
+  for key, value in pairs(paths) do
+    local path = type(key) == "number" and value or key
+    path = path and common.normalize_path(path)
+    if path and (common.path_equals(path, root) or common.path_belongs_to(path, root)) then
+      local info = system.get_file_info(path)
+      if info and info.type == "dir" then
+        if watch_path_allowed(index, path, info, "dir") then
+          add_coalesced_scope(scopes, path, true)
+        else
+          ignored = ignored + 1
+        end
+      elseif has_project_index_provider(path) then
+        -- Do not size-filter source paths here. A file that grew beyond the
+        -- native scan cap may already have records in the current snapshot;
+        -- refreshing its scope is what removes those now-stale records.
+        if watch_path_allowed(index, path, info, "file") then
+          add_coalesced_scope(scopes, common.dirname(path), true)
+        else
+          ignored = ignored + 1
+        end
+      elseif not info then
+        -- The watcher cannot reliably distinguish a removed file from a
+        -- removed directory after the path is gone. Conservatively refresh the
+        -- parent: dotted directories can contain indexed descendants and must
+        -- not leave stale symbols behind.
+        local parent = common.dirname(path)
+        if not watch_path_allowed(index, path, nil, "dir") then
+          ignored = ignored + 1
+        elseif watch_path_allowed(index, parent, system.get_file_info(parent), "dir") then
+          add_coalesced_scope(scopes, parent, true)
+        else
+          ignored = ignored + 1
+        end
+      else
+        irrelevant = irrelevant + 1
+      end
+    end
+  end
+
+  index.watch_ignored_events = (index.watch_ignored_events or 0) + ignored
+  index.watch_irrelevant_events = (index.watch_irrelevant_events or 0) + irrelevant
+  if not next(scopes) then
+    return false, ignored > 0 and irrelevant == 0 and "ignored" or "irrelevant"
+  end
+  return symbol_index.mark_directories_dirty(
+    scopes, reason or "project-watch", opts
+  )
 end
 
 function symbol_index.mark_file_dirty(path, reason)

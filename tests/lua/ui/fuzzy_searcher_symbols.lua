@@ -22,6 +22,7 @@ test.describe("Fuzzy Searcher Project symbols", function()
     if context.original_lsp_enabled then lsp_manager.is_enabled = context.original_lsp_enabled end
     if context.original_lsp_workspace_symbols then lsp_provider.workspace_symbols = context.original_lsp_workspace_symbols end
     if context.original_ts_workspace_symbols_async then symbol_index.workspace_symbols_async = context.original_ts_workspace_symbols_async end
+    if context.original_ts_status then symbol_index.status = context.original_ts_status end
     if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
   end)
 
@@ -57,6 +58,72 @@ test.describe("Fuzzy Searcher Project symbols", function()
 
     test.ok(wait_until(function() return picker.status == "0 symbols — Tree-sitter" end))
     test.equal(#(picker.results or {}), 0)
+  end)
+
+  test.it("settles an empty completed native Project Symbol query", function(context)
+    context.original_lsp_enabled = lsp_manager.is_enabled
+    context.original_ts_workspace_symbols_async = symbol_index.workspace_symbols_async
+    context.original_ts_status = symbol_index.status
+
+    lsp_manager.is_enabled = function() return false end
+    local ready_index = { status = "ready", symbol_status = "ready", usage_status = "ready" }
+    -- A separate root may begin indexing after this request captured its
+    -- consistent snapshots. The completed request is still authoritative and
+    -- must settle instead of being discarded by a second global status scan.
+    symbol_index.status = function()
+      return { status = "indexing", symbol_status = "indexing", usage_status = "indexing" }
+    end
+    local calls = 0
+    symbol_index.workspace_symbols_async = function(query)
+      calls = calls + 1
+      test.equal(query, "absent")
+      return {
+        done = true,
+        status = "fresh",
+        results = {},
+        meta = {
+          roots = { { status = "pending", index = ready_index } },
+          index = ready_index,
+        },
+        cancel = function() end,
+      }, nil, "pending", { roots = {} }
+    end
+
+    fuzzy_searcher.open("$absent")
+    local picker = core.fuzzy_searcher_active_view
+    picker:refresh("$absent")
+
+    test.ok(wait_until(function() return picker.status == "0 symbols — Tree-sitter" end))
+    test.equal(calls, 1)
+  end)
+
+  test.it("settles a terminal native Project Symbol query failure", function(context)
+    context.original_lsp_enabled = lsp_manager.is_enabled
+    context.original_ts_workspace_symbols_async = symbol_index.workspace_symbols_async
+
+    lsp_manager.is_enabled = function() return false end
+    local calls = 0
+    symbol_index.workspace_symbols_async = function(query)
+      calls = calls + 1
+      test.equal(query, "broken-native")
+      return {
+        done = true,
+        status = "unavailable",
+        reason = "native-project-symbol-query-failed",
+        results = nil,
+        meta = { roots = {} },
+        cancel = function() end,
+      }, nil, "pending", { roots = {} }
+    end
+
+    fuzzy_searcher.open("$broken-native")
+    local picker = core.fuzzy_searcher_active_view
+    picker:refresh("$broken-native")
+
+    test.ok(wait_until(function()
+      return picker.status == "Project symbols unavailable: native-project-symbol-query-failed"
+    end))
+    test.equal(calls, 1)
   end)
 
   test.it("surfaces a terminal Tree-sitter Project index failure instead of polling forever", function(context)

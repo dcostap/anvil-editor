@@ -270,7 +270,8 @@ test.describe("Fuzzy Searcher preview", function()
     test.same(selection_state(view), { 1, 1, 1, 1 })
   end)
 
-  test.it("marks preview documents as lightweight so background file integrations do not run", function(context)
+  test.it("keeps preview documents lightweight and unwrapped", function(context)
+    config.plugins.linewrapping.enable_by_default = true
     local path = temp_file_path("fuzzy-preview-lightweight-doc-test.txt")
     context.files = { path }
     write_file(path, "preview only\n")
@@ -292,6 +293,7 @@ test.describe("Fuzzy Searcher preview", function()
     test.equal(preview.doc.disable_language_services, true)
     test.equal(preview.doc.disable_treesitter, true)
     test.equal(preview.doc.disable_gitdiff_highlight, true)
+    test.equal(preview:is_wrapping_enabled(), false)
   end)
 
   test.it("horizontally reveals off-screen content matches in the DocView preview", function(context)

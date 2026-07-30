@@ -57,25 +57,29 @@ static struct dirmonitor_backend* find_backend(const char* name)
 static int f_check_dir_callback(int watch_id, const char* path, void* L) {
   // using absolute indices from f_dirmonitor_check (2: callback, 3: error_callback, 4: watch_id notified table)
 
-  // Check if we already notified about this watch
-  lua_rawgeti(L, 4, watch_id);
-  bool skip = !lua_isnoneornil(L, -1);
-  lua_pop(L, 1);
-  if (skip) return 0;
-
-  // Set watch as notified
-  lua_pushboolean(L, true);
-  lua_rawseti(L, 4, watch_id);
+  // Directory-only backends can emit several records for one watch in a
+  // batch, so retain the historical per-watch coalescing for those records.
+  // Leaf-aware backends must deliver every distinct path; Lua consumers can
+  // then coalesce by the actual changed path instead of losing information.
+  if (!path) {
+    lua_rawgeti(L, 4, watch_id);
+    bool skip = !lua_isnoneornil(L, -1);
+    lua_pop(L, 1);
+    if (skip) return 0;
+    lua_pushboolean(L, true);
+    lua_rawseti(L, 4, watch_id);
+  }
 
   // Prepare callback call
   lua_pushvalue(L, 2);
   if (path)
-    lua_pushlstring(L, path, watch_id);
+    lua_pushstring(L, path);
   else
     lua_pushnumber(L, watch_id);
+  lua_pushinteger(L, watch_id);
 
   int result = 0;
-  if (lua_pcall(L, 1, 1, 3) == LUA_OK)
+  if (lua_pcall(L, 2, 1, 3) == LUA_OK)
     result = lua_toboolean(L, -1);
   lua_pop(L, 1);
   return !result;

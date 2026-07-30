@@ -1494,6 +1494,8 @@ end
 
 function DocView:invalidate_line_render(_provider_id, line1, line2, opts)
   opts = opts or {}
+  self.__line_render_invalidation_generation =
+    (self.__line_render_invalidation_generation or 0) + 1
   local perf = package.loaded["core.perf"]
   if perf and perf.is_recording and perf.is_recording() and perf.add_detail then
     local caller = debug.getinfo(2, "Sl") or {}
@@ -1795,7 +1797,7 @@ end
 
 function DocView:get_copy_feedback_ranges(line)
   local feedback = self.copy_feedback
-  local color = copy_feedback.color(feedback)
+  local color = copy_feedback.color(feedback, style.copy_feedback)
   if not color then
     self.copy_feedback = nil
     self:remove_decoration_provider("core.copy-feedback")

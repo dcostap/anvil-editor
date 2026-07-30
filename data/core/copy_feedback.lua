@@ -1,7 +1,7 @@
 local copy_feedback = {}
 
 local DURATION = 0.20
-local INITIAL_ALPHA = 33 -- white at 13% opacity / 87% transparency
+local INITIAL_ALPHA = 33
 
 function copy_feedback.start(payload, now)
   local state = {}
@@ -22,10 +22,17 @@ function copy_feedback.alpha(state, now)
   return alpha
 end
 
-function copy_feedback.color(state, now)
+function copy_feedback.color(state, base_color, now)
   local alpha = copy_feedback.alpha(state, now)
   if not alpha then return nil end
-  return { 255, 255, 255, alpha }
+  assert(type(base_color) == "table", "copy feedback requires a base color")
+  local base_alpha = base_color[4] or 255
+  return {
+    base_color[1] or 255,
+    base_color[2] or 255,
+    base_color[3] or 255,
+    math.floor(base_alpha * alpha / INITIAL_ALPHA),
+  }
 end
 
 return copy_feedback

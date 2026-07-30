@@ -3,6 +3,7 @@ local command = require "core.command"
 local copy_feedback = require "core.copy_feedback"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
+local style = require "core.style"
 local test = require "core.test"
 
 local function make_view(text)
@@ -32,12 +33,14 @@ test.describe("Copy Feedback Highlight", function()
     if context.previous_active_view then core.set_active_view(context.previous_active_view) end
   end)
 
-  test.it("starts as an 87%-transparent white overlay and disappears after 200ms", function()
+  test.it("starts at its themed overlay color and disappears after 200ms", function()
     local feedback = copy_feedback.start({}, 10)
-    test.same(copy_feedback.color(feedback, 10), { 255, 255, 255, 33 })
-    local halfway = copy_feedback.color(feedback, 10.1)
-    test.ok(halfway and halfway[4] > 0 and halfway[4] < 33, "expected feedback to fade")
-    test.equal(copy_feedback.color(feedback, 10.2), nil)
+    test.same(copy_feedback.color(feedback, style.copy_feedback, 10), {
+      style.copy_feedback[1], style.copy_feedback[2], style.copy_feedback[3], math.floor(style.copy_feedback[4]),
+    })
+    local halfway = copy_feedback.color(feedback, style.copy_feedback, 10.1)
+    test.ok(halfway and halfway[4] > 0 and halfway[4] < style.copy_feedback[4], "expected feedback to fade")
+    test.equal(copy_feedback.color(feedback, style.copy_feedback, 10.2), nil)
   end)
 
   test.it("briefly marks the exact Document View text copied by doc:copy", function(context)
@@ -70,13 +73,14 @@ test.describe("Copy Feedback Highlight", function()
     local feedback_rect
     for _, rect in ipairs(rects) do
       local color = rect.color
-      if color and color[1] == 255 and color[2] == 255 and color[3] == 255
-      and color[4] and color[4] > 0 and color[4] <= 33 then
+      if color and color[1] == style.copy_feedback[1]
+      and color[2] == style.copy_feedback[2] and color[3] == style.copy_feedback[3]
+      and color[4] and color[4] > 0 and color[4] <= style.copy_feedback[4] then
         feedback_rect = rect
         break
       end
     end
-    test.not_nil(feedback_rect, "expected copied text to receive white fading feedback")
+    test.not_nil(feedback_rect, "expected copied text to receive themed fading feedback")
     test.equal(feedback_rect.x, view:get_col_x_offset(1, 2))
     test.equal(feedback_rect.w, view:get_col_x_offset(1, 5) - view:get_col_x_offset(1, 2))
   end)

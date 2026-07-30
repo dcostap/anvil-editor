@@ -121,23 +121,26 @@ end
 
 ---Checks each watched paths for changes.
 ---This function must be called in a coroutine, e.g. inside a thread created with `core.add_thread()`.
----@param change_callback fun(path: string)
+---@param change_callback fun(path: string, changed_path: string) The containing watched path and, when available, the changed leaf path.
 ---@param scan_time? number Maximum amount of time, in seconds, before the function yields execution.
 ---@param wait_time? number The duration to yield execution (in seconds).
 ---@return boolean # If true, a path had changed.
 function DirWatch:check(change_callback, scan_time, wait_time)
   local had_change = false
   local last_error
-  self.monitor:check(function(id)
+  self.monitor:check(function(id, native_watch_id)
     had_change = true
     if self.monitor:mode() == "single" then
-      local path = common.dirname(id)
+      local changed_path = id
       if not string.match(id, "^/") and not string.match(id, "^%a:[/\\]") then
-        path = common.dirname(self.single_watch_top .. PATHSEP .. id)
+        changed_path = self.single_watch_top .. PATHSEP .. id
       end
-      change_callback(path)
-    elseif self.reverse_watched[id] then
-      local path = self.reverse_watched[id]
+      changed_path = common.normalize_path(changed_path)
+      change_callback(common.dirname(changed_path), changed_path)
+    else
+      local watch_id = native_watch_id or id
+      local path = self.reverse_watched[watch_id]
+      if not path then return end
       local last_modified = self.last_modified[path]
       local info = system.get_file_info(path)
       if last_modified then
@@ -146,7 +149,16 @@ function DirWatch:check(change_callback, scan_time, wait_time)
           return
         end
       end
-      change_callback(path)
+      local changed_path = path
+      if type(id) == "string" then
+        if string.match(id, "^/") or string.match(id, "^%a:[/\\]") then
+          changed_path = id
+        else
+          changed_path = path .. PATHSEP .. id
+        end
+        changed_path = common.normalize_path(changed_path)
+      end
+      change_callback(path, changed_path)
       -- The watch may get lost when a file is deleted and re-added, eg:
       -- git checkout <branch>. We register modified timestamp to prevent
       -- sending unnecessary notifications or duplicating them.
@@ -166,7 +178,7 @@ function DirWatch:check(change_callback, scan_time, wait_time)
       local info = system.get_file_info(directory)
       local new_modified = info and info.modified
       if old_modified ~= new_modified then
-        change_callback(directory)
+        change_callback(directory, directory)
         had_change = true
         self.scanned[directory] = new_modified
       end

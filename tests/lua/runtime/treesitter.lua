@@ -776,6 +776,7 @@ class ExcludedThing
     test.not_nil(request)
     wait_async_request(request)
     test.equal(request.status, "fresh", request.reason)
+    test.equal(request.meta.roots[1].status, "fresh")
     test.equal(#(request.results or {}), #(sync_symbols or {}), common.serialize({ async = request.results, sync = sync_symbols }))
     for i, symbol in ipairs(sync_symbols or {}) do
       test.equal(request.results[i] and request.results[i].name, symbol.name)
@@ -1396,6 +1397,100 @@ fun make%d(): ShardedThing%d = ShardedThing%d()
     test.equal(reason, "ignored")
     test.equal(index.generation, generation)
     test.equal(index.status, "ready")
+    common.rm(root, true)
+  end)
+
+  test.it("Tree-sitter Project watcher ignores changed files without an index provider", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-watcher-unsupported-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    local noise = root .. PATHSEP .. "active-session.log"
+    write_file(noise, "not source code\n")
+    local index = seed_ready_symbol_index(root, { "StableWatcherThing" })
+    index.watch_running = true
+    local generation = index.generation
+
+    local matched, reason = symbol_index.mark_watch_paths_dirty(
+      root, { [noise] = true }, "project-watch"
+    )
+
+    test.not_ok(matched)
+    test.equal(reason, "irrelevant")
+    test.equal(index.generation, generation)
+    test.equal(index.status, "ready")
+    common.rm(root, true)
+  end)
+
+  test.it("Tree-sitter Project watcher refreshes the parent of a vanished dotted directory", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-watcher-dotted-dir-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    local removed_dir = mkdir(root .. PATHSEP .. "generated.v1")
+    write_file(removed_dir .. PATHSEP .. "Removed.kt", [[package demo
+
+class RemovedDottedDirectoryThing
+
+fun make(): RemovedDottedDirectoryThing = RemovedDottedDirectoryThing()
+]])
+    local refs, reason, status = wait_workspace_usages("RemovedDottedDirectoryThing", {
+      root = root,
+      force = true,
+      include_declaration = false,
+      limit = 20,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 2)
+    common.rm(removed_dir, true)
+
+    local matched
+    matched, reason = symbol_index.mark_watch_paths_dirty(
+      root, { [removed_dir] = true }, "project-watch"
+    )
+
+    test.ok(matched, reason)
+    refs, reason, status = wait_workspace_usages("RemovedDottedDirectoryThing", {
+      root = root,
+      include_declaration = false,
+      limit = 20,
+    })
+    test.equal(status, "fresh", reason)
+    test.equal(#refs, 0)
+    common.rm(root, true)
+  end)
+
+  test.it("Tree-sitter filesystem watcher receives unsupported leaf changes without reindexing", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-watcher-leaf-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    write_file(root .. PATHSEP .. "Stable.kt", [[package demo
+
+class StableLeafWatcherThing
+]])
+
+    symbol_index.start_project_indexing({ root = root, reason = "test-watch", refresh_after_seconds = 0 })
+    local index = wait_index_ready(root)
+    test.equal(index.status, "ready")
+    local generation = index.generation
+    local ignored_before = index.watch_irrelevant_events or 0
+
+    write_file(root .. PATHSEP .. "active-session.log", "not source code\n")
+    local deadline = system.get_time() + 5
+    repeat
+      index = symbol_index.status(root)
+      if (index.watch_irrelevant_events or 0) > ignored_before then break end
+      coroutine.yield(0.05)
+    until system.get_time() >= deadline
+
+    test.ok(
+      (index.watch_irrelevant_events or 0) > ignored_before,
+      "expected the filesystem watcher to classify the changed leaf"
+    )
+    test.equal(index.generation, generation)
+    test.equal(index.status, "ready")
+    symbol_index.reset_for_tests()
     common.rm(root, true)
   end)
 

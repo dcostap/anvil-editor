@@ -88,6 +88,19 @@ local fuzzy_searcher = {
 
 local FSView = Widget:extend()
 local active_view
+
+function fuzzy_searcher._perf_scope_begin(name, capture_heap)
+  if not core.perf_draw_scope_active then return nil end
+  local perf = package.loaded["core.perf"]
+  return perf and perf.scope_begin and perf.scope_begin(name, capture_heap) or nil
+end
+
+function fuzzy_searcher._perf_scope_end(token)
+  if not token then return end
+  local perf = package.loaded["core.perf"]
+  if perf and perf.scope_end then perf.scope_end(token) end
+end
+
 local open
 local open_static_results
 
@@ -3083,7 +3096,7 @@ end
 function FSView:copy_flash_color(idx)
   local flash = self.copy_flash
   if not flash then return nil end
-  local color = fuzzy_searcher.copy_feedback.color(flash)
+  local color = fuzzy_searcher.copy_feedback.color(flash, style.fuzzy_searcher_copy_feedback)
   if not color then
     self.copy_flash = nil
     return nil
@@ -3272,6 +3285,7 @@ function FSView:update_preview_view()
         return nil
       end
       view = PreviewDocView(doc)
+      view:set_wrapping_enabled(false)
     end
     self.preview_view = view
     self.preview_key = key
@@ -4686,31 +4700,6 @@ function fuzzy_searcher.cancel_symbol_search()
   if active_view then active_view.symbol_search_request = nil end
 end
 
-local function project_symbol_roots_indexing(ts_symbols, meta)
-  for _, root in ipairs((meta and meta.roots) or {}) do
-    local index = root.index
-    if index and index.symbol_status == "indexing" then return true end
-    if root.status == "pending" then return true end
-  end
-  local index = meta and meta.index
-  if index and index.symbol_status == "indexing" then return true end
-
-  -- A successful empty async query can be produced from the currently-ready
-  -- subset while a newly-added/restored Project Path root is still indexing.
-  -- Treat the picker as pending until every Project Symbol root is settled so
-  -- the UI never presents "0 symbols" as a final answer mid-index.
-  local ok, project_paths = pcall(require, "core.project_paths")
-  if not ok or not project_paths or not project_paths.search_roots or not (ts_symbols and ts_symbols.status) then return false end
-  for _, root in ipairs(project_paths.search_roots("symbols") or {}) do
-    local path = root and root.path
-    if path then
-      local root_index = ts_symbols.status(path)
-      if root_index and root_index.symbol_status == "indexing" then return true end
-    end
-  end
-  return false
-end
-
 function FSView:start_symbol_search(query, reset_selection, path_query)
   fuzzy_searcher.cancel_symbol_search()
   local gen = symbol_generation
@@ -4783,22 +4772,15 @@ function FSView:start_symbol_search(query, reset_selection, path_query)
             results = async_request.results
             reason = async_request.reason
             status = async_request.status
-            if #(results or {}) > 0 or not project_symbol_roots_indexing(ts_symbols, async_request.meta) then
-              break
-            end
-            reason = "indexing"
-            status = "pending"
+            break
           else
             reason = async_request.reason or reason
             status = async_request.status or status
           end
           if async_request.cancel then async_request:cancel() end
+          if status == "unavailable" then break end
         elseif status == "fresh" then
-          if #(results or {}) > 0 or not project_symbol_roots_indexing(ts_symbols, meta) then
-            break
-          end
-          reason = "indexing"
-          status = "pending"
+          break
         elseif status == "unavailable" then
           break
         end
@@ -5150,11 +5132,22 @@ end
 
 function FSView:draw()
   if not self:is_visible() then return false end
+  local draw_scope = fuzzy_searcher._perf_scope_begin("fuzzy_searcher", true)
   local root = core.root_panel
+
+  local phase_scope = fuzzy_searcher._perf_scope_begin("overlay")
   renderer.draw_rect(root.position.x, root.position.y, root.size.x, root.size.y, style.fuzzy_searcher_overlay_background)
+  fuzzy_searcher._perf_scope_end(phase_scope)
 
-  if not FSView.super.draw(self) then return false end
+  phase_scope = fuzzy_searcher._perf_scope_begin("widget_chrome")
+  local widget_drawn = FSView.super.draw(self)
+  fuzzy_searcher._perf_scope_end(phase_scope)
+  if not widget_drawn then
+    fuzzy_searcher._perf_scope_end(draw_scope)
+    return false
+  end
 
+  phase_scope = fuzzy_searcher._perf_scope_begin("list_setup")
   local pad = style.padding.x
   local font = style.code_font
   local m = self:list_metrics(font)
@@ -5184,13 +5177,18 @@ function FSView:draw()
   if self.viewport_offset + m.result_rows - 1 < #self.results or self:can_load_more() then
     renderer.draw_text(font, down_arrow, x + (list_w - font:get_width(down_arrow)) / 2, m.bottom_indicator_y + row_padding, arrow_color)
   end
+  fuzzy_searcher._perf_scope_end(phase_scope)
 
+  phase_scope = fuzzy_searcher._perf_scope_begin("result_scan")
   local last = math.min(#self.results, self.viewport_offset + m.result_rows - 1)
   local has_visible_grep = false
   for idx = self.viewport_offset, last do
     local r = self.results[idx]
     if r and r.kind == "grep" then has_visible_grep = true; break end
   end
+  fuzzy_searcher._perf_scope_end(phase_scope)
+
+  local results_scope = fuzzy_searcher._perf_scope_begin("result_rows")
   local previous_rendered_grep_file = nil
   local previous_rendered_grep_line_x = nil
   local previous_rendered_was_grep = false
@@ -5198,6 +5196,12 @@ function FSView:draw()
     local r = self.results[idx]
     local yy = m.results_top + (idx - self.viewport_offset) * lh
     local row_y = yy + row_padding
+    local row_scope
+    if core.perf_draw_scope_active then
+      row_scope = fuzzy_searcher._perf_scope_begin(
+        r.header and "header" or ("kind:" .. tostring(r.kind or "default"))
+      )
+    end
     if r.header then
       previous_rendered_grep_file = nil
       previous_rendered_grep_line_x = nil
@@ -5212,13 +5216,6 @@ function FSView:draw()
         renderer.draw_rect(x, yy, list_w, lh, style.line_highlight)
       elseif idx == self.hovered_result then
         renderer.draw_rect(x, yy, list_w, lh, style.background3 or color_with_alpha(style.text, 24))
-      end
-      local flash_color = self:copy_flash_color(idx)
-      if flash_color then
-        local flash_x, flash_w = self:copy_flash_bounds(font, r, x + pad, row_text_w)
-        if flash_w > 0 then
-          renderer.draw_rect(flash_x, yy + 1, flash_w, math.max(1, lh - 2), flash_color)
-        end
       end
       if r.kind == "grep" then
         local file = tostring(r.file or "")
@@ -5267,7 +5264,17 @@ function FSView:draw()
         previous_rendered_grep_line_x = nil
         previous_rendered_was_grep = false
       end
+      -- Draw after the row so copied-result feedback takes precedence over
+      -- fuzzy-match backgrounds as well as the selected-row background.
+      local flash_color = self:copy_flash_color(idx)
+      if flash_color then
+        local flash_x, flash_w = self:copy_flash_bounds(font, r, x + pad, row_text_w)
+        if flash_w > 0 then
+          renderer.draw_rect(flash_x, yy + 1, flash_w, math.max(1, lh - 2), flash_color)
+        end
+      end
     end
+    fuzzy_searcher._perf_scope_end(row_scope)
   end
   if has_visible_grep then
     local path_w, gap = grep_row_columns(row_text_w)
@@ -5275,7 +5282,9 @@ function FSView:draw()
     renderer.draw_rect(sx, m.results_top, style.divider_size, math.max(0, last - self.viewport_offset + 1) * lh, style.divider)
   end
   core.pop_clip_rect()
+  fuzzy_searcher._perf_scope_end(results_scope)
 
+  phase_scope = fuzzy_searcher._perf_scope_begin("preview")
   local r = self:selected_result()
   local px, py, preview_w, preview_h = self:preview_bounds()
   if full_width_mode and not vertical_preview then
@@ -5299,15 +5308,23 @@ function FSView:draw()
     renderer.draw_text(font, "Ctrl+Enter: open in new Anvil window", px, py + lh * 4, style.dim)
     core.pop_clip_rect()
   else
+    local preview_phase_scope = fuzzy_searcher._perf_scope_begin("preview_update")
     local preview = self:update_preview_view()
+    fuzzy_searcher._perf_scope_end(preview_phase_scope)
     if preview then
+      preview_phase_scope = fuzzy_searcher._perf_scope_begin("preview_draw")
       draw_view_in_rect(preview, px, py, preview_w, preview_h, r)
+      fuzzy_searcher._perf_scope_end(preview_phase_scope)
     elseif self.preview_blocked then
+      preview_phase_scope = fuzzy_searcher._perf_scope_begin("preview_placeholder")
       core.push_clip_rect(px, py, preview_w, preview_h)
       draw_preview_placeholder("Preview unavailable", self.preview_blocked.reason .. " — " .. basename(self.preview_blocked.path), px, py, preview_w, preview_h)
       core.pop_clip_rect()
+      fuzzy_searcher._perf_scope_end(preview_phase_scope)
     end
   end
+  fuzzy_searcher._perf_scope_end(phase_scope)
+  fuzzy_searcher._perf_scope_end(draw_scope)
   return true
 end
 
