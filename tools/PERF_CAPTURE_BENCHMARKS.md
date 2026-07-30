@@ -1,5 +1,10 @@
 # Anvil perf capture benchmarks
 
+> This F11-style capture is an intrusive diagnostic profiler. It is not the
+> authoritative performance-regression score. Use
+> [`RENDER_PERF_GATE.md`](RENDER_PERF_GATE.md) for isolated repeated throughput,
+> present-paced, and D3D11 visual-regression checks.
+
 These scripts launch Anvil, open a target file, run the same detailed performance recorder used by the F11 performance HUD, capture the editor window at the end, and optionally compare that screenshot against a visual baseline.
 
 ## Scripts

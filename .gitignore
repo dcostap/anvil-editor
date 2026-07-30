@@ -24,6 +24,8 @@ tools/perf-results/
 tools/baselines/whitespace_perf_*.png
 tools/baselines/whitespace_perf_best.json
 tools/baselines/perf_capture_*.png
+!tools/baselines/render/
+!tools/baselines/render/*.png
 
 !resources/windows/*.diff
 !resources/windows/*.exe.manifest.in
