@@ -968,9 +968,17 @@ local function image_fragment(view, span, opts)
   local label = link.alias or link.alt
   if not label or label == "" then label = link.path or link.raw_target or "" end
   local status_text, color = "image unavailable", style.markdown_live_image_error
-  if entry.status == "loading" then
+  -- Obsidian-style embeds depend on the vault index to find attachments by
+  -- name. The local-path fallback may miss while that index is still being
+  -- built, but that is not a failed image load: its ready notification will
+  -- invalidate this row and retry resolution.
+  local display_status = entry.status
+  if display_status == "error" and resolution.status == "pending" then
+    display_status = "loading"
+  end
+  if display_status == "loading" then
     status_text, color = "loading image", style.markdown_live_image_loading
-  elseif entry.status == "remote-disabled" then
+  elseif display_status == "remote-disabled" then
     status_text, color = "remote image blocked", style.markdown_live_image_blocked
   end
   return {
@@ -978,7 +986,7 @@ local function image_fragment(view, span, opts)
     source_col2 = span.col2,
     text = "[" .. status_text .. ": " .. label .. "]",
     color = color,
-    image_status = entry.status,
+    image_status = display_status,
   }
 end
 

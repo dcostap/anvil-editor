@@ -198,7 +198,18 @@ end
 function images.load_from_path(path, opts)
   opts = opts or {}
   local loader = opts.loader or function(filename) return canvas.load_image(filename) end
+  local started_at = system.get_time()
   local image, errmsg = loader(path)
+  local elapsed = system.get_time() - started_at
+  if elapsed >= 0.1 then
+    local core = package.loaded.core
+    if core and core.log_quiet then
+      core.log_quiet(
+        "Markdown image load %s in %.1fms: %s",
+        image and "completed" or "failed", elapsed * 1000, tostring(path)
+      )
+    end
+  end
   if not image then
     return { status = "error", path = path, errmsg = errmsg or "image could not be loaded" }
   end

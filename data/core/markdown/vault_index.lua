@@ -300,7 +300,12 @@ function Index:new(root)
     watch_dir_count = 0,
     watcher_mode = "stopped",
     show_unsupported_files = obsidian_settings.showUnsupportedFiles == true,
-    diagnostics = { doc_updates = 0, doc_updates_coalesced = 0, degraded_rescans = 0 },
+    diagnostics = {
+      doc_updates = 0,
+      doc_updates_coalesced = 0,
+      degraded_rescans = 0,
+      last_rebuild = nil,
+    },
   }, self)
 end
 
@@ -622,6 +627,7 @@ end
 
 function Index:rebuild(reason, opts)
   opts = opts or {}
+  local started_at = system.get_time()
   self:refresh_obsidian_settings()
   self.rebuild_serial = self.rebuild_serial + 1
   self.status, self.reason = "indexing", reason or "manual"
@@ -631,7 +637,18 @@ function Index:rebuild(reason, opts)
   self.status, self.reason = "ready", nil
   self.generation = self.generation + 1
   self:notify("ready")
-  core.log_quiet("Markdown vault index rebuilt %s: %d notes, %d attachments", reason or "manual", self:note_count(), self:attachment_count())
+  local elapsed_ms = (system.get_time() - started_at) * 1000
+  self.diagnostics.last_rebuild = {
+    reason = reason or "manual",
+    elapsed_ms = elapsed_ms,
+    notes = self:note_count(),
+    attachments = self:attachment_count(),
+    cooperative = false,
+  }
+  core.log_quiet(
+    "Markdown vault index rebuilt: root=%s reason=%s elapsed=%.1fms notes=%d attachments=%d",
+    self.root, reason or "manual", elapsed_ms, self:note_count(), self:attachment_count()
+  )
   return self
 end
 
@@ -843,18 +860,24 @@ function Index:ensure(reason)
 end
 
 function Index:rebuild_async(reason)
+  local started_at = system.get_time()
+  local rebuild_reason = reason or "async-rebuild"
   self:refresh_obsidian_settings()
   self.rebuild_serial = self.rebuild_serial + 1
   local serial = self.rebuild_serial
-  self.status, self.reason = "indexing", reason or "async-rebuild"
+  self.status, self.reason = "indexing", rebuild_reason
   self:clear()
   self:notify("indexing")
-  core.log_quiet("Markdown vault index scheduled cooperative rebuild: %s", tostring(self.reason))
+  core.log_quiet(
+    "Markdown vault index scheduled cooperative rebuild: root=%s reason=%s",
+    self.root, rebuild_reason
+  )
   core.add_thread(function()
-    local dirs, processed = { self.root }, 0
+    local dirs, processed, scanned_dirs, scanned_files = { self.root }, 0, 0, 0
     while #dirs > 0 do
       if serial ~= self.rebuild_serial then return end
       local dir = table.remove(dirs)
+      scanned_dirs = scanned_dirs + 1
       self:watch_dir(dir)
       for _, name in ipairs(system.list_dir(dir) or {}) do
         if name ~= ".git" and name ~= ".obsidian" and name ~= ".run-meson-tests" then
@@ -863,6 +886,7 @@ function Index:rebuild_async(reason)
           if info and info.type == "dir" then
             dirs[#dirs + 1] = path
           elseif info and info.type == "file" then
+            scanned_files = scanned_files + 1
             local tracked = false
             for doc in pairs(self.doc_listeners) do
               if doc.abs_filename and path_key(doc.abs_filename) == path_key(path) then tracked = true break end
@@ -886,8 +910,19 @@ function Index:rebuild_async(reason)
     self.generation = self.generation + 1
     self:notify("ready")
     core.redraw = true
+    local elapsed_ms = (system.get_time() - started_at) * 1000
+    self.diagnostics.last_rebuild = {
+      reason = rebuild_reason,
+      elapsed_ms = elapsed_ms,
+      directories = scanned_dirs,
+      files = scanned_files,
+      notes = self:note_count(),
+      attachments = self:attachment_count(),
+      cooperative = true,
+    }
     core.log_quiet(
-      "Markdown vault index cooperative rebuild ready: notes=%d attachments=%d",
+      "Markdown vault index cooperative rebuild ready: root=%s reason=%s elapsed=%.1fms dirs=%d files=%d notes=%d attachments=%d",
+      self.root, rebuild_reason, elapsed_ms, scanned_dirs, scanned_files,
       self:note_count(), self:attachment_count()
     )
   end)

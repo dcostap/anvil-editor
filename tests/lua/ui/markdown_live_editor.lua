@@ -4029,6 +4029,42 @@ test.describe("Markdown Live Editor", function()
     if not ok then error(err, 0) end
   end)
 
+  test.it("shows unresolved image embeds as loading while the vault indexes", function()
+    local root = USERDIR .. PATHSEP .. "markdown-live-image-indexing-" .. system.get_process_id()
+    test.ok(common.mkdirp(root))
+    -- Keep the cooperative scan active long enough to render its initial
+    -- placeholder instead of racing a tiny vault's ready notification.
+    for i = 1, 200 do
+      local file = test.not_nil(io.open(root .. PATHSEP .. "Fill" .. i .. ".md", "wb"))
+      file:write("# Fill\n")
+      file:close()
+    end
+    local old_projects = core.projects
+    core.projects = { Project(root) }
+    local view, doc = make_view("![[not-yet-indexed.png]]\nnext", root .. PATHSEP .. "Source.md")
+    doc:set_selection(2, 1)
+    local ok, err = pcall(function()
+      refresh(view)
+      test.equal(view.__markdown_live_owner.link_index.status, "indexing")
+      local loading
+      for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
+        if fragment.image_status then loading = fragment break end
+      end
+      test.equal(test.not_nil(loading).text, "[loading image: not-yet-indexed.png]")
+
+      test.ok(wait_status(view.__markdown_live_owner.link_index, "ready"))
+      local unavailable
+      for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
+        if fragment.image_status then unavailable = fragment break end
+      end
+      test.equal(test.not_nil(unavailable).text, "[image unavailable: not-yet-indexed.png]")
+    end)
+    markdown.live_render.detach(view)
+    core.projects = old_projects
+    common.rm(root, true)
+    if not ok then error(err, 0) end
+  end)
+
   test.it("keeps image rows in the draw range when the source text is just off-screen", function()
     local image_path = USERDIR .. PATHSEP .. "markdown-live-cull-image-" .. system.get_process_id() .. ".png"
     local fp = io.open(image_path, "wb")
