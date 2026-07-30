@@ -180,6 +180,16 @@ end
 
 local old_start = process.start
 
+---@class process.options
+---@field detach? boolean Keep the child alive independently of this process object.
+---@field background? boolean Launch without foreground-window activation on Windows. Defaults to true on Windows.
+---@field timeout? number Process operation timeout in seconds.
+---@field stdin? integer
+---@field stdout? integer
+---@field stderr? integer
+---@field cwd? string
+---@field env? table<string, string>
+
 ---Create and start a new process, wrapping the native process with stream helpers.
 ---
 ---When `options.env` is a table, values are merged over the system environment.

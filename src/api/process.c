@@ -1080,12 +1080,14 @@ static int process_start(lua_State *L) {
   if (lua_istable(L, 2)) {
     if (lua_getfield(L, 2, "detach") == LUA_TBOOLEAN)
       detach = lua_toboolean(L, -1);
+    if (lua_getfield(L, 2, "background") == LUA_TBOOLEAN)
+      launch_background = lua_toboolean(L, -1);
     lua_getfield(L, 2, "timeout"); deadline = (int) luaL_optnumber(L, -1, deadline);
     lua_getfield(L, 2, "stdin");   redirects[STDIN_FD] = (int) luaL_optnumber(L, -1, REDIRECT_DEFAULT);
     lua_getfield(L, 2, "stdout");  redirects[STDOUT_FD] = (int) luaL_optnumber(L, -1, REDIRECT_DEFAULT);
     lua_getfield(L, 2, "stderr");  redirects[STDERR_FD] = (int) luaL_optnumber(L, -1, REDIRECT_DEFAULT);
     lua_getfield(L, 2, "cwd");     cwd = luaL_optstring(L, -1, NULL);
-    lua_pop(L, 6);
+    lua_pop(L, 7);
   }
 
   if (lua_istable(L, 1)) {
@@ -1120,7 +1122,7 @@ static int process_start(lua_State *L) {
     lua_pop(L, 1);
   }
 
-  SDL_SetBooleanProperty(props, SDL_PROP_PROCESS_CREATE_BACKGROUND_BOOLEAN, launch_background || detach);
+  SDL_SetBooleanProperty(props, SDL_PROP_PROCESS_CREATE_BACKGROUND_BOOLEAN, launch_background);
 
   if (!set_property_or_fail(props, SDL_SetPointerProperty(props, SDL_PROP_PROCESS_CREATE_ARGS_POINTER, (void *) args)) ||
       (cwd && !SDL_SetStringProperty(props, SDL_PROP_PROCESS_CREATE_WORKING_DIRECTORY_STRING, cwd)) ||

@@ -42,8 +42,8 @@ call :RemoveLink "%DEST%\data\treesitter"
 if errorlevel 1 exit /b 1
 
 echo.
-echo === Installing portable Anvil to %DEST% ===
-"%BASH%" -lc "%MSYS_ENV% cd %REPO_BASH% && meson install -C build-windows-x86_64 --destdir %DEST_BASH%"
+echo === Installing stripped portable Anvil to %DEST% ===
+"%BASH%" -lc "%MSYS_ENV% cd %REPO_BASH% && meson install -C build-windows-x86_64 --destdir %DEST_BASH% --strip"
 if errorlevel 1 exit /b 1
 
 echo.

@@ -17,6 +17,9 @@ Compiling produces binaries in:
 - `build-windows-x86_64\src\anvil.exe`
 - `build-windows-x86_64\src\anvil.com`
 
+These build-directory binaries retain native debug information. The dev
+portable install strips its executable so the daily launcher starts quickly.
+
 The Lua/data files are not embedded in the exe. A runnable portable app is produced by `meson install` into `C:\Projects\c_projects\anvil-portable`.
 
 ## Dev portable workflow
@@ -37,11 +40,19 @@ Use the BAT files in the repo root
   - rebuilds and updates the dev portable app
   - restores the source-data junctions
 
+- `launch-anvil-debug.bat`
+  - explicitly launches the unstripped `build-windows-x86_64\src\anvil.exe`
+  - uses the normal dev portable data and user directory
+  - use this only when native debugger/symbol information is needed
+
 Daily launcher target:
 
 ```text
 C:\Projects\c_projects\anvil-portable\anvil.exe
 ```
+
+The daily launcher is the stripped executable. Do not switch it back to the
+unstripped build output; use `launch-anvil-debug.bat` for native debugging.
 
 ## Renderer selection
 

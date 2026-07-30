@@ -203,18 +203,44 @@ function core.open_project_in_new_window(project)
   end
 
   local exe = EXEFILE or (EXEDIR and (EXEDIR .. PATHSEP .. "anvil.exe")) or "anvil"
+  local process_ok, process = pcall(require, "core.process")
 
-  -- On Windows, launching detached through core.process can create a visible
-  -- Anvil window that Windows/SDL does not grant input focus to.  Preserve the
-  -- older WinExec-based launch path here so newly-opened project windows are
-  -- activated correctly.
+  -- Launch directly instead of going through system.exec's legacy
+  -- WinExec -> cmd /c path. On Windows that shell handoff can stall for several
+  -- seconds before the Anvil process even enters SDL_AppInit. The child is a
+  -- GUI executable, so it does not need background console suppression; grant
+  -- its PID explicit foreground permission before its first window is shown.
   if PLATFORM == "Windows" then
+    if process_ok and process and process.start then
+      local proc, start_error = process.start({ exe, project }, {
+        detach = true,
+        background = false,
+        stdin = process.REDIRECT_DISCARD,
+        stdout = process.REDIRECT_DISCARD,
+        stderr = process.REDIRECT_DISCARD,
+      })
+      if proc then
+        local pid = proc:pid()
+        local foreground_allowed = pid and pid > 0
+          and system.allow_process_foreground
+          and system.allow_process_foreground(pid)
+        core.log_quiet(
+          "Started Project window process pid=%s foreground_allowed=%s project=%q",
+          tostring(pid), tostring(not not foreground_allowed), tostring(project)
+        )
+        return true
+      end
+      core.log_quiet(
+        "Direct Project window launch failed for %q; falling back to system.exec: %s",
+        tostring(project), tostring(start_error)
+      )
+    end
+
     system.exec(string.format("%q %q", exe, project))
     return true
   end
 
-  local ok, process = pcall(require, "core.process")
-  if ok and process and process.start then
+  if process_ok and process and process.start then
     local proc = process.start({ exe, project }, {
       detach = true,
       stdin = process.REDIRECT_DISCARD,

@@ -919,6 +919,18 @@ static int f_raise_window(lua_State *L) {
 }
 
 
+static int f_allow_process_foreground(lua_State *L) {
+  lua_Integer pid = luaL_checkinteger(L, 1);
+#ifdef _WIN32
+  lua_pushboolean(L, pid > 0 && AllowSetForegroundWindow((DWORD)pid));
+#else
+  (void)pid;
+  lua_pushboolean(L, false);
+#endif
+  return 1;
+}
+
+
 static int f_show_fatal_error(lua_State *L) {
   const char *title = luaL_checkstring(L, 1);
   const char *msg = luaL_checkstring(L, 2);
@@ -1787,9 +1799,7 @@ static int f_get_sandbox(lua_State* L) {
 }
 
 static int f_get_display_info(lua_State* L) {
-  bool video_was_init = SDL_WasInit(SDL_INIT_VIDEO);
-
-  if (!video_was_init) {
+  if (!SDL_WasInit(SDL_INIT_VIDEO)) {
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         SDL_Log("Video subsystem failed: %s", SDL_GetError());
         return luaL_error(L, "Video subsystem failed: %s", SDL_GetError());
@@ -1823,7 +1833,10 @@ static int f_get_display_info(lua_State* L) {
   lua_pushnumber(L, mode->h);
   lua_pushnumber(L, default_scale);
 
-  if(!video_was_init) SDL_QuitSubSystem(SDL_INIT_VIDEO);
+  /* The editor creates its window later in the same startup sequence. Keep
+     video initialized instead of shutting it down here and paying for a
+     second platform video initialization in renwindow.create(). SDL_AppQuit
+     performs the process-wide SDL teardown. */
 
   return 5;
 }
@@ -1853,6 +1866,7 @@ static const luaL_Reg lib[] = {
   { "window_has_focus",      f_window_has_focus      },
   { "window_focus_diagnostics", f_window_focus_diagnostics },
   { "raise_window",          f_raise_window          },
+  { "allow_process_foreground", f_allow_process_foreground },
   { "show_fatal_error",      f_show_fatal_error      },
   { "rmdir",                 f_rmdir                 },
   { "chdir",                 f_chdir                 },
