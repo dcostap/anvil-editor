@@ -48,7 +48,7 @@ local function dump_file_section(fp, path, max_bytes)
   return true
 end
 
-local function dump_debug_logs()
+local function dump_logs_to_file()
   local dir = temp_dir()
   local path = dir .. PATHSEP .. timestamp_name()
   local fp = assert(io.open(path, "wb"))
@@ -124,7 +124,7 @@ command.add(nil, {
   ["log:copy-to-clipboard"] = function()
     system.set_clipboard(core.get_log())
   end,
-  ["log:dump-debug-logs"] = function()
-    dump_debug_logs()
+  ["log:dump-to-file"] = function()
+    dump_logs_to_file()
   end
 })

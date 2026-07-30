@@ -291,7 +291,7 @@ function M.flash(doc, old_lines, new_lines, opts)
 
   model.doc = doc
   model.start_time = system.get_time()
-  model.duration = option(opts, "duration", 1.0)
+  model.duration = option(opts, "duration", 2.0)
 
   local installed = {}
   for _, view in ipairs(active_docviews_for_doc(doc)) do

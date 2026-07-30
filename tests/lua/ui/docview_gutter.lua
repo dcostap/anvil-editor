@@ -2,6 +2,7 @@ local common = require "core.common"
 local config = require "core.config"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
+local style = require "core.style"
 local test = require "core.test"
 
 local gitdiff = require "plugins.gitdiff_highlight"
@@ -80,5 +81,32 @@ test.describe("DocView gutter line numbers", function()
     end
 
     test.equal(marker_x_for(9), marker_x_for(10))
+  end)
+
+  test.it("keeps git hunk markers inside the gutter when line numbers are hidden", function(context)
+    local view = make_view(context, 3)
+    view.show_line_numbers = false
+    gitdiff._set_state_for_tests(view.doc, {
+      is_in_repo = true,
+      line_index = { [1] = "modification" },
+      ranges = {},
+    })
+
+    local marker
+    context.original_draw_rect = renderer.draw_rect
+    renderer.draw_rect = function(x, y, w, h, color)
+      if color == style.git_change_modification then
+        marker = { x = x, width = w }
+      end
+    end
+
+    local gutter_width, gutter_padding = view:get_gutter_width()
+    local content_width = gutter_padding and gutter_width - gutter_padding or gutter_width
+    view:draw_line_gutter(1, 0, 0, content_width)
+
+    test.ok(marker, "expected a modified-line hunk marker")
+    test.ok(marker.x >= 0, "expected the marker to start inside the gutter")
+    test.ok(marker.x + marker.width <= gutter_width,
+      "expected the marker not to overlap document text")
   end)
 end)

@@ -55,7 +55,7 @@ plugin_defaults("autoreload", {
 })
 plugin_defaults("reload_diff_flash", {
   enabled = true,
-  duration = 1.0,
+  duration = 2.0,
   max_diff_cells = 2 * 1000 * 1000,
   max_diff_lines = 50000,
 })

@@ -457,9 +457,9 @@ local function effective_diff_for_line(doc, line)
 end
 
 local function gitdiff_padding(dv)
-	local line_number_width = dv.get_line_number_gutter_width
+	local line_number_width = dv:line_number_gutter_visible()
 		and dv:get_line_number_gutter_width()
-		or dv:get_font():get_width(string.rep("0", math.max(2, #tostring(#dv.doc.lines))))
+		or 0
 	return style.padding.x * 1.5 + line_number_width
 end
 
