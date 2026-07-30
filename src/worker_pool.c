@@ -2,6 +2,7 @@
 
 #include "git_status_index.h"
 #include "project_file_manifest.h"
+#include "markdown_vault_index.h"
 #include "markdown_parser.h"
 #include "markdown_extensions.h"
 #include "treesitter/languages.h"
@@ -95,6 +96,10 @@ struct AnvilWorkerJob {
   uint32_t project_progress_files;
   bool project_publish_partial_snapshots;
   bool manifest_show_unsupported_files;
+  AnvilProjectFileManifestSnapshot *manifest_snapshot;
+  uint64_t markdown_vault_shallow_bytes;
+  AnvilMarkdownVaultSnapshot *previous_markdown_vault_snapshot;
+  AnvilMarkdownVaultSnapshot *markdown_vault_snapshot_to_release;
   struct AnvilWorkerJob *cancel_parent;
 
   struct AnvilWorkerJob *next;
@@ -135,6 +140,7 @@ struct AnvilWorkerResult {
   AnvilTSProjectSnapshot *project_snapshot;
   AnvilGitStatusSnapshot *git_status_snapshot;
   AnvilProjectFileManifestSnapshot *project_file_manifest;
+  AnvilMarkdownVaultSnapshot *markdown_vault_snapshot;
   struct AnvilWorkerResult *next;
 };
 
@@ -398,6 +404,9 @@ static void job_free(AnvilWorkerJob *job) {
   free(job->status_text);
   free(job->numstat_text);
   anvil_git_status_snapshot_release(job->git_status_snapshot_to_release);
+  anvil_project_file_manifest_release(job->manifest_snapshot);
+  anvil_markdown_vault_snapshot_release(job->markdown_vault_snapshot_to_release);
+  anvil_markdown_vault_snapshot_release(job->previous_markdown_vault_snapshot);
   for (uint32_t i = 0; i < job->project_file_count; i++) {
     SDL_free((void *)job->project_files[i].path);
     SDL_free((void *)job->project_files[i].relpath);
@@ -3562,6 +3571,62 @@ static void run_project_file_manifest(AnvilWorkerContext *context, AnvilWorkerJo
   enqueue_simple_result(context->pool, job, "final");
 }
 
+static bool vault_job_cancelled(void *userdata) { return job_cancelled((AnvilWorkerJob *)userdata); }
+
+static void run_markdown_vault_index(AnvilWorkerContext *context, AnvilWorkerJob *job) {
+  AnvilMarkdownVaultBuildSpec spec = {
+    .manifest = job->manifest_snapshot,
+    .previous = job->previous_markdown_vault_snapshot,
+    .shallow_note_bytes = job->markdown_vault_shallow_bytes,
+    .cancelled = vault_job_cancelled,
+    .cancel_userdata = job,
+  };
+  char *error = NULL;
+  AnvilMarkdownVaultSnapshot *snapshot = anvil_markdown_vault_snapshot_build(&spec, &error);
+  if (!snapshot) {
+    if (job_cancelled(job) || (error && strcmp(error, "cancelled") == 0)) {
+      SDL_free(error); SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_CANCELLED);
+      enqueue_simple_result(context->pool, job, "cancelled");
+    } else {
+      SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
+      AnvilWorkerResult *result = result_new(job, "error");
+      if (result) result->error = error ? error : pool_strdup("native Markdown vault index failed"); else SDL_free(error);
+      enqueue_result(context->pool, result);
+    }
+    return;
+  }
+  AnvilWorkerResult *result = result_new(job, "result");
+  if (!result) { anvil_markdown_vault_snapshot_release(snapshot); SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED); return; }
+  result->markdown_vault_snapshot = snapshot;
+  enqueue_result(context->pool, result);
+  SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_COMPLETE);
+  enqueue_simple_result(context->pool, job, "final");
+}
+
+static void run_markdown_vault_overlay(AnvilWorkerContext *context, AnvilWorkerJob *job) {
+  char *error = NULL;
+  AnvilMarkdownVaultSnapshot *snapshot = anvil_markdown_vault_overlay_build(
+    job->path, job->relpath, job->text, job->text_len, job->markdown_vault_shallow_bytes,
+    vault_job_cancelled, job, &error
+  );
+  if (!snapshot) {
+    if (job_cancelled(job) || (error && strcmp(error, "cancelled") == 0)) {
+      SDL_free(error); SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_CANCELLED);
+      enqueue_simple_result(context->pool, job, "cancelled");
+    } else {
+      SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
+      AnvilWorkerResult *result = result_new(job, "error");
+      if (result) result->error = error ? error : pool_strdup("native Markdown vault overlay failed"); else SDL_free(error);
+      enqueue_result(context->pool, result);
+    }
+    return;
+  }
+  AnvilWorkerResult *result = result_new(job, "result");
+  if (!result) { anvil_markdown_vault_snapshot_release(snapshot); SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED); return; }
+  result->markdown_vault_snapshot = snapshot; enqueue_result(context->pool, result);
+  SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_COMPLETE); enqueue_simple_result(context->pool, job, "final");
+}
+
 static void run_job(AnvilWorkerContext *context, AnvilWorkerJob *job) {
   AnvilWorkerPool *pool = context->pool;
   SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_RUNNING);
@@ -3614,6 +3679,16 @@ static void run_job(AnvilWorkerContext *context, AnvilWorkerJob *job) {
     enqueue_simple_result(context->pool, job, "final");
   } else if (strcmp(kind, "project_file_manifest") == 0) {
     run_project_file_manifest(context, job);
+  } else if (strcmp(kind, "markdown_vault_index") == 0) {
+    run_markdown_vault_index(context, job);
+  } else if (strcmp(kind, "markdown_vault_overlay") == 0) {
+    run_markdown_vault_overlay(context, job);
+  } else if (strcmp(kind, "markdown_vault_snapshot_release") == 0) {
+    AnvilMarkdownVaultSnapshot *snapshot = job->markdown_vault_snapshot_to_release;
+    job->markdown_vault_snapshot_to_release = NULL;
+    anvil_markdown_vault_snapshot_release(snapshot);
+    SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_COMPLETE);
+    enqueue_simple_result(context->pool, job, "final");
   } else {
     SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
     AnvilWorkerResult *result = result_new(job, "error");
@@ -3831,6 +3906,15 @@ AnvilWorkerJob *anvil_worker_pool_submit(AnvilWorkerPool *pool, const AnvilWorke
     pool_set_error(error, "Project file manifest requires a root");
     return NULL;
   }
+  if (strcmp(spec->kind, "markdown_vault_index") == 0 && !spec->manifest_snapshot) {
+    pool_set_error(error, "Markdown vault index requires a Project file manifest");
+    return NULL;
+  }
+  if (strcmp(spec->kind, "markdown_vault_overlay") == 0 &&
+      (!spec->path || !spec->path[0] || !spec->relpath || !spec->relpath[0] || !spec->text)) {
+    pool_set_error(error, "Markdown vault overlay requires path, relative path, and text");
+    return NULL;
+  }
   if ((spec->status_text_len && !spec->status_text) || (spec->numstat_text_len && !spec->numstat_text) ||
       spec->status_text_len > UINT32_MAX || spec->numstat_text_len > UINT32_MAX) {
     pool_set_error(error, "Git status worker input exceeds 4GB byte limit");
@@ -3925,6 +4009,13 @@ AnvilWorkerJob *anvil_worker_pool_submit(AnvilWorkerPool *pool, const AnvilWorke
   job->project_progress_files = spec->project_progress_files ? spec->project_progress_files : 64;
   job->project_publish_partial_snapshots = spec->project_publish_partial_snapshots;
   job->manifest_show_unsupported_files = spec->manifest_show_unsupported_files;
+  job->manifest_snapshot = spec->manifest_snapshot;
+  anvil_project_file_manifest_retain(job->manifest_snapshot);
+  job->markdown_vault_shallow_bytes = spec->markdown_vault_shallow_bytes;
+  job->previous_markdown_vault_snapshot = spec->previous_markdown_vault_snapshot;
+  anvil_markdown_vault_snapshot_retain(job->previous_markdown_vault_snapshot);
+  job->markdown_vault_snapshot_to_release = spec->markdown_vault_snapshot_to_release;
+  anvil_markdown_vault_snapshot_retain(job->markdown_vault_snapshot_to_release);
   job->project_file_count = spec->project_file_count;
   if (job->project_file_count) {
     if (!spec->project_files || (size_t)job->project_file_count > SIZE_MAX / sizeof(*job->project_files)) {
@@ -4114,6 +4205,7 @@ void anvil_worker_result_free(AnvilWorkerResult *result) {
   anvil_ts_project_snapshot_release(result->project_snapshot);
   anvil_git_status_snapshot_release(result->git_status_snapshot);
   anvil_project_file_manifest_release(result->project_file_manifest);
+  anvil_markdown_vault_snapshot_release(result->markdown_vault_snapshot);
   SDL_free(result);
 }
 
@@ -4142,6 +4234,13 @@ AnvilProjectFileManifestSnapshot *anvil_worker_result_steal_project_file_manifes
   if (!result) return NULL;
   AnvilProjectFileManifestSnapshot *out = result->project_file_manifest;
   result->project_file_manifest = NULL;
+  return out;
+}
+
+AnvilMarkdownVaultSnapshot *anvil_worker_result_steal_markdown_vault_snapshot(AnvilWorkerResult *result) {
+  if (!result) return NULL;
+  AnvilMarkdownVaultSnapshot *out = result->markdown_vault_snapshot;
+  result->markdown_vault_snapshot = NULL;
   return out;
 }
 

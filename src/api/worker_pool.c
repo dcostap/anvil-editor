@@ -19,6 +19,7 @@
 #define API_TYPE_PROJECT_SNAPSHOT "NativeTreeSitterProjectSnapshot"
 #define API_TYPE_GIT_STATUS_SNAPSHOT "NativeFileTreeGitStatusSnapshot"
 #define API_TYPE_PROJECT_FILE_MANIFEST "NativeProjectFileManifestSnapshot"
+#define API_TYPE_MARKDOWN_VAULT_SNAPSHOT "NativeMarkdownVaultSnapshot"
 
 typedef struct {
   AnvilWorkerPool *pool;
@@ -51,6 +52,10 @@ typedef struct {
 typedef struct {
   AnvilProjectFileManifestSnapshot *snapshot;
 } LuaProjectFileManifest;
+
+typedef struct {
+  AnvilMarkdownVaultSnapshot *snapshot;
+} LuaMarkdownVaultSnapshot;
 
 static LuaWorkerPool *check_pool(lua_State *L, int idx) {
   LuaWorkerPool *pool = (LuaWorkerPool *)luaL_checkudata(L, idx, API_TYPE_WORKER_POOL);
@@ -98,6 +103,12 @@ static LuaProjectFileManifest *check_project_file_manifest(lua_State *L, int idx
   LuaProjectFileManifest *manifest = (LuaProjectFileManifest *)luaL_checkudata(L, idx, API_TYPE_PROJECT_FILE_MANIFEST);
   luaL_argcheck(L, manifest && manifest->snapshot, idx, "closed native Project file manifest");
   return manifest;
+}
+
+static LuaMarkdownVaultSnapshot *check_markdown_vault_snapshot(lua_State *L, int idx) {
+  LuaMarkdownVaultSnapshot *snapshot = (LuaMarkdownVaultSnapshot *)luaL_checkudata(L, idx, API_TYPE_MARKDOWN_VAULT_SNAPSHOT);
+  luaL_argcheck(L, snapshot && snapshot->snapshot, idx, "closed native Markdown vault snapshot");
+  return snapshot;
 }
 
 static int opt_int_field(lua_State *L, int table, const char *key, int def) {
@@ -286,6 +297,7 @@ static int pool_submit(lua_State *L) {
   LuaProjectBuilder *transferred_builder = NULL;
   LuaProjectSnapshot *transferred_snapshot = NULL;
   LuaGitStatusSnapshot *transferred_git_status_snapshot = NULL;
+  LuaMarkdownVaultSnapshot *transferred_markdown_vault_snapshot = NULL;
   LuaProjectSnapshot *query_snapshot = NULL;
   lua_getfield(L, 2, "project_builder");
   if (!lua_isnil(L, -1)) {
@@ -321,6 +333,25 @@ static int pool_submit(lua_State *L) {
       "release_git_status_snapshot is only valid for File Tree Git status release jobs");
     transferred_git_status_snapshot = check_git_status_snapshot(L, -1);
     spec.git_status_snapshot_to_release = transferred_git_status_snapshot->snapshot;
+  }
+  lua_pop(L, 1);
+  lua_getfield(L, 2, "manifest");
+  if (!lua_isnil(L, -1)) {
+    spec.manifest_snapshot = check_project_file_manifest(L, -1)->snapshot;
+  }
+  lua_pop(L, 1);
+  spec.markdown_vault_shallow_bytes = opt_uint32_field(L, 2, "shallow_note_bytes", 512 * 1024);
+  lua_getfield(L, 2, "previous_vault_snapshot");
+  if (!lua_isnil(L, -1)) {
+    spec.previous_markdown_vault_snapshot = check_markdown_vault_snapshot(L, -1)->snapshot;
+  }
+  lua_pop(L, 1);
+  lua_getfield(L, 2, "release_markdown_vault_snapshot");
+  if (!lua_isnil(L, -1)) {
+    luaL_argcheck(L, spec.kind && strcmp(spec.kind, "markdown_vault_snapshot_release") == 0, 2,
+      "release_markdown_vault_snapshot is only valid for Markdown vault release jobs");
+    transferred_markdown_vault_snapshot = check_markdown_vault_snapshot(L, -1);
+    spec.markdown_vault_snapshot_to_release = transferred_markdown_vault_snapshot->snapshot;
   }
   lua_pop(L, 1);
   lua_getfield(L, 2, "project_builder_id");
@@ -460,6 +491,11 @@ static int pool_submit(lua_State *L) {
     AnvilGitStatusSnapshot *snapshot = transferred_git_status_snapshot->snapshot;
     transferred_git_status_snapshot->snapshot = NULL;
     anvil_git_status_snapshot_release(snapshot);
+  }
+  if (transferred_markdown_vault_snapshot && transferred_markdown_vault_snapshot->snapshot) {
+    AnvilMarkdownVaultSnapshot *snapshot = transferred_markdown_vault_snapshot->snapshot;
+    transferred_markdown_vault_snapshot->snapshot = NULL;
+    anvil_markdown_vault_snapshot_release(snapshot);
   }
   push_job_handle(L, job);
   return 1;
@@ -914,6 +950,302 @@ static int project_file_manifest_lookup(lua_State *L) {
   AnvilProjectFileManifestRecord record;
   if (!anvil_project_file_manifest_lookup(manifest->snapshot, path, &record)) { lua_pushnil(L); return 1; }
   push_manifest_record(L, &record);
+  return 1;
+}
+
+static void push_string_list(lua_State *L, const char *const *items, uint32_t count) {
+  lua_createtable(L, (int)count, 0);
+  for (uint32_t i = 0; i < count; i++) { lua_pushstring(L, items[i]); lua_rawseti(L, -2, (int)i + 1); }
+}
+
+static void push_markdown_vault_note(lua_State *L, const AnvilMarkdownVaultNoteView *note) {
+  lua_createtable(L, 0, 18);
+  lua_pushstring(L, "note"); lua_setfield(L, -2, "kind");
+  lua_pushstring(L, note->absolute_path); lua_setfield(L, -2, "abs_path");
+  lua_pushstring(L, note->relative_path); lua_setfield(L, -2, "rel_path");
+  lua_pushstring(L, note->display_name); lua_setfield(L, -2, "display_name");
+  lua_pushnumber(L, (lua_Number)note->size); lua_setfield(L, -2, "size");
+  lua_pushnumber(L, (lua_Number)note->modified); lua_setfield(L, -2, "modified");
+  lua_pushboolean(L, note->shallow); lua_setfield(L, -2, "shallow");
+  lua_pushinteger(L, note->fact_signature); lua_setfield(L, -2, "fact_signature");
+  push_string_list(L, note->aliases, note->alias_count); lua_setfield(L, -2, "aliases");
+  push_string_list(L, note->tags, note->tag_count); lua_setfield(L, -2, "tags");
+  push_string_list(L, note->preview, note->preview_count); lua_setfield(L, -2, "embed_preview");
+  lua_createtable(L, (int)note->metadata_count, 0);
+  for (uint32_t i = 0; i < note->metadata_count; i++) {
+    const AnvilMarkdownVaultMetadataView *meta = &note->metadata[i];
+    if (!meta->list && meta->value_count == 1) lua_pushstring(L, meta->values[0]);
+    else push_string_list(L, meta->values, meta->value_count);
+    lua_setfield(L, -2, meta->key);
+  }
+  lua_setfield(L, -2, "frontmatter");
+
+  lua_createtable(L, (int)note->heading_count, 0);
+  int headings_table = lua_gettop(L);
+  lua_createtable(L, 0, (int)note->heading_count); int slug_table = lua_gettop(L);
+  lua_createtable(L, 0, (int)note->heading_count); int text_table = lua_gettop(L);
+  lua_createtable(L, 0, (int)note->heading_count); int path_table = lua_gettop(L);
+  for (uint32_t i = 0; i < note->heading_count; i++) {
+    const AnvilMarkdownVaultHeadingView *heading = &note->headings[i];
+    lua_createtable(L, 0, 8);
+    lua_pushstring(L, "heading"); lua_setfield(L, -2, "type");
+    lua_pushstring(L, heading->text); lua_setfield(L, -2, "text");
+    lua_pushstring(L, heading->slug); lua_setfield(L, -2, "slug");
+    lua_pushstring(L, heading->path_text); lua_setfield(L, -2, "path_text");
+    lua_pushstring(L, heading->path_slug); lua_setfield(L, -2, "path_slug");
+    lua_pushinteger(L, heading->line); lua_setfield(L, -2, "line");
+    lua_pushinteger(L, heading->level); lua_setfield(L, -2, "level");
+    push_string_list(L, heading->preview, heading->preview_count); lua_setfield(L, -2, "embed_preview");
+    lua_pushvalue(L, -1); lua_rawseti(L, headings_table, (int)i + 1);
+    lua_pushvalue(L, -1); lua_setfield(L, slug_table, heading->slug);
+    lua_pushvalue(L, -1); lua_setfield(L, text_table, heading->slug);
+    lua_setfield(L, path_table, heading->path_slug);
+  }
+  lua_setfield(L, -5, "headings_by_path");
+  lua_setfield(L, -4, "headings_by_text");
+  lua_setfield(L, -3, "headings_by_slug");
+  lua_setfield(L, -2, "headings");
+
+  lua_createtable(L, (int)note->block_count, 0); int blocks_table = lua_gettop(L);
+  lua_createtable(L, 0, (int)note->block_count); int blocks_by_id = lua_gettop(L);
+  for (uint32_t i = 0; i < note->block_count; i++) {
+    const AnvilMarkdownVaultBlockView *block = &note->blocks[i];
+    lua_createtable(L, 0, 6);
+    lua_pushstring(L, "block"); lua_setfield(L, -2, "type");
+    lua_pushstring(L, block->id); lua_setfield(L, -2, "id");
+    lua_pushinteger(L, block->line); lua_setfield(L, -2, "line");
+    lua_pushinteger(L, block->col1); lua_setfield(L, -2, "col1");
+    lua_pushinteger(L, block->col2); lua_setfield(L, -2, "col2");
+    push_string_list(L, block->preview, block->preview_count); lua_setfield(L, -2, "embed_preview");
+    lua_pushvalue(L, -1); lua_rawseti(L, blocks_table, (int)i + 1);
+    lua_setfield(L, blocks_by_id, block->id);
+  }
+  lua_setfield(L, -3, "blocks_by_id"); lua_setfield(L, -2, "blocks");
+
+  lua_createtable(L, (int)note->link_count, 0);
+  for (uint32_t i = 0; i < note->link_count; i++) {
+    const AnvilMarkdownVaultLinkView *link = &note->links[i];
+    lua_createtable(L, 0, 8);
+    lua_pushstring(L, link->kind); lua_setfield(L, -2, "kind");
+    lua_pushstring(L, link->raw_target); lua_setfield(L, -2, "raw_target");
+    lua_pushstring(L, link->path); lua_setfield(L, -2, "path");
+    if (link->alias) { lua_pushstring(L, link->alias); lua_setfield(L, -2, "alias"); }
+    lua_pushinteger(L, link->source_line); lua_setfield(L, -2, "source_line");
+    lua_pushinteger(L, link->source_col1); lua_setfield(L, -2, "source_col1");
+    lua_pushinteger(L, link->source_col2); lua_setfield(L, -2, "source_col2");
+    if (link->subtarget) {
+      lua_createtable(L, 0, 2);
+      lua_pushstring(L, link->block_subtarget ? "block" : "heading"); lua_setfield(L, -2, "type");
+      lua_pushstring(L, link->subtarget); lua_setfield(L, -2, link->block_subtarget ? "id" : "text");
+      lua_setfield(L, -2, "subtarget");
+    }
+    lua_rawseti(L, -2, (int)i + 1);
+  }
+  lua_setfield(L, -2, "outbound_links");
+}
+
+static void push_markdown_vault_attachment(lua_State *L, const AnvilMarkdownVaultAttachmentView *entry) {
+  lua_createtable(L, 0, 6);
+  lua_pushstring(L, "attachment"); lua_setfield(L, -2, "kind");
+  lua_pushstring(L, entry->absolute_path); lua_setfield(L, -2, "abs_path");
+  lua_pushstring(L, entry->relative_path); lua_setfield(L, -2, "rel_path");
+  lua_pushstring(L, entry->display_name); lua_setfield(L, -2, "display_name");
+  lua_pushnumber(L, (lua_Number)entry->size); lua_setfield(L, -2, "size");
+  lua_pushnumber(L, (lua_Number)entry->modified); lua_setfield(L, -2, "modified");
+}
+
+static void push_markdown_vault_handle(lua_State *L, AnvilMarkdownVaultSnapshot *snapshot) {
+  LuaMarkdownVaultSnapshot *lua_snapshot = (LuaMarkdownVaultSnapshot *)lua_newuserdata(L, sizeof(*lua_snapshot));
+  lua_snapshot->snapshot = snapshot; luaL_getmetatable(L, API_TYPE_MARKDOWN_VAULT_SNAPSHOT); lua_setmetatable(L, -2);
+}
+
+static int markdown_vault_close(lua_State *L) {
+  LuaMarkdownVaultSnapshot *snapshot = (LuaMarkdownVaultSnapshot *)luaL_checkudata(L, 1, API_TYPE_MARKDOWN_VAULT_SNAPSHOT);
+  bool released = snapshot && snapshot->snapshot;
+  if (released) { anvil_markdown_vault_snapshot_release(snapshot->snapshot); snapshot->snapshot = NULL; }
+  lua_pushboolean(L, released); return 1;
+}
+
+static int markdown_vault_summary(lua_State *L) {
+  LuaMarkdownVaultSnapshot *snapshot = check_markdown_vault_snapshot(L, 1); AnvilMarkdownVaultSummary summary;
+  anvil_markdown_vault_snapshot_summary(snapshot->snapshot, &summary); lua_createtable(L, 0, 11);
+#define SET_VAULT_SUMMARY(name) do { lua_pushnumber(L, (lua_Number)summary.name); lua_setfield(L, -2, #name); } while (0)
+  SET_VAULT_SUMMARY(note_count); SET_VAULT_SUMMARY(attachment_count); SET_VAULT_SUMMARY(headings);
+  SET_VAULT_SUMMARY(blocks); SET_VAULT_SUMMARY(links); SET_VAULT_SUMMARY(bytes_read);
+  SET_VAULT_SUMMARY(shallow_notes); SET_VAULT_SUMMARY(failed_notes);
+  SET_VAULT_SUMMARY(reused_notes); SET_VAULT_SUMMARY(rebuilt_notes);
+#undef SET_VAULT_SUMMARY
+  lua_pushnumber(L, summary.build_ms); lua_setfield(L, -2, "build_ms"); return 1;
+}
+
+static int markdown_vault_note(lua_State *L) {
+  LuaMarkdownVaultSnapshot *snapshot = check_markdown_vault_snapshot(L, 1); const char *path = luaL_checkstring(L, 2); uint32_t index;
+  AnvilMarkdownVaultNoteView note;
+  if (!anvil_markdown_vault_note_lookup(snapshot->snapshot, path, &index) || !anvil_markdown_vault_note_at(snapshot->snapshot, index, &note)) { lua_pushnil(L); return 1; }
+  push_markdown_vault_note(L, &note); return 1;
+}
+
+static int markdown_vault_attachment(lua_State *L) {
+  LuaMarkdownVaultSnapshot *snapshot = check_markdown_vault_snapshot(L, 1); const char *path = luaL_checkstring(L, 2); uint32_t index;
+  AnvilMarkdownVaultAttachmentView entry;
+  if (!anvil_markdown_vault_attachment_lookup(snapshot->snapshot, path, &index) || !anvil_markdown_vault_attachment_at(snapshot->snapshot, index, &entry)) { lua_pushnil(L); return 1; }
+  push_markdown_vault_attachment(L, &entry); return 1;
+}
+
+static int markdown_vault_resolve(lua_State *L, bool attachments) {
+  LuaMarkdownVaultSnapshot *snapshot = check_markdown_vault_snapshot(L, 1); const char *target = luaL_checkstring(L, 2);
+  uint32_t total = attachments ? anvil_markdown_vault_resolve_attachments(snapshot->snapshot, target, NULL, 0)
+    : anvil_markdown_vault_resolve_notes(snapshot->snapshot, target, NULL, 0);
+  uint32_t count = total > 64 ? 64 : total; uint32_t *indices = count ? (uint32_t *)SDL_malloc((size_t)count * sizeof(*indices)) : NULL;
+  if (count) {
+    if (attachments) anvil_markdown_vault_resolve_attachments(snapshot->snapshot, target, indices, count);
+    else anvil_markdown_vault_resolve_notes(snapshot->snapshot, target, indices, count);
+  }
+  lua_createtable(L, (int)count, 2);
+  for (uint32_t i = 0; i < count; i++) {
+    if (attachments) { AnvilMarkdownVaultAttachmentView entry; anvil_markdown_vault_attachment_at(snapshot->snapshot, indices[i], &entry); push_markdown_vault_attachment(L, &entry); }
+    else { AnvilMarkdownVaultNoteView note; anvil_markdown_vault_note_at(snapshot->snapshot, indices[i], &note); push_markdown_vault_note(L, &note); }
+    lua_rawseti(L, -2, (int)i + 1);
+  }
+  lua_pushinteger(L, total); lua_setfield(L, -2, "total"); lua_pushboolean(L, total > count); lua_setfield(L, -2, "truncated");
+  SDL_free(indices); return 1;
+}
+static int markdown_vault_resolve_notes_lua(lua_State *L) { return markdown_vault_resolve(L, false); }
+static int markdown_vault_resolve_attachments_lua(lua_State *L) { return markdown_vault_resolve(L, true); }
+
+static int markdown_vault_linked_notes_lua(lua_State *L) {
+  LuaMarkdownVaultSnapshot *snapshot = check_markdown_vault_snapshot(L, 1); const char *target = luaL_checkstring(L, 2);
+  uint32_t total = anvil_markdown_vault_linked_notes(snapshot->snapshot, target, NULL, 0);
+  uint32_t count = total > 4096 ? 4096 : total; uint32_t *indices = count ? (uint32_t *)SDL_malloc((size_t)count * sizeof(*indices)) : NULL;
+  if (count) anvil_markdown_vault_linked_notes(snapshot->snapshot, target, indices, count);
+  lua_createtable(L, (int)count, 1);
+  for (uint32_t i = 0; i < count; i++) { AnvilMarkdownVaultNoteView note; anvil_markdown_vault_note_at(snapshot->snapshot, indices[i], &note); push_markdown_vault_note(L, &note); lua_rawseti(L, -2, (int)i + 1); }
+  lua_pushinteger(L, total); lua_setfield(L, -2, "total"); SDL_free(indices); return 1;
+}
+
+static bool lua_contains_ci(const char *text, const char *query) {
+  if (!query || !query[0]) return true;
+  size_t qlen = strlen(query);
+  for (const char *start = text ? text : ""; *start; start++) {
+    size_t i = 0;
+    while (i < qlen && start[i] && SDL_tolower((unsigned char)start[i]) == SDL_tolower((unsigned char)query[i])) i++;
+    if (i == qlen) return true;
+  }
+  return false;
+}
+
+static char *lua_strip_markdown_extension(const char *path) {
+  size_t len = strlen(path); const char *dot = strrchr(path, '.');
+  if (dot && (SDL_strcasecmp(dot, ".md") == 0 || SDL_strcasecmp(dot, ".markdown") == 0 || SDL_strcasecmp(dot, ".mdown") == 0)) len = (size_t)(dot - path);
+  char *copy = (char *)SDL_malloc(len + 1); if (!copy) return NULL; memcpy(copy, path, len); copy[len] = '\0'; return copy;
+}
+
+static char *lua_relative_markdown_target(const char *source_path, const char *target_path) {
+  char *source = SDL_strdup(source_path ? source_path : ""), *target = SDL_strdup(target_path ? target_path : "");
+  if (!source || !target) { SDL_free(source); SDL_free(target); return NULL; }
+  for (char *c = source; *c; c++) if (*c == '\\') *c = '/';
+  for (char *c = target; *c; c++) if (*c == '\\') *c = '/';
+  char *slash = strrchr(source, '/'); if (slash) *slash = '\0';
+  size_t common = 0, last_separator = 0; bool target_inside_source = false;
+  while (source[common] && target[common] && SDL_tolower((unsigned char)source[common]) == SDL_tolower((unsigned char)target[common])) {
+    if (source[common] == '/') last_separator = common + 1;
+    common++;
+  }
+  if (!source[common] && target[common] == '/') { last_separator = common + 1; target_inside_source = true; }
+  size_t ups = 0; for (size_t i = last_separator; source[i]; i++) if (source[i] == '/') ups++;
+  if (!target_inside_source && source[last_separator]) ups++;
+  const char *remainder = target + last_separator;
+  size_t bytes = ups * 3 + strlen(remainder) + 3;
+  char *result = (char *)SDL_calloc(bytes, 1);
+  if (result) {
+    for (size_t i = 0; i < ups; i++) strcat(result, "../");
+    strcat(result, remainder);
+    char *without = lua_strip_markdown_extension(result);
+    if (without) { SDL_free(result); result = without; }
+    if (!strchr(result, '/') && strncmp(result, "..", 2) != 0) {
+      char *local = (char *)SDL_malloc(strlen(result) + 3); if (local) { strcpy(local, "./"); strcat(local, result); SDL_free(result); result = local; }
+    }
+  }
+  SDL_free(source); SDL_free(target); return result;
+}
+
+static char *markdown_completion_note_target(AnvilMarkdownVaultSnapshot *snapshot,
+  const AnvilMarkdownVaultNoteView *note, const char *policy, const char *source_path) {
+  char *rel = lua_strip_markdown_extension(note->relative_path);
+  if (!rel) return NULL;
+  if (policy && strcmp(policy, "root") == 0) return rel;
+  if (policy && strcmp(policy, "relative") == 0 && source_path && source_path[0]) {
+    SDL_free(rel); return lua_relative_markdown_target(source_path, note->absolute_path);
+  }
+  uint32_t matches[2];
+  uint32_t count = anvil_markdown_vault_resolve_notes(snapshot, note->display_name, matches, 2);
+  if (count == 1) { SDL_free(rel); return SDL_strdup(note->display_name); }
+  count = anvil_markdown_vault_resolve_notes(snapshot, rel, matches, 2);
+  if (count == 1) return rel;
+  SDL_free(rel); return SDL_strdup(note->relative_path);
+}
+
+static void push_completion_candidate(lua_State *L, const char *text, const char *target, const char *kind,
+  const char *path, const char *rel_path, uint32_t line, const char *info) {
+  lua_createtable(L, 0, 7);
+  lua_pushstring(L, text); lua_setfield(L, -2, "text"); lua_pushstring(L, target); lua_setfield(L, -2, "target");
+  lua_pushstring(L, kind); lua_setfield(L, -2, "kind"); lua_pushstring(L, path); lua_setfield(L, -2, "path");
+  lua_pushstring(L, rel_path); lua_setfield(L, -2, "rel_path"); lua_pushinteger(L, line); lua_setfield(L, -2, "line");
+  lua_pushstring(L, info ? info : rel_path); lua_setfield(L, -2, "info");
+}
+
+static int markdown_vault_completion(lua_State *L) {
+  LuaMarkdownVaultSnapshot *lua_snapshot = check_markdown_vault_snapshot(L, 1);
+  AnvilMarkdownVaultSnapshot *snapshot = lua_snapshot->snapshot;
+  const char *mode = luaL_checkstring(L, 2), *query = luaL_optstring(L, 3, ""), *source = luaL_optstring(L, 4, "");
+  const char *policy = luaL_optstring(L, 5, "shortest_unique");
+  uint32_t limit = (uint32_t)luaL_optinteger(L, 6, 200); if (!limit) limit = 1; if (limit > 4096) limit = 4096;
+  AnvilMarkdownVaultSummary summary; anvil_markdown_vault_snapshot_summary(snapshot, &summary);
+  lua_createtable(L, (int)limit, 0); uint32_t out = 0;
+  uint32_t source_index = 0; bool has_source = source[0] && anvil_markdown_vault_note_lookup(snapshot, source, &source_index);
+  for (uint32_t i = 0; out < limit && i < summary.note_count; i++) {
+    AnvilMarkdownVaultNoteView note; if (!anvil_markdown_vault_note_at(snapshot, i, &note)) continue;
+    bool current = has_source && i == source_index;
+    if (strcmp(mode, "note") == 0) {
+      char *target = markdown_completion_note_target(snapshot, &note, policy, source);
+      if (target && (lua_contains_ci(note.display_name, query) || lua_contains_ci(target, query) || lua_contains_ci(note.relative_path, query))) {
+        push_completion_candidate(L, note.display_name, target, "note", note.absolute_path, note.relative_path, 1, note.relative_path); lua_rawseti(L, -2, ++out);
+      }
+      for (uint32_t a = 0; target && out < limit && a < note.alias_count; a++) if (lua_contains_ci(note.aliases[a], query)) {
+        size_t bytes = strlen(target) + strlen(note.aliases[a]) + 2; char *alias_target = (char *)SDL_malloc(bytes);
+        if (alias_target) { SDL_snprintf(alias_target, bytes, "%s|%s", target, note.aliases[a]); push_completion_candidate(L, note.aliases[a], alias_target, "alias", note.absolute_path, note.relative_path, 1, note.relative_path); lua_rawseti(L, -2, ++out); SDL_free(alias_target); }
+      }
+      SDL_free(target);
+    } else if ((strcmp(mode, "current_heading") == 0 && current) || strcmp(mode, "global_heading") == 0) {
+      char *note_target = markdown_completion_note_target(snapshot, &note, policy, source);
+      for (uint32_t h = 0; note_target && out < limit && h < note.heading_count; h++) {
+        const AnvilMarkdownVaultHeadingView *heading = &note.headings[h]; const char *heading_text = heading->path_text[0] ? heading->path_text : heading->text;
+        if (!lua_contains_ci(heading_text, query)) continue;
+        size_t bytes = strlen(note_target) + strlen(heading_text) + 2; char *target = (char *)SDL_malloc(bytes);
+        if (!target) continue;
+        if (strcmp(mode, "current_heading") == 0) SDL_snprintf(target, bytes, "#%s", heading_text);
+        else SDL_snprintf(target, bytes, "%s#%s", note_target, heading_text);
+        push_completion_candidate(L, heading_text, target, "heading", note.absolute_path, note.relative_path, heading->line, note.relative_path); lua_rawseti(L, -2, ++out); SDL_free(target);
+      }
+      SDL_free(note_target);
+    } else if ((strcmp(mode, "current_block") == 0 && current) || strcmp(mode, "global_block") == 0) {
+      char *note_target = markdown_completion_note_target(snapshot, &note, policy, source);
+      for (uint32_t b = 0; note_target && out < limit && b < note.block_count; b++) {
+        const AnvilMarkdownVaultBlockView *block = &note.blocks[b]; if (!lua_contains_ci(block->id, query)) continue;
+        size_t bytes = strlen(note_target) + strlen(block->id) + 3; char *target = (char *)SDL_malloc(bytes); if (!target) continue;
+        if (strcmp(mode, "current_block") == 0) SDL_snprintf(target, bytes, "^%s", block->id);
+        else SDL_snprintf(target, bytes, "%s#^%s", note_target, block->id);
+        push_completion_candidate(L, block->id, target, "block", note.absolute_path, note.relative_path, block->line, note.relative_path); lua_rawseti(L, -2, ++out); SDL_free(target);
+      }
+      SDL_free(note_target);
+    }
+  }
+  if (strcmp(mode, "note") == 0) for (uint32_t i = 0; out < limit && i < summary.attachment_count; i++) {
+    AnvilMarkdownVaultAttachmentView entry; if (!anvil_markdown_vault_attachment_at(snapshot, i, &entry)) continue;
+    if (lua_contains_ci(entry.display_name, query) || lua_contains_ci(entry.relative_path, query)) {
+      push_completion_candidate(L, entry.display_name, entry.relative_path, "attachment", entry.absolute_path, entry.relative_path, 1, entry.relative_path); lua_rawseti(L, -2, ++out);
+    }
+  }
   return 1;
 }
 
@@ -1751,6 +2083,12 @@ static void push_result(lua_State *L, AnvilWorkerResult *result) {
     lua_getfield(L, -2, "manifest"); lua_setfield(L, -2, "manifest");
     lua_setfield(L, -2, "payload");
   }
+  AnvilMarkdownVaultSnapshot *vault_snapshot = anvil_worker_result_steal_markdown_vault_snapshot(result);
+  if (vault_snapshot) {
+    push_markdown_vault_handle(L, vault_snapshot); lua_setfield(L, -2, "vault_snapshot");
+    lua_getfield(L, -1, "payload"); if (!lua_istable(L, -1)) { lua_pop(L, 1); lua_createtable(L, 0, 1); }
+    lua_getfield(L, -2, "vault_snapshot"); lua_setfield(L, -2, "vault_snapshot"); lua_setfield(L, -2, "payload");
+  }
   const char *error = anvil_worker_result_error(result);
   if (error) {
     lua_pushstring(L, error);
@@ -2044,6 +2382,19 @@ static const luaL_Reg project_file_manifest_methods[] = {
   { NULL, NULL }
 };
 
+static const luaL_Reg markdown_vault_snapshot_methods[] = {
+  { "summary", markdown_vault_summary },
+  { "note", markdown_vault_note },
+  { "attachment", markdown_vault_attachment },
+  { "resolve_notes", markdown_vault_resolve_notes_lua },
+  { "resolve_attachments", markdown_vault_resolve_attachments_lua },
+  { "linked_notes", markdown_vault_linked_notes_lua },
+  { "completion", markdown_vault_completion },
+  { "close", markdown_vault_close },
+  { "__gc", markdown_vault_close },
+  { NULL, NULL }
+};
+
 static const luaL_Reg lib[] = {
   { "new", f_new },
   { "new_project_builder", f_new_project_builder },
@@ -2100,6 +2451,10 @@ int luaopen_worker_pool_native(lua_State *L) {
   lua_setfield(L, -2, "__index");
   luaL_setfuncs(L, project_file_manifest_methods, 0);
   lua_pop(L, 1);
+
+  luaL_newmetatable(L, API_TYPE_MARKDOWN_VAULT_SNAPSHOT);
+  lua_pushvalue(L, -1); lua_setfield(L, -2, "__index");
+  luaL_setfuncs(L, markdown_vault_snapshot_methods, 0); lua_pop(L, 1);
 
   luaL_newlib(L, lib);
   return 1;

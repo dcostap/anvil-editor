@@ -21,6 +21,7 @@ anvil_sources = [
     'markdown_parser.c',
     'markdown_extensions.c',
     'project_file_manifest.c',
+    'markdown_vault_index.c',
     'treesitter/languages.c',
     'treesitter/project_file.c',
     'treesitter/project_index.c',
@@ -222,6 +223,21 @@ project_file_manifest_test = executable('project_file_manifest_test',
 )
 test('project-file-manifest', project_file_manifest_test, env: anvil_test_env)
 
+markdown_vault_index_test = executable('markdown_vault_index_test',
+    [
+        '../tests/native/markdown_vault_index_test.c',
+        'project_file_manifest.c',
+        'markdown_vault_index.c',
+        'markdown_parser.c',
+        'treesitter/languages.c',
+        'treesitter/snapshot.c',
+    ],
+    include_directories: anvil_includes,
+    dependencies: [tree_sitter_dep, tree_sitter_c_dep, tree_sitter_cpp_dep, tree_sitter_odin_dep, tree_sitter_kotlin_dep, tree_sitter_markdown_dep, tree_sitter_markdown_inline_dep, sdl_dep],
+    c_args: anvil_cargs,
+)
+test('markdown-vault-index', markdown_vault_index_test, env: anvil_test_env)
+
 worker_pool_test = executable('worker_pool_test',
     [
         '../tests/native/worker_pool_test.c',
@@ -229,6 +245,7 @@ worker_pool_test = executable('worker_pool_test',
         'fuzzy.c',
         'git_status_index.c',
         'project_file_manifest.c',
+        'markdown_vault_index.c',
         'markdown_parser.c',
         'markdown_extensions.c',
         'treesitter/languages.c',

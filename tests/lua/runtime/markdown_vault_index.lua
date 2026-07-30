@@ -459,6 +459,9 @@ test.describe("Markdown vault index", function()
       local doc = Doc(ghost_path, ghost_path, true)
       doc:insert(1, 1, "# Unsaved\n")
       index:track_doc(doc)
+      test.ok(wait_until(function()
+        return index:resolve(wiki("[[Ghost]]"), source_path).status == "resolved"
+      end), "unsaved overlay was not published")
       test.equal(index:resolve(wiki("[[Ghost]]"), source_path).status, "resolved")
       doc:on_close()
       test.equal(index:resolve(wiki("[[Ghost]]"), source_path).status, "missing")
@@ -501,10 +504,14 @@ test.describe("Markdown vault index", function()
     local doc = Doc(note_path, note_path, true)
     -- Doc:set_filename automatically tracks the new Document before its test
     -- contents are inserted. Remove that empty overlay so the explicit track
-    -- below establishes the intended baseline synchronously.
+    -- below establishes the intended baseline.
     test.ok(index:untrack_doc(doc))
     doc:insert(1, 1, table.concat(lines, "\n") .. "\n")
     test.ok(index:track_doc(doc))
+    test.ok(wait_until(function()
+      local entry = index:note(note_path)
+      return entry and entry.doc == doc and index.doc_overlay_jobs[doc] == nil
+    end), "baseline native overlay was not published")
     local generation = index.generation
     local updates = index.diagnostics.doc_updates
 
@@ -741,10 +748,16 @@ test.describe("Markdown vault index", function()
       local doc = Doc(old_path, old_path, true)
       doc:insert(1, 1, "# Old\n")
       old_index:track_doc(doc)
+      test.ok(wait_until(function()
+        return old_index:resolve(wiki("[[Old]]"), source_path).status == "resolved"
+      end), "old-root overlay was not published")
       test.equal(old_index:resolve(wiki("[[Old]]"), source_path).status, "resolved")
       doc:set_filename(new_path, new_path)
       doc:insert(2, 1, "# New Heading\n")
       test.equal(old_index:resolve(wiki("[[New]]"), source_path).status, "missing")
+      test.ok(wait_until(function()
+        return new_index:resolve(wiki("[[New]]"), new_path).status == "resolved"
+      end), "new-root overlay was not published")
       test.equal(new_index:resolve(wiki("[[New]]"), new_path).status, "resolved")
     end)
 

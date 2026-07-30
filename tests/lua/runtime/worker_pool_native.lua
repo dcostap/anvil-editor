@@ -172,6 +172,26 @@ test.describe("worker_pool_native", function()
     test.ok(common.rm(root, true))
   end)
 
+  test.test("Markdown vault overlay jobs publish bounded note facts", function()
+    local pool = new_pool("lua-native-markdown-overlay", 1)
+    test.not_nil(pool:submit({
+      kind = "markdown_vault_overlay",
+      path = "C:/vault/Note.md",
+      relpath = "Note.md",
+      text = "---\naliases: [Draft]\n---\n# Unsaved\n\ntext ^block\n",
+    }))
+    local snapshot
+    test.ok(drain_until(pool, function(message)
+      if message.type == "result" then snapshot = message.vault_snapshot end
+      return message.type == "final"
+    end))
+    local note = test.not_nil(test.not_nil(snapshot):note("C:/vault/Note.md"))
+    test.same(note.aliases, { "Draft" })
+    test.equal(note.headings_by_slug.unsaved.line, 4)
+    test.equal(note.blocks_by_id.block.line, 6)
+    snapshot:close()
+  end)
+
   test.test("Tree-sitter index job returns bounded result handle", function()
     local pool = new_pool("lua-native-treesitter-index", 1)
     local handle = pool:submit({

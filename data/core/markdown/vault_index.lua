@@ -108,11 +108,11 @@ local function is_markdown(path)
 end
 
 local function note_entry_for_explicit_path(index, abs)
-  local entry = index.notes_by_abs[path_key(abs)]
+  local entry = index:note(abs)
   if entry then return entry end
   if extension(abs) then return nil end
   for _, ext in ipairs(MARKDOWN_EXTENSION_LIST) do
-    entry = index.notes_by_abs[path_key(abs .. "." .. ext)]
+    entry = index:note(abs .. "." .. ext)
     if entry then return entry end
   end
 end
@@ -184,90 +184,6 @@ local function unique_item(item)
   return item
 end
 
-local function unquote_scalar(value)
-  value = trim(value)
-  local first, last = value:sub(1, 1), value:sub(-1)
-  if #value >= 2 and ((first == "\"" and last == "\"") or (first == "'" and last == "'")) then
-    value = value:sub(2, -2)
-  end
-  return trim(value)
-end
-
-local function parse_inline_list(value)
-  local values = {}
-  if value:sub(1, 1) ~= "[" or value:sub(-1) ~= "]" then return nil end
-  local body, start, quote, escaped = value:sub(2, -2), 1, nil, false
-  for i = 1, #body + 1 do
-    local char = body:sub(i, i)
-    if escaped then
-      escaped = false
-    elseif quote == '"' and char == "\\" then
-      escaped = true
-    elseif quote then
-      if char == quote then quote = nil end
-    elseif char == '"' or char == "'" then
-      quote = char
-    elseif char == "," or i > #body then
-      local item = unquote_scalar(body:sub(start, i - 1))
-      if item ~= "" then values[#values + 1] = item end
-      start = i + 1
-    end
-  end
-  return values
-end
-
-local function parse_frontmatter_metadata(text)
-  local result = { aliases = {}, tags = {}, values = {} }
-  local body = (text or ""):gsub("\r\n", "\n")
-  local delimiter = body:match("^(%-%-%-)\n") or body:match("^(%+%+%+)\n")
-  if not delimiter then return result end
-  local finish = body:find("\n" .. delimiter:gsub("(%W)", "%%%1") .. "\n", #delimiter + 2)
-  if not finish then return result end
-
-  local current_key
-  local frontmatter = body:sub(#delimiter + 2, finish - 1)
-  for line in (frontmatter .. "\n"):gmatch("(.-)\n") do
-    local key, value = line:match("^([%w_%-]+):%s*(.-)%s*$")
-    if key then
-      current_key = key:lower()
-      local list = parse_inline_list(value)
-      if list then
-        result.values[current_key] = list
-      elseif value ~= "" then
-        result.values[current_key] = unquote_scalar(value)
-      else
-        result.values[current_key] = {}
-      end
-    elseif current_key then
-      local item = line:match("^%s+%-%s*(.-)%s*$")
-      if item then
-        local values = result.values[current_key]
-        if type(values) ~= "table" then values = {}; result.values[current_key] = values end
-        item = unquote_scalar(item)
-        if item ~= "" then values[#values + 1] = item end
-      elseif line:match("^%S") then
-        current_key = nil
-      end
-    end
-  end
-
-  local function collect(keys, destination, normalize)
-    for _, key in ipairs(keys) do
-      local values = result.values[key]
-      if values ~= nil then
-        if type(values) ~= "table" then values = { values } end
-        for _, value in ipairs(values) do
-          value = normalize and normalize(value) or value
-          if value ~= "" then destination[#destination + 1] = value end
-        end
-      end
-    end
-  end
-  collect({ "aliases", "alias" }, result.aliases)
-  collect({ "tags", "tag" }, result.tags, function(value) return value:gsub("^#", "") end)
-  return result
-end
-
 local Index = {}
 Index.__index = Index
 
@@ -289,6 +205,8 @@ function Index:new(root)
     attachment_keys = {},
     attachment_keys_ci = {},
     doc_listeners = setmetatable({}, { __mode = "k" }),
+    doc_overlays = setmetatable({}, { __mode = "k" }),
+    doc_overlay_jobs = setmetatable({}, { __mode = "k" }),
     consumers = {},
     watcher = nil,
     watcher_serial = 0,
@@ -297,6 +215,7 @@ function Index:new(root)
     pending_scan_dirs = {},
     subtree_scan_running = false,
     doc_update_serials = setmetatable({}, { __mode = "k" }),
+    doc_overlay_serials = setmetatable({}, { __mode = "k" }),
     watch_dir_limit = MAX_NATIVE_WATCH_DIRS,
     watch_dir_count = 0,
     watcher_mode = "stopped",
@@ -307,6 +226,7 @@ function Index:new(root)
       degraded_rescans = 0,
       last_rebuild = nil,
     },
+    removed_paths = {},
   }, self)
 end
 
@@ -351,16 +271,36 @@ function Index:clear()
   self.attachment_keys_ci = {}
 end
 
+local function release_vault_snapshot(snapshot)
+  if not snapshot then return end
+  local pool = worker_pool.current_system()
+  if not pool then snapshot:close(); return end
+  local handle = pool:submit {
+    kind = "markdown-vault-snapshot-release",
+    priority = "background",
+    native = true,
+    native_kind = "markdown_vault_snapshot_release",
+    native_payload = { release_markdown_vault_snapshot = snapshot },
+  }
+  if not handle then snapshot:close() end
+end
+
 function Index:note(path)
   if type(path) ~= "string" or path == "" then return nil end
   local absolute = common.is_absolute_path(path) and path or join_path(self.root, path)
-  return note_entry_for_explicit_path(self, common.normalize_path(absolute))
+  absolute = common.normalize_path(absolute)
+  if self.removed_paths[path_key(absolute)] then return nil end
+  local overlay = self.notes_by_abs[path_key(absolute)]
+  if overlay then return overlay end
+  return self.disk_snapshot and self.disk_snapshot:note(absolute) or nil
 end
 
 function Index:attachment(path)
   if type(path) ~= "string" or path == "" then return nil end
   local absolute = common.is_absolute_path(path) and path or join_path(self.root, path)
+  absolute = common.normalize_path(absolute)
   return self.attachments_by_abs[path_key(absolute)]
+    or (self.disk_snapshot and self.disk_snapshot:attachment(absolute))
 end
 
 function Index:remove_path_entry(path)
@@ -440,161 +380,17 @@ function Index:add_attachment_entry(entry)
 end
 
 function Index:remove_path(path)
+  local existing = self:note(path) or self:attachment(path)
   local removed = self:remove_path_entry(path)
-  if removed then
+  if existing then
+    self.removed_paths[path_key(path)] = { path = common.normalize_path(path), serial = self.rebuild_serial }
+  end
+  if removed or existing then
     self.generation = self.generation + 1
     self:notify("path-removed", path)
     return true
   end
   return false
-end
-
-local function embed_source_lines(text)
-  local lines = {}
-  local normalized = (text or ""):gsub("\r\n", "\n")
-  for line in (normalized .. "\n"):gmatch("(.-)\n") do lines[#lines + 1] = line end
-  return lines
-end
-
-local function clean_embed_line(line)
-  line = trim(line)
-  line = line:gsub("^#+%s*", "")
-  -- Guard suffix patterns by their required literal. Without this, Lua's
-  -- unanchored leading whitespace repetition backtracks quadratically over
-  -- long padded table cells that do not contain a heading marker or block id.
-  if line:find("#%s*$") then line = line:gsub("%s*#+%s*$", "") end
-  if line:find("%^[%w%-]+%s*$") then line = line:gsub("%s+%^[%w%-]+%s*$", "") end
-  if #line > 240 then line = line:sub(1, 237) .. "..." end
-  return line
-end
-
-local function collect_embed_preview(lines, line1, line2, limit)
-  local preview = {}
-  for line = math.max(1, line1 or 1), math.min(#lines, line2 or #lines) do
-    local value = clean_embed_line(lines[line] or "")
-    if value ~= "" and value ~= "---" and value ~= "+++" then
-      preview[#preview + 1] = value
-      if #preview >= limit then break end
-    end
-  end
-  return preview
-end
-
-local function attach_embed_previews(text, anchor_index)
-  local lines = embed_source_lines(text)
-  local note_line1 = 1
-  local delimiter = lines[1]
-  if delimiter == "---" or delimiter == "+++" then
-    for i = 2, #lines do
-      if lines[i] == delimiter then note_line1 = i + 1 break end
-    end
-  end
-  local note_preview = collect_embed_preview(lines, note_line1, #lines, 3)
-  local headings = anchor_index.headings or {}
-  for i, heading in ipairs(headings) do
-    local line2 = #lines
-    for j = i + 1, #headings do
-      if (headings[j].level or 1) <= (heading.level or 1) then
-        line2 = headings[j].line - 1
-        break
-      end
-    end
-    heading.embed_preview = collect_embed_preview(lines, heading.line + 1, line2, 2)
-  end
-  for _, block in ipairs(anchor_index.blocks or {}) do
-    block.embed_preview = collect_embed_preview(lines, block.line, block.line, 1)
-  end
-  return note_preview
-end
-
-local function note_fact_signature(entry)
-  local parts = {}
-  local function add(...)
-    for i = 1, select("#", ...) do parts[#parts + 1] = tostring(select(i, ...)) end
-    parts[#parts + 1] = "\0"
-  end
-  for _, value in ipairs(entry.aliases or {}) do add("alias", value) end
-  for _, value in ipairs(entry.tags or {}) do add("tag", value) end
-  for _, value in ipairs(entry.embed_preview or {}) do add("preview", value) end
-  for _, heading in ipairs(entry.headings or {}) do
-    add("heading", heading.text, heading.line, heading.level, heading.path_slug)
-    for _, value in ipairs(heading.embed_preview or {}) do add("heading-preview", value) end
-  end
-  for _, block in ipairs(entry.blocks or {}) do
-    add("block", block.id, block.line)
-    for _, value in ipairs(block.embed_preview or {}) do add("block-preview", value) end
-  end
-  for _, link in ipairs(entry.outbound_links or {}) do
-    add("link", link.kind, link.source_line, link.source_col1, link.source_col2,
-      link.raw_target, link.alias)
-  end
-  return table.concat(parts)
-end
-
-function Index:make_note_entry(path, text, opts)
-  opts = opts or {}
-  local file_info = opts.file_info or system.get_file_info(path)
-  text = text or (not opts.shallow and read_file(path)) or ""
-  local anchor_index, parsed
-  if opts.shallow then
-    anchor_index = { headings = {}, blocks = {} }
-    parsed = { links = {} }
-  else
-    parsed = parser.parse(text)
-    anchor_index = anchors.index_document(parsed)
-  end
-  local headings_by_slug = {}
-  local headings_by_text = {}
-  local headings_by_path = {}
-  local blocks_by_id = {}
-  for _, heading in ipairs(anchor_index.headings) do
-    headings_by_slug[heading.slug] = heading
-    headings_by_text[anchors.normalize_heading(heading.text or "")] = heading
-    if heading.path_slug and heading.path_slug ~= "" then
-      headings_by_path[heading.path_slug] = heading
-    end
-  end
-  for _, block in ipairs(anchor_index.blocks) do
-    blocks_by_id[block.id] = block
-  end
-
-  local rel = self:relative_path(path)
-  local display_name = display_basename(strip_markdown_extension(rel))
-  local metadata = parse_frontmatter_metadata(text)
-  local embed_preview = attach_embed_previews(text, anchor_index)
-  local entry = {
-    kind = "note",
-    abs_path = common.normalize_path(path),
-    rel_path = rel,
-    display_name = display_name,
-    aliases = metadata.aliases,
-    tags = metadata.tags,
-    frontmatter = metadata.values,
-    embed_preview = embed_preview,
-    outbound_links = parsed.links or {},
-    headings = anchor_index.headings,
-    headings_by_slug = headings_by_slug,
-    headings_by_text = headings_by_text,
-    headings_by_path = headings_by_path,
-    blocks = anchor_index.blocks,
-    blocks_by_id = blocks_by_id,
-    modified = file_info and file_info.modified,
-    size = file_info and file_info.size,
-  }
-  entry.fact_signature = note_fact_signature(entry)
-  return entry
-end
-
-function Index:make_attachment_entry(path, file_info)
-  file_info = file_info or system.get_file_info(path)
-  return {
-    kind = "attachment",
-    abs_path = common.normalize_path(path),
-    rel_path = self:relative_path(path),
-    display_name = display_basename(path),
-    modified = file_info and file_info.modified,
-    size = file_info and file_info.size,
-  }
 end
 
 function Index:watch_dir(dir)
@@ -757,6 +553,7 @@ function Index:rebuild_async(reason)
   local function finish_error(message)
     if serial ~= self.rebuild_serial then return end
     self.manifest_job = nil
+    self.vault_job = nil
     self.status, self.reason = "error", tostring(message and (message.error or message) or "manifest failed")
     self:notify("error", self.reason)
     core.log_quiet("Markdown native manifest failed: root=%s generation=%d error=%s",
@@ -788,72 +585,85 @@ function Index:rebuild_async(reason)
       if not manifest and message.type == "final" then return end
       if not manifest then return finish_error("native manifest result missing snapshot") end
       self.manifest_job = nil
-      core.add_thread(function()
-        if serial ~= self.rebuild_serial then manifest:close(); return end
-        local summary = manifest:summary()
-        local staging = Index:new(self.root)
-        staging.show_unsupported_files = self.show_unsupported_files
-        staging.link_path_policy = self.link_path_policy
-        local tracked = {}
-        for doc in pairs(self.doc_listeners) do
-          if doc.abs_filename then tracked[path_key(doc.abs_filename)] = true end
-        end
-        local offset = 0
-        while offset < summary.records do
-          if serial ~= self.rebuild_serial then manifest:close(); return end
-          local page = manifest:page(offset, 64)
-          for _, record in ipairs(page) do
-            if not tracked[path_key(record.absolute_path)] then
-              if record.kind == "markdown" then
-                local text = read_file(record.absolute_path) or ""
-                local shallow = record.size > MAX_COOPERATIVE_NOTE_BYTES
-                staging:add_note_entry(staging:make_note_entry(record.absolute_path, text, {
-                  shallow = shallow,
-                  file_info = { size = record.size, modified = record.modified },
-                }))
-              elseif record.kind == "attachment" then
-                staging:add_attachment_entry(staging:make_attachment_entry(record.absolute_path, {
-                  size = record.size, modified = record.modified,
-                }))
-              end
+      if serial ~= self.rebuild_serial then manifest:close(); return end
+      local manifest_summary = manifest:summary()
+      local vault_handle, vault_error = pool:submit {
+        kind = "markdown-vault-index",
+        generation = serial,
+        phase = "vault",
+        priority = "background",
+        native = true,
+        native_kind = "markdown_vault_index",
+        native_payload = {
+          manifest = manifest,
+          previous_vault_snapshot = self.disk_snapshot,
+          shallow_note_bytes = MAX_COOPERATIVE_NOTE_BYTES,
+        },
+        is_stale = function() return serial ~= self.rebuild_serial end,
+        on_stale = function(vault_message)
+          local snapshot = vault_message.vault_snapshot or (vault_message.payload and vault_message.payload.vault_snapshot)
+          if snapshot then release_vault_snapshot(snapshot) end
+        end,
+        on_error = function(vault_message) manifest:close(); finish_error(vault_message) end,
+        on_cancelled = function(vault_message) manifest:close(); finish_error(vault_message or "cancelled") end,
+        on_result = function(vault_message)
+          local snapshot = vault_message.vault_snapshot or (vault_message.payload and vault_message.payload.vault_snapshot)
+          if not snapshot and vault_message.type == "final" then return end
+          if not snapshot then manifest:close(); return finish_error("native vault result missing snapshot") end
+          if serial ~= self.rebuild_serial then manifest:close(); release_vault_snapshot(snapshot); return end
+          self.vault_job = nil
+          local overlays = {}
+          for _, entry in pairs(self.notes_by_abs) do if entry.doc then overlays[#overlays + 1] = entry end end
+          self.notes_by_abs, self.attachments_by_abs = {}, {}
+          self.note_keys, self.note_keys_ci = {}, {}
+          self.attachment_keys, self.attachment_keys_ci = {}, {}
+          for _, entry in ipairs(overlays) do self:add_note_entry(entry) end
+          release_vault_snapshot(self.disk_snapshot)
+          self.disk_snapshot = snapshot
+          for key, removed in pairs(self.removed_paths) do
+            if serial > (removed.serial or 0)
+              and (snapshot:note(removed.path) or snapshot:attachment(removed.path))
+            then
+              self.removed_paths[key] = nil
             end
           end
-          offset = page.next_offset
-          coroutine.yield(0)
-        end
-        if serial ~= self.rebuild_serial then manifest:close(); return end
-        for _, field in ipairs({
-          "notes_by_abs", "attachments_by_abs", "note_keys", "note_keys_ci",
-          "attachment_keys", "attachment_keys_ci",
-        }) do self[field] = staging[field] end
-        for doc in pairs(self.doc_listeners) do self:update_doc(doc, { rebuilding = true }) end
-        if self.manifest_snapshot then self.manifest_snapshot:close() end
-        self.manifest_snapshot = manifest
-        self.status, self.reason = "ready", nil
-        self.generation = self.generation + 1
-        self:notify("ready")
-        core.redraw = true
-        local elapsed_ms = (system.get_time() - started_at) * 1000
-        self.diagnostics.last_rebuild = {
-          reason = rebuild_reason,
-          elapsed_ms = elapsed_ms,
-          directories = summary.directories + 1,
-          files = summary.files,
-          notes = self:note_count(),
-          attachments = self:attachment_count(),
-          cooperative = true,
-          native_manifest = true,
-          manifest_ms = summary.scan_ms,
-        }
-        core.log_quiet(
-          "Markdown vault native manifest adopted: root=%s generation=%d elapsed=%.1fms native=%.1fms dirs=%d files=%d notes=%d attachments=%d",
-          self.root, serial, elapsed_ms, summary.scan_ms, summary.directories, summary.files,
-          self:note_count(), self:attachment_count()
-        )
-        local pending = self.pending_manifest_reason
-        self.pending_manifest_reason = nil
-        if pending then self:rebuild_async(pending) end
-      end)
+          if self.manifest_snapshot then self.manifest_snapshot:close() end
+          self.manifest_snapshot = manifest
+          self.status, self.reason = "ready", nil
+          self.generation = self.generation + 1
+          self:notify("ready")
+          core.redraw = true
+          local vault_summary = snapshot:summary()
+          local elapsed_ms = (system.get_time() - started_at) * 1000
+          self.diagnostics.last_rebuild = {
+            reason = rebuild_reason,
+            elapsed_ms = elapsed_ms,
+            directories = manifest_summary.directories + 1,
+            files = manifest_summary.files,
+            notes = self:note_count(),
+            attachments = self:attachment_count(),
+            cooperative = true,
+            native_manifest = true,
+            native_vault = true,
+            manifest_ms = manifest_summary.scan_ms,
+            vault_ms = vault_summary.build_ms,
+            bytes_read = vault_summary.bytes_read,
+            notes_reused = vault_summary.reused_notes,
+            notes_rebuilt = vault_summary.rebuilt_notes,
+          }
+          core.log_quiet(
+            "Markdown vault native snapshot published: root=%s generation=%d elapsed=%.1fms manifest=%.1fms vault=%.1fms notes=%d attachments=%d reused=%d rebuilt=%d bytes=%d",
+            self.root, serial, elapsed_ms, manifest_summary.scan_ms, vault_summary.build_ms,
+            self:note_count(), self:attachment_count(), vault_summary.reused_notes,
+            vault_summary.rebuilt_notes, vault_summary.bytes_read
+          )
+          local pending = self.pending_manifest_reason
+          self.pending_manifest_reason = nil
+          if pending then self:rebuild_async(pending) end
+        end,
+      }
+      if not vault_handle then manifest:close(); finish_error(vault_error or "native vault submission failed")
+      else self.vault_job = vault_handle end
     end,
   }
   if not handle then
@@ -865,14 +675,18 @@ function Index:rebuild_async(reason)
 end
 
 function Index:note_count()
-  local count = 0
-  for _ in pairs(self.notes_by_abs) do count = count + 1 end
+  local count = self.disk_snapshot and self.disk_snapshot:summary().note_count or 0
+  for _, entry in pairs(self.notes_by_abs) do
+    if not (self.disk_snapshot and self.disk_snapshot:note(entry.abs_path)) then count = count + 1 end
+  end
   return count
 end
 
 function Index:attachment_count()
-  local count = 0
-  for _ in pairs(self.attachments_by_abs) do count = count + 1 end
+  local count = self.disk_snapshot and self.disk_snapshot:summary().attachment_count or 0
+  for _, entry in pairs(self.attachments_by_abs) do
+    if not (self.disk_snapshot and self.disk_snapshot:attachment(entry.abs_path)) then count = count + 1 end
+  end
   return count
 end
 
@@ -982,10 +796,18 @@ end
 function Index:plan_note_rename(old_path, new_path)
   old_path, new_path = absolute_path(old_path), absolute_path(new_path)
   if not (old_path and new_path and is_markdown(old_path) and is_markdown(new_path)) then return nil end
-  local old_entry = self.notes_by_abs[path_key(old_path)]
+  local old_entry = self:note(old_path)
   if not old_entry then return nil end
   local files = {}
+  local entries, seen_entries = {}, {}
   for _, entry in pairs(self.notes_by_abs) do
+    entries[#entries + 1] = entry
+    seen_entries[path_key(entry.abs_path)] = true
+  end
+  for _, entry in ipairs(self.disk_snapshot and self.disk_snapshot:linked_notes(old_path) or {}) do
+    if not seen_entries[path_key(entry.abs_path)] then entries[#entries + 1] = entry end
+  end
+  for _, entry in ipairs(entries) do
     local source_path = common.path_equals(entry.abs_path, old_path) and new_path or entry.abs_path
     local text = entry.doc and entry.doc:get_text(1, 1, math.huge, math.huge) or read_file(entry.abs_path)
     if text then
@@ -1045,6 +867,18 @@ function Index:completion_candidates(mode, query, source_path, limit)
     }
   end
 
+  if self.disk_snapshot then
+    for _, candidate in ipairs(self.disk_snapshot:completion(
+      mode, query, source_path or "", self.link_path_policy, limit
+    )) do
+      if not (candidate.path and self.notes_by_abs[path_key(candidate.path)]) then
+        local key = candidate.kind .. "\0" .. candidate.target .. "\0" .. tostring(candidate.path or "")
+        seen[key] = true
+        candidates[#candidates + 1] = candidate
+      end
+    end
+  end
+
   local source_entry = source_path and self.notes_by_abs[path_key(source_path)] or nil
   if mode == "note" then
     for _, entry in pairs(self.notes_by_abs) do
@@ -1098,48 +932,83 @@ function Index:update_path(path, opts)
   opts = opts or {}
   path = absolute_path(path)
   if not path then return false end
-  if is_markdown(path) and file_exists(path) then
-    local info = system.get_file_info(path)
-    local shallow = opts.cooperative and info and (info.size or 0) > MAX_COOPERATIVE_NOTE_BYTES
-    self:add_note_entry(self:make_note_entry(path, opts.text, { shallow = shallow }))
-    if shallow then
-      core.log_quiet("Markdown index shallow-indexed oversized note %s (%d bytes)", path, info.size)
-    end
-  elseif self:is_attachment(path) and file_exists(path) then
-    self:add_attachment_entry(self:make_attachment_entry(path))
-  else
-    return false
-  end
-  if not opts.rebuilding then
-    self.generation = self.generation + 1
-    self:notify("path-updated", path)
-  end
-  return true
+  self.removed_paths[path_key(path)] = nil
+  if not ((is_markdown(path) or self:is_attachment(path)) and file_exists(path)) then return false end
+  self:rebuild(opts.reason or "path-updated")
+  return self:note(path) ~= nil or self:attachment(path) ~= nil
 end
 
 function Index:update_doc(doc, opts)
   opts = opts or {}
   if not (doc and doc.abs_filename and is_markdown(doc.abs_filename)) then return false end
   if not common.path_belongs_to(common.normalize_path(doc.abs_filename), self.root) then return false end
+  local pool = worker_pool.current_system()
+  if not pool then return false end
   local text = doc:get_text(1, 1, math.huge, math.huge)
-  local shallow = opts.cooperative ~= false and #text > MAX_COOPERATIVE_NOTE_BYTES
-  local entry = self:make_note_entry(doc.abs_filename, text, {
-    shallow = shallow,
-  })
-  entry.doc = doc
-  local previous = self.notes_by_abs[path_key(doc.abs_filename)]
-  local facts_changed = not previous or previous.fact_signature ~= entry.fact_signature
-  self:add_note_entry(entry)
-  self.diagnostics.doc_updates = self.diagnostics.doc_updates + 1
-  if not opts.rebuilding and facts_changed then
-    self.generation = self.generation + 1
-    self:notify("document-updated", doc)
+  local serial = (self.doc_overlay_serials[doc] or 0) + 1
+  self.doc_overlay_serials[doc] = serial
+  local old_job = self.doc_overlay_jobs[doc]
+  if old_job then pool:cancel(old_job) end
+  local path = common.normalize_path(doc.abs_filename)
+  local handle, submit_error = pool:submit {
+    kind = "markdown-vault-overlay",
+    generation = serial,
+    priority = "interactive",
+    native = true,
+    native_kind = "markdown_vault_overlay",
+    native_payload = {
+      path = path,
+      relpath = self:relative_path(path),
+      text = text,
+      shallow_note_bytes = MAX_COOPERATIVE_NOTE_BYTES,
+    },
+    is_stale = function()
+      return not self.doc_listeners[doc] or self.doc_overlay_serials[doc] ~= serial
+        or not doc.abs_filename or not common.path_equals(doc.abs_filename, path)
+    end,
+    on_stale = function(message)
+      local snapshot = message.vault_snapshot or (message.payload and message.payload.vault_snapshot)
+      if snapshot then release_vault_snapshot(snapshot) end
+      core.log_quiet("Markdown vault stale overlay released: path=%s request=%d current=%s tracked=%s current_path=%s",
+        path, serial, tostring(self.doc_update_serials[doc]), tostring(self.doc_listeners[doc] ~= nil), tostring(doc.abs_filename))
+    end,
+    on_error = function(message)
+      if self.doc_overlay_serials[doc] == serial then self.doc_overlay_jobs[doc] = nil end
+      core.log_quiet("Markdown vault overlay failed for %s: %s", path, tostring(message.error or message))
+    end,
+    on_cancelled = function()
+      if self.doc_overlay_serials[doc] == serial then self.doc_overlay_jobs[doc] = nil end
+    end,
+    on_result = function(message)
+      local snapshot = message.vault_snapshot or (message.payload and message.payload.vault_snapshot)
+      if not snapshot and message.type == "final" then return end
+      if not snapshot then return end
+      self.doc_overlay_jobs[doc] = nil
+      local entry = snapshot:note(path)
+      if not entry then release_vault_snapshot(snapshot); return end
+      entry.doc = doc
+      local previous_entry = self.notes_by_abs[path_key(path)]
+      local facts_changed = not previous_entry or previous_entry.fact_signature ~= entry.fact_signature
+      local previous_overlay = self.doc_overlays[doc]
+      self.doc_overlays[doc] = { snapshot = snapshot, path = path, serial = serial }
+      self:add_note_entry(entry)
+      if previous_overlay and previous_overlay.snapshot ~= snapshot then
+        release_vault_snapshot(previous_overlay.snapshot)
+      end
+      self.diagnostics.doc_updates = self.diagnostics.doc_updates + 1
+      if not opts.rebuilding and facts_changed then
+        self.generation = self.generation + 1
+        self:notify("document-updated", doc)
+      end
+      core.log_quiet("Markdown vault native overlay published: path=%s generation=%d bytes=%d shallow=%s",
+        path, serial, #text, tostring(entry.shallow == true))
+    end,
+  }
+  if not handle then
+    core.log_quiet("Markdown vault overlay submission failed for %s: %s", path, tostring(submit_error))
+    return false
   end
-  if shallow then
-    core.log_quiet("Markdown index shallow-indexed oversized open Document %s (%d bytes)",
-      doc.abs_filename, #text)
-  end
-  core.log_quiet("Markdown vault index updated doc %s", doc.abs_filename)
+  self.doc_overlay_jobs[doc] = handle
   return true
 end
 
@@ -1152,7 +1021,6 @@ function Index:schedule_doc_update(doc)
   core.add_thread(function()
     coroutine.yield(DOC_UPDATE_DEBOUNCE_SECONDS)
     if self.doc_listeners[doc] and self.doc_update_serials[doc] == serial then
-      self.doc_update_serials[doc] = 0
       self:update_doc(doc, { cooperative = true })
     end
   end)
@@ -1188,7 +1056,18 @@ function Index:untrack_doc(doc)
   if doc and doc.remove_text_change_listener then doc:remove_text_change_listener(id) end
   if doc and doc.remove_metadata_listener then doc:remove_metadata_listener(id) end
   self.doc_update_serials[doc] = nil
+  self.doc_overlay_serials[doc] = nil
   self.doc_listeners[doc] = nil
+  local job = self.doc_overlay_jobs[doc]
+  local pool = worker_pool.current_system()
+  if job and pool then pool:cancel(job) end
+  self.doc_overlay_jobs[doc] = nil
+  local overlay = self.doc_overlays[doc]
+  if overlay then
+    self:remove_path_entry(overlay.path)
+    release_vault_snapshot(overlay.snapshot)
+  end
+  self.doc_overlays[doc] = nil
   return true
 end
 
@@ -1268,6 +1147,18 @@ function Index:resolve_note_entry(target)
   entry, candidates = unique_item(ci)
   if entry then return entry end
   if candidates then return nil, candidates end
+
+  if self.disk_snapshot then
+    local native, filtered = self.disk_snapshot:resolve_notes(target), {}
+    for _, candidate in ipairs(native) do
+      local key = path_key(candidate.abs_path)
+      if not self.removed_paths[key] and not self.notes_by_abs[key] then filtered[#filtered + 1] = candidate end
+    end
+    native = filtered
+    if #native == 1 then return native[1] end
+    if #native > 1 then return nil, native end
+  end
+
 end
 
 function Index:resolve_attachment_entry(target)
@@ -1280,6 +1171,17 @@ function Index:resolve_attachment_entry(target)
   entry, candidates = unique_item(ci)
   if entry then return entry end
   if candidates then return nil, candidates end
+
+  if self.disk_snapshot then
+    local native, filtered = self.disk_snapshot:resolve_attachments(target), {}
+    for _, candidate in ipairs(native) do
+      local key = path_key(candidate.abs_path)
+      if not self.removed_paths[key] and not self.attachments_by_abs[key] then filtered[#filtered + 1] = candidate end
+    end
+    native = filtered
+    if #native == 1 then return native[1] end
+    if #native > 1 then return nil, native end
+  end
 end
 
 function Index:resolve(link_or_target, source_path)
@@ -1304,7 +1206,7 @@ function Index:resolve(link_or_target, source_path)
     if not common.path_belongs_to(abs, self.root) then
       return { status = "external", target = target, path = abs, reason = "outside vault" }
     end
-    local entry = self.notes_by_abs[path_key(abs)] or self.attachments_by_abs[path_key(abs)]
+    local entry = self:note(abs) or self:attachment(abs)
     if not entry then return missing(target) end
     return self:resolve_entry_result(entry, link, target)
   end
@@ -1313,7 +1215,7 @@ function Index:resolve(link_or_target, source_path)
   if explicit_path and source_dir then
     local abs = absolute_path(join_path(source_dir, target))
     if abs and common.path_belongs_to(abs, self.root) then
-      local entry = note_entry_for_explicit_path(self, abs) or self.attachments_by_abs[path_key(abs)]
+      local entry = note_entry_for_explicit_path(self, abs) or self:attachment(abs)
       if entry then
         return self:resolve_entry_result(entry, link, target)
       end
