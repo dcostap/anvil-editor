@@ -50,6 +50,8 @@ typedef struct {
   uint64_t render_unshaped_runs;
   uint64_t render_shape_probe_bytes;
   uint64_t render_hb_shapes;
+  uint64_t render_shaped_cache_hits;
+  uint64_t render_shaped_cache_misses;
   uint64_t render_glyphs;
   uint64_t render_whitespace_chars;
   uint64_t render_chars_after_clip;
@@ -68,6 +70,8 @@ int ren_font_get_metadata(const char *path, FontMetaData **data, int *count, boo
 int ren_font_group_get_tab_size(RenFont **font);
 int ren_font_group_get_height(RenFont **font);
 float ren_font_group_get_size(RenFont **font);
+uint32_t ren_font_get_generation(const RenFont *font);
+float ren_font_get_surface_scale(const RenFont *font);
 void ren_font_group_set_size(RenFont **font, float size, float surface_scale);
 #ifdef ANVIL_USE_SDL_RENDERER
 void update_font_scale(RenWindow *window_renderer, RenFont **fonts);

@@ -18,6 +18,16 @@ end
 
 local Highlighter = Object:extend()
 
+local function invalidate_line_packets(highlighter, line, count)
+  local packets = package.loaded["core.docview_line_packets"]
+  if packets and packets.invalidate_document and highlighter.doc then
+    packets.invalidate_document(
+      highlighter.doc, line or 1,
+      line and (line + math.max(0, count or 0)) or math.huge
+    )
+  end
+end
+
 function Highlighter:__tostring() return "Highlighter" end
 
 function Highlighter:new(doc)
@@ -114,6 +124,8 @@ function Highlighter:soft_reset()
   self:invalidate_render_cache()
   self.first_invalid_line = 1
   self.max_wanted_line = 0
+  self.packet_reset_generation = (self.packet_reset_generation or 0) + 1
+  invalidate_line_packets(self)
 end
 
 function Highlighter:invalidate(idx)
@@ -129,12 +141,14 @@ function Highlighter:insert_notify(line, n)
     blanks[i] = false
   end
   common.splice(self.lines, line, 0, blanks)
+  invalidate_line_packets(self, line, math.huge)
 end
 
 function Highlighter:remove_notify(line, n)
   self:invalidate(line)
   self:invalidate_render_cache(line)
   common.splice(self.lines, line, n)
+  invalidate_line_packets(self, line, math.huge)
 end
 
 function Highlighter:batch_notify(changed_ranges)
@@ -167,6 +181,7 @@ end
 
 function Highlighter:update_notify(line, n)
   -- plugins can hook here to be notified that lines have been retokenized
+  invalidate_line_packets(self, line, n)
   self.doc:clear_cache(line, n)
 end
 

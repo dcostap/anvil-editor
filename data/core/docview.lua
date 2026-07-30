@@ -7,6 +7,7 @@ local translate = require "core.doc.translate"
 local tokenizer = require "core.tokenizer"
 local ime = require "core.ime"
 local linewrapping = require "core.linewrapping"
+local line_packets = require "core.docview_line_packets"
 local language_intelligence = require "core.language_intelligence"
 local range_marker = require "core.range_marker"
 local copy_feedback = require "core.copy_feedback"
@@ -855,6 +856,11 @@ function DocView:new(doc)
   self.fold_listeners = {}
   self.edit_guards = {}
   self.owned_features = {}
+  self:add_owned_feature("core.docview-line-packets", {
+    on_release = function(_, view)
+      line_packets.clear(view)
+    end,
+  })
   register_fold_view(self)
   linewrapping.register_docview(self)
   self:set_wrapping_enabled(config.plugins.linewrapping.enable_by_default)
@@ -5137,6 +5143,7 @@ function DocView:update()
 
   phase_start = perf_active and system.get_time()
   DocView.super.update(self)
+  line_packets.update_contributors(self)
   perf_elapsed("docview_update_super_ms", phase_start)
   perf_elapsed("docview_update_ms", update_start)
 end
@@ -5710,6 +5717,8 @@ function DocView:draw_line_text(line, x, y)
     return self:get_line_height()
   end
 
+  line_packets.draw_legacy_before_text(self, line, x, y)
+
   local render_line = self:get_line_render(line)
   if render_line and self.wrapped_settings and not render_line.disable_wrapping then
     local first_idx, _, count = linewrapping.get_line_idx_col_count(self, line)
@@ -5929,6 +5938,8 @@ function DocView:draw_line_text(line, x, y)
     return lh
   end
   if self.wrapped_settings then
+    local packet_height = line_packets.draw_content(self, line, x, y)
+    if packet_height then return packet_height end
     local wrapped_text_scope = perf_scope_begin("wrapped_text", true)
     local perf_active = core.perf_frame_stats ~= nil
     local perf_start = perf_active and system.get_time()
@@ -6780,7 +6791,9 @@ function DocView:draw_line_body(line, x, y)
       self.doc:get_name(), tostring(line), #self.doc.lines
     )
     if self.wrapped_settings then self.wrapped_doc_line_count = nil end
-    return self:get_line_height()
+    return line_packets.finish_line_body(
+      self, line, x, y, self:get_line_height()
+    )
   end
 
   if self.wrapped_settings then
@@ -6818,11 +6831,11 @@ function DocView:draw_line_body(line, x, y)
         end
         perf_scope_end(body_phase_scope)
         perf_scope_end(wrapped_body_scope)
-        return height
+        return line_packets.finish_line_body(self, line, x, y, height)
       end
       perf_scope_end(body_phase_scope)
       perf_scope_end(wrapped_body_scope)
-      return lh * count
+      return line_packets.finish_line_body(self, line, x, y, lh * count)
     end
     local visible_idx1 = idx0 + first_row - 1
     local visible_idx2 = idx0 + last_row - 1
@@ -6916,7 +6929,9 @@ function DocView:draw_line_body(line, x, y)
 
     local underline_module = DocView.__lsp_diagnostic_underlines_module or package.loaded["core.lsp.diagnostic_underlines"]
     if underline_module and underline_module.draw_line then
+      local underline_scope = perf_scope_begin("diagnostic_underlines")
       underline_module.draw_line(self, line, x, y)
+      perf_scope_end(underline_scope)
     end
     if visible_idx2 == idx0 + count - 1 then
       local hint_y = wrapped_row_geometry(self, y, idx0, idx0 + count - 1)
@@ -6927,7 +6942,7 @@ function DocView:draw_line_body(line, x, y)
     self.__wrapped_draw_last_idx = old_visible_idx2
     perf_scope_end(body_phase_scope)
     perf_scope_end(wrapped_body_scope)
-    return line_height
+    return line_packets.finish_line_body(self, line, x, y, line_height)
   end
 
   draw_decoration_line_backgrounds(self, line, x, y)
@@ -7017,9 +7032,17 @@ function DocView:draw_line_body(line, x, y)
     end
   end
 
+  local underline_module = DocView.__lsp_diagnostic_underlines_module
+    or package.loaded["core.lsp.diagnostic_underlines"]
+  if underline_module and underline_module.draw_line then
+    local underline_scope = perf_scope_begin("diagnostic_underlines")
+    underline_module.draw_line(self, line, x, y)
+    perf_scope_end(underline_scope)
+  end
+
   self:draw_line_hint(line, x, y)
 
-  return line_height
+  return line_packets.finish_line_body(self, line, x, y, line_height)
 end
 
 
@@ -7414,6 +7437,7 @@ Doc.register_text_transaction_handler("docview-render-caches", function(doc, tra
   end
   for view in pairs(DocView.registry[doc] or {}) do
     if view and view.doc == doc then
+      line_packets.apply_transaction(view, transaction)
       local invalid_line1, invalid_line2 = line1, line2
       local provider_entries = view:line_render_provider_entries()
       local providers_handle_line_structure = line_structure_changed and #provider_entries > 0

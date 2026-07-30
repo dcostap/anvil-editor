@@ -5,10 +5,14 @@ param(
   [int]$ScrollSeconds = 15,
   [int]$WheelEveryMs = 8,
   [int]$WheelDelta = -120,
+  [int]$StartLine = 0,
   [switch]$UseGlobalMouseWheel,
   [switch]$KeepOpen,
   [switch]$NoAnalyze,
   [switch]$NoKillExisting,
+  [switch]$NoStatsFlush,
+  [switch]$NoDocViewStats,
+  [switch]$ForceContinuousRedraw,
   [string]$FrameStatsFile = "$env:TEMP\anvil_frame_pacing_stats.csv",
   [string]$D3DStatsFile = "$env:TEMP\anvil_d3d11_stats.csv"
 )
@@ -41,11 +45,34 @@ Remove-Item -LiteralPath $FrameStatsFile, $D3DStatsFile -Force -ErrorAction Sile
 $env:ANVIL_RAD_PACING = "1"
 $env:ANVIL_FRAME_PACING_STATS = "1"
 $env:ANVIL_FRAME_PACING_STATS_FILE = $FrameStatsFile
-$env:ANVIL_FRAME_PACING_STATS_FLUSH = "1"
 $env:ANVIL_D3D11_STATS = "1"
 $env:ANVIL_D3D11_STATS_FILE = $D3DStatsFile
-$env:ANVIL_D3D11_STATS_FLUSH = "1"
-$env:ANVIL_DOCVIEW_STATS = "1"
+if ($NoStatsFlush) {
+  Remove-Item Env:ANVIL_FRAME_PACING_STATS_FLUSH -ErrorAction SilentlyContinue
+  Remove-Item Env:ANVIL_D3D11_STATS_FLUSH -ErrorAction SilentlyContinue
+} else {
+  $env:ANVIL_FRAME_PACING_STATS_FLUSH = "1"
+  $env:ANVIL_D3D11_STATS_FLUSH = "1"
+}
+if ($NoDocViewStats) {
+  Remove-Item Env:ANVIL_DOCVIEW_STATS -ErrorAction SilentlyContinue
+} else {
+  $env:ANVIL_DOCVIEW_STATS = "1"
+}
+if ($ForceContinuousRedraw) {
+  $env:ANVIL_PERF_CADENCE_ONLY = "1"
+  if ($StartLine -gt 0) {
+    $env:ANVIL_PERF_CADENCE_START_LINE = [string]$StartLine
+    $env:ANVIL_PERF_CADENCE_FILE = $File
+  } else {
+    Remove-Item Env:ANVIL_PERF_CADENCE_START_LINE -ErrorAction SilentlyContinue
+    Remove-Item Env:ANVIL_PERF_CADENCE_FILE -ErrorAction SilentlyContinue
+  }
+} else {
+  Remove-Item Env:ANVIL_PERF_CADENCE_ONLY -ErrorAction SilentlyContinue
+  Remove-Item Env:ANVIL_PERF_CADENCE_START_LINE -ErrorAction SilentlyContinue
+  Remove-Item Env:ANVIL_PERF_CADENCE_FILE -ErrorAction SilentlyContinue
+}
 
 Add-Type @"
 using System;
@@ -129,8 +156,15 @@ if (!$KeepOpen) {
   try { $targetProcess.Refresh() } catch {}
   if (!$targetProcess.HasExited) {
     Write-Host "Stopping Anvil pid $($targetProcess.Id)"
-    Stop-Process -Id $targetProcess.Id -Force
-    Wait-Process -Id $targetProcess.Id -Timeout 5 -ErrorAction SilentlyContinue
+    if ($NoStatsFlush) {
+      $targetProcess.CloseMainWindow() | Out-Null
+      Wait-Process -Id $targetProcess.Id -Timeout 5 -ErrorAction SilentlyContinue
+      try { $targetProcess.Refresh() } catch {}
+    }
+    if (!$targetProcess.HasExited) {
+      Stop-Process -Id $targetProcess.Id -Force
+      Wait-Process -Id $targetProcess.Id -Timeout 5 -ErrorAction SilentlyContinue
+    }
   }
 }
 

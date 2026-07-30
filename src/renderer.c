@@ -165,7 +165,10 @@ typedef struct {
 
 typedef struct {
   char *text;
+  hb_glyph_info_t *glyph_infos;
+  hb_glyph_position_t *glyph_positions;
   size_t len;
+  unsigned int glyph_count;
   uint32_t hash;
   uint32_t generation;
   double width;
@@ -1150,7 +1153,12 @@ static RenFont *font_get_glyph_by_id(RenFont *font, unsigned int glyph_id, int s
 static void font_clear_shaped_width_cache(RenFont *font) {
   for (size_t i = 0; i < font->shaped_width_count; i++) {
     SDL_free(font->shaped_width_cache[i].text);
+    SDL_free(font->shaped_width_cache[i].glyph_infos);
+    SDL_free(font->shaped_width_cache[i].glyph_positions);
     font->shaped_width_cache[i].text = NULL;
+    font->shaped_width_cache[i].glyph_infos = NULL;
+    font->shaped_width_cache[i].glyph_positions = NULL;
+    font->shaped_width_cache[i].glyph_count = 0;
   }
   font->shaped_width_count = 0;
   font->shaped_width_age = 0;
@@ -1170,7 +1178,13 @@ static ShapedWidthCacheEntry *font_lookup_shaped_width_cache(RenFont *font, cons
   return NULL;
 }
 
-static void font_store_shaped_width_cache(RenFont *font, const char *text, size_t len, uint32_t hash_value, double width, int x_offset, bool has_x_offset) {
+static void font_store_shaped_width_cache(
+  RenFont *font, const char *text, size_t len, uint32_t hash_value,
+  double width, int x_offset, bool has_x_offset,
+  const hb_glyph_info_t *glyph_infos,
+  const hb_glyph_position_t *glyph_positions,
+  unsigned int glyph_count
+) {
   size_t idx = font->shaped_width_count;
   if (idx < SHAPED_WIDTH_CACHE_MAX) {
     font->shaped_width_count++;
@@ -1184,11 +1198,33 @@ static void font_store_shaped_width_cache(RenFont *font, const char *text, size_
       }
     }
     SDL_free(font->shaped_width_cache[idx].text);
+    SDL_free(font->shaped_width_cache[idx].glyph_infos);
+    SDL_free(font->shaped_width_cache[idx].glyph_positions);
   }
 
   ShapedWidthCacheEntry *entry = &font->shaped_width_cache[idx];
   entry->text = check_alloc(SDL_malloc(len));
   memcpy(entry->text, text, len);
+  entry->glyph_infos = NULL;
+  entry->glyph_positions = NULL;
+  entry->glyph_count = 0;
+  if (glyph_count > 0) {
+    entry->glyph_infos = check_alloc(SDL_malloc(
+      sizeof(*entry->glyph_infos) * (size_t)glyph_count
+    ));
+    entry->glyph_positions = check_alloc(SDL_malloc(
+      sizeof(*entry->glyph_positions) * (size_t)glyph_count
+    ));
+    memcpy(
+      entry->glyph_infos, glyph_infos,
+      sizeof(*entry->glyph_infos) * (size_t)glyph_count
+    );
+    memcpy(
+      entry->glyph_positions, glyph_positions,
+      sizeof(*entry->glyph_positions) * (size_t)glyph_count
+    );
+    entry->glyph_count = glyph_count;
+  }
   entry->len = len;
   entry->hash = hash_value;
   entry->generation = font->generation;
@@ -1606,6 +1642,19 @@ float ren_font_group_get_size(RenFont **fonts) {
   return fonts[0]->size;
 }
 
+uint32_t ren_font_get_generation(const RenFont *font) {
+  return font ? font->generation : 0;
+}
+
+float ren_font_get_surface_scale(const RenFont *font) {
+  if (!font) return 0.0f;
+#ifdef ANVIL_USE_SDL_RENDERER
+  return font->scale;
+#else
+  return 1.0f;
+#endif
+}
+
 void ren_font_group_set_size(RenFont **fonts, float size, float surface_scale) {
   for (int i = 0; i < FONT_FALLBACK_MAX && fonts[i]; ++i) {
     font_clear_glyph_cache(fonts[i]);
@@ -1760,7 +1809,10 @@ static double shaped_run_get_width(hb_buffer_t *buffer, RenFont *font, const cha
   }
 
   if (cacheable)
-    font_store_shaped_width_cache(font, text, len, hash_value, width, cached_x_offset, cached_has_x_offset);
+    font_store_shaped_width_cache(
+      font, text, len, hash_value, width, cached_x_offset,
+      cached_has_x_offset, infos, positions, glyph_count
+    );
   return width;
 }
 
@@ -1932,18 +1984,31 @@ static void draw_glyph_bitmap(DrawGlyphContext *ctx, RenFont **fonts, RenFont *f
 
 static double draw_shaped_run(hb_buffer_t *buffer, DrawGlyphContext *ctx, RenFont **fonts, RenFont *font, const char *text, size_t len, double pen_x, double y) {
   g_text_frame_stats.render_shaped_runs++;
-  hb_buffer_clear_contents(buffer);
-  hb_buffer_add_utf8(buffer, text, len, 0, len);
-  hb_buffer_guess_segment_properties(buffer);
-  uint64_t hb_start = SDL_GetPerformanceCounter();
-  hb_shape(font->hb_font, buffer, NULL, 0);
-  uint64_t hb_end = SDL_GetPerformanceCounter();
-  g_text_frame_stats.render_hb_shapes++;
-  g_text_frame_stats.render_hb_shape_ms += renderer_perf_ms(hb_start, hb_end);
-
   unsigned int glyph_count = 0;
-  hb_glyph_info_t *infos = hb_buffer_get_glyph_infos(buffer, &glyph_count);
-  hb_glyph_position_t *positions = hb_buffer_get_glyph_positions(buffer, NULL);
+  hb_glyph_info_t *infos = NULL;
+  hb_glyph_position_t *positions = NULL;
+  ShapedWidthCacheEntry *cached = NULL;
+  if (len <= SHAPED_WIDTH_CACHE_MAX_TEXT) {
+    cached = font_lookup_shaped_width_cache(font, text, len, hash_bytes(text, len));
+  }
+  if (cached && cached->glyph_infos && cached->glyph_positions) {
+    infos = cached->glyph_infos;
+    positions = cached->glyph_positions;
+    glyph_count = cached->glyph_count;
+    g_text_frame_stats.render_shaped_cache_hits++;
+  } else {
+    g_text_frame_stats.render_shaped_cache_misses++;
+    hb_buffer_clear_contents(buffer);
+    hb_buffer_add_utf8(buffer, text, len, 0, len);
+    hb_buffer_guess_segment_properties(buffer);
+    uint64_t hb_start = SDL_GetPerformanceCounter();
+    hb_shape(font->hb_font, buffer, NULL, 0);
+    uint64_t hb_end = SDL_GetPerformanceCounter();
+    g_text_frame_stats.render_hb_shapes++;
+    g_text_frame_stats.render_hb_shape_ms += renderer_perf_ms(hb_start, hb_end);
+    infos = hb_buffer_get_glyph_infos(buffer, &glyph_count);
+    positions = hb_buffer_get_glyph_positions(buffer, NULL);
+  }
 
   double clip_break_x = ctx->clip_end_x + font->size * ctx->surface_scale_x * 4.0;
   for (unsigned int i = 0; i < glyph_count; i++) {

@@ -3,7 +3,7 @@ local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
 local style = require "core.style"
-local DocView = require "core.docview"
+local line_packets = require "core.docview_line_packets"
 
 local indent_guides = {
   enabled = true,
@@ -11,6 +11,10 @@ local indent_guides = {
   highlight_active = false,
   blank_line_search_limit = 25,
 }
+
+indent_guides = line_packets.persistent_contributor_config(
+  "indent_guides", indent_guides
+)
 
 local indent_cache_by_doc = setmetatable({}, { __mode = "k" })
 
@@ -167,11 +171,7 @@ local function active_indent_depth(dv, indent_size)
   return depth >= 0 and depth or nil
 end
 
-local old_draw_line_body = DocView.draw_line_body
-function DocView:draw_line_body(line, x, y)
-  local scope = perf_scope_begin("indent_guides")
-  local line_height = old_draw_line_body(self, line, x, y)
-
+local function emit_indent_guides(self, line, x, y, emit_grid, emit_rect)
   local conf = indent_guides
   if conf.enabled and not markdown_live_mode(self) then
     local _, indent_size = self.doc:get_indent_info()
@@ -196,25 +196,97 @@ function DocView:draw_line_body(line, x, y)
       local function draw_grid(from_depth, to_depth, color)
         local count = to_depth - from_depth + 1
         if count <= 0 then return end
-        if renderer.draw_rect_grid then
-          renderer.draw_rect_grid(x + from_depth * indent_px, y, indent_px, lw, lh, count, color)
-        else
-          for depth = from_depth, to_depth do
-            renderer.draw_rect(x + depth * indent_px, y, lw, lh, color)
-          end
-        end
+        emit_grid(
+          x + from_depth * indent_px, y, indent_px, lw, lh, count, color
+        )
       end
 
       if active_depth and active_depth >= first_depth and active_depth <= last_depth then
         draw_grid(first_depth, active_depth - 1, normal_color)
-        renderer.draw_rect(x + active_depth * indent_px, y, lw, lh, active_color)
+        emit_rect(x + active_depth * indent_px, y, lw, lh, active_color)
         draw_grid(active_depth + 1, last_depth, normal_color)
       else
         draw_grid(first_depth, last_depth, normal_color)
       end
     end
   end
-
-  perf_scope_end(scope)
-  return line_height
 end
+
+local function draw_legacy_guides(self, line, x, y)
+  emit_indent_guides(
+    self, line, x, y,
+    function(gx, gy, step, width, height, count, color)
+      if renderer.draw_rect_grid then
+        renderer.draw_rect_grid(
+          gx, gy, step, width, height, count, color
+        )
+      else
+        for index = 0, count - 1 do
+          renderer.draw_rect(
+            gx + index * step, gy, width, height, color
+          )
+        end
+      end
+    end,
+    renderer.draw_rect
+  )
+end
+
+local indent_contributor = {
+  packet_enabled = function(view)
+    return indent_guides.enabled
+      and not indent_guides.highlight_active
+      and not markdown_live_mode(view)
+  end,
+  signature = function(view)
+    local _, indent_size = view.doc:get_indent_info()
+    return table.concat({
+      tostring(indent_guides.line_width),
+      tostring(indent_guides.blank_line_search_limit),
+      tostring(indent_size or config.indent_size or 2),
+      tostring(style.indent_guide),
+      tostring(view:get_font()),
+      tostring(view:get_font():get_size()),
+    }, "\0")
+  end,
+  signature_scope = "view",
+  packet_enabled_scope = "view",
+  invalidate_transaction = function(view, first_line, last_line)
+    local limit = math.max(0, tonumber(indent_guides.blank_line_search_limit) or 0)
+    local line1 = math.max(1, first_line - limit)
+    local line2 = math.min(#view.doc.lines, last_line + limit)
+    for line = line1, line2 do
+      if view.doc.lines[line]:match("^[ \t]*\r?\n?$") then
+        line_packets.invalidate_range(view, line, line)
+      end
+    end
+  end,
+  append_packet = function(builder, view, line, context)
+    emit_indent_guides(
+      view, line, context.screen_x, context.screen_y,
+      function(x, y, step, width, height, count, color)
+        builder:add_rect_grid(
+          context.guides_layer, 1,
+          x - context.screen_x, y - context.screen_y,
+          step, width, height, count, color
+        )
+      end,
+      function(x, y, width, height, color)
+        builder:add_rect(
+          context.guides_layer, 1,
+          x - context.screen_x, y - context.screen_y,
+          width, height, color
+        )
+      end
+    )
+  end,
+  draw_legacy = function(view, line, x, y)
+    local scope = perf_scope_begin("indent_guides")
+    draw_legacy_guides(view, line, x, y)
+    perf_scope_end(scope)
+  end,
+}
+
+line_packets.register_contributor("indent_guides", indent_contributor)
+
+return indent_guides

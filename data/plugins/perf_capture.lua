@@ -38,7 +38,36 @@ if control_file then
   end
 end
 
-if not truthy("ANVIL_PERF_CAPTURE") and not is_truthy_value(control.enabled) then return {} end
+local cadence_only = truthy("ANVIL_PERF_CADENCE_ONLY")
+if not cadence_only
+and not truthy("ANVIL_PERF_CAPTURE")
+and not is_truthy_value(control.enabled) then return {} end
+if cadence_only then
+  core.perf_cadence_uncapped = true
+  local start_line = tonumber(os.getenv("ANVIL_PERF_CADENCE_START_LINE") or "")
+  if start_line then
+    local target_file = os.getenv("ANVIL_PERF_CADENCE_FILE")
+    core.add_thread(function()
+      local view
+      repeat
+        view = core.active_view
+        if not (view and view:is(DocView) and view.doc
+          and (not target_file or target_file == ""
+            or common.path_equals(view.doc.abs_filename, target_file))) then
+          coroutine.yield(0.01)
+        end
+      until view and view:is(DocView) and view.doc
+        and (not target_file or target_file == ""
+          or common.path_equals(view.doc.abs_filename, target_file))
+      local line = math.max(1, math.min(#view.doc.lines, math.floor(start_line)))
+      view.doc:set_selection(line, 1)
+      view:scroll_to_line(line, true)
+      core.redraw = true
+    end)
+  end
+  core.log_quiet("Performance cadence probe: continuous present-paced redraw enabled")
+  return { cadence_only = true }
+end
 core.perf_capture_active = true
 
 local function env_string(name, key, default)

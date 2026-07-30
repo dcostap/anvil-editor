@@ -451,7 +451,7 @@ function ThemeEditor:apply_color_to_selected(value)
   end
 
   self:update_change_count()
-  core.redraw = true
+  core.bump_render_style_generation("runtime-theme-editor")
 end
 
 function ThemeEditor:reset_group(group)
@@ -462,7 +462,7 @@ function ThemeEditor:reset_group(group)
   end
   self:select_group(group)
   self:reload_entries()
-  core.redraw = true
+  core.bump_render_style_generation("runtime-theme-editor-reset")
 end
 
 function ThemeEditor:reset_selected()
@@ -475,7 +475,7 @@ function ThemeEditor:reset_all_changes()
     if original then entry.container[entry.key] = original end
   end
   self:reload_entries()
-  core.redraw = true
+  core.bump_render_style_generation("runtime-theme-editor-reset-all")
 end
 
 function ThemeEditor:resize_grip_size()

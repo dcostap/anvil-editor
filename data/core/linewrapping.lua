@@ -644,16 +644,49 @@ function LineWrapping.clear_wrap_cache(docview)
   docview.wrapped_text_revision = nil
 end
 
+local function font_native_value(font, method, fallback)
+  if not (font and font[method]) then return tostring(fallback) end
+  local value = font[method](font)
+  if type(value) ~= "table" then return tostring(value) end
+  local parts = {}
+  for index, item in ipairs(value) do parts[index] = tostring(item) end
+  return table.concat(parts, ":")
+end
+
 local function wrap_settings_signature(docview, default_font, width)
   local _, indent_size = docview.doc:get_indent_info()
+  local require_tokenization = config.plugins.linewrapping.require_tokenization
+  local syntax_font_signature
+  if require_tokenization then
+    local names = {}
+    for name in pairs(style.syntax_fonts) do names[#names + 1] = name end
+    table.sort(names)
+    local parts = {}
+    for _, name in ipairs(names) do
+      local font = style.syntax_fonts[name]
+      parts[#parts + 1] = name
+      parts[#parts + 1] = tostring(font)
+      parts[#parts + 1] = tostring(font and font:get_size())
+      parts[#parts + 1] = font_native_value(font, "get_generation", 0)
+      parts[#parts + 1] = font_native_value(font, "get_surface_scale", 1)
+    end
+    syntax_font_signature = table.concat(parts, "\0")
+  end
   return {
     width = width,
     font = default_font,
     font_size = default_font and default_font:get_size(),
+    font_generation = font_native_value(default_font, "get_generation", 0),
+    font_surface_scale = font_native_value(
+      default_font, "get_surface_scale", 1
+    ),
     mode = config.plugins.linewrapping.mode,
     indent = config.plugins.linewrapping.indent,
     wrapping_indent = config.plugins.linewrapping.wrapping_indent,
-    require_tokenization = config.plugins.linewrapping.require_tokenization,
+    require_tokenization = require_tokenization,
+    syntax_generation = require_tokenization
+      and (docview.doc.highlighter.packet_reset_generation or 0) or 0,
+    syntax_font_signature = syntax_font_signature,
     indent_size = indent_size,
   }
 end
@@ -662,10 +695,14 @@ local function same_wrap_settings_except_width(a, b)
   if not a or not b then return false end
   return a.font == b.font
     and a.font_size == b.font_size
+    and a.font_generation == b.font_generation
+    and a.font_surface_scale == b.font_surface_scale
     and a.mode == b.mode
     and a.indent == b.indent
     and a.wrapping_indent == b.wrapping_indent
     and a.require_tokenization == b.require_tokenization
+    and a.syntax_generation == b.syntax_generation
+    and a.syntax_font_signature == b.syntax_font_signature
     and a.indent_size == b.indent_size
 end
 

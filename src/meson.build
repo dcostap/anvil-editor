@@ -38,6 +38,7 @@ anvil_sources = [
     'win32_single_instance.c',
     'resize_diagnostics.c',
     'renderer.c',
+    'display_packet.c',
     'renwindow.c',
     'rencache.c',
     'main.c',

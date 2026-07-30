@@ -1316,6 +1316,14 @@ map_new_syntax_colors = function(clear_new)
 end
 
 
+function core.bump_render_style_generation(reason)
+  core.render_style_generation = (core.render_style_generation or 0) + 1
+  core.redraw = true
+  core.last_render_style_generation_reason = reason
+  return core.render_style_generation
+end
+
+
 function core.reload_module(name)
   local old = package.loaded[name]
   local is_color_scheme = name:match("^colors%..*")
@@ -1341,7 +1349,7 @@ function core.reload_module(name)
   if is_color_scheme then
     map_new_syntax_colors()
     core.color_theme_generation = (core.color_theme_generation or 0) + 1
-    core.redraw = true
+    core.bump_render_style_generation("color-theme-reload")
     if core.log_quiet then
       core.log_quiet(
         "Color theme generation %d after reloading %s",
@@ -2128,6 +2136,15 @@ local perf_diagnostic_keys = {
   "linewrapping_draw_line_text_segments",
   "linewrapping_draw_line_text_bytes",
   "linewrapping_draw_line_text_known_bounds_segments",
+  "docview_line_packet_hits",
+  "docview_line_packet_misses",
+  "docview_line_packet_builds",
+  "docview_line_packet_build_ms",
+  "docview_line_packet_replay_ms",
+  "docview_line_packet_evictions",
+  "docview_line_packet_resident_packets",
+  "docview_line_packet_resident_bytes",
+  "docview_line_packet_frame_failures",
   "core_root_panel_update_ms",
   "core_tool_window_update_ms",
   "rootpanel_update_ms",
@@ -2357,7 +2374,7 @@ function core.step(next_frame_time, options)
   -- update
   local update_start_time = system.get_time()
   local stats_config = config.draw_stats
-  local uncapped = stats_config == "uncapped"
+  local uncapped = stats_config == "uncapped" or core.perf_cadence_uncapped
   local priority_event = event_received and event_received ~= "mousemoved"
   local resizing = options.live_resize or (core.window_resizing_until and core.window_resizing_until > system.get_time())
   core.root_panel.size.x, core.root_panel.size.y = width, height
@@ -2446,6 +2463,9 @@ function core.step(next_frame_time, options)
   end
   core.render_frame_active = false
   step_stats.draw_emit_ms = (system.get_time() - draw_emit_start_time) * 1000
+  if renderer.frame_failed and renderer.frame_failed() then
+    core.redraw = true
+  end
   local renderer_end_start_time = system.get_time()
   renderer.end_frame()
   if tool_window then tool_window.draw_all() end
@@ -2753,7 +2773,7 @@ local function frame_pacing_stats_log(fields)
       frame_pacing_stats_enabled = false
       return
     end
-    frame_pacing_stats_file:write("time,seq,rad_pacing,immediate,reason,target_fps,core_fps,present_paced,active_present_paced,did_redraw,pending_events,queue_depth,event_count,event_ms,update_ms,pre_draw_ms,draw_emit_ms,renderer_end_ms,frame_time_ms,run_threads_ms,core_step_ms,present_ms,sync_interval,renderer_path,draw_calls,quad_instances,texture_quads,texture_uploads,texture_upload_bytes,d3d11_glyph_push_ms,d3d11_flush_quads_ms,d3d11_dwm_flush_ms,d3d11_clear_state_ms,rencache_commands,rencache_text_commands,rencache_rect_commands,rencache_set_clip_commands,rencache_command_bytes,rencache_text_bytes,rencache_draw_text_ms,rencache_draw_text_width_ms,docview_draw_ms,docview_gutter_ms,docview_body_ms,docview_text_ms,docview_highlighter_get_line_ms,docview_token_loop_ms,docview_renderer_draw_text_ms,docview_visible_lines,docview_text_lines,docview_tokens,docview_draw_text_calls,sleep_requested_ms,sleep_actual_ms,skipped_post_present_sleep,total_ms,run_mode\n")
+    frame_pacing_stats_file:write("time,seq,rad_pacing,immediate,reason,target_fps,core_fps,present_paced,active_present_paced,did_redraw,pending_events,queue_depth,event_count,event_ms,update_ms,pre_draw_ms,draw_emit_ms,renderer_end_ms,frame_time_ms,run_threads_ms,core_step_ms,present_ms,sync_interval,renderer_path,draw_calls,quad_instances,texture_quads,texture_uploads,texture_upload_bytes,d3d11_glyph_push_ms,d3d11_flush_quads_ms,d3d11_dwm_flush_ms,d3d11_clear_state_ms,rencache_commands,rencache_text_commands,rencache_rect_commands,rencache_set_clip_commands,rencache_command_bytes,rencache_text_bytes,rencache_draw_text_ms,rencache_draw_text_width_ms,display_packet_replays,display_packet_commands_replayed,display_packet_text_commands_replayed,display_packet_rect_commands_replayed,display_packet_source_bytes,display_packet_frame_bytes_copied,display_packet_replay_ms,display_packet_frame_allocation_failures,rencache_frame_failed,docview_draw_ms,docview_gutter_ms,docview_body_ms,docview_text_ms,docview_highlighter_get_line_ms,docview_token_loop_ms,docview_renderer_draw_text_ms,docview_visible_lines,docview_text_lines,docview_tokens,docview_draw_text_calls,sleep_requested_ms,sleep_actual_ms,skipped_post_present_sleep,total_ms,run_mode\n")
     frame_pacing_stats_file:flush()
   end
   frame_pacing_stats_seq = frame_pacing_stats_seq + 1
@@ -2799,6 +2819,15 @@ local function frame_pacing_stats_log(fields)
     tostring(fields.rencache_text_bytes or 0),
     string.format("%.3f", fields.rencache_draw_text_ms or 0),
     string.format("%.3f", fields.rencache_draw_text_width_ms or 0),
+    tostring(fields.display_packet_replays or 0),
+    tostring(fields.display_packet_commands_replayed or 0),
+    tostring(fields.display_packet_text_commands_replayed or 0),
+    tostring(fields.display_packet_rect_commands_replayed or 0),
+    tostring(fields.display_packet_source_bytes or 0),
+    tostring(fields.display_packet_frame_bytes_copied or 0),
+    string.format("%.3f", fields.display_packet_replay_ms or 0),
+    tostring(fields.display_packet_frame_allocation_failures or 0),
+    fields.rencache_frame_failed and "1" or "0",
     string.format("%.3f", fields.docview_draw_ms or 0),
     string.format("%.3f", fields.docview_gutter_ms or 0),
     string.format("%.3f", fields.docview_body_ms or 0),
@@ -2872,7 +2901,7 @@ function core.run_step(options)
   local worker_pool_slowest_callback_name = ""
   local pending_events_at_start = system.has_pending_events()
   local now     = run_step_start
-  local uncapped = config.draw_stats == "uncapped"
+  local uncapped = config.draw_stats == "uncapped" or core.perf_cadence_uncapped
   local rad_pacing = rad_frame_pacing_enabled()
   local present_paced = renderer_present_paced()
   local active_present_paced = false
@@ -3376,6 +3405,15 @@ function core.run_step(options)
     rencache_text_bytes = renderer_stats.rencache_text_bytes,
     rencache_draw_text_ms = renderer_stats.rencache_draw_text_ms,
     rencache_draw_text_width_ms = renderer_stats.rencache_draw_text_width_ms,
+    display_packet_replays = renderer_stats.display_packet_replays,
+    display_packet_commands_replayed = renderer_stats.display_packet_commands_replayed,
+    display_packet_text_commands_replayed = renderer_stats.display_packet_text_commands_replayed,
+    display_packet_rect_commands_replayed = renderer_stats.display_packet_rect_commands_replayed,
+    display_packet_source_bytes = renderer_stats.display_packet_source_bytes,
+    display_packet_frame_bytes_copied = renderer_stats.display_packet_frame_bytes_copied,
+    display_packet_replay_ms = renderer_stats.display_packet_replay_ms,
+    display_packet_frame_allocation_failures = renderer_stats.display_packet_frame_allocation_failures,
+    rencache_frame_failed = renderer_stats.rencache_frame_failed,
     docview_draw_ms = docview_stats.draw_ms,
     docview_gutter_ms = docview_stats.gutter_ms,
     docview_body_ms = docview_stats.body_ms,

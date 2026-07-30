@@ -10,6 +10,7 @@
 
 #define API_TYPE_FONT "Font"
 #define API_TYPE_TEXT_LAYOUT "TextLayout"
+#define API_TYPE_DISPLAY_PACKET "DisplayPacket"
 #define API_TYPE_REGEX "Regex"
 #define API_TYPE_THREAD "Thread"
 #define API_TYPE_CHANNEL "Channel"

@@ -4,6 +4,7 @@ local style = require "core.style"
 local command = require "core.command"
 local keymap = require "core.keymap"
 local DocView = require "core.docview"
+local line_packets = require "core.docview_line_packets"
 
 -- Colors can be configured as follows:
 --   underline color  = `style.bracketmatch_color`
@@ -168,7 +169,9 @@ local function redraw_char(dv, x, y, screen_x, screen_y, width, height, line, co
     core.push_clip_rect(screen_x, screen_y, width, height)
     local dlt = DocView.draw_line_text
     DocView.draw_line_text = function() end
-    dv:draw_line_body(line, x, y)
+    line_packets.with_suspended_finalization(dv, function()
+      dv:draw_line_body(line, x, y)
+    end)
     DocView.draw_line_text = dlt
     core.pop_clip_rect()
   else

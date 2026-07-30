@@ -27,9 +27,18 @@ typedef struct {
   size_t max_text_bytes;
   double draw_text_ms;
   double draw_text_width_ms;
+  int display_packet_replays;
+  int display_packet_commands_replayed;
+  int display_packet_text_commands_replayed;
+  int display_packet_rect_commands_replayed;
+  size_t display_packet_source_bytes;
+  size_t display_packet_frame_bytes_copied;
+  double display_packet_replay_ms;
+  int display_packet_frame_allocation_failures;
+  bool rencache_frame_failed;
 } RenCacheFrameStats;
 
-typedef struct {
+typedef struct RenCache {
   uint8_t *command_buf;
   size_t command_buf_idx;
   size_t command_buf_size;
@@ -39,6 +48,8 @@ typedef struct {
   unsigned *cells;
   RenRect rect_buf[RENCACHE_CELLS_X * RENCACHE_CELLS_Y / 2];
   bool resize_issue;
+  bool frame_failed;
+  bool frame_active;
   RenRect screen_rect;
   RenRect last_clip_rect;
   SDL_Window *window;   /* The cache can be used for both a window or surface */
@@ -63,12 +74,30 @@ void  rencache_draw_rounded_rect(RenCache *rc, RenRect rect, float radius, RenCo
 void  rencache_draw_rect_grid(RenCache *rc, float x, float y, float step_x, float w, float h, int count, RenColor color);
 double rencache_draw_text(RenCache *rc, RenFont **font, const char *text, size_t len, double x, double y, RenColor color, RenTab tab);
 double rencache_draw_text_known_bounds(RenCache *rc, RenFont **font, const char *text, size_t len, double x, double y, RenRect rect, RenColor color, RenTab tab);
+double rencache_draw_text_known_bounds_captured(RenCache *rc, RenFont **font, const char *text, size_t len, double x, double y, RenRect rect, RenColor color, RenTab tab, int tab_size);
 RenRect rencache_draw_poly(RenCache *rc, RenPoint *points, int npoints, RenColor color);
 void  rencache_draw_canvas(RenCache *ren_cache, RenRect rect, RenCache *canvas);
 void  rencache_draw_pixels(RenCache *ren_cache, RenRect rect, const char* bytes, size_t len);
 void  rencache_invalidate(RenCache *rc);
 void  rencache_begin_frame(RenCache *rc);
 void  rencache_end_frame(RenCache *rc);
+void  rencache_abandon_frame(RenCache *rc);
+bool  rencache_frame_is_failed(const RenCache *rc);
+bool  rencache_reserve_command_bytes(RenCache *rc, size_t bytes);
+size_t rencache_text_command_storage_size(size_t text_len);
+size_t rencache_rect_command_storage_size(void);
+size_t rencache_rect_grid_command_storage_size(void);
+RenRect rencache_rect_from_floats(double x, double y, double w, double h);
+void rencache_record_display_packet_replay(
+  RenCache *rc,
+  size_t commands,
+  size_t text_commands,
+  size_t rect_commands,
+  size_t source_bytes,
+  size_t frame_bytes,
+  uint64_t started
+);
+void rencache_test_fail_next_packet_reserve(void);
 RenSurface rencache_get_surface(RenCache *rc);
 void rencache_get_size(RenCache *rc, int *w, int *h);
 void rencache_update_rects(RenCache *rc, RenRect *rects, int count);

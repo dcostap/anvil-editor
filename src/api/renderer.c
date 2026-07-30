@@ -1,10 +1,13 @@
 #include <string.h>
 #include <assert.h>
+#include <limits.h>
+#include <math.h>
 #include <lua.h>
 
 #include "api.h"
 #include "../renderer.h"
 #include "../d3d11_backend.h"
+#include "../display_packet.h"
 #include "../rencache.h"
 #include "../renwindow.h"
 #include "utils/lxlauxlib.h"
@@ -13,6 +16,23 @@
 int RENDERER_FONT_REF = LUA_NOREF;
 // a reference index to a table that stores canvases during a render cycle
 int RENDERER_CANVAS_REF = LUA_NOREF;
+
+typedef struct {
+  RenDisplayPacket *packet;
+  int font_refs;
+} LuaDisplayPacket;
+
+static void renderer_clear_font_refs(lua_State *L) {
+  if (RENDERER_FONT_REF == LUA_NOREF) return;
+  lua_newtable(L);
+  lua_rawseti(L, LUA_REGISTRYINDEX, RENDERER_FONT_REF);
+}
+
+static void renderer_clear_canvas_refs(lua_State *L) {
+  if (RENDERER_CANVAS_REF == LUA_NOREF) return;
+  lua_newtable(L);
+  lua_rawseti(L, LUA_REGISTRYINDEX, RENDERER_CANVAS_REF);
+}
 
 typedef struct {
   char *text;
@@ -220,6 +240,32 @@ static int f_font_get_size(lua_State *L) {
   return 1;
 }
 
+static int f_font_get_generation(lua_State *L) {
+  RenFont *fonts[FONT_FALLBACK_MAX];
+  bool table = font_retrieve(L, fonts, 1);
+  if (table) lua_newtable(L);
+  int count = 0;
+  for (int index = 0; index < FONT_FALLBACK_MAX && fonts[index]; index++) {
+    lua_pushinteger(L, (lua_Integer)ren_font_get_generation(fonts[index]));
+    count++;
+    if (table) lua_rawseti(L, -2, index + 1);
+  }
+  return table ? 1 : (count > 0 ? 1 : 0);
+}
+
+static int f_font_get_surface_scale(lua_State *L) {
+  RenFont *fonts[FONT_FALLBACK_MAX];
+  bool table = font_retrieve(L, fonts, 1);
+  if (table) lua_newtable(L);
+  int count = 0;
+  for (int index = 0; index < FONT_FALLBACK_MAX && fonts[index]; index++) {
+    lua_pushnumber(L, ren_font_get_surface_scale(fonts[index]));
+    count++;
+    if (table) lua_rawseti(L, -2, index + 1);
+  }
+  return table ? 1 : (count > 0 ? 1 : 0);
+}
+
 static int f_font_set_size(lua_State *L) {
   RenFont* fonts[FONT_FALLBACK_MAX]; font_retrieve(L, fonts, 1);
   float size = luaL_checknumber(L, 2);
@@ -357,6 +403,8 @@ static int f_get_size(lua_State *L) {
 
 static int f_begin_frame(UNUSED lua_State *L) {
   assert(ren_get_target_window() == NULL);
+  renderer_clear_font_refs(L);
+  renderer_clear_canvas_refs(L);
   RenWindow *window = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
   ren_set_target_window(window);
   rencache_begin_frame(&window->cache);
@@ -369,15 +417,55 @@ static int f_end_frame(UNUSED lua_State *L) {
   assert(window != NULL);
   rencache_end_frame(&window->cache);
   ren_set_target_window(NULL);
-#ifndef LUA_JITLIBNAME
-  // clear the font reference table
-  lua_newtable(L);
-  lua_rawseti(L, LUA_REGISTRYINDEX, RENDERER_FONT_REF);
-  // clear the canvas reference table
-  lua_newtable(L);
-  lua_rawseti(L, LUA_REGISTRYINDEX, RENDERER_CANVAS_REF);
-#endif
+  renderer_clear_font_refs(L);
+  renderer_clear_canvas_refs(L);
   return 0;
+}
+
+static int f_frame_refs_begin(lua_State *L) {
+  renderer_clear_font_refs(L);
+  renderer_clear_canvas_refs(L);
+  return 0;
+}
+
+static int f_frame_refs_end(lua_State *L) {
+  renderer_clear_font_refs(L);
+  renderer_clear_canvas_refs(L);
+  return 0;
+}
+
+static int f_frame_font_ref_count(lua_State *L) {
+  int count = 0;
+  if (RENDERER_FONT_REF != LUA_NOREF) {
+    lua_rawgeti(L, LUA_REGISTRYINDEX, RENDERER_FONT_REF);
+    if (lua_istable(L, -1)) {
+      lua_pushnil(L);
+      while (lua_next(L, -2) != 0) {
+        count++;
+        lua_pop(L, 1);
+      }
+    }
+    lua_pop(L, 1);
+  }
+  lua_pushinteger(L, count);
+  return 1;
+}
+
+static int f_abandon_frame(lua_State *L) {
+  RenWindow *window = ren_get_target_window();
+  if (window) {
+    rencache_abandon_frame(&window->cache);
+    ren_set_target_window(NULL);
+  }
+  renderer_clear_font_refs(L);
+  renderer_clear_canvas_refs(L);
+  return 0;
+}
+
+static int f_frame_failed(lua_State *L) {
+  RenWindow *window = ren_get_target_window();
+  lua_pushboolean(L, window && rencache_frame_is_failed(&window->cache));
+  return 1;
 }
 
 
@@ -821,6 +909,24 @@ static int f_get_last_frame_stats(lua_State *L) {
   lua_setfield(L, -2, "rencache_draw_text_ms");
   lua_pushnumber(L, rc_stats ? rc_stats->draw_text_width_ms : 0.0);
   lua_setfield(L, -2, "rencache_draw_text_width_ms");
+  lua_pushinteger(L, rc_stats ? rc_stats->display_packet_replays : 0);
+  lua_setfield(L, -2, "display_packet_replays");
+  lua_pushinteger(L, rc_stats ? rc_stats->display_packet_commands_replayed : 0);
+  lua_setfield(L, -2, "display_packet_commands_replayed");
+  lua_pushinteger(L, rc_stats ? rc_stats->display_packet_text_commands_replayed : 0);
+  lua_setfield(L, -2, "display_packet_text_commands_replayed");
+  lua_pushinteger(L, rc_stats ? rc_stats->display_packet_rect_commands_replayed : 0);
+  lua_setfield(L, -2, "display_packet_rect_commands_replayed");
+  lua_pushinteger(L, rc_stats ? (lua_Integer)rc_stats->display_packet_source_bytes : 0);
+  lua_setfield(L, -2, "display_packet_source_bytes");
+  lua_pushinteger(L, rc_stats ? (lua_Integer)rc_stats->display_packet_frame_bytes_copied : 0);
+  lua_setfield(L, -2, "display_packet_frame_bytes_copied");
+  lua_pushnumber(L, rc_stats ? rc_stats->display_packet_replay_ms : 0.0);
+  lua_setfield(L, -2, "display_packet_replay_ms");
+  lua_pushinteger(L, rc_stats ? rc_stats->display_packet_frame_allocation_failures : 0);
+  lua_setfield(L, -2, "display_packet_frame_allocation_failures");
+  lua_pushboolean(L, rc_stats ? rc_stats->rencache_frame_failed : false);
+  lua_setfield(L, -2, "rencache_frame_failed");
 #define PUSH_TEXT_STAT_INTEGER(name) \
   lua_pushinteger(L, text_stats ? (lua_Integer)text_stats->name : 0); \
   lua_setfield(L, -2, "text_" #name)
@@ -844,6 +950,8 @@ static int f_get_last_frame_stats(lua_State *L) {
   PUSH_TEXT_STAT_INTEGER(render_unshaped_runs);
   PUSH_TEXT_STAT_INTEGER(render_shape_probe_bytes);
   PUSH_TEXT_STAT_INTEGER(render_hb_shapes);
+  PUSH_TEXT_STAT_INTEGER(render_shaped_cache_hits);
+  PUSH_TEXT_STAT_INTEGER(render_shaped_cache_misses);
   PUSH_TEXT_STAT_INTEGER(render_glyphs);
   PUSH_TEXT_STAT_INTEGER(render_whitespace_chars);
   PUSH_TEXT_STAT_INTEGER(render_chars_after_clip);
@@ -882,11 +990,336 @@ static int f_to_canvas(lua_State *L) {
   return 1;
 }
 
+static LuaDisplayPacket *check_display_packet(lua_State *L, int index) {
+  LuaDisplayPacket *userdata = (LuaDisplayPacket *)luaL_checkudata(
+    L, index, API_TYPE_DISPLAY_PACKET
+  );
+  if (!userdata->packet) luaL_error(L, "Display Packet has been collected");
+  return userdata;
+}
+
+static float current_surface_scale(void) {
+#ifdef ANVIL_USE_SDL_RENDERER
+  RenWindow *window = ren_get_target_window();
+  if (window) {
+    float scale = rencache_get_surface(&window->cache).scale_x;
+    return scale > 0 ? scale : 1.0f;
+  }
+#endif
+  return 1.0f;
+}
+
+static void clear_display_packet_refs(lua_State *L, LuaDisplayPacket *userdata) {
+  if (userdata->font_refs == LUA_NOREF) return;
+  luaL_unref(L, LUA_REGISTRYINDEX, userdata->font_refs);
+  userdata->font_refs = LUA_NOREF;
+}
+
+static void retain_display_packet_fonts(
+  lua_State *L, LuaDisplayPacket *userdata, int font_index
+) {
+  font_index = lua_absindex(L, font_index);
+  lua_rawgeti(L, LUA_REGISTRYINDEX, userdata->font_refs);
+  int refs = lua_gettop(L);
+  if (!lua_istable(L, refs)) luaL_error(L, "Display Packet Font references are unavailable");
+
+  if (lua_istable(L, font_index)) {
+    size_t count = lua_rawlen(L, font_index);
+    if (count > FONT_FALLBACK_MAX) count = FONT_FALLBACK_MAX;
+    for (size_t index = 1; index <= count; index++) {
+      lua_rawgeti(L, font_index, (lua_Integer)index);
+      luaL_checkudata(L, -1, API_TYPE_FONT);
+      lua_pushvalue(L, -1);
+      lua_pushboolean(L, true);
+      lua_rawset(L, refs);
+      lua_pop(L, 1);
+    }
+  } else {
+    luaL_checkudata(L, font_index, API_TYPE_FONT);
+    lua_pushvalue(L, font_index);
+    lua_pushboolean(L, true);
+    lua_rawset(L, refs);
+  }
+  lua_pop(L, 1);
+}
+
+static void pin_display_packet_fonts(lua_State *L, int packet_index) {
+  if (RENDERER_FONT_REF == LUA_NOREF) return;
+  LuaDisplayPacket *userdata = check_display_packet(L, packet_index);
+  lua_rawgeti(L, LUA_REGISTRYINDEX, RENDERER_FONT_REF);
+  int active_refs = lua_gettop(L);
+  if (!lua_istable(L, active_refs)) {
+    lua_pop(L, 1);
+    return;
+  }
+  lua_rawgeti(L, LUA_REGISTRYINDEX, userdata->font_refs);
+  int packet_refs = lua_gettop(L);
+  if (!lua_istable(L, packet_refs)) {
+    lua_pop(L, 2);
+    return;
+  }
+  lua_pushnil(L);
+  while (lua_next(L, packet_refs) != 0) {
+    lua_pop(L, 1);
+    lua_pushvalue(L, -1);
+    lua_pushboolean(L, true);
+    lua_rawset(L, active_refs);
+  }
+  lua_pop(L, 2);
+}
+
+static int f_display_packet_new(lua_State *L) {
+  LuaDisplayPacket *userdata = (LuaDisplayPacket *)lua_newuserdata(
+    L, sizeof(*userdata)
+  );
+  userdata->packet = ren_display_packet_new();
+  userdata->font_refs = LUA_NOREF;
+  if (!userdata->packet) return luaL_error(L, "out of memory creating Display Packet");
+  luaL_setmetatable(L, API_TYPE_DISPLAY_PACKET);
+  lua_newtable(L);
+  userdata->font_refs = luaL_ref(L, LUA_REGISTRYINDEX);
+  return 1;
+}
+
+static int f_display_packet_test_fail_next_reserve(lua_State *L) {
+  (void)L;
+  rencache_test_fail_next_packet_reserve();
+  return 0;
+}
+
+static void check_packet_builder_state(lua_State *L, LuaDisplayPacket *userdata) {
+  if (ren_display_packet_is_released(userdata->packet))
+    luaL_error(L, "cannot mutate a released Display Packet");
+  if (ren_display_packet_is_sealed(userdata->packet))
+    luaL_error(L, "cannot mutate a sealed Display Packet");
+}
+
+static int check_packet_layer(lua_State *L, int index) {
+  lua_Integer value = luaL_checkinteger(L, index);
+  if (value < 0 || value > INT_MAX) luaL_argerror(L, index, "invalid layer");
+  return (int)value;
+}
+
+static int check_packet_row(lua_State *L, int index) {
+  lua_Integer value = luaL_checkinteger(L, index);
+  if (value < 1 || value > INT_MAX) luaL_argerror(L, index, "invalid visual row");
+  return (int)value;
+}
+
+static double check_finite_number(lua_State *L, int index) {
+  double value = luaL_checknumber(L, index);
+  if (!isfinite(value)) luaL_argerror(L, index, "number must be finite");
+  return value;
+}
+
+static int f_display_packet_add_text(lua_State *L) {
+  LuaDisplayPacket *userdata = check_display_packet(L, 1);
+  check_packet_builder_state(L, userdata);
+  int layer = check_packet_layer(L, 2);
+  int row = check_packet_row(L, 3);
+  RenFont *fonts[FONT_FALLBACK_MAX];
+  font_retrieve(L, fonts, 4);
+  size_t text_len;
+  const char *text = luaL_checklstring(L, 5, &text_len);
+  double x = check_finite_number(L, 6);
+  double y = check_finite_number(L, 7);
+  RenColor color = luaXL_checkcolor(L, 8, 255);
+  RenTab tab = { .offset = NAN };
+  if (!lua_isnoneornil(L, 9)) tab.offset = check_finite_number(L, 9);
+  lua_Integer raw_tab_size = luaL_checkinteger(L, 10);
+  if (raw_tab_size <= 0 || raw_tab_size > INT8_MAX)
+    return luaL_argerror(L, 10, "tab size must be between 1 and 127");
+
+  double next_x = x;
+  RenDisplayPacketResult result = ren_display_packet_add_text(
+    userdata->packet, layer, row, fonts, text, text_len, x, y, color, tab,
+    (int)raw_tab_size, current_surface_scale(), &next_x
+  );
+  if (result != REN_DISPLAY_PACKET_OK) {
+    return luaL_error(
+      L, "failed to add Display Packet text: %s",
+      ren_display_packet_result_string(result)
+    );
+  }
+  retain_display_packet_fonts(L, userdata, 4);
+  lua_pushnumber(L, next_x);
+  return 1;
+}
+
+static int f_display_packet_add_rect(lua_State *L) {
+  LuaDisplayPacket *userdata = check_display_packet(L, 1);
+  check_packet_builder_state(L, userdata);
+  RenDisplayPacketResult result = ren_display_packet_add_rect(
+    userdata->packet,
+    check_packet_layer(L, 2),
+    check_packet_row(L, 3),
+    check_finite_number(L, 4),
+    check_finite_number(L, 5),
+    check_finite_number(L, 6),
+    check_finite_number(L, 7),
+    luaXL_checkcolor(L, 8, 255)
+  );
+  if (result != REN_DISPLAY_PACKET_OK) {
+    return luaL_error(
+      L, "failed to add Display Packet rectangle: %s",
+      ren_display_packet_result_string(result)
+    );
+  }
+  return 0;
+}
+
+static int f_display_packet_add_rect_grid(lua_State *L) {
+  LuaDisplayPacket *userdata = check_display_packet(L, 1);
+  check_packet_builder_state(L, userdata);
+  lua_Integer raw_count = luaL_checkinteger(L, 9);
+  if (raw_count <= 0 || raw_count > INT_MAX)
+    return luaL_argerror(L, 9, "invalid rectangle-grid count");
+  RenDisplayPacketResult result = ren_display_packet_add_rect_grid(
+    userdata->packet,
+    check_packet_layer(L, 2),
+    check_packet_row(L, 3),
+    check_finite_number(L, 4),
+    check_finite_number(L, 5),
+    check_finite_number(L, 6),
+    check_finite_number(L, 7),
+    check_finite_number(L, 8),
+    (int)raw_count,
+    luaXL_checkcolor(L, 10, 255)
+  );
+  if (result != REN_DISPLAY_PACKET_OK) {
+    return luaL_error(
+      L, "failed to add Display Packet rectangle grid: %s",
+      ren_display_packet_result_string(result)
+    );
+  }
+  return 0;
+}
+
+static int f_display_packet_seal(lua_State *L) {
+  LuaDisplayPacket *userdata = check_display_packet(L, 1);
+  if (!ren_display_packet_seal(userdata->packet))
+    return luaL_error(L, "cannot seal a released Display Packet");
+  lua_settop(L, 1);
+  return 1;
+}
+
+static int f_display_packet_bytes(lua_State *L) {
+  LuaDisplayPacket *userdata = check_display_packet(L, 1);
+  lua_pushinteger(L, (lua_Integer)ren_display_packet_bytes(userdata->packet));
+  return 1;
+}
+
+static void push_color(lua_State *L, RenColor color) {
+  lua_createtable(L, 4, 0);
+  lua_pushinteger(L, color.r); lua_rawseti(L, -2, 1);
+  lua_pushinteger(L, color.g); lua_rawseti(L, -2, 2);
+  lua_pushinteger(L, color.b); lua_rawseti(L, -2, 3);
+  lua_pushinteger(L, color.a); lua_rawseti(L, -2, 4);
+}
+
+static int f_display_packet_inspect(lua_State *L) {
+  LuaDisplayPacket *userdata = check_display_packet(L, 1);
+  size_t count = ren_display_packet_command_count(userdata->packet);
+  lua_createtable(L, (int)(count > INT_MAX ? INT_MAX : count), 0);
+  for (size_t index = 0; index < count; index++) {
+    RenDisplayPacketCommandInfo info;
+    if (!ren_display_packet_command_info(userdata->packet, index, &info)) continue;
+    lua_createtable(L, 0, 20);
+    const char *type = info.type == REN_DISPLAY_PACKET_TEXT ? "text"
+      : info.type == REN_DISPLAY_PACKET_RECT ? "rect" : "rect_grid";
+    lua_pushstring(L, type); lua_setfield(L, -2, "type");
+    lua_pushinteger(L, info.layer); lua_setfield(L, -2, "layer");
+    lua_pushinteger(L, info.row); lua_setfield(L, -2, "row");
+    lua_pushnumber(L, info.x); lua_setfield(L, -2, "x");
+    lua_pushnumber(L, info.y); lua_setfield(L, -2, "y");
+    lua_pushnumber(L, info.width); lua_setfield(L, -2, "width");
+    lua_pushnumber(L, info.height); lua_setfield(L, -2, "height");
+    push_color(L, info.color); lua_setfield(L, -2, "color");
+    if (info.type == REN_DISPLAY_PACKET_TEXT) {
+      lua_pushlstring(L, info.text, info.text_len); lua_setfield(L, -2, "text");
+      lua_pushnumber(L, info.bounds_x); lua_setfield(L, -2, "bounds_x");
+      lua_pushnumber(L, info.bounds_y); lua_setfield(L, -2, "bounds_y");
+      lua_pushnumber(L, info.bounds_width); lua_setfield(L, -2, "bounds_width");
+      lua_pushnumber(L, info.bounds_height); lua_setfield(L, -2, "bounds_height");
+      lua_pushnumber(L, info.tab.offset); lua_setfield(L, -2, "tab_offset");
+      lua_pushinteger(L, info.tab_size); lua_setfield(L, -2, "tab_size");
+      lua_pushinteger(L, (lua_Integer)info.font_count);
+      lua_setfield(L, -2, "font_count");
+    } else if (info.type == REN_DISPLAY_PACKET_RECT_GRID) {
+      lua_pushnumber(L, info.step_x); lua_setfield(L, -2, "step_x");
+      lua_pushinteger(L, info.count); lua_setfield(L, -2, "count");
+    }
+    lua_rawseti(L, -2, (lua_Integer)index + 1);
+  }
+  return 1;
+}
+
+static int f_display_packet_draw(lua_State *L) {
+  LuaDisplayPacket *userdata = check_display_packet(L, 1);
+  double origin_x = check_finite_number(L, 2);
+  double origin_y = check_finite_number(L, 3);
+  int layer = check_packet_layer(L, 4);
+  int first_row = check_packet_row(L, 5);
+  int last_row = check_packet_row(L, 6);
+  if (last_row < first_row)
+    return luaL_argerror(L, 6, "last visual row precedes first visual row");
+  if (ren_display_packet_is_released(userdata->packet)) {
+    lua_pushboolean(L, false);
+    lua_pushliteral(L, "released");
+    return 2;
+  }
+  if (!ren_display_packet_is_sealed(userdata->packet)) {
+    lua_pushboolean(L, false);
+    lua_pushliteral(L, "not_sealed");
+    return 2;
+  }
+  RenWindow *window = ren_get_target_window();
+  if (!window) {
+    lua_pushboolean(L, false);
+    lua_pushliteral(L, "no_target");
+    return 2;
+  }
+  RenDisplayPacketResult result = ren_display_packet_replay(
+    userdata->packet, &window->cache, origin_x, origin_y, layer,
+    first_row, last_row, current_surface_scale()
+  );
+  if (result == REN_DISPLAY_PACKET_OK) {
+    pin_display_packet_fonts(L, 1);
+    lua_pushboolean(L, true);
+    return 1;
+  }
+  lua_pushboolean(L, false);
+  lua_pushstring(L, ren_display_packet_result_string(result));
+  return 2;
+}
+
+static int f_display_packet_release(lua_State *L) {
+  LuaDisplayPacket *userdata = check_display_packet(L, 1);
+  ren_display_packet_free(userdata->packet);
+  clear_display_packet_refs(L, userdata);
+  return 0;
+}
+
+static int f_display_packet_gc(lua_State *L) {
+  LuaDisplayPacket *userdata = (LuaDisplayPacket *)luaL_checkudata(
+    L, 1, API_TYPE_DISPLAY_PACKET
+  );
+  clear_display_packet_refs(L, userdata);
+  ren_display_packet_destroy(userdata->packet);
+  userdata->packet = NULL;
+  return 0;
+}
+
 static const luaL_Reg lib[] = {
   { "show_debug",         f_show_debug         },
   { "get_size",           f_get_size           },
   { "begin_frame",        f_begin_frame        },
   { "end_frame",          f_end_frame          },
+  { "abandon_frame",      f_abandon_frame      },
+  { "frame_failed",       f_frame_failed       },
+  { "_frame_refs_begin",  f_frame_refs_begin   },
+  { "_frame_refs_end",    f_frame_refs_end     },
+  { "_frame_font_ref_count", f_frame_font_ref_count },
   { "is_present_paced",   f_is_present_paced   },
   { "get_last_frame_stats", f_get_last_frame_stats },
   { "set_clip_rect",      f_set_clip_rect      },
@@ -911,6 +1344,8 @@ static const luaL_Reg fontLib[] = {
   { "text_layout",        f_font_text_layout        },
   { "get_height",         f_font_get_height         },
   { "get_size",           f_font_get_size           },
+  { "get_generation",     f_font_get_generation     },
+  { "get_surface_scale",  f_font_get_surface_scale  },
   { "set_size",           f_font_set_size           },
   { "get_path",           f_font_get_path           },
   { "get_metadata",       f_font_get_metadata       },
@@ -927,8 +1362,20 @@ static const luaL_Reg textLayoutLib[] = {
   { NULL, NULL }
 };
 
+static const luaL_Reg displayPacketLib[] = {
+  { "__gc",          f_display_packet_gc            },
+  { "add_text",      f_display_packet_add_text      },
+  { "add_rect",      f_display_packet_add_rect      },
+  { "add_rect_grid", f_display_packet_add_rect_grid },
+  { "seal",          f_display_packet_seal          },
+  { "bytes",         f_display_packet_bytes         },
+  { "inspect",       f_display_packet_inspect       },
+  { "draw",          f_display_packet_draw          },
+  { "release",       f_display_packet_release       },
+  { NULL, NULL }
+};
+
 int luaopen_renderer(lua_State *L) {
-#ifndef LUA_JITLIBNAME
   // gets a reference on the registry to store font data
   lua_newtable(L);
   RENDERER_FONT_REF = luaL_ref(L, LUA_REGISTRYINDEX);
@@ -936,7 +1383,6 @@ int luaopen_renderer(lua_State *L) {
   // gets a reference on the registry to store canvas data
   lua_newtable(L);
   RENDERER_CANVAS_REF = luaL_ref(L, LUA_REGISTRYINDEX);
-#endif
 
   luaL_newlib(L, lib);
   luaL_newmetatable(L, API_TYPE_FONT);
@@ -949,5 +1395,18 @@ int luaopen_renderer(lua_State *L) {
   lua_pushvalue(L, -1);
   lua_setfield(L, -2, "__index");
   lua_pop(L, 1);
+  luaL_newmetatable(L, API_TYPE_DISPLAY_PACKET);
+  luaL_setfuncs(L, displayPacketLib, 0);
+  lua_pushvalue(L, -1);
+  lua_setfield(L, -2, "__index");
+  lua_pop(L, 1);
+  lua_createtable(L, 0, 4);
+  lua_pushcfunction(L, f_display_packet_new);
+  lua_setfield(L, -2, "new");
+  lua_pushcfunction(L, f_display_packet_test_fail_next_reserve);
+  lua_setfield(L, -2, "_test_fail_next_reserve");
+  lua_pushinteger(L, 0); lua_setfield(L, -2, "CONTENT");
+  lua_pushinteger(L, 1); lua_setfield(L, -2, "FOREGROUND_GUIDES");
+  lua_setfield(L, -2, "display_packet");
   return 1;
 }

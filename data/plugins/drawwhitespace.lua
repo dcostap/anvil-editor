@@ -5,6 +5,7 @@ local style = require "core.style"
 local Doc = require "core.doc"
 local DocView = require "core.docview"
 local linewrapping = require "core.linewrapping"
+local line_packets = require "core.docview_line_packets"
 local command = require "core.command"
 
 local function perf_scope_begin(name)
@@ -50,6 +51,10 @@ local drawwhitespace = {
   },
 }
 
+drawwhitespace = line_packets.persistent_contributor_config(
+  "whitespace", drawwhitespace
+)
+
 local function markdown_live_mode(view)
   local live_render = package.loaded["core.markdown.live_render"]
   return live_render and live_render.is_live_mode
@@ -69,9 +74,7 @@ local function get_option(substitution, option)
   end
 end
 
-local update = DocView.update
-function DocView:update()
-  update(self)
+local function update_selected_state(self)
   if
     drawwhitespace.enabled
     and
@@ -574,6 +577,8 @@ local function draw_tab_markers(self, idx, x, font, ty, substitution, start_col,
   end
 end
 
+local whitespace_run_draw_options
+
 local function draw_whitespace_run(self, idx, x, y, font, ty, substitution, start_col, end_col, color, x_cache, end_line_end)
   if start_col >= end_col then return end
 
@@ -614,7 +619,144 @@ local function draw_whitespace_run(self, idx, x, y, font, ty, substitution, star
   draw_tab_markers(self, idx, x, font, ty, substitution, start_col, end_col, color, x_cache, end_line_end)
 end
 
-local function whitespace_run_draw_options(substitution, run)
+local function append_packet_space_markers(
+  builder, layer, row, self, idx, origin_x, origin_y, x, font, ty,
+  substitution, start_col, end_col, color, x_cache, end_line_end
+)
+  local count = end_col - start_col
+  if count <= 0 then return end
+  local marker = substitution.sub or "·"
+  if marker == "" then return end
+  font = marker_font(font)
+  local start_x = cached_col_x_offset(self, idx, x_cache, start_col) + x
+  local end_x = cached_col_x_offset(
+    self, idx, x_cache, end_col, end_line_end
+  ) + x
+  if end_x <= start_x then return end
+  local clip_left, clip_right = current_clip_x_range(self)
+  if end_x <= clip_left or start_x >= clip_right then return end
+  local _, indent_size = self.doc:get_indent_info()
+  indent_size = indent_size or 2
+
+  if marker_matches_space_advance(font, marker) then
+    builder:add_text(
+      layer, row, font, repeated_marker(marker, count),
+      start_x - origin_x, ty - origin_y, color, nil, indent_size
+    )
+    return
+  end
+
+  local cell_width = (end_x - start_x) / count
+  local dot_size = math.max(2, math.floor(2 * SCALE))
+  local dot_origin = start_x + (cell_width - dot_size) / 2
+  local dot_y = math.floor(ty + (font:get_height() - dot_size) / 2)
+  local first = math.max(
+    0, math.floor((clip_left - dot_size - dot_origin) / cell_width) - 1
+  )
+  local last = math.min(
+    count - 1, math.ceil((clip_right - dot_origin) / cell_width) + 1
+  )
+  local draw_count = last - first + 1
+  if draw_count > 0 then
+    builder:add_rect_grid(
+      layer, row,
+      dot_origin + first * cell_width - origin_x,
+      dot_y - origin_y,
+      cell_width, dot_size, dot_size, draw_count, color
+    )
+  end
+end
+
+local function append_packet_tab_markers(
+  builder, layer, row, self, idx, origin_x, origin_y, x, font, ty,
+  substitution, start_col, end_col, color, x_cache, end_line_end
+)
+  local marker = substitution.sub or ""
+  if marker == "" then return end
+  local clip_left, clip_right = current_clip_x_range(self)
+  local _, indent_size = self.doc:get_indent_info()
+  indent_size = indent_size or 2
+  local marker_width, tab_width = cached_tab_metrics(
+    font, marker, indent_size
+  )
+  local batch_tabs = tab_width > 0 and marker_width < tab_width
+  local first_col, last_col, first_x, first_offset
+  for col = start_col, end_col - 1 do
+    local offset = cached_col_x_offset(self, idx, x_cache, col)
+    local marker_x = offset + x
+    if marker_x >= clip_right then break end
+    if marker_x + marker_width > clip_left then
+      if not first_col then
+        first_col, first_x, first_offset = col, marker_x, offset
+      end
+      last_col = col
+      if not batch_tabs then
+        builder:add_text(
+          layer, row, font, marker,
+          marker_x - origin_x, ty - origin_y, color, nil, indent_size
+        )
+      end
+    end
+  end
+  if batch_tabs and first_col then
+    builder:add_text(
+      layer, row, font,
+      repeated_tab_marker(marker, last_col - first_col + 1),
+      first_x - origin_x, ty - origin_y, color, first_offset, indent_size
+    )
+  end
+end
+
+local function append_packet_whitespace(builder, self, idx, context)
+  local entry = get_line_runs(self, idx)
+  local font = self:get_font()
+    or style.syntax_fonts.whitespace or style.syntax_fonts.comment
+  local line_height = self:get_line_height()
+  local text_y_offset = self:get_line_text_y_offset()
+  local x_cache
+  for row_idx = context.built_first, context.built_last do
+    local _, row_start_col = linewrapping.get_idx_line_col(self, row_idx)
+    local next_line, row_end_col = linewrapping.get_idx_line_col(
+      self, row_idx + 1
+    )
+    local row_continues = next_line == idx
+    if not row_continues then row_end_col = #self.doc.lines[idx] end
+    local row_y = context.screen_y
+      + (row_idx - context.first_idx) * line_height
+    local text_y = row_y + text_y_offset
+    local local_row = row_idx - context.first_idx + 1
+    for _, run in ipairs(entry.runs) do
+      local substitution = drawwhitespace.substitutions[run.substitution]
+      local start_col = math.max(run.start_col, row_start_col)
+      local end_col = math.min(run.end_col, row_end_col)
+      if start_col < end_col then
+        local draw, color = whitespace_run_draw_options(substitution, run)
+        if draw then
+          x_cache = x_cache or get_line_x_cache(self, idx, entry)
+          if substitution.char == " " then
+            append_packet_space_markers(
+              builder, context.content_layer, local_row,
+              self, idx, context.screen_x, context.screen_y,
+              context.screen_x, font, text_y, substitution,
+              start_col, end_col, color, x_cache,
+              row_continues and end_col == row_end_col
+            )
+          else
+            append_packet_tab_markers(
+              builder, context.content_layer, local_row,
+              self, idx, context.screen_x, context.screen_y,
+              context.screen_x, font, text_y, substitution,
+              start_col, end_col, color, x_cache,
+              row_continues and end_col == row_end_col
+            )
+          end
+        end
+      end
+    end
+  end
+end
+
+whitespace_run_draw_options = function(substitution, run)
   local draw = false
   local color = get_option(substitution, "color")
   if run.trailing then
@@ -680,8 +822,7 @@ local function draw_wrapped_whitespace(self, idx, x, y, font, entry)
   end
 end
 
-local draw_line_text = DocView.draw_line_text
-function DocView:draw_line_text(idx, x, y)
+local function draw_legacy_whitespace(self, idx, x, y)
   if
     not drawwhitespace.enabled
     or
@@ -689,12 +830,12 @@ function DocView:draw_line_text(idx, x, y)
     or
     markdown_live_mode(self)
   then
-    return draw_line_text(self, idx, x, y)
+    return
   end
 
   local line_text = self.doc.lines[idx]
   if not line_text or not line_text:find("[ \t]") then
-    return draw_line_text(self, idx, x, y)
+    return
   end
 
   local scope = perf_scope_begin("draw_whitespace")
@@ -768,9 +909,7 @@ function DocView:draw_line_text(idx, x, y)
   end
 
   ::not_selected::
-  local result = draw_line_text(self, idx, x, y)
   perf_scope_end(scope)
-  return result
 end
 
 
@@ -780,5 +919,62 @@ command.add_toggle("draw-whitespace:toggle", {
   end,
   set = function(enabled)
     drawwhitespace.enabled = enabled
+    line_packets.invalidate_contributor("whitespace")
   end,
 })
+
+local whitespace_contributor = {
+  packet_enabled = function(view)
+    return drawwhitespace.enabled
+      and not drawwhitespace.show_selected_only
+      and not markdown_live_mode(view)
+  end,
+  signature = function(view)
+    local function value_signature(value)
+      if type(value) ~= "table" then return tostring(value) end
+      local parts = {}
+      for index, item in ipairs(value) do parts[index] = tostring(item) end
+      return table.concat(parts, ":")
+    end
+    local font = view:get_font()
+      or style.syntax_fonts.whitespace or style.syntax_fonts.comment
+    local parts = {
+      tostring(drawwhitespace.show_leading),
+      tostring(drawwhitespace.show_middle),
+      tostring(drawwhitespace.show_trailing),
+      tostring(drawwhitespace.show_middle_min),
+      value_signature(drawwhitespace.color),
+      value_signature(drawwhitespace.leading_color),
+      value_signature(drawwhitespace.middle_color),
+      value_signature(drawwhitespace.trailing_color),
+      value_signature(style.whitespace),
+      value_signature(style.whitespace_trailing),
+      tostring(font),
+      tostring(font and font:get_size()),
+      tostring(font and marker_font(font)),
+    }
+    for _, substitution in ipairs(drawwhitespace.substitutions) do
+      parts[#parts + 1] = table.concat({
+        tostring(substitution.char), tostring(substitution.sub),
+        tostring(substitution.show_leading),
+        tostring(substitution.show_middle),
+        tostring(substitution.show_middle_min),
+        tostring(substitution.show_trailing),
+        value_signature(substitution.color),
+        value_signature(substitution.leading_color),
+        value_signature(substitution.middle_color),
+        value_signature(substitution.trailing_color),
+      }, ":")
+    end
+    return table.concat(parts, "\0")
+  end,
+  signature_scope = "view",
+  packet_enabled_scope = "view",
+  append_packet = append_packet_whitespace,
+  draw_legacy = draw_legacy_whitespace,
+  update = update_selected_state,
+}
+
+line_packets.register_contributor("whitespace", whitespace_contributor)
+
+return drawwhitespace

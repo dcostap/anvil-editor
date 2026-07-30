@@ -132,12 +132,14 @@ function renderer.begin_frame(window)
   if not windows_pointer_cache[window] then
     windows_pointer_cache[window] = ffi.cast("void**", window)[0]
   end
+  renderer._frame_refs_begin()
   ffi.C.rencache_begin_frame_ffi(windows_pointer_cache[window])
 end
 
 renderer.end_frame_lua = renderer.end_frame
 function renderer.end_frame()
   ffi.C.rencache_end_frame_ffi()
+  renderer._frame_refs_end()
 end
 
 renderer.set_clip_rect_lua = renderer.set_clip_rect
